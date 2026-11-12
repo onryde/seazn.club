@@ -88,6 +88,7 @@ import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { isPayConfirming } from "@/lib/registration-pay";
 import { __setRateLimitCounterForTests } from "@/lib/rate-limit";
+import { log } from "@/server/logger";
 import {
   issuePayLink,
   recordPayToken,
@@ -1083,6 +1084,42 @@ describe.skipIf(!HAS_DB)("an expire refused because the session just stopped bei
     const err = await rejection(payFromPayPage(token, ORIGIN, now));
     expect(err.status).toBe(502);
     expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(1);
+  });
+
+  // Fix round 1 (F6): when the re-read settles it, the refused expire's own error used to vanish without a trace. It is logged at
+  // info (the outcome is normal - the line says why an expire failed); a still-open session keeps its error-level line.
+  it("the refused expire's error is logged at info with the entry when the re-read settles it (expired, complete; counted)", async () => {
+    const changes: [string, (s: FakeSession) => void][] = [
+      ["expired", (s) => (s.status = "expired")],
+      [
+        "complete",
+        (s) => {
+          s.status = "complete";
+          s.payment_status = "paid";
+          s.payment_intent = "pi_test_f6_" + randomUUID().slice(0, 6);
+        },
+      ],
+    ];
+    let checked = 0;
+    for (const [label, change] of changes) {
+      const { reg, token, now } = await shortSession();
+      const refused = Object.assign(new Error(STRIPE_NOT_OPEN), { type: "StripeInvalidRequestError", statusCode: 400 });
+      stripeMock.checkoutExpire.mockImplementationOnce(async (id: string) => {
+        change(stripeMock.store.get(id)!);
+        throw refused;
+      });
+      const info = vi.spyOn(log, "info").mockImplementation(() => undefined);
+      try {
+        await payFromPayPage(token, ORIGIN, now).catch(() => undefined); // complete answers 409 - its own case above
+        const lines = info.mock.calls.filter(([o]) => (o as { err?: unknown } | undefined)?.err === refused);
+        expect(lines, `${label}: the swallowed expire error is logged once`).toHaveLength(1);
+        expect(lines[0]![0], label).toMatchObject({ registrationId: reg.id });
+      } finally {
+        info.mockRestore();
+      }
+      checked++;
+    }
+    expect(checked, "anti-vacuity: both settled outcomes checked").toBe(2);
   });
 });
 

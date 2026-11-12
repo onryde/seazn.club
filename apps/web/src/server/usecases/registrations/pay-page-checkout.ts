@@ -98,7 +98,11 @@ async function expireStored(id: string, registrationId: string): Promise<Stripe.
     return await getStripe().checkout.sessions.expire(id);
   } catch (err) {
     const current = await readStored(id, registrationId);
-    if (current.status !== "open") return current;
+    if (current.status !== "open") {
+      // Fix round 1 (F6): the re-read settles it, but the refusal itself is kept - it is the only trace of why the expire failed.
+      log.info({ err, registrationId, status: current.status }, "registration pay page: expire refused, the stored session had stopped being open");
+      return current;
+    }
     log.error({ err, registrationId }, "registration pay page: could not expire the stored session");
     throw stripeUnavailable();
   }
