@@ -224,6 +224,17 @@ export function endedStillDue(
   );
 }
 
+/** Does this deal hold its sponsor from Archive (archive spec docs/superpowers/specs/2026-11-11-sponsor-archive-design.md D9,
+ *  the table in §8)? A deal that is LIVE or OPEN can still put the sponsor on a public surface, and an ended deal still due
+ *  (`endedStillDue`) still asks for money: "End or settle its deal first." Every other ended deal is settled (`written_off`
+ *  included: the club gave the money up) or was never a deal (`legacy`). The ONE rule: the archive usecase refuses on it and
+ *  the console's Archive card disables on it. */
+export function blocksArchive(
+  d: Pick<SponsorDeal, "deal_status" | "payment_method" | "payment_status" | "live_at" | "ended_reason">,
+): boolean {
+  return d.ended_reason !== "legacy" && (isLiveDeal(d) || isOpenDeal(d) || endedStillDue(d));
+}
+
 /** The fields `allowedActions` reads. */
 export type DealActionFacts = Pick<
   SponsorDeal,
