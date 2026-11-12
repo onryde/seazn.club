@@ -13,6 +13,7 @@ import { freesTeamSlot, promoteOldestWaitlisted, openPromotionSeatGate, notifyPr
 import { paymentReminderMessage } from "./mail";
 import { issuePayLink, recordPayToken } from "./pay-token";
 import { stripeRefund, queueRefundReceipt, errText, maybeAlertRegistrationRefundFailed } from "./refunds";
+import { queueRegistrationExpiredMail } from "./lifecycle-mail";
 import { releaseSoloSignUpPlacement } from "./withdraw";
 import { effectivePoolDeadline } from "./list";
 
@@ -314,6 +315,9 @@ export async function sweepRegistrations(
           from: "waitlist",
         }, null);
       }
+      // Polish wave P2 (W10): tell the registrant their unpaid place was released, in the transaction that releases it. The sweep has no
+      // response to defer behind, so the retry worker makes the first attempt.
+      await queueRegistrationExpiredMail(tx, { reg: locked, origin });
       return { promoted, settings, competitionId: div.competition_id };
     })) as unknown as {
       promoted: RegistrationWithGroupRow | null;

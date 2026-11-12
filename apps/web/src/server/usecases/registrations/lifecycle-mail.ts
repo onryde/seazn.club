@@ -8,7 +8,7 @@ import "server-only";
 // `null` also means "already queued" (the once-key): nothing more to attempt. A request path then makes the first attempt after commit
 // (`deferred(() => dispatchNow(ids))`); a webhook or the sweep leaves it to the retry worker, as every other outbox mail does.
 import { routes } from "@/lib/routes";
-import { registrationApprovedEmail, registrationPaidEmail } from "@/lib/email";
+import { registrationApprovedEmail, registrationExpiredEmail, registrationPaidEmail } from "@/lib/email";
 import { enqueueEmailOnce, expiryWithin, recipientLocale } from "@/server/email-outbox";
 import { log } from "@/server/logger";
 import type { Tx, RegistrationWithGroupRow, DivisionCtx } from "./types";
@@ -26,6 +26,10 @@ const hasPublicPages = (ctx: DivisionCtx): boolean => ctx.comp_visibility === "p
 /** The competition's public hub page, for a recipient who holds no status token (a teammate) - or `null` for a private competition. */
 const competitionUrlOf = (origin: string, ctx: DivisionCtx): string | null =>
   hasPublicPages(ctx) ? `${origin}${routes.publicHub(ctx.org_slug, ctx.comp_slug)}` : null;
+
+/** The competition's public registration page: how to register again - or `null` for a private competition. */
+const registerUrlOf = (origin: string, ctx: DivisionCtx): string | null =>
+  hasPublicPages(ctx) ? `${origin}${routes.publicRegister(ctx.org_slug, ctx.comp_slug)}` : null;
 
 /** An entry's own status page, by reference code (`/r/<ref>`): token-less, so it is safe in any mail to the contact. */
 const statusUrlOf = (origin: string, reg: RegistrationWithGroupRow): string | null => (reg.ref_code ? `${origin}/r/${reg.ref_code}` : null);
@@ -160,4 +164,44 @@ export async function queueRegistrationApprovedMails(tx: Tx, a: { reg: Registrat
     if (id) queued.push(id);
   }
   return queued;
+}
+
+/**
+ * `registration_expired`: the hourly sweep released an unpaid place (W10). To the contact, in their language: which entry, that its place
+ * was released, and how to register again. In the sweep's own transaction, where the entry is written `expired`; the sweep has no
+ * response to defer behind, so the retry worker makes the first attempt.
+ *
+ * One mail per ENTRY (a cart whose two entries both lapse tells the contact twice, once for each division: the mails differ by the division
+ * they name). `reg` is the row as the sweep locked it, before it was written `expired`. Once per entry: `expired` is terminal, so the
+ * entry's id is the key; a second sweep finds nothing overdue, and a direct second call queues nothing.
+ */
+export async function queueRegistrationExpiredMail(tx: Tx, a: { reg: RegistrationWithGroupRow; origin: string }): Promise<string | null> {
+  const { reg } = a;
+  return contained(tx, "registration_expired", reg.id, async (sp) => {
+    const ctx = await divisionCtx(sp, reg.division_id);
+    const locale = await recipientLocale(sp, { pick: reg.locale, userId: reg.user_id, orgDefault: ctx.default_locale });
+    const content = await registrationExpiredEmail(
+      {
+        orgName: ctx.org_name,
+        competitionName: ctx.comp_name,
+        divisionName: await divisionNameOf(sp, reg.division_id),
+        displayName: reg.display_name,
+        contactName: reg.contact_name,
+        refCode: reg.ref_code,
+        registerUrl: registerUrlOf(a.origin, ctx),
+      },
+      locale,
+    );
+    return enqueueEmailOnce(sp, {
+      kind: "registration_expired",
+      refType: "registration",
+      refId: reg.id,
+      orgId: reg.org_id,
+      to: reg.contact_email,
+      ...content,
+      transactional: false,
+      expiresAt: expiryWithin(null),
+      dedupeKey: `${reg.id}:expired`,
+    });
+  });
 }

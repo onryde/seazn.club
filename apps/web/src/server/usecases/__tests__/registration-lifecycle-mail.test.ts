@@ -4,7 +4,7 @@
 // its sealed body; Stripe is mocked and the only network.
 //
 // Sport: not applicable. The mail does not vary by sport; the axes that vary are the payment method, the approval mode and the locale.
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
 const stripeMock = vi.hoisted(() => {
@@ -44,9 +44,10 @@ import {
   putRegistrationSettings,
   refundRegistration,
   sendPaymentReminder,
+  sweepRegistrations,
   divisionCtx,
 } from "../registrations";
-import { queueRegistrationApprovedMails, queueRegistrationPaidMail } from "../registrations/lifecycle-mail";
+import { queueRegistrationApprovedMails, queueRegistrationExpiredMail, queueRegistrationPaidMail } from "../registrations/lifecycle-mail";
 import { approveRegistration } from "../registration-approval";
 import { createDivision } from "../divisions";
 import { stubOutboxEnv } from "./_invite-mail";
@@ -539,5 +540,138 @@ describe.skipIf(!HAS_DB)("queueRegistrationApprovedMails' own guard", () => {
     const ids = await sql.begin((tx) => queueRegistrationApprovedMails(tx, { reg: reg.registration }));
     expect(ids).toEqual([]);
     expect(await approvedRows(reg.registration.id)).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// registration_expired (W10)
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+const expiredRows = async (regId: string) =>
+  sql<{ id: string; recipient: string; status: string; attempts: number }[]>`
+    select id, recipient, status, attempts from email_outbox where kind = 'registration_expired' and ref_type = 'registration' and ref_id = ${regId} order by created_at`;
+
+/** The sweep is GLOBAL to the database and other files run their own: every case is seeded first and made overdue in ONE statement
+ *  immediately before ONE sweep, and the oldest deadline sorts first so the sweep's batch reaches these rows before any older one. */
+const overdue = (groupIds: string[]) => sql`update registration_groups set expires_at = timestamptz '2000-01-01' where id = any(${groupIds}::uuid[])`;
+
+describe.skipIf(!HAS_DB)("expired: the sweep releases unpaid places (real sweepRegistrations)", () => {
+  const W: {
+    held: { to: string; regId: string; groupId: string };
+    sibling: { regId: string };
+    paid: { regId: string };
+    contained: { regId: string };
+    priv: { to: string; regId: string };
+    cap: { holderTo: string; holderId: string; waitingId: string; waitingTo: string };
+    division: { name: string };
+  } = {} as never;
+
+  beforeAll(async () => {
+    if (!HAS_DB) return;
+    stubOutboxEnv();
+    // 1. A stripe cart of two entries: one unpaid and overdue (nl contact), one FREE in the same cart (never subject to the deadline).
+    const a = await stripeWorld(1500);
+    await sql`update divisions set name = 'Open Singles' where id = ${a.division.id}`;
+    const heldTo = address("exp");
+    const held = await seedRegistration(a.competition.id, a.division.id, a.settings, { displayName: TEAM, contactEmail: heldTo, locale: "nl", refCode: `P2-${randomUUID().slice(0, 6)}` });
+    await sql`update registration_groups set contact_name = ${CONTACT} where id = ${held.registration.group_id}`;
+    const free = await secondDivision(a as unknown as Parameters<typeof secondDivision>[0], "Free Social", { fee_cents: 0 });
+    const sibling = await seedSecondEntry(held.registration.group_id, free.division.id, 0, "Maya Free", "pending");
+    // 2. A PAID entry whose cart deadline has passed (a webhook won): not expired, not mailed.
+    const paid = await seedRegistration(a.competition.id, a.division.id, a.settings, { contactEmail: address("exp-paid"), status: "paid" });
+    // 3. A mail that cannot be queued (empty address) must not stop the entry being released.
+    const bad = await seedRegistration(a.competition.id, a.division.id, a.settings, { contactEmail: address("exp-bad") });
+    await sql`update registration_groups set contact_email = '' where id = ${bad.registration.group_id}`;
+    // 4. A PRIVATE competition: the mail goes, but names no page it cannot link.
+    const p = await stripeWorld(1500);
+    await sql`update competitions set visibility = 'private' where id = ${p.competition.id}`;
+    const privTo = address("exp-priv");
+    const priv = await seedRegistration(p.competition.id, p.division.id, p.settings, { contactEmail: privTo });
+    // 5. A full division: the holder lapses and the waitlisted entry behind them is promoted in the same transaction.
+    const c = await stripeWorld(1500);
+    await sql`update registration_settings set capacity = 1 where division_id = ${c.division.id}`;
+    const holderTo = address("exp-cap-h");
+    const waitingTo = address("exp-cap-w");
+    const holder = await seedRegistration(c.competition.id, c.division.id, c.settings, { contactEmail: holderTo });
+    const waiting = await seedRegistration(c.competition.id, c.division.id, c.settings, { contactEmail: waitingTo, status: "waitlisted", locale: "es" });
+
+    Object.assign(W, {
+      held: { to: heldTo, regId: held.registration.id, groupId: held.registration.group_id },
+      sibling: { regId: sibling.id },
+      paid: { regId: paid.registration.id },
+      contained: { regId: bad.registration.id },
+      priv: { to: privTo, regId: priv.registration.id },
+      cap: { holderTo, holderId: holder.registration.id, waitingId: waiting.registration.id, waitingTo },
+      division: { name: "Open Singles" },
+    });
+    await overdue([held.registration.group_id, paid.registration.group_id, bad.registration.group_id, priv.registration.group_id, holder.registration.group_id]);
+    await sweepRegistrations(ORIGIN);
+  }, 60_000);
+
+  it("the unpaid entry is released AND its contact is told: their language, their name, the entry, its division, and how to register again", async () => {
+    const [row] = await sql<{ status: string }[]>`select status from registrations where id = ${W.held.regId}`;
+    expect(row!.status, "premise: the real sweep expired it").toBe("expired");
+    const rows = await expiredRows(W.held.regId);
+    expect(rows.map((r) => r.recipient.toLowerCase())).toEqual([W.held.to]);
+    expect(rows[0]!.status).toBe("queued");
+    expect(rows[0]!.attempts, "the sweep leaves the first attempt to the worker").toBe(0);
+    const b = await body("registration_expired", "registration", W.held.regId, W.held.to);
+    expect(b.subject, "the contact's nl pick").toContain("Je plek is vrijgegeven");
+    expect(words(b.html)).toContain(`Hoi ${CONTACT}`);
+    expect(b.text).toContain(TEAM);
+    expect(b.text).toContain("Open Singles");
+    expect(b.text, "where to register again: the competition's public register page, on the sweep's origin").toContain(`${ORIGIN}/live/`);
+    expect(b.text).toContain("/register");
+  });
+
+  it("the free sibling in the same cart is not released and not mailed; the paid entry is neither (the empty case)", async () => {
+    const [free] = await sql<{ status: string }[]>`select status from registrations where id = ${W.sibling.regId}`;
+    const [paid] = await sql<{ status: string }[]>`select status from registrations where id = ${W.paid.regId}`;
+    expect(free!.status, "premise: nothing was due for it").toBe("pending");
+    expect(paid!.status).toBe("paid");
+    expect(await expiredRows(W.sibling.regId)).toHaveLength(0);
+    expect(await expiredRows(W.paid.regId)).toHaveLength(0);
+  });
+
+  it("a second sweep releases and mails nothing more", async () => {
+    const before = await expiredRows(W.held.regId);
+    await sweepRegistrations(ORIGIN);
+    expect(await expiredRows(W.held.regId)).toEqual(before);
+  });
+
+  it("a mail that cannot be queued does not stop the place being released", async () => {
+    const [row] = await sql<{ status: string }[]>`select status from registrations where id = ${W.contained.regId}`;
+    expect(row!.status).toBe("expired");
+    expect(await expiredRows(W.contained.regId)).toHaveLength(0);
+  });
+
+  it("a private competition: still told, with no register link to a page that does not exist", async () => {
+    const [row] = await sql<{ status: string }[]>`select status from registrations where id = ${W.priv.regId}`;
+    expect(row!.status).toBe("expired");
+    const b = await body("registration_expired", "registration", W.priv.regId, W.priv.to);
+    expect(b.text).not.toContain("/register");
+    expect(b.text).not.toContain("http");
+  });
+
+  it("the release that frees a seat still promotes the waitlisted entry behind it: the holder is told AND the next entrant is promoted", async () => {
+    const [h] = await sql<{ status: string }[]>`select status from registrations where id = ${W.cap.holderId}`;
+    const [n] = await sql<{ status: string; promoted_at: Date | null }[]>`select status, promoted_at from registrations where id = ${W.cap.waitingId}`;
+    expect(h!.status).toBe("expired");
+    expect(n!.promoted_at, "premise: the real sweep promoted the next entrant").not.toBeNull();
+    expect((await expiredRows(W.cap.holderId)).map((r) => r.recipient.toLowerCase())).toEqual([W.cap.holderTo]);
+    const promoted = await sql<{ recipient: string }[]>`select recipient from email_outbox where kind = 'registration_promoted' and ref_id = ${W.cap.waitingId}`;
+    expect(promoted.map((r) => r.recipient.toLowerCase()), "the promotion mail is unaffected").toEqual([W.cap.waitingTo]);
+    expect(await expiredRows(W.cap.waitingId), "the promoted entrant is not told their place was released").toHaveLength(0);
+  });
+});
+
+describe.skipIf(!HAS_DB)("queueRegistrationExpiredMail's own guard", () => {
+  it("once per entry: a second call queues nothing", async () => {
+    const w = await stripeWorld(1500);
+    const reg = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("exp-once") });
+    const queue = () => sql.begin((tx) => queueRegistrationExpiredMail(tx, { reg: reg.registration, origin: ORIGIN }));
+    expect(await queue()).not.toBeNull();
+    expect(await queue()).toBeNull();
+    expect(await expiredRows(reg.registration.id)).toHaveLength(1);
   });
 });
