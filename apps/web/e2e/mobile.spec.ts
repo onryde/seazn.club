@@ -8426,6 +8426,16 @@ async function qmGuest(browser: import("@playwright/test").Browser) {
 
 /** Nothing clipped inside `root` at this width; the count of boxes scanned (zero would pass anything, so it fails). */
 async function qmNotClipped(page: Page, root: string, label: string, exempt: (box: string) => boolean = () => false): Promise<number> {
+  // A turning chevron mid-transition (Show QR's) reads as a clip for ~100 ms on a fast runner: settle every FINITE
+  // animation under the root first (a live dot's pulse is infinite and would never settle, so it is left out).
+  await page.locator(root).evaluate((el) =>
+    Promise.all(
+      el
+        .getAnimations({ subtree: true })
+        .filter((a) => a.effect?.getComputedTiming().iterations !== Infinity)
+        .map((a) => a.finished.catch(() => null)),
+    ),
+  );
   const boxes = await page.locator(root).locator(QM_SCAN).count();
   expect(boxes, `${label}: the scan had boxes to scan`).toBeGreaterThan(0);
   const { clipped, scrollable } = await overflowingIn(page, root, QM_SCAN, `${label} was not in the DOM`);
