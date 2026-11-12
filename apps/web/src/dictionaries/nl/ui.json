@@ -8335,5 +8335,6 @@
   "regPay.confirming.slow": "Dit duurt langer dan normaal. Je betaling is veilig: ververs deze pagina over een minuut of neem contact op met de organisator.",
   "regPay.refused.notPayable": "Deze inschrijving kan nu niet online worden betaald. Open je betaalpagina opnieuw om te zien hoe het ervoor staat.",
   "regPay.refused.unavailable": "De organisator kan nu geen kaartbetalingen aannemen. Neem contact op.",
-  "regPay.refused.failed": "We konden de betaling niet starten. Probeer het over een moment opnieuw."
+  "regPay.refused.failed": "We konden de betaling niet starten. Probeer het over een moment opnieuw.",
+  "regPay.notice.retry": "Je betaling wordt al voorbereid — tik nogmaals op Betaal."
 }

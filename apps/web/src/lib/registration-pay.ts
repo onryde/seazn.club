@@ -7,14 +7,21 @@ export function registrationPayPath(token: string): string {
   return `/r/pay/${token}`;
 }
 
-/** The page's one notice flag (`?notice=recording`): the Pay route sends the player back with it when Stripe says the card
- *  payment is complete and the payment webhook has not landed yet. A display hint only: the page reads nothing else from it. */
+/** The page's notice flag (`?notice=...`), a display hint only: the page reads nothing else from it. The Pay route sends the
+ *  player back with `recording` when Stripe says the payment is complete (or still processing) and the payment webhook has not
+ *  landed yet, and with `retry` when the press lost a race to another press setting up the same payment. */
 export const PAY_NOTICE_PARAM = "notice";
 export const PAY_RECORDING_NOTICE = "recording";
+export const PAY_RETRY_NOTICE = "retry";
 
 /** The payment page with the "payment being recorded" notice. */
 export function registrationPayRecordingPath(token: string): string {
   return `${registrationPayPath(token)}?${PAY_NOTICE_PARAM}=${PAY_RECORDING_NOTICE}`;
+}
+
+/** The payment page with the "already being set up - tap Pay again" notice. */
+export function registrationPayRetryPath(token: string): string {
+  return `${registrationPayPath(token)}?${PAY_NOTICE_PARAM}=${PAY_RETRY_NOTICE}`;
 }
 
 /** What every answer from the page's routes carries: per request, never indexed, never a Referer - a redirect's own

@@ -21,7 +21,7 @@ import { notFound } from "next/navigation";
 import { HttpError } from "@/lib/errors";
 import { getDictionary, t } from "@/lib/i18n";
 import { resolveLocale } from "@/lib/resolve-locale";
-import { isPayConfirming, registrationPayPath, type PayPageQuery } from "@/lib/registration-pay";
+import { PAY_RETRY_NOTICE, isPayConfirming, registrationPayPath, type PayPageQuery } from "@/lib/registration-pay";
 import { PayPageNotice, PayPageView } from "@/components/registrations/pay-page-view";
 import { log } from "@/server/logger";
 import { payPageDocByToken, reconcileRegistrationByPaySession } from "@/server/usecases/registrations";
@@ -82,5 +82,13 @@ export default async function PayPage({
     }
   }
   const ui = await getDictionary(doc.locale, "ui");
-  return <PayPageView doc={doc} ui={ui} payAction={`${registrationPayPath(token)}/pay`} confirming={isPayConfirming(doc, q)} />;
+  return (
+    <PayPageView
+      doc={doc}
+      ui={ui}
+      payAction={`${registrationPayPath(token)}/pay`}
+      confirming={isPayConfirming(doc, q)}
+      retryNotice={q.notice === PAY_RETRY_NOTICE}
+    />
+  );
 }

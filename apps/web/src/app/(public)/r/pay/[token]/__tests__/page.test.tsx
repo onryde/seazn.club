@@ -65,7 +65,7 @@ vi.mock("@/server/usecases/registrations", async (importOriginal) => {
 
 import { getDictionary, t } from "@/lib/i18n";
 import type { Dict } from "@/lib/i18n-constants";
-import { PAY_NOTICE_PARAM, PAY_RECORDING_NOTICE, isPayConfirming, registrationPayPath } from "@/lib/registration-pay";
+import { PAY_NOTICE_PARAM, PAY_RECORDING_NOTICE, PAY_RETRY_NOTICE, isPayConfirming, registrationPayPath } from "@/lib/registration-pay";
 import { PAY_PAGE_STATES, type PayPageDoc, type PayPageState } from "@/server/usecases/registrations/pay-page";
 import { PayPageView } from "@/components/registrations/pay-page-view";
 import { CONFIRM_INTERVAL_MS, CONFIRM_MAX_REFRESHES, PayPageConfirming } from "@/components/registrations/pay-page-confirming";
@@ -174,6 +174,16 @@ describe("every state renders its copy; the Pay form exists only in `pay` (count
     expect(markup).not.toContain(html(t(en, "regPay.pay", { amount: "€25.00" })));
   });
 
+  it("offline: the deadline row shows too (final review, item 3); a paid entry still shows none", () => {
+    const offline = render(doc(STATE_CASES.offline.doc));
+    expect(has(offline, en, "regPay.deadline")).toBe(true);
+    expect(offline).toContain("Dec 1, 2026");
+    const noDeadline = render(doc({ ...STATE_CASES.offline.doc, deadline: null }));
+    expect(has(noDeadline, en, "regPay.deadline")).toBe(false);
+    const paid = render(doc({ state: "paid" }));
+    expect(has(paid, en, "regPay.deadline")).toBe(false);
+  });
+
   it("paid with a date reads 'Paid on <date>'; paid without a date reads 'Paid'", () => {
     const dated = render(doc({ state: "paid", paidAt: new Date("2026-11-20T09:00:00Z") }));
     expect(has(dated, en, "regPay.state.paidOn", { date: "Nov 20, 2026" })).toBe(true);
@@ -221,6 +231,7 @@ describe("isPayConfirming (Review Focus 4)", () => {
     ["checkout=cancel", pay, { checkout: "cancel", session_id: SESSION }, false],
     ["the recording notice", pay, { notice: PAY_RECORDING_NOTICE }, true],
     ["any other notice", pay, { notice: "other" }, false],
+    ["the retry notice (a racing press) is not confirming", pay, { notice: PAY_RETRY_NOTICE }, false],
     ["no query at all", pay, {}, false],
     ["a matching return on a paid entry", doc({ state: "paid", paySessionId: SESSION }), { checkout: "success", session_id: SESSION }, false],
     ["the recording notice on a paid entry", doc({ state: "paid" }), { notice: PAY_RECORDING_NOTICE }, false],
@@ -346,6 +357,31 @@ describe("the page function", () => {
     expect(hasForm(markup)).toBe(false);
   });
 
+  it("?notice=retry on a pay entry (a racing press, final review item 2): the retry line above a live Pay form, no confirming", async () => {
+    ctx.docs = [doc()];
+    const markup = await run({ [PAY_NOTICE_PARAM]: PAY_RETRY_NOTICE });
+    expect(has(markup, en, "regPay.notice.retry")).toBe(true);
+    expect(markup).toContain('data-testid="pay-retry"');
+    expect(hasForm(markup)).toBe(true);
+    expect(has(markup, en, "regPay.confirming.title")).toBe(false);
+  });
+
+  it("the retry line shows only for ?notice=retry on a pay entry (counted)", async () => {
+    let checked = 0;
+    for (const [d, q] of [
+      [doc(), {}],
+      [doc(), { [PAY_NOTICE_PARAM]: PAY_RECORDING_NOTICE }],
+      [doc({ state: "paid" }), { [PAY_NOTICE_PARAM]: PAY_RETRY_NOTICE }],
+      [doc({ state: "offline" }), { [PAY_NOTICE_PARAM]: PAY_RETRY_NOTICE }],
+    ] as const) {
+      ctx.docs = [d];
+      const markup = await run(q);
+      expect(markup, JSON.stringify(q)).not.toContain('data-testid="pay-retry"');
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
   it("the 404 page is the one answer, from the reader's dictionary, with no token and no props", async () => {
     ctx.locale = "fr";
     const fr = await getDictionary("fr", "ui");
@@ -359,7 +395,7 @@ describe("the copy is in the dictionaries the page reads", () => {
   it("every regPay key the brief names exists in all four locales, non-empty (counted)", () => {
     const keys = JSON.parse(readFileSync(resolve(__dirname, "../../../../../../dictionaries/en/ui.json"), "utf8")) as Record<string, string>;
     const regPay = Object.keys(keys).filter((k) => k.startsWith("regPay."));
-    expect(regPay.length).toBe(30);
+    expect(regPay.length).toBe(31);
     let checked = 0;
     for (const loc of ["en", "es", "fr", "nl"] as const) {
       const d = JSON.parse(readFileSync(resolve(__dirname, `../../../../../../dictionaries/${loc}/ui.json`), "utf8")) as Record<string, string>;

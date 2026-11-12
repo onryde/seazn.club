@@ -63,6 +63,7 @@ export function PayPageView({
   ui,
   payAction,
   confirming,
+  retryNotice = false,
 }: {
   doc: PayPageDoc;
   ui: Dict;
@@ -70,6 +71,9 @@ export function PayPageView({
   payAction: string;
   /** The page's `isPayConfirming` verdict on this request. */
   confirming: boolean;
+  /** `?notice=retry`: the Pay route sent the player back after their press lost a race to another press. Shown only above a
+   *  live Pay form. */
+  retryNotice?: boolean;
 }) {
   const money = (cents: number) => payPageMoney(doc.locale, cents, doc.currency);
   const total = money(doc.totalCents);
@@ -92,6 +96,11 @@ export function PayPageView({
   } else if (doc.state === "pay") {
     panel = (
       <form method="post" action={payAction} data-testid="pay-form" className="ph-no-capture min-w-0">
+        {retryNotice ? (
+          <p data-testid="pay-retry" role="status" className="mb-3 text-sm font-medium break-words text-ink">
+            {t(ui, "regPay.notice.retry")}
+          </p>
+        ) : null}
         <button type="submit" className="btn btn-primary w-full sm:w-auto">
           {t(ui, "regPay.pay", { amount: total })}
         </button>
@@ -169,7 +178,7 @@ export function PayPageView({
           <Row label={t(ui, "regPay.total")} testId="pay-total">
             <span className="text-base font-semibold tabular-nums">{total}</span>
           </Row>
-          {doc.state === "pay" && doc.deadline ? (
+          {(doc.state === "pay" || doc.state === "offline") && doc.deadline ? (
             <Row label={t(ui, "regPay.deadline")}>{dateTime(doc.locale, doc.deadline)}</Row>
           ) : null}
           {doc.refCode ? <Row label={t(ui, "regPay.reference")}>{doc.refCode}</Row> : null}

@@ -8335,5 +8335,6 @@
   "regPay.confirming.slow": "Esto está tardando más de lo normal. Tu pago está a salvo: actualiza esta página en un minuto o ponte en contacto con el organizador.",
   "regPay.refused.notPayable": "Esta inscripción no se puede pagar en línea ahora mismo. Abre de nuevo tu página de pago para ver cómo está.",
   "regPay.refused.unavailable": "El organizador no puede aceptar pagos con tarjeta ahora mismo. Ponte en contacto con él.",
-  "regPay.refused.failed": "No hemos podido iniciar el pago. Inténtalo de nuevo en un momento."
+  "regPay.refused.failed": "No hemos podido iniciar el pago. Inténtalo de nuevo en un momento.",
+  "regPay.notice.retry": "Tu pago ya se está preparando: vuelve a pulsar Pagar."
 }

@@ -6364,6 +6364,7 @@ export type DictionaryKey =
   | "regPay.meta.title"
   | "regPay.notFound.body"
   | "regPay.notFound.title"
+  | "regPay.notice.retry"
   | "regPay.offline.title"
   | "regPay.organiser"
   | "regPay.pay"

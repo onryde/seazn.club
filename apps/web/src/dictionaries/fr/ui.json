@@ -8335,5 +8335,6 @@
   "regPay.confirming.slow": "Cela prend plus de temps que d'habitude. Votre paiement est en sécurité : actualisez cette page dans une minute ou contactez l'organisateur.",
   "regPay.refused.notPayable": "Cette inscription ne peut pas être payée en ligne pour le moment. Rouvrez votre page de paiement pour voir où elle en est.",
   "regPay.refused.unavailable": "L'organisateur ne peut pas accepter les paiements par carte pour le moment. Veuillez le contacter.",
-  "regPay.refused.failed": "Nous n'avons pas pu lancer le paiement. Veuillez réessayer dans un instant."
+  "regPay.refused.failed": "Nous n'avons pas pu lancer le paiement. Veuillez réessayer dans un instant.",
+  "regPay.notice.retry": "Votre paiement est déjà en cours de préparation — appuyez de nouveau sur Payer."
 }

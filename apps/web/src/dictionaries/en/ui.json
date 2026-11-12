@@ -8335,5 +8335,6 @@
   "regPay.confirming.slow": "This is taking longer than usual. Your payment is safe: refresh this page in a minute, or contact the organiser.",
   "regPay.refused.notPayable": "This entry can't be paid online right now. Open your payment page again to see where it stands.",
   "regPay.refused.unavailable": "The organiser can't take card payments right now. Please contact them.",
-  "regPay.refused.failed": "We couldn't start the payment. Please try again in a moment."
+  "regPay.refused.failed": "We couldn't start the payment. Please try again in a moment.",
+  "regPay.notice.retry": "Your payment is already being set up — tap Pay again."
 }

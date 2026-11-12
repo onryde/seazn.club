@@ -45,7 +45,7 @@ vi.mock("@/lib/stripe", () => ({
 import { sql, statementCount } from "@/lib/db";
 import { __setRateLimitCounterForTests } from "@/lib/rate-limit";
 import { getDictionary, t } from "@/lib/i18n";
-import { REG_PAY_PRIVATE_HEADERS, registrationPayPath, registrationPayRecordingPath } from "@/lib/registration-pay";
+import { REG_PAY_PRIVATE_HEADERS, registrationPayPath, registrationPayRecordingPath, registrationPayRetryPath } from "@/lib/registration-pay";
 import { issuePayLink, putRegistrationSettings, recordPayToken } from "@/server/usecases/registrations";
 import { SETTINGS_BASE, seedRegistration, stripeRig, type StripeRigResult } from "@/server/usecases/__tests__/_registration-fixtures";
 import { POST } from "../pay/route";
@@ -174,6 +174,34 @@ describe.skipIf(!HAS_DB)("POST /r/pay/[token]/pay", () => {
     expect(res.headers.get("location")).toBe(registrationPayRecordingPath(token));
     expectPrivate(res);
     expect(stripeMock.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("a racing press loses the pointer claim (409 REGISTRATION_CHECKOUT_CONFLICT) → 303 back to the page with ?notice=retry, its own session expired (final review, item 2)", async () => {
+    const { reg, token } = await entry();
+    // A second press stamps the entry's pointer while this one is inside Stripe: this press's claim (on the null it read) loses.
+    stripeMock.create.mockImplementationOnce(async (params: Stripe.Checkout.SessionCreateParams) => {
+      await sql`update registrations set pay_session_id = 'cs_test_pp4_racer' where id = ${reg.id}`;
+      const id = `cs_test_pp4_loser_${randomUUID().slice(0, 6)}`;
+      const s: FakeSession = {
+        id,
+        object: "checkout.session",
+        status: "open",
+        payment_status: "unpaid",
+        payment_intent: null,
+        url: `https://checkout.stripe.test/${id}`,
+        expires_at: Math.floor(Date.now() / 1000) + 24 * 3600,
+        metadata: { ...(params.metadata as Record<string, string>) },
+      };
+      stripeMock.store.set(id, s);
+      return { ...s };
+    });
+    const res = await press(token);
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe(registrationPayRetryPath(token));
+    expectPrivate(res);
+    expect(stripeMock.create).toHaveBeenCalledTimes(1);
+    const [loser] = [...stripeMock.store.values()] as FakeSession[];
+    expect(loser!.status).toBe("expired"); // the loser never hands out its URL
   });
 
   it("Connect off (Review Focus 5) → 503 in the ENTRY's language, not the reader's, and nothing minted", async () => {
