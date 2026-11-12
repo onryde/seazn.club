@@ -129,9 +129,14 @@ const PAYMENT_BASE = {
   amount_cents: 1500,
   refunded_cents: 0,
   disputed_at: null,
+  // The CART's intent (set by whichever entry paid) - read by nothing below; kept so a test can show it is ignored.
   payment_intent_id: null as string | null,
+  // THIS entry's own card payment (V387), the only intent the payment state reads (polish wave P5, carry d).
+  entry_payment_intent_id: null as string | null,
   status: "confirmed" as const,
 };
+/** A cart whose card payment was a SIBLING's: the cart's intent is set, this entry's own is not. */
+const CART_PAID_BY_SIBLING = { ...PAYMENT_BASE, payment_intent_id: "pi_sibling" };
 
 describe("deriveRegistrantPaymentState", () => {
   it("a disputed entry is 'disputed' regardless of anything else", () => {
@@ -150,7 +155,7 @@ describe("deriveRegistrantPaymentState", () => {
 
   it("a zero-fee entry is 'free', even with a non-null payment_intent_id — the CART might have paid by card for a fee-bearing sibling", () => {
     expect(
-      deriveRegistrantPaymentState({ ...PAYMENT_BASE, amount_cents: 0, payment_intent_id: "pi_123" }),
+      deriveRegistrantPaymentState({ ...PAYMENT_BASE, amount_cents: 0, entry_payment_intent_id: "pi_123" }),
     ).toBe("free");
   });
 
@@ -168,20 +173,34 @@ describe("deriveRegistrantPaymentState", () => {
   // V363/V364 moved onto `registration_groups` (CART-level, shared by every
   // entry in the cart) — reads the ENTRY's own `status` first instead.
   it("status paid/confirmed with no card payment_intent is 'paidOffline'", () => {
-    expect(deriveRegistrantPaymentState({ ...PAYMENT_BASE, status: "paid", payment_intent_id: null })).toBe(
+    expect(deriveRegistrantPaymentState({ ...PAYMENT_BASE, status: "paid", entry_payment_intent_id: null })).toBe(
       "paidOffline",
     );
     expect(
-      deriveRegistrantPaymentState({ ...PAYMENT_BASE, status: "confirmed", payment_intent_id: null }),
+      deriveRegistrantPaymentState({ ...PAYMENT_BASE, status: "confirmed", entry_payment_intent_id: null }),
     ).toBe("paidOffline");
   });
 
+  // Polish wave P5 (P1-review carry d): an entry marked paid in cash beside a sibling that paid by card read "Paid" (by card),
+  // because the label read the CART's intent. It reads the entry's own.
+  it("paid/confirmed with only a SIBLING's card payment on the cart is 'paidOffline'; the entry's own intent is 'paid'", () => {
+    const checked = (["paid", "confirmed"] as const).map((status) => {
+      expect(deriveRegistrantPaymentState({ ...CART_PAID_BY_SIBLING, status }), status).toBe("paidOffline");
+      expect(
+        deriveRegistrantPaymentState({ ...CART_PAID_BY_SIBLING, status, entry_payment_intent_id: "pi_sibling" }),
+        status,
+      ).toBe("paid");
+      return status;
+    });
+    expect(checked.length, "both settled statuses checked").toBe(2);
+  });
+
   it("status paid or confirmed WITH a card payment_intent is 'paid' (card payment captured)", () => {
-    expect(deriveRegistrantPaymentState({ ...PAYMENT_BASE, status: "paid", payment_intent_id: "pi_123" })).toBe(
+    expect(deriveRegistrantPaymentState({ ...PAYMENT_BASE, status: "paid", entry_payment_intent_id: "pi_123" })).toBe(
       "paid",
     );
     expect(
-      deriveRegistrantPaymentState({ ...PAYMENT_BASE, status: "confirmed", payment_intent_id: "pi_123" }),
+      deriveRegistrantPaymentState({ ...PAYMENT_BASE, status: "confirmed", entry_payment_intent_id: "pi_123" }),
     ).toBe("paid");
   });
 
@@ -191,7 +210,7 @@ describe("deriveRegistrantPaymentState", () => {
 
   it("a pending entry stays 'awaitingPayment' even when payment_intent_id is set — payment_intent_id alone never implies THIS entry is paid", () => {
     expect(
-      deriveRegistrantPaymentState({ ...PAYMENT_BASE, status: "pending", payment_intent_id: "pi_123" }),
+      deriveRegistrantPaymentState({ ...PAYMENT_BASE, status: "pending", entry_payment_intent_id: "pi_123" }),
     ).toBe("awaitingPayment");
   });
 
@@ -204,14 +223,14 @@ describe("deriveRegistrantPaymentState", () => {
       amount_cents: 1000,
       refunded_cents: 0,
       disputed_at: null,
-      payment_intent_id: null,
+      entry_payment_intent_id: null,
       status: "confirmed", // A was just marked paid -> materialised to confirmed
     });
     const entryB_stillPending = deriveRegistrantPaymentState({
       amount_cents: 2000,
       refunded_cents: 0,
       disputed_at: null,
-      payment_intent_id: null, // same cart column, untouched by A's mark-paid
+      entry_payment_intent_id: null, // B's own column, untouched by A's mark-paid
       status: "pending", // B's own status, untouched by A's mark-paid
     });
     expect(entryA_markedPaid).toBe("paidOffline");

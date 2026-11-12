@@ -180,33 +180,90 @@ describe.skipIf(!HAS_DB)("division delete (v3/09 §4)", () => {
     const { auth } = await seedOrg();
     const { comp, division } = await seedDivision(auth);
     // Registration CLOSED (the open-registration guard must not be the one
-    // firing) but money was taken and not returned. Payment envelope lives
-    // on the cart (registration_groups) now.
-    const [{ id: groupId }] = await sql<{ id: string }[]>`
-      insert into registration_groups
-        (competition_id, contact_name, contact_email, access_token_hash,
-         amount_cents, currency, payment_method, payment_intent_id)
-      values
-        (${comp.id}, 'Payer', 'payer@test.local', ${randomUUID()},
-         500, 'gbp', 'stripe', ${"pi_" + randomUUID().slice(0, 8)})
-      returning id`;
-    await sql`insert into registrations (division_id, group_id, status, display_name, amount_cents)
-      values (${division.id}, ${groupId}, 'confirmed', 'Payer', 500)`;
-    try {
-      await deleteDivision(auth, division.id);
-      expect.unreachable("expected 409 REGISTRATION_PAYMENTS");
-    } catch (err) {
-      expect(err).toBeInstanceOf(HttpError);
-      expect((err as HttpError).status).toBe(409);
-      expect((err as HttpError).code).toBe("REGISTRATION_PAYMENTS");
-    }
-    // Fully refunded → the money trail is settled → delete proceeds.
+    // firing) but money was taken and not returned. Seeded as the webhook
+    // writes a card payment: the intent on the cart AND on the entry it paid
+    // (`checkout-completion.ts`, V387) - the guard reads the entry's own.
+    const intent = "pi_" + randomUUID().slice(0, 8);
+    const { groupId, regIds } = await seedCart(comp.id, division.id, [500], intent, [true]);
+    await expectPaymentsBlock(auth, division.id);
+    // Fully refunded → the money trail is settled → delete proceeds. A refund
+    // books both totals (entry and cart; `organiser-actions.ts`).
+    await sql`update registrations set refunded_cents = amount_cents where id = ${regIds[0]}`;
     await sql`update registration_groups set refunded_cents = amount_cents where id = ${groupId}`;
     await deleteDivision(auth, division.id);
     const [gone] = await sql`select 1 from divisions where id = ${division.id}`;
     expect(gone).toBeUndefined();
   });
+
+  // Polish wave P5 (P1-review carry d): the guard read the CART's totals, which never clear while a cart holds an unpaid
+  // entry beside a paid-and-refunded one - the delete was refused for good although no money was held.
+  it("a cart whose only payment was fully refunded does not block, though an unpaid sibling keeps the cart's totals apart", async () => {
+    const { auth } = await seedOrg();
+    const { comp, division } = await seedDivision(auth);
+    const intent = "pi_" + randomUUID().slice(0, 8);
+    const { groupId, regIds } = await seedCart(comp.id, division.id, [1500, 1000], intent, [true, false]);
+    await expectPaymentsBlock(auth, division.id); // the positive pair: A's payment is live
+    await sql`update registrations set refunded_cents = 1500 where id = ${regIds[0]}`;
+    await sql`update registration_groups set refunded_cents = 1500 where id = ${groupId}`;
+    const [g] = await sql<{ amount_cents: number; refunded_cents: number }[]>`
+      select amount_cents, refunded_cents from registration_groups where id = ${groupId}`;
+    expect(g!.refunded_cents, "premise: the cart's totals do not clear").toBeLessThan(g!.amount_cents);
+    await deleteDivision(auth, division.id);
+    const [gone] = await sql`select 1 from divisions where id = ${division.id}`;
+    expect(gone).toBeUndefined();
+  });
+
+  it("an entry that paid again after its late payment was refunded still blocks (only its current payment's refunds count)", async () => {
+    const { auth } = await seedOrg();
+    const { comp, division } = await seedDivision(auth);
+    const intent = "pi_" + randomUUID().slice(0, 8);
+    const { groupId, regIds } = await seedCart(comp.id, division.id, [500], intent, [true]);
+    // The late payment's refund is booked as history AND late (`checkout-completion.ts`, V510), on both totals.
+    await sql`update registrations set refunded_cents = 500, late_refunded_cents = 500 where id = ${regIds[0]}`;
+    await sql`update registration_groups set refunded_cents = 500 where id = ${groupId}`;
+    await expectPaymentsBlock(auth, division.id);
+  });
 });
+
+/** A card cart in `divisionId`: one confirmed entry per amount; `paid[i]` stamps the cart's intent on entry i as the webhook
+ *  does for the entry a session paid. The cart's amount is the entries' sum, its intent set (some entry paid). */
+async function seedCart(
+  competitionId: string,
+  divisionId: string,
+  amounts: number[],
+  intent: string,
+  paid: boolean[],
+): Promise<{ groupId: string; regIds: string[] }> {
+  const [{ id: groupId }] = await sql<{ id: string }[]>`
+    insert into registration_groups
+      (competition_id, contact_name, contact_email, access_token_hash,
+       amount_cents, currency, payment_method, payment_intent_id)
+    values
+      (${competitionId}, 'Payer', 'payer@test.local', ${randomUUID()},
+       ${amounts.reduce((a, b) => a + b, 0)}, 'gbp', 'stripe', ${intent})
+    returning id`;
+  const regIds: string[] = [];
+  for (const [i, amount] of amounts.entries()) {
+    const [{ id }] = await sql<{ id: string }[]>`
+      insert into registrations (division_id, group_id, status, display_name, amount_cents, payment_intent_id)
+      values (${divisionId}, ${groupId}, ${paid[i] ? "confirmed" : "pending"}, ${"Entry " + i}, ${amount},
+              ${paid[i] ? intent : null})
+      returning id`;
+    regIds.push(id);
+  }
+  return { groupId, regIds };
+}
+
+async function expectPaymentsBlock(auth: AuthCtx, divisionId: string): Promise<void> {
+  try {
+    await deleteDivision(auth, divisionId);
+    expect.unreachable("expected 409 REGISTRATION_PAYMENTS");
+  } catch (err) {
+    expect(err).toBeInstanceOf(HttpError);
+    expect((err as HttpError).status).toBe(409);
+    expect((err as HttpError).code).toBe("REGISTRATION_PAYMENTS");
+  }
+}
 
 describe.skipIf(!HAS_DB)("division archive / restore (v3/09 §4)", () => {
   it("archive hides from the console list, the public view, and frees the plan slot", async () => {

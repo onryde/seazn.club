@@ -28,12 +28,17 @@ import { createDivision } from "../divisions";
 import { createEntrants, patchEntrant } from "../entrants";
 import { listKnockoutWaiting, listStageDrawSeeds } from "../knockout-desk";
 import { placeWaitingKnockoutEntrant } from "../knockout-late-entry";
-import { confirmRegistration, handleRegistrationCheckoutCompleted, putRegistrationSettings } from "../registrations";
+import {
+  confirmRegistration,
+  handleRegistrationCheckoutCompleted,
+  markRegistrationPaidOffline,
+  putRegistrationSettings,
+} from "../registrations";
 import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
 import { createStages, generateStageFixtures } from "../stages";
 import { withdrawEntrantCascade } from "../withdrawal";
-import { fakeSession, seedRegistration } from "./_registration-fixtures";
+import { fakeSession, seedRegistration, seedSecondEntry } from "./_registration-fixtures";
 import { seedOrg } from "./_seed";
 
 const getStripeMock = vi.hoisted(() =>
@@ -190,6 +195,37 @@ describe.skipIf(!HAS_DB)("T19 listKnockoutWaiting: the stage card's waiting play
     await sql`update registrations set refunded_cents = amount_cents where id = ${paid.registrationId}`;
     const [w] = await listKnockoutWaiting(r.auth, r.divisionId);
     expect(w).toMatchObject({ entrantId: paid.entrantId, paid: false });
+  });
+
+  // Polish wave P5 (P1-review carry d): "paid" is THIS entry's own card payment. The cart's intent is set by whichever entry
+  // paid, so an entry marked paid in cash beside a sibling who paid by card read as paid online - and its refused tap offered a
+  // refund of money it never paid by card.
+  it("an entry marked paid offline beside a card-paying cart sibling is not paid online; the sibling is", async () => {
+    const r = await rig({ n: 6 });
+    const card = await paidArrival(r, "Card Payer");
+    const [{ group_id }] = await sql<{ group_id: string }[]>`select group_id from registrations where id = ${card.registrationId}`;
+    const cash = await seedSecondEntry(group_id, r.divisionId, 500, "Cash Payer");
+    const marked = await markRegistrationPaidOffline(r.auth, cash.id);
+    expect(marked.entrant_id, "rig: the mark-paid made an entrant").toBeTruthy();
+    expect(marked.payment_intent_id, "premise: the CART carries the sibling's card intent").toBeTruthy();
+    expect(marked.entry_payment_intent_id, "premise: the cash entry has no card payment of its own").toBeNull();
+    const waiting = await listKnockoutWaiting(r.auth, r.divisionId);
+    expect(waiting.length, "two arrivals, two waiting").toBe(2);
+    expect(waiting.map((w) => ({ name: w.name, paid: w.paid }))).toEqual([
+      { name: "Card Payer", paid: true },
+      { name: "Cash Payer", paid: false },
+    ]);
+  });
+
+  it("an entry that paid again after a late payment was refunded is still paid (only its current payment's refunds count)", async () => {
+    const r = await rig({ n: 6 });
+    const paid = await paidArrival(r, "Paid Again");
+    // A late payment's refund is booked as history AND late (`checkout-completion.ts`, V510); the in-time payment is untouched.
+    await sql`update registrations
+                 set refunded_cents = refunded_cents + amount_cents, late_refunded_cents = late_refunded_cents + amount_cents
+               where id = ${paid.registrationId}`;
+    const [w] = await listKnockoutWaiting(r.auth, r.divisionId);
+    expect(w).toMatchObject({ entrantId: paid.entrantId, paid: true });
   });
 });
 

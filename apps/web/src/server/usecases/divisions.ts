@@ -509,11 +509,13 @@ export async function deleteDivision(auth: AuthCtx, id: string): Promise<void> {
     // Money records must outlive mistakes (spec 2026-07-12 issue #10): a hard
     // delete cascades the registrations away, so block it while any card
     // payment on this division is not fully refunded. Archive stays open.
+    // Polish wave P5 (carry d): per ENTRY - its own card payment (V387) net of
+    // that payment's refunds (`ownPaymentRefundedCents`, V510). The cart's
+    // totals never clear while it holds an unpaid entry beside a refunded one.
     const [{ live_payments }] = await tx<{ live_payments: number }[]>`
       select count(*)::int as live_payments from registrations r
-      join registration_groups g on g.id = r.group_id
-      where r.division_id = ${id} and g.payment_intent_id is not null
-        and g.refunded_cents < g.amount_cents`;
+      where r.division_id = ${id} and r.payment_intent_id is not null
+        and r.refunded_cents - r.late_refunded_cents < r.amount_cents`;
     if (live_payments > 0) {
       throw new HttpError(
         409,

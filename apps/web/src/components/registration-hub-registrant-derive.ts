@@ -170,7 +170,7 @@ export type RegistrantPaymentState =
 export function deriveRegistrantPaymentState(
   row: Pick<
     RegistrationListRow,
-    "amount_cents" | "refunded_cents" | "disputed_at" | "payment_intent_id" | "status"
+    "amount_cents" | "refunded_cents" | "disputed_at" | "entry_payment_intent_id" | "status"
   >,
 ): RegistrantPaymentState {
   if (row.disputed_at !== null) return "disputed";
@@ -180,7 +180,9 @@ export function deriveRegistrantPaymentState(
   if (row.status === "waitlisted") return "waitlisted";
   if (row.amount_cents === 0) return "free";
   if (row.status !== "paid" && row.status !== "confirmed") return "awaitingPayment";
-  return row.payment_intent_id === null ? "paidOffline" : "paid";
+  // Polish wave P5 (carry d): THIS entry's own card payment (V387). The cart's intent names whichever entry paid, so an
+  // entry marked paid in cash beside a card-paying sibling read "paid" by card.
+  return row.entry_payment_intent_id === null ? "paidOffline" : "paid";
 }
 
 /** RS009 walkthrough (2026-08-31) — the ONE place a row's "kind" is turned

@@ -66,6 +66,28 @@ async function seedCompWithDivision(): Promise<{
   return { auth, orgId, compId: comp.id, divId: division.id };
 }
 
+/** A cart in `divId`; each entry carries its own intent (stamped as the webhook stamps the entry a session paid) and its own
+ *  totals (a refund books entry and cart). The cart's amount is the entries' sum. */
+async function seedCart(
+  compId: string,
+  divId: string,
+  entries: { amount: number; status: string; intent: string | null; refunded?: number; late?: number }[],
+  cart: { intent: string; refunded: number },
+): Promise<void> {
+  const [{ id: groupId }] = await sql<{ id: string }[]>`
+    insert into registration_groups
+      (competition_id, contact_name, contact_email, access_token_hash,
+       amount_cents, currency, payment_intent_id, refunded_cents)
+    values (${compId}, 'P', 'p@x.test', ${randomUUID()}, ${entries.reduce((a, e) => a + e.amount, 0)}, 'gbp',
+            ${cart.intent}, ${cart.refunded})
+    returning id`;
+  for (const e of entries) {
+    await sql`insert into registrations
+        (division_id, group_id, status, display_name, amount_cents, payment_intent_id, refunded_cents, late_refunded_cents)
+      values (${divId}, ${groupId}, ${e.status}, 'P', ${e.amount}, ${e.intent}, ${e.refunded ?? 0}, ${e.late ?? 0})`;
+  }
+}
+
 afterAll(async () => {
   if (!HAS_DB) return;
   const globalForDb = globalThis as { _sql?: { end(): Promise<void> } };
@@ -87,17 +109,42 @@ describe.skipIf(!HAS_DB)("deleteCompetition money guards", () => {
 
   it("409s when a registration has unrefunded card money", async () => {
     const { auth, compId, divId } = await seedCompWithDivision();
-    // Payment envelope lives on the cart (registration_groups) now.
-    const [{ id: groupId }] = await sql<{ id: string }[]>`
-      insert into registration_groups
-        (competition_id, contact_name, contact_email, access_token_hash,
-         amount_cents, currency, payment_intent_id, refunded_cents)
-      values (${compId}, 'P', 'p@x.test', ${randomUUID()}, 2000, 'gbp', 'pi_reg', 0)
-      returning id`;
-    await sql`insert into registrations (division_id, group_id, status, display_name, amount_cents)
-      values (${divId}, ${groupId}, 'paid', 'P', 2000)`;
+    // Seeded as the webhook writes a card payment: the intent on the cart AND on the entry it paid (`checkout-completion.ts`,
+    // V387) - the guard reads the entry's own.
+    await seedCart(compId, divId, [{ amount: 2000, status: "paid", intent: "pi_reg" }], { intent: "pi_reg", refunded: 0 });
     await expect(deleteCompetition(auth, compId)).rejects.toMatchObject({
       status: 409,
+      message: expect.stringContaining("card payments"),
+    });
+  });
+
+  // Polish wave P5 (P1-review carry d): the guard read the CART's totals, which never clear while a cart holds an unpaid entry
+  // beside a paid-and-refunded one - the competition could never be deleted although no money was held.
+  it("still deletes when the cart's only payment was refunded, though an unpaid sibling keeps the cart's totals apart", async () => {
+    const { auth, compId, divId } = await seedCompWithDivision();
+    const intent = "pi_" + randomUUID().slice(0, 8);
+    await seedCart(
+      compId,
+      divId,
+      [
+        { amount: 1500, status: "withdrawn", intent, refunded: 1500 },
+        { amount: 1000, status: "pending", intent: null },
+      ],
+      { intent, refunded: 1500 },
+    );
+    await deleteCompetition(auth, compId);
+    const [gone] = await sql`select 1 from competitions where id = ${compId}`;
+    expect(gone).toBeUndefined();
+  });
+
+  it("409s for an entry that paid again after its late payment was refunded (only its current payment's refunds count)", async () => {
+    const { auth, compId, divId } = await seedCompWithDivision();
+    const intent = "pi_" + randomUUID().slice(0, 8);
+    // The late payment's refund is booked as history AND late (`checkout-completion.ts`, V510), on both totals.
+    await seedCart(compId, divId, [{ amount: 500, status: "confirmed", intent, refunded: 500, late: 500 }], { intent, refunded: 500 });
+    await expect(deleteCompetition(auth, compId)).rejects.toMatchObject({
+      status: 409,
+      message: expect.stringContaining("card payments"),
     });
   });
 
@@ -123,14 +170,10 @@ describe.skipIf(!HAS_DB)("deleteCompetition money guards", () => {
 
   it("still deletes when money is fully refunded", async () => {
     const { auth, compId, divId } = await seedCompWithDivision();
-    const [{ id: groupId }] = await sql<{ id: string }[]>`
-      insert into registration_groups
-        (competition_id, contact_name, contact_email, access_token_hash,
-         amount_cents, currency, payment_intent_id, refunded_cents)
-      values (${compId}, 'P', 'p@x.test', ${randomUUID()}, 2000, 'gbp', 'pi_reg2', 2000)
-      returning id`;
-    await sql`insert into registrations (division_id, group_id, status, display_name, amount_cents)
-      values (${divId}, ${groupId}, 'withdrawn', 'P', 2000)`;
+    await seedCart(compId, divId, [{ amount: 2000, status: "withdrawn", intent: "pi_reg2", refunded: 2000 }], {
+      intent: "pi_reg2",
+      refunded: 2000,
+    });
     await deleteCompetition(auth, compId);
     const [gone] = await sql`select 1 from competitions where id = ${compId}`;
     expect(gone).toBeUndefined();
