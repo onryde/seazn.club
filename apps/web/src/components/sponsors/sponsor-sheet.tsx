@@ -110,6 +110,7 @@ export function SponsorSheet({
       <Modal
         title={title}
         placement="side"
+        closeSize="lg"
         onClose={() => {
           if (!suspended) router.push(closeHref);
         }}
