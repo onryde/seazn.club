@@ -419,6 +419,116 @@ describe("mount and unmount", () => {
   });
 });
 
+// React strict mode (dev) mounts an effect, unmounts it and mounts it again in ONE synchronous pass. A click that arms the widget and
+// asks for its token in the same handler (resend) has a `token()` already waiting when that unmount lands: releasing it with null
+// made the request go out with no token. The release is deferred one microtask and dropped when a mount() follows; a REAL unmount
+// (nothing follows) still releases, so nothing hangs. Found in a real browser (`next dev`), invisible to the node suite until now.
+describe("strict-mode remount: unmount must not release a pending token() when a mount follows at once", () => {
+  it("click first (resend arms the widget and asks in one handler): token() waiting, then mount, unmount, mount -> the REMOUNTED widget's token, never null", async () => {
+    const { c, widget } = controller();
+    let got: string | null | undefined;
+    void c.token().then((t) => (got = t)); // no widget exists yet: the click came first
+    c.mount(CONTAINER, VIEW);
+    c.unmount();
+    c.mount(CONTAINER, VIEW);
+    await flush();
+    expect(widget.api.render, "premise: exactly one widget was rendered (the first mount's load is dropped)").toHaveBeenCalledTimes(1);
+    expect(got, "the waiter was not released by the in-between unmount").toBe("tok-1");
+  });
+
+  it("with the widget already up and a token() waiting: unmount then mount keeps the waiter, and the NEW widget's token resolves it", async () => {
+    const widget = fakeWidget({ autoSolve: false });
+    const { c } = controller({}, widget);
+    c.mount(CONTAINER, VIEW);
+    await flush();
+    let got: string | null | undefined;
+    void c.token().then((t) => (got = t));
+    c.unmount();
+    c.mount(CONTAINER, VIEW);
+    await flush(); // the deferred release has had its turn
+    expect(widget.api.remove, "premise: the first widget really was torn down").toHaveBeenCalledTimes(1);
+    expect(widget.api.render, "premise: and a second one rendered").toHaveBeenCalledTimes(2);
+    expect(got, "still waiting: nothing released it").toBeUndefined();
+    widget.solve("tok-new");
+    await flush();
+    expect(got).toBe("tok-new");
+  });
+
+  it("a token() that starts AFTER the unmount but before the mount is kept too, and gets the new widget's token", async () => {
+    const { c } = controller();
+    c.unmount();
+    let got: string | null | undefined;
+    void c.token().then((t) => (got = t));
+    c.mount(CONTAINER, VIEW);
+    await flush();
+    expect(got).toBe("tok-1");
+  });
+
+  it("a REAL unmount (no mount follows) still releases the waiter with null once the deferral has run: nothing hangs, no timer is left", async () => {
+    vi.useFakeTimers();
+    try {
+      const widget = fakeWidget({ autoSolve: false });
+      const { c } = controller({}, widget);
+      c.mount(CONTAINER, VIEW);
+      await vi.advanceTimersByTimeAsync(0);
+      let got: string | null | undefined;
+      void c.token().then((t) => (got = t));
+      expect(vi.getTimerCount(), "premise: the 20 s wait timer is running").toBe(1);
+      c.unmount();
+      await vi.advanceTimersByTimeAsync(0); // microtasks only: far short of TOKEN_WAIT_MS
+      expect(got).toBeNull();
+      expect(vi.getTimerCount(), "the wait timer was cleared when the waiter was released").toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("strict-mode order and then a real unmount: the waiter is released with null once, by the LAST unmount", async () => {
+    vi.useFakeTimers();
+    try {
+      const widget = fakeWidget({ autoSolve: false });
+      const { c } = controller({}, widget);
+      c.mount(CONTAINER, VIEW);
+      await vi.advanceTimersByTimeAsync(0);
+      let got: string | null | undefined;
+      let settled = 0;
+      void c.token().then((t) => ((got = t), settled++));
+      c.unmount();
+      c.mount(CONTAINER, VIEW);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(got, "premise: the first unmount did not release it").toBeUndefined();
+      c.unmount();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(got).toBeNull();
+      expect(settled).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a remount AFTER the deferred release fired starts clean: the old waiter stays null, a new token() waits for the new widget", async () => {
+    const widget = fakeWidget({ autoSolve: false });
+    const { c } = controller({}, widget);
+    c.mount(CONTAINER, VIEW);
+    await flush();
+    let first: string | null | undefined;
+    void c.token().then((t) => (first = t));
+    c.unmount();
+    await flush(); // nothing followed: released
+    expect(first).toBeNull();
+    c.mount(CONTAINER, VIEW);
+    await flush();
+    let second: string | null | undefined;
+    void c.token().then((t) => (second = t));
+    await flush();
+    expect(second, "waits for the new widget").toBeUndefined();
+    widget.solve("tok-b");
+    await flush();
+    expect(second).toBe("tok-b");
+    expect(first, "the released waiter is not resolved a second time").toBeNull();
+  });
+});
+
 describe("loadTurnstileApi: the script tag", () => {
   type FakeScript = { src: string; async: boolean; defer: boolean; onload?: () => void; onerror?: () => void; remove: () => void };
   let scripts: FakeScript[];

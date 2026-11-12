@@ -120,11 +120,18 @@ export function createTurnstileController(opts: {
     },
 
     unmount() {
-      generation++;
+      const mine = ++generation;
       if (api && widgetId !== null) api.remove(widgetId);
       widgetId = null;
       token = null;
-      settle(null);
+      // Whoever is waiting for a token is released with null only if NOTHING mounts straight after. React strict mode (dev) runs
+      // an effect as mount, unmount, mount in one synchronous pass, and a click that arms the widget and asks for its token in the
+      // same handler (resend) already has a `token()` waiting when that in-between unmount lands: releasing it there sent the
+      // request with no token. One microtask is enough, the pass being synchronous; `mount()` bumps `generation`, which cancels this.
+      // A real unmount (a step that leaves, a form that is replaced) has no mount after it, so the release still happens.
+      queueMicrotask(() => {
+        if (mine === generation) settle(null);
+      });
     },
 
     token() {
