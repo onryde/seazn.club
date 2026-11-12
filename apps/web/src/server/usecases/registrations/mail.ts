@@ -4,8 +4,9 @@ import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { isTerminalRegistrationStatus } from "@/lib/registration-status";
 import { registrationEmail, paymentReminderEmail } from "@/lib/email";
-import type { RegistrationEmailArgs } from "@/lib/email-templates";
+import type { RegistrationEmailArgs, RegistrationEmailInvite } from "@/lib/email-templates";
 import { routes } from "@/lib/routes";
+import { joinLinkPath } from "@/lib/join-link";
 import { resolveVenueTz } from "@/lib/tz";
 import { type Locale } from "@/lib/i18n-constants";
 import { deferred } from "@/lib/deferred";
@@ -156,6 +157,9 @@ export async function buildCartMail(
   // Pay button even though its total is non-zero.
   const owedCents = entries.reduce((sum, e) => sum + (e.status === "pending" ? e.amount_cents : 0), 0);
   const payPageUrl = token && group.payment_method === "stripe" && owedCents > 0 ? statusUrl : null;
+  // The join links are bearer capabilities, so they ride only a mail that already carries the cart token (the submit-time send and
+  // the registrant's own resend): the organiser's resend and dispute evidence, which have none, carry none.
+  const invites = token ? await cartInvites(groupId, entries, origin, ctx.org_slug, ctx.comp_slug) : [];
 
   return {
     to: group.contact_email,
@@ -184,8 +188,54 @@ export async function buildCartMail(
       statusUrl,
       refCode: group.ref_code,
       refStatusUrl: group.ref_code ? `${origin}/r/${group.ref_code}` : null,
+      invites,
     },
   };
+}
+
+/**
+ * "Invite your teammates" for the confirmation mail (polish wave P6): one link per team / pair entry of the cart that can still
+ * take people, in the entry order the mail lists them. A TEAM gets its general join link; a PAIR gets its partner's claim link
+ * (`player_id` = the one pending slot the captain typed), or the general link - the picker - when two or more slots are pending, and
+ * nothing when none is (the pair is complete). Dead entries (withdrawn / rejected / expired), free agents and individual entries
+ * have no join code to hand out, so they get no line. The links are capabilities: the caller only asks for them when it holds the
+ * cart token, exactly like the Pay button.
+ *
+ * Nothing here says who was already emailed: nothing mails a typed, unclaimed teammate (`claim_invite` goes to a teammate who has
+ * ALREADY joined and consented), so "already invited" would be a claim the product cannot make.
+ */
+async function cartInvites(
+  groupId: string,
+  entries: { id: string; display_name: string; division_name: string; status: string }[],
+  origin: string,
+  orgSlug: string,
+  compSlug: string,
+): Promise<RegistrationEmailInvite[]> {
+  const rows = await sql<
+    { id: string; join_code: string; entrant_kind: "team" | "individual" | "pair"; pending_count: number; first_pending_id: string | null }[]
+  >`
+    select r.id, r.join_code, rs.entrant_kind,
+           (select count(*)::int from registration_players p
+             where p.registration_id = r.id and p.source = 'captain_entered' and p.consent_status = 'pending') as pending_count,
+           (select p.id from registration_players p
+             where p.registration_id = r.id and p.source = 'captain_entered' and p.consent_status = 'pending'
+             order by p.squad_number nulls last, p.created_at limit 1) as first_pending_id
+    from registrations r
+    join registration_settings rs on rs.division_id = r.division_id
+    where r.group_id = ${groupId} and r.join_code is not null and not r.free_agent`;
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const invites: RegistrationEmailInvite[] = [];
+  for (const e of entries) {
+    const r = byId.get(e.id);
+    if (!r || isTerminalRegistrationStatus(e.status)) continue;
+    if (r.entrant_kind === "team") {
+      invites.push({ displayName: e.display_name, divisionName: e.division_name, kind: "team", url: `${origin}${joinLinkPath(orgSlug, compSlug, r.join_code)}` });
+    } else if (r.entrant_kind === "pair" && r.pending_count > 0) {
+      const playerId = r.pending_count === 1 ? (r.first_pending_id ?? undefined) : undefined;
+      invites.push({ displayName: e.display_name, divisionName: e.division_name, kind: "pair", url: `${origin}${joinLinkPath(orgSlug, compSlug, r.join_code, playerId)}` });
+    }
+  }
+  return invites;
 }
 
 /** What `buildCartMail` returns for a cart that has something to say. */

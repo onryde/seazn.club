@@ -10,7 +10,7 @@ export { transferOfferTemplate } from "./transfer-offer";
 export { transferCompleteTemplate } from "./transfer-complete";
 export { groupOrgRemovedTemplate } from "./group-org-removed";
 export { groupOrgLeftTemplate } from "./group-org-left";
-export { registrationTemplate, type RegistrationEmailArgs } from "./registration";
+export { registrationTemplate, type RegistrationEmailArgs, type RegistrationEmailInvite } from "./registration";
 export { paymentReminderTemplate, type PaymentReminderArgs } from "./payment-reminder";
 export {
   registrationPromotedTemplate,

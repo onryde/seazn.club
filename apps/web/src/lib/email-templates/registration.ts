@@ -27,6 +27,16 @@ export interface RegistrationEmailEntry {
   approved?: boolean;
 }
 
+/** One "forward this link" line of the confirmation mail (polish wave P6): the team's join link for a team, the partner's claim
+ *  link for a pair. `url` is the ABSOLUTE join url - a capability (whoever holds the code can join the entry), so only a producer
+ *  that already holds the cart token passes one (`buildCartMail` gates it exactly like the Pay button). */
+export interface RegistrationEmailInvite {
+  displayName: string;
+  divisionName: string;
+  kind: "team" | "pair";
+  url: string;
+}
+
 /** RS005 W4 — cart-shaped (owner ruling 2026-08-25): one email per cart,
  *  every entry with its own status/fee, one total, one pay link. A
  *  single-entry cart (most carts) still renders as a clean single-entry
@@ -57,6 +67,9 @@ export interface RegistrationEmailArgs {
   /** Quotable reference (v3/05 §3) + its public status page. */
   refCode?: string | null;
   refStatusUrl?: string | null;
+  /** Team / pair entries the recipient (the captain) can invite people to: one block each, after the payment block. Absent or empty
+   *  = no invite block, which is every mail that carries no cart token (dispute evidence, the organiser's resend). */
+  invites?: RegistrationEmailInvite[];
 }
 
 /** A pay-by moment as the mails write it: the status page's own spelling ("14 Nov 2026, 11:15 UTC", `fmtPublicDeadline`), in the org's
@@ -218,6 +231,18 @@ export function registrationTemplate(
         ? "\n\n" + t(dict, "registration.textFeeContactOrganiser", { amount })
         : "";
 
+  // "Invite your teammates": the join link is meant to be FORWARDED, so it is a panel the captain copies from, not a button.
+  // The panel's own escaping covers the url's `&`; the text part carries it verbatim.
+  const invites = opts.invites ?? [];
+  const inviteParts = invites.map((i) => {
+    const names = { displayName: i.displayName, divisionName: i.divisionName };
+    const title = t(dict, i.kind === "pair" ? "registration.invitePanelTitlePair" : "registration.invitePanelTitleTeam", names);
+    const body = t(dict, i.kind === "pair" ? "registration.inviteBodyPair" : "registration.inviteBodyTeam", names);
+    return { title, body, url: i.url };
+  });
+  const inviteBlock = inviteParts.map((i) => panel(i.title, i.body + "\n" + i.url)).join("");
+  const inviteText = inviteParts.map((i) => "\n\n" + i.title + "\n" + i.body + "\n" + i.url).join("");
+
   const subject = t(dict, "registration.subject", { competitionName: opts.competitionName });
   return {
     subject,
@@ -245,6 +270,7 @@ export function registrationTemplate(
             )
           : "") +
         paymentBlock +
+        inviteBlock +
         button(t(dict, "registration.viewButton"), opts.statusUrl) +
         linkFallback(opts.statusUrl),
       footerNote: t(dict, "registration.footer", {
@@ -276,6 +302,7 @@ export function registrationTemplate(
             : "")
         : "") +
       paymentText +
+      inviteText +
       "\n\n" +
       t(dict, "registration.textView", { url: opts.statusUrl }),
   };
