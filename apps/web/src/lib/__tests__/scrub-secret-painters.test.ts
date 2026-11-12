@@ -683,9 +683,10 @@ describe("every element that paints a scrubbed secret carries ph-no-capture, or 
     expect(checked).toBe(2);
     const form = painters.get("components/quick-match/save-form.tsx") ?? [];
     expect(form.filter((site) => site.how === "attribute action" && site.tag === "form").map((site) => site.blocked)).toEqual([true]);
-    // The save page's own <a> back to the home: a host element, so its class is checked here and not handed off.
+    // The save page's own <a>s, host elements, so each class is checked here and not handed off: "Sign in" with the save page
+    // as its `next` (review m2, signed out on a saved match), and the way back to the home.
     const page = painters.get("app/q/[token]/save/page.tsx") ?? [];
-    expect(page.filter((site) => site.how === "attribute href" && site.tag === "a").map((site) => site.blocked)).toEqual([true]);
+    expect(page.filter((site) => site.how === "attribute href" && site.tag === "a").map((site) => site.blocked)).toEqual([true, true]);
   });
 
   it("the painter files and the verdict table are the same set", () => {

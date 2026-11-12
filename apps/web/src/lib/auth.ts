@@ -70,7 +70,7 @@ export interface SessionOptions {
    * The staff member (a `users.id`) whose impersonation this session is: app/admin/impersonate passes it, and it is signed
    * into the cookie as the `imp` claim (quick match plan 3 Task 5, ledger carry m5). Before it, an impersonated session was
    * indistinguishable from the user's own on the server (the page set only the readable `seazn_no_analytics` cookie, which
-   * anyone can set or clear), so nothing could refuse an action staff must never take as the user. `isImpersonatedSession`
+   * anyone can set or clear), so nothing could refuse an action staff must never take as the user. `getCurrentSession`
    * reads it; quick match Save is its first reader.
    */
   impersonatedBy?: string;
@@ -127,20 +127,31 @@ async function sessionClaims(): Promise<JWTPayload | null> {
   }
 }
 
-/**
- * Is this request's session a staff member's impersonation of the user it signs in (the `imp` claim createSession signs for
- * app/admin/impersonate)? Fails closed: an `imp` claim of ANY value counts, so a malformed one can never pass as the user's
- * own session. No session at all is not an impersonation (false).
- */
-export async function isImpersonatedSession(): Promise<boolean> {
-  const claims = await sessionClaims();
-  return claims !== null && claims.imp !== undefined;
+export interface CurrentSession {
+  user: User;
+  /**
+   * A staff member's impersonation of `user` (the `imp` claim createSession signs for app/admin/impersonate). Fails closed:
+   * an `imp` claim of ANY value counts, so a malformed one can never pass as the user's own session.
+   */
+  impersonated: boolean;
+}
+
+/** The logged-in user and whether staff is impersonating them, both from ONE verify of the cookie; null when signed out. */
+export async function getCurrentSession(): Promise<CurrentSession | null> {
+  const payload = await sessionClaims();
+  if (!payload) return null;
+  const user = await userOfClaims(payload);
+  return user ? { user, impersonated: payload.imp !== undefined } : null;
 }
 
 /** Returns the logged-in user, or null. */
 export async function getCurrentUser(): Promise<User | null> {
   const payload = await sessionClaims();
-  if (!payload) return null;
+  return payload ? userOfClaims(payload) : null;
+}
+
+/** The user a verified session's claims name, or null (a malformed `uid`, a deleted account). */
+async function userOfClaims(payload: JWTPayload): Promise<User | null> {
   // Never String() an unknown claim into a lookup key: `uid: {}` would become
   // the user id "[object Object]", and `uid: null` the id "null". Today those
   // only MISS — which is the same reasoning that made accepting a relay token

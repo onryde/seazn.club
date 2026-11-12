@@ -8448,6 +8448,8 @@
   "quickMatch.save.title": "Garder {name} dans votre compte ?",
   "quickMatch.save.hint": "Il reste jusqu'à ce que vous le supprimiez. Toute personne ayant le lien peut toujours marquer les points.",
   "quickMatch.save.backHome": "Retour au match",
+  "quickMatch.save.savedToAccount": "Ce match a été enregistré dans un compte.",
+  "quickMatch.save.signIn": "Se connecter",
   "quickMatch.dead.title": "Ce lien a expiré ou n'existe pas",
   "quickMatch.dead.hint": "Vérifiez que vous avez le lien complet. Les matchs rapides que personne n'enregistre sont supprimés {days} jours après le dernier point marqué.",
   "quickMatch.dead.startNew": "Lancer un nouveau match rapide"

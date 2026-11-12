@@ -6,7 +6,9 @@
 // "Save it" opens, and it shows one of four things:
 //   - an unknown, malformed, expired or deleted token: plan 2's dead screen (`qm-dead-link`), which never says which;
 //   - signed in and the match is already yours: straight to the home;
-//   - saved by somebody else: the taken line, `quickMatch.flash.taken`, and a way back to the match;
+//   - saved, to a signed-in visitor who is not its saver: the taken line, `quickMatch.flash.taken`, and a way back;
+//   - saved, to a signed-out visitor (review m2: it may be the saver on another device): a neutral line,
+//     `quickMatch.save.savedToAccount`, and "Sign in" to `/login?next=/q/<token>/save`, which brings the saver home;
 //   - anything else: one button. The match's name in `quickMatch.save.title`, `quickMatch.save.hint`, and a plain
 //     `<form method="post">` to `/q/<token>/save/confirm` labelled `quickMatch.home.save`, so it works with no script.
 // Its words are the VIEWER's (`resolveLocale()` with no org default), it is never indexed, and everything on it that holds
@@ -78,6 +80,7 @@ import {
   saveStateOf,
 } from "@/server/usecases/__tests__/_quick-match-save-rig";
 import QuickMatchSavePage, { generateMetadata } from "../save/page";
+import LoginPage from "@/app/login/page";
 import QuickMatchHomePage from "../page";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -230,25 +233,55 @@ describe.skipIf(!HAS_DB)("GET /q/<token>/save", () => {
     expect(saveSpy).not.toHaveBeenCalled();
   });
 
-  it("saved by somebody else: the taken line and the way back, no button; the same signed out (it cannot be theirs to save)", async () => {
+  it("saved by somebody else, to a signed-in visitor: the taken line and the way back, no button, no sign-in", async () => {
     const saver = await account("saver");
     const viewer = await account("viewer");
     const qm = await createTypedMatch(null);
     expect(await saveQuickMatchForUser(saver, qm.id)).toBe("saved");
     const held = await saveStateOf(qm.id);
+    await signIn(viewer);
 
-    let checked = 0;
-    for (const session of [viewer, null]) {
-      h.jar.clear();
-      if (session) await createSession(session);
-      const html = await htmlOf(qm.token);
-      const why = session ? "signed in as another" : "signed out";
-      expect(textOf(html, "qm-save-taken"), why).toBe(en_("quickMatch.flash.taken"));
-      expect(attr(tagOf(html, "qm-save-back"), "href"), why).toBe(`/q/${qm.token}`);
-      expect(confirmForm(html), `${why}: no button`).toBeNull();
-      checked++;
+    const html = await htmlOf(qm.token);
+
+    expect(textOf(html, "qm-save-taken")).toBe(en_("quickMatch.flash.taken"));
+    expect(attr(tagOf(html, "qm-save-back"), "href")).toBe(`/q/${qm.token}`);
+    expect(confirmForm(html), "no button").toBeNull();
+    expect(has(html, "qm-save-signin"), "already signed in: no sign-in").toBe(false);
+    expect(has(html, "qm-save-saved"), "not the signed-out line").toBe(false);
+    expect(await saveStateOf(qm.id)).toEqual(held);
+  });
+
+  it("review m2: saved, to a signed-out visitor: a neutral line and Sign in, which brings the saver (another device) home", async () => {
+    const saver = await account("saver-elsewhere");
+    const qm = await createTypedMatch(null);
+    expect(await saveQuickMatchForUser(saver, qm.id)).toBe("saved");
+    const held = await saveStateOf(qm.id);
+    h.jar.clear();
+
+    const html = await htmlOf(qm.token);
+
+    expect(textOf(html, "qm-save-saved")).toBe(en_("quickMatch.save.savedToAccount"));
+    expect(has(html, "qm-save-taken"), "never 'someone else': it may be theirs").toBe(false);
+    expect(confirmForm(html), "no button").toBeNull();
+    const signInTag = tagOf(html, "qm-save-signin");
+    const href = unescape(attr(signInTag, "href") ?? "");
+    const url = new URL(href, "http://relative.invalid");
+    expect([url.pathname, [...url.searchParams.keys()]]).toEqual(["/login", ["next"]]);
+    expect(url.searchParams.get("next"), "the sign-in returns to this page").toBe(`/q/${qm.token}/save`);
+    expect((attr(signInTag, "class") ?? "").split(/\s+/), "its href holds the token").toContain(NO_CAPTURE);
+    expect(textOf(html, "qm-save-signin")).toBe(en_("quickMatch.save.signIn"));
+    expect(attr(tagOf(html, "qm-save-back"), "href")).toBe(`/q/${qm.token}`);
+
+    // The saver follows it on another device: signed in, the login page sends them to its next, and the save page home.
+    await signIn(saver);
+    let digest = "";
+    try {
+      await LoginPage({ searchParams: Promise.resolve({ next: url.searchParams.get("next")! }) });
+    } catch (e) {
+      digest = String((e as { digest?: string }).digest ?? "");
     }
-    expect(checked).toBe(2);
+    expect(digest.split(";")[2], "the login page hands a signed-in saver on to the save page").toBe(`/q/${qm.token}/save`);
+    expect(await savePage(qm.token), "and the save page sends its saver home").toEqual({ redirect: `/q/${qm.token}` });
     expect(await saveStateOf(qm.id)).toEqual(held);
   });
 

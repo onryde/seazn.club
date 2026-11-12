@@ -8448,6 +8448,8 @@
   "quickMatch.save.title": "{name} in je account bewaren?",
   "quickMatch.save.hint": "Hij blijft tot je hem verwijdert. Iedereen met de link kan nog steeds scoren.",
   "quickMatch.save.backHome": "Terug naar de wedstrijd",
+  "quickMatch.save.savedToAccount": "Deze wedstrijd is in een account bewaard.",
+  "quickMatch.save.signIn": "Inloggen",
   "quickMatch.dead.title": "Deze link is verlopen of bestaat niet",
   "quickMatch.dead.hint": "Controleer of je de volledige link hebt. Snelle wedstrijden die niemand bewaart, worden {days} dagen na de laatste score verwijderd.",
   "quickMatch.dead.startNew": "Start een nieuwe snelle wedstrijd"

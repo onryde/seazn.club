@@ -3,7 +3,8 @@
 // button's post, `POST /q/<token>/save/confirm`, the ONE write of the save flow (the save page's GET never writes).
 //
 // The contract, in the order the route checks it:
-//   - a post from another site is refused 403 before anything is read (the proxy's Origin check covers `/api/**` only);
+//   - a post from another site is refused 403 before anything is read (the proxy's Origin check covers `/api/**` only), and a
+//     post that shows no proof of its page at all (neither `Origin` nor `Sec-Fetch-Site`) lands on the generic line unsaved;
 //   - an unknown, expired or deleted token lands on its own `/q/<token>`, the dead screen, never on a sign-in;
 //   - signed out lands on the sign-in with `next=/q/<token>/save` (C19 amended: the sign-in hand-off is the one place the
 //     token may ride a query);
@@ -18,8 +19,8 @@
 // `createSession` on a Map-backed cookie jar (so the session the route reads is the one a door SET), the impersonated session
 // by the real impersonation page from a real staff token, and the account deletion by the real `DELETE /api/users/me`.
 // Stand-ins: `next/headers` (the jar), the limiter, Stripe, the outbox transport, PostHog, Sentry's capture (a spy), the
-// viewer's locale, and two wrapped seams a case arms: the token read (a row that expires between the read and the save) and
-// the save itself (a fault).
+// viewer's locale, and wrapped seams a case arms: the token read (a row that expires between the read and the save), and the
+// save's own transaction (a fault AFTER its UPDATE, inside it: the reminder's cancel, the step that follows the write).
 //
 // Expected values come from the spec and the plan (the codes' names, the `next` path, 7 days), the dictionaries (each line by
 // its key) and the rows the real producers wrote; never from the route's own answer.
@@ -41,8 +42,10 @@ const h = vi.hoisted(() => ({
   locale: "en" as "en" | "fr" | "es" | "nl",
   /** Run once, right after the token read answers for this quick match id (a race the route cannot see coming). */
   afterRead: new Map<string, () => Promise<void>>(),
-  /** Make the save throw for this quick match id (a database fault). */
+  /** Make the save's transaction fail for this quick match id, AFTER its UPDATE ran (a database fault inside the save). */
   failSave: new Set<string>(),
+  /** What the failing transaction itself read back before it threw: the save had written, in the transaction. */
+  inTx: new Map<string, string | null>(),
 }));
 vi.mock("next/headers", () => ({
   headers: async () => new Headers({ "x-forwarded-for": "203.0.113.97" }),
@@ -86,12 +89,25 @@ vi.mock("@/server/usecases/quick-match-home", async (orig) => {
 });
 vi.mock("@/server/usecases/quick-match-save", async (orig) => {
   const real = await orig<typeof import("@/server/usecases/quick-match-save")>();
+  return { ...real, saveQuickMatchForUser: vi.fn(real.saveQuickMatchForUser) };
+});
+// The save's transaction runs its UPDATE, then cancels the match's queued reminder on the same transaction. An armed match's
+// cancel reads the row on that transaction (the write is there) and throws: the fault lands INSIDE the save, after the write.
+vi.mock("@/server/email-outbox/cancel", async (orig) => {
+  const real = await orig<typeof import("@/server/email-outbox/cancel")>();
   return {
     ...real,
-    saveQuickMatchForUser: vi.fn(async (userId: string, quickMatchId: string) => {
-      if (h.failSave.has(quickMatchId)) throw new Error("armed: the save's transaction failed (test)");
-      return real.saveQuickMatchForUser(userId, quickMatchId);
-    }),
+    cancelQueuedEmails: async (...args: Parameters<typeof real.cancelQueuedEmails>) => {
+      const [tx, which] = args;
+      const armed = (which.refIds ?? []).find((id) => h.failSave.has(id));
+      if (armed) {
+        const [row] = await tx<{ saved_by_user_id: string | null }[]>`
+          select saved_by_user_id from quick_matches where id = ${armed}`;
+        h.inTx.set(armed, row?.saved_by_user_id ?? null);
+        throw new Error("armed: the save's transaction failed after its UPDATE (test)");
+      }
+      return real.cancelQueuedEmails(...args);
+    },
   };
 });
 
@@ -229,6 +245,7 @@ beforeEach(() => {
   h.locale = "en";
   h.afterRead.clear();
   h.failSave.clear();
+  h.inTx.clear();
   saveSpy.mockClear();
   vi.mocked(Sentry.captureException).mockClear();
 });
@@ -388,22 +405,54 @@ describe.skipIf(!HAS_DB)("POST /q/<token>/save/confirm", () => {
       { "sec-fetch-site": "cross-site" },
       { "sec-fetch-site": "same-site", origin: "https://games.qm-save-route.test" },
       { origin: "null" },
+      // Our own Origin, but the browser says the page was not ours (review m4: the Sec-Fetch-Site rule on its own; a
+      // sibling subdomain is `same-site`, an address-bar or extension post `none`).
+      { "sec-fetch-site": "same-site", origin: ORIGIN },
+      { "sec-fetch-site": "cross-site", origin: ORIGIN },
+      { "sec-fetch-site": "none", origin: ORIGIN },
     ];
+    let checked = 0;
     for (const headers of foreign) {
       const res = await confirm(qm.token, headers);
       expect(res.status, JSON.stringify(headers)).toBe(403);
       expect(res.headers.get("location"), JSON.stringify(headers)).toBeNull();
+      checked++;
     }
+    expect(checked).toBe(8);
     expect((await saveStateOf(qm.id)).saved_by_user_id, "nothing saved by a foreign post").toBeNull();
     expect(saveSpy).not.toHaveBeenCalled();
 
-    // Our own page's post, and a client that sends neither header (curl; the session cookie is SameSite=Lax, so a browser's
-    // cross-site post never carries it): both reach the save.
-    await home(await confirm(qm.token, { origin: ORIGIN, "sec-fetch-site": "same-origin" }), qm.token);
-    expect((await saveStateOf(qm.id)).saved_by_user_id).toBe(me);
-    const other = await createTypedMatch(null);
-    await home(await confirm(other.token, {}), other.token);
-    expect((await saveStateOf(other.id)).saved_by_user_id).toBe(me);
+    // Our own page's post, as each kind of browser sends it: both headers (today's), and either one alone (an older browser
+    // with no Sec-Fetch-Site; a same-origin request with no Origin). Each reaches the save.
+    let saved = 0;
+    for (const headers of [
+      { origin: ORIGIN, "sec-fetch-site": "same-origin" },
+      { origin: ORIGIN },
+      { "sec-fetch-site": "same-origin" },
+    ] as Record<string, string>[]) {
+      const match = saved === 0 ? qm : await createTypedMatch(null);
+      await home(await confirm(match.token, headers), match.token);
+      expect((await saveStateOf(match.id)).saved_by_user_id, JSON.stringify(headers)).toBe(me);
+      saved++;
+    }
+    expect(saved).toBe(3);
+  });
+
+  it("review m1: a post with no proof of its page (no Origin, no Sec-Fetch-Site, or an empty Origin) is refused: the generic line, nothing saved, not a fault", async () => {
+    const me = await account("no-proof");
+    await signIn(me);
+    let checked = 0;
+    for (const headers of [{}, { origin: "" }] as Record<string, string>[]) {
+      const qm = await createTypedMatch(null);
+      const res = await confirm(qm.token, headers);
+      expect(await refused(res, qm.token), JSON.stringify(headers)).toBe(CODE.failed);
+      expect((await saveStateOf(qm.id)).saved_by_user_id, JSON.stringify(headers)).toBeNull();
+      expect(flashOf(await homeAt(res))).toBe(en["quickMatch.flash.generic"]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    expect(saveSpy).not.toHaveBeenCalled();
+    expect(reported(), "a refusal, never reported").toHaveLength(0);
   });
 
   it("m5: a session staff impersonation started never saves to the person staff is viewing as; their own sign-in then does", async () => {
@@ -485,17 +534,20 @@ describe.skipIf(!HAS_DB)("POST /q/<token>/save/confirm", () => {
     expect(flashOf(await homeAt(taken))).toBe(nl["quickMatch.flash.taken"]);
   });
 
-  it("a fault in the save is reported and lands on the generic line; nothing half-saved", async () => {
+  it("a fault inside the save's transaction, after its UPDATE, is reported, lands on the generic line, and rolls the whole save back", async () => {
     const me = await account("fault");
-    const qm = await createTypedMatch(null);
+    const typed = addressFor("fault-typed");
+    const qm = await createTypedMatch(typed);
+    const before = await saveStateOf(qm.id);
     h.failSave.add(qm.id);
     await signIn(me);
 
     const res = await confirm(qm.token);
 
+    expect(h.inTx.get(qm.id), "premise: the UPDATE had written the saver, inside the transaction, when it failed").toBe(me);
     expect(await refused(res, qm.token)).toBe(CODE.failed);
     expect(reported(), "a fault, not a refusal: reported once").toHaveLength(1);
-    expect((await saveStateOf(qm.id)).saved_by_user_id).toBeNull();
+    expect(await saveStateOf(qm.id), "nothing half-saved: saver, expiry and the typed address all as they were").toEqual(before);
     expect(flashOf(await homeAt(res))).toBe(en["quickMatch.flash.generic"]);
   });
 

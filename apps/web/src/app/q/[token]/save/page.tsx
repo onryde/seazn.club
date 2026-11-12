@@ -6,8 +6,9 @@
 // (`/q/<token>/save/confirm`, ./confirm/route.ts), never this page. What it shows:
 //   - an unknown, malformed, expired or deleted token: plan 2's dead screen, which never says which;
 //   - signed in and already yours: straight to the home;
-//   - saved by somebody else (signed in or not: a saved match is no longer anyone else's to save): the taken line and the
-//     way back to the match;
+//   - saved by somebody else, to a signed-in visitor: the taken line and the way back to the match;
+//   - saved, to a signed-out visitor (review m2): it may be the saver on another device, so never "someone else": a neutral
+//     line and "Sign in" back to this page (`/login?next=/q/<token>/save`), which sends the saver home once signed in;
 //   - anything else: the match's name, what saving does, and one button.
 // The session is read only for a saved match, the one case where who is looking changes the page.
 //
@@ -52,11 +53,14 @@ export default async function QuickMatchSavePage({ params }: { params: Promise<{
     );
   }
 
-  const taken = row.savedByUserId !== null;
-  if (taken) {
+  // What a saved match shows depends on who is looking (the one case the session is read for).
+  let saved: "no" | "taken" | "signedOut" = "no";
+  if (row.savedByUserId !== null) {
     const viewer = await getCurrentUser();
     if (viewer !== null && viewer.id === row.savedByUserId) redirect(routes.quickMatch(token));
+    saved = viewer === null ? "signedOut" : "taken";
   }
+  const heading = "app-display text-2xl font-bold leading-tight text-cream [overflow-wrap:anywhere]";
 
   return (
     <>
@@ -69,21 +73,26 @@ export default async function QuickMatchSavePage({ params }: { params: Promise<{
             aria-labelledby="qm-save-heading"
             className="mx-auto flex w-full max-w-md min-w-0 flex-1 flex-col justify-center gap-3 px-4 py-12 sm:px-6"
           >
-            {taken ? (
-              <h1
-                id="qm-save-heading"
-                data-testid="qm-save-taken"
-                className="app-display text-2xl font-bold leading-tight text-cream [overflow-wrap:anywhere]"
-              >
+            {saved === "taken" ? (
+              <h1 id="qm-save-heading" data-testid="qm-save-taken" className={heading}>
                 {tt("quickMatch.flash.taken")}
               </h1>
+            ) : saved === "signedOut" ? (
+              <>
+                <h1 id="qm-save-heading" data-testid="qm-save-saved" className={heading}>
+                  {tt("quickMatch.save.savedToAccount")}
+                </h1>
+                <a
+                  data-testid="qm-save-signin"
+                  href={`/login?next=${encodeURIComponent(routes.quickMatchSave(token))}`}
+                  className={`ph-no-capture app-display mt-3 inline-flex min-h-12 w-full max-w-full items-center justify-center rounded-xl bg-[color:var(--mk-lime)] px-5 py-2.5 text-center text-base font-bold leading-tight text-night ${FOCUS}`}
+                >
+                  {tt("quickMatch.save.signIn")}
+                </a>
+              </>
             ) : (
               <>
-                <h1
-                  id="qm-save-heading"
-                  data-testid="qm-save-title"
-                  className="app-display text-2xl font-bold leading-tight text-cream [overflow-wrap:anywhere]"
-                >
+                <h1 id="qm-save-heading" data-testid="qm-save-title" className={heading}>
                   {tt("quickMatch.save.title", { name: row.name })}
                 </h1>
                 <p data-testid="qm-save-hint" className="text-sm leading-relaxed text-[#b7aede]">

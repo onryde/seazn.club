@@ -6032,6 +6032,8 @@ export type DictionaryKey =
   | "quickMatch.recent.title"
   | "quickMatch.save.backHome"
   | "quickMatch.save.hint"
+  | "quickMatch.save.savedToAccount"
+  | "quickMatch.save.signIn"
   | "quickMatch.save.title"
   | "quickMatch.setup.addSide"
   | "quickMatch.setup.email"

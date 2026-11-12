@@ -21,7 +21,8 @@
 //   (D) Save (plan 3 Task 5), in a browser of its own (plan 2 m6: not inside (A)): a guest who typed an address on a new
 //       league taps Save on its home → the sign-in, carrying the save page → signs in as a DIFFERENT person → the save page
 //       → Save → the home reads "Saved" and no longer counts down; the record holds the saver and forgets the typed
-//       address. A second guest on the same link sees neither Save nor Saved, and the save page tells them it is taken.
+//       address. A second guest on the same link sees neither Save nor Saved; the save page says it is saved to an account
+//       and offers Sign in back to itself (review m2: a signed-out visitor may be the saver on another device).
 //
 // ── WHAT IS A REACH AND WHAT IS THE TEST (README rule) ────────────────────────────────────────────────────────────
 // There is NO reach here: nothing is seeded and no API is called. Every quick match is made through the setup form,
@@ -1146,14 +1147,20 @@ test("(D) Save: a guest who typed an address saves the league into another accou
     const saved = await saveRecordOf(made);
     expect([saved.saver, saved.email, saved.expires_at], "the saver's, the typed address forgotten, no expiry").toEqual([saver, null, null]);
 
-    // A second guest with the same link: the match, but neither Save nor Saved; the save page says it is taken.
+    // A second guest with the same link: the match, but neither Save nor Saved. Signed out, the save page cannot know they
+    // are not the saver, so it says the match is saved to an account and offers Sign in, back to itself.
     const q = await theirs.newPage();
     await q.goto(made.path);
     await expect(q.getByTestId("qm-name")).toHaveText(made.name, { timeout: STEP_MS });
     await expect(q.getByTestId("qm-save")).toHaveCount(0);
     await expect(q.getByTestId("qm-saved")).toHaveCount(0);
     await q.goto(`${made.path}/save`);
-    await expect(q.getByTestId("qm-save-taken")).toHaveText(ui("quickMatch.flash.taken"), { timeout: STEP_MS });
+    await expect(q.getByTestId("qm-save-saved")).toHaveText(ui("quickMatch.save.savedToAccount"), { timeout: STEP_MS });
+    const signIn = q.getByTestId("qm-save-signin");
+    await expect(signIn).toHaveText(ui("quickMatch.save.signIn"));
+    expect((await signIn.boundingBox())?.height ?? 0, "Sign in is a 44px target").toBeGreaterThanOrEqual(44);
+    const signInUrl = new URL((await signIn.getAttribute("href"))!, "http://relative.invalid");
+    expect([signInUrl.pathname, signInUrl.searchParams.get("next")]).toEqual(["/login", `${made.path}/save`]);
     await expect(q.getByTestId("qm-save")).toHaveCount(0);
     await expectNoHorizontalScroll(q);
   } finally {

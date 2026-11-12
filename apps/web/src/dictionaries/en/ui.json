@@ -8448,6 +8448,8 @@
   "quickMatch.save.title": "Keep {name} in your account?",
   "quickMatch.save.hint": "It stays until you delete it. Anyone with the link can still score.",
   "quickMatch.save.backHome": "Back to the match",
+  "quickMatch.save.savedToAccount": "This match has been saved to an account.",
+  "quickMatch.save.signIn": "Sign in",
   "quickMatch.dead.title": "This link has ended or doesn't exist",
   "quickMatch.dead.hint": "Check that you have the whole link. Quick matches nobody saves are removed {days} days after the last score.",
   "quickMatch.dead.startNew": "Start a new quick match"
