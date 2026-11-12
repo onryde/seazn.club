@@ -1,5 +1,5 @@
 import "server-only";
-import { SignJWT, jwtVerify } from "jose";
+import { SignJWT, jwtVerify, type JWTPayload } from "jose";
 import { cookies } from "next/headers";
 import { sql } from "@/lib/db";
 import { cacheGet, cacheSet, cacheDelPattern } from "@/lib/cache";
@@ -65,13 +65,32 @@ function secretKey(): Uint8Array {
   return new TextEncoder().encode(secret);
 }
 
+export interface SessionOptions {
+  /**
+   * The staff member (a `users.id`) whose impersonation this session is: app/admin/impersonate passes it, and it is signed
+   * into the cookie as the `imp` claim (quick match plan 3 Task 5, ledger carry m5). Before it, an impersonated session was
+   * indistinguishable from the user's own on the server (the page set only the readable `seazn_no_analytics` cookie, which
+   * anyone can set or clear), so nothing could refuse an action staff must never take as the user. `isImpersonatedSession`
+   * reads it; quick match Save is its first reader.
+   */
+  impersonatedBy?: string;
+}
+
 /** Issue a signed session cookie for the given user id. */
-export async function createSession(userId: string): Promise<void> {
+export async function createSession(userId: string, opts: SessionOptions = {}): Promise<void> {
   // The quick-match system user (V506) can never sign in (quick-match spec §7.1). Every door that signs a person in
   // (magic-link consume, verify-email, Google, the claim and invite accepts, the funnel claim, staff impersonation) ends
   // here, and this is the only place a session is signed, so one refusal covers them all, a door added later included.
   if (userId === QUICK_MATCH_SYSTEM_USER_ID) throw new HttpError(403, "system user");
-  const token = await new SignJWT({ uid: userId })
+  const claims: { uid: string; imp?: string } = { uid: userId };
+  if (opts.impersonatedBy !== undefined) {
+    // An empty actor would sign an `imp` nobody can trace; refuse rather than mint a session that reads as either kind.
+    if (typeof opts.impersonatedBy !== "string" || opts.impersonatedBy === "") {
+      throw new Error("createSession: impersonatedBy must name the staff member");
+    }
+    claims.imp = opts.impersonatedBy;
+  }
+  const token = await new SignJWT(claims)
     .setProtectedHeader({ alg: SESSION_ALGORITHM })
     .setIssuedAt()
     .setExpirationTime(`${SESSION_DAYS}d`)
@@ -92,28 +111,43 @@ export async function destroySession(): Promise<void> {
   jar.delete(SESSION_HINT_COOKIE);
 }
 
-/** Returns the logged-in user, or null. */
-export async function getCurrentUser(): Promise<User | null> {
+/** The session cookie's verified claims, or null: no cookie, a bad signature, another audience or algorithm, expired. */
+async function sessionClaims(): Promise<JWTPayload | null> {
   const jar = await cookies();
   const token = jar.get(COOKIE_NAME)?.value;
   if (!token) return null;
-
-  let uid: string;
   try {
     const { payload } = await jwtVerify(token, secretKey(), {
       audience: SESSION_AUDIENCE,
       algorithms: [SESSION_ALGORITHM],
     });
-    // Never String() an unknown claim into a lookup key: `uid: {}` would become
-    // the user id "[object Object]", and `uid: null` the id "null". Today those
-    // only MISS — which is the same reasoning that made accepting a relay token
-    // look harmless right up until a claim was added. Require the claim to be
-    // what it says it is, exactly as server/relay/tokens.ts does with its own.
-    if (typeof payload.uid !== "string" || payload.uid === "") return null;
-    uid = payload.uid;
+    return payload;
   } catch {
     return null;
   }
+}
+
+/**
+ * Is this request's session a staff member's impersonation of the user it signs in (the `imp` claim createSession signs for
+ * app/admin/impersonate)? Fails closed: an `imp` claim of ANY value counts, so a malformed one can never pass as the user's
+ * own session. No session at all is not an impersonation (false).
+ */
+export async function isImpersonatedSession(): Promise<boolean> {
+  const claims = await sessionClaims();
+  return claims !== null && claims.imp !== undefined;
+}
+
+/** Returns the logged-in user, or null. */
+export async function getCurrentUser(): Promise<User | null> {
+  const payload = await sessionClaims();
+  if (!payload) return null;
+  // Never String() an unknown claim into a lookup key: `uid: {}` would become
+  // the user id "[object Object]", and `uid: null` the id "null". Today those
+  // only MISS — which is the same reasoning that made accepting a relay token
+  // look harmless right up until a claim was added. Require the claim to be
+  // what it says it is, exactly as server/relay/tokens.ts does with its own.
+  if (typeof payload.uid !== "string" || payload.uid === "") return null;
+  const uid: string = payload.uid;
 
   const cached = await cacheGet<User>(userKey(uid));
   if (cached) return cached;

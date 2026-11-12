@@ -28,8 +28,9 @@ export default async function ImpersonatePage({ searchParams }: PageProps) {
   // Mark used
   await sql`update impersonation_sessions set ended_at = now() where id = ${row.id}`;
 
-  // Create session as target user
-  await createSession(row.target_id);
+  // Create session as target user, signed as staff's impersonation (the `imp` claim): the server can then refuse what staff
+  // must never do as the user, such as saving a quick match into their account (quick match plan 3 Task 5, carry m5).
+  await createSession(row.target_id, { impersonatedBy: row.actor_id });
 
   // Readable (non-httpOnly) marker so client analytics skips capture while
   // staff impersonate — keeps impersonated activity out of real user data.
