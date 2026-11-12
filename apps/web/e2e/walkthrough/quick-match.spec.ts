@@ -23,6 +23,10 @@
 //       → Save → the home reads "Saved" and no longer counts down; the record holds the saver and forgets the typed
 //       address. A second guest on the same link sees neither Save nor Saved; the save page says it is saved to an account
 //       and offers Sign in back to itself (review m2: a signed-out visitor may be the saver on another device).
+//       Then the account's Quick matches (plan 3 Task 6, spec §7.7): the saver opens /me → the match is its one row, its
+//       name a link to the home → Rename → the new name on the row, in the record (all four names, the slug kept) and on
+//       the home its link opens → Delete → the confirmation → "Delete for everyone" → the row and the section are gone,
+//       the record is gone, and the link is the dead screen for the second guest and the saver alike.
 //
 // ── WHAT IS A REACH AND WHAT IS THE TEST (README rule) ────────────────────────────────────────────────────────────
 // There is NO reach here: nothing is seeded and no API is called. Every quick match is made through the setup form,
@@ -1080,6 +1084,10 @@ test("(C) the marketing page lists both quick matches, newest first, and a tap o
 /** Save's steps: the setup, the sign-in's two hops (the login page, the magic link), the save page, the home after the
  *  save, the second guest's home and save page; the Save taps, the fold, the reads of each page; the record twice. */
 const SAVE = { navs: 8, acts: 12, reads: 2 } as const;
+/** The account's Quick matches (plan 3 Task 6): /me, the home its link opens, /me again, its reload after the delete, and
+ *  the dead link in each browser; the row's reads and 44px measures, Rename's form, fill and save, Delete's confirmation and
+ *  its yes; the record before the rename, after it, and after the delete. */
+const ACCOUNT = { navs: 6, acts: 14, reads: 3 } as const;
 
 interface SaveRecord {
   email: string | null;
@@ -1087,6 +1095,25 @@ interface SaveRecord {
   saved_by_user_id: string | null;
   saver: string | null;
 }
+interface NamesRecord {
+  id: string;
+  competition_id: string;
+  slug: string;
+  names: string[];
+}
+/** The quick match's id and the four places its name lives (the row, the competition, the division, the stage), with the
+ *  competition's slug, found by the home token's hash; null once the match is deleted. */
+async function namesRecordOf(made: Made): Promise<NamesRecord | null> {
+  const [row] = await withDb((sql) => sql<NamesRecord[]>`
+    select q.id, q.competition_id, c.slug, array[q.name, c.name, d.name, s.name] as names
+      from quick_matches q
+      join competitions c on c.id = q.competition_id
+      join divisions d on d.competition_id = c.id
+      join stages s on s.division_id = d.id
+     where q.token_hash = ${tokenHash(made.token)}`);
+  return row ?? null;
+}
+
 /** The quick match's save columns and its saver's address, found by the home token's hash (C19). */
 async function saveRecordOf(made: Made): Promise<SaveRecord> {
   const [row] = await withDb((sql) => sql<SaveRecord[]>`
@@ -1097,8 +1124,15 @@ async function saveRecordOf(made: Made): Promise<SaveRecord> {
   return row;
 }
 
-test("(D) Save: a guest who typed an address saves the league into another account by signing in; only the saver reads Saved", async ({ browser }, info) => {
-  setBudget(budgetFor({ ...SAVE, plans: [] }));
+test("(D) Save: a guest who typed an address saves the league into another account by signing in; only the saver reads Saved; the saver's account lists it, renames it and deletes it for everyone", async ({ browser }, info) => {
+  setBudget(
+    budgetFor({
+      navs: SAVE.navs + ACCOUNT.navs,
+      acts: SAVE.acts + ACCOUNT.acts,
+      reads: SAVE.reads + ACCOUNT.reads,
+      plans: [],
+    }),
+  );
   const guestOf = async () =>
     browser.newContext({ storageState: await consentedAnonymousState(), baseURL: info.project.use.baseURL, viewport: PHONE });
   const mine = await guestOf();
@@ -1163,6 +1197,73 @@ test("(D) Save: a guest who typed an address saves the league into another accou
     expect([signInUrl.pathname, signInUrl.searchParams.get("next")]).toEqual(["/login", `${made.path}/save`]);
     await expect(q.getByTestId("qm-save")).toHaveCount(0);
     await expectNoHorizontalScroll(q);
+
+    // ── The account's Quick matches (plan 3 Task 6, spec §7.7) ──
+    // The saver opens their account page. A navigation: nothing on the home links to /me.
+    const before = await namesRecordOf(made);
+    expect(before?.names, "the create's name in all four places").toEqual([made.name, made.name, made.name, made.name]);
+    await p.goto("/me");
+    const list = p.getByTestId("me-quick-matches");
+    await expect(list.getByRole("heading", { level: 2 })).toHaveText(ui("quickMatch.me.title"), { timeout: STEP_MS });
+    await expect(list.locator("li[data-qm-id]"), "one row: the one match this account saved").toHaveCount(1);
+    const row = list.locator(`li[data-qm-id="${before!.id}"]`);
+    const nameLink = row.getByTestId("me-qm-name");
+    await expect(nameLink).toHaveText(made.name);
+    await expect(nameLink).toHaveAttribute("href", made.path);
+    await expect(row.getByTestId("me-qm-meta")).toHaveText(
+      `${ui("quickMatch.format.league")} · ${plural(ui, "quickMatch.home.playedSaved", total, { played: 0 })}`,
+    );
+    for (const id of ["me-qm-name", "me-qm-rename", "me-qm-delete"]) {
+      expect((await row.getByTestId(id).boundingBox())?.height ?? 0, `${id} is a 44px target`).toBeGreaterThanOrEqual(44);
+    }
+    await expectNoHorizontalScroll(p);
+
+    // Rename: the row's form opens at the current name; the new one, typed with spaces around it, is stored trimmed, shows on
+    // the row at once, and is the match's name in all four places, its slug untouched (D14).
+    await row.getByTestId("me-qm-rename").click();
+    const input = row.getByTestId("me-qm-rename-input");
+    await expect(input).toHaveValue(made.name);
+    const renamed = `Renamed ${TAG}`;
+    await input.fill(`  ${renamed}  `);
+    await row.getByTestId("me-qm-rename-save").click();
+    await expect(row.getByTestId("me-qm-rename-form")).toHaveCount(0);
+    await expect(nameLink).toHaveText(renamed);
+    const after = await namesRecordOf(made);
+    expect(after, "renamed in all four places, trimmed; the slug kept").toEqual({ ...before!, names: [renamed, renamed, renamed, renamed] });
+    // The name is the link: tapped, the home, the same link, under its new name.
+    await nameLink.click();
+    await p.waitForURL((u) => u.pathname === made.path, { timeout: STEP_MS });
+    await expect(p.getByTestId("qm-name")).toHaveText(renamed);
+    await expect(p.getByTestId("qm-saved")).toHaveText(ui("quickMatch.home.saved"));
+
+    // Delete, for everyone: back on the account page (its own read, after the rename), Delete asks first.
+    await p.goto("/me");
+    await expect(nameLink).toHaveText(renamed, { timeout: STEP_MS });
+    await row.getByTestId("me-qm-delete").click();
+    await expect(row.getByTestId("me-qm-delete-question")).toHaveText(ui("quickMatch.me.deleteConfirm"));
+    for (const id of ["me-qm-delete-yes", "me-qm-delete-cancel"]) {
+      expect((await row.getByTestId(id).boundingBox())?.height ?? 0, `${id} is a 44px target`).toBeGreaterThanOrEqual(44);
+    }
+    await expectNoHorizontalScroll(p);
+    await row.getByTestId("me-qm-delete-yes").click();
+    // The row goes, and the section with it: the empty case has no heading over nothing.
+    await expect(list).toHaveCount(0);
+    expect(await namesRecordOf(made), "the record is gone").toBeNull();
+    const [left] = await withDb((sql) => sql<{ n: number }[]>`
+      select count(*)::int as n from competitions where id = ${before!.competition_id}`);
+    expect(left!.n, "the competition is gone with it").toBe(0);
+    // The page's own read agrees: reloaded, the account page has no Quick matches.
+    await p.reload();
+    await expect(p.locator("h1.page-title")).toHaveText(ui("me.title"), { timeout: STEP_MS });
+    await expect(p.getByTestId("me-quick-matches")).toHaveCount(0);
+    await expect(p.getByRole("heading", { name: ui("quickMatch.me.title") })).toHaveCount(0);
+
+    // The link, for everyone who holds it: the second guest's browser, then the saver's own, both the dead screen.
+    for (const [who, tab] of [["the second guest", q], ["the saver", p]] as const) {
+      await tab.goto(made.path);
+      await expect(tab.getByTestId("qm-dead-link"), `${who}: the dead screen`).toBeVisible({ timeout: STEP_MS });
+      await expect(tab.getByTestId("qm-name"), `${who}: no match behind it`).toHaveCount(0);
+    }
   } finally {
     await mine.close();
     await theirs.close();
