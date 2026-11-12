@@ -87,7 +87,10 @@ const HAS_DB = !!process.env.DATABASE_URL;
 
 /** Minimal shape `checkout.sessions.retrieve` resolves to for these tests:
  *  `status` plus the same `registration_ids` metadata shape
- *  createRegistrationCheckout stamps on every session it mints. */
+ *  createRegistrationCheckout stamps on every session it mints. It carries no
+ *  `url` or `expires_at`, so the status page's reuse rule (polish wave W5,
+ *  `reusableSessionUrl`) never hands it out: every resume below re-mints, which
+ *  is the path this file is about. Reuse itself: registration-pay-page-checkout.test.ts. */
 function openSession(id: string, registrationIds: string[]): Stripe.Checkout.Session {
   return {
     id,

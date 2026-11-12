@@ -1,21 +1,22 @@
 import "server-only";
 // Pay from the player payment page (plan 2026-11-11-player-payment-page, Task 3; see ./index.ts): reuse-or-expire on the
 // entry's own session pointer (`registrations.pay_session_id`, V505), mint for this entry alone, return to the page.
-import type Stripe from "stripe";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
-import { getStripe } from "@/lib/stripe";
 import { registrationPayPath } from "@/lib/registration-pay";
-import { log } from "@/server/logger";
 import { divisionCtx } from "./lookups";
-import { checkoutRegistrationIds, completedSessionStillPays, mintEntryPayPageCheckout, refuseWhileSessionPays } from "./checkout";
+import {
+  completedSessionStillPays,
+  expireStoredSession,
+  mintEntryPayPageCheckout,
+  readStoredSession,
+  refuseWhileSessionPays,
+  reusableSessionUrl,
+} from "./checkout";
 import { payPageDocByToken } from "./pay-page";
 
-/** A stored session is handed out again only while more than this is left of it (the sponsor rule's value, sponsors.ts). */
-export const PAY_SESSION_REUSE_MARGIN_MS = 10 * 60_000;
-
-const stripeUnavailable = () =>
-  new HttpError(502, "Stripe was unable to start this checkout — please try again shortly.");
+// The margin and the reuse rule live beside the cart status page's Pay (`./checkout`), which applies the same rule (polish wave W5).
+export { PAY_SESSION_REUSE_MARGIN_MS } from "./checkout";
 
 /**
  * The Pay button: a Checkout URL for this entry alone. Outside any transaction (the Stripe calls are network round-trips), the
@@ -54,18 +55,18 @@ export async function payFromPayPage(token: string, origin: string, now: Date = 
   const read = doc.paySessionId;
   // Fix round 1 (F2): the cart status page's session, when it is not this page's own - a SEPA debit still processing there must
   // stop this page minting (or handing out) a second payment. The same rule the status page applies (`refuseWhileSessionPays`).
+  // It never hands the cart's session OUT, even an open one for this entry alone (polish wave W5 ruling): that session returns to
+  // the cart status page with the cart's access token in its URL - cancel and withdraw rights this pay link does not carry. The
+  // page's first press mints instead, and the mint expires the cart's session when it covers only this entry (subsumption).
   if (row.cart_session_id && row.cart_session_id !== read) {
     await refuseWhileSessionPays(row.cart_session_id, doc.registrationId);
   }
   if (read) {
-    let stored = await readStored(read, doc.registrationId);
+    let stored = await readStoredSession(read, doc.registrationId);
     if (stored.status === "open") {
-      const ids = checkoutRegistrationIds(stored);
-      const onlyThisEntry = ids.length === 1 && ids[0] === doc.registrationId;
-      if (onlyThisEntry && stored.url && stored.expires_at * 1000 > now.getTime() + PAY_SESSION_REUSE_MARGIN_MS) {
-        return stored.url;
-      }
-      stored = await expireStored(read, doc.registrationId);
+      const reuse = reusableSessionUrl(stored, doc.registrationId, now);
+      if (reuse) return reuse;
+      stored = await expireStoredSession(read, doc.registrationId);
     }
     if (stored.status === "complete" && (await completedSessionStillPays(stored, doc.registrationId))) {
       throw new HttpError(409, "This entry has already been paid", "REGISTRATION_PAID_ONLINE");
@@ -74,36 +75,4 @@ export async function payFromPayPage(token: string, origin: string, now: Date = 
 
   const returnBase = `${origin}${registrationPayPath(token)}?src=pay`;
   return mintEntryPayPageCheckout(doc.groupId, doc.registrationId, ctx, origin, returnBase, read);
-}
-
-/** The stored session as Stripe holds it now; a read failure refuses (502). */
-async function readStored(id: string, registrationId: string): Promise<Stripe.Checkout.Session> {
-  try {
-    return await getStripe().checkout.sessions.retrieve(id);
-  } catch (err) {
-    log.error({ err, registrationId }, "registration pay page: could not read the stored session");
-    throw stripeUnavailable();
-  }
-}
-
-/**
- * Expires an open stored session and answers it as Stripe then holds it. Gap wave G3: Stripe refuses to expire a session that is
- * no longer `open` (it timed out, or was paid in another tab, between the read and this call), which used to be a transient 502.
- * On ANY expire failure the session is read again and that read decides - never the error text: no longer open → returned (the
- * caller mints past an expired one, and puts a complete one through `completedSessionStillPays`); still open → a real failure,
- * 502, since minting beside a session that can still pay is a double charge.
- */
-async function expireStored(id: string, registrationId: string): Promise<Stripe.Checkout.Session> {
-  try {
-    return await getStripe().checkout.sessions.expire(id);
-  } catch (err) {
-    const current = await readStored(id, registrationId);
-    if (current.status !== "open") {
-      // Fix round 1 (F6): the re-read settles it, but the refusal itself is kept - it is the only trace of why the expire failed.
-      log.info({ err, registrationId, status: current.status }, "registration pay page: expire refused, the stored session had stopped being open");
-      return current;
-    }
-    log.error({ err, registrationId }, "registration pay page: could not expire the stored session");
-    throw stripeUnavailable();
-  }
 }
