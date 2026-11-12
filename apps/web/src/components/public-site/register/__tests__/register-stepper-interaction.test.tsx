@@ -2377,3 +2377,66 @@ describe("step 5 — submit", () => {
     expect(propsOf(after[0]!).value).toBe("Alex Test");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Polish wave P4 (walkthrough W1, W3) — Details starts from what steps 1 and 2 already collected. Driven through the REAL stepper:
+// the producer is the WHO/ENTRIES inputs, the consumer is the RosterTable the registrant sees on step 3; details-seed.test.ts owns the
+// rules, this owns that the stepper actually applies them on the way in (a pure rule nothing calls is the inert seam).
+// ---------------------------------------------------------------------------
+
+describe("P4 — the Details step is seeded from the contact (W1) and the pair partner (W3)", () => {
+  const rosterNames = (island: ReturnType<typeof mount>["island"]) =>
+    island
+      .tree()
+      .filter((e) => propsOf(e)["data-testid"] === "reg-roster-name")
+      .sort((a, b) => Number(propsOf(a)["data-player-row"]) - Number(propsOf(b)["data-player-row"]))
+      .map((e) => propsOf(e).value as string);
+
+  const DIV_SINGLES: DivisionLike = { ...DIV_OPEN, fee_cents: 1500, payment_method: "stripe" };
+  const DIV_PAIR: DivisionLike = { ...DIV_OPEN, division_id: "div-pair", name: "Mixed Doubles", entrant_kind: "pair" };
+
+  it("W1: 'I'm registering myself' puts the contact's own name on Player 1 (the registrant no longer types it twice)", () => {
+    const m = mount([DIV_SINGLES]);
+    (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Mia Cole", email: "mia@example.com", dob: "1990-04-02" });
+    (propsOf(m.stepWho()).onImPlayingChange as (v: boolean) => void)(true);
+    m.clickByText("Next"); // -> DETAILS (one individual division collapses ENTRIES)
+    expect(rosterNames(m.island)).toEqual(["Mia Cole"]);
+  });
+
+  it("the pair of W1: the same flow WITHOUT 'I'm registering myself' leaves Player 1 blank (someone else is being entered)", () => {
+    const m = mount([DIV_SINGLES]);
+    (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Mia Cole", email: "mia@example.com" });
+    m.clickByText("Next");
+    expect(rosterNames(m.island)).toEqual([""]);
+  });
+
+  it("W3: the partner typed on Entries is already on Player 2 when Details opens, and the registrant's own edit survives going Back and Next", () => {
+    const m = mount([DIV_PAIR]);
+    (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Mia Cole", email: "mia@example.com" });
+    m.clickByText("Next"); // -> ENTRIES
+    (propsOf(m.divisionCard("div-pair")).onAddPair as () => void)();
+    setByAriaLabel(m.island, "Partner's name (optional for now)", "Sam Reid");
+    m.clickByText("Next"); // -> DETAILS
+    expect(rosterNames(m.island), "the partner typed on step 2 arrives on Player 2").toEqual(["", "Sam Reid"]);
+
+    // The registrant corrects Player 2 and goes back and forward: the correction must not be put back to the step-2 spelling.
+    const row2 = m.island.tree().find((e) => propsOf(e)["data-testid"] === "reg-roster-name" && propsOf(e)["data-player-row"] === 1);
+    (propsOf(row2!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "Samuel Reid" } });
+    m.clickByText("Back"); // -> ENTRIES
+    m.clickByText("Next"); // -> DETAILS again
+    expect(rosterNames(m.island)).toEqual(["", "Samuel Reid"]);
+  });
+
+  it("a pair where the contact plays: Player 1 is the contact AND already picked as 'which player are you', so Next is not blocked by the picker", () => {
+    const m = mount([DIV_PAIR]);
+    (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Mia Cole", email: "mia@example.com", dob: "1990-04-02" });
+    (propsOf(m.stepWho()).onImPlayingChange as (v: boolean) => void)(true);
+    m.clickByText("Next"); // -> ENTRIES
+    (propsOf(m.divisionCard("div-pair")).onAddPair as () => void)();
+    setByAriaLabel(m.island, "Partner's name (optional for now)", "Sam Reid");
+    m.clickByText("Next"); // -> DETAILS
+    expect(rosterNames(m.island)).toEqual(["Mia Cole", "Sam Reid"]);
+    m.clickByText("Next"); // -> CONSENT: only reachable when validateDetails accepted the seeded roster and pick
+    expect(m.pageText(), "reached the consent step").toContain("Privacy");
+  });
+});

@@ -32,6 +32,7 @@ import {
   type CartAction,
 } from "./cart";
 import { lichessLinkStartHref } from "@/lib/lichess-link";
+import { seedDetailsRows } from "./details-seed";
 import { seasonStartYearFrom } from "./eligibility-presentation";
 import { clearRegisterState, REGISTER_STATE_VERSION, loadRegisterState, saveRegisterState } from "./storage";
 import {
@@ -378,6 +379,11 @@ export function RegisterStepper({
     if (currentStep === "details") setDetailsAttempted(true);
     if (currentStep === "consent") setConsentAttempted(true);
     if (!canGoNext) return;
+    // P4 (W1, W3): moving INTO details seeds its rows from the contact and the pair partner (details-seed.ts — blank rows only, so
+    // going Back and Next again never overwrites what the registrant typed there).
+    if (stepOrder[nextStepIndex(clampedIndex, stepOrder)] === "details") {
+      setCart((c) => seedDetailsRows(c, contact, info.divisions));
+    }
     setStepIndex((i) => nextStepIndex(i, stepOrder));
   }
   function goBack() {
