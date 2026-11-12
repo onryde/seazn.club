@@ -250,6 +250,11 @@ describe.skipIf(!HAS_DB)("/admin/quick-matches renders what is there, and nothin
     // static markup writes the apostrophe as an entity, and a raw probe would fail on spelling, not on the words.
     const note = html.replace(/&#x27;|&apos;/g, "'");
     expect(note).toContain("every window counts the survivors; within 24 hours only a saver's Delete removes one");
+    // The sentence as a reader sees it: the event names keep their spaces (a JSX line break before `{...}` ate one, and
+    // the sign-off screen read "deletion asquick_match_deleted"). The note's own text, tags out, names typed here.
+    const noteText = /data-testid="qm-counts-note"[^>]*>([\s\S]*?)<\/p>/.exec(note)?.[1]?.replace(/<[^>]*>/g, "").replace(/\s+/g, " ");
+    expect(noteText, "the note renders").toBeDefined();
+    expect(noteText).toContain("PostHog has every deletion as quick_match_deleted, by how it went, and every create as quick_match_created.");
     expect(note).not.toContain("Created over 7 and 30 days");
     let pointed = 0;
     for (const w of ["24h", "7d", "30d"]) {
