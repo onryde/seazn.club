@@ -86,6 +86,8 @@ describe.each([
     // The regression guard: no old (or new) submission form ships here.
     expect(html).not.toContain("<form");
     expect(html).not.toContain('data-testid="register-form"');
+    // Nothing is open to join either: the "Have a join code?" field belongs to the open page only (polish wave P6).
+    expect(html).not.toContain('data-testid="register-join-code"');
   });
 
   it("still renders a real page shell (title + competition breadcrumb), not a bare string", async () => {
