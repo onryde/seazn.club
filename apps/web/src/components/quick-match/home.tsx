@@ -34,7 +34,7 @@ import { compactScore } from "@/lib/match-day/view";
 import { scoreLineOf, type LevelWords } from "@/lib/score/levels";
 import { setBreakdown } from "@/lib/public-site";
 import type { QuickMatchFixture, QuickMatchHome, QuickMatchSide } from "@/server/usecases/quick-match-home";
-import { QuickMatchStandings, type StandingsView } from "./standings";
+import { QuickMatchStandings, type FullTableData, type StandingsView } from "./standings";
 import { QuickMatchDraw, type DrawCard, type DrawRound, type DrawSeat } from "./draw";
 import { QuickMatchList, type MatchView, type ScoreSlot, type SeatView } from "./match-list";
 import { fixtureLabel, winnerOfLabel, type FixtureLabel } from "./fixture-label";
@@ -204,7 +204,9 @@ function feederOf(label: unknown, all: readonly QuickMatchFixture[]): QuickMatch
   return hits[0]!;
 }
 
-export function buildHomeView(home: QuickMatchHome, copy: QuickMatchCopy): Built {
+/** `fullTable`: the public table's columns and cells for this league (owner 2026-11-12, "Full table"), built by the page
+ *  (`app/q/[token]/full-table.ts`); null for a knockout, or when the page has none to give. */
+export function buildHomeView(home: QuickMatchHome, copy: QuickMatchCopy, fullTable: FullTableData | null = null): Built {
   const { t } = copy;
   const say = ({ key, params }: FixtureLabel) => t(key, params);
   const knockout = home.row.format === "knockout";
@@ -302,12 +304,31 @@ export function buildHomeView(home: QuickMatchHome, copy: QuickMatchCopy): Built
       abbr: copy.pub(`table.abbr.${key}`),
       word: copy.pub(`table.col.${key}`),
     }));
+    // The fold, only where the public table shows more than the short one does (P, W, D, Pts): its rows are the short
+    // table's, in the same order, each with the public table's cells for that entrant.
+    const shortKeys = new Set<string>(columns.map((c) => c.key));
+    const full: StandingsView["full"] =
+      fullTable === null || fullTable.columns.every((c) => shortKeys.has(c.key))
+        ? null
+        : {
+            label: t("quickMatch.home.fullTable"),
+            regionLabel: copy.pub("table.regionCaptioned", { caption: t("quickMatch.home.fullTable") }),
+            columns: fullTable.columns,
+            cells: rows.map((r) => {
+              const cells = Object.hasOwn(fullTable.cells, r.entrantId) ? fullTable.cells[r.entrantId]! : undefined;
+              if (cells === undefined || cells.length !== fullTable.columns.length) {
+                throw new QuickMatchHomeShapeError(`the full table has no row of ${fullTable.columns.length} cells for entrant ${r.entrantId}`);
+              }
+              return cells;
+            }),
+          };
     standings = {
       title: t("quickMatch.home.standings"),
       rankLabel: t("ladder.rank"),
       sideLabel: t("quickMatch.home.sideCol"),
       levelLabel: level ? copy.pub("table.level") : null,
       columns,
+      full,
       rows: rows.map((r) => ({
         entrantId: r.entrantId,
         place: top && leaders.includes(r.entrantId) ? rankText(top, false) : rankText(r, level),
@@ -407,17 +428,20 @@ export function QuickMatchHomeView({
   slots = {},
   flash = null,
   viewerId = null,
+  fullTable = null,
 }: {
   home: QuickMatchHome;
   copy: QuickMatchCopy;
   slots?: QuickMatchSlots;
+  /** The public table's columns and cells for a league (`app/q/[token]/full-table.ts`): the "Full table" fold. */
+  fullTable?: FullTableData | null;
   /** The `?e=` line (`homeFlash`), already in the viewer's words, and its tone; null for none. */
   flash?: { text: string; tone: HomeFlashTone } | null;
   /** The signed-in viewer's account id, or null: only read to tell the match's saver "Saved". */
   viewerId?: string | null;
 }) {
   const { t } = copy;
-  const v = buildHomeView(home, copy);
+  const v = buildHomeView(home, copy, fullTable);
   const save = saveStateFor(home.row.savedByUserId, viewerId);
   const saveNode =
     save === "offer" && slots.save ? (

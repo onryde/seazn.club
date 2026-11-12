@@ -58,6 +58,7 @@ import { routes } from "@/lib/routes";
 import { levelWords } from "@/lib/score/levels";
 import { ADD_PICK_PARAMS } from "@/server/usecases/quick-match-add";
 import { readQuickMatchHome, resolveQuickMatchToken } from "@/server/usecases/quick-match-home";
+import { quickMatchFullTable } from "./full-table";
 
 export const dynamic = "force-dynamic";
 
@@ -177,6 +178,7 @@ export default async function QuickMatchHomePage({
         slots={slots}
         flash={flash ? { text: copy.t(flash.key, flash.vars), tone: flash.tone } : null}
         viewerId={viewerId}
+        fullTable={quickMatchFullTable(home, copy.pub)}
       />
     </>
   );

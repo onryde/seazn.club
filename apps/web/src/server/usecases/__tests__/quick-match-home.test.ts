@@ -27,6 +27,10 @@ import { DEFAULT_LOCALE, LOCALES } from "@/lib/i18n-constants";
 import { messages } from "@/lib/messages";
 import type { CreateQuickMatch } from "@/server/api-v1/schemas";
 import { forEachSportAsync } from "@seazn/engine/testkit";
+import { builtinModules } from "@seazn/engine/sports";
+import enPublic from "@/dictionaries/en/public.json";
+import { t as tRuntime } from "@/lib/i18n-runtime";
+import { quickMatchFullTable } from "@/app/q/[token]/full-table";
 import { listDivisionFixtures } from "../fixtures";
 import { touchQuickMatchActivity, touchQuickMatchActivityForFixture } from "../quick-match-activity";
 import { systemAuth, type CreatedQuickMatch } from "../quick-match-create";
@@ -613,6 +617,18 @@ describe.skipIf(!HAS_DB)("readQuickMatchHome", () => {
       expect(h.next!.id).toBe(h.fixtures[0]!.id);
       expect([h.next!.home!.name, h.next!.away!.name].sort()).toEqual(["Side A", "Side B"]);
       expect(tableOf(h)).toHaveLength(2);
+      // The Full table's ingredients (owner 2026-11-12): the sport's own standings metrics, as the engine declares them, and
+      // the stage's table rules from the one loader (its tie-break order); the table built from them has more to show
+      // than the short table's P, W and Pts, in every offered sport, and a cell for every row.
+      expect(h.metricSpecs, key).toEqual(builtinModules.find((m) => m.key === key)!.metrics);
+      expect(h.tableRules, key).not.toBeNull();
+      expect(h.tableRules!.tiebreakers.length, key).toBeGreaterThan(0);
+      const full = quickMatchFullTable(h, (k) => tRuntime(enPublic, k));
+      const fullKeys = full!.columns.map((c) => c.key);
+      expect(fullKeys, key).toEqual(expect.arrayContaining(["played", "won", "points"]));
+      expect(fullKeys.filter((k) => !["played", "won", "drawn", "points"].includes(k)).length, `${key}: more than the short table`).toBeGreaterThan(0);
+      expect(Object.keys(full!.cells).sort(), key).toEqual(tableOf(h).map((r) => r.entrantId).sort());
+      for (const cells of Object.values(full!.cells)) expect(cells, key).toHaveLength(fullKeys.length);
       checked++;
       await hardDeleteQuickMatchCompetition(out.competitionId);
     });

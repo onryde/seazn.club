@@ -20,7 +20,9 @@ import { QUICK_MATCH_SYSTEM_ORG_ID } from "@/lib/quick-match-constants";
 import { isBye, type MatchLineRow } from "@/lib/run-sheet-groups";
 import type { EntrantKind } from "@seazn/engine/sport";
 import { PLAIN_LAYOUT, type TableLayout } from "@seazn/engine/competition";
-import { stageTableRulesDocs } from "@/server/engine-db/table-rules";
+import type { MetricSpecLike } from "@/lib/public-site";
+import { resolveModule } from "@/server/engine-db";
+import { stageTableRulesDocs, type StageTableRulesDoc } from "@/server/engine-db/table-rules";
 import { tableLayoutFor } from "@/server/public-site/standings-view";
 import { isCarriedForward, SETTLED_OPEN_STATUSES } from "./carried-forward";
 import { listDivisionFixtures } from "./fixtures";
@@ -284,6 +286,12 @@ export interface QuickMatchHome {
   /** The unit the stored points are in (`TableLayout.unit`, the public table's own `tableLayoutFor` over the stage's
    *  rules): "half" for chess's FIDE half-points, which print through the engine's `pointsText` ("1½"), else "whole". */
   pointsUnit: TableLayout["unit"];
+  /** The full table's ingredients (owner 2026-11-12, "Full table"), the public table's own: the league stage's table rules
+   *  (`stageTableRulesDocs`, the one loader: its points rule and tie-break order) and the sport's standings metrics from the
+   *  division's pinned module. Null and empty for a knockout; null rules or empty metrics also when the loader or the
+   *  module refuses, as the public table falls back to its structural columns. */
+  tableRules: StageTableRulesDoc | null;
+  metricSpecs: MetricSpecLike[];
   allPlayed: boolean;
 }
 
@@ -331,8 +339,8 @@ export async function readQuickMatchHome(row: QuickMatchRow): Promise<QuickMatch
   const auth = systemAuth();
 
   const head = await withTenant(SYSTEM_ORG, async (tx) => {
-    const divisions = await tx<{ id: string; sport_key: string; variant_key: string }[]>`
-      select d.id, d.sport_key, d.variant_key from divisions d where d.competition_id = ${row.competitionId}`;
+    const divisions = await tx<{ id: string; sport_key: string; variant_key: string; module_version: string }[]>`
+      select d.id, d.sport_key, d.variant_key, d.module_version from divisions d where d.competition_id = ${row.competitionId}`;
     if (divisions.length === 0) return null;
     if (divisions.length > 1) {
       throw new Error(`quick match ${row.id}: competition ${row.competitionId} holds ${divisions.length} divisions, not one`);
@@ -428,10 +436,18 @@ export async function readQuickMatchHome(row: QuickMatchRow): Promise<QuickMatch
 
   const { played, total } = playedOf(rows);
   const standings = stage.kind === "league" ? await getStandings(auth, stage.id) : null;
-  const pointsUnit =
-    stage.kind === "league"
-      ? tableLayoutFor((await withTenant(SYSTEM_ORG, (tx) => stageTableRulesDocs(tx, [stage.id])))[stage.id]).unit
-      : PLAIN_LAYOUT.unit;
+  const tableRules =
+    stage.kind === "league" ? ((await withTenant(SYSTEM_ORG, (tx) => stageTableRulesDocs(tx, [stage.id])))[stage.id] ?? null) : null;
+  const pointsUnit = stage.kind === "league" ? tableLayoutFor(tableRules).unit : PLAIN_LAYOUT.unit;
+  // The division page's own fallback: a module this build cannot resolve shows the structural columns only.
+  let metricSpecs: MetricSpecLike[] = [];
+  if (stage.kind === "league") {
+    try {
+      metricSpecs = resolveModule(division.sport_key, division.module_version).metrics;
+    } catch {
+      metricSpecs = [];
+    }
+  }
   const kindChosen = (await offerFor(division.sport_key, division.variant_key)).kinds.length > 1;
 
   return {
@@ -451,6 +467,8 @@ export async function readQuickMatchHome(row: QuickMatchRow): Promise<QuickMatch
     total,
     standings,
     pointsUnit,
+    tableRules,
+    metricSpecs,
     // The empty case first: no match at all is not "all played".
     allPlayed: total > 0 && played === total,
   };

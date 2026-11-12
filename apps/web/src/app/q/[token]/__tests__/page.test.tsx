@@ -50,7 +50,16 @@ import { DictProvider } from "@/components/i18n/dict-provider";
 import en from "@/dictionaries/en/ui.json";
 import fr from "@/dictionaries/fr/ui.json";
 import enPublic from "@/dictionaries/en/public.json";
+import { builtinModules } from "@seazn/engine/sports";
+import type { StandingsRow } from "@seazn/engine/competition";
+import type { Dict } from "@/lib/i18n-constants";
+import { withTenant } from "@/lib/db";
+import { QUICK_MATCH_SYSTEM_ORG_ID } from "@/lib/quick-match-constants";
+import { stageTableRulesDocs } from "@/server/engine-db/table-rules";
+import { StandingsTable } from "@/components/public-site/standings-table";
+import type { FullTableData } from "@/components/quick-match/standings";
 import QuickMatchHomePage, { generateMetadata } from "../page";
+import { quickMatchFullTable } from "../full-table";
 
 /** A throwaway key of this file's own: every create seals a home token, and CI's unit job has no DEVICE_LINK_KEK. */
 vi.stubEnv("DEVICE_LINK_KEK", kekBytes(32).toString("hex"));
@@ -145,6 +154,17 @@ function textOf(node: unknown): string {
 }
 /** Whitespace folded, so a sentence split over elements reads as one. */
 const words = (node: unknown) => textOf(node).replace(/\s+/g, " ").trim();
+/** What a screen reader hears: the words with every `aria-hidden` subtree left out (a chevron, the printed letters). */
+function heardOf(node: unknown): string {
+  if (Array.isArray(node)) return node.map(heardOf).join("");
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (isValidElement(node)) {
+    const props = node.props as { children?: unknown; "aria-hidden"?: unknown };
+    return props["aria-hidden"] === "true" ? "" : heardOf(props.children);
+  }
+  return "";
+}
+const heard = (node: unknown) => heardOf(node).replace(/\s+/g, " ").trim();
 const classOf = (el: ReactElement<Record<string, unknown>>) => String(el.props.className ?? "");
 /** The table's header cells, each read on its own (the place column's name is screen-reader text). */
 const headCells = (tree: ReactNode) => all(oneByTestId(tree, "qm-standings-head"), (el) => el.type === "th").map(words);
@@ -255,8 +275,8 @@ const stubSlots = () => ({
     <span data-testid="slot-add-match" data-home={v.home} data-away={v.away} data-sides={v.sides.map((s) => s.id).join(",")} />
   )),
 });
-async function renderView(home: QuickMatchHome, slots = stubSlots()) {
-  const tree = await expand(<QuickMatchHomeView home={home} copy={enCopy()} slots={slots} />);
+async function renderView(home: QuickMatchHome, slots = stubSlots(), fullTable: FullTableData | null = null) {
+  const tree = await expand(<QuickMatchHomeView home={home} copy={enCopy()} slots={slots} fullTable={fullTable} />);
   return { tree, slots };
 }
 
@@ -303,6 +323,8 @@ describe("the empty case: a quick match with no match left", () => {
       })),
     },
     pointsUnit: "whole",
+    tableRules: null,
+    metricSpecs: [],
     allPlayed: false,
   };
 
@@ -422,6 +444,37 @@ describe("the empty case: a quick match with no match left", () => {
   });
 
   // Assumptions are guards: two states plan 1's read never produces are named refusals, never a blank or a code.
+  it("the Full table fold (owner 2026-11-12): none without the page's data or when it adds no column; offered closed when it does; a row it lacks is refused", async () => {
+    // A knockout stores no table, so the page's builder has nothing to give; with nothing from the page there is no fold.
+    expect(quickMatchFullTable({ standings: null, tableRules: null, metricSpecs: [] }, (k) => tRuntime(enPublic, k))).toBeNull();
+    expect(byTestId((await renderView(empty)).tree, "qm-full-table")).toHaveLength(0);
+    // The public table's columns over the same rows, but nothing the short table lacks: still no fold (nothing more to show).
+    const same: FullTableData = {
+      columns: ["played", "won", "points"].map((key) => ({ key, abbr: key, word: key })),
+      cells: { "e-1": ["0", "0", "0"], "e-2": ["0", "0", "0"] },
+    };
+    expect(byTestId((await renderView(empty, stubSlots(), same)).tree, "qm-full-table")).toHaveLength(0);
+    // One column more (L): the fold, closed on first paint, its rows the short table's in the same order.
+    const more: FullTableData = {
+      columns: [...same.columns, { key: "lost", abbr: "L", word: "Lost" }],
+      cells: { "e-1": ["0", "0", "0", "0"], "e-2": ["1", "1", "1", "1"] },
+    };
+    const { tree } = await renderView(empty, stubSlots(), more);
+    const fold = oneByTestId(tree, "qm-full-table");
+    expect([fold.type, fold.props.open]).toEqual(["details", undefined]);
+    expect(heard(oneByTestId(fold, "qm-full-table-toggle"))).toBe(en_("quickMatch.home.fullTable"));
+    expect(byTestId(fold, "qm-full-table-row").map((r) => words(all(r, (el) => el.type === "th")[0]))).toEqual(["One", "Two"]);
+    expect(byTestId(fold, "qm-full-table-row").map((r) => byTestId(r, "qm-full-cell").map(words))).toEqual([
+      ["0", "0", "0", "0"],
+      ["1", "1", "1", "1"],
+    ]);
+    // The guard: a row the page's table does not hold (or holds short) is refused, never a row of blanks.
+    const lacking: FullTableData["cells"][] = [{ "e-1": more.cells["e-1"]! }, { "e-1": more.cells["e-1"]!, "e-2": ["1", "1", "1"] }];
+    for (const cells of lacking) {
+      await expect(renderView(empty, stubSlots(), { ...more, cells })).rejects.toThrow(QuickMatchHomeShapeError);
+    }
+  });
+
   it("refuses a table that names a side the quick match does not hold", async () => {
     const stray: QuickMatchHome = {
       ...empty,
@@ -524,7 +577,7 @@ describe.skipIf(!HAS_DB)("the quick match home page", () => {
     expect(headCells(tree).slice(0, 2)).toEqual([en_("ladder.rank"), en_("quickMatch.home.sideCol")]);
     expect(numericHeads(tree)).toEqual([head("P", "Played"), head("W", "Won"), head("Pts", "Points")]);
     // The table is named by its visible heading; the banner sits outside main.
-    const table = all(oneByTestId(tree, "qm-standings"), (el) => el.type === "table");
+    const table = all(oneByTestId(tree, "qm-standings-short"), (el) => el.type === "table");
     expect(table.map((el) => el.props["aria-labelledby"])).toEqual([oneByTestId(tree, "qm-standings-title").props.id]);
     expect(oneByTestId(tree, "qm-standings-title").props.id).toBe("qm-standings-title");
     expectBannerOutsideMain(tree);
@@ -1064,6 +1117,86 @@ describe.skipIf(!HAS_DB)("the quick match home page", () => {
     expect(words(oneByTestId(hero, "qm-hero-kicker"))).toContain(en_("quickMatch.home.live"));
     expect(oneByTestId(page.tree, "qm-match").props["data-state"]).toBe("live");
     expect(words(oneByTestId(page.tree, "qm-played"))).toBe(enPlayed(0, 1));
+    await hardDeleteQuickMatchCompetition(out.competitionId);
+  });
+
+  it("Full table (owner 2026-11-12): after one decided badminton match, the public table's own columns in its order, under a closed fold; the short table keeps P, W, Pts", async () => {
+    locale.value = "en";
+    const out = await create(league({ sides: SIDES.slice(0, 3) }));
+    const only = (await homeOf(out)).next!;
+    const r = await playToDecided(systemAuth(), only.id);
+    if (r.kind !== "decided") throw new Error(`precondition: ${JSON.stringify(r)}`);
+    const h = await homeOf(out);
+    const decided = h.fixtures.find((f) => f.id === only.id)!;
+    const winner = decided.winnerEntrantId!;
+    const loser = decided.home!.entrantId === winner ? decided.away!.entrantId : decided.home!.entrantId;
+    const idle = h.sides.map((s) => s.entrantId).find((id) => id !== winner && id !== loser)!;
+
+    const { tree, html } = await renderPage(out.token);
+    // The short table is the mockup's, unchanged; the fold sits under it, closed on first paint, and its name is the toggle.
+    expect(numericHeads(tree)).toEqual([head("P", "Played"), head("W", "Won"), head("Pts", "Points")]);
+    const fold = oneByTestId(tree, "qm-full-table");
+    expect([fold.type, fold.props.open]).toEqual(["details", undefined]);
+    expect(heard(oneByTestId(fold, "qm-full-table-toggle"))).toBe(en_("quickMatch.home.fullTable"));
+
+    // THE ORACLE: the public table itself (`StandingsTable`, the division page's) over the same stored rows, with the stage's
+    // rules from the one loader and the sport's metrics from the engine's registry. Its header words, in its order, are the
+    // full table's — never a list typed here.
+    const rules = (await withTenant(QUICK_MATCH_SYSTEM_ORG_ID, (tx) => stageTableRulesDocs(tx, [out.stageId])))[out.stageId];
+    if (!rules) throw new Error("precondition: the loader has the stage's table rules");
+    const metrics = builtinModules.find((m) => m.key === "badminton")!.metrics;
+    const publicHtml = renderToStaticMarkup(
+      <StandingsTable
+        rows={h.standings!.rows as StandingsRow[]}
+        metricSpecs={metrics}
+        cascade={rules.tiebreakers}
+        entrantNames={Object.fromEntries(h.sides.map((s) => [s.entrantId, s.name]))}
+        dict={enPublic as unknown as Dict}
+        rules={rules}
+      />,
+    );
+    const unescape = (x: string) => x.replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+    const publicTitles = [...publicHtml.matchAll(/<th[^>]*\stitle="([^"]*)"/g)].map((m) => unescape(m[1]!));
+    const heads = all(oneByTestId(fold, "qm-full-table-head"), (el) => el.type === "th" && el.props.title !== undefined);
+    expect(publicTitles.length, "the public table shows more than P, W and Pts").toBeGreaterThan(3);
+    expect(heads.map((th) => th.props.title)).toEqual(publicTitles);
+    // Each header prints the letters and is heard as the word, as the short table's are.
+    for (const th of heads) expect(words(all(th, srOnly))).toBe(th.props.title);
+
+    // The rulebook's cells for the one decided match: each side that played it played 1; the winner won it, the loser lost
+    // it; the third side played nothing. Rows in the short table's order, by name.
+    const keys = heads.map((th) => String(th.key));
+    const at = (key: string) => {
+      const i = keys.indexOf(key);
+      expect(i, `the full table has a ${key} column`).toBeGreaterThanOrEqual(0);
+      return i;
+    };
+    const nameOf = (id: string) => h.sides.find((s) => s.entrantId === id)!.name;
+    const rowCells = (id: string) => {
+      const row = byTestId(fold, "qm-full-table-row").find((tr) => words(all(tr, (el) => el.type === "th")[0]) === nameOf(id));
+      if (!row) throw new Error(`no full-table row for ${nameOf(id)}`);
+      return byTestId(row, "qm-full-cell").map(words);
+    };
+    expect([at("played"), at("won"), at("lost")].map((i) => rowCells(winner)[i])).toEqual(["1", "1", "0"]);
+    expect([at("played"), at("won"), at("lost")].map((i) => rowCells(loser)[i])).toEqual(["1", "0", "1"]);
+    expect(rowCells(idle)[at("played")]).toBe("0");
+    expect(byTestId(fold, "qm-full-table-row").map((tr) => words(all(tr, (el) => el.type === "th")[0]))).toEqual(
+      byTestId(tree, "qm-standings-row").map((tr) => words(all(tr, (el) => el.type === "th")[0])),
+    );
+
+    // The full table scrolls sideways in its own region, never the page: focusable, a role and a name (axe's rule).
+    const region = oneByTestId(fold, "qm-full-table-region");
+    expect([region.props.role, region.props.tabIndex, region.props["aria-label"]]).toEqual([
+      "region",
+      0,
+      tRuntime(enPublic, "table.regionCaptioned", { caption: en_("quickMatch.home.fullTable") }),
+    ]);
+    // `relative` contains the header's absolutely placed screen-reader words, or they widen the page at 320 (browser-measured).
+    expect(classOf(region).split(/\s+/)).toEqual(expect.arrayContaining(["relative", "overflow-x-auto", "min-w-0"]));
+    // Open, the short table steps aside: its wrapper hides when the section holds an open fold (one table at a time).
+    expect(classOf(oneByTestId(tree, "qm-standings-short")).split(/\s+/)).toContain("group-has-[>details[open]]/standings:hidden");
+    expect(classOf(oneByTestId(tree, "qm-standings")).split(/\s+/)).toContain("group/standings");
+    expect(html).toContain('data-testid="qm-full-table"');
     await hardDeleteQuickMatchCompetition(out.competitionId);
   });
 

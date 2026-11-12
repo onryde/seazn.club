@@ -88,6 +88,57 @@ test("home (Task 5): a league of 4 with a 43-character side, at 320, 768 and 128
   });
 });
 
+// Owner 2026-11-12, "Full table": the short table (P, W, Pts) opens in place, a native <details>, into the public table's own
+// columns for the sport; open, the short table steps aside, and the wider table scrolls inside its own focusable region,
+// never the page. At 1280 and at 320 (the narrowest phone, where the table is widest against the screen). The columns and
+// their order are the public table's, pinned against it in app/q/[token]/__tests__/page.test.tsx; here the browser shows
+// that the fold opens, swaps, scrolls in place and closes back.
+test("Full table (owner 2026-11-12): at 1280 and 320 the fold opens in place to the public table's columns, the short table steps aside, and it closes back; no sideways scroll", async ({ guest: page }) => {
+  const EN_UI = readDict("../src/dictionaries/en/ui.json");
+  const EN_PUB = readDict("../src/dictionaries/en/public.json");
+  const label = EN_UI["quickMatch.home.fullTable"]!;
+  await createThroughSetup(page, [LONG, "Priya & Tom", "Lee & Ana", "Jo & Max"]);
+  let checked = 0;
+  for (const width of [1280, 320] as const) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.reload();
+    const short = page.getByTestId("qm-standings-short");
+    const fold = page.getByTestId("qm-full-table");
+    const toggle = page.getByTestId("qm-full-table-toggle");
+    const region = page.getByTestId("qm-full-table-region");
+    // First paint: the short table, the fold closed under it.
+    await expect(short, `${width}`).toBeVisible();
+    await expect(toggle, `${width}`).toContainText(label);
+    await expect(region, `${width}: closed`).toBeHidden();
+    expect((await toggle.boundingBox())?.height ?? 0, `${width}: the toggle is a 44px target`).toBeGreaterThanOrEqual(44);
+
+    await toggle.click();
+    await expect(fold, `${width}: open`).toHaveAttribute("open", "");
+    await expect(region, `${width}`).toBeVisible();
+    await expect(short, `${width}: one table at a time`).toBeHidden();
+    // More than the short table's columns, Lost among them, and every side a row.
+    const heads = page.getByTestId("qm-full-table-head").locator("th[title]");
+    expect(await heads.count(), `${width}: more than P, W and Pts`).toBeGreaterThan(3);
+    await expect(page.getByTestId("qm-full-table-head").locator(`th[title="${EN_PUB["table.col.lost"]}"]`), `${width}`).toHaveCount(1);
+    await expect(page.getByTestId("qm-full-table-row"), `${width}`).toHaveCount(4);
+    await expect(page.getByTestId("qm-full-table").getByText(LONG), `${width}`).toBeVisible();
+    // Its own scrolling region: a role, a name and a tab stop (axe's scrollable-region-focusable), and the page stays put.
+    await expect(region).toHaveAttribute("role", "region");
+    await expect(region).toHaveAttribute("tabindex", "0");
+    await expect(region).toHaveAttribute("aria-label", EN_PUB["table.regionCaptioned"]!.replace("{caption}", label));
+    await region.focus();
+    await expect(region, `${width}: the region takes focus`).toBeFocused();
+    await expectNoHorizontalScroll(page);
+
+    await toggle.click();
+    await expect(region, `${width}: closed again`).toBeHidden();
+    await expect(short, `${width}: the short table is back`).toBeVisible();
+    await expectNoHorizontalScroll(page);
+    checked++;
+  }
+  expect(checked).toBe(2);
+});
+
 // ── Task 6: Score ───────────────────────────────────────────────────────────────────────────────────────────────────
 //
 // The Score control is a plain form post (`POST /q/<token>/score/<fixture>`) answered with a 303 into the pad, or back to the
