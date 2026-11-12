@@ -87,6 +87,10 @@ export const EVENTS = {
    *  court_count, courtless_count }; never a token, URL or link id, because
    *  every card's QR is a live scoring credential. */
   SCORER_SHEETS_PRINTED: "scorer_sheets_printed",
+  /** Quick match (pre-flight D11): a guest created a quick match. The ONE event the quick match system org sends —
+   *  `captureServer` drops every organizer event for that org. Carries { quick_match_id, sport_key, variant_key, kind,
+   *  format, sides, plays }; never the match's name, the guest's email or the home token. */
+  QUICK_MATCH_CREATED: "quick_match_created",
 } as const;
 
 export type AnalyticsEvent = (typeof EVENTS)[keyof typeof EVENTS];

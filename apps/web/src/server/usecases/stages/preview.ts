@@ -2,7 +2,7 @@ import "server-only";
 // The division builder's example preview: the same `generate()` over synthetic
 // seeded entrants, no DB.
 
-import { progressionSize, type SourceShape, type TakeRule } from "@seazn/engine/competition";
+import { progressionSize, type RoundRole, type SourceShape, type TakeRule } from "@seazn/engine/competition";
 import { estimatePlateField } from "@/lib/division-builder/format-estimate";
 import { msg } from "@/lib/messages";
 import { resolveSlotLabel } from "@/lib/slot-label";
@@ -258,4 +258,80 @@ export function previewDivisionFixtures(
 
     return { title: stage.name, sections };
   });
+}
+
+// The same draw previewDivisionFixtures renders, as STRUCTURE instead of English text (quick match, spec C22; plan 1
+// pre-flight C2): seeds, feeders, the bye flag and the engine's typed round role, so a caller in any locale names the
+// sides and the rounds itself. Same placeholder entrants (e<i> is seed i), same generate(), same refByExt and
+// laneFixtures as above: there is still one bracket algorithm. A first stage only — a stage fed by an earlier one
+// has no seeds of its own to place here.
+export interface PreviewDrawFeed {
+  /** The source fixture's {round, seq}: the same pair refByExt builds above. */
+  round: number;
+  seq: number;
+  /** Whose seat it is: the source's winner, or its loser (a third-place match, a losers' bracket). */
+  side: "winner" | "loser";
+}
+export interface PreviewDrawFixture {
+  roundNo: number;
+  seqInRound: number;
+  /** The placeholder's seed (e<i> is seed i); null when the seat is fed or empty. */
+  homeSeed: number | null;
+  awaySeed: number | null;
+  homeFrom: PreviewDrawFeed | null;
+  awayFrom: PreviewDrawFeed | null;
+  /** `award` is set: the flag previewDivisionFixtures reads. The holder sits at home and the away seat is empty. */
+  bye: boolean;
+  /** roundRoleFor(…) for BRACKET_KINDS, exactly as previewDivisionFixtures titles a round; null for a round robin. */
+  role: RoundRole | null;
+}
+
+export function previewStageDraw(stage: PreviewStageInput, count: number): PreviewDrawFixture[] {
+  const n = Math.min(Math.max(2, Math.trunc(count) || 2), 64);
+  const poolIds = new Map(POOL_KEYS.split("").map((k) => [k, k]));
+  const entrants: ActiveEntrant[] = Array.from({ length: n }, (_, i) => ({
+    id: `e${i + 1}`,
+    seed: i + 1,
+    swiss_first_round: null,
+  }));
+  let gen: GenFixture[];
+  try {
+    gen = generate(stage.kind, stage.config, entrants, poolIds);
+  } catch {
+    return [];
+  }
+
+  const seedById = new Map(entrants.map((e) => [e.id, e.seed]));
+  const seedOf = (id: string | null): number | null => (id ? (seedById.get(id) ?? null) : null);
+  const refByExt = new Map(gen.map((f) => [f.extKey, { round: f.roundNo, seq: f.seqInRound }]));
+  const feedOf = (from: GenFixture["homeFrom"]): PreviewDrawFeed | null => {
+    const ref = from ? refByExt.get(from.extKey) : undefined;
+    return from && ref ? { ...ref, side: from.side } : null;
+  };
+  const laneFixtures = gen.map((f) => ({ round_no: f.roundNo, lane: f.lane ?? null }));
+  const bracket = BRACKET_KINDS.has(stage.kind);
+
+  return gen.map((f) => ({
+    roundNo: f.roundNo,
+    seqInRound: f.seqInRound,
+    homeSeed: seedOf(f.home),
+    awaySeed: seedOf(f.away),
+    homeFrom: feedOf(f.homeFrom),
+    awayFrom: feedOf(f.awayFrom),
+    bye: f.award !== undefined,
+    role: bracket
+      ? roundRoleFor(
+          laneFixtures,
+          {
+            round_no: f.roundNo,
+            lane: f.lane ?? null,
+            is_final: f.isFinal === true,
+            third_place: f.thirdPlace === true,
+            conditional: f.conditional === true,
+          },
+          stage.kind,
+          f.extKey,
+        )
+      : null,
+  }));
 }

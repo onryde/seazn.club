@@ -84,6 +84,14 @@ export function sealWith(name: KekName, plain: string): Buffer {
   return Buffer.concat([Buffer.from([VERSION]), wrapIv, wrapped, wrapTag, dataIv, dataTag, body]);
 }
 
+/** True when `enc` has an envelope's shape: at least the fixed header and this module's version byte, the two things
+ *  `openWith` refuses before it decrypts anything. Says nothing about whether a key opens it. For a caller that must
+ *  tell a damaged row from a key that cannot open a sound one without reading an error message
+ *  (quick-match-tokens.ts `tryOpenHomeToken`). */
+export function isWellFormedEnvelope(enc: Uint8Array): boolean {
+  return enc.length >= HEADER_LEN && enc[0] === VERSION;
+}
+
 export function openWith(name: KekName, enc: Uint8Array): string {
   const b = Buffer.from(enc);
   if (b.length < HEADER_LEN) throw new Error("relay envelope too short");

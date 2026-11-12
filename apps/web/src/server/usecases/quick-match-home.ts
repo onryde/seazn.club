@@ -1,0 +1,276 @@
+import "server-only";
+// Quick match (spec docs/superpowers/specs/2026-11-03-quick-match-design.md §7.1 point 3, §7.4, §7.5, §7.10; plan 1
+// Task 7; pre-flight B7, C9-C11): a home token to its quick match, and the quick match home's read.
+//
+// The home token is the guest's only credential (§7.4). It resolves to the `quick_matches` row, and through it to ONE
+// competition. Every quick match lives in the one system org, so a system-org session is scoped by RLS to every guest's
+// match at once: the per-match check (§7.1 point 3) is what keeps two strangers apart, and it runs FIRST — the division
+// is looked up by the row's own competition before anything else is read, and a competition with no division (deleted)
+// answers null.
+//
+// Nothing here computes a result. The table is the stored one (`getStandings`), the bracket is the fixture rows as the
+// generator and the write path left them (winners already seated by `onDecided`, §7.10), and a bye is the shared
+// predicate (`isBye`, lib/run-sheet-groups.ts), never re-derived.
+import { withTenant } from "@/lib/db";
+import { SETTLED_FIXTURE_STATUSES } from "@/lib/fixture-status";
+import { toLocale, type Locale } from "@/lib/i18n-constants";
+import { messages, type MessageKey } from "@/lib/messages";
+import { systemAuth } from "@/lib/quick-match-auth";
+import { QUICK_MATCH_SYSTEM_ORG_ID } from "@/lib/quick-match-constants";
+import { isBye } from "@/lib/run-sheet-groups";
+import { variantWordKey } from "@/lib/variant-label-keys";
+import type { EntrantKind } from "@seazn/engine/sport";
+import { listDivisionFixtures } from "./fixtures";
+import type { QuickMatchFormat } from "./quick-match-preview";
+import { hashHomeToken, isHomeTokenShaped } from "./quick-match-tokens";
+import { getStandings, type FixtureRow, type StandingsOut } from "./stages";
+
+const SYSTEM_ORG = QUICK_MATCH_SYSTEM_ORG_ID;
+
+export interface QuickMatchRow {
+  id: string;
+  competitionId: string;
+  name: string;
+  format: QuickMatchFormat;
+  email: string | null;
+  locale: Locale;
+  lastActivityAt: Date;
+  /** null on a saved row (§7.7): alive, never expiring. */
+  expiresAt: Date | null;
+  savedByUserId: string | null;
+  /** The home token's sealed envelope (C19): `openHomeToken` rebuilds the page link from it. */
+  tokenEnc: Uint8Array;
+}
+
+interface QuickMatchDbRow {
+  id: string;
+  competition_id: string;
+  name: string;
+  format: QuickMatchFormat;   // V506's check constraint: 'league' | 'knockout'
+  email: string | null;
+  locale: string;
+  last_activity_at: Date;
+  expires_at: Date | null;
+  saved_by_user_id: string | null;
+  token_enc: Uint8Array;
+}
+
+const toRow = (r: QuickMatchDbRow): QuickMatchRow => ({
+  id: r.id,
+  competitionId: r.competition_id,
+  name: r.name,
+  format: r.format,
+  email: r.email,
+  // The column is free text (default 'en'); a locale the app no longer speaks reads as the default, never as a broken page.
+  locale: toLocale(r.locale),
+  lastActivityAt: r.last_activity_at,
+  expiresAt: r.expires_at,
+  savedByUserId: r.saved_by_user_id,
+  tokenEnc: r.token_enc,
+});
+
+/**
+ * The quick match a home token opens, or null: a string that is not a home token's shape (checked before any lookup),
+ * a token no row holds (never issued, or its match deleted), or an expired row. A null `expires_at` is ALIVE: a saved
+ * row carries none (§7.7), and a bare `expires_at > now()` would kill every saved link (pre-flight B7a). Reading never
+ * spends the token.
+ */
+export async function resolveQuickMatchToken(token: string): Promise<QuickMatchRow | null> {
+  if (!isHomeTokenShaped(token)) return null;
+  const hash = hashHomeToken(token);
+  const [row] = await withTenant(SYSTEM_ORG, (tx) => tx<QuickMatchDbRow[]>`
+    select id, competition_id, name, format, email, locale, last_activity_at, expires_at, saved_by_user_id, token_enc
+    from quick_matches
+    where token_hash = ${hash} and (expires_at is null or expires_at > now())`);
+  return row ? toRow(row) : null;
+}
+
+/**
+ * The quick match whose competition this is, or null for any other competition — whatever its expiry: the row stands
+ * until the sweep deletes it (plan 3), and a score re-arms it (D5). The pad's way back to the home (Task 9).
+ */
+export async function findQuickMatchByCompetition(competitionId: string): Promise<QuickMatchRow | null> {
+  const [row] = await withTenant(SYSTEM_ORG, (tx) => tx<QuickMatchDbRow[]>`
+    select id, competition_id, name, format, email, locale, last_activity_at, expires_at, saved_by_user_id, token_enc
+    from quick_matches
+    where competition_id = ${competitionId}`);
+  return row ? toRow(row) : null;
+}
+
+export interface QuickMatchSide {
+  entrantId: string;
+  name: string;
+}
+
+export interface QuickMatchFixture {
+  id: string;
+  roundNo: number;
+  fixtureNo: number;
+  /** null while the seat is unknown (a bracket seat its feeder has not filled yet, or a bye's empty seat). */
+  home: QuickMatchSide | null;
+  away: QuickMatchSide | null;
+  homeSlotLabel: unknown;
+  awaySlotLabel: unknown;
+  status: string;
+  /** The match's stored summary (`match_states.summary`); null before its first event. */
+  summary: unknown;
+  isBye: boolean;
+  /** fixtures.is_final (C10): plan 2 marks the final without guessing from the round. */
+  isFinal: boolean;
+  /** The outcome's winner when it names one (an entrant id, lib/outcome-text.ts); null otherwise. */
+  winnerEntrantId: string | null;
+}
+
+export interface QuickMatchHome {
+  row: QuickMatchRow;
+  divisionId: string;
+  stageId: string;
+  /** Dictionary keys, never English names (C1/C10). */
+  sport: { key: string; labelKey: MessageKey; variantKey: string; variantLabelKey: MessageKey | null };
+  /** The entrants' one kind (D2): the eyebrow's "sport · kind · format". */
+  kind: EntrantKind;
+  /** In seed order: the order the guest typed them (C20). */
+  sides: QuickMatchSide[];
+  /** In (round, fixture number) order, byes included. */
+  fixtures: QuickMatchFixture[];
+  next: QuickMatchFixture | null;
+  /** The first match in play, in the same order. */
+  live: QuickMatchFixture | null;
+  /** Non-bye fixtures whose status is settled (SETTLED_FIXTURE_STATUSES, B7d). */
+  played: number;
+  /** Non-bye fixtures: Task 5's matchCount (C17). */
+  total: number;
+  /** The stored table of a league stage; null for a knockout, which has none (§7.10). */
+  standings: StandingsOut | null;
+  allPlayed: boolean;
+}
+
+const byRoundThenNumber = (a: QuickMatchFixture, b: QuickMatchFixture): number =>
+  a.roundNo - b.roundNo || a.fixtureNo - b.fixtureNo;
+
+const isLive = (f: QuickMatchFixture): boolean => f.status === "in_play";
+/** Scheduled with both sides known (C18: a match whose sides are not yet known cannot be scored). A held level result
+ *  (`needs_decision`) is never playable: it waits for an organizer's settle, which C23 keeps unreachable for guests. */
+const isReady = (f: QuickMatchFixture): boolean => f.status === "scheduled" && f.home !== null && f.away !== null;
+
+/** The hero's next match (C11): the first by (round, fixture number) in play, else the first scheduled with both sides
+ *  known; null when there is none (an empty list included). */
+export function nextPlayable(fixtures: QuickMatchFixture[]): QuickMatchFixture | null {
+  const ordered = [...fixtures].sort(byRoundThenNumber);
+  return ordered.find(isLive) ?? ordered.find(isReady) ?? null;
+}
+
+const winnerOf = (outcome: unknown): string | null => {
+  const winner = (outcome as { winner?: unknown } | null)?.winner;
+  return typeof winner === "string" ? winner : null;
+};
+
+const isMessageKey = (k: string): k is MessageKey => Object.hasOwn(messages, k);
+
+/**
+ * The quick match home's read, or null when the row's competition is gone (deleted since the row was resolved, Review
+ * Focus 3). Every query runs as the system org (`withTenant(SYSTEM_ORG)`), each in its own transaction, in sequence
+ * (withTenant never nests, lib/db.ts):
+ *   1. THE PER-MATCH CHECK: the division by the row's own competition — none → null, before anything else is read — then
+ *      its stage and its sides;
+ *   2. the fixtures (`listDivisionFixtures`, scoped by that division);
+ *   3. their summaries from `match_states`, by the ids just listed AND the row's competition (B7d);
+ *   4. a league's stored table (`getStandings`).
+ * A quick match is one division with one stage (§7.1); a competition holding more, or a seat naming an entrant outside
+ * the division's own sides, is refused loudly rather than read half-right.
+ */
+export async function readQuickMatchHome(row: QuickMatchRow): Promise<QuickMatchHome | null> {
+  const auth = systemAuth();
+
+  const head = await withTenant(SYSTEM_ORG, async (tx) => {
+    const divisions = await tx<{ id: string; sport_key: string; variant_key: string }[]>`
+      select d.id, d.sport_key, d.variant_key from divisions d where d.competition_id = ${row.competitionId}`;
+    if (divisions.length === 0) return null;
+    if (divisions.length > 1) {
+      throw new Error(`quick match ${row.id}: competition ${row.competitionId} holds ${divisions.length} divisions, not one`);
+    }
+    const division = divisions[0]!;
+    const stages = await tx<{ id: string; kind: string }[]>`select id, kind from stages where division_id = ${division.id}`;
+    if (stages.length !== 1) {
+      throw new Error(`quick match ${row.id}: division ${division.id} holds ${stages.length} stages, not one`);
+    }
+    const entrants = await tx<{ id: string; display_name: string; kind: EntrantKind }[]>`
+      select id, display_name, kind from entrants where division_id = ${division.id} order by seed nulls last, created_at, id`;
+    return { division, stage: stages[0]!, entrants };
+  });
+  if (!head) return null;
+  const { division, stage, entrants } = head;
+
+  const kinds = new Set(entrants.map((e) => e.kind));
+  if (kinds.size !== 1) {
+    throw new Error(`quick match ${row.id}: division ${division.id} holds ${kinds.size} entrant kinds, not one (D2)`);
+  }
+  const labelKey = `sport.${division.sport_key}`;
+  if (!isMessageKey(labelKey)) throw new Error(`quick match ${row.id}: no dictionary key names sport ${division.sport_key}`);
+
+  const sides: QuickMatchSide[] = entrants.map((e) => ({ entrantId: e.id, name: e.display_name }));
+  const sideById = new Map(sides.map((s) => [s.entrantId, s]));
+  const sideOf = (fixtureId: string, entrantId: string | null): QuickMatchSide | null => {
+    if (entrantId === null) return null;
+    const side = sideById.get(entrantId);
+    if (!side) throw new Error(`quick match ${row.id}: fixture ${fixtureId} seats entrant ${entrantId}, outside its own sides`);
+    return side;
+  };
+
+  const rows: FixtureRow[] = await listDivisionFixtures(auth, division.id);
+  const ids = rows.map((r) => r.id);
+  const summaries = new Map(
+    ids.length === 0
+      ? []
+      : (await withTenant(SYSTEM_ORG, (tx) => tx<{ fixture_id: string; summary: unknown }[]>`
+          select ms.fixture_id, ms.summary
+          from match_states ms
+          join fixtures f on f.id = ms.fixture_id
+          join divisions d on d.id = f.division_id
+          where ms.fixture_id = any(${ids}::uuid[]) and d.competition_id = ${row.competitionId}`)).map((s) => [s.fixture_id, s.summary]),
+  );
+
+  const fixtures = rows
+    .map((r): QuickMatchFixture => ({
+      id: r.id,
+      roundNo: r.round_no,
+      fixtureNo: r.fixture_no,
+      home: sideOf(r.id, r.home_entrant_id),
+      away: sideOf(r.id, r.away_entrant_id),
+      homeSlotLabel: r.home_slot_label,
+      awaySlotLabel: r.away_slot_label,
+      status: r.status,
+      summary: summaries.get(r.id) ?? null,
+      isBye: isBye(r),
+      isFinal: r.is_final === true,
+      winnerEntrantId: winnerOf(r.outcome),
+    }))
+    .sort(byRoundThenNumber);
+
+  const matches = fixtures.filter((f) => !f.isBye);
+  const total = matches.length;
+  const played = matches.filter((f) => SETTLED_FIXTURE_STATUSES.has(f.status)).length;
+  const standings = stage.kind === "league" ? await getStandings(auth, stage.id) : null;
+
+  return {
+    row,
+    divisionId: division.id,
+    stageId: stage.id,
+    sport: {
+      key: division.sport_key,
+      labelKey,
+      variantKey: division.variant_key,
+      variantLabelKey: variantWordKey(division.sport_key, division.variant_key) ?? null,
+    },
+    kind: entrants[0]!.kind,
+    sides,
+    fixtures,
+    next: nextPlayable(fixtures),
+    live: fixtures.find(isLive) ?? null,
+    played,
+    total,
+    standings,
+    // The empty case first: no match at all is not "all played".
+    allPlayed: total > 0 && played === total,
+  };
+}

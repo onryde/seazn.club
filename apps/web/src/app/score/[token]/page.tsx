@@ -43,6 +43,11 @@ import type { MessageKey } from "@/lib/messages";
 import { DEFAULT_LOCALE, getDictionary } from "@/lib/i18n";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { HtmlLang } from "@/components/i18n/html-lang";
+import { QUICK_MATCH_SYSTEM_ORG_ID } from "@/lib/quick-match-constants";
+import { findQuickMatchByCompetition } from "@/server/usecases/quick-match-home";
+import { tryOpenHomeToken } from "@/server/usecases/quick-match-tokens";
+import { log } from "@/server/logger";
+import { QuickMatchBackLink } from "@/components/v2/quick-match-back-link";
 import type { ReactNode } from "react";
 
 export default async function ScorePadPage({
@@ -118,7 +123,15 @@ export default async function ScorePadPage({
   // The match and each still-empty seat, named the way the schedule board
   // names them (owner ruling 2026-09-24: "QF·1", "Winner of QF·2"), in the
   // viewer's language.
-  const names = await withTenant(link.org_id, (tx) => scanMatchNames(tx, fixture.id, t));
+  // Quick match C12: the way back to its home, or null for every other pad (whose org guard returns before a query).
+  // Read before the screen split: a later round's pad drops back to the waiting screen when a feeder's result is voided,
+  // and the guest there needs the way home too (review Q3, controller ruling 2026-11-08). Only a quick match's waiting
+  // poll pays for it.
+  const [names, quickMatchHref] = await Promise.all([
+    withTenant(link.org_id, (tx) => scanMatchNames(tx, fixture.id, t)),
+    quickMatchHomeHref(link.org_id, fixture.competition_id),
+  ]);
+  const backLabel = t("quickMatch.backToMatch");
   const ref = names.ref;
   if (screen.screen === "waiting" || screen.screen === "division_not_started") {
     // No pad and no stream yet: Waiting re-renders THIS page (router.refresh)
@@ -146,7 +159,9 @@ export default async function ScorePadPage({
     return (
       <main style={themeStyle} className="min-h-screen bg-court px-4 py-6">
         <HtmlLang lang={locale} />
-        <div className="mx-auto max-w-2xl">
+        {scanColumn(
+          quickMatchHref,
+          backLabel,
           <ScanWaiting
             home={seated(fixture.home_name, fixture.home_kind, fixture.home_members, fixture.home_lineup) ?? names.home}
             away={seated(fixture.away_name, fixture.away_kind, fixture.away_members, fixture.away_lineup) ?? names.away}
@@ -166,8 +181,8 @@ export default async function ScorePadPage({
                     hint: t("device.scan.waitingHint"),
                   }
             }
-          />
-        </div>
+          />,
+        )}
       </main>
     );
   }
@@ -191,10 +206,7 @@ export default async function ScorePadPage({
   // stage, and the spec records these four catalog sites as a known gap to be
   // closed the day a team sport gains a stage-overridable teamSize.
   const lineupCatalog = lineupCatalogFor(sportModule, fixture.config);
-  const [state, events] = await Promise.all([
-    getFixtureState(read, fixture.id),
-    listEvents(read, fixture.id, 0),
-  ]);
+  const [state, events] = await Promise.all([getFixtureState(read, fixture.id), listEvents(read, fixture.id, 0)]);
 
   const fixtureId = fixture.id; // a closure does not keep `fixture`'s null check
   async function side(entrantId: string | null): Promise<PadSideInfo | null> {
@@ -258,8 +270,10 @@ export default async function ScorePadPage({
 
   return (
     <main style={themeStyle} className="min-h-screen bg-court px-4 py-6">
-      <div className="mx-auto max-w-2xl">
-        {inLocale(
+      {scanColumn(
+        quickMatchHref,
+        backLabel,
+        inLocale(
         <DeviceScorePad
         token={token}
         logo={chrome.logo}
@@ -308,10 +322,67 @@ export default async function ScorePadPage({
         // W2c Task 15 (X-SR-7): the chrome's own writes send the version the pad was loaded with.
         rulesVersion={rulesVersion}
         />,
-        )}
-      </div>
+        ),
+      )}
     </main>
   );
+}
+
+/**
+ * The block every scan screen (the waiting screens, Confirm, the pad) puts its content in. A quick match's (C12) is a
+ * flex column so its back link can sit above the content from md up and under it on a phone (the link's own
+ * `max-md:order-last`; quick-match-back-link.tsx says why). Every other screen keeps the plain block it always had,
+ * byte for byte. The link sits outside the pad's dictionary provider: its label is already resolved. A plain function,
+ * not a component, like `inLocale` above: the page's element tree then holds the link itself, where a test can find it.
+ */
+function scanColumn(backHref: string | null, backLabel: string, children: ReactNode) {
+  if (backHref === null) return <div className="mx-auto max-w-2xl">{children}</div>;
+  return (
+    <div className="mx-auto flex max-w-2xl flex-col gap-3">
+      <QuickMatchBackLink href={backHref} label={backLabel} />
+      {children}
+    </div>
+  );
+}
+
+/**
+ * Quick match (spec C12; plan 1 Task 9): the href of the pad's way back to its quick match's home, `/q/<home token>`,
+ * or null for every other pad. Only the system org's links can belong to a quick match, so any other org's pad returns
+ * before a query. A system-org competition with no `quick_matches` row (a create that died before its last commit,
+ * pre-flight D1) has no home to go back to. Expiry is not checked: the home answers an expired match honestly, and a
+ * score revives the row (D5). The token is opened here, server-side; only the finished href reaches the client.
+ *
+ * The link is an extra and must never break scoring (controller ruling 2026-11-08; pre-flight A6, C8): when the home
+ * token cannot be opened, whether the KEK is missing, the envelope is damaged, or a KEK was rotated without re-sealing,
+ * the screen renders without the link and the server logs ONE warning with that case's reason code. The warning
+ * carries the reason and the competition id only: never the token, the envelope, or the crypto error's own message.
+ */
+async function quickMatchHomeHref(orgId: string, competitionId: string): Promise<string | null> {
+  if (orgId !== QUICK_MATCH_SYSTEM_ORG_ID) return null;
+  const row = await findQuickMatchByCompetition(competitionId);
+  if (!row) return null;
+  // The non-throwing open (quick-match-tokens.ts): kek_missing, malformed or rejected, never by an error's message.
+  const opened = tryOpenHomeToken(row.tokenEnc);
+  if (!opened.ok) {
+    const reason = `quick_match_back_link_${opened.reason}`;
+    if (firstWarning(`${competitionId}:${reason}`)) {
+      log.warn({ reason, competitionId }, "quick match pad: back link hidden, the home token could not be opened");
+    }
+    return null;
+  }
+  return `/q/${opened.token}`;
+}
+
+/** Each (competition, reason) is warned about once per server process (ruling 2026-11-08): a waiting screen re-renders
+ *  this page every POLL_MS, and a broken key would otherwise log on every poll of every waiting phone. Bounded: past
+ *  WARNED_CAP keys it starts over, so a long-lived server cannot grow it without limit (the cost is one repeat line). */
+const WARNED_CAP = 1_000;
+const warned = new Set<string>();
+function firstWarning(key: string): boolean {
+  if (warned.has(key)) return false;
+  if (warned.size >= WARNED_CAP) warned.clear();
+  warned.add(key);
+  return true;
 }
 
 /** Doc 13 §7's dead end. Both lines arrive localised: no English literal is

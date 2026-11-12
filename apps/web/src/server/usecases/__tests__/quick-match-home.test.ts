@@ -1,0 +1,523 @@
+// Quick match plan 1, Task 7: resolve a home token and read the home (spec docs/superpowers/specs/2026-11-03-quick-match-
+// design.md §7.1 point 3, §7.4, §7.5, §7.10; C1, C17, C19; pre-flight B7, C9-C12). Three surfaces:
+//   - `resolveQuickMatchToken` / `findQuickMatchByCompetition`: a home token (or a competition) to its `quick_matches`
+//     row; a saved row (expires_at null) is alive (B7a);
+//   - `readQuickMatchHome` / `nextPlayable`: the home page's read, scoped to the row's own competition (the per-match
+//     check, §7.1 point 3: every quick match lives in ONE system org, so RLS alone cannot keep two strangers apart);
+//   - `touchQuickMatchActivity` / `...ForFixture`: the 7-day clock (C1) moved by activity, re-armed only while unsaved.
+//
+// Every quick match is made by the real producer, `createQuickMatch`, and every match result by the real write path
+// (`playToDecided` and `scoreEvent`), never by hand-inserted rows. The few direct UPDATEs below are the states a later
+// plan or a corrupt row would produce (a saved row, an expired one, a tampered seat), each named where it is made.
+//
+// Every case keys on its OWN quick match (pre-flight A16): the system org is shared by every case, every run and every
+// parallel test file, so nothing here counts the org's rows. Expected values come from the spec or the rulebook (round
+// robin n·(n-1)/2; a knockout of 3 is two matches and seed 1 sits out, §7.3; 7 days, C1), from the preview (the number
+// the Start button showed), or from the database the write path wrote — never from the read under test.
+//
+// Real Postgres required (RLS, triggers, the generator, the write path); the DB cases skip without DATABASE_URL. The
+// `nextPlayable` cases are pure and always run.
+import { randomBytes as kekBytes, randomUUID } from "node:crypto";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+
+import { sql } from "@/lib/db";
+import { FIXTURE_STATUSES } from "@/lib/fixture-status";
+import offerJson from "@/lib/quick-match-offer.generated.json";
+import { DEFAULT_LOCALE } from "@/lib/i18n-constants";
+import { messages } from "@/lib/messages";
+import { variantWordKey } from "@/lib/variant-label-keys";
+import type { CreateQuickMatch } from "@/server/api-v1/schemas";
+import { forEachSportAsync } from "@seazn/engine/testkit";
+import { listDivisionFixtures } from "../fixtures";
+import { touchQuickMatchActivity, touchQuickMatchActivityForFixture } from "../quick-match-activity";
+import { createQuickMatch, systemAuth, type CreatedQuickMatch } from "../quick-match-create";
+import { hardDeleteQuickMatchCompetition } from "../quick-match-delete";
+import {
+  findQuickMatchByCompetition,
+  nextPlayable,
+  readQuickMatchHome,
+  resolveQuickMatchToken,
+  type QuickMatchFixture,
+  type QuickMatchHome,
+  type QuickMatchRow,
+} from "../quick-match-home";
+import { quickMatchPreview } from "../quick-match-preview";
+import { listQuickMatchSports } from "../quick-match-sports";
+import { hashHomeToken, hashVisitorKey, mintHomeToken, mintVisitorKey, openHomeToken } from "../quick-match-tokens";
+import { scoreEvent } from "../scoring";
+import { firstRallyFor, playToDecided } from "./_quick-match-probe";
+import { makeUser } from "./_seed";
+
+vi.stubEnv("DEVICE_LINK_KEK", kekBytes(32).toString("hex"));   // A15: every create seals a home token
+// The create's one analytics event reaches a mock, never PostHog.
+vi.mock("@/lib/posthog-server", async (orig) => ({
+  ...(await orig<typeof import("@/lib/posthog-server")>()),
+  captureServer: vi.fn(),
+}));
+
+const HAS_DB = !!process.env.DATABASE_URL;
+const DAY_MS = 24 * 3600 * 1000;
+/** C1 / §7.2: an unsaved quick match is kept this many days after its last activity. The spec's number, typed here on
+ *  purpose so the test does not read it back from the code under test. */
+const SPEC_EXPIRY_DAYS = 7;
+/** The sweep's budget, in its own cost driver (AGENTS.md class 20): one create and one read per offered sport. Every
+ *  other case keeps the repo default (vitest.config.ts: no inline pins). */
+const OFFERED_SPORTS = new Set(offerJson.offered.map((o) => o.sport_key)).size;
+const SWEEP_TIMEOUT_MS = Math.max(30_000, OFFERED_SPORTS * 30_000);
+
+const uniq = () => `QM home ${randomUUID().slice(0, 8)}`;
+/** A visitor as the route names one: a fresh visitor key's sha256 hex. */
+const v = () => hashVisitorKey(mintVisitorKey());
+const SIDES = ["Ravi & Sam", "Priya & Tom", "Lee & Ana", "Jo & Max"];
+/** Read from the catalog in beforeAll, never typed (as Task 5's suite does). */
+let BADMINTON_V: string;
+
+/** `league4`: four badminton pairs, a single round robin. Each call is its own quick match (its own name). */
+const league4 = (over: Partial<CreateQuickMatch> = {}): CreateQuickMatch => ({
+  name: uniq(),
+  sport_key: "badminton",
+  variant_key: BADMINTON_V,
+  kind: "pair",   // badminton's entrantModel takes pairs (D2)
+  format: "league",
+  sides: SIDES,
+  plays: 1,
+  email: null,
+  locale: "en",
+  ...over,
+});
+const create = (input: CreateQuickMatch = league4()) => createQuickMatch(input, { visitorHash: v() });
+
+async function rowOf(out: CreatedQuickMatch): Promise<QuickMatchRow> {
+  const row = await resolveQuickMatchToken(out.token);
+  if (!row) throw new Error(`precondition: quick match ${out.id} does not resolve`);
+  return row;
+}
+async function homeOf(out: CreatedQuickMatch): Promise<QuickMatchHome> {
+  const home = await readQuickMatchHome(await rowOf(out));
+  if (!home) throw new Error(`precondition: quick match ${out.id} has no home`);
+  return home;
+}
+async function activityOf(id: string): Promise<{ last: number; expires: number | null }> {
+  const [q] = await sql<{ last_activity_at: Date; expires_at: Date | null }[]>`
+    select last_activity_at, expires_at from quick_matches where id = ${id}`;
+  if (!q) throw new Error(`precondition: quick match ${id} has no row`);
+  return { last: q.last_activity_at.getTime(), expires: q.expires_at?.getTime() ?? null };
+}
+/** Plan 3's saved shape (§7.7): a saver, and no expiry. */
+async function save(id: string): Promise<void> {
+  const saver = await makeUser("qm-saver");
+  await sql`update quick_matches set saved_by_user_id = ${saver.id}, expires_at = null where id = ${id}`;
+}
+/** A standings row as the stored table holds it (`StandingsRowLike`, lib/public-site.ts). */
+type TableRow = { entrantId: string; played: number; won: number };
+const tableOf = (h: QuickMatchHome) => (h.standings?.rows ?? []) as TableRow[];
+const sideIds = (f: QuickMatchFixture) => [f.home?.entrantId, f.away?.entrantId].filter((id): id is string => !!id);
+
+beforeAll(async () => {
+  if (!HAS_DB) return;
+  const [row] = await sql<{ key: string }[]>`
+    select key from sport_variants where sport_key = 'badminton' and is_system and org_id is null order by key limit 1`;
+  if (!row) throw new Error("no system badminton variant: run `npm run sync:sports` against this database");
+  BADMINTON_V = row.key;
+});
+
+afterAll(async () => {
+  if (!HAS_DB) return;
+  const g = globalThis as { _sql?: { end(): Promise<void> } };
+  const client = g._sql;
+  g._sql = undefined;
+  await client?.end();
+});
+
+// ── nextPlayable: pure ──────────────────────────────────────────────────────────────────────────────────────────────
+
+const fx = (o: Partial<QuickMatchFixture> & Pick<QuickMatchFixture, "id" | "roundNo" | "fixtureNo">): QuickMatchFixture => ({
+  home: { entrantId: "e-home", name: "Home" },
+  away: { entrantId: "e-away", name: "Away" },
+  homeSlotLabel: null,
+  awaySlotLabel: null,
+  status: "scheduled",
+  summary: null,
+  isBye: false,
+  isFinal: false,
+  winnerEntrantId: null,
+  ...o,
+});
+
+describe("nextPlayable (C11: the hero's next match)", () => {
+  it("empty case first: no fixtures, no next match", () => {
+    expect(nextPlayable([])).toBeNull();
+  });
+
+  it("orders by round, then by fixture number, whatever order the list arrives in", () => {
+    // Each wrong sort key picks a different row: list order → r2n1; fixture number alone → r2n1; round alone (stable) → r1n3.
+    const list = [
+      fx({ id: "r2n1", roundNo: 2, fixtureNo: 1 }),
+      fx({ id: "r1n3", roundNo: 1, fixtureNo: 3 }),
+      fx({ id: "r1n2", roundNo: 1, fixtureNo: 2 }),
+    ];
+    expect(nextPlayable(list)!.id).toBe("r1n2");
+    expect(nextPlayable([...list].reverse())!.id).toBe("r1n2");
+  });
+
+  it("a match in play comes first, before any lower-numbered scheduled one", () => {
+    const list = [
+      fx({ id: "r1n1", roundNo: 1, fixtureNo: 1 }),
+      fx({ id: "r2n5", roundNo: 2, fixtureNo: 5, status: "in_play" }),
+      fx({ id: "r2n4", roundNo: 2, fixtureNo: 4, status: "in_play" }),
+    ];
+    expect(nextPlayable(list)!.id).toBe("r2n4");   // the first in play, by the same order
+  });
+
+  it("a scheduled match with an unknown side waits; no other status is ever next", () => {
+    const waiting = [
+      fx({ id: "home-unknown", roundNo: 1, fixtureNo: 1, home: null }),
+      fx({ id: "away-unknown", roundNo: 1, fixtureNo: 2, away: null }),
+    ];
+    // The rulebook's non-playable statuses (V214 + V432; C11/C18: only a match in play, or scheduled with both sides, is
+    // next), typed here; the domain minus the two playable ones must be exactly this list, so a new status reds here
+    // until someone decides whether it can be next.
+    const NOT_PLAYABLE = ["decided", "finalized", "abandoned", "forfeited", "cancelled", "needs_decision"];
+    const others = FIXTURE_STATUSES.filter((s) => s !== "scheduled" && s !== "in_play");
+    expect([...others].sort()).toEqual([...NOT_PLAYABLE].sort());
+    let checked = 0;
+    for (const status of NOT_PLAYABLE) {
+      const list = [...waiting, fx({ id: `s-${status}`, roundNo: 0, fixtureNo: 0, status }), fx({ id: "ready", roundNo: 3, fixtureNo: 9 })];
+      expect(nextPlayable(list)!.id, status).toBe("ready");
+      expect(nextPlayable(list.filter((f) => f.id !== "ready")), status).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(NOT_PLAYABLE.length);
+    expect(checked).toBeGreaterThan(0);
+  });
+});
+
+// ── resolve and find ────────────────────────────────────────────────────────────────────────────────────────────────
+
+describe.skipIf(!HAS_DB)("resolveQuickMatchToken / findQuickMatchByCompetition", () => {
+  it("resolves a live token, twice, and refuses its hash, a foreign prefix, a malformed or unknown token, and an expired one", async () => {
+    const input = league4({ locale: "fr" });
+    const a = await create(input);
+    const first = await resolveQuickMatchToken(a.token);
+    expect(first).toMatchObject({
+      id: a.id, competitionId: a.competitionId, name: input.name, format: "league", email: null, locale: "fr", savedByUserId: null,
+    });
+    expect(first!.expiresAt!.getTime()).toBe(a.expiresAt.getTime());
+    expect(first!.lastActivityAt).toBeInstanceOf(Date);
+    expect(openHomeToken(first!.tokenEnc)).toBe(a.token);   // C19: the row carries the envelope the page link is rebuilt from
+    expect((await resolveQuickMatchToken(a.token))!.id).toBe(a.id);   // a second resolve: reading never spends the token
+
+    expect(await resolveQuickMatchToken(hashHomeToken(a.token))).toBeNull();   // the stored hash is not the credential
+    expect(await resolveQuickMatchToken("dl_" + a.token.slice(3))).toBeNull();   // a device-link-shaped token
+    expect(await resolveQuickMatchToken("")).toBeNull();
+    expect(await resolveQuickMatchToken(a.token.slice(0, -1))).toBeNull();   // one character short
+    expect(await resolveQuickMatchToken(`${a.token} `)).toBeNull();
+    expect(await resolveQuickMatchToken(mintHomeToken())).toBeNull();   // well shaped, never issued
+
+    // A stored locale the app no longer speaks reads as the default (toLocale), never as a broken page.
+    await sql`update quick_matches set locale = 'xx' where id = ${a.id}`;
+    expect((await resolveQuickMatchToken(a.token))!.locale).toBe(DEFAULT_LOCALE);
+
+    await sql`update quick_matches set expires_at = now() - interval '1 second' where id = ${a.id}`;   // the sweep has not run yet
+    expect(await resolveQuickMatchToken(a.token)).toBeNull();
+  });
+
+  it("checks the shape before the lookup: a stored hash of a malformed token never resolves", async () => {
+    const a = await create();
+    const malformed = `qm_${randomUUID()}`;   // the prefix, but a 36-character body: not a home token
+    await sql`update quick_matches set token_hash = ${hashHomeToken(malformed)} where id = ${a.id}`;
+    expect(await resolveQuickMatchToken(malformed)).toBeNull();
+  });
+
+  it("a saved row with no expiry resolves (B7a)", async () => {
+    const a = await create();
+    await save(a.id);
+    const row = await resolveQuickMatchToken(a.token);
+    expect(row!.id).toBe(a.id);
+    expect(row!.expiresAt).toBeNull();
+    expect(row!.savedByUserId).not.toBeNull();
+  });
+
+  it("finds a quick match by its competition, expired or not, and nothing for another competition (T9's back link)", async () => {
+    const a = await create();
+    const found = await findQuickMatchByCompetition(a.competitionId);
+    expect(found!.id).toBe(a.id);
+    expect(openHomeToken(found!.tokenEnc)).toBe(a.token);
+    expect(await findQuickMatchByCompetition(randomUUID())).toBeNull();
+    // The row stands until the sweep deletes it, and a score re-arms it (D5): the pad still finds its way back.
+    await sql`update quick_matches set expires_at = now() - interval '1 second' where id = ${a.id}`;
+    expect((await findQuickMatchByCompetition(a.competitionId))!.id).toBe(a.id);
+  });
+
+  it("answers null for a token whose competition was hard-deleted, and a stale row reads no home (Review Focus 3)", async () => {
+    const a = await create();
+    const stale = await rowOf(a);
+    await hardDeleteQuickMatchCompetition(a.competitionId);
+    expect(await resolveQuickMatchToken(a.token)).toBeNull();
+    expect(await findQuickMatchByCompetition(a.competitionId)).toBeNull();
+    expect(await readQuickMatchHome(stale)).toBeNull();
+  });
+});
+
+// ── the activity clock ──────────────────────────────────────────────────────────────────────────────────────────────
+
+describe.skipIf(!HAS_DB)("touchQuickMatchActivity / touchQuickMatchActivityForFixture (C1, B7b, D5)", () => {
+  it("a touch on an unsaved row moves its activity and re-arms its expiry 7 days out, and no other row moves", async () => {
+    const a = await create();
+    const bystander = await create();
+    const before = await activityOf(bystander.id);
+    const at = new Date(Date.now() + 3 * DAY_MS);
+    await touchQuickMatchActivity(a.id, at);
+    expect(await activityOf(a.id)).toEqual({ last: at.getTime(), expires: at.getTime() + SPEC_EXPIRY_DAYS * DAY_MS });
+    expect(await activityOf(bystander.id)).toEqual(before);
+  });
+
+  it("a touch on a saved row moves its activity and leaves its expiry null", async () => {
+    const a = await create();
+    await save(a.id);
+    const at = new Date(Date.now() + 2 * DAY_MS);
+    await touchQuickMatchActivity(a.id, at);
+    expect(await activityOf(a.id)).toEqual({ last: at.getTime(), expires: null });
+  });
+
+  it("through a fixture: touches the quick match holding it (re-armed, or still saved), and nothing for any other fixture", async () => {
+    const a = await create();
+    const saved = await create();
+    await save(saved.id);
+    const bystander = await create();
+    const before = await activityOf(bystander.id);
+    const [fa] = await listDivisionFixtures(systemAuth(), a.divisionId);
+    const [fs] = await listDivisionFixtures(systemAuth(), saved.divisionId);
+    const at = new Date(Date.now() + 4 * DAY_MS);
+
+    await touchQuickMatchActivityForFixture(fa!.id, at);
+    await touchQuickMatchActivityForFixture(fs!.id, at);
+    await touchQuickMatchActivityForFixture(randomUUID(), at);   // a fixture in no quick match: nothing moves, nothing throws
+
+    expect(await activityOf(a.id)).toEqual({ last: at.getTime(), expires: at.getTime() + SPEC_EXPIRY_DAYS * DAY_MS });
+    expect(await activityOf(saved.id)).toEqual({ last: at.getTime(), expires: null });
+    expect(await activityOf(bystander.id)).toEqual(before);
+  });
+});
+
+// ── the home ────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+describe.skipIf(!HAS_DB)("readQuickMatchHome", () => {
+  it("reads a fresh league: 0 of 6 played, match 1 next, nothing live, a table of 4", async () => {
+    const input = league4();
+    const a = await create(input);
+    const h = await homeOf(a);
+    expect(h.row.id).toBe(a.id);
+    expect(h.divisionId).toBe(a.divisionId);
+    expect(h.stageId).toBe(a.stageId);
+    expect(h.total).toBe(6);   // round robin of 4: 4·3/2
+    expect(h.total).toBe(a.matchCount);   // C17: the number the Start button showed
+    expect(h.played).toBe(0);
+    expect(h.allPlayed).toBe(false);
+    expect(h.live).toBeNull();
+    expect(h.next!.roundNo).toBe(1);
+    expect(h.next!.fixtureNo).toBe(1);
+    expect(h.fixtures).toHaveLength(6);
+    expect(h.fixtures.filter((f) => f.isBye || f.isFinal || f.summary !== null || f.winnerEntrantId !== null)).toEqual([]);
+    const order = h.fixtures.map((f) => [f.roundNo, f.fixtureNo]);
+    expect(order).toEqual([...order].sort((x, y) => x[0]! - y[0]! || x[1]! - y[1]!));
+    // C20: the sides in the order entered, and every pair meets exactly once.
+    expect(h.sides.map((s) => s.name)).toEqual(input.sides);
+    const pairs = new Set(h.fixtures.map((f) => [f.home!.name, f.away!.name].sort().join(" v ")));
+    expect(pairs.size).toBe(6);
+    expect(h.standings!.stage_id).toBe(a.stageId);
+    expect(tableOf(h).map((r) => r.entrantId).sort()).toEqual(h.sides.map((s) => s.entrantId).sort());
+    expect(h.kind).toBe("pair");
+    expect(h.sport).toEqual({
+      key: "badminton",
+      labelKey: "sport.badminton",
+      variantKey: BADMINTON_V,
+      variantLabelKey: variantWordKey("badminton", BADMINTON_V) ?? null,
+    });
+    expect(Object.hasOwn(messages, h.sport.labelKey)).toBe(true);
+    expect(h.sport.variantLabelKey).not.toBeNull();   // every system badminton variant is named (variant-label-keys.ts)
+  });
+
+  it("never returns another quick match's division, fixtures or sides (isolation, §7.1 point 3)", async () => {
+    const a = await create();
+    const b = await create();
+    const ha = await homeOf(a);
+    expect(ha.divisionId).toBe(a.divisionId);   // B7c: a dropped division predicate answers some other division
+    expect(ha.stageId).toBe(a.stageId);
+    const aFixtures = await listDivisionFixtures(systemAuth(), a.divisionId);
+    const bFixtures = await listDivisionFixtures(systemAuth(), b.divisionId);
+    expect(bFixtures.length).toBeGreaterThan(0);
+    expect(ha.fixtures.map((f) => f.id).sort()).toEqual(aFixtures.map((f) => f.id).sort());
+    expect(ha.fixtures.some((f) => bFixtures.some((x) => x.id === f.id))).toBe(false);
+    const hb = await homeOf(b);
+    const bSides = new Set(hb.sides.map((s) => s.entrantId));
+    expect(ha.sides.some((s) => bSides.has(s.entrantId))).toBe(false);
+  });
+
+  it("refuses to name a seat outside the quick match's own sides (a tampered fixture)", async () => {
+    const a = await create();
+    const b = await create();
+    try {
+      const [fa] = await listDivisionFixtures(systemAuth(), a.divisionId);
+      const hb = await homeOf(b);
+      await sql`update fixtures set home_entrant_id = ${hb.sides[0]!.entrantId} where id = ${fa!.id}`;
+      await expect(readQuickMatchHome(await rowOf(a))).rejects.toThrow(/outside its own sides/);
+    } finally {
+      await hardDeleteQuickMatchCompetition(a.competitionId);   // the corrupt match never outlives its case
+    }
+  });
+
+  it("a quick match with no fixture left reads nothing played, nothing next, and NOT all played (the empty case)", async () => {
+    const a = await create();
+    try {
+      await sql`delete from fixtures where division_id = ${a.divisionId}`;   // a state no producer makes: the guard's own case
+      const h = await homeOf(a);
+      expect(h.fixtures).toEqual([]);
+      expect(h.total).toBe(0);
+      expect(h.played).toBe(0);
+      expect(h.allPlayed).toBe(false);   // zero of zero is not a finished match: no winner card
+      expect(h.next).toBeNull();
+      expect(h.live).toBeNull();
+      expect(h.sides).toHaveLength(SIDES.length);
+    } finally {
+      await hardDeleteQuickMatchCompetition(a.competitionId);
+    }
+  });
+
+  it("refuses a competition holding two divisions, a division holding two stages, or sides of two kinds (one each, §7.1, D2)", async () => {
+    const corrupt: CreatedQuickMatch[] = [];
+    try {
+      const twoDivisions = await create();
+      corrupt.push(twoDivisions);
+      await sql`
+        insert into divisions (competition_id, org_id, name, slug, sport_key, variant_key, config, module_version)
+        select competition_id, org_id, name, slug || '-twin', sport_key, variant_key, config, module_version
+        from divisions where id = ${twoDivisions.divisionId}`;
+      await expect(readQuickMatchHome(await rowOf(twoDivisions))).rejects.toThrow(/2 divisions/);
+
+      const twoStages = await create();
+      corrupt.push(twoStages);
+      await sql`
+        insert into stages (division_id, org_id, seq, kind, name)
+        select division_id, org_id, seq + 1, kind, name from stages where id = ${twoStages.stageId}`;
+      await expect(readQuickMatchHome(await rowOf(twoStages))).rejects.toThrow(/2 stages/);
+
+      const twoKinds = await create();
+      corrupt.push(twoKinds);
+      const [first] = (await homeOf(twoKinds)).sides;
+      await sql`update entrants set kind = 'team' where id = ${first!.entrantId}`;
+      await expect(readQuickMatchHome(await rowOf(twoKinds))).rejects.toThrow(/2 entrant kinds/);
+    } finally {
+      for (const m of corrupt) await hardDeleteQuickMatchCompetition(m.competitionId);   // no corrupt match outlives its case
+    }
+  });
+
+  it("a match in play is live and next, even past a lower-numbered one; only its own summary is read", async () => {
+    const a = await create();
+    let h = await homeOf(a);
+    const last = h.fixtures.at(-1)!;
+    expect(last.fixtureNo).toBeGreaterThan(h.next!.fixtureNo);   // precondition: it is not already next
+    for (const req of await firstRallyFor(last.id)) await scoreEvent(systemAuth(), last.id, req);
+    h = await homeOf(a);
+    expect(h.live!.id).toBe(last.id);
+    expect(h.next!.id).toBe(last.id);
+    const [stored] = await sql<{ summary: unknown }[]>`select summary from match_states where fixture_id = ${last.id}`;
+    expect(stored).toBeDefined();
+    expect(h.fixtures.find((f) => f.id === last.id)!.summary).toEqual(stored!.summary);
+    expect(h.fixtures.filter((f) => f.id !== last.id && f.summary !== null)).toEqual([]);
+    expect(h.played).toBe(0);
+  });
+
+  it("a void of the deciding event takes the match back: played, the winner and the table follow it (the sequence)", async () => {
+    const a = await create();
+    let h = await homeOf(a);
+    const first = h.next!;
+    const r = await playToDecided(systemAuth(), first.id);
+    if (r.kind !== "decided") throw new Error(`precondition: ${JSON.stringify(r)}`);
+
+    h = await homeOf(a);
+    expect(h.played).toBe(1);
+    expect(h.allPlayed).toBe(false);
+    const decided = h.fixtures.find((f) => f.id === first.id)!;
+    expect(sideIds(first)).toContain(decided.winnerEntrantId);
+    expect(h.next!.id).not.toBe(first.id);
+    expect(tableOf(h).reduce((n, row) => n + row.played, 0)).toBe(2);   // one match, two sides played it
+    expect(tableOf(h).find((row) => row.entrantId === decided.winnerEntrantId)!.won).toBe(1);
+
+    // core.void of the last event, expected_seq = the tip (carried-forward-scoring.test.ts); a settled fixture still takes it.
+    await scoreEvent(systemAuth(), first.id, { expected_seq: r.lastSeq, type: "core.void", payload: { event_id: r.lastEventId } });
+    h = await homeOf(a);
+    expect(h.played).toBe(0);
+    const undone = h.fixtures.find((f) => f.id === first.id)!;
+    expect(undone.winnerEntrantId).toBeNull();
+    expect(h.live!.id).toBe(first.id);   // started and undecided again: in play
+    expect(h.next!.id).toBe(first.id);
+    expect(tableOf(h).reduce((n, row) => n + row.played, 0)).toBe(0);
+  });
+
+  it("knockout of 3: the bye is marked and not counted, the final waits, follows its semi-final, then all is played (C10)", async () => {
+    const input = league4({ format: "knockout", sides: SIDES.slice(0, 3) });
+    const k = await create(input);
+    let h = await homeOf(k);
+    const byes = h.fixtures.filter((f) => f.isBye);
+    expect(byes).toHaveLength(1);
+    expect([byes[0]!.home?.name, byes[0]!.away?.name]).toContain(input.sides[0]);   // §7.3: with 3 sides seed 1 sits out
+    expect(h.total).toBe(2);   // the semi-final and the final; the bye is not a match
+    expect(h.total).toBe(k.matchCount);
+    expect(h.played).toBe(0);   // the bye is settled (forfeited) but is not a match played
+    expect(h.standings).toBeNull();   // a bracket has no table (§7.10): plan 2 draws it instead
+    const finals = h.fixtures.filter((f) => f.isFinal);
+    expect(finals).toHaveLength(1);
+    const final = finals[0]!;
+    expect(final.roundNo).toBe(2);
+    expect(h.next!.isFinal).toBe(false);   // the final has an unknown side: not next
+    const semi = h.next!;
+    expect(semi.isBye).toBe(false);
+
+    expect(await playToDecided(systemAuth(), semi.id)).toMatchObject({ kind: "decided" });
+    h = await homeOf(k);
+    expect(h.played).toBe(1);
+    expect(h.allPlayed).toBe(false);
+    const semiWinner = h.fixtures.find((f) => f.id === semi.id)!.winnerEntrantId;
+    expect(sideIds(semi)).toContain(semiWinner);
+    expect(h.next!.id).toBe(final.id);   // both sides of the final are now known
+    expect(sideIds(h.next!)).toContain(semiWinner);
+
+    expect(await playToDecided(systemAuth(), final.id)).toMatchObject({ kind: "decided" });
+    h = await homeOf(k);
+    expect(h.played).toBe(2);
+    expect(h.allPlayed).toBe(true);
+    expect(h.next).toBeNull();
+    expect(h.live).toBeNull();
+    const done = h.fixtures.find((f) => f.id === final.id)!;
+    expect(sideIds(done)).toContain(done.winnerEntrantId);
+  });
+
+  it("reads every offered sport's home with that sport's own keys and kind (sweep)", async () => {
+    const offered = new Map((await listQuickMatchSports()).map((s) => [s.sport_key, s]));
+    let checked = 0;
+    const visited = await forEachSportAsync(async ({ key }) => {
+      const sport = offered.get(key);
+      if (!sport) return;   // not offered (generic, the lineup sport): no quick match of it can exist to read
+      const variant = sport.variants[0]!;
+      const kind = sport.kinds.at(-1)!;   // the last kind: pairs for badminton, a team for football, one player for chess
+      const input = league4({ sport_key: key, variant_key: variant.variant_key, kind, sides: ["Side A", "Side B"] });
+      const out = await create(input);
+      const h = await homeOf(out);
+      // The setup screen's own names for this sport and variant (C1: keys, never English names), and the kind chosen.
+      expect(h.sport).toEqual({ key, labelKey: sport.labelKey, variantKey: variant.variant_key, variantLabelKey: variant.labelKey });
+      expect(h.kind).toBe(kind);
+      expect(h.total).toBe(quickMatchPreview({ format: "league", sides: 2, plays: 1 }).matchCount);
+      expect(h.total).toBe(1);
+      expect(h.next!.id).toBe(h.fixtures[0]!.id);
+      expect([h.next!.home!.name, h.next!.away!.name].sort()).toEqual(["Side A", "Side B"]);
+      expect(tableOf(h)).toHaveLength(2);
+      checked++;
+      await hardDeleteQuickMatchCompetition(out.competitionId);
+    });
+    console.info(`quick match home sweep: ${checked} offered sports read of ${visited} sport modules`);
+    expect(visited).toBeGreaterThan(0);
+    expect(checked).toBeGreaterThan(0);   // zero checked is a failure
+    expect(checked).toBe(offered.size);   // every offered sport, once
+  }, SWEEP_TIMEOUT_MS);
+});

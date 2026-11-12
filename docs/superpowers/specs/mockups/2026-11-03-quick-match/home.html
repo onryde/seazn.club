@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quick match home mockup</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Inter:wght@400;500;600&display=swap');
+body { margin: 0; padding: 24px 16px; background: #f5f5f7; color: #1d1d1f; font-family: Inter, system-ui, sans-serif; }
+h1 { font-size: 20px; margin: 0 0 4px; }
+.intro { color: #6e6e73; font-size: 14px; max-width: 760px; margin: 0 0 8px; }
+.row { display: flex; flex-wrap: wrap; gap: 24px; justify-content: center; }
+.col { width: 320px; }
+.cap { font-size: 13px; color: #6e6e73; margin: 10px 4px 0; }
+.cap b { color: #1d1d1f; }
+
+.qm-phone { width: 300px; margin: 1.25rem auto 0; border-radius: 30px; border: 6px solid #1f1f22; background: linear-gradient(180deg, #1d1145, #150b36); overflow: hidden; box-shadow: 0 12px 32px rgba(0,0,0,.18); color: #f5f0e8; font-size: 13px; line-height: 1.35; }
+.qm-screen { min-height: 660px; display: flex; flex-direction: column; }
+.qm-display { font-family: 'Barlow Condensed', Inter, sans-serif; text-transform: uppercase; letter-spacing: .03em; }
+.qm-gantry { padding: 10px 14px; display: flex; justify-content: space-between; align-items: baseline; }
+.qm-wordmark { font-weight: 700; font-size: 17px; letter-spacing: .06em; }
+.qm-gantry-sub { font-size: 12px; opacity: .85; }
+.qm-body { padding: 6px 14px 14px; flex: 1; }
+.qm-eyebrow { color: #a3e635; font-size: 11px; font-weight: 600; letter-spacing: .22em; margin: 0; }
+.qm-name { font-size: 26px; font-weight: 700; line-height: 1; margin-top: 2px; }
+.qm-meta { font-size: 11px; color: #8d7fc0; margin: 4px 0 0; }
+.qm-actions { display: flex; gap: 6px; margin-top: 10px; }
+.qm-ghost { flex: 1; text-align: center; border: 1px solid #4a3885; border-radius: 8px; padding: 7px 0; font-size: 12px; }
+.qm-ghost.qm-save { border-color: #a3e635; color: #a3e635; font-weight: 600; }
+.qm-lbl { font-size: 11px; font-weight: 600; color: #b7aede; margin: 14px 0 6px; display: flex; justify-content: space-between; }
+.qm-table-wrap { border-radius: 12px; overflow: hidden; border: 1px solid #3b2a6e; }
+.qm-table { width: 100%; border-collapse: collapse; background: rgba(36,22,80,.75); }
+.qm-table th { font-family: 'Barlow Condensed', Inter, sans-serif; text-transform: uppercase; letter-spacing: .08em; font-size: 10px; font-weight: 600; color: #b7aede; text-align: left; padding: 6px 8px; border-bottom: 1px solid #3b2a6e; }
+.qm-table td { padding: 6px 8px; font-size: 12px; border-bottom: 1px solid rgba(59,42,110,.6); }
+.qm-table tr:last-child td { border-bottom: 0; }
+.qm-table .n { font-family: 'Barlow Condensed', Inter, sans-serif; font-size: 15px; font-weight: 700; text-align: center; width: 30px; }
+.qm-table .pos { color: #a3e635; }
+.qm-table .leader td { background: rgba(163,230,53,.08); }
+.qm-match { display: flex; align-items: center; gap: 8px; background: rgba(36,22,80,.75); border: 1px solid #3b2a6e; border-radius: 10px; padding: 8px 10px; margin-bottom: 6px; }
+.qm-match.next { border-color: #a3e635; box-shadow: inset 3px 0 0 #a3e635; }
+.qm-match.done { opacity: .85; }
+.qm-m-no { font-family: 'Barlow Condensed', Inter, sans-serif; font-size: 13px; font-weight: 700; color: #8d7fc0; width: 18px; flex: none; }
+.qm-m-sides { flex: 1; min-width: 0; font-size: 12px; line-height: 1.3; }
+.qm-m-sides b { font-weight: 600; }
+.qm-m-sides span { color: #b7aede; }
+.qm-m-score { font-family: 'Barlow Condensed', Inter, sans-serif; font-size: 13px; color: #b7aede; letter-spacing: .04em; white-space: nowrap; }
+.qm-score-btn { background: #a3e635; color: #150b36; border-radius: 7px; padding: 6px 10px; font-size: 12px; font-weight: 600; flex: none; }
+.qm-live { font-size: 11px; display: inline-flex; align-items: center; gap: 4px; }
+.qm-live::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: #ef4444; }
+.qm-add { font-size: 12px; color: #a3e635; font-weight: 600; margin-top: 4px; }
+.qm-foot { font-size: 11px; color: #8d7fc0; margin: 12px 0 0; }
+.qm-hero { margin-top: 12px; background: #241650; border: 1px solid #a3e635; border-radius: 14px; padding: 12px; text-align: center; }
+.qm-hero-k { font-size: 10px; color: #a3e635; letter-spacing: .22em; font-weight: 600; margin: 0; }
+.qm-hero-v { font-size: 22px; font-weight: 700; line-height: 1.05; margin: 6px 0; }
+.qm-hero-v small { display: block; font-size: 12px; font-weight: 600; color: #8d7fc0; margin: 2px 0; letter-spacing: .1em; }
+.qm-hero-btn { display: block; background: #a3e635; color: #150b36; border-radius: 10px; padding: 10px 0; font-weight: 600; font-size: 14px; margin-top: 8px; }
+.qm-bracket { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.qm-brk { background: rgba(36,22,80,.75); border: 1px solid #3b2a6e; border-radius: 10px; padding: 7px 8px; font-size: 11px; color: #8d7fc0; }
+.qm-brk b { display: flex; justify-content: space-between; color: #f5f0e8; font-weight: 500; font-size: 12px; margin-top: 3px; }
+.qm-brk b i { font-style: normal; font-family: 'Barlow Condensed', Inter, sans-serif; font-size: 13px; color: #b7aede; }
+.qm-brk .w { color: #a3e635; font-weight: 600; }
+.qm-brk-final { grid-column: 1 / 3; border-color: #a3e635; }
+</style>
+</head>
+<body>
+<h1>Quick match · home (what the share link opens)</h1>
+<p class="intro">Design of record, chosen by the owner on 2026-11-05: next match first. One big Score button for the phone on the court, then Share and Save, then the standings (league) or the draw (knockout), then every match in play order with finished ones at the bottom.</p>
+
+<div class="row">
+  <div class="col">
+    <div class="qm-phone"><div class="qm-screen">
+      <div class="qm-gantry"><span class="qm-display qm-wordmark">Seazn</span><span class="qm-display qm-gantry-sub">Quick match</span></div>
+      <div class="qm-body">
+        <p class="qm-display qm-eyebrow">Badminton · Doubles · League</p>
+        <div class="qm-display qm-name">Badminton · Tue 3 Nov</div>
+        <p class="qm-meta">2 of 6 matches played · kept 7 days after the last score</p>
+        <div class="qm-hero">
+          <p class="qm-display qm-hero-k">Up next · match 3 of 6</p>
+          <div class="qm-display qm-hero-v">Ravi &amp; Sam<small>v</small>Lee &amp; Ana</div>
+          <span class="qm-hero-btn">Score this match</span>
+        </div>
+        <div class="qm-actions"><span class="qm-ghost">Share link</span><span class="qm-ghost qm-save">Save this match</span></div>
+        <p class="qm-lbl">Standings</p>
+        <div class="qm-table-wrap"><table class="qm-table">
+          <tr><th></th><th>Side</th><th class="n">P</th><th class="n">W</th><th class="n">Pts</th></tr>
+          <tr class="leader"><td class="n pos">1</td><td>Ravi &amp; Sam</td><td class="n">1</td><td class="n">1</td><td class="n">3</td></tr>
+          <tr><td class="n pos">2</td><td>Lee &amp; Ana</td><td class="n">1</td><td class="n">1</td><td class="n">3</td></tr>
+          <tr><td class="n pos">3</td><td>Priya &amp; Tom</td><td class="n">1</td><td class="n">0</td><td class="n">0</td></tr>
+          <tr><td class="n pos">4</td><td>Jo &amp; Max</td><td class="n">1</td><td class="n">0</td><td class="n">0</td></tr>
+        </table></div>
+        <p class="qm-lbl">All matches</p>
+        <div class="qm-match"><span class="qm-m-no">4</span><div class="qm-m-sides"><b>Priya &amp; Tom</b> <span>v</span> <b>Jo &amp; Max</b></div><span class="qm-score-btn">Score</span></div>
+        <div class="qm-match"><span class="qm-m-no">5</span><div class="qm-m-sides"><b>Ravi &amp; Sam</b> <span>v</span> <b>Jo &amp; Max</b></div><span class="qm-score-btn">Score</span></div>
+        <div class="qm-match"><span class="qm-m-no">6</span><div class="qm-m-sides"><b>Priya &amp; Tom</b> <span>v</span> <b>Lee &amp; Ana</b></div><span class="qm-score-btn">Score</span></div>
+        <div class="qm-match done"><span class="qm-m-no">1</span><div class="qm-m-sides"><b>Ravi &amp; Sam</b> <span>beat</span> Priya &amp; Tom</div><span class="qm-m-score">21-15 · 21-18</span></div>
+        <div class="qm-match done"><span class="qm-m-no">2</span><div class="qm-m-sides"><b>Lee &amp; Ana</b> <span>beat</span> Jo &amp; Max</div><span class="qm-m-score">18-21 · 21-19 · 21-17</span></div>
+        <div class="qm-add">+ Add a match</div>
+        <p class="qm-foot">Anyone with this link can score.</p>
+      </div>
+    </div></div>
+    <p class="cap"><b>League.</b> "Add a match" is the decider for a level table. When every match is played the hero turns into the winner.</p>
+  </div>
+
+  <div class="col">
+    <div class="qm-phone"><div class="qm-screen">
+      <div class="qm-gantry"><span class="qm-display qm-wordmark">Seazn</span><span class="qm-display qm-gantry-sub">Quick match</span></div>
+      <div class="qm-body">
+        <p class="qm-display qm-eyebrow">Badminton · Doubles · Knockout</p>
+        <div class="qm-display qm-name">Badminton · Tue 3 Nov</div>
+        <p class="qm-meta">1 of 3 matches played · kept 7 days after the last score</p>
+        <div class="qm-hero">
+          <p class="qm-display qm-hero-k">Live · semi-final 2</p>
+          <div class="qm-display qm-hero-v">Priya &amp; Tom<small>11-9</small>Lee &amp; Ana</div>
+          <span class="qm-hero-btn">Continue scoring</span>
+        </div>
+        <div class="qm-actions"><span class="qm-ghost">Share link</span><span class="qm-ghost qm-save">Save this match</span></div>
+        <p class="qm-lbl">The draw</p>
+        <div class="qm-bracket">
+          <div class="qm-brk">Semi-final 1<b><span class="w">Ravi &amp; Sam</span><i>21-15 · 21-18</i></b><b><span>Jo &amp; Max</span><i></i></b></div>
+          <div class="qm-brk">Semi-final 2<b><span>Priya &amp; Tom</span><i><span class="qm-live">Live</span></i></b><b><span>Lee &amp; Ana</span><i>11-9</i></b></div>
+          <div class="qm-brk qm-brk-final">Final<b><span class="w">Ravi &amp; Sam</span><i>v</i></b><b><span>Winner of semi-final 2</span><i></i></b></div>
+        </div>
+        <p class="qm-lbl">All matches</p>
+        <div class="qm-match"><span class="qm-m-no">3</span><div class="qm-m-sides"><b>Ravi &amp; Sam</b> <span>v</span> <span>winner of 2</span></div><span class="qm-m-score">waits</span></div>
+        <div class="qm-match done"><span class="qm-m-no">1</span><div class="qm-m-sides"><b>Ravi &amp; Sam</b> <span>beat</span> Jo &amp; Max</div><span class="qm-m-score">21-15 · 21-18</span></div>
+        <p class="qm-foot">Anyone with this link can score.</p>
+      </div>
+    </div></div>
+    <p class="cap"><b>Knockout.</b> The standings become the draw. The final waits until both semi-finals are in. No "Add a match".</p>
+  </div>
+</div>
+</body>
+</html>

@@ -41,6 +41,7 @@ import { mintCheckinToken } from "@/server/usecases/checkin-token";
 import { mintReportToken } from "@/server/sponsors/report-token";
 import { reportLinkPath } from "@/lib/sponsor-report";
 import { invoicePath } from "@/lib/sponsor-invoice";
+import { mintHomeToken } from "@/server/usecases/quick-match-tokens";
 import { routes } from "@/lib/routes";
 import { JoinInvite } from "@/components/join-invite";
 import { ClaimInvite } from "@/components/claim-invite";
@@ -190,9 +191,10 @@ describe("every /<path>/${token} template is scrubbed, or is knowingly public", 
     // invite's ID (an email-bound invite's token never reaches it). The route still takes a link's token, so its PATH
     // stays a credential route (VERDICTS, swept above); there is just no template building it from a token.
     expect([...builders.keys()].sort()).toEqual(
-      expect.arrayContaining(["/join", "/checkin", "/api/checkin", "/claim", "/api/claims", "/api/invites", "/score", "/api/v1/capture/codes", "/r", "/api/v1/public/registrations/by-ref", "/r/sponsor", "/r/sponsor/invoice"]),
+      // `/q`: the scoring pad's way back to a quick match's home (app/score/[token]/page.tsx, quick match plan 1 Task 9).
+      expect.arrayContaining(["/join", "/checkin", "/api/checkin", "/claim", "/api/claims", "/api/invites", "/score", "/api/v1/capture/codes", "/r", "/api/v1/public/registrations/by-ref", "/r/sponsor", "/r/sponsor/invoice", "/q"]),
     );
-    expect(builders.size).toBeGreaterThanOrEqual(10);
+    expect(builders.size).toBeGreaterThanOrEqual(11);
   });
 
   it("each builder's URL loses its token, or is on the public list with its reason; no public entry is stale", () => {
@@ -211,7 +213,8 @@ describe("every /<path>/${token} template is scrubbed, or is knowingly public", 
       }
     }
     for (const prefix of Object.keys(PUBLIC_BUILDERS)) expect(builders.has(prefix), `${prefix} is no longer built anywhere: delete it`).toBe(true);
-    expect(scrubbed).toBeGreaterThanOrEqual(14); // (10 builders - 3 public) x 2 kinds
+    // (11 builders - 3 public) x 2 kinds; 14 before quick match plan 1 Task 9 added `/q`.
+    expect(scrubbed).toBeGreaterThanOrEqual(16);
     expect(kept).toBe(Object.keys(PUBLIC_BUILDERS).length * KINDS.length);
   });
 });
@@ -439,5 +442,127 @@ describe("the hooks scrub them wherever an event carries one", () => {
     );
     const frame = { type: 5, timestamp: 1, data: { tag: "performanceSpan", payload: { description: api } } };
     expect(JSON.stringify(scrubRecordingEvent(frame))).not.toContain(invite);
+  });
+});
+
+// ---- a quick match's home token, `/q/<token>` -----------------------------------------------------------------------------
+//
+// Quick match plan 1 Task 9 (spec C12, O3, C19): the scoring pad links back to `/q/<home token>`, and whoever holds that token
+// can score every match of the quick match. The home PAGE (`app/q/[token]`) is plan 2's, so the file-system sweep above
+// cannot reach this route yet: until it does, this block is the route's sweep, on REAL home tokens from the real minter.
+// When plan 2 adds the route and its verdict, the sweeps above take it over too.
+
+describe("a quick match's home token, /q/<token>: scrubbed wherever a URL carries it", () => {
+  const HOMES = Array.from({ length: MINTS }, () => mintHomeToken());
+  const sample = [HOMES[0]!, HOMES[7]!, HOMES[150]!, HOMES[299]!];
+  /** Every shape the home URL takes: the page, behind an origin and the marketing locale prefix, with a query and a
+   *  fragment, and the calls under it (plan 2's add-match route; the save hand-off spec C19 amended 2026-11-08 allows in a
+   *  sign-in `next`). The first one is the pad's own href. */
+  const forms = (t: string) => [
+    `/q/${t}`,
+    `/q/${t}/`,
+    `${ORIGIN}/q/${t}`,
+    `${ORIGIN}/q/${t}?from=pad#up-next`,
+    `${ORIGIN}/fr/q/${t}`,
+    `/q/${t}/add-match`,
+    `/q/${t}/save`,
+    `GET /q/${t}`,
+    `navigated to "/q/${t}"`,
+  ];
+
+  it("premise: the tokens are real home tokens, unique, URL-safe, with `-` and `_` in their bodies", () => {
+    expect(HOMES).toHaveLength(MINTS);
+    expect(new Set(HOMES).size).toBe(MINTS);
+    for (const t of HOMES) {
+      expect(t.startsWith("qm_"), t).toBe(true);
+      expect(encodeURIComponent(t), "needs no escaping in a URL").toBe(t);
+    }
+    expect(HOMES.some((t) => t.slice(3).includes("-")), "a '-' after the prefix").toBe(true);
+    expect(HOMES.some((t) => t.slice(3).includes("_")), "a '_' after the prefix").toBe(true);
+  });
+
+  it("every form loses the token and keeps everything else, idempotently", () => {
+    let checked = 0;
+    const failures: string[] = [];
+    for (const t of sample) {
+      for (const input of forms(t)) {
+        const out = scrubScoreUrl(input);
+        if (out !== without(input, t)) failures.push(`${input} -> ${out}`);
+        else if (scrubScoreUrl(out) !== out) failures.push(`${input}: not idempotent`);
+        checked++;
+      }
+    }
+    expect(failures.slice(0, 5), `${failures.length} of ${checked} failed`).toEqual([]);
+    expect(checked).toBe(sample.length * forms("x").length);
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("inside another URL (a sign-in next=): encoded at depths 1 to 3, either hex case", () => {
+    let checked = 0;
+    const failures: string[] = [];
+    for (const t of sample) {
+      for (const url of [`/q/${t}`, `${ORIGIN}/q/${t}?from=pad`, `/q/${t}/save`]) {
+        for (const depth of [1, 2, 3]) {
+          for (const hex of ["upper", "lower"] as const) {
+            const wrapped = `${ORIGIN}/login?lang=fr&next=${encode(url, depth)}&x=1`;
+            const input = hex === "lower" ? lowerHex(wrapped) : wrapped;
+            const out = scrubScoreUrl(input);
+            if (!input.includes(t)) failures.push(`${input}: premise, the input does not carry the token`);
+            else if (out !== without(input, t)) failures.push(`${input} -> ${out}`);
+            checked++;
+          }
+        }
+      }
+    }
+    expect(failures.slice(0, 5), `${failures.length} of ${checked} failed`).toEqual([]);
+    expect(checked).toBe(sample.length * 3 * 3 * 2);
+  });
+
+  it("a `q` that is not the route root is an address and is left alone; the positive pair loses the token", () => {
+    const t = HOMES[0]!;
+    // A competition or club slug `q` sits after a path segment, never at the root; `/quick/`, `/qr/` and `/faq/` are other words.
+    const addresses = [`/o/club/c/q/${t}`, `/live/club/q/${t}`, `/quick/${t}`, `/qr/${t}`, `/faq/${t}`, "/q", "/q/", `${ORIGIN}/q/?from=pad`];
+    let checked = 0;
+    for (const p of addresses) {
+      for (const input of [p, p.startsWith("/") ? `${ORIGIN}${p}` : p]) {
+        expect(scrubScoreUrl(input), input).toBe(input);
+        checked++;
+      }
+    }
+    expect(checked).toBe(addresses.length * 2);
+    expect(scrubScoreUrl(`${ORIGIN}/q/${t}`)).toBe(`${ORIGIN}/q/${PLACEHOLDER}`);
+  });
+
+  it("PostHog: the home's pageview, and an autocaptured click on the pad's back link", () => {
+    const t = HOMES[1]!;
+    const url = `${ORIGIN}/q/${t}`;
+    const out = posthogBeforeSend({
+      uuid: "u1",
+      event: "$autocapture",
+      properties: {
+        $current_url: url,
+        $pathname: `/q/${t}`,
+        $referrer: url,
+        $elements: [{ tag_name: "a", attr__href: `/q/${t}`, $el_text: "Back to the quick match" }],
+      },
+      $set_once: { $initial_current_url: url },
+    } as unknown as CaptureResult);
+    expect(out).not.toBeNull();
+    expect(JSON.stringify(out)).not.toContain(t);
+    expect(out!.properties.$pathname).toBe(`/q/${PLACEHOLDER}`);
+  });
+
+  it("Sentry: the navigation from the pad to the home, its transaction, request, spans and a replay's URLs", () => {
+    const t = HOMES[2]!;
+    const home = `${ORIGIN}/q/${t}`;
+    const event: Event = {
+      event_id: "e1",
+      transaction: `GET /q/${t}`,
+      request: { url: home, headers: { Referer: home } },
+      breadcrumbs: [{ category: "navigation", data: { from: "/score/[token]", to: `/q/${t}` } }],
+      spans: [{ span_id: "s1", trace_id: "t1", start_timestamp: 1, data: { "url.full": home } }],
+    };
+    expect(JSON.stringify(scrubSentryEvent(event))).not.toContain(t);
+    expect(JSON.stringify(scrubSentryEvent({ type: "replay_event", urls: [home] } as unknown as Event))).not.toContain(t);
   });
 });

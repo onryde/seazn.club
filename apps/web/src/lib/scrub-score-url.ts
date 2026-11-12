@@ -43,7 +43,7 @@
 // `/api/auth/change-email/confirm`. Sentry's `request.query_string` has no path to scope by, so it is scrubbed when the
 // event's URL or transaction names one of those routes, the way a capture route's request is recognised (`isCaptureEvent`).
 //
-// Four more credentials carry themselves in the PATH, and become `[token]` after their prefix, plain or URL-encoded at
+// Five more credentials carry themselves in the PATH, and become `[token]` after their prefix, plain or URL-encoded at
 // any depth, by the `/capture/codes/` rules (`SECRET_PATH_ROUTES`). Each is a ROUTE ROOT and is matched only there (the start
 // of a path, after an origin, or after the marketing locale prefix): a club or competition slug is free text, so
 // `/o/x/c/join/d/claim` is an address and not a secret (`ROUTE_ROOT`):
@@ -54,9 +54,12 @@
 //    An email invite also mints a SESSION for a new or unverified invitee (`/claim`), as a magic link does; the team
 //    screen masks the token on purpose;
 //  - the fixture check-in code `/checkin/<token>` and `/api/checkin/<token>` (an HS256 JWT valid until the fixture's local
-//    midnight; checkin-token.ts): it is the proof of presence at the venue, so it is a credential, not a public address.
+//    midnight; checkin-token.ts): it is the proof of presence at the venue, so it is a credential, not a public address;
 //  - the sponsor report link `/r/sponsor/<token>` (32 random bytes, base64url; until the club revokes it; R4 S14): whoever
-//    holds it reads that sponsor's figures and frames, with no login - a bearer credential, though it sits under `/r/`.
+//    holds it reads that sponsor's figures and frames, with no login - a bearer credential, though it sits under `/r/`;
+//  - a quick match's home `/q/<home token>` (`qm_` + 43 base64url; quick-match-tokens.ts): whoever holds it can score
+//    every match of that quick match (quick match spec O3, C19). The scoring pad links back to it (C12), so it is in the
+//    pad's DOM and in the navigation a click starts.
 // Left alone: the registration reference `/r/<ref>` (a
 // lookup, not auth; the emailed `token` is what authorises a withdrawal) - a reference literally `sponsor` included, since
 // only a segment AFTER `/r/sponsor/` is a credential.
@@ -155,9 +158,10 @@ const ENCODED_ROOM_TOKEN = new RegExp(`(%(?:25)*(?:3[Ff]|26)t%(?:25)*3[Dd])${JWT
  * Route prefixes whose NEXT segment is a credential: the profile-claim secret (`/claim/<secret>` and the accept call
  * `/api/claims/<secret>/accept`), the org-invite token (`/join/<token>` and `/api/invites/<token>[/accept|/claim]`; the
  * revoke call `/api/orgs/<id>/invites/<token>/revoke`), the day's check-in code (`/checkin/<token>`,
- * `/api/checkin/<token>`), the sponsor report link (`/r/sponsor/<token>`, R4 S14) and the sponsor invoice link
- * (`/r/sponsor/invoice/<token>`, its `/pdf` and `/pay`: sponsor deals T22). Each is spelled with its trailing slash, so `/claims/…`, `/joined/…`, `/checkin-link` and
- * `/register/join` (a public page with nothing after it) do not match, and `[id]` stands for one path segment.
+ * `/api/checkin/<token>`), the sponsor report link (`/r/sponsor/<token>`, R4 S14), the sponsor invoice link
+ * (`/r/sponsor/invoice/<token>`, its `/pdf` and `/pay`: sponsor deals T22) and a quick match's home token (`/q/<token>`,
+ * and every call under it). Each is spelled with its trailing slash, so `/claims/…`, `/joined/…`, `/checkin-link`,
+ * `/quick/…` and `/register/join` (a public page with nothing after it) do not match, and `[id]` stands for one path segment.
  *
  * Every one is a ROUTE ROOT, and is matched there only (`ROUTE_ROOT`): a club or competition slug is free text, so
  * `/o/x/c/join/d/claim` is an address and not a secret. They are spelled in full, not by their shortest tail, for the same
@@ -178,6 +182,9 @@ const SECRET_PATH_ROUTES = [
   // `invoice` for the credential and leave the invoice token in the URL.
   "/r/sponsor/invoice/",
   "/r/sponsor/",
+  // Quick match (plan 1 Task 9): the home token. A one-letter root, which is why every root here is matched at the root
+  // only: a competition slug `q` (`/o/x/c/q/…`) is an address, not this route.
+  "/q/",
 ] as const;
 /** The marketing locale prefix (`/fr/pricing`): a route root may follow it. */
 const LOCALE_PREFIX = LOCALES.join("|");

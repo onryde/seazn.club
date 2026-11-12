@@ -39,6 +39,10 @@
 //
 // stg cfg-defaults fix (2026-11-03): the 20th, a third call in `append-event.ts` — the first event's freeze reads the
 // resolution in its "stored" form, apart from the fold's (which fills the sport's schema defaults: fixture-cfg.ts).
+//
+// Quick match plan 1 (spec C23): the 21st, `usecases/quick-match-sports.ts` `quickMatchKnockoutCfg` - the cfg a quick match
+// knockout's match will play, resolved before any fixture exists, to decide whether a guest is offered a knockout. A
+// STAGE-level read like the chip's (`config_snapshot: null, rules_override: null`), so its row says `override: false`.
 import { randomUUID } from "node:crypto";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
@@ -61,7 +65,8 @@ vi.mock("@/server/engine-db/fixture-cfg", async (importOriginal) => {
   };
 });
 import { builtinModules } from "@seazn/engine/sports";
-import { resolveFixtureCfg } from "@/server/engine-db/fixture-cfg";
+import { stageDefaultsFor } from "@seazn/engine/sport";
+import { resolveFixtureCfg, withSchemaDefaults } from "@/server/engine-db/fixture-cfg";
 import { appendEvent, completeStageIfReady, recomputeStandings } from "@/server/engine-db";
 import { loadFoldInputs } from "@/server/engine-db/fold";
 import { sql, withTenant } from "@/lib/db";
@@ -80,6 +85,7 @@ import { patchDivision } from "@/server/usecases/divisions";
 import { writeFixtureRulesOverride } from "@/server/usecases/fixture-rules";
 import { writeAwardedMatchState } from "@/server/engine-db/awarded-state";
 import { generateStageFixtures, unpairSwissRound } from "@/server/usecases/stages";
+import { offerFor } from "@/server/usecases/quick-match-sports";
 import { insertLegacyEvents, seedBracket } from "./helpers/seed-bracket";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -194,12 +200,14 @@ const SITES: readonly { file: string; count: number; case: string; override?: fa
   // W3 T3 (SW-M7, X-SW-5): the Swiss bye freezes at award - the cfg append-event.ts would freeze at a first event, over
   // the bye shell's own override.
   { file: "apps/web/src/server/usecases/stages/swiss-gen.ts", count: 1, case: "stages.ts swissGen bye seat" },
+  // Quick match (C23): a guest's knockout offer, decided on the cfg its matches will play - a stage with no fixture yet.
+  { file: "apps/web/src/server/usecases/quick-match-sports.ts", count: 1, case: "quick-match-sports.ts offerFor", override: false },
 ];
 /** The ledger's total, which the source scan and the driven set must both reach. */
 const SITE_TOTAL = SITES.reduce((n, s) => n + s.count, 0);
 
 describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)", () => {
-  it("the site ledger is exact: 20 production calls, and none unlisted", () => {
+  it("the site ledger is exact: 21 production calls, and none unlisted", () => {
     const files: string[] = [];
     (function walk(d: string) {
       for (const e of readdirSync(d)) {
@@ -218,8 +226,8 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
       if (n > 0) found.set(rel, n);
     }
     expect(Object.fromEntries(found)).toEqual(Object.fromEntries(SITES.map((s) => [s.file, s.count])));
-    expect([...found.values()].reduce((a, b) => a + b, 0)).toBe(20);
-    expect(SITE_TOTAL, "the ledger's own rows add up to the scan").toBe(20);
+    expect([...found.values()].reduce((a, b) => a + b, 0)).toBe(21);
+    expect(SITE_TOTAL, "the ledger's own rows add up to the scan").toBe(21);
   });
 
   it("the comment stripper keeps a call and drops prose (both directions)", () => {
@@ -573,11 +581,29 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
     expect(league[0]!.out?.tieBoard, "no overlay on a table stage").toBe("draw");
   });
 
-  // M3 (review): the ledger above pins the 20 sites in the SOURCE; this pins that the cases DROVE all 20 - 19 with the
-  // override and the stage line without one (its row says `override: false`). Sites come from the spy's own caller frames (`callSite`), so a case cannot vouch for a site it never
+  it.skipIf(!HAS_DB)("quick-match-sports.ts offerFor: a guest's knockout offer is decided on the bracket overlay, and the call carries NO match override", async () => {
+    // Boardgame on the synced catalog's own system row: its overlay (`tiebreak: true`) is observable, and neither the
+    // variant nor the knockout preset sets `tiebreak`, so the overlay is the ONLY source of it in what the resolver hands back.
+    const [row] = await sql<{ config: unknown }[]>`
+      select config from sport_variants where sport_key = 'boardgame' and key = 'classical' and is_system and org_id is null`;
+    expect(row, "premise: the synced catalog holds boardgame/classical").toBeDefined();
+    const boardgame = builtinModules.find((m) => m.key === "boardgame")!;
+    expect((withSchemaDefaults(boardgame, row!.config) as { tiebreak?: unknown }).tiebreak, "premise: the variant sets no tiebreak").not.toBe(true);
+    expect(stageDefaultsFor(boardgame, "knockout", "classical"), "premise: nor does the knockout preset").not.toHaveProperty("tiebreak");
+
+    spy.mockClear();
+    await offerFor("boardgame", "classical");
+    const calls = seen();
+    expect(calls.length, JSON.stringify(calls)).toBe(1); // one variant, one resolution
+    expectOverlay("knockout");
+    expect(expectNoOverrideArg()).toBe(1);
+  });
+
+  // M3 (review): the ledger above pins the 21 sites in the SOURCE; this pins that the cases DROVE all 21 - 19 with the
+  // override, and the stage line and the quick match knockout offer without one (their rows say `override: false`). Sites come from the spy's own caller frames (`callSite`), so a case cannot vouch for a site it never
   // reached. Declared last: vitest runs a file's cases in order, so every case above has run (or was filtered out
   // with -t, in which case this one is filtered out too).
-  it.skipIf(!HAS_DB)("every one of the 20 call sites was driven (19 with the override, the stage line without), per the spy's caller frames", () => {
+  it.skipIf(!HAS_DB)("every one of the 21 call sites was driven (19 with the override, the two stage-level reads without), per the spy's caller frames", () => {
     const tally = (driven: ReadonlySet<string>) => {
       const byFile = new Map<string, number>();
       for (const site of driven) {
@@ -600,7 +626,7 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
       SITES.filter((s) => s.override === false).map((s) => s.file).sort(),
     );
     expect(DRIVEN.size + DRIVEN_NO_OVERRIDE.size, "anti-vacuity: the sites checked").toBe(SITE_TOTAL);
-    expect(SITE_TOTAL).toBe(20);
+    expect(SITE_TOTAL).toBe(21);
   });
 });
 

@@ -1,6 +1,7 @@
 import "server-only";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { QUICK_MATCH_SYSTEM_USER_ID } from "@/lib/quick-match-constants";
 import type { OrgRole } from "@/lib/types";
 
 export interface InviteRow {
@@ -141,6 +142,10 @@ export async function claimEmailInvite(token: string): Promise<ClaimResult> {
     select id, email_verified from users
     where email = ${invite.email} and deleted_at is null limit 1`;
   if (account?.email_verified) return { needs_signin: true };
+  // The quick-match system user (V506) is unverified and can never sign in (quick-match spec §7.1). Any org editor can
+  // invite its address and read the invite's token back, so it is answered as a verified account is, BEFORE anything is
+  // written: not joined to the org, not marked verified. (createSession refuses it too; that alone would leave both.)
+  if (account?.id === QUICK_MATCH_SYSTEM_USER_ID) return { needs_signin: true };
 
   const { resolveOrCreateUser } = await import("@/lib/users");
   const userId = account?.id ?? (await resolveOrCreateUser(invite.email));

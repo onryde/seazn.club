@@ -341,6 +341,7 @@ import type { LedgerSlotEvent, OwnIdentity, PendingEvent } from "./types";
 import { rulesVersionOf, type PadAuthMode, type PadTransport } from "./transport";
 import type { NextMatchRef } from "@/lib/next-match-started";
 import { useFixtureStream, type RealtimeConnector } from "./use-fixture-stream";
+import { drainForNavigation, registerPadFlush } from "./pad-flush";
 
 // Review finding 2: submit() minted a fresh idempotency key/expected_seq on
 // EVERY call with no guard at all, so a courtside double-tap (or two bound
@@ -1955,6 +1956,11 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
     // only add churn, not correctness.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Quick match C12 (plan 1 Task 9 fix round 1): a control that LEAVES this pad (the quick match's back link) asks it
+  // first to release what it holds and drain, through this hook's own store and `runDrain` (pad-flush.ts). Registered
+  // for the life of the mount; nothing calls it unless such a control is on the page, so every other pad is unchanged.
+  useEffect(() => registerPadFlush((deadline) => drainForNavigation(store, runDrain, deadline)), [store, runDrain]);
 
   const submit = useCallback(
     async (type: string, payload: unknown, opts?: { dropWith?: string }) => {

@@ -8,9 +8,13 @@ import "server-only";
 import { createHash, randomBytes } from "node:crypto";
 import { sql, withTenant, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { systemAuth } from "@/lib/quick-match-auth";
+import { QUICK_MATCH_ERRORS } from "@/lib/quick-match-constants";
+import { DEVICE_LINK_MINT_LIMIT, rateLimit } from "@/lib/rate-limit";
 import { hasValidKek, openWith, sealWith } from "@/server/relay/crypto";
-import type { AuthCtx } from "@/server/api-v1/auth";
+import { assertUuid, type AuthCtx } from "@/server/api-v1/auth";
 import { log } from "@/server/logger";
+import type { QuickMatchRow } from "./quick-match-home";
 import type { ResolvedCode } from "./stream-codes";
 
 export const DEVICE_LINK_PREFIX = "dl_";
@@ -266,6 +270,40 @@ export async function ensureDeviceLink(
 ): Promise<EnsuredDeviceLink> {
   requireSessionEditor(auth);
   return withTenant(auth.orgId, (tx) => ensureInTx(tx, auth, fixtureId, label));
+}
+
+/**
+ * Quick match (spec docs/superpowers/specs/2026-11-03-quick-match-design.md §7.4, C4, C18; plan 1 Task 8): the guest's
+ * "Score" tap. The fixture's link, re-shown if it is live, else minted, issued by the quick match system user: a guest
+ * has no session, so `requireSessionEditor` is not asked; the caller has resolved `qm` from its home token, which IS the
+ * credential (§7.4). In order:
+ *   - the mint limit, per quick match (`qm-mint:<id>`, DEVICE_LINK_MINT_LIMIT), before anything is read;
+ *   - a fixture id that is not a uuid → 404, before any query (Postgres would refuse the cast with a 22P02, a 500);
+ *   - an expired row (one `findQuickMatchByCompetition` can still return) → 404 `QUICK_MATCH_ERRORS.EXPIRED`, as its
+ *     home answers an expired token; a saved row has no expiry;
+ *   - under the fixture's link lock, in the system org: a fixture outside THIS quick match's competition → 404 (the
+ *     per-match check, §7.1 point 3: every quick match shares the one org); finalized or `cancelled` → 422; a match whose
+ *     two sides are not both known (a knockout round waiting for its feeders, a bye) → 422 QUICK_MATCH_SIDES_UNKNOWN (C18);
+ *   - `ensureLocked`: the live sealed link re-opened (no write), or one minted that revokes any other.
+ * A decided match still opens: its link may undo its own events until an organizer finalizes.
+ */
+export async function ensureGuestDeviceLink(qm: QuickMatchRow, fixtureId: string): Promise<EnsuredDeviceLink> {
+  await rateLimit(`qm-mint:${qm.id}`, DEVICE_LINK_MINT_LIMIT);
+  assertUuid(fixtureId, "fixture");
+  if (qm.expiresAt !== null && qm.expiresAt.getTime() <= Date.now()) {
+    throw new HttpError(404, "quick match not found or expired", QUICK_MATCH_ERRORS.EXPIRED);
+  }
+  const auth = systemAuth();
+  return withTenant(auth.orgId, async (tx) => {
+    await lockFixtureLinks(tx, fixtureId);
+    await loadLinkableFixture(tx, fixtureId, qm.competitionId);
+    const [seats] = await tx<{ home_entrant_id: string | null; away_entrant_id: string | null }[]>`
+      select home_entrant_id, away_entrant_id from fixtures where id = ${fixtureId}`;
+    if (!seats?.home_entrant_id || !seats.away_entrant_id) {
+      throw new HttpError(422, "this match's sides are not known yet", "QUICK_MATCH_SIDES_UNKNOWN");
+    }
+    return ensureLocked(tx, auth, fixtureId, "quick-match");
+  });
 }
 
 /**
