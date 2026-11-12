@@ -94,7 +94,7 @@ describe("EntryCard — a displayNameById miss never falls back to the raw p.ful
     // Pins the CURRENT behaviour the claim-link fix now matches, so a future
     // edit cannot quietly diverge the two again in the other direction.
     const html = renderToStaticMarkup(<EntryCard {...baseProps()} />);
-    expect(html).toContain(">Not checked in<"); // the badge still renders
+    expect(html).toContain(">Not joined yet<"); // the badge still renders (a pending entry's word; owner ruling on V7, 2026-11-12)
     expect(html).not.toContain("undefined");
   });
 });

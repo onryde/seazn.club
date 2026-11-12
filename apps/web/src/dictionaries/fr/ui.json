@@ -6660,6 +6660,8 @@
   "register.status.roster.registered": "Inscrit",
   "register.status.roster.notRegistered": "Pas encore inscrit",
   "register.status.roster.meterJoined": "{claimed} sur {total} ont rejoint",
+  "register.status.roster.joined": "A rejoint",
+  "register.status.roster.notJoined": "Pas encore rejoint",
   "register.status.roster.meterRegistered": "{claimed} sur {total} inscrits",
   "register.status.invite.heading": "Invitez vos coéquipiers",
   "register.status.invite.headingPair": "Invitez votre partenaire",

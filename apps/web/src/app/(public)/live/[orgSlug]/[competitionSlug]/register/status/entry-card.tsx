@@ -32,7 +32,19 @@ import {
   rosterPlayerDisplayName,
   rosterVocabulary,
   type EntryStatus,
+  type RosterVocabulary,
 } from "./view-model";
+
+// The roster's key family per vocabulary (chips: claimed/pending; the meter). See `rosterVocabulary` for which entry gets which.
+const ROSTER_WORDS: Record<RosterVocabulary, { meter: string; claimed: string; pending: string }> = {
+  checkin: { meter: "register.status.roster.meter", claimed: "register.status.roster.claimed", pending: "register.status.roster.pending" },
+  joined: { meter: "register.status.roster.meterJoined", claimed: "register.status.roster.joined", pending: "register.status.roster.notJoined" },
+  registered: {
+    meter: "register.status.roster.meterRegistered",
+    claimed: "register.status.roster.registered",
+    pending: "register.status.roster.notRegistered",
+  },
+};
 
 const STATUS_TONE: Record<EntryStatus, { rail: string; badge: string }> = {
   pending: { rail: "bg-amber-400", badge: "bg-amber-50 text-amber-800 border-amber-200" },
@@ -159,11 +171,10 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
   const tone = STATUS_TONE[entry.status];
   const money = resolveMoneyState(entry, cart);
   const roster = rosterCounts(entry.players);
-  // Polish wave P3 (W6, W10, W11): a waitlisted, withdrawn, expired or rejected entry has nothing to check in to, so its roster
-  // never says "Checked in". `rosterVocabulary` picks the key family once; the chips and the meter both read it.
-  const rosterWords = rosterVocabulary(entry.status) === "checkin"
-    ? { meter: "register.status.roster.meter", claimed: "register.status.roster.claimed", pending: "register.status.roster.pending" }
-    : { meter: "register.status.roster.meterRegistered", claimed: "register.status.roster.registered", pending: "register.status.roster.notRegistered" };
+  // Polish wave P3 (W6, W10, W11) and the owner ruling on V7: only a confirmed entry's roster says "Checked in"; a pending or paid one
+  // says "Joined", a waitlisted, withdrawn, expired or rejected one "Registered". `rosterVocabulary` picks the key family once; the chips
+  // and the meter both read it.
+  const rosterWords = ROSTER_WORDS[rosterVocabulary(entry.status)];
   // Polish wave P3 (W2, W12): WHY a pending entry is not confirmed. Suppressed once the payment window has closed: the
   // window-closed message below is the true and more actionable statement, and "waiting for payment" beside it would read as
   // an invitation to pay a window that no longer accepts payment.

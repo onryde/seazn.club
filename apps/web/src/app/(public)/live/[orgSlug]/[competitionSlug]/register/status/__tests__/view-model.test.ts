@@ -627,11 +627,13 @@ describe("public write-path URL builders — the /public/ segment is load-bearin
 
 // Polish wave P3 (W6, W10, W11): a waitlisted, expired or withdrawn page printed SUBTOTAL "Free" and a roster that read "Checked in".
 // The expectations below are the brief's rulings, written out per status; none is read back from the function under test.
-describe("rosterVocabulary: 'checked in' only where there is a live entry to check in to", () => {
+// Polish wave final fix (owner ruling on V7, 2026-11-12): only a CONFIRMED entry says "checked in"; an entry still awaiting payment,
+// approval or both (pending, paid) says its players have JOINED - "2 of 2 checked in" on an unpaid entry read as a false claim.
+describe("rosterVocabulary: 'checked in' only on a confirmed entry", () => {
   // Every status a registration can hold (the DB CHECK on registrations.status), each with the ruling for it.
-  const RULING: [EntryStatus, "checkin" | "registered"][] = [
-    ["pending", "checkin"],
-    ["paid", "checkin"],
+  const RULING: [EntryStatus, "checkin" | "joined" | "registered"][] = [
+    ["pending", "joined"],
+    ["paid", "joined"],
     ["confirmed", "checkin"],
     ["waitlisted", "registered"],
     ["withdrawn", "registered"],

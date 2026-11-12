@@ -580,8 +580,10 @@ describe("register status page (RS007 rebuild)", () => {
       // Finding #20: this used to read "1 of 2 confirmed" — the same word
       // the entry's own payment-status pill uses a few lines above (green
       // CONFIRMED = the fee landed). Roster-side copy now uses a check-in
-      // metaphor instead, so it can no longer be read as a payment state.
-      expect(html).toContain("1 of 2 checked in");
+      // metaphor instead, so it can no longer be read as a payment state. This entry is still PENDING, so (owner ruling on V7,
+      // 2026-11-12) its meter says who has joined - "checked in" is kept for a confirmed entry (pinned below).
+      expect(html).toContain("1 of 2 joined");
+      expect(html).not.toContain("checked in");
       // The per-slot link names the unclaimed player and carries their id.
       expect(html).toContain("join_code=JOIN123&amp;player_id=p2");
       // The generic link carries no player_id.

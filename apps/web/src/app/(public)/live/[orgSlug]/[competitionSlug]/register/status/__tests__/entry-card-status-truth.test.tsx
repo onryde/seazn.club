@@ -137,25 +137,47 @@ describe("a pending entry says what it is waiting on (W2, W12)", () => {
   });
 });
 
-describe("the roster says 'Checked in' only on a live entry (W6, W10, W11)", () => {
+describe("the roster says 'Checked in' only on a confirmed entry (W6, W10, W11; final fix ruling on V7)", () => {
   const PLAYERS = [
     { id: "p1", full_name: "Mia Cole", consent_status: "granted" as const, consent: null },
     { id: "p2", full_name: "Dev Kapoor", consent_status: "pending" as const, consent: null },
   ];
-  const LIVE: EntryStatus[] = ["pending", "paid", "confirmed"];
   const NOT_LIVE: EntryStatus[] = ["waitlisted", "withdrawn", "expired", "rejected"];
+  const AWAITING: EntryStatus[] = ["pending", "paid"];
 
-  it("a live entry keeps the check-in words: the chips and the meter (counted)", () => {
+  it("a confirmed entry keeps the check-in words: the chips and the meter", () => {
+    const markup = render(props({ status: "confirmed", players: PLAYERS }));
+    expect(markup).toContain(">Checked in<");
+    expect(markup).toContain(">Not checked in<");
+    expect(markup).toContain(">1 of 2 checked in<");
+    expect(markup).not.toContain(">Joined<");
+    expect(markup).not.toContain(">Registered<");
+  });
+
+  // Owner ruling on V7 (2026-11-12): an entry still awaiting payment, approval or both has not been confirmed, so nobody on it has
+  // "checked in": its players have JOINED. Tested for both review modes and with and without a fee, so every pending shape is seen.
+  it("an entry awaiting payment, approval or both says 'Joined', never 'checked in' (counted)", () => {
+    const shapes: [EntryStatus, number, "auto" | "manual"][] = [
+      ["pending", 1500, "auto"],
+      ["pending", 1500, "manual"],
+      ["pending", 0, "manual"],
+      ["pending", 0, "auto"],
+      ["paid", 1500, "manual"],
+      ["paid", 1500, "auto"],
+    ];
     let checked = 0;
-    for (const status of LIVE) {
-      const markup = render(props({ status, players: PLAYERS }));
-      expect(markup, status).toContain(">Checked in<");
-      expect(markup, status).toContain(">Not checked in<");
-      expect(markup, status).toContain(">1 of 2 checked in<");
-      expect(markup, status).not.toContain(">Registered<");
+    for (const [status, amount_cents, approval] of shapes) {
+      const markup = render(props({ status, amount_cents, approval, players: PLAYERS }));
+      const at = `${status}/${amount_cents}/${approval}`;
+      expect(markup, at).toContain(">Joined<");
+      expect(markup, at).toContain(">Not joined yet<");
+      expect(markup, at).toContain(">1 of 2 joined<");
+      expect(markup, at).not.toMatch(/checked in/i);
+      expect(markup, at).not.toContain(">Registered<");
       checked += 1;
     }
-    expect(checked).toBe(LIVE.length);
+    expect(checked).toBe(6);
+    expect(new Set(shapes.map(([s]) => s)), "both awaiting statuses seen").toEqual(new Set(AWAITING));
   });
 
   it("a waitlisted, withdrawn, expired or rejected entry never says it checked in (counted)", () => {
@@ -178,6 +200,26 @@ describe("the roster says 'Checked in' only on a live entry (W6, W10, W11)", () 
     expect(markup).toContain(">1 of 1 registered<");
     expect(markup).toContain(">Registered<");
     expect(markup).not.toContain("checked in");
+  });
+
+  it("es, fr and nl: the 'joined' words are each locale's own and differ from the check-in words", () => {
+    const dicts: [string, Locale, Dict][] = [["es", "es", uiEs as Dict], ["fr", "fr", uiFr as Dict], ["nl", "nl", uiNl as Dict]];
+    const en = uiEn as Record<string, string>;
+    let checked = 0;
+    for (const [name, locale, ui] of dicts) {
+      const d = ui as Record<string, string>;
+      for (const key of ["register.status.roster.joined", "register.status.roster.notJoined"]) {
+        expect(d[key], `${name} ${key} exists`).toBeTruthy();
+        expect(d[key], `${name} ${key} translated`).not.toBe(en[key]);
+      }
+      const markup = render(props({ status: "pending", players: PLAYERS }, {}, locale, ui));
+      expect(markup, name).toContain(`>${d["register.status.roster.joined"]}<`);
+      expect(markup, name).toContain(`>${d["register.status.roster.notJoined"]}<`);
+      expect(markup, name).toContain(`>${d["register.status.roster.meterJoined"]!.replace("{claimed}", "1").replace("{total}", "2")}<`);
+      expect(d["register.status.roster.joined"], `${name}: not the check-in word`).not.toBe(d["register.status.roster.claimed"]);
+      checked += 1;
+    }
+    expect(checked).toBe(3);
   });
 
   it("es, fr and nl: the neutral words are each locale's own and differ from the check-in words", () => {

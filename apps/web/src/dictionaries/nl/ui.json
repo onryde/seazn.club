@@ -6660,6 +6660,8 @@
   "register.status.roster.registered": "Geregistreerd",
   "register.status.roster.notRegistered": "Nog niet geregistreerd",
   "register.status.roster.meterJoined": "{claimed} van {total} aangesloten",
+  "register.status.roster.joined": "Aangesloten",
+  "register.status.roster.notJoined": "Nog niet aangesloten",
   "register.status.roster.meterRegistered": "{claimed} van {total} geregistreerd",
   "register.status.invite.heading": "Nodig je teamgenoten uit",
   "register.status.invite.headingPair": "Nodig je partner uit",
