@@ -115,8 +115,25 @@ export interface SponsorListProps {
   onAddDeal: (s: SponsorItem) => void;
 }
 
-/** An archived row's grey (archive spec D19): the same row, dimmed, so the list reads as history. Exported for the tests. */
-export const ARCHIVED_ROW = "opacity-60";
+/** An archived row's look (archive spec D19): a pale grey ground and quieter (but still AA) text, so the list reads as history. NOT
+ *  `opacity`: a faded row drops its text and chips under 4.5:1 (batch B review M1). Every text colour on an archived row is slate-600
+ *  or darker on slate-50 / white / slate-200 (7.2 / 7.6 / 6.2 : 1). Exported for the tests. */
+export const ARCHIVED_ROW = "bg-slate-50";
+
+/** Is a delete certain to be refused? History on any of a sponsor's deals - money paid or refunded, or an invoice number (every
+ *  online and offline deal gets one when it is made, paid or not: sponsor invoices, Task 20) - is a 409 `sponsor_has_deal_history`
+ *  (server/usecases/sponsors.ts `dealHoldsHistory`). What the row can see of it is its paid order and the deal it shows; a pre-deals
+ *  order or a history on an older deal is only known to the server, whose refusal is shown the same way. So this decides whether to ASK
+ *  first, and - on an ARCHIVED row only - whether to draw the trash at all (its refusal would say "Archive it instead" to a sponsor that
+ *  already is). On a live row it refuses nothing. */
+export function deleteIsRefusedForHistory(s: SponsorItem): boolean {
+  return (
+    Boolean(s.paid_order_id) ||
+    s.deal?.payment_status === "paid" ||
+    s.deal?.payment_status === "refunded" ||
+    s.deal?.invoice_number != null
+  );
+}
 
 const ACTION_MSG: Record<RowAction, MessageKey> = {
   add_deal: "sponsors.deal.action.addDeal",
@@ -269,7 +286,7 @@ export function SponsorList(props: SponsorListProps) {
       <span
         data-testid="sponsor-row-archived-chip"
         title={words}
-        className="min-w-0 max-w-full truncate rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-semibold uppercase text-slate-600"
+        className="min-w-0 max-w-full truncate rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-semibold uppercase text-slate-700"
       >
         {words}
       </span>
@@ -311,13 +328,13 @@ export function SponsorList(props: SponsorListProps) {
             // eslint-disable-next-line @next/next/no-img-element
             <img src={s.logo_path} alt="" data-testid="sponsor-row-logo" className="h-9 w-9 rounded object-contain ring-1 ring-slate-200 max-[376px]:hidden" />
           ) : (
-            <span data-testid="sponsor-row-logo" className="grid h-9 w-9 place-items-center rounded bg-slate-100 text-xs font-semibold text-slate-500 max-[376px]:hidden">
+            <span data-testid="sponsor-row-logo" className={`grid h-9 w-9 place-items-center rounded bg-slate-100 text-xs font-semibold ${isArchived ? "text-slate-600" : "text-slate-500"} max-[376px]:hidden`}>
               {s.name.charAt(0).toUpperCase()}
             </span>
           )}
           <div data-testid="sponsor-row-main" className="min-w-0">
             {/* A badge (Disputed - parked, Paid ...) wraps under the name instead of squeezing it to "O..." in a 160px column. */}
-            <p data-testid="sponsor-row-name" className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-sm font-medium text-slate-800">
+            <p data-testid="sponsor-row-name" className={`flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-sm font-medium ${isArchived ? "text-slate-600" : "text-slate-800"}`}>
               {/* Plain text: the pencil is the one way into the sponsor (a name that looked like a link was the thing people did not find). */}
               <span data-testid="sponsor-row-name-text" className="block min-w-0 max-w-full truncate max-[376px]:line-clamp-2 max-[376px]:whitespace-normal max-[376px]:break-words">
                 {s.name}
@@ -326,7 +343,7 @@ export function SponsorList(props: SponsorListProps) {
               {badge(s)}
               {isArchived ? null : tierHint(s)}
             </p>
-            <p data-testid="sponsor-row-sub" className="truncate text-xs text-slate-500 max-[376px]:line-clamp-2 max-[376px]:whitespace-normal max-[376px]:break-words">
+            <p data-testid="sponsor-row-sub" className={`truncate text-xs ${isArchived ? "text-slate-600" : "text-slate-500"} max-[376px]:line-clamp-2 max-[376px]:whitespace-normal max-[376px]:break-words`}>
               {subline(s, { msg, locale, tz, competitions, hasTiers })}
             </p>
           </div>
@@ -365,7 +382,7 @@ export function SponsorList(props: SponsorListProps) {
                 place on every row. 5rem holds "999 klikken" (the longest of the four languages) with room to spare. */}
             <span
               data-testid="sponsor-row-clicks"
-              className="shrink-0 whitespace-nowrap pr-2 text-xs tabular-nums text-slate-500 md:min-w-[5rem] md:text-right"
+              className={`shrink-0 whitespace-nowrap pr-2 text-xs tabular-nums ${isArchived ? "text-slate-600" : "text-slate-500"} md:min-w-[5rem] md:text-right`}
               title={msg("sponsors.row.clicksHint")}
             >
               {clicks}
@@ -401,15 +418,22 @@ export function SponsorList(props: SponsorListProps) {
                   // control: aria-hidden, nothing focusable in it, and gone below md (a phone's tray wraps and has no columns to keep).
                   <div data-testid="sponsor-row-move-spacer" aria-hidden="true" className="shrink-0 max-md:hidden md:w-[3.75rem]" />
                 )}
-                <button
-                  type="button"
-                  aria-label={msg("settings.org.sponsors.remove", { name: s.name })}
-                  disabled={busy}
-                  onClick={() => onRemove(s)}
-                  className="grid h-7 w-7 place-items-center rounded text-red-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-30 max-md:h-11 max-md:w-11"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
+                {isArchived && deleteIsRefusedForHistory(s) ? (
+                  // An archived sponsor with history cannot be deleted (409) and the refusal would say "Archive it instead": no trash. The
+                  // room it would take stays from md (one 28px button) so the tray is as wide as its neighbours'; gone below md, where the
+                  // tray wraps. Archived with no KNOWN history keeps the trash: the server stays the authority there.
+                  <div data-testid="sponsor-row-trash-spacer" aria-hidden="true" className="shrink-0 max-md:hidden md:w-7" />
+                ) : (
+                  <button
+                    type="button"
+                    aria-label={msg("settings.org.sponsors.remove", { name: s.name })}
+                    disabled={busy}
+                    onClick={() => onRemove(s)}
+                    className="grid h-7 w-7 place-items-center rounded text-red-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-30 max-md:h-11 max-md:w-11"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                )}
               </>
             ) : null}
           </div>

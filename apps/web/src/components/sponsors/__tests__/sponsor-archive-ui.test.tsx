@@ -13,6 +13,10 @@
 //   A5 Edit on an archived page `canWrite` -> `canEdit` on the Edit button            -> "archived: read-only page"
 //   A6 ?edit=1 honoured         `editing` loses its `archived_at === null`            -> "?edit=1 on an archived sponsor"
 //   A7 neighbour is archived    move() drops its live-only group                      -> "a move never swaps with an archived neighbour"
+//   B1 trash on archived+history `isArchived && deleteIsRefusedForHistory(s)` -> `false`  -> "archived row with history: no trash"
+//   B2 faded row               ARCHIVED_ROW back to `opacity-60`                          -> "no opacity" + "contrast"
+//   B3 no focus move           drop `focusAfterFlip.current = ...` in archive()           -> "focus after Archive"
+//   B4 blocked line late       409 catch does not await the re-reads                      -> "blocked line is there when the error shows"
 //   A8 On stream filter         page.test: includeArchived on the On stream tab       -> page.test.tsx
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -22,8 +26,10 @@ const confirmMock = vi.hoisted(() => vi.fn<(opts?: unknown) => Promise<boolean>>
 vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => confirmMock }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: () => {}, refresh: () => {}, replace: () => {} }) }));
 
-import { OrgSponsors, SponsorForm, type SponsorItem, type SponsorsHubData } from "@/components/org-sponsors";
+import { FOCUS_AFTER_ARCHIVE, OrgSponsors, SponsorForm, focusVisibleTestId, type SponsorItem, type SponsorsHubData } from "@/components/org-sponsors";
 import { ARCHIVED_ROW, SponsorList, type SponsorListProps } from "@/components/sponsors/sponsor-list";
+import { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
 import { ReportLinkSection } from "@/components/sponsors/sponsor-sheet";
 import { OverviewTab } from "@/components/sponsors/overview-tab";
 import { SAVE_ERROR_MSG } from "@/components/sponsors/save-error";
@@ -236,6 +242,8 @@ beforeEach(() => {
     return { ok: a.status < 400, status: a.status, json: async () => a.body };
   });
   vi.stubGlobal("fetch", fetchMock);
+  // The page's focus move (`focusVisibleTestId`) reads the DOM; node has none, so every mount gets an empty one (the focus tests stub their own).
+  vi.stubGlobal("document", { querySelectorAll: () => [] });
 });
 const flush = async () => {
   for (let i = 0; i < 10; i++) await new Promise((resolve) => setTimeout(resolve, 0));
@@ -313,6 +321,29 @@ describe("the sequence: archive, show archived, unarchive, the row back in place
     expect(m.rowIds()).toEqual(["p1"]);
     expect(m.byId("sponsors-archived-switch")).toBeUndefined();
     expect(calls.filter((c) => c.method === "GET").map((c) => c.url).sort()).toEqual([`/api/v1/orgs/${ORG}/sponsor-deals`, `/api/v1/orgs/${ORG}/sponsors?archived=1`]);
+  });
+
+  it("the blocked line is there when the 409 error shows: the re-read of the deals lands BEFORE the error (never the error alone)", async () => {
+    const m = mount([P1], { hub: { sponsorId: "p1" } });
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const LIVE = deal({ id: "dl", sponsor_id: "p1", deal_status: "live", payment_status: "paid", live_at: "2026-10-01T09:00:00.000Z", ended_at: null, ended_reason: null });
+    fetchMock.mockImplementation(async (url: string, init?: { method?: string }) => {
+      const method = init?.method ?? "GET";
+      calls.push({ url, method, body: null });
+      if (method === "POST") return { ok: false, status: 409, json: async () => ({ error: { code: "sponsor_has_current_deal", message: "x" } }) };
+      if (url.includes("sponsor-deals")) await gate;
+      return { ok: true, status: 200, json: async () => ({ data: url.includes("sponsor-deals") ? [LIVE] : [P1] }) };
+    });
+    m.click("sponsor-sheet-archive-button");
+    await flush();
+    expect(m.text(), "while the deals are still being re-read the error is NOT shown yet").not.toContain(msg("sponsors.archive.blocked"));
+    expect(m.byId("sponsor-sheet-archive-blocked")).toBeUndefined();
+    release();
+    await flush();
+    expect(m.byId("sponsor-sheet-archive-blocked"), "the blocked line is drawn").toBeDefined();
+    expect(propsOf(m.byId("sponsor-sheet-archive-button")!).disabled).toBe(true);
+    expect(m.text()).toContain(msg("sponsors.archive.blocked"));
   });
 
   it("a re-read keeps the archived rows (it asks for ?archived=1), so a write elsewhere does not lose the switch", async () => {
@@ -474,3 +505,125 @@ describe("Overview: the Archived chip", () => {
     expect(findAll(markup, "sponsor-overview-row-l")[0]!.outer).not.toContain("sponsor-overview-archived");
   });
 });
+
+
+describe("an archived row: trash, contrast, hit target (batch B review I1, M1, M2)", () => {
+  const withHistory = archivedRow(sponsor({ id: "h1", name: "Paid Up Ltd", deal: deal({ id: "dh", sponsor_id: "h1", payment_status: "paid", invoice_number: 4 }) }));
+  const noHistory = archivedRow(sponsor({ id: "n1", name: "Never Billed", deal: null }));
+  const liveHistory = sponsor({ id: "l1", name: "Live Paid", deal: deal({ id: "dl", sponsor_id: "l1", deal_status: "live", payment_status: "paid", invoice_number: 5 }) });
+  const trash = (html: string, id: string, name: string) => rowOf(html, id).includes(`aria-label="${msg("settings.org.sponsors.remove", { name })}"`);
+
+  it("archived with history: no trash (a spacer keeps the tray width); archived without history: trash; live with history: trash", () => {
+    const html = listHtml([liveHistory], { archived: [withHistory, noHistory], showArchived: true });
+    expect(trash(html, "h1", "Paid Up Ltd"), "archived + history").toBe(false);
+    expect(findAll(rowOf(html, "h1"), "sponsor-row-trash-spacer"), "the room stays").toHaveLength(1);
+    expect(classTokens(findAll(rowOf(html, "h1"), "sponsor-row-trash-spacer")[0]!.open)).toEqual(expect.arrayContaining(["max-md:hidden", "md:w-7"]));
+    expect(attrOf(findAll(rowOf(html, "h1"), "sponsor-row-trash-spacer")[0]!.open, "aria-hidden")).toBe("true");
+    expect(trash(html, "n1", "Never Billed"), "archived, no known history: the server stays the authority").toBe(true);
+    expect(findAll(rowOf(html, "n1"), "sponsor-row-trash-spacer")).toHaveLength(0);
+    expect(trash(html, "l1", "Live Paid"), "live + history keeps its trash").toBe(true);
+    // each history arm of the rule hides it (paid order, refunded, numbered)
+    let checked = 0;
+    for (const over of [{ paid_order_id: "o1" }, { deal: deal({ id: "x", sponsor_id: "z", payment_status: "refunded", invoice_number: null }) }, { deal: deal({ id: "y", sponsor_id: "z", payment_status: "pending", invoice_number: 9 }) }]) {
+      const z = archivedRow(sponsor({ id: "z", name: "Zed", ...over }));
+      expect(trash(listHtml([], { archived: [z], showArchived: true }), "z", "Zed")).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("no opacity anywhere on an archived row (it faded text under 4.5:1); the row is a pale ground instead (pair)", () => {
+    const html = listHtml([P1], { archived: [OLD], showArchived: true });
+    const li = rowOf(html, "a1");
+    expect(li).not.toMatch(/class="(?:[^"]*\s)?opacity-\d+/);
+    expect(classTokens(findAll(html, "sponsor-row").find((r) => attrOf(r.open, "data-archived") === "true")!.open)).toContain(ARCHIVED_ROW);
+    expect(ARCHIVED_ROW).toBe("bg-slate-50");
+  });
+
+  // Contrast, from Tailwind's own theme (oklch -> sRGB), for every text colour on an archived row, against the ground it sits on.
+  const THEME = readFileSync(createRequire(import.meta.url).resolve("tailwindcss/theme.css"), "utf8");
+  function hexOf(step: number): [number, number, number] {
+    const m = new RegExp(`--color-slate-${step}: oklch\\(([\\d.]+)% ([\\d.]+) ([\\d.]+)\\)`).exec(THEME)!;
+    const [L, C, H] = [Number(m[1]) / 100, Number(m[2]), (Number(m[3]) * Math.PI) / 180];
+    const a = C * Math.cos(H), b = C * Math.sin(H);
+    const l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3, mm = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3, ss = (L - 0.0894841775 * a - 1.291485548 * b) ** 3;
+    return [4.0767416621 * l - 3.3077115913 * mm + 0.2309699292 * ss, -1.2684380046 * l + 2.6097574011 * mm - 0.3413193965 * ss, -0.0041960863 * l - 0.7034186147 * mm + 1.707614701 * ss];
+  }
+  // hexOf already yields LINEAR sRGB (oklab -> linear), which is what relative luminance takes.
+  const lum = (rgb: [number, number, number]) => { const [r, g, b] = rgb.map((c) => Math.min(1, Math.max(0, c))) as [number, number, number]; return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+  const ratio = (fg: number, bg: number | "white") => { const a = lum(hexOf(fg)), b = bg === "white" ? 1 : lum(hexOf(bg)); return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05); };
+
+  it("every text colour on an archived row is >= 4.5:1 on its ground (name, sub-line, clicks, logo initial, chip) - ratios derived from Tailwind's theme", () => {
+    const html = listHtml([], { archived: [archivedRow(sponsor({ id: "c1", name: "Contrast Co" }))], showArchived: true });
+    const li = rowOf(html, "c1");
+    const step = (open: string) => Number(/\btext-slate-(\d+)\b/.exec(attrOf(open, "class") ?? "")![1]);
+    const grounds: [string, string, number | "white"][] = [
+      ["sponsor-row-name", "name", 50], ["sponsor-row-sub", "sub-line", 50], ["sponsor-row-clicks", "clicks", 50],
+      ["sponsor-row-logo", "logo initial", 100], ["sponsor-row-archived-chip", "chip", 200],
+    ];
+    let checked = 0;
+    for (const [id, label, ground] of grounds) {
+      const el = findAll(li, id)[0]!;
+      const r = ratio(step(el.open), ground);
+      expect(r, `${label}: text-slate-${step(el.open)} on slate-${ground} is ${r.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5);
+      checked++;
+    }
+    expect(checked).toBe(grounds.length);
+    // premise: the arithmetic can fail - the live row's slate-500 on slate-100 (the logo tile) is under 4.5 in v4's theme or close to it
+    expect(ratio(500, 100)).toBeLessThan(ratio(600, 100));
+  });
+
+  it("the Open chevron is a 44px hit target below md, on archived rows and on a viewer's rows", () => {
+    for (const [label, html] of [
+      ["editor, archived", listHtml([], { archived: [OLD], showArchived: true })],
+      ["viewer, archived", listHtml([], { canEdit: false, archived: [OLD], showArchived: true })],
+    ] as const) {
+      const open = findAll(html, "sponsor-row-open");
+      expect(open, label).toHaveLength(1);
+      expect(classTokens(open[0]!.open), label).toEqual(expect.arrayContaining(["max-md:h-11", "max-md:w-11"]));
+    }
+  });
+});
+
+describe("focus after the page flips (batch B review I2)", () => {
+  function stubDocument() {
+    const focused: string[] = [];
+    const el = (id: string, visible: boolean) => ({ getClientRects: () => (visible ? [{}] : []), focus: () => focused.push(id) });
+    const byId = new Map<string, ReturnType<typeof el>[]>();
+    for (const id of [FOCUS_AFTER_ARCHIVE.archive, FOCUS_AFTER_ARCHIVE.unarchive]) byId.set(id, [el(`${id}#hidden`, false), el(`${id}#visible`, true)]);
+    vi.stubGlobal("document", { activeElement: null, addEventListener: () => {}, removeEventListener: () => {}, querySelectorAll: (q: string) => byId.get(/"([^"]+)"/.exec(q)![1]!) ?? [] });
+    return focused;
+  }
+
+  it("focusVisibleTestId focuses the laid-out copy, never the hidden twin, and says so", () => {
+    const focused = stubDocument();
+    expect(focusVisibleTestId("sponsor-sheet-unarchive")).toBe(true);
+    expect(focused).toEqual(["sponsor-sheet-unarchive#visible"]);
+    expect(focusVisibleTestId("nothing-here")).toBe(false);
+  });
+
+  it("Archive moves focus to Unarchive; Unarchive moves it to Archive; a plain re-read moves it nowhere", async () => {
+    expect(FOCUS_AFTER_ARCHIVE).toEqual({ archive: "sponsor-sheet-unarchive", unarchive: "sponsor-sheet-archive-button" });
+    const focused = stubDocument();
+    const m = mount([P1], { hub: { sponsorId: "p1" } });
+    expect(focused, "arriving on the page moves nothing").toEqual([]);
+    answer = (_u, method) => ({ status: 200, body: { data: method === "POST" ? archivedRow(P1) : [] } });
+    m.click("sponsor-sheet-archive-button");
+    await flush();
+    expect(focused).toEqual(["sponsor-sheet-unarchive#visible"]);
+    answer = (_u, method) => ({ status: 200, body: { data: method === "DELETE" ? liveRow(P1) : [] } });
+    m.click("sponsor-sheet-unarchive");
+    await flush();
+    expect(focused).toEqual(["sponsor-sheet-unarchive#visible", "sponsor-sheet-archive-button#visible"]);
+  });
+
+  it("a refused Archive (409) moves no focus: the button is still there", async () => {
+    const focused = stubDocument();
+    const m = mount([P1], { hub: { sponsorId: "p1" } });
+    answer = (url, method) => (method === "POST" ? { status: 409, body: { error: { code: "sponsor_has_current_deal", message: "x" } } } : { status: 200, body: { data: url.includes("deals") ? [] : [P1] } });
+    m.click("sponsor-sheet-archive-button");
+    await flush();
+    expect(focused).toEqual([]);
+  });
+});
+

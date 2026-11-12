@@ -21,7 +21,7 @@ import { ImagePlus } from "lucide-react";
 import { useViewerTz } from "@/components/client-time";
 import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
 import { useConfirm } from "@/components/ui/confirm-provider";
-import { SponsorList, dealPrice, groupTierOf, sameOrderBand, type DealWrite } from "@/components/sponsors/sponsor-list";
+import { SponsorList, dealPrice, deleteIsRefusedForHistory, groupTierOf, sameOrderBand, type DealWrite } from "@/components/sponsors/sponsor-list";
 import { AddDealSheet, type CreateDealBody } from "@/components/sponsors/add-deal-sheet";
 import { SMALL_BTN, SponsorSheet, SponsorSheetBody, sponsorDealGroups } from "@/components/sponsors/sponsor-sheet";
 import { DealPageBody } from "@/components/sponsors/deal-page";
@@ -245,18 +245,18 @@ const DEAL_ROUTE: Record<DealAction, string> = {
   end_now: "end",
 };
 
-/** Is a delete certain to be refused? History on any of a sponsor's deals - money paid or refunded, or an invoice number (every
- *  online and offline deal gets one when it is made, paid or not: sponsor invoices, Task 20) - is a 409 `sponsor_has_deal_history`
- *  (server/usecases/sponsors.ts `dealHoldsHistory`). What the row can see of it is its paid order and the deal it shows; a pre-deals
- *  order or a history on an older deal is only known to the server, whose refusal is shown the same way. So this only decides
- *  whether to ASK first - it refuses nothing. */
-function deleteIsRefusedForHistory(s: SponsorItem): boolean {
-  return (
-    Boolean(s.paid_order_id) ||
-    s.deal?.payment_status === "paid" ||
-    s.deal?.payment_status === "refunded" ||
-    s.deal?.invoice_number != null
-  );
+/** Where keyboard focus goes when the sponsor page swaps its Archive card for the archived banner and back (batch B review I2): the
+ *  button that just ran is gone, so focus would fall to <body>. After Archive it lands on the banner's Unarchive; after Unarchive on the
+ *  card's Archive button. Test ids, so the e2e and the unit test name the same targets. */
+export const FOCUS_AFTER_ARCHIVE = { archive: "sponsor-sheet-unarchive", unarchive: "sponsor-sheet-archive-button" } as const;
+
+/** Focus the VISIBLE control with this test id (the sponsor page can be in the DOM twice - the phone body and the side panel - and
+ *  only one is laid out). Returns whether something took focus. */
+export function focusVisibleTestId(testId: string, doc: Pick<Document, "querySelectorAll"> = document): boolean {
+  const el = Array.from(doc.querySelectorAll<HTMLElement>(`[data-testid="${testId}"]`)).find((e) => e.getClientRects().length > 0);
+  if (!el) return false;
+  el.focus();
+  return true;
 }
 
 /** The dictionary key for a refused logo upload grant, from the route's STATUS (batch H review m6): the picker offers PNG, JPG and WebP,
@@ -563,6 +563,8 @@ export function OrgSponsors({
   const live = sponsors.filter((s) => s.archived_at === null);
   const archived = sponsors.filter((s) => s.archived_at !== null);
   const [archivedSwitch, setArchivedSwitch] = useState(false);
+  // The control to focus once the page has flipped between its Archive card and its archived banner (`FOCUS_AFTER_ARCHIVE`).
+  const focusAfterFlip = useRef<string | null>(null);
   if (archivedSwitch && archived.length === 0) setArchivedSwitch(false);
   const showArchived = archivedSwitch && archived.length > 0;
   // The org's deals, for the sponsor page and the confirms that name what a deal's end does to the others. The server's list is the
@@ -793,6 +795,7 @@ export function OrgSponsors({
     void run(async () => {
       try {
         const row = (await api(`/${s.id}/archive`, { method: "POST" })) as SponsorItem;
+        focusAfterFlip.current = FOCUS_AFTER_ARCHIVE.archive;
         setSponsors((prev) => prev.map((r) => (r.id === s.id ? row : r)));
         setNotice(msg("sponsors.archive.done", { name: s.name }));
       } catch (err) {
@@ -806,6 +809,7 @@ export function OrgSponsors({
   function unarchive(s: SponsorItem) {
     void run(async () => {
       const row = (await api(`/${s.id}/archive`, { method: "DELETE" })) as SponsorItem;
+      focusAfterFlip.current = FOCUS_AFTER_ARCHIVE.unarchive;
       setSponsors((prev) => prev.map((r) => (r.id === s.id ? row : r)));
       setNotice(msg("sponsors.archive.unarchived", { name: s.name }));
     });
@@ -1016,6 +1020,14 @@ export function OrgSponsors({
   const selectedDeal =
     selected === undefined || hub.dealId === null ? undefined : deals.find((d) => d.id === hub.dealId && d.sponsor_id === selected.id);
   const sheetOpen = selected !== undefined;
+  const selectedArchived = selected !== undefined && selected.archived_at !== null;
+  // Keyed on the flip, so only an Archive or Unarchive the person just ran moves focus (never a re-read, never page arrival).
+  useEffect(() => {
+    const target = focusAfterFlip.current;
+    if (target === null) return;
+    focusAfterFlip.current = null;
+    focusVisibleTestId(target);
+  }, [selectedArchived]);
   // The pay link, only while its deal can still be paid; each page shows the one that is its own.
   const openPayLink = payLink !== null && payLinkStillOpen(deals, payLink.deal) ? payLink : null;
   // The sponsor the Add deal sheet is open for - from either the list's row or the sponsor's page. A sponsor the list no longer holds
