@@ -18,6 +18,10 @@
 //   (B) a badminton KNOCKOUT of three: the lone "Semi-final" (unnumbered) and the bye, the semi tapped, "Winner of the
 //       semi-final" resolving to its winner's name, the final tapped, the champion on the draw.
 //   (C) the marketing page's "Your recent quick matches": both matches, newest first; tapping one opens its home.
+//   (D) Save (plan 3 Task 5), in a browser of its own (plan 2 m6: not inside (A)): a guest who typed an address on a new
+//       league taps Save on its home → the sign-in, carrying the save page → signs in as a DIFFERENT person → the save page
+//       → Save → the home reads "Saved" and no longer counts down; the record holds the saver and forgets the typed
+//       address. A second guest on the same link sees neither Save nor Saved, and the save page tells them it is taken.
 //
 // ── WHAT IS A REACH AND WHAT IS THE TEST (README rule) ────────────────────────────────────────────────────────────
 // There is NO reach here: nothing is seeded and no API is called. Every quick match is made through the setup form,
@@ -38,7 +42,7 @@
 // ── EXTENSION POINTS ──────────────────────────────────────────────────────────────────────────────────────────────
 // Share (plan 2 T7), Add a match (plan 2 T8) and Save (plan 3) EXTEND this file, each at a marked `EXTENSION POINT`
 // below, at the place in the journey where it belongs, naming the state the page is in there. Share (step 3b) and Add a
-// match (step 7) are filled in; Save is not yet.
+// match (step 7) are filled in; Save is its own journey, (D), in its own browser (plan 2 m6).
 import { test, expect, type BrowserContext, type Page } from "@playwright/test";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -46,7 +50,7 @@ import { fileURLToPath } from "node:url";
 import { LEVEL_RANK } from "@seazn/engine/competition";
 import { stageDefaultsFor } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
-import { expectNoHorizontalScroll, TAG, withDb } from "../helpers";
+import { expectNoHorizontalScroll, loginUi, TAG, withDb } from "../helpers";
 import { consentedAnonymousState } from "../scorepad-a11y-kit";
 import { HOLD_MS } from "../../src/components/v2/scorepad/queue";
 import { HUMAN_FASTEST_REPEAT_MS } from "../../src/components/v2/scorepad/use-pad-pipeline";
@@ -252,8 +256,15 @@ interface Made {
 }
 
 /** The setup form, filled and started the way a guest does it: badminton, Singles, the sides typed, the format, the
- *  short rules. Lands on the home and returns its token. */
-async function startQuickMatch(p: Page, name: string, sides: string[], format: "league" | "knockout", matches: number): Promise<Made> {
+ *  short rules, and (when given) an address in the "Email me the link" fold. Lands on the home and returns its token. */
+async function startQuickMatch(
+  p: Page,
+  name: string,
+  sides: string[],
+  format: "league" | "knockout",
+  matches: number,
+  opts: { email?: string } = {},
+): Promise<Made> {
   await expect(form(p)).toBeVisible({ timeout: STEP_MS });
   // The island is live once blank rows hold Start disabled (the server's no-script Start is enabled): typing before
   // that would race React taking the inputs over.
@@ -276,6 +287,12 @@ async function startQuickMatch(p: Page, name: string, sides: string[], format: "
   await expect(rules).toHaveValue(VARIANT);
   // Start counts what the format plays (a round robin's n(n-1)/2, a knockout's n-1).
   await expect(p.getByTestId("qm-start")).toContainText(plural(mk, "quickMatch.setup.startCount", matches));
+  if (opts.email !== undefined) {
+    await form(p).getByText(mk("quickMatch.setup.email"), { exact: true }).click();
+    const email = form(p).getByLabel(mk("quickMatch.setup.emailLabel"), { exact: true });
+    await email.fill(opts.email);
+    await expect(email).toHaveValue(opts.email);
+  }
   await expectNoHorizontalScroll(p);
   await p.getByTestId("qm-start").click();
   await p.waitForURL(/\/q\/qm_[^/?#]+$/, { timeout: STEP_MS });
@@ -925,10 +942,8 @@ test("(A) a guest plays a badminton league of three from the marketing page to i
     "the stored table counts the added match",
   ).toEqual(final.map((t, i) => ({ name: t.name, played: t.played, won: t.won, points: t.points, rank: i + 1 })));
 
-  // ── EXTENSION POINT: Save (plan 3) ──────────────────────────────────────────────────────────────────────────────
-  // A finished league the guest may want to keep. Save goes HERE: Save on the home, its email, the played line's
-  // "kept n days" wording once saved, and the stored row's expiry (quick_matches.expires_at by `tokenHash`). (C) below
-  // reads this match in the recent strip: a saved match must still be listed, newest first.
+  // ── Save (plan 3) is journey (D) below, in a browser of its own (plan 2 m6): this guest's (C) reads the recent strip
+  // of THIS context, which a sign-in would change.
 
   league = { ...made, results, table: tableOf(sides, results, rules) };
 });
@@ -1057,4 +1072,92 @@ test("(C) the marketing page lists both quick matches, newest first, and a tap o
   await expect(page.getByTestId("qm-name")).toHaveText(league!.name);
   await expect(page.getByTestId("qm-winner-name")).toHaveText([LONG]);
   await expect(page.locator('[data-testid="qm-match"][data-state="settled"]')).toHaveCount(league!.results.length);
+});
+
+// ── (D) Save (plan 3 Task 5) ────────────────────────────────────────────────────────────────────────────────────────
+
+/** Save's steps: the setup, the sign-in's two hops (the login page, the magic link), the save page, the home after the
+ *  save, the second guest's home and save page; the Save taps, the fold, the reads of each page; the record twice. */
+const SAVE = { navs: 8, acts: 12, reads: 2 } as const;
+
+interface SaveRecord {
+  email: string | null;
+  expires_at: Date | null;
+  saved_by_user_id: string | null;
+  saver: string | null;
+}
+/** The quick match's save columns and its saver's address, found by the home token's hash (C19). */
+async function saveRecordOf(made: Made): Promise<SaveRecord> {
+  const [row] = await withDb((sql) => sql<SaveRecord[]>`
+    select q.email, q.expires_at, q.saved_by_user_id, u.email as saver
+      from quick_matches q left join users u on u.id = q.saved_by_user_id
+     where q.token_hash = ${tokenHash(made.token)}`);
+  if (!row) throw new Error("the quick match has no row");
+  return row;
+}
+
+test("(D) Save: a guest who typed an address saves the league into another account by signing in; only the saver reads Saved", async ({ browser }, info) => {
+  setBudget(budgetFor({ ...SAVE, plans: [] }));
+  const guestOf = async () =>
+    browser.newContext({ storageState: await consentedAnonymousState(), baseURL: info.project.use.baseURL, viewport: PHONE });
+  const mine = await guestOf();
+  const theirs = await guestOf();
+  try {
+    const p = await mine.newPage();
+    await p.goto("/en/play");
+    // The address typed on the match is not the saver's: Save keeps it for whoever signs in (C3), and forgets the address.
+    const typed = `delivered+qm-typed-${TAG}@resend.dev`;
+    const saver = `delivered+qm-saver-${TAG}-${Math.random().toString(36).slice(2, 7)}@resend.dev`;
+    const sides = [`Avocet Moreau ${TAG}`, `Plover Okafor ${TAG}`, `Dunlin Sato ${TAG}`];
+    const total = (sides.length * (sides.length - 1)) / 2;
+    const made = await startQuickMatch(p, `Keep me ${TAG}`, sides, "league", total, { email: typed });
+
+    const fresh = await saveRecordOf(made);
+    expect([fresh.email, fresh.saved_by_user_id], "made with the typed address, saved by nobody").toEqual([typed, null]);
+    expect(fresh.expires_at, "an unsaved match expires").not.toBeNull();
+    await expect(p.getByTestId("qm-played")).toHaveText(
+      plural(ui, "quickMatch.home.played", total, { played: 0, days: QUICK_MATCH_EXPIRY_DAYS }),
+    );
+
+    // Save, signed out: the sign-in, carrying the save page.
+    const save = p.getByTestId("qm-save");
+    await expect(save).toHaveText(ui("quickMatch.home.save"));
+    expect((await save.boundingBox())?.height ?? 0, "Save is a 44px target").toBeGreaterThanOrEqual(44);
+    await save.click();
+    await p.waitForURL((u) => u.pathname === "/login", { timeout: STEP_MS });
+    const next = new URL(p.url()).searchParams.get("next");
+    expect(next, "the sign-in returns to the save page").toBe(`${made.path}/save`);
+
+    // Signed in as someone else entirely: back on the save page, its one button.
+    await loginUi(p, saver, next!);
+    await p.waitForURL((u) => u.pathname === next, { timeout: STEP_MS });
+    await expect(p.getByTestId("qm-save-title")).toHaveText(ui("quickMatch.save.title", { name: made.name }));
+    await expect(p.getByTestId("qm-save-hint")).toHaveText(ui("quickMatch.save.hint"));
+    await expectNoHorizontalScroll(p);
+    expect((await saveRecordOf(made)).saved_by_user_id, "opening the save page saves nothing").toBeNull();
+    await p.getByTestId("qm-save").click();
+
+    // The home, saved: "Saved" in place of the button, and a played line with no countdown.
+    await p.waitForURL((u) => u.pathname === made.path && u.search === "", { timeout: STEP_MS });
+    await expect(p.getByTestId("qm-saved")).toHaveText(ui("quickMatch.home.saved"));
+    await expect(p.getByTestId("qm-save")).toHaveCount(0);
+    await expect(p.getByTestId("qm-played")).toHaveText(plural(ui, "quickMatch.home.playedSaved", total, { played: 0 }));
+    await expectNoHorizontalScroll(p);
+    const saved = await saveRecordOf(made);
+    expect([saved.saver, saved.email, saved.expires_at], "the saver's, the typed address forgotten, no expiry").toEqual([saver, null, null]);
+
+    // A second guest with the same link: the match, but neither Save nor Saved; the save page says it is taken.
+    const q = await theirs.newPage();
+    await q.goto(made.path);
+    await expect(q.getByTestId("qm-name")).toHaveText(made.name, { timeout: STEP_MS });
+    await expect(q.getByTestId("qm-save")).toHaveCount(0);
+    await expect(q.getByTestId("qm-saved")).toHaveCount(0);
+    await q.goto(`${made.path}/save`);
+    await expect(q.getByTestId("qm-save-taken")).toHaveText(ui("quickMatch.flash.taken"), { timeout: STEP_MS });
+    await expect(q.getByTestId("qm-save")).toHaveCount(0);
+    await expectNoHorizontalScroll(q);
+  } finally {
+    await mine.close();
+    await theirs.close();
+  }
 });

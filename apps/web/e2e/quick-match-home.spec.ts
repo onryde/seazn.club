@@ -76,7 +76,11 @@ test("home (Task 5): a league of 4 with a 43-character side, at 320, 768 and 128
     await expect(page.getByTestId("qm-standings").getByText(LONG), `${width}`).toBeVisible();
     await expect(page.getByTestId("qm-match"), `${width}`).toHaveCount(6);
     await expect(page.getByTestId("qm-anyone"), `${width}`).toBeVisible();
-    await expect(page.getByText("Save this match"), `${width}: no Save in plan 2 (D13)`).toHaveCount(0);
+    // Plan 3 Task 5 (D13 lifted): an unsaved match offers Save to anyone, a 44px target in the actions row.
+    const save = page.getByTestId("qm-save");
+    await expect(save, `${width}: Save is offered`).toHaveText("Save this match");
+    expect((await save.boundingBox())?.height ?? 0, `${width}: Save is a 44px target`).toBeGreaterThanOrEqual(44);
+    await expect(page.getByTestId("qm-saved"), `${width}: nobody saved it yet`).toHaveCount(0);
   });
 });
 

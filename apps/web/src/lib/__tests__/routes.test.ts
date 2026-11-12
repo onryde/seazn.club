@@ -159,6 +159,12 @@ describe("routes", () => {
     // The same home the token's own builder names, so the two never drift apart.
     expect(routes.quickMatchAddMatch("qm_abc")).toBe(`${routes.quickMatch("qm_abc")}/add-match`);
   });
+
+  it("builds a quick match's Save post: the home token in the path, under the save page (plan 3 Task 5)", () => {
+    expect(routes.quickMatchSaveConfirm("qm_abc")).toBe("/q/qm_abc/save/confirm");
+    // The same save page the reminder links to, so the two never drift apart.
+    expect(routes.quickMatchSaveConfirm("qm_abc")).toBe(`${routes.quickMatchSave("qm_abc")}/confirm`);
+  });
 });
 
 describe("routes.orgSponsors (R4 S11: the Sponsors hub is top-level, not a Settings tab)", () => {

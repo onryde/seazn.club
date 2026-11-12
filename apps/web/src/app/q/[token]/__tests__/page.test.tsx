@@ -42,6 +42,7 @@ import * as homeModule from "@/components/quick-match/home";
 import * as standingsModule from "@/components/quick-match/standings";
 import * as drawModule from "@/components/quick-match/draw";
 import * as listModule from "@/components/quick-match/match-list";
+import * as saveFormModule from "@/components/quick-match/save-form";
 import { QuickMatchHomeShapeError, QuickMatchHomeView, type AddMatchView, type QuickMatchCopy } from "@/components/quick-match/home";
 import { QuickMatchShare } from "@/components/quick-match/share";
 import { DictProvider } from "@/components/i18n/dict-provider";
@@ -77,11 +78,11 @@ const enPlayed = (played: number, count: number) =>
 
 /** Every component the four quick-match modules export is a SERVER component: the server calls it and only its output
  *  reaches the browser. Anything else with a function type is a client boundary (its props are serialised). */
-const SERVER_MODULES = { homeModule, standingsModule, drawModule, listModule };
+const SERVER_MODULES = { homeModule, standingsModule, drawModule, listModule, saveFormModule };
 const SERVER = new Set<unknown>(
   Object.values(SERVER_MODULES).flatMap((m) => Object.values(m).filter((v) => typeof v === "function")),
 );
-const SERVER_FILES = ["home.tsx", "standings.tsx", "draw.tsx", "match-list.tsx"].map((f) =>
+const SERVER_FILES = ["home.tsx", "standings.tsx", "draw.tsx", "match-list.tsx", "save-form.tsx"].map((f) =>
   path.resolve(import.meta.dirname, "../../../../components/quick-match", f),
 );
 
@@ -268,8 +269,8 @@ describe("the home's modules", () => {
       expect(text.trimStart().startsWith('"use client"'), file).toBe(false);
       checked++;
     }
-    expect(checked).toBe(4);
-    expect(SERVER.size).toBeGreaterThanOrEqual(4);
+    expect(checked).toBe(5);
+    expect(SERVER.size).toBeGreaterThanOrEqual(5);
   });
 });
 
@@ -534,8 +535,11 @@ describe.skipIf(!HAS_DB)("the quick match home page", () => {
     expect(matches[0]!.props["data-next"], "the hero's match is marked in the list").toBe("true");
     expect(matches.slice(1).filter((m) => m.props["data-next"] === "true")).toHaveLength(0);
 
-    // D13: no Save in plan 2. T6-T8's slots are empty on the page until those tasks fill them.
-    expect(html).not.toContain(en_("quickMatch.home.save"));
+    // Plan 3 Task 5 (D13 lifted): an unsaved match offers Save, a plain post to the save route, to anyone.
+    const save = oneByTestId(tree, "qm-save-form");
+    expect([save.type, save.props.method, save.props.action]).toEqual(["form", "post", `/q/${out.token}/save/confirm`]);
+    expect(words(oneByTestId(tree, "qm-save"))).toBe(en_("quickMatch.home.save"));
+    expect(byTestId(tree, "qm-saved")).toHaveLength(0);
     expect(byTestId(tree, "slot-score")).toHaveLength(0);
     expect(words(oneByTestId(tree, "qm-anyone"))).toBe(en_("quickMatch.home.anyoneCanScore"));
     expect(html).toContain(`<h2`);

@@ -26,6 +26,10 @@
 // disclosure then opens on first paint at those picks, each kept only if it is one of this match's sides (else the view's
 // own pick), so the fix is one tap away with no script. Picks without a flash are ignored (a reload, a crafted link), and
 // the picks are spent with `e` (`ClearFlashParam`).
+//
+// Plan 3 Task 5: the Save slot (`QuickMatchSaveForm`, a plain post to `routes.quickMatchSaveConfirm(token)`), drawn by the
+// view only while nobody has saved the match; its saver reads "Saved". The session is read ONLY for a saved match (the one
+// case where who is looking changes the page), so an unsaved home stays a page anyone's request renders the same.
 import type { Metadata } from "next";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { HtmlLang } from "@/components/i18n/html-lang";
@@ -39,8 +43,10 @@ import {
 import { QuickMatchAddMatch } from "@/components/quick-match/add-match";
 import { ClearFlashParam } from "@/components/quick-match/clear-flash-param";
 import { matchSidesId } from "@/components/quick-match/match-list";
+import { QuickMatchSaveForm } from "@/components/quick-match/save-form";
 import { QuickMatchScoreForm } from "@/components/quick-match/score-form";
 import { QuickMatchShare } from "@/components/quick-match/share";
+import { getCurrentUser } from "@/lib/auth";
 import { getDictionary } from "@/lib/i18n";
 import { plural, t } from "@/lib/i18n-runtime";
 import { pickDictPrefixes } from "@/lib/i18n-subset";
@@ -130,6 +136,9 @@ export default async function QuickMatchHomePage({
         />
       </DictProvider>
     ),
+    save: (
+      <QuickMatchSaveForm action={routes.quickMatchSaveConfirm(token)} label={copy.t("quickMatch.home.save")} look="ghost" />
+    ),
     // League only (the view asks for it only there, C5): the two selects open at the view's pick, the table's top two.
     addMatch: (view) => {
       const ours = new Set(view.sides.map((s) => s.id));
@@ -151,6 +160,7 @@ export default async function QuickMatchHomePage({
       );
     },
   };
+  const viewerId = home.row.savedByUserId === null ? null : ((await getCurrentUser())?.id ?? null);
   return (
     <>
       <HtmlLang lang={locale} />
@@ -161,6 +171,7 @@ export default async function QuickMatchHomePage({
         copy={copy}
         slots={slots}
         flash={flash ? { text: copy.t(flash.key, flash.vars), tone: flash.tone } : null}
+        viewerId={viewerId}
       />
     </>
   );

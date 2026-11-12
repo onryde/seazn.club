@@ -518,18 +518,27 @@ const PAINTERS: Record<string, { verdict: true | string; handoff?: string | stri
     verdict: "writes the claim's `/claim/<token>` path into AuthForm's `next` prop inline and paints it nowhere itself",
     handoff: "components/auth-form.tsx",
   },
-  // The quick match home (plan 2 Tasks 6, 7, 8): builds `routes.quickMatchScore(token, fixture)` inline into the Score form's
-  // `action`, `routes.quickMatch(token)` into the Share island's `path`, and `routes.quickMatchAddMatch(token)` into the
-  // "Add a match" form's `action`.
+  // The quick match home (plan 2 Tasks 6, 7, 8; plan 3 Task 5): builds `routes.quickMatchScore(token, fixture)` inline into
+  // the Score form's `action`, `routes.quickMatch(token)` into the Share island's `path`, `routes.quickMatchAddMatch(token)`
+  // into the "Add a match" form's `action`, and `routes.quickMatchSaveConfirm(token)` into the Save form's `action`.
   "app/q/[token]/page.tsx": {
     verdict:
-      "builds the home's own `/q/<token>` paths inline into its islands' props (the Score form's action, the Share island's path, the Add a match form's action) and paints them nowhere itself",
-    handoff: ["components/quick-match/score-form.tsx", "components/quick-match/share.tsx", "components/quick-match/add-match.tsx"],
+      "builds the home's own `/q/<token>` paths inline into its islands' props (the Score form's action, the Share island's path, the Add a match form's action, the Save form's action) and paints them nowhere itself",
+    handoff: [
+      "components/quick-match/score-form.tsx",
+      "components/quick-match/share.tsx",
+      "components/quick-match/add-match.tsx",
+      "components/quick-match/save-form.tsx",
+    ],
   },
   // The home's Share (plan 2 Task 7): the home link in its read-only field, handed to the share sheet; the QR is `sensitive`.
   "components/quick-match/share.tsx": { verdict: true },
   // The home's "Add a match" (plan 2 Task 8): its form's action is `/q/<home token>/add-match`.
   "components/quick-match/add-match.tsx": { verdict: true },
+  // Save (plan 3 Task 5): the form's action is `/q/<home token>/save/confirm`, on the home and on the save page.
+  "components/quick-match/save-form.tsx": { verdict: true },
+  // The save page (plan 3 Task 5): its back link to the home, and the Save form's action (a component site, checked there).
+  "app/q/[token]/save/page.tsx": { verdict: true },
 };
 
 /** The files that paint a quick match's home URL, `/q/<token>`: every one must be FOUND by the scan, not just listed, or a
@@ -543,6 +552,9 @@ const QUICK_MATCH_PAINTERS = [
   "app/q/[token]/page.tsx",
   "components/quick-match/share.tsx",
   "components/quick-match/add-match.tsx",
+  // Plan 3 Task 5: the Save form, and the save page (its back link, and the form's action it builds).
+  "components/quick-match/save-form.tsx",
+  "app/q/[token]/save/page.tsx",
 ];
 
 describe("every element that paints a scrubbed secret carries ph-no-capture, or its file says why not", () => {
@@ -560,8 +572,17 @@ describe("every element that paints a scrubbed secret carries ph-no-capture, or 
     // The builders and segments come from the app, not from this test.
     // quickMatch: the guest's home, `/q/<token>` (quick match plan 2, A6); quickMatchSave: its save page, `/q/<token>/save`
     // (plan 3 Task 2, the reminder mail's link); quickMatchScore: its Score post, `/q/<token>/score/<fixture>` (branch fix A);
-    // quickMatchAddMatch: its "Add a match" post, `/q/<token>/add-match` (plan 2 Task 8).
-    expect(secretBuilderNames().sort()).toEqual(["checkin", "claim", "quickMatch", "quickMatchAddMatch", "quickMatchSave", "quickMatchScore"]);
+    // quickMatchAddMatch: its "Add a match" post, `/q/<token>/add-match` (plan 2 Task 8); quickMatchSaveConfirm: its Save post,
+    // `/q/<token>/save/confirm` (plan 3 Task 5).
+    expect(secretBuilderNames().sort()).toEqual([
+      "checkin",
+      "claim",
+      "quickMatch",
+      "quickMatchAddMatch",
+      "quickMatchSave",
+      "quickMatchSaveConfirm",
+      "quickMatchScore",
+    ]);
     expect(oneTimeLinkPaths().length).toBeGreaterThanOrEqual(5);
     expect(secretSegments().sort()).toEqual(expect.arrayContaining(["checkin", "claim", "join", "score"]));
     // The names the producers really use.
@@ -646,6 +667,25 @@ describe("every element that paints a scrubbed secret carries ph-no-capture, or 
     ]);
     const form = painters.get("components/quick-match/add-match.tsx") ?? [];
     expect(form.filter((site) => site.how === "attribute action" && site.tag === "form").map((site) => site.blocked)).toEqual([true]);
+  });
+
+  it("Save (plan 3 Task 5): the home and the save page hand the action to QuickMatchSaveForm; its <form> and the page's back link carry the class", () => {
+    let checked = 0;
+    for (const from of ["app/q/[token]/page.tsx", "app/q/[token]/save/page.tsx"]) {
+      // The hop: `action={routes.quickMatchSaveConfirm(token)}`, written inline, so only the inline rule finds each site.
+      expect(known.props).toEqual(expect.arrayContaining([{ component: "QuickMatchSaveForm", prop: "action", from }]));
+      const sites = painters.get(from) ?? [];
+      expect(sites.filter((site) => site.tag === "QuickMatchSaveForm").map((site) => [site.how, site.component]), from).toEqual([
+        ["attribute action", true],
+      ]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    const form = painters.get("components/quick-match/save-form.tsx") ?? [];
+    expect(form.filter((site) => site.how === "attribute action" && site.tag === "form").map((site) => site.blocked)).toEqual([true]);
+    // The save page's own <a> back to the home: a host element, so its class is checked here and not handed off.
+    const page = painters.get("app/q/[token]/save/page.tsx") ?? [];
+    expect(page.filter((site) => site.how === "attribute href" && site.tag === "a").map((site) => site.blocked)).toEqual([true]);
   });
 
   it("the painter files and the verdict table are the same set", () => {

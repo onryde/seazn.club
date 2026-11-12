@@ -1,5 +1,5 @@
 import { test as base, expect, type Browser, type BrowserContextOptions, type Page, type TestInfo } from "@playwright/test";
-import { expectNoHorizontalScroll, TAG } from "./helpers";
+import { expectNoHorizontalScroll, loginUi, TAG } from "./helpers";
 import { consentedAnonymousState } from "./scorepad-a11y-kit";
 
 // Quick match plan 2 (spec docs/superpowers/specs/2026-11-03-quick-match-design.md §5): the guest's surfaces in a real
@@ -255,3 +255,73 @@ test("first visit on a phone: the cookie banner's buttons stay tappable and the 
   }
 });
 
+// ── Save (plan 3 Task 5) ────────────────────────────────────────────────────────────────────────────────────────────
+//
+// The save page (`/q/<token>/save`) and the Save post (`/q/<token>/save/confirm`): the route's every answer and the page's
+// every state are proven in app/q/[token]/__tests__/save-route.test.ts and save-page.test.tsx; this is what only a browser
+// shows: the page's width with a real name at 320, 768 and 1280, the 44px targets, the plain post without the script, and
+// the sign-in's real round trip back to the save page. The full journey (a typed address, a second account, a second guest)
+// is the walkthrough's (D).
+
+const SAVE_WIDTHS = [320, 768, 1280] as const;
+
+test("Save (plan 3 Task 5): the save page at 320, 768 and 1280; without the script and signed out it posts to the sign-in; signed in it saves", async ({ guest: page, browser }, info) => {
+  const name = `e2e save ${TAG}`;
+  await openSetup(page);
+  await form(page).getByLabel("Name", { exact: true }).fill(name);
+  await side(page, 1).fill("Ravi & Sam");
+  await side(page, 2).fill("Priya & Tom");
+  await start(page).click();
+  await expect(page).toHaveURL(/\/q\/qm_[^/?#]+$/);
+  const home = new URL(page.url()).pathname;
+  const savePage = `${home}/save`;
+
+  // The save page, signed out, at each width: the name, what saving does, one button and the way back, each a 44px target.
+  await page.goto(savePage);
+  let checked = 0;
+  for (const width of SAVE_WIDTHS) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect(page.getByTestId("qm-save-title"), `${width}`).toHaveText(`Keep ${name} in your account?`);
+    await expect(page.getByTestId("qm-save-hint"), `${width}`).toHaveText("It stays until you delete it. Anyone with the link can still score.");
+    for (const id of ["qm-save", "qm-save-back"]) {
+      const box = await page.getByTestId(id).boundingBox();
+      expect(box?.height ?? 0, `${width}: ${id} is a 44px target`).toBeGreaterThanOrEqual(44);
+    }
+    await expectNoHorizontalScroll(page);
+    checked++;
+  }
+  expect(checked).toBe(SAVE_WIDTHS.length);
+
+  // Without the script: the same page's plain post reaches the route, which sends a signed-out guest to sign in.
+  const noScript = await guestContext(browser, info, { javaScriptEnabled: false });
+  try {
+    const plain = await noScript.newPage();
+    await plain.goto(savePage);
+    await plain.getByTestId("qm-save").click();
+    await expect(plain).toHaveURL(/\/login\?next=/);
+    expect(new URL(plain.url()).searchParams.get("next"), "no script: the sign-in carries the save page").toBe(savePage);
+  } finally {
+    await noScript.close();
+  }
+
+  // Signed out, from the home: Save goes to the sign-in, carrying the save page.
+  await page.goto(home);
+  await page.getByTestId("qm-save").click();
+  await page.waitForURL((u) => u.pathname === "/login");
+  expect(new URL(page.url()).searchParams.get("next")).toBe(savePage);
+
+  // Signed in by the real magic link: back on the save page; Save lands on the home, which says Saved at every width.
+  await loginUi(page, `delivered+e2e-qm-save-${TAG}-${Math.random().toString(36).slice(2, 7)}@resend.dev`, savePage);
+  await expect(page.getByTestId("qm-save-title")).toHaveText(`Keep ${name} in your account?`);
+  await page.getByTestId("qm-save").click();
+  await page.waitForURL((u) => u.pathname === home && u.search === "");
+  checked = 0;
+  for (const width of SAVE_WIDTHS) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect(page.getByTestId("qm-saved"), `${width}`).toHaveText("Saved");
+    await expect(page.getByTestId("qm-save"), `${width}: no button once saved`).toHaveCount(0);
+    await expectNoHorizontalScroll(page);
+    checked++;
+  }
+  expect(checked).toBe(SAVE_WIDTHS.length);
+});

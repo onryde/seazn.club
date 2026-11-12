@@ -101,4 +101,11 @@ export const QUICK_MATCH_ERRORS = {
    *  script carries none), a token Cloudflare refuses, or Cloudflare unreachable, which fails closed. The guest's refusal,
    *  never a fault: the setup screen shows #1136's shared `turnstile.error`, keeping what was typed. */
   TURNSTILE_FAILED: "QUICK_MATCH_TURNSTILE_FAILED",
+  /** Save (plan 3 Task 5): somebody else saved this match first (`saveQuickMatchForUser` answered "taken"). The confirm route
+   *  lands on the home with `?e=` this code, and the home shows `quickMatch.flash.taken`; the save page shows the same line. */
+  TAKEN: "QUICK_MATCH_TAKEN",
+  /** Save (plan 3 Task 5, ledger carry m5): the session is a staff member's impersonation of a user (the session's signed
+   *  `imp` claim, lib/auth.ts). Staff never save a guest's match into the account they are looking through, so nothing is
+   *  written; the home shows `quickMatch.flash.impersonating`. */
+  SAVE_IMPERSONATED: "QUICK_MATCH_SAVE_IMPERSONATED",
 } as const;

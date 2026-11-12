@@ -6,7 +6,8 @@
 //
 // A SERVER component. It reads plan 1's `QuickMatchHome` and passes only strings and ids on: the read's `row` (the
 // creator's email, the sealed token) never leaves this file (A14), and nothing here is a client boundary. The actions are
-// SLOTS the later tasks fill (Score: Task 6, Share: Task 7, Add a match: Task 8); Save is hidden in plan 2 (D13).
+// SLOTS the later tasks fill (Score: Task 6, Share: Task 7, Add a match: Task 8, Save: plan 3 Task 5). Save is offered on a
+// match nobody has saved (to anyone, signed in or not: C3); its saver reads "Saved" instead; anyone else sees neither.
 //
 // Words: every string a guest reads is a dictionary key in the VIEWER's locale (D10). Matches are numbered D12's way (the
 // 1-based index among non-bye matches in play order), a waiting seat names its feeder in words, never a round code, and a
@@ -15,6 +16,7 @@
 // Phone first: one column, each name wrapping or truncating inside a `min-w-0` chain, so a 40-character side never
 // widens a 320px screen. From `lg` the name, hero and actions hold a sticky left column beside the table and the list.
 import type { ReactNode } from "react";
+import { Check } from "lucide-react";
 import { isLevelTable, pointsText, rankText } from "@seazn/engine/competition";
 import type { EntrantKind } from "@seazn/engine/sport";
 import type { Locale } from "@/lib/i18n-constants";
@@ -60,6 +62,8 @@ export interface QuickMatchSlots {
   share?: ReactNode;
   /** League only (C5): a knockout never asks for it. */
   addMatch?: AddMatchSlot;
+  /** Plan 3 Task 5: the Save form. Drawn only while nobody has saved the match (`savedSlot`). */
+  save?: ReactNode;
 }
 
 const KIND_KEY = {
@@ -102,6 +106,9 @@ const FLASH: Readonly<Record<string, HomeFlash>> = {
   [QUICK_MATCH_ERRORS.ADHOC_LIMIT]: { key: "quickMatch.flash.adhocLimit", tone: "refusal", vars: { max: QUICK_MATCH_MAX_ADHOC } },
   [QUICK_MATCH_ERRORS.SAME_SIDE]: { key: "quickMatch.flash.sameSide", tone: "refusal" },
   [QUICK_MATCH_ERRORS.LEAGUE_ONLY]: { key: "quickMatch.flash.leagueOnly", tone: "refusal" },
+  // Save's confirm route (plan 3 Task 5): somebody saved it first, and staff looking through a user's account.
+  [QUICK_MATCH_ERRORS.TAKEN]: { key: "quickMatch.flash.taken", tone: "refusal" },
+  [QUICK_MATCH_ERRORS.SAVE_IMPERSONATED]: { key: "quickMatch.flash.impersonating", tone: "refusal" },
 };
 const GENERIC_FLASH: HomeFlash = { key: "quickMatch.flash.generic", tone: "refusal" };
 export function homeFlash(e: string | string[] | undefined): HomeFlash | null {
@@ -378,20 +385,47 @@ export function buildHomeView(home: QuickMatchHome, copy: QuickMatchCopy): Built
 
 const LABEL = "app-display text-xs font-semibold tracking-[0.14em] text-[#b7aede]";
 
+/**
+ * What the actions row shows for Save (plan 3 Task 5): the form while nobody has saved the match, "Saved" for the account
+ * that did, and nothing for anyone else (signed out included: the page cannot know it is theirs, and a saved match is no
+ * longer anyone else's to save). `viewerId` is the signed-in account, or null.
+ */
+export type SaveState = "offer" | "saved" | "none";
+export function saveStateFor(savedByUserId: string | null, viewerId: string | null): SaveState {
+  if (savedByUserId === null) return "offer";
+  return viewerId !== null && viewerId === savedByUserId ? "saved" : "none";
+}
+
 export function QuickMatchHomeView({
   home,
   copy,
   slots = {},
   flash = null,
+  viewerId = null,
 }: {
   home: QuickMatchHome;
   copy: QuickMatchCopy;
   slots?: QuickMatchSlots;
   /** The `?e=` line (`homeFlash`), already in the viewer's words, and its tone; null for none. */
   flash?: { text: string; tone: HomeFlashTone } | null;
+  /** The signed-in viewer's account id, or null: only read to tell the match's saver "Saved". */
+  viewerId?: string | null;
 }) {
   const { t } = copy;
   const v = buildHomeView(home, copy);
+  const save = saveStateFor(home.row.savedByUserId, viewerId);
+  const saveNode =
+    save === "offer" && slots.save ? (
+      slots.save
+    ) : save === "saved" ? (
+      <p
+        data-testid="qm-saved"
+        className="app-display inline-flex min-h-11 min-w-0 items-center justify-center gap-2 rounded-lg bg-[rgb(163_230_53/0.1)] px-4 py-2 text-sm font-semibold text-[color:var(--mk-lime)]"
+      >
+        <Check aria-hidden="true" className="h-4 w-4 flex-none" strokeWidth={2.5} />
+        <span className="min-w-0">{t("quickMatch.home.saved")}</span>
+      </p>
+    ) : null;
   return (
     <div className="min-h-screen bg-night text-cream">
       {gantry(t)}
@@ -429,7 +463,12 @@ export function QuickMatchHomeView({
             </div>
             {v.hero ? heroCard(v.hero, t, slots.score) : null}
             {v.winner ? winnerCard(v.winner) : null}
-            {slots.share ? <div className="flex min-w-0 flex-wrap gap-2">{slots.share}</div> : null}
+            {slots.share || saveNode ? (
+              <div data-testid="qm-actions" className="flex min-w-0 flex-col gap-3">
+                {slots.share ?? null}
+                {saveNode}
+              </div>
+            ) : null}
           </div>
           <div className="flex min-w-0 flex-col gap-6">
             {v.standings ? <QuickMatchStandings view={v.standings} /> : null}
@@ -465,7 +504,8 @@ export function QuickMatchHomeView({
 // Plain functions, not components: the page's element tree then holds what they render (the score page's `scanColumn`
 // convention), so the server render and its test both see it.
 
-function gantry(t: QuickMatchCopy["t"]): ReactNode {
+/** The quick match pages' header bar: the wordmark and "Quick match". Exported for the save page (plan 3 Task 5). */
+export function gantry(t: QuickMatchCopy["t"]): ReactNode {
   return (
     <header className="border-b border-[#2a1c5c] bg-night-2">
       <div className="mx-auto flex w-full max-w-5xl min-w-0 items-center gap-3 px-4 py-3">

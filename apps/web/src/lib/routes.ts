@@ -151,6 +151,9 @@ export const routes = {
   quickMatch: (token: string) => `/q/${token}`,
   /** The same home's save page (the reminder mail's "save it" link, plan 3 Task 2): the home token, under the same `/q/` root. */
   quickMatchSave: (token: string) => `/q/${token}/save`,
+  /** The Save button's post (plan 3 Task 5): the save page and the home both post a plain form here; it saves for the
+   *  signed-in person, or sends a signed-out one to sign in with `next=` the save page. Same scrubbed `/q/` root. */
+  quickMatchSaveConfirm: (token: string) => `/q/${token}/save/confirm`,
   /** A quick match home's Score post for one match (plan 2 Task 6; "Edit result" posts it too): the home token and the
    *  fixture both ride the path, never a query string, under the same scrubbed `/q/` root. */
   quickMatchScore: (token: string, fixtureId: string) => `/q/${token}/score/${fixtureId}`,

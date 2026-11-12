@@ -63,6 +63,10 @@ const encode = (value: string, depth: number) => {
 /** The capture rule's placeholder is `[code]`, every other rule's `[token]`: both mean "a secret was here". */
 const normalised = (value: string) => value.split("[code]").join(PLACEHOLDER);
 const lowerHex = (value: string) => value.replace(/(%(?:25)*)([0-9A-F]{2})/g, (_, pct: string, hex: string) => pct + hex.toLowerCase());
+/** What a PUBLIC route's URL becomes: nothing of the route's own is scrubbed, but a quick match home token is a credential
+ *  wherever it stands (the bare `qm_` rule, quick match plan 3 Task 5), so one that sits in a public segment becomes
+ *  `qm_[token]`. Every other kind of token is left exactly as it was. */
+const publicOut = (url: string, kind: string, token: string) => (kind === "home" ? url.split(token).join(`qm_${PLACEHOLDER}`) : url);
 
 // ---- real tokens -------------------------------------------------------------------------------------------------
 
@@ -145,7 +149,7 @@ describe("every route with a secret segment is scrubbed, or is knowingly public"
               expect(scrubScoreUrl(out), "idempotent").toBe(out);
               scrubbed++;
             } else {
-              expect(scrubScoreUrl(url), `${route.key} (${verdict}): ${url}`).toBe(url);
+              expect(scrubScoreUrl(url), `${route.key} (${verdict}): ${url}`).toBe(publicOut(url, kind, token));
               kept++;
             }
           }
@@ -264,7 +268,7 @@ describe("every /<path>/${token} template is scrubbed, or is knowingly public", 
       for (const [kind, tokens] of KINDS) {
         const url = `${ORIGIN}${prefix.replace(/\[id\]/g, "00000000-0000-4000-8000-000000000002")}/${tokens[0]!}`;
         if (prefix in PUBLIC_BUILDERS) {
-          expect(scrubScoreUrl(url), `${prefix} (${PUBLIC_BUILDERS[prefix]})`).toBe(url);
+          expect(scrubScoreUrl(url), `${prefix} (${PUBLIC_BUILDERS[prefix]})`).toBe(publicOut(url, kind, tokens[0]!));
           kept++;
         } else {
           expect(scrubScoreUrl(url), `${prefix} / ${kind} (built in ${file}) must be scrubbed, or added to PUBLIC_BUILDERS with a reason`).not.toContain(tokens[0]!);
@@ -582,17 +586,29 @@ describe("a quick match's home token, /q/<token>: scrubbed wherever a URL carrie
 
   it("a `q` that is not the route root is an address and is left alone; the positive pair loses the token", () => {
     const t = HOMES[0]!;
+    // The segment after a slug `q`, with no home token's `qm_` in front: what the ROOT anchor alone decides (a home token
+    // itself is scrubbed wherever it stands, by the bare rule, below).
+    const segment = t.slice("qm_".length);
     // A competition or club slug `q` sits after a path segment, never at the root; `/quick/`, `/qr/` and `/faq/` are other words.
-    const addresses = [`/o/club/c/q/${t}`, `/live/club/q/${t}`, `/quick/${t}`, `/qr/${t}`, `/faq/${t}`, "/q", "/q/", `${ORIGIN}/q/?from=pad`];
+    const addresses = (x: string) => [`/o/club/c/q/${x}`, `/live/club/q/${x}`, `/quick/${x}`, `/qr/${x}`, `/faq/${x}`];
+    const plain = [...addresses(segment), "/q", "/q/", `${ORIGIN}/q/?from=pad`];
     let checked = 0;
-    for (const p of addresses) {
+    for (const p of plain) {
       for (const input of [p, p.startsWith("/") ? `${ORIGIN}${p}` : p]) {
         expect(scrubScoreUrl(input), input).toBe(input);
         checked++;
       }
     }
-    expect(checked).toBe(addresses.length * 2);
+    expect(checked).toBe(plain.length * 2);
     expect(scrubScoreUrl(`${ORIGIN}/q/${t}`)).toBe(`${ORIGIN}/q/${PLACEHOLDER}`);
+    expect(scrubScoreUrl(`${ORIGIN}/q/${segment}`), "the root rule takes any segment after /q/").toBe(`${ORIGIN}/q/${PLACEHOLDER}`);
+    // Plan 3 Task 5: a real home token at any of those addresses is still the match's credential, scrubbed by the bare rule.
+    let bare = 0;
+    for (const p of addresses(t)) {
+      expect(scrubScoreUrl(`${ORIGIN}${p}`), p).toBe(`${ORIGIN}${p.split(t).join(`qm_${PLACEHOLDER}`)}`);
+      bare++;
+    }
+    expect(bare).toBe(5);
   });
 
   it("PostHog: the home's pageview, and an autocaptured click on the pad's back link", () => {
