@@ -9,12 +9,18 @@ import "server-only";
 // NEW expiry (C2: one reminder per approach to expiry). A saved row keeps the stamp the save gave it.
 //
 // And the reminder already QUEUED for the old expiry ends (branch review B m6, controller PO rec 2026-11-08): a score that
-// lands between the sweep's claim and the worker's send would otherwise mail "deleted tomorrow" for a match now 7 days out,
-// and then a second reminder before the new expiry. It ends on the outbox's cancel path with QUICK_MATCH_REARMED_REASON, on
+// lands between the sweep's claim and the outbox worker's CLAIM of the reminder would otherwise mail "deleted tomorrow" for a
+// match now 7 days out, and then a second reminder before the new expiry. The window closes at the worker's claim, not at
+// its send: the cancel ends only `queued` rows, so a reminder already leased (`sending`) when the score lands still goes
+// out, and so does one whose attempt fails and is re-queued after the touch (attempt.ts markRetry), on its retry. Bounded:
+// the reminder's own outbox expiry is the OLD match expiry (quick-match-sweep.ts), so it never goes out after that. A
+// worker claim landing between this module's read and its cancel is the same residual (the two serialise on the row, so it
+// is never ended twice). It ends on the outbox's cancel path with QUICK_MATCH_REARMED_REASON, on
 // the system org's tenant handle (`cancelQueuedEmails` fences on `current_org_id()`: on the pool it would end nothing of the
 // system org's, cancel.ts G-7). Only a re-armed match whose reminder is still queued opens that transaction: one indexed read
 // of the outbox by kind and ref decides it (EXPLAIN: an Index Scan on `email_outbox_replace_idx`, the kind, ref type and ref
-// as its Index Cond), so a scored rally on a match with nothing queued pays one read.
+// as its Index Cond), so a scored rally on a match with nothing queued pays one read. A failed end is logged as its own line,
+// never thrown: the touch committed before it, and the callers' "touch failed" would report a write that stands (review m-4).
 //
 // Two doors, one rule:
 //   - `touchQuickMatchActivity(id)`: the home's own actions (plan 2's Score tap);
@@ -24,12 +30,13 @@ import "server-only";
 //
 // PRIVILEGED (the pooled `sql`, not a tenant transaction): the scoring caller holds no system-org session, and runs this
 // after its own transaction has closed. Import-light on purpose — the db client, the constants, the outbox's cancel leaf
-// (type-only imports) and the delete module's ref-type constant — so the scoring path's call adds nothing of the home
-// read's graph.
+// (type-only imports), the delete module's ref-type constant and the logger — so the scoring path's call adds nothing of
+// the home read's graph.
 import { sql, withTenant } from "@/lib/db";
 import { QUICK_MATCH_EXPIRY_DAYS, QUICK_MATCH_SYSTEM_ORG_ID } from "@/lib/quick-match-constants";
 import { QUICK_MATCH_REARMED_REASON, cancelQueuedEmails } from "@/server/email-outbox/cancel";
 import type { OutboxKind } from "@/server/email-outbox/constants";
+import { log } from "@/server/logger";
 import { QUICK_MATCH_OUTBOX_REF_TYPE } from "./quick-match-delete";
 
 const DAY_MS = 24 * 3600 * 1000;
@@ -41,23 +48,28 @@ const expiryFrom = (now: Date): Date => new Date(now.getTime() + QUICK_MATCH_EXP
 /** The rows a touch wrote: `rearmed` when it moved the expiry (unsaved), so a reminder queued for the old one is stale. */
 type Touched = { id: string; rearmed: boolean };
 
-/** End the reminder still queued for an expiry the touch just moved (see the header). Nothing queued: one read, no transaction. */
+/** End the reminder still queued for an expiry the touch just moved (see the header). Nothing queued: one read, no transaction.
+ *  Never throws: the touch it follows has committed, so a failure here is logged as itself (ids only), not as the touch's. */
 async function endStaleReminders(touched: readonly Touched[]): Promise<void> {
   const ids = touched.filter((t) => t.rearmed).map((t) => t.id);
   if (ids.length === 0) return;
-  const queued = await sql<{ ref_id: string }[]>`
-    select distinct ref_id from email_outbox
-     where ref_type = ${QUICK_MATCH_OUTBOX_REF_TYPE} and ref_id = any(${ids}::text[]) and kind = ${REMINDER_KIND} and status = 'queued'`;
-  if (queued.length === 0) return;
-  // The ended rows are dropped: the reminder kind has no ended-badly hook (hooks.ts KIND_HOOKS), as quick-match-save.ts says.
-  await withTenant(QUICK_MATCH_SYSTEM_ORG_ID, (tx) =>
-    cancelQueuedEmails(tx, {
-      kind: REMINDER_KIND,
-      refType: QUICK_MATCH_OUTBOX_REF_TYPE,
-      refIds: queued.map((q) => q.ref_id),
-      reason: QUICK_MATCH_REARMED_REASON,
-    }),
-  );
+  try {
+    const queued = await sql<{ ref_id: string }[]>`
+      select distinct ref_id from email_outbox
+       where ref_type = ${QUICK_MATCH_OUTBOX_REF_TYPE} and ref_id = any(${ids}::text[]) and kind = ${REMINDER_KIND} and status = 'queued'`;
+    if (queued.length === 0) return;
+    // The ended rows are dropped: the reminder kind has no ended-badly hook (hooks.ts KIND_HOOKS), as quick-match-save.ts says.
+    await withTenant(QUICK_MATCH_SYSTEM_ORG_ID, (tx) =>
+      cancelQueuedEmails(tx, {
+        kind: REMINDER_KIND,
+        refType: QUICK_MATCH_OUTBOX_REF_TYPE,
+        refIds: queued.map((q) => q.ref_id),
+        reason: QUICK_MATCH_REARMED_REASON,
+      }),
+    );
+  } catch (err) {
+    log.error({ err, quickMatchIds: ids }, "quick match: ending the reminder queued for the old expiry failed (the touch stands)");
+  }
 }
 
 /** Mark activity on one quick match: `last_activity_at = now`, and while unsaved `expires_at` re-armed

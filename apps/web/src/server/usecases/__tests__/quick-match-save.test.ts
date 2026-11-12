@@ -92,22 +92,26 @@ vi.mock("@/lib/db", async (orig) => {
       async (tx) => {
         if (!plan.armed) return fn(tx);
         await tx`set local enable_seqscan = off`;
-        const out = await fn(tx);
-        // This transaction's own use of the index (null when there is no such index): Postgres counts an index's scans and the
-        // entries they returned per transaction (pg_stat_get_xact_numscans / _tuples_returned), synchronously, so no other
-        // suite's work can reach the numbers.
+        // The save's own use of the index (null when there is no such index), as DELTAS around it. The counters
+        // (pg_stat_get_xact_numscans / _tuples_returned) are this backend's PENDING stats, which Postgres 15+ flushes on a timer,
+        // not at each commit: on a pooled connection they still hold earlier transactions' scans (measured: 2 at the start of
+        // this one), so an absolute read reds whenever an earlier test used the index on the same connection (review I1).
         const read = async () =>
           (
             await tx<{ n: number | null; e: number | null }[]>`
               select pg_stat_get_xact_numscans(to_regclass('quick_matches_unsaved_email_idx'))::int as n,
                      pg_stat_get_xact_tuples_returned(to_regclass('quick_matches_unsaved_email_idx'))::int as e`
           )[0];
+        const delta = (from: number | null | undefined, to: number | null | undefined): number | null =>
+          from != null && to != null ? to - from : null;
+        const baseline = await read();
+        const out = await fn(tx);
         const r = await read();
-        plan.scans = r?.n ?? null;
-        plan.entries = r?.e ?? null;
+        plan.scans = delta(baseline?.n, r?.n);
+        plan.entries = delta(baseline?.e, r?.e);
         await tx`select 1 from quick_matches where email_lower = lower(${plan.address}) and saved_by_user_id is null`;
         const after = await read();
-        plan.yardstick = after?.e != null && r?.e != null ? after.e - r.e : null;
+        plan.yardstick = delta(r?.e, after?.e);
         return out;
       },
       opts,

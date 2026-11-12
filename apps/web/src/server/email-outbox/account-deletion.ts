@@ -28,7 +28,10 @@ import "server-only";
 //     address from every match that carries it, so the deletion ends it too (branch review B m4). This module knows no quick match (it must
 //     not import a usecase, no-import-cycle.test.ts claim 1): the quick match release (usecases/quick-match-save.ts) ends those rows on the
 //     same transaction, through `endQueuedForDeletedAccount` below, so they end exactly as the account's own do, and then replaces the
-//     address with `deletedAccountPlaceholder` on every one of them, whatever its status, as step 3 does to the account's own.
+//     address with `deletedAccountPlaceholder` on every one of them, whatever its status, as step 3 does to the account's own. It matches
+//     the address case-FOLDED, unlike the legacy arm above (N-B): quick match mail never carries an account id, so there is no
+//     account to fence on, and a guest typed the spelling. A case-variant twin's quick match mail is reached too (accepted as rare;
+//     quick-match-save.ts says why).
 //
 // RESIDUAL (accepted): a pre-V472 invite queued to an address the account has SINCE CHANGED AWAY FROM is reached by neither arm. It names no
 // account (the account arm cannot find it) and no longer holds the account's current address (the legacy arm cannot find it), so that old

@@ -140,15 +140,27 @@ export async function saveQuickMatchForUser(userId: string, quickMatchId: string
  * PO rec 2026-11-08), whichever match it is about: one a stranger saved has forgotten the address (m9), its queued link mail
  * has not. It ends on the account deletion's own end path (`account_deleted`, email-outbox/account-deletion.ts), not
  * `cancelQueuedEmails`: that one fences on `current_org_id()` and this transaction is the pooled one, on which it would end
- * nothing of the system org's (cancel.ts G-7); a second, tenant transaction could fail apart from the deletion. The address
- * is case-folded as the rest of the release folds it. Index-served: the predicate is `email_outbox_replace_idx`'s (kind,
- * ref_type, lower(recipient)), partial on the live statuses that `status = 'queued'` implies. Returns the ended rows for
- * the route's `afterEndedBadly` (neither kind has a hook; the route hands every ended row on regardless).
+ * nothing of the system org's (cancel.ts G-7); a second, tenant transaction could fail apart from the deletion. Returns the
+ * ended rows for the route's `afterEndedBadly` (neither kind has a hook; the route hands every ended row on regardless).
+ *
+ * The address is case-folded, as the rest of the release folds it, where the account deletion's own legacy arm deliberately
+ * does not (account-deletion.ts N-B: `users.email` is case-sensitive, so a folded match could reach a case-variant twin
+ * account's rows). The account deletion fences that arm on `recipient_user_id is null` and can match exactly; quick match
+ * mail never carries an account id (enqueue.ts refuses one on a literal-address kind), so there is no account to fence on, and
+ * a guest's typed spelling is not the account's. Two residuals, both accepted as rare (branch review B): a case-variant
+ * twin's quick match mail is ended and scrubbed too; and mail sent to an address the account has since changed away from is
+ * not reached (the same gap as account-deletion.ts's RESIDUAL).
+ *
+ * The end is index-served: its predicate is `email_outbox_replace_idx`'s (kind, ref_type, lower(recipient)), partial on the
+ * live statuses that `status = 'queued'` implies.
  *
  * Then EVERY quick match mail to the address, whatever its status (sent, delayed, ended), loses it to the deleted account's
  * placeholder, as the account deletion's step 3 scrubs the account's own rows (controller ruling 2026-11-12: the same policy,
  * none of its own). After the end, which finds the queued rows by the address. A sent row keeps its status: the provider's
- * later events find it by its provider id, never by recipient (provider-events.ts).
+ * later events find it by its provider id, never by recipient (provider-events.ts). NOT index-served: with no status filter
+ * the partial `email_outbox_replace_idx` cannot serve it, so it reads every quick match outbox row (`email_outbox_ref_idx`
+ * by ref_type, then a filter on the recipient), of every status, up to retention, once per account deletion. Account
+ * deletion is rare, so no index is added for it (review m-1).
  */
 export async function releaseQuickMatchesOfDeletedAccount(tx: Tx, a: { userId: string; email: string }): Promise<EndedRow[]> {
   await tx`

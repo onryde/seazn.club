@@ -81,6 +81,18 @@ vi.mock("@/server/email-outbox", async (orig) => {
     },
   };
 });
+// The stale reminder's end (m6), behind a switch: an armed quick match's cancel throws, AFTER its touch has committed (review m-4).
+const cancelFault = vi.hoisted(() => ({ armed: new Set<string>() }));
+vi.mock("@/server/email-outbox/cancel", async (orig) => {
+  const real = await orig<typeof import("@/server/email-outbox/cancel")>();
+  return {
+    ...real,
+    cancelQueuedEmails: async (...args: Parameters<typeof real.cancelQueuedEmails>) => {
+      if (args[1].refIds.some((id) => cancelFault.armed.has(id))) throw new Error("armed: this cancel fails (test)");
+      return real.cancelQueuedEmails(...args);
+    },
+  };
+});
 // The scoring path's touch, behind a switch: off, a score commits and the touch that records it in last_activity_at has not run yet
 // (it runs after the append commits, best-effort: scoring.ts).
 const touchSwitch = vi.hoisted(() => ({ skipFixture: false }));
@@ -236,6 +248,8 @@ const remindersOf = (quickMatchId: string) => sql<ReminderRow[]>`
 /** Branch review B m6 (controller, PO rec 2026-11-08): the reason a touch ends a reminder queued for the expiry it moved. The fix
  *  round's word, typed here, so a rename in the code reds this file. */
 const REARMED_REASON = "quick_match_rearmed";
+/** The log line a failed stale-reminder end writes (review m-4): not the touch's failure, which committed before it. */
+const STALE_REMINDER_END_FAILED = "quick match: ending the reminder queued for the old expiry failed (the touch stands)";
 /** How an outbox row ended: its status, its reason, and whether its sealed body is gone. */
 const outboxEnd = async (id: string): Promise<{ status: string; last_error: string | null; cleared: boolean }> => {
   const [r] = await sql<{ status: string; last_error: string | null; cleared: boolean }[]>`
@@ -674,6 +688,38 @@ describe.skipIf(!HAS_DB)("the expiry sweep (DB)", () => {
     // The positive pair: the live reminder does send, through the same worker tick.
     await sendDue(rows[1]!.id);
     expect(sentTo(to), "the new expiry's reminder is mailed").toHaveLength(1);
+  });
+
+  it.each([
+    ["the home's touch", "home"],
+    ["the scoring path's touch, after a rally", "score"],
+  ] as const)("a stale reminder's end that fails is logged as itself, not as a failed touch (review m-4): %s; the touch stands", async (_, door) => {
+    const due = await create({ email: address(`rearm-fault-${door}`) });
+    await expiresIn(due.id, 23);
+    expect(await sweepQuickMatches({ baseUrl: BASE, onlyIds: [due.id] })).toEqual({ ...ZERO, checked: 1, reminded: 1 });
+    const [old] = await remindersOf(due.id);
+    const linked = door === "score" ? await scoreLink(due) : null;
+    const start = linked ? (await firstRallyFor(linked.fixtureId))[0] : null;
+    const logged = logs.lines.length;
+    cancelFault.armed.add(due.id);
+    try {
+      if (linked) {
+        const res = await post(linked.secret, linked.fixtureId, start!);
+        expect(res.status, await res.clone().text()).toBe(201);
+      } else {
+        await expect(touchQuickMatchActivity(due.id), "the touch answers: its own write committed").resolves.toBeUndefined();
+      }
+    } finally {
+      cancelFault.armed.delete(due.id);
+    }
+    const s = await stateOf(due.id);
+    expect(s!.reminder_sent_at, "the touch stands: the reminder re-armed").toBeNull();
+    expect(s!.expires_at!.getTime() - s!.last_activity_at.getTime(), "and the expiry moved").toBe(SPEC_EXPIRY_DAYS * DAY_MS);
+    expect((await outboxEnd(old!.id)).status, "premise: the armed cancel ended nothing").toBe("queued");
+    // The line's words, typed here: a failed end is its own event, and the touch it follows committed.
+    const said = logs.lines.slice(logged).map((l) => String(l.at(-1)));
+    expect(said.filter((m) => m === STALE_REMINDER_END_FAILED), "its own line, once").toHaveLength(1);
+    expect(said.filter((m) => m.includes("touch failed")), "never reported as a failed touch").toEqual([]);
   });
 
   it.each([
