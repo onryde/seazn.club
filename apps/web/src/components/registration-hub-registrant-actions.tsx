@@ -218,7 +218,9 @@ export function RegistrationHubRegistrantActions({
       status: optimisticStatus,
       approval,
       amount_cents: amountCents,
+      // Already THIS payment's refunds (the detail passes ownPaymentRefundedCents), so nothing of it is a late payment's.
       refunded_cents: refundedCents,
+      late_refunded_cents: 0,
       division_fee_cents: divisionFeeCents,
       payment_intent_id: paymentIntentId,
       entry_payment_intent_id: entryPaymentIntentId,

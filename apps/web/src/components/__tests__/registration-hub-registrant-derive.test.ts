@@ -42,6 +42,8 @@ const NOT_A_SOLO_SIGNUP = {
   entry_payment_intent_id: null,
   // Not approved ahead of payment unless a case says so (polish wave P5, W12: V511 `approved_at`).
   approved_at: null,
+  // No late payment sent back unless a case says so (V510; polish wave final fix m2).
+  late_refunded_cents: 0,
 } as const;
 
 describe("REGISTRANT_STATUS_STYLE", () => {
@@ -769,6 +771,30 @@ describe("deriveRegistrantActionFlags", () => {
           entry_payment_intent_id: "pi_123",
         }).canRefund,
       ).toBe(false);
+    });
+
+    // Polish wave final fix m2: the cap is what is left of THIS payment - its refunds minus the refunds of LATE payments (V510,
+    // `ownPaymentRefundedCents`), the same cap `refundRegistration` applies. A re-promoted entry whose earlier, late payment was sent
+    // back in full and which then paid again has refunded_cents == amount_cents, all of it late: its own payment is untouched.
+    it("is TRUE on an entry whose refunds were all of a LATE payment, and follows the remaining balance of its own (m2)", () => {
+      const row = (refunded_cents: number, late_refunded_cents: number) =>
+        deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,
+          ...base,
+          status: "withdrawn",
+          amount_cents: 1500,
+          refunded_cents,
+          late_refunded_cents,
+          payment_intent_id: "pi_again",
+          entry_payment_intent_id: "pi_again",
+        }).canRefund;
+      const cases: [refunded: number, late: number, refundable: boolean][] = [
+        [1500, 1500, true], // all late: the current payment is whole
+        [2000, 1500, true], // 500 of the current payment back: 1000 left
+        [3000, 1500, false], // the current payment fully back
+        [1500, 0, false], // no late refunds: the history IS this payment's
+      ];
+      for (const [refunded, late, refundable] of cases) expect(row(refunded, late), `refunded ${refunded}, late ${late}`).toBe(refundable);
+      expect(cases.length, "anti-vacuity").toBe(4);
     });
 
     // The case the flag EXISTS for. Past refund_lock_at, withdrawCore
