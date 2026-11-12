@@ -60,6 +60,7 @@ const PROPS: ActionProps = {
   entryPaymentIntentId: null,
   refundedCents: 0,
   lastRemindedAt: null,
+  approvedAt: null,
 };
 const mount = (o: Partial<ActionProps> = {}) => renderIsland(RegistrationHubRegistrantActions, { ...PROPS, ...o });
 const action = (island: ReturnType<typeof mount>, name: string) =>
