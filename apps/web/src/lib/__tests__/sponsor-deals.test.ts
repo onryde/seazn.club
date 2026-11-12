@@ -64,6 +64,10 @@ const SPEC_PAYMENT_STATUSES = ["pending", "paid", "failed", "refunded", "none"];
 const SPEC_END_REASONS = [
   "refunded", "dispute_lost", "ended_now", "expired", "competition_finished", "legacy", "duplicate_payment", "written_off",
 ];
+/** The end reasons after which an offline deal that went live and ended unpaid is still DUE: the sweep's two (its term ran out,
+ *  its competition finished). Task 23 carries 1 and 4, and archive spec §8 row 7. Every other reason, `written_off` included
+ *  (archive preflight P2), is settled or was never a deal. */
+const SPEC_STILL_DUE_REASONS: ReadonlySet<string> = new Set(["expired", "competition_finished"]);
 /** The order allowedActions answers in: Write off sits beside Mark as paid, the other answer to an invoice still due. */
 const SPEC_DEAL_ACTIONS = ["send_invoice", "resend_invoice", "mark_paid", "write_off", "approve", "refund", "end_now"];
 
@@ -873,14 +877,13 @@ describe("an ENDED deal still due (Task 23 carries 1 and 4): late Mark as paid, 
   });
 
   it("every end reason × an offline unpaid deal that went live: only the sweep's two leave it due (8 reasons × pending/failed × email or none = 32 checked)", () => {
-    const DUE_AFTER = new Set(["expired", "competition_finished"]);
     let checked = 0;
     let due = 0;
     for (const reason of SPEC_END_REASONS as EndReason[]) {
       for (const p of ["pending", "failed"] as PaymentStatus[]) {
         for (const email of ["accounts@harbourside.example", null]) {
           const d = ended({ ended_reason: reason, payment_status: p, sponsor_email: email });
-          const isDue = DUE_AFTER.has(reason);
+          const isDue = SPEC_STILL_DUE_REASONS.has(reason);
           const label = `${reason}/${p}/${email ? "email" : "no email"}`;
           expect(endedStillDue(d), label).toBe(isDue);
           expect(allowedActions(d), label).toEqual(isDue ? (email ? [RI, MP, WO] : [MP, WO]) : []);
@@ -1187,9 +1190,6 @@ describe("dealChip (spec §5.2 chips, D2: Paid is derived)", () => {
 // Expected values come from §8 and the declared value sets (DEAL_STATUSES, END_REASONS, PAYMENT_STATUSES, PAYMENT_METHODS),
 // never from blocksArchive or the predicates it composes.
 describe("blocksArchive — what holds a sponsor from Archive (archive spec D9, D17, §8; preflight P2)", () => {
-  /** §8 row 7: an ended deal still asks for money only after these two end reasons (the term ran out, the competition finished).
-   *  Every other reason, `written_off` included (P2), is settled or was never a deal. */
-  const SPEC_STILL_DUE_REASONS: ReadonlySet<string> = new Set(["expired", "competition_finished"]);
   /** An ended deal: the caller names the reason and the money. */
   const endedDeal = (over: Partial<SponsorDeal>): SponsorDeal => deal({ deal_status: "ended", ended_at: T0, ...over });
   /** §8 row 7's shape: offline, went live, unpaid. Only its end reason decides. */
@@ -1315,14 +1315,38 @@ describe("blocksArchive — what holds a sponsor from Archive (archive spec D9, 
     expect(checked, "still-due reasons checked").toBe(SPEC_STILL_DUE_REASONS.size);
   });
 
-  it("legacy: an ended legacy order never holds its sponsor, in any money state (PAYMENT_STATUSES of a pre-deals order, count reported)", () => {
+  it("legacy: an ended legacy order never holds its sponsor, in any money state; its twin differing only in reason holds whenever unpaid (PAYMENT_STATUSES, count reported)", () => {
+    /** The file header's rule: "unpaid" is payment `pending` or `failed`. */
+    const SPEC_UNPAID: ReadonlySet<string> = new Set(["pending", "failed"]);
     let checked = 0;
-    for (const p of ["pending", "paid", "failed", "refunded"] as PaymentStatus[]) {
-      expect(blocksArchive(endedDeal({ payment_status: p, ended_reason: "legacy", invoice_number: null })), `legacy/${p}`).toBe(false);
+    let discriminating = 0;
+    for (const p of PAYMENT_STATUSES) {
+      // The still-due shape (offline, went live, ended), so the endedStillDue arm CAN answer true: only the reason differs.
+      const legacy = endedDeal({ payment_method: "offline", payment_status: p, live_at: T0, ended_reason: "legacy", invoice_number: null });
+      const twin: SponsorDeal = { ...legacy, ended_reason: "expired" };
+      expect(blocksArchive(legacy), `legacy/${p}`).toBe(false);
+      expect(blocksArchive(twin), `expired twin/${p}`).toBe(SPEC_UNPAID.has(p));
+      if (SPEC_UNPAID.has(p)) discriminating++;
       checked++;
     }
-    expect(checked, "legacy money states checked").toBe(4);
-    // The positive pair: the same ended shape with a still-due reason, offline and live, holds.
-    expect(blocksArchive(offlineWentLiveUnpaid("expired"))).toBe(true);
+    expect(checked, "money states checked").toBe(PAYMENT_STATUSES.length);
+    expect(discriminating, "rows whose twin holds").toBe([...PAYMENT_STATUSES].filter((p) => SPEC_UNPAID.has(p)).length);
+    expect(discriminating).toBeGreaterThan(0);
+  });
+
+  it("legacy, the second barrier: a legacy reason on a deal that is not ended never holds (rows the DB refuses by sponsor_orders_ended_shape; not-ended DEAL_STATUSES, count reported)", () => {
+    // Impossible rows on purpose: they pin the deliberate redundant `!== "legacy"` conjunct (sponsor-deals.ts blocksArchive), so
+    // dropping it is caught here rather than only by the CHECK (deals-migration.test.ts refuses these rows).
+    let checked = 0;
+    for (const s of DEAL_STATUSES) {
+      if (s === "ended") continue;
+      const legacy: SponsorDeal = { ...deal({ deal_status: s }), ended_reason: "legacy" };
+      expect(blocksArchive(legacy), `${s} + legacy`).toBe(false);
+      // The positive twin: the same deal without the reason holds (it is live or open).
+      expect(blocksArchive({ ...legacy, ended_reason: null }), `${s}, no reason`).toBe(true);
+      checked++;
+    }
+    expect(checked, "not-ended statuses checked").toBe(DEAL_STATUSES.length - 1);
+    expect(checked).toBeGreaterThan(0);
   });
 });

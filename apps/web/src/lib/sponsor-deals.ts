@@ -228,7 +228,11 @@ export function endedStillDue(
  *  the table in §8)? A deal that is LIVE or OPEN can still put the sponsor on a public surface, and an ended deal still due
  *  (`endedStillDue`) still asks for money: "End or settle its deal first." Every other ended deal is settled (`written_off`
  *  included: the club gave the money up) or was never a deal (`legacy`). The ONE rule: the archive usecase refuses on it and
- *  the console's Archive card disables on it. */
+ *  the console's Archive card disables on it.
+ *  A legacy order is excluded three times over: by name here, by the `sponsor_orders_ended_shape` CHECK (a reason means the
+ *  deal is ended, so it is never live or open) and by STILL_DUE_AFTER (legacy is not a still-due reason). The `!== "legacy"`
+ *  conjunct is a deliberate, redundant second barrier: it keeps a pre-deals order from ever holding a sponsor even if one of
+ *  the other two moves. */
 export function blocksArchive(
   d: Pick<SponsorDeal, "deal_status" | "payment_method" | "payment_status" | "live_at" | "ended_reason">,
 ): boolean {
