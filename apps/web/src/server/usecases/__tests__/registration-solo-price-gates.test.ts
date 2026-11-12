@@ -66,7 +66,16 @@ async function rig(o: { teamFee: number; soloFee: number | null; approval: "auto
     variant_key: "score",
     config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
   });
-  await putRegistrationSettings(auth, division.id, {
+  await applySettings(auth, division.id, o);
+  const [row] = await sql<{ org_slug: string; comp_slug: string }[]>`
+    select o.slug as org_slug, c.slug as comp_slug from competitions c join organizations o on o.id = c.org_id
+     where c.id = ${competition.id}`;
+  return { auth, divisionId: division.id, ctx: { orgSlug: row!.org_slug, compSlug: row!.comp_slug } };
+}
+
+/** The division's registration settings through the REAL organiser door (also the "organiser edits the fees later" step). */
+async function applySettings(auth: AuthCtx, divisionId: string, o: { teamFee: number; soloFee: number | null; approval: "auto" | "manual" }) {
+  await putRegistrationSettings(auth, divisionId, {
     enabled: true,
     entrant_kind: "team",
     fee_cents: o.teamFee,
@@ -80,10 +89,6 @@ async function rig(o: { teamFee: number; soloFee: number | null; approval: "auto
     capacity: null,
     refund_lock_at: null,
   });
-  const [row] = await sql<{ org_slug: string; comp_slug: string }[]>`
-    select o.slug as org_slug, c.slug as comp_slug from competitions c join organizations o on o.id = c.org_id
-     where c.id = ${competition.id}`;
-  return { auth, divisionId: division.id, ctx: { orgSlug: row!.org_slug, compSlug: row!.comp_slug } };
 }
 
 /** One entry through the REAL submit: a solo sign-up, or a team. Returns its id and what submit charged it. */
@@ -213,5 +218,65 @@ describe.skipIf(!HAS_DB)("a solo sign-up's money controls read the SOLO's own pr
       checked += 1;
     }
     expect(checked, "anti-vacuity: solo and team").toBe(2);
+  });
+
+  // Re-review N1: m3 priced the promoted solo by its own fee but still decided "confirm at once" on the TEAM fee (`promotionSeats`). In an
+  // auto-approval division free for teams with a 5.00 solo fee, a waitlisted solo was promoted straight to CONFIRMED with 5.00 unpaid -
+  // Mark paid and the reminder gone (both need `pending`) - and still mailed a pay link. The confirm decision now reads the row's own
+  // price: a promotion confirms at once only on auto approval with nothing owed BY THIS ENTRY. Expected outcomes come from that rule.
+  const entrantOf = async (id: string) =>
+    (await sql<{ entrant_id: string | null }[]>`select entrant_id from registrations where id = ${id}`)[0]!.entrant_id;
+  const payTokens = async (id: string) =>
+    (await sql<{ n: number }[]>`select count(*)::int as n from registration_pay_tokens where registration_id = ${id}`)[0]!.n;
+
+  it("auto approval, team fee 0, solo fee 5.00: a promoted solo stays PENDING owing 5.00 (pay link, Mark paid); a team row is confirmed at once (N1)", async () => {
+    const r = await rig({ teamFee: 0, soloFee: 500, approval: "auto" });
+    const solo = await submit(r, true);
+    expect(solo.status, "premise: the solo owes its fee").toBe("pending");
+    await waitlistRegistration(r.auth, solo.id);
+
+    const promoted = await promoteFromWaitlist(r.auth, r.divisionId, { registrationId: solo.id });
+    expect(promoted!.amount_cents, "charged its own price").toBe(500);
+    expect(promoted!.status, "not confirmed with the fee unpaid").toBe("pending");
+    // The promotion mail carries a pay link (recorded with its token) - right for an entry that owes; it is queued after the response.
+    await vi.waitFor(async () => expect(await payTokens(solo.id), "the pay link the promotion mail carries").toBe(1));
+    // ...and the money controls that need `pending` still work: the reminder, then Mark paid confirms it.
+    await sendPaymentReminder(r.auth, solo.id, ORIGIN);
+    expect(await reminderRows(solo.id), "one reminder queued").toBe(1);
+    expect((await markRegistrationPaidOffline(r.auth, solo.id)).status).toBe("confirmed");
+
+    // Control, same division: a TEAM row is free here, so its promotion confirms and seats it at once (the RS010 rule, unchanged). A team
+    // cannot be waitlisted from free/auto at submit (it confirms), so it reaches the queue the way the solo did: owing, waitlisted, then
+    // the organiser drops the team fee to 0 - the promotion decides on the settings as they are now.
+    await applySettings(r.auth, r.divisionId, { teamFee: 600, soloFee: 500, approval: "auto" });
+    const team = await submit(r, false);
+    expect(team.status, "premise: the team owes 6.00").toBe("pending");
+    await waitlistRegistration(r.auth, team.id);
+    await applySettings(r.auth, r.divisionId, { teamFee: 0, soloFee: 500, approval: "auto" });
+    const promotedTeam = await promoteFromWaitlist(r.auth, r.divisionId, { registrationId: team.id });
+    expect(promotedTeam!.amount_cents).toBe(0);
+    expect(promotedTeam!.status, "a free team on auto approval confirms on promotion").toBe("confirmed");
+    expect(await entrantOf(team.id), "and is seated").not.toBeNull();
+  });
+
+  it("the mirror: auto approval, team fee 6.00, solo fee 0 - a promoted solo owes nothing and is CONFIRMED at once; a team row stays pending owing 6.00 (N1)", async () => {
+    // A free solo confirms at submit, so it reaches the queue owing (solo fee 5.00), waitlisted, and the organiser then makes solos free.
+    const r = await rig({ teamFee: 6000, soloFee: 500, approval: "auto" });
+    const solo = await submit(r, true);
+    const team = await submit(r, false);
+    expect([solo.status, team.status], "premise: both owe").toEqual(["pending", "pending"]);
+    await waitlistRegistration(r.auth, solo.id);
+    await waitlistRegistration(r.auth, team.id);
+    await applySettings(r.auth, r.divisionId, { teamFee: 6000, soloFee: 0, approval: "auto" });
+
+    const promotedSolo = await promoteFromWaitlist(r.auth, r.divisionId, { registrationId: solo.id });
+    expect(promotedSolo!.amount_cents).toBe(0);
+    expect(promotedSolo!.status, "nothing owed on auto approval: confirmed, not left pending with no way to confirm").toBe("confirmed");
+    expect(await entrantOf(solo.id), "a solo seats nobody until it is assigned to a team").toBeNull();
+
+    const promotedTeam = await promoteFromWaitlist(r.auth, r.divisionId, { registrationId: team.id });
+    expect(promotedTeam!.amount_cents).toBe(6000);
+    expect(promotedTeam!.status, "the team owes its fee").toBe("pending");
+    expect(await entrantOf(team.id)).toBeNull();
   });
 });

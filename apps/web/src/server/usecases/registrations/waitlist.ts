@@ -146,10 +146,20 @@ async function recordSkippedPromotion(tx: Tx, divisionId: string, registrationId
 
 /** Whether promoting a waitlisted entry under these settings SEATS it at once: a free entry on an auto-approval division confirms
  *  (and so materialises) on the spot. Every other promotion only opens a pay window or waits for the organiser, and seats nobody -
- *  its seat is made later, by a door that carries its own seat gate. The one statement of the rule, read by `promoteWaitlistedRow`
- *  to decide whether to materialise and by the callers that decide whether to open a gate. */
+ *  its seat is made later, by a door that carries its own seat gate. The one statement of the rule, read by `promoteWaitlistedRow`'s
+ *  fail-closed check and by the callers that decide whether to open a gate. Whether the promoted row itself confirms is decided on its
+ *  own price (`promotionConfirmsRow`); for a team row the two agree. */
 export function promotionSeats(settings: RegistrationSettingsRow | null): settings is RegistrationSettingsRow {
   return settings?.approval === "auto" && (settings.fee_cents ?? 0) === 0;
+}
+
+/** Whether promoting ONE row confirms it on the spot (re-review N1): auto approval and nothing owed by THIS entry - its own price, the
+ *  one the promotion just wrote (m3: a solo's `free_agent_fee_cents` when set, else the team fee). For a team row that is exactly
+ *  `promotionSeats` (its price is the team fee); a solo's differs when the two fees differ. Deciding on the team fee confirmed a solo
+ *  owing 5.00 in a free-for-teams division with the fee unpaid, and left a free solo in a paid-for-teams division pending with no door
+ *  to confirm it. A solo seats nobody (`materialise` confirms it and returns), so the seat gate is not needed for one. */
+function promotionConfirmsRow(settings: RegistrationSettingsRow | null, amountCents: number): settings is RegistrationSettingsRow {
+  return settings?.approval === "auto" && amountCents === 0;
 }
 
 /** The seat gate for an AUTOMATIC promotion on `divisionId` (a withdrawal, an expiry, a lapsed pay window), or undefined when a
@@ -313,7 +323,8 @@ export async function promoteWaitlistedRow(
   // division sat at `pending` forever: no entrant materialised, never
   // counted toward the public entrant list, while `notifyPromoted` (below)
   // still emailed the registrant as if they were in.
-  if (promotionSeats(settings)) {
+  // Re-review N1: decided on the row's OWN price (above), not the team fee.
+  if (promotionConfirmsRow(settings, row.amount_cents)) {
     await materialise(tx, row, settings.entrant_kind, seatGate, "waitlist");
     const [confirmed] = await tx<RegistrationWithGroupRow[]>`
       select ${regGroupCols(tx)}
