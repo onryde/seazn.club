@@ -15,7 +15,7 @@ import { materialise } from "./materialise";
 import { openRegistrationSeatGateFor } from "./waitlist";
 import { paymentReminderMessage, payDeadlineOf } from "./mail";
 import { issuePayLink, recordPayToken } from "./pay-token";
-import { stripeRefund, queueRefundReceipt } from "./refunds";
+import { stripeRefund, queueRefundReceipt, recordRefundFailure, registrationRefundKey } from "./refunds";
 import { withdrawCore } from "./withdraw";
 import { queueRegistrationApprovedMails, queueRegistrationPaidMail } from "./lifecycle-mail";
 import { REMINDER_CAP_PER_DAY, REMINDER_LIMIT_CODE } from "@/lib/registration-reminder";
@@ -301,7 +301,10 @@ export async function refundRegistration(
   // for the first to commit and reads the cap it left. The lock is held across the Stripe call on purpose (a refund is rare and
   // per entry; a second refund of the same money is the failure being prevented). `orgReg` reads `for update` (entry and cart rows,
   // in the order checkout completion locks them).
-  const { row, receiptId } = await withTenant(auth.orgId, async (tx) => {
+  // Set when Stripe itself failed (not the booking after it): recorded once the transaction has rolled back, so the next press carries a
+  // new key when Stripe answered (final review m1).
+  let stripeFailure: unknown = undefined;
+  const refunded = await withTenant(auth.orgId, async (tx) => {
     const reg = await orgReg(tx, regId);
     // Polish wave W8 (walkthrough s08b): THIS entry's own payment, never the cart's. The cart's `payment_intent_id` is set by
     // whichever entry paid last, so on a cart where only a sibling paid it named the sibling's payment, and Refund on the unpaid
@@ -319,11 +322,15 @@ export async function refundRegistration(
     if (amount > remaining) {
       throw new HttpError(422, `Refund exceeds the remaining ${remaining} cents`);
     }
-    // The key names THIS refund: the entry, what its books held when the cap was read (under the lock, so it only moves when a
-    // refund is booked) and the amount. A retry of the same press after a failed booking is the same refund at Stripe; a second
-    // legitimate partial refund of the same amount reads a different total and so is a different key.
-    const refund = await stripeRefund(intent, amount, {
-      idempotencyKey: `registration-refund:${regId}:${reg.refunded_cents}:${amount}`,
+    // The key names THIS refund (`registrationRefundKey`, the one format every refund path shares - final review m6): the entry, what
+    // its books held when the cap was read (under the lock, so it only moves when a refund is booked), the amount, and the failures
+    // Stripe answered so far. A retry of the same press after a failed booking is the same refund at Stripe; a second legitimate
+    // partial refund of the same amount reads a different total and so is a different key; a retry after Stripe refused (m1) is a
+    // new key, never the refusal replayed for 24 hours.
+    const idempotencyKey = await registrationRefundKey(tx, reg, amount);
+    const refund = await stripeRefund(intent, amount, { idempotencyKey }).catch((err: unknown) => {
+      stripeFailure = err;
+      throw err;
     });
     const [div] = await tx<{ competition_id: string }[]>`
       select competition_id from divisions where id = ${reg.division_id}`;
@@ -346,7 +353,13 @@ export async function refundRegistration(
       stripe_refund_id: refund.id,
     }, auth.userId);
     return { row: await orgRegAfter(tx, regId), receiptId };
+  }).catch(async (err: unknown) => {
+    if (stripeFailure !== undefined) {
+      await recordRefundFailure({ regId, competitionId: ctx.competition_id, orgId: auth.orgId, mode: "manual", err: stripeFailure, actorId: auth.userId });
+    }
+    throw err;
   });
+  const { row, receiptId } = refunded;
   // A request: the first attempt is made after the response.
   if (receiptId !== null) deferred(() => dispatchNow([receiptId]));
   return row;

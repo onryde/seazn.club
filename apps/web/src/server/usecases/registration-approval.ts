@@ -38,9 +38,7 @@ import {
   releaseSoloSignUpPlacement,
   withdrawRegistrationOrganiser,
   clearExpiresIfNoLongerNeeded,
-  stripeRefund,
-  queueRefundReceipt,
-  maybeAlertRegistrationRefundFailed,
+  refundEntryUnderLock,
   inviteUnclaimedMembers,
   queueRegistrationApprovedMails,
   queueRegistrationRejectedMails,
@@ -207,10 +205,10 @@ export async function approveRegistration(
  * manual-approval entry sitting at exactly `paid` awaiting review — before
  * this, that state could be APPROVED but never DECLINED, the precise gap
  * ruling B was invented to avoid. Rejecting a paid entry refunds it in the
- * same call (not the same SQL transaction — the Stripe network call happens
- * between two locked tx's, same two-phase pattern as
- * `withdrawCore`/`refundRegistration`: this entry's own remaining balance
- * only, never the cart's whole intent).
+ * same call: after the rejection commits, `refundEntryUnderLock` moves and
+ * books it under the entry's lock (final review m6, the shape every refund of
+ * an entry's own payment shares): this entry's own remaining balance only,
+ * never the cart's whole intent.
  */
 export async function rejectRegistration(
   auth: AuthCtx,
@@ -304,51 +302,22 @@ export async function rejectRegistration(
   }
 
   // The amount was decided in the transaction (see `refundCents` there): the mail already told the payer this much is coming back.
-  const ownIntent = result.refundable?.entry_payment_intent_id ?? null;
-  if (result.refundable && ownIntent) {
-    const remaining = result.refundCents;
-    if (remaining > 0) {
-      try {
-        // Read BEFORE the money moves (a failure after it would report a refund failure for a refund that went through).
-        const refundCtx = await divisionCtx(sql, result.row.division_id);
-        const refund = await stripeRefund(ownIntent, remaining);
-        // The registrant's receipt is queued in the same transaction as the refund's record; the request makes the first attempt.
-        const receiptId = await sql.begin(async (tx) => {
-          await tx`
-            update registrations set refunded_cents = refunded_cents + ${remaining}, updated_at = now()
-            where id = ${regId}`;
-          await tx`
-            update registration_groups
-            set refunded_cents = refunded_cents + ${remaining}, refunded_at = now(), updated_at = now()
-            where id = ${result.refundable!.group_id}`;
-          return queueRefundReceipt(tx, { reg: result.refundable!, ctx: refundCtx, amountCents: remaining, refundId: refund.id });
-        });
-        if (receiptId !== null) deferred(() => dispatchNow([receiptId]));
-        await audit(sql, result.competitionId!, auth.orgId, "registration.refunded", {
-          registration_id: regId,
-          amount_cents: remaining,
-          mode: "reject",
-          stripe_refund_id: refund.id,
-        }, auth.userId);
-      } catch (err) {
-        // Same fail-open contract as withdrawCore: a refund failure must not
-        // undo the reject decision — surfaces on the organiser console
-        // (rejected + refunded_cents < amount_cents).
-        await audit(sql, result.competitionId!, auth.orgId, "registration.refund_failed", {
-          registration_id: regId,
-          mode: "reject",
-        }, auth.userId);
-        await maybeAlertRegistrationRefundFailed({
-          registrationId: regId,
-          orgId: auth.orgId,
-          competitionId: result.competitionId!,
-          amountCents: remaining,
-          currency: result.refundable!.currency,
-          paymentIntentId: ownIntent,
-          reason: err instanceof Error ? err.message : String(err),
-          mode: "reject",
-        });
-      }
+  // Final review m6: moved, capped and booked under the entry's lock with the shared key (`refundEntryUnderLock`), so an organiser's
+  // Refund pressed during this call waits and reads what it left instead of sending the same money back twice. A failure is recorded
+  // and alerted there; it never undoes the reject decision (it surfaces on the console as rejected + refunded_cents < amount_cents).
+  if (result.refundable?.entry_payment_intent_id && result.refundCents > 0) {
+    const refunded = await refundEntryUnderLock({
+      regId,
+      ctx: await divisionCtx(sql, result.row.division_id),
+      capCents: result.refundCents,
+      mode: "reject",
+      actorId: auth.userId,
+      currency: result.refundable.currency,
+    });
+    // The request makes the first attempt, after the response.
+    if (refunded?.receiptId) {
+      const receiptId = refunded.receiptId;
+      deferred(() => dispatchNow([receiptId]));
     }
   }
 

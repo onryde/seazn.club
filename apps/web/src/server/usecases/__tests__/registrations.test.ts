@@ -698,6 +698,7 @@ describe.skipIf(!HAS_DB)("registration flows (doc 16 §1.1, PROMPT-20a)", () => 
         reverse_transfer: true,
         refund_application_fee: true,
       }),
+      expect.objectContaining({ idempotencyKey: expect.stringMatching(/^registration-refund:/) }), // the shared locked-refund key (final review m6)
     );
     const firstRow = await loadWithGroup(first.registration.id);
     expect(firstRow.refunded_cents).toBe(firstRow.amount_cents);
@@ -3183,6 +3184,7 @@ describe.skipIf(!HAS_DB)("RS002: entry-level refunds (multi-entry cart hazards)"
 
     expect(stripeMock.refundCreate).toHaveBeenCalledWith(
       expect.objectContaining({ payment_intent: intent, amount: a.amount_cents }),
+      expect.objectContaining({ idempotencyKey: expect.stringMatching(/^registration-refund:/) }), // the shared locked-refund key (final review m6)
     );
     const aAfter = await loadWithGroup(a.id);
     const bAfter = await loadWithGroup(b.id);
@@ -3262,10 +3264,11 @@ describe.skipIf(!HAS_DB)("RS002: entry-level refunds (multi-entry cart hazards)"
     // back, B still confirmed, A never refunded.
     expect(stripeMock.refundCreate).toHaveBeenCalledWith(
       expect.objectContaining({ payment_intent: intentA, amount: 1000 }),
+      expect.objectContaining({ idempotencyKey: expect.stringMatching(/^registration-refund:/) }), // the shared locked-refund key (final review m6)
     );
-    expect(stripeMock.refundCreate).not.toHaveBeenCalledWith(
-      expect.objectContaining({ payment_intent: intentB }),
-    );
+    // Read off every call's params (the call now carries a second argument, the key, so a one-matcher `not.toHaveBeenCalledWith`
+    // would pass on ANY call shape).
+    expect(stripeMock.refundCreate.mock.calls.map((c) => (c[0] as { payment_intent: string }).payment_intent)).not.toContain(intentB);
     const bAfter = await loadWithGroup(b.id);
     expect(bAfter.status).toBe("confirmed");
     expect(bAfter.refunded_cents).toBe(0);
@@ -5119,6 +5122,7 @@ describe.skipIf(!HAS_DB)("RS012: sweepRegistrations pool-deadline pass", () => {
         reverse_transfer: true,
         refund_application_fee: true,
       }),
+      expect.objectContaining({ idempotencyKey: expect.stringMatching(/^registration-refund:/) }), // the shared locked-refund key (final review m6)
     );
 
     const withdrawnAudits = await auditRows(solo.registration.id, "registration.withdrawn");
@@ -5153,6 +5157,7 @@ describe.skipIf(!HAS_DB)("RS012: sweepRegistrations pool-deadline pass", () => {
       expect(res.poolDeadlinePassed, "premise: the sweep withdrew the entry").toBeGreaterThanOrEqual(1);
       expect(stripeMock.refundCreate, "premise: the refund was really attempted").toHaveBeenCalledWith(
         expect.objectContaining({ payment_intent: paid.entry_payment_intent_id, amount: 500 }),
+        expect.objectContaining({ idempotencyKey: expect.stringMatching(/^registration-refund:/) }), // the shared locked-refund key (final review m6)
       );
 
       // The withdrawal stands, and the refund really never landed: the alert reports a real gap.

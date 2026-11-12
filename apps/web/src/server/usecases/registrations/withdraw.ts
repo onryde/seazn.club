@@ -18,13 +18,7 @@ import { regGroupCols, loadSettings, divisionCtx, fallbackOrigin } from "./looku
 import { clearExpiresIfNoLongerNeeded } from "./materialise";
 import { queueRegistrationWithdrawnMails } from "./lifecycle-mail";
 import { freesTeamSlot, promoteOldestWaitlisted, openPromotionSeatGate, notifyPromoted } from "./waitlist";
-import {
-  stripeRefund,
-  queueRefundReceipt,
-  errText,
-  maybeAlertRegistrationRefundFailed,
-  resolveRefundPolicy,
-} from "./refunds";
+import { refundEntryUnderLock, resolveRefundPolicy } from "./refunds";
 
 /**
  * Release a solo sign-up's placement on someone else's team, if they have
@@ -259,57 +253,22 @@ export async function withdrawCore(reg: RegistrationWithGroupRow, actorId: strin
     ownPaymentRefundedCents(locked),
   );
   if (policy.refundable) {
-    // RS002 (V368): THIS entry's own remaining balance — never the cart's
-    // whole intent (hazard 1) — so a sibling that already carries a partial
-    // refund (organiser discretion, then a late withdrawal) is never
-    // double-counted here either.
-    const remaining = policy.amount_cents;
-    try {
-      // Same value the policy above was resolved from — never the cart's.
-      const refund = await stripeRefund(locked.entry_payment_intent_id as string, remaining);
-      // Additive on BOTH tables (hazard 2 fixed), in ONE transaction (review
-      // fixup — matches refundRegistration's withTenant-wrapped pattern
-      // below: two separate autocommit statements could leave the entry and
-      // cart totals silently diverged if the second failed after the first
-      // committed, reachable today on a single-entry cart, no multi-entry
-      // cart needed).
-      // The registrant's receipt is queued in the SAME transaction (`ctx` was read before it). This is a request: the first attempt is
-      // made after the response, off the caller's path.
-      const receiptId = await sql.begin(async (tx) => {
-        await tx`
-          update registrations
-          set refunded_cents = refunded_cents + ${remaining}, updated_at = now()
-          where id = ${locked.id}`;
-        await tx`
-          update registration_groups
-          set refunded_cents = refunded_cents + ${remaining}, refunded_at = now(), updated_at = now()
-          where id = ${locked.group_id}`;
-        return queueRefundReceipt(tx, { reg: locked, ctx, amountCents: remaining, refundId: refund.id });
-      });
-      if (receiptId !== null) deferred(() => dispatchNow([receiptId]));
-      await audit(sql, ctx.competition_id, ctx.org_id, "registration.refunded", {
-        registration_id: reg.id,
-        amount_cents: remaining,
-        mode: "auto",
-        stripe_refund_id: refund.id,
-      }, actorId);
-    } catch (err) {
-      // Refund failure must not undo the withdrawal — surfaces on the
-      // organiser console (withdrawn + refunded_cents < amount_cents).
-      await audit(sql, ctx.competition_id, ctx.org_id, "registration.refund_failed", {
-        registration_id: reg.id,
-        mode: "auto",
-      }, actorId);
-      await maybeAlertRegistrationRefundFailed({
-        registrationId: reg.id,
-        orgId: ctx.org_id,
-        competitionId: ctx.competition_id,
-        amountCents: remaining,
-        currency: locked.currency,
-        paymentIntentId: locked.payment_intent_id,
-        reason: errText(err),
-        mode: "auto",
-      });
+    // RS002 (V368): THIS entry's own remaining balance - never the cart's whole intent (hazard 1). Final review m6: moved, capped
+    // and booked under the entry's lock, with the shared key, so an organiser's Refund pressed during this call waits and reads
+    // what it left instead of refunding the same money again. A failure is recorded and alerted there and never undoes the
+    // withdrawal (it surfaces on the organiser console as withdrawn + refunded_cents < amount_cents).
+    const refunded = await refundEntryUnderLock({
+      regId: locked.id,
+      ctx,
+      capCents: policy.amount_cents,
+      mode: "auto",
+      actorId,
+      currency: locked.currency,
+    });
+    // A request: the first attempt is made after the response, off the caller's path.
+    if (refunded?.receiptId) {
+      const receiptId = refunded.receiptId;
+      deferred(() => dispatchNow([receiptId]));
     }
   }
 }

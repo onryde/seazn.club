@@ -12,7 +12,7 @@ import { clearExpiresIfNoLongerNeeded } from "./materialise";
 import { freesTeamSlot, promoteOldestWaitlisted, openPromotionSeatGate, notifyPromoted } from "./waitlist";
 import { paymentReminderMessage } from "./mail";
 import { issuePayLink, recordPayToken } from "./pay-token";
-import { stripeRefund, queueRefundReceipt, errText, maybeAlertRegistrationRefundFailed } from "./refunds";
+import { refundEntryUnderLock } from "./refunds";
 import { queueRegistrationExpiredMails, queueRegistrationPromotionLapsedMails } from "./lifecycle-mail";
 import { releaseSoloSignUpPlacement } from "./withdraw";
 import { effectivePoolDeadline } from "./list";
@@ -528,45 +528,18 @@ export async function sweepRegistrations(
       locked.entry_payment_intent_id &&
       locked.amount_cents - ownPaymentRefundedCents(locked) > 0
     ) {
-      // Polish wave P5 (carry b): the cap is THIS payment's - a late payment's refund in the history is not this one's.
-      const remaining = locked.amount_cents - ownPaymentRefundedCents(locked);
-      try {
-        const refund = await stripeRefund(locked.entry_payment_intent_id, remaining);
-        // The receipt is queued in the same transaction as the refund's record; a cron has no response to defer behind, so the first
-        // attempt is the worker's.
-        await sql.begin(async (tx) => {
-          await tx`
-            update registrations
-            set refunded_cents = refunded_cents + ${remaining}, updated_at = now()
-            where id = ${locked.id}`;
-          await tx`
-            update registration_groups
-            set refunded_cents = refunded_cents + ${remaining}, refunded_at = now(), updated_at = now()
-            where id = ${locked.group_id}`;
-          await queueRefundReceipt(tx, { reg: locked, ctx, amountCents: remaining, refundId: refund.id });
-        });
-        await audit(sql, ctx.competition_id, ctx.org_id, "registration.refunded", {
-          registration_id: locked.id,
-          amount_cents: remaining,
-          mode: "auto_pool_deadline",
-          stripe_refund_id: refund.id,
-        }, null);
-      } catch (err) {
-        await audit(sql, ctx.competition_id, ctx.org_id, "registration.refund_failed", {
-          registration_id: locked.id,
-          mode: "auto_pool_deadline",
-        }, null);
-        await maybeAlertRegistrationRefundFailed({
-          registrationId: locked.id,
-          orgId: ctx.org_id,
-          competitionId: ctx.competition_id,
-          amountCents: remaining,
-          currency: locked.currency,
-          paymentIntentId: locked.payment_intent_id,
-          reason: errText(err),
-          mode: "auto_pool_deadline",
-        });
-      }
+      // Polish wave P5 (carry b): the cap is THIS payment's - a late payment's refund in the history is not this one's. Final review
+      // m6: moved, capped and booked under the entry's lock with the shared key (`refundEntryUnderLock`), like every other refund
+      // path. The receipt is queued in the same transaction; a cron has no response to defer behind, so the first attempt is the
+      // worker's. A failure is recorded and alerted there.
+      await refundEntryUnderLock({
+        regId: locked.id,
+        ctx,
+        capCents: locked.amount_cents - ownPaymentRefundedCents(locked),
+        mode: "auto_pool_deadline",
+        actorId: null,
+        currency: locked.currency,
+      });
     }
   }
 

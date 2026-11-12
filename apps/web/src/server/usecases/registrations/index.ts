@@ -118,6 +118,8 @@ export {
   stripeRefund,
   queueRefundReceipt,
   maybeAlertRegistrationRefundFailed,
+  refundEntryUnderLock,
+  registrationRefundKey,
   resolveRefundPolicy,
 } from "./refunds";
 export type { ResolvedRefundPolicy } from "./refunds";
