@@ -328,11 +328,11 @@ describe.skipIf(!HAS_DB)("POST /api/admin/users/[id]/resend-verification — the
   });
 
   it("refuses the quick-match system user with createSession's 403, by its stored id: nothing minted, queued, mailed or logged; an ordinary account still gets its mail", async () => {
-    // Quick match plan 3 Task 8 (plan-1 final review): the system user (V492) is unverified and can never sign in
+    // Quick match plan 3 Task 8 (plan-1 final review): the system user (V506) is unverified and can never sign in
     // (createSession refuses it), so a verify mail for it is a link that must never exist.
     const [system] = await sql<{ email_verified: boolean }[]>`
       select email_verified from users where id = ${QUICK_MATCH_SYSTEM_USER_ID} and deleted_at is null`;
-    expect(system, "premise: the system user is seeded (V492), live and unverified, so only the guard refuses it").toEqual({
+    expect(system, "premise: the system user is seeded (V506), live and unverified, so only the guard refuses it").toEqual({
       email_verified: false,
     });
     const staff = await user("staff", { staff: true });

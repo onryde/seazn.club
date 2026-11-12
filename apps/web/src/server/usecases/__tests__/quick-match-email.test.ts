@@ -742,7 +742,7 @@ describe("the two templates (no database): the link, the name, and nothing else"
   });
 });
 
-describe.skipIf(!HAS_DB)("quick_matches.locale is one of the shipped locales (V493, the plan-1 carry m3)", () => {
+describe.skipIf(!HAS_DB)("quick_matches.locale is one of the shipped locales (V507, the plan-1 carry m3)", () => {
   it("the CHECK refuses a locale the app does not ship and accepts each one it does; the database's set is LOCALES", async () => {
     const made = await createQuickMatch(
       { name: uniq(), sport_key: "badminton", variant_key: BADMINTON_V, kind: "pair", format: "league", sides, plays: 1, email: null, locale: "en" },

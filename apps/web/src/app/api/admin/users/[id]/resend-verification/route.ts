@@ -20,7 +20,7 @@ export async function POST(
     const [user] = await sql<{ id: string; email: string; email_verified: boolean }[]>`
       select id, email, email_verified from users where id = ${id} and deleted_at is null`;
     if (!user) throw new HttpError(404, "User not found");
-    // The quick-match system user (V492) can never sign in, so it is never sent a verify link: createSession's refusal,
+    // The quick-match system user (V506) can never sign in, so it is never sent a verify link: createSession's refusal,
     // by the same id compare. The row's id, not the param: Postgres matches a capitalised uuid, `===` would not.
     if (user.id === QUICK_MATCH_SYSTEM_USER_ID) throw new HttpError(403, "system user");
     if (user.email_verified) throw new HttpError(400, "Email already verified");

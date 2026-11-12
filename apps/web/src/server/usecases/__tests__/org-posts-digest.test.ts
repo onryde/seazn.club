@@ -556,7 +556,7 @@ describe.skipIf(!HAS_DB)("weekly digest (P3 / D7)", () => {
     // lack `news.auto`: the feature is switched ON for it below, so only the candidate query's exclusion stands
     // between it and a digest.
     const [systemOrg] = await sql<{ id: string }[]>`select id from organizations where id = ${QUICK_MATCH_SYSTEM_ORG_ID}`;
-    expect(systemOrg, "premise: the system org is seeded (V492)").toBeDefined();
+    expect(systemOrg, "premise: the system org is seeded (V506)").toBeDefined();
     const [ownOverride] = await sql`
       select 1 from org_entitlement_overrides where org_id = ${QUICK_MATCH_SYSTEM_ORG_ID} and feature_key = 'news.auto'`;
     expect(ownOverride, "premise: the system org carries no news.auto override of its own, so the cleanup restores it").toBeUndefined();
