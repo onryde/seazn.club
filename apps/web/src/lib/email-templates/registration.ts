@@ -1,5 +1,5 @@
 import { button, linkFallback, panel, paragraph, renderEmail } from "./compose";
-import { escapeHtml, money } from "./shared";
+import { escapeHtml, isOwnEntry, money, ownKey } from "./shared";
 import { fmtPublicDeadline } from "@/lib/format";
 import { t, type Dict } from "@/lib/i18n";
 import {
@@ -118,12 +118,14 @@ function entryStatusLabel(dict: Dict, e: RegistrationEmailEntry): string {
  *  HTML rendering escapes the WHOLE joined block once, in panel() (see
  *  registrationTemplate below) — escaping per-line here would double-escape
  *  a name like "A & B". */
-function entryLine(dict: Dict, e: RegistrationEmailEntry, currency: string, locale: string): string {
+function entryLine(dict: Dict, e: RegistrationEmailEntry, currency: string, locale: string, contactName: string): string {
   const status = entryStatusLabel(dict, e);
   const names = { displayName: e.displayName, divisionName: e.divisionName };
+  // Sign-off V8: the contact's own entry is listed by its division alone.
+  const own = isOwnEntry(e.displayName, contactName);
   return e.feeCents > 0
-    ? t(dict, "registration.entryLineWithFee", { ...names, status, amount: money(e.feeCents, currency, locale) })
-    : t(dict, "registration.entryLineNoFee", { ...names, status });
+    ? t(dict, ownKey("registration.entryLineWithFee", own), { ...names, status, amount: money(e.feeCents, currency, locale) })
+    : t(dict, ownKey("registration.entryLineNoFee", own), { ...names, status });
 }
 
 /** Registration confirmation — carries the offline (cash/bank) payment
@@ -171,7 +173,7 @@ export function registrationTemplate(
   const intro = single
     ? waitlisted
       ? t(dict, "registration.introWaitlist", { competitionName: escapeHtml(opts.competitionName) })
-      : t(dict, "registration.intro", {
+      : t(dict, ownKey("registration.intro", isOwnEntry(first.displayName, opts.contactName)), {
           contactName: escapeHtml(opts.contactName),
           displayName: escapeHtml(first.displayName),
           divisionName: escapeHtml(first.divisionName),
@@ -215,14 +217,14 @@ export function registrationTemplate(
     ? ""
     : panel(
         t(dict, "registration.entriesPanelTitle"),
-        opts.entries.map((e) => entryLine(dict, e, opts.currency, locale)).join("\n"),
+        opts.entries.map((e) => entryLine(dict, e, opts.currency, locale, opts.contactName)).join("\n"),
       );
   const entriesText = single
     ? ""
     : "\n\n" +
       t(dict, "registration.textEntriesHeading") +
       "\n" +
-      opts.entries.map((e) => entryLine(dict, e, opts.currency, locale)).join("\n");
+      opts.entries.map((e) => entryLine(dict, e, opts.currency, locale, opts.contactName)).join("\n");
 
   const card = paid && !!opts.payPageUrl;
   const deadline = opts.payDeadline ? formatDeadline(opts.payDeadline, locale, opts.timeZone) : null;

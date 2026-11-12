@@ -1,5 +1,5 @@
 import { button, linkFallback, panel, paragraph, renderEmail } from "./compose";
-import { escapeHtml, money } from "./shared";
+import { escapeHtml, isOwnEntry, money, ownKey } from "./shared";
 import { formatDeadline } from "./registration";
 import { t, type Dict } from "@/lib/i18n";
 import {
@@ -99,7 +99,7 @@ export function registrationPromotedTemplate(
       title: t(dict, "registrationPromoted.title"),
       contentHtml:
         paragraph(
-          t(dict, "registrationPromoted.intro", {
+          t(dict, ownKey("registrationPromoted.intro", isOwnEntry(opts.displayName, opts.contactName)), {
             contactName: escapeHtml(opts.contactName),
             displayName: escapeHtml(opts.displayName),
             competitionName: escapeHtml(opts.competitionName),

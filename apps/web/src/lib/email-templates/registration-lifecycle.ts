@@ -4,7 +4,7 @@
 // Small templates on one shared shell, so the copy of "who is this for, which entry, where do I look" is written once.
 // `dict` = the emails namespace for the recipient's locale (see lib/email.ts).
 import { button, linkFallback, panel, paragraph, renderEmail } from "./compose";
-import { escapeHtml, money } from "./shared";
+import { escapeHtml, isOwnEntry, money, ownKey } from "./shared";
 import { t, type Dict } from "@/lib/i18n";
 
 type Content = { subject: string; html: string; text: string };
@@ -26,14 +26,6 @@ const shell = (dict: Dict, ns: string, base: Pick<LifecycleBase, "orgName" | "co
   eyebrow: `${base.orgName} · ${base.competitionName}`,
   footerNote: t(dict, `${ns}.footer`, { competitionName: base.competitionName, orgName: base.orgName }),
 });
-
-/** Polish wave sign-off V8: the entry IS the recipient (an individual registering themself) when its name is theirs - compared trimmed,
- *  spaces collapsed, case-folded, the way one person's name is typed twice. Such a mail calls it "your entry" and names it by its
- *  division instead of naming the person back to themselves. An empty name is nobody's: it never matches. */
-const normName = (name: string): string => name.trim().replace(/\s+/g, " ").toLocaleLowerCase();
-const isOwnEntry = (displayName: string, recipientName: string): boolean => normName(displayName) !== "" && normName(displayName) === normName(recipientName);
-/** The key's "your entry" twin (`<key>Own`), for the recipient's own entry. */
-const ownKey = (key: string, own: boolean): string => (own ? `${key}Own` : key);
 
 const referenceHtml = (dict: Dict, ns: string, refCode: string | null | undefined): string =>
   refCode ? paragraph(t(dict, `${ns}.reference`, { refCode: escapeHtml(refCode) })) : "";

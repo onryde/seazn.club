@@ -19,3 +19,14 @@ export function escapeHtml(s: string): string {
 export function money(cents: number, currency: string, locale = "en-GB"): string {
   return formatMoneyExact(cents, currency, locale);
 }
+
+/** Polish wave sign-off V8: the entry IS the recipient (an individual registering themself) when its name is theirs - compared trimmed,
+ *  spaces collapsed, case-folded, the way one person's name is typed twice. Such a mail names the entry by its division ("your entry in
+ *  Open Singles") instead of naming the person back to themselves. An empty name is nobody's: it never matches. */
+export function isOwnEntry(displayName: string, recipientName: string): boolean {
+  const norm = (name: string): string => name.trim().replace(/\s+/g, " ").toLocaleLowerCase();
+  return norm(displayName) !== "" && norm(displayName) === norm(recipientName);
+}
+
+/** The key's own-entry twin (`<key>Own`): the same sentence without the entry's name. */
+export const ownKey = (key: string, own: boolean): string => (own ? `${key}Own` : key);

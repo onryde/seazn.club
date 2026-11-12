@@ -1414,6 +1414,8 @@ describe.skipIf(!HAS_DB)("W12: the cart confirmation rebuilt after an approval (
     const w = await offlineWorld(1500, "manual");
     const first = await seedRegistration(w.competition.id, w.division.id, w.settings, { displayName: "Maya Cole", contactEmail: address("w12-cart") });
     const sibling = await seedSecondEntry(first.registration.group_id, w.division.id, 1500, "Sam Cole", "pending");
+    // A contact who is neither entry, so each line carries its entry's name (sign-off V8 lists the contact's OWN entry by division).
+    await sql`update registration_groups set contact_name = ${CONTACT} where id = ${first.registration.group_id}`;
     await approveRegistration(w.owner, first.registration.id);
 
     await notifySubmitted(first.registration.group_id, ORIGIN, first.access_token);

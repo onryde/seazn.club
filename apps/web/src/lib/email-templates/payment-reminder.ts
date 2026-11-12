@@ -1,5 +1,5 @@
 import { button, panel, paragraph, renderEmail } from "./compose";
-import { escapeHtml, money } from "./shared";
+import { escapeHtml, isOwnEntry, money, ownKey } from "./shared";
 import { formatDeadline } from "./registration";
 import { t, type Dict } from "@/lib/i18n";
 import {
@@ -71,7 +71,7 @@ export function paymentReminderTemplate(
       title: t(dict, "paymentReminder.title"),
       contentHtml:
         paragraph(
-          t(dict, "paymentReminder.body", {
+          t(dict, ownKey("paymentReminder.body", isOwnEntry(opts.displayName, opts.contactName)), {
             contactName: escapeHtml(opts.contactName),
             displayName: escapeHtml(opts.displayName),
             divisionName: escapeHtml(opts.divisionName),
@@ -87,7 +87,7 @@ export function paymentReminderTemplate(
         orgName: opts.orgName,
       }) +
       "\n" +
-      t(dict, "paymentReminder.textEntry", { displayName: opts.displayName, divisionName: opts.divisionName }) +
+      t(dict, ownKey("paymentReminder.textEntry", isOwnEntry(opts.displayName, opts.contactName)), { displayName: opts.displayName, divisionName: opts.divisionName }) +
       "\n" +
       t(dict, "paymentReminder.textFee", { amount }) +
       (card

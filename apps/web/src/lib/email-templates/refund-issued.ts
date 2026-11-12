@@ -1,5 +1,5 @@
 import { panel, paragraph, renderEmail } from "./compose";
-import { escapeHtml, money } from "./shared";
+import { escapeHtml, isOwnEntry, money, ownKey } from "./shared";
 import { t, type Dict } from "@/lib/i18n";
 
 export interface RefundIssuedArgs {
@@ -35,7 +35,7 @@ export function refundIssuedTemplate(
       title: t(dict, "refundIssued.title"),
       contentHtml:
         paragraph(
-          t(dict, "refundIssued.body", {
+          t(dict, ownKey("refundIssued.body", isOwnEntry(opts.displayName, opts.contactName)), {
             contactName: escapeHtml(opts.contactName),
             displayName: escapeHtml(opts.displayName),
             amount,

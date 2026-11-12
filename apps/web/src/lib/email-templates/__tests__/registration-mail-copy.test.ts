@@ -242,3 +242,61 @@ describe("the payment reminder names the entry's division (V5)", () => {
     expect(checked, "anti-vacuity: two methods x two parts").toBe(4);
   });
 });
+
+// Polish wave sign-off V8 (the confirmation, reminder, promotion and refund mails; the lifecycle mails are in
+// registration-lifecycle-copy.test.ts): "Thanks Dana Captain - your registration for Spring Open (Dana Captain, Open Doubles)". When the
+// entry's name IS the contact's, the mail names the entry by its division and never repeats the person's name: the differential is the
+// SAME mail for an entry with another name, so the contact is named exactly as often (the greeting) and the other entry's name appears.
+describe("a registrant mail never names the contact back to themselves as the entry (V8)", () => {
+  async function renders(locale: (typeof LOCALES)[number], displayName: string, contactName: string) {
+    const dict = await dictOf(locale);
+    const base = { orgName: "Riverside Club", competitionName: "Spring Open", displayName, divisionName: DIVISION, contactName, currency: "gbp" };
+    const entry = (divisionName: string, feeCents: number) => ({ displayName, divisionName, status: "pending", feeCents, approval: "auto" as const });
+    const confirmation = (entries: ReturnType<typeof entry>[]) =>
+      registrationTemplate(
+        { orgName: base.orgName, competitionName: base.competitionName, contactName, entries, totalCents: 1500, currency: "gbp", paymentInstructions: null, statusUrl: "https://seazn.club/s" },
+        dict,
+      );
+    return {
+      confirmation: confirmation([entry(DIVISION, 1500)]),
+      confirmationCart: confirmation([entry(DIVISION, 1500), entry("Masters Doubles", 0)]),
+      reminder: paymentReminderTemplate({ ...base, feeCents: 1500, paymentInstructions: null, method: "card", payPageUrl: PAY_PAGE }, dict),
+      promotion: registrationPromotedTemplate({ ...base, feeCents: 1500, method: "card", payPageUrl: PAY_PAGE }, dict),
+      refund: refundIssuedTemplate({ ...base, amountCents: 1500 }, dict),
+    } as Record<string, { subject: string; html: string; text: string }>;
+  }
+  const count = (hay: string, needle: string) => hay.toLowerCase().split(needle.toLowerCase()).length - 1;
+
+  it.each(LOCALES)("%s: the contact's own entry adds no mention of their name; another entry's name is printed (counted)", async (locale) => {
+    const other = await renders(locale, TEAM, CONTACT);
+    let checked = 0;
+    for (const contactSpelling of [CONTACT, "  dana   CAPTAIN "]) {
+      const own = await renders(locale, CONTACT, contactSpelling);
+      for (const name of Object.keys(other)) {
+        const o = own[name]!;
+        const t = other[name]!;
+        expect(words(t.html), `${locale} ${name}: premise - the other entry is named`).toContain(TEAM);
+        const greetings = count(words(t.html), CONTACT);
+        // A cart's confirmation has no greeting (its intro names the competition): there the contact's name must not appear at all.
+        if (name !== "confirmationCart") expect(greetings, `${locale} ${name}: premise - the contact is greeted`).toBeGreaterThan(0);
+        expect(count(words(o.html), "dana captain"), `${locale} ${name}: html - the greeting only`).toBe(greetings);
+        expect(count(o.text, "dana captain"), `${locale} ${name}: text`).toBe(count(t.text, CONTACT));
+        expect(count(o.subject, "dana captain"), `${locale} ${name}: subject`).toBe(0);
+        for (const part of [o.subject, o.html, o.text]) {
+          expect(part, `${locale} ${name}: no raw dictionary token`).not.toMatch(/\b(registration|paymentReminder|registrationPromoted|refundIssued)\.[a-zA-Z]+\b/);
+          expect(part, `${locale} ${name}: no unfilled placeholder`).not.toMatch(/\{\w+\}/);
+        }
+        checked += 1;
+      }
+    }
+    expect(checked, "anti-vacuity: 5 mails x 2 spellings").toBe(10);
+  });
+
+  it("en, written out: the single confirmation names the division alone; a cart lists each own entry by its division", async () => {
+    const own = await renders("en", CONTACT, CONTACT);
+    expect(words(own.confirmation!.html)).toContain("Thanks Dana Captain — your registration for Spring Open (Open Doubles) has been received.");
+    expect(own.confirmationCart!.text).toContain("Open Doubles — ");
+    expect(own.confirmationCart!.text).toContain("Masters Doubles — ");
+    expect(own.reminder!.text).toContain("Open Doubles");
+  });
+});
