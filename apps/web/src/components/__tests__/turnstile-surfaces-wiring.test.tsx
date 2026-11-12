@@ -1,5 +1,5 @@
-// Cloudflare Turnstile, the CLIENT side of six of the seven guarded routes, driven the way a browser would (join and register have
-// their own interaction suites): login (auth-form), start (start-wizard), resend (resend-confirmation), and the three withdraw
+// Cloudflare Turnstile, the CLIENT side of six of the eight guarded routes, driven the way a browser would (join and register have
+// their own interaction suites, and the quick match setup form its own in components/quick-match/__tests__/setup-form.test.tsx): login (auth-form), start (start-wizard), resend (resend-confirmation), and the three withdraw
 // buttons (withdraw-by-ref, cancel-entry, registration-actions: by-ref and by-id are two routes under one action).
 //
 // A pure-builder suite is blind to wiring (apps/web vitest has no DOM): a form can build the right header in a unit test and still

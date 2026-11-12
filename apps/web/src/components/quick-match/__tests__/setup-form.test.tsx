@@ -11,6 +11,35 @@
 //
 // Sport: the island sweeps four sports (badminton, chess, football, tennis): two kinds, one kind, team, and a sport whose
 // preferred variant is not its first. The full live offer is swept against the real DB in play-page.test.tsx.
+//
+// The bot check (Cloudflare Turnstile, owner 2026-11-12): the widget is a stand-in with the controller's own surface
+// (token/reset), as turnstile-surfaces-wiring.test.tsx stubs it, because the real widget needs a browser; the REAL
+// `withTurnstile` runs, so what reaches the stubbed fetch is what the island sends. The controller's real half is
+// lib/__tests__/turnstile-client.test.ts.
+const turnstileFake = vi.hoisted(() => ({
+  token: null as string | null,
+  resets: 0,
+  actions: [] as string[],
+  controller: null as unknown as { token(): Promise<string | null>; reset(): void },
+}));
+vi.mock("@/components/turnstile-widget", () => {
+  turnstileFake.controller = {
+    token: () => Promise.resolve(turnstileFake.token),
+    reset: () => {
+      turnstileFake.resets++;
+    },
+  };
+  return {
+    useTurnstile: (action: string) => {
+      turnstileFake.actions.push(action);
+      return turnstileFake.controller;
+    },
+    TurnstileWidget: function TurnstileWidgetStub() {
+      return null;
+    },
+  };
+});
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import enMarketing from "@/dictionaries/en/marketing.json";
@@ -34,6 +63,7 @@ import type { QuickMatchSport } from "@/server/usecases/quick-match-sports";
 import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
 import { setupCopy, setupSports } from "@/app/[lang]/(marketing)/play/setup-props";
 import { CONSENT_OPEN_ATTR } from "@/components/cookie-consent";
+import { TurnstileWidget } from "@/components/turnstile-widget";
 import {
   QuickMatchSetupForm,
   drawPreview,
@@ -172,7 +202,12 @@ function stubWindow(assign: (path: string) => void = vi.fn()) {
 }
 const firePageshow = (persisted: boolean) => [...(pageListeners.get("pageshow") ?? [])].forEach((fn) => fn({ persisted }));
 
-beforeEach(() => stubWindow());
+beforeEach(() => {
+  stubWindow();
+  turnstileFake.token = null;
+  turnstileFake.resets = 0;
+  turnstileFake.actions = [];
+});
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.useRealTimers();
@@ -228,6 +263,7 @@ describe("setupErrorKey: every refusal the create route can name has copy (T3's 
     QUICK_MATCH_KIND_NOT_OFFERED: "quickMatch.errors.kindNotOffered",
     QUICK_MATCH_FORMAT_NOT_OFFERED: "quickMatch.errors.formatNotOffered",
     QUICK_MATCH_EMAIL_INVALID: "quickMatch.errors.emailInvalid",
+    QUICK_MATCH_TURNSTILE_FAILED: "quickMatch.errors.botCheck",
   };
 
   it("maps every QUICK_MATCH_ERRORS code; the count is every code there is", () => {
@@ -688,6 +724,8 @@ describe("submitting (the form-post contract, enhanced: ledger CARRY to T4)", ()
     const onSubmit = propsOf(all(i).find((el) => el.type === "form")!).onSubmit as (e: { preventDefault(): void }) => Promise<void>;
     const first = onSubmit({ preventDefault: () => {} });
     const second = onSubmit({ preventDefault: () => {} });
+    // The post waits on the bot check's token (`withTurnstile`) before it is sent; the lock is taken before that wait.
+    await flush();
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(propsOf(start(i)).disabled, "Start is disabled while the create runs").toBe(true);
     release({ url: "http://localhost:3000/q/qm_one", status: 200 });
@@ -771,6 +809,83 @@ describe("submitting (the form-post contract, enhanced: ledger CARRY to T4)", ()
     expect(propsOf(emailDetails(limited)).open).toBe(true);
     expect(propsOf(emailDetails(mount({ initialError: QUICK_MATCH_ERRORS.TOO_MANY_ALIVE }))).open).toBe(false);
     expect(propsOf(emailDetails(mount())).open).toBe(false);
+  });
+
+  describe("the bot check (Cloudflare Turnstile, owner 2026-11-12)", () => {
+    /** The owner's sentence for a refused bot check (brief 2026-11-12), typed: the copy is the contract, not the lookup. */
+    const BOT_LINE = "We couldn't confirm you're not a bot. Try again.";
+
+    it("asks for the `quickmatch` widget, and mounts exactly one in the Start bar, straight before Start, wired to the controller that sends", () => {
+      const i = mount({}, { hydrate: true });
+      expect(turnstileFake.actions.length, "anti-vacuity: the island asked for a widget").toBeGreaterThan(0);
+      expect(new Set(turnstileFake.actions)).toEqual(new Set(["quickmatch"]));
+      const tree = all(i);
+      const widgets = tree.filter((el) => el.type === TurnstileWidget);
+      expect(widgets).toHaveLength(1);
+      expect(propsOf(widgets[0]!).controller).toBe(turnstileFake.controller);
+      expect(tree[0]!.type, "inside the form").toBe("form");
+      // In the Start bar (pinned to a phone's foot, so a challenge is never scrolled out of view), the element before Start.
+      const bar = byTestId(i, "qm-start-bar")!;
+      const inBar = walk(bar).filter((el) => el !== bar);
+      expect(inBar.filter((el) => el.type === TurnstileWidget)).toHaveLength(1);
+      expect(inBar.indexOf(start(i)) - inBar.indexOf(widgets[0]!), "straight before Start").toBe(1);
+      // The server's HTML (no script yet) carries the same one widget container: it renders nothing until the script runs.
+      expect(all(mount()).filter((el) => el.type === TurnstileWidget)).toHaveLength(1);
+    });
+
+    it("a held token travels in the cf-turnstile-response header, never in the body, and the widget is reset after", async () => {
+      turnstileFake.token = "tok-1";
+      const { calls } = stubFetch([{ url: "http://localhost:3000/q/qm_tok", status: 200 }]);
+      const i = mount();
+      fillSides(i, ["A", "B"]);
+      await submit(i);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.init.headers).toEqual({ "cf-turnstile-response": "tok-1" });
+      const body = calls[0]!.init.body as URLSearchParams;
+      expect([...body.keys()].filter((k) => /turnstile/i.test(k)), "the token is not a form field").toEqual([]);
+      expect([...body.values()]).not.toContain("tok-1");
+      expect(turnstileFake.resets, "a token is single-use: reset once it was sent").toBe(1);
+    });
+
+    it("no token (no site key: dev, e2e): the post goes with NO header and the widget is still reset", async () => {
+      const { calls } = stubFetch([{ url: "http://localhost:3000/q/qm_tok", status: 200 }]);
+      const i = mount();
+      fillSides(i, ["A", "B"]);
+      await submit(i);
+      expect(calls).toHaveLength(1);
+      expect(Object.keys((calls[0]!.init.headers ?? {}) as Record<string, string>)).toEqual([]);
+      expect(turnstileFake.resets).toBe(1);
+    });
+
+    it("QUICK_MATCH_TURNSTILE_FAILED shows the bot-check line, keeps every name, unlocks; the retry carries the widget's NEW token", async () => {
+      turnstileFake.token = "tok-1";
+      const { calls, assign } = stubFetch([
+        { url: `http://localhost:3000/en/play?e=QUICK_MATCH_TURNSTILE_FAILED`, status: 200 },
+        { url: "http://localhost:3000/q/qm_two", status: 200 },
+      ]);
+      const i = mount({}, { hydrate: true });
+      type(nameInput(i), "Sunday doubles");
+      fillSides(i, ["Ravi & Sam", "Priya & Tom"]);
+      await submit(i);
+      await flush();
+      expect(textOf(byTestId(i, "qm-setup-error")!)).toContain(BOT_LINE);
+      expect(propsOf(nameInput(i)).value).toBe("Sunday doubles");
+      expect(sideInputs(i).map((el) => propsOf(el).value)).toEqual(["Ravi & Sam", "Priya & Tom"]);
+      expect(propsOf(start(i)).disabled, "unlocked for the retry").toBe(false);
+      expect(assign).not.toHaveBeenCalled();
+      // The widget fetched a fresh token after the reset; the retry carries it, not the spent one.
+      turnstileFake.token = "tok-2";
+      await submit(i);
+      expect(calls.map((c) => (c.init.headers as Record<string, string>)["cf-turnstile-response"])).toEqual(["tok-1", "tok-2"]);
+      expect(turnstileFake.resets).toBe(2);
+      expect(assign).toHaveBeenCalledWith("/q/qm_two");
+    });
+
+    it("the no-JS path: a post without the script carries no token and comes back ?e=QUICK_MATCH_TURNSTILE_FAILED, which renders its line", () => {
+      const i = mount({ initialError: "QUICK_MATCH_TURNSTILE_FAILED" });
+      expect(textOf(byTestId(i, "qm-setup-error")!)).toContain(BOT_LINE);
+      expect(propsOf(emailDetails(i)).open, "not the email's fault: its fold stays shut").toBe(false);
+    });
   });
 
   it("the inputs carry the schema's checks as patterns: a non-blank name and sides (A-M2), and the schema's email (A-I2)", () => {

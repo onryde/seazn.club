@@ -71,6 +71,8 @@ const MARKETING_KEYS = [
   "quickMatch.errors.nameBlank",
   "quickMatch.errors.unavailable",
   "quickMatch.errors.generic",
+  // The create's bot check refused (Cloudflare Turnstile, owner 2026-11-12).
+  "quickMatch.errors.botCheck",
 ] as const;
 
 const UI_KEYS = [
@@ -310,6 +312,8 @@ describe("quick match guest copy: plurals", () => {
     expect(m["quickMatch.errors.emailInvalid"]).toBe("Check the email address, or leave it blank.");
     // Review m5: what the browser's own bubble carries for an all-space name (the input's `title`).
     expect(m["quickMatch.errors.nameBlank"]).toBe("Type a name, not just spaces.");
+    // The bot check's refusal, in the owner's words (2026-11-12).
+    expect(m["quickMatch.errors.botCheck"]).toBe("We couldn't confirm you're not a bot. Try again.");
     expect(ui["quickMatch.home.editResult"]).toBe("Edit result");
     // Task 1 review I2 and m1 (controller, 2026-11-08): the league line names no tie-break the standings do not use
     // (draws score points, so "most wins" was false), and the two offer refusals name nothing the guest did not choose.

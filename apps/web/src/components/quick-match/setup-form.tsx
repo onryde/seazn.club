@@ -12,6 +12,11 @@
 // 2026-11-08): a home (`/q/<token>`) is navigated to; a refusal (`/<lang>/play?e=<code>`) is shown here, with the typed
 // sides kept. The form locks on its first submit and unlocks only on a refusal (pre-flight B4f): the route has no
 // server-side dedupe (decision log 2026-11-08).
+//
+// The create is bot-checked (Cloudflare Turnstile, action `quickmatch`; owner 2026-11-12), the way #1136's forms are: one
+// widget in the form (`TurnstileWidget`, invisible unless Cloudflare needs a tap), and the enhanced submit sends its token in
+// the `cf-turnstile-response` header through `withTurnstile`, which resets the spent token after. A post without the script
+// carries no token, so the route refuses it with QUICK_MATCH_TURNSTILE_FAILED, which the page shows as its own line.
 import { useEffect, useRef, useState, useSyncExternalStore, type FormEvent } from "react";
 import { Pencil, X } from "lucide-react";
 import type { EntrantKind } from "@seazn/engine/sport";
@@ -35,7 +40,9 @@ import {
   QUICK_MATCH_SIDE_NAME_MAX,
 } from "@/lib/quick-match-constants";
 import { routes } from "@/lib/routes";
+import { withTurnstile } from "@/lib/turnstile-client";
 import { useHydrated } from "@/lib/use-client-snapshot";
+import { TurnstileWidget, useTurnstile } from "@/components/turnstile-widget";
 import { fixtureLabel, winnerOfLabel, type FixtureLabel } from "./fixture-label";
 
 /** The create route (app/api/quick-match/route.ts). It answers every post with a 303. */
@@ -98,6 +105,7 @@ const ERROR_KEYS: Readonly<Record<string, string>> = {
   [QUICK_MATCH_ERRORS.KIND_NOT_OFFERED]: "quickMatch.errors.kindNotOffered",
   [QUICK_MATCH_ERRORS.FORMAT_NOT_OFFERED]: "quickMatch.errors.formatNotOffered",
   [QUICK_MATCH_ERRORS.EMAIL_INVALID]: "quickMatch.errors.emailInvalid",
+  [QUICK_MATCH_ERRORS.TURNSTILE_FAILED]: "quickMatch.errors.botCheck",
 };
 export function setupErrorKey(code: string): string {
   return Object.hasOwn(ERROR_KEYS, code) ? ERROR_KEYS[code]! : "quickMatch.errors.generic";
@@ -263,6 +271,7 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError }:
   const locked = useRef(false);
   /** False in the server's HTML and until the script runs: that page must work as a plain form post (I1). */
   const hydrated = useHydrated();
+  const turnstile = useTurnstile("quickmatch");
 
   // Back from the home (bfcache): the page comes back exactly as it was left, locked mid-submit. Unlock it (m9).
   useEffect(() => {
@@ -329,22 +338,25 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError }:
     setError(null);
     let outcome: SubmitOutcome;
     try {
-      const res = await fetch(CREATE_PATH, {
-        method: "POST",
-        body: setupBody({
-          name,
-          sport_key: sport.sport_key,
-          variant_key: variant.key,
-          kind,
-          format: effectiveFormat,
-          sides: rows.map((r) => r.name),
-          plays,
-          email,
-          locale: lang,
+      const res = await withTurnstile(turnstile, (headers) =>
+        fetch(CREATE_PATH, {
+          method: "POST",
+          headers,
+          body: setupBody({
+            name,
+            sport_key: sport.sport_key,
+            variant_key: variant.key,
+            kind,
+            format: effectiveFormat,
+            sides: rows.map((r) => r.name),
+            plays,
+            email,
+            locale: lang,
+          }),
+          redirect: "follow",
+          credentials: "same-origin",
         }),
-        redirect: "follow",
-        credentials: "same-origin",
-      });
+      );
       outcome = submitOutcome(res);
     } catch {
       outcome = { kind: "refused", code: QUICK_MATCH_ERRORS.CREATE_FAILED };
@@ -656,6 +668,12 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError }:
             {errorLine}
           </p>
         ) : null}
+        {/* The bot check's widget, straight before the submit as on #1136's forms. It is invisible unless Cloudflare needs a
+            tap, and then it sits in this bar, which below 640px is pinned to the screen's foot: a challenge is where the
+            guest's thumb already is, never scrolled out of view. It renders nothing without a site key (dev, e2e) or before
+            the script runs; `min-w-0 max-w-full` and the controller's compact size under 300px keep it inside 320px. No margin:
+            an invisible widget is a 0px box that must leave the bar exactly as it was (a margin on it showed as 10px). */}
+        <TurnstileWidget controller={turnstile} />
         <button
           type="submit"
           data-testid="qm-start"

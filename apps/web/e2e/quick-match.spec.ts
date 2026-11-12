@@ -173,6 +173,9 @@ test("the real cap: five live quick matches on one visitor, and the sixth Start 
 });
 
 test("without the script the page still works: Start is live, only the chosen sport can be picked, and the plain post lands on the home (I1)", async ({ browser }, info) => {
+  // The plain post carries no bot-check token. It lands here because e2e's server is a harness (ENV_NAME ci), which skips
+  // Cloudflare Turnstile (server/turnstile.ts `turnstileMode`); a deployed server refuses it with
+  // QUICK_MATCH_TURNSTILE_FAILED, as #1136's forms are refused without the script (create-route.test.ts, the bot-check block).
   const ctx = await guestContext(browser, info, { javaScriptEnabled: false });
   try {
     const page = await ctx.newPage();

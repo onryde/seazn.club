@@ -5961,6 +5961,7 @@ export type DictionaryKey =
   | "quickMatch.dead.hint"
   | "quickMatch.dead.startNew"
   | "quickMatch.dead.title"
+  | "quickMatch.errors.botCheck"
   | "quickMatch.errors.emailInvalid"
   | "quickMatch.errors.formatNotOffered"
   | "quickMatch.errors.generic"
