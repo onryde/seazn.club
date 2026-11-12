@@ -912,3 +912,93 @@ describe.skipIf(!HAS_DB)("the cart status page's Pay follows the payment page's 
     expect(await cartPointer(reg.id)).toBe(s2);
   });
 });
+
+// Gap wave G2 (2026-11-12, ledger :42): lock order. Checkout completion (`confirmPaidRegistration`) locks the entry and its cart
+// in ONE statement - `select … from registrations r join registration_groups g … for update` - entry row first. The page mint's
+// stamp transaction used to update the cart first and the entry second: a webhook landing for the same entry mid-mint could
+// deadlock against it. The mint now locks the entry row before touching the cart. Witnessed with real row locks on separate
+// connections (a holder transaction + `pg_blocking_pids`, then a `for update nowait` probe on the other row), not by reading SQL.
+describe.skipIf(!HAS_DB)("lock order: the entry row before the cart row (gap wave G2)", () => {
+  async function blockedBy(pid: number): Promise<number> {
+    const [row] = await sql<{ n: number }[]>`
+      select count(*)::int as n from pg_stat_activity where ${pid} = any(pg_blocking_pids(pid))`;
+    return row!.n;
+  }
+  async function untilBlocked(pid: number): Promise<void> {
+    const deadline = Date.now() + 5000;
+    while ((await blockedBy(pid)) === 0) {
+      if (Date.now() > deadline) throw new Error(`nothing ever waited on backend ${pid}: the call under test took no lock it holds`);
+      await new Promise((r) => setTimeout(r, 25));
+    }
+  }
+  /** `for update nowait` on one row, outside any transaction: "free", or the SQLSTATE that refused it (55P03 = held). */
+  async function probe(table: "registrations" | "registration_groups", id: string): Promise<string> {
+    const q =
+      table === "registrations"
+        ? sql`select 1 from registrations where id = ${id} for update nowait`
+        : sql`select 1 from registration_groups where id = ${id} for update nowait`;
+    return q.then(
+      () => "free",
+      (e: unknown) => (e as { code?: string }).code ?? String(e),
+    );
+  }
+  /** Holds a row lock on its own connection until `release()`. */
+  function holdRow(table: "registrations" | "registration_groups", id: string) {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let ready!: (pid: number) => void;
+    const pid = new Promise<number>((r) => (ready = r));
+    const done = sql.begin(async (tx) => {
+      if (table === "registrations") await tx`select 1 from registrations where id = ${id} for update`;
+      else await tx`select 1 from registration_groups where id = ${id} for update`;
+      const [row] = await tx<{ pid: number }[]>`select pg_backend_pid() as pid`;
+      ready(row!.pid);
+      await gate;
+    });
+    return { pid, release, done };
+  }
+
+  it("premise: checkout completion holds the ENTRY row while it waits for the cart row", async () => {
+    const { reg } = await cardEntry();
+    const token = await linkFor(reg);
+    await payFromPayPage(token, ORIGIN);
+    const paid = payInStripe((await payPointer(reg.id))!);
+
+    const cart = holdRow("registration_groups", reg.group_id);
+    let completion: Promise<void> | undefined;
+    try {
+      const pid = await cart.pid;
+      completion = handleRegistrationCheckoutCompleted(paid);
+      completion.catch(() => undefined);
+      await untilBlocked(pid);
+      expect(await probe("registrations", reg.id)).toBe("55P03"); // taken before the cart it is waiting on
+    } finally {
+      cart.release();
+      await cart.done;
+    }
+    await completion;
+    expect((await loadWithGroup(reg.id)).status).toBe("confirmed");
+  });
+
+  it("the page mint waits on the entry row with the cart row still FREE (no cart lock held while it waits)", async () => {
+    const { reg } = await cardEntry();
+    const token = await linkFor(reg);
+
+    const entry = holdRow("registrations", reg.id);
+    let pay: Promise<string> | undefined;
+    try {
+      const pid = await entry.pid;
+      pay = payFromPayPage(token, ORIGIN);
+      pay.catch(() => undefined);
+      await untilBlocked(pid);
+      expect(await probe("registration_groups", reg.group_id)).toBe("free");
+    } finally {
+      entry.release();
+      await entry.done;
+    }
+    const url = await pay;
+    const s1 = (await payPointer(reg.id))!;
+    expect(url).toBe(stripeMock.store.get(s1)!.url);
+    expect((await loadWithGroup(reg.id)).checkout_session_id).toBe(s1);
+  });
+});

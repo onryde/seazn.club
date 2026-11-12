@@ -389,6 +389,10 @@ async function mintRegistrationCheckout(
   } else {
     try {
       stamped = await sql.begin(async (tx) => {
+        // Gap wave G2: the ENTRY row first, then the cart. Checkout completion (`confirmPaidRegistration`) locks the two in that
+        // order in one statement (`select … from registrations r join registration_groups g … for update`), so stamping the cart
+        // first here could deadlock against a webhook landing for the same entry mid-mint.
+        await tx`select 1 from registrations where id = ${pointer.registrationId} for update`;
         if (!(await stampGroup(tx))) return false;
         const [claimed] = await tx<{ id: string }[]>`
           update registrations
