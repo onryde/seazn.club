@@ -23,9 +23,9 @@
 //  3. A spec added to `SERIAL_SPECS` but never removed from the parallel
 //     project's ignore list — or vice versa — is either run twice against
 //     shared org state or not at all.
-//  4. The walkthrough project is dispatched as FOUR legs — `capture` and
-//     `stream` carve-outs plus `rest` sharded two ways — by the same catch-all
-//     construction (E2E_WALKTHROUGH_SLICE). The same three failure modes apply
+//  4. The walkthrough project is dispatched as FIVE legs — `capture`, `stream`
+//     and `sponsor` carve-outs plus `rest` sharded two ways — by the same
+//     catch-all construction (E2E_WALKTHROUGH_SLICE). The same three failure modes apply
 //     to it: a typo in a carve-out, a "rest" that stops being a catch-all, and
 //     a duplicate artifact slug that only fails when a report is needed.
 //
@@ -629,7 +629,7 @@ const WALKTHROUGH_SPECS: string[] = [
 /** The values of `E2E_WALKTHROUGH_SLICE` that e2e.yml dispatches. Named here
  *  because the config has no export for them; the dispatch test below proves
  *  e2e.yml sends exactly these and no other. */
-const WALKTHROUGH_SLICES = ["capture", "stream", "rest"] as const;
+const WALKTHROUGH_SLICES = ["capture", "stream", "sponsor", "rest"] as const;
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -708,16 +708,18 @@ describe("e2e CI wiring", () => {
     ).toBe(true);
   });
 
-  it("splits the walkthrough project into capture + stream + rest with nothing lost and nothing run twice", async () => {
+  it("splits the walkthrough project into capture + stream + sponsor + rest with nothing lost and nothing run twice", async () => {
     const whole = projectNamed(await configFor(undefined), "walkthrough");
     const capture = projectNamed(await configFor(undefined, "capture"), "walkthrough");
     const stream = projectNamed(await configFor(undefined, "stream"), "walkthrough");
+    const sponsor = projectNamed(await configFor(undefined, "sponsor"), "walkthrough");
     const rest = projectNamed(await configFor(undefined, "rest"), "walkthrough");
     const files = specFiles();
 
     const inWhole = files.filter((f) => selects(whole, f));
     const inCapture = files.filter((f) => selects(capture, f));
     const inStream = files.filter((f) => selects(stream, f));
+    const inSponsor = files.filter((f) => selects(sponsor, f));
     const inRest = files.filter((f) => selects(rest, f));
 
     // Anti-vacuity first: an empty slice would make the partition below pass
@@ -725,37 +727,56 @@ describe("e2e CI wiring", () => {
     expect(inWhole.length, "premise: the whole walkthrough project selects specs").toBeGreaterThan(0);
     expect(inCapture.length, "the capture slice selects no spec").toBeGreaterThan(0);
     expect(inStream.length, "the stream slice selects no spec").toBeGreaterThan(0);
+    expect(inSponsor.length, "the sponsor slice selects no spec").toBeGreaterThan(0);
     expect(inRest.length, "the rest slice selects no spec").toBeGreaterThan(0);
 
     // A PARTITION of the unsliced project: union is it, pairwise intersections
     // are empty. Either failing means CI runs a walkthrough twice or never.
-    expect([...inCapture, ...inStream, ...inRest].sort()).toEqual(inWhole);
-    expect(inCapture.filter((f) => inStream.includes(f) || inRest.includes(f))).toEqual([]);
-    expect(inStream.filter((f) => inRest.includes(f))).toEqual([]);
+    expect([...inCapture, ...inStream, ...inSponsor, ...inRest].sort()).toEqual(inWhole);
+    expect(inCapture.filter((f) => inStream.includes(f) || inSponsor.includes(f) || inRest.includes(f))).toEqual([]);
+    expect(inStream.filter((f) => inSponsor.includes(f) || inRest.includes(f))).toEqual([]);
+    expect(inSponsor.filter((f) => inRest.includes(f))).toEqual([]);
 
     // The slices must stay inside the walkthrough directory.
-    expect([...inCapture, ...inStream, ...inRest].filter((f) => !f.startsWith("walkthrough/"))).toEqual([]);
+    expect(
+      [...inCapture, ...inStream, ...inSponsor, ...inRest].filter((f) => !f.startsWith("walkthrough/")),
+    ).toEqual([]);
   });
 
-  it("keeps the walkthrough 'rest' slice a catch-all: a new spec file joins it and neither carve-out", async () => {
-    // The reason the cut is two named groups plus a remainder rather than four
+  it("keeps the walkthrough 'rest' slice a catch-all: a new spec file joins it and no carve-out", async () => {
+    // The reason the cut is three named groups plus a remainder rather than
     // file lists: a spec added tomorrow, with a name nobody has thought about,
     // runs in CI without anyone editing the config.
     const capture = projectNamed(await configFor(undefined, "capture"), "walkthrough");
     const stream = projectNamed(await configFor(undefined, "stream"), "walkthrough");
+    const sponsor = projectNamed(await configFor(undefined, "sponsor"), "walkthrough");
     const rest = projectNamed(await configFor(undefined, "rest"), "walkthrough");
     const fresh = "walkthrough/zz-a-spec-added-tomorrow.spec.ts";
     expect(selects(rest, fresh), "a new walkthrough spec must land in the rest slice").toBe(true);
     expect(selects(capture, fresh), "a new walkthrough spec must not land in the capture carve-out").toBe(false);
     expect(selects(stream, fresh), "a new walkthrough spec must not land in the stream carve-out").toBe(false);
+    expect(selects(sponsor, fresh), "a new walkthrough spec must not land in the sponsor carve-out").toBe(false);
     // And the carve-outs are not the whole directory in disguise.
     expect(selects(capture, "walkthrough/stream-relay.spec.ts")).toBe(false);
     expect(selects(stream, "walkthrough/capture-phone.spec.ts")).toBe(false);
+    expect(selects(stream, "walkthrough/sponsor-stream-matrix.spec.ts")).toBe(false);
+    expect(selects(capture, "walkthrough/sponsor-stream-matrix.spec.ts")).toBe(false);
+    // The sponsor carve-out is ONE file, not a `sponsor` prefix: the other
+    // sponsor specs (sponsors-journey, sponsor-deals-captures, ...) stay in
+    // "rest" — the positive half of each pair is the sponsor leg selecting its
+    // own file, the negative half is rest ignoring it and nothing else.
+    expect(selects(sponsor, "walkthrough/sponsor-stream-matrix.spec.ts")).toBe(true);
+    expect(selects(rest, "walkthrough/sponsor-stream-matrix.spec.ts"), "rest must ignore the sponsor carve-out").toBe(false);
+    for (const sibling of ["walkthrough/sponsors-journey.spec.ts", "walkthrough/sponsor-deals-captures.spec.ts"]) {
+      expect(selects(sponsor, sibling), `the sponsor carve-out must not select ${sibling}`).toBe(false);
+      expect(selects(rest, sibling), `${sibling} must stay in the rest slice`).toBe(true);
+    }
   });
 
   it("names only REAL files in the walkthrough carve-outs, and each carve-out selects what it names", async () => {
     const capture = projectNamed(await configFor(undefined, "capture"), "walkthrough");
     const stream = projectNamed(await configFor(undefined, "stream"), "walkthrough");
+    const sponsor = projectNamed(await configFor(undefined, "sponsor"), "walkthrough");
     const present = specFiles();
 
     // `capture-(a|b|c)\.spec\.ts` — the alternation is the hand-maintained
@@ -778,6 +799,13 @@ describe("e2e CI wiring", () => {
     // The stream carve-out is one file; it must exist and be the only match.
     expect(present).toContain("walkthrough/stream-relay.spec.ts");
     expect(present.filter((f) => selects(stream, f))).toEqual(["walkthrough/stream-relay.spec.ts"]);
+
+    // Likewise the sponsor carve-out: one file, it must exist, and be the only
+    // match. A renamed spec would otherwise leave the sponsor leg selecting
+    // nothing (Playwright exits non-zero on "no tests found", but only after
+    // the ~2.5 min setup) while the renamed file ran on a rest shard.
+    expect(present).toContain("walkthrough/sponsor-stream-matrix.spec.ts");
+    expect(present.filter((f) => selects(sponsor, f))).toEqual(["walkthrough/sponsor-stream-matrix.spec.ts"]);
   });
 
   // The two assertions the floors above cannot make. See WALKTHROUGH_SPECS for
@@ -880,7 +908,7 @@ describe("e2e CI wiring", () => {
     expect(heavyArgs[0], "the heavy leg must not shard").not.toContain("--shard");
   });
 
-  it("dispatches the walkthrough project as capture, stream and a two-way rest, each exactly once", () => {
+  it("dispatches the walkthrough project as capture, stream, sponsor and a two-way rest, each exactly once", () => {
     const yml = readFileSync(join(REPO_ROOT, ".github/workflows/e2e.yml"), "utf8")
       .split("\n")
       .map((line) => line.replace(/(^|\s)#.*$/, ""))
@@ -913,10 +941,11 @@ describe("e2e CI wiring", () => {
 
     // Every walkthrough leg names a slice this config understands, and the
     // parallel legs name none (the key is the walkthrough project's own).
-    expect(wt.map((l) => l.wslice).sort(), "walkthrough legs: one capture, one stream, rest twice").toEqual([
+    expect(wt.map((l) => l.wslice).sort(), "walkthrough legs: one capture, one stream, one sponsor, rest twice").toEqual([
       "capture",
       "rest",
       "rest",
+      "sponsor",
       "stream",
     ]);
     expect(
@@ -926,7 +955,7 @@ describe("e2e CI wiring", () => {
     expect(legs.filter((l) => l.project !== "walkthrough" && l.wslice !== undefined)).toEqual([]);
 
     // The carve-outs run whole; "rest" is the only sharded part, two ways.
-    for (const sl of ["capture", "stream"]) {
+    for (const sl of ["capture", "stream", "sponsor"]) {
       const leg = wt.filter((l) => l.wslice === sl);
       expect(leg, `exactly one ${sl} leg`).toHaveLength(1);
       expect(leg[0]!.args, `the ${sl} leg must not shard`).not.toContain("--shard");

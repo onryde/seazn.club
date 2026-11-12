@@ -170,12 +170,23 @@ const PARALLEL_SLICE = process.env.E2E_PARALLEL_SLICE;
 // 48% of the directory's 5690 worker-seconds — stream-relay (31 tests, 1372s)
 // and capture-phone + capture-panel-pr2 + capture-auto (31 tests, 1367s) — so
 // e2e.yml now runs FOUR legs: those two groups whole, and the remaining 299
-// tests sharded two ways. E2E_WALKTHROUGH_SLICE picks the leg: "capture",
-// "stream", "rest" (the catch-all: it ignores the two carve-outs and nothing
-// else, so a new walkthrough spec joins it with no list to edit), unset = the
+// tests sharded two ways (a fifth, "sponsor", was cut from "rest" later — see
+// below). E2E_WALKTHROUGH_SLICE picks the leg: "capture", "stream", "sponsor",
+// "rest" (the catch-all: it ignores the carve-outs and nothing else, so a new
+// walkthrough spec joins it with no list to edit), unset = the
 // whole directory, which is what every local run takes. e2e.yml's e2e-parallel
 // matrix carries the measurements (run 39332874412: job 650 / 684 / 718 / 551s,
 // the slowest 12.0 min); e2e-ci-wiring.test.ts pins the partition.
+//
+// FIFTH LEG, 2026-11-12: "sponsor". sponsor-stream-matrix.spec.ts is serial and
+// three of its four tests take the WHOLE placement pool for a composed stream
+// (each holds it up to ~265s, then seeds and reads around it) — an estimated
+// ~13 min of added wall clock, NOT yet measured on CI. The "rest" legs already
+// sit at 14-17 / 12-13 min under a 20-minute `timeout-minutes`, so folding it in
+// would break the cap, and "stream" is 11 min; its own leg runs in parallel with
+// the other four. One file, so the carve-out is one anchored filename (not a
+// `sponsor` prefix: sponsors-journey.spec.ts and every other sponsor spec stay
+// in "rest"). "rest" ignores it. Replace the estimate with the first CI time.
 // ANCHORED ON `e2e/` deliberately. Playwright matches `testMatch`/`testIgnore`
 // against the file's ABSOLUTE path, not a path relative to `testDir`, so a
 // bare /walkthrough\// also matches every checkout that happens to live under
@@ -186,15 +197,18 @@ const PARALLEL_SLICE = process.env.E2E_PARALLEL_SLICE;
 const WALKTHROUGH = /[\\/]e2e[\\/]walkthrough[\\/]/;
 
 // Walkthrough carve-outs, selected by E2E_WALKTHROUGH_SLICE (see the block
-// above the project for the measurements and the reasoning). "capture" and
-// "stream" each select ONE group of files; "rest" ignores both and is the
-// catch-all; unset runs the whole directory, which is what a local run wants.
+// above the project for the measurements and the reasoning). "capture",
+// "stream" and "sponsor" each select ONE group of files; "rest" ignores all
+// three and is the catch-all; unset runs the whole directory, which is what a
+// local run wants.
 const WALKTHROUGH_CAPTURE = /walkthrough[\\/]capture-(phone|panel-pr2|auto)\.spec\.ts/;
 const WALKTHROUGH_STREAM = /walkthrough[\\/]stream-relay\.spec\.ts/;
+const WALKTHROUGH_SPONSOR = /walkthrough[\\/]sponsor-stream-matrix\.spec\.ts/;
 const WALKTHROUGH_SLICE = process.env.E2E_WALKTHROUGH_SLICE;
 const WALKTHROUGH_SLICE_MATCH: Record<string, RegExp> = {
   capture: WALKTHROUGH_CAPTURE,
   stream: WALKTHROUGH_STREAM,
+  sponsor: WALKTHROUGH_SPONSOR,
 };
 
 export default defineConfig({
@@ -250,7 +264,7 @@ export default defineConfig({
         ? WALKTHROUGH_SLICE_MATCH[WALKTHROUGH_SLICE]
         : WALKTHROUGH,
       ...(WALKTHROUGH_SLICE === "rest"
-        ? { testIgnore: [WALKTHROUGH_CAPTURE, WALKTHROUGH_STREAM] }
+        ? { testIgnore: [WALKTHROUGH_CAPTURE, WALKTHROUGH_STREAM, WALKTHROUGH_SPONSOR] }
         : {}),
       use: { ...devices["Desktop Chrome"], storageState: AUTH_STATE },
       dependencies: ["setup"],
