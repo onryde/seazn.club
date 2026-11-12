@@ -16,6 +16,7 @@ import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { apiJson, TAG, withDb } from "./helpers";
+import { REMINDER_CAP_PER_DAY } from "../src/lib/registration-reminder";
 import {
   escapeRe, INSTRUCTIONS, noHorizontalScroll, putSettings, seedDueEntry, seedRig, sweepAndOpenLink, tokensFor, WIDTHS,
 } from "./pay-page-kit";
@@ -81,7 +82,9 @@ test.describe("player payment page", () => {
          where type = 'registration.payment_reminded' and payload->>'registration_id' = ${entry.regId}`)[0]!.n));
     const sentCopy = enUi["reg.remind.sent"]!;
     const notSentCopy = enUi["reg.remind.notSent"]!;
-    const limitCopy = enUi["reg.remind.limit"]!;
+    // G8: the limit names the cap ({count}); the expected line fills it from the server's own constant, never a typed 5.
+    const limitCopy = enUi["reg.remind.limit"]!.replace("{count}", String(REMINDER_CAP_PER_DAY));
+    expect(limitCopy, "premise: the copy carries the count").toContain(String(REMINDER_CAP_PER_DAY));
     const page = rig.owner;
     const url = `/o/${rig.orgSlug}/c/${rig.compSlug}/registration?tab=registrants`;
     const open = async () => {
@@ -124,10 +127,10 @@ test.describe("player payment page", () => {
     await dialog.getByRole("button").last().click();
     await expect.poll(pressed, { timeout: 20_000 }).toBe(2);
 
-    // The cap, through the real route: three more audit rows make five; the sixth press is refused in the panel's own words.
+    // The cap, through the real route: audit rows up to the cap; the next press is refused in the panel's own words.
     await withDb(async (sql) => {
       const [c] = await sql<{ competition_id: string }[]>`select d.competition_id from divisions d where d.id = ${rig.divisionId}`;
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < REMINDER_CAP_PER_DAY - 2; i++) {
         await sql`insert into competition_events (competition_id, org_id, type, payload)
                   values (${c!.competition_id}, ${rig.orgId}, 'registration.payment_reminded', ${sql.json({ registration_id: entry.regId })})`;
       }
@@ -136,7 +139,7 @@ test.describe("player payment page", () => {
     await row.locator('[data-registration-hub-registrant-action="remind"]').click();
     await page.getByRole("alertdialog").getByRole("button").last().click();
     await expect(feedback(row)).toHaveText(limitCopy, { timeout: 20_000 });
-    expect(await pressed(), "the sixth press queued nothing").toBe(5);
+    expect(await pressed(), "the press past the cap queued nothing").toBe(REMINDER_CAP_PER_DAY);
 
     // The panel at the other widths: the button and the line are reachable, with no horizontal page scroll.
     let checked = 0;
