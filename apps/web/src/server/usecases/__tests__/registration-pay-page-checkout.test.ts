@@ -118,11 +118,15 @@ import {
   putRegistrationSettings,
   promoteWaitlistedRow,
   payFromPayPage,
+  groupById,
+  refundRegistration,
+  withdrawRegistrationOrganiser,
   reconcileRegistrationByPaySession,
   resumeRegistrationCheckout,
   PAY_SESSION_REUSE_MARGIN_MS,
 } from "../registrations";
 import { createRegistrationCheckout } from "../registrations/checkout";
+import { approveRegistration, rejectRegistration } from "../registration-approval";
 import { returnsToPayPage } from "../registrations/pay-page-checkout";
 import { divisionCtx } from "../registrations/lookups";
 import {
@@ -1355,6 +1359,99 @@ describe.skipIf(!HAS_DB)("a late refund is decided per payment, and the page's r
     const after = await payPageDocByToken(w.token, new Date());
     expect(after?.state).toBe("refunded");
     expect(after!.refundedCents).toBe(700);
+  });
+
+  // Polish wave P5, P1-review carry (b): every refund of the CURRENT payment is capped by that payment, not by the history.
+  // `refunded_cents` keeps the late refund of the earlier payment, so the old cap (`amount - refunded`) read the re-promoted entry's
+  // in-time payment as already sent back: the organiser's Refund 422'd and a withdrawal refunded nothing.
+  /** Late refund, re-promotion, then an IN-TIME payment of the new promotion (through the page and the real webhook core). */
+  async function paidAgainAfterLateRefund() {
+    const w = await oneLateRefund();
+    await repromote(w);
+    await payFromPayPage(w.token, ORIGIN);
+    const second = payInStripe((await payPointer(w.reg.id))!);
+    await handleRegistrationCheckoutCompleted(second);
+    const row = await loadWithGroup(w.reg.id);
+    expect(["paid", "confirmed"], "premise: the in-time payment seated the entry").toContain(row.status);
+    expect(row.entry_payment_intent_id, "premise: the entry's own payment is the second one").toBe(second.payment_intent);
+    expect(row.refunded_cents, "premise: the earlier late refund is still on the books").toBe(1500);
+    stripeMock.refundCreate.mockClear();
+    return { ...w, second };
+  }
+
+  it("the late producer books what it sent back as LATE (V510), beside the history - and a redelivery books nothing more", async () => {
+    const w = await oneLateRefund();
+    const row = await loadWithGroup(w.reg.id);
+    expect(row.refunded_cents).toBe(1500);
+    expect(row.late_refunded_cents).toBe(1500);
+    await handleRegistrationCheckoutCompleted(w.first);
+    expect((await loadWithGroup(w.reg.id)).late_refunded_cents).toBe(1500);
+  });
+
+  it("(P5 carry b) paid again after a late refund: the organiser's Refund sends back the WHOLE fee on the new payment; a second Refund → 422", async () => {
+    const w = await paidAgainAfterLateRefund();
+
+    const after = await refundRegistration(w.rig.owner, w.reg.id, undefined);
+
+    expect(stripeMock.refundCreate).toHaveBeenCalledTimes(1);
+    expect(stripeMock.refundCreate.mock.calls[0]![0]).toMatchObject({ payment_intent: w.second.payment_intent, amount: 1500 });
+    expect(after.refunded_cents, "history: the late refund and this one").toBe(3000);
+    // The sequence: the current payment is now fully refunded.
+    const err = await rejection(refundRegistration(w.rig.owner, w.reg.id, undefined));
+    expect(err.status).toBe(422);
+    expect(stripeMock.refundCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it("(P5 carry b) paid again after a late refund: an organiser withdrawal before the lock refunds the new payment in full", async () => {
+    const w = await paidAgainAfterLateRefund();
+
+    await withdrawRegistrationOrganiser(w.rig.owner, w.reg.id);
+
+    expect(stripeMock.refundCreate).toHaveBeenCalledTimes(1);
+    expect(stripeMock.refundCreate.mock.calls[0]![0]).toMatchObject({ payment_intent: w.second.payment_intent, amount: 1500 });
+    expect((await loadWithGroup(w.reg.id)).refunded_cents).toBe(3000);
+  });
+
+  it("(P5 carry b) paid again after a late refund: the status page's refund policy quotes the new payment's whole fee (the read twin)", async () => {
+    const w = await paidAgainAfterLateRefund();
+
+    const view = await groupById(w.reg.group_id, w.accessToken);
+
+    const entry = view.entries.find((e) => e.id === w.reg.id)!;
+    expect(entry.refund_policy.refundable).toBe(true);
+    expect(entry.refund_policy.amount_cents).toBe(1500);
+  });
+
+  /** The same, on a division switched to MANUAL approval before the in-time payment: the payment leaves the entry `paid`, awaiting
+   *  the organiser's decision. */
+  async function paidAgainAwaitingApproval() {
+    const w = await oneLateRefund();
+    await repromote(w);
+    await putRegistrationSettings(w.rig.owner, w.rig.division.id, { ...SETTINGS_BASE, payment_method: "stripe", fee_cents: 1500, approval: "manual" });
+    await payFromPayPage(w.token, ORIGIN);
+    const second = payInStripe((await payPointer(w.reg.id))!);
+    await handleRegistrationCheckoutCompleted(second);
+    expect((await loadWithGroup(w.reg.id)).status, "premise: awaiting the organiser's decision").toBe("paid");
+    stripeMock.refundCreate.mockClear();
+    return { ...w, second };
+  }
+
+  it("(P5 carry b) paid again after a late refund, awaiting approval: Reject refunds the new payment in full", async () => {
+    const w = await paidAgainAwaitingApproval();
+
+    await rejectRegistration(w.rig.owner, w.reg.id);
+
+    expect(stripeMock.refundCreate).toHaveBeenCalledTimes(1);
+    expect(stripeMock.refundCreate.mock.calls[0]![0]).toMatchObject({ payment_intent: w.second.payment_intent, amount: 1500 });
+  });
+
+  it("(P5 carry b) paid again after a late refund, awaiting approval: Approve is not refused as 'already refunded'", async () => {
+    const w = await paidAgainAwaitingApproval();
+
+    const row = await approveRegistration(w.rig.owner, w.reg.id);
+
+    expect(row.status).toBe("confirmed");
+    expect(stripeMock.refundCreate).not.toHaveBeenCalled();
   });
 
   it("a late refund recorded before the payment was named on it keeps the old whole-entry rule (no second refund on a redelivery)", async () => {

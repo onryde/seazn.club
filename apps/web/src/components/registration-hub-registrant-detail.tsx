@@ -23,7 +23,7 @@ import { t } from "@/lib/i18n";
 import type { Dict } from "@/lib/i18n-constants";
 import { formatMinor, asCurrency } from "@/lib/currency";
 import { fmtDateTime } from "@/lib/format";
-import { isTerminalRegistrationStatus } from "@/lib/registration-status";
+import { isTerminalRegistrationStatus, ownPaymentRefundedCents } from "@/lib/registration-status";
 import type { RegistrationFormField } from "@/server/api-v1/schemas";
 import type { RegistrationListRow } from "@/server/usecases/registrations";
 import type { RegistrantRosterPlayer, RegistrantCartSibling } from "@/app/o/[orgSlug]/c/[compSlug]/registration/data";
@@ -288,7 +288,8 @@ export function RegistrationHubRegistrantDetail({
             divisionFeeCents={row.division_fee_cents}
             paymentIntentId={row.payment_intent_id}
             entryPaymentIntentId={row.entry_payment_intent_id}
-            refundedCents={row.refunded_cents}
+            // Polish wave P5 (carry b): what was sent back of THIS payment (the Refund cap the server applies), never the history.
+            refundedCents={ownPaymentRefundedCents(row)}
             lastRemindedAt={row.last_reminded_at ? new Date(row.last_reminded_at).toISOString() : null}
           />
           {/* The organiser's own last payment-reminder press, in the org's timezone like "Submitted". A full-width line under the

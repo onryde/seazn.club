@@ -19,7 +19,7 @@ import { hashRegistrationToken } from "./helpers";
 export function regGroupCols(db: AnySql) {
   return db`
     r.id, r.division_id, r.org_id, r.status, r.display_name, r.answers,
-    r.amount_cents, r.refunded_cents, r.entrant_id, r.promoted_at, r.withdrawn_at,
+    r.amount_cents, r.refunded_cents, r.late_refunded_cents, r.entrant_id, r.promoted_at, r.withdrawn_at,
     r.charged_at, r.promotion_expires_at, r.waitlisted_at,
     r.payment_intent_id as entry_payment_intent_id,
     r.group_id, r.join_code, r.free_agent, r.created_at, r.updated_at,

@@ -295,6 +295,7 @@ describe("#10/#13b — notifyPromoted (pure function, offline branch — no DB)"
       answers: {},
       amount_cents: 500,
       refunded_cents: 0,
+      late_refunded_cents: 0,
       entrant_id: null,
       promoted_at: now,
       promotion_expires_at: null,

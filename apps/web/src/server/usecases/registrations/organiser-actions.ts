@@ -19,6 +19,7 @@ import { stripeRefund, queueRefundReceipt } from "./refunds";
 import { withdrawCore } from "./withdraw";
 import { queueRegistrationApprovedMails, queueRegistrationPaidMail } from "./lifecycle-mail";
 import { REMINDER_CAP_PER_DAY, REMINDER_LIMIT_CODE } from "@/lib/registration-reminder";
+import { ownPaymentRefundedCents } from "@/lib/registration-status";
 
 /** Organiser approve (free regs and waitlist overrides). Paid-division regs
  *  must be paid first — confirming an unpaid one would gift the spot. */
@@ -291,7 +292,9 @@ export async function refundRegistration(
   // RS002 (V368): reg.refunded_cents is THIS entry's own column now (hazard 3
   // fixed) — a sibling's earlier refund can no longer drive this negative and
   // falsely report an untouched entry as "already fully refunded".
-  const remaining = reg.amount_cents - reg.refunded_cents;
+  // Polish wave P5 (carry b): and only what was sent back of its CURRENT payment counts - a late payment's refund (kept in the
+  // history) is not this payment's, so a re-promoted entry that paid again is refundable in full.
+  const remaining = reg.amount_cents - ownPaymentRefundedCents(reg);
   if (remaining <= 0) throw new HttpError(422, "Already fully refunded");
   const amount = amountCents ?? remaining;
   if (amount > remaining) {

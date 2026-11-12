@@ -1,7 +1,7 @@
 import "server-only";
 // The hourly pay-window sweep: reminders, expiries, promotions (see ./index.ts).
 import { sql } from "@/lib/db";
-import { SPOT_HOLDERS } from "@/lib/registration-status";
+import { SPOT_HOLDERS, ownPaymentRefundedCents } from "@/lib/registration-status";
 import { enqueueEmailOnce } from "@/server/email-outbox";
 import { log } from "@/server/logger";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
@@ -523,9 +523,10 @@ export async function sweepRegistrations(
     if (
       (locked.status === "paid" || locked.status === "confirmed") &&
       locked.entry_payment_intent_id &&
-      locked.amount_cents - locked.refunded_cents > 0
+      locked.amount_cents - ownPaymentRefundedCents(locked) > 0
     ) {
-      const remaining = locked.amount_cents - locked.refunded_cents;
+      // Polish wave P5 (carry b): the cap is THIS payment's - a late payment's refund in the history is not this one's.
+      const remaining = locked.amount_cents - ownPaymentRefundedCents(locked);
       try {
         const refund = await stripeRefund(locked.entry_payment_intent_id, remaining);
         // The receipt is queued in the same transaction as the refund's record; a cron has no response to defer behind, so the first

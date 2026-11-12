@@ -4,6 +4,7 @@ import "server-only";
 // decides what it shows (an organiser who switches the division to offline, marks it paid or waives it after the mail is reflected
 // the next time the page is opened).
 import { sql } from "@/lib/db";
+import { ownPaymentRefundedCents } from "@/lib/registration-status";
 import type { Locale } from "@/lib/i18n-constants";
 import { fillPaymentInstructions } from "@/lib/payment-instructions";
 import { resolveVenueTz } from "@/lib/tz";
@@ -121,12 +122,10 @@ export async function payPageDocByToken(token: string, now: Date): Promise<PayPa
   const ctx = await divisionCtx(sql, reg.division_id);
   // Fix round 1 (F3): "refunded" is about the payment the entry holds NOW. `refunded_cents` keeps the whole history, including a
   // late payment sent back while the entry was off the list (lapsed, expired): that money was never this payment, so a re-promoted
-  // entry that then paid in time is paid, not refunded. Late refunds are the entry's `registration.refunded` / `late_payment` rows.
-  const [late] = await sql<{ cents: string }[]>`
-    select coalesce(sum((payload->>'amount_cents')::int), 0)::text as cents from competition_events
-    where competition_id = ${ctx.competition_id} and type = 'registration.refunded'
-      and payload->>'registration_id' = ${reg.id} and payload->>'mode' = 'late_payment'`;
-  const refundedCents = Math.max(0, reg.refunded_cents - Number(late?.cents ?? 0));
+  // entry that then paid in time is paid, not refunded. Polish wave P5 (carry b): the late part is booked on the entry
+  // (`late_refunded_cents`, V510, backfilled from the late-refund audit rows this read used to sum), and the rule is the one every
+  // refund cap reads.
+  const refundedCents = ownPaymentRefundedCents(reg);
   const state = payPageState({ status: reg.status, refundedCents, deadline, method }, now);
   if (state === null) return null;
 

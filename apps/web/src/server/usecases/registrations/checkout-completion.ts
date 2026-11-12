@@ -579,9 +579,12 @@ async function confirmPaidRegistration(
         // diverged, and the whole attempt would still land in the catch below
         // as `refund_failed` — a misleading audit trail for a refund that
         // actually succeeded).
+        // V510 (polish wave P5, carry b): booked as LATE too, so the cap of a later in-time payment (`ownPaymentRefundedCents`)
+        // is not eaten by this refund of a payment the entry never held.
         await tx`
           update registrations
-          set refunded_cents = refunded_cents + ${entryRefundCents}, updated_at = now()
+          set refunded_cents = refunded_cents + ${entryRefundCents},
+              late_refunded_cents = late_refunded_cents + ${entryRefundCents}, updated_at = now()
           where id = ${outcome.reg.id}`;
         await tx`
           update registration_groups

@@ -1,6 +1,7 @@
 import "server-only";
 // Withdrawal core shared by the public and organiser paths, and the solo placement release (see ./index.ts).
 import { sql } from "@/lib/db";
+import { ownPaymentRefundedCents } from "@/lib/registration-status";
 import { HttpError } from "@/lib/errors";
 import { deferred } from "@/lib/deferred";
 import { dispatchNow } from "@/server/email-outbox";
@@ -254,7 +255,8 @@ export async function withdrawCore(reg: RegistrationWithGroupRow, actorId: strin
       ? locked.entry_payment_intent_id
       : null,
     locked.amount_cents,
-    locked.refunded_cents,
+    // Polish wave P5 (carry b): what was sent back of THIS payment, not the history (a late payment's refund is not this one's).
+    ownPaymentRefundedCents(locked),
   );
   if (policy.refundable) {
     // RS002 (V368): THIS entry's own remaining balance — never the cart's

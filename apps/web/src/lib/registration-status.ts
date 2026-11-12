@@ -36,6 +36,16 @@ export function isTerminalRegistrationStatus(status: string): boolean {
   return (TERMINAL_STATUSES as readonly string[]).includes(status);
 }
 
+/** What has been sent back of THIS entry's CURRENT payment (polish wave P5, P1-review carry b): its refund history
+ *  (`refunded_cents`, V368) minus the refunds of LATE payments (`late_refunded_cents`, V510) - a late payment is never the entry's
+ *  current payment (a late outcome never stamps its intent on the entry), and a re-promotion resets the fee but keeps the history.
+ *  The cap of every refund of the current payment is `amount_cents - ownPaymentRefundedCents(row)`: the organiser's Refund, the
+ *  withdrawal refund, the pool-deadline sweep, the reject refund, the panel's Refund control and the payment page all read this.
+ *  Dependency-free like the rest of this module, so the organiser panel (a client island) imports the same rule. */
+export function ownPaymentRefundedCents(row: { refunded_cents: number; late_refunded_cents: number }): number {
+  return Math.max(0, row.refunded_cents - row.late_refunded_cents);
+}
+
 /** What an entry that is not yet confirmed is still WAITING ON (polish wave P2; the mails' answer to a bare "Pending"):
  *  `payment` (its fee is owed), `approval` (a manual-approval division needs the organiser's yes) or both. `null` = nothing to
  *  name: the entry is confirmed, waitlisted, ended, or pending with neither a fee nor a manual review (a state a free auto-approval

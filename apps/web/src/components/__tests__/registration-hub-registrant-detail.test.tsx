@@ -31,6 +31,7 @@ function row(over: Partial<RegistrationListRow> = {}): RegistrationListRow {
     answers: {},
     amount_cents: 1500,
     refunded_cents: 0,
+    late_refunded_cents: 0,
     entrant_id: null,
     promoted_at: null,
     withdrawn_at: null,
@@ -447,6 +448,21 @@ describe("RegistrationHubRegistrantDetail — action controls (RS005 W3, viewer/
       // Polish wave W8: Refund keys off the entry's OWN intent, so it must reach the island distinct from the cart's.
       entryPaymentIntentId: "pi_own_789",
     });
+  });
+
+  // Polish wave P5 (carry b): a late payment's refund stays in `refunded_cents` (history) but is not this payment's; the island's
+  // Refund cap is what was sent back of the CURRENT payment, the same rule the server's refund applies.
+  it("hands the island the CURRENT payment's refunded amount, not the history (a late refund then an in-time payment)", () => {
+    const tree = walk(
+      RegistrationHubRegistrantDetail(
+        baseProps({
+          row: row({ status: "confirmed", amount_cents: 1500, refunded_cents: 2200, late_refunded_cents: 1500, entry_payment_intent_id: "pi_now" }),
+          canEdit: true,
+        }),
+      ),
+    );
+    const actions = tree.find((e) => e.type === RegistrationHubRegistrantActions);
+    expect(propsOf(actions!).refundedCents).toBe(700);
   });
 
   it("is ABSENT for a viewer — not merely disabled (owner ruling, 2026-08-25: mutating controls are absent, not disabled)", () => {

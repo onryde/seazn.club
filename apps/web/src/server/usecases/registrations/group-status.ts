@@ -2,7 +2,7 @@ import "server-only";
 // The group (cart) read model behind the /r/[ref] status page (see ./index.ts).
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
-import { isTerminalRegistrationStatus } from "@/lib/registration-status";
+import { isTerminalRegistrationStatus, ownPaymentRefundedCents } from "@/lib/registration-status";
 import { isValidRefCode, normalizeRefCode } from "@/lib/ref-code";
 import { resolveVenueTz } from "@/lib/tz";
 import type { RegistrationSettingsRow, RegistrationRow, RegistrationGroupRow } from "./types";
@@ -242,6 +242,7 @@ async function buildGroupStatusView(
       | "fee_if_promoted_cents"
     > & {
       refunded_cents: number;
+      late_refunded_cents: number;
       promotion_expires_at: Date | null;
       /** V387/H1 — read to resolve THIS entry's refund policy, then
        *  destructured OUT below so it never reaches the public view: a
@@ -251,7 +252,7 @@ async function buildGroupStatusView(
     })[]
   >`
     select r.id, r.division_id, d.name as division_name, r.display_name, r.status,
-           r.amount_cents, r.refunded_cents, r.free_agent, r.join_code, r.promotion_expires_at,
+           r.amount_cents, r.refunded_cents, r.late_refunded_cents, r.free_agent, r.join_code, r.promotion_expires_at,
            r.payment_intent_id as entry_payment_intent_id,
            d.youth as division_youth, d.player_name_display as division_player_name_display,
            -- RS009: the team an organiser placed this solo sign-up on, or
@@ -406,7 +407,7 @@ async function buildGroupStatusView(
     charges_enabled: comp?.charges_enabled ?? false,
     payment_instructions: paymentInstructions,
     org_timezone: refundTz,
-    entries: entries.map(({ refunded_cents, promotion_expires_at, entry_payment_intent_id, ...e }) => ({
+    entries: entries.map(({ refunded_cents, late_refunded_cents, promotion_expires_at, entry_payment_intent_id, ...e }) => ({
       ...e,
       promotion_expires_at: promotion_expires_at ? new Date(promotion_expires_at).toISOString() : null,
       allows_new_joiner: entrantKindByDivision.get(e.division_id) !== "pair",
@@ -470,7 +471,8 @@ async function buildGroupStatusView(
         // is the honest answer when we cannot name this entry's charge.
         e.status === "paid" || e.status === "confirmed" ? entry_payment_intent_id : null,
         e.amount_cents,
-        refunded_cents,
+        // Polish wave P5 (carry b), the read twin of withdrawCore's: what was sent back of THIS payment, not the history.
+        ownPaymentRefundedCents({ refunded_cents, late_refunded_cents }),
       ),
     })),
   };

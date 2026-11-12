@@ -12,6 +12,7 @@ import "server-only";
 import type postgres from "postgres";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { ownPaymentRefundedCents } from "@/lib/registration-status";
 import { log } from "@/server/logger";
 import { deferred } from "@/lib/deferred";
 import { dispatchNow } from "@/server/email-outbox";
@@ -130,7 +131,8 @@ export async function approveRegistration(
     // Whole-branch review MAJOR: refundRegistration does NOT change status,
     // so a 'paid' row an organiser already refunded stayed approvable —
     // checked here, off `reg` directly, before anything settings-dependent.
-    if (reg.refunded_cents > 0) {
+    // Polish wave P5 (carry b): a refund of its CURRENT payment, not a late payment's refund in the history.
+    if (ownPaymentRefundedCents(reg) > 0) {
       throw new HttpError(422, "This registration was already refunded and cannot be approved");
     }
     const settings = await loadApprovalSettings(tx, reg.division_id);
@@ -276,7 +278,8 @@ export async function rejectRegistration(
   // on a cart whose entries paid in separate sessions is a sibling's. Null fails closed: nothing of this entry's to send back.
   const ownIntent = result.refundable?.entry_payment_intent_id ?? null;
   if (result.refundable && ownIntent) {
-    const remaining = result.refundable.amount_cents - result.refundable.refunded_cents;
+    // Polish wave P5 (carry b): the cap is THIS payment's - a late payment's refund in the history is not this one's.
+    const remaining = result.refundable.amount_cents - ownPaymentRefundedCents(result.refundable);
     if (remaining > 0) {
       try {
         // Read BEFORE the money moves (a failure after it would report a refund failure for a refund that went through).
