@@ -14,7 +14,7 @@
 // Sport: not applicable - refunds do not vary by sport (the money path never reads the sport).
 // Real Postgres required; skipped without DATABASE_URL (matches every sibling usecase suite in this directory).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type Stripe from "stripe";
+import Stripe from "stripe";
 
 const stripeMock = vi.hoisted(() => {
   const refundCreate = vi.fn();
@@ -49,6 +49,7 @@ import {
   withdrawRegistrationOrganiser,
 } from "../registrations";
 import { rejectRegistration } from "../registration-approval";
+import { stripeRefusedDefinitively } from "../registrations/refunds";
 import { SETTINGS_BASE, fakeSession, loadWithGroup, seedRegistration, seedSecondEntry, stripeRig } from "./_registration-fixtures";
 import { POST as refundRoute } from "@/app/api/v1/registrations/[id]/refund/route";
 
@@ -369,13 +370,66 @@ describe.skipIf(!HAS_DB)("a retry after a refused refund carries a new key; afte
     const { rig, open } = await twoEntryCart("manual");
     await handleRegistrationCheckoutCompleted(paidSession([open.id], 1500, "m1c"));
     stripeMock.refundCreate.mockImplementationOnce(async () => {
-      throw Object.assign(new Error("account restricted"), { statusCode: 400 });
+      throw Stripe.errors.generateV1Error({ statusCode: 400, type: "invalid_request_error", message: "account restricted" });
     });
     await rejectRegistration(rig.owner, open.id);
     expect((await loadWithGroup(open.id)).refunded_cents, "the reject stands, nothing booked").toBe(0);
     await refundRegistration(rig.owner, open.id, undefined);
     expect(keyOf(0)).toBe(`registration-refund:${open.id}:0:1500`);
     expect(keyOf(1)).toBe(`registration-refund:${open.id}:0:1500:f1`);
+  });
+
+  // Re-review N2: a Stripe 5xx counted as "answered" and rotated the key. Stripe documents a 500 as indeterminate - the refund may have
+  // executed - so a new key on the retry could send the money twice (on a shared-intent cart, out of a sibling's share). Rule under test:
+  // only a definitive refusal rotates; a 5xx keeps the key, so the retry replays whatever Stripe did.
+  it("Stripe answered 500: the press fails and books nothing; the retry carries the SAME key (it may have executed) and nothing is recorded as a refusal", async () => {
+    const { rig, open } = await paidEntry("n2a");
+    stripeMock.refundCreate.mockImplementationOnce(async () => {
+      throw Stripe.errors.generateV1Error({ statusCode: 500, type: "api_error", message: "An unknown error occurred" });
+    });
+    await expect(refundRegistration(rig.owner, open.id, undefined)).rejects.toThrow("unknown error");
+    expect((await loadWithGroup(open.id)).refunded_cents, "nothing booked").toBe(0);
+    await refundRegistration(rig.owner, open.id, undefined);
+    expect(stripeMock.refundCreate).toHaveBeenCalledTimes(2);
+    expect(keyOf(0)).toBe(`registration-refund:${open.id}:0:1500`);
+    expect(keyOf(1), "same key: if the first went through, Stripe replays it instead of refunding twice").toBe(keyOf(0));
+    const [{ failed, answered }] = await sql<{ failed: number; answered: number }[]>`
+      select count(*)::int as failed, count(*) filter (where payload->>'stripe_answered' = 'true')::int as answered
+        from competition_events where type = 'registration.refund_failed' and payload->>'registration_id' = ${open.id}`;
+    expect(failed, "the failure is on the record").toBe(1);
+    expect(answered, "but not as a refusal that would rotate the key").toBe(0);
+  });
+});
+
+// Re-review N2, the classifier itself: which Stripe errors are a DEFINITIVE refusal (the refund did not happen, Stripe replays the
+// refusal for 24 h, so the retry needs a new key) and which leave it unknown or untried (keep the key). Each error is built by the
+// Stripe SDK's own classifier (`generateV1Error`) from the raw answer, so the shapes are the SDK's, not ours. Pure: no database.
+describe("stripeRefusedDefinitively: a 4xx card / invalid-request refusal rotates the key; 5xx, rate limits, timeouts do not (N2)", () => {
+  const raw = (statusCode: number, type?: string) => Stripe.errors.generateV1Error({ statusCode, type, message: `${statusCode} ${type ?? ""}` } as never);
+  const CASES: [string, unknown, boolean][] = [
+    ["402 card_error (declined / insufficient funds)", raw(402, "card_error"), true],
+    ["400 invalid_request_error (e.g. charge already refunded)", raw(400, "invalid_request_error"), true],
+    ["404 invalid_request_error (no such charge)", raw(404, "invalid_request_error"), true],
+    ["500 api_error (indeterminate: may have executed)", raw(500, "api_error"), false],
+    ["502 api_error", raw(502, "api_error"), false],
+    ["503 api_error", raw(503, "api_error"), false],
+    ["429 rate limit (not processed)", raw(429), false],
+    ["400 idempotency_error (key reused with other parameters)", raw(400, "idempotency_error"), false],
+    ["401 authentication_error", raw(401, "authentication_error"), false],
+    ["403 permission_error", raw(403, "permission_error"), false],
+    ["a connection error / timeout (no answer)", new Stripe.errors.StripeConnectionError({ message: "timeout" } as never), false],
+    ["an invalid-request error raised before any request (no status: nothing reached Stripe)", new Stripe.errors.StripeInvalidRequestError({ message: "bad argument" } as never), false],
+    ["a plain Error", new Error("boom"), false],
+    ["null", null, false],
+  ];
+  it("every case (counted)", () => {
+    let checked = 0;
+    for (const [name, err, rotate] of CASES) {
+      expect(stripeRefusedDefinitively(err), name).toBe(rotate);
+      checked += 1;
+    }
+    expect(checked).toBe(CASES.length);
+    expect(CASES.filter(([, , r]) => r).length, "both answers present").toBe(3);
   });
 });
 

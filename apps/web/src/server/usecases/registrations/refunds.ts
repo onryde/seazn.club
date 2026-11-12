@@ -126,12 +126,22 @@ export async function queueRefundReceipt(
   }
 }
 
-/** Whether Stripe ANSWERED a refund call with an error (it carries the HTTP status Stripe returned), as opposed to the call never
- *  getting an answer (a connection error, a timeout). Stripe keeps the first answer to an idempotency key, errors included, for 24
- *  hours: after an answered error the same key only replays it, so the next attempt needs a new one (final review m1). After an
- *  unanswered call the key must stay: the refund may have gone through, and the same key is what turns the retry into a replay. */
-export function stripeAnsweredError(err: unknown): boolean {
-  return typeof (err as { statusCode?: unknown } | null)?.statusCode === "number";
+/** The error classes of a definitive refusal (stripe-node's `type`, as `billing-manage.ts` reads it). The SDK builds these
+ *  only from a 400/404 (invalid request) or a 402 (card) answer (`generateV1Error`), so the 4xx range comes with the type: a separate
+ *  status check would be a second guard nothing can reach. A 400 `idempotency_error` and a 429 rate limit get other types. */
+const DEFINITIVE_REFUSAL_TYPES: ReadonlySet<string> = new Set(["StripeCardError", "StripeInvalidRequestError"]);
+
+/** Whether Stripe DEFINITIVELY refused a refund call: a card or invalid-request error with a 4xx status (a drained connected account,
+ *  a charge already refunded, no such charge). The refund did not happen, and Stripe keeps the first answer to an idempotency key,
+ *  errors included, for 24 hours: the same key would only replay the refusal, so the next attempt needs a new one (final review m1).
+ *  Anything else keeps the key (re-review N2): a 5xx is indeterminate (Stripe documents that the refund may have executed), a rate limit
+ *  or an idempotency conflict was not processed, and a connection error or timeout got no answer at all. For those the same key is what
+ *  turns a retry into a replay of whatever Stripe did, instead of a second refund. */
+export function stripeRefusedDefinitively(err: unknown): boolean {
+  const e = err as { statusCode?: unknown; type?: unknown } | null;
+  // An answer from Stripe carries its HTTP status; an error the SDK raised before any request (or a timeout) carries none.
+  if (typeof e?.statusCode !== "number") return false;
+  return DEFINITIVE_REFUSAL_TYPES.has(String(e.type));
 }
 
 /**
@@ -142,9 +152,11 @@ export function stripeAnsweredError(err: unknown): boolean {
  *    different refund; a retry of a refund whose booking was lost (Stripe moved the money, the transaction rolled back) reads the
  *    same total and replays at Stripe instead of sending the money twice;
  *  - the amount;
- *  - the failures Stripe answered for this entry so far (`registration.refund_failed` rows with `stripe_answered`): Stripe replays
- *    an answered error for 24 hours, so a retry after the organiser fixed the cause (a topped-up connected account) must carry a new
- *    key or it is refused again (m1). No suffix while there are none, so the key of an untroubled refund is unchanged.
+ *  - the refusals Stripe gave this entry so far (`registration.refund_failed` rows with `stripe_answered`, true only for a definitive
+ *    refusal: `stripeRefusedDefinitively`): Stripe replays an answered error for 24 hours, so a retry after the organiser fixed the
+ *    cause (a topped-up connected account) must carry a new key or it is refused again (m1). A 5xx, a timeout or a connection error
+ *    is not counted (N2): the refund may have gone through, and the same key makes the retry a replay. No suffix while there are none,
+ *    so the key of an untroubled refund is unchanged.
  */
 export async function registrationRefundKey(tx: Tx, reg: Pick<RegistrationWithGroupRow, "id" | "refunded_cents">, amountCents: number): Promise<string> {
   const [{ n }] = await tx<{ n: number }[]>`
@@ -163,7 +175,7 @@ export async function recordRefundFailure(
   await audit(sql, a.competitionId, a.orgId, "registration.refund_failed", {
     registration_id: a.regId,
     mode: a.mode,
-    stripe_answered: stripeAnsweredError(a.err),
+    stripe_answered: stripeRefusedDefinitively(a.err),
   }, a.actorId);
 }
 
