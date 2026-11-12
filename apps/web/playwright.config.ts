@@ -178,15 +178,13 @@ const PARALLEL_SLICE = process.env.E2E_PARALLEL_SLICE;
 // matrix carries the measurements (run 39332874412: job 650 / 684 / 718 / 551s,
 // the slowest 12.0 min); e2e-ci-wiring.test.ts pins the partition.
 //
-// FIFTH LEG, 2026-11-12: "sponsor". sponsor-stream-matrix.spec.ts is serial and
-// three of its four tests take the WHOLE placement pool for a composed stream
-// (each holds it up to ~265s, then seeds and reads around it) — an estimated
-// ~13 min of added wall clock, NOT yet measured on CI. The "rest" legs already
-// sit at 14-17 / 12-13 min under a 20-minute `timeout-minutes`, so folding it in
-// would break the cap, and "stream" is 11 min; its own leg runs in parallel with
-// the other four. One file, so the carve-out is one anchored filename (not a
-// `sponsor` prefix: sponsors-journey.spec.ts and every other sponsor spec stay
-// in "rest"). "rest" ignores it. Replace the estimate with the first CI time.
+// FIFTH LEG, 2026-11-12: "sponsor". sponsor-stream-matrix.spec.ts is serial, and four of its five tests take the WHOLE placement pool
+// for a composed stream, one test at a time. MEASURED on CI run 43242862358 (its first version, four tests): 6 passed incl. the two
+// setup tests in 2.8 min, job 5.0 min; review round 1 then added carousel laps and a fifth test, so the figure is to be re-measured.
+// It stays its own leg even though 5 min would fit a rest shard: one of its tests calls the GLOBAL sponsor-deal cron sweep (every org
+// in the database), so no other spec's deals may share its database. One file, so the
+// carve-out is one anchored filename (not a `sponsor` prefix: sponsors-journey.spec.ts and every other sponsor spec stay in "rest").
+// "rest" ignores it.
 // ANCHORED ON `e2e/` deliberately. Playwright matches `testMatch`/`testIgnore`
 // against the file's ABSOLUTE path, not a path relative to `testDir`, so a
 // bare /walkthrough\// also matches every checkout that happens to live under

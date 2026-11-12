@@ -592,19 +592,26 @@ jobs:
             walkthrough_slice: rest
             args: --workers=3 --shard=2/2
           # FIFTH WALKTHROUGH LEG, 2026-11-12: sponsor-stream-matrix.spec.ts
-          # (the L2 sponsor x stream matrix). Serial, and three of its four
-          # tests take the WHOLE placement pool for a composed stream — up to
-          # ~265s each — so folding it into a rest shard would add an estimated
-          # ~13 min to legs already at 14-17 / 12-13 min against the 20-minute
-          # cap above. Its own leg runs in parallel with the rest; the
-          # estimate is NOT yet a CI measurement, replace it with the first
-          # run's job time. It runs whole (no --shard): one file, and a
-          # `rest` shard cannot be cut around it. `walkthrough_slice: sponsor`
-          # selects exactly that file in apps/web/playwright.config.ts and
-          # "rest" ignores it; e2e-ci-wiring.test.ts pins both. Like every
-          # walkthrough leg it also runs the Event Pass money-path check
-          # (keyed on event-pass.spec.ts, so it prints the notice here) and
-          # the Connect steps, which skip when their secrets are absent.
+          # (the L2 sponsor x stream matrix). Serial, and four of its five
+          # tests take the WHOLE placement pool for a composed stream, so it
+          # holds the pool one test at a time for the length of the file.
+          # MEASURED on run 43242862358 (its first version, four tests): 6
+          # passed incl. the two setup tests in 2.8 min, job 5.0 min (O1 20 s,
+          # J1 46 s, J2 49 s, J3 ~49 s). Review round 1 then added carousel
+          # laps and a fifth test (J4, the plan change mid-stream), so the
+          # figure is to be re-measured from the next run. It stays its own
+          # leg even though 5 min would fit a rest shard: J3 calls the GLOBAL
+          # sponsor-deal cron sweep (every org in the database), so no other
+          # spec's deals may share its database. Its pool holds are declared up
+          # to 325 s of the pool's 330 s limit at the 10 s connect delay set
+          # below (a local run at the default delay is refused by name).
+          # It runs whole (no --shard): one file, and a `rest` shard cannot be
+          # cut around it. `walkthrough_slice: sponsor` selects exactly that
+          # file in apps/web/playwright.config.ts and "rest" ignores it;
+          # e2e-ci-wiring.test.ts pins both. Like every walkthrough leg it also
+          # runs the Event Pass money-path check (keyed on event-pass.spec.ts,
+          # so it prints the notice here) and the Connect steps, which skip
+          # when their secrets are absent.
           - group: walkthrough sponsor
             slug: walkthrough-sponsor
             project: walkthrough

@@ -6,15 +6,21 @@
 //
 //   O1  OBS (passthrough, no compositor): a break card shows on the page and NOTHING is recorded - Times shown stays 0. This is
 //       today's behaviour (spec "Why" 3: airings ride only a composed heartbeat), named as such; it is not a promise.
-//   J1  Free (community): partner-only. A paid-by-hand deal with a queued successor, a complimentary deal, a hand-ticked sponsor;
-//       the gold/tiered placements are refused (402 sponsors.tiers). One full rotation cycle (three breaks) gives each its weight;
-//       the queued deal takes over; a deal ends; archive and unarchive.
-//   J2  Pass (a competition pass on A only): a gold deal scoped to A airs as gold on A and not at all on B (another competition's
-//       plan); org-wide gold and anything scoped to B is refused. A full cycle (four breaks), the successor deal, an ended
-//       complimentary deal, archive and unarchive.
-//   J3  Pro: title (complimentary), gold (paid by hand, queued silver successor), silver (ONLINE, paid by a signed Stripe webhook
-//       while live), partner (unpaid, expires, is written off), a hand-ticked partner (archive, unarchive). Two breaks before the
-//       changes and two after, each checked against an independent smooth weighted round robin.
+//   J1  Free (community): partner-only. A paid-by-hand deal with a queued successor, a complimentary deal, a hand-ticked sponsor, all three
+//       on the carousel before anything changes; the gold/tiered placements are refused (402 sponsors.tiers). One full rotation cycle
+//       (three breaks) gives each its weight; the queued deal takes over; a deal ends and a sponsor is archived (both leave the
+//       carousel); the archived sponsor returns and airs again.
+//   J2  Pass (a competition pass on A only): a gold deal scoped to A is served as gold on A, and the OTHER competition's plan PREVIEW
+//       (the door that never writes) carries no gold sponsor; org-wide gold and anything scoped to B is refused. A full cycle (four
+//       breaks), the successor deal, an ended complimentary deal, archive and a returning sponsor that airs again.
+//   J3  Pro: title (complimentary), gold (paid by hand, queued silver successor), silver (ONLINE, paid by a signed Stripe webhook while
+//       live: the joiner airs), partner (unpaid, expires, is written off). Four breaks across the changes, their positions strictly
+//       consecutive from 0.
+//   J4  Pro, the club's PLAN changes while the stream is live: downgraded to Free, every card the plan serves is a partner and the stored
+//       tier rows are untouched; back on Pro the tiers return. A hand-ticked sponsor is archived and returns.
+//
+// Every sponsor that leaves has aired before it leaves (a lap of the carousel first), and every joiner airs after it joins: an absence
+// is only evidence where the same sponsor was shown while it was on the roster.
 //
 // THE ONLY STAND-IN is the compositor, at its HTTP boundary (helpers/sponsor-relay-standin.ts, as sponsors-journey.spec.ts): a real
 // composed session, its real overlay page, the page's own `seazn:sponsor:*` console lines turned into heartbeat `airings`, a
@@ -27,11 +33,18 @@
 //   - who airs: the plan on the relay door (`relayPlan`) - ticked cards and their tiers. The tiers come from the packages the
 //     test bought; the roster from the deals and ticks it wrote.
 //   - the rotation share: SPONSOR_TIER_WEIGHTS (the declaration). A FULL cycle (as many consecutive breaks as the weights sum to)
-//     gives every card exactly its weight - no algorithm needed. A PARTIAL window is checked against `cycleOf` below, written from
-//     the rule the planner states (smooth weighted round robin: add every weight, take the highest, a tie to the earlier card,
-//     subtract the total), at the position the database recorded.
-//   - who is on the carousel AFTER a change: the page's own start lines whose `at` is past the change plus the page's catch-up.
+//     gives every card exactly its weight - no algorithm needed. A PARTIAL window is held to what a declaration does say: the card
+//     dealt is a ticked one and the positions the database wrote run consecutively from 0 (assign.ts: max + 1, none = 0). Which of two
+//     equal-weight cards comes first is the planner's own order, which nothing declares, so no per-break order is asserted.
+//   - who is on the carousel AFTER a change: the page's own start lines past the change plus the page's catch-up. The carousel is a
+//     fixed rotation over the ticked cards (carouselStep: the next index, mod the list), so a lap of as many showings as the roster
+//     has cards shows every sponsor on it once - and none that left.
 //   - what was recorded: `sponsor_airings` against the tally of the lines the heartbeats carried; Times shown on the Overview.
+//
+// ONE SPORT (volleyball), on purpose: the plan, the rotation and the carousel never read the sport - it only supplies a set end that
+// opens a major break (declared by the engine, `declaredMajorBreak`) - so a second sport would buy nothing but pool time.
+// SERIAL: after the first red the rest of this file does not run, so a red count here is a FLOOR - re-run after each fix until a
+// whole pass completes (as mobile.spec.ts).
 //
 // NOT DRIVEN, named plainly: a real Stripe Checkout (no Connect on CI), a frame's storage (a stub on CI: sponsors-journey J4), and
 // the stg run (layer L3).
@@ -81,19 +94,35 @@ const SEED_MS = 180_000;
 /** From the plan serving a change until the page has caught up: one poll of its own (POLL_WAIT_MS is the compositor page's
  *  STREAM_POLL_MS plus slack), then the showing in flight ends and the next is drawn from the new list. */
 const CATCH_UP_MS = POLL_WAIT_MS + SCENE_CAROUSEL_MS;
-/** Showings after the catch-up that count as evidence of who is on the carousel (two: one would pass a roster of one by luck). */
+/** Showings after the catch-up that count as evidence of who is on the carousel when the roster is one card (two: one would pass by luck). */
 const EVIDENCE_SHOWINGS = 2;
-/** From the plan serving a change to the page having shown EVIDENCE_SHOWINGS cards drawn from the new list. */
-const EVIDENCE_MS = CATCH_UP_MS + EVIDENCE_SHOWINGS * SCENE_CAROUSEL_MS + ACT_MS;
+/** A window of the page's carousel in which `showings` cards start: after a change in the roster it first catches up (CATCH_UP_MS) -
+ *  `settled` is a roster that has not changed, so nothing to catch up on - then a showing is SCENE_CAROUSEL_MS, plus a tap of slack. As
+ *  many showings as the roster has cards reach each card once (the carousel is a fixed rotation, carouselStep). */
+const lapMs = (showings: number, settled = false): number => (settled ? 0 : CATCH_UP_MS) + showings * SCENE_CAROUSEL_MS + ACT_MS;
 /** A change in the stream: the write, the plan following it, the heartbeat. */
 const CHANGE_MS = 2 * ACT_MS + POLL_WAIT_MS;
 /** A break: the score event and the plan that carries its card (the writing poll). */
 const BREAK_MS = POLL_WAIT_MS;
-/** The change a journey proves ABSENCE after: its writes (three at most), the plan, the page's evidence, the heartbeat. */
-const EVIDENCE_STEP_MS = 3 * ACT_MS + POLL_WAIT_MS + EVIDENCE_MS + ACT_MS;
-/** One journey's STREAMING time after the session is up: the live beat, the page, four breaks (a volleyball best-of-five has at
- *  most four set ends that open a break), three plain changes, one evidence step, the final heartbeat and its read. */
-const STREAM_MS = ACT_MS + NAV_MS + 4 * BREAK_MS + 3 * CHANGE_MS + EVIDENCE_STEP_MS + 2 * ACT_MS;
+/** A change a journey proves a carousel window after: its writes (three at most), the plan, the window, the heartbeat. */
+const evidenceStepMs = (showings: number): number => 3 * ACT_MS + POLL_WAIT_MS + lapMs(showings) + ACT_MS;
+/** The live beat and the page. */
+const START_MS = ACT_MS + NAV_MS;
+/** The final heartbeat and its read. */
+const END_MS = 2 * ACT_MS;
+/** Each journey's STREAMING time after the session is up, from what it does (a volleyball best-of-five has at most four set ends that
+ *  open a break). The first lap is a SETTLED one: a roster nothing has changed, shown once from the page's first showing. */
+const JOURNEY_STREAM_MS = {
+  free: START_MS + lapMs(3, true) + 3 * BREAK_MS + CHANGE_MS + evidenceStepMs(EVIDENCE_SHOWINGS) + CHANGE_MS + lapMs(2) + BREAK_MS + END_MS,
+  pass: START_MS + lapMs(3, true) + 4 * BREAK_MS + CHANGE_MS + evidenceStepMs(EVIDENCE_SHOWINGS) + CHANGE_MS + lapMs(2) + END_MS,
+  pro: START_MS + CHANGE_MS + lapMs(4) + 2 * BREAK_MS + CHANGE_MS + evidenceStepMs(3) + 2 * BREAK_MS + END_MS,
+  plan: START_MS + lapMs(3, true) + 2 * CHANGE_MS + evidenceStepMs(EVIDENCE_SHOWINGS) + CHANGE_MS + lapMs(3) + END_MS,
+} as const;
+/** The longest journey: the most a test of this file holds the pool after the session is up. The pool's limit is POOL_HOLD_CYCLES cycles
+ *  and the session's own create-to-stop cycle is one of them, so this must stay under the other five: at CI's 10 s connect delay (set on
+ *  the server and on the Playwright step alike) that is 5 x 55 s. A LOCAL run at the default delay has a smaller limit, and
+ *  takeWholePool refuses it by name - set FAKE_INGEST_CONNECT_AFTER_MS=10000 as CI does. */
+const STREAM_MS = Math.max(...Object.values(JOURNEY_STREAM_MS));
 /** The longest this file holds the stream pool: the session's create-to-stop cycle, then the journey. */
 const POOL_HOLD = { file: "sponsor-stream-matrix.spec.ts", holdMs: cycleMs(FAKE_CONNECT_MS) + STREAM_MS } as const;
 /** What a journey does after the pool is let go: the Overview read (three reloads) and the reads around it. */
@@ -133,10 +162,17 @@ test.afterEach(async () => {
 test.afterAll(async () => {
   // Not `releaseStandInOrg`: it deletes the org's sponsors rows, and `sponsor_orders.sponsor_id` is `on delete restrict`, so an org
   // that holds deals could not be released that way. The org is soft-deleted, as releaseSeededOrgSql does.
+  // One org's failed release must not leave the next one behind: each is tried, and the failures are named together at the end.
+  const failed: string[] = [];
   for (const org of orgs) {
-    await org.ctx.close().catch(() => {});
-    await releaseSeededOrgSql(org.orgId, org.userId);
+    try {
+      await org.ctx.close().catch(() => {});
+      await releaseSeededOrgSql(org.orgId, org.userId);
+    } catch (error) {
+      failed.push(`${org.orgSlug}: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
+  expect(failed, "every seeded org was released").toEqual([]);
 });
 
 // --- seeding, through the product ---------------------------------------------------------------------------------------------
@@ -156,6 +192,12 @@ const volleyball = (org: StandInOrg, label: string): Promise<StandInFixture> =>
  *  way setOrgPlanBySql does it, and the entitlement cache dropped so the next read is the new plan's. */
 async function downgrade(org: StandInOrg): Promise<void> {
   await setOrgPlanBySql({ orgId: org.orgId }, "community");
+  await invalidateOrgEntitlements(org.page.request, org.orgId);
+}
+
+/** The way back to Pro: the billing group moved and the entitlement cache dropped, so the next read is Pro's. */
+async function upgrade(org: StandInOrg): Promise<void> {
+  await setOrgPlanBySql({ orgId: org.orgId }, "pro");
   await invalidateOrgEntitlements(org.page.request, org.orgId);
 }
 
@@ -233,39 +275,23 @@ function declaredMajorBreak(sport: string): string {
   return kind;
 }
 
-interface CardLite {
-  id: string;
-  tier: SponsorTier;
-}
-
-/** One smooth-weighted-round-robin cycle (plan decision P7), from the rule as the planner states it and the weights the tier
- *  list declares: each step adds every card's weight to its score, takes the highest (a tie to the earlier card) and subtracts the
- *  total from it. Written here and not imported, so a change to the planner's own cycle moves THIS answer only if the rule moved. */
-function cycleOf(cards: readonly CardLite[]): string[] {
-  const weights = cards.map((c) => SPONSOR_TIER_WEIGHTS[c.tier]);
-  const total = weights.reduce((sum, w) => sum + w, 0);
-  const scores = weights.map(() => 0);
-  const out: string[] = [];
-  for (let step = 0; step < total; step++) {
-    weights.forEach((w, i) => {
-      scores[i] = (scores[i] ?? 0) + w;
-    });
-    let best = 0;
-    scores.forEach((score, i) => {
-      if (score > (scores[best] ?? 0)) best = i;
-    });
-    scores[best] = (scores[best] ?? 0) - total;
-    out.push(cards[best]!.id);
-  }
-  return out;
-}
-
 type Roster = Record<string, SponsorTier>;
 
 /** The ticked cards a plan serves, by sponsor, with the tier each is served at. `plan.cards` also carries an unticked card an airing
  *  still names (`onStream: false`): that one is not on the rotation or the carousel, so it is not on the roster. */
 function rosterOf(plan: SponsorPlan): Roster {
   return plan === null ? {} : Object.fromEntries(plan.cards.filter((c) => c.onStream).map((c) => [c.sponsorId, c.tier]));
+}
+
+/** EVERY card a plan carries, ticked or not, with the tier it is served at - the roster's unfiltered twin. */
+function cardTiersOf(plan: SponsorPlan): Roster {
+  return plan === null ? {} : Object.fromEntries(plan.cards.map((c) => [c.sponsorId, c.tier]));
+}
+
+/** `sponsors.tier` of the given sponsors: the stored tier the planner reads, and flattens AT THE READ when the plan has no `sponsors.tiers`. */
+async function tierRows(orgId: string, ids: readonly string[]): Promise<Roster> {
+  const rows = await withDb((sql) => sql<{ id: string; tier: SponsorTier }[]>`select id, tier from sponsors where org_id = ${orgId}`);
+  return Object.fromEntries(rows.filter((r) => ids.includes(r.id)).map((r) => [r.id, r.tier]));
 }
 
 // --- the stream under test ---------------------------------------------------------------------------------------------------
@@ -328,15 +354,28 @@ async function expectRoster(read: () => Promise<SponsorPlan>, want: Roster, mess
 const sceneShowings = (cef: CompositorPage, sinceMs: number) =>
   cef.sponsorLines().filter((l) => l.kind === "start" && l.json.source === "scene" && Date.parse(String(l.json.at)) >= sinceMs);
 
-/** Who is on the carousel after a change: once the page has caught up, EVIDENCE_SHOWINGS more cards are shown, and every one is of a
- *  sponsor still on the roster. The count first (anti-vacuity: a page that showed nothing proves nothing). */
-async function expectCarousel(rig: Rig, changedAt: number, allowed: ReadonlySet<string>, message: string): Promise<void> {
+/** Who is on the carousel after a change: once the page has caught up, as many showings as the roster has cards (at least
+ *  EVIDENCE_SHOWINGS) are shown - the carousel is a fixed rotation, so that is a lap - and every sponsor of `onAir` is among them
+ *  and none else. The count first (anti-vacuity: a page that showed nothing proves nothing). Not for a roster that did not change: that
+ *  is `expectAiredOnPage`. */
+async function expectCarousel(rig: Rig, changedAt: number, onAir: readonly string[], message: string): Promise<void> {
   const since = changedAt + CATCH_UP_MS;
+  const showings = Math.max(EVIDENCE_SHOWINGS, onAir.length);
   await expect
-    .poll(() => sceneShowings(rig.cef, since).length, { message: `${message}: the page showed ${EVIDENCE_SHOWINGS} more carousel cards once it had caught up`, timeout: EVIDENCE_MS })
-    .toBeGreaterThanOrEqual(EVIDENCE_SHOWINGS);
+    .poll(() => sceneShowings(rig.cef, since).length, { message: `${message}: the page showed ${showings} carousel cards once it had caught up`, timeout: lapMs(showings) })
+    .toBeGreaterThanOrEqual(showings);
   const shown = new Set(sceneShowings(rig.cef, since).map((l) => String(l.json.cardId)));
-  expect([...shown].filter((id) => !allowed.has(id)), `${message}: carousel cards of sponsors that must not air`).toEqual([]);
+  expect([...shown].filter((id) => !onAir.includes(id)), `${message}: carousel cards of sponsors that must not air`).toEqual([]);
+  expect(onAir.filter((id) => !shown.has(id)), `${message}: sponsors on the roster that the carousel did not show in a lap`).toEqual([]);
+}
+
+/** Before anything changes: every sponsor ticked onto the stream has had a carousel showing on the page, counted from the page's first
+ *  showing. This is the positive pair of every later absence - a sponsor that leaves HAD aired - and the first lap of the rotation. */
+async function expectAiredOnPage(rig: Rig, ids: readonly string[], message: string): Promise<void> {
+  const shown = () => new Set(sceneShowings(rig.cef, 0).map((l) => String(l.json.cardId)));
+  await expect
+    .poll(() => ids.filter((id) => !shown().has(id)), { message: `${message}: a carousel showing for every ticked sponsor`, timeout: lapMs(ids.length, true) })
+    .toEqual([]);
 }
 
 interface BreakPick {
@@ -346,12 +385,13 @@ interface BreakPick {
 }
 
 /** One set ends (a major natural break): the plan that carries its card is read until it names it, the position the database wrote
- *  for it is read back, and the sponsor it went to is checked against the rotation rule at that position, over the ticked cards the
- *  plan served at that moment. */
+ *  for it is read back, and the sponsor it went to is checked to be one of the ticked cards the plan served at that moment. WHICH of
+ *  them is not asserted per break (equal weights tie in the planner's own order, which nothing declares): the share is asserted over
+ *  a full cycle (expectFullCycle), and the positions over a journey. */
 async function openBreak(rig: Rig, winner: "home" | "away", message: string): Promise<BreakPick> {
   const known = new Set((await relayPlan(rig.s))?.airings.map((a) => a.momentId) ?? []);
   await sendEvent(rig.org.page.request, rig.fx.fixtureId, "volleyball.set.summary", winner === "home" ? { home: 25, away: 20 } : { home: 20, away: 25 });
-  const got: { airing?: SponsorPlanAiring; cards?: CardLite[] } = {};
+  const got: { airing?: SponsorPlanAiring; cards?: string[] } = {};
   await expect
     .poll(
       async () => {
@@ -359,7 +399,7 @@ async function openBreak(rig: Rig, winner: "home" | "away", message: string): Pr
         const airing = plan?.airings.find((a) => !known.has(a.momentId));
         if (plan === null || airing === undefined) return "no new airing yet";
         got.airing = airing;
-        got.cards = plan.cards.filter((c) => c.onStream).map((c) => ({ id: c.id, tier: c.tier }));
+        got.cards = plan.cards.filter((c) => c.onStream).map((c) => c.id);
         return airing.breakKind;
       },
       { message: `${message}: the plan carries the set's break card`, timeout: POLL_WAIT_MS },
@@ -373,10 +413,15 @@ async function openBreak(rig: Rig, winner: "home" | "away", message: string): Pr
   expect(row, `${message}: the break's assignment was written`).toBeDefined();
   expect(row!.source, `${message}: by the rotation`).toBe("rotation");
   expect(row!.position, `${message}: at a position`).not.toBeNull();
-  const position = row!.position!;
-  const cycle = cycleOf(cards);
-  expect(airing.cardId, `${message}: the card at position ${position} of ${cards.length} cards (${cycle.join(" ")})`).toBe(cycle[position % cycle.length]);
-  return { momentId: airing.momentId, position, sponsorId: airing.cardId };
+  expect(cards, `${message}: the card dealt is one of the ${cards.length} ticked cards`).toContain(airing.cardId);
+  return { momentId: airing.momentId, position: row!.position!, sponsorId: airing.cardId };
+}
+
+/** The positions the database wrote run consecutively from 0 (assign.ts: max + 1, none = 0) - only for an org whose first break this is,
+ *  which each journey guards before it opens one. A stuck position repeats a card; a skipped one hands a break to nobody. */
+function expectPositionsFromZero(picks: readonly BreakPick[], message: string): void {
+  expect(picks.length, `${message}: anti-vacuity - positions were read`).toBeGreaterThan(0);
+  expect(picks.map((p) => p.position), `${message}: strictly consecutive positions, from 0`).toEqual(picks.map((_, i) => i));
 }
 
 /** A FULL cycle: as many consecutive breaks as the weights sum to, so every card holds exactly its weight - read off the declaration,
@@ -384,7 +429,7 @@ async function openBreak(rig: Rig, winner: "home" | "away", message: string): Pr
 function expectFullCycle(picks: readonly BreakPick[], roster: Roster, message: string): void {
   const total = Object.values(roster).reduce((sum, tier) => sum + SPONSOR_TIER_WEIGHTS[tier], 0);
   expect(picks.length, `${message}: one break per unit of weight`).toBe(total);
-  expect(picks.map((p) => p.position), `${message}: consecutive positions`).toEqual(picks.map((_, i) => picks[0]!.position + i));
+  expectPositionsFromZero(picks, message);
   const held = Object.fromEntries(Object.keys(roster).map((id) => [id, picks.filter((p) => p.sponsorId === id).length]));
   const weights = Object.fromEntries(Object.entries(roster).map(([id, tier]) => [id, SPONSOR_TIER_WEIGHTS[tier]]));
   expect(held, `${message}: each sponsor held exactly its tier's weight of the cycle`).toEqual(weights);
@@ -406,10 +451,12 @@ async function expectOverview(org: StandInOrg, want: Record<string, number>, mes
     .toEqual(Object.fromEntries(Object.entries(want).map(([id, n]) => [id, String(n)])));
 }
 
-/** What every journey ends with: the last showings beaten in, the session over, then Times shown as a person reads it. */
+/** What every journey ends with: the last showings beaten in, then every sponsor that was ever on the roster has aired and been
+ *  recorded - the leavers among them (their absence means something only because they were shown) - and nobody else has. */
 async function finish(rig: Rig, sponsors: readonly string[], what: string): Promise<void> {
   await flush(rig, `${what}: the last showings`);
-  expect([...rig.aired.values()].reduce((a, b) => a + b, 0), `${what}: anti-vacuity - the page aired sponsors and they were recorded`).toBeGreaterThan(0);
+  expect(sponsors.length, `${what}: anti-vacuity - sponsors were named`).toBeGreaterThan(0);
+  expect(sponsors.filter((id) => (rig.aired.get(id) ?? 0) === 0), `${what}: sponsors that were on the stream and never aired`).toEqual([]);
   expect([...rig.aired.keys()].filter((id) => !sponsors.includes(id)), `${what}: only sponsors of this club aired`).toEqual([]);
 }
 
@@ -459,7 +506,7 @@ test("O1 OBS, no compositor: the break card shows on the page and NOTHING is rec
 // =====================================================================================================================
 // J1 — Free (community)
 // =====================================================================================================================
-test("J1 Free: partner-only deals reach the composed stream, a queued deal takes over mid-stream, a deal ends, a sponsor is archived and returns", async ({ browser }) => {
+test("J1 Free: partner-only deals reach the composed stream and air, a queued deal takes over mid-stream, a deal ends and a sponsor is archived, the archived sponsor returns and airs again", async ({ browser }) => {
   test.setTimeout(JOURNEY_TIMEOUT_MS);
   const org = await seedOrg(browser, "ssm-free");
   const fx = await volleyball(org, "Free");
@@ -490,22 +537,26 @@ test("J1 Free: partner-only deals reach the composed stream, a queued deal takes
   const all = [fa, fb, fh];
 
   await withStream(browser, org, fx, async (rig) => {
-    await expectRoster(() => relayPlan(rig.s), { [fa]: "partner", [fb]: "partner", [fh]: "partner" }, "Free: the plan serves the three partners");
+    const three: Roster = { [fa]: "partner", [fb]: "partner", [fh]: "partner" };
+    await expectRoster(() => relayPlan(rig.s), three, "Free: the plan serves the three partners");
     const [fresh] = await withDb((sql) => sql<{ n: number }[]>`select count(*)::int as n from sponsor_assignments where org_id = ${o}`);
     expect(fresh?.n, "guard: a fresh org has handed no break a card, so the rotation starts clean").toBe(0);
+    // Before anything changes all three air: what Fell and Fox are shown to be when they leave below.
+    await expectAiredOnPage(rig, all, "Free: before the changes");
 
     // One whole cycle (weights 1+1+1): three breaks, one card each.
     const picks: BreakPick[] = [];
     for (const winner of ["home", "away", "home"] as const) picks.push(await openBreak(rig, winner, `Free: break ${picks.length + 1}`));
-    expectFullCycle(picks, { [fa]: "partner", [fb]: "partner", [fh]: "partner" }, "Free: the first cycle");
+    expectFullCycle(picks, three, "Free: the first cycle");
     await flush(rig, "Free: after the first cycle");
 
-    // Change 1: Fern's paid deal ends; the queued one takes over. The sponsor stays on air; only the deal behind it moved.
+    // Change 1: Fern's paid deal ends; the queued one takes over. A STABILITY check, not a movement: the same sponsor stays on air
+    // at the same tier, so the roster before and after is identical - what moved is the deal behind it, read through its status.
     await expectArchiveRefused(api, o, fa, "Free: Fern holds a live deal");
     await endNow(api, o, faFirst, "Free: Fern's live deal ends");
     expect(await dealStatus(api, o, faFirst), "Fern's first deal is ended").toBe("ended");
     expect(await dealStatus(api, o, faNext), "the queued deal is live now").toBe("live");
-    await expectRoster(() => relayPlan(rig.s), { [fa]: "partner", [fb]: "partner", [fh]: "partner" }, "Free: Fern is still on the plan under its second deal");
+    await expectRoster(() => relayPlan(rig.s), three, "Free: stability - Fern is still on the plan under its second deal, and so are the others");
     await flush(rig, "Free: after the queued deal went live");
 
     // Change 2: a complimentary deal ends and a hand-ticked sponsor is archived: both leave the stream. The page's carousel follows.
@@ -513,13 +564,16 @@ test("J1 Free: partner-only deals reach the composed stream, a queued deal takes
     await archive(api, o, fh, "Free: Fox archived (no deal to hold it)");
     const left = await expectRoster(() => relayPlan(rig.s), { [fa]: "partner" }, "Free: only Fern is left on the plan");
     await flush(rig, "Free: after Fell and Fox left");
-    await expectCarousel(rig, left, new Set([fa]), "Free: after Fell ended and Fox was archived");
+    await expectCarousel(rig, left, [fa], "Free: after Fell ended and Fox was archived");
 
-    // Change 3: Fox comes back exactly as it was; the fourth break is dealt over the two cards now on the plan.
+    // Change 3: Fox comes back exactly as it was and airs again; the fourth break is dealt over the two cards now on the plan.
     await unarchive(api, o, fh, "Free: Fox unarchived");
-    await expectRoster(() => relayPlan(rig.s), { [fa]: "partner", [fh]: "partner" }, "Free: Fern and Fox are on the plan");
-    await openBreak(rig, "away", "Free: the break after the changes");
+    const back = await expectRoster(() => relayPlan(rig.s), { [fa]: "partner", [fh]: "partner" }, "Free: Fern and Fox are on the plan");
     await flush(rig, "Free: after Fox returned");
+    await expectCarousel(rig, back, [fa, fh], "Free: after Fox returned - Fox is on the carousel again");
+    const fourth = await openBreak(rig, "away", "Free: the break after the changes");
+    expectPositionsFromZero([...picks, fourth], "Free: the fourth break carries the positions on");
+    await flush(rig, "Free: after the fourth break");
     await finish(rig, all, "Free");
     await endAndReadOverview(rig, all, "Free");
   });
@@ -528,7 +582,7 @@ test("J1 Free: partner-only deals reach the composed stream, a queued deal takes
 // =====================================================================================================================
 // J2 — Pass (a competition pass on competition A only)
 // =====================================================================================================================
-test("J2 Pass: a gold deal scoped to the pass competition airs as gold there and not at all on another competition; deals change mid-stream", async ({ browser }) => {
+test("J2 Pass: a gold deal scoped to the pass competition is served as gold on it and is absent from the other competition's plan preview; deals change mid-stream and the returning sponsor airs again", async ({ browser }) => {
   test.setTimeout(JOURNEY_TIMEOUT_MS);
   const org = await seedOrg(browser, "ssm-pass");
   const fxA = await volleyball(org, "Pass A");
@@ -566,11 +620,13 @@ test("J2 Pass: a gold deal scoped to the pass competition airs as gold there and
     await expectRoster(() => relayPlan(rig.s), onA, "Pass: on the pass competition the gold deal airs as gold");
     // The other competition's plan: the gold deal is scoped to A, so it is not there; the org-wide partners are.
     const onB = () => previewPlan(api, fxB.fixtureId);
-    await expectRoster(onB, { [pp]: "partner", [ph]: "partner" }, "Pass: on the OTHER competition the gold sponsor is absent");
+    await expectRoster(onB, { [pp]: "partner", [ph]: "partner" }, "Pass: on the OTHER competition's plan preview the gold sponsor is absent");
     const [fresh] = await withDb((sql) => sql<{ n: number }[]>`select count(*)::int as n from sponsor_assignments where org_id = ${o}`);
     expect(fresh?.n, "guard: a fresh org has handed no break a card (the preview above wrote none)").toBe(0);
+    // Before anything changes all three air on A's stream: what Pine and Plover are shown to be when they leave below.
+    await expectAiredOnPage(rig, all, "Pass: before the changes");
 
-    // One whole cycle (weights 2+1+1): all four breaks a best-of-five can open.
+    // One whole cycle (weights 2+1+1): all four breaks a best-of-five can open, before the first change.
     const picks: BreakPick[] = [];
     for (const winner of ["home", "away", "home", "away"] as const) picks.push(await openBreak(rig, winner, `Pass: break ${picks.length + 1}`));
     expectFullCycle(picks, onA, "Pass: the cycle");
@@ -584,19 +640,20 @@ test("J2 Pass: a gold deal scoped to the pass competition airs as gold there and
     await expectRoster(onB, { [pp]: "partner", [ph]: "partner" }, "Pass: the other competition's plan did not move");
     await flush(rig, "Pass: after the gold deal ended");
 
-    // Change 2: a complimentary deal ends, a hand-ticked sponsor is archived. Nothing but Pike airs; the other competition has no plan.
+    // Change 2: a complimentary deal ends, a hand-ticked sponsor is archived. Nothing but Pike airs; the other competition's preview has no plan.
     await endNow(api, o, ppDeal, "Pass: Pine's deal ends");
     await archive(api, o, ph, "Pass: Plover archived");
     const left = await expectRoster(() => relayPlan(rig.s), { [pg]: "partner" }, "Pass: only Pike is left on the pass competition");
-    await expectRoster(onB, {}, "Pass: the other competition has no sponsor left, so no plan");
+    await expectRoster(onB, {}, "Pass: the other competition's preview has no sponsor left, so no plan");
     await flush(rig, "Pass: after Pine ended and Plover was archived");
-    await expectCarousel(rig, left, new Set([pg]), "Pass: after Pine ended and Plover was archived");
+    await expectCarousel(rig, left, [pg], "Pass: after Pine ended and Plover was archived");
 
-    // Change 3: Plover returns.
+    // Change 3: Plover returns and airs again.
     await unarchive(api, o, ph, "Pass: Plover unarchived");
-    await expectRoster(() => relayPlan(rig.s), { [pg]: "partner", [ph]: "partner" }, "Pass: Pike and Plover are on the pass competition");
-    await expectRoster(onB, { [ph]: "partner" }, "Pass: Plover is on the other competition too (org-wide)");
+    const back = await expectRoster(() => relayPlan(rig.s), { [pg]: "partner", [ph]: "partner" }, "Pass: Pike and Plover are on the pass competition");
+    await expectRoster(onB, { [ph]: "partner" }, "Pass: Plover is on the other competition's preview too (org-wide)");
     await flush(rig, "Pass: after Plover returned");
+    await expectCarousel(rig, back, [pg, ph], "Pass: after Plover returned - Plover is on the carousel again");
     await finish(rig, all, "Pass");
     await endAndReadOverview(rig, all, "Pass");
   });
@@ -605,7 +662,7 @@ test("J2 Pass: a gold deal scoped to the pass competition airs as gold there and
 // =====================================================================================================================
 // J3 — Pro
 // =====================================================================================================================
-test("J3 Pro: every tier and payment type on one stream - a paid-online deal goes live mid-stream, a gold deal hands over to its silver successor, an unpaid deal expires and is written off", async ({ browser }) => {
+test("J3 Pro: every tier and payment type on one stream - a paid-online deal goes live mid-stream and airs, a gold deal hands over to its silver successor, an unpaid deal expires and is written off", async ({ browser }) => {
   test.setTimeout(JOURNEY_TIMEOUT_MS);
   const org = await seedOrg(browser, "ssm-pro");
   const fx = await volleyball(org, "Pro");
@@ -623,7 +680,6 @@ test("J3 Pro: every tier and payment type on one stream - a paid-online deal goe
   const g = await newSponsor(api, o, "Gale Gold Estates");
   const s = await newSponsor(api, o, "Sable Silver Print");
   const q = await newSponsor(api, o, "Quarry Quick Lets");
-  const h = await newSponsor(api, o, "Heron Hand Tools");
   const tDeal = await newDeal(api, o, t, { package_id: pkg.title, payment_method: "complimentary", go_live: "immediate" });
   expect(await dealStatus(api, o, tDeal), "premise: the title deal is live").toBe("live");
   const gGold = await newDeal(api, o, g, { package_id: pkg.gold });
@@ -633,7 +689,6 @@ test("J3 Pro: every tier and payment type on one stream - a paid-online deal goe
   // Quarry's deal goes live at once and is never paid: the unpaid-and-expired state a write-off is for.
   const qDeal = await newDeal(api, o, q, { package_id: pkg.partner, go_live: "immediate" });
   expect(await dealStatus(api, o, qDeal), "premise: live, unpaid").toBe("live");
-  await tick(api, o, h, "Heron ticked by hand");
   // Sable's ONLINE deal, pending: SQL-seeded the way Send invoice leaves one (a CI server has no Connect to sell online through),
   // its sponsor hidden until it is paid. The payment below is the signed webhook, the route Stripe itself calls.
   const sDeal = await withDb(async (sql) => {
@@ -646,20 +701,16 @@ test("J3 Pro: every tier and payment type on one stream - a paid-online deal goe
     await sql`update sponsors set status = 'inactive' where id = ${s}`;
     return made!.id;
   });
-  const all = [t, g, s, q, h];
+  const all = [t, g, s, q];
 
   await withStream(browser, org, fx, async (rig) => {
-    const start: Roster = { [t]: "title", [g]: "gold", [q]: "partner", [h]: "partner" };
+    const start: Roster = { [t]: "title", [g]: "gold", [q]: "partner" };
     await expectRoster(() => relayPlan(rig.s), start, "Pro: every tier airs at its own tier; Sable (unpaid, online) is not on the plan yet");
     const [fresh] = await withDb((sql) => sql<{ n: number }[]>`select count(*)::int as n from sponsor_assignments where org_id = ${o}`);
     expect(fresh?.n, "guard: a fresh org has handed no break a card, so the rotation starts clean").toBe(0);
 
-    // Two breaks of the first seven-turn cycle (3+2+1+1): a PARTIAL window, checked at its recorded positions.
-    await openBreak(rig, "home", "Pro: the first break");
-    await openBreak(rig, "away", "Pro: the second break");
-    await flush(rig, "Pro: before the changes");
-
-    // Change 1: Sable's invoice is paid ONLINE while the stream is live (the signed webhook): the sponsor joins, as silver.
+    // Change 1: Sable's invoice is paid ONLINE while the stream is live (the signed webhook): the sponsor joins, as silver, and AIRS - in
+    // the same lap that shows Quarry, which is what Quarry is shown to be when it expires below.
     const paid = await postSignedEvent(
       api,
       stripeEvent("payment_intent.succeeded", {
@@ -669,23 +720,25 @@ test("J3 Pro: every tier and payment type on one stream - a paid-online deal goe
     );
     expect(paid.status(), "the signed event is accepted").toBe(200);
     expect(await dealStatus(api, o, sDeal), "Sable's online deal is live once paid").toBe("live");
-    await expectRoster(() => relayPlan(rig.s), { ...start, [s]: "silver" }, "Pro: Sable joined the stream, as silver");
+    const joined = await expectRoster(() => relayPlan(rig.s), { ...start, [s]: "silver" }, "Pro: Sable joined the stream, as silver");
     await flush(rig, "Pro: after Sable's payment");
+    await expectCarousel(rig, joined, [t, g, s, q], "Pro: after Sable joined - Sable airs, and so does every other sponsor on the roster");
+
+    // Two breaks over the four cards on the plan (3+2+1+1, the first seven-turn cycle): a PARTIAL window, its positions read back.
+    const picks: BreakPick[] = [];
+    picks.push(await openBreak(rig, "home", "Pro: the first break"));
+    picks.push(await openBreak(rig, "away", "Pro: the second break"));
+    await flush(rig, "Pro: after the first window");
 
     // Change 2: Gale's gold deal ends; the queued silver deal takes over - the same sponsor, a lighter tier.
     await expectArchiveRefused(api, o, g, "Pro: Gale holds a live deal");
     await endNow(api, o, gGold, "Pro: Gale's gold deal ends");
     expect(await dealStatus(api, o, gSilver), "the queued silver deal is live").toBe("live");
-    const afterGold: Roster = { [t]: "title", [g]: "silver", [s]: "silver", [q]: "partner", [h]: "partner" };
+    const afterGold: Roster = { [t]: "title", [g]: "silver", [s]: "silver", [q]: "partner" };
     await expectRoster(() => relayPlan(rig.s), afterGold, "Pro: Gale is served as silver now");
     await flush(rig, "Pro: after Gale's hand-over");
 
-    // Two more breaks, dealt over the five cards now on the plan (3+1+1+1+1): the positions carry on from the first two.
-    await openBreak(rig, "home", "Pro: the third break, after Sable joined and Gale handed over");
-    await openBreak(rig, "away", "Pro: the fourth break");
-    await flush(rig, "Pro: after the second window");
-
-    // Change 3: Quarry's unpaid deal runs past its end and the sweep ends it; the club writes it off. A hand-ticked sponsor is archived.
+    // Change 3: Quarry's unpaid deal runs past its end and the sweep ends it; the club writes it off. The carousel follows.
     await withDb((sql) => sql`update sponsor_orders set ends_at = now() - interval '1 minute' where id = ${qDeal}`);
     const cronSecret = process.env.CRON_SECRET;
     expect(cronSecret, "the e2e job sets CRON_SECRET (one value for the server and this runner)").toBeTruthy();
@@ -699,16 +752,79 @@ test("J3 Pro: every tier and payment type on one stream - a paid-online deal goe
     const writeOff = await apiJson<{ deal_status: string; ended_reason: string | null }>(api, `/api/v1/orgs/${o}/sponsor-deals/${qDeal}/write-off`, "POST");
     expect(writeOff.status, `the write-off: ${JSON.stringify(writeOff.error)}`).toBe(200);
     expect(writeOff.data, "Quarry's deal is written off").toMatchObject({ deal_status: "ended", ended_reason: "written_off" });
-    await archive(api, o, h, "Pro: Heron archived (no deal to hold it)");
-    const left = await expectRoster(() => relayPlan(rig.s), { [t]: "title", [g]: "silver", [s]: "silver" }, "Pro: Quarry (expired) and Heron (archived) have left the plan");
-    await flush(rig, "Pro: after Quarry expired and Heron was archived");
-    await expectCarousel(rig, left, new Set([t, g, s]), "Pro: after Quarry expired and Heron was archived");
+    const left = await expectRoster(() => relayPlan(rig.s), { [t]: "title", [g]: "silver", [s]: "silver" }, "Pro: Quarry (expired) has left the plan; Quarry does not return");
+    await flush(rig, "Pro: after Quarry expired");
+    await expectCarousel(rig, left, [t, g, s], "Pro: after Quarry expired - Gale (now silver) and Sable air, Quarry does not");
 
-    // Change 4: Heron returns exactly as it was; Quarry, whose deal ended, does not.
-    await unarchive(api, o, h, "Pro: Heron unarchived");
-    await expectRoster(() => relayPlan(rig.s), { [t]: "title", [g]: "silver", [s]: "silver", [h]: "partner" }, "Pro: Heron is back; Quarry is not");
-    await flush(rig, "Pro: after Heron returned");
+    // Two more breaks, dealt over the three cards now on the plan (3+1+1): the positions carry on across all three changes.
+    picks.push(await openBreak(rig, "home", "Pro: the third break, after Sable joined, Gale handed over and Quarry left"));
+    picks.push(await openBreak(rig, "away", "Pro: the fourth break"));
+    expectPositionsFromZero(picks, "Pro: the four breaks across the changes");
+    await flush(rig, "Pro: after the second window");
     await finish(rig, all, "Pro");
     await endAndReadOverview(rig, all, "Pro");
+  });
+});
+
+// =====================================================================================================================
+// J4 — Pro, the club's PLAN changes while the stream is live
+// =====================================================================================================================
+test("J4 Pro: the plan changes mid-stream - on Free every card is served as a partner and the stored tiers are untouched, back on Pro the tiers return; a hand-ticked sponsor is archived and returns", async ({ browser }) => {
+  test.setTimeout(JOURNEY_TIMEOUT_MS);
+  const org = await seedOrg(browser, "ssm-plan");
+  const fx = await volleyball(org, "Plan");
+  const api = org.page.request;
+  const o = org.orgId;
+  expect(await planFlagSql("sponsors.tiers", "pro"), "premise: Pro has sponsors.tiers").toBe(true);
+  expect(await planFlagSql("sponsors.tiers", "community"), "premise: Free has none").toBe(false);
+
+  // Packages and deals are made on Pro (Free refuses a title or gold placement); the plan is moved only once the stream is up.
+  const titlePkg = await streamPackage(api, o, "title");
+  const goldPkg = await streamPackage(api, o, "gold");
+  const t = await newSponsor(api, o, "Tarn Title Motors");
+  const g = await newSponsor(api, o, "Gale Gold Estates");
+  const h = await newSponsor(api, o, "Heron Hand Tools");
+  const tDeal = await newDeal(api, o, t, { package_id: titlePkg, payment_method: "complimentary", go_live: "immediate" });
+  expect(await dealStatus(api, o, tDeal), "premise: the title deal is live").toBe("live");
+  const gDeal = await newDeal(api, o, g, { package_id: goldPkg, payment_method: "complimentary", go_live: "immediate" });
+  expect(await dealStatus(api, o, gDeal), "premise: the gold deal is live").toBe("live");
+  await tick(api, o, h, "Heron ticked by hand");
+  const all = [t, g, h];
+  // The tiers the packages bought - the test's own declaration, which the plan and the stored rows are both held to.
+  const onPro: Roster = { [t]: "title", [g]: "gold", [h]: "partner" };
+  const onFree: Roster = Object.fromEntries(all.map((id) => [id, "partner"]));
+
+  await withStream(browser, org, fx, async (rig) => {
+    const plan = () => relayPlan(rig.s);
+    await expectRoster(plan, onPro, "Plan: on Pro every sponsor is served at its own tier");
+    expect(cardTiersOf(await plan()), "premise: and every card the plan carries is at that tier").toEqual(onPro);
+    expect(await tierRows(o, all), "premise: the stored rows hold the tiers the packages bought").toEqual(onPro);
+    await expectAiredOnPage(rig, all, "Plan: before anything changes");
+
+    // Change 1: the club drops to Free while the stream is live. The plan serves EVERY card as a partner; nothing is written to the rows.
+    await downgrade(org);
+    await expectRoster(plan, onFree, "Plan: on Free every ticked sponsor is served as a partner");
+    expect(cardTiersOf(await plan()), "Plan: on Free every card the plan carries is a partner").toEqual(onFree);
+    expect(await tierRows(o, all), "Plan: the downgrade wrote nothing to the rows - the tiers are flattened at the read").toEqual(onPro);
+    await flush(rig, "Plan: after the downgrade");
+
+    // Change 2: and back to Pro: the tiers return, because they never left the rows.
+    await upgrade(org);
+    await expectRoster(plan, onPro, "Plan: back on Pro the tiers return");
+    expect(cardTiersOf(await plan()), "Plan: back on Pro every card is at its own tier again").toEqual(onPro);
+    expect(await tierRows(o, all), "Plan: and the rows are as they were").toEqual(onPro);
+    await flush(rig, "Plan: after the upgrade");
+
+    // Change 3: the hand-ticked sponsor is archived and leaves the carousel (it had aired above); change 4: it returns and airs again.
+    await archive(api, o, h, "Plan: Heron archived (no deal to hold it)");
+    const left = await expectRoster(plan, { [t]: "title", [g]: "gold" }, "Plan: Heron has left the plan");
+    await flush(rig, "Plan: after Heron left");
+    await expectCarousel(rig, left, [t, g], "Plan: after Heron was archived");
+    await unarchive(api, o, h, "Plan: Heron unarchived");
+    const back = await expectRoster(plan, onPro, "Plan: Heron is back, as the partner it was");
+    await flush(rig, "Plan: after Heron returned");
+    await expectCarousel(rig, back, all, "Plan: after Heron returned - Heron is on the carousel again");
+    await finish(rig, all, "Plan");
+    await endAndReadOverview(rig, all, "Plan");
   });
 });
