@@ -57,6 +57,7 @@ import { openPanels } from "./helpers/rules-strip";
 import { HOLD_MS } from "../src/components/v2/scorepad/queue";
 import { FLOOR_MS, ROUTE_CHECK_MS } from "./spectator-w2-kit";
 import { withDb } from "./rs007-money-kit";
+import { openSponsorRowTools } from "./settings-support";
 import { STORAGE_KEY as GAME_2048_STORAGE_KEY, type GameState as Game2048State } from "../src/games/2048/state";
 import { openMatchActions } from "./helpers/match-actions";
 import { consolePanel, openConsolePanel } from "./helpers/console-panels";
@@ -8167,4 +8168,203 @@ test("hockey v3 pad (W2d T18): the goal-type question holds the 44px floor, hit-
   const events = await apiJson<{ type: string }[]>(request, `/api/v1/fixtures/${fx.fixtureId}/events?since_seq=0`);
   expect(events.data!.filter((e) => e.type === "hockey.goal"), "a cancelled question writes no goal").toEqual([]);
   console.log(`[hockey goal-type ${projectWidth}px] ${here.length} controls hit-tested; scrollWidth ${widths.scroll}/${widths.client}`);
+});
+
+// ---------------------------------------------------------------------------
+// Archive a sponsor (spec 2026-11-11-sponsor-archive, plan Task 8 step 2) - the three new surfaces at all seven width projects, in es and
+// nl (the longest words): the sponsor's page with its Archive card BLOCKED by a live deal, an ARCHIVED sponsor's page with its banner and
+// Unarchive, and the list with "Show archived (N)" on. Names are 43 characters (the check a short name cannot fail).
+// Its own test with its own seed - never the serial setup test (a sponsor API regression there would abort ~110 tests; see
+// `seedSponsorsSweep`). What it holds, each hit-tested the way a finger meets it (elementFromPoint, not a painted box):
+//   - the list switch is 44px at EVERY width; the Archive, Unarchive and Add-deal-sheet close buttons are 44px below md (768), where
+//     `max-md:min-h-11` / `max-md:h-11` is the declared floor; from 768 they are hit-tested but sized by the desktop rule (SMALL_BTN is
+//     30px; the large modal close is 40px) - a tablet floor is not in the design of record, so none is asserted there.
+//   - no horizontal page scroll, and nothing of the new surfaces painted past the viewport;
+//   - axe serious/critical on the new surfaces (the archive card, the banner, the switch row and the Archived group).
+// The list's ⋯ tray is a fold below md: the archived row's tools are opened (gated on the toggle being visible) before the trash is read.
+// ---------------------------------------------------------------------------
+type ArchiveSweep = { orgId: string; blocked: string; plain: string; archived: string; ids: string[]; blockedId: string; plainId: string; archivedId: string; done: boolean };
+let archiveSweep: ArchiveSweep | null = null;
+/** 43 characters, distinct from the first letter (the sponsors share one org). */
+const archiveName = (head: string): string => `${head} Building Supplies and Timber Company Ltd`.slice(0, 43);
+
+async function seedArchiveSweep(request: APIRequestContext): Promise<ArchiveSweep> {
+  // A retry of the test reuses what it already made, so a flaky run does not pile a second set into the org.
+  if (archiveSweep !== null && archiveSweep.done) return archiveSweep;
+  expect(setupOrgId, "the setup test recorded the active org's id").not.toBe("");
+  const orgId = setupOrgId;
+  const mk = async (name: string): Promise<string> => {
+    const res = await apiJson<{ id: string }>(request, `/api/v1/orgs/${orgId}/sponsors`, "POST", { name, tier: "partner", url: "https://sponsor.example/" });
+    expect(res.status, `sponsor ${name} -> ${res.status} ${JSON.stringify(res.error)}`).toBe(201);
+    return res.data!.id;
+  };
+  const blocked = archiveName("Brightwater");
+  const plain = archiveName("Wharfside");
+  const archived = archiveName("Yardley");
+  for (const n of [blocked, plain, archived]) expect(n.length, `${n} is 43 characters`).toBe(43);
+  const pkg = await apiJson<{ id: string }>(request, `/api/v1/orgs/${orgId}/sponsor-packages`, "POST", { name: `Archive gate partner ${TAG}`, price_cents: 25_000, currency: "gbp", tier: "partner" });
+  expect(pkg.status, `package -> ${pkg.status} ${JSON.stringify(pkg.error)}`).toBe(201);
+  const blockedId = await mk(blocked);
+  const plainId = await mk(plain);
+  const archivedId = await mk(archived);
+  // Recorded as soon as they exist, so the afterAll cleanup finds them even when a later step is the red one.
+  const seeded: ArchiveSweep = { orgId, blocked, plain, archived, ids: [blockedId, plainId, archivedId], blockedId, plainId, archivedId, done: false };
+  archiveSweep = seeded;
+  const deal = await apiJson<{ deal: { deal_status: string } }>(request, `/api/v1/orgs/${orgId}/sponsors/${blockedId}/deals`, "POST", {
+    package_id: pkg.data!.id, competition_id: null, payment_method: "complimentary", go_live: "immediate",
+  });
+  expect(deal.status, `deal -> ${deal.status} ${JSON.stringify(deal.error)}`).toBe(201);
+  expect(deal.data!.deal.deal_status, "premise: the complimentary deal is live, so it blocks Archive").toBe("live");
+  const arch = await apiJson(request, `/api/v1/orgs/${orgId}/sponsors/${archivedId}/archive`, "POST");
+  expect(arch.status, `archive -> ${arch.status} ${JSON.stringify(arch.error)}`).toBe(200);
+  seeded.done = true;
+  return seeded;
+}
+
+// Sponsors with deals cannot be deleted (history), so the live deal is dropped first with privileged SQL, as the sponsors sweep does;
+// never throws: a teardown must not fail a green run.
+test.afterAll(async ({ request }) => {
+  if (archiveSweep === null) return;
+  const { orgId, ids } = archiveSweep;
+  for (const id of ids) {
+    await withDb((sql) => sql`delete from sponsor_orders where org_id = ${orgId} and sponsor_id = ${id}`).catch(() => undefined);
+    await apiJson(request, `/api/v1/orgs/${orgId}/sponsors/${id}`, "DELETE").catch(() => undefined);
+  }
+});
+
+/** A tap target hit-tested at both edges, with its floor: 44 where `floor` says so, otherwise only that the centre column reaches it. */
+async function hitFloor(locator: Locator, label: string, floor: number): Promise<void> {
+  await expect(locator, `${label} is not visible`).toBeVisible({ timeout: 20_000 });
+  await locator.evaluate((el) => el.scrollIntoView({ block: "center", inline: "nearest" }));
+  const probe = await locator.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const cx = r.left + r.width / 2;
+    const hit = (y: number): boolean => {
+      const at = document.elementFromPoint(cx, y);
+      return at !== null && (at === el || el.contains(at));
+    };
+    return { height: r.height, width: r.width, top: hit(r.top + 1), bottom: hit(r.bottom - 1), centre: hit(r.top + r.height / 2) };
+  });
+  expect(probe.height, `${label} is ${probe.height}px tall (floor ${floor})`).toBeGreaterThanOrEqual(floor);
+  expect(probe.top, `${label}: a tap at its top edge does not reach it`).toBe(true);
+  expect(probe.bottom, `${label}: a tap at its bottom edge does not reach it`).toBe(true);
+  expect(probe.centre, `${label}: a tap at its centre does not reach it`).toBe(true);
+}
+/** Nothing in `locator` is painted past the viewport (a box that overflows its parent would show here even where the page itself clips). */
+async function paintedInsideViewport(locator: Locator, label: string): Promise<number> {
+  await expect(locator, `${label} is not visible`).toBeVisible({ timeout: 20_000 });
+  const probe = await locator.evaluate((root) => {
+    const boxes = [root, ...Array.from(root.querySelectorAll<HTMLElement>("*"))].filter((e) => e.getClientRects().length > 0);
+    const out = boxes.filter((e) => {
+      const r = e.getBoundingClientRect();
+      return r.right > window.innerWidth + 0.5 || r.left < -0.5;
+    });
+    return { n: boxes.length, out: out.map((e) => `${e.tagName.toLowerCase()}[${e.getAttribute("data-testid") ?? ""}]`) };
+  });
+  expect(probe.out, `${label} is painted outside the viewport`).toEqual([]);
+  return probe.n;
+}
+
+test("sponsor archive: the blocked page, the archived page and the list with the switch, in es and nl - fit, 44px where a finger is the pointer, axe clean", async ({ page, request, baseURL }) => {
+  test.setTimeout(300_000);
+  const seed = await seedArchiveSweep(request);
+  const width = page.viewportSize()!.width;
+  const finger = width < 768;
+  const visible = (testId: string): Locator => page.locator(`[data-testid="${testId}"]:visible`);
+  const axeOn = async (selector: string, label: string): Promise<void> => {
+    expect(await page.locator(selector).count(), `${label}: axe has something to scan`).toBeGreaterThan(0);
+    const results = await new AxeBuilder({ page }).include(selector).withTags(["wcag2a", "wcag2aa"]).analyze();
+    expect(
+      results.violations.filter((v) => v.impact === "serious" || v.impact === "critical").map((v) => `${v.id} - ${v.nodes[0]?.html}`),
+      `axe serious/critical on ${label} at ${width}px`,
+    ).toEqual([]);
+  };
+  let checked = 0;
+  for (const locale of ["es", "nl"] as const) {
+    await page.context().addCookies([{ name: "seazn_locale", value: locale, url: baseURL! }]);
+    const dict: Record<string, string> = JSON.parse(readFileSync(fileURLToPath(new URL(`../src/dictionaries/${locale}/ui.json`, import.meta.url)), "utf8"));
+    const word = (key: string): string => {
+      const v = dict[key];
+      if (v === undefined || v === "") throw new Error(`${locale}/ui.json has no ${key}`);
+      return v;
+    };
+    const tag = `${projectTag()} ${locale}`;
+
+    // 1. The blocked page: Archive is shown, disabled, with its reason, in the locale's words.
+    await page.goto(sponsorHref(orgSlug, seed.blockedId));
+    await expect(visible("sponsor-sheet"), `${tag}: the sponsor's page opens`).toBeVisible({ timeout: 30_000 });
+    const archive = visible("sponsor-sheet-archive-button");
+    await expect(archive, `${tag}: Archive is offered`).toBeVisible();
+    await expect(archive, `${tag}: ...and disabled by the live deal`).toBeDisabled();
+    await expect(visible("sponsor-sheet-archive-blocked"), `${tag}: the reason, in ${locale}`).toHaveText(word("sponsors.archive.blocked"));
+    await expect(archive, `${tag}: the button says its own word`).toContainText(word("sponsors.archive.button"));
+    await hitFloor(archive, `${tag} blocked Archive`, finger ? 44 : 0);
+    checked += await paintedInsideViewport(visible("sponsor-sheet-archive"), `${tag} the Archive card`);
+    await expectNoHorizontalScroll(page);
+    await axeOn('[data-testid="sponsor-sheet-archive"]', `${tag} the blocked Archive card`);
+
+    // 2. An active, unblocked sponsor: Archive is ENABLED (the positive pair), and its Add deal sheet's close is the large one.
+    await page.goto(sponsorHref(orgSlug, seed.plainId));
+    await expect(visible("sponsor-sheet"), `${tag}: the plain sponsor's page opens`).toBeVisible({ timeout: 30_000 });
+    await expect(visible("sponsor-sheet-archive-button"), `${tag}: with no live deal Archive is enabled`).toBeEnabled();
+    await expect(visible("sponsor-sheet-archive-blocked"), `${tag}: ...and there is no reason line`).toHaveCount(0);
+    await hitFloor(visible("sponsor-sheet-archive-button"), `${tag} Archive`, finger ? 44 : 0);
+    const addDeal = visible("sponsor-sheet-add-deal");
+    await expect(async () => {
+      if (await page.getByTestId("add-deal-sheet").isVisible()) return;
+      await addDeal.click({ timeout: 2_000 });
+      await expect(page.getByTestId("add-deal-sheet")).toBeVisible({ timeout: 3_000 });
+    }).toPass({ timeout: 20_000 });
+    const close = page.locator('[role="dialog"]:has([data-testid="add-deal-sheet"]) button[aria-label="Close"]');
+    await expect(close, `${tag}: the Add deal sheet has ONE close`).toHaveCount(1);
+    await hitFloor(close, `${tag} modal close`, finger ? 44 : 40);
+    await close.click();
+    await expect(page.getByTestId("add-deal-sheet"), `${tag}: the close closes it`).toHaveCount(0);
+    checked++;
+
+    // 3. The archived page: its banner (the locale's sentence around the date) and Unarchive.
+    await page.goto(sponsorHref(orgSlug, seed.archivedId));
+    await expect(visible("sponsor-sheet"), `${tag}: the archived sponsor's page opens`).toBeVisible({ timeout: 30_000 });
+    const banner = visible("sponsor-sheet-archived");
+    await expect(banner, `${tag}: the banner`).toBeVisible();
+    const [head, tail] = word("sponsors.archive.banner").split("{date}") as [string, string];
+    await expect(banner, `${tag}: the banner reads in ${locale}`).toContainText(head.trim());
+    await expect(banner).toContainText(tail.trim());
+    await expect(visible("sponsor-sheet-archive"), `${tag}: no Archive card on an archived page`).toHaveCount(0);
+    const unarchive = visible("sponsor-sheet-unarchive");
+    await expect(unarchive, `${tag}: Unarchive`).toContainText(word("sponsors.archive.unarchive"));
+    await hitFloor(unarchive, `${tag} Unarchive`, finger ? 44 : 0);
+    checked += await paintedInsideViewport(banner, `${tag} the archived banner`);
+    await expectNoHorizontalScroll(page);
+    await axeOn('[data-testid="sponsor-sheet-archived"]', `${tag} the archived banner`);
+
+    // 4. The list with the switch on: the switch (44 at every width), the Archived group, the chip, the greyed row, no sideways scroll.
+    await page.goto(sponsorsHref(orgSlug, "sponsors"));
+    const filter = page.getByTestId("sponsors-archived-filter");
+    await expect(filter, `${tag}: the switch row`).toBeVisible({ timeout: 30_000 });
+    const archivedNow = await apiJson<{ archived_at: string | null }[]>(request, `/api/v1/orgs/${seed.orgId}/sponsors?archived=1`);
+    const n = archivedNow.data!.filter((s) => s.archived_at !== null).length;
+    expect(n, `${tag}: premise: at least the seeded sponsor is archived`).toBeGreaterThanOrEqual(1);
+    await expect(filter.locator("label"), `${tag}: "Show archived (N)" in ${locale}`).toHaveText(word("sponsors.archive.show").replace("{count}", String(n)));
+    await hitFloor(page.getByTestId("sponsors-archived-switch"), `${tag} the archived switch`, 44);
+    const group = page.locator('[data-testid="sponsor-group"][data-tier="archived"]');
+    await expect(async () => {
+      if (await group.isVisible()) return;
+      await page.getByTestId("sponsors-archived-switch").click({ timeout: 2_000 });
+      await expect(group).toBeVisible({ timeout: 3_000 });
+    }).toPass({ timeout: 20_000 });
+    await expect(page.getByTestId("sponsors-archived-switch"), `${tag}: the switch reads on`).toHaveAttribute("aria-checked", "true");
+    const row = group.getByTestId("sponsor-row").filter({ hasText: seed.archived });
+    await expect(row, `${tag}: the archived sponsor's row is in the Archived group`).toHaveCount(1);
+    await expect(row.getByTestId("sponsor-row-archived-chip"), `${tag}: its chip, in ${locale}`).toHaveText(word("sponsors.archive.chip"));
+    await expect(page.getByTestId("sponsor-row").filter({ hasText: seed.plain }).first(), `${tag}: pair: a live row is on the list too`).toBeVisible();
+    // The ⋯ tray folds the row's tools below md: open it (gated on the toggle being visible, never a width literal) and read the trash.
+    const opened = await openSponsorRowTools(page, seed.archived);
+    await expect(opened.getByRole("button", { name: word("settings.org.sponsors.remove").replace("{name}", seed.archived), exact: true }), `${tag}: an archived row without history keeps its trash`).toBeVisible();
+    checked += await paintedInsideViewport(page.getByTestId("sponsors-list-view"), `${tag} the list`);
+    await expectNoHorizontalScroll(page);
+    await axeOn('[data-testid="sponsors-archived-filter"]', `${tag} the switch row`);
+    await axeOn('[data-testid="sponsor-group"][data-tier="archived"]', `${tag} the Archived group`);
+  }
+  expect(checked, "anti-vacuity: painted boxes were counted across both locales").toBeGreaterThan(20);
 });
