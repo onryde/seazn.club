@@ -16,12 +16,13 @@ export const GO_LIVE_RULES = ["on_payment", "immediate", "on_approval"] as const
 /** D2: the money column `status` (the API's `payment_status`), plus `none` for a complimentary deal. */
 export const PAYMENT_STATUSES = ["pending", "paid", "failed", "refunded", "none"] as const;
 /** `legacy`: a pre-deals order (D6). `duplicate_payment`: a second, different payment on a paid deal, recorded as its own
- *  ended, paid row (F3). */
+ *  ended, paid row (F3). `written_off`: the club waived an offline invoice still due after its deal ended (`endedStillDue`,
+ *  Task 23): the deal was already ended, its money stays unpaid, and the reason says why nothing is owed. */
 export const END_REASONS = [
-  "refunded", "dispute_lost", "ended_now", "expired", "competition_finished", "legacy", "duplicate_payment",
+  "refunded", "dispute_lost", "ended_now", "expired", "competition_finished", "legacy", "duplicate_payment", "written_off",
 ] as const;
 /** The order allowedActions answers in. */
-export const DEAL_ACTIONS = ["send_invoice", "resend_invoice", "mark_paid", "approve", "refund", "end_now"] as const;
+export const DEAL_ACTIONS = ["send_invoice", "resend_invoice", "mark_paid", "write_off", "approve", "refund", "end_now"] as const;
 
 export type DealStatus = (typeof DEAL_STATUSES)[number];
 export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
@@ -70,8 +71,14 @@ export interface SponsorDeal {
    *  console's refund words key on it too. On a paid deal it means a card payment at Stripe paid it; Mark as paid clears it.
    *  The intent id itself never leaves the server. */
   has_payment_intent: boolean;
-  /** Always null until PR 3 numbers invoices (D11). */
+  /** The deal's invoice number (D11), per org from 1 (`formatInvoiceNumber` shows it): allocated when an online or offline deal is
+   *  created, kept when it ends, never reused. Null on a complimentary deal (no invoice), a legacy order, and a deal made before
+   *  invoices were numbered. */
   invoice_number: number | null;
+  /** When the club wrote off this deal's invoice, and who did (V504; final review m3): both set by Write off and only on a
+   *  `written_off` deal. `written_off_by` is a user id, nulled when that user is deleted; the deal page names them. */
+  written_off_at: string | null;
+  written_off_by: string | null;
 }
 
 export type DealRuleCode = "on_payment_needs_payment" | "illegal_transition";
@@ -194,21 +201,57 @@ export function statusAfterApproved(d: Pick<SponsorDeal, "deal_status">, otherLi
  *  to a dispute. */
 const NOT_REFUNDABLE_AFTER: ReadonlySet<EndReason> = new Set<EndReason>(["refunded", "dispute_lost"]);
 
+/** End reasons that leave an offline deal's money still owed: its term ran out (`expired`) or its competition finished, both by
+ *  the sweep. `ended_now` is the club cancelling (nothing due, the invoice reads void), and every other reason is money already
+ *  settled or a row that was never a deal. */
+const STILL_DUE_AFTER: ReadonlySet<EndReason> = new Set<EndReason>(["expired", "competition_finished"]);
+
+/** Is this an ENDED deal whose invoice is still due (review I3; Task 23 carries 1 and 4)? An OFFLINE deal that went live
+ *  (`live_at`), then ended unpaid because its term ran out or its competition finished: the sponsor had the placement, so the
+ *  money is owed. The club can still mark it paid (the deal stays ended) or write it off (`written_off`). An online deal ended
+ *  unpaid claims nothing (its card link is gone), and one that never went live had nothing to pay for. The invoice reads it as
+ *  `unpaid` (server/sponsors/invoice-doc.ts `invoiceState`). */
+export function endedStillDue(
+  d: Pick<SponsorDeal, "deal_status" | "payment_method" | "payment_status" | "live_at" | "ended_reason">,
+): boolean {
+  return (
+    d.deal_status === "ended" &&
+    d.payment_method === "offline" &&
+    isUnpaid(d.payment_status) &&
+    d.live_at !== null &&
+    d.ended_reason !== null &&
+    STILL_DUE_AFTER.has(d.ended_reason)
+  );
+}
+
+/** The fields `allowedActions` reads. */
+export type DealActionFacts = Pick<
+  SponsorDeal,
+  "deal_status" | "payment_method" | "payment_status" | "disputed_at" | "ended_reason" | "sponsor_email" | "live_at" | "invoice_number"
+>;
+
 /** The actions a deal offers, in DEAL_ACTIONS order. TOTAL (F15): every deal_status × payment_status × method answers.
- *  Task 6 refuses with 409, before any write, every action this does not offer (F12). `*_invoice` is online-only here;
- *  Task 23 adds resend_invoice for offline deals with an email (F13). */
-export function allowedActions(
-  d: Pick<SponsorDeal, "deal_status" | "payment_method" | "payment_status" | "disputed_at" | "ended_reason">,
-): DealAction[] {
+ *  Task 6 refuses with 409, before any write, every action this does not offer (F12). `send_invoice` is online-only (a draft
+ *  waits for it). `resend_invoice` is offered on an unpaid deal that is due: an online one, or an offline one with a billing
+ *  email to send it to (F13) - an offline invoice is emailed, never paid by card - and an offline deal still due after it ended
+ *  (`endedStillDue`) with an email. Neither send is offered on a deal with no invoice number (made before invoices were numbered,
+ *  T23 review m5): it has no invoice page for the email to link, so the server would refuse it. `mark_paid` on every unpaid deal
+ *  that is due, ended-and-still-due included (the deal stays ended); `write_off` only on an ended deal still due. */
+export function allowedActions(d: DealActionFacts): DealAction[] {
   const s = d.deal_status;
   const online = d.payment_method === "online";
+  const offline = d.payment_method === "offline";
   const paidFor = d.payment_method !== "complimentary";
   const unpaid = paidFor && isUnpaid(d.payment_status);
   const payable = s === "awaiting_payment" || s === "live" || s === "scheduled";
+  const hasEmail = d.sponsor_email !== null && d.sponsor_email !== "";
+  const endedDue = endedStillDue(d);
+  const numbered = d.invoice_number !== null;
   const offered: Record<DealAction, boolean> = {
-    send_invoice: s === "draft" && online && unpaid,
-    resend_invoice: payable && online && unpaid,
-    mark_paid: payable && unpaid,
+    send_invoice: numbered && s === "draft" && online && unpaid,
+    resend_invoice: numbered && ((payable && unpaid && (online || (offline && hasEmail))) || (endedDue && hasEmail)),
+    mark_paid: (payable && unpaid) || endedDue,
+    write_off: endedDue,
     approve: s === "awaiting_approval",
     refund:
       paidFor &&
@@ -259,17 +302,22 @@ export function pickRowDeal(deals: readonly SponsorDeal[]): SponsorDeal | null {
 export type RowAction = "add_deal" | "open_deal" | "resend_invoice" | "mark_paid" | "approve";
 
 /** F15's precedence, first match wins:
- *  1. no deal, or ended → add_deal;
+ *  1. no deal, or ended → add_deal - except an ended deal still due (`endedStillDue`, T24 m8: an offline invoice the sponsor owes
+ *     after its term ran out), whose row offers mark_paid: the money is the thing to chase, and a new deal can wait. Write off is on
+ *     the sponsor's page and the deal's own;
  *  2. awaiting_approval → approve;
- *  3. unpaid and not draft or scheduled → resend_invoice (online) or mark_paid (offline);
+ *  3. unpaid and not draft or scheduled → resend_invoice (online) or mark_paid (offline). An ONLINE deal with no invoice number
+ *     (made before invoices were numbered) has no invoice to resend (`allowedActions` does not offer it, the server answers 409
+ *     deal_not_invoiceable; T24 m5), so its row opens the deal, where what it can do is;
  *  4. draft or scheduled → open_deal;
  *  5. otherwise (live with payment paid or none) → null. */
 export function rowNextAction(d: SponsorDeal | null): RowAction | null {
-  if (d === null || d.deal_status === "ended") return "add_deal";
+  if (d === null) return "add_deal";
+  if (d.deal_status === "ended") return endedStillDue(d) ? "mark_paid" : "add_deal";
   if (d.deal_status === "awaiting_approval") return "approve";
   const queued = d.deal_status === "draft" || d.deal_status === "scheduled";
   if (isUnpaid(d.payment_status) && !queued) {
-    if (d.payment_method === "online") return "resend_invoice";
+    if (d.payment_method === "online") return allowedActions(d).includes("resend_invoice") ? "resend_invoice" : "open_deal";
     if (d.payment_method === "offline") return "mark_paid";
   }
   if (queued) return "open_deal";
@@ -277,11 +325,13 @@ export function rowNextAction(d: SponsorDeal | null): RowAction | null {
 }
 
 /** A deal's status chip. `paid` is derived (D2): a scheduled deal that is paid. "Live · awaiting payment" is a live
- *  deal still unpaid; "on hold" is a live deal parked by a dispute. */
+ *  deal still unpaid; "on hold" is a live deal parked by a dispute; "Ended · unpaid" (`endedDue`, T24 m8) is an ended deal whose
+ *  invoice is still due (`endedStillDue`). */
 export type DealChip = {
   kind: "draft" | "awaiting_payment" | "paid" | "scheduled" | "awaiting_approval" | "live" | "ended";
   awaitingPayment: boolean;
   onHold: boolean;
+  endedDue: boolean;
 };
 
 export function dealChip(d: SponsorDeal): DealChip {
@@ -291,6 +341,7 @@ export function dealChip(d: SponsorDeal): DealChip {
     kind,
     awaitingPayment: live && isUnpaid(d.payment_status),
     onHold: live && Boolean(d.parked_at),
+    endedDue: endedStillDue(d),
   };
 }
 
@@ -311,6 +362,9 @@ export function invoiceActionOnCreate(rule: GoLiveRule, queued: boolean): "send_
     payment_status: initialPaymentStatus("online"),
     disputed_at: null,
     ended_reason: null,
+    sponsor_email: "billing@example.invalid", // an online deal always has one (the V495 CHECK online_has_email)
+    live_at: null,
+    invoice_number: 1, // every online deal is numbered when it is created (D11, createDeal)
   });
   if (offered.includes("send_invoice")) return "send_invoice";
   if (offered.includes("resend_invoice")) return "resend_invoice";
@@ -488,4 +542,11 @@ export function dealTimeline(
   if (withCompetition && ctx.competitionFinished) detail.competitionFinished = "yes";
   steps.push({ key: "ends", at: d.ends_at, state: "not_yet", ...(Object.keys(detail).length > 0 ? { detail } : {}) });
   return steps;
+}
+
+/** D11: how an invoice number reads — "SP-" and at least four digits (1 → SP-0001, 12345 → SP-12345: padded, never cut). Only
+ *  what the per-org allocator hands out (an integer from 1) is a number; anything else is a RangeError, never a printed SP-0000. */
+export function formatInvoiceNumber(n: number): string {
+  if (!Number.isSafeInteger(n) || n < 1) throw new RangeError(`not an invoice number: ${n}`);
+  return `SP-${String(n).padStart(4, "0")}`;
 }

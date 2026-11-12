@@ -1,14 +1,16 @@
 export const dynamic = "force-dynamic";
 // Connect settings (spec 2026-07-12 §8; renamed from Payments 2026-07-18) —
 // its own route like billing: Stripe Connect onboarding/status, the org's
-// default payment method for new divisions, and the org-wide offline
-// instructions. Returning from Stripe onboarding lands here (?connect=return)
-// and the card re-reads live status.
+// default payment method for new divisions, the org-wide offline
+// instructions, and (sponsor deals Task 21) the address and bank details
+// every sponsor invoice prints. Returning from Stripe onboarding lands here
+// (?connect=return) and the card re-reads live status.
 import Link from "@/components/ui/console-link";
 import { sql } from "@/lib/db";
 import { requireOrgPage } from "@/server/page-auth";
 import { routes } from "@/lib/routes";
 import { OrgPaymentInstructions } from "@/components/org-payment-instructions";
+import { OrgSponsorInvoiceDetails } from "@/components/org-sponsor-invoice-details";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t } from "@/lib/i18n";
 import { SettingsShell, navContext } from "../_components/settings-nav";
@@ -19,7 +21,7 @@ export default async function ConnectSettingsPage({
   params: Promise<{ orgSlug: string }>;
 }) {
   const { orgSlug } = await params;
-  const { org } = await requireOrgPage(orgSlug, { tail: "/settings/connect" });
+  const { org, canEdit } = await requireOrgPage(orgSlug, { tail: "/settings/connect" });
   const isOwner = org.role === "owner";
   const locale = await resolveLocale();
   const dict = await getDictionary(locale, "ui");
@@ -33,9 +35,12 @@ export default async function ConnectSettingsPage({
       payment_instructions: string | null;
       default_payment_method: "offline" | "stripe";
       charges_enabled: boolean;
+      sponsor_invoice_address: string | null;
+      sponsor_invoice_bank_details: string | null;
     }[]
   >`
-    select payment_instructions, default_payment_method, stripe_charges_enabled as charges_enabled
+    select payment_instructions, default_payment_method, stripe_charges_enabled as charges_enabled,
+           sponsor_invoice_address, sponsor_invoice_bank_details
     from organizations where id = ${org.id}`;
 
   return (
@@ -61,6 +66,17 @@ export default async function ConnectSettingsPage({
           initialDefaultMethod={row?.default_payment_method ?? "offline"}
           chargesEnabled={row?.charges_enabled ?? false}
           isOwner={isOwner}
+        />
+      </section>
+
+      {/* Sponsor invoices (V502): on every plan - a club that records a sponsor's cash payment still prints an invoice. Its own
+          card, not a row of the one above: the registrants' offline instructions are written for players and never print here. */}
+      <section className="card mt-4 p-6">
+        <OrgSponsorInvoiceDetails
+          orgId={org.id}
+          initialAddress={row?.sponsor_invoice_address ?? null}
+          initialBankDetails={row?.sponsor_invoice_bank_details ?? null}
+          canEdit={canEdit}
         />
       </section>
 

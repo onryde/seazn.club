@@ -37,8 +37,8 @@ export type KindHook = {
  *  releases its seat stamp once every email for the stamp has ended badly, and the worker re-drives a release that was never
  *  applied (R9). The five registration and refund kinds have no side effect to apply when a mail ends badly (spec §1), and nor
  *  have wave 2's ten money mails, wave 3's eight account and invite mails, wave 4's nine officials, discipline, report and
- *  billing-group mails or wave 5's funnel reminder and sixteen staff alerts: each body renders at enqueue time and nothing waits on
- *  its outcome (phase-4 note). */
+ *  billing-group mails, wave 5's funnel reminder and sixteen staff alerts, or sponsor deals' paid notice: each body renders at enqueue
+ *  time and nothing waits on its outcome (phase-4 note). */
 export const KIND_HOOKS: Record<OutboxKind, KindHook> = {
   magic_link: {},
   chess_invite: { onEndedBadly: chessInviteEndedBadly, findUnapplied: findUnappliedChessEndings },
@@ -91,6 +91,7 @@ export const KIND_HOOKS: Record<OutboxKind, KindHook> = {
   staff_ai_run_cost: {},
   staff_earn_grant_volume: {},
   staff_extra_org_allowance: {},
+  sponsor_deal_paid: {},
 };
 
 /** Does this kind have a hook to run for a row that ended badly? (A kind with none is not "skipped" when a tick runs out of

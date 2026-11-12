@@ -53,6 +53,11 @@ vi.mock("@/lib/currency-server", () => ({ preferredCurrency }));
 vi.mock("@/server/usecases/credits-tab", () => ({ getCreditsTab }));
 vi.mock("@/lib/entitlements", () => ({ orgPlanKey }));
 vi.mock("@/lib/credits", () => ({ walletIdFor, balance }));
+// The Sponsor invoices island calls useRouter() (it refreshes the route after a save); a static render has no app router mounted.
+vi.mock("next/navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/navigation")>()),
+  useRouter: () => ({ refresh: () => {} }),
+}));
 vi.mock("@/components/org-payment-instructions", () => ({
   OrgPaymentInstructions: () => <div data-testid="connect-panel" />,
 }));

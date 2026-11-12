@@ -22,7 +22,7 @@ import Link from "@/components/ui/console-link";
 import { ArrowDown, ArrowUp, ChevronRight, MousePointerClick, Pencil, Trash2 } from "lucide-react";
 import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
 import { DealChip } from "@/components/sponsors/deal-chip";
-import { priceLabel } from "@/components/sponsors/deal-copy";
+import { dealActionKey, priceLabel } from "@/components/sponsors/deal-copy";
 import { SponsorRowMore } from "@/components/sponsors/sponsor-row-more";
 import { TIER_BADGE, TIER_MSG } from "@/components/sponsors/tier-labels";
 import type { SponsorItem } from "@/components/org-sponsors";
@@ -184,7 +184,8 @@ export function SponsorList(props: SponsorListProps) {
     if (!canEdit) return null;
     const next = rowNextAction(s.deal);
     if (next === null) return null;
-    const label = msg(ACTION_MSG[next]);
+    // Resend invoice on a deal never sent reads "Send invoice" (final review m1); a row with no deal offers only Add deal.
+    const label = msg(s.deal === null ? ACTION_MSG[next] : dealActionKey(ACTION_MSG, next, s.deal));
     const common = {
       "data-testid": "sponsor-row-action",
       "data-action": next,

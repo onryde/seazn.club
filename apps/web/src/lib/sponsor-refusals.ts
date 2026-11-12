@@ -31,6 +31,12 @@ export const SPONSOR_REFUSAL_CODES = [
   "deal_not_invoiceable",
   "deal_changed",
   "deal_paid_online",
+  // Send or resend an OFFLINE invoice with no billing email to send it to (Task 23, F13; 422), and Write off on a deal with
+  // nothing still due (Task 23 carry 4).
+  "no_billing_email",
+  "deal_nothing_due",
+  // A send past the org's daily invoice-email cap (T23 review m7; 429, `INVOICE_EMAILS_PER_DAY`).
+  "invoice_send_limit",
   // A DealRuleError mapped at the usecase boundary (lib/sponsor-deals.ts `DealRuleCode`).
   "on_payment_needs_payment",
   "illegal_transition",

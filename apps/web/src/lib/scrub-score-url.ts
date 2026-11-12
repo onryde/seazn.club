@@ -155,7 +155,8 @@ const ENCODED_ROOM_TOKEN = new RegExp(`(%(?:25)*(?:3[Ff]|26)t%(?:25)*3[Dd])${JWT
  * Route prefixes whose NEXT segment is a credential: the profile-claim secret (`/claim/<secret>` and the accept call
  * `/api/claims/<secret>/accept`), the org-invite token (`/join/<token>` and `/api/invites/<token>[/accept|/claim]`; the
  * revoke call `/api/orgs/<id>/invites/<token>/revoke`), the day's check-in code (`/checkin/<token>`,
- * `/api/checkin/<token>`) and the sponsor report link (`/r/sponsor/<token>`, R4 S14). Each is spelled with its trailing slash, so `/claims/…`, `/joined/…`, `/checkin-link` and
+ * `/api/checkin/<token>`), the sponsor report link (`/r/sponsor/<token>`, R4 S14) and the sponsor invoice link
+ * (`/r/sponsor/invoice/<token>`, its `/pdf` and `/pay`: sponsor deals T22). Each is spelled with its trailing slash, so `/claims/…`, `/joined/…`, `/checkin-link` and
  * `/register/join` (a public page with nothing after it) do not match, and `[id]` stands for one path segment.
  *
  * Every one is a ROUTE ROOT, and is matched there only (`ROUTE_ROOT`): a club or competition slug is free text, so
@@ -173,6 +174,9 @@ const SECRET_PATH_ROUTES = [
   "/api/checkin/",
   "/api/invites/",
   "/api/orgs/[id]/invites/",
+  // BEFORE "/r/sponsor/" (F21): the alternation takes the FIRST prefix that matches, and "/r/sponsor/" would take the segment
+  // `invoice` for the credential and leave the invoice token in the URL.
+  "/r/sponsor/invoice/",
   "/r/sponsor/",
 ] as const;
 /** The marketing locale prefix (`/fr/pricing`): a route root may follow it. */

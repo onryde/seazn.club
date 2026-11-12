@@ -1630,6 +1630,11 @@ export async function cleanup(tag: string): Promise<void> {
       delete from sponsor_orders
       where org_id in (select id from organizations
                        where created_by in (select id from users where email = any(${emails})))`;
+    // So is the org's sponsor invoice counter (the sponsor-invoices delta: an org that numbered a deal keeps one).
+    await sql`
+      delete from sponsor_invoice_counters
+      where org_id in (select id from organizations
+                       where created_by in (select id from users where email = any(${emails})))`;
     // P9: courts must go BEFORE venues, and both before the org. P8 made
     // `courts.venue_id` ON DELETE RESTRICT on purpose (amendment A3 — a venue
     // with courts must not vanish through the API), and a RESTRICT sitting

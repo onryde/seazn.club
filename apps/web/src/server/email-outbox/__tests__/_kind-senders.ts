@@ -31,6 +31,10 @@ import type { OutboxKind } from "../constants";
 export const SENDERS_AT_START = 49;
 /** The two phase-1 kinds. Their senders had left lib/email.ts before the spec counted its 49, so moving them took nothing from that count. */
 export const KINDS_BEFORE_PHASE_3: readonly OutboxKind[] = ["magic_link", "chess_invite"];
+/** Kinds BORN on the outbox after phase 3 closed: they never had a direct `send*` in lib/email.ts, so they are not among the spec's 49
+ *  and take nothing from that count (without this list `allowlistLengthFor` would go negative). Not phase-1 kinds either, so they get a
+ *  list of their own. Sponsor deals Task 23 (plan 2026-11-07-sponsor-deals, D13): the owner's "a sponsor has paid" notice. */
+export const KINDS_BORN_ON_THE_OUTBOX: readonly OutboxKind[] = ["sponsor_deal_paid"];
 
 /** The `send*` exports of lib/email.ts still to move. The spec counted 49 at the start of phase 3 wave 1; each kind task took its own
  *  with it, and wave 5's last move emptied the list (T7 also deleted the private boolean sender and its typed form, so lib/email.ts
@@ -103,12 +107,17 @@ export const KIND_DIRECT_SENDER: Readonly<Record<OutboxKind, string | null>> = {
   staff_ai_run_cost: null,
   staff_earn_grant_volume: null,
   staff_extra_org_allowance: null,
+  // Born on the outbox (KINDS_BORN_ON_THE_OUTBOX): never had a direct sender.
+  sponsor_deal_paid: null,
 };
 
 /** How long the allowlist must be while `unmoved` kinds are still on their direct sender: the spec's 49, less one for every phase-3 kind
- *  that has moved. The phase-3 kinds are the ones KIND_DIRECT_SENDER names, less the two phase-1 kinds; the moved ones are those less the
- *  `unmoved`. So registering a kind early (it joins the map and NOT_YET_MOVED together) changes nothing, and moving one takes one off. */
+ *  that has moved. The phase-3 kinds are the ones KIND_DIRECT_SENDER names, less the two phase-1 kinds and the kinds born on the outbox
+ *  after phase 3 (neither ever owned one of the 49); the moved ones are those less the `unmoved`. So registering a kind early (it joins
+ *  the map and NOT_YET_MOVED together) changes nothing, and moving one takes one off. */
 export const allowlistLengthFor = (unmoved: number): number => {
-  const phase3Kinds = (Object.keys(KIND_DIRECT_SENDER) as OutboxKind[]).filter((k) => !KINDS_BEFORE_PHASE_3.includes(k)).length;
+  const phase3Kinds = (Object.keys(KIND_DIRECT_SENDER) as OutboxKind[]).filter(
+    (k) => !KINDS_BEFORE_PHASE_3.includes(k) && !KINDS_BORN_ON_THE_OUTBOX.includes(k),
+  ).length;
   return SENDERS_AT_START - (phase3Kinds - unmoved);
 };

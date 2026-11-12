@@ -1,12 +1,15 @@
 // Shared state and helpers (pass/fail counters, check, sessions, the HTTP/DB helpers, tag): see the header of that file.
+import { createHash, randomBytes } from "node:crypto";
 import {
   BASE,
   type Session,
   call,
   check,
+  cookieHeader,
   html,
   newSession,
   postSignedStripeWebhook,
+  raw,
   signIn,
   smokeDb,
   tag,
@@ -48,11 +51,11 @@ export async function sponsorDealsSuite(admin: Session, proOrgId: string, viewer
   const paidName = `Deal Paid ${tag}`;
   const paidSponsor = await addSponsor(paidName);
   const made = await createDeal(paidSponsor, {});
-  const madeData = made.status === 201 ? v1data<{ deal: Deal; checkout_url: string | null }>(made) : null;
+  const madeData = made.status === 201 ? v1data<{ deal: Deal; invoice_url: string | null }>(made) : null;
   const hiddenPage = await publicPage();
   check(
     "sd offline deal created hidden (201)",
-    made.status === 201 && madeData?.checkout_url === null && madeData.deal.deal_status === "awaiting_payment" && !hiddenPage.includes(paidName),
+    made.status === 201 && madeData?.invoice_url === null && madeData.deal.deal_status === "awaiting_payment" && !hiddenPage.includes(paidName),
   );
   const before = await sponsorCount();
   const paid = madeData ? await v1(free, `/api/v1/orgs/${org.id}/sponsor-deals/${madeData.deal.id}/mark-paid`, "POST") : null;
@@ -211,6 +214,220 @@ export async function sponsorDealsSuite(admin: Session, proOrgId: string, viewer
       sheet.includes('data-testid="sponsor-sheet-placement-note"') &&
       ownHub.body.includes('data-testid="sponsors-list-view"'),
   );
+
+  // --- PR 3 Task 21: Settings -> Connect carries the "Sponsor invoices" card on EVERY plan. The community owner above saves both
+  // fields the way the card does (two single-key PATCHes, F30), and the real server's page answers 200 with the card OPEN AT those
+  // values (the page's own read of the two V502 columns); the Pro org's page carries the card too, with nothing stored yet.
+  const invoiceAddress = `Smoke Club ${tag}, 12 Mill Lane`;
+  const invoiceBank = `Sort 12-34-56 Acc 12345678 ${tag}`;
+  const savedAddress = await raw(free, `/api/orgs/${org.id}`, "PATCH", { sponsor_invoice_address: invoiceAddress });
+  const savedBank = await raw(free, `/api/orgs/${org.id}`, "PATCH", { sponsor_invoice_bank_details: invoiceBank });
+  const communityPayments = await html(free, `/o/${org.slug}/settings/connect`);
+  const proPayments = proSlug ? await html(admin, `/o/${proSlug}/settings/connect`) : null;
+  const areaBody = (page: string, testId: string) =>
+    page.match(new RegExp(`<textarea[^>]*data-testid="${testId}"[^>]*>([\\s\\S]*?)</textarea>`))?.[1] ?? null;
+  check(
+    "sd settings Payments renders the Sponsor invoices card",
+    savedAddress.status === 200 && savedBank.status === 200 &&
+      communityPayments.status === 200 &&
+      communityPayments.body.includes('data-testid="sponsor-invoices-card"') &&
+      communityPayments.body.includes("Sponsor invoices") &&
+      areaBody(communityPayments.body, "sponsor-invoice-address") === invoiceAddress &&
+      areaBody(communityPayments.body, "sponsor-invoice-bank-details") === invoiceBank &&
+      proPayments?.status === 200 &&
+      proPayments.body.includes('data-testid="sponsor-invoices-card"') &&
+      areaBody(proPayments.body, "sponsor-invoice-address") !== null,
+  );
+
+  // --- PR 3 Task 22: the numbered invoice. Its page answers one opaque 404 for a token that opens nothing.
+  // As with the report's revoked link (suites/sponsors.ts says why, next 16.3.6's errorRecovery path): a notFound() thrown by
+  // the page answers Next's error shell, whose body carries the not-found notice only as escaped Flight JSON, never as a
+  // `data-testid="..."` attribute - the browser draws it client-side, which e2e/walkthrough/sponsor-invoices.spec.ts reads
+  // after it draws. So the PROOF is the 404 status; `notice` only says the answer came from this route's not-found, and
+  // `leaked` is the invoice's own markup, which a 404 must never carry.
+  const unknownInvoice = await html(newSession(), `/r/sponsor/invoice/${randomBytes(32).toString("base64url")}`);
+  const invoiceNotice = unknownInvoice.body.includes("sponsor-invoice-not-found");
+  const invoiceLeaked = unknownInvoice.body.includes('data-testid="sponsor-invoice"');
+  const unknownInvoiceIs404 = unknownInvoice.status === 404 && invoiceNotice && !invoiceLeaked;
+  if (!unknownInvoiceIs404) {
+    console.log(`      unknown invoice token: status ${unknownInvoice.status}, notice ${invoiceNotice}, invoice leaked ${invoiceLeaked}, ${unknownInvoice.body.length} bytes`);
+  }
+  check("sd invoice page 404 for an unknown token", unknownInvoiceIs404);
+
+  // The console's copy, for a numbered offline deal on its OWN sponsor (F33) of the Pro org: "read" auth, so the viewer gets it.
+  const invoiceSponsor = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/orgs/${proOrgId}/sponsors`, "POST", { name: `Deal Invoice ${tag}` }),
+  ).id;
+  const invoiceDeal = await v1(admin, `/api/v1/orgs/${proOrgId}/sponsors/${invoiceSponsor}/deals`, "POST", {
+    package_id: proPkg.id, competition_id: null, payment_method: "offline", go_live: "on_payment",
+  });
+  const invoiceDealId = invoiceDeal.status === 201 ? v1data<{ deal: Deal }>(invoiceDeal).deal.id : "";
+  const consolePdf = invoiceDealId
+    ? await fetch(`${BASE}/api/v1/orgs/${proOrgId}/sponsor-deals/${invoiceDealId}/invoice.pdf`, { headers: { cookie: cookieHeader(viewer) } })
+    : null;
+  const pdfBytes = consolePdf ? Buffer.from(await consolePdf.arrayBuffer()) : Buffer.alloc(0);
+  check(
+    "sd console invoice.pdf is application/pdf (read auth)",
+    consolePdf?.status === 200 &&
+      consolePdf.headers.get("content-type") === "application/pdf" &&
+      /^attachment; filename="SP-\d{4,}\.pdf"$/.test(consolePdf.headers.get("content-disposition") ?? "") &&
+      pdfBytes.subarray(0, 5).toString("latin1") === "%PDF-",
+  );
+
+  // Pay on a settled OFFLINE invoice sends the sponsor back to the invoice (303), which reads Paid with no pay form. An offline
+  // invoice is refused whether or not it is paid, so this row does NOT witness "pay refuses because it is paid" - that killer is
+  // routes.test.ts (an ONLINE deal paid by the webhook). The raw token leaves the app only in the invoice email (Task 23), so
+  // this row plants a KNOWN token's hash on the deal it just marked paid (the same sha256 as server/sponsors/report-token.ts
+  // hashReportToken); the smoke row that opens a REAL emailed token is Task 23's (F9).
+  if (!process.env.DATABASE_URL) {
+    check("sd pay on a settled offline invoice: skipped (no DATABASE_URL to plant a known token) - routes.test.ts covers it", true);
+  } else {
+    const markedPaid = invoiceDealId ? await v1(admin, `/api/v1/orgs/${proOrgId}/sponsor-deals/${invoiceDealId}/mark-paid`, "POST") : null;
+    const knownToken = randomBytes(32).toString("base64url");
+    const db = smokeDb();
+    try {
+      await db`update sponsor_orders set invoice_token_hash = ${createHash("sha256").update(knownToken, "utf8").digest()}
+                where id = ${invoiceDealId} and invoice_number is not null`;
+    } finally {
+      await db.end();
+    }
+    const payRes = await fetch(`${BASE}/r/sponsor/invoice/${knownToken}/pay`, { method: "POST", redirect: "manual" });
+    const invoicePage = await html(newSession(), `/r/sponsor/invoice/${knownToken}`);
+    check(
+      "sd pay on a settled offline invoice: 303 back to the invoice, stamped paid, no pay form",
+      markedPaid?.status === 200 && v1data<Deal>(markedPaid).payment_status === "paid" &&
+        payRes.status === 303 && (payRes.headers.get("location") ?? "").endsWith(`/r/sponsor/invoice/${knownToken}`) &&
+        // The page it lands on: the same token opens the invoice, stamped paid, with no pay form.
+        invoicePage.status === 200 && invoicePage.body.includes('data-testid="sponsor-invoice"') &&
+        invoicePage.body.includes('data-state="paid"') && !invoicePage.body.includes('data-testid="invoice-pay"'),
+    );
+  }
+
+  // --- PR 3 Task 23: an OFFLINE invoice is emailed (F13), on the community org whose bank details the Task 21 rows saved, for a deal
+  // on its OWN sponsor (F33). Send invoice answers 200 with no payment session, the deal does not move, the send ROTATES the invoice
+  // token (F9: the stored hash changes), and exactly one `sponsor_invoice` row for the deal is queued to the billing address with the
+  // numbered subject. The row's body (the link itself) is sealed and, on this keyless server, scrubbed by the request's own first
+  // attempt, so smoke cannot read the emailed token back (sponsor-invoice-email.test.ts opens the real body and follows its link).
+  if (!process.env.DATABASE_URL) {
+    check("sd offline invoice email: skipped (no DATABASE_URL to read the outbox) - sponsor-invoice-email.test.ts covers it", true);
+  } else {
+    const billing = `delivered+deal_invoice_${tag}@resend.dev`;
+    const emailSponsor = await addSponsor(`Deal Emailed ${tag}`);
+    const emailed = await createDeal(emailSponsor, { sponsor_email: billing });
+    const emailedDeal = emailed.status === 201 ? v1data<{ deal: Deal }>(emailed).deal : null;
+    const db = smokeDb();
+    try {
+      const hashOf = async (id: string) =>
+        (await db<{ h: Buffer | null }[]>`select invoice_token_hash as h from sponsor_orders where id = ${id}`)[0]?.h ?? null;
+      const before = emailedDeal ? await hashOf(emailedDeal.id) : null;
+      const sent = emailedDeal ? await v1(free, `/api/v1/orgs/${org.id}/sponsor-deals/${emailedDeal.id}/send-invoice`, "POST") : null;
+      const sentData = sent?.status === 200 ? v1data<{ deal: Deal; invoice_url: string }>(sent) : null;
+      const after = emailedDeal ? await hashOf(emailedDeal.id) : null;
+      const rows = emailedDeal
+        ? await db<{ recipient: string; subject: string }[]>`
+            select recipient, subject from email_outbox
+             where kind = 'sponsor_invoice' and ref_type = 'sponsor_order' and ref_id = ${emailedDeal.id}`
+        : [];
+      check(
+        "sd offline invoice email queued with the invoice link",
+        sentData !== null && /\/r\/sponsor\/invoice\/[A-Za-z0-9_-]{20,}$/.test(sentData.invoice_url) &&
+          !sentData.invoice_url.includes("checkout.stripe") && sentData.deal.deal_status === emailedDeal?.deal_status &&
+          before !== null && after !== null && !before.equals(after) &&
+          rows.length === 1 && rows[0]?.recipient === billing.toLowerCase() && /^Invoice SP-\d{4,} — /.test(rows[0]?.subject ?? ""),
+      );
+
+      // The invoice page and its PDF for that deal. The emailed token cannot be read back (above), so this row plants a KNOWN
+      // token's hash on the deal the way the send stored its own (the same sha256 as server/sponsors/report-token.ts).
+      const knownToken = randomBytes(32).toString("base64url");
+      if (emailedDeal) {
+        await db`update sponsor_orders set invoice_token_hash = ${createHash("sha256").update(knownToken, "utf8").digest()}
+                  where id = ${emailedDeal.id} and invoice_number is not null`;
+      }
+      const page = await html(newSession(), `/r/sponsor/invoice/${knownToken}`);
+      const pdf = await fetch(`${BASE}/r/sponsor/invoice/${knownToken}/pdf`);
+      const bytes = Buffer.from(await pdf.arrayBuffer());
+      check(
+        "sd invoice pdf is application/pdf for an invoice token; the page reads unpaid with the bank details",
+        page.status === 200 && page.body.includes('data-state="unpaid"') && page.body.includes(invoiceBank) &&
+          pdf.status === 200 && pdf.headers.get("content-type") === "application/pdf" &&
+          bytes.subarray(0, 5).toString("latin1") === "%PDF-",
+      );
+    } finally {
+      await db.end();
+    }
+  }
+
+  // --- PR 3 Task 24: an OFFLINE deal that went live and then ended unpaid (its term ran out) is still DUE. It is the one ended deal
+  // that offers Mark as paid and Write off (lib/sponsor-deals.ts `endedStillDue`), and the sponsor list's row names it instead of
+  // saying a bare "Ended" with an Add deal. Made as a club makes it - a sponsor, an immediate offline deal with a billing email -
+  // and then the term ends: no route ends a deal that way (the hourly sweep does), so that one step is SQL, under the CHECKs
+  // `ended_shape` (V495) and `written_off_unpaid_offline` (V504: a written-off deal is offline, unpaid and went live).
+  if (!process.env.DATABASE_URL) {
+    check("sd ended-unpaid deal rows: skipped (no DATABASE_URL to end a deal) - sponsor-deals.test.ts and sponsor-list.test.tsx cover them", true);
+  } else {
+    type EndedDeal = Deal & { ended_reason: string | null };
+    const dueName = `Deal Ended Due ${tag}`;
+    const dueSponsor = await addSponsor(dueName);
+    const dueMade = await createDeal(dueSponsor, { go_live: "immediate", sponsor_email: `delivered+deal_due_${tag}@resend.dev` });
+    const dueDeal = dueMade.status === 201 ? v1data<{ deal: Deal }>(dueMade).deal : null;
+    const writeOff = (id: string) => v1(free, `/api/v1/orgs/${org.id}/sponsor-deals/${id}/write-off`, "POST");
+    // Nothing is due on a LIVE deal: the club cannot waive an invoice whose sponsor still has the placement.
+    const refusedLive = dueDeal ? await writeOff(dueDeal.id) : null;
+    check(
+      "sd write off is refused on a live deal (409), and the deal is untouched",
+      dueDeal?.deal_status === "live" && refusedLive?.status === 409 &&
+        v1data<EndedDeal>(await v1(free, `/api/v1/orgs/${org.id}/sponsor-deals/${dueDeal.id}`)).deal_status === "live",
+    );
+
+    const knownToken = randomBytes(32).toString("base64url");
+    const db = smokeDb();
+    let ended = 0;
+    try {
+      if (dueDeal) {
+        ended = (
+          await db`update sponsor_orders set deal_status = 'ended', ended_reason = 'expired', ended_at = now()
+                    where id = ${dueDeal.id} and deal_status = 'live' returning id`
+        ).length;
+        // The emailed token cannot be read back (the rows above), so a KNOWN token's hash is planted the way the send stores its own.
+        await db`update sponsor_orders set invoice_token_hash = ${createHash("sha256").update(knownToken, "utf8").digest()}
+                  where id = ${dueDeal.id} and invoice_number is not null`;
+      }
+    } finally {
+      await db.end();
+    }
+    const dueHub = await html(free, `/o/${org.slug}/sponsors?tab=sponsors`);
+    const dueAt = dueHub.body.indexOf(`data-sponsor-id="${dueSponsor}"`);
+    const dueRow = dueAt >= 0 ? dueHub.body.slice(dueAt, dueHub.body.indexOf("</li>", dueAt)) : "";
+    const dueBefore = await html(newSession(), `/r/sponsor/invoice/${knownToken}`);
+    check(
+      "sd ended-unpaid deal: the hub row reads Ended · unpaid with Mark as paid; the invoice still reads unpaid and says it is due",
+      ended === 1 && dueHub.status === 200 &&
+        dueRow.includes("Ended · unpaid") && (dueRow.match(/data-testid="sponsor-row-action"/g) ?? []).length === 1 &&
+        dueRow.includes('data-action="mark_paid"') &&
+        dueBefore.status === 200 && dueBefore.body.includes('data-state="unpaid"') &&
+        dueBefore.body.includes("This sponsorship has ended, and this invoice is still due.") &&
+        !dueBefore.body.includes('data-testid="invoice-pay"'),
+    );
+
+    const wroteOff = dueDeal ? await writeOff(dueDeal.id) : null;
+    const dueAfter = await html(newSession(), `/r/sponsor/invoice/${knownToken}`);
+    const wroteOffDeal = wroteOff?.status === 200 ? v1data<EndedDeal>(wroteOff) : null;
+    check(
+      "sd write off: the deal reads written_off with its money still unpaid; the invoice reads Written off and asks for nothing",
+      wroteOffDeal?.ended_reason === "written_off" && wroteOffDeal.payment_status === "pending" && wroteOffDeal.deal_status === "ended" &&
+        dueAfter.status === 200 && dueAfter.body.includes('data-state="written_off"') &&
+        dueAfter.body.includes("Nothing due — written off by") &&
+        !dueAfter.body.includes('data-testid="invoice-pay"') && !dueAfter.body.includes('data-testid="invoice-bank"'),
+    );
+
+    // Once is all: a deal already written off has nothing due, so a second write off is refused and changes nothing.
+    const writeOffAgain = dueDeal ? await writeOff(dueDeal.id) : null;
+    check(
+      "sd a second write off is refused (409)",
+      wroteOffDeal !== null && writeOffAgain?.status === 409 &&
+        v1data<EndedDeal>(await v1(free, `/api/v1/orgs/${org.id}/sponsor-deals/${dueDeal!.id}`)).ended_reason === "written_off",
+    );
+  }
 
   // --- T9, the hourly sweep's route (D20): the cron secret guards it, and the right one answers the sweep's counts. CI sets
   // CRON_SECRET for the smoke job and its server alike (ci.yml), so a wrong secret is exactly a 401.

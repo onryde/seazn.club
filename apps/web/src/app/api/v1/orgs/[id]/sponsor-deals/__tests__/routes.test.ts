@@ -1,15 +1,16 @@
 // Sponsor deals, Task 6 (plan 2026-11-07-sponsor-deals D16, D21; F11) — the deal routes, over the REAL handlers, the REAL
 // session door and the REAL tables:
-//   POST /api/v1/orgs/{id}/sponsors/{sponsorId}/deals                         create → 201 { deal, checkout_url }
+//   POST /api/v1/orgs/{id}/sponsors/{sponsorId}/deals                         create → 201 { deal, invoice_url }
 //   GET  /api/v1/orgs/{id}/sponsor-deals[?sponsor_id=]                        list
 //   GET  /api/v1/orgs/{id}/sponsor-deals/{dealId}                             get
-//   POST /api/v1/orgs/{id}/sponsor-deals/{dealId}/{mark-paid|approve|end|refund}  → 200 SponsorDeal
+//   POST /api/v1/orgs/{id}/sponsor-deals/{dealId}/{mark-paid|approve|end|refund|write-off}  → 200 SponsorDeal
+//   POST /api/v1/orgs/{id}/sponsor-deals/{dealId}/send-invoice                → 200 { deal, invoice_url } (Task 23: offline too)
 // Only `requireUser` (who is signed in) is faked, as the report-link routes' suite does; `requireOrgAuth`'s role lookup runs
 // against real `org_members` rows.
 //
 // What this file owns is the WIRING and the ENVELOPES: who may call (D21: every write is an editor's, a viewer reads — the
 // granted AND denied pair), the 400 for a body the strict schema refuses, the cross-org 404, the key ban, and the create's
-// `{ deal, checkout_url: null }` for a deal that is not online (F11). The usecase's own rules are
+// `{ deal, invoice_url: null }` for a deal that is not online (F11; T23 review I1: never a Checkout url). The usecase's own rules are
 // server/usecases/__tests__/sponsor-deals.test.ts's. Sport-agnostic (a deal reads no sport).
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { existsSync } from "node:fs";
@@ -33,7 +34,7 @@ vi.mock("next/headers", () => ({
 import { sql } from "@/lib/db";
 import { buildOpenApiDocument } from "@/server/api-v1/openapi";
 import { NEVER_KEY_ROUTES } from "@/server/api-v1/key-scopes";
-import { SponsorDeal, SponsorDealCreated } from "@/server/api-v1/schemas";
+import { SponsorDeal, SponsorDealCreated, SponsorDealInvoiceSent } from "@/server/api-v1/schemas";
 import { createApiKey } from "@/server/usecases/api-keys";
 import { makeUser, seedOrg } from "@/server/usecases/__tests__/_seed";
 import { POST as CREATE } from "../../sponsors/[sponsorId]/deals/route";
@@ -44,6 +45,7 @@ import { POST as APPROVE } from "../[dealId]/approve/route";
 import { POST as END } from "../[dealId]/end/route";
 import { POST as REFUND } from "../[dealId]/refund/route";
 import { POST as SEND_INVOICE } from "../[dealId]/send-invoice/route";
+import { POST as WRITE_OFF } from "../[dealId]/write-off/route";
 import { GET as EVIDENCE } from "../[dealId]/evidence/route";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -53,6 +55,7 @@ afterAll(async () => {
   if (!HAS_DB) return;
   if (made.length > 0) {
     await sql`delete from sponsor_orders where org_id = any(${made}::uuid[])`;
+    await sql`delete from sponsor_invoice_counters where org_id = any(${made}::uuid[])`;
     await sql`delete from organizations where id = any(${made}::uuid[])`;
   }
   const g = globalThis as { _sql?: { end(): Promise<void> } };
@@ -77,7 +80,14 @@ const list = (orgId: string, query = "", headers: HeadersInit = {}) =>
   LIST(new Request(`http://localhost/api/v1/orgs/${orgId}/sponsor-deals${query}`, { headers }), { params: Promise.resolve({ id: orgId }) });
 const read = (orgId: string, dealId: string) =>
   READ(new Request(`http://localhost/api/v1/orgs/${orgId}/sponsor-deals/${dealId}`), { params: Promise.resolve({ id: orgId, dealId }) });
-const ACTIONS = { "mark-paid": MARK_PAID, approve: APPROVE, end: END, refund: REFUND, "send-invoice": SEND_INVOICE } as const;
+const ACTIONS = {
+  "mark-paid": MARK_PAID,
+  approve: APPROVE,
+  end: END,
+  refund: REFUND,
+  "send-invoice": SEND_INVOICE,
+  "write-off": WRITE_OFF,
+} as const;
 type ActionName = keyof typeof ACTIONS;
 const act = (action: ActionName, orgId: string, dealId: string, headers: HeadersInit = {}) =>
   ACTIONS[action](new Request(`http://localhost/api/v1/orgs/${orgId}/sponsor-deals/${dealId}/${action}`, { method: "POST", headers }), {
@@ -113,15 +123,15 @@ const evidence = (orgId: string, dealId: string, headers: HeadersInit = {}) =>
 const dealsOf = (orgId: string) => sql<{ id: string }[]>`select id from sponsor_orders where org_id = ${orgId}`;
 
 describe.skipIf(!HAS_DB)("the sponsor deal routes (DB)", () => {
-  it("F11: create answers 201 { deal, checkout_url: null } for offline and complimentary, in the documented shape", async () => {
+  it("F11: create answers 201 { deal, invoice_url: null } for offline and complimentary, in the documented shape", async () => {
     const o = await organiser();
     let checked = 0;
     for (const over of [{}, { payment_method: "complimentary", go_live: "immediate" }]) {
       const res = await create(o.orgId, o.sponsorId, body(o.packageId, over));
       expect(res.status, JSON.stringify(over)).toBe(201);
-      const data = ((await res.json()) as Envelope<{ deal: Deal; checkout_url: string | null }>).data!;
-      expect(Object.keys(data).sort()).toEqual(["checkout_url", "deal"]);
-      expect(data.checkout_url).toBeNull();
+      const data = ((await res.json()) as Envelope<{ deal: Deal; invoice_url: string | null }>).data!;
+      expect(Object.keys(data).sort()).toEqual(["deal", "invoice_url"]);
+      expect(data.invoice_url, "nothing was emailed, so there is no link").toBeNull();
       expect(SponsorDealCreated.safeParse(data).success, "the documented response schema").toBe(true);
       expect(Object.keys(data.deal), "SponsorDeal stays URL-free").not.toContain("checkout_url");
       checked++;
@@ -163,7 +173,7 @@ describe.skipIf(!HAS_DB)("the sponsor deal routes (DB)", () => {
       denied++;
     }
     expect((await evidence(o.orgId, deal.id)).status, "the evidence pack is an editor's").toBe(403);
-    expect(denied, "every POST checked").toBe(6);
+    expect(denied, "every POST checked").toBe(7);
     expect((await dealsOf(o.orgId)).length, "the viewer wrote nothing").toBe(1);
     expect((await list(o.orgId)).status).toBe(200);
     expect((await list(o.orgId, `?sponsor_id=${o.sponsorId}`)).status).toBe(200);
@@ -191,7 +201,7 @@ describe.skipIf(!HAS_DB)("the sponsor deal routes (DB)", () => {
     expect(((await (await list(b.orgId, `?sponsor_id=${a.sponsorId}`)).json()) as Envelope<Deal[]>).data).toEqual([]);
     expect((await create(b.orgId, a.sponsorId, body(b.packageId))).status, "A's sponsor through B").toBe(404);
     expect((await evidence(b.orgId, deal.id)).status, "evidence").toBe(404);
-    expect(checked).toBe(5);
+    expect(checked).toBe(6);
     expect((await read(b.orgId, "not-a-uuid")).status).toBe(404);
     expect((await evidence(b.orgId, "not-a-uuid")).status).toBe(404);
     expect((await act("end", b.orgId, "not-a-uuid")).status).toBe(404);
@@ -248,24 +258,53 @@ describe.skipIf(!HAS_DB)("the sponsor deal routes (DB)", () => {
     const ev = await evidence(o.orgId, deal.id, bearer);
     expect(ev.status, "evidence").toBe(403);
     checked++;
-    expect(checked).toBe(8);
+    expect(checked).toBe(9);
     expect(await dealsOf(o.orgId)).toHaveLength(1);
   });
 
-  it("send-invoice on an offline deal is 409 deal_not_invoiceable (an online-only action); the evidence pack downloads as an HTML attachment", async () => {
+  it("send-invoice on an offline deal (Task 23): 422 no_billing_email with no address, then 200 { deal, invoice_url } once it has one (the emailed invoice page, never a Checkout url); the evidence pack downloads as an HTML attachment", async () => {
     const o = await organiser();
-    const deal = ((await (await create(o.orgId, o.sponsorId, body(o.packageId))).json()) as Envelope<{ deal: Deal }>).data!.deal;
+    const bare = ((await (await create(o.orgId, o.sponsorId, body(o.packageId))).json()) as Envelope<{ deal: Deal }>).data!.deal;
+    const refused = await act("send-invoice", o.orgId, bare.id);
+    expect(refused.status, "no billing email: the one refusal an address would cure").toBe(422);
+    expect(((await refused.json()) as Envelope).error?.code).toBe("no_billing_email");
+    const deal = ((await (await create(o.orgId, o.sponsorId, body(o.packageId, { sponsor_email: "billing@harbour.test" }))).json()) as Envelope<{ deal: Deal }>).data!.deal;
     const res = await act("send-invoice", o.orgId, deal.id);
-    expect(res.status).toBe(409);
-    expect(((await res.json()) as Envelope).error?.code).toBe("deal_not_invoiceable");
+    expect(res.status).toBe(200);
+    const sent = ((await res.json()) as Envelope<{ deal: Deal; invoice_url: string }>).data!;
+    expect(Object.keys(sent).sort()).toEqual(["deal", "invoice_url"]);
+    // The invoice page's route shape, typed here (the origin is the box's `baseUrl`); never a Checkout url.
+    expect(sent.invoice_url, "the link the email carries").toMatch(/^https?:\/\/[^/]+\/r\/sponsor\/invoice\/[A-Za-z0-9_-]{20,}$/);
+    expect(SponsorDealInvoiceSent.safeParse(sent).success, "the documented response schema").toBe(true);
     const pack = await evidence(o.orgId, deal.id);
     expect(pack.status).toBe(200);
     expect(pack.headers.get("content-type")).toMatch(/^text\/html/);
     expect(pack.headers.get("content-disposition")).toMatch(/^attachment; filename="sponsor-dispute-evidence-/);
   });
+
+  it("write-off over HTTP (Task 23): 409 deal_nothing_due on a deal still running, 200 ended/written_off on an offline deal its term ended unpaid, then 409 deal_nothing_due again", async () => {
+    const o = await organiser();
+    const deal = ((await (await create(o.orgId, o.sponsorId, body(o.packageId))).json()) as Envelope<{ deal: Deal }>).data!.deal;
+    const early = await act("write-off", o.orgId, deal.id);
+    expect(early.status, "a running deal has nothing to write off").toBe(409);
+    expect(((await early.json()) as Envelope).error?.code).toBe("deal_nothing_due");
+    // The deal ran, then its term ran out unpaid (the sweep's write, done by hand).
+    await sql`
+      update sponsor_orders
+         set deal_status = 'ended', live_at = now() - interval '30 days', ended_at = now(), ended_reason = 'expired'
+       where id = ${deal.id}`;
+    const res = await act("write-off", o.orgId, deal.id);
+    expect(res.status).toBe(200);
+    const after = ((await res.json()) as Envelope<Deal & { ended_reason: string | null }>).data!;
+    expect(SponsorDeal.safeParse(after).success, "the documented schema").toBe(true);
+    expect([after.deal_status, after.payment_status, after.ended_reason]).toEqual(["ended", "pending", "written_off"]); // nothing was paid: the money column says so
+    const again = await act("write-off", o.orgId, deal.id);
+    expect(again.status, "the second write-off").toBe(409);
+    expect(((await again.json()) as Envelope).error?.code).toBe("deal_nothing_due");
+  });
 });
 
-/** The nine operations, as key-scopes names them (typed from the plan's D16 list and Task 7, never read from the code). */
+/** The ten operations, as key-scopes names them (typed from the plan's D16 list, Task 7 and Task 23, never read from the code). */
 const OPERATIONS = [
   "POST /orgs/:id/sponsors/:sponsorId/deals",
   "GET /orgs/:id/sponsor-deals",
@@ -275,6 +314,7 @@ const OPERATIONS = [
   "POST /orgs/:id/sponsor-deals/:dealId/end",
   "POST /orgs/:id/sponsor-deals/:dealId/refund",
   "POST /orgs/:id/sponsor-deals/:dealId/send-invoice",
+  "POST /orgs/:id/sponsor-deals/:dealId/write-off",
   "GET /orgs/:id/sponsor-deals/:dealId/evidence",
 ];
 /** Retired by Task 7 (D16): today's order routes, every one replaced above. */
@@ -297,14 +337,14 @@ describe("the deal routes are documented and never key-reachable (no DB)", () =>
       expect(doc.paths[openapiPath]?.[method!.toLowerCase()], op).toBeDefined();
       checked++;
     }
-    expect(checked).toBe(9);
+    expect(checked).toBe(10);
     const schema = doc.paths["/api/v1/orgs/{id}/sponsors/{sponsorId}/deals"]!.post!.requestBody!.content["application/json"].schema;
     expect(Object.keys(schema.properties).sort()).toEqual(
       ["competition_id", "end_current", "ends_on", "go_live", "package_id", "payment_method", "sponsor_email"],
     );
   });
 
-  it("all nine are NEVER_KEY_ROUTES (a money surface, console only)", () => {
+  it("all ten are NEVER_KEY_ROUTES (a money surface, console only)", () => {
     for (const op of OPERATIONS) expect(NEVER_KEY_ROUTES, op).toContain(op);
   });
 

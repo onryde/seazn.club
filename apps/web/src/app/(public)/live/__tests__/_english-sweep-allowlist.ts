@@ -60,4 +60,14 @@ export const ENGLISH_SWEEP_ALLOWLIST: readonly AllowlistEntry[] = [
   scorecardNotation("W"),
   scorecardNotation("wd"),
   scorecardNotation("nb"),
+  {
+    // The sponsor invoice's number, "SP-0042" (formatInvoiceNumber), on the page and in its "use SP-0042 as the payment
+    // reference" line. An identifier, not copy: the club's console shows the same number in the MEMBER's language while the
+    // invoice is in the ORG's, and the sponsor's bank transfer carries it, so a prefix that changed with the language would
+    // stop the three matching.
+    text: "SP",
+    onlyOn: ["../r/sponsor/invoice/[token]/page.tsx"],
+    reason:
+      "the sponsor invoice number's fixed prefix (SP-0042, formatInvoiceNumber): an identifier the console, the invoice and the bank reference must share in every language, not a word",
+  },
 ];

@@ -26,7 +26,7 @@ import { SMALL_BTN, SponsorSheet, SponsorSheetBody } from "@/components/sponsors
 import { DealPageBody } from "@/components/sponsors/deal-page";
 import { PayLinkBanner } from "@/components/sponsors/pay-link-banner";
 import {
-  endConfirmBodyKey, endKeepsPayment, markPaidRetiresPayLink, payLinkStillOpen, refundConfirmBodyKey, refundPlacementKey,
+  endConfirmBodyKey, endKeepsPayment, invoiceNoticeKey, markPaidRetiresPayLink, payLinkStillOpen, refundConfirmBodyKey, refundPlacementKey,
 } from "@/components/sponsors/deal-copy";
 import { createDealWrite, sponsorSaveErrorKey } from "@/components/sponsors/save-error";
 import type { SponsorWrite } from "@/components/sponsors/save-error";
@@ -99,8 +99,8 @@ export interface SponsorItem {
  *  sheet (Task 16: `packages` are its cards, `tiersOrgWide` and `tiersCompetitionIds` decide which scopes place them, `hasMonetize`,
  *  `monetizeOrgWide`, `monetizeCompetitionIds` and `chargesEnabled` decide
  *  whether Online is open FOR THE SCOPE picked, `finishedCompetitionIds` lock the packages that are no longer sold, `deals` feed its
- *  "already has one of these" confirm) and the deal page (Task 17: `dealId` picks it; `dealCreatedByName` and `dealCompetitionFinished`
- *  are the two reads its timeline needs from the server). */
+ *  "already has one of these" confirm) and the deal page (Task 17: `dealId` picks it; `dealCreatedByName`, `dealWrittenOffByName` and
+ *  `dealCompetitionFinished` are the reads its timeline needs from the server). */
 export interface SponsorsHubData {
   orgSlug: string;
   /** The org's timezone (V305; null = UTC): the zone a deal's "Ends on" day was typed in (`createDeal` stores the start of the next day
@@ -134,6 +134,9 @@ export interface SponsorsHubData {
   dealId: string | null;
   /** The selected deal's creator, by display name (a removed member or a deleted user reads null); null with no deal selected. */
   dealCreatedByName: string | null;
+  /** Who wrote off the selected deal's invoice, by display name, by the same rule (final review m3); null with no deal selected, on a
+   *  deal not written off, and for a member who can no longer be named. */
+  dealWrittenOffByName: string | null;
   /** The selected deal's competition has finished, by the desk's derived phase (never a date); false with no deal selected. */
   dealCompetitionFinished: boolean;
   /** The selected sponsor's live report links (an editor's page only; empty otherwise). */
@@ -215,17 +218,24 @@ const DEAL_ROUTE: Record<DealAction, string> = {
   send_invoice: "send-invoice",
   resend_invoice: "send-invoice",
   mark_paid: "mark-paid",
+  write_off: "write-off",
   approve: "approve",
   refund: "refund",
   end_now: "end",
 };
 
-/** Is a delete certain to be refused? Money history (paid or refunded) on any of a sponsor's deals is a 409
- *  `sponsor_has_deal_history` (server/usecases/sponsors.ts `dealHoldsHistory`). What the row can see of it is its paid order
- *  and the deal it shows; a pre-deals order or a history on an older deal is only known to the server, whose refusal is shown
- *  the same way. So this only decides whether to ASK first - it refuses nothing. */
+/** Is a delete certain to be refused? History on any of a sponsor's deals - money paid or refunded, or an invoice number (every
+ *  online and offline deal gets one when it is made, paid or not: sponsor invoices, Task 20) - is a 409 `sponsor_has_deal_history`
+ *  (server/usecases/sponsors.ts `dealHoldsHistory`). What the row can see of it is its paid order and the deal it shows; a pre-deals
+ *  order or a history on an older deal is only known to the server, whose refusal is shown the same way. So this only decides
+ *  whether to ASK first - it refuses nothing. */
 function deleteIsRefusedForHistory(s: SponsorItem): boolean {
-  return Boolean(s.paid_order_id) || s.deal?.payment_status === "paid" || s.deal?.payment_status === "refunded";
+  return (
+    Boolean(s.paid_order_id) ||
+    s.deal?.payment_status === "paid" ||
+    s.deal?.payment_status === "refunded" ||
+    s.deal?.invoice_number != null
+  );
 }
 
 /** The dictionary key for a refused logo upload grant, from the route's STATUS (batch H review m6): the picker offers PNG, JPG and WebP,
@@ -522,8 +532,9 @@ export function OrgSponsors({
   const [error, setError] = useState<string | null>(null);
   /** What a write that changes nothing on screen says it did (Resend invoice: the chip stays "Awaiting payment"). */
   const [notice, setNotice] = useState<string | null>(null);
-  /** The pay link the last send, resend or online Add deal answered with, and the deal it pays: shown only while that deal can still
-   *  be paid (`payLinkStillOpen`), so End now, Mark as paid or a payment takes it down with the deal. */
+  /** The invoice link the last send, resend or online Add deal answered with (`invoice_url`: the link the email carries, never a
+   *  Checkout url), and its deal: shown only while that deal can still be paid (`payLinkStillOpen`), so End now, Mark as paid or a
+   *  payment takes it down with the deal. */
   const [payLink, setPayLink] = useState<{ deal: SponsorDeal; url: string } | null>(null);
 
   /** A call on the org's v1 API (`path` after `/orgs/{id}`); the envelope's payload back. */
@@ -701,11 +712,11 @@ export function OrgSponsors({
 
   function remove(s: SponsorItem) {
     void (async () => {
-      // The server's rule (sponsors.ts `deleteSponsor`, sponsor deals F3): a sponsor's deals go WITH it, unless one holds payment
-      // history (paid or refunded, or a pre-deals order) or an open payment link nobody could close - then the delete is a 409 and
-      // the sponsor stays. So a sponsor with deals asks first, in words that match; one already known to hold payment history
-      // is not asked to confirm a delete that cannot happen (its 409 reads `sponsors.error.hasDealHistory`). The server stays
-      // the rule's one owner: this only skips a question, it refuses nothing.
+      // The server's rule (sponsors.ts `deleteSponsor`, sponsor deals F3 and F10): a sponsor's deals go WITH it, unless one holds
+      // history (money paid or refunded, an invoice number, or a pre-deals order) or an open payment link nobody could close - then
+      // the delete is a 409 and the sponsor stays. So a sponsor with deals asks first, in words that match; one already known to hold
+      // history is not asked to confirm a delete that cannot happen (its 409 reads `sponsors.error.hasDealHistory`). The server
+      // stays the rule's one owner: this only skips a question, it refuses nothing.
       if (s.deal && !deleteIsRefusedForHistory(s)) {
         const ok = await confirm({
           title: msg("sponsors.deleteDeal.title"),
@@ -749,9 +760,24 @@ export function OrgSponsors({
       if (action === "mark_paid") {
         const ok = await confirm({
           title: msg("sponsors.deal.markPaid.title", { amount: dealPrice(deal, locale), name }),
-          body: [msg("sponsors.deal.markPaid.body"), ...(markPaidRetiresPayLink(deal) ? [msg("sponsors.deal.confirm.markPaid.payLink", { name })] : [])].join(" "),
+          // An ended deal still due (Task 23 carry 1) does not follow its go-live rule: it stays ended, and its invoice reads Paid.
+          body: [
+            msg(deal.deal_status === "ended" ? "sponsors.deal.markPaid.bodyEnded" : "sponsors.deal.markPaid.body"),
+            ...(markPaidRetiresPayLink(deal) ? [msg("sponsors.deal.confirm.markPaid.payLink", { name })] : []),
+          ].join(" "),
           confirmLabel: msg("sponsors.deal.action.markPaid"),
           tone: "default",
+        });
+        if (!ok) return;
+      }
+      if (action === "write_off") {
+        // Task 23 carry 4: waiving what is still due is final, so it asks first, in the words the invoice will then say.
+        const amount = dealPrice(deal, locale);
+        const ok = await confirm({
+          title: msg("sponsors.deal.confirm.writeOff.title", { amount, name }),
+          body: msg("sponsors.deal.confirm.writeOff.body", { name }),
+          confirmLabel: msg("sponsors.deal.confirm.writeOff.label", { amount }),
+          tone: "danger",
         });
         if (!ok) return;
       }
@@ -786,12 +812,13 @@ export function OrgSponsors({
         async () => {
           try {
             const answer = (await v1(`/sponsor-deals/${deal.id}/${DEAL_ROUTE[action]}`, { method: "POST" })) as
-              | { deal?: SponsorDeal; checkout_url?: string | null }
+              | { deal?: SponsorDeal; invoice_url?: string | null }
               | null;
             if (action === "resend_invoice" || action === "send_invoice") {
-              // The answer carries the pay link beside the deal (F11); the deal itself carries no url.
-              setPayLink(answer?.checkout_url ? { deal: answer.deal ?? deal, url: answer.checkout_url } : null);
-              setNotice(msg(action === "resend_invoice" ? "sponsors.deal.notice.invoiceResent" : "sponsors.deal.notice.invoiceSent", { name }));
+              // The answer carries the invoice link beside the deal (F11); the deal itself carries no url.
+              setPayLink(answer?.invoice_url ? { deal: answer.deal ?? deal, url: answer.invoice_url } : null);
+              // By the deal BEFORE the send: an offline deal's first send is offered as Resend, and replaces nothing (m3).
+              setNotice(msg(invoiceNoticeKey(deal), { name }));
             }
           } finally {
             await refresh().catch(() => {});
@@ -814,11 +841,11 @@ export function OrgSponsors({
     setNotice(null);
     try {
       const made = (await v1(`/sponsors/${s.id}/deals`, { method: "POST", body: JSON.stringify(body) })) as
-        | { deal?: SponsorDeal; checkout_url?: string | null }
+        | { deal?: SponsorDeal; invoice_url?: string | null }
         | null;
-      // F11: the pay link rides beside the deal in the create's answer. An online create that did not make one (a Stripe refusal) is
+      // F11: the invoice link rides beside the deal in the create's answer. An online create that did not send (a Stripe refusal) is
       // handled below; a create that sends no invoice has none.
-      setPayLink(made?.deal && made.checkout_url ? { deal: made.deal, url: made.checkout_url } : null);
+      setPayLink(made?.deal && made.invoice_url ? { deal: made.deal, url: made.invoice_url } : null);
       setNotice(msg(body.payment_method === "online" ? "sponsors.deal.notice.invoiceSent" : "sponsors.dealSheet.notice.saved", { name: s.name }));
     } catch (err) {
       if (!(err instanceof ApiV1Error) || err.code !== "stripe_unavailable" || body.payment_method !== "online") throw err;
@@ -914,6 +941,7 @@ export function OrgSponsors({
             orgTz={hub.orgTimezone ?? "UTC"}
             competitions={competitions}
             createdBy={hub.dealCreatedByName}
+            writtenOffBy={hub.dealWrittenOffByName}
             competitionFinished={hub.dealCompetitionFinished}
             payLink={openPayLink?.deal.id === selectedDeal.id ? openPayLink.url : null}
             error={error}

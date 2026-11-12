@@ -3,7 +3,7 @@
 // can all read them without a cycle.
 //
 // The same two lists are typed again as CHECK constraints: the statuses in db/migration/deltas/V470__email_outbox.sql, the kinds
-// (as last redefined) in V478__email_outbox_phase3_wave5.sql. They are two copies of one fact, so outbox-schema.test.ts reads the
+// (as last redefined) in the sponsor deals delta `V<n>__email_outbox_sponsor_deal_paid.sql` (V478's list plus one). They are two copies of one fact, so outbox-schema.test.ts reads the
 // constraint definitions back from the catalogue and requires them to name exactly these members.
 
 export const OUTBOX_KINDS = [
@@ -62,6 +62,8 @@ export const OUTBOX_KINDS = [
   "staff_ai_run_cost",
   "staff_earn_grant_volume",
   "staff_extra_org_allowance",
+  // Born on the outbox after phase 3 (sponsor deals Task 23, plan 2026-11-07-sponsor-deals, D13): the owner's "a sponsor has paid".
+  "sponsor_deal_paid",
 ] as const;
 export type OutboxKind = (typeof OUTBOX_KINDS)[number];
 
@@ -129,6 +131,8 @@ export const OUTBOX_KIND_FACTS: Readonly<Record<OutboxKind, { to: "account" | "l
   staff_ai_run_cost: { to: "staff", transactional: true },
   staff_earn_grant_volume: { to: "staff", transactional: true },
   staff_extra_org_allowance: { to: "staff", transactional: true },
+  // To the org's owner (`orgOwnerRecipient`) as an account, in the owner's language; a sponsor and money mail, so not transactional.
+  sponsor_deal_paid: { to: "account", transactional: false },
 };
 
 /** Mail ABOUT an account that is addressed to a literal address (phase-3 D5, wave 3): its verification and its email change. These kinds

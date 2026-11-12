@@ -64,6 +64,7 @@ afterAll(async () => {
   if (made.orgIds.length > 0) {
     await sql`delete from email_outbox where org_id = any(${made.orgIds}::uuid[])`;
     await sql`delete from sponsor_orders where org_id = any(${made.orgIds}::uuid[])`;
+    await sql`delete from sponsor_invoice_counters where org_id = any(${made.orgIds}::uuid[])`;
     await sql`delete from organizations where id = any(${made.orgIds}::uuid[])`;
   }
   if (made.userIds.length > 0) {
@@ -252,7 +253,7 @@ describe.skipIf(!HAS_DB)("every offline and complimentary combination follows sp
         const where = `${label} after ${step.action}`;
         if (step.action === "create") {
           const out = await createDeal(o.auth, id, input(p, { payment_method: row.method, go_live: row.rule }), ORIGIN);
-          expect(out.checkout_url, `${where}: no checkout url for a deal that is not online (F11)`).toBeNull();
+          expect(out.invoice_url, `${where}: no invoice link for a deal that is not online - nothing was emailed (F11)`).toBeNull();
           dealId = out.deal.id;
         } else if (step.action === "mark_paid") {
           await markDealPaid(o.auth, dealId);

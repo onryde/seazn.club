@@ -35,7 +35,7 @@ import { DealPageBody, type DealPageBodyProps } from "@/components/sponsors/deal
 import { SponsorSheet } from "@/components/sponsors/sponsor-sheet";
 import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
 import { expandSponsorTree } from "./_sponsor-tree";
-import { attrOf, findAll, findOne, textOfMarkup } from "./_markup";
+import { attrOf, classTokens, findAll, findOne, textOfMarkup } from "./_markup";
 import {
   allowedActions, DEAL_ACTIONS, DEAL_STATUSES, GO_LIVE_RULES, PAYMENT_METHODS, PAYMENT_STATUSES, initialPaymentStatus,
   type DealAction, type SponsorDeal,
@@ -69,9 +69,17 @@ const BASE: SponsorDeal = {
   amount_cents: 30_000, currency: "gbp", sponsor_name: "Quay Fisheries", sponsor_email: "accounts@quayfisheries.co.uk",
   ends_at: "2027-09-01T00:00:00.000Z", created_at: "2026-10-14T09:00:00.000Z", created_by: null, invoice_sent_at: null, paid_at: null,
   marked_paid_by: null, approved_at: null, approved_by: null, live_at: null, ended_at: null, ended_reason: null, parked_at: null,
-  disputed_at: null, dispute_id: null, has_payment_intent: false, invoice_number: null,
+  disputed_at: null, dispute_id: null, has_payment_intent: false, invoice_number: null, written_off_at: null, written_off_by: null,
 };
-const deal = (over: Partial<SponsorDeal>): SponsorDeal => ({ ...BASE, ...over });
+/** D11: an online or offline deal is numbered when it is made, a complimentary one never (an unnumbered online or offline deal is
+ *  pre-numbering stg data, and offers no send: lib/sponsor-deals.test.ts sweeps it). */
+const deal = (over: Partial<SponsorDeal>): SponsorDeal => ({
+  ...BASE,
+  invoice_number: (over.payment_method ?? BASE.payment_method) === "complimentary" ? null : 1,
+  ...over,
+});
+/** The invoice page's link, as a send answers it (`invoice_url`; the route shape `/r/sponsor/invoice/<token>`). */
+const INVOICE_LINK = "https://app.example/r/sponsor/invoice/tok_abcdefghijklmnopqrstuvwx";
 
 /** Screen 5, first state: "Paid online, waiting for approval - Quay Fisheries". */
 const QUAY = deal({
@@ -110,7 +118,7 @@ const noop = () => {};
 function props(over: Partial<DealPageBodyProps> = {}): DealPageBodyProps {
   return {
     deal: QUAY, sponsorName: "Quay Fisheries", orgId: ORG, hasTiers: true, canEdit: true, busy: false, tz: "UTC", orgTz: "UTC", competitions: COMPS,
-    createdBy: "Sam Patel", competitionFinished: false, payLink: null, error: null, notice: null, onAction: noop, ...over,
+    createdBy: "Sam Patel", writtenOffBy: null, competitionFinished: false, payLink: null, error: null, notice: null, onAction: noop, ...over,
   };
 }
 const html = (over: Partial<DealPageBodyProps> = {}) => renderToStaticMarkup(<DealPageBody {...props(over)} />);
@@ -203,12 +211,33 @@ describe("the header (acceptance: the package, the price, the sponsor and the ch
 
 describe("the buttons are the engine's answer, in DEAL_ACTIONS order (F27)", () => {
   const WORDS: Record<DealAction, string> = {
-    send_invoice: "Send invoice", resend_invoice: "Resend invoice", mark_paid: "Mark as paid", approve: "Approve", refund: "Refund", end_now: "End now",
+    send_invoice: "Send invoice", resend_invoice: "Resend invoice", mark_paid: "Mark as paid", write_off: "Write off", approve: "Approve",
+    refund: "Refund", end_now: "End now",
   };
   // Typed from spec §5.2 and the mockup's "Actions by state" - NOT read from allowedActions.
-  const CASES: { label: string; d: SponsorDeal; want: DealAction[] }[] = [
+  // Final review m1: Resend invoice on a deal whose invoice never went out reads "Send invoice" (the action is the same). The two offline
+  // rows below were never sent, so their send button says so; RIDGE was sent, so it says Resend.
+  const NEVER_SENT = { resend_invoice: "Send invoice" } as const;
+  const CASES: { label: string; d: SponsorDeal; want: DealAction[]; words?: Partial<Record<DealAction, string>> }[] = [
     { label: "paid online, awaiting approval (screen 5: Approve, Refund, End now)", d: QUAY, want: ["approve", "refund", "end_now"] },
-    { label: "offline, awaiting payment (screen 5: Mark as paid, End now)", d: MARLOW, want: ["mark_paid", "end_now"] },
+    { label: "offline, awaiting payment, no billing email (screen 5: Mark as paid, End now)", d: MARLOW, want: ["mark_paid", "end_now"] },
+    {
+      label: "offline, awaiting payment, with a billing email (Task 23, F13: Resend invoice too)",
+      d: deal({ ...MARLOW, sponsor_email: "accounts@marlow.example" }),
+      want: ["resend_invoice", "mark_paid", "end_now"],
+      words: NEVER_SENT,
+    },
+    {
+      label: "offline, went live, then its end date passed unpaid (Task 23 carries 1 and 4: still due)",
+      d: deal({ ...MARLOW, sponsor_email: "accounts@marlow.example", deal_status: "ended", live_at: "2026-10-01T10:00:00.000Z", ended_reason: "expired", ended_at: "2026-10-30T10:00:00.000Z" }),
+      want: ["resend_invoice", "mark_paid", "write_off"],
+      words: NEVER_SENT,
+    },
+    {
+      label: "the same, written off: nothing is due any more",
+      d: deal({ ...MARLOW, deal_status: "ended", live_at: "2026-10-01T10:00:00.000Z", ended_reason: "written_off", ended_at: "2026-10-30T10:00:00.000Z" }),
+      want: [],
+    },
     { label: "online, invoice sent, awaiting payment (Mark as paid, Resend invoice, End now)", d: RIDGE, want: ["resend_invoice", "mark_paid", "end_now"] },
     { label: "online draft, not sent", d: KESTREL, want: ["send_invoice", "end_now"] },
     { label: "live and paid (Refund, End now)", d: HARBOUR, want: ["refund", "end_now"] },
@@ -226,7 +255,8 @@ describe("the buttons are the engine's answer, in DEAL_ACTIONS order (F27)", () 
       const markup = html({ deal: c.d });
       expect(actionsOf(markup), c.label).toEqual(c.want);
       for (const b of findAll(markup, "deal-page-action")) {
-        expect(textOfMarkup(b.outer), `${c.label}: words`).toBe(WORDS[attrOf(b.open, "data-action") as DealAction]);
+        const a = attrOf(b.open, "data-action") as DealAction;
+        expect(textOfMarkup(b.outer), `${c.label}: words`).toBe(c.words?.[a] ?? WORDS[a]);
       }
       checked++;
     }
@@ -300,6 +330,27 @@ describe("the buttons are the engine's answer, in DEAL_ACTIONS order (F27)", () 
 });
 
 // --- Evidence pack: the one control that is not a DealAction ----------------------------------------------------------------------
+
+describe("final review m1: a send button says Send until the invoice has gone out, then Resend", () => {
+  it("an offline deal never sent reads 'Send invoice' (its first send is offered as Resend invoice), and once sent 'Resend invoice' - the button and its name (the pair, 4 counted)", () => {
+    const ROWS: [string, SponsorDeal, string][] = [
+      ["offline, awaiting payment, never sent", deal({ ...MARLOW, sponsor_email: "accounts@marlow.example", invoice_sent_at: null }), "Send invoice"],
+      ["offline, awaiting payment, sent", deal({ ...MARLOW, sponsor_email: "accounts@marlow.example", invoice_sent_at: "2026-10-21T09:00:00.000Z" }), "Resend invoice"],
+      // An online deal that went live before its first send (Stripe refused it at create) is offered Resend invoice too.
+      ["online, live, never sent", deal({ ...RIDGE, deal_status: "live", live_at: "2026-10-28T10:00:00.000Z", invoice_sent_at: null }), "Send invoice"],
+      ["online, awaiting payment, sent", RIDGE, "Resend invoice"],
+    ];
+    let checked = 0;
+    for (const [label, d, words] of ROWS) {
+      expect(allowedActions(d), `premise: ${label} offers Resend invoice`).toContain("resend_invoice");
+      const b = findAll(html({ deal: d }), "deal-page-action").find((x) => attrOf(x.open, "data-action") === "resend_invoice")!;
+      expect(textOfMarkup(b.outer), label).toBe(words);
+      expect(attrOf(b.open, "aria-label"), `${label}: its name`).toBe(`${words}: ${d.package_name}`);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+});
 
 describe("Evidence pack: only when disputed, and last (D3)", () => {
   const DISPUTED = deal({ ...HARBOUR, disputed_at: "2026-11-02T10:00:00.000Z", dispute_id: "dp_1" });
@@ -500,6 +551,18 @@ describe("the timeline (mockup screen 5): dealTimeline's steps, drawn", () => {
     expect(new Set(Object.values(WANT)).size).toBe(7);
   });
 
+  it("final review m3: a written-off deal says WHO wrote it off and WHEN (the write-off's day, not the day it ended); a member who can no longer be named is left out (2 counted)", () => {
+    const wo = deal({
+      ...MARLOW, deal_status: "ended", live_at: "2026-10-01T10:00:00.000Z", ended_reason: "written_off", ended_at: "2026-10-30T10:00:00.000Z",
+      written_off_at: "2026-11-12T15:00:00.000Z", written_off_by: "u-sam",
+    });
+    expect(stepWords(html({ deal: wo, writtenOffBy: "Sam Patel" }), "ended")).toEqual(["Ended", "30 Oct 2026 · Written off by Sam Patel on 12 Nov 2026"]);
+    expect(stepWords(html({ deal: wo, writtenOffBy: null }), "ended")).toEqual(["Ended", "30 Oct 2026 · Written off on 12 Nov 2026"]);
+    // The pair: a name handed for a deal that was NOT written off says nothing about a write-off.
+    const expired = deal({ ...wo, ended_reason: "expired", written_off_at: null, written_off_by: null });
+    expect(stepWords(html({ deal: expired, writtenOffBy: "Sam Patel" }), "ended")).toEqual(["Ended", "30 Oct 2026 · End date reached"]);
+  });
+
   it("the creator is named when known and omitted - not guessed - when not (a removed member, a deleted user)", () => {
     expect(stepWords(html({ createdBy: "Sam Patel" }), "created")).toEqual(["Created", "14 Oct 2026 · Sam Patel"]);
     expect(stepWords(html({ createdBy: null }), "created")).toEqual(["Created", "14 Oct 2026"]);
@@ -595,7 +658,7 @@ describe("the Deal block: package and tier, scope, payment, the invoice email, t
 
   it("screen 5's Quay Fisheries: Silver Season (Silver), Season 2026/27, Online invoice, the email, After I approve", () => {
     const markup = html({ deal: QUAY });
-    expect(keys(markup)).toEqual(["package", "scope", "payment", "invoice_to", "goes_live"]);
+    expect(keys(markup)).toEqual(["package", "scope", "payment", "invoice", "invoice_to", "goes_live"]);
     expect(fact(markup, "package")).toBe("Silver Season Silver");
     expect(fact(markup, "scope")).toBe("Season 2026/27");
     expect(fact(markup, "payment")).toBe("Online invoice");
@@ -605,7 +668,7 @@ describe("the Deal block: package and tier, scope, payment, the invoice email, t
 
   it("an offline deal with no email has no 'Invoice to' row, and reads Offline / When paid", () => {
     const markup = html({ deal: MARLOW });
-    expect(keys(markup)).toEqual(["package", "scope", "payment", "goes_live"]);
+    expect(keys(markup)).toEqual(["package", "scope", "payment", "invoice", "goes_live"]);
     expect(fact(markup, "payment")).toBe("Offline");
     expect(fact(markup, "goes_live")).toBe("When paid");
   });
@@ -658,6 +721,50 @@ describe("the Deal block: package and tier, scope, payment, the invoice email, t
   it("the tier is the deal's own snapshot (a later package edit never moves it) and the facts carry the price", () => {
     const titled = deal({ ...QUAY, tier: "title", package_name: "Title Season" });
     expect(fact(html({ deal: titled }), "package")).toBe("Title Season Title");
+  });
+});
+
+// --- the invoice: its number and the club's own copy (final review I1) -------------------------------------------------------------
+
+describe("final review I1: a numbered deal shows its invoice number and the club's own PDF; a deal with no invoice shows neither", () => {
+  const PDF = (dealId: string) => `/api/v1/orgs/${ORG}/sponsor-deals/${dealId}/invoice.pdf`;
+  const invoiceFact = (markup: string) => findAll(markup, "deal-page-fact").find((f) => attrOf(f.open, "data-fact") === "invoice");
+
+  it("an online and an offline deal: 'Invoice' reads its number (SP-0007, the reference a transfer carries) and links the console PDF route as a download - for a viewer too (2 counted)", () => {
+    let checked = 0;
+    for (const d of [deal({ ...RIDGE, id: "d-online", invoice_number: 7 }), deal({ ...MARLOW, id: "d-offline", invoice_number: 7 })]) {
+      for (const canEdit of [true, false]) {
+        const markup = html({ deal: d, canEdit });
+        const row = invoiceFact(markup);
+        expect(row, `${d.payment_method}: the Invoice row`).toBeDefined();
+        expect(textOfMarkup(row!.outer).startsWith("Invoice"), "its label").toBe(true);
+        expect(textOfMarkup(findOne(markup, "deal-page-invoice-number").outer)).toBe("SP-0007");
+        const link = findOne(markup, "deal-page-invoice-pdf");
+        expect(attrOf(link.open, "href"), "the existing console route, never the sponsor's token link").toBe(PDF(d.id));
+        expect(/\sdownload(=|\s|>)/.test(link.open), "a download").toBe(true);
+        expect(textOfMarkup(link.outer)).toBe("Download invoice (PDF)");
+        expect(classTokens(link.open), "a 44px target below md").toContain("max-md:min-h-11");
+      }
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("the negative pair: a complimentary deal and an unnumbered one (made before invoices were numbered) show no number and no link (2 counted)", () => {
+    let checked = 0;
+    for (const d of [OLD_ANCHOR, deal({ ...RIDGE, id: "d-old", invoice_number: null })]) {
+      expect(d.invoice_number, "premise: no invoice number").toBeNull();
+      const markup = html({ deal: d });
+      expect(invoiceFact(markup), `${d.payment_method}: no Invoice row`).toBeUndefined();
+      expect(findAll(markup, "deal-page-invoice-pdf")).toHaveLength(0);
+      expect(textOfMarkup(markup)).not.toMatch(/SP-\d/);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("the number is padded, never cut: 12345 reads SP-12345", () => {
+    expect(textOfMarkup(findOne(html({ deal: deal({ ...RIDGE, invoice_number: 12345 }) }), "deal-page-invoice-number").outer)).toBe("SP-12345");
   });
 });
 
@@ -734,8 +841,11 @@ describe("'Going live will': what the deal switches on, true to the deal's state
 
 describe("the pay link banner on the page", () => {
   it("shows the link the last send made, with a copy control, and nothing when there is none", () => {
-    const markup = html({ deal: RIDGE, payLink: "https://checkout.stripe.test/c/pay_123" });
-    expect(textOfMarkup(findOne(markup, "sponsor-pay-link-url").outer)).toBe("https://checkout.stripe.test/c/pay_123");
+    const markup = html({ deal: RIDGE, payLink: INVOICE_LINK });
+    expect(textOfMarkup(findOne(markup, "sponsor-pay-link-url").outer)).toBe(INVOICE_LINK);
+    // The link is a credential (its token opens the invoice and its Pay by card): session replay must never record it. The
+    // painters sweep cannot follow a url the SERVER builds into an API reply, so the class is pinned here, on the rendered banner.
+    expect(findOne(markup, "sponsor-pay-link").outer, "the banner carries ph-no-capture").toMatch(/^<div[^>]*\sclass="ph-no-capture[\s"]/);
     expect(findAll(markup, "sponsor-pay-link")).toHaveLength(1);
     expect(findAll(html({ deal: RIDGE }), "sponsor-pay-link")).toHaveLength(0);
   });
@@ -791,7 +901,7 @@ const sponsor = (over: Partial<SponsorItem> = {}): SponsorItem => ({
 function hubOf(over: Partial<SponsorsHubData> = {}): SponsorsHubData {
   return {
     orgSlug: SLUG, orgTimezone: null, deals: [], packages: [], tiersOrgWide: true, tiersCompetitionIds: [], hasMonetize: true, monetizeOrgWide: true, monetizeCompetitionIds: [], finishedCompetitionIds: [],
-    chargesEnabled: true, sponsorId: "a", editSponsor: false, dealId: null, dealCreatedByName: null, dealCompetitionFinished: false, reportLinks: [],
+    chargesEnabled: true, sponsorId: "a", editSponsor: false, dealId: null, dealCreatedByName: null, dealWrittenOffByName: null, dealCompetitionFinished: false, reportLinks: [],
     reportDefaults: { from: "2026-01-01", to: "2026-11-09", competitionId: null }, ...over,
   };
 }
@@ -879,6 +989,18 @@ describe("D4 hub.dealId opens the deal page on top of its sponsor (the seam, thr
     const quietSteps = Object.fromEntries(quiet.all("deal-page-step").map((s) => [propsOf(s)["data-step"], flat(textOf(s as never))]));
     expect(quietSteps.created).not.toContain("Sam Patel");
     expect(quietSteps.ends).toContain("When Season 2026/27 finishes");
+  });
+
+  it("final review m3: the server's write-off name reaches the page (hub.dealWrittenOffByName), and its absence names no one", () => {
+    const wo = deal({
+      ...MARLOW, sponsor_id: "a", deal_status: "ended", live_at: "2026-10-01T10:00:00.000Z", ended_reason: "written_off",
+      ended_at: "2026-10-30T10:00:00.000Z", written_off_at: "2026-11-12T15:00:00.000Z", written_off_by: "u-sam",
+    });
+    const ended = (m: ReturnType<typeof mount>) => flat(textOf(m.all("deal-page-step").find((x) => propsOf(x)["data-step"] === "ended") as never));
+    expect(ended(mount([SUBJECT], hubOf({ deals: [wo], dealId: "dm", dealWrittenOffByName: "Sam Patel" })))).toContain("Written off by Sam Patel on 12 Nov 2026");
+    const unnamed = ended(mount([SUBJECT], hubOf({ deals: [wo], dealId: "dm", dealWrittenOffByName: null })));
+    expect(unnamed).toContain("Written off on 12 Nov 2026");
+    expect(unnamed).not.toContain("Sam Patel");
   });
 
   it("a viewer's deal page (canEdit off) has no buttons", () => {
@@ -1000,10 +1122,10 @@ describe("the writes the deal page makes", () => {
   });
 
   it("D7 the pay-link banner follows its deal: a Resend shows the link, and it goes when the deal can no longer be paid", async () => {
-    const LINK = "https://checkout.stripe.test/c/pay_abc";
+    const LINK = INVOICE_LINK;
     const sent = mk({ ...RIDGE, id: "dr1" });
     answer = (url, method) => {
-      if (method === "POST" && url.endsWith("/send-invoice")) return { status: 200, body: { ok: true, data: { deal: sent, checkout_url: LINK } } };
+      if (method === "POST" && url.endsWith("/send-invoice")) return { status: 200, body: { ok: true, data: { deal: sent, invoice_url: LINK } } };
       return defaultAnswer(url, method);
     };
     const m = mount([SUBJECT], hubOf({ deals: [sent], dealId: "dr1" }));
@@ -1020,11 +1142,32 @@ describe("the writes the deal page makes", () => {
     expect(m.has("sponsor-pay-link"), "the banner outlived its deal").toBe(false);
   });
 
+  it("final review m2: Resend on an 'Ended · unpaid' deal (offline, still due) shows the copy link like any other send; the twin that was written off shows none", async () => {
+    const due = mk({
+      ...MARLOW, id: "de1", sponsor_email: "pay@marlow.example", deal_status: "ended", live_at: "2026-10-01T10:00:00.000Z",
+      ended_reason: "expired", ended_at: "2026-10-30T10:00:00.000Z", invoice_sent_at: "2026-10-02T10:00:00.000Z",
+    });
+    expect(allowedActions(due), "premise: an ended deal still due offers Resend invoice").toContain("resend_invoice");
+    answer = (url, method) => {
+      if (method === "POST" && url.endsWith("/send-invoice")) return { status: 200, body: { ok: true, data: { deal: due, invoice_url: INVOICE_LINK } } };
+      return defaultAnswer(url, method);
+    };
+    const m = mount([SUBJECT], hubOf({ deals: [due], dealId: "de1" }));
+    m.action("resend_invoice");
+    await flush();
+    expect(m.words("sponsor-pay-link-url"), "the link the email carries, to copy").toEqual([INVOICE_LINK]);
+    // The deal is then written off: nothing is due, so the link goes.
+    served.deals = [mk({ ...due, ended_reason: "written_off", written_off_at: "2026-11-12T15:00:00.000Z", written_off_by: "u-sam" })];
+    m.action("write_off");
+    await flush();
+    expect(m.has("sponsor-pay-link"), "the banner outlived the write-off").toBe(false);
+  });
+
   it("the banner is for ITS deal only: a link made for another deal is not shown on this one", async () => {
     const other = mk({ ...RIDGE, id: "d-other" });
     const mine = mk({ ...RIDGE, id: "d-mine" });
     answer = (url, method) => {
-      if (method === "POST" && url.endsWith("/send-invoice")) return { status: 200, body: { ok: true, data: { deal: other, checkout_url: "https://checkout.stripe.test/c/other" } } };
+      if (method === "POST" && url.endsWith("/send-invoice")) return { status: 200, body: { ok: true, data: { deal: other, invoice_url: `${INVOICE_LINK}other` } } };
       return defaultAnswer(url, method);
     };
     const m = mount([SUBJECT], hubOf({ deals: [other, mine], dealId: "d-mine" }));
@@ -1038,7 +1181,7 @@ describe("the writes the deal page makes", () => {
   it("the banner also follows an Add deal create: its answer carries the link, shown on the sponsor's page", async () => {
     const created = mk({ ...RIDGE, id: "d-new" });
     answer = (url, method) => {
-      if (method === "POST" && url.endsWith("/sponsors/a/deals")) return { status: 201, body: { ok: true, data: { deal: created, checkout_url: "https://checkout.stripe.test/c/new" } } };
+      if (method === "POST" && url.endsWith("/sponsors/a/deals")) return { status: 201, body: { ok: true, data: { deal: created, invoice_url: `${INVOICE_LINK}new` } } };
       return defaultAnswer(url, method);
     };
     const m = mount([SUBJECT], hubOf({ deals: [], dealId: null }));
@@ -1049,7 +1192,41 @@ describe("the writes the deal page makes", () => {
       package_id: "p0", competition_id: null, payment_method: "online", go_live: "on_payment", sponsor_email: "x@example.com",
     });
     await flush();
-    expect(m.words("sponsor-pay-link-url")).toEqual(["https://checkout.stripe.test/c/new"]);
+    expect(m.words("sponsor-pay-link-url")).toEqual([`${INVOICE_LINK}new`]);
+  });
+
+  it("T23 review I1: an answer that carries only a checkout_url (an older server) paints no banner - the console shows the invoice link and nothing else", async () => {
+    const sent = mk({ ...RIDGE, id: "dc1" });
+    answer = (url, method) => {
+      if (method === "POST" && url.endsWith("/send-invoice")) return { status: 200, body: { ok: true, data: { deal: sent, checkout_url: "https://checkout.stripe.test/c/raw" } } };
+      return defaultAnswer(url, method);
+    };
+    const m = mount([SUBJECT], hubOf({ deals: [sent], dealId: "dc1" }));
+    m.action("resend_invoice");
+    await flush();
+    expect(m.has("sponsor-pay-link"), "a Checkout url is never painted").toBe(false);
+    expect(m.text()).not.toContain("checkout.stripe");
+  });
+
+  it("T23 review m3: what a send says is read off the deal BEFORE it - a first send (an offline deal's first is offered as Resend) says 'Invoice sent'; only a deal already sent says 'sent again' (2 counted)", async () => {
+    let checked = 0;
+    for (const [label, before, words] of [
+      ["an offline deal never sent", mk({ ...MARLOW, id: "dm1", sponsor_email: "pay@marlow.example", invoice_sent_at: null }), "Invoice sent for Quay Fisheries."],
+      ["an online deal already sent", mk({ ...RIDGE, id: "dm2" }), "Invoice sent again for Quay Fisheries."],
+    ] as const) {
+      expect(allowedActions(before), `premise: ${label} offers Resend`).toContain("resend_invoice");
+      answer = (url, method) => {
+        if (method === "POST" && url.endsWith("/send-invoice")) return { status: 200, body: { ok: true, data: { deal: before, invoice_url: INVOICE_LINK } } };
+        return defaultAnswer(url, method);
+      };
+      const m = mount([SUBJECT], hubOf({ deals: [before], dealId: before.id }));
+      m.action("resend_invoice");
+      await flush();
+      expect(m.text(), label).toContain(words);
+      if (before.invoice_sent_at === null) expect(m.text(), label).not.toContain("sent again");
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 });
 

@@ -96,7 +96,8 @@ async function sellOnline(auth: AuthCtx, packageId: string, name: string, email:
     { package_id: packageId, competition_id: null, payment_method: "online", go_live: "on_payment", sponsor_email: email, ends_on: null },
     "https://app.test",
   );
-  return { sponsorId, deal: out.deal, checkout_url: out.checkout_url };
+  // The deal's stored Checkout session: the answer carries only the emailed invoice link (T23 review I1).
+  return { sponsorId, deal: out.deal, checkout_url: (await sql<{ checkout_url: string | null }[]>`select checkout_url from sponsor_orders where id = ${out.deal.id}`)[0]!.checkout_url };
 }
 
 /** The sponsor a deal names now, and its status and tier. */
@@ -308,8 +309,8 @@ describe.skipIf(!HAS_DB)("sponsor monetization", () => {
       },
     });
 
-    // The sponsor contact's invoice is one outbox row for this order, sent by the request (after it returned), carrying the link
-    // Stripe returned and the package's price.
+    // The sponsor contact's invoice is one outbox row for this order, sent by the request (after it returned), carrying the
+    // numbered invoice page's link and the package's price - never the Checkout link Stripe returned (Task 23, D14).
     await vi.waitFor(
       async () => {
         const [r] = await sql<{ status: string }[]>`
@@ -327,7 +328,8 @@ describe.skipIf(!HAS_DB)("sponsor monetization", () => {
       .filter((c) => c.idempotencyKey === idempotencyKey(invoices[0]!.id));
     expect(sent).toHaveLength(1);
     expect(sent[0]!.to).toBe("pay@acme.test");
-    expect(sent[0]!.text).toContain("https://stripe.test/session");
+    expect(sent[0]!.text).toMatch(/\/r\/sponsor\/invoice\/[A-Za-z0-9_-]{20,}/);
+    expect(sent[0]!.text).not.toContain("https://stripe.test/session");
     expect(sent[0]!.text).toContain("£500.00");
   });
 

@@ -36,6 +36,7 @@ import path from "node:path";
 import { randomBytes, randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { Event } from "@sentry/nextjs";
+import { normalizeAppPath } from "next/dist/shared/lib/router/utils/app-paths";
 
 vi.mock("next/headers", () => ({ headers: async () => new Headers(), cookies: async () => ({ get: () => undefined, set: () => undefined }) }));
 // Only the Postgres round trip is a stand-in: the real minters run on top of it.
@@ -325,7 +326,11 @@ const FORMS: { name: string; event: (route: { key: string; url: string }, body: 
   },
   {
     name: "the transaction alone, no request URL",
-    event: ({ key }, body) => ({ event_id: "e3", transaction: `POST /${key}`, request: { method: "POST", data: body } }),
+    // Spelled as Next names it: the route definition's pathname (next/dist/server/route-modules/app-route/module.js sets
+    // `next.route` from it; @sentry/nextjs names the transaction `<METHOD> <next.route>`), which is the app path through Next's
+    // own normalizeAppPath, a route group like `(public)` dropped. No real transaction carries a group (T22's invoice
+    // handlers are the first credential handlers under one).
+    event: ({ key }, body) => ({ event_id: "e3", transaction: `POST ${normalizeAppPath(`/${key}`)}`, request: { method: "POST", data: body } }),
   },
 ];
 

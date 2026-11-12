@@ -368,7 +368,7 @@ export async function sponsorsSuite(admin: Session, proOrgId: string, proOrgSlug
   const pkg = v1data<{ id: string }>(pkgRes);
 
   // Sponsor deals Task 7 (F8): the checkout is an ONLINE DEAL on a sponsor (`POST /sponsors/{id}/deals`), and the create answers
-  // `checkout_url` itself (F11). Every row creates its OWN sponsor (F33): a deal on the gold sponsor above would hide it (D8).
+  // `invoice_url` itself (F11): the emailed invoice page, never a Checkout url (T23 review I1). Every row creates its OWN sponsor (F33): a deal on the gold sponsor above would hide it (D8).
   const ownSponsor = async (name: string) =>
     v1data<{ id: string }>(await v1(admin, `/api/v1/orgs/${proOrgId}/sponsors`, "POST", { name, tier: "partner" })).id;
   const onlineDeal = (sponsorId: string, email: string) =>
@@ -412,10 +412,11 @@ export async function sponsorsSuite(admin: Session, proOrgId: string, proOrgSlug
       true,
     );
   } else {
-    const made = started.status === 201 ? v1data<{ deal: { deal_status: string }; checkout_url: string | null }>(started) : null;
+    const made = started.status === 201 ? v1data<{ deal: { deal_status: string }; invoice_url: string | null }>(started) : null;
     check(
-      "sp online deal starts (draft→awaiting_payment, checkout url)",
-      made !== null && !!made.checkout_url && made.deal.deal_status === "awaiting_payment",
+      "sp online deal starts (draft→awaiting_payment, invoice link, never a Checkout url)",
+      made !== null && !!made.invoice_url && /\/r\/sponsor\/invoice\//.test(made.invoice_url) && !made.invoice_url.includes("checkout.stripe") &&
+        made.deal.deal_status === "awaiting_payment",
     );
   }
   const deals = await v1(admin, `/api/v1/orgs/${proOrgId}/sponsor-deals?sponsor_id=${acmeSponsor}`);

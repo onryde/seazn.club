@@ -240,6 +240,15 @@ const READ_MS = 20_000;
 const rowOf = (page: Page, sponsorId: string): Locator =>
   page.locator(`[data-testid="sponsor-row"][data-sponsor-id="${sponsorId}"]`);
 
+/** The Checkout url behind an invoice link. No answer carries one (T23 review I1: the console gets the emailed invoice page, never a
+ *  raw Checkout url), so it is reached the way the sponsor reaches it: the invoice page's Pay by card, posted as its form posts it,
+ *  answers 303 to the session. The link is a credential, so a failure names the status, never the url. */
+async function checkoutBehind(request: APIRequestContext, invoiceUrl: string): Promise<string> {
+  const res = await request.post(`${new URL(invoiceUrl).pathname}/pay`, { maxRedirects: 0, timeout: STRIPE_MS });
+  expect(res.status(), `the invoice page's Pay by card answered ${res.status()}`).toBe(303);
+  return res.headers()["location"] ?? "";
+}
+
 /** A deal's own page (`?sponsor=&deal=`, sponsor deals Task 17), and one of its buttons / timeline steps. */
 const dealAction = (page: Page, action: string): Locator =>
   page.locator(`[data-testid="deal-page-action"][data-action="${action}"]`);
@@ -625,9 +634,13 @@ test("invoice: Add deal on the sponsor's page, Online, Send invoice mints a REAL
   });
 
   // The link Stripe returned is the proof the rail is real: a fabricated `acct_e2e_*` destination is rejected outright, so a
-  // hosted-checkout URL cannot exist unless the connected account does. It rides in the create's answer, beside the deal (F11).
-  const body = (await sent.json()) as { data?: { checkout_url?: string | null; deal?: { id?: string } } };
-  const checkoutUrl = body.data?.checkout_url ?? "";
+  // hosted-checkout URL cannot exist unless the connected account does. The create answers the emailed invoice page beside the deal
+  // (F11; never the Checkout url, T23 review I1), and the invoice page's Pay by card leads to the session.
+  const body = (await sent.json()) as { data?: { invoice_url?: string | null; deal?: { id?: string } } };
+  const invoiceUrl = body.data?.invoice_url ?? "";
+  expect(invoiceUrl, "the create answers the invoice page's link").toMatch(/\/r\/sponsor\/invoice\/[A-Za-z0-9_-]{20,}$/);
+  expect(invoiceUrl, "never a Checkout url").not.toContain("checkout.stripe");
+  const checkoutUrl = await checkoutBehind(request, invoiceUrl);
   expect(checkoutUrl, "Stripe must have returned a hosted checkout URL for the destination charge").toMatch(
     /^https:\/\/checkout\.stripe\.com\//,
   );
@@ -1076,10 +1089,11 @@ test("end now: an invoice the sponsor never pays is resent, then ended from its 
     page.getByTestId("add-deal-submit").click(),
   ]);
   expect(sent.status(), `POST /sponsors/{id}/deals answered ${sent.status()}: ${await sent.text()}`).toBe(201);
-  const created = (await sent.json()) as { data: { deal: { id: string }; checkout_url: string } };
+  const created = (await sent.json()) as { data: { deal: { id: string }; invoice_url: string } };
   const dealId = created.data.deal.id;
-  const payLink = created.data.checkout_url;
-  expect(payLink, "a real hosted checkout URL").toMatch(/^https:\/\/checkout\.stripe\.com\//);
+  const invoiceLink = created.data.invoice_url;
+  const payLink = await checkoutBehind(request, invoiceLink);
+  expect(payLink, "a real hosted checkout URL, behind the invoice page").toMatch(/^https:\/\/checkout\.stripe\.com\//);
   await expect.poll(onPublicPage, { timeout: READ_MS, message: "a deal waiting for its money hides the sponsor" }).toBe(false);
 
   // The deal now holds the sponsor's status (D9): switching it back on by hand is refused while the deal waits.
@@ -1105,9 +1119,10 @@ test("end now: an invoice the sponsor never pays is resent, then ended from its 
     resend.click(),
   ]);
   expect(resent.status(), `POST send-invoice answered ${resent.status()}: ${await resent.text()}`).toBe(200);
-  const again = (await resent.json()) as { data: { checkout_url: string } };
-  expect(again.data.checkout_url, "the stored open session is reused, not a second link").toBe(payLink);
-  await expect(page.getByTestId("sponsor-pay-link-url"), "the page shows the link it resent").toHaveText(payLink);
+  const again = (await resent.json()) as { data: { invoice_url: string } };
+  expect(again.data.invoice_url, "every send mints a new invoice link (F9)").not.toBe(invoiceLink);
+  expect(await checkoutBehind(request, again.data.invoice_url), "the stored open session is reused, not a second link").toBe(payLink);
+  await expect(page.getByTestId("sponsor-pay-link-url"), "the page shows the invoice link it resent").toHaveText(again.data.invoice_url);
   await expect
     .poll(async () => (await outboxRows("sponsor_invoice", "sponsor_order", dealId)).length, {
       timeout: READ_MS,

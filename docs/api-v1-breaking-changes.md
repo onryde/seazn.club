@@ -7,6 +7,29 @@ This file starts at the first breaking change the v1 contract has taken. It
 is not a full changelog: additive fields do not appear here, because a reader
 that ignores an unknown field is unaffected by one.
 
+## 2026-11-11 — a sponsor deal's send and create answer `invoice_url`, not `checkout_url`; a daily invoice-email cap
+
+`POST /api/v1/orgs/{id}/sponsors/{sponsorId}/deals` and `POST /api/v1/orgs/{id}/sponsor-deals/{dealId}/send-invoice` answered
+`{ deal, checkout_url }`: the deal's raw Stripe Checkout url, for the organiser console's copy link. A sponsor is never sent a raw
+Checkout link (owner ruling, sponsor deals PR 3): the invoice email links the deal's numbered invoice page, whose Pay by card is
+the only way to a Checkout session. The answers now carry that page's link instead, the exact link the email carries. Both paths
+are console-only (an API key gets 403), so no key-holding consumer reads them.
+
+| Case | Before | Now |
+|---|---|---|
+| Online create (201) | `{ deal, checkout_url: "https://checkout.stripe.com/…" }` | `{ deal, invoice_url: "<origin>/r/sponsor/invoice/<token>" }` |
+| Offline or complimentary create (201) | `{ deal, checkout_url: null }` | `{ deal, invoice_url: null }` (nothing was emailed) |
+| Send invoice, online (200) | `{ deal, checkout_url: "https://checkout.stripe.com/…" }` | `{ deal, invoice_url: "<origin>/r/sponsor/invoice/<token>" }` |
+| Send invoice, offline | 409 `deal_not_invoiceable` (an offline deal had no invoice to send) | 200 `{ deal, invoice_url: "<origin>/r/sponsor/invoice/<token>" }` (a deal with a billing email; 422 `no_billing_email` without one) |
+| The 51st invoice email of an organisation in any 24 hours (online create, or either send) | sent | 429 `invoice_send_limit`, nothing written or sent |
+
+Every send mints a new token, so each answer's `invoice_url` differs from the last, and an earlier one opens nothing. A reader of
+`checkout_url` finds the field absent. The Checkout session itself is unchanged: the invoice page's Pay by card reuses it while
+more than 10 minutes are left of it.
+
+Pinning tests: `apps/web/src/server/usecases/__tests__/sponsor-invoice-email.test.ts` (the answer equals the link in the queued
+email, online and offline; the cap at 50 and 51) and `apps/web/src/app/api/v1/orgs/[id]/sponsor-deals/__tests__/routes.test.ts`.
+
 ## 2026-11-10 — a sponsor's name is stored trimmed, and a blank name is a 400
 
 `POST /api/v1/orgs/{id}/sponsors` and `PATCH /api/v1/orgs/{id}/sponsors/{sponsorId}` took `name` as "1 to 80 characters",

@@ -40,6 +40,7 @@ import { createInvite } from "@/server/usecases/invites";
 import { mintCheckinToken } from "@/server/usecases/checkin-token";
 import { mintReportToken } from "@/server/sponsors/report-token";
 import { reportLinkPath } from "@/lib/sponsor-report";
+import { invoicePath } from "@/lib/sponsor-invoice";
 import { routes } from "@/lib/routes";
 import { JoinInvite } from "@/components/join-invite";
 import { ClaimInvite } from "@/components/claim-invite";
@@ -189,7 +190,7 @@ describe("every /<path>/${token} template is scrubbed, or is knowingly public", 
     // invite's ID (an email-bound invite's token never reaches it). The route still takes a link's token, so its PATH
     // stays a credential route (VERDICTS, swept above); there is just no template building it from a token.
     expect([...builders.keys()].sort()).toEqual(
-      expect.arrayContaining(["/join", "/checkin", "/api/checkin", "/claim", "/api/claims", "/api/invites", "/score", "/api/v1/capture/codes", "/r", "/api/v1/public/registrations/by-ref", "/r/sponsor"]),
+      expect.arrayContaining(["/join", "/checkin", "/api/checkin", "/claim", "/api/claims", "/api/invites", "/score", "/api/v1/capture/codes", "/r", "/api/v1/public/registrations/by-ref", "/r/sponsor", "/r/sponsor/invoice"]),
     );
     expect(builders.size).toBeGreaterThanOrEqual(10);
   });
@@ -387,6 +388,38 @@ describe("the hooks scrub them wherever an event carries one", () => {
     } as Event);
     expect(JSON.stringify(event)).not.toContain(report);
     expect(event.transaction).toBe("GET /r/sponsor/[token]");
+  });
+
+  it("the sponsor invoice link (T22, F21): the page, its /pdf and its /pay lose the TOKEN itself, not the segment before it", () => {
+    // The invoice token is minted by the same minter as the report's (mintReportToken), so the report pool is a pool of real
+    // invoice tokens. "/r/sponsor/" matched first would scrub the segment `invoice` and leave the token: each case reads the
+    // token's absence AND where the placeholder landed.
+    let checked = 0;
+    for (const token of [REPORTS[0]!, REPORTS[1]!, REPORTS[150]!, REPORTS[299]!]) {
+      for (const tail of ["", "/pdf", "/pay"]) {
+        const page = `${invoicePath(token)}${tail}`;
+        expect(page, "premise").toContain(token);
+        for (const url of [page, `${ORIGIN}${page}`, `${ORIGIN}/fr${page}?from=mail#top`, `POST ${page}`]) {
+          const out = scrubScoreUrl(url);
+          expect(out, url).not.toContain(token);
+          expect(out, url).toContain(`/r/sponsor/invoice/[token]${tail}`);
+          checked++;
+        }
+        const next = `${ORIGIN}/login?next=${encodeURIComponent(`${ORIGIN}${page}`)}`;
+        expect(scrubScoreUrl(next), next).not.toContain(token);
+        checked++;
+      }
+    }
+    const url = `${ORIGIN}${invoicePath(REPORTS[2]!)}`;
+    const out = posthogBeforeSend({
+      uuid: "u3",
+      event: "$pageview",
+      properties: { $current_url: url, $pathname: invoicePath(REPORTS[2]!), $referrer: url },
+      $set_once: { $initial_current_url: url },
+    } as unknown as CaptureResult);
+    expect(JSON.stringify(out)).not.toContain(REPORTS[2]!);
+    expect(out!.properties.$pathname).toBe("/r/sponsor/invoice/[token]");
+    expect(checked).toBe(60);
   });
 
   it("Sentry: request URL, transaction, breadcrumbs, spans, a replay's URL list and a recording frame", () => {

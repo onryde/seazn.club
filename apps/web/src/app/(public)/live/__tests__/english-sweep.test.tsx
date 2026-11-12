@@ -65,6 +65,7 @@ const stub = vi.hoisted(() => ({
   embedDivisionData: vi.fn(),
   readRoom: vi.fn(),
   sponsorReport: vi.fn(),
+  sponsorInvoice: vi.fn(),
 }));
 /** Every element a share image handed to satori, in draw order. */
 const images = vi.hoisted(() => ({ drawn: [] as unknown[] }));
@@ -158,8 +159,9 @@ vi.mock("@/server/embed-data", () => ({ embedDivisionData: stub.embedDivisionDat
 // personal link; the snapshot is data, handed in here.
 vi.mock("@/server/usecases/external-play/room", () => ({ readRoom: stub.readRoom, roomGrantDowngraded: async () => false }));
 // The sponsor report (R4 S14) is drawn in the VISITOR's locale (`resolveLocale`, the reader's cookie and Accept-Language),
-// so here the visitor reads in the scene's locale; its rate limit reads the request's headers. No other swept page imports
-// either module (the register flow and `../r/[ref]` do, and are excluded below). The report itself is data, handed in.
+// so here the visitor reads in the scene's locale; its rate limit reads the request's headers. The sponsor invoice's head, 404
+// and throttled screen read the same two (its body is the ORG's language, the doc's own). No other swept page imports either
+// module (the register flow and `../r/[ref]` do, and are excluded below). The report itself is data, handed in.
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => state.locale }));
 vi.mock("next/headers", () => ({
   headers: async () => new Headers({ "x-forwarded-for": "203.0.113.9" }),
@@ -168,6 +170,12 @@ vi.mock("next/headers", () => ({
 vi.mock("@/server/sponsors/report", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/sponsors/report")>()),
   sponsorReport: stub.sponsorReport,
+}));
+// The sponsor's invoice (sponsor deals, Task 22): its door is SQL (the token's deal, then the club's row), so the document is
+// data, handed in - built in the scene's locale the way `buildDoc` builds it (below).
+vi.mock("@/server/sponsors/invoice-doc", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/sponsors/invoice-doc")>()),
+  invoiceDocByToken: stub.sponsorInvoice,
 }));
 // A share image is satori pixels, which no sweep can read — but the ELEMENT
 // handed to satori is markup. Captured here and rendered like a page, so every
@@ -212,6 +220,11 @@ import * as MatchRoom from "../(kiosk)/[orgSlug]/[competitionSlug]/[divisionSlug
 import * as SponsorReportPage from "../../r/sponsor/[token]/page";
 import SponsorReportNotFound from "../../r/sponsor/[token]/not-found";
 import * as SponsorReportNotFoundModule from "../../r/sponsor/[token]/not-found";
+import * as SponsorInvoicePage from "../../r/sponsor/invoice/[token]/page";
+import SponsorInvoiceNotFound from "../../r/sponsor/invoice/[token]/not-found";
+import * as SponsorInvoiceNotFoundModule from "../../r/sponsor/invoice/[token]/not-found";
+import { INVOICE_NOTICE_PARAM, PAYMENT_RECORDING_NOTICE } from "@/lib/sponsor-invoice";
+import type { SponsorInvoiceDoc } from "@/server/sponsors/invoice-doc";
 import { __setRateLimitCounterForTests } from "@/lib/rate-limit";
 import { fmtOnScreen, type SponsorReport, type SponsorReportShowing } from "@/lib/sponsor-report";
 import type { RoomSnapshot } from "@/components/public-site/match-room/room-snapshot";
@@ -232,7 +245,7 @@ import { scriptLedger, HOME, AWAY, type Script } from "@/server/public-site/__te
 import { makeEnvelope } from "@seazn/engine/testkit";
 import { cricket } from "@seazn/engine/sports/cricket";
 import { FootballCfg } from "@seazn/engine/sports/football";
-import { getDictionary } from "@/lib/i18n";
+import { getDictionary, t } from "@/lib/i18n";
 import { msgFor } from "@/lib/messages-i18n";
 import { toLocale } from "@/lib/i18n-constants";
 import { resolveLatestModule } from "@/server/engine-db";
@@ -1226,6 +1239,72 @@ async function renderSponsorReports(): Promise<Segment[]> {
   return [...out, ...(await served(SponsorReportPage, p))];
 }
 
+/** The sponsor's invoice (sponsor deals, Task 22), every answer it gives. Its body is in the ORG's language (`doc.locale`, the
+ *  club's default_locale), so here the club writes in the scene's locale. The doc's two built words are made as `buildDoc` makes
+ *  them, from the same keys in that locale: the line (`sponsors.invoice.line`) and the all-competitions scope
+ *  (`sponsors.scopeAll`). The docs draw every state's stamp and line (unpaid, paid, refunded, void, written off, ended, and an
+ *  offline invoice whose deal ended still due), the pay form, a card the club cannot take, the "being recorded" notice, the bank
+ *  details and their reference, the club's address and logo, and what the sponsorship includes (stream yes and no, a
+ *  competition and all of them); then the throttled screen, then the served head. Each render is witnessed by its testid. */
+async function renderSponsorInvoices(): Promise<Segment[]> {
+  const locale = state.locale as Locale;
+  const ui = await getDictionary(locale, "ui");
+  const all = t(ui, "sponsors.scopeAll");
+  const doc = (over: Partial<SponsorInvoiceDoc>, scope = all): SponsorInvoiceDoc => ({
+    number: "SP-0042",
+    issuedOn: "2026-09-04",
+    org: { name: org().name, address: "9zqquay 8zqroad\n9zqharbour 8zqtown", logoPath: "https://logo.test/9zqlogo.png" },
+    billedTo: { name: "9zqharbour 8zqtimber", email: "9zqaccounts@9zqharbour.9zqexample" },
+    line: { description: t(ui, "sponsors.invoice.line", { package: "9zqgold 8zqseason", scope }), amountCents: 123_456, currency: "eur" },
+    included: { tier: "gold", scope, onStream: true },
+    state: "unpaid",
+    dealEnded: false,
+    method: "online",
+    bankDetails: null,
+    payable: true,
+    cardUnavailable: false,
+    locale,
+    ...over,
+  });
+  const comp = "9zqcomp 8zqcup";
+  const offline = { method: "offline", payable: false, bankDetails: "9zqiban 8zqbank 9zq0042" } as const;
+  const docs: [SponsorInvoiceDoc, Record<string, string>][] = [
+    [doc({}), {}],
+    [doc({ payable: false, cardUnavailable: true, included: { tier: "title", scope: all, onStream: false } }), {}],
+    [doc({}), { [INVOICE_NOTICE_PARAM]: PAYMENT_RECORDING_NOTICE }],
+    [doc({ ...offline, org: { name: org().name, address: null, logoPath: null }, billedTo: { name: "9zqharbour 8zqtimber", email: null },
+      included: { tier: "silver", scope: comp, onStream: false } }, comp), {}],
+    [doc({ ...offline, dealEnded: true, included: { tier: "partner", scope: comp, onStream: true } }, comp), {}],
+    [doc({ state: "paid", payable: false }), {}],
+    [doc({ state: "refunded", payable: false }), {}],
+    [doc({ ...offline, state: "void", bankDetails: null, dealEnded: true }), {}],
+    [doc({ ...offline, state: "written_off", bankDetails: null, dealEnded: true }), {}],
+    [doc({ state: "ended", payable: false, dealEnded: true }), {}],
+  ];
+  const p = params({ token: "9zqtoken" });
+  const page = async (search: Record<string, string>) =>
+    renderToStaticMarkup((await SponsorInvoicePage.default({ ...p, searchParams: Promise.resolve(search) })) as ReactElement);
+  const out: Segment[] = [];
+  for (const [d, search] of docs) {
+    stub.sponsorInvoice.mockResolvedValueOnce(d);
+    const markup = await page(search);
+    expect(markup, "the invoice drew").toContain('data-testid="sponsor-invoice"');
+    out.push(...extractSegments(markup));
+  }
+  expect(stub.sponsorInvoice.mock.calls.length, "every doc was looked up").toBeGreaterThanOrEqual(docs.length);
+  const looked = stub.sponsorInvoice.mock.calls.length;
+  __setRateLimitCounterForTests(async () => ({ count: 61, ttlMs: 30_000 }));
+  try {
+    const markup = await page({});
+    expect(markup, "the throttled screen drew").toContain('data-testid="sponsor-invoice-throttled"');
+    expect(stub.sponsorInvoice.mock.calls.length, "the throttled screen looks nothing up").toBe(looked);
+    out.push(...extractSegments(markup));
+  } finally {
+    __setRateLimitCounterForTests(null);
+  }
+  return [...out, ...(await served(SponsorInvoicePage, p))];
+}
+
 // ------------------------------------------------------------- the scenes
 
 type Params<T> = { params: Promise<T> };
@@ -1434,6 +1513,24 @@ const SCENES: Scene[] = [
       return [...extractSegments(markup), ...(await served(SponsorReportNotFoundModule, undefined))];
     },
   },
+  {
+    name: "sponsor invoice (every state, the pay form, a card the club cannot take, the recording notice, bank details, the throttled screen)",
+    files: ["../r/sponsor/invoice/[token]/page.tsx"],
+    minDictValues: 200,
+    render: renderSponsorInvoices,
+  },
+  {
+    // The ONE answer for an invoice token that opens nothing (unknown, rotated, malformed, an unnumbered deal, a deleted club),
+    // in the READER's language: it takes no props and reads no token. Its head too (the report's 404 above says why).
+    name: "sponsor invoice not-found (body and head)",
+    files: ["../r/sponsor/invoice/[token]/not-found.tsx"],
+    minDictValues: 4,
+    render: async () => {
+      const markup = renderToStaticMarkup(await SponsorInvoiceNotFound());
+      expect(markup, "the 404 drew").toContain('data-testid="sponsor-invoice-not-found"');
+      return [...extractSegments(markup), ...(await served(SponsorInvoiceNotFoundModule, undefined))];
+    },
+  },
 ];
 
 /** Pages and layouts under /live this sweep does not render, and why. */
@@ -1512,6 +1609,16 @@ const NOT_RENDERED: Record<string, NotRendered> = {
     reason:
       "a route handler returning a satori PNG of the by-reference registration ticket, drawn in the VISITOR's locale (`resolveLocale`) exactly as `../r/[ref]/page.tsx` is — not the org's, so outside this sweep's locale",
     provenBy: ["app/(public)/r/[ref]/__tests__/ticket-png-locale.test.tsx"],
+  },
+  "../r/sponsor/invoice/[token]/pdf/route.ts": {
+    reason:
+      "a route handler returning application/pdf: the sponsor's invoice drawn in the ORG's language (every label, state stamp and line, the date, the amount), or a short plain-text 404/429 in the reader's",
+    provenBy: ["server/sponsors/__tests__/invoice-pdf.test.ts", "app/(public)/r/sponsor/invoice/[token]/__tests__/routes.test.ts"],
+  },
+  "../r/sponsor/invoice/[token]/pay/route.ts": {
+    reason:
+      "a POST route handler that answers 303 (to Stripe Checkout, or back to the invoice page) and draws no page; its only words are a short plain-text 404/429/502 in the reader's language",
+    provenBy: ["app/(public)/r/sponsor/invoice/[token]/__tests__/routes.test.ts"],
   },
 };
 

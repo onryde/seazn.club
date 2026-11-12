@@ -77,6 +77,8 @@ function deal(over: Partial<SponsorDeal>): SponsorDeal {
     dispute_id: null,
     has_payment_intent: false,
     invoice_number: null,
+    written_off_at: null,
+    written_off_by: null,
     ...over,
   };
 }

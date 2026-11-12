@@ -50,14 +50,18 @@ export function DealChip({ deal }: { deal: SponsorDeal | null }) {
   const msg = useMsg();
   const model = deal === null ? null : dealChip(deal);
   const kind: Kind = model?.kind ?? "none";
-  // A live deal's two variants: parked by a dispute (not live on the pages while it is), and still unpaid.
+  // A live deal's two variants: parked by a dispute (not live on the pages while it is), and still unpaid. An ENDED deal's one: its
+  // invoice is still due (T24 m8), which wears the lime of "Awaiting payment" - money is owed - not the grey of a closed account.
   const held = model?.onHold === true;
+  const due = model?.endedDue === true;
   const label: MessageKey = held
     ? "sponsors.deal.chip.liveOnHold"
     : model?.awaitingPayment
       ? "sponsors.deal.chip.liveAwaitingPayment"
-      : DEAL_CHIP_MSG[kind];
-  const state: ChipState = held ? "frozen" : KIND_STATE[kind];
+      : due
+        ? "sponsors.deal.chip.endedUnpaid"
+        : DEAL_CHIP_MSG[kind];
+  const state: ChipState = held ? "frozen" : due ? "in_progress" : KIND_STATE[kind];
   return (
     <span data-testid="deal-chip" data-chip-kind={kind} className={`${CHIP_BASE} max-w-full ${kind === "none" ? NONE_STYLE : CHIP_STYLE[state]}`}>
       {state === "live" && <span aria-hidden className="chip-pulse-dot h-1.5 w-1.5 shrink-0 rounded-full bg-lime-400" />}

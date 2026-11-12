@@ -124,14 +124,16 @@ export default async function SponsorsHubPage({
     const dealId = sponsorId === null ? null : resolveDealParam(rawDeal, deals.filter((d) => d.sponsor_id === sponsorId));
     // `?edit=1` (the list's pencil) opens the selected sponsor's Details editor - an editor's, so a viewer's link to it is the read-only page.
     const editSponsor = sponsorId !== null && canEdit && resolveEditParam(rawEdit);
-    // The deal page's two server reads (Task 17), only while a deal is selected: who created it, and - for an open deal that ends with
-    // its competition (no end date of its own) - whether the desk says that competition has finished. The timeline words both.
+    // The deal page's server reads (Task 17), only while a deal is selected: who created it, who wrote off its invoice (final review
+    // m3; `dealCreatorName`'s member rule, and no query for a deal not written off), and - for an open deal that ends with its
+    // competition (no end date of its own) - whether the desk says that competition has finished. The timeline words all three.
     const selectedDeal = dealId === null ? null : (deals.find((d) => d.id === dealId) ?? null);
-    const [dealCreatedByName, dealCompetitionFinished] =
+    const [dealCreatedByName, dealWrittenOffByName, dealCompetitionFinished] =
       selectedDeal === null
-        ? [null, false]
+        ? [null, null, false]
         : await Promise.all([
             dealCreatorName(active.id, selectedDeal.created_by),
+            selectedDeal.written_off_by === null ? Promise.resolve(null) : dealCreatorName(active.id, selectedDeal.written_off_by),
             selectedDeal.deal_status !== "ended" && selectedDeal.ends_at === null
               ? isDealCompetitionFinished(active.id, selectedDeal.competition_id)
               : Promise.resolve(false),
@@ -159,7 +161,8 @@ export default async function SponsorsHubPage({
           hub={{
             orgSlug, orgTimezone: active.timezone, deals, packages, tiersOrgWide: tiers.orgWide, tiersCompetitionIds: tiers.competitionIds,
             hasMonetize, monetizeOrgWide: monetize.orgWide, monetizeCompetitionIds: monetize.competitionIds,
-            chargesEnabled, finishedCompetitionIds, sponsorId, editSponsor, dealId, dealCreatedByName, dealCompetitionFinished, reportLinks, reportDefaults,
+            chargesEnabled, finishedCompetitionIds, sponsorId, editSponsor, dealId, dealCreatedByName, dealWrittenOffByName, dealCompetitionFinished, reportLinks,
+            reportDefaults,
           }}
         />
       </HubPanel>

@@ -344,12 +344,13 @@ export async function seedDetachableGroup(
 }
 
 /** Everything the fixtures above made for these organisations: their outbox rows, their sponsor orders (a RESTRICT foreign key keeps
- *  an organisation with orders, V299), the organisations (packages, placements and memberships cascade), then the owners' billing
+ *  an organisation with orders, V299, and so does its invoice counter), the organisations (packages, placements and memberships cascade), then the owners' billing
  *  groups and accounts. */
 export async function cleanUpSponsorOrgs(orgIds: readonly string[], userIds: readonly string[]): Promise<void> {
   if (orgIds.length > 0) {
     await sql`delete from email_outbox where org_id = any(${orgIds as string[]}::uuid[])`;
     await sql`delete from sponsor_orders where org_id = any(${orgIds as string[]}::uuid[])`;
+    await sql`delete from sponsor_invoice_counters where org_id = any(${orgIds as string[]}::uuid[])`;
     await sql`delete from organizations where id = any(${orgIds as string[]}::uuid[])`;
   }
   if (userIds.length > 0) {

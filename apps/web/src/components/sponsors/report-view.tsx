@@ -13,7 +13,9 @@ import type { CSSProperties } from "react";
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import { plural, t } from "@/lib/i18n-runtime";
 import { fmtNumber } from "@/lib/format";
-import { fmtIsoDay, fmtOnScreen, type SponsorReport, type SponsorReportShowing } from "@/lib/sponsor-report";
+import { fmtOnScreen, type SponsorReport, type SponsorReportShowing } from "@/lib/sponsor-report";
+// The public day as the invoice prints it: English day-month-year ("2 Jun 2026"), never bare `en`'s US order (final re-review N3).
+import { invoiceDay } from "@/lib/sponsor-invoice";
 import { PrintButton } from "@/components/print-button";
 import { breakMsgKey } from "@/components/sponsors/break-labels";
 
@@ -106,7 +108,7 @@ function Showing({ s, ui, locale }: { s: SponsorReportShowing; ui: Dict; locale:
             </span>
           </p>
           <p className="mt-0.5 text-xs text-ink-muted">
-            <time dateTime={s.startedAt}>{fmtIsoDay(locale, s.startedAt.slice(0, 10))}</time>
+            <time dateTime={s.startedAt}>{invoiceDay(locale, s.startedAt.slice(0, 10))}</time>
           </p>
         </figcaption>
       </figure>
@@ -117,7 +119,7 @@ function Showing({ s, ui, locale }: { s: SponsorReportShowing; ui: Dict; locale:
 export function SponsorReportView({ report, ui, locale }: { report: SponsorReport; ui: Dict; locale: Locale }) {
   const { sponsor } = report;
   const scope = report.competition ?? t(ui, "sponsorReport.scope.all");
-  const period = t(ui, "sponsorReport.period", { from: fmtIsoDay(locale, report.period.from), to: fmtIsoDay(locale, report.period.to) });
+  const period = t(ui, "sponsorReport.period", { from: invoiceDay(locale, report.period.from), to: invoiceDay(locale, report.period.to) });
   const latest = report.timesShown > report.showings.length;
   return (
     <main
@@ -206,7 +208,7 @@ export function SponsorReportView({ report, ui, locale }: { report: SponsorRepor
           <div className="min-w-0 max-w-prose space-y-1">
             <p>{t(ui, "sponsorReport.footnote")}</p>
             <p>{t(ui, "sponsorReport.viewersNote")}</p>
-            <p>{t(ui, "sponsorReport.asOf", { date: fmtIsoDay(locale, report.asOf.slice(0, 10)) })}</p>
+            <p>{t(ui, "sponsorReport.asOf", { date: invoiceDay(locale, report.asOf.slice(0, 10)) })}</p>
           </div>
           <div className="shrink-0">
             <PrintButton label={t(ui, "sponsorReport.print")} />
@@ -217,10 +219,12 @@ export function SponsorReportView({ report, ui, locale }: { report: SponsorRepor
   );
 }
 
-/** The two answers that are not a report: the opaque 404 (not-found.tsx) and the throttled screen. Same quiet sheet. */
+/** The two answers that are not a report: the opaque 404 (not-found.tsx) and the throttled screen. Same quiet sheet, on the
+ *  same ground as the report and the invoice (min-h-screen bg-canvas): a shorter box left the body's own colour showing below
+ *  it, a second tone under the card. Shared by the report's and the invoice's 404 and throttled screens. */
 export function SponsorReportNotice({ testId, title, body }: { testId: string; title: string; body: string }) {
   return (
-    <main data-testid={testId} style={DISPLAY_FACE} className="grid min-h-[70vh] place-items-center bg-canvas px-4 py-12 text-ink">
+    <main data-testid={testId} style={DISPLAY_FACE} className="grid min-h-screen place-items-center bg-canvas px-4 py-12 text-ink">
       <div className="w-full max-w-md rounded-2xl border border-accent-line bg-surface px-6 py-8 text-center">
         <h1 className="font-display text-2xl font-bold text-ink">{title}</h1>
         <p className="mt-2 text-sm text-ink-muted">{body}</p>

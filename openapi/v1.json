@@ -71418,7 +71418,8 @@
                                           "expired",
                                           "competition_finished",
                                           "legacy",
-                                          "duplicate_payment"
+                                          "duplicate_payment",
+                                          "written_off"
                                         ]
                                       },
                                       {
@@ -71470,6 +71471,26 @@
                                         "type": "null"
                                       }
                                     ]
+                                  },
+                                  "written_off_at": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "written_off_by": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
                                   }
                                 },
                                 "required": [
@@ -71503,7 +71524,9 @@
                                   "disputed_at",
                                   "dispute_id",
                                   "has_payment_intent",
-                                  "invoice_number"
+                                  "invoice_number",
+                                  "written_off_at",
+                                  "written_off_by"
                                 ],
                                 "additionalProperties": false
                               },
@@ -71603,7 +71626,9 @@
                         "disputed_at": "example",
                         "dispute_id": "example",
                         "has_payment_intent": true,
-                        "invoice_number": -9007199254740991
+                        "invoice_number": -9007199254740991,
+                        "written_off_at": "example",
+                        "written_off_by": "example"
                       },
                       "locked_by_deal": true,
                       "has_open_deal": true,
@@ -72193,7 +72218,8 @@
                                         "expired",
                                         "competition_finished",
                                         "legacy",
-                                        "duplicate_payment"
+                                        "duplicate_payment",
+                                        "written_off"
                                       ]
                                     },
                                     {
@@ -72245,6 +72271,26 @@
                                       "type": "null"
                                     }
                                   ]
+                                },
+                                "written_off_at": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "written_off_by": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
                                 }
                               },
                               "required": [
@@ -72278,7 +72324,9 @@
                                 "disputed_at",
                                 "dispute_id",
                                 "has_payment_intent",
-                                "invoice_number"
+                                "invoice_number",
+                                "written_off_at",
+                                "written_off_by"
                               ],
                               "additionalProperties": false
                             },
@@ -72376,7 +72424,9 @@
                       "disputed_at": "example",
                       "dispute_id": "example",
                       "has_payment_intent": true,
-                      "invoice_number": -9007199254740991
+                      "invoice_number": -9007199254740991,
+                      "written_off_at": "example",
+                      "written_off_by": "example"
                     },
                     "locked_by_deal": true,
                     "has_open_deal": true,
@@ -73014,7 +73064,8 @@
                                         "expired",
                                         "competition_finished",
                                         "legacy",
-                                        "duplicate_payment"
+                                        "duplicate_payment",
+                                        "written_off"
                                       ]
                                     },
                                     {
@@ -73066,6 +73117,26 @@
                                       "type": "null"
                                     }
                                   ]
+                                },
+                                "written_off_at": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "written_off_by": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
                                 }
                               },
                               "required": [
@@ -73099,7 +73170,9 @@
                                 "disputed_at",
                                 "dispute_id",
                                 "has_payment_intent",
-                                "invoice_number"
+                                "invoice_number",
+                                "written_off_at",
+                                "written_off_by"
                               ],
                               "additionalProperties": false
                             },
@@ -73197,7 +73270,9 @@
                       "disputed_at": "example",
                       "dispute_id": "example",
                       "has_payment_intent": true,
-                      "invoice_number": -9007199254740991
+                      "invoice_number": -9007199254740991,
+                      "written_off_at": "example",
+                      "written_off_by": "example"
                     },
                     "locked_by_deal": true,
                     "has_open_deal": true,
@@ -73439,7 +73514,7 @@
         ]
       },
       "delete": {
-        "summary": "Delete a sponsor, with its deals. A sponsor holding a deal with money or document history (money paid or refunded, a pre-deals order) is 409 `sponsor_has_deal_history`. Every deal's Checkout link is read at Stripe before any is closed: while one has been paid there, or cannot be read, the delete is 409 `sponsor_has_open_checkout` and no link is closed. Then each open link is closed; when one cannot be, the delete is 409 `sponsor_has_open_checkout`, the sponsor and its deals stay, and the links already closed stay closed (none is left stored)",
+        "summary": "Delete a sponsor, with its deals. A sponsor holding a deal with money or document history (money paid or refunded, a numbered invoice, a pre-deals order) is 409 `sponsor_has_deal_history`. Every deal's Checkout link is read at Stripe before any is closed: while one has been paid there, or cannot be read, the delete is 409 `sponsor_has_open_checkout` and no link is closed. Then each open link is closed; when one cannot be, the delete is 409 `sponsor_has_open_checkout`, the sponsor and its deals stay, and the links already closed stay closed (none is left stored)",
         "tags": [
           "sponsors"
         ],
@@ -75811,7 +75886,7 @@
     },
     "/api/v1/orgs/{id}/sponsors/{sponsorId}/deals": {
       "post": {
-        "summary": "Add a deal to a sponsor: a package (its name, tier, stream tick and price are copied onto the deal), a scope inside the package's, how it is paid (`online` · `offline` · `complimentary`) and when it goes live (`on_payment` · `immediate` · `on_approval`; complimentary cannot go live on payment, 422 `on_payment_needs_payment`). A deal added beside a live one queues behind it, unless `end_current` ends the live one first. `ends_on` is a day in the organisation's timezone, today or later (422 `ends_on_in_past`). Answers `{ deal, checkout_url }`; the url is null for an offline or complimentary deal. An online deal sends its invoice to the sponsor's billing email at once and answers its Checkout url; when Stripe cannot mint the link the deal stays as created and the answer is 502 `stripe_unavailable` (Send invoice retries it). A tier above partner or a competition scope is `sponsors.tiers` (402), selling online is `sponsors.monetize` (402) and needs Stripe connected (409 `connect_required`) and the sponsor's billing email (422 `sponsor_email_required`). Editors only (owner / admin); never key-accessible",
+        "summary": "Add a deal to a sponsor: a package (its name, tier, stream tick and price are copied onto the deal), a scope inside the package's, how it is paid (`online` · `offline` · `complimentary`) and when it goes live (`on_payment` · `immediate` · `on_approval`; complimentary cannot go live on payment, 422 `on_payment_needs_payment`). A deal added beside a live one queues behind it, unless `end_current` ends the live one first. `ends_on` is a day in the organisation's timezone, today or later (422 `ends_on_in_past`). Answers `{ deal, invoice_url }`; the url is null for an offline or complimentary deal. An online deal sends its invoice to the sponsor's billing email at once and answers the link that email carries (`invoice_url`, the deal's numbered invoice page - never a payment link); when Stripe cannot mint the payment link the deal stays as created and the answer is 502 `stripe_unavailable` (Send invoice retries it). A tier above partner or a competition scope is `sponsors.tiers` (402), selling online is `sponsors.monetize` (402) and needs Stripe connected (409 `connect_required`) and the sponsor's billing email (422 `sponsor_email_required`); an online deal past the organisation's invoice emails for the day (50 in any 24 hours) is 429 `invoice_send_limit`, before anything is written. Editors only (owner / admin); never key-accessible",
         "tags": [
           "sponsors"
         ],
@@ -76150,7 +76225,8 @@
                                     "expired",
                                     "competition_finished",
                                     "legacy",
-                                    "duplicate_payment"
+                                    "duplicate_payment",
+                                    "written_off"
                                   ]
                                 },
                                 {
@@ -76202,6 +76278,26 @@
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "written_off_at": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "written_off_by": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -76235,11 +76331,13 @@
                             "disputed_at",
                             "dispute_id",
                             "has_payment_intent",
-                            "invoice_number"
+                            "invoice_number",
+                            "written_off_at",
+                            "written_off_by"
                           ],
                           "additionalProperties": false
                         },
-                        "checkout_url": {
+                        "invoice_url": {
                           "anyOf": [
                             {
                               "type": "string"
@@ -76252,7 +76350,7 @@
                       },
                       "required": [
                         "deal",
-                        "checkout_url"
+                        "invoice_url"
                       ],
                       "additionalProperties": false
                     },
@@ -76296,9 +76394,11 @@
                       "disputed_at": "example",
                       "dispute_id": "example",
                       "has_payment_intent": true,
-                      "invoice_number": -9007199254740991
+                      "invoice_number": -9007199254740991,
+                      "written_off_at": "example",
+                      "written_off_by": "example"
                     },
-                    "checkout_url": "example"
+                    "invoice_url": "example"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -76527,6 +76627,50 @@
           },
           "422": {
             "description": "Rejected by the engine",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
             "content": {
               "application/json": {
                 "schema": {
@@ -76875,7 +77019,8 @@
                                   "expired",
                                   "competition_finished",
                                   "legacy",
-                                  "duplicate_payment"
+                                  "duplicate_payment",
+                                  "written_off"
                                 ]
                               },
                               {
@@ -76927,6 +77072,26 @@
                                 "type": "null"
                               }
                             ]
+                          },
+                          "written_off_at": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "written_off_by": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -76960,7 +77125,9 @@
                           "disputed_at",
                           "dispute_id",
                           "has_payment_intent",
-                          "invoice_number"
+                          "invoice_number",
+                          "written_off_at",
+                          "written_off_by"
                         ],
                         "additionalProperties": false
                       }
@@ -77005,7 +77172,9 @@
                       "disputed_at": "example",
                       "dispute_id": "example",
                       "has_payment_intent": true,
-                      "invoice_number": -9007199254740991
+                      "invoice_number": -9007199254740991,
+                      "written_off_at": "example",
+                      "written_off_by": "example"
                     }
                   ],
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
@@ -77405,7 +77574,8 @@
                                 "expired",
                                 "competition_finished",
                                 "legacy",
-                                "duplicate_payment"
+                                "duplicate_payment",
+                                "written_off"
                               ]
                             },
                             {
@@ -77457,6 +77627,26 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "written_off_at": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "written_off_by": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -77490,7 +77680,9 @@
                         "disputed_at",
                         "dispute_id",
                         "has_payment_intent",
-                        "invoice_number"
+                        "invoice_number",
+                        "written_off_at",
+                        "written_off_by"
                       ],
                       "additionalProperties": false
                     },
@@ -77533,7 +77725,9 @@
                     "disputed_at": "example",
                     "dispute_id": "example",
                     "has_payment_intent": true,
-                    "invoice_number": -9007199254740991
+                    "invoice_number": -9007199254740991,
+                    "written_off_at": "example",
+                    "written_off_by": "example"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -77685,7 +77879,7 @@
     },
     "/api/v1/orgs/{id}/sponsor-deals/{dealId}/mark-paid": {
       "post": {
-        "summary": "Mark a deal as paid (the club took the money itself). A when-paid deal goes live, or queues behind the sponsor's live deal; an after-I-approve deal waits for Approve. 409 when the deal has no payment to mark (`deal_already_paid`, `deal_not_payable`, `deal_ended`). On an online deal its open payment link is closed at Stripe first: 409 `deal_paid_online` when the sponsor has just paid it there, 502 `stripe_unavailable` when Stripe cannot be asked or the link closed (the deal is not marked paid; its link may already be closed, and Send invoice makes a new one), 409 `deal_changed` when the deal moved meanwhile. Editors only; never key-accessible",
+        "summary": "Mark a deal as paid (the club took the money itself). A when-paid deal goes live, or queues behind the sponsor's live deal; an after-I-approve deal waits for Approve. An offline deal that went live and then ended unpaid (its end date passed, or its competition finished) can still be marked paid: it stays ended. 409 when the deal has no payment to mark (`deal_already_paid`, `deal_not_payable`, `deal_ended`). On an online deal its open payment link is closed at Stripe first: 409 `deal_paid_online` when the sponsor has just paid it there, 502 `stripe_unavailable` when Stripe cannot be asked or the link closed (the deal is not marked paid; its link may already be closed, and Send invoice makes a new one), 409 `deal_changed` when the deal moved meanwhile. Editors only; never key-accessible",
         "tags": [
           "sponsors"
         ],
@@ -77932,7 +78126,8 @@
                                 "expired",
                                 "competition_finished",
                                 "legacy",
-                                "duplicate_payment"
+                                "duplicate_payment",
+                                "written_off"
                               ]
                             },
                             {
@@ -77984,6 +78179,26 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "written_off_at": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "written_off_by": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -78017,7 +78232,9 @@
                         "disputed_at",
                         "dispute_id",
                         "has_payment_intent",
-                        "invoice_number"
+                        "invoice_number",
+                        "written_off_at",
+                        "written_off_by"
                       ],
                       "additionalProperties": false
                     },
@@ -78060,7 +78277,9 @@
                     "disputed_at": "example",
                     "dispute_id": "example",
                     "has_payment_intent": true,
-                    "invoice_number": -9007199254740991
+                    "invoice_number": -9007199254740991,
+                    "written_off_at": "example",
+                    "written_off_by": "example"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -78245,6 +78464,602 @@
           },
           "502": {
             "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ]
+      }
+    },
+    "/api/v1/orgs/{id}/sponsor-deals/{dealId}/write-off": {
+      "post": {
+        "summary": "Write off an offline invoice still due after its deal ended (the deal went live, then its end date passed or its competition finished, unpaid): the deal's end reason becomes `written_off`, it records when and by whom (`written_off_at`, `written_off_by`), its money stays unpaid, and its invoice reads \"Nothing due\". No email. 409 `deal_nothing_due` when the deal has nothing still due, `deal_already_paid` when it is paid. Editors only; never key-accessible",
+        "tags": [
+          "sponsors"
+        ],
+        "x-required-scope": "none",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "dealId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "sponsor_id": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "package_id": {
+                          "type": "string"
+                        },
+                        "deal_status": {
+                          "type": "string",
+                          "enum": [
+                            "draft",
+                            "awaiting_payment",
+                            "awaiting_approval",
+                            "scheduled",
+                            "live",
+                            "ended"
+                          ]
+                        },
+                        "payment_status": {
+                          "type": "string",
+                          "enum": [
+                            "pending",
+                            "paid",
+                            "failed",
+                            "refunded",
+                            "none"
+                          ]
+                        },
+                        "payment_method": {
+                          "type": "string",
+                          "enum": [
+                            "online",
+                            "offline",
+                            "complimentary"
+                          ]
+                        },
+                        "go_live": {
+                          "type": "string",
+                          "enum": [
+                            "on_payment",
+                            "immediate",
+                            "on_approval"
+                          ]
+                        },
+                        "package_name": {
+                          "type": "string"
+                        },
+                        "tier": {
+                          "type": "string",
+                          "enum": [
+                            "title",
+                            "gold",
+                            "silver",
+                            "partner"
+                          ]
+                        },
+                        "includes_on_stream": {
+                          "type": "boolean"
+                        },
+                        "competition_id": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "amount_cents": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "currency": {
+                          "type": "string"
+                        },
+                        "sponsor_name": {
+                          "type": "string"
+                        },
+                        "sponsor_email": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "ends_at": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "created_at": {
+                          "type": "string"
+                        },
+                        "created_by": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "invoice_sent_at": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "paid_at": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "marked_paid_by": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "approved_at": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "approved_by": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "live_at": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "ended_at": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "ended_reason": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "refunded",
+                                "dispute_lost",
+                                "ended_now",
+                                "expired",
+                                "competition_finished",
+                                "legacy",
+                                "duplicate_payment",
+                                "written_off"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "parked_at": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "disputed_at": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "dispute_id": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "has_payment_intent": {
+                          "type": "boolean"
+                        },
+                        "invoice_number": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "written_off_at": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "written_off_by": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "sponsor_id",
+                        "package_id",
+                        "deal_status",
+                        "payment_status",
+                        "payment_method",
+                        "go_live",
+                        "package_name",
+                        "tier",
+                        "includes_on_stream",
+                        "competition_id",
+                        "amount_cents",
+                        "currency",
+                        "sponsor_name",
+                        "sponsor_email",
+                        "ends_at",
+                        "created_at",
+                        "created_by",
+                        "invoice_sent_at",
+                        "paid_at",
+                        "marked_paid_by",
+                        "approved_at",
+                        "approved_by",
+                        "live_at",
+                        "ended_at",
+                        "ended_reason",
+                        "parked_at",
+                        "disputed_at",
+                        "dispute_id",
+                        "has_payment_intent",
+                        "invoice_number",
+                        "written_off_at",
+                        "written_off_by"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "id": "example",
+                    "sponsor_id": "example",
+                    "package_id": "example",
+                    "deal_status": "draft",
+                    "payment_status": "pending",
+                    "payment_method": "online",
+                    "go_live": "on_payment",
+                    "package_name": "example",
+                    "tier": "title",
+                    "includes_on_stream": true,
+                    "competition_id": "example",
+                    "amount_cents": -9007199254740991,
+                    "currency": "example",
+                    "sponsor_name": "example",
+                    "sponsor_email": "example",
+                    "ends_at": "example",
+                    "created_at": "example",
+                    "created_by": "example",
+                    "invoice_sent_at": "example",
+                    "paid_at": "example",
+                    "marked_paid_by": "example",
+                    "approved_at": "example",
+                    "approved_by": "example",
+                    "live_at": "example",
+                    "ended_at": "example",
+                    "ended_reason": "refunded",
+                    "parked_at": "example",
+                    "disputed_at": "example",
+                    "dispute_id": "example",
+                    "has_payment_intent": true,
+                    "invoice_number": -9007199254740991,
+                    "written_off_at": "example",
+                    "written_off_by": "example"
+                  },
+                  "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
             "content": {
               "application/json": {
                 "schema": {
@@ -78547,7 +79362,8 @@
                                 "expired",
                                 "competition_finished",
                                 "legacy",
-                                "duplicate_payment"
+                                "duplicate_payment",
+                                "written_off"
                               ]
                             },
                             {
@@ -78599,6 +79415,26 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "written_off_at": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "written_off_by": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -78632,7 +79468,9 @@
                         "disputed_at",
                         "dispute_id",
                         "has_payment_intent",
-                        "invoice_number"
+                        "invoice_number",
+                        "written_off_at",
+                        "written_off_by"
                       ],
                       "additionalProperties": false
                     },
@@ -78675,7 +79513,9 @@
                     "disputed_at": "example",
                     "dispute_id": "example",
                     "has_payment_intent": true,
-                    "invoice_number": -9007199254740991
+                    "invoice_number": -9007199254740991,
+                    "written_off_at": "example",
+                    "written_off_by": "example"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -79118,7 +79958,8 @@
                                 "expired",
                                 "competition_finished",
                                 "legacy",
-                                "duplicate_payment"
+                                "duplicate_payment",
+                                "written_off"
                               ]
                             },
                             {
@@ -79170,6 +80011,26 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "written_off_at": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "written_off_by": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -79203,7 +80064,9 @@
                         "disputed_at",
                         "dispute_id",
                         "has_payment_intent",
-                        "invoice_number"
+                        "invoice_number",
+                        "written_off_at",
+                        "written_off_by"
                       ],
                       "additionalProperties": false
                     },
@@ -79246,7 +80109,9 @@
                     "disputed_at": "example",
                     "dispute_id": "example",
                     "has_payment_intent": true,
-                    "invoice_number": -9007199254740991
+                    "invoice_number": -9007199254740991,
+                    "written_off_at": "example",
+                    "written_off_by": "example"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -79733,7 +80598,8 @@
                                 "expired",
                                 "competition_finished",
                                 "legacy",
-                                "duplicate_payment"
+                                "duplicate_payment",
+                                "written_off"
                               ]
                             },
                             {
@@ -79785,6 +80651,26 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "written_off_at": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "written_off_by": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -79818,7 +80704,9 @@
                         "disputed_at",
                         "dispute_id",
                         "has_payment_intent",
-                        "invoice_number"
+                        "invoice_number",
+                        "written_off_at",
+                        "written_off_by"
                       ],
                       "additionalProperties": false
                     },
@@ -79861,7 +80749,9 @@
                     "disputed_at": "example",
                     "dispute_id": "example",
                     "has_payment_intent": true,
-                    "invoice_number": -9007199254740991
+                    "invoice_number": -9007199254740991,
+                    "written_off_at": "example",
+                    "written_off_by": "example"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -80101,7 +80991,7 @@
     },
     "/api/v1/orgs/{id}/sponsor-deals/{dealId}/send-invoice": {
       "post": {
-        "summary": "Send, or resend, an online deal's invoice to the sponsor's billing email: answers `{ deal, checkout_url }`. The deal's payment link is reused while more than 10 minutes are left of it; otherwise the old link is closed first and a new one made. A draft moves to awaiting payment. 409 `deal_not_invoiceable` when the deal is offline, paid or ended, `deal_paid_online` when the sponsor has just paid, `connect_required` without Stripe connected, `deal_changed` when the deal moved meanwhile; 402 when the plan no longer sells online; 502 `stripe_unavailable` when Stripe cannot (the deal is not moved and nothing is sent; its old link may already be closed, and sending again makes a new one). Editors only; never key-accessible",
+        "summary": "Send, or resend, a deal's invoice to the sponsor's billing email: answers `{ deal, invoice_url }`, `invoice_url` being the link the email carries (the deal's numbered invoice page, for the console to copy - never a payment link). Every send replaces that page's link (the earlier email's link stops opening). An ONLINE deal: its payment link (reached only from the invoice page's Pay by card) is reused while more than 10 minutes are left of it; otherwise the old link is closed first and a new one made; a draft moves to awaiting payment. An OFFLINE deal with a billing email: the invoice carries the club's bank details and the deal does not move. 409 `deal_not_invoiceable` when the deal is paid, ended, complimentary or has no invoice number, `deal_paid_online` when the sponsor has just paid, `connect_required` without Stripe connected (online), `deal_changed` when the deal moved meanwhile; 422 `no_billing_email` for an offline deal with no billing email; 402 when the plan no longer sells online; 429 `invoice_send_limit` past the organisation's invoice emails for the day (50 in any 24 hours; nothing is sent or moved); 502 `stripe_unavailable` when Stripe cannot (the deal is not moved and nothing is sent; its old link may already be closed, and sending again makes a new one). Editors only; never key-accessible",
         "tags": [
           "sponsors"
         ],
@@ -80351,7 +81241,8 @@
                                     "expired",
                                     "competition_finished",
                                     "legacy",
-                                    "duplicate_payment"
+                                    "duplicate_payment",
+                                    "written_off"
                                   ]
                                 },
                                 {
@@ -80403,6 +81294,26 @@
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "written_off_at": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "written_off_by": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -80436,17 +81347,19 @@
                             "disputed_at",
                             "dispute_id",
                             "has_payment_intent",
-                            "invoice_number"
+                            "invoice_number",
+                            "written_off_at",
+                            "written_off_by"
                           ],
                           "additionalProperties": false
                         },
-                        "checkout_url": {
+                        "invoice_url": {
                           "type": "string"
                         }
                       },
                       "required": [
                         "deal",
-                        "checkout_url"
+                        "invoice_url"
                       ],
                       "additionalProperties": false
                     },
@@ -80490,9 +81403,11 @@
                       "disputed_at": "example",
                       "dispute_id": "example",
                       "has_payment_intent": true,
-                      "invoice_number": -9007199254740991
+                      "invoice_number": -9007199254740991,
+                      "written_off_at": "example",
+                      "written_off_by": "example"
                     },
-                    "checkout_url": "example"
+                    "invoice_url": "example"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -80719,6 +81634,94 @@
               }
             }
           },
+          "422": {
+            "description": "Rejected by the engine",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
           "502": {
             "description": "Error",
             "content": {
@@ -80777,6 +81780,207 @@
     "/api/v1/orgs/{id}/sponsor-deals/{dealId}/evidence": {
       "get": {
         "summary": "Dispute evidence pack for a deal as a printable HTML attachment — the deal record, receipt reconstruction, placement delivery proof, activity log. Editors only; never key-accessible",
+        "tags": [
+          "sponsors"
+        ],
+        "x-required-scope": "none",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "dealId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "data": {},
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {},
+                  "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ]
+      }
+    },
+    "/api/v1/orgs/{id}/sponsor-deals/{dealId}/invoice.pdf": {
+      "get": {
+        "summary": "A deal's numbered invoice as the PDF its sponsor gets (an `application/pdf` attachment named after the invoice number), in the organisation's language: the number, the club and the sponsor, the line and total, its state (paid, unpaid, refunded, cancelled, written off or ended), what the sponsorship includes and, on an OFFLINE invoice that is still unpaid, the club's bank details. 404 when the deal has no invoice (complimentary, or made before invoices were numbered) or is not this organisation's. Any member who can see the deal; never key-accessible",
         "tags": [
           "sponsors"
         ],

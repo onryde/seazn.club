@@ -7,7 +7,7 @@
 //
 // What is checked, and how:
 //  - WHICH kinds are account kinds is the engine's own declaration (`OUTBOX_KIND_FACTS`), compared with a list typed here from the
-//    spec (`chess_invite`, wave 2's seven and wave 4's seven). A new account kind is then a failure that asks for a decision here, not a
+//    spec (`chess_invite`, wave 2's seven, wave 4's seven and sponsor deals' `sponsor_deal_paid`). A new account kind is then a failure that asks for a decision here, not a
 //    quiet pass.
 //  - Every account kind that has moved is swept through its real producer. Wave 2's T1 registered its kinds before their producers moved,
 //    each kind task (T2-T9) added its producer here, and T10 deleted the list of the pending ones. Wave 4's T1 registered its seven
@@ -25,6 +25,9 @@
 //    Neither touches Stripe: the alert never does, and the lost notice's dispute names no charge, so the balance recovery is skipped.
 //  - The sponsor dispute notices are driven through the real `handleSponsorDispute` on a paid sponsor order. None touches Stripe: the
 //    alert and the won notice never do, and the lost notice's dispute names no charge, so the balance recovery is skipped.
+//  - The sponsor's "paid" notice (sponsor deals Task 23) is driven through the real `processStripeEvent` (`payment_intent.succeeded`) on
+//    a pending sponsor order: the payment is recorded and the owner's notice queued in one transaction, nothing reaches Stripe, and a
+//    webhook has no request to make a first attempt, so the row stays queued with its body for the worker.
 //  - The pass notice is driven through the real `processStripeEvent` (`charge.refunded`, a full refund) on an Event Pass. The revoke and
 //    the notice read the database only; the other refund handlers no-op on a pass charge (their one Stripe lookup needs a Stripe key).
 //  - The trial warning is driven through the real `processStripeEvent` (`customer.subscription.trial_will_end`) on a trialing billing
@@ -102,6 +105,8 @@ const SPEC_ACCOUNT_KINDS: readonly OutboxKind[] = [
   "group_transfer_complete",
   "group_org_removed",
   "group_org_left",
+  // Sponsor deals Task 23 (D13): born on the outbox after phase 3, the owner's "a sponsor has paid" notice.
+  "sponsor_deal_paid",
 ];
 
 beforeEach(() => stubOutboxEnv());
@@ -204,6 +209,27 @@ describe.skipIf(!HAS_DB)("an account kind's sealed body never names its recipien
       expect(await handleSponsorDispute(dispute("won"), "closed"), "premise: the real handler matched the sponsor's charge").toBe(true);
       // The notice names the package the disputed payment bought.
       return { rowIds: await rowIdsOf("sponsor_dispute_won", disputeId), positive: literal(o.packageName) };
+    },
+    sponsor_deal_paid: async () => {
+      const o = await seedSponsorOrder({ status: "pending" });
+      const event = {
+        id: `evt_akb_${randomUUID().slice(0, 12)}`,
+        object: "event",
+        type: "payment_intent.succeeded",
+        data: {
+          object: {
+            id: o.intent, object: "payment_intent", amount: 25000, amount_received: 25000, currency: "gbp", status: "succeeded",
+            metadata: { kind: "sponsor", order_id: o.orderId, org_id: o.orgId },
+          },
+        },
+      } as unknown as Stripe.Event;
+      await processStripeEvent(event);
+      const [order] = await sql<{ status: string }[]>`select status from sponsor_orders where id = ${o.orderId}`;
+      expect(order!.status, "premise: the real handler paid the deal").toBe("paid");
+      const rows = await sql<{ id: string }[]>`
+        select id from email_outbox where kind = 'sponsor_deal_paid' and ref_type = 'sponsor_order' and ref_id = ${o.orderId}`;
+      // The notice names the package the sponsor paid for.
+      return { rowIds: rows.map((x) => x.id), positive: literal(o.packageName) };
     },
     sponsor_dispute_lost: async () => {
       const o = await seedSponsorOrder({ status: "paid" });

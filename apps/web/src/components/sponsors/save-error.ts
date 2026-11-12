@@ -45,6 +45,9 @@ export const SAVE_ERROR_MSG: Readonly<Record<EnvelopeCode | SponsorRefusalCode, 
   deal_not_refundable: "sponsors.error.notRefundable",
   deal_disputed: "sponsors.error.dealDisputed",
   deal_not_invoiceable: "sponsors.error.notInvoiceable",
+  no_billing_email: "sponsors.error.noBillingEmail",
+  deal_nothing_due: "sponsors.error.nothingDue",
+  invoice_send_limit: "sponsors.error.invoiceSendLimit",
   deal_changed: "sponsors.error.dealChanged",
   illegal_transition: "sponsors.error.dealChanged",
   // Mark as paid's refusal (F37): the sponsor's own payment is in flight. Resend says it its own way (below).
@@ -79,7 +82,9 @@ export const SAVE_ERROR_BY_WRITE: Readonly<Record<SponsorWrite, Partial<Record<E
   // A create that does NOT end the current deal: its only Stripe call is the invoice, sent AFTER the deal is saved (createDeal,
   // F11), so a 502 there leaves a saved draft, which Send invoice sends.
   create_deal: { stripe_unavailable: "sponsors.error.invoiceSavedNoLink" },
-  // The same create when the deal goes live (or queues) straight away: its next step is Resend invoice, not Send invoice.
+  // The same create when the deal goes live (or queues) straight away: its next step is the `resend_invoice` action, which reads
+  // "Send invoice" while nothing has gone out (dealActionKey, final review m1) - and here the send is exactly what failed. So
+  // these words name Send invoice too, in a sentence of their own.
   create_deal_resend: { stripe_unavailable: "sponsors.error.invoiceSavedResend" },
   // A create that ends the current deal (`end_current`, Task 16) has a SECOND Stripe call, before anything is written: closing the
   // live deal's pay link. A 502 is therefore either "nothing was saved" or "the deal is saved, its invoice is not sent", and the

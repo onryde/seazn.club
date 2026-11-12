@@ -43,6 +43,8 @@ import {
   sponsorRefundTemplate,
   trialEndingTemplate,
   type SponsorRefundArgs,
+  sponsorDealPaidTemplate,
+  type SponsorDealPaidArgs,
   sponsorDisputeAlertTemplate,
   type SponsorDisputeAlertArgs,
   sponsorDisputeLostTemplate,
@@ -587,6 +589,14 @@ export async function sponsorReceiptEmail(args: SponsorReceiptArgs, locale: Loca
 export async function sponsorRefundEmail(args: SponsorRefundArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
   return sponsorRefundTemplate(args, dict);
+}
+
+/** The owner's "a sponsor has paid" notice (sponsor deals, D13), in the owner's language. It is queued on the email outbox by
+ *  `handleSponsorPaymentSucceeded` (sponsors.ts, kind `sponsor_deal_paid`) in the transaction that records the card payment, once
+ *  per payment intent; nothing sends it directly. */
+export async function sponsorDealPaidEmail(args: SponsorDealPaidArgs, locale: Locale): Promise<EmailContent> {
+  const dict = await getDictionary(locale, "emails");
+  return sponsorDealPaidTemplate(args, dict);
 }
 
 /** Organiser alert: a sponsorship package payment was disputed (P0-2), in the owner's language. It is queued on the email outbox by

@@ -49,7 +49,14 @@ import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harn
 import { ApiV1Error } from "@/lib/client-v1";
 import { routes } from "@/lib/routes";
 import { sponsorsHref } from "@/lib/sponsors-hub";
-import { goLiveRulesFor, type GoLiveRule, type PaymentMethod, type SponsorDeal } from "@/lib/sponsor-deals";
+import { goLiveRulesFor, initialPaymentStatus, initialStatus, type GoLiveRule, type PaymentMethod, type SponsorDeal } from "@/lib/sponsor-deals";
+import { renderToStaticMarkup } from "react-dom/server";
+import { DictProvider } from "@/components/i18n/dict-provider";
+import { SponsorSheetBody } from "@/components/sponsors/sponsor-sheet";
+import type { Locale } from "@/lib/i18n-constants";
+import uiEs from "@/dictionaries/es/ui.json";
+import uiFr from "@/dictionaries/fr/ui.json";
+import uiNl from "@/dictionaries/nl/ui.json";
 import { CreateSponsorDeal } from "@/server/api-v1/schemas/sponsors";
 import type { SponsorPackageRow } from "@/server/usecases/sponsors";
 import { t } from "@/lib/i18n-runtime";
@@ -89,7 +96,7 @@ const OPEN_DEAL: SponsorDeal = {
   currency: "gbp", sponsor_name: "Ridge Gold Physiotherapy", sponsor_email: "accounts@ridgegoldphysio.co.uk", ends_at: null,
   created_at: "2026-10-01T09:00:00.000Z", created_by: null, invoice_sent_at: "2026-10-28T09:00:00.000Z", paid_at: null, marked_paid_by: null,
   approved_at: null, approved_by: null, live_at: null, ended_at: null, ended_reason: null, parked_at: null, disputed_at: null,
-  dispute_id: null, has_payment_intent: false, invoice_number: null,
+  dispute_id: null, has_payment_intent: false, invoice_number: null, written_off_at: null, written_off_by: null,
 };
 
 const created: CreateDealBody[] = [];
@@ -983,7 +990,7 @@ describe("a refusal stays on the sheet, in the dictionary's words", () => {
     expect(has(island, "add-deal-error"), "a new attempt clears the old refusal").toBe(false);
   });
 
-  it("a stripe_unavailable the sheet is handed reads the words of ITS create: Send invoice for a saved draft, Resend invoice for a deal that is live, 'look at the deals' when the current deal was being ended (counted)", async () => {
+  it("a stripe_unavailable the sheet is handed reads the words of ITS create: a saved draft and a deal that is live both name Send invoice (nothing has gone out), 'look at the deals' when the current deal was being ended (counted)", async () => {
     // The page resolves for an ONLINE create's refusal (it closes the sheet and speaks itself), so a sheet only meets it from another
     // caller - but the words must still be right: each names the action the saved deal actually offers (`allowedActions`), and a
     // refusal while the current deal is being ended cannot promise that nothing was changed OR that a draft exists.
@@ -1005,10 +1012,41 @@ describe("a refusal stays on the sheet, in the dictionary's words", () => {
       checked++;
     }
     expect(checked).toBe(CASES.length);
-    // And the words name the button the person will find: Resend where the deal is live, Send where it is a draft.
-    expect(msg("sponsors.error.invoiceSavedNoLink")).toContain(msg("sponsors.deal.action.sendInvoice"));
-    expect(msg("sponsors.error.invoiceSavedResend")).toContain(msg("sponsors.deal.action.resendInvoice"));
-    expect(msg("sponsors.error.invoiceSavedResend"), "the live deal's words do not send the club to a button it will not find").not.toContain(msg("sponsors.deal.action.sendInvoice"));
+    // And the words name the button the person will FIND - read off the sponsor's page as it renders the deal this create saved
+    // (online, the case's rule, queued behind the sponsor's live deal, numbered, and NOT sent: the send is what Stripe refused),
+    // never one dictionary string against another. In every locale (final re-review N1: the words once named Resend invoice, a
+    // button the page no longer shows on a deal that was never sent).
+    const DICTS: [Locale, Dict][] = [["en", en], ["es", uiEs as unknown as Dict], ["fr", uiFr as unknown as Dict], ["nl", uiNl as unknown as Dict]];
+    let read = 0;
+    for (const c of CASES.filter((x) => !x.ending)) {
+      const saved: SponsorDeal = {
+        ...OPEN_DEAL, id: "d-saved", go_live: c.rule, deal_status: initialStatus("online", c.rule, true), payment_status: initialPaymentStatus("online"),
+        invoice_number: 1, invoice_sent_at: null,
+      };
+      for (const [locale, dict] of DICTS) {
+        const html = renderToStaticMarkup(
+          <DictProvider dict={dict} locale={locale}>
+            <SponsorSheetBody
+              sponsor={sponsor({ locked_by_deal: true, status: "active" })} deals={[saved]} orgId="org-1" orgSlug={SLUG} hasTiers canEdit busy={false}
+              tz="UTC" competitions={COMPETITIONS} editing={false} renderEditor={() => null} onEdit={() => {}} onToggleStream={() => {}}
+              onShowAgain={() => {}} onAddDeal={() => {}} onDealAction={() => {}} error={null} notice={null} payLink={null} reportLinks={[]}
+              reportDefaults={null}
+            />
+          </DictProvider>,
+        );
+        const buttons = [...html.matchAll(/<button[^>]*data-testid="sponsor-sheet-deal-action"[^>]*data-action="(send_invoice|resend_invoice)"[^>]*>([^<]*)<\/button>/g)];
+        expect(buttons.length, `${c.rule} ${locale}: the saved deal offers ONE invoice button`).toBe(1);
+        const shown = buttons[0]![2]!;
+        const words = t(dict, c.key);
+        expect(words, `${c.rule} ${locale}: the error names the button the page shows ("${shown}")`).toContain(shown);
+        // ...and no invoice button the page does not show (the pair: "Resend invoice" is not on a deal never sent).
+        for (const other of ["sponsors.deal.action.sendInvoice", "sponsors.deal.action.resendInvoice"] as const) {
+          if (t(dict, other) !== shown) expect(words, `${c.rule} ${locale}: never names ${other}`).not.toContain(t(dict, other));
+        }
+        read++;
+      }
+    }
+    expect(read, "3 creates x 4 locales").toBe(12);
   });
 
   it("a create that ends the current deal and sends no invoice, refused by Stripe, SAVED NOTHING: the sheet says so in the shared words and keeps every choice (F6)", async () => {

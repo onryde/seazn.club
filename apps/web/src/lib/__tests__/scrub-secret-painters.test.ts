@@ -404,6 +404,14 @@ const PAINTERS: Record<string, { verdict: true | string; handoff?: string }> = {
     verdict:
       "passes join_code to JoinForm as a prop (and to previewJoinEntry on the server): JoinForm uses it in the preview request's URL and the join POST body, and paints it only into the Lichess refusal link's href (join-form.tsx, verdict true above), never anywhere else",
   },
+  // Sponsor deals T22: the invoice page's PDF link and pay form carry the invoice token (`/r/sponsor/invoice/<token>/pdf`, `/pay`).
+  "components/sponsors/invoice-view.tsx": { verdict: true },
+  // Task 23: the pay form is its own client island (a double click sends one post); invoice-view hands it the pay action.
+  "components/sponsors/invoice-pay-form.tsx": { verdict: true },
+  "app/(public)/r/sponsor/invoice/[token]/page.tsx": {
+    verdict: "builds the invoice's PDF link and pay action from the token and hands both to SponsorInvoiceView as props; it paints nothing itself",
+    handoff: "components/sponsors/invoice-view.tsx",
+  },
   "components/org-team.tsx": {
     verdict:
       "paints the MASKED link (`/join/abcd…wxyz`: first and last four characters, deliberate against shoulder-surfing); the full URL goes only to the clipboard",

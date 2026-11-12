@@ -399,11 +399,17 @@ async function seedSponsorsSweep(request: APIRequestContext): Promise<NonNullabl
   return seeded;
 }
 
-// The sponsor is removed with its deal (an open offline deal holds no money, so the delete is allowed) and the package is retired, so
-// a re-run against the same database does not pile sponsors into the shared org. Never throws: a teardown must not fail a green run.
+// The sponsor is removed and the package retired, so a re-run against the same database does not pile sponsors into the shared org.
+// The deal stays OFFLINE on purpose (an offline deal's page carries the invoice's chrome, which this file gives width coverage to), and
+// an offline deal is numbered when it is made, so the API refuses this sponsor's delete as history (409 `sponsor_has_deal_history`,
+// sponsor invoices F10) - by design, for a club. The test's own deal is therefore dropped first with privileged SQL (the e2e
+// DATABASE_URL role bypasses the tenant fence), and the API delete then removes a sponsor with no deals. The org's invoice counter
+// is left as it is: numbers are never reused, so the next run's deal simply takes the next one. Never throws: a teardown must not
+// fail a green run.
 test.afterAll(async ({ request }) => {
   if (sponsorsSweep === null) return;
   const { orgId, sponsorId, packageId } = sponsorsSweep;
+  await withDb((sql) => sql`delete from sponsor_orders where org_id = ${orgId} and sponsor_id = ${sponsorId}`).catch(() => undefined);
   await apiJson(request, `/api/v1/orgs/${orgId}/sponsors/${sponsorId}`, "DELETE").catch(() => undefined);
   await apiJson(request, `/api/v1/orgs/${orgId}/sponsor-packages/${packageId}`, "DELETE").catch(() => undefined);
 });

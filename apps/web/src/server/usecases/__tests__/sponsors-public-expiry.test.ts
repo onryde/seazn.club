@@ -223,7 +223,8 @@ describe.skipIf(!HAS_DB)("a console deal action expires the public pages before 
     h.tags.length = 0;
     h.tails.length = 0;
     const sent = await sendDealInvoice(auth, deal.id, "https://app.test");
-    expect(sent.checkout_url, "premise: the resend reused the session").toBe("https://stripe.test/send");
+    expect((await sql<{ checkout_url: string | null }[]>`select checkout_url from sponsor_orders where id = ${deal.id}`)[0]!.checkout_url, "premise: the resend reused the session").toBe("https://stripe.test/send");
+    expect(sent.invoice_url, "the answer is the emailed invoice page").toMatch(/^https:\/\/app\.test\/r\/sponsor\/invoice\//);
     expect(h.tags).toContainEqual({ tag: orgTag(s), profile: { expire: 0 } });
     // The invoice's first attempt is the one task a send leaves to after() (the request makes it once it has answered); a bust
     // left there too would make two.
@@ -234,6 +235,7 @@ describe.skipIf(!HAS_DB)("a console deal action expires the public pages before 
     for (const id of [dealOrgId, sendOrgId].filter(Boolean)) {
       await sql`delete from email_outbox where org_id = ${id}`;
       await sql`delete from sponsor_orders where org_id = ${id}`;
+      await sql`delete from sponsor_invoice_counters where org_id = ${id}`;
       await sql`delete from organizations where id = ${id}`;
     }
   });

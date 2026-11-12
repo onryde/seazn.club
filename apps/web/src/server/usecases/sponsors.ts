@@ -19,6 +19,7 @@ import { getStripe } from "@/lib/stripe";
 import {
   sponsorInvoiceEmail,
   sponsorReceiptEmail,
+  sponsorDealPaidEmail,
   sponsorRefundEmail,
   sponsorDisputeAlertEmail,
   sponsorDisputeWonEmail,
@@ -39,6 +40,8 @@ import { applicationFeeCents, feePercentFor } from "./registrations";
 import { recoverDisputedTransfer as recoverDisputedTransferCore } from "./dispute-recovery";
 import { orgOwnerRecipient } from "./org-owner";
 import { routes } from "@/lib/routes";
+import { dealHref, sponsorsHref } from "@/lib/sponsors-hub";
+import type { DealPaidNext, SponsorInvoiceArgs } from "@/lib/email-templates";
 import { SPONSOR_TIERS, type SponsorTier } from "@/lib/sponsor-tiers";
 import { placementNeedsTiers } from "@/lib/sponsor-deal-policy";
 import { assertPlacementAllowed } from "@/server/sponsors/deal-gates";
@@ -340,22 +343,21 @@ export async function patchSponsor(
 /** Money a deal holds as history: once paid (and so once refundable or refunded), its record is the audit trail. */
 const MONEY_HISTORY: ReadonlySet<PaymentStatus> = new Set<PaymentStatus>(["paid", "refunded"]);
 
-/** A deal that holds its sponsor (product ruling 2026-11-09, sponsor deals Task 5): it carries money history — money paid or
- *  refunded — or it is a pre-deals legacy order (F16: the RESTRICT key covers it). Every other deal (a draft, an unpaid or
- *  failed one, a complimentary one, live or ended) goes with its sponsor. A stored Checkout session no longer holds it
- *  (Task 7, F3): `deleteSponsor` retires the session first, and refuses only when it cannot. The tenant's prune policy (V300's
- *  fence, widened by the sponsor-deals delta) admits exactly the others once their session is cleared, so each refusal here is
- *  a 409, never a 23503. */
+/** A deal that holds its sponsor (product ruling 2026-11-09, sponsor deals Task 5): it carries money or document history —
+ *  money paid or refunded, an invoice number (Task 20, F10: a numbered invoice is a document, and its number is never reused,
+ *  spec §7) — or it is a pre-deals legacy order (F16: the RESTRICT key covers it). Every other deal (a draft, an unpaid or
+ *  failed one, a complimentary one, live or ended, with no number) goes with its sponsor. A stored Checkout session no longer
+ *  holds it (Task 7, F3): `deleteSponsor` retires the session first, and refuses only when it cannot. The tenant's prune policy
+ *  (V300's fence, widened by the sponsor-deals delta and narrowed again by the invoices delta's `invoice_number is null`) admits
+ *  exactly the others once their session is cleared, so each refusal here is a 409, never a 23503. */
 function dealHoldsHistory(d: ServerDeal): boolean {
-  // TODO(Task 20, F10): `|| d.invoice_number !== null` once deals are numbered (a numbered invoice is a document); the
-  // prune policy gains `and invoice_number is null` in the same task.
-  return MONEY_HISTORY.has(d.payment_status) || isLegacyDeal(d);
+  return MONEY_HISTORY.has(d.payment_status) || d.invoice_number !== null || isLegacyDeal(d);
 }
 
 const holdsHistory = () =>
   sponsorRefusal(
     409,
-    "this sponsor has deal history (money paid or refunded, or a pre-deals order) — end its deals instead",
+    "this sponsor has deal history (money paid or refunded, a numbered invoice, or a pre-deals order) — end its deals instead",
     "sponsor_has_deal_history",
   );
 const holdsOpenCheckout = () =>
@@ -366,7 +368,8 @@ const holdsOpenCheckout = () =>
   );
 
 /**
- * Delete a sponsor with its deals. Refused (409 `sponsor_has_deal_history`) while a deal holds money history — read FIRST, so a
+ * Delete a sponsor with its deals. Refused (409 `sponsor_has_deal_history`) while a deal holds money or document history
+ * (`dealHoldsHistory`: a numbered invoice too, F10) — read FIRST, so a
  * delete that will be refused never closes a payment link. Then the session rule (F3), outside any transaction: every stored
  * Checkout session is retired; a completed one (money in flight) or an open one that cannot be expired refuses the delete (409
  * `sponsor_has_open_checkout`), because a later payment on a deleted deal would take money and record nothing. Each retired
@@ -379,6 +382,9 @@ export async function deleteSponsor(auth: AuthCtx, id: string): Promise<void> {
   // Every refusal before the first expire (review I1): Stripe is asked about EVERY stored session first, so a completed one
   // (money in flight) or one nobody can read refuses the delete with no link closed. Then each open one is expired and
   // forgotten in its own statement: a later failure leaves no dead link stored on a deal that stays.
+  // Since the invoices delta (Task 20, F10) this branch is reachable ONLY for an online deal made before that delta: every online
+  // deal created since carries an invoice number, which `dealHoldsHistory` refused above, and the only other unnumbered online
+  // rows (a webhook's duplicate payment) are paid, so they are refused there too. It stays for those pre-delta rows (staging).
   const held = before.flatMap((d): WithSession[] =>
     d.checkout_session_id === null ? [] : [{ id: d.id, checkout_session_id: d.checkout_session_id }]);
   const asStripeRefusal = async <T>(fn: () => Promise<T>): Promise<T> => {
@@ -795,16 +801,24 @@ export async function ensureDealCheckout(
 /**
  * Queue a deal's invoice on the email outbox, on `tx` (the transaction that records the send): kind `sponsor_invoice`, ref
  * `sponsor_order/<deal id>`, once-key `<deal id>:<sendNo>` — so a resend is a new invoice and a retried send (the same count)
- * is not. To the deal's billing email, a literal address, in the org's language. Returns the outbox id, or `null` when this
- * send already has its invoice. No catch: a refused enqueue rolls the send back (its session is pinned by its Stripe key, so a
- * retry gets the same one). The caller asked `assertOutboxCanQueue` before it minted (P-W2-1).
+ * is not. To the deal's billing email, a literal address, in the org's language. The email carries the invoice's number and
+ * links its page (`invoiceUrl`, the token the same transaction minted: Task 23, D14), never a Checkout session; `pay` says how
+ * the sponsor pays (card on the page, or transfer to the club's bank details). Returns the outbox id, or `null` when this send
+ * already has its invoice. No catch: a refused enqueue rolls the send back (an online send's session is pinned by its Stripe
+ * key, so a retry gets the same one). The caller asked `assertOutboxCanQueue` before it touched Stripe (P-W2-1).
  */
 export async function queueSponsorInvoice(
   tx: Tx,
-  a: { deal: SponsorDealView & { org_id: string }; checkoutUrl: string; sendNo: number },
+  a: {
+    deal: SponsorDealView & { org_id: string };
+    number: string;
+    invoiceUrl: string;
+    pay: SponsorInvoiceArgs["pay"];
+    sendNo: number;
+  },
 ): Promise<string | null> {
-  const { deal, checkoutUrl, sendNo } = a;
-  if (!deal.sponsor_email) throw new Error(`sponsors: online deal ${deal.id} has no billing email (online_has_email)`);
+  const { deal, invoiceUrl, sendNo } = a;
+  if (!deal.sponsor_email) throw new Error(`sponsors: deal ${deal.id} has no billing email, so its invoice has nowhere to go`);
   const [org] = await tx<{ name: string; default_locale: string }[]>`
     select name, default_locale from organizations where id = ${deal.org_id}`;
   const locale = await recipientLocale(tx, { pick: null, userId: null, orgDefault: org?.default_locale ?? null });
@@ -815,7 +829,9 @@ export async function queueSponsorInvoice(
       sponsorName: deal.sponsor_name,
       amountCents: deal.amount_cents,
       currency: deal.currency,
-      checkoutUrl,
+      number: a.number,
+      invoiceUrl,
+      pay: a.pay,
     },
     locale,
   );
@@ -848,10 +864,10 @@ type DealPaymentAlert =
   | "deal_missing";
 
 /**
- * The owner alert for a payment the club may owe back (Review Focus 1, F3, F12): a Sentry event carrying the reason, the deal
+ * The platform's eye on a payment the club may owe back (Review Focus 1, F3, F12): a Sentry event carrying the reason, the deal
  * and the intent, raised after the commit and only on the transition (a redelivery of the same intent is a no-op before it).
- * TODO(Task 23): the owner's account-addressed `sponsor_deal_paid` outbox alert (with a duplicate flag) replaces this stand-in;
- * that kind needs Task 23's `email_outbox_kind_valid` delta.
+ * The OWNER hears through the `sponsor_deal_paid` notice (`queueDealPaidNotice`, Task 23), queued in the payment's transaction
+ * with its "check the deal" or "second payment" line; `deal_missing` has no deal to name and no notice, so Sentry alone carries it.
  */
 function alertDealPayment(
   reason: DealPaymentAlert,
@@ -881,17 +897,20 @@ type PaymentOutcome = {
  *  - unpaid (`pending`, or `failed`: Stripe lets a failed intent succeed on a retry, and a re-sent invoice pays on a new
  *    intent): money paid, the intent that took it recorded (overwriting a declined one, so its refund and disputes find the
  *    deal), and the receipt queued in the same transaction. Then the go-live rule (`statusAfterPaid`) moves the deal — live,
- *    scheduled behind a live deal, or awaiting approval — and the sponsor's deals are applied. An ENDED deal (legacy included)
- *    keeps its status and its sponsor is not touched: `log.warn` plus the owner alert. A deal its rule cannot move (a draft,
- *    awaiting approval) keeps its status: the `DealRuleError` is caught here, never escapes (F12: a throw would 500 the
- *    webhook and Stripe would retry forever), and is logged with the deal id plus the owner alert. Both stay refundable.
+ *    scheduled behind a live deal, or awaiting approval — and the sponsor's deals are applied. The owner's `sponsor_deal_paid`
+ *    notice, saying which, is queued in the same transaction (D13, Task 23). An ENDED deal (legacy included) keeps its status
+ *    and its sponsor is not touched: `log.warn`, the Sentry alert, and the owner's notice saying "check the deal". A deal its
+ *    rule cannot move (a draft, awaiting approval) keeps its status: the `DealRuleError` is caught here, never escapes (F12: a
+ *    throw would 500 the webhook and Stripe would retry forever), and is logged with the deal id plus the same alert and notice.
+ *    Both stay refundable.
  *  - already paid on the SAME intent (on this deal or the row a second payment made): a redelivery, a no-op. Stripe's own
  *    idempotency keys expire ~24h, so this DB guard is the real one.
  *  - paid (or refunded) on another intent: a second payment (F3). Its own row — the deal's snapshot, `online`, money `paid`
  *    on its own intent, amount and currency, ended `duplicate_payment` — so the club sees the money and can refund it; the
- *    deal and its sponsor stay as they were; owner alert. No receipt (Task 23 owns the copy).
+ *    deal and its sponsor stay as they were; the Sentry alert, and the owner's notice saying "a second payment". No sponsor
+ *    receipt.
  *
- * The worker makes the receipt's first attempt: a webhook has no response to defer behind. Nobody reads a webhook's result back
+ * The worker makes the receipt's and the notice's first attempt: a webhook has no response to defer behind. Nobody reads a webhook's result back
  * at once, so the public pages are busted as tail work (`deferred`, F1).
  */
 export async function handleSponsorPaymentSucceeded(
@@ -910,7 +929,11 @@ export async function handleSponsorPaymentSucceeded(
     const { deal, orgId } = locked;
     if (deal.payment_status !== "pending" && deal.payment_status !== "failed") {
       if (locked.deals.some((d) => d.payment_intent_id === intent.id)) return null; // a redelivery
-      return { orgId, applied: false, alert: { reason: "duplicate_payment", dealId: deal.id, recordedOn: await recordDuplicatePayment(tx, locked, intent) } };
+      const recordedOn = await recordDuplicatePayment(tx, locked, intent);
+      // What the second payment took, as its row records it (`recordDuplicatePayment`).
+      const paid = { amountCents: intent.amount_received ?? intent.amount, currency: intent.currency };
+      await queueDealPaidNotice(tx, { locked, dealId: recordedOn ?? deal.id, intentId: intent.id, paid, next: "duplicate" });
+      return { orgId, applied: false, alert: { reason: "duplicate_payment", dealId: deal.id, recordedOn } };
     }
 
     const now = new Date();
@@ -945,6 +968,8 @@ export async function handleSponsorPaymentSucceeded(
         intentId: intent.id,
       });
     }
+    const paid = { amountCents: deal.amount_cents, currency: deal.currency }; // the invoiced amount, as the receipt says it
+    await queueDealPaidNotice(tx, { locked, dealId: deal.id, intentId: intent.id, paid, next: dealPaidNext(next) });
     if (next === null) {
       const reason = refused ? "deal_not_payable" : "deal_ended";
       return { orgId, applied: false, alert: { reason, dealId: deal.id, recordedOn: deal.id, err: refused ?? undefined } };
@@ -968,6 +993,69 @@ export async function handleSponsorPaymentSucceeded(
       select slug from organizations where id = ${out.orgId}`;
     if (org) deferred(() => fireOrgRevalidate(org.slug));
   }
+}
+
+/** The owner's next step after a card payment moved (or did not move) a deal to `next` (null: it did not move). `statusAfterPaid`
+ *  answers only live, scheduled or awaiting_approval for a deal it moves; anything else is no step we can name, so the owner is
+ *  told to check the deal rather than told something false. */
+export function dealPaidNext(next: DealStatus | null): DealPaidNext {
+  if (next === "live") return "live";
+  if (next === "scheduled") return "scheduled";
+  if (next === "awaiting_approval") return "approve";
+  return "check";
+}
+
+/**
+ * The owner's "a sponsor has paid" notice (spec D13; plan 2026-11-07-sponsor-deals, Task 23), queued on `tx`, the transaction that
+ * records the card payment, so the notice and the paid deal commit together or not at all (no catch: a refused enqueue rolls the
+ * payment back and Stripe delivers the webhook again). Kind `sponsor_deal_paid`, to the org's owner (`orgOwnerRecipient`) as an
+ * account, in the owner's language; once-key the payment intent, so a redelivered or replayed event never mails twice. It names
+ * the sponsor, the amount paid, and the next step, and links the deal (`dealHref`; a sponsor-less legacy row links the
+ * Sponsors tab). An org with no current owner records the payment and mails nobody. Card payments only: an offline mark-paid,
+ * an offline refund and a complimentary deal send nothing (D13).
+ */
+async function queueDealPaidNotice(
+  tx: Tx,
+  a: {
+    locked: LockedDeal;
+    dealId: string;
+    intentId: string;
+    paid: { amountCents: number; currency: string };
+    next: DealPaidNext;
+  },
+): Promise<string | null> {
+  const { locked } = a;
+  const owner = await orgOwnerRecipient(tx, locked.orgId);
+  if (!owner) return null;
+  const [org] = await tx<{ slug: string; name: string; default_locale: string }[]>`
+    select slug, name, default_locale from organizations where id = ${locked.orgId}`;
+  if (!org) return null;
+  const locale = await recipientLocale(tx, { pick: null, userId: owner.userId, orgDefault: org.default_locale });
+  const path = locked.sponsorId !== null ? dealHref(org.slug, locked.sponsorId, a.dealId) : sponsorsHref(org.slug, "sponsors");
+  const kind = "sponsor_deal_paid";
+  return enqueueEmailOnce(tx, {
+    kind,
+    refType: "sponsor_order",
+    refId: a.dealId,
+    dedupeKey: onceKey(kind, "sponsor_order", a.intentId),
+    orgId: locked.orgId,
+    to: owner.email,
+    recipientUserId: owner.userId,
+    transactional: false,
+    expiresAt: expiryWithin(null),
+    ...(await sponsorDealPaidEmail(
+      {
+        orgName: org.name,
+        packageName: locked.deal.package_name,
+        sponsorName: locked.deal.sponsor_name,
+        amountCents: a.paid.amountCents,
+        currency: a.paid.currency,
+        next: a.next,
+        dealUrl: `${sponsorEmailOrigin()}${path}`,
+      },
+      locale,
+    )),
+  });
 }
 
 /**

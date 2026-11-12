@@ -54,8 +54,12 @@ export const SponsorDeal = z.object({
   /** The deal records a Stripe payment intent. On a paid deal: a card payment at Stripe paid it, so a refund goes back to
    *  the card through Stripe; false for an offline deal and one marked as paid by hand. The intent id itself is never sent. */
   has_payment_intent: z.boolean(),
-  /** Always null until invoices are numbered. */
+  /** The deal's invoice number, allocated when an online or offline deal is created; null for a complimentary or legacy deal. */
   invoice_number: z.number().int().nullable(),
+  /** When the club wrote off the deal's unpaid invoice, and the member who did; both null unless `ended_reason` is `written_off`
+   *  (the member is null there too once that user is deleted). */
+  written_off_at: z.string().nullable(),
+  written_off_by: z.string().nullable(),
 });
 
 /** Sponsor deals, Task 6 (plan 2026-11-07-sponsor-deals D16; spec §5.1, §5.2): the Add deal body. STRICT — an unknown key
@@ -74,17 +78,19 @@ export const CreateSponsorDeal = z
   })
   .strict();
 
-/** F11: the create answers the deal and, for an online deal, the Checkout url its invoice carries (null otherwise). The url
- *  rides beside the deal, never on it: SponsorDeal stays url-free. */
+/** F11: the create answers the deal and, for an online deal, the link its invoice email carries - the deal's numbered invoice
+ *  page, never a Checkout url (T23 review I1: no Checkout url leaves the server but to the sponsor's own Pay by card). Null for a
+ *  deal no email went for (offline, complimentary). The url rides beside the deal, never on it: SponsorDeal stays url-free. */
 export const SponsorDealCreated = z.object({
   deal: SponsorDeal,
-  checkout_url: z.string().nullable(),
+  invoice_url: z.string().nullable(),
 });
 
-/** Send invoice (Task 7): the deal after the send and the Checkout url the invoice carries (beside the deal, never on it). */
+/** Send invoice (Task 7; Task 23): the deal after the send and the link the email carries - the invoice page, with the new token
+ *  this send minted (beside the deal, never on it; the console's copy link). Online and offline alike. */
 export const SponsorDealInvoiceSent = z.object({
   deal: SponsorDeal,
-  checkout_url: z.string(),
+  invoice_url: z.string(),
 });
 
 export const Sponsor = z.object({

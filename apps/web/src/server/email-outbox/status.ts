@@ -1,7 +1,7 @@
 import "server-only";
 // What the outbox knows about the emails of a thing, and the retention of the rows themselves. They run on the PRIVILEGED connection,
 // as the worker does (V470: `app_user` holds INSERT only, so a tenant connection can neither read a row back nor delete one):
-// `latestEmailStatus`, `latestStatusesOfRows`, `scrubEndedRecipients` and `purgeOldEmails` on the pooled client, `lockQueuedEmails` on the PRIVILEGED
+// `latestEmailStatus`, `latestStatusesOfRows`, `emailsQueuedWithin`, `scrubEndedRecipients` and `purgeOldEmails` on the pooled client, `lockQueuedEmails` on the PRIVILEGED
 // TRANSACTION its caller passes in (it takes row locks, which only mean something inside that transaction). None of them sends anything.
 //
 //  - `latestEmailStatus` is the read the arbiter's phase-2 column will use ("did this seat's invite arrive?"). Its caller is a tenant
@@ -84,6 +84,19 @@ export async function latestEmailStatus(
     status: r.status,
     at: r.at,
   }));
+}
+
+/**
+ * How many emails of `kind` this organisation queued in the last `hours` hours - every row, whatever its status: a `replaced`,
+ * voided, failed or sent row was still an email this organisation asked Seazn to send, so a send cap counts it. Hours, never days:
+ * a day interval moves with a DST change in the server's zone. The connection bypasses RLS, so the `org_id` filter is the fence.
+ */
+export async function emailsQueuedWithin(orgId: string, kind: OutboxKind, hours: number): Promise<number> {
+  const [row] = await sql<{ n: number }[]>`
+    select count(*)::int as n
+      from email_outbox
+     where org_id = ${orgId} and kind = ${kind} and created_at > now() - make_interval(hours => ${hours})`;
+  return row?.n ?? 0;
 }
 
 /**
