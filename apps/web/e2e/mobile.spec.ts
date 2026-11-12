@@ -8410,8 +8410,13 @@ const QM_LONG_TOO = "Priya Raghunathan & Tomasz Wisniewski";
 const QM_NAV_MS = 20_000;
 /** A click, a fill or a measurement. */
 const QM_ACT_MS = 2_000;
-/** The boxes a person reads inside a surface (never an `<input>`/`<select>`: a field scrolls its own text by design). */
-const QM_SCAN = "div,span,p,a,button,label,li,ol,ul,h1,h2,th,td,table,section,summary,legend,small";
+/** The boxes a person reads inside a surface, and the boxes that hold them (never an `<input>`/`<select>`: a field scrolls
+ *  its own text by design). */
+const QM_SCAN = "div,span,p,a,button,label,li,ol,ul,h1,h2,th,td,table,section,summary,legend,small,fieldset,form,details,header";
+/** Badminton's live score reads as its levels in seat order (`compactScore`, lib/match-day/view.ts): the games won, then the
+ *  game's points ("0–0 · 1–0", CI run 43290331372). One rally to the home side is a point and no game: games 0–0, points
+ *  1–0. Before that rally the last level reads 0–0, which this does not match. */
+const QM_AFTER_ONE_HOME_RALLY = /^\s*0\D+0\D+1\D+0\s*$/;
 
 /** A guest's own browser at this project's viewport: no session, the cookie banner already answered. */
 async function qmGuest(browser: import("@playwright/test").Browser) {
@@ -8444,16 +8449,17 @@ async function qmNotClipped(page: Page, root: string, label: string, exempt: (bo
   return boxes;
 }
 
-/** The setup form filled the way a guest fills it: badminton, the name, the sides, League when there are three or more. */
-async function qmFillSetup(page: Page, name: string, sides: readonly string[]): Promise<void> {
+/** The setup form filled the way a guest fills it: the sport (badminton unless named), the name, the sides, League when there
+ *  are three or more. */
+async function qmFillSetup(page: Page, name: string, sides: readonly string[], sport: "badminton" | "football" = "badminton"): Promise<void> {
   await page.goto("/en/play", { waitUntil: "load" });
   const form = page.getByTestId("qm-setup-form");
   await expect(form).toBeVisible({ timeout: QM_NAV_MS });
   // The island is live once blank rows hold Start disabled (the server's no-script Start is enabled): typing before then races
   // React taking the inputs over.
   await expect(page.getByTestId("qm-start")).toBeDisabled();
-  await form.getByText(qmUi("sport.badminton"), { exact: true }).click();
-  await expect(form.getByRole("radio", { name: qmUi("sport.badminton"), exact: true })).toBeChecked();
+  await form.getByText(qmUi(`sport.${sport}`), { exact: true }).click();
+  await expect(form.getByRole("radio", { name: qmUi(`sport.${sport}`), exact: true })).toBeChecked();
   await form.getByLabel(qmMk("quickMatch.setup.nameLabel"), { exact: true }).fill(name);
   for (let n = 3; n <= sides.length; n += 1) await form.getByRole("button", { name: qmMk("quickMatch.setup.addSide") }).click();
   for (const [i, s] of sides.entries()) await form.getByLabel(qmMk("quickMatch.setup.sideLabel", { n: i + 1 }), { exact: true }).fill(s);
@@ -8491,18 +8497,36 @@ test("quick match (guest): the setup form, the home with Share's QR and Add a ma
     await qmFillSetup(page, name, sides);
     await expectNoHorizontalScroll(page);
     // The one designed overhang: docked (below 640) the Start bar bleeds through its column's gutter to the column's edges
-    // (`-mx-4` under the column's `px-4`, setup-form.tsx), so the FORM's own box reports it. Exempt that one line, and only
-    // while the bar is docked and spans its column exactly; from 640 nothing is exempt.
+    // (`-mx-4` under the column's `px-4`, setup-form.tsx), so the FORM's own box reports it. Exempt exactly that: one form
+    // line whose overhang (content − client) is the bar's measured overhang past the form's right edge (1rem, 16px), only
+    // while the bar is docked and spans its column; any other overhang on the form, and anything from 640, is a clip.
     const bar = await page.evaluate(() => {
       const form = document.querySelector<HTMLElement>('[data-testid="qm-setup-form"]');
       const el = document.querySelector<HTMLElement>('[data-testid="qm-start-bar"]');
       if (!form?.parentElement || !el) return null;
-      const [b, c] = [el.getBoundingClientRect(), form.parentElement.getBoundingClientRect()];
-      return { docked: getComputedStyle(el).position === "sticky", left: Math.round(b.left - c.left), right: Math.round(c.right - b.right) };
+      const [b, f, c] = [el.getBoundingClientRect(), form.getBoundingClientRect(), form.parentElement.getBoundingClientRect()];
+      return {
+        docked: getComputedStyle(el).position === "sticky",
+        left: Math.round(b.left - c.left),
+        right: Math.round(c.right - b.right),
+        overhang: Math.round(b.right - f.right),
+      };
     });
     expect(bar, "the setup form and its Start bar are in the DOM").not.toBeNull();
-    if (bar!.docked) expect([bar!.left, bar!.right], "docked, the Start bar spans its column exactly").toEqual([0, 0]);
-    scanned += await qmNotClipped(page, '[data-testid="qm-setup-form"]', "the setup form", (box) => bar!.docked && /^form \d+px content in \d+px$/.test(box));
+    if (bar!.docked) {
+      expect([bar!.left, bar!.right], "docked, the Start bar spans its column exactly").toEqual([0, 0]);
+      expect(bar!.overhang, "docked, the Start bar bleeds 1rem past the form's right edge (`-mx-4`)").toBe(16);
+    }
+    let excused = 0;
+    scanned += await qmNotClipped(page, '[data-testid="qm-setup-form"]', "the setup form", (box) => {
+      const m = /^form (\d+)px content in (\d+)px$/.exec(box);
+      const bleed = bar!.docked && m !== null && Math.abs(Number(m[1]) - Number(m[2]) - bar!.overhang) <= 1;
+      if (bleed) excused += 1;
+      return bleed;
+    });
+    expect(excused, bar!.docked ? "docked: exactly the Start bar's one overhang line was excused" : "undocked: nothing was excused").toBe(
+      bar!.docked ? 1 : 0,
+    );
     await hitFloor(page.getByTestId("qm-start"), "Start", 44);
     const home = await qmStart(page);
 
@@ -8512,8 +8536,11 @@ test("quick match (guest): the setup form, the home with Share's QR and Add a ma
     const heroNames = [(await hero.getByTestId("qm-hero-home").textContent())!.trim(), (await hero.getByTestId("qm-hero-away").textContent())!.trim()];
     expect(sides, "the hero names two of the typed sides").toEqual(expect.arrayContaining(heroNames));
     expect(heroNames.some((n) => n === QM_LONG || n === QM_LONG_TOO), "premise: a long name plays the first match (so the pad carries one)").toBe(true);
-    const fixtureId = (await page.locator('[data-testid="qm-match"][data-next="true"]').getAttribute("data-fixture-id"))!;
-    expect(fixtureId, "the row marked next is the hero's match").toMatch(/^[0-9a-f-]{36}$/);
+    // The list's next match is the hero's: one row marked next, and its sides are the hero's two names.
+    const next = page.locator('[data-testid="qm-match"][data-next="true"]');
+    await expect(next).toHaveCount(1);
+    for (const n of heroNames) await expect(next.getByTestId("qm-match-sides"), "the row marked next is the hero's match").toContainText(n);
+    const fixtureId = (await next.getAttribute("data-fixture-id"))!;
     await hitFloor(hero.getByTestId("qm-score"), "the hero's Score", 44);
     await expect(page.getByTestId("qm-share-copy"), "Copy is on first paint").toBeVisible();
     await hitFloor(page.getByTestId("qm-share-copy"), "Copy link", 44);
@@ -8535,8 +8562,9 @@ test("quick match (guest): the setup form, the home with Share's QR and Add a ma
     await page.getByTestId("score-start-match").click();
     const half = (s: "home" | "away") => page.locator(`[data-role="pad-v3"] button[data-role="v3-scorebug-half"][data-side="${s}"]`);
     await expect(half("home"), "Start opens the pad, its halves tappable").toBeVisible({ timeout: QM_NAV_MS });
-    await assertTouchFloor(half("home"), "the home half");
-    await assertTouchFloor(half("away"), "the away half");
+    // Each half is the rally button: 44px tall and a tap at its edges and centre lands on it (a hit test, not a box size).
+    await hitFloor(half("home"), "the home half", 44);
+    await hitFloor(half("away"), "the away half", 44);
     await half("home").click();
     await expectScorebugNotClipped(page, "the quick match pad, a long name on it");
     await expectNoHorizontalScroll(page);
@@ -8562,7 +8590,7 @@ test("quick match (guest): the setup form, the home with Share's QR and Add a ma
 
     // ── 4. The home again: live, with the rally's point (one to the home side, none to the away side), still fitting ──
     await expect(hero.getByTestId("qm-hero-kicker")).toHaveText(qmUi("quickMatch.home.liveMatch", { n: 1, total: 3 }));
-    await expect(hero.getByTestId("qm-hero-score"), "the home reads the rally, not a stale page").toHaveText(/^\s*1\D+0\s*$/);
+    await expect(hero.getByTestId("qm-hero-score"), "the home reads the rally, not a stale page").toHaveText(QM_AFTER_ONE_HOME_RALLY);
     await expectNoHorizontalScroll(page);
     scanned += await qmNotClipped(page, '[data-testid="qm-home"]', "the home with a live match");
 
@@ -8635,4 +8663,55 @@ test("quick match (saver): signed in, Save; the home's Saved and In your account
     await ctx.close();
   }
   expect(scanned, "anti-vacuity: every surface had boxes to scan").toBeGreaterThan(20);
+});
+
+// Review m6: one CLOCK sport. Football's pad is the taller one (the clock and its controls over the board), so its pad and
+// its way back are measured at this width too. Kept short for the phone legs' clock (e2e.yml timeout-minutes): two sides,
+// Start, no goal (the goal dock is scorepad-v3-football.spec.ts's).
+test("quick match (football, a clock sport): the pad after Start and its way back hold at this width; the home reads it live", async ({
+  browser,
+}) => {
+  // Four page loads or redirects, the start's hold and the record read back, and ~10 local acts.
+  test.setTimeout(4 * QM_NAV_MS + HOLD_MS + QM_NAV_MS + 10 * QM_ACT_MS);
+  const ctx = await qmGuest(browser);
+  let painted = 0;
+  try {
+    const page = await ctx.newPage();
+    await qmFillSetup(page, `Mobile quick match football ${TAG}-${projectTag()}`, [QM_LONG, QM_LONG_TOO], "football");
+    const home = await qmStart(page);
+    const hero = page.getByTestId("qm-hero");
+    await expect(hero.getByTestId("qm-hero-kicker"), "before Start: up next").toHaveText(qmUi("quickMatch.home.upNext", { n: 1, total: 1 }));
+    const fixtureId = (await page.locator('[data-testid="qm-match"][data-next="true"]').getAttribute("data-fixture-id"))!;
+
+    await hero.getByTestId("qm-score").click();
+    await page.waitForURL(/\/score\/dl_[A-Za-z0-9_-]+$/, { timeout: QM_NAV_MS });
+    await expect(page.getByTestId("scan-confirm")).toBeVisible({ timeout: QM_NAV_MS });
+    await page.getByTestId("score-start-match").click();
+    await expect(page.locator('[data-role="pad-v3"] [data-role="v3-scorebug"]'), "Start opens football's pad").toBeVisible({ timeout: QM_NAV_MS });
+    await expectScorebugNotClipped(page, "the football quick match pad, two long names on it");
+    await expectNoHorizontalScroll(page);
+    // The start is in the record before anything leaves the pad (the pad may hold it, queue.ts).
+    await expect
+      .poll(
+        async () => {
+          const [row] = await withDb(
+            (sql) => sql<{ n: number }[]>`select count(*)::int as n from score_events where fixture_id = ${fixtureId} and type = 'core.start'`,
+          );
+          return row!.n;
+        },
+        { timeout: HOLD_MS + QM_NAV_MS, message: "the start never reached the ledger" },
+      )
+      .toBe(1);
+    const back = page.getByTestId("quick-match-back-link");
+    await expect(back).toHaveAccessibleName(qmUi("quickMatch.backToMatch"));
+    painted += await paintedInsideViewport(back, "Back to the quick match (football)");
+    await hitFloor(back, "Back to the quick match (football)", 44);
+    await back.click();
+    await page.waitForURL((u) => u.pathname === home && u.search === "", { timeout: QM_NAV_MS });
+    await expect(hero.getByTestId("qm-hero-kicker"), "after Start: live").toHaveText(qmUi("quickMatch.home.liveMatch", { n: 1, total: 1 }));
+    await expectNoHorizontalScroll(page);
+  } finally {
+    await ctx.close();
+  }
+  expect(painted, "anti-vacuity: the back link's boxes were measured").toBeGreaterThan(0);
 });
