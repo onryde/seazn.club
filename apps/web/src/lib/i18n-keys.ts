@@ -6543,6 +6543,7 @@ export type DictionaryKey =
   | "register.status.pay.ctaFallback"
   | "register.status.pay.error.conflict"
   | "register.status.pay.error.generic"
+  | "register.status.pay.error.paidOnline"
   | "register.status.pay.unavailable"
   | "register.status.pay.windowClosed"
   | "register.status.resend.busy"

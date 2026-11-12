@@ -8,7 +8,7 @@ import { getStripe } from "@/lib/stripe";
 import { registrationPayPath } from "@/lib/registration-pay";
 import { log } from "@/server/logger";
 import { divisionCtx } from "./lookups";
-import { checkoutRegistrationIds, mintEntryPayPageCheckout } from "./checkout";
+import { checkoutRegistrationIds, completedSessionStillPays, mintEntryPayPageCheckout } from "./checkout";
 import { payPageDocByToken } from "./pay-page";
 
 /** A stored session is handed out again only while more than this is left of it (the sponsor rule's value, sponsors.ts). */
@@ -77,31 +77,4 @@ export async function payFromPayPage(token: string, origin: string, now: Date = 
 
   const returnBase = `${origin}${registrationPayPath(token)}?src=pay`;
   return mintEntryPayPageCheckout(doc.groupId, doc.registrationId, ctx, origin, returnBase, read);
-}
-
-/**
- * Whether a `complete` session still stands for money: `payment_status` `paid`, or `unpaid` behind a PaymentIntent that can still
- * collect. Fail CLOSED: a session is dead only when it has no PaymentIntent, or the intent is `requires_payment_method` (a
- * failed debit sent it back) or `canceled`. Every other status keeps the session alive - `processing` (a delayed method between
- * the customer's confirmation and the bank's answer), `requires_action` (a voucher / bank-transfer method - customer_balance,
- * OXXO, Boleto, Konbini - waiting for the customer to pay), `requires_confirmation`, `requires_capture`, and `succeeded` (the
- * intent can settle before the session's own `payment_status` flips to `paid`) - because minting a second payable session beside
- * one that can still land money is a double charge.
- */
-async function completedSessionStillPays(stored: Stripe.Checkout.Session, registrationId: string): Promise<boolean> {
-  if (stored.payment_status === "paid") return true;
-  if (stored.payment_status !== "unpaid") return false;
-  const pi = stored.payment_intent;
-  if (pi === null) return false;
-  if (typeof pi !== "string") return intentCanStillCollect(pi.status);
-  try {
-    return intentCanStillCollect((await getStripe().paymentIntents.retrieve(pi)).status);
-  } catch (err) {
-    log.error({ err, registrationId }, "registration pay page: could not read the stored session's payment");
-    throw stripeUnavailable();
-  }
-}
-
-function intentCanStillCollect(status: Stripe.PaymentIntent.Status): boolean {
-  return status !== "requires_payment_method" && status !== "canceled";
 }

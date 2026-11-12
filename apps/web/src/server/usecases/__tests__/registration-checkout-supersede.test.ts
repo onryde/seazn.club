@@ -45,6 +45,13 @@
 // mocked expire() call to prove the new session is already durably on
 // record at that exact point, not just in the eventual end state.
 //
+// Gap wave G1 (2026-11-12): `resumeRegistrationCheckout` now READS the cart's stored session once before minting (it refuses while
+// a `complete` session naming the entry can still pay - registration-pay-page-checkout.test.ts), so the stored session is read
+// twice on a resume re-mint: that guard, then the supersede step after the stamp. The retrieve mock is therefore persistent
+// (`mockResolvedValue`, not `...Once`): with a one-shot mock the guard consumed it and the supersede step read `undefined`, which
+// its best-effort catch swallows - the two "must NOT expire" cases below would then pass without the predicate ever running.
+// Each resume re-mint case pins both reads (`toHaveBeenCalledTimes(2)`).
+//
 // Real Postgres required; skipped without DATABASE_URL (matches every
 // sibling usecase suite in this directory).
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -115,13 +122,14 @@ describe.skipIf(!HAS_DB)(
 
       // Registrant clicks "Pay now" again on the SAME entry — the prior
       // session (firstSessionId) is still open and covers exactly this id.
-      stripeMock.checkoutRetrieve.mockResolvedValueOnce(
+      stripeMock.checkoutRetrieve.mockResolvedValue(
         openSession(firstSessionId, [first.registration.id]),
       );
 
       await resumeRegistrationCheckout(first.registration.id, first.access_token, "http://test.local");
 
       expect(stripeMock.checkoutRetrieve).toHaveBeenCalledWith(firstSessionId);
+      expect(stripeMock.checkoutRetrieve).toHaveBeenCalledTimes(2); // the G1 guard's read, then the supersede step's
       expect(stripeMock.checkoutExpire).toHaveBeenCalledWith(firstSessionId);
       const group = await loadWithGroup(first.registration.id);
       expect(group.checkout_session_id).not.toBe(firstSessionId); // overwritten with the new session
@@ -140,7 +148,7 @@ describe.skipIf(!HAS_DB)(
       await resumeRegistrationCheckout(a.registration.id, a.access_token, "http://test.local");
       const sessionA = (await loadWithGroup(a.registration.id)).checkout_session_id!;
 
-      stripeMock.checkoutRetrieve.mockResolvedValueOnce(openSession(sessionA, [a.registration.id]));
+      stripeMock.checkoutRetrieve.mockResolvedValue(openSession(sessionA, [a.registration.id]));
 
       // B shares A's group/access token (seedSecondEntry attaches to the same
       // cart) — resuming B's own, separate, still-payable entry must not
@@ -150,6 +158,7 @@ describe.skipIf(!HAS_DB)(
       // The check DID run (this isn't vacuously skipped) — it just decided,
       // correctly, that A's own ids don't intersect B's.
       expect(stripeMock.checkoutRetrieve).toHaveBeenCalledWith(sessionA);
+      expect(stripeMock.checkoutRetrieve).toHaveBeenCalledTimes(2); // the G1 guard's read, then the supersede step's
       expect(stripeMock.checkoutExpire).not.toHaveBeenCalled();
     });
 
@@ -164,7 +173,7 @@ describe.skipIf(!HAS_DB)(
       // Prior session covers A ALONE.
       await resumeRegistrationCheckout(a.registration.id, a.access_token, "http://test.local");
       const sessionA = (await loadWithGroup(a.registration.id)).checkout_session_id!;
-      stripeMock.checkoutRetrieve.mockResolvedValueOnce(openSession(sessionA, [a.registration.id]));
+      stripeMock.checkoutRetrieve.mockResolvedValue(openSession(sessionA, [a.registration.id]));
 
       // Re-mint for the WHOLE cart (both pending, payable entries): every id
       // the prior session covered (A) is also covered by the new mint, so
@@ -188,7 +197,7 @@ describe.skipIf(!HAS_DB)(
       // Prior session covers the WHOLE cart, {A,B}.
       await mintGroupCheckout(a.registration.group_id, division.id, "http://test.local", a.access_token);
       const sessionAB = (await loadWithGroup(a.registration.id)).checkout_session_id!;
-      stripeMock.checkoutRetrieve.mockResolvedValueOnce(
+      stripeMock.checkoutRetrieve.mockResolvedValue(
         openSession(sessionAB, [a.registration.id, b.id]),
       );
 
@@ -198,6 +207,7 @@ describe.skipIf(!HAS_DB)(
       await resumeRegistrationCheckout(a.registration.id, a.access_token, "http://test.local");
 
       expect(stripeMock.checkoutRetrieve).toHaveBeenCalledWith(sessionAB);
+      expect(stripeMock.checkoutRetrieve).toHaveBeenCalledTimes(2); // the G1 guard's read, then the supersede step's
       expect(stripeMock.checkoutExpire).not.toHaveBeenCalled();
       // The cart's checkout_session_id still moves to the new session — only
       // the EXPIRE decision differs, never the stamp itself.
@@ -211,7 +221,7 @@ describe.skipIf(!HAS_DB)(
       await resumeRegistrationCheckout(first.registration.id, first.access_token, "http://test.local");
       const firstSessionId = (await loadWithGroup(first.registration.id)).checkout_session_id!;
 
-      stripeMock.checkoutRetrieve.mockResolvedValueOnce(
+      stripeMock.checkoutRetrieve.mockResolvedValue(
         openSession(firstSessionId, [first.registration.id]),
       );
       // Reads the group's row from INSIDE the mocked expire() call — proves
@@ -227,6 +237,7 @@ describe.skipIf(!HAS_DB)(
 
       await resumeRegistrationCheckout(first.registration.id, first.access_token, "http://test.local");
 
+      expect(stripeMock.checkoutRetrieve).toHaveBeenCalledTimes(2); // the G1 guard's read, then the supersede step's
       expect(stripeMock.checkoutExpire).toHaveBeenCalledWith(firstSessionId);
       // The NEW session was already durably on record when expire() ran —
       // never the old one being expired, which would mean a reader could

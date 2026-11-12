@@ -215,6 +215,12 @@ export async function handleRegistrationCheckoutAsyncPaymentFailed(
   await sql`
     update registrations set pay_session_id = null, updated_at = now()
     where id in ${sql(regIds)} and pay_session_id = ${session.id}`;
+  // Gap wave G1: the cart's pointer likewise, on the same terms (only while it still names THIS session), so the status page's next
+  // Pay mints from an empty pointer instead of re-reading a session that can no longer pay.
+  await sql`
+    update registration_groups set checkout_session_id = null, updated_at = now()
+    where id in (select group_id from registrations where id in ${sql(regIds)})
+      and checkout_session_id = ${session.id}`;
 }
 
 type PayOutcome =

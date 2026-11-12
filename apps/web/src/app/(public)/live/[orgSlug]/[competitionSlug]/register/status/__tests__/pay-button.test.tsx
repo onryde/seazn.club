@@ -35,6 +35,8 @@ vi.stubGlobal("window", {
 });
 
 import { ApiV1Error } from "@/lib/client-v1";
+import { t } from "@/lib/i18n-runtime";
+import uiEn from "@/dictionaries/en/ui.json";
 import { PayButton } from "../pay-button";
 
 beforeEach(() => {
@@ -100,6 +102,21 @@ describe("PayButton", () => {
       await (propsOf(findButton(island.tree())).onClick as () => Promise<void>)();
 
       expect(island.text()).toContain("Another payment attempt just started");
+      expect(nav.assigned).toBe("");
+    });
+
+    // Gap wave G1: a 409 is not always a race. REGISTRATION_PAID_ONLINE means the cart's stored session can still land money (a
+    // SEPA/Bacs debit processing): "refresh and try again" would loop the player into the same refusal, so it reads as on its way.
+    it("409 REGISTRATION_PAID_ONLINE (a payment already on its way) shows its own localized copy, never the race's 'try again'", async () => {
+      net.rejection = new ApiV1Error("A payment for this entry is already on its way", 409, "REGISTRATION_PAID_ONLINE");
+      const island = renderIsland(PayButton, { entryId: "reg-1", token: "rg_tok" });
+
+      await (propsOf(findButton(island.tree())).onClick as () => Promise<void>)();
+
+      const own = t(uiEn, "register.status.pay.error.paidOnline" as never);
+      expect(own).not.toBe("register.status.pay.error.paidOnline"); // the key resolves (no fallback to the key itself)
+      expect(island.text()).toContain(own);
+      expect(island.text()).not.toContain(t(uiEn, "register.status.pay.error.conflict"));
       expect(nav.assigned).toBe("");
     });
 

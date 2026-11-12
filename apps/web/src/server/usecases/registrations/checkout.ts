@@ -494,6 +494,62 @@ export function checkoutRegistrationIds(session: Stripe.Checkout.Session): strin
   return (session.metadata?.registration_ids ?? "").split(",").filter(Boolean);
 }
 
+/** Stripe could not be read or written while deciding whether a stored session still pays. */
+const storedSessionUnreadable = () =>
+  new HttpError(502, "Stripe was unable to start this checkout — please try again shortly.");
+
+/**
+ * Whether a `complete` session still stands for money: `payment_status` `paid`, or `unpaid` behind a PaymentIntent that can still
+ * collect. Fail CLOSED: a session is dead only when it has no PaymentIntent, or the intent is `requires_payment_method` (a
+ * failed debit sent it back) or `canceled`. Every other status keeps the session alive - `processing` (a delayed method between
+ * the customer's confirmation and the bank's answer), `requires_action` (a voucher / bank-transfer method - customer_balance,
+ * OXXO, Boleto, Konbini - waiting for the customer to pay), `requires_confirmation`, `requires_capture`, and `succeeded` (the
+ * intent can settle before the session's own `payment_status` flips to `paid`) - because minting a second payable session beside
+ * one that can still land money is a double charge. An intent that cannot be read refuses (502).
+ *
+ * The one rule for both Pay buttons: the player payment page's (`payFromPayPage`, on the entry's `pay_session_id`) and the cart
+ * status page's (`resumeRegistrationCheckout`, on the cart's `checkout_session_id`).
+ */
+export async function completedSessionStillPays(stored: Stripe.Checkout.Session, registrationId: string): Promise<boolean> {
+  if (stored.payment_status === "paid") return true;
+  if (stored.payment_status !== "unpaid") return false;
+  const pi = stored.payment_intent;
+  if (pi === null) return false;
+  if (typeof pi !== "string") return intentCanStillCollect(pi.status);
+  try {
+    return intentCanStillCollect((await getStripe().paymentIntents.retrieve(pi)).status);
+  } catch (err) {
+    log.error({ err, registrationId }, "registration: could not read a completed session's payment");
+    throw storedSessionUnreadable();
+  }
+}
+
+function intentCanStillCollect(status: Stripe.PaymentIntent.Status): boolean {
+  return status !== "requires_payment_method" && status !== "canceled";
+}
+
+/**
+ * Gap wave G1 (2026-11-12): the cart status page's Pay refuses while the cart's stored session names this entry and can still
+ * land money (`completedSessionStillPays`) - a delayed debit still `processing`, a voucher waiting at `requires_action`, or a paid
+ * session whose webhook has not landed. Minting beside it would be a second payable session for the entry. Any other stored
+ * session - open (superseded after the mint, `expireSupersededCheckoutSession`), expired, a dead `complete` one, or a sibling's -
+ * is minted past. A read failure refuses (502) rather than mint beside a session that may still pay.
+ */
+async function refuseWhileCartSessionPays(sessionId: string | null, registrationId: string): Promise<void> {
+  if (!sessionId) return;
+  let stored: Stripe.Checkout.Session;
+  try {
+    stored = await getStripe().checkout.sessions.retrieve(sessionId);
+  } catch (err) {
+    log.error({ err, registrationId }, "registration: could not read the cart's stored checkout session");
+    throw storedSessionUnreadable();
+  }
+  if (stored.status !== "complete" || !checkoutRegistrationIds(stored).includes(registrationId)) return;
+  if (await completedSessionStillPays(stored, registrationId)) {
+    throw new HttpError(409, "A payment for this entry is already on its way", "REGISTRATION_PAID_ONLINE");
+  }
+}
+
 /** Resume/complete payment from the status page (pending paid regs — fresh
  *  submissions whose checkout was abandoned, and waitlist promotions). */
 export async function resumeRegistrationCheckout(
@@ -542,6 +598,7 @@ export async function resumeRegistrationCheckout(
   if (!ctx.charges_enabled) {
     throw new HttpError(503, "Payments are not set up for this organiser yet");
   }
+  await refuseWhileCartSessionPays(reg.checkout_session_id, reg.id);
   const url = await createRegistrationCheckout(reg.group_id, [reg.id], ctx, origin, token);
   return { checkout_url: url };
 }
