@@ -394,6 +394,8 @@ export function deriveRegistrantActionFlags(
   // error prose no test pins, and forced two unrelated test fixtures to be
   // reworded because their text collided with the match. Reading the same
   // value the server reads is correct on the FIRST render and cannot drift.
+  // Polish wave P5 (H-2): `division_fee_cents` is priced for THIS entry (a solo sign-up's own price, list.ts / entryPriceCents), so an
+  // unpaid solo is offered the reminder and Mark paid for what IT owes, never the team's fee.
   const feeOwed = row.division_fee_cents > 0;
   // THIS entry's own payment (V387), never the cart's `payment_intent_id` (a sibling's payment sets it): polish wave P5, P1 carry.
   const awaitingOfflineFee = row.status === "pending" && feeOwed && row.entry_payment_intent_id === null;

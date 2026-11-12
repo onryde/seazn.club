@@ -46,6 +46,19 @@ export function ownPaymentRefundedCents(row: { refunded_cents: number; late_refu
   return Math.max(0, row.refunded_cents - row.late_refunded_cents);
 }
 
+/** What ONE entry costs on its division right now (RS009): a solo sign-up pays `free_agent_fee_cents` when the organiser set one - NULL
+ *  means "no separate price", the team's - and every other entry pays `fee_cents`. 0 is a real price (free), never "unset". The ONE
+ *  definition: submit prices an entry with it, and every organiser money gate (Approve, Confirm, Mark paid, the payment reminder) and the
+ *  panel's `division_fee_cents` read it, so a solo is never reminded, marked paid or held for the TEAM's fee (polish wave P5, H-2).
+ *  No settings row prices nothing. Dependency-free, like the rest of this module. */
+export function entryPriceCents(
+  settings: { fee_cents: number | null; free_agent_fee_cents: number | null } | null | undefined,
+  freeAgent: boolean,
+): number {
+  if (!settings) return 0;
+  return freeAgent && settings.free_agent_fee_cents !== null ? settings.free_agent_fee_cents : (settings.fee_cents ?? 0);
+}
+
 /** What an entry that is not yet confirmed is still WAITING ON (polish wave P2; the mails' answer to a bare "Pending"):
  *  `payment` (its fee is owed), `approval` (a manual-approval division needs the organiser's yes) or both. `null` = nothing to
  *  name: the entry is confirmed, waitlisted, ended, or pending with neither a fee nor a manual review (a state a free auto-approval

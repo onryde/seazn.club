@@ -12,7 +12,7 @@ import "server-only";
 import type postgres from "postgres";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
-import { ownPaymentRefundedCents } from "@/lib/registration-status";
+import { entryPriceCents, ownPaymentRefundedCents } from "@/lib/registration-status";
 import { log } from "@/server/logger";
 import { deferred } from "@/lib/deferred";
 import { dispatchNow } from "@/server/email-outbox";
@@ -76,7 +76,7 @@ export async function loadApprovalSettings(tx: Tx, divisionId: string): Promise<
   const [row] = await tx<ApprovalSettingsRow[]>`
     select division_id, enabled, entrant_kind, opens_at, closes_at, capacity,
            fee_cents, refund_lock_at, form_fields, payment_method,
-           payment_instructions, updated_at, approval, allow_free_agents
+           payment_instructions, updated_at, approval, allow_free_agents, free_agent_fee_cents
     from registration_settings where division_id = ${divisionId}`;
   return row ?? null;
 }
@@ -152,7 +152,8 @@ export async function approveRegistration(
     // Polish wave P5 (W12): Approve and the payment are two decisions. An entry whose fee is still due is APPROVED and stays pending
     // (payment due); the payment - the card webhook or Mark paid - then confirms it (`approved_at`, V511). It used to be refused
     // ("mark it paid first"), so Approve could not be given before the money and Mark paid was the approval.
-    if ((settings.fee_cents ?? 0) > 0 && reg.status !== "paid" && reg.entry_payment_intent_id === null) {
+    // H-2: THIS entry's price - a solo sign-up's own, never the team's (`entryPriceCents`).
+    if (entryPriceCents(settings, reg.free_agent) > 0 && reg.status !== "paid" && reg.entry_payment_intent_id === null) {
       if (reg.approved_at !== null) return { row: reg, mailIds: [] as string[] }; // idempotent: approved once, mailed once
       await tx`update registrations set approved_at = now(), updated_at = now() where id = ${regId}`;
       await audit(tx, competitionId, auth.orgId, "registration.approved", {

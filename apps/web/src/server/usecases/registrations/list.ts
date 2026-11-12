@@ -150,7 +150,8 @@ export interface RegistrationListRow extends Omit<RegistrationWithGroupRow, "acc
    *  behaves exactly as auto (registration-approval.ts's own
    *  `loadApprovalSettings` reads it the same way). */
   approval: RegistrationSettingsRow["approval"];
-  /** The DIVISION's LIVE entry fee, not this entry's frozen `amount_cents`.
+  /** The DIVISION's LIVE entry fee, not this entry's frozen `amount_cents` - priced for THIS entry: a solo sign-up's own
+   *  `free_agent_fee_cents` when set, else `fee_cents` (polish wave P5, H-2: `entryPriceCents`, the server gates' own rule).
    *
    *  Both server gates read the live value — `approveRegistration` refuses
    *  while a fee is outstanding, `markRegistrationPaidOffline` refuses when
@@ -302,7 +303,9 @@ export async function listRegistrations(
         d.slug as division_slug,
         coalesce(rs.entrant_kind, 'individual') as entrant_kind,
         coalesce(rs.approval, 'auto') as approval,
-        coalesce(rs.fee_cents, 0) as division_fee_cents,
+        -- H-2: this ENTRY's live price (lib/registration-status.ts entryPriceCents): a solo sign-up's own when set, else the team's.
+        case when r.free_agent and rs.free_agent_fee_cents is not null then rs.free_agent_fee_cents
+             else coalesce(rs.fee_cents, 0) end as division_fee_cents,
         (select count(*)::int from registration_players rp
           where rp.registration_id = r.id) as roster_count,
         ${rosterCapExpr(tx)} as roster_cap,

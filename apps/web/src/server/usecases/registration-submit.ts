@@ -22,7 +22,7 @@ import { getLimit, requireFeature } from "@/lib/entitlements";
 import { generateRefCode } from "@/lib/ref-code";
 import { rosterDerivedName } from "@/lib/entrant-roster-name";
 import { LEGAL_VERSION } from "@/lib/legal";
-import { entryStanding, type EntryStanding } from "@/lib/registration-status";
+import { entryPriceCents, entryStanding, type EntryStanding } from "@/lib/registration-status";
 import { log } from "@/server/logger";
 import { dispatchNow } from "@/server/email-outbox";
 import {
@@ -791,10 +791,8 @@ export async function submitRegistrationGroup(
       // the team price" and is the default on every division, while 0 is a
       // real price meaning free. `||` would collapse the two and charge the
       // full team fee to a registrant the public page told was free.
-      const entryFeeCents =
-        p.input.free_agent && live.free_agent_fee_cents !== null
-          ? live.free_agent_fee_cents
-          : live.fee_cents;
+      // The ONE definition (lib/registration-status.ts), shared with every organiser money gate (polish wave P5, H-2).
+      const entryFeeCents = entryPriceCents(live, p.input.free_agent === true);
       const feeCents = waitlisted ? 0 : entryFeeCents;
       if (!waitlisted && feeCents > 0) paymentMethodsSeen.add(live.payment_method);
       const status: RegistrationRow["status"] = waitlisted ? "waitlisted" : "pending";

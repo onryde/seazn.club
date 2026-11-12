@@ -48,7 +48,7 @@ describe("SPOT_HOLDERS — single source of truth", () => {
 // the joiner's confirmation) so "Pending" is never the whole answer. Every status x fee x approval cell is enumerated; the expected
 // answers are typed from the rules (a fee is owed only while pending; a manual-approval division always needs the organiser's yes),
 // never read back from the function.
-import { entryStanding, entryWaitingOn } from "@/lib/registration-status";
+import { entryPriceCents, entryStanding, entryWaitingOn } from "@/lib/registration-status";
 
 describe("entryWaitingOn", () => {
   const STATUSES = ["pending", "paid", "confirmed", "waitlisted", "withdrawn", "expired", "rejected"] as const;
@@ -115,5 +115,30 @@ describe("entryStanding", () => {
     // An unreadable review mode names nothing, approved or not; confirmed stays confirmed.
     expect(entryStanding("pending", 2500, null, true)).toBeNull();
     expect(entryStanding("confirmed", 2500, "manual", true)).toBe("confirmed");
+  });
+});
+
+// Polish wave P5 (H-2): what one entry costs, by RS009's rule (a solo sign-up pays its own price when the organiser set one; NULL = the
+// team's; 0 is free, never "unset"). Expected values are written per row from that rule.
+describe("entryPriceCents", () => {
+  it("prices every (team fee, solo fee, solo?) shape by the rule, and a missing settings row prices nothing (counted)", () => {
+    const rows: [number, number | null, boolean, number][] = [
+      [6000, 500, true, 500],
+      [6000, 500, false, 6000],
+      [6000, 0, true, 0],
+      [6000, 0, false, 6000],
+      [6000, null, true, 6000],
+      [6000, null, false, 6000],
+      [0, 500, true, 500],
+      [0, 500, false, 0],
+    ];
+    let checked = 0;
+    for (const [fee_cents, free_agent_fee_cents, solo, want] of rows) {
+      expect(entryPriceCents({ fee_cents, free_agent_fee_cents }, solo), `${fee_cents}/${free_agent_fee_cents}/${solo}`).toBe(want);
+      checked += 1;
+    }
+    expect(checked).toBe(8);
+    expect(entryPriceCents(null, true), "the empty case: no settings row").toBe(0);
+    expect(entryPriceCents(undefined, false)).toBe(0);
   });
 });

@@ -19,7 +19,7 @@ import { stripeRefund, queueRefundReceipt } from "./refunds";
 import { withdrawCore } from "./withdraw";
 import { queueRegistrationApprovedMails, queueRegistrationPaidMail } from "./lifecycle-mail";
 import { REMINDER_CAP_PER_DAY, REMINDER_LIMIT_CODE } from "@/lib/registration-reminder";
-import { ownPaymentRefundedCents } from "@/lib/registration-status";
+import { entryPriceCents, ownPaymentRefundedCents } from "@/lib/registration-status";
 
 /** Organiser approve (free regs and waitlist overrides). Paid-division regs
  *  must be paid first — confirming an unpaid one would gift the spot. */
@@ -45,7 +45,8 @@ export async function confirmRegistration(auth: AuthCtx, regId: string): Promise
     if (reg.status === "withdrawn") throw new HttpError(422, "registration is withdrawn");
     const settings = await loadSettings(tx, reg.division_id);
     // Polish wave P5 (P1 carry): THIS entry's own payment (V387), never the cart's (a sibling's payment sets the cart's intent).
-    if ((settings?.fee_cents ?? 0) > 0 && reg.status !== "paid" && reg.entry_payment_intent_id === null) {
+    // Polish wave P5 (H-2): what THIS entry costs - a solo sign-up's own price, never the team's (`entryPriceCents`).
+    if (entryPriceCents(settings, reg.free_agent) > 0 && reg.status !== "paid" && reg.entry_payment_intent_id === null) {
       throw new HttpError(
         422,
         "Awaiting payment — use Mark paid once the fee arrives, or Confirm without payment to waive it",
@@ -111,7 +112,7 @@ export async function markRegistrationPaidOffline(
       throw new HttpError(422, "This registration was paid by card — refund it on the payments trail instead");
     }
     const settings = await loadSettings(tx, reg.division_id);
-    if ((settings?.fee_cents ?? 0) <= 0) {
+    if (entryPriceCents(settings, reg.free_agent) <= 0) {
       throw new HttpError(422, "This division has no entry fee");
     }
     const [div] = await tx<{ competition_id: string }[]>`
@@ -188,7 +189,7 @@ export async function confirmRegistrationWaived(
     await materialise(tx, reg, settings?.entrant_kind ?? "individual", seatGate);
     await audit(tx, div.competition_id, auth.orgId, "registration.fee_waived", {
       registration_id: regId,
-      fee_cents: settings?.fee_cents ?? 0,
+      fee_cents: entryPriceCents(settings, reg.free_agent),
     }, auth.userId);
     const after = await orgRegAfter(tx, regId);
     // Polish wave P2 (W2, W13): a comped entry is approved by the organiser; the registrant is told in the same transaction.
@@ -211,7 +212,7 @@ export async function sendPaymentReminder(
 ): Promise<{ sent: boolean }> {
   const reg = await withTenant(auth.orgId, (tx) => orgReg(tx, regId));
   const settings = await loadSettings(sql, reg.division_id);
-  const fee = settings?.fee_cents ?? 0;
+  const fee = entryPriceCents(settings, reg.free_agent);
   if (fee <= 0) throw new HttpError(422, "This division has no entry fee.");
   if (reg.status !== "pending") {
     throw new HttpError(422, "Payment reminders only apply to pending registrations.");
