@@ -1,4 +1,4 @@
-import { button, linkFallback, panel, paragraph, renderEmail } from "./compose";
+import { button, inlineLink, linkFallback, panel, panelHtml, paragraph, renderEmail } from "./compose";
 import { escapeHtml, isOwnEntry, money, ownKey } from "./shared";
 import { fmtPublicDeadline } from "@/lib/format";
 import { t, type Dict } from "@/lib/i18n";
@@ -27,14 +27,16 @@ export interface RegistrationEmailEntry {
   approved?: boolean;
 }
 
-/** One "forward this link" line of the confirmation mail (polish wave P6): the team's join link for a team, the partner's claim
- *  link for a pair. `url` is the ABSOLUTE join url - a capability (whoever holds the code can join the entry), so only a producer
- *  that already holds the cart token passes one (`buildCartMail` gates it exactly like the Pay button). */
+/** One entry's "forward these links" block of the confirmation mail (polish wave P6; labelled per person in waves I and K): one
+ *  link per teammate still to join (their own claim link, named), then for a team the general link (`name: null`, "Link for anyone
+ *  else"). Each `url` is the ABSOLUTE join url - a capability (whoever holds the code can join the entry), so only a producer that
+ *  already holds the cart token passes one (`buildCartMail` gates it exactly like the Pay button). */
 export interface RegistrationEmailInvite {
   displayName: string;
   divisionName: string;
   kind: "team" | "pair";
-  url: string;
+  /** In roster order, the general link last. Empty = nothing to invite to: the entry gets no block. */
+  links: { name: string | null; url: string }[];
 }
 
 /** RS005 W4 — cart-shaped (owner ruling 2026-08-25): one email per cart,
@@ -262,17 +264,26 @@ export function registrationTemplate(
         ? "\n\n" + t(dict, "registration.textFeeContactOrganiser", { amount })
         : "";
 
-  // "Invite your teammates": the join link is meant to be FORWARDED, so it is a panel the captain copies from, not a button.
-  // The panel's own escaping covers the url's `&`; the text part carries it verbatim.
-  const invites = opts.invites ?? [];
+  // "Invite your teammates": the links are meant to be FORWARDED, so it is a panel the captain copies from, not a button. Each link
+  // is labelled with whose it is (waves I and K: three identical-looking URLs confused the captain): in html a hyperlink on the label,
+  // in text the label and the url on one line. `inlineLink` escapes the label and the url's `&`; the text part carries both verbatim.
+  const invites = (opts.invites ?? []).filter((i) => i.links.length > 0);
   const inviteParts = invites.map((i) => {
     const names = { displayName: i.displayName, divisionName: i.divisionName };
     const title = t(dict, i.kind === "pair" ? "registration.invitePanelTitlePair" : "registration.invitePanelTitleTeam", names);
     const body = t(dict, i.kind === "pair" ? "registration.inviteBodyPair" : "registration.inviteBodyTeam", names);
-    return { title, body, url: i.url };
+    const links = i.links.map((l) => ({
+      label: l.name === null ? t(dict, "registration.inviteLinkAnyone") : t(dict, "registration.inviteLinkFor", { name: l.name }),
+      url: l.url,
+    }));
+    return { title, body, links };
   });
-  const inviteBlock = inviteParts.map((i) => panel(i.title, i.body + "\n" + i.url)).join("");
-  const inviteText = inviteParts.map((i) => "\n\n" + i.title + "\n" + i.body + "\n" + i.url).join("");
+  const inviteBlock = inviteParts
+    .map((i) => panelHtml(i.title, escapeHtml(i.body) + "\n" + i.links.map((l) => inlineLink(l.label, l.url)).join("\n")))
+    .join("");
+  const inviteText = inviteParts
+    .map((i) => "\n\n" + i.title + "\n" + i.body + i.links.map((l) => "\n" + t(dict, "registration.inviteTextLine", { label: l.label, url: l.url })).join(""))
+    .join("");
 
   const subject = t(dict, "registration.subject", { competitionName: opts.competitionName });
   return {

@@ -65,6 +65,20 @@ export function panel(title: string, body: string): string {
   });
 }
 
+/** The same panel with an HTML body (polish wave I: a panel that carries hyperlinks). The caller escapes every interpolated value;
+ *  newlines are still preserved (pre-line). */
+export function panelHtml(title: string, bodyHtml: string): string {
+  return fill(tpl("blocks/panel.html"), {
+    PANEL_TITLE: escapeHtml(title),
+    PANEL_BODY: bodyHtml,
+  });
+}
+
+/** An inline hyperlink in the body's accent colour: `label` is the visible text, `url` the target. Both are escaped here. */
+export function inlineLink(label: string, url: string): string {
+  return `<a href="${escapeHtml(url)}" target="_blank" style="color:#6931c9;font-weight:600;text-decoration:underline;">${escapeHtml(label)}</a>`;
+}
+
 /** "Button not working?" plain-URL fallback. */
 export function linkFallback(url: string): string {
   return fill(tpl("blocks/link-fallback.html"), { FALLBACK_URL: escapeHtml(url) });

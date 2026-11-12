@@ -7,6 +7,7 @@ import { registrationEmail, paymentReminderEmail } from "@/lib/email";
 import type { RegistrationEmailArgs, RegistrationEmailInvite } from "@/lib/email-templates";
 import { routes } from "@/lib/routes";
 import { joinLinkPath } from "@/lib/join-link";
+import { resolvePersonDisplayName } from "@/lib/name-display";
 import { resolveVenueTz } from "@/lib/tz";
 import { type Locale } from "@/lib/i18n-constants";
 import { deferred } from "@/lib/deferred";
@@ -194,11 +195,12 @@ export async function buildCartMail(
 }
 
 /**
- * "Invite your teammates" for the confirmation mail (polish wave P6): one link per team / pair entry of the cart that can still
- * take people, in the entry order the mail lists them. A TEAM gets its general join link; a PAIR gets its partner's claim link
- * (`player_id` = the one pending slot the captain typed), or the general link - the picker - when two or more slots are pending, and
- * nothing when none is (the pair is complete). Dead entries (withdrawn / rejected / expired), free agents and individual entries
- * have no join code to hand out, so they get no line. The links are capabilities: the caller only asks for them when it holds the
+ * "Invite your teammates" for the confirmation mail (polish wave P6; labelled per person in waves I and K): for each team / pair entry
+ * of the cart that can still take people, in the entry order the mail lists them, the SAME links the status page's invite block
+ * offers (`inviteLinks`, register/status/view-model.ts): one per roster slot still to join (`consent_status = 'pending'`, roster order,
+ * named by the roster's own masked name), then for a team the general link. A pair has no general link (its roster is fixed at two),
+ * so a complete pair has nothing and gets no block. Dead entries (withdrawn / rejected / expired), free agents and individual entries
+ * have no join code to hand out, so they get no block. The links are capabilities: the caller only asks for them when it holds the
  * cart token, exactly like the Pay button.
  *
  * Nothing here says who was already emailed: nothing mails a typed, unclaimed teammate (`claim_invite` goes to a teammate who has
@@ -212,28 +214,37 @@ async function cartInvites(
   compSlug: string,
 ): Promise<RegistrationEmailInvite[]> {
   const rows = await sql<
-    { id: string; join_code: string; entrant_kind: "team" | "individual" | "pair"; pending_count: number; first_pending_id: string | null }[]
+    { id: string; join_code: string; entrant_kind: "team" | "individual" | "pair"; youth: boolean; player_name_display: string | null }[]
   >`
-    select r.id, r.join_code, rs.entrant_kind,
-           (select count(*)::int from registration_players p
-             where p.registration_id = r.id and p.source = 'captain_entered' and p.consent_status = 'pending') as pending_count,
-           (select p.id from registration_players p
-             where p.registration_id = r.id and p.source = 'captain_entered' and p.consent_status = 'pending'
-             order by p.squad_number nulls last, p.created_at limit 1) as first_pending_id
+    select r.id, r.join_code, rs.entrant_kind, d.youth, d.player_name_display
     from registrations r
     join registration_settings rs on rs.division_id = r.division_id
+    join divisions d on d.id = r.division_id
     where r.group_id = ${groupId} and r.join_code is not null and not r.free_agent`;
+  if (rows.length === 0) return [];
+  // The roster's own order and masking, as the status page reads them (group-status.ts): `order by rp.created_at`, and the name
+  // through the same resolver with the linked person's consent and the division's policy.
+  const pending = await sql<{ id: string; registration_id: string; full_name: string; person_consent: { public_name?: boolean } | null }[]>`
+    select rp.id, rp.registration_id, rp.full_name, p.consent as person_consent
+    from registration_players rp
+    left join persons p on p.id = rp.person_id
+    where rp.registration_id in ${sql(rows.map((r) => r.id))} and rp.consent_status = 'pending'
+    order by rp.created_at`;
   const byId = new Map(rows.map((r) => [r.id, r]));
   const invites: RegistrationEmailInvite[] = [];
   for (const e of entries) {
     const r = byId.get(e.id);
     if (!r || isTerminalRegistrationStatus(e.status)) continue;
-    if (r.entrant_kind === "team") {
-      invites.push({ displayName: e.display_name, divisionName: e.division_name, kind: "team", url: `${origin}${joinLinkPath(orgSlug, compSlug, r.join_code)}` });
-    } else if (r.entrant_kind === "pair" && r.pending_count > 0) {
-      const playerId = r.pending_count === 1 ? (r.first_pending_id ?? undefined) : undefined;
-      invites.push({ displayName: e.display_name, divisionName: e.division_name, kind: "pair", url: `${origin}${joinLinkPath(orgSlug, compSlug, r.join_code, playerId)}` });
-    }
+    if (r.entrant_kind !== "team" && r.entrant_kind !== "pair") continue;
+    const links: RegistrationEmailInvite["links"] = pending
+      .filter((p) => p.registration_id === r.id)
+      .map((p) => ({
+        name: resolvePersonDisplayName(p.full_name, p.person_consent, r.player_name_display, r.youth),
+        url: `${origin}${joinLinkPath(orgSlug, compSlug, r.join_code, p.id)}`,
+      }));
+    if (r.entrant_kind === "team") links.push({ name: null, url: `${origin}${joinLinkPath(orgSlug, compSlug, r.join_code)}` });
+    if (links.length === 0) continue;
+    invites.push({ displayName: e.display_name, divisionName: e.division_name, kind: r.entrant_kind, links });
   }
   return invites;
 }

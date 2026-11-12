@@ -345,16 +345,15 @@ test("RS007 witness — cancelling one of two cart entries drops the subtotal to
     await anon.screenshot({ path: `${SHOTS}/10-status-paid-and-waitlisted.png`, fullPage: true });
 
     // ---- STEP 4/BEATS 11-12 — the claim link, FOLLOWED (rs007-registration-
-    // journey.spec.ts's idiom): read the anchor the page emits, click it,
+    // journey.spec.ts's idiom): read the link the page emits, follow it,
     // never construct the URL. Scoped to entry A, the surviving one.
-    const claim = teamACard.locator('a[href*="/register/join"]').first();
+    // Polish wave K: the status page prints no URL; each link rides its Copy button as data-href. Read exactly as emitted, never built.
+    const claim = teamACard.locator('[data-testid="reg-invite-copy"][data-href*="/register/join"]').first();
     await expect(claim, "team A's card emits no claim link").toBeVisible();
-    const href = await claim.getAttribute("href");
+    const href = await claim.getAttribute("data-href");
     expect(href, "the claim link carries no join_code").toContain("join_code=");
-    const [claimResponse] = await Promise.all([
-      anon.waitForResponse((r) => r.url().includes("/register/join") && r.request().isNavigationRequest()),
-      claim.click(),
-    ]);
+    const claimResponse = await anon.goto(href!, { waitUntil: "load" });
+    if (!claimResponse) throw new Error("following the invite link produced no navigation response");
     expect(claimResponse.status(), `claim link resolved to ${claimResponse.status()}`).toBeLessThan(400);
     await expect(anon.getByText(MATES_A[0]!).first()).toBeVisible();
     await anon.screenshot({ path: `${SHOTS}/11-claim-join-form.png`, fullPage: true });

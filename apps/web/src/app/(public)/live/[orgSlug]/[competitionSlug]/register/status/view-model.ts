@@ -347,13 +347,16 @@ export function claimHref(
 }
 
 /** What a captain can hand out to bring people onto an entry (polish wave P6): one link per UNCLAIMED roster slot (opens the join page
- *  with that slot already chosen) and, for a team, the general link anyone joining can use. A pair has no general link (its roster is
+ *  with that slot already chosen) and, for a team, the general link anyone joining can use. Every slot is listed with whether its
+ *  person has joined (polish wave K): the block names the whole roster, and only a slot still to join carries a link. A pair has no general link (its roster is
  *  fixed at two: `joinTeamEntry` 422s the insert-a-new-person path), so only its partner's slot link is real. The URLs are written by
  *  the block that shows them (`joinLinkPath`, lib/join-link.ts); this says WHICH exist. */
 export interface InviteLinks {
   /** The code the links are built from, narrowed to non-null by the gate below. */
   joinCode: string;
-  slots: { id: string }[];
+  /** Every roster slot, in roster order. `joined`: the person has taken the place (granted or guardian consent), so the slot has no
+   *  link to hand out. */
+  slots: { id: string; joined: boolean }[];
   generic: boolean;
 }
 
@@ -370,8 +373,9 @@ export function inviteLinks(entry: {
   players: { id: string; consent_status: "pending" | "granted" | "guardian" }[];
 }): InviteLinks | null {
   if (!entry.join_code || !canJoinEntry(entry.status)) return null;
-  const slots = entry.players.filter((p) => p.consent_status === "pending").map((p) => ({ id: p.id }));
-  if (slots.length === 0 && !entry.allows_new_joiner) return null;
+  const slots = entry.players.map((p) => ({ id: p.id, joined: p.consent_status !== "pending" }));
+  // Something to hand out: a slot still to join, or a team that may still grow. A complete pair has no link left.
+  if (!slots.some((slot) => !slot.joined) && !entry.allows_new_joiner) return null;
   return { joinCode: entry.join_code, slots, generic: entry.allows_new_joiner };
 }
 

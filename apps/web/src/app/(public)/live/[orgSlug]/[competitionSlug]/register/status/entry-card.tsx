@@ -430,7 +430,7 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
             orgSlug={orgSlug}
             competitionSlug={competitionSlug}
             joinCode={invites.joinCode}
-            slots={invites.slots.map((slot) => ({ id: slot.id, name: displayNameById.get(slot.id) ?? "" }))}
+            slots={invites.slots.map((slot) => ({ id: slot.id, name: displayNameById.get(slot.id) ?? "", joined: slot.joined }))}
             generic={invites.generic}
           />
         )}

@@ -553,12 +553,30 @@ describe("inviteLinks", () => {
     ...over,
   });
 
-  it("a team on a live entry: one slot per UNCLAIMED player (granted and guardian are claimed), in roster order, and the general link", () => {
-    expect(inviteLinks(entry())).toEqual({ joinCode: "JOIN123", slots: [{ id: "p2" }, { id: "p3" }], generic: true });
+  // Polish wave K (owner feedback): the block names EVERY roster slot with whether that person has joined, so the captain sees who is
+  // still to come; only a slot still to join gets a link. Granted and guardian are joined.
+  it("a team on a live entry: every slot in roster order, joined or not (granted and guardian are joined), and the general link", () => {
+    expect(inviteLinks(entry())).toEqual({
+      joinCode: "JOIN123",
+      slots: [
+        { id: "p1", joined: true },
+        { id: "p2", joined: false },
+        { id: "p3", joined: false },
+        { id: "p4", joined: true },
+      ],
+      generic: true,
+    });
   });
 
-  it("a pair (allows_new_joiner false): the partner's slot and NO general link", () => {
-    expect(inviteLinks(entry({ allows_new_joiner: false, players: players.slice(0, 2) }))).toEqual({ joinCode: "JOIN123", slots: [{ id: "p2" }], generic: false });
+  it("a pair (allows_new_joiner false): both slots, the partner still to join, and NO general link", () => {
+    expect(inviteLinks(entry({ allows_new_joiner: false, players: players.slice(0, 2) }))).toEqual({
+      joinCode: "JOIN123",
+      slots: [
+        { id: "p1", joined: true },
+        { id: "p2", joined: false },
+      ],
+      generic: false,
+    });
   });
 
   it("every dead status offers nothing, however much else is still true; every live status offers links (counted, both directions)", () => {
@@ -583,7 +601,11 @@ describe("inviteLinks", () => {
 
   it("empty case: a team with every slot claimed still offers the general link; a pair with every slot claimed offers nothing", () => {
     const claimed = players.map((p) => ({ ...p, consent_status: "granted" as const }));
-    expect(inviteLinks(entry({ players: claimed }))).toEqual({ joinCode: "JOIN123", slots: [], generic: true });
+    expect(inviteLinks(entry({ players: claimed }))).toEqual({
+      joinCode: "JOIN123",
+      slots: claimed.map((p) => ({ id: p.id, joined: true })),
+      generic: true,
+    });
     expect(inviteLinks(entry({ players: claimed, allows_new_joiner: false }))).toBeNull();
   });
 

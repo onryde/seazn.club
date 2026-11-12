@@ -281,9 +281,10 @@ test("configure, register, join, waitlist, approve, opt-out — every screen agr
     // status page emits (never constructed), the mate claiming their own
     // named row through the real /register/join UI.
     // =============================================================
-    const claim = captainPage.locator('a[href*="/register/join"]').first();
+    // Polish wave K: the status page prints no URL; each link rides its Copy button as data-href. Read exactly as emitted, never built.
+    const claim = captainPage.locator('[data-testid="reg-invite-copy"][data-href*="/register/join"]').first();
     await expect(claim, "the status page emits no claim link for the pending team-mate row").toBeVisible();
-    const claimHref = await claim.getAttribute("href");
+    const claimHref = await claim.getAttribute("data-href");
     expect(claimHref, "the claim link carries no join_code").toContain("join_code=");
 
     const matePage = await anonB.newPage();
