@@ -23,10 +23,14 @@ const stripeUnavailable = () =>
  * 1. the page's document at press time (`null` → 404) - so an organiser's switch to offline, a mark-paid or a waiver after the
  *    page loaded, or a passed deadline the hourly sweep has not caught yet, refuses here: anything but `pay` → 409;
  * 2. Connect live, else 503 - before any reuse, so a disabled account is handed nothing;
- * 3. the stored session, if any: `complete` → 409 (paid in Stripe, the webhook has not landed); `open`, covering exactly this
- *    entry and with more than the margin left → handed out again (no mint); any other `open` one → expired first;
+ * 3. the stored session, if any: `complete` and paid, or `complete` with a delayed-method payment (SEPA, Bacs) still
+ *    `processing` → 409 (the money is in flight, the webhook has not landed); `complete` with any other payment state - a delayed
+ *    payment that FAILED leaves the session `complete` + `unpaid` forever - is dead and minted past (nothing to expire); `open`,
+ *    covering exactly this entry and with more than the margin left → handed out again (no mint); any other `open` one →
+ *    expired first;
  * 4. one mint for `[entry]` returning to the page, claiming the pointer on the value read in 3.
- * A Stripe failure reading or expiring the stored session refuses (502) rather than mint beside a session that may still pay.
+ * A Stripe failure reading or expiring the stored session (or its PaymentIntent) refuses (502) rather than mint beside a session
+ * that may still pay.
  */
 export async function payFromPayPage(token: string, origin: string, now: Date = new Date()): Promise<string> {
   const doc = await payPageDocByToken(token, now);
@@ -53,7 +57,7 @@ export async function payFromPayPage(token: string, origin: string, now: Date = 
       log.error({ err, registrationId: doc.registrationId }, "registration pay page: could not read the stored session");
       throw stripeUnavailable();
     }
-    if (stored.status === "complete") {
+    if (stored.status === "complete" && (await completedSessionStillPays(stored, doc.registrationId))) {
       throw new HttpError(409, "This entry has already been paid", "REGISTRATION_PAID_ONLINE");
     }
     if (stored.status === "open") {
@@ -73,4 +77,23 @@ export async function payFromPayPage(token: string, origin: string, now: Date = 
 
   const returnBase = `${origin}${registrationPayPath(token)}?src=pay`;
   return mintEntryPayPageCheckout(doc.groupId, doc.registrationId, ctx, origin, returnBase, read);
+}
+
+/**
+ * Whether a `complete` session still stands for money: `payment_status` `paid`, or `unpaid` behind a PaymentIntent that is
+ * `processing` (a delayed method between the customer's confirmation and the bank's answer). Anything else - the intent back at
+ * `requires_payment_method` after a failed debit, cancelled, none at all - is a dead session the player must be able to pay past.
+ */
+async function completedSessionStillPays(stored: Stripe.Checkout.Session, registrationId: string): Promise<boolean> {
+  if (stored.payment_status === "paid") return true;
+  if (stored.payment_status !== "unpaid") return false;
+  const pi = stored.payment_intent;
+  if (pi === null) return false;
+  if (typeof pi !== "string") return pi.status === "processing";
+  try {
+    return (await getStripe().paymentIntents.retrieve(pi)).status === "processing";
+  } catch (err) {
+    log.error({ err, registrationId }, "registration pay page: could not read the stored session's payment");
+    throw stripeUnavailable();
+  }
 }

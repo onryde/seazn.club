@@ -30,6 +30,9 @@ interface FakeSession {
   status: "open" | "complete" | "expired";
   payment_status: "unpaid" | "paid";
   payment_intent: string | null;
+  /** The PaymentIntent's own status behind a `complete` session (delayed methods: `processing`, then `succeeded` or back to
+   *  `requires_payment_method` on failure). Read through `paymentIntents.retrieve`, the way `payFromPayPage` reads it. */
+  pi_status?: string;
   url: string | null;
   expires_at: number;
   metadata: Record<string, string>;
@@ -46,6 +49,7 @@ const stripeMock = vi.hoisted(() => {
     checkoutRetrieve: vi.fn(),
     checkoutExpire: vi.fn(),
     refundCreate: vi.fn(),
+    paymentIntentRetrieve: vi.fn(),
   };
 });
 vi.mock("@/lib/stripe", () => ({
@@ -58,6 +62,7 @@ vi.mock("@/lib/stripe", () => ({
       },
     },
     refunds: { create: stripeMock.refundCreate },
+    paymentIntents: { retrieve: stripeMock.paymentIntentRetrieve },
   }),
 }));
 
@@ -81,6 +86,7 @@ vi.mock("@/server/usecases/registrations/pay-page", async (importOriginal) => {
 
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { isPayConfirming } from "@/lib/registration-pay";
 import { __setRateLimitCounterForTests } from "@/lib/rate-limit";
 import {
   issuePayLink,
@@ -90,6 +96,7 @@ import {
   type PayPageState,
   mintGroupCheckout,
   handleRegistrationCheckoutCompleted,
+  handleRegistrationCheckoutAsyncPaymentFailed,
   markRegistrationPaidOffline,
   putRegistrationSettings,
   payFromPayPage,
@@ -150,6 +157,11 @@ beforeEach(() => {
     return { ...s };
   });
   stripeMock.refundCreate.mockReset().mockImplementation(async () => ({ id: "re_test_" + randomUUID().slice(0, 8) }));
+  stripeMock.paymentIntentRetrieve.mockReset().mockImplementation(async (id: string) => {
+    const s = [...stripeMock.store.values()].find((x) => x.payment_intent === id);
+    if (!s?.pi_status) throw Object.assign(new Error(`No such payment_intent: ${id}`), { code: "resource_missing" });
+    return { id, object: "payment_intent", status: s.pi_status };
+  });
 });
 
 afterEach(() => {
@@ -190,6 +202,18 @@ async function rejection(p: Promise<unknown>): Promise<HttpError> {
   );
   expect(err).toBeInstanceOf(HttpError);
   return err as HttpError;
+}
+
+/** A delayed-method (SEPA/Bacs) completion: Stripe marks the session `complete` with `payment_status: "unpaid"` while the
+ *  PaymentIntent is `processing`; a later failure leaves the session exactly so and moves the intent back to
+ *  `requires_payment_method` (Stripe: "Checkout Session object", payment_status; "Payment Intents", status lifecycle). */
+function completeDelayed(id: string, piStatus: "processing" | "requires_payment_method"): Stripe.Checkout.Session {
+  const s = stripeMock.store.get(id)!;
+  s.status = "complete";
+  s.payment_status = "unpaid";
+  s.payment_intent = "pi_test_d" + id.slice(-6) + randomUUID().slice(0, 4);
+  s.pi_status = piStatus;
+  return { ...s } as unknown as Stripe.Checkout.Session;
 }
 
 function createdParams(i: number): Stripe.Checkout.SessionCreateParams {
@@ -375,6 +399,101 @@ describe.skipIf(!HAS_DB)("payFromPayPage (player payment page, Task 3)", () => {
     expect(err.code).toBe("REGISTRATION_PAID_ONLINE");
     expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(1); // the first press only
     expect(stripeMock.checkoutExpire).not.toHaveBeenCalled();
+  });
+
+  it("stored session complete + paid → 409 PAID_ONLINE, no intent read, zero create (final review, item 1)", async () => {
+    const { reg } = await cardEntry();
+    const token = await linkFor(reg);
+    await payFromPayPage(token, ORIGIN);
+    const s1 = (await payPointer(reg.id))!;
+    payInStripe(s1);
+
+    const err = await rejection(payFromPayPage(token, ORIGIN));
+    expect(err.code).toBe("REGISTRATION_PAID_ONLINE");
+    expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(1);
+    expect(stripeMock.paymentIntentRetrieve).not.toHaveBeenCalled();
+    expect(await payPointer(reg.id)).toBe(s1);
+  });
+
+  it("stored session complete + delayed payment still processing → 409 PAID_ONLINE (recording), no mint (final review, item 1)", async () => {
+    const { reg } = await cardEntry();
+    const token = await linkFor(reg);
+    await payFromPayPage(token, ORIGIN);
+    const s1 = (await payPointer(reg.id))!;
+    completeDelayed(s1, "processing");
+
+    const err = await rejection(payFromPayPage(token, ORIGIN));
+    expect(err.status).toBe(409);
+    expect(err.code).toBe("REGISTRATION_PAID_ONLINE");
+    expect(stripeMock.paymentIntentRetrieve).toHaveBeenCalledTimes(1);
+    expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(1); // the first press only
+    expect(stripeMock.checkoutExpire).not.toHaveBeenCalled();
+    expect(await payPointer(reg.id)).toBe(s1);
+  });
+
+  it("stored session complete + delayed payment FAILED (webhook not landed) → a fresh session, pointer moved, never 'recording' (final review, item 1)", async () => {
+    const { reg } = await cardEntry();
+    const token = await linkFor(reg);
+    await payFromPayPage(token, ORIGIN);
+    const s1 = (await payPointer(reg.id))!;
+    completeDelayed(s1, "requires_payment_method");
+
+    const url = await payFromPayPage(token, ORIGIN);
+
+    expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(2);
+    const s2 = (await payPointer(reg.id))!;
+    expect(s2).not.toBe(s1);
+    expect(url).toBe(stripeMock.store.get(s2)!.url);
+    expect(stripeMock.checkoutExpire).not.toHaveBeenCalled(); // a complete session cannot be expired
+    expect(payableFor(reg.id)).toEqual([s2]);
+  });
+
+  it("an intent read failure on a complete + unpaid session refuses 502, zero create (never mint beside a session that may still pay)", async () => {
+    const { reg } = await cardEntry();
+    const token = await linkFor(reg);
+    await payFromPayPage(token, ORIGIN);
+    const s1 = (await payPointer(reg.id))!;
+    completeDelayed(s1, "processing");
+    stripeMock.paymentIntentRetrieve.mockRejectedValueOnce(new Error("stripe down"));
+
+    const err = await rejection(payFromPayPage(token, ORIGIN));
+    expect(err.status).toBe(502);
+    expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it("the async_payment_failed webhook clears the entry's pointer to that session (only that one): the old success return no longer reads as confirming, and Pay mints", async () => {
+    const { reg } = await cardEntry();
+    const token = await linkFor(reg);
+    await payFromPayPage(token, ORIGIN);
+    const s1 = (await payPointer(reg.id))!;
+    const failed = completeDelayed(s1, "requires_payment_method");
+    const ret = { checkout: "success", session_id: s1 };
+    expect(isPayConfirming((await payPageDocByToken(token, new Date()))!, ret)).toBe(true); // processing window
+
+    await handleRegistrationCheckoutAsyncPaymentFailed(failed);
+
+    expect(await payPointer(reg.id)).toBeNull();
+    const doc = (await payPageDocByToken(token, new Date()))!;
+    expect(doc.state).toBe("pay");
+    expect(isPayConfirming(doc, ret)).toBe(false);
+    await payFromPayPage(token, ORIGIN);
+    expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(2);
+    expect(await payPointer(reg.id)).not.toBe(s1);
+  });
+
+  it("a stale async_payment_failed for an older session leaves the entry's CURRENT pointer alone", async () => {
+    const { reg } = await cardEntry();
+    const token = await linkFor(reg);
+    await payFromPayPage(token, ORIGIN);
+    const s1 = (await payPointer(reg.id))!;
+    const failed = completeDelayed(s1, "requires_payment_method");
+    await payFromPayPage(token, ORIGIN); // dead session → fresh one
+    const s2 = (await payPointer(reg.id))!;
+    expect(s2).not.toBe(s1);
+
+    await handleRegistrationCheckoutAsyncPaymentFailed(failed);
+
+    expect(await payPointer(reg.id)).toBe(s2);
   });
 
   it("charges_enabled false → 503, zero create (Review Focus 5)", async () => {

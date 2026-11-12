@@ -185,8 +185,13 @@ export async function handleRegistrationCheckoutCompleted(
  * `handleRegistrationCheckoutCompleted` never ran fulfilment for this session
  * (it gates on `payment_status`, and a failed session never reaches `paid`),
  * so there is nothing to undo — every named entry is left exactly where it
- * is, still `pending`, still payable. Only the failure is recorded, the same
- * "audit but do not act" shape as `registration.refund_failed` above.
+ * is, still `pending`, still payable. The failure is recorded, the same
+ * "audit but do not act" shape as `registration.refund_failed` above, and an
+ * entry whose payment-page pointer (`pay_session_id`) still names THIS session
+ * drops it - so the page's Stripe success return for the dead session no
+ * longer reads as "confirming", and the next Pay mints from an empty pointer.
+ * Conditional on the session id, so a later session the page already moved
+ * to is never cleared by a stale failure.
  */
 export async function handleRegistrationCheckoutAsyncPaymentFailed(
   session: Stripe.Checkout.Session,
@@ -207,6 +212,9 @@ export async function handleRegistrationCheckoutAsyncPaymentFailed(
       null,
     );
   }
+  await sql`
+    update registrations set pay_session_id = null, updated_at = now()
+    where id in ${sql(regIds)} and pay_session_id = ${session.id}`;
 }
 
 type PayOutcome =
