@@ -177,7 +177,7 @@ test("the real cap: five live quick matches on one visitor, and the sixth Start 
   await expect(side(page, 2)).toHaveValue(`Cap B ${TAG}`);
 });
 
-test("without the script the page still works: Start is live, only the chosen sport can be picked, and the plain post lands on the home (I1)", async ({ browser }, info) => {
+test("without the script: the page says it needs JavaScript, Start is live, only the chosen sport can be picked, and on this harness (bot check skipped; a deployed server refuses the post) the plain post lands on the home (I1)", async ({ browser }, info) => {
   // The plain post carries no bot-check token. It lands here because e2e's server is a harness (ENV_NAME ci), which skips
   // Cloudflare Turnstile (server/turnstile.ts `turnstileMode`); a deployed server refuses it with
   // QUICK_MATCH_TURNSTILE_FAILED, as #1136's forms are refused without the script (create-route.test.ts, the bot-check block).
