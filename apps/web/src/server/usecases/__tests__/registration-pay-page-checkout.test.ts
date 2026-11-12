@@ -207,7 +207,7 @@ async function rejection(p: Promise<unknown>): Promise<HttpError> {
 /** A delayed-method (SEPA/Bacs) completion: Stripe marks the session `complete` with `payment_status: "unpaid"` while the
  *  PaymentIntent is `processing`; a later failure leaves the session exactly so and moves the intent back to
  *  `requires_payment_method` (Stripe: "Checkout Session object", payment_status; "Payment Intents", status lifecycle). */
-function completeDelayed(id: string, piStatus: "processing" | "requires_payment_method"): Stripe.Checkout.Session {
+function completeDelayed(id: string, piStatus: Stripe.PaymentIntent.Status): Stripe.Checkout.Session {
   const s = stripeMock.store.get(id)!;
   s.status = "complete";
   s.payment_status = "unpaid";
@@ -446,6 +446,82 @@ describe.skipIf(!HAS_DB)("payFromPayPage (player payment page, Task 3)", () => {
     expect(url).toBe(stripeMock.store.get(s2)!.url);
     expect(stripeMock.checkoutExpire).not.toHaveBeenCalled(); // a complete session cannot be expired
     expect(payableFor(reg.id)).toEqual([s2]);
+  });
+
+  // A `complete` + `unpaid` session is dead ONLY when its PaymentIntent cannot collect any more: back at
+  // `requires_payment_method` after a failed debit, or `canceled`. Every other status can still land money - `requires_action`
+  // is a voucher / bank-transfer method (customer_balance, OXXO, Boleto, Konbini) waiting for the customer to pay, and
+  // `succeeded` can precede the session's own `payment_status` flip - so minting a second session beside it risks a double charge.
+  // Typed as a Record over Stripe's own status union, so a status Stripe adds fails tsc until it is classified here.
+  const PI_STATUS_STILL_PAYS: Record<Stripe.PaymentIntent.Status, boolean> = {
+    requires_payment_method: false,
+    canceled: false,
+    processing: true,
+    requires_action: true,
+    requires_confirmation: true,
+    requires_capture: true,
+    succeeded: true,
+  };
+  const STILL_PAYS = Object.entries(PI_STATUS_STILL_PAYS).filter(([, live]) => live).map(([st]) => st as Stripe.PaymentIntent.Status);
+  const DEAD = Object.entries(PI_STATUS_STILL_PAYS).filter(([, live]) => !live).map(([st]) => st as Stripe.PaymentIntent.Status);
+
+  it("the status table classifies both sides (anti-vacuity: a sweep over zero statuses proves nothing)", () => {
+    expect(STILL_PAYS.length).toBeGreaterThanOrEqual(5);
+    expect(DEAD).toEqual(expect.arrayContaining(["requires_payment_method", "canceled"]));
+    expect(DEAD).toHaveLength(2);
+  });
+
+  it.each(STILL_PAYS)(
+    "stored session complete + unpaid, PaymentIntent %s → 409 PAID_ONLINE, no mint, pointer kept (money can still arrive)",
+    async (piStatus) => {
+      const { reg } = await cardEntry();
+      const token = await linkFor(reg);
+      await payFromPayPage(token, ORIGIN);
+      const s1 = (await payPointer(reg.id))!;
+      completeDelayed(s1, piStatus);
+
+      const err = await rejection(payFromPayPage(token, ORIGIN));
+      expect(err.status).toBe(409);
+      expect(err.code).toBe("REGISTRATION_PAID_ONLINE");
+      expect(stripeMock.paymentIntentRetrieve).toHaveBeenCalledTimes(1);
+      expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(1); // the first press only
+      expect(stripeMock.checkoutExpire).not.toHaveBeenCalled();
+      expect(await payPointer(reg.id)).toBe(s1);
+    },
+  );
+
+  it.each(DEAD)(
+    "stored session complete + unpaid, PaymentIntent %s → a fresh session, pointer moved (nothing can still pay)",
+    async (piStatus) => {
+      const { reg } = await cardEntry();
+      const token = await linkFor(reg);
+      await payFromPayPage(token, ORIGIN);
+      const s1 = (await payPointer(reg.id))!;
+      completeDelayed(s1, piStatus);
+
+      const url = await payFromPayPage(token, ORIGIN);
+
+      expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(2);
+      const s2 = (await payPointer(reg.id))!;
+      expect(s2).not.toBe(s1);
+      expect(url).toBe(stripeMock.store.get(s2)!.url);
+      expect(payableFor(reg.id)).toEqual([s2]);
+    },
+  );
+
+  it("stored session complete + unpaid with NO PaymentIntent at all → a fresh session (nothing to collect), no intent read", async () => {
+    const { reg } = await cardEntry();
+    const token = await linkFor(reg);
+    await payFromPayPage(token, ORIGIN);
+    const s1 = (await payPointer(reg.id))!;
+    const stored = stripeMock.store.get(s1)!;
+    stored.status = "complete"; // payment_status stays "unpaid", payment_intent stays null
+
+    await payFromPayPage(token, ORIGIN);
+
+    expect(stripeMock.paymentIntentRetrieve).not.toHaveBeenCalled();
+    expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(2);
+    expect(await payPointer(reg.id)).not.toBe(s1);
   });
 
   it("an intent read failure on a complete + unpaid session refuses 502, zero create (never mint beside a session that may still pay)", async () => {
