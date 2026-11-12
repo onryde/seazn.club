@@ -85,7 +85,8 @@ export function registrationPaidTemplate(
       state: t(dict, e.confirmed ? `${ns}.lineConfirmed` : `${ns}.lineApproval`),
     });
   const count = String(opts.entries.length);
-  const listHtml = `<ul style="margin:0 0 16px;padding-left:20px;font-size:15px;line-height:1.6;">${opts.entries.map((e) => `<li>${line(e, escapeHtml)}</li>`).join("")}</ul>`;
+  // The house type (html/blocks/paragraph.html's stack and colour): a bare <ul> rendered in the mail client's default serif (V4).
+  const listHtml = `<ul style="margin:0 0 16px;padding-left:20px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.6;color:#3d3849;">${opts.entries.map((e) => `<li>${line(e, escapeHtml)}</li>`).join("")}</ul>`;
   return {
     subject,
     html: renderEmail({

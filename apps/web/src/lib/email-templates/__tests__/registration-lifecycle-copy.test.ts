@@ -271,3 +271,34 @@ describe("the rejection's refund line (polish wave P5)", () => {
     expect(words(without.html)).not.toContain(DUE);
   });
 });
+
+// Polish wave sign-off V4: the paid cart mail's entry list rendered in the mail client's default serif - the one block of the mail
+// with no font of its own (the paragraph, panel and button blocks each carry the house sans stack). The expected stack and colour
+// are read off the SAME mail's intro paragraph right above the list, so the list follows the house block if the house block changes.
+describe("the paid cart mail's entry list wears the mail's own type (V4)", () => {
+  const styleOf = (tag: string, html: string): string => {
+    const m = html.match(new RegExp(`<${tag}\\b[^>]*style="([^"]*)"`));
+    expect(m, `premise: a styled <${tag}> in the mail`).not.toBeNull();
+    return m![1]!;
+  };
+  const prop = (style: string, name: string): string | undefined =>
+    style.split(";").map((d) => d.split(":")).find(([k]) => k!.trim() === name)?.slice(1).join(":").trim();
+
+  it.each(LOCALES)("%s: font-family and colour match the paragraph's", async (locale) => {
+    const html = registrationPaidTemplate({ ...paidBase, entries: [entry1(true), entry2(false)], statusUrl: LINK }, await dictOf(locale)).html;
+    const ul = styleOf("ul", html);
+    // The paragraph block right above the list (the cart's intro), not the masthead's own <p>.
+    const before = html.slice(0, html.indexOf("<ul"));
+    const paragraphs = [...before.matchAll(/<p\b[^>]*style="([^"]*)"/g)];
+    expect(paragraphs.length, "premise: a paragraph precedes the list").toBeGreaterThan(0);
+    const p = paragraphs.at(-1)![1]!;
+    let checked = 0;
+    for (const name of ["font-family", "color"]) {
+      const want = prop(p, name);
+      expect(want, `premise: the paragraph declares ${name}`).toBeTruthy();
+      expect(prop(ul, name), `${locale}: the list's ${name}`).toBe(want);
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+});
