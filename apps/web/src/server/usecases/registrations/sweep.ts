@@ -144,8 +144,11 @@ export async function sweepRegistrations(
         payDeadline: reg.expires_at,
       });
       await sql.begin(async (tx) => {
-        await recordPayToken(tx, { tokenHash: link.tokenHash, registrationId: reg.id, orgId: reg.org_id });
-        await enqueueEmailOnce(tx, { ...message, dedupeKey: `${reg.id}:submit` });
+        // Gap wave G9: the token is recorded only for a mail this run queued. `null` = the once-key found this reminder already
+        // queued (its mark was lost), so the link in THIS body is never sent: recording it would leave a payable link nobody holds.
+        // Marked either way - the mail exists.
+        const queued = await enqueueEmailOnce(tx, { ...message, dedupeKey: `${reg.id}:submit` });
+        if (queued !== null) await recordPayToken(tx, { tokenHash: link.tokenHash, registrationId: reg.id, orgId: reg.org_id });
         await tx`update registrations set submit_reminded_at = now(), updated_at = now()
                  where id = ${reg.id}`;
       });
@@ -210,8 +213,12 @@ export async function sweepRegistrations(
         payDeadline: reg.promotion_expires_at,
       });
       await sql.begin(async (tx) => {
-        await recordPayToken(tx, { tokenHash: link.tokenHash, registrationId: reg.id, orgId: reg.org_id });
-        await enqueueEmailOnce(tx, { ...message, dedupeKey: `${reg.id}:promotion:${reg.promoted_at.toISOString()}` });
+        // Gap wave G9, as pass (1a): a token only for a mail this run queued; marked either way.
+        const queued = await enqueueEmailOnce(tx, {
+          ...message,
+          dedupeKey: `${reg.id}:promotion:${reg.promoted_at.toISOString()}`,
+        });
+        if (queued !== null) await recordPayToken(tx, { tokenHash: link.tokenHash, registrationId: reg.id, orgId: reg.org_id });
         await tx`update registrations set promotion_reminded_at = now(), updated_at = now()
                  where id = ${reg.id}`;
       });

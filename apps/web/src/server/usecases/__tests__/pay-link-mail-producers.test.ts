@@ -313,6 +313,48 @@ describe.skipIf(!HAS_DB)("the sweep's pay-page reminder, called twice and failin
     expect(await tokensFor(registration.id)).toBe(1);
   });
 
+  // Gap wave G9 (ledger Q3/Q4): the mark normally stops a second sweep BEFORE the once-key, so the once-key is the backstop for a
+  // row whose mark is gone while its mail is queued. Reached here the only way it can be: the mark (and lease) cleared by hand.
+  // A backstop that queues nothing must record nothing - a token no mail carries is a payable link nobody was sent.
+  it("each pass whose once-key finds its mail already queued records no second token, and marks the entry again", async () => {
+    // Both entries are seeded before ONE sweep (then one more): `sweepRegistrations` is global, so every extra call here is one
+    // more chance to take another file's due row out from under it.
+    const w1a = await stripeWorld();
+    const { registration: a } = await seedRegistration(w1a.competition.id, w1a.division.id, w1a.settings, { contactEmail: address("g9-1a") });
+    await sql`update registration_groups set expires_at = now() + interval '2 minutes' where id = ${a.group_id}`;
+    const w1b = await stripeWorld();
+    const b = await promoted(w1b, address("g9-1b"));
+    await sql`update registrations set promotion_expires_at = now() + interval '2 minutes' where id = ${b.id}`;
+    const PASSES = [
+      { pass: "1a", id: a.id, mark: "submit_reminded_at", lease: "submit_reminder_claimed_at" },
+      { pass: "1b", id: b.id, mark: "promotion_reminded_at", lease: "promotion_reminder_claimed_at" },
+    ] as const;
+    const markOf = async (id: string, mark: string): Promise<Date | null> =>
+      (await sql<{ at: Date | null }[]>`select ${sql(mark)} as at from registrations where id = ${id}`)[0]!.at;
+
+    await sweepRegistrations(ORIGIN);
+    const before = new Map<string, number>();
+    for (const p of PASSES) {
+      expect(await rowsOf("payment_reminder", p.id), `${p.pass} premise: the first sweep queued one mail`).toBe(1);
+      const n = await tokensFor(p.id);
+      expect(n, `${p.pass} premise: and recorded its token`).toBeGreaterThanOrEqual(1);
+      before.set(p.id, n);
+      await sql`update registrations set ${sql(p.mark)} = null, ${sql(p.lease)} = null where id = ${p.id}`;
+      expect(await markOf(p.id, p.mark), `${p.pass} premise: the mark is gone`).toBeNull();
+    }
+
+    await sweepRegistrations(ORIGIN);
+    let checked = 0;
+    for (const p of PASSES) {
+      // The mark is written only inside the queue transaction: set again = this pass reached its once-key for this entry.
+      expect(await markOf(p.id, p.mark), `${p.pass}: marked again (the queue transaction ran)`).not.toBeNull();
+      expect(await rowsOf("payment_reminder", p.id), `${p.pass}: still one mail`).toBe(1);
+      expect(await tokensFor(p.id), `${p.pass}: no token beyond the ones mails carry`).toBe(before.get(p.id));
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: both sweep passes were driven to their once-key").toBe(2);
+  });
+
   it("a throw inside the queue transaction releases the lease and leaves zero tokens and zero mails; the next sweep sends", async () => {
     const w = await stripeWorld();
     const { registration } = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("throw") });
@@ -351,7 +393,9 @@ describe.skipIf(!HAS_DB)("sweep 1a decides by the division's payment method, fal
   ];
 
   it("each (division, cart) pair: sent ⇔ the resolved method is card; the reminder and its token come together", async () => {
-    let checked = 0;
+    // Every case is seeded before ONE sweep: `sweepRegistrations` is global, so each extra call is one more chance to take another
+    // file's due row out from under it.
+    const seeded: { c: (typeof CASES)[number]; regId: string }[] = [];
     for (const c of CASES) {
       const w = await stripeWorld();
       const { registration } = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("g5") });
@@ -371,10 +415,14 @@ describe.skipIf(!HAS_DB)("sweep 1a decides by the division's payment method, fal
         const [left] = await sql<{ n: string }[]>`select count(*)::text as n from registration_settings where division_id = ${w.division.id}`;
         expect(left!.n, `${c.label}: premise, the division has no settings row`).toBe("0");
       }
-      await sweepRegistrations(ORIGIN);
+      seeded.push({ c, regId: registration.id });
+    }
+    await sweepRegistrations(ORIGIN);
+    let checked = 0;
+    for (const { c, regId } of seeded) {
       const want = c.sent ? 1 : 0;
-      expect(await rowsOf("payment_reminder", registration.id), `${c.label}: reminders`).toBe(want);
-      expect(await tokensFor(registration.id), `${c.label}: pay-page tokens`).toBe(want);
+      expect(await rowsOf("payment_reminder", regId), `${c.label}: reminders`).toBe(want);
+      expect(await tokensFor(regId), `${c.label}: pay-page tokens`).toBe(want);
       checked += 1;
     }
     expect(checked, "anti-vacuity: every case was swept").toBe(CASES.length);
