@@ -8452,5 +8452,19 @@
   "quickMatch.save.signIn": "Se connecter",
   "quickMatch.dead.title": "Ce lien a expiré ou n'existe pas",
   "quickMatch.dead.hint": "Vérifiez que vous avez le lien complet. Les matchs rapides que personne n'enregistre sont supprimés {days} jours après le dernier point marqué.",
-  "quickMatch.dead.startNew": "Lancer un nouveau match rapide"
+  "quickMatch.dead.startNew": "Lancer un nouveau match rapide",
+  "quickMatch.me.title": "Matchs rapides",
+  "quickMatch.me.rename": "Renommer",
+  "quickMatch.me.renameLabel": "Nouveau nom",
+  "quickMatch.me.renameSave": "Enregistrer le nom",
+  "quickMatch.me.cancel": "Annuler",
+  "quickMatch.me.delete": "Supprimer",
+  "quickMatch.me.deleteConfirm": "Supprimer ce match rapide pour tout le monde ? Le lien ne fonctionnera plus.",
+  "quickMatch.me.deleteYes": "Supprimer pour tout le monde",
+  "quickMatch.me.noLink": "Son lien ne peut pas être affiché pour le moment.",
+  "quickMatch.me.renameInvalid": "Donnez au match un nom de 1 à {max} caractères.",
+  "quickMatch.me.notInAccount": "Ce match rapide n'est plus dans votre compte.",
+  "quickMatch.me.renameImpersonating": "Vous êtes connecté en tant qu'une autre personne (vue du personnel), ce match n'a donc pas été renommé.",
+  "quickMatch.me.deleteImpersonating": "Vous êtes connecté en tant qu'une autre personne (vue du personnel), ce match n'a donc pas été supprimé.",
+  "quickMatch.me.signedOut": "Vous êtes déconnecté. Reconnectez-vous pour modifier vos matchs rapides."
 }

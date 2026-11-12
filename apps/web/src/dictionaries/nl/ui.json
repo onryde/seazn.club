@@ -8452,5 +8452,19 @@
   "quickMatch.save.signIn": "Inloggen",
   "quickMatch.dead.title": "Deze link is verlopen of bestaat niet",
   "quickMatch.dead.hint": "Controleer of je de volledige link hebt. Snelle wedstrijden die niemand bewaart, worden {days} dagen na de laatste score verwijderd.",
-  "quickMatch.dead.startNew": "Start een nieuwe snelle wedstrijd"
+  "quickMatch.dead.startNew": "Start een nieuwe snelle wedstrijd",
+  "quickMatch.me.title": "Snelle wedstrijden",
+  "quickMatch.me.rename": "Naam wijzigen",
+  "quickMatch.me.renameLabel": "Nieuwe naam",
+  "quickMatch.me.renameSave": "Naam opslaan",
+  "quickMatch.me.cancel": "Annuleren",
+  "quickMatch.me.delete": "Verwijderen",
+  "quickMatch.me.deleteConfirm": "Deze snelle wedstrijd voor iedereen verwijderen? De link werkt dan niet meer.",
+  "quickMatch.me.deleteYes": "Voor iedereen verwijderen",
+  "quickMatch.me.noLink": "De link kan nu niet worden getoond.",
+  "quickMatch.me.renameInvalid": "Geef de wedstrijd een naam van 1 tot {max} tekens.",
+  "quickMatch.me.notInAccount": "Deze snelle wedstrijd staat niet meer in je account.",
+  "quickMatch.me.renameImpersonating": "Je bent ingelogd als iemand anders (personeelsweergave), dus de naam van deze wedstrijd is niet gewijzigd.",
+  "quickMatch.me.deleteImpersonating": "Je bent ingelogd als iemand anders (personeelsweergave), dus deze wedstrijd is niet verwijderd.",
+  "quickMatch.me.signedOut": "Je bent uitgelogd. Log opnieuw in om je snelle wedstrijden te wijzigen."
 }

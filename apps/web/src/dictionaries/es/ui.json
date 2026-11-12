@@ -8452,5 +8452,19 @@
   "quickMatch.save.signIn": "Iniciar sesión",
   "quickMatch.dead.title": "Este enlace ha caducado o no existe",
   "quickMatch.dead.hint": "Comprueba que tienes el enlace completo. Los partidos rápidos que nadie guarda se eliminan {days} días después de la última puntuación.",
-  "quickMatch.dead.startNew": "Empezar un nuevo partido rápido"
+  "quickMatch.dead.startNew": "Empezar un nuevo partido rápido",
+  "quickMatch.me.title": "Partidos rápidos",
+  "quickMatch.me.rename": "Cambiar nombre",
+  "quickMatch.me.renameLabel": "Nuevo nombre",
+  "quickMatch.me.renameSave": "Guardar nombre",
+  "quickMatch.me.cancel": "Cancelar",
+  "quickMatch.me.delete": "Borrar",
+  "quickMatch.me.deleteConfirm": "¿Borrar este partido rápido para todos? El enlace dejará de funcionar.",
+  "quickMatch.me.deleteYes": "Borrar para todos",
+  "quickMatch.me.noLink": "Ahora mismo no se puede mostrar su enlace.",
+  "quickMatch.me.renameInvalid": "Ponle al partido un nombre de 1 a {max} caracteres.",
+  "quickMatch.me.notInAccount": "Este partido rápido ya no está en tu cuenta.",
+  "quickMatch.me.renameImpersonating": "Has iniciado sesión como otra persona (vista de personal), así que no se ha cambiado el nombre de este partido.",
+  "quickMatch.me.deleteImpersonating": "Has iniciado sesión como otra persona (vista de personal), así que este partido no se ha borrado.",
+  "quickMatch.me.signedOut": "Has cerrado sesión. Vuelve a iniciar sesión para cambiar tus partidos rápidos."
 }

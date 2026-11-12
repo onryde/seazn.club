@@ -3,7 +3,8 @@ import "server-only";
 // competition. PRIVILEGED — the pooled role, not a tenant transaction — because two of the rows it removes are reached
 // by no foreign key the database could cascade along, and its callers act for no organizer:
 //   - the create's compensation (quick-match-create.ts), when a create fails after its competition exists;
-//   - the expiry sweep (quick-match-sweep.ts), for an unsaved match idle past its expiry, and for an orphan competition.
+//   - the expiry sweep (quick-match-sweep.ts), for an unsaved match idle past its expiry, and for an orphan competition;
+//   - the saver's Delete on the account's Quick matches (quick-match-owner.ts, plan 3 Task 6, C13), for a match they saved.
 //
 // `deleteCompetition` cannot serve either: it refuses (409) any competition with score events, and a scored match is
 // exactly what the sweep removes. The database does the rest along §7.8's cascade: competitions → divisions → stages →
@@ -40,13 +41,17 @@ export const QUICK_MATCH_OUTBOX_REF_TYPE = "quick_match";
 /** What must still hold at the moment of a conditional delete, read under the row's lock:
  *  - `expiredBefore`: the match is unsaved and its expiry is strictly before this instant (the expiry sweep);
  *  - `orphanedBefore`: the competition has no `quick_matches` row and was created strictly before this instant (the
- *    sweep's orphan step: a create that died between its two commits). */
-export type QuickMatchDeleteGuard = { expiredBefore: Date } | { orphanedBefore: Date };
+ *    sweep's orphan step: a create that died between its two commits);
+ *  - `savedBy`: the match is saved by this user (the saver's Delete, C13). This one WAITS for the row's lock rather than
+ *    skipping it: a person's own delete is no sweep that comes back later. A match they do not hold (someone else's, nobody's,
+ *    released since they looked) is nothing of theirs to delete: `gone`, never `kept`. */
+export type QuickMatchDeleteGuard = { expiredBefore: Date } | { orphanedBefore: Date } | { savedBy: string };
 
 /** `deleted`: the competition's delete removed its row. `kept`: a guard was given and no longer holds (the match was
  *  revived or saved, another transaction holds its row, or a guest's score stands, whose touch it then gets: see the
  *  header), so nothing was deleted and the caller may judge it again later.
- *  Both false: there was nothing of the system org's to delete (gone already, or another org's). */
+ *  Both false: there was nothing of the system org's to delete (gone already, or another org's), or, under `savedBy`, nothing
+ *  that user holds. */
 export interface QuickMatchDeleteResult {
   deleted: boolean;
   kept: boolean;
@@ -54,6 +59,13 @@ export interface QuickMatchDeleteResult {
 
 /** Does the guard still hold for this competition, read under its row's lock? `gone` when no system-org row is left to judge. */
 async function judge(tx: Tx, competitionId: string, guard: QuickMatchDeleteGuard): Promise<"due" | "kept" | "gone"> {
+  if ("savedBy" in guard) {
+    const [held] = await tx`
+      select 1 from quick_matches
+       where competition_id = ${competitionId} and org_id = ${QUICK_MATCH_SYSTEM_ORG_ID} and saved_by_user_id = ${guard.savedBy}
+         for update`;
+    return held ? "due" : "gone";
+  }
   if ("expiredBefore" in guard) {
     const [row] = await tx<{ due: boolean | null }[]>`
       select (saved_by_user_id is null and expires_at < ${guard.expiredBefore}) as due

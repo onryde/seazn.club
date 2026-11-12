@@ -108,4 +108,20 @@ export const QUICK_MATCH_ERRORS = {
    *  `imp` claim, lib/auth.ts). Staff never save a guest's match into the account they are looking through, so nothing is
    *  written; the home shows `quickMatch.flash.impersonating`. */
   SAVE_IMPERSONATED: "QUICK_MATCH_SAVE_IMPERSONATED",
+  /** The account's Quick matches (plan 3 Task 6), `PATCH`/`DELETE /api/quick-match/<id>`: no session (401). The account list
+   *  shows `quickMatch.me.signedOut`. */
+  SIGNED_OUT: "QUICK_MATCH_SIGNED_OUT",
+  /** Rename (plan 3 Task 6, ledger carry: rename and delete refuse under impersonation): the session is a staff member's
+   *  impersonation (403). Staff never rename the match of the person they look through: `quickMatch.me.renameImpersonating`. */
+  RENAME_IMPERSONATED: "QUICK_MATCH_RENAME_IMPERSONATED",
+  /** Delete, the same carry (403): staff never hard-delete, for everyone with its link, the match of the person they look
+   *  through. `quickMatch.me.deleteImpersonating`. */
+  DELETE_IMPERSONATED: "QUICK_MATCH_DELETE_IMPERSONATED",
+  /** Rename (plan 3 Amend T6 [D14]): a name `CreateQuickMatch` would refuse, trimmed, 1 to QUICK_MATCH_NAME_MAX (422).
+   *  `quickMatch.me.renameInvalid`, with the bound as `{max}`. */
+  RENAME_INVALID: "QUICK_MATCH_RENAME_INVALID",
+  /** Rename or delete (plan 3 Amend T6 [B28]): no match this person has saved goes by that id: someone else's, nobody's, one
+   *  past its expiry, one deleted already, or no id at all. One answer for all of them (404), so it never says whether a match
+   *  exists. `quickMatch.me.notInAccount`. */
+  NOT_IN_ACCOUNT: "QUICK_MATCH_NOT_IN_ACCOUNT",
 } as const;

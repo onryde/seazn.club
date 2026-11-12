@@ -399,11 +399,13 @@ describe("route-tree sweep: every write handler under app/api is gated, behind a
       ["harness", "export async function POST() { if (!fakeControlEnabled(process.env)) throw new Error(); }"],
       ["bearer", "export async function POST(req: Request) { const t = bearerOf(req); }"],
       ["session401", "export async function POST() { const u = await getCurrentUser(); if (!u) return json({}, { status: 401 }); }"],
+      ["session401", "export async function DELETE() { const s = await getCurrentSession(); if (!s) throw new HttpError(401, 'x'); }"],
     ];
     for (const [want, src] of cases) expect([want, door(src)]).toEqual([want, want]);
     // Lookalikes: the secret header with no CRON_SECRET in the file, getCurrentUser without a 401 (consent reads it optionally).
     expect(door("export async function POST(req: Request) { req.headers.get('x-cron-secret'); }")).toBe("anonymous");
     expect(door("export async function POST() { const u = await getCurrentUser(); return u?.id; }")).toBe("anonymous");
+    expect(door("export async function POST() { const s = await getCurrentSession(); return s?.user.id; }")).toBe("anonymous");
     expect(door("export async function POST() { await requireUserAgent(); }")).toBe("anonymous");
   });
 

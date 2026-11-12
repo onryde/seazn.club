@@ -8452,5 +8452,19 @@
   "quickMatch.save.signIn": "Sign in",
   "quickMatch.dead.title": "This link has ended or doesn't exist",
   "quickMatch.dead.hint": "Check that you have the whole link. Quick matches nobody saves are removed {days} days after the last score.",
-  "quickMatch.dead.startNew": "Start a new quick match"
+  "quickMatch.dead.startNew": "Start a new quick match",
+  "quickMatch.me.title": "Quick matches",
+  "quickMatch.me.rename": "Rename",
+  "quickMatch.me.renameLabel": "New name",
+  "quickMatch.me.renameSave": "Save name",
+  "quickMatch.me.cancel": "Cancel",
+  "quickMatch.me.delete": "Delete",
+  "quickMatch.me.deleteConfirm": "Delete this quick match for everyone? The link stops working.",
+  "quickMatch.me.deleteYes": "Delete for everyone",
+  "quickMatch.me.noLink": "Its link can't be shown right now.",
+  "quickMatch.me.renameInvalid": "Give the match a name of 1 to {max} characters.",
+  "quickMatch.me.notInAccount": "This quick match is no longer in your account.",
+  "quickMatch.me.renameImpersonating": "You're signed in as someone else (staff view), so this match wasn't renamed.",
+  "quickMatch.me.deleteImpersonating": "You're signed in as someone else (staff view), so this match wasn't deleted.",
+  "quickMatch.me.signedOut": "You're signed out. Sign in again to change your quick matches."
 }
