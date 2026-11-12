@@ -137,7 +137,7 @@ export function Modal({
   const side = placement === "side";
   const closeClass =
     closeSize === "lg"
-      ? "grid h-10 w-10 place-items-center rounded-full text-slate-500 hover:bg-purple-50 hover:text-purple-700 max-md:h-11 max-md:w-11"
+      ? "grid h-10 w-10 shrink-0 place-items-center rounded-full text-slate-500 hover:bg-purple-50 hover:text-purple-700 max-md:h-11 max-md:w-11"
       : `grid h-7 w-7 place-items-center rounded-full text-slate-400 hover:bg-purple-50 hover:text-purple-700${bleedClose}`;
 
   return (
