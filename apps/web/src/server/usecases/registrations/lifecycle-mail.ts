@@ -8,7 +8,8 @@ import "server-only";
 // `null` also means "already queued" (the once-key): nothing more to attempt. A request path then makes the first attempt after commit
 // (`deferred(() => dispatchNow(ids))`); a webhook or the sweep leaves it to the retry worker, as every other outbox mail does.
 import { routes } from "@/lib/routes";
-import { registrationApprovedEmail, registrationExpiredEmail, registrationPaidEmail } from "@/lib/email";
+import { registrationApprovedEmail, registrationExpiredEmail, registrationPaidEmail, registrationWithdrawnEmail } from "@/lib/email";
+import { isTerminalRegistrationStatus } from "@/lib/registration-status";
 import { enqueueEmailOnce, expiryWithin, recipientLocale } from "@/server/email-outbox";
 import { log } from "@/server/logger";
 import type { Tx, RegistrationWithGroupRow, DivisionCtx } from "./types";
@@ -202,6 +203,49 @@ export async function queueRegistrationExpiredMail(tx: Tx, a: { reg: Registratio
       transactional: false,
       expiresAt: expiryWithin(null),
       dedupeKey: `${reg.id}:expired`,
+    });
+  });
+}
+
+/**
+ * `registration_withdrawn`: the ORGANISER withdrew the entry (W11). To the registration's contact, in their language: which entry, which
+ * division, that it is withdrawn, and where to ask. A registrant's own withdrawal is never mailed (they know; their refund has its own
+ * receipt): the caller decides who withdrew, this decides whether the person is still OWED the news.
+ *
+ * `reg` is the row as the withdrawal locked it, BEFORE it was written `withdrawn`. An entry already in a terminal status (`expired` - the
+ * sweep told them their place was released; `rejected` and `withdrawn` cannot reach a withdrawal at all) is not told again: a second,
+ * contradictory mail helps nobody. In the withdrawal's own transaction, so the mail and the fact commit together; a request path, so the
+ * caller makes the first attempt after the response.
+ *
+ * Once per entry: `withdrawn` is terminal, so the entry's id is the key.
+ */
+export async function queueRegistrationWithdrawnMail(tx: Tx, a: { reg: RegistrationWithGroupRow }): Promise<string | null> {
+  const { reg } = a;
+  if (isTerminalRegistrationStatus(reg.status)) return null;
+  return contained(tx, "registration_withdrawn", reg.id, async (sp) => {
+    const ctx = await divisionCtx(sp, reg.division_id);
+    const locale = await recipientLocale(sp, { pick: reg.locale, userId: reg.user_id, orgDefault: ctx.default_locale });
+    const content = await registrationWithdrawnEmail(
+      {
+        orgName: ctx.org_name,
+        competitionName: ctx.comp_name,
+        divisionName: await divisionNameOf(sp, reg.division_id),
+        displayName: reg.display_name,
+        contactName: reg.contact_name,
+        refCode: reg.ref_code,
+      },
+      locale,
+    );
+    return enqueueEmailOnce(sp, {
+      kind: "registration_withdrawn",
+      refType: "registration",
+      refId: reg.id,
+      orgId: reg.org_id,
+      to: reg.contact_email,
+      ...content,
+      transactional: false,
+      expiresAt: expiryWithin(null),
+      dedupeKey: `${reg.id}:withdrawn`,
     });
   });
 }

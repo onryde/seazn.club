@@ -20,6 +20,8 @@
 //   - registration_expired (polish wave P2): the real `sweepRegistrations` (the overdue pass) over a stripe cart past its deadline, in an `nl`
 //     group: the "your place was released" mail is queued in the transaction that writes the entry `expired`, and the worker makes the
 //     first attempt (a sweep has no response to defer behind).
+//   - registration_withdrawn (polish wave P2): the real `withdrawRegistrationOrganiser` of a pending entry of an `fr` registrant: the "your
+//     entry was withdrawn" mail is queued in the withdrawal's own transaction and the request that did it makes the first attempt.
 //   - solo_signup_assigned: the real `assignSoloSignUp` of a pooled `fr` solo sign-up onto a team entry: the email is queued in the
 //     assignment's own transaction and the request that did it makes the first attempt.
 //   - refund_issued: the real `refundRegistration` of a paid `es` registrant (Stripe's refund is mocked): the receipt is queued in the transaction
@@ -252,6 +254,7 @@ import {
   refundRegistration,
   maybeAlertRegistrationRefundFailed,
   sweepRegistrations,
+  withdrawRegistrationOrganiser,
   withdrawRegistrationPublic,
 } from "@/server/usecases/registrations";
 import { handleSponsorDispute, handleSponsorPaymentSucceeded, refundSponsorOrder } from "@/server/usecases/sponsors";
@@ -371,6 +374,7 @@ const SPEC_KINDS = [
   "registration_paid",
   "registration_approved",
   "registration_expired",
+  "registration_withdrawn",
 ] as const satisfies readonly OutboxKind[];
 
 /** The legend: [to, transactional]. A = an account, resolved at send; L = a literal address; S = the staff address. T = transactional. */
@@ -435,6 +439,7 @@ const SPEC_FACTS: KindFacts = {
   registration_approved: ["literal", false],
   registration_paid: ["literal", false],
   registration_expired: ["literal", false],
+  registration_withdrawn: ["literal", false],
 };
 
 /** What the real producers create beyond the rows the hand-made scenarios name: the seeded round's people and organisation. (The
@@ -503,7 +508,7 @@ describe("the spec's lists (no database)", () => {
   it("the spec lists fifty-one kinds, sponsor deals adds one, and the code's registry is exactly them, in the spec's order", () => {
     expect([...OUTBOX_KINDS]).toEqual([...SPEC_KINDS]);
     // The spec's Counts: "With `magic_link` and `chess_invite` that is 51." Sponsor deals Task 23 adds sponsor_deal_paid: 52.
-    expect(SPEC_KINDS).toHaveLength(55);
+    expect(SPEC_KINDS).toHaveLength(56);
   });
 
   it("the legend has 21 literal kinds, SIXTEEN account kinds (sponsor deals' sponsor_deal_paid the sixteenth) and SIXTEEN staff kinds; THIRTY-TWO are transactional", () => {
@@ -535,6 +540,7 @@ describe("the spec's lists (no database)", () => {
       "registration_paid",
       "registration_approved",
       "registration_expired",
+      "registration_withdrawn",
     ]);
     expect(by("account")).toEqual([
       "chess_invite",
@@ -951,6 +957,30 @@ async function registrationExpiredScenario(): Promise<KindScenario> {
       );
       const [after] = await sql<{ status: string }[]>`select status from registrations where id = ${registration.id}`;
       expect(after!.status, "premise: the real sweep expired the entry").toBe("expired");
+    },
+  };
+}
+
+/** The real organiser withdrawal: an `fr` registrant's pending entry is withdrawn by the organiser. The mail is queued in the withdrawal's own
+ *  transaction; the request that did it makes the first attempt. */
+async function registrationWithdrawnScenario(): Promise<KindScenario> {
+  const { orgId, ownerId } = await seedOrg("pro");
+  made.orgIds.push(orgId);
+  made.userIds.push(ownerId);
+  const owner = asOwner(orgId, ownerId);
+  const { competition, division } = await rig(owner);
+  const settings = await putRegistrationSettings(owner, division.id, { ...SETTINGS_BASE, fee_cents: 0, payment_method: "offline", approval: "manual" });
+  const recipient = address();
+  const { registration } = await seedRegistration(competition.id, division.id, settings, { contactEmail: recipient, locale: "fr" });
+  return {
+    locale: "fr",
+    subjectKey: "registrationWithdrawn.subject",
+    subjectVars: { competitionName: competition.name },
+    recipient,
+    firstAttempt: "request",
+    run: async () => {
+      const row = await withdrawRegistrationOrganiser(owner, registration.id);
+      expect(row.status, "premise: the real organiser withdrawal withdrew the entry").toBe("withdrawn");
     },
   };
 }
@@ -2309,6 +2339,11 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
       dictionarySubject("en", registrationExpired.subjectKey, registrationExpired.subjectVars),
     );
 
+    const registrationWithdrawn = await registrationWithdrawnScenario();
+    expect(dictionarySubject("fr", registrationWithdrawn.subjectKey, registrationWithdrawn.subjectVars)).not.toBe(
+      dictionarySubject("en", registrationWithdrawn.subjectKey, registrationWithdrawn.subjectVars),
+    );
+
     const staffDispute = await staffDisputeAlertScenario();
     expect(dictionarySubject("fr", staffDispute.subjectKey, staffDispute.subjectVars)).not.toBe(
       dictionarySubject("en", staffDispute.subjectKey, staffDispute.subjectVars),
@@ -2371,6 +2406,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         registration_paid: registrationPaid,
         registration_approved: registrationApproved,
         registration_expired: registrationExpired,
+        registration_withdrawn: registrationWithdrawn,
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );
@@ -2378,7 +2414,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
     const moved = SPEC_KINDS.filter((k) => !NOT_YET_MOVED.includes(k));
     // The spec's count, typed: "With `magic_link` and `chess_invite` that is 51." Every kind has moved, so every one was swept; sponsor
     // deals Task 23's sponsor_deal_paid makes 52.
-    expect(out.checked, "anti-vacuity: every kind the spec lists was swept").toBe(55);
+    expect(out.checked, "anti-vacuity: every kind the spec lists was swept").toBe(56);
     expect(out.checked).toBeGreaterThan(0);
     expect(out.kinds, "and they are exactly the spec's moved kinds, in the spec's order").toEqual(moved);
   }, 60_000);

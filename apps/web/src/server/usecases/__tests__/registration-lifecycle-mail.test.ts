@@ -18,11 +18,11 @@ const stripeMock = vi.hoisted(() => {
 });
 vi.mock("@/lib/stripe", () => ({ getStripe: () => stripeMock.stripe }));
 
-// `registrationApprovedEmail` passes through to the real renderer; a test makes it fail for one recipient to prove the failure stays
-// contained to that recipient's own savepoint.
+// `registrationApprovedEmail` and `registrationWithdrawnEmail` pass through to the real renderer; a test makes one fail to prove the
+// failure stays contained to that mail's own savepoint (the approval / the withdrawal stands).
 vi.mock("@/lib/email", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/email")>();
-  return { ...actual, registrationApprovedEmail: vi.fn(actual.registrationApprovedEmail) };
+  return { ...actual, registrationApprovedEmail: vi.fn(actual.registrationApprovedEmail), registrationWithdrawnEmail: vi.fn(actual.registrationWithdrawnEmail) };
 });
 
 const deliverMock = vi.hoisted(() => vi.fn());
@@ -30,6 +30,7 @@ vi.mock("@/server/email-outbox/transport", () => ({ deliver: deliverMock }));
 
 import { sql } from "@/lib/db";
 import * as emailModule from "@/lib/email";
+import { generateRefCode } from "@/lib/ref-code";
 import { openBody } from "@/server/email-outbox/seal";
 import { formatDeadline } from "@/lib/email-templates/registration";
 import {
@@ -46,8 +47,12 @@ import {
   sendPaymentReminder,
   sweepRegistrations,
   divisionCtx,
+  withdrawRegistrationByRef,
+  withdrawRegistrationOrganiser,
+  withdrawRegistrationPublic,
 } from "../registrations";
-import { queueRegistrationApprovedMails, queueRegistrationExpiredMail, queueRegistrationPaidMail } from "../registrations/lifecycle-mail";
+import { queueRegistrationApprovedMails, queueRegistrationExpiredMail, queueRegistrationPaidMail, queueRegistrationWithdrawnMail } from "../registrations/lifecycle-mail";
+import type { RegistrationRow } from "../registrations";
 import { approveRegistration } from "../registration-approval";
 import { createDivision } from "../divisions";
 import { stubOutboxEnv } from "./_invite-mail";
@@ -79,6 +84,7 @@ beforeEach(() => {
   stripeMock.checkoutCreate.mockReset();
   // vitest 4: mockReset puts back the implementation given to vi.fn(impl), i.e. the real renderer (the hook above is for one test only).
   vi.mocked(emailModule.registrationApprovedEmail).mockReset();
+  vi.mocked(emailModule.registrationWithdrawnEmail).mockReset();
 });
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -673,5 +679,128 @@ describe.skipIf(!HAS_DB)("queueRegistrationExpiredMail's own guard", () => {
     expect(await queue()).not.toBeNull();
     expect(await queue()).toBeNull();
     expect(await expiredRows(reg.registration.id)).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// registration_withdrawn (W11): the ORGANISER withdrew the entry
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+const withdrawnRows = async (regId: string) =>
+  sql<{ id: string; recipient: string; status: string; attempts: number }[]>`
+    select id, recipient, status, attempts from email_outbox where kind = 'registration_withdrawn' and ref_type = 'registration' and ref_id = ${regId} order by created_at`;
+const statusOf = async (regId: string): Promise<string> => (await sql<{ status: string }[]>`select status from registrations where id = ${regId}`)[0]!.status;
+
+describe.skipIf(!HAS_DB)("withdrawn: the organiser withdraws an entry (real withdrawRegistrationOrganiser)", () => {
+  it("the contact is told in their language: who, which entry, which division; the first attempt is made after the response", async () => {
+    const w = await offlineWorld(1500, "auto");
+    const to = address("wd");
+    const reg = await seedRegistration(w.competition.id, w.division.id, w.settings, { displayName: TEAM, contactEmail: to, locale: "es", refCode: `P2-${randomUUID().slice(0, 6)}` });
+    await sql`update registration_groups set contact_name = ${CONTACT} where id = ${reg.registration.group_id}`;
+    await withdrawRegistrationOrganiser(w.owner, reg.registration.id);
+    expect(await statusOf(reg.registration.id), "premise: the real usecase withdrew it").toBe("withdrawn");
+    const rows = await withdrawnRows(reg.registration.id);
+    expect(rows.map((r) => r.recipient.toLowerCase())).toEqual([to]);
+    expect(rows[0]!.status).toBe("queued");
+    expect(rows[0]!.attempts, "a request path: one attempt, made after the response").toBe(1);
+    const b = await body("registration_withdrawn", "registration", reg.registration.id);
+    expect(b.subject).toContain("Tu inscripción ha sido retirada");
+    const visible = words(b.html);
+    expect(visible).toContain(CONTACT);
+    // The hidden preheader (the inbox preview line) may name the entry first; the BODY names the person, then the entry.
+    expect(visible.indexOf(TEAM, visible.indexOf(CONTACT)), "the entry is named after the greeting").toBeGreaterThan(visible.indexOf(CONTACT));
+    expect(b.text).toContain(TEAM);
+    expect(b.text, "the division's own name").toContain("Open");
+    expect(b.text).toContain(reg.registration.ref_code!);
+  });
+
+  it("every live status is told (pending, paid, confirmed, waitlisted); an EXPIRED entry already was, by the sweep's mail (the table, not a sample)", async () => {
+    const w = await offlineWorld(1500, "auto");
+    // Ruling: the organiser withdrawing an entry the person has already been told lost its place adds nothing but a second, contradictory mail.
+    const table: Array<[RegistrationRow["status"], number]> = [["pending", 1], ["paid", 1], ["confirmed", 1], ["waitlisted", 1], ["expired", 0]];
+    let checked = 0;
+    for (const [status, expected] of table) {
+      const reg = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address(`wd-${status}`), status });
+      await withdrawRegistrationOrganiser(w.owner, reg.registration.id);
+      expect(await statusOf(reg.registration.id), `premise: ${status} was withdrawn`).toBe("withdrawn");
+      expect(await withdrawnRows(reg.registration.id), status).toHaveLength(expected);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: every status of the table was driven").toBe(5);
+  });
+
+  it("a REJECTED entry cannot be withdrawn, so nothing is mailed; a second withdraw of a withdrawn entry mails nothing more", async () => {
+    const w = await offlineWorld(1500, "auto");
+    const rejected = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("wd-rej"), status: "rejected" });
+    await expect(withdrawRegistrationOrganiser(w.owner, rejected.registration.id)).rejects.toThrow(/rejected/);
+    expect(await withdrawnRows(rejected.registration.id)).toHaveLength(0);
+
+    const reg = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("wd-twice") });
+    await withdrawRegistrationOrganiser(w.owner, reg.registration.id);
+    await withdrawRegistrationOrganiser(w.owner, reg.registration.id);
+    expect(await withdrawnRows(reg.registration.id), "the second call is the idempotent no-op it always was").toHaveLength(1);
+  });
+
+  it("a registrant's OWN withdrawal mails nothing (they know), by the status page and by the reference page alike", async () => {
+    const w = await offlineWorld(1500, "auto");
+    const viaStatus = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("wd-self") });
+    await withdrawRegistrationPublic(viaStatus.registration.id, viaStatus.access_token);
+    const ref = generateRefCode();
+    const viaRef = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("wd-self-ref"), refCode: ref });
+    await withdrawRegistrationByRef(ref, viaRef.registration.id, viaRef.access_token);
+    let checked = 0;
+    for (const r of [viaStatus, viaRef]) {
+      expect(await statusOf(r.registration.id), "premise: the registrant withdrew it").toBe("withdrawn");
+      expect(await withdrawnRows(r.registration.id)).toHaveLength(0);
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("a paid entry withdrawn before the refund lock: the refund receipt and the withdrawal mail are two mails, both to the contact", async () => {
+    const w = await stripeWorld(1500);
+    const to = address("wd-paid");
+    const reg = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: to });
+    await handleRegistrationCheckoutCompleted(fakeSession(reg.registration.id, 1500));
+    await withdrawRegistrationOrganiser(w.owner, reg.registration.id);
+    expect(stripeMock.refundCreate, "premise: the automatic refund ran").toHaveBeenCalledTimes(1);
+    const receipts = await sql<{ recipient: string }[]>`select recipient from email_outbox where kind = 'refund_issued' and org_id = ${w.orgId}`;
+    expect(receipts.map((r) => r.recipient.toLowerCase())).toEqual([to]);
+    expect((await withdrawnRows(reg.registration.id)).map((r) => r.recipient.toLowerCase())).toEqual([to]);
+  });
+
+  it("a mail that cannot be queued never undoes the withdrawal (contained at its own savepoint)", async () => {
+    const w = await offlineWorld(1500, "auto");
+    const reg = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("wd-contained") });
+    vi.mocked(emailModule.registrationWithdrawnEmail).mockImplementation(async () => {
+      throw new Error("render fault");
+    });
+    await withdrawRegistrationOrganiser(w.owner, reg.registration.id);
+    expect(vi.mocked(emailModule.registrationWithdrawnEmail), "premise: the producer reached the renderer").toHaveBeenCalled();
+    expect(await statusOf(reg.registration.id)).toBe("withdrawn");
+    expect(await withdrawnRows(reg.registration.id)).toHaveLength(0);
+  });
+});
+
+describe.skipIf(!HAS_DB)("queueRegistrationWithdrawnMail's own guards", () => {
+  it("once per entry: a second call queues nothing", async () => {
+    const w = await offlineWorld(1500, "auto");
+    const reg = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("wd-once") });
+    const queue = () => sql.begin((tx) => queueRegistrationWithdrawnMail(tx, { reg: reg.registration }));
+    expect(await queue()).not.toBeNull();
+    expect(await queue()).toBeNull();
+    expect(await withdrawnRows(reg.registration.id)).toHaveLength(1);
+  });
+
+  it("an entry the person was already told is gone (expired, rejected, withdrawn) is not told again", async () => {
+    const w = await offlineWorld(1500, "auto");
+    let checked = 0;
+    for (const status of ["expired", "rejected", "withdrawn"] as const) {
+      const reg = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address(`wd-g-${status}`), status });
+      expect(await sql.begin((tx) => queueRegistrationWithdrawnMail(tx, { reg: reg.registration })), status).toBeNull();
+      expect(await withdrawnRows(reg.registration.id), status).toHaveLength(0);
+      checked += 1;
+    }
+    expect(checked).toBe(3);
   });
 });

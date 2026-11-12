@@ -15,6 +15,7 @@ import { audit } from "../audit";
 import type { Tx, RegistrationWithGroupRow } from "./types";
 import { regGroupCols, loadSettings, divisionCtx, fallbackOrigin } from "./lookups";
 import { clearExpiresIfNoLongerNeeded } from "./materialise";
+import { queueRegistrationWithdrawnMail } from "./lifecycle-mail";
 import { freesTeamSlot, promoteOldestWaitlisted, openPromotionSeatGate, notifyPromoted } from "./waitlist";
 import {
   stripeRefund,
@@ -177,9 +178,12 @@ export async function withdrawCore(reg: RegistrationWithGroupRow, actorId: strin
         from: "waitlist",
       }, actorId);
     }
-    return { locked, promoted };
+    // Polish wave P2 (W11): the ORGANISER's withdrawal is news to the registrant; their own is not (`actorId` null: the status page and the
+    // reference page, which refund and receipt on their own). Queued with the fact, so the two commit together.
+    const mailId = actorId !== null ? await queueRegistrationWithdrawnMail(tx, { reg: locked }) : null;
+    return { locked, promoted, mailId };
   })) as unknown as
-    | { locked: RegistrationWithGroupRow; promoted: RegistrationWithGroupRow | null }
+    | { locked: RegistrationWithGroupRow; promoted: RegistrationWithGroupRow | null; mailId: string | null }
     | null;
   if (!outcome) return;
   log.info(
@@ -209,6 +213,8 @@ export async function withdrawCore(reg: RegistrationWithGroupRow, actorId: strin
   }
 
   fireDivisionRevalidate(reg.division_id, ctx.competition_id);
+  const withdrawnMailId = outcome.mailId;
+  if (withdrawnMailId !== null) deferred(() => dispatchNow([withdrawnMailId]));
   if (outcome.promoted) {
     void notifyPromoted(outcome.promoted, ctx, settings, fallbackOrigin(), { firstAttempt: "request" });
   }

@@ -68,6 +68,7 @@ export const OUTBOX_KINDS = [
   "registration_paid",
   "registration_approved",
   "registration_expired",
+  "registration_withdrawn",
 ] as const;
 export type OutboxKind = (typeof OUTBOX_KINDS)[number];
 
@@ -141,6 +142,7 @@ export const OUTBOX_KIND_FACTS: Readonly<Record<OutboxKind, { to: "account" | "l
   registration_paid: { to: "literal", transactional: false },
   registration_approved: { to: "literal", transactional: false },
   registration_expired: { to: "literal", transactional: false },
+  registration_withdrawn: { to: "literal", transactional: false },
 };
 
 /** Mail ABOUT an account that is addressed to a literal address (phase-3 D5, wave 3): its verification and its email change. These kinds
