@@ -3314,9 +3314,9 @@ describe.skipIf(!HAS_DB)("RS002: entry-level refunds (multi-entry cart hazards)"
     stripeMock.refundCreate.mockClear();
 
     const aRefunded = await refundRegistration(owner, a.id, undefined);
-    expect(stripeMock.refundCreate).toHaveBeenCalledWith(
-      expect.objectContaining({ payment_intent: intent, amount: a.amount_cents }),
-    );
+    // The manual refund carries a Stripe idempotency key as a second argument (polish wave P5, carry c): match the params alone.
+    expect(stripeMock.refundCreate).toHaveBeenCalledTimes(1);
+    expect(stripeMock.refundCreate.mock.calls[0]![0]).toMatchObject({ payment_intent: intent, amount: a.amount_cents });
     // refundRegistration writes the ENTRY's own refunded_cents (V368), not
     // just the group's accumulated total.
     expect(aRefunded.refunded_cents).toBe(a.amount_cents);
@@ -3324,9 +3324,8 @@ describe.skipIf(!HAS_DB)("RS002: entry-level refunds (multi-entry cart hazards)"
     // B's own remaining is computed from B's own numbers — must NOT throw
     // "Already fully refunded" for an entry nobody has touched yet.
     const bRefunded = await refundRegistration(owner, b.id, undefined);
-    expect(stripeMock.refundCreate).toHaveBeenLastCalledWith(
-      expect.objectContaining({ payment_intent: intent, amount: b.amount_cents }),
-    );
+    expect(stripeMock.refundCreate).toHaveBeenCalledTimes(2);
+    expect(stripeMock.refundCreate.mock.calls[1]![0]).toMatchObject({ payment_intent: intent, amount: b.amount_cents });
     expect(bRefunded.refunded_cents).toBe(b.amount_cents);
   });
 

@@ -283,27 +283,38 @@ export async function refundRegistration(
   regId: string,
   amountCents: number | undefined,
 ): Promise<RegistrationWithGroupRow> {
-  const reg = await withTenant(auth.orgId, async (tx) => orgReg(tx, regId));
-  // Polish wave W8 (walkthrough s08b): THIS entry's own payment, never the cart's. The cart's `payment_intent_id` is set by
-  // whichever entry paid last, so on a cart where only a sibling paid it named the sibling's payment, and Refund on the unpaid
-  // entry sent real money back off it. An entry with no payment of its own has nothing to refund; null fails closed (V387/H1).
-  const intent = reg.entry_payment_intent_id;
-  if (!intent) throw new HttpError(422, "No payment to refund");
-  // RS002 (V368): reg.refunded_cents is THIS entry's own column now (hazard 3
-  // fixed) — a sibling's earlier refund can no longer drive this negative and
-  // falsely report an untouched entry as "already fully refunded".
-  // Polish wave P5 (carry b): and only what was sent back of its CURRENT payment counts - a late payment's refund (kept in the
-  // history) is not this payment's, so a re-promoted entry that paid again is refundable in full.
-  const remaining = reg.amount_cents - ownPaymentRefundedCents(reg);
-  if (remaining <= 0) throw new HttpError(422, "Already fully refunded");
-  const amount = amountCents ?? remaining;
-  if (amount > remaining) {
-    throw new HttpError(422, `Refund exceeds the remaining ${remaining} cents`);
-  }
-  // Read before the money moves and before the tenant transaction opens (a pooled read inside it waits on the connection it holds).
-  const ctx = await divisionCtx(sql, reg.division_id);
-  const refund = await stripeRefund(intent, amount);
+  const pre = await withTenant(auth.orgId, async (tx) => orgReg(tx, regId));
+  // Read before the tenant transaction opens (a pooled read inside it waits on the connection it holds).
+  const ctx = await divisionCtx(sql, pre.division_id);
+  // Polish wave P5 (P1-review carry c): the cap is read, the money moved and the refund booked under ONE lock on the entry row. Two
+  // refunds at once used to read the same cap before either booked, so both passed it and both moved money. The second now waits
+  // for the first to commit and reads the cap it left. The lock is held across the Stripe call on purpose (a refund is rare and
+  // per entry; a second refund of the same money is the failure being prevented). `orgReg` reads `for update` (entry and cart rows,
+  // in the order checkout completion locks them).
   const { row, receiptId } = await withTenant(auth.orgId, async (tx) => {
+    const reg = await orgReg(tx, regId);
+    // Polish wave W8 (walkthrough s08b): THIS entry's own payment, never the cart's. The cart's `payment_intent_id` is set by
+    // whichever entry paid last, so on a cart where only a sibling paid it named the sibling's payment, and Refund on the unpaid
+    // entry sent real money back off it. An entry with no payment of its own has nothing to refund; null fails closed (V387/H1).
+    const intent = reg.entry_payment_intent_id;
+    if (!intent) throw new HttpError(422, "No payment to refund");
+    // RS002 (V368): reg.refunded_cents is THIS entry's own column now (hazard 3
+    // fixed) — a sibling's earlier refund can no longer drive this negative and
+    // falsely report an untouched entry as "already fully refunded".
+    // Polish wave P5 (carry b): and only what was sent back of its CURRENT payment counts - a late payment's refund (kept in the
+    // history) is not this payment's, so a re-promoted entry that paid again is refundable in full.
+    const remaining = reg.amount_cents - ownPaymentRefundedCents(reg);
+    if (remaining <= 0) throw new HttpError(422, "Already fully refunded");
+    const amount = amountCents ?? remaining;
+    if (amount > remaining) {
+      throw new HttpError(422, `Refund exceeds the remaining ${remaining} cents`);
+    }
+    // The key names THIS refund: the entry, what its books held when the cap was read (under the lock, so it only moves when a
+    // refund is booked) and the amount. A retry of the same press after a failed booking is the same refund at Stripe; a second
+    // legitimate partial refund of the same amount reads a different total and so is a different key.
+    const refund = await stripeRefund(intent, amount, {
+      idempotencyKey: `registration-refund:${regId}:${reg.refunded_cents}:${amount}`,
+    });
     const [div] = await tx<{ competition_id: string }[]>`
       select competition_id from divisions where id = ${reg.division_id}`;
     // Additive on BOTH tables: this entry's own total (V368) and the cart's

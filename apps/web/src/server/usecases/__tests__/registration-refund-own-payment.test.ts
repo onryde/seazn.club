@@ -39,7 +39,6 @@ vi.mock("next/headers", () => ({
   headers: async () => new Headers(),
 }));
 
-import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { handleRegistrationCheckoutCompleted, putRegistrationSettings, refundRegistration } from "../registrations";
 import { rejectRegistration } from "../registration-approval";
@@ -117,7 +116,7 @@ describe.skipIf(!HAS_DB)("an organiser refund moves only the entry's own payment
     // The positive pair: the entry that paid refunds its own share, on the intent that paid it.
     const openAfter = await refundRegistration(rig.owner, open.id, undefined);
     expect(stripeMock.refundCreate).toHaveBeenCalledTimes(1);
-    expect(stripeMock.refundCreate).toHaveBeenCalledWith(expect.objectContaining({ payment_intent: paid.payment_intent, amount: 1500 }));
+    expect(stripeMock.refundCreate.mock.calls.at(-1)![0]).toMatchObject({ payment_intent: paid.payment_intent, amount: 1500 });
     expect(openAfter.refunded_cents).toBe(1500);
     const mastersFinal = await loadWithGroup(masters.id);
     expect(mastersFinal.status, "the unpaid sibling is untouched").toBe("pending");
@@ -147,7 +146,7 @@ describe.skipIf(!HAS_DB)("an organiser refund moves only the entry's own payment
     const accepted = await post(open.id);
     expect(accepted.status).toBe(200);
     expect(stripeMock.refundCreate).toHaveBeenCalledTimes(1);
-    expect(stripeMock.refundCreate).toHaveBeenCalledWith(expect.objectContaining({ payment_intent: paid.payment_intent, amount: 1500 }));
+    expect(stripeMock.refundCreate.mock.calls.at(-1)![0]).toMatchObject({ payment_intent: paid.payment_intent, amount: 1500 });
   });
 
   it("a second Refund on the paid entry after the first → 422 'already fully refunded', no second Stripe call (sequence)", async () => {
@@ -170,7 +169,7 @@ describe.skipIf(!HAS_DB)("an organiser refund moves only the entry's own payment
     await refundRegistration(rig.owner, open.id, undefined);
 
     expect(stripeMock.refundCreate).toHaveBeenCalledTimes(1);
-    expect(stripeMock.refundCreate).toHaveBeenCalledWith(expect.objectContaining({ payment_intent: first.payment_intent, amount: 1500 }));
+    expect(stripeMock.refundCreate.mock.calls.at(-1)![0]).toMatchObject({ payment_intent: first.payment_intent, amount: 1500 });
   });
 
   it("rejecting a paid entry refunds it on its own intent, never the cart's newest (the same rule on the reject path)", async () => {
@@ -185,7 +184,60 @@ describe.skipIf(!HAS_DB)("an organiser refund moves only the entry's own payment
     await rejectRegistration(rig.owner, open.id);
 
     expect(stripeMock.refundCreate).toHaveBeenCalledTimes(1);
-    expect(stripeMock.refundCreate).toHaveBeenCalledWith(expect.objectContaining({ payment_intent: first.payment_intent, amount: 1500 }));
+    expect(stripeMock.refundCreate.mock.calls.at(-1)![0]).toMatchObject({ payment_intent: first.payment_intent, amount: 1500 });
     expect((await loadWithGroup(masters.id)).refunded_cents, "the sibling's payment is untouched").toBe(0);
   });
 });
+
+// Polish wave P5, P1-review carry (c): two organiser refunds of one entry at once both read the same cap before either booked its
+// refund, so both passed and both moved money; and the Stripe call carried no idempotency key, so a retry of a refund whose
+// booking failed could send the money twice. Rule under test (owner-approved rec): the entry row is locked `for update` around
+// read-cap -> Stripe -> book, and the Stripe call carries a key derived from (entry, refunded amount read under the lock, amount).
+describe.skipIf(!HAS_DB)("concurrent organiser refunds serialise on the entry (P5 carry c)", () => {
+  async function paidEntry() {
+    const { rig, open } = await twoEntryCart();
+    const paid = paidSession([open.id], 1500, "conc");
+    await handleRegistrationCheckoutCompleted(paid);
+    return { rig, open, paid };
+  }
+
+  it("two concurrent full refunds → ONE Stripe refund, the other refused 422; the books hold one refund", async () => {
+    const { rig, open, paid } = await paidEntry();
+    // Stripe takes a while: without the lock the second call reads the cap while the first is still inside Stripe.
+    stripeMock.refundCreate.mockImplementation(async () => {
+      await new Promise((r) => setTimeout(r, 300));
+      return { id: `re_conc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}` };
+    });
+
+    const results = await Promise.allSettled([
+      refundRegistration(rig.owner, open.id, undefined),
+      refundRegistration(rig.owner, open.id, undefined),
+    ]);
+
+    expect(stripeMock.refundCreate).toHaveBeenCalledTimes(1);
+    expect(stripeMock.refundCreate.mock.calls[0]![0]).toMatchObject({ payment_intent: paid.payment_intent, amount: 1500 });
+    const fulfilled = results.filter((r) => r.status === "fulfilled");
+    const rejected = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]!.reason).toBeInstanceOf(HttpError);
+    expect((rejected[0]!.reason as HttpError).status).toBe(422);
+    const row = await loadWithGroup(open.id);
+    expect(row.refunded_cents).toBe(1500);
+    expect(row.group_refunded_cents).toBe(1500);
+  });
+
+  it("the Stripe call carries an idempotency key of (entry, refunded read, amount): two legitimate equal partial refunds carry DIFFERENT keys", async () => {
+    const { rig, open } = await paidEntry();
+
+    await refundRegistration(rig.owner, open.id, 500);
+    await refundRegistration(rig.owner, open.id, 500);
+
+    expect(stripeMock.refundCreate).toHaveBeenCalledTimes(2);
+    const keys = stripeMock.refundCreate.mock.calls.map((c) => (c[1] as { idempotencyKey?: string } | undefined)?.idempotencyKey);
+    expect(keys[0]).toBe(`registration-refund:${open.id}:0:500`);
+    expect(keys[1]).toBe(`registration-refund:${open.id}:500:500`);
+    expect((await loadWithGroup(open.id)).refunded_cents).toBe(1000);
+  });
+});
+

@@ -39,13 +39,17 @@ export async function syncRegistrationRefund(charge: Stripe.Charge): Promise<voi
 export async function stripeRefund(
   paymentIntentId: string,
   amountCents: number | undefined,
+  opts: { idempotencyKey?: string } = {},
 ): Promise<Stripe.Refund> {
-  return getStripe().refunds.create({
+  const params: Stripe.RefundCreateParams = {
     payment_intent: paymentIntentId,
     ...(amountCents !== undefined ? { amount: amountCents } : {}),
     reverse_transfer: true,
     refund_application_fee: true,
-  });
+  };
+  // Polish wave P5 (carry c): a caller that can name the refund it means (the organiser's manual refund) passes a key, so a retry of
+  // the same refund is the same refund at Stripe. The others keep the one-argument call.
+  return opts.idempotencyKey ? getStripe().refunds.create(params, { idempotencyKey: opts.idempotencyKey }) : getStripe().refunds.create(params);
 }
 
 /**
