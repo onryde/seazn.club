@@ -280,9 +280,11 @@ async function enterAndPay(
     // Every entrant kind arrives here with its own pre-rendered, EMPTY player
     // rows — one for `individual`, two for `pair` — and the step refuses to
     // advance with "Fill in the missing details above before continuing".
-    // Nothing above filled them: notably, the partner name typed on the
-    // entries step feeds only the pair's DISPLAY name, never its roster
-    // (finding #17), so a doubles scenario must name both rows explicitly.
+    // Nothing above filled them, except (since polish wave P4) the partner
+    // name typed on the entries step, which now arrives on the pair's Player 2
+    // row (it used to feed only the pair's DISPLAY name, finding #17). The loop
+    // below fills BLANK rows only, so a doubles scenario still names Player 1
+    // explicitly and Player 2 keeps the partner it was given.
     //
     // `opts.roster` is positional. Falling back to the captain's name for an
     // unnamed row is right for a singles entry (the row IS the captain) and
