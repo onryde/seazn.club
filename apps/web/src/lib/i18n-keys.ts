@@ -6554,6 +6554,7 @@ export type DictionaryKey =
   | "register.status.entry.assignedToTeam"
   | "register.status.entry.awaitingTeam"
   | "register.status.entry.awaitingTeamDeadline"
+  | "register.status.entry.refunded"
   | "register.status.heading"
   | "register.status.invite.copied"
   | "register.status.invite.copy"

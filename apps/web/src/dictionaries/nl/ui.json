@@ -6671,6 +6671,7 @@
   "register.status.invite.share": "Delen",
   "register.status.invite.shareTitle": "Sluit je aan bij {entry}",
   "register.status.invite.shareText": "Sluit je aan bij {entry} ({division}): open de link om je plek te bevestigen.",
+  "register.status.entry.refunded": "Terugbetaald {amount}",
   "register.status.entry.awaitingTeam": "Wacht op een team",
   "register.status.entry.awaitingTeamDeadline": "Als niemand je vóór {date} in een team plaatst, word je automatisch terugbetaald.",
   "register.status.entry.assignedToTeam": "Toegewezen aan {team}",

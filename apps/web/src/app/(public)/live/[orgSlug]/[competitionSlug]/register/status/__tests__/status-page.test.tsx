@@ -97,6 +97,7 @@ const BASE_ENTRY = {
     consent: { public_name?: boolean } | null;
   }[],
   refund_policy: { refundable: true, deadline: "2026-09-15T00:00:00.000Z", amount_cents: 2500 },
+  refunded_cents: 0,
 };
 
 const BASE_VIEW = {

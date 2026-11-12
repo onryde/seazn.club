@@ -45,6 +45,7 @@ function props(over: Partial<EntryCardProps["entry"]> = {}, cart: Partial<EntryC
       division_player_name_display: null,
       players: [],
       refund_policy: { refundable: false, deadline: null, amount_cents: 0 },
+      refunded_cents: 0,
       ...over,
     },
     cart: { expires_at: FUTURE, charges_enabled: true, instructionsHtml: null, currency: "gbp", timezone: "UTC", ...cart },
@@ -189,6 +190,67 @@ describe("the roster says 'Checked in' only on a live entry (W6, W10, W11)", () 
       expect(markup, name).toContain(`>${d["register.status.roster.notRegistered"]}<`);
       expect(markup, name).toContain(`>${d["register.status.roster.meterRegistered"]!.replace("{claimed}", "1").replace("{total}", "2")}<`);
       expect(d["register.status.roster.notRegistered"], `${name}: not the check-in word`).not.toBe(d["register.status.roster.pending"]);
+      checked += 1;
+    }
+    expect(checked).toBe(3);
+  });
+});
+
+// Polish wave sign-off V6: a rejected entry whose fee the organiser sent back read only "REJECTED" - the registrant could not see from
+// the page that the money was returned (the rejection mail said it, the page did not). The card now names what came back, on any entry
+// that has had money sent back (a withdrawal's auto-refund, a rejection's, an organiser's partial refund on a confirmed entry), and says
+// nothing about refunds on an entry nothing was sent back for. Expected strings are the dictionary's own words plus the figure written
+// out; none is read back from the card.
+describe("an entry with money sent back says how much (sign-off V6)", () => {
+  const refundedLine = (markup: string) => markup.match(/data-testid="reg-status-refunded"[^>]*>([^<]*)</)?.[1] ?? null;
+
+  it("nothing sent back: no refund line on any status, rejected included (the empty case first; counted)", () => {
+    const ALL: EntryStatus[] = ["pending", "paid", "confirmed", "waitlisted", "withdrawn", "expired", "rejected"];
+    let checked = 0;
+    for (const status of ALL) {
+      const markup = render(props({ status, approval: "manual", refunded_cents: 0 }));
+      expect(refundedLine(markup), status).toBeNull();
+      expect(markup, status).not.toContain("Refunded");
+      checked += 1;
+    }
+    expect(checked).toBe(ALL.length);
+  });
+
+  it("the walkthrough's case: a rejected £15 entry refunded in full reads 'Refunded £15.00'", () => {
+    const markup = render(props({ status: "rejected", approval: "manual", amount_cents: 1500, refunded_cents: 1500 }));
+    expect(refundedLine(markup)).toBe("Refunded £15.00");
+  });
+
+  it("every status that has had money sent back names the amount (counted)", () => {
+    const ALL: EntryStatus[] = ["pending", "paid", "confirmed", "waitlisted", "withdrawn", "expired", "rejected"];
+    let checked = 0;
+    for (const status of ALL) {
+      expect(refundedLine(render(props({ status, approval: "manual", refunded_cents: 500 }))), status).toBe("Refunded £5.00");
+      checked += 1;
+    }
+    expect(checked).toBe(ALL.length);
+  });
+
+  it("a partial refund on a confirmed entry keeps the fee and adds what came back", () => {
+    const markup = render(props({ status: "confirmed", amount_cents: 1500, refunded_cents: 500 }));
+    expect(markup).toContain(">£15.00<");
+    expect(refundedLine(markup)).toBe("Refunded £5.00");
+  });
+
+  it("es, fr and nl each say it in their own words (read from the raw files: getDictionary fills English)", () => {
+    const dicts: [string, Locale, Dict][] = [["es", "es", uiEs as Dict], ["fr", "fr", uiFr as Dict], ["nl", "nl", uiNl as Dict]];
+    const en = (uiEn as Record<string, string>)["register.status.entry.refunded"];
+    expect(en).toBe("Refunded {amount}");
+    let checked = 0;
+    for (const [name, locale, ui] of dicts) {
+      const own = (ui as Record<string, string>)["register.status.entry.refunded"]!;
+      expect(own, `${name}: the key exists`).toBeTruthy();
+      expect(own, `${name}: translated`).not.toBe(en);
+      expect(own, `${name}: carries the figure`).toContain("{amount}");
+      const line = refundedLine(render(props({ status: "rejected", approval: "manual", refunded_cents: 1500 }, {}, locale, ui)));
+      expect(line, name).not.toBeNull();
+      for (const part of own.split("{amount}").map((s) => s.trim()).filter(Boolean)) expect(line, `${name}: ${part}`).toContain(part);
+      expect(line, `${name}: the figure`).toMatch(/15[.,]00/);
       checked += 1;
     }
     expect(checked).toBe(3);

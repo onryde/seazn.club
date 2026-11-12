@@ -42,6 +42,7 @@ vi.mock("next/headers", () => ({
 import { HttpError } from "@/lib/errors";
 import { sql } from "@/lib/db";
 import {
+  groupById,
   handleRegistrationCheckoutCompleted,
   putRegistrationSettings,
   refundRegistration,
@@ -375,5 +376,38 @@ describe.skipIf(!HAS_DB)("a retry after a refused refund carries a new key; afte
     await refundRegistration(rig.owner, open.id, undefined);
     expect(keyOf(0)).toBe(`registration-refund:${open.id}:0:1500`);
     expect(keyOf(1)).toBe(`registration-refund:${open.id}:0:1500:f1`);
+  });
+});
+
+// Polish wave sign-off V6: the rejected entry's status card said only "REJECTED" after its fee was sent back, because the status read
+// model dropped the entry's refunded amount on the floor. The seam under test: a REAL rejection of a paid entry (paid through the real
+// webhook core) moves the money, and the registrant's status read (`groupById`, what the status page renders) then carries it on that
+// entry - and only that entry. The expected 1500 is the paying session's own amount, never a value read back from the code under test.
+describe.skipIf(!HAS_DB)("the status page's read carries what a rejection sent back (sign-off V6)", () => {
+  it("before: nothing refunded on either entry; after rejecting the paid one: its fee on it, the unpaid sibling still 0", async () => {
+    const rig = await stripeRig({ feeCents: 1500 });
+    await putRegistrationSettings(rig.owner, rig.division.id, { ...SETTINGS_BASE, payment_method: "stripe", fee_cents: 1500, approval: "manual" });
+    const seeded = await seedRegistration(rig.competition.id, rig.division.id, rig.settings, { displayName: "Open Singles", amountCents: 1500 });
+    await seedSecondEntry(seeded.registration.group_id, rig.division.id, 1000, "Masters Singles");
+    const read = async () =>
+      (await groupById(seeded.registration.group_id, seeded.access_token)).entries.map((e) => [e.display_name, e.status, e.refunded_cents]);
+
+    expect(await read(), "the empty case: nothing sent back yet").toEqual([
+      ["Open Singles", "pending", 0],
+      ["Masters Singles", "pending", 0],
+    ]);
+    await handleRegistrationCheckoutCompleted(paidSession([seeded.registration.id], 1500, "v6"));
+    expect(await read(), "paid, not refunded: still 0").toEqual([
+      ["Open Singles", "paid", 0],
+      ["Masters Singles", "pending", 0],
+    ]);
+
+    await rejectRegistration(rig.owner, seeded.registration.id);
+
+    expect(stripeMock.refundCreate, "premise: the rejection moved the money").toHaveBeenCalledTimes(1);
+    expect(await read()).toEqual([
+      ["Open Singles", "rejected", 1500],
+      ["Masters Singles", "pending", 0],
+    ]);
   });
 });

@@ -104,6 +104,10 @@ export interface GroupEntryView {
    *  (see `resolveRefundPolicy`) — the status page's cancel-confirm copy
    *  reads this directly rather than re-deriving it. */
   refund_policy: ResolvedRefundPolicy;
+  /** Polish wave sign-off V6: everything sent back to the registrant for THIS entry (a withdrawal's or rejection's auto-refund, an
+   *  organiser's Refund, a late payment's refund) - the entry's `refunded_cents`, never the cart's. The status card names it, so a
+   *  rejected entry whose fee came back says so instead of reading only "Rejected". */
+  refunded_cents: number;
 }
 
 /** The whole cart, for the status page (design §4 step 6; RS007 builds the
@@ -414,6 +418,7 @@ async function buildGroupStatusView(
     org_timezone: refundTz,
     entries: entries.map(({ refunded_cents, late_refunded_cents, promotion_expires_at, entry_payment_intent_id, ...e }) => ({
       ...e,
+      refunded_cents,
       promotion_expires_at: promotion_expires_at ? new Date(promotion_expires_at).toISOString() : null,
       allows_new_joiner: entrantKindByDivision.get(e.division_id) !== "pair",
       // Unknown (a division whose settings row is somehow missing) fails

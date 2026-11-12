@@ -129,6 +129,9 @@ export interface EntryCardProps {
        *  same as an explicit null. */
       reason?: "no_deadline" | null;
     };
+    /** Polish wave sign-off V6: everything sent back for this entry (`GroupEntryView.refunded_cents`). REQUIRED for the reason
+     *  `approved` is: an omitted value would read as "nothing refunded" on a rejected entry whose fee came back. */
+    refunded_cents: number;
   };
   cart: {
     expires_at: string | null;
@@ -325,6 +328,14 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
         )}
 
         {moneyNode}
+
+        {/* Polish wave sign-off V6: what came back, on any entry money was sent back for - a rejected or withdrawn entry has no
+            money block above, so without this the page never said the fee was returned. */}
+        {entry.refunded_cents > 0 && (
+          <p data-testid="reg-status-refunded" className="text-sm text-ink-muted">
+            {t(ui, "register.status.entry.refunded", { amount: formatMoneyExact(entry.refunded_cents, cart.currency, locale) })}
+          </p>
+        )}
 
         {/* RS009 handoff — see awaitingTeamAssignment's own doc comment
             (view-model.ts) for why this check is INCOMPLETE (free_agent

@@ -67,6 +67,7 @@ function baseProps(): EntryCardProps {
         },
       ],
       refund_policy: { refundable: false, deadline: null, amount_cents: 0 },
+      refunded_cents: 0,
     },
     cart: {
       expires_at: null,
