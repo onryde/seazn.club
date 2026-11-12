@@ -8,12 +8,13 @@ import "server-only";
 // `null` also means "already queued" (the once-key): nothing more to attempt. A request path then makes the first attempt after commit
 // (`deferred(() => dispatchNow(ids))`); a webhook or the sweep leaves it to the retry worker, as every other outbox mail does.
 import { routes } from "@/lib/routes";
-import { registrationApprovedEmail, registrationExpiredEmail, registrationPaidEmail, registrationWithdrawnEmail } from "@/lib/email";
-import { isTerminalRegistrationStatus } from "@/lib/registration-status";
+import { registrationApprovedEmail, registrationExpiredEmail, registrationJoinedEmail, registrationPaidEmail, registrationWithdrawnEmail } from "@/lib/email";
+import type { JoinedState } from "@/lib/email-templates";
+import { entryWaitingOn, isTerminalRegistrationStatus } from "@/lib/registration-status";
 import { enqueueEmailOnce, expiryWithin, recipientLocale } from "@/server/email-outbox";
 import { log } from "@/server/logger";
 import type { Tx, RegistrationWithGroupRow, DivisionCtx } from "./types";
-import { divisionCtx, fallbackOrigin } from "./lookups";
+import { divisionCtx, fallbackOrigin, loadSettings } from "./lookups";
 
 const divisionNameOf = async (db: Tx, divisionId: string): Promise<string> => {
   const [row] = await db<{ name: string }[]>`select name from divisions where id = ${divisionId}`;
@@ -246,6 +247,70 @@ export async function queueRegistrationWithdrawnMail(tx: Tx, a: { reg: Registrat
       transactional: false,
       expiresAt: expiryWithin(null),
       dedupeKey: `${reg.id}:withdrawn`,
+    });
+  });
+}
+
+/** What the joiner is told the entry IS: confirmed, on the waitlist, or still waiting on the fee and/or the organiser's approval. `null` =
+ *  nothing nameable (a pending entry with no fee under auto-approval is a state nothing rests in): the mail then says nothing about the
+ *  entry's standing rather than claim one. */
+const joinedStateOf = (status: string, amountCents: number, approval: "auto" | "manual" | null): JoinedState | null => {
+  if (status === "confirmed") return "confirmed";
+  if (status === "waitlisted") return "waitlisted";
+  return approval === null ? null : entryWaitingOn(status, amountCents, approval);
+};
+
+/**
+ * `registration_joined`: a teammate claimed a slot on the entry, or took one, through its join link (W13). To THE JOINER's own address, in
+ * their language (their account's, else the club's), telling them which entry they are on and honestly where it stands: a team that has not
+ * paid or been approved is NOT "in" yet, and the mail says what it waits on.
+ *
+ * Runs in the join's own transaction, at its own savepoint: a join never fails for want of a mail. `to` is what the joiner typed: none (or only
+ * blanks) is the empty case, nothing to mail, and the join stands. An entry already in a terminal status is not described as one the joiner is
+ * on (the join link refuses those before it gets here; this is that assumption as a guard). The joiner holds no status token, so the mail
+ * links the competition's public page (none for a private competition) and never the captain's reference code.
+ *
+ * Once per PLAYER ROW (`<player id>:joined`): a slot is claimed once, and two joiners on one entry are two mails to their own addresses.
+ * A request path: the caller makes the first attempt after the response.
+ */
+export async function queueRegistrationJoinedMail(
+  tx: Tx,
+  a: { registrationId: string; playerId: string; playerName: string; to: string | null; userId: string | null; origin?: string },
+): Promise<string | null> {
+  const to = a.to?.trim() ?? "";
+  if (to === "") return null;
+  return contained(tx, "registration_joined", a.registrationId, async (sp) => {
+    const [reg] = await sp<{ display_name: string; status: string; amount_cents: number; division_id: string; org_id: string }[]>`
+      select display_name, status, amount_cents, division_id, org_id from registrations where id = ${a.registrationId}`;
+    if (!reg) throw new Error(`lifecycle mail: registration ${a.registrationId} not found`);
+    if (isTerminalRegistrationStatus(reg.status)) return null;
+    const origin = a.origin ?? fallbackOrigin();
+    const ctx = await divisionCtx(sp, reg.division_id);
+    const settings = await loadSettings(sp, reg.division_id);
+    const locale = await recipientLocale(sp, { pick: null, userId: a.userId, orgDefault: ctx.default_locale });
+    const content = await registrationJoinedEmail(
+      {
+        orgName: ctx.org_name,
+        competitionName: ctx.comp_name,
+        divisionName: await divisionNameOf(sp, reg.division_id),
+        displayName: reg.display_name,
+        refCode: null,
+        playerName: a.playerName,
+        state: joinedStateOf(reg.status, reg.amount_cents, settings?.approval ?? null),
+        competitionUrl: competitionUrlOf(origin, ctx),
+      },
+      locale,
+    );
+    return enqueueEmailOnce(sp, {
+      kind: "registration_joined",
+      refType: "registration",
+      refId: a.registrationId,
+      orgId: reg.org_id,
+      to,
+      ...content,
+      transactional: false,
+      expiresAt: expiryWithin(null),
+      dedupeKey: `${a.playerId}:joined`,
     });
   });
 }

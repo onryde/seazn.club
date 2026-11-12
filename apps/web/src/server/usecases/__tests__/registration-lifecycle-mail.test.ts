@@ -18,17 +18,19 @@ const stripeMock = vi.hoisted(() => {
 });
 vi.mock("@/lib/stripe", () => ({ getStripe: () => stripeMock.stripe }));
 
-// `registrationApprovedEmail` and `registrationWithdrawnEmail` pass through to the real renderer; a test makes one fail to prove the
+// `registrationApprovedEmail`, `registrationWithdrawnEmail` and `registrationJoinedEmail` pass through to the real renderer; a test makes one fail to prove the
 // failure stays contained to that mail's own savepoint (the approval / the withdrawal stands).
 vi.mock("@/lib/email", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/email")>();
-  return { ...actual, registrationApprovedEmail: vi.fn(actual.registrationApprovedEmail), registrationWithdrawnEmail: vi.fn(actual.registrationWithdrawnEmail) };
+  return { ...actual, registrationApprovedEmail: vi.fn(actual.registrationApprovedEmail), registrationWithdrawnEmail: vi.fn(actual.registrationWithdrawnEmail), registrationJoinedEmail: vi.fn(actual.registrationJoinedEmail) };
 });
 
 const deliverMock = vi.hoisted(() => vi.fn());
 vi.mock("@/server/email-outbox/transport", () => ({ deliver: deliverMock }));
 
 import { sql } from "@/lib/db";
+import { getDictionary } from "@/lib/i18n";
+import { log } from "@/server/logger";
 import * as emailModule from "@/lib/email";
 import { generateRefCode } from "@/lib/ref-code";
 import { openBody } from "@/server/email-outbox/seal";
@@ -51,12 +53,19 @@ import {
   withdrawRegistrationOrganiser,
   withdrawRegistrationPublic,
 } from "../registrations";
-import { queueRegistrationApprovedMails, queueRegistrationExpiredMail, queueRegistrationPaidMail, queueRegistrationWithdrawnMail } from "../registrations/lifecycle-mail";
+import {
+  queueRegistrationApprovedMails,
+  queueRegistrationExpiredMail,
+  queueRegistrationJoinedMail,
+  queueRegistrationPaidMail,
+  queueRegistrationWithdrawnMail,
+} from "../registrations/lifecycle-mail";
+import { joinTeamEntry } from "../registration-submit";
 import type { RegistrationRow } from "../registrations";
 import { approveRegistration } from "../registration-approval";
 import { createDivision } from "../divisions";
 import { stubOutboxEnv } from "./_invite-mail";
-import { SETTINGS_BASE, asOwner, fakeSession, loadWithGroup, rig, seedOrg, seedRegistration, seedSecondEntry, stripeRig } from "./_registration-fixtures";
+import { SETTINGS_BASE, asOwner, fakeSession, loadWithGroup, makeUser, rig, seedOrg, seedRegistration, seedSecondEntry, stripeRig } from "./_registration-fixtures";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const ORIGIN = "https://lifecycle-mail.test";
@@ -85,6 +94,7 @@ beforeEach(() => {
   // vitest 4: mockReset puts back the implementation given to vi.fn(impl), i.e. the real renderer (the hook above is for one test only).
   vi.mocked(emailModule.registrationApprovedEmail).mockReset();
   vi.mocked(emailModule.registrationWithdrawnEmail).mockReset();
+  vi.mocked(emailModule.registrationJoinedEmail).mockReset();
 });
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -145,9 +155,6 @@ async function body(kind: string, refType: string, refId: string, to?: string): 
   expect(row!.body_sealed, `the ${kind} row still holds its body (status ${row!.status})`).not.toBeNull();
   return { ...(await openBody(row!.body_sealed!)), subject: row!.subject };
 }
-
-const rowCount = async (kind: string, refType: string, refId: string): Promise<number> =>
-  Number((await sql<{ n: string }[]>`select count(*)::text as n from email_outbox where kind = ${kind} and ref_type = ${refType} and ref_id = ${refId}`)[0]!.n);
 
 /** The visible words of an html part. */
 const words = (html: string): string => html.replace(/<style[\s\S]*?<\/style>/g, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
@@ -699,6 +706,10 @@ describe.skipIf(!HAS_DB)("withdrawn: the organiser withdraws an entry (real with
     await sql`update registration_groups set contact_name = ${CONTACT} where id = ${reg.registration.group_id}`;
     await withdrawRegistrationOrganiser(w.owner, reg.registration.id);
     expect(await statusOf(reg.registration.id), "premise: the real usecase withdrew it").toBe("withdrawn");
+    await vi.waitFor(async () => {
+      const [r] = await withdrawnRows(reg.registration.id);
+      if (!r || r.attempts < 1) throw new Error("the request's attempt has not been made yet");
+    });
     const rows = await withdrawnRows(reg.registration.id);
     expect(rows.map((r) => r.recipient.toLowerCase())).toEqual([to]);
     expect(rows[0]!.status).toBe("queued");
@@ -802,5 +813,207 @@ describe.skipIf(!HAS_DB)("queueRegistrationWithdrawnMail's own guards", () => {
       checked += 1;
     }
     expect(checked).toBe(3);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// registration_joined (W13): a teammate claimed a slot (or took one) through the join link
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+const joinedRows = async (regId: string) =>
+  sql<{ id: string; recipient: string; status: string; attempts: number; dedupe_key: string | null }[]>`
+    select id, recipient, status, attempts, dedupe_key from email_outbox where kind = 'registration_joined' and ref_type = 'registration' and ref_id = ${regId} order by created_at, id`;
+
+/** A TEAM entry with a join link, in a world whose fee, payment method and approval mode the case chooses. Seeded by the row (not by a
+ *  submit) so each case names the exact status the entry rests in; the join itself is the real `joinTeamEntry`. */
+async function teamEntry(a: {
+  fee?: number;
+  approval?: "auto" | "manual";
+  status?: RegistrationRow["status"];
+  players?: string[];
+  visibility?: "public" | "private";
+  locale?: string | null;
+}) {
+  const { orgId, ownerId } = await seedOrg("pro");
+  made.orgIds.push(orgId);
+  made.userIds.push(ownerId);
+  const owner = asOwner(orgId, ownerId);
+  const { competition, division } = await rig(owner);
+  if (a.visibility) await sql`update competitions set visibility = ${a.visibility} where id = ${competition.id}`;
+  const settings = await putRegistrationSettings(owner, division.id, {
+    ...SETTINGS_BASE,
+    entrant_kind: "team",
+    fee_cents: a.fee ?? 0,
+    payment_method: "offline",
+    payment_instructions: "Pay at the desk, quoting {{reference}}",
+    approval: a.approval ?? "auto",
+  });
+  const refCode = generateRefCode();
+  const reg = await seedRegistration(competition.id, division.id, settings, {
+    displayName: TEAM,
+    contactEmail: address("captain"),
+    status: a.status ?? "confirmed",
+    players: (a.players ?? []).map((name) => ({ name })),
+    locale: a.locale ?? null,
+    refCode,
+  });
+  const joinCode = `JN${randomUUID().replace(/-/g, "").slice(0, 8).toUpperCase()}`;
+  await sql`update registrations set join_code = ${joinCode} where id = ${reg.registration.id}`;
+  const slots = await sql<{ id: string; full_name: string }[]>`select id, full_name from registration_players where registration_id = ${reg.registration.id} order by full_name`;
+  return { orgId, owner, competition, division, settings, reg: reg.registration, joinCode, refCode, slots };
+}
+
+const JOINER = "Sam Joiner";
+const join = (code: string, to: string | null, over: { player_id?: string; name?: string; sessionUserId?: string } = {}) =>
+  joinTeamEntry(
+    { sessionUserId: over.sessionUserId ?? null },
+    { join_code: code, player_id: over.player_id ?? null, player: { full_name: over.name ?? JOINER, dob: "1995-05-01", email: to }, privacy_consent: true },
+  );
+
+describe.skipIf(!HAS_DB)("joined: a teammate joins an entry (real joinTeamEntry)", () => {
+  it("each state the entry rests in is stated honestly: five waiting/confirmed states and the one with nothing to name (the table, not a sample)", async () => {
+    const dict = await getDictionary("en", "emails");
+    const T = (k: string): string => String(dict[`registrationJoined.state${k}Title`]);
+    // Expected titles come from the DICTIONARY'S keys per state; what each case is waiting on is the rulebook's (a fee is owed only while the
+    // entry is pending; a paid entry waits on approval alone; a free auto-approved entry has nothing to wait on).
+    const table: Array<{ name: string; entry: Parameters<typeof teamEntry>[0]; title: string | null }> = [
+      { name: "confirmed", entry: { status: "confirmed" }, title: T("Confirmed") },
+      { name: "waitlisted", entry: { status: "waitlisted" }, title: T("Waitlisted") },
+      { name: "payment", entry: { status: "pending", fee: 1500, approval: "auto" }, title: T("Payment") },
+      { name: "approval", entry: { status: "pending", fee: 0, approval: "manual" }, title: T("Approval") },
+      { name: "payment and approval", entry: { status: "pending", fee: 1500, approval: "manual" }, title: T("PaymentApproval") },
+      { name: "paid, awaiting approval", entry: { status: "paid", fee: 1500, approval: "manual" }, title: T("Approval") },
+      { name: "pending with nothing to wait on", entry: { status: "pending", fee: 0, approval: "auto" }, title: null },
+    ];
+    const allTitles = Object.keys(dict).filter((k) => /^registrationJoined\.state.*Title$/.test(k)).map((k) => String(dict[k]));
+    expect(allTitles.length, "premise: the dictionary has five state titles").toBe(5);
+    let checked = 0;
+    for (const c of table) {
+      const e = await teamEntry(c.entry);
+      const to = address("joiner");
+      await join(e.joinCode, to);
+      const rows = await joinedRows(e.reg.id);
+      expect(rows.map((r) => r.recipient.toLowerCase()), c.name).toEqual([to]);
+      const b = await body("registration_joined", "registration", e.reg.id, to);
+      if (c.title) expect(b.text, `${c.name}: names its state`).toContain(c.title);
+      // ("…awaiting payment" is a prefix of "…awaiting payment and approval": a title the expected one contains is not another state's.)
+      for (const other of allTitles.filter((t) => t !== c.title && !(c.title ?? "").includes(t))) expect(b.text, `${c.name}: names no OTHER state`).not.toContain(other);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: every row of the table was driven").toBe(7);
+  });
+
+  it("the mail greets the joiner, names the entry and its division, links the public page, and never leaks the captain's reference; the first attempt follows the response", async () => {
+    const e = await teamEntry({ status: "confirmed" });
+    const to = address("joiner-copy");
+    await join(e.joinCode, to);
+    // The dispatch runs after the response, on its own: wait for the attempt rather than race it. The provider answers 503, so the row stays queued.
+    await vi.waitFor(async () => {
+      const [r] = await joinedRows(e.reg.id);
+      if (!r || r.attempts < 1) throw new Error("the request's attempt has not been made yet");
+    });
+    const [row] = await joinedRows(e.reg.id);
+    expect(row!.status).toBe("queued");
+    expect(row!.attempts, "a request path: one attempt, made after the response").toBe(1);
+    const b = await body("registration_joined", "registration", e.reg.id, to);
+    const visible = words(b.html);
+    expect(visible).toContain(JOINER);
+    expect(visible.indexOf(TEAM, visible.indexOf(JOINER)), "the entry is named after the greeting").toBeGreaterThan(visible.indexOf(JOINER));
+    expect(b.text).toContain("Open");
+    expect(b.text, "the competition's public page").toContain("/live/");
+    expect(b.text, "the captain's reference code is theirs, not the teammate's").not.toContain(e.refCode);
+    expect(b.html).not.toContain(e.refCode);
+  });
+
+  it("the joiner's language is their account's; with no account it is the club's", async () => {
+    // Two slots to claim: the generic sport's roster holds one player, so a second NEW joiner would be refused as "full".
+    const e = await teamEntry({ status: "confirmed", players: ["Nora Account", "Elsa Anon"] });
+    const dictNl = await getDictionary("nl", "emails");
+    const userId = await makeUser("joiner-nl");
+    made.userIds.push(userId);
+    await sql`update users set locale = 'nl' where id = ${userId}`;
+    const nlTo = address("joiner-nl");
+    await join(e.joinCode, nlTo, { sessionUserId: userId, name: "Nora Account", player_id: e.slots.find((x) => x.full_name === "Nora Account")!.id });
+    const enTo = address("joiner-en");
+    await join(e.joinCode, enTo, { name: "Elsa Anon", player_id: e.slots.find((x) => x.full_name === "Elsa Anon")!.id });
+    const nl = await body("registration_joined", "registration", e.reg.id, nlTo);
+    const en = await body("registration_joined", "registration", e.reg.id, enTo);
+    expect(nl.text, "premise: an account's nl pick reaches the mail").toContain(dictNl["registrationJoined.stateConfirmedTitle"]!);
+    expect(en.subject).not.toBe(nl.subject);
+    expect(en.text).not.toContain(dictNl["registrationJoined.stateConfirmedTitle"]!);
+  });
+
+  it("a CLAIMED slot mails the claimer once; a second claim of the same slot is refused and mails nothing; two joiners are two mails to their own addresses", async () => {
+    const e = await teamEntry({ status: "confirmed", players: ["Slot A", "Slot B"] });
+    const toA = address("claim-a");
+    const toB = address("claim-b");
+    await join(e.joinCode, toA, { player_id: e.slots[0]!.id, name: "Slot A" });
+    await expect(join(e.joinCode, address("claim-again"), { player_id: e.slots[0]!.id, name: "Slot A" })).rejects.toMatchObject({ status: 409 });
+    await join(e.joinCode, toB, { player_id: e.slots[1]!.id, name: "Slot B" });
+    const rows = await joinedRows(e.reg.id);
+    expect(rows.map((r) => r.recipient.toLowerCase()).sort()).toEqual([toA, toB].sort());
+    expect(rows.map((r) => r.dedupe_key).sort(), "keyed by the player row, not the entry").toEqual([`${e.slots[0]!.id}:joined`, `${e.slots[1]!.id}:joined`].sort());
+  });
+
+  it("no address, no mail: a joiner who left none (or only blanks) joins all the same (the empty case)", async () => {
+    const e = await teamEntry({ status: "confirmed", players: ["No Address", "Blank Address"] });
+    // Declining to mail is the producer's own decision, not a failure it swallows: nothing is logged as an error (the outbox would refuse a
+    // blank recipient anyway, inside the savepoint, and the contained failure would hide that this guard is gone).
+    const errors = vi.spyOn(log, "error");
+    const none = await join(e.joinCode, null, { name: "No Address", player_id: e.slots.find((x) => x.full_name === "No Address")!.id });
+    const blank = await join(e.joinCode, "   ", { name: "Blank Address", player_id: e.slots.find((x) => x.full_name === "Blank Address")!.id });
+    expect(none.player_id).not.toBe(blank.player_id);
+    const joined = await sql<{ n: number }[]>`select count(*)::int as n from registration_players where registration_id = ${e.reg.id} and consent_status = 'granted'`;
+    expect(joined[0]!.n, "premise: both joined (consented)").toBe(2);
+    expect(await joinedRows(e.reg.id)).toHaveLength(0);
+    expect(errors, "no failure was contained: the producer declined").not.toHaveBeenCalled();
+  });
+
+  it("after a withdrawal the link is refused and nothing is mailed (sequence)", async () => {
+    const e = await teamEntry({ status: "confirmed" });
+    await withdrawRegistrationOrganiser(e.owner, e.reg.id);
+    await expect(join(e.joinCode, address("late"))).rejects.toMatchObject({ status: 422 });
+    expect(await joinedRows(e.reg.id)).toHaveLength(0);
+  });
+
+  it("a private competition: the joiner is told, with no link to a page that does not exist", async () => {
+    const e = await teamEntry({ status: "confirmed", visibility: "private" });
+    const to = address("joiner-priv");
+    await join(e.joinCode, to);
+    const b = await body("registration_joined", "registration", e.reg.id, to);
+    expect(b.text).not.toContain("http");
+  });
+
+  it("a mail that cannot be queued never undoes the join (contained at its own savepoint)", async () => {
+    const e = await teamEntry({ status: "confirmed" });
+    vi.mocked(emailModule.registrationJoinedEmail).mockImplementation(async () => {
+      throw new Error("render fault");
+    });
+    const to = address("joiner-fault");
+    const errors = vi.spyOn(log, "error");
+    const res = await join(e.joinCode, to);
+    expect(errors, "premise: the spy sees the producer's contained failure").toHaveBeenCalledWith(expect.objectContaining({ kind: "registration_joined" }), expect.any(String));
+    expect(vi.mocked(emailModule.registrationJoinedEmail), "premise: the producer reached the renderer").toHaveBeenCalled();
+    const [player] = await sql<{ email: string | null }[]>`select email from registration_players where id = ${res.player_id}`;
+    expect(player!.email?.toLowerCase(), "the join stands").toBe(to);
+    expect(await joinedRows(e.reg.id)).toHaveLength(0);
+  });
+});
+
+describe.skipIf(!HAS_DB)("queueRegistrationJoinedMail's own guards", () => {
+  it("once per player row: a second call for the same player queues nothing", async () => {
+    const e = await teamEntry({ status: "confirmed", players: ["Slot A"] });
+    const call = () =>
+      sql.begin((tx) => queueRegistrationJoinedMail(tx, { registrationId: e.reg.id, playerId: e.slots[0]!.id, playerName: JOINER, to: address("once"), userId: null }));
+    expect(await call()).not.toBeNull();
+    expect(await call()).toBeNull();
+    expect(await joinedRows(e.reg.id)).toHaveLength(1);
+  });
+
+  it("an entry that ended is not described as one the joiner is in (nothing queued for a withdrawn entry)", async () => {
+    const e = await teamEntry({ status: "withdrawn", players: ["Slot A"] });
+    const id = await sql.begin((tx) => queueRegistrationJoinedMail(tx, { registrationId: e.reg.id, playerId: e.slots[0]!.id, playerName: JOINER, to: address("ended"), userId: null }));
+    expect(id).toBeNull();
+    expect(await joinedRows(e.reg.id)).toHaveLength(0);
   });
 });

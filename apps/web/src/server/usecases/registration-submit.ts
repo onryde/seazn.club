@@ -17,11 +17,13 @@ import "server-only";
 import { randomBytes } from "node:crypto";
 import { sql, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { deferred } from "@/lib/deferred";
 import { getLimit, requireFeature } from "@/lib/entitlements";
 import { generateRefCode } from "@/lib/ref-code";
 import { rosterDerivedName } from "@/lib/entrant-roster-name";
 import { LEGAL_VERSION } from "@/lib/legal";
 import { log } from "@/server/logger";
+import { dispatchNow } from "@/server/email-outbox";
 import {
   SPOT_HOLDERS,
   REGISTRATION_TOKEN_PREFIX,
@@ -37,6 +39,7 @@ import {
   backfillPersonEmail,
   joinExistingEntrant,
   inviteUnclaimedMembers,
+  queueRegistrationJoinedMail,
   playerPersonConsentsByEmail,
   anyOptedOutByRegistration,
   type RegistrationRow,
@@ -1319,6 +1322,8 @@ export async function joinTeamEntry(
   // to sweep yet — materialise() itself will trigger the sweep whenever it
   // eventually runs).
   let materialisedEntrantId: string | null = null;
+  // Polish wave P2 (W13): the joiner's own "you're on the team" mail, queued in this transaction; its first attempt follows the response.
+  let joinedMailId: string | null = null;
 
   const playerId = await sql.begin(async (tx) => {
     const [locked] = await tx<{ status: string; free_agent: boolean; entrant_id: string | null }[]>`
@@ -1438,6 +1443,7 @@ export async function joinTeamEntry(
           await backfillPersonEmail(tx, claimed.person_id, claimedEmail);
         }
       }
+      joinedMailId = await queueRegistrationJoinedMail(tx, { registrationId: reg.id, playerId: claimed.id, playerName: input.player.full_name, to: claimedEmail, userId: linkUserId });
       return claimed.id;
     }
 
@@ -1476,6 +1482,7 @@ export async function joinTeamEntry(
         user_id: linkUserId,
       });
     }
+    joinedMailId = await queueRegistrationJoinedMail(tx, { registrationId: reg.id, playerId: player!.id, playerName: input.player.full_name, to: claimedEmail, userId: linkUserId });
     return player!.id;
   });
 
@@ -1488,6 +1495,8 @@ export async function joinTeamEntry(
   // this joiner (and any other already-granted, unclaimed member of the
   // SAME entrant) is swept in one call.
   if (materialisedEntrantId) void inviteUnclaimedMembers(reg.org_id, materialisedEntrantId);
+  const sendJoinedId: string | null = joinedMailId;
+  if (sendJoinedId !== null) deferred(() => dispatchNow([sendJoinedId]));
 
   log.info(
     {

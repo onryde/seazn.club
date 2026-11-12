@@ -123,7 +123,7 @@ export {
 export type { ResolvedRefundPolicy } from "./refunds";
 export { handleRegistrationDispute, buildDisputeEvidence } from "./disputes";
 export { releaseSoloSignUpPlacement } from "./withdraw";
-export { queueRegistrationApprovedMails } from "./lifecycle-mail";
+export { queueRegistrationApprovedMails, queueRegistrationJoinedMail } from "./lifecycle-mail";
 export {
   publicRegistrationStatus,
   withdrawRegistrationPublic,
