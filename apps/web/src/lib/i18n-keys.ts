@@ -6586,6 +6586,7 @@ export type DictionaryKey =
   | "register.status.roster.claimed"
   | "register.status.roster.heading"
   | "register.status.roster.meter"
+  | "register.status.roster.meterJoined"
   | "register.status.roster.meterRegistered"
   | "register.status.roster.notRegistered"
   | "register.status.roster.pending"

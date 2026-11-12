@@ -256,7 +256,8 @@ export function rosterMeterAfterJoin(
  *  Your spot is confirmed" is true of a `confirmed` entry and of nothing else: a team awaiting payment or approval, or on the waitlist, is not
  *  confirmed because one more teammate arrived. Every other standing says "You've joined" and, where the server named one, what the entry is
  *  still waiting on. `null` (nothing nameable, or a response that carried no standing at all) says only "You've joined": never confirmed.
- *  The meter says "registered", not "checked in", on a waitlisted entry (it has nothing to check in to; W6/W10/W11). */
+ *  The meter says "registered", not "checked in", on a waitlisted entry (it has nothing to check in to; W6/W10/W11), and "joined" on
+ *  every other entry that is not confirmed (sign-off V7). */
 export interface JoinSuccessCopy {
   headingKey: string;
   bodyKey: string;
@@ -277,6 +278,8 @@ export function joinSuccessCopy(state: EntryStanding | null): JoinSuccessCopy {
     headingKey: "register.join.success.joinedHeading",
     bodyKey: "register.join.success.joinedBody",
     stateKey: state === null ? null : `register.join.success.state.${state}`,
-    meterKey: state === "waitlisted" ? "register.status.roster.meterRegistered" : "register.status.roster.meter",
+    // Polish wave sign-off V7: a not-yet-confirmed entry's meter says how many have joined - "checked in" read as a claim about an
+    // unpaid entry nobody had made. Waitlisted keeps "registered" (P3); only the confirmed branch above says checked in.
+    meterKey: state === "waitlisted" ? "register.status.roster.meterRegistered" : "register.status.roster.meterJoined",
   };
 }

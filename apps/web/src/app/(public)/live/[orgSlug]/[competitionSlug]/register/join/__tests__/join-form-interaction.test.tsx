@@ -399,12 +399,23 @@ describe("submit — success", () => {
       expect(m.pageText()).not.toContain("checked in");
     });
 
-    it("a payment-pending entry's meter keeps the check-in wording (it is a live entry)", async () => {
-      apiV1Mock.queue.push({ ok: true, data: { registration_id: "reg-1", player_id: "p1", consent_status: "granted", entry_state: "payment" } });
-      const m = mount({ initialPlayerId: "p1", totalPlayers: 4 });
-      fillMinimalValidForm(m);
-      await submit(m);
-      expect(m.pageText()).toContain("3 of 4 checked in");
+    // Polish wave sign-off V7 (reverses P3's "a payment-pending entry keeps the check-in wording"): the owner read "2 of 2 checked in"
+    // on a join to an unpaid entry as a claim nobody had made. An entry not yet confirmed (awaiting payment and/or approval), and a
+    // response that names no standing, say how many have JOINED. Expected text is the dictionary's own words with the figures filled.
+    it("an entry awaiting payment or approval (or naming no standing) says 'joined', never 'checked in' (counted)", async () => {
+      let checked = 0;
+      for (const state of ["payment", "approval", "payment_and_approval", null]) {
+        apiV1Mock.calls = [];
+        apiV1Mock.queue = [];
+        apiV1Mock.queue.push({ ok: true, data: { registration_id: "reg-1", player_id: "p1", consent_status: "granted", entry_state: state } });
+        const m = mount({ initialPlayerId: "p1", totalPlayers: 4 });
+        fillMinimalValidForm(m);
+        await submit(m);
+        expect(m.pageText(), String(state)).toContain("3 of 4 joined");
+        expect(m.pageText(), String(state)).not.toContain("checked in");
+        checked += 1;
+      }
+      expect(checked).toBe(4);
     });
   });
 

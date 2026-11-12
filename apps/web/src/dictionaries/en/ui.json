@@ -6659,6 +6659,7 @@
   "register.status.roster.pending": "Not checked in",
   "register.status.roster.registered": "Registered",
   "register.status.roster.notRegistered": "Not registered yet",
+  "register.status.roster.meterJoined": "{claimed} of {total} joined",
   "register.status.roster.meterRegistered": "{claimed} of {total} registered",
   "register.status.invite.heading": "Invite your teammates",
   "register.status.invite.headingPair": "Invite your partner",
