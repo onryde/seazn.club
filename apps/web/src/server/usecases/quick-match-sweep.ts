@@ -11,7 +11,9 @@ import "server-only";
 //   1. re-arm (Review Focus 3, D8): a saved match whose saver's account is soft-deleted (`users.deleted_at`; the account
 //      deletion releases its matches itself, so this is the backstop) or hard-deleted (the FK nulled `saved_by_user_id`,
 //      leaving a row with neither saver nor expiry) becomes unsaved again, expiring 7 days after its last activity. Its
-//      address goes too: with the account gone it can no longer be compared with anyone's.
+//      address goes too: with the account gone it can no longer be compared with anyone's (the save already forgot it, m9;
+//      this is the backstop's own scrub). Its reminder stamp stays as the save set it (spent): with no address the
+//      reminder step (3) never reaches it, so clearing the stamp would promise a mail nothing can send (final review B m1).
 //   2. expire: an unsaved match whose expiry is strictly past is hard-deleted (quick-match-delete.ts), each in its own
 //      transaction that re-reads the expiry under the row's lock, so a score that landed since the read keeps it. A delete
 //      that happened sends `quick_match_deleted` (via "expiry", quick-match-deleted-event.ts): the row leaves no other trace.
@@ -154,8 +156,7 @@ export async function sweepQuickMatches(opts: SweepQuickMatchesOptions): Promise
       update quick_matches t
          set saved_by_user_id = null,
              expires_at = t.last_activity_at + make_interval(days => ${QUICK_MATCH_EXPIRY_DAYS}::int),
-             email = null,
-             reminder_sent_at = null
+             email = null
        where t.id in (
          select q.id from quick_matches q
           where q.org_id = ${SYSTEM_ORG} and ${saverGone()} ${matchInScope()}

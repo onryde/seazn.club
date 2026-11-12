@@ -132,9 +132,11 @@ export async function saveQuickMatchForUser(userId: string, quickMatchId: string
 /**
  * A deleted account lets go of its quick matches (D8), on the deletion's own transaction (the pooled client, before the
  * account's address is anonymised): the matches it saved expire again `QUICK_MATCH_EXPIRY_DAYS` after their last
- * activity, so friends with the link keep scoring until then, and the reminder is owed again (the save had marked it
- * sent); its address leaves every match it was typed on. The matches it saved are found by their saver, never by the
- * address: a saved match holds none (m9), so a released one has no address to be reminded at either.
+ * activity, so friends with the link keep scoring until then; its address leaves every match it was typed on. The matches
+ * it saved are found by their saver, never by the address: a saved match holds none (m9), so a released one has no address
+ * to be reminded at, and is never reminded. Its reminder stamp is left as the save set it (spent): clearing it would promise
+ * a mail the sweep can never send, since the reminder step needs an address (final review B m1). Friends get no warning
+ * before such a match is swept; D8 accepted that.
  *
  * And every quick match mail still QUEUED to the address (its link, its reminder) ends unsent (branch review B m4, controller
  * PO rec 2026-11-08), whichever match it is about: one a stranger saved has forgotten the address (m9), its queued link mail
@@ -166,8 +168,7 @@ export async function releaseQuickMatchesOfDeletedAccount(tx: Tx, a: { userId: s
   await tx`
     update quick_matches
        set saved_by_user_id = null,
-           expires_at = last_activity_at + make_interval(days => ${QUICK_MATCH_EXPIRY_DAYS}),
-           reminder_sent_at = null
+           expires_at = last_activity_at + make_interval(days => ${QUICK_MATCH_EXPIRY_DAYS})
      where saved_by_user_id = ${a.userId} and org_id = ${QUICK_MATCH_SYSTEM_ORG_ID}`;
   await tx`
     update quick_matches set email = null

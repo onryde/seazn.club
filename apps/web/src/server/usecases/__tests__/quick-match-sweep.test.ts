@@ -273,7 +273,9 @@ async function saver(tag: string): Promise<string> {
   users.push(u.id);
   return u.id;
 }
-/** The save (plan 3 Task 4's one UPDATE, as `quick-match-save.ts` writes it): saver set, expiry cleared, reminder marked spent. */
+/** The save's UPDATE (`quick-match-save.ts`) MINUS its `email = null` (m9): saver set, expiry cleared, reminder marked spent, the
+ *  address deliberately KEPT. No product path leaves a saved row with an address; the rig does, so the re-arm's own address scrub
+ *  and the once-key backstop below have something to act on. */
 async function saveAs(quickMatchId: string, userId: string): Promise<void> {
   await sql`update quick_matches set saved_by_user_id = ${userId}, expires_at = null, reminder_sent_at = coalesce(reminder_sent_at, now())
             where id = ${quickMatchId}`;
@@ -635,13 +637,15 @@ describe.skipIf(!HAS_DB)("the expiry sweep (DB)", () => {
     expect(await remindersOf(due.id)).toHaveLength(0);
   });
 
-  it("never twice before the same expiry: a match reminded, saved, then released with no activity since gets no second reminder", async () => {
+  it("never twice before the same expiry: a reminded match whose stamp is cleared with its expiry unchanged gets no second reminder (the outbox's once-key backstops the stamp)", async () => {
     const due = await create({ email: address("once") });
     await expiresIn(due.id, 23);
     expect(await sweepQuickMatches({ baseUrl: BASE, onlyIds: [due.id] })).toEqual({ ...ZERO, checked: 1, reminded: 1 });
     await saveAs(due.id, await saver("once"));
-    // The release as Task 4's account deletion writes it: unsaved, 7 days from the last activity (the same expiry as before, since
-    // nothing was scored), the reminder stamp cleared.
+    // A hand-written state no product path writes: unsaved again, 7 days from the last activity (the same expiry as before), the
+    // address kept and the reminder stamp cleared. The account deletion's release used to clear the stamp; since m9 a saved match
+    // holds no address and the release leaves the stamp alone (final review B m1). The once-key, per expiry, is the backstop if
+    // a path ever clears the stamp without moving the expiry.
     await sql`update quick_matches set saved_by_user_id = null, expires_at = last_activity_at + interval '7 days', reminder_sent_at = null
               where id = ${due.id}`;
     expect(await sweepQuickMatches({ baseUrl: BASE, onlyIds: [due.id] })).toEqual({ ...ZERO, checked: 1 });
@@ -732,6 +736,8 @@ describe.skipIf(!HAS_DB)("the expiry sweep (DB)", () => {
     const fresh = await create({ email: address("rearm-fresh") });
     const freshClock = await idleFor(fresh.id, 2);
     await saveAs(fresh.id, gone);
+    const freshStamp = (await stateOf(fresh.id))!.reminder_sent_at;
+    expect(freshStamp, "premise: the save marked its reminder spent").not.toBeNull();
     const stale = await create({ email: address("rearm-stale") });
     await idleFor(stale.id, SPEC_EXPIRY_DAYS + 2);
     await saveAs(stale.id, gone);
@@ -744,6 +750,8 @@ describe.skipIf(!HAS_DB)("the expiry sweep (DB)", () => {
     const f = await stateOf(fresh.id);
     expect(f).toMatchObject({ saved_by_user_id: null, email: null }); // D8: the address cannot be compared any more, so it goes
     expect(f!.expires_at!.getTime()).toBe(freshClock.last.getTime() + SPEC_EXPIRY_DAYS * DAY_MS);
+    // With no address the reminder step never reaches it, so the stamp stays spent rather than promise a mail (final review B m1).
+    expect(f!.reminder_sent_at, "the save's spent stamp stands").toEqual(freshStamp);
     expect(await stateOf(stale.id), "idle past 7 days once unsaved: deleted in the same pass").toBeUndefined();
     // A second sweep finds nothing more to re-arm.
     expect(await sweepQuickMatches({ baseUrl: BASE, onlyIds: [fresh.id, stale.id] })).toEqual({ ...ZERO, checked: 1 });

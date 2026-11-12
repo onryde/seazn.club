@@ -143,7 +143,8 @@ describe.skipIf(!HAS_DB)("DELETE /api/users/me lets go of the account's quick ma
     const othersMatch = await createTypedMatch(addressFor("others-address"));
     expect(await saveQuickMatchForUser(other, othersMatch.id)).toBe("saved");
     const othersBefore = await saveStateOf(othersMatch.id);
-    expect((await saveStateOf(kept.id)).reminder_sent_at, "premise: the save marked its reminder sent").not.toBeNull();
+    const keptStamp = (await saveStateOf(kept.id)).reminder_sent_at;
+    expect(keptStamp, "premise: the save marked its reminder sent").not.toBeNull();
 
     expect(await deleteAccount(leaver)).toBe(200);
 
@@ -152,7 +153,9 @@ describe.skipIf(!HAS_DB)("DELETE /api/users/me lets go of the account's quick ma
     expect(k.expires_at?.getTime(), "7 days after its last activity (C1)").toBe(
       k.last_activity_at.getTime() + SPEC_EXPIRY_DAYS * DAY_MS,
     );
-    expect(k.reminder_sent_at, "released, it can get its reminder again").toBeNull();
+    // Final review B m1: a saved match holds no address (m9), so a released one can never be reminded; the release leaves the
+    // save's stamp as it was rather than promise a mail nothing can send.
+    expect([k.email, k.reminder_sent_at], "released: no address to remind, and the save's spent stamp stands").toEqual([null, keptStamp]);
     expect(await resolveQuickMatchToken(kept.token), "friends with the link can still open it").not.toBeNull();
 
     const t = await saveStateOf(typedOnly.id);
@@ -177,13 +180,14 @@ describe.skipIf(!HAS_DB)("DELETE /api/users/me lets go of the account's quick ma
       leaver,
       null,
     ]);
+    expect(saved.reminder_sent_at, "premise: the save marked its reminder spent").not.toBeNull();
 
     expect(await deleteAccount(leaver)).toBe(200);
 
     const r = await saveStateOf(typed.id);
     expect(r.saved_by_user_id, "released: found by its saver, with no address left to find it by").toBeNull();
     expect(r.expires_at?.getTime(), "7 days after its last activity (C1)").toBe(r.last_activity_at.getTime() + SPEC_EXPIRY_DAYS * DAY_MS);
-    expect(r.reminder_sent_at).toBeNull();
+    expect(r.reminder_sent_at, "the save's spent stamp stands (final review B m1)").toEqual(saved.reminder_sent_at);
     expect(await resolveQuickMatchToken(typed.token), "alive for friends with the link").not.toBeNull();
   });
 
@@ -306,12 +310,13 @@ describe.skipIf(!HAS_DB)("DELETE /api/users/me lets go of the account's quick ma
     // 3. The account is deleted: the match is released, and the mail still queued to the address ends (m4).
     expect(await deleteAccount(userId)).toBe(200);
     const released = await saveStateOf(typed.id);
-    expect(released, "released: unsaved, 7 days after its last activity (C1), the reminder owed again, still no address").toEqual({
+    // No reminder is owed: the match holds no address (m9), so the stamp stays as the claim set it (final review B m1).
+    expect(released, "released: unsaved, 7 days after its last activity (C1), still no address, the reminder stamp unchanged").toEqual({
       ...created,
       expires_at: new Date(created.last_activity_at.getTime() + SPEC_EXPIRY_DAYS * DAY_MS),
       email: null,
       saved_by_user_id: null,
-      reminder_sent_at: null,
+      reminder_sent_at: clock,
     });
     expect(await mailOf(typed.id)).toEqual([
       { kind: "quick_match_link", ...ENDED_BY_DELETION },
