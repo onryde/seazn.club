@@ -12,10 +12,13 @@
 //   - a row whose token cannot be opened (no usable KEK) is listed by name, without a link, and one warning names it (B29);
 //   - C9: the saved match is not among the account's own competitions and does not count toward its plan;
 //   - the viewer's language;
-//   - the "Nothing here yet" card is not printed above a list of quick matches (it would be false), and is with none.
+//   - the "Nothing here yet" card is not printed above a list of quick matches (it would be false), and is with none;
+//   - under a staff impersonation (the REAL impersonate page's session) every row is named WITHOUT its link: staff never get a
+//     guest's link (T6 review m3, the admin page's rule), and that is no fault (no B29 warning); the person's own session links.
 //
 // The real producers: `createQuickMatch` makes each match, the real Save keeps it, the events route's own door scores it,
-// `createOrgForUser` makes the account's organization. Stand-ins: the session (`getCurrentUser` answers the case's account), the
+// `createOrgForUser` makes the account's organization. Stand-ins: the session (`getCurrentSession` answers the case's account,
+// except in the impersonation case, which reads the REAL session the impersonate page signed into the cookie jar), the
 // viewer's language, the router, PostHog, and the player-home reads that are not this section's (no rosters, no stats).
 //
 // Sport: badminton only: the list reads no sport, and the counts are the format's (league, knockout), which is what varies here.
@@ -31,6 +34,17 @@ vi.stubEnv("DEVICE_LINK_KEK", KEK); // every create seals a home token, every Sc
 const h = vi.hoisted(() => ({
   user: null as null | { id: string; email: string; display_name: string; timezone: string | null; locale: string | null },
   locale: "en" as "en" | "fr" | "es" | "nl",
+  /** true: the page reads the REAL session from the cookie jar (the impersonation case). */
+  real: false,
+  jar: new Map<string, string>(),
+}));
+vi.mock("next/headers", () => ({
+  headers: async () => new Headers({ "x-forwarded-for": "203.0.113.97" }),
+  cookies: async () => ({
+    get: (name: string) => (h.jar.has(name) ? { name, value: h.jar.get(name)! } : undefined),
+    set: (name: string, value: string) => void h.jar.set(name, value),
+    delete: (name: string) => void h.jar.delete(name),
+  }),
 }));
 vi.mock("next/navigation", () => ({
   redirect: vi.fn((to: string) => {
@@ -40,12 +54,16 @@ vi.mock("next/navigation", () => ({
   usePathname: () => "/me",
   useSearchParams: () => new URLSearchParams(),
 }));
-vi.mock("@/lib/auth", async (orig) => ({
-  ...(await orig<typeof import("@/lib/auth")>()),
-  getCurrentUser: async () => h.user,
-  getActiveOrgId: async () => null,
-  getUserOrgs: async () => [],
-}));
+vi.mock("@/lib/auth", async (orig) => {
+  const real = await orig<typeof import("@/lib/auth")>();
+  return {
+    ...real,
+    getCurrentUser: async () => h.user,
+    getCurrentSession: async () => (h.real ? real.getCurrentSession() : h.user ? { user: h.user, impersonated: false } : null),
+    getActiveOrgId: async () => null,
+    getUserOrgs: async () => [],
+  };
+});
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => h.locale }));
 vi.mock("@/lib/posthog-server", async (orig) => ({
   ...(await orig<typeof import("@/lib/posthog-server")>()),
@@ -71,7 +89,9 @@ vi.mock("@/server/usecases/me-lichess", () => ({
 import en from "@/dictionaries/en/ui.json";
 import fr from "@/dictionaries/fr/ui.json";
 import { sql } from "@/lib/db";
-import { createOrgForUser } from "@/lib/auth";
+import { createOrgForUser, createSession } from "@/lib/auth";
+import { createImpersonationToken } from "@/lib/admin";
+import ImpersonatePage from "@/app/admin/impersonate/page";
 import { plural as pluralRuntime } from "@/lib/i18n-runtime";
 import { requireFixtureActor, type AuthCtx } from "@/server/api-v1/auth";
 import { CreateCompetition } from "@/server/api-v1/schemas";
@@ -187,6 +207,8 @@ function rowsOf(section: string): Row[] {
 
 beforeEach(() => {
   h.user = null;
+  h.real = false;
+  h.jar.clear();
   h.locale = "en";
   vi.stubEnv("DEVICE_LINK_KEK", KEK);
 });
@@ -199,6 +221,8 @@ afterAll(async () => {
     await sql`delete from competitions where org_id in (select id from organizations where created_by = any(${users}::uuid[]))`;
     await sql`delete from organizations where created_by = any(${users}::uuid[])`;
     await sql`delete from subscriptions where owner_user_id = any(${users}::uuid[])`;
+    await sql`delete from impersonation_sessions where actor_id = any(${users}::uuid[]) or target_id = any(${users}::uuid[])`;
+    await sql`delete from staff_audit_log where actor_id = any(${users}::uuid[])`;
     await sql`delete from users where id = any(${users}::uuid[])`;
   }
   const g = globalThis as { _sql?: { end(): Promise<void> } };
@@ -216,10 +240,11 @@ describe.skipIf(!HAS_DB)("/me: the account's Quick matches", () => {
     await save(someoneElse, await create("league", 2));
     viewAs(me);
 
-    expect(await listMyQuickMatches(me), "the finder answers none").toEqual([]);
+    expect(await listMyQuickMatches(me, { links: true }), "the finder answers none").toEqual([]);
     const html = await page();
 
     expect(sectionOf(html), "no section").toBeNull();
+    expect(html, "nothing of the list at all, not even its empty live region").not.toContain('data-testid="me-qm-root"');
     expect(unescape(html)).not.toContain(`>${en["quickMatch.me.title"]}<`);
     // The positive pair: the page rendered (its own title), and the "Nothing here yet" card is there for an empty account.
     expect(unescape(html)).toContain(`>${en["me.title"]}<`);
@@ -244,10 +269,13 @@ describe.skipIf(!HAS_DB)("/me: the account's Quick matches", () => {
     await save(other, await create("league", 2));
     viewAs(me);
 
-    const section = sectionOf(await page());
+    const html = await page();
+    const section = sectionOf(html);
 
     expect(section, "the section is there").not.toBeNull();
     expect(section).toContain(`>${en["quickMatch.me.title"]}<`);
+    // The list's root (its live region and focus target) is there with rows, the positive pair of the empty case's absence.
+    expect(html).toContain('data-testid="me-qm-root"');
     // The anchor the home's "In your account" link lands on (controller ruling on T6: /me#quick-matches).
     expect(section).toMatch(/^<section[^>]*\sid="quick-matches"/);
     const rows = rowsOf(section!);
@@ -293,7 +321,7 @@ describe.skipIf(!HAS_DB)("/me: the account's Quick matches", () => {
     const warn = vi.spyOn(log, "warn");
     vi.stubEnv("DEVICE_LINK_KEK", "");
 
-    const listed = await listMyQuickMatches(me);
+    const listed = await listMyQuickMatches(me, { links: true });
     const html = await page();
 
     expect(listed.map((r) => [r.id, r.token]).sort()).toEqual([[a.id, null], [b.id, null]].sort());
@@ -330,7 +358,7 @@ describe.skipIf(!HAS_DB)("/me: the account's Quick matches", () => {
 
     expect(await countActiveCompetitions(org.id), "the plan's active count is unchanged").toBe(countBefore);
     expect(await ids()).not.toContain(qm.competitionId);
-    expect((await listMyQuickMatches(me)).map((r) => r.id), "it is in the account's Quick matches instead").toEqual([qm.id]);
+    expect((await listMyQuickMatches(me, { links: true })).map((r) => r.id), "it is in the account's Quick matches instead").toEqual([qm.id]);
     // The positive pair: a competition the account really runs is listed and counted by the same two readers.
     const real = await createCompetition(
       auth,
@@ -356,5 +384,50 @@ describe.skipIf(!HAS_DB)("/me: the account's Quick matches", () => {
       `${fr["quickMatch.format.knockout"]} · ${pluralRuntime(fr, "quickMatch.home.playedSaved", 2, "fr", { played: 0 })}`,
     );
     expect(fr["quickMatch.me.title"]).not.toBe(en["quickMatch.me.title"]);
+  });
+
+  it("under a staff impersonation (the real impersonate page): each saved match is named, WITHOUT its link, and that is no fault; the person's own session then links each", async () => {
+    process.env.AUTH_SECRET ??= "auth-secret-for-quick-match-section-test-0123456789-0123456789";
+    const target = await account("imp-target");
+    const staff = await account("imp-staff");
+    const a = await create("league", 2);
+    const b = await create("knockout", 3);
+    await save(target, a);
+    await save(target, b);
+    const warn = vi.spyOn(log, "warn");
+    h.real = true;
+
+    const token = await createImpersonationToken(staff, target);
+    // This file's `redirect` stand-in throws "redirected to <path>" (the page's own redirect, after it signed the target in).
+    const thrown = await ImpersonatePage({ searchParams: Promise.resolve({ token }) }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(thrown instanceof Error ? thrown.message : String(thrown), "premise: the page signed the target in").toBe(
+      "redirected to /dashboard",
+    );
+    const looked = await page();
+    const rows = rowsOf(sectionOf(looked)!);
+    expect(rows.map((r) => [r.id, r.tag, r.href, r.hasNoLinkLine]).sort()).toEqual(
+      [
+        [a.id, "span", null, true],
+        [b.id, "span", null, true],
+      ].sort(),
+    );
+    expect(looked, "no home link anywhere on the page").not.toMatch(/href="\/q\//);
+    for (const qm of [a, b]) expect(looked, "nor a token").not.toContain(qm.token);
+    const faults = warn.mock.calls.filter(([, msg]) => typeof msg === "string" && msg.startsWith("quick match account list"));
+    expect(faults, "a staff view is a rule, not a token that failed to open").toHaveLength(0);
+
+    // The positive pair, in sequence: the same person, signed in by a door of their own, gets each link.
+    h.jar.clear();
+    await createSession(target);
+    const own = rowsOf(sectionOf(await page())!);
+    expect(own.map((r) => [r.id, r.tag, r.href]).sort()).toEqual(
+      [
+        [a.id, "a", `/q/${a.token}`],
+        [b.id, "a", `/q/${b.token}`],
+      ].sort(),
+    );
   });
 });

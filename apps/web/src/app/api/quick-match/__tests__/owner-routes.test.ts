@@ -79,6 +79,7 @@ import { saveQuickMatchForUser, saveQuickMatchesForVerifiedUser } from "@/server
 import { listQuickMatchSports } from "@/server/usecases/quick-match-sports";
 import { hashVisitorKey, mintVisitorKey } from "@/server/usecases/quick-match-tokens";
 import { playToDecided } from "@/server/usecases/__tests__/_quick-match-probe";
+import { scoreEvent } from "@/server/usecases/scoring";
 import { expectAllPresent, expectNoOrphans, idsOf, tablesRecorded } from "@/server/usecases/__tests__/_quick-match-orphans";
 import { addressFor, createTypedMatch, deleteMadeMatches, saveStateOf } from "@/server/usecases/__tests__/_quick-match-save-rig";
 import { deleteMyQuickMatch, renameMyQuickMatch, type OwnerAnswer } from "@/components/quick-match/my-list-requests";
@@ -425,10 +426,44 @@ describe.skipIf(!HAS_DB)("DELETE /api/quick-match/<id>: the saver deletes", () =
     const me = await account("typed-owner", email);
     const qm = await createTypedMatch(email); // a guest typed this person's address; this person never saw the setup page
     expect(await saveQuickMatchesForVerifiedUser(me), "premise: the sign-in's save by address").toEqual({ savedByEmail: 1 });
+    // The typed address queued the match's link mail (plan 3 Task 1): its outbox row is the match's too, and goes with it
+    // (T6 review m4: the outbox delete on the saver's path, witnessed).
+    const probes = await idsOf(qm);
+    expect(tablesRecorded(probes), "premise: the emailed create queued its link mail").toContain("email_outbox");
     await signIn(me);
 
     expect((await del(qm.id)).status).toBe(204);
     expect(await resolveQuickMatchToken(qm.token)).toBeNull();
+    await expectNoOrphans(probes, "saver's delete of an emailed match");
+  });
+
+  it("after a take-back: the deciding rally voided by the guest's own Void, the saver's delete still takes everything, the void with it", async () => {
+    const me = await account("delete-after-void");
+    const qm = await createOf("badminton");
+    const row = await resolveQuickMatchToken(qm.token);
+    const [f0] = await sql<{ id: string }[]>`
+      select f.id from fixtures f join divisions d on d.id = f.division_id
+       where d.competition_id = ${qm.competitionId} order by f.round_no, f.fixture_no limit 1`;
+    const { secret } = await ensureGuestDeviceLink(row!, f0!.id);
+    const auth = await requireFixtureActor(
+      new Request("http://test.local/api/v1", { headers: { authorization: `Bearer ${secret}` } }),
+      f0!.id,
+      "score",
+    );
+    const played = await playToDecided(auth, f0!.id);
+    if (played.kind !== "decided") throw new Error(`premise: the match was played to a result, got ${played.kind}`);
+    // The guest's take-back, as the pad's "Void my last entry" posts it: core.void of the deciding event, expected_seq = the tip.
+    await scoreEvent(auth, f0!.id, { expected_seq: played.lastSeq, type: "core.void", payload: { event_id: played.lastEventId } });
+    const [voids] = await sql<{ n: number }[]>`
+      select count(*)::int as n from score_events where fixture_id = ${f0!.id} and type = 'core.void' and voids_event_id = ${played.lastEventId}`;
+    expect(voids!.n, "premise: the take-back is recorded, pointing at the deciding rally").toBe(1);
+    expect(await saveQuickMatchForUser(me, qm.id)).toBe("saved");
+    const probes = await idsOf(qm);
+    await signIn(me);
+
+    expect((await del(qm.id)).status).toBe(204);
+    await expectNoOrphans(probes, "saver's delete after a take-back");
+    expect(await resolveQuickMatchToken(qm.token), "the link resolves to nothing").toBeNull();
   });
 });
 

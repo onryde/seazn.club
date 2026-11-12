@@ -26,6 +26,11 @@ const card = vi.hoisted(() => ({ myLichessLink: vi.fn() }));
 vi.mock("@/server/usecases/me-lichess", () => card);
 vi.mock("@/lib/auth", () => ({
   getCurrentUser: loaders.getCurrentUser,
+  // /me reads the session (T6 review m3: a staff impersonation sees quick matches without their links).
+  getCurrentSession: async () => {
+    const user = await loaders.getCurrentUser();
+    return user ? { user, impersonated: false } : null;
+  },
   getUserOrgs: loaders.getUserOrgs,
   getActiveOrgId: loaders.getActiveOrgId,
 }));

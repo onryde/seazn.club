@@ -14,6 +14,11 @@
 //   QUICK_MATCH_NAME_MAX); Delete opens a confirmation in the row, whose own button deletes. Both send their request with `fetch`
 //   (my-list-requests.ts, `PATCH`/`DELETE /api/quick-match/<id>`), so they need the script; the server checks everything again.
 //   A refusal is printed in the row as its own line (role=alert); success updates the row at once and refreshes the page's read.
+// - What this browser knows past the page's read is one pure step (`remember`, `onRead`, `shownOf`; T6 review m1, m2):
+//   a rename lays its name over the row until the page's next read, which then wins; a delete drops the row; a refusal that
+//   the match is no longer in the account (another tab deleted it, or it expired) drops the row too. A delete and a "gone"
+//   are said in the list's polite live region, which stays mounted while it has something to say, and focus moves to a
+//   stable target: the heading while rows remain, else the list's own root (never lost to the page's body).
 // - The section's id is the anchor the saved home's "In your account" link lands on (`/me#quick-matches`, home.tsx).
 // - Every control is a 44px target (min-h-11), at 320 as at 1280; long names wrap, never push the page sideways.
 //
@@ -46,62 +51,88 @@ const FORMAT_KEY = {
   knockout: "quickMatch.format.knockout",
 } as const satisfies Record<MyQuickMatchItem["format"], MessageKey>;
 
+/** What this browser knows past the page's read `read`: the rows it deleted or found gone, the names it set, and the last
+ *  thing the list said in its live region. */
+export interface ListMemory {
+  read: readonly MyQuickMatchItem[];
+  gone: ReadonlySet<string>;
+  renamed: Readonly<Record<string, string>>;
+  notice: { key: MessageKey; name: string } | null;
+}
+/** An answer the list heard for one row: renamed, deleted, or refused as no longer in the account (NOT_IN_ACCOUNT). */
+export type ListEvent =
+  | { kind: "renamed"; id: string; name: string }
+  | { kind: "deleted"; id: string; name: string }
+  | { kind: "gone"; id: string; name: string };
+
+export function freshMemory(read: readonly MyQuickMatchItem[]): ListMemory {
+  return { read, gone: new Set(), renamed: {}, notice: null };
+}
+export function remember(m: ListMemory, e: ListEvent): ListMemory {
+  if (e.kind === "renamed") return { ...m, renamed: { ...m.renamed, [e.id]: e.name } };
+  const key: MessageKey = e.kind === "deleted" ? "quickMatch.me.deleted" : "quickMatch.me.notInAccount";
+  return { ...m, gone: new Set([...m.gone, e.id]), notice: { key, name: e.name } };
+}
+/** The page read again (a refresh): its names win over this browser's renames; what is gone stays gone; what was said stays. */
+export function onRead(m: ListMemory, read: readonly MyQuickMatchItem[]): ListMemory {
+  return { ...m, read, renamed: {} };
+}
+export function shownOf(items: readonly MyQuickMatchItem[], m: ListMemory): MyQuickMatchItem[] {
+  return items.filter((i) => !m.gone.has(i.id)).map((i) => ({ ...i, name: m.renamed[i.id] ?? i.name }));
+}
+
 export function QuickMatchMyList({ items }: { items: readonly MyQuickMatchItem[] }) {
   const t = useT();
   const router = useRouter();
-  // What this browser has already done, laid over the page's read until the refresh brings the same news.
-  const [renamed, setRenamed] = useState<Readonly<Record<string, string>>>({});
-  const [deleted, setDeleted] = useState<ReadonlySet<string>>(new Set());
+  const [memory, setMemory] = useState(() => freshMemory(items));
+  // A new read from the page (router.refresh, or a navigation back): adjust during render, React's sanctioned way.
+  if (memory.read !== items) setMemory(onRead(memory, items));
   const heading = useRef<HTMLHeadingElement>(null);
-  const shown = items.filter((i) => !deleted.has(i.id)).map((i) => ({ ...i, name: renamed[i.id] ?? i.name }));
-  if (shown.length === 0) return null;
+  const root = useRef<HTMLDivElement>(null);
+  const shown = shownOf(items, memory);
+  // The empty case first (B26): nothing read and nothing said, nothing at all.
+  if (shown.length === 0 && memory.notice === null) return null;
+
+  const settle = (event: ListEvent) => {
+    const left = shown.filter((i) => i.id !== event.id).length;
+    setMemory((m) => remember(m, event));
+    if (event.kind !== "renamed") (left > 0 ? heading : root).current?.focus();
+    router.refresh();
+  };
   return (
-    <section
-      id={QUICK_MATCH_ACCOUNT_SECTION_ID}
-      data-testid="me-quick-matches"
-      aria-labelledby={TITLE_ID}
-      className="mb-8 min-w-0 scroll-mt-4"
-    >
-      <h2
-        id={TITLE_ID}
-        ref={heading}
-        tabIndex={-1}
-        className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400 outline-none"
-      >
-        {t("quickMatch.me.title")}
-      </h2>
-      <ul className="min-w-0 space-y-2">
-        {shown.map((item) => (
-          <MyRow
-            key={item.id}
-            item={item}
-            onRenamed={(name) => {
-              setRenamed((r) => ({ ...r, [item.id]: name }));
-              router.refresh();
-            }}
-            onDeleted={() => {
-              setDeleted((d) => new Set([...d, item.id]));
-              heading.current?.focus();
-              router.refresh();
-            }}
-          />
-        ))}
-      </ul>
-    </section>
+    <div ref={root} tabIndex={-1} data-testid="me-qm-root" className="min-w-0 outline-none">
+      <p role="status" aria-live="polite" aria-atomic="true" data-testid="me-qm-status" className="sr-only">
+        {memory.notice ? t(memory.notice.key, { name: memory.notice.name }) : ""}
+      </p>
+      {shown.length > 0 && (
+        <section
+          id={QUICK_MATCH_ACCOUNT_SECTION_ID}
+          data-testid="me-quick-matches"
+          aria-labelledby={TITLE_ID}
+          className="mb-8 min-w-0 scroll-mt-4"
+        >
+          <h2
+            id={TITLE_ID}
+            ref={heading}
+            tabIndex={-1}
+            className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400 outline-none"
+          >
+            {t("quickMatch.me.title")}
+          </h2>
+          <ul className="min-w-0 space-y-2">
+            {shown.map((item) => (
+              <MyRow key={item.id} item={item} onSettled={settle} />
+            ))}
+          </ul>
+        </section>
+      )}
+    </div>
   );
 }
 
 type Mode = "idle" | "rename" | "delete";
 
-function MyRow({
-  item,
-  onRenamed,
-  onDeleted,
-}: {
-  item: MyQuickMatchItem;
-  onRenamed: (name: string) => void;
-  onDeleted: () => void;
-}) {
+function MyRow({ item, onSettled }: { item: MyQuickMatchItem; onSettled: (event: ListEvent) => void }) {
   const t = useT();
   const plural = usePlural();
   const ids = useId();
@@ -125,9 +156,9 @@ function MyRow({
     setError(null);
     const answer = await renameMyQuickMatch(item.id, input.current?.value ?? "");
     setPending(false);
-    if (!answer.ok) return setError(answer.key);
+    if (!answer.ok) return refused(answer.key);
     setMode("idle");
-    onRenamed(answer.name ?? (input.current?.value ?? item.name).trim());
+    onSettled({ kind: "renamed", id: item.id, name: answer.name ?? (input.current?.value ?? item.name).trim() });
   }
   async function remove() {
     if (pending) return;
@@ -135,8 +166,14 @@ function MyRow({
     setError(null);
     const answer = await deleteMyQuickMatch(item.id);
     setPending(false);
-    if (!answer.ok) return setError(answer.key);
-    onDeleted();
+    if (!answer.ok) return refused(answer.key);
+    onSettled({ kind: "deleted", id: item.id, name: item.name });
+  }
+  // No longer in the account (another tab deleted it, or it expired): every control here would answer the same, so the row
+  // goes and the list says why (m1). Any other refusal stays on the row, its own line.
+  function refused(key: MessageKey) {
+    if (key === "quickMatch.me.notInAccount") return onSettled({ kind: "gone", id: item.id, name: item.name });
+    setError(key);
   }
 
   const href = item.token === null ? null : routes.quickMatch(item.token);

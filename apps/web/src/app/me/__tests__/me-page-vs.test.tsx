@@ -18,6 +18,8 @@ vi.mock("next/navigation", () => ({
 }));
 vi.mock("@/lib/auth", () => ({
   getCurrentUser: async () => ({ id: "u1", email: "player@example.com", display_name: "Pat" }),
+  // /me reads the session (T6 review m3: a staff impersonation sees quick matches without their links).
+  getCurrentSession: async () => ({ user: { id: "u1", email: "player@example.com", display_name: "Pat" }, impersonated: false }),
   getActiveOrgId: async () => null,
   getUserOrgs: async () => [],
 }));

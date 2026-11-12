@@ -160,8 +160,12 @@ export interface MyQuickMatch {
  * Each row's home token is opened with the NON-throwing `tryOpenHomeToken` (B29; controller ruling 2026-11-08): a row that does
  * not open (no usable DEVICE_LINK_KEK, a damaged envelope) is listed with `token: null`, so the account page never fails for
  * every saver at once, with ONE warning for the read naming each such row's id and reason, never a token or an envelope.
+ *
+ * `links: false` (a staff impersonation, T6 review m3, the admin page's rule: staff never get a guest's link): no token is
+ * opened at all and every row's `token` is null. That is the caller's rule, not a fault, so it warns nothing. The caller must
+ * say which, every time.
  */
-export async function listMyQuickMatches(userId: string): Promise<MyQuickMatch[]> {
+export async function listMyQuickMatches(userId: string, opts: { links: boolean }): Promise<MyQuickMatch[]> {
   const { matches, fixtures } = await withTenant(SYSTEM_ORG, async (tx) => {
     const matches = await tx<{ id: string; competition_id: string; name: string; format: QuickMatchFormat; token_enc: Uint8Array }[]>`
       select id, competition_id, name, format, token_enc
@@ -181,12 +185,12 @@ export async function listMyQuickMatches(userId: string): Promise<MyQuickMatch[]
   for (const f of fixtures) byCompetition.set(f.competition_id, [...(byCompetition.get(f.competition_id) ?? []), f]);
   const unopened: { id: string; reason: HomeTokenOpenRefusal }[] = [];
   const out = matches.map((m): MyQuickMatch => {
-    const opened = tryOpenHomeToken(m.token_enc);
-    if (!opened.ok) unopened.push({ id: m.id, reason: opened.reason });
+    const opened = opts.links ? tryOpenHomeToken(m.token_enc) : null;
+    if (opened && !opened.ok) unopened.push({ id: m.id, reason: opened.reason });
     return {
       id: m.id,
       name: m.name,
-      token: opened.ok ? opened.token : null,
+      token: opened?.ok ? opened.token : null,
       format: m.format,
       ...playedOf(byCompetition.get(m.competition_id) ?? []),
     };

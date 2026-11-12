@@ -334,10 +334,11 @@ test("Save (plan 3 Task 5): the save page at 320, 768 and 1280; without the scri
 // The account's Quick matches on /me (quick match plan 3 Task 6): the list's every answer is proven in
 // app/me/__tests__/quick-matches-section.test.tsx and the requests' in app/api/quick-match/__tests__/owner-routes.test.ts;
 // this is what only a browser shows: the row with the longest name the create allows at 320, 768 and 1280, Rename's form
-// and Delete's confirmation opened at each, every control a 44px target, nothing sideways; and a refusal printed in the
-// row when the match was deleted from another tab while this one's form was open. The full journey (the rename read back
+// and Delete's confirmation opened at each, every control a 44px target, nothing sideways; and a match deleted from another
+// tab while this one's Rename form was open: Save name drops the row, the list's live region says it is no longer in the
+// account, and focus lands on the list's own root rather than the page's body (T6 review m1, m2). The full journey (the rename read back
 // on the home, the delete for everyone, the dead link) is the walkthrough's (D).
-test("the account's Quick matches (plan 3 Task 6): /me at 320, 768 and 1280 with an 80-character name; Rename's form and Delete's confirmation; a match deleted in another tab refuses the rename in the row", async ({ guest: page }) => {
+test("the account's Quick matches (plan 3 Task 6): /me at 320, 768 and 1280 with an 80-character name; Rename's form and Delete's confirmation; a match deleted in another tab drops the row on Save name and says why", async ({ guest: page }) => {
   // A setup, a magic-link sign-in and a save before three widths of two opened panels and a second tab: past the 60s default.
   test.slow();
   // The longest name the create allows, its tail one unbroken word: the hardest to fit at 320.
@@ -385,7 +386,8 @@ test("the account's Quick matches (plan 3 Task 6): /me at 320, 768 and 1280 with
   }
   expect(checked).toBe(SAVE_WIDTHS.length);
 
-  // A second tab of the same account deletes the match while this tab's Rename form is open: Save name is refused, in the row.
+  // A second tab of the same account deletes the match while this tab's Rename form is open: Save name is refused as not in
+  // the account, so the row goes, the live region says why, and focus stays on the list (the heading went with the row).
   await row.getByTestId("me-qm-rename").click();
   const other = await page.context().newPage();
   try {
@@ -399,7 +401,10 @@ test("the account's Quick matches (plan 3 Task 6): /me at 320, 768 and 1280 with
   }
   await row.getByTestId("me-qm-rename-input").fill(`Too late ${TAG}`);
   await row.getByTestId("me-qm-rename-save").click();
-  await expect(row.getByTestId("me-qm-error")).toHaveText("This quick match is no longer in your account.");
+  await expect(page.getByTestId("me-quick-matches"), "the gone row is dropped, and the section with it").toHaveCount(0);
+  await expect(page.getByTestId("me-qm-status")).toHaveText("This quick match is no longer in your account.");
+  await expect(page.getByTestId("me-qm-status")).toHaveAttribute("role", "status");
+  await expect(page.getByTestId("me-qm-root"), "focus on a stable target, not the page's body").toBeFocused();
   await expectNoHorizontalScroll(page);
   // The page's own read: no Quick matches left.
   await page.reload();

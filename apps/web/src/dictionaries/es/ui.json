@@ -8467,5 +8467,6 @@
   "quickMatch.me.renameImpersonating": "Has iniciado sesión como otra persona (vista de personal), así que no se ha cambiado el nombre de este partido.",
   "quickMatch.me.deleteImpersonating": "Has iniciado sesión como otra persona (vista de personal), así que este partido no se ha borrado.",
   "quickMatch.me.signedOut": "Has cerrado sesión. Vuelve a iniciar sesión para cambiar tus partidos rápidos.",
-  "quickMatch.home.inAccount": "En tu cuenta"
+  "quickMatch.home.inAccount": "En tu cuenta",
+  "quickMatch.me.deleted": "Se ha borrado {name}."
 }

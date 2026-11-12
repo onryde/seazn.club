@@ -1086,9 +1086,9 @@ test("(C) the marketing page lists both quick matches, newest first, and a tap o
 const SAVE = { navs: 8, acts: 12, reads: 2 } as const;
 /** The account's Quick matches (plan 3 Task 6): "In your account" to /me, the home its link opens, "In your account" again,
  *  the reload after the delete, and the dead link in each browser; the link's two taps and measure, the row's reads and 44px
- *  measures, Rename's form, fill and save, Delete's confirmation and its yes; the record before the rename, after it, and
- *  after the delete. */
-const ACCOUNT = { navs: 6, acts: 17, reads: 3 } as const;
+ *  measures, Rename's form, fill and save, Delete's confirmation and its yes, the live region and the focus after it; the
+ *  record before the rename, after it, and after the delete (the quick match's row and the competition: two reads). */
+const ACCOUNT = { navs: 6, acts: 19, reads: 4 } as const;
 
 interface SaveRecord {
   email: string | null;
@@ -1253,8 +1253,11 @@ test("(D) Save: a guest who typed an address saves the league into another accou
     }
     await expectNoHorizontalScroll(p);
     await row.getByTestId("me-qm-delete-yes").click();
-    // The row goes, and the section with it: the empty case has no heading over nothing.
+    // The row goes, and the section with it: the empty case has no heading over nothing. The list's polite live region says
+    // which match was deleted, and focus stays on the list's own root, never the page's body (T6 review m2).
     await expect(list).toHaveCount(0);
+    await expect(p.getByTestId("me-qm-status")).toHaveText(ui("quickMatch.me.deleted", { name: renamed }));
+    await expect(p.getByTestId("me-qm-root")).toBeFocused();
     expect(await namesRecordOf(made), "the record is gone").toBeNull();
     const [left] = await withDb((sql) => sql<{ n: number }[]>`
       select count(*)::int as n from competitions where id = ${before!.competition_id}`);
