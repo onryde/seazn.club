@@ -18,11 +18,11 @@ import { messages, type MessageKey } from "@/lib/messages";
 import { systemAuth } from "@/lib/quick-match-auth";
 import { QUICK_MATCH_SYSTEM_ORG_ID } from "@/lib/quick-match-constants";
 import { isBye } from "@/lib/run-sheet-groups";
-import { variantWordKey } from "@/lib/variant-label-keys";
 import type { EntrantKind } from "@seazn/engine/sport";
 import { PLAIN_LAYOUT, type TableLayout } from "@seazn/engine/competition";
 import { stageTableRulesDocs } from "@/server/engine-db/table-rules";
 import { tableLayoutFor } from "@/server/public-site/standings-view";
+import { isCarriedForward, SETTLED_OPEN_STATUSES } from "./carried-forward";
 import { listDivisionFixtures } from "./fixtures";
 import type { QuickMatchFormat } from "./quick-match-preview";
 import { offerFor } from "./quick-match-sports";
@@ -180,6 +180,10 @@ export interface QuickMatchFixture {
    *  `live` (in play), `ready` (scheduled, both sides known: C11) or `waiting` (anything else: a side still unknown, C18,
    *  or a held result no guest can settle, C23). */
   phase: QuickMatchPhase;
+  /** A settled result that has already moved the match on (carried-forward.ts's own predicate, read from these rows): its
+   *  winner or loser is seated in a later match, or the stage is complete. The pad refuses to reopen it
+   *  (RESULT_CARRIED_FORWARD), so the home offers it no "Edit result" (branch review A M6). False for anything not settled. */
+  resultMovedOn: boolean;
 }
 
 export type QuickMatchPhase = "settled" | "live" | "ready" | "waiting";
@@ -189,7 +193,7 @@ export interface QuickMatchHome {
   divisionId: string;
   stageId: string;
   /** Dictionary keys, never English names (C1/C10). */
-  sport: { key: string; labelKey: MessageKey; variantKey: string; variantLabelKey: MessageKey | null };
+  sport: { key: string; labelKey: MessageKey };
   /** The entrants' one kind (D2): the eyebrow's "sport · kind · format". */
   kind: EntrantKind;
   /** The sport offers more than one kind, so the guest CHOSE this one (the setup page's kind switch is shown only then):
@@ -200,8 +204,6 @@ export interface QuickMatchHome {
   /** In (round, fixture number) order, byes included. */
   fixtures: QuickMatchFixture[];
   next: QuickMatchFixture | null;
-  /** The first match in play, in the same order. */
-  live: QuickMatchFixture | null;
   /** Non-bye fixtures whose status is settled (SETTLED_FIXTURE_STATUSES, B7d). */
   played: number;
   /** Non-bye fixtures: Task 5's matchCount (C17). */
@@ -265,7 +267,8 @@ export async function readQuickMatchHome(row: QuickMatchRow): Promise<QuickMatch
       throw new Error(`quick match ${row.id}: competition ${row.competitionId} holds ${divisions.length} divisions, not one`);
     }
     const division = divisions[0]!;
-    const stages = await tx<{ id: string; kind: string }[]>`select id, kind from stages where division_id = ${division.id}`;
+    const stages = await tx<{ id: string; kind: string; status: string }[]>`
+      select id, kind, status from stages where division_id = ${division.id}`;
     if (stages.length !== 1) {
       throw new Error(`quick match ${row.id}: division ${division.id} holds ${stages.length} stages, not one`);
     }
@@ -294,6 +297,15 @@ export async function readQuickMatchHome(row: QuickMatchRow): Promise<QuickMatch
 
   const rows: FixtureRow[] = await listDivisionFixtures(auth, division.id);
   const ids = rows.map((r) => r.id);
+  const rowById = new Map(rows.map((r) => [r.id, r]));
+  /** The seat a feed edge names (1 = home, 2 = away) is taken: carried-forward.ts's SQL, over the rows already loaded. A feed
+   *  into a match outside this division's own rows is refused loudly, as a foreign entrant is above. */
+  const feedFilled = (fixtureId: string, target: string | null | undefined, slot: number | null | undefined): boolean => {
+    if (target == null) return false;
+    const into = rowById.get(target);
+    if (!into) throw new Error(`quick match ${row.id}: fixture ${fixtureId} feeds ${target}, outside its own division`);
+    return slot === 1 ? into.home_entrant_id !== null : slot === 2 ? into.away_entrant_id !== null : false;
+  };
   const summaries = new Map(
     ids.length === 0
       ? []
@@ -324,6 +336,15 @@ export async function readQuickMatchHome(row: QuickMatchRow): Promise<QuickMatch
         isFinal: r.is_final === true,
         winnerEntrantId: winnerOf(r.outcome),
         phase: phaseOf({ status: r.status, home, away }),
+        resultMovedOn:
+          SETTLED_OPEN_STATUSES.has(r.status) &&
+          isCarriedForward({
+            winnerFeedFilled: feedFilled(r.id, r.winner_to_fixture, r.winner_to_slot),
+            loserFeedFilled: feedFilled(r.id, r.loser_to_fixture, r.loser_to_slot),
+            // A quick match is a league or a knockout (CreateQuickMatch's format), never Swiss: no next round to pair.
+            swissNextRoundSeated: false,
+            stageComplete: stage.status === "complete",
+          }),
       };
     })
     .sort(byRoundThenNumber);
@@ -345,15 +366,12 @@ export async function readQuickMatchHome(row: QuickMatchRow): Promise<QuickMatch
     sport: {
       key: division.sport_key,
       labelKey,
-      variantKey: division.variant_key,
-      variantLabelKey: variantWordKey(division.sport_key, division.variant_key) ?? null,
     },
     kind: entrants[0]!.kind,
     kindChosen,
     sides,
     fixtures,
     next: nextPlayable(fixtures),
-    live: fixtures.find(isLive) ?? null,
     played,
     total,
     standings,

@@ -108,4 +108,25 @@ describe("QuickMatchScoreForm", () => {
     expect(textOf(row).trim()).toBe("Score");
     expect(propsOf(hero)["aria-describedby"], "the hero's section already names its match").toBeUndefined();
   });
+
+  it("'Edit result' (A-M6): the same post, a secondary outline (never the lime call to action), 44px, its own test id", () => {
+    const edit = mount({ place: "edit", label: "Edit result", describedBy: "qm-match-sides-x" });
+    const button = buttonOf(edit);
+    const form = formOf(edit);
+    expect(propsOf(form).method, "a real post: it works without the script").toBe("post");
+    expect(propsOf(form).action).toBe(props().action);
+    expect(classOf(form)).toContain("ph-no-capture");
+    expect(propsOf(button).type).toBe("submit");
+    expect(propsOf(button)["data-testid"]).toBe("qm-edit-result");
+    expect(textOf(button).trim()).toBe("Edit result");
+    expect(propsOf(button)["aria-describedby"], "many rows say 'Edit result': each names its match").toBe("qm-match-sides-x");
+    expect(classOf(button)).toEqual(expect.arrayContaining(["min-h-11", "border", "bg-transparent"]));
+    expect(classOf(button).some((c) => c.includes("--mk-lime") && c.startsWith("bg-")), "not filled lime").toBe(false);
+    // The positive pair: the Score buttons ARE the lime ones, and keep their own test id.
+    for (const place of ["hero", "row"] as const) {
+      const score = buttonOf(mount({ place }));
+      expect(classOf(score), place).toContain("bg-[color:var(--mk-lime)]");
+      expect(propsOf(score)["data-testid"], place).toBe("qm-score");
+    }
+  });
 });

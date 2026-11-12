@@ -34,9 +34,13 @@ export interface MatchView {
   result: string | null;
   /** The hero's match: marked in the list as the mockup's lime edge. */
   next: boolean;
+  /** settled, and the pad will still reopen it (its result has not moved the match on): the row offers "Edit result". */
+  editable: boolean;
 }
 
-export type ScoreSlot = (fixture: { id: string; live: boolean }, place: "hero" | "row") => ReactNode;
+/** The page's Score control for one match: the hero's, a playable row's, or a settled row's "Edit result" (`edit`, branch
+ *  review A M6), which posts the SAME route: the pad is where a result is corrected. */
+export type ScoreSlot = (fixture: { id: string; live: boolean }, place: "hero" | "row" | "edit") => ReactNode;
 
 /** The id of a row's sides line ("A v B"): a row's Score control is described by it, so each of the list's "Score" buttons
  *  names its own match to a screen reader (plan 2 Task 6). */
@@ -169,7 +173,15 @@ function rowEnd(m: MatchView, waits: string, liveLabel: string, score?: ScoreSlo
       return score ? <span className="flex-none">{score({ id: m.id, live: false }, "row")}</span> : null;
     case "waiting":
       return <span className="flex-none text-xs text-[#b7aede]">{waits}</span>;
-    case "settled":
-      return m.score === null ? null : <span className="min-w-0 max-w-[45%] flex-none text-right">{scoreText}</span>;
+    case "settled": {
+      const edit = m.editable ? score?.({ id: m.id, live: false }, "edit") : null;
+      if (m.score === null && !edit) return null;
+      return (
+        <span className="flex min-w-0 max-w-[45%] flex-none flex-col items-end gap-1 text-right">
+          {m.score !== null ? scoreText : null}
+          {edit}
+        </span>
+      );
+    }
   }
 }

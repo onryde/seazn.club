@@ -82,15 +82,22 @@ export default async function QuickMatchHomePage({
 
   const flash = homeFlash(search?.e);
   const slots: QuickMatchSlots = {
-    // Offered by the view on a live or ready match only (C11, C18), the hero's and each such row's.
+    // Offered by the view on a live or ready match (C11, C18), the hero's and each such row's; and as "Edit result" on a
+    // settled row the pad will still reopen (A-M6), posting the same route.
     score: (fixture, place) => (
       <QuickMatchScoreForm
         action={routes.quickMatchScore(token, fixture.id)}
         place={place}
         label={copy.t(
-          place === "row" ? "quickMatch.home.scoreShort" : fixture.live ? "quickMatch.home.continue" : "quickMatch.home.score",
+          place === "edit"
+            ? "quickMatch.home.editResult"
+            : place === "row"
+              ? "quickMatch.home.scoreShort"
+              : fixture.live
+                ? "quickMatch.home.continue"
+                : "quickMatch.home.score",
         )}
-        describedBy={place === "row" ? matchSidesId(fixture.id) : undefined}
+        describedBy={place === "hero" ? undefined : matchSidesId(fixture.id)}
       />
     ),
     share: (

@@ -593,7 +593,7 @@ describe.skipIf(!HAS_DB)("the home offers Score on a playable match only, each f
     }
   });
 
-  it("a decided match has no Score anywhere and the hero moves on; a live one reads 'Continue scoring' and keeps its row's", async () => {
+  it("a decided match has no Score and the hero moves on, its row offers 'Edit result' on the same route; a live one reads 'Continue scoring' and keeps its row's", async () => {
     const out = await create();
     const [f0, f1] = await fixturesOf(out.competitionId);
     // Match 1 decided (played from its first event, `playToDecided`'s own premise).
@@ -605,7 +605,10 @@ describe.skipIf(!HAS_DB)("the home offers Score on a playable match only, each f
     );
     expect(await playToDecided(auth, f0!.id)).toMatchObject({ kind: "decided" });
     let forms = scoreForms(await homeAt(`/q/${out.token}`));
-    expect(forms.filter((f) => f.action.endsWith(`/${f0!.id}`)), "settled: no Score").toEqual([]);
+    // Settled: no Score, and one secondary "Edit result" in its row, posting the same route (A-M6).
+    expect(forms.filter((f) => f.action.endsWith(`/${f0!.id}`)).map((f) => [f.place, f.row, f.label, f.action])).toEqual([
+      ["edit", f0!.id, en["quickMatch.home.editResult"], `/q/${out.token}/score/${f0!.id}`],
+    ]);
     expect(forms.filter((f) => f.place === "hero").map((f) => [f.action, f.label])).toEqual([
       [`/q/${out.token}/score/${f1!.id}`, en["quickMatch.home.score"]],
     ]);
@@ -618,6 +621,77 @@ describe.skipIf(!HAS_DB)("the home offers Score on a playable match only, each f
     ]);
     expect(forms.filter((f) => f.row === f1!.id).map((f) => f.label), "the live row keeps its Score").toEqual([en["quickMatch.home.scoreShort"]]);
     expect(forms.filter((f) => f.place === "row")).toHaveLength(5);
+  });
+
+  it("'Edit result' on a decided league match lands in the pad on that match, and the pad takes the correction (A-M6)", async () => {
+    const out = await create();
+    const [f0] = await fixturesOf(out.competitionId);
+    const auth = await requireFixtureActor(
+      new Request("http://test.local/api/v1", { headers: { authorization: `Bearer ${await padSecret(await tap(out.token, f0!.id))}` } }),
+      f0!.id,
+      "score",
+    );
+    const played = await playToDecided(auth, f0!.id);
+    if (played.kind !== "decided") throw new Error(`precondition: match 1 decided, got ${JSON.stringify(played)}`);
+    const [edit] = scoreForms(await homeAt(`/q/${out.token}`)).filter((f) => f.place === "edit");
+    expect(edit?.row).toBe(f0!.id);
+    // The form's own post: the same route a Score tap takes, a 303 into the pad for this match.
+    const secret = await padSecret(await tap(out.token, edit!.action.split("/").at(-1)!));
+    expect(await resolveDeviceLinkToken(secret)).toMatchObject({ fixture_id: f0!.id });
+    // The pad's own write path, through that link: voiding the deciding event reopens the match (the correction).
+    const res = await postEvent(
+      new Request(`http://test.local/api/v1/fixtures/${f0!.id}/events`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${secret}`, "content-type": "application/json" },
+        body: JSON.stringify({ expected_seq: played.lastSeq, type: "core.void", payload: { event_id: played.lastEventId } }),
+      }),
+      { params: Promise.resolve({ id: f0!.id }) },
+    );
+    expect(res.status, await res.clone().text()).toBe(201);
+    const [after] = await sql<{ status: string }[]>`select status from fixtures where id = ${f0!.id}`;
+    expect(after!.status, "reopened").not.toBe("decided");
+  });
+
+  it("a knockout of 4: a decided semi-final whose winner is seated in the final offers no 'Edit result', and the pad refuses it; the decided final offers it (A-M6)", async () => {
+    // Four sides, so the first semi-final's winner fills ONE seat of the final while the other waits: the seat read is the
+    // one its feed edge names, never "any seat taken" (with three, the bye fills the other seat at the draw).
+    const out = await create(league({ format: "knockout", sides: SIDES.slice(0, 4) }));
+    const decide = async (fixtureId: string) => {
+      const secret = await padSecret(await tap(out.token, fixtureId));
+      const auth = await requireFixtureActor(
+        new Request("http://test.local/api/v1", { headers: { authorization: `Bearer ${secret}` } }),
+        fixtureId,
+        "score",
+      );
+      const played = await playToDecided(auth, fixtureId);
+      if (played.kind !== "decided") throw new Error(`precondition: ${fixtureId} decided, got ${JSON.stringify(played)}`);
+      return { secret, played };
+    };
+    const [semi1, semi2] = (await fixturesOf(out.competitionId)).filter((f) => f.round_no === 1);
+    expect([seated(semi1!), seated(semi2!)], "premise: two seated semi-finals").toEqual([true, true]);
+    const first = await decide(semi1!.id);
+    const final = (await fixturesOf(out.competitionId)).find((f) => f.round_no === 2)!;
+    expect([final.home_entrant_id !== null, final.away_entrant_id !== null].filter(Boolean), "premise: one final seat filled").toHaveLength(1);
+    let forms = scoreForms(await homeAt(`/q/${out.token}`));
+    expect(forms.filter((f) => f.action.endsWith(`/${semi1!.id}`)), "the first semi-final: nothing to post").toEqual([]);
+    expect(forms.filter((f) => f.row === semi2!.id).map((f) => f.place), "the second still plays").toEqual(["row"]);
+    // What the hidden control would have met: the pad refuses to reopen a result that moved the match on.
+    const refused = await postEvent(
+      new Request(`http://test.local/api/v1/fixtures/${semi1!.id}/events`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${first.secret}`, "content-type": "application/json" },
+        body: JSON.stringify({ expected_seq: first.played.lastSeq, type: "core.void", payload: { event_id: first.played.lastEventId } }),
+      }),
+      { params: Promise.resolve({ id: semi1!.id }) },
+    );
+    expect(refused.status).toBe(403);
+    expect(await refused.text()).toContain("RESULT_CARRIED_FORWARD");
+
+    // Both semi-finals and the final decided: nothing waits on the final, so it is the one to edit.
+    await decide(semi2!.id);
+    await decide(final.id);
+    forms = scoreForms(await homeAt(`/q/${out.token}`));
+    expect(forms.map((f) => [f.place, f.row, f.label])).toEqual([["edit", final.id, en["quickMatch.home.editResult"]]]);
   });
 
   it("a knockout of 3: the semi-final in the hero and its row; the waiting final and the bye offer none", async () => {

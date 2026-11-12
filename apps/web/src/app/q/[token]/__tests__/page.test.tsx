@@ -244,7 +244,7 @@ const enCopy = (): QuickMatchCopy => ({
 });
 /** The slots T6, T7 and T8 fill: here, stand-ins that say where they were put. */
 const stubSlots = () => ({
-  score: vi.fn((f: { id: string; live: boolean }, place: "hero" | "row") => (
+  score: vi.fn((f: { id: string; live: boolean }, place: "hero" | "row" | "edit") => (
     <span data-testid="slot-score" data-fixture-id={f.id} data-live={String(f.live)} data-place={place} />
   )),
   share: <span data-testid="slot-share" />,
@@ -282,13 +282,12 @@ describe("the empty case: a quick match with no match left", () => {
     },
     divisionId: "d-1",
     stageId: "s-1",
-    sport: { key: "badminton", labelKey: "sport.badminton", variantKey: "bwf", variantLabelKey: null },
+    sport: { key: "badminton", labelKey: "sport.badminton" },
     kind: "pair",
     kindChosen: true,
     sides: [{ entrantId: "e-1", name: "One" }, { entrantId: "e-2", name: "Two" }],
     fixtures: [],
     next: null,
-    live: null,
     played: 0,
     total: 0,
     standings: {
@@ -346,7 +345,7 @@ describe("the empty case: a quick match with no match left", () => {
     // A goal sport (no set table): the away side won 0-1, so winner first is "1–0" and the stored order is wrong.
     const settled = (summary: unknown, winnerEntrantId: string): QuickMatchFixture => ({
       id: "f-1", roundNo: 1, fixtureNo: 1, seqInRound: 1, home: side(1), away: side(2), homeSlotLabel: null, awaySlotLabel: null,
-      status: "decided", summary, isBye: false, isFinal: false, winnerEntrantId, phase: "settled",
+      status: "decided", summary, isBye: false, isFinal: false, winnerEntrantId, phase: "settled", resultMovedOn: false,
     });
     const football = (f: QuickMatchFixture): QuickMatchHome => ({
       ...empty, sport: { ...empty.sport, key: "football", labelKey: "sport.football" }, fixtures: [f], played: 1, total: 1,
@@ -366,6 +365,27 @@ describe("the empty case: a quick match with no match left", () => {
     expect(checked).toBe(5);
   });
 
+  it("a settled row asks for the 'edit' slot once, unless its result moved the match on; a ready row asks for Score; nothing else asks (A-M6)", async () => {
+    const side = (n: number) => ({ entrantId: `e-${n}`, name: `Side ${n}` });
+    const fx = (id: string, n: number, over: Partial<QuickMatchFixture>): QuickMatchFixture => ({
+      id, roundNo: 1, fixtureNo: n, seqInRound: n, home: side(1), away: side(2), homeSlotLabel: null, awaySlotLabel: null,
+      status: "decided", summary: null, isBye: false, isFinal: false, winnerEntrantId: "e-1", phase: "settled", resultMovedOn: false,
+      ...over,
+    });
+    const fixtures = [
+      fx("f-open", 1, {}),
+      fx("f-moved", 2, { resultMovedOn: true }),
+      fx("f-off", 3, { status: "abandoned", winnerEntrantId: null }),
+      fx("f-ready", 4, { status: "scheduled", winnerEntrantId: null, phase: "ready" }),
+    ];
+    const { slots } = await renderView({ ...empty, fixtures, next: fixtures[3]!, played: 3, total: 4 });
+    const asked = slots.score.mock.calls.map(([f, place]) => `${f.id}:${place}`).sort();
+    expect(asked).toEqual(["f-off:edit", "f-open:edit", "f-ready:hero", "f-ready:row"]);
+    // The empty case: nothing settled, nothing to edit.
+    const none = await renderView({ ...empty, fixtures: [fixtures[3]!], next: fixtures[3]!, played: 0, total: 1 });
+    expect(none.slots.score.mock.calls.filter(([, place]) => place === "edit")).toEqual([]);
+  });
+
   // Assumptions are guards: two states plan 1's read never produces are named refusals, never a blank or a code.
   it("refuses a table that names a side the quick match does not hold", async () => {
     const stray: QuickMatchHome = {
@@ -383,7 +403,8 @@ describe("the empty case: a quick match with no match left", () => {
     const summary = { headline: "0–2", detail: { sets: [{ home: 15, away: 21, closed: true }, { home: 18, away: 21, closed: true }] } };
     const settled = (over: Partial<QuickMatchFixture>): QuickMatchFixture => ({
       id: "f-1", roundNo: 1, fixtureNo: 1, seqInRound: 1, home: side(1), away: side(2), homeSlotLabel: null, awaySlotLabel: null,
-      status: "decided", summary, isBye: false, isFinal: false, winnerEntrantId: "e-2", phase: "settled", ...over,
+      status: "decided", summary, isBye: false, isFinal: false, winnerEntrantId: "e-2", phase: "settled", resultMovedOn: false,
+      ...over,
     });
     const league = (f: QuickMatchFixture): QuickMatchHome => ({ ...empty, fixtures: [f], played: 1, total: 1 });
     const won = oneByTestId((await renderView(league(settled({})))).tree, "qm-match");
@@ -404,7 +425,7 @@ describe("the empty case: a quick match with no match left", () => {
     const fixture = (over: Partial<QuickMatchFixture>): QuickMatchFixture => ({
       id: "f-1", roundNo: 1, fixtureNo: 1, seqInRound: 1, home: side(1), away: side(2), homeSlotLabel: null,
       awaySlotLabel: null, status: "scheduled", summary: null, isBye: false, isFinal: false, winnerEntrantId: null,
-      phase: "ready", ...over,
+      phase: "ready", resultMovedOn: false, ...over,
     });
     const knockout = (label: unknown): QuickMatchHome => ({
       ...empty,
@@ -988,7 +1009,7 @@ describe.skipIf(!HAS_DB)("the quick match home page", () => {
     const { firstRallyFor } = await import("@/server/usecases/__tests__/_quick-match-probe");
     for (const req of await firstRallyFor(only.id)) await scoreEvent(systemAuth(), only.id, req);
     const h = await homeOf(out);
-    expect(h.live?.id, "precondition: in play").toBe(only.id);
+    expect(h.fixtures.filter((f) => f.phase === "live").map((f) => f.id), "precondition: in play").toEqual([only.id]);
     const { tree, slots } = await renderView(h);
     const hero = oneByTestId(tree, "qm-hero");
     expect(words(oneByTestId(hero, "qm-hero-kicker"))).toBe(en_("quickMatch.home.liveMatch", { n: 1, total: 1 }));

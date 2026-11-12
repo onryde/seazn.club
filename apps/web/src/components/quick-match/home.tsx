@@ -219,6 +219,8 @@ export function buildHomeView(home: QuickMatchHome, copy: QuickMatchCopy): Built
         score: scoreText(f, home.sport.key, copy.levels),
         result,
         next: heroFixture !== null && heroFixture.id === f.id,
+        // A settled match the pad will reopen (A-M6): not one whose result has already moved the match on.
+        editable: f.phase === "settled" && !f.resultMovedOn,
       };
     });
 

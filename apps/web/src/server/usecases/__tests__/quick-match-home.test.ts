@@ -25,7 +25,6 @@ import { FIXTURE_STATUSES } from "@/lib/fixture-status";
 import offerJson from "@/lib/quick-match-offer.generated.json";
 import { DEFAULT_LOCALE, LOCALES } from "@/lib/i18n-constants";
 import { messages } from "@/lib/messages";
-import { variantWordKey } from "@/lib/variant-label-keys";
 import type { CreateQuickMatch } from "@/server/api-v1/schemas";
 import { forEachSportAsync } from "@seazn/engine/testkit";
 import { listDivisionFixtures } from "../fixtures";
@@ -141,6 +140,7 @@ const fx = (o: Partial<QuickMatchFixture> & Pick<QuickMatchFixture, "id" | "roun
   status: "scheduled",
   seqInRound: 1,
   phase: "ready",
+  resultMovedOn: false,
   summary: null,
   isBye: false,
   isFinal: false,
@@ -336,7 +336,7 @@ describe.skipIf(!HAS_DB)("readQuickMatchHome", () => {
     expect(h.total).toBe(a.matchCount);   // C17: the number the Start button showed
     expect(h.played).toBe(0);
     expect(h.allPlayed).toBe(false);
-    expect(h.live).toBeNull();
+    expect(h.fixtures.filter((f) => f.phase === "live")).toEqual([]);
     expect(h.next!.roundNo).toBe(1);
     expect(h.next!.fixtureNo).toBe(1);
     expect(h.fixtures).toHaveLength(6);
@@ -350,14 +350,8 @@ describe.skipIf(!HAS_DB)("readQuickMatchHome", () => {
     expect(h.standings!.stage_id).toBe(a.stageId);
     expect(tableOf(h).map((r) => r.entrantId).sort()).toEqual(h.sides.map((s) => s.entrantId).sort());
     expect(h.kind).toBe("pair");
-    expect(h.sport).toEqual({
-      key: "badminton",
-      labelKey: "sport.badminton",
-      variantKey: BADMINTON_V,
-      variantLabelKey: variantWordKey("badminton", BADMINTON_V) ?? null,
-    });
+    expect(h.sport).toEqual({ key: "badminton", labelKey: "sport.badminton" });
     expect(Object.hasOwn(messages, h.sport.labelKey)).toBe(true);
-    expect(h.sport.variantLabelKey).not.toBeNull();   // every system badminton variant is named (variant-label-keys.ts)
   });
 
   it("never returns another quick match's division, fixtures or sides (isolation, §7.1 point 3)", async () => {
@@ -399,7 +393,7 @@ describe.skipIf(!HAS_DB)("readQuickMatchHome", () => {
       expect(h.played).toBe(0);
       expect(h.allPlayed).toBe(false);   // zero of zero is not a finished match: no winner card
       expect(h.next).toBeNull();
-      expect(h.live).toBeNull();
+      expect(h.fixtures.filter((f) => f.phase === "live")).toEqual([]);
       expect(h.sides).toHaveLength(SIDES.length);
     } finally {
       await hardDeleteQuickMatchCompetition(a.competitionId);
@@ -441,7 +435,7 @@ describe.skipIf(!HAS_DB)("readQuickMatchHome", () => {
     expect(last.fixtureNo).toBeGreaterThan(h.next!.fixtureNo);   // precondition: it is not already next
     for (const req of await firstRallyFor(last.id)) await scoreEvent(systemAuth(), last.id, req);
     h = await homeOf(a);
-    expect(h.live!.id).toBe(last.id);
+    expect(h.fixtures.filter((f) => f.phase === "live").map((f) => f.id)).toEqual([last.id]);
     expect(h.next!.id).toBe(last.id);
     const [stored] = await sql<{ summary: unknown }[]>`select summary from match_states where fixture_id = ${last.id}`;
     expect(stored).toBeDefined();
@@ -472,7 +466,8 @@ describe.skipIf(!HAS_DB)("readQuickMatchHome", () => {
     expect(h.played).toBe(0);
     const undone = h.fixtures.find((f) => f.id === first.id)!;
     expect(undone.winnerEntrantId).toBeNull();
-    expect(h.live!.id).toBe(first.id);   // started and undecided again: in play
+    // started and undecided again: in play
+    expect(h.fixtures.filter((f) => f.phase === "live").map((f) => f.id)).toEqual([first.id]);
     expect(h.next!.id).toBe(first.id);
     expect(tableOf(h).reduce((n, row) => n + row.played, 0)).toBe(0);
   });
@@ -510,7 +505,7 @@ describe.skipIf(!HAS_DB)("readQuickMatchHome", () => {
     expect(h.played).toBe(2);
     expect(h.allPlayed).toBe(true);
     expect(h.next).toBeNull();
-    expect(h.live).toBeNull();
+    expect(h.fixtures.filter((f) => f.phase === "live")).toEqual([]);
     const done = h.fixtures.find((f) => f.id === final.id)!;
     expect(sideIds(done)).toContain(done.winnerEntrantId);
   });
@@ -577,7 +572,7 @@ describe.skipIf(!HAS_DB)("readQuickMatchHome", () => {
       const out = await create(input);
       const h = await homeOf(out);
       // The setup screen's own names for this sport and variant (C1: keys, never English names), and the kind chosen.
-      expect(h.sport).toEqual({ key, labelKey: sport.labelKey, variantKey: variant.variant_key, variantLabelKey: variant.labelKey });
+      expect(h.sport).toEqual({ key, labelKey: sport.labelKey });
       expect(h.kind).toBe(kind);
       // The kind is named only where the guest chose it: the setup screen shows its kind switch for >1 kind (h1).
       expect(h.kindChosen, key).toBe(sport.kinds.length > 1);
