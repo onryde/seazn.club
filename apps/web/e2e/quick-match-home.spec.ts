@@ -10,10 +10,14 @@ import { HOLD_MS } from "../src/components/v2/scorepad/queue";
 import { HUMAN_FASTEST_REPEAT_MS } from "../src/components/v2/scorepad/use-pad-pipeline";
 
 // Quick match plan 2 Task 5 (spec docs/superpowers/specs/2026-11-03-quick-match-design.md §5 step 3, §8): the guest's home
-// at `/q/<token>` in a real browser, at the three widths the task is verified at (320, 768, 1280), for a league, a knockout
-// and the dead link. Task 10 owns the flow (`quick-match.spec.ts`: setup → home → Score → back) and the seven-width case
+// at `/q/<token>` in a real browser, at the three widths the task is verified at (320, 768, 1280), for a league and the dead
+// link. Task 10 owns the flow (`quick-match.spec.ts`: setup → home → Score → back) and the seven-width case
 // (`mobile.spec.ts`); this file is the home's own width check, which no unit test can see: the page's real width with a
-// 43-character side name, the hero, the table and the draw laid out by the browser.
+// 43-character side name, the hero, the table and the list laid out by the browser.
+//
+// A guest's quick match is a league (owner 2026-11-12, "take out": League + Knockout comes later), so no knockout can be
+// made here: the knockout home (the draw, the waiting final and its "not yet", Add a match refused) stays in code for
+// League + Knockout and is covered by its tests in app/q/[token]/__tests__/ (page, score-route and add-match-route) until then.
 //
 // Every quick match here is made the way a guest makes one: the setup page's form, posted by its Start button, followed to
 // the home (the real producer, never a seed). Measured with `expectNoHorizontalScroll` (helpers.ts), which lifts the
@@ -40,15 +44,15 @@ const LONG = "The Extraordinarily Long-Named Doubles Pair";
 const form = (page: Page) => page.getByTestId("qm-setup-form");
 const side = (page: Page, n: number) => form(page).getByLabel(`Side ${n}`, { exact: true });
 
-/** Make a quick match through the setup page and land on its home. */
-async function createThroughSetup(page: Page, sides: string[], format: "League" | "Knockout") {
+/** Make a quick match through the setup page and land on its home. It is a league: there is no format to pick
+ *  (owner 2026-11-12). */
+async function createThroughSetup(page: Page, sides: string[]) {
   await page.goto("/en/play");
   await expect(form(page)).toBeVisible();
   await form(page).getByText("Badminton", { exact: true }).click();
   await form(page).getByLabel("Name", { exact: true }).fill(`e2e home ${TAG}`);
   for (let n = 3; n <= sides.length; n++) await page.getByRole("button", { name: "+ Add a side" }).click();
   for (const [k, name] of sides.entries()) await side(page, k + 1).fill(name);
-  if (sides.length > 2) await form(page).getByText(format, { exact: true }).click();
   await page.getByTestId("qm-start").click();
   await expect(page).toHaveURL(/\/q\/[^/?#]+$/);
 }
@@ -68,7 +72,7 @@ async function atEachWidth(page: Page, check: (width: number) => Promise<void>, 
 }
 
 test("home (Task 5): a league of 4 with a 43-character side, at 320, 768 and 1280: hero, table and list, no sideways scroll", async ({ guest: page }) => {
-  await createThroughSetup(page, [LONG, "Priya & Tom", "Lee & Ana", "Jo & Max"], "League");
+  await createThroughSetup(page, [LONG, "Priya & Tom", "Lee & Ana", "Jo & Max"]);
   await atEachWidth(page, async (width) => {
     await expect(page.getByTestId("qm-played"), `${width}`).toHaveText("0 of 6 matches played · kept 7 days after the last score");
     await expect(page.getByTestId("qm-hero"), `${width}`).toContainText("Up next · match 1 of 6");
@@ -84,26 +88,14 @@ test("home (Task 5): a league of 4 with a 43-character side, at 320, 768 and 128
   });
 });
 
-test("home (Task 5): a knockout of 3 at 320, 768 and 1280: the draw with a lone 'Semi-final', the bye, the waiting final", async ({ guest: page }) => {
-  await createThroughSetup(page, [LONG, "Priya & Tom", "Lee & Ana"], "Knockout");
-  await atEachWidth(page, async (width) => {
-    const draw = page.getByTestId("qm-draw");
-    await expect(draw, `${width}`).toBeVisible();
-    await expect(page.getByTestId("qm-standings"), `${width}`).toHaveCount(0);
-    await expect(draw.getByTestId("qm-draw-card"), `${width}`).toHaveCount(3);
-    await expect(draw.getByTestId("qm-draw-round"), `${width}`).toHaveText(["Semi-final", "Final"]);
-    await expect(draw.locator('[data-bye="true"]'), `${width}`).toContainText("Bye");
-    await expect(page.locator('[data-testid="qm-match"][data-state="waiting"]'), `${width}`).toContainText("Winner of the semi-final");
-    await expect(page.getByTestId("qm-hero"), `${width}`).toContainText("Up next · Semi-final");
-  });
-});
-
 // ── Task 6: Score ───────────────────────────────────────────────────────────────────────────────────────────────────
 //
 // The Score control is a plain form post (`POST /q/<token>/score/<fixture>`) answered with a 303 into the pad, or back to the
 // home with a flash (app/q/[token]/score/[fixtureId]/route.ts). Its unit and DB tests prove the route and the island; this is
-// what only a browser shows: the post followed to the pad, the Back button and a second tap that reopens the same link, a
-// real refused post landing on the flash, and the buttons as real 44px targets at the three widths.
+// what only a browser shows: the post followed to the pad, the Back button and a second tap that reopens the same link, and
+// the buttons as real 44px targets at the three widths. (Its refused post, a waiting knockout final, needs a knockout, which
+// a guest cannot make since the owner's 2026-11-12 "take out": score-route.test.ts proves that refusal until League +
+// Knockout.)
 
 /** A real tap target: at least 44px tall, and the element a tap at its centre actually hits (`boundingBox()` measures paint,
  *  not hit area). Scrolled into view first: `elementFromPoint` is viewport-relative and reads null below the fold. */
@@ -119,7 +111,7 @@ async function expectTappable(locator: Locator, what: string) {
 }
 
 test("Score (Task 6): a league of 4 at 320, 768 and 1280: Score on the hero and on each of the 6 matches, real 44px targets", async ({ guest: page }) => {
-  await createThroughSetup(page, [LONG, "Priya & Tom", "Lee & Ana", "Jo & Max"], "League");
+  await createThroughSetup(page, [LONG, "Priya & Tom", "Lee & Ana", "Jo & Max"]);
   await atEachWidth(page, async (width) => {
     const hero = page.getByTestId("qm-hero").getByTestId("qm-score");
     await expect(hero, `${width}`).toHaveText("Score this match");
@@ -132,7 +124,7 @@ test("Score (Task 6): a league of 4 at 320, 768 and 1280: Score on the hero and 
 });
 
 test("Score (Task 6): the hero's Score lands in the pad on its match; Back, then Score again, reopens the same link", async ({ guest: page }) => {
-  await createThroughSetup(page, ["Ravi & Sam", "Priya & Tom", "Lee & Ana", "Jo & Max"], "League");
+  await createThroughSetup(page, ["Ravi & Sam", "Priya & Tom", "Lee & Ana", "Jo & Max"]);
   const home = new URL(page.url()).pathname;
   await page.getByTestId("qm-hero").getByTestId("qm-score").click();
   // The secret alone in the path (O3): no query, no fragment.
@@ -151,47 +143,6 @@ test("Score (Task 6): the hero's Score lands in the pad on its match; Back, then
   expect(new URL(page.url()).pathname, "the same link, reopened (not a second one)").toBe(pad);
 });
 
-test("Score (Task 6): a post for the waiting final lands back on the home with the 'not yet' flash, at 320, 768 and 1280", async ({ guest: page }) => {
-  await createThroughSetup(page, ["Ravi & Sam", "Priya & Tom", "Lee & Ana"], "Knockout");
-  const home = new URL(page.url()).pathname;
-  const waiting = page.locator('[data-testid="qm-match"][data-state="waiting"]');
-  await expect(waiting).toHaveCount(1);
-  await expect(waiting.getByTestId("qm-score"), "the home offers no Score on a waiting match (C18)").toHaveCount(0);
-  const finalId = await waiting.getAttribute("data-fixture-id");
-  expect(finalId).toMatch(/^[0-9a-f-]{36}$/);
-  // A stale page or a crafted post: the same form the home draws, submitted for the final. Its 303 is caught as the
-  // redirected GET: the URL holds `?e=` only until the home's ClearFlashParam takes the spent parameter out (T6 m2).
-  const refusal = `${home}?e=QUICK_MATCH_SIDES_UNKNOWN`;
-  const landed = page.waitForRequest((r) => r.method() === "GET" && r.url().endsWith(refusal));
-  await page.evaluate((action) => {
-    const form = document.createElement("form");
-    form.method = "post";
-    form.action = action;
-    document.body.append(form);
-    form.submit();
-  }, `${home}/score/${finalId}`);
-  expect((await landed).redirectedFrom()?.method(), "the post's 303 landed on the refusal").toBe("POST");
-  // The spent ?e= leaves the URL, and the flash stays on screen: a plain replaceState, which Next's router mirrors from
-  // its own history state without asking the server again. So the widths are checked by resizing, never by a reload.
-  await expect(page).toHaveURL(new RegExp(`${home}$`));
-  await atEachWidth(
-    page,
-    async (width) => {
-      const flash = page.getByTestId("qm-flash");
-      await expect(flash, `${width}`).toHaveText("That match can't be scored yet: it waits for earlier results.");
-      await expect(flash, `${width}`).toHaveAttribute("role", "alert");
-      await expect(flash, `${width}: in view at the top`).toBeInViewport();
-      await expect(page.getByTestId("qm-hero"), `${width}`).toContainText("Up next · Semi-final");
-      await expect(page, `${width}: the URL stays clean`).toHaveURL(new RegExp(`${home}$`));
-    },
-    { reload: false },
-  );
-  // What m2 is for: a reload of the page (or a shared or bookmarked copy of its URL) prints no stale refusal.
-  await page.reload();
-  await expect(page.getByTestId("qm-hero"), "the home itself is there").toContainText("Up next · Semi-final");
-  await expect(page.getByTestId("qm-flash")).toHaveCount(0);
-});
-
 // ── Task 7: Share ───────────────────────────────────────────────────────────────────────────────────────────────────
 //
 // The island's unit test (components/quick-match/__tests__/share.test.tsx) proves its wiring with doubles; this is what only
@@ -205,7 +156,7 @@ test("Share (Task 7): the link and Copy on first paint, the QR closed; Copy fill
   await page.addInitScript(() => {
     delete (Navigator.prototype as { share?: unknown }).share;
   });
-  await createThroughSetup(page, [LONG, "Priya & Tom", "Lee & Ana", "Jo & Max"], "League");
+  await createThroughSetup(page, [LONG, "Priya & Tom", "Lee & Ana", "Jo & Max"]);
   // The home link a guest shares is the page's own address: `/q/<token>` on this origin, never the pad's device link.
   const homeUrl = page.url();
   expect(new URL(homeUrl).pathname).toMatch(/^\/q\/qm_[A-Za-z0-9_-]+$/);
@@ -256,7 +207,7 @@ test("Share (Task 7): where the phone has a share sheet, 'Share on WhatsApp' is 
       },
     });
   });
-  await createThroughSetup(page, ["Ravi & Sam", "Priya & Tom"], "League");
+  await createThroughSetup(page, ["Ravi & Sam", "Priya & Tom"]);
   const homeUrl = page.url();
   const name = `e2e home ${TAG}`;
   await atEachWidth(page, async (width) => {
@@ -361,13 +312,14 @@ test("Edit result (review I1): a French home at 320 with a settled row: 'Modifie
 // "+ Add a match" is a native disclosure holding a plain form post (`POST /q/<token>/add-match`) answered with a 303 back to
 // the home, the new match on it, or with a flash (app/q/[token]/add-match/route.ts). The route's DB test proves every answer
 // and the island's unit test its wiring; this is what only a browser shows: the disclosure opening, the selects' real width
-// with a 43-character side in them, the 44px targets at the three widths, a refused post landing on its flash, and a
-// knockout with no control at all. The walkthrough (walkthrough/quick-match.spec.ts, step 7) adds one to a finished league
-// and plays it.
+// with a 43-character side in them, the 44px targets at the three widths, and a refused post landing on its flash. (A
+// knockout's missing control is page.test.tsx's and its "league only" refusal add-match-route.test.ts's: a guest cannot
+// make a knockout since the owner's 2026-11-12 "take out".) The walkthrough (walkthrough/quick-match.spec.ts, step 7) adds
+// one to a finished league and plays it.
 
 test("Add a match (Task 8): a league of 4 at 320, 768 and 1280: closed on first paint, opens to two selects at the table's top two, 44px targets; Add lands the new match on the home", async ({ guest: page }) => {
   const sides = [LONG, "Priya & Tom", "Lee & Ana", "Jo & Max"];
-  await createThroughSetup(page, sides, "League");
+  await createThroughSetup(page, sides);
   const home = new URL(page.url()).pathname;
   const open = page.getByTestId("qm-add-match-open");
   const addForm = page.getByTestId("qm-add-match-form");
@@ -404,7 +356,7 @@ test("Add a match (Task 8): a league of 4 at 320, 768 and 1280: closed on first 
 });
 
 test("Add a match (Task 8): the same side twice lands back on the home with 'Pick two different sides.', the form open at the picks, nothing added, at 320, 768 and 1280", async ({ guest: page }) => {
-  await createThroughSetup(page, ["Ravi & Sam", "Priya & Tom", "Lee & Ana"], "League");
+  await createThroughSetup(page, ["Ravi & Sam", "Priya & Tom", "Lee & Ana"]);
   const home = new URL(page.url()).pathname;
   await page.getByTestId("qm-add-match-open").click();
   const addForm = page.getByTestId("qm-add-match-form");
@@ -440,34 +392,4 @@ test("Add a match (Task 8): the same side twice lands back on the home with 'Pic
     },
     { reload: false },
   );
-});
-
-test("Add a match (Task 8): a knockout has no '+ Add a match'; a stale or crafted post lands on 'Only a league can take an extra match.'", async ({ guest: page }) => {
-  await createThroughSetup(page, ["Ravi & Sam", "Priya & Tom", "Lee & Ana"], "Knockout");
-  const home = new URL(page.url()).pathname;
-  await expect(page.getByTestId("qm-draw")).toBeVisible();
-  await expect(page.getByTestId("qm-add-match"), "a knockout has a winner by construction (C5)").toHaveCount(0);
-  // What a league's form posts, two side ids: the league check answers before the sides are even looked at.
-  const landed = page.waitForRequest((r) => {
-    if (r.method() !== "GET") return false;
-    const url = new URL(r.url());
-    return url.pathname === home && url.searchParams.get("e") === "QUICK_MATCH_LEAGUE_ONLY";
-  });
-  await page.evaluate((action) => {
-    const form = document.createElement("form");
-    form.method = "post";
-    form.action = action;
-    for (const name of ["home", "away"]) {
-      const input = document.createElement("input");
-      input.name = name;
-      input.value = "00000000-0000-4000-8000-000000000000";
-      form.append(input);
-    }
-    document.body.append(form);
-    form.submit();
-  }, `${home}/add-match`);
-  expect((await landed).redirectedFrom()?.method(), "the post's 303 landed on the refusal").toBe("POST");
-  await expect(page.getByTestId("qm-flash")).toHaveText("Only a league can take an extra match.");
-  await expect(page.getByTestId("qm-match"), "nothing added: a knockout of 3 plays 2").toHaveCount(2);
-  await expectNoHorizontalScroll(page);
 });

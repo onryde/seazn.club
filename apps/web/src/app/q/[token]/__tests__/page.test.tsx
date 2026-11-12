@@ -26,7 +26,8 @@ import { sql } from "@/lib/db";
 import { t as tRuntime, plural as pluralRuntime } from "@/lib/i18n-runtime";
 import { levelWords } from "@/lib/score/levels";
 import type { CreateQuickMatch } from "@/server/api-v1/schemas";
-import { createQuickMatch, systemAuth, type CreatedQuickMatch } from "@/server/usecases/quick-match-create";
+import { systemAuth, type CreatedQuickMatch } from "@/server/usecases/quick-match-create";
+import { createQuickMatchAnyFormat } from "@/server/usecases/__tests__/_quick-match-knockout";
 import { hardDeleteQuickMatchCompetition } from "@/server/usecases/quick-match-delete";
 import {
   readQuickMatchHome,
@@ -224,8 +225,8 @@ const league = (over: Partial<CreateQuickMatch> = {}): CreateQuickMatch => ({
 });
 const create = (input: CreateQuickMatch) => {
   // An email's link mail needs the origin (plan 3's create); held in a variable so the call fits either signature.
-  const ctx = { visitorHash: hashVisitorKey(mintVisitorKey()), baseUrl: "https://seazn.example", mailAllowed: async () => true as const };
-  return createQuickMatch(input, ctx);
+  const ctx = { visitorHash: hashVisitorKey(mintVisitorKey()), baseUrl: "https://seazn.example" };
+  return createQuickMatchAnyFormat(input, ctx);
 };
 async function homeOf(out: CreatedQuickMatch): Promise<QuickMatchHome> {
   const row = await resolveQuickMatchToken(out.token);

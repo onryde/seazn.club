@@ -1,6 +1,8 @@
-// Quick match plan 2, Task 2 (pre-flight amendments D1, A2, A3, B2, C2): the setup screen's every match count and
-// knockout draw, computed on the server and handed to the setup island as a prop, so the number on the Start button is
-// a lookup — never a fetch that can land stale or out of order.
+// Quick match plan 2, Task 2 (pre-flight amendments D1, A2, A3, B2, C2): the setup screen's every match count, computed
+// on the server and handed to the setup island as a prop, so the number on the Start button is a lookup — never a fetch
+// that can land stale or out of order. A guest's quick match is a league (owner 2026-11-12, "take out" Knockout), so the
+// table holds league cells only; the knockout draws (`quickMatchKnockoutDraws`) are kept, unshipped, for League +
+// Knockout, and pinned here the same way.
 //
 // No DB. ONE table for every sport: the draw is the stage kind's, not the sport's. The engine's generators take no sport
 // (spec §7.3: a league is `generateRoundRobin({ entrants, seeds, config: { legs } })`, a knockout `generateSingleElim`),
@@ -19,17 +21,18 @@ import {
   quickMatchPreviewTable,
   quickMatchStageInput,
   type QuickMatchDrawSeat,
+  quickMatchKnockoutDraws,
   type QuickMatchFormat,
   type QuickMatchKnockoutCell,
-  type QuickMatchPreviewTable,
+  type QuickMatchKnockoutDraws,
 } from "../quick-match-preview";
 
-/** The rulebook's ranges (CreateQuickMatch: 2..6 sides, 1..2 plays — Once | Twice, owner 2026-11-12; C16: two sides is
- *  always a league). */
+/** The rulebook's ranges (CreateQuickMatch: 2..6 sides, 1..2 plays — Once | Twice, owner 2026-11-12; C16: a knockout
+ *  needs three sides). */
 const LEAGUE_KEYS = [2, 3, 4, 5, 6].flatMap((n) => [1, 2].map((p) => `league:${n}:${p}`));
 const KNOCKOUT_KEYS = [3, 4, 5, 6].map((n) => `knockout:${n}:1`);
 
-const knockout = (t: QuickMatchPreviewTable, n: number): QuickMatchKnockoutCell => {
+const knockout = (t: QuickMatchKnockoutDraws, n: number): QuickMatchKnockoutCell => {
   const cell = t[`knockout:${n}:1`];
   if (!cell) throw new Error(`no knockout cell for ${n} sides`);
   return cell;
@@ -46,10 +49,17 @@ const pairWords = (cell: QuickMatchKnockoutCell, pair: [QuickMatchDrawSeat, Quic
   pair.map((s) => seatWords(cell, s)).sort().join("v");
 
 describe("quickMatchPreviewTable — the cells", () => {
-  it("holds exactly the 10 league cells (2..6 sides × 1..2 plays) and the 4 knockout cells (3..6 sides)", () => {
+  it("holds exactly the 10 league cells (2..6 sides × 1..2 plays) and no knockout cell (owner 2026-11-12: League only)", () => {
     const keys = Object.keys(quickMatchPreviewTable());
-    expect(keys.length).toBe(14); // anti-vacuity: an empty table is a failure, not a pass
-    expect(new Set(keys)).toEqual(new Set([...LEAGUE_KEYS, ...KNOCKOUT_KEYS]));
+    expect(keys.length).toBe(10); // anti-vacuity: an empty table is a failure, not a pass
+    expect(new Set(keys)).toEqual(new Set(LEAGUE_KEYS));
+    expect(keys.filter((k) => !k.startsWith("league:")), "nothing but leagues ships to a guest").toEqual([]);
+  });
+
+  it("the kept knockout draws hold exactly the 4 draws (3..6 sides), for League + Knockout", () => {
+    const keys = Object.keys(quickMatchKnockoutDraws());
+    expect(keys.length).toBe(4);
+    expect(new Set(keys)).toEqual(new Set(KNOCKOUT_KEYS));
   });
 
   it("every league cell counts plays × n(n−1)/2 matches (round robin)", () => {
@@ -63,8 +73,8 @@ describe("quickMatchPreviewTable — the cells", () => {
     expect(checked).toBe(10);
   });
 
-  it("every knockout cell counts n − 1 matches, and the top seeds sit out round one (spec §7.3 step 3)", () => {
-    const t = quickMatchPreviewTable();
+  it("every knockout draw counts n − 1 matches, and the top seeds sit out round one (spec §7.3 step 3)", () => {
+    const t = quickMatchKnockoutDraws();
     const holders: Record<number, number[]> = { 3: [1], 4: [], 5: [1, 2, 3], 6: [1, 2] };
     let checked = 0;
     for (const n of [3, 4, 5, 6]) {
@@ -87,7 +97,7 @@ describe("quickMatchPreviewTable — the cells", () => {
     [5, [["4v5"], ["1vW(4v5)", "2v3"], ["W(1vW(4v5))vW(2v3)"]]],
     [6, [["3v6", "4v5"], ["1vW(4v5)", "2vW(3v6)"], ["W(1vW(4v5))vW(2vW(3v6))"]]],
   ])("the knockout of %i draws %j, round by round", (n, rounds) => {
-    const cell = knockout(quickMatchPreviewTable(), n);
+    const cell = knockout(quickMatchKnockoutDraws(), n);
     // the PAIRING is the assertion, not the order of the pairs in a round
     expect(cell.rounds.map((r) => new Set(r.pairs.map((p) => pairWords(cell, p))))).toEqual(rounds.map((r) => new Set(r)));
   });
@@ -99,11 +109,11 @@ describe("quickMatchPreviewTable — the cells", () => {
     [5, ["quarter_final", "semi_final", "final"]],
     [6, ["quarter_final", "semi_final", "final"]],
   ])("the knockout of %i names its rounds %j", (n, roles) => {
-    expect(knockout(quickMatchPreviewTable(), n).rounds.map((r) => r.role?.kind)).toEqual(roles);
+    expect(knockout(quickMatchKnockoutDraws(), n).rounds.map((r) => r.role?.kind)).toEqual(roles);
   });
 
   it("a winner's seat only ever names an EARLIER round's pair (no loop, no forward reference)", () => {
-    const t = quickMatchPreviewTable();
+    const t = quickMatchKnockoutDraws();
     let seats = 0;
     for (const n of [3, 4, 5, 6]) {
       const cell = knockout(t, n);
@@ -119,15 +129,16 @@ describe("quickMatchPreviewTable — the cells", () => {
   });
 });
 
-describe("quickMatchPreviewTable — the exhaustive differential against the direct calls", () => {
+describe("quickMatchPreviewTable and quickMatchKnockoutDraws — the exhaustive differential against the direct calls", () => {
   // Every cell against `quickMatchPreview` called directly, and every knockout seat against the generator's own RAW
   // draw (`previewStageDraw`), which carries each fixture's explicit seq — so a feeder is resolved here by lookup on
   // (round, seq), independently of the table's walk over the fold's ordered lines.
   it("every cell's count, every knockout round's role, bye and pair, and every seat equal the direct calls", () => {
     const t = quickMatchPreviewTable();
+    const draws = quickMatchKnockoutDraws();
     let cells = 0;
     let seats = 0;
-    for (const key of Object.keys(t)) {
+    for (const key of [...Object.keys(t), ...Object.keys(draws)]) {
       const [format, sides, plays] = key.split(":") as [QuickMatchFormat, string, string];
       const input = { format, sides: Number(sides), plays: Number(plays) };
       const direct = quickMatchPreview(input);
@@ -136,7 +147,7 @@ describe("quickMatchPreviewTable — the exhaustive differential against the dir
         expect(t[key as `league:${number}:${number}`], key).toEqual({ matchCount: direct.matchCount });
         continue;
       }
-      const cell = knockout(t, input.sides);
+      const cell = knockout(draws, input.sides);
       expect(cell.matchCount, key).toBe(direct.matchCount);
       expect(cell.rounds.map((r) => r.role), key).toEqual(direct.rounds.map((r) => r.role));
       expect(cell.byes, key).toEqual(direct.rounds.flatMap((r) => r.lines.filter((l) => l.bye).map((l) => l.home.seed)));
@@ -165,7 +176,7 @@ describe("quickMatchPreviewTable — the exhaustive differential against the dir
       }
       expect(cell.rounds.flatMap((r) => r.pairs), key).toHaveLength(raw.filter((x) => !x.bye).length);
     }
-    expect(cells).toBe(14); // anti-vacuity
+    expect(cells).toBe(14); // anti-vacuity: 10 league cells + 4 knockout draws
     expect(seats).toBe(28); // 2 × (2 + 3 + 4 + 5)
   });
 });
@@ -180,25 +191,24 @@ describe("quickMatchPreviewTable — ONE table for every sport, and small enough
     expectTypeOf<Parameters<typeof quickMatchStageInput>[0]>().toEqualTypeOf<{ format: QuickMatchFormat; plays: number; name: string }>();
   });
 
-  it("serializes inside a 2 KiB budget, and its shape holds exactly 104 keys", () => {
+  it("serializes inside a 2 KiB budget, and its shape holds exactly 20 keys", () => {
     // The table rides in every /play page payload: the budget is the requirement.
     const t = quickMatchPreviewTable();
     expect(JSON.stringify(t).length).toBeLessThanOrEqual(2048);
     // The shape's tripwire: every object key in the table, NOT descending into `role` (the engine's RoundRole may grow
-    // a field without the table changing shape). Hand count: 14 cell keys + 10 league `matchCount` + 4 knockout cells ×
-    // 3 (matchCount, byes, rounds) + 10 rounds (2 + 2 + 3 + 3) × 2 (role, pairs) + 28 seats × 1 (seed | winnerOf) +
-    // 10 winnerOf seats (every match but the final feeds one: n − 2 for n = 3..6) × 2 (round, pair) = 104.
+    // a field without the table changing shape). Hand count: 10 cell keys + 10 league `matchCount` = 20 (League only,
+    // owner 2026-11-12: no knockout cell rides in the page).
     const keysIn = (v: unknown): number =>
       Array.isArray(v)
         ? v.reduce((n: number, x) => n + keysIn(x), 0)
         : v !== null && typeof v === "object"
           ? Object.entries(v).reduce((n, [k, x]) => n + 1 + (k === "role" ? 0 : keysIn(x)), 0)
           : 0;
-    expect(keysIn(t)).toBe(104);
+    expect(keysIn(t)).toBe(20);
   });
 });
 
-describe("quickMatchPreviewTable — a knockout seat it cannot name is refused, never shown blank or mislabeled", () => {
+describe("quickMatchKnockoutDraws — a knockout seat it cannot name is refused, never shown blank or mislabeled", () => {
   afterEach(() => {
     vi.doUnmock("../stages");
     vi.resetModules();
@@ -219,15 +229,15 @@ describe("quickMatchPreviewTable — a knockout seat it cannot name is refused, 
     // positive pair: the same stub with well-formed seats is accepted.
     vi.resetModules();
     vi.doMock("../stages", () => ({ previewStageDraw: () => drawn }));
-    const { quickMatchPreviewTable: fresh } = await import("../quick-match-preview");
-    expect(() => fresh()).toThrow(/^quickMatchPreviewTable cannot name /);
+    const { quickMatchKnockoutDraws: fresh } = await import("../quick-match-preview");
+    expect(() => fresh()).toThrow(/^quickMatchKnockoutDraws cannot name /);
   });
 
   it("the stubbed path accepts a well-formed draw (so the refusals above are the seat's, not the stub's)", async () => {
     vi.resetModules();
     const drawn = [holder, match, { ...final, homeFrom: winner(1, 1), awayFrom: winner(1, 2) }];
     vi.doMock("../stages", () => ({ previewStageDraw: () => drawn }));
-    const { quickMatchPreviewTable: fresh } = await import("../quick-match-preview");
+    const { quickMatchKnockoutDraws: fresh } = await import("../quick-match-preview");
     // the bye holder takes the final's home seat; the away seat is the winner of the one real match
     expect(fresh()["knockout:4:1"]).toEqual({
       matchCount: 2,

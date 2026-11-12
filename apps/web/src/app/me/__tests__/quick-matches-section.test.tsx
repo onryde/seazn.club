@@ -99,7 +99,8 @@ import { log } from "@/server/logger";
 import { createCompetition, listCompetitions } from "@/server/usecases/competitions";
 import { ensureGuestDeviceLink } from "@/server/usecases/device-links";
 import { countActiveCompetitions } from "@/server/usecases/entitlement-freeze";
-import { createQuickMatch, type CreatedQuickMatch } from "@/server/usecases/quick-match-create";
+import { type CreatedQuickMatch } from "@/server/usecases/quick-match-create";
+import { createQuickMatchAnyFormat } from "@/server/usecases/__tests__/_quick-match-knockout";
 import { hardDeleteQuickMatchCompetition } from "@/server/usecases/quick-match-delete";
 import { listMyQuickMatches, readQuickMatchHome, resolveQuickMatchToken } from "@/server/usecases/quick-match-home";
 import { saveQuickMatchForUser } from "@/server/usecases/quick-match-save";
@@ -132,7 +133,7 @@ async function create(format: "league" | "knockout", sides: number): Promise<Cre
     await sql<{ key: string }[]>`
       select key from sport_variants where sport_key = 'badminton' and is_system and org_id is null order by key limit 1`
   )[0]!.key;
-  const out = await createQuickMatch(
+  const out = await createQuickMatchAnyFormat(
     {
       name: `QM list ${format} ${randomUUID().slice(0, 8)}`,
       sport_key: "badminton",
@@ -144,7 +145,7 @@ async function create(format: "league" | "knockout", sides: number): Promise<Cre
       email: null,
       locale: "en",
     },
-    { visitorHash: hashVisitorKey(mintVisitorKey()), mailAllowed: async () => true },
+    { visitorHash: hashVisitorKey(mintVisitorKey()) },
   );
   made.push(out.competitionId);
   return out;

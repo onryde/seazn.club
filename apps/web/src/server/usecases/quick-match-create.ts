@@ -12,7 +12,7 @@ import "server-only";
 //   - `createQuickMatchTree` is UNGUARDED: no offer, kind or format check. Its only callers are the offer probe
 //     (`__tests__/_quick-match-probe.ts`, which must not go through the offer it produces) and `createQuickMatch`.
 //   - `createQuickMatch` is GUARDED, and what a route calls: the home token sealed first, the per-visitor cap, the probe's
-//     offer (`offerFor`: sport × variant, the sport's kinds, the knockout offer), then the tree and the one analytics
+//     offer (`offerFor`: sport × variant, the sport's kinds; a league only), then the tree and the one analytics
 //     event (D11).
 //
 // The two-commit shape is §7.3's recorded deviation: the competition, division, stage and entrants are created by the
@@ -36,7 +36,6 @@ import {
   QUICK_MATCH_ENDS_ON_DAYS,
   QUICK_MATCH_ERRORS,
   QUICK_MATCH_EXPIRY_DAYS,
-  QUICK_MATCH_KNOCKOUT_MIN_SIDES,
   QUICK_MATCH_MAX_ALIVE_PER_VISITOR,
   QUICK_MATCH_SYSTEM_ORG_ID,
   QUICK_MATCH_SYSTEM_USER_ID,
@@ -263,10 +262,8 @@ export async function createQuickMatchTree(
  *   1. the early per-visitor count: QUICK_MATCH_MAX_ALIVE_PER_VISITOR alive already → 429 QUICK_MATCH_TOO_MANY_ALIVE,
  *      before anything is built (the locked recount inside the tree is the race guard, B5f);
  *   2. the offer: a sport × variant the probe did not prove → 422 SPORT_NOT_OFFERED; a kind the sport does not take →
- *      422 KIND_NOT_OFFERED (D2); a knockout of two sides (C16), or of a variant where a bracket match can end level →
- *      422 FORMAT_NOT_OFFERED. C23 as amended (owner ruling 2026-11-07): a knockout is offered only where a bracket match
- *      cannot end level, decided by the engine's `bracketMayEndLevel` on the variant's cfg ⊕ the knockout stage's
- *      defaults (`offer.knockoutAllowed`, quick-match-sports.ts); the probe checks the same question on real fixtures;
+ *      422 KIND_NOT_OFFERED (D2); any format but a league → 422 FORMAT_NOT_OFFERED (owner 2026-11-12: League only for
+ *      now; the knockout rules, C16 and C23's `offer.knockoutAllowed`, wait for League + Knockout);
  *   3. with an email only, `ctx.mailAllowed(email)` (the route's mail limits): asked only once every refusal above has
  *      passed, so a refused create spends no mail bucket. It answers `true`, or the `MailRefusal` that said no. A no
  *      costs the MAIL, never the match (branch review B m3,
@@ -312,12 +309,11 @@ export async function createQuickMatch(
   if (!offer.kinds.includes(kind)) {
     throw new HttpError(422, `${input.sport_key} does not take '${kind}' sides`, QUICK_MATCH_ERRORS.KIND_NOT_OFFERED);
   }
-  if (input.format === "knockout" && (!offer.knockoutAllowed || input.sides.length < QUICK_MATCH_KNOCKOUT_MIN_SIDES)) {
-    throw new HttpError(
-      422,
-      "a knockout is offered only for three or more sides, in a variant whose matches always produce a winner",
-      QUICK_MATCH_ERRORS.FORMAT_NOT_OFFERED,
-    );
+  // Owner 2026-11-12 ("take out"): a guest is offered League only for now. League + Knockout comes in a later PR and
+  // reuses the knockout stage, so the API enum and the DB check keep "knockout"; it is just not offered. The knockout
+  // rules that stood here (three or more sides, a variant that cannot end level: `offer.knockoutAllowed`) wait for it.
+  if (input.format !== "league") {
+    throw new HttpError(422, "a quick match is a league for now: a knockout is not offered", QUICK_MATCH_ERRORS.FORMAT_NOT_OFFERED);
   }
 
   const mailRefusal = rest.email === null ? null : await ctx.mailAllowed(rest.email);

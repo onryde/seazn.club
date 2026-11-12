@@ -590,7 +590,7 @@ describe.skipIf(!HAS_DB)("a mail limiter outage (Redis configured but unreachabl
 });
 
 describe.skipIf(!HAS_DB)("a create the create itself refuses spends NO mail bucket (B-m3: its refusals run first)", () => {
-  it("too many alive, a sport not offered, a kind not offered, a knockout of two: each refused with its code, no mail key asked (counted)", async () => {
+  it("too many alive, a sport not offered, a kind not offered, a knockout (League only): each refused with its code, no mail key asked (counted)", async () => {
     const seen: string[] = [];
     __setRateLimitCounterForTests(async (key) => {
       seen.push(key);
@@ -605,7 +605,7 @@ describe.skipIf(!HAS_DB)("a create the create itself refuses spends NO mail buck
       { why: "too many alive", fields: {}, visitor: full, code: QUICK_MATCH_ERRORS.TOO_MANY_ALIVE },
       { why: "a sport not offered", fields: { sport_key: "generic", variant_key: generic!.key, kind: "team" }, code: QUICK_MATCH_ERRORS.SPORT_NOT_OFFERED },
       { why: "a kind not offered", fields: { kind: "team" }, code: QUICK_MATCH_ERRORS.KIND_NOT_OFFERED },
-      { why: "a knockout of two", fields: { format: "knockout" }, code: QUICK_MATCH_ERRORS.FORMAT_NOT_OFFERED },
+      { why: "a knockout (League only, owner 2026-11-12)", fields: { format: "knockout" }, code: QUICK_MATCH_ERRORS.FORMAT_NOT_OFFERED },
     ];
     let checked = 0;
     for (const c of cases) {

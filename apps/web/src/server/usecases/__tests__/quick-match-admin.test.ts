@@ -56,7 +56,8 @@ import { createSession } from "@/lib/auth";
 import { sql } from "@/lib/db";
 import { AuthError } from "@/lib/errors";
 import type { CreateQuickMatch } from "@/server/api-v1/schemas";
-import { createQuickMatch, systemAuth, type CreatedQuickMatch } from "../quick-match-create";
+import { systemAuth, type CreatedQuickMatch } from "../quick-match-create";
+import { createQuickMatchAnyFormat } from "./_quick-match-knockout";
 import { hardDeleteQuickMatchCompetition } from "../quick-match-delete";
 import {
   QUICK_MATCH_ADMIN_LIST_LIMIT,
@@ -102,7 +103,7 @@ async function offered(sportKey: string): Promise<{ variant_key: string; kind: C
 
 async function create(shape: Shape): Promise<CreatedQuickMatch> {
   const { variant_key, kind } = await offered(shape.sport_key);
-  const out = await createQuickMatch(
+  const out = await createQuickMatchAnyFormat(
     {
       name: `QM admin ${randomUUID().slice(0, 8)}`,
       sport_key: shape.sport_key,
@@ -114,7 +115,7 @@ async function create(shape: Shape): Promise<CreatedQuickMatch> {
       email: shape.email ?? null,
       locale: shape.locale ?? "en",
     },
-    { visitorHash: hashVisitorKey(mintVisitorKey()), baseUrl: "https://qm-admin.test", mailAllowed: async () => true },
+    { visitorHash: hashVisitorKey(mintVisitorKey()), baseUrl: "https://qm-admin.test" },
   );
   competitions.push(out.competitionId);
   return out;

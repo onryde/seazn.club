@@ -42,7 +42,8 @@ import { systemAuth } from "@/lib/quick-match-auth";
 import { MUTATION_LIMIT, __setRateLimitCounterForTests } from "@/lib/rate-limit";
 import type { CreateQuickMatch } from "@/server/api-v1/schemas";
 import { addFixture } from "@/server/usecases/stages";
-import { createQuickMatch, type CreatedQuickMatch } from "@/server/usecases/quick-match-create";
+import { type CreatedQuickMatch } from "@/server/usecases/quick-match-create";
+import { createQuickMatchAnyFormat } from "@/server/usecases/__tests__/_quick-match-knockout";
 import { hardDeleteQuickMatchCompetition } from "@/server/usecases/quick-match-delete";
 import { readQuickMatchHome } from "@/server/usecases/quick-match-home";
 import { offerFor } from "@/server/usecases/quick-match-sports";
@@ -112,7 +113,7 @@ const league = (over: Partial<CreateQuickMatch> = {}): CreateQuickMatch => ({
 });
 const created: string[] = [];
 async function create(input: CreateQuickMatch = league()): Promise<CreatedQuickMatch> {
-  const out = await createQuickMatch(input, { visitorHash: hashVisitorKey(mintVisitorKey()), mailAllowed: async () => true });
+  const out = await createQuickMatchAnyFormat(input, { visitorHash: hashVisitorKey(mintVisitorKey()) });
   created.push(out.competitionId);
   return out;
 }

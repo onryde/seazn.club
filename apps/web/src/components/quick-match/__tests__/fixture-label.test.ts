@@ -1,9 +1,10 @@
 // The knockout fixture's label and its feeder's label (quick match plan 2; controller ruling 2026-11-08): a round's fixtures
 // are numbered among its NON-BYE fixtures, and a round with exactly one gets the unnumbered label; the final is never
-// numbered; a "winner of" names its round the same way. One helper, so the setup preview (T4) and the home's draw (T5)
-// cannot disagree.
+// numbered; a "winner of" names its round the same way. One helper, so a draw preview and the home's draw (T5) cannot
+// disagree. (The setup screen shows no draw today: a guest's quick match is a league, owner 2026-11-12; the knockout draws
+// are kept for League + Knockout, and read here from `quickMatchKnockoutDraws`.)
 //
-// Expected labels are typed by hand from the generator's draws pinned in setup-form.test.tsx (3 sides: byes [1], SF 3v2,
+// Expected labels are typed by hand from the generator's draws pinned in quick-match-preview-table.test.ts (3 sides: byes [1], SF 3v2,
 // F 1 v W; 4: SF 1v4 3v2, F; 5: byes [1,3,2], QF 5v4, SF 1 v W(QF) and 3v2, F; 6: byes [1,2], QF 5v4 3v6, SF 1 v W(QF1)
 // and W(QF2) v 2, F), never read back from the helper. Sport: not applicable (the draw is sport-blind, B4c).
 import { describe, expect, it } from "vitest";
@@ -11,7 +12,7 @@ import enUi from "@/dictionaries/en/ui.json";
 import frUi from "@/dictionaries/fr/ui.json";
 import { interpolate } from "@/lib/i18n-runtime";
 import { QUICK_MATCH_MAX_SIDES, QUICK_MATCH_MIN_SIDES } from "@/lib/quick-match-constants";
-import { quickMatchPreviewTable, type QuickMatchKnockoutCell } from "@/server/usecases/quick-match-preview";
+import { quickMatchKnockoutDraws, type QuickMatchKnockoutCell } from "@/server/usecases/quick-match-preview";
 import { fixtureLabel, winnerOfLabel, type FixtureLabel } from "../fixture-label";
 
 const say = (l: FixtureLabel, dict: Record<string, string> = enUi) => {
@@ -20,10 +21,10 @@ const say = (l: FixtureLabel, dict: Record<string, string> = enUi) => {
   return interpolate(s, l.params);
 };
 
-const TABLE = quickMatchPreviewTable();
+const DRAWS = quickMatchKnockoutDraws();
 const cellOf = (n: number): QuickMatchKnockoutCell => {
-  const cell = TABLE[`knockout:${n}:1`];
-  if (!cell) throw new Error(`no knockout of ${n} in the table`);
+  const cell = DRAWS[`knockout:${n}:1`];
+  if (!cell) throw new Error(`no knockout of ${n} in the draws`);
   return cell;
 };
 
@@ -63,7 +64,7 @@ const EXPECTED: Record<number, { cards: string[]; feeders: string[] }> = {
 };
 
 describe("fixtureLabel / winnerOfLabel: numbered among the round's non-bye fixtures, unnumbered when it has one", () => {
-  it("every knockout the setup offers, 3..6 sides: the labels in play order and the feeders; 14 cards and 10 feeders checked", () => {
+  it("every knockout draw, 3..6 sides: the labels in play order and the feeders; 14 cards and 10 feeders checked", () => {
     let cards = 0;
     let feeders = 0;
     for (let n = Math.max(3, QUICK_MATCH_MIN_SIDES); n <= QUICK_MATCH_MAX_SIDES; n++) {

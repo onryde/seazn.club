@@ -9,20 +9,11 @@ import { pickVariant } from "@/lib/preferred-variant";
 import type { QuickMatchSport } from "@/server/usecases/quick-match-sports";
 import type { SetupSport } from "@/components/quick-match/setup-form";
 
-/** The island's copy: the setup and error lines (marketing), and from ui the kind and format words, the draw's card and
- *  feeder names, and the round names `roundRoleLabel` reads. Flat `key → string`; nothing else of either dictionary. */
+/** The island's copy: the setup and error lines (marketing), and from ui the kind words. Flat `key → string`; nothing
+ *  else of either dictionary. A league only (owner 2026-11-12), so no format word, draw card or round name ships. */
 const MARKETING_PREFIXES = ["quickMatch.setup.", "quickMatch.errors."];
 const UI_PREFIXES = [
   "quickMatch.kind.",
-  "quickMatch.format.",
-  "quickMatch.home.versus",
-  "quickMatch.home.semiFinal",
-  "quickMatch.home.quarterFinal",
-  "quickMatch.home.winnerOfSemi",
-  "quickMatch.home.winnerOfMatch",
-  "quickMatch.home.winnerOfThe",
-  "quickMatch.home.winnerOfQuarter",
-  "bracket.round.",
   // The kind switch's legend (screen readers only): "Who plays", the division builder's own word for the same choice.
   "divBuilder.step.who",
   // A refused bot check: #1136's shared sentence (reload, content blocker), as every guarded form shows it (review m2).
@@ -50,7 +41,6 @@ export function setupSports(sports: readonly QuickMatchSport[], ui: Dict): Setup
     const [firstVariant, ...moreVariants] = s.variants.map((v) => ({
       key: v.variant_key,
       name: t(ui, v.labelKey),
-      knockoutAllowed: v.knockoutAllowed,
     }));
     if (!firstKind || !firstVariant) return [];
     const variants: SetupSport["variants"] = [firstVariant, ...moreVariants];

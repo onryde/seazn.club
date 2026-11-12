@@ -4,8 +4,9 @@
 //
 // Everything it shows arrives as props from the server page (`app/[lang]/(marketing)/play/page.tsx`): the offer with its
 // names already resolved, the copy, and the whole preview table (`quickMatchPreviewTable`, pre-flight D1), so the match
-// count and the knockout draw are lookups, never a fetch that can land stale. Server modules are reached by `import type`
-// only: eslint.config.mjs refuses a value import of @/server/** in src/components/quick-match/**.
+// count is a lookup, never a fetch that can land stale. A quick match is a league (owner 2026-11-12, "take out": League
+// + Knockout comes later), so the screen has no format control at all, and posts `format=league`. Server modules are
+// reached by `import type` only: eslint.config.mjs refuses a value import of @/server/** in src/components/quick-match/**.
 //
 // The form is a real `<form method="post" action="/api/quick-match">`, so it works before the script loads. Once it
 // runs, a submit is a fetch of the same fields that follows the route's 303 (ledger "CARRY to T4", decision log
@@ -20,17 +21,12 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type FormEvent } from "react";
 import { Pencil, X } from "lucide-react";
 import type { EntrantKind } from "@seazn/engine/sport";
-import type {
-  QuickMatchDrawSeat,
-  QuickMatchKnockoutCell,
-  QuickMatchPreviewTable,
-} from "@/server/usecases/quick-match-preview";
+import type { QuickMatchPreviewTable } from "@/server/usecases/quick-match-preview";
 import { LOCALES, type Locale } from "@/lib/i18n-constants";
 import { interpolate, plural } from "@/lib/i18n-runtime";
 import {
   QUICK_MATCH_EMAIL_PATTERN,
   QUICK_MATCH_ERRORS,
-  QUICK_MATCH_KNOCKOUT_MIN_SIDES,
   QUICK_MATCH_MAX_ALIVE_PER_VISITOR,
   QUICK_MATCH_MAX_PLAYS,
   QUICK_MATCH_MAX_SIDES,
@@ -43,12 +39,9 @@ import { routes } from "@/lib/routes";
 import { withTurnstile } from "@/lib/turnstile-client";
 import { useHydrated } from "@/lib/use-client-snapshot";
 import { TurnstileWidget, useTurnstile } from "@/components/turnstile-widget";
-import { fixtureLabel, winnerOfLabel, type FixtureLabel } from "./fixture-label";
 
 /** The create route (app/api/quick-match/route.ts). It answers every post with a 303. */
 const CREATE_PATH = "/api/quick-match";
-
-export type QuickMatchFormat = "league" | "knockout";
 
 /** One sport as the page hands it over: names resolved on the server, chips in catalog order (pre-flight B4b). */
 export interface SetupSport {
@@ -64,7 +57,6 @@ export interface SetupSport {
 export interface SetupVariant {
   key: string;
   name: string;
-  knockoutAllowed: boolean;
 }
 
 export interface SetupFormProps {
@@ -80,21 +72,9 @@ export interface SetupFormProps {
 
 // ---- the pure rules (exported for the tests) ----------------------------------------------------------------------
 
-/** The Start button's count: one lookup in the server's table. `undefined` outside it (a knockout of two). */
-export function matchCountOf(
-  table: QuickMatchPreviewTable,
-  format: QuickMatchFormat,
-  sides: number,
-  plays: number,
-): number | undefined {
-  return format === "league" ? table[`league:${sides}:${plays}`]?.matchCount : table[`knockout:${sides}:1`]?.matchCount;
-}
-
-/** What the Format row offers: nothing at two sides (C16), League alone where the rules can end level (C23, D15). */
-export type FormatOffer = "hidden" | "leagueOnly" | "both";
-export function formatOffer(sides: number, knockoutAllowed: boolean): FormatOffer {
-  if (sides < QUICK_MATCH_KNOCKOUT_MIN_SIDES) return "hidden";
-  return knockoutAllowed ? "both" : "leagueOnly";
+/** The Start button's count: one lookup in the server's table. `undefined` outside it. */
+export function matchCountOf(table: QuickMatchPreviewTable, sides: number, plays: number): number | undefined {
+  return table[`league:${sides}:${plays}`]?.matchCount;
 }
 
 /** The copy key for a refusal code, from T3's table; every other code (CREATE_FAILED, a crafted `?e=`) is generic. */
@@ -135,14 +115,13 @@ export function submitOutcome(res: { url: string; status: number }): SubmitOutco
   return { kind: "refused", code: QUICK_MATCH_ERRORS.CREATE_FAILED };
 }
 
-/** The create's fields, exactly the nine `CreateQuickMatch` takes (C3); `sides` repeated in typed order. A knockout has no
- *  plays, so it posts 1; a blank email is posted blank and the route maps it to none (B4e). */
+/** The create's fields, exactly the nine `CreateQuickMatch` takes (C3); `sides` repeated in typed order. The format is
+ *  always a league (owner 2026-11-12); a blank email is posted blank and the route maps it to none (B4e). */
 export function setupBody(input: {
   name: string;
   sport_key: string;
   variant_key: string;
   kind: EntrantKind;
-  format: QuickMatchFormat;
   sides: readonly string[];
   plays: number;
   email: string;
@@ -153,66 +132,15 @@ export function setupBody(input: {
   body.append("sport_key", input.sport_key);
   body.append("variant_key", input.variant_key);
   body.append("kind", input.kind);
-  body.append("format", input.format);
+  body.append("format", "league");
   for (const side of input.sides) body.append("sides", side);
-  body.append("plays", String(input.format === "knockout" ? 1 : input.plays));
+  body.append("plays", String(input.plays));
   body.append("email", input.email.trim());
   body.append("locale", input.locale);
   return body;
 }
 
 type Msg = (key: string, vars?: Record<string, string | number>) => string;
-
-/** One card of the knockout preview: its round's name (numbered where the round has several) and its one line. */
-export interface DrawCard {
-  label: string;
-  line: string;
-}
-
-/**
- * The knockout preview (C22) under the typed names. The table already resolved every bye feeder to its holder (T2), so a
- * round's pairs are its non-bye fixtures and a seat is a seed (the i-th typed name) or the winner of an earlier pair.
- * Card and feeder names are fixture-label.ts's (numbered among the round's fixtures, unnumbered when it has one), the
- * rule the home's draw shares. A pair whose seats are both winners is the final's "Winners meet". A blank row is named
- * by its place ("Side 3"), never blank.
- */
-export function drawPreview(
-  cell: QuickMatchKnockoutCell,
-  names: readonly string[],
-  msg: Msg,
-): { sitsOut: string[]; cards: DrawCard[] } {
-  const say = (l: FixtureLabel) => msg(l.key, l.params);
-  const nameOf = (seed: number) => names[seed - 1]?.trim() || msg("quickMatch.setup.sideLabel", { n: seed });
-  const matchNo = new Map<string, number>();
-  let n = 0;
-  cell.rounds.forEach((r, ri) => r.pairs.forEach((_, pi) => matchNo.set(`${ri + 1}:${pi + 1}`, ++n)));
-
-  const seatName = (seat: QuickMatchDrawSeat): string => {
-    if ("seed" in seat) return nameOf(seat.seed);
-    const { round, pair } = seat.winnerOf;
-    const no = matchNo.get(`${round}:${pair}`);
-    const from = cell.rounds[round - 1];
-    // T2 refuses a dangling feeder, but this is the screen: never print "Winner of match undefined".
-    if (no === undefined || !from) {
-      throw new Error(`drawPreview cannot name the winner of round ${round} pair ${pair}: not in the draw`);
-    }
-    return say(winnerOfLabel(from.role, from.pairs.length, pair - 1, no));
-  };
-
-  const cards = cell.rounds.flatMap((r, ri) =>
-    r.pairs.map(([home, away], pi): DrawCard => {
-      // Both seats are named even where the line reads "Winners meet", so a dangling feeder there is refused too.
-      const [homeName, awayName] = [seatName(home), seatName(away)];
-      const line =
-        "winnerOf" in home && "winnerOf" in away
-          ? msg("quickMatch.setup.winnersMeet")
-          : `${homeName} ${msg("quickMatch.home.versus")} ${awayName}`;
-      return { label: say(fixtureLabel(r.role, ri + 1, r.pairs.length, pi)), line };
-    }),
-  );
-  const sitsOut = [...cell.byes].sort((a, b) => a - b).map((seed) => msg("quickMatch.setup.sitsOut", { name: nameOf(seed) }));
-  return { sitsOut, cards };
-}
 
 // ---- the guest's date (B4h) -----------------------------------------------------------------------------------------
 
@@ -259,7 +187,6 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError }:
     { id: 0, name: "" },
     { id: 1, name: "" },
   ]);
-  const [format, setFormat] = useState<QuickMatchFormat>("league");
   const [plays, setPlays] = useState(1);
   /** null: the name follows the suggestion; a string once the guest has typed one (B4h). */
   const [typedName, setTypedName] = useState<string | null>(null);
@@ -291,33 +218,20 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError }:
   const suggestion = date === null ? sport.name : msg("quickMatch.setup.suggestedName", { sport: sport.name, date });
   const name = typedName ?? suggestion;
 
-  const offer = formatOffer(rows.length, variant.knockoutAllowed);
-  const effectiveFormat: QuickMatchFormat = offer === "both" ? format : "league";
-  const matches = matchCountOf(table, effectiveFormat, rows.length, plays);
-  const knockoutCell = effectiveFormat === "knockout" ? table[`knockout:${rows.length}:1`] : undefined;
-  const draw = knockoutCell ? drawPreview(knockoutCell, rows.map((r) => r.name), msg) : null;
-  /** Per card, how many matches its round has: a round of one (a lone semi-final, the final) spans the row. */
-  const roundSizes = knockoutCell ? knockoutCell.rounds.flatMap((r) => r.pairs.map(() => r.pairs.length)) : [];
+  const matches = matchCountOf(table, rows.length, plays);
   const canStart = !submitting && name.trim() !== "" && rows.every((r) => r.name.trim() !== "");
 
-  // Pre-flight B4c: a format the screen can no longer offer resets to League, so it does not come back by itself.
-  function settleFormat(sides: number, knockoutAllowed: boolean) {
-    if (formatOffer(sides, knockoutAllowed) !== "both") setFormat("league");
-  }
   function chooseSport(key: string) {
     const next = sports.find((s) => s.sport_key === key);
     if (!next) return;
     setSportKey(next.sport_key);
     setKind(next.kinds[0].kind);
     setVariantKey(next.defaultVariant);
-    const nextVariant = next.variants.find((v) => v.key === next.defaultVariant) ?? next.variants[0];
-    settleFormat(rows.length, nextVariant.knockoutAllowed);
   }
   function chooseVariant(key: string) {
     const next = sport.variants.find((v) => v.key === key);
     if (!next) return;
     setVariantKey(next.key);
-    settleFormat(rows.length, next.knockoutAllowed);
   }
   function addSide() {
     if (rows.length >= QUICK_MATCH_MAX_SIDES) return;
@@ -327,7 +241,6 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError }:
     const next = rows.filter((r) => r.id !== id);
     if (next.length < QUICK_MATCH_MIN_SIDES) return;
     setRows(next);
-    settleFormat(next.length, variant.knockoutAllowed);
   }
   function renameSide(id: number, value: string) {
     setRows(rows.map((r) => (r.id === id ? { ...r, name: value } : r)));
@@ -361,7 +274,6 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError }:
             sport_key: sport.sport_key,
             variant_key: variant.key,
             kind,
-            format: effectiveFormat,
             sides: rows.map((r) => r.name),
             plays,
             email,
@@ -388,29 +300,6 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError }:
 
   const errorLine =
     error === null ? null : msg(setupErrorKey(error), { max: QUICK_MATCH_MAX_ALIVE_PER_VISITOR });
-  const playsRow =
-    effectiveFormat === "league" ? (
-      <fieldset className={offer === "hidden" ? "mt-5" : "mt-3 border-l-2 border-[#3b2a6e] pl-3"}>
-        <legend className={LABEL}>{msg("quickMatch.setup.plays")}</legend>
-        <div className={`${SEG} mt-1.5`}>
-          {Array.from({ length: QUICK_MATCH_MAX_PLAYS }, (_, k) => k + 1).map((p) => (
-            <label key={p} className="min-w-0 flex-1">
-              <input
-                type="radio"
-                name="plays"
-                value={String(p)}
-                checked={plays === p}
-                onChange={() => setPlays(p)}
-                className="peer sr-only"
-              />
-              <span className={`${SEG_ITEM} text-sm`}>{msg(`quickMatch.setup.plays.${p}`)}</span>
-            </label>
-          ))}
-        </div>
-      </fieldset>
-    ) : (
-      <input type="hidden" name="plays" value="1" />
-    );
 
   return (
     <form
@@ -560,69 +449,29 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError }:
         </div>
       </div>
 
-      {offer === "hidden" ? (
-        <input type="hidden" name="format" value="league" />
-      ) : (
-        <fieldset className="mt-6" data-testid="qm-format-row">
-          <legend className={LABEL}>{msg("quickMatch.setup.format")}</legend>
-          {offer === "both" ? (
-            <div className={`${SEG} mt-1.5`}>
-              {(["league", "knockout"] as const).map((f) => (
-                <label key={f} className="min-w-0 flex-1">
-                  <input
-                    type="radio"
-                    name="format"
-                    value={f}
-                    checked={effectiveFormat === f}
-                    onChange={() => setFormat(f)}
-                    className="peer sr-only"
-                  />
-                  <span className={`${SEG_ITEM} text-base`}>{msg(`quickMatch.format.${f}`)}</span>
-                </label>
-              ))}
-            </div>
-          ) : (
-            <>
-              <input type="hidden" name="format" value="league" />
-              <p className="mt-1.5 rounded-lg border border-[#3b2a6e] bg-[#241650] px-3 py-2.5 text-center text-base font-semibold shadow-[inset_0_-2px_0_var(--mk-lime)]">
-                {msg("quickMatch.format.league")}
-              </p>
-              <p className={HELP}>{msg("quickMatch.setup.knockoutUnavailable")}</p>
-            </>
-          )}
-          <p className={HELP}>
-            {msg(effectiveFormat === "league" ? "quickMatch.setup.leagueHelp" : "quickMatch.setup.knockoutHelp")}
-          </p>
-        </fieldset>
-      )}
-
-      {playsRow}
-
-      {draw ? (
-        <div data-testid="qm-draw" className="mt-3">
-          <ol className="grid grid-cols-2 gap-1.5 text-xs">
-            {draw.cards.map((c, k) => (
-              <li
-                key={`${c.label}-${k}`}
-                className={`min-w-0 rounded-lg border border-[#3b2a6e] bg-[var(--mk-night)] px-2.5 py-2 text-[#b7aede] ${roundSizes[k] === 1 ? "col-span-2 text-center" : ""}`}
-              >
-                {c.label}
-                <span className="mt-0.5 block break-words text-sm font-medium text-[var(--mk-cream)]">{c.line}</span>
-              </li>
-            ))}
-          </ol>
-          {draw.sitsOut.length > 0 ? (
-            <ul className="mt-2 space-y-0.5 text-xs text-[#8d7fc0]">
-              {/* Index keys: two sides may share a name, so two lines can be the same words. */}
-              {draw.sitsOut.map((line, k) => (
-                <li key={k} className="min-w-0 break-words">
-                  {line}
-                </li>
-              ))}
-            </ul>
-          ) : null}
+      {/* A league, always (owner 2026-11-12): no format control, so nothing to choose; the post still names it. */}
+      <input type="hidden" name="format" value="league" />
+      <fieldset className="mt-5">
+        <legend className={LABEL}>{msg("quickMatch.setup.plays")}</legend>
+        <div className={`${SEG} mt-1.5`}>
+          {Array.from({ length: QUICK_MATCH_MAX_PLAYS }, (_, k) => k + 1).map((p) => (
+            <label key={p} className="min-w-0 flex-1">
+              <input
+                type="radio"
+                name="plays"
+                value={String(p)}
+                checked={plays === p}
+                onChange={() => setPlays(p)}
+                className="peer sr-only"
+              />
+              <span className={`${SEG_ITEM} text-sm`}>{msg(`quickMatch.setup.plays.${p}`)}</span>
+            </label>
+          ))}
         </div>
-      ) : null}
+        <p className={HELP} data-testid="qm-league-help">
+          {msg("quickMatch.setup.leagueHelp")}
+        </p>
+      </fieldset>
 
       <label className="mt-6 block">
         <span className={LABEL}>{msg("quickMatch.setup.rules")}</span>

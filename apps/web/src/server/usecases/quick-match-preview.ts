@@ -99,11 +99,15 @@ export function quickMatchPreview(input: { format: QuickMatchFormat; sides: numb
 }
 
 // ---------------------------------------------------------------------------
-// The setup screen's whole table (plan 2 pre-flight D1): every league count and every knockout draw the form can ask
-// for, computed here and handed to the setup island as a prop, so the Start button's number is a lookup — never a fetch
-// that can land stale or out of order. Every cell is a `quickMatchPreview` call over an in-range input, so its RangeError
-// is unreachable. ONE table serves every sport: the preview, the stage input it shares with the create, and the engine's
-// generators all take no sport (quick-match-preview-table.test.ts pins the first two inputs).
+// The setup screen's whole table (plan 2 pre-flight D1): every league count the form can ask for, computed here and
+// handed to the setup island as a prop, so the Start button's number is a lookup — never a fetch that can land stale or
+// out of order. Every cell is a `quickMatchPreview` call over an in-range input, so its RangeError is unreachable. ONE
+// table serves every sport: the preview, the stage input it shares with the create, and the engine's generators all take
+// no sport (quick-match-preview-table.test.ts pins the first two inputs).
+//
+// League only (owner 2026-11-12, "take out"): a guest picks no knockout for now, so the table the setup page ships holds
+// no knockout cell. The knockout draws (`quickMatchKnockoutDraws`) are KEPT, unshipped, for League + Knockout, which
+// comes in a later PR and will preview its knockout phase the same way.
 // ---------------------------------------------------------------------------
 
 /** A knockout seat on the setup screen: seed i (the i-th side as typed), or the winner of an earlier pair of this draw
@@ -125,12 +129,12 @@ export interface QuickMatchKnockoutCell {
   byes: number[];
   rounds: QuickMatchDrawRound[];
 }
-/** Keyed `"<format>:<sides>:<plays>"`. A knockout carries no plays (its stage has no legs), so its key always ends `:1`:
- *  the island looks one up as `` `knockout:${sides}:1` ``. A key outside the table (one side, a knockout of two) holds
- *  nothing, and every lookup is typed `| undefined`, so the compiler makes each caller handle that miss. */
-export type QuickMatchPreviewTable = { [key: `league:${number}:${number}`]: QuickMatchLeagueCell | undefined } & {
-  [key: `knockout:${number}:1`]: QuickMatchKnockoutCell | undefined;
-};
+/** Keyed `"league:<sides>:<plays>"`. A key outside the table (one side, three plays) holds nothing, and every lookup is
+ *  typed `| undefined`, so the compiler makes each caller handle that miss. */
+export type QuickMatchPreviewTable = { [key: `league:${number}:${number}`]: QuickMatchLeagueCell | undefined };
+/** Keyed `"knockout:<sides>:1"`: a knockout carries no plays (its stage has no legs), so its key always ends `:1`. Not
+ *  shipped to a guest today (League only); kept for League + Knockout. */
+export type QuickMatchKnockoutDraws = { [key: `knockout:${number}:1`]: QuickMatchKnockoutCell | undefined };
 
 function knockoutCell(preview: QuickMatchPreview, sides: number): QuickMatchKnockoutCell {
   // Where each match line lands in the cell: its round's place and its 1-based place among that round's matches. A
@@ -144,19 +148,19 @@ function knockoutCell(preview: QuickMatchPreview, sides: number): QuickMatchKnoc
   const where = (round: number, seq: number) => `the knockout of ${sides} R${round}·${seq}`;
 
   const holderOf = (bye: QuickMatchPreviewLine, at: string): number => {
-    if (bye.home.seed === null) throw new Error(`quickMatchPreviewTable cannot name ${at}: the bye's holder is no seed`);
+    if (bye.home.seed === null) throw new Error(`quickMatchKnockoutDraws cannot name ${at}: the bye's holder is no seed`);
     return bye.home.seed;
   };
   const seatOf = (side: QuickMatchPreviewSide, at: string): QuickMatchDrawSeat => {
     if (side.seed !== null && side.feeder !== null) {
-      throw new Error(`quickMatchPreviewTable cannot name ${at}: the seat is both seeded and fed`);
+      throw new Error(`quickMatchKnockoutDraws cannot name ${at}: the seat is both seeded and fed`);
     }
     if (side.seed !== null) return { seed: side.seed };
     // quickMatchPreview refuses a match seat with neither, so a seat with no seed has a feeder.
     const { round, seq } = side.feeder!;
     const source = roundAt.get(round)?.lines[seq - 1];
     if (!source) {
-      throw new Error(`quickMatchPreviewTable cannot name ${at}: it is fed by ${where(round, seq)}, which is not in the draw`);
+      throw new Error(`quickMatchKnockoutDraws cannot name ${at}: it is fed by ${where(round, seq)}, which is not in the draw`);
     }
     if (source.bye) return { seed: holderOf(source, where(round, seq)) };
     return { winnerOf: placeOf.get(source)! };
@@ -175,15 +179,22 @@ function knockoutCell(preview: QuickMatchPreview, sides: number): QuickMatchKnoc
 }
 
 export function quickMatchPreviewTable(): QuickMatchPreviewTable {
-  const table: Record<string, QuickMatchLeagueCell | QuickMatchKnockoutCell> = {};
+  const table: Record<string, QuickMatchLeagueCell> = {};
   for (let sides = QUICK_MATCH_MIN_SIDES; sides <= QUICK_MATCH_MAX_SIDES; sides++) {
     for (let plays = 1; plays <= QUICK_MATCH_MAX_PLAYS; plays++) {
       table[`league:${sides}:${plays}`] = { matchCount: quickMatchPreview({ format: "league", sides, plays }).matchCount };
     }
   }
-  // C16: two sides is always a league; the create refuses a knockout of two (QUICK_MATCH_FORMAT_NOT_OFFERED).
-  for (let sides = QUICK_MATCH_KNOCKOUT_MIN_SIDES; sides <= QUICK_MATCH_MAX_SIDES; sides++) {
-    table[`knockout:${sides}:1`] = knockoutCell(quickMatchPreview({ format: "knockout", sides, plays: 1 }), sides);
-  }
   return table as QuickMatchPreviewTable;
+}
+
+/** Every knockout draw a quick match of 3..6 sides would make (C22), structure only. No caller in the product today: a
+ *  guest is offered League only (owner 2026-11-12); kept for League + Knockout's preview of its knockout phase. */
+export function quickMatchKnockoutDraws(): QuickMatchKnockoutDraws {
+  const draws: Record<string, QuickMatchKnockoutCell> = {};
+  // C16: two sides is always a league.
+  for (let sides = QUICK_MATCH_KNOCKOUT_MIN_SIDES; sides <= QUICK_MATCH_MAX_SIDES; sides++) {
+    draws[`knockout:${sides}:1`] = knockoutCell(quickMatchPreview({ format: "knockout", sides, plays: 1 }), sides);
+  }
+  return draws as QuickMatchKnockoutDraws;
 }

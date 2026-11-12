@@ -37,7 +37,8 @@ import { log } from "@/server/logger";
 import { ensureGuestDeviceLink, resolveDeviceLinkToken } from "../device-links";
 import { touchQuickMatchActivityForFixture } from "../quick-match-activity";
 import { systemAuth } from "@/lib/quick-match-auth";
-import { createQuickMatch, type CreatedQuickMatch } from "../quick-match-create";
+import { type CreatedQuickMatch } from "../quick-match-create";
+import { createQuickMatchAnyFormat } from "./_quick-match-knockout";
 import { hardDeleteQuickMatchCompetition } from "../quick-match-delete";
 import { findQuickMatchByCompetition, resolveQuickMatchToken, type QuickMatchRow } from "../quick-match-home";
 import { listQuickMatchSports } from "../quick-match-sports";
@@ -95,7 +96,7 @@ const league = (over: Partial<CreateQuickMatch> = {}): CreateQuickMatch => ({
 /** Every competition a case created, hard-deleted in afterAll (the shared DB stays lean). */
 const created: string[] = [];
 async function create(input: CreateQuickMatch = league()): Promise<{ out: CreatedQuickMatch; row: QuickMatchRow }> {
-  const out = await createQuickMatch(input, { visitorHash: visitor(), mailAllowed: async () => true });
+  const out = await createQuickMatchAnyFormat(input, { visitorHash: visitor() });
   created.push(out.competitionId);
   const row = await resolveQuickMatchToken(out.token);
   if (!row) throw new Error(`precondition: quick match ${out.id} does not resolve`);

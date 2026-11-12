@@ -8449,8 +8449,8 @@ async function qmNotClipped(page: Page, root: string, label: string): Promise<nu
   return boxes;
 }
 
-/** The setup form filled the way a guest fills it: the sport (badminton unless named), the name, the sides, League when there
- *  are three or more. */
+/** The setup form filled the way a guest fills it: the sport (badminton unless named), the name, the sides. A quick match is a
+ *  league (owner 2026-11-12), so there is no format to pick at any number of sides. */
 async function qmFillSetup(page: Page, name: string, sides: readonly string[], sport: "badminton" | "football" = "badminton"): Promise<void> {
   await page.goto("/en/play", { waitUntil: "load" });
   const form = page.getByTestId("qm-setup-form");
@@ -8463,10 +8463,11 @@ async function qmFillSetup(page: Page, name: string, sides: readonly string[], s
   await form.getByLabel(qmMk("quickMatch.setup.nameLabel"), { exact: true }).fill(name);
   for (let n = 3; n <= sides.length; n += 1) await form.getByRole("button", { name: qmMk("quickMatch.setup.addSide") }).click();
   for (const [i, s] of sides.entries()) await form.getByLabel(qmMk("quickMatch.setup.sideLabel", { n: i + 1 }), { exact: true }).fill(s);
-  if (sides.length > 2) {
-    await form.getByText(qmUi("quickMatch.format.league"), { exact: true }).click();
-    await expect(form.getByRole("radio", { name: qmUi("quickMatch.format.league"), exact: true })).toBeChecked();
+  // No League or Knockout to pick (owner 2026-11-12): the league's own help says what it is instead.
+  for (const format of ["league", "knockout"] as const) {
+    await expect(form.getByRole("radio", { name: qmUi(`quickMatch.format.${format}`), exact: true }), `no ${format} to pick`).toHaveCount(0);
   }
+  await expect(form.getByTestId("qm-league-help")).toHaveText(qmMk("quickMatch.setup.leagueHelp"));
   // A single round robin of n sides plays n(n-1)/2 matches.
   const matches = (sides.length * (sides.length - 1)) / 2;
   await expect(page.getByTestId("qm-start-count")).toHaveText(

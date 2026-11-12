@@ -3,11 +3,12 @@
 //
 // No DOM here (vitest `environment: "node"`): the island is driven through `renderIsland`, whose dispatcher runs its
 // hooks, and its handlers are called as a browser would call them. Two real producers feed it, never a fixture:
-//  - the server's precomputed table, `quickMatchPreviewTable()` (T2), so every count and draw below is the generator's;
+//  - the server's precomputed table, `quickMatchPreviewTable()` (T2), so every count below is the generator's;
 //  - the page's own copy and sport builders (`setupCopy`, `setupSports`) over the real en dictionaries, so a key the
 //    page forgets to hand over shows up here as a raw key in an English assertion.
-// Expected values come from the rulebook (spec C6/C22, §7.3: a league is plays × n(n−1)/2 matches, a knockout n − 1,
-// seed i meets seed N+1−i, byes go to the top seeds) and from T3's code table, never from the island.
+// Expected values come from the rulebook (spec C6, §7.3: a league is plays × n(n−1)/2 matches) and from T3's code table,
+// never from the island. A guest's quick match is a league (owner 2026-11-12, "take out" Knockout: League + Knockout comes
+// later), so the screen has no format control and no draw.
 //
 // Sport: the island sweeps four sports (badminton, chess, football, tennis): two kinds, one kind, team, and a sport whose
 // preferred variant is not its first. The full live offer is swept against the real DB in play-page.test.tsx.
@@ -68,11 +69,7 @@ import {
   QUICK_MATCH_SIDE_NAME_MAX,
 } from "@/lib/quick-match-constants";
 import { CreateQuickMatch } from "@/server/api-v1/schemas";
-import {
-  quickMatchPreviewTable,
-  type QuickMatchKnockoutCell,
-  type QuickMatchPreviewTable,
-} from "@/server/usecases/quick-match-preview";
+import { quickMatchPreviewTable, type QuickMatchPreviewTable } from "@/server/usecases/quick-match-preview";
 import type { QuickMatchSport } from "@/server/usecases/quick-match-sports";
 import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
 import { setupCopy, setupSports } from "@/app/[lang]/(marketing)/play/setup-props";
@@ -80,8 +77,6 @@ import { CONSENT_OPEN_ATTR } from "@/components/cookie-consent";
 import { TurnstileWidget } from "@/components/turnstile-widget";
 import {
   QuickMatchSetupForm,
-  drawPreview,
-  formatOffer,
   matchCountOf,
   setupBody,
   setupErrorKey,
@@ -91,8 +86,6 @@ import {
 
 const TABLE = quickMatchPreviewTable();
 const COPY = setupCopy(enMarketing, enUi);
-const msg = (key: string, vars?: Record<string, string | number>) =>
-  Object.entries(vars ?? {}).reduce((s, [k, v]) => s.replaceAll(`{${k}}`, String(v)), (COPY as Record<string, string>)[key] ?? key);
 
 /** listQuickMatchSports' shape, as plan 1 returns it (labelKey = real dictionary keys). Catalog (sport key) order. */
 const OFFER: QuickMatchSport[] = [
@@ -128,19 +121,6 @@ const OFFER: QuickMatchSport[] = [
     variants: [
       { variant_key: "fast4", labelKey: "variant.tennis.fast4", knockoutAllowed: true },
       { variant_key: "tour", labelKey: "variant.tennis.tour", knockoutAllowed: true },
-    ],
-  },
-];
-
-/** D15 is unreachable in v1 (every offered variant allows a knockout), so it is mocked: one variant that can end level. */
-const LEVEL_OFFER: QuickMatchSport[] = [
-  {
-    sport_key: "football",
-    labelKey: "sport.football",
-    kinds: ["team"],
-    variants: [
-      { variant_key: "11-a-side", labelKey: "variant.football.elevenASide", knockoutAllowed: true },
-      { variant_key: "youth", labelKey: "variant.football.youth", knockoutAllowed: false },
     ],
   },
 ];
@@ -232,41 +212,22 @@ afterEach(() => {
 // ---- the pure rules -----------------------------------------------------------------------------------------------
 
 describe("matchCountOf: the Start button's number is a lookup in the server's table", () => {
-  it("every league is plays × n(n−1)/2 and every knockout n − 1 (rulebook); 14 cells checked", () => {
+  it("every league is plays × n(n−1)/2 (rulebook); 10 cells checked", () => {
     let checked = 0;
     for (let n = 2; n <= QUICK_MATCH_MAX_SIDES; n++) {
       for (let plays = 1; plays <= QUICK_MATCH_MAX_PLAYS; plays++) {
-        expect(matchCountOf(TABLE, "league", n, plays), `league ${n}×${plays}`).toBe((plays * n * (n - 1)) / 2);
+        expect(matchCountOf(TABLE, n, plays), `league ${n}×${plays}`).toBe((plays * n * (n - 1)) / 2);
         checked++;
       }
     }
-    for (let n = 3; n <= QUICK_MATCH_MAX_SIDES; n++) {
-      // A knockout has no plays: any plays value reads the same cell.
-      expect(matchCountOf(TABLE, "knockout", n, 2), `knockout of ${n}`).toBe(n - 1);
-      checked++;
-    }
-    // 5 side counts (2..6) × 2 plays (Once, Twice) + 4 knockouts (3..6 sides).
-    expect(checked).toBe(14);
+    // 5 side counts (2..6) × 2 plays (Once, Twice).
+    expect(checked).toBe(10);
   });
 
-  it("a key outside the table is undefined, never a number (a knockout of two, seven sides)", () => {
-    expect(matchCountOf(TABLE, "knockout", 2, 1)).toBeUndefined();
-    expect(matchCountOf(TABLE, "league", 7, 1)).toBeUndefined();
-  });
-});
-
-describe("formatOffer: the format row (C16) and the knockout gate (C23/D15)", () => {
-  it("hidden at two sides whatever the rules; both at 3..6 where a knockout is allowed, League alone where not; 10 checked", () => {
-    const seen: string[] = [];
-    for (const allowed of [true, false]) {
-      expect(formatOffer(2, allowed)).toBe("hidden");
-      seen.push(`2:${allowed}`);
-      for (let n = 3; n <= QUICK_MATCH_MAX_SIDES; n++) {
-        expect(formatOffer(n, allowed), `${n} sides, knockoutAllowed ${allowed}`).toBe(allowed ? "both" : "leagueOnly");
-        seen.push(`${n}:${allowed}`);
-      }
-    }
-    expect(seen).toHaveLength(10);
+  it("a key outside the table is undefined, never a number (one side, seven sides, three plays)", () => {
+    expect(matchCountOf(TABLE, 1, 1)).toBeUndefined();
+    expect(matchCountOf(TABLE, 7, 1)).toBeUndefined();
+    expect(matchCountOf(TABLE, 3, 3)).toBeUndefined();
   });
 });
 
@@ -353,101 +314,12 @@ describe("submitOutcome: what the followed 303 says", () => {
   });
 });
 
-describe("drawPreview: the knockout draw as the generator makes it, under the typed names (C22)", () => {
-  const NAMES = ["Ravi & Sam", "Priya & Tom", "Lee & Ana", "Jo & Max", "Kim & Raj", "Ola & Ben"];
-  const cellOf = (n: number): QuickMatchKnockoutCell => {
-    const cell = TABLE[`knockout:${n}:1`];
-    if (!cell) throw new Error(`no knockout of ${n} in the table`);
-    return cell;
-  };
-  const pairOf = (line: string) => line.split(" v ").sort();
-  const sorted = (...names: string[]) => [...names].sort();
-
-  it("4 sides: two semi-finals 1v4 and 2v3, then the winners meet; nobody sits out", () => {
-    const d = drawPreview(cellOf(4), NAMES.slice(0, 4), msg);
-    expect(d.sitsOut).toEqual([]);
-    expect(d.cards).toHaveLength(3); // n − 1 matches
-    expect(d.cards.map((c) => c.label)).toEqual(["Semi-final 1", "Semi-final 2", "Final"]);
-    const semis = d.cards.filter((c) => c.label.startsWith("Semi-final"));
-    expect(semis.map((c) => pairOf(c.line)).sort()).toEqual([sorted(NAMES[0]!, NAMES[3]!), sorted(NAMES[1]!, NAMES[2]!)].sort());
-    expect(d.cards.at(-1)).toEqual({ label: "Final", line: "Winners meet" });
-  });
-
-  it("3 sides: the top seed sits out, meets the winner of the one semi-final", () => {
-    const d = drawPreview(cellOf(3), NAMES.slice(0, 3), msg);
-    expect(d.sitsOut).toEqual([`${NAMES[0]} sits out the first round`]);
-    expect(d.cards).toHaveLength(2);
-    // The round has one fixture, so neither it nor its winner is numbered (ruling 2026-11-08, fixture-label.ts).
-    expect(d.cards[0]!.label).toBe("Semi-final");
-    expect(pairOf(d.cards[0]!.line)).toEqual(sorted(NAMES[1]!, NAMES[2]!));
-    expect(d.cards[1]!.label).toBe("Final");
-    expect(pairOf(d.cards[1]!.line)).toEqual(sorted(NAMES[0]!, "Winner of the semi-final"));
-  });
-
-  it("5 sides: seeds 1-3 sit out (in seed order), 4v5 is the lone quarter-final, its winner meets seed 1", () => {
-    const d = drawPreview(cellOf(5), NAMES.slice(0, 5), msg);
-    expect(d.sitsOut).toEqual([0, 1, 2].map((k) => `${NAMES[k]} sits out the first round`));
-    expect(d.cards).toHaveLength(4);
-    expect(d.cards.map((c) => c.label)).toEqual(["Quarter-final", "Semi-final 1", "Semi-final 2", "Final"]);
-    expect(pairOf(d.cards[0]!.line)).toEqual(sorted(NAMES[3]!, NAMES[4]!));
-    const semis = d.cards.filter((c) => c.label.startsWith("Semi-final")).map((c) => pairOf(c.line));
-    expect(semis.sort()).toEqual([sorted(NAMES[0]!, "Winner of the quarter-final"), sorted(NAMES[1]!, NAMES[2]!)].sort());
-    expect(d.cards.at(-1)).toEqual({ label: "Final", line: "Winners meet" });
-  });
-
-  it("6 sides: seeds 1-2 sit out; each meets the winner of the quarter-final the 8-draw sends them, named as its card is", () => {
-    const d = drawPreview(cellOf(6), NAMES, msg);
-    expect(d.sitsOut).toEqual([0, 1].map((k) => `${NAMES[k]} sits out the first round`));
-    expect(d.cards).toHaveLength(5);
-    expect(d.cards.map((c) => c.label)).toEqual(["Quarter-final 1", "Quarter-final 2", "Semi-final 1", "Semi-final 2", "Final"]);
-    const qf = d.cards.filter((c) => c.label.startsWith("Quarter-final"));
-    expect(qf.map((c) => pairOf(c.line)).sort()).toEqual([sorted(NAMES[2]!, NAMES[5]!), sorted(NAMES[3]!, NAMES[4]!)].sort());
-    // A "winner of" seat names its feeding card by the card's own label (ruling m8): "Quarter-final 2" → "quarter-final 2".
-    const feederOf = (a: string, b: string) => {
-      const card = qf.find((c) => pairOf(c.line).join() === sorted(a, b).join());
-      return `Winner of ${card!.label.replace(/^Quarter/, "quarter")}`;
-    };
-    const semis = d.cards.filter((c) => c.label.startsWith("Semi-final")).map((c) => pairOf(c.line));
-    // Seed 1 meets the winner of 4v5 and seed 2 the winner of 3v6 (seed i v N+1−i in the 8-draw: 1v8→4v5, 2v7→3v6).
-    expect(semis.sort()).toEqual(
-      [
-        sorted(NAMES[0]!, feederOf(NAMES[3]!, NAMES[4]!)),
-        sorted(NAMES[1]!, feederOf(NAMES[2]!, NAMES[5]!)),
-      ].sort(),
-    );
-    expect(d.cards.at(-1)).toEqual({ label: "Final", line: "Winners meet" });
-  });
-
-  it("a blank row is named by its place, never blank; no card ever reads a raw key or undefined (4 draws swept)", () => {
-    const d = drawPreview(cellOf(4), ["Ravi & Sam", "", "Lee & Ana", "Jo & Max"], msg);
-    expect(d.cards.some((c) => c.line.includes("Side 2"))).toBe(true);
-    let cards = 0;
-    for (let n = 3; n <= QUICK_MATCH_MAX_SIDES; n++) {
-      for (const c of drawPreview(cellOf(n), NAMES.slice(0, n), msg).cards) {
-        expect(`${c.label} ${c.line}`).not.toMatch(/undefined|\{|quickMatch\.|bracket\./);
-        cards++;
-      }
-    }
-    expect(cards).toBe(2 + 3 + 4 + 5);
-  });
-
-  it("refuses a seat fed by a match that is not in the draw (the guard, reached)", () => {
-    const broken: QuickMatchKnockoutCell = {
-      matchCount: 1,
-      byes: [],
-      rounds: [{ role: { kind: "final" }, pairs: [[{ seed: 1 }, { winnerOf: { round: 1, pair: 2 } }]] }],
-    };
-    expect(() => drawPreview(broken, NAMES, msg)).toThrow(/not in the draw/);
-  });
-});
-
 describe("setupBody: the form's fields, exactly (C3 under the form-post contract)", () => {
   const base = {
     name: "Badminton · Tue, Nov 3",
     sport_key: "badminton",
     variant_key: "bwf",
     kind: "pair" as const,
-    format: "league" as const,
     sides: ["A", "B", "C"],
     plays: 2,
     email: "",
@@ -465,8 +337,12 @@ describe("setupBody: the form's fields, exactly (C3 under the form-post contract
     expect(body.get("locale")).toBe("en");
   });
 
-  it("a knockout sends plays 1, whatever was picked before it", () => {
-    expect(setupBody({ ...base, format: "knockout", plays: 2 }).get("plays")).toBe("1");
+  it("the format is always league (owner 2026-11-12: League only), and plays goes as picked: Once and Twice", () => {
+    for (const plays of [1, 2]) {
+      const body = setupBody({ ...base, plays });
+      expect(body.getAll("format"), `plays ${plays}`).toEqual(["league"]);
+      expect(body.get("plays")).toBe(String(plays));
+    }
   });
 });
 
@@ -484,12 +360,23 @@ describe("QuickMatchSetupForm: the screen as the mockup orders it", () => {
     expect(i.text()).toContain("Each pair plays");
   });
 
-  it("a third side brings the Format row with League and Knockout; six is the cap", () => {
+  it("no Format row at any side count (owner 2026-11-12: League only, Knockout taken out); six is the cap", () => {
     const i = mount();
-    click(buttonNamed(i, "+ Add a side"));
-    expect(sideInputs(i)).toHaveLength(3);
-    expect(radio(i, "format", "league")).toBeDefined();
-    expect(radio(i, "format", "knockout")).toBeDefined();
+    let checked = 0;
+    for (let n = 2; n <= QUICK_MATCH_MAX_SIDES; n++) {
+      if (sideInputs(i).length < n) click(buttonNamed(i, "+ Add a side"));
+      expect(sideInputs(i), "the row was added").toHaveLength(n);
+      expect(radio(i, "format", "league"), `${n} sides`).toBeUndefined();
+      expect(radio(i, "format", "knockout"), `${n} sides`).toBeUndefined();
+      expect(inputs(i, "format").map((el) => [propsOf(el).type, propsOf(el).value]), `${n} sides`).toEqual([["hidden", "league"]]);
+      expect(i.text(), `${n} sides`).not.toMatch(/knockout|sits out|winners meet/i);
+      expect(byTestId(i, "qm-league-help"), `${n} sides: the league line stands`).toBeDefined();
+      checked++;
+    }
+    expect(checked, "anti-vacuity: 2..6 sides").toBe(5);
+    click(buttonNamed(i, "Remove side 6"));
+    click(buttonNamed(i, "Remove side 5"));
+    click(buttonNamed(i, "Remove side 4"));
     expect(i.text()).toContain("3 of 6");
     fillSides(i, ["A", "B", "C", "D", "E", "F"]);
     expect(sideInputs(i)).toHaveLength(6);
@@ -511,45 +398,6 @@ describe("QuickMatchSetupForm: the screen as the mockup orders it", () => {
     expect(propsOf(nameInput(i)).maxLength).toBe(80);
     // The browser's bounds are the schema's own (spec E1: 80 and 60).
     expect([QUICK_MATCH_NAME_MAX, QUICK_MATCH_SIDE_NAME_MAX]).toEqual([80, 60]);
-  });
-
-  it("Knockout hides Each pair plays and shows the draw from the server's table: 4 sides, two semi-finals and a final", () => {
-    const i = mount();
-    fillSides(i, ["Ravi & Sam", "Priya & Tom", "Lee & Ana", "Jo & Max"]);
-    expect(startText(i)).toBe("Start playing · 6 matches");
-    type(radio(i, "format", "knockout"), "knockout");
-    expect(radio(i, "plays", "1"), "no plays choice in a knockout").toBeUndefined();
-    expect(propsOf(hidden(i, "plays")!).value).toBe("1");
-    const draw = byTestId(i, "qm-draw");
-    expect(draw).toBeDefined();
-    const text = textOf(draw!);
-    expect(text).toContain("Semi-final 1");
-    expect(text).toContain("Semi-final 2");
-    expect(text).toContain("Winners meet");
-    expect(i.text()).toContain("Lose and you're out.");
-    expect(startText(i)).toBe("Start playing · 3 matches");
-  });
-
-  it("League again: the draw goes, Each pair plays comes back", () => {
-    const i = mount();
-    fillSides(i, ["A", "B", "C"]);
-    type(radio(i, "format", "knockout"), "knockout");
-    expect(byTestId(i, "qm-draw")).toBeDefined();
-    type(radio(i, "format", "league"), "league");
-    expect(byTestId(i, "qm-draw")).toBeUndefined();
-    expect(radio(i, "plays", "2")).toBeDefined();
-  });
-
-  it("the sequence: Knockout, then down to two sides, then a third again: the format is League (reset), not Knockout", () => {
-    const i = mount();
-    fillSides(i, ["A", "B", "C"]);
-    type(radio(i, "format", "knockout"), "knockout");
-    expect(propsOf(radio(i, "format", "knockout")!).checked).toBe(true);
-    click(buttonNamed(i, "Remove side 3"));
-    expect(propsOf(hidden(i, "format")!).value).toBe("league");
-    click(buttonNamed(i, "+ Add a side"));
-    expect(propsOf(radio(i, "format", "league")!).checked).toBe(true);
-    expect(propsOf(radio(i, "format", "knockout")!).checked).toBe(false);
   });
 
   it("the Start count follows the table: singular at one match, plays multiply, two sides is one match", () => {
@@ -650,37 +498,6 @@ describe("sport, kind and match rules (B4b-d, D6, C24)", () => {
       .filter((el) => el.type === "label" && walk(propsOf(el).children as ReactElement).some((c) => propsOf(c).name === "kind"))
       .map((el) => textOf(el).trim());
     expect(kindLabels).toEqual(["Singles", "Doubles"]);
-  });
-});
-
-describe("Knockout unavailable (D15, spec §5): League alone and one line, no disabled button", () => {
-  const level = () => {
-    const sports = setupSports(LEVEL_OFFER, enUi) as SetupFormProps["sports"];
-    return mount({ sports });
-  };
-
-  it("a variant that can end level, 3 sides: League alone, the reason, no Knockout control at all", () => {
-    const i = level();
-    const select = () => all(i).find((el) => el.type === "select" && propsOf(el).name === "variant_key")!;
-    type(select(), "youth");
-    fillSides(i, ["A", "B", "C"]);
-    expect(i.text()).toContain("Knockout needs match rules that can't end level.");
-    expect(radio(i, "format", "knockout")).toBeUndefined();
-    expect(all(i).some((el) => el.type === "button" && textOf(el).includes("Knockout"))).toBe(false);
-    expect(propsOf(hidden(i, "format")!).value).toBe("league");
-  });
-
-  it("the sequence: Knockout chosen on rules that allow it, then rules that do not: back to League; then back: Knockout offered", () => {
-    const i = level();
-    const select = () => all(i).find((el) => el.type === "select" && propsOf(el).name === "variant_key")!;
-    fillSides(i, ["A", "B", "C"]);
-    type(radio(i, "format", "knockout"), "knockout");
-    type(select(), "youth");
-    expect(propsOf(hidden(i, "format")!).value).toBe("league");
-    type(select(), "11-a-side");
-    expect(radio(i, "format", "knockout"), "positive pair: offered again").toBeDefined();
-    expect(propsOf(radio(i, "format", "league")!).checked).toBe(true);
-    expect(i.text()).not.toContain("Knockout needs match rules");
   });
 });
 
@@ -1128,17 +945,16 @@ describe("submitting (the form-post contract, enhanced: ledger CARRY to T4)", ()
     expect(byTestId(mount({ initialError: null }), "qm-setup-error")).toBeUndefined();
   });
 
-  it("a knockout posts format knockout and plays 1; chess posts kind individual", async () => {
-    const { calls } = stubFetch([{ url: "http://localhost:3000/q/qm_ko", status: 200 }]);
+  it("every create posts format league with the plays picked (owner 2026-11-12); chess posts kind individual", async () => {
+    const { calls } = stubFetch([{ url: "http://localhost:3000/q/qm_lg", status: 200 }]);
     const i = mount();
     type(radio(i, "sport_key", "boardgame"), "boardgame");
     fillSides(i, ["A", "B", "C", "D"]);
     type(radio(i, "plays", "2"), "2");
-    type(radio(i, "format", "knockout"), "knockout");
     await submit(i);
     const body = calls[0]!.init.body as URLSearchParams;
-    expect(body.get("format")).toBe("knockout");
-    expect(body.get("plays")).toBe("1");
+    expect(body.getAll("format")).toEqual(["league"]);
+    expect(body.get("plays")).toBe("2");
     expect(body.get("kind")).toBe("individual");
     expect(body.get("sport_key")).toBe("boardgame");
   });
@@ -1213,9 +1029,9 @@ describe("what a screen reader hears, what a thumb can hit, where the Start bar 
     expect(textOf(legend!)).toBe("Who plays");
   });
 
-  it("every tap target has a 44px floor of its own, and no element carries two text sizes or two vertical paddings; 17 checked", () => {
+  it("every tap target has a 44px floor of its own, and no element carries two text sizes or two vertical paddings; 15 checked", () => {
     const i = mount({}, { hydrate: true });
-    fillSides(i, ["A", "B", "C"]); // a × and the Format row
+    fillSides(i, ["A", "B", "C"]); // a ×
     const faces = (name: string) =>
       all(i)
         .filter((el) => el.type === "label" && walk(propsOf(el).children as ReactElement).some((c) => propsOf(c).name === name))
@@ -1224,7 +1040,6 @@ describe("what a screen reader hears, what a thumb can hit, where the Start bar 
       ...faces("sport_key").map((el): [string, ReactElement] => ["chip", el]),
       ...faces("kind").map((el): [string, ReactElement] => ["kind", el]),
       ...faces("plays").map((el): [string, ReactElement] => ["plays", el]),
-      ...faces("format").map((el): [string, ReactElement] => ["format", el]),
       ...sideInputs(i).map((el): [string, ReactElement] => ["side", el]),
       ["remove", buttonNamed(i, "Remove side 3")!],
       ["add", buttonNamed(i, "+ Add a side")!],
@@ -1238,8 +1053,8 @@ describe("what a screen reader hears, what a thumb can hit, where the Start bar 
       expect(cls.filter((c) => /^text-(xs|sm|base|lg|xl)$/.test(c)).length, `${what}: one text size`).toBeLessThanOrEqual(1);
       expect(cls.filter((c) => /^py-/.test(c)).length, `${what}: one vertical padding`).toBeLessThanOrEqual(1);
     }
-    // 4 chips, 2 kinds, 2 plays, 2 formats, 3 sides, ×, Add, rules, email.
-    expect(targets).toHaveLength(17);
+    // 4 chips, 2 kinds, 2 plays, 3 sides, ×, Add, rules, email.
+    expect(targets).toHaveLength(15);
   });
 
   it("the Start bar sticks inside the form below 640px, never as a fixed bar with a spacer, and un-docks while the cookie banner is open", () => {
@@ -1254,15 +1069,5 @@ describe("what a screen reader hears, what a thumb can hit, where the Start bar 
     expect(classOf(byTestId(i, "qm-start-zone")).split(/\s+/)).toContain("max-md:contents");
     const form = all(i).find((el) => el.type === "form")!;
     expect(walk(propsOf(form).children as ReactElement).includes(byTestId(i, "qm-start-bar")!), "inside the form").toBe(true);
-  });
-
-  it("the sits-out lines wrap, and two sides of the same name still make two lines (index keys)", () => {
-    const i = mount({}, { hydrate: true });
-    fillSides(i, ["Ana", "Ana", "Ana", "Ana", "Ana"]);
-    type(radio(i, "format", "knockout"), "knockout");
-    const lines = all(i).filter((el) => el.type === "li" && textOf(el).includes("sits out"));
-    expect(lines.map((el) => textOf(el))).toEqual(["Ana sits out the first round", "Ana sits out the first round", "Ana sits out the first round"]);
-    expect(new Set(lines.map((el) => el.key)).size, "three distinct keys").toBe(3);
-    for (const el of lines) expect(classOf(el).split(/\s+/)).toEqual(expect.arrayContaining(["min-w-0", "break-words"]));
   });
 });

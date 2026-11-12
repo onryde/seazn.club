@@ -29,7 +29,8 @@ import type { CreateQuickMatch } from "@/server/api-v1/schemas";
 import { forEachSportAsync } from "@seazn/engine/testkit";
 import { listDivisionFixtures } from "../fixtures";
 import { touchQuickMatchActivity, touchQuickMatchActivityForFixture } from "../quick-match-activity";
-import { createQuickMatch, systemAuth, type CreatedQuickMatch } from "../quick-match-create";
+import { systemAuth, type CreatedQuickMatch } from "../quick-match-create";
+import { createQuickMatchAnyFormat } from "./_quick-match-knockout";
 import { hardDeleteQuickMatchCompetition } from "../quick-match-delete";
 import {
   findQuickMatchByCompetition,
@@ -86,7 +87,7 @@ const league4 = (over: Partial<CreateQuickMatch> = {}): CreateQuickMatch => ({
   locale: "en",
   ...over,
 });
-const create = (input: CreateQuickMatch = league4()) => createQuickMatch(input, { visitorHash: v(), mailAllowed: async () => true });
+const create = (input: CreateQuickMatch = league4()) => createQuickMatchAnyFormat(input, { visitorHash: v() });
 
 async function rowOf(out: CreatedQuickMatch): Promise<QuickMatchRow> {
   const row = await resolveQuickMatchToken(out.token);

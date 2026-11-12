@@ -15,8 +15,9 @@
 //       Then Add a match (plan 2 T8, C5): "+ Add a match" on the finished home → its two selects open at the table's top
 //       two → "Add the match" → the winner card gives way to the new match as Up next (4 of 4) → it is played like the
 //       others → the table, the winner and the record read back with four results, the fourth stored as an ad-hoc match.
-//   (B) a badminton KNOCKOUT of three: the lone "Semi-final" (unnumbered) and the bye, the semi tapped, "Winner of the
-//       semi-final" resolving to its winner's name, the final tapped, the champion on the draw.
+//   (B) a second badminton LEAGUE, of two sides, each pair playing once: its one match, every rally tapped, goes to its
+//       away side → the winner card, the table of two and the record read back. (A guest's quick match is a league since
+//       the owner's 2026-11-12 "take out"; the knockout journey that stood here returns with League + Knockout.)
 //   (C) the marketing page's "Your recent quick matches": both matches, newest first; tapping one opens its home.
 //   (D) Save (plan 3 Task 5), in a browser of its own (plan 2 m6: not inside (A)): a guest who typed an address on a new
 //       league taps Save on its home → the sign-in, carrying the save page → signs in as a DIFFERENT person → the save page
@@ -41,7 +42,7 @@
 // - The points: the same module's `pointsMap`. The table is tallied in THIS file from the results tapped, never read
 //   from the page first. Rank is by matches won (BWF 16.2.1, the module's `primaryTableKey`), and the final table is
 //   built to be strict (2, 1, 0 wins), so no tie-break rung is needed to place it.
-// - The match counts: a single round robin of n plays n(n-1)/2; a single knockout of n plays n-1.
+// - The match counts: a single round robin of n plays n(n-1)/2.
 // - Every sentence a person reads: the en dictionaries, never retyped. The level dash: the engine's `LEVEL_RANK`.
 //
 // ── EXTENSION POINTS ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -104,14 +105,14 @@ interface SetRules {
   pointsMap: Record<string, [number, number]>;
 }
 
-/** The rules a quick match stage of `kind` plays: the variant's config under the stage kind's defaults, parsed by the
- *  module's own schema (defaults filled). Called inside a test, never at module scope: a load-time throw reports as
- *  zero collected tests rather than a red one (README). */
-function rulesFor(kind: "league" | "knockout"): SetRules {
+/** The rules a quick match plays: the variant's config under the league stage's defaults (a quick match is a league,
+ *  owner 2026-11-12), parsed by the module's own schema (defaults filled). Called inside a test, never at module scope: a
+ *  load-time throw reports as zero collected tests rather than a red one (README). */
+function leagueRules(): SetRules {
   const mod = builtinModules.find((m) => m.key === SPORT);
   expect(mod, `premise: the engine ships ${SPORT}`).toBeDefined();
   expect(Object.keys(mod!.variants), `premise: ${SPORT} declares the "${VARIANT}" variant`).toContain(VARIANT);
-  const rules = mod!.configSchema.parse({ ...mod!.variants[VARIANT], ...stageDefaultsFor(mod!, kind, VARIANT) }) as SetRules;
+  const rules = mod!.configSchema.parse({ ...mod!.variants[VARIANT], ...stageDefaultsFor(mod!, "league", VARIANT) }) as SetRules;
   expect(rules.pointsMap["*"], "premise: badminton's table awards flat points for a win and a loss").toHaveLength(2);
   return rules;
 }
@@ -260,13 +261,13 @@ interface Made {
   sides: string[];
 }
 
-/** The setup form, filled and started the way a guest does it: badminton, Singles, the sides typed, the format, the
- *  short rules, and (when given) an address in the "Email me the link" fold. Lands on the home and returns its token. */
+/** The setup form, filled and started the way a guest does it: badminton, Singles, the sides typed, each pair once, the
+ *  short rules, and (when given) an address in the "Email me the link" fold. A quick match is a league (owner
+ *  2026-11-12): there is no format to pick, at any number of sides. Lands on the home and returns its token. */
 async function startQuickMatch(
   p: Page,
   name: string,
   sides: string[],
-  format: "league" | "knockout",
   matches: number,
   opts: { email?: string } = {},
 ): Promise<Made> {
@@ -283,14 +284,21 @@ async function startQuickMatch(
   for (const [i, side] of sides.entries()) {
     await form(p).getByLabel(mk("quickMatch.setup.sideLabel", { n: i + 1 }), { exact: true }).fill(side);
   }
-  // Three sides put the format row on screen (D5); the guest picks the format by its words.
-  await expect(p.getByTestId("qm-format-row")).toBeVisible();
-  await choice(p, ui(`quickMatch.format.${format}`)).click();
-  await expect(form(p).getByRole("radio", { name: ui(`quickMatch.format.${format}`), exact: true })).toBeChecked();
+  // No format to pick, whatever the number of sides (owner 2026-11-12): neither format's words name a radio, and the
+  // league's own help is what the screen says instead.
+  let formats = 0;
+  for (const format of ["league", "knockout"] as const) {
+    await expect(form(p).getByRole("radio", { name: ui(`quickMatch.format.${format}`), exact: true }), `no ${format} to pick`).toHaveCount(0);
+    formats += 1;
+  }
+  expect(formats, "anti-vacuity: formats checked").toBe(2);
+  await expect(form(p).getByTestId("qm-league-help")).toHaveText(mk("quickMatch.setup.leagueHelp"));
+  // Each pair once, the default: the count below is a single round robin's.
+  await expect(form(p).getByRole("radio", { name: mk("quickMatch.setup.plays.1"), exact: true })).toBeChecked();
   const rules = form(p).locator('select[name="variant_key"]');
   await rules.selectOption(VARIANT);
   await expect(rules).toHaveValue(VARIANT);
-  // Start counts what the format plays (a round robin's n(n-1)/2, a knockout's n-1).
+  // Start counts what the league plays (a round robin's n(n-1)/2).
   await expect(p.getByTestId("qm-start")).toContainText(plural(mk, "quickMatch.setup.startCount", matches));
   if (opts.email !== undefined) {
     await form(p).getByText(mk("quickMatch.setup.email"), { exact: true }).click();
@@ -694,10 +702,10 @@ async function expectTable(p: Page, table: readonly Tally[]): Promise<void> {
 const LONG = `The Extraordinarily Long-Named Champion Club ${TAG}`;
 
 let league: (Made & { results: Played[]; table: Tally[] }) | null = null;
-let cup: (Made & { champion: string }) | null = null;
+let pair: Made | null = null;
 
 test("(A) a guest plays a badminton league of three from the marketing page to its final table, every rally tapped", async ({ browser }) => {
-  const rules = rulesFor("league");
+  const rules = leagueRules();
   const sides = [LONG, `Priya Raman ${TAG}`, `Jo Okafor ${TAG}`];
   expect(LONG.replace(` ${TAG}`, "").length, "premise: the long side is 40+ characters").toBeGreaterThanOrEqual(40);
   const total = (sides.length * (sides.length - 1)) / 2;
@@ -737,7 +745,7 @@ test("(A) a guest plays a badminton league of three from the marketing page to i
   await page.waitForURL((url) => url.pathname === "/en/play", { timeout: STEP_MS });
 
   // ---- 2. Badminton, League, three sides (one long), Start ----
-  const made = await startQuickMatch(page, `QM walk league ${TAG}`, sides, "league", total);
+  const made = await startQuickMatch(page, `QM walk league ${TAG}`, sides, total);
 
   // ---- 3. The home: the hero, the three matches, a level table ----
   await expect(page.getByTestId("qm-name")).toHaveText(made.name);
@@ -953,120 +961,74 @@ test("(A) a guest plays a badminton league of three from the marketing page to i
   league = { ...made, results, table: tableOf(sides, results, rules) };
 });
 
-test("(B) a guest plays a badminton knockout of three: the bye, the semi-final, and the final, every rally tapped", async () => {
+test("(B) a guest plays a second badminton league, of two sides each playing once: its one match decided, every rally tapped", async () => {
   expect(league, "(A) made this guest's first quick match").not.toBeNull();
-  const rules = rulesFor("knockout");
-  const sides = [`Kestrel Vance ${TAG}`, `Osprey Lindqvist ${TAG}`, `Merlin Achebe ${TAG}`];
-  const total = sides.length - 1;
-  // The semi goes to its AWAY side; the final to whoever came through the semi, so the champion is the name the
-  // final's waiting seat had to resolve to.
-  const plans: readonly (readonly Game[])[] = [
-    [[rules.setTo, 2], [rules.setTo, 1]],
-    [[rules.setTo, 6], [rules.setTo, 4]],
-  ];
-  expect(plans, "one plan per match a knockout of three plays").toHaveLength(total);
-  plans.forEach((g, i) => checkPlan(rules, g, `knockout match ${i + 1}`));
+  const rules = leagueRules();
+  const sides = [`Kestrel Vance ${TAG}`, `Osprey Lindqvist ${TAG}`];
+  // The rulebook's count: a single round robin of two sides is one match.
+  const total = (sides.length * (sides.length - 1)) / 2;
+  // The match goes to its AWAY side, in two games: winner-first and home-first read differently on its row.
+  const plans: readonly (readonly Game[])[] = [[[rules.setTo, 2], [rules.setTo, 6]]];
+  expect(plans, "one plan per match a round robin of two plays").toHaveLength(total);
+  plans.forEach((g, i) => checkPlan(rules, g, `league of two, match ${i + 1}`));
   setBudget(budgetFor({ navs: 2, acts: 16, reads: 1, plans }));
 
   // ---- 1. The setup page again, where the first match is already listed ----
   await page.goto("/en/play");
   await expect(page.getByTestId("qm-recent"), "the setup page lists the league made in (A)").toContainText(league!.name);
-  const made = await startQuickMatch(page, `QM walk cup ${TAG}`, sides, "knockout", total);
+  const made = await startQuickMatch(page, `QM walk pair ${TAG}`, sides, total);
 
-  // ---- 2. The draw: a lone, unnumbered Semi-final, a bye, and the final waiting on the semi ----
+  // ---- 2. The home: one match up next, a level table of two ----
   await expect(page.getByTestId("qm-name")).toHaveText(made.name);
-  await expect(page.getByTestId("qm-eyebrow")).toContainText(ui("quickMatch.format.knockout"));
-  await expect(page.getByTestId("qm-standings"), "a knockout has no table").toHaveCount(0);
-  await expect(page.getByTestId("qm-add-match"), "a knockout takes no extra match (C5)").toHaveCount(0);
+  await expect(page.getByTestId("qm-eyebrow")).toContainText(ui("quickMatch.format.league"));
   await expect(page.getByTestId("qm-played")).toHaveText(
     plural(ui, "quickMatch.home.played", total, { played: 0, days: QUICK_MATCH_EXPIRY_DAYS }),
   );
-  const draw = page.getByTestId("qm-draw");
-  await expect(draw.getByTestId("qm-draw-card"), "the semi, the bye and the final").toHaveCount(3);
-  await expect(draw.getByTestId("qm-draw-round")).toHaveText([ui("quickMatch.home.semiFinalOnly"), ui("bracket.round.final")]);
-  await expect(page.getByTestId("qm-hero-kicker")).toHaveText(ui("quickMatch.home.upNextRound", { round: ui("quickMatch.home.semiFinalOnly") }));
-  const semiHome = (await page.getByTestId("qm-hero-home").textContent())!.trim();
-  const semiAway = (await page.getByTestId("qm-hero-away").textContent())!.trim();
-  const byeHolder = sides.find((s) => s !== semiHome && s !== semiAway);
-  expect(byeHolder, "the side not in the semi-final has the bye").toBeDefined();
-  const bye = draw.locator('[data-testid="qm-draw-card"][data-bye="true"]');
-  await expect(bye).toContainText(ui("bracket.slot.bye"));
-  await expect(bye.getByTestId("qm-draw-name")).toHaveText([byeHolder!]);
-  const waiting = page.locator('[data-testid="qm-match"][data-state="waiting"]');
-  await expect(waiting, "the final waits").toHaveCount(1);
-  const finalId = (await waiting.getAttribute("data-fixture-id"))!;
-  await expect(waiting).toContainText(ui("quickMatch.home.winnerOfTheSemi"));
-  await expect(waiting.getByTestId("qm-score"), "no Score on a match whose sides are not known (C18)").toHaveCount(0);
-  const finalCard = draw.locator(`[data-testid="qm-draw-card"][data-fixture-id="${finalId}"]`);
-  await expect(finalCard).toContainText(ui("quickMatch.home.winnerOfTheSemi"));
-  await expect(finalCard).toContainText(byeHolder!);
+  await expect(page.getByTestId("qm-hero-kicker")).toHaveText(ui("quickMatch.home.upNext", { n: 1, total }));
+  await expect(page.getByTestId("qm-match")).toHaveCount(total);
+  await expect(page.locator('[data-testid="qm-match"][data-state="ready"]'), "the one match is ready to score").toHaveCount(total);
+  await expect(page.getByTestId("qm-standings-row")).toHaveCount(sides.length);
+  for (const name of sides) await expect(tableRow(page, name).getByTestId("qm-cell")).toHaveText(["0", "0", "0"]);
+  await expect(page.locator('[data-testid="qm-standings-row"][data-leader="true"]'), "nothing counted: no leader").toHaveCount(0);
   await expectNoHorizontalScroll(page);
 
-  // ---- 3a. The semi-final, tapped ----
-  const semi = await playHeroMatch(page, made, plans[0]!, (_h, a) => a, "after-result");
-  expect(semi.winnerSide, "the plan: the semi goes to its away side").toBe("away");
-  expect(await expectRecorded(made, [semi])).toBe(1);
+  // ---- 3. The one match, tapped; its away side takes it ----
+  const played = await playHeroMatch(page, made, plans[0]!, (_h, a) => a, "after-result");
+  expect(played.winnerSide, "the plan: the match goes to its away side").toBe("away");
 
-  // ---- 4a. "Winner of the semi-final" is now a name ----
-  await expect(page.getByTestId("qm-played")).toHaveText(
-    plural(ui, "quickMatch.home.played", total, { played: 1, days: QUICK_MATCH_EXPIRY_DAYS }),
-  );
-  const finalRow = matchRow(page, finalId);
-  await expect(finalRow, "the final is ready once the semi is decided").toHaveAttribute("data-state", "ready");
-  await expect(finalRow).toHaveAttribute("data-next", "true");
-  await expect(finalRow).toContainText(semi.winner);
-  await expect(finalRow).not.toContainText(ui("quickMatch.home.winnerOfTheSemi"));
-  await expect(finalCard).not.toContainText(ui("quickMatch.home.winnerOfTheSemi"));
-  await expect(finalCard.getByTestId("qm-draw-name"), "the final card names two sides").toHaveCount(2);
-  const finalSeats = (await finalCard.getByTestId("qm-draw-name").allTextContents()).map((s) => s.trim());
-  expect(finalSeats.sort(), "the final seats the bye holder and the semi's winner").toEqual([semi.winner, byeHolder!].sort());
-  const semiCard = draw.locator(`[data-testid="qm-draw-card"][data-fixture-id="${semi.fixtureId}"]`);
-  await expect(semiCard.locator('[data-testid="qm-draw-seat"][data-winner="true"]').getByTestId("qm-draw-name")).toHaveText(semi.winner);
-  await expect(semiCard.getByTestId("qm-draw-seat-score")).toHaveText(winnerFirst(semi.games));
-  await expect(page.getByTestId("qm-hero-kicker")).toHaveText(ui("quickMatch.home.upNextRound", { round: ui("bracket.round.final") }));
-
-  // ---- 3b. The final, tapped ----
-  const final = await playHeroMatch(page, made, plans[1]!, (h, a) => {
-    expect([h, a], "the final seats the bye holder and the semi's winner").toEqual(expect.arrayContaining([byeHolder!, semi.winner]));
-    return semi.winner;
-  }, "after-result");
-  expect(final.fixtureId, "the final is the match that waited on the semi").toBe(finalId);
-
-  // ---- 4b. The champion on the draw ----
+  // ---- 4. Finished: the winner card, the table the rallies made, the record agreeing ----
+  const table = tableOf(sides, [played], rules);
+  expect(table.map((t) => t.won), "the plan makes a strict table: no tie-break is needed to place it").toEqual([1, 0]);
   await expect(page.getByTestId("qm-played")).toHaveText(
     plural(ui, "quickMatch.home.played", total, { played: total, days: QUICK_MATCH_EXPIRY_DAYS }),
   );
   await expect(page.locator('[data-testid="qm-match"][data-state="settled"]')).toHaveCount(total);
   await expect(page.getByTestId("qm-hero"), "nothing left to play").toHaveCount(0);
   await expect(page.getByTestId("qm-winner-kicker")).toHaveText(ui("quickMatch.home.winner"));
-  await expect(page.getByTestId("qm-winner-name")).toHaveText([semi.winner]);
-  await expect(finalCard.locator('[data-testid="qm-draw-seat"][data-winner="true"]').getByTestId("qm-draw-name")).toHaveText(semi.winner);
-  await expect(finalCard.getByTestId("qm-draw-seat-score")).toHaveText(winnerFirst(final.games));
+  await expect(page.getByTestId("qm-winner-name")).toHaveText([played.winner]);
+  await expect(page.getByTestId("qm-standings-row").getByRole("rowheader")).toHaveText(table.map((t) => t.name));
+  await expectTable(page, table);
   await expectNoHorizontalScroll(page);
+  expect(await expectRecorded(made, [played])).toBe(total);
 
-  const { fixtures, nameOf } = await recordOf(made);
-  const matches = fixtures.filter((f) => f.home !== null && f.away !== null);
-  expect(matches, "the record holds the semi and the final, both seated (the bye has one side)").toHaveLength(total);
-  expect(await expectRecorded(made, [semi, final])).toBe(total);
-  expect(nameOf.get(fixtures.find((f) => f.id === finalId)!.winner!), "the record's champion").toBe(semi.winner);
-
-  cup = { ...made, champion: semi.winner };
+  pair = made;
 });
 
 test("(C) the marketing page lists both quick matches, newest first, and a tap opens the home", async () => {
   expect(league, "(A) made the first quick match in this browser").not.toBeNull();
-  expect(cup, "(B) made the second").not.toBeNull();
+  expect(pair, "(B) made the second").not.toBeNull();
   setBudget(budgetFor({ navs: 2, acts: 6, reads: 0, plans: [] }));
 
   await page.goto("/en");
   const strip = page.getByTestId("qm-recent");
   await expect(strip).toBeVisible({ timeout: STEP_MS });
   await expect(strip.getByRole("heading")).toHaveText(mk("quickMatch.recent.title"));
-  // Newest first: the knockout (B) was made after the league (A). Only this browser's two: the context is a new guest.
+  // Newest first: the league of two (B) was made after the league of three (A). Only this browser's two: the context is a
+  // new guest.
   const links = strip.getByRole("link");
   await expect(links).toHaveCount(2);
-  await expect(links.nth(0)).toHaveAttribute("href", cup!.path);
-  await expect(links.nth(0)).toContainText(cup!.name);
+  await expect(links.nth(0)).toHaveAttribute("href", pair!.path);
+  await expect(links.nth(0)).toContainText(pair!.name);
   await expect(links.nth(1)).toHaveAttribute("href", league!.path);
   await expect(links.nth(1)).toContainText(league!.name);
   await expectNoHorizontalScroll(page);
@@ -1146,7 +1108,7 @@ test("(D) Save: a guest who typed an address saves the league into another accou
     const saver = `delivered+qm-saver-${TAG}-${Math.random().toString(36).slice(2, 7)}@resend.dev`;
     const sides = [`Avocet Moreau ${TAG}`, `Plover Okafor ${TAG}`, `Dunlin Sato ${TAG}`];
     const total = (sides.length * (sides.length - 1)) / 2;
-    const made = await startQuickMatch(p, `Keep me ${TAG}`, sides, "league", total, { email: typed });
+    const made = await startQuickMatch(p, `Keep me ${TAG}`, sides, total, { email: typed });
 
     const fresh = await saveRecordOf(made);
     expect([fresh.email, fresh.saved_by_user_id], "made with the typed address, saved by nobody").toEqual([typed, null]);

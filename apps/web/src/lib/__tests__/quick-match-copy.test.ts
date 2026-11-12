@@ -46,10 +46,7 @@ const MARKETING_KEYS = [
   "quickMatch.setup.sideLabel",
   "quickMatch.setup.removeSide",
   "quickMatch.setup.addSide",
-  "quickMatch.setup.format",
   "quickMatch.setup.leagueHelp",
-  "quickMatch.setup.knockoutHelp",
-  "quickMatch.setup.knockoutUnavailable",
   "quickMatch.setup.plays",
   "quickMatch.setup.rules",
   "quickMatch.setup.email",
@@ -57,8 +54,6 @@ const MARKETING_KEYS = [
   "quickMatch.setup.start",
   "quickMatch.setup.startCount.one",
   "quickMatch.setup.startCount.other",
-  "quickMatch.setup.sitsOut",
-  "quickMatch.setup.winnersMeet",
   "quickMatch.recent.title",
   "quickMatch.errors.tooManyAlive",
   "quickMatch.errors.rateLimited",
@@ -338,6 +333,14 @@ describe("quick match guest copy: plurals", () => {
     // Task 1 review I2 and m1 (controller, 2026-11-08): the league line names no tie-break the standings do not use
     // (draws score points, so "most wins" was false), and the two offer refusals name nothing the guest did not choose.
     expect(m["quickMatch.setup.leagueHelp"]).toBe("Everyone plays everyone. Top of the table wins.");
+    // Owner 2026-11-12 ("take out"): League only for now. The setup's knockout lines are gone from every locale, and the
+    // page's description no longer promises one.
+    for (const locale of LOCALES) {
+      for (const gone of ["format", "knockoutHelp", "knockoutUnavailable", "sitsOut", "winnersMeet"]) {
+        expect(DICTS[locale].marketing[`quickMatch.setup.${gone}`], `${locale} quickMatch.setup.${gone}`).toBeUndefined();
+      }
+    }
+    expect(m["quickMatch.meta.description"]).toBe("Set up a small league in seconds, share one link, and keep score from any phone. No account needed.");
     expect(m["quickMatch.errors.formatNotOffered"]).toBe("That format isn't available for this match.");
     expect(m["quickMatch.errors.sportNotOffered"]).toBe("Those match rules aren't available for quick matches.");
     // home.html hero lines.

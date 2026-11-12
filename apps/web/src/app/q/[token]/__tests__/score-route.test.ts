@@ -40,7 +40,8 @@ import type { CreateQuickMatch } from "@/server/api-v1/schemas";
 import { ensureGuestDeviceLink, resolveDeviceLinkToken } from "@/server/usecases/device-links";
 import { resultCarriedForward } from "@/server/usecases/carried-forward";
 import { touchQuickMatchActivity } from "@/server/usecases/quick-match-activity";
-import { createQuickMatch, type CreatedQuickMatch } from "@/server/usecases/quick-match-create";
+import { type CreatedQuickMatch } from "@/server/usecases/quick-match-create";
+import { createQuickMatchAnyFormat } from "@/server/usecases/__tests__/_quick-match-knockout";
 import { hardDeleteQuickMatchCompetition } from "@/server/usecases/quick-match-delete";
 import { readQuickMatchHome, resolveQuickMatchToken } from "@/server/usecases/quick-match-home";
 import { offerFor } from "@/server/usecases/quick-match-sports";
@@ -111,7 +112,7 @@ const league = (over: Partial<CreateQuickMatch> = {}): CreateQuickMatch => ({
 });
 const created: string[] = [];
 async function create(input: CreateQuickMatch = league()): Promise<CreatedQuickMatch> {
-  const out = await createQuickMatch(input, { visitorHash: hashVisitorKey(mintVisitorKey()), mailAllowed: async () => true });
+  const out = await createQuickMatchAnyFormat(input, { visitorHash: hashVisitorKey(mintVisitorKey()) });
   created.push(out.competitionId);
   return out;
 }

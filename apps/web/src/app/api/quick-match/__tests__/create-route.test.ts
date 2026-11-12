@@ -25,7 +25,7 @@ import { sql } from "@/lib/db";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { explicitLocale } from "@/lib/explicit-locale";
 import { LOCALES } from "@/lib/i18n-constants";
-import { QUICK_MATCH_ERRORS } from "@/lib/quick-match-constants";
+import { QUICK_MATCH_ERRORS, QUICK_MATCH_MAX_SIDES, QUICK_MATCH_MIN_SIDES } from "@/lib/quick-match-constants";
 import { __setRateLimitCounterForTests, QUICK_MATCH_CREATE_LIMIT } from "@/lib/rate-limit";
 import { createCompetition } from "@/server/usecases/competitions";
 import { listDivisionFixtures } from "@/server/usecases/fixtures";
@@ -201,11 +201,6 @@ describe.skipIf(!HAS_DB)("POST /api/quick-match: the create", () => {
     // Rulebook: a round robin of n sides played p times is p · n(n−1)/2 matches.
     expect(await listDivisionFixtures(systemAuth(), division_id)).toHaveLength(2 * (4 * 3) / 2);
   });
-
-  it("a knockout of 4 lands on its home too (the format field reaches the create)", async () => {
-    const token = landedToken(await post(form({ format: "knockout" })));
-    expect(await resolveQuickMatchToken(token)).toMatchObject({ format: "knockout" });
-  });
 });
 
 describe.skipIf(!HAS_DB)("POST /api/quick-match: the visitor's language (A-M8: /fr/play lands on a French home)", () => {
@@ -302,10 +297,18 @@ describe.skipIf(!HAS_DB)("POST /api/quick-match: every refusal is a 303 back to 
     expect(checked).toBe(2);
   });
 
-  it("a knockout of two sides: QUICK_MATCH_FORMAT_NOT_OFFERED (C16)", async () => {
-    const f = form({ format: "knockout", sides: sides.slice(0, 2), locale: "es" });
-    refusedTo(await post(f), "es", "QUICK_MATCH_FORMAT_NOT_OFFERED");
-    expect(await rowsNamed(f.name as string)).toHaveLength(0);
+  it("a knockout at any side count: QUICK_MATCH_FORMAT_NOT_OFFERED, nothing made (owner 2026-11-12: League only)", async () => {
+    // The format field reaches the create: the same form as a league lands on a home (the create tests above), and as a
+    // knockout it is refused at every side count the form takes, 2..6.
+    const many = [...sides, "Kim & Lou", "Ola & Pat"];
+    let checked = 0;
+    for (let n = QUICK_MATCH_MIN_SIDES; n <= QUICK_MATCH_MAX_SIDES; n++) {
+      const f = form({ format: "knockout", sides: many.slice(0, n), locale: "es" });
+      refusedTo(await post(f), "es", "QUICK_MATCH_FORMAT_NOT_OFFERED");
+      expect(await rowsNamed(f.name as string), `${n} sides`).toHaveLength(0);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: 2..6 sides").toBe(5);
   });
 
   it("a server without DEVICE_LINK_KEK (503): QUICK_MATCH_CREATE_FAILED, touching nothing, and reported once as a fault", async () => {
