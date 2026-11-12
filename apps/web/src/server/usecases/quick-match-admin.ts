@@ -10,10 +10,17 @@ import "server-only";
 // renders them through React, which escapes them.
 //
 // The states, one definition each:
-//   - played: at least one score event on any of the match's fixtures. A point and a result are both score events (the pad
-//     appends both); a bye's award is written onto its fixture with none (bracket-seats.ts), so a knockout's day-one bye never
-//     reads as played. Nothing else can settle a quick match's real match (it has no organizer to settle or withdraw a side),
-//     and that premise is a guard: a row whose matches are decided with no event is logged by id (`brokenPremise`).
+//   - played: at least one STANDING point or result on any of the match's fixtures (controller ruling 2026-11-12, review I1):
+//     an event of a sport's own type (`<sport>.*`: a rally, a goal, a chess result) that no `core.void` has taken back. The
+//     kernel's types are never play, by the engine's own declaration (`CORE_EVENT_SCHEMAS`, the list `playRecorded` reads):
+//     a Start alone is a guest who opened the pad and left, and a point taken back leaves nothing played. Two departures
+//     from `playRecorded`, both the ruling's: no chess exception (its `startIsPlay`: a chess Start alone is not played here
+//     either), and a sport event counts wherever it sits in the ledger. A bye's award is written onto its fixture with no
+//     event at all (bracket-seats.ts), so a knockout's day-one bye never reads as played. A result is a sport event too (the
+//     deciding rally, a chess result), and nothing else decides a quick match's real match: it has no organizer to settle
+//     or withdraw a side, and the one kernel result a scorer's pad sends (a disqualifying sanction's forfeit) follows its
+//     sanction, a sport event. That premise is a guard: a row whose matches are decided with no standing sport event is
+//     logged by id (`brokenPremise`).
 //   - decided "x of y": the guest's own "{played} of {count}" (`playedOf`, quick-match-home.ts: non-bye fixtures, and the
 //     settled ones among them), so staff and the guest never read two numbers for one match.
 //   - finished: every one of its matches decided (and it has at least one).
@@ -30,7 +37,9 @@ import "server-only";
 // newest rows under the filter, one of their sides, one of their fixtures.
 //
 // PRIVILEGED: the pooled role (quick_matches is FORCE RLS, and staff read across the one system org), as the sweep reads it.
-// Every statement names the system org, found as the quick match code finds it (QUICK_MATCH_SYSTEM_ORG_ID).
+// Every read of `quick_matches` names the system org, found as the quick match code finds it (QUICK_MATCH_SYSTEM_ORG_ID); the
+// reads of its fixtures and sides take their competition ids from those rows alone.
+import { CORE_EVENT_SCHEMAS } from "@seazn/engine/core";
 import { requireStaff } from "@/lib/admin";
 import { sql } from "@/lib/db";
 import { QUICK_MATCH_SYSTEM_ORG_ID } from "@/lib/quick-match-constants";
@@ -108,13 +117,19 @@ function scopeSql(onlyIds: readonly string[] | undefined) {
     : sql`q.org_id = ${SYSTEM_ORG} and q.id = any(${[...onlyIds]}::uuid[])`;
 }
 
-/** played (see the header): a score event on any fixture of the match `q`. */
+/** The kernel's event types, the engine's own list (start, void, forfeit, abandon, finalize, note, award, suspend, resume,
+ *  settle and the lineup family): none of them is play (`playRecorded`). Every other type is a sport's own. */
+const KERNEL_EVENT_TYPES: readonly string[] = Object.keys(CORE_EVENT_SCHEMAS);
+
+/** played (see the header): a standing sport event on any fixture of the match `q`: not a kernel type, and not voided. */
 function playedSql() {
   return sql`exists (
     select 1 from score_events se
       join fixtures f on f.id = se.fixture_id
       join divisions d on d.id = f.division_id
-     where d.competition_id = q.competition_id)`;
+     where d.competition_id = q.competition_id
+       and se.type <> all(${[...KERNEL_EVENT_TYPES]}::text[])
+       and not exists (select 1 from score_events v where v.voids_event_id = se.id))`;
 }
 
 /** finished (see the header): every match decided, and at least one. */
@@ -122,7 +137,9 @@ export function isFinished(m: { decided: number; total: number }): boolean {
   return m.total > 0 && m.decided === m.total;
 }
 
-/** Every fixture row of these competitions, by competition: ONE read, the columns `playedOf` reads. */
+/** Every fixture row of these competitions, by competition: ONE read, the columns `playedOf` reads. No org predicate here
+ *  or on the sides' read (review m2): every id comes from a row `scopeSql` pinned to the system org, and the one writer of a
+ *  quick match (quick-match-create.ts) makes the row and its competition in that org, together. */
 async function fixturesByCompetition(competitionIds: readonly string[]): Promise<Map<string, MatchLineRow[]>> {
   const out = new Map<string, MatchLineRow[]>();
   if (competitionIds.length === 0) return out;
@@ -131,18 +148,19 @@ async function fixturesByCompetition(competitionIds: readonly string[]): Promise
            f.ext_key
       from fixtures f
       join divisions d on d.id = f.division_id
-     where d.org_id = ${SYSTEM_ORG} and d.competition_id = any(${[...competitionIds]}::uuid[])`;
+     where d.competition_id = any(${[...competitionIds]}::uuid[])`;
   for (const { competition_id, ...f } of rows) out.set(competition_id, [...(out.get(competition_id) ?? []), f]);
   return out;
 }
 
-/** The guard on the played premise (see the header): rows whose matches are decided with no score event, logged by id. */
+/** The guard on the played premise (see the header): rows whose matches are decided with no standing sport event, logged by
+ *  id. */
 function brokenPremise(rows: readonly { id: string; played: boolean; decided: number }[]): void {
   const ids = rows.filter((r) => !r.played && r.decided > 0).map((r) => r.id);
   if (ids.length > 0) {
     log.error(
       { quickMatchIds: ids },
-      "quick match admin: a match is decided with no score event; the played count's premise (every result is an event) is broken",
+      "quick match admin: a match is decided with no standing point or result; the played count's premise (every result is a sport event) is broken",
     );
   }
 }
@@ -223,7 +241,7 @@ export async function listQuickMatchesForAdmin(
     select d.competition_id, e.display_name, e.kind
       from entrants e
       join divisions d on d.id = e.division_id
-     where d.org_id = ${SYSTEM_ORG} and d.competition_id = any(${competitionIds}::uuid[])
+     where d.competition_id = any(${competitionIds}::uuid[])
      order by d.competition_id, e.seed nulls last, e.created_at, e.id`;
   const sidesOf = new Map<string, { display_name: string; kind: string }[]>();
   for (const e of entrants) sidesOf.set(e.competition_id, [...(sidesOf.get(e.competition_id) ?? []), e]);

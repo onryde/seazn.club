@@ -1,8 +1,8 @@
 // /admin/quick-matches (owner 2026-11-12: "do we have admin panel to match created, used or not?" / "yes build the admin page"):
 // the two staff reads behind it, `quickMatchAdminCounts` and `listQuickMatchesForAdmin`.
 //
-// Every quick match is made by the real producer (`createQuickMatch`), every point and result by the real write path
-// (`scoreEvent`, `playToDecided`), every save by the real Save (`saveQuickMatchForUser`). The direct UPDATEs below are the
+// Every quick match is made by the real producer (`createQuickMatch`), every Start, point, take-back and result by the real
+// write path (`scoreEvent`, `playToDecided`), every save by the real Save (`saveQuickMatchForUser`). The direct UPDATEs below are the
 // clock (`created_at`, `expires_at`) and one state no guest path writes (a decided match with no score event), each named
 // where it is made. The session is the REAL one: `createSession` signs it into a cookie jar standing in for next/headers,
 // and `requireStaff` reads it back.
@@ -10,12 +10,16 @@
 // Expected values come from the seed table below (each row says what it is: played, finished, saved, expired, its age),
 // the windows from the brief (24 hours, 7 days, 30 days, typed here), the cap from the brief (100), and the rulebook for
 // the match counts (a round robin of n sides is n(n-1)/2 matches, a knockout of n sides n-1), never from the code under test.
+// "Played" is the controller's ruling (2026-11-12, review I1): at least one standing point or result. A Start alone is not
+// played, nor is a point that was taken back; a point is, and so is a result with no point before it (chess).
 //
 // The system org is shared by every case, run and parallel file: every read here passes `onlyIds` with the case's own ids,
 // and every count is that scope's.
 //
 // Sports: badminton for most rows, football for the finished one (the team sport offered, a different scoring module and
-// entrant kind): the reads are sport-blind (a score event exists, a fixture's status), so two sports cover the shape.
+// entrant kind), and chess (boardgame) for the two rows where the ruling and the engine's own `playRecorded` part: a chess
+// Start alone, which the engine counts as play (`startIsPlay`) and the ruling does not, and a chess result, the one sport
+// offered whose match is decided by a result with no point before it.
 //
 // Real Postgres required; skipped without DATABASE_URL.
 import { randomBytes, randomUUID } from "node:crypto";
@@ -82,7 +86,7 @@ const users: string[] = [];
 const foreignOrgs: string[] = [];
 
 interface Shape {
-  sport_key: "badminton" | "football";
+  sport_key: "badminton" | "football" | "boardgame";
   format: "league" | "knockout";
   sides: string[];
   locale?: "en" | "fr";
@@ -140,6 +144,32 @@ async function rally(out: CreatedQuickMatch): Promise<void> {
   for (const req of await firstRallyFor(fixtureId)) await scoreEvent(systemAuth(), fixtureId, req);
 }
 
+/** Start only: the guest opened the pad, tapped Start and left. */
+async function startOnly(out: CreatedQuickMatch): Promise<void> {
+  const fixtureId = await firstPlayable(out.competitionId);
+  await scoreEvent(systemAuth(), fixtureId, { expected_seq: 0, type: "core.start", payload: {} });
+}
+
+/** One rally, then its point taken back (`core.void` naming it): the Start stands, nothing played does. */
+async function rallyThenVoid(out: CreatedQuickMatch): Promise<void> {
+  const fixtureId = await firstPlayable(out.competitionId);
+  const reqs = await firstRallyFor(fixtureId);
+  let pointId = "";
+  for (const req of reqs) pointId = (await scoreEvent(systemAuth(), fixtureId, req)).event_id;
+  await scoreEvent(systemAuth(), fixtureId, { expected_seq: reqs.length, type: "core.void", payload: { event_id: pointId } });
+  const [{ n }] = await sql<{ n: number }[]>`
+    select count(*)::int as n from score_events where fixture_id = ${fixtureId} and voids_event_id = ${pointId}`;
+  expect(n, "premise: the point was taken back").toBe(1);
+}
+
+/** The match's one result, and nothing before it but the Start: the deciding event is the ledger's only sport event. */
+async function resultOnly(out: CreatedQuickMatch): Promise<void> {
+  const fixtures = await fixturesOf(out.competitionId);
+  expect(fixtures.length, "premise: a league of two is one match").toBe(1);
+  expect(await playToDecided(systemAuth(), fixtures[0]!.id), "premise: Start, then the result, decides it")
+    .toMatchObject({ kind: "decided", events: 2 });
+}
+
 /** The first playable match played to its result. */
 async function decideFirst(out: CreatedQuickMatch): Promise<void> {
   const fixtureId = await firstPlayable(out.competitionId);
@@ -171,7 +201,7 @@ interface Seed {
   ageMs: number;
   shape: Shape;
   /** What is done to it after the create. */
-  act: "none" | "rally" | "decideFirst" | "decideAll" | "save" | "expire";
+  act: "none" | "start" | "rally" | "rallyVoid" | "result" | "decideFirst" | "decideAll" | "save" | "expire";
   played: boolean;
   finished: boolean;
   saved: boolean;
@@ -183,13 +213,27 @@ interface Seed {
 
 const TWO = ["Ravi & Sam", "Priya & Tom"];
 const THREE = ["Ravi & Sam", "Priya & Tom", "Asha & Ben"];
+const CHESS = ["Asha", "Ben"];
 const SEEDS: Seed[] = [
   { tag: "never", ageMs: 1 * HOUR_MS, shape: { sport_key: "badminton", format: "league", sides: TWO }, act: "none",
     played: false, finished: false, saved: false, expired: false, decided: 0, total: 1 },
+  // A point stands: played.
   { tag: "rally", ageMs: 2 * HOUR_MS, shape: { sport_key: "badminton", format: "league", sides: TWO, locale: "fr" }, act: "rally",
     played: true, finished: false, saved: false, expired: false, decided: 0, total: 1 },
+  // Start tapped, nothing scored: NOT played (the ruling: a guest who opened the pad and left did not play).
+  { tag: "start-only", ageMs: 3 * HOUR_MS, shape: { sport_key: "badminton", format: "league", sides: TWO }, act: "start",
+    played: false, finished: false, saved: false, expired: false, decided: 0, total: 1 },
+  // A point scored and taken back: NOT played (no point stands).
+  { tag: "voided", ageMs: 4 * HOUR_MS, shape: { sport_key: "badminton", format: "league", sides: TWO }, act: "rallyVoid",
+    played: false, finished: false, saved: false, expired: false, decided: 0, total: 1 },
   { tag: "saved", ageMs: 5 * HOUR_MS, shape: { sport_key: "badminton", format: "league", sides: TWO }, act: "save",
     played: false, finished: false, saved: true, expired: false, decided: 0, total: 1 },
+  // A chess Start alone: NOT played, though the engine's `playRecorded` says a chess Start is play (`startIsPlay`).
+  { tag: "chess-start", ageMs: 6 * HOUR_MS, shape: { sport_key: "boardgame", format: "league", sides: CHESS }, act: "start",
+    played: false, finished: false, saved: false, expired: false, decided: 0, total: 1 },
+  // A chess result with no point before it (chess records none): played, and its one match decided.
+  { tag: "result-only", ageMs: 4 * 24 * HOUR_MS, shape: { sport_key: "boardgame", format: "league", sides: CHESS }, act: "result",
+    played: true, finished: true, saved: false, expired: false, decided: 1, total: 1 },
   { tag: "partial", ageMs: 2 * 24 * HOUR_MS, shape: { sport_key: "badminton", format: "league", sides: THREE }, act: "decideFirst",
     played: true, finished: false, saved: false, expired: false, decided: 1, total: 3 },
   { tag: "finished", ageMs: 3 * 24 * HOUR_MS, shape: { sport_key: "football", format: "league", sides: ["Lions", "Tigers"] }, act: "decideAll",
@@ -208,7 +252,8 @@ const SEED_HOOK_TIMEOUT_MS = Math.max(30_000, SEEDS.length * 20_000);
 let NOW: Date;
 const made = new Map<string, CreatedQuickMatch>();
 let saverId: string;
-let foreignId: string;
+/** Another org's two rows: one saved, one unsaved past its expiry. */
+const foreignIds: string[] = [];
 
 /** The seeds' ids, the scope of every read. */
 const seedIds = (): string[] => SEEDS.map((s) => made.get(s.tag)!.id);
@@ -220,7 +265,10 @@ beforeAll(async () => {
   for (const s of SEEDS) {
     const out = await create(s.shape);
     made.set(s.tag, out);
+    if (s.act === "start") await startOnly(out);
     if (s.act === "rally") await rally(out);
+    if (s.act === "rallyVoid") await rallyThenVoid(out);
+    if (s.act === "result") await resultOnly(out);
     if (s.act === "decideFirst") await decideFirst(out);
     if (s.act === "decideAll") {
       for (const f of await fixturesOf(out.competitionId)) {
@@ -236,20 +284,25 @@ beforeAll(async () => {
     if (s.act === "expire") await sql`update quick_matches set expires_at = ${new Date(NOW.getTime() - HOUR_MS)} where id = ${made.get(s.tag)!.id}`;
   }
 
-  // Another org's row: a `quick_matches` row that is NOT the system org's (no guest path writes one), saved and past its
-  // expiry, created a minute ago. In scope by id, it would add to every count if the org were not the predicate.
+  // Another org's rows: `quick_matches` rows that are NOT the system org's (no guest path writes one), created a minute ago:
+  // one SAVED, one unsaved and past its expiry. In scope by id, they would add to created, saved and expired, and to the
+  // saved and never-played lists, if the org were not the predicate.
   const [org] = await sql<{ id: string }[]>`
     insert into organizations (name, slug, created_by) values ('QM admin foreign', ${`qm-admin-foreign-${randomUUID().slice(0, 8)}`}, ${saverId})
     returning id`;
   foreignOrgs.push(org!.id);
-  const [comp] = await sql<{ id: string }[]>`
-    insert into competitions (org_id, name, slug) values (${org!.id}, 'QM admin foreign', ${`qm-admin-foreign-${randomUUID().slice(0, 8)}`}) returning id`;
-  const [qm] = await sql<{ id: string }[]>`
-    insert into quick_matches (org_id, competition_id, name, format, token_hash, token_enc, visitor_hash, expires_at, created_at)
-    values (${org!.id}, ${comp!.id}, 'QM admin foreign', 'league', ${randomBytes(32).toString("hex")}, ${randomBytes(48)},
-            ${randomBytes(32).toString("hex")}, ${new Date(NOW.getTime() - HOUR_MS)}, ${new Date(NOW.getTime() - 60_000)})
-    returning id`;
-  foreignId = qm!.id;
+  for (const savedBy of [saverId, null]) {
+    const [comp] = await sql<{ id: string }[]>`
+      insert into competitions (org_id, name, slug) values (${org!.id}, 'QM admin foreign', ${`qm-admin-foreign-${randomUUID().slice(0, 8)}`}) returning id`;
+    const [qm] = await sql<{ id: string }[]>`
+      insert into quick_matches (org_id, competition_id, name, format, token_hash, token_enc, visitor_hash, expires_at, created_at,
+                                 saved_by_user_id)
+      values (${org!.id}, ${comp!.id}, 'QM admin foreign', 'league', ${randomBytes(32).toString("hex")}, ${randomBytes(48)},
+              ${randomBytes(32).toString("hex")}, ${savedBy === null ? new Date(NOW.getTime() - HOUR_MS) : null},
+              ${new Date(NOW.getTime() - 60_000)}, ${savedBy})
+      returning id`;
+    foreignIds.push(qm!.id);
+  }
 }, SEED_HOOK_TIMEOUT_MS);
 
 beforeEach(async () => {
@@ -375,10 +428,17 @@ describe.skipIf(!HAS_DB)("the counts", () => {
     expect(await quickMatchAdminCounts({ now: NOW, onlyIds: seedIds() })).toEqual(first);
   });
 
-  it("another org's quick_matches row is never counted, though it is in scope by id", async () => {
-    const withForeign = await quickMatchAdminCounts({ now: NOW, onlyIds: [...seedIds(), foreignId] });
+  it("another org's quick_matches rows (one saved, one expired) are never counted, though they are in scope by id", async () => {
+    // Premise: the two rows ARE what they witness (one saved, one unsaved past its expiry), else the saved and expired counts
+    // would be blind to them.
+    const premise = await sql<{ saved: boolean; expired: boolean }[]>`
+      select saved_by_user_id is not null as saved, (saved_by_user_id is null and expires_at < ${NOW}) as expired
+        from quick_matches where id = any(${foreignIds}::uuid[]) order by saved desc`;
+    expect(premise).toEqual([{ saved: true, expired: false }, { saved: false, expired: true }]);
+    const withForeign = await quickMatchAdminCounts({ now: NOW, onlyIds: [...seedIds(), ...foreignIds] });
     expect(withForeign).toEqual(await quickMatchAdminCounts({ now: NOW, onlyIds: seedIds() }));
-    expect((await quickMatchAdminCounts({ now: NOW, onlyIds: [foreignId] }))["24h"].created).toBe(0);
+    const zero = { created: 0, played: 0, finished: 0, saved: 0, expiredPending: 0 };
+    expect(await quickMatchAdminCounts({ now: NOW, onlyIds: foreignIds })).toEqual({ "24h": zero, "7d": zero, "30d": zero });
   });
 
   it("after the expired row is swept (hard-deleted) it is in no count: the database keeps no record of it", async () => {
@@ -504,26 +564,36 @@ describe.skipIf(!HAS_DB)("the recent table", () => {
     }
   });
 
-  it("another org's quick_matches row is never listed, though it is in scope by id", async () => {
-    for (const filter of ["all", "never", "saved"] as const) {
-      const list = await listQuickMatchesForAdmin({ filter, onlyIds: [foreignId] });
+  it("another org's quick_matches rows are never listed, though they are in scope by id, under every filter", async () => {
+    let checked = 0;
+    for (const filter of ["all", "played", "never", "saved"] as const) {
+      const list = await listQuickMatchesForAdmin({ filter, onlyIds: foreignIds });
       expect(list.rows, filter).toEqual([]);
+      checked++;
     }
+    expect(checked).toBe(4);
   });
 });
 
 describe.skipIf(!HAS_DB)("the played premise is a guard, not a comment", () => {
-  it("a decided match with no score event (no guest path writes one) is logged by id as a broken premise; the read still answers", async () => {
+  it("a decided match with no standing point or result (no guest path writes one) is logged by id as a broken premise, by the list and by the counts; each read still answers", async () => {
     const odd = await create({ sport_key: "badminton", format: "league", sides: TWO });
     // A state no guest path writes: the match's one fixture decided without an event. Only an organizer's settle or a
     // withdrawal's walkover could, and a quick match has neither.
     const [f] = await fixturesOf(odd.competitionId);
     await sql`update fixtures set status = 'decided' where id = ${f!.id}`;
+    // Each read guards it on its own: the list, then the counts, each read's log looked at alone.
     const list = await listQuickMatchesForAdmin({ onlyIds: [odd.id] });
     expect(list.rows[0]).toMatchObject({ decided: 1, total: 1 });
-    const text = JSON.stringify(logs.lines);
-    expect(text).toContain(odd.id);
-    expect(text).toContain("quick match admin");
+    let text = JSON.stringify(logs.lines);
+    expect(text, "the list").toContain(odd.id);
+    expect(text, "the list").toContain("quick match admin");
+    logs.lines.length = 0;
+    const counts = await quickMatchAdminCounts({ now: new Date(), onlyIds: [odd.id] });
+    expect(counts["24h"]).toMatchObject({ created: 1, played: 0, finished: 1 });
+    text = JSON.stringify(logs.lines);
+    expect(text, "the counts").toContain(odd.id);
+    expect(text, "the counts").toContain("quick match admin");
     // The positive pair: the seeded rows, every one consistent, log nothing.
     logs.lines.length = 0;
     await listQuickMatchesForAdmin({ onlyIds: seedIds() });

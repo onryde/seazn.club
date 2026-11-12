@@ -116,9 +116,9 @@ export default async function AdminQuickMatchesPage({
         </div>
         <p className="max-w-3xl text-xs text-slate-500" data-testid="qm-counts-note">
           Counts cover matches still on record. A match deleted by its saver, or by the sweep {QUICK_MATCH_EXPIRY_DAYS} days
-          after its last activity, leaves no row this page can read, so it is in no count here (Created over 7 and 30 days
-          counts the survivors). PostHog has every deletion as {EVENTS.QUICK_MATCH_DELETED}, by how it went, and every create
-          as {EVENTS.QUICK_MATCH_CREATED}.
+          after its last activity, leaves no row this page can read, so it is in no count here (every window counts the
+          survivors; within 24 hours only a saver&apos;s Delete removes one). PostHog has every deletion as
+          {EVENTS.QUICK_MATCH_DELETED}, by how it went, and every create as {EVENTS.QUICK_MATCH_CREATED}.
         </p>
       </section>
 

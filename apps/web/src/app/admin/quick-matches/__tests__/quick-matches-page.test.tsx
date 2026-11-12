@@ -246,6 +246,11 @@ describe.skipIf(!HAS_DB)("/admin/quick-matches renders what is there, and nothin
     // The page says what it cannot count: a deleted match leaves no row, so its row points at PostHog's event (controller
     // ruling 2026-11-12, the name typed here) instead of a number, in every window.
     expect(html).toContain('data-testid="qm-counts-note"');
+    // Review m6: no window is claimed complete; the 24-hour one names the one delete that reaches it. Unescaped first: the
+    // static markup writes the apostrophe as an entity, and a raw probe would fail on spelling, not on the words.
+    const note = html.replace(/&#x27;|&apos;/g, "'");
+    expect(note).toContain("every window counts the survivors; within 24 hours only a saver's Delete removes one");
+    expect(note).not.toContain("Created over 7 and 30 days");
     let pointed = 0;
     for (const w of ["24h", "7d", "30d"]) {
       expect(cell(html, "deleted", w), `deleted ${w}`).toBe("see PostHog: quick_match_deleted");
