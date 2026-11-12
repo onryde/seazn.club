@@ -22,6 +22,7 @@ import { getLimit, requireFeature } from "@/lib/entitlements";
 import { generateRefCode } from "@/lib/ref-code";
 import { rosterDerivedName } from "@/lib/entrant-roster-name";
 import { LEGAL_VERSION } from "@/lib/legal";
+import { entryStanding, type EntryStanding } from "@/lib/registration-status";
 import { log } from "@/server/logger";
 import { dispatchNow } from "@/server/email-outbox";
 import {
@@ -202,6 +203,11 @@ export interface JoinTeamEntryResult {
   registration_id: string;
   player_id: string;
   consent_status: "granted" | "guardian";
+  /** Where the entry the joiner just joined STANDS (polish wave P3, W4/W13): confirmed, waitlisted, or still waiting on payment and/or the
+   *  organiser's approval. The join page says "you're in, your spot is confirmed" ONLY for `confirmed`; a team awaiting payment is not
+   *  confirmed because one more teammate arrived. `null` = nothing nameable (a pending entry with no fee under auto-approval), which the
+   *  page words neutrally and never as confirmed. Read under the same row lock the join writes under. */
+  entry_state: EntryStanding | null;
 }
 
 export interface JoinPreviewSlot {
@@ -221,6 +227,9 @@ export interface JoinPreviewResult {
   competition_slug: string;
   org_slug: string;
   org_name: string;
+  /** What kind of entry this link joins (polish wave P3, W3): lets the join page say "this PAIR is full" only for a pair, and the
+   *  generic roster-full copy for a team. */
+  entrant_kind: "team" | "individual" | "pair";
   unclaimed_slots: JoinPreviewSlot[];
   /** True only when this entry can still grow by adding someone NEW — never
    *  for a `pair` (fixed at two, claim-only) and never once the sport's
@@ -1147,6 +1156,7 @@ export async function previewJoinEntry(joinCode: string): Promise<JoinPreviewRes
     competition_slug: divCtx.comp_slug,
     org_slug: divCtx.org_slug,
     org_name: divCtx.org_name,
+    entrant_kind: reg.entrant_kind,
     unclaimed_slots: unclaimedSlots,
     allow_new_player: allowNewPlayer,
     requires_dob: requiresDob({
@@ -1324,12 +1334,20 @@ export async function joinTeamEntry(
   let materialisedEntrantId: string | null = null;
   // Polish wave P2 (W13): the joiner's own "you're on the team" mail, queued in this transaction; its first attempt follows the response.
   let joinedMailId: string | null = null;
+  // Polish wave P3: the locked row's status and fee, captured for `entry_state` (below). Initialised to values that name nothing: the
+  // transaction either assigns them or throws before the result is built.
+  let lockedStatus = "";
+  let lockedFeeCents = 0;
 
   const playerId = await sql.begin(async (tx) => {
-    const [locked] = await tx<{ status: string; free_agent: boolean; entrant_id: string | null }[]>`
-      select status, free_agent, entrant_id from registrations where id = ${reg.id} for update`;
+    const [locked] = await tx<{ status: string; amount_cents: number; free_agent: boolean; entrant_id: string | null }[]>`
+      select status, amount_cents, free_agent, entrant_id from registrations where id = ${reg.id} for update`;
     if (!locked) throw new HttpError(404, "This join link is not valid");
     materialisedEntrantId = locked.entrant_id;
+    // Polish wave P3: the entry's standing as the row lock sees it (a join never changes status or fee), reported back so the page never
+    // says "confirmed" about an entry still awaiting payment or approval.
+    lockedStatus = locked.status;
+    lockedFeeCents = locked.amount_cents;
     if (locked.free_agent) throw new HttpError(422, "This entry has no roster to join yet");
     if (["withdrawn", "rejected", "expired"].includes(locked.status)) {
       throw new HttpError(422, "This entry is no longer accepting players");
@@ -1508,5 +1526,11 @@ export async function joinTeamEntry(
     "player joined team entry via link",
   );
 
-  return { registration_id: reg.id, player_id: playerId, consent_status: consentStatus };
+  // Polish wave P3 (W4/W13): where the entry stands, in the SAME words the joiner's mail uses (one definition, lib/registration-status.ts).
+  // The review mode is read live; unreadable (no settings row cannot happen past the join's own inner join, but it is a guard, not a
+  // comment) it names nothing rather than guess.
+  const settings = await loadSubmitSettings(reg.division_id);
+  const entryState = entryStanding(lockedStatus, lockedFeeCents, settings?.approval ?? null);
+
+  return { registration_id: reg.id, player_id: playerId, consent_status: consentStatus, entry_state: entryState };
 }

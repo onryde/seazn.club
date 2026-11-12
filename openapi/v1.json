@@ -111978,6 +111978,14 @@
                         "org_name": {
                           "type": "string"
                         },
+                        "entrant_kind": {
+                          "type": "string",
+                          "enum": [
+                            "team",
+                            "individual",
+                            "pair"
+                          ]
+                        },
                         "unclaimed_slots": {
                           "type": "array",
                           "items": {
@@ -112032,6 +112040,7 @@
                         "competition_slug",
                         "org_slug",
                         "org_name",
+                        "entrant_kind",
                         "unclaimed_slots",
                         "allow_new_player",
                         "requires_dob",
@@ -112057,6 +112066,7 @@
                     "competition_slug": "example",
                     "org_slug": "example",
                     "org_name": "example",
+                    "entrant_kind": "team",
                     "unclaimed_slots": [
                       {
                         "player_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
@@ -112413,12 +112423,30 @@
                             "granted",
                             "guardian"
                           ]
+                        },
+                        "entry_state": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "confirmed",
+                                "waitlisted",
+                                "payment",
+                                "approval",
+                                "payment_and_approval"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
                         "registration_id",
                         "player_id",
-                        "consent_status"
+                        "consent_status",
+                        "entry_state"
                       ],
                       "additionalProperties": false
                     },
@@ -112433,7 +112461,8 @@
                   "data": {
                     "registration_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                     "player_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
-                    "consent_status": "granted"
+                    "consent_status": "granted",
+                    "entry_state": "confirmed"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }

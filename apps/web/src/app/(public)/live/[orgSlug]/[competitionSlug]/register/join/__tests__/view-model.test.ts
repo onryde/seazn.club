@@ -4,12 +4,14 @@
 import { describe, expect, it } from "vitest";
 import { guardianRequired, validateConsent } from "@/components/public-site/register/validation";
 import { cartHasOtherPlayers } from "@/components/public-site/register/cart";
+import type { EntryStanding } from "@/lib/registration-status";
 import {
   buildJoinBody,
   canSubmitJoin,
   classifyJoinFailure,
   defaultSlotChoice,
   joinerCart,
+  joinSuccessCopy,
   joinWhoRequirements,
   NEW_PLAYER_CHOICE,
   rosterMeterAfterJoin,
@@ -266,5 +268,37 @@ describe("rosterMeterAfterJoin", () => {
   });
   it("the last unclaimed slot being claimed reads as fully confirmed", () => {
     expect(rosterMeterAfterJoin(4, 1, false)).toEqual({ claimed: 4, total: 4 });
+  });
+});
+
+// Polish wave P3 (W4, W13): the success panel says "You're in / your spot is confirmed" ONLY for a confirmed entry. Every other standing (and
+// "nothing nameable") words the join as joining, never as confirmed. Expected keys are written out per standing, not derived.
+describe("joinSuccessCopy", () => {
+  const TABLE: { state: EntryStanding | null; heading: string; body: string; stateKey: string | null; meter: string }[] = [
+    { state: "confirmed", heading: "register.join.success.heading", body: "register.join.success.body", stateKey: null, meter: "register.status.roster.meter" },
+    { state: "waitlisted", heading: "register.join.success.joinedHeading", body: "register.join.success.joinedBody", stateKey: "register.join.success.state.waitlisted", meter: "register.status.roster.meterRegistered" },
+    { state: "payment", heading: "register.join.success.joinedHeading", body: "register.join.success.joinedBody", stateKey: "register.join.success.state.payment", meter: "register.status.roster.meter" },
+    { state: "approval", heading: "register.join.success.joinedHeading", body: "register.join.success.joinedBody", stateKey: "register.join.success.state.approval", meter: "register.status.roster.meter" },
+    { state: "payment_and_approval", heading: "register.join.success.joinedHeading", body: "register.join.success.joinedBody", stateKey: "register.join.success.state.payment_and_approval", meter: "register.status.roster.meter" },
+    { state: null, heading: "register.join.success.joinedHeading", body: "register.join.success.joinedBody", stateKey: null, meter: "register.status.roster.meter" },
+  ];
+
+  it("every standing (and the unnameable one) maps to its own copy (counted)", () => {
+    let checked = 0;
+    for (const c of TABLE) {
+      expect(joinSuccessCopy(c.state), String(c.state)).toEqual({ headingKey: c.heading, bodyKey: c.body, stateKey: c.stateKey, meterKey: c.meter });
+      checked += 1;
+    }
+    expect(checked).toBe(TABLE.length);
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("only `confirmed` gets the confirmed wording: five of the six inputs never do", () => {
+    const confirmedKeys = new Set(["register.join.success.heading", "register.join.success.body"]);
+    const claims = TABLE.filter((c) => {
+      const k = joinSuccessCopy(c.state);
+      return confirmedKeys.has(k.headingKey) || confirmedKeys.has(k.bodyKey);
+    }).map((c) => c.state);
+    expect(claims).toEqual(["confirmed"]);
   });
 });

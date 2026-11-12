@@ -65,6 +65,7 @@ const TEAM_PREVIEW = {
   competition_slug: "summer-smash",
   org_slug: "riverside",
   org_name: "Riverside CC",
+  entrant_kind: "team" as "team" | "individual" | "pair",
   unclaimed_slots: [
     { player_id: "p1", full_name: "Sam Player" },
     { player_id: "p2", full_name: "Jordan Player" },
@@ -148,6 +149,54 @@ describe("register join page (RS007) — the URL entry-card.tsx already emits", 
       // Still shows the (known, already-public) context — this is a live
       // link, not the unknown/dead-code case.
       expect(html).toContain("Team Alpha");
+    });
+
+    // Polish wave P3 (W3): a PAIR is full in its own words, and only when both of its slots are claimed. The walkthrough's pair had BOTH
+    // slots unclaimed, so its picker was right and no "full" state applies; this is the case that does.
+    it("a pair with both slots claimed says THIS PAIR is full, in the pair's words, never the team's roster copy", async () => {
+      usecaseMock.previewJoinEntry.mockResolvedValueOnce({
+        ...TEAM_PREVIEW,
+        entrant_kind: "pair",
+        display_name: "Alex & Sam",
+        unclaimed_slots: [],
+        allow_new_player: false,
+        total_players: 2,
+      });
+      const html = await render({ join_code: "PAIRFULL" });
+      expect(html).toContain('data-full-kind="pair"');
+      expect(html).toContain("This pair is already full");
+      expect(html).toContain("Both players have already checked in.");
+      expect(html).not.toContain("This roster is already full");
+      expect(html).not.toContain("Which one are you?");
+    });
+
+    it("a team at its cap keeps the team's roster-full copy (the pair words are not a global replacement)", async () => {
+      usecaseMock.previewJoinEntry.mockResolvedValueOnce({ ...TEAM_PREVIEW, unclaimed_slots: [], allow_new_player: false });
+      const html = await render({ join_code: "TEAMFULL" });
+      expect(html).toContain('data-full-kind="roster"');
+      expect(html).toContain("This roster is already full");
+      expect(html).not.toContain("This pair is already full");
+    });
+
+    it("a pair with one slot still open is not full, and one with both slots open is not full either: the picker renders for each", async () => {
+      let checked = 0;
+      for (const open of [1, 2]) {
+        usecaseMock.previewJoinEntry.mockResolvedValueOnce({
+          ...TEAM_PREVIEW,
+          entrant_kind: "pair",
+          unclaimed_slots: [
+            { player_id: "p1", full_name: "Sam Player" },
+            { player_id: "p2", full_name: "Jordan Player" },
+          ].slice(0, open),
+          allow_new_player: false,
+          total_players: 2,
+        });
+        const html = await render({ join_code: "PAIROPEN" });
+        expect(html, `${open} open`).not.toContain("This pair is already full");
+        expect(html, `${open} open`).toContain("Which one are you?");
+        checked += 1;
+      }
+      expect(checked).toBe(2);
     });
 
     it("does NOT show the full-roster state when slots remain, even with allow_new_player false (the pair shape)", async () => {

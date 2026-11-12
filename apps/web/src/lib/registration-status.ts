@@ -53,3 +53,18 @@ export function entryWaitingOn(status: string, feeCents: number, approval: "auto
   if (review) return "approval";
   return null;
 }
+
+/** Where an entry STANDS, in words a person who just joined it can be told truthfully (polish wave P3: the join page said "you're in, your
+ *  spot is confirmed" for a team still awaiting payment or approval, and the mail already knew better): confirmed, on the waitlist, or still
+ *  waiting on payment and/or the organiser. `null` = nothing nameable (a pending entry with no fee under auto-approval is a state nothing
+ *  rests in), so a caller says nothing about the entry's standing rather than claim one; it never reads as `confirmed`.
+ *
+ *  `approval` is null when the division's review mode could not be read: a pending entry then names nothing, because "waiting for payment"
+ *  vs "waiting for approval" cannot be told apart without it. The ONE definition: the joiner mail (`lifecycle-mail.ts`) and the join
+ *  response (`joinTeamEntry`) both call this, so the mail and the page can never disagree about the same entry. */
+export type EntryStanding = "confirmed" | "waitlisted" | EntryWaitingOn;
+export function entryStanding(status: string, feeCents: number, approval: "auto" | "manual" | null): EntryStanding | null {
+  if (status === "confirmed") return "confirmed";
+  if (status === "waitlisted") return "waitlisted";
+  return approval === null ? null : entryWaitingOn(status, feeCents, approval);
+}

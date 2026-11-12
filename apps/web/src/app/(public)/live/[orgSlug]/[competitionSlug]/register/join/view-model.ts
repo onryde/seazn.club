@@ -9,6 +9,7 @@ import { lichessRefusalReason } from "@/components/public-site/register/submit";
 import type { CartState, ConsentState, ContactState } from "@/components/public-site/register/types";
 import type { WhoFieldRequirements } from "@/components/public-site/register/validation";
 import { TURNSTILE_ERROR_CODE } from "@/lib/turnstile";
+import type { EntryStanding } from "@/lib/registration-status";
 
 /** Sentinel for "add me as a new player" — never a real player_id (those
  *  are uuids). PublicJoinRequest's own contract is "player_id omitted ->
@@ -249,4 +250,33 @@ export function rosterMeterAfterJoin(
   return viaNewPlayer
     ? { claimed: claimedBefore + 1, total: totalBefore + 1 }
     : { claimed: claimedBefore + 1, total: totalBefore };
+}
+
+/** Which dictionary keys the success panel reads, by where the entry the joiner just joined STANDS (polish wave P3, W4/W13). "You're in /
+ *  Your spot is confirmed" is true of a `confirmed` entry and of nothing else: a team awaiting payment or approval, or on the waitlist, is not
+ *  confirmed because one more teammate arrived. Every other standing says "You've joined" and, where the server named one, what the entry is
+ *  still waiting on. `null` (nothing nameable, or a response that carried no standing at all) says only "You've joined": never confirmed.
+ *  The meter says "registered", not "checked in", on a waitlisted entry (it has nothing to check in to; W6/W10/W11). */
+export interface JoinSuccessCopy {
+  headingKey: string;
+  bodyKey: string;
+  stateKey: string | null;
+  meterKey: string;
+}
+
+export function joinSuccessCopy(state: EntryStanding | null): JoinSuccessCopy {
+  if (state === "confirmed") {
+    return {
+      headingKey: "register.join.success.heading",
+      bodyKey: "register.join.success.body",
+      stateKey: null,
+      meterKey: "register.status.roster.meter",
+    };
+  }
+  return {
+    headingKey: "register.join.success.joinedHeading",
+    bodyKey: "register.join.success.joinedBody",
+    stateKey: state === null ? null : `register.join.success.state.${state}`,
+    meterKey: state === "waitlisted" ? "register.status.roster.meterRegistered" : "register.status.roster.meter",
+  };
 }

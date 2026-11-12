@@ -579,6 +579,10 @@ export const PublicJoinResponse = z.object({
   registration_id: Uuid,
   player_id: Uuid,
   consent_status: z.enum(["granted", "guardian"]),
+  /** Where the entry the joiner just joined stands (polish wave P3, W4/W13; `JoinTeamEntryResult.entry_state`, registration-submit.ts):
+   *  confirmed, on the waitlist, or still waiting on payment and/or the organiser's approval. Only `confirmed` may be worded as "you're
+   *  in". null = nothing nameable (a pending entry with no fee under auto-approval), never to be read as confirmed. */
+  entry_state: z.enum(["confirmed", "waitlisted", "payment", "approval", "payment_and_approval"]).nullable(),
 });
 
 /** One CAPTAIN-ENTERED, still-`pending` slot on an entry — claimable by
@@ -602,6 +606,9 @@ export const PublicJoinPreviewResponse = z.object({
   competition_slug: z.string(),
   org_slug: z.string(),
   org_name: z.string(),
+  /** What kind of entry the link joins (polish wave P3, W3; `JoinPreviewResult.entrant_kind`, registration-submit.ts): the join page
+   *  says "this pair is full" only for a pair. */
+  entrant_kind: EntrantKind,
   unclaimed_slots: z.array(PublicJoinPreviewSlot),
   allow_new_player: z.boolean(),
   /** RS007 join page — whether the WHO-equivalent step must collect a

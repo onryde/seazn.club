@@ -9,8 +9,7 @@ import "server-only";
 // (`deferred(() => dispatchNow(ids))`); a webhook or the sweep leaves it to the retry worker, as every other outbox mail does.
 import { routes } from "@/lib/routes";
 import { registrationApprovedEmail, registrationExpiredEmail, registrationJoinedEmail, registrationPaidEmail, registrationWithdrawnEmail } from "@/lib/email";
-import type { JoinedState } from "@/lib/email-templates";
-import { entryWaitingOn, isTerminalRegistrationStatus } from "@/lib/registration-status";
+import { entryStanding, isTerminalRegistrationStatus } from "@/lib/registration-status";
 import { enqueueEmailOnce, expiryWithin, recipientLocale } from "@/server/email-outbox";
 import { log } from "@/server/logger";
 import type { Tx, RegistrationWithGroupRow, DivisionCtx } from "./types";
@@ -282,15 +281,6 @@ export async function queueRegistrationWithdrawnMail(tx: Tx, a: { reg: Registrat
   });
 }
 
-/** What the joiner is told the entry IS: confirmed, on the waitlist, or still waiting on the fee and/or the organiser's approval. `null` =
- *  nothing nameable (a pending entry with no fee under auto-approval is a state nothing rests in): the mail then says nothing about the
- *  entry's standing rather than claim one. */
-const joinedStateOf = (status: string, amountCents: number, approval: "auto" | "manual" | null): JoinedState | null => {
-  if (status === "confirmed") return "confirmed";
-  if (status === "waitlisted") return "waitlisted";
-  return approval === null ? null : entryWaitingOn(status, amountCents, approval);
-};
-
 /**
  * `registration_joined`: a teammate claimed a slot on the entry, or took one, through its join link (W13). To THE JOINER's own address, in
  * their language (their account's, else the club's), telling them which entry they are on and honestly where it stands: a team that has not
@@ -327,7 +317,8 @@ export async function queueRegistrationJoinedMail(
         displayName: reg.display_name,
         refCode: null,
         playerName: a.playerName,
-        state: joinedStateOf(reg.status, reg.amount_cents, settings?.approval ?? null),
+        // The ONE standing definition (lib/registration-status.ts), shared with the join response so the mail and the page agree.
+        state: entryStanding(reg.status, reg.amount_cents, settings?.approval ?? null),
         competitionUrl: competitionUrlOf(origin, ctx),
       },
       locale,
