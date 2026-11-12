@@ -266,8 +266,8 @@ export default async function SponsorsHubPage({
 
   // The back link is the Streaming page's, verbatim (owner, 2026-11-11: "back button in sponsor page like in streaming page"): quiet
   // emphasis, to /dashboard, labelled with the existing `common.dashboard`. This is the page's ONE return - `requireOrgPage` has
-  // already redirected or 404ed - so every tab, reader and locale reaches it here. The shell's breadcrumb apron also carries a back
-  // chevron (to the org home); the owner asked for the Streaming treatment regardless, so both stay.
+  // already redirected or 404ed - so every tab, reader and locale reaches it here. The shell's breadcrumb apron is gone on this page
+  // (owner, 2026-11-12, lib/breadcrumb-chain.ts: like Streaming and Directory), so this link is the ONLY back affordance.
   return (
     <main className="mx-auto max-w-4xl px-4 py-4 md:py-8">
       <BackLink href="/dashboard" label={t(dict, "common.dashboard")} />

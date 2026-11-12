@@ -102,12 +102,11 @@ export function buildCrumbs(args: {
     return crumbs;
   }
 
-  // The Sponsors hub (R4 sponsors-on-stream S11): a top-level console route, so it owes its own crumb (and with it the
-  // back chevron's target) in the change that creates it. Reuses the hub's own title, like "add-ons" reuses the nav's.
-  if (rest[0] === "sponsors") {
-    crumbs.push({ label: t("sponsors.title"), href: routes.orgSponsors(org) });
-    return crumbs;
-  }
+  // The Sponsors hub (R4 sponsors-on-stream S11) is a TOP-NAV page, so it carries no breadcrumb bar at all (owner, 2026-11-12:
+  // "like Streaming and Directory"): [] makes <Breadcrumbs> render nothing. The Nav already names the club and holds the switcher,
+  // and the page has its own "<- Dashboard" BackLink as its one return. Every tab (`?tab=`, `?deal=`) is this one pathname. Any
+  // OTHER /o/<club>/... page keeps its trail - a new top-nav page that should match owes the same line, in the change that creates it.
+  if (rest[0] === "sponsors") return [];
 
   if (rest[0] !== "c" || rest.length < 2) return crumbs;
   if (rest[1] === "new") {
