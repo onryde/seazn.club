@@ -80,11 +80,11 @@ export interface RegistrationRow {
    *  `RegistrationWithGroupRow`, which exposes the group's as
    *  `group_refunded_cents` to keep the two from colliding in one SELECT. */
   refunded_cents: number;
-  /** V510 (polish wave P5, P1-review carry b): the part of `refunded_cents` that sent back a LATE payment (one that completed after
+  /** V512 (polish wave P5, P1-review carry b): the part of `refunded_cents` that sent back a LATE payment (one that completed after
    *  the entry had lapsed, expired or been withdrawn) - never the entry's current payment. `ownPaymentRefundedCents` subtracts it, so
    *  a re-promoted entry that paid again can still be refunded. */
   late_refunded_cents: number;
-  /** V511 (polish wave P5, W12): when the organiser approved this entry while its fee was still due (manual approval). The entry stays
+  /** V513 (polish wave P5, W12): when the organiser approved this entry while its fee was still due (manual approval). The entry stays
    *  `pending` until the payment lands, which then confirms it; null when never approved that way. */
   approved_at: Date | null;
   entrant_id: string | null;

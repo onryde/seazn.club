@@ -112,7 +112,7 @@ describe("the cart confirmation's entry lines", () => {
     for (const line of out.text.split("\n")) expect(line, `${locale}: no raw key`).not.toMatch(/registration\.entryStatus/);
   });
 
-  // Polish wave P5 (W12): the organiser approved the manual, unpaid "Ladies Singles" entry ahead of its payment (`approved`, V511, as the
+  // Polish wave P5 (W12): the organiser approved the manual, unpaid "Ladies Singles" entry ahead of its payment (`approved`, V513, as the
   // cart mail's rebuild reads it). It now waits on payment alone - the SAME word as "Open Singles" (auto, unpaid) - never "payment and
   // approval". The expected word is another line of the same mail, not this function's output for the approved line.
   it.each(LOCALES)("%s: an entry approved ahead of its payment waits on payment alone - the same word as an unpaid auto entry", async (locale) => {

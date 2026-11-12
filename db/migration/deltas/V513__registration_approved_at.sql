@@ -1,5 +1,5 @@
 -- =============================================================================
--- V511 — the organiser's approval is recorded apart from the payment (registration polish wave P5, walkthrough W12).
+-- V513 — the organiser's approval is recorded apart from the payment (registration polish wave P5, walkthrough W12).
 --
 -- On a manual-approval division Approve and Mark paid were one decision: Approve refused an unpaid entry ("mark it paid first")
 -- and Mark paid confirmed it outright, so an organiser could not approve an entry and leave its fee due, nor record a payment

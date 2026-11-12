@@ -477,7 +477,7 @@ async function confirmPaidRegistration(
     // registration-approval.ts's ApprovalSettingsRow.
     const [approvalRow] = await tx<{ approval: "auto" | "manual" }[]>`
       select approval from registration_settings where division_id = ${reg.division_id}`;
-    // Polish wave P5 (W12): an entry the organiser already approved while its fee was due (`approved_at`, V511) is confirmed by this
+    // Polish wave P5 (W12): an entry the organiser already approved while its fee was due (`approved_at`, V513) is confirmed by this
     // payment - the approval was given; only the money was outstanding.
     if (approvalRow?.approval === "manual" && reg.approved_at === null) {
       await audit(tx, div.competition_id, reg.org_id, "registration.paid_awaiting_approval", {
@@ -581,7 +581,7 @@ async function confirmPaidRegistration(
         // diverged, and the whole attempt would still land in the catch below
         // as `refund_failed` — a misleading audit trail for a refund that
         // actually succeeded).
-        // V510 (polish wave P5, carry b): booked as LATE too, so the cap of a later in-time payment (`ownPaymentRefundedCents`)
+        // V512 (polish wave P5, carry b): booked as LATE too, so the cap of a later in-time payment (`ownPaymentRefundedCents`)
         // is not eaten by this refund of a payment the entry never held.
         await tx`
           update registrations

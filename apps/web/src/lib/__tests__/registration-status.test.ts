@@ -81,7 +81,7 @@ describe("entryWaitingOn", () => {
     expect(entryWaitingOn("something_new", 2500, "manual", false)).toBeNull();
   });
 
-  // Polish wave P5 (W12): the organiser approved an entry whose fee was still owed (`approved_at`, V511). Their yes is given, so the entry
+  // Polish wave P5 (W12): the organiser approved an entry whose fee was still owed (`approved_at`, V513). Their yes is given, so the entry
   // waits on what an entry that needs no yes waits on: the expected value is the SAME table's auto-approval cell, never this function's
   // own output. The approved stamp never adds a wait (an auto division's cells are unchanged by it).
   it("an approved entry waits on what an auto-approval entry waits on: every status x fee x approval cell (28 checked)", () => {

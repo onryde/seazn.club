@@ -1,5 +1,5 @@
 -- =============================================================================
--- V510 — a refund's cap is THIS entry's current payment (registration polish wave P5, P1-review carry b).
+-- V512 — a refund's cap is THIS entry's current payment (registration polish wave P5, P1-review carry b).
 --
 -- `registrations.refunded_cents` (V368) is the entry's whole refund HISTORY. A late payment (the entry had lapsed, expired or
 -- been withdrawn when Stripe completed its session) is refunded automatically and booked there too - and a re-promotion resets

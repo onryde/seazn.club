@@ -704,7 +704,7 @@ describe.skipIf(!HAS_DB)("queueRegistrationApprovedMails' own guard", () => {
 // W12 (polish wave P5): Approve and the payment are two decisions on a manual-approval division
 // ---------------------------------------------------------------------------------------------------------------------------------
 // Before: Approve on an unpaid entry was refused ("mark it paid first") and Mark paid confirmed the entry outright, so on a manual
-// division the money WAS the approval. Now: Approve on an unpaid entry approves it (`approved_at`, V511) and leaves it pending with the
+// division the money WAS the approval. Now: Approve on an unpaid entry approves it (`approved_at`, V513) and leaves it pending with the
 // fee due; Mark paid records the money and, on a manual division, leaves an unapproved entry `paid` awaiting approval. Whichever comes
 // second confirms the entry. Every step runs through its real producer (approveRegistration, markRegistrationPaidOffline, the card
 // webhook core); the expected copy is read from the dictionaries' own words and the amount from the money formatter, never from the code.

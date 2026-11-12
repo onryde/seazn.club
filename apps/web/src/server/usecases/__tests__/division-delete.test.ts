@@ -218,7 +218,7 @@ describe.skipIf(!HAS_DB)("division delete (v3/09 §4)", () => {
     const { comp, division } = await seedDivision(auth);
     const intent = "pi_" + randomUUID().slice(0, 8);
     const { groupId, regIds } = await seedCart(comp.id, division.id, [500], intent, [true]);
-    // The late payment's refund is booked as history AND late (`checkout-completion.ts`, V510), on both totals.
+    // The late payment's refund is booked as history AND late (`checkout-completion.ts`, V512), on both totals.
     await sql`update registrations set refunded_cents = 500, late_refunded_cents = 500 where id = ${regIds[0]}`;
     await sql`update registration_groups set refunded_cents = 500 where id = ${groupId}`;
     await expectPaymentsBlock(auth, division.id);

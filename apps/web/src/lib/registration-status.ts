@@ -37,7 +37,7 @@ export function isTerminalRegistrationStatus(status: string): boolean {
 }
 
 /** What has been sent back of THIS entry's CURRENT payment (polish wave P5, P1-review carry b): its refund history
- *  (`refunded_cents`, V368) minus the refunds of LATE payments (`late_refunded_cents`, V510) - a late payment is never the entry's
+ *  (`refunded_cents`, V368) minus the refunds of LATE payments (`late_refunded_cents`, V512) - a late payment is never the entry's
  *  current payment (a late outcome never stamps its intent on the entry), and a re-promotion resets the fee but keeps the history.
  *  The cap of every refund of the current payment is `amount_cents - ownPaymentRefundedCents(row)`: the organiser's Refund, the
  *  withdrawal refund, the pool-deadline sweep, the reject refund, the panel's Refund control and the payment page all read this.
@@ -67,7 +67,7 @@ export function entryPriceCents(
  *  A fee is owed only while the entry is `pending`; a `paid` entry has paid, so it waits on approval alone, and only when the
  *  division reviews entries by hand. `feeCents` is the entry's OWN fee (`registrations.amount_cents`), never the cart's.
  *
- *  `approved` (polish wave P5, W12): the organiser already said yes to this entry (`registrations.approved_at`, V511) while its fee was
+ *  `approved` (polish wave P5, W12): the organiser already said yes to this entry (`registrations.approved_at`, V513) while its fee was
  *  still owed - the entry stays `pending` and waits on its payment alone, which then confirms it. Every caller passes it: an entry the
  *  organiser approved never reads "awaiting approval" again. */
 export type EntryWaitingOn = "payment" | "approval" | "payment_and_approval";

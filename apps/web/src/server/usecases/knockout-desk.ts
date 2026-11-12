@@ -29,7 +29,7 @@ export async function listKnockoutWaiting(auth: AuthCtx, divisionId: string): Pr
     const rows = await tx<{ id: string; stage_id: string; display_name: string; paid: boolean }[]>`
       select e.id, e.knockout_waiting_stage_id as stage_id, e.display_name,
              -- Polish wave P5 (carry d): THIS entry's own card payment (V387), net of the refunds of that payment
-             -- (ownPaymentRefundedCents, V510) - never the cart's intent, which names whichever entry paid.
+             -- (ownPaymentRefundedCents, V512) - never the cart's intent, which names whichever entry paid.
              exists (select 1 from registrations r
                       where r.entrant_id = e.id and r.payment_intent_id is not null
                         and r.amount_cents > r.refunded_cents - r.late_refunded_cents) as paid

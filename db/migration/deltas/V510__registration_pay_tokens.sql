@@ -1,5 +1,5 @@
 -- =============================================================================
--- V505 — the player payment page (plan 2026-11-11-player-payment-page, Task 1).
+-- V510 — the player payment page (plan 2026-11-11-player-payment-page, Task 1).
 --
 -- Chase mails link a per-entry page on our domain, `/r/pay/<token>`, instead of a raw Stripe Checkout url. The token is
 -- 32 random bytes (base64url) shown once inside the mail's url; only its sha256 is stored, exactly as

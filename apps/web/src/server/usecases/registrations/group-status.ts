@@ -68,7 +68,7 @@ export interface GroupEntryView {
    *  fee it says what a not-yet-confirmed entry is WAITING ON (`entryWaitingOn`): the status page names it instead of a bare
    *  "pending". A division with no settings row reviews nothing by hand, the same default the submit path uses. */
   approval: "auto" | "manual";
-  /** Polish wave P5 (W12): the organiser approved this entry while its fee was still owed (`approved_at`, V511), so it waits on payment
+  /** Polish wave P5 (W12): the organiser approved this entry while its fee was still owed (`approved_at`, V513), so it waits on payment
    *  alone - with `approval` it keeps the page from saying "awaiting approval" about an entry the organiser already said yes to. */
   approved: boolean;
   /** Polish wave P3 (W6): for a WAITLISTED entry, the fee a promotion would set (the division's own `fee_cents`, what

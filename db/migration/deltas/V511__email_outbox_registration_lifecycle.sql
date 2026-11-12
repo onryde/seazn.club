@@ -1,4 +1,4 @@
--- V507 -- the email outbox's registrant lifecycle kinds (polish wave P2, walkthrough W1-W4, W10, W11, W13).
+-- V511 -- the email outbox's registrant lifecycle kinds (polish wave P2, walkthrough W1-W4, W10, W11, W13).
 --
 -- WHAT THIS ADDS. Mails to the person an entry is about, after its confirmation: `registration_paid` (the payment landed, by card or
 -- marked offline), `registration_approved` (the organiser approved it; the contact and any teammate with an address),
@@ -9,9 +9,9 @@
 -- The CHECK restates every kind: V503's fifty-two in V503's order (the last definer of email_outbox_kind_valid, re-checked
 -- 2026-11-12), then these. Nothing else moves: the once-key, the replace rule and the cancel function are V472's.
 --
--- Numbered V507 because this branch's V505 collides with main's (V505 sponsor_archive, V506 quick_matches): the renumber at merge is a
--- pure `git mv`, which the tests allow because they find this file by its SUFFIX (`__email_outbox_registration_lifecycle.sql`), never
--- its number. outbox-schema.test.ts reads the constraint back and requires it to equal constants.ts.
+-- Authored as V507 and renumbered to V511 at the rebase onto main (main took V506, V508 and V509): a pure `git mv`, which the tests
+-- allow because they find this file by its SUFFIX (`__email_outbox_registration_lifecycle.sql`), never its number.
+-- outbox-schema.test.ts reads the constraint back and requires it to equal constants.ts.
 
 alter table email_outbox drop constraint email_outbox_kind_valid,
   add constraint email_outbox_kind_valid check (kind in ('magic_link', 'chess_invite', 'registration_confirmation',

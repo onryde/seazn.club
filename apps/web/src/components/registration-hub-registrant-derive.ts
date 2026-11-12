@@ -403,7 +403,7 @@ export function deriveRegistrantActionFlags(
   const nonTerminal = !isTerminalRegistrationStatus(row.status);
   return {
     // Polish wave P5 (W12): Approve is its own decision - offered while the fee is still due (the entry then stays pending until the
-    // payment confirms it) and gone once given (`approved_at`, V511). It used to wait for Mark paid, which was itself the approval.
+    // payment confirms it) and gone once given (`approved_at`, V513). It used to wait for Mark paid, which was itself the approval.
     canApprove: awaitingManualDecision && row.approved_at === null,
     canReject: awaitingManualDecision,
     canWithdraw: nonTerminal,

@@ -208,7 +208,7 @@ async function fanOut(
  * teammate whose address is the contact's own is not mailed twice). Each in their own language: the contact's pick or account, a teammate's account or the club's.
  *
  * `reg` is the row AFTER the write. Only an entry that is `confirmed` there is told it is. Polish wave P5 (W12): an entry approved while
- * its fee is still due (`pending` with `approved_at`, V511) is told it is approved and that its place is confirmed once the fee is paid,
+ * its fee is still due (`pending` with `approved_at`, V513) is told it is approved and that its place is confirmed once the fee is paid,
  * with the amount. Any other state (a `paid` entry nobody approved) queues nothing here and says so in the log, because the mail is a
  * claim about the row, not about what the organiser pressed.
  *

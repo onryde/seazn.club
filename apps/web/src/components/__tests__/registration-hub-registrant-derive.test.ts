@@ -40,9 +40,9 @@ const NOT_A_SOLO_SIGNUP = {
   division_started: false,
   // No payment of THIS entry's own unless a case says so (polish wave W8: Refund reads the entry's intent, never the cart's).
   entry_payment_intent_id: null,
-  // Not approved ahead of payment unless a case says so (polish wave P5, W12: V511 `approved_at`).
+  // Not approved ahead of payment unless a case says so (polish wave P5, W12: V513 `approved_at`).
   approved_at: null,
-  // No late payment sent back unless a case says so (V510; polish wave final fix m2).
+  // No late payment sent back unless a case says so (V512; polish wave final fix m2).
   late_refunded_cents: 0,
 } as const;
 
@@ -379,7 +379,7 @@ describe("deriveRegistrantActionFlags", () => {
   // for why (this pure function never sees the division's settings).
   //
   // Polish wave P5 (W12) retires that carve-out: approveRegistration now APPROVES an unpaid entry (it stays pending with
-  // `approved_at`, V511, and its payment confirms it), so Approve is offered on an unpaid entry until it has been approved once.
+  // `approved_at`, V513, and its payment confirms it), so Approve is offered on an unpaid entry until it has been approved once.
   describe("approve's awaiting-payment carve-out (RS005 R1 finding 1), retired by W12", () => {
     it("approve is PRESENT on a manual, fee-bearing, unpaid, pending entry not yet approved (W12: approved, fee still due)", () => {
       expect(
@@ -773,7 +773,7 @@ describe("deriveRegistrantActionFlags", () => {
       ).toBe(false);
     });
 
-    // Polish wave final fix m2: the cap is what is left of THIS payment - its refunds minus the refunds of LATE payments (V510,
+    // Polish wave final fix m2: the cap is what is left of THIS payment - its refunds minus the refunds of LATE payments (V512,
     // `ownPaymentRefundedCents`), the same cap `refundRegistration` applies. A re-promoted entry whose earlier, late payment was sent
     // back in full and which then paid again has refunded_cents == amount_cents, all of it late: its own payment is untouched.
     it("is TRUE on an entry whose refunds were all of a LATE payment, and follows the remaining balance of its own (m2)", () => {

@@ -128,7 +128,7 @@ export async function markRegistrationPaidOffline(
       where id = ${reg.group_id}`;
     // Polish wave P5 (W12): on a manual-approval division the payment is not the approval. An entry the organiser has not approved
     // stays `paid` (awaiting approval) - Approve then confirms it - as a card payment does (`confirmPaidRegistration`, ruling B); one
-    // already approved (`approved_at`, V511) is confirmed by its payment.
+    // already approved (`approved_at`, V513) is confirmed by its payment.
     const awaitingApproval = settings?.approval === "manual" && reg.approved_at === null;
     if (!awaitingApproval) await materialise(tx, { ...reg, status: "paid" }, settings?.entrant_kind ?? "individual", seatGate);
     await audit(tx, div.competition_id, auth.orgId, "registration.offline_paid", {

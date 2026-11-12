@@ -81,7 +81,7 @@ Migrations: highest on origin/main is `V500__drop_org_referral.sql`. In flight e
 ### Task 1: Pay-token table, per-entry session pointer, token helpers
 
 **Files:**
-- Create: `db/migration/deltas/V505__registration_pay_tokens.sql`
+- Create: `db/migration/deltas/V510__registration_pay_tokens.sql` (authored as V505; renumbered at the rebase onto main)
 - Create: `src/server/usecases/registrations/pay-token.ts`
 - Create: `src/lib/registration-pay.ts` (client-safe: paths, notice flag, headers)
 - Modify: `src/server/usecases/registrations/index.ts` (barrel exports)
@@ -108,7 +108,7 @@ Migrations: highest on origin/main is `V500__drop_org_referral.sql`. In flight e
 - [ ] **Step 4: Run to verify pass.** Expected `EXIT=0`, 6/6.
 - [ ] **Step 5: Mutate once**: drop `force row level security` → the cross-org test must fail; restore. Record the killer in the commit body.
 - [ ] **Step 6: E2E / smoke** — no surface yet; traced forward by T7 `registration-pay-page.spec.ts` "card golden path" and smoke `registrationPayPage`.
-- [ ] **Step 7: Commit** `feat(registration): pay-page tokens and per-entry session pointer (V505)`.
+- [ ] **Step 7: Commit** `feat(registration): pay-page tokens and per-entry session pointer (V505)`. (Renumbered to V510 at the rebase onto main.)
 
 ### Task 2: The page document — `payPageDocByToken`
 

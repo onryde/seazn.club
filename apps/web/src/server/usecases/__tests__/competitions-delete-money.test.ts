@@ -140,7 +140,7 @@ describe.skipIf(!HAS_DB)("deleteCompetition money guards", () => {
   it("409s for an entry that paid again after its late payment was refunded (only its current payment's refunds count)", async () => {
     const { auth, compId, divId } = await seedCompWithDivision();
     const intent = "pi_" + randomUUID().slice(0, 8);
-    // The late payment's refund is booked as history AND late (`checkout-completion.ts`, V510), on both totals.
+    // The late payment's refund is booked as history AND late (`checkout-completion.ts`, V512), on both totals.
     await seedCart(compId, divId, [{ amount: 500, status: "confirmed", intent, refunded: 500, late: 500 }], { intent, refunded: 500 });
     await expect(deleteCompetition(auth, compId)).rejects.toMatchObject({
       status: 409,

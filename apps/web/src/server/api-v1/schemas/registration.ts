@@ -157,7 +157,7 @@ export const Registration = z.object({
   refunded_at: z.string().nullable(),
   expires_at: z.string().nullable(),
   offline_marked_paid_at: z.string().nullable(),
-  /** When the organiser approved this entry on a manual-approval division while its fee was still owed (V511): the entry stays
+  /** When the organiser approved this entry on a manual-approval division while its fee was still owed (V513): the entry stays
    *  `pending` until it is paid, and its payment then confirms it. Null when never approved that way (an entry approved after paying
    *  is confirmed at once and carries no stamp). */
   approved_at: z.string().nullable(),

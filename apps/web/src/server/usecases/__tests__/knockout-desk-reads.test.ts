@@ -220,7 +220,7 @@ describe.skipIf(!HAS_DB)("T19 listKnockoutWaiting: the stage card's waiting play
   it("an entry that paid again after a late payment was refunded is still paid (only its current payment's refunds count)", async () => {
     const r = await rig({ n: 6 });
     const paid = await paidArrival(r, "Paid Again");
-    // A late payment's refund is booked as history AND late (`checkout-completion.ts`, V510); the in-time payment is untouched.
+    // A late payment's refund is booked as history AND late (`checkout-completion.ts`, V512); the in-time payment is untouched.
     await sql`update registrations
                  set refunded_cents = refunded_cents + amount_cents, late_refunded_cents = late_refunded_cents + amount_cents
                where id = ${paid.registrationId}`;

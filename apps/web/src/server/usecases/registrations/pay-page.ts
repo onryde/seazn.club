@@ -123,7 +123,7 @@ export async function payPageDocByToken(token: string, now: Date): Promise<PayPa
   // Fix round 1 (F3): "refunded" is about the payment the entry holds NOW. `refunded_cents` keeps the whole history, including a
   // late payment sent back while the entry was off the list (lapsed, expired): that money was never this payment, so a re-promoted
   // entry that then paid in time is paid, not refunded. Polish wave P5 (carry b): the late part is booked on the entry
-  // (`late_refunded_cents`, V510, backfilled from the late-refund audit rows this read used to sum), and the rule is the one every
+  // (`late_refunded_cents`, V512, backfilled from the late-refund audit rows this read used to sum), and the rule is the one every
   // refund cap reads.
   const refundedCents = ownPaymentRefundedCents(reg);
   const state = payPageState({ status: reg.status, refundedCents, deadline, method }, now);

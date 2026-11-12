@@ -2818,7 +2818,7 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
       const res = await seedRegistration(competition.id, division.id, settings, { amountCents: 500 });
       await handleRegistrationCheckoutCompleted(fakeSession(res.registration.id, 500));
       const intent = (await loadWithGroup(res.registration.id)).entry_payment_intent_id!;
-      // An earlier, late payment of 500 was sent back (V510): history 500, all of it late.
+      // An earlier, late payment of 500 was sent back (V512): history 500, all of it late.
       await sql`update registrations set refunded_cents = 500, late_refunded_cents = 500 where id = ${res.registration.id}`;
 
       await sync(intent, 200);

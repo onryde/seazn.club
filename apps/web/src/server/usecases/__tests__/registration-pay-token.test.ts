@@ -31,7 +31,7 @@ async function pendingEntry() {
   return { orgId: rig.orgId, registrationId: seeded.registration.id };
 }
 
-describe.skipIf(!HAS_DB)("registration pay tokens (V505)", () => {
+describe.skipIf(!HAS_DB)("registration pay tokens (V510)", () => {
   it("unknown token resolves to null (empty case first)", async () => {
     expect(await registrationIdByPayToken("x".repeat(43))).toBeNull();
     expect(await registrationIdByPayToken("")).toBeNull();

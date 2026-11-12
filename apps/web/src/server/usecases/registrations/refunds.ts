@@ -32,7 +32,7 @@ export async function syncRegistrationRefund(charge: Stripe.Charge): Promise<voi
   // The per-entry readers - the delete guards, the knockout desk, the panel's Refund - read it, and a dashboard refund never reached
   // it: a fully refunded entry was still offered Refund (Stripe then refused) and never cleared a delete guard. What was sent back of
   // THIS payment is `amount_refunded`, capped at the entry's price; a refunded LATE payment already in its history
-  // (`late_refunded_cents`, V510) is another payment's and stays on top. Monotonic like the cart's. A payment shared by several entries
+  // (`late_refunded_cents`, V512) is another payment's and stays on top. Monotonic like the cart's. A payment shared by several entries
   // of a cart is not split by guessing: the cart mirror above is all it gets. An in-app refund holds the entry row across its Stripe
   // call (`refundEntryUnderLock`, `refundRegistration`), so this waits for its booking and then finds nothing left to raise.
   await sql`

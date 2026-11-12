@@ -108,7 +108,7 @@ async function divisionCompetitionId(tx: Tx, divisionId: string): Promise<string
  * for money that had already gone back.
  *
  * Polish wave P5 (W12): an entry whose fee is still owed is APPROVED, not
- * refused: it stays `pending` with `approved_at` stamped (V511), nobody is
+ * refused: it stays `pending` with `approved_at` stamped (V513), nobody is
  * seated, and the registrant is mailed "approved - payment still due". Its
  * payment (the card webhook or Mark paid) then confirms it. A second Approve
  * of such an entry is a no-op (one stamp, one mail).
@@ -149,7 +149,7 @@ export async function approveRegistration(
     const competitionId = await divisionCompetitionId(tx, reg.division_id);
     assertNotFrozen(frozen, competitionId);
     // Polish wave P5 (W12): Approve and the payment are two decisions. An entry whose fee is still due is APPROVED and stays pending
-    // (payment due); the payment - the card webhook or Mark paid - then confirms it (`approved_at`, V511). It used to be refused
+    // (payment due); the payment - the card webhook or Mark paid - then confirms it (`approved_at`, V513). It used to be refused
     // ("mark it paid first"), so Approve could not be given before the money and Mark paid was the approval.
     // H-2: THIS entry's price - a solo sign-up's own, never the team's (`entryPriceCents`).
     if (entryPriceCents(settings, reg.free_agent) > 0 && reg.status !== "paid" && reg.entry_payment_intent_id === null) {

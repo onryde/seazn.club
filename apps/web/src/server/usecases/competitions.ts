@@ -927,7 +927,7 @@ export async function deleteCompetition(auth: AuthCtx, id: string): Promise<void
       throw new HttpError(409, "competition has an Event Pass — archive it instead");
     }
     // Polish wave P5 (carry d): per ENTRY - its own card payment (V387) net of
-    // that payment's refunds (`ownPaymentRefundedCents`, V510). The cart's
+    // that payment's refunds (`ownPaymentRefundedCents`, V512). The cart's
     // totals never clear while it holds an unpaid entry beside a refunded one.
     const [liveMoney] = await tx`
       select 1 from registrations r

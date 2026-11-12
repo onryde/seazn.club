@@ -98,7 +98,7 @@ describe("a pending entry says what it is waiting on (W2, W12)", () => {
     expect(seen.size, "the three reasons are three different sentences").toBe(3);
   });
 
-  // Polish wave P5 (W12): the organiser approved the entry while its fee was owed (`approved`, V511). The card then names the
+  // Polish wave P5 (W12): the organiser approved the entry while its fee was owed (`approved`, V513). The card then names the
   // payment alone - the same reason an unpaid auto-approval entry gives (the MATRIX's first row), never "payment and approval".
   it("an entry approved ahead of its payment waits on payment alone; unapproved, on both (the pair)", () => {
     const approvedMarkup = render(props({ status: "pending", amount_cents: 1500, approval: "manual", approved: true }));

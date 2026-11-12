@@ -46,7 +46,7 @@ const SPEC_STATUSES = [
 // the outbox after phase 3: sponsor deals Task 23's `sponsor_deal_paid` (plan 2026-11-07-sponsor-deals, D13; its delta is found by
 // suffix, `__email_outbox_sponsor_deal_paid.sql`), then the five registrant lifecycle kinds (polish wave P2) in
 // `__email_outbox_registration_lifecycle.sql`, then polish wave P5's two (rejected, promotion lapsed) in
-// `V512__email_outbox_registration_rejected_lapsed.sql`, which restates that list plus two and is therefore the LAST definer of the CHECK. The
+// `V514__email_outbox_registration_rejected_lapsed.sql`, which restates that list plus two and is therefore the LAST definer of the CHECK. The
 // vocabulary test compares constants.ts with it, and the live-CHECK read compares
 // the database's constraint with it as well.
 const SPEC_KINDS = [

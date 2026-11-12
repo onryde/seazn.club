@@ -1379,7 +1379,7 @@ describe.skipIf(!HAS_DB)("a late refund is decided per payment, and the page's r
     return { ...w, second };
   }
 
-  it("the late producer books what it sent back as LATE (V510), beside the history - and a redelivery books nothing more", async () => {
+  it("the late producer books what it sent back as LATE (V512), beside the history - and a redelivery books nothing more", async () => {
     const w = await oneLateRefund();
     const row = await loadWithGroup(w.reg.id);
     expect(row.refunded_cents).toBe(1500);

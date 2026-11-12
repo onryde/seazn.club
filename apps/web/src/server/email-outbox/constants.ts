@@ -3,7 +3,7 @@
 // can all read them without a cycle.
 //
 // The same two lists are typed again as CHECK constraints: the statuses in db/migration/deltas/V470__email_outbox.sql, the kinds
-// (as last redefined) in polish wave P5's `V512__email_outbox_registration_rejected_lapsed.sql` (V507's registration lifecycle list, the
+// (as last redefined) in polish wave P5's `V514__email_outbox_registration_rejected_lapsed.sql` (V511's registration lifecycle list, the
 // sponsor deals delta's V503 list plus five, plus two more; that is 59). They are two copies of one fact, so outbox-schema.test.ts reads the
 // constraint definitions back from the catalogue and requires them to name exactly these members.
 

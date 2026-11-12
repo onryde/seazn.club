@@ -510,7 +510,7 @@ export async function deleteDivision(auth: AuthCtx, id: string): Promise<void> {
     // delete cascades the registrations away, so block it while any card
     // payment on this division is not fully refunded. Archive stays open.
     // Polish wave P5 (carry d): per ENTRY - its own card payment (V387) net of
-    // that payment's refunds (`ownPaymentRefundedCents`, V510). The cart's
+    // that payment's refunds (`ownPaymentRefundedCents`, V512). The cart's
     // totals never clear while it holds an unpaid entry beside a refunded one.
     const [{ live_payments }] = await tx<{ live_payments: number }[]>`
       select count(*)::int as live_payments from registrations r

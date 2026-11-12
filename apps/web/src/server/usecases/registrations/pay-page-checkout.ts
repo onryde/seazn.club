@@ -1,7 +1,7 @@
 import "server-only";
 import type Stripe from "stripe";
 // Pay from the player payment page (plan 2026-11-11-player-payment-page, Task 3; see ./index.ts): reuse-or-expire on the
-// entry's own session pointer (`registrations.pay_session_id`, V505), mint for this entry alone, return to the page.
+// entry's own session pointer (`registrations.pay_session_id`, V510), mint for this entry alone, return to the page.
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { registrationPayPath } from "@/lib/registration-pay";

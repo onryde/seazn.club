@@ -1,7 +1,7 @@
 import "server-only";
 // The player payment page's token (plan 2026-11-11-player-payment-page, Task 1; see ./index.ts). A chase mail links
 // `/r/pay/<token>`: 32 random bytes shown once inside the mail's url, stored only as their sha256
-// (`registration_pay_tokens.token_hash`, V505). A fresh token per mail; every token for an entry stays valid - the entry's
+// (`registration_pay_tokens.token_hash`, V510). A fresh token per mail; every token for an entry stays valid - the entry's
 // state, not token revocation, closes the page.
 import { sql, type Tx } from "@/lib/db";
 import { registrationPayPath } from "@/lib/registration-pay";

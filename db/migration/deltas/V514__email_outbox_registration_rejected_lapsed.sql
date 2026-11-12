@@ -1,11 +1,11 @@
--- V512 -- the email outbox's last two registrant lifecycle kinds (polish wave P5, the P2 carry).
+-- V514 -- the email outbox's last two registrant lifecycle kinds (polish wave P5, the P2 carry).
 --
 -- WHAT THIS ADDS. `registration_rejected` (the organiser rejected the entry on a manual-approval division; a refund line when the
 -- entry's own card payment is being returned) and `registration_promotion_lapsed` (an entry promoted off the waitlist was not paid in
 -- its pay window and went back to the waitlist). Literal addresses, not transactional (like every registration_* mail). Each is queued
 -- in the transaction that records the fact it reports, once per fact.
 --
--- The CHECK restates every kind: V503's fifty-two in V503's order, V507's five registration lifecycle kinds, then these two (V507 is
+-- The CHECK restates every kind: V503's fifty-two in V503's order, V511's five registration lifecycle kinds, then these two (V511 is
 -- the previous definer of email_outbox_kind_valid, re-checked 2026-11-12; origin/main defines none after V503). Nothing else moves:
 -- the once-key, the replace rule and the cancel function are V472's. outbox-schema.test.ts reads the constraint back and requires it
 -- to equal constants.ts.

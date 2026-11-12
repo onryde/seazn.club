@@ -97,7 +97,7 @@ export interface EntryCardProps {
      *  organiser's approval as well as (or instead of) payment. REQUIRED for the same reason `assigned_team_name` is: an
      *  omitted value would silently read as "no review" and the card would name only the payment. */
     approval: "auto" | "manual";
-    /** Polish wave P5 (W12): the organiser approved this entry while its fee was still owed (V511), so it waits on payment alone.
+    /** Polish wave P5 (W12): the organiser approved this entry while its fee was still owed (V513), so it waits on payment alone.
      *  REQUIRED for the reason `approval` is: an omitted value would read "awaiting approval" about an entry already approved. */
     approved: boolean;
     /** Polish wave P3 (W6): the fee a promotion off the waitlist WOULD set (the division's own fee), null on every other status.

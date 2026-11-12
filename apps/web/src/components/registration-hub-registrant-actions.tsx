@@ -141,7 +141,7 @@ export interface RegistrationHubRegistrantActionsProps {
   /** ISO time of the organiser's last "Send payment reminder" press for this entry; null if never. Within an hour of it, the next
    *  press asks first. */
   lastRemindedAt: string | null;
-  /** Polish wave P5 (W12): when the organiser approved this entry while its fee was still due (`approved_at`, V511), ISO; null if
+  /** Polish wave P5 (W12): when the organiser approved this entry while its fee was still due (`approved_at`, V513), ISO; null if
    *  never approved that way. Approve is then done and the payment confirms the entry. */
   approvedAt: string | null;
 }

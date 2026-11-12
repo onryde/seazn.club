@@ -22,7 +22,7 @@ export interface RegistrationEmailEntry {
   status: string;
   feeCents: number;
   approval: "auto" | "manual";
-  /** The organiser approved this entry while its fee was owed (V511, polish wave P5 W12): it waits on payment alone. Absent = not
+  /** The organiser approved this entry while its fee was owed (V513, polish wave P5 W12): it waits on payment alone. Absent = not
    *  approved, which is every entry at submit; the cart mail's rebuild (resend, dispute evidence) reads the live column. */
   approved?: boolean;
 }
