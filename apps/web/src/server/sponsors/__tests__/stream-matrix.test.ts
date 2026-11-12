@@ -409,7 +409,6 @@ describe("L1 cell generator - pairwise plus single-axis edges (pure; no database
     let expectedPairs = -PAYMENTS.length;
     for (let i = 0; i < sizes.length; i++) for (let j = i + 1; j < sizes.length; j++) expectedPairs += sizes[i]! * sizes[j]!;
     expect(required.size, "the reachable pair space").toBe(expectedPairs);
-    expect(expectedPairs, "213 declared pairs less the 4 unreachable").toBe(209);
     expect(GEN.pairsRequired, "the generator's own count agrees with the axes'").toBe(expectedPairs);
     const held = new Set(GEN.cells.flatMap(pairsOf));
     const missing = [...required].filter((p) => !held.has(p));

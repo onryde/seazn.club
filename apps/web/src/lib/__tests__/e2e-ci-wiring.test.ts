@@ -304,10 +304,10 @@ const WALKTHROUGH_SPECS: string[] = [
   // composed session's overlay page (the compositor stood in for at its HTTP boundary), the short link followed, the report
   // shared, read in French and revoked; a viewer refused. Holds the stream-slot pool (its own PoolHolder).
   "sponsors-journey.spec.ts",
-  // Sponsor x stream matrix, layer L2: one composed journey per plan (Free, Pass, Pro) with deals of every state and payment type
-  // changing mid-stream - the plan the overlay serves, the rotation it follows, the airings a heartbeat records and the Overview's
-  // Times shown - and an OBS (no compositor) check that the card shows and nothing is recorded. Holds the stream-slot pool (its own
-  // PoolHolder).
+  // Sponsor x stream matrix, layer L2: one composed journey per plan (J1 Free, J2 Pass, J3 Pro) with deals of every state and payment
+  // type changing mid-stream, and J4, a Pro club whose PLAN changes while the stream is live (down to Free and back) - the plan the
+  // overlay serves, the rotation it follows, the airings a heartbeat records and the Overview's Times shown - and an OBS (no
+  // compositor) check (O1) that the card shows and nothing is recorded. Holds the stream-slot pool (its own PoolHolder).
   "sponsor-stream-matrix.spec.ts",
   // Title sponsor poster: an organiser picks and saves a poster (the crop warning, the stored url), a visitor sees it in the hero panel
   // and, at 320, the band, taps it and is counted, a second Title sponsor rotates in on the page's driven clock, Remove falls back to the

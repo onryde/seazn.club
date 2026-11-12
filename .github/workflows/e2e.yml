@@ -542,31 +542,31 @@ jobs:
           # slash, as `parallel 1/4` above already does.
           #
           # THREE THINGS THAT WENT FROM 1x TO 3x with the first split, and are
-          # 4x now, because every leg carries `project: walkthrough` and the
-          # conditions below key on that. Read these before diagnosing a red as
-          # a product defect:
+          # 5x now (the fifth leg, "sponsor", joined 2026-11-12), because every
+          # leg carries `project: walkthrough` and the conditions below key on
+          # that. Read these before diagnosing a red as a product defect:
           #
-          #   * `stripe:sync` runs four times concurrently against one
+          #   * `stripe:sync` runs five times concurrently against one
           #     Stripe test account. It MUST — the step writes price ids into
           #     each leg's own Postgres — and its own comment below traces
           #     what the concurrency does and what is left unverified.
-          #   * four `stripe listen` forwarders run against that same account.
+          #   * five `stripe listen` forwarders run against that same account.
           #     Each posts to its own server with its own minted secret, so the
-          #     leg holding a money spec is served correctly; the other three
+          #     leg holding a money spec is served correctly; the other four
           #     also receive that leg's events and post them to a server whose
           #     database has none of those rows. Noise, not a failure — but it is
           #     where to look first if a money spec reds naming an id nothing in
           #     its own DB owns.
           #   * the "Connect walkthrough not configured" `::warning::` is now
-          #     emitted up to four times for one missing secret. Cosmetic; do
-          #     not read four warnings as four problems.
+          #     emitted up to five times for one missing secret. Cosmetic; do
+          #     not read five warnings as five problems.
           #
           # The Event Pass money-path check below was BROKEN by the first split
           # and is repaired in the same commit — see its own comment. It is the
           # pattern to look for when adding a leg: any step that reads the
           # Playwright JSON report sees only ITS OWN leg's tests. It keys on the
           # FILE, so it is correct for this cut too: event-pass.spec.ts lands in
-          # "rest" 1/2 and the other three legs report a notice.
+          # "rest" 1/2 and the other four legs report a notice.
           - group: walkthrough capture
             slug: walkthrough-capture
             project: walkthrough
@@ -598,20 +598,26 @@ jobs:
           # MEASURED on run 43242862358 (its first version, four tests): 6
           # passed incl. the two setup tests in 2.8 min, job 5.0 min (O1 20 s,
           # J1 46 s, J2 49 s, J3 ~49 s). Review round 1 then added carousel
-          # laps and a fifth test (J4, the plan change mid-stream), so the
-          # figure is to be re-measured from the next run. It stays its own
-          # leg even though 5 min would fit a rest shard: J3 calls the GLOBAL
-          # sponsor-deal cron sweep (every org in the database), so no other
-          # spec's deals may share its database. Its pool holds are declared up
-          # to 325 s of the pool's 330 s limit at the 10 s connect delay set
-          # below (a local run at the default delay is refused by name).
+          # laps and a fifth test (J4, the plan change mid-stream); MEASURED
+          # again on run 43249678949: 7 passed incl. setup, tests 7.6 min, job
+          # 10.0 min. It stays its own leg: adding it to the slowest rest
+          # shard (13.5 min) would break the 20 min cap, and J3 calls the
+          # GLOBAL sponsor-deal cron sweep (every org in the database), so no
+          # other spec's deals may share its database. Its pool holds are
+          # declared up to 325 s of the pool's 330 s limit at the 10 s connect
+          # delay set below (a local run at the default delay is refused by
+          # name).
           # It runs whole (no --shard): one file, and a `rest` shard cannot be
           # cut around it. `walkthrough_slice: sponsor` selects exactly that
           # file in apps/web/playwright.config.ts and "rest" ignores it;
           # e2e-ci-wiring.test.ts pins both. Like every walkthrough leg it also
           # runs the Event Pass money-path check (keyed on event-pass.spec.ts,
           # so it prints the notice here) and the Connect steps, which skip
-          # when their secrets are absent.
+          # when their secrets are absent. This leg does not NEED stripe:sync or
+          # the Connect forwarder (J3's online deal is a signed webhook, no
+          # price ids, no Connect); they stay because every step keys on
+          # `matrix.project`, not a per-leg field, so skipping them is new
+          # plumbing across several live-CI conditions for a small saving.
           - group: walkthrough sponsor
             slug: walkthrough-sponsor
             project: walkthrough

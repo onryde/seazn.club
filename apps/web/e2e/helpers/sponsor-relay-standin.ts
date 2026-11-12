@@ -67,6 +67,15 @@ export function contractValidator(def: "heartbeat" | "heartbeatReply") {
   return validate;
 }
 
+/** The most `airings` one heartbeat may carry, read off the vendored contract's own `$defs/heartbeat` (the array branch's `maxItems`), so a
+ *  spec that chunks the page's showings into beats never types the bound. Refused by name if the contract stops bounding it. */
+export function contractHeartbeatAiringsMax(): number {
+  const airings = (contractValidator("heartbeat").schema as { properties?: { airings?: { anyOf?: readonly { maxItems?: number }[] } } }).properties?.airings;
+  const max = airings?.anyOf?.map((branch) => branch.maxItems).find((n): n is number => typeof n === "number");
+  if (max === undefined) throw new Error("the vendored relay-job.v1 contract no longer bounds a heartbeat's airings: $defs/heartbeat.properties.airings has no maxItems");
+  return max;
+}
+
 /** Why `body` breaks the contract's `$defs/<def>`, or null when it keeps it. */
 function contractProblem(def: "heartbeat" | "heartbeatReply", body: unknown): string | null {
   const validate = contractValidator(def);
