@@ -3,8 +3,8 @@
 // can all read them without a cycle.
 //
 // The same two lists are typed again as CHECK constraints: the statuses in db/migration/deltas/V470__email_outbox.sql, the kinds
-// (as last redefined) in the registration lifecycle delta `V<n>__email_outbox_registration_lifecycle.sql` (the sponsor deals delta's list,
-// V503, plus five; that is 57). They are two copies of one fact, so outbox-schema.test.ts reads the
+// (as last redefined) in polish wave P5's `V512__email_outbox_registration_rejected_lapsed.sql` (V507's registration lifecycle list, the
+// sponsor deals delta's V503 list plus five, plus two more; that is 59). They are two copies of one fact, so outbox-schema.test.ts reads the
 // constraint definitions back from the catalogue and requires them to name exactly these members.
 
 export const OUTBOX_KINDS = [
@@ -71,6 +71,9 @@ export const OUTBOX_KINDS = [
   "registration_expired",
   "registration_withdrawn",
   "registration_joined",
+  // Polish wave P5 (P2 carry): the organiser rejected the entry; a promoted entry's pay window lapsed. Literal, not transactional.
+  "registration_rejected",
+  "registration_promotion_lapsed",
 ] as const;
 export type OutboxKind = (typeof OUTBOX_KINDS)[number];
 
@@ -146,6 +149,9 @@ export const OUTBOX_KIND_FACTS: Readonly<Record<OutboxKind, { to: "account" | "l
   registration_expired: { to: "literal", transactional: false },
   registration_withdrawn: { to: "literal", transactional: false },
   registration_joined: { to: "literal", transactional: false },
+  // Polish wave P5 (P2 carry): the organiser rejected the entry; a promoted entry's pay window lapsed. Literal, not transactional.
+  registration_rejected: { to: "literal", transactional: false },
+  registration_promotion_lapsed: { to: "literal", transactional: false },
 };
 
 /** Mail ABOUT an account that is addressed to a literal address (phase-3 D5, wave 3): its verification and its email change. These kinds

@@ -31,11 +31,15 @@ import {
   registrationApprovedTemplate,
   registrationExpiredTemplate,
   registrationWithdrawnTemplate,
+  registrationRejectedTemplate,
+  registrationPromotionLapsedTemplate,
   registrationJoinedTemplate,
   type RegistrationPaidArgs,
   type RegistrationApprovedArgs,
   type RegistrationExpiredArgs,
   type RegistrationWithdrawnArgs,
+  type RegistrationRejectedArgs,
+  type RegistrationPromotionLapsedArgs,
   type RegistrationJoinedArgs,
   disputeAlertTemplate,
   type DisputeAlertArgs,
@@ -579,6 +583,14 @@ export async function registrationExpiredEmail(args: RegistrationExpiredArgs, lo
 
 export async function registrationWithdrawnEmail(args: RegistrationWithdrawnArgs, locale: Locale): Promise<EmailContent> {
   return registrationWithdrawnTemplate(args, await getDictionary(locale, "emails"));
+}
+
+export async function registrationRejectedEmail(args: RegistrationRejectedArgs, locale: Locale): Promise<EmailContent> {
+  return registrationRejectedTemplate(args, await getDictionary(locale, "emails"));
+}
+
+export async function registrationPromotionLapsedEmail(args: RegistrationPromotionLapsedArgs, locale: Locale): Promise<EmailContent> {
+  return registrationPromotionLapsedTemplate(args, await getDictionary(locale, "emails"));
 }
 
 export async function registrationJoinedEmail(args: RegistrationJoinedArgs, locale: Locale): Promise<EmailContent> {

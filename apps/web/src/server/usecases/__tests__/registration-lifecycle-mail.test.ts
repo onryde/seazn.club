@@ -31,6 +31,7 @@ vi.mock("@/server/email-outbox/transport", () => ({ deliver: deliverMock }));
 
 import { sql } from "@/lib/db";
 import { getDictionary } from "@/lib/i18n";
+import { t } from "@/lib/i18n-runtime";
 import { log } from "@/server/logger";
 import * as emailModule from "@/lib/email";
 import { generateRefCode } from "@/lib/ref-code";
@@ -62,6 +63,8 @@ import {
   queueRegistrationExpiredMails,
   queueRegistrationJoinedMail,
   queueRegistrationPaidMail,
+  queueRegistrationPromotionLapsedMails,
+  queueRegistrationRejectedMails,
   queueRegistrationWithdrawnMails,
 } from "../registrations/lifecycle-mail";
 import { joinTeamEntry } from "../registration-submit";
@@ -1397,5 +1400,260 @@ describe.skipIf(!HAS_DB)("W12: the cart confirmation rebuilt after an approval (
     expect(lineOf("Maya Cole")).toContain(String(dict["registration.entryStatusAwaitingPayment"]));
     expect(lineOf("Maya Cole")).not.toContain(String(dict["registration.entryStatusAwaitingPaymentApproval"]));
     expect(lineOf("Sam Cole"), `premise: the unapproved sibling (${sibling.id})`).toContain(String(dict["registration.entryStatusAwaitingPaymentApproval"]));
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// registration_rejected (polish wave P5, P2 carry): the organiser REJECTED the entry on a manual-approval division
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Before: a rejected registrant heard nothing; a card payer received only the refund receipt, with no word of WHY the money came back.
+// Now: the contact and every joined teammate are told the entry was not accepted, in their own language, in the transaction that records
+// the rejection. The contact (the payer) also reads that their card payment is being returned, with the amount still owed back on THIS
+// entry's own payment; a teammate never reads the contact's money. Expected copy is the dictionaries' own words, the amount the money
+// formatter's, never the code under test.
+
+const rejectedRows = async (regId: string) =>
+  sql<{ id: string; recipient: string; status: string; attempts: number }[]>`
+    select id, recipient, status, attempts from email_outbox where kind = 'registration_rejected' and ref_type = 'registration' and ref_id = ${regId} order by created_at, id`;
+
+describe.skipIf(!HAS_DB)("rejected: the organiser rejects an entry (real rejectRegistration)", () => {
+  it("an UNPAID entry: the contact (their language) and the joined teammate (the club's) are told it was not accepted, with no refund line; once", async () => {
+    const w = await offlineWorld(1500, "manual");
+    await sql`update organizations set default_locale = 'es' where id = ${w.orgId}`;
+    const to = address("rej");
+    const joiner = address("rej-j");
+    const ref = `P5-${randomUUID().slice(0, 6)}`;
+    const reg = await seedRegistration(w.competition.id, w.division.id, w.settings, { displayName: TEAM, contactEmail: to, locale: "fr", refCode: ref });
+    await sql`update registration_groups set contact_name = ${CONTACT} where id = ${reg.registration.group_id}`;
+    await addMate(reg.registration.id, w.orgId, { name: "Joe Joiner", email: joiner });
+    await addMate(reg.registration.id, w.orgId, { name: "Typed In", email: address("rej-t"), consent: "pending", source: "captain_entered" });
+
+    await rejectRegistration(w.owner, reg.registration.id);
+    expect(await statusOf(reg.registration.id), "premise: the real usecase rejected it").toBe("rejected");
+    await vi.waitFor(async () => {
+      const rows = await rejectedRows(reg.registration.id);
+      if (rows.length < 2 || rows.some((r) => r.attempts < 1)) throw new Error("the request's attempts have not been made yet");
+    });
+    const rows = await rejectedRows(reg.registration.id);
+    expect(rows.map((r) => r.recipient.toLowerCase()).sort(), "the contact and the joined teammate, never the unconsented one").toEqual([to, joiner].sort());
+    expect(rows.map((r) => r.attempts), "a request path: one attempt each, made after the response").toEqual([1, 1]);
+
+    const fr = await getDictionary("fr", "emails");
+    const es = await getDictionary("es", "emails");
+    const toContact = await body("registration_rejected", "registration", reg.registration.id, to);
+    const toJoiner = await body("registration_rejected", "registration", reg.registration.id, joiner);
+    expect(toContact.text, "the contact's own fr pick").toContain(String(fr["registrationRejected.title"]));
+    expect(toJoiner.text, "a teammate follows the club's default (es)").toContain(String(es["registrationRejected.title"]));
+    expect(words(toContact.html)).toContain(CONTACT);
+    expect(words(toJoiner.html)).toContain("Joe Joiner");
+    expect(toContact.text).toContain(TEAM);
+    expect(toContact.text, "the division's own name").toContain("Open");
+    expect(toContact.text).toContain(ref);
+    expect(toJoiner.text, "a teammate is not given the contact's reference").not.toContain(ref);
+    expect(toContact.text, "nothing was paid, so nothing is being returned").not.toContain(formatMoneyExact(1500, w.settings.currency, "fr"));
+
+    await rejectRegistration(w.owner, reg.registration.id);
+    expect(await rejectedRows(reg.registration.id), "a second Reject is a no-op: nothing more").toHaveLength(2);
+  });
+
+  it("a CARD-paid entry: the contact reads that their payment is being refunded, with the amount; the teammate does not; the receipt still follows", async () => {
+    const w = await manualStripeWorld(1500);
+    const to = address("rej-card");
+    const joiner = address("rej-card-j");
+    const reg = await seedRegistration(w.competition.id, w.division.id, w.settings, { displayName: TEAM, contactEmail: to, locale: "nl" });
+    await addMate(reg.registration.id, w.orgId, { name: "Joe Joiner", email: joiner });
+    await handleRegistrationCheckoutCompleted(fakeSession(reg.registration.id, 1500));
+    expect((await loadWithGroup(reg.registration.id)).status, "premise: paid and waiting for the organiser").toBe("paid");
+
+    await rejectRegistration(w.owner, reg.registration.id);
+    expect(stripeMock.refundCreate, "premise: the real reject refunded the payment").toHaveBeenCalledTimes(1);
+    const nl = await getDictionary("nl", "emails");
+    const amount = formatMoneyExact(1500, w.settings.currency, "nl");
+    const toContact = await body("registration_rejected", "registration", reg.registration.id, to);
+    expect(toContact.text).toContain(t(nl, "registrationRejected.textRefund", { amount }));
+    const toJoiner = await body("registration_rejected", "registration", reg.registration.id, joiner);
+    // The joiner reads the club's language (en), not the contact's: no refund line and no amount in ANY locale's spelling.
+    const en = await getDictionary("en", "emails");
+    expect(toJoiner.text, "premise: the joiner's mail is the club's en copy").toContain(String(en["registrationRejected.title"]));
+    expect(toJoiner.text, "the contact's money is not a teammate's news").not.toContain(String(en["registrationRejected.textRefund"]).split("{amount}")[0]!);
+    let spellings = 0;
+    for (const locale of ["en", "fr", "es", "nl"] as const) {
+      expect(toJoiner.text, `no ${locale} spelling of the amount`).not.toContain(formatMoneyExact(1500, w.settings.currency, locale));
+      spellings += 1;
+    }
+    expect(spellings).toBe(4);
+    const refundId = (await stripeMock.refundCreate.mock.results[0]!.value as { id: string }).id;
+    const receipts = await sql<{ recipient: string }[]>`select recipient from email_outbox where kind = 'refund_issued' and ref_type = 'refund' and ref_id = ${refundId}`;
+    expect(receipts.map((r) => r.recipient.toLowerCase()), "the refund receipt is unchanged: one, to the payer").toEqual([to]);
+  });
+
+  it("a card payment already PARTLY refunded: the line names what is still being returned (1000), never the entry fee (1500)", async () => {
+    const w = await manualStripeWorld(1500);
+    const to = address("rej-part");
+    const reg = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: to });
+    await handleRegistrationCheckoutCompleted(fakeSession(reg.registration.id, 1500));
+    await sql`update registrations set refunded_cents = 500 where id = ${reg.registration.id}`;
+
+    await rejectRegistration(w.owner, reg.registration.id);
+    expect(stripeMock.refundCreate.mock.calls[0]?.[0], "premise: the real reject refunds the remaining 1000").toMatchObject({ amount: 1000 });
+    const en = await getDictionary("en", "emails");
+    const b = await body("registration_rejected", "registration", reg.registration.id, to);
+    expect(b.text).toContain(t(en, "registrationRejected.textRefund", { amount: formatMoneyExact(1000, w.settings.currency, "en") }));
+    expect(b.text).not.toContain(formatMoneyExact(1500, w.settings.currency, "en"));
+  });
+
+  it("an OFFLINE payment (no card to return it to): told the entry was not accepted, with no refund line", async () => {
+    const w = await offlineWorld(1500, "manual");
+    const to = address("rej-off");
+    const reg = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: to });
+    await markRegistrationPaidOffline(w.owner, reg.registration.id);
+    expect(await statusOf(reg.registration.id), "premise: paid offline, waiting for the organiser (W12)").toBe("paid");
+    await rejectRegistration(w.owner, reg.registration.id);
+    expect(stripeMock.refundCreate).not.toHaveBeenCalled();
+    const b = await body("registration_rejected", "registration", reg.registration.id, to);
+    expect(b.text).not.toContain(formatMoneyExact(1500, w.settings.currency, "en"));
+  });
+
+  it("a refused Reject (an automatic-approval division) mails nothing", async () => {
+    const w = await offlineWorld(1500, "auto");
+    const reg = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("rej-auto") });
+    await expect(rejectRegistration(w.owner, reg.registration.id)).rejects.toMatchObject({ status: 422 });
+    expect(await rejectedRows(reg.registration.id)).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// registration_promotion_lapsed (polish wave P5, P2 carry): a promoted entry was not paid in its window and went back to the waitlist
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Before: the sweep put the entry back on the waitlist in silence; the registrant last heard "a spot opened up - pay by <deadline>".
+// Now: the contact and every joined teammate are told, in the sweep's own transaction (the retry worker makes the first attempt). Once
+// per PROMOTION: a second sweep tells nobody again, while an entry promoted again and lapsing again is told again.
+
+const lapsedRows = async (regId: string) =>
+  sql<{ id: string; recipient: string; status: string; attempts: number }[]>`
+    select id, recipient, status, attempts from email_outbox where kind = 'registration_promotion_lapsed' and ref_type = 'registration' and ref_id = ${regId} order by created_at, id`;
+
+/** Promote a waitlisted entry through the real waitlist code, then put its pay window in the past. */
+async function promoteThenLapse(w: Awaited<ReturnType<typeof stripeWorld>>, regId: string, groupId: string) {
+  await sql.begin((tx) => promoteWaitlistedRow(tx, regId, groupId, w.settings));
+  const [row] = await sql<{ status: string; promotion_expires_at: Date | null }[]>`select status, promotion_expires_at from registrations where id = ${regId}`;
+  expect(row!.status, "premise: promoted").toBe("pending");
+  expect(row!.promotion_expires_at, "premise: a card promotion opens a pay window").not.toBeNull();
+  await sql`update registrations set promotion_expires_at = now() - interval '1 minute' where id = ${regId}`;
+}
+
+describe.skipIf(!HAS_DB)("promotion lapsed: the sweep returns an unpaid promotion to the waitlist (real sweepRegistrations)", () => {
+  it("the contact (their language) and the joined teammate (the club's) are told the entry is back on the waitlist; the worker makes the first attempt", async () => {
+    const w = await stripeWorld(1500);
+    await sql`update organizations set default_locale = 'fr' where id = ${w.orgId}`;
+    const to = address("lapse");
+    const joiner = address("lapse-j");
+    const ref = `P5-${randomUUID().slice(0, 6)}`;
+    const reg = await seedRegistration(w.competition.id, w.division.id, w.settings, { displayName: TEAM, contactEmail: to, status: "waitlisted", locale: "es", refCode: ref });
+    await sql`update registration_groups set contact_name = ${CONTACT} where id = ${reg.registration.group_id}`;
+    await addMate(reg.registration.id, w.orgId, { name: "Joe Joiner", email: joiner });
+    await promoteThenLapse(w, reg.registration.id, reg.registration.group_id);
+
+    await sweepRegistrations(ORIGIN);
+    expect(await statusOf(reg.registration.id), "premise: the real sweep lapsed it").toBe("waitlisted");
+    const rows = await lapsedRows(reg.registration.id);
+    expect(rows.map((r) => r.recipient.toLowerCase()).sort()).toEqual([to, joiner].sort());
+    expect(rows.map((r) => r.attempts), "the sweep leaves the first attempt to the worker").toEqual([0, 0]);
+    const es = await getDictionary("es", "emails");
+    const fr = await getDictionary("fr", "emails");
+    const toContact = await body("registration_promotion_lapsed", "registration", reg.registration.id, to);
+    const toJoiner = await body("registration_promotion_lapsed", "registration", reg.registration.id, joiner);
+    expect(toContact.text, "the contact's own es pick").toContain(String(es["registrationPromotionLapsed.title"]));
+    expect(toJoiner.text, "a teammate follows the club's default (fr)").toContain(String(fr["registrationPromotionLapsed.title"]));
+    expect(words(toContact.html)).toContain(CONTACT);
+    expect(words(toJoiner.html)).toContain("Joe Joiner");
+    expect(toContact.text).toContain(TEAM);
+    expect(toContact.text).toContain("Open");
+    expect(toContact.text).toContain(ref);
+    expect(toJoiner.text).not.toContain(ref);
+    expect(toContact.text, "the competition's public page, on the sweep's origin").toContain(`${ORIGIN}/live/`);
+  });
+
+  it("a second sweep tells nobody again; promoted AGAIN and lapsing again is a new promotion, so a new mail", async () => {
+    const w = await stripeWorld(1500);
+    const to = address("lapse-2");
+    const reg = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: to, status: "waitlisted" });
+    await promoteThenLapse(w, reg.registration.id, reg.registration.group_id);
+    await sweepRegistrations(ORIGIN);
+    expect(await lapsedRows(reg.registration.id)).toHaveLength(1);
+    await sweepRegistrations(ORIGIN);
+    expect(await lapsedRows(reg.registration.id), "nothing lapsed again").toHaveLength(1);
+
+    await promoteThenLapse(w, reg.registration.id, reg.registration.group_id);
+    await sweepRegistrations(ORIGIN);
+    expect(await statusOf(reg.registration.id)).toBe("waitlisted");
+    expect((await lapsedRows(reg.registration.id)).map((r) => r.recipient.toLowerCase()), "one mail per lapse").toEqual([to, to]);
+  });
+
+  it("the empty case: a promotion whose window is still open is not lapsed and not mailed", async () => {
+    const w = await stripeWorld(1500);
+    const reg = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("lapse-open"), status: "waitlisted" });
+    await sql.begin((tx) => promoteWaitlistedRow(tx, reg.registration.id, reg.registration.group_id, w.settings));
+    await sweepRegistrations(ORIGIN);
+    expect(await statusOf(reg.registration.id)).toBe("pending");
+    expect(await lapsedRows(reg.registration.id)).toHaveLength(0);
+  });
+
+  it("a private competition: still told, with no link to a page that does not exist", async () => {
+    const w = await stripeWorld(1500);
+    await sql`update competitions set visibility = 'private' where id = ${w.competition.id}`;
+    const to = address("lapse-priv");
+    const reg = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: to, status: "waitlisted" });
+    await promoteThenLapse(w, reg.registration.id, reg.registration.group_id);
+    await sweepRegistrations(ORIGIN);
+    const b = await body("registration_promotion_lapsed", "registration", reg.registration.id, to);
+    expect(b.text).not.toContain("http");
+  });
+});
+
+describe.skipIf(!HAS_DB)("the reject and lapse producers' own guards", () => {
+  it("reject: once per entry and address - a second call queues nothing; an entry already ended (expired, rejected, withdrawn) is not told", async () => {
+    const w = await offlineWorld(1500, "manual");
+    const reg = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("rej-once") });
+    await addMate(reg.registration.id, w.orgId, { name: "Joe Joiner", email: address("rej-once-j") });
+    const queue = () => sql.begin((tx) => queueRegistrationRejectedMails(tx, { reg: reg.registration, refundCents: 0 }));
+    expect(await queue(), "the contact and the joiner").toHaveLength(2);
+    expect(await queue()).toEqual([]);
+    expect(await rejectedRows(reg.registration.id)).toHaveLength(2);
+
+    let checked = 0;
+    for (const status of ["expired", "rejected", "withdrawn"] as const) {
+      const ended = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address(`rej-g-${status}`), status });
+      expect(await sql.begin((tx) => queueRegistrationRejectedMails(tx, { reg: ended.registration, refundCents: 0 })), status).toEqual([]);
+      expect(await rejectedRows(ended.registration.id), status).toHaveLength(0);
+      checked += 1;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("reject: a refund of zero is no refund line - the empty case of the amount", async () => {
+    const w = await offlineWorld(1500, "manual");
+    const to = address("rej-zero");
+    const reg = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: to, status: "paid" });
+    await sql.begin((tx) => queueRegistrationRejectedMails(tx, { reg: reg.registration, refundCents: 0 }));
+    const en = await getDictionary("en", "emails");
+    const refundLead = String(en["registrationRejected.textRefund"]).split("{amount}")[0]!;
+    expect(refundLead.length, "premise: the refund sentence has words before the amount").toBeGreaterThan(5);
+    expect((await body("registration_rejected", "registration", reg.registration.id, to)).text).not.toContain(refundLead);
+  });
+
+  it("lapse: an entry that was never promoted cannot lapse (nothing queued); a promoted one is told once per promotion", async () => {
+    const w = await stripeWorld(1500);
+    const never = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("lapse-never") });
+    expect(never.registration.promoted_at, "premise: never promoted").toBeNull();
+    expect(await sql.begin((tx) => queueRegistrationPromotionLapsedMails(tx, { reg: never.registration, origin: ORIGIN }))).toEqual([]);
+    expect(await lapsedRows(never.registration.id)).toHaveLength(0);
+
+    const reg = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("lapse-once"), status: "waitlisted" });
+    await sql.begin((tx) => promoteWaitlistedRow(tx, reg.registration.id, reg.registration.group_id, w.settings));
+    const promoted = await loadWithGroup(reg.registration.id);
+    const queue = () => sql.begin((tx) => queueRegistrationPromotionLapsedMails(tx, { reg: promoted, origin: ORIGIN }));
+    expect(await queue()).toHaveLength(1);
+    expect(await queue(), "the same promotion: nothing more").toEqual([]);
   });
 });

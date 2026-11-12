@@ -24,6 +24,11 @@
 //     entry was withdrawn" mail is queued in the withdrawal's own transaction and the request that did it makes the first attempt.
 //   - registration_joined (polish wave P2): the real `joinTeamEntry` of a new teammate, signed in to an `nl` account, onto a confirmed team entry:
 //     the "you're on the team" mail goes to the address they typed, queued in the join's own transaction, and the request makes the first attempt.
+//   - registration_rejected (polish wave P5): the real `rejectRegistration` of a pending entry of an `es` registrant in a manual-approval
+//     division: the "not accepted" mail is queued in the rejection's own transaction and the request that did it makes the first attempt.
+//   - registration_promotion_lapsed (polish wave P5): the real `sweepRegistrations` (the lapse pass) over an `fr` entry promoted off the
+//     waitlist (the real `promoteWaitlistedRow`) whose pay window has passed: the "back on the waitlist" mail is queued in the transaction
+//     that puts it back, and the worker makes the first attempt.
 //   - solo_signup_assigned: the real `assignSoloSignUp` of a pooled `fr` solo sign-up onto a team entry: the email is queued in the
 //     assignment's own transaction and the request that did it makes the first attempt.
 //   - refund_issued: the real `refundRegistration` of a paid `es` registrant (Stripe's refund is mocked): the receipt is queued in the transaction
@@ -248,7 +253,7 @@ import { createPerson } from "@/server/usecases/persons";
 import { POST as registerPost } from "@/app/api/v1/public/orgs/[orgSlug]/competitions/[slug]/register/route";
 import { openRound } from "@/server/usecases/external-play/open-round";
 import { assignSoloSignUp } from "@/server/usecases/registration-assign";
-import { approveRegistration } from "@/server/usecases/registration-approval";
+import { approveRegistration, rejectRegistration } from "@/server/usecases/registration-approval";
 import { joinTeamEntry } from "@/server/usecases/registration-submit";
 import {
   handleRegistrationCheckoutCompleted,
@@ -256,6 +261,7 @@ import {
   putRegistrationSettings,
   refundRegistration,
   maybeAlertRegistrationRefundFailed,
+  promoteWaitlistedRow,
   sweepRegistrations,
   withdrawRegistrationOrganiser,
   withdrawRegistrationPublic,
@@ -379,6 +385,8 @@ const SPEC_KINDS = [
   "registration_expired",
   "registration_withdrawn",
   "registration_joined",
+  "registration_rejected",
+  "registration_promotion_lapsed",
 ] as const satisfies readonly OutboxKind[];
 
 /** The legend: [to, transactional]. A = an account, resolved at send; L = a literal address; S = the staff address. T = transactional. */
@@ -445,6 +453,8 @@ const SPEC_FACTS: KindFacts = {
   registration_expired: ["literal", false],
   registration_withdrawn: ["literal", false],
   registration_joined: ["literal", false],
+  registration_rejected: ["literal", false],
+  registration_promotion_lapsed: ["literal", false],
 };
 
 /** What the real producers create beyond the rows the hand-made scenarios name: the seeded round's people and organisation. (The
@@ -513,10 +523,10 @@ describe("the spec's lists (no database)", () => {
   it("the spec lists fifty-one kinds, sponsor deals adds one and the registration lifecycle five more (57), and the code's registry is exactly them, in the spec's order", () => {
     expect([...OUTBOX_KINDS]).toEqual([...SPEC_KINDS]);
     // The spec's Counts: "With `magic_link` and `chess_invite` that is 51." Sponsor deals Task 23 adds sponsor_deal_paid: 52; the five registration lifecycle kinds: 57.
-    expect(SPEC_KINDS).toHaveLength(57);
+    expect(SPEC_KINDS).toHaveLength(59);
   });
 
-  it("the legend has 25 literal kinds, SIXTEEN account kinds (sponsor deals' sponsor_deal_paid the sixteenth) and SIXTEEN staff kinds; THIRTY-TWO are transactional", () => {
+  it("the legend has 27 literal kinds, SIXTEEN account kinds (sponsor deals' sponsor_deal_paid the sixteenth) and SIXTEEN staff kinds; THIRTY-TWO are transactional", () => {
     const by = (to: string): string[] => SPEC_KINDS.filter((k) => SPEC_FACTS[k][0] === to);
     expect(by("literal")).toEqual([
       "magic_link",
@@ -547,6 +557,8 @@ describe("the spec's lists (no database)", () => {
       "registration_expired",
       "registration_withdrawn",
       "registration_joined",
+      "registration_rejected",
+      "registration_promotion_lapsed",
     ]);
     expect(by("account")).toEqual([
       "chess_invite",
@@ -626,7 +638,8 @@ describe("the spec's lists (no database)", () => {
       "staff_extra_org_allowance",
     ]);
     // The spec's legend: "The 19 N kinds are the senders that pass no `transactional: true` today", so 51 - 19 = 32 are T. Sponsor deals'
-    // sponsor_deal_paid is N, and so is each of the 5 registration lifecycle kinds: 19 + 1 + 5 = 25 N, so 57 - 25 = 32 are T still.
+    // sponsor_deal_paid is N, and so is each of the 7 registration lifecycle kinds (P2's five, P5's two): 19 + 1 + 7 = 27 N, so
+    // 59 - 27 = 32 are T still.
     expect(SPEC_KINDS.filter((k) => SPEC_FACTS[k][1])).toHaveLength(32);
   });
 
@@ -987,6 +1000,63 @@ async function registrationWithdrawnScenario(): Promise<KindScenario> {
     run: async () => {
       const row = await withdrawRegistrationOrganiser(owner, registration.id);
       expect(row.status, "premise: the real organiser withdrawal withdrew the entry").toBe("withdrawn");
+    },
+  };
+}
+
+/** The real organiser rejection (polish wave P5): an `es` registrant's free entry waits in a manual-approval division and the organiser
+ *  rejects it. The mail is queued in the rejection's own transaction; the request that did it makes the first attempt. */
+async function registrationRejectedScenario(): Promise<KindScenario> {
+  const { orgId, ownerId } = await seedOrg("pro");
+  made.orgIds.push(orgId);
+  made.userIds.push(ownerId);
+  const owner = asOwner(orgId, ownerId);
+  const { competition, division } = await rig(owner);
+  const settings = await putRegistrationSettings(owner, division.id, { ...SETTINGS_BASE, fee_cents: 0, payment_method: "offline", approval: "manual" });
+  const recipient = address();
+  const { registration } = await seedRegistration(competition.id, division.id, settings, { contactEmail: recipient, locale: "es" });
+  return {
+    locale: "es",
+    subjectKey: "registrationRejected.subject",
+    subjectVars: { competitionName: competition.name },
+    recipient,
+    firstAttempt: "request",
+    run: async () => {
+      const row = await rejectRegistration(owner, registration.id);
+      expect(row.status, "premise: the real rejection rejected the entry").toBe("rejected");
+    },
+  };
+}
+
+/** The real sweep's lapse pass (polish wave P5): an `fr` registrant's waitlisted entry is promoted by the real `promoteWaitlistedRow` (a card
+ *  division: a pay window opens) and its window is put in the past immediately before the sweep. The sweep puts it back on the waitlist and
+ *  queues the mail in that same transaction; the first attempt is the worker's. */
+async function registrationPromotionLapsedScenario(): Promise<KindScenario> {
+  const w = await stripeRig({ feeCents: 700 });
+  made.orgIds.push(w.orgId);
+  made.userIds.push(w.ownerId);
+  const recipient = address();
+  const { registration } = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: recipient, locale: "fr", status: "waitlisted" });
+  await sql.begin((tx) => promoteWaitlistedRow(tx, registration.id, registration.group_id, w.settings));
+  return {
+    locale: "fr",
+    subjectKey: "registrationPromotionLapsed.subject",
+    subjectVars: { competitionName: w.competition.name },
+    recipient,
+    firstAttempt: "worker",
+    run: async () => {
+      // Lapsed HERE, immediately before the sweep (the sweep is global: see registrationExpiredScenario).
+      await sql`update registrations set promotion_expires_at = now() - interval '1 minute' where id = ${registration.id}`;
+      await sweepRegistrations("https://sweep.test");
+      await vi.waitFor(
+        async () => {
+          const [queued] = await sql<{ n: number }[]>`select count(*)::int as n from email_outbox where kind = 'registration_promotion_lapsed' and lower(recipient) = lower(${recipient})`;
+          if (queued!.n === 0) throw new Error("the lapsed mail has not been queued yet");
+        },
+        { timeout: 10_000, interval: 50 },
+      );
+      const [after] = await sql<{ status: string }[]>`select status from registrations where id = ${registration.id}`;
+      expect(after!.status, "premise: the real sweep put the entry back on the waitlist").toBe("waitlisted");
     },
   };
 }
@@ -2386,6 +2456,16 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
       dictionarySubject("en", registrationJoined.subjectKey, registrationJoined.subjectVars),
     );
 
+    const registrationRejected = await registrationRejectedScenario();
+    expect(dictionarySubject("es", registrationRejected.subjectKey, registrationRejected.subjectVars)).not.toBe(
+      dictionarySubject("en", registrationRejected.subjectKey, registrationRejected.subjectVars),
+    );
+
+    const registrationLapsed = await registrationPromotionLapsedScenario();
+    expect(dictionarySubject("fr", registrationLapsed.subjectKey, registrationLapsed.subjectVars)).not.toBe(
+      dictionarySubject("en", registrationLapsed.subjectKey, registrationLapsed.subjectVars),
+    );
+
     const staffDispute = await staffDisputeAlertScenario();
     expect(dictionarySubject("fr", staffDispute.subjectKey, staffDispute.subjectVars)).not.toBe(
       dictionarySubject("en", staffDispute.subjectKey, staffDispute.subjectVars),
@@ -2450,6 +2530,8 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         registration_expired: registrationExpired,
         registration_withdrawn: registrationWithdrawn,
         registration_joined: registrationJoined,
+        registration_rejected: registrationRejected,
+        registration_promotion_lapsed: registrationLapsed,
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );
@@ -2457,7 +2539,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
     const moved = SPEC_KINDS.filter((k) => !NOT_YET_MOVED.includes(k));
     // The spec's count, typed: "With `magic_link` and `chess_invite` that is 51." Every kind has moved, so every one was swept; sponsor
     // deals Task 23's sponsor_deal_paid makes 52.
-    expect(out.checked, "anti-vacuity: every kind the spec lists was swept").toBe(57);
+    expect(out.checked, "anti-vacuity: every kind the spec lists was swept").toBe(59);
     expect(out.checked).toBeGreaterThan(0);
     expect(out.kinds, "and they are exactly the spec's moved kinds, in the spec's order").toEqual(moved);
   }, 60_000);

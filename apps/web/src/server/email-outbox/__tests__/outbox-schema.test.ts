@@ -45,7 +45,8 @@ const SPEC_STATUSES = [
 // order, then wave 5's seventeen (the funnel reminder and sixteen staff alerts) in the table's row order, then the one kind born on
 // the outbox after phase 3: sponsor deals Task 23's `sponsor_deal_paid` (plan 2026-11-07-sponsor-deals, D13; its delta is found by
 // suffix, `__email_outbox_sponsor_deal_paid.sql`), then the five registrant lifecycle kinds (polish wave P2) in
-// `__email_outbox_registration_lifecycle.sql`, which restates that list plus five and is therefore the LAST definer of the CHECK. The
+// `__email_outbox_registration_lifecycle.sql`, then polish wave P5's two (rejected, promotion lapsed) in
+// `V512__email_outbox_registration_rejected_lapsed.sql`, which restates that list plus two and is therefore the LAST definer of the CHECK. The
 // vocabulary test compares constants.ts with it, and the live-CHECK read compares
 // the database's constraint with it as well.
 const SPEC_KINDS = [
@@ -68,6 +69,8 @@ const SPEC_KINDS = [
   "registration_expired",
   "registration_withdrawn",
   "registration_joined",
+  "registration_rejected",
+  "registration_promotion_lapsed",
 ];
 
 describe("email outbox vocabularies (constants.ts)", () => {
@@ -79,7 +82,7 @@ describe("email outbox vocabularies (constants.ts)", () => {
   it("the kinds are the spec's fifty-one, in the spec's wave order, then sponsor deals' sponsor_deal_paid, then the registration lifecycle kinds", () => {
     // The spec's Counts: "wave 1 has 5 kinds, wave 2 has 10, wave 3 has 8, wave 4 has 9 and wave 5 has 17, which makes 49. With
     // `magic_link` and `chess_invite` that is 51." Sponsor deals Task 23 (D13) adds one: 52.
-    expect(SPEC_KINDS.length).toBe(57);
+    expect(SPEC_KINDS.length).toBe(59);
     expect([...OUTBOX_KINDS]).toEqual(SPEC_KINDS);
   });
 

@@ -107,6 +107,8 @@ const SPEC_LEGEND: Record<string, [to: "account" | "literal" | "staff", transact
   registration_expired: ["literal", false],
   registration_withdrawn: ["literal", false],
   registration_joined: ["literal", false],
+  registration_rejected: ["literal", false],
+  registration_promotion_lapsed: ["literal", false],
 };
 
 /** A `db` that records the statements it is handed and answers like postgres.js does for an insert: a row list carrying the
@@ -168,7 +170,7 @@ describe("the kind facts guard (no database)", () => {
       checked++;
     }
     // The spec's Counts: "With `magic_link` and `chess_invite` that is 51." Sponsor deals Task 23 adds sponsor_deal_paid: 52.
-    expect(checked, "every kind of the legend was compared").toBe(57);
+    expect(checked, "every kind of the legend was compared").toBe(59);
     // The other direction: the code declares no kind the legend does not.
     expect(Object.keys(OUTBOX_KIND_FACTS).sort()).toEqual(Object.keys(SPEC_LEGEND).sort());
   });
@@ -187,9 +189,9 @@ describe("the kind facts guard (no database)", () => {
         checked++;
       }
     }
-    // (25 literal + 16 staff) x 2 writers = 82: the spec's legend has 20 L kinds (magic_link, the five wave-1 kinds, wave 2's three
+    // (27 literal + 16 staff) x 2 writers = 86: the spec's legend has 20 L kinds (magic_link, the five wave-1 kinds, wave 2's three
     // sponsor mails, wave 3's eight, wave 4's two official notices and wave 5's funnel reminder) and 16 S kinds (wave 5's staff alerts).
-    expect(checked, "41 kinds not addressed to an account x 2 writers").toBe(82);
+    expect(checked, "43 kinds not addressed to an account x 2 writers").toBe(86);
   });
 
   it("the refusal names the kind and ref type and carries neither the address, the user id nor the body", async () => {

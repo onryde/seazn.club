@@ -43,6 +43,7 @@ import {
   maybeAlertRegistrationRefundFailed,
   inviteUnclaimedMembers,
   queueRegistrationApprovedMails,
+  queueRegistrationRejectedMails,
   type RegistrationWithGroupRow,
   type RegistrationSettingsRow,
 } from "./registrations";
@@ -234,6 +235,8 @@ export async function rejectRegistration(
         promoted: null as RegistrationWithGroupRow | null,
         competitionId: null as string | null,
         refundable: null as RegistrationWithGroupRow | null,
+        refundCents: 0,
+        mailIds: [] as string[],
       };
     }
     if (reg.status !== "pending" && reg.status !== "paid") {
@@ -275,13 +278,24 @@ export async function rejectRegistration(
         from: "waitlist",
       }, auth.userId);
     }
+    // Polish wave W8: the entry's OWN payment (V387), never the cart's - the cart's intent is the newest payment in the cart, which on a
+    // cart whose entries paid in separate sessions is a sibling's. Null fails closed: nothing of this entry's to send back. Polish wave P5
+    // (carry b): the cap is THIS payment's - a late payment's refund in the history is not this one's. Computed ONCE, here: it is both
+    // what the refund below sends back and what the registrant's mail says is coming back.
+    const refundCents =
+      reg.status === "paid" && reg.entry_payment_intent_id ? Math.max(0, reg.amount_cents - ownPaymentRefundedCents(reg)) : 0;
+    // Polish wave P5 (P2 carry): tell the registrant, in the transaction that records the rejection; the request makes the first attempt.
+    const mailIds = await queueRegistrationRejectedMails(tx, { reg, refundCents });
     return {
       row: await orgRegAfter(tx, regId),
       promoted,
       competitionId,
       refundable: reg.status === "paid" ? reg : null,
+      refundCents,
+      mailIds,
     };
   });
+  if (result.mailIds.length > 0) deferred(() => dispatchNow(result.mailIds));
   fireDivisionRevalidate(result.row.division_id, result.competitionId ?? undefined);
   if (result.promoted) {
     const ctx = await divisionCtx(sql, result.row.division_id);
@@ -289,12 +303,10 @@ export async function rejectRegistration(
     void notifyPromoted(result.promoted, ctx, settings, fallbackOrigin(), { firstAttempt: "request" });
   }
 
-  // Polish wave W8: the entry's OWN payment (V387), never the cart's - the cart's intent is the newest payment in the cart, which
-  // on a cart whose entries paid in separate sessions is a sibling's. Null fails closed: nothing of this entry's to send back.
+  // The amount was decided in the transaction (see `refundCents` there): the mail already told the payer this much is coming back.
   const ownIntent = result.refundable?.entry_payment_intent_id ?? null;
   if (result.refundable && ownIntent) {
-    // Polish wave P5 (carry b): the cap is THIS payment's - a late payment's refund in the history is not this one's.
-    const remaining = result.refundable.amount_cents - ownPaymentRefundedCents(result.refundable);
+    const remaining = result.refundCents;
     if (remaining > 0) {
       try {
         // Read BEFORE the money moves (a failure after it would report a refund failure for a refund that went through).

@@ -13,7 +13,7 @@ import { freesTeamSlot, promoteOldestWaitlisted, openPromotionSeatGate, notifyPr
 import { paymentReminderMessage } from "./mail";
 import { issuePayLink, recordPayToken } from "./pay-token";
 import { stripeRefund, queueRefundReceipt, errText, maybeAlertRegistrationRefundFailed } from "./refunds";
-import { queueRegistrationExpiredMails } from "./lifecycle-mail";
+import { queueRegistrationExpiredMails, queueRegistrationPromotionLapsedMails } from "./lifecycle-mail";
 import { releaseSoloSignUpPlacement } from "./withdraw";
 import { effectivePoolDeadline } from "./list";
 
@@ -413,6 +413,9 @@ export async function sweepRegistrations(
           from: "waitlist",
         }, null);
       }
+      // Polish wave P5 (P2 carry): tell the registrant the held place went to the next in line and the entry is waiting again, in the
+      // transaction that puts it back. `locked` still carries the promotion it lost (the once-key). The worker makes the first attempt.
+      await queueRegistrationPromotionLapsedMails(tx, { reg: locked, origin });
       return { promoted, settings, competitionId: div.competition_id };
     })) as unknown as {
       promoted: RegistrationWithGroupRow | null;

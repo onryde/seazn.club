@@ -1,6 +1,7 @@
 import "server-only";
 // The registrant's lifecycle mails (polish wave P2): what happens to an entry AFTER its confirmation - the payment landed, the organiser
-// approved it, the unpaid place was released, the organiser withdrew it, a teammate joined it. One producer per outbox kind (see ./index.ts).
+// approved it, the unpaid place was released, the organiser withdrew it, a teammate joined it; and (polish wave P5) the organiser rejected
+// it, or a promoted entry's pay window lapsed and it went back to the waitlist. One producer per outbox kind (see ./index.ts).
 //
 // Every producer runs INSIDE the transaction that records the fact it reports (the payment, the approval, the expiry...), at its own
 // savepoint: the mail and the fact commit together or not at all, a fact the books lost is never mailed, and a mail that cannot be queued
@@ -8,7 +9,15 @@ import "server-only";
 // `null` also means "already queued" (the once-key): nothing more to attempt. A request path then makes the first attempt after commit
 // (`deferred(() => dispatchNow(ids))`); a webhook or the sweep leaves it to the retry worker, as every other outbox mail does.
 import { routes } from "@/lib/routes";
-import { registrationApprovedEmail, registrationExpiredEmail, registrationJoinedEmail, registrationPaidEmail, registrationWithdrawnEmail } from "@/lib/email";
+import {
+  registrationApprovedEmail,
+  registrationExpiredEmail,
+  registrationJoinedEmail,
+  registrationPaidEmail,
+  registrationPromotionLapsedEmail,
+  registrationRejectedEmail,
+  registrationWithdrawnEmail,
+} from "@/lib/email";
 import { entryStanding, isTerminalRegistrationStatus } from "@/lib/registration-status";
 import { enqueueEmailOnce, expiryWithin, recipientLocale } from "@/server/email-outbox";
 import { money } from "@/lib/email-templates/shared";
@@ -163,7 +172,7 @@ const audienceOf = async (sp: Tx, reg: RegistrationWithGroupRow): Promise<Audien
 async function fanOut(
   tx: Tx,
   a: {
-    kind: "registration_approved" | "registration_withdrawn" | "registration_expired";
+    kind: "registration_approved" | "registration_withdrawn" | "registration_expired" | "registration_rejected" | "registration_promotion_lapsed";
     reg: RegistrationWithGroupRow;
     defaultLocale: string | null;
     audience: Audience[];
@@ -315,6 +324,94 @@ export async function queueRegistrationWithdrawnMails(tx: Tx, a: { reg: Registra
     audience: prep.audience,
     render: (r, locale) => registrationWithdrawnEmail({ ...base, contactName: r.name, refCode: r.refCode }, locale),
     keyOf: (r) => `${reg.id}:withdrawn:${r.to.toLowerCase()}`,
+  });
+}
+
+/**
+ * `registration_rejected` (polish wave P5): the ORGANISER rejected the entry on a manual-approval division. To the registration's contact
+ * AND to every teammate who has joined the entry and has an address (the audience of the approval), each in their own language: which
+ * entry, which division, that it was not accepted, and where to ask.
+ *
+ * `reg` is the row as the rejection locked it, BEFORE it was written `rejected`; an entry already in a terminal status is not told again
+ * (the rejection refuses those itself; this is that assumption as a guard). `refundCents` is what the rejection is returning to the card
+ * on THIS entry's own payment (computed once, in the rejection, and also the amount it refunds): when it is above zero the CONTACT - the
+ * payer - reads that it is being refunded, with the amount in their language. A teammate never reads it (the contact's money is not their
+ * news), and an offline payment has no card to return to, so it reads no line (the panel sends them to the organiser). The refund itself,
+ * and its receipt, follow after the commit; a refund that then fails is the organiser's to resolve, and surfaces on their console.
+ *
+ * Once per entry and address: `rejected` is terminal, so the entry's id and the address are the key. A request path: the caller makes the
+ * first attempt after the response.
+ */
+export async function queueRegistrationRejectedMails(tx: Tx, a: { reg: RegistrationWithGroupRow; refundCents: number }): Promise<string[]> {
+  const { reg } = a;
+  if (isTerminalRegistrationStatus(reg.status)) return [];
+  const prep = await contained(tx, "registration_rejected", reg.id, async (sp) => ({
+    ctx: await divisionCtx(sp, reg.division_id),
+    divisionName: await divisionNameOf(sp, reg.division_id),
+    audience: await audienceOf(sp, reg),
+  }));
+  if (!prep) return [];
+  const base = {
+    orgName: prep.ctx.org_name,
+    competitionName: prep.ctx.comp_name,
+    divisionName: prep.divisionName,
+    displayName: reg.display_name,
+  };
+  const payer = reg.contact_email.toLowerCase();
+  return fanOut(tx, {
+    kind: "registration_rejected",
+    reg,
+    defaultLocale: prep.ctx.default_locale,
+    audience: prep.audience,
+    render: (r, locale) =>
+      registrationRejectedEmail(
+        {
+          ...base,
+          contactName: r.name,
+          refCode: r.refCode,
+          refundAmount: a.refundCents > 0 && r.to.toLowerCase() === payer ? money(a.refundCents, reg.currency, locale) : null,
+        },
+        locale,
+      ),
+    keyOf: (r) => `${reg.id}:rejected:${r.to.toLowerCase()}`,
+  });
+}
+
+/**
+ * `registration_promotion_lapsed` (polish wave P5): the hourly sweep found a PROMOTED entry unpaid past its own window
+ * (`promotion_expires_at`) and put it back on the waitlist's tail, offering the place to the next entry in line. To the registration's
+ * contact AND to every teammate who has joined the entry and has an address, each in their own language: which entry, that the held
+ * place went to the next in line, that the entry is waiting again, and the competition's public page (none for a private competition).
+ * In the sweep's own transaction; the sweep has no response to defer behind, so the retry worker makes the first attempt.
+ *
+ * `reg` is the row as the sweep locked it, BEFORE it was written back to `waitlisted`, so it still carries the promotion it lost. Only a
+ * promoted entry can lapse (an entry with no `promoted_at` is not one; nothing is queued). Once per PROMOTION and address: the key carries
+ * `promoted_at`, so a second sweep queues nothing, while an entry promoted again and lapsing again is a new lapse and is told again.
+ */
+export async function queueRegistrationPromotionLapsedMails(tx: Tx, a: { reg: RegistrationWithGroupRow; origin: string }): Promise<string[]> {
+  const { reg } = a;
+  if (!reg.promoted_at) return [];
+  const prep = await contained(tx, "registration_promotion_lapsed", reg.id, async (sp) => ({
+    ctx: await divisionCtx(sp, reg.division_id),
+    divisionName: await divisionNameOf(sp, reg.division_id),
+    audience: await audienceOf(sp, reg),
+  }));
+  if (!prep) return [];
+  const promotion = new Date(reg.promoted_at).toISOString();
+  const base = {
+    orgName: prep.ctx.org_name,
+    competitionName: prep.ctx.comp_name,
+    divisionName: prep.divisionName,
+    displayName: reg.display_name,
+    competitionUrl: competitionUrlOf(a.origin, prep.ctx),
+  };
+  return fanOut(tx, {
+    kind: "registration_promotion_lapsed",
+    reg,
+    defaultLocale: prep.ctx.default_locale,
+    audience: prep.audience,
+    render: (r, locale) => registrationPromotionLapsedEmail({ ...base, contactName: r.name, refCode: r.refCode }, locale),
+    keyOf: (r) => `${reg.id}:lapsed:${promotion}:${r.to.toLowerCase()}`,
   });
 }
 

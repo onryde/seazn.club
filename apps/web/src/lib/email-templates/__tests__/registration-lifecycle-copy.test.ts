@@ -10,6 +10,8 @@ import {
   registrationExpiredTemplate,
   registrationJoinedTemplate,
   registrationPaidTemplate,
+  registrationPromotionLapsedTemplate,
+  registrationRejectedTemplate,
   registrationWithdrawnTemplate,
   type JoinedState,
 } from "@/lib/email-templates";
@@ -49,6 +51,10 @@ async function renderAll(locale: (typeof LOCALES)[number]) {
     approvedPaymentDue: registrationApprovedTemplate({ ...base, recipientName: PERSON, competitionUrl: LINK, paymentDue: DUE }, dict),
     expired: registrationExpiredTemplate({ ...base, contactName: PERSON, registerUrl: LINK }, dict),
     withdrawn: registrationWithdrawnTemplate({ ...base, contactName: PERSON }, dict),
+    // Polish wave P5 (P2 carry): rejected (with and without the payer's refund line), and a promotion that lapsed.
+    rejected: registrationRejectedTemplate({ ...base, contactName: PERSON }, dict),
+    rejectedRefund: registrationRejectedTemplate({ ...base, contactName: PERSON, refundAmount: DUE }, dict),
+    promotionLapsed: registrationPromotionLapsedTemplate({ ...base, contactName: PERSON, competitionUrl: LINK }, dict),
     ...Object.fromEntries(
       STATES.map((s) => [`joined_${s}`, registrationJoinedTemplate({ ...base, refCode: null, playerName: PERSON, state: s, competitionUrl: LINK }, dict)]),
     ),
@@ -69,13 +75,13 @@ describe("every lifecycle mail, in every locale", () => {
       expect(out.html, `${locale} ${name}: html names the division`).toContain(DIVISION);
       expect(out.text, `${locale} ${name}: text names the division`).toContain(DIVISION);
       for (const part of [out.subject, out.html, out.text]) {
-        expect(part, `${locale} ${name}: no raw dictionary token`).not.toMatch(/\b(registrationPaid|registrationApproved|registrationExpired|registrationWithdrawn|registrationJoined)\.[a-zA-Z]+\b/);
+        expect(part, `${locale} ${name}: no raw dictionary token`).not.toMatch(/\b(registrationPaid|registrationApproved|registrationExpired|registrationWithdrawn|registrationJoined|registrationRejected|registrationPromotionLapsed)\.[a-zA-Z]+\b/);
         expect(part, `${locale} ${name}: no unfilled placeholder`).not.toMatch(/\{\w+\}/);
       }
       expect(out.subject, `${locale} ${name}: the subject is non-empty`).not.toBe("");
       checked += 1;
     }
-    expect(checked, "anti-vacuity: 5 kinds, joined in 5 states, paid in 5 (2 single + 3 cart), approved in 2 = 14 renders").toBe(14);
+    expect(checked, "anti-vacuity: 7 kinds, joined in 5 states, paid in 5 (2 single + 3 cart), approved in 2, rejected in 2 = 17 renders").toBe(17);
   });
 
   it("the subjects differ between locales (an untranslated key would repeat the English one)", async () => {
@@ -88,7 +94,7 @@ describe("every lifecycle mail, in every locale", () => {
         checked += 1;
       }
     }
-    expect(checked, "anti-vacuity: every render of every non-English locale").toBe(42);
+    expect(checked, "anti-vacuity: every render of every non-English locale").toBe(51);
   });
 });
 
@@ -227,6 +233,7 @@ describe("links and reference", () => {
       ["approved", registrationApprovedTemplate({ ...base, recipientName: PERSON, competitionUrl: LINK }, dict), registrationApprovedTemplate({ ...base, recipientName: PERSON }, dict)],
       ["expired", registrationExpiredTemplate({ ...base, contactName: PERSON, registerUrl: LINK }, dict), registrationExpiredTemplate({ ...base, contactName: PERSON }, dict)],
       ["joined", registrationJoinedTemplate({ ...base, playerName: PERSON, state: "confirmed", competitionUrl: LINK }, dict), registrationJoinedTemplate({ ...base, playerName: PERSON, state: "confirmed" }, dict)],
+      ["promotion lapsed", registrationPromotionLapsedTemplate({ ...base, contactName: PERSON, competitionUrl: LINK }, dict), registrationPromotionLapsedTemplate({ ...base, contactName: PERSON }, dict)],
     ];
     let checked = 0;
     for (const [name, linked, bare] of calls) {
@@ -236,7 +243,7 @@ describe("links and reference", () => {
       expect(bare.text, `${name} text without a link`).not.toContain("https://");
       checked += 1;
     }
-    expect(checked).toBe(5);
+    expect(checked).toBe(6);
   });
 
   it("names are escaped in the html and left raw in the text (a team called 'A & B <x>')", async () => {
@@ -246,5 +253,21 @@ describe("links and reference", () => {
     expect(out.html).not.toContain("<x>");
     expect(out.html).not.toContain("Zoe <b>");
     expect(out.text).toContain("A & B <x>");
+  });
+});
+
+describe("the rejection's refund line (polish wave P5)", () => {
+  it.each(LOCALES)("%s: the payer's mail names what is coming back, in both parts; with no amount there is no refund line at all", async (locale) => {
+    const dict = await dictOf(locale);
+    const withRefund = registrationRejectedTemplate({ ...base, contactName: PERSON, refundAmount: DUE }, dict);
+    const without = registrationRejectedTemplate({ ...base, contactName: PERSON, refundAmount: null }, dict);
+    const fill = (key: string) => String(dict[key]).split("{amount}").join(DUE);
+    expect(withRefund.text).toContain(fill("registrationRejected.textRefund"));
+    expect(words(withRefund.html)).toContain(words(fill("registrationRejected.refund")).trim());
+    const lead = String(dict["registrationRejected.textRefund"]).split("{amount}")[0]!.trim();
+    expect(lead.length, "premise: the refund sentence has words before the amount").toBeGreaterThan(3);
+    expect(without.text).not.toContain(DUE);
+    expect(without.text).not.toContain(lead);
+    expect(words(without.html)).not.toContain(DUE);
   });
 });

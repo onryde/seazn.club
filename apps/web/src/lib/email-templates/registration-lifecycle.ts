@@ -1,6 +1,7 @@
 // The registrant's lifecycle mails (polish wave P2: walkthrough W1-W4, W10, W11, W13) - what happens to an entry AFTER the confirmation:
-// the payment landed, the organiser approved it, the unpaid place was released, the organiser withdrew it, a teammate joined it.
-// Five small templates on one shared shell, so the copy of "who is this for, which entry, where do I look" is written once.
+// the payment landed, the organiser approved it, the unpaid place was released, the organiser withdrew it, a teammate joined it; and
+// (polish wave P5) the organiser rejected it, or a promoted entry's pay window lapsed and it went back to the waitlist.
+// Small templates on one shared shell, so the copy of "who is this for, which entry, where do I look" is written once.
 // `dict` = the emails namespace for the recipient's locale (see lib/email.ts).
 import { button, linkFallback, panel, paragraph, renderEmail } from "./compose";
 import { escapeHtml, money } from "./shared";
@@ -280,6 +281,93 @@ export function registrationWithdrawnTemplate(opts: RegistrationWithdrawnArgs, d
       t(dict, `${ns}.text`, { competitionName: opts.competitionName, orgName: opts.orgName }) +
       "\n" +
       t(dict, `${ns}.textBody`, names) +
+      referenceText(dict, ns, opts.refCode),
+  };
+}
+
+// ------------------------------------------------------------------------------------------------------------------------------
+// registration_rejected (polish wave P5)
+
+export interface RegistrationRejectedArgs extends LifecycleBase {
+  contactName: string;
+  /** What is being returned to the PAYER's card on this entry's own payment, already formatted in the recipient's language - or `null`
+   *  (nothing was paid by card, nothing is left to return, or the recipient is a teammate: the contact's money is not their news). */
+  refundAmount?: string | null;
+}
+
+/** The ORGANISER rejected the entry on a manual-approval division: say so, and (to the payer) that their card payment is coming back. */
+export function registrationRejectedTemplate(opts: RegistrationRejectedArgs, dict: Dict): Content {
+  const ns = "registrationRejected";
+  const subject = t(dict, `${ns}.subject`, { competitionName: opts.competitionName });
+  const names = { displayName: opts.displayName, divisionName: opts.divisionName };
+  return {
+    subject,
+    html: renderEmail({
+      subject,
+      preheader: t(dict, `${ns}.preheader`, { displayName: opts.displayName, competitionName: opts.competitionName }),
+      ...shell(dict, ns, opts),
+      title: t(dict, `${ns}.title`),
+      contentHtml:
+        paragraph(
+          t(dict, `${ns}.intro`, {
+            contactName: escapeHtml(opts.contactName),
+            displayName: escapeHtml(names.displayName),
+            divisionName: escapeHtml(names.divisionName),
+            competitionName: escapeHtml(opts.competitionName),
+          }),
+        ) +
+        (opts.refundAmount ? paragraph(t(dict, `${ns}.refund`, { amount: escapeHtml(opts.refundAmount) })) : "") +
+        panel(t(dict, `${ns}.panelTitle`), t(dict, `${ns}.panelBody`)) +
+        referenceHtml(dict, ns, opts.refCode),
+    }),
+    text:
+      t(dict, `${ns}.text`, { competitionName: opts.competitionName, orgName: opts.orgName }) +
+      "\n" +
+      t(dict, `${ns}.textBody`, names) +
+      (opts.refundAmount ? "\n\n" + t(dict, `${ns}.textRefund`, { amount: opts.refundAmount }) : "") +
+      referenceText(dict, ns, opts.refCode),
+  };
+}
+
+// ------------------------------------------------------------------------------------------------------------------------------
+// registration_promotion_lapsed (polish wave P5)
+
+export interface RegistrationPromotionLapsedArgs extends LifecycleBase {
+  contactName: string;
+  /** The competition's public page - or `null` for a private competition. */
+  competitionUrl?: string | null;
+}
+
+/** A promoted entry was not paid within its window: the place went to the next entry in line and this one is back on the waitlist. */
+export function registrationPromotionLapsedTemplate(opts: RegistrationPromotionLapsedArgs, dict: Dict): Content {
+  const ns = "registrationPromotionLapsed";
+  const subject = t(dict, `${ns}.subject`, { competitionName: opts.competitionName });
+  const names = { displayName: opts.displayName, divisionName: opts.divisionName };
+  return {
+    subject,
+    html: renderEmail({
+      subject,
+      preheader: t(dict, `${ns}.preheader`, { displayName: opts.displayName, competitionName: opts.competitionName }),
+      ...shell(dict, ns, opts),
+      title: t(dict, `${ns}.title`),
+      contentHtml:
+        paragraph(
+          t(dict, `${ns}.intro`, {
+            contactName: escapeHtml(opts.contactName),
+            displayName: escapeHtml(names.displayName),
+            divisionName: escapeHtml(names.divisionName),
+            competitionName: escapeHtml(opts.competitionName),
+          }),
+        ) +
+        panel(t(dict, `${ns}.panelTitle`), t(dict, `${ns}.panelBody`)) +
+        (opts.competitionUrl ? button(t(dict, `${ns}.viewCompetition`), opts.competitionUrl) + linkFallback(opts.competitionUrl) : "") +
+        referenceHtml(dict, ns, opts.refCode),
+    }),
+    text:
+      t(dict, `${ns}.text`, { competitionName: opts.competitionName, orgName: opts.orgName }) +
+      "\n" +
+      t(dict, `${ns}.textBody`, names) +
+      (opts.competitionUrl ? "\n\n" + t(dict, `${ns}.textViewCompetition`) + "\n" + opts.competitionUrl : "") +
       referenceText(dict, ns, opts.refCode),
   };
 }
