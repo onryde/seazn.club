@@ -11,8 +11,9 @@
 //   EMAIL_OUTBOX_KEK=<same 64-hex the server runs with> CONNECT_WALKTHROUGH=1 STRIPE_CONNECT_TEST_ACCOUNT=acct_... \
 //     npx playwright test e2e/walkthrough/registration-pay-page-card.spec.ts --project=walkthrough
 // `stripe listen` is NOT needed for the "Paid" assertion: the page's own return reconciles the paid session (that is the point of
-// it), so a missing forwarder cannot hide a defect here - nor can a present one paper over a missing reconcile (the pay-page route
-// is asserted to have flipped the row before the webhook is awaited).
+// it). The test accepts EITHER path to "Paid" - the return's reconcile or the webhook (with a forwarder running) - and does not
+// assert which one flipped the row, so a present forwarder could paper over a missing reconcile here; the reconcile itself is
+// proven in registration-pay-page-checkout.test.ts.
 //
 // Which mail the link comes from: the SWEEP's T-24h reminder (`POST /api/cron/registrations`). The organiser's own press is driven
 // and proven (audit row, one more token) but its mail is attempted at once, and with no Resend key that ends the row `dead` with its

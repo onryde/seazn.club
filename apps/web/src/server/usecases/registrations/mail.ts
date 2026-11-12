@@ -45,7 +45,8 @@ import { loadSettings, divisionCtx, tokenMatchesHash, orgReg } from "./lookups";
  * The Pay button (player payment page plan, P5 - owner decision): when the cart pays by card, still owes a fee and `token` is
  * given, it points at `statusUrl` - the cart's own token-bearing status page, our details-first page that pays the WHOLE cart
  * (a per-entry page would split one cart into separate charges) and never expires. Nothing is minted here: no Checkout
- * session, no pay-page token. Without a token (resends, dispute evidence) there is no Pay button.
+ * session, no pay-page token. The registrant's own resend (`resendRegistrationConfirmationPublic`) passes its token, so its mail
+ * does carry the Pay button; without a token (the organiser's resend, dispute evidence) there is none.
  *
  * `locale` is the language the mail is WRITTEN in, resolved here (D4, the
  * phase-3 spec): the cart's explicit pick, then the linked account's locale,
