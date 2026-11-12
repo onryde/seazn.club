@@ -143,6 +143,19 @@ describe("*_enc columns never leave their owners", () => {
       .filter((f) => pattern.test(readFileSync(join(SRC, f), "utf8")));
     expect([...naming].sort()).toEqual([...TOKEN_ENC_OWNERS].sort());
   });
+
+  it("each token_enc owner names only its own table: quick_matches for the two quick-match files, match_day_codes for match-day-codes.ts", () => {
+    // The scan above is by column name, so it cannot tell the two tables apart; this one can. An owner naming the OTHER
+    // table's name is a cross-read of a sealed token.
+    const table = { quick: /\bquick_matches\b/, day: /\bmatch_day_codes\b/ };
+    const src = (f: string): string => readFileSync(join(SRC, f), "utf8");
+    for (const f of QUICK_MATCH_OWNERS) {
+      expect(table.quick.test(src(f)), `${f} names quick_matches`).toBe(true);
+      expect(table.day.test(src(f)), `${f} must not name match_day_codes`).toBe(false);
+    }
+    expect(table.day.test(src(MATCH_DAY_OWNER)), `${MATCH_DAY_OWNER} names match_day_codes`).toBe(true);
+    expect(table.quick.test(src(MATCH_DAY_OWNER)), `${MATCH_DAY_OWNER} must not name quick_matches`).toBe(false);
+  });
 });
 
 // Claim 4 (ruling 13, C14): only the named writers name a capture table. Comments are

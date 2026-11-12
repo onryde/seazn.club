@@ -172,13 +172,54 @@ describe.skipIf(!HAS_DB)("the day read for a Match Day code", () => {
     await sql`update fixtures set finished_at = ${iso(-10)} where id = ${done!.id}`;
 
     const [{ headline }] = await sql<{ headline: string }[]>`select summary->>'headline' as headline from match_states where fixture_id = ${playing!.id}`;
-    expect(headline, "premise: the engine's headline is the long form").toContain("21");
+    expect(headline, "premise: the engine's headline is the long form, not the desk's short one").toBe("1 — 0 · 21–15 (9–4)");
+    expect(headline).not.toBe("1–0 · 9–4");
     const { code } = await codeFor(day, { kind: "competition" });
     const view = await getMatchDayForCode(code, NOW);
     const rows = view.courts.flatMap((c) => [...(c.now ? [c.now] : []), ...c.next, ...c.finished]);
     // As the desk's court row shows them: sets won · live points; the same form once finished.
     expect(rows.find((r) => r.fixture_id === playing!.id)).toMatchObject({ status: "in_play", summary: "1–0 · 9–4" });
     expect(rows.find((r) => r.fixture_id === done!.id)).toMatchObject({ status: "finished", summary: "2–0" });
+    expect(CaptureMatchdayDay.safeParse(view).success).toBe(true);
+  });
+
+  it("a tennis row in play reads sets · games · points, with the level words in English (DEFAULT_LOCALE, the controller's ruling)", async () => {
+    // single-sport: tennis — the one nested (three-level) kernel; its live game carries "Ad", a level word the desk composes
+    // from the dictionary. The read pins DEFAULT_LOCALE (English) for every phone, so the literal below is English.
+    const div = await createDivision(day.auth, day.comp.id, {
+      name: "Court Tennis",
+      slug: "tennis-" + randomUUID().slice(0, 6),
+      sport_key: "tennis",
+      variant_key: "tour",
+      config: {},
+    });
+    await createEntrants(day.auth, div.id, ["T1", "T2"].map((n, i) => ({ kind: "individual" as const, display_name: n, seed: i + 1, members: [] })));
+    const [stage] = await createStages(day.auth, div.id, { seq: 1, kind: "league", name: "League", config: {}, progression: null });
+    await startDivision(day.auth, div.id);
+    await generateStageFixtures(day.auth, stage!.id);
+    const [m] = await sql<{ id: string; home_entrant_id: string; away_entrant_id: string }[]>`
+      select id, home_entrant_id, away_entrant_id from fixtures where stage_id = ${stage!.id}
+         and home_entrant_id is not null and away_entrant_id is not null limit 1`;
+    const point = async (by: string) => {
+      const [{ n }] = await sql<{ n: number }[]>`select coalesce(max(seq), 0)::int as n from score_events where fixture_id = ${m!.id}`;
+      await scoreEvent(day.auth, m!.id, { expected_seq: n, type: "tennis.point", payload: { by } } as never);
+    };
+    const H = m!.home_entrant_id;
+    const A = m!.away_entrant_id;
+    await place(day, m!.id, 0, day.courts.c3);
+    const [{ n: seq0 }] = await sql<{ n: number }[]>`select coalesce(max(seq), 0)::int as n from score_events where fixture_id = ${m!.id}`;
+    await scoreEvent(day.auth, m!.id, { expected_seq: seq0, type: "core.start", payload: {} } as never);
+    // Set 1 to home: six games of four straight points (6–0). Set 2: games alternate H A H A H (3–2 to home), each four
+    // straight points; then the live game goes 15–0, 15–15, 30–15, 30–30, 40–30, 40–40 (deuce) and home takes the advantage.
+    for (let g = 0; g < 6; g++) for (let i = 0; i < 4; i++) await point(H);
+    for (const winner of [H, A, H, A, H]) for (let i = 0; i < 4; i++) await point(winner);
+    for (const by of [H, A, H, A, H, A, H]) await point(by);
+
+    const { code } = await codeFor(day, { kind: "competition" });
+    const view = await getMatchDayForCode(code, NOW);
+    const rows = view.courts.flatMap((c) => [...(c.now ? [c.now] : []), ...c.next, ...c.finished]);
+    // sets won · games of the set in play · the game's points ("Ad" is the English advantage call, home leading).
+    expect(rows.find((r) => r.fixture_id === m!.id)).toMatchObject({ status: "in_play", sport_key: "tennis", summary: "1–0 · 3–2 · Ad–40" });
     expect(CaptureMatchdayDay.safeParse(view).success).toBe(true);
   });
 
