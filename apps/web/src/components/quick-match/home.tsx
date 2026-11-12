@@ -30,6 +30,7 @@ import {
 } from "@/lib/quick-match-constants";
 import { roundRoleFor } from "@/lib/round-role-label";
 import { routes } from "@/lib/routes";
+import { fmtPublicDate, UTC } from "@/lib/format";
 import { compactScore } from "@/lib/match-day/view";
 import { scoreLineOf, type LevelWords } from "@/lib/score/levels";
 import { setBreakdown } from "@/lib/public-site";
@@ -43,6 +44,8 @@ type Vars = Record<string, string | number>;
 
 /** The viewer's words, resolved by the page from the dictionaries. */
 export interface QuickMatchCopy {
+  /** The viewer's language (D10), for the dates the page writes. */
+  locale: Locale;
   t: (key: MessageKey, vars?: Vars) => string;
   plural: (key: string, count: number, vars?: Vars) => string;
   /** The public dictionary's live-level marks (TB, MTB, Ad) for a live score. */
@@ -443,9 +446,24 @@ export function QuickMatchHomeView({
   const { t } = copy;
   const v = buildHomeView(home, copy, fullTable);
   const save = saveStateFor(home.row.savedByUserId, viewerId);
+  // Owner 2026-11-12: under Save, while nobody holds the match, the DAY it is deleted, from the row's own expiry. A calendar
+  // day in UTC: a quick match has no venue to name a zone, and the sweep deletes on the instant, not the viewer's midnight.
+  // No expiry, no line: a match whose saver's account was deleted is offered Save again (`saved_by_user_id` is ON DELETE SET
+  // NULL) but `expires_at` stays null, and nothing will delete it.
+  const deletedOn =
+    home.row.expiresAt === null
+      ? null
+      : fmtPublicDate(copy.locale, UTC, home.row.expiresAt, { day: "numeric", month: "long", year: "numeric" });
   const saveNode =
     save === "offer" && slots.save ? (
-      slots.save
+      <div className="flex min-w-0 flex-col gap-1.5">
+        {slots.save}
+        {deletedOn ? (
+          <p data-testid="qm-not-saved" className="text-center text-[13px] leading-snug text-[#b7aede] [overflow-wrap:anywhere]">
+            {t("quickMatch.home.notSaved", { date: deletedOn })}
+          </p>
+        ) : null}
+      </div>
     ) : save === "saved" ? (
       // "Saved", and the way to where the saver renames or deletes it (plan 3 Task 6, controller ruling): the account's Quick
       // matches. Its saver's only, as "Saved" is.

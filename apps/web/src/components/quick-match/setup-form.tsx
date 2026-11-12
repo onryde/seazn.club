@@ -27,6 +27,7 @@ import { interpolate, plural } from "@/lib/i18n-runtime";
 import {
   QUICK_MATCH_EMAIL_PATTERN,
   QUICK_MATCH_ERRORS,
+  QUICK_MATCH_EXPIRY_DAYS,
   QUICK_MATCH_MAX_ALIVE_PER_VISITOR,
   QUICK_MATCH_MAX_PLAYS,
   QUICK_MATCH_MAX_SIDES,
@@ -556,6 +557,12 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError }:
             }
           >
             {checkPrompt ? msg("quickMatch.setup.tickCheck") : null}
+          </p>
+          {/* Owner 2026-11-12: said plainly, just above Start, that an unsaved quick match is deleted, and when (the sweep's
+              own constant, never a typed number). In the bar, so a phone sees it beside the Start it docks; from md it is
+              order 2 and earlier in the DOM than Start (also 2), so it sits straight above it. */}
+          <p data-testid="qm-keep-note" className="mb-2.5 text-center text-xs leading-snug text-[#b7aede] md:order-2">
+            {msg("quickMatch.setup.keepNote", { days: QUICK_MATCH_EXPIRY_DAYS })}
           </p>
           <button
             type="submit"

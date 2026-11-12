@@ -82,6 +82,7 @@ export default async function QuickMatchHomePage({
   const locale = await resolveLocale();
   const [ui, pub, search] = await Promise.all([getDictionary(locale, "ui"), getDictionary(locale, "public"), searchParams]);
   const copy: QuickMatchCopy = {
+    locale,
     t: (key, vars) => t(ui, key, vars),
     plural: (key, count, vars) => plural(ui, key, count, locale, vars),
     levels: levelWords(pub),

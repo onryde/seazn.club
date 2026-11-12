@@ -492,6 +492,7 @@
   "quickMatch.setup.start": "Start playing",
   "quickMatch.setup.tickCheck": "Tick the check above, then tap Start playing.",
   "quickMatch.setup.needsScript": "Starting a quick match needs JavaScript.",
+  "quickMatch.setup.keepNote": "No account needed. Deleted {days} days after the last score unless you save it.",
   "quickMatch.setup.startCount.one": "· {count} match",
   "quickMatch.setup.startCount.other": "· {count} matches",
   "quickMatch.recent.title": "Your recent quick matches",

@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { expectNoHorizontalScroll, loginUi, TAG, withDb } from "./helpers";
 import { consentedAnonymousState } from "./scorepad-a11y-kit";
 import { HOLD_MS } from "../src/components/v2/scorepad/queue";
-import { QUICK_MATCH_MAX_SIDES } from "../src/lib/quick-match-constants";
+import { QUICK_MATCH_EXPIRY_DAYS, QUICK_MATCH_MAX_SIDES } from "../src/lib/quick-match-constants";
 
 // Quick match plan 2 (spec docs/superpowers/specs/2026-11-03-quick-match-design.md §5): the guest's surfaces in a real
 // browser, at 1280 (the `parallel` project). Task 4 writes the setup screen's cases; Task 10 extends this file with the
@@ -123,6 +123,11 @@ test("setup (owner 2026-11-12, League only): at 3 to 6 sides there is no Knockou
   }
   expect(checked, "anti-vacuity: side counts checked, 3 to the most a quick match takes").toBe(QUICK_MATCH_MAX_SIDES - 2);
   expect(checked).toBeGreaterThan(0);
+  // Owner 2026-11-12: just above Start, said plainly, that an unsaved quick match is deleted, after the sweep's own days.
+  const note = page.getByTestId("qm-keep-note");
+  await expect(note).toHaveText(mk("quickMatch.setup.keepNote", { days: QUICK_MATCH_EXPIRY_DAYS }));
+  const [noteBox, startBox] = [await note.boundingBox(), await start(page).boundingBox()];
+  expect(noteBox && startBox && noteBox.y + noteBox.height <= startBox.y, "the line sits above Start").toBe(true);
   await expect(form(page).getByRole("button", { name: mk("quickMatch.setup.addSide") }), "at the most sides there is no row to add").toHaveCount(0);
 });
 

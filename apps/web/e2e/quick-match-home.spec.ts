@@ -74,7 +74,7 @@ async function atEachWidth(page: Page, check: (width: number) => Promise<void>, 
 test("home (Task 5): a league of 4 with a 43-character side, at 320, 768 and 1280: hero, table and list, no sideways scroll", async ({ guest: page }) => {
   await createThroughSetup(page, [LONG, "Priya & Tom", "Lee & Ana", "Jo & Max"]);
   await atEachWidth(page, async (width) => {
-    await expect(page.getByTestId("qm-played"), `${width}`).toHaveText("0 of 6 matches played · kept 7 days after the last score");
+    await expect(page.getByTestId("qm-played"), `${width}`).toHaveText("0 of 6 matches played · deleted 7 days after the last score unless saved");
     await expect(page.getByTestId("qm-hero"), `${width}`).toContainText("Up next · match 1 of 6");
     await expect(page.getByTestId("qm-standings-row"), `${width}`).toHaveCount(4);
     await expect(page.getByTestId("qm-standings").getByText(LONG), `${width}`).toBeVisible();
@@ -85,6 +85,10 @@ test("home (Task 5): a league of 4 with a 43-character side, at 320, 768 and 128
     await expect(save, `${width}: Save is offered`).toHaveText("Save this match");
     expect((await save.boundingBox())?.height ?? 0, `${width}: Save is a 44px target`).toBeGreaterThanOrEqual(44);
     await expect(page.getByTestId("qm-saved"), `${width}: nobody saved it yet`).toHaveCount(0);
+    // Owner 2026-11-12: under Save, the day it is deleted (the date itself is pinned against the row in page.test.tsx).
+    await expect(page.getByTestId("qm-not-saved"), `${width}: the deletion day under Save`).toHaveText(
+      /^Not saved — deleted on \d{1,2} [A-Z][a-z]+ \d{4}$/,
+    );
   });
 });
 
@@ -400,7 +404,7 @@ test("Add a match (Task 8): a league of 4 at 320, 768 and 1280: closed on first 
   await expect(page.getByTestId("qm-flash")).toHaveCount(0);
   // A round robin of 4 plays 6 (n(n-1)/2); the added match is the 7th, listed last, seated as picked.
   await expect(page.getByTestId("qm-match")).toHaveCount(7);
-  await expect(page.getByTestId("qm-played")).toHaveText("0 of 7 matches played · kept 7 days after the last score");
+  await expect(page.getByTestId("qm-played")).toHaveText("0 of 7 matches played · deleted 7 days after the last score unless saved");
   await expect(page.getByTestId("qm-match").last().getByTestId("qm-match-sides")).toHaveText("Jo & Max v Priya & Tom");
   await expect(page.getByTestId("qm-hero"), "the hero is still the first match").toContainText("Up next · match 1 of 7");
   await expectNoHorizontalScroll(page);

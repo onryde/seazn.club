@@ -492,6 +492,7 @@
   "quickMatch.setup.start": "Commencer à jouer",
   "quickMatch.setup.tickCheck": "Cochez la case ci-dessus, puis touchez Commencer à jouer.",
   "quickMatch.setup.needsScript": "Lancer un match rapide nécessite JavaScript.",
+  "quickMatch.setup.keepNote": "Aucun compte requis. Supprimé {days} jours après le dernier point marqué, sauf si vous l'enregistrez.",
   "quickMatch.setup.startCount.one": "· {count} match",
   "quickMatch.setup.startCount.other": "· {count} matchs",
   "quickMatch.recent.title": "Vos matchs rapides récents",

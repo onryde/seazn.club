@@ -71,6 +71,8 @@ const MARKETING_KEYS = [
   // server's HTML shows a browser without the script (review m3).
   "quickMatch.setup.tickCheck",
   "quickMatch.setup.needsScript",
+  // Owner 2026-11-12: the line above Start that says an unsaved quick match is deleted, and when.
+  "quickMatch.setup.keepNote",
 ] as const;
 
 const UI_KEYS = [
@@ -125,6 +127,8 @@ const UI_KEYS = [
   "quickMatch.home.playedSaved.one",
   "quickMatch.home.playedSaved.other",
   "quickMatch.home.editResult",
+  // Owner 2026-11-12: under Save, while nobody has saved the match, the day it is deleted.
+  "quickMatch.home.notSaved",
   "quickMatch.dead.title",
   "quickMatch.dead.hint",
   "quickMatch.dead.startNew",
@@ -309,12 +313,20 @@ describe("quick match guest copy: plurals", () => {
     expect(`${m["quickMatch.setup.start"]} ${plural(m, "quickMatch.setup.startCount", 6, "en")}`).toBe("Start playing · 6 matches");
     // setup.html: "Sides 4 of 6".
     expect(plural(m, "quickMatch.setup.sidesCount", 4, "en", { max: 6 })).toBe("4 of 6");
-    // home.html: "2 of 6 matches played · kept 7 days after the last score"; A11: "0 of 1 match played".
+    // home.html's count; owner 2026-11-12: an unsaved match says plainly that it is DELETED, and that saving it stops that
+    // (it read "kept 7 days after the last score", which a guest took for a promise, not a deletion).
     expect(plural(ui, "quickMatch.home.played", 6, "en", { played: 2, days: 7 })).toBe(
-      "2 of 6 matches played · kept 7 days after the last score",
+      "2 of 6 matches played · deleted 7 days after the last score unless saved",
     );
     expect(plural(ui, "quickMatch.home.played", 1, "en", { played: 0, days: 7 })).toBe(
-      "0 of 1 match played · kept 7 days after the last score",
+      "0 of 1 match played · deleted 7 days after the last score unless saved",
+    );
+    // Owner 2026-11-12, the owner's words: the setup line above Start, and the dated line under Save.
+    expect(interpolate(m["quickMatch.setup.keepNote"]!, { days: 7 })).toBe(
+      "No account needed. Deleted 7 days after the last score unless you save it.",
+    );
+    expect(interpolate(ui["quickMatch.home.notSaved"]!, { date: "19 November 2026" })).toBe(
+      "Not saved — deleted on 19 November 2026",
     );
     // A saved match (branch review A I3): the same count, no countdown.
     expect(plural(ui, "quickMatch.home.playedSaved", 6, "en", { played: 2 })).toBe("2 of 6 matches played");
@@ -358,6 +370,7 @@ describe("quick match guest copy: constants are placeholders, never typed number
     ["ui", "quickMatch.home.played.other", "days"],
     ["ui", "quickMatch.flash.adhocLimit", "max"],
     ["ui", "quickMatch.dead.hint", "days"],
+    ["marketing", "quickMatch.setup.keepNote", "days"],
   ] as const;
 
   it("each constant-bearing value interpolates its constant in every locale (counted)", () => {

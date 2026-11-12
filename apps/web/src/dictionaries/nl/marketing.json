@@ -492,6 +492,7 @@
   "quickMatch.setup.start": "Begin met spelen",
   "quickMatch.setup.tickCheck": "Vink het vakje hierboven aan en tik dan op Begin met spelen.",
   "quickMatch.setup.needsScript": "Voor een snelle wedstrijd heb je JavaScript nodig.",
+  "quickMatch.setup.keepNote": "Geen account nodig. Wordt {days} dagen na de laatste score verwijderd, tenzij je hem bewaart.",
   "quickMatch.setup.startCount.one": "· {count} wedstrijd",
   "quickMatch.setup.startCount.other": "· {count} wedstrijden",
   "quickMatch.recent.title": "Je recente snelle wedstrijden",

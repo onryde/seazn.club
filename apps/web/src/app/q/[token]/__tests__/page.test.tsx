@@ -259,6 +259,7 @@ const matchNumbers = (h: QuickMatchHome) => new Map(h.fixtures.filter((f) => !f.
 
 /** The view's copy, built as the page builds it, from the dictionaries. */
 const enCopy = (): QuickMatchCopy => ({
+  locale: "en",
   t: (k, v) => tRuntime(en, k, v),
   plural: (k, n, v) => pluralRuntime(en, k, n, "en", v),
   levels: levelWords(enPublic),
@@ -365,6 +366,38 @@ describe("the empty case: a quick match with no match left", () => {
     const { tree } = await renderView({ ...empty, played: 1, total: 3 });
     expect(words(oneByTestId(tree, "qm-played"))).toBe(enPlayed(1, 3));
     expect(enPlayed(1, 3)).toContain(`${SPEC_EXPIRY_DAYS} days`);
+  });
+
+  it("under Save, an unsaved match names the DAY it is deleted, in the viewer's language; a saved one, and one with no expiry, name none (owner 2026-11-12)", async () => {
+    // 10:00 UTC, 19 November 2026. The owner's words, the date as the page's public dates read: day-month in English.
+    const at = new Date("2026-11-19T10:00:00.000Z");
+    const saveSlot = () => ({ ...stubSlots(), save: <form data-testid="slot-save" /> });
+    const view = (row: Partial<QuickMatchHome["row"]>, viewerId: string | null, copy = enCopy()) =>
+      expand(<QuickMatchHomeView home={{ ...empty, row: { ...empty.row, ...row } }} copy={copy} slots={saveSlot()} viewerId={viewerId} />);
+    const frCopy: QuickMatchCopy = { ...enCopy(), locale: "fr", t: (k, v) => tRuntime(fr, k, v) };
+
+    const unsaved = await view({ expiresAt: at, savedByUserId: null }, null);
+    expect(words(oneByTestId(unsaved, "qm-not-saved"))).toBe("Not saved — deleted on 19 November 2026");
+    // Under Save: in the actions row, after the Save form in document order.
+    const order = all(oneByTestId(unsaved, "qm-actions"), (el) => ["slot-save", "qm-not-saved"].includes(String(el.props["data-testid"])));
+    expect(order.map((el) => el.props["data-testid"])).toEqual(["slot-save", "qm-not-saved"]);
+    expect(words(oneByTestId(await view({ expiresAt: at, savedByUserId: null }, null, frCopy), "qm-not-saved"))).toBe(
+      "Non enregistré — sera supprimé le 19 novembre 2026",
+    );
+
+    // No line: the saver looking (Saved), anyone else looking at a saved match (no Save at all), and a match nobody holds
+    // that has no expiry (its saver's account was deleted: `saved_by_user_id` is ON DELETE SET NULL and `expires_at` stays
+    // null, so Save is offered again but nothing will delete it).
+    const none: [string, Awaited<ReturnType<typeof view>>, boolean][] = [
+      ["the saver", await view({ expiresAt: null, savedByUserId: "u-1" }, "u-1"), false],
+      ["someone else, a saved match", await view({ expiresAt: null, savedByUserId: "u-1" }, null), false],
+      ["nobody holds it, no expiry", await view({ expiresAt: null, savedByUserId: null }, null), true],
+    ];
+    for (const [who, tree, offersSave] of none) {
+      expect(byTestId(tree, "qm-not-saved"), who).toHaveLength(0);
+      expect(byTestId(tree, "slot-save"), `${who}: Save offered`).toHaveLength(offersSave ? 1 : 0);
+    }
+    expect(none).toHaveLength(3);
   });
 
   it("a settled match's score reads winner first from the engine's per-side lines; the headline only when they name no pair (h2)", async () => {
@@ -594,6 +627,13 @@ describe.skipIf(!HAS_DB)("the quick match home page", () => {
     expect([save.type, save.props.method, save.props.action]).toEqual(["form", "post", `/q/${out.token}/save/confirm`]);
     expect(words(oneByTestId(tree, "qm-save"))).toBe(en_("quickMatch.home.save"));
     expect(byTestId(tree, "qm-saved")).toHaveLength(0);
+    // Owner 2026-11-12: under Save, the day this match is deleted: the row's own expiry, as an en-GB calendar day in UTC.
+    const [expiry] = await sql<{ expires_at: Date | null }[]>`select expires_at from quick_matches where id = ${out.id}`;
+    expect(expiry?.expires_at, "premise: an unsaved match has an expiry").toBeInstanceOf(Date);
+    const day = new Intl.DateTimeFormat("en-GB", { timeZone: "UTC", day: "numeric", month: "long", year: "numeric" }).format(
+      expiry!.expires_at!,
+    );
+    expect(words(oneByTestId(tree, "qm-not-saved"))).toBe(`Not saved — deleted on ${day}`);
     expect(byTestId(tree, "slot-score")).toHaveLength(0);
     expect(words(oneByTestId(tree, "qm-anyone"))).toBe(en_("quickMatch.home.anyoneCanScore"));
     expect(html).toContain(`<h2`);
