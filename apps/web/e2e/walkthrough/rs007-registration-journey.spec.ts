@@ -291,12 +291,15 @@ test("a captain enters a team, and a team-mate claims their spot from the link t
         anon.getByText(MATES[1]!),
         "Mate Two's raw full name is still visible after their own opt-out",
       ).not.toBeVisible();
+      // The name also appears in the captain's "Invite your teammates" block
+      // (a joined row); this beat is about the ROSTER, so read outside it.
+      const outsideInvite = 'xpath=self::*[not(ancestor::*[@data-testid="reg-invite"])]';
       await expect(
-        anon.getByText(mate2Masked),
+        anon.getByText(mate2Masked).locator(outsideInvite),
         `expected Mate Two's masked name ("${mate2Masked}") to be visible`,
       ).toBeVisible();
       await expect(
-        anon.getByText(MATES[0]!),
+        anon.getByText(MATES[0]!).locator(outsideInvite),
         "Mate One (never opted out) must still render in full",
       ).toBeVisible();
       await screenshotAtWidths(anon, testInfo, "12-standings-mixed-consent");
