@@ -46,7 +46,7 @@ export interface LockedSponsor {
   /** Placement provenance (ruling (g), V495): the deal whose snapshot `tier`, `competition_id` and `on_stream` carry, set by
    *  the live write; null when the club set them by hand (or a hand PATCH of any of them has since taken them over). */
   placement_from_deal_id: string | null;
-  /** Archived (V505, archive spec D8): hidden everywhere, every record kept. Read under the lock by Archive (idempotent), by
+  /** Archived (V508, archive spec D8): hidden everywhere, every record kept. Read under the lock by Archive (idempotent), by
    *  `patchSponsor` and by `createDeal` (both refuse an archived sponsor, 409 `sponsor_archived`). */
   archived_at: string | null;
 }

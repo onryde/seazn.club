@@ -4,8 +4,8 @@
 // Sport-agnostic: no sport sweep. Sponsor visibility carries no sport.
 //
 // Expected values are the spec's literals (§6.1: `archived_at timestamptz null`, no default, no backfill), never read back
-// from the migration. The delta is found by SUFFIX, never by number: it is authored as V505 and renumbered at merge (a
-// `git mv` plus a line-1 edit), so line 1 must name the file's own version, the rule src/lib/__tests__/migration-header-truth
+// from the migration. The delta is found by SUFFIX, never by number: it was authored as V505 and renumbered to V508 at
+// merge (a `git mv` plus a line-1 edit), so line 1 must name the file's own version, the rule src/lib/__tests__/migration-header-truth
 // enforces repo-wide; it is restated here so a renumber that forgets line 1 reds in this file too. Real Postgres required
 // for the column checks (skipped without DATABASE_URL like every DB suite under src/server).
 import { randomUUID } from "node:crypto";
@@ -20,7 +20,7 @@ const DELTAS_DIR = resolve(__dirname, "../../../../../../db/migration/deltas");
 const DELTA = /^V\d+__sponsor_archive\.sql$/;
 const MATCHES = readdirSync(DELTAS_DIR).filter((f) => DELTA.test(f));
 
-/** The repo's self-naming header shape (migration-header-truth.test.ts `selfNamed`): `-- V505 — description`. */
+/** The repo's self-naming header shape (migration-header-truth.test.ts `selfNamed`): `-- V508 — description`. */
 const SELF_NAMED = /^--\s*V(\d+)\s*[—–-]\s/;
 /** The version a migration file's NAME declares (migration-header-truth.test.ts `fileVersion`). */
 const fileVersion = (name: string): string => /^V(\d+)__/.exec(name)![1]!;

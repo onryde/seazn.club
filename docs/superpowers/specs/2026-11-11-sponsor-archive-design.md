@@ -64,7 +64,7 @@ Owner-approved behaviour (2026-11-11), verbatim in substance:
 | The slim switch: a 44 × 56 tap target `role="switch"` holding a 24 × 44 track and a 20 px knob. It is inline in the On stream tab, and `on-stream-tab.test.tsx:183-230` pins its proportions | `components/sponsors/on-stream-tab.tsx:214-235` |
 | Delete is the trash icon in the list row's tools, folded into the ⋯ tray below `md` | `components/sponsors/sponsor-list.tsx:345-356` |
 | Public pages expire through `expirePublicSponsors` after the commit (`expireCompetitionShell`, awaited inside the request) | `usecases/sponsors.ts:179-181` |
-| Migrations: main holds **V501** (`sponsor_poster`, #1186) and **V502 to V504** (the sponsor invoices, PR 3 #1176: `sponsor_invoices`, `email_outbox_sponsor_deal_paid`, `sponsor_deal_written_off`); this feature authors **V505**, the next free number (provisional: renumbered at merge if main moves) | `db/migration/deltas/` at `9f9ca88d8d` |
+| Migrations: main holds **V501** (`sponsor_poster`, #1186) and **V502 to V504** (the sponsor invoices, PR 3 #1176: `sponsor_invoices`, `email_outbox_sponsor_deal_paid`, `sponsor_deal_written_off`); this feature authored **V505**, the next free number (provisional: renumbered at merge if main moved). Renumbered to **V508** before merge: staging already had V506 (`quick_matches`) applied and V507 is claimed by two unmerged branches | `db/migration/deltas/` at `9f9ca88d8d` |
 
 **Premises in the brief that proved false or incomplete** (AGENTS.md class 5):
 
@@ -74,7 +74,7 @@ Owner-approved behaviour (2026-11-11), verbatim in substance:
 4. **"The Add deal sheet's sponsor picker".** There is none. `AddDealSheet` takes one `sponsor` and is opened from that sponsor's row action or page. The filter becomes: do not offer Add deal for an archived sponsor, and refuse it on the server (D10).
 5. **"Search/directory if any".** None reads sponsors. The kiosk (`/present`) and its OG images do not draw sponsors either.
 6. **"Live, scheduled or awaiting payment"** leaves out `draft` and `awaiting_approval` (both can still go live) and an **ended deal still due** (it still asks for money). D9 covers all of them.
-7. **Migration numbers.** When this spec was written, the poster branch's file was **`V503__sponsor_poster.sql`**, colliding with PR 3's `V503__sponsor_deal_written_off.sql`. Resolved on main: the poster merged as **V501** (#1186), PR 3's invoices as **V502 to V504** (#1176), and this feature authors **V505**. PR 3 was then still WIP; it merged as #1176 (`9f9ca88d8d`).
+7. **Migration numbers.** When this spec was written, the poster branch's file was **`V503__sponsor_poster.sql`**, colliding with PR 3's `V503__sponsor_deal_written_off.sql`. Resolved on main: the poster merged as **V501** (#1186), PR 3's invoices as **V502 to V504** (#1176), and this feature authored **V505**, renumbered to **V508** before merge (V506 `quick_matches` was already applied on staging; V507 is claimed by two unmerged branches). PR 3 was then still WIP; it merged as #1176 (`9f9ca88d8d`).
 8. **The visibility filter is not one place.** Besides `resolveSponsors`, four SQL sites read `status = 'active'` directly (§4 table). Each needs the archive filter, and a sweep pins the set (D27, plan Task 4).
 9. **"The v1 API plus OpenAPI regen"** applies to the console only. Every sponsor route is never key-accessible, so only `openapi/v1.json` changes; `v1.public.json` has no sponsor paths.
 
@@ -113,10 +113,10 @@ Owner-approved behaviour (2026-11-11), verbatim in substance:
 
 ## 6. Data and API
 
-### 6.1 Migration `V505__sponsor_archive.sql` (provisional; renumbered at merge)
+### 6.1 Migration `V508__sponsor_archive.sql` (authored as V505; renumbered to V508 before merge)
 
 ```sql
--- V505 — archive a sponsor: hidden everywhere, every record kept (renumbered at merge: rename the file AND this line).
+-- V508 — archive a sponsor: hidden everywhere, every record kept (renumbered at merge: rename the file AND this line).
 -- Spec: docs/superpowers/specs/2026-11-11-sponsor-archive-design.md §6.1.
 alter table sponsors add column archived_at timestamptz null;
 ```

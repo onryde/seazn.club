@@ -84,7 +84,7 @@ export interface SponsorRow extends SponsorDealSummary {
   created_at: string;
   /** Ticked onto the stream's rotation (V492; R4 S12). Written only by PATCH; a created sponsor starts false. */
   on_stream: boolean;
-  /** When the club archived this sponsor (V505, archive spec D8), or null. Orthogonal to `status`: an archived sponsor is hidden
+  /** When the club archived this sponsor (V508, archive spec D8), or null. Orthogonal to `status`: an archived sponsor is hidden
    *  everywhere and keeps every record. Written ONLY by `archiveSponsor` / `unarchiveSponsor`, never by a PATCH (D11). */
   archived_at: string | null;
   /** The paid order that activated this placement, when it was bought
