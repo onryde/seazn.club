@@ -14,7 +14,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { msg } from "@/lib/messages";
 import { roundRoleLabel } from "@/lib/round-role-label";
 import { previewDivisionFixtures, previewStageDraw } from "../stages";
-import { quickMatchPreview, quickMatchStageInput, type QuickMatchPreviewRound } from "../quick-match-preview";
+import { quickMatchPreview, quickMatchStageInput, type QuickMatchPreview, type QuickMatchPreviewRound } from "../quick-match-preview";
+
+/** The byes the preview draws: its own bye lines (the preview no longer counts them; nothing in production read the count). */
+const byesOf = (p: QuickMatchPreview) => p.rounds.flatMap((r) => r.lines).filter((l) => l.bye).length;
 
 const pairs = (r: QuickMatchPreviewRound) =>
   new Set(r.lines.filter((l) => !l.bye).map((l) => [l.home.seed, l.away.seed].sort().join("v")));
@@ -44,7 +47,7 @@ describe("quickMatchPreview — counts", () => {
   ])("knockout %i sides = %i matches, %i byes", (sides, n, byes) => {
     const p = quickMatchPreview({ format: "knockout", sides, plays: 1 });
     expect(p.matchCount).toBe(n);
-    expect(p.byeCount).toBe(byes);
+    expect(byesOf(p)).toBe(byes);
   });
 });
 
@@ -102,7 +105,7 @@ describe("quickMatchPreview — the draw (C22)", () => {
     expect(quickMatchPreview({ format: "league", sides: 4, plays: 1 }).rounds.every((r) => r.role === null)).toBe(true);
   });
 
-  it("matchCount, byeCount and the round names equal previewDivisionFixtures' for every format, side count and plays (C17 differential)", () => {
+  it("matchCount, the byes and the round names equal previewDivisionFixtures' for every format, side count and plays (C17 differential)", () => {
     const bye = msg("bracket.slot.bye"); // a test file: the bye-render-sites scan reads non-test files only
     let checked = 0;
     for (const format of ["league", "knockout"] as const)
@@ -113,9 +116,9 @@ describe("quickMatchPreview — the draw (C22)", () => {
           const lines = sections.flatMap((s) => s.matches);
           const p = quickMatchPreview({ format, sides, plays });
           expect(p.matchCount, label).toBe(lines.filter((m) => m.away !== bye).length);
-          expect(p.byeCount, label).toBe(lines.filter((m) => m.away === bye).length);
+          expect(byesOf(p), label).toBe(lines.filter((m) => m.away === bye).length);
           // A round robin's odd field sits one side out per round, but that is no fixture: never a bye line.
-          if (format === "league") expect(p.byeCount, label).toBe(0);
+          if (format === "league") expect(byesOf(p), label).toBe(0);
           // Each round's typed role, named the way the text preview names it, is that preview's section title.
           expect(
             p.rounds.map((r) => (r.role ? roundRoleLabel(msg, r.role) : msg("bracket.round.plain", { n: r.roundNo }))),
@@ -230,7 +233,6 @@ describe("quickMatchPreview — a seat it cannot name is refused, never shown bl
     const { quickMatchPreview: fresh } = await import("../quick-match-preview");
     expect(fresh({ format: "knockout", sides: 4, plays: 1 })).toEqual({
       matchCount: 1,
-      byeCount: 0,
       rounds: [{ roundNo: 2, role: null, lines: [{ home: { seed: null, feeder: { round: 1, seq: 1 } }, away: { seed: null, feeder: { round: 1, seq: 2 } }, bye: false }] }],
     });
   });

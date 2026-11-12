@@ -105,7 +105,7 @@ export function QuickMatchDrawCard({ card: c, byeLabel, liveLabel }: { card: Dra
 }
 
 /** One side's line (a plain function, so the card's tree holds it): the name, or the feeder in words while it waits, which
- *  WRAPS ("Winner of the quarter-final 2" is not cut short); a winner's finished score at the line's end, wrapping below a
+ *  WRAPS ("Winner of quarter-final 2" is not cut short); a winner's finished score at the line's end, wrapping below a
  *  long name rather than widening the card. */
 function seatLine(seat: DrawSeat) {
   return (

@@ -3,8 +3,9 @@
 // the create runs, over the same stage input (`quickMatchStageInput`), so the number on the Start button cannot drift
 // from the fixtures generated (pre-flight A8) and there is never a second bracket algorithm (§4).
 //
-// No string here is copy (pre-flight C2, C10): plan 2 names seed i after the i-th side as typed, a feeder as the
-// winner of round·seq, a bye in words, and a round by roundRoleLabel(t, role), or "Round {n}" when role is null.
+// No string here is copy (pre-flight C2, C10): plan 2 names seed i after the i-th side as typed, a bye in words, and a
+// card and a waiting seat's feeder through `fixtureLabel`/`winnerOfLabel` (components/quick-match/fixture-label.ts), from
+// the round's role and the match's place among its round's non-bye matches.
 import type { RoundRole } from "@seazn/engine/competition";
 import {
   QUICK_MATCH_KNOCKOUT_MIN_SIDES,
@@ -31,10 +32,9 @@ export interface QuickMatchPreviewRound {
   role: RoundRole | null;
   lines: QuickMatchPreviewLine[];
 }
-/** matchCount: the lines that are not byes (a bye is not a match); byeCount: the byes. */
+/** matchCount: the lines that are not byes (a bye is not a match). */
 export interface QuickMatchPreview {
   matchCount: number;
-  byeCount: number;
   rounds: QuickMatchPreviewRound[];
 }
 /** A PreviewStageInput, and Task 5's CreateStage once `seq: 1` is added: ONE input for the preview and the create. */
@@ -78,7 +78,6 @@ export function quickMatchPreview(input: { format: QuickMatchFormat; sides: numb
 
   const rounds = new Map<number, QuickMatchPreviewRound>();
   let matchCount = 0;
-  let byeCount = 0;
   for (const f of [...draw].sort((a, b) => a.roundNo - b.roundNo || a.seqInRound - b.seqInRound)) {
     const where = `R${f.roundNo}·${f.seqInRound}`;
     // The engine always lands a bye's award on home (stages/generators.ts bracketToGen), so its away seat is empty. A bye with
@@ -91,13 +90,12 @@ export function quickMatchPreview(input: { format: QuickMatchFormat; sides: numb
       away: f.bye ? EMPTY_SEAT : seatOf(f.awaySeed, f.awayFrom, where),
       bye: f.bye,
     };
-    if (f.bye) byeCount++;
-    else matchCount++;
+    if (!f.bye) matchCount++;
     const round = rounds.get(f.roundNo);
     if (round) round.lines.push(line);
     else rounds.set(f.roundNo, { roundNo: f.roundNo, role: f.role, lines: [line] });
   }
-  return { matchCount, byeCount, rounds: [...rounds.values()] };
+  return { matchCount, rounds: [...rounds.values()] };
 }
 
 // ---------------------------------------------------------------------------
