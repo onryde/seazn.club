@@ -12,7 +12,8 @@ import { ClearFlashParam } from "@/components/quick-match/clear-flash-param";
 import { QuickMatchSetupForm } from "@/components/quick-match/setup-form";
 import { RecentStrip } from "@/components/quick-match/recent-strip";
 import { getDictionary, t } from "@/lib/i18n";
-import { hasLocale, LOCALES } from "@/lib/i18n-constants";
+import { DEFAULT_LOCALE, hasLocale, LOCALES } from "@/lib/i18n-constants";
+import { routes } from "@/lib/routes";
 import { log } from "@/server/logger";
 import { quickMatchPreviewTable } from "@/server/usecases/quick-match-preview";
 import { readRecentQuickMatches } from "@/server/usecases/quick-match-recent";
@@ -29,10 +30,10 @@ export async function generateMetadata({ params }: { params: Promise<{ lang: str
     title: t(d, "quickMatch.meta.title"),
     description: t(d, "quickMatch.meta.description"),
     alternates: {
-      canonical: `/${lang}/play`,
+      canonical: routes.quickMatchSetup(lang),
       languages: {
-        ...Object.fromEntries(LOCALES.map((l) => [l, `/${l}/play`])),
-        "x-default": "/en/play",
+        ...Object.fromEntries(LOCALES.map((l) => [l, routes.quickMatchSetup(l)])),
+        "x-default": routes.quickMatchSetup(DEFAULT_LOCALE),
       },
     },
   };

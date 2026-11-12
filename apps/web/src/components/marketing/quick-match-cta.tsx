@@ -6,12 +6,13 @@
 // The href is locale-PREFIXED: only `/<lang>/play` resolves (proxy.ts rewrites an unprefixed marketing path only when it
 // is listed), and the create route sends a refusal back to the same path (app/api/quick-match/route.ts).
 import Link from "@/components/ui/console-link";
+import { routes } from "@/lib/routes";
 
 export function QuickMatchCta({ lang, label, hint }: { lang: string; label: string; hint: string }) {
   return (
     <div data-testid="qm-cta" className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
       <Link
-        href={`/${lang}/play`}
+        href={routes.quickMatchSetup(lang)}
         aria-describedby="qm-cta-hint"
         className="mk-display inline-flex min-h-11 shrink-0 items-center justify-center rounded-xl border border-[#4a3885] px-6 text-base font-semibold tracking-[0.02em] text-[var(--mk-cream)] transition hover:border-[var(--mk-lime)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--mk-lime)]"
       >

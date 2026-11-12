@@ -499,7 +499,7 @@ const PAINTERS: Record<string, { verdict: true | string; handoff?: string | stri
     verdict: "writes the claim's `/claim/<token>` path into AuthForm's `next` prop inline and paints it nowhere itself",
     handoff: "components/auth-form.tsx",
   },
-  // The quick match home (plan 2 Tasks 6, 7): builds `/q/<token>/score/<fixture>` inline into the Score form's `action`,
+  // The quick match home (plan 2 Tasks 6, 7): builds `routes.quickMatchScore(token, fixture)` inline into the Score form's `action`,
   // and `routes.quickMatch(token)` into the Share island's `path`.
   "app/q/[token]/page.tsx": {
     verdict:
@@ -536,8 +536,8 @@ describe("every element that paints a scrubbed secret carries ph-no-capture, or 
     expect(all.length).toBeGreaterThan(500);
     // The builders and segments come from the app, not from this test.
     // quickMatch: the guest's home, `/q/<token>` (quick match plan 2, A6); quickMatchSave: its save page, `/q/<token>/save`
-    // (plan 3 Task 2, the reminder mail's link).
-    expect(secretBuilderNames().sort()).toEqual(["checkin", "claim", "quickMatch", "quickMatchSave"]);
+    // (plan 3 Task 2, the reminder mail's link); quickMatchScore: its Score post, `/q/<token>/score/<fixture>` (branch fix A).
+    expect(secretBuilderNames().sort()).toEqual(["checkin", "claim", "quickMatch", "quickMatchSave", "quickMatchScore"]);
     expect(oneTimeLinkPaths().length).toBeGreaterThanOrEqual(5);
     expect(secretSegments().sort()).toEqual(expect.arrayContaining(["checkin", "claim", "join", "score"]));
     // The names the producers really use.
@@ -584,7 +584,7 @@ describe("every element that paints a scrubbed secret carries ph-no-capture, or 
   });
 
   it("the home's Score form (Task 6): the page hands its action to QuickMatchScoreForm, whose host <form> carries the class", () => {
-    // The hop the scan follows: the home page builds `${routes.quickMatch(token)}/score/${id}` straight into the prop.
+    // The hop the scan follows: the home page builds `routes.quickMatchScore(token, id)` straight into the prop.
     expect(known.props).toEqual(
       expect.arrayContaining([{ component: "QuickMatchScoreForm", prop: "action", from: "app/q/[token]/page.tsx" }]),
     );

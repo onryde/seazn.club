@@ -85,7 +85,7 @@ export default async function QuickMatchHomePage({
     // Offered by the view on a live or ready match only (C11, C18), the hero's and each such row's.
     score: (fixture, place) => (
       <QuickMatchScoreForm
-        action={`${routes.quickMatch(token)}/score/${fixture.id}`}
+        action={routes.quickMatchScore(token, fixture.id)}
         place={place}
         label={copy.t(
           place === "row" ? "quickMatch.home.scoreShort" : fixture.live ? "quickMatch.home.continue" : "quickMatch.home.score",

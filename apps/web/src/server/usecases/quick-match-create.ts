@@ -36,6 +36,7 @@ import {
   QUICK_MATCH_ENDS_ON_DAYS,
   QUICK_MATCH_ERRORS,
   QUICK_MATCH_EXPIRY_DAYS,
+  QUICK_MATCH_KNOCKOUT_MIN_SIDES,
   QUICK_MATCH_MAX_ALIVE_PER_VISITOR,
   QUICK_MATCH_SYSTEM_ORG_ID,
   QUICK_MATCH_SYSTEM_USER_ID,
@@ -282,7 +283,7 @@ export async function createQuickMatch(
   if (!offer.kinds.includes(kind)) {
     throw new HttpError(422, `${input.sport_key} does not take '${kind}' sides`, QUICK_MATCH_ERRORS.KIND_NOT_OFFERED);
   }
-  if (input.format === "knockout" && (!offer.knockoutAllowed || input.sides.length <= 2)) {
+  if (input.format === "knockout" && (!offer.knockoutAllowed || input.sides.length < QUICK_MATCH_KNOCKOUT_MIN_SIDES)) {
     throw new HttpError(
       422,
       "a knockout is offered only for three or more sides, in a variant whose matches always produce a winner",

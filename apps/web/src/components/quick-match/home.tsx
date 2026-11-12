@@ -22,6 +22,7 @@ import type { MessageKey } from "@/lib/messages";
 import type { TKey } from "@/lib/i18n-runtime";
 import { QUICK_MATCH_ERRORS, QUICK_MATCH_EXPIRY_DAYS } from "@/lib/quick-match-constants";
 import { roundRoleFor } from "@/lib/round-role-label";
+import { routes } from "@/lib/routes";
 import { compactScore } from "@/lib/match-day/view";
 import { scoreLineOf, type LevelWords } from "@/lib/score/levels";
 import { setBreakdown } from "@/lib/public-site";
@@ -518,7 +519,7 @@ export function QuickMatchDead({ locale, t }: { locale: Locale; t: QuickMatchCop
           </p>
           <a
             data-testid="qm-dead-start"
-            href={`/${locale}/play`}
+            href={routes.quickMatchSetup(locale)}
             className="app-display mt-2 inline-flex min-h-11 max-w-full items-center justify-center rounded-xl bg-[color:var(--mk-lime)] px-5 py-2.5 text-center text-base font-bold leading-tight text-night focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cream"
           >
             {t("quickMatch.dead.startNew")}

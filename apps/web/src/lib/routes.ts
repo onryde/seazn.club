@@ -6,6 +6,7 @@
 // a page shows; multi-org tabs stay independent.
 
 import { PUBLIC_HUB_ROOT } from "./public-hub-root.mjs";
+import { toLocale } from "./i18n-constants";
 
 export { PUBLIC_HUB_ROOT };
 
@@ -150,4 +151,11 @@ export const routes = {
   quickMatch: (token: string) => `/q/${token}`,
   /** The same home's save page (the reminder mail's "save it" link, plan 3 Task 2): the home token, under the same `/q/` root. */
   quickMatchSave: (token: string) => `/q/${token}/save`,
+  /** A quick match home's Score post for one match (plan 2 Task 6; "Edit result" posts it too): the home token and the
+   *  fixture both ride the path, never a query string, under the same scrubbed `/q/` root. */
+  quickMatchScore: (token: string, fixtureId: string) => `/q/${token}/score/${fixtureId}`,
+  /** The quick match setup screen, `/<lang>/play` (plan 2 Task 4). Only the locale-PREFIXED path resolves (proxy.ts rewrites
+   *  an unprefixed marketing path only when it is listed). A value that names no shipped locale builds the default's page,
+   *  so this never builds a root path (`/join/play`) out of whatever it was handed. */
+  quickMatchSetup: (locale: string) => `/${toLocale(locale)}/play`,
 } as const;

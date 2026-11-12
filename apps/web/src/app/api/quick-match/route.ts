@@ -129,7 +129,7 @@ export async function POST(req: NextRequest) {
         Sentry.captureException(err);
         log.error({ err }, "quick match create: failed");
       }
-      return redirectLocal(`/${locale}/play?e=${refusalCode(err)}`, 303);
+      return redirectLocal(`${routes.quickMatchSetup(locale)}?e=${refusalCode(err)}`, 303);
     }
   });
 }

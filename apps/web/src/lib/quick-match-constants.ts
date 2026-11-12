@@ -17,6 +17,13 @@ export const QUICK_MATCH_SYSTEM_ORG_SLUG = "seazn-quick-matches";
 /** Sides in one quick match, inclusive. */
 export const QUICK_MATCH_MAX_SIDES = 6;
 export const QUICK_MATCH_MIN_SIDES = 2;
+/** C16: two sides is always a league; a knockout needs three. The create refuses a smaller one (FORMAT_NOT_OFFERED), the
+ *  preview table holds none, and the setup screen hides its format row below it. */
+export const QUICK_MATCH_KNOCKOUT_MIN_SIDES = QUICK_MATCH_MIN_SIDES + 1;
+/** The match name's and a side name's longest, in UTF-16 units after trimming. `CreateQuickMatch` REFUSES a longer one,
+ *  never clips it (E1), and the setup inputs carry the same bound so the browser stops it first. */
+export const QUICK_MATCH_NAME_MAX = 80;
+export const QUICK_MATCH_SIDE_NAME_MAX = 60;
 /** League plays per pair (legs), at most. */
 export const QUICK_MATCH_MAX_PLAYS = 4;
 /** Alive (unexpired, unsaved) quick matches one visitor key may hold. */

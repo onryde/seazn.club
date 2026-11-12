@@ -6,7 +6,12 @@
 // No string here is copy (pre-flight C2, C10): plan 2 names seed i after the i-th side as typed, a feeder as the
 // winner of round·seq, a bye in words, and a round by roundRoleLabel(t, role), or "Round {n}" when role is null.
 import type { RoundRole } from "@seazn/engine/competition";
-import { QUICK_MATCH_MAX_PLAYS, QUICK_MATCH_MAX_SIDES, QUICK_MATCH_MIN_SIDES } from "@/lib/quick-match-constants";
+import {
+  QUICK_MATCH_KNOCKOUT_MIN_SIDES,
+  QUICK_MATCH_MAX_PLAYS,
+  QUICK_MATCH_MAX_SIDES,
+  QUICK_MATCH_MIN_SIDES,
+} from "@/lib/quick-match-constants";
 import { previewStageDraw, type PreviewDrawFeed } from "./stages";
 
 export type QuickMatchFormat = "league" | "knockout";
@@ -129,9 +134,6 @@ export type QuickMatchPreviewTable = { [key: `league:${number}:${number}`]: Quic
   [key: `knockout:${number}:1`]: QuickMatchKnockoutCell | undefined;
 };
 
-/** C16: two sides is always a league; the create refuses a knockout of two (QUICK_MATCH_FORMAT_NOT_OFFERED). */
-const KNOCKOUT_MIN_SIDES = QUICK_MATCH_MIN_SIDES + 1;
-
 function knockoutCell(preview: QuickMatchPreview, sides: number): QuickMatchKnockoutCell {
   // Where each match line lands in the cell: its round's place and its 1-based place among that round's matches. A
   // round's lines are in seq order and its seqs run 1..k (bracketToGen's per-round counter), so seq s is lines[s − 1].
@@ -181,7 +183,8 @@ export function quickMatchPreviewTable(): QuickMatchPreviewTable {
       table[`league:${sides}:${plays}`] = { matchCount: quickMatchPreview({ format: "league", sides, plays }).matchCount };
     }
   }
-  for (let sides = KNOCKOUT_MIN_SIDES; sides <= QUICK_MATCH_MAX_SIDES; sides++) {
+  // C16: two sides is always a league; the create refuses a knockout of two (QUICK_MATCH_FORMAT_NOT_OFFERED).
+  for (let sides = QUICK_MATCH_KNOCKOUT_MIN_SIDES; sides <= QUICK_MATCH_MAX_SIDES; sides++) {
     table[`knockout:${sides}:1`] = knockoutCell(quickMatchPreview({ format: "knockout", sides, plays: 1 }), sides);
   }
   return table as QuickMatchPreviewTable;

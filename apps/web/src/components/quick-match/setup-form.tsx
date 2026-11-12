@@ -20,25 +20,24 @@ import type {
   QuickMatchKnockoutCell,
   QuickMatchPreviewTable,
 } from "@/server/usecases/quick-match-preview";
-import type { Locale } from "@/lib/i18n-constants";
+import { LOCALES, type Locale } from "@/lib/i18n-constants";
 import { interpolate, plural } from "@/lib/i18n-runtime";
 import {
   QUICK_MATCH_ERRORS,
+  QUICK_MATCH_KNOCKOUT_MIN_SIDES,
   QUICK_MATCH_MAX_ALIVE_PER_VISITOR,
   QUICK_MATCH_MAX_PLAYS,
   QUICK_MATCH_MAX_SIDES,
   QUICK_MATCH_MIN_SIDES,
+  QUICK_MATCH_NAME_MAX,
+  QUICK_MATCH_SIDE_NAME_MAX,
 } from "@/lib/quick-match-constants";
+import { routes } from "@/lib/routes";
 import { useHydrated } from "@/lib/use-client-snapshot";
 import { fixtureLabel, winnerOfLabel, type FixtureLabel } from "./fixture-label";
 
 /** The create route (app/api/quick-match/route.ts). It answers every post with a 303. */
 const CREATE_PATH = "/api/quick-match";
-/** C16: two sides is always a league; a knockout needs three. */
-const KNOCKOUT_MIN_SIDES = QUICK_MATCH_MIN_SIDES + 1;
-/** The schema's own bounds (CreateQuickMatch): the inputs carry them so the browser stops a longer name. */
-const NAME_MAX = 80;
-const SIDE_MAX = 60;
 
 export type QuickMatchFormat = "league" | "knockout";
 
@@ -85,7 +84,7 @@ export function matchCountOf(
 /** What the Format row offers: nothing at two sides (C16), League alone where the rules can end level (C23, D15). */
 export type FormatOffer = "hidden" | "leagueOnly" | "both";
 export function formatOffer(sides: number, knockoutAllowed: boolean): FormatOffer {
-  if (sides < KNOCKOUT_MIN_SIDES) return "hidden";
+  if (sides < QUICK_MATCH_KNOCKOUT_MIN_SIDES) return "hidden";
   return knockoutAllowed ? "both" : "leagueOnly";
 }
 
@@ -111,7 +110,8 @@ export function submitOutcome(res: { url: string; status: number }): SubmitOutco
     url = null;
   }
   if (url?.pathname.startsWith("/q/")) return { kind: "home", path: url.pathname };
-  const code = url && /^\/[a-z]{2}\/play$/.test(url.pathname) ? url.searchParams.get("e") : null;
+  const path = url?.pathname;
+  const code = url !== null && LOCALES.some((l) => path === routes.quickMatchSetup(l)) ? url.searchParams.get("e") : null;
   if (code) return { kind: "refused", code };
   // The limiter's own 429 carries no code (lib/rate-limit.ts); the route names it, but a 429 reaching here unfollowed
   // (a proxy in front) is still the rate limit.
@@ -395,7 +395,7 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError }:
           type="text"
           name="name"
           value={name}
-          maxLength={NAME_MAX}
+          maxLength={QUICK_MATCH_NAME_MAX}
           required
           autoComplete="off"
           aria-describedby="qm-name-hint"
@@ -483,7 +483,7 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError }:
                 type="text"
                 name="sides"
                 value={row.name}
-                maxLength={SIDE_MAX}
+                maxLength={QUICK_MATCH_SIDE_NAME_MAX}
                 required
                 autoComplete="off"
                 aria-label={msg("quickMatch.setup.sideLabel", { n: k + 1 })}
