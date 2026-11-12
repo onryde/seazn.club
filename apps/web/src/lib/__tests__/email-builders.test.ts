@@ -547,6 +547,27 @@ describe("email builders compose from the html templates", () => {
     expect(out.html).not.toContain("<Ltd>");
   });
 
+  // Polish wave final fix m7: the registrant mails now write money in the recipient's language (each passes its locale); a mail
+  // that names none - the sponsor and dispute mails - keeps the en-GB spelling it always had. A dollar is where the two differ
+  // ("US$250.00" in en-GB, "$250.00" in en), so the case is USD; GBP is the control both spell the same.
+  it("a sponsor mail that names no language keeps the en-GB money spelling (US$ for a dollar, the control £ unchanged)", () => {
+    const en = emailsEn as Dict;
+    const receiptArgs = {
+      orgName: "Riverside Racquets",
+      packageName: "Gold — Spring Open",
+      sponsorName: "Court & Co",
+      amountCents: 25_000,
+      publicUrl: "https://seazn.club/live/riverside",
+    };
+    const cases: [string, string, string][] = [
+      ["invoice usd", sponsorInvoiceTemplate({ ...invoiceArgs, currency: "usd", pay: { by: "card" } }, en).text, "US$250.00"],
+      ["receipt usd", sponsorReceiptTemplate({ ...receiptArgs, currency: "usd" }, en).text, "US$250.00"],
+      ["invoice gbp", sponsorInvoiceTemplate({ ...invoiceArgs, currency: "gbp", pay: { by: "card" } }, en).text, "£250.00"],
+    ];
+    for (const [label, text, spelled] of cases) expect(text, label).toContain(spelled);
+    expect(cases.length, "anti-vacuity").toBe(3);
+  });
+
   it("sponsor invoice by transfer: the bank details (escaped, every line) and the reference line; no card line", () => {
     const en = emailsEn as Record<string, string>;
     const out = sponsorInvoiceTemplate({ ...invoiceArgs, pay: { by: "transfer", bankDetails: BANK } }, en as Dict);
