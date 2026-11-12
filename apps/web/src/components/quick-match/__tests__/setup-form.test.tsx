@@ -815,7 +815,7 @@ describe("submitting (the form-post contract, enhanced: ledger CARRY to T4)", ()
     /** The owner's sentence for a refused bot check (brief 2026-11-12), typed: the copy is the contract, not the lookup. */
     const BOT_LINE = "We couldn't confirm you're not a bot. Try again.";
 
-    it("asks for the `quickmatch` widget, and mounts exactly one in the Start bar, straight before Start, wired to the controller that sends", () => {
+    it("asks for the `quickmatch` widget and mounts exactly one, in the form, wired to the controller that sends", () => {
       const i = mount({}, { hydrate: true });
       expect(turnstileFake.actions.length, "anti-vacuity: the island asked for a widget").toBeGreaterThan(0);
       expect(new Set(turnstileFake.actions)).toEqual(new Set(["quickmatch"]));
@@ -824,13 +824,43 @@ describe("submitting (the form-post contract, enhanced: ledger CARRY to T4)", ()
       expect(widgets).toHaveLength(1);
       expect(propsOf(widgets[0]!).controller).toBe(turnstileFake.controller);
       expect(tree[0]!.type, "inside the form").toBe("form");
-      // In the Start bar (pinned to a phone's foot, so a challenge is never scrolled out of view), the element before Start.
-      const bar = byTestId(i, "qm-start-bar")!;
-      const inBar = walk(bar).filter((el) => el !== bar);
-      expect(inBar.filter((el) => el.type === TurnstileWidget)).toHaveLength(1);
-      expect(inBar.indexOf(start(i)) - inBar.indexOf(widgets[0]!), "straight before Start").toBe(1);
       // The server's HTML (no script yet) carries the same one widget container: it renders nothing until the script runs.
       expect(all(mount()).filter((el) => el.type === TurnstileWidget)).toHaveLength(1);
+    });
+
+    it("below 768px the widget sits in the page's flow straight above the Start bar, never in it; from 768px it orders between the error line and Start (m4)", () => {
+      // One widget, one DOM, branched at `md` (AGENTS.md: never a second tree; and two mounts on one controller would fight).
+      // The Start zone holds [widget, Start bar]. Below `md` the zone is `display: contents`, so both are the form's own children:
+      // the widget is in the page above the bar, the bar's sticky range is still the whole form, and a challenge (up to 140px
+      // tall) never rides the bar that sticks to a phone's foot. From `md` the zone is a column and the BAR is `display:
+      // contents`, so the error line, the widget and Start are its items, ordered as they sat in the bar before.
+      const i = mount({ initialError: "QUICK_MATCH_TURNSTILE_FAILED" }, { hydrate: true });
+      const tokens = (el: ReactElement | undefined) => String(propsOf(el!).className ?? "").split(/\s+/);
+      const zone = byTestId(i, "qm-start-zone");
+      expect(zone, "the Start zone").toBeDefined();
+      const kids = [propsOf(zone!).children].flat(2).filter(Boolean) as ReactElement[];
+      const named = kids.map((k) => (k.type === TurnstileWidget ? "widget" : String(propsOf(k)["data-testid"])));
+      expect(named, "the widget straight before the bar, nothing else in the zone").toEqual(["widget", "qm-start-bar"]);
+      const bar = byTestId(i, "qm-start-bar")!;
+      expect(walk(bar).filter((el) => el.type === TurnstileWidget), "never inside the bar that sticks").toHaveLength(0);
+      // Token compares, never a `\b` regex: `md:contents` must not match inside `max-md:contents` (AGENTS.md).
+      expect(tokens(zone)).toEqual(expect.arrayContaining(["max-md:contents", "md:flex", "md:flex-col"]));
+      expect(tokens(zone).filter((c) => c === "contents" || c === "flex"), "no unprefixed display on the zone").toEqual([]);
+      expect(tokens(bar)).toContain("md:contents");
+      expect(tokens(bar).filter((c) => /^(max-md:|sm:|max-sm:)?contents$/.test(c)), "the bar is a real box below md").toEqual([]);
+      // From md, the visual order: the error line (order 0), the widget, then Start.
+      const error = byTestId(i, "qm-setup-error");
+      expect(error, "the error line is shown, so its order is checked").toBeDefined();
+      expect(tokens(error).filter((c) => /^md:-?order-/.test(c)), "error line: default order, first").toEqual([]);
+      expect(tokens(kids[0])).toContain("md:order-1");
+      expect(tokens(start(i))).toContain("md:order-2");
+      // Below md the zone adds no box, so the zone's top margin is md-only and the gap above the widget is the widget's own:
+      // `max-md:mt-8` collapses into the bar's smaller one while the widget is an empty box (the page as it was), and sits the
+      // widget 32px under the email field, 12px over the bar, once Cloudflare shows a challenge.
+      expect(tokens(zone)).toContain("md:mt-8");
+      expect(tokens(kids[0])).toContain("max-md:mt-8");
+      expect(tokens(bar)).toContain("mt-3");
+      expect(tokens(bar)).not.toContain("mt-8");
     });
 
     it("a held token travels in the cf-turnstile-response header, never in the body, and the widget is reset after", async () => {
@@ -1081,6 +1111,8 @@ describe("what a screen reader hears, what a thumb can hit, where the Start bar 
     expect(CONSENT_OPEN_ATTR).toBe("data-consent-open");
     expect(bar).toContain(`[html[${CONSENT_OPEN_ATTR}]_&]:static`);
     expect(all(i).some((el) => /\bbottom-bar(-spacer)?\b/.test(classOf(el))), "no fixed bar, no spacer").toBe(false);
+    // Its one wrapper (the Start zone, m4) adds no box below 768px, so the bar's sticky range is the whole form, not the zone.
+    expect(classOf(byTestId(i, "qm-start-zone")).split(/\s+/)).toContain("max-md:contents");
     const form = all(i).find((el) => el.type === "form")!;
     expect(walk(propsOf(form).children as ReactElement).includes(byTestId(i, "qm-start-bar")!), "inside the form").toBe(true);
   });

@@ -651,42 +651,50 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError }:
         </label>
       </details>
 
-      {/* The Start bar. Below 640px it sticks to the bottom of the screen INSIDE the form, so it never covers anything
-          after the form and needs no spacer; from 640px up it sits inline. While the cookie banner is open
-          (cookie-consent.tsx sets `data-consent-open` on <html>) it un-docks into the page, so it neither hides under
-          the banner nor covers its buttons; z-30 keeps the banner (z-40) on top either way. */}
-      <div
-        data-testid="qm-start-bar"
-        className="z-30 -mx-4 mt-8 border-t border-[#3b2a6e] bg-[rgb(21_11_54/0.94)] px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3 backdrop-blur max-sm:sticky max-sm:bottom-0 sm:mx-0 sm:border-0 sm:bg-transparent sm:p-0 sm:backdrop-blur-none [html[data-consent-open]_&]:static"
-      >
-        {errorLine !== null ? (
-          <p
-            role="alert"
-            data-testid="qm-setup-error"
-            className="mb-2.5 rounded-lg border border-[rgb(239_68_68/0.55)] bg-[rgb(239_68_68/0.14)] px-3 py-2 text-sm text-[var(--mk-cream)]"
-          >
-            {errorLine}
-          </p>
-        ) : null}
-        {/* The bot check's widget, straight before the submit as on #1136's forms. It is invisible unless Cloudflare needs a
-            tap, and then it sits in this bar, which below 640px is pinned to the screen's foot: a challenge is where the
-            guest's thumb already is, never scrolled out of view. It renders nothing without a site key (dev, e2e) or before
-            the script runs; `min-w-0 max-w-full` and the controller's compact size under 300px keep it inside 320px. No margin:
-            an invisible widget is a 0px box that must leave the bar exactly as it was (a margin on it showed as 10px). */}
-        <TurnstileWidget controller={turnstile} />
-        <button
-          type="submit"
-          data-testid="qm-start"
-          // The server's HTML leaves Start enabled: without the script, `required` on the names guards the post (I1).
-          disabled={hydrated && !canStart}
-          className="block w-full rounded-xl bg-[var(--mk-lime)] px-4 py-3.5 text-center text-base font-semibold text-[var(--mk-night)] transition hover:brightness-105 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--mk-cream)] disabled:cursor-not-allowed disabled:opacity-50"
+      {/* The Start zone: the bot check's widget, then the Start bar, one DOM branched at `md` (m4). Below 768px the zone is
+          `display: contents`, so both are the form's own children: the widget sits in the page straight above the bar and
+          never rides the bar that sticks to a phone's foot (a challenge is up to 140px tall), and the bar's sticky range is
+          still the whole form. From 768px the zone is a column and the bar is `display: contents`, so the error line, the
+          widget and Start are its items, in that order, as they sat in the bar before.
+
+          The widget is invisible unless Cloudflare needs a tap, and renders nothing without a site key (dev, e2e) or before
+          the script runs. Below md its `mt-8` collapses into the bar's `mt-3` while it is an empty box, so the page is as it
+          was; once a challenge shows it sits 32px under the email field and 12px over the bar. From md it has no margin, as
+          an empty box there is a flex item and any margin on it would show (round 1 measured 10px). `min-w-0 max-w-full` and
+          the controller's compact size under 300px keep it inside 320px. */}
+      <div data-testid="qm-start-zone" className="max-md:contents md:mt-8 md:flex md:flex-col">
+        <TurnstileWidget controller={turnstile} className="max-md:mt-8 md:order-1" />
+        {/* The Start bar. Below 640px it sticks to the bottom of the screen INSIDE the form, so it never covers anything
+            after the form and needs no spacer; from 640px up it sits inline. While the cookie banner is open
+            (cookie-consent.tsx sets `data-consent-open` on <html>) it un-docks into the page, so it neither hides under
+            the banner nor covers its buttons; z-30 keeps the banner (z-40) on top either way. */}
+        <div
+          data-testid="qm-start-bar"
+          className="z-30 -mx-4 mt-3 border-t border-[#3b2a6e] bg-[rgb(21_11_54/0.94)] px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3 backdrop-blur max-sm:sticky max-sm:bottom-0 sm:mx-0 sm:border-0 sm:bg-transparent sm:p-0 sm:backdrop-blur-none md:contents [html[data-consent-open]_&]:static"
         >
-          {msg("quickMatch.setup.start")}
-          {/* Always mounted, so a screen reader hears the count change (m2). */}{" "}
-          <small aria-live="polite" data-testid="qm-start-count" className="text-sm font-medium opacity-75">
-            {matches !== undefined ? count("quickMatch.setup.startCount", matches) : null}
-          </small>
-        </button>
+          {errorLine !== null ? (
+            <p
+              role="alert"
+              data-testid="qm-setup-error"
+              className="mb-2.5 rounded-lg border border-[rgb(239_68_68/0.55)] bg-[rgb(239_68_68/0.14)] px-3 py-2 text-sm text-[var(--mk-cream)]"
+            >
+              {errorLine}
+            </p>
+          ) : null}
+          <button
+            type="submit"
+            data-testid="qm-start"
+            // The server's HTML leaves Start enabled: without the script, `required` on the names guards the post (I1).
+            disabled={hydrated && !canStart}
+            className="block w-full rounded-xl bg-[var(--mk-lime)] px-4 py-3.5 text-center text-base font-semibold text-[var(--mk-night)] transition hover:brightness-105 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--mk-cream)] disabled:cursor-not-allowed disabled:opacity-50 md:order-2"
+          >
+            {msg("quickMatch.setup.start")}
+            {/* Always mounted, so a screen reader hears the count change (m2). */}{" "}
+            <small aria-live="polite" data-testid="qm-start-count" className="text-sm font-medium opacity-75">
+              {matches !== undefined ? count("quickMatch.setup.startCount", matches) : null}
+            </small>
+          </button>
+        </div>
       </div>
     </form>
   );
