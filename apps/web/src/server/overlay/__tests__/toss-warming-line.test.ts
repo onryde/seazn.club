@@ -40,6 +40,11 @@ const ROWS: Record<string, { payload: (l: Lineups) => unknown; copy: (team: stri
     payload: (l) => ({ firstBreak: l.away.entrantId }),
     copy: (team) => ["overlay.toss.breaksFirst", { team }],
   },
+  // S2-7 (TN-TS-1, engine 8.0.0): tennis's toss names the side that serves first.
+  tennis: {
+    payload: (l) => ({ serving: l.away.entrantId }),
+    copy: (team) => ["overlay.toss.servesFirst", { team }],
+  },
 };
 
 const tossSports = builtinModules.filter((m) => Object.hasOwn(m.eventSchemas ?? {}, `${m.key}.toss`));
@@ -98,7 +103,7 @@ describe("the warming card's toss line — every sport whose engine module decla
     expect(checked, "the registry's toss sports are cricket and carrom today").toBeGreaterThanOrEqual(2);
   });
 
-  it("the sports themselves: cricket and carrom both declare a toss (the set is not silently smaller)", () => {
-    expect(tossSports.map((m) => m.key).sort()).toEqual(expect.arrayContaining(["carrom", "cricket"]));
+  it("the sports themselves: cricket, carrom and tennis declare a toss (the set is not silently smaller)", () => {
+    expect(tossSports.map((m) => m.key).sort()).toEqual(expect.arrayContaining(["carrom", "cricket", "tennis"]));
   });
 });

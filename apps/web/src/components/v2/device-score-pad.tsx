@@ -19,7 +19,6 @@ import {
   resolvePadSpecForMount,
   shouldMountPad,
   type LiveState,
-  type SendEvent,
   type SideInfo,
   type SportInfo,
 } from "@/components/v2/fixture-console";
@@ -34,6 +33,8 @@ import { scoringErrorText } from "@/lib/scoring-vocab";
 // renders", never a fallback to a v1 chain that no longer exists.
 import { ScorePad, type ScorePadBootstrap } from "@/components/v2/scorepad/registry";
 import { RulesChangedBanner } from "@/components/v2/scorepad/v3/rules-changed-banner";
+import { StartTossQuestion, useStartWithToss } from "@/components/v2/scorepad/v3/start-match-control";
+import { runTossThenStart } from "@/lib/start-with-toss";
 import { rulesVersionOf, type FixtureRulesResult } from "@/components/v2/scorepad/transport";
 import { resolveModuleClient } from "@/components/v2/scorepad/module-client";
 import { entrantDisplayName } from "@/lib/entrant-name";
@@ -355,8 +356,10 @@ export function DeviceScorePad({
     setChromeRulesShown(false);
   }, []);
 
-  const send: SendEvent = useCallback(
-    async (type, payload) => {
+  // `expectedSeq` (S2-7, TN-TS-1): the toss-then-Start sequence's second write names the seq its first one left, rather
+  // than this render's `live.last_seq` (`runTossThenStart`). Every other caller omits it.
+  const send = useCallback(
+    async (type: string, payload: unknown, expectedSeq?: number): Promise<boolean> => {
       setError(null);
       setBusy(true);
       // One idempotency key per action: flaky venue Wi-Fi retries are safe —
@@ -368,7 +371,7 @@ export function DeviceScorePad({
             await authed(`/api/v1/fixtures/${fixture.id}/events`, {
               method: "POST",
               json: {
-                expected_seq: live.last_seq,
+                expected_seq: expectedSeq ?? live.last_seq,
                 type,
                 payload,
                 idempotency_key: idempotencyKey,
@@ -491,6 +494,13 @@ export function DeviceScorePad({
   //
   // `token` is the only field, so this is stable for the life of the link.
   const padAuth = useMemo(() => ({ kind: "device_link" as const, token }), [token]);
+  // S2-7 (TN-TS-1): a tennis Start asks "Who serves first?" and sends the toss first (`runTossThenStart`).
+  const start = useStartWithToss({
+    sportKey: sport.key,
+    state: live.state,
+    onStart: () => void send("core.start", {}),
+    onTossThenStart: (toss) => runTossThenStart(live.last_seq, toss, send),
+  });
 
   // Doc 13 §7: the pad's dead-end when the link dies mid-day.
   if (dead) {
@@ -739,15 +749,27 @@ export function DeviceScorePad({
               <RulesChangedBanner formatLine={chromeRules.formatLine} onDismiss={() => setChromeRulesShown(false)} />
             </div>
           )}
-          <button
-            type="button"
-            data-testid="score-start-match"
-            disabled={busy || padSyncing}
-            onClick={() => send("core.start", {})}
-            className="btn btn-primary mt-4 h-12 w-full text-base"
-          >
-            {msg("score.startMatch")}
-          </button>
+          {/* S2-7 (TN-TS-1): a tennis Start asks "Who serves first?" in place of the button, then sends the toss first. */}
+          {start.asking ? (
+            <div className="mt-4">
+              <StartTossQuestion
+                home={{ id: home!.id, name: entrantDisplayName(home!) }}
+                away={{ id: away!.id, name: entrantDisplayName(away!) }}
+                msg={msg}
+                start={start}
+              />
+            </div>
+          ) : (
+            <button
+              type="button"
+              data-testid="score-start-match"
+              disabled={busy || padSyncing}
+              onClick={start.press}
+              className="btn btn-primary mt-4 h-12 w-full text-base"
+            >
+              {msg("score.startMatch")}
+            </button>
+          )}
         </section>
       )}
 

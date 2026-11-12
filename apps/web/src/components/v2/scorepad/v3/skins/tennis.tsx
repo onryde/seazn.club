@@ -61,8 +61,8 @@
 //     context-strip slot the way cricket's striker/bowler do; the serving
 //     player is carried on the scorebug's own `WhoLine`, not a strip pick.
 //   - a Fault tile, a Let tile, a Retire tile (R4-1, R4-2): tennis declares
-//     five event types only (`point`/`set_summary`/`sanction`/
-//     `interruption`/`game.award`, the kernel's `eventSchemas`) — no fault/let
+//     six event types only (`point`/`set_summary`/`sanction`/
+//     `interruption`/`game.award`, and since engine 8.0.0 `toss`, the kernel's `eventSchemas`) — no fault/let
 //     event exists to dispatch, and §9.4 bars a new one. Forfeit/Abandon
 //     already have a home in `fixture-console.tsx`'s console chrome; a Retire
 //     tile here would be a second entry point to that same capability, the
@@ -104,6 +104,8 @@ const SET_SUMMARY_TYPE = `${SPORT}.set_summary`;
 const SANCTION_TYPE = `${SPORT}.sanction`;
 const INTERRUPTION_TYPE = `${SPORT}.interruption`;
 const GAME_AWARD_TYPE = `${SPORT}.game.award`;
+/** S2-7 (TN-TS-1, engine 8.0.0): "Who serves first?". Asked by the Start control, never by the live pad (`startTossQuestion`). */
+const TOSS_TYPE = `${SPORT}.toss`;
 
 export const SIDES: readonly Side[] = ["home", "away"];
 const SIDE_LABEL: Record<Side, MessageKey> = {
@@ -164,6 +166,9 @@ interface TennisStateShape {
   setsWon?: { home?: number; away?: number };
   serving?: string;
   tbFirstServer?: string | null;
+  /** S2-7 (TN-TS-1): the side a `tennis.toss` gave the first service game. ABSENT until a toss is held (the kernel's own
+   *  rule), so a match with no toss reads exactly as before: home serves first. */
+  opener?: string;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -310,8 +315,12 @@ interface ServeContext {
  * not something this fix claims to fix.
  */
 function deriveServeContext(state: TennisStateShape, squads: SquadState): ServeContext {
-  const shim: Pick<NestedState, "serving" | "sets" | "games" | "squads" | "tbFirstServer"> = {
+  const shim: Pick<NestedState, "serving" | "sets" | "games" | "squads" | "tbFirstServer" | "opener"> = {
     serving: state.serving === "away" ? "away" : "home",
+    // S2-7 (TN-TS-1): READ by `walkServe`, which starts the ITF turn walk from the toss's side. Left out, a toss naming away
+    // walks from home while `serving` says away — `serveOrderKnown` reads that as drift and the pad names no server for
+    // the whole match. Passed only when held: absent is the kernel's "no toss, home serves first".
+    ...(state.opener === "home" || state.opener === "away" ? { opener: state.opener } : {}),
     sets: (state.sets ?? []).map((set) => ({
       home: set.home ?? 0,
       away: set.away ?? 0,
@@ -658,7 +667,8 @@ export function buildTiles(view: PadHostView): TileSpec[] {
  * "the fold will not accept this at all right now".
  *
  * TWO entries, each a state the fold genuinely throws in, and each listed
- * only in that state:
+ * only in that state (plus `tennis.toss`, always: the pad's own refusal, not
+ * the fold's — S2-7, explained at its line in the body):
  *
  *   - `set_summary` — `applySetSummary` throws for a set already being scored
  *     point-by-point (`nested/kernel.ts`), so offering the generic form
@@ -704,7 +714,14 @@ export function buildTiles(view: PadHostView): TileSpec[] {
  */
 export function refusedEventTypes(view: PadHostView): string[] {
   const state = asState(view.state);
-  const refused: string[] = [];
+  // S2-7 (TN-TS-1; the controller's ruling, review R1-M6) — the ONE entry here that is the PAD's refusal, not the fold's.
+  // The engine's padSpec declares a gated `live` toss panel beside the `pre` one, and the fold takes a toss at any time
+  // before the result (a late toss re-seats the serve for the whole match). Offered through this pad's More sheet, every
+  // untossed match in progress would carry a one-tap control that silently rewrites who served every game so far. The web
+  // asks the toss only as part of starting the match (`startTossQuestion`), toss first, then `core.start`; so the pad never
+  // offers it, in any phase. `__tests__/tennis-toss.test.ts` proves the padSpec DOES offer it live (so this is load-bearing)
+  // and that More does not.
+  const refused: string[] = [TOSS_TYPE];
   if (setInProgressOf(state)) refused.push(SET_SUMMARY_TYPE);
   if (gameAwardRefused(state)) refused.push(GAME_AWARD_TYPE);
   return refused;
@@ -1163,6 +1180,12 @@ export function tennisDetail(ctx: ActivityDetailContext): string | undefined {
       return join([vocabText("level", payload.level, t), named(payload.person ?? payload.by), reasonOf()]);
     case INTERRUPTION_TYPE:
       return join([vocabText("kind", payload.kind, t), named(payload.person)]);
+    case TOSS_TYPE: {
+      // `serving` is an ENTRANT id, resolved to its side through the fold's own `entrants` (`ctx.state`). Unresolvable
+      // (no state, an unknown id) adds nothing rather than printing a raw id.
+      const side = sideOfEntrant(asState(ctx.state), payload.serving);
+      return side === null ? undefined : t(SIDE_LABEL[side]);
+    }
     case GAME_AWARD_TYPE:
       // `winner` is an ENTRANT id; `ActivityDetailContext` carries no fold
       // state to resolve which side that is (unlike `payload`/`personNames`,
@@ -1172,6 +1195,53 @@ export function tennisDetail(ctx: ActivityDetailContext): string | undefined {
     default:
       return undefined;
   }
+}
+
+// ---------------------------------------------------------------------------
+// The toss at Start — S2-7 (TN-TS-1, engine 8.0.0). "Who serves first?" is asked as PART OF STARTING the match, by the
+// Start control on the console and on the remote pad (`../start-match-control.tsx`), never by the live pad (see
+// `refusedEventTypes`). The controller's rulings: the toss goes BEFORE `core.start` (a toss after the Start with nothing
+// scored counts as play, ruling 112: it would block a walkover and admit a zero-point retirement), and a match with no toss
+// keeps working exactly as before (home serves first).
+// ---------------------------------------------------------------------------
+
+/** One side of the match as the Start control knows it: the entrant id the toss names, and its display name. */
+export interface TossSide {
+  id: string;
+  name: string;
+}
+
+/**
+ * Whether Start must ask "Who serves first?" first, read off the engine's own rule (`tennisPadRules.tossOpen`, the
+ * predicate `applyToss` refuses by). `state` is the server's stored fold (`/state`'s `state`), which is `null` until the
+ * ledger holds its first event — and an empty ledger holds no toss, so it asks. A toss already held (another screen
+ * recorded it, or this Start's own toss landed and its `core.start` did not) answers no: Start then only starts.
+ */
+export function startNeedsToss(sportKey: string, state: unknown): boolean {
+  if (sportKey !== SPORT) return false;
+  if (state === null || state === undefined) return true;
+  return tennisPadRules.tossOpen(state);
+}
+
+/** The question itself, as a required `ChoiceDock` (`requires: "serving"`): one chip per side, home first, each naming
+ *  the entrant as the organiser typed it and setting the toss's one field. */
+export function startTossQuestion(home: TossSide, away: TossSide, t: TFn): DockSpec {
+  const chip = (side: Side, entrant: TossSide): DockChip => ({
+    id: side,
+    label: SIDE_LABEL[side],
+    labelText: entrant.name,
+    mutate: (payload) => ({ ...payload, serving: entrant.id }),
+  });
+  return {
+    title: t("pad.tennis.start.toss.title"),
+    chips: [chip("home", home), chip("away", away)],
+    requires: "serving",
+  };
+}
+
+/** The `tennis.toss` event a chosen chip answers — the chip's own `mutate`, so the payload is exactly what it sets. */
+export function tossEventFor(chip: DockChip): { type: string; payload: Record<string, unknown> } {
+  return { type: TOSS_TYPE, payload: chip.mutate({}) };
 }
 
 // ---------------------------------------------------------------------------

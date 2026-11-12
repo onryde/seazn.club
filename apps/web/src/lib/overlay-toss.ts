@@ -12,9 +12,15 @@ export interface OverlayCarromToss {
   firstBreakSide: 0 | 1;
 }
 
+/** Tennis's toss on the wire (S2-7, TN-TS-1, engine 8.0.0): the side that serves first. Null = no toss taken. */
+export interface OverlayTennisToss {
+  servesFirstSide: 0 | 1;
+}
+
 export type OverlayToss =
   | { sport: "cricket"; toss: OverlayCricketToss }
-  | { sport: "carrom"; toss: OverlayCarromToss };
+  | { sport: "carrom"; toss: OverlayCarromToss }
+  | { sport: "tennis"; toss: OverlayTennisToss };
 
 /**
  * Carrom's toss off its folded STATE, by shape — the way `project.ts` reads everything else off a module's state (no
@@ -32,13 +38,29 @@ export function carromTossOf(state: unknown): OverlayCarromToss | null {
   return null;
 }
 
+/**
+ * Tennis's toss (S2-7, TN-TS-1): the side the fold seated as the opener. The fold's `opener` is `"home" | "away"`, but it
+ * is a field of the shared nested kernel, so it alone does not say a TENNIS toss was taken — the void-resolved stream
+ * must still hold a `tennis.toss`. A voided toss leaves the stream and the fold's opener with it, so this answers null.
+ */
+export function tennisTossOf(state: unknown, active: ReadonlyArray<{ type: string }>): OverlayTennisToss | null {
+  if (!active.some((e) => e.type === "tennis.toss")) return null;
+  if (typeof state !== "object" || state === null) return null;
+  const opener = (state as { opener?: unknown }).opener;
+  if (opener === "home") return { servesFirstSide: 0 };
+  if (opener === "away") return { servesFirstSide: 1 };
+  return null;
+}
+
 /** The overlay payload's toss as the union the warming line and the toss card read. Each field is present only for its
  *  own sport (the loader projects cricket's off the scorecard, carrom's off the state), so presence picks the arm. */
 export function overlayTossOf(data: {
   cricketToss?: OverlayCricketToss | null;
   carromToss?: OverlayCarromToss | null;
+  tennisToss?: OverlayTennisToss | null;
 }): OverlayToss | null {
   if (data.cricketToss) return { sport: "cricket", toss: data.cricketToss };
   if (data.carromToss) return { sport: "carrom", toss: data.carromToss };
+  if (data.tennisToss) return { sport: "tennis", toss: data.tennisToss };
   return null;
 }

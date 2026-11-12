@@ -158,6 +158,7 @@ export const TIMELINE_KEY_FOR: Readonly<Record<string, string>> = {
   "tennis.set_summary": `${TENNIS}set_summary`,
   "tennis.sanction": `${TENNIS}sanction`,
   "tennis.interruption": `${TENNIS}interruption`,
+  "tennis.toss": `${TENNIS}toss`,
 
   "volleyball.rally": `${SETBASED}rally`,
   "volleyball.set.summary": `${SETBASED}set.summary`,

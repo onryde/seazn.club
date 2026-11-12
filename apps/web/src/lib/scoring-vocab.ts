@@ -178,6 +178,7 @@ export const EVENT_KEY: Record<string, MessageKey> = {
   "tennis.point": "event.tennis.point",
   "tennis.sanction": "event.tennis.sanction",
   "tennis.set_summary": "event.tennis.set_summary",
+  "tennis.toss": "event.tennis.toss", // S2-7 (TN-TS-1, engine 8.0.0)
 
   "volleyball.expedite.start": "event.volleyball.expedite.start", // R8/WS-R r2
   "volleyball.rally": "event.volleyball.rally",
@@ -1115,11 +1116,13 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.tennis.action.sanction",
   "pad.tennis.action.setScore",
   "pad.tennis.action.setScoreTiebreak",
+  "pad.tennis.action.toss",
   "pad.tennis.panel.gameAward",
   "pad.tennis.panel.interruptions",
   "pad.tennis.panel.points",
   "pad.tennis.panel.sanctions",
   "pad.tennis.panel.setScore",
+  "pad.tennis.panel.toss",
   // R4/tennis (v3 ribbon). Five keys for the FIVE `tennis.*` types the engine
   // declares (`kernel.ts:1766-1772`) — the brief said four; §9.1's own
   // false-premises note corrects it, and this skin's ribbon coverage is
@@ -1132,6 +1135,8 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.tennis.ribbon.sanction",
   "pad.tennis.ribbon.interruption",
   "pad.tennis.ribbon.game.award",
+  // S2-7 (TN-TS-1): the sixth type, `tennis.toss` (engine 8.0.0).
+  "pad.tennis.ribbon.toss",
   // R4/tennis — tap model S's own hint. `ScorebugHalf.hintKey` resolves
   // through this SAME `padLabel()` gate (scorebug.tsx), so an unregistered
   // key would print its own raw dotted name as the visible hint text.

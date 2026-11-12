@@ -16,6 +16,7 @@ import {
   type RosteredFixture,
   setDivisionConfigSql,
 } from "./helpers";
+import { answerStartToss } from "./helpers/start-toss";
 import { CONSENT_KEY, CONSENT_VERSION_KEY, COOKIE_POLICY_VERSION } from "../src/lib/consent";
 import { HOLD_MS } from "../src/components/v2/scorepad/queue";
 import { officialLabelKey } from "../src/lib/official-label";
@@ -3195,7 +3196,10 @@ for (const sport of SPORTS) {
 
     const beforeStart = await ledgerCount(page.request, fx.fixtureId);
     await page.getByRole("button", { name: "Start match", exact: true }).click();
-    await waitForLedgerGrowth(page.request, fx.fixtureId, beforeStart);
+    // S2-7: a tennis Start asks "Who serves first?" and writes TWO events (the toss, then core.start); wait for both.
+    const tennisStart = sport.sportKey === "tennis";
+    if (tennisStart) await answerStartToss(page);
+    await waitForLedgerGrowth(page.request, fx.fixtureId, tennisStart ? beforeStart + 1 : beforeStart);
     // THE RACE THIS PROBE EXISTS FOR: `waitForLedgerGrowth` proves the SERVER
     // took `core.start`; the pad renders from its own client fold, which
     // arrives later. Capturing here without the probe photographed a

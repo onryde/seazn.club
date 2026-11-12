@@ -1,5 +1,6 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import { apiJson, fixturePath, pickCricketPeople, seedRosteredFixture, expectNoHorizontalScroll, TAG } from "./helpers";
+import { answerStartToss } from "./helpers/start-toss";
 import {
   HIT_TARGET_FLOOR_PX,
   floorViolationLines,
@@ -69,10 +70,12 @@ async function ledger(
  *  arriving from the chrome is a foreign write as far as the pad's own
  *  pipeline is concerned, and polling the ledger — not a fixed sleep — is
  *  what makes tapping the pad safe immediately afterward). */
-async function openLiveConsole(page: Page, fx: { fixtureId: string }): Promise<void> {
+async function openLiveConsole(page: Page, fx: { fixtureId: string }, opts: { tennis?: boolean } = {}): Promise<void> {
   await page.goto(await fixturePath(page.request, fx.fixtureId));
   await expect(pad(page)).toBeVisible({ timeout: 20_000 });
   await page.getByRole("button", { name: "Start match", exact: true }).click();
+  // S2-7: a tennis Start asks "Who serves first?" first; home keeps the serve order the tennis test was written against.
+  if (opts.tennis === true) await answerStartToss(page);
   await expect
     .poll(async () => (await ledger(page.request, fx.fixtureId)).map((e) => e.type), { timeout: 20_000 })
     .toContain("core.start");
@@ -265,7 +268,7 @@ test("tennis skin: play points to deuce", async ({ page, request }) => {
     home: [{ fullName: `Skins Tennis Home ${TAG}` }],
     away: [{ fullName: `Skins Tennis Away ${TAG}` }],
   });
-  await openLiveConsole(page, fx);
+  await openLiveConsole(page, fx, { tennis: true });
 
   // R4/tennis cutover — v3 tapModel S: the scoreboard halves ARE the point
   // buttons (v3/skins/tennis.tsx), so the v2-era one-tap "Home"/"Away" pair

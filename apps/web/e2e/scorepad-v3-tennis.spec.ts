@@ -1,5 +1,6 @@
 import { test, expect, type Page, type APIRequestContext } from "@playwright/test";
 import { apiJson, fixturePath, seedRosteredFixture, TAG, type RosteredFixture } from "./helpers";
+import { answerStartToss } from "./helpers/start-toss";
 
 // ScoringPad v3, wave R4/task G — the coverage tennis's conversion OWES
 // beyond re-pointing the pre-existing skin/cutover tests at the v3 DOM
@@ -101,10 +102,12 @@ async function countOf(request: APIRequestContext, fixtureId: string, type: stri
 /** Open the console and take the fixture live through the console's own
  *  "Start match" control — the real organiser flow. Same helper, same
  *  reasoning as scorepad-v3-football.spec.ts's own. */
-async function openLiveConsole(page: Page, fx: RosteredFixture): Promise<void> {
+async function openLiveConsole(page: Page, fx: RosteredFixture, serving: "home" | "away" = "home"): Promise<void> {
   await page.goto(await fixturePath(page.request, fx.fixtureId));
   await expect(pad(page)).toBeVisible({ timeout: 20_000 });
   await page.getByRole("button", { name: "Start match", exact: true }).click();
+  // S2-7: Start asks "Who serves first?" first; home is the order every test below was written against.
+  await answerStartToss(page, serving);
   await expect
     .poll(async () => (await ledger(page.request, fx.fixtureId)).map((e) => e.type), { timeout: 20_000 })
     .toContain("core.start");
@@ -477,4 +480,84 @@ test("tennis v3: the Set-score tile is withheld while the set is in progress, re
     v3Tile(page, "setScore"),
     "D-16 closes BOTH ways: undoing the only point must restore the tile, not just hide it forever",
   ).toBeVisible({ timeout: 20_000 });
+});
+
+// ---------------------------------------------------------------------------
+// S2-7 (TN-TS-1, engine 8.0.0) — the toss. The console's Start asks "Who serves first?" (a required ChoiceDock) and
+// the answer writes `tennis.toss`, THEN `core.start` (the controller's ruling: a toss after the Start with nothing scored
+// counts as play, ruling 112). The live pad never offers the toss (review R1-M6), and a match with no toss keeps home
+// serving first.
+// ---------------------------------------------------------------------------
+
+test("tennis v3: Start asks Who serves first?, the toss reaches the ledger BEFORE core.start, and the pad serves the side chosen", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const homeName = `V3 Tennis Toss Home ${TAG}`;
+  const awayName = `V3 Tennis Toss Away ${TAG}`;
+  const fx = await seedRosteredFixture(page.request, {
+    label: `V3 Tennis Toss ${TAG}`,
+    sportKey: "tennis",
+    variantKey: "tour",
+    entrantKind: "individual",
+    home: [{ fullName: homeName }],
+    away: [{ fullName: awayName }],
+  });
+  await page.goto(await fixturePath(page.request, fx.fixtureId));
+  await expect(pad(page)).toBeVisible({ timeout: 20_000 });
+  await page.getByRole("button", { name: "Start match", exact: true }).click();
+
+  const question = page.getByTestId("score-start-toss");
+  await expect(question).toBeVisible({ timeout: 20_000 });
+  await expect(question).toContainText("Who serves first?");
+  await expect(question.getByTestId("pad-dock-chip-home")).toBeVisible();
+  await expect(question.getByTestId("pad-dock-chip-away")).toBeVisible();
+  expect(await ledger(page.request, fx.fixtureId), "nothing is written until the question is answered").toEqual([]);
+
+  // A double tap answers once: one toss, one Start.
+  await question.getByTestId("pad-dock-chip-away").dblclick();
+  await expect
+    .poll(async () => (await ledger(page.request, fx.fixtureId)).map((e) => e.type), { timeout: 20_000 })
+    .toEqual(["tennis.toss", "core.start"]);
+  const [toss, start] = await ledger(page.request, fx.fixtureId);
+  expect(toss!.payload).toEqual({ serving: fx.awayEntrantId });
+  expect(start!.seq, "the Start is the very next write after the toss").toBe(toss!.seq + 1);
+
+  // The pad serves the side the toss chose.
+  const server = pad(page).locator('[data-strip-item-id="server"]');
+  await expect(server).toBeVisible({ timeout: 20_000 });
+  await expect(server).toContainText(awayName);
+  await expect(server).not.toContainText(homeName);
+  await expect(page.getByTestId("score-start-match")).toHaveCount(0);
+});
+
+test("tennis v3: a match started with NO toss serves home first, and the live pad never offers Who serves first", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const homeName = `V3 Tennis NoToss Home ${TAG}`;
+  const fx = await seedRosteredFixture(page.request, {
+    label: `V3 Tennis NoToss ${TAG}`,
+    sportKey: "tennis",
+    variantKey: "tour",
+    entrantKind: "individual",
+    home: [{ fullName: homeName }],
+    away: [{ fullName: `V3 Tennis NoToss Away ${TAG}` }],
+    // Started through the API, as every tennis match before engine 8.0.0 was: no toss on the ledger.
+    emitCoreStart: true,
+  });
+  await page.goto(await fixturePath(page.request, fx.fixtureId));
+  await expect(tennisHalf(page, "home")).toBeVisible({ timeout: 20_000 });
+  const server = pad(page).locator('[data-strip-item-id="server"]');
+  await expect(server).toContainText(homeName);
+
+  // The engine's padSpec declares a live toss panel for exactly this state (untossed, in play); the pad withholds it, so
+  // neither a tile, the More sheet, nor any button names it.
+  await expect(pad(page).getByText("Who serves first", { exact: false })).toHaveCount(0);
+  const more = v3Tile(page, "more");
+  if ((await more.count()) > 0) {
+    await more.click();
+    await expect(pad(page).getByText("Who serves first", { exact: false })).toHaveCount(0);
+  }
+  expect((await ledger(page.request, fx.fixtureId)).map((e) => e.type)).toEqual(["core.start"]);
 });

@@ -67,6 +67,10 @@ export function warmingLine(args: {
     const team = args.sideNames[toss.toss.firstBreakSide] ?? "";
     return team === "" ? pending() : args.msg("overlay.toss.breaksFirst", { team });
   }
+  if (toss.sport === "tennis") {
+    const team = args.sideNames[toss.toss.servesFirstSide] ?? "";
+    return team === "" ? pending() : args.msg("overlay.toss.servesFirst", { team });
+  }
   const team = args.sideNames[toss.toss.wonBySide] ?? "";
   if (team === "") return pending();
   const choice = args.msg(

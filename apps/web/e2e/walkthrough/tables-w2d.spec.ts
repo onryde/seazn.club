@@ -35,6 +35,7 @@ import { openPanels } from "../helpers/rules-strip";
 import { closeOpenContexts } from "../spectator-public-helpers";
 import { API_CALL_MS, activeOrgSlug, dictString, division, entrants, eventStream, person, publicCompetition, spectator } from "../spectator-w2-kit";
 import { openMatchActions } from "../helpers/match-actions";
+import { answerStartToss } from "../helpers/start-toss";
 
 // Each test seeds its own competition: nothing is shared, so nothing serialises.
 test.describe.configure({ mode: "parallel" });
@@ -426,9 +427,11 @@ async function openPad(page: Page, f: Fx): Promise<void> {
   await expect(pad(page)).toBeVisible({ timeout: STEP_MS });
 }
 /** Open a fixture nobody has started, and start it the way a scorer does. */
-async function openLive(page: Page, f: Fx): Promise<void> {
+async function openLive(page: Page, f: Fx, opts: { tennis?: boolean } = {}): Promise<void> {
   await openPad(page, f);
   await page.getByRole("button", { name: say("score.startMatch"), exact: true }).click();
+  // S2-7: a tennis Start asks "Who serves first?" first; home keeps the serve order the tennis test was written against.
+  if (opts.tennis === true) await answerStartToss(page);
   await expect.poll(async () => (await ledger(page.request, f.id)).map((e) => e.type), { timeout: STEP_MS }).toContain("core.start");
 }
 
@@ -1007,7 +1010,7 @@ test.describe("tennis", () => {
     // Y beats X 2-1: the first point TAPPED, the rest posted.
     const yx = between(fixtures, Y, X);
     await lineUp(request, yx, [{ who: Y }, { who: X }]);
-    await openLive(page, yx);
+    await openLive(page, yx, { tennis: true });
     const point = await landed(page, yx, () => half(page, sideOf(yx, Y)).click());
     expect([point.type, point.payload.by], "the tapped point").toEqual(["tennis.point", Y.id]);
     await play(request, yx, [...game(Y).slice(1), ...game(X), ...game(Y)]);

@@ -64,6 +64,8 @@ const REST = [
   "src/server/public-site/__tests__/match-centre-parity.test.ts",
   "src/server/public-site/__tests__/public-lineups.test.ts",
   "src/server/public-site/__tests__/timeline.test.ts",
+  // S2-7 (TN-TS-1): the public timeline's tennis.toss line and the hold/break rungs that follow it.
+  "src/server/public-site/__tests__/timeline-tennis-toss.test.ts",
   // Spectator W2: the hub document, its schema, the pure ladders' consumers,
   // the standings view, the leader boards and the standings timestamp fix.
   // The four "c*" files this wave added live in C_GLOBBED above, not here —

@@ -147,7 +147,9 @@ const N = (value: unknown): string | number =>
 
 /** The entrant fields a payload can carry a side in, in precedence order. */
 // `side` is the kernel lineup family's spelling; the rest are the sports'.
-const SIDE_FIELDS = ["by", "side", "wonBy", "winner", "winnerId", "entrantId", "firstBreak", "white"];
+// `serving` is tennis.toss's (S2-7, TN-TS-1) — LAST, so a set-based rally that carries both `by` and `serving` still
+// reads as the side that won it.
+const SIDE_FIELDS = ["by", "side", "wonBy", "winner", "winnerId", "entrantId", "firstBreak", "white", "serving"];
 
 function sideIndexOf(payload: Payload, sides: readonly [SideT, SideT]): 0 | 1 | null {
   for (const field of SIDE_FIELDS) {
@@ -346,6 +348,8 @@ const PARAMS_FOR: Record<string, (ctx: ParamCtx) => Params> = {
     kind: S(c.payload.kind),
     detail: nameOf(c, "person"),
   }),
+  // S2-7 (TN-TS-1): who the toss gave the first service game.
+  "tennis.toss": (c) => ({ side: sideNameOf(c) }),
 
   "carrom.toss": (c) => ({ side: sideNameOf(c) }),
   "carrom.board.summary": (c) => ({

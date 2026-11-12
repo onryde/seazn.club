@@ -18,4 +18,4 @@ No time to score every point? Use **Set score** to record a finished set's game 
 
 ## Common questions
 
-**Who serves first?** The pad starts with the home side. The serve indicator is a scoring aid, not a record — it doesn't affect results.
+**Who serves first?** When you press **Start match**, the pad asks who serves first — pick the side that won the toss, and the match starts with them serving. The serve indicator then rotates from that side. It's a scoring aid, not a result: who serves doesn't change the score. A match started before this question existed keeps the home side serving first.
