@@ -1,8 +1,9 @@
--- V507 — Quick match lifecycle (docs/superpowers/specs/2026-11-03-quick-match-design.md §7.6, §7.7, C2; plan 3 Task 1 and its
+-- V510 — Quick match lifecycle (docs/superpowers/specs/2026-11-03-quick-match-design.md §7.6, §7.7, C2; plan 3 Task 1 and its
 -- pre-flight amendment T1 [B20], the plan-1 final review's carry m3).
 -- Flyway runs with outOfOrder=false, so the version number must rise in MERGE order: it is a WORKING number, assigned at merge
--- (main's max + 1, after V506__quick_matches.sql). A renumber moves this file's name, the `V507` on line 1
--- (migration-header-truth.test.ts) and the comments that cite V507 by number (`git grep -n V507 -- apps`).
+-- (main's max + 1: authored as V507 after V506__quick_matches.sql, renumbered to V510 past main's V508__sponsor_archive.sql and
+-- V509__match_day_codes.sql). A renumber moves this file's name, the `V510` on line 1 (migration-header-truth.test.ts) and the
+-- comments that cite V510 by number (`git grep -n V510 -- apps`).
 --
 -- Three changes, none of which changes a row's data:
 --
