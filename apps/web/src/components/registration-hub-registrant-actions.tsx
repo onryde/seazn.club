@@ -129,6 +129,10 @@ export interface RegistrationHubRegistrantActionsProps {
    *  offline/unpaid one. Both the approve-awaiting-payment exclusion and
    *  the markPaid gate key off this being null. */
   paymentIntentId: string | null;
+  /** THIS entry's own payment intent (`entry_payment_intent_id`, V387) — set only when a card payment landed for this entry.
+   *  Refund keys off this, never the cart's `paymentIntentId`: a sibling's payment sets the cart's, and an entry that paid nothing
+   *  has nothing to refund (polish wave W8). */
+  entryPaymentIntentId: string | null;
   /** THIS entry's own refunded total (V368 — `registrations.refunded_cents`,
    *  not the cart's). With `amountCents` it is what decides whether anything
    *  is left to refund, mirroring `refundRegistration`'s own
@@ -150,6 +154,7 @@ export function RegistrationHubRegistrantActions({
   amountCents,
   divisionFeeCents,
   paymentIntentId,
+  entryPaymentIntentId,
   refundedCents,
   lastRemindedAt,
 }: RegistrationHubRegistrantActionsProps) {
@@ -209,6 +214,7 @@ export function RegistrationHubRegistrantActions({
       refunded_cents: refundedCents,
       division_fee_cents: divisionFeeCents,
       payment_intent_id: paymentIntentId,
+      entry_payment_intent_id: entryPaymentIntentId,
       // RS009's two flags are computed by the same shared function so that
       // `hasAnyAction` counts them, but this component does not render either
       // control — the assign sheet is its own component, mounted beside this

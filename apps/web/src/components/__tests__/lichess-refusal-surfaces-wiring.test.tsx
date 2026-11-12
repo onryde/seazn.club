@@ -57,6 +57,7 @@ const PROPS: ActionProps = {
   amountCents: 0,
   divisionFeeCents: 0,
   paymentIntentId: null,
+  entryPaymentIntentId: null,
   refundedCents: 0,
   lastRemindedAt: null,
 };

@@ -38,6 +38,8 @@ const NOT_A_SOLO_SIGNUP = {
   free_agent: false,
   assigned_team_id: null,
   division_started: false,
+  // No payment of THIS entry's own unless a case says so (polish wave W8: Refund reads the entry's intent, never the cart's).
+  entry_payment_intent_id: null,
 } as const;
 
 describe("REGISTRANT_STATUS_STYLE", () => {
@@ -525,11 +527,14 @@ describe("deriveRegistrantActionFlags", () => {
   // future is exercised here automatically rather than silently falling
   // through to whatever a branch's default does.
   it("returns a defined boolean for every real status × approval × fee × payment_intent combination", () => {
+    let swept = 0;
     for (const status of RegistrationStatus.options) {
       for (const approval of ["auto", "manual"] as const) {
         for (const amount_cents of [0, 1500]) {
           for (const division_fee_cents of [0, 1500]) {
           for (const payment_intent_id of [null, "pi_123"] as const) {
+          // Polish wave W8: the entry's OWN intent is a separate axis from the cart's — a sibling's payment sets the cart's alone.
+          for (const entry_payment_intent_id of [null, "pi_123"] as const) {
           // RS007 #16 — refunded_cents is a real input now (canRefund reads
           // `amount_cents - refunded_cents`), so it joins the sweep rather
           // than being pinned at 0: 1500 against a 1500 charge is the
@@ -542,6 +547,7 @@ describe("deriveRegistrantActionFlags", () => {
               refunded_cents,
               division_fee_cents,
               payment_intent_id,
+              entry_payment_intent_id,
             });
             // RS009: iterate the flags the function ACTUALLY returned rather
             // than a hand-listed seven. The list this replaces was written to
@@ -570,13 +576,18 @@ describe("deriveRegistrantActionFlags", () => {
             // refusals ("No payment to refund" / "Already fully refunded")
             // for EVERY combination, so an organiser is never shown a button
             // the server will reject, nor denied one it would have honoured.
-            expect(flags.canRefund).toBe(payment_intent_id !== null && amount_cents - refunded_cents > 0);
+            // Polish wave W8: on THIS entry's own payment - the cart's intent (a sibling's payment) never makes an entry refundable.
+            expect(flags.canRefund).toBe(entry_payment_intent_id !== null && amount_cents - refunded_cents > 0);
+            swept++;
+          }
           }
           }
           }
         }
       }
     }
+    // Anti-vacuity: every status × 2 approvals × 2 amounts × 2 fees × 2 cart intents × 2 entry intents × 2 refunded.
+    expect(swept).toBe(RegistrationStatus.options.length * 64);
   });
 
   describe("canRemind (player payment page)", () => {
@@ -615,6 +626,34 @@ describe("deriveRegistrantActionFlags", () => {
       ).toBe(false);
     });
 
+    // Polish wave W8 (walkthrough s08b): a cart of two where only the SIBLING paid. The cart's intent is the sibling's payment;
+    // this entry has none of its own, so there is nothing of its to refund - the server refuses 422 and the control is hidden.
+    it("is false on an unpaid entry whose cart carries a SIBLING's payment (W8)", () => {
+      expect(
+        deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,
+          ...base,
+          status: "pending",
+          amount_cents: 1000,
+          refunded_cents: 0,
+          payment_intent_id: "pi_sibling",
+          entry_payment_intent_id: null,
+        }).canRefund,
+      ).toBe(false);
+    });
+
+    it("is true on the entry that paid, whatever the cart's intent says (W8 positive pair)", () => {
+      expect(
+        deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,
+          ...base,
+          status: "confirmed",
+          amount_cents: 1500,
+          refunded_cents: 0,
+          payment_intent_id: "pi_newer_sibling",
+          entry_payment_intent_id: "pi_own",
+        }).canRefund,
+      ).toBe(true);
+    });
+
     it("is true for a paid entry with a balance left", () => {
       expect(
         deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,
@@ -623,6 +662,7 @@ describe("deriveRegistrantActionFlags", () => {
           amount_cents: 2500,
           refunded_cents: 0,
           payment_intent_id: "pi_123",
+          entry_payment_intent_id: "pi_123",
         }).canRefund,
       ).toBe(true);
     });
@@ -635,6 +675,7 @@ describe("deriveRegistrantActionFlags", () => {
           amount_cents: 2500,
           refunded_cents: 1000,
           payment_intent_id: "pi_123",
+          entry_payment_intent_id: "pi_123",
         }).canRefund,
       ).toBe(true);
     });
@@ -647,6 +688,7 @@ describe("deriveRegistrantActionFlags", () => {
           amount_cents: 2500,
           refunded_cents: 2500,
           payment_intent_id: "pi_123",
+          entry_payment_intent_id: "pi_123",
         }).canRefund,
       ).toBe(false);
     });
@@ -667,6 +709,7 @@ describe("deriveRegistrantActionFlags", () => {
           amount_cents: 4000,
           refunded_cents: 0,
           payment_intent_id: "pi_123",
+          entry_payment_intent_id: "pi_123",
         }).canRefund,
       ).toBe(true);
     });
@@ -679,6 +722,7 @@ describe("deriveRegistrantActionFlags", () => {
           amount_cents: 4000,
           refunded_cents: 0,
           payment_intent_id: "pi_123",
+          entry_payment_intent_id: "pi_123",
         }).canRefund,
       ).toBe(true);
     });

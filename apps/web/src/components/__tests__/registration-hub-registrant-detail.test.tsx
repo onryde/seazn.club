@@ -46,6 +46,7 @@ function row(over: Partial<RegistrationListRow> = {}): RegistrationListRow {
     payment_method: "stripe",
     checkout_session_id: null,
     payment_intent_id: null,
+    entry_payment_intent_id: null,
     expires_at: null,
     reminded_at: null,
     refunded_at: null,
@@ -383,6 +384,7 @@ describe("RegistrationHubRegistrantDetail — action controls (RS005 W3, viewer/
             approval: "manual",
             amount_cents: 2500,
             payment_intent_id: "pi_456",
+            entry_payment_intent_id: "pi_own_789",
           }),
           canEdit: true,
         }),
@@ -396,6 +398,8 @@ describe("RegistrationHubRegistrantDetail — action controls (RS005 W3, viewer/
       approval: "manual",
       amountCents: 2500,
       paymentIntentId: "pi_456",
+      // Polish wave W8: Refund keys off the entry's OWN intent, so it must reach the island distinct from the cart's.
+      entryPaymentIntentId: "pi_own_789",
     });
   });
 

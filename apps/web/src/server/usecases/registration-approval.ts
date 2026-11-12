@@ -264,13 +264,16 @@ export async function rejectRegistration(
     void notifyPromoted(result.promoted, ctx, settings, fallbackOrigin(), { firstAttempt: "request" });
   }
 
-  if (result.refundable?.payment_intent_id) {
+  // Polish wave W8: the entry's OWN payment (V387), never the cart's - the cart's intent is the newest payment in the cart, which
+  // on a cart whose entries paid in separate sessions is a sibling's. Null fails closed: nothing of this entry's to send back.
+  const ownIntent = result.refundable?.entry_payment_intent_id ?? null;
+  if (result.refundable && ownIntent) {
     const remaining = result.refundable.amount_cents - result.refundable.refunded_cents;
     if (remaining > 0) {
       try {
         // Read BEFORE the money moves (a failure after it would report a refund failure for a refund that went through).
         const refundCtx = await divisionCtx(sql, result.row.division_id);
-        const refund = await stripeRefund(result.refundable.payment_intent_id, remaining);
+        const refund = await stripeRefund(ownIntent, remaining);
         // The registrant's receipt is queued in the same transaction as the refund's record; the request makes the first attempt.
         const receiptId = await sql.begin(async (tx) => {
           await tx`
@@ -303,7 +306,7 @@ export async function rejectRegistration(
           competitionId: result.competitionId!,
           amountCents: remaining,
           currency: result.refundable!.currency,
-          paymentIntentId: result.refundable!.payment_intent_id,
+          paymentIntentId: ownIntent,
           reason: err instanceof Error ? err.message : String(err),
           mode: "reject",
         });

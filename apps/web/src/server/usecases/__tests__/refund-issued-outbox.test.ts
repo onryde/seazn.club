@@ -248,8 +248,11 @@ describe.skipIf(!HAS_DB)("the refund receipt rides the outbox (DB)", () => {
     await putRegistrationSettings(w.owner, w.division.id, { ...SETTINGS_BASE, payment_method: "stripe", fee_cents: 800, approval: "manual" });
     const email = address("reject");
     const seeded = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: email, locale: "nl" });
-    await sql`update registrations set status = 'paid' where id = ${seeded.registration.id}`;
-    await sql`update registration_groups set payment_intent_id = ${"pi_t11_" + randomUUID().slice(0, 8)} where id = ${seeded.registration.group_id}`;
+    // The entry's OWN intent as well as the cart's, as confirmPaidRegistration stamps it (V387): the reject refund reads the entry's
+    // payment, never the cart's (polish wave W8).
+    const intent = "pi_t11_" + randomUUID().slice(0, 8);
+    await sql`update registrations set status = 'paid', payment_intent_id = ${intent} where id = ${seeded.registration.id}`;
+    await sql`update registration_groups set payment_intent_id = ${intent} where id = ${seeded.registration.group_id}`;
 
     const rejected = await rejectRegistration(w.owner, seeded.registration.id);
 

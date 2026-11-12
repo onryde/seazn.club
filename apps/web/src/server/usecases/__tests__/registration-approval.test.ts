@@ -539,7 +539,9 @@ describe.skipIf(!HAS_DB)("reject/approve on a paid-awaiting-approval entry", () 
     // Simulate the payment having landed (ruling B: manual mode leaves this
     // at 'paid' via confirmPaidRegistration's own manual-mode gate) without
     // re-deriving the whole webhook path here.
-    await sql`update registrations set status = 'paid' where id = ${regId}`;
+    // The entry's OWN intent too, as confirmPaidRegistration stamps it with `status = 'paid'` (V387): refunds read the entry's
+    // payment, never the cart's (polish wave W8).
+    await sql`update registrations set status = 'paid', payment_intent_id = 'pi_test_fake' where id = ${regId}`;
     await sql`update registration_groups set payment_intent_id = 'pi_test_fake' where id = ${submitted.group_id}`;
 
     const rejected = await rejectRegistration(owner, regId);
@@ -569,7 +571,9 @@ describe.skipIf(!HAS_DB)("reject/approve on a paid-awaiting-approval entry", () 
       },
     );
     const regId = submitted.entries[0]!.registration_id;
-    await sql`update registrations set status = 'paid' where id = ${regId}`;
+    // The entry's OWN intent too, as confirmPaidRegistration stamps it with `status = 'paid'` (V387): refunds read the entry's
+    // payment, never the cart's (polish wave W8).
+    await sql`update registrations set status = 'paid', payment_intent_id = 'pi_test_fake' where id = ${regId}`;
     await sql`update registration_groups set payment_intent_id = 'pi_test_fake' where id = ${submitted.group_id}`;
     const [groupRow] = await sql<{ currency: string }[]>`
       select currency from registration_groups where id = ${submitted.group_id}`;
@@ -636,7 +640,9 @@ describe.skipIf(!HAS_DB)("reject/approve on a paid-awaiting-approval entry", () 
       },
     );
     const regId = submitted.entries[0]!.registration_id;
-    await sql`update registrations set status = 'paid' where id = ${regId}`;
+    // The entry's OWN intent too, as confirmPaidRegistration stamps it with `status = 'paid'` (V387): refunds read the entry's
+    // payment, never the cart's (polish wave W8).
+    await sql`update registrations set status = 'paid', payment_intent_id = 'pi_test_fake2' where id = ${regId}`;
     await sql`update registration_groups set payment_intent_id = 'pi_test_fake2' where id = ${submitted.group_id}`;
 
     // An organiser refunds it via the normal refund flow — which does NOT

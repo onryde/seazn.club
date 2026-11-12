@@ -339,8 +339,11 @@ export interface RegistrantActionFlags {
  * nothing to promote FROM.
  *
  * canRefund (RS007 finding #16): mirrors `refundRegistration`'s own two
- * refusals (usecases/registrations/organiser-actions.ts) exactly — "No payment to refund" when there is
- * no `payment_intent_id`, and "Already fully refunded" when
+ * refusals (usecases/registrations/organiser-actions.ts) exactly — "No payment to refund" when THIS
+ * entry has no payment of its own (`entry_payment_intent_id`, V387 — never
+ * the cart's `payment_intent_id`, which a sibling's payment sets: polish wave
+ * W8, where an unpaid entry offered Refund and it refunded the sibling's
+ * money), and "Already fully refunded" when
  * `amount_cents - refunded_cents <= 0`. Deliberately NOT gated on status:
  * the usecase is not either, and the case that matters most is a WITHDRAWN
  * entry — past `refund_lock_at`, `withdrawCore` refuses to auto-refund and
@@ -363,6 +366,7 @@ export function deriveRegistrantActionFlags(
     | "amount_cents"
     | "refunded_cents"
     | "payment_intent_id"
+    | "entry_payment_intent_id"
     | "division_fee_cents"
     | "free_agent"
     | "assigned_team_id"
@@ -395,7 +399,7 @@ export function deriveRegistrantActionFlags(
     canMarkPaid: awaitingOfflineFee,
     canResend: nonTerminal,
     canRemind: row.status === "pending" && feeOwed,
-    canRefund: row.payment_intent_id !== null && row.amount_cents - row.refunded_cents > 0,
+    canRefund: row.entry_payment_intent_id !== null && row.amount_cents - row.refunded_cents > 0,
     // A solo sign-up (an entry with no roster of its own) is the only kind of
     // row that can be placed on a team. `assigned_team_id` is derived from
     // the roster row pointing back at this entry, so these two flags are

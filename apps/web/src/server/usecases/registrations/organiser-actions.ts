@@ -256,7 +256,11 @@ export async function refundRegistration(
   amountCents: number | undefined,
 ): Promise<RegistrationWithGroupRow> {
   const reg = await withTenant(auth.orgId, async (tx) => orgReg(tx, regId));
-  if (!reg.payment_intent_id) throw new HttpError(422, "No payment to refund");
+  // Polish wave W8 (walkthrough s08b): THIS entry's own payment, never the cart's. The cart's `payment_intent_id` is set by
+  // whichever entry paid last, so on a cart where only a sibling paid it named the sibling's payment, and Refund on the unpaid
+  // entry sent real money back off it. An entry with no payment of its own has nothing to refund; null fails closed (V387/H1).
+  const intent = reg.entry_payment_intent_id;
+  if (!intent) throw new HttpError(422, "No payment to refund");
   // RS002 (V368): reg.refunded_cents is THIS entry's own column now (hazard 3
   // fixed) — a sibling's earlier refund can no longer drive this negative and
   // falsely report an untouched entry as "already fully refunded".
@@ -268,7 +272,7 @@ export async function refundRegistration(
   }
   // Read before the money moves and before the tenant transaction opens (a pooled read inside it waits on the connection it holds).
   const ctx = await divisionCtx(sql, reg.division_id);
-  const refund = await stripeRefund(reg.payment_intent_id, amount);
+  const refund = await stripeRefund(intent, amount);
   const { row, receiptId } = await withTenant(auth.orgId, async (tx) => {
     const [div] = await tx<{ competition_id: string }[]>`
       select competition_id from divisions where id = ${reg.division_id}`;

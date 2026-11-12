@@ -99,6 +99,7 @@ const PROPS: ActionProps = {
   amountCents: 0,
   divisionFeeCents: 0,
   paymentIntentId: null,
+  entryPaymentIntentId: null,
   refundedCents: 0,
   lastRemindedAt: null,
 };
@@ -166,10 +167,18 @@ describe("RegistrationHubRegistrantActions — legality (which buttons render)",
     ).toBeUndefined();
   });
 
+  // Polish wave W8 (walkthrough s08b): the still-unpaid entry of a cart whose SIBLING paid. The cart's intent is the sibling's
+  // payment; this entry has none of its own, so Refund is hidden (the server refuses it 422 - it used to refund the sibling's money).
+  it("hides refund on an unpaid entry whose cart carries a sibling's payment (W8)", () => {
+    const island = mount({ status: "pending", approval: "auto", amountCents: 1000, divisionFeeCents: 1000, paymentIntentId: "pi_sibling", entryPaymentIntentId: null });
+    expect(findAction(island, "refund")).toBeUndefined();
+    expect(findAction(island, "withdraw"), "the row still has its other actions (the control set is not empty)").toBeTruthy();
+  });
+
   it("shows refund on a paid entry with a balance left", () => {
     expect(
       findAction(
-        mount({ status: "confirmed", approval: "auto", amountCents: 2500, paymentIntentId: "pi_1" }),
+        mount({ status: "confirmed", approval: "auto", amountCents: 2500, paymentIntentId: "pi_1", entryPaymentIntentId: "pi_1" }),
         "refund",
       ),
     ).toBeTruthy();
@@ -184,6 +193,7 @@ describe("RegistrationHubRegistrantActions — legality (which buttons render)",
           amountCents: 2500,
           refundedCents: 2500,
           paymentIntentId: "pi_1",
+          entryPaymentIntentId: "pi_1",
         }),
         "refund",
       ),
@@ -201,6 +211,7 @@ describe("RegistrationHubRegistrantActions — legality (which buttons render)",
       approval: "manual",
       amountCents: 4000,
       paymentIntentId: "pi_1",
+      entryPaymentIntentId: "pi_1",
     });
     expect(findAction(island, "refund")).toBeTruthy();
     expect(findAction(island, "withdraw")).toBeUndefined();
@@ -277,6 +288,7 @@ describe("RegistrationHubRegistrantActions — confirm gating", () => {
       approval: "auto",
       amountCents: 4000,
       paymentIntentId: "pi_1",
+      entryPaymentIntentId: "pi_1",
     });
     await (propsOf(findAction(island, "refund")!).onClick as () => Promise<void>)();
     expect(confirmMock.fn).toHaveBeenCalledTimes(1);
@@ -299,6 +311,7 @@ describe("RegistrationHubRegistrantActions — confirm gating", () => {
       approval: "auto",
       amountCents: 4000,
       paymentIntentId: "pi_1",
+      entryPaymentIntentId: "pi_1",
     });
     await (propsOf(findAction(island, "refund")!).onClick as () => Promise<void>)();
     expect(net.calls.some((c) => c.url.endsWith("/refund"))).toBe(false);
@@ -314,6 +327,7 @@ describe("RegistrationHubRegistrantActions — confirm gating", () => {
       approval: "auto",
       amountCents: 4000,
       paymentIntentId: "pi_1",
+      entryPaymentIntentId: "pi_1",
     });
     await (propsOf(findAction(island, "refund")!).onClick as () => Promise<void>)();
     const feedback = island
@@ -580,6 +594,7 @@ describe("RegistrationHubRegistrantActions — finding 2: a failure never resurr
       amountCents: 0,
       divisionFeeCents: 0,
       paymentIntentId: null,
+      entryPaymentIntentId: null,
   refundedCents: 0,
       lastRemindedAt: null,
     });

@@ -278,6 +278,7 @@ export function RegistrationHubRegistrantDetail({
             amountCents={row.amount_cents}
             divisionFeeCents={row.division_fee_cents}
             paymentIntentId={row.payment_intent_id}
+            entryPaymentIntentId={row.entry_payment_intent_id}
             refundedCents={row.refunded_cents}
             lastRemindedAt={row.last_reminded_at ? new Date(row.last_reminded_at).toISOString() : null}
           />
