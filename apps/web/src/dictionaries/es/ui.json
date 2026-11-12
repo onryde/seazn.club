@@ -6579,6 +6579,7 @@
   "register.entries.cart.closedNote": "Esta categoría se ha cerrado desde que añadiste esta inscripción — no se cobrará y puede que debas eliminarla.",
   "register.entries.cart.closedBlocking": "Esta categoría ya no está abierta y no se puede cobrar — elimina esta inscripción para continuar.",
   "register.entries.cart.teamNameRequired": "Ponle un nombre a este equipo para continuar.",
+  "register.entries.cart.mixedPayment": "Una inscripción no puede mezclar métodos de pago: {cardDivision} se paga con tarjeta al inscribirte y {offlineDivision} se paga al organizador. Quita una de las dos e inscríbela por separado.",
   "register.entries.cart.subtotal": "Subtotal",
   "register.entries.free": "Gratis",
   "register.entries.cart.max": "El carrito está lleno — hasta {max} inscripciones por registro.",

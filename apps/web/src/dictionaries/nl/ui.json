@@ -6579,6 +6579,7 @@
   "register.entries.cart.closedNote": "Deze categorie is gesloten sinds je deze inschrijving toevoegde — er wordt niet voor in rekening gebracht en je moet hem mogelijk verwijderen.",
   "register.entries.cart.closedBlocking": "Deze categorie is niet meer open en kan niet in rekening worden gebracht — verwijder deze inschrijving om door te gaan.",
   "register.entries.cart.teamNameRequired": "Geef dit team een naam om door te gaan.",
+  "register.entries.cart.mixedPayment": "Eén inschrijving kan geen betaalmethoden mixen: {cardDivision} betaal je per kaart bij inschrijving en {offlineDivision} betaal je aan de organisator. Verwijder een van beide en schrijf die apart in.",
   "register.entries.cart.subtotal": "Subtotaal",
   "register.entries.free": "Gratis",
   "register.entries.cart.max": "Winkelwagen is vol — maximaal {max} inschrijvingen per registratie.",

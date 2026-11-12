@@ -547,9 +547,20 @@ export function summarizeCart(cart: CartState, divisions: readonly DivisionLike[
   return { lines, subtotalCents, currency };
 }
 
+/**
+ * How ONE cart line is paid, or null when it is not charged now (free, waitlisted, stale-closed, an unknown division, or a solo price of
+ * 0 on a paid division). The review step labels each entry with this (polish wave P4, walkthrough W9): it used to label the whole cart
+ * with the first charged division's method, and read "pay by card at sign-up" over a cart whose second entry was pay-the-organiser.
+ * Same `lineFeeCents` the subtotal and the server charge by, so a line is labelled exactly when it is charged.
+ */
+export function lineMethod(line: CartLineSummary): DivisionLike["payment_method"] | null {
+  if (line.notChargedNow || !line.division) return null;
+  return lineFeeCents(line.entry, line.division) > 0 ? line.division.payment_method : null;
+}
+
 /** The division that decides the cart's payment PRESENTATION — step 5's
- *  submit button label (register.submit.card/.fee) and its payment-method
- *  note both read this, so the two can never disagree. The first line that
+ *  submit button label (register.submit.card/.fee). (The review's per-entry
+ *  method labels read `lineMethod` instead — one entry each, P4/W9.) The first line that
  *  is actually charged now (not waitlisted/stale-closed, fee > 0); every
  *  payable division in a cart shares one payment method by construction
  *  (assertUniformPaymentMethod, registration-submit.ts), so any one of them

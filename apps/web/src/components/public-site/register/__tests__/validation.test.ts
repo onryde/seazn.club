@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   entryDetailsComplete,
   guardianRequired,
+  mixedPaymentConflict,
   validateConsent,
   validateContact,
   validateDetails,
@@ -842,5 +843,86 @@ describe("validateConsent", () => {
   it("a minor NOT self-registering (nobody linked) never needs a guardian", () => {
     const result = validateConsent(unlinkedCart, minorSelfContact, { ...EMPTY_CONSENT, privacy_consent: true }, NOW);
     expect(result.valid).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Polish wave P4 (walkthrough W9) — a cart that mixes card and pay-the-organiser divisions can never be collected in one session, and the
+// server refuses it. The form used to let the registrant add both, fill four steps, and refuse only at submit. These are the rules the
+// ENTRIES step now applies as the second division is added; they mirror registration-submit.ts's assertUniformPaymentMethod: only a
+// division that actually charges (fee_cents > 0) counts, and a waitlisted one still does (the structural check runs before waitlisting).
+// ---------------------------------------------------------------------------
+
+describe("mixedPaymentConflict / validateEntries — a mixed card + offline cart is refused on the ENTRIES step (W9)", () => {
+  const SEASON_START_YEAR = 2026;
+  const CARD: DivisionLike = { ...BASE_DIVISION, division_id: "d-card", name: "Open Singles", fee_cents: 1500, payment_method: "stripe" };
+  const OFFLINE: DivisionLike = { ...BASE_DIVISION, division_id: "d-off", name: "Social Singles", fee_cents: 800, payment_method: "offline" };
+  const cartFor = (...divisionIds: string[]): CartState => ({
+    entries: divisionIds.map((id, i) => entry({ id: `e${i}`, division_id: id, entrant_kind: "individual" })),
+  });
+
+  it("the walkthrough's cart (Open Singles by card, Social Singles to the organiser) names BOTH divisions", () => {
+    expect(mixedPaymentConflict(cartFor("d-card", "d-off"), [CARD, OFFLINE])).toEqual({
+      cardDivision: "Open Singles",
+      offlineDivision: "Social Singles",
+    });
+    // Cart order does not matter: the card division is still the card one.
+    expect(mixedPaymentConflict(cartFor("d-off", "d-card"), [CARD, OFFLINE])).toEqual({
+      cardDivision: "Open Singles",
+      offlineDivision: "Social Singles",
+    });
+  });
+
+  it("blocks Next with a per-cart cause (error stays null, like the stale-closed and team-name causes) and clears once one side is removed", () => {
+    const mixed = validateEntries(cartFor("d-card", "d-off"), [CARD, OFFLINE], EMPTY_CONTACT, SEASON_START_YEAR);
+    expect(mixed.valid).toBe(false);
+    expect(mixed.error).toBeNull();
+    expect(mixed.mixedPayment).toEqual({ cardDivision: "Open Singles", offlineDivision: "Social Singles" });
+    const onlyCard = validateEntries(cartFor("d-card"), [CARD, OFFLINE], EMPTY_CONTACT, SEASON_START_YEAR);
+    expect(onlyCard.valid).toBe(true);
+    expect(onlyCard.mixedPayment).toBeNull();
+  });
+
+  it("the empty case: an empty cart and a one-entry cart are never a conflict", () => {
+    expect(mixedPaymentConflict(EMPTY_CART, [CARD, OFFLINE])).toBeNull();
+    expect(mixedPaymentConflict(cartFor("d-card"), [CARD, OFFLINE])).toBeNull();
+    expect(mixedPaymentConflict(cartFor("d-card", "d-card"), [CARD, OFFLINE]), "the same division twice (Add another)").toBeNull();
+  });
+
+  it("a division the server never collects for (fee 0) imposes no constraint, whatever its method", () => {
+    const freeOffline: DivisionLike = { ...OFFLINE, division_id: "d-free", fee_cents: 0 };
+    const freeCard: DivisionLike = { ...CARD, division_id: "d-free-card", fee_cents: 0 };
+    expect(mixedPaymentConflict(cartFor("d-card", "d-free"), [CARD, freeOffline])).toBeNull();
+    expect(mixedPaymentConflict(cartFor("d-off", "d-free-card"), [OFFLINE, freeCard])).toBeNull();
+  });
+
+  it("a waitlisted division still counts: the server's structural check runs before waitlisting", () => {
+    const fullOffline: DivisionLike = { ...OFFLINE, closed_reason: "full" };
+    expect(mixedPaymentConflict(cartFor("d-card", "d-off"), [CARD, fullOffline])).not.toBeNull();
+  });
+
+  it("an entry whose division is unknown, or a division with no method/fee given, is never a conflict (degrade, do not throw)", () => {
+    expect(mixedPaymentConflict(cartFor("d-card", "ghost"), [CARD])).toBeNull();
+    expect(mixedPaymentConflict(cartFor("a", "b"), [{ division_id: "a" }, { division_id: "b" }])).toBeNull();
+  });
+
+  it("the whole table: every method pair x fee pair conflicts exactly when both charge and the methods differ (counted)", () => {
+    const methods = ["stripe", "offline"] as const;
+    const fees = [0, 1000] as const;
+    let checked = 0;
+    let conflicts = 0;
+    for (const m1 of methods)
+      for (const m2 of methods)
+        for (const f1 of fees)
+          for (const f2 of fees) {
+            const a: DivisionLike = { ...BASE_DIVISION, division_id: "a", name: "A", fee_cents: f1, payment_method: m1 };
+            const b: DivisionLike = { ...BASE_DIVISION, division_id: "b", name: "B", fee_cents: f2, payment_method: m2 };
+            const want = f1 > 0 && f2 > 0 && m1 !== m2;
+            expect(mixedPaymentConflict(cartFor("a", "b"), [a, b]) !== null, `${m1}/${f1} + ${m2}/${f2}`).toBe(want);
+            checked += 1;
+            if (want) conflicts += 1;
+          }
+    expect(checked).toBe(16);
+    expect(conflicts, "premise: the table has conflicting rows (two: stripe+offline both ways round)").toBe(2);
   });
 });

@@ -65,6 +65,7 @@ import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hoo
 import { ApiV1Error } from "@/lib/client-v1";
 import { t as tRuntime } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";
+import { summarizeCart } from "../cart";
 import { DivisionCard } from "../division-card";
 import { EntryCart } from "../entry-cart";
 import { EntryDetails } from "../entry-details";
@@ -1862,6 +1863,9 @@ const DIV_WAITLIST: DivisionLike = {
   fee_cents: 1000,
   free_agent_fee_cents: null,
   currency: "gbp",
+  // The same method as DIV_PAID's: the server's uniform-method rule counts a waitlisted division too (it runs before waitlisting), so a
+  // card cart with an OFFLINE waitlisted division is a cart it refuses - and, since P4, one the ENTRIES step refuses as well.
+  payment_method: "stripe",
 };
 
 describe("step 5 — REVIEW→PAY line items", () => {
@@ -2438,5 +2442,124 @@ describe("P4 — the Details step is seeded from the contact (W1) and the pair p
     expect(rosterNames(m.island)).toEqual(["Mia Cole", "Sam Reid"]);
     m.clickByText("Next"); // -> CONSENT: only reachable when validateDetails accepted the seeded roster and pick
     expect(m.pageText(), "reached the consent step").toContain("Privacy");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Polish wave P4 (walkthrough W9) — the mixed card + offline cart is refused on the ENTRIES step, the moment the second division is added,
+// with the specific reason; it used to be refused only at submit under "check your details". Validation rules: validation.test.ts.
+// ---------------------------------------------------------------------------
+
+describe("P4 — a card + offline cart is refused on the ENTRIES step (W9)", () => {
+  const DIV_CARD: DivisionLike = { ...DIV_OPEN, division_id: "div-card", name: "Open Singles", fee_cents: 1500, payment_method: "stripe" };
+  const DIV_OFFLINE: DivisionLike = { ...DIV_OPEN, division_id: "div-offline", name: "Social Singles", fee_cents: 800, payment_method: "offline" };
+
+  function onEntries(divisions: DivisionLike[]) {
+    const m = mount(divisions);
+    (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Mia Cole", email: "mia@example.com" });
+    m.clickByText("Next"); // -> ENTRIES
+    return m;
+  }
+
+  it("says why, naming both divisions, as soon as the second one is added - and Next stays on the step", () => {
+    const m = onEntries([DIV_CARD, DIV_OFFLINE]);
+    (propsOf(m.divisionCard("div-card")).onAddIndividual as () => void)();
+    expect(m.entryCartText(), "one division: no refusal yet").not.toContain("can't mix payment methods");
+
+    (propsOf(m.divisionCard("div-offline")).onAddIndividual as () => void)();
+    expect(m.entryCartText()).toContain(
+      "One registration can't mix payment methods: Open Singles is paid by card at sign-up and Social Singles is paid to the organiser.",
+    );
+
+    m.clickByText("Next");
+    expect(m.island.tree().some((e) => e.type === StepDetails), "Next is refused: still on ENTRIES").toBe(false);
+    expect(m.island.tree().some((e) => e.type === EntryCart), "still on ENTRIES").toBe(true);
+  });
+
+  it("removing one side clears the refusal and Next goes on (the sequence, not just the state)", () => {
+    const m = onEntries([DIV_CARD, DIV_OFFLINE]);
+    (propsOf(m.divisionCard("div-card")).onAddIndividual as () => void)();
+    (propsOf(m.divisionCard("div-offline")).onAddIndividual as () => void)();
+    expect(m.entryCartText()).toContain("can't mix payment methods");
+
+    const offlineId = m.entryCartCart().entries.find((e) => e.division_id === "div-offline")!.id;
+    (propsOf(m.island.tree().find((e) => e.type === EntryCart)!).dispatch as (a: object) => void)({ type: "REMOVE_ENTRY", id: offlineId });
+    expect(m.entryCartText()).not.toContain("can't mix payment methods");
+
+    m.clickByText("Next");
+    expect(m.island.tree().some((e) => e.type === StepDetails), "no longer refused: on DETAILS").toBe(true);
+  });
+
+  // One island per test (the harness's hook state is global), so each pairing is its own case.
+  const FREE_OFFLINE: DivisionLike = { ...DIV_OFFLINE, division_id: "div-free", name: "Free Roll", fee_cents: 0 };
+  const DIV_CARD_2: DivisionLike = { ...DIV_CARD, division_id: "div-card-2", name: "Masters Singles" };
+  it.each([
+    ["two card divisions", DIV_CARD_2],
+    ["a card division beside a free offline one", FREE_OFFLINE],
+  ] as const)("%s are never refused: Next goes on", (_label, other) => {
+    const m = onEntries([DIV_CARD, other]);
+    (propsOf(m.divisionCard("div-card")).onAddIndividual as () => void)();
+    (propsOf(m.divisionCard(other.division_id)).onAddIndividual as () => void)();
+    expect(m.entryCartCart().entries, "premise: both were added").toHaveLength(2);
+    expect(m.entryCartText()).not.toContain("can't mix payment methods");
+    m.clickByText("Next");
+    expect(m.island.tree().some((e) => e.type === StepDetails)).toBe(true);
+  });
+});
+
+// Polish wave P4 (walkthrough W9) - the review step labels EACH entry with its own payment method, not the cart with one.
+describe("P4 - the REVIEW step labels each entry with its own payment method (W9)", () => {
+  const CARD: DivisionLike = { ...DIV_OPEN, division_id: "div-card", name: "Open Singles", fee_cents: 1500, payment_method: "stripe" };
+  const OFFLINE: DivisionLike = { ...DIV_OPEN, division_id: "div-offline", name: "Social Singles", fee_cents: 800, payment_method: "offline" };
+  const lines = (node: ReactNode) => walk(node).filter((e) => e.type === "li").map((e) => textOf(e));
+
+  it("a cart that mixes the two (only reachable from a restored draft now) never labels one entry with the other's method", () => {
+    const cart: CartState = {
+      entries: ["div-card", "div-offline"].map((division_id, i) => ({
+        id: `e${i}`,
+        division_id,
+        entrant_kind: "individual" as const,
+        team_name: null,
+        partner_name: null,
+        free_agent: false,
+        players: [],
+        answers: {},
+        registering_self: false,
+        self_player_index: null,
+      })),
+    };
+    const out = (StepReview as unknown as ComponentFn)({ summary: summarizeCart(cart, [CARD, OFFLINE]), locale: "en" });
+    const rows = lines(out);
+    expect(rows).toHaveLength(2);
+    const card = rows.find((r) => r.includes("Open Singles"))!;
+    const offline = rows.find((r) => r.includes("Social Singles"))!;
+    expect(card).toContain("pay by card at sign-up");
+    expect(card).not.toContain("pay the organiser");
+    expect(offline).toContain("pay the organiser");
+    expect(offline).not.toContain("pay by card at sign-up");
+    // The old cart-wide note under the subtotal is what mislabelled the walkthrough's 23-pound cart.
+    expect((textOf(out).match(/pay by card at sign-up/g) ?? []).length, "once, on its own line").toBe(1);
+  });
+
+  it("through the real stepper: the charged entry is labelled, the waitlisted one is not", () => {
+    const WAIT: DivisionLike = { ...CARD, division_id: "div-wait", name: "Full Division", closed_reason: "full" };
+    const m = mount([CARD, WAIT]);
+    (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Rep", email: "rep@example.com" });
+    m.clickByText("Next"); // -> ENTRIES
+    (propsOf(m.divisionCard("div-card")).onAddIndividual as () => void)();
+    (propsOf(m.divisionCard("div-wait")).onAddIndividual as () => void)();
+    m.clickByText("Next"); // -> DETAILS
+    const names = allByAriaLabel(m.island, "Player 1 — Your name");
+    (propsOf(names[0]!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "One" } });
+    (propsOf(names[1]!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "Two" } });
+    m.clickByText("Next"); // -> CONSENT
+    (propsOf(byId(m.island, "reg-consent-privacy")).onChange as (e: { target: { checked: boolean } }) => void)({ target: { checked: true } });
+    m.clickByText("Next"); // -> REVIEW
+    const rows = lines(m.island.tree());
+    const charged = rows.find((r) => r.includes("Open Singles"))!;
+    const waitlisted = rows.find((r) => r.includes("Full Division"))!;
+    expect(charged).toContain("pay by card at sign-up");
+    expect(waitlisted).not.toContain("pay by card at sign-up");
+    expect(waitlisted).not.toContain("pay the organiser");
   });
 });

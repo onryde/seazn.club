@@ -6425,6 +6425,7 @@ export type DictionaryKey =
   | "register.entries.cart.freeAgentBadge"
   | "register.entries.cart.heading"
   | "register.entries.cart.max"
+  | "register.entries.cart.mixedPayment"
   | "register.entries.cart.remove"
   | "register.entries.cart.self"
   | "register.entries.cart.subtotal"

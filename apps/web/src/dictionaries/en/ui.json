@@ -6579,6 +6579,7 @@
   "register.entries.cart.closedNote": "This division has closed since you added this entry — it won't be charged and may need to be removed.",
   "register.entries.cart.closedBlocking": "This division is no longer open and can't be charged — remove this entry to continue.",
   "register.entries.cart.teamNameRequired": "Give this team a name to continue.",
+  "register.entries.cart.mixedPayment": "One registration can't mix payment methods: {cardDivision} is paid by card at sign-up and {offlineDivision} is paid to the organiser. Remove one of them and register it separately.",
   "register.entries.cart.subtotal": "Subtotal",
   "register.entries.free": "Free",
   "register.entries.cart.max": "Cart is full — up to {max} entries per registration.",
