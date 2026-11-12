@@ -15,6 +15,7 @@ import { inviteUnclaimedMembers } from "./people";
 import { materialise } from "./materialise";
 import { checkoutRegistrationIds } from "./checkout";
 import { stripeRefund, queueRefundReceipt, errText, maybeAlertRegistrationRefundFailed } from "./refunds";
+import { queueRegistrationPaidMail } from "./lifecycle-mail";
 
 /**
  * Payment-integrity fix: `createRegistrationCheckout` freezes
@@ -472,6 +473,9 @@ async function confirmPaidRegistration(
         registration_id: regId,
         amount_cents: reg.amount_cents,
       }, null);
+      // Polish wave P2 (W1, W3): "payment received", in the transaction that records the payment. The entry is WAITING for the organiser:
+      // the mail says so, never "you're confirmed". The webhook leaves the first attempt to the worker.
+      await queueRegistrationPaidMail(tx, { reg, confirmed: false, paymentRef: paymentIntentId ?? sessionId });
       return {
         kind: "paid_awaiting_approval",
         divisionId: reg.division_id,
@@ -489,6 +493,9 @@ async function confirmPaidRegistration(
       paid: true,
       amount_cents: reg.amount_cents,
     }, null);
+    // Polish wave P2: what the entry IS after `materialise` wrote it, read back from the row - not a rule assumed from the division.
+    const [after] = await tx<{ status: string }[]>`select status from registrations where id = ${regId}`;
+    await queueRegistrationPaidMail(tx, { reg, confirmed: after?.status === "confirmed", paymentRef: paymentIntentId ?? sessionId });
     return {
       kind: "confirmed",
       divisionId: reg.division_id,

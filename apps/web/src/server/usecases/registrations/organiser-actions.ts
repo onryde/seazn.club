@@ -17,6 +17,7 @@ import { paymentReminderMessage, payDeadlineOf } from "./mail";
 import { issuePayLink, recordPayToken } from "./pay-token";
 import { stripeRefund, queueRefundReceipt } from "./refunds";
 import { withdrawCore } from "./withdraw";
+import { queueRegistrationPaidMail } from "./lifecycle-mail";
 import { REMINDER_CAP_PER_DAY, REMINDER_LIMIT_CODE } from "@/lib/registration-reminder";
 
 /** Organiser approve (free regs and waitlist overrides). Paid-division regs
@@ -81,7 +82,7 @@ export async function markRegistrationPaidOffline(
   // needs no id the transaction has not read yet, and `assertNotFrozen` is pure.
   const frozen = await frozenCompetitionIds(auth.orgId);
   const seatGate = await openRegistrationSeatGateFor(auth, regId);
-  const row = await withTenant(auth.orgId, async (tx) => {
+  const { row, mailId } = await withTenant(auth.orgId, async (tx) => {
     const reg = await orgReg(tx, regId);
     // RULING A (RS002 W5 review, BLOCKER): rejected is terminal from every
     // writer. Already implied by the `!== "pending"` check below (rejected
@@ -117,8 +118,20 @@ export async function markRegistrationPaidOffline(
       registration_id: regId,
       amount_cents: reg.amount_cents,
     }, auth.userId);
-    return orgRegAfter(tx, regId);
+    const after = await orgRegAfter(tx, regId);
+    // Polish wave P2 (W1, W3): "payment received" in the transaction that records it. The wording is what the entry IS after the write
+    // (today a mark-paid materialises, so confirmed; the day it stops, the same read says "awaiting approval"). One mail per mark: the
+    // mark's own timestamp is the payment ref, so a re-promoted entry marked paid again is a new mail.
+    const [mark] = await tx<{ at: Date }[]>`select offline_marked_paid_at as at from registration_groups where id = ${reg.group_id}`;
+    const mailId = await queueRegistrationPaidMail(tx, {
+      reg: after,
+      confirmed: after.status === "confirmed",
+      paymentRef: `offline:${mark!.at.toISOString()}`,
+    });
+    return { row: after, mailId };
   }, seatGate?.tenant);
+  // A request: the first attempt is made after the response.
+  if (mailId !== null) deferred(() => dispatchNow([mailId]));
   fireDivisionRevalidate(row.division_id);
   // RS008: fire-and-forget, strictly AFTER the transaction above has
   // committed — see confirmRegistration's identical wiring for why.

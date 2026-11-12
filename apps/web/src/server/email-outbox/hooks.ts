@@ -92,6 +92,7 @@ export const KIND_HOOKS: Record<OutboxKind, KindHook> = {
   staff_earn_grant_volume: {},
   staff_extra_org_allowance: {},
   sponsor_deal_paid: {},
+  registration_paid: {},
 };
 
 /** Does this kind have a hook to run for a row that ended badly? (A kind with none is not "skipped" when a tick runs out of

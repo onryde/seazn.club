@@ -12,6 +12,9 @@
 //     behind them: the real promotion, `notifyPromoted`, the real once-keyed enqueue, the dispatch after the response.
 //   - payment_reminder: the real `sweepRegistrations` (pass 1a) over a stripe cart due for its T-24h reminder, in an `fr` group: the real
 //     claim, mint (Stripe is the one mocked network), once-keyed enqueue and stamp. The sweep leaves the first attempt to the worker.
+//   - registration_paid (polish wave P2): the real `handleRegistrationCheckoutCompleted` (the Stripe webhook's handler) for a card entry of an
+//     `nl` registrant: the "payment received" mail is queued in the transaction that records the payment, once per payment intent, and the
+//     worker makes the first attempt (a webhook has no response to defer behind).
 //   - solo_signup_assigned: the real `assignSoloSignUp` of a pooled `fr` solo sign-up onto a team entry: the email is queued in the
 //     assignment's own transaction and the request that did it makes the first attempt.
 //   - refund_issued: the real `refundRegistration` of a paid `es` registrant (Stripe's refund is mocked): the receipt is queued in the transaction
@@ -359,6 +362,7 @@ const SPEC_KINDS = [
   "staff_extra_org_allowance",
   // Sponsor deals Task 23 (plan 2026-11-07-sponsor-deals, D13): born on the outbox after phase 3, so after every wave.
   "sponsor_deal_paid",
+  "registration_paid",
 ] as const satisfies readonly OutboxKind[];
 
 /** The legend: [to, transactional]. A = an account, resolved at send; L = a literal address; S = the staff address. T = transactional. */
@@ -420,6 +424,7 @@ const SPEC_FACTS: KindFacts = {
   staff_extra_org_allowance: ["staff", true],
   // Sponsor deals Task 23: to the org owner's account (`orgOwnerRecipient`), not transactional (a sponsor and money mail, N).
   sponsor_deal_paid: ["account", false],
+  registration_paid: ["literal", false],
 };
 
 /** What the real producers create beyond the rows the hand-made scenarios name: the seeded round's people and organisation. (The
@@ -488,10 +493,10 @@ describe("the spec's lists (no database)", () => {
   it("the spec lists fifty-one kinds, sponsor deals adds one, and the code's registry is exactly them, in the spec's order", () => {
     expect([...OUTBOX_KINDS]).toEqual([...SPEC_KINDS]);
     // The spec's Counts: "With `magic_link` and `chess_invite` that is 51." Sponsor deals Task 23 adds sponsor_deal_paid: 52.
-    expect(SPEC_KINDS).toHaveLength(52);
+    expect(SPEC_KINDS).toHaveLength(53);
   });
 
-  it("the legend has TWENTY literal kinds, SIXTEEN account kinds (sponsor deals' sponsor_deal_paid the sixteenth) and SIXTEEN staff kinds; THIRTY-TWO are transactional", () => {
+  it("the legend has 21 literal kinds, SIXTEEN account kinds (sponsor deals' sponsor_deal_paid the sixteenth) and SIXTEEN staff kinds; THIRTY-TWO are transactional", () => {
     const by = (to: string): string[] => SPEC_KINDS.filter((k) => SPEC_FACTS[k][0] === to);
     expect(by("literal")).toEqual([
       "magic_link",
@@ -517,6 +522,7 @@ describe("the spec's lists (no database)", () => {
       "official_assignment_changed",
       // Wave 5: the funnel reminder goes to the draft's address.
       "funnel_reminder",
+      "registration_paid",
     ]);
     expect(by("account")).toEqual([
       "chess_invite",
@@ -596,7 +602,7 @@ describe("the spec's lists (no database)", () => {
       "staff_extra_org_allowance",
     ]);
     // The spec's legend: "The 19 N kinds are the senders that pass no `transactional: true` today", so 51 - 19 = 32 are T. Sponsor deals'
-    // sponsor_deal_paid is N, so 52 - 20 = 32 still.
+    // sponsor_deal_paid is N, and so is each of the 1 registration lifecycle kinds, so 53 - 26 = 32 still.
     expect(SPEC_KINDS.filter((k) => SPEC_FACTS[k][1])).toHaveLength(32);
   });
 
@@ -855,6 +861,28 @@ async function refundIssuedScenario(): Promise<KindScenario> {
     run: async () => {
       const after = await refundRegistration(w.owner, registration.id, undefined);
       expect(after.refunded_cents, "premise: the real refund went through").toBe(700);
+    },
+  };
+}
+
+/** The real payment webhook handler: a card entry of an `nl` registrant is paid. The "payment received" mail is queued in the transaction that
+ *  records the payment (the entry is confirmed there), and the worker makes the first attempt: a webhook has no response to defer behind. */
+async function registrationPaidScenario(): Promise<KindScenario> {
+  const w = await stripeRig({ feeCents: 900 });
+  made.orgIds.push(w.orgId);
+  made.userIds.push(w.ownerId);
+  const recipient = address();
+  const { registration } = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: recipient, locale: "nl" });
+  return {
+    locale: "nl",
+    subjectKey: "registrationPaid.subject",
+    subjectVars: { competitionName: w.competition.name },
+    recipient,
+    firstAttempt: "worker",
+    run: async () => {
+      await handleRegistrationCheckoutCompleted(fakeSession(registration.id, 900));
+      const [after] = await sql<{ status: string }[]>`select status from registrations where id = ${registration.id}`;
+      expect(after!.status, "premise: the real handler took the payment and confirmed the entry").toBe("confirmed");
     },
   };
 }
@@ -2198,6 +2226,11 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
       dictionarySubject("nl", dealPaid.subjectKey, dealPaid.subjectVars),
     );
 
+    const registrationPaid = await registrationPaidScenario();
+    expect(dictionarySubject("nl", registrationPaid.subjectKey, registrationPaid.subjectVars)).not.toBe(
+      dictionarySubject("en", registrationPaid.subjectKey, registrationPaid.subjectVars),
+    );
+
     const staffDispute = await staffDisputeAlertScenario();
     expect(dictionarySubject("fr", staffDispute.subjectKey, staffDispute.subjectVars)).not.toBe(
       dictionarySubject("en", staffDispute.subjectKey, staffDispute.subjectVars),
@@ -2257,6 +2290,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         staff_earn_grant_volume: earnGrantVolumeScenario(),
         staff_extra_org_allowance: extraOrgAllowanceScenario(),
         sponsor_deal_paid: dealPaid,
+        registration_paid: registrationPaid,
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );
@@ -2264,7 +2298,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
     const moved = SPEC_KINDS.filter((k) => !NOT_YET_MOVED.includes(k));
     // The spec's count, typed: "With `magic_link` and `chess_invite` that is 51." Every kind has moved, so every one was swept; sponsor
     // deals Task 23's sponsor_deal_paid makes 52.
-    expect(out.checked, "anti-vacuity: every kind the spec lists was swept").toBe(52);
+    expect(out.checked, "anti-vacuity: every kind the spec lists was swept").toBe(53);
     expect(out.checked).toBeGreaterThan(0);
     expect(out.kinds, "and they are exactly the spec's moved kinds, in the spec's order").toEqual(moved);
   }, 60_000);

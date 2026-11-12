@@ -25,6 +25,7 @@ import "server-only";
 //   materialise          confirmed entry -> entrant: materialise, join an existing entrant, clear the expiry
 //   waitlist             waitlist promotion: the seat gate, promote the oldest, the promoted notice
 //   mail                 registration mail: cart confirmation (submit, resend) and the payment reminder message
+//   lifecycle-mail       the registrant's lifecycle mails (payment received, approved, released, withdrawn by the organiser, joined): one queue producer per kind
 //   settings             organiser settings (defaults, get / put) and the public register-panel info
 //   checkout             minting and resuming a Stripe checkout for a registration or a cart
 //   pay-token            the player payment page's token: mint, record, issue a link, resolve a token to its entry

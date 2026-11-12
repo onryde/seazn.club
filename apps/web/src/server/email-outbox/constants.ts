@@ -64,6 +64,8 @@ export const OUTBOX_KINDS = [
   "staff_extra_org_allowance",
   // Born on the outbox after phase 3 (sponsor deals Task 23, plan 2026-11-07-sponsor-deals, D13): the owner's "a sponsor has paid".
   "sponsor_deal_paid",
+  // Polish wave P2 (registrant lifecycle mails, W1-W13): literal addresses, not transactional (like every registration_* mail).
+  "registration_paid",
 ] as const;
 export type OutboxKind = (typeof OUTBOX_KINDS)[number];
 
@@ -133,6 +135,8 @@ export const OUTBOX_KIND_FACTS: Readonly<Record<OutboxKind, { to: "account" | "l
   staff_extra_org_allowance: { to: "staff", transactional: true },
   // To the org's owner (`orgOwnerRecipient`) as an account, in the owner's language; a sponsor and money mail, so not transactional.
   sponsor_deal_paid: { to: "account", transactional: false },
+  // Polish wave P2 (registrant lifecycle mails, W1-W13): literal addresses, not transactional (like every registration_* mail).
+  registration_paid: { to: "literal", transactional: false },
 };
 
 /** Mail ABOUT an account that is addressed to a literal address (phase-3 D5, wave 3): its verification and its email change. These kinds

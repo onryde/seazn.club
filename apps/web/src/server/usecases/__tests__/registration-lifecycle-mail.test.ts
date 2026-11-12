@@ -26,6 +26,7 @@ import { openBody } from "@/server/email-outbox/seal";
 import { formatDeadline } from "@/lib/email-templates/registration";
 import {
   handleRegistrationCheckoutCompleted,
+  markRegistrationPaidOffline,
   notifyPromoted,
   notifySubmitted,
   payDeadlineOf,
@@ -35,6 +36,7 @@ import {
   sendPaymentReminder,
   divisionCtx,
 } from "../registrations";
+import { queueRegistrationPaidMail } from "../registrations/lifecycle-mail";
 import { createDivision } from "../divisions";
 import { stubOutboxEnv } from "./_invite-mail";
 import { SETTINGS_BASE, asOwner, fakeSession, loadWithGroup, rig, seedOrg, seedRegistration, seedSecondEntry, stripeRig } from "./_registration-fixtures";
@@ -252,5 +254,143 @@ describe.skipIf(!HAS_DB)("the promotion and refund mails greet the contact (W4; 
     const visible = words(b.html);
     expect(visible).toContain(`Hi ${CONTACT}`);
     expect(visible).not.toContain(`Hi ${TEAM}`);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// registration_paid (W1, W3)
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+const paidRows = async (regId: string) =>
+  sql<{ id: string; status: string; recipient: string; dedupe_key: string | null }[]>`
+    select id, status, recipient, dedupe_key from email_outbox where kind = 'registration_paid' and ref_type = 'registration' and ref_id = ${regId} order by created_at, id`;
+
+async function manualStripeWorld(feeCents = 1500) {
+  const w = await stripeWorld(feeCents);
+  const settings = await putRegistrationSettings(w.owner, w.division.id, { ...SETTINGS_BASE, payment_method: "stripe", fee_cents: feeCents, approval: "manual" });
+  return { ...w, settings };
+}
+
+describe.skipIf(!HAS_DB)("payment received: the card webhook (real handleRegistrationCheckoutCompleted)", () => {
+  it("auto approval: one mail, THIS entry's amount, the division, 'you're confirmed', addressed to the contact in their language", async () => {
+    const w = await stripeWorld(1500);
+    const contact = address("paid");
+    const reg = await seedRegistration(w.competition.id, w.division.id, w.settings, { displayName: TEAM, contactEmail: contact, locale: "es", refCode: `P2-${randomUUID().slice(0, 6)}` });
+    await sql`update registration_groups set contact_name = ${CONTACT} where id = ${reg.registration.group_id}`;
+
+    await handleRegistrationCheckoutCompleted(fakeSession(reg.registration.id, 1500));
+
+    expect((await loadWithGroup(reg.registration.id)).status, "premise: the real handler confirmed the entry").toBe("confirmed");
+    const rows = await paidRows(reg.registration.id);
+    expect(rows.map((r) => [r.status, r.recipient.toLowerCase()]), "exactly one row, to the contact, still queued (a webhook leaves the attempt to the worker)").toEqual([["queued", contact]]);
+    const b = await body("registration_paid", "registration", reg.registration.id, contact);
+    expect(b.subject).toContain("Pago recibido");
+    expect(b.text).toContain("15.00");
+    expect(b.text).toContain("Open");
+    expect(b.text, "the es confirmed wording").toContain("Tu plaza está confirmada");
+    expect(words(b.html)).toContain(`Hola ${CONTACT}`);
+    expect(words(b.html)).not.toContain(`Hola ${TEAM}`);
+    expect(reg.registration.ref_code, "premise: the entry has a reference").not.toBeNull();
+    expect(b.text, "the token-less status page of the entry (a webhook has no request origin: the configured one)").toContain(`/r/${reg.registration.ref_code}`);
+  });
+
+  it("MANUAL approval: the entry is paid and waiting, so the mail says awaiting approval and never 'confirmed'", async () => {
+    const w = await manualStripeWorld(1500);
+    const reg = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("paid-manual") });
+
+    await handleRegistrationCheckoutCompleted(fakeSession(reg.registration.id, 1500));
+
+    expect((await loadWithGroup(reg.registration.id)).status, "premise: manual approval leaves the entry at paid").toBe("paid");
+    const b = await body("registration_paid", "registration", reg.registration.id);
+    expect(b.text).toContain("Awaiting organiser approval");
+    expect(b.text).not.toContain("You're confirmed");
+    expect(b.text).toContain("15.00");
+  });
+
+  it("a replayed webhook, and a different payment for the SAME entry, queue nothing more (the second call and the duplicate)", async () => {
+    const w = await stripeWorld(1500);
+    const reg = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("paid-twice") });
+    const session = fakeSession(reg.registration.id, 1500);
+    await handleRegistrationCheckoutCompleted(session);
+    await handleRegistrationCheckoutCompleted(session);
+    expect(await paidRows(reg.registration.id), "the replay of the same session").toHaveLength(1);
+
+    // A second tab pays with ANOTHER intent: the duplicate branch refunds it; the entry was paid once, so it is mailed once.
+    await handleRegistrationCheckoutCompleted({ ...session, id: "cs_test_dup", payment_intent: "pi_test_dup" } as typeof session);
+    expect(stripeMock.refundCreate, "premise: the duplicate was refunded").toHaveBeenCalledTimes(1);
+    expect(await paidRows(reg.registration.id), "a duplicate payment is not a second 'payment received'").toHaveLength(1);
+  });
+
+  it("a payment that lands on a withdrawn entry is refunded, not reported as received", async () => {
+    const w = await stripeWorld(1500);
+    const reg = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("paid-late"), status: "withdrawn" });
+    await handleRegistrationCheckoutCompleted(fakeSession(reg.registration.id, 1500));
+    expect(await paidRows(reg.registration.id)).toHaveLength(0);
+  });
+
+  it("a mail that cannot be queued never undoes the payment (contained at its own savepoint)", async () => {
+    const w = await stripeWorld(1500);
+    const reg = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("paid-fail") });
+    // An empty recipient is refused by the outbox's own CHECK: the INSERT throws inside the producer's savepoint.
+    await sql`update registration_groups set contact_email = '' where id = ${reg.registration.group_id}`;
+    await handleRegistrationCheckoutCompleted(fakeSession(reg.registration.id, 1500));
+    expect((await loadWithGroup(reg.registration.id)).status, "the payment stands").toBe("confirmed");
+    expect(await paidRows(reg.registration.id), "and no half-written mail is left").toHaveLength(0);
+  });
+});
+
+describe.skipIf(!HAS_DB)("payment received: the organiser marks an offline payment (real markRegistrationPaidOffline)", () => {
+  it("one mail, in the transaction of the mark, with this entry's amount; marking twice is refused and mails nothing more", async () => {
+    const w = await offlineWorld(1500, "auto");
+    const contact = address("offline");
+    const reg = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: contact });
+    const row = await markRegistrationPaidOffline(w.owner, reg.registration.id);
+    expect(row.status).toBe("confirmed");
+    const rows = await paidRows(reg.registration.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.dedupe_key, "keyed by the registration and the mark's own timestamp").toMatch(new RegExp(`^${reg.registration.id}:offline:`));
+    const b = await body("registration_paid", "registration", reg.registration.id, contact);
+    expect(b.text).toContain("15.00");
+    expect(b.text).toContain("You're confirmed");
+
+    await expect(markRegistrationPaidOffline(w.owner, reg.registration.id)).rejects.toThrow(/Only pending/);
+    expect(await paidRows(reg.registration.id), "the refused second mark queued nothing").toHaveLength(1);
+  });
+
+  it("a cart of two entries: marking one paid mails ITS amount, not the cart's total", async () => {
+    const w = await offlineWorld(1500, "auto");
+    const second = await secondDivision(w, "Masters", { fee_cents: 900 });
+    const first = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("cart-paid") });
+    const sibling = await seedSecondEntry(first.registration.group_id, second.division.id, 900, "Maya Cole", "pending");
+    await markRegistrationPaidOffline(w.owner, sibling.id);
+    const b = await body("registration_paid", "registration", sibling.id);
+    expect(b.text).toContain("9.00");
+    expect(b.text, "not the whole cart's 24.00, not the other entry's 15.00").not.toMatch(/24\.00|15\.00/);
+    expect(await paidRows(first.registration.id), "the unpaid sibling is not mailed").toHaveLength(0);
+  });
+});
+
+describe.skipIf(!HAS_DB)("queueRegistrationPaidMail's own guards", () => {
+  it("an entry with no fee has no payment to report (the empty case): nothing is queued", async () => {
+    const w = await offlineWorld(0, "auto");
+    const reg = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("free") });
+    expect(reg.registration.amount_cents, "premise: a free entry").toBe(0);
+    const id = await sql.begin((tx) => queueRegistrationPaidMail(tx, { reg: reg.registration, confirmed: true, paymentRef: "pi_free" }));
+    expect(id).toBeNull();
+    expect(await paidRows(reg.registration.id)).toHaveLength(0);
+  });
+
+  it("once per payment ref: the same ref queues nothing; a LATER payment of the same entry replaces the unsent first", async () => {
+    const w = await stripeWorld(1500);
+    const reg = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("keyed") });
+    const queue = (ref: string) => sql.begin((tx) => queueRegistrationPaidMail(tx, { reg: reg.registration, confirmed: true, paymentRef: ref, origin: ORIGIN }));
+    const first = await queue("pi_a");
+    expect(first).not.toBeNull();
+    expect(await queue("pi_a"), "the same payment").toBeNull();
+    expect(await paidRows(reg.registration.id)).toHaveLength(1);
+    const second = await queue("pi_b");
+    expect(second, "a different payment").not.toBeNull();
+    const rows = await paidRows(reg.registration.id);
+    expect(rows.map((r) => r.status), "the unsent first is superseded, the newer is queued").toEqual(["replaced", "queued"]);
   });
 });
