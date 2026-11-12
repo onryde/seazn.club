@@ -170,15 +170,21 @@ export async function sweepRegistrations(
   // `promotion_reminded_at` — never the group's `reminded_at`, which a cart
   // can share with a still-pending sibling (see (1a)'s comment and the
   // column's own doc comment on `registrations`, V379). `promotion_expires_at
-  // is not null` alone is enough to scope this to promoted, stripe-fee rows:
+  // is not null` scopes this to rows promoted with a stripe fee (the method check below covers a later switch):
   // `promoteWaitlistedRow` only ever sets it when the promotion itself
   // needed a stripe window (`amount_cents` > 0 at that moment), and nothing
   // else in the codebase writes it.
   // `r.promoted_at is not null` below is what makes `promoted_at` a Date here (the once-key names the promotion by it).
+  //
+  // Fix round 1 (F4): the window only proves the division took cards AT PROMOTION. An organiser who switches it to offline later
+  // leaves the window standing, so the method is resolved now, exactly as pass (1a) (G5) and the page do: the division's settings
+  // row, the cart's snapshot only when the division has none.
   const duePromoted = await sql<(RegistrationWithGroupRow & { promoted_at: Date })[]>`
     select ${regGroupCols(sql)}
     from registrations r join registration_groups g on g.id = r.group_id
+    left join registration_settings rs on rs.division_id = r.division_id
     where r.status = 'pending' and r.promoted_at is not null
+      and coalesce(rs.payment_method, g.payment_method) = 'stripe'
       and r.promotion_expires_at is not null
       and r.promotion_expires_at < now() + interval '24 hours'
       and r.promotion_expires_at > now()

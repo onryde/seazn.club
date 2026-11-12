@@ -431,6 +431,59 @@ describe.skipIf(!HAS_DB)("sweep 1a decides by the division's payment method, fal
 });
 
 // ---------------------------------------------------------------------------------------------------------------------------------
+// Fix round 1, F4: pass 1b (a promoted entry's own reminder) resolves the method the same way
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+describe.skipIf(!HAS_DB)("sweep 1b decides by the division's payment method, falling back to the cart's (fix round 1 F4, DB)", () => {
+  // Same rule as pass 1a above (and the page): a promotion's own window (`promotion_expires_at`) is stamped only when the division
+  // took cards AT PROMOTION; an organiser who switches the division to offline afterwards leaves that window standing, and the
+  // card reminder must not go to a page that then shows offline instructions.
+  const CASES: readonly { label: string; division: "stripe" | "offline" | "none"; cart: "stripe" | "offline"; sent: boolean }[] = [
+    { label: "division switched card→offline after the promotion, cart still card", division: "offline", cart: "stripe", sent: false },
+    { label: "positive pair: division and cart both card", division: "stripe", cart: "stripe", sent: true },
+    { label: "division card, cart offline", division: "stripe", cart: "offline", sent: true },
+    { label: "no settings row, cart card (fallback)", division: "none", cart: "stripe", sent: true },
+    { label: "no settings row, cart offline (fallback)", division: "none", cart: "offline", sent: false },
+  ];
+
+  it("each (division, cart) pair: sent ⇔ the resolved method is card; the reminder and its token come together", async () => {
+    // Seeded before ONE sweep, as G5 above: `sweepRegistrations` is global.
+    const seeded: { c: (typeof CASES)[number]; regId: string }[] = [];
+    for (const c of CASES) {
+      const w = await stripeWorld();
+      const reg = await promoted(w, address("f4"));
+      expect(reg.promotion_expires_at, `${c.label}: premise, the card promotion stamped its own window`).not.toBeNull();
+      // The earliest deadline in the pass's order, so the case's row is never crowded out of its limit.
+      await sql`update registrations set promotion_expires_at = now() + interval '2 minutes' where id = ${reg.id}`;
+      await sql`update registration_groups set payment_method = ${c.cart} where id = ${reg.group_id}`;
+      if (c.division === "offline") {
+        await putRegistrationSettings(w.owner, w.division.id, {
+          ...SETTINGS_BASE,
+          fee_cents: w.settings.fee_cents,
+          payment_method: "offline",
+          payment_instructions: "Cash on the day",
+        });
+      } else if (c.division === "none") {
+        await sql`delete from registration_settings where division_id = ${w.division.id}`;
+        const [left] = await sql<{ n: string }[]>`select count(*)::text as n from registration_settings where division_id = ${w.division.id}`;
+        expect(left!.n, `${c.label}: premise, the division has no settings row`).toBe("0");
+      }
+      seeded.push({ c, regId: reg.id });
+    }
+    await sweepRegistrations(ORIGIN);
+    let checked = 0;
+    for (const { c, regId } of seeded) {
+      const want = c.sent ? 1 : 0;
+      expect(await rowsOf("payment_reminder", regId), `${c.label}: reminders`).toBe(want);
+      expect(await tokensFor(regId), `${c.label}: pay-page tokens`).toBe(want);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: every case was swept").toBe(CASES.length);
+    expect(CASES.filter((c) => c.sent).length * CASES.filter((c) => !c.sent).length, "both outcomes are witnessed").toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------
 // Locale, and the source guard
 // ---------------------------------------------------------------------------------------------------------------------------------
 
