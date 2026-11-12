@@ -24,7 +24,7 @@ import {
   type GroupStatusView,
 } from "@/server/usecases/registrations";
 import { HttpError } from "@/lib/errors";
-import { formatMinor, type Currency } from "@/lib/currency";
+import { formatMoneyExact } from "@/lib/currency";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t } from "@/lib/i18n";
 import { DictProvider } from "@/components/i18n/dict-provider";
@@ -32,7 +32,7 @@ import { renderProse } from "@/lib/prose";
 import { fillPaymentInstructions, preserveLineBreaks } from "@/lib/payment-instructions";
 import { EntryCard } from "./entry-card";
 import { ResendConfirmation } from "./resend-confirmation";
-import { entryCountsTowardTotal } from "./view-model";
+import { cartSubtotal } from "./view-model";
 import { routes } from "@/lib/routes";
 
 export const metadata: Metadata = { robots: { index: false, follow: false } };
@@ -104,9 +104,19 @@ export default async function RegistrationStatusPage({ params, searchParams }: P
   // the Subtotal forever. `entryCountsTowardTotal` is the SAME predicate
   // each EntryCard uses to decide whether to show its own fee, so this
   // total is provably the sum of what the cards actually show.
-  const subtotalCents = view.entries
-    .filter((e) => entryCountsTowardTotal(e.status))
-    .reduce((sum, e) => sum + e.amount_cents, 0);
+  //
+  // Polish wave P3 (W6, W10, W11): that predicate leaves an all-waitlisted or
+  // all-ended cart with a live total of 0, which this row used to print as
+  // "Free" for an entry that owes a fee on promotion, or was cancelled.
+  // `cartSubtotal` says which of the three it is; the row words each one.
+  const subtotal = cartSubtotal(view.entries);
+  const subtotalAmount =
+    subtotal.kind === "nothing_due"
+      ? t(ui, "register.status.subtotal.nothingDue")
+      : subtotal.cents === 0
+        ? t(ui, "register.entries.free")
+        : formatMoneyExact(subtotal.cents, view.currency, locale);
+  const subtotalNote = subtotal.kind === "waitlisted" && subtotal.cents > 0 ? t(ui, "register.status.subtotal.waitlisted") : null;
 
   // Rendered ONCE (cart-level, not per entry — every offline-due entry in
   // this cart reads the SAME instructions) so EntryCard can stay a plain,
@@ -185,14 +195,20 @@ export default async function RegistrationStatusPage({ params, searchParams }: P
           ))}
         </ul>
 
-        <div className="mt-6 flex items-center justify-between border-t border-zinc-200 pt-3">
+        {/* Wraps: at 320px the note ("Not due while waitlisted") sits under the amount instead of squeezing the label. */}
+        <div className="mt-6 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-t border-zinc-200 pt-3">
           <span className="text-xs font-semibold uppercase tracking-wider text-ink-muted">
             {t(ui, "register.entries.cart.subtotal")}
           </span>
-          <span className="text-lg font-bold text-ink">
-            {subtotalCents === 0
-              ? t(ui, "register.entries.free")
-              : formatMinor(subtotalCents, view.currency as Currency, locale)}
+          <span className="min-w-0 text-right">
+            <span data-testid="reg-status-subtotal-amount" data-subtotal-kind={subtotal.kind} className="block text-lg font-bold text-ink">
+              {subtotalAmount}
+            </span>
+            {subtotalNote && (
+              <span data-testid="reg-status-subtotal-note" className="block text-xs text-ink-muted">
+                {subtotalNote}
+              </span>
+            )}
           </span>
         </div>
       </div>

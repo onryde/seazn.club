@@ -75,6 +75,9 @@ const BASE_ENTRY = {
   // division's registration_settings.payment_method), never the cart —
   // see resolveMoneyState's own doc comment (view-model.ts).
   payment_method: "stripe" as const,
+  // Polish wave P3: this entry's own division's review mode, and the fee a promotion off the waitlist would set (waitlisted only).
+  approval: "auto" as "auto" | "manual",
+  fee_if_promoted_cents: null as number | null,
   // RS008: this entry's own division youth/player_name_display policy —
   // threaded onto GroupEntryView (buildGroupStatusView, usecases/registrations/group-status.ts).
   division_youth: false,
@@ -132,7 +135,7 @@ describe("register status page (RS007 rebuild)", () => {
     expect(html).toContain(">waitlisted<");
     // Subtotal excludes the waitlisted (amount_cents 0) entry — same as the
     // single pending entry's own fee.
-    expect(html).toContain("£25");
+    expect(html).toContain("£25.00");
     expect(usecaseMock.groupById).toHaveBeenCalledWith("g1", "tok");
   });
 
@@ -210,7 +213,7 @@ describe("register status page (RS007 rebuild)", () => {
     it("an unpaid CARD entry renders a working pay control naming the amount", async () => {
       usecaseMock.groupById.mockResolvedValueOnce(BASE_VIEW);
       const html = await render({ rid: "g1", token: "tok" });
-      expect(html).toContain("£25");
+      expect(html).toContain("£25.00");
       expect(html).toMatch(/Pay now/);
     });
 
@@ -239,7 +242,7 @@ describe("register status page (RS007 rebuild)", () => {
       // exact, tag-flanked occurrences: 1 is just the Subtotal, 2 proves
       // the card itself shows its own figure too.
       expect(
-        (html.match(/>£25</g) || []).length,
+        (html.match(/>£25\.00</g) || []).length,
         "the offline-due card itself must show its own fee, not just the page Subtotal",
       ).toBeGreaterThanOrEqual(2);
     });
@@ -274,7 +277,7 @@ describe("register status page (RS007 rebuild)", () => {
       // Same "Subtotal alone would satisfy a plain toContain" trap as the
       // offline case above — count exact, tag-flanked occurrences instead.
       expect(
-        (html.match(/>£25</g) || []).length,
+        (html.match(/>£25\.00</g) || []).length,
         "the stripe_unavailable card itself must show its own fee, not just the page Subtotal",
       ).toBeGreaterThanOrEqual(2);
     });
@@ -292,7 +295,7 @@ describe("register status page (RS007 rebuild)", () => {
       // tests above for why a plain toContain can't distinguish "the card
       // shows it" from "only the Subtotal does".
       expect(
-        (html.match(/>£25</g) || []).length,
+        (html.match(/>£25\.00</g) || []).length,
         "the confirmed card itself must show its own fee, not just the page Subtotal",
       ).toBeGreaterThanOrEqual(2);
     });
@@ -333,7 +336,7 @@ describe("register status page (RS007 rebuild)", () => {
       // "never a blank money section" rule FIX 1 already established for
       // stripe_unavailable/confirmed/free.
       expect(
-        (html.match(/>£25</g) || []).length,
+        (html.match(/>£25\.00</g) || []).length,
         "the window_closed card itself must still show its own fee",
       ).toBeGreaterThanOrEqual(2);
     });
@@ -397,7 +400,7 @@ describe("register status page (RS007 rebuild)", () => {
         ],
       });
       const html = await render({ rid: "g1", token: "tok" });
-      const subtotalMatch = html.match(/<span class="text-lg font-bold text-ink">([^<]*)<\/span>/);
+      const subtotalMatch = html.match(/data-testid="reg-status-subtotal-amount"[^>]*>([^<]*)</);
       expect(subtotalMatch, "subtotal span not found").not.toBeNull();
       // withdrawCore (usecases/registrations/withdraw.ts), the rejection path
       // (registration-approval.ts), and the expiry sweep (usecases/registrations/)
@@ -405,6 +408,68 @@ describe("register status page (RS007 rebuild)", () => {
       // so reg-2's stale 1000 must NOT be folded into the live subtotal.
       expect(subtotalMatch![1]).toContain("25");
       expect(subtotalMatch![1]).not.toContain("35");
+    });
+  });
+
+  // Polish wave P3 (walkthrough W6, W10, W11): a cart with nothing LIVE in it summed to 0 and the row printed "Free" -- for a waitlisted
+  // entry that owes a fee the moment it is promoted, and for an expired or withdrawn one. Each row below is a literal from the brief's
+  // ruling (amount / amount plus a "not due while waitlisted" note / "Nothing due"), never read back from `cartSubtotal`.
+  describe("subtotal words what is due, not just the live sum (P3)", () => {
+    const SUBTOTAL_CASES: { name: string; entries: Record<string, unknown>[]; amount: string; note: string | null }[] = [
+      { name: "all waitlisted, division fee 15.00 -> the fee a promotion would set, with the note, never Free",
+        entries: [{ status: "waitlisted", amount_cents: 0, fee_if_promoted_cents: 1500 }], amount: "£15.00", note: "Not due while waitlisted" },
+      { name: "two waitlisted entries add their promotion fees",
+        entries: [{ status: "waitlisted", amount_cents: 0, fee_if_promoted_cents: 1500 }, { status: "waitlisted", amount_cents: 0, fee_if_promoted_cents: 1000 }],
+        amount: "£25.00", note: "Not due while waitlisted" },
+      { name: "all waitlisted in a FREE division -> Free, no note (nothing would ever be due)",
+        entries: [{ status: "waitlisted", amount_cents: 0, fee_if_promoted_cents: 0 }], amount: "Free", note: null },
+      { name: "all withdrawn -> Nothing due, never Free",
+        entries: [{ status: "withdrawn", amount_cents: 1500, fee_if_promoted_cents: null }], amount: "Nothing due", note: null },
+      { name: "all expired -> Nothing due",
+        entries: [{ status: "expired", amount_cents: 1500, fee_if_promoted_cents: null }], amount: "Nothing due", note: null },
+      { name: "withdrawn + expired + rejected -> Nothing due",
+        entries: [{ status: "withdrawn", amount_cents: 1500, fee_if_promoted_cents: null }, { status: "expired", amount_cents: 500, fee_if_promoted_cents: null }, { status: "rejected", amount_cents: 900, fee_if_promoted_cents: null }],
+        amount: "Nothing due", note: null },
+      { name: "waitlisted + withdrawn -> the waitlisted fee (the ended entry adds nothing)",
+        entries: [{ status: "waitlisted", amount_cents: 0, fee_if_promoted_cents: 1500 }, { status: "withdrawn", amount_cents: 2500, fee_if_promoted_cents: null }],
+        amount: "£15.00", note: "Not due while waitlisted" },
+      { name: "a live entry wins: pending 25.00 + waitlisted -> 25.00 and NO waitlist note",
+        entries: [{ status: "pending", amount_cents: 2500, fee_if_promoted_cents: null }, { status: "waitlisted", amount_cents: 0, fee_if_promoted_cents: 1500 }],
+        amount: "£25.00", note: null },
+      { name: "a free confirmed entry is a genuinely free cart -> Free",
+        entries: [{ status: "confirmed", amount_cents: 0, fee_if_promoted_cents: null }], amount: "Free", note: null },
+      { name: "a confirmed entry beside a withdrawn one -> the confirmed fee only",
+        entries: [{ status: "confirmed", amount_cents: 1500, fee_if_promoted_cents: null }, { status: "withdrawn", amount_cents: 1500, fee_if_promoted_cents: null }],
+        amount: "£15.00", note: null },
+      { name: "no entries at all -> Nothing due (the empty case)", entries: [], amount: "Nothing due", note: null },
+    ];
+
+    it("every case prints its literal amount and note (counted)", async () => {
+      let checked = 0;
+      for (const c of SUBTOTAL_CASES) {
+        usecaseMock.groupById.mockResolvedValueOnce({
+          ...BASE_VIEW,
+          entries: c.entries.map((e, i) => ({ ...BASE_ENTRY, id: `reg-${i + 1}`, ...e })),
+        });
+        const html = await render({ rid: "g1", token: "tok" });
+        const amount = html.match(/data-testid="reg-status-subtotal-amount"[^>]*>([^<]*)</)?.[1];
+        expect(amount, c.name).toBe(c.amount);
+        const note = html.match(/data-testid="reg-status-subtotal-note"[^>]*>([^<]*)</)?.[1] ?? null;
+        expect(note, c.name).toBe(c.note);
+        checked += 1;
+      }
+      expect(checked).toBe(SUBTOTAL_CASES.length);
+      expect(checked).toBeGreaterThan(0);
+    });
+
+    it("the subtotal is the cart's own currency, to two decimals, in the page's locale (a whole amount keeps its .00)", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce({
+        ...BASE_VIEW,
+        currency: "eur",
+        entries: [{ ...BASE_ENTRY, status: "waitlisted" as const, amount_cents: 0, fee_if_promoted_cents: 1500 }],
+      });
+      const html = await render({ rid: "g1", token: "tok" });
+      expect(html.match(/data-testid="reg-status-subtotal-amount"[^>]*>([^<]*)</)?.[1]).toBe("€15.00");
     });
   });
 

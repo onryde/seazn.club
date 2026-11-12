@@ -7,6 +7,7 @@ import {
   awaitingTeamAssignment,
   canCancelEntry,
   canJoinEntry,
+  cartSubtotal,
   claimHref,
   classifyStatusActionFailure,
   effectivePayDeadline,
@@ -19,6 +20,8 @@ import {
   resolveMoneyState,
   rosterCounts,
   rosterPlayerDisplayName,
+  rosterVocabulary,
+  type EntryStatus,
 } from "../view-model";
 
 describe("effectivePayDeadline", () => {
@@ -559,5 +562,73 @@ describe("public write-path URL builders — the /public/ segment is load-bearin
 
   it("resend targets the PUBLIC group-scoped path", () => {
     expect(publicResendPath("grp-1")).toBe("/api/v1/public/registrations/groups/grp-1/resend");
+  });
+});
+
+// Polish wave P3 (W6, W10, W11): a waitlisted, expired or withdrawn page printed SUBTOTAL "Free" and a roster that read "Checked in".
+// The expectations below are the brief's rulings, written out per status; none is read back from the function under test.
+describe("rosterVocabulary: 'checked in' only where there is a live entry to check in to", () => {
+  // Every status a registration can hold (the DB CHECK on registrations.status), each with the ruling for it.
+  const RULING: [EntryStatus, "checkin" | "registered"][] = [
+    ["pending", "checkin"],
+    ["paid", "checkin"],
+    ["confirmed", "checkin"],
+    ["waitlisted", "registered"],
+    ["withdrawn", "registered"],
+    ["expired", "registered"],
+    ["rejected", "registered"],
+  ];
+  it("one case per status (counted)", () => {
+    let checked = 0;
+    for (const [status, want] of RULING) {
+      expect(rosterVocabulary(status), status).toBe(want);
+      checked += 1;
+    }
+    expect(checked).toBe(7);
+    expect(new Set(RULING.map(([s]) => s)).size, "premise: no status listed twice").toBe(7);
+  });
+});
+
+describe("cartSubtotal: what the Subtotal row says (never a bare 'Free' for money that is simply not due)", () => {
+  const e = (status: EntryStatus, amount_cents: number, fee_if_promoted_cents: number | null = null) => ({
+    status,
+    amount_cents,
+    fee_if_promoted_cents,
+  });
+
+  it("live entries (pending, paid, confirmed) sum their own fees", () => {
+    expect(cartSubtotal([e("pending", 1500), e("confirmed", 1000)])).toEqual({ kind: "amount", cents: 2500 });
+    expect(cartSubtotal([e("paid", 1500)])).toEqual({ kind: "amount", cents: 1500 });
+  });
+
+  it("a live entry that is genuinely free reads as an amount of 0 (the page prints 'Free' for it)", () => {
+    expect(cartSubtotal([e("confirmed", 0)])).toEqual({ kind: "amount", cents: 0 });
+  });
+
+  it("an ended entry's stale fee never joins a live total (the earlier FIX 1)", () => {
+    expect(cartSubtotal([e("confirmed", 1000), e("withdrawn", 1500), e("expired", 700), e("rejected", 300)])).toEqual({
+      kind: "amount",
+      cents: 1000,
+    });
+  });
+
+  it("only waitlisted entries: the fee they WOULD owe if promoted, labelled not due (W6)", () => {
+    expect(cartSubtotal([e("waitlisted", 0, 1500)])).toEqual({ kind: "waitlisted", cents: 1500 });
+    expect(cartSubtotal([e("waitlisted", 0, 1500), e("waitlisted", 0, 1000)])).toEqual({ kind: "waitlisted", cents: 2500 });
+    // A waitlisted entry on a free division would owe nothing: the page prints that as 'Free', which is true.
+    expect(cartSubtotal([e("waitlisted", 0, 0)])).toEqual({ kind: "waitlisted", cents: 0 });
+    // The fee a promotion would set is unknown (a division with no settings row): nothing to quote.
+    expect(cartSubtotal([e("waitlisted", 0, null)])).toEqual({ kind: "waitlisted", cents: 0 });
+  });
+
+  it("a waitlisted entry beside an ended one is still the waitlist's amount; a live entry outranks both", () => {
+    expect(cartSubtotal([e("waitlisted", 0, 1500), e("withdrawn", 1000)])).toEqual({ kind: "waitlisted", cents: 1500 });
+    expect(cartSubtotal([e("waitlisted", 0, 1500), e("pending", 1000)])).toEqual({ kind: "amount", cents: 1000 });
+  });
+
+  it("every entry ended: nothing is due (W10, W11), and the empty cart says the same", () => {
+    expect(cartSubtotal([e("expired", 1500)])).toEqual({ kind: "nothing_due" });
+    expect(cartSubtotal([e("withdrawn", 1500), e("rejected", 1000)])).toEqual({ kind: "nothing_due" });
+    expect(cartSubtotal([])).toEqual({ kind: "nothing_due" });
   });
 });

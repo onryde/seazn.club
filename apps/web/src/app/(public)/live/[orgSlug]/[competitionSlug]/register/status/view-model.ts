@@ -138,6 +138,37 @@ export function entryCountsTowardTotal(status: EntryStatus): boolean {
   return status === "pending" || status === "paid" || status === "confirmed";
 }
 
+/** What the Subtotal row says. Never a bare "Free" for money that is simply not due (polish wave P3, walkthrough W6/W10/W11: a waitlisted,
+ *  expired or withdrawn page read "Subtotal: Free" for an entry that owes a fee, or never will).
+ *  - `amount`: the live entries' fees summed (`entryCountsTowardTotal`). 0 is a genuinely free cart ("Free").
+ *  - `waitlisted`: nothing is live and a waitlisted entry remains: `cents` is the fee a promotion WOULD set (the division's own fee,
+ *    what `promoteWaitlistedRow` writes), shown with "not due while waitlisted". 0 is a free division ("Free").
+ *  - `nothing_due`: every entry has ended (withdrawn, expired, rejected), or there are none. Not "not charged": an entry withdrawn after it
+ *    paid was charged and refunded; "nothing due" is true of all of them. */
+export type CartSubtotal =
+  | { kind: "amount"; cents: number }
+  | { kind: "waitlisted"; cents: number }
+  | { kind: "nothing_due" };
+
+export function cartSubtotal(
+  entries: { status: EntryStatus; amount_cents: number; fee_if_promoted_cents: number | null }[],
+): CartSubtotal {
+  const live = entries.filter((e) => entryCountsTowardTotal(e.status));
+  if (live.length > 0) return { kind: "amount", cents: live.reduce((sum, e) => sum + e.amount_cents, 0) };
+  const waitlisted = entries.filter((e) => e.status === "waitlisted");
+  if (waitlisted.length > 0) {
+    return { kind: "waitlisted", cents: waitlisted.reduce((sum, e) => sum + (e.fee_if_promoted_cents ?? 0), 0) };
+  }
+  return { kind: "nothing_due" };
+}
+
+/** Which words the roster's chips and meter use. A live entry (pending, paid, confirmed) asks its players to CHECK IN ("Checked in",
+ *  "Not checked in", "2 of 3 checked in"); a waitlisted, withdrawn, expired or rejected entry has nothing to check in to, and "Checked in"
+ *  on it reads as attendance that never happened (polish wave P3, W6/W10/W11), so it says "Registered". */
+export function rosterVocabulary(status: EntryStatus): "checkin" | "registered" {
+  return entryCountsTowardTotal(status) ? "checkin" : "registered";
+}
+
 /**
  * Gates the roster claim/invite affordances (the per-slot "Send {name}
  * their claim link" and the generic "Invite someone new to this entry").

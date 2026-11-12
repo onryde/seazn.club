@@ -1,0 +1,185 @@
+// Polish wave P3 (walkthrough W2, W12, W6, W10, W11): the status card tells the truth about WHY an entry is not confirmed, and does not
+// say "Checked in" about a roster whose entry is waitlisted, expired or withdrawn.
+//
+// Expected values here are the brief's rulings (per status / fee / review mode, written out) and the copy in the dictionary files; none
+// is read back from the card or the view-model under test. renderToStaticMarkup, the same convention as entry-card.test.tsx (no jsdom
+// in this workspace; CancelEntry reads useRouter()/useConfirm() at render time).
+import { describe, expect, it, vi } from "vitest";
+import { renderToStaticMarkup } from "react-dom/server";
+import uiEn from "@/dictionaries/en/ui.json";
+import uiEs from "@/dictionaries/es/ui.json";
+import uiFr from "@/dictionaries/fr/ui.json";
+import uiNl from "@/dictionaries/nl/ui.json";
+import type { Dict, Locale } from "@/lib/i18n-constants";
+
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: () => {} }) }));
+vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => async () => false }));
+
+import { EntryCard, type EntryCardProps } from "../entry-card";
+import type { EntryStatus } from "../view-model";
+
+const FUTURE = "2099-01-01T00:00:00.000Z";
+const PAST = "2000-01-01T00:00:00.000Z";
+
+function props(over: Partial<EntryCardProps["entry"]> = {}, cart: Partial<EntryCardProps["cart"]> = {}, locale: Locale = "en", ui: Dict = uiEn as Dict): EntryCardProps {
+  return {
+    entry: {
+      id: "reg-1",
+      division_id: "div-1",
+      division_name: "Open Singles",
+      display_name: "Mia Cole",
+      entrant_kind: "individual",
+      status: "pending",
+      amount_cents: 1500,
+      free_agent: false,
+      assigned_team_name: null,
+      pool_place_by_at: null,
+      join_code: null,
+      allows_new_joiner: true,
+      promotion_expires_at: null,
+      payment_method: "stripe",
+      approval: "auto",
+      fee_if_promoted_cents: null,
+      division_youth: false,
+      division_player_name_display: null,
+      players: [],
+      refund_policy: { refundable: false, deadline: null, amount_cents: 0 },
+      ...over,
+    },
+    cart: { expires_at: FUTURE, charges_enabled: true, instructionsHtml: null, currency: "gbp", timezone: "UTC", ...cart },
+    orgSlug: "org",
+    competitionSlug: "comp",
+    token: "tok",
+    locale,
+    ui,
+  };
+}
+const render = (p: EntryCardProps) => renderToStaticMarkup(<EntryCard {...p} />);
+const waitingOn = (markup: string) => markup.match(/data-waiting-on="([a-z_]+)"/)?.[1] ?? null;
+
+describe("a pending entry says what it is waiting on (W2, W12)", () => {
+  // [status, fee in cents, review mode, what the card says it waits on]. The brief's ruling: payment (a fee is owed), approval (the
+  // division reviews entries by hand), or both; nothing to name for a confirmed, waitlisted or ended entry, or a pending entry with
+  // neither a fee nor a review (a state a free auto-approval division never rests in).
+  const MATRIX: [EntryStatus, number, "auto" | "manual", string | null][] = [
+    ["pending", 1500, "auto", "payment"],
+    ["pending", 1500, "manual", "payment_and_approval"],
+    ["pending", 0, "manual", "approval"],
+    ["pending", 0, "auto", null],
+    ["paid", 1500, "manual", "approval"],
+    ["paid", 1500, "auto", null],
+    ["confirmed", 1500, "manual", null],
+    ["confirmed", 1500, "auto", null],
+    ["waitlisted", 0, "manual", null],
+    ["withdrawn", 1500, "manual", null],
+    ["expired", 1500, "auto", null],
+    ["rejected", 1500, "manual", null],
+  ];
+
+  it("every (status, fee, review) case names the right thing, in the dictionary's own words (counted)", () => {
+    let checked = 0;
+    const seen = new Set<string>();
+    for (const [status, amount_cents, approval, want] of MATRIX) {
+      const markup = render(props({ status, amount_cents, approval }));
+      expect(waitingOn(markup), `${status}/${amount_cents}/${approval}`).toBe(want);
+      if (want) {
+        const copy = (uiEn as Record<string, string>)[`register.status.waiting.${want}`]!;
+        expect(copy, `premise: copy exists for ${want}`).toBeTruthy();
+        expect(markup, `${status}/${amount_cents}/${approval}`).toContain(copy);
+        seen.add(copy);
+      } else {
+        expect(markup, `${status}/${amount_cents}/${approval}: no 'Not confirmed yet'`).not.toContain("Not confirmed yet");
+      }
+      checked += 1;
+    }
+    expect(checked).toBe(MATRIX.length);
+    expect(seen.size, "the three reasons are three different sentences").toBe(3);
+  });
+
+  it("an offline entry waiting on payment AND approval says both (W12: the page showed only how to pay)", () => {
+    const markup = render(props({ payment_method: "offline", approval: "manual" }, { instructionsHtml: "<p>Pay the organiser</p>" }));
+    expect(waitingOn(markup)).toBe("payment_and_approval");
+    expect(markup).toContain("Pay the organiser");
+  });
+
+  it("an entry whose payment window has already closed says nothing here: the window-closed message already explains it", () => {
+    const markup = render(props({ payment_method: "stripe" }, { expires_at: PAST }));
+    expect(markup).toContain("The payment window for this entry has");
+    expect(waitingOn(markup)).toBeNull();
+  });
+
+  it("es, fr and nl each carry their own sentence for each reason (read from the raw files: getDictionary fills English)", () => {
+    const dicts: [string, Locale, Dict][] = [["es", "es", uiEs as Dict], ["fr", "fr", uiFr as Dict], ["nl", "nl", uiNl as Dict]];
+    let checked = 0;
+    for (const [name, locale, ui] of dicts) {
+      for (const [approval, amount, want] of [["auto", 1500, "payment"], ["manual", 0, "approval"], ["manual", 1500, "payment_and_approval"]] as const) {
+        const key = `register.status.waiting.${want}`;
+        const own = (ui as Record<string, string>)[key]!;
+        expect(own, `${name} ${key} exists`).toBeTruthy();
+        expect(own, `${name} ${key} is translated`).not.toBe((uiEn as Record<string, string>)[key]);
+        expect(render(props({ approval, amount_cents: amount }, {}, locale, ui)), `${name}/${want}`).toContain(own.replace(/'/g, "&#x27;"));
+        checked += 1;
+      }
+    }
+    expect(checked).toBe(9);
+  });
+});
+
+describe("the roster says 'Checked in' only on a live entry (W6, W10, W11)", () => {
+  const PLAYERS = [
+    { id: "p1", full_name: "Mia Cole", consent_status: "granted" as const, consent: null },
+    { id: "p2", full_name: "Dev Kapoor", consent_status: "pending" as const, consent: null },
+  ];
+  const LIVE: EntryStatus[] = ["pending", "paid", "confirmed"];
+  const NOT_LIVE: EntryStatus[] = ["waitlisted", "withdrawn", "expired", "rejected"];
+
+  it("a live entry keeps the check-in words: the chips and the meter (counted)", () => {
+    let checked = 0;
+    for (const status of LIVE) {
+      const markup = render(props({ status, players: PLAYERS }));
+      expect(markup, status).toContain(">Checked in<");
+      expect(markup, status).toContain(">Not checked in<");
+      expect(markup, status).toContain(">1 of 2 checked in<");
+      expect(markup, status).not.toContain(">Registered<");
+      checked += 1;
+    }
+    expect(checked).toBe(LIVE.length);
+  });
+
+  it("a waitlisted, withdrawn, expired or rejected entry never says it checked in (counted)", () => {
+    let checked = 0;
+    for (const status of NOT_LIVE) {
+      const markup = render(props({ status, players: PLAYERS }));
+      expect(markup, status).toContain(">Registered<");
+      expect(markup, status).toContain(">Not registered yet<");
+      expect(markup, status).toContain(">1 of 2 registered<");
+      expect(markup, status).not.toContain(">Checked in<");
+      expect(markup, status).not.toContain(">Not checked in<");
+      expect(markup, status).not.toMatch(/>\d+ of \d+ checked in</);
+      checked += 1;
+    }
+    expect(checked).toBe(NOT_LIVE.length);
+  });
+
+  it("the walkthrough's own case: a waitlisted individual whose one player has confirmed reads '1 of 1 registered' (W6)", () => {
+    const markup = render(props({ status: "waitlisted", amount_cents: 0, players: [PLAYERS[0]!] }));
+    expect(markup).toContain(">1 of 1 registered<");
+    expect(markup).toContain(">Registered<");
+    expect(markup).not.toContain("checked in");
+  });
+
+  it("es, fr and nl: the neutral words are each locale's own and differ from the check-in words", () => {
+    const dicts: [string, Locale, Dict][] = [["es", "es", uiEs as Dict], ["fr", "fr", uiFr as Dict], ["nl", "nl", uiNl as Dict]];
+    let checked = 0;
+    for (const [name, locale, ui] of dicts) {
+      const d = ui as Record<string, string>;
+      const markup = render(props({ status: "withdrawn", players: PLAYERS }, {}, locale, ui));
+      expect(markup, name).toContain(`>${d["register.status.roster.registered"]}<`);
+      expect(markup, name).toContain(`>${d["register.status.roster.notRegistered"]}<`);
+      expect(markup, name).toContain(`>${d["register.status.roster.meterRegistered"]!.replace("{claimed}", "1").replace("{total}", "2")}<`);
+      expect(d["register.status.roster.notRegistered"], `${name}: not the check-in word`).not.toBe(d["register.status.roster.pending"]);
+      checked += 1;
+    }
+    expect(checked).toBe(3);
+  });
+});

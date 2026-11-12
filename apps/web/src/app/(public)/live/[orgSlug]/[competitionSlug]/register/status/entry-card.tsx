@@ -10,10 +10,11 @@
 // offline instructions) is resolved ONCE in page.tsx and handed down here
 // as a plain string.
 import type { ReactNode } from "react";
-import { formatMinor, type Currency } from "@/lib/currency";
-import { fmtPublicDateTime, fmtPublicZoneAbbrev } from "@/lib/format";
+import { formatMoneyExact } from "@/lib/currency";
+import { fmtPublicDeadline } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import type { Dict, Locale } from "@/lib/i18n-constants";
+import { entryWaitingOn } from "@/lib/registration-status";
 import { CompetitionProse } from "@/components/public-site/competition-prose";
 import { PayButton } from "./pay-button";
 import { CancelEntry } from "./cancel-entry";
@@ -29,6 +30,7 @@ import {
   resolveMoneyState,
   rosterCounts,
   rosterPlayerDisplayName,
+  rosterVocabulary,
   type EntryStatus,
 } from "./view-model";
 
@@ -91,6 +93,14 @@ export interface EntryCardProps {
      *  see resolveMoneyState's own doc comment (view-model.ts) for why this
      *  moved off the cart. */
     payment_method: "offline" | "stripe";
+    /** Polish wave P3 (W2, W12): this entry's OWN division's review mode, so a pending card can say whether it is waiting on the
+     *  organiser's approval as well as (or instead of) payment. REQUIRED for the same reason `assigned_team_name` is: an
+     *  omitted value would silently read as "no review" and the card would name only the payment. */
+    approval: "auto" | "manual";
+    /** Polish wave P3 (W6): the fee a promotion off the waitlist WOULD set (the division's own fee), null on every other status.
+     *  The card itself does not print it; the page's Subtotal does (`cartSubtotal`). Carried on the entry so one shape
+     *  travels from the read model to both. */
+    fee_if_promoted_cents: number | null;
     /** RS008: this entry's OWN division's youth/player_name_display policy —
      *  see `rosterPlayerDisplayName` (view-model.ts) for why it travels with
      *  the entry rather than the cart. */
@@ -143,6 +153,15 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
   const tone = STATUS_TONE[entry.status];
   const money = resolveMoneyState(entry, cart);
   const roster = rosterCounts(entry.players);
+  // Polish wave P3 (W6, W10, W11): a waitlisted, withdrawn, expired or rejected entry has nothing to check in to, so its roster
+  // never says "Checked in". `rosterVocabulary` picks the key family once; the chips and the meter both read it.
+  const rosterWords = rosterVocabulary(entry.status) === "checkin"
+    ? { meter: "register.status.roster.meter", claimed: "register.status.roster.claimed", pending: "register.status.roster.pending" }
+    : { meter: "register.status.roster.meterRegistered", claimed: "register.status.roster.registered", pending: "register.status.roster.notRegistered" };
+  // Polish wave P3 (W2, W12): WHY a pending entry is not confirmed. Suppressed once the payment window has closed: the
+  // window-closed message below is the true and more actionable statement, and "waiting for payment" beside it would read as
+  // an invitation to pay a window that no longer accepts payment.
+  const waitingOn = money.kind === "window_closed" ? null : entryWaitingOn(entry.status, entry.amount_cents, entry.approval);
   const unclaimed = entry.players.filter((p) => p.consent_status === "pending");
   // RS008: every roster row's name, masked by division youth policy OR the
   // linked person's own consent opt-out. Resolved ONCE, by id, so the
@@ -170,7 +189,7 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
     player_name_display: entry.division_player_name_display,
   });
 
-  // FIX 1 (RS007 status-page review): formatMinor(entry.amount_cents, …)
+  // FIX 1 (RS007 status-page review): the entry's fee figure
   // used to appear ONLY inside the stripe_due "Pay now — {amount}" label,
   // so an offline_due/stripe_unavailable/paid/confirmed card named no
   // figure at all — a bank-transfer card showed instructions and a
@@ -185,7 +204,7 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
   const feeLabel =
     entry.amount_cents === 0
       ? t(ui, "register.entries.free")
-      : formatMinor(entry.amount_cents, cart.currency as Currency, locale);
+      : formatMoneyExact(entry.amount_cents, cart.currency, locale);
   const showsFeeLine = entryCountsTowardTotal(entry.status) && money.kind !== "stripe_due";
 
   // FIX #13(a): org-zone-aware, zone-labelled ("1 Sept 2026, 00:30 IST", not
@@ -198,8 +217,7 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
   // call (throws), so the two are composed by hand — same convention
   // officials-panel.tsx/timezone-preference.tsx already use elsewhere in
   // this codebase.
-  const deadlineLabel = (deadline: string) =>
-    `${fmtPublicDateTime(locale, cart.timezone, deadline)} ${fmtPublicZoneAbbrev(locale, cart.timezone, deadline)}`;
+  const deadlineLabel = (deadline: string) => fmtPublicDeadline(locale, cart.timezone, deadline);
 
   // RS012 review cleanup: computed once here rather than calling
   // `poolPlaceByDate(entry)` a second time inside the JSX below, which used
@@ -296,6 +314,12 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
           </span>
         </div>
 
+        {waitingOn && (
+          <p data-testid="reg-status-waiting" data-waiting-on={waitingOn} className="text-sm text-ink">
+            {t(ui, `register.status.waiting.${waitingOn}`)}
+          </p>
+        )}
+
         {moneyNode}
 
         {/* RS009 handoff — see awaitingTeamAssignment's own doc comment
@@ -333,7 +357,7 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
                 {t(ui, "register.status.roster.heading")}
               </p>
               <p className="text-xs text-ink-muted">
-                {t(ui, "register.status.roster.meter", { claimed: roster.claimed, total: roster.total })}
+                {t(ui, rosterWords.meter, { claimed: roster.claimed, total: roster.total })}
               </p>
             </div>
             {/* Each row wraps rather than letting the badge win. The badge is
@@ -357,7 +381,7 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
                         : "shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700"
                     }
                   >
-                    {t(ui, p.consent_status === "pending" ? "register.status.roster.pending" : "register.status.roster.claimed")}
+                    {t(ui, p.consent_status === "pending" ? rosterWords.pending : rosterWords.claimed)}
                   </span>
                 </li>
               ))}
@@ -423,7 +447,7 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
               token={token}
               divisionName={entry.division_name}
               refundable={entry.refund_policy.refundable}
-              refundAmountFormatted={formatMinor(entry.refund_policy.amount_cents, cart.currency as Currency, locale)}
+              refundAmountFormatted={formatMoneyExact(entry.refund_policy.amount_cents, cart.currency, locale)}
             />
           </div>
         )}
