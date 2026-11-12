@@ -365,23 +365,24 @@ export function SponsorSheetBody(props: SponsorSheetBodyProps) {
               </dd>
               {hasTiers ? (
                 <>
-                  {/* The Title sponsor's poster (spec §8), read-only like the tier below it and only where the plan can place a Title sponsor:
-                      a 4:5 thumbnail cropped as the public panel crops it, or the words that say the logo shows instead. */}
-                  <dt className="text-slate-500">{msg("sponsors.sheet.poster")}</dt>
-                  <dd data-testid="sponsor-sheet-detail-poster" className="min-w-0 text-slate-800">
-                    {sponsor.poster_path ? (
-                      // Stored via content-upload - an absolute CDN URL.
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        data-testid="sponsor-sheet-poster-thumb"
-                        src={sponsor.poster_path}
-                        alt=""
-                        className="h-15 w-12 rounded-md object-cover ring-1 ring-slate-200"
-                      />
-                    ) : (
-                      <span className="text-slate-500">{msg("sponsors.sheet.noPoster")}</span>
-                    )}
-                  </dd>
+                  {/* The Title poster (spec §8), read-only like the tier below it and only where the plan can place a Title sponsor: a 4:5
+                      thumbnail cropped as the public panel crops it. Only when one is stored (owner, 2026-11-11, option B): most sponsors are
+                      never a Title sponsor, so a "no poster" row on every sponsor's page is noise. */}
+                  {sponsor.poster_path ? (
+                    <>
+                      <dt className="text-slate-500">{msg("sponsors.sheet.poster")}</dt>
+                      <dd data-testid="sponsor-sheet-detail-poster" className="min-w-0 text-slate-800">
+                        {/* Stored via content-upload - an absolute CDN URL. */}
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          data-testid="sponsor-sheet-poster-thumb"
+                          src={sponsor.poster_path}
+                          alt=""
+                          className="h-15 w-12 rounded-md object-cover ring-1 ring-slate-200"
+                        />
+                      </dd>
+                    </>
+                  ) : null}
                   <dt className="text-slate-500">{msg("sponsors.tierLabel")}</dt>
                   <dd data-testid="sponsor-sheet-detail-tier" className="min-w-0 text-slate-800">
                     {msg(TIER_MSG[shownTier])}
