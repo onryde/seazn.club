@@ -362,7 +362,7 @@ describe.skipIf(!HAS_DB)("the submit queues the confirmation on the outbox (DB)"
 
     // The same cart is notified again (a re-fire of the producer) while the provider is back.
     deliverMock.mockReset().mockImplementation(ok);
-    await notifySubmitted(groupId, ORIGIN, token, null);
+    await notifySubmitted(groupId, ORIGIN, token);
     const rows = await settled(groupId, 2);
     expect(rows.map((r) => r.status), "the older row was replaced, the newer one sent").toEqual(["replaced", "sent"]);
 
@@ -538,18 +538,18 @@ describe.skipIf(!HAS_DB)("the organiser's resend rides the outbox (DB)", () => {
     const w = await world();
     // A cart that does not exist.
     const missing = randomUUID();
-    await expect(notifySubmitted(missing, ORIGIN, "tok_x", null)).resolves.toBeUndefined();
+    await expect(notifySubmitted(missing, ORIGIN, "tok_x")).resolves.toBeUndefined();
     expect(await rowsOf(missing)).toHaveLength(0);
     // A cart with no entries.
     const [{ id: empty }] = await sql<{ id: string }[]>`
       insert into registration_groups (competition_id, contact_name, contact_email, access_token_hash, amount_cents, currency)
       values (${w.competition.id}, 'Ghost', ${address("ghost")}, ${randomUUID()}, 0, 'gbp') returning id`;
-    await expect(notifySubmitted(empty, ORIGIN, "tok_x", null)).resolves.toBeUndefined();
+    await expect(notifySubmitted(empty, ORIGIN, "tok_x")).resolves.toBeUndefined();
     expect(await rowsOf(empty)).toHaveLength(0);
     expect(enqueueGate.calls, "the producer never reached the writer").toBe(0);
     // The positive pair: a real cart under the same call is queued (the probe above can see a row).
     const { registration } = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("real") });
-    await notifySubmitted(registration.group_id, ORIGIN, "tok_x", null);
+    await notifySubmitted(registration.group_id, ORIGIN, "tok_x");
     expect(await settled(registration.group_id, 1)).toHaveLength(1);
   });
 

@@ -43,6 +43,8 @@ import { officialRoleLabel } from "../email-templates/official-assigned";
 import { PASS_KEYS, type PassKey } from "@/lib/currency";
 
 const LINK = "https://seazn.club/x?token=abc";
+/** A player payment page link (`/r/pay/<43-char token>`), what every chase mail links now. */
+const PAY_PAGE = "https://seazn.club/r/pay/" + "T".repeat(43);
 
 // Sponsor deals Task 23: the invoice links its numbered page (D14), never a Checkout session.
 const INVOICE_URL = "https://seazn.club/r/sponsor/invoice/tok_abc123";
@@ -113,13 +115,14 @@ function makeBuilders(
     ["account-deletion", accountDeletionTemplate(dict), "accountDeletion.subject"],
     ["invite", inviteTemplate("Riverside Racquets", LINK, dict), "invite.subject"],
     ["registration", registrationTemplate(registrationCartArgs, dict), "registration.subject"],
-    ["payment-reminder", paymentReminderTemplate(registrationArgs, dict), "paymentReminder.subject"],
+    ["payment-reminder", paymentReminderTemplate({ ...registrationArgs, method: "offline", payPageUrl: PAY_PAGE }, dict), "paymentReminder.subject"],
     [
       "registration-promoted",
       registrationPromotedTemplate(
         {
           ...registrationArgs,
-          payUrl: LINK,
+          method: "card",
+          payPageUrl: PAY_PAGE,
           payDeadline: "2026-08-01T12:00:00Z",
           refCode: "SZ-ABCD-EFGH",
           refStatusUrl: "https://seazn.club/r/SZ-ABCD-EFGH",
@@ -372,34 +375,57 @@ describe("email builders compose from the html templates", () => {
     }
   });
 
-  it("card registration carries a Pay now button and the deadline", () => {
+  it("card registration carries a Pay now button to the given page, and the deadline; none without one", () => {
+    const statusPage = "https://seazn.club/live/o/c/register/status?rid=g1&token=t1";
     const out = registrationTemplate(
       {
         ...registrationCartArgs,
         paymentInstructions: null,
-        payUrl: "https://checkout.stripe.test/cs_1",
+        payPageUrl: statusPage,
         payDeadline: "2026-08-01T12:00:00Z",
       },
       emailsEn as Dict,
     );
-    expect(out.html).toContain("https://checkout.stripe.test/cs_1");
+    expect(out.html).toContain(statusPage.replace(/&/g, "&amp;"));
     expect(out.html).toContain("Pay now");
-    expect(out.text).toContain("https://checkout.stripe.test/cs_1");
+    expect(out.text).toContain(statusPage);
+    // The empty case: no page, no Pay button.
+    const none = registrationTemplate({ ...registrationCartArgs, paymentInstructions: null, payPageUrl: null }, emailsEn as Dict);
+    expect(none.html).not.toContain("Pay now");
   });
 
-  it("card payment reminder links the fresh checkout, offline keeps instructions", () => {
+  it("payment reminder: card has the Pay button to the payment page; offline keeps instructions and links the page's details", () => {
+    const en = emailsEn as Record<string, string>;
     const card = paymentReminderTemplate(
-      {
-        ...registrationArgs,
-        paymentInstructions: null,
-        checkoutUrl: "https://checkout.stripe.test/cs_2",
-        payDeadline: "2026-08-01T12:00:00Z",
-      },
+      { ...registrationArgs, paymentInstructions: null, method: "card", payPageUrl: PAY_PAGE, payDeadline: "2026-08-01T12:00:00Z" },
       emailsEn as Dict,
     );
-    expect(card.html).toContain("https://checkout.stripe.test/cs_2");
-    const offline = paymentReminderTemplate(registrationArgs, emailsEn as Dict);
+    expect(card.html).toContain(PAY_PAGE);
+    expect(card.text).toContain(PAY_PAGE);
+    expect(card.html).toContain(en["paymentReminder.payNow"]!.split("{")[0]!.trim());
+    expect(card.html).not.toContain(en["paymentReminder.viewDetails"]!);
+    const offline = paymentReminderTemplate({ ...registrationArgs, method: "offline", payPageUrl: PAY_PAGE }, emailsEn as Dict);
     expect(offline.html).toContain("Bank transfer");
+    expect(offline.html).toContain(en["paymentReminder.viewDetails"]!);
+    expect(offline.html).toContain(PAY_PAGE);
+    expect(offline.text).toContain(en["paymentReminder.textViewDetails"]!);
+    expect(offline.text).toContain(PAY_PAGE);
+    expect(offline.html).not.toContain(en["paymentReminder.payNow"]!.split("{")[0]!.trim());
+  });
+
+  it("promotion: card links the payment page as Pay; offline links its details; free links nothing", () => {
+    const en = emailsEn as Record<string, string>;
+    const card = registrationPromotedTemplate({ ...registrationArgs, method: "card", payPageUrl: PAY_PAGE }, emailsEn as Dict);
+    expect(card.text).toContain(PAY_PAGE);
+    expect(card.html).not.toContain(en["registrationPromoted.viewDetails"]!);
+    const offline = registrationPromotedTemplate({ ...registrationArgs, method: "offline", payPageUrl: PAY_PAGE }, emailsEn as Dict);
+    expect(offline.html).toContain("Bank transfer");
+    expect(offline.html).toContain(en["registrationPromoted.viewDetails"]!);
+    expect(offline.text).toContain(en["registrationPromoted.textViewDetails"]!);
+    expect(offline.text).toContain(PAY_PAGE);
+    const free = registrationPromotedTemplate({ ...registrationArgs, feeCents: 0, method: "offline", payPageUrl: null }, emailsEn as Dict);
+    expect(free.html).not.toContain("/r/pay/");
+    expect(free.text).not.toContain("/r/pay/");
   });
 
   it("dispute-lost email states the loss, the balance debit and who pays the fee", () => {
@@ -691,7 +717,7 @@ describe("email builders compose from the html templates", () => {
 
   it("payment reminder without instructions points at the organiser", () => {
     const out = paymentReminderTemplate(
-      { ...registrationArgs, paymentInstructions: null },
+      { ...registrationArgs, paymentInstructions: null, method: "offline", payPageUrl: PAY_PAGE },
       emailsEn as Dict,
     );
     expect(out.html).toContain("Please contact Riverside Racquets to arrange payment.");

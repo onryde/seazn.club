@@ -117,12 +117,13 @@ export async function POST(req: Request, { params }: Ctx) {
     }
     // Cart-shaped confirmation (RS005 W4 finding: the confirmation mailer had
     // ZERO callers before this wave — see notifySubmitted's own doc
-    // comment). Queued HERE, after the mint attempt resolves either way, so
-    // the mail can carry whatever payUrl actually exists rather than a
-    // guess made before it was known; its first attempt is made after the
-    // response. notifySubmitted never throws — a mail failure must never
-    // turn this already-committed cart into an error response.
-    await notifySubmitted(result.group_id, baseUrl(req), result.access_token, checkout_url);
+    // comment), queued after the mint attempt resolves either way; its first
+    // attempt is made after the response. The mail never carries the
+    // Checkout url (player payment page, P5): a card cart's Pay button goes to
+    // the cart's own status page, and `checkout_url` stays in this response
+    // only. notifySubmitted never throws — a mail failure must never turn
+    // this already-committed cart into an error response.
+    await notifySubmitted(result.group_id, baseUrl(req), result.access_token);
     return reply(201, { ...result, checkout_url });
   });
 }

@@ -14,6 +14,7 @@ import { inviteUnclaimedMembers } from "./people";
 import { materialise } from "./materialise";
 import { openRegistrationSeatGateFor } from "./waitlist";
 import { paymentReminderMessage } from "./mail";
+import { issuePayLink, recordPayToken } from "./pay-token";
 import { stripeRefund, queueRefundReceipt } from "./refunds";
 import { withdrawCore } from "./withdraw";
 
@@ -166,10 +167,11 @@ export async function confirmRegistrationWaived(
   return row;
 }
 
-/** Organiser: email an unpaid (offline) registrant a payment reminder. */
+/** Organiser: email an unpaid registrant a payment reminder linking their payment page (card and offline alike; P4). */
 export async function sendPaymentReminder(
   auth: AuthCtx,
   regId: string,
+  origin: string,
 ): Promise<{ sent: boolean }> {
   const reg = await withTenant(auth.orgId, (tx) => orgReg(tx, regId));
   const settings = await loadSettings(sql, reg.division_id);
@@ -179,18 +181,24 @@ export async function sendPaymentReminder(
     throw new HttpError(422, "Payment reminders only apply to pending registrations.");
   }
   const ctx = await divisionCtx(sql, reg.division_id);
+  // The division's method first (an organiser may have switched it since the entry), then the cart's - the page's own rule.
+  const method = (settings?.payment_method ?? reg.payment_method) === "stripe" ? "card" : "offline";
+  const link = issuePayLink(origin);
   const message = await paymentReminderMessage(reg, ctx, {
     feeCents: fee,
     // Division override first, org-wide fallback — same resolution as the
     // confirmation email; refCode personalises {{reference}}.
     paymentInstructions: settings?.payment_instructions ?? ctx.payment_instructions,
+    method,
+    payPageUrl: link.url,
     refCode: reg.ref_code,
   });
-  // The row and the audit entry are ONE transaction: an audit that fails queues no mail, and a mail the outbox refuses leaves no
-  // "reminded" entry behind. The mail is then attempted at once; `sent` is whether THAT attempt was accepted. A provider that is down
+  // The row, its link's token and the audit entry are ONE transaction: an audit that fails queues no mail and records no token, and
+  // a mail the outbox refuses leaves no "reminded" entry behind. The token's org is the entry's own (the tenant this tx runs as). The mail is then attempted at once; `sent` is whether THAT attempt was accepted. A provider that is down
   // answers `{ sent: false }` and the row stays queued for the retry worker. No once-key: a press is a deliberate mail.
   const id = await withTenant(auth.orgId, async (tx) => {
     const queued = await enqueueEmail(tx, message);
+    await recordPayToken(tx, { tokenHash: link.tokenHash, registrationId: reg.id, orgId: reg.org_id });
     await audit(tx, ctx.competition_id, auth.orgId, "registration.payment_reminded", { registration_id: regId }, auth.userId);
     return queued;
   });

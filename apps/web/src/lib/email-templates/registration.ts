@@ -35,8 +35,9 @@ export interface RegistrationEmailArgs {
   totalCents: number;
   currency: string;
   paymentInstructions: string | null;
-  /** Card entries (spec §3): direct pay link + the 48h deadline. */
-  payUrl?: string | null;
+  /** Card carts with a fee still owed: where the Pay button goes - the cart's own token-bearing status page (our details-first
+   *  page, which pays the whole cart), never a Checkout url. Null: no Pay button. */
+  payPageUrl?: string | null;
   payDeadline?: Date | string | null;
   statusUrl: string;
   /** Quotable reference (v3/05 §3) + its public status page. */
@@ -151,7 +152,7 @@ export function registrationTemplate(
       "\n" +
       opts.entries.map((e) => entryLine(dict, e, opts.currency)).join("\n");
 
-  const card = paid && !!opts.payUrl;
+  const card = paid && !!opts.payPageUrl;
   const deadline = opts.payDeadline ? formatDeadline(opts.payDeadline) : null;
 
   const paymentBlock = card
@@ -160,7 +161,7 @@ export function registrationTemplate(
         deadline
           ? t(dict, "registration.feeHeldUntil", { deadline })
           : t(dict, "registration.feeHeld"),
-      ) + button(t(dict, "registration.payNow", { amount }), opts.payUrl as string)
+      ) + button(t(dict, "registration.payNow", { amount }), opts.payPageUrl as string)
     : paid && instructions
       ? panel(t(dict, "registration.feePanelTitle", { amount }), instructions as string)
       : paid
@@ -175,7 +176,7 @@ export function registrationTemplate(
         ? t(dict, "registration.textHeldUntil", { deadline })
         : t(dict, "registration.textHeld")) +
       "\n" +
-      opts.payUrl
+      opts.payPageUrl
     : paid && instructions
       ? "\n\n" +
         t(dict, "registration.textFee", { amount }) +

@@ -16,7 +16,7 @@ import { divisionTakesKind } from "@/lib/division-entrant-kinds";
 import type { Tx, RegistrationSettingsRow, RegistrationWithGroupRow, DivisionCtx } from "./types";
 import { regGroupCols, loadSettings } from "./lookups";
 import { materialise } from "./materialise";
-import { createRegistrationCheckout } from "./checkout";
+import { issuePayLink, recordPayToken } from "./pay-token";
 
 /** RS012 ruling 1 — a status leaving SPOT_HOLDERS only frees a TEAM slot
  *  when the entry itself was ever counted as one; a solo sign-up
@@ -316,7 +316,8 @@ export async function promoteWaitlistedRow(
   return row;
 }
 
-/** Post-tx promoted email: card entries get a fresh token-free checkout link, offline entries the resolved instructions.
+/** Post-tx promoted email: an entry with a fee gets a link to its payment page (`/r/pay/<token>`, never a Checkout url) - card
+ *  entries as the Pay button, offline entries beside the resolved instructions; a free promotion links nothing.
  *  Exported for `registration-approval.ts` (RS002 W5) — `promoteFromWaitlist`
  *  reuses this verbatim rather than re-deriving the promoted-email shape.
  *
@@ -334,8 +335,7 @@ export async function notifyPromoted(
   opts: { firstAttempt: "request" | "worker" },
 ): Promise<void> {
   try {
-    // A promotion always stamps `promoted_at` and the once-key is built from it: refuse by name, BEFORE the pay link is minted
-    // (a Checkout session minted for an email that cannot be queued is a session nobody holds).
+    // A promotion always stamps `promoted_at` and the once-key is built from it: refuse by name, BEFORE the pay link is issued.
     if (promoted.promoted_at === null) throw new Error("notifyPromoted: a promoted registration has no promoted_at");
     // REVIEW FIX (#10): the DIVISION's own payment method — never
     // `promoted.payment_method` (registration_groups.payment_method, the
@@ -347,14 +347,9 @@ export async function notifyPromoted(
     // divisions). Same fallback convention promoteWaitlistedRow's own
     // `method` already uses.
     const method = settings?.payment_method ?? "offline";
-    let payUrl: string | null = null;
-    if (method === "stripe" && promoted.amount_cents > 0 && ctx.charges_enabled) {
-      try {
-        payUrl = await createRegistrationCheckout(promoted.group_id, [promoted.id], ctx, origin, null);
-      } catch {
-        /* the reminder sweep mints another */
-      }
-    }
+    // P3: card or offline, an entry that owes a fee gets its payment page. Nothing external happens: the page mints a Checkout
+    // session only when the player presses Pay (and answers Connect being off itself).
+    const link = promoted.amount_cents > 0 ? issuePayLink(origin) : null;
     const locale = await recipientLocale(sql, { pick: promoted.locale, userId: promoted.user_id, orgDefault: ctx.default_locale });
     const content = await registrationPromotedEmail(
       {
@@ -363,7 +358,8 @@ export async function notifyPromoted(
         displayName: promoted.display_name,
         feeCents: promoted.amount_cents,
         currency: promoted.currency,
-        payUrl,
+        method: method === "stripe" ? "card" : "offline",
+        payPageUrl: link?.url ?? null,
         // REVIEW FIX (#13b): this entry's OWN promotion_expires_at, never
         // `promoted.expires_at` (the GROUP's shared column, which a sibling's
         // own earlier/later promotion can leave disagreeing with this row) —
@@ -382,16 +378,25 @@ export async function notifyPromoted(
       },
       locale,
     );
-    const id = await enqueueEmailOnce(sql, {
-      kind: "registration_promoted",
-      refType: "registration",
-      refId: promoted.id,
-      orgId: promoted.org_id,
-      to: promoted.contact_email,
-      ...content,
-      transactional: false,
-      expiresAt: expiryWithin(promoted.promotion_expires_at),
-      dedupeKey: `${promoted.id}:${promoted.promoted_at.toISOString()}`,
+    // The row and its link's token are ONE transaction: a token is recorded only for a mail that was queued (a replay queues
+    // nothing, so it records nothing).
+    const promotedAt = promoted.promoted_at;
+    const id = await sql.begin(async (tx) => {
+      const queued = await enqueueEmailOnce(tx, {
+        kind: "registration_promoted",
+        refType: "registration",
+        refId: promoted.id,
+        orgId: promoted.org_id,
+        to: promoted.contact_email,
+        ...content,
+        transactional: false,
+        expiresAt: expiryWithin(promoted.promotion_expires_at),
+        dedupeKey: `${promoted.id}:${promotedAt.toISOString()}`,
+      });
+      if (queued !== null && link) {
+        await recordPayToken(tx, { tokenHash: link.tokenHash, registrationId: promoted.id, orgId: promoted.org_id });
+      }
+      return queued;
     });
     // `null` = this promotion's mail is already queued (a replay): nothing more to attempt.
     if (opts.firstAttempt === "request" && id !== null) deferred(() => dispatchNow([id]));

@@ -276,7 +276,7 @@ export async function buildDisputeEvidence(
   // what the division is configured for today).
   const { registrationTemplate } = await import("@/lib/email-templates");
   const { getDictionary } = await import("@/lib/i18n");
-  const cartMail = await buildCartMail(reg.group_id, origin, null, null);
+  const cartMail = await buildCartMail(reg.group_id, origin, null);
   // Reconstruct the receipt exactly as sent — in the registrant's captured
   // locale (cycle 47), so replayed dispute evidence matches the original mail.
   const emailDict = await getDictionary(cartMail?.locale ?? toLocale(reg.locale), "emails");

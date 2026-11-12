@@ -1,7 +1,6 @@
 // RS003 W5c — branch coverage for createRegistrationCheckout's early-return
 // and error guards (registrations/), reached exclusively
-// through its two live callers, mintGroupCheckout and (where noted)
-// sweepRegistrations. Real Postgres required; skipped without DATABASE_URL.
+// through its live caller mintGroupCheckout (and, where noted, directly). Real Postgres required; skipped without DATABASE_URL.
 //
 // Two of the guards below (empty entries, subtotal<=0) turned
 // out to be UNREACHABLE via a single, non-concurrent call to
@@ -90,7 +89,8 @@ vi.mock("@/lib/db", async (importOriginal) => {
 
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
-import { mintGroupCheckout, sweepRegistrations } from "../registrations";
+import { divisionCtx, mintGroupCheckout } from "../registrations";
+import { createRegistrationCheckout } from "../registrations/checkout";
 import { stripeRig, seedRegistration, loadWithGroup } from "./_registration-fixtures";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -199,14 +199,13 @@ describe.skipIf(!HAS_DB)("mintGroupCheckout — own guards (RS003 W5c)", () => {
 // createRegistrationCheckout — the token===null return-URL branch
 // (:1308-1311). Neither mintGroupCheckout nor resumeRegistrationCheckout can
 // reach this: both declare `token: string` (not nullable) and always forward
-// their own real token verbatim. The only two real callers that pass
-// `null` are notifyPromoted (waitlist promotion emails) and
-// sweepRegistrations (payment reminder emails) — sweepRegistrations is used
-// here since it exposes the Stripe call args directly via the mock, with no
-// need to also mock the email sender.
+// their own real token verbatim. The two callers that used to pass `null`
+// (notifyPromoted and sweepRegistrations) link the player payment page now
+// and mint nothing (player payment page, Task 5), and the page's own Pay
+// passes a returnBase; so the branch is driven directly.
 // ---------------------------------------------------------------------------
 
-describe.skipIf(!HAS_DB)("createRegistrationCheckout — token===null return-URL shape, via sweepRegistrations (RS003 W5c)", () => {
+describe.skipIf(!HAS_DB)("createRegistrationCheckout — token===null return-URL shape, called directly (RS003 W5c)", () => {
   it("a system-minted (token===null) session returns the token-free /r/[ref] URL, not the status-page shape (:1308-1311)", async () => {
     const { competition, division, settings } = await stripeRig();
     // Random suffix — a fixed literal ref code collides with a leftover row
@@ -215,19 +214,11 @@ describe.skipIf(!HAS_DB)("createRegistrationCheckout — token===null return-URL
     // suffixed for exactly this reason.
     const refCode = "TESTREF" + randomUUID().slice(0, 8).toUpperCase();
     const first = await seedRegistration(competition.id, division.id, settings, { refCode });
-    // seedRegistration's own stripeWindow logic sets a 48h deadline — force
-    // it inside the reminder sweep's T-24h window; reminded_at stays null
-    // from the insert.
-    await sql`
-      update registration_groups
-      set expires_at = now() + interval '2 hours'
-      where id = ${first.registration.group_id}`;
-
-    // The reminder is queued on the email outbox now (this file never mocks
-    // it either), so the sweep makes no send of its own and needs no mail
-    // provider here. The mint call itself — this test's actual point, per the
-    // file header above — is what is asserted.
-    await sweepRegistrations("http://test.local");
+    // Player payment page (Task 5): the sweep no longer mints (its reminder links the entry's payment page), so no live caller
+    // passes a null token without a returnBase any more. The branch is still createRegistrationCheckout's, and is driven here
+    // directly: its URL shape is this test's point.
+    const ctx = await divisionCtx(sql, division.id);
+    await createRegistrationCheckout(first.registration.group_id, [first.registration.id], ctx, "http://test.local", null);
     expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(1);
 
     const args = stripeMock.checkoutCreate.mock.calls[0]![0] as {

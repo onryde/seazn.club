@@ -455,13 +455,20 @@ describe.skipIf(!HAS_DB)("POST .../register — DB-backed", () => {
     expect(status).toBe(201);
     expect(body.data?.checkout_url).toBe("https://checkout.stripe.test/session");
     expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(1);
-    // RS005 W4: the pay link appears in the confirmation mail exactly when
-    // a checkout was actually minted.
+    // Player payment page (P5): the response keeps `checkout_url`, but the
+    // confirmation mail never carries it — its Pay button goes to the cart's
+    // own token-bearing status page.
     const row = await confirmationOf(String(body.data!.group_id));
     expect(row).toMatchObject({ kind: "registration_confirmation", ref_type: "registration_group", ref_id: body.data!.group_id, status: "sent" });
     const saw = providerSaw(row);
     expect(saw).toHaveLength(1);
-    expect(saw[0]!.text).toContain("https://checkout.stripe.test/session");
+    for (const part of [saw[0]!.text, saw[0]!.html]) {
+      expect(part).not.toContain("checkout.stripe");
+      expect(part).not.toContain("cs_test_");
+    }
+    expect(saw[0]!.text).toContain(
+      `/live/${orgSlug}/${competition.slug}/register/status?rid=${String(body.data!.group_id)}&token=${encodeURIComponent(String(body.data!.access_token))}`,
+    );
   });
 
   // submitRegistrationGroup COMMITS before the route mints. If a mint failure

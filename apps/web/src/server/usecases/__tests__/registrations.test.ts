@@ -2385,6 +2385,12 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
           ?.split(",")
           .includes(id),
       ).length;
+    // Player payment page (Task 5): a reminder or promotion mail links the entry's payment page and mints NO Checkout session;
+    // each such mail records one pay-page token for its entry.
+    const tokensFor = async (id: string) => {
+      const [row] = await sql<{ n: string }[]>`select count(*)::text as n from registration_pay_tokens where registration_id = ${id}`;
+      return Number(row!.n);
+    };
     const regRow = (id: string) => loadWithGroup(id);
     // REVIEW FIX (money-path defect #7): pass (1a)'s sent mark moved off the
     // GROUP (registration_groups.reminded_at) onto the ENTRY
@@ -2413,12 +2419,13 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
     expect(first.reminded).toBeGreaterThanOrEqual(1); // A is among the reminded
     const remindedAt = await submitRemindedAt(a.registration.id);
     expect(remindedAt).not.toBeNull();
-    expect(checkoutsFor(a.registration.id)).toBe(1); // fresh session for the email
+    expect(await tokensFor(a.registration.id)).toBe(1); // one pay-page link for the email
+    expect(checkoutsFor(a.registration.id)).toBe(0); // and no Checkout session
 
     // submit_reminded_at guard: a second sweep must not re-remind A.
     await sweepRegistrations("http://test.local");
     expect(await submitRemindedAt(a.registration.id)).toEqual(remindedAt);
-    expect(checkoutsFor(a.registration.id)).toBe(1); // still exactly one, no re-send
+    expect(await tokensFor(a.registration.id)).toBe(1); // still exactly one, no re-send
 
     // Past the deadline → A expired + B promoted with a fresh window.
     // expires_at lives on the cart now (V364).
@@ -2442,7 +2449,8 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
       where type = 'registration.expired'
         and payload->>'registration_id' = ${a.registration.id}`;
     expect(expiredEvent.promoted_registration_id).toBe(b.registration.id);
-    expect(checkoutsFor(b.registration.id)).toBe(1); // promotion mints B's pay link
+    expect(await tokensFor(b.registration.id)).toBe(1); // the promotion mail links B's payment page
+    expect(checkoutsFor(b.registration.id)).toBe(0);
 
     // A further sweep is a no-op for OUR rows: nothing re-expires, nothing
     // re-promotes, and B (a fresh 48h window) is not yet reminder-due.
@@ -2451,8 +2459,9 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
     expect(await regRow(b.registration.id)).toEqual(bRow);
     expect(await auditCount("registration.expired", a.registration.id)).toBe(1);
     expect(await auditCount("registration.promoted", b.registration.id)).toBe(1);
-    expect(checkoutsFor(a.registration.id)).toBe(1); // A stays reminded exactly once
-    expect(checkoutsFor(b.registration.id)).toBe(1); // B not re-linked
+    expect(await tokensFor(a.registration.id)).toBe(1); // A stays reminded exactly once
+    expect(await tokensFor(b.registration.id)).toBe(1); // B not re-linked
+    expect(checkoutsFor(a.registration.id) + checkoutsFor(b.registration.id)).toBe(0);
   });
 
   // RS007 follow-up (this wave): the reminder mark was a RECEIPT (written
@@ -2509,6 +2518,12 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
           .includes(id),
       ).length;
     stripeMock.checkoutCreate.mockClear();
+    // Player payment page (Task 5): a reminder or promotion mail links the entry's payment page and mints NO Checkout session;
+    // each such mail records one pay-page token for its entry.
+    const tokensFor = async (id: string) => {
+      const [row] = await sql<{ n: string }[]>`select count(*)::text as n from registration_pay_tokens where registration_id = ${id}`;
+      return Number(row!.n);
+    };
 
     const res = await sweepRegistrations("https://test.local");
     expect(res.reminded).toBeGreaterThanOrEqual(2);
@@ -2516,8 +2531,9 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
     // Reverting to a group-level claim/mark makes this fail: A wins the
     // shared claim and B's own attempt finds it already non-null — B is
     // silently excluded from every future sweep.
-    expect(checkoutsFor(a.registration.id), "A reminded").toBe(1);
-    expect(checkoutsFor(b.id), "B reminded independently, not silenced by A's claim").toBe(1);
+    expect(await tokensFor(a.registration.id), "A reminded").toBe(1);
+    expect(await tokensFor(b.id), "B reminded independently, not silenced by A's claim").toBe(1);
+    expect(checkoutsFor(a.registration.id) + checkoutsFor(b.id), "no Checkout session for either").toBe(0);
 
     const submitRemindedAt = async (id: string) => {
       const [row] = await sql<{ submit_reminded_at: Date | null }[]>`
@@ -2529,8 +2545,8 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
 
     // A second sweep must not re-remind either.
     await sweepRegistrations("https://test.local");
-    expect(checkoutsFor(a.registration.id)).toBe(1);
-    expect(checkoutsFor(b.id)).toBe(1);
+    expect(await tokensFor(a.registration.id)).toBe(1);
+    expect(await tokensFor(b.id)).toBe(1);
   });
 
   // REVIEW FIX (money-path defect #9) — a losing claim used to mint a real
@@ -2540,8 +2556,9 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
   // so nobody is ever given that URL). Repro: two sweepRegistrations() calls
   // at once — both read the row as due, the claim lets one in, and pre-fix the
   // other still minted before its own claim attempt failed. Fixed by moving
-  // the mint to AFTER a successful claim, so a losing invocation never
-  // reaches createRegistrationCheckout at all.
+  // the mint to AFTER a successful claim; since the player payment page
+  // (Task 5) the reminder mints no session at all, so the race now pins:
+  // one pay-page token, one row, zero mints, and an untouched pointer.
   it("REVIEW FIX: a losing claim never mints a checkout — the group's session pointer is never clobbered by a session nobody holds", async () => {
     const { competition, division, settings } = await stripeRig();
     const contactEmail = `mint-race-${randomUUID().slice(0, 8)}@test.local`;
@@ -2558,15 +2575,14 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
         ?.split(",")
         .includes(a.registration.id),
     ).length;
-    // Reverting the fix (mint before claim) makes this fail: the racing
-    // invocation still mints a real session before its own claim attempt
-    // loses — TWO mints for one reminder that is only ever queued once.
-    expect(mintsForOurs, "exactly one mint — the loser's claim failed before it ever minted").toBe(1);
+    expect(mintsForOurs, "no mint at all — the reminder links the payment page").toBe(0);
     expect(await reminderRowsTo(contactEmail)).toHaveLength(1);
+    const [tok] = await sql<{ n: string }[]>`select count(*)::text as n from registration_pay_tokens where registration_id = ${a.registration.id}`;
+    expect(Number(tok!.n), "the loser issued no token either").toBe(1);
 
     const [groupRow] = await sql<{ checkout_session_id: string | null }[]>`
       select checkout_session_id from registration_groups where id = ${a.registration.group_id}`;
-    expect(groupRow!.checkout_session_id, "the winner's own session is what got stamped").not.toBeNull();
+    expect(groupRow!.checkout_session_id, "the cart's session pointer is untouched").toBeNull();
   });
 
   // V381/RS007: the claim above is now a LEASE, not a permanent mark — see
@@ -4774,9 +4790,15 @@ describe.skipIf(!HAS_DB)("RS007: sweep reminds a promoted entry off its OWN cloc
     // expires_at is in-window and submit_reminded_at is null) and stamp this
     // too, on top of pass (1b)'s own mark checked above.
     expect(cols!.submit_reminded_at, "pass (1a)'s mark stays untouched").toBeNull();
-    // Exactly one checkout link minted — two would mean two reminder emails
-    // for the same entry from two passes.
-    expect(checkoutsFor(promoted!.id)).toBe(1);
+    // Exactly one pay-page link issued — two would mean two reminder emails
+    // for the same entry from two passes (player payment page, Task 5: the
+    // reminder mints no Checkout session at all).
+    const tokensFor = async (id: string) => {
+      const [row] = await sql<{ n: string }[]>`select count(*)::text as n from registration_pay_tokens where registration_id = ${id}`;
+      return Number(row!.n);
+    };
+    expect(await tokensFor(promoted!.id)).toBe(1);
+    expect(checkoutsFor(promoted!.id)).toBe(0);
 
     // A second sweep must not re-remind.
     const remindedAt = cols!.promotion_reminded_at;
@@ -4784,7 +4806,7 @@ describe.skipIf(!HAS_DB)("RS007: sweep reminds a promoted entry off its OWN cloc
     const [cols2] = await sql<{ promotion_reminded_at: Date | null }[]>`
       select promotion_reminded_at from registrations where id = ${promoted!.id}`;
     expect(cols2!.promotion_reminded_at).toEqual(remindedAt);
-    expect(checkoutsFor(promoted!.id)).toBe(1); // still exactly one — no re-send
+    expect(await tokensFor(promoted!.id)).toBe(1); // still exactly one — no re-send
   });
 
   // V381/RS007 — same lease fix, same semantics, on this pass's OWN column
@@ -6151,7 +6173,7 @@ describe.skipIf(!HAS_DB)("RS005 F1: swallowed registration-mail failures are now
     const spy = vi.spyOn(log, "error").mockImplementation(() => undefined as never);
 
     await expect(
-      notifySubmitted(missingGroupId, "https://test.local", "tok_x", null),
+      notifySubmitted(missingGroupId, "https://test.local", "tok_x"),
     ).resolves.toBeUndefined(); // still fire-and-forget — never throws
     expect(spy).toHaveBeenCalled();
     expect(spy.mock.calls[0]?.[0]).toMatchObject({ groupId: missingGroupId });
@@ -6170,7 +6192,7 @@ describe.skipIf(!HAS_DB)("RS005 F1: swallowed registration-mail failures are now
       returning id`;
     const spy = vi.spyOn(log, "error").mockImplementation(() => undefined as never);
 
-    await notifySubmitted(groupId, "https://test.local", "tok_x", null);
+    await notifySubmitted(groupId, "https://test.local", "tok_x");
     expect(spy).toHaveBeenCalled();
     expect(spy.mock.calls[0]?.[0]).toMatchObject({ groupId });
     expect(spy.mock.calls[0]?.[1]).toContain("no entries");
@@ -6188,7 +6210,7 @@ describe.skipIf(!HAS_DB)("RS005 F1: swallowed registration-mail failures are now
 
     const spy = vi.spyOn(log, "error").mockImplementation(() => undefined as never);
     await expect(
-      notifySubmitted(seeded.registration.group_id, "https://test.local", seeded.access_token, null),
+      notifySubmitted(seeded.registration.group_id, "https://test.local", seeded.access_token),
     ).resolves.toBeUndefined(); // fire-and-forget semantics preserved
     expect(spy).toHaveBeenCalled();
     expect(spy.mock.calls[0]?.[0]).toMatchObject({ groupId: seeded.registration.group_id });

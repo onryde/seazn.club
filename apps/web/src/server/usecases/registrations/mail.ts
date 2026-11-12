@@ -42,9 +42,10 @@ import { loadSettings, divisionCtx, tokenMatchesHash, orgReg } from "./lookups";
  * (every other caller), it falls back to the token-less `/r/[ref]` page,
  * mirroring that same function's fallback.
  *
- * `payUrl`: never minted here — a caller with a fresh checkout link
- * resolves it itself and passes it straight through, exactly as
- * `notifyPromoted` (above) does inline.
+ * The Pay button (player payment page plan, P5 - owner decision): when the cart pays by card, still owes a fee and `token` is
+ * given, it points at `statusUrl` - the cart's own token-bearing status page, our details-first page that pays the WHOLE cart
+ * (a per-entry page would split one cart into separate charges) and never expires. Nothing is minted here: no Checkout
+ * session, no pay-page token. Without a token (resends, dispute evidence) there is no Pay button.
  *
  * `locale` is the language the mail is WRITTEN in, resolved here (D4, the
  * phase-3 spec): the cart's explicit pick, then the linked account's locale,
@@ -58,7 +59,6 @@ export async function buildCartMail(
   groupId: string,
   origin: string,
   token: string | null,
-  payUrl: string | null,
 ): Promise<{ to: string; locale: Locale; orgId: string; competitionId: string; args: RegistrationEmailArgs } | null> {
   const [group] = await sql<
     Pick<
@@ -134,6 +134,11 @@ export async function buildCartMail(
     ? `${origin}${routes.publicRegisterStatus(ctx.org_slug, ctx.comp_slug)}?rid=${groupId}&token=${encodeURIComponent(token)}`
     : `${origin}/r/${group.ref_code}`;
 
+  // What is still owed by card: the PENDING entries' fees. A cart whose every fee is settled (confirmed, waived, paid) gets no
+  // Pay button even though its total is non-zero.
+  const owedCents = entries.reduce((sum, e) => sum + (e.status === "pending" ? e.amount_cents : 0), 0);
+  const payPageUrl = token && group.payment_method === "stripe" && owedCents > 0 ? statusUrl : null;
+
   return {
     to: group.contact_email,
     locale: await recipientLocale(sql, { pick: group.locale, userId: group.user_id, orgDefault: ctx.default_locale }),
@@ -146,7 +151,7 @@ export async function buildCartMail(
       totalCents,
       currency: group.currency,
       paymentInstructions,
-      payUrl,
+      payPageUrl,
       payDeadline: group.expires_at,
       statusUrl,
       refCode: group.ref_code,
@@ -183,10 +188,9 @@ async function cartConfirmationMessage(mail: CartMail, groupId: string): Promise
 /**
  * Post-submit confirmation (RS005 W4) — fire-and-forget, cart-shaped: every
  * entry in the group with its own status/fee, the group's payable total,
- * and `payUrl` exactly as resolved by the caller (the public register
- * route, after its own `mintGroupCheckout` attempt succeeds, fails, or is
- * skipped for a zero-subtotal cart) — this function never mints anything
- * itself. A registrant who gets no mail because the outbox refused the row,
+ * and (a card cart with a fee owed) a Pay button to the cart's own status
+ * page, decided by `buildCartMail` - this function never mints anything,
+ * and no Checkout url reaches the mail. A registrant who gets no mail because the outbox refused the row,
  * or because this function itself threw, still keeps a
  * committed, capacity-holding cart — that is the entire reason this wraps
  * everything in one try/catch, matching `notifyPromoted`'s contract
@@ -203,10 +207,9 @@ export async function notifySubmitted(
   groupId: string,
   origin: string,
   token: string,
-  payUrl: string | null,
 ): Promise<void> {
   try {
-    const mail = await buildCartMail(groupId, origin, token, payUrl);
+    const mail = await buildCartMail(groupId, origin, token);
     if (!mail) return; // buildCartMail already logged why
     const id = await enqueueEmail(sql, await cartConfirmationMessage(mail, groupId));
     deferred(() => dispatchNow([id]));
@@ -256,7 +259,7 @@ export async function resendRegistrationConfirmation(
       `This registration is ${reg.status} — a confirmation would tell the registrant they are entered`,
     );
   }
-  const mail = await buildCartMail(reg.group_id, origin, null, null);
+  const mail = await buildCartMail(reg.group_id, origin, null);
   if (!mail) return { sent: false }; // buildCartMail already logged why
   const message = await cartConfirmationMessage(mail, reg.group_id);
   // The row and the audit entry are ONE transaction: an audit that fails queues no mail, and a mail the outbox refuses leaves no
@@ -315,7 +318,7 @@ export async function resendRegistrationConfirmationPublic(
       "This registration is no longer active — a confirmation would tell the registrant they are entered",
     );
   }
-  const mail = await buildCartMail(groupId, origin, token, null);
+  const mail = await buildCartMail(groupId, origin, token);
   if (!mail) return { sent: false }; // buildCartMail already logged why
   const message = await cartConfirmationMessage(mail, groupId);
   // As the organiser's resend: the row and the audit entry are one transaction, then the first attempt is made at once.
@@ -330,7 +333,8 @@ export async function resendRegistrationConfirmationPublic(
 
 /**
  * The outbox message of one payment reminder: ONE place decides its kind, ref, recipient, transactionality and language, so the sweep's
- * two passes and the organiser's manual reminder cannot drift apart. The ref is the ENTRY (`registration/<reg id>`): a newer reminder
+ * two passes and the organiser's manual reminder cannot drift apart. Every reminder links the entry's payment page (`payPageUrl`),
+ * never a Checkout url. The ref is the ENTRY (`registration/<reg id>`): a newer reminder
  * for the same entry fully restates the older one (fee, link, deadline), so it supersedes an older one the registrant has not read. It
  * is not transactional (the marketing suppression list applies). It is worthless once the pay window it names has closed
  * (`payDeadline`), and the manual reminder has no end of its own. The language is the registrant's (D4: the cart's pick, then the
@@ -342,7 +346,10 @@ export async function paymentReminderMessage(
   o: {
     feeCents: number;
     paymentInstructions: string | null;
-    checkoutUrl?: string | null;
+    /** `card`: the page's Pay button; `offline`: the instructions plus the page's details link. */
+    method: "card" | "offline";
+    /** This entry's payment page (`issuePayLink`), whose token the caller records in the queueing transaction. */
+    payPageUrl: string;
     payDeadline?: Date | null;
     refCode?: string | null;
   },
@@ -362,7 +369,8 @@ export async function paymentReminderMessage(
         feeCents: o.feeCents,
         currency: reg.currency,
         paymentInstructions: o.paymentInstructions,
-        checkoutUrl: o.checkoutUrl,
+        method: o.method,
+        payPageUrl: o.payPageUrl,
         payDeadline: o.payDeadline,
         refCode: o.refCode,
       },
