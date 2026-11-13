@@ -1648,6 +1648,17 @@ test.describe("RS005 registrants tab", () => {
     await page.goto(`${hub}&status=confirmed`, { waitUntil: "load" });
     await expect(page.locator('select[name="status"]')).toHaveValue("confirmed");
 
+    // This spec runs at 1280 only (Desktop Chrome), so it shows the md-and-up face
+    // of the bar's ONE DOM: the pill row, and no phone Filters button. Both exist
+    // in the markup (`toHaveCount(1)`) — the browser, not a class scan, decides
+    // which one is visible. The phone face is driven in mobile.spec.ts at all seven
+    // widths. Because the sheet is closed here, `select[name="status"]` above is a
+    // single element: the sheet's copies only exist while it is open.
+    await expect(page.locator("[data-filter-pill-row]")).toBeVisible();
+    await expect(page.locator("[data-filters-open]")).toHaveCount(1);
+    await expect(page.locator("[data-filters-open]")).toBeHidden();
+    await expect(page.locator("[data-filter-phone-row]")).toBeHidden();
+
     // Scoped to the FORM: the filtered-empty state renders its own "Clear
     // filters" link, so an unscoped role lookup is a strict-mode violation on
     // a competition with no matching rows. The bar's own link reads "Clear all"

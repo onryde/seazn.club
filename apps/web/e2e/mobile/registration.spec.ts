@@ -157,6 +157,7 @@ test("registrants tab: no-scroll, grid/card switch, expanded-row and filter-bar 
   );
   expect(submitted.status, JSON.stringify(submitted)).toBe(201);
   const teamRegId = submitted.data!.entries.find((e) => e.division_id === teamDiv.data!.id)!.registration_id;
+  const soloRegId = submitted.data!.entries.find((e) => e.division_id === soloDiv.data!.id)!.registration_id;
 
   // 1) The tab itself: no horizontal scroll, rows present.
   await page.goto(`/o/${org.slug}/c/${comp.data!.slug}/registration?tab=registrants`, { waitUntil: "load" });
@@ -188,25 +189,157 @@ test("registrants tab: no-scroll, grid/card switch, expanded-row and filter-bar 
   await expect(row.locator("[data-registration-hub-registrant-sibling-link]")).toBeVisible();
   await expectNoHorizontalScroll(page);
 
-  // 4) The filter bar: present, no overflow, and its controls stay
-  //    touch-sized (min-h-11 = 44px, the same bar every other v3 control in
-  //    this file is held to). R4 (task 1, auto-submit) removed the filter
-  //    bar's own submit button entirely — every control now submits itself
-  //    on change (registration-hub-registrant-filters.tsx's own header
-  //    comment) — so the status <select> (still present, still min-h-11) is
-  //    the stand-in; it is not interacted with here (a change would
-  //    navigate away via requestSubmit()), only measured.
+  // 4) The filter bar (B6 T20 + T21, spec §8) — ONE DOM, two faces. From md the
+  //    A3 pill bar: each filter is a pill with a native <select> laid over it.
+  //    Below md the pill row folds away; the bar is the search box, a Filters
+  //    button with a count, a removable chip per set filter, and a bottom sheet
+  //    (the house Modal) whose edits are staged until "Show registrants".
+  //    Whichever face this width shows is driven END TO END — one select change
+  //    and one × — because a markup test cannot see that a control is
+  //    reachable (AGENTS.md class 22: the phone controls sit behind a fold, so
+  //    the sheet is OPENED, never assumed open; the open is retried because a
+  //    tap before React has attached is lost, not queued, and never doubled).
+  const vw = projectViewport()?.width ?? 0;
+  const hub = `/o/${org.slug}/c/${comp.data!.slug}/registration?tab=registrants`;
   const filters = page.locator("[data-registration-hub-registrant-filters]");
+  const rowOf = (id: string) => page.locator(`[data-registration-hub-registrant-row][data-registration-id="${id}"]`);
+  /** What is under a point, and which clear link (if any) it belongs to. */
+  const hitAt = (x: number, y: number) =>
+    page.evaluate(
+      ([px, py]) => {
+        const el = document.elementFromPoint(px!, py!);
+        return {
+          tag: el?.tagName ?? null,
+          name: el?.getAttribute("name") ?? null,
+          clearOne: el?.closest("[data-filter-clear-one]")?.getAttribute("data-filter-clear-one") ?? null,
+          chipClear: el?.closest("[data-chip-clear]")?.getAttribute("data-chip-clear") ?? null,
+        };
+      },
+      [x, y] as const,
+    );
+  const kindFilter = (u: URL) => u.pathname.endsWith("/registration") && u.searchParams.get("kind");
+
   await expect(filters).toBeVisible();
-  const statusSelect = filters.locator('select[name="status"]');
-  const box = await statusSelect.boundingBox();
-  expect(box, "filter status select must have a measurable box").not.toBeNull();
-  // B6 T20 (A3 pill bar): the select is laid over its pill, so its box IS the
-  // pill's. Below md the pill keeps the 44px touch height; from md up the owner-
-  // approved bar is 40px ("every control is 40 px tall", registration-redesign
-  // spec §8). md is 768, the same break the bar's own `md:h-10` switches at.
-  const filterControlMin = (projectViewport()?.width ?? 0) >= 768 ? 40 : 44;
-  expect(box!.height, `filter controls must stay >=${filterControlMin}px tall`).toBeGreaterThanOrEqual(filterControlMin);
+  if (vw >= 768) {
+    // 4a) The pill face. The phone row (Filters button, chips) is NOT shown.
+    await expect(filters.locator("[data-filter-pill-row]")).toBeVisible();
+    await expect(filters.locator("[data-filter-phone-row]")).toBeHidden();
+    await expect(filters.locator("[data-filters-open]")).toBeHidden();
+    await page.goto(`${hub}&kind=team`, { waitUntil: "load" });
+    await expect(rowOf(teamRegId)).toBeVisible({ timeout: 20_000 });
+    await expect(rowOf(soloRegId), "kind=team narrows the table").toHaveCount(0);
+
+    // 4b) Each pill is 40px (spec §8) and its native select IS the pill's box —
+    //     T20 shipped an overlay whose `absolute` could be deleted with every
+    //     class test green (the select then measured 139px inside a 253px pill).
+    const pill = filters.locator('[data-filter-pill="kind"]');
+    const select = pill.locator("select");
+    const pb = (await pill.boundingBox())!;
+    const sb = (await select.boundingBox())!;
+    expect(pb, "the kind pill is measurable").not.toBeNull();
+    expect(sb, "the kind select is measurable").not.toBeNull();
+    expect(pb.height, "pills are 40px tall from md").toBeGreaterThanOrEqual(40);
+    for (const k of ["x", "y", "width", "height"] as const) {
+      expect(Math.abs(sb[k] - pb[k]), `select ${k} must equal the pill's (${sb[k]} vs ${pb[k]})`).toBeLessThanOrEqual(1);
+    }
+    // ...and the pointer lands where it should: on the select over the face, on
+    // the × link over the select.
+    const left = await hitAt(pb.x + 8, pb.y + pb.height / 2);
+    expect(left, "a tap on the pill's left edge hits the select").toMatchObject({ tag: "SELECT", name: "kind" });
+    const xb = (await pill.locator("[data-filter-clear-one]").boundingBox())!;
+    const onX = await hitAt(xb.x + xb.width / 2, xb.y + xb.height / 2);
+    expect(onX.clearOne, "a tap on the × hits the × link").toBe("kind");
+    await expectNoHorizontalScroll(page);
+
+    // 4c) One select change, end to end.
+    await select.selectOption("individual");
+    await page.waitForURL((u) => kindFilter(u) === "individual");
+    await expect(rowOf(soloRegId)).toBeVisible({ timeout: 20_000 });
+    await expect(rowOf(teamRegId), "kind=individual hides the team entry").toHaveCount(0);
+
+    // 4d) One ×, end to end: it drops kind, keeps the rest of the address.
+    await filters.locator('[data-filter-clear-one="kind"]').click();
+    await page.waitForURL((u) => u.pathname.endsWith("/registration") && !u.searchParams.has("kind"));
+    expect(new URL(page.url()).searchParams.get("tab"), "× stays on the Registrants tab").toBe("registrants");
+    await expect(rowOf(teamRegId)).toBeVisible({ timeout: 20_000 });
+    await expect(rowOf(soloRegId)).toBeVisible();
+  } else {
+    // 4a) The phone face. The pill row is folded away; the Filters button is the
+    //     way in, 44px tall.
+    const open = filters.locator("[data-filters-open]");
+    // Scoped to THIS dialog: the cookie banner is not a Modal, but another dialog must never make this strict.
+    const sheet = page.getByRole("dialog").filter({ has: page.locator("[data-filter-sheet-form]") });
+    await expect(open).toBeVisible();
+    await expect(filters.locator("[data-filter-pill-row]")).toBeHidden();
+    await expect(filters.locator("[data-filter-phone-row]")).toBeVisible();
+    const ob = (await open.boundingBox())!;
+    expect(ob, "the Filters button is measurable").not.toBeNull();
+    expect(ob.height, "the Filters button must stay a 44px touch target").toBeGreaterThanOrEqual(44);
+    await expect(open.locator("[data-filters-count]"), "nothing set: no count").toHaveCount(0);
+    await expect(sheet).toHaveCount(0);
+    await expectNoHorizontalScroll(page);
+
+    const openSheet = async () => {
+      await expect(async () => {
+        if (!(await sheet.isVisible())) await open.click();
+        await expect(sheet).toBeVisible({ timeout: 1_500 });
+      }).toPass({ timeout: 20_000 });
+    };
+
+    // 4b) The sheet holds every filter and Sort, fits this width, and keeps its
+    //     footer inside the viewport (nothing to scroll the PAGE for).
+    await openSheet();
+    for (const name of ["status", "division_id", "kind", "sort"]) {
+      await expect(sheet.locator(`select[name="${name}"]`), `sheet select ${name}`).toBeVisible();
+    }
+    for (const name of ["free_agent", "consent_pending"]) {
+      await expect(sheet.locator(`input[name="${name}"]`), `sheet switch ${name}`).toBeAttached();
+    }
+    const show = sheet.locator("[data-filter-sheet-show]");
+    await expect(show).toBeVisible();
+    const showBox = (await show.boundingBox())!;
+    const viewport = page.viewportSize()!;
+    expect(showBox.height, "Show registrants is a 44px target").toBeGreaterThanOrEqual(44);
+    expect(showBox.y + showBox.height, "Show registrants is inside the viewport").toBeLessThanOrEqual(viewport.height);
+    expect(showBox.x + showBox.width).toBeLessThanOrEqual(viewport.width);
+    await expectNoHorizontalScroll(page);
+
+    // 4c) Edits are STAGED: changing a select navigates nowhere, and closing the
+    //     sheet (Escape) discards them and hands focus back to the button.
+    const before = page.url();
+    await sheet.locator('select[name="kind"]').selectOption("individual");
+    await page.waitForTimeout(400); // a negative: an auto-submit would navigate within this
+    expect(page.url(), "a staged edit must not navigate").toBe(before);
+    await page.keyboard.press("Escape");
+    await expect(sheet).toHaveCount(0);
+    await expect(open, "closing returns focus to the trigger").toBeFocused();
+    expect(page.url()).toBe(before);
+    await openSheet();
+    await expect(sheet.locator('select[name="kind"]'), "a discarded edit is gone on reopen").toHaveValue("");
+
+    // 4d) One select change, end to end: stage it, Show registrants applies it with ONE push.
+    await sheet.locator('select[name="kind"]').selectOption("individual");
+    await show.click();
+    await page.waitForURL((u) => kindFilter(u) === "individual");
+    await expect(sheet).toHaveCount(0);
+    await expect(rowOf(soloRegId)).toBeVisible({ timeout: 20_000 });
+    await expect(rowOf(teamRegId), "kind=individual hides the team entry").toHaveCount(0);
+    await expect(filters.locator("[data-filters-open] [data-filters-count]")).toHaveText("1");
+
+    // 4e) One chip ×, end to end — 44px, and the pointer reaches it.
+    const chipX = filters.locator('[data-chip-clear="kind"]');
+    await expect(chipX).toBeVisible();
+    const cb = (await chipX.boundingBox())!;
+    expect(cb.width, "the chip × is a 44px-wide target").toBeGreaterThanOrEqual(44);
+    expect(cb.height, "the chip × is a 44px-tall target").toBeGreaterThanOrEqual(44);
+    expect((await hitAt(cb.x + cb.width / 2, cb.y + cb.height / 2)).chipClear).toBe("kind");
+    await expectNoHorizontalScroll(page);
+    await chipX.click();
+    await page.waitForURL((u) => u.pathname.endsWith("/registration") && !u.searchParams.has("kind"));
+    await expect(rowOf(teamRegId)).toBeVisible({ timeout: 20_000 });
+    await expect(rowOf(soloRegId)).toBeVisible();
+    await expect(filters.locator("[data-filters-open] [data-filters-count]")).toHaveCount(0);
+  }
   await expectNoHorizontalScroll(page);
 });
 
