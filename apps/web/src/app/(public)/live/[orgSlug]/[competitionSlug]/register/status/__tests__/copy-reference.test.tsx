@@ -54,6 +54,21 @@ describe("CopyReference", () => {
     expect(liveRegion(island)).toBe("Copied");
   });
 
+  // B4 design review: "Copied" reached a screen reader twice, once from the live region and once as the button's new name. It is now
+  // announced once, by the live region; the button's accessible name stays what pressing it does ("Copy reference"), while its
+  // visible label still reads "Copied" for the moment.
+  it("'Copied' reaches assistive tech exactly once: the live region says it, the button's name stays 'Copy reference'", async () => {
+    const island = mount();
+    const nameOf = () => propsOf(island.tree().find((e) => e.type === "button")!)["aria-label"];
+    expect(nameOf(), "before the press").toBe("Copy reference");
+    await press(island);
+    expect(buttonText(island), "premise: the visible label reads Copied").toBe("Copied");
+    expect(nameOf(), "after the press, the name is unchanged").toBe("Copy reference");
+    // What a screen reader is handed: each element's accessible name (aria-label, else its own text) plus the live region's text.
+    const exposed = [String(nameOf()), liveRegion(island)];
+    expect(exposed.filter((text) => text === "Copied"), "announced once").toHaveLength(1);
+  });
+
   it("offers the copy again once the moment passes, and a second press copies again", async () => {
     const island = mount();
     await press(island);
