@@ -45,6 +45,8 @@ vi.mock("@/server/usecases/audit", async (importOriginal) => {
 
 // Test 9: the outbox refuses the enqueue once (after the submit committed), armed immediately before the call under test.
 const enqueueGate = vi.hoisted(() => ({ failOnce: false, calls: 0 }));
+// Section 5: a slow machine. The next `dispatchNow` (an organiser action's deferred first attempt) waits until the case releases it.
+const dispatchHold = vi.hoisted(() => ({ armed: false, heldIds: [] as string[], release: null as null | (() => void) }));
 vi.mock("@/server/email-outbox", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/server/email-outbox")>();
   return {
@@ -56,6 +58,14 @@ vi.mock("@/server/email-outbox", async (importOriginal) => {
         throw new Error("the outbox refused the row");
       }
       return actual.enqueueEmail(...args);
+    },
+    dispatchNow: (...args: Parameters<typeof actual.dispatchNow>) => {
+      if (!dispatchHold.armed) return actual.dispatchNow(...args);
+      dispatchHold.armed = false;
+      dispatchHold.heldIds = [...args[0]];
+      return new Promise<void>((resolve) => {
+        dispatchHold.release = resolve;
+      }).then(() => actual.dispatchNow(...args));
     },
   };
 });
@@ -123,6 +133,9 @@ beforeEach(() => {
   auditGate.failOnce = false;
   enqueueGate.failOnce = false;
   enqueueGate.calls = 0;
+  // A case that failed while holding a dispatch must not leave its tail pending: every later `flushDeferred` would wait on it for ever.
+  dispatchHold.release?.();
+  Object.assign(dispatchHold, { armed: false, heldIds: [], release: null });
   deliverMock.mockReset();
   deliverMock.mockImplementation(ok);
 });
@@ -798,7 +811,14 @@ describe.skipIf(!HAS_DB)("D4: the confirmation's language, through the real prod
 describe.skipIf(!HAS_DB)("a queued confirmation is a frozen snapshot (DB)", () => {
   const paidLine = dictionarySubject("en", "registration.textFee", { amount: "£15.00" });
 
-  it("a fact changed while the row waits: a resend retires the stale row and the NEW state is what sends", async () => {
+  // The payment mark also queues its own mail ("Payment received", `registration_paid`) to the same address, and its first attempt is a
+  // deferred tail. Where that tail lands against the provider coming back is machine timing, so the case runs both ways: settled
+  // before (flushed while the provider still answers 503), and held until after (a slow machine - it is then accepted as a second
+  // mail to the address). The confirmation is counted by its own rows' keys, never by address.
+  it.each([
+    { lands: "before the provider is back", late: false },
+    { lands: "after the provider is back (a slow machine)", late: true },
+  ])("a fact changed while the row waits: a resend retires the stale row and the NEW state is what sends (payment mail lands $lands)", async ({ late }) => {
     const w = await world({ fee: 1500 });
     deliverMock.mockReset().mockImplementation(later);
     const out = await submit(w);
@@ -810,19 +830,38 @@ describe.skipIf(!HAS_DB)("a queued confirmation is a frozen snapshot (DB)", () =
     expect(staleText, "premise: the waiting row asks for the fee").toContain(paidLine);
 
     // The fact changes while the row waits: the organiser records the payment (the entry is now confirmed and owes nothing).
+    dispatchHold.armed = late;
     await markRegistrationPaidOffline(w.owner, regId);
+    if (!late) await flushDeferred();
+    const [paid] = await sql<{ id: string; status: string; attempts: number }[]>`
+      select id, status, attempts from email_outbox where kind = 'registration_paid' and ref_type = 'registration' and ref_id = ${regId}`;
+    expect(paid, "premise: the payment mark queued its own mail").toBeDefined();
+    if (late) {
+      expect(dispatchHold.heldIds, "premise: the held dispatch is the payment mail's").toEqual([paid!.id]);
+      expect(paid, "premise: held, it has not been attempted yet").toMatchObject({ status: "queued", attempts: 0 });
+    } else {
+      expect(paid, "premise: flushed, its first attempt met the 503").toMatchObject({ status: "queued", attempts: 1 });
+    }
     const [still] = await rowsOf(groupId);
     expect(openBody(still!.body_sealed!).text, "the waiting row did NOT follow the change: it is a snapshot").toBe(staleText);
 
     // The resend writes the new state; the stale row is retired and the provider is back.
     deliverMock.mockReset().mockImplementation(ok);
+    if (late) {
+      dispatchHold.release!();
+      await flushDeferred();
+    }
     expect(await resendRegistrationConfirmation(w.owner, regId, ORIGIN)).toEqual({ sent: true });
     const rows = await rowsOf(groupId);
     expect(rows.map((r) => r.status)).toEqual(["replaced", "sent"]);
     await tickNow(rows.map((r) => r.id));
 
-    const sent = callsToAddress(out.email);
-    expect(sent, "exactly one mail was accepted, and it is the new one").toHaveLength(1);
+    const keys = new Set(rows.map((r) => idempotencyKey(r.id)));
+    const sent = allCalls().filter((c) => keys.has(c.idempotencyKey));
+    expect(sent, "exactly one confirmation was accepted, and it is the new one").toEqual(callsFor(rows[1]!.id));
+    expect(sent).toHaveLength(1);
+    expect(callsFor(paid!.id), "the payment mail is its own mail, accepted only if it landed after the provider was back").toHaveLength(late ? 1 : 0);
+    expect(callsToAddress(out.email), "so a count by address reads the payment mail as a second confirmation").toHaveLength(late ? 2 : 1);
     expect(sent[0]!.text, "the mail that arrived no longer asks for the fee").not.toContain(paidLine);
     expect(sent[0]!.text).not.toBe(staleText);
     expect(callsFor(rows[0]!.id), "the stale row was never sent again").toHaveLength(0);
