@@ -64,7 +64,8 @@ function selfRow(
 
 function seedEntry(entry: CartEntry, contact: ContactState, division: SeedDivision | undefined): CartEntry {
   // Polish wave P5 (H-1): a solo sign-up is the registrant looking for a team - its ONE row is theirs, seeded like any self row
-  // (blank-only). A solo saved before the form collected its player has no row: it gets one here.
+  // (`selfRow`: filled while blank, and following a Contact rename while it still holds what was seeded, never a hand-edited value).
+  // A solo saved before the form collected its player has no row: it gets one here.
   if (entry.free_agent) {
     const row = entry.players[0] ?? { ...EMPTY_ROSTER_PLAYER };
     const seeded = selfRow(row, contact, division, entry.seeded_from);

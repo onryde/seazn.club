@@ -118,8 +118,9 @@ export function prevStepIndex(current: number): number {
  * straight to a later step — must not steal focus; it only arms. Every run
  * after that reflects a REAL stepIndex change: once `hydrated` is true it
  * never flips again, so stepIndex is the only remaining thing that can
- * rerun the effect, and nothing but goNext/goBack ever calls setStepIndex
- * post-hydration.
+ * rerun the effect. Post-hydration, the callers of setStepIndex are goNext,
+ * goBack, and (B2) the step rail's jump and Review's Edit; each is a
+ * deliberate move to another step, so each one moves focus to its heading.
  */
 export function stepFocusTransition(hydrated: boolean, armed: boolean): { focus: boolean; armed: boolean } {
   if (!hydrated) return { focus: false, armed };

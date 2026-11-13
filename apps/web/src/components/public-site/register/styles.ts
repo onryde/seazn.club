@@ -29,7 +29,8 @@ export const BTN_FORWARD = `${BTN_PRIMARY} ml-auto text-center max-md:min-h-11 m
  *  secure payment…"). The outer span's `data-widest` carries the longest of the labels it will ever show; its `::after` draws that
  *  text invisibly in the SAME grid cell as the visible label (LABEL_SIZER_TEXT), so the cell, and the button around it, is always as
  *  wide AND as tall as the longest label — a click that changes the words moves nothing, including at 320 where the long ones wrap.
- *  The ghost is generated content, so it is not in the button's text or its accessible name. */
+ *  The ghost is `after:invisible` (visibility: hidden), so it is out of the accessibility tree and the button's accessible name; being
+ *  generated content would not by itself keep it out of either. */
 export const LABEL_SIZER = "grid after:invisible after:col-start-1 after:row-start-1 after:content-[attr(data-widest)]";
 /** The visible label, in the ghost's cell and centred against it (the cell may be taller than a short label). */
 export const LABEL_SIZER_TEXT = "col-start-1 row-start-1 self-center";
