@@ -10,6 +10,7 @@ import {
   isValidRefCode,
   normalizeRefCode,
   parseEntryReference,
+  parseTypedReference,
 } from "@/lib/ref-code";
 
 describe("REF_ALPHABET", () => {
@@ -195,5 +196,56 @@ describe("entryReferenceOf", () => {
 
   it("refuses a row the database cannot hold (position past the size), by entryReference's own name", () => {
     expect(() => entryReferenceOf({ ref_code: generateRefCode(), cart_position: 3, cart_size: 1 })).toThrow(RangeError);
+  });
+});
+
+// Registration redesign B5 T18 review (m1): a person types, pastes or reads out the reference the mails now print, `SZ-XXXX-XXXX-2`, into
+// /r/<ref> and the by-ref lookups. The suffix names the entry; the cart's reference is what finds the cart.
+describe("parseTypedReference", () => {
+  it("a bare reference reads as before, however it was typed: any case, with or without the SZ and the dashes, spaces anywhere", () => {
+    const ref = generateRefCode();
+    const bare = ref.replace(/^SZ-/, "").replace("-", "");
+    for (const typed of [ref, ref.toLowerCase(), ` ${ref} `, `sz ${bare.slice(0, 4)} ${bare.slice(4)}`, bare, `SZ${bare}`]) {
+      expect(parseTypedReference(typed), JSON.stringify(typed)).toEqual({ refCode: ref, position: null });
+    }
+  });
+
+  it("a suffixed reference reads as the cart's reference and the entry's number, in any case and trimmed", () => {
+    const ref = generateRefCode();
+    expect(parseTypedReference(`${ref}-2`)).toEqual({ refCode: ref, position: 2 });
+    expect(parseTypedReference(` ${ref.toLowerCase()}-12 `)).toEqual({ refCode: ref, position: 12 });
+  });
+
+  it("is parseEntryReference's own reading of what entryReference prints, for every position the column holds", () => {
+    let checked = 0;
+    for (let i = 0; i < 10; i++) {
+      const ref = generateRefCode();
+      for (const [position, size] of [[1, 1], [1, 2], [2, 2], [7, 9], [32767, 32767]] as const) {
+        const printed = entryReference(ref, position, size);
+        expect(parseTypedReference(printed), printed).toEqual({ refCode: ref, position: size === 1 ? null : position });
+        checked += 1;
+      }
+    }
+    expect(checked, "anti-vacuity").toBe(50);
+  });
+
+  it("refuses what no entry can carry: position 0, a leading zero, past the column, a negative or a non-number", () => {
+    const ref = generateRefCode();
+    const refused = [`${ref}-0`, `${ref}-02`, `${ref}-32768`, `${ref}-99999999`, `${ref}--1`, `${ref}-x`, `${ref}-2-3`, `${ref}2`];
+    for (const typed of refused) expect(parseTypedReference(typed), typed).toBeNull();
+    expect(refused.length, "anti-vacuity").toBe(8);
+  });
+
+  it("the checksum still rejects a mistyped cart reference, with or without a suffix", () => {
+    const ref = generateRefCode();
+    const chars = ref.replace("SZ-", "").replace(/-/g, "").split("");
+    chars[2] = REF_ALPHABET[(REF_ALPHABET.indexOf(chars[2]!) + 1) % REF_ALPHABET.length]!;
+    const typo = formatRefCode(chars.join(""));
+    expect(parseTypedReference(typo)).toBeNull();
+    expect(parseTypedReference(`${typo}-2`)).toBeNull();
+  });
+
+  it("refuses nothing-shaped input", () => {
+    for (const typed of ["", "   ", "SZ", "-2", "hello", "SZ-ABCD"]) expect(parseTypedReference(typed), JSON.stringify(typed)).toBeNull();
   });
 });

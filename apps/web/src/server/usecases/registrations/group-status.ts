@@ -3,10 +3,10 @@ import "server-only";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { entryPriceCents, isTerminalRegistrationStatus, ownPaymentRefundedCents } from "@/lib/registration-status";
-import { entryReferenceOf, isValidRefCode, normalizeRefCode } from "@/lib/ref-code";
+import { entryReferenceOf } from "@/lib/ref-code";
 import { resolveVenueTz } from "@/lib/tz";
 import type { RegistrationSettingsRow, RegistrationRow, RegistrationGroupRow } from "./types";
-import { loadSettings, DUMMY_ACCESS_HASH, tokenMatchesHash, GROUP_ID_RE } from "./lookups";
+import { loadSettings, DUMMY_ACCESS_HASH, tokenMatchesHash, typedReference, GROUP_ID_RE } from "./lookups";
 import { type ResolvedRefundPolicy, resolveRefundPolicy } from "./refunds";
 import { effectivePoolDeadline } from "./list";
 import { waitlistPositionSql } from "./waitlist";
@@ -176,7 +176,9 @@ export interface GroupStatusView {
    *  payment_method at submit — `assertUniformPaymentMethod`). */
   charges_enabled: boolean;
   /** RS007: the resolved offline instructions ({{reference}} left
-   *  un-substituted — the page fills it in with THIS cart's own ref_code),
+   *  un-substituted — the page fills it in with the reference the entry due
+   *  quotes: that entry's own when exactly one is due, the cart's ref_code
+   *  otherwise; `offlineInstructionsReference`, status/view-model.ts),
    *  division override falling back to the org's, or null for a
    *  stripe-method cart. Same resolution order `buildCartMail`'s email
    *  uses, so the page and the confirmation email never disagree about what
@@ -205,10 +207,12 @@ export interface GroupStatusView {
  */
 export async function groupByRef(ref: string, accessToken: string): Promise<GroupStatusView> {
   const notFound = () => new HttpError(404, "registration not found");
-  const canonical = normalizeRefCode(ref);
-  if (!isValidRefCode(canonical)) throw notFound();
-  const [group] = await sql<RegistrationGroupRow[]>`
+  const { canonical, position } = typedReference(ref);
+  const [found] = await sql<RegistrationGroupRow[]>`
     select * from registration_groups where ref_code = ${canonical}`;
+  // An entry number the cart was never sent with (B5 T18 review m1) is no cart at all: the same dummy-hash compare and the same 404 as an
+  // unknown reference, so the number is no oracle on how many entries a cart has.
+  const group = found && (position === null || position <= found.cart_size) ? found : undefined;
   return buildGroupStatusView(group, accessToken, notFound);
 }
 

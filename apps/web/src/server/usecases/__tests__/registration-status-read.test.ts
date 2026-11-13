@@ -73,10 +73,12 @@ import {
   refundRegistration,
   resendRegistrationConfirmationPublic,
   sweepRegistrations,
+  withdrawRegistrationByRef,
   withdrawRegistrationOrganiser,
   type GroupStatusView,
 } from "@/server/usecases/registrations";
 import { generateRefCode } from "@/lib/ref-code";
+import { regByRef } from "../registrations/lookups";
 import {
   cardEntryReference,
   cartHeadline,
@@ -1673,6 +1675,51 @@ describe.skipIf(!HAS_DB)("groupById: each entry's own reference and the cart's s
     expect(offlineInstructionsReference(soloView.entries, soloView)).toBe(solo.ref);
     expect(soloView.entries.map((e) => cardEntryReference(e, soloView)), "a one-entry cart's card prints none").toEqual([null]);
   });
+
+  // Review m6: every cart above sits in ONE division. A cart is a person's whole basket, and the entries of one basket can sit in different
+  // divisions with different settings (a free one beside a paid one, a different payment method on the free one: a cart's PAID divisions
+  // agree on a method at submit, a free one owes nothing and need not). The references, the card rule and the offline rule are the same
+  // for it, read through the real reader.
+  it("a cart across two divisions: each entry is its own -n whichever division it is in, and the offline rule counts what is DUE, not what is in the cart", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division: paid } = await rig(owner);
+    await sql`
+      insert into registration_settings
+        (division_id, enabled, entrant_kind, fee_cents, payment_method, payment_instructions, approval, allow_free_agents)
+      values (${paid.id}, true, 'individual', 500, 'offline', 'Quote {{reference}} to the club', 'auto', false)`;
+    const free = await createDivision(owner, competition.id, {
+      name: "Free Social",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    });
+    await sql`
+      insert into registration_settings
+        (division_id, enabled, entrant_kind, fee_cents, payment_method, approval, allow_free_agents)
+      values (${free.id}, true, 'individual', 0, 'stripe', 'auto', false)`;
+
+    const ref = freshRef();
+    const first = await seedRegistration(competition.id, paid.id, SETTINGS, { refCode: ref, displayName: "Paid Entry" });
+    await seedSecondEntry(first.registration.group_id, free.id, 0, "Free Entry", "pending");
+    const view = await groupById(first.registration.group_id, first.access_token);
+    expect(view.entries.map((e) => [e.display_name, e.division_name, e.payment_method]), "premise: two divisions, two methods").toEqual([
+      ["Paid Entry", "Open", "offline"],
+      ["Free Entry", "Free Social", "stripe"],
+    ]);
+    expect(view.cart_size).toBe(2);
+    expect(view.entries.map((e) => e.entry_ref)).toEqual([`${ref}-1`, `${ref}-2`]);
+    expect(view.entries.map((e) => cardEntryReference(e, view)), "the card prints each entry's own").toEqual([`${ref}-1`, `${ref}-2`]);
+    expect(offlineInstructionsReference(view.entries, view), "exactly one entry owes (the free one owes nothing): its own reference").toBe(`${ref}-1`);
+
+    // The other way round: the entry that owes is entry 2, in the other division.
+    const second2 = await seedRegistration(competition.id, free.id, SETTINGS, { refCode: freshRef(), displayName: "Free First", amountCents: 0 });
+    const paidSecond = await seedSecondEntry(second2.registration.group_id, paid.id, 500, "Paid Second", "pending");
+    const flipped = await groupById(second2.registration.group_id, second2.access_token);
+    expect(flipped.entries.map((e) => e.display_name), "premise: the free entry is first").toEqual(["Free First", "Paid Second"]);
+    expect(flipped.entries.find((e) => e.id === paidSecond.id)!.entry_ref).toBe(`${flipped.ref_code}-2`);
+    expect(offlineInstructionsReference(flipped.entries, flipped), "the entry that owes holds position 2").toBe(`${flipped.ref_code}-2`);
+  });
 });
 
 // B4 fix round 3 (re-review I1): the page tells the person before the hourly sweep what the sweep is about to do. Read through the real
@@ -1715,5 +1762,89 @@ describe.skipIf(!HAS_DB)("the status headline before and after the sweep (B4 fix
     const after = await groupById(t.registration.group_id, t.access_token);
     expect(after.entries[0]!.status, "the expiry pass expired it").toBe("expired");
     expect(cartHeadline(after.entries, after)).toBe("closed");
+  });
+});
+
+// Registration redesign B5 T18 review (m1). The mails now print an entry's own reference (`SZ-XXXX-XXXX-2`), and a person reads that off a
+// mail or a bank statement and types it into /r/<ref>. Every by-ref door takes the number and finds the cart by the reference it belongs to.
+// The number is held against what the cart was SENT with (`cart_size`, withdrawn rows counted): a number the cart never had is the same
+// 404 as a reference that does not exist, in message, status and cost, so the suffix is no oracle on how big a cart is.
+describe.skipIf(!HAS_DB)("a typed entry reference finds the cart; a number the cart never had is the unknown-reference 404 (B5 T18 review m1)", () => {
+  const SETTINGS = { ...SETTINGS_BASE, fee_cents: 500, currency: "gbp", payment_method: "stripe" as const };
+
+  async function cartOf(size: number) {
+    const { competition, division } = await stripeSettingsRig();
+    const ref = freshRef();
+    const first = await seedRegistration(competition.id, division.id, SETTINGS, { refCode: ref, displayName: "Entry 1" });
+    const entries = [first.registration];
+    for (let n = 2; n <= size; n++) entries.push(await seedSecondEntry(first.registration.group_id, division.id, 500, `Entry ${n}`, "pending"));
+    return { ref, token: first.access_token, groupId: first.registration.group_id, entries };
+  }
+  const failure = (p: Promise<unknown>) => p.then(() => null, (e: unknown) => e as HttpError);
+  /** What a caller (or an attacker) can read off a refusal. */
+  const shape = (e: HttpError | null) => (e ? { is: e instanceof HttpError, status: e.status, message: e.message } : null);
+
+  it("groupByRef and publicCartByRef resolve `<ref>-1` and `<ref>-2` of a 2-entry cart to the whole cart, as the bare reference does", async () => {
+    const c = await cartOf(2);
+    const bare = await groupByRef(c.ref, c.token);
+    for (const typed of [`${c.ref}-1`, `${c.ref}-2`, ` ${c.ref.toLowerCase()}-2 `]) {
+      const view = await groupByRef(typed, c.token);
+      expect(view.ref_code, typed).toBe(c.ref);
+      expect(view.entries.map((e) => e.id), typed).toEqual(bare.entries.map((e) => e.id));
+      const pub = await publicCartByRef(typed);
+      expect(pub.entries.map((e) => e.id), `publicCartByRef ${typed}`).toEqual(bare.entries.map((e) => e.id));
+    }
+    expect((await regByRef(`${c.ref}-2`)).group_id, "regByRef").toBe(c.groupId);
+  });
+
+  it("a number past the cart's size, zero and one past the column are the unknown-reference 404, through every by-ref door", async () => {
+    const c = await cartOf(2);
+    const unknown = freshRef();
+    const baseline = shape(await failure(groupByRef(unknown, c.token)));
+    expect(baseline, "premise: an unknown reference is a 404").toEqual({ is: true, status: 404, message: "registration not found" });
+    let checked = 0;
+    for (const n of [3, 4, 0, 32768, 99999]) {
+      const typed = `${c.ref}-${n}`;
+      expect(shape(await failure(groupByRef(typed, c.token))), `groupByRef ${typed}`).toEqual(baseline);
+      expect(shape(await failure(publicCartByRef(typed))), `publicCartByRef ${typed}`).toEqual(baseline);
+      expect(shape(await failure(regByRef(typed))), `regByRef ${typed}`).toEqual(baseline);
+      expect(shape(await failure(withdrawRegistrationByRef(typed, c.entries[1]!.id, c.token))), `withdrawRegistrationByRef ${typed}`).toEqual(baseline);
+      checked += 4;
+    }
+    expect(checked, "anti-vacuity: every door, every number").toBe(20);
+    const [{ status }] = await sql<{ status: string }[]>`select status from registrations where id = ${c.entries[1]!.id}`;
+    expect(status, "a refused withdrawal changed nothing").toBe("pending");
+  });
+
+  it("a good number with the WRONG token and a bad number with the RIGHT token are the same refusal as an unknown reference (no oracle either way)", async () => {
+    const c = await cartOf(2);
+    const unknown = shape(await failure(groupByRef(freshRef(), c.token)));
+    expect(unknown).not.toBeNull();
+    expect(shape(await failure(groupByRef(`${c.ref}-2`, "regtok_" + randomUUID())))).toEqual(unknown);
+    expect(shape(await failure(groupByRef(`${c.ref}-9`, c.token)))).toEqual(unknown);
+  });
+
+  it("the cart's size is what it was SENT with: after entry 1 is withdrawn, -1 and -2 still resolve; a lone survivor of three keeps -3 and -4 is refused", async () => {
+    const c = await cartOf(2);
+    await sql`update registrations set status = 'withdrawn', withdrawn_at = now() where id = ${c.entries[0]!.id}`;
+    for (const n of [1, 2]) expect((await groupByRef(`${c.ref}-${n}`, c.token)).ref_code, `-${n}`).toBe(c.ref);
+
+    const three = await cartOf(3);
+    await sql`delete from registrations where id in ${sql([three.entries[0]!.id, three.entries[1]!.id])}`;
+    expect((await groupByRef(`${three.ref}-3`, three.token)).entries.map((e) => e.display_name), "premise: only entry 3 is left").toEqual(["Entry 3"]);
+    expect((await failure(groupByRef(`${three.ref}-4`, three.token)))?.status).toBe(404);
+  });
+
+  it("a one-entry cart takes its own bare reference and nothing numbered past 1", async () => {
+    const c = await cartOf(1);
+    expect((await groupByRef(c.ref, c.token)).entries).toHaveLength(1);
+    expect((await groupByRef(`${c.ref}-1`, c.token)).entries, "-1 is within a cart of one").toHaveLength(1);
+    expect((await failure(groupByRef(`${c.ref}-2`, c.token)))?.status).toBe(404);
+  });
+
+  it("self-withdraw by the typed reference of entry 2 withdraws entry 2 only, and answers with the whole cart", async () => {
+    const c = await cartOf(2);
+    const cart = await withdrawRegistrationByRef(`${c.ref}-2`, c.entries[1]!.id, c.token);
+    expect(cart.entries.map((e) => [e.display_name, e.status])).toEqual([["Entry 1", "pending"], ["Entry 2", "withdrawn"]]);
   });
 });

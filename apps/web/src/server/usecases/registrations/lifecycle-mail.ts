@@ -21,6 +21,7 @@ import {
 import { entryStanding, isTerminalRegistrationStatus } from "@/lib/registration-status";
 import { enqueueEmailOnce, expiryWithin, recipientLocale } from "@/server/email-outbox";
 import { money } from "@/lib/email-templates/shared";
+import { entryReferenceOf } from "@/lib/ref-code";
 import { log } from "@/server/logger";
 import type { Tx, RegistrationWithGroupRow, DivisionCtx } from "./types";
 import { divisionCtx, fallbackOrigin, loadSettings, regGroupCols } from "./lookups";
@@ -114,7 +115,10 @@ export async function queueRegistrationPaidMail(
           orgName: ctx.org_name,
           competitionName: ctx.comp_name,
           contactName: lead.contact_name,
-          refCode: lead.ref_code,
+          // The reference to quote against THIS payment (B5 T18 review I1): a payment of exactly one entry of a cart sent with two or more
+          // names that entry's own (`-2`), because the transfer it was made against did; a payment of several entries names the cart's,
+          // which finds them all. A one-entry cart is both, and `entryReferenceOf` gives it the bare reference.
+          refCode: entries.length === 1 ? entryReferenceOf(lead) : lead.ref_code,
           currency: lead.currency,
           entries: listed as [(typeof listed)[number], ...typeof listed],
           statusUrl: statusUrlOf(origin, lead),
@@ -143,7 +147,8 @@ interface Audience {
   to: string;
   /** Greeted by this name (the contact's, or the teammate's own); never the entry's. */
   name: string;
-  /** The quotable reference: the contact's, never a teammate's. */
+  /** The quotable reference: the contact's, never a teammate's. It is the ENTRY's own (`SZ-XXXX-XXXX-2` in a cart sent with two or more
+   *  entries, the bare cart reference otherwise): each of these mails is about one entry, and the player quotes what they paid against. */
   refCode: string | null;
   pick: string | null;
   userId: string | null;
@@ -158,7 +163,7 @@ const audienceOf = async (sp: Tx, reg: RegistrationWithGroupRow): Promise<Audien
       and consent_status in ('granted', 'guardian')
     order by created_at, id`;
   return [
-    { to: reg.contact_email, name: reg.contact_name, refCode: reg.ref_code, pick: reg.locale, userId: reg.user_id },
+    { to: reg.contact_email, name: reg.contact_name, refCode: entryReferenceOf(reg), pick: reg.locale, userId: reg.user_id },
     ...mates.map((m) => ({ to: m.email, name: m.full_name, refCode: null, pick: null, userId: m.user_id })),
   ];
 };

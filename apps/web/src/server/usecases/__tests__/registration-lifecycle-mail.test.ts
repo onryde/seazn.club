@@ -1749,3 +1749,162 @@ describe.skipIf(!HAS_DB)("the reject and lapse producers' own guards", () => {
     expect(await queue(), "the same promotion: nothing more").toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Registration redesign B5 T18 review (I1): a mail about ONE entry quotes THAT entry's reference
+// ---------------------------------------------------------------------------------------------------------------------------------
+// The five per-entry mails (approved, expired, withdrawn, rejected, promotion lapsed) went out with the CART's reference, so a player who
+// paid entry 2 by transfer and then read "your place was released" was handed a reference that also names entry 1. Each is driven through
+// its REAL producer (a usecase or the sweep), in a cart of one entry (the bare reference is right), of two (entry 2 is -2), and of two
+// with entry 1 withdrawn beforehand (the size is what the cart was SENT with, so the survivor is still -2). The expected reference line is
+// the dictionary's own, filled with the reference the cart was minted with: never typed here, never read back from the code under test.
+describe.skipIf(!HAS_DB)("B5 T18 review I1: the per-entry lifecycle mails quote the entry's own reference (real producers)", () => {
+  type AnyWorld = Awaited<ReturnType<typeof offlineWorld>> | Awaited<ReturnType<typeof stripeWorld>>;
+  const KINDS: {
+    kind: string;
+    ns: string;
+    world: () => Promise<AnyWorld>;
+    seed: RegistrationRow["status"];
+    drive: (w: AnyWorld, e: { id: string; group_id: string }) => Promise<void>;
+  }[] = [
+    { kind: "registration_approved", ns: "registrationApproved", world: () => offlineWorld(1500, "manual"), seed: "pending", drive: async (w, e) => void (await approveRegistration(w.owner, e.id)) },
+    { kind: "registration_expired", ns: "registrationExpired", world: () => stripeWorld(1500), seed: "pending", drive: async (_w, e) => { await overdue([e.group_id]); await sweepRegistrations(ORIGIN); } },
+    { kind: "registration_withdrawn", ns: "registrationWithdrawn", world: () => offlineWorld(1500, "auto"), seed: "pending", drive: async (w, e) => void (await withdrawRegistrationOrganiser(w.owner, e.id)) },
+    { kind: "registration_rejected", ns: "registrationRejected", world: () => offlineWorld(1500, "manual"), seed: "pending", drive: async (w, e) => void (await rejectRegistration(w.owner, e.id)) },
+    { kind: "registration_promotion_lapsed", ns: "registrationPromotionLapsed", world: () => stripeWorld(1500), seed: "waitlisted", drive: async (w, e) => { await promoteThenLapse(w as Awaited<ReturnType<typeof stripeWorld>>, e.id, e.group_id); await sweepRegistrations(ORIGIN); } },
+  ];
+  const referenceLine = async (ns: string, ref: string) => t(await getDictionary("en", "emails"), `${ns}.textReference`, { refCode: ref });
+
+  /** A cart of `size` entries (the LAST is the one under test), `withdrawnFirst` withdrawing entry 1 of a cart of two beforehand. */
+  async function run(k: (typeof KINDS)[number], size: 1 | 2, withdrawnFirst: boolean) {
+    const w = await k.world();
+    const to = address(`i1-${k.ns}`);
+    const ref = generateRefCode();
+    const entries: { id: string; group_id: string }[] = [];
+    if (size === 2) {
+      const first = await seedRegistration(w.competition.id, w.division.id, w.settings, { displayName: "Maya Cole", contactEmail: to, refCode: ref });
+      entries.push(first.registration);
+      const second = await seedSecondEntry(first.registration.group_id, w.division.id, 1500, "Maya Cole Jr", k.seed);
+      entries.push(second);
+      if (withdrawnFirst) await sql`update registrations set status = 'withdrawn', withdrawn_at = now() where id = ${first.registration.id}`;
+    } else {
+      const only = await seedRegistration(w.competition.id, w.division.id, w.settings, { displayName: "Maya Cole", contactEmail: to, refCode: ref, status: k.seed });
+      entries.push(only.registration);
+    }
+    const target = entries[entries.length - 1]!;
+    await k.drive(w, target);
+    const b = await body(k.kind, "registration", target.id, to);
+    return { ref, b };
+  }
+
+  let driven = 0;
+  for (const k of KINDS) {
+    it(`${k.kind}: a cart of one entry quotes the bare reference; entry 2 of two quotes -2, also after entry 1 is withdrawn`, async () => {
+      const solo = await run(k, 1, false);
+      expect(solo.b.text.split("\n"), "one entry: the cart's reference").toContain(await referenceLine(k.ns, solo.ref));
+      expect(solo.b.text, "and no suffix anywhere").not.toContain(`${solo.ref}-`);
+      expect(solo.b.html).not.toContain(`${solo.ref}-`);
+
+      for (const withdrawnFirst of [false, true]) {
+        const two = await run(k, 2, withdrawnFirst);
+        const label = withdrawnFirst ? "entry 1 withdrawn" : "both live";
+        expect(two.b.text.split("\n"), `${label}: the reference line of entry 2`).toContain(await referenceLine(k.ns, `${two.ref}-2`));
+        expect(words(two.b.html), `${label}: html`).toContain(`${two.ref}-2`);
+        expect(two.b.text, `${label}: never the bare cart reference or entry 1's`).not.toMatch(new RegExp(`${two.ref}(?!-2)`));
+        expect(two.b.html, `${label}: html carries no bare reference either`).not.toMatch(new RegExp(`${two.ref}(?!-2)`));
+      }
+      driven += 1;
+    }, 60_000);
+  }
+
+  it("covers every kind the fan-out sends (anti-vacuity: read off the producer's own source, and every case above ran)", async () => {
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync(new URL("../registrations/lifecycle-mail.ts", import.meta.url), "utf8");
+    const sent = [...src.matchAll(/fanOut\(tx, \{\s*kind: "(registration_[a-z_]+)"/g)].map((m) => m[1]!).sort();
+    expect(sent.length, "the scan found the fan-out kinds").toBeGreaterThanOrEqual(5);
+    expect(KINDS.map((k) => k.kind).sort(), "every fan-out kind is covered by a case").toEqual(sent);
+    expect(driven, "each case ran its three carts").toBe(KINDS.length);
+  });
+});
+
+// `registration_paid` is one mail per PAYMENT (B5 T18 review I1, mirroring the status page's offline rule): a payment of exactly one entry
+// of a cart sent with two or more quotes that entry's reference, a payment of several quotes the cart's, which finds them all.
+describe.skipIf(!HAS_DB)("B5 T18 review I1: the payment-received mail quotes the entry paid, or the cart when several were (real webhook / offline mark)", () => {
+  const line = async (ref: string) => t(await getDictionary("en", "emails"), "registrationPaid.textReference", { refCode: ref });
+
+  it("a card payment of both entries of a cross-division cart names the cart's reference", async () => {
+    const c = await stripeCart();
+    const ref = c.first.ref_code!;
+    await handleRegistrationCheckoutCompleted(c.session);
+    const b = await body("registration_paid", "registration", c.first.id);
+    expect(b.text.split("\n")).toContain(await line(ref));
+    expect(b.text, "both entries are in this mail, so no entry's suffix").not.toContain(`${ref}-`);
+    expect(b.html).not.toContain(`${ref}-`);
+  });
+
+  it("a payment of ONE entry of that cart (the other was withdrawn) names that entry's reference", async () => {
+    const c = await stripeCart({ secondStatus: "withdrawn" });
+    const ref = c.first.ref_code!;
+    await handleRegistrationCheckoutCompleted(c.session);
+    const b = await body("registration_paid", "registration", c.first.id);
+    expect(b.text.split("\n"), "entry 1 of a cart sent with two").toContain(await line(`${ref}-1`));
+    expect(words(b.html)).toContain(`${ref}-1`);
+    expect(b.text, "the status link stays the cart's: it is how the page is found").toContain(`/r/${ref}`);
+    expect(b.text).not.toContain(`/r/${ref}-`);
+  });
+
+  it("the organiser marking entry 2 paid offline names -2; a one-entry cart names the bare reference", async () => {
+    const w = await offlineWorld(1500, "auto");
+    const ref = generateRefCode();
+    const first = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("i1-paid2"), refCode: ref });
+    const second = await seedSecondEntry(first.registration.group_id, w.division.id, 1500, "Maya Cole Jr", "pending");
+    await markRegistrationPaidOffline(w.owner, second.id);
+    const b2 = await body("registration_paid", "registration", second.id);
+    expect(b2.text.split("\n")).toContain(await line(`${ref}-2`));
+
+    const solo = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("i1-paid1"), refCode: generateRefCode() });
+    await markRegistrationPaidOffline(w.owner, solo.registration.id);
+    const b1 = await body("registration_paid", "registration", solo.registration.id);
+    expect(b1.text.split("\n")).toContain(await line(solo.registration.ref_code!));
+    expect(b1.text).not.toContain(`${solo.registration.ref_code}-`);
+  });
+});
+
+// `refund_issued` names ONE entry and its amount, so it quotes that entry's reference (B5 T18 review I1). Disputes are organiser-facing and
+// cart-level: they keep the cart's reference (unchanged, nothing to assert here).
+describe.skipIf(!HAS_DB)("B5 T18 review I1: the refund receipt quotes the refunded entry's reference (real refundRegistration, real late-payment refund)", () => {
+  const line = async (ref: string) => t(await getDictionary("en", "emails"), "refundIssued.textReference", { refCode: ref });
+  const refundRef = async (orgId: string) => {
+    const rows = await sql<{ ref_id: string }[]>`select ref_id from email_outbox where kind = 'refund_issued' and org_id = ${orgId} order by created_at, id`;
+    expect(rows.length, "premise: the refund queued a receipt").toBeGreaterThan(0);
+    return rows[rows.length - 1]!.ref_id;
+  };
+
+  it("the organiser's refund of entry 2 of a 2-entry cart says -2; of a one-entry cart, the bare reference", async () => {
+    const w = await stripeWorld(1500);
+    const ref = generateRefCode();
+    const first = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("i1-ref"), refCode: ref });
+    const second = await seedSecondEntry(first.registration.group_id, w.division.id, 1500, "Maya Cole Jr", "pending");
+    await handleRegistrationCheckoutCompleted(fakeSession(second.id, 1500));
+    await refundRegistration(w.owner, second.id, undefined);
+    const b = await body("refund_issued", "refund", await refundRef(w.orgId));
+    expect(b.text.split("\n")).toContain(await line(`${ref}-2`));
+    expect(words(b.html)).toContain(`${ref}-2`);
+
+    const solo = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("i1-ref1"), refCode: generateRefCode() });
+    await handleRegistrationCheckoutCompleted(fakeSession(solo.registration.id, 1500));
+    await refundRegistration(w.owner, solo.registration.id, undefined);
+    const b1 = await body("refund_issued", "refund", await refundRef(w.orgId));
+    expect(b1.text.split("\n")).toContain(await line(solo.registration.ref_code!));
+    expect(b1.text).not.toContain(`${solo.registration.ref_code}-`);
+  });
+
+  it("the refund of a late payment for a withdrawn sibling (entry 2) says -2", async () => {
+    const c = await stripeCart({ secondStatus: "withdrawn" });
+    const ref = c.first.ref_code!;
+    await handleRegistrationCheckoutCompleted(c.session);
+    expect(stripeMock.refundCreate, "premise: the late payment for the withdrawn sibling was refunded").toHaveBeenCalledTimes(1);
+    const b = await body("refund_issued", "refund", await refundRef(c.w.orgId));
+    expect(b.text.split("\n"), "the refunded entry is entry 2 of the cart").toContain(await line(`${ref}-2`));
+  });
+});

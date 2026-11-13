@@ -4,7 +4,7 @@ import { timingSafeEqual } from "node:crypto";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { SPOT_HOLDERS } from "@/lib/registration-status";
-import { isValidRefCode, normalizeRefCode } from "@/lib/ref-code";
+import { parseTypedReference } from "@/lib/ref-code";
 import { audit } from "../audit";
 import type { Tx, RegistrationSettingsRow, RegistrationWithGroupRow, AnySql, DivisionCtx } from "./types";
 import { hashRegistrationToken } from "./helpers";
@@ -145,11 +145,17 @@ export async function regByToken(regId: string, token: string): Promise<Registra
   return reg;
 }
 
+/** What a typed reference names: the cart's reference, and the entry number quoted (null for a bare one). The checksum rejects typos
+ *  before the DB sees them; dashes/case are normalised so "sz abcd efgh" read over a phone still resolves, and `SZ-ABCD-EFGH-2` as the
+ *  mails print it resolves to the cart (B5 T18 review m1). A reference no entry could carry is the one 404 an unknown reference gets. */
+export function typedReference(ref: string): { canonical: string; position: number | null } {
+  const typed = parseTypedReference(ref);
+  if (!typed) throw new HttpError(404, "registration not found");
+  return { canonical: typed.refCode, position: typed.position };
+}
+
 export async function regByRef(ref: string): Promise<RegistrationWithGroupRow> {
-  // Checksum rejects typos before the DB sees them; normalise dashes/case so
-  // "sz abcd efgh" read over a phone still resolves.
-  const canonical = normalizeRefCode(ref);
-  if (!isValidRefCode(canonical)) throw new HttpError(404, "registration not found");
+  const { canonical, position } = typedReference(ref);
   // ref_code lives on the cart now (V364) — shared by every entry in it. A
   // cart can hold more than one entry (RS002/RS003 shipped group submit) —
   // this picks the oldest deterministically rather than an arbitrary one,
@@ -163,6 +169,7 @@ export async function regByRef(ref: string): Promise<RegistrationWithGroupRow> {
     select ${regGroupCols(sql)}
     from registrations r join registration_groups g on g.id = r.group_id
     where g.ref_code = ${canonical}
+      and (${position}::int is null or ${position}::int <= g.cart_size)
     order by r.created_at, r.id limit 1`;
   if (!reg) throw new HttpError(404, "registration not found");
   return reg;
@@ -184,12 +191,12 @@ export async function regByRefAndToken(
   entryId: string,
   token: string,
 ): Promise<RegistrationWithGroupRow> {
-  const canonical = normalizeRefCode(ref);
-  if (!isValidRefCode(canonical)) throw new HttpError(404, "registration not found");
+  const { canonical, position } = typedReference(ref);
   const [reg] = await sql<RegistrationWithGroupRow[]>`
     select ${regGroupCols(sql)}
     from registrations r join registration_groups g on g.id = r.group_id
     where g.ref_code = ${canonical} and r.id = ${entryId}
+      and (${position}::int is null or ${position}::int <= g.cart_size)
       and g.access_token_hash = ${hashRegistrationToken(token)}`;
   if (!reg) throw new HttpError(404, "registration not found");
   return reg;

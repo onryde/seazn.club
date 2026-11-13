@@ -114,3 +114,15 @@ export function isValidRefCode(raw: string): boolean {
   const payload = chars.slice(0, PAYLOAD_LEN);
   return checksum(payload) === chars.slice(PAYLOAD_LEN);
 }
+
+/** A reference as a PERSON gives it: typed, pasted or read off a mail or a bank statement (B5 T18 review). Either the cart's `SZ-XXXX-XXXX`
+ *  (read as `normalizeRefCode` always has: any case, with or without the `SZ` and the dashes, spaces anywhere) or an entry's own
+ *  `SZ-XXXX-XXXX-<n>` (the mails print it; `parseEntryReference`'s strict dashed form, any case, trimmed). `refCode` is the cart's, which
+ *  is what finds the cart; `position` is the entry number quoted, or null for a bare reference, for the caller to hold against the cart's
+ *  size. Null for anything no entry could carry (position 0, past the column), and for a cart reference that fails its checksum. */
+export function parseTypedReference(raw: string): { refCode: string; position: number | null } | null {
+  const entry = parseEntryReference(raw);
+  const refCode = entry ? entry.refCode : normalizeRefCode(raw);
+  if (!isValidRefCode(refCode)) return null;
+  return { refCode, position: entry?.position ?? null };
+}
