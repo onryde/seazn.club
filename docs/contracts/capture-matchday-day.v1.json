@@ -135,6 +135,18 @@
                       }
                     ]
                   },
+                  "round_tag": {
+                    "description": "The match as the web desk and the schedule board tag it: SF·1 and SF·2 for the two semi-finals, F for a round of one match, the round's R{n} code where the board codes no round (a group or Swiss round). Additive to round_label.",
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "home": {
                     "description": "The first side's name; null while the seat has no entrant.",
                     "anyOf": [
@@ -148,6 +160,28 @@
                   },
                   "away": {
                     "description": "The second side's name; null while the seat has no entrant.",
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "home_slot": {
+                    "description": "What the web desk prints for the first seat while it has no entrant (\"Winner of Group A\", \"Winner of SF·1\"), in English like round_label; null when the seat has an entrant or the web has no label for it.",
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "away_slot": {
+                    "description": "What the web desk prints for the second seat while it has no entrant; null when the seat has an entrant or the web has no label for it.",
                     "anyOf": [
                       {
                         "type": "string"
@@ -196,8 +230,11 @@
                   "sport_key",
                   "division_name",
                   "round_label",
+                  "round_tag",
                   "home",
                   "away",
+                  "home_slot",
+                  "away_slot",
                   "status",
                   "scheduled_at",
                   "summary"
@@ -242,6 +279,18 @@
                     }
                   ]
                 },
+                "round_tag": {
+                  "description": "The match as the web desk and the schedule board tag it: SF·1 and SF·2 for the two semi-finals, F for a round of one match, the round's R{n} code where the board codes no round (a group or Swiss round). Additive to round_label.",
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "home": {
                   "description": "The first side's name; null while the seat has no entrant.",
                   "anyOf": [
@@ -255,6 +304,28 @@
                 },
                 "away": {
                   "description": "The second side's name; null while the seat has no entrant.",
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "home_slot": {
+                  "description": "What the web desk prints for the first seat while it has no entrant (\"Winner of Group A\", \"Winner of SF·1\"), in English like round_label; null when the seat has an entrant or the web has no label for it.",
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "away_slot": {
+                  "description": "What the web desk prints for the second seat while it has no entrant; null when the seat has an entrant or the web has no label for it.",
                   "anyOf": [
                     {
                       "type": "string"
@@ -303,8 +374,11 @@
                 "sport_key",
                 "division_name",
                 "round_label",
+                "round_tag",
                 "home",
                 "away",
+                "home_slot",
+                "away_slot",
                 "status",
                 "scheduled_at",
                 "summary"
@@ -345,6 +419,18 @@
                     }
                   ]
                 },
+                "round_tag": {
+                  "description": "The match as the web desk and the schedule board tag it: SF·1 and SF·2 for the two semi-finals, F for a round of one match, the round's R{n} code where the board codes no round (a group or Swiss round). Additive to round_label.",
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "home": {
                   "description": "The first side's name; null while the seat has no entrant.",
                   "anyOf": [
@@ -358,6 +444,28 @@
                 },
                 "away": {
                   "description": "The second side's name; null while the seat has no entrant.",
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "home_slot": {
+                  "description": "What the web desk prints for the first seat while it has no entrant (\"Winner of Group A\", \"Winner of SF·1\"), in English like round_label; null when the seat has an entrant or the web has no label for it.",
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "away_slot": {
+                  "description": "What the web desk prints for the second seat while it has no entrant; null when the seat has an entrant or the web has no label for it.",
                   "anyOf": [
                     {
                       "type": "string"
@@ -406,8 +514,11 @@
                 "sport_key",
                 "division_name",
                 "round_label",
+                "round_tag",
                 "home",
                 "away",
+                "home_slot",
+                "away_slot",
                 "status",
                 "scheduled_at",
                 "summary"
@@ -461,6 +572,18 @@
               }
             ]
           },
+          "round_tag": {
+            "description": "The match as the web desk and the schedule board tag it: SF·1 and SF·2 for the two semi-finals, F for a round of one match, the round's R{n} code where the board codes no round (a group or Swiss round). Additive to round_label.",
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "home": {
             "description": "The first side's name; null while the seat has no entrant.",
             "anyOf": [
@@ -474,6 +597,28 @@
           },
           "away": {
             "description": "The second side's name; null while the seat has no entrant.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "home_slot": {
+            "description": "What the web desk prints for the first seat while it has no entrant (\"Winner of Group A\", \"Winner of SF·1\"), in English like round_label; null when the seat has an entrant or the web has no label for it.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "away_slot": {
+            "description": "What the web desk prints for the second seat while it has no entrant; null when the seat has an entrant or the web has no label for it.",
             "anyOf": [
               {
                 "type": "string"
@@ -522,8 +667,11 @@
           "sport_key",
           "division_name",
           "round_label",
+          "round_tag",
           "home",
           "away",
+          "home_slot",
+          "away_slot",
           "status",
           "scheduled_at",
           "summary"
@@ -564,6 +712,18 @@
               }
             ]
           },
+          "round_tag": {
+            "description": "The match as the web desk and the schedule board tag it: SF·1 and SF·2 for the two semi-finals, F for a round of one match, the round's R{n} code where the board codes no round (a group or Swiss round). Additive to round_label.",
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "home": {
             "description": "The first side's name; null while the seat has no entrant.",
             "anyOf": [
@@ -577,6 +737,28 @@
           },
           "away": {
             "description": "The second side's name; null while the seat has no entrant.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "home_slot": {
+            "description": "What the web desk prints for the first seat while it has no entrant (\"Winner of Group A\", \"Winner of SF·1\"), in English like round_label; null when the seat has an entrant or the web has no label for it.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "away_slot": {
+            "description": "What the web desk prints for the second seat while it has no entrant; null when the seat has an entrant or the web has no label for it.",
             "anyOf": [
               {
                 "type": "string"
@@ -625,8 +807,11 @@
           "sport_key",
           "division_name",
           "round_label",
+          "round_tag",
           "home",
           "away",
+          "home_slot",
+          "away_slot",
           "status",
           "scheduled_at",
           "summary"
@@ -673,6 +858,20 @@
                 "type": "null"
               }
             ]
+          },
+          "waiting": {
+            "description": "stage_complete: a draw whose source stages are every one decided but not yet completed on the web desk. Listed so the phone can say \"complete the stage on the web desk\"; it has no button, and the approval routes still refuse it (MD_STALE). null for a ready draw and for a Swiss approval.",
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "stage_complete"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -680,7 +879,8 @@
           "stage_id",
           "division_name",
           "label",
-          "round"
+          "round",
+          "waiting"
         ],
         "additionalProperties": false
       }

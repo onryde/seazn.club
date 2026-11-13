@@ -45,8 +45,11 @@ const MD_ROW: Record<string, string> = {
   sport_key: "The match's sport: it decides which pad the phone opens.",
   division_name: "The match's division.",
   round_label: "The round as the web's board codes it (R2, QF, SF, F, …).",
+  round_tag: "The match as the web desk and the schedule board tag it: SF·1 and SF·2 for the two semi-finals, F for a round of one match, the round's R{n} code where the board codes no round (a group or Swiss round). Additive to round_label.",
   home: "The first side's name; null while the seat has no entrant.",
   away: "The second side's name; null while the seat has no entrant.",
+  home_slot: "What the web desk prints for the first seat while it has no entrant (\"Winner of Group A\", \"Winner of SF·1\"), in English like round_label; null when the seat has an entrant or the web has no label for it.",
+  away_slot: "What the web desk prints for the second seat while it has no entrant; null when the seat has an entrant or the web has no label for it.",
   status: "upcoming (not started), in_play, or finished (decided, finalized, held, abandoned, forfeited or cancelled).",
   scheduled_at: "The match's planned start as a UTC instant; null when it has none.",
   summary: "The short score as the Match Day desk shows it in a row: a set sport's sets won, then the games and live points of the set in play (\"1–1 · 14–9\"; tennis \"1–0 · 3–2 · 40–30\", \"TB 3–2\"), the sport's own headline otherwise; the same form once finished (\"2–0\"). Never the full headline with every set's score. null before any.",
@@ -266,6 +269,7 @@ const contracts: Contract[] = [
         "approvals.stage_id": "The stage to review and approve.",
         "approvals.label": "The stage's name.",
         "approvals.round": "swiss only: the round awaiting pairing (the phone's \"Round 4 pairings are ready\"); null for a draw.",
+        "approvals.waiting": "stage_complete: a draw whose source stages are every one decided but not yet completed on the web desk. Listed so the phone can say \"complete the stage on the web desk\"; it has no button, and the approval routes still refuse it (MD_STALE). null for a ready draw and for a Swiss approval.",
         ...Object.fromEntries(
           ["courts.now", "courts.next", "courts.finished", "no_court", "online"].flatMap((at) =>
             Object.entries(MD_ROW).map(([field, text]) => [`${at}.${field}`, text]),

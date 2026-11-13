@@ -31,14 +31,24 @@
       "stage_id": "3b8c9d0e-1f2a-4b3c-bd4e-6f7a8b9c0d1e",
       "division_name": "Men's singles",
       "label": "Finals",
-      "round": null
+      "round": null,
+      "waiting": null
     },
     {
       "kind": "swiss",
       "stage_id": "4c9d0e1f-2a3b-4c4d-8e5f-7a8b9c0d1e2f",
       "division_name": "Open",
       "label": "Swiss",
-      "round": 4
+      "round": 4,
+      "waiting": null
+    },
+    {
+      "kind": "draw",
+      "stage_id": "5d0e1f2a-3b4c-4d5e-9f6a-8b9c0d1e2f3a",
+      "division_name": "Women's singles",
+      "label": "Finals",
+      "round": null,
+      "waiting": "stage_complete"
     }
   ]
 }

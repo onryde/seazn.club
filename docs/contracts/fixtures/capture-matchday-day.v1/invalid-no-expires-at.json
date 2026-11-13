@@ -24,8 +24,11 @@
           "sport_key": "badminton",
           "division_name": "Men's doubles",
           "round_label": "QF",
+          "round_tag": "QF",
           "home": null,
           "away": null,
+          "home_slot": null,
+          "away_slot": null,
           "status": "upcoming",
           "scheduled_at": "2026-11-07T09:20:00.000Z",
           "summary": null

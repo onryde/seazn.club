@@ -31,7 +31,8 @@
       "stage_id": "3b8c9d0e-1f2a-4b3c-bd4e-6f7a8b9c0d1e",
       "division_name": "Men's singles",
       "label": "Finals",
-      "round": null
+      "round": null,
+      "waiting": null
     },
     {
       "kind": "swiss",

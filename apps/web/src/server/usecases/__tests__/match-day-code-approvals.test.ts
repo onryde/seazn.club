@@ -321,6 +321,22 @@ describe.skipIf(!HAS_DB)("approvals through a Match Day code", () => {
     });
   });
 
+  describe("F-T8-2: a waiting draw is listed, and still refused", () => {
+    it("every group match decided, the stage not complete: the day read lists the draw waiting; the review and the approve refuse MD_STALE; nothing is seated", async () => {
+      const d = await drawDivision(day);
+      const { code } = await codeFor(day, { kind: "competition" }, true);
+      const review = await reviewApprovalForCode(code, "draw", d.koId);
+      // The desk reopens the groups: every match is still decided, the stage is no longer complete.
+      await sql`update stages set status = 'active' where division_id = ${d.divisionId} and kind = 'group'`;
+      const listed = (await getMatchDayForCode(code, NOW)).approvals.find((a) => a.stage_id === d.koId);
+      expect(listed?.waiting, "premise: the phone is shown the waiting draw").toBe("stage_complete");
+      expect(await refusalOf(approveForCode(code, "draw", d.koId, { hash: review.hash }))).toEqual({ status: 409, code: "MD_STALE" });
+      await sql`update stage_seed_proposals set status = 'stale' where stage_id = ${d.koId}`;
+      expect(await refusalOf(reviewApprovalForCode(code, "draw", d.koId))).toEqual({ status: 409, code: "MD_STALE" });
+      expect(await seatsOf(d.finalId), "nothing seated").toEqual({ home_entrant_id: null, away_entrant_id: null });
+    });
+  });
+
   describe("fix round 1: no word outside the md_ list, and the use row never fails an approval", () => {
     it("a seat filled after the draft (409 SEEDING_FIXTURES_ALREADY_FILLED) is MD_STALE, with no use row", async () => {
       const d = await drawDivision(day);

@@ -51023,6 +51023,17 @@
                                           }
                                         ]
                                       },
+                                      "round_tag": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
                                       "home": {
                                         "anyOf": [
                                           {
@@ -51034,6 +51045,26 @@
                                         ]
                                       },
                                       "away": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "home_slot": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "away_slot": {
                                         "anyOf": [
                                           {
                                             "type": "string"
@@ -51079,8 +51110,11 @@
                                       "sport_key",
                                       "division_name",
                                       "round_label",
+                                      "round_tag",
                                       "home",
                                       "away",
+                                      "home_slot",
+                                      "away_slot",
                                       "status",
                                       "scheduled_at",
                                       "summary"
@@ -51120,6 +51154,17 @@
                                         }
                                       ]
                                     },
+                                    "round_tag": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
                                     "home": {
                                       "anyOf": [
                                         {
@@ -51131,6 +51176,26 @@
                                       ]
                                     },
                                     "away": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "home_slot": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "away_slot": {
                                       "anyOf": [
                                         {
                                           "type": "string"
@@ -51176,8 +51241,11 @@
                                     "sport_key",
                                     "division_name",
                                     "round_label",
+                                    "round_tag",
                                     "home",
                                     "away",
+                                    "home_slot",
+                                    "away_slot",
                                     "status",
                                     "scheduled_at",
                                     "summary"
@@ -51213,6 +51281,17 @@
                                         }
                                       ]
                                     },
+                                    "round_tag": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
                                     "home": {
                                       "anyOf": [
                                         {
@@ -51224,6 +51303,26 @@
                                       ]
                                     },
                                     "away": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "home_slot": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "away_slot": {
                                       "anyOf": [
                                         {
                                           "type": "string"
@@ -51269,8 +51368,11 @@
                                     "sport_key",
                                     "division_name",
                                     "round_label",
+                                    "round_tag",
                                     "home",
                                     "away",
+                                    "home_slot",
+                                    "away_slot",
                                     "status",
                                     "scheduled_at",
                                     "summary"
@@ -51319,6 +51421,17 @@
                                   }
                                 ]
                               },
+                              "round_tag": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
                               "home": {
                                 "anyOf": [
                                   {
@@ -51330,6 +51443,26 @@
                                 ]
                               },
                               "away": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "home_slot": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "away_slot": {
                                 "anyOf": [
                                   {
                                     "type": "string"
@@ -51375,8 +51508,11 @@
                               "sport_key",
                               "division_name",
                               "round_label",
+                              "round_tag",
                               "home",
                               "away",
+                              "home_slot",
+                              "away_slot",
                               "status",
                               "scheduled_at",
                               "summary"
@@ -51412,6 +51548,17 @@
                                   }
                                 ]
                               },
+                              "round_tag": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
                               "home": {
                                 "anyOf": [
                                   {
@@ -51423,6 +51570,26 @@
                                 ]
                               },
                               "away": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "home_slot": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "away_slot": {
                                 "anyOf": [
                                   {
                                     "type": "string"
@@ -51468,8 +51635,11 @@
                               "sport_key",
                               "division_name",
                               "round_label",
+                              "round_tag",
                               "home",
                               "away",
+                              "home_slot",
+                              "away_slot",
                               "status",
                               "scheduled_at",
                               "summary"
@@ -51511,6 +51681,19 @@
                                     "type": "null"
                                   }
                                 ]
+                              },
+                              "waiting": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "stage_complete"
+                                    ]
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             "required": [
@@ -51518,7 +51701,8 @@
                               "stage_id",
                               "division_name",
                               "label",
-                              "round"
+                              "round",
+                              "waiting"
                             ],
                             "additionalProperties": false
                           }
@@ -51572,8 +51756,11 @@
                           "sport_key": "example",
                           "division_name": "example",
                           "round_label": "example",
+                          "round_tag": "example",
                           "home": "example",
                           "away": "example",
+                          "home_slot": "example",
+                          "away_slot": "example",
                           "status": "upcoming",
                           "scheduled_at": "2026-08-01T09:00:00Z",
                           "summary": "example"
@@ -51584,8 +51771,11 @@
                             "sport_key": "example",
                             "division_name": "example",
                             "round_label": "example",
+                            "round_tag": "example",
                             "home": "example",
                             "away": "example",
+                            "home_slot": "example",
+                            "away_slot": "example",
                             "status": "upcoming",
                             "scheduled_at": "2026-08-01T09:00:00Z",
                             "summary": "example"
@@ -51597,8 +51787,11 @@
                             "sport_key": "example",
                             "division_name": "example",
                             "round_label": "example",
+                            "round_tag": "example",
                             "home": "example",
                             "away": "example",
+                            "home_slot": "example",
+                            "away_slot": "example",
                             "status": "upcoming",
                             "scheduled_at": "2026-08-01T09:00:00Z",
                             "summary": "example"
@@ -51612,8 +51805,11 @@
                         "sport_key": "example",
                         "division_name": "example",
                         "round_label": "example",
+                        "round_tag": "example",
                         "home": "example",
                         "away": "example",
+                        "home_slot": "example",
+                        "away_slot": "example",
                         "status": "upcoming",
                         "scheduled_at": "2026-08-01T09:00:00Z",
                         "summary": "example"
@@ -51625,8 +51821,11 @@
                         "sport_key": "example",
                         "division_name": "example",
                         "round_label": "example",
+                        "round_tag": "example",
                         "home": "example",
                         "away": "example",
+                        "home_slot": "example",
+                        "away_slot": "example",
                         "status": "upcoming",
                         "scheduled_at": "2026-08-01T09:00:00Z",
                         "summary": "example"
@@ -51638,7 +51837,8 @@
                         "stage_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                         "division_name": "example",
                         "label": "example",
-                        "round": 1
+                        "round": 1,
+                        "waiting": "stage_complete"
                       }
                     ]
                   },

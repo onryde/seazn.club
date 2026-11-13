@@ -912,16 +912,21 @@ export async function matchDayCandidates(
       if (!mine && c.state === "called" && c.current !== null && ready(c.current)) {
         picked.push({ row: c.current, source: "other_court", from: c.court_name, waiting: 0, behind: 0, planned: null });
       }
-      const next = c.queue.find((q) => ready(q.row));
-      if (next === undefined) continue;
-      picked.push({
-        row: next.row,
-        source: mine ? "this_court" : "other_court",
-        from: mine ? null : c.court_name,
-        waiting: wholeMinutes(next.estimated_at.getTime() - nowMs),
-        behind: wholeMinutes(next.estimated_at.getTime() - next.planned_at.getTime()),
-        planned: next.planned_at,
-      });
+      // The court's first ready queued match PER DIVISION (F-T8-6): the desk's panel filters by division, and a court whose first
+      // match is another division's would otherwise show "Nothing is waiting" beside a match of the filtered one in its queue.
+      const seenDivisions = new Set<string>();
+      for (const next of c.queue) {
+        if (!ready(next.row) || seenDivisions.has(next.row.division_id)) continue;
+        seenDivisions.add(next.row.division_id);
+        picked.push({
+          row: next.row,
+          source: mine ? "this_court" : "other_court",
+          from: mine ? null : c.court_name,
+          waiting: wholeMinutes(next.estimated_at.getTime() - nowMs),
+          behind: wholeMinutes(next.estimated_at.getTime() - next.planned_at.getTime()),
+          planned: next.planned_at,
+        });
+      }
     }
     for (const r of board.noCourt) {
       picked.push({

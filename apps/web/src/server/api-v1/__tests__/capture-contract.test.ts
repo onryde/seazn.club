@@ -56,7 +56,7 @@ const SHA256: Record<string, string> = {
   "capture-scoring-link.v1.json": "f0f1188655f3ca83b3e42ce7fedd6f6210a3a141b0bcf02fa250eb2448b1c85f",
   "capture-record.v1.json": "213f766043b7682f198cc98da13e93995b6602e46533ecf60c78bf562aebd6f8",
   // MD-1 Task 3 (capture S4 Match Day design §5, §9.3): a Match Day code's day read.
-  "capture-matchday-day.v1.json": "31b411690974b0c32ef98265edce74b6b0c586bb6d5e638c3dbf2f329fdcdc65",
+  "capture-matchday-day.v1.json": "63b14bde9a71e6e8ec82c31cdcd945e9e9b9345c74302739e51b91fe61f1c28e",
   // MD-1 Task 4 (capture S4 Match Day design §6, §9.4): a Match Day code's open.
   "capture-matchday-open.v1.json": "760028bf99e5cf74ee033f5613fa43477677cef318ecdf739c0b62e2fc21c0c0",
   // MD-1 Task 6 (capture S4 Match Day design §7, §9.5): a Match Day code's approval review, its approve and its answers.
@@ -1596,7 +1596,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     expect(fileAdmits(MD_DAY, "#/$defs/refusal", fixture(MD_DAY_DIR, "refusal-invalid-opens-at-local"))).toBe(false);
     // Fix M1: an approval carries its round — the Swiss round awaiting pairing, null for a draw — and may not omit it.
     const approvals = fixture(MD_DAY_DIR, "valid-approvals").approvals as Json[];
-    expect(approvals.map((a) => [a.kind, a.round])).toEqual([["draw", null], ["swiss", 4]]);
+    expect(approvals.map((a) => [a.kind, a.round, a.waiting])).toEqual([["draw", null, null], ["swiss", 4, null], ["draw", null, "stage_complete"]]);
     expect(fileAdmits(MD_DAY, "", fixture(MD_DAY_DIR, "invalid-approval-no-round"))).toBe(false);
     // Fix M5: the refusal's code is the plan's closed list in both files; an envelope word is not an md_ refusal.
     for (const [file, dir, name] of [[MD_DAY, MD_DAY_DIR, "refusal-invalid-envelope-word"], [MD_OPEN, MD_OPEN_DIR, "refusal-invalid-not-found"]] as const) {

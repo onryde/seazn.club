@@ -327,8 +327,13 @@ export const CaptureMatchdayRow = z.strictObject({
   sport_key: z.string().min(1),
   division_name: z.string(),
   round_label: z.string().min(1).nullable(),
+  /** The match as the desk tags it: "SF·1", "F" for a round of one match, `R{n}` where no round is coded. */
+  round_tag: z.string().min(1).nullable(),
   home: z.string().nullable(),
   away: z.string().nullable(),
+  /** What the desk prints for a seat with no entrant ("Winner of Group A"); null when it has an entrant or no label. */
+  home_slot: z.string().nullable(),
+  away_slot: z.string().nullable(),
   status: z.enum(["upcoming", "in_play", "finished"]),
   scheduled_at: MdInstant.nullable(),
   /** The short score as the Match Day desk shows it in a row (`compactScore`, lib/match-day/view.ts): "1–1 · 14–9" while a set
@@ -342,6 +347,8 @@ export const CaptureMatchdayApproval = z.strictObject({
   label: z.string(),
   /** Swiss: the round awaiting pairing; a draw: null (MD-1 fix M1, the controller's ruling). */
   round: z.number().int().min(1).nullable(),
+  /** A draw whose source stages are all decided but not yet completed on the desk: listed, no button. Else null. */
+  waiting: z.enum(["stage_complete"]).nullable(),
 });
 export const CaptureMatchdayCourt = z.strictObject({
   court_id: z.uuid(),
