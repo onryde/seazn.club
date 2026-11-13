@@ -1,15 +1,19 @@
--- V510 — Quick match lifecycle (docs/superpowers/specs/2026-11-03-quick-match-design.md §7.6, §7.7, C2; plan 3 Task 1 and its
+-- V515 — Quick match lifecycle (docs/superpowers/specs/2026-11-03-quick-match-design.md §7.6, §7.7, C2; plan 3 Task 1 and its
 -- pre-flight amendment T1 [B20], the plan-1 final review's carry m3).
 -- Flyway runs with outOfOrder=false, so the version number must rise in MERGE order: it is a WORKING number, assigned at merge
 -- (main's max + 1: authored as V507 after V506__quick_matches.sql, renumbered to V510 past main's V508__sponsor_archive.sql and
--- V509__match_day_codes.sql). A renumber moves this file's name, the `V510` on line 1 (migration-header-truth.test.ts) and the
--- comments that cite V510 by number (`git grep -n V510 -- apps`).
+-- V509__match_day_codes.sql, then to V515 past main's V510__registration_pay_tokens.sql through
+-- V514__email_outbox_registration_rejected_lapsed.sql). A renumber moves this file's name, the `V515` on line 1
+-- (migration-header-truth.test.ts) and the comments that cite V515 by number (`git grep -n V515 -- apps`). It also re-reads the
+-- previous definer of email_outbox_kind_valid (change 1 below), because that CHECK is restated whole here.
 --
 -- Three changes, none of which changes a row's data:
 --
 -- 1. The email outbox's vocabulary gains the quick match's two mails: the link at creation (`quick_match_link`) and the one reminder
---    before expiry (`quick_match_reminder`). The CHECK restates V503's fifty-two kinds in V503's order (V478's fifty-one, then
---    sponsor_deal_paid), then these two.
+--    before expiry (`quick_match_reminder`). The CHECK restates V514's fifty-nine kinds in V514's order (V503's fifty-two, i.e.
+--    V478's fifty-one then sponsor_deal_paid; V511's five registration lifecycle kinds; V514's registration_rejected and
+--    registration_promotion_lapsed), then these two: sixty-one. V514 is the previous definer of email_outbox_kind_valid (re-checked
+--    2026-11-13 against origin/main cb52c71d52: V511 and V514 are the only definers after V503).
 --    outbox-schema.test.ts reads it back and requires it to equal constants.ts and the typed list.
 --
 -- 2. `quick_matches.locale` is one of the app's shipped locales (lib/i18n-constants.ts LOCALES), in V282's and V478's shape. The
@@ -39,6 +43,7 @@ alter table email_outbox drop constraint email_outbox_kind_valid,
     'staff_connect_bank_changed', 'staff_stuck_events', 'staff_stream_pack_price_drift', 'staff_ai_run_cost',
     'staff_earn_grant_volume', 'staff_extra_org_allowance',
     'sponsor_deal_paid',
+    'registration_paid', 'registration_approved', 'registration_expired', 'registration_withdrawn', 'registration_joined', 'registration_rejected', 'registration_promotion_lapsed',
     'quick_match_link', 'quick_match_reminder'));
 
 alter table quick_matches

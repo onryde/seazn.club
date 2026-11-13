@@ -69,7 +69,7 @@ export const toRow = (r: QuickMatchDbRow): QuickMatchRow => ({
   name: r.name,
   format: r.format,
   email: r.email,
-  // A locale the app does not speak reads as the default, never as a broken page. V510's check constraint keeps such a
+  // A locale the app does not speak reads as the default, never as a broken page. V515's check constraint keeps such a
   // value out of the column; this stays as defence in depth (a locale dropped later would leave old rows behind it).
   locale: toLocale(r.locale),
   lastActivityAt: r.last_activity_at,

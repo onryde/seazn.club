@@ -7,7 +7,7 @@
 // exports no `send*` and keeps no private sender (no-second-path.test.ts); `checkSendable` and `deliver` stay, called only by the
 // outbox. The sweep asserts both lists empty and its count at the spec's 51. A later phase that registers a kind before its producer
 // moves follows the rule below; one that ADDS a direct sender has to change the spec's count first. A kind that is born on the outbox
-// (never a direct sender: sponsor deals' paid notice, the quick match design's two, V510) joins KIND_DIRECT_SENDER as null and
+// (never a direct sender: sponsor deals' paid notice, the quick match design's two, V515) joins KIND_DIRECT_SENDER as null and
 // KINDS_BORN_ON_THE_OUTBOX, and the count is untouched.
 //
 //  - SENDER_ALLOWLIST: the direct `send*` exports of lib/email.ts (no-second-path.test.ts checks it against the file, exactly).

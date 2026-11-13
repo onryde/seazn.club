@@ -204,7 +204,7 @@ describe("nextPlayable (C11: the hero's next match)", () => {
 // ── the row ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 describe("toRow: a stored locale", () => {
-  // V510's check constraint keeps an unknown locale out of the column (T1's quick-match-email.test.ts proves it), so no DB
+  // V515's check constraint keeps an unknown locale out of the column (T1's quick-match-email.test.ts proves it), so no DB
   // row can carry one: the read's fallback is proven here, on the mapper itself, as defence in depth.
   const dbRow = (locale: string): QuickMatchDbRow => ({
     id: "qm-1", competition_id: "c-1", name: "n", format: "league", email: null, locale,

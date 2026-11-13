@@ -15,13 +15,13 @@
 //
 // THE REMINDER'S CANCEL (D9) is witnessed twice. At its seam: the cancel is wrapped below, every call recorded with the
 // tenant its handle runs as and passed to the real `cancelQueuedEmails`. And on the outbox row itself (plan 3 Task 1 added
-// `quick_match_reminder` to OUTBOX_KINDS and to the kind CHECK, V510): a queued reminder is written by the real writer, the
+// `quick_match_reminder` to OUTBOX_KINDS and to the kind CHECK, V515): a queued reminder is written by the real writer, the
 // way the expiry sweep (plan 3 Task 2) will write it, the match is saved by each path, and the row is read back ended.
 //
-// THE BY-EMAIL LOOKUP'S INDEX (V510 `quick_matches_unsaved_email_idx`, plan 3 Amend T1 [B20]): the save runs on every
+// THE BY-EMAIL LOOKUP'S INDEX (V515 `quick_matches_unsaved_email_idx`, plan 3 Amend T1 [B20]): the save runs on every
 // verified sign-in, site-wide. The planner is asked, inside the save's own transaction and for its own statement, to use the
 // index (sequential scans off), and the transaction's own index statistics say whether it did, and that it read the one
-// address rather than every unsaved one (under RLS, `lower(email) = $1` can only walk the index; V510's header says why).
+// address rather than every unsaved one (under RLS, `lower(email) = $1` can only walk the index; V515's header says why).
 //
 // Real Postgres required; skipped without DATABASE_URL.
 import { randomBytes as kekBytes, randomUUID } from "node:crypto";
@@ -154,7 +154,7 @@ const someone = () => account(addressFor("someone"));
 /** The clock's state: past its expiry, not yet reached by the sweep (D13). */
 const expire = (id: string) => sql`update quick_matches set expires_at = now() - interval '1 minute' where id = ${id}`;
 
-/** The address columns of one row, read on the pool: the typed `email` and V510's generated `email_lower` beside it. */
+/** The address columns of one row, read on the pool: the typed `email` and V515's generated `email_lower` beside it. */
 const addressOf = async (id: string): Promise<{ email: string | null; email_lower: string | null }> => {
   const [r] = await sql<{ email: string | null; email_lower: string | null }[]>`
     select email, email_lower from quick_matches where id = ${id}`;
@@ -574,7 +574,7 @@ describe.skipIf(!HAS_DB)("a save ends the match's queued reminder (D9), on the s
   });
 });
 
-describe.skipIf(!HAS_DB)("the by-email lookup is indexed (V510 quick_matches_unsaved_email_idx, plan 3 Amend T1 [B20])", () => {
+describe.skipIf(!HAS_DB)("the by-email lookup is indexed (V515 quick_matches_unsaved_email_idx, plan 3 Amend T1 [B20])", () => {
   it("the save's own statement looks its address up in the index: that address's entries only, not a walk of every unsaved address", async () => {
     // With sequential scans off, a WHERE that cannot be an index condition (under RLS, `lower(email) = $1`) still uses the partial
     // index as a whole walk (its predicate holds), reading every unsaved address. A second unsaved address makes that walk read

@@ -10,7 +10,7 @@ import "server-only";
 // Both go through `saveInTx`: the saver set, the expiry cleared, the typed address forgotten, the reminder marked spent and
 // any queued reminder ended, in ONE `withTenant(system org)` transaction. The address goes because the saver is known now
 // (branch review B m9, controller PO rec 2026-11-08): a guest typed it and nobody verified it, a saved match is never
-// reminded, and a stranger's address is not kept for ever. V510's `email_lower` is generated from it, so it goes too.
+// reminded, and a stranger's address is not kept for ever. V515's `email_lower` is generated from it, so it goes too.
 // The tenant is load-bearing: `cancelQueuedEmails` fences on
 // `current_org_id()`, and on the pool it ends only org-less rows, which is nothing of the system org's (cancel.ts G-7).
 //
@@ -30,9 +30,9 @@ import type { EndedRow } from "@/server/email-outbox/hooks";
 import { log } from "@/server/logger";
 import { QUICK_MATCH_OUTBOX_REF_TYPE } from "./quick-match-delete";
 
-/** The reminder the sweep queues before expiry (C2; the kind is in OUTBOX_KINDS and the kind CHECK since V510). */
+/** The reminder the sweep queues before expiry (C2; the kind is in OUTBOX_KINDS and the kind CHECK since V515). */
 const QUICK_MATCH_REMINDER_KIND: OutboxKind = "quick_match_reminder";
-/** A quick match's two mails: the link at creation and the reminder before expiry (both literal-address, V510). */
+/** A quick match's two mails: the link at creation and the reminder before expiry (both literal-address, V515). */
 const QUICK_MATCH_MAIL_KINDS: readonly OutboxKind[] = ["quick_match_link", QUICK_MATCH_REMINDER_KIND];
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -50,7 +50,7 @@ type Which = { ids: readonly string[] } | { email: string };
  * safe: a second save waiting on the row re-reads `saved_by_user_id is null` and saves nothing.
  */
 async function saveInTx(tx: Tx, userId: string, which: Which): Promise<string[]> {
-  // The by-email arm runs on every verified sign-in. It compares V510's generated `email_lower` (= lower(email)), never
+  // The by-email arm runs on every verified sign-in. It compares V515's generated `email_lower` (= lower(email)), never
   // `lower(email)` itself: under the table's RLS a non-leakproof function on a column cannot be an index condition, so only
   // the column form looks the address up in `quick_matches_unsaved_email_idx` (quick-match-save.test.ts proves it reads one
   // index entry, not every unsaved address).
