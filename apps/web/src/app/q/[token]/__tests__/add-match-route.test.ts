@@ -308,9 +308,8 @@ describe.skipIf(!HAS_DB)("POST /q/<token>/add-match: an add that works lands bac
     expect(stored!.rows.reduce((n, r) => n + r.won, 0), "two decided matches, two wins").toBe(2);
     html = await homeAt(`/q/${out.token}`);
     expect(html).toContain('data-testid="qm-winner"');
-    expect(textOfTestId(html, "qm-played")).toBe(
-      plural(en, "quickMatch.home.played", 2, "en", { played: 2, days: SPEC_EXPIRY_DAYS }),
-    );
+    // Finished again: the played line carries no countdown (plan 4, T4 review m1), the open league's line above did.
+    expect(textOfTestId(html, "qm-played")).toBe("2 of 2 matches played");
   });
 
   it("a fresh league (nothing played yet) takes a decider, and a second add after the first: each its own new round", async () => {

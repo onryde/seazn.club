@@ -136,6 +136,45 @@ const UI_KEYS = [
   "quickMatch.dead.title",
   "quickMatch.dead.hint",
   "quickMatch.dead.startNew",
+  // Plan 4 (skip one league match, spec 2026-11-12 §3, §6): the row's ⋯ menu (owner 2026-11-13: one menu per row, named by
+  // its sides; Edit result moves into it), the confirm sheet, the Not played row and counts, the league finished by skips
+  // and with no match played, the refusals, and the stale-screen line (T1 review G1) on the home and the pad.
+  "quickMatch.home.moreActions",
+  "quickMatch.home.notPlayed",
+  "quickMatch.home.notPlayedHint",
+  "quickMatch.home.putBack",
+  "quickMatch.home.notPlayedPart.one",
+  "quickMatch.home.notPlayedPart.other",
+  "quickMatch.home.playedSkipped.one",
+  "quickMatch.home.playedSkipped.other",
+  "quickMatch.home.playedSkippedSaved.one",
+  "quickMatch.home.playedSkippedSaved.other",
+  "quickMatch.home.countsPlayedOnly",
+  "quickMatch.home.finalTable",
+  "quickMatch.home.winnerAfter.one",
+  "quickMatch.home.winnerAfter.other",
+  "quickMatch.home.winnerSkipped.one",
+  "quickMatch.home.winnerSkipped.other",
+  "quickMatch.home.leagueFinished",
+  "quickMatch.home.noPlay",
+  "quickMatch.home.noPlayHint.one",
+  "quickMatch.home.noPlayHint.other",
+  "quickMatch.skip.title",
+  "quickMatch.skip.body",
+  "quickMatch.skip.bodyLast",
+  "quickMatch.skip.partial",
+  // FR4 m1: a live match with nothing scored yet (only Started) says so, and quotes no score.
+  "quickMatch.skip.started",
+  "quickMatch.skip.confirm",
+  "quickMatch.skip.keep",
+  "quickMatch.flash.notSkippable",
+  "quickMatch.flash.leagueFinished",
+  "quickMatch.flash.notPlayed",
+  "device.quickMatch.notPlayed",
+  // FR3 (T5 finding 1): the guest pad's Not played screen reads the match again on tap.
+  "device.quickMatch.checkAgain",
+  // FR4 m2: the same screen once the league has finished: no Put back can come, so no hint.
+  "device.quickMatch.notPlayedFinal",
 ] as const;
 
 /** Every `quickMatch.*` key of one file in one locale, sorted. */
@@ -239,7 +278,17 @@ describe("quick match guest copy: plurals", () => {
     ["marketing", "quickMatch.setup.sidesCount"],
     ["ui", "quickMatch.home.played"],
     ["ui", "quickMatch.home.playedSaved"],
+    // Plan 4: the Not played counts, the winner's note and the no-play hint.
+    ["ui", "quickMatch.home.notPlayedPart"],
+    ["ui", "quickMatch.home.playedSkipped"],
+    ["ui", "quickMatch.home.playedSkippedSaved"],
+    ["ui", "quickMatch.home.winnerAfter"],
+    ["ui", "quickMatch.home.winnerSkipped"],
+    ["ui", "quickMatch.home.noPlayHint"],
   ] as const;
+  /** Families that name no noun, so their two forms may read the same: "{count} of {max}", and "{count} not played" (en and
+   *  nl; fr and es agree the participle, which the participle check below witnesses). */
+  const NOUNLESS: ReadonlySet<string> = new Set(["quickMatch.setup.sidesCount", "quickMatch.home.notPlayedPart"]);
 
   it("each plural family has .one and .other in every locale, and the noun changes where the copy has one", () => {
     let checked = 0;
@@ -249,12 +298,92 @@ describe("quick match guest copy: plurals", () => {
         const other = DICTS[locale][file][`${key}.other`];
         expect(one, `${locale} ${key}.one`).toBeTypeOf("string");
         expect(other, `${locale} ${key}.other`).toBeTypeOf("string");
-        // "{count} of {max}" names no noun, so its two forms may match; the other two must differ ("1 matches", A11).
-        if (key !== "quickMatch.setup.sidesCount") expect(one, `${locale} ${key}: singular differs`).not.toBe(other);
+        // A family with no noun may match; every other must differ ("1 matches", A11).
+        if (!NOUNLESS.has(key)) expect(one, `${locale} ${key}: singular differs`).not.toBe(other);
         checked++;
       }
     }
     expect(checked).toBe(LOCALES.length * FAMILIES.length);
+  });
+
+  // T1 review M1: plural() fills only {count}. A family whose number rode another name ({n}, {played}) printed the raw
+  // placeholder when called the natural way, `plural(dict, key, n, locale)`; T4's own test would have mirrored it.
+  const COUNTED = [
+    "quickMatch.home.notPlayedPart",
+    "quickMatch.home.winnerAfter",
+    "quickMatch.home.winnerSkipped",
+    "quickMatch.home.noPlayHint",
+  ] as const;
+
+  it("the Not played, winner and no-play counts read their number from plural() alone, in every locale (counted)", () => {
+    let checked = 0;
+    const faults: string[] = [];
+    for (const locale of LOCALES) {
+      const ui = DICTS[locale].ui;
+      for (const key of COUNTED) {
+        for (const form of ["one", "other"]) {
+          const extra = placeholders(ui[`${key}.${form}`] ?? "").filter((p) => p !== "count");
+          if (extra.length) faults.push(`${locale} ${key}.${form}: {${extra.join(",")}} besides {count}`);
+        }
+        for (const n of [1, 2, 5]) {
+          const out = plural(ui, key, n, locale);
+          if (/\{\w+\}/.test(out)) faults.push(`${locale} ${key} at ${n}: ${out}`);
+          // The .other forms always print the number; the no-play hint's .one says "the only match" instead.
+          if (n > 1 && !out.includes(String(n))) faults.push(`${locale} ${key} at ${n} omits ${n}: ${out}`);
+          checked++;
+        }
+      }
+    }
+    expect(checked, "anti-vacuity").toBe(LOCALES.length * COUNTED.length * 3);
+    expect(faults).toEqual([]);
+  });
+
+  // "Not played" agrees with "match" in fr and es; en and nl do not inflect it. The grammar, typed here as the rule.
+  const PARTICIPLE: Record<Locale, readonly [one: string, other: string]> = {
+    en: ["played", "played"],
+    fr: ["joué", "joués"],
+    es: ["jugado", "jugados"],
+    nl: ["gespeeld", "gespeeld"],
+  };
+
+  it("'N not played' agrees in every locale: .one at 1, .other at 2 (counted)", () => {
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const [one, many] = PARTICIPLE[locale];
+      const ui = DICTS[locale].ui;
+      const atOne = plural(ui, "quickMatch.home.notPlayedPart", 1, locale);
+      const atTwo = plural(ui, "quickMatch.home.notPlayedPart", 2, locale);
+      expect(atOne, `${locale} at 1`).toMatch(new RegExp(`(^|[^\\p{L}])${one}([^\\p{L}]|$)`, "u"));
+      expect(atTwo, `${locale} at 2`).toMatch(new RegExp(`(^|[^\\p{L}])${many}([^\\p{L}]|$)`, "u"));
+      if (one !== many) expect(atOne, `${locale} at 1 never says "${many}"`).not.toMatch(new RegExp(`(^|[^\\p{L}])${many}([^\\p{L}]|$)`, "u"));
+      checked++;
+    }
+    expect(checked).toBe(LOCALES.length);
+  });
+
+  it("the stale-screen line (T1 review G1) reads the same on the home and on the pad, in every locale (counted)", () => {
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const ui = DICTS[locale].ui;
+      expect(ui["device.quickMatch.notPlayed"], locale).toEqual(expect.stringMatching(/\S/));
+      expect(ui["device.quickMatch.notPlayed"], locale).toBe(ui["quickMatch.flash.notPlayed"]);
+      checked++;
+    }
+    expect(checked).toBe(LOCALES.length);
+  });
+
+  it("FR4: the finished league's pad line and the started sheet line are their own words in every locale (counted)", () => {
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const ui = DICTS[locale].ui;
+      // Not the open league's line, which says how to put the match back: on a finished league that hint is false.
+      expect(ui["device.quickMatch.notPlayedFinal"], locale).not.toBe(ui["device.quickMatch.notPlayed"]);
+      // Not the partial line: a match only Started has no score to quote, so the line takes none.
+      expect(ui["quickMatch.skip.started"], locale).not.toBe(ui["quickMatch.skip.partial"]);
+      expect(placeholders(ui["quickMatch.skip.started"]!), locale).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(LOCALES.length);
   });
 
   // The word for "match" in each locale, singular and plural: the translation's own grammar, typed here as the rule,
@@ -269,7 +398,7 @@ describe("quick match guest copy: plurals", () => {
   const word = (w: string) => new RegExp(`(^|[^\\p{L}])${w}([^\\p{L}]|$)`, "u");
 
   it("every locale reads its .one for 1 and its .other for 2 through plural(), with the right noun (counted)", () => {
-    const NOUN_FAMILIES = FAMILIES.filter(([, key]) => key !== "quickMatch.setup.sidesCount");
+    const NOUN_FAMILIES = FAMILIES.filter(([, key]) => !NOUNLESS.has(key));
     const vars = { max: 6, played: 0, days: 7 };
     let checked = 0;
     for (const locale of LOCALES) {
@@ -367,6 +496,59 @@ describe("quick match guest copy: plurals", () => {
     expect(interpolate(ui["quickMatch.home.liveRound"]!, { round: interpolate(ui["quickMatch.home.semiFinal"]!, { n: 2 }) }))
       .toBe("Live · Semi-final 2");
   });
+
+  it("en reads plan 4's copy (skip one league match) through the real plural(), each count from plural() alone", () => {
+    const ui = DICTS.en.ui;
+    // The played line with skips (spec §6: "N of M played · K not played", M the full total). Plan 4's key table keeps the
+    // unsaved countdown on it (the owner's 11-12 rule that the purge is stated), where mockup frames 4-5 say "league finished".
+    const skipped = (k: number) => plural(ui, "quickMatch.home.notPlayedPart", k, "en");
+    expect(plural(ui, "quickMatch.home.playedSkipped", 6, "en", { played: 4, days: 7, skipped: skipped(2) })).toBe(
+      "4 of 6 matches played · 2 not played · deleted 7 days after the last score unless saved",
+    );
+    expect(plural(ui, "quickMatch.home.playedSkipped", 1, "en", { played: 0, days: 7, skipped: skipped(1) })).toBe(
+      "0 of 1 match played · 1 not played · deleted 7 days after the last score unless saved",
+    );
+    expect(plural(ui, "quickMatch.home.playedSkippedSaved", 6, "en", { played: 4, skipped: skipped(2) })).toBe(
+      "4 of 6 matches played · 2 not played",
+    );
+    // The winner's note under a league finished by skips, and the no-play card's hint.
+    expect(`${plural(ui, "quickMatch.home.winnerAfter", 2, "en")} ${plural(ui, "quickMatch.home.winnerSkipped", 1, "en")}`).toBe(
+      "Top of the table after 2 played matches. 1 match was not played.",
+    );
+    expect(`${plural(ui, "quickMatch.home.winnerAfter", 1, "en")} ${plural(ui, "quickMatch.home.winnerSkipped", 3, "en")}`).toBe(
+      "Top of the table after 1 played match. 3 matches were not played.",
+    );
+    expect(plural(ui, "quickMatch.home.noPlayHint", 1, "en")).toBe("The only match was marked Not played, so there is no winner.");
+    expect(plural(ui, "quickMatch.home.noPlayHint", 3, "en")).toBe("All 3 matches were marked Not played, so there is no winner.");
+    // The row's ⋯ menu, named by its sides (owner 2026-11-13), and the confirm sheet (mockup qmd13a01 frame 2; D6).
+    expect(interpolate(ui["quickMatch.home.moreActions"]!, { home: "Ravi & Sam", away: "Priya & Tom" })).toBe(
+      "More actions for Ravi & Sam v Priya & Tom",
+    );
+    expect(interpolate(ui["quickMatch.skip.title"]!, { home: "Ravi & Sam", away: "Priya & Tom" })).toBe(
+      "Skip Ravi & Sam v Priya & Tom?",
+    );
+    expect(interpolate(ui["quickMatch.skip.partial"]!, { score: "8–5" })).toBe(
+      "8–5 is already scored. It will not count in the table; it stays in the match history.",
+    );
+    // FR4 m1: a match only Started has nothing to quote.
+    expect(ui["quickMatch.skip.started"]).toBe("This match has started, but nothing is scored yet.");
+    // FR4 m2: the pad's Not played line once the league has finished.
+    expect(ui["device.quickMatch.notPlayedFinal"]).toBe("This match was not played.");
+    // The refusals, scoped to what was refused (T1 review I1: Edit result and Add a match still change a finished league;
+    // G2: a knockout match is not skippable either, and has no result to point at).
+    expect(ui["quickMatch.flash.leagueFinished"]).toBe("The league has finished, so a Not played match can't be put back.");
+    expect(ui["quickMatch.flash.notSkippable"]).toBe(
+      "Only an unfinished league match can be marked Not played. To change a result, use Edit result.",
+    );
+    // T1 review G1: a Score or a pad tap on a match somebody else marked Not played.
+    expect(ui["quickMatch.flash.notPlayed"]).toBe("This match was marked Not played. Put it back from the match list to score it.");
+    // The words the copy names are the controls' own labels: Edit result in every locale, Not played in en.
+    for (const locale of LOCALES) {
+      const d = DICTS[locale].ui;
+      expect(d["quickMatch.flash.notSkippable"], locale).toContain(d["quickMatch.home.editResult"]!);
+    }
+    expect(ui["quickMatch.flash.notPlayed"]).toContain(ui["quickMatch.home.notPlayed"]!);
+  });
 });
 
 describe("quick match guest copy: constants are placeholders, never typed numbers", () => {
@@ -378,6 +560,8 @@ describe("quick match guest copy: constants are placeholders, never typed number
     ["ui", "quickMatch.flash.adhocLimit", "max"],
     ["ui", "quickMatch.dead.hint", "days"],
     ["marketing", "quickMatch.setup.keepNote", "days"],
+    ["ui", "quickMatch.home.playedSkipped.one", "days"],
+    ["ui", "quickMatch.home.playedSkipped.other", "days"],
   ] as const;
 
   it("each constant-bearing value interpolates its constant in every locale (counted)", () => {

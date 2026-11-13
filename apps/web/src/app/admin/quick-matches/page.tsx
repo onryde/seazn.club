@@ -25,7 +25,7 @@ const WINDOW_LABEL: Record<QuickMatchAdminWindow, string> = {
 const COUNT_ROWS: { key: keyof QuickMatchAdminCounts; label: string; hint: string }[] = [
   { key: "created", label: "Created", hint: "still on record" },
   { key: "played", label: "Played", hint: "at least one point or result" },
-  { key: "finished", label: "Finished", hint: "every match decided" },
+  { key: "finished", label: "Finished", hint: "every match played or not played" },
   { key: "saved", label: "Saved", hint: "kept in an account" },
   { key: "expiredPending", label: "Expired, awaiting sweep", hint: "unsaved and past its expiry, not yet deleted" },
 ];
@@ -168,8 +168,9 @@ export default async function AdminQuickMatchesPage({
                     <span className="mr-2 rounded bg-slate-800 px-1.5 py-0.5 text-xs text-slate-400">{r.sides.length}</span>
                     <span className="break-words">{r.sides.join(", ")}</span>
                   </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-right font-mono text-slate-200">
-                    {r.decided} of {r.total}
+                  <td className="whitespace-nowrap px-3 py-2 text-right font-mono text-slate-200" data-testid="qm-decided">
+                    {/* The guest's own count (§6 of the skip spec): the total stays every match, the Not played ones beside it. */}
+                    {r.notPlayed > 0 ? `${r.decided} of ${r.total} · ${r.notPlayed} not played` : `${r.decided} of ${r.total}`}
                   </td>
                   <td className="whitespace-nowrap px-3 py-2 text-xs text-slate-400">{utc(r.lastActivityAt)}</td>
                   <td className="px-3 py-2">

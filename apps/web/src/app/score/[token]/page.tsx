@@ -45,6 +45,7 @@ import { DictProvider } from "@/components/i18n/dict-provider";
 import { HtmlLang } from "@/components/i18n/html-lang";
 import { QUICK_MATCH_SYSTEM_ORG_ID } from "@/lib/quick-match-constants";
 import { findQuickMatchByCompetition } from "@/server/usecases/quick-match-home";
+import { withQuickMatchFinished } from "@/server/usecases/quick-match-skip";
 import { tryOpenHomeToken } from "@/server/usecases/quick-match-tokens";
 import { log } from "@/server/logger";
 import { QuickMatchBackLink } from "@/components/v2/quick-match-back-link";
@@ -222,7 +223,12 @@ export default async function ScorePadPage({
   // stage, and the spec records these four catalog sites as a known gap to be
   // closed the day a team sport gains a stage-overridable teamSize.
   const lineupCatalog = lineupCatalogFor(sportModule, fixture.config);
-  const [state, events] = await Promise.all([getFixtureState(read, fixture.id), listEvents(read, fixture.id, 0)]);
+  // FR4 m2: a quick match's Not played match also says whether its league has finished (`/state`'s own addition), so
+  // the pad's first paint already knows no Put back can come.
+  const [state, events] = await Promise.all([
+    getFixtureState(read, fixture.id).then((s) => withQuickMatchFinished(link.org_id, s)),
+    listEvents(read, fixture.id, 0),
+  ]);
 
   const fixtureId = fixture.id; // a closure does not keep `fixture`'s null check
   async function side(entrantId: string | null): Promise<PadSideInfo | null> {
@@ -322,6 +328,7 @@ export default async function ScorePadPage({
           summary: state.summary,
           state: state.state,
           outcome: state.outcome,
+          ...("quick_match_finished" in state ? { quick_match_finished: state.quick_match_finished } : {}),
         }}
         initialEvents={events.map((e) => ({
           id: e.id,

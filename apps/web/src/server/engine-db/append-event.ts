@@ -18,7 +18,7 @@ import {
   type ScoreSummary,
   type StageKind,
 } from "@seazn/engine/core";
-import { LOCKED_FIXTURE_STATUSES } from "@/lib/fixture-status";
+import { LOCKED_FIXTURE_REFUSAL_CODE, LOCKED_FIXTURE_STATUSES } from "@/lib/fixture-status";
 import { LEVEL_RESULT_REASON } from "@/lib/level-result-reason";
 import { SETTLE_REFUSAL_REASON } from "@/lib/settle-refusal-reason";
 import { resolveModule } from "./registry";
@@ -323,7 +323,7 @@ export async function appendEventInTx(
   // organiser's settle) would fold and then break V499's shape check with a bare 23514, so the door refuses it by name first.
   if (fixture.joint_declared) throw knockoutRefusal("FINAL_JOINT_WINNERS_DECLARED");
   if (LOCKED.has(fixture.status)) {
-    throw new EngineError("ALREADY_DECIDED", `fixture ${fixtureId} is ${fixture.status}`, {
+    throw new EngineError(LOCKED_FIXTURE_REFUSAL_CODE, `fixture ${fixtureId} is ${fixture.status}`, {
       fixtureId,
       status: fixture.status,
     });

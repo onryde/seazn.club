@@ -7,8 +7,9 @@
 //   - `touchQuickMatchActivity` / `...ForFixture`: the 7-day clock (C1) moved by activity, re-armed only while unsaved.
 //
 // Every quick match is made by the real producer, `createQuickMatch`, and every match result by the real write path
-// (`playToDecided` and `scoreEvent`), never by hand-inserted rows. The few direct UPDATEs below are the states a later
-// plan or a corrupt row would produce (a saved row, an expired one, a tampered seat), each named where it is made.
+// (`playToDecided` and `scoreEvent`), never by hand-inserted rows; every match marked Not played by the home's own writer
+// (`skipQuickMatchFixture`, plan 4 Task 3). The few direct UPDATEs below are the states a later plan or a corrupt row would
+// produce (a saved row, an expired one, a tampered seat), each named where it is made.
 //
 // Every case keys on its OWN quick match (pre-flight A16): the system org is shared by every case, every run and every
 // parallel test file, so nothing here counts the org's rows. Expected values come from the spec or the rulebook (round
@@ -21,7 +22,8 @@ import { randomBytes as kekBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { sql } from "@/lib/db";
-import { FIXTURE_STATUSES } from "@/lib/fixture-status";
+import { FIXTURE_STATUSES, type FixtureStatusValue } from "@/lib/fixture-status";
+import { isBye, type MatchLineRow } from "@/lib/run-sheet-groups";
 import offerJson from "@/lib/quick-match-offer.generated.json";
 import { DEFAULT_LOCALE, LOCALES } from "@/lib/i18n-constants";
 import { messages } from "@/lib/messages";
@@ -38,16 +40,23 @@ import { createQuickMatchAnyFormat } from "./_quick-match-knockout";
 import { hardDeleteQuickMatchCompetition } from "../quick-match-delete";
 import {
   findQuickMatchByCompetition,
+  isQuickMatchFinished,
+  listMyQuickMatches,
+  listRecentQuickMatches,
   nextPlayable,
+  phaseOf,
+  playedOf,
   readQuickMatchHome,
   resolveQuickMatchToken,
   toRow,
   type QuickMatchDbRow,
   type QuickMatchFixture,
   type QuickMatchHome,
+  type QuickMatchPhase,
   type QuickMatchRow,
 } from "../quick-match-home";
 import { quickMatchPreview } from "../quick-match-preview";
+import { skipQuickMatchFixture } from "../quick-match-skip";
 import { listQuickMatchSports } from "../quick-match-sports";
 import { hashHomeToken, hashVisitorKey, mintHomeToken, mintVisitorKey, openHomeToken } from "../quick-match-tokens";
 import { scoreEvent } from "../scoring";
@@ -118,6 +127,14 @@ async function save(id: string): Promise<void> {
 type TableRow = { entrantId: string; played: number; won: number };
 const tableOf = (h: QuickMatchHome) => (h.standings?.rows ?? []) as TableRow[];
 const sideIds = (f: QuickMatchFixture) => [f.home?.entrantId, f.away?.entrantId].filter((id): id is string => !!id);
+
+/** Marks a match Not played through the home's own writer (`skipQuickMatchFixture`, plan 4 T3), as its home link would. */
+async function markNotPlayed(out: { token: string }, fixtureId: string): Promise<void> {
+  const row = await resolveQuickMatchToken(out.token);
+  if (!row) throw new Error("precondition: the quick match's token resolves");
+  expect(await skipQuickMatchFixture(row, fixtureId), `premise: fixture ${fixtureId} was open and is now Not played`)
+    .toEqual({ changed: true });
+}
 
 beforeAll(async () => {
   if (!HAS_DB) return;
@@ -198,6 +215,126 @@ describe("nextPlayable (C11: the hero's next match)", () => {
     }
     expect(checked).toBe(NOT_PLAYABLE.length);
     expect(checked).toBeGreaterThan(0);
+  });
+});
+
+// ── one count, one "finished": pure (plan 4 Task 2, D4; spec 2026-11-12-quick-match-cancel-and-skip-design.md §3, §6) ──
+
+/** A real match's row as the count reads it (`MatchLineRow`): both seats known, no outcome yet, the given status. */
+const line = (status: FixtureStatusValue, o: Partial<MatchLineRow> = {}): MatchLineRow => ({
+  status,
+  outcome: null,
+  home_entrant_id: "e-1",
+  away_entrant_id: "e-2",
+  home_slot_label: null,
+  away_slot_label: null,
+  ext_key: null,
+  ...o,
+});
+/** A bye as a knockout's draw writes one (stages/bracket-seats.ts): one seat empty, `forfeited` by an award to the other. */
+const byeLine = (): MatchLineRow => line("forfeited", { away_entrant_id: null, outcome: { kind: "award", winner: "e-1" } });
+
+describe("playedOf / isQuickMatchFinished: a Not played match counts as done, and M stays the full total (§6)", () => {
+  it("premise: the bye row is a bye and the plain rows are matches (the shared predicate), else the bye cases are vacuous", () => {
+    expect(isBye(byeLine())).toBe(true);
+    let matches = 0;
+    for (const status of FIXTURE_STATUSES) {
+      expect(isBye(line(status)), status).toBe(false);
+      matches++;
+    }
+    expect(matches).toBe(FIXTURE_STATUSES.length);
+  });
+
+  it("a table of cases, the empty case first: the counts and whether the quick match is finished", () => {
+    // Every expected number is counted by hand from the case's own rows: a match is a non-bye row; played is a settled one
+    // (decided, forfeited, abandoned); not played is a `cancelled` one; the total is every match, played or not (§6).
+    type Want = { played: number; notPlayed: number; total: number };
+    const cases: [why: string, rows: MatchLineRow[], want: Want, finished: boolean][] = [
+      ["the empty case first: no match at all is not finished", [], { played: 0, notPlayed: 0, total: 0 }, false],
+      ["one played, one not played, one to play: not finished",
+        [line("decided"), line("cancelled"), line("scheduled")], { played: 1, notPlayed: 1, total: 3 }, false],
+      ["one played, one not played: finished (a skip is done, and the total keeps it)",
+        [line("decided"), line("cancelled")], { played: 1, notPlayed: 1, total: 2 }, true],
+      ["every match not played: finished with nothing played (the no-play case)",
+        [line("cancelled"), line("cancelled")], { played: 0, notPlayed: 2, total: 2 }, true],
+      ["every match played: finished, as before any skip existed",
+        [line("decided"), line("decided")], { played: 2, notPlayed: 0, total: 2 }, true],
+      ["a walkover and an abandonment are played; a held level result is neither played nor not played",
+        [line("forfeited"), line("abandoned"), line("needs_decision")], { played: 2, notPlayed: 0, total: 3 }, false],
+      ["a match back in play (Edit result reopened it) beside a not played one: not finished",
+        [line("in_play"), line("cancelled")], { played: 0, notPlayed: 1, total: 2 }, false],
+      ["a bye is no match: in none of the three counts", [byeLine(), line("decided")], { played: 1, notPlayed: 0, total: 1 }, true],
+      ["a bye beside the one match, not played: finished with nothing played",
+        [byeLine(), line("cancelled")], { played: 0, notPlayed: 1, total: 1 }, true],
+    ];
+    let checked = 0;
+    for (const [why, rows, want, finished] of cases) {
+      expect(playedOf(rows), why).toEqual(want);
+      expect(isQuickMatchFinished(playedOf(rows)), why).toBe(finished);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+    expect(checked).toBe(9);
+    // The table can witness the regression it exists for: a case where finished differs from "every match played".
+    expect(cases.filter(([, , w, f]) => f && w.played < w.total).length).toBeGreaterThan(0);
+  });
+
+  it("finished is derived, never kept: Add a match un-finishes a league finished by skips, and so does Edit result (Review Focus 3, 5)", () => {
+    const done = [line("decided"), line("cancelled")];
+    expect(isQuickMatchFinished(playedOf(done)), "premise: finished by a skip").toBe(true);
+    // Add a match: one new scheduled fixture.
+    const added = [...done, line("scheduled")];
+    expect(playedOf(added)).toEqual({ played: 1, notPlayed: 1, total: 3 });
+    expect(isQuickMatchFinished(playedOf(added))).toBe(false);
+    // ... and played to its result: finished again.
+    expect(isQuickMatchFinished(playedOf([...done, line("decided")]))).toBe(true);
+    // Edit result: the played match's deciding event voided, back in play.
+    expect(isQuickMatchFinished(playedOf([line("in_play"), line("cancelled")]))).toBe(false);
+  });
+
+  it("the predicate alone, on counts handed to it: at least one match, and every one played or not played", () => {
+    const cases: [{ played: number; notPlayed: number; total: number }, boolean][] = [
+      [{ played: 0, notPlayed: 0, total: 0 }, false],
+      [{ played: 1, notPlayed: 0, total: 1 }, true],
+      [{ played: 0, notPlayed: 1, total: 1 }, true],
+      [{ played: 1, notPlayed: 2, total: 3 }, true],
+      [{ played: 1, notPlayed: 1, total: 3 }, false],
+      [{ played: 2, notPlayed: 0, total: 3 }, false],
+    ];
+    let checked = 0;
+    for (const [c, want] of cases) {
+      expect(isQuickMatchFinished(c), JSON.stringify(c)).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(6);
+  });
+});
+
+describe("phaseOf: every fixture status's phase for a guest", () => {
+  it("cancelled is Not played whatever its seats; every other status keeps its phase (C11, C18, C23)", () => {
+    // [both sides known, a side still unknown], typed here from the rules the phase doc states: settled (decided,
+    // forfeited, abandoned), live (in play), ready (scheduled with both sides known), waiting (anything else: a side still
+    // unknown, a held result no guest can settle, a finalized match no guest path writes), and Not played (the skip).
+    const RULEBOOK = {
+      scheduled: ["ready", "waiting"],
+      in_play: ["live", "live"],
+      decided: ["settled", "settled"],
+      finalized: ["waiting", "waiting"],
+      abandoned: ["settled", "settled"],
+      forfeited: ["settled", "settled"],
+      cancelled: ["notPlayed", "notPlayed"],
+      needs_decision: ["waiting", "waiting"],
+    } satisfies Record<FixtureStatusValue, [QuickMatchPhase, QuickMatchPhase]>;
+    const side = { entrantId: "e-1", name: "One" };
+    let checked = 0;
+    for (const status of FIXTURE_STATUSES) {
+      const [known, unknown] = RULEBOOK[status];
+      expect(phaseOf({ status, home: side, away: { ...side, entrantId: "e-2" } }), status).toBe(known);
+      expect(phaseOf({ status, home: null, away: side }), `${status}, a side unknown`).toBe(unknown);
+      checked++;
+    }
+    expect(checked).toBe(8);
+    expect(Object.keys(RULEBOOK).sort()).toEqual([...FIXTURE_STATUSES].sort());
   });
 });
 
@@ -340,7 +477,7 @@ describe.skipIf(!HAS_DB)("readQuickMatchHome", () => {
     expect(h.total).toBe(6);   // round robin of 4: 4·3/2
     expect(h.total).toBe(a.matchCount);   // C17: the number the Start button showed
     expect(h.played).toBe(0);
-    expect(h.allPlayed).toBe(false);
+    expect(h.finished).toBe(false);
     expect(h.fixtures.filter((f) => f.phase === "live")).toEqual([]);
     expect(h.next!.roundNo).toBe(1);
     expect(h.next!.fixtureNo).toBe(1);
@@ -396,7 +533,7 @@ describe.skipIf(!HAS_DB)("readQuickMatchHome", () => {
       expect(h.fixtures).toEqual([]);
       expect(h.total).toBe(0);
       expect(h.played).toBe(0);
-      expect(h.allPlayed).toBe(false);   // zero of zero is not a finished match: no winner card
+      expect(h.finished).toBe(false);   // zero of zero is not a finished match: no winner card
       expect(h.next).toBeNull();
       expect(h.fixtures.filter((f) => f.phase === "live")).toEqual([]);
       expect(h.sides).toHaveLength(SIDES.length);
@@ -487,7 +624,7 @@ describe.skipIf(!HAS_DB)("readQuickMatchHome", () => {
 
     h = await homeOf(a);
     expect(h.played).toBe(1);
-    expect(h.allPlayed).toBe(false);
+    expect(h.finished).toBe(false);
     const decided = h.fixtures.find((f) => f.id === first.id)!;
     expect(sideIds(first)).toContain(decided.winnerEntrantId);
     expect(h.next!.id).not.toBe(first.id);
@@ -504,6 +641,50 @@ describe.skipIf(!HAS_DB)("readQuickMatchHome", () => {
     expect(h.fixtures.filter((f) => f.phase === "live").map((f) => f.id)).toEqual([first.id]);
     expect(h.next!.id).toBe(first.id);
     expect(tableOf(h).reduce((n, row) => n + row.played, 0)).toBe(0);
+  });
+
+  it("a Not played match counts as done: 1 played and 1 not played of 3 is open, the last not played finishes it; the strip and the account list read the same count (plan 4 T2)", async () => {
+    // One sport (badminton): the count reads fixture statuses, never a sport's scoring; the skip's sport sweep is Task 3's.
+    const visitorHash = v();
+    const out = await createQuickMatchAnyFormat(league4({ sides: SIDES.slice(0, 3) }), { visitorHash });
+    try {
+      let h = await homeOf(out);
+      const matches = h.fixtures.filter((f) => !f.isBye);
+      expect(matches).toHaveLength(3);   // round robin of 3: 3·2/2
+      const [m1, m2, m3] = matches as [QuickMatchFixture, QuickMatchFixture, QuickMatchFixture];
+      expect(await playToDecided(systemAuth(), m1.id)).toMatchObject({ kind: "decided" });
+      await markNotPlayed(out, m2.id);
+
+      h = await homeOf(out);
+      expect({ played: h.played, notPlayed: h.notPlayed, total: h.total, finished: h.finished })
+        .toEqual({ played: 1, notPlayed: 1, total: 3, finished: false });
+      expect(h.fixtures.find((f) => f.id === m2.id)!.phase).toBe("notPlayed");
+      expect(h.next!.id).toBe(m3.id);   // a Not played match is never next
+
+      // Every count consumer reads the one `playedOf`: the setup page's Continue card (the recent strip's read) and the
+      // account list. An open match first, then the finished one below.
+      const recent = async () => (await listRecentQuickMatches(visitorHash, { counts: true })).find((r) => r.token === out.token);
+      expect(await recent()).toMatchObject({ played: 1, notPlayed: 1, total: 3 });
+
+      await markNotPlayed(out, m3.id);
+      h = await homeOf(out);
+      expect({ played: h.played, notPlayed: h.notPlayed, total: h.total, finished: h.finished })
+        .toEqual({ played: 1, notPlayed: 2, total: 3, finished: true });
+      expect(h.next).toBeNull();
+      expect(h.fixtures.filter((f) => !f.isBye).map((f) => [f.id, f.phase])).toEqual([
+        [m1.id, "settled"],
+        [m2.id, "notPlayed"],
+        [m3.id, "notPlayed"],
+      ]);
+      expect(await recent()).toMatchObject({ played: 1, notPlayed: 2, total: 3 });
+
+      await save(out.id);
+      const [saver] = await sql<{ saved_by_user_id: string }[]>`select saved_by_user_id from quick_matches where id = ${out.id}`;
+      const mine = await listMyQuickMatches(saver!.saved_by_user_id, { links: false });
+      expect(mine.find((m) => m.id === out.id)).toMatchObject({ played: 1, notPlayed: 2, total: 3 });
+    } finally {
+      await hardDeleteQuickMatchCompetition(out.competitionId);
+    }
   });
 
   it("knockout of 3: the bye is marked and not counted, the final waits, follows its semi-final, then all is played (C10)", async () => {
@@ -528,7 +709,7 @@ describe.skipIf(!HAS_DB)("readQuickMatchHome", () => {
     expect(await playToDecided(systemAuth(), semi.id)).toMatchObject({ kind: "decided" });
     h = await homeOf(k);
     expect(h.played).toBe(1);
-    expect(h.allPlayed).toBe(false);
+    expect(h.finished).toBe(false);
     const semiWinner = h.fixtures.find((f) => f.id === semi.id)!.winnerEntrantId;
     expect(sideIds(semi)).toContain(semiWinner);
     expect(h.next!.id).toBe(final.id);   // both sides of the final are now known
@@ -537,7 +718,7 @@ describe.skipIf(!HAS_DB)("readQuickMatchHome", () => {
     expect(await playToDecided(systemAuth(), final.id)).toMatchObject({ kind: "decided" });
     h = await homeOf(k);
     expect(h.played).toBe(2);
-    expect(h.allPlayed).toBe(true);
+    expect(h.finished).toBe(true);
     expect(h.next).toBeNull();
     expect(h.fixtures.filter((f) => f.phase === "live")).toEqual([]);
     const done = h.fixtures.find((f) => f.id === final.id)!;

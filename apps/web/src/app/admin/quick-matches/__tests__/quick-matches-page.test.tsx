@@ -14,6 +14,9 @@
 //
 // One sport (badminton), on purpose: the page renders the reads' rows, which the usecase suite already holds across two sports.
 //
+// Plan 4 Task 2: a match marked Not played counts as done. Every match is marked Not played by the home's own writer
+// (`skipQuickMatchFixture`, plan 4 Task 3).
+//
 // Real Postgres required; skipped without DATABASE_URL. Rendered through react-dom/server (vitest runs `environment: "node"`).
 import { randomBytes, randomUUID } from "node:crypto";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -70,11 +73,12 @@ import { createQuickMatch, systemAuth, type CreatedQuickMatch } from "@/server/u
 import { hardDeleteQuickMatchCompetition } from "@/server/usecases/quick-match-delete";
 import { resolveQuickMatchToken } from "@/server/usecases/quick-match-home";
 import { saveQuickMatchForUser } from "@/server/usecases/quick-match-save";
+import { skipQuickMatchFixture } from "@/server/usecases/quick-match-skip";
 import { listQuickMatchSports } from "@/server/usecases/quick-match-sports";
 import { hashHomeToken, hashVisitorKey, mintVisitorKey } from "@/server/usecases/quick-match-tokens";
 import { ensureGuestDeviceLink } from "@/server/usecases/device-links";
 import { scoreEvent } from "@/server/usecases/scoring";
-import { firstRallyFor } from "@/server/usecases/__tests__/_quick-match-probe";
+import { firstRallyFor, playToDecided } from "@/server/usecases/__tests__/_quick-match-probe";
 import AdminQuickMatchesPage from "../page";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -96,7 +100,7 @@ interface Secrets {
 }
 let S: Secrets;
 
-async function create(email: string | null, visitorHash: string): Promise<CreatedQuickMatch> {
+async function create(email: string | null, visitorHash: string, sides: string[] = [MARKUP_SIDE, PLAIN_SIDE]): Promise<CreatedQuickMatch> {
   const sport = (await listQuickMatchSports()).find((s) => s.sport_key === "badminton");
   if (!sport) throw new Error("premise: badminton is offered for quick matches");
   const out = await createQuickMatch(
@@ -106,7 +110,7 @@ async function create(email: string | null, visitorHash: string): Promise<Create
       variant_key: sport.variants[0]!.variant_key,
       kind: sport.kinds.at(-1)!,
       format: "league",
-      sides: [MARKUP_SIDE, PLAIN_SIDE],
+      sides,
       plays: 1,
       email,
       locale: "en",
@@ -131,6 +135,16 @@ const render = async (filter?: string | string[]): Promise<string> =>
   renderToStaticMarkup(await AdminQuickMatchesPage({ searchParams: Promise.resolve(filter === undefined ? {} : { filter }) }));
 
 const rowsIn = (html: string): number => html.split('data-testid="qm-row"').length - 1;
+/** Each listed row's Decided cell, in order. */
+const decidedCells = (html: string): string[] => [...html.matchAll(/data-testid="qm-decided"[^>]*>([^<]*)</g)].map((m) => m[1]!);
+
+/** Marks a match Not played through the home's own writer (`skipQuickMatchFixture`, plan 4 T3), as its home link would. */
+async function markNotPlayed(out: CreatedQuickMatch, fixtureId: string): Promise<void> {
+  const row = await resolveQuickMatchToken(out.token);
+  if (!row) throw new Error(`precondition: quick match ${out.id}'s token resolves`);
+  expect(await skipQuickMatchFixture(row, fixtureId), `premise: fixture ${fixtureId} was open and is now Not played`)
+    .toEqual({ changed: true });
+}
 const cell = (html: string, row: string, window: string): string | undefined =>
   html.match(new RegExp(`data-testid="qm-count-${row}-${window}"[^>]*>([^<]*)<`))?.[1];
 
@@ -285,6 +299,51 @@ describe.skipIf(!HAS_DB)("/admin/quick-matches renders what is there, and nothin
     expect(checked).toBe(6);
     // The active filter is marked.
     expect(await render("saved")).toMatch(/aria-current="page"[^>]*>Saved</);
+  });
+
+  it("Not played (plan 4): the Decided cell adds how many were not played, and Finished counts a league finished by skips", async () => {
+    await signInAs(true);
+    const ids = scope.ids;
+    // A league of three sides: three matches (a round robin of n is n(n-1)/2), scoped alone so the counts are its own.
+    const league = await create(null, hashVisitorKey(mintVisitorKey()), [PLAIN_SIDE, "Asha & Ben", "Lee & Ana"]);
+    scope.ids = [league.id];
+    try {
+      const fixtures = await sql<{ id: string }[]>`
+        select f.id from fixtures f join divisions d on d.id = f.division_id where d.competition_id = ${league.competitionId}
+         order by f.round_no, f.fixture_no`;
+      expect(fixtures.length, "premise: a round robin of 3 is 3 matches").toBe(3);
+      expect(await playToDecided(systemAuth(), fixtures[0]!.id), "premise: played to a result").toMatchObject({ kind: "decided" });
+
+      // Nothing not played: the cell is the guest's own "x of y", and the match is not finished.
+      let html = await render();
+      expect(decidedCells(html)).toEqual(["1 of 3"]);
+      let finished = 0;
+      for (const w of ["24h", "7d", "30d"]) {
+        expect(cell(html, "finished", w), w).toBe("0");
+        finished++;
+      }
+
+      // One not played: x of y keeps the full total and says the rest; still one to play, still not finished.
+      await markNotPlayed(league, fixtures[1]!.id);
+      html = await render();
+      expect(decidedCells(html)).toEqual(["1 of 3 · 1 not played"]);
+      expect(cell(html, "finished", "30d")).toBe("0");
+
+      // The last not played: every match played or not played, so it is finished in every window.
+      await markNotPlayed(league, fixtures[2]!.id);
+      html = await render();
+      expect(decidedCells(html)).toEqual(["1 of 3 · 2 not played"]);
+      for (const w of ["24h", "7d", "30d"]) {
+        expect(cell(html, "finished", w), w).toBe("1");
+        finished++;
+      }
+      expect(finished).toBe(6);
+      // The Finished row's hint says what finished now means.
+      expect(html).toContain("every match played or not played");
+      expect(html).not.toContain("every match decided");
+    } finally {
+      scope.ids = ids;
+    }
   });
 
   it("the empty case: nothing in scope is the empty row, not an empty table", async () => {

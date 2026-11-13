@@ -15,15 +15,18 @@ import "server-only";
 //     kernel's types are never play, by the engine's own declaration (`CORE_EVENT_SCHEMAS`, the list `playRecorded` reads):
 //     a Start alone is a guest who opened the pad and left, and a point taken back leaves nothing played. Two departures
 //     from `playRecorded`, both the ruling's: no chess exception (its `startIsPlay`: a chess Start alone is not played here
-//     either), and a sport event counts wherever it sits in the ledger. A bye's award is written onto its fixture with no
-//     event at all (bracket-seats.ts), so a knockout's day-one bye never reads as played. A result is a sport event too (the
-//     deciding rally, a chess result), and nothing else decides a quick match's real match: it has no organizer to settle
-//     or withdraw a side, and the one kernel result a scorer's pad sends (a disqualifying sanction's forfeit) follows its
-//     sanction, a sport event. That premise is a guard: a row whose matches are decided with no standing sport event is
-//     logged by id (`brokenPremise`).
+//     either), and a sport event counts wherever it sits in the ledger, on any fixture, whatever its status: a match marked
+//     Not played (plan 4) keeps its ledger (Put back restores it exactly as it was), so a point standing on it was played.
+//     A bye's award is written onto its fixture with no event at all (bracket-seats.ts), so a knockout's day-one bye never
+//     reads as played. A result is a sport event too (the deciding rally, a chess result), and nothing else decides a quick
+//     match's real match: it has no organizer to settle or withdraw a side, and the one kernel result a scorer's pad sends
+//     (a disqualifying sanction's forfeit) follows its sanction, a sport event. That premise is a guard: a row whose matches
+//     are decided with no standing sport event is logged by id (`brokenPremise`).
 //   - decided "x of y": the guest's own "{played} of {count}" (`playedOf`, quick-match-home.ts: non-bye fixtures, and the
-//     settled ones among them), so staff and the guest never read two numbers for one match.
-//   - finished: every one of its matches decided (and it has at least one).
+//     settled ones among them), so staff and the guest never read two numbers for one match; with "· K not played" beside
+//     it when matches were marked Not played (plan 4), the total staying the full count.
+//   - finished: the guest's own (`isQuickMatchFinished`, plan 4 D4): it has at least one match, and every one is decided or
+//     marked Not played. A league finished by skips is finished here too.
 //   - saved: `saved_by_user_id` is set.
 //   - expired, awaiting the sweep: unsaved and past `expires_at`. The hourly sweep (quick-match-sweep.ts) then HARD-deletes it
 //     with its competition and its outbox rows, as the saver's Delete does, and neither leaves a row: the only record of a
@@ -45,7 +48,7 @@ import { sql } from "@/lib/db";
 import { QUICK_MATCH_SYSTEM_ORG_ID } from "@/lib/quick-match-constants";
 import type { MatchLineRow } from "@/lib/run-sheet-groups";
 import { log } from "@/server/logger";
-import { playedOf } from "./quick-match-home";
+import { isQuickMatchFinished, playedOf } from "./quick-match-home";
 
 const SYSTEM_ORG = QUICK_MATCH_SYSTEM_ORG_ID;
 const HOUR_MS = 3600 * 1000;
@@ -90,6 +93,8 @@ export interface QuickMatchAdminRow {
   /** Guest-typed, in the order typed (seed order). */
   sides: string[];
   decided: number;
+  /** Matches marked Not played (plan 4): beside "decided of total", never out of the total. */
+  notPlayed: number;
   total: number;
   lastActivityAt: Date;
   saved: boolean;
@@ -130,11 +135,6 @@ function playedSql() {
      where d.competition_id = q.competition_id
        and se.type <> all(${[...KERNEL_EVENT_TYPES]}::text[])
        and not exists (select 1 from score_events v where v.voids_event_id = se.id))`;
-}
-
-/** finished (see the header): every match decided, and at least one. */
-export function isFinished(m: { decided: number; total: number }): boolean {
-  return m.total > 0 && m.decided === m.total;
 }
 
 /** Every fixture row of these competitions, by competition: ONE read, the columns `playedOf` reads. No org predicate here
@@ -181,8 +181,8 @@ export async function quickMatchAdminCounts(
      where ${scopeSql(opts.onlyIds)} and q.created_at >= ${new Date(now.getTime() - widest)}`;
   const fixtures = await fixturesByCompetition(cohort.map((c) => c.competition_id));
   const judged = cohort.map((c) => {
-    const { played: decided, total } = playedOf(fixtures.get(c.competition_id) ?? []);
-    return { ...c, decided, total, finished: isFinished({ decided, total }) };
+    const counts = playedOf(fixtures.get(c.competition_id) ?? []);
+    return { ...c, decided: counts.played, finished: isQuickMatchFinished(counts) };
   });
   brokenPremise(judged);
 
@@ -249,7 +249,7 @@ export async function listQuickMatchesForAdmin(
 
   const rows = page.map((m): QuickMatchAdminRow => {
     const sides = sidesOf.get(m.competition_id) ?? [];
-    const { played: decided, total } = playedOf(fixtures.get(m.competition_id) ?? []);
+    const { played: decided, notPlayed, total } = playedOf(fixtures.get(m.competition_id) ?? []);
     return {
       id: m.id,
       createdAt: m.created_at,
@@ -258,6 +258,7 @@ export async function listQuickMatchesForAdmin(
       kinds: [...new Set(sides.map((s) => s.kind))].sort(),
       sides: sides.map((s) => s.display_name),
       decided,
+      notPlayed,
       total,
       lastActivityAt: m.last_activity_at,
       saved: m.saved,

@@ -27,6 +27,7 @@ import { deviceLinkOrgId, ensureDeviceLink, ensureGuestDeviceLink, resolveDevice
 import { createQuickMatch, type CreatedQuickMatch } from "@/server/usecases/quick-match-create";
 import { hardDeleteQuickMatchCompetition } from "@/server/usecases/quick-match-delete";
 import { findQuickMatchByCompetition } from "@/server/usecases/quick-match-home";
+import { skipQuickMatchFixture } from "@/server/usecases/quick-match-skip";
 import { readScanFixture } from "@/server/usecases/scan-fixture";
 import { hashVisitorKey, mintVisitorKey } from "@/server/usecases/quick-match-tokens";
 import { seedOrg } from "@/server/usecases/__tests__/_seed";
@@ -527,5 +528,51 @@ describe.skipIf(!HAS_DB)("the dead link's hint names no organiser on a quick mat
     expect(html, "precondition: the gone screen").toContain(en["device.dead.gone"]);
     expect(html).toContain(hint);
     expect(html).not.toContain(not);
+  });
+});
+
+// FR4 m2 (whole-branch review m2, controller PO rec 2026-11-13): the pad opened on a Not played match already knows, on its
+// first paint, whether the league has finished (`initialState.quick_match_finished`, the key `/state` adds), so a pad
+// opened after the league finished never arms its clock or says "Put it back". Expected values come from the rows (a
+// league of 2 is one match, a league of 3 three), never from the page.
+describe.skipIf(!HAS_DB)("FR4 m2: the pad's first paint says whether a Not played match's league has finished", () => {
+  const initialOf = (tree: ReactElement) => {
+    const pad = find(tree, DeviceScorePad);
+    expect(pad, "precondition: the pad renders").not.toBeNull();
+    return (pad!.props as { initialState: Record<string, unknown> }).initialState;
+  };
+
+  it("scheduled: no key; its only match Not played: finished; a league of 3 with one Not played: not finished", async () => {
+    const two = await quickMatchPad();
+    expect("quick_match_finished" in initialOf((await render(two.secret)).tree), "scheduled: the state it always had").toBe(false);
+    const twoRow = await findQuickMatchByCompetition(two.out.competitionId);
+    expect(await skipQuickMatchFixture(twoRow!, two.fixtureId)).toEqual({ changed: true });
+    const finished = initialOf((await render(two.secret)).tree);
+    expect([finished.status, finished.quick_match_finished]).toEqual(["cancelled", true]);
+
+    const three = await createQuickMatch(
+      { ...twoSides(), sides: ["Ravi & Sam", "Priya & Tom", "Lee & Ana"] },
+      { visitorHash: hashVisitorKey(mintVisitorKey()), mailAllowed: async () => true },
+    );
+    const [fx] = await sql<{ id: string }[]>`
+      select id from fixtures where division_id = ${three.divisionId} order by round_no, seq_in_round limit 1`;
+    const threeRow = await findQuickMatchByCompetition(three.competitionId);
+    const { secret } = await ensureGuestDeviceLink(threeRow!, fx!.id);
+    expect(await skipQuickMatchFixture(threeRow!, fx!.id)).toEqual({ changed: true });
+    const open = initialOf((await render(secret)).tree);
+    expect([open.status, open.quick_match_finished], "two matches still open").toEqual(["cancelled", false]);
+    for (const id of [two.out.competitionId, three.competitionId]) await hardDeleteQuickMatchCompetition(id);
+  });
+
+  it("an organiser's cancelled match: the state carries no key (the negative pair)", async () => {
+    const { auth } = await seedOrg("pro");
+    const { stage } = await seedStage(auth, "league", ["A", "B"]);
+    const [fixture] = await fixturesOf(stage.id);
+    const { secret } = await ensureDeviceLink(auth, fixture!.id);
+    // No organiser path in reach here cancels a match; the row is moved directly, as the status an organiser can reach.
+    await sql`update fixtures set status = 'cancelled' where id = ${fixture!.id}`;
+    const state = initialOf((await render(secret)).tree);
+    expect(state.status, "precondition: the page read it cancelled").toBe("cancelled");
+    expect("quick_match_finished" in state).toBe(false);
   });
 });

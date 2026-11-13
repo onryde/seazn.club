@@ -44397,6 +44397,10 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "quick_match_finished": {
+                          "description": "Present only on a quick match's match marked Not played (status cancelled): whether its league has finished, so it can no longer be put back. Absent on every other match.",
+                          "type": "boolean"
                         }
                       },
                       "required": [

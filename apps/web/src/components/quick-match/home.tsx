@@ -1,8 +1,15 @@
 // Quick match home (spec docs/superpowers/specs/2026-11-03-quick-match-design.md §5 step 3, §7.5, C11, C15, C18; plan 2
 // Task 5; mockup docs/superpowers/specs/mockups/2026-11-03-quick-match/home.html, layout only): what the share link opens.
 // In the mockup's order: the eyebrow (sport · kind · format), the name, the played line, the hero (the match up next or in
-// play, or the winner once every match is played), the actions, the standings (league) or the draw (knockout), then every
+// play, or the winner once the league is finished), the actions, the standings (league) or the draw (knockout), then every
 // match with the finished ones at the bottom.
+//
+// Not played (plan docs/superpowers/plans/2026-11-13-quick-match-4-skip-match.md Task 4; spec 2026-11-12 §3, §6; mockup
+// qmd13a01 sections 1-5, layout only): each row's ⋯ menu (the `rowMenu` slot, match-list.tsx decides what it offers), the
+// played line naming how many were not played (M stays the full total), "Counts played matches only" over the table, and
+// "finished" read from the one predicate (`QuickMatchHome.finished`, `isQuickMatchFinished`): every match played or Not
+// played. Finished with a match played, the winner card says how many were played and how many were not; finished with
+// none played, the table is hidden and the home says "No matches were played", with the way to start a new quick match.
 //
 // A SERVER component. It reads plan 1's `QuickMatchHome` and passes only strings and ids on: the read's `row` (the
 // creator's email, the sealed token) never leaves this file (A14), and nothing here is a client boundary. The actions are
@@ -31,14 +38,16 @@ import {
 import { roundRoleFor } from "@/lib/round-role-label";
 import { routes } from "@/lib/routes";
 import { compactScore } from "@/lib/match-day/view";
-import { scoreLineOf, type LevelWords } from "@/lib/score/levels";
+import { scoreLineOf, type LevelWords, type ScoreLine } from "@/lib/score/levels";
 import { setBreakdown } from "@/lib/public-site";
+import { isQuickMatchFinished } from "@/lib/quick-match-finished";
 import type { QuickMatchFixture, QuickMatchHome, QuickMatchSide } from "@/server/usecases/quick-match-home";
 import { QuickMatchDeletionLine } from "./deletion-line";
 import { QuickMatchStandings, type FullTableData, type StandingsView } from "./standings";
 import { QuickMatchDraw, type DrawCard, type DrawRound, type DrawSeat } from "./draw";
-import { QuickMatchList, type MatchView, type ScoreSlot, type SeatView } from "./match-list";
+import { QuickMatchList, type MatchView, type RowMenuSlot, type ScoreSlot, type SeatView, type SkipCopy } from "./match-list";
 import { fixtureLabel, winnerOfLabel, type FixtureLabel } from "./fixture-label";
+import { playedLine } from "./played-line";
 
 type Vars = Record<string, string | number>;
 
@@ -72,6 +81,9 @@ export interface QuickMatchSlots {
   addMatch?: AddMatchSlot;
   /** Plan 3 Task 5: the Save form. Drawn only while nobody has saved the match (`savedSlot`). */
   save?: ReactNode;
+  /** Plan 4 Task 4: one row's ⋯ menu (Score and Not played, Edit result, or Put back), asked only for a row with something to
+   *  offer (match-list.tsx `rowMenuItems`). */
+  rowMenu?: RowMenuSlot;
 }
 
 const KIND_KEY = {
@@ -89,7 +101,8 @@ const FORMAT_KEY = {
  * The home's flash (pre-flight D3): a home action's refusal lands back here as `?e=<code>` (QUICK_MATCH_ERRORS), and each
  * code reads as its own `quickMatch.flash.*` line in the viewer's language. The codes are the Score route's
  * (app/q/[token]/score/[fixtureId]/route.ts) and Add-a-match's (app/q/[token]/add-match/route.ts: the cap, whose line names
- * QUICK_MATCH_MAX_ADHOC as `{max}`, the same side twice, and a knockout). An expiry has none: the home is then the dead
+ * QUICK_MATCH_MAX_ADHOC as `{max}`, the same side twice, and a knockout), and plan 4's Not played and Put back routes
+ * (app/q/[token]/skip, put-back: a match with a result, a finished league). An expiry has none: the home is then the dead
  * screen, which ignores `?e=` (D16; T6 review m1). A repeated `?e=` reads its first, a blank one is
  * no flash, and anything else (a crafted value, a code of another page) is the generic line: the raw value never reaches
  * the page.
@@ -117,6 +130,12 @@ const FLASH: Readonly<Record<string, HomeFlash>> = {
   // Save's confirm route (plan 3 Task 5): somebody saved it first, and staff looking through a user's account.
   [QUICK_MATCH_ERRORS.TAKEN]: { key: "quickMatch.flash.taken", tone: "refusal" },
   [QUICK_MATCH_ERRORS.SAVE_IMPERSONATED]: { key: "quickMatch.flash.impersonating", tone: "refusal" },
+  // Not played and Put back (plan 4 Task 3's routes): a skip of a match that has a result (or of a knockout's), and a stale
+  // Put back once the league has finished.
+  [QUICK_MATCH_ERRORS.NOT_SKIPPABLE]: { key: "quickMatch.flash.notSkippable", tone: "refusal" },
+  [QUICK_MATCH_ERRORS.LEAGUE_FINISHED]: { key: "quickMatch.flash.leagueFinished", tone: "refusal" },
+  // The Score route on a match someone else marked Not played after this page loaded (T1 review G1): put it back first.
+  [QUICK_MATCH_ERRORS.NOT_PLAYED]: { key: "quickMatch.flash.notPlayed", tone: "refusal" },
 };
 const GENERIC_FLASH: HomeFlash = { key: "quickMatch.flash.generic", tone: "refusal" };
 export function homeFlash(e: string | string[] | undefined): HomeFlash | null {
@@ -139,7 +158,10 @@ interface Built {
   eyebrow: string;
   played: string;
   hero: { kicker: string; home: string; away: string; score: string | null; fixture: { id: string; live: boolean } } | null;
-  winner: { kicker: string; names: string[] } | null;
+  /** `note` (plan 4): how many were played and how many were not, when the league finished with some Not played. */
+  winner: { kicker: string; names: string[]; note: string | null } | null;
+  /** Finished with no match played (plan 4, spec §3 Edge): "No matches were played", in place of a winner and a table. */
+  noPlay: { kicker: string; title: string; hint: string } | null;
   standings: StandingsView | null;
   draw: DrawRound[] | null;
   matches: MatchView[];
@@ -180,6 +202,25 @@ function scoreText(f: QuickMatchFixture, sportKey: string, levels: LevelWords): 
   if (f.phase !== "live") return null;
   const line = scoreLineOf(f.summary);
   return line === null ? null : compactScore(line, levels);
+}
+
+/**
+ * Whether a live match has anything but noughts on the board (FR4 m1, whole-branch review m1): a match that was only
+ * Started is live at "0 — 0" and has scored nothing, so the confirm sheet must not call that score "already scored". Read
+ * from the engine's own figures, never its headline (a period sport's carries its period, "0 — 0 · P1"; a board game's
+ * reads "vs" until it is decided): a set sport's sets, games and points as `scoreLineOf` splits them (an advantage call is
+ * a point), else any figure on a side's own line (`ScoreSummary.perSide[].line`: goals, games and the board in play, a
+ * shoot-out's tally). A summary with no per-side lines is not the engine's shape: its score is quoted as before, so the
+ * sheet warns rather than hides.
+ */
+function scoreStands(line: ScoreLine, summary: unknown): boolean {
+  if (line.kind === "sets") {
+    const { won, mid, live } = line.levels;
+    return [...won, ...(mid ?? [])].some((n) => Number(n) > 0) || (live?.sides.some((s) => s !== "0") ?? false);
+  }
+  const perSide = (summary as { perSide?: unknown }).perSide;
+  if (!Array.isArray(perSide)) return true;
+  return perSide.some((s) => /[1-9]/.test(String((s as { line?: unknown } | null)?.line ?? "")));
 }
 
 /** A knockout fixture's role in its bracket, and its place among its round's NON-BYE fixtures: what `fixtureLabel` and
@@ -230,7 +271,26 @@ export function buildHomeView(home: QuickMatchHome, copy: QuickMatchCopy, fullTa
     return { name: null, label: say(winnerOfLabel(role, count, index, matchNo.get(feeder.id)!)), winner: false };
   };
 
-  const heroFixture = home.allPlayed ? null : home.next;
+  const heroFixture = home.finished ? null : home.next;
+  // The confirm sheet's body (plan 4 D6): skipping a match now finishes the league exactly when every OTHER match is played
+  // or Not played, the one finished predicate asked one Not played ahead; then the sheet says it cannot be put back.
+  const skipFinishes = isQuickMatchFinished({ played: home.played, notPlayed: home.notPlayed + 1, total: home.total });
+  /** The partial line (D6): a live match's score that will not count, quoted only once a score stands (`scoreStands`); a
+   *  live match with nothing scored yet says it has started (FR4 m1). Nothing for a match not in play, or one whose summary
+   *  this reader cannot split. */
+  const partialOf = (f: QuickMatchFixture): string | null => {
+    if (f.phase !== "live") return null;
+    const line = scoreLineOf(f.summary);
+    if (line === null) return null;
+    return scoreStands(line, f.summary)
+      ? t("quickMatch.skip.partial", { score: compactScore(line, copy.levels) })
+      : t("quickMatch.skip.started");
+  };
+  const skipCopyOf = (f: QuickMatchFixture, home_: SeatView, away: SeatView): SkipCopy => ({
+    title: t("quickMatch.skip.title", { home: home_.label, away: away.label }),
+    body: t(skipFinishes ? "quickMatch.skip.bodyLast" : "quickMatch.skip.body"),
+    partial: partialOf(f),
+  });
   const matches: MatchView[] = home.fixtures
     .filter((f) => !f.isBye)
     .map((f) => {
@@ -244,17 +304,25 @@ export function buildHomeView(home: QuickMatchHome, copy: QuickMatchCopy, fullTa
               : f.status === "decided"
                 ? t("quickMatch.home.drawn", { a: f.home.name, b: f.away.name })
                 : null;
+      const homeSeat = seat(f, f.home, f.homeSlotLabel);
+      const awaySeat = seat(f, f.away, f.awaySlotLabel);
+      // Spec §6: only an unplayed or in-progress match is skippable, and only a league's (P12: a bracket needs a winner).
+      const skippable = !knockout && (f.phase === "ready" || f.phase === "live");
       return {
         id: f.id,
         n: matchNo.get(f.id)!,
         phase: f.phase,
-        home: seat(f, f.home, f.homeSlotLabel),
-        away: seat(f, f.away, f.awaySlotLabel),
+        home: homeSeat,
+        away: awaySeat,
         score: scoreText(f, home.sport.key, copy.levels),
         result,
         next: heroFixture !== null && heroFixture.id === f.id,
         // A settled match the pad will reopen (A-M6): not one whose result has already moved the match on.
         editable: f.phase === "settled" && !f.resultMovedOn,
+        skippable,
+        // §6: Put back is hidden once the league has finished (the server refuses a stale one, LEAGUE_FINISHED).
+        putBack: !knockout && f.phase === "notPlayed" && !home.finished,
+        skipCopy: skippable ? skipCopyOf(f, homeSeat, awaySeat) : null,
       };
     });
 
@@ -326,7 +394,9 @@ export function buildHomeView(home: QuickMatchHome, copy: QuickMatchCopy, fullTa
             }),
           };
     standings = {
-      title: t("quickMatch.home.standings"),
+      // A finished league's table is final (mockup qmd13a01 §4); with a match Not played it says it counts played ones only.
+      title: t(home.finished ? "quickMatch.home.finalTable" : "quickMatch.home.standings"),
+      note: home.notPlayed > 0 ? t("quickMatch.home.countsPlayedOnly") : null,
       rankLabel: t("ladder.rank"),
       sideLabel: t("quickMatch.home.sideCol"),
       levelLabel: level ? copy.pub("table.level") : null,
@@ -343,14 +413,29 @@ export function buildHomeView(home: QuickMatchHome, copy: QuickMatchCopy, fullTa
   }
 
   let winner: Built["winner"] = null;
-  if (home.allPlayed) {
+  let noPlay: Built["noPlay"] = null;
+  if (home.finished) {
     if (knockout) {
       const final = home.fixtures.find((f) => f.isFinal);
-      if (final?.winnerEntrantId) winner = { kicker: t("quickMatch.home.winner"), names: [nameOf(final.winnerEntrantId)] };
+      if (final?.winnerEntrantId) winner = { kicker: t("quickMatch.home.winner"), names: [nameOf(final.winnerEntrantId)], note: null };
+    } else if (home.played === 0) {
+      // Spec §3 Edge: every match Not played. No winner, and no table (its every row would read 0, its order meaningless).
+      noPlay = {
+        kicker: t("quickMatch.home.leagueFinished"),
+        title: t("quickMatch.home.noPlay"),
+        hint: copy.plural("quickMatch.home.noPlayHint", home.total),
+      };
+      standings = null;
     } else if (leaders.length > 0) {
       winner = {
         kicker: t(leaders.length === 1 ? "quickMatch.home.winner" : "quickMatch.home.level"),
         names: leaders.map(nameOf),
+        // A short league is never mistaken for a full one (mockup qmd13a01 §4): "Top of the table after 4 played matches.
+        // 2 matches were not played."
+        note:
+          home.notPlayed > 0
+            ? `${copy.plural("quickMatch.home.winnerAfter", home.played)} ${copy.plural("quickMatch.home.winnerSkipped", home.notPlayed)}`
+            : null,
       };
     }
   }
@@ -397,12 +482,14 @@ export function buildHomeView(home: QuickMatchHome, copy: QuickMatchCopy, fullTa
       " · ",
     ),
     // A saved match has no expiry (plan 3 Task 2): it is kept until its owner deletes it, so its line carries no countdown (A-I3).
-    played:
-      home.row.expiresAt === null
-        ? copy.plural("quickMatch.home.playedSaved", home.total, { played: home.played })
-        : copy.plural("quickMatch.home.played", home.total, { played: home.played, days: QUICK_MATCH_EXPIRY_DAYS }),
+    // A finished one (plan 4, T4 review m1) carries none either: "deleted N days after the last score" names a clock the
+    // guest no longer runs, and a league finished with nothing played has no score at all. Its deletion is still said, by
+    // the dated "Not saved — deleted on …" line under Save. The Continue card and the account's list say the same words
+    // (`playedLine`), without the countdown.
+    played: playedLine(copy.plural, home, home.row.expiresAt === null || home.finished ? null : QUICK_MATCH_EXPIRY_DAYS),
     hero,
     winner,
+    noPlay,
     standings,
     draw,
     matches,
@@ -519,6 +606,7 @@ export function QuickMatchHomeView({
             </div>
             {v.hero ? heroCard(v.hero, t, slots.score) : null}
             {v.winner ? winnerCard(v.winner) : null}
+            {v.noPlay ? noPlayCard(v.noPlay, routes.quickMatchSetup(copy.locale), t("quickMatch.dead.startNew")) : null}
             {slots.share || saveNode ? (
               <div data-testid="qm-actions" className="flex min-w-0 flex-col gap-3">
                 {slots.share ?? null}
@@ -543,7 +631,9 @@ export function QuickMatchHomeView({
                 versus={t("quickMatch.home.versus")}
                 waits={t("quickMatch.home.waits")}
                 liveLabel={t("quickMatch.home.live")}
+                notPlayedLabel={t("quickMatch.home.notPlayed")}
                 score={slots.score}
+                rowMenu={slots.rowMenu}
               />
             ) : null}
             {v.addMatch && slots.addMatch ? <div className="min-w-0">{slots.addMatch(v.addMatch)}</div> : null}
@@ -640,6 +730,44 @@ function winnerCard(winner: NonNullable<Built["winner"]>): ReactNode {
           </li>
         ))}
       </ul>
+      {winner.note !== null ? (
+        <p data-testid="qm-winner-note" className="mt-2 text-sm leading-snug text-[#d9d2f2] [overflow-wrap:anywhere]">
+          {winner.note}
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
+/** Finished with nothing played (plan 4, spec §3 Edge, mockup qmd13a01 §5): the league is over and names no winner; the
+ *  way on is a new quick match, on the viewer's own setup page (the dead link's words: the same action). */
+function noPlayCard(noPlay: NonNullable<Built["noPlay"]>, startHref: string, startLabel: string): ReactNode {
+  return (
+    <section
+      data-testid="qm-no-play"
+      aria-labelledby="qm-no-play-title"
+      className="min-w-0 rounded-2xl border border-[#3b2a6e] bg-night-2 p-4"
+    >
+      <p data-testid="qm-no-play-kicker" className="app-display text-sm font-semibold tracking-[0.06em] text-[#b7aede]">
+        {noPlay.kicker}
+      </p>
+      <h2
+        id="qm-no-play-title"
+        data-testid="qm-no-play-title"
+        className="app-display mt-1.5 text-[1.6rem] font-bold leading-[1.1] text-cream [overflow-wrap:anywhere]"
+      >
+        {noPlay.title}
+      </h2>
+      <p data-testid="qm-no-play-hint" className="mt-2 text-sm leading-snug text-[#d9d2f2] [overflow-wrap:anywhere]">
+        {noPlay.hint}
+      </p>
+      <a
+        data-testid="qm-no-play-start"
+        href={startHref}
+        className="app-display mt-4 inline-flex min-h-11 w-full items-center justify-center rounded-xl border border-[color:var(--mk-lime)] px-5 py-2.5 text-center text-base font-bold leading-tight text-[color:var(--mk-lime)] hover:bg-[rgb(163_230_53/0.08)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cream"
+      >
+        {startLabel}
+      </a>
     </section>
   );
 }

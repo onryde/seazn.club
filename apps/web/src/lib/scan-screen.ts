@@ -15,15 +15,19 @@ export const VIEW_ONLY_COPY: Readonly<Record<ViewOnlyReason, MessageKey>> = {
   no_opponent: "device.scan.viewOnly.noOpponent",
 };
 
-/** A quick match's own line for each View-only reason whose ordinary copy sends the scorer to an organiser; the reasons
- *  absent here (cancelled, no opponent) never named one and keep their words. */
+/** A quick match's own line for each View-only reason whose ordinary copy would mislead a guest: carried forward and
+ *  finalized send the scorer to an organiser, and cancelled is the home's "Not played" (says how to put it back). The
+ *  reason absent here (no opponent) never named one and keeps its words. */
 const QUICK_MATCH_VIEW_ONLY: Readonly<Partial<Record<ViewOnlyReason, MessageKey>>> = {
   carried_forward: "device.quickMatch.resultLocked",
   finalized: "device.quickMatch.finished",
+  cancelled: "device.quickMatch.notPlayed",
 };
 
 /** Quick match (branch-fix A review Q1/Q2, controller rulings 2026-11-12): a guest's pad has no organiser to ask, so no
  *  View-only line sends the guest to one: carried forward says the result is locked, finalized that the match is finished.
+ *  Cancelled (quick match plan 4, T1 review G1): a guest's match is cancelled only by the home's "Not played", so the pad
+ *  says so and how to put it back, in the home's own Score refusal words (`quickMatch.flash.notPlayed`).
  *  Copy only: which screen a reason opens, and every control on it, stays the shared pad's. */
 export function viewOnlyKey(reason: ViewOnlyReason, quickMatch: boolean): MessageKey {
   return (quickMatch ? QUICK_MATCH_VIEW_ONLY[reason] : undefined) ?? VIEW_ONLY_COPY[reason];
@@ -40,6 +44,14 @@ export function decidedKey(quickMatch: boolean): MessageKey {
 export function askFreshLinkKey(quickMatch: boolean): MessageKey {
   return quickMatch ? "device.quickMatch.askFreshLink" : "device.askFreshLink";
 }
+
+/** Quick match plan 4, FR3 (T5 finding 1, controller PO rec 2026-11-13): how often a guest's pad that shows Not played
+ *  reads the match again while its tab is visible, so a Put back on another phone lifts it with no reload. Only that
+ *  screen polls, and only while visible: a hidden tab, an unmounted pad, a dead link or any other screen arms no timer,
+ *  and a re-read still in flight swallows the next tick. 10s: one `/state` + ledger pair per phone per 10s, on a screen
+ *  that has no controls to wait on; the tab return and "Check again" answer at once. Exported for the tests and the e2e
+ *  budget, which take it from here. */
+export const NOT_PLAYED_RECHECK_MS = 10_000;
 
 export type ScanScreen =
   | { screen: "view_only"; reason: ViewOnlyReason }

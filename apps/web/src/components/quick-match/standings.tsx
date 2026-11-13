@@ -8,6 +8,9 @@
 // A SERVER component over a view home.tsx built: no dictionary or database here. The side column truncates inside a
 // fixed table layout, so a 40-character name never widens a 320px screen.
 //
+// Not played (quick match plan 4 Task 4, mockup qmd13a01 §3-§4): the title reads "Final table" once the league is finished,
+// and with a match Not played the header carries a note that the table counts played matches only (both words home.tsx's).
+//
 // "Full table" (owner 2026-11-12): under the short table, a native `<details>` that expands IN PLACE (no script, no modal)
 // into the public table's own columns for this sport, in its order (the tie-break order the table is ranked by), with the
 // public table's own header words and cell text (`app/q/[token]/full-table.ts` builds them with standings-view.ts). Open,
@@ -23,7 +26,10 @@ export interface FullTableData {
 }
 
 export interface StandingsView {
+  /** "Standings", or "Final table" once the league is finished. */
   title: string;
+  /** "Counts played matches only" while a match is Not played (plan 4); null otherwise. */
+  note: string | null;
   /** The place column's name, for a screen reader (the mockup's header cell is blank). */
   rankLabel: string;
   sideLabel: string;
@@ -56,13 +62,20 @@ export interface StandingsView {
 export function QuickMatchStandings({ view }: { view: StandingsView }) {
   return (
     <section data-testid="qm-standings" aria-labelledby="qm-standings-title" className="group/standings min-w-0">
-      <h2
-        id="qm-standings-title"
-        data-testid="qm-standings-title"
-        className="app-display mb-2 text-xs font-semibold tracking-[0.18em] text-[#b7aede]"
-      >
-        {view.title}
-      </h2>
+      <div className="mb-2 flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
+        <h2
+          id="qm-standings-title"
+          data-testid="qm-standings-title"
+          className="app-display text-xs font-semibold tracking-[0.18em] text-[#b7aede]"
+        >
+          {view.title}
+        </h2>
+        {view.note !== null ? (
+          <p data-testid="qm-standings-note" className="min-w-0 text-xs text-[#8d7fc0] [overflow-wrap:anywhere]">
+            {view.note}
+          </p>
+        ) : null}
+      </div>
       <div
         data-testid="qm-standings-short"
         className="min-w-0 overflow-hidden rounded-xl border border-[#3b2a6e] group-has-[>details[open]]/standings:hidden"

@@ -8719,3 +8719,115 @@ test("quick match (football, a clock sport): the pad after Start and its way bac
   }
   expect(painted, "anti-vacuity: the back link's boxes were measured").toBeGreaterThan(0);
 });
+
+// Quick match plan 4 Task 5 (docs/superpowers/plans/2026-11-13-quick-match-4-skip-match.md; spec
+// docs/superpowers/specs/2026-11-12-quick-match-cancel-and-skip-design.md §6): a row's ⋯ menu and its "Not played" confirm
+// sheet are new interactive regions on the guest's home, so this width measures them open: nothing painted off screen or
+// clipped, no sideways scroll, every target 44px by hit test, and axe (WCAG A/AA) clean on the open menu and the open sheet,
+// each run judging at least one node. Then the skip lands the row Not played with its Put back at this width, and Put back
+// returns it. The sheet is a native modal <dialog> (plan D7): a bottom sheet below md, centred from md; either way all of it
+// is on screen here. The island must be hydrated before "Not played" is tapped, or the tap posts at once (the no-script
+// path) and no sheet opens: React's props key on the <details> is the signal.
+
+/** axe on `selector`, WCAG A/AA: no violation, and the count of nodes it judged (zero judged would pass anything, so it fails). */
+async function qmAxeClean(page: Page, selector: string, label: string): Promise<number> {
+  expect(await page.locator(selector).count(), `${label}: axe has something to scan`).toBeGreaterThan(0);
+  const axe = await new AxeBuilder({ page }).include(selector).withTags(["wcag2a", "wcag2aa"]).analyze();
+  expect(
+    axe.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(" ")).join(", ")}`),
+    `${label}: axe at ${projectTag()}`,
+  ).toEqual([]);
+  const judged = axe.passes.reduce((n, p) => n + p.nodes.length, 0);
+  expect(judged, `${label}: axe judged nodes`).toBeGreaterThan(0);
+  return judged;
+}
+
+test("quick match (Not played): a row's ⋯ menu and its confirm sheet hold at this width, 44px and axe-clean; the Not played row and its Put back too", async ({
+  browser,
+}) => {
+  // Two page loads, the skip's and the put back's redirects, and ~40 local acts (axe runs among them).
+  test.setTimeout(4 * QM_NAV_MS + 40 * QM_ACT_MS);
+  const ctx = await qmGuest(browser);
+  let scanned = 0;
+  let judged = 0;
+  try {
+    const page = await ctx.newPage();
+    await qmFillSetup(page, `Mobile quick match skip ${TAG}-${projectTag()}`, [QM_LONG, QM_LONG_TOO, "Lee & Ana"]);
+    await qmStart(page);
+    const next = page.locator('[data-testid="qm-match"][data-next="true"]');
+    await expect(next).toHaveCount(1);
+    const fixtureId = (await next.getAttribute("data-fixture-id"))!;
+    const rowSel = `[data-testid="qm-match"][data-fixture-id="${fixtureId}"]`;
+    const row = page.locator(rowSel);
+    await expect(row).toHaveAttribute("data-state", "ready");
+    await expect
+      .poll(() => row.getByTestId("qm-row-menu").evaluate((el) => Object.keys(el).some((k) => k.startsWith("__reactProps$"))), {
+        timeout: QM_NAV_MS,
+        message: "the ⋯ menu never hydrated",
+      })
+      .toBe(true);
+
+    // ── 1. The ⋯ menu, open: Score and Not played ──
+    const toggle = row.getByTestId("qm-row-menu-toggle");
+    await hitFloor(toggle, "the row's ⋯", 44);
+    await toggle.click();
+    const panel = row.getByTestId("qm-row-menu-panel");
+    await expect(panel).toBeVisible();
+    await expect(panel.getByRole("button")).toHaveCount(2);
+    await hitFloor(row.getByTestId("qm-menu-score"), "the menu's Score", 44);
+    await hitFloor(row.getByTestId("qm-skip"), "Not played", 44);
+    scanned += await paintedInsideViewport(panel, "the open ⋯ menu");
+    await expectNoHorizontalScroll(page);
+    scanned += await qmNotClipped(page, rowSel, "the row, its ⋯ menu open");
+    judged += await qmAxeClean(page, `${rowSel} [data-testid="qm-row-menu"]`, "the open ⋯ menu");
+
+    // ── 2. The confirm sheet, open: all of it on screen, its two answers 44px ──
+    await row.getByTestId("qm-skip").click();
+    const sheetSel = `${rowSel} [data-testid="qm-skip-sheet"]`;
+    const sheet = page.locator(sheetSel);
+    await expect(sheet, "Not played asks first").toBeVisible();
+    await expect(row.getByTestId("qm-skip-body")).toHaveText(qmUi("quickMatch.skip.body"));
+    const onScreen = await sheet.evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      return { modal: el.matches(":modal"), top: r.top, bottom: r.bottom, vh: window.innerHeight };
+    });
+    expect(onScreen.modal, "the sheet is modal").toBe(true);
+    expect(onScreen.top >= -0.5 && onScreen.bottom <= onScreen.vh + 0.5, `the sheet is all on screen ${JSON.stringify(onScreen)}`).toBe(true);
+    await hitFloor(row.getByTestId("qm-skip-confirm"), "Mark not played", 44);
+    await hitFloor(row.getByTestId("qm-skip-keep"), "Keep this match", 44);
+    scanned += await paintedInsideViewport(sheet, "the confirm sheet");
+    await expectNoHorizontalScroll(page);
+    scanned += await qmNotClipped(page, sheetSel, "the confirm sheet");
+    judged += await qmAxeClean(page, sheetSel, "the open confirm sheet");
+    await row.getByTestId("qm-skip-keep").click();
+    await expect(sheet, "Keep closes it").toBeHidden();
+    await expect(row, "Keep changed nothing").toHaveAttribute("data-state", "ready");
+
+    // ── 3. Mark not played: the row Not played, its ⋯ holding Put back ──
+    await toggle.click();
+    await row.getByTestId("qm-skip").click();
+    await expect(sheet).toBeVisible();
+    await row.getByTestId("qm-skip-confirm").click();
+    await expect(row, "the skip landed").toHaveAttribute("data-state", "notPlayed", { timeout: QM_NAV_MS });
+    await expect(row.getByTestId("qm-not-played")).toHaveText(qmUi("quickMatch.home.notPlayed"));
+    await hitFloor(toggle, "the Not played row's ⋯", 44);
+    await toggle.click();
+    await expect(panel).toBeVisible();
+    await expect(panel.getByRole("button"), "Put back only").toHaveCount(1);
+    await hitFloor(row.getByTestId("qm-put-back"), "Put back", 44);
+    scanned += await paintedInsideViewport(panel, "the Not played row's ⋯ menu");
+    await expectNoHorizontalScroll(page);
+    scanned += await qmNotClipped(page, '[data-testid="qm-home"]', "the home, a Not played row's ⋯ menu open");
+    judged += await qmAxeClean(page, `${rowSel} [data-testid="qm-row-menu"]`, "the Not played row's open ⋯ menu");
+
+    // ── 4. Put back: the match is back to play ──
+    await row.getByTestId("qm-put-back").click();
+    await expect(row, "Put back landed").toHaveAttribute("data-state", "ready", { timeout: QM_NAV_MS });
+    await expect(row.getByTestId("qm-score")).toBeVisible();
+    await expectNoHorizontalScroll(page);
+  } finally {
+    await ctx.close();
+  }
+  expect(scanned, "anti-vacuity: every open surface had boxes to scan").toBeGreaterThan(40);
+  expect(judged, "anti-vacuity: axe judged the open menus and the sheet").toBeGreaterThan(0);
+});

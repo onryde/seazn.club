@@ -128,4 +128,21 @@ export const QUICK_MATCH_ERRORS = {
    *  past its expiry, one deleted already, or no id at all. One answer for all of them (404), so it never says whether a match
    *  exists. `quickMatch.me.notInAccount`. */
   NOT_IN_ACCOUNT: "QUICK_MATCH_NOT_IN_ACCOUNT",
+  /** "Not played" (plan 4, spec 2026-11-12 §3 and §6): only an unplayed or in-progress league match (`scheduled`, `in_play`)
+   *  can be skipped. Refused (422): a league match in any status other than `scheduled`, `in_play` or `cancelled` (decided,
+   *  forfeited, abandoned, finalized, needs_decision), a tap from a page loaded before the match was settled included; and a
+   *  knockout match in any status, because a bracket needs a winner (spec §3; T1 review G2: not LEAGUE_ONLY, whose copy
+   *  speaks of an extra match). A second tap on a Not played (`cancelled`) match is NOT refused: it changes nothing and
+   *  lands on the home (plan D3). The home shows `quickMatch.flash.notSkippable`, which also points at Edit result. */
+  NOT_SKIPPABLE: "QUICK_MATCH_NOT_SKIPPABLE",
+  /** "Put back" (plan 4, spec §6): the league has finished, every match played or Not played, so a Not played match can no
+   *  longer be put back (422). Edit result and Add a match still change a finished league (and reopen it); only Put back is
+   *  refused. The home hides Put back once the league is finished, so only a stale tap meets it:
+   *  `quickMatch.flash.leagueFinished`. */
+  LEAGUE_FINISHED: "QUICK_MATCH_LEAGUE_FINISHED",
+  /** A Score tap on a match marked Not played (plan 4; T1 review G1, controller ruling 2026-11-13): someone else skipped it
+   *  after this page loaded. The guest link refuses it (422, `ensureGuestDeviceLink`, device-links.ts) and mints nothing,
+   *  and the home shows `quickMatch.flash.notPlayed`, which says to put it back first: never the generic line, whose "try
+   *  again" would only loop. */
+  NOT_PLAYED: "QUICK_MATCH_NOT_PLAYED",
 } as const;

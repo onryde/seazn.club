@@ -17,11 +17,11 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 export interface QuickMatchScoreFormProps {
   /** `/q/<token>/score/<fixtureId>`, built by the page. */
   action: string;
-  /** The button's words, in the viewer's language: "Score this match", "Continue scoring", "Score" or "Edit result". */
+  /** The button's words, in the viewer's language: "Score this match", "Continue scoring" or "Score". */
   label: string;
-  /** The hero's full-width button, a list row's compact one, or a settled row's secondary "Edit result" (A-M6): the same
-   *  post, outlined rather than filled, so the next match's Score stays the page's one lime call to action. */
-  place: "hero" | "row" | "edit";
+  /** The hero's full-width button or a list row's compact one. A settled row's "Edit result" is no longer here: it lives
+   *  in the row's ⋯ menu (owner 2026-11-13, quick match plan 4 T4; `row-menu.tsx` is its one emitter). */
+  place: "hero" | "row";
   /** A row's button names its match through the row's sides (`matchSidesId`): many rows say "Score". */
   describedBy?: string;
 }
@@ -30,7 +30,6 @@ const FOCUS = "focus-visible:outline focus-visible:outline-2 focus-visible:outli
 const BUTTON = {
   hero: "min-h-12 w-full rounded-xl bg-[color:var(--mk-lime)] px-5 py-2.5 text-base font-bold text-night",
   row: "min-h-11 rounded-lg bg-[color:var(--mk-lime)] px-4 py-2 text-sm font-bold text-night",
-  edit: "min-h-11 rounded-lg border border-[#3b2a6e] bg-transparent px-3 py-2 text-sm font-semibold text-cream hover:border-[color:var(--mk-lime)]",
 } as const;
 
 export function QuickMatchScoreForm({ action, label, place, describedBy }: QuickMatchScoreFormProps) {
@@ -61,7 +60,7 @@ export function QuickMatchScoreForm({ action, label, place, describedBy }: Quick
     <form method="post" action={action} onSubmit={onSubmit} data-place={place} className={`ph-no-capture min-w-0 ${place === "hero" ? "w-full" : ""}`}>
       <button
         type="submit"
-        data-testid={place === "edit" ? "qm-edit-result" : "qm-score"}
+        data-testid="qm-score"
         aria-disabled={busy || undefined}
         aria-describedby={describedBy}
         className={`app-display inline-flex max-w-full items-center justify-center text-center leading-tight [overflow-wrap:anywhere] aria-disabled:opacity-70 ${BUTTON[place]} ${FOCUS}`}

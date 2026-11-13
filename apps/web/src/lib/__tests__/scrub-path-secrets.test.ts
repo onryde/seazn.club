@@ -524,7 +524,8 @@ describe("a quick match's home token, /q/<token>: scrubbed wherever a URL carrie
   const sample = [HOMES[0]!, HOMES[7]!, HOMES[150]!, HOMES[299]!];
   /** Every shape the home URL takes: the page, behind an origin and the marketing locale prefix, with a query and a
    *  fragment, and the calls under it (plan 2's add-match route; the save hand-off spec C19 amended 2026-11-08 allows in a
-   *  sign-in `next`). The first one is the pad's own href. */
+   *  sign-in `next`; plan 4's "Not played" and "Put back" posts, whose match id stays: it is no credential). The first one
+   *  is the pad's own href. */
   const forms = (t: string) => [
     `/q/${t}`,
     `/q/${t}/`,
@@ -533,6 +534,9 @@ describe("a quick match's home token, /q/<token>: scrubbed wherever a URL carrie
     `${ORIGIN}/fr/q/${t}`,
     `/q/${t}/add-match`,
     `/q/${t}/save`,
+    `/q/${t}/skip/11111111-2222-3333-4444-555555555555`,
+    `/q/${t}/put-back/11111111-2222-3333-4444-555555555555`,
+    `POST ${ORIGIN}/q/${t}/skip/11111111-2222-3333-4444-555555555555`,
     `GET /q/${t}`,
     `navigated to "/q/${t}"`,
   ];

@@ -1,7 +1,11 @@
 // Shared state and helpers (pass/fail counters, check, sessions, the HTTP/DB helpers, tag): see the header of that file.
 import { readFileSync } from "node:fs";
 import { BASE, check, cookieHeader, newSession, signIn, smokeDb, tag } from "../harness.ts";
-import { QUICK_MATCH_EXPIRY_DAYS, QUICK_MATCH_SYSTEM_ORG_ID } from "../../../apps/web/src/lib/quick-match-constants.ts";
+import {
+  QUICK_MATCH_ERRORS,
+  QUICK_MATCH_EXPIRY_DAYS,
+  QUICK_MATCH_SYSTEM_ORG_ID,
+} from "../../../apps/web/src/lib/quick-match-constants.ts";
 
 /**
  * Quick match (spec docs/superpowers/specs/2026-11-03-quick-match-design.md §5, §7.8, §9 "smoke"; plan 2 Task 11 and plan 3
@@ -14,7 +18,10 @@ import { QUICK_MATCH_EXPIRY_DAYS, QUICK_MATCH_SYSTEM_ORG_ID } from "../../../app
  *    by the home side). After the start alone the home reads "Live" with no point on its score; after the rally its score's
  *    current level reads 1 to 0, home first (one rally won by the home side is one point to it). Every expected word is the
  *    English dictionary's, filled with the constants it names.
- * 2. The sweep (plan 3 T7, extended past its amendment by the dispatch): two more matches, one aged past its expiry in SQL and
+ * 2. Not played (plan 4 T7, `notPlayedLeg`): a second league of two has its one match marked Not played through the home's own
+ *    form; the home then reads "0 of 1 match played · 1 not played" and "No matches were played", a second tap changes
+ *    nothing, a stale Put back is refused with QUICK_MATCH_LEAGUE_FINISHED, and the match's row stays `cancelled`.
+ * 3. The sweep (plan 3 T7, extended past its amendment by the dispatch): two more matches, one aged past its expiry in SQL and
  *    one saved through the real Save post by a signed-in person and aged the same. `POST /api/cron/quick-match-expiry` with
  *    the cron secret answers a report with a number for every key, `failed` 0 and `expired` >= 1; then, per match: the
  *    expired unsaved one is gone (its row and its competition, each counted 1 before and 0 after), while the saved one and the match
@@ -109,6 +116,116 @@ function testidText(html: string, id: string, tag = "p"): string | null {
   const open = html.indexOf(">", at);
   const close = html.indexOf(`</${tag}>`, open);
   return open === -1 || close === -1 ? null : html.slice(open + 1, close).replace(/<[^>]*>/g, "");
+}
+
+/** Server-rendered text back to the dictionary's own characters: React escapes `'` as `&#x27;` (the flash says "can't"), and
+ *  `&`, `"`, `<`, `>` as their named entities. `&amp;` last, so an escaped entity is never decoded twice. */
+function unescapeHtml(s: string): string {
+  return s
+    .replace(/&#x27;|&#39;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
+/** A Location for a label, the home token blanked: the token is the match's credential and never goes in a log. */
+function hideToken(at: URL): string {
+  return `${at.pathname.replace(/qm_[A-Za-z0-9_-]+/, "<token>")}${at.search}`;
+}
+
+/**
+ * Step 2, Not played (quick match plan 4 Task 7; spec docs/superpowers/specs/2026-11-12-quick-match-cancel-and-skip-design.md
+ * §3, §6). A league of two has one match. Its home offers that match's "Not played" form (the ⋯ menu's item, a plain post
+ * with no body); posting it answers 303 to the bare home, which then reads "0 of 1 match played · 1 not played" with no
+ * countdown (a finished league names no clock, T4 review m1) and shows the "No matches were played" card: the only match
+ * skipped finishes the league with nothing played and no winner. A second tap changes nothing (plan D3: 303 to the bare home
+ * again). Put back, posted as a stale tap would (the finished home no longer draws it), is refused: 303 to the home with
+ * `?e=QUICK_MATCH_LEAGUE_FINISHED`, whose flash is the dictionary's line. The match's row in the database ends `cancelled`.
+ * Before the skip, the same home reads the unfinished line and draws no such card: the negative half of every check after.
+ *
+ * Writes only through the guest's own posts, on its own tagged match, as step 1 does: no guard of the sweep's kind is owed.
+ */
+async function notPlayedLeg(
+  db: ReturnType<typeof smokeDb>,
+  own: (name: string) => Promise<{ id: string; competition_id: string } | null>,
+  variant: string,
+): Promise<void> {
+  const name = `QM smoke ${tag} not played`;
+  const made = await createMatch(name, [`Gil ${tag}`, `Hal ${tag}`], variant);
+  const row = await own(name);
+  check(
+    `quick match not played: a league of two created for the skip (got ${made.status} ${made.where}; row ${row ? "found" : "missing"})`,
+    made.status === 303 && made.token !== null && row !== null,
+  );
+  if (!made.token || !row) return;
+  const homePath = `/q/${made.token}`;
+  const hasNoPlay = (html: string) => html.includes(`data-testid="qm-no-play"`);
+
+  const before = await page(homePath);
+  const skipActions = [...before.html.matchAll(/action="(\/q\/qm_[A-Za-z0-9_-]{43}\/skip\/([0-9a-f-]{36}))"/g)];
+  const skipIds = [...new Set(skipActions.map((m) => m[2]))];
+  const fixtureId = skipIds.length === 1 ? skipIds[0] : undefined;
+  const skipPath = fixtureId ? `${homePath}/skip/${fixtureId}` : "";
+  const playedOpen = words("quickMatch.home.played.one", { played: 0, count: 1, days: QUICK_MATCH_EXPIRY_DAYS });
+  check(
+    `quick match not played: before the skip the home offers Not played for exactly its one match, on its own path, reads "${playedOpen}" and draws no "no matches were played" card (got ${before.status}; ${skipActions.length} skip form(s), ${skipIds.length} distinct match(es), own path ${skipActions.every((m) => m[1] === skipPath)}; played ${JSON.stringify(testidText(before.html, "qm-played"))}; card ${hasNoPlay(before.html) ? "present" : "absent"})`,
+    before.status === 200 && fixtureId !== undefined && skipActions.every((m) => m[1] === skipPath) && playedOpen !== "" &&
+      testidText(before.html, "qm-played") === playedOpen && !hasNoPlay(before.html),
+  );
+  if (!fixtureId) return;
+
+  const postAt = async (path: string) => {
+    const res = await fetch(`${BASE}${path}`, { method: "POST", redirect: "manual" });
+    return { status: res.status, at: new URL(res.headers.get("location") ?? "", BASE) };
+  };
+  const skipped = await postAt(skipPath);
+  check(
+    `quick match not played: the Not played post answers 303 to the bare home (got ${skipped.status} ${hideToken(skipped.at)})`,
+    skipped.status === 303 && skipped.at.pathname === homePath && skipped.at.search === "",
+  );
+
+  const after = await page(homePath);
+  // "N of M played · K not played", M the full total, K through its own plural; no countdown on a finished league.
+  const playedSkipped = words("quickMatch.home.playedSkippedSaved.one", {
+    played: 0,
+    count: 1,
+    skipped: words("quickMatch.home.notPlayedPart.one", { count: 1 }),
+  });
+  const noPlayTitle = words("quickMatch.home.noPlay");
+  const titleAfter = testidText(after.html, "qm-no-play-title", "h2");
+  check(
+    `quick match not played: after the skip the home reads "${playedSkipped}" and the league is finished with nothing played, "${noPlayTitle}", no winner and no Put back (got ${after.status}; played ${JSON.stringify(testidText(after.html, "qm-played"))}; card ${hasNoPlay(after.html) ? "present" : "absent"}, title ${JSON.stringify(titleAfter)}; winner ${after.html.includes(`data-testid="qm-winner"`) ? "shown" : "none"}; put-back forms ${(after.html.match(/\/put-back\//g) ?? []).length})`,
+    after.status === 200 && playedSkipped !== "" && noPlayTitle !== "" && testidText(after.html, "qm-played") === playedSkipped &&
+      hasNoPlay(after.html) && titleAfter === noPlayTitle && !after.html.includes(`data-testid="qm-winner"`) &&
+      !after.html.includes("/put-back/"),
+  );
+
+  const again = await postAt(skipPath);
+  check(
+    `quick match not played: a second Not played tap changes nothing and lands on the bare home again (got ${again.status} ${hideToken(again.at)})`,
+    again.status === 303 && again.at.pathname === homePath && again.at.search === "",
+  );
+
+  // Put back, as a stale tap (a home opened before the skip) would post it: the league has finished, so it is refused.
+  const putBack = await postAt(`${homePath}/put-back/${fixtureId}`);
+  const refusedAt = `${homePath}?e=${QUICK_MATCH_ERRORS.LEAGUE_FINISHED}`;
+  const flashPage = putBack.at.pathname === homePath ? await page(`${putBack.at.pathname}${putBack.at.search}`) : null;
+  const flashText = flashPage ? testidText(flashPage.html, "qm-flash") : null;
+  const flashCopy = words("quickMatch.flash.leagueFinished");
+  check(
+    `quick match not played: Put back after the league finished answers 303 to the home with ?e=${QUICK_MATCH_ERRORS.LEAGUE_FINISHED}, whose flash reads "${flashCopy}" (got ${putBack.status} ${hideToken(putBack.at)}; flash ${JSON.stringify(flashText === null ? null : unescapeHtml(flashText))})`,
+    putBack.status === 303 && `${putBack.at.pathname}${putBack.at.search}` === refusedAt && flashCopy !== "" &&
+      flashText !== null && unescapeHtml(flashText) === flashCopy,
+  );
+
+  const [fx] = await db<{ status: string }[]>`
+    select f.status from fixtures f join divisions d on d.id = f.division_id
+     where f.id = ${fixtureId} and d.competition_id = ${row.competition_id}`;
+  check(
+    `quick match not played: the match's row in the database is cancelled, the refused Put back undid nothing (got ${JSON.stringify(fx?.status ?? null)})`,
+    fx?.status === "cancelled",
+  );
 }
 
 export async function quickMatchSuite(): Promise<void> {
@@ -217,7 +334,11 @@ export async function quickMatchSuite(): Promise<void> {
         testidText(after.html, "qm-played") === playedNone,
     );
 
-    // ── 2. The sweep: an expired unsaved match goes, a saved one and the live one stay ────────────────────────────────────
+    // ── 2. Not played: the only match skipped finishes the league with nothing played; Put back is then refused ──────────
+    // Its own function, so a check that stops it early never takes the sweep below with it.
+    await notPlayedLeg(db, own, variant);
+
+    // ── 3. The sweep: an expired unsaved match goes, a saved one and the live one stay ────────────────────────────────────
     const cronSecret = process.env.CRON_SECRET;
     if (!cronSecret) {
       check("quick match sweep: skipped (no CRON_SECRET in the smoke env, the cron route cannot be called); quick-match-sweep.test.ts covers it", true);

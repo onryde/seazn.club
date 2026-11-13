@@ -9,6 +9,7 @@ import es from "@/dictionaries/es/ui.json";
 import fr from "@/dictionaries/fr/ui.json";
 import nl from "@/dictionaries/nl/ui.json";
 import { officialLabelKey } from "@/lib/official-label";
+import { LOCKED_FIXTURE_STATUSES } from "@/lib/fixture-status";
 import type { ViewOnlyReason } from "@/lib/scan-screen";
 import { DeviceScorePad, type PadEventIn } from "@/components/v2/device-score-pad";
 import { ScorePad } from "@/components/v2/scorepad/registry";
@@ -864,7 +865,7 @@ describe("DeviceScorePad — a quick match's pad names no organiser (review Q1/Q
     expect(byTestId(island.tree(), "device-void-mine"), "View-only offers no undo").toBeUndefined();
   });
 
-  it("opened on View-only by the page: carried forward reads as locked, finalized as finished; cancelled keeps its own words", () => {
+  it("opened on View-only by the page: carried forward reads as locked, finalized as finished, cancelled as Not played", () => {
     const carried = renderIsland(DeviceScorePad, { ...quick("decided", { kind: "win" }), initialViewOnly: "carried_forward" as const });
     expect(textOf(byTestId(carried.tree(), "scan-view-only"))).toBe(dict["device.quickMatch.resultLocked"]);
     const finalized = renderIsland(DeviceScorePad, { ...quick("finalized", { kind: "win" }), initialViewOnly: "finalized" as const });
@@ -873,7 +874,131 @@ describe("DeviceScorePad — a quick match's pad names no organiser (review Q1/Q
     // The negative pair, same state, no prop: the ordinary pad keeps the organiser's finalised line.
     const ordinary = renderIsland(DeviceScorePad, { ...props("finalized", { kind: "win" }), initialViewOnly: "finalized" as const });
     expect(textOf(byTestId(ordinary.tree(), "scan-view-only"))).toBe(dict["device.scan.viewOnly.finalized"]);
+    // Quick match plan 4 (T1 review G1): a guest's match is cancelled only by the home's "Not played", so the pad says so
+    // and how to put it back, never the organiser's "cancelled" line.
     const cancelled = renderIsland(DeviceScorePad, { ...quick("cancelled", null), initialViewOnly: "cancelled" as const });
-    expect(textOf(byTestId(cancelled.tree(), "scan-view-only"))).toBe(dict["device.scan.viewOnly.cancelled"]);
+    expect(textOf(byTestId(cancelled.tree(), "scan-view-only"))).toBe(dict["device.quickMatch.notPlayed"]);
+    expect(textOfTree(cancelled.tree())).not.toMatch(ORGANISER);
+    const ordinaryCancelled = renderIsland(DeviceScorePad, { ...props("cancelled", null), initialViewOnly: "cancelled" as const });
+    expect(textOf(byTestId(ordinaryCancelled.tree(), "scan-view-only"))).toBe(dict["device.scan.viewOnly.cancelled"]);
+  });
+
+  // Quick match plan 4, T3 (stale screens): the home's "Not played" while a guest's pad is open on the match.
+  it("marked Not played behind a live guest pad: the next re-read lands on View-only with the Not played line", async () => {
+    const island = renderIsland(DeviceScorePad, quick("in_play", null));
+    const pad = island.tree().find((e) => e.type === ScorePad);
+    // Empty case first: live and in play, no View-only.
+    expect(pad, "precondition: the pad is up").toBeDefined();
+    expect(byTestId(island.tree(), "scan-view-only")).toBeUndefined();
+    api.serverStatus = "cancelled";
+    // The inner pad's own tap (refused on the server: the match is Not played) fires onEvents, whose re-read sees it.
+    (propsOf(pad!).onEvents as () => void)();
+    await flush();
+    expect(textOf(byTestId(island.tree(), "scan-view-only"))).toBe(dict["device.quickMatch.notPlayed"]);
+    expect(island.tree().find((e) => e.type === ScorePad), "no pad").toBeUndefined();
+    expect(textOfTree(island.tree())).not.toMatch(ORGANISER);
+  });
+
+  /** A stale Start: the guest's pad opened on Confirm, then the match was decided, finished or marked Not played
+   *  elsewhere, and the server refuses the Start ALREADY_DECIDED (the events route's played-fixture refusal). */
+  const staleStart = async (serverStatus: string) => {
+    api.postRefusal = { code: "ALREADY_DECIDED", status: 422 };
+    api.serverStatus = serverStatus;
+    const island = renderIsland(DeviceScorePad, { ...quick("scheduled", null), initialEvents: [] });
+    expect(byTestId(island.tree(), "scan-confirm"), "precondition: Confirm, with Start").toBeDefined();
+    expect(byTestId(island.tree(), "scan-view-only"), "precondition: not View-only").toBeUndefined();
+    (propsOf(byTestId(island.tree(), "score-start-match")!).onClick as () => void)();
+    await flush();
+    expect(api.posts, "the Start really went to the server").toBe(1);
+    expect(api.stateReads, "the refusal re-reads the match once").toBe(1);
+    return island;
+  };
+
+  it.each([
+    ["cancelled", "device.quickMatch.notPlayed"],
+    ["finalized", "device.quickMatch.finished"],
+  ] as const)("a stale Start refused ALREADY_DECIDED on a match now %s: View-only says why, and no 'already has a result' line", async (status, key) => {
+    const island = await staleStart(status);
+    expect(textOf(byTestId(island.tree(), "scan-view-only"))).toBe(dict[key]);
+    expect(byTestId(island.tree(), "scan-confirm"), "no Confirm, no Start").toBeUndefined();
+    expect(textOfTree(island.tree()), "the refusal's own words would be false here").not.toContain(
+      dict["engineError.ALREADY_DECIDED"],
+    );
+  });
+
+  it("the negative pair: a stale Start on a match now DECIDED keeps the refusal's own words", async () => {
+    const island = await staleStart("decided");
+    expect(byTestId(island.tree(), "scan-view-only"), "decided is no View-only").toBeUndefined();
+    expect(textOfTree(island.tree())).toContain(dict["engineError.ALREADY_DECIDED"]);
+  });
+});
+
+// Quick match plan 4, T3 review I1: the chrome's stale-write branch (`device-score-pad.tsx`, ALREADY_DECIDED → re-read →
+// View-only on a locked status) is NOT quick-match-gated — it serves every device-link pad, so an organiser's fixture in any
+// sport. The quick match rows above pin only the guest's copy; these pin the ordinary pad's half. The only organiser route in:
+// the organiser finalizes (or a fixture is cancelled) while a scorer's phone is up, and the scorer taps Start or "Void my last
+// entry". The branch reads a status alone, so the generic sport stands for every sport.
+describe("DeviceScorePad — an ordinary pad's stale Start or Void on a match now locked (T3 review I1)", () => {
+  /** The chrome write a scorer taps on a screen gone stale, and the screen it opens on. */
+  const TRIGGERS = {
+    start: { opensOn: () => ({ ...props("scheduled", null), initialEvents: [] }), testId: "score-start-match" },
+    void: { opensOn: () => props("decided", { kind: "win" }), testId: "device-void-mine" },
+  } as const;
+
+  const staleWrite = async (trigger: keyof typeof TRIGGERS, serverStatus: string) => {
+    api.postRefusal = { code: "ALREADY_DECIDED", status: 422 };
+    api.serverStatus = serverStatus;
+    const island = renderIsland(DeviceScorePad, TRIGGERS[trigger].opensOn());
+    // Empty case first: the screen opens live, with the control the scorer taps, and no View-only.
+    expect(byTestId(island.tree(), "scan-view-only"), "precondition: not View-only").toBeUndefined();
+    const button = byTestId(island.tree(), TRIGGERS[trigger].testId);
+    expect(button, `precondition: the ${trigger} control is on screen`).toBeDefined();
+    (propsOf(button!).onClick as () => void)();
+    await flush();
+    expect(api.posts, `the ${trigger} really went to the server`).toBe(1);
+    expect(api.stateReads, "the refusal re-reads the match once").toBe(1);
+    return island;
+  };
+
+  const ROWS = [
+    ["start", "finalized", "device.scan.viewOnly.finalized", "device.quickMatch.finished"],
+    ["start", "cancelled", "device.scan.viewOnly.cancelled", "device.quickMatch.notPlayed"],
+    ["void", "finalized", "device.scan.viewOnly.finalized", "device.quickMatch.finished"],
+    ["void", "cancelled", "device.scan.viewOnly.cancelled", "device.quickMatch.notPlayed"],
+  ] as const;
+
+  it.each(ROWS)(
+    "a stale %s refused ALREADY_DECIDED on a match now %s: View-only with the ordinary line, never the quick match's",
+    async (trigger, status, ordinaryKey, quickKey) => {
+      const island = await staleWrite(trigger, status);
+      const screen = byTestId(island.tree(), "scan-view-only");
+      expect(screen, "the refusal on a locked match moves the ordinary pad to View-only too").toBeDefined();
+      expect(textOf(screen)).toBe(dict[ordinaryKey]);
+      expect(textOf(screen), "a quick match's line on an organiser's fixture would be false").not.toBe(dict[quickKey]);
+      expect(byTestId(island.tree(), TRIGGERS[trigger].testId), "View-only offers no control to re-tap").toBeUndefined();
+      expect(textOfTree(island.tree()), "the refusal's 'already has a result' would be false here").not.toContain(
+        dict["engineError.ALREADY_DECIDED"],
+      );
+    },
+  );
+
+  it.each(["start", "void"] as const)(
+    "the negative pair: a stale %s on a match now DECIDED keeps the refusal's own words, no View-only",
+    async (trigger) => {
+      const island = await staleWrite(trigger, "decided");
+      expect(byTestId(island.tree(), "scan-view-only"), "decided is not locked: no View-only").toBeUndefined();
+      expect(textOfTree(island.tree())).toContain(dict["engineError.ALREADY_DECIDED"]);
+    },
+  );
+
+  it("anti-vacuity: every locked status is a row for both triggers", () => {
+    // The rows are typed by hand from the write path's lock (`append-event.ts`: finalized, cancelled); this pins that the
+    // table covers the shared set, so a status added to the lock without a row here goes red.
+    const covered = new Set(ROWS.map(([, status]) => status));
+    expect(covered.size, "rows checked").toBeGreaterThan(0);
+    expect([...covered].sort()).toEqual([...LOCKED_FIXTURE_STATUSES].sort());
+    for (const trigger of Object.keys(TRIGGERS)) {
+      expect(ROWS.filter(([t]) => t === trigger).map(([, s]) => s).sort(), trigger).toEqual([...LOCKED_FIXTURE_STATUSES].sort());
+    }
   });
 });

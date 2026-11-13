@@ -285,6 +285,14 @@ export const FixtureState = z.object({
   summary: z.unknown(),
   state: z.unknown(),
   outcome: z.unknown().nullable(),
+  /** Quick match plan 4, FR4 m2 (`withQuickMatchFinished`): on a quick match's Not played match only, whether its league
+   *  has finished (then no Put back can come, and the guest's pad stops waiting for one). Absent on every other match. */
+  quick_match_finished: z
+    .boolean()
+    .optional()
+    .describe(
+      "Present only on a quick match's match marked Not played (status cancelled): whether its league has finished, so it can no longer be put back. Absent on every other match.",
+    ),
 });
 
 export const StandingsRowOut = z.object({

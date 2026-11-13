@@ -109,24 +109,17 @@ describe("QuickMatchScoreForm", () => {
     expect(propsOf(hero)["aria-describedby"], "the hero's section already names its match").toBeUndefined();
   });
 
-  it("'Edit result' (A-M6): the same post, a secondary outline (never the lime call to action), 44px, its own test id", () => {
-    const edit = mount({ place: "edit", label: "Edit result", describedBy: "qm-match-sides-x" });
-    const button = buttonOf(edit);
-    const form = formOf(edit);
-    expect(propsOf(form).method, "a real post: it works without the script").toBe("post");
-    expect(propsOf(form).action).toBe(props().action);
-    expect(classOf(form)).toContain("ph-no-capture");
-    expect(propsOf(button).type).toBe("submit");
-    expect(propsOf(button)["data-testid"]).toBe("qm-edit-result");
-    expect(textOf(button).trim()).toBe("Edit result");
-    expect(propsOf(button)["aria-describedby"], "many rows say 'Edit result': each names its match").toBe("qm-match-sides-x");
-    expect(classOf(button)).toEqual(expect.arrayContaining(["min-h-11", "border", "bg-transparent"]));
-    expect(classOf(button).some((c) => c.includes("--mk-lime") && c.startsWith("bg-")), "not filled lime").toBe(false);
-    // The positive pair: the Score buttons ARE the lime ones, and keep their own test id.
+  // Quick match plan 4, T4 review m4: "Edit result" moved into the row's ⋯ menu (owner 2026-11-13), so this island no longer
+  // has an "edit" place and never emits `qm-edit-result` (the menu is its one emitter: a second would turn the e2e's
+  // getByTestId strict-mode red on a settled row). Every place is the lime Score, `qm-score`.
+  it("every place is the lime Score with its one test id, `qm-score`; never `qm-edit-result`", () => {
+    let checked = 0;
     for (const place of ["hero", "row"] as const) {
       const score = buttonOf(mount({ place }));
       expect(classOf(score), place).toContain("bg-[color:var(--mk-lime)]");
       expect(propsOf(score)["data-testid"], place).toBe("qm-score");
+      checked++;
     }
+    expect(checked).toBe(2);
   });
 });

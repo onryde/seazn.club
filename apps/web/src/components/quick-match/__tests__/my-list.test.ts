@@ -15,9 +15,18 @@ import en from "@/dictionaries/en/ui.json";
 import es from "@/dictionaries/es/ui.json";
 import fr from "@/dictionaries/fr/ui.json";
 import nl from "@/dictionaries/nl/ui.json";
-import { freshMemory, onRead, remember, shownOf, type MyQuickMatchItem } from "../my-list";
+import { plural } from "@/lib/i18n-runtime";
+import { freshMemory, metaLine, onRead, remember, shownOf, type MyQuickMatchItem } from "../my-list";
 
-const row = (id: string, name: string): MyQuickMatchItem => ({ id, name, token: `qm_${id}`, format: "league", played: 0, total: 1 });
+const row = (id: string, name: string): MyQuickMatchItem => ({
+  id,
+  name,
+  token: `qm_${id}`,
+  format: "league",
+  played: 0,
+  notPlayed: 0,
+  total: 1,
+});
 const A = row("a", "Sunday league");
 const B = row("b", "Club cup");
 const C = row("c", "Rematch");
@@ -88,5 +97,40 @@ describe("the /me list's memory (review m1, m2)", () => {
       checked++;
     }
     expect(checked).toBe(4);
+  });
+});
+
+// The row's line under its name (plan 4 Task 4, spec 2026-11-12 §6): the format, then the home's played line with no
+// countdown, and with a Not played match "· K not played", the full total kept. Expected lines are typed from the spec.
+describe("the /me row's line (plan 4 Task 4)", () => {
+  const en_ = en as Record<string, string>;
+  const t = (key: string) => en_[key] ?? key;
+  const p = (key: string, count: number, vars?: Record<string, string | number>) => plural(en_, key, count, "en", vars);
+  const item = (over: Partial<MyQuickMatchItem>): MyQuickMatchItem => ({ ...row("x", "X"), ...over });
+
+  it("the empty case first: nothing played, nothing skipped, says no Not played part", () => {
+    expect(metaLine(item({ played: 0, notPlayed: 0, total: 6 }), t, p)).toBe("League · 0 of 6 matches played");
+  });
+
+  it("with one skipped: the full total and how many were not played", () => {
+    expect(metaLine(item({ played: 2, notPlayed: 1, total: 6 }), t, p)).toBe("League · 2 of 6 matches played · 1 not played");
+  });
+
+  it("after a Put back (the count back to 0) the part goes away; a knockout says its own format", () => {
+    expect(metaLine(item({ played: 2, notPlayed: 0, total: 6 }), t, p)).toBe("League · 2 of 6 matches played");
+    expect(metaLine(item({ format: "knockout", played: 1, notPlayed: 0, total: 1 }), t, p)).toBe("Knockout · 1 of 1 match played");
+  });
+
+  it("every line has its keys in all four languages, the Not played part a {count} plural", () => {
+    let checked = 0;
+    for (const dict of [en, es, fr, nl] as Record<string, string>[]) {
+      for (const key of ["quickMatch.home.playedSkippedSaved", "quickMatch.home.notPlayedPart", "quickMatch.home.playedSaved"]) {
+        expect(dict[`${key}.other`], `${key}.other`).toBeTypeOf("string");
+        checked++;
+      }
+      expect(dict["quickMatch.home.notPlayedPart.other"]).toContain("{count}");
+      expect(dict["quickMatch.home.playedSkippedSaved.other"]).toContain("{skipped}");
+    }
+    expect(checked).toBe(12);
   });
 });

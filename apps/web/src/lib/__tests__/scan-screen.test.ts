@@ -250,14 +250,31 @@ describe("the quick match's pad copy: no organiser to ask (review Q1/Q2)", () =>
     expect(askFreshLinkKey(false)).toBe("device.askFreshLink");
   });
 
-  it("a quick match's pad: carried forward reads as locked, finalized as finished, decided as saved, a dead link as go back; the other two reasons are unchanged", () => {
+  it("a quick match's pad: carried forward reads as locked, finalized as finished, cancelled as Not played, decided as saved, a dead link as go back; no opponent is unchanged", () => {
     expect(viewOnlyKey("carried_forward", true)).toBe("device.quickMatch.resultLocked");
     expect(viewOnlyKey("finalized", true)).toBe("device.quickMatch.finished");
+    // Quick match plan 4 (T1 review G1, controller ruling 2026-11-13): the only way a guest's match becomes `cancelled` is
+    // the skip, so a pad left open on it says Not played and how to put it back, never "cancelled".
+    expect(viewOnlyKey("cancelled", true)).toBe("device.quickMatch.notPlayed");
     expect(decidedKey(true)).toBe("device.quickMatch.resultSaved");
     expect(askFreshLinkKey(true)).toBe("device.quickMatch.askFreshLink");
-    const others = REASONS.filter((r) => r !== "carried_forward" && r !== "finalized");
-    expect(others, "premise: the two reasons that never named an organiser").toEqual(["cancelled", "no_opponent"]);
+    const others = REASONS.filter((r) => r !== "carried_forward" && r !== "finalized" && r !== "cancelled");
+    expect(others, "premise: the one reason a quick match keeps the ordinary words for").toEqual(["no_opponent"]);
     for (const reason of others) expect(viewOnlyKey(reason, true), reason).toBe(VIEW_ONLY_COPY[reason]);
+  });
+
+  it("the Not played line, verbatim, is the home's own Score refusal: one sentence on the pad and on the home (T1 G1)", () => {
+    let checked = 0;
+    for (const locale of ["en", "es", "fr", "nl"]) {
+      const d = load(locale);
+      expect(d["device.quickMatch.notPlayed"], locale).toBeTruthy();
+      expect(d["device.quickMatch.notPlayed"], locale).toBe(d["quickMatch.flash.notPlayed"]);
+      checked++;
+    }
+    expect(checked).toBe(4);
+    expect(load("en")["device.quickMatch.notPlayed"]).toBe(
+      "This match was marked Not played. Put it back from the match list to score it.",
+    );
   });
 
   /** Every line these helpers give a quick match's pad: each View-only reason, the decided line, and the dead-link

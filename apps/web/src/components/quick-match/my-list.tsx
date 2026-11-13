@@ -30,6 +30,7 @@ import type { MessageKey } from "@/lib/messages";
 import { QUICK_MATCH_ACCOUNT_SECTION_ID, QUICK_MATCH_NAME_MAX, QUICK_MATCH_NON_BLANK_PATTERN } from "@/lib/quick-match-constants";
 import { routes } from "@/lib/routes";
 import { deleteMyQuickMatch, renameMyQuickMatch } from "./my-list-requests";
+import { playedLine, type PluralFn } from "./played-line";
 
 /** One saved quick match, as the page read it (quick-match-home.ts `MyQuickMatch`, restated here: this island imports nothing
  *  from the server). */
@@ -40,6 +41,8 @@ export interface MyQuickMatchItem {
   token: string | null;
   format: "league" | "knockout";
   played: number;
+  /** Matches marked Not played (plan 4): the line then says how many, as the match's home does. */
+  notPlayed: number;
   total: number;
 }
 
@@ -50,6 +53,12 @@ const FORMAT_KEY = {
   league: "quickMatch.format.league",
   knockout: "quickMatch.format.knockout",
 } as const satisfies Record<MyQuickMatchItem["format"], MessageKey>;
+
+/** A row's line under its name: the format, then the home's own played line without its countdown (`playedLine`), so the
+ *  list never says a different "played" from the match's home ("League · 2 of 6 matches played · 1 not played"). */
+export function metaLine(item: MyQuickMatchItem, t: (key: MessageKey) => string, plural: PluralFn): string {
+  return `${t(FORMAT_KEY[item.format])} · ${playedLine(plural, item, null)}`;
+}
 
 /** What this browser knows past the page's read `read`: the rows it deleted or found gone, the names it set, and the last
  *  thing the list said in its live region. */
@@ -177,7 +186,7 @@ function MyRow({ item, onSettled }: { item: MyQuickMatchItem; onSettled: (event:
   }
 
   const href = item.token === null ? null : routes.quickMatch(item.token);
-  const line = `${t(FORMAT_KEY[item.format])} · ${plural("quickMatch.home.playedSaved", item.total, { played: item.played })}`;
+  const line = metaLine(item, t, plural);
   return (
     <li data-testid="me-qm-row" data-qm-id={item.id} className="card min-w-0 space-y-3 p-4">
       <div className="min-w-0">
