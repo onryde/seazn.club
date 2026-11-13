@@ -172,9 +172,11 @@ export function registrationLineItems(
  *
  * Currency is validated BEFORE any Stripe call (owner ruling 4): the
  * group's snapshot must both be an allowlisted registration currency and
- * match the org's CURRENT currency (`ctx.currency`, read fresh by the
- * caller's `divisionCtx` call) — a snapshot gone stale since submit 422s
- * here, never as a Stripe-side error on a registrant's pay page.
+ * match the org's CURRENT currency (the mint's own `organizations` read,
+ * the same statement that reads the Connect account and
+ * `stripe_charges_enabled`; registration redesign B1 fix M2) — a snapshot
+ * gone stale since submit 422s here, never as a Stripe-side error on a
+ * registrant's pay page.
  *
  * Greenfield conversion (owner ruling 3): this used to key its metadata by
  * one entry alone, singular-registration-id shaped, until this session;
@@ -269,16 +271,21 @@ async function mintRegistrationCheckout(
       "REGISTRATION_CURRENCY_UNAVAILABLE",
     );
   }
-  if (firstEntry.currency !== ctx.currency) {
+  // The org's currency and Connect state come from THIS read, made at the moment of the mint, never from `ctx`: the register route's
+  // `ctx` is the submit's pre-transaction read (registration redesign B1 T5), so an org that changed its currency or lost Connect
+  // during the submit would otherwise be charged on stale facts. One statement either way: these columns ride the account-id read.
+  const [org] = await timed(opts.timer, "mint_reads", () => sql<
+    { stripe_account_id: string | null; currency: string; stripe_charges_enabled: boolean }[]
+  >`
+    select stripe_account_id, currency, stripe_charges_enabled from organizations where id = ${ctx.org_id}`);
+  if (org && firstEntry.currency !== org.currency) {
     throw new HttpError(
       422,
       "This organiser's currency has changed since this cart was created",
       "REGISTRATION_CURRENCY_UNAVAILABLE",
     );
   }
-  const [org] = await timed(opts.timer, "mint_reads", () => sql<{ stripe_account_id: string | null }[]>`
-    select stripe_account_id from organizations where id = ${ctx.org_id}`);
-  if (!org?.stripe_account_id) {
+  if (!org?.stripe_account_id || !org.stripe_charges_enabled) {
     throw new HttpError(503, "Payments are not set up for this organiser yet");
   }
   // Bound to a const because the session params are now built inside a closure

@@ -320,13 +320,12 @@ export interface DivisionCtx {
    *  resolve per-division without risking two entries in one cart
    *  disagreeing about the same date). */
   org_timezone: string | null;
-  /** The org's CURRENT currency (RS001b/RS003) — read fresh on every call so
-   *  `createRegistrationCheckout` can 422 a group whose snapshot has gone
-   *  stale (the org's currency moved since submit) BEFORE any Stripe call,
-   *  never as a Stripe-side error on a registrant's pay page. Every OTHER
-   *  currency read in this file still resolves from the cart's own snapshot
-   *  (`RegistrationGroupRow.currency`) — this field exists only to compare
-   *  against that snapshot, never to replace it. */
+  /** The org's currency as of this read (RS001b/RS003). The checkout mint no
+   *  longer compares against it: it reads the org's currency itself, in the
+   *  same statement as the Connect account (registration redesign B1 fix M2),
+   *  because the register route's context is the submit's pre-transaction
+   *  read. Every currency the registrant is charged in still resolves from
+   *  the cart's own snapshot (`RegistrationGroupRow.currency`). */
   currency: string;
 }
 

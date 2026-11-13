@@ -2047,6 +2047,33 @@ describe.skipIf(!HAS_DB)("mintGroupCheckout with the cart the submit just wrote 
     expect(stripeMock.checkoutCreate).not.toHaveBeenCalled();
   });
 
+  // B1 fix round 1 (review M2): the known context is the submit's PRE-transaction read, and the org can move between that read and
+  // the mint. The mint's own org read (fresh, after the commit) decides currency and Connect, as it did when the mint read everything
+  // itself. Each case moves the org AFTER the known cart is taken: the known cart still says "fine", the database says otherwise.
+  it("refuses with 422 REGISTRATION_CURRENCY_UNAVAILABLE when the org's currency moved after the known cart was taken", async () => {
+    const c = await cardCart();
+    const [group] = await sql<{ currency: string }[]>`select currency from registration_groups where id = ${c.a.group_id}`;
+    expect(c.known.ctx.currency, "premise: the known cart agrees with the cart's own currency snapshot").toBe(group!.currency);
+    const moved = group!.currency === "usd" ? "eur" : "usd";
+    await sql`update organizations set currency = ${moved} where id = ${c.rig.orgId}`;
+    const err = await rejection(mintGroupCheckout(c.a.group_id, c.rig.division.id, ORIGIN, c.accessToken, c.known));
+    expect(err.status).toBe(422);
+    expect(err.code).toBe("REGISTRATION_CURRENCY_UNAVAILABLE");
+    expect(stripeMock.checkoutCreate).not.toHaveBeenCalled();
+  });
+
+  it("refuses with 503 when the org's Connect went off after the known cart was taken (the account id still set)", async () => {
+    const c = await cardCart();
+    expect(c.known.ctx.charges_enabled, "premise: the known cart says Connect is live").toBe(true);
+    await sql`update organizations set stripe_charges_enabled = false where id = ${c.rig.orgId}`;
+    const [org] = await sql<{ stripe_account_id: string | null }[]>`select stripe_account_id from organizations where id = ${c.rig.orgId}`;
+    expect(org!.stripe_account_id, "premise: only charges_enabled moved, so the account-id guard alone cannot refuse").toBeTruthy();
+    const err = await rejection(mintGroupCheckout(c.a.group_id, c.rig.division.id, ORIGIN, c.accessToken, c.known));
+    expect(err.status).toBe(503);
+    expect(err.message).toBe("Payments are not set up for this organiser yet");
+    expect(stripeMock.checkoutCreate).not.toHaveBeenCalled();
+  });
+
   it("refuses a known cart whose context is another division's, before a read or a Stripe call", async () => {
     const c = await cardCart();
     const other = await cardCart();
