@@ -8517,6 +8517,7 @@
   "funnel.claim.venue": "Main venue",
   "funnel.claim.court": "Court {n}",
   "funnel.claim.division.other": "Other",
+  "funnel.claim.orgName": "{name} organisers",
   "funnel.claim.card.working": "Creating your competition…",
   "funnel.claim.card.workingBody": "Signing you in and drawing up the structure.",
   "funnel.claim.card.done": "Done — taking you inside…",

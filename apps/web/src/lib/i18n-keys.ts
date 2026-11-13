@@ -3429,6 +3429,7 @@ export type DictionaryKey =
   | "funnel.claim.entrant.individual"
   | "funnel.claim.entrant.pair"
   | "funnel.claim.entrant.team"
+  | "funnel.claim.orgName"
   | "funnel.claim.venue"
   | "funnelClaim.body"
   | "funnelClaim.button"

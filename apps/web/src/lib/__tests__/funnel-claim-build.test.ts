@@ -9,11 +9,26 @@
 // dictionary file on disk, and the cap is the live plan resolver's.
 // Real Postgres required — skipped without DATABASE_URL (test-infra recipe).
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+
+// The caller every claim builds as (review-whole I1): a pass-through around the real createCompetition that keeps the
+// AuthCtx it was handed, so a test can read the role the claim acted with. Nothing else about the write changes.
+const seen = vi.hoisted(() => ({ auths: [] as { orgId: string; role: string | null }[] }));
+vi.mock("@/server/usecases/competitions", async (orig) => {
+  const actual = await orig<typeof import("@/server/usecases/competitions")>();
+  return {
+    ...actual,
+    createCompetition: (...args: Parameters<typeof actual.createCompetition>) => {
+      seen.auths.push({ orgId: args[0].orgId, role: args[0].role });
+      return actual.createCompetition(...args);
+    },
+  };
+});
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { sql } from "@/lib/db";
-import { createOrgForUser } from "@/lib/auth";
+import { createOrgForUser, invalidateUserOrgs } from "@/lib/auth";
+import { isEditorRole, type OrgRole } from "@/lib/types";
 import { getLimit } from "@/lib/entitlements";
 import { LOCALES, type Locale } from "@/lib/i18n-constants";
 import { consumeFunnelDraft, createFromDraft, createFunnelDraft, funnelEntrantCap, type FunnelPayload } from "@/lib/funnel";
@@ -67,6 +82,8 @@ function ui(locale: Locale, key: string, n?: number): string {
   if (typeof s !== "string") throw new Error(`${locale}/ui.json has no ${key}`);
   return n === undefined ? s : s.replaceAll("{n}", String(n));
 }
+/** The new organisation's name as the dictionary words it: the event's name in the draft's language's sentence. */
+const orgNameFor = (locale: Locale, eventName: string): string => ui(locale, "funnel.claim.orgName").replaceAll("{name}", eventName);
 
 // ── The claim path and its read-backs ──────────────────────────────────────────────────────────────────────────────────
 const address = (): string => `${RUN}-${randomUUID().slice(0, 8)}@example.com`;
@@ -152,6 +169,7 @@ function engineDefaultKind(moduleKey: string, variantKey: string): EntrantKind {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  seen.auths.length = 0;
 });
 afterAll(async () => {
   if (!HAS_DB) return;
@@ -449,6 +467,100 @@ describe.skipIf(!HAS_DB)("the claim builds the chosen format, its entrants and i
     expect((await entrantsOf(second.divisionId)).map((e) => e.seed)).toEqual(seeds(8));
 
     expect(await consumeFunnelDraft(first.token), "the first link is spent").toBeNull();
+  });
+
+  // ── Which organisation the claim builds into (review-whole I1) ────────────────────────────────────────────────────────
+  // The first of the claimant's organisations, oldest first, where their role may edit (lib/types.ts EDITOR_ROLES); none
+  // such, a new one of their own. The use-cases do not re-check the role, so a claim into an organisation the claimant
+  // only VIEWS would write an event there behind its owners' backs.
+  /** Every row a claim can write, counted in one organisation. */
+  const writtenIn = async (orgId: string) => {
+    const [row] = await sql<{ competitions: number; divisions: number; stages: number; entrants: number; venues: number; courts: number }[]>`
+      select (select count(*)::int from competitions where org_id = ${orgId}) as competitions,
+             (select count(*)::int from divisions where org_id = ${orgId}) as divisions,
+             (select count(*)::int from stages where org_id = ${orgId}) as stages,
+             (select count(*)::int from entrants where org_id = ${orgId}) as entrants,
+             (select count(*)::int from venues where org_id = ${orgId}) as venues,
+             (select count(*)::int from courts where org_id = ${orgId}) as courts`;
+    return row!;
+  };
+  const NOTHING = { competitions: 0, divisions: 0, stages: 0, entrants: 0, venues: 0, courts: 0 };
+  /** An organisation someone else owns, created now (so it is older than anything the claimant makes after it). */
+  async function someoneElsesOrg(label: string): Promise<string> {
+    const owner = await seedUser();
+    return (await createOrgForUser(owner, `${RUN} ${label}`)).id;
+  }
+  /** Seat `userId` in `orgId` as `role` the way an accepted invite does, and drop their cached membership list. */
+  async function seat(orgId: string, userId: string, role: OrgRole): Promise<void> {
+    await sql`insert into org_members (org_id, user_id, role) values (${orgId}, ${userId}, ${role})`;
+    await invalidateUserOrgs(userId);
+  }
+  const roleIn = async (orgId: string, userId: string) =>
+    (await sql<{ role: OrgRole }[]>`select role from org_members where org_id = ${orgId} and user_id = ${userId}`)[0]?.role ?? null;
+
+  it("a VIEWER of an older organisation who claims gets a new organisation of their own; nothing is written to the one they view", async () => {
+    // Premise: the role set says what the claim may build into, and a viewer may not edit.
+    expect(isEditorRole("viewer"), "premise: a viewer cannot edit").toBe(false);
+    let checked = 0;
+    // English and a language that words the new organisation its own way (review-whole m2).
+    for (const locale of ["en", "fr"] as const) {
+      const viewed = await someoneElsesOrg(`viewed ${locale}`);
+      const userId = await seedUser();
+      await seat(viewed, userId, "viewer");
+      seen.auths.length = 0;
+      expect(funnelFormatMin("groups-knockout"), "premise: 8 holds a groups-knockout").toBeLessThanOrEqual(8);
+      const c = await claim({ entrants: 8, format: "groups-knockout", courts: 2 }, { userId, locale });
+      expect(c.orgId, `${locale}: never the viewed organisation`).not.toBe(viewed);
+      expect(await writtenIn(viewed), `${locale}: zero rows in the viewed organisation`).toEqual(NOTHING);
+      // The claim's event is whole, in the new organisation, which the claimant owns.
+      expect(await writtenIn(c.orgId), `${locale}: the new organisation holds the event`).toMatchObject({
+        competitions: 1,
+        divisions: 1,
+        stages: RULEBOOK_KINDS["groups-knockout"].length,
+        entrants: 8,
+        venues: 1,
+        courts: 2,
+      });
+      expect(await roleIn(c.orgId, userId), `${locale}: the claimant owns it`).toBe("owner");
+      expect(seen.auths, `${locale}: the claim acted as the new organisation's owner`).toEqual([{ orgId: c.orgId, role: "owner" }]);
+      // Named in the draft's language, from the event's name (read back off the competition the claim wrote).
+      const [row] = await sql<{ org: string; event: string }[]>`
+        select o.name as org, c.name as event from organizations o join competitions c on c.org_id = o.id where c.id = ${c.competitionId}`;
+      expect(row!.org, `${locale}: the organisation's name`).toBe(orgNameFor(locale, row!.event));
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every language driven").toBe(2);
+    expect(orgNameFor("fr", "X"), "premise: French words the organisation apart from English").not.toBe(orgNameFor("en", "X"));
+  });
+
+  it("an OWNER of a newer organisation who views an older one lands in their own, not the older one", async () => {
+    const viewed = await someoneElsesOrg("viewed, older");
+    const userId = await seedUser();
+    const own = await createOrgForUser(userId, `${RUN} own, newer`);
+    await seat(viewed, userId, "viewer");
+    const [{ older }] = await sql<{ older: boolean }[]>`
+      select (select created_at from organizations where id = ${viewed}) < (select created_at from organizations where id = ${own.id}) as older`;
+    expect(older, "premise: the viewed organisation is the older, so it comes first by age").toBe(true);
+    seen.auths.length = 0;
+    const c = await claim({ entrants: 4, format: "league", courts: 2 }, { userId });
+    expect(c.orgId, "their own organisation").toBe(own.id);
+    expect(await writtenIn(viewed), "zero rows in the viewed organisation").toEqual(NOTHING);
+    expect(seen.auths).toEqual([{ orgId: own.id, role: "owner" }]);
+  });
+
+  it("an ADMIN of an older organisation who owns a newer one builds into the older: the first editable by age, acting as admin", async () => {
+    // The pair to the viewer: an admin may edit, so the oldest editable organisation is the one they administer — and the
+    // claim acts with the role they hold there, never a hand-typed owner.
+    expect(isEditorRole("admin"), "premise: an admin can edit").toBe(true);
+    const administered = await someoneElsesOrg("administered, older");
+    const userId = await seedUser();
+    const own = await createOrgForUser(userId, `${RUN} own, newer`);
+    await seat(administered, userId, "admin");
+    seen.auths.length = 0;
+    const c = await claim({ entrants: 4, format: "league" }, { userId });
+    expect(c.orgId, "the older, editable organisation").toBe(administered);
+    expect(seen.auths, "as the admin they are there").toEqual([{ orgId: administered, role: "admin" }]);
+    expect(await writtenIn(own.id), "nothing in their own, newer organisation").toEqual(NOTHING);
   });
 
   it("a date sets ends_on to the same day; no date leaves both empty", async () => {

@@ -20,6 +20,7 @@ import { getDictionary, t } from "@/lib/i18n";
 import { lookup } from "@/lib/i18n-runtime";
 import { DEFAULT_LOCALE, hasLocale, type Locale } from "@/lib/i18n-constants";
 import { createOrgForUser, getUserOrgs } from "@/lib/auth";
+import { isEditorRole } from "@/lib/types";
 import { CreateStages, type CreateCompetition } from "@/server/api-v1/schemas";
 import { log } from "@/server/logger";
 import { createCompetition } from "@/server/usecases/competitions";
@@ -200,7 +201,7 @@ async function claimStep<T>(step: ClaimStep, competitionId: string, run: () => P
  * In order (start-wizard redesign plan, 2026-11-13):
  *   -. before anything, the first day: one that is not a calendar day or is before the UTC day less one is refused
  *      (400), so a stale or hand-made draft writes nothing — not even the organisation;
- *   0. the organisation (the user's first, else a new one), then a PRE-FLIGHT of the reads and checks the build can make
+ *   0. the organisation (the user's first they may edit, else a new one), then a PRE-FLIGHT of the reads and checks the build can make
  *      before its first write — the language, the sport, the entrant cap, the stage graph parsed as the API parses it.
  *      Not pre-flighted: the active-competition quota (createCompetition's own check, which refuses BEFORE its insert,
  *      so a 402 there writes nothing of the event) and the stage kinds' plan features (createStages, after the
@@ -230,12 +231,16 @@ export async function createFromDraft(
   if (payload.start_date !== undefined && (!isIsoDay(payload.start_date) || payload.start_date < funnelEarliestDay(new Date()))) {
     throw new HttpError(400, "This event's first day has already passed — nothing was set up.", FUNNEL_CLAIM_DATE_PAST);
   }
-  const orgs = await getUserOrgs(userId);
-  const org = orgs[0] ?? (await createOrgForUser(userId, `${payload.name} organisers`));
-  const auth: AuthCtx = { orgId: org.id, via: "session", userId, role: "owner", keyId: null };
+  const dict = await getDictionary(draft.locale ?? DEFAULT_LOCALE, "ui");
+  // The first of the user's organisations (oldest first) where their role may edit; none such, a new one of their own,
+  // named in the draft's language. Never an organisation they only view: the use-cases below do not re-check the role,
+  // so a viewer's claim would write an event into someone else's organisation (review-whole I1). The claim acts with the
+  // role the user holds there — owner only of the organisation it just created.
+  const editable = (await getUserOrgs(userId)).find((o) => isEditorRole(o.role));
+  const org = editable ?? (await createOrgForUser(userId, t(dict, "funnel.claim.orgName", { name: payload.name })));
+  const auth: AuthCtx = { orgId: org.id, via: "session", userId, role: editable?.role ?? "owner", keyId: null };
 
   // 0. Pre-flight.
-  const dict = await getDictionary(draft.locale ?? DEFAULT_LOCALE, "ui");
   const { sport_key, variant_key } = await resolveSport(payload.sport);
   // Other (and a name the registry does not know) builds the generic module, whose dictionary name is "Generic" — a word
   // for the engine, not for an organiser's division.

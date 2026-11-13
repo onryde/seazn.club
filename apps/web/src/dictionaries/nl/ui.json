@@ -8517,6 +8517,7 @@
   "funnel.claim.venue": "Hoofdlocatie",
   "funnel.claim.court": "Baan {n}",
   "funnel.claim.division.other": "Overig",
+  "funnel.claim.orgName": "Organisatie {name}",
   "funnel.claim.card.working": "Je competitie wordt aangemaakt…",
   "funnel.claim.card.workingBody": "We melden je aan en zetten de opzet klaar.",
   "funnel.claim.card.done": "Klaar — we brengen je naar je competitie…",
