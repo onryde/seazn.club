@@ -2,20 +2,35 @@ import "server-only";
 // Start-a-competition funnel (v3/07 §6): a visitor configures a competition
 // BEFORE authenticating; the draft rides a single-use emailed token that both
 // proves email ownership (like login_links) and carries the payload. Claiming
-// creates the org (if none), the competition and a division, then lands the
-// new organiser inside it.
+// creates the org (if none), the competition and a division — with the format
+// the visitor picked as its stages, their field as seeded placeholder entrants,
+// and their courts as a venue (start-wizard redesign, 2026-11-13) — then lands
+// the new organiser inside it.
 import crypto from "node:crypto";
 import { z } from "zod";
 import { sql, type Tx } from "@/lib/db";
-import type { Locale } from "@/lib/i18n-constants";
+import { getLimit } from "@/lib/entitlements";
+import { funnelFormatMin, funnelFormatStages, isFunnelFormat } from "@/lib/funnel-formats";
+import { getDictionary, t } from "@/lib/i18n";
+import { DEFAULT_LOCALE, hasLocale, type Locale } from "@/lib/i18n-constants";
 import { createOrgForUser, getUserOrgs } from "@/lib/auth";
+import { CreateStages, type CreateCompetition } from "@/server/api-v1/schemas";
+import { log } from "@/server/logger";
 import { createCompetition } from "@/server/usecases/competitions";
 import { createDivision } from "@/server/usecases/divisions";
+import { registrationDefaultKind } from "@/server/usecases/entrant-shape";
+import { createEntrants } from "@/server/usecases/entrants";
+import { createStages } from "@/server/usecases/stages";
+import { createCourt, createVenue, listVenues } from "@/server/usecases/venues";
 import { pickVariant } from "@/lib/preferred-variant";
 import { routes } from "@/lib/routes";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import type { EntrantKind } from "@seazn/engine/sport";
 
 const DRAFT_TTL_DAYS = 7;
+
+/** The plan row the funnel's field is capped by: a division's entrants. */
+const ENTRANT_CAP_KEY = "entrants.per_division.max";
 
 export const funnelPayloadSchema = z
   .object({
@@ -24,6 +39,10 @@ export const funnelPayloadSchema = z
     entrants: z.number().int().min(2).max(256),
     start_date: z.string().max(10).optional(),
     format: z.string().max(40).optional(),
+    // The wizard's Planning fold, sent only when it was opened. Courts are built (one venue, this many courts); hours only
+    // shaped the cards' estimate and are kept on the draft, never written (a duration is not a court's clock window).
+    courts: z.number().int().min(1).max(32).optional(),
+    hours: z.number().int().min(1).max(72).optional(),
   })
   .strict();
 
@@ -33,6 +52,8 @@ export interface FunnelDraft {
   id: string;
   email: string;
   payload: FunnelPayload;
+  /** The language the visitor started the draft in (the start route's pick); null when they gave none. */
+  locale: Locale | null;
 }
 
 /** Create a draft on `db` and return its single-use claim token and the instant it stops working. The start route passes its
@@ -61,9 +82,9 @@ export async function createFunnelDraft(
 export async function consumeFunnelDraft(token: string): Promise<FunnelDraft | null> {
   return sql.begin(async (tx) => {
     const [row] = await tx<
-      { id: string; email: string; payload: unknown; expires_at: string; used_at: string | null }[]
+      { id: string; email: string; payload: unknown; expires_at: string; used_at: string | null; locale: string | null }[]
     >`
-      select id, email, payload, expires_at, used_at
+      select id, email, payload, expires_at, used_at, locale
       from funnel_drafts where token = ${token}
       for update limit 1`;
     if (!row || row.used_at || new Date(row.expires_at).getTime() < Date.now()) {
@@ -72,8 +93,19 @@ export async function consumeFunnelDraft(token: string): Promise<FunnelDraft | n
     const parsed = funnelPayloadSchema.safeParse(row.payload);
     if (!parsed.success) return null;
     await tx`update funnel_drafts set used_at = now() where id = ${row.id}`;
-    return { id: row.id, email: row.email, payload: parsed.data };
+    // The column's CHECK holds it to the shipped locales; anything else reads as no language, never a cast.
+    const locale = row.locale !== null && hasLocale(row.locale) ? row.locale : null;
+    return { id: row.id, email: row.email, payload: parsed.data, locale };
   });
+}
+
+/** How many entrants a division of a new organisation on `planKey` holds (the free plan by default: a claim with no
+ *  organisation yet makes one on it), read from the live plan catalogue — the number /start quotes beside its size
+ *  stepper. `null` is unlimited; a plan with no row holds none, as the resolver reads a missing row (`getLimit`). */
+export async function funnelEntrantCap(planKey: "community" = "community"): Promise<number | null> {
+  const [row] = await sql<{ int_value: number | null }[]>`
+    select int_value from plan_entitlements where plan_key = ${planKey} and feature_key = ${ENTRANT_CAP_KEY}`;
+  return row ? row.int_value : 0;
 }
 
 /** Map the funnel's free-text sport onto the engine catalog: an exact-name
@@ -102,33 +134,96 @@ export async function resolveSport(
   return { sport_key: "generic", variant_key: generic?.variant_key ?? "score" };
 }
 
+/** The `ui` key each entrant kind's placeholder name reads; `{n}` is its seed. */
+const PLACEHOLDER_NAME_KEY: Record<EntrantKind, string> = {
+  individual: "funnel.claim.entrant.individual",
+  pair: "funnel.claim.entrant.pair",
+  team: "funnel.claim.entrant.team",
+};
+
 /**
  * Turn a claimed draft into real structure for `userId` and return where to
  * land: inside the new competition on the division's entrants tab. Uses the
  * standard use-cases, so quotas/slugs/audit all apply as if typed by hand.
+ *
+ * In order (start-wizard redesign plan, 2026-11-13):
+ *   1. the organisation (the user's first, else a new one) and the competition — one day long when the visitor gave a
+ *      date (D5); undated otherwise (Q2: an end date needs a day the visitor never gave, the #376 residual);
+ *   2. the division, of the sport's preferred variant;
+ *   3. the field: the visitor's size held to the plan's per-division cap (D4, Q1). It is the ONE size both the stages
+ *      and the entrants are built for, so a 256 ask on a 64-entrant plan builds a 64 field's graph and 64 entrants —
+ *      never a bracket sized for entrants that do not exist;
+ *   4. the stages of the format card they picked, the graph that card's match count was read off
+ *      (lib/funnel-formats.ts); none for a format the funnel does not offer, a draft that names none (old drafts), or a
+ *      field below the format's minimum — never a guess;
+ *   5. the entrants: name-only, of the division's default kind, seeded 1..field, named in the draft's language;
+ *   6. the courts, when the visitor opened Planning and the organisation has no venue yet: one venue holding that many.
+ *      The hours are never written (D1).
  */
 export async function createFromDraft(
   userId: string,
   draft: FunnelDraft,
 ): Promise<{ redirect: string; orgId: string }> {
+  const { payload } = draft;
   const orgs = await getUserOrgs(userId);
-  const org = orgs[0] ?? (await createOrgForUser(userId, `${draft.payload.name} organisers`));
+  const org = orgs[0] ?? (await createOrgForUser(userId, `${payload.name} organisers`));
 
   const auth: AuthCtx = { orgId: org.id, via: "session", userId, role: "owner", keyId: null };
+  const dict = await getDictionary(draft.locale ?? DEFAULT_LOCALE, "ui");
+  // The cast is the undated draft's: CreateCompetition requires an end date (#376) and an undated draft has none (Q2).
   const competition = await createCompetition(auth, {
-    name: draft.payload.name,
+    name: payload.name,
     visibility: "private",
     branding: {},
-    ...(draft.payload.start_date ? { starts_on: draft.payload.start_date } : {}),
-  } as never);
+    ...(payload.start_date ? { starts_on: payload.start_date, ends_on: payload.start_date } : {}),
+  } as CreateCompetition);
 
-  const { sport_key, variant_key } = await resolveSport(draft.payload.sport);
+  const { sport_key, variant_key } = await resolveSport(payload.sport);
   const division = await createDivision(auth, competition.id, {
-    name: draft.payload.sport,
+    name: payload.sport,
     sport_key,
     variant_key,
     config: {},
   } as never);
+
+  const cap = await getLimit(org.id, ENTRANT_CAP_KEY, competition.id);
+  const field = cap === null ? payload.entrants : Math.min(payload.entrants, cap);
+  if (field < payload.entrants) {
+    log.info(
+      { orgId: org.id, competitionId: competition.id, requested: payload.entrants, cap },
+      "funnel_claim_entrants_clamped",
+    );
+  }
+
+  const { format } = payload;
+  if (isFunnelFormat(format) && field >= funnelFormatMin(format)) {
+    // Parsed as the stages route parses the division builder's POST: a draft the API would refuse is refused here, loudly.
+    await createStages(
+      auth,
+      division.id,
+      CreateStages.parse(funnelFormatStages(format, field).map((stage, i) => ({ seq: i + 1, ...stage }))),
+    );
+  }
+
+  // A plan that holds no entrants (`field` 0) asks for an empty batch, which createEntrants writes nothing for.
+  const kind = registrationDefaultKind(division);
+  await createEntrants(
+    auth,
+    division.id,
+    Array.from({ length: field }, (_, i) => ({
+      kind,
+      display_name: t(dict, PLACEHOLDER_NAME_KEY[kind], { n: i + 1 }),
+      seed: i + 1,
+      members: [],
+    })),
+  );
+
+  if (payload.courts !== undefined && (await listVenues(auth)).length === 0) {
+    const venue = await createVenue(auth, { name: t(dict, "funnel.claim.venue"), sort: 0 });
+    for (let i = 1; i <= payload.courts; i++) {
+      await createCourt(auth, venue.id, { name: t(dict, "funnel.claim.court", { n: i }), sort: i - 1, tags: [] });
+    }
+  }
 
   return {
     redirect: routes.division(org.slug, competition.slug, division.slug, "entrants"),

@@ -8506,5 +8506,10 @@
   "quickMatch.me.deleteImpersonating": "Vous êtes connecté en tant qu'une autre personne (vue du personnel), ce match n'a donc pas été supprimé.",
   "quickMatch.me.signedOut": "Vous êtes déconnecté. Reconnectez-vous pour modifier vos matchs rapides.",
   "quickMatch.home.inAccount": "Dans votre compte",
-  "quickMatch.me.deleted": "{name} a été supprimé."
+  "quickMatch.me.deleted": "{name} a été supprimé.",
+  "funnel.claim.entrant.individual": "Joueur {n}",
+  "funnel.claim.entrant.pair": "Paire {n}",
+  "funnel.claim.entrant.team": "Équipe {n}",
+  "funnel.claim.venue": "Lieu principal",
+  "funnel.claim.court": "Terrain {n}"
 }

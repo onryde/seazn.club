@@ -8506,5 +8506,10 @@
   "quickMatch.me.deleteImpersonating": "Has iniciado sesión como otra persona (vista de personal), así que este partido no se ha borrado.",
   "quickMatch.me.signedOut": "Has cerrado sesión. Vuelve a iniciar sesión para cambiar tus partidos rápidos.",
   "quickMatch.home.inAccount": "En tu cuenta",
-  "quickMatch.me.deleted": "Se ha borrado {name}."
+  "quickMatch.me.deleted": "Se ha borrado {name}.",
+  "funnel.claim.entrant.individual": "Jugador {n}",
+  "funnel.claim.entrant.pair": "Pareja {n}",
+  "funnel.claim.entrant.team": "Equipo {n}",
+  "funnel.claim.venue": "Sede principal",
+  "funnel.claim.court": "Pista {n}"
 }

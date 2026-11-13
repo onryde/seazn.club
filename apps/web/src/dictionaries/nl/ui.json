@@ -8506,5 +8506,10 @@
   "quickMatch.me.deleteImpersonating": "Je bent ingelogd als iemand anders (personeelsweergave), dus deze wedstrijd is niet verwijderd.",
   "quickMatch.me.signedOut": "Je bent uitgelogd. Log opnieuw in om je snelle wedstrijden te wijzigen.",
   "quickMatch.home.inAccount": "In je account",
-  "quickMatch.me.deleted": "{name} is verwijderd."
+  "quickMatch.me.deleted": "{name} is verwijderd.",
+  "funnel.claim.entrant.individual": "Speler {n}",
+  "funnel.claim.entrant.pair": "Paar {n}",
+  "funnel.claim.entrant.team": "Team {n}",
+  "funnel.claim.venue": "Hoofdlocatie",
+  "funnel.claim.court": "Baan {n}"
 }

@@ -8506,5 +8506,10 @@
   "quickMatch.me.deleteImpersonating": "You're signed in as someone else (staff view), so this match wasn't deleted.",
   "quickMatch.me.signedOut": "You're signed out. Sign in again to change your quick matches.",
   "quickMatch.home.inAccount": "In your account",
-  "quickMatch.me.deleted": "{name} was deleted."
+  "quickMatch.me.deleted": "{name} was deleted.",
+  "funnel.claim.entrant.individual": "Player {n}",
+  "funnel.claim.entrant.pair": "Pair {n}",
+  "funnel.claim.entrant.team": "Team {n}",
+  "funnel.claim.venue": "Main venue",
+  "funnel.claim.court": "Court {n}"
 }
