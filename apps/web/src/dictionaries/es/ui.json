@@ -420,6 +420,7 @@
   "register.submit.free": "Inscribirse en la competición",
   "register.submit.fee": "Inscribirse — {fee}",
   "register.submit.pay": "Pagar {fee} e inscribirse",
+  "register.submit.waitlist": "Apuntarse a la lista de espera",
   "register.bar.summary.one": "{count} inscripción · {total}",
   "register.bar.summary.other": "{count} inscripciones · {total}",
   "register.submit.saving": "Guardando tu plaza…",

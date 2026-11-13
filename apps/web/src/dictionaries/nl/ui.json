@@ -420,6 +420,7 @@
   "register.submit.free": "Deelnemen aan de competitie",
   "register.submit.fee": "Deelnemen — {fee}",
   "register.submit.pay": "Betaal {fee} en neem deel",
+  "register.submit.waitlist": "Op de wachtlijst komen",
   "register.bar.summary.one": "{count} inschrijving · {total}",
   "register.bar.summary.other": "{count} inschrijvingen · {total}",
   "register.submit.saving": "Je plek wordt opgeslagen…",

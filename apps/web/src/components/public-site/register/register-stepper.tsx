@@ -28,6 +28,7 @@ import {
   cartReducer,
   clearSelfLinkWhenNotPlaying,
   payableDivision,
+  submitLabelKey,
   summarizeCart,
   type CartAction,
 } from "./cart";
@@ -380,17 +381,13 @@ export function RegisterStepper({
   // (handleSubmit/the nav row below) read this ONE result, never a second
   // computation (summarizeCart's own doc comment).
   const reviewSummary = summarizeCart(cart, info.divisions);
-  // Submit button label (design §4 step 5's three cases): free, pay-by-card-
-  // now, or pay-the-organiser-later. Reads `payableDivision` — the SAME
-  // lookup StepReview's own payment-method note reads — so the two can
-  // never disagree (payableDivision's own doc comment).
+  // Submit button label (design §4 step 5's three cases, plus B3 T12's fourth): free, pay-by-card-now, pay-the-organiser-later, or —
+  // when every entry waits — join the waiting list. `submitLabelKey` reads the SAME summary the total and the line items read, and
+  // `reviewPayable` reads `payableDivision` — the SAME lookup StepReview's own payment-method note reads — so they can never disagree.
   const reviewPayable = payableDivision(reviewSummary);
-  const submitLabel =
-    reviewSummary.subtotalCents === 0 || !reviewSummary.currency
-      ? t("register.submit.free")
-      : t(reviewPayable?.payment_method === "stripe" ? "register.submit.pay" : "register.submit.fee", {
-          fee: formatMoneyExact(reviewSummary.subtotalCents, reviewSummary.currency, locale),
-        });
+  const submitLabel = t(submitLabelKey(reviewSummary), {
+    fee: reviewSummary.currency ? formatMoneyExact(reviewSummary.subtotalCents, reviewSummary.currency, locale) : "",
+  });
   // What the button says right now: its ready text, or the phase the submit is in (spec §3.3 item 5).
   const submitButtonLabel =
     submitPhase === "saving"

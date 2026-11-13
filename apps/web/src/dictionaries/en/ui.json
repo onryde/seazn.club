@@ -420,6 +420,7 @@
   "register.submit.free": "Enter the competition",
   "register.submit.fee": "Enter — {fee}",
   "register.submit.pay": "Pay {fee} and enter",
+  "register.submit.waitlist": "Join the waiting list",
   "register.bar.summary.one": "{count} entry · {total}",
   "register.bar.summary.other": "{count} entries · {total}",
   "register.submit.saving": "Saving your place…",

@@ -3483,6 +3483,47 @@ describe("B2 T8 — action bar: Back, named Continue, running total, one forward
     expect(textOf(one(m.island, "reg-bar-summary"))).toBe("1 entry · £25.00");
   });
 
+  // B3 T12 (B2 review m3) - the forward button says what submit will DO. Driven through the real stepper to Review; the producer is the
+  // cart's own verdict (summarizeCart), the consumer is the words on the button.
+  it("a cart whose every entry waits: the Review button says 'Join the waiting list', not the free label", () => {
+    const m = reachReview(DIV_WAITLIST);
+    const rows = walk(one(m.island, "reg-review-entries")).filter((e) => e.type === "li").map((e) => textOf(e));
+    expect(rows.length, "premise: Review lists an entry").toBeGreaterThan(0);
+    expect(rows.every((r) => r.includes("Waiting list — not charged now")), "premise: every listed entry waits").toBe(true);
+    expect(textOf(one(m.island, "reg-submit"))).toBe("Join the waiting list");
+    expect(textOf(one(m.island, "reg-review-total")), "and nothing is charged now").not.toContain("£10");
+  });
+
+  it("a cart with one charged entry and one waiting entry still says Pay, and quotes the CHARGED total only", () => {
+    const m = mount([DIV_PAID, DIV_WAITLIST]);
+    fillWho(m);
+    m.clickByText("Next"); // -> ENTRIES
+    addEntry(m, "div-paid");
+    addEntry(m, "div-wait");
+    m.clickByText("Next"); // -> DETAILS
+    allByAriaLabel(m.island, "Player 1 — Your name").forEach((n, i) =>
+      (propsOf(n).onChange as (e: { target: { value: string } }) => void)({ target: { value: `Player ${i + 1}` } }),
+    );
+    m.clickByText("Next"); // -> CONSENT
+    consent(m);
+    m.clickByText("Next"); // -> REVIEW
+    const rows = walk(one(m.island, "reg-review-entries")).filter((e) => e.type === "li").map((e) => textOf(e));
+    expect(rows, "premise: one charged entry and one waiting entry").toHaveLength(2);
+    expect(rows.filter((r) => r.includes("Waiting list — not charged now")), "premise: exactly one waits").toHaveLength(1);
+    // £25 charged + £10 waiting: the label carries the first only (a label that summed both would read £35.00).
+    expect(textOf(one(m.island, "reg-submit"))).toBe("Pay £25.00 and enter");
+  });
+
+  it("the waiting-list button is sized to its own label (the width sizer reads the same label the button shows)", () => {
+    const m = reachReview(DIV_WAITLIST);
+    const btn = one(m.island, "reg-submit");
+    const sizer = walk(btn).find((e) => propsOf(e)["data-widest"] !== undefined);
+    expect(sizer, "the label sits in a sizer span that carries data-widest").toBeTruthy();
+    const widest = String(propsOf(sizer!)["data-widest"]);
+    expect("Join the waiting list".length, "premise: the idle label is the longer of the two phases").toBeGreaterThan("Saving your place…".length);
+    expect(widest, "the sizer holds the longest label this cart will show, which is the idle one").toBe("Join the waiting list");
+  });
+
   it("the running total shows on every step once the cart is payable, not only on Entries (the seeded single division on Contact)", () => {
     const m = mount([DIV_PAID]);
     expect(textOf(one(m.island, "reg-bar-summary"))).toBe("1 entry · £25.00");
@@ -3626,6 +3667,9 @@ describe("B2 T8 — action bar: Back, named Continue, running total, one forward
       ) as Record<string, string>;
       expect(d["register.nav.continueTo"], `${loc}: continueTo`).toContain("{step}");
       expect(d["register.submit.pay"], `${loc}: pay`).toContain("{fee}");
+      expect(d["register.submit.waitlist"], `${loc}: the waiting-list button is worded`).toBeTruthy();
+      expect(d["register.submit.waitlist"], `${loc}: it quotes no fee (nothing is charged now)`).not.toContain("{fee}");
+      expect(d["register.submit.waitlist"], `${loc}: it is not the free label`).not.toBe(d["register.submit.free"]);
       expect(d["register.bar.summary.one"], `${loc}: summary.one`).toMatch(/\{count\}.*\{total\}/);
       expect(d["register.bar.summary.other"], `${loc}: summary.other`).toMatch(/\{count\}.*\{total\}/);
       expect(d["register.submit.card"], `${loc}: the retired card label is gone`).toBeUndefined();

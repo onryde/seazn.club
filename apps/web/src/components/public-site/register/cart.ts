@@ -572,6 +572,25 @@ export function lineMethod(line: CartLineSummary): DivisionLike["payment_method"
   return lineFeeCents(line.entry, line.division) > 0 ? line.division.payment_method : null;
 }
 
+/** True when the cart is not empty and submit will put EVERY entry on the waiting list: the person is joining a queue, nothing is
+ *  charged and nothing is seated. An empty cart is never "all waiting" (`every` is true of no lines, which is why the length check
+ *  comes first). A stale-closed or unknown-division line is not waiting (it blocks Next instead), so it keeps this false. */
+export function cartIsAllWaitlisted(summary: CartSummary): boolean {
+  return summary.lines.length > 0 && summary.lines.every((l) => l.waitlisted);
+}
+
+/** Which dictionary key names Review's forward button (B3 T12, B2 review m3): what submit WILL DO, read off the same summary as the
+ *  total and the line items so the four cannot disagree. All waiting: join the waiting list (nothing is charged, nobody is seated).
+ *  Otherwise nothing charged now: the free label; a charged total: pay by card now (`pay`) or the organiser's fee (`fee`) — and the
+ *  fee it quotes is `subtotalCents`, which already leaves out every waiting entry (a mixed cart pays for what it seats). */
+export type SubmitLabelKey = "register.submit.waitlist" | "register.submit.free" | "register.submit.pay" | "register.submit.fee";
+
+export function submitLabelKey(summary: CartSummary): SubmitLabelKey {
+  if (cartIsAllWaitlisted(summary)) return "register.submit.waitlist";
+  if (summary.subtotalCents === 0 || !summary.currency) return "register.submit.free";
+  return payableDivision(summary)?.payment_method === "stripe" ? "register.submit.pay" : "register.submit.fee";
+}
+
 /** The division that decides the cart's payment PRESENTATION — step 5's
  *  submit button label (register.submit.pay/.fee). (The review's per-entry
  *  method labels read `lineMethod` instead — one entry each, P4/W9.) The first line that

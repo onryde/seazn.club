@@ -6918,6 +6918,7 @@ export type DictionaryKey =
   | "register.submit.openingPayment"
   | "register.submit.pay"
   | "register.submit.saving"
+  | "register.submit.waitlist"
   | "register.subtitle"
   | "register.supportedBy"
   | "register.ticket.admitOne"

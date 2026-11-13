@@ -14,6 +14,7 @@ import {
   lineMethod,
   payableDivision,
   registeringSelfAnywhere,
+  submitLabelKey,
   summarizeCart,
   toGroupEntry,
 } from "../cart";
@@ -1096,6 +1097,82 @@ describe("summarizeCart", () => {
       };
       const division = payableDivision(summarizeCart(cart, [WAITLIST_DIV, OPEN_PAID]));
       expect(division?.division_id).toBe("open-paid");
+    });
+  });
+
+  // Registration redesign B3 T12 (B2 review m3). The forward button on Review names what submit will DO. A cart whose every entry
+  // waits is a person joining a waiting list - "Enter the competition" (the free label, because the charged total is 0) is wrong for
+  // it; a cart with one charged entry and one waiting entry still pays, and the label quotes the CHARGED total only.
+  describe("submitLabelKey — the Review button names what submit will do", () => {
+    const STRIPE_PAID: DivisionLike = { ...OPEN_PAID, division_id: "stripe-paid", payment_method: "stripe" };
+    const FREE_DIV: DivisionLike = { ...TEAM_DIVISION, division_id: "free-div", fee_cents: 0, free_agent_fee_cents: null };
+    const ONE_LEFT_STRIPE: DivisionLike = { ...STRIPE_PAID, division_id: "one-left-stripe", capacity: 8, remaining: 1, taken: 7 };
+    const team = (id: string, division_id: string, patch: Partial<CartEntry> = {}) => entry({ id, division_id, entrant_kind: "team", ...patch });
+    const key = (entries: CartEntry[], divisions: DivisionLike[]) => submitLabelKey(summarizeCart({ entries }, divisions));
+
+    // The empty case first (TEST-STRATEGY): an empty cart has no line that is "all" anything, so it must NOT read as a waiting list.
+    it("an empty cart is not a waiting list: it keeps the free label", () => {
+      expect(key([], [WAITLIST_DIV])).toBe("register.submit.free");
+    });
+
+    it.each([
+      { name: "one entry into a full division", entries: [team("e1", "waitlist")], divisions: [WAITLIST_DIV] },
+      { name: "two entries into a full division", entries: [team("e1", "waitlist"), team("e2", "waitlist")], divisions: [WAITLIST_DIV] },
+      {
+        name: "entries into two different full divisions",
+        entries: [team("e1", "waitlist"), team("e2", "waitlist-2")],
+        divisions: [WAITLIST_DIV, { ...WAITLIST_DIV, division_id: "waitlist-2" }],
+      },
+    ])("every entry waits ($name): join the waiting list", ({ entries, divisions }) => {
+      const summary = summarizeCart({ entries }, divisions);
+      expect(summary.lines.every((l) => l.waitlisted), "premise: every line is waitlisted").toBe(true);
+      expect(summary.lines.length, "premise: the cart is not empty").toBeGreaterThan(0);
+      expect(submitLabelKey(summary)).toBe("register.submit.waitlist");
+    });
+
+    it.each([
+      { name: "one charged card entry + one waiting entry", entries: [team("e1", "stripe-paid"), team("e2", "waitlist")], divisions: [STRIPE_PAID, WAITLIST_DIV], want: "register.submit.pay" },
+      { name: "one charged offline entry + one waiting entry", entries: [team("e1", "open-paid"), team("e2", "waitlist")], divisions: [OPEN_PAID, WAITLIST_DIV], want: "register.submit.fee" },
+      { name: "the same division: the first entry takes the last place, the second waits (card)", entries: [team("e1", "one-left-stripe"), team("e2", "one-left-stripe")], divisions: [ONE_LEFT_STRIPE], want: "register.submit.pay" },
+      { name: "the waiting entry comes FIRST in the cart, the charged one after it", entries: [team("e1", "waitlist"), team("e2", "stripe-paid")], divisions: [WAITLIST_DIV, STRIPE_PAID], want: "register.submit.pay" },
+    ])("mixed ($name): the Pay/Enter label stays, the waiting-list one does not", ({ entries, divisions, want }) => {
+      const summary = summarizeCart({ entries }, divisions);
+      expect(summary.lines.some((l) => l.waitlisted), "premise: one entry waits").toBe(true);
+      expect(summary.lines.some((l) => !l.notChargedNow), "premise: one entry is charged").toBe(true);
+      expect(submitLabelKey(summary)).toBe(want);
+    });
+
+    it("the fee the Pay label quotes is the charged total only: the waiting entry's own price never joins it", () => {
+      const summary = summarizeCart({ entries: [team("e1", "stripe-paid"), team("e2", "waitlist")] }, [STRIPE_PAID, WAITLIST_DIV]);
+      expect(WAITLIST_DIV.fee_cents, "premise: the waiting entry has a price of its own").toBeGreaterThan(0);
+      expect(summary.subtotalCents).toBe(STRIPE_PAID.fee_cents);
+    });
+
+    it("a free entry beside a waiting one is not a waiting list: the person is entering the free division", () => {
+      expect(key([team("e1", "free-div"), team("e2", "waitlist")], [FREE_DIV, WAITLIST_DIV])).toBe("register.submit.free");
+    });
+
+    it("a solo sign-up into a full division is not waiting (submit never queues it): it is charged, so it reads Pay", () => {
+      const full: DivisionLike = { ...WAITLIST_DIV, payment_method: "stripe", free_agent_fee_cents: 500 };
+      expect(key([team("solo", "waitlist", { free_agent: true })], [full])).toBe("register.submit.pay");
+    });
+
+    it("a stale-closed entry alone is not a waiting list, and neither is an unknown division", () => {
+      expect(key([team("e1", "stale")], [STALE_CLOSED_DIV])).toBe("register.submit.free");
+      expect(key([team("e1", "ghost")], [WAITLIST_DIV])).toBe("register.submit.free");
+    });
+
+    it("a waiting entry beside a stale-closed one is not 'every entry waits' (the stale one blocks Next, it does not wait)", () => {
+      expect(key([team("e1", "waitlist"), team("e2", "stale")], [WAITLIST_DIV, STALE_CLOSED_DIV])).toBe("register.submit.free");
+    });
+
+    it("after the entry holding the last place is removed (the real reducer) the survivor takes it: the label flips from Pay back off the waiting list", () => {
+      const before: CartState = { entries: [team("e1", "one-left-stripe"), team("e2", "one-left-stripe")] };
+      const afterRemoval = cartReducer(before, { type: "REMOVE_ENTRY", id: "e1" });
+      expect(submitLabelKey(summarizeCart(afterRemoval, [ONE_LEFT_STRIPE]))).toBe("register.submit.pay");
+      // And the other direction: a division that fills up under a cart of waiting entries reads waiting for all of them.
+      const full: DivisionLike = { ...ONE_LEFT_STRIPE, remaining: 0 };
+      expect(submitLabelKey(summarizeCart(before, [full]))).toBe("register.submit.waitlist");
     });
   });
 });
