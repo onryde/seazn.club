@@ -13,7 +13,8 @@
 //   - no `<dialog>` to open (none mounted yet, or a browser without `showModal`): the skip posts, as with no script (D7);
 //   - with one: the skip's first submit is held, the menu closes and the sheet opens once, its safe answer focused; "Mark not
 //     played" posts once; one post per menu (a second confirm, or any other item, is cancelled) until a bfcache restore;
-//   - Keep and a backdrop tap close the sheet, and focus goes back to the ⋯; Escape or a tap outside closes the open menu.
+//   - Keep and a backdrop tap close the sheet, and focus goes back to the ⋯; Escape, a tap outside, or keyboard focus leaving
+//     it closes the open menu (the Tab order itself is a browser's: no e2e drives it yet, T5 owns the browser witness).
 //
 // Sport: not applicable (the island posts paths; it knows no sport).
 import type { ReactElement } from "react";
@@ -247,6 +248,31 @@ describe("QuickMatchRowMenu", () => {
     expect(el.summary.focus).toHaveBeenCalledTimes(1);
     (propsOf(one(i, "qm-row-menu")).onToggle as (e: unknown) => void)({ currentTarget: { open: false } });
     expect(listeners.get("pointerdown")?.size, "closed again: the listener is gone").toBe(0);
+  });
+
+  // T4 review m3 (WCAG 2.2 SC 2.4.11): the open panel sits over the next row's controls, so a Tab past its last item must
+  // not leave focus under it. A browser's Tab is a focusout on the `<details>` whose relatedTarget is the next control; only
+  // a real browser walks the Tab order itself (node has no focus), so this pins the handler's three answers.
+  it("the open menu closes when keyboard focus leaves it; focus moving inside it, or to nowhere (a tap), keeps it open", () => {
+    const i = openMatch();
+    const el = mountElements(i);
+    const blur = (relatedTarget: unknown) =>
+      (propsOf(one(i, "qm-row-menu")).onBlur as (e: unknown) => void)({ relatedTarget, currentTarget: el.details });
+    // The empty case first: focus moving between the menu's own items (Score → Not played) keeps it open.
+    blur("inside");
+    expect(el.details.open, "focus moved to the menu's next item").toBe(true);
+    // No relatedTarget: a tap on nothing focusable (or Safari's unfocused button). The pointerdown listener owns that path;
+    // closing here would mask it.
+    blur(null);
+    expect(el.details.open, "focus went nowhere").toBe(true);
+    // Tab past the last item: focus lands on the next row's Score, outside the menu. It closes, and focus stays where the
+    // guest sent it (no pull back to the ⋯, unlike Escape).
+    blur("elsewhere");
+    expect(el.details.open, "focus left the menu").toBe(false);
+    expect(el.summary.focus, "focus is not pulled back").not.toHaveBeenCalled();
+    // A second focusout on the closed menu is harmless.
+    blur("elsewhere");
+    expect(el.details.open).toBe(false);
   });
 
   it("the sheet says the match's own words: its title, a live match's score before the body, and the two answers", () => {

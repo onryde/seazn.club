@@ -14,7 +14,9 @@
 //   - One post per menu: the first goes, every later one (a double tap, a second item) is cancelled until the page comes back
 //     from the back-forward cache (the guest pressed Back), which unlocks it; `score-form.tsx`'s rule. A button is never
 //     `disabled` (that can cancel the post it started); busy is `aria-disabled` and its look.
-//   - Opened, a tap outside or Escape closes the menu; the menus share one `name`, so opening one closes any other.
+//   - Opened, a tap outside, Escape, or keyboard focus leaving it (a Tab past its last item, whose panel would otherwise
+//     cover the next row's controls: WCAG 2.2 SC 2.4.11) closes the menu; the menus share one `name`, so opening one closes
+//     any other. With no script the `<details>` stays open until its ⋯ is pressed again, as a native disclosure does.
 //   - `ph-no-capture` on every form: each action holds the home token, the quick match's credential (O3), so session replay
 //     must never record it (scrub-secret-painters.test.ts).
 //   - Every target is 44px (min-h-11; the ⋯ is 44 by 44).
@@ -156,6 +158,13 @@ export function QuickMatchRowMenu({ label, scoreAction, editAction, skipAction, 
         name="qm-row-menu"
         data-testid="qm-row-menu"
         onToggle={(e) => setOpen(e.currentTarget.open)}
+        // Keyboard focus leaving the menu (React's onBlur is the bubbling focusout) closes it, focus left where the guest
+        // sent it. A null relatedTarget is a tap on nothing focusable (or Safari's unfocused button): that is the
+        // pointerdown listener's path, and closing here would mask it.
+        onBlur={(e) => {
+          const next = e.relatedTarget as Node | null;
+          if (next !== null && !e.currentTarget.contains(next)) e.currentTarget.open = false;
+        }}
         className="group/menu"
       >
         <summary

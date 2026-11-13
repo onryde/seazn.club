@@ -122,6 +122,9 @@ const LIST_PLACE: Readonly<Record<QuickMatchPhase, number>> = { live: 0, ready: 
 /** The list's order: still to play (live, ready, waiting) in play order, then the Not played ones in play order, then the
  *  finished ones in play order. */
 export function listOrder(matches: readonly MatchView[]): MatchView[] {
+  // tsc places every phase (the Record over the union). A phase from outside it at runtime would drop out of the filter
+  // below, the list one row short and no error, so it refuses by the switches' own name (T4 review m6).
+  for (const m of matches) if (!Object.hasOwn(LIST_PLACE, m.phase)) unknownPhase(m.phase as never);
   return [0, 1, 2].flatMap((place) => matches.filter((m) => LIST_PLACE[m.phase] === place));
 }
 

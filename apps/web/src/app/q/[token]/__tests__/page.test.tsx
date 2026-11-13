@@ -698,6 +698,33 @@ describe("the empty case: a quick match with no match left", () => {
       expect(words(oneByTestId(none.tree, "qm-played"))).toBe("1 of 2 matches played · deleted 7 days after the last score unless saved");
     });
 
+    it("(c2) a finished home, unsaved: the played line drops its countdown (T4 review m1); the dated 'deleted on' line stays", async () => {
+      // The countdown names "the last score", which on a finished league is no clock the guest can still run, and on a
+      // nothing-played league does not exist. The dated line under Save carries the deletion truthfully in both.
+      const at = new Date("2026-11-19T10:00:00.000Z");
+      const unsavedAt = (h: QuickMatchHome): QuickMatchHome => ({ ...h, row: { ...h.row, expiresAt: at, savedByUserId: null } });
+      const withSave = () => ({ ...stubSlots(), save: <form data-testid="slot-save" /> });
+      const cases: [string, QuickMatchHome, string][] = [
+        ["finished by skips", unsavedAt(homeWith([settled("f-1", 1), skipped("f-2", 2), skipped("f-3", 3)], { played: 1, notPlayed: 2, finished: true }, { standings: leaderTable })), "1 of 3 matches played · 2 not played"],
+        ["nothing played", unsavedAt(homeWith([skipped("f-1", 1), skipped("f-2", 2), skipped("f-3", 3)], { played: 0, notPlayed: 3, finished: true })), "0 of 3 matches played · 3 not played"],
+        ["every match played", unsavedAt(homeWith([settled("f-1", 1), settled("f-2", 2)], { played: 2, notPlayed: 0, finished: true }, { standings: leaderTable })), "2 of 2 matches played"],
+      ];
+      for (const [name, home, line] of cases) {
+        const { tree } = await renderView(home, withSave());
+        expect(words(oneByTestId(tree, "qm-played")), name).toBe(line);
+        // The dated line stays: still unsaved, still deleted on a day (10:00Z on the 19th − 14h, the never-late day).
+        expect(deletionLineOf(tree)?.served, name).toBe("Not saved — deleted on 18 November 2026");
+      }
+      expect(cases).toHaveLength(3);
+      // The positive pair: the same unsaved home, still open, keeps its countdown beside the same dated line.
+      const open = await renderView(
+        unsavedAt(homeWith([settled("f-1", 1), skipped("f-2", 2), fx("f-3", 3)], { played: 1, notPlayed: 1, finished: false })),
+        withSave(),
+      );
+      expect(words(oneByTestId(open.tree, "qm-played"))).toBe("1 of 3 matches played · 1 not played · deleted 7 days after the last score unless saved");
+      expect(deletionLineOf(open.tree)?.served).toBe("Not saved — deleted on 18 November 2026");
+    });
+
     it("(d) finished by skips with matches played: the winner card says how many were played and not, no hero, the Final table with its note", async () => {
       const cases: [string, QuickMatchHome, string][] = [
         ["2 played, 1 not", homeWith([settled("f-1", 1), skipped("f-2", 2), settled("f-3", 3)], { played: 2, notPlayed: 1, finished: true }, { standings: leaderTable }), "Top of the table after 2 played matches. 1 match was not played."],
@@ -1202,7 +1229,8 @@ describe.skipIf(!HAS_DB)("the quick match home page", () => {
     const card = oneByTestId(tree, "qm-winner");
     expect(words(oneByTestId(card, "qm-winner-kicker"))).toBe(en_("quickMatch.home.winner"));
     expect(byTestId(card, "qm-winner-name").map(words)).toEqual([winnerName]);
-    expect(words(oneByTestId(tree, "qm-played"))).toBe(enPlayed(2, 2));
+    // Finished: the played line carries no countdown (plan 4, T4 review m1); the dated "deleted on" line says it.
+    expect(words(oneByTestId(tree, "qm-played"))).toBe("2 of 2 matches played");
 
     // Every match is settled and reads as a whole-sentence result, winner first.
     let checked = 0;

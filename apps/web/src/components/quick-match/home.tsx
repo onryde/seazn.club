@@ -455,8 +455,11 @@ export function buildHomeView(home: QuickMatchHome, copy: QuickMatchCopy, fullTa
       " · ",
     ),
     // A saved match has no expiry (plan 3 Task 2): it is kept until its owner deletes it, so its line carries no countdown (A-I3).
-    // The Continue card and the account's list say the same words (`playedLine`), without the countdown.
-    played: playedLine(copy.plural, home, home.row.expiresAt === null ? null : QUICK_MATCH_EXPIRY_DAYS),
+    // A finished one (plan 4, T4 review m1) carries none either: "deleted N days after the last score" names a clock the
+    // guest no longer runs, and a league finished with nothing played has no score at all. Its deletion is still said, by
+    // the dated "Not saved — deleted on …" line under Save. The Continue card and the account's list say the same words
+    // (`playedLine`), without the countdown.
+    played: playedLine(copy.plural, home, home.row.expiresAt === null || home.finished ? null : QUICK_MATCH_EXPIRY_DAYS),
     hero,
     winner,
     noPlay,
