@@ -16,8 +16,10 @@
 --
 -- ONE writer: trg_cart_position (BEFORE INSERT on registrations) bumps the group's cart_size — the UPDATE takes the group
 -- row lock, so two inserts into one group queue rather than race — and gives the new value to the entry. An insert may not
--- supply a position (refused), an update may not change an entry's position or move it to another cart (refused), and a
--- cart's size may not go down (refused). Fixtures, e2e seeds and smoke inserts name neither column and need no change.
+-- supply a position (refused), an update may not change an entry's position or move it to another cart (refused), a
+-- cart's size may not go down (refused), and a new cart starts at size 0 (an insert naming any other size is refused, or
+-- its first entry would be numbered past 1 and a one-entry cart quoted with a suffix). Fixtures, e2e seeds and smoke
+-- inserts name neither column and need no change.
 --
 -- !! DATA CHANGE — BACKFILL (marked block below) !!
 --   Every existing registration is numbered within its group by (created_at, id): the order the status page and the cart
@@ -88,3 +90,16 @@ end $$;
 
 create trigger trg_cart_size_never_shrinks before update of cart_size on registration_groups
   for each row execute function registration_groups_cart_size_never_shrinks();
+
+-- B3 review m7: the insert was the one way left to write a cart_size by hand. Only trg_cart_position raises it.
+create or replace function registration_groups_cart_size_starts_at_zero() returns trigger
+  language plpgsql as $$
+begin
+  if new.cart_size <> 0 then
+    raise exception 'cart_position: a new cart''s size starts at 0 and only its entries raise it (got %)', new.cart_size;
+  end if;
+  return new;
+end $$;
+
+create trigger trg_cart_size_starts_at_zero before insert on registration_groups
+  for each row execute function registration_groups_cart_size_starts_at_zero();

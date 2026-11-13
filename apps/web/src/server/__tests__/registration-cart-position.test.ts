@@ -170,6 +170,38 @@ describe.skipIf(!HAS_DB)("V519 cart_position / cart_size", () => {
     await dropOrg(orgId);
   });
 
+  // B3 review m7: the insert was the one way left to write a cart_size by hand. A new cart that starts at 5 hands its first entry
+  // number 6 and quotes every reference with a suffix it never earned (a one-entry cart is quoted bare). A cart starts at 0.
+  it("a new group may not start at a cart_size of its own choosing; naming 0, or nothing, is accepted", async () => {
+    const { orgId, compId, divId } = await seedOrgCompDiv();
+    const insertGroup = (size: number | null) => {
+      const token = `tok-${randomUUID()}`;
+      return size === null
+        ? sql`insert into registration_groups (competition_id, contact_name, contact_email, access_token_hash, currency)
+              values (${compId}, 'Cap Tain', 'cap@example.com', ${token}, 'gbp') returning id`
+        : sql`insert into registration_groups (competition_id, contact_name, contact_email, access_token_hash, currency, cart_size)
+              values (${compId}, 'Cap Tain', 'cap@example.com', ${token}, 'gbp', ${size}) returning id`;
+    };
+    const refused = [5, 1, -1];
+    for (const size of refused) {
+      expect(await outcome(insertGroup(size)), `cart_size ${size}`).toContain("cart_position: a new cart's size starts at 0");
+    }
+    expect(refused.length, "anti-vacuity: three sizes refused").toBe(3);
+    const groups = await sql<{ n: number }[]>`select count(*)::int as n from registration_groups where competition_id = ${compId}`;
+    expect(groups[0]!.n, "a refused insert writes no cart").toBe(0);
+
+    // The positive pair: 0 named outright, and the column left out (every fixture, seed and the submit path), both start the cart.
+    let accepted = 0;
+    for (const size of [0, null]) {
+      const [g] = (await insertGroup(size)) as unknown as { id: string }[];
+      expect(await cartSize(g!.id), `cart_size ${size}`).toBe(0);
+      expect((await insertEntry(g!.id, divId, "First")).cart_position, "its first entry is #1").toBe(1);
+      accepted += 1;
+    }
+    expect(accepted).toBe(2);
+    await dropOrg(orgId);
+  });
+
   it("the catalog carries the shape: NOT NULL smallints, cart_size default 0, positive CHECK, unique (group_id, cart_position)", async () => {
     const cols = await sql<{ table_name: string; column_name: string; data_type: string; is_nullable: string; column_default: string | null }[]>`
       select table_name, column_name, data_type, is_nullable, column_default from information_schema.columns
