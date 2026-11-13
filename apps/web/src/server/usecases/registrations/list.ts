@@ -4,7 +4,7 @@ import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { mayHoldBearerCredential } from "@/lib/types";
 import { SPOT_HOLDERS } from "@/lib/registration-status";
-import { parseSearchReference } from "@/lib/ref-code";
+import { parseSearchReference, referenceFragmentsOf } from "@/lib/ref-code";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { omit } from "@/lib/omit";
 import type { Tx, RegistrationSettingsRow, RegistrationWithGroupRow, AnySql } from "./types";
@@ -28,8 +28,10 @@ export interface ListRegistrationsFilters {
   consent_pending?: boolean;
   /** Matches the entry's display name, the cart's contact name/email, or the cart's reference: the reference as a person types it
    *  (any case, with or without the SZ, dashes and spaces: `lib/ref-code.ts` `parseSearchReference`) finds every entry of its cart,
-   *  the entry's own `SZ-XXXX-XXXX-<n>` (or `SZXXXXXXXX<n>`) finds that one entry, and any fragment of the reference as it is
-   *  written finds the cart. */
+   *  the entry's own `SZ-XXXX-XXXX-<n>` (or `SZXXXXXXXX<n>`) finds that one entry, also when it sits inside pasted text
+   *  (`PAYMENT SZ-XXXX-XXXX-2 THANK YOU`), and a fragment of the reference finds the cart: as written (`SZ-7F3K`, `-EFGH`) when the
+   *  text has a dash or a digit, and without the dashes (`SZ7F3K`, straddling the dash) from four letters or digits. A shorter plain
+   *  word is a name search only. */
   text?: string;
   /** RS005 W1a. Default `"oldest"` is `order by r.created_at, r.id` —
    *  UNCHANGED from pre-W1a, so the live `/api/v1/divisions/[id]/registrations`
@@ -310,6 +312,10 @@ export async function listRegistrations(
     // names its cart, so it finds every entry of it. A position past the cart's size matches no row on its own, because
     // `cart_position <= cart_size` always holds (V519).
     const typedRef = text ? parseSearchReference(text) : null;
+    // A PART of a reference finds its cart too (a person reads out `SZ-7F3K`, a bank statement keeps `SZ7F3KQ2` without the dash), but only
+    // when the text is plausibly one: a dash, a digit or four letters. "sz" is in every reference and "Ann" in one in a few thousand, so a
+    // short name search must not list carts by their reference (B5 T19 review m2; `referenceFragmentsOf` says which is which).
+    const fragments = text ? referenceFragmentsOf(text) : { written: null, dashless: null };
     const rows = await tx<RawListRow[]>`
       select ${regGroupCols(tx)},
         d.name as division_name,
@@ -384,7 +390,16 @@ export async function listRegistrations(
             ? tx`and (r.display_name ilike ${likePattern(text)} escape '\\'
                   or g.contact_name ilike ${likePattern(text)} escape '\\'
                   or g.contact_email ilike ${likePattern(text)} escape '\\'
-                  or g.ref_code ilike ${likePattern(text)} escape '\\'
+                  ${
+                    fragments.written !== null
+                      ? tx`or g.ref_code ilike ${likePattern(fragments.written)} escape '\\'`
+                      : tx``
+                  }
+                  ${
+                    fragments.dashless !== null
+                      ? tx`or replace(g.ref_code, '-', '') ilike ${likePattern(fragments.dashless)} escape '\\'`
+                      : tx``
+                  }
                   ${
                     typedRef
                       ? typedRef.position === null

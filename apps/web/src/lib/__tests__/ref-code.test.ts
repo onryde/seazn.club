@@ -12,6 +12,7 @@ import {
   parseEntryReference,
   parseSearchReference,
   parseTypedReference,
+  referenceFragmentsOf,
 } from "@/lib/ref-code";
 
 describe("REF_ALPHABET", () => {
@@ -326,13 +327,172 @@ describe("parseSearchReference", () => {
   it("refuses what no entry can carry: position 0, a leading zero, past the column; and a mistyped, short, long or non-reference input", () => {
     const ref = plainRef();
     const bare = ref.replace(/^SZ-/, "").replace("-", "");
-    const refused = [`${ref}-0`, `${ref}-02`, `SZ${bare}02`, `${ref}-32768`, `${ref}-99999999`, `${ref}-x`, `SZ${bare}2X`, "", "   ", "SZ", "-2", "hello", "SZ-ABCD", `SZ-${bare.slice(0, 7)}`];
+    const refused = [`${ref}-0`, `${ref}-02`, `SZ${bare}02`, `${ref}-32768`, `${ref}-99999999`, "", "   ", "SZ", "-2", "hello", "SZ-ABCD", `SZ-${bare.slice(0, 7)}`];
     for (const typed of refused) expect(parseSearchReference(typed), JSON.stringify(typed)).toBeNull();
     // The checksum still rejects one flipped character, with or without a suffix.
     const chars = bare.split("");
     chars[2] = REF_ALPHABET[(REF_ALPHABET.indexOf(chars[2]!) + 1) % REF_ALPHABET.length]!;
     const typo = chars.join("");
     for (const typed of [typo, `SZ${typo}`, `SZ${typo}2`, formatRefCode(typo), `${formatRefCode(typo)}-2`]) expect(parseSearchReference(typed), typed).toBeNull();
-    expect(refused.length, "anti-vacuity").toBe(14);
+    expect(refused.length, "anti-vacuity").toBe(12);
+  });
+});
+
+// Registration redesign B5 T19 review m1 (2026-11-13): a payer pastes the reference INTO a sentence, and a bank statement prints it inside
+// its own text ("PAYMENT SZ-ABCD-EFGH-2 THANK YOU"), so the box finds a reference anywhere in what was typed, not only at the front.
+describe("parseSearchReference: a reference anywhere in pasted text", () => {
+  const plainRef = () => {
+    for (;;) {
+      const ref = generateRefCode();
+      if (!ref.startsWith("SZ-SZ")) return ref;
+    }
+  };
+
+  it("finds the cart's reference inside a sentence, dashed, dashless, lowercase and split by spaces", () => {
+    let checked = 0;
+    for (let i = 0; i < 25; i++) {
+      const ref = plainRef();
+      const bare = ref.replace(/^SZ-/, "").replace("-", "");
+      const texts = [
+        `PAYMENT ${ref} THANK YOU`,
+        `payment sz${bare.toLowerCase()} thank you`,
+        `Transfer from J Smith, ref ${ref}, 12/11/2026`,
+        `ref: SZ ${bare.slice(0, 4)} ${bare.slice(4)}. paid`,
+        `Dear organiser,\n${ref}\nregards`,
+        `${ref} 2025-11-13`,
+        `(${ref})`,
+      ];
+      for (const text of texts) {
+        expect(parseSearchReference(text), JSON.stringify(text)).toEqual({ refCode: ref, position: null });
+        checked += 1;
+      }
+    }
+    expect(checked, "anti-vacuity").toBe(175);
+  });
+
+  it("finds an entry's reference inside a sentence: the position attached to the code, with one dash or none", () => {
+    let checked = 0;
+    for (let i = 0; i < 10; i++) {
+      const ref = plainRef();
+      const bare = ref.replace(/^SZ-/, "").replace("-", "");
+      for (const position of [1, 2, 10, 32767]) {
+        const texts = [
+          `PAYMENT ${ref}-${position} THANK YOU`,
+          `payment sz${bare.toLowerCase()}${position} thank you`,
+          `${ref}-${position}, Smith`,
+          `Smith ${ref}-${position}.`,
+          `ref ${ref}${position}`,
+        ];
+        for (const text of texts) {
+          expect(parseSearchReference(text), JSON.stringify(text)).toEqual({ refCode: ref, position });
+          checked += 1;
+        }
+      }
+    }
+    expect(checked, "anti-vacuity").toBe(200);
+  });
+
+  it("a number that is only SEPARATED from the code is not its position: the cart is found, a superset of the entry", () => {
+    // `SZ-ABCD-EFGH 2025-11-13` is a date, `SZ-ABCD-EFGH 2 paid` is ambiguous; missing the entry is worse than listing its siblings.
+    const ref = plainRef();
+    const bare = ref.replace(/^SZ-/, "").replace("-", "");
+    const texts = [`Smith ${ref} 2 paid`, `Smith ${ref} 2025-11-13`, `Smith SZ ${bare.slice(0, 4)} ${bare.slice(4)} 2 paid`, `${ref}  -  2 paid`];
+    for (const text of texts) expect(parseSearchReference(text), JSON.stringify(text)).toEqual({ refCode: ref, position: null });
+    expect(texts.length, "anti-vacuity").toBe(4);
+  });
+
+  it("an attached position no entry can carry finds nothing, as it does at the front", () => {
+    const ref = plainRef();
+    const bare = ref.replace(/^SZ-/, "").replace("-", "");
+    const refused = [`PAYMENT ${ref}-0 THANKS`, `PAYMENT ${ref}-02 THANKS`, `PAYMENT SZ${bare}02 THANKS`, `PAYMENT ${ref}-32768 THANKS`, `PAYMENT ${ref}-99999999 THANKS`, `PAYMENT ${ref}-123456 THANKS`];
+    for (const text of refused) expect(parseSearchReference(text), JSON.stringify(text)).toBeNull();
+    expect(refused.length, "anti-vacuity").toBe(6);
+  });
+
+  it("needs the SZ: eight good characters in a sentence are not a reference, so a name is never read as one", () => {
+    const ref = plainRef();
+    const bare = ref.replace(/^SZ-/, "").replace("-", "");
+    for (const text of [`Lunch ${bare} thanks`, `Lunch ${ref.replace(/^SZ-/, "")} thanks`, `Lunch ${bare}2 thanks`, "Lunch order for the Szabo family", "Szilvia Nagy"]) {
+      expect(parseSearchReference(text), JSON.stringify(text)).toBeNull();
+    }
+  });
+
+  it("the checksum still holds inside text: a mistyped reference is not found", () => {
+    const ref = plainRef();
+    const chars = ref.replace(/^SZ-/, "").replace("-", "").split("");
+    chars[2] = REF_ALPHABET[(REF_ALPHABET.indexOf(chars[2]!) + 1) % REF_ALPHABET.length]!;
+    const typo = chars.join("");
+    for (const text of [`PAYMENT ${formatRefCode(typo)} THANKS`, `PAYMENT SZ${typo}2 THANKS`, `PAYMENT SZ ${typo.slice(0, 4)} ${typo.slice(4)} THANKS`]) {
+      expect(parseSearchReference(text), JSON.stringify(text)).toBeNull();
+    }
+  });
+
+  it("a decoy SZ in front does not hide the reference behind it, and the first valid reference wins", () => {
+    const ref = plainRef();
+    const other = plainRef();
+    expect(parseSearchReference(`ref SZ ${ref} paid`)).toEqual({ refCode: ref, position: null });
+    expect(parseSearchReference(`SZ SZ ${ref}-2`)).toEqual({ refCode: ref, position: 2 });
+    // A near-miss first (a mistyped code), then a real one.
+    const chars = ref.replace(/^SZ-/, "").replace("-", "").split("");
+    chars[0] = REF_ALPHABET[(REF_ALPHABET.indexOf(chars[0]!) + 1) % REF_ALPHABET.length]!;
+    expect(parseSearchReference(`was ${formatRefCode(chars.join(""))} then ${other}-3`)).toEqual({ refCode: other, position: 3 });
+  });
+
+  it("a payload that starts with SZ is found inside text too", () => {
+    let ref = generateRefCode();
+    for (let i = 0; i < 20000 && !ref.startsWith("SZ-SZ"); i++) ref = generateRefCode();
+    expect(ref.startsWith("SZ-SZ"), "premise: drew a reference whose payload starts with SZ").toBe(true);
+    expect(parseSearchReference(`PAYMENT ${ref}-2 THANKS`)).toEqual({ refCode: ref, position: 2 });
+    expect(parseSearchReference(`PAYMENT ${ref} THANKS`)).toEqual({ refCode: ref, position: null });
+  });
+});
+
+// B5 T19 review m2: which part of the search text may be a PART of a reference. "sz" is in every reference and "Ann" is in one in a few
+// thousand, so a short name search must not list random carts; the reference-fragment predicate waits for a dash, a digit or four letters.
+describe("referenceFragmentsOf", () => {
+  it("lets a short plain word through to nothing: no dash, no digit, under four letters or digits", () => {
+    for (const text of ["", "   ", "sz", "Sz", "Ann", "Zed", "ab", "a", "Al B", "J.", "é"]) {
+      expect(referenceFragmentsOf(text), JSON.stringify(text)).toEqual({ written: null, dashless: null });
+    }
+  });
+
+  it("a dash or a digit makes the text, as written, a fragment of the dashed reference", () => {
+    expect(referenceFragmentsOf("SZ-")).toEqual({ written: "SZ-", dashless: null });
+    expect(referenceFragmentsOf("-EF")).toEqual({ written: "-EF", dashless: null });
+    expect(referenceFragmentsOf("  -EF ")).toEqual({ written: "-EF", dashless: null });
+    expect(referenceFragmentsOf("7")).toEqual({ written: "7", dashless: null });
+    expect(referenceFragmentsOf("N2")).toEqual({ written: "N2", dashless: null });
+    expect(referenceFragmentsOf("7F3")).toEqual({ written: "7F3", dashless: null });
+  });
+
+  it("four letters or digits also read as a fragment of the reference with the dashes taken out, upper-cased", () => {
+    expect(referenceFragmentsOf("abcd")).toEqual({ written: null, dashless: "ABCD" });
+    expect(referenceFragmentsOf("  sz abcd  ")).toEqual({ written: null, dashless: "SZABCD" });
+    expect(referenceFragmentsOf("ABC.")).toEqual({ written: null, dashless: null });
+    expect(referenceFragmentsOf("AB.CD")).toEqual({ written: null, dashless: "ABCD" });
+    expect(referenceFragmentsOf("SZ-ABCD")).toEqual({ written: "SZ-ABCD", dashless: "SZABCD" });
+    expect(referenceFragmentsOf("7F3K")).toEqual({ written: "7F3K", dashless: "7F3K" });
+    expect(referenceFragmentsOf("Ann Lee")).toEqual({ written: null, dashless: "ANNLEE" });
+    expect(referenceFragmentsOf("Mary-Jane")).toEqual({ written: "Mary-Jane", dashless: "MARYJANE" });
+    expect(referenceFragmentsOf("PAYMENT SZ-7F3K-Q2ND-2 THANK YOU")).toEqual({
+      written: "PAYMENT SZ-7F3K-Q2ND-2 THANK YOU",
+      dashless: "PAYMENTSZ7F3KQ2ND2THANKYOU",
+    });
+  });
+
+  it("every fragment of every reference the product mints passes the gate, at any length from four on", () => {
+    let checked = 0;
+    for (let i = 0; i < 30; i++) {
+      const ref = generateRefCode();
+      const bare = ref.replace(/-/g, "");
+      for (let from = 0; from + 4 <= bare.length; from++) {
+        for (let to = from + 4; to <= bare.length; to++) {
+          const fragment = bare.slice(from, to);
+          expect(referenceFragmentsOf(fragment).dashless, fragment).toBe(fragment);
+          checked += 1;
+        }
+      }
+    }
+    expect(checked, "anti-vacuity: 30 references x 28 fragments (10 characters, lengths 4 to 10)").toBe(30 * 28);
   });
 });

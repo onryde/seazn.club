@@ -133,6 +133,9 @@ export function parseTypedReference(raw: string): { refCode: string; position: n
  *  an optional `SZ`, the 8 code characters (alphabet and checksum verified), then optionally the entry's position as plain digits.
  *  A code is always exactly 8 characters, so a suffix never needs a separator to be told from it.
  *
+ *  When the text does not START with a reference it is scanned for one (`findEmbeddedReference`): a payer writes the reference into a
+ *  sentence and a bank prints it inside its own words, `PAYMENT SZ-ABCD-EFGH-2 THANK YOU` (T19 review m1).
+ *
  *  Deliberately NOT `parseTypedReference`: that one reads what a person types into /r/ and the by-ref lookups, which have always
  *  refused `${ref}2` (the mails print `-2`, and a lookup that guessed would answer for the wrong cart on a typo). A search only lists
  *  rows, so being generous costs nothing, and the checksum keeps a name from being read as a reference. Same result shape, and
@@ -151,5 +154,50 @@ export function parseSearchReference(raw: string): { refCode: string; position: 
     const position = Number(rest);
     if (position <= MAX_CART_POSITION) return { refCode: formatRefCode(chars), position };
   }
+  return findEmbeddedReference(raw.toUpperCase());
+}
+
+/** Up to three separator characters (a dash, spaces, a line break, a dot) may sit between the `SZ` and the code and between its characters. */
+const SEPARATORS = "[^A-Z0-9]{0,3}";
+const EMBEDDED_REFERENCE = `SZ${SEPARATORS}((?:[${REF_ALPHABET}]${SEPARATORS}){${CODE_LEN - 1}}[${REF_ALPHABET}])(?:-?([0-9]+))?`;
+
+/** A reference inside other text (`parseSearchReference`'s second reading; `upper` is the text upper-cased): `SZ`, then the 8 code
+ *  characters with up to three separators between any two, then the entry's position when it is ATTACHED to the code, directly or after
+ *  one dash, which is how the mails print it (`…-2`). The `SZ` is required here: eight good characters in a sentence are a coincidence
+ *  one time in 900, and only a prefix makes it a reference. A number merely SEPARATED from the code (`SZ-ABCD-EFGH 2025-11-13`) is not
+ *  taken for its position, so the whole cart is found, a superset of the entry: a search that over-lists is better than one that misses.
+ *  An attached position no entry can carry (`-0`, `-02`, past the column) rejects that reading, as it does at the front.
+ *  Null when no reading holds up; the first valid one wins. */
+function findEmbeddedReference(upper: string): { refCode: string; position: number | null } | null {
+  const re = new RegExp(EMBEDDED_REFERENCE, "g");
+  for (let m = re.exec(upper); m !== null; m = re.exec(upper)) {
+    // The next attempt starts one character on, not after this match: a decoy `SZ` (`SZ SZ-ABCD-EFGH`) must not swallow the real one.
+    re.lastIndex = m.index + 1;
+    const refCode = formatRefCode(m[1]!.replace(/[^A-Z0-9]/g, ""));
+    if (!isValidRefCode(refCode)) continue;
+    if (m[2] === undefined) return { refCode, position: null };
+    if (!/^[1-9][0-9]{0,4}$/.test(m[2])) continue;
+    const position = Number(m[2]);
+    if (position <= MAX_CART_POSITION) return { refCode, position };
+  }
   return null;
+}
+
+/** Which parts of a search text may be a PART of a reference, for the search's partial-reference matches (B5 T19 review m1/m2). Every
+ *  stored reference starts `SZ-` and carries 8 characters of a 30-character alphabet, so a short word is "in" some reference by
+ *  chance (`sz` is in every one, `Ann` in about one in 4,500), and a reference fragment that fired on any text would list random carts
+ *  under a name search. A fragment is only offered when the text is plausibly one:
+ *   - `written`: the text exactly as typed, to be matched against the dashed `SZ-ABCD-EFGH`, when it has a dash or a digit
+ *     (`SZ-`, `-EFGH`, `7F3`: what a person types while reading a reference out);
+ *   - `dashless`: the letters and digits only, upper-cased, to be matched against the reference with its dashes taken out, when
+ *     there are at least four of them (`SZ7F3K`, `7F3KQ2` straddling the dash, `PAYMENTSZ…`: what a bank statement leaves).
+ *  Together that is "a dash, a digit, or four letters or digits". The two are separate because a text of four letters and no dash
+ *  or digit matches the dashed reference only where it also matches the dashless one, so offering it as `written` would add nothing. */
+export function referenceFragmentsOf(raw: string): { written: string | null; dashless: string | null } {
+  const written = raw.trim();
+  const alnum = written.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  return {
+    written: /[-0-9]/.test(written) ? written : null,
+    dashless: alnum.length >= 4 ? alnum : null,
+  };
 }

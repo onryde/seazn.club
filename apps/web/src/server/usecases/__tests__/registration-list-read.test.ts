@@ -11,7 +11,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import type { OrgRole } from "@/lib/types";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { PaymentRequiredError } from "@/lib/errors";
-import { generateRefCode } from "@/lib/ref-code";
+import { REF_ALPHABET, formatRefCode, generateRefCode, isValidRefCode } from "@/lib/ref-code";
 import { RegistrationListEntry } from "@/server/api-v1/schemas";
 import {
   listRegistrations,
@@ -841,7 +841,32 @@ function freshRef(): string {
   }
 }
 
-async function cartRig() {
+/** A reference with the payload `payload6` (six alphabet characters) and the two check characters that make it valid, found by trying
+ *  every pair against `isValidRefCode`, so a test can place chosen letters in a stored reference without a hand-typed checksum. */
+function refWithPayload(payload6: string): string {
+  expect(payload6, "premise: six alphabet characters").toMatch(new RegExp(`^[${REF_ALPHABET}]{6}$`));
+  for (const a of REF_ALPHABET) {
+    for (const b of REF_ALPHABET) {
+      const ref = formatRefCode(payload6 + a + b);
+      if (isValidRefCode(ref)) return ref;
+    }
+  }
+  throw new Error(`no check characters make ${payload6} a valid reference`);
+}
+
+/** A reference that starts with the chosen `prefix` (up to six alphabet characters), the rest drawn at random and re-drawn while the
+ *  reference is already stored: `registration_groups.ref_code` is unique across the whole table, and this database outlives the run. */
+async function chosenRef(prefix: string): Promise<string> {
+  for (;;) {
+    let payload = prefix;
+    while (payload.length < 6) payload += REF_ALPHABET[Math.floor(Math.random() * REF_ALPHABET.length)];
+    const ref = refWithPayload(payload);
+    const [taken] = await sql`select 1 from registration_groups where ref_code = ${ref}`;
+    if (!taken) return ref;
+  }
+}
+
+async function cartRig(refs: { refX?: string; refY?: string } = {}) {
   const { orgId, owner, competition, division: divA, settings } = await baseRig({
     form_fields: [{ key: "shirt_size", label: "Shirt size", kind: "text", required: false }],
   });
@@ -852,8 +877,8 @@ async function cartRig() {
     config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
   });
   await putRegistrationSettings(owner, divB.id, { ...SETTINGS_BASE, fee_cents: 0 });
-  const refX = freshRef();
-  const refY = freshRef();
+  const refX = refs.refX ?? freshRef();
+  const refY = refs.refY ?? freshRef();
   const x1 = (
     await seedRegistration(competition.id, divA.id, settings, { displayName: "Ann Alpha", status: "confirmed", refCode: refX })
   ).registration;
@@ -1007,6 +1032,109 @@ describe.skipIf(!HAS_DB)("B5 T19: the organiser's search finds an entry by its r
     expect(await find(`${refX}-2`)).toEqual([]);
     expect(await find(`${refX}-3`)).toEqual(ids(x3));
     expect(await find(refX)).toEqual(ids(x1, x3));
+  });
+});
+
+// B5 T19 review (2026-11-13). m1: a bank statement strips the dashes and wraps the reference in its own words, so a dashless fragment and
+// a reference anywhere in pasted text both find the cart. m2: a short name search ("sz", "Ann") must not list carts whose reference merely
+// contains those letters. The references below are CHOSEN, not drawn, so no fragment can land in a fixture name by chance: X's payload
+// starts QKJW (no name here has a Q, J or W), Y's starts ANN2 ("Ann" is a name in X, a fragment of Y's reference).
+describe.skipIf(!HAS_DB)("B5 T19 review m1: a fragment without the dashes, and a reference inside pasted text", () => {
+  const dashless = (ref: string) => ref.replace(/-/g, "");
+
+  it("a dashless fragment of four or more finds the cart, straddling the dash included, in any case and with spaces", async () => {
+    const { refX, x1, x2, x3, find, ids } = await cartRig({ refX: await chosenRef("QKJW") });
+    const bare = dashless(refX); // SZQKJWxxcc
+    const fragments = [bare.slice(0, 6), bare.slice(2, 6), bare.slice(4, 8), bare.slice(5, 9), bare.slice(6), bare.toLowerCase(), `qkjw ${bare.slice(6, 8).toLowerCase()}`, `${bare.slice(2, 6)} ${bare.slice(6, 8)}`, bare.slice(3, 7)];
+    for (const typed of fragments) expect(await find(typed), JSON.stringify(typed)).toEqual(ids(x1, x2, x3));
+    expect(fragments.length, "anti-vacuity: every fragment was searched").toBe(9);
+    // Three characters is a name-sized search: it is in the reference, and it still finds nothing.
+    expect(await find("KJW"), "three characters").toEqual([]);
+    expect(await find("QKJ"), "three characters").toEqual([]);
+  });
+
+  it("a dashless fragment stays inside the competition it is searched in, and inside the one-status filter", async () => {
+    const { owner, refX, x1, x2, x3, find, ids } = await cartRig({ refX: await chosenRef("QKJW") });
+    // Another organisation's cart whose reference shares the first four letters: its own organiser finds it, this one does not.
+    const other = await baseRig();
+    const refW = await chosenRef("QKJW");
+    const w1 = (await seedRegistration(other.competition.id, other.division.id, other.settings, { displayName: "Wren Elsewhere", refCode: refW })).registration;
+    expect(refW.slice(0, 7)).toBe(refX.slice(0, 7));
+    expect(await find("QKJW"), "shared prefix, this competition only").toEqual(ids(x1, x2, x3));
+    expect(await find("SZQKJW")).toEqual(ids(x1, x2, x3));
+    expect((await listRegistrations(other.owner, null, null, { competition_id: other.competition.id, text: "QKJW" })).map((r) => r.id)).toEqual([w1.id]);
+    // The same organisation's other competition.
+    const second = await rig(owner);
+    const secondSettings = await putRegistrationSettings(owner, second.division.id, { ...SETTINGS_BASE, fee_cents: 0 });
+    const v1 = (await seedRegistration(second.competition.id, second.division.id, secondSettings, { displayName: "Vera Elsewhere", refCode: await chosenRef("QKJW") })).registration;
+    expect(await find("QKJW"), "another competition of the same organisation").toEqual(ids(x1, x2, x3));
+    expect((await listRegistrations(owner, null, null, { competition_id: second.competition.id, text: "QKJW" })).map((r) => r.id)).toEqual([v1.id]);
+    expect(await find("QKJW", "withdrawn")).toEqual(ids(x3));
+  });
+
+  it("a reference inside pasted text finds the cart, or the one entry, dashed or not", async () => {
+    const { refX, x1, x2, x3, find, ids } = await cartRig({ refX: await chosenRef("QKJW") });
+    const bare = dashless(refX);
+    const cartTexts = [
+      `PAYMENT ${refX} THANK YOU`,
+      `payment ${bare.toLowerCase()} thank you`,
+      `Transfer from J Smith, ref ${refX}, 12/11/2026`,
+      `${refX} 2025-11-13`,
+      `Dear organiser,\n${refX}\nregards`,
+      `ref: SZ ${bare.slice(2, 6)} ${bare.slice(6)} 2 paid`, // a separated number is not a position: the cart, a superset
+    ];
+    for (const typed of cartTexts) expect(await find(typed), JSON.stringify(typed)).toEqual(ids(x1, x2, x3));
+    const entryTexts = [`PAYMENT ${refX}-2 THANK YOU`, `payment ${bare.toLowerCase()}2 thank you`, `Smith, ${refX}-2.`, `${refX}2 paid`];
+    for (const typed of entryTexts) expect(await find(typed), JSON.stringify(typed)).toEqual(ids(x2));
+    expect(await find(`PAYMENT ${refX}-3 THANK YOU`)).toEqual(ids(x3));
+    expect(cartTexts.length + entryTexts.length, "anti-vacuity: every text was searched").toBe(10);
+  });
+
+  it("text around a reference does not make it match anything it should not: a past-the-cart position, a mistyped reference, another cart's", async () => {
+    const { refX, find } = await cartRig({ refX: await chosenRef("QKJW") });
+    expect(await find(`PAYMENT ${refX}-4 THANK YOU`), "position past the cart's size").toEqual([]);
+    expect(await find(`PAYMENT ${refX}-0 THANK YOU`), "position 0").toEqual([]);
+    const chars = dashless(refX).slice(2).split("");
+    chars[3] = chars[3] === "2" ? "3" : "2";
+    expect(await find(`PAYMENT SZ-${chars.slice(0, 4).join("")}-${chars.slice(4).join("")} THANK YOU`), "one character flipped").toEqual([]);
+    expect(await find(`PAYMENT ${freshRef()} THANK YOU`), "a reference no cart here holds").toEqual([]);
+    // The positive pair: the unflipped sentence finds the cart, so the empties above are the reference being wrong and not the sentence.
+    expect((await find(`PAYMENT ${refX} THANK YOU`)).length).toBe(3);
+  });
+});
+
+describe.skipIf(!HAS_DB)("B5 T19 review m2: a short name search does not list carts whose reference merely contains the letters", () => {
+  it("`Ann` finds the three Anns by name and not Zed, whose reference contains ANN; `sz` finds nobody by reference", async () => {
+    const { refY, x1, x2, x3, y1, find, ids } = await cartRig({ refY: await chosenRef("ANN2") });
+    expect(refY).toMatch(/^SZ-ANN2-/);
+    expect(await find("Ann")).toEqual(ids(x1, x2, x3));
+    expect(await find("ann")).toEqual(ids(x1, x2, x3));
+    // Every stored reference starts `SZ-`: before the gate, "sz" listed every cart that carries a reference.
+    expect(await find("sz")).toEqual([]);
+    expect(await find("SZ")).toEqual([]);
+    // The positive pair: Zed IS found by the same letters once the text is plausibly a reference (a digit, a dash, or four characters).
+    expect(await find("ANN2")).toEqual(ids(y1));
+    expect(await find("-ann")).toEqual(ids(y1));
+    expect(await find("N2")).toEqual(ids(y1));
+    expect(await find("annc")).toEqual([]); // four characters but not in any reference: nothing, and Ann's names do not contain it either
+  });
+
+  it("a short name still finds the registrant it names, whatever the references hold", async () => {
+    const { x1, x2, x3, y1, n1, find, ids } = await cartRig({ refY: await chosenRef("ANN2") });
+    expect(await find("Zed")).toEqual(ids(y1));
+    expect(await find("Nia")).toEqual(ids(n1));
+    expect(await find("Be")).toEqual(ids(x2));
+    expect(await find("Ga")).toEqual(ids(x3));
+    // The shared contact email is a name-style field too: two letters of it list every cart, as they always did.
+    expect(await find("le")).toEqual(ids(x1, x2, x3, y1, n1));
+  });
+
+  it("a short name search is a name search for a registrant called Szilvia, and Bob's reference does not follow it", async () => {
+    const { owner, competition, division, settings } = await baseRig();
+    const szilvia = (await seedRegistration(competition.id, division.id, settings, { displayName: "Szilvia Nagy", refCode: freshRef() })).registration;
+    await seedRegistration(competition.id, division.id, settings, { displayName: "Bob Builder", refCode: freshRef() });
+    const found = (await listRegistrations(owner, null, null, { competition_id: competition.id, text: "sz" })).map((r) => r.id);
+    expect(found).toEqual([szilvia.id]);
   });
 });
 
