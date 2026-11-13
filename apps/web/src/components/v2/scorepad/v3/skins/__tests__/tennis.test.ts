@@ -384,11 +384,9 @@ describe("servingInfo (via buildScorebug's strip + WhoLine dot) — real folds",
     // below, which wire it on purpose) — this test's own job is the games
     // arithmetic, not the set_summary staleness rule.
     //
-    // Both summary sets are EVEN-game on purpose (6-4, 2-6). An odd one
-    // desyncs the fold's `serving` from the turn walk and the engine then
-    // declines to name anyone at all (`serveOrderKnown: false`), which would
-    // make this test pass or fail on the staleness rule instead of on the
-    // arithmetic it exists to pin.
+    // Both summary sets are EVEN-game on purpose (6-4, 2-6), so the test pins
+    // the games arithmetic alone and not the serve hand-off an odd summary
+    // makes (engine 9.0.0).
     const cfgDoubles = cfgFor("doubles-noad-mtb10");
     const squads = doublesSquads(true);
     const oneSetAll: ModuleEvent[] = [
@@ -423,7 +421,13 @@ describe("servingInfo (via buildScorebug's strip + WhoLine dot) — real folds",
     expect(spec.halves[0]!.tapEvent?.payload.server).toBeDefined();
   });
 
-  it("an ODD-game summary DOES still refuse — the fold and the walk genuinely disagree there", () => {
+  // Engine 9.0.0 (engine #47, capture T12-F2): a summary set now hands the
+  // serve on as the same set played point by point would, so an ODD-game
+  // summary no longer leaves the order unknown. These two tests pinned the
+  // old refusal; they now pin the server ITF Rule 10 gives.
+  it("an ODD-game summary hands the serve on — the fold and the walk agree, and the server is named", () => {
+    // Home served games 1, 3, 5, 7, 9 of nine, so away serves set 2's first
+    // game; home wins it, and home serves the second.
     const events: EventEnvelope[] = [
       makeEnvelope(0, start),
       makeEnvelope(1, { type: "tennis.set_summary", payload: { home: 6, away: 3 } }),
@@ -432,24 +436,21 @@ describe("servingInfo (via buildScorebug's strip + WhoLine dot) — real folds",
     const folded = foldClient(tennis, cfgFor(), SINGLES_LINEUPS, events, STRICT_ALL);
     const v = view({ state: folded, squads: singlesSquads(), events });
     const spec = buildScorebug(v, t);
-    expect(stripValue(v, "server")).toBeUndefined();
-    expect(spec.halves.every((h) => h.who.every((w) => w.serving === undefined))).toBe(true);
-    expect(spec.halves[0]!.tapEvent?.payload.server).toBeUndefined();
+    expect(stripValue(v, "server")).toBe(NAMES.H);
+    expect(spec.halves.some((h) => h.who.some((w) => w.serving === true))).toBe(true);
+    expect(spec.halves[0]!.tapEvent?.payload.server).toBeDefined();
   });
 
-  it("MUTATION PROOF: a SINGLES side is not exempt — the person is unambiguous but the SIDE is not", () => {
-    // 9 banked games: `state.serving` never moved, the walk did. There is
-    // exactly one player per side, so naming the person is trivial — and
-    // still wrong, because the side it would be attached to is the wrong end
-    // of the court. A guard that special-cased singles would pass everything
-    // above and fail here.
+  it("a SINGLES side after an odd summary is the side ITF names, not the side the set opened with", () => {
+    // 9 banked games with home serving first: away serves next. A fold that
+    // left `serving` where it was would name home here.
     const events: EventEnvelope[] = [
       makeEnvelope(0, start),
       makeEnvelope(1, { type: "tennis.set_summary", payload: { home: 6, away: 3 } }),
     ];
     const folded = foldClient(tennis, cfgFor(), SINGLES_LINEUPS, events, STRICT_ALL);
     const v = view({ state: folded, squads: singlesSquads(), events });
-    expect(stripValue(v, "server")).toBeUndefined();
+    expect(stripValue(v, "server")).toBe(NAMES.A);
   });
 
   it("a VOIDED set_summary never poisons serve info — it genuinely never happened", () => {
