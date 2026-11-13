@@ -65,7 +65,7 @@ describe("the \"Call matches to courts\" tick (Task 8e)", () => {
   it("a listed code names each power it has, and nothing for none", () => {
     expect(powersWords(en, { can_approve: false, can_call: false })).toBe("");
     expect(powersWords(en, { can_approve: false, can_call: true })).toBe(" · Calls matches");
-    expect(powersWords(en, { can_approve: true, can_call: true })).toBe(" · Approves draws · Calls matches");
+    expect(powersWords(en, { can_approve: true, can_call: true })).toBe(" · Approves pairings and brackets · Calls matches");
   });
   it("the tick and the list's word are in the desk's four languages", () => {
     expect(en["matchDay.code.call"]).toBe("Call matches to courts");
