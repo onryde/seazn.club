@@ -29,9 +29,9 @@ export interface ListRegistrationsFilters {
   /** Matches the entry's display name, the cart's contact name/email, or the cart's reference: the reference as a person types it
    *  (any case, with or without the SZ, dashes and spaces: `lib/ref-code.ts` `parseSearchReference`) finds every entry of its cart,
    *  the entry's own `SZ-XXXX-XXXX-<n>` (or `SZXXXXXXXX<n>`) finds that one entry, also when it sits inside pasted text
-   *  (`PAYMENT SZ-XXXX-XXXX-2 THANK YOU`), and a fragment of the reference finds the cart: as written (`SZ-7F3K`, `-EFGH`) when the
-   *  text has a dash or a digit, and without the dashes (`SZ7F3K`, straddling the dash) from four letters or digits. A shorter plain
-   *  word is a name search only. */
+   *  (`PAYMENT SZ-XXXX-XXXX-2 THANK YOU`), and a fragment of the reference finds the cart: without the dashes (`SZ7F3K`, straddling the
+   *  dash) from four letters or digits, and as written (`-7F3`, `SZ-7F3`) from a dash with three characters beyond the SZ. Anything
+   *  shorter, a bare digit included, is a name and e-mail search only. */
   text?: string;
   /** RS005 W1a. Default `"oldest"` is `order by r.created_at, r.id` —
    *  UNCHANGED from pre-W1a, so the live `/api/v1/divisions/[id]/registrations`
@@ -313,8 +313,9 @@ export async function listRegistrations(
     // `cart_position <= cart_size` always holds (V519).
     const typedRef = text ? parseSearchReference(text) : null;
     // A PART of a reference finds its cart too (a person reads out `SZ-7F3K`, a bank statement keeps `SZ7F3KQ2` without the dash), but only
-    // when the text is plausibly one: a dash, a digit or four letters. "sz" is in every reference and "Ann" in one in a few thousand, so a
-    // short name search must not list carts by their reference (B5 T19 review m2; `referenceFragmentsOf` says which is which).
+    // from four letters or digits, or from a dash with three characters beyond the SZ. "sz" is in every reference, "Ann" in one in a few
+    // thousand and a digit in one in four, so a short name search must not list carts by their reference (B5 T19 review m2;
+    // `referenceFragmentsOf` says which is which).
     const fragments = text ? referenceFragmentsOf(text) : { written: null, dashless: null };
     const rows = await tx<RawListRow[]>`
       select ${regGroupCols(tx)},

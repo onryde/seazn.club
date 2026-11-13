@@ -984,6 +984,16 @@ describe.skipIf(!HAS_DB)("B5 T19: the organiser's search finds an entry by its r
     expect(await find("SZ-____-____")).toEqual([]);
   });
 
+  it("LIKE metacharacters stay literal in a fragment that DOES reach the dashed reference: `-QKJ%` is not `-QKJ` followed by anything", async () => {
+    const { x1, x2, x3, find, ids } = await cartRig({ refX: await chosenRef("QKJW") });
+    // The positive pair: `-QKJ` (a dash and three characters) is read as a fragment of `SZ-QKJW-…` and finds the cart.
+    expect(await find("-QKJ")).toEqual(ids(x1, x2, x3));
+    // Unescaped, `%` would stand for the `W` and `_` for any one character, and these would find it too.
+    expect(await find("-QKJ%")).toEqual([]);
+    expect(await find("-QKJ_")).toEqual([]);
+    expect(await find("-QK_")).toEqual([]);
+  });
+
   it("name, email and contact searches are unchanged, and a reference in the OR does not widen them", async () => {
     const { x1, x2, x3, y1, n1, find, ids } = await cartRig();
     expect(await find("Ann")).toEqual(ids(x1, x2, x3));
@@ -1115,7 +1125,9 @@ describe.skipIf(!HAS_DB)("B5 T19 review m2: a short name search does not list ca
     // The positive pair: Zed IS found by the same letters once the text is plausibly a reference (a digit, a dash, or four characters).
     expect(await find("ANN2")).toEqual(ids(y1));
     expect(await find("-ann")).toEqual(ids(y1));
-    expect(await find("N2")).toEqual(ids(y1));
+    // ...and not before: two characters after a dash, or a digit among too few characters, are still a name search.
+    expect(await find("-an")).toEqual([]);
+    expect(await find("N2")).toEqual([]);
     expect(await find("annc")).toEqual([]); // four characters but not in any reference: nothing, and Ann's names do not contain it either
   });
 
@@ -1135,6 +1147,51 @@ describe.skipIf(!HAS_DB)("B5 T19 review m2: a short name search does not list ca
     await seedRegistration(competition.id, division.id, settings, { displayName: "Bob Builder", refCode: freshRef() });
     const found = (await listRegistrations(owner, null, null, { competition_id: competition.id, text: "sz" })).map((r) => r.id);
     expect(found).toEqual([szilvia.id]);
+  });
+});
+
+// B5 T19 review m2, tightened (2026-11-13): a bare digit or one to three letters or digits is a name/email search and nothing else, even when
+// a stored reference holds them. Fragments of a reference are read from four letters or digits, or from a dash with three beyond the SZ.
+describe.skipIf(!HAS_DB)("B5 T19 review m2: the fragment gate", () => {
+  /** Two carts whose references contain what the searches below type, and whose names and e-mail contain none of it. */
+  async function gateRig() {
+    const { owner, competition, division, settings } = await baseRig();
+    const refBea = await chosenRef("7QKJ"); // SZ-7QKJ-xx..: holds 7, 7Q, 7QK, SZ-7, -7Q, -7QK, 7QKJ
+    const refCy = await chosenRef("2345"); // SZ-2345-xx..: holds 2, 23, 234, 2345
+    const bea = (await seedRegistration(competition.id, division.id, settings, { displayName: "Bea Bloom", refCode: refBea, contactEmail: "bea@club.test" })).registration;
+    const cy = (await seedRegistration(competition.id, division.id, settings, { displayName: "Cy Dune", refCode: refCy, contactEmail: "cy@club.test" })).registration;
+    const find = async (text: string) =>
+      (await listRegistrations(owner, null, null, { competition_id: competition.id, text })).map((r) => r.id).sort();
+    return { refBea, refCy, bea, cy, find };
+  }
+
+  it("a bare digit, one to three characters, and `SZ-7` list nobody by reference", async () => {
+    const { refBea, refCy, find } = await gateRig();
+    expect(refBea).toMatch(/^SZ-7QKJ-/);
+    expect(refCy).toMatch(/^SZ-2345-/);
+    const refused = ["7", "2", "Q", "7Q", "23", "7QK", "234", "SZ", "SZ-", "SZ-7", "SZ-2", "-7", "-7Q", "-23", "7-Q"];
+    for (const text of refused) expect(await find(text), JSON.stringify(text)).toEqual([]);
+    expect(refused.length, "anti-vacuity: every text was searched").toBe(15);
+  });
+
+  it("the same characters find the cart once there are four, or a dash with three beyond the SZ", async () => {
+    const { bea, cy, find } = await gateRig();
+    // Four characters, with and without the SZ and the dash; 2345 is four digits, which is four characters.
+    for (const text of ["7QKJ", "SZ7QK", "SZ-7QK", "7qkj"]) expect(await find(text), JSON.stringify(text)).toEqual([bea.id]);
+    expect(await find("2345")).toEqual([cy.id]);
+    // A dash and three characters beyond the SZ.
+    expect(await find("-7QK")).toEqual([bea.id]);
+    expect(await find("-234")).toEqual([cy.id]);
+    expect(await find("SZ-7QK")).toEqual([bea.id]);
+  });
+
+  it("a short search is still a name or e-mail search: the registrant it names is found whatever the references hold", async () => {
+    const { bea, cy, find } = await gateRig();
+    expect(await find("Be")).toEqual([bea.id]);
+    expect(await find("Cy")).toEqual([cy.id]);
+    expect(await find("le")).toEqual([]); // no L in the alphabet, none in these names or e-mail
+    expect(await find("club")).toEqual([bea.id, cy.id].sort()); // four characters, matched by e-mail
+    expect(await find("bea@")).toEqual([bea.id]);
   });
 });
 

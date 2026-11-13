@@ -447,31 +447,35 @@ describe("parseSearchReference: a reference anywhere in pasted text", () => {
   });
 });
 
-// B5 T19 review m2: which part of the search text may be a PART of a reference. "sz" is in every reference and "Ann" is in one in a few
-// thousand, so a short name search must not list random carts; the reference-fragment predicate waits for a dash, a digit or four letters.
+// B5 T19 review m2 (tightened 2026-11-13): which part of the search text may be a PART of a reference. "sz" is in every reference and
+// "Ann" in one in a few thousand, so a short name search must not list random carts: the reference-fragment predicates wait for four
+// letters or digits, or for a dash with three characters beyond the SZ (`SZ-7F3`, `-7F3`). A bare digit, `7`, `N2` or `SZ-7` never do.
 describe("referenceFragmentsOf", () => {
-  it("lets a short plain word through to nothing: no dash, no digit, under four letters or digits", () => {
-    for (const text of ["", "   ", "sz", "Sz", "Ann", "Zed", "ab", "a", "Al B", "J.", "é"]) {
-      expect(referenceFragmentsOf(text), JSON.stringify(text)).toEqual({ written: null, dashless: null });
-    }
+  it("offers nothing for a bare digit, one to three letters or digits, or a dash with too little around it", () => {
+    const none = ["", "   ", "sz", "Sz", "SZ", "Ann", "Zed", "ab", "a", "Al B", "J.", "é", "7", "2", "N2", "7F3", "le", "SZ-", "-", "SZ-7", "SZ-7 ", "-EF", "-7Q", "7-Q", "Sz-A"];
+    for (const text of none) expect(referenceFragmentsOf(text), JSON.stringify(text)).toEqual({ written: null, dashless: null });
+    expect(none.length, "anti-vacuity").toBe(25);
   });
 
-  it("a dash or a digit makes the text, as written, a fragment of the dashed reference", () => {
-    expect(referenceFragmentsOf("SZ-")).toEqual({ written: "SZ-", dashless: null });
-    expect(referenceFragmentsOf("-EF")).toEqual({ written: "-EF", dashless: null });
-    expect(referenceFragmentsOf("  -EF ")).toEqual({ written: "-EF", dashless: null });
-    expect(referenceFragmentsOf("7")).toEqual({ written: "7", dashless: null });
-    expect(referenceFragmentsOf("N2")).toEqual({ written: "N2", dashless: null });
-    expect(referenceFragmentsOf("7F3")).toEqual({ written: "7F3", dashless: null });
+  it("a dash with three characters beyond the SZ offers the text as written, against the dashed reference", () => {
+    expect(referenceFragmentsOf("-7F3")).toEqual({ written: "-7F3", dashless: null });
+    expect(referenceFragmentsOf("  -7F3 ")).toEqual({ written: "-7F3", dashless: null });
+    expect(referenceFragmentsOf("7F3-")).toEqual({ written: "7F3-", dashless: null });
+    expect(referenceFragmentsOf("A-BC")).toEqual({ written: "A-BC", dashless: null });
+    expect(referenceFragmentsOf("-ann")).toEqual({ written: "-ann", dashless: null });
   });
 
-  it("four letters or digits also read as a fragment of the reference with the dashes taken out, upper-cased", () => {
+  it("four letters or digits read as a fragment of the reference with the dashes taken out, upper-cased", () => {
     expect(referenceFragmentsOf("abcd")).toEqual({ written: null, dashless: "ABCD" });
+    expect(referenceFragmentsOf("2025")).toEqual({ written: null, dashless: "2025" }); // four digits are four characters: allowed
     expect(referenceFragmentsOf("  sz abcd  ")).toEqual({ written: null, dashless: "SZABCD" });
     expect(referenceFragmentsOf("ABC.")).toEqual({ written: null, dashless: null });
     expect(referenceFragmentsOf("AB.CD")).toEqual({ written: null, dashless: "ABCD" });
+    expect(referenceFragmentsOf("SZ-7F3")).toEqual({ written: "SZ-7F3", dashless: "SZ7F3" });
     expect(referenceFragmentsOf("SZ-ABCD")).toEqual({ written: "SZ-ABCD", dashless: "SZABCD" });
-    expect(referenceFragmentsOf("7F3K")).toEqual({ written: "7F3K", dashless: "7F3K" });
+    // The SZ counts toward the four (SZAB is four characters) but not toward the dash's three: `SZ-AB` offers the dashless reading only.
+    expect(referenceFragmentsOf("SZ-AB")).toEqual({ written: null, dashless: "SZAB" });
+    expect(referenceFragmentsOf("7F3K")).toEqual({ written: null, dashless: "7F3K" });
     expect(referenceFragmentsOf("Ann Lee")).toEqual({ written: null, dashless: "ANNLEE" });
     expect(referenceFragmentsOf("Mary-Jane")).toEqual({ written: "Mary-Jane", dashless: "MARYJANE" });
     expect(referenceFragmentsOf("PAYMENT SZ-7F3K-Q2ND-2 THANK YOU")).toEqual({
@@ -480,19 +484,35 @@ describe("referenceFragmentsOf", () => {
     });
   });
 
-  it("every fragment of every reference the product mints passes the gate, at any length from four on", () => {
-    let checked = 0;
+  it("every fragment of every reference the product mints passes: four or more characters dashless, and a dash with three beyond the SZ as written", () => {
+    let withoutDash = 0;
+    let withDash = 0;
+    let offeredAsWritten = 0;
     for (let i = 0; i < 30; i++) {
-      const ref = generateRefCode();
+      // No SZ inside the payload, not even across the dash (`S-Z`), so "characters beyond the SZ" is unambiguous for every fragment below.
+      let ref = generateRefCode();
+      while (ref.replace(/-/g, "").slice(2).includes("SZ")) ref = generateRefCode();
       const bare = ref.replace(/-/g, "");
       for (let from = 0; from + 4 <= bare.length; from++) {
         for (let to = from + 4; to <= bare.length; to++) {
           const fragment = bare.slice(from, to);
           expect(referenceFragmentsOf(fragment).dashless, fragment).toBe(fragment);
-          checked += 1;
+          withoutDash += 1;
+        }
+      }
+      for (let from = 0; from < ref.length; from++) {
+        for (let to = from + 1; to <= ref.length; to++) {
+          const fragment = ref.slice(from, to);
+          if (!fragment.includes("-")) continue;
+          const beyondTheSZ = fragment.replace(/-/g, "").length - (from === 0 ? 2 : 0);
+          expect(referenceFragmentsOf(fragment).written, fragment).toBe(beyondTheSZ >= 3 ? fragment : null);
+          withDash += 1;
+          if (beyondTheSZ >= 3) offeredAsWritten += 1;
         }
       }
     }
-    expect(checked, "anti-vacuity: 30 references x 28 fragments (10 characters, lengths 4 to 10)").toBe(30 * 28);
+    expect(withoutDash, "anti-vacuity: 30 references x 28 dashless fragments (10 characters, lengths 4 to 10)").toBe(30 * 28);
+    expect(withDash, "anti-vacuity: 30 references x 55 substrings that cross a dash").toBe(30 * 55);
+    expect(offeredAsWritten, "anti-vacuity: 41 of those 55 have three characters beyond the SZ").toBe(30 * 41);
   });
 });

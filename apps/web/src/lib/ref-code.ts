@@ -183,21 +183,22 @@ function findEmbeddedReference(upper: string): { refCode: string; position: numb
   return null;
 }
 
-/** Which parts of a search text may be a PART of a reference, for the search's partial-reference matches (B5 T19 review m1/m2). Every
- *  stored reference starts `SZ-` and carries 8 characters of a 30-character alphabet, so a short word is "in" some reference by
- *  chance (`sz` is in every one, `Ann` in about one in 4,500), and a reference fragment that fired on any text would list random carts
- *  under a name search. A fragment is only offered when the text is plausibly one:
- *   - `written`: the text exactly as typed, to be matched against the dashed `SZ-ABCD-EFGH`, when it has a dash or a digit
- *     (`SZ-`, `-EFGH`, `7F3`: what a person types while reading a reference out);
- *   - `dashless`: the letters and digits only, upper-cased, to be matched against the reference with its dashes taken out, when
- *     there are at least four of them (`SZ7F3K`, `7F3KQ2` straddling the dash, `PAYMENTSZ…`: what a bank statement leaves).
- *  Together that is "a dash, a digit, or four letters or digits". The two are separate because a text of four letters and no dash
- *  or digit matches the dashed reference only where it also matches the dashless one, so offering it as `written` would add nothing. */
+/** Which parts of a search text may be a PART of a reference, for the search's partial-reference matches (B5 T19 review m1/m2, tightened
+ *  2026-11-13). Every stored reference starts `SZ-` and carries 8 characters of a 30-character alphabet, so a short text is "in" some
+ *  reference by chance (`sz` is in every one, `Ann` in about one in 4,500, a digit in about one in four), and a reference fragment
+ *  that fired on any text would list random carts under a name search. A fragment is offered only when the text has the weight of one:
+ *   - `dashless`: the letters and digits only, upper-cased, to be matched against the reference with its dashes taken out, from FOUR
+ *     of them (`SZ7F3K`, `7F3KQ2` straddling the dash, `2345`, `PAYMENTSZ…`: what a bank statement leaves);
+ *   - `written`: the text exactly as typed, to be matched against the dashed `SZ-ABCD-EFGH`, when it has a dash AND three characters
+ *     beyond a leading `SZ` (`SZ-7F3`, `-7F3`: what a person types while reading a reference out; `SZ-7` and `-7F` are not enough).
+ *  A bare digit, `N2`, `7F3` and `le` offer nothing and stay name and e-mail searches. The two are separate predicates because a text of
+ *  four characters matches the dashed reference only where it also matches the dashless one, so `written` adds nothing for it. */
 export function referenceFragmentsOf(raw: string): { written: string | null; dashless: string | null } {
   const written = raw.trim();
   const alnum = written.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const beyondTheSZ = alnum.startsWith("SZ") ? alnum.length - 2 : alnum.length;
   return {
-    written: /[-0-9]/.test(written) ? written : null,
+    written: written.includes("-") && beyondTheSZ >= 3 ? written : null,
     dashless: alnum.length >= 4 ? alnum : null,
   };
 }
