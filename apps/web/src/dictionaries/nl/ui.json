@@ -6695,6 +6695,7 @@
   "register.status.pay.error.generic": "We konden de betaling niet starten — probeer het opnieuw of neem contact op met de organisator.",
   "register.status.pay.windowClosed": "Het betaalvenster voor deze inschrijving is gesloten, dus ze is haar plek kwijt — neem contact op met de organisator als je toch nog wilt meedoen.",
   "register.status.pay.promotionLapsed": "De tijd om voor deze plek te betalen is voorbij. Je inschrijving gaat terug naar het einde van de wachtlijst.",
+  "register.status.chip.closed": "gesloten",
   "register.status.offline.heading": "Zo betaal je",
   "register.status.cancel.cta": "Deze inschrijving annuleren",
   "register.status.cancel.busy": "Bezig met annuleren…",

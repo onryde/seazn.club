@@ -774,7 +774,7 @@ describe("register status page (RS007 rebuild)", () => {
       const cards = html.match(/<li class="[^"]*rounded-xl[\s\S]*?(?=<li class="[^"]*rounded-xl|$)/g) ?? [];
       expect(cards.length, "two entry cards").toBe(2);
       expect(cards[0], "the closed entry's card").toContain("so it has lost its place");
-      expect(cards[0], "round 4: its chip says Closed, never pending").toMatch(/data-testid="reg-status-outcome"[^>]*>Closed<\/span>/);
+      expect(cards[0], "round 4: its chip says Closed, never pending").toMatch(/data-testid="reg-status-outcome"[^>]*>closed<\/span>/);
       expect(cards[1], "the confirmed card says nothing of it").not.toContain("lost its place");
       expect(html).not.toContain("to keep your place");
     });

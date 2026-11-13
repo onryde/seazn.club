@@ -70,11 +70,12 @@ const STATUS_KEY: Record<EntryStatus, string> = {
 
 /** B4 fix round 4 (controller ruling): past a pay-by date the row stays 'pending' until the sweep runs, so the chip says what the
  *  sweep will do with it. A lapsed promotion goes back on the waitlist: the waitlisted chip and tone, never PENDING under the
- *  page's waitlist headline. A never-promoted entry past the cart's date is expired: "Closed" in the expired tone. Otherwise the
+ *  page's waitlist headline. A never-promoted entry past the cart's date is expired: "closed" in the expired tone, the page's
+ *  own chip word (tidy round, re-review m6), set per locale like the other status chips. Otherwise the
  *  row's own status. `data-status` on the chip keeps the row's status either way (the bench reads it). */
 function entryChip(status: EntryStatus, money: MoneyState["kind"]): { key: string; tone: { rail: string; badge: string } } {
   if (money === "promotion_lapsed") return { key: STATUS_KEY.waitlisted, tone: STATUS_TONE.waitlisted };
-  if (money === "window_closed") return { key: "register.entries.badge.closed", tone: STATUS_TONE.expired };
+  if (money === "window_closed") return { key: "register.status.chip.closed", tone: STATUS_TONE.expired };
   return { key: STATUS_KEY[status], tone: STATUS_TONE[status] };
 }
 

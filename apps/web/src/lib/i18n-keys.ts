@@ -6871,6 +6871,7 @@ export type DictionaryKey =
   | "register.status.cancel.error.conflict"
   | "register.status.cancel.error.generic"
   | "register.status.cancel.refund.noDeadline"
+  | "register.status.chip.closed"
   | "register.status.copied"
   | "register.status.copyRef"
   | "register.status.entry.assignedToTeam"

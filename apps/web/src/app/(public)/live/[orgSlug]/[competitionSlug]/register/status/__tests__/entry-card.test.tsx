@@ -397,7 +397,7 @@ describe("EntryCard — a waitlisted entry's place in the queue (B3 T13)", () =>
 
 // B4 fix round 4 (controller ruling): past a pay-by date the row is still 'pending' until the sweep runs, but the chip says what the
 // sweep will do with it. A lapsed promotion goes back on the waitlist (the waitlisted chip and tone, never PENDING under a waitlist
-// headline); a never-promoted entry past the cart's date is expired (a "Closed" chip in the expired tone). The bench hook
+// headline); a never-promoted entry past the cart's date is expired (a "closed" chip in the expired tone). The bench hook
 // `data-status` keeps the row's own status. Expected words come from each locale's dictionary, never from the component.
 describe("EntryCard — the chip past a pay-by date (B4 fix round 4)", () => {
   const PAST = "2020-01-01T00:00:00.000Z";
@@ -434,7 +434,10 @@ describe("EntryCard — the chip past a pay-by date (B4 fix round 4)", () => {
       expect(lapsed.status, `${locale} lapsed bench hook`).toBe("pending");
 
       const closed = chip(render(locale, owing, { expires_at: PAST }));
-      expect(closed.text, `${locale} closed`).toBe(dict["register.entries.badge.closed"]);
+      // Tidy round (re-review m6): the status page's own chip word, set per locale beside the other status chips, never the
+      // register-entries badge's (a division's "Closed").
+      expect(dict["register.status.chip.closed"], `${locale} premise: the chip's own key exists`).toBeTruthy();
+      expect(closed.text, `${locale} closed`).toBe(dict["register.status.chip.closed"]);
       expect([closed.cls, closed.rail], `${locale} closed tone`).toEqual([expired.cls, expired.rail]);
       expect(closed.status, `${locale} closed bench hook`).toBe("pending");
 
