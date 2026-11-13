@@ -8449,9 +8449,9 @@ async function qmNotClipped(page: Page, root: string, label: string): Promise<nu
   return boxes;
 }
 
-/** The setup form filled the way a guest fills it: the sport (badminton unless named), the name, the sides. A quick match is a
- *  league (owner 2026-11-12), so there is no format to pick at any number of sides. */
-async function qmFillSetup(page: Page, name: string, sides: readonly string[], sport: "badminton" | "football" = "badminton"): Promise<void> {
+/** The setup form filled the way a guest fills it: the sport (badminton unless named), the name, the sides; the Format list
+ *  left at League (plan 5: its rows are League, then from three sides League → Final and League → Semi-finals → Final). */
+async function qmFillSetup(page: Page, name: string, sides: readonly string[], sport: "badminton" | "football" | "boardgame" = "badminton"): Promise<void> {
   await page.goto("/en/play", { waitUntil: "load" });
   const form = page.getByTestId("qm-setup-form");
   await expect(form).toBeVisible({ timeout: QM_NAV_MS });
@@ -8463,11 +8463,11 @@ async function qmFillSetup(page: Page, name: string, sides: readonly string[], s
   await form.getByLabel(qmMk("quickMatch.setup.nameLabel"), { exact: true }).fill(name);
   for (let n = 3; n <= sides.length; n += 1) await form.getByRole("button", { name: qmMk("quickMatch.setup.addSide") }).click();
   for (const [i, s] of sides.entries()) await form.getByLabel(qmMk("quickMatch.setup.sideLabel", { n: i + 1 }), { exact: true }).fill(s);
-  // No League or Knockout to pick (owner 2026-11-12): the league's own help says what it is instead.
-  for (const format of ["league", "knockout"] as const) {
-    await expect(form.getByRole("radio", { name: qmUi(`quickMatch.format.${format}`), exact: true }), `no ${format} to pick`).toHaveCount(0);
-  }
-  await expect(form.getByTestId("qm-league-help")).toHaveText(qmMk("quickMatch.setup.leagueHelp"));
+  // The Format list (plan 5): League is the choice, with its own hint; from three sides the two knockout rows join it.
+  const shapes = form.locator('input[type="radio"][name="shape"]');
+  await expect(shapes, "the Format rows").toHaveCount(sides.length >= 3 ? 3 : 1);
+  await expect(form.getByRole("radio", { name: qmMk("quickMatch.setup.shape.league"), exact: true }), "League is the choice").toBeChecked();
+  await expect(form.locator('label:has(input[name="shape"][value="league"])')).toContainText(qmMk("quickMatch.setup.shape.leagueHint"));
   // A single round robin of n sides plays n(n-1)/2 matches.
   const matches = (sides.length * (sides.length - 1)) / 2;
   await expect(page.getByTestId("qm-start-count")).toHaveText(
@@ -8830,4 +8830,144 @@ test("quick match (Not played): a row's ⋯ menu and its confirm sheet hold at t
   }
   expect(scanned, "anti-vacuity: every open surface had boxes to scan").toBeGreaterThan(40);
   expect(judged, "anti-vacuity: axe judged the open menus and the sheet").toBeGreaterThan(0);
+});
+
+// Quick match plan 5 Task 8 (docs/superpowers/plans/2026-11-13-quick-match-5-league-knockout.md; spec
+// docs/superpowers/specs/2026-11-12-quick-match-league-knockout-design.md §5, §11, §12; mockup qmd13a01 §7-12, layout only):
+// a League + Knockout's new surfaces at this width. A chess League → Final of three sides is played on the pad by taps (one
+// tap decides a chess game, owner R7-2), steered round the circle (each side beats one and loses to one), so the three are
+// level on every chess round-robin step but the lot (points, direct encounter, wins, Sonneborn-Berger: engine
+// BOARDGAME_RR_TIEBREAKERS) and straddle the cut of 2: the home asks "pick 2 of 3", with a Toss, since the lot was drawn.
+// Measured in that state (the question, then its Pick panel open once the island runs), then after the Toss (the result
+// line, the filled bracket above the table, the hero on the final): nothing painted off screen or clipped, no sideways
+// scroll, every button 44px by hit test, axe (WCAG A/AA) clean, each count reported.
+
+/** Press a plain island button once React has claimed it (before that a press is lost); pressed once. */
+async function qmPressHydrated(control: Locator, label: string): Promise<void> {
+  await expect
+    .poll(() => control.evaluate((el) => Object.keys(el).some((k) => k.startsWith("__reactProps$"))), {
+      message: `${label} never hydrated`,
+      timeout: QM_NAV_MS,
+    })
+    .toBe(true);
+  await control.click();
+}
+
+/** The hero's match on the pad, won by `winnerOf(home, away)` with one tap on its half; back by the pad's link once the
+ *  pad's events post for the result is answered 201. */
+async function qmPlayChess(page: Page, home: string, winnerOf: (h: string, a: string) => string): Promise<void> {
+  const hero = page.getByTestId("qm-hero");
+  const [h, a] = await Promise.all(["qm-hero-home", "qm-hero-away"].map(async (id) => ((await hero.getByTestId(id).textContent()) ?? "").trim()));
+  const winner = winnerOf(h!, a!);
+  expect([h, a], "the steered winner plays this match").toContain(winner);
+  const fixtureId = (await page.locator('[data-testid="qm-match"][data-next="true"]').getAttribute("data-fixture-id"))!;
+  await hero.getByTestId("qm-score").click();
+  await page.waitForURL(/\/score\/dl_[A-Za-z0-9_-]+$/, { timeout: QM_NAV_MS });
+  await expect(page.getByTestId("scan-confirm")).toBeVisible({ timeout: QM_NAV_MS });
+  await qmPressHydrated(page.getByTestId("score-start-match"), "the pad's Start");
+  const half = page.locator(`[data-role="pad-v3"] button[data-role="v3-scorebug-half"][data-side="${winner === h ? "home" : "away"}"]`);
+  await expect(half).toBeVisible({ timeout: QM_NAV_MS });
+  const written = page.waitForResponse(
+    (r) =>
+      r.request().method() === "POST" &&
+      new URL(r.url()).pathname === `/api/v1/fixtures/${fixtureId}/events` &&
+      (r.request().postData() ?? "").includes('"boardgame.result"'),
+    { timeout: HOLD_MS + QM_NAV_MS },
+  );
+  await half.click();
+  expect((await written).status(), `${winner} won: the result is written`).toBe(201);
+  await page.getByTestId("quick-match-back-link").click();
+  await page.waitForURL((u) => u.pathname === home && u.search === "", { timeout: QM_NAV_MS });
+}
+
+test("quick match (League + Knockout): the tie at the cut, its Pick panel open, then the filled bracket after a Toss, hold at this width: 44px, axe-clean, nothing clipped", async ({
+  browser,
+}) => {
+  // Three chess games (each: Score's 303, the pad's load, Start, the tap's hold, the way back), the toss's redirect, and ~60
+  // local acts (axe runs among them).
+  test.setTimeout(3 * (HOLD_MS + 4 * QM_NAV_MS) + 2 * QM_NAV_MS + 60 * QM_ACT_MS);
+  const ctx = await qmGuest(browser);
+  let scanned = 0;
+  let judged = 0;
+  let targets = 0;
+  const target = async (locator: Locator, label: string) => {
+    await hitFloor(locator, label, 44);
+    targets += 1;
+  };
+  try {
+    const page = await ctx.newPage();
+    const sides = [QM_LONG, QM_LONG_TOO, "Lee Ana"] as const;
+    await qmFillSetup(page, `Mobile quick match knockout ${TAG}-${projectTag()}`, sides, "boardgame");
+    const form = page.getByTestId("qm-setup-form");
+    await form.locator('label:has(input[name="shape"][value="final"])').click();
+    // A round robin of 3 plays 3, then a final of the top 2 plays 1 (spec §12).
+    await expect(page.getByTestId("qm-start-count")).toHaveText(qmMk("quickMatch.setup.startCount.other", { count: 3 + 1 }));
+    const home = await qmStart(page);
+    await expect(page.getByTestId("qm-eyebrow")).toHaveText(`${qmUi("sport.boardgame")} · ${qmUi("quickMatch.format.league_knockout")}`);
+
+    // ── 1. The league, round the circle: sides[0] beats sides[1], sides[1] beats sides[2], sides[2] beats sides[0] ──
+    const beats = (x: string, y: string) => (sides.indexOf(x as (typeof sides)[number]) + 1) % 3 === sides.indexOf(y as (typeof sides)[number]);
+    for (let g = 0; g < 3; g++) await qmPlayChess(page, home, (h, a) => (beats(h, a) ? h : a));
+
+    // ── 2. The question: pick 2 of 3, with a Toss (the lot was drawn) ──
+    const cut = page.getByTestId("qm-cut");
+    await expect(cut).toBeVisible({ timeout: QM_NAV_MS });
+    await expect(page.getByTestId("qm-cut-title")).toHaveText(
+      qmUi("quickMatch.cut.titleMany.other", { place: qmUi("quickMatch.home.rankShort.1"), sides: 3, count: 2 }),
+    );
+    await expect(page.getByTestId("qm-hero"), "the question stands in the hero's place").toHaveCount(0);
+    await target(page.getByTestId("qm-cut-pick"), "Pick who goes through");
+    await target(page.getByTestId("qm-cut-toss"), "Toss a coin");
+    scanned += await paintedInsideViewport(cut, "the tie at the cut");
+    await expectNoHorizontalScroll(page);
+    scanned += await qmNotClipped(page, '[data-testid="qm-cut"]', "the tie at the cut");
+    scanned += await qmNotClipped(page, '[data-testid="qm-knockout"]', "the knockout waiting for the tie");
+    scanned += await qmNotClipped(page, '[data-testid="qm-standings"]', "the table with the tie marked");
+    judged += await qmAxeClean(page, '[data-testid="qm-cut"]', "the tie at the cut");
+    judged += await qmAxeClean(page, '[data-testid="qm-knockout"]', "the knockout waiting for the tie");
+
+    // ── 3. The Pick panel, open once the island runs (the server's Send is never disabled): three checkboxes, Send, Back ──
+    const send = page.getByTestId("qm-cut-send");
+    await expect(send, "hydrated: Send waits for two").toBeDisabled({ timeout: QM_NAV_MS });
+    await page.getByTestId("qm-cut-pick").click();
+    await expect(page.getByTestId("qm-cut-pick-panel")).toHaveAttribute("open", "");
+    const options = page.getByTestId("qm-cut-option");
+    await expect(options).toHaveText([...sides]);
+    for (let k = 0; k < 3; k++) await target(options.nth(k), `option ${k + 1}`);
+    await options.nth(0).click();
+    await options.nth(2).click();
+    await expect(send, "two chosen for two places").toBeEnabled();
+    await target(send, "Send");
+    await target(page.getByTestId("qm-cut-back"), "Back");
+    scanned += await paintedInsideViewport(cut, "the Pick panel");
+    await expectNoHorizontalScroll(page);
+    scanned += await qmNotClipped(page, '[data-testid="qm-cut"]', "the Pick panel, two chosen");
+    judged += await qmAxeClean(page, '[data-testid="qm-cut"]', "the open Pick panel");
+    await page.getByTestId("qm-cut-back").click();
+    await expect(page.getByTestId("qm-cut-pick-panel"), "Back shuts the panel").not.toHaveAttribute("open", "");
+
+    // ── 4. Toss: the final fills; the result line, the bracket above the table, the hero on the final ──
+    await page.getByTestId("qm-cut-toss").click();
+    await expect(page.getByTestId("qm-cut-result"), "the toss's answer").toBeVisible({ timeout: QM_NAV_MS });
+    await expect(page.getByTestId("qm-hero-kicker")).toHaveText(qmUi("quickMatch.home.upNextRound", { round: qmUi("bracket.round.final") }));
+    const order = await page.evaluate(() => {
+      const ko = document.querySelector('[data-testid="qm-knockout"]')!.getBoundingClientRect();
+      const table = document.querySelector('[data-testid="qm-standings"]')!.getBoundingClientRect();
+      return ko.bottom <= table.top;
+    });
+    expect(order, "filled: the bracket above the table").toBe(true);
+    const card = page.locator('[data-testid="qm-draw-card"][data-next="true"]');
+    await target(card.getByTestId("qm-score"), "the final's Score");
+    await target(page.getByTestId("qm-hero").getByTestId("qm-score"), "the hero's Score");
+    scanned += await paintedInsideViewport(page.getByTestId("qm-knockout"), "the filled bracket");
+    await expectNoHorizontalScroll(page);
+    scanned += await qmNotClipped(page, '[data-testid="qm-home"]', "the home, the knockout filled");
+    judged += await qmAxeClean(page, '[data-testid="qm-knockout"]', "the filled bracket");
+    judged += await qmAxeClean(page, '[data-testid="qm-cut-result"]', "the toss's result line");
+  } finally {
+    await ctx.close();
+  }
+  expect(scanned, "anti-vacuity: every surface had boxes to scan").toBeGreaterThan(40);
+  expect(judged, "anti-vacuity: axe judged the question, the panel and the bracket").toBeGreaterThan(0);
+  expect(targets, "anti-vacuity: buttons hit-tested").toBe(2 + 3 + 2 + 2);
 });
