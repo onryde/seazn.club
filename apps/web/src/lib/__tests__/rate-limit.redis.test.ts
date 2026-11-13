@@ -16,9 +16,10 @@ const uniq = () => `test:${randomUUID()}`;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 describe.skipIf(!HAS_REDIS)("rate limiter (real Redis)", () => {
-  // The client uses enableOfflineQueue:false, so a command fired before the
-  // socket is 'ready' rejects → incrWindow returns null. A long-lived server
-  // warms the singleton once; here we warm it explicitly before asserting.
+  // A command issued while the client is still connecting waits for it (up to
+  // REDIS_CONNECT_WAIT_MS, lib/cache.ts; cache-cold-start.redis.test.ts), so
+  // the first call normally counts. This loop is a readiness check: a Redis
+  // that never comes up fails here once, not as a null in every case.
   beforeAll(async () => {
     for (let i = 0; i < 50; i++) {
       if ((await incrWindow(`warmup:${randomUUID()}`, 5)) !== null) return;
