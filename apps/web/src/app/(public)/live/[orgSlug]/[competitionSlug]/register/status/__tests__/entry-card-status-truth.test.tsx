@@ -47,9 +47,11 @@ function props(over: Partial<EntryCardProps["entry"]> = {}, cart: Partial<EntryC
       players: [],
       refund_policy: { refundable: false, deadline: null, amount_cents: 0 },
       refunded_cents: 0,
+      // B5 T18: a one-entry cart, so the card prints no reference of its own.
+      entry_ref: "SZ-ABCD-EFGH",
       ...over,
     },
-    cart: { expires_at: FUTURE, charges_enabled: true, instructionsHtml: null, currency: "gbp", timezone: "UTC", ...cart },
+    cart: { expires_at: FUTURE, charges_enabled: true, instructionsHtml: null, currency: "gbp", timezone: "UTC", cart_size: 1, ...cart },
     orgSlug: "org",
     competitionSlug: "comp",
     token: "tok",

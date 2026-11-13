@@ -11,6 +11,7 @@ import {
   awaitingTeamAssignment,
   canCancelEntry,
   canJoinEntry,
+  cardEntryReference,
   cartHeadline,
   cartMoneySummary,
   claimHref,
@@ -21,6 +22,7 @@ import {
   headlineCarriesUnavailableNotice,
   inviteLinks,
   moneyLine,
+  offlineInstructionsReference,
   poolPlaceByDate,
   publicCheckoutPath,
   publicResendPath,
@@ -1235,5 +1237,81 @@ describe("status page outcome (B4 T15)", () => {
       }
     }
     expect(checked).toBe(8 * 4);
+  });
+});
+
+// Registration redesign B5 T18 (spec §6.3): which reference the status page quotes where. Pure rules; the DB seam that feeds them is
+// proven by `registration-status-read.test.ts`, which hands them the real read model's own output.
+describe("per-entry reference on the status page (B5 T18)", () => {
+  const FUTURE = "2099-01-01T00:00:00.000Z";
+  const PAST = "2000-01-01T00:00:00.000Z";
+  const CART_REF = "SZ-ABCD-EFGH";
+  const cart = (over: Partial<{ ref_code: string | null; expires_at: string | null; charges_enabled: boolean; cart_size: number }> = {}) => ({
+    ref_code: CART_REF as string | null,
+    expires_at: FUTURE as string | null,
+    charges_enabled: true,
+    cart_size: 2,
+    ...over,
+  });
+  type E = Parameters<typeof offlineInstructionsReference>[0][number];
+  const entry = (n: number, over: Partial<E> = {}): E => ({
+    status: "pending",
+    amount_cents: 1500,
+    promotion_expires_at: null,
+    payment_method: "offline",
+    entry_ref: `${CART_REF}-${n}`,
+    ...over,
+  });
+
+  describe("cardEntryReference: the card prints its own reference only in a cart sent with two or more entries", () => {
+    it("a one-entry cart prints none: it would only repeat the page's own reference", () => {
+      expect(cardEntryReference({ entry_ref: CART_REF }, cart({ cart_size: 1 }))).toBeNull();
+    });
+    it("a 2+ cart prints each entry's own", () => {
+      expect(cardEntryReference({ entry_ref: `${CART_REF}-1` }, cart({ cart_size: 2 }))).toBe(`${CART_REF}-1`);
+      expect(cardEntryReference({ entry_ref: `${CART_REF}-2` }, cart({ cart_size: 2 }))).toBe(`${CART_REF}-2`);
+    });
+    it("a cart sent with 3 whose siblings are gone still prints the survivor's -3 (the size is what it was sent with)", () => {
+      expect(cardEntryReference({ entry_ref: `${CART_REF}-3` }, cart({ cart_size: 3 }))).toBe(`${CART_REF}-3`);
+    });
+    it("no reference to print (the cart has none) is null, whatever the size", () => {
+      expect(cardEntryReference({ entry_ref: null }, cart({ cart_size: 2, ref_code: null }))).toBeNull();
+    });
+  });
+
+  describe("offlineInstructionsReference: the reference the page's {{reference}} is filled with", () => {
+    it("the empty cart quotes the cart's reference", () => {
+      expect(offlineInstructionsReference([], cart())).toBe(CART_REF);
+    });
+    it("exactly one entry due: its own, so the bank transfer matches the one amount it names", () => {
+      const entries = [entry(1, { status: "confirmed" }), entry(2)];
+      expect(offlineInstructionsReference(entries, cart())).toBe(`${CART_REF}-2`);
+      expect(offlineInstructionsReference([entry(1), entry(2, { status: "confirmed" })], cart())).toBe(`${CART_REF}-1`);
+    });
+    it("a one-entry cart owing its fee: the entry's reference IS the cart's", () => {
+      expect(offlineInstructionsReference([entry(1, { entry_ref: CART_REF })], cart({ cart_size: 1 }))).toBe(CART_REF);
+    });
+    it("several due: the cart's reference, which finds every entry", () => {
+      expect(offlineInstructionsReference([entry(1), entry(2)], cart())).toBe(CART_REF);
+    });
+    it("nothing due: the cart's reference", () => {
+      expect(offlineInstructionsReference([entry(1, { status: "confirmed" }), entry(2, { status: "withdrawn" })], cart())).toBe(CART_REF);
+    });
+    it("a waitlisted entry, a free entry and a lapsed window are not due", () => {
+      const entries = [
+        entry(1, { status: "waitlisted", amount_cents: 0 }),
+        entry(2, { amount_cents: 0 }),
+        entry(3, { promotion_expires_at: PAST }),
+        entry(4),
+      ];
+      expect(offlineInstructionsReference(entries, cart({ cart_size: 4 }))).toBe(`${CART_REF}-4`);
+    });
+    it("a card entry's money is not the offline instructions' business", () => {
+      expect(offlineInstructionsReference([entry(1, { payment_method: "stripe" }), entry(2)], cart())).toBe(`${CART_REF}-2`);
+    });
+    it("a cart with no reference quotes none", () => {
+      expect(offlineInstructionsReference([entry(1, { entry_ref: null })], cart({ ref_code: null }))).toBeNull();
+      expect(offlineInstructionsReference([entry(1, { entry_ref: null }), entry(2, { entry_ref: null })], cart({ ref_code: null }))).toBeNull();
+    });
   });
 });

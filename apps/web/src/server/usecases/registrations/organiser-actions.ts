@@ -226,13 +226,12 @@ export async function sendPaymentReminder(
     // may have edited the fee since sign-up, and the mail must not quote a price the entry will not be asked for.
     feeCents: reg.amount_cents,
     // Division override first, org-wide fallback — same resolution as the
-    // confirmation email; refCode personalises {{reference}}.
+    // confirmation email; the message fills {{reference}} with THIS entry's own reference (B5 T18).
     paymentInstructions: settings?.payment_instructions ?? ctx.payment_instructions,
     method,
     payPageUrl: link.url,
     // The entry's own pay-by moment (polish wave W4): the sweep's reminder quotes one, so the organiser's must too.
     payDeadline: payDeadlineOf(reg),
-    refCode: reg.ref_code,
   });
   // The row, its link's token and the audit entry are ONE transaction: an audit that fails queues no mail and records no token, and
   // a mail the outbox refuses leaves no "reminded" entry behind. The token's org is the entry's own (the tenant this tx runs as). The mail is then attempted at once; `sent` is whether THAT attempt was accepted. A provider that is down

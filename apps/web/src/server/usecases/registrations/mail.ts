@@ -7,6 +7,7 @@ import { registrationEmail, paymentReminderEmail } from "@/lib/email";
 import type { RegistrationEmailArgs, RegistrationEmailInvite } from "@/lib/email-templates";
 import { routes } from "@/lib/routes";
 import { joinLinkPath } from "@/lib/join-link";
+import { entryReferenceOf } from "@/lib/ref-code";
 import { resolvePersonDisplayName } from "@/lib/name-display";
 import { resolveVenueTz } from "@/lib/tz";
 import { type Locale } from "@/lib/i18n-constants";
@@ -458,7 +459,6 @@ export async function paymentReminderMessage(
     /** The entry's pay-by moment, named in the card mail so the player knows how long the spot is held. The sweep passes the one it
      *  keyed on; the organiser's manual reminder passes the entry's own (`payDeadlineOf`). */
     payDeadline?: Date | null;
-    refCode?: string | null;
   },
 ): Promise<OutboxMessage> {
   const locale = await recipientLocale(sql, { pick: reg.locale, userId: reg.user_id, orgDefault: ctx.default_locale });
@@ -484,9 +484,10 @@ export async function paymentReminderMessage(
         payPageUrl: o.payPageUrl,
         payDeadline: o.payDeadline,
         timeZone: resolveVenueTz(null, ctx.org_timezone),
-        // Final fix round F: every reminder prints the reference, so it falls back to the cart's own when the caller passed none (the
-        // sweep's card reminders).
-        refCode: o.refCode ?? reg.ref_code,
+        // Final fix round F: every reminder prints the reference (the sweep's card reminders too). B5 T18: a reminder is about ONE entry,
+        // so it is THIS entry's reference, read off the row here and nowhere else: a caller no longer passes one, so the organiser's manual
+        // reminder and the sweep's two passes cannot quote different strings for the same entry.
+        refCode: entryReferenceOf(reg),
       },
       locale,
     )),

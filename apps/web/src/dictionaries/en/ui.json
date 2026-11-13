@@ -6725,6 +6725,7 @@
   "register.status.entry.awaitingTeam": "Waiting for a team",
   "register.status.entry.awaitingTeamDeadline": "If nobody places you on a team by {date}, you'll be automatically refunded.",
   "register.status.entry.assignedToTeam": "Assigned to {team}",
+  "register.status.entry.reference": "Reference {reference}",
   "register.status.waitlisted.note": "You're on the waitlist — no fee is due unless you're promoted.",
   "register.status.waitlistPosition": "You're #{n} on the waiting list",
   "register.status.headline.pay": "Pay to finish entering",

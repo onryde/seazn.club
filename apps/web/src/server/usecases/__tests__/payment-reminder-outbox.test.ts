@@ -63,6 +63,7 @@ import { sql } from "@/lib/db";
 import type { Locale } from "@/lib/i18n-constants";
 import { HttpError } from "@/lib/errors";
 import { money } from "@/lib/email-templates/shared";
+import { generateRefCode } from "@/lib/ref-code";
 import {
   promoteWaitlistedRow,
   putRegistrationSettings,
@@ -74,7 +75,7 @@ import { idempotencyKey } from "@/server/email-outbox/constants";
 import { runOutboxTick } from "@/server/email-outbox/worker";
 import { assertNothingMoreToSend, bornAgo, dictionarySubject } from "@/server/email-outbox/__tests__/_kind-harness";
 import { stubOutboxEnv } from "./_invite-mail";
-import { SETTINGS_BASE, asOwner, rig, seedOrg, seedRegistration, stripeRig } from "./_registration-fixtures";
+import { SETTINGS_BASE, asOwner, rig, seedOrg, seedRegistration, seedSecondEntry, stripeRig } from "./_registration-fixtures";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const ORIGIN = "https://test.local";
@@ -282,6 +283,36 @@ describe.skipIf(!HAS_DB)("the sweep's payment reminders ride the outbox (DB)", (
     const sent = callsFor(row!.id)[0]!;
     expect(sent.text.split("\n"), "the text part prints it on its own line").toContain(dictionarySubject("fr", "paymentReminder.textReference", { refCode: ref }));
     expect(sent.html, "and the html part").toContain(ref);
+  });
+
+  // Registration redesign B5 T18 (spec §6.3): a reminder is about ONE entry, so it quotes that entry's own reference. A cart's two entries
+  // are two mails (one per entry, once-key `<entry id>:submit`), and each must name its own -n; the sweep passes no reference, so this is
+  // the message builder's own reading of the row the sweep selected.
+  it("the sweep's reminders of a 2-entry cart each print their OWN reference (-1 and -2), html and text (B5 T18)", async () => {
+    const w = await stripeWorld();
+    const email = address("t18");
+    const ref = generateRefCode();
+    const first = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: email, locale: "en", refCode: ref });
+    const second = await seedSecondEntry(first.registration.group_id, w.division.id, 500, "Second Entry", "pending");
+    await dueSoon(first.registration.group_id);
+    await sweepRegistrations(ORIGIN);
+    const rows = await rowsTo(email);
+    expect(rows.map((r) => r.ref_id).sort(), "premise: one reminder per entry").toEqual([first.registration.id, second.id].sort());
+    deliverMock.mockReset().mockImplementation(ok);
+    await bornAgo(rows.map((r) => r.id));
+    await tickNow(rows.map((r) => r.id));
+    let checked = 0;
+    for (const [entryId, n] of [[first.registration.id, 1], [second.id, 2]] as const) {
+      const row = rows.find((r) => r.ref_id === entryId)!;
+      const sent = callsFor(row.id)[0]!;
+      const line = dictionarySubject("en", "paymentReminder.textReference", { refCode: `${ref}-${n}` });
+      expect(sent.text.split("\n"), `entry ${n}'s text names ${ref}-${n}`).toContain(line);
+      expect(sent.html, `entry ${n}'s html names ${ref}-${n}`).toContain(`${ref}-${n}`);
+      const other = n === 1 ? 2 : 1;
+      expect(sent.text, `entry ${n}'s mail never names its sibling's`).not.toContain(`${ref}-${other}`);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 
   it("a promoted entry's reminder is queued by pass 1b under its own once-key, and a re-promoted entry gets its second-cycle reminder", async () => {

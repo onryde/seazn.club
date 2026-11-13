@@ -12,6 +12,8 @@
 // Real Postgres required; skipped without DATABASE_URL (matches every sibling usecase suite in this directory).
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import type Stripe from "stripe";
 
 const stripeMock = vi.hoisted(() => {
@@ -35,11 +37,16 @@ import {
   PAY_PAGE_STATES,
   type PayPageState,
 } from "../registrations";
+import { generateRefCode } from "@/lib/ref-code";
+import uiEn from "@/dictionaries/en/ui.json";
+import type { Dict } from "@/lib/i18n-constants";
+import { PayPageView } from "@/components/registrations/pay-page-view";
 import { createRegistrationCheckout } from "../registrations/checkout";
 import { divisionCtx } from "../registrations/lookups";
 import {
   stripeRig,
   seedRegistration,
+  seedSecondEntry,
   makeUser,
   SETTINGS_BASE,
   type StripeRigResult,
@@ -348,5 +355,94 @@ describe.skipIf(!HAS_DB)("payPageDocByToken (player payment page, Task 2)", () =
     expect(reached.size).toBeGreaterThan(0);
     expect([...reached].sort()).toEqual([...PAY_PAGE_STATES].sort());
     expect(reached.size).toBe(PAY_PAGE_STATES.length);
+  });
+});
+
+// Registration redesign B5 T18 (spec §6.3): the page quotes THIS entry's reference, and an offline transfer's {{reference}} is filled
+// with it. The cart is built by the real producers: `seedRegistration` and `seedSecondEntry` insert through the V519 trigger, which
+// numbers each entry and counts the cart (a fixture that wrote cart_position itself would only prove the fixture).
+describe.skipIf(!HAS_DB)("payPageDocByToken: the entry's own reference (registration redesign B5 T18)", () => {
+  const INSTRUCTIONS = "Bank transfer, quote {{reference}}";
+
+  /** An offline division and a cart of `size` entries in it, each owing its own fee; entry n is `entries[n - 1]`. */
+  async function offlineCart(size: number, refOver: string | null = generateRefCode()) {
+    const r = await stripeRig({ feeCents: 800 });
+    const settings = await putRegistrationSettings(r.owner, r.division.id, {
+      ...SETTINGS_BASE,
+      payment_method: "offline",
+      fee_cents: 800,
+      payment_instructions: INSTRUCTIONS,
+    });
+    const first = await seedRegistration(r.competition.id, r.division.id, settings, { refCode: refOver, displayName: "Entry 1" });
+    const entries = [first.registration];
+    for (let n = 2; n <= size; n++) {
+      entries.push(await seedSecondEntry(first.registration.group_id, r.division.id, 800, `Entry ${n}`, "pending"));
+    }
+    return { r, entries, ref: refOver };
+  }
+
+  it("each entry of a 2-entry cart shows its own -n, and {{reference}} is filled with it", async () => {
+    const { entries, ref } = await offlineCart(2);
+    let checked = 0;
+    for (const [i, reg] of entries.entries()) {
+      const doc = await docOf(reg);
+      expect(doc?.state).toBe("offline");
+      expect(doc!.refCode).toBe(`${ref}-${i + 1}`);
+      expect(doc!.paymentInstructions).toBe(`Bank transfer, quote ${ref}-${i + 1}`);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: both entries were read").toBe(2);
+  });
+
+  // The seam: the REAL doc, drawn by the REAL view. A doc fixture on both ends would only prove the fixture.
+  it("the page draws the entry's own reference twice (details and offline panel), whole, never the bare cart reference", async () => {
+    const { entries, ref } = await offlineCart(2);
+    const doc = await docOf(entries[1]!);
+    const markup = renderToStaticMarkup(createElement(PayPageView, { doc: doc!, ui: uiEn as Dict, payAction: "/r/pay/x/pay", confirming: false }));
+    expect(markup.match(new RegExp(`>${ref}-2<`, "g"))?.length, "the details row and the offline panel").toBe(2);
+    expect(markup).toContain(`Bank transfer, quote ${ref}-2`);
+    expect(markup, "the bare cart reference is not drawn as the page's reference").not.toMatch(new RegExp(`>${ref}<`));
+  });
+
+  it("a one-entry cart shows the bare cart reference, in the instructions too", async () => {
+    const { entries, ref } = await offlineCart(1);
+    const doc = await docOf(entries[0]!);
+    expect(doc!.refCode).toBe(ref);
+    expect(doc!.paymentInstructions).toBe(`Bank transfer, quote ${ref}`);
+  });
+
+  it("a card entry of a 2-entry cart shows its own -n as well (the page states the reference whatever the method)", async () => {
+    const r = await stripeRig({ feeCents: 1234 });
+    const ref = generateRefCode();
+    const first = await seedRegistration(r.competition.id, r.division.id, r.settings, { refCode: ref });
+    const second = await seedSecondEntry(first.registration.group_id, r.division.id, 1234, "Second", "pending");
+    const doc = await docOf(second);
+    expect(doc?.state).toBe("pay");
+    expect(doc!.refCode).toBe(`${ref}-2`);
+  });
+
+  it("after entry 1 is withdrawn, entry 2 still shows -2: the cart is counted by what it was sent with, never by who is left", async () => {
+    const { entries, ref } = await offlineCart(2);
+    await sql`update registrations set status = 'withdrawn', withdrawn_at = now() where id = ${entries[0]!.id}`;
+    const doc = await docOf(entries[1]!);
+    expect(doc?.state).toBe("offline");
+    expect(doc!.refCode).toBe(`${ref}-2`);
+    expect(doc!.paymentInstructions).toBe(`Bank transfer, quote ${ref}-2`);
+  });
+
+  it("after a sibling is deleted (its division removed), the lone survivor of three is still -3", async () => {
+    const { entries, ref } = await offlineCart(3);
+    await sql`delete from registrations where id in ${sql([entries[0]!.id, entries[1]!.id])}`;
+    const doc = await docOf(entries[2]!);
+    expect(doc!.refCode).toBe(`${ref}-3`);
+    expect(doc!.paymentInstructions).toBe(`Bank transfer, quote ${ref}-3`);
+  });
+
+  it("a cart with no reference (the mint ran out of retries) shows none, and the instructions say so in their generic phrase", async () => {
+    const { entries } = await offlineCart(2, null);
+    const doc = await docOf(entries[1]!);
+    expect(doc?.state).toBe("offline");
+    expect(doc!.refCode).toBeNull();
+    expect(doc!.paymentInstructions).toBe("Bank transfer, quote your registration reference");
   });
 });

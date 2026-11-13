@@ -15,15 +15,19 @@ import { hashRegistrationToken } from "./helpers";
  *  SAME `sql`/`tx` instance as the surrounding query so the two tables'
  *  column list can only drift in one place. `g.refunded_cents` is aliased to
  *  `group_refunded_cents` so it never collides with `r.refunded_cents`
- *  (V368) — see the block comment above `RegistrationWithGroupRow`. */
+ *  (V368) — see the block comment above `RegistrationWithGroupRow`.
+ *
+ *  `r.cart_position` and `g.cart_size` (V519, registration redesign B5 T18) are the two stored halves of an entry's own reference:
+ *  `entryReferenceOf(row)` (lib/ref-code.ts) reads them with `ref_code`. `cart_size` is the cart's STORED size (how many entries it
+ *  was sent with), never a count of the entries read here, so a withdrawn or deleted sibling cannot move another entry's reference. */
 export function regGroupCols(db: AnySql) {
   return db`
     r.id, r.division_id, r.org_id, r.status, r.display_name, r.answers,
     r.amount_cents, r.refunded_cents, r.late_refunded_cents, r.approved_at, r.entrant_id, r.promoted_at, r.withdrawn_at,
     r.charged_at, r.promotion_expires_at, r.waitlisted_at,
     r.payment_intent_id as entry_payment_intent_id,
-    r.group_id, r.join_code, r.free_agent, r.created_at, r.updated_at,
-    g.contact_name, g.contact_email, g.user_id, g.locale, g.ref_code,
+    r.group_id, r.cart_position, r.join_code, r.free_agent, r.created_at, r.updated_at,
+    g.contact_name, g.contact_email, g.user_id, g.locale, g.ref_code, g.cart_size,
     g.access_token_hash, g.currency, g.payment_method, g.checkout_session_id,
     g.payment_intent_id, g.expires_at, g.reminded_at,
     g.refunded_cents as group_refunded_cents,

@@ -4,6 +4,7 @@ import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { SPOT_HOLDERS } from "@/lib/registration-status";
 import { resolveVenueTz } from "@/lib/tz";
+import { entryReferenceOf } from "@/lib/ref-code";
 import { registrationPromotedEmail } from "@/lib/email";
 import { deferred } from "@/lib/deferred";
 import { dispatchNow, enqueueEmailOnce, expiryWithin, recipientLocale } from "@/server/email-outbox";
@@ -441,7 +442,8 @@ export async function notifyPromoted(
           method === "offline" && promoted.amount_cents > 0
             ? (settings?.payment_instructions ?? ctx.payment_instructions)
             : null,
-        refCode: promoted.ref_code,
+        // B5 T18: the mail is always about ONE entry, so it quotes THAT entry's reference; the status link below resolves by the CART's.
+        refCode: entryReferenceOf(promoted),
         refStatusUrl: promoted.ref_code ? `${origin}/r/${promoted.ref_code}` : null,
       },
       locale,

@@ -26,6 +26,8 @@ export interface RegistrationPromotedArgs {
   timeZone?: string | null;
   /** Offline divisions: resolved cash/bank instructions. */
   paymentInstructions?: string | null;
+  /** The reference to quote for THIS entry (`entryReferenceOf`, lib/ref-code.ts; B5 T18): this mail is always about one entry. Printed in the
+   *  reference line, and fills {{reference}} in the instructions. Not the status link's: `refStatusUrl` resolves by the CART's reference. */
   refCode?: string | null;
   refStatusUrl?: string | null;
 }

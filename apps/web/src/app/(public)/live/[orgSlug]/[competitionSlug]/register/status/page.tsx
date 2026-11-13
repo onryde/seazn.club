@@ -40,6 +40,7 @@ import {
   cartMoneySummary,
   headlineCarriesUnavailableNotice,
   moneyLine,
+  offlineInstructionsReference,
   receivedCount,
   whatHappensNext,
   type MoneySummary,
@@ -155,10 +156,16 @@ export default async function RegistrationStatusPage({ params, searchParams }: P
   // this cart reads the SAME instructions) so EntryCard can stay a plain,
   // non-async component (see its own doc comment for why that matters for
   // this page's own render-to-static-markup tests).
+  //
+  // B5 T18 (spec §6.3): {{reference}} is the one entry's own reference when exactly one entry owes, the cart's when several do
+  // (`offlineInstructionsReference`), so the line a person quotes to their bank is the one the organiser can match.
   const instructionsHtml = view.payment_instructions
-    ? await renderProse(preserveLineBreaks(fillPaymentInstructions(view.payment_instructions, view.ref_code)))
+    ? await renderProse(
+        preserveLineBreaks(fillPaymentInstructions(view.payment_instructions, offlineInstructionsReference(view.entries, view))),
+      )
     : null;
   const cart = {
+    cart_size: view.cart_size,
     expires_at: view.expires_at,
     charges_enabled: view.charges_enabled,
     instructionsHtml,
@@ -212,7 +219,8 @@ export default async function RegistrationStatusPage({ params, searchParams }: P
         </p>
 
         {/* The reference hero: the largest type on the page (spec §5.1 item 2). A cart whose reference mint ran out of retries has
-            none (`ref_code` is nullable), so there is nothing to show or copy. Per-entry suffixes (B5) go on each card, not here. */}
+            none (`ref_code` is nullable), so there is nothing to show or copy. Per-entry suffixes (B5) go on each card, not here: the hero is
+            the whole cart's. */}
         {view.ref_code && (
           <section
             data-testid="reg-status-ref"

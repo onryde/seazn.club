@@ -53,6 +53,14 @@ export function entryReference(refCode: string, position: number, cartSize: numb
   return cartSize < 2 ? refCode : `${refCode}-${position}`;
 }
 
+/** The reference to quote for the entry a `registrations ⨝ registration_groups` row names (`regGroupCols`), or null when the cart has
+ *  none (`registration_groups.ref_code` is nullable: a submit whose reference mint ran out of retries still commits the cart). The one
+ *  reading of those three columns, so the pay page, the reminder and promotion mails, the status page and the organiser's views all
+ *  quote the same string, and an offline transfer that quotes it matches what the organiser sees and searches (spec §6.3, §6.4). */
+export function entryReferenceOf(row: { ref_code: string | null; cart_position: number; cart_size: number }): string | null {
+  return row.ref_code === null ? null : entryReference(row.ref_code, row.cart_position, row.cart_size);
+}
+
 const ENTRY_REFERENCE = new RegExp(`^SZ-([${REF_ALPHABET}]{4}-[${REF_ALPHABET}]{4})(?:-([1-9][0-9]*))?$`);
 
 /** Reads `SZ-XXXX-XXXX` (position null) or `SZ-XXXX-XXXX-<n>`, trimmed and case-insensitive, over the ref alphabet only.

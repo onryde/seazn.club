@@ -158,6 +158,31 @@ export interface CartPayFacts {
   charges_enabled: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// Registration redesign B5 T18 (spec §6.3): which reference the page quotes where. The hero and the cart's mails keep the CART's
+// reference; an entry card and a transfer that pays for one entry quote that entry's own (`GroupEntryView.entry_ref`).
+// ---------------------------------------------------------------------------
+
+/** What an entry card prints under its name: its own reference, only in a cart sent with two or more entries. A one-entry cart's reference
+ *  is the hero's, so printing it again would say nothing new. `cart_size` is the cart's STORED size (`GroupStatusView.cart_size`), so a
+ *  lone survivor of a cart sent with three still prints its `-3`. Null when there is nothing to print (the cart has no reference). */
+export function cardEntryReference(entry: { entry_ref: string | null }, cart: { cart_size: number }): string | null {
+  return cart.cart_size >= 2 ? entry.entry_ref : null;
+}
+
+/** The reference the offline instructions' `{{reference}}` is filled with. Every card that owes offline money shows the SAME rendered
+ *  instructions, so one reference serves them all: when exactly ONE entry owes, that entry's own (the transfer pays one amount, and the
+ *  organiser matches it to one entry); when several owe, or none does, the cart's, which finds every entry. Null for a cart with no
+ *  reference. "Owes" is the card's own rule (`resolveMoneyState` → `offline_due`), so the reference and the instructions beside it can
+ *  never disagree about which entries are due. */
+export function offlineInstructionsReference(
+  entries: readonly (StatusEntry & { entry_ref: string | null })[],
+  cart: CartPayFacts & { ref_code: string | null },
+): string | null {
+  const due = entries.filter((e) => resolveMoneyState(e, cart).kind === "offline_due");
+  return due.length === 1 ? due[0]!.entry_ref : cart.ref_code;
+}
+
 /** Whether the money line counts this entry's fee as due: a fee owed on an entry that still holds its place. That is `stripe_due`,
  *  `offline_due` and `stripe_unavailable` (the org cannot take a card today, and the person is told to contact the organiser: the fee
  *  is still owed). NOT `window_closed` (B4 fix round 2, controller ruling): the pay-by date has gone by, the place is lost and there is

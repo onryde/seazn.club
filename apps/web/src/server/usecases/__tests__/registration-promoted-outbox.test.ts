@@ -39,7 +39,8 @@ import { idempotencyKey } from "@/server/email-outbox/constants";
 import { runOutboxTick } from "@/server/email-outbox/worker";
 import { assertNothingMoreToSend, bornAgo, dictionarySubject } from "@/server/email-outbox/__tests__/_kind-harness";
 import { stubOutboxEnv } from "./_invite-mail";
-import { SETTINGS_BASE, asOwner, fakeSession, loadWithGroup, rig, seedOrg, seedRegistration, stripeRig } from "./_registration-fixtures";
+import { SETTINGS_BASE, asOwner, fakeSession, loadWithGroup, rig, seedOrg, seedRegistration, seedSecondEntry, stripeRig } from "./_registration-fixtures";
+import { generateRefCode } from "@/lib/ref-code";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const ORIGIN = "https://test.local";
@@ -317,5 +318,76 @@ describe.skipIf(!HAS_DB)("the waitlist promotion email rides the outbox (DB)", (
     const [row] = await settledTo(q.waitEmail, 1);
     expect(row).toMatchObject({ kind: KIND, status: "sent", ref_id: q.waiting.registration.id });
     expect(row!.subject).toBe(dictionarySubject("nl", "registrationPromoted.subject", { competitionName: d.competition.name }));
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Registration redesign B5 T18 (spec §6.3): the promotion mail is always about ONE entry, so it quotes that entry's reference, as its
+// reference line and as the {{reference}} its instructions are filled with. The status link stays the cart's (it resolves by cart).
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+describe.skipIf(!HAS_DB)("the promotion email quotes the promoted entry's own reference (B5 T18; real withdrawal -> real notifyPromoted)", () => {
+  type Body = { to: string; text: string; html: string };
+  const bodyTo = (email: string): Body => {
+    const calls = deliverMock.mock.calls.map((c) => c[0] as Body).filter((c) => c.to.toLowerCase() === email.toLowerCase());
+    expect(calls, `one mail went to ${email}`).toHaveLength(1);
+    return calls[0]!;
+  };
+  const refLine = async (ref: string): Promise<string> => dictionarySubject("en", "registrationPromoted.textReference", { refCode: ref });
+
+  /** A full one-spot offline division: `holder` has the spot; a second cart has entry 1 and a WAITLISTED entry 2. */
+  async function twoEntryCartBehind(entry1: "withdrawn" | "pending") {
+    const d = await fullDivision("offline");
+    await sql`update registration_settings set payment_instructions = ${"Pay at the desk, quoting {{reference}}"} where division_id = ${d.division.id}`;
+    const settings = { ...d.settings, payment_instructions: "Pay at the desk, quoting {{reference}}" };
+    const holderEmail = address("t18-holder");
+    const holder = await seedRegistration(d.competition.id, d.division.id, settings, { contactEmail: holderEmail, displayName: "Holder", refCode: generateRefCode() });
+    const waitEmail = address("t18-wait");
+    const ref = generateRefCode();
+    const first = await seedRegistration(d.competition.id, d.division.id, settings, { contactEmail: waitEmail, displayName: "Cart Two", status: entry1, refCode: ref });
+    const second = await seedSecondEntry(first.registration.group_id, d.division.id, 0, "Cart Two Jr", "waitlisted");
+    return { d, settings, holder, first, second, waitEmail, ref };
+  }
+
+  it("entry 2 of a 2-entry cart is promoted by a real withdrawal: the mail names ref-2 in its reference line and its instructions, the status link stays the cart's", async () => {
+    const q = await twoEntryCartBehind("withdrawn");
+    await withdrawRegistrationPublic(q.holder.registration.id, q.holder.access_token);
+    await settledTo(q.waitEmail, 1);
+    expect((await loadWithGroup(q.second.id)).status, "premise: entry 2 was the one promoted").toBe("pending");
+    const sent = bodyTo(q.waitEmail);
+    expect(sent.text.split("\n"), "the reference line").toContain(await refLine(`${q.ref}-2`));
+    expect(sent.text, "the {{reference}} the instructions were filled with").toContain(`quoting ${q.ref}-2`);
+    expect(sent.html).toContain(`${q.ref}-2`);
+    // A withdrawal has no request origin, so the link is on the fallback origin; what matters is the path: it resolves by CART.
+    expect(sent.text, "the status link resolves by CART, so it keeps the bare reference").toMatch(new RegExp(`Status: \\S+/r/${q.ref}\\s*$`, "m"));
+    expect(sent.text, "the sibling's number never appears").not.toContain(`${q.ref}-1`);
+  });
+
+  it("with entry 1 still live, the promoted entry 2 is -2 as well: the number is the entry's own place in the cart, not 'the other one'", async () => {
+    const q = await twoEntryCartBehind("pending");
+    await sql`update registration_settings set capacity = 3 where division_id = ${q.d.division.id}`;
+    const promoted = await sql.begin((tx) => promoteWaitlistedRow(tx, q.second.id, q.second.group_id, q.settings));
+    const row = await loadWithGroup(promoted!.id);
+    await notifyPromoted(row, await divisionCtx(sql, q.d.division.id), q.settings, ORIGIN, { firstAttempt: "request" });
+    await settledTo(q.waitEmail, 1);
+    expect(bodyTo(q.waitEmail).text.split("\n")).toContain(await refLine(`${q.ref}-2`));
+  });
+
+  it("a one-entry cart's promotion mail quotes the bare cart reference", async () => {
+    const d = await fullDivision("offline");
+    const settings = { ...d.settings, payment_instructions: "Pay at the desk, quoting {{reference}}" };
+    const holder = await seedRegistration(d.competition.id, d.division.id, settings, { contactEmail: address("t18-h1"), refCode: generateRefCode() });
+    const waitEmail = address("t18-w1");
+    const ref = generateRefCode();
+    const waiting = await seedRegistration(d.competition.id, d.division.id, settings, { contactEmail: waitEmail, status: "waitlisted", refCode: ref });
+    await sql`update registration_settings set payment_instructions = ${"Pay at the desk, quoting {{reference}}"} where division_id = ${d.division.id}`;
+    await withdrawRegistrationPublic(holder.registration.id, holder.access_token);
+    await settledTo(waitEmail, 1);
+    expect((await loadWithGroup(waiting.registration.id)).status, "premise: the waitlisted entry was promoted").toBe("pending");
+    const sent = bodyTo(waitEmail);
+    expect(sent.text.split("\n")).toContain(await refLine(ref));
+    expect(sent.text).toContain(`quoting ${ref}`);
+    expect(sent.text, "no suffix").not.toContain(`${ref}-`);
+    expect(sent.html).not.toContain(`${ref}-`);
   });
 });

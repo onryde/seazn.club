@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   REF_ALPHABET,
   entryReference,
+  entryReferenceOf,
   formatRefCode,
   generateRefCode,
   isValidRefCode,
@@ -168,5 +169,31 @@ describe("parseEntryReference", () => {
       }
     }
     expect(checked).toBe(20 * (1 + 2 + 3 + 7));
+  });
+});
+
+// Registration redesign B5 T18: the one reading of an entry's reference off a `registrations ⨝ registration_groups` row, so the pay
+// page, the reminder and promotion mails, the status page and (T19) the organiser's views all quote the SAME string.
+describe("entryReferenceOf", () => {
+  it("is the entry's own reference: bare for a one-entry cart, suffixed with its position for a 2+ cart", () => {
+    const ref = generateRefCode();
+    expect(entryReferenceOf({ ref_code: ref, cart_position: 1, cart_size: 1 })).toBe(ref);
+    expect(entryReferenceOf({ ref_code: ref, cart_position: 1, cart_size: 2 })).toBe(`${ref}-1`);
+    expect(entryReferenceOf({ ref_code: ref, cart_position: 2, cart_size: 2 })).toBe(`${ref}-2`);
+  });
+
+  it("a cart whose reference mint ran out of retries has none, so no entry does (ref_code is nullable)", () => {
+    expect(entryReferenceOf({ ref_code: null, cart_position: 2, cart_size: 3 })).toBeNull();
+  });
+
+  it("is entryReference over the row's three columns: a lone survivor of a 3-entry cart is still -3", () => {
+    const ref = generateRefCode();
+    const row = { ref_code: ref, cart_position: 3, cart_size: 3 };
+    expect(entryReferenceOf(row)).toBe(entryReference(ref, 3, 3));
+    expect(entryReferenceOf(row)).toBe(`${ref}-3`);
+  });
+
+  it("refuses a row the database cannot hold (position past the size), by entryReference's own name", () => {
+    expect(() => entryReferenceOf({ ref_code: generateRefCode(), cart_position: 3, cart_size: 1 })).toThrow(RangeError);
   });
 });

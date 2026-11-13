@@ -6725,6 +6725,7 @@
   "register.status.entry.awaitingTeam": "Wacht op een team",
   "register.status.entry.awaitingTeamDeadline": "Als niemand je vóór {date} in een team plaatst, word je automatisch terugbetaald.",
   "register.status.entry.assignedToTeam": "Toegewezen aan {team}",
+  "register.status.entry.reference": "Referentie {reference}",
   "register.status.waitlisted.note": "Je staat op de wachtlijst — er is geen bijdrage verschuldigd tenzij je wordt geplaatst.",
   "register.status.waitlistPosition": "Je bent #{n} op de wachtlijst",
   "register.status.headline.pay": "Betaal om je inschrijving af te ronden",

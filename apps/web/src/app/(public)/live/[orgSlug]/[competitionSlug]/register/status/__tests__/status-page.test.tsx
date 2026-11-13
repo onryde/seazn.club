@@ -103,10 +103,15 @@ const BASE_ENTRY = {
   refunded_cents: 0,
   // B4 T14: how this entry's fee was settled (GroupEntryView.settled_by), history not status. null = nothing settled it.
   settled_by: null as "card" | "offline" | "waived" | null,
+  // B5 T18: the reference to quote for THIS entry (GroupEntryView.entry_ref): the cart's with its place in the cart, in a cart sent
+  // with two or more entries. BASE_VIEW's cart was sent with two.
+  entry_ref: "SZ-TEST-01-1" as string | null,
 };
 
 const BASE_VIEW = {
   ref_code: "SZ-TEST-01" as string | null,
+  // B5 T18: how many entries the cart was sent with (GroupStatusView.cart_size, stored, never shrinks).
+  cart_size: 2,
   contact_name: "Alex Test",
   // B4 T15: the address the confirmation went to ("Confirmation sent to {email}.").
   contact_email: "alex@example.test",
@@ -141,6 +146,7 @@ const BASE_VIEW = {
       status: "waitlisted" as const,
       amount_cents: 0,
       refund_policy: { refundable: false, deadline: null, amount_cents: 0 },
+      entry_ref: "SZ-TEST-01-2" as string | null,
     },
   ],
 };
@@ -287,6 +293,105 @@ describe("register status page (RS007 rebuild)", () => {
         (html.match(/>£25\.00</g) || []).length,
         "the offline-due card itself must show its own fee (the money line reads \"£25.00 due\", never a bare figure)",
       ).toBe(1);
+    });
+
+
+    // Registration redesign B5 T18 (spec §6.3). The hero keeps the CART's reference; each card of a 2+ cart quotes its own.
+    describe("per-entry reference (B5 T18)", () => {
+      /** The entry-reference lines of the page, in card order. */
+      const cardRefs = (html: string): string[] => [...html.matchAll(/data-testid="reg-status-entry-ref" data-entry-ref="([^"]*)"/g)].map((m) => m[1]!);
+      const offlineView = (over: Record<string, unknown>) => ({
+        ...BASE_VIEW,
+        payment_method: "offline" as const,
+        payment_instructions: "Send to club@example.com, quoting {{reference}}.",
+        ...over,
+      });
+      const dueEntry = (n: number, over: Record<string, unknown> = {}) => ({
+        ...BASE_ENTRY,
+        id: `reg-${n}`,
+        payment_method: "offline" as const,
+        entry_ref: `SZ-TEST-01-${n}`,
+        ...over,
+      });
+
+      it("every card of a 2+ cart names its own reference, in card order, and the hero still names the cart's", async () => {
+        usecaseMock.groupById.mockResolvedValueOnce(BASE_VIEW);
+        const html = await render({ rid: "g1", token: "tok" });
+        expect(cardRefs(html)).toEqual(["SZ-TEST-01-1", "SZ-TEST-01-2"]);
+        const hero = html.match(/<section[^>]*data-testid="reg-status-ref"[\s\S]*?<\/section>/)?.[0];
+        expect(hero, "the hero is still there").toContain(">SZ-TEST-01<");
+        expect(hero).not.toContain("SZ-TEST-01-");
+        // The label is the dictionary's own, read from the English file (never typed here).
+        const [lead] = (uiEn as Record<string, string>)["register.status.entry.reference"]!.split("{reference}");
+        expect(html).toContain(lead!);
+      });
+
+      it("a one-entry cart prints none on its card: it would only repeat the hero", async () => {
+        usecaseMock.groupById.mockResolvedValueOnce({
+          ...BASE_VIEW,
+          cart_size: 1,
+          entries: [{ ...BASE_ENTRY, entry_ref: "SZ-TEST-01" }],
+        });
+        const html = await render({ rid: "g1", token: "tok" });
+        expect(html, "anti-vacuity: the card and the hero rendered").toContain(">SZ-TEST-01<");
+        expect(html).toContain("Mixed Doubles");
+        expect(cardRefs(html)).toEqual([]);
+        expect(html).not.toContain('data-testid="reg-status-entry-ref"');
+      });
+
+      it("the lone survivor of a cart sent with three still prints its own -3 (the size is what it was sent with)", async () => {
+        usecaseMock.groupById.mockResolvedValueOnce({
+          ...BASE_VIEW,
+          cart_size: 3,
+          entries: [{ ...BASE_ENTRY, entry_ref: "SZ-TEST-01-3" }],
+        });
+        expect(cardRefs(await render({ rid: "g1", token: "tok" }))).toEqual(["SZ-TEST-01-3"]);
+      });
+
+      it("a cart with no reference (the mint ran out of retries) prints no entry reference and no hero", async () => {
+        usecaseMock.groupById.mockResolvedValueOnce({
+          ...BASE_VIEW,
+          ref_code: null,
+          entries: BASE_VIEW.entries.map((e) => ({ ...e, entry_ref: null })),
+        });
+        const html = await render({ rid: "g1", token: "tok" });
+        expect(html, "anti-vacuity: the page still rendered").toContain("Mixed Doubles");
+        expect(cardRefs(html)).toEqual([]);
+        expect(html).not.toContain('data-testid="reg-status-ref"');
+      });
+
+      it("offline instructions with TWO entries due quote the cart's reference, which finds both", async () => {
+        usecaseMock.groupById.mockResolvedValueOnce(offlineView({ entries: [dueEntry(1), dueEntry(2)] }));
+        const html = await render({ rid: "g1", token: "tok" });
+        expect(html.match(/quoting SZ-TEST-01\./g)?.length, "both due cards carry the instructions with the cart's reference").toBe(2);
+        expect(html).not.toContain("quoting SZ-TEST-01-");
+      });
+
+      it("offline instructions with exactly ONE entry due quote that entry's own reference, whichever place it holds", async () => {
+        for (const [due, other] of [[2, 1], [1, 2]] as const) {
+          usecaseMock.groupById.mockResolvedValueOnce(
+            offlineView({ entries: [dueEntry(other, { status: "confirmed" as const }), dueEntry(due)].sort((a, b) => a.id.localeCompare(b.id)) }),
+          );
+          const html = await render({ rid: "g1", token: "tok" });
+          expect(html.match(/quoting SZ-TEST-01-\d\./g), `entry ${due} is the one due`).toEqual([`quoting SZ-TEST-01-${due}.`]);
+        }
+      });
+
+      it("a withdrawn sibling does not hand the survivor the bare reference: entry 2 still quotes -2", async () => {
+        usecaseMock.groupById.mockResolvedValueOnce(
+          offlineView({ entries: [dueEntry(1, { status: "withdrawn" as const }), dueEntry(2)] }),
+        );
+        const html = await render({ rid: "g1", token: "tok" });
+        expect(html.match(/quoting SZ-TEST-01[-\d]*\./g)).toEqual(["quoting SZ-TEST-01-2."]);
+      });
+
+      it("a one-entry cart owing its fee quotes the bare reference", async () => {
+        usecaseMock.groupById.mockResolvedValueOnce(
+          offlineView({ cart_size: 1, entries: [dueEntry(1, { entry_ref: "SZ-TEST-01" })] }),
+        );
+        const html = await render({ rid: "g1", token: "tok" });
+        expect(html.match(/quoting SZ-TEST-01[-\d]*\./g)).toEqual(["quoting SZ-TEST-01."]);
+      });
     });
 
     // Bug (2026-08-27 browser sweep): payment_instructions is Markdown, and a

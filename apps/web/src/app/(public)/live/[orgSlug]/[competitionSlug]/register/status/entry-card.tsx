@@ -23,6 +23,7 @@ import {
   assignedTeamName,
   awaitingTeamAssignment,
   canCancelEntry,
+  cardEntryReference,
   entryCountsTowardTotal,
   entryDisplayName,
   inviteLinks,
@@ -148,8 +149,14 @@ export interface EntryCardProps {
     /** Polish wave sign-off V6: everything sent back for this entry (`GroupEntryView.refunded_cents`). REQUIRED for the reason
      *  `approved` is: an omitted value would read as "nothing refunded" on a rejected entry whose fee came back. */
     refunded_cents: number;
+    /** Registration redesign B5 T18: the reference to quote for THIS entry (`GroupEntryView.entry_ref`). REQUIRED for the reason
+     *  `approved` is: a card built without it would silently print no reference, in a cart that has one for each entry. */
+    entry_ref: string | null;
   };
   cart: {
+    /** Registration redesign B5 T18: how many entries the cart was SENT with (`GroupStatusView.cart_size`, stored, never shrinks). The card
+     *  prints its own reference only when this is two or more (`cardEntryReference`). REQUIRED: omitted, no card would print one. */
+    cart_size: number;
     expires_at: string | null;
     charges_enabled: boolean;
     /** Pre-rendered offline instructions (renderProse + fillPaymentInstructions
@@ -250,6 +257,11 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
 
   const invites = inviteLinks(entry);
 
+  // B5 T18 (spec §6.3): an entry of a 2+ cart quotes its own reference, small, under its name. The label is split on its one placeholder so
+  // the reference sits in its own span (select-all: one tap selects the reference, not the word before it), as the page's "sent to" line does.
+  const ownRef = cardEntryReference(entry, cart);
+  const [refLead, refTail = ""] = t(ui, "register.status.entry.reference").split("{reference}");
+
   let moneyNode: ReactNode = null;
   if (money.kind === "stripe_due") {
     const label = t(ui, "register.status.pay.cta", { amount: feeLabel });
@@ -332,6 +344,13 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
               {entry.division_name}
             </p>
             <p className="truncate font-display text-lg font-semibold text-ink">{headingName}</p>
+            {ownRef && (
+              <p data-testid="reg-status-entry-ref" data-entry-ref={ownRef} className="mt-0.5 font-mono text-xs break-all text-ink-muted">
+                {refLead}
+                <span className="select-all">{ownRef}</span>
+                {refTail}
+              </p>
+            )}
           </div>
           <span
             data-testid="reg-status-outcome"

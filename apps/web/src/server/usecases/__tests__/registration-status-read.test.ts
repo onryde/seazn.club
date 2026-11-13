@@ -75,6 +75,10 @@ import {
   type GroupStatusView,
 } from "@/server/usecases/registrations";
 import { generateRefCode } from "@/lib/ref-code";
+import {
+  cardEntryReference,
+  offlineInstructionsReference,
+} from "@/app/(public)/live/[orgSlug]/[competitionSlug]/register/status/view-model";
 import { idempotencyKey } from "@/server/email-outbox/constants";
 import { stubOutboxEnv } from "./_invite-mail";
 import { createDivision, patchDivision } from "../divisions";
@@ -1576,5 +1580,94 @@ describe.skipIf(!HAS_DB)("resendRegistrationConfirmationPublic (RS007)", () => {
     expect(saw[0]!.text).toContain(
       `https://test.local/live/${orgSlug}/${competition.slug}/register/status?rid=${registration.group_id}&token=${access_token}`,
     );
+  });
+});
+
+// Registration redesign B5 T18 (spec §6.3). The read model hands the status page each entry's own reference and how many entries the
+// cart was SENT with. Both come off the REAL rows (V519's trigger numbers the entries; `seedSecondEntry` inserts through it), and the
+// page's two rules (view-model.ts) are then run over the read model's own output: a fixture on both ends would prove the fixture.
+describe.skipIf(!HAS_DB)("groupById: each entry's own reference and the cart's size (B5 T18)", () => {
+  const SETTINGS = { ...SETTINGS_BASE, fee_cents: 500, currency: "gbp", payment_method: "offline" as const };
+
+  /** An offline division with `{{reference}}` instructions, and a cart of `size` entries owing a fee each. */
+  async function cartOf(size: number, ref: string | null = freshRef()) {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    await sql`
+      insert into registration_settings
+        (division_id, enabled, entrant_kind, fee_cents, payment_method, payment_instructions, approval, allow_free_agents)
+      values (${division.id}, true, 'individual', 500, 'offline', 'Quote {{reference}} to the club', 'auto', false)`;
+    const first = await seedRegistration(competition.id, division.id, SETTINGS, { refCode: ref, displayName: "Entry 1" });
+    const entries = [first.registration];
+    for (let n = 2; n <= size; n++) entries.push(await seedSecondEntry(first.registration.group_id, division.id, 500, `Entry ${n}`, "pending"));
+    return { entries, token: first.access_token, groupId: first.registration.group_id, ref, owner };
+  }
+  const refsById = (view: GroupStatusView) => Object.fromEntries(view.entries.map((e) => [e.display_name, e.entry_ref]));
+
+  it("a 2-entry cart: cart_size 2, each entry its own -n, the cart's reference still bare", async () => {
+    const c = await cartOf(2);
+    const view = await groupById(c.groupId, c.token);
+    expect(view.cart_size).toBe(2);
+    expect(view.ref_code).toBe(c.ref);
+    expect(refsById(view)).toEqual({ "Entry 1": `${c.ref}-1`, "Entry 2": `${c.ref}-2` });
+  });
+
+  it("a one-entry cart: cart_size 1 and the entry's reference IS the cart's", async () => {
+    const c = await cartOf(1);
+    const view = await groupById(c.groupId, c.token);
+    expect(view.cart_size).toBe(1);
+    expect(view.entries).toHaveLength(1);
+    expect(view.entries[0]!.entry_ref).toBe(c.ref);
+  });
+
+  it("the same read by ref (groupByRef) says the same", async () => {
+    const c = await cartOf(2);
+    const view = await groupByRef(c.ref!, c.token);
+    expect(view.cart_size).toBe(2);
+    expect(refsById(view)).toEqual({ "Entry 1": `${c.ref}-1`, "Entry 2": `${c.ref}-2` });
+  });
+
+  it("after entry 1 is withdrawn, entry 2 still reads -2 and the cart is still of size 2 (withdrawn rows are counted: the size is what it was sent with)", async () => {
+    const c = await cartOf(2);
+    await withdrawRegistrationOrganiser(c.owner, c.entries[0]!.id);
+    const view = await groupById(c.groupId, c.token);
+    expect(view.entries.find((e) => e.display_name === "Entry 1")!.status, "premise: entry 1 is withdrawn").toBe("withdrawn");
+    expect(view.cart_size).toBe(2);
+    expect(refsById(view)).toEqual({ "Entry 1": `${c.ref}-1`, "Entry 2": `${c.ref}-2` });
+  });
+
+  it("a deleted sibling leaves a gap: the lone survivor of a cart of three is still -3", async () => {
+    const c = await cartOf(3);
+    await sql`delete from registrations where id in ${sql([c.entries[0]!.id, c.entries[1]!.id])}`;
+    const view = await groupById(c.groupId, c.token);
+    expect(view.entries.map((e) => e.display_name), "premise: only entry 3 is left").toEqual(["Entry 3"]);
+    expect(view.cart_size).toBe(3);
+    expect(view.entries[0]!.entry_ref).toBe(`${c.ref}-3`);
+  });
+
+  it("a cart with no reference (the mint ran out of retries) has no entry reference either, but still its size", async () => {
+    const c = await cartOf(2, null);
+    const view = await groupById(c.groupId, c.token);
+    expect(view.ref_code).toBeNull();
+    expect(view.cart_size).toBe(2);
+    expect(view.entries.map((e) => e.entry_ref)).toEqual([null, null]);
+  });
+
+  // The seam: the read model's own output through the page's two rules.
+  it("the page's rules over the REAL read model: both due -> the cart's reference; one due -> that entry's; the card prints -n only in a 2+ cart", async () => {
+    const c = await cartOf(2);
+    const both = await groupById(c.groupId, c.token);
+    expect(offlineInstructionsReference(both.entries, both), "both entries owe: the cart's reference finds both").toBe(c.ref);
+    expect(both.entries.map((e) => cardEntryReference(e, both))).toEqual([`${c.ref}-1`, `${c.ref}-2`]);
+
+    await sql`update registrations set status = 'confirmed' where id = ${c.entries[0]!.id}`;
+    const one = await groupById(c.groupId, c.token);
+    expect(offlineInstructionsReference(one.entries, one), "one entry owes: its own reference").toBe(`${c.ref}-2`);
+
+    const solo = await cartOf(1);
+    const soloView = await groupById(solo.groupId, solo.token);
+    expect(offlineInstructionsReference(soloView.entries, soloView)).toBe(solo.ref);
+    expect(soloView.entries.map((e) => cardEntryReference(e, soloView)), "a one-entry cart's card prints none").toEqual([null]);
   });
 });

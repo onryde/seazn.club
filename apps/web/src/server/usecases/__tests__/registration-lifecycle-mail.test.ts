@@ -246,6 +246,73 @@ describe.skipIf(!HAS_DB)("the payment reminder (W4; real sendPaymentReminder)", 
   });
 });
 
+// Registration redesign B5 T18 (spec §6.3): the reminder is about ONE entry, so it quotes that entry's reference, both as the reference
+// line and as the {{reference}} the instructions are filled with. The cart's confirmation mail is about the WHOLE cart and keeps the
+// cart's bare reference.
+describe.skipIf(!HAS_DB)("the payment reminder and the cart mail quote the right reference (B5 T18; real sendPaymentReminder, real notifySubmitted)", () => {
+  /** A two-entry offline cart: both entries owe, the second in the same division. */
+  async function twoEntryCart(tag: string) {
+    const w = await offlineWorld(1500, "auto");
+    const ref = generateRefCode();
+    const first = await seedRegistration(w.competition.id, w.division.id, w.settings, { displayName: "Maya Cole", contactEmail: address(tag), refCode: ref });
+    const second = await seedSecondEntry(first.registration.group_id, w.division.id, 1500, "Maya Cole Jr", "pending");
+    return { w, ref, first, second };
+  }
+  const referenceLine = async (ref: string) => t(await getDictionary("en", "emails"), "paymentReminder.textReference", { refCode: ref });
+
+  it("the reminder for entry 2 of a 2-entry cart carries ref-2 in the reference line and in the filled instructions, html and text", async () => {
+    const { w, ref, second } = await twoEntryCart("t18-2");
+    await sendPaymentReminder(w.owner, second.id, ORIGIN);
+    const b = await body("payment_reminder", "registration", second.id);
+    expect(b.text.split("\n"), "the reference line").toContain(await referenceLine(`${ref}-2`));
+    expect(b.text, "the {{reference}} the instructions were filled with").toContain(`quoting ${ref}-2`);
+    expect(words(b.html)).toContain(`${ref}-2`);
+    expect(words(b.html)).toContain(`quoting ${ref}-2`);
+    expect(b.text, "never the bare cart reference or the sibling's").not.toMatch(new RegExp(`${ref}(?!-2)`));
+    expect(b.html).not.toMatch(new RegExp(`${ref}(?!-2)`));
+  });
+
+  it("the reminder for entry 1 of the same cart carries ref-1", async () => {
+    const { w, ref, first } = await twoEntryCart("t18-1");
+    await sendPaymentReminder(w.owner, first.registration.id, ORIGIN);
+    const b = await body("payment_reminder", "registration", first.registration.id);
+    expect(b.text.split("\n")).toContain(await referenceLine(`${ref}-1`));
+    expect(b.text).toContain(`quoting ${ref}-1`);
+    expect(b.text).not.toMatch(new RegExp(`${ref}(?!-1)`));
+  });
+
+  it("a one-entry cart's reminder carries the bare cart reference", async () => {
+    const w = await offlineWorld(1500, "auto");
+    const ref = generateRefCode();
+    const only = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("t18-solo"), refCode: ref });
+    await sendPaymentReminder(w.owner, only.registration.id, ORIGIN);
+    const b = await body("payment_reminder", "registration", only.registration.id);
+    expect(b.text.split("\n")).toContain(await referenceLine(ref));
+    expect(b.text).toContain(`quoting ${ref}`);
+    expect(b.text, "no suffix at all").not.toContain(`${ref}-`);
+    expect(b.html).not.toContain(`${ref}-`);
+  });
+
+  it("after entry 1 is withdrawn, entry 2's reminder still says -2", async () => {
+    const { w, ref, first, second } = await twoEntryCart("t18-wd");
+    await sql`update registrations set status = 'withdrawn', withdrawn_at = now() where id = ${first.registration.id}`;
+    await sendPaymentReminder(w.owner, second.id, ORIGIN);
+    const b = await body("payment_reminder", "registration", second.id);
+    expect(b.text.split("\n")).toContain(await referenceLine(`${ref}-2`));
+    expect(b.text).toContain(`quoting ${ref}-2`);
+  });
+
+  it("the cart's confirmation mail still carries the bare cart reference (it is about the whole cart)", async () => {
+    const { ref, first } = await twoEntryCart("t18-cart");
+    await notifySubmitted(first.registration.group_id, ORIGIN, first.access_token);
+    const b = await body("registration_confirmation", "registration_group", first.registration.group_id);
+    expect(b.text, "the cart ref is there").toContain(ref);
+    expect(b.text, "the instructions quote the cart's reference, which finds every entry").toContain(`quoting ${ref}`);
+    expect(b.text, "and no entry's suffix anywhere").not.toContain(`${ref}-`);
+    expect(b.html).not.toContain(`${ref}-`);
+  });
+});
+
 describe("payDeadlineOf (no database)", () => {
   const NOW = new Date("2026-11-12T10:00:00Z");
   const H = 3_600_000;

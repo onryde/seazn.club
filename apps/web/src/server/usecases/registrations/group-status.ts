@@ -3,7 +3,7 @@ import "server-only";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { entryPriceCents, isTerminalRegistrationStatus, ownPaymentRefundedCents } from "@/lib/registration-status";
-import { isValidRefCode, normalizeRefCode } from "@/lib/ref-code";
+import { entryReferenceOf, isValidRefCode, normalizeRefCode } from "@/lib/ref-code";
 import { resolveVenueTz } from "@/lib/tz";
 import type { RegistrationSettingsRow, RegistrationRow, RegistrationGroupRow } from "./types";
 import { loadSettings, DUMMY_ACCESS_HASH, tokenMatchesHash, GROUP_ID_RE } from "./lookups";
@@ -119,6 +119,11 @@ export interface GroupEntryView {
    *  A waived entry keeps its `amount_cents`, so it must count as neither paid nor due. Derived in ./status-facts.ts (the
    *  contract T15 renders is documented at its top). */
   settled_by: SettledBy | null;
+  /** Registration redesign B5 T18 (spec §6.2, §6.3): the reference to quote for THIS entry (`entryReferenceOf`, lib/ref-code.ts): the cart's
+   *  `SZ-XXXX-XXXX` with the entry's place in the cart (`-2`) when the cart was sent with two or more entries, the cart's alone for a
+   *  one-entry cart. Null only when the cart has no reference at all (`GroupStatusView.ref_code`). Fixed at submit: a withdrawal or a
+   *  deleted sibling never changes it. The card prints it only in a 2+ cart (`cardEntryReference`, register/status/view-model.ts). */
+  entry_ref: string | null;
 }
 
 /** The whole cart, for the status page (design §4 step 6; RS007 builds the
@@ -137,6 +142,10 @@ export interface GroupStatusView {
    *  The two current consumers (`fillPaymentInstructions`'s `reference`
    *  param, and a bare JSX `{view.ref_code}`) already tolerate null. */
   ref_code: string | null;
+  /** Registration redesign B5 T18: how many entries the cart was SENT with (`registration_groups.cart_size`, V519): every entry whatever its
+   *  status now, never less after a withdrawal or a deleted division. It decides whether the page speaks of per-entry references at all
+   *  (`cardEntryReference`), never a count of `entries`. */
+  cart_size: number;
   contact_name: string;
   /** Registration redesign B4 T15: the address the cart's confirmation mail went to (queued at submit), for the page's "Confirmation
    *  sent to {email}." Token-gated like every field here; the token-less `PublicCartView` never carries it. */
@@ -269,7 +278,10 @@ async function buildGroupStatusView(
       | "approval"
       | "fee_if_promoted_cents"
       | "settled_by"
+      | "entry_ref"
     > & {
+      /** V519: read to make `entry_ref`, then destructured OUT below (the view carries the reference, not the number). */
+      cart_position: number;
       refunded_cents: number;
       late_refunded_cents: number;
       promotion_expires_at: Date | null;
@@ -280,7 +292,7 @@ async function buildGroupStatusView(
       entry_payment_intent_id: string | null;
     })[]
   >`
-    select r.id, r.division_id, d.name as division_name, r.display_name, r.status,
+    select r.id, r.division_id, d.name as division_name, r.display_name, r.status, r.cart_position,
            r.amount_cents, r.refunded_cents, r.late_refunded_cents, r.free_agent, r.join_code, r.promotion_expires_at,
            r.payment_intent_id as entry_payment_intent_id, r.approved_at is not null as approved,
            d.youth as division_youth, d.player_name_display as division_player_name_display,
@@ -431,6 +443,7 @@ async function buildGroupStatusView(
     // doc comment for why that was a lie (groupById reaches rows where this
     // is genuinely null).
     ref_code: group.ref_code,
+    cart_size: group.cart_size,
     contact_name: group.contact_name,
     contact_email: group.contact_email,
     currency: group.currency,
@@ -449,8 +462,10 @@ async function buildGroupStatusView(
     charges_enabled: comp?.charges_enabled ?? false,
     payment_instructions: paymentInstructions,
     org_timezone: refundTz,
-    entries: entries.map(({ refunded_cents, late_refunded_cents, promotion_expires_at, entry_payment_intent_id, ...e }) => ({
+    entries: entries.map(({ cart_position, refunded_cents, late_refunded_cents, promotion_expires_at, entry_payment_intent_id, ...e }) => ({
       ...e,
+      // B5 T18: the cart's STORED size (`group.cart_size`), never `entries.length`: this list may be short of what the cart was sent with.
+      entry_ref: entryReferenceOf({ ref_code: group.ref_code, cart_position, cart_size: group.cart_size }),
       refunded_cents,
       promotion_expires_at: promotion_expires_at ? new Date(promotion_expires_at).toISOString() : null,
       allows_new_joiner: entrantKindByDivision.get(e.division_id) !== "pair",

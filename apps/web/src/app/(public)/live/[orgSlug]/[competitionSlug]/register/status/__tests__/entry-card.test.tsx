@@ -69,6 +69,7 @@ function baseProps(): EntryCardProps {
       ],
       refund_policy: { refundable: false, deadline: null, amount_cents: 0 },
       refunded_cents: 0,
+      entry_ref: "SZ-ABCD-EFGH-2",
     },
     cart: {
       expires_at: null,
@@ -76,6 +77,7 @@ function baseProps(): EntryCardProps {
       instructionsHtml: null,
       currency: "gbp",
       timezone: "UTC",
+      cart_size: 2,
     },
     orgSlug: "org",
     competitionSlug: "comp",
@@ -84,6 +86,50 @@ function baseProps(): EntryCardProps {
     ui: uiEn as Dict,
   };
 }
+
+// Registration redesign B5 T18 (spec §6.3): an entry of a cart sent with two or more entries quotes its own reference, small, under
+// its name; the page's hero still says the cart's.
+describe("EntryCard — its own reference (B5 T18)", () => {
+  const refLine = (html: string) => html.match(/<p data-testid="reg-status-entry-ref" data-entry-ref="([^"]*)"[^>]*>([\s\S]*?)<\/p>/);
+
+  it("a 2+ cart: the line names the reference in the dictionary's words, the reference alone in its own selectable span", () => {
+    const html = renderToStaticMarkup(<EntryCard {...baseProps()} />);
+    const m = refLine(html);
+    expect(m, "the reference line").not.toBeNull();
+    expect(m![1]).toBe("SZ-ABCD-EFGH-2");
+    const [lead, tail = ""] = (uiEn as Record<string, string>)["register.status.entry.reference"]!.split("{reference}");
+    expect(m![2]).toBe(`${lead}<span class="select-all">SZ-ABCD-EFGH-2</span>${tail}`);
+  });
+
+  it("sits after the division and the entry's name, so the two lines that name the entry stay together", () => {
+    const html = renderToStaticMarkup(<EntryCard {...baseProps()} />);
+    const at = (needle: string) => html.indexOf(needle);
+    expect(at("Open"), "division").toBeGreaterThan(-1);
+    expect(at("Team X")).toBeGreaterThan(at("Open"));
+    expect(at('data-testid="reg-status-entry-ref"')).toBeGreaterThan(at("Team X"));
+    expect(at('data-testid="reg-status-entry-ref"')).toBeLessThan(at('data-testid="reg-status-outcome"'));
+  });
+
+  it("a one-entry cart: no line (the empty case)", () => {
+    const p = baseProps();
+    const html = renderToStaticMarkup(<EntryCard {...p} cart={{ ...p.cart, cart_size: 1 }} entry={{ ...p.entry, entry_ref: "SZ-ABCD-EFGH" }} />);
+    expect(html, "anti-vacuity: the card rendered").toContain("Team X");
+    expect(refLine(html)).toBeNull();
+  });
+
+  it("no reference to print (the cart has none): no line, whatever the size", () => {
+    const p = baseProps();
+    const html = renderToStaticMarkup(<EntryCard {...p} entry={{ ...p.entry, entry_ref: null }} />);
+    expect(html).toContain("Team X");
+    expect(refLine(html)).toBeNull();
+  });
+
+  it("a withdrawn entry keeps its number: the line is still there, and says -2", () => {
+    const p = baseProps();
+    const html = renderToStaticMarkup(<EntryCard {...p} entry={{ ...p.entry, status: "withdrawn" }} />);
+    expect(refLine(html)![1]).toBe("SZ-ABCD-EFGH-2");
+  });
+});
 
 describe("EntryCard — a displayNameById miss never falls back to the raw p.full_name", () => {
   it("the claim-link text stays clear of the raw name even when rosterPlayerDisplayName's own map entry is missing", () => {

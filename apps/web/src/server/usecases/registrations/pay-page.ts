@@ -7,6 +7,7 @@ import { sql } from "@/lib/db";
 import { ownPaymentRefundedCents } from "@/lib/registration-status";
 import type { Locale } from "@/lib/i18n-constants";
 import { fillPaymentInstructions } from "@/lib/payment-instructions";
+import { entryReferenceOf } from "@/lib/ref-code";
 import { resolveVenueTz } from "@/lib/tz";
 import { recipientLocale } from "@/server/email-outbox/locale";
 import type { RegistrationRow, RegistrationWithGroupRow } from "./types";
@@ -42,9 +43,12 @@ export interface PayPageDoc {
   /** The organiser's own zone (`organizations.timezone`, UTC when unset): the deadline is written in it, the same zone and spelling
    *  the status page writes it in (polish wave P3, W4). Always a valid IANA zone, never null. */
   timezone: string;
+  /** The reference to quote for THIS entry (`entryReferenceOf`, registration redesign B5 T18): the cart's `SZ-XXXX-XXXX` with the entry's
+   *  place in the cart (`-2`) when the cart was sent with two or more entries, the cart's alone for a one-entry cart. Null when the cart
+   *  has none. Still named `refCode` (the name predates per-entry references): it is the entry's reference, not always the cart's. */
   refCode: string | null;
   orgName: string;
-  /** Offline only: the division's instructions, else the org's, with `{{reference}}` filled. */
+  /** Offline only: the division's instructions, else the org's, with `{{reference}}` filled with `refCode` (this entry's own). */
   paymentInstructions: string | null;
   /** Paid/refunded only: the first confirming audit row's time, or null when there is none. */
   paidAt: Date | null;
@@ -146,6 +150,9 @@ export async function payPageDocByToken(token: string, now: Date): Promise<PayPa
   }
 
   const instructions = settings?.payment_instructions ?? ctx.payment_instructions;
+  // One reading for both the page's reference and the instructions' {{reference}}: an offline transfer that quotes the line the page shows
+  // is the one the organiser searches for (spec §6.3).
+  const reference = entryReferenceOf(reg);
   return {
     registrationId: reg.id,
     groupId: reg.group_id,
@@ -164,9 +171,9 @@ export async function payPageDocByToken(token: string, now: Date): Promise<PayPa
     refundedCents,
     deadline,
     timezone: resolveVenueTz(null, ctx.org_timezone),
-    refCode: reg.ref_code,
+    refCode: reference,
     orgName: ctx.org_name,
-    paymentInstructions: state === "offline" && instructions ? fillPaymentInstructions(instructions, reg.ref_code) : null,
+    paymentInstructions: state === "offline" && instructions ? fillPaymentInstructions(instructions, reference) : null,
     paidAt,
     paySessionId: reg.pay_session_id,
     cardPaymentsOn: ctx.charges_enabled,
