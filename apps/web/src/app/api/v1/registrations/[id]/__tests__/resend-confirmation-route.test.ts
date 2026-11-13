@@ -159,6 +159,9 @@ describe.skipIf(!HAS_DB)("POST /registrations/:id/resend-confirmation", () => {
     const { competition, division } = await rig(owner);
     const { registration: first } = await seedRegistration(competition.id, division.id, SETTINGS, {
       displayName: "First Entry",
+      // A contact who is not an entry: a mail names the contact's OWN entry by its division (polish wave V8), so a rep is what lets
+      // both entries be read back by name.
+      contactName: "Cart Rep",
       contactEmail: "cart-rep@test.local",
       refCode: `SZ-RS${randomUUID().slice(0, 6).toUpperCase()}`,
     });
@@ -173,8 +176,12 @@ describe.skipIf(!HAS_DB)("POST /registrations/:id/resend-confirmation", () => {
     expect(rows, "one mail for the whole cart").toHaveLength(1);
     const saw = providerSaw(rows);
     expect(saw).toHaveLength(1);
-    expect(saw[0]!.text).toContain("First Entry");
-    expect(saw[0]!.text).toContain("Second Entry");
+    // Each entry on its own line, with its OWN status (words from the dictionary, never typed here).
+    const lineOf = (name: string) => saw[0]!.text.split("\n").filter((l) => l.includes(name));
+    expect(lineOf("First Entry"), "the entry named in the URL").toHaveLength(1);
+    expect(lineOf("Second Entry"), "the cart's other entry").toHaveLength(1);
+    expect(lineOf("First Entry")[0]).toContain(dictionarySubject("en", "registration.entryStatusPending", {}));
+    expect(lineOf("Second Entry")[0]).toContain(dictionarySubject("en", "registration.entryStatusWaitlisted", {}));
   });
 
   it("does not mint a fresh checkout — the resent mail carries no pay link", async () => {

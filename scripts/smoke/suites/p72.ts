@@ -256,17 +256,20 @@ async function seedPaidRegistration(competitionId: string, divisionId: string): 
     max: 1,
   });
   try {
+    // The intent on the ENTRY as well as the cart, as a paid webhook writes it (V387): the delete guard reads the entry's own
+    // payment net of its own refunds (polish wave P5), so a cart-only intent is a shape the product no longer writes.
+    const intent = "pi_smoke_" + divisionId.slice(0, 8);
     const [group] = await sql<{ id: string }[]>`
       insert into registration_groups
         (competition_id, contact_name, contact_email, access_token_hash,
          amount_cents, currency, payment_method, payment_intent_id, refunded_cents)
       values (${competitionId}, 'Smoke Payer', 'payer@x.test', ${crypto.randomUUID()},
-              2000, 'gbp', 'stripe', ${"pi_smoke_" + divisionId.slice(0, 8)}, 0)
+              2000, 'gbp', 'stripe', ${intent}, 0)
       returning id`;
     await sql`
       insert into registrations
-        (group_id, division_id, status, display_name, amount_cents, answers)
-      values (${group.id}, ${divisionId}, 'paid', 'Smoke Payer', 2000, '{}')`;
+        (group_id, division_id, status, display_name, amount_cents, payment_intent_id, answers)
+      values (${group.id}, ${divisionId}, 'paid', 'Smoke Payer', 2000, ${intent}, '{}')`;
   } finally {
     await sql.end();
   }

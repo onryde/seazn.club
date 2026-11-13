@@ -16,9 +16,9 @@ import {
  * mode:"duplicate" — the exact real-refund-object pairing a stubbed Stripe
  * can never produce to assert against.
  *
- * This does NOT keep two Checkout Sessions open at once, and neither
- * session is ever completed — see the inline comment on the resume-mint
- * below for why (this same branch added expireSupersededCheckoutSession),
+ * This does NOT keep two Checkout Sessions open at once, and the session is
+ * never completed — see the inline comment on the resume below (polish wave
+ * W5: a resume hands the entry's open session out again instead of minting),
  * and payRealDestinationCharge's own doc comment for why a session can't be
  * paid headlessly at all. The duplicate PAYMENT this leg proves is
  * synthesized independently: two distinct real PaymentIntents against the
@@ -50,19 +50,13 @@ export async function registrationDuplicatePaymentSuite(): Promise<void> {
   const seeded = await seedRealRegistrationCart("regdup", "Reg Dup Cup", feeCents);
   const openSessions: string[] = [seeded.sessionId];
   try {
-    // Resume-mints a second real session for the same still-pending cart.
-    // createRegistrationCheckout mints this new session FIRST, then calls
-    // expireSupersededCheckoutSession(seeded.sessionId, registrationIds) —
-    // added this same branch — which finds seeded.sessionId still `open`
-    // with intersecting registration_ids and expires it. So this does NOT
-    // leave two open sessions behind (see this function's own doc comment);
-    // what it proves is that the resume path mints a genuinely distinct
-    // session (asserted via sessionIdB below) rather than replaying the
-    // stale one. Neither session is ever paid through directly either way —
-    // a Checkout Session's own `payment_intent` stays null until a real
-    // browser visits its hosted page, so nothing headless can complete one
-    // (payRealDestinationCharge's doc comment). The duplicate PAYMENT below
-    // is synthesized independently, through two distinct real PaymentIntents.
+    // A resume on the same still-pending cart. Polish wave W5 (walkthrough S05: sign-up, decline, Pay now, Pay now opened three
+    // sessions): Stripe keeps a session `open` through a declined card or a backed-out Checkout, so resumeRegistrationCheckout hands
+    // the entry's open session out again (`reusableSessionUrl`) and mints nothing - it used to mint a second session and expire the
+    // first. Proven here against the REAL Stripe object: the URL handed back is the first session's own, and the cart still points
+    // at it. Neither session path is ever paid through directly - a Checkout Session's own `payment_intent` stays null until a real
+    // browser visits its hosted page (payRealDestinationCharge's doc comment) - so the duplicate PAYMENT below is synthesized
+    // independently, through two distinct real PaymentIntents.
     const resumed = await v1(
       newSession(),
       `/api/v1/public/registrations/${seeded.regId}/checkout`,
@@ -71,7 +65,7 @@ export async function registrationDuplicatePaymentSuite(): Promise<void> {
     );
     const resumedOut = v1data<{ checkout_url: string }>(resumed);
     check(
-      "reg duplicate: a second real session mints for the same still-pending cart",
+      "reg duplicate: a resume on the still-pending cart answers with a real Checkout URL",
       resumed.status === 200 && !!resumedOut?.checkout_url?.startsWith("https://checkout.stripe.com/"),
     );
 
@@ -84,11 +78,12 @@ export async function registrationDuplicatePaymentSuite(): Promise<void> {
     } finally {
       await sessionDb.end();
     }
+    const first = await stripe.checkout.sessions.retrieve(seeded.sessionId);
     check(
-      "reg duplicate: the second session is a distinct Stripe object from the first",
-      !!sessionIdB && sessionIdB !== seeded.sessionId,
+      "reg duplicate: the resume hands out the FIRST session again (still open, same URL, cart pointer unchanged) - no second payable session",
+      first.status === "open" && !!first.url && resumedOut?.checkout_url === first.url && sessionIdB === seeded.sessionId,
     );
-    if (sessionIdB) openSessions.push(sessionIdB);
+    if (sessionIdB && sessionIdB !== seeded.sessionId) openSessions.push(sessionIdB);
 
     // Pay BOTH for real against the fixture Connect account — two genuine,
     // succeeded destination-charge PaymentIntents, in either order. See

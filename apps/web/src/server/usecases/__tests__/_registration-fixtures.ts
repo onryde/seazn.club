@@ -180,6 +180,8 @@ export async function seedRegistration(
   settings: { fee_cents: number; currency: string; payment_method: "offline" | "stripe" },
   over: {
     displayName?: string;
+    /** The cart contact's name; defaults to `displayName` (an individual registering themself, whose mail names the entry by division). */
+    contactName?: string;
     contactEmail?: string;
     status?: RegistrationRow["status"];
     amountCents?: number;
@@ -210,7 +212,7 @@ export async function seedRegistration(
        amount_cents, currency, payment_method, expires_at, locale, ref_code,
        privacy_consent_at, privacy_consent_version)
     values (
-      ${competitionId}, ${displayName}, ${over.contactEmail ?? "alex@test.local"},
+      ${competitionId}, ${over.contactName ?? displayName}, ${over.contactEmail ?? "alex@test.local"},
       ${hashRegistrationToken(rawToken)},
       ${amountCents}, ${settings.currency}, ${method},
       ${stripeWindow ? sql`now() + interval '48 hours'` : null},

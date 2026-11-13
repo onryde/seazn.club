@@ -1,6 +1,6 @@
 // Shared text helpers for the email templates. HTML structure lives in the
 // ./html files and is composed by ./compose.ts.
-import { formatMoneyExact } from "@/lib/currency";
+import { formatMoneyExact } from "@/lib/format-money-exact";
 
 export function escapeHtml(s: string): string {
   return s

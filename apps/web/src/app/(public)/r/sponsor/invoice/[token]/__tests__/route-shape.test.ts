@@ -56,8 +56,8 @@ function resolve(pathname: string): { route: string; params: Record<string, unkn
 }
 
 describe("/r/sponsor/invoice/[token] beside the report and the registration lookup", () => {
-  it("premise: the pages under /r are the lookup, the report and the invoice", () => {
-    expect(pagesUnderR().sort()).toEqual(["/r/[ref]", "/r/sponsor/[token]", "/r/sponsor/invoice/[token]"]);
+  it("premise: the pages under /r are the lookup, the payment page, the report and the invoice", () => {
+    expect(pagesUnderR().sort()).toEqual(["/r/[ref]", "/r/pay/[token]", "/r/sponsor/[token]", "/r/sponsor/invoice/[token]"]);
   });
 
   it("an invoice URL is the invoice; a report URL is still the report and a reference still the lookup (counted)", () => {

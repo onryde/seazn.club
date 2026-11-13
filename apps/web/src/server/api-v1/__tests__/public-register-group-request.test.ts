@@ -515,6 +515,7 @@ describe("PublicJoinPreviewResponse", () => {
     requires_gender: false,
     total_players: 2,
     eligibility_note: null,
+    entry_confirmed: false,
   };
 
   it("entrant_kind: each of the three kinds parses; an unknown kind, or its absence, does not", () => {
@@ -526,5 +527,22 @@ describe("PublicJoinPreviewResponse", () => {
     expect(checked).toBe(3);
     expect(PublicJoinPreviewResponse.safeParse({ ...preview, entrant_kind: "squad" }).success).toBe(false);
     expect(PublicJoinPreviewResponse.safeParse(preview).success).toBe(false);
+  });
+
+  // Polish wave G: a full entry's page uses check-in words only for a confirmed entry, so the flag is required, never inferred.
+  it("entry_confirmed: both booleans parse; its absence, or a non-boolean, does not (counted)", () => {
+    const withKind = { ...preview, entrant_kind: "pair" };
+    let checked = 0;
+    for (const entry_confirmed of [true, false]) {
+      expect(PublicJoinPreviewResponse.safeParse({ ...withKind, entry_confirmed }).success, String(entry_confirmed)).toBe(true);
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+    for (const bad of ["true", 1, null]) {
+      expect(PublicJoinPreviewResponse.safeParse({ ...withKind, entry_confirmed: bad }).success, String(bad)).toBe(false);
+    }
+    const without: Record<string, unknown> = { ...withKind };
+    delete without.entry_confirmed;
+    expect(PublicJoinPreviewResponse.safeParse(without).success).toBe(false);
   });
 });
