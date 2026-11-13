@@ -20,6 +20,7 @@ import { getDictionary, t } from "@/lib/i18n";
 import { hasLocale } from "@/lib/i18n-constants";
 import { readRecentQuickMatches } from "@/server/usecases/quick-match-recent";
 import { listQuickMatchSports } from "@/server/usecases/quick-match-sports";
+import { log } from "@/server/logger";
 import { setupSports } from "./play/setup-props";
 
 export async function generateMetadata({
@@ -89,14 +90,18 @@ export default async function HomePage({ params }: { params: Promise<{ lang: str
   //
   // `quickMatchOffer` (owner 2026-11-13, the hero's quick match start): the hero's Sport select lists exactly what the setup
   // screen offers, read and named the way that page does (`listQuickMatchSports`, `setupSports`), so it never offers a
-  // sport /play would ignore. Empty on failure: the Start alone, and /play says why.
+  // sport /play would ignore. Empty on failure: the Start alone, and /play says why. The failure is logged at error, as
+  // /play logs the same read (review m3): the hero's one primary is dead until it recovers.
   const [liveNow, thisWeek, currency, planMatrix, recentQuickMatches, quickMatchOffer, ui] = await Promise.all([
     getDiscoveryLive().catch(() => []),
     getDiscoveryThisWeek().catch(() => []),
     preferredCurrency(null).catch(() => "usd" as const),
     loadPricingMatrix().catch(() => ({})),
     readRecentQuickMatches(),
-    listQuickMatchSports().catch(() => []),
+    listQuickMatchSports().catch((err: unknown) => {
+      log.error({ err }, "marketing home: the quick match offer could not be read");
+      return [];
+    }),
     getDictionary(lang, "ui"),
   ]);
   const heroSports = setupSports(quickMatchOffer, ui);
@@ -159,7 +164,7 @@ export default async function HomePage({ params }: { params: Promise<{ lang: str
               </p>
             </div>
             <div className="w-full max-w-md justify-self-center">
-              <HeroVignette />
+              <HeroVignette label={t(d, "home.hero.vignetteLabel")} />
             </div>
           </div>
           {/* A returning guest's quick matches, still on the night stage, under the hero (renders nothing for none). */}

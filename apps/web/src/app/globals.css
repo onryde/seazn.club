@@ -612,9 +612,11 @@ body {
 }
 
 /* Hero vignette choreography (~2.6s once, then idle). Transform/opacity only.
-   Geometry: bat pivots at the grip (310,230); the blade's sweet spot passes
-   (282,152) when the swing crosses ~-20deg — the toss parks the ball exactly
-   there at 1.5s, so contact reads mid-blade, never on the handle. */
+   Geometry: the swinging object (`.mk-bat`, a badminton racket since review
+   m6) pivots at the grip (310,230); its head's sweet spot (310,148 at rest)
+   passes (282,152) when the swing crosses ~-20deg — the toss parks the
+   shuttle (`.mk-ball`, its cork at the origin) exactly there at 1.5s, so
+   contact reads mid-strings, never on the shaft. */
 .mk-vignette .mk-ball {
   animation:
     mk-ball-toss 1.1s cubic-bezier(0.3, 0, 0.4, 1) forwards,

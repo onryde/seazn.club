@@ -210,6 +210,15 @@ function eventLinkOf(html: string, lang: string): { tag: string; text: string } 
   return m ? { tag: m[1]!, text: m[2]!.replace(/<[^>]*>/g, "").replace(/<!-- -->/g, "") } : null;
 }
 
+/** The sport the hero's art draws (hero-vignette.tsx `data-sport`): exactly one in the hero, or a red. */
+function artSportOf(html: string): string {
+  const all = [...heroOf(html).matchAll(/<div\b[^>]*\bdata-sport="([^"]*)"/g)].map((m) => m[1]!);
+  expect(all, "one illustration in the hero").toHaveLength(1);
+  return all[0]!;
+}
+/** The hero art's accessible name: the `role="img"` svg's label. */
+const artLabelOf = (html: string) => heroOf(html).match(/<svg\b[^>]*\brole="img"[^>]*\baria-label="([^"]*)"/)?.[1];
+
 /** A two-sport offer the hero lists in this order (the stubbed listQuickMatchSports): badminton, then chess. */
 const OFFER: QuickMatchSport[] = [
   {
@@ -268,9 +277,26 @@ describe("the hero's quick match start (spec §5 step 1, Option A)", () => {
     expect(optionsOf(form!.body)).toEqual([]);
   });
 
-  it("the offer cannot be read: the same Start alone, and the page still renders (fail-soft, as the strip is)", async () => {
-    vi.mocked(listQuickMatchSports).mockRejectedValueOnce(new Error("db down"));
+  it("an empty offer is no failure: nothing logged (the positive pair of the read that throws)", async () => {
+    const error = vi.spyOn(log, "error").mockImplementation(() => undefined);
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    vi.mocked(listQuickMatchSports).mockResolvedValueOnce([]);
+    await render("en");
+    expect(listQuickMatchSports).toHaveBeenCalledTimes(1);
+    expect(error).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("the offer cannot be read: the same Start alone, the page still renders (fail-soft), and the failure is logged once, at error, as /play logs it", async () => {
+    const error = vi.spyOn(log, "error").mockImplementation(() => undefined);
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    const cause = new Error("db down");
+    vi.mocked(listQuickMatchSports).mockRejectedValueOnce(cause);
     const html = await render("en");
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(error.mock.calls[0]![0]).toEqual({ err: cause });
+    expect(String(error.mock.calls[0]![1])).toMatch(/offer could not be read/);
+    expect(warn).not.toHaveBeenCalled();
     const form = ctaFormOf(html);
     expect(form?.tag).toContain('action="/en/play"');
     expect(form!.body).not.toContain("<select");
@@ -305,6 +331,11 @@ describe("the hero's quick match start (spec §5 step 1, Option A)", () => {
     expect(start).toContain('aria-describedby="qm-cta-hint"');
     expect(form.body.indexOf(start!)).toBeGreaterThan(form.body.indexOf(select!));
     expect(heroOf(html)).toMatch(new RegExp(`<p\\b[^>]*\\bid="qm-cta-hint"[^>]*>${enMarketing["quickMatch.ctaHint"]}</p>`));
+    // Review m6: the art beside the select draws the sport the select opens on, never one it cannot give.
+    const selected = optionsOf(form.body).filter((o) => o.selected);
+    expect(selected).toHaveLength(1);
+    expect(artSportOf(html)).toBe(selected[0]!.value);
+    expect(unescape(artLabelOf(html) ?? "")).toBe(enMarketing["home.hero.vignetteLabel"]);
   });
 
   it("the organiser's setup is a quiet link to `/en/start` under the Start; the funnel's fields and Setup button are gone", async () => {
@@ -334,9 +365,9 @@ describe("the hero's quick match start (spec §5 step 1, Option A)", () => {
     expect(hero).not.toMatch(/\bname="date"/);
     expect(hero).not.toMatch(/\btype="date"/);
     let removed = 0;
-    for (const key of ["funnel.entrants", "funnel.date", "funnel.submit"] as const) {
-      expect(enMarketing[key], `${key} still has copy to look for`).toBeTruthy();
-      expect(plain, key).not.toContain(enMarketing[key]);
+    // The removed form's English copy as origin/main shipped it (its `funnel.*` keys are deleted with it).
+    for (const copy of ["Players / teams", "Start date", "Setup →"]) {
+      expect(plain, copy).not.toContain(copy);
       removed++;
     }
     expect(removed).toBe(3);
@@ -355,6 +386,7 @@ describe("the hero's quick match start (spec §5 step 1, Option A)", () => {
     const names = setupSports(OFFER, ui).map((s) => s.name);
     expect(optionsOf(form.body).map((o) => unescape(o.label))).toEqual(names);
     expect(html).toContain(frMarketing["quickMatch.ctaHint"]);
+    expect(unescape(artLabelOf(html) ?? ""), "the art's French name").toBe(frMarketing["home.hero.vignetteLabel"]);
     expect(eventLinkOf(html, "fr")?.text).toBe(`${frMarketing["home.hero.eventPrompt"]} ${frMarketing["home.hero.eventLink"]}`);
     expect(eventLinkOf(html, "en"), "never the English path").toBeNull();
     expect(html).not.toContain('action="/en/play"');
@@ -365,11 +397,15 @@ describe.skipIf(!HAS_DB)("the hero's Sport select over the live offer, through t
   it("lists exactly the setup screen's sports, and each option, sent as the form names it, opens /play on that sport", async () => {
     const [live, ui] = await Promise.all([listQuickMatchSports(), getDictionary("en", "ui")]);
     const expected = setupSports(live, ui);
-    const form = ctaFormOf(await render("en"))!;
+    const home = await render("en");
+    const form = ctaFormOf(home)!;
     const field = form.body.match(/<select\b[^>]*\bname="([^"]*)"/)?.[1];
     expect(field, "the select's field name").toBeDefined();
     const options = optionsOf(form.body);
     expect(options.map((o) => o.value)).toEqual(expected.map((s) => s.sport_key));
+    // Review m6: the hero's art draws the sport the live select opens on (the offer's first).
+    expect(options.filter((o) => o.selected).map((o) => o.value)).toEqual([expected[0]!.sport_key]);
+    expect(artSportOf(home)).toBe(expected[0]!.sport_key);
     let checked = 0;
     for (const o of options) {
       const play = await render("en", "play", { [field!]: o.value });
@@ -423,6 +459,8 @@ describe("the recent strip fails soft (A9): the busiest page never 500s on a gue
     const error = vi.spyOn(log, "error").mockImplementation(() => undefined);
     const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
     jar.visitor = mintVisitorKey();
+    // The hero's offer reads (stubbed), so the one log line counted here is the strip's, with or without a database.
+    vi.mocked(listQuickMatchSports).mockResolvedValueOnce(OFFER);
     vi.mocked(listRecentQuickMatches).mockRejectedValueOnce(new Error("connection terminated"));
     const html = await render();
     expect(listRecentQuickMatches).toHaveBeenCalledTimes(1);
