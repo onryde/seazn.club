@@ -3,14 +3,28 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { api } from "@/lib/client";
+import { useMsg } from "@/components/i18n/dict-provider";
+import { ApiError, api } from "@/lib/client";
+import { FUNNEL_CLAIM_INVALID, FUNNEL_CLAIM_SIGNED_IN } from "@/lib/funnel-claim-codes";
+
+/** Where a claim that did not land leaves the visitor. `signedIn` is the one the route names after it set the session:
+ *  the event may be partly built and the token is spent, so the way on is the dashboard. Everything else is signed out. */
+type Failure = "missing" | "invalid" | "failed" | "signedIn";
+
+/** The route names its two refusals with a `code`; anything else (a 5xx before the session, a limiter, the network) is
+ *  the generic failure. The route's English `error` is never shown — the card words every state from the dictionary. */
+function failureOf(e: unknown): Exclude<Failure, "missing"> {
+  if (e instanceof ApiError && e.code === FUNNEL_CLAIM_SIGNED_IN) return "signedIn";
+  if (e instanceof ApiError && e.code === FUNNEL_CLAIM_INVALID) return "invalid";
+  return "failed";
+}
 
 /** Consumes a funnel draft token: signs the visitor in, creates the drafted
  *  competition, and routes inside it (v3/07 §6). Mirrors <MagicLink>. */
 export function FunnelClaim({ token }: { token: string | null }) {
   const router = useRouter();
-  const [status, setStatus] = useState<"working" | "ok" | "error">("working");
-  const [error, setError] = useState<string | null>(null);
+  const msg = useMsg();
+  const [status, setStatus] = useState<"working" | "ok" | Failure>("working");
   const ran = useRef(false);
 
   useEffect(() => {
@@ -26,44 +40,54 @@ export function FunnelClaim({ token }: { token: string | null }) {
         router.push(res.redirect || "/dashboard");
         router.refresh();
       })
-      .catch((e) => {
-        setStatus("error");
-        setError(e instanceof Error ? e.message : "Setup failed");
-      });
+      .catch((e: unknown) => setStatus(failureOf(e)));
   }, [token, router]);
 
   // No token is known on the very first render (the server's included): show
   // the error straight away instead of a "Creating…" frame an effect replaces.
-  const shownStatus = token ? status : "error";
-  const shownError = token ? error : "Missing setup token.";
+  const shown: "working" | "ok" | Failure = token ? status : "missing";
 
   return (
     <div className="card p-6 text-center" data-funnel-claim>
-      {shownStatus === "working" && (
+      {shown === "working" && (
         <>
           <div className="mb-3 text-4xl">🏗️</div>
-          <p className="font-semibold text-slate-800">Creating your competition…</p>
-          <p className="mt-1 text-sm text-slate-500">
-            Signing you in and drawing up the structure.
-          </p>
+          <p className="font-semibold text-slate-800">{msg("funnel.claim.card.working")}</p>
+          <p className="mt-1 text-sm text-slate-500">{msg("funnel.claim.card.workingBody")}</p>
         </>
       )}
-      {shownStatus === "ok" && (
-        <p className="text-sm text-slate-600">Done — taking you inside…</p>
+      {shown === "ok" && <p className="text-sm text-slate-600">{msg("funnel.claim.card.done")}</p>}
+      {shown === "signedIn" && (
+        <>
+          <div className="mb-3 text-4xl">⚠️</div>
+          <p className="font-semibold text-slate-800">{msg("funnel.claim.card.signedInTitle")}</p>
+          <p className="mt-1 text-sm text-slate-600">{msg("funnel.claim.card.signedInBody")}</p>
+          <Link href="/dashboard" className="btn btn-primary mt-4 inline-block px-4">
+            {msg("funnel.claim.card.dashboard")}
+          </Link>
+        </>
       )}
-      {shownStatus === "error" && (
+      {(shown === "missing" || shown === "invalid" || shown === "failed") && (
         <>
           <div className="mb-3 text-4xl">⛔</div>
-          <p className="font-semibold text-slate-800">This link didn’t work</p>
-          <p className="mt-1 text-sm text-red-600">{shownError}</p>
+          <p className="font-semibold text-slate-800">
+            {shown === "failed" ? msg("funnel.claim.card.failedTitle") : msg("funnel.claim.card.invalidTitle")}
+          </p>
+          <p className="mt-1 text-sm text-red-600">
+            {shown === "missing"
+              ? msg("funnel.claim.card.missingToken")
+              : shown === "invalid"
+                ? msg("funnel.claim.card.invalidDetail")
+                : msg("funnel.claim.card.failedDetail")}
+          </p>
           <p className="mt-4 text-sm text-slate-500">
-            Setup links work once and expire after 7 days.{" "}
+            {msg("funnel.claim.card.retryHint")}{" "}
             <Link href="/start" className="font-medium text-purple-700 underline">
-              Start again
+              {msg("funnel.claim.card.startAgain")}
             </Link>{" "}
-            or{" "}
+            {msg("funnel.claim.card.or")}{" "}
             <Link href="/login" className="font-medium text-purple-700 underline">
-              sign in
+              {msg("funnel.claim.card.signIn")}
             </Link>
             .
           </p>

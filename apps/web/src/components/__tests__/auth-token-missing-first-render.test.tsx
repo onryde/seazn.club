@@ -68,10 +68,23 @@ describe.each([
 });
 
 describe("FunnelClaim without a token", () => {
+  const missing = (l: "en" | "es") => msgFor(l, "funnel.claim.card.missingToken");
+  const working = (l: "en" | "es") => msgFor(l, "funnel.claim.card.working");
+
   it("the server markup already states the error; with a token it is the working state", () => {
-    expect(renderToStaticMarkup(<FunnelClaim token={null} />)).toContain("Missing setup token.");
-    const working = renderToStaticMarkup(<FunnelClaim token="tok" />);
-    expect(working).toContain("Creating your competition");
-    expect(working).not.toContain("Missing setup token.");
+    expect(missing("en"), "anti-vacuity: a real sentence").toMatch(/\w{3}/);
+    expect(renderToStaticMarkup(<FunnelClaim token={null} />)).toContain(missing("en"));
+    const html = renderToStaticMarkup(<FunnelClaim token="tok" />);
+    expect(html).toContain(working("en"));
+    expect(html).not.toContain(missing("en"));
+  });
+
+  it("follows a locale change after mount, and still posts nothing", () => {
+    expect(missing("es")).not.toBe(missing("en"));
+    const island = renderIsland(FunnelClaim, { token: null });
+    h.locale = "es";
+    island.rerender({ token: null });
+    expect(island.text()).toContain(missing("es"));
+    expect(h.posts).toEqual([]);
   });
 });

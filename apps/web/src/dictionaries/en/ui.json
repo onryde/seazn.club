@@ -8512,5 +8512,20 @@
   "funnel.claim.entrant.team": "Team {n}",
   "funnel.claim.venue": "Main venue",
   "funnel.claim.court": "Court {n}",
-  "funnel.claim.division.other": "Other"
+  "funnel.claim.division.other": "Other",
+  "funnel.claim.card.working": "Creating your competition…",
+  "funnel.claim.card.workingBody": "Signing you in and drawing up the structure.",
+  "funnel.claim.card.done": "Done — taking you inside…",
+  "funnel.claim.card.invalidTitle": "This link didn’t work",
+  "funnel.claim.card.invalidDetail": "This setup link is invalid, expired, or already used.",
+  "funnel.claim.card.missingToken": "Missing setup token.",
+  "funnel.claim.card.failedTitle": "Setup failed",
+  "funnel.claim.card.failedDetail": "Something went wrong while setting up your competition.",
+  "funnel.claim.card.retryHint": "Setup links work once and expire after 7 days.",
+  "funnel.claim.card.startAgain": "Start again",
+  "funnel.claim.card.or": "or",
+  "funnel.claim.card.signIn": "sign in",
+  "funnel.claim.card.signedInTitle": "You’re signed in",
+  "funnel.claim.card.signedInBody": "We couldn’t finish setting up your competition, so it may be only partly built. Open your dashboard to check it and add anything missing.",
+  "funnel.claim.card.dashboard": "Go to your dashboard"
 }

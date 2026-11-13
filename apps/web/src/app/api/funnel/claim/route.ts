@@ -1,13 +1,15 @@
 import { z } from "zod";
 import { headers } from "next/headers";
 import { clientIp } from "@/lib/client-ip";
-import { handler } from "@/lib/http";
+import { HttpError, handler } from "@/lib/http";
 import { rateLimit, AUTH_LIMIT } from "@/lib/rate-limit";
 import { sql } from "@/lib/db";
 import { createSession, setActiveOrgId } from "@/lib/auth";
 import { consumeFunnelDraft, createFromDraft } from "@/lib/funnel";
+import { FUNNEL_CLAIM_INVALID, FUNNEL_CLAIM_SIGNED_IN } from "@/lib/funnel-claim-codes";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
+import { log } from "@/server/logger";
 import { saveQuickMatchesForVerifiedUser } from "@/server/usecases/quick-match-save";
 
 const schema = z.object({ token: z.string().min(10) }).strict();
@@ -57,7 +59,8 @@ export async function POST(req: Request) {
     const { token } = schema.parse(await req.json());
     const draft = await consumeFunnelDraft(token);
     if (!draft) {
-      throw new Error("This setup link is invalid, expired, or already used.");
+      // An expected answer, not a fault: a 400 the card words in the visitor's language (no Sentry).
+      throw new HttpError(400, "This setup link is invalid, expired, or already used.", FUNNEL_CLAIM_INVALID);
     }
 
     const userId = await resolveOrCreateVerifiedUser(draft.email);
@@ -66,8 +69,25 @@ export async function POST(req: Request) {
     // Quick match §7.7: keep the matches a guest typed this verified address on (never throws; logs and goes on).
     await saveQuickMatchesForVerifiedUser(userId);
 
-    const { redirect, orgId } = await createFromDraft(userId, draft);
-    await setActiveOrgId(orgId);
+    // From here the visitor IS signed in and the token is spent: a failure names that, so the card sends them to their
+    // dashboard (the event may be partly built — createFromDraft logs which step) instead of "start again or sign in".
+    // The thrown status rides through, so a 5xx still reaches Sentry and the handler's log (the inner error as `cause`);
+    // a 4xx the handler does not log is logged here. The body carries neither the inner message nor anything personal.
+    let built: Awaited<ReturnType<typeof createFromDraft>>;
+    try {
+      built = await createFromDraft(userId, draft);
+      await setActiveOrgId(built.orgId);
+    } catch (err) {
+      const status = err instanceof HttpError ? err.status : 500;
+      if (status < 500) log.warn({ err, status }, "funnel_claim_signed_in_refused");
+      const signedIn = new HttpError(
+        status,
+        "Signed in, but the competition could not be finished.",
+        FUNNEL_CLAIM_SIGNED_IN,
+      );
+      throw Object.assign(signedIn, { cause: err });
+    }
+    const { redirect } = built;
 
     await captureServer({
       event: EVENTS.FUNNEL_CLAIMED,

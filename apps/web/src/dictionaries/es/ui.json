@@ -8512,5 +8512,20 @@
   "funnel.claim.entrant.team": "Equipo {n}",
   "funnel.claim.venue": "Sede principal",
   "funnel.claim.court": "Pista {n}",
-  "funnel.claim.division.other": "Otro"
+  "funnel.claim.division.other": "Otro",
+  "funnel.claim.card.working": "Creando tu competición…",
+  "funnel.claim.card.workingBody": "Iniciando tu sesión y preparando la estructura.",
+  "funnel.claim.card.done": "Listo: te llevamos dentro…",
+  "funnel.claim.card.invalidTitle": "Este enlace no ha funcionado",
+  "funnel.claim.card.invalidDetail": "Este enlace de configuración no es válido, ha caducado o ya se ha usado.",
+  "funnel.claim.card.missingToken": "Falta el token de configuración.",
+  "funnel.claim.card.failedTitle": "No se pudo completar la configuración",
+  "funnel.claim.card.failedDetail": "Algo salió mal al configurar tu competición.",
+  "funnel.claim.card.retryHint": "Los enlaces de configuración solo funcionan una vez y caducan a los 7 días.",
+  "funnel.claim.card.startAgain": "Empezar de nuevo",
+  "funnel.claim.card.or": "o",
+  "funnel.claim.card.signIn": "iniciar sesión",
+  "funnel.claim.card.signedInTitle": "Sesión iniciada",
+  "funnel.claim.card.signedInBody": "No pudimos terminar de configurar tu competición, así que puede estar a medias. Abre tu panel para revisarla y añadir lo que falte.",
+  "funnel.claim.card.dashboard": "Ir a tu panel"
 }
