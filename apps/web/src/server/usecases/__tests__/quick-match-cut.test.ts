@@ -84,20 +84,20 @@ const CASES: Case[] = [
     name: "2-way at 2nd-3rd, top 2: straddles, 1 seat for 2 (case 1)",
     rows: table(["a", "c", "b", "d"], ["c", "b"]),
     q: 2,
-    want: [{ entrantIds: ["b", "c"], ranked: ["c", "b"], place: 2, seats: 1, straddles: true }],
+    want: [{ entrantIds: ["b", "c"], ranked: ["c", "b"], place: 2, seats: 1, straddles: true, byLot: true }],
     toss: ["c"],
   },
   {
     name: "2-way at 1st-2nd, top 2: both go through, ordered by the lot (case 2)",
     rows: table(["b", "a", "c"], ["b", "a"]),
     q: 2,
-    want: [{ entrantIds: ["a", "b"], ranked: ["b", "a"], place: 1, seats: 2, straddles: false }],
+    want: [{ entrantIds: ["a", "b"], ranked: ["b", "a"], place: 1, seats: 2, straddles: false, byLot: true }],
   },
   {
     name: "3-way at 1st-3rd, top 2: pick 2 of 3 (Review Focus 3)",
     rows: table(["c", "a", "b"], ["c", "a", "b"]),
     q: 2,
-    want: [{ entrantIds: ["a", "b", "c"], ranked: ["c", "a", "b"], place: 1, seats: 2, straddles: true }],
+    want: [{ entrantIds: ["a", "b", "c"], ranked: ["c", "a", "b"], place: 1, seats: 2, straddles: true, byLot: true }],
     toss: ["c", "a"],
   },
   {
@@ -111,22 +111,22 @@ const CASES: Case[] = [
     rows: table(["b", "a", "d", "c", "e"], ["b", "a"], ["d", "c"]),
     q: 4,
     want: [
-      { entrantIds: ["a", "b"], ranked: ["b", "a"], place: 1, seats: 2, straddles: false },
-      { entrantIds: ["c", "d"], ranked: ["d", "c"], place: 3, seats: 2, straddles: false },
+      { entrantIds: ["a", "b"], ranked: ["b", "a"], place: 1, seats: 2, straddles: false, byLot: true },
+      { entrantIds: ["c", "d"], ranked: ["d", "c"], place: 3, seats: 2, straddles: false, byLot: true },
     ],
   },
   {
     name: "top 4, 2-way at 4th-5th: straddles the semi-final cut",
     rows: table(["a", "b", "c", "e", "d", "f"], ["e", "d"]),
     q: 4,
-    want: [{ entrantIds: ["d", "e"], ranked: ["e", "d"], place: 4, seats: 1, straddles: true }],
+    want: [{ entrantIds: ["d", "e"], ranked: ["e", "d"], place: 4, seats: 1, straddles: true, byLot: true }],
     toss: ["e"],
   },
   {
     name: "top 4, 3-way at 3rd-5th: pick 2 of 3",
     rows: table(["a", "b", "f", "d", "c", "e"], ["f", "d", "c"]),
     q: 4,
-    want: [{ entrantIds: ["c", "d", "f"], ranked: ["f", "d", "c"], place: 3, seats: 2, straddles: true }],
+    want: [{ entrantIds: ["c", "d", "f"], ranked: ["f", "d", "c"], place: 3, seats: 2, straddles: true, byLot: true }],
     toss: ["f", "d"],
   },
   {
@@ -134,8 +134,8 @@ const CASES: Case[] = [
     rows: table(["b", "a", "c", "f", "d", "e"], ["b", "a"], ["f", "d"]),
     q: 4,
     want: [
-      { entrantIds: ["a", "b"], ranked: ["b", "a"], place: 1, seats: 2, straddles: false },
-      { entrantIds: ["d", "f"], ranked: ["f", "d"], place: 4, seats: 1, straddles: true },
+      { entrantIds: ["a", "b"], ranked: ["b", "a"], place: 1, seats: 2, straddles: false, byLot: true },
+      { entrantIds: ["d", "f"], ranked: ["f", "d"], place: 4, seats: 1, straddles: true, byLot: true },
     ],
     toss: ["f"],
   },
@@ -143,14 +143,14 @@ const CASES: Case[] = [
     name: "a level table (every row one class), top 2 of 4: pick 2 of 4",
     rows: table(["d", "b", "c", "a"], ["d", "b", "c", "a"]),
     q: 2,
-    want: [{ entrantIds: ["a", "b", "c", "d"], ranked: ["d", "b", "c", "a"], place: 1, seats: 2, straddles: true }],
+    want: [{ entrantIds: ["a", "b", "c", "d"], ranked: ["d", "b", "c", "a"], place: 1, seats: 2, straddles: true, byLot: true }],
     toss: ["d", "b"],
   },
   {
     name: "top 4 of 4, all level: everyone goes through, ordered by the lot (case 2)",
     rows: table(["d", "c", "b", "a"], ["d", "c", "b", "a"]),
     q: 4,
-    want: [{ entrantIds: ["a", "b", "c", "d"], ranked: ["d", "c", "b", "a"], place: 1, seats: 4, straddles: false }],
+    want: [{ entrantIds: ["a", "b", "c", "d"], ranked: ["d", "c", "b", "a"], place: 1, seats: 4, straddles: false, byLot: true }],
   },
 ];
 
@@ -185,7 +185,7 @@ describe("cutTies: case 1 (ask) vs case 2 (the lot) vs nothing (D4)", () => {
     }
   });
 
-  it("an edit that grows the class changes the open question (a stored decision keyed on the old class no longer matches)", () => {
+  it("an edit that grows the class changes the open tie's key (its sorted entrantIds); an edit that breaks the tie closes it", () => {
     // Before: B and C level for 2nd. After a corrected result D joins them, level on everything.
     const before = openTie(cutTies(table(["a", "c", "b", "d"], ["c", "b"]), 2));
     const after = openTie(cutTies(table(["a", "d", "c", "b"], ["d", "c", "b"]), 2));
@@ -196,16 +196,51 @@ describe("cutTies: case 1 (ask) vs case 2 (the lot) vs nothing (D4)", () => {
   });
 });
 
+describe("byLot: a class the lot ordered vs one the engine left in typing order (m1)", () => {
+  /** `table`'s rows with every tied row's step set to `key` (the engine's `tieBreak.key` on a residual class), or only
+   *  `only`'s. */
+  const keyed = (rows: CutRow[], key: string, only?: string): CutRow[] =>
+    rows.map((r) => (r.tieUnbroken && (only === undefined || r.entrantId === only) ? { ...r, tieKey: key } : r));
+
+  it("a class ordered by the lot is byLot; the same class ordered by seed (no lot drawn) is not, straddling or all through", () => {
+    const straddle = table(["a", "c", "b", "d"], ["c", "b"]);
+    const allThrough = table(["b", "a", "c"], ["b", "a"]);
+    expect(cutTies(straddle, 2).map((t) => t.byLot)).toEqual([true]);
+    expect(cutTies(allThrough, 2).map((t) => t.byLot)).toEqual([true]);
+    expect(cutTies(keyed(straddle, "seed"), 2)).toEqual([
+      { entrantIds: ["b", "c"], ranked: ["c", "b"], place: 2, seats: 1, straddles: true, byLot: false },
+    ]);
+    expect(cutTies(keyed(allThrough, "seed"), 2)).toEqual([
+      { entrantIds: ["a", "b"], ranked: ["b", "a"], place: 1, seats: 2, straddles: false, byLot: false },
+    ]);
+  });
+
+  it("one member not ordered by the lot is enough to say no lot", () => {
+    expect(cutTies(keyed(table(["d", "b", "c", "a"], ["d", "b", "c", "a"]), "seed", "c"), 2).map((t) => t.byLot)).toEqual([false]);
+  });
+});
+
 describe("cutTies refuses a table the engine never stores (assumptions are guards)", () => {
-  it("two classes across one cut line: impossible with contiguous classes, so a fault", () => {
-    // Interleaved: A (1st) with C (3rd), B (2nd) with D (4th). Each straddles the top-2 line.
-    expect(() => cutTies(table(["a", "b", "c", "d"], ["a", "c"], ["b", "d"]), 2)).toThrow(
-      "quick match cut: two ties straddle one cut",
-    );
+  it("a class whose ranks are not consecutive (A 1st and C 3rd level, B 2nd between them)", () => {
+    expect(() => cutTies(table(["a", "b", "c"], ["a", "c"]), 2)).toThrow(/a,c does not hold consecutive ranks/);
+    // Interleaved classes are refused by the same guard, before any question of how many straddle.
+    expect(() => cutTies(table(["a", "b", "c", "d"], ["a", "c"], ["b", "d"]), 2)).toThrow(/consecutive ranks/);
+  });
+
+  it("two classes across one cut line: only rows sharing a rank can make it, and it is a fault", () => {
+    // A and B level at 2nd-3rd; C and D level at 2nd-3rd too (two rows share each rank). Both straddle the top-2 line.
+    const rows: CutRow[] = [
+      { entrantId: "x", rank: 1, tieUnbroken: false, tieWith: [], tieKey: null },
+      { entrantId: "a", rank: 2, tieUnbroken: true, tieWith: ["b"], tieKey: "lots" },
+      { entrantId: "b", rank: 3, tieUnbroken: true, tieWith: ["a"], tieKey: "lots" },
+      { entrantId: "c", rank: 2, tieUnbroken: true, tieWith: ["d"], tieKey: "lots" },
+      { entrantId: "d", rank: 3, tieUnbroken: true, tieWith: ["c"], tieKey: "lots" },
+    ];
+    expect(() => cutTies(rows, 2)).toThrow("quick match cut: two ties straddle one cut");
   });
 
   it("openTie on a hand-built list with two open ties: the same fault", () => {
-    const t = (ids: string[], place: number): CutTie => ({ entrantIds: ids, ranked: ids, place, seats: 1, straddles: true });
+    const t = (ids: string[], place: number): CutTie => ({ entrantIds: ids, ranked: ids, place, seats: 1, straddles: true, byLot: true });
     expect(() => openTie([t(["a", "c"], 1), t(["b", "d"], 2)])).toThrow("quick match cut: two ties straddle one cut");
     expect(openTie([]), "the empty list has no open tie").toBeNull();
   });
@@ -308,9 +343,14 @@ describe("cutTiebreakers: the sport's default with no seed step, ending in the l
     expect(sent).toEqual(["points", "seed", "lots"]);
   });
 
-  it("every offered variant: the default ends in the lot, only tennis and ice hockey list the seed, and the cut's order is the default less every seed step, an order the engine accepts", () => {
+  it("every offered variant: the default ends in the lot, every variant of a sport shares one list, only tennis and ice hockey list the seed, and the cut's order is the default less every seed step, an order the engine accepts", () => {
     expect(OFFERED_SPORTS, "the offer's sports (deduped)").toHaveLength(9);
+    // The count this sweep owes, from the engine: every variant the offered sports DECLARE. The probe offers each of
+    // them today, so a variant the engine adds, or one the probe stops offering, moves this.
+    const declaredVariants = OFFERED_SPORTS.reduce((n, k) => n + Object.keys(moduleOf(k).variants).length, 0);
+    expect(OFFERED, "every declared variant of the offered sports is offered").toHaveLength(declaredVariants);
     const withSeed = new Set<string>();
+    const listsBySport = new Map<string, Set<string>>();
     let checked = 0;
     for (const { sport_key, variant_key } of OFFERED) {
       const mod = moduleOf(sport_key);
@@ -318,14 +358,18 @@ describe("cutTiebreakers: the sport's default with no seed step, ending in the l
       const declared = leagueDefault(mod, cfg);
       expect(declared.at(-1), `${sport_key}/${variant_key}: the default list ends in the lot`).toBe("lots");
       if (declared.includes("seed")) withSeed.add(sport_key);
+      listsBySport.set(sport_key, (listsBySport.get(sport_key) ?? new Set()).add(declared.join(",")));
       const cut = cutTiebreakers(declared);
       // The ruling's own words: every default step, in its order, except `seed`.
       expect(cut, `${sport_key}/${variant_key}`).toEqual(declared.filter((k) => k !== "seed"));
       expect(validateCascade(cut, { module: mod, cfg, stageKind: "league", crossGroup: false }), `${sport_key}/${variant_key}`).toEqual([]);
       checked++;
     }
-    expect(checked).toBe(OFFERED.length);
+    expect(checked).toBe(declaredVariants);
     expect(checked).toBeGreaterThan(0);
+    // One list per sport, whatever the variant: why the ranking sweep below may play one variant of each sport.
+    expect([...listsBySport].filter(([, lists]) => lists.size !== 1).map(([k]) => k), "sports whose variants differ").toEqual([]);
+    expect(listsBySport.size).toBe(OFFERED_SPORTS.length);
     // P8: the engine declares `seed` before `lots` for exactly these two. A change in the engine moves this pin.
     expect([...withSeed].sort()).toEqual(["icehockey", "tennis"]);
   });
@@ -366,8 +410,10 @@ function ranked(entrants: string[], results: FixtureResult[], cascade: readonly 
   return rows.map(cutRowOf);
 }
 
-describe("Once and Twice through the engine's ranking, every offered sport", () => {
-  it("Once, a circle (each beats the next): 3 level, pick 2 of 3; Twice, a 1-1 split behind a leader: 2 level for 2nd, pick 1 of 2. Only a default with a seed step hides either", () => {
+// One variant per sport: the declaration sweep above proves every variant of a sport shares its tiebreak list, and the
+// list is all the ranking reads of the cfg here.
+describe("Once and Twice through the engine's ranking, every offered sport (one variant each)", () => {
+  it("Once, a circle (each beats the next): 3 level, pick 2 of 3; Twice, a 1-1 split behind a leader: 2 level for 2nd, pick 1 of 2; both by lot. Only a default with a seed step hides either. Every match Not played: all level, no lot", () => {
     let sports = 0;
     const hiders: string[] = [];
     for (const sport_key of OFFERED_SPORTS) {
@@ -386,7 +432,7 @@ describe("Once and Twice through the engine's ranking, every offered sport", () 
       const onceRows = ranked(sides, once, cut);
       const onceOrder = [...onceRows].sort((a, b) => a.rank - b.rank).map((r) => r.entrantId);
       expect(cutTies(onceRows, 2), `${sport_key} Once`).toEqual([
-        { entrantIds: ["ann", "bo", "kim"], ranked: onceOrder, place: 1, seats: 2, straddles: true },
+        { entrantIds: ["ann", "bo", "kim"], ranked: onceOrder, place: 1, seats: 2, straddles: true, byLot: true },
       ]);
       expect(tossThrough(openTie(cutTies(onceRows, 2))!)).toEqual(onceOrder.slice(0, 2));
 
@@ -400,7 +446,14 @@ describe("Once and Twice through the engine's ranking, every offered sport", () 
       const twiceOrder = [...twiceRows].sort((a, b) => a.rank - b.rank).map((r) => r.entrantId);
       expect(twiceOrder[0], `${sport_key} Twice: four wins of four lead`).toBe("max");
       expect(cutTies(twiceRows, 2), `${sport_key} Twice`).toEqual([
-        { entrantIds: ["ann", "bo"], ranked: twiceOrder.slice(1), place: 2, seats: 1, straddles: true },
+        { entrantIds: ["ann", "bo"], ranked: twiceOrder.slice(1), place: 2, seats: 1, straddles: true, byLot: true },
+      ]);
+
+      // Every match Not played: the engine draws no lot on a table with no counted match (its anti-goal 3) and leaves
+      // the class in seed order, the typing order. The cut still asks (nobody is silently through), but not by lot.
+      const empty = ranked(sides, [], cut);
+      expect(cutTies(empty, 2), `${sport_key} nothing played`).toEqual([
+        { entrantIds: ["ann", "bo", "kim"], ranked: sides, place: 1, seats: 2, straddles: true, byLot: false },
       ]);
 
       // The witness: under the declared default, a seed step separates the level sides by typing order and the cut
@@ -496,7 +549,7 @@ describe.skipIf(!HAS_DB)("the stored lot on a real league (plan T2 Step 2)", () 
 
     // The seam: the stored rows, read by cutRowOf, give the guests' question.
     const ties = cutTies(done.map(cutRowOf), 2);
-    expect(ties).toEqual([{ entrantIds: ids, ranked: liveOrder, place: 1, seats: 2, straddles: true }]);
+    expect(ties).toEqual([{ entrantIds: ids, ranked: liveOrder, place: 1, seats: 2, straddles: true, byLot: true }]);
     expect(tossThrough(ties[0]!)).toEqual(liveOrder.slice(0, 2));
   }, 60_000);
 });

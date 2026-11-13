@@ -39,6 +39,11 @@ export interface CutTie {
   seats: number;
   /** Some members go through and some do not (case 1, ask). False: every member goes through (case 2, the lot). */
   straddles: boolean;
+  /** Every member was ordered by the lot (`tieKey === "lots"`), so `ranked` is a drawn order a toss may reveal and a
+   *  view may label "decided by lot". False for a residual class the engine ordered by SEED: a table with no counted
+   *  match draws no lot (the engine's anti-goal 3) and falls back to seed then id, the typing order. That order is no
+   *  coin: offer no Toss on it and never call it "by lot". */
+  byLot: boolean;
 }
 
 const TWO_STRADDLE = "quick match cut: two ties straddle one cut";
@@ -62,8 +67,9 @@ export function cutRowOf(row: StandingsRow): CutRow {
  * (case 2), `seats === 0` is left out. The input's order does not matter and it is never written.
  *
  * Refused, as faults (the engine never stores such a table): a member named with no row; members that disagree on
- * their class (each member must be `tieUnbroken` and name exactly the others); a level row level with nobody; and two
- * straddling classes (one cut line crosses at most one class of contiguous ranks).
+ * their class (each member must be `tieUnbroken` and name exactly the others); a level row level with nobody; a class
+ * whose ranks are not consecutive; and two straddling classes (one cut line crosses at most one class of consecutive
+ * ranks, so only rows that share a rank can reach this last one).
  */
 export function cutTies(rows: readonly CutRow[], qualifiers: 2 | 4): CutTie[] {
   const byId = new Map(rows.map((r) => [r.entrantId, r] as const));
@@ -86,15 +92,19 @@ export function cutTies(rows: readonly CutRow[], qualifiers: 2 | 4): CutTie[] {
       }
     }
     for (const id of ids) seen.add(id);
+    const ranked = [...members].sort((a, b) => a.rank - b.rank);
+    if (ranked.at(-1)!.rank - ranked[0]!.rank !== ranked.length - 1) {
+      throw new Error(`quick match cut: the tie ${key} does not hold consecutive ranks`);
+    }
     const seats = members.filter((m) => m.rank <= qualifiers).length;
     if (seats === 0) continue;
-    const ranked = [...members].sort((a, b) => a.rank - b.rank);
     ties.push({
       entrantIds: ids,
       ranked: ranked.map((m) => m.entrantId),
       place: ranked[0]!.rank,
       seats,
       straddles: seats < ids.length,
+      byLot: members.every((m) => m.tieKey === "lots"),
     });
   }
   ties.sort((a, b) => a.place - b.place);
@@ -110,7 +120,8 @@ export function openTie(ties: readonly CutTie[]): CutTie | null {
 }
 
 /** "Toss a coin" (D5, §11): the stored lot IS the coin, so the toss sends through the class's first `seats` in the live
- *  table's order. No second draw: a reload or another phone shows the same result. */
+ *  table's order. No second draw: a reload or another phone shows the same result. A coin only when `tie.byLot`: on a
+ *  class the engine left in seed order this is the typing order, and the caller must not offer it as a toss. */
 export function tossThrough(tie: CutTie): string[] {
   return tie.ranked.slice(0, tie.seats);
 }
