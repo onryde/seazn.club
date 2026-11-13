@@ -394,6 +394,22 @@ describe.skipIf(!HAS_DB)("groupById — token gate", () => {
     expect(view.entries[0]!.players.map((p) => p.full_name)).toEqual(["Sam Player"]);
   });
 
+  // Registration redesign B4 T15: the status page says "Confirmation sent to {email}." The address is the cart's own, read from the
+  // group row by the real builder, never supplied by a page fixture. (The token-less `publicCartByRef` never carries it: below.)
+  it("carries the cart's contact email, the address its confirmation went to", async () => {
+    const { competition, division } = await stripeSettingsRig();
+    const contactEmail = `status-${randomUUID().slice(0, 8)}@test.local`;
+    const { registration, access_token } = await seedRegistration(
+      competition.id,
+      division.id,
+      { ...SETTINGS_BASE, fee_cents: 500, currency: "gbp", payment_method: "stripe" },
+      { refCode: freshRef(), contactEmail },
+    );
+
+    const view = await groupById(registration.group_id, access_token);
+    expect(view.contact_email).toBe(contactEmail);
+  });
+
   it("a malformed id string 404s cleanly rather than throwing a raw DB syntax error", async () => {
     await expect(groupById("not-a-uuid", "regtok_" + randomUUID())).rejects.toMatchObject({
       status: 404,

@@ -138,6 +138,9 @@ export interface GroupStatusView {
    *  param, and a bare JSX `{view.ref_code}`) already tolerate null. */
   ref_code: string | null;
   contact_name: string;
+  /** Registration redesign B4 T15: the address the cart's confirmation mail went to (queued at submit), for the page's "Confirmation
+   *  sent to {email}." Token-gated like every field here; the token-less `PublicCartView` never carries it. */
+  contact_email: string;
   currency: string;
   amount_cents: number;
   payment_method: "offline" | "stripe" | null;
@@ -429,6 +432,7 @@ async function buildGroupStatusView(
     // is genuinely null).
     ref_code: group.ref_code,
     contact_name: group.contact_name,
+    contact_email: group.contact_email,
     currency: group.currency,
     amount_cents: group.amount_cents,
     payment_method: group.payment_method,
