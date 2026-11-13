@@ -4,8 +4,11 @@
 //
 // Sign-off 2026-11-12 (controller, PO rec): a quick match's sides are name-only entrants, with no members, so nothing on
 // the pad could name them and every side word read Home/Away while the card above the pad said "Red Bibs" and "Blue
-// Bibs". A side with NO members is now called by its name in place of the side word. A side with a roster keeps the
-// word: an organiser's singles entrant (one member), a pair, a rostered team — their pads are unchanged.
+// Bibs". A side with NO members is now called by its name in place of the side word.
+//
+// Decided per FIXTURE (review m1, controller ruling 2026-11-13): when either side is called by its name, BOTH are, so a
+// fixture between a rostered team and a name-only one never reads "Goal / Home" beside "Goal / Riverside FC". A fixture
+// whose two sides both have a roster (an organiser's singles entrants, pairs, rostered teams) keeps the side words.
 //
 // One seam for every skin rather than ~90 call sites: `ScorePad` (registry.tsx) builds the words from the two
 // `SideInfo`s and wraps BOTH translators with them — the one the skin factory is built with and the chassis's own
@@ -21,19 +24,23 @@ export const SIDE_WORD_KEY: Readonly<Record<Side, string>> = {
   away: "scorepad.attribution.away",
 };
 
-/** The name a side is called by in place of its side word: only a side with no members and a non-blank name has one. */
+/** The name a side is called by in place of its side word. Only when at least one side has no members and a non-blank
+ *  name; then every side with a non-blank name has one. */
 export type SideWords = Readonly<Partial<Record<Side, string>>>;
 
 export function sideWordsFrom(
   sides: Readonly<Record<Side, { readonly members: readonly unknown[] }>>,
   entrantNames: PadHostView["entrantNames"],
 ): SideWords {
-  const words: Partial<Record<Side, string>> = {};
+  const names: Partial<Record<Side, string>> = {};
+  let nameOnly = false;
   for (const side of ["home", "away"] as const) {
     const name = entrantNames[side]?.trim();
-    if (sides[side].members.length === 0 && name) words[side] = name;
+    if (!name) continue;
+    names[side] = name;
+    if (sides[side].members.length === 0) nameOnly = true;
   }
-  return words;
+  return nameOnly ? names : {};
 }
 
 /** `t`, except that a side's word key resolves to that side's name where `words` has one. Any other key, and a side

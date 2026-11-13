@@ -10,6 +10,11 @@
 //
 // Swept over every sport a quick match OFFERS (lib/quick-match-offer.generated.json, the product's own list), each at the
 // engine's default cfg, after `core.start`. The control is the same sweep with rostered sides.
+//
+// Review m1 (controller ruling 2026-11-13): the words are decided per FIXTURE. When either side is called by its name,
+// BOTH are, so an organiser's fixture between a rostered team and a name-only one never reads "Goal / Home" beside
+// "Goal / Riverside FC". Driven over the same sweep in both orientations; and every engine sport a quick match does NOT
+// offer (cricket's squad labels among them) is rendered with rostered sides to show its pad keeps the side words.
 import { describe, expect, it } from "vitest";
 import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -52,7 +57,17 @@ function side(s: Side, rostered: boolean): SideInfo {
   };
 }
 
-function render(sportKey: string, rostered: boolean): string {
+/** The engine's default cfg; a sport with no defaults (generic) at the first variant the engine declares for it. */
+function cfgOf(mod: (typeof builtinModules)[number]): unknown {
+  const defaults = mod.configSchema.safeParse({});
+  if (defaults.success) return defaults.data;
+  const first = Object.values(mod.variants ?? {})[0];
+  if (first === undefined) throw new Error(`${mod.key} has no default cfg and declares no variant`);
+  return mod.configSchema.parse(first);
+}
+
+function render(sportKey: string, rostered: boolean | Record<Side, boolean>): string {
+  const r = typeof rostered === "boolean" ? { home: rostered, away: rostered } : rostered;
   const mod = builtinModules.find((m) => m.key === sportKey);
   if (!mod) throw new Error(`quick match offers ${sportKey}, which the engine does not register`);
   const started = [makeEnvelope(1, { type: "core.start", payload: {} } as ModuleEvent)];
@@ -64,9 +79,9 @@ function render(sportKey: string, rostered: boolean): string {
         fixtureId: `fx-${sportKey}`,
         sportKey,
         moduleVersion: mod.version,
-        resolvedConfig: mod.configSchema.parse({}),
-        home: side("home", rostered),
-        away: side("away", rostered),
+        resolvedConfig: cfgOf(mod),
+        home: side("home", r.home),
+        away: side("away", r.away),
         initialEvents: started,
         auth: { kind: "device_link", token: "dl_test" },
         identity: { recordedBy: null, deviceLinkId: "dl-1" },
@@ -100,7 +115,7 @@ describe("a name-only side is called by its name on the pad, in every sport a qu
     expect(checked).toBe(QM_SPORTS.length * 2);
   });
 
-  it("the control: rostered sides keep the side words, in every one of those sports (an organiser's pad is unchanged)", () => {
+  it("the control: rostered sides keep the side words, in every one of those sports", () => {
     let checked = 0;
     const faults: string[] = [];
     for (const sportKey of QM_SPORTS) {
@@ -117,15 +132,69 @@ describe("a name-only side is called by its name on the pad, in every sport a qu
   });
 });
 
+describe("one side rostered, the other name-only: BOTH sides are called by name (review m1, per fixture)", () => {
+  it("in every sport a quick match offers, each way round: no element reads Home or Away, and both names are on the pad", () => {
+    expect(QM_SPORTS.length, "anti-vacuity: the offer lists sports").toBeGreaterThan(0);
+    let checked = 0;
+    const faults: string[] = [];
+    for (const sportKey of QM_SPORTS) {
+      for (const rostered of [{ home: true, away: false }, { home: false, away: true }]) {
+        const texts = wholeTexts(render(sportKey, rostered));
+        const which = `${sportKey} (${rostered.home ? "home" : "away"} rostered)`;
+        for (const s of SIDES) {
+          if (texts.includes(WORD[s])) faults.push(`${which}: an element reads "${WORD[s]}"`);
+          if (!texts.some((x) => x === NAMES[s] || x.includes(NAMES[s]))) faults.push(`${which}: "${NAMES[s]}" is nowhere`);
+          checked++;
+        }
+      }
+    }
+    expect(faults.join("\n")).toBe("");
+    expect(checked).toBe(QM_SPORTS.length * 2 * 2);
+  });
+});
+
+describe("an organiser's sport a quick match does not offer, both sides rostered: the pad keeps its side words", () => {
+  /** Every engine sport outside the offer: the product's list subtracted from the engine's own registry. */
+  const OTHER_SPORTS = builtinModules.map((m) => m.key).filter((k) => !QM_SPORTS.includes(k));
+
+  it("no entrant name stands in a side word's place, and where the pad says a side word it is still Home/Away", () => {
+    expect(OTHER_SPORTS, "anti-vacuity: the engine registers sports a quick match does not offer").toContain("cricket");
+    let checked = 0;
+    let saysWords = 0;
+    const faults: string[] = [];
+    for (const sportKey of OTHER_SPORTS) {
+      const texts = wholeTexts(render(sportKey, true));
+      for (const s of SIDES) {
+        if (texts.includes(NAMES[s])) faults.push(`${sportKey}: "${NAMES[s]}" stands as a whole label`);
+        if (texts.includes(WORD[s])) saysWords++;
+        checked++;
+      }
+    }
+    expect(faults.join("\n")).toBe("");
+    expect(checked).toBe(OTHER_SPORTS.length * 2);
+    // Not vacuous: at least one of these pads says the side words, so a name replacing them would be seen.
+    expect(saysWords).toBeGreaterThan(0);
+  });
+});
+
 describe("sideWordsFrom / withSideWords — the empty cases", () => {
   const none = { members: [] as unknown[] };
   const one = { members: [{}] };
   const echo = (key: string, vars?: Record<string, string | number>) => (vars ? `${key}${JSON.stringify(vars)}` : key);
 
-  it("a blank or missing name gives no word (the side keeps Home/Away); a rostered side never has one", () => {
+  it("a blank or missing name gives no word (the side keeps Home/Away); two rostered sides never have one", () => {
     expect(sideWordsFrom({ home: none, away: none }, { home: "   ", away: "" })).toEqual({});
     expect(sideWordsFrom({ home: none, away: none }, {})).toEqual({});
-    expect(sideWordsFrom({ home: one, away: none }, { home: "Ada", away: " Blue Bibs " })).toEqual({ away: "Blue Bibs" });
+    expect(sideWordsFrom({ home: one, away: one }, { home: "Ada", away: "Bo" })).toEqual({});
+  });
+
+  it("per fixture (review m1): one name-only side names BOTH sides, a blank name still keeps its word", () => {
+    expect(sideWordsFrom({ home: one, away: none }, { home: "Ada", away: " Blue Bibs " })).toEqual({ home: "Ada", away: "Blue Bibs" });
+    expect(sideWordsFrom({ home: none, away: one }, { home: "Red Bibs", away: "Bo" })).toEqual({ home: "Red Bibs", away: "Bo" });
+    // The rostered side has no name to give: it keeps its word; the name-only side still has its name.
+    expect(sideWordsFrom({ home: one, away: none }, { home: "  ", away: "Blue Bibs" })).toEqual({ away: "Blue Bibs" });
+    // A name-only side with a blank name decides nothing: the rostered pair keeps the words.
+    expect(sideWordsFrom({ home: one, away: none }, { home: "Ada", away: "" })).toEqual({});
   });
 
   it("no words hands back the same translator; with words, only the two side-word keys change", () => {
