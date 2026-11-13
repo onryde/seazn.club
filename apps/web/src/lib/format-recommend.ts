@@ -8,6 +8,7 @@ import {
   funnelFormatMin,
   funnelFormatPerEntrant,
   funnelFormatRounds,
+  funnelFormatSlots,
   type FunnelFormat,
 } from "./funnel-formats";
 
@@ -15,7 +16,8 @@ export interface RecommendInput {
   entrants: number;
   courts: number;
   hours: number;
-  /** Minutes a match blocks a court; 30 is a sane cross-sport default. */
+  /** Minutes a match blocks a court. `recommendFormats` (the console's strip) falls back to 30 as a cross-sport default;
+   *  the funnel's `rankFormats` requires the sport's own (`FunnelRankInput`). */
   matchMinutes?: number;
 }
 
@@ -123,9 +125,9 @@ export function recommendFormats(input: RecommendInput): Recommendation[] {
 // and nothing is dropped or reordered: every card in its fixed place, each telling whether it can be built at all
 // (`available`) and whether it fits the day (`fits`). Best fit is a separate, honest question (`bestFitSlug`).
 //
-// The day is modelled round by round, as it is played: a round cannot start before the one it follows, so each round
-// takes ⌈its matches / courts⌉ slots of one match length, and the match length is the SPORT's (required, never a
-// cross-sport default: football's 90 minutes and table tennis's 20 are not the same day).
+// The day is the slots the engine's own placer packs the format into (`funnelFormatSlots`: a round robin's rounds side by
+// side, a bracket's matches as soon as their feeders are in, a Swiss round by round), at the SPORT's match length
+// (required, never a cross-sport default: football's 90 minutes and table tennis's 20 are not the same day).
 // ---------------------------------------------------------------------------------------------------------------------
 
 /** `recommendFormats`' input with the match length required: the funnel passes its sport's (`funnelSportMatchMinutes`). */
@@ -137,7 +139,7 @@ export interface RankedFormat {
   estHours: number;
   /** The fewest matches any entrant is sure to play (`funnelFormatPerEntrant`). */
   perEntrant: number;
-  /** Built AND its rounds, one after another, inside the hours. */
+  /** Built AND its slots (`funnelFormatSlots`) inside the hours. */
   fits: boolean;
   /** The field meets the format's minimum (`funnelFormatMin`). */
   available: boolean;
@@ -154,12 +156,11 @@ export function rankFormats(input: FunnelRankInput): RankedFormat[] {
   if (!Number.isFinite(minutes) || minutes <= 0) return [];
 
   return [...FUNNEL_FORMATS, ...FUNNEL_MORE_FORMATS].map((slug) => {
-    const rounds = funnelFormatRounds(slug, n);
-    const slots = rounds.reduce((sum, m) => sum + Math.ceil(m / courts), 0);
+    const slots = funnelFormatSlots(slug, n, courts);
     const available = n >= funnelFormatMin(slug);
     return {
       slug,
-      matches: rounds.reduce((sum, m) => sum + m, 0),
+      matches: funnelFormatRounds(slug, n).reduce((sum, m) => sum + m, 0),
       estHours: Math.round(((slots * minutes) / 60) * 10) / 10,
       perEntrant: funnelFormatPerEntrant(slug, n),
       fits: available && slots * minutes <= hours * 60,

@@ -3,6 +3,7 @@
 // built event cannot disagree (review focus 1). Every expected value here is read from a source the layer does not own:
 // - the engine's own draw (`previewStageDraw`, the same `generate()` the real draw runs) and its Swiss pairer (`pairRound`),
 //   simulated round by round with the higher seed winning every match;
+// - the engine's own placer (`slotFixtures`, which Auto-schedule seeds from), packing those real draws onto the courts;
 // - the house's declarations (FORMAT_BOUNDS, swiss-rounds.ts's band table and rulebook-W3 bounds, `stageGraphSizeGate`,
 //   `templatesForSport`, match-length.ts's per-sport lengths, `pickVariant`);
 // - the owner-approved mock swr13a01 (A1: 16 players, 2 courts, 4 hours; A2: 12 players, 4 courts, 6 hours);
@@ -11,7 +12,17 @@
 // Every sweep counts what it checked and fails on zero.
 import { describe, expect, it } from "vitest";
 import { builtinModules } from "@seazn/engine/sports";
-import { pairKey, pairRound, type Colour, type SwissStanding } from "@seazn/engine/scheduling";
+import {
+  pairKey,
+  pairRound,
+  slotFixtures,
+  validateAssignments,
+  type Assignment,
+  type Colour,
+  type OrderDependency,
+  type SchedulableFixture,
+  type SwissStanding,
+} from "@seazn/engine/scheduling";
 import { previewStageDraw, type PreviewDrawFixture } from "@/server/usecases/stages/preview";
 import { buildTemplateStages, detectTemplate, templatesForSport, type StageDraft } from "@/lib/format-templates";
 import { withinFormatBounds } from "@/lib/format-bounds";
@@ -25,6 +36,7 @@ import {
   funnelFormatKnobs,
   funnelFormatMin,
   funnelFormatRounds,
+  funnelFormatSlots,
   funnelFormatStages,
   isFunnelFormat,
   type FunnelFormat,
@@ -64,12 +76,13 @@ interface Played {
  *  with anyone in it (a bye's holder walks through), or by the loser of a fixture that was played — so a bye's empty seat
  *  is not a match, and neither is a losers'-bracket board fed by a bye's missing loser. Read off the engine's own feed
  *  graph, never a formula. A feed from a fixture not yet played is an assumption broken, refused by name. */
-function playDraw(draw: readonly PreviewDrawFixture[]): Played {
+function playDraw(draw: readonly PreviewDrawFixture[]): Played & { played: ReadonlySet<string> } {
   const at = (round: number, seq: number) => `${round}:${seq}`;
   const result = new Map<string, { winner: number | null; loser: number | null }>();
   const perRound = new Map<number, number>();
   const games = new Map<number, number>();
   const seated = new Set<number>();
+  const played = new Set<string>();
   const ordered = [...draw].sort((a, b) => a.roundNo - b.roundNo || a.seqInRound - b.seqInRound);
   const seat = (seed: number | null, from: PreviewDrawFixture["homeFrom"]): number | null => {
     if (seed !== null) return seed;
@@ -86,6 +99,7 @@ function playDraw(draw: readonly PreviewDrawFixture[]): Played {
     perRound.set(f.roundNo, perRound.get(f.roundNo) ?? 0);
     if (home !== null && away !== null) {
       perRound.set(f.roundNo, perRound.get(f.roundNo)! + 1);
+      played.add(at(f.roundNo, f.seqInRound));
       games.set(home, (games.get(home) ?? 0) + 1);
       games.set(away, (games.get(away) ?? 0) + 1);
       result.set(at(f.roundNo, f.seqInRound), { winner: Math.min(home, away), loser: Math.max(home, away) });
@@ -94,12 +108,12 @@ function playDraw(draw: readonly PreviewDrawFixture[]): Played {
     }
   }
   const rounds = [...perRound.entries()].sort((a, b) => a[0] - b[0]).map(([, m]) => m);
-  return { rounds, games, seated };
+  return { rounds, games, seated, played };
 }
 
 /** The engine pairs a Swiss of `n` over `rounds` rounds (higher seed wins every board); null when a round is refused. With
  *  `chess`, the pairer works under the colour limits (white = home), as it does for the chess sport. */
-function playSwiss(n: number, rounds: number, chess: boolean): Played | null {
+function playSwiss(n: number, rounds: number, chess: boolean): (Played & { boards: [number, number][][] }) | null {
   const ids = Array.from({ length: n }, (_, i) => i + 1);
   const id = (seed: number) => `e${seed}`;
   const score = new Map(ids.map((s) => [id(s), 0]));
@@ -108,6 +122,7 @@ function playSwiss(n: number, rounds: number, chess: boolean): Played | null {
   const byes = new Set<string>();
   const games = new Map<number, number>(ids.map((s) => [s, 0]));
   const perRound: number[] = [];
+  const boards: [number, number][][] = [];
   for (let round = 1; round <= rounds; round++) {
     const standings: SwissStanding[] = ids
       .map(id)
@@ -128,8 +143,9 @@ function playSwiss(n: number, rounds: number, chess: boolean): Played | null {
       score.set(pairing.bye, score.get(pairing.bye)! + 1);
     }
     perRound.push(pairing.pairings.length);
+    boards.push(pairing.pairings.map((p) => [Number(p.home.slice(1)), Number(p.away.slice(1))]));
   }
-  return { rounds: perRound, games, seated: new Set(ids) };
+  return { rounds: perRound, games, seated: new Set(ids), boards };
 }
 
 /** A fed stage's field and how many of each pool it takes, read off its own take rules and its source's pools. The
@@ -226,9 +242,219 @@ const engine = (f: FunnelFormat, n: number): EngineDay => {
   return ENGINE.get(key)!;
 };
 
-/** The day the engine's rounds take, one after another: ⌈matches / courts⌉ slots of one match length per round. */
-const engineMinutes = (rounds: readonly number[], courts: number, minutes: number) =>
-  rounds.reduce((sum, m) => sum + Math.ceil(m / courts), 0) * minutes;
+/** One match-length slot is one minute on the placer's clock here, so its end time reads in slots. */
+const SLOT_MS = 60_000;
+
+/** The engine's own placer (`slotFixtures`) over a stage's boards on `courts` courts from slot `from`: a match blocks one
+ *  court for one slot, nobody plays twice at once (each seed is a person), no rest or gap. Returns the slot the last
+ *  board ends. A board the placer cannot place is an assumption broken, refused by name. */
+function place(fixtures: SchedulableFixture[], dependencies: OrderDependency[], courts: number, from: number): number {
+  const out = slotFixtures({
+    fixtures,
+    dependencies,
+    config: {
+      startAt: from * SLOT_MS,
+      matchMinutes: 1,
+      gapMinutes: 0,
+      courts: Array.from({ length: courts }, (_, i) => `c${i + 1}`),
+      perEntrantMinRest: 0,
+    },
+  });
+  if (out.assignments.length !== fixtures.length) {
+    throw new Error(`the placer left ${fixtures.length - out.assignments.length} of ${fixtures.length} boards: ${out.conflicts[0]?.reason}`);
+  }
+  return Math.max(from * SLOT_MS, ...out.assignments.map((a) => a.endAt)) / SLOT_MS;
+}
+
+const pad = (i: number) => String(i).padStart(4, "0");
+const seedFixture = (id: string, home: number | null, away: number | null): SchedulableFixture => ({
+  id,
+  ...(home !== null ? { home: `e${home}` } : {}),
+  ...(away !== null ? { away: `e${away}` } : {}),
+  people: [home, away].filter((s): s is number => s !== null).map((s) => `p${s}`),
+  divisionId: "d",
+  stageId: "s",
+});
+
+/** One stage's real draw through the placer, returning the slot its last board ends: every board that is played
+ *  (`playDraw`'s rule), a round robin's with its round and pool and no barrier (the engine's start floor: a round robin's
+ *  pairings are fixed in advance, so its rounds may run side by side), a bracket's with its feeds as dependencies (a bye
+ *  or walkover is not a board, so it passes its own feeders through).
+ *
+ *  The product's fixture ids are random uuids, so the order the boards reach the placer is any order Auto-schedule can
+ *  meet. Two are tried and the better kept: the draw's own, and the boards with the most still waiting on them first (a
+ *  bracket's farthest from its final, a round robin's bigger pools within each round) — the second only when it differs,
+ *  since a placement costs time quadratic in its boards. */
+function placeStage(draw: readonly PreviewDrawFixture[], courts: number, from: number): { end: number; listed: boolean } {
+  const at = (round: number, seq: number) => `${round}:${seq}`;
+  const byAt = new Map(draw.map((f) => [at(f.roundNo, f.seqInRound), f]));
+  const { played } = playDraw(draw);
+  const roundRobin = draw.every((f) => f.role === null);
+  const poolOf = new Map<number, number[]>();
+  if (roundRobin) for (const pool of poolsOf(draw)) for (const seed of pool) poolOf.set(seed, pool);
+  const feedersOf = (f: PreviewDrawFixture): string[] =>
+    [f.homeFrom, f.awayFrom].flatMap((feed) => {
+      if (feed === null) return [];
+      const source = byAt.get(at(feed.round, feed.seq))!;
+      const key = at(source.roundNo, source.seqInRound);
+      return played.has(key) ? [key] : feedersOf(source);
+    });
+  const boards = draw.filter((f) => played.has(at(f.roundNo, f.seqInRound)));
+  const feeds = new Map(boards.map((f) => [at(f.roundNo, f.seqInRound), roundRobin ? [] : feedersOf(f)]));
+  const feedsInto = new Map<string, string[]>();
+  for (const [to, sources] of feeds) for (const s of sources) feedsInto.set(s, [...(feedsInto.get(s) ?? []), to]);
+  const toFinal = new Map<string, number>();
+  const stepsToFinal = (key: string): number => {
+    if (!toFinal.has(key)) toFinal.set(key, Math.max(0, ...(feedsInto.get(key) ?? []).map((k) => 1 + stepsToFinal(k))));
+    return toFinal.get(key)!;
+  };
+  const critical = (f: PreviewDrawFixture) =>
+    roundRobin ? -poolOf.get(f.homeSeed!)!.length : -stepsToFinal(at(f.roundNo, f.seqInRound));
+  const drawOrder = (a: PreviewDrawFixture, b: PreviewDrawFixture) => a.roundNo - b.roundNo || a.seqInRound - b.seqInRound;
+  const orders = [[...boards].sort(drawOrder), [...boards].sort((a, b) => critical(a) - critical(b) || drawOrder(a, b))];
+  if (orders[1]!.every((f, i) => f === orders[0]![i])) orders.pop();
+  const placed = Math.min(
+    ...orders.map((handed) => {
+      const id = new Map(handed.map((f, i) => [at(f.roundNo, f.seqInRound), `b${pad(i)}`]));
+      const fixtures = handed.map((f) => ({
+        ...seedFixture(id.get(at(f.roundNo, f.seqInRound))!, f.homeSeed, f.awaySeed),
+        ...(roundRobin ? { roundNo: f.roundNo, poolId: `pool${Math.min(...poolOf.get(f.homeSeed!)!)}` } : {}),
+      }));
+      const dependencies = [...feeds].flatMap(([to, sources]) =>
+        sources.map((s) => ({ fixtureId: id.get(to)!, dependsOn: id.get(s)!, direct: true })),
+      );
+      return place(fixtures, dependencies, courts, from);
+    }),
+  );
+  if (!roundRobin) return { end: placed, listed: false };
+  const listed = listRoundRobin(boards, poolOf, courts, from);
+  if (listed.end >= placed) return { end: placed, listed: false };
+  // Only a shorter list schedule decides the answer, so only one is put to the verifier (a quadratic check).
+  const conflicts = validateAssignments(listed.assignments, VERIFY);
+  if (conflicts.length > 0) throw new Error(`listRoundRobin built an illegal board: ${JSON.stringify(conflicts[0])}`);
+  return { end: listed.end, listed: true };
+}
+
+/** The engine's verifier as the oracle runs it: no rest, no gap, one-minute matches, and a zone — without one it skips
+ *  the round-order rows, which are half of what it is here for. */
+const VERIFY = { perEntrantMinRest: 0, gapMinutes: 0, matchMinutes: 1, tz: "UTC" } as const;
+/** Per format, the days `listRoundRobin` fitted into fewer slots than the placer did (the sweep reports it: zero would make
+ *  it dead weight). */
+const LISTED_SHORTER = new Map<FunnelFormat, number>();
+
+/** A round-robin board built slot by slot, the pools with the most rounds still to play first, each pool playing its
+ *  rounds in order — accepted (by `placeStage`) only if the engine's own verifier (`validateAssignments`: courts, people,
+ *  round order) finds nothing wrong with it. It exists because the placer hands boards over round by round (it sorts on `roundNo`
+ *  first): in a stage of uneven pools with the courts nearly full, every pool's round one fills the first slots, and the
+ *  bigger pool's last rounds trail alone at the end, a slot or two later than the rules allow. Returns the board and the
+ *  slot its last board ends. */
+function listRoundRobin(
+  boards: readonly PreviewDrawFixture[],
+  poolOf: ReadonlyMap<number, number[]>,
+  courts: number,
+  from: number,
+): { end: number; assignments: Assignment[] } {
+  const poolKey = (f: PreviewDrawFixture) => Math.min(...poolOf.get(f.homeSeed!)!);
+  const pools = new Map<number, PreviewDrawFixture[][]>();
+  for (const f of [...boards].sort((a, b) => a.roundNo - b.roundNo || a.seqInRound - b.seqInRound)) {
+    const rounds = pools.get(poolKey(f)) ?? pools.set(poolKey(f), []).get(poolKey(f))!;
+    if (rounds.at(-1)?.[0]?.roundNo !== f.roundNo) rounds.push([]);
+    rounds.at(-1)!.push(f);
+  }
+  const assignments: Assignment[] = [];
+  let left = boards.length;
+  let slot = from;
+  for (; left > 0; slot++) {
+    if (slot > from + boards.length) throw new Error("listRoundRobin: a slot placed nothing");
+    const busy = new Set<number>();
+    let court = 0;
+    const order = [...pools].sort(([ka, a], [kb, b]) => b.length - a.length || poolOf.get(kb)!.length - poolOf.get(ka)!.length || ka - kb);
+    for (const [key, rounds] of order) {
+      // Round order: a board of the next round may start in this slot only once every board of this one has.
+      while (court < courts && rounds.length > 0) {
+        const next = rounds[0]!.find((f) => !busy.has(f.homeSeed!) && !busy.has(f.awaySeed!));
+        if (next === undefined) break;
+        rounds[0]!.splice(rounds[0]!.indexOf(next), 1);
+        if (rounds[0]!.length === 0) rounds.shift();
+        busy.add(next.homeSeed!);
+        busy.add(next.awaySeed!);
+        assignments.push({
+          fixtureId: `${next.roundNo}:${next.seqInRound}`,
+          court: `c${++court}`,
+          startAt: slot * SLOT_MS,
+          endAt: (slot + 1) * SLOT_MS,
+          entrants: [`e${next.homeSeed}`, `e${next.awaySeed}`],
+          people: [`p${next.homeSeed}`, `p${next.awaySeed}`],
+          poolId: `pool${key}`,
+          divisionId: "d",
+          stageId: "s",
+          roundNo: next.roundNo,
+          movable: true,
+        });
+        left--;
+      }
+    }
+  }
+  return { end: slot, assignments };
+}
+
+const SLOTS = new Map<string, number>();
+/** The fewest slots the engine's placer packs format `f` at `n` into on `courts` courts (`placeStage`). A
+ *  Swiss carries the engine's END barrier (`roundBarrier: "end"`: round r + 1 is paired from round r's results), on the
+ *  engine's own pairings. Groups + knockout's bracket starts when the group stage ends: it is seeded from the final
+ *  tables (controller ruling m-R1, the stage boundary). */
+function engineSlots(f: FunnelFormat, n: number, courts: number): number {
+  const key = `${f}:${n}:${courts}`;
+  if (SLOTS.has(key)) return SLOTS.get(key)!;
+  const drawn = drawnFor(f, n);
+  let slots: number;
+  if ("swiss" in drawn) slots = place(drawn.swiss, [], courts, 0);
+  else {
+    const first = placeStage(drawn.first, courts, 0);
+    const second = drawn.fed === null ? null : placeStage(drawn.fed, courts, first.end);
+    slots = (second ?? first).end;
+    if (first.listed || second?.listed) LISTED_SHORTER.set(f, (LISTED_SHORTER.get(f) ?? 0) + 1);
+  }
+  SLOTS.set(key, slots);
+  return slots;
+}
+
+/** Format `f`'s draws at `n`, made once for every court count: a Swiss's boards on the engine's own pairings, carrying
+ *  its END barrier; otherwise the root stage's draw and the fed bracket's. */
+type Drawn = { swiss: SchedulableFixture[] } | { first: PreviewDrawFixture[]; fed: PreviewDrawFixture[] | null };
+const DRAWN = new Map<string, Drawn>();
+function drawnFor(f: FunnelFormat, n: number): Drawn {
+  const key = `${f}:${n}`;
+  if (DRAWN.has(key)) return DRAWN.get(key)!;
+  const stages = buildTemplateStages(PINNED_TEMPLATE[f], funnelFormatKnobs(f, n));
+  const root = stages[0]!;
+  let drawn: Drawn;
+  if (root.kind === "swiss") {
+    const swiss = playSwiss(n, root.config.rounds as number, false);
+    if (swiss === null) throw new Error(`drawnFor: the engine refuses a Swiss of ${n}`);
+    drawn = {
+      swiss: swiss.boards.flatMap((round, r) =>
+        round.map(([home, away], i) => ({
+          ...seedFixture(`r${pad(r + 1)}-${pad(i)}`, home, away),
+          roundNo: r + 1,
+          roundBarrier: "end" as const,
+        })),
+      ),
+    };
+  } else {
+    const fed = stages[1];
+    drawn = { first: previewStageDraw(root, n), fed: fed === undefined ? null : previewStageDraw(fed, fedTake(fed, root).field) };
+  }
+  DRAWN.set(key, drawn);
+  return drawn;
+}
+
+/** The courts the placer sweeps: every count up to where the busiest draw saturates, then the wizard's top. */
+const COURTS = [1, 2, 3, 4, 5, 6, 8, 12, 16, 32] as const;
+/** The largest field the placer sweeps a format at: the preview's 64, but 24 for a League — one pool, so every size from
+ *  2 to 24 already crosses odd and even fields and courts past the 12 it can fill, while a placement is quadratic in its
+ *  boards (a 64-League is 2,016, seconds each). */
+const placerMax = (f: FunnelFormat) => (f === "league" ? 24 : PREVIEW_MAX);
 
 const rank = (n: number, courts: number, hours: number, matchMinutes = BADMINTON) =>
   rankFormats({ entrants: n, courts, hours, matchMinutes });
@@ -248,14 +474,14 @@ describe("the funnel's format layer", () => {
     expect(checked).toBe(255 * 4 * 8);
   });
 
-  it("fixed display order for every input in the wizard's range (n 2..256, courts 1..4, hours 1..8, every sport)", () => {
+  it("fixed display order across the wizard's range (n 2..256; courts 1..32 and hours 1..72 at steps; every sport)", () => {
     let checked = 0;
     const wrong: string[] = [];
     for (const s of FUNNEL_SPORTS) {
       const minutes = funnelSportMatchMinutes(s);
       for (let n = 2; n <= 256; n++) {
-        for (let courts = 1; courts <= 4; courts++) {
-          for (let hours = 1; hours <= 8; hours++) {
+        for (const courts of [1, 2, 4, 8, 16, 32]) {
+          for (const hours of [1, 4, 8, 24, 72]) {
             const slugs = rank(n, courts, hours, minutes).map((r) => r.slug).join(",");
             if (slugs !== ALL.join(",")) wrong.push(`${s.key} n=${n} c=${courts} h=${hours}: ${slugs}`);
             checked++;
@@ -264,7 +490,7 @@ describe("the funnel's format layer", () => {
       }
     }
     expect(wrong.join("\n")).toBe("");
-    expect(checked).toBe(FUNNEL_SPORTS.length * 255 * 4 * 8);
+    expect(checked).toBe(FUNNEL_SPORTS.length * 255 * 6 * 5);
     expect(ALL).toEqual(["league", "groups-knockout", "knockout", "swiss", "double_elim"]);
   });
 
@@ -409,21 +635,79 @@ describe("the funnel's format layer", () => {
     for (const f of ALL) expect(checked.get(f), f).toBeGreaterThan(0);
   });
 
-  it("each card's time and Fits tag are the engine's rounds played one after another, at every sport's match length", () => {
+  // The placer is the product's (Auto-schedule seeds from it), the draws are the engine's: nothing here restates the
+  // layer's rule. Round robins and brackets pack — a round robin's rounds run side by side, a bracket's match waits only
+  // for its feeders — so each sweep also counts the days where packing beats playing round by round: the defect this
+  // replaces showed a 6-player League on 2 courts as 10 slots where the placer needs 8 (controller m-R1). One test per
+  // format, so each placement sweep has its own budget.
+  for (const f of ALL) {
+    it(`${f}: each card's slots are what the engine's own placer packs the real draw into (n min..${placerMax(f)}, courts 1..32)`, () => {
+      let checked = 0;
+      let packed = 0;
+      const wrong: string[] = [];
+      for (let n = funnelFormatMin(f); n <= placerMax(f); n++) {
+        for (const courts of COURTS) {
+          const placed = engineSlots(f, n, courts);
+          const slots = funnelFormatSlots(f, n, courts);
+          if (slots !== placed) wrong.push(`n=${n} c=${courts}: ${slots} slots vs the placer's ${placed}`);
+          const roundByRound = engine(f, n).rounds.reduce((sum, m) => sum + Math.ceil(m / courts), 0);
+          if (placed < roundByRound) packed++;
+          checked++;
+        }
+      }
+      expect(wrong.join("\n")).toBe("");
+      expect(checked).toBe((placerMax(f) + 1 - funnelFormatMin(f)) * COURTS.length);
+      // A Swiss round is paired from the last one's results, so the placer never packs one; every other format packs.
+      if (f === "swiss") expect(packed).toBe(0);
+      else expect(packed).toBeGreaterThan(0);
+      // The verified list schedule is what proves Groups + knockout's uneven-pool days (see `listRoundRobin`).
+      if (f === "groups-knockout") expect(LISTED_SHORTER.get(f) ?? 0).toBeGreaterThan(0);
+    });
+  }
+
+  it("the oracle's verifier is live: it refuses a player twice in a slot, a shared court and a round before the last", () => {
+    const board = (id: string, court: string, slot: number, a: number, b: number, roundNo: number): Assignment => ({
+      fixtureId: id,
+      court,
+      startAt: slot * SLOT_MS,
+      endAt: (slot + 1) * SLOT_MS,
+      entrants: [`e${a}`, `e${b}`],
+      people: [`p${a}`, `p${b}`],
+      poolId: "pool1",
+      divisionId: "d",
+      stageId: "s",
+      roundNo,
+      movable: true,
+    });
+    const legal = [board("a", "c1", 0, 1, 2, 1), board("b", "c2", 0, 3, 4, 1), board("c", "c1", 1, 1, 3, 2)];
+    expect(validateAssignments(legal, VERIFY)).toEqual([]);
+    const twice = [board("a", "c1", 0, 1, 2, 1), board("b", "c2", 0, 1, 3, 1)];
+    const shared = [board("a", "c1", 0, 1, 2, 1), board("b", "c1", 0, 3, 4, 1)];
+    const early = [board("a", "c1", 1, 1, 2, 1), board("c", "c2", 0, 3, 4, 2)];
+    for (const [name, b] of [["twice", twice], ["shared", shared], ["early", early]] as const) {
+      expect(validateAssignments(b, VERIFY).length, name).toBeGreaterThan(0);
+    }
+  });
+
+  it("each card's time and Fits tag are its slots at the sport's match length (every sport, n 2..24, courts 1..4)", () => {
     let checked = 0;
+    let fit = 0;
+    let over = 0;
     const wrong: string[] = [];
     for (const s of FUNNEL_SPORTS) {
       const minutes = funnelSportMatchMinutes(s);
-      for (let n = 2; n <= PREVIEW_MAX; n++) {
+      for (let n = 2; n <= placerMax("league"); n++) {
         for (let courts = 1; courts <= 4; courts++) {
           for (const hours of [1, 2, 4, 6, 8, 12, 24]) {
             for (const r of rank(n, courts, hours, minutes)) {
               if (!r.available) continue;
-              const need = engineMinutes(engine(r.slug, n).rounds, courts, minutes);
+              const need = engineSlots(r.slug, n, courts) * minutes;
               const hoursShown = Math.round((need / 60) * 10) / 10;
               if (r.estHours !== hoursShown || r.fits !== need <= hours * 60) {
                 wrong.push(`${s.key} ${r.slug} n=${n} c=${courts} h=${hours}: ${r.estHours}h ${r.fits} vs ${hoursShown}h`);
               }
+              if (r.fits) fit++;
+              else over++;
               checked++;
             }
           }
@@ -431,7 +715,51 @@ describe("the funnel's format layer", () => {
       }
     }
     expect(wrong.join("\n")).toBe("");
-    expect(checked).toBeGreaterThan(FUNNEL_SPORTS.length * 63 * 4 * 7 * 3);
+    expect(checked).toBeGreaterThan(FUNNEL_SPORTS.length * (placerMax("league") - 1) * 4 * 7 * 3);
+    expect([fit > 0, over > 0]).toEqual([true, true]);
+  });
+
+  it("packed days, worked by hand from the rules (badminton's 30 minutes)", () => {
+    // 6 players, 2 courts: 15 matches, at most 3 at once (nobody twice), so ⌈15 / 2⌉ = 8 slots — 4 hours, not the 5 that
+    // five rounds of three played one after another would take.
+    const six = card(rank(6, 2, 4), "league");
+    expect([six.matches, six.estHours, six.fits]).toEqual([15, 4, true]);
+    expect(card(rank(6, 2, 3), "league").fits).toBe(false);
+    // 10 players, 4 courts: 45 matches, at most 5 at once, 4 courts: ⌈45 / 4⌉ = 12 slots = 6 hours, exactly the day.
+    const ten = card(rank(10, 4, 6), "league");
+    expect([ten.matches, ten.estHours, ten.fits]).toEqual([45, 6, true]);
+    expect(card(rank(10, 4, 5), "league").fits).toBe(false);
+    // Double elimination of 4 on 2 courts: the two semi-finals; the winners' final beside the losers' first match; the
+    // losers' final; the final — 6 matches in 4 slots, 2 hours.
+    const de = card(rank(4, 2, 2), "double_elim");
+    expect([de.matches, de.estHours, de.fits]).toEqual([6, 2, true]);
+    expect(card(rank(4, 2, 1), "double_elim").fits).toBe(false);
+    // A knockout of 16 on 3 courts: 15 matches; a quarter-final can start once its two first-round matches are in, so 6
+    // slots (3 hours), not round by round's ⌈8/3⌉ + ⌈4/3⌉ + 1 + 1 = 7.
+    const ko = card(rank(16, 3, 3), "knockout");
+    expect([ko.matches, ko.estHours, ko.fits]).toEqual([15, 3, true]);
+    // A Swiss of 12 on 4 courts is round by round: each round's 6 boards take ⌈6 / 4⌉ = 2 slots.
+    const swiss = card(rank(12, 4, 24), "swiss");
+    expect(swiss.estHours).toBe((swissRoundsDefault(12) * 2 * 30) / 60);
+  });
+
+  it("slots refuse a court count that is not a whole number of at least one, and stay finite below a format's minimum", () => {
+    for (const courts of [0, -1, 1.5, Number.NaN]) {
+      expect(() => funnelFormatSlots("league", 6, courts), String(courts)).toThrow(RangeError);
+    }
+    // Groups + knockout at 2 or 3 is never built (its card is unavailable), but the card still renders: a pool of one
+    // plays nothing, and nothing is no slots — never NaN.
+    let checked = 0;
+    for (const n of [2, 3]) {
+      for (const f of ALL) {
+        for (const courts of COURTS) {
+          expect(Number.isFinite(funnelFormatSlots(f, n, courts)), `${f} n=${n} c=${courts}`).toBe(true);
+          checked++;
+        }
+      }
+    }
+    expect(checked).toBe(2 * ALL.length * COURTS.length);
+    expect(funnelFormatSlots("groups-knockout", 2, 1)).toBe(1);
   });
 
   it("the mock's cards: A1 (16 players, 2 courts, 4 hours) and A2 (12, 4 courts, 6 hours), badminton", () => {

@@ -3,7 +3,7 @@
 // (lib/funnel.ts `createFromDraft`), so the card the organiser picked and the event they land on cannot disagree.
 //
 // Every count below is read off the SAME knobs the stage graph is built at (`funnelFormatKnobs`), never a second model;
-// lib/__tests__/funnel-formats.test.ts proves each against the engine's own draw, round by round.
+// lib/__tests__/funnel-formats.test.ts proves each against the engine's own draw and its own placer.
 //
 // Pure and client-safe: format-templates.ts, format-bounds.ts and swiss-rounds.ts, each importable by the client.
 import { buildTemplateStages, clampKnob, type StageDraft, type TemplateKnobs } from "./format-templates";
@@ -75,21 +75,22 @@ export function funnelFormatStages(f: FunnelFormat, n: number): StageDraft[] {
   return buildTemplateStages(TEMPLATE_KEY[f], knobs);
 }
 
-/** Matches per round of a round robin over `n` split into `pools` pools (one pool = a league), played in parallel: the
- *  pools are as even as the draw makes them (sizes differ by at most one); a pool of s plays s − 1 rounds (s even) or s
- *  (odd, one sits out each round) of ⌊s/2⌋ matches. */
-function roundRobinRounds(n: number, pools: number, legs: number): number[] {
+/** The pools of a round robin over `n` split into `pools` (one pool = a league), as even as the draw makes them: sizes
+ *  differ by at most one. */
+function poolSizes(n: number, pools: number): number[] {
   const small = Math.floor(n / pools);
-  const sizes = [small, small + 1];
-  const count = [pools - (n % pools), n % pools];
-  const roundsOf = (s: number) => (s < 2 ? 0 : s % 2 === 0 ? s - 1 : s);
-  const leg: number[] = [];
-  const total = Math.max(roundsOf(sizes[0]!), count[1]! > 0 ? roundsOf(sizes[1]!) : 0);
-  for (let r = 1; r <= total; r++) {
-    let matches = 0;
-    for (const i of [0, 1]) if (count[i]! > 0 && r <= roundsOf(sizes[i]!)) matches += count[i]! * Math.floor(sizes[i]! / 2);
-    leg.push(matches);
-  }
+  return Array.from({ length: pools }, (_, i) => (i < n % pools ? small + 1 : small));
+}
+
+/** A pool of s plays s − 1 rounds (s even) or s (odd, one sits out each round), of ⌊s/2⌋ matches each. */
+const roundsOf = (s: number) => (s < 2 ? 0 : s % 2 === 0 ? s - 1 : s);
+
+/** Matches per round of a round robin over `n` in `pools` pools, the pools sharing round numbers. */
+function roundRobinRounds(n: number, pools: number, legs: number): number[] {
+  const sizes = poolSizes(n, pools);
+  const leg = Array.from({ length: Math.max(...sizes.map(roundsOf)) }, (_, r) =>
+    sizes.reduce((sum, s) => sum + (r < roundsOf(s) ? Math.floor(s / 2) : 0), 0),
+  );
   return Array.from({ length: legs }, () => leg).flat();
 }
 
@@ -136,9 +137,62 @@ export function funnelFormatRounds(f: FunnelFormat, n: number): number[] {
   }
 }
 
-/** Matches PLAYED by `f`'s graph at `n`: the sum of its rounds. */
-export function funnelFormatMatches(f: FunnelFormat, n: number): number {
-  return funnelFormatRounds(f, n).reduce((sum, m) => sum + m, 0);
+/**
+ * The match-length slots `f`'s graph at `n` needs on `courts` courts: the shortest day the engine's scheduling rules allow
+ * — one match a court, nobody twice at once, and:
+ * - a round robin (League, the group stage) has its pairings fixed in advance, so its rounds may run side by side (no
+ *   `roundBarrier`: the start floor, engine calendar.d.ts). Its day is bounded by the courts and by its biggest pool's
+ *   rounds. (The ⌊s/2⌋ a pool of s can play at once never binds on its own: a pool's matches are ⌊s/2⌋ × its rounds, so
+ *   that limit bounds the day at the pools' average rounds, never above the biggest pool's.)
+ * - a bracket (knockout, double elimination) carries no round order at all, only its feeds: a match waits for the matches
+ *   that feed it, and no others (`bracketSlots`);
+ * - a Swiss pairs round r + 1 from round r's results (`roundBarrier: "end"`), so it is played round by round;
+ * - Groups + knockout's bracket is seeded from the final group tables, so it starts when the group stage ends.
+ * No rest or changeover is modelled: the sport's match length is all a match costs. The test proves every count is reached
+ * over the engine's draw (n 2..64, courts 1..32): by the engine's own placer (`slotFixtures`, which Auto-schedule seeds
+ * from), or — uneven pools near the courts' limit, where the placer, handing rounds over one at a time, trails by a slot or
+ * two — by a board the engine's verifier accepts.
+ */
+export function funnelFormatSlots(f: FunnelFormat, n: number, courts: number): number {
+  const k = funnelFormatKnobs(f, n);
+  if (!Number.isInteger(courts) || courts < 1) throw new RangeError(`courts are a whole number of at least 1 (got ${courts})`);
+  switch (f) {
+    case "league":
+      return roundRobinSlots(n, 1, k.legs, courts);
+    case "groups-knockout":
+      return roundRobinSlots(n, k.poolCount, k.legs, courts) + bracketSlots(fromTheFinal(bracketRounds(k.qualified)), courts);
+    case "knockout":
+      return bracketSlots(fromTheFinal(bracketRounds(n)), courts);
+    case "swiss":
+      return k.swissRounds * Math.ceil(Math.floor(n / 2) / courts);
+    case "double_elim":
+      // The engine's double elimination stands its matches 1, 1, 2, 2 … steps from the final: each winners' round's
+      // count, twice, the two farthest steps holding round one's.
+      return bracketSlots(fromTheFinal(bracketRounds(n)).flatMap((m) => [m, m]), courts);
+  }
+}
+
+function roundRobinSlots(n: number, pools: number, legs: number, courts: number): number {
+  const sizes = poolSizes(n, pools);
+  const matches = legs * sizes.reduce((sum, s) => sum + (s * (s - 1)) / 2, 0);
+  return Math.max(legs * Math.max(...sizes.map(roundsOf)), Math.ceil(matches / courts));
+}
+
+/** A bracket's rounds counted from its final outward. */
+const fromTheFinal = (rounds: readonly number[]) => [...rounds].reverse();
+
+/** A bracket whose matches stand `out[l]` at l steps from its final (the final is step 0). A match l steps out has at
+ *  least l more slots of play after it, so for every l the day is at least l + ⌈(matches l or more steps out) / courts⌉;
+ *  playing the farthest-out first meets the largest of these (Hu, 1961, for a tree of equal-length matches; for the
+ *  double-elimination graph, measured against the engine's placer in the test). */
+function bracketSlots(out: readonly number[], courts: number): number {
+  let slots = 0;
+  let outside = out.reduce((sum, m) => sum + m, 0);
+  for (let l = 0; l <= out.length; l++) {
+    slots = Math.max(slots, l + Math.ceil(outside / courts));
+    outside -= out[l] ?? 0;
+  }
+  return slots;
 }
 
 /** The fewest matches any entrant is sure to play — the "how much does everyone play" number Best fit ranks by: the whole
@@ -151,10 +205,8 @@ export function funnelFormatPerEntrant(f: FunnelFormat, n: number): number {
     case "league":
       return k.legs * (n - 1);
     case "groups-knockout": {
-      const small = Math.floor(n / k.poolCount);
-      const sizes = n % k.poolCount === 0 ? [small] : [small, small + 1];
       const throughPerPool = Math.floor(k.qualified / k.poolCount);
-      return Math.min(...sizes.map((s) => k.legs * (s - 1) + (s <= throughPerPool ? 1 : 0)));
+      return Math.min(...poolSizes(n, k.poolCount).map((s) => k.legs * (s - 1) + (s <= throughPerPool ? 1 : 0)));
     }
     case "knockout":
       return 1;
