@@ -87,4 +87,11 @@ describe("CookieConsent sets data-consent-open on <html> exactly while it is pai
     expect(island.tree()).toHaveLength(0);
     expect(open()).toBe(false);
   });
+
+  it("the scoring pad paints no banner, so it sets no attribute, though the visitor has never chosen", () => {
+    nav.pathname = "/score/abc123token";
+    const island = mount();
+    expect(island.tree()).toHaveLength(0);
+    expect(open()).toBe(false);
+  });
 });
