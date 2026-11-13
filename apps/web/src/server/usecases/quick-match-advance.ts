@@ -45,7 +45,9 @@ import { MUTATION_LIMIT, rateLimit } from "@/lib/rate-limit";
 import type { MatchLineRow } from "@/lib/run-sheet-groups";
 import type { StandingsRow } from "@seazn/engine/competition";
 import { cutRowOf, cutTies, openTie, tossThrough, type CutTie } from "./quick-match-cut";
-import { findQuickMatchByCompetition, isQuickMatchFinished, playedOf, type QuickMatchRow } from "./quick-match-home";
+import { isQuickMatchFinished } from "@/lib/quick-match-finished";
+// The row and the count from below the home (never the home itself, which reads this module's cut: no cycle).
+import { findQuickMatchByCompetition, playedOf, type QuickMatchRow } from "./quick-match-row";
 import {
   completeStage,
   computeSeedProposal,
