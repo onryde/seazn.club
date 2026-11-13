@@ -129,12 +129,15 @@ export const QUICK_MATCH_ERRORS = {
    *  exists. `quickMatch.me.notInAccount`. */
   NOT_IN_ACCOUNT: "QUICK_MATCH_NOT_IN_ACCOUNT",
   /** "Not played" (plan 4, spec 2026-11-12 §3 and §6): only an unplayed or in-progress league match (`scheduled`, `in_play`)
-   *  can be skipped. A match that already has a result, or any other status that is not open to a skip, is refused (422); a
-   *  tap from a page loaded before the match was settled meets it too. The home shows `quickMatch.flash.notSkippable`, which
-   *  points at Edit result. */
+   *  can be skipped. Refused (422): a league match in any status other than `scheduled`, `in_play` or `cancelled` (decided,
+   *  forfeited, abandoned, finalized, needs_decision), a tap from a page loaded before the match was settled included; and a
+   *  knockout match in any status, because a bracket needs a winner (spec §3; T1 review G2: not LEAGUE_ONLY, whose copy
+   *  speaks of an extra match). A second tap on a Not played (`cancelled`) match is NOT refused: it changes nothing and
+   *  lands on the home (plan D3). The home shows `quickMatch.flash.notSkippable`, which also points at Edit result. */
   NOT_SKIPPABLE: "QUICK_MATCH_NOT_SKIPPABLE",
-  /** "Put back" (plan 4, spec §6): the league has finished, every match played or Not played, so its matches no longer
-   *  change (422). The home hides Put back once the league is finished, so only a stale tap meets it:
+  /** "Put back" (plan 4, spec §6): the league has finished, every match played or Not played, so a Not played match can no
+   *  longer be put back (422). Edit result and Add a match still change a finished league (and reopen it); only Put back is
+   *  refused. The home hides Put back once the league is finished, so only a stale tap meets it:
    *  `quickMatch.flash.leagueFinished`. */
   LEAGUE_FINISHED: "QUICK_MATCH_LEAGUE_FINISHED",
 } as const;
