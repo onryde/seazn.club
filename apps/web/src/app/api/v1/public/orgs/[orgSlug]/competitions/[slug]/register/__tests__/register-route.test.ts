@@ -55,6 +55,7 @@ import { createDivision } from "@/server/usecases/divisions";
 import { idempotencyKey } from "@/server/email-outbox/constants";
 import { stubOutboxEnv } from "@/server/usecases/__tests__/_invite-mail";
 import { dictionarySubject } from "@/server/email-outbox/__tests__/_kind-harness";
+import { log } from "@/server/logger";
 import { POST as registerRoute } from "../route";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -620,5 +621,206 @@ describe.skipIf(!HAS_DB)("POST .../register — DB-backed", () => {
     expect(row!.status).toBe("confirmed");
     const mail = await confirmationOf(String(body.data!.group_id));
     expect(mail, "the confirmation waits in the outbox for the retry worker").toMatchObject({ status: "queued", attempts: 1 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Registration redesign B0 — per-stage submit timing (spec 2026-11-13-registration-redesign-design.md §3.2). Every submit logs one
+// `register.submit.timing` line; the `Server-Timing` header rides the 201 only when REGISTER_SERVER_TIMING is exactly "1". The
+// stage names below are the spec's list (rate_limit, turnstile, user, pre_tx + its sub-stages, tx, mint + its sub-stages, mail,
+// total), filtered by what each cart actually runs - never read back from the timer.
+// ---------------------------------------------------------------------------
+
+/** The plan's Server-Timing grammar: `name;dur=N` entries, ", "-separated, at most one decimal. */
+const SERVER_TIMING_LIST = /^[a-z_.]+;dur=\d+(\.\d)?(, [a-z_.]+;dur=\d+(\.\d)?)*$/;
+
+type TimingLine = { timing: Record<string, number>; divisions: number; entries: number; players: number; payment_method: string };
+
+/** Every `register.submit.timing` payload the spy saw, in order. */
+function timingLines(spy: { mock: { calls: unknown[][] } }): TimingLine[] {
+  return spy.mock.calls.filter((c) => c[1] === "register.submit.timing").map((c) => c[0] as TimingLine);
+}
+
+const headerStages = (res: Response): string[] =>
+  (res.headers.get("server-timing") ?? "").split(", ").filter(Boolean).map((m) => m.split(";")[0]!);
+
+/** Route-level stages a submit runs whatever the cart (the usecase's own are added by the DB-backed cases). */
+const ROUTE_STAGES = ["rate_limit", "turnstile", "user", "mail", "total"];
+
+describe("POST .../register — submit timing (routing)", () => {
+  let infoSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    infoSpy = vi.spyOn(log, "info");
+  });
+  afterEach(() => {
+    infoSpy.mockRestore();
+  });
+
+  it.each([[undefined], [""], ["0"], ["true"], ["yes"]])("sends no Server-Timing when REGISTER_SERVER_TIMING is %j, and still logs the timing line", async (value) => {
+    vi.stubEnv("REGISTER_SERVER_TIMING", value);
+    submitSpy.mockResolvedValueOnce(fakeResult());
+    const res = await registerRoute(req(URL_("acme", "cup"), groupBody(), { "x-forwarded-for": "9.9.8.1" }), ctx("acme", "cup"));
+    expect(res.status).toBe(201);
+    expect(res.headers.get("server-timing")).toBeNull();
+    const lines = timingLines(infoSpy);
+    expect(lines, "one timing line per submit, header or not").toHaveLength(1);
+    expect(Object.keys(lines[0]!.timing).sort()).toEqual([...ROUTE_STAGES].sort());
+  });
+
+  it("sends Server-Timing when REGISTER_SERVER_TIMING=1, naming exactly the stages the log line reports", async () => {
+    vi.stubEnv("REGISTER_SERVER_TIMING", "1");
+    submitSpy.mockResolvedValueOnce(fakeResult());
+    const res = await registerRoute(req(URL_("acme", "cup"), groupBody(), { "x-forwarded-for": "9.9.8.2" }), ctx("acme", "cup"));
+    expect(res.status).toBe(201);
+    const header = res.headers.get("server-timing");
+    expect(header).toMatch(SERVER_TIMING_LIST);
+    const lines = timingLines(infoSpy);
+    expect(lines).toHaveLength(1);
+    expect(headerStages(res).sort()).toEqual(Object.keys(lines[0]!.timing).sort());
+    // A zero-subtotal cart never reaches the mint (route: `amount_cents > 0`), so no mint stage is timed.
+    expect(headerStages(res).sort()).toEqual([...ROUTE_STAGES].sort());
+  });
+
+  it("the body is unchanged by the timer: the same 201 envelope with or without the header", async () => {
+    const fake = fakeResult();
+    vi.stubEnv("REGISTER_SERVER_TIMING", "1");
+    submitSpy.mockResolvedValueOnce(fake);
+    const on = await read(await registerRoute(req(URL_("acme", "cup"), groupBody(), { "x-forwarded-for": "9.9.8.3" }), ctx("acme", "cup")));
+    vi.stubEnv("REGISTER_SERVER_TIMING", undefined);
+    submitSpy.mockResolvedValueOnce(fake);
+    const off = await read(await registerRoute(req(URL_("acme", "cup"), groupBody(), { "x-forwarded-for": "9.9.8.3" }), ctx("acme", "cup")));
+    expect(on.body.data).toEqual({ ...fake, checkout_url: null });
+    expect(off.body.data).toEqual(on.body.data);
+  });
+
+  it("a refused submit (rate limit) sends no timing header and logs no timing line", async () => {
+    vi.stubEnv("REGISTER_SERVER_TIMING", "1");
+    rl.mockImplementationOnce(async () => {
+      throw new HttpError(429, "slow down");
+    });
+    const res = await registerRoute(req(URL_("acme", "cup"), groupBody(), { "x-forwarded-for": "9.9.8.4" }), ctx("acme", "cup"));
+    expect(res.status).toBe(429);
+    expect(res.headers.get("server-timing")).toBeNull();
+    expect(timingLines(infoSpy)).toEqual([]);
+  });
+
+  // The line goes to stdout and on to Sentry Logs: stage names, milliseconds and the cart's SHAPE only. No contact, no player name,
+  // no slug, no ip, no id, ref code or token.
+  it("logs the cart's shape - distinct divisions, entries, players, payment method - and nothing that names anyone", async () => {
+    const divisionA = randomUUID();
+    const divisionB = randomUUID();
+    const fake = fakeResult();
+    submitSpy.mockResolvedValueOnce(fake);
+    const body = groupBody({
+      contact: { name: "Zelda Contact", email: "zelda.contact@test.local" },
+      entries: [
+        { division_id: divisionA, entrant_kind: "individual", players: [{ full_name: "Ana Example" }], answers: {} },
+        { division_id: divisionB, entrant_kind: "pair", players: [{ full_name: "Ben Example" }, { full_name: "Cy Example" }], answers: {} },
+        { division_id: divisionA, entrant_kind: "individual", players: [{ full_name: "Dee Example" }], answers: {} },
+      ],
+    });
+    const res = await registerRoute(req(URL_("acme-shape", "cup-shape"), body, { "x-forwarded-for": "9.9.8.5" }), ctx("acme-shape", "cup-shape"));
+    expect(res.status).toBe(201);
+    const [line] = timingLines(infoSpy);
+    // 2 distinct divisions, 3 entries, 1 + 2 + 1 = 4 players: three different numbers, so a swapped count cannot pass.
+    expect(line).toMatchObject({ divisions: 2, entries: 3, players: 4, payment_method: "none" });
+    expect(Object.keys(line!).sort()).toEqual(["divisions", "entries", "payment_method", "players", "timing"]);
+    for (const [stage, ms] of Object.entries(line!.timing)) {
+      expect(stage).toMatch(/^[a-z_.]+$/);
+      expect(typeof ms).toBe("number");
+    }
+    const text = JSON.stringify(line);
+    for (const secret of [
+      "Zelda", "zelda.contact@test.local", "Ana Example", "Ben Example", "Cy Example", "Dee Example",
+      "acme-shape", "cup-shape", "9.9.8.5", divisionA, divisionB, fake.group_id, fake.ref_code, fake.access_token,
+    ]) {
+      expect(text, `the timing line must not carry ${secret}`).not.toContain(secret);
+    }
+  });
+});
+
+describe.skipIf(!HAS_DB)("POST .../register — submit timing (DB-backed)", () => {
+  let infoSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    infoSpy = vi.spyOn(log, "info");
+    vi.stubEnv("REGISTER_SERVER_TIMING", "1");
+  });
+  afterEach(() => {
+    infoSpy.mockRestore();
+  });
+
+  async function paidRig(paymentMethod: "stripe" | "offline"): Promise<{ orgSlug: string; compSlug: string; divisionId: string }> {
+    const { orgSlug, orgId, ownerId } = await seedOrg();
+    await sql`update organizations
+              set stripe_charges_enabled = true, stripe_account_id = ${"acct_" + randomUUID().slice(0, 8)}
+              where id = ${orgId}`;
+    const { competition, division } = await rig(asOwner(orgId, ownerId));
+    await sql`
+      insert into registration_settings
+        (division_id, enabled, entrant_kind, fee_cents, payment_method, approval, allow_free_agents)
+      values (${division.id}, true, 'individual', 500, ${paymentMethod}, 'auto', false)`;
+    return { orgSlug, compSlug: competition.slug, divisionId: division.id };
+  }
+
+  const oneEntry = (divisionId: string) =>
+    groupBody({ entries: [{ division_id: divisionId, entrant_kind: "individual", players: [{ full_name: "Timed Player" }], answers: {} }] });
+
+  it("a free cart times every pre-transaction read under pre_tx, the transaction, and never the mint", async () => {
+    const { orgSlug, orgId, ownerId } = await seedOrg();
+    const { competition, division } = await rig(asOwner(orgId, ownerId));
+    await seedSettings(division.id);
+
+    const res = await registerRoute(req(URL_(orgSlug, competition.slug), oneEntry(division.id), { "x-forwarded-for": "9.9.8.10" }), ctx(orgSlug, competition.slug));
+    expect(res.status).toBe(201);
+    const [line] = timingLines(infoSpy);
+    expect(line!.payment_method).toBe("none");
+    // Not an online division (no `online`/`seat_gate`), no paid card division's feature check beyond the plan cap, nothing to mint.
+    expect(Object.keys(line!.timing).sort()).toEqual(
+      [...ROUTE_STAGES, "pre_tx", "pre_tx.division_ctx", "pre_tx.settings", "pre_tx.entitlements", "tx"].sort(),
+    );
+    expect(headerStages(res).sort()).toEqual(Object.keys(line!.timing).sort());
+    // The nesting is real: a parent spans its children, and the run spans its sequential parts.
+    const t = line!.timing;
+    for (const sub of ["pre_tx.division_ctx", "pre_tx.settings", "pre_tx.entitlements"]) expect(t.pre_tx!).toBeGreaterThanOrEqual(t[sub]!);
+    expect(t.total!).toBeGreaterThanOrEqual(t.pre_tx! + t.tx! - 0.2);
+  });
+
+  it("a card cart times the mint, its reads and the Stripe call, and logs the method as card", async () => {
+    const rigd = await paidRig("stripe");
+    const res = await registerRoute(req(URL_(rigd.orgSlug, rigd.compSlug), oneEntry(rigd.divisionId), { "x-forwarded-for": "9.9.8.11" }), ctx(rigd.orgSlug, rigd.compSlug));
+    const { status, body } = await read(res);
+    expect(status).toBe(201);
+    expect(body.data?.checkout_url).toBe("https://checkout.stripe.test/session");
+    const [line] = timingLines(infoSpy);
+    expect(line!.payment_method).toBe("card");
+    expect(Object.keys(line!.timing)).toEqual(expect.arrayContaining(["mint", "mint.mint_reads", "mint.stripe", "pre_tx", "tx"]));
+    expect(line!.timing.mint!).toBeGreaterThanOrEqual(line!.timing["mint.stripe"]!);
+    expect(headerStages(res).sort()).toEqual(Object.keys(line!.timing).sort());
+  });
+
+  it("a mint that fails is still timed, the 201 still goes out, and the method is logged as mint_failed", async () => {
+    const rigd = await paidRig("stripe");
+    stripeMock.checkoutCreate.mockRejectedValueOnce(new Error("stripe is down"));
+    const res = await registerRoute(req(URL_(rigd.orgSlug, rigd.compSlug), oneEntry(rigd.divisionId), { "x-forwarded-for": "9.9.8.12" }), ctx(rigd.orgSlug, rigd.compSlug));
+    const { status, body } = await read(res);
+    expect(status).toBe(201);
+    expect(body.data?.checkout_url).toBeNull();
+    const [line] = timingLines(infoSpy);
+    expect(line!.payment_method).toBe("mint_failed");
+    expect(Object.keys(line!.timing)).toEqual(expect.arrayContaining(["mint", "mint.mint_reads", "mint.stripe"]));
+    expect(res.headers.get("server-timing")).toMatch(SERVER_TIMING_LIST);
+  });
+
+  it("an offline paid cart reaches the mint, which reads and declines without calling Stripe; the method is offline", async () => {
+    const rigd = await paidRig("offline");
+    const res = await registerRoute(req(URL_(rigd.orgSlug, rigd.compSlug), oneEntry(rigd.divisionId), { "x-forwarded-for": "9.9.8.13" }), ctx(rigd.orgSlug, rigd.compSlug));
+    const { status, body } = await read(res);
+    expect(status).toBe(201);
+    expect(body.data?.checkout_url).toBeNull();
+    expect(stripeMock.checkoutCreate).not.toHaveBeenCalled();
+    const [line] = timingLines(infoSpy);
+    expect(line!.payment_method).toBe("offline");
+    expect(Object.keys(line!.timing)).toEqual(expect.arrayContaining(["mint", "mint.mint_reads"]));
+    expect(Object.keys(line!.timing)).not.toContain("mint.stripe");
   });
 });

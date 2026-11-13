@@ -7,6 +7,7 @@ import { getStripe } from "@/lib/stripe";
 import { isRegistrationCurrency } from "@/lib/currency";
 import { routes } from "@/lib/routes";
 import { log } from "@/server/logger";
+import { timed, type StageTimer } from "@/server/timing";
 import type { RegistrationWithGroupRow, DivisionCtx } from "./types";
 import { effectiveFeePercentFor, applicationFeeCents } from "./helpers";
 import { regGroupCols, loadSettings, divisionCtx, regByToken } from "./lookups";
@@ -201,6 +202,9 @@ export interface RegistrationCheckoutOpts {
  *  `registrations.pay_session_id` in the SAME transaction as the cart stamp, conditional on the value the caller read. */
 interface MintOpts extends RegistrationCheckoutOpts {
   entryPointer?: { registrationId: string; read: string | null };
+  /** The register route's stage timer, from `mintGroupCheckout` (registration redesign B0): the reads are timed as `mint_reads`, the
+   *  Stripe call as `stripe`. */
+  timer?: StageTimer;
 }
 
 /** Thrown inside the stamp transaction to roll the cart stamp back when the entry pointer moved since it was read. */
@@ -241,11 +245,11 @@ async function mintRegistrationCheckout(
   if (opts.returnBase !== undefined && !opts.returnBase.includes("?")) {
     throw new Error("createRegistrationCheckout: returnBase must already carry its query string");
   }
-  const entries = await sql<RegistrationWithGroupRow[]>`
+  const entries = await timed(opts.timer, "mint_reads", () => sql<RegistrationWithGroupRow[]>`
     select ${regGroupCols(sql)}
     from registrations r join registration_groups g on g.id = r.group_id
     where r.group_id = ${groupId} and r.id in ${sql(registrationIds)}
-    order by r.created_at`;
+    order by r.created_at`);
   if (entries.length === 0) throw new HttpError(422, "No registrations to pay for");
   const firstEntry = entries[0]!;
   const subtotal = entries.reduce((sum, e) => sum + e.amount_cents, 0);
@@ -272,8 +276,8 @@ async function mintRegistrationCheckout(
       "REGISTRATION_CURRENCY_UNAVAILABLE",
     );
   }
-  const [org] = await sql<{ stripe_account_id: string | null }[]>`
-    select stripe_account_id from organizations where id = ${ctx.org_id}`;
+  const [org] = await timed(opts.timer, "mint_reads", () => sql<{ stripe_account_id: string | null }[]>`
+    select stripe_account_id from organizations where id = ${ctx.org_id}`);
   if (!org?.stripe_account_id) {
     throw new HttpError(503, "Payments are not set up for this organiser yet");
   }
@@ -292,7 +296,7 @@ async function mintRegistrationCheckout(
   // the registration, so the paid transition can stamp the competition with the
   // exact percent this payer was billed — never a re-resolved one that a
   // mid-competition plan change could have moved.
-  const feePercent = await effectiveFeePercentFor(ctx.competition_id, ctx.org_id);
+  const feePercent = await timed(opts.timer, "mint_reads", () => effectiveFeePercentFor(ctx.competition_id, ctx.org_id));
   const idsJoined = registrationIds.join(",");
   // Stripe refuses a session whose total converts to less than its minimum
   // charge in the PLATFORM's currency (~30p on this GB platform). That is an
@@ -303,7 +307,7 @@ async function mintRegistrationCheckout(
   // gbp but ₹12.00 in inr, which converts to about 9p and is rejected outright.
   // Mapped narrowly: only `amount_too_small` becomes a clean 422, so any other
   // Stripe failure still surfaces as itself rather than being swallowed.
-  const session = await mintOrTranslate(() => getStripe().checkout.sessions.create({
+  const session = await timed(opts.timer, "stripe", () => mintOrTranslate(() => getStripe().checkout.sessions.create({
     mode: "payment",
     customer_email: firstEntry.contact_email,
     // fee_percent rides the session so the paid transition can stamp the
@@ -343,7 +347,7 @@ async function mintRegistrationCheckout(
     },
     success_url: `${returnBase}&checkout=success&session_id={CHECKOUT_SESSION_ID}`,
     cancel_url: `${returnBase}&checkout=cancelled`,
-  }));
+  })));
   if (!session.url) throw new HttpError(502, "Stripe did not return a checkout URL");
   // checkout_session_id/fee_percent live on the cart (V364) — one row to
   // stamp regardless of how many entries this session covers.
@@ -452,33 +456,31 @@ async function mintRegistrationCheckout(
  * zero-payable or non-stripe cart (owner ruling 5: an all-waitlisted,
  * all-free, or offline-payment-method group mints nothing) — it only
  * throws for a genuine failure (Connect not live, currency gone stale, a
- * real Stripe error).
+ * real Stripe error). `timer` (registration redesign B0) is the register
+ * route's: every read here and in the mint is timed as `mint_reads`, the
+ * Stripe call as `stripe`; the other callers pass none.
  */
 export async function mintGroupCheckout(
   groupId: string,
   divisionId: string,
   origin: string,
   token: string,
+  timer?: StageTimer,
 ): Promise<string | null> {
-  const [group] = await sql<{ payment_method: string | null }[]>`
-    select payment_method from registration_groups where id = ${groupId}`;
+  const [group] = await timed(timer, "mint_reads", () => sql<{ payment_method: string | null }[]>`
+    select payment_method from registration_groups where id = ${groupId}`);
   if (!group || group.payment_method !== "stripe") return null;
-  const payable = await sql<{ id: string }[]>`
+  const payable = await timed(timer, "mint_reads", () => sql<{ id: string }[]>`
     select id from registrations
     where group_id = ${groupId} and status = 'pending' and amount_cents > 0
-    order by created_at`;
+    order by created_at`);
   if (payable.length === 0) return null;
-  const ctx = await divisionCtx(sql, divisionId);
+  const ctx = await timed(timer, "mint_reads", () => divisionCtx(sql, divisionId));
   if (!ctx.charges_enabled) {
     throw new HttpError(503, "Payments are not set up for this organiser yet");
   }
-  return createRegistrationCheckout(
-    groupId,
-    payable.map((r) => r.id),
-    ctx,
-    origin,
-    token,
-  );
+  // `createRegistrationCheckout`'s own call, made here so the timer can ride along: it lives on the internal MintOpts, not the public opts.
+  return (await mintRegistrationCheckout(groupId, payable.map((r) => r.id), ctx, origin, token, { timer })).url;
 }
 
 // ---------------------------------------------------------------------------
