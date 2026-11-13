@@ -94,16 +94,17 @@ test("home (Task 5): a league of 4 with a 43-character side, at 320, 768 and 128
 
 // Owner 2026-11-12, "Full table": the short table (P, W, Pts) opens in place, a native <details>, into the public table's own
 // columns for the sport; open, the short table steps aside, and the wider table scrolls inside its own focusable region,
-// never the page. At 1280 and at 320 (the narrowest phone, where the table is widest against the screen). The columns and
-// their order are the public table's, pinned against it in app/q/[token]/__tests__/page.test.tsx; here the browser shows
-// that the fold opens, swaps, scrolls in place and closes back.
-test("Full table (owner 2026-11-12): at 1280 and 320 the fold opens in place to the public table's columns, the short table steps aside, and it closes back; no sideways scroll", async ({ guest: page }) => {
+// never the page. At the house's three widths, 1280, 768 (review m4) and 320 (the narrowest phone, where the table is
+// widest against the screen). The columns and their order are the public table's, pinned against it in
+// app/q/[token]/__tests__/page.test.tsx; here the browser shows that the fold opens, swaps, scrolls in place and closes back.
+test("Full table (owner 2026-11-12): at 1280, 768 and 320 the fold opens in place to the public table's columns, the short table steps aside, and it closes back; no sideways scroll", async ({ guest: page }) => {
   const EN_UI = readDict("../src/dictionaries/en/ui.json");
   const EN_PUB = readDict("../src/dictionaries/en/public.json");
   const label = EN_UI["quickMatch.home.fullTable"]!;
   await createThroughSetup(page, [LONG, "Priya & Tom", "Lee & Ana", "Jo & Max"]);
   let checked = 0;
-  for (const width of [1280, 320] as const) {
+  const WIDTHS = [1280, 768, 320] as const;
+  for (const width of WIDTHS) {
     await page.setViewportSize({ width, height: 900 });
     await page.reload();
     const short = page.getByTestId("qm-standings-short");
@@ -140,7 +141,7 @@ test("Full table (owner 2026-11-12): at 1280 and 320 the fold opens in place to 
     await expectNoHorizontalScroll(page);
     checked++;
   }
-  expect(checked).toBe(2);
+  expect(checked).toBe(WIDTHS.length);
 });
 
 // ── Task 6: Score ───────────────────────────────────────────────────────────────────────────────────────────────────
