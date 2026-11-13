@@ -24,6 +24,7 @@ import { swissRoundsGuidance } from "@/lib/swiss-rounds";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { log } from "@/server/logger";
 import { generateStageFixturesUnpublished } from "@/server/usecases/stages";
+import { archiveVenue, createCourt, createVenue } from "@/server/usecases/venues";
 import { builtinModules } from "@seazn/engine/sports";
 import { effectiveEntrantModel, type EntrantKind } from "@seazn/engine/sport";
 
@@ -117,7 +118,13 @@ const venuesOf = (orgId: string) =>
   sql<{ id: string; name: string }[]>`select id, name from venues where org_id = ${orgId} and archived_at is null order by sort, name`;
 const courtsOf = (orgId: string) =>
   sql<{ venue_id: string; name: string; sort: number }[]>`
-    select venue_id, name, sort from courts where org_id = ${orgId} and archived_at is null order by sort, name`;
+    select c.venue_id, c.name, c.sort from courts c join venues v on v.id = c.venue_id
+     where c.org_id = ${orgId} and c.archived_at is null and v.archived_at is null
+     order by c.sort, c.name`;
+const divisionNameOf = async (divisionId: string): Promise<string> => {
+  const [d] = await sql<{ name: string }[]>`select name from divisions where id = ${divisionId}`;
+  return d!.name;
+};
 const courtHoursOf = async (orgId: string): Promise<number> => {
   const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from court_hours where org_id = ${orgId}`;
   return n;
@@ -148,27 +155,29 @@ afterAll(async () => {
 });
 
 describe.skipIf(!HAS_DB)("the claim builds the chosen format, its entrants and its courts (start wizard T2)", () => {
-  it("each format builds its own stage graph — the one its card counted — and the graph draws the seeded field", async () => {
-    // One sport (badminton): the stage graph is format-shaped, not sport-shaped; the sport sweep is the entrants case below.
+  it("every funnel sport × every format builds the stage graph its card counted, and the graph draws the seeded field", async () => {
+    // Every sport: a stage write is sport-specific (the sport's stage tables, the kinds a sport refuses), so is its Generate.
     const n = 12;
     let checked = 0;
-    for (const format of ALL_FORMATS) {
-      const c = await claim({ entrants: n, format });
+    const pairs = FUNNEL_SPORTS.flatMap((sport) => ALL_FORMATS.map((format) => [sport, format] as const));
+    for (const [sport, format] of pairs) {
+      const label = `${sport.key} ${format}`;
+      const c = await claim({ sport: sport.name, entrants: n, format });
       const stored = await stagesOf(c.divisionId);
-      expect(stored.map((s) => s.kind), format).toEqual(RULEBOOK_KINDS[format]);
-      expect(stored.map((s) => s.seq), `${format}: seq 1..`).toEqual(seeds(stored.length));
-      expect(detectTemplate(stored), format).toBe(TEMPLATE_OF[format]);
+      expect(stored.map((s) => s.kind), label).toEqual(RULEBOOK_KINDS[format]);
+      expect(stored.map((s) => s.seq), `${label}: seq 1..`).toEqual(seeds(stored.length));
+      expect(detectTemplate(stored), label).toBe(TEMPLATE_OF[format]);
       // The card's own graph (preview = build): every stage's kind, name, progression and each knob it was drafted with.
       const drafted = funnelFormatStages(format, n);
-      expect(stored, `${format}: as many stages as the card counted`).toHaveLength(drafted.length);
+      expect(stored, `${label}: as many stages as the card counted`).toHaveLength(drafted.length);
       for (const [i, d] of drafted.entries()) {
         const s = stored[i]!;
-        expect({ kind: s.kind, name: s.name, progression: s.progression }, `${format} stage ${i + 1}`).toEqual({
+        expect({ kind: s.kind, name: s.name, progression: s.progression }, `${label} stage ${i + 1}`).toEqual({
           kind: d.kind,
           name: d.name,
           progression: d.progression,
         });
-        for (const [k, v] of Object.entries(d.config)) expect(s.config[k], `${format} stage ${i + 1} config.${k}`).toEqual(v);
+        for (const [k, v] of Object.entries(d.config)) expect(s.config[k], `${label} stage ${i + 1} config.${k}`).toEqual(v);
       }
       if (format === "swiss") {
         expect(stored[0]!.config.rounds, "the Swiss plays the house's recommendation for the field").toBe(swissRoundsGuidance(n).recommended);
@@ -179,16 +188,16 @@ describe.skipIf(!HAS_DB)("the claim builds the chosen format, its entrants and i
       expect(entrants).toHaveLength(n);
       const auth: AuthCtx = { orgId: c.orgId, via: "session", userId: c.userId, role: "owner", keyId: null };
       const outcome = await generateStageFixturesUnpublished(auth, stored[0]!.id);
-      expect(outcome.created, `${format}: Generate created fixtures`).toBeGreaterThan(0);
+      expect(outcome.created, `${label}: Generate created fixtures`).toBeGreaterThan(0);
       // A Swiss's first Generate lays every round's empty lines; the next one (Pair next) seats round 1.
       if (format === "swiss") await generateStageFixturesUnpublished(auth, stored[0]!.id);
       const lines = await sql<{ home: string | null; away: string | null }[]>`
         select home_entrant_id as home, away_entrant_id as away from fixtures where stage_id = ${stored[0]!.id}`;
       const drawn = new Set(lines.flatMap((f) => [f.home, f.away]).filter((x): x is string => !!x));
-      expect([...drawn].sort(), `${format}: every seeded entrant is drawn`).toEqual(entrants.map((e) => e.id).sort());
+      expect([...drawn].sort(), `${label}: every seeded entrant is drawn`).toEqual(entrants.map((e) => e.id).sort());
       checked++;
     }
-    expect(checked, "anti-vacuity: every funnel format was claimed").toBe(5);
+    expect(checked, "anti-vacuity: every funnel sport × every funnel format was claimed").toBe(FUNNEL_SPORTS.length * ALL_FORMATS.length);
   });
 
   it("entrants: n seeded name-only rows of the sport's default kind, every funnel sport", async () => {
@@ -203,6 +212,9 @@ describe.skipIf(!HAS_DB)("the claim builds the chosen format, its entrants and i
       expect(new Set(rows.map((r) => r.kind)), `${s.key}: the ${want} the engine declares`).toEqual(new Set([want]));
       expect(rows.map((r) => r.members), `${s.key}: name-only`).toEqual(rows.map(() => 0));
       expect(rows.map((r) => r.display_name), s.key).toEqual(seeds(n).map((i) => ui("en", NAME_KEY[want], i)));
+      expect(await divisionNameOf(c.divisionId), `${s.key}: the division is named as the dictionary names its sport`).toBe(
+        ui("en", `sport.${s.module}`),
+      );
       kinds.add(want);
       checked++;
     }
@@ -222,6 +234,7 @@ describe.skipIf(!HAS_DB)("the claim builds the chosen format, its entrants and i
         expect((await entrantsOf(c.divisionId)).map((e) => e.display_name), `${locale} ${s.key}`).toEqual(
           seeds(n).map((i) => ui(locale, NAME_KEY[kind], i)),
         );
+        expect(await divisionNameOf(c.divisionId), `${locale} ${s.key}: the division`).toBe(ui(locale, `sport.${s.module}`));
         expect((await venuesOf(c.orgId)).map((v) => v.name), `${locale}: the venue`).toEqual([ui(locale, "funnel.claim.venue")]);
         expect((await courtsOf(c.orgId)).map((x) => x.name), `${locale}: the courts`).toEqual([1, 2].map((i) => ui(locale, "funnel.claim.court", i)));
         checked++;
@@ -230,6 +243,7 @@ describe.skipIf(!HAS_DB)("the claim builds the chosen format, its entrants and i
     expect(checked, "anti-vacuity: every language × both kinds").toBe(LOCALES.length * sports.length);
     // Each language can be told from the fallback only while the dictionaries differ.
     expect(new Set(LOCALES.map((l) => ui(l, NAME_KEY.individual))).size, "premise: every language names a player its own way").toBe(LOCALES.length);
+    expect(new Set(LOCALES.map((l) => ui(l, "sport.football"))).size, "premise: the languages name football differently").toBeGreaterThan(1);
 
     // A draft started with no language falls to English.
     const none = await claim({ entrants: 2, format: "league" }, { locale: null });
@@ -323,14 +337,42 @@ describe.skipIf(!HAS_DB)("the claim builds the chosen format, its entrants and i
     expect(checked, "anti-vacuity").toBe(cases.length);
   });
 
-  it("planning courts build one venue with N courts; the hours write nothing", async () => {
-    const c = await claim({ entrants: 8, format: "knockout", courts: 3, hours: 5 });
-    const venues = await venuesOf(c.orgId);
+  it("planning courts build one venue with N courts, in court order; the hours write nothing", async () => {
+    // Twelve courts as well as three: past nine, name order ("Court 10" before "Court 2") is not court order.
+    let checked = 0;
+    for (const n of [3, 12]) {
+      const c = await claim({ entrants: 8, format: "knockout", courts: n, hours: 5 });
+      const venues = await venuesOf(c.orgId);
+      expect(venues.map((v) => v.name), `${n} courts`).toEqual([ui("en", "funnel.claim.venue")]);
+      const courts = await courtsOf(c.orgId);
+      expect(courts.map((x) => x.name), `${n} courts`).toEqual(seeds(n).map((i) => ui("en", "funnel.claim.court", i)));
+      expect(courts.map((x) => x.sort), `${n} courts: sorted as numbered`).toEqual(seeds(n).map((i) => i - 1));
+      expect(new Set(courts.map((x) => x.venue_id)), "every court is the one venue's").toEqual(new Set([venues[0]!.id]));
+      expect(await courtHoursOf(c.orgId), "no court hours: the funnel's hours are a duration, not a clock window").toBe(0);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    expect(ui("en", "funnel.claim.court", 10) < ui("en", "funnel.claim.court", 2), "premise: by name, court 10 sorts before court 2").toBe(true);
+  });
+
+  it("an organisation whose only venue is archived gets a new active venue with the courts", async () => {
+    const userId = await seedUser();
+    const org = await createOrgForUser(userId, `${RUN} archived venue`);
+    const auth: AuthCtx = { orgId: org.id, via: "session", userId, role: "owner", keyId: null };
+    const old = await createVenue(auth, { name: `${RUN} old hall`, sort: 0 });
+    await createCourt(auth, old.id, { name: "Old court", sort: 0, tags: [] });
+    await archiveVenue(auth, old.id);
+    expect(await venuesOf(org.id), "premise: no active venue").toEqual([]);
+
+    const c = await claim({ entrants: 4, format: "league", courts: 2 }, { userId });
+    expect(c.orgId).toBe(org.id);
+    const venues = await venuesOf(org.id);
     expect(venues.map((v) => v.name)).toEqual([ui("en", "funnel.claim.venue")]);
-    const courts = await courtsOf(c.orgId);
-    expect(courts.map((x) => x.name)).toEqual([1, 2, 3].map((i) => ui("en", "funnel.claim.court", i)));
-    expect(new Set(courts.map((x) => x.venue_id)), "every court is the one venue's").toEqual(new Set([venues[0]!.id]));
-    expect(await courtHoursOf(c.orgId), "no court hours: the funnel's hours are a duration, not a clock window").toBe(0);
+    const courts = await courtsOf(org.id);
+    expect(courts.map((x) => [x.venue_id, x.name])).toEqual([1, 2].map((i) => [venues[0]!.id, ui("en", "funnel.claim.court", i)]));
+    const [{ archived }] = await sql<{ archived: number }[]>`
+      select count(*)::int as archived from venues where org_id = ${org.id} and archived_at is not null`;
+    expect(archived, "the archived venue stays archived").toBe(1);
   });
 
   it("no planning inputs build no venue — nor do hours without courts", async () => {
