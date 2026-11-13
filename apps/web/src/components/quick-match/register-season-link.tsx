@@ -6,17 +6,19 @@
 // to the screen's foot inside the form and must not grow, so the door is never in the bar: it is in the form's flow under
 // the bar's resting place, met once the guest scrolls to the end. From 768px the zone is a column and the door follows it.
 //
-// The href is `/<lang>/start?sport=<key>` for a sport /start takes (`funnelSportByKeyOrName`, the list /start's parser
-// reads, start/prefill.ts), else the plain `/<lang>/start`: a link never sends what its reader would drop. Before the
-// script runs the other chips are disabled (setup-form.tsx, I1), so the server's sport is the only one a guest can have
-// and its link is right without the script. No hooks and no directive: it renders inside the setup island.
+// The href is `/<lang>/start?sport=<key>` for a sport /start takes (`funnelSportKeyByKeyOrName`, lib/funnel-sport-keys.ts:
+// the list /start's parser reads through lib/funnel-sports.ts, start/prefill.ts, and import-free, so neither this door nor
+// the home hero's carries the match-length table), else the plain `/<lang>/start`: a link never sends what its reader
+// would drop. Before the script runs the other chips are disabled (setup-form.tsx, I1), so the server's sport is the only
+// one a guest can have and its link is right without the script. No hooks and no directive: it renders inside the setup
+// island.
 import Link from "@/components/ui/console-link";
-import { funnelSportByKeyOrName } from "@/lib/funnel-sports";
+import { funnelSportKeyByKeyOrName } from "@/lib/funnel-sport-keys";
 
 /** `/<lang>/start`, with `?sport=<key>` when /start lists the sport (by key or name, sent as its key). */
 export function startHrefForSport(lang: string, sportKey: string | null | undefined): string {
-  const sport = typeof sportKey === "string" ? funnelSportByKeyOrName(sportKey) : null;
-  return sport === null ? `/${lang}/start` : `/${lang}/start?${new URLSearchParams({ sport: sport.key })}`;
+  const key = typeof sportKey === "string" ? funnelSportKeyByKeyOrName(sportKey) : null;
+  return key === null ? `/${lang}/start` : `/${lang}/start?${new URLSearchParams({ sport: key })}`;
 }
 
 export function RegisterSeasonLink({ lang, sportKey, label }: { lang: string; sportKey: string; label: string }) {

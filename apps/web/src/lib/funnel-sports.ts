@@ -2,9 +2,11 @@
 // hero send as `/start?sport=`; `name` is the sports catalogue's name (`sports.name`, written by scripts/sync-sports.ts),
 // which is the `sport` value /api/funnel/start stores and the claim resolves (lib/funnel.ts `resolveSport`); `module` and
 // `variant` are the engine sport and system variant that claim builds — Other names no sport, so it builds the generic
-// module. Pure and client-safe. Every field is pinned against its authority (the catalogue writer, the engine registry,
-// `pickVariant`) in lib/__tests__/funnel-formats.test.ts; the list and its entries are frozen, so a caller holding one
-// cannot change the next lookup.
+// module. The sports, their order, keys and names are lib/funnel-sport-keys.ts's (the import-free list the client doors
+// read); this module adds what the claim builds for each key. Pure and client-safe. Every field is pinned against its
+// authority (the catalogue writer, the engine registry, `pickVariant`) in lib/__tests__/funnel-formats.test.ts; the list
+// and its entries are frozen, so a caller holding one cannot change the next lookup.
+import { FUNNEL_SPORT_IDS, funnelSportKeyByKeyOrName, type FunnelSportKey } from "./funnel-sport-keys";
 import { defaultMatchMinutes } from "./match-length";
 
 export interface FunnelSport {
@@ -14,30 +16,33 @@ export interface FunnelSport {
   readonly variant: string;
 }
 
-const sport = (key: string, name: string, variant: string, module: string = key): FunnelSport =>
-  Object.freeze({ key, name, module, variant });
+/** The system variant the claim builds for each funnel sport, and its engine module where that is not the key. */
+const BUILDS: Readonly<Record<FunnelSportKey, { readonly variant: string; readonly module?: string }>> = {
+  badminton: { variant: "bwf-3x15" },
+  boardgame: { variant: "blitz" },
+  carrom: { variant: "club-29" },
+  football: { variant: "11-a-side" },
+  hockey: { variant: "fih-outdoor" },
+  icehockey: { variant: "iihf" },
+  tabletennis: { variant: "bo5" },
+  tennis: { variant: "tour" },
+  volleyball: { variant: "beach" },
+  cricket: { variant: "t20" },
+  other: { variant: "score", module: "generic" },
+};
 
-export const FUNNEL_SPORTS: readonly FunnelSport[] = Object.freeze([
-  sport("badminton", "Badminton", "bwf-3x15"),
-  sport("boardgame", "Chess", "blitz"),
-  sport("carrom", "Carrom", "club-29"),
-  sport("football", "Football", "11-a-side"),
-  sport("hockey", "Hockey", "fih-outdoor"),
-  sport("icehockey", "Ice Hockey", "iihf"),
-  sport("tabletennis", "Table Tennis", "bo5"),
-  sport("tennis", "Tennis", "tour"),
-  sport("volleyball", "Volleyball", "beach"),
-  sport("cricket", "Cricket", "t20"),
-  sport("other", "Other", "score", "generic"),
-]);
+export const FUNNEL_SPORTS: readonly FunnelSport[] = Object.freeze(
+  FUNNEL_SPORT_IDS.map(({ key, name }): FunnelSport => {
+    const { variant, module = key } = BUILDS[key];
+    return Object.freeze({ key, name, module, variant });
+  }),
+);
 
 /** The funnel sport a link names, by key (`tabletennis`) or by name (`Table Tennis`), in any case; null for anything
  *  else. */
 export function funnelSportByKeyOrName(raw: string): FunnelSport | null {
-  if (typeof raw !== "string") return null;
-  const wanted = raw.trim().toLowerCase();
-  if (wanted === "") return null;
-  return FUNNEL_SPORTS.find((s) => s.key === wanted || s.name.toLowerCase() === wanted) ?? null;
+  const key = funnelSportKeyByKeyOrName(raw);
+  return key === null ? null : (FUNNEL_SPORTS.find((s) => s.key === key) ?? null);
 }
 
 /** How long one match of `s` blocks a court, in minutes: the house's length for the variant the claim builds
