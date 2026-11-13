@@ -166,12 +166,34 @@ function owesFee(entry: StatusEntry, cart: CartPayFacts): boolean {
 }
 
 /** The page's outcome headline (spec §5.1). `payUnavailable` (B4 review m1, owner ruling 2026-11-13): a card fee is owed and the org
- *  cannot take a card today, so the page leads with the card notice ("contact the organiser"), never with Pay. */
-export type HeadlineKind = "pay" | "payUnavailable" | "in" | "received" | "waitlist" | "closed";
+ *  cannot take a card today, so the page leads with the card notice ("contact the organiser"), never with Pay. `pool` (B4 review I1):
+ *  a confirmed solo sign-up nobody has placed on a team yet ("You're in the player pool"), where `in` would add "Nothing else to do"
+ *  above the card's own "Waiting for a team". */
+export type HeadlineKind = "pay" | "payUnavailable" | "in" | "pool" | "received" | "waitlist" | "closed";
+
+/** What the headline reads off one entry beyond the money: whether it is a solo sign-up still waiting for a team
+ *  (`awaitingTeamAssignment`). A `GroupEntryView` is one. */
+export interface HeadlineEntry extends StatusEntry {
+  free_agent: boolean;
+  assigned_team_name: string | null;
+}
 
 /** Most pressing first (0): the cart's headline is the most pressing kind any of its entries reads as (`entryHeadline`). A `Record`, so
- *  a kind added to `HeadlineKind` without a place here does not compile. */
-const HEADLINE_PRECEDENCE: Record<HeadlineKind, number> = { pay: 0, payUnavailable: 1, received: 2, in: 3, waitlist: 4, closed: 5 };
+ *  a kind added to `HeadlineKind` without a place here does not compile.
+ *
+ *  `pool` sits above `in` (B4 review I1 ruling): beside a confirmed team entry, "You're in" and its "Nothing else to do" would be
+ *  false for the solo sign-up, while "You're in the player pool" and "The organiser places you on a team" stay true for the whole
+ *  cart. It sits below `received`: an entry awaiting the organiser's decision comes first, and a solo one cannot be placed until
+ *  it is confirmed or paid (assignSoloSignUp, registration-assign.ts). */
+const HEADLINE_PRECEDENCE: Record<HeadlineKind, number> = {
+  pay: 0,
+  payUnavailable: 1,
+  received: 2,
+  pool: 3,
+  in: 4,
+  waitlist: 5,
+  closed: 6,
+};
 
 /**
  * What ONE entry would put at the top of the page on its own. Money first, because an owed fee is the registrant's to act on:
@@ -179,10 +201,11 @@ const HEADLINE_PRECEDENCE: Record<HeadlineKind, number> = { pay: 0, payUnavailab
  *  - `stripe_unavailable` → `payUnavailable` (owed, and no way to pay here: the card notice)
  *  - `window_closed` → `closed`: the pay-by date has gone by and the sweep expires the entry on its next run, so it has lost its
  *    place (B4 review m1). Never `pay` (nothing can be paid) and never `received` (nobody is reviewing it). Its card says so.
- *  - otherwise by status: `pending`/`paid` → `received` (owing nothing, so waiting on the organiser), `confirmed` → `in`,
- *    `waitlisted` → `waitlist`, withdrawn/expired/rejected → `closed`.
+ *  - otherwise by status: `pending`/`paid` → `received` (owing nothing, so waiting on the organiser), `confirmed` → `pool` while it
+ *    is a solo sign-up still waiting for a team (`awaitingTeamAssignment`), else `in`, `waitlisted` → `waitlist` (a waitlisted solo
+ *    sign-up is waiting for a place before a team), withdrawn/expired/rejected → `closed`.
  */
-function entryHeadline(entry: StatusEntry, cart: CartPayFacts): HeadlineKind {
+function entryHeadline(entry: HeadlineEntry, cart: CartPayFacts): HeadlineKind {
   switch (resolveMoneyState(entry, cart).kind) {
     case "stripe_due":
     case "offline_due":
@@ -199,7 +222,7 @@ function entryHeadline(entry: StatusEntry, cart: CartPayFacts): HeadlineKind {
     case "paid":
       return "received";
     case "confirmed":
-      return "in";
+      return awaitingTeamAssignment(entry) ? "pool" : "in";
     case "waitlisted":
       return "waitlist";
     case "withdrawn":
@@ -216,7 +239,7 @@ function entryHeadline(entry: StatusEntry, cart: CartPayFacts): HeadlineKind {
  * a card fee owed while cards are unavailable outranks everything but `pay`, and an entry past its pay-by date adds only `closed`,
  * so beside a confirmed sibling the cart reads `in`.
  */
-export function cartHeadline(entries: readonly StatusEntry[], cart: CartPayFacts): HeadlineKind {
+export function cartHeadline(entries: readonly HeadlineEntry[], cart: CartPayFacts): HeadlineKind {
   if (entries.length === 0) return "closed";
   let headline: HeadlineKind = "closed";
   for (const e of entries) {
@@ -228,7 +251,7 @@ export function cartHeadline(entries: readonly StatusEntry[], cart: CartPayFacts
 
 /** How many entries are waiting on the organiser's decision: the count the `received` headline and step are worded for. An entry that
  *  owes a fee is never one of them, including one owed with no way to pay here (B4 review m1). */
-export function receivedCount(entries: readonly StatusEntry[], cart: CartPayFacts): number {
+export function receivedCount(entries: readonly HeadlineEntry[], cart: CartPayFacts): number {
   return entries.filter((e) => entryHeadline(e, cart) === "received").length;
 }
 
@@ -292,7 +315,7 @@ export interface NextFacts extends CartPayFacts {
   competition_starts_on: string | null;
   competition_ends_on: string | null;
   venue_name: string | null;
-  entries: readonly (StatusEntry & Parameters<typeof inviteLinks>[0])[];
+  entries: readonly (HeadlineEntry & Parameters<typeof inviteLinks>[0])[];
 }
 
 /**
@@ -329,6 +352,8 @@ function nextStep(view: NextFacts, headline: HeadlineKind): NextItem | null {
       return null;
     case "received":
       return { ...step("register.status.next.received"), count: receivedCount(view.entries, view) };
+    case "pool":
+      return step("register.status.next.pool");
     case "waitlist":
       return step("register.status.next.waitlist");
     case "in":

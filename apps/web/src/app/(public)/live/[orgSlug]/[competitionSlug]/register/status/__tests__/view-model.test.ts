@@ -706,6 +706,8 @@ describe("status page outcome (B4 T15)", () => {
     join_code: null,
     allows_new_joiner: true,
     players: [],
+    free_agent: false,
+    assigned_team_name: null,
     ...over,
   });
 
@@ -722,6 +724,15 @@ describe("status page outcome (B4 T15)", () => {
   const withdrawn = entry({ status: "withdrawn", amount_cents: 1500 });
   const expired = entry({ status: "expired", amount_cents: 1500 });
   const rejected = entry({ status: "rejected", amount_cents: 1500 });
+  // B4 review I1: a solo sign-up (free agent) in the player pool. Confirmed before any placement (registration-submit.ts confirms a
+  // free auto-approval entry at submit; assignSoloSignUp places only a confirmed or paid one), so "You're in" + "Nothing else to do"
+  // would sit above its own card's "Waiting for a team".
+  const inPool = entry({ status: "confirmed", amount_cents: 0, free_agent: true });
+  const placedSolo = entry({ status: "confirmed", amount_cents: 0, free_agent: true, assigned_team_name: "Riverside Rovers" });
+  const soloAwaitingApproval = entry({ status: "pending", amount_cents: 0, free_agent: true });
+  const soloUnpaid = entry({ status: "pending", amount_cents: 800, free_agent: true });
+  const soloWaitlisted = entry({ status: "waitlisted", amount_cents: 0, free_agent: true });
+  const soloWithdrawn = entry({ status: "withdrawn", amount_cents: 0, free_agent: true });
 
   describe("cartHeadline", () => {
     it("the empty cart is closed (the empty case, first)", () => {
@@ -747,6 +758,20 @@ describe("status page outcome (B4 T15)", () => {
       { name: "m1: cards unavailable + free awaiting approval -> payUnavailable", entries: [unpaidCard, freeAwaiting], cart: { charges_enabled: false }, want: "payUnavailable" },
       { name: "m1: cards unavailable + an offline fee due -> pay (one of them can be paid here)", entries: [unpaidCard, offlineDue], cart: { charges_enabled: false }, want: "pay" },
       { name: "m1: cards unavailable + window_closed -> payUnavailable", entries: [unpaidCard, windowClosed], cart: { charges_enabled: false }, want: "payUnavailable" },
+      // I1: the player pool. A confirmed solo sign-up nobody has placed on a team yet.
+      { name: "I1: a confirmed solo sign-up not yet on a team -> pool", entries: [inPool], want: "pool" },
+      { name: "I1: once placed on a team -> in", entries: [placedSolo], want: "in" },
+      { name: "I1 ruling: pool + a confirmed team entry -> pool (You're in's 'Nothing else to do' would contradict the solo card)", entries: [confirmedCard, inPool], want: "pool" },
+      { name: "I1: pool + a placed solo -> pool", entries: [placedSolo, inPool], want: "pool" },
+      { name: "I1: pool + waitlisted -> pool", entries: [waitlisted, inPool], want: "pool" },
+      { name: "I1: pool + paid awaiting approval -> received (the organiser's decision comes first)", entries: [inPool, paidAwaiting], want: "received" },
+      { name: "I1: pool + an unpaid card entry -> pay", entries: [inPool, unpaidCard], want: "pay" },
+      { name: "I1: a solo sign-up awaiting approval -> received (not placeable until confirmed)", entries: [soloAwaitingApproval], want: "received" },
+      { name: "I1: a solo sign-up that owes its fee -> pay", entries: [soloUnpaid], want: "pay" },
+      { name: "I1: a waitlisted solo sign-up -> waitlist, not the pool", entries: [soloWaitlisted], want: "waitlist" },
+      { name: "I1: a withdrawn solo sign-up -> closed, not the pool", entries: [soloWithdrawn], want: "closed" },
+      { name: "I1: a solo past its pay-by date -> closed, not the pool", entries: [{ ...soloUnpaid, promotion_expires_at: PAST }], want: "closed" },
+      { name: "I1, after a withdrawal: a withdrawn solo beside a confirmed team -> in", entries: [confirmedCard, soloWithdrawn], want: "in" },
       { name: "rule 3: a card-paid confirmed entry", entries: [confirmedCard], want: "in" },
       { name: "rule 3: a waived entry is confirmed, not owed", entries: [waived], want: "in" },
       { name: "rule 3: a free confirmed entry", entries: [confirmedFree], want: "in" },
@@ -778,7 +803,9 @@ describe("status page outcome (B4 T15)", () => {
       expect(checked).toBe(RULES.length);
       expect(checked).toBeGreaterThan(0);
       // Premise: every headline kind is reached by at least one row, so no kind is asserted vacuously.
-      expect(new Set(RULES.map((r) => r.want))).toEqual(new Set<HeadlineKind>(["pay", "payUnavailable", "in", "received", "waitlist", "closed"]));
+      expect(new Set(RULES.map((r) => r.want))).toEqual(
+        new Set<HeadlineKind>(["pay", "payUnavailable", "in", "pool", "received", "waitlist", "closed"]),
+      );
     });
 
     // B4 review m1: the `received` headline and its step are worded for a count ("Entries received", "reviews your entries"). An entry
@@ -885,7 +912,7 @@ describe("status page outcome (B4 T15)", () => {
     // every owed fee, including the two with no way to pay here, so whenever something is due and nothing can be paid, the page
     // never leads with "awaiting approval" for that debt: it leads with the card notice, or with the entry's siblings.
     it("pay exactly when an entry can be paid here; an owed fee with no way to pay never reads as awaiting approval (counted)", () => {
-      const palette = [unpaidCard, offlineDue, windowClosed, paidAwaiting, freeAwaiting, confirmedCard, confirmedFree, waived, waitlisted, withdrawn, expired, rejected];
+      const palette = [unpaidCard, offlineDue, windowClosed, paidAwaiting, freeAwaiting, confirmedCard, confirmedFree, waived, waitlisted, withdrawn, expired, rejected, inPool, soloUnpaid];
       const PAYABLE = new Set(["stripe_due", "offline_due"]);
       let checked = 0;
       let pays = 0;
@@ -1040,6 +1067,12 @@ describe("status page outcome (B4 T15)", () => {
         expect(whatHappensNext(view({ entries: [paidAwaiting, windowClosed] }), "received")[0]!.count).toBe(1);
       });
 
+      it("pool: the organiser places you on a team, and this page shows it", () => {
+        expect(whatHappensNext(view({ entries: [inPool, confirmedCard] }), "pool")).toEqual([
+          { kind: "step", key: "register.status.next.pool", vars: {} },
+        ]);
+      });
+
       it("waitlist: this page shows a promotion", () => {
         expect(whatHappensNext(view({ entries: [waitlisted] }), "waitlist")).toEqual([
           { kind: "step", key: "register.status.next.waitlist", vars: {} },
@@ -1086,7 +1119,7 @@ describe("status page outcome (B4 T15)", () => {
     });
 
     it("every key a next item can carry exists in every locale (counted)", () => {
-      const KEYS = ["starts", "runs", "venue", "payBy", "pay", "received.one", "received.other", "waitlist", "invite", "done", "title"];
+      const KEYS = ["starts", "runs", "venue", "payBy", "pay", "received.one", "received.other", "pool", "waitlist", "invite", "done", "title"];
       let checked = 0;
       for (const [locale, dict] of Object.entries({ en: uiEn, es: uiEs, fr: uiFr, nl: uiNl })) {
         for (const k of KEYS) {
@@ -1098,5 +1131,26 @@ describe("status page outcome (B4 T15)", () => {
       }
       expect(checked).toBe(KEYS.length * 4);
     });
+  });
+
+  // The page words each headline kind from one key (page.tsx; `received` is a plural family, `payUnavailable` the card notice).
+  it("every headline kind's copy exists in every locale (counted)", () => {
+    const KEYS: Record<HeadlineKind, string[]> = {
+      pay: ["register.status.headline.pay"],
+      payUnavailable: ["register.status.pay.unavailable"],
+      received: ["register.status.headline.received.one", "register.status.headline.received.other"],
+      pool: ["register.status.headline.pool"],
+      in: ["register.status.headline.in"],
+      waitlist: ["register.status.headline.waitlist"],
+      closed: ["register.status.headline.closed"],
+    };
+    let checked = 0;
+    for (const [locale, dict] of Object.entries({ en: uiEn, es: uiEs, fr: uiFr, nl: uiNl })) {
+      for (const k of Object.values(KEYS).flat()) {
+        expect((dict as Record<string, string>)[k], `${locale} ${k}`).toEqual(expect.any(String));
+        checked += 1;
+      }
+    }
+    expect(checked).toBe(8 * 4);
   });
 });

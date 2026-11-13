@@ -510,6 +510,11 @@ describe("register status page (RS007 rebuild)", () => {
         kind: "received", text: "Entries received, awaiting approval" },
       { name: "a waitlisted entry", entries: [{ status: "waitlisted", amount_cents: 0 }], kind: "waitlist", text: "You're on the waiting list" },
       { name: "only withdrawn", entries: [{ status: "withdrawn" }], kind: "closed", text: "This registration is closed" },
+      // B4 review I1: a confirmed solo sign-up nobody has placed on a team yet.
+      { name: "a solo sign-up in the player pool", entries: [{ status: "confirmed", amount_cents: 0, free_agent: true }],
+        kind: "pool", text: "You're in the player pool" },
+      { name: "a solo sign-up placed on a team", entries: [{ status: "confirmed", amount_cents: 0, free_agent: true, assigned_team_name: "Riverside Rovers" }],
+        kind: "in", text: "You're in" },
     ];
 
     it("the h1 is the outcome, one literal per headline kind (counted)", async () => {
@@ -528,7 +533,26 @@ describe("register status page (RS007 rebuild)", () => {
       }
       expect(checked).toBe(HEADLINES.length);
       // Premise: every headline kind the page can show is reached by a row here.
-      expect(new Set(HEADLINES.map((c) => c.kind))).toEqual(new Set(["pay", "payUnavailable", "in", "received", "waitlist", "closed"]));
+      expect(new Set(HEADLINES.map((c) => c.kind))).toEqual(new Set(["pay", "payUnavailable", "in", "pool", "received", "waitlist", "closed"]));
+    });
+
+    // B4 review I1, through the page: the lead line, the step and the solo card agree. Beside a confirmed team entry the pool still
+    // leads (ruling: "Nothing else to do" would contradict the solo card's "Waiting for a team").
+    it("a solo sign-up in the pool beside a confirmed team: the pool leads, the step says the organiser places you, never 'Nothing else to do'", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce({
+        ...BASE_VIEW,
+        entries: [
+          { ...BASE_ENTRY, id: "reg-1", status: "confirmed" as const, settled_by: "card" as const },
+          { ...BASE_ENTRY, id: "reg-2", division_name: "Womens 35+", display_name: "Alex Test", entrant_kind: "individual" as const,
+            status: "confirmed" as const, amount_cents: 0, free_agent: true, assigned_team_name: null },
+        ],
+      });
+      const html = (await render({ rid: "g1", token: "tok" })).replace(/&#x27;/g, "'");
+      expect(headline(html)).toBe("You're in the player pool");
+      const steps = [...html.matchAll(/<li[^>]*data-next-kind="step"[^>]*>([^<]*)</g)].map((m) => m[1]);
+      expect(steps).toEqual(["The organiser places you on a team. This page shows it."]);
+      expect(html).toContain("Waiting for a team");
+      expect(html).not.toContain("Nothing else to do");
     });
 
     // B4 review m1, the owed states' cards and steps. A card fee owed while cards are unavailable keeps its figure and the notice, has
