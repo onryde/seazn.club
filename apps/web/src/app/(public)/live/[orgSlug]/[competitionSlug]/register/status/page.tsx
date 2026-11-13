@@ -146,7 +146,7 @@ export default async function RegistrationStatusPage({ params, searchParams }: P
         ? t(ui, "register.status.pay.unavailable")
         : t(ui, `register.status.headline.${headline}`);
   const money = cartMoneySummary(view.entries, view);
-  const nextItems = whatHappensNext(view, headline);
+  const nextItems = whatHappensNext(view, headline, new Date());
   // The address is set in its own span (layout.tsx's poweredBy split): the template is split on its one placeholder.
   const [sentLead, sentTail = ""] = t(ui, "register.status.sentTo").split("{email}");
 

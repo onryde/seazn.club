@@ -969,6 +969,8 @@ describe("status page outcome (B4 T15)", () => {
   });
 
   describe("whatHappensNext (spec §5.2: real data only)", () => {
+    // A fixed "now" (12:00 UTC on 13 Nov 2026), so the competition dates below never go stale against the real clock.
+    const NOW = new Date("2026-11-13T12:00:00.000Z");
     type View = Parameters<typeof whatHappensNext>[0];
     const view = (over: Partial<View> = {}): View => ({
       competition_name: "Summer Smash",
@@ -977,41 +979,84 @@ describe("status page outcome (B4 T15)", () => {
       venue_name: null,
       expires_at: FUTURE,
       charges_enabled: true,
+      org_timezone: "UTC",
       entries: [],
       ...over,
     });
 
     it("no dates, no venue and a closed cart: no items, so the section is not shown (the empty case, first)", () => {
-      expect(whatHappensNext(view(), "closed")).toEqual([]);
+      expect(whatHappensNext(view(), "closed", NOW)).toEqual([]);
+    });
+
+    // B4 review m7: "{name} starts on {date}" is not a next step once the competition is over. The dates line goes when its last day
+    // (ends_on, else starts_on) is before today, today read in the org's own zone. Expected values from that rule, a row per case.
+    it("the dates line goes once the competition's last day is before today, and stays until then (counted)", () => {
+      const CASES: { name: string; start: string; end: string | null; tz?: string; now?: string; kept: boolean }[] = [
+        { name: "a one-day event yesterday", start: "2026-11-12", end: null, kept: false },
+        { name: "a one-day event today", start: "2026-11-13", end: null, kept: true },
+        { name: "a one-day event tomorrow", start: "2026-11-14", end: null, kept: true },
+        { name: "a run that ended yesterday", start: "2026-11-10", end: "2026-11-12", kept: false },
+        { name: "a run that ends today", start: "2026-11-10", end: "2026-11-13", kept: true },
+        { name: "a run under way (started, not ended)", start: "2026-11-12", end: "2026-11-20", kept: true },
+        { name: "a run still ahead", start: "2026-12-05", end: "2026-12-07", kept: true },
+        { name: "a start long past, ends_on equal", start: "2026-01-01", end: "2026-01-01", kept: false },
+        // The org's zone decides "today": 23:30 UTC on 13 Nov is already 14 Nov in Auckland (UTC+13), so a 13 Nov event is over there.
+        { name: "Auckland: past midnight, the 13th is over", start: "2026-11-13", end: null, tz: "Pacific/Auckland", now: "2026-11-13T23:30:00.000Z", kept: false },
+        { name: "UTC at the same instant: the 13th is today", start: "2026-11-13", end: null, tz: "UTC", now: "2026-11-13T23:30:00.000Z", kept: true },
+      ];
+      let checked = 0;
+      let dropped = 0;
+      for (const c of CASES) {
+        const items = whatHappensNext(
+          view({ competition_starts_on: c.start, competition_ends_on: c.end, org_timezone: c.tz ?? "UTC" }),
+          "closed",
+          c.now ? new Date(c.now) : NOW,
+        );
+        expect(items.some((i) => i.kind === "dates"), c.name).toBe(c.kept);
+        checked += 1;
+        if (!c.kept) dropped += 1;
+      }
+      expect(checked).toBe(CASES.length);
+      expect(dropped, "both directions").toBeGreaterThan(0);
+      expect(checked - dropped).toBeGreaterThan(0);
+    });
+
+    it("a past competition keeps the venue and the step: only the dates line goes", () => {
+      const items = whatHappensNext(
+        view({ competition_starts_on: "2026-11-01", competition_ends_on: "2026-11-02", venue_name: "Riverside Courts", entries: [confirmedCard] }),
+        "in",
+        NOW,
+      );
+      expect(items.map((i) => i.kind)).toEqual(["venue", "step"]);
     });
 
     it("a closed cart adds no step, even with dates and a venue", () => {
-      const items = whatHappensNext(view({ competition_starts_on: "2026-12-05", venue_name: "Riverside Courts" }), "closed");
+      const items = whatHappensNext(view({ competition_starts_on: "2026-12-05", venue_name: "Riverside Courts" }), "closed", NOW);
       expect(items.map((i) => i.kind)).toEqual(["dates", "venue"]);
     });
 
     it("a one-day event (ends_on equal to starts_on) says 'starts on'", () => {
-      expect(whatHappensNext(view({ competition_starts_on: "2026-12-05", competition_ends_on: "2026-12-05" }), "closed")).toEqual([
+      expect(whatHappensNext(view({ competition_starts_on: "2026-12-05", competition_ends_on: "2026-12-05" }), "closed", NOW)).toEqual([
         { kind: "dates", key: "register.status.next.starts", vars: { name: "Summer Smash", date: "2026-12-05" } },
       ]);
     });
 
     it("no ends_on says 'starts on'", () => {
-      expect(whatHappensNext(view({ competition_starts_on: "2026-12-05" }), "closed")[0]!.key).toBe("register.status.next.starts");
+      expect(whatHappensNext(view({ competition_starts_on: "2026-12-05" }), "closed", NOW)[0]!.key).toBe("register.status.next.starts");
     });
 
     it("an ends_on that differs says 'runs {start} to {end}'", () => {
-      expect(whatHappensNext(view({ competition_starts_on: "2026-12-05", competition_ends_on: "2026-12-07" }), "closed")).toEqual([
+      expect(whatHappensNext(view({ competition_starts_on: "2026-12-05", competition_ends_on: "2026-12-07" }), "closed", NOW)).toEqual([
         { kind: "dates", key: "register.status.next.runs", vars: { name: "Summer Smash", start: "2026-12-05", end: "2026-12-07" } },
       ]);
     });
 
     it("an ends_on with no starts_on invents no start: no dates item", () => {
-      expect(whatHappensNext(view({ competition_ends_on: "2026-12-07" }), "closed")).toEqual([]);
+      expect(whatHappensNext(view({ competition_ends_on: "2026-12-07" }), "closed", NOW)).toEqual([]);
     });
 
     it("a venue is named only when the read model names one", () => {
-      expect(whatHappensNext(view({ venue_name: "Riverside Courts" }), "closed")).toEqual([
+      expect(whatHappensNext(view({ venue_name: "Riverside Courts" }), "closed", NOW)).toEqual([
         { kind: "venue", key: "register.status.next.venue", vars: { venue: "Riverside Courts" } },
       ]);
     });
@@ -1020,6 +1065,7 @@ describe("status page outcome (B4 T15)", () => {
       const items = whatHappensNext(
         view({ competition_starts_on: "2026-12-05", venue_name: "Riverside Courts", entries: [waitlisted] }),
         "waitlist",
+        NOW,
       );
       expect(items.map((i) => i.kind)).toEqual(["dates", "venue", "step"]);
     });
@@ -1027,19 +1073,19 @@ describe("status page outcome (B4 T15)", () => {
     describe("the step, by headline", () => {
       it("pay: names the EARLIEST pay-by deadline among the entries due", () => {
         const promoted = { ...unpaidCard, promotion_expires_at: SOONER };
-        expect(whatHappensNext(view({ entries: [unpaidCard, promoted] }), "pay")).toEqual([
+        expect(whatHappensNext(view({ entries: [unpaidCard, promoted] }), "pay", NOW)).toEqual([
           { kind: "step", key: "register.status.next.payBy", vars: { deadline: SOONER } },
         ]);
       });
 
       it("pay with no deadline anywhere: 'Pay to keep your place', no invented date", () => {
-        expect(whatHappensNext(view({ expires_at: null, entries: [offlineDue] }), "pay")).toEqual([
+        expect(whatHappensNext(view({ expires_at: null, entries: [offlineDue] }), "pay", NOW)).toEqual([
           { kind: "step", key: "register.status.next.pay", vars: {} },
         ]);
       });
 
       it("pay beside an entry past its deadline: names only the date still ahead, never one that has gone by", () => {
-        expect(whatHappensNext(view({ entries: [windowClosed, unpaidCard] }), "pay")).toEqual([
+        expect(whatHappensNext(view({ entries: [windowClosed, unpaidCard] }), "pay", NOW)).toEqual([
           { kind: "step", key: "register.status.next.payBy", vars: { deadline: FUTURE } },
         ]);
       });
@@ -1049,32 +1095,32 @@ describe("status page outcome (B4 T15)", () => {
       it("a fee past its deadline alone: the cart is closed and adds no step", () => {
         const v = view({ entries: [windowClosed] });
         expect(cartHeadline(v.entries, v), "premise: the headline").toBe("closed");
-        expect(whatHappensNext(v, cartHeadline(v.entries, v))).toEqual([]);
+        expect(whatHappensNext(v, cartHeadline(v.entries, v), NOW)).toEqual([]);
       });
 
       it("a card fee owed while cards are unavailable: the headline is the card notice and there is no pay step", () => {
         const v = view({ charges_enabled: false, entries: [unpaidCard] });
         expect(cartHeadline(v.entries, v), "premise: the headline").toBe("payUnavailable");
-        expect(whatHappensNext(v, cartHeadline(v.entries, v))).toEqual([]);
+        expect(whatHappensNext(v, cartHeadline(v.entries, v), NOW)).toEqual([]);
       });
 
       it("received: the organiser reviews, counted over the entries awaiting the decision", () => {
-        expect(whatHappensNext(view({ entries: [paidAwaiting, freeAwaiting, waitlisted] }), "received")).toEqual([
+        expect(whatHappensNext(view({ entries: [paidAwaiting, freeAwaiting, waitlisted] }), "received", NOW)).toEqual([
           { kind: "step", key: "register.status.next.received", vars: {}, count: 2 },
         ]);
-        expect(whatHappensNext(view({ entries: [paidAwaiting] }), "received")[0]!.count).toBe(1);
+        expect(whatHappensNext(view({ entries: [paidAwaiting] }), "received", NOW)[0]!.count).toBe(1);
         // m1: an entry past its pay-by date is not awaiting a decision, so it is not counted ("your entry", not "your entries").
-        expect(whatHappensNext(view({ entries: [paidAwaiting, windowClosed] }), "received")[0]!.count).toBe(1);
+        expect(whatHappensNext(view({ entries: [paidAwaiting, windowClosed] }), "received", NOW)[0]!.count).toBe(1);
       });
 
       it("pool: the organiser places you on a team, and this page shows it", () => {
-        expect(whatHappensNext(view({ entries: [inPool, confirmedCard] }), "pool")).toEqual([
+        expect(whatHappensNext(view({ entries: [inPool, confirmedCard] }), "pool", NOW)).toEqual([
           { kind: "step", key: "register.status.next.pool", vars: {} },
         ]);
       });
 
       it("waitlist: this page shows a promotion", () => {
-        expect(whatHappensNext(view({ entries: [waitlisted] }), "waitlist")).toEqual([
+        expect(whatHappensNext(view({ entries: [waitlisted] }), "waitlist", NOW)).toEqual([
           { kind: "step", key: "register.status.next.waitlist", vars: {} },
         ]);
       });
@@ -1084,21 +1130,21 @@ describe("status page outcome (B4 T15)", () => {
 
       it("in, with a teammate still to join: send the invite links", () => {
         const team = { ...confirmedCard, join_code: "JOIN1", players: [joined("p1"), pending("p2")] };
-        expect(whatHappensNext(view({ entries: [team] }), "in")).toEqual([{ kind: "step", key: "register.status.next.invite", vars: {} }]);
+        expect(whatHappensNext(view({ entries: [team] }), "in", NOW)).toEqual([{ kind: "step", key: "register.status.next.invite", vars: {} }]);
       });
 
       it("in, with everyone joined (only the general link left): nothing else to do", () => {
         const team = { ...confirmedCard, join_code: "JOIN1", players: [joined("p1"), joined("p2")] };
-        expect(whatHappensNext(view({ entries: [team] }), "in")).toEqual([{ kind: "step", key: "register.status.next.done", vars: {} }]);
+        expect(whatHappensNext(view({ entries: [team] }), "in", NOW)).toEqual([{ kind: "step", key: "register.status.next.done", vars: {} }]);
       });
 
       it("in, with no join code at all: nothing else to do", () => {
-        expect(whatHappensNext(view({ entries: [confirmedCard] }), "in")[0]!.key).toBe("register.status.next.done");
+        expect(whatHappensNext(view({ entries: [confirmedCard] }), "in", NOW)[0]!.key).toBe("register.status.next.done");
       });
 
       it("in, after a withdrawal: a withdrawn sibling's unclaimed slot asks for no invite (its link is dead)", () => {
         const deadTeam = { ...withdrawn, join_code: "JOIN2", players: [pending("p3")] };
-        expect(whatHappensNext(view({ entries: [confirmedCard, deadTeam] }), "in")[0]!.key).toBe("register.status.next.done");
+        expect(whatHappensNext(view({ entries: [confirmedCard, deadTeam] }), "in", NOW)[0]!.key).toBe("register.status.next.done");
       });
     });
 

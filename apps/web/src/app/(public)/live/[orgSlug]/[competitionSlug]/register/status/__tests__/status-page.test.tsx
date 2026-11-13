@@ -619,15 +619,15 @@ describe("register status page (RS007 rebuild)", () => {
     it("dates, venue and the step render as sentences, the dates in the page's locale", async () => {
       usecaseMock.groupById.mockResolvedValueOnce({
         ...BASE_VIEW,
-        competition_starts_on: "2026-12-05",
-        competition_ends_on: "2026-12-07",
+        competition_starts_on: "2099-12-05",
+        competition_ends_on: "2099-12-07",
         venue_name: "Riverside Courts",
         entries: [{ ...BASE_ENTRY, status: "waitlisted" as const, amount_cents: 0, waitlist_position: 2 }],
       });
       const html = (await render({ rid: "g1", token: "tok" })).replace(/&#x27;/g, "'");
       const lines = [...html.matchAll(/<li[^>]*data-next-kind="([a-z]+)"[^>]*>([^<]*)</g)].map((m) => [m[1], m[2]]);
       expect(lines).toEqual([
-        ["dates", "Summer Smash runs 5 Dec 2026 to 7 Dec 2026."],
+        ["dates", "Summer Smash runs 5 Dec 2099 to 7 Dec 2099."],
         ["venue", "Played at Riverside Courts."],
         ["step", "If a place opens, your entry moves up and this page shows it."],
       ]);
@@ -636,15 +636,32 @@ describe("register status page (RS007 rebuild)", () => {
       expect(html).toContain("You're #2 on the waiting list");
     });
 
-    it("a one-day event says 'starts on'", async () => {
+    // B4 review m7: the page passes the real clock, so these dates are far past/future (the file's FUTURE convention). A competition
+    // whose last day is before today has no dates line; the venue and the step stay.
+    it("a competition that is over shows no dates line, and keeps the venue and the step", async () => {
       usecaseMock.groupById.mockResolvedValueOnce({
         ...BASE_VIEW,
-        competition_starts_on: "2026-12-05",
-        competition_ends_on: "2026-12-05",
+        competition_starts_on: "2000-06-01",
+        competition_ends_on: "2000-06-03",
+        venue_name: "Riverside Courts",
         entries: [{ ...BASE_ENTRY, status: "confirmed" as const }],
       });
       const html = (await render({ rid: "g1", token: "tok" })).replace(/&#x27;/g, "'");
-      expect(html).toContain(">Summer Smash starts on 5 Dec 2026.<");
+      const kinds = [...html.matchAll(/<li[^>]*data-next-kind="([a-z]+)"/g)].map((m) => m[1]);
+      expect(kinds).toEqual(["venue", "step"]);
+      expect(html).not.toContain("Summer Smash runs");
+      expect(html).not.toContain("Summer Smash starts on");
+    });
+
+    it("a one-day event says 'starts on'", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce({
+        ...BASE_VIEW,
+        competition_starts_on: "2099-12-05",
+        competition_ends_on: "2099-12-05",
+        entries: [{ ...BASE_ENTRY, status: "confirmed" as const }],
+      });
+      const html = (await render({ rid: "g1", token: "tok" })).replace(/&#x27;/g, "'");
+      expect(html).toContain(">Summer Smash starts on 5 Dec 2099.<");
       expect(html).toContain(">Nothing else to do. Keep this page — it's your entry.<");
     });
 

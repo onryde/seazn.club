@@ -6,6 +6,7 @@
 import { anyOptedOut, resolvePersonDisplayName } from "@/lib/name-display";
 import { isTerminalRegistrationStatus } from "@/lib/registration-status";
 import { joinLinkPath } from "@/lib/join-link";
+import { zonedDateInput } from "@/lib/zoned-datetime";
 
 export type EntryStatus =
   | "pending"
@@ -315,6 +316,8 @@ export interface NextFacts extends CartPayFacts {
   competition_starts_on: string | null;
   competition_ends_on: string | null;
   venue_name: string | null;
+  /** The org's own zone (`GroupStatusView.org_timezone`): what "today" is for the dates line. */
+  org_timezone: string;
   entries: readonly (HeadlineEntry & Parameters<typeof inviteLinks>[0])[];
 }
 
@@ -322,11 +325,15 @@ export interface NextFacts extends CartPayFacts {
  * "What happens next" (spec §5.2), from real data only: the competition's own dates, the one venue the read model names, and one
  * step for the headline. At most three items, in that order. No item promises an email or invents a time (FP9). The empty case: no
  * dates, no venue and a `closed` cart give no items, and the page renders no section.
+ *
+ * The dates line is a step still ahead (B4 review m7): it goes once the competition's last day (`ends_on`, else `starts_on`) is
+ * before today, and today is the calendar day `now` falls on in the org's own zone. A competition running today keeps it.
  */
-export function whatHappensNext(view: NextFacts, headline: HeadlineKind): NextItem[] {
+export function whatHappensNext(view: NextFacts, headline: HeadlineKind, now: Date): NextItem[] {
   const items: NextItem[] = [];
   const start = view.competition_starts_on;
-  if (start) {
+  const over = start !== null && (view.competition_ends_on ?? start) < zonedDateInput(now, view.org_timezone);
+  if (start && !over) {
     const end = view.competition_ends_on;
     items.push(
       end && end !== start
