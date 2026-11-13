@@ -3484,7 +3484,8 @@ describe("B2 T8 — action bar: Back, named Continue, running total, one forward
     // Counted as ELEMENTS (the line's own testid), not as text matches: `textOf` over a flat `walk` repeats every nested element's text.
     const waitingLines = walk((EntryCart as unknown as ComponentFn)(propsOf(m.island.tree().find((e) => e.type === EntryCart)!))).filter((e) => propsOf(e)["data-testid"] === "reg-cart-waitlist");
     expect(waitingLines.map((e) => textOf(e)), "the cart labels exactly one entry, with the copy").toEqual(["Waiting list — not charged now"]);
-    expect(textOf(one(m.island, "reg-bar-summary")), "two entries, ONE fee").toBe("2 entries · £25.00");
+    // B3 review m2 (owner ruling 2026-11-13): the bar counts the entries its total is for - the waiting one is in neither.
+    expect(textOf(one(m.island, "reg-bar-summary")), "ONE charged entry, ONE fee").toBe("1 entry · £25.00");
 
     m.clickByText("Next"); // -> DETAILS
     const names = allByAriaLabel(m.island, "Player 1 — Your name");

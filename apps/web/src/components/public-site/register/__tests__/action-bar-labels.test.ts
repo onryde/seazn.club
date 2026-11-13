@@ -138,6 +138,38 @@ describe("actionBarLabels — the phone running total", () => {
     expect(two.total).toBe("2 entries · £50.00");
   });
 
+  // B3 review m2 (owner ruling 2026-11-13): the count is of the entries the total is FOR. A cart of one charged entry and one waiting
+  // entry read "2 entries · £25.00" - two entries for £25 - though the second is not entered or charged now. Expected words are the
+  // ruling's: the waiting entry is in neither the total nor the count.
+  const bar = (entries: CartEntry[], divisions: DivisionLike[]) =>
+    actionBarLabels({ t, plural, locale: "en", summary: summarizeCart({ entries }, divisions), step: "entries", stepAfter: "details", phase: "idle" }).total;
+  const FULL_CARD = { ...FULL, payment_method: "stripe" as const };
+  const ONE_LEFT_CARD = division({ division_id: "one-left", fee_cents: 2500, payment_method: "stripe", capacity: 8, remaining: 1, taken: 7 });
+
+  it("one charged entry and one waiting (another division): '1 entry · £25.00'", () => {
+    const entries = [entry("e1", "card"), entry("e2", "full", "team")];
+    expect(summarizeCart({ entries }, [CARD, FULL_CARD]).lines.map((l) => l.waitlisted), "premise: the second waits").toEqual([false, true]);
+    expect(bar(entries, [CARD, FULL_CARD])).toBe("1 entry · £25.00");
+  });
+
+  it("two entries, one place left in the division: the first takes it and is counted, the second waits: '1 entry · £25.00'", () => {
+    const entries = [entry("e1", "one-left"), entry("e2", "one-left")];
+    expect(summarizeCart({ entries }, [ONE_LEFT_CARD]).lines.map((l) => l.waitlisted), "premise: the second waits").toEqual([false, true]);
+    expect(bar(entries, [ONE_LEFT_CARD])).toBe("1 entry · £25.00");
+  });
+
+  it("a charged entry beside a stale-closed one (its window shut since it was added; not charged): '1 entry · £25.00'", () => {
+    const STALE = division({ division_id: "stale", fee_cents: 1500, payment_method: "stripe", open: false, closed_reason: "window" });
+    const entries = [entry("e1", "card"), entry("e2", "stale")];
+    expect(summarizeCart({ entries }, [CARD, STALE]).lines.map((l) => l.staleClosed), "premise: the second is stale-closed").toEqual([false, true]);
+    expect(bar(entries, [CARD, STALE])).toBe("1 entry · £25.00");
+  });
+
+  it("a charged entry beside a FREE one: both are entered now, so both count: '2 entries · £25.00'", () => {
+    const FREE_CARD = division({ division_id: "free-card", fee_cents: 0, payment_method: "stripe" });
+    expect(bar([entry("e1", "card"), entry("e2", "free-card")], [CARD, FREE_CARD])).toBe("2 entries · £25.00");
+  });
+
   it("is absent on Review (the Pay label already states the fee)", () => {
     expect(labels(CARTS[1], { step: "review", stepAfter: undefined }).total).toBeNull();
   });

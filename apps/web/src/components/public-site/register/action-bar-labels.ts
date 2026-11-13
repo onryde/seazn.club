@@ -25,7 +25,7 @@ export interface ActionBarLabels {
    *  that changes the words does not change the button's width. Never changes with the phase. */
   widestSubmitLabel: string;
   /** The phone bar's running total ("2 entries · £50.00"), or null when there is nothing to say: Review (the Pay label states the
-   *  fee), an empty cart, and a cart that costs nothing. */
+   *  fee), an empty cart, and a cart that costs nothing. Counts only the entries the total is for (a waiting entry is in neither). */
   total: string | null;
 }
 
@@ -68,9 +68,13 @@ export function actionBarLabels(input: {
   // The running total in the phone bar (spec §7.2): what the cart costs now, so the person is never a step away from the number.
   // Hidden for an empty cart and for a cart that costs nothing ("3 entries · £0.00" says nothing), and ON Review, where the Review
   // card's own total is on the page and the button reads the fee: a third copy is a line of bar for nothing.
+  // The count is of the entries the total is FOR (B3 review m2): the lines `summarizeCart` summed, so a waiting or stale-closed entry is
+  // in neither ("2 entries · £25.00" over one charged entry and one waiting read as two entries for £25). A free line entered beside a
+  // charged one is entered now, so it counts.
+  const entered = summary.lines.filter((l) => !l.notChargedNow).length;
   const total =
     step !== "review" && summary.subtotalCents > 0 && summary.currency
-      ? plural("register.bar.summary", summary.lines.length, {
+      ? plural("register.bar.summary", entered, {
           total: formatMoneyExact(summary.subtotalCents, summary.currency, locale),
         })
       : null;
