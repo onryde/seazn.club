@@ -99,12 +99,13 @@ describe("the deletion lines read the sweep's constant, never a typed number (ow
       fixtures: [],
       next: null,
       played: 1,
+      notPlayed: 0,
       total: 3,
       standings: null,
       pointsUnit: "whole",
       tableRules: null,
       metricSpecs: [],
-      allPlayed: false,
+      finished: false,
     });
     const played = (h: QuickMatchHome) =>
       textOfTestId(renderToStaticMarkup(createElement(QuickMatchHomeView, { home: h, copy })), "qm-played");

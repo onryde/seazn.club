@@ -17,6 +17,7 @@ import { toLocale, type Locale } from "@/lib/i18n-constants";
 import { messages, type MessageKey } from "@/lib/messages";
 import { systemAuth } from "@/lib/quick-match-auth";
 import { QUICK_MATCH_SYSTEM_ORG_ID } from "@/lib/quick-match-constants";
+import { isQuickMatchFinished, type QuickMatchCounts } from "@/lib/quick-match-finished";
 import { isBye, type MatchLineRow } from "@/lib/run-sheet-groups";
 import type { EntrantKind } from "@seazn/engine/sport";
 import { PLAIN_LAYOUT, type TableLayout } from "@seazn/engine/competition";
@@ -33,6 +34,10 @@ import { hashHomeToken, isHomeTokenShaped, tryOpenHomeToken, type HomeTokenOpenR
 import { getStandings, type FixtureRow, type StandingsOut } from "./stages";
 
 const SYSTEM_ORG = QUICK_MATCH_SYSTEM_ORG_ID;
+
+// The one "finished" (plan 4 D4), client-safe in lib so the Continue card can read it too; every server caller takes it from
+// here, beside the count it reads.
+export { isQuickMatchFinished, type QuickMatchCounts };
 
 export interface QuickMatchRow {
   id: string;
@@ -104,11 +109,14 @@ export interface RecentQuickMatch {
   createdAt: string;
 }
 
-/** A recent row with its played count: `playedOf`, the home's own count (owner 2026-11-12: the setup page's Continue card
- *  says it, and is shown only while `played < total`), so the card never says a different "played" from the match's home.
- *  Only that page reads it, so only it pays the fixture read (review m5: `listRecentQuickMatches`' `counts`). */
+/** A recent row with its counts: `playedOf`, the home's own (owner 2026-11-12: the setup page's Continue card says it, and
+ *  is shown only while the match is not finished, `isQuickMatchFinished`), so the card never says a different "played" from
+ *  the match's home. Only that page reads it, so only it pays the fixture read (review m5: `listRecentQuickMatches`'
+ *  `counts`). */
 export interface RecentQuickMatchWithCounts extends RecentQuickMatch {
   played: number;
+  /** Matches marked Not played (plan 4). */
+  notPlayed: number;
   total: number;
 }
 
@@ -186,6 +194,8 @@ export interface MyQuickMatch {
   format: QuickMatchFormat;
   /** `playedOf`, the home's own count: the list never says a different "played" from the match's home. */
   played: number;
+  /** Matches marked Not played (plan 4). */
+  notPlayed: number;
   total: number;
 }
 
@@ -238,12 +248,21 @@ export async function listMyQuickMatches(userId: string, opts: { links: boolean 
   return out;
 }
 
+/** A match marked Not played (plan 4 D1): the skip writes `cancelled`, and no other quick match path does. The count and
+ *  the phase read this one predicate. */
+const isNotPlayed = (f: { status: string }): boolean => f.status === "cancelled";
+
 /** A quick match's "{played} of {count}" (plan 2 Task 5, B7d): its matches are its non-bye fixtures (`isBye`, the shared
- *  predicate, never re-derived), and the played ones are those whose status is settled (SETTLED_FIXTURE_STATUSES). The home
- *  and the account list read this one count. */
-export function playedOf(rows: readonly MatchLineRow[]): { played: number; total: number } {
+ *  predicate, never re-derived), the played ones are those whose status is settled (SETTLED_FIXTURE_STATUSES), and the Not
+ *  played ones (plan 4) are counted beside them, never out of the total (§6: "N of M played · K not played", M the full
+ *  total). The home, the Continue card, the account list and /admin read this one count. */
+export function playedOf(rows: readonly MatchLineRow[]): QuickMatchCounts {
   const matches = rows.filter((r) => !isBye(r));
-  return { played: matches.filter((r) => SETTLED_FIXTURE_STATUSES.has(r.status)).length, total: matches.length };
+  return {
+    played: matches.filter((r) => SETTLED_FIXTURE_STATUSES.has(r.status)).length,
+    notPlayed: matches.filter(isNotPlayed).length,
+    total: matches.length,
+  };
 }
 
 /**
@@ -284,9 +303,9 @@ export interface QuickMatchFixture {
   /** The outcome's winner when it names one (an entrant id, lib/outcome-text.ts); null otherwise. */
   winnerEntrantId: string | null;
   /** Where the match stands for a guest (plan 2 Task 5), decided by the SAME predicates `nextPlayable` reads, so a list
-   *  row's Score and the hero's next can never disagree: `settled` (SETTLED_FIXTURE_STATUSES; a bye's walkover too),
-   *  `live` (in play), `ready` (scheduled, both sides known: C11) or `waiting` (anything else: a side still unknown, C18,
-   *  or a held result no guest can settle, C23). */
+   *  row's Score and the hero's next can never disagree: `notPlayed` (marked Not played, plan 4: whatever its seats, and
+   *  never next), `settled` (SETTLED_FIXTURE_STATUSES; a bye's walkover too), `live` (in play), `ready` (scheduled, both
+   *  sides known: C11) or `waiting` (anything else: a side still unknown, C18, or a held result no guest can settle, C23). */
   phase: QuickMatchPhase;
   /** A settled result that has already moved the match on (carried-forward.ts's own predicate, read from these rows): its
    *  winner or loser is seated in a later match, or the stage is complete. The pad refuses to reopen it
@@ -294,7 +313,7 @@ export interface QuickMatchFixture {
   resultMovedOn: boolean;
 }
 
-export type QuickMatchPhase = "settled" | "live" | "ready" | "waiting";
+export type QuickMatchPhase = "settled" | "live" | "ready" | "waiting" | "notPlayed";
 
 export interface QuickMatchHome {
   row: QuickMatchRow;
@@ -314,7 +333,9 @@ export interface QuickMatchHome {
   next: QuickMatchFixture | null;
   /** Non-bye fixtures whose status is settled (SETTLED_FIXTURE_STATUSES, B7d). */
   played: number;
-  /** Non-bye fixtures: Task 5's matchCount (C17). */
+  /** Non-bye fixtures marked Not played (plan 4): done, but no result. */
+  notPlayed: number;
+  /** Non-bye fixtures: Task 5's matchCount (C17). Every match, played or not (§6). */
   total: number;
   /** The stored table of a league stage; null for a knockout, which has none (§7.10). */
   standings: StandingsOut | null;
@@ -327,7 +348,8 @@ export interface QuickMatchHome {
    *  module refuses, as the public table falls back to its structural columns. */
   tableRules: StageTableRulesDoc | null;
   metricSpecs: MetricSpecLike[];
-  allPlayed: boolean;
+  /** `isQuickMatchFinished`: at least one match, and every one played or Not played (plan 4 D4). Derived on each read. */
+  finished: boolean;
 }
 
 const byRoundThenNumber = (a: QuickMatchFixture, b: QuickMatchFixture): number =>
@@ -340,9 +362,18 @@ const isLive = (f: Seated): boolean => f.status === "in_play";
  *  (`needs_decision`) is never playable: it waits for an organizer's settle, which C23 keeps unreachable for guests. */
 const isReady = (f: Seated): boolean => f.status === "scheduled" && f.home !== null && f.away !== null;
 
-/** `QuickMatchFixture.phase`: settled first (a bye's walkover is settled whatever its seats), then live, then ready. */
-const phaseOf = (f: Seated): QuickMatchPhase =>
-  SETTLED_FIXTURE_STATUSES.has(f.status) ? "settled" : isLive(f) ? "live" : isReady(f) ? "ready" : "waiting";
+/** `QuickMatchFixture.phase`: Not played first (whatever its seats, plan 4), then settled (a bye's walkover is settled
+ *  whatever its seats), then live, then ready. Exported for its pure status sweep. */
+export const phaseOf = (f: Seated): QuickMatchPhase =>
+  isNotPlayed(f)
+    ? "notPlayed"
+    : SETTLED_FIXTURE_STATUSES.has(f.status)
+      ? "settled"
+      : isLive(f)
+        ? "live"
+        : isReady(f)
+          ? "ready"
+          : "waiting";
 
 /** The hero's next match (C11): the first by (round, fixture number) in play, else the first scheduled with both sides
  *  known; null when there is none (an empty list included). */
@@ -469,7 +500,7 @@ export async function readQuickMatchHome(row: QuickMatchRow): Promise<QuickMatch
     })
     .sort(byRoundThenNumber);
 
-  const { played, total } = playedOf(rows);
+  const counts = playedOf(rows);
   const standings = stage.kind === "league" ? await getStandings(auth, stage.id) : null;
   const tableRules =
     stage.kind === "league" ? ((await withTenant(SYSTEM_ORG, (tx) => stageTableRulesDocs(tx, [stage.id])))[stage.id] ?? null) : null;
@@ -498,13 +529,12 @@ export async function readQuickMatchHome(row: QuickMatchRow): Promise<QuickMatch
     sides,
     fixtures,
     next: nextPlayable(fixtures),
-    played,
-    total,
+    ...counts,
     standings,
     pointsUnit,
     tableRules,
     metricSpecs,
-    // The empty case first: no match at all is not "all played".
-    allPlayed: total > 0 && played === total,
+    // The empty case first (the predicate's own): no match at all is not finished.
+    finished: isQuickMatchFinished(counts),
   };
 }

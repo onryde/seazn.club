@@ -230,7 +230,7 @@ export function buildHomeView(home: QuickMatchHome, copy: QuickMatchCopy, fullTa
     return { name: null, label: say(winnerOfLabel(role, count, index, matchNo.get(feeder.id)!)), winner: false };
   };
 
-  const heroFixture = home.allPlayed ? null : home.next;
+  const heroFixture = home.finished ? null : home.next;
   const matches: MatchView[] = home.fixtures
     .filter((f) => !f.isBye)
     .map((f) => {
@@ -343,7 +343,7 @@ export function buildHomeView(home: QuickMatchHome, copy: QuickMatchCopy, fullTa
   }
 
   let winner: Built["winner"] = null;
-  if (home.allPlayed) {
+  if (home.finished) {
     if (knockout) {
       const final = home.fixtures.find((f) => f.isFinal);
       if (final?.winnerEntrantId) winner = { kicker: t("quickMatch.home.winner"), names: [nameOf(final.winnerEntrantId)] };

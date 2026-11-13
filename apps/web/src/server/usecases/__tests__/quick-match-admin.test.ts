@@ -3,8 +3,9 @@
 //
 // Every quick match is made by the real producer (`createQuickMatch`), every Start, point, take-back and result by the real
 // write path (`scoreEvent`, `playToDecided`), every save by the real Save (`saveQuickMatchForUser`). The direct UPDATEs below are the
-// clock (`created_at`, `expires_at`) and one state no guest path writes (a decided match with no score event), each named
-// where it is made. The session is the REAL one: `createSession` signs it into a cookie jar standing in for next/headers,
+// clock (`created_at`, `expires_at`), one state no guest path writes (a decided match with no score event), and a match
+// marked Not played before plan 4 Task 3's writer exists (`markNotPlayed`, its guarded status write), each named where it
+// is made. The session is the REAL one: `createSession` signs it into a cookie jar standing in for next/headers,
 // and `requireStaff` reads it back.
 //
 // Expected values come from the seed table below (each row says what it is: played, finished, saved, expired, its age),
@@ -61,7 +62,6 @@ import { createQuickMatchAnyFormat } from "./_quick-match-knockout";
 import { hardDeleteQuickMatchCompetition } from "../quick-match-delete";
 import {
   QUICK_MATCH_ADMIN_LIST_LIMIT,
-  isFinished,
   listQuickMatchesForAdmin,
   parseQuickMatchAdminFilter,
   quickMatchAdminCounts,
@@ -177,6 +177,20 @@ async function decideFirst(out: CreatedQuickMatch): Promise<void> {
   expect(await playToDecided(systemAuth(), fixtureId), "premise: the match was played to a result").toMatchObject({ kind: "decided" });
 }
 
+/**
+ * Marks a match Not played. This STANDS IN for plan 4 Task 3's writer (`quick-match-skip.ts`, not built when this was
+ * written) and makes the same guarded status write: under the fixture lock the write path takes (append-event.ts), only
+ * `scheduled` or `in_play` becomes `cancelled`, and exactly one row moves.
+ */
+async function markNotPlayed(fixtureId: string): Promise<void> {
+  const moved = await sql.begin(async (tx) => {
+    await tx`select pg_advisory_xact_lock(hashtext(${"fixture:" + fixtureId}))`;
+    return tx<{ id: string }[]>`
+      update fixtures set status = 'cancelled' where id = ${fixtureId} and status in ('scheduled', 'in_play') returning id`;
+  });
+  expect(moved, `premise: fixture ${fixtureId} was open and is now Not played`).toHaveLength(1);
+}
+
 /** The clock: the row's creation moved to `at`. */
 async function createdAt(id: string, at: Date): Promise<void> {
   await sql`update quick_matches set created_at = ${at} where id = ${id}`;
@@ -202,7 +216,7 @@ interface Seed {
   ageMs: number;
   shape: Shape;
   /** What is done to it after the create. */
-  act: "none" | "start" | "rally" | "rallyVoid" | "result" | "decideFirst" | "decideAll" | "save" | "expire";
+  act: "none" | "start" | "rally" | "rallyVoid" | "result" | "decideFirst" | "decideAll" | "decideFirstSkipRest" | "save" | "expire";
   played: boolean;
   finished: boolean;
   saved: boolean;
@@ -210,6 +224,8 @@ interface Seed {
   /** "{decided} of {total}": the rulebook's match count (round robin n(n-1)/2, knockout n-1) and the matches played to a result. */
   decided: number;
   total: number;
+  /** The matches marked Not played (plan 4): absent is none. */
+  notPlayed?: number;
 }
 
 const TWO = ["Ravi & Sam", "Priya & Tom"];
@@ -239,6 +255,10 @@ const SEEDS: Seed[] = [
     played: true, finished: false, saved: false, expired: false, decided: 1, total: 3 },
   { tag: "finished", ageMs: 3 * 24 * HOUR_MS, shape: { sport_key: "football", format: "league", sides: ["Lions", "Tigers"] }, act: "decideAll",
     played: true, finished: true, saved: false, expired: false, decided: 1, total: 1 },
+  // Finished by skips (plan 4, D4): one match played to its result, the other two marked Not played. Every match is played
+  // or not played, so it is finished, though only one of its three was decided; a point stands, so it was played.
+  { tag: "skipped", ageMs: 5 * 24 * HOUR_MS, shape: { sport_key: "badminton", format: "league", sides: THREE }, act: "decideFirstSkipRest",
+    played: true, finished: true, saved: false, expired: false, decided: 1, total: 3, notPlayed: 2 },
   { tag: "expired", ageMs: 10 * 24 * HOUR_MS, shape: { sport_key: "badminton", format: "league", sides: TWO }, act: "expire",
     played: false, finished: false, saved: false, expired: true, decided: 0, total: 1 },
   // A knockout of three: one seat sits out round one, and that bye is settled at the start without anyone playing. It is
@@ -271,6 +291,12 @@ beforeAll(async () => {
     if (s.act === "rallyVoid") await rallyThenVoid(out);
     if (s.act === "result") await resultOnly(out);
     if (s.act === "decideFirst") await decideFirst(out);
+    if (s.act === "decideFirstSkipRest") {
+      await decideFirst(out);
+      const open = (await fixturesOf(out.competitionId)).filter((f) => f.status === "scheduled");
+      expect(open.length, "premise: two matches of three still to play").toBe(2);
+      for (const f of open) await markNotPlayed(f.id);
+    }
     if (s.act === "decideAll") {
       for (const f of await fixturesOf(out.competitionId)) {
         expect(await playToDecided(systemAuth(), f.id), "premise: every match played to a result").toMatchObject({ kind: "decided" });
@@ -344,24 +370,6 @@ describe("premises", () => {
   });
 });
 
-describe("isFinished (pure): every match decided, and at least one", () => {
-  it("the empty case first: a match with no matches is not finished; all decided is; one short is not", () => {
-    const cases: [{ decided: number; total: number }, boolean][] = [
-      [{ decided: 0, total: 0 }, false],
-      [{ decided: 1, total: 1 }, true],
-      [{ decided: 3, total: 3 }, true],
-      [{ decided: 2, total: 3 }, false],
-      [{ decided: 0, total: 3 }, false],
-    ];
-    let checked = 0;
-    for (const [m, want] of cases) {
-      expect(isFinished(m), JSON.stringify(m)).toBe(want);
-      checked++;
-    }
-    expect(checked).toBe(5);
-  });
-});
-
 describe("parseQuickMatchAdminFilter (pure): a query value as a filter", () => {
   it("the empty case first: absent is all; each filter is itself; an unknown, a repeated or a cased value is all", () => {
     const cases: [unknown, QuickMatchAdminFilter][] = [
@@ -407,7 +415,7 @@ describe.skipIf(!HAS_DB)("the counts", () => {
     expect(counts).toEqual({ "24h": zero, "7d": zero, "30d": zero });
   });
 
-  it("each window counts the seed table's rows: created, played (a point or a result), finished (every match decided), saved, expired awaiting the sweep", async () => {
+  it("each window counts the seed table's rows: created, played (a point or a result), finished (every match played or not played), saved, expired awaiting the sweep", async () => {
     const counts = await quickMatchAdminCounts({ now: NOW, onlyIds: seedIds() });
     let checked = 0;
     for (const w of Object.keys(WINDOWS) as WindowKey[]) {
@@ -422,6 +430,8 @@ describe.skipIf(!HAS_DB)("the counts", () => {
     expect(expectedCounts("7d")).not.toEqual(expectedCounts("30d"));
     // And a row older than every window is in none.
     expect(SEEDS.some((s) => s.ageMs > WINDOWS["30d"] && s.played)).toBe(true);
+    // A row finished by skips is inside a window, so "every match decided" would count one fewer finished there (plan 4).
+    expect(SEEDS.some((s) => s.finished && (s.notPlayed ?? 0) > 0 && s.decided < s.total && s.ageMs <= WINDOWS["7d"])).toBe(true);
   });
 
   it("a second read answers the same (a read changes nothing)", async () => {
@@ -526,6 +536,7 @@ describe.skipIf(!HAS_DB)("the recent table", () => {
         kinds: [(await offered(s.shape.sport_key)).kind],
         sides: s.shape.sides,
         decided: s.decided,
+        notPlayed: s.notPlayed ?? 0,
         total: s.total,
         saved: s.saved,
         locale: s.shape.locale ?? "en",
@@ -545,7 +556,7 @@ describe.skipIf(!HAS_DB)("the recent table", () => {
     expect(list.rows.length).toBe(SEEDS.length);
     for (const row of list.rows) {
       expect(Object.keys(row).sort()).toEqual(
-        ["createdAt", "decided", "expiresAt", "format", "id", "kinds", "lastActivityAt", "locale", "saved", "sides", "sportKey", "total"],
+        ["createdAt", "decided", "expiresAt", "format", "id", "kinds", "lastActivityAt", "locale", "notPlayed", "saved", "sides", "sportKey", "total"],
       );
     }
   });

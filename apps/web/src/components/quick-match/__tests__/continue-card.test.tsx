@@ -1,7 +1,7 @@
 // "Continue" on the setup page (owner 2026-11-12: "if same browser tries to create one more, show the first one"). A guest
-// whose browser holds an UNFINISHED quick match (not every match decided) meets it first, above the form: its name, how
-// many of its matches are played, and Continue to its home. The newest unfinished one is the card; every other recent
-// match stays in the strip below; a finished one is only ever in the strip. Creating another is never blocked.
+// whose browser holds an UNFINISHED quick match (not every match played or not played) meets it first, above the form:
+// its name, how many of its matches are played, and Continue to its home. The newest unfinished one is the card; every
+// other recent match stays in the strip below; a finished one is only ever in the strip. Creating another is never blocked.
 //
 // Here: the pure split over rows handed to it, and the card's markup. The rows' READ (the visitor cookie, played and
 // total from the match's real fixtures) and the page's order (card, then "Or start a new quick match", then the form,
@@ -19,11 +19,13 @@ import type { RecentQuickMatchWithCounts as RecentQuickMatch } from "../recent-s
 
 /** Home-token shaped (`qm_` + 43 base64url characters), as `mintHomeToken` writes them. */
 const token = (c: string) => `qm_${c.repeat(42)}x`;
-const row = (c: string, played: number, total: number): RecentQuickMatch => ({
+/** `notPlayed`: the matches marked Not played (plan 4); absent is none. */
+const row = (c: string, played: number, total: number, notPlayed = 0): RecentQuickMatch => ({
   token: token(c),
   name: `Match ${c}`,
   createdAt: "2026-11-08T10:00:00.000Z",
   played,
+  notPlayed,
   total,
 });
 const names = (rows: readonly RecentQuickMatch[]) => rows.map((r) => r.name);
@@ -47,6 +49,16 @@ describe("splitRecent: the newest unfinished match is the card, every other row 
       ["two unfinished: the NEWEST is the card, the other stays in the strip", [row("A", 2, 6), row("B", 0, 1)], "Match A", ["Match B"]],
       // A row with no matches at all cannot be continued (no producer makes one: a quick match has two sides at least).
       ["no matches: nothing to continue", [row("A", 0, 0)], null, ["Match A"]],
+      // Plan 4 (§3, §6): a Not played match is done, so a league finished by skips is finished, and M stays the full total.
+      [
+        "the newest is finished by a skip (1 played, 1 not played of 2), an older one is open: the older is the card",
+        [row("A", 1, 2, 1), row("B", 0, 1)],
+        "Match B",
+        ["Match A"],
+      ],
+      ["finished with nothing played (every match not played): no card", [row("A", 0, 1, 1)], null, ["Match A"]],
+      ["one played, one not played, one to play: still open, the card", [row("A", 1, 3, 1)], "Match A", []],
+      ["every one finished, one by skips and one by play: no card", [row("A", 1, 3, 2), row("B", 1, 1)], null, ["Match A", "Match B"]],
     ];
     let checked = 0;
     for (const [why, rows, card, strip] of cases) {
@@ -56,6 +68,7 @@ describe("splitRecent: the newest unfinished match is the card, every other row 
       checked++;
     }
     expect(checked).toBe(cases.length);
+    expect(checked).toBe(10);
   });
 });
 

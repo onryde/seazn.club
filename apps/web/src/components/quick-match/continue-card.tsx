@@ -1,25 +1,27 @@
 // "Continue" on the setup page (owner 2026-11-12: "if same browser tries to create one more, show the first one"). A guest
-// whose browser holds an UNFINISHED quick match (not every match decided) meets it first, above the form: its name, how many
-// of its matches are played, and Continue to its home. The newest unfinished one is the card; every other recent match stays
-// in the strip below it; a finished match is only ever in the strip. The form follows under its own heading: making another
-// is never blocked.
+// whose browser holds an UNFINISHED quick match (not every match played or not played, `isQuickMatchFinished`) meets it
+// first, above the form: its name, how many of its matches are played, and Continue to its home. The newest unfinished one
+// is the card; every other recent match stays in the strip below it; a finished match is only ever in the strip. The form
+// follows under its own heading: making another is never blocked.
 //
 // The rows are the recent strip's (`readRecentQuickMatches({ counts: true })`, the same visitor cookie, the same read, which
 // then carries each match's `playedOf` count): no browser storage. A server component, handed its rows and words by the
 // page (eslint.config.mjs keeps every value import of @/server out of components/quick-match/**).
 import type { ReactNode } from "react";
+import { isQuickMatchFinished } from "@/lib/quick-match-finished";
 import { routes } from "@/lib/routes";
 import type { RecentQuickMatchWithCounts } from "./recent-strip";
 
 /**
- * The card's row and the strip's rows. `items` arrive newest first (the read sorts); the card is the first that still has a
- * match to play, and the strip keeps every other row in the order it was handed. A row with no matches at all has nothing to
- * continue (no producer makes one: a quick match has two sides at least), so it is never the card.
+ * The card's row and the strip's rows. `items` arrive newest first (the read sorts); the card is the first that is not
+ * finished (`isQuickMatchFinished`, the home's own: a league finished by skipping its last matches is finished), and the
+ * strip keeps every other row in the order it was handed. A row with no matches at all has nothing to continue (no producer
+ * makes one: a quick match has two sides at least), so it is never the card.
  */
 export function splitRecent(
   items: readonly RecentQuickMatchWithCounts[],
 ): { resume: RecentQuickMatchWithCounts | null; rest: RecentQuickMatchWithCounts[] } {
-  const resume = items.find((r) => r.played < r.total) ?? null;
+  const resume = items.find((r) => r.total > 0 && !isQuickMatchFinished(r)) ?? null;
   return { resume, rest: items.filter((r) => r !== resume) };
 }
 

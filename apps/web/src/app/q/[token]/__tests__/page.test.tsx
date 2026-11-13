@@ -325,6 +325,7 @@ describe("the empty case: a quick match with no match left", () => {
     fixtures: [],
     next: null,
     played: 0,
+    notPlayed: 0,
     total: 0,
     standings: {
       stage_id: "s-1", pool_id: null, computed_through_seq: 0, updated_at: null,
@@ -336,7 +337,7 @@ describe("the empty case: a quick match with no match left", () => {
     pointsUnit: "whole",
     tableRules: null,
     metricSpecs: [],
-    allPlayed: false,
+    finished: false,
   };
 
   it("shows no hero, no winner card and no match row; the table lists both sides with no leader", async () => {
@@ -974,7 +975,7 @@ describe.skipIf(!HAS_DB)("the quick match home page", () => {
 
     const { tree, html } = await renderPage(out.token);
     h = await homeOf(out);
-    expect(h.allPlayed).toBe(true);   // precondition from the plan-1 read
+    expect(h.finished).toBe(true);   // precondition from the plan-1 read
     const done = h.fixtures.find((f) => f.id === final.id)!;
     const winnerName = h.sides.find((s) => s.entrantId === done.winnerEntrantId)!.name;
     expect(byTestId(tree, "qm-hero")).toHaveLength(0);
@@ -1028,7 +1029,7 @@ describe.skipIf(!HAS_DB)("the quick match home page", () => {
       await scoreEvent(systemAuth(), only.id, { expected_seq: seq, ...req });
     }
     const h = await homeOf(out);
-    expect(h.allPlayed, "precondition: the one match is played").toBe(true);
+    expect(h.finished, "precondition: the one match is played").toBe(true);
     expect(h.fixtures[0]!.winnerEntrantId, "precondition: level, no winner").toBeNull();
 
     const { tree } = await renderPage(out.token);
@@ -1059,7 +1060,7 @@ describe.skipIf(!HAS_DB)("the quick match home page", () => {
     const settled = h.fixtures.find((f) => f.id === only.id)!;
     expect(settled.status, "precondition: a level league match is decided").toBe("decided");
     expect(settled.winnerEntrantId, "precondition: and names no winner").toBeNull();
-    expect(h.allPlayed).toBe(true);
+    expect(h.finished).toBe(true);
 
     const { tree } = await renderPage(out.token);
     const row = oneByTestId(tree, "qm-match");
