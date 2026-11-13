@@ -24,6 +24,7 @@ import {
   type RegistrationSettingsResponse,
 } from "@/components/registration-hub-config-state";
 import { mapSaveError, type ConfigFieldKey } from "@/components/registration-hub-save-error";
+import { sameSentBody } from "@/components/use-config-dirty";
 
 export interface RegistrationHubConfigDivisionLike extends DivisionEligibility {
   division_id: string;
@@ -113,44 +114,43 @@ export function useRegistrationConfigPanelState(
     setLoaded((prev) => (prev ? { ...prev, state: { ...prev.state, ...p } } : prev));
   }
 
-  /** Resolves with what the save did (null: nothing loaded, nothing sent).
-   *  Returned rather than only stored so a caller can act on the failure at
-   *  the moment it happens; reacting to the `errors` STATE in an effect
-   *  instead is a cascading render, and lint rejects it. */
-  async function save(): Promise<SaveResult | null> {
-    if (!loaded) return null;
+  /** Resolves with what the save did. Returned rather than only stored so a
+   *  caller can act on the failure at the moment it happens; reacting to the
+   *  `errors` STATE in an effect instead is a cascading render, and lint
+   *  rejects it.
+   *
+   *  `onlyChanged` (B7 T23 re-review m3, the hub's "Save and close"): a half
+   *  whose body is what the server already holds is not sent, and counts as
+   *  landed — so a PATCH carrying no change cannot fail the close. Nothing to
+   *  send at all is a success with no request and no `onSaved`. The Save
+   *  button sends both halves, as it always has.
+   *
+   *  Throws when nothing has loaded: there is no draft to send, and the panel
+   *  refuses that case before it calls here (its own `!state` check). */
+  async function save(opts: { onlyChanged?: boolean } = {}): Promise<SaveResult> {
+    if (!loaded) throw new Error("useRegistrationConfigPanelState.save: nothing has loaded, so there is nothing to save");
+    const patchBody = toDivisionPatchBody(loaded.state);
+    const putBody = toRegistrationSettingsPutBody(loaded.state);
+    const sendPatch = !opts.onlyChanged || !sameSentBody(toDivisionPatchBody(loaded.saved), patchBody);
+    const sendPut = !opts.onlyChanged || !sameSentBody(toRegistrationSettingsPutBody(loaded.saved), putBody);
+    if (!sendPatch && !sendPut) return { outcome: "success", errors: {} };
     setBusy(true);
     setErrors({});
     setFormError(null);
     setSaveOutcome(null);
-    const patchBody = toDivisionPatchBody(loaded.state);
-    const putBody = toRegistrationSettingsPutBody(loaded.state);
+    // A half not sent settles as landed (a plain value in allSettled is a fulfilled result).
     const [patchResult, putResult] = await Promise.allSettled([
-      apiV1(`/api/v1/divisions/${division.division_id}`, { method: "PATCH", json: patchBody }),
-      apiV1(`/api/v1/divisions/${division.division_id}/registration-settings`, {
-        method: "PUT",
-        json: putBody,
-      }),
+      sendPatch ? apiV1(`/api/v1/divisions/${division.division_id}`, { method: "PATCH", json: patchBody }) : null,
+      sendPut
+        ? apiV1(`/api/v1/divisions/${division.division_id}/registration-settings`, {
+            method: "PUT",
+            json: putBody,
+          })
+        : null,
     ]);
     setBusy(false);
     const patchOk = patchResult.status === "fulfilled";
     const putOk = putResult.status === "fulfilled";
-    // Each body that landed is now what the server holds: move the saved values to what it SENT. Per body, because a partial
-    // save is half saved — keeping the landed half "unsaved" would let Cancel restore values the server no longer has, and the
-    // next save would quietly undo it. What was SENT, not the current draft: an edit typed while the save was in flight is
-    // still unsaved.
-    if (patchOk || putOk) {
-      setLoaded((prev) =>
-        prev
-          ? { ...prev, saved: { ...prev.saved, ...(patchOk ? patchBody : {}), ...(putOk ? putBody : {}) } }
-          : prev,
-      );
-    }
-    if (patchOk && putOk) {
-      setSaveOutcome("success");
-      onSaved();
-      return { outcome: "success", errors: {} };
-    }
     const nextErrors: Partial<Record<ConfigFieldKey, string>> = {};
     let banner: string | null = null;
     for (const result of [patchResult, putResult]) {
@@ -160,10 +160,30 @@ export function useRegistrationConfigPanelState(
       if (info.field) nextErrors[info.field] = text;
       else banner = text;
     }
-    const outcome: SaveOutcome = patchOk === putOk ? "both-failed" : patchOk ? "put-failed" : "patch-failed";
+    const outcome: SaveOutcome =
+      patchOk && putOk ? "success" : patchOk === putOk ? "both-failed" : patchOk ? "put-failed" : "patch-failed";
+    // The outcome before the saved values move: a renderer that does not batch (the static test harness) then sees the page
+    // turn clean with the outcome already in place, as React's one batched render does — so the panel's "back to saved"
+    // transition clears a failure and keeps a success the same way in both (re-review m4).
     setErrors(nextErrors);
     setFormError(banner);
     setSaveOutcome(outcome);
+    // Each body that landed is now what the server holds: move the saved values to what it SENT. Per body, because a partial
+    // save is half saved — keeping the landed half "unsaved" would let Cancel restore values the server no longer has, and the
+    // next save would quietly undo it. What was SENT, not the current draft: an edit typed while the save was in flight is
+    // still unsaved. A landed PUT also retires the legacy-shape notice (re-review m1): the row it described is gone.
+    if (patchOk || putOk) {
+      setLoaded((prev) =>
+        prev
+          ? {
+              ...prev,
+              saved: { ...prev.saved, ...(patchOk ? patchBody : {}), ...(putOk ? putBody : {}) },
+              readOnly: putOk ? { ...prev.readOnly, storedEntryShapeLegacy: false } : prev.readOnly,
+            }
+          : prev,
+      );
+    }
+    if (outcome === "success") onSaved();
     return { outcome, errors: nextErrors };
   }
 
@@ -179,6 +199,14 @@ export function useRegistrationConfigPanelState(
     setSaveOutcome(null);
   }
 
+  /** B7 T23 re-review m4: what the last FAILED save said — its field errors, its banner, its outcome — once the edits it was
+   *  about are gone (the page is back to the saved values). A success outcome stays: it is still true. */
+  function clearFailure() {
+    setErrors((prev) => (Object.keys(prev).length === 0 ? prev : {}));
+    setFormError(null);
+    setSaveOutcome((prev) => (prev === "success" ? prev : null));
+  }
+
   return {
     state: loaded?.state ?? null,
     saved: loaded?.saved ?? null,
@@ -191,5 +219,6 @@ export function useRegistrationConfigPanelState(
     patch,
     save,
     reset,
+    clearFailure,
   };
 }

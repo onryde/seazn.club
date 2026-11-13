@@ -65,6 +65,15 @@ function sameStoredValue(field: string, a: unknown, b: unknown): boolean {
   return wire(a) === wire(b);
 }
 
+/** Whether two request bodies would store the same thing, field by field, by the same rule the dirty check uses. The hub's
+ *  "Save and close" skips a half that carries no change (B7 T23 re-review m3). */
+export function sameSentBody(before: Record<string, unknown>, after: Record<string, unknown>): boolean {
+  for (const field of new Set([...Object.keys(before), ...Object.keys(after)])) {
+    if (!sameStoredValue(field, before[field], after[field])) return false;
+  }
+  return true;
+}
+
 /**
  * Clean until both sides exist: a draft with nothing saved beside it is a load in flight, not "everything changed".
  *
@@ -89,7 +98,7 @@ export function configDirty(
   for (const field of changed) {
     const section = sectionForField(field as ConfigFieldKey);
     // Every field the save sends is in SECTION_FIELDS (registration-hub-config-panel-sections.ts, and the sweep in
-    // registration-hub-config-panel.test.ts, which reads the section off the rendered page). One that is not would be an edit
+    // registration-hub-config-panel.test.tsx, which reads the section off the rendered page). One that is not would be an edit
     // counted nowhere a person can find it: refuse loudly.
     if (!section) throw new Error(`configDirty: "${field}" is saved but belongs to no section in SECTION_FIELDS`);
     touched.add(section);

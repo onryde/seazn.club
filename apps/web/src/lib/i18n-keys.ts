@@ -6334,6 +6334,7 @@ export type DictionaryKey =
   | "reg.config.allSaved"
   | "reg.config.changed"
   | "reg.config.saveFailed"
+  | "reg.config.saveRefused"
   | "reg.config.sectionIndex"
   | "reg.config.unsaved.one"
   | "reg.config.unsaved.other"

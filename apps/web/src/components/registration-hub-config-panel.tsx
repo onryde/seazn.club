@@ -59,10 +59,9 @@ import {
   sectionAnchor,
   type SaveBarState,
 } from "@/components/registration-hub-config-page-chrome";
-import { Disclosure, sectionTitle } from "@/components/registration-hub-config-section";
+import { Disclosure, sectionTitle, type Msg } from "@/components/registration-hub-config-section";
 import { routes } from "@/lib/routes";
 import type { Currency } from "@/lib/currency";
-import type { MessageKey } from "@/lib/messages";
 import { FormBuilder } from "@/components/registration-hub-form-builder";
 import type { DivisionCategoryValue } from "@/components/registration-hub-row-derive";
 import {
@@ -99,7 +98,6 @@ import { fmtZoneAbbrev } from "@/lib/format";
  *  early — the same reason the division wizard's deadlines pass this. */
 const CUTOFF_TIME_OPTIONS = ["23:59"];
 
-type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
 /** The entrant-type select's order, unchanged from before FU1; filtered to the division's allowed kinds. */
 const KIND_OPTION_ORDER: readonly EntrantKindValue[] = ["individual", "team", "pair"];
@@ -300,7 +298,7 @@ export function RegistrationHubConfigPanel({
   // names) — a silent English fallback there is correct, not a bug (see
   // useLocaleOrDefault's own doc comment, dict-provider.tsx).
   const locale = useLocaleOrDefault();
-  const { state, saved, readOnly, loadError, busy, errors, formError, saveOutcome, patch, save, reset } =
+  const { state, saved, readOnly, loadError, busy, errors, formError, saveOutcome, patch, save, reset, clearFailure } =
     useRegistrationConfigPanelState(division, onSaved, (code) =>
       code === CHESS_INDIVIDUAL_ONLY
         ? msg("divset.err.chessIndividualOnly")
@@ -354,6 +352,18 @@ export function RegistrationHubConfigPanel({
     return draft !== undefined && isDateTimeHalvesIncomplete(draft);
   });
   const dirty = useConfigDirty(saved, state, pendingClocks);
+  // Back to the saved values (edited back by hand, or the failed half of a partial save restored): what the last failed save
+  // said was about edits that no longer exist, so it goes — the bar reading "All changes saved" over a failure banner is a
+  // contradiction (B7 T23 re-review m4). The sanctioned "adjust state when a value changes" shape: during render, on the
+  // transition only, never in an effect.
+  const [wasDirty, setWasDirty] = useState(false);
+  if (wasDirty !== dirty.dirty) {
+    setWasDirty(dirty.dirty);
+    if (!dirty.dirty) {
+      clearFailure();
+      setClientErrors((prev) => (Object.keys(prev).length === 0 ? prev : {}));
+    }
+  }
   // Latest callback in a ref, written in an effect (never during render), so the report below fires on the ANSWER moving and
   // not on a parent handing down a fresh inline function each render — which, with a parent that stores the report in
   // state, would be a render loop.
@@ -368,14 +378,25 @@ export function RegistrationHubConfigPanel({
   function onDateTimeHalfChange(field: DateTimeFieldKey, half: "date" | "time", value: string) {
     const current = dtDrafts[field] ?? orgTzDateTimeHalves(state![field], orgTz);
     const result = editOrgTzDateTimeHalf(current, half, value, orgTz);
-    setDtDrafts((prev) => ({ ...prev, [field]: result.halves }));
     // Never patch `state` while incomplete — that would be the exact bug
     // this task fixes, just moved one layer up: an in-progress half-typed
     // pair silently becoming a committed "unset". Leaving the committed
     // value untouched here means a save attempted mid-edit still saves
     // whatever was there BEFORE (blocked below by the incomplete check,
     // never silently nulled).
-    if (!result.incomplete) patch({ [field]: result.instant });
+    // The value before the draft: a renderer that does not batch the two (the static test harness) then never sees the
+    // finished draft over the old value — a clean moment that would read as "edited back" (re-review m4).
+    if (!result.incomplete) {
+      patch({ [field]: result.instant });
+      // A refusal of this clock for being half-typed is answered once both halves are in (B7 T23 re-review m4).
+      setClientErrors((prev) => {
+        if (!(field in prev)) return prev;
+        const next = { ...prev };
+        delete next[field];
+        return next;
+      });
+    }
+    setDtDrafts((prev) => ({ ...prev, [field]: result.halves }));
   }
 
   // Reveal whichever section holds the first error, at the moment the save
@@ -389,7 +410,8 @@ export function RegistrationHubConfigPanel({
   // computed value twice — which happens the moment the organiser toggles the
   // section by hand while the error is still live. Writing it once here means
   // the reveal survives until they deliberately close it again.
-  async function saveAndReveal(): Promise<ConfigSaveResult> {
+  async function saveAndReveal(onlyChanged: boolean): Promise<ConfigSaveResult> {
+    // Nothing loaded: nothing to check or send (a host's Save before the GET answered).
     if (!state) return "refused";
     // Client-side gate BEFORE the network round trip (RS005 R4 task 2): an
     // incomplete clock field, or anything validateConfigState catches, must
@@ -416,10 +438,21 @@ export function RegistrationHubConfigPanel({
       return "refused";
     }
     setClientErrors({});
-    const result = await save();
-    if (!result) return "refused";
+    const result = await save({ onlyChanged });
     if (result.outcome !== "success") reveal(firstErrorSection(result.errors));
     return result.outcome;
+  }
+
+  // One save at a time (B7 T23 re-review m2): a second ask while one is in flight — the bar's button, a host's handle — gets the
+  // SAME promise, so nothing is sent twice and `onSaved` fires once. A ref, written only by these handlers, never in render.
+  const inFlight = useRef<Promise<ConfigSaveResult> | null>(null);
+  function saveOnce(onlyChanged: boolean): Promise<ConfigSaveResult> {
+    if (inFlight.current) return inFlight.current;
+    const pending = saveAndReveal(onlyChanged).finally(() => {
+      inFlight.current = null;
+    });
+    inFlight.current = pending;
+    return pending;
   }
 
   // Open the section that refused the save; on the page, also scroll to it and move focus there (to the page's heading when
@@ -431,9 +464,10 @@ export function RegistrationHubConfigPanel({
   }
 
   // The latest save, for a host that saves from outside (T24's tab close): refreshed after every render, emptied on unmount.
+  // It sends only the half that changed (re-review m3): a close must not fail on a request that carried nothing.
   useEffect(() => {
     if (!saveHandleRef) return;
-    saveHandleRef.current = { save: saveAndReveal };
+    saveHandleRef.current = { save: () => saveOnce(true) };
     return () => {
       saveHandleRef.current = null;
     };
@@ -585,7 +619,9 @@ export function RegistrationHubConfigPanel({
     ) as Record<SectionId, string>;
     // A save that did not go through (refused on the page, or by the server) while edits are still unsaved: the bar says so in
     // place of the count, until the next save or Cancel. Clean wins — once nothing is unsaved, "All changes saved" is true.
-    const saveFailed = (saveOutcome !== null && saveOutcome !== "success") || Object.keys(clientErrors).length > 0;
+    // The page's own refusal sent nothing, which the line says (re-review m8); a server failure may have saved half.
+    const refusedHere = Object.keys(clientErrors).length > 0;
+    const saveFailed = (saveOutcome !== null && saveOutcome !== "success") || refusedHere;
     const barState: SaveBarState = !dirty.dirty ? "clean" : saveFailed ? "failed" : "dirty";
     return (
       <section
@@ -598,14 +634,15 @@ export function RegistrationHubConfigPanel({
         // the failed save's line wrapped in French — measured in Chromium). As SCROLL PADDING on the root scroller, a control
         // brought into view by focus (Tab, a tap, a failed save's reveal) stops above the bar instead of under it, which the
         // browser would otherwise count as visible (WCAG 2.4.11). On the root, not as a margin on each control: Chromium reveals
-        // a focused textarea by its caret, which ignores the control's own scroll margin.
-        className="min-w-0 space-y-4 [html:has(&)]:scroll-pb-36"
+        // a focused textarea by its caret, which ignores the control's own scroll margin. Plus the home-indicator inset the bar
+        // pads itself by below md (re-review m6).
+        className="min-w-0 space-y-4 [html:has(&)]:scroll-pb-[calc(9rem+env(safe-area-inset-bottom))]"
       >
         {/* tabIndex -1: where focus goes after a save refused by a banner (they sit just below). */}
         <h2
           id={headingId}
           tabIndex={-1}
-          className="scroll-mt-[calc(var(--app-header-h)+1rem)] break-words text-lg font-semibold text-slate-900 focus:outline-none"
+          className="scroll-mt-[calc(var(--app-header-h)+1rem)] break-words rounded-sm text-lg font-semibold text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 focus-visible:ring-offset-2"
         >
           {division.name}
         </h2>
@@ -629,14 +666,14 @@ export function RegistrationHubConfigPanel({
               barState === "clean"
                 ? msg("reg.config.allSaved")
                 : barState === "failed"
-                  ? msg("reg.config.saveFailed")
+                  ? msg(refusedHere ? "reg.config.saveRefused" : "reg.config.saveFailed")
                   : msgPlural("reg.config.unsaved", dirty.count)
             }
             busy={busy}
             cancelLabel={msg("reg.hub.config.cancel")}
             saveLabel={busy ? msg("reg.hub.config.saving") : msg("reg.hub.config.save")}
             onCancel={cancelEdits}
-            onSave={saveAndReveal}
+            onSave={() => saveOnce(false)}
           />
         )}
       </section>
@@ -659,7 +696,7 @@ export function RegistrationHubConfigPanel({
               data-action="save"
               disabled={busy}
               className="btn btn-primary min-h-11"
-              onClick={saveAndReveal}
+              onClick={() => saveOnce(false)}
             >
               {busy ? msg("reg.hub.config.saving") : msg("reg.hub.config.save")}
             </button>

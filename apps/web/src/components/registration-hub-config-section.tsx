@@ -8,7 +8,8 @@ import type { ReactEventHandler, ReactNode } from "react";
 import type { MessageKey } from "@/lib/messages";
 import type { SectionId } from "@/components/registration-hub-config-panel-sections";
 
-type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
+/** The panel's copy lookup, as every section is handed it. */
+export type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
 /** A section's name, as its header shows it. Exported for the hub's division tabs (T24), which name a section in their own
  *  prompts; `formFieldCount` only words the sign-up form's ("Sign-up form · 1 extra question"). */
@@ -108,16 +109,19 @@ export function Disclosure({
   }
 
   const headingId = `${page.anchorId}-title`;
-  // The page's tag can push a long translated title past a 320px card: the row wraps there.
+  // The heading, the error dot and the Changed tag, as siblings rather than one wrapper: below md they sit straight inside the
+  // <summary>, whose content is phrasing and heading content only — no <div> (B7 T23 re-review m7). Both parents lay them out
+  // in a wrapping row, so the page's tag can push a long translated title onto a second line of a 320px card.
   const head = (
-    <div className="flex min-w-0 flex-wrap items-center gap-2">
+    <>
       {/* A heading under the page's own h2 (the division), so a screen reader's heading list is the section list. Focus target
-          of the section index (tabIndex -1: reachable by script, never a Tab stop). */}
+          of the section index (tabIndex -1: reachable by script, never a Tab stop); the ring shows when that focus came from
+          the keyboard. */}
       <h3
         id={headingId}
         data-section-heading
         tabIndex={page.alwaysOpen ? -1 : undefined}
-        className="min-w-0 break-words text-sm font-semibold text-slate-700 focus:outline-none"
+        className="min-w-0 break-words rounded-sm text-sm font-semibold text-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 focus-visible:ring-offset-2"
       >
         {title}
       </h3>
@@ -130,7 +134,7 @@ export function Disclosure({
           {page.changedLabel}
         </span>
       )}
-    </div>
+    </>
   );
   // Clear of the sticky app header when the index (or a failed save) scrolls a section to the top.
   const scrollClear = "scroll-mt-[calc(var(--app-header-h)+1rem)]";
@@ -143,7 +147,7 @@ export function Disclosure({
         aria-labelledby={headingId}
         className={`card overflow-hidden p-0 ${scrollClear}`}
       >
-        <div className="p-4">{head}</div>
+        <div className="flex min-w-0 flex-wrap items-center gap-2 p-4">{head}</div>
         {body}
       </section>
     );
@@ -157,10 +161,10 @@ export function Disclosure({
       open={open}
       onToggle={onToggle}
     >
-      <summary className="marker:content-none flex cursor-pointer list-none items-center justify-between gap-2 p-4 [&::-webkit-details-marker]:hidden">
+      <summary className="marker:content-none flex min-w-0 cursor-pointer list-none flex-wrap items-center gap-2 p-4 [&::-webkit-details-marker]:hidden">
         {head}
         <ChevronDown
-          className="h-4 w-4 shrink-0 text-slate-400 transition-transform group-open:rotate-180"
+          className="ml-auto h-4 w-4 shrink-0 text-slate-400 transition-transform group-open:rotate-180"
           strokeWidth={1.75}
           aria-hidden
         />
