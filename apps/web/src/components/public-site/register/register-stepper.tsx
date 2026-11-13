@@ -323,7 +323,7 @@ export function RegisterStepper({
     setCart(clearSelfLinkWhenNotPlaying(autoLinkObviousSelf(cart, imPlaying), imPlaying));
   }
 
-  // B2 T9: a failed Continue on Contact moves focus to the error summary (a role=alert box naming what is wrong). By the time this
+  // B2 T9: a failed Continue on Contact moves focus to the error summary (the box naming what is wrong, announced by this focus alone). By the time this
   // runs the render that mounted the summary has committed, so the ref is attached. A failure count of 0 is "never failed": nothing to focus.
   useEffect(() => {
     if (whoFailedContinues > 0) whoSummaryRef.current?.focus();

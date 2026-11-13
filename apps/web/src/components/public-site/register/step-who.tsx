@@ -64,15 +64,17 @@ export function StepWho({
         {t("register.section.identity")}
       </h2>
 
-      {/* The error summary (B2 T9, spec 7.3): one alert naming every field that is wrong, so a person on a phone does not have to
-          scroll the card to find out why Continue did nothing. It is THE alert on this card: the per-field messages below are plain
-          text tied to their field by aria-describedby, so the same problems are not announced twice. Tokens: the red-200 / red-50 /
-          red-700 box of entry-cart.tsx's own error block. `tabIndex={-1}` makes it a focus target the stepper can move to. */}
+      {/* The error summary (B2 T9, spec 7.3): one box naming every field that is wrong, so a person on a phone does not have to
+          scroll the card to find out why Continue did nothing. Announced by FOCUS and nothing else (B2 review m2): the stepper moves
+          focus here on a failed Continue, which reads it out once. It is deliberately NOT a live region (`role="alert"`): its text is
+          recomputed as the person types the fix, and a live region would read each change aloud mid-typing, and announce it twice the
+          first time (once as it appears, once on focus). The text still follows the typing, so what is on screen is never stale. The
+          per-field messages below are plain text tied to their field by aria-describedby. Tokens: the red-200 / red-50 / red-700 box
+          of entry-cart.tsx's own error block. `tabIndex={-1}` makes it a focus target the stepper can move to. */}
       {failing.length > 0 && (
         <div
           ref={summaryRef}
           id="reg-who-summary"
-          role="alert"
           tabIndex={-1}
           data-testid="reg-who-error-summary"
           className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-sm font-medium text-red-700"

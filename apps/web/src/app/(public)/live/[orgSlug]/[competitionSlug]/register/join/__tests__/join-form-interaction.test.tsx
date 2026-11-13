@@ -368,7 +368,7 @@ describe("submit — the in-flight button is busy, not dimmed (B2 T8)", () => {
 
 // B2 T10: the join page reuses StepWho, so it gets the same error summary - and the same focus move, which is the JOIN FORM's to make: the
 // summary only exists while something is wrong, so a failed Join hands StepWho a ref and asks it for focus, as the register stepper does on
-// a failed Continue. Without it the registrant taps Join, nothing visibly happens below the fold, and the alert is announced to nobody.
+// a failed Continue. Without it the registrant taps Join, nothing visibly happens below the fold, and the summary is announced to nobody.
 describe("a failed Join focuses the Contact error summary (B2 T10)", () => {
   type M = ReturnType<typeof mount>;
   const summaries = (m: M) => m.island.tree().filter((e) => propsOf(e)["data-testid"] === "reg-who-error-summary");

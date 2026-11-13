@@ -3703,7 +3703,7 @@ describe("B2 T9 — Contact: error summary, invalid fields, the playing card", (
     return { ref: ref!, focus };
   }
 
-  it("a failed Continue on Contact focuses an alert naming both missing fields", () => {
+  it("a failed Continue on Contact focuses a summary naming both missing fields (focus announces it, a live region would not be needed)", () => {
     const m = mount([DIV_OPEN]);
     expect(summaries(m), "pristine: nothing is wrong yet, so no alert").toHaveLength(0);
     const { ref, focus } = armFocus(m);
@@ -3712,11 +3712,29 @@ describe("B2 T9 — Contact: error summary, invalid fields, the playing card", (
 
     expect(summaries(m), "exactly one summary").toHaveLength(1);
     const summary = summaries(m)[0]!;
-    expect(propsOf(summary).role, "announced").toBe("alert");
+    // Announced by FOCUS, once, and by nothing else: a live region (`role="alert"`, `aria-live`) would announce it a second time when it
+    // appears and again every time its recomputed text changes while the person types the fix (B2 review m2).
+    expect(propsOf(summary).role, "not an assertive live region").toBeUndefined();
+    expect(propsOf(summary)["aria-live"], "not a polite one either").toBeUndefined();
+    expect(alerts(m), "no live region on the card at all").toHaveLength(0);
     expect(textOf(summary)).toBe("2 things to fix before you continue: Your name, Email");
     expect(propsOf(summary).tabIndex, "focusable by script, out of the Tab order").toBe(-1);
     expect(propsOf(summary).ref, "the element the stepper's ref attaches to").toBe(ref);
     expect(focus, "and Continue asked for focus on it").toHaveBeenCalledTimes(1);
+  });
+
+  it("typing the fix updates the summary's text but moves no focus and adds no announcement (it stays readable, and quiet)", () => {
+    const m = mount([DIV_OPEN]);
+    const { focus } = armFocus(m);
+    m.clickByText("Next");
+    expect(focus, "premise: the failed Continue focused it once").toHaveBeenCalledTimes(1);
+    expect(textOf(summaries(m)[0]!), "premise: two things are wrong").toBe("2 things to fix before you continue: Your name, Email");
+
+    setWho(m, { name: "Alex Test" }); // typing, no Continue
+    expect(textOf(summaries(m)[0]!), "the text follows the typing, so what is on screen is never stale").toBe("1 thing to fix before you continue: Email");
+    expect(focus, "typing never asks for focus again").toHaveBeenCalledTimes(1);
+    expect(alerts(m), "and nothing on the card is a live region that would read the new text aloud mid-typing").toHaveLength(0);
+    expect(propsOf(summaries(m)[0]!)["aria-live"]).toBeUndefined();
   });
 
   it("every failed Continue focuses it again, a fixed field drops out of it, and a Continue that passes does not", () => {
@@ -3762,7 +3780,7 @@ describe("B2 T9 — Contact: error summary, invalid fields, the playing card", (
       checked++;
     }
     expect(checked, "anti-vacuity: all four fields checked").toBe(4);
-    expect(alerts(m), "one alert (the summary), not one per field: four announcements of the same four problems is noise").toHaveLength(1);
+    expect(alerts(m), "no field announces itself, and neither does the summary (focus does): four announcements of the same four problems is noise").toHaveLength(0);
 
     setWho(m, { name: "Alex Test", email: "alex@example.com", dob: "1990-04-02", gender: "f" });
     for (const key of Object.keys(expected)) {
