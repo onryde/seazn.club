@@ -1,9 +1,10 @@
 import { test as base, expect, type Locator, type Page } from "@playwright/test";
+import AxeBuilder from "@axe-core/playwright";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { stageDefaultsFor } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
-import { expectNoHorizontalScroll, TAG } from "./helpers";
+import { expectNoHorizontalScroll, overflowingIn, TAG } from "./helpers";
 import { expectQrDecodesAsPainted, expectQrEnlarges, expectWholeModuleScale } from "./helpers/qr-enlarge";
 import { consentedAnonymousState } from "./scorepad-a11y-kit";
 import { HOLD_MS } from "../src/components/v2/scorepad/queue";
@@ -144,6 +145,24 @@ test("Full table (owner 2026-11-12): at 1280, 768 and 320 the fold opens in plac
     await region.focus();
     await expect(region, `${width}: the region takes focus`).toBeFocused();
     await expectNoHorizontalScroll(page);
+    // AGENTS.md rule 23: where the open table is wider than the screen it is a REACHABLE scroll strip (overflow-x auto, a
+    // tab stop, a role and a name), never a clip. Every overflowing box in the fold is the reachable kind with tabindex 0;
+    // at 320 the region itself overflows (measured 448px of table in 286px), so the exemption is exercised, not assumed.
+    const { clipped, scrollable } = await overflowingIn(page, '[data-testid="qm-full-table"]', "*", `${width}: no Full table`);
+    expect(clipped, `${width}: the open Full table clips nothing`).toEqual([]);
+    for (const box of scrollable) expect(box, `${width}: a scrolling box is a tab stop`).toMatch(/tabindex=0$/);
+    const overflows = await region.evaluate((el) => el.scrollWidth > el.clientWidth + 1);
+    if (width === 320) expect(overflows, "320: the open Full table scrolls in its region (premise of the checks)").toBe(true);
+    expect(scrollable.length > 0, `${width}: the scan saw the region's overflow`).toBe(overflows);
+    // axe's own verdict on the open fold (scrollable-region-focusable among the WCAG A/AA rules): no violation, and when
+    // the region scrolls the rule judged at least one node, so a green here is not an axe run that evaluated nothing.
+    const axe = await new AxeBuilder({ page }).include('[data-testid="qm-full-table"]').withTags(["wcag2a", "wcag2aa"]).analyze();
+    expect(
+      axe.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(" ")).join(", ")}`),
+      `${width}: axe on the open Full table`,
+    ).toEqual([]);
+    const judged = axe.passes.filter((p) => p.id === "scrollable-region-focusable").flatMap((p) => p.nodes).length;
+    if (overflows) expect(judged, `${width}: axe judged the scrolling region`).toBeGreaterThan(0);
 
     await toggle.click();
     await expect(region, `${width}: closed again`).toBeHidden();

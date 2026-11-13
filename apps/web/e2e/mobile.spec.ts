@@ -8548,6 +8548,15 @@ test("quick match (guest): the setup form, the home with Share's QR and Add a ma
     await hitFloor(page.getByTestId("qm-add-match-submit"), "Add the match", 44);
     await expectNoHorizontalScroll(page);
     scanned += await qmNotClipped(page, '[data-testid="qm-home"]', "the home, Share and Add a match open");
+    // The Full table open (owner 2026-11-12): where it is wider than the screen it scrolls in its own region (overflow-x
+    // auto, tabindex 0, a role and a name; AGENTS.md rule 23), which the scan counts as reachable, never as a clip. Closed
+    // again after, so the rest of the walk meets the home as a guest first sees it.
+    await page.getByTestId("qm-full-table-toggle").click();
+    await expect(page.getByTestId("qm-full-table-region")).toBeVisible();
+    await expectNoHorizontalScroll(page);
+    scanned += await qmNotClipped(page, '[data-testid="qm-standings"]', "the Full table open");
+    await page.getByTestId("qm-full-table-toggle").click();
+    await expect(page.getByTestId("qm-full-table-region")).toBeHidden();
 
     // ── 3. The pad: Score → the Confirm card → Start match → one rally to the home side ──
     await hero.getByTestId("qm-score").click();
