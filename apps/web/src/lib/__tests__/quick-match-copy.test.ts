@@ -18,6 +18,8 @@ import {
   QUICK_MATCH_ERRORS,
   QUICK_MATCH_MAX_ADHOC,
   QUICK_MATCH_MAX_PLAYS,
+  QUICK_MATCH_QUALIFIERS,
+  QUICK_MATCH_SEMIS_MIN_SIDES,
 } from "@/lib/quick-match-constants";
 import { CreateQuickMatch } from "@/server/api-v1/schemas";
 
@@ -77,6 +79,18 @@ const MARKETING_KEYS = [
   "quickMatch.setup.needsScript",
   // Owner 2026-11-12: the line above Start that says an unsaved quick match is deleted, and when.
   "quickMatch.setup.keepNote",
+  // Plan 5 (League + Knockout, spec 2026-11-12 §2, §12; mockup qmd13a01 §6): the three-choice format list, the semi-finals'
+  // minimum, and its refusal. Setup copy lives here because the setup island reads `quickMatch.setup.` / `.errors.` from
+  // marketing (play/setup-props.ts).
+  "quickMatch.setup.format",
+  "quickMatch.setup.shape.league",
+  "quickMatch.setup.shape.leagueHint",
+  "quickMatch.setup.shape.final",
+  "quickMatch.setup.shape.finalHint",
+  "quickMatch.setup.shape.semis",
+  "quickMatch.setup.shape.semisHint",
+  "quickMatch.setup.shape.semisNeeds",
+  "quickMatch.errors.semisTooFewSides",
 ] as const;
 
 const UI_KEYS = [
@@ -175,6 +189,48 @@ const UI_KEYS = [
   "device.quickMatch.checkAgain",
   // FR4 m2: the same screen once the league has finished: no Put back can come, so no hint.
   "device.quickMatch.notPlayedFinal",
+  // Plan 5 (League + Knockout, spec §5, §6, §11, §12; mockup qmd13a01 §7-12): the played line's two parts, the standings
+  // caption and markers, the knockout card and its seats, the setting-up and champion cards, the tie question and its two
+  // answers, and the four refusals. The format word and the seat ranks are derived below, not listed.
+  "quickMatch.home.stagePart.split",
+  "quickMatch.home.stagePart.knockoutOn",
+  "quickMatch.home.goThrough",
+  "quickMatch.home.wentThrough",
+  "quickMatch.home.knockout",
+  "quickMatch.home.knockoutFills",
+  "quickMatch.home.knockoutWaiting",
+  "quickMatch.home.toDecide",
+  "quickMatch.home.byLotShort",
+  "quickMatch.home.byLot",
+  "quickMatch.home.picked",
+  "quickMatch.home.levelToDecide",
+  "quickMatch.home.leagueMatches",
+  "quickMatch.home.finalLeagueTable",
+  "quickMatch.home.settingUp",
+  "quickMatch.home.settingUpHint",
+  "quickMatch.home.refresh",
+  "quickMatch.home.champion",
+  "quickMatch.home.championBeat",
+  "quickMatch.home.championTopToo",
+  "quickMatch.cut.kicker.one",
+  "quickMatch.cut.kicker.other",
+  "quickMatch.cut.title",
+  "quickMatch.cut.titleMany.one",
+  "quickMatch.cut.titleMany.other",
+  "quickMatch.cut.body",
+  "quickMatch.cut.pick",
+  "quickMatch.cut.toss",
+  "quickMatch.cut.back",
+  "quickMatch.cut.pickQuestion.one",
+  "quickMatch.cut.pickQuestion.other",
+  "quickMatch.cut.send",
+  "quickMatch.cut.tossResult",
+  "quickMatch.cut.tossBody",
+  "quickMatch.cut.pickResult",
+  "quickMatch.flash.alreadyDecided",
+  "quickMatch.flash.tieChanged",
+  "quickMatch.flash.pickInvalid",
+  "quickMatch.flash.leagueComplete",
 ] as const;
 
 /** Every `quickMatch.*` key of one file in one locale, sorted. */
@@ -482,9 +538,10 @@ describe("quick match guest copy: plurals", () => {
     // (draws score points, so "most wins" was false), and the two offer refusals name nothing the guest did not choose.
     expect(m["quickMatch.setup.leagueHelp"]).toBe("Everyone plays everyone. Top of the table wins.");
     // Owner 2026-11-12 ("take out"): League only for now. The setup's knockout lines are gone from every locale, and the
-    // page's description no longer promises one.
+    // page's description no longer promises one. Plan 5 (owner 2026-11-13, mockup qmd13a01 §6 FINAL) brings the "Format"
+    // label back over its three-row list (`quickMatch.setup.shape.*`); the plain knockout's own lines stay gone.
     for (const locale of LOCALES) {
-      for (const gone of ["format", "knockoutHelp", "knockoutUnavailable", "sitsOut", "winnersMeet"]) {
+      for (const gone of ["knockoutHelp", "knockoutUnavailable", "sitsOut", "winnersMeet"]) {
         expect(DICTS[locale].marketing[`quickMatch.setup.${gone}`], `${locale} quickMatch.setup.${gone}`).toBeUndefined();
       }
     }
@@ -562,6 +619,14 @@ describe("quick match guest copy: constants are placeholders, never typed number
     ["marketing", "quickMatch.setup.keepNote", "days"],
     ["ui", "quickMatch.home.playedSkipped.one", "days"],
     ["ui", "quickMatch.home.playedSkipped.other", "days"],
+    // Plan 5: the semi-finals' minimum is QUICK_MATCH_SEMIS_MIN_SIDES, and a shape's count is its QUICK_MATCH_QUALIFIERS entry
+    // (the knockout stage's own progression on a live match).
+    ["marketing", "quickMatch.setup.shape.semisNeeds", "min"],
+    ["marketing", "quickMatch.errors.semisTooFewSides", "min"],
+    ["marketing", "quickMatch.setup.shape.finalHint", "count"],
+    ["marketing", "quickMatch.setup.shape.semisHint", "count"],
+    ["ui", "quickMatch.home.goThrough", "count"],
+    ["ui", "quickMatch.home.wentThrough", "count"],
   ] as const;
 
   it("each constant-bearing value interpolates its constant in every locale (counted)", () => {
@@ -622,5 +687,94 @@ describe("quick match guest copy: no internal word, no copied sport name", () =>
     }
     expect(checked).toBeGreaterThan(0);
     expect(faults).toEqual([]);
+  });
+});
+
+describe("quick match guest copy: League + Knockout (plan 5 Task 1)", () => {
+  const seats = Math.max(...QUICK_MATCH_QUALIFIERS);
+
+  it("every knockout seat's rank has its two labels, 1st..the largest knockout's last seat, and none beyond, in ui.json (counted)", () => {
+    // Derived from the qualifier counts the create accepts: a larger knockout reds here until its seats can be named.
+    expect(seats, "anti-vacuity: the qualifier counts were read").toBeGreaterThan(0);
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const ui = DICTS[locale].ui;
+      for (let n = 1; n <= seats; n++) {
+        for (const family of ["quickMatch.home.leagueRank", "quickMatch.home.rankShort"]) {
+          expect((ui[`${family}.${n}`] ?? "").trim(), `${locale} ${family}.${n}`).not.toBe("");
+          expect(placeholders(ui[`${family}.${n}`]!), `${locale} ${family}.${n}: a fixed rank, no placeholder`).toEqual([]);
+          checked++;
+        }
+      }
+      // No label for a seat no knockout has (a dead key), and the four ranks read four different words.
+      expect(ui[`quickMatch.home.leagueRank.${seats + 1}`], locale).toBeUndefined();
+      expect(ui[`quickMatch.home.rankShort.${seats + 1}`], locale).toBeUndefined();
+      const short = Array.from({ length: seats }, (_, i) => ui[`quickMatch.home.rankShort.${i + 1}`]);
+      expect(new Set(short).size, `${locale}: the short ranks differ`).toBe(seats);
+    }
+    expect(checked, "anti-vacuity").toBe(LOCALES.length * seats * 2);
+  });
+
+  // The place a tie leaves in the knockout, singular and plural, typed here as each locale's grammar (never read back).
+  const PLACE: Record<Locale, readonly [one: string, other: string]> = {
+    en: ["place", "places"],
+    fr: ["place", "places"],
+    es: ["plaza", "plazas"],
+    nl: ["plaats", "plaatsen"],
+  };
+  const word = (w: string) => new RegExp(`(^|[^\\p{L}])${w}([^\\p{L}]|$)`, "u");
+  const vars = { place: "2nd", sides: 3 };
+
+  it("the tie's two place counts read .one at 1 and .other at 2 with the right noun, their number from plural() (counted)", () => {
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const ui = DICTS[locale].ui;
+      const [one, many] = PLACE[locale];
+      for (const key of ["quickMatch.cut.kicker", "quickMatch.cut.titleMany"]) {
+        const atOne = plural(ui, key, 1, locale, vars);
+        const atTwo = plural(ui, key, 2, locale, vars);
+        expect(atOne, `${locale} ${key} at 1`).toMatch(word(one));
+        expect(atOne, `${locale} ${key} at 1 never says "${many}"`).not.toMatch(word(many));
+        expect(atTwo, `${locale} ${key} at 2`).toMatch(word(many));
+        expect(atTwo, `${locale} ${key} at 2 names the count`).toContain("2");
+        for (const out of [atOne, atTwo]) expect(out, `${locale} ${key}: every placeholder filled`).not.toMatch(/\{\w+\}/);
+        checked++;
+      }
+      // "Who goes through?" / "Choose 2 to go through": no shared noun, so the two forms differ and the count shows at 2.
+      const q1 = plural(ui, "quickMatch.cut.pickQuestion", 1, locale);
+      const q2 = plural(ui, "quickMatch.cut.pickQuestion", 2, locale);
+      expect(q1, locale).not.toBe(q2);
+      expect(q2, locale).toContain("2");
+      for (const out of [q1, q2]) expect(out, locale).not.toMatch(/\{\w+\}/);
+      checked++;
+    }
+    expect(checked, "anti-vacuity").toBe(LOCALES.length * 3);
+  });
+
+  it("en reads the spec's and the mockup's copy (spec §5 example; mockup qmd13a01 §6-12)", () => {
+    const m = DICTS.en.marketing;
+    const ui = DICTS.en.ui;
+    expect(ui["quickMatch.format.league_knockout"]).toBe("League + Knockout");
+    // §6: the three stacked choices and the disabled row's reason.
+    expect(m["quickMatch.setup.shape.final"]).toBe("League → Final");
+    expect(interpolate(m["quickMatch.setup.shape.finalHint"]!, { count: QUICK_MATCH_QUALIFIERS[0] })).toBe(
+      "Everyone plays everyone, then the top 2 play a final.",
+    );
+    expect(interpolate(m["quickMatch.setup.shape.semisHint"]!, { count: QUICK_MATCH_QUALIFIERS[1] })).toBe(
+      "Everyone plays everyone, then the top 4 play semi-finals and a final.",
+    );
+    expect(interpolate(m["quickMatch.setup.shape.semisNeeds"]!, { min: QUICK_MATCH_SEMIS_MIN_SIDES })).toBe("Needs 4 or more sides");
+    // §5: "Tie for 2nd: Ines and Mika"; §11: "Tie for 2nd: 3 sides, 1 place".
+    expect(interpolate(ui["quickMatch.cut.title"]!, { place: ui["quickMatch.home.rankShort.2"]!, names: "Ines and Mika" })).toBe(
+      "Tie for 2nd: Ines and Mika",
+    );
+    expect(plural(ui, "quickMatch.cut.titleMany", 1, "en", { place: "2nd", sides: 3 })).toBe("Tie for 2nd: 3 sides, 1 place");
+    expect(plural(ui, "quickMatch.cut.kicker", 1, "en")).toBe("League finished · one place left in the knockout");
+    expect(plural(ui, "quickMatch.cut.kicker", 2, "en")).toBe("League finished · 2 places left in the knockout");
+    // D7: a waiting seat, and a seat that waits on the tie.
+    expect(ui["quickMatch.home.leagueRank.1"]).toBe("1st in the league");
+    expect(interpolate(ui["quickMatch.home.toDecide"]!, { seat: ui["quickMatch.home.leagueRank.2"]! })).toBe(
+      "2nd in the league — to decide",
+    );
   });
 });

@@ -506,5 +506,14 @@
   "quickMatch.errors.emailInvalid": "Controleer het e-mailadres, of laat het leeg.",
   "quickMatch.errors.nameBlank": "Typ een naam, niet alleen spaties.",
   "quickMatch.errors.unavailable": "Snelle wedstrijden zijn nu niet beschikbaar. Probeer het later opnieuw.",
-  "quickMatch.errors.generic": "We konden je snelle wedstrijd niet starten. Probeer het opnieuw."
+  "quickMatch.errors.generic": "We konden je snelle wedstrijd niet starten. Probeer het opnieuw.",
+  "quickMatch.setup.format": "Formaat",
+  "quickMatch.setup.shape.league": "Competitie",
+  "quickMatch.setup.shape.leagueHint": "Iedereen speelt tegen iedereen.",
+  "quickMatch.setup.shape.final": "Competitie → Finale",
+  "quickMatch.setup.shape.finalHint": "Iedereen speelt tegen iedereen, daarna speelt de top {count} een finale.",
+  "quickMatch.setup.shape.semis": "Competitie → Halve finales → Finale",
+  "quickMatch.setup.shape.semisHint": "Iedereen speelt tegen iedereen, daarna speelt de top {count} halve finales en een finale.",
+  "quickMatch.setup.shape.semisNeeds": "Minstens {min} deelnemers nodig",
+  "quickMatch.errors.semisTooFewSides": "Voor halve finales zijn minstens {min} deelnemers nodig."
 }

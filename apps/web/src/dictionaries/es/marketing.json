@@ -506,5 +506,14 @@
   "quickMatch.errors.emailInvalid": "Revisa la dirección de correo electrónico o déjala en blanco.",
   "quickMatch.errors.nameBlank": "Escribe un nombre, no solo espacios.",
   "quickMatch.errors.unavailable": "Los partidos rápidos no están disponibles en este momento. Vuelve a intentarlo más tarde.",
-  "quickMatch.errors.generic": "No hemos podido empezar tu partido rápido. Vuelve a intentarlo."
+  "quickMatch.errors.generic": "No hemos podido empezar tu partido rápido. Vuelve a intentarlo.",
+  "quickMatch.setup.format": "Formato",
+  "quickMatch.setup.shape.league": "Liga",
+  "quickMatch.setup.shape.leagueHint": "Todos juegan contra todos.",
+  "quickMatch.setup.shape.final": "Liga → Final",
+  "quickMatch.setup.shape.finalHint": "Todos juegan contra todos y después los {count} primeros juegan una final.",
+  "quickMatch.setup.shape.semis": "Liga → Semifinales → Final",
+  "quickMatch.setup.shape.semisHint": "Todos juegan contra todos y después los {count} primeros juegan semifinales y una final.",
+  "quickMatch.setup.shape.semisNeeds": "Hacen falta {min} participantes o más",
+  "quickMatch.errors.semisTooFewSides": "Las semifinales necesitan {min} participantes o más."
 }

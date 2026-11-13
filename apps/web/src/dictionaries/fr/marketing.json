@@ -506,5 +506,14 @@
   "quickMatch.errors.emailInvalid": "Vérifiez l'adresse e-mail, ou laissez-la vide.",
   "quickMatch.errors.nameBlank": "Saisissez un nom, pas seulement des espaces.",
   "quickMatch.errors.unavailable": "Les matchs rapides ne sont pas disponibles pour le moment. Réessayez plus tard.",
-  "quickMatch.errors.generic": "Impossible de lancer votre match rapide. Réessayez."
+  "quickMatch.errors.generic": "Impossible de lancer votre match rapide. Réessayez.",
+  "quickMatch.setup.format": "Format",
+  "quickMatch.setup.shape.league": "Championnat",
+  "quickMatch.setup.shape.leagueHint": "Tout le monde affronte tout le monde.",
+  "quickMatch.setup.shape.final": "Championnat → Finale",
+  "quickMatch.setup.shape.finalHint": "Tout le monde affronte tout le monde, puis les {count} premiers jouent une finale.",
+  "quickMatch.setup.shape.semis": "Championnat → Demi-finales → Finale",
+  "quickMatch.setup.shape.semisHint": "Tout le monde affronte tout le monde, puis les {count} premiers jouent des demi-finales et une finale.",
+  "quickMatch.setup.shape.semisNeeds": "Il faut au moins {min} participants",
+  "quickMatch.errors.semisTooFewSides": "Les demi-finales demandent au moins {min} participants."
 }

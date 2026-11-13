@@ -176,6 +176,16 @@ describe("routes", () => {
     // Two different posts: a Put back must never land on the skip route, or the reverse.
     expect(routes.quickMatchSkip("qm_abc", f)).not.toBe(routes.quickMatchPutBack("qm_abc", f));
   });
+
+  it("builds a quick match home's two answers to a tie at the cut, Toss a coin and Pick who goes through: the home token in the path (plan 5 T1)", () => {
+    expect(routes.quickMatchCutToss("qm_abc")).toBe("/q/qm_abc/cut/toss");
+    expect(routes.quickMatchCutPick("qm_abc")).toBe("/q/qm_abc/cut/pick");
+    // The same home the token's own builder names, so the three never drift apart.
+    expect(routes.quickMatchCutToss("qm_abc")).toBe(`${routes.quickMatch("qm_abc")}/cut/toss`);
+    expect(routes.quickMatchCutPick("qm_abc")).toBe(`${routes.quickMatch("qm_abc")}/cut/pick`);
+    // Two different posts: a pick must never land on the toss route, or the reverse.
+    expect(routes.quickMatchCutToss("qm_abc")).not.toBe(routes.quickMatchCutPick("qm_abc"));
+  });
 });
 
 describe("routes.orgSponsors (R4 S11: the Sponsors hub is top-level, not a Settings tab)", () => {

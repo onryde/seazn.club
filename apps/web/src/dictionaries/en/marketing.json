@@ -506,5 +506,14 @@
   "quickMatch.errors.emailInvalid": "Check the email address, or leave it blank.",
   "quickMatch.errors.nameBlank": "Type a name, not just spaces.",
   "quickMatch.errors.unavailable": "Quick matches aren't available right now. Try again later.",
-  "quickMatch.errors.generic": "We couldn't start your quick match. Try again."
+  "quickMatch.errors.generic": "We couldn't start your quick match. Try again.",
+  "quickMatch.setup.format": "Format",
+  "quickMatch.setup.shape.league": "League",
+  "quickMatch.setup.shape.leagueHint": "Everyone plays everyone.",
+  "quickMatch.setup.shape.final": "League → Final",
+  "quickMatch.setup.shape.finalHint": "Everyone plays everyone, then the top {count} play a final.",
+  "quickMatch.setup.shape.semis": "League → Semi-finals → Final",
+  "quickMatch.setup.shape.semisHint": "Everyone plays everyone, then the top {count} play semi-finals and a final.",
+  "quickMatch.setup.shape.semisNeeds": "Needs {min} or more sides",
+  "quickMatch.errors.semisTooFewSides": "Semi-finals need {min} or more sides."
 }

@@ -39,6 +39,15 @@ export const QUICK_MATCH_EMAIL_PATTERN = "(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\
 /** League plays per pair (legs), at most: "Each pair plays" is Once | Twice (owner 2026-11-12). The create's schema and
  *  the preview refuse more, so the setup screen and the server agree. */
 export const QUICK_MATCH_MAX_PLAYS = 2;
+/** League + Knockout (plan 5 D1; spec 2026-11-12-quick-match-league-knockout §2, §12): how many go through from the league, the
+ *  top 2 (League → Final) or the top 4 (League → Semi-finals → Final). `CreateQuickMatch.qualifiers` takes exactly these, and
+ *  only with `format: "league_knockout"`. A live match's count is NOT stored beside it: the knockout stage's own progression
+ *  (`sources[0].take[0].to`) is the one authority. */
+export const QUICK_MATCH_QUALIFIERS = [2, 4] as const;
+/** Semi-finals need four sides (1st v 4th, 2nd v 3rd). The create refuses League → Semi-finals → Final below it
+ *  (SEMIS_TOO_FEW_SIDES), and the setup screen disables that row with `quickMatch.setup.shape.semisNeeds`, which
+ *  interpolates this number as `{min}`. */
+export const QUICK_MATCH_SEMIS_MIN_SIDES = 4;
 /** Alive (unexpired, unsaved) quick matches one visitor key may hold. */
 export const QUICK_MATCH_MAX_ALIVE_PER_VISITOR = 5;
 /** Days without activity before an unsaved quick match expires. */
@@ -145,4 +154,24 @@ export const QUICK_MATCH_ERRORS = {
    *  and the home shows `quickMatch.flash.notPlayed`, which says to put it back first: never the generic line, whose "try
    *  again" would only loop. */
   NOT_PLAYED: "QUICK_MATCH_NOT_PLAYED",
+  /** A tie at the knockout's cut (plan 5 D5, spec 2026-11-12 §5, §11): someone already answered it, by Pick or by Toss, or the
+   *  knockout has already filled (422). The first decision wins (`quick_matches.cut_decision`, written only while null); a
+   *  second phone's answer changes nothing. The home shows `quickMatch.flash.alreadyDecided` above who went through. */
+  ALREADY_DECIDED: "QUICK_MATCH_ALREADY_DECIDED",
+  /** A Pick or Toss post when no tie straddles the cut (plan 5 D5, 422): the league is not finished, or an edited result moved
+   *  the table so the question is no longer the one the page showed (§11). Never a fault: the home shows
+   *  `quickMatch.flash.tieChanged`, which says to decide again on the fresh question. */
+  TIE_NOT_OPEN: "QUICK_MATCH_TIE_NOT_OPEN",
+  /** A Pick post that does not name exactly the open places' number of distinct sides, all from the tied group (plan 5 D5, 422).
+   *  The browser's own panel only enables Send at the right count, so a crafted or no-JS post meets it:
+   *  `quickMatch.flash.pickInvalid`. */
+  PICK_INVALID: "QUICK_MATCH_PICK_INVALID",
+  /** "Add a match" on a League + Knockout once every league match is played or Not played (plan 5 D3, spec §6, 422): the
+   *  knockout fills (or its tie is open) from that league, so it takes no extra match. A plain league keeps taking one. The
+   *  home hides the control then, so only a stale tap meets it: `quickMatch.flash.leagueComplete`. */
+  LEAGUE_COMPLETE: "QUICK_MATCH_LEAGUE_COMPLETE",
+  /** A create of League → Semi-finals → Final with fewer than QUICK_MATCH_SEMIS_MIN_SIDES sides (plan 5, spec §3, 422). The setup
+   *  screen disables that choice below it, so only a crafted post meets it: `quickMatch.errors.semisTooFewSides`, which
+   *  interpolates the minimum as `{min}`. */
+  SEMIS_TOO_FEW_SIDES: "QUICK_MATCH_SEMIS_TOO_FEW_SIDES",
 } as const;
