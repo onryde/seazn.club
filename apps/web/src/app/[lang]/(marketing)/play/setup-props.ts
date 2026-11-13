@@ -9,8 +9,9 @@ import { pickVariant } from "@/lib/preferred-variant";
 import type { QuickMatchSport } from "@/server/usecases/quick-match-sports";
 import type { SetupSport } from "@/components/quick-match/setup-form";
 
-/** The island's copy: the setup and error lines (marketing), and from ui the kind words. Flat `key → string`; nothing
- *  else of either dictionary. A league only (owner 2026-11-12), so no format word, draw card or round name ships. */
+/** The island's copy: the setup and error lines (marketing; the Format list's titles, hints and reason are
+ *  `quickMatch.setup.shape.*`), and from ui the kind words. Flat `key → string`; nothing else of either dictionary. No
+ *  draw card or round name ships: the screen shows no bracket. */
 const MARKETING_PREFIXES = ["quickMatch.setup.", "quickMatch.errors."];
 const UI_PREFIXES = [
   "quickMatch.kind.",
@@ -33,14 +34,16 @@ export function setupCopy(marketing: Dict, ui: Dict): Record<string, string> {
 }
 
 /** The offer as the island takes it: every name in the page's language (C1, C14), the kinds labelled in the sport's own
- *  order (the first is the default, D6), the default rules by `pickVariant` (D6). A sport with no kind or no variant
- *  cannot be set up and is left out, so the island's non-empty types hold. Catalog order is kept (B4b). */
+ *  order (the first is the default, D6), the default rules by `pickVariant` (D6), and per rules whether League + Knockout
+ *  may be offered on them (C23 `knockoutAllowed`, plan 5 T6). A sport with no kind or no variant cannot be set up and is left
+ *  out, so the island's non-empty types hold. Catalog order is kept (B4b). */
 export function setupSports(sports: readonly QuickMatchSport[], ui: Dict): SetupSport[] {
   return sports.flatMap((s): SetupSport[] => {
     const [firstKind, ...moreKinds] = s.kinds.map((kind) => ({ kind, label: t(ui, `quickMatch.kind.${kind}`) }));
     const [firstVariant, ...moreVariants] = s.variants.map((v) => ({
       key: v.variant_key,
       name: t(ui, v.labelKey),
+      knockoutAllowed: v.knockoutAllowed,
     }));
     if (!firstKind || !firstVariant) return [];
     const variants: SetupSport["variants"] = [firstVariant, ...moreVariants];

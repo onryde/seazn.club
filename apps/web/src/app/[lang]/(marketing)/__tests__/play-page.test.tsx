@@ -172,6 +172,41 @@ describe("/<lang>/play: the form", () => {
     expect(html).not.toContain(">Start playing<");
   });
 
+  it("ships the Format list (plan 5 T6): one `shape` radio, League, chosen, at the two sides it opens on; no `format` field", async () => {
+    vi.mocked(listQuickMatchSports).mockResolvedValueOnce(OFFER);
+    const html = await render("en");
+    const shapes = html.match(/<input[^>]*name="shape"[^>]*>/g) ?? [];
+    expect(shapes, "two sides: League alone (spec §12)").toHaveLength(1);
+    expect(shapes[0]).toMatch(/value="league"/);
+    expect(shapes[0], "chosen, so the plain post sends it").toContain('checked="');
+    expect(html, "no format field: one radio, one fact").not.toMatch(/name="format"/);
+    expect(html).toContain('role="radiogroup"');
+    expect(html).toContain(">Format<");
+    // The old League-only line is gone: the row's hint says it, and "Top of the table wins" is false for a knockout.
+    expect(html).not.toContain('data-testid="qm-league-help"');
+  });
+
+  it("hands the island each rules' C23 knockoutAllowed as the offer says it, both ways (the list reads it, never a default)", async () => {
+    const mixed: QuickMatchSport[] = [
+      {
+        ...OFFER[0]!,
+        variants: [
+          { variant_key: "bwf", labelKey: "variant.badminton.bwf", knockoutAllowed: false },
+          { variant_key: "bwf-3x15", labelKey: "variant.badminton.bwf3x15", knockoutAllowed: true },
+        ],
+      },
+      OFFER[1]!,
+    ];
+    vi.mocked(listQuickMatchSports).mockResolvedValueOnce(mixed);
+    const props = await islandProps({});
+    const seen = props.sports.flatMap((sp) => sp.variants.map((v) => [sp.sport_key, v.key, v.knockoutAllowed]));
+    expect(seen).toEqual([
+      ["badminton", "bwf", false],
+      ["badminton", "bwf-3x15", true],
+      ["boardgame", "rapid", true],
+    ]);
+  });
+
   it("is dynamic (no cached render: the offer and ?e= are per request)", () => {
     expect(dynamic).toBe("force-dynamic");
   });
@@ -253,6 +288,7 @@ describe.skipIf(!HAS_DB)("/<lang>/play over the live offer (real listQuickMatchS
     const html = await render("en");
     const sports = setupSports(live, ui);
     let checked = 0;
+    let variants = 0;
     for (const s of sports) {
       expect(html, `${s.sport_key} chip`).toMatch(field("sport_key", s.sport_key));
       const body = {
@@ -270,8 +306,14 @@ describe.skipIf(!HAS_DB)("/<lang>/play over the live offer (real listQuickMatchS
       const offer = await offerFor(s.sport_key, s.defaultVariant);
       expect(offer.offered, `${s.sport_key}/${s.defaultVariant} offered`).toBe(true);
       expect(offer.kinds, `${s.sport_key} kinds`).toContain(body.kind);
+      // The Format list reads each rules' C23 answer (plan 5 T6): the island is handed exactly what the create's guard asks.
+      for (const v of s.variants) {
+        expect(v.knockoutAllowed, `${s.sport_key}/${v.key} knockoutAllowed`).toBe((await offerFor(s.sport_key, v.key)).knockoutAllowed);
+        variants++;
+      }
       checked++;
     }
+    expect(variants, "rules swept").toBeGreaterThanOrEqual(checked);
     // Anti-vacuity: a DB without `sync:sports` offers nothing, and an empty sweep proves nothing.
     expect(checked, "sports swept").toBeGreaterThan(0);
     expect(checked).toBe(live.length);

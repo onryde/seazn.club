@@ -18,7 +18,8 @@
 //      guarded public POST (server/turnstile.ts `requireTurnstile`): the token rides the `cf-turnstile-response` header, which
 //      only the enhanced (scripted) submit sends, so a post without the script is refused here, like #1136's forms. A refusal
 //      is QUICK_MATCH_TURNSTILE_FAILED, before the schema, the visitor, any write or either mail bucket;
-//   2. the form, through plan 1's `CreateQuickMatch` schema (strict: a stray field is refused, not dropped);
+//   2. the form, through plan 1's `CreateQuickMatch` schema (strict: a stray field is refused, not dropped), the setup's one
+//      Format radio (`shape`) mapped to its `format` + `qualifiers` first (plan 5 D1, `formInput`);
 //   3. the visitor, from the REQUEST's cookie (B3a), minted when absent or malformed (`isVisitorKeyShaped`, B3b);
 //   4. plan 1's `createQuickMatch`: the seal, the per-visitor alive cap, the offer, then, with an email only and only once
 //      all of those have passed (branch review B m3), the mail limits through its `mailAllowed` hook: a separate per-IP
@@ -43,6 +44,7 @@ import { explicitLocale } from "@/lib/explicit-locale";
 import { handler, HttpError, redirectLocal } from "@/lib/http";
 import { DEFAULT_LOCALE, hasLocale, type Locale } from "@/lib/i18n-constants";
 import { QUICK_MATCH_ERRORS } from "@/lib/quick-match-constants";
+import { isSetupShape, shapeToFormat } from "@/lib/quick-match-shape";
 import { baseUrl } from "@/lib/oauth";
 import {
   EMAIL_LIMIT,
@@ -80,11 +82,16 @@ class FormRefused extends Error {
 
 /**
  * The form's fields as the schema's input. `sides` is a list (one field per side, in entry order); every other field is one
- * value, and a repeated or file-valued one is passed on as a list for the schema to refuse. Two fields are mapped, as the
- * form cannot spell them: `plays` is a number (blank = the schema's default), and a blank `email` is none (B4e).
+ * value, and a repeated or file-valued one is passed on as a list for the schema to refuse. Three fields are mapped, as the
+ * form cannot spell them: `plays` is a number (blank = the schema's default), a blank `email` is none (B4e), and the Format
+ * list's one radio, `shape` (plan 5 D1: league | final | semis), is the create's `format` and `qualifiers`
+ * (lib/quick-match-shape.ts). A shape is mapped only when it is one of the three AND the post names no format or count of its
+ * own; otherwise it is passed on as the stray field it is, and the strict schema refuses the form, never a guess between two
+ * answers.
  */
 function formInput(form: FormData): Record<string, unknown> {
   const out: Record<string, unknown> = {};
+  const ownFormat = form.has("format") || form.has("qualifiers");
   for (const key of new Set(form.keys())) {
     const values = form.getAll(key);
     const [only] = values;
@@ -94,7 +101,11 @@ function formInput(form: FormData): Record<string, unknown> {
     }
     if (key === "plays") out.plays = only === "" ? undefined : Number(only);
     else if (key === "email") out.email = only.trim() === "" ? null : only;
-    else out[key] = only;
+    else if (key === "shape" && !ownFormat && isSetupShape(only)) {
+      const { format, qualifiers } = shapeToFormat(only);
+      out.format = format;
+      if (qualifiers !== null) out.qualifiers = qualifiers;
+    } else out[key] = only;
   }
   return out;
 }

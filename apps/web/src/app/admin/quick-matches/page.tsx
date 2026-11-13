@@ -37,6 +37,15 @@ const FILTER_LABEL: Record<QuickMatchAdminFilter, string> = {
   saved: "Saved",
 };
 
+/** A row's format as staff say it (English, as all of /admin), never the stored word. A format this map does not know (a
+ *  later one) shows its stored word rather than nothing. */
+const FORMAT_LABEL: Readonly<Record<string, string>> = {
+  league: "League",
+  knockout: "Knockout",
+  league_knockout: "League + Knockout",
+};
+const formatLabel = (format: string): string => (Object.hasOwn(FORMAT_LABEL, format) ? FORMAT_LABEL[format]! : format);
+
 /** A time as staff read it in a ticket: minutes, UTC, the same on every machine. */
 const utc = (d: Date | null): string => (d === null ? "—" : `${d.toISOString().slice(0, 16).replace("T", " ")} UTC`);
 
@@ -161,8 +170,8 @@ export default async function AdminQuickMatchesPage({
               {list.rows.map((r) => (
                 <tr key={r.id} className="align-top hover:bg-slate-800/50" data-testid="qm-row">
                   <td className="whitespace-nowrap px-3 py-2 text-xs text-slate-400">{utc(r.createdAt)}</td>
-                  <td className="px-3 py-2 text-slate-300">
-                    {[r.sportKey ?? "—", r.format, r.kinds.join("/") || "—"].join(" · ")}
+                  <td className="px-3 py-2 text-slate-300" data-testid="qm-sport-format">
+                    {[r.sportKey ?? "—", formatLabel(r.format), r.kinds.join("/") || "—"].join(" · ")}
                   </td>
                   <td className="max-w-md px-3 py-2 text-slate-300">
                     <span className="mr-2 rounded bg-slate-800 px-1.5 py-0.5 text-xs text-slate-400">{r.sides.length}</span>
