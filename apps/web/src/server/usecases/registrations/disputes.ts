@@ -273,7 +273,11 @@ export async function buildDisputeEvidence(
   // longer among the inputs here — currency is the CART's snapshot,
   // RS001b — which is also the more honest source for dispute evidence,
   // since it is what the registrant was actually charged in rather than
-  // what the division is configured for today).
+  // what the division is configured for today). A waiting entry's
+  // `waitlistPosition` is forced null for the same reason (B3 review m3,
+  // owner ruling 2026-11-13): `buildCartMail` reads the place LIVE, and the
+  // queue has moved since the mail went out, so quoting today's place would
+  // attest to a number that was never sent. The line states the status alone.
   const { registrationTemplate } = await import("@/lib/email-templates");
   const { getDictionary } = await import("@/lib/i18n");
   const cartMail = await buildCartMail(reg.group_id, origin, null);
@@ -282,7 +286,12 @@ export async function buildDisputeEvidence(
   const emailDict = await getDictionary(cartMail?.locale ?? toLocale(reg.locale), "emails");
   const emailText = cartMail
     ? registrationTemplate(
-        { ...cartMail.args, paymentInstructions: null, payDeadline: null },
+        {
+          ...cartMail.args,
+          paymentInstructions: null,
+          payDeadline: null,
+          entries: cartMail.args.entries.map((e) => ({ ...e, waitlistPosition: null })),
+        },
         emailDict,
       ).text
     // NEVER silently blank. This document is submitted to Stripe as evidence

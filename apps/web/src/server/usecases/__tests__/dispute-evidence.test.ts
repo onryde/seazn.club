@@ -5,6 +5,8 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
+import { getDictionary } from "@/lib/i18n";
+import { t } from "@/lib/i18n-runtime";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
@@ -192,9 +194,16 @@ describe.skipIf(!HAS_DB)("dispute evidence pack", () => {
     // (its own row) — the CART widening is specifically in the confirmation
     // email reconstruction below it.
     expect(pack.html).toContain("Confirmed");
-    // B3 T13 (owner ruling 2026-11-13): the cart mail states a waiting entry's place and that nothing is charged now. The
-    // reconstruction reads the place LIVE (as it reads every status): the division's only waiter, so #1.
-    expect(pack.html).toContain("On the waiting list — position #1, not charged now");
+    // B3 review m3 (owner ruling 2026-11-13): the reconstruction never quotes a LIVE queue place as if it had been sent. The place a
+    // waiting entry holds today is not the one its mail stated when it went out (the queue has moved since), so the rebuilt receipt
+    // states the status alone. The words are the email dictionary's, the sibling's own line pinned so another "Waitlisted" cannot
+    // stand in for it; the sibling is the division's only waiter, so a live place would read #1.
+    const dict = await getDictionary("en", "emails");
+    const waitlisted = t(dict, "registration.entryStatusWaitlisted");
+    expect(waitlisted, "premise: the dictionary's plain status").toBe("Waitlisted");
+    expect(pack.html).toMatch(new RegExp(`Sibling Entry · [^<\\n]* — ${waitlisted}(?! —)`));
+    expect(pack.html).not.toContain(t(dict, "registration.entryStatusWaitlistedPosition", { position: 1 }));
+    expect(pack.html, "no queue place at all").not.toMatch(/position #\d/);
     // paymentInstructions/payDeadline stay forced null in the reconstruction
     // (unchanged by this wave) — no stray "Pay now" button from a stale mint.
     expect(pack.html).not.toContain("Pay now");
