@@ -28,7 +28,9 @@ If you're entering other people — a squad, a couple of teammates — you'll se
 
 ## Paying, and what happens after
 
-Review shows exactly what you're about to submit and what it costs, and the button tells you what happens next: **Enter the competition** for a free entry, **Enter — {fee}** for pay-the-organiser divisions (you'll see how to pay on the next page), or **Continue to payment** for card divisions, which takes you to a secure Stripe checkout.
+Review shows exactly what you're about to submit and what it costs, and the button tells you what happens next: **Enter the competition** for a free entry, **Enter — {fee}** for pay-the-organiser divisions (you'll see how to pay on the next page), or **Continue to payment — {fee}** for card divisions, which takes you to a secure Stripe checkout.
+
+Once you press it, the button says what it's doing: **Saving your place…** while your entry is saved, then, for a card entry, **Opening secure payment…** while Stripe's checkout loads. Wait for the next page rather than pressing again; if something goes wrong the button comes back with its usual words and a note on what to do, and nothing you typed is lost.
 
 Once you're through, you land on your **registration page** — the one place to check status, pay any entry that's still due, resend your confirmation email, invite teammates onto a team entry, and withdraw. It's also linked from your confirmation email and from your ticket at [your reference number](/help/registration/reference-numbers), which is the quicker page for a day-of "what's your status" check or for showing your ticket at check-in.
 
