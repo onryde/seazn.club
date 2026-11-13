@@ -16,7 +16,8 @@
 //   be spelled differently ("…00Z"); the column is a timestamptz, so two spellings of one instant store the same thing.
 //
 // A field edited back to its saved value is therefore clean, and the count is of FIELDS (what "{n} unsaved changes" says),
-// with each section listed once, in the page's own section order.
+// with each section listed once, in the page's own section order. A clock half-typed (date picked, time blank) never reaches
+// the draft, so the caller names it in `pending`, and it counts too.
 import { useMemo } from "react";
 import {
   toDivisionPatchBody,
@@ -64,22 +65,36 @@ function sameStoredValue(field: string, a: unknown, b: unknown): boolean {
   return wire(a) === wire(b);
 }
 
-/** Clean until both sides exist: a draft with nothing saved beside it is a load in flight, not "everything changed". */
-export function configDirty(saved: RegistrationConfigState | null, draft: RegistrationConfigState | null): ConfigDirty {
+/**
+ * Clean until both sides exist: a draft with nothing saved beside it is a load in flight, not "everything changed".
+ *
+ * `pending`: fields with an edit in progress that the draft does not hold yet — a clock with its date picked and its time
+ * still blank, which the panel keeps out of the state until both halves are there (registration-hub-tz-input.ts). Save
+ * refuses such a field, so it is unsaved whatever the draft says: each one counts, once, in its own section, even when the
+ * draft's value for it happens to equal the saved one.
+ */
+export function configDirty(
+  saved: RegistrationConfigState | null,
+  draft: RegistrationConfigState | null,
+  pending: readonly ConfigFieldKey[] = [],
+): ConfigDirty {
   if (!saved || !draft) return { dirty: false, count: 0, sections: [] };
   const before = sentBy(saved);
   const after = sentBy(draft);
-  let count = 0;
-  const touched = new Set<SectionId>();
+  const changed = new Set<string>(pending);
   for (const field of new Set([...Object.keys(before), ...Object.keys(after)])) {
-    if (sameStoredValue(field, before[field], after[field])) continue;
+    if (!sameStoredValue(field, before[field], after[field])) changed.add(field);
+  }
+  const touched = new Set<SectionId>();
+  for (const field of changed) {
     const section = sectionForField(field as ConfigFieldKey);
     // Every field the save sends is in SECTION_FIELDS (registration-hub-config-panel-sections.ts, and the sweep in
-    // use-config-dirty.test.ts). One that is not would be an edit counted nowhere a person can find it: refuse loudly.
+    // registration-hub-config-panel.test.ts, which reads the section off the rendered page). One that is not would be an edit
+    // counted nowhere a person can find it: refuse loudly.
     if (!section) throw new Error(`configDirty: "${field}" is saved but belongs to no section in SECTION_FIELDS`);
-    count += 1;
     touched.add(section);
   }
+  const count = changed.size;
   return { dirty: count > 0, count, sections: SECTION_IDS.filter((id) => touched.has(id)) };
 }
 
@@ -94,8 +109,12 @@ function fromSummary(summary: string): ConfigDirty {
  * `configDirty`, with an identity that holds while the answer does: a second keystroke in a field that is already changed
  * hands back the same object, so a caller can key an effect (the panel's `onDirtyChange` report) on it directly.
  */
-export function useConfigDirty(saved: RegistrationConfigState | null, draft: RegistrationConfigState | null): ConfigDirty {
-  const { count, sections } = configDirty(saved, draft);
+export function useConfigDirty(
+  saved: RegistrationConfigState | null,
+  draft: RegistrationConfigState | null,
+  pending: readonly ConfigFieldKey[] = [],
+): ConfigDirty {
+  const { count, sections } = configDirty(saved, draft, pending);
   const summary = `${count}|${sections.join(",")}`;
   return useMemo(() => fromSummary(summary), [summary]);
 }

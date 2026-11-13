@@ -6562,6 +6562,7 @@
   "reg.config.unsaved.other": "{count} modifications non enregistrées",
   "reg.config.changed": "Modifié",
   "reg.config.sectionIndex": "Sections",
+  "reg.config.saveFailed": "Tout n'a pas été enregistré. Corrigez ce qui est signalé et enregistrez à nouveau.",
   "register.nav.back": "Retour",
   "register.nav.continueTo": "Continuer vers {step}",
   "register.nav.step": "Étape {n} sur {total}",

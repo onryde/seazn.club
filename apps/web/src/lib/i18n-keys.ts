@@ -6333,6 +6333,7 @@ export type DictionaryKey =
   | "reg.cluster.spot"
   | "reg.config.allSaved"
   | "reg.config.changed"
+  | "reg.config.saveFailed"
   | "reg.config.sectionIndex"
   | "reg.config.unsaved.one"
   | "reg.config.unsaved.other"

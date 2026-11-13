@@ -6562,6 +6562,7 @@
   "reg.config.unsaved.other": "{count} niet-opgeslagen wijzigingen",
   "reg.config.changed": "Gewijzigd",
   "reg.config.sectionIndex": "Onderdelen",
+  "reg.config.saveFailed": "Niet alles is opgeslagen. Herstel wat gemarkeerd is en sla opnieuw op.",
   "register.nav.back": "Terug",
   "register.nav.continueTo": "Doorgaan naar {step}",
   "register.nav.step": "Stap {n} van {total}",

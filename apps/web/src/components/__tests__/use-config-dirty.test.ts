@@ -9,7 +9,7 @@ import {
   toRegistrationSettingsPutBody,
   type RegistrationConfigState,
 } from "@/components/registration-hub-config-state";
-import { SECTION_FIELDS, SECTION_IDS, type SectionId } from "@/components/registration-hub-config-panel-sections";
+import { SECTION_IDS } from "@/components/registration-hub-config-panel-sections";
 import { editOrgTzDateTimeHalf, orgTzDateTimeHalves } from "@/components/registration-hub-tz-input";
 import { renderIsland } from "@/components/__tests__/_hook-harness";
 
@@ -166,23 +166,58 @@ describe("configDirty — compares what the save SENDS, not object identity", ()
   });
 });
 
-describe("configDirty — every saved field is tracked, in the section the page shows it in", () => {
-  it("a change to any one field reads as exactly one change, in SECTION_FIELDS' section for it", () => {
+describe("configDirty — every saved field is tracked", () => {
+  // WHICH section each field counts in is read off the rendered page (registration-hub-config-panel.test.tsx, "every field the
+  // save sends is rendered inside exactly one section"), never from SECTION_FIELDS, which is what configDirty itself reads.
+  it("a change to any one field reads as exactly one change, in exactly one section", () => {
     const sent = { ...toDivisionPatchBody(SAVED), ...toRegistrationSettingsPutBody(SAVED) };
     const fields = Object.keys(sent) as (keyof RegistrationConfigState)[];
     // The save sends every field the editor holds — none is edited without being saved, so none may go untracked.
     expect(new Set(fields)).toEqual(new Set(Object.keys(SAVED)));
-    const sectionOf = (f: string) => SECTION_IDS.find((id) => (SECTION_FIELDS[id] as readonly string[]).includes(f));
     let checked = 0;
     for (const field of fields) {
       const draft = { ...SAVED, [field]: perturb(SAVED[field]) } as RegistrationConfigState;
-      const expected = sectionOf(field);
-      expect(expected, `${field} has a section`).toBeDefined();
-      expect(configDirty(SAVED, draft), field).toEqual({ dirty: true, count: 1, sections: [expected as SectionId] });
+      const answer = configDirty(SAVED, draft);
+      expect(answer.count, field).toBe(1);
+      expect(answer.dirty, field).toBe(true);
+      expect(answer.sections, field).toHaveLength(1);
+      expect(SECTION_IDS, field).toContain(answer.sections[0]);
       checked += 1;
     }
     expect(checked).toBe(fields.length);
     expect(checked).toBeGreaterThan(0);
+  });
+});
+
+describe("configDirty — a clock still half-typed (pending) is unsaved", () => {
+  it("the empty case: no pending fields and an identical draft is clean", () => {
+    expect(configDirty(SAVED, SAVED, [])).toEqual(CLEAN);
+  });
+
+  it("a pending clock counts as one change in its section even though the draft still holds the saved value", () => {
+    // Where the page shows each clock (the panel's rendered-section sweep): Open & close, Money, Eligibility.
+    expect(configDirty(SAVED, SAVED, ["opens_at"])).toEqual({ dirty: true, count: 1, sections: ["schedule"] });
+    expect(configDirty(SAVED, SAVED, ["refund_lock_at"])).toEqual({ dirty: true, count: 1, sections: ["money"] });
+    expect(configDirty(SAVED, SAVED, ["place_by_at"])).toEqual({ dirty: true, count: 1, sections: ["eligibility"] });
+  });
+
+  it("a field both changed in the draft AND pending counts once", () => {
+    const moved = { ...SAVED, opens_at: "2026-03-01T09:00:00.000Z" };
+    expect(configDirty(SAVED, moved, ["opens_at"])).toEqual({ dirty: true, count: 1, sections: ["schedule"] });
+  });
+
+  it("pending clocks add to the other edits, each section once, in the page's order", () => {
+    const draft = { ...SAVED, capacity: 40 };
+    expect(configDirty(SAVED, draft, ["closes_at", "opens_at", "place_by_at"])).toEqual({
+      dirty: true,
+      count: 4,
+      sections: ["eligibility", "schedule", "capacity"],
+    });
+  });
+
+  it("nothing loaded yet stays clean whatever is pending (no draft can be half-typed before the load)", () => {
+    expect(configDirty(null, null, ["opens_at"])).toEqual(CLEAN);
+    expect(configDirty(null, SAVED, ["opens_at"])).toEqual(CLEAN);
   });
 });
 

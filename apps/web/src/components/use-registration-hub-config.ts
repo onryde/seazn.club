@@ -13,6 +13,7 @@
 import { useEffect, useState } from "react";
 import { apiV1 } from "@/lib/client-v1";
 import {
+  asIndividualOnly,
   holdsNonIndividualEntry,
   initialConfigState,
   toDivisionPatchBody,
@@ -51,10 +52,18 @@ export interface ReadOnlyEcho {
 interface Loaded {
   state: RegistrationConfigState;
   readOnly: ReadOnlyEcho;
-  /** B7 T23: what the server holds as far as this editor knows — the values it loaded, moved forward by each request that
-   *  LANDED, to what that request sent. The dirty check (use-config-dirty.ts) compares `state` against this, and `reset()`
-   *  restores it. Never the props the panel mounted with: after a save those are stale until the page refetches. */
+  /** B7 T23: what the server holds as far as this editor knows — the row it loaded, AS STORED, moved forward by each request
+   *  that LANDED, to what that request sent. The dirty check (use-config-dirty.ts) compares `state` against this, and
+   *  `reset()` returns to it. Never the props the panel mounted with: after a save those are stale until the page refetches.
+   *  As stored, not as seeded: a chess division's legacy team/pair/solo row is seeded individual, and that difference is an
+   *  unsaved change until a save moves the row (B7 T23 review m2). */
   saved: RegistrationConfigState;
+}
+
+/** What one save did: the outcome, named by what failed, and the field errors it produced (empty when it succeeded). */
+export interface SaveResult {
+  outcome: SaveOutcome;
+  errors: Partial<Record<ConfigFieldKey, string>>;
 }
 
 export function useRegistrationConfigPanelState(
@@ -80,10 +89,9 @@ export function useRegistrationConfigPanelState(
       .then((data) => {
         if (cancelled) return;
         const individualOnly = division.individual_only === true;
-        const state = initialConfigState(data, division, individualOnly);
         setLoaded({
-          state,
-          saved: state,
+          state: initialConfigState(data, division, individualOnly),
+          saved: initialConfigState(data, division),
           readOnly: {
             chargesEnabled: data.charges_enabled,
             orgPaymentInstructions: data.org_payment_instructions,
@@ -105,12 +113,12 @@ export function useRegistrationConfigPanelState(
     setLoaded((prev) => (prev ? { ...prev, state: { ...prev.state, ...p } } : prev));
   }
 
-  /** Resolves with the field errors this save produced — empty when it
-   *  succeeded. Returned rather than only stored so a caller can act on the
-   *  failure at the moment it happens; reacting to the `errors` STATE in an
-   *  effect instead is a cascading render, and lint rejects it. */
-  async function save(): Promise<Partial<Record<ConfigFieldKey, string>>> {
-    if (!loaded) return {};
+  /** Resolves with what the save did (null: nothing loaded, nothing sent).
+   *  Returned rather than only stored so a caller can act on the failure at
+   *  the moment it happens; reacting to the `errors` STATE in an effect
+   *  instead is a cascading render, and lint rejects it. */
+  async function save(): Promise<SaveResult | null> {
+    if (!loaded) return null;
     setBusy(true);
     setErrors({});
     setFormError(null);
@@ -141,7 +149,7 @@ export function useRegistrationConfigPanelState(
     if (patchOk && putOk) {
       setSaveOutcome("success");
       onSaved();
-      return {};
+      return { outcome: "success", errors: {} };
     }
     const nextErrors: Partial<Record<ConfigFieldKey, string>> = {};
     let banner: string | null = null;
@@ -152,16 +160,20 @@ export function useRegistrationConfigPanelState(
       if (info.field) nextErrors[info.field] = text;
       else banner = text;
     }
+    const outcome: SaveOutcome = patchOk === putOk ? "both-failed" : patchOk ? "put-failed" : "patch-failed";
     setErrors(nextErrors);
     setFormError(banner);
-    setSaveOutcome(patchOk === putOk ? "both-failed" : patchOk ? "put-failed" : "patch-failed");
-    return nextErrors;
+    setSaveOutcome(outcome);
+    return { outcome, errors: nextErrors };
   }
 
   /** B7 T23 (the page layout's Cancel): every field back to the saved values, and the outcome of the last save with them —
-   *  its banner and field errors were about the edits just discarded. */
+   *  its banner and field errors were about the edits just discarded. An individual-only division returns to the saved values
+   *  in the one shape it takes, never to a legacy row's team/pair/solo shape the server refuses (so Cancel on such a row
+   *  leaves it unsaved: the row itself has not moved). */
   function reset() {
-    setLoaded((prev) => (prev ? { ...prev, state: prev.saved } : prev));
+    const individualOnly = division.individual_only === true;
+    setLoaded((prev) => (prev ? { ...prev, state: individualOnly ? asIndividualOnly(prev.saved) : prev.saved } : prev));
     setErrors({});
     setFormError(null);
     setSaveOutcome(null);

@@ -15,14 +15,15 @@ import { ROUTABLE_FIELDS, type ConfigFieldKey } from "@/components/registration-
 import { effectiveEntrantModel } from "@seazn/engine/sport";
 import {
   RegistrationHubConfigPanel,
-  Disclosure,
   EligibilitySection,
   OpenCloseSection,
   CapacitySection,
   MoneySection,
   FormSection,
   OrgTzDateTimePair,
+  type ConfigSaveHandle,
 } from "@/components/registration-hub-config-panel";
+import { Disclosure, sectionTitle } from "@/components/registration-hub-config-section";
 
 const net = vi.hoisted(() => ({
   calls: [] as { url: string; method: string; json?: unknown }[],
@@ -37,6 +38,19 @@ const net = vi.hoisted(() => ({
 // which is what the real hook hands this harness too). Mocked to a value a test sets, the way the sponsor sheet's tests do.
 const mdUp = vi.hoisted(() => ({ value: null as boolean | null }));
 vi.mock("@/components/ui/use-md-up", () => ({ useMdUp: () => mdUp.value }));
+
+// B7 T23 review m5: every reveal the panel asks for, in order (the real one still runs, and finds no document here).
+const revealed = vi.hoisted(() => ({ anchors: [] as string[] }));
+vi.mock("@/components/registration-hub-config-page-chrome", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/components/registration-hub-config-page-chrome")>();
+  return {
+    ...actual,
+    revealSection: (anchor: string) => {
+      revealed.anchors.push(anchor);
+      return actual.revealSection(anchor);
+    },
+  };
+});
 
 vi.mock("@/lib/client-v1", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/client-v1")>();
@@ -69,9 +83,10 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
 
 import { ApiV1Error } from "@/lib/client-v1";
 import { plural, t } from "@/lib/i18n-runtime";
-import { SECTION_IDS } from "@/components/registration-hub-config-panel-sections";
-import type { ConfigDirty } from "@/components/use-config-dirty";
-import { ConfigSaveBar, ConfigSectionIndex } from "@/components/registration-hub-config-page-chrome";
+import { SECTION_IDS, type SectionId } from "@/components/registration-hub-config-panel-sections";
+import { configDirty, type ConfigDirty } from "@/components/use-config-dirty";
+import { toDivisionPatchBody, toRegistrationSettingsPutBody } from "@/components/registration-hub-config-state";
+import { ConfigSaveBar, ConfigSectionIndex, sectionAnchor } from "@/components/registration-hub-config-page-chrome";
 import uiEn from "@/dictionaries/en/ui.json";
 
 type SectionType = (props: Record<string, unknown>) => ReactNode;
@@ -272,6 +287,7 @@ beforeEach(() => {
   net.putRejection = null;
   net.putGate = null;
   mdUp.value = null;
+  revealed.anchors = [];
 });
 
 describe("RegistrationHubConfigPanel — built on Modal (keeps the focus trap)", () => {
@@ -708,10 +724,10 @@ describe("RegistrationHubConfigPanel — cancel", () => {
 // elements, so an ancestor and its descendant both carry the same text and a
 // naive occurrence count measures nesting depth, not duplication.
 describe("RegistrationHubConfigPanel — a section is named once", () => {
-  const source = readFileSync(
-    new URL("../registration-hub-config-panel.tsx", import.meta.url),
-    "utf8",
-  );
+  // B7 T23: `sectionTitle` and the section box (Disclosure) moved to registration-hub-config-section.tsx; both files are read.
+  const source = ["../registration-hub-config-panel.tsx", "../registration-hub-config-section.tsx"]
+    .map((f) => readFileSync(new URL(f, import.meta.url), "utf8"))
+    .join("\n");
   const SECTION_KEYS = [
     "reg.hub.config.eligibility",
     "reg.settings.openClose",
@@ -1761,6 +1777,8 @@ describe("RegistrationHubConfigPanel — page layout (B7 T23)", () => {
   }
 
   const CLEAN: ConfigDirty = { dirty: false, count: 0, sections: [] };
+  /** The Save bar's tallest measured height (px): Chromium, 320 wide, the failed save's line wrapped (fr/nl/es), B7 T23 review. */
+  const BAR_TALLEST_PX = 129;
   const allSaved = t(uiEn, "reg.config.allSaved");
   const unsaved = (n: number) => plural(uiEn, "reg.config.unsaved", n, "en");
 
@@ -1780,7 +1798,7 @@ describe("RegistrationHubConfigPanel — page layout (B7 T23)", () => {
     expect(String(propsOf(bar).className)).toMatch(/(^|\s)bottom-0(\s|$)/);
   });
 
-  it("page layout at md renders every details open with a section index linking each SECTION_IDS entry", async () => {
+  it("page layout at md renders every section as an open <section> under its own h3, with a section index linking each one", async () => {
     mdUp.value = true;
     const page = await openPage();
     const tree = page.tree();
@@ -1789,39 +1807,35 @@ describe("RegistrationHubConfigPanel — page layout (B7 T23)", () => {
     expect(propsOf(nav)["aria-label"]).toBe(t(uiEn, "reg.config.sectionIndex"));
     const links = tree.filter((e) => e.type === "a" && propsOf(e)["data-section-link"] !== undefined);
     expect(links.map((a) => propsOf(a)["data-section-link"])).toEqual([...SECTION_IDS]);
+    // Review m4: every section is open here, so nothing on it is a disclosure — no <details>, and no <summary> (which a screen
+    // reader announces as a button) that a click or a key would not fold.
+    expect(tree.some((e) => e.type === "details")).toBe(false);
+    expect(tree.some((e) => e.type === "summary")).toBe(false);
     for (const id of SECTION_IDS) {
-      const details = accordionSection(tree, id)!;
-      expect(propsOf(details).open, id).toBe(true);
-      const anchor = propsOf(details).id as string;
-      expect(anchor, id).toMatch(new RegExp(`^section-${id}-`));
+      const section = accordionSection(tree, id)!;
+      expect(section.type, id).toBe("section");
+      const anchor = propsOf(section).id as string;
+      expect(anchor, id).toBe(sectionAnchor(id, "div-1"));
       // Two division tabs can be mounted at once (T24 hides the inactive one), so each anchor names its division too.
       expect(anchor).toContain("div-1");
       const link = links.find((a) => propsOf(a)["data-section-link"] === id)!;
       expect(propsOf(link).href).toBe(`#${anchor}`);
-      // The summary is a heading here, not a control: out of the tab order, and a click does not fold the section.
-      const summary = tree.find((e) => e.type === "summary" && holds(details, (x) => x === e))!;
-      expect(propsOf(summary).tabIndex).toBe(-1);
-      const preventDefault = vi.fn();
-      (propsOf(summary).onClick as (e: { preventDefault: () => void }) => void)({ preventDefault });
-      expect(preventDefault).toHaveBeenCalledTimes(1);
+      // Named by its heading: an h3 (under the page's h2), the index's focus target, never a Tab stop.
+      const heading = tree.find((e) => e.type === "h3" && holds(section, (x) => x === e))!;
+      expect(propsOf(section)["aria-labelledby"], id).toBe(propsOf(heading).id);
+      expect(textOf(heading), id).toBe(sectionTitle(id, testMsg, FORM_FIELDS.length));
+      expect(propsOf(heading).tabIndex, id).toBe(-1);
+      expect(propsOf(heading)["data-section-heading"], id).toBe(true);
       checked += 1;
     }
     expect(checked).toBe(SECTION_IDS.length);
     expect(new Set(tree.filter((e) => propsOf(e)["data-accordion-section"]).map((e) => propsOf(e).id)).size).toBe(5);
+    // The page's own heading is the h2 (the division), so the sections sit one level under it.
+    const h2 = tree.find((e) => e.type === "h2")!;
+    expect(textOf(h2)).toBe("Open Singles");
   });
 
-  it("a native toggle at md (fired as the forced-open sections mount) does not rewrite the phone accordion's state", async () => {
-    mdUp.value = true;
-    const page = await openPage();
-    (propsOf(accordionSection(page.tree(), "money")!).onToggle as (e: { target: { open: boolean } }) => void)({
-      target: { open: true },
-    });
-    mdUp.value = false;
-    page.island.rerender({ ...SHARED, onSaved: vi.fn(), layout: "page" as const, onDirtyChange: () => {} });
-    expect(propsOf(accordionSection(page.tree(), "money")!).open).toBe(false);
-  });
-
-  it("below md, and before the viewport is known, the sections stay accordions with their usual defaults", async () => {
+  it("below md, and before the viewport is known, the sections stay accordions with their usual defaults, each summary holding its h3", async () => {
     for (const value of [false, null]) {
       mdUp.value = value;
       const page = await openPage();
@@ -1829,12 +1843,35 @@ describe("RegistrationHubConfigPanel — page layout (B7 T23)", () => {
       expect(propsOf(accordionSection(tree, "eligibility")!).open, String(value)).toBe(true);
       expect(propsOf(accordionSection(tree, "money")!).open, String(value)).toBe(false);
       expect(propsOf(accordionSection(tree, "form")!).open, String(value)).toBe(false);
-      const summary = tree.find((e) => e.type === "summary")!;
-      expect(propsOf(summary).tabIndex, String(value)).toBeUndefined();
-      expect(propsOf(summary).onClick, String(value)).toBeUndefined();
+      let checked = 0;
+      for (const id of SECTION_IDS) {
+        const details = accordionSection(tree, id)!;
+        expect(details.type, `${value} ${id}`).toBe("details");
+        const summary = tree.find((e) => e.type === "summary" && holds(details, (x) => x === e))!;
+        expect(propsOf(summary).tabIndex, `${value} ${id}`).toBeUndefined();
+        const heading = tree.find((e) => e.type === "h3" && holds(summary, (x) => x === e))!;
+        expect(textOf(heading), `${value} ${id}`).toBe(sectionTitle(id, testMsg, FORM_FIELDS.length));
+        // The summary is the control here; the heading inside it is not a second Tab stop.
+        expect(propsOf(heading).tabIndex, `${value} ${id}`).toBeUndefined();
+        checked += 1;
+      }
+      expect(checked).toBe(SECTION_IDS.length);
       // The index is CSS-hidden below md (one DOM): never a second phone tree.
       expect(String(propsOf(tree.find((e) => e.type === "nav")!).className)).toMatch(/(^|\s)max-md:hidden(\s|$)/);
     }
+  });
+
+  it("a toggle below md opens and closes the accordion it belongs to", async () => {
+    mdUp.value = false;
+    const page = await openPage();
+    const toggle = (open: boolean) =>
+      (propsOf(accordionSection(page.tree(), "money")!).onToggle as (e: { target: { open: boolean } }) => void)({
+        target: { open },
+      });
+    toggle(true);
+    expect(propsOf(accordionSection(page.tree(), "money")!).open).toBe(true);
+    toggle(false);
+    expect(propsOf(accordionSection(page.tree(), "money")!).open).toBe(false);
   });
 
   it("the bar reads All changes saved, then 1 unsaved change, then 2 unsaved changes; Changed marks only the edited sections", async () => {
@@ -2028,6 +2065,312 @@ describe("RegistrationHubConfigPanel — page layout (B7 T23)", () => {
     expect(page.reports.at(-1)).toEqual({ dirty: true, count: 1, sections: ["capacity"] });
     expect(page.tree().some((e) => propsOf(e)["data-field-error"] === "capacity")).toBe(true);
   });
+
+  // --- B7 T23 review fixes -------------------------------------------------------------------------------------------------
+
+  const findHalfChange = (page: Awaited<ReturnType<typeof openPage>>, field: string, half: "date" | "time", value: string) =>
+    (propsOf(findHalf(page.tree(), field, half)).onChange as (v: string) => void)(value);
+  const fieldErrorShown = (page: Awaited<ReturnType<typeof openPage>>, field: string) =>
+    page.tree().some((e) => propsOf(e)["data-field-error"] === field);
+  /** A refusal the server routes to one field: a validation issue with that field as its path. */
+  const refusedOn = (field: string) =>
+    new ApiV1Error("Invalid input", 400, "VALIDATION", { issues: [{ path: [field], message: `${field} refused by the server` }] });
+
+  it("a clock with its date picked and its time still blank is 1 unsaved change, in its section, and reported; Cancel is clean (review I-1)", async () => {
+    // No opening time stored, so picking a date leaves the time blank: a half the state never holds and Save refuses.
+    net.getResponse = { ...RESPONSE, opens_at: null };
+    const page = await openPage();
+    expect(page.reports).toEqual([CLEAN]);
+    findHalfChange(page, "opens_at", "date", "2026-03-01");
+    expect(propsOf(findHalf(page.tree(), "opens_at", "time")).value).toBe("");
+    expect(textOf(page.status())).toBe(unsaved(1));
+    // The Open & close section is where the page shows the opening time.
+    expect(page.changedSections()).toEqual(["schedule"]);
+    expect(page.reports.at(-1)).toEqual({ dirty: true, count: 1, sections: ["schedule"] });
+    await page.click("cancel");
+    expect(propsOf(findHalf(page.tree(), "opens_at", "date")).value).toBe("");
+    expect(page.reports.at(-1)).toEqual(CLEAN);
+    expect(textOf(page.status())).toBe(allSaved);
+  });
+
+  it("a clock moved and then half-cleared counts once, not twice; completing it back to the saved instant is clean (review I-1)", async () => {
+    const page = await openPage();
+    const saved = orgTzDateTimeHalves(RESPONSE.opens_at, "UTC");
+    findHalfChange(page, "opens_at", "date", "2026-03-01");
+    expect(page.reports.at(-1)).toEqual({ dirty: true, count: 1, sections: ["schedule"] });
+    // The state still holds the moved instant AND the pair is half-typed: one field, one change.
+    findHalfChange(page, "opens_at", "time", "");
+    expect(page.reports.at(-1)).toEqual({ dirty: true, count: 1, sections: ["schedule"] });
+    expect(textOf(page.status())).toBe(unsaved(1));
+    findHalfChange(page, "opens_at", "time", saved.time);
+    findHalfChange(page, "opens_at", "date", saved.date);
+    expect(page.reports.at(-1)).toEqual(CLEAN);
+  });
+
+  it("a half-typed clock beside another edit: 2 unsaved changes in two sections", async () => {
+    net.getResponse = { ...RESPONSE, opens_at: null };
+    const page = await openPage();
+    page.type("capacity", "40");
+    findHalfChange(page, "opens_at", "date", "2026-03-01");
+    expect(page.reports.at(-1)).toEqual({ dirty: true, count: 2, sections: ["schedule", "capacity"] });
+  });
+
+  it("Cancel after a save the SERVER refused clears its field error and its banner (review m1)", async () => {
+    const page = await openPage();
+    page.type("capacity", "40");
+    page.type("category", "open");
+    net.putRejection = refusedOn("capacity");
+    net.patchRejection = new ApiV1Error("The server is busy", 503, "ERROR");
+    await page.click("save");
+    const banners = () =>
+      page.tree().filter((e) => e.type === "p" && propsOf(e).role === "alert" && textOf(e) === "The server is busy");
+    expect(fieldErrorShown(page, "capacity")).toBe(true);
+    expect(banners()).toHaveLength(1);
+    await page.click("cancel");
+    expect(fieldErrorShown(page, "capacity")).toBe(false);
+    expect(banners()).toHaveLength(0);
+    expect(page.reports.at(-1)).toEqual(CLEAN);
+  });
+
+  it("Cancel after a save the PAGE refused clears the refusal (review m1)", async () => {
+    const page = await openPage();
+    page.type("capacity", "20000");
+    await page.click("save");
+    expect(fieldErrorShown(page, "capacity")).toBe(true);
+    await page.click("cancel");
+    expect(fieldErrorShown(page, "capacity")).toBe(false);
+    expect(propsOf(page.field("capacity")).value).toBe(32);
+  });
+
+  it("Cancel drops a typed solo price too, back to the stored empty (no separate price) (review m1)", async () => {
+    const page = await openPage();
+    page.type("free_agent_fee_cents", "7");
+    expect(propsOf(page.field("free_agent_fee_cents")).value).toBe("7");
+    expect(page.reports.at(-1)).toEqual({ dirty: true, count: 1, sections: ["money"] });
+    await page.click("cancel");
+    expect(propsOf(page.field("free_agent_fee_cents")).value).toBe("");
+    expect(page.reports.at(-1)).toEqual(CLEAN);
+  });
+
+  it("the index marks exactly the changed sections, with a dot and a Changed a screen reader hears (review m1/m4)", async () => {
+    mdUp.value = true;
+    const page = await openPage();
+    const links = () => page.tree().filter((e) => e.type === "a" && propsOf(e)["data-section-link"] !== undefined);
+    const marked = () =>
+      links()
+        .filter((a) => holds(a, (x) => propsOf(x)["data-section-link-changed"] !== undefined))
+        .map((a) => propsOf(a)["data-section-link"]);
+    expect(marked()).toEqual([]);
+    page.type("capacity", "40");
+    page.type("fee_cents", "18");
+    expect(marked()).toEqual(["capacity", "money"]);
+    let checked = 0;
+    for (const link of links().filter((a) => ["capacity", "money"].includes(propsOf(a)["data-section-link"] as string))) {
+      const dot = (x: ReactElement) => propsOf(x)["aria-hidden"] === true && /(^|\s)rounded-full(\s|$)/.test(String(propsOf(x).className));
+      expect(holds(link, dot)).toBe(true);
+      const said: ReactElement[] = [];
+      holds(link, (x) => (propsOf(x)["data-section-link-changed"] !== undefined ? (said.push(x), true) : false));
+      expect(String(propsOf(said[0]!).className)).toMatch(/(^|\s)sr-only(\s|$)/);
+      expect(textOf(said[0]!)).toContain(t(uiEn, "reg.config.changed"));
+      // Inside the title's own box, so the link's name reads "Capacity (Changed)" with no stray space before it.
+      expect(textOf(said[0]!).replace(/\s+/g, "")).toBe(`(${t(uiEn, "reg.config.changed")})`);
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+    await page.click("cancel");
+    expect(marked()).toEqual([]);
+  });
+
+  it("a legacy chess row (stored as a team with a solo pool) reads as unsaved on load, Cancel keeps the one shape chess takes, and Save moves it (review m2)", async () => {
+    net.getResponse = { ...RESPONSE, entrant_kind: "team", allow_free_agents: true, free_agent_fee_cents: 500 };
+    const page = await openPage({ division: { ...DIVISION, individual_only: true } });
+    // The page shows individual / no solo pool / no solo price; the row still holds team / solo pool / 5.00 — three fields that
+    // a save would change.
+    // Clean while the GET is in flight, then three fields a save would change.
+    expect(page.reports).toEqual([CLEAN, { dirty: true, count: 3, sections: ["eligibility", "schedule", "money"] }]);
+    expect(textOf(page.status())).toBe(unsaved(3));
+    // Save is never disabled for being clean or dirty: it is how this row moves.
+    expect(propsOf(page.button("save")).disabled).toBe(false);
+    // Cancel returns to what the page can show — never to the stored team shape, which the server refuses for chess.
+    await page.click("cancel");
+    expect(propsOf(page.field("entrant_kind")).value).toBe("individual");
+    expect(page.reports.at(-1)!.count).toBe(3);
+    await page.click("save");
+    expect(net.calls.find((c) => c.method === "PUT")!.json).toMatchObject({
+      entrant_kind: "individual",
+      allow_free_agents: false,
+      free_agent_fee_cents: null,
+    });
+    expect(page.reports.at(-1)).toEqual(CLEAN);
+    expect(textOf(page.status())).toBe(allSaved);
+  });
+
+  it("positive pair: a chess row already stored as individual entry is clean on load, with Save still enabled", async () => {
+    net.getResponse = { ...RESPONSE, entrant_kind: "individual", allow_free_agents: false, free_agent_fee_cents: null };
+    const page = await openPage({ division: { ...DIVISION, individual_only: true } });
+    expect(page.reports).toEqual([CLEAN]);
+    expect(propsOf(page.button("save")).disabled).toBe(false);
+  });
+
+  it("every field the save sends is rendered inside exactly one section, and a change to it is counted in THAT section (review m3: the oracle is the rendered page)", async () => {
+    mdUp.value = true;
+    const sent = Object.keys({ ...toDivisionPatchBody(FULL_STATE), ...toRegistrationSettingsPutBody(FULL_STATE) }) as (keyof RegistrationConfigState)[];
+    expect(new Set(sent)).toEqual(new Set(Object.keys(FULL_STATE)));
+    /** A different value of the same shape — what an edit produces, without knowing which field it is. */
+    const perturb = (v: unknown): unknown =>
+      v === null ? 1 : typeof v === "number" ? v + 1 : typeof v === "boolean" ? !v : Array.isArray(v) ? [...v, { key: "x", label: "X", kind: "text", required: false }] : `${String(v)}!`;
+    // Some fields render only where they apply — payment instructions for an offline division, the refund cutoff for a card
+    // one — so the page is read twice and the sightings pooled.
+    const shownIn = new Map<string, Set<SectionId>>();
+    let renders = 0;
+    for (const payment_method of ["offline", "stripe"] as const) {
+      net.getResponse = { ...RESPONSE, payment_method };
+      const page = await openPage();
+      for (const id of SECTION_IDS) {
+        for (const e of deepExpand(accordionSection(page.tree(), id)!)) {
+          const name = propsOf(e)["data-field"];
+          for (const field of sent) {
+            // The sign-up form's questions are edited by its FormBuilder; every other field carries its name as data-field
+            // (a clock's two halves and the payment method's two radios as `<field>_<part>`).
+            const here =
+              field === "form_fields"
+                ? e.type === FormBuilder
+                : name === field || (typeof name === "string" && name.startsWith(`${field}_`));
+            if (here) {
+              if (!shownIn.has(field)) shownIn.set(field, new Set());
+              shownIn.get(field)!.add(id);
+            }
+          }
+        }
+      }
+      renders += 1;
+    }
+    expect(renders).toBe(2);
+    let checked = 0;
+    for (const field of sent) {
+      const sections = [...(shownIn.get(field) ?? [])];
+      expect(sections, `${field} is rendered in exactly one section`).toHaveLength(1);
+      const draft = { ...FULL_STATE, [field]: perturb(FULL_STATE[field]) } as RegistrationConfigState;
+      expect(configDirty(FULL_STATE, draft), field).toEqual({ dirty: true, count: 1, sections });
+      checked += 1;
+    }
+    expect(checked).toBe(sent.length);
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("a save the server refuses on a field says so in the bar and reveals that field's section; a retry that lands reads saved (review m5)", async () => {
+    const page = await openPage();
+    page.type("capacity", "40");
+    net.putRejection = refusedOn("capacity");
+    await page.click("save");
+    expect(t(uiEn, "reg.config.saveFailed")).not.toBe("reg.config.saveFailed");
+    expect(textOf(page.status())).toBe(t(uiEn, "reg.config.saveFailed"));
+    expect(propsOf(page.status())["data-config-status"]).toBe("failed");
+    expect(propsOf(page.status())["data-config-dirty"]).toBe("dirty");
+    expect(revealed.anchors).toEqual([sectionAnchor("capacity", "div-1")]);
+    await page.click("save");
+    expect(textOf(page.status())).toBe(allSaved);
+    expect(propsOf(page.status())["data-config-status"]).toBe("clean");
+    expect(revealed.anchors).toHaveLength(1);
+  });
+
+  it("a refusal with no field (a banner) reveals the page heading, where the banners sit (review m5)", async () => {
+    const page = await openPage();
+    page.type("capacity", "40");
+    net.putRejection = new ApiV1Error("capacity is out of range", 422, "ERROR");
+    await page.click("save");
+    const h2 = page.tree().find((e) => e.type === "h2")!;
+    expect(revealed.anchors).toEqual([propsOf(h2).id]);
+    expect(propsOf(h2).tabIndex).toBe(-1);
+    expect(textOf(page.status())).toBe(t(uiEn, "reg.config.saveFailed"));
+  });
+
+  it("a save the page refuses says so in the bar and reveals its section; Cancel clears the failure (review m5)", async () => {
+    const page = await openPage();
+    page.type("capacity", "20000");
+    await page.click("save");
+    expect(textOf(page.status())).toBe(t(uiEn, "reg.config.saveFailed"));
+    expect(revealed.anchors).toEqual([sectionAnchor("capacity", "div-1")]);
+    // Fixing the value does not by itself say "saved": it is still unsaved until a save lands.
+    page.type("capacity", "40");
+    expect(textOf(page.status())).toBe(t(uiEn, "reg.config.saveFailed"));
+    await page.click("cancel");
+    expect(textOf(page.status())).toBe(allSaved);
+    expect(propsOf(page.status())["data-config-status"]).toBe("clean");
+  });
+
+  it("once nothing is unsaved the bar says so, even right after a failed save (review m5)", async () => {
+    const page = await openPage();
+    page.type("capacity", "40");
+    net.putRejection = refusedOn("capacity");
+    await page.click("save");
+    expect(propsOf(page.status())["data-config-status"]).toBe("failed");
+    page.type("capacity", "32");
+    expect(textOf(page.status())).toBe(allSaved);
+    expect(propsOf(page.status())["data-config-status"]).toBe("clean");
+  });
+
+  it("while the page is mounted the viewport keeps a bottom scroll padding taller than the Save bar at its tallest (review m6)", async () => {
+    const page = await openPage();
+    const cls = String(propsOf(page.root()).className);
+    // Scroll padding on the ROOT scroller, scoped by :has() to while this page is in the document. Not a margin on each control:
+    // Chromium reveals a focused textarea by its caret, which ignores the control's scroll margin (measured, scratchpad
+    // harness: the textarea stayed under the bar with a per-control margin and cleared it with the root padding).
+    const rule = cls.match(/(?:^|\s)\[html:has\(&\)\]:scroll-pb-(\d+)(?:\s|$)/);
+    expect(rule, `no root scroll-padding rule on the page: ${cls}`).not.toBeNull();
+    // Tailwind spacing N = N x 4px; the bar's tallest measured height is BAR_TALLEST_PX.
+    expect(Number(rule![1]) * 4).toBeGreaterThanOrEqual(BAR_TALLEST_PX);
+    expect(BAR_TALLEST_PX).toBeGreaterThan(0);
+  });
+
+  it("the save handle answers what each save did — refused, success, put-failed, patch-failed, both-failed — and empties on unmount (G1)", async () => {
+    const handle: { current: ConfigSaveHandle | null } = { current: null };
+    const page = await openPage({ saveHandleRef: handle });
+    expect(handle.current).not.toBeNull();
+    page.type("capacity", "20000");
+    expect(await handle.current!.save()).toBe("refused");
+    expect(net.calls.some((c) => c.method === "PUT" || c.method === "PATCH")).toBe(false);
+    page.type("capacity", "40");
+    expect(await handle.current!.save()).toBe("success");
+    expect(page.onSaved).toHaveBeenCalledTimes(1);
+    net.putRejection = refusedOn("capacity");
+    expect(await handle.current!.save()).toBe("put-failed");
+    net.patchRejection = refusedOn("age_max");
+    expect(await handle.current!.save()).toBe("patch-failed");
+    net.putRejection = refusedOn("capacity");
+    net.patchRejection = refusedOn("age_max");
+    expect(await handle.current!.save()).toBe("both-failed");
+    // The same save as the bar's: it reveals what refused it.
+    expect(revealed.anchors.at(-1)).toBe(sectionAnchor("eligibility", "div-1"));
+    page.island.unmount();
+    expect(handle.current).toBeNull();
+  });
+
+  it("the section index reveals its section: scrolls to it, focuses its heading, and adds no #hash to history (review m4/m5)", () => {
+    const heading = { focus: vi.fn() };
+    const target = { scrollIntoView: vi.fn(), querySelector: vi.fn(() => heading), focus: vi.fn() };
+    const getElementById = vi.fn((id: string) => (id === sectionAnchor("money", "div-1") ? target : null));
+    vi.stubGlobal("document", { getElementById });
+    vi.stubGlobal("window", { matchMedia: () => ({ matches: true }) });
+    try {
+      const titles = Object.fromEntries(SECTION_IDS.map((id) => [id, id])) as Record<SectionId, string>;
+      const nav = walk(ConfigSectionIndex({ divisionId: "div-1", label: "Sections", titles, changed: [], changedLabel: "Changed" }));
+      const link = nav.find((e) => e.type === "a" && propsOf(e)["data-section-link"] === "money")!;
+      const preventDefault = vi.fn();
+      (propsOf(link).onClick as (e: { preventDefault: () => void }) => void)({ preventDefault });
+      expect(preventDefault).toHaveBeenCalledTimes(1);
+      expect(target.scrollIntoView).toHaveBeenCalledWith({ behavior: "auto", block: "start" });
+      expect(target.querySelector).toHaveBeenCalledWith("summary, [data-section-heading]");
+      expect(heading.focus).toHaveBeenCalledWith({ preventScroll: true });
+      // No such element (the tab is not mounted): the link falls back to its plain href.
+      const other = nav.find((e) => e.type === "a" && propsOf(e)["data-section-link"] === "capacity")!;
+      const fallback = vi.fn();
+      (propsOf(other).onClick as (e: { preventDefault: () => void }) => void)({ preventDefault: fallback });
+      expect(fallback).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
 
 describe("RegistrationHubConfigPanel — the modal layout is unchanged by the page layout (B7 T23)", () => {
@@ -2046,9 +2389,22 @@ describe("RegistrationHubConfigPanel — the modal layout is unchanged by the pa
     expect(tree.some((e) => propsOf(e)["data-section-changed"] !== undefined)).toBe(false);
     // md does not force the modal's sections open: its accordion defaults stand at every width.
     expect(propsOf(accordionSection(tree, "money")!).open).toBe(false);
+    // Its sections are the disclosures they always were: no page anchors, no headings inside the summaries.
+    expect(tree.some((e) => e.type === "h3")).toBe(false);
+    expect(tree.filter((e) => e.type === "details").every((d) => propsOf(d).id === undefined)).toBe(true);
     const cancel = tree.find((e) => e.type === "button" && propsOf(e)["data-action"] === "cancel")!;
     (propsOf(cancel).onClick as () => void)();
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(propsOf(findField(island.tree(), "capacity")!).value).toBe(40);
+  });
+
+  it("a refused save in the modal opens the section and does not scroll the page under it", async () => {
+    const island = renderIsland(RegistrationHubConfigPanel, { ...BASE_PROPS, onClose: vi.fn() }, expandPanel);
+    await flush();
+    net.putRejection = new ApiV1Error("Invalid input", 400, "VALIDATION", { issues: [{ path: ["fee_cents"], message: "no" }] });
+    const save = island.tree().find((e) => e.type === "button" && propsOf(e)["data-action"] === "save")!;
+    await (propsOf(save).onClick as () => Promise<unknown>)();
+    expect(propsOf(accordionSection(island.tree(), "money")!).open).toBe(true);
+    expect(revealed.anchors).toEqual([]);
   });
 });

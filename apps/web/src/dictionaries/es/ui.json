@@ -6562,6 +6562,7 @@
   "reg.config.unsaved.other": "{count} cambios sin guardar",
   "reg.config.changed": "Modificado",
   "reg.config.sectionIndex": "Secciones",
+  "reg.config.saveFailed": "No se ha guardado todo. Corrige lo marcado y vuelve a guardar.",
   "register.nav.back": "Atrás",
   "register.nav.continueTo": "Continuar a {step}",
   "register.nav.step": "Paso {n} de {total}",
