@@ -591,6 +591,16 @@ export function submitLabelKey(summary: CartSummary): SubmitLabelKey {
   return payableDivision(summary)?.payment_method === "stripe" ? "register.submit.pay" : "register.submit.fee";
 }
 
+/** Which dictionary key heads the Review step (owner ruling 2026-11-13): "Review and pay" only when something is charged now, a plain
+ *  "Review" when nothing is (a free cart, or one whose every entry waits). Read off `submitLabelKey`, the verdict on the same summary,
+ *  so the heading and the button below it cannot disagree: the button says Pay or Enter with a fee exactly when the heading says pay. */
+export type ReviewHeadingKey = "register.review.heading" | "register.review.headingPlain";
+
+export function reviewHeadingKey(summary: CartSummary): ReviewHeadingKey {
+  const label = submitLabelKey(summary);
+  return label === "register.submit.pay" || label === "register.submit.fee" ? "register.review.heading" : "register.review.headingPlain";
+}
+
 /** The division that decides the cart's payment PRESENTATION — step 5's
  *  submit button label (register.submit.pay/.fee). (The review's per-entry
  *  method labels read `lineMethod` instead — one entry each, P4/W9.) The first line that

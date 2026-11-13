@@ -14,6 +14,7 @@ import {
   lineMethod,
   payableDivision,
   registeringSelfAnywhere,
+  reviewHeadingKey,
   submitLabelKey,
   summarizeCart,
   toGroupEntry,
@@ -1173,6 +1174,45 @@ describe("summarizeCart", () => {
       // And the other direction: a division that fills up under a cart of waiting entries reads waiting for all of them.
       const full: DivisionLike = { ...ONE_LEFT_STRIPE, remaining: 0 };
       expect(submitLabelKey(summarizeCart(before, [full]))).toBe("register.submit.waitlist");
+    });
+  });
+
+  // Owner ruling 2026-11-13 (B2/B3 fix round): Review's heading says "Review and pay" only when something IS charged now; a free cart,
+  // or one whose every entry waits, has nothing to pay, so it is a plain "Review". The expected key is the ruling's, entry by entry
+  // (what the person is charged), not read back from submitLabelKey.
+  describe("reviewHeadingKey — Review says 'and pay' only when something is charged now", () => {
+    const STRIPE_PAID: DivisionLike = { ...OPEN_PAID, division_id: "stripe-paid", payment_method: "stripe" };
+    const FREE_DIV: DivisionLike = { ...TEAM_DIVISION, division_id: "free-div", fee_cents: 0, free_agent_fee_cents: null };
+    const ONE_LEFT_STRIPE: DivisionLike = { ...STRIPE_PAID, division_id: "one-left-stripe", capacity: 8, remaining: 1, taken: 7 };
+    const team = (id: string, division_id: string, patch: Partial<CartEntry> = {}) => entry({ id, division_id, entrant_kind: "team", ...patch });
+    const PAY = "register.review.heading";
+    const PLAIN = "register.review.headingPlain";
+
+    it.each([
+      { name: "an empty cart (nothing is charged)", entries: [], divisions: [WAITLIST_DIV], charged: false },
+      { name: "a free entry", entries: [team("e1", "free-div")], divisions: [FREE_DIV], charged: false },
+      { name: "one entry into a full, PRICED division (it waits, so nothing is charged)", entries: [team("e1", "waitlist")], divisions: [WAITLIST_DIV], charged: false },
+      { name: "two entries into a full, priced division", entries: [team("e1", "waitlist"), team("e2", "waitlist")], divisions: [WAITLIST_DIV], charged: false },
+      { name: "a free entry beside a waiting one", entries: [team("e1", "free-div"), team("e2", "waitlist")], divisions: [FREE_DIV, WAITLIST_DIV], charged: false },
+      { name: "a card entry", entries: [team("e1", "stripe-paid")], divisions: [STRIPE_PAID], charged: true },
+      { name: "a pay-the-organiser entry", entries: [team("e1", "open-paid")], divisions: [OPEN_PAID], charged: true },
+      { name: "a charged entry beside a waiting one", entries: [team("e1", "stripe-paid"), team("e2", "waitlist")], divisions: [STRIPE_PAID, WAITLIST_DIV], charged: true },
+      { name: "the waiting entry comes first, the charged one after", entries: [team("e1", "waitlist"), team("e2", "stripe-paid")], divisions: [WAITLIST_DIV, STRIPE_PAID], charged: true },
+      { name: "a solo sign-up into a full division (submit never queues it, so it is charged)", entries: [team("solo", "waitlist", { free_agent: true })], divisions: [{ ...WAITLIST_DIV, payment_method: "stripe" as const, free_agent_fee_cents: 500 }], charged: true },
+    ])("$name", ({ entries, divisions, charged }) => {
+      const summary = summarizeCart({ entries }, divisions);
+      // The premise is the rulebook's own: money is charged now exactly when some line is not "not charged now" and has a price.
+      expect(summary.subtotalCents > 0, "premise: the cart's subtotal agrees with what the case says is charged").toBe(charged);
+      expect(reviewHeadingKey(summary)).toBe(charged ? PAY : PLAIN);
+    });
+
+    it("the answer follows the cart: the last place taken by the first entry flips the second off the heading's 'pay'", () => {
+      const both: CartState = { entries: [team("e1", "one-left-stripe"), team("e2", "one-left-stripe")] };
+      expect(reviewHeadingKey(summarizeCart(both, [ONE_LEFT_STRIPE])), "one entry seats and pays").toBe(PAY);
+      const full: DivisionLike = { ...ONE_LEFT_STRIPE, remaining: 0 };
+      expect(reviewHeadingKey(summarizeCart(both, [full])), "the division fills under the cart: both wait, nothing is charged").toBe(PLAIN);
+      const afterRemoval = cartReducer(both, { type: "REMOVE_ENTRY", id: "e1" });
+      expect(reviewHeadingKey(summarizeCart(afterRemoval, [ONE_LEFT_STRIPE])), "removing the first lets the survivor take the place").toBe(PAY);
     });
   });
 });

@@ -15,7 +15,7 @@ import type { ReactNode } from "react";
 import { useT } from "@/components/i18n/dict-provider";
 import { formatMoneyExact } from "@/lib/currency";
 import { entryDisplayName, UNNAMED_KEY } from "./entry-cart";
-import { type CartLineSummary, type CartSummary, lineFeeCents, lineMethod, payableDivision } from "./cart";
+import { type CartLineSummary, type CartSummary, lineFeeCents, lineMethod, payableDivision, reviewHeadingKey } from "./cart";
 import { reviewEditTarget, type ReviewContent, type ReviewSection } from "./review-content";
 import { BTN_TEXT } from "./styles";
 import type { StepId } from "./types";
@@ -103,7 +103,7 @@ export function StepReview({
   return (
     <div className="rounded-xl border border-zinc-200/80 bg-surface p-4 shadow-sm sm:p-6">
       <h2 tabIndex={-1} className="font-display text-xl font-semibold uppercase tracking-wide text-ink">
-        {t("register.review.heading")}
+        {t(reviewHeadingKey(summary))}
       </h2>
       <p className="mt-1 text-sm text-ink-muted">{t("register.review.subtitle")}</p>
 
@@ -146,10 +146,12 @@ export function StepReview({
                       {label !== null && <p className="text-xs text-ink-muted">{label}</p>}
                       {playerNames.length > 0 && <p className="break-words text-xs text-ink-muted">{playerNames.join(", ")}</p>}
                     </div>
-                    {feeLabel && (
+                    {/* A waiting entry has no price to show: it is not free, it is not charged yet, and the line under the row says so
+                        (owner ruling 2026-11-13: the row reads "Waiting list - not charged now" instead of "Free"). */}
+                    {feeLabel && !waitlisted && (
                       <span className="shrink-0 text-right">
                         <span className="block font-display text-sm font-semibold text-ink">
-                          {waitlisted || staleClosed ? t("register.entries.free") : feeLabel}
+                          {staleClosed ? t("register.entries.free") : feeLabel}
                         </span>
                         {method && (
                           <span data-testid="reg-review-method" className="block font-sans text-xs font-normal text-ink-muted">

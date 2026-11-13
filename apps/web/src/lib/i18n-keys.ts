@@ -6843,6 +6843,7 @@ export type DictionaryKey =
   | "register.review.consent.media"
   | "register.review.edit"
   | "register.review.heading"
+  | "register.review.headingPlain"
   | "register.review.no"
   | "register.review.notAnswered"
   | "register.review.section.answers"

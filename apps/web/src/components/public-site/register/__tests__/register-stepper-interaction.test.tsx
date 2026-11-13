@@ -1072,7 +1072,7 @@ describe("review finding #2 — step transitions move focus to the new step's he
     ["step-entries.tsx", "register.entries.heading"],
     ["step-details.tsx", "register.details.heading"],
     ["step-consent.tsx", "register.section.consent"],
-    ["step-review.tsx", "register.review.heading"],
+    ["step-review.tsx", "reviewHeadingKey"],
   ])("%s's own step heading is tabIndex={-1} — the actual focus TARGET, not a synthetic wrapper", (file, key) => {
     const src = readFileSync(join(__dirname, "..", file), "utf8");
     const h2Index = src.indexOf("<h2");
@@ -1485,6 +1485,19 @@ function byId(island: ReturnType<typeof mount>["island"], id: string) {
   return el!;
 }
 
+/** True when the stepper is ON the Review step. Asserted by the step's own component, never by page text: "Review" is also the rail's
+ *  name for the step, so the word alone would be on screen before the step is reached. */
+function onReviewStep(island: ReturnType<typeof mount>["island"]): boolean {
+  return island.tree().some((e) => e.type === StepReview);
+}
+
+/** The current step's own heading (its focus target, the one `h2` a step renders). */
+function stepHeading(island: ReturnType<typeof mount>["island"]): string {
+  const headings = island.tree().filter((e) => e.type === "h2");
+  expect(headings, "exactly one step heading").toHaveLength(1);
+  return textOf(headings[0]!);
+}
+
 describe("step 3 — the mixed-composition meter blocks an all-male roster and clears once fixed", () => {
   it("shows the unmet sentence, blocks Next; adding a female player clears both and unblocks", () => {
     const { island, stepWho, divisionCard, clickByText, pageText } = mount([DIV_OPEN, DIV_MIXED_TEAM]);
@@ -1799,7 +1812,8 @@ describe("step 4 — CONSENT", () => {
     });
 
     clickByText("Next"); // media consent never touched — must NOT block
-    expect(pageText()).toContain("Review and pay");
+    expect(onReviewStep(island), "it advanced to Review").toBe(true);
+    expect(stepHeading(island), "a free cart has nothing to pay, so the heading does not say so").toBe("Review");
   });
 
   it("states owner ruling 5 plainly, at the moment of consent", () => {
@@ -1841,7 +1855,7 @@ describe("step 4 — CONSENT", () => {
       target: { checked: true },
     });
     clickByText("Next"); // both given — unblocked
-    expect(pageText()).toContain("Review and pay");
+    expect(onReviewStep(island), "unblocked: on Review").toBe(true);
   });
 
   it("never shows the guardian block for an adult contact, even when self-registering", () => {
@@ -1875,7 +1889,7 @@ describe("step 4 — CONSENT", () => {
       target: { checked: true },
     });
     clickByText("Next"); // privacy given, guardian info still missing — must stay BLOCKED
-    expect(pageText(), "must not advance without guardian consent").not.toContain("Review and pay");
+    expect(onReviewStep(island), "must not advance without guardian consent").toBe(false);
     expect(pageText()).toContain("Guardian consent is required");
   });
 
@@ -3090,6 +3104,26 @@ describe("P4 - the REVIEW step labels each entry with its own payment method (W9
     expect((textOf(out).match(/pay by card at sign-up/g) ?? []).length, "once, on its own line").toBe(1);
   });
 
+  it("a stale-closed entry's row (unreachable through Next, which blocks it, but rendered if it ever arrives) keeps 'Free' and its closed note, and is not called a waiting-list entry", () => {
+    const STALE: DivisionLike = { ...CARD, division_id: "div-stale-r", name: "Closed Meanwhile", open: false, closed_reason: "window" };
+    const cart: CartState = {
+      entries: [{ id: "s1", division_id: "div-stale-r", entrant_kind: "individual" as const, team_name: null, partner_name: null, free_agent: false, players: [], answers: {}, registering_self: false, self_player_index: null }],
+    };
+    const out = (StepReview as unknown as ComponentFn)({
+      summary: summarizeCart(cart, [STALE]),
+      content: reviewContent(cart, [STALE], EMPTY_CONTACT, EMPTY_CONSENT, new Date()),
+      locale: "en",
+      order: buildStepOrder(2, "individual"),
+      onEdit: vi.fn(),
+    });
+    const rows = lines(out);
+    expect(rows, "premise: one row").toHaveLength(1);
+    expect(rows[0]).toContain("Closed Meanwhile");
+    expect(rows[0], "its price slot says Free: the entry is not charged").toContain("Free");
+    expect(rows[0], "and the closed note under it").toContain("has closed since you added this entry");
+    expect(rows[0], "a closed division is not a waiting list").not.toContain("Waiting list");
+  });
+
   it("through the real stepper: the charged entry is labelled, the waitlisted one is not", () => {
     const WAIT: DivisionLike = { ...CARD, division_id: "div-wait", name: "Full Division", closed_reason: "full", capacity: 4, remaining: 0, taken: 4 };
     const m = mount([CARD, WAIT]);
@@ -3522,6 +3556,73 @@ describe("B2 T8 — action bar: Back, named Continue, running total, one forward
     const widest = String(propsOf(sizer!)["data-widest"]);
     expect("Join the waiting list".length, "premise: the idle label is the longer of the two phases").toBeGreaterThan("Saving your place…".length);
     expect(widest, "the sizer holds the longest label this cart will show, which is the idle one").toBe("Join the waiting list");
+  });
+
+  // Owner ruling 2026-11-13: Review's heading says "and pay" only when something is charged now. The expected words are the ruling's.
+  it.each([
+    { name: "a card cart", division: DIV_PAID, want: "Review and pay" },
+    { name: "a pay-the-organiser cart", division: DIV_PAY_LATER_T8, want: "Review and pay" },
+    { name: "a free cart", division: DIV_OPEN, want: "Review" },
+    { name: "a cart whose every entry waits (the full division has a price of its own)", division: DIV_WAITLIST, want: "Review" },
+  ])("Review's heading for $name reads '$want'", ({ division, want }) => {
+    const m = reachReview(division);
+    expect(onReviewStep(m.island), "premise: on Review").toBe(true);
+    expect(stepHeading(m.island)).toBe(want);
+  });
+
+  it("a mixed cart (one charged entry, one waiting) is still 'Review and pay'", () => {
+    const m = mount([DIV_PAID, DIV_WAITLIST]);
+    fillWho(m);
+    m.clickByText("Next"); // -> ENTRIES
+    addEntry(m, "div-paid");
+    addEntry(m, "div-wait");
+    m.clickByText("Next"); // -> DETAILS
+    allByAriaLabel(m.island, "Player 1 — Your name").forEach((n, i) =>
+      (propsOf(n).onChange as (e: { target: { value: string } }) => void)({ target: { value: `Player ${i + 1}` } }),
+    );
+    m.clickByText("Next"); // -> CONSENT
+    consent(m);
+    m.clickByText("Next"); // -> REVIEW
+    expect(onReviewStep(m.island), "premise: on Review").toBe(true);
+    expect(stepHeading(m.island)).toBe("Review and pay");
+    // The waiting entry's row says it waits INSTEAD of "Free": it is not free, it is not charged yet (owner ruling 2026-11-13).
+    const rows = walk(one(m.island, "reg-review-entries")).filter((e) => e.type === "li").map((e) => textOf(e));
+    expect(rows, "premise: two entries").toHaveLength(2);
+    const waiting = rows.filter((r) => r.includes("Waiting list — not charged now"));
+    expect(waiting, "premise: exactly one waits").toHaveLength(1);
+    expect(waiting[0], "the waiting row is not labelled Free").not.toContain("Free");
+    expect(waiting[0], "nor does it show a price (the division's £10.00 is not charged)").not.toMatch(/£\d/);
+    const charged = rows.filter((r) => !r.includes("Waiting list — not charged now"));
+    expect(charged[0], "its pair: the charged row carries its fee").toContain("£25.00");
+  });
+
+  it("a cart whose every entry waits lists no 'Free' anywhere on its Review rows", () => {
+    const m = reachReview(DIV_WAITLIST);
+    const rows = walk(one(m.island, "reg-review-entries")).filter((e) => e.type === "li").map((e) => textOf(e));
+    expect(rows.length, "premise: Review lists an entry").toBeGreaterThan(0);
+    for (const r of rows) {
+      expect(r).toContain("Waiting list — not charged now");
+      expect(r).not.toContain("Free");
+      expect(r, "no price either: the full division's own fee is not charged").not.toMatch(/£\d/);
+    }
+  });
+
+  it("a free entry's row still says Free (the waiting-row rule did not swallow it)", () => {
+    const m = reachReview(DIV_OPEN);
+    const rows = walk(one(m.island, "reg-review-entries")).filter((e) => e.type === "li").map((e) => textOf(e));
+    expect(rows, "premise: one entry").toHaveLength(1);
+    expect(rows[0]).toContain("Free");
+  });
+
+  it("every locale words the plain heading, and differently from 'Review and pay'", () => {
+    let checked = 0;
+    for (const loc of ["en", "es", "fr", "nl"]) {
+      const d = JSON.parse(readFileSync(join(__dirname, "..", "..", "..", "..", "dictionaries", loc, "ui.json"), "utf8")) as Record<string, string>;
+      expect(d["register.review.headingPlain"], `${loc}: the plain heading`).toBeTruthy();
+      expect(d["register.review.headingPlain"], `${loc}: it is not the 'and pay' heading`).not.toBe(d["register.review.heading"]);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: all four locales").toBe(4);
   });
 
   it("the running total shows on every step once the cart is payable, not only on Entries (the seeded single division on Contact)", () => {

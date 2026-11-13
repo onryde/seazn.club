@@ -6659,6 +6659,7 @@
   "register.nav.consent": "Consent",
   "register.nav.review": "Review",
   "register.review.heading": "Review and pay",
+  "register.review.headingPlain": "Review",
   "register.review.subtitle": "Check it over. Use Edit to go back to any step; nothing you entered is lost.",
   "register.review.edit": "Edit",
   "register.review.section.you": "You",

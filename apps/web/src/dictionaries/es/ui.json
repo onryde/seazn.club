@@ -6659,6 +6659,7 @@
   "register.nav.consent": "Consentimiento",
   "register.nav.review": "Revisión",
   "register.review.heading": "Revisión y pago",
+  "register.review.headingPlain": "Revisión",
   "register.review.subtitle": "Revísalo todo. Usa Editar para volver a cualquier paso; no se pierde nada de lo que has introducido.",
   "register.review.edit": "Editar",
   "register.review.section.you": "Tú",
