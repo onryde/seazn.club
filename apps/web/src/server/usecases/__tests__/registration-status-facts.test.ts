@@ -14,8 +14,15 @@
 //     division), so reading it as "card" would turn a cash payment into a card one the moment the organiser approves it.
 //
 // Another sport: N/A — registration money and venues are sport-agnostic.
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { onlyVenue, settledBy, type SettledBy, type SettlementEvent } from "../registrations/status-facts";
+import {
+  onlyVenue,
+  settledBy,
+  SETTLEMENT_EVENT_TYPES,
+  type SettledBy,
+  type SettlementEvent,
+} from "../registrations/status-facts";
 
 const REG = "11111111-1111-4111-8111-111111111111";
 
@@ -97,5 +104,23 @@ describe("onlyVenue — a venue line only when exactly one venue is named (spec 
       checked += 1;
     }
     expect(checked, "anti-vacuity: rows checked").toBe(3);
+  });
+});
+
+// B4 review m4: the status page's "how was this settled" (here) and the pay page's "paid on" date (pay-page.ts, `paidAt`) read the
+// SAME event family, so a new settle path that writes a new event type is added once and both pages see it. A second hand-kept copy
+// is what this refuses: pay-page.ts imports the list and spells none of its types itself.
+describe("one settlement event family (B4 review m4)", () => {
+  const payPage = readFileSync(new URL("../registrations/pay-page.ts", import.meta.url), "utf8");
+
+  it("pay-page.ts imports SETTLEMENT_EVENT_TYPES from status-facts and reads it in its paid-on query", () => {
+    expect(payPage).toMatch(/import \{[^}]*\bSETTLEMENT_EVENT_TYPES\b[^}]*\} from "\.\/status-facts";/);
+    expect(payPage).toMatch(/type in \$\{sql\(SETTLEMENT_EVENT_TYPES as unknown as string\[\]\)\}/);
+  });
+
+  it("pay-page.ts spells none of the family's event types itself", () => {
+    const spelled = SETTLEMENT_EVENT_TYPES.filter((t) => payPage.includes(`"${t}"`));
+    expect(SETTLEMENT_EVENT_TYPES.length).toBe(4); // anti-vacuity: four types checked
+    expect(spelled).toEqual([]);
   });
 });

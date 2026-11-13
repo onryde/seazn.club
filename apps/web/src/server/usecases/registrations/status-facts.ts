@@ -37,8 +37,9 @@ export interface SettlementEvent {
   payload: Record<string, unknown>;
 }
 
-/** The event types any settle path writes for a registration — the family pay-page.ts's PAID_EVENT_TYPES reads. Not every row
- *  of these types settles anything: `settlementOf` decides. */
+/** The event types any settle path writes for a registration. The ONE list (B4 review m4): pay-page.ts's "paid on" date reads it
+ *  too, so a new settle path's event type is added here once. Not every row of these types settles anything: `settlementOf`
+ *  decides. */
 export const SETTLEMENT_EVENT_TYPES = [
   "registration.confirmed",
   "registration.paid_awaiting_approval",

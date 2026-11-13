@@ -13,6 +13,7 @@ import type { RegistrationRow, RegistrationWithGroupRow } from "./types";
 import { regGroupCols, loadSettings, divisionCtx } from "./lookups";
 import { registrationLineItems } from "./checkout";
 import { registrationIdByPayToken } from "./pay-token";
+import { SETTLEMENT_EVENT_TYPES } from "./status-facts";
 
 export const PAY_PAGE_STATES = ["pay", "offline", "paid", "refunded", "deadline_passed", "waitlisted"] as const;
 export type PayPageState = (typeof PAY_PAGE_STATES)[number];
@@ -94,13 +95,6 @@ export function payPageState(f: PayPageFacts, now: Date): PayPageState | null {
   throw new Error(`payPageState: no rule covers registration status "${f.status}"`);
 }
 
-const PAID_EVENT_TYPES = [
-  "registration.confirmed",
-  "registration.paid_awaiting_approval",
-  "registration.offline_paid",
-  "registration.fee_waived",
-] as const;
-
 /**
  * The document `/r/pay/<token>` renders, or null for an unknown token and for a withdrawn or rejected entry. Privileged pool reads:
  * the visitor has no org, the token is what names one.
@@ -140,10 +134,11 @@ export async function payPageDocByToken(token: string, now: Date): Promise<PayPa
 
   let paidAt: Date | null = null;
   if (state === "paid" || state === "refunded") {
+    // The first event of the settlement family (status-facts.ts, which the status page's "settled by" also reads: B4 review m4).
     const [ev] = await sql<{ created_at: Date }[]>`
       select created_at from competition_events
       where competition_id = ${ctx.competition_id}
-        and type in ${sql(PAID_EVENT_TYPES as unknown as string[])}
+        and type in ${sql(SETTLEMENT_EVENT_TYPES as unknown as string[])}
         and payload->>'registration_id' = ${reg.id}
       order by created_at
       limit 1`;
