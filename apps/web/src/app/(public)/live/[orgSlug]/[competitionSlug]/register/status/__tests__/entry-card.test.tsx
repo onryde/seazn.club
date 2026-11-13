@@ -453,3 +453,34 @@ describe("EntryCard — the chip past a pay-by date (B4 fix round 4)", () => {
     expect(checked).toBe(16);
   });
 });
+
+// Tidy round (re-review m3): an offline fee with no payment instructions (neither the division's nor the org's) says the organiser will
+// tell them how to pay, in each locale's own words. Instructions given, or a card fee, never show it.
+describe("EntryCard — an offline fee with no instructions (tidy m3)", () => {
+  const LOCALES = { en: uiEn, es: uiEs, fr: uiFr, nl: uiNl } as const;
+  const owing = { status: "pending" as const, amount_cents: 2500 };
+  const unescape = (s: string) => s.replace(/&#x27;/g, "'").replace(/&amp;/g, "&");
+  const render = (locale: keyof typeof LOCALES, entry: Partial<EntryCardProps["entry"]>, cart: Partial<EntryCardProps["cart"]> = {}) => {
+    const p = baseProps();
+    return unescape(
+      renderToStaticMarkup(
+        <EntryCard {...p} locale={locale} ui={LOCALES[locale] as Dict} entry={{ ...p.entry, ...entry }} cart={{ ...p.cart, ...cart }} />,
+      ),
+    );
+  };
+
+  it("says the organiser will tell them how to pay only when there is nothing else to go on", () => {
+    let checked = 0;
+    for (const locale of Object.keys(LOCALES) as (keyof typeof LOCALES)[]) {
+      const fallback = (LOCALES[locale] as Record<string, string>)["register.status.offline.fallback"];
+      expect(fallback, `${locale} premise: the key exists`).toBeTruthy();
+      const line = `>${fallback}<`;
+      expect(render(locale, { ...owing, payment_method: "offline" }, { instructionsHtml: null }), `${locale} no instructions`).toContain(line);
+      expect(render(locale, { ...owing, payment_method: "offline" }, { instructionsHtml: "<p>Bank: Example Bank</p>" }), `${locale} instructions`).not.toContain(line);
+      expect(render(locale, { ...owing, payment_method: "stripe" }, { instructionsHtml: null }), `${locale} card fee`).not.toContain(line);
+      expect(render(locale, { status: "confirmed", payment_method: "offline" }, { instructionsHtml: null }), `${locale} nothing owed`).not.toContain(line);
+      checked += 4;
+    }
+    expect(checked).toBe(16);
+  });
+});

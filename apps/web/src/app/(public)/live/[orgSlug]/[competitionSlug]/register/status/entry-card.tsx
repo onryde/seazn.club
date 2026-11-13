@@ -309,7 +309,8 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
     moneyNode = (
       <div className="space-y-1.5">
         <p className="text-sm font-semibold text-ink">{feeLabel}</p>
-        {/* B4 fix round 3: the heading only above instructions the organiser wrote, never "How to pay" over nothing. */}
+        {/* B4 fix round 3: the heading only above instructions the organiser wrote, never "How to pay" over nothing. Tidy round
+            (re-review m3): with none from the division or the org, the card says the organiser will tell them, and names no route. */}
         {cart.instructionsHtml ? (
           <>
             <p className="text-xs font-semibold tracking-wide text-ink-muted uppercase">
@@ -317,7 +318,9 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
             </p>
             <CompetitionProse html={cart.instructionsHtml} />
           </>
-        ) : null}
+        ) : (
+          <p className="text-sm text-ink-muted">{t(ui, "register.status.offline.fallback")}</p>
+        )}
         {money.deadline && (
           <p className="text-xs text-ink-muted">
             {t(ui, "register.status.money.deadline", { date: deadlineLabel(money.deadline) })}

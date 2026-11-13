@@ -6697,6 +6697,7 @@
   "register.status.pay.promotionLapsed": "De tijd om voor deze plek te betalen is voorbij. Je inschrijving gaat terug naar het einde van de wachtlijst.",
   "register.status.chip.closed": "gesloten",
   "register.status.offline.heading": "Zo betaal je",
+  "register.status.offline.fallback": "De organisator laat je weten hoe je kunt betalen.",
   "register.status.cancel.cta": "Deze inschrijving annuleren",
   "register.status.cancel.busy": "Bezig met annuleren…",
   "register.status.cancel.error.conflict": "De status van deze inschrijving is net gewijzigd — ververs de pagina en probeer het opnieuw.",

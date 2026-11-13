@@ -6697,6 +6697,7 @@
   "register.status.pay.promotionLapsed": "The time to pay for this place has passed. Your entry goes back to the end of the waiting list.",
   "register.status.chip.closed": "closed",
   "register.status.offline.heading": "How to pay",
+  "register.status.offline.fallback": "The organiser will tell you how to pay.",
   "register.status.cancel.cta": "Cancel this entry",
   "register.status.cancel.busy": "Cancelling…",
   "register.status.cancel.error.conflict": "This entry's status just changed — refresh the page and try again.",

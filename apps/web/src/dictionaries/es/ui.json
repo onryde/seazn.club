@@ -6697,6 +6697,7 @@
   "register.status.pay.promotionLapsed": "El plazo para pagar esta plaza ha terminado. Tu inscripción vuelve al final de la lista de espera.",
   "register.status.chip.closed": "cerrado",
   "register.status.offline.heading": "Cómo pagar",
+  "register.status.offline.fallback": "El organizador te dirá cómo pagar.",
   "register.status.cancel.cta": "Cancelar esta inscripción",
   "register.status.cancel.busy": "Cancelando…",
   "register.status.cancel.error.conflict": "El estado de esta inscripción acaba de cambiar — actualiza la página e inténtalo de nuevo.",

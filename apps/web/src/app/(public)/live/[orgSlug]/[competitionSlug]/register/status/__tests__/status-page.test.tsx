@@ -439,16 +439,29 @@ describe("register status page (RS007 rebuild)", () => {
 
     // B4 fix round 3 (re-review gap): an offline fee with no instructions from the organiser shows the fee and the date, never a
     // "How to pay" heading with nothing under it. With instructions, the heading stays.
-    it("an offline fee with no instructions has no empty 'How to pay' heading; with instructions it keeps it", async () => {
+    // Tidy round (re-review m3): with no instructions from the division or the org, the card says the organiser will tell them how to
+    // pay, and nothing on the page names a way to pay that is not there: no Pay button, no "How to pay", no step pointing below.
+    it("an offline fee with no instructions says the organiser will tell them how to pay, and names no route; with instructions it keeps them", async () => {
+      const FALLBACK = ">The organiser will tell you how to pay.<";
       const offline = { ...BASE_VIEW, payment_method: "offline" as const, entries: [{ ...BASE_ENTRY, payment_method: "offline" as const }] };
       usecaseMock.groupById.mockResolvedValueOnce({ ...offline, payment_instructions: null });
-      const bare = await render({ rid: "g1", token: "tok" });
+      const bare = (await render({ rid: "g1", token: "tok" })).replace(/&#x27;/g, "'");
       expect(bare, "premise: the fee is still named").toMatch(/>£25\.00</);
+      expect(bare).toContain(FALLBACK);
       expect(bare).not.toContain(">How to pay<");
+      expect(bare, "no Pay control for an offline fee").not.toMatch(/Pay now/);
+      expect(bare).toMatch(/data-testid="reg-status-headline"[^>]*>Pay to finish entering</);
+      expect(bare, "the step keeps the date and points nowhere").toContain(`>Pay by ${fmtPublicDeadline("en", "UTC", FUTURE)} to keep your place.<`);
+      expect(bare).not.toMatch(/below/i);
       usecaseMock.groupById.mockResolvedValueOnce({ ...offline, payment_instructions: "Bank: Example Bank" });
-      const withText = await render({ rid: "g1", token: "tok" });
+      const withText = (await render({ rid: "g1", token: "tok" })).replace(/&#x27;/g, "'");
       expect(withText).toContain(">How to pay<");
       expect(withText).toContain("Bank: Example Bank");
+      expect(withText, "instructions given: no fallback").not.toContain(FALLBACK);
+      usecaseMock.groupById.mockResolvedValueOnce({ ...BASE_VIEW, payment_instructions: null });
+      const card = (await render({ rid: "g1", token: "tok" })).replace(/&#x27;/g, "'");
+      expect(card, "premise: a card fee has its Pay button").toMatch(/Pay now/);
+      expect(card, "a card fee is paid here: no fallback").not.toContain(FALLBACK);
     });
 
     it("a confirmed entry still names its own fee — no Pay control, no instructions, but not a blank money section (FIX 1)", async () => {

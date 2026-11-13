@@ -6918,6 +6918,7 @@ export type DictionaryKey =
   | "register.status.next.venue"
   | "register.status.next.waitlist"
   | "register.status.notFound"
+  | "register.status.offline.fallback"
   | "register.status.offline.heading"
   | "register.status.pay.busy"
   | "register.status.pay.cta"

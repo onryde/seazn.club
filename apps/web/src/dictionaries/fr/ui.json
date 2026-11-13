@@ -6697,6 +6697,7 @@
   "register.status.pay.promotionLapsed": "Le délai pour payer cette place est passé. Votre inscription retourne à la fin de la liste d'attente.",
   "register.status.chip.closed": "fermé",
   "register.status.offline.heading": "Comment payer",
+  "register.status.offline.fallback": "L'organisateur vous dira comment payer.",
   "register.status.cancel.cta": "Annuler cette inscription",
   "register.status.cancel.busy": "Annulation…",
   "register.status.cancel.error.conflict": "Le statut de cette inscription vient de changer — actualisez la page et réessayez.",
