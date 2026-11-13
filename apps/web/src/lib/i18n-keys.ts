@@ -6138,7 +6138,6 @@ export type DictionaryKey =
   | "quickMatch.setup.emailLabel"
   | "quickMatch.setup.format"
   | "quickMatch.setup.keepNote"
-  | "quickMatch.setup.leagueHelp"
   | "quickMatch.setup.nameHint"
   | "quickMatch.setup.nameLabel"
   | "quickMatch.setup.needsScript"

@@ -145,9 +145,10 @@ const SURFACES: Surface[] = [
     file: "quick-match/route.ts",
     action: "quickmatch",
     call: (r) => quickMatch(r as NextRequest),
-    // The setup form's nine fields as a browser posts them (setup-form.tsx `setupBody`); CreateQuickMatch accepts it.
+    // The setup form's nine fields as a browser posts them (setup-form.tsx `setupBody`): the Format list posts `shape`, which
+    // the route maps to the create's `format` (plan 5 D1), so CreateQuickMatch accepts it.
     form: {
-      name: "Sunday doubles", sport_key: "badminton", variant_key: "bwf", kind: "pair", format: "league",
+      name: "Sunday doubles", sport_key: "badminton", variant_key: "bwf", kind: "pair", shape: "league",
       sides: ["Ravi & Sam", "Priya & Tom"], plays: "1", email: "", locale: "en",
     },
     usecase: usecase.quickMatch,

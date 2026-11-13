@@ -101,6 +101,10 @@ function formInput(form: FormData): Record<string, unknown> {
     }
     if (key === "plays") out.plays = only === "" ? undefined : Number(only);
     else if (key === "email") out.email = only.trim() === "" ? null : only;
+    // Keep `isSetupShape` here. Today an unknown shape is refused either way: passed on raw, the strict schema refuses the
+    // stray `shape`; mapped unguarded, `shapeToFormat` answers no format and the schema refuses for want of one. The second
+    // holds ONLY while CreateQuickMatch gives `format` no default: add a `.default()` there and an unguarded unknown shape
+    // would start a match in that default (T6 review m4; the guard's mutant is equivalent until then).
     else if (key === "shape" && !ownFormat && isSetupShape(only)) {
       const { format, qualifiers } = shapeToFormat(only);
       out.format = format;

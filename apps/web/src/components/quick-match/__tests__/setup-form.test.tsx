@@ -493,7 +493,8 @@ describe("QuickMatchSetupForm: the screen as the mockup orders it", () => {
     const i = mount();
     fillSides(i, ["A", "B", "C", "D"]);
     expect(textOf(shapeLabel(i, "league")!)).toContain("League");
-    expect(textOf(shapeLabel(i, "league")!)).toContain("Everyone plays everyone.");
+    // T6 review m1 (controller, 2026-11-13): the plain League row still says who wins.
+    expect(textOf(shapeLabel(i, "league")!)).toContain("Everyone plays everyone. Top of the table wins.");
     expect(textOf(shapeLabel(i, "final")!)).toContain("Everyone plays everyone, then the top 2 play a final.");
     expect(textOf(shapeLabel(i, "semis")!)).toContain("Everyone plays everyone, then the top 4 play semi-finals and a final.");
     for (const v of ["league", "final", "semis"]) expect(textOf(shapeLabel(i, v)!), v).not.toMatch(/[{}]/);

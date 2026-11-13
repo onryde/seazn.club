@@ -48,7 +48,6 @@ const MARKETING_KEYS = [
   "quickMatch.setup.sideLabel",
   "quickMatch.setup.removeSide",
   "quickMatch.setup.addSide",
-  "quickMatch.setup.leagueHelp",
   "quickMatch.setup.plays",
   "quickMatch.setup.rules",
   "quickMatch.setup.email",
@@ -536,7 +535,22 @@ describe("quick match guest copy: plurals", () => {
     expect(ui["quickMatch.home.editResult"]).toBe("Edit result");
     // Task 1 review I2 and m1 (controller, 2026-11-08): the league line names no tie-break the standings do not use
     // (draws score points, so "most wins" was false), and the two offer refusals name nothing the guest did not choose.
-    expect(m["quickMatch.setup.leagueHelp"]).toBe("Everyone plays everyone. Top of the table wins.");
+    // Plan 5 T6 review m1 (controller, 2026-11-13): that line is now the plain League row's hint, so the row still says who
+    // wins. Each locale keeps its own existing sentence (typed here: the translations of record); the standalone line's key
+    // is gone from every locale.
+    const LEAGUE_HINT: Record<Locale, string> = {
+      en: "Everyone plays everyone. Top of the table wins.",
+      fr: "Tout le monde affronte tout le monde. Le premier du classement gagne.",
+      es: "Todos juegan contra todos. Gana quien acabe primero en la tabla.",
+      nl: "Iedereen speelt tegen iedereen. Wie bovenaan eindigt, wint.",
+    };
+    let hints = 0;
+    for (const locale of LOCALES) {
+      expect(DICTS[locale].marketing["quickMatch.setup.shape.leagueHint"], locale).toBe(LEAGUE_HINT[locale]);
+      expect(DICTS[locale].marketing["quickMatch.setup.leagueHelp"], `${locale} quickMatch.setup.leagueHelp`).toBeUndefined();
+      hints++;
+    }
+    expect(hints, "anti-vacuity: every locale").toBe(4);
     // Owner 2026-11-12 ("take out"): League only for now. The setup's knockout lines are gone from every locale, and the
     // page's description no longer promises one. Plan 5 (owner 2026-11-13, mockup qmd13a01 §6 FINAL) brings the "Format"
     // label back over its three-row list (`quickMatch.setup.shape.*`); the plain knockout's own lines stay gone.
