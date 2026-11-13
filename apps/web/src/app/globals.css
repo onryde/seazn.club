@@ -741,6 +741,14 @@ body {
   .mk-live-dot { animation: none; }
 }
 
+/* Off-screen (hero-vignette.tsx watches the art with an IntersectionObserver;
+   a phone's hero puts it below the fold): every part holds the frame it is
+   on, the endless sway and pulse included, and resumes from it back in view;
+   the play's timers hold with it, so the score still moves on the landing.
+   With no script there is no observer and no attribute: the art plays as
+   before. Same specificity as the rules above, so it must stay after them. */
+[data-offscreen] .mk-vignette * { animation-play-state: paused; }
+
 /* LIVE ticker marquee — duplicated row scrolls 50%; pause on hover/focus. */
 .mk-ticker { animation: mk-ticker-scroll 28s linear infinite; }
 .mk-ticker:hover,

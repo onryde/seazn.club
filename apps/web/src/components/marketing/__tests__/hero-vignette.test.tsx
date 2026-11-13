@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import offer from "@/lib/quick-match-offer.generated.json";
-import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
+import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
 import { REDUCED_MOTION_QUERY } from "@/components/ui/use-prefers-reduced-motion";
 import { HERO_SCENES, HERO_SPORT_SELECT_ID, heroScoreText, type HeroSceneKey } from "../hero-scenes";
 import { HeroVignette } from "../hero-vignette";
@@ -208,21 +208,48 @@ describe("HeroVignette plays: three plays on load, a landing moves the score, th
   });
 });
 
+/** The score the ANIMATED art rests on for `sport`: mounted with motion, its plays run out on the clock. */
+function restingScore(sport: HeroSceneKey): string {
+  vi.useFakeTimers();
+  browser({ select: fakeSelect(sport) });
+  const island = mount(sport);
+  vi.advanceTimersByTime(20 * 3300);
+  expect(vi.getTimerCount(), `${sport}: at rest`).toBe(0);
+  const score = read(island.tree()).score;
+  island.unmount();
+  vi.useRealTimers();
+  return score;
+}
+
 describe("HeroVignette under prefers-reduced-motion: the final frame, no motion", () => {
-  it("shows each scene's landed frame at once, schedules nothing, and a change shows the new sport's landed frame", () => {
-    vi.useFakeTimers();
-    const select = fakeSelect("badminton");
-    browser({ select, reduce: true });
-    const island = mount("badminton");
-    expect(read(island.tree()).score).toBe(heroScoreText("badminton", 1));
-    expect(vi.getTimerCount(), "no play is scheduled").toBe(0);
-    const play = read(island.tree()).play;
-    vi.advanceTimersByTime(20_000);
-    expect(read(island.tree()).play, "no auto play").toBe(play);
-    select.choose("carrom");
-    expect(read(island.tree()).scene).toBe("carrom");
-    expect(read(island.tree()).score).toBe(heroScoreText("carrom", 1));
-    expect(vi.getTimerCount()).toBe(0);
+  it("shows the frame the animated art RESTS on (the decided score), at once, for every offered sport; a change shows the new sport's", () => {
+    const rests = new Map(offeredSports.map((sport) => [sport, restingScore(sport)] as const));
+    let checked = 0;
+    for (const sport of offeredSports) {
+      // Not a mid-play frame: the resting frame is past the first landing (the old reduced frame) and past the first frame.
+      expect(rests.get(sport), `${sport}: rests past its first landing`).not.toBe(heroScoreText(sport, 1));
+      expect(rests.get(sport)).not.toBe(heroScoreText(sport, 0));
+      vi.useFakeTimers();
+      const select = fakeSelect(sport);
+      browser({ select, reduce: true });
+      const island = mount(sport);
+      expect(read(island.tree()).score, `${sport} under reduced motion`).toBe(rests.get(sport));
+      expect(vi.getTimerCount(), `${sport}: no play is scheduled`).toBe(0);
+      const play = read(island.tree()).play;
+      vi.advanceTimersByTime(20_000);
+      expect(read(island.tree()).play, `${sport}: no auto play`).toBe(play);
+      // A change: the new sport's resting frame, at once, nothing scheduled.
+      const next = offeredSports.find((s) => s !== sport)!;
+      select.choose(next);
+      expect(read(island.tree()).scene).toBe(next);
+      expect(read(island.tree()).score, `${sport} → ${next}`).toBe(rests.get(next));
+      expect(vi.getTimerCount()).toBe(0);
+      island.unmount();
+      vi.useRealTimers();
+      checked++;
+    }
+    expect(checked, "offered sports checked").toBe(offeredSports.length);
+    expect(checked).toBeGreaterThan(1);
   });
 
   it("the CSS: every part the vignette animates stops under reduced motion, the object rests where it lands, the trail is drawn", () => {
@@ -246,7 +273,134 @@ describe("HeroVignette under prefers-reduced-motion: the final frame, no motion"
   });
 });
 
+// Off-screen (review m5, 2026-11-13): on a phone the art sits below the fold, and the plays ran there unseen while the
+// endless sway and pulse never stopped. The art watches itself with an IntersectionObserver: off-screen it holds every
+// animation (a data attribute the CSS reads) and the play's timers with them; back in view it resumes where it held.
+// No observer (no script, an old browser, this harness by default): it plays as it always did.
+
+/** Stands in for the art's DOM node: the stub only has to see the same object the art hands its observer. */
+const NODE = { nodeName: "DIV" } as unknown as Element;
+type Observed = { cb: (entries: { isIntersecting: boolean }[]) => void; observed: Element[]; disconnects: number };
+let observers: Observed[] = [];
+function stubObserver(): void {
+  observers = [];
+  class FakeIO {
+    private readonly rec: Observed;
+    constructor(cb: Observed["cb"]) {
+      this.rec = { cb, observed: [], disconnects: 0 };
+      observers.push(this.rec);
+    }
+    observe(el: Element) {
+      this.rec.observed.push(el);
+    }
+    disconnect() {
+      this.rec.disconnects += 1;
+    }
+    unobserve() {}
+    takeRecords() {
+      return [];
+    }
+  }
+  vi.stubGlobal("IntersectionObserver", FakeIO);
+}
+const artOf = (tree: Tree) => tree.find((el) => propsOf(el)["data-sport"] !== undefined)!;
+/** React attaches the art's ref to its node; the harness has no DOM, so the test does, as React would. */
+function attach(tree: Tree): void | (() => void) {
+  const ref = propsOf(artOf(tree)).ref as ((node: Element | null) => void | (() => void)) | undefined;
+  expect(typeof ref, "the art takes a callback ref").toBe("function");
+  return ref!(NODE);
+}
+const offscreen = (tree: Tree) => propsOf(artOf(tree))["data-offscreen"] !== undefined;
+const view = (on: boolean) => observers.at(-1)!.cb([{ isIntersecting: on }]);
+
+describe("HeroVignette holds its plays while it is off-screen (review m5)", () => {
+  it("off-screen mid-play: no landing, no next play, the CSS hold on; back in view it lands with the time it had left", () => {
+    vi.useFakeTimers();
+    browser({ select: fakeSelect("badminton") });
+    stubObserver();
+    const island = mount("badminton");
+    attach(island.tree());
+    expect(observers, "one observer").toHaveLength(1);
+    expect(observers[0]!.observed).toEqual([NODE]);
+    expect(offscreen(island.tree()), "in view: nothing held").toBe(false);
+    const play = read(island.tree()).play;
+    vi.advanceTimersByTime(1000);
+    view(false);
+    expect(offscreen(island.tree()), "off-screen: the CSS holds every part").toBe(true);
+    expect(vi.getTimerCount(), "off-screen: the play's timers hold").toBe(0);
+    vi.advanceTimersByTime(30_000);
+    expect(read(island.tree()).score, "no landing off-screen").toBe(heroScoreText("badminton", 0));
+    expect(read(island.tree()).play, "no next play off-screen").toBe(play);
+    view(true);
+    expect(offscreen(island.tree())).toBe(false);
+    expect(read(island.tree()).play, "back in view: the same play resumes, not a new one").toBe(play);
+    vi.advanceTimersByTime(LANDING_MS - 1000 - 1);
+    expect(read(island.tree()).score, "not before the time it had left").toBe(heroScoreText("badminton", 0));
+    vi.advanceTimersByTime(1);
+    expect(read(island.tree()).score, "lands with the time it had left").toBe(heroScoreText("badminton", 1));
+    // It runs out its plays as before, and rests.
+    vi.advanceTimersByTime(20 * 3300);
+    expect(read(island.tree()).score, "three landings").toBe(heroScoreText("badminton", 3));
+    expect(vi.getTimerCount()).toBe(0);
+    // At rest, off-screen holds only the endless sway and pulse: back in view is no new play, and the score holds.
+    const rest = read(island.tree());
+    view(false);
+    expect(offscreen(island.tree())).toBe(true);
+    view(true);
+    expect(read(island.tree()).play, "at rest: back in view replays nothing").toBe(rest.play);
+    vi.advanceTimersByTime(20_000);
+    expect(read(island.tree()).score).toBe(rest.score);
+    island.unmount();
+  });
+
+  it("a pick while off-screen waits for the view (a phone below the fold), then plays and lands; unmount disconnects", () => {
+    vi.useFakeTimers();
+    const select = fakeSelect("badminton");
+    browser({ select });
+    stubObserver();
+    const island = mount("badminton");
+    const detach = attach(island.tree());
+    view(false);
+    select.choose("tennis");
+    expect(read(island.tree()).scene).toBe("tennis");
+    expect(offscreen(island.tree()), "the new play is held too").toBe(true);
+    vi.advanceTimersByTime(30_000);
+    expect(read(island.tree()).score, "no landing unseen").toBe(heroScoreText("tennis", 0));
+    view(true);
+    vi.advanceTimersByTime(LANDING_MS);
+    expect(read(island.tree()).score, "in view: it lands").toBe(heroScoreText("tennis", 1));
+    expect(typeof detach, "the ref hands React its cleanup").toBe("function");
+    (detach as () => void)();
+    expect(observers[0]!.disconnects, "the observer is let go").toBeGreaterThan(0);
+  });
+
+  it("the CSS holds every part under the attribute, after (so over) every rule that animates one; the scorebug's pulse is inside", () => {
+    const vignette = CSS.slice(CSS.indexOf("/* Hero vignette choreography"), CSS.indexOf("/* LIVE ticker marquee"));
+    const hold = vignette.match(/\[data-offscreen\]\s+\.mk-vignette\s+\*\s*\{([^}]*)\}/);
+    expect(hold, "the off-screen hold rule").not.toBeNull();
+    expect(hold![1]).toMatch(/animation-play-state:\s*paused/);
+    // Equal specificity to `.mk-vignette .mk-ball` and friends, so it must come after every rule that sets `animation:`.
+    const animating = [...vignette.matchAll(/\{[^}]*\banimation:/g)].map((m) => m.index!);
+    expect(animating.length, "animating rules found").toBeGreaterThanOrEqual(5);
+    for (const at of animating) expect(at, "an animation rule after the hold").toBeLessThan(hold!.index!);
+    // The pulsing LIVE dot is a descendant of the run, so the hold reaches it.
+    browser({ select: fakeSelect("badminton") });
+    const island = mount("badminton");
+    const run = byTestId(island.tree(), "vignette-run")[0]!;
+    expect(walk(run).some((el) => String(propsOf(el).className ?? "").includes("mk-live-dot"))).toBe(true);
+  });
+});
+
 describe("HeroVignette's server render (also the no-JS page)", () => {
+  it("is never held: the server (and the no-JS page) draws no off-screen attribute, so the art plays as it always did", () => {
+    let checked = 0;
+    for (const sport of offeredSports) {
+      expect(renderToStaticMarkup(<HeroVignette sport={sport} labels={LABELS} />), sport).not.toContain("data-offscreen");
+      checked++;
+    }
+    expect(checked).toBe(offeredSports.length);
+  });
+
   it("renders the scorebug, the replay control and LIVE", () => {
     const html = renderToStaticMarkup(<HeroVignette sport="badminton" labels={LABELS} />);
     expect(html).toContain('data-testid="scorebug"');
