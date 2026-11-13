@@ -251,6 +251,19 @@ export interface CartEntry {
    *  `CartEntry` fixture in this tree sets it, and `undefined` reads the
    *  same as `false` everywhere it's checked. */
   self_link_declined?: boolean;
+  /** CLIENT-ONLY (never sent — `toGroupEntry` does not include it), same status as `id` and `self_link_declined`. What the DETAILS seed
+   *  (`details-seed.ts`) last gave THIS entry's contact row from Contact, one value per field; a key that is absent was never given.
+   *  It is how a later pass tells a row the form seeded ("Mia", still "Mia") from one the registrant edited ("Amelia"): the first
+   *  follows a Contact rename, the second never does. Kept on the entry, not in a stepper ref, so it rides the sessionStorage draft
+   *  with the cart. Optional: a draft saved before it existed has none and simply starts one on its next pass. */
+  seeded_from?: SeededFromContact;
+}
+
+/** `CartEntry.seeded_from`: the values the contact row last took from Contact. */
+export interface SeededFromContact {
+  name?: string;
+  dob?: string;
+  gender?: Gender;
 }
 
 /** The whole cart. Self-link state lives PER-ENTRY (`CartEntry.

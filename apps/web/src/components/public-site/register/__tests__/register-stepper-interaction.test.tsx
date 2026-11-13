@@ -3757,15 +3757,36 @@ describe("B2 T9 — Details: one card per entry, the contact's own row, the orga
     expect(m.pageText()).not.toContain(NOTE);
   });
 
-  it("a contact renamed after the row was seeded: the row keeps the old name (the seed fills blanks only), stays editable and does not claim 'That's you'", () => {
+  // B2 T10 (supersedes T9's "the seed fills blanks only"): a row the seed filled and the registrant never touched follows a Contact
+  // rename, so "That's you" stays true after it; a row the registrant typed over is theirs and is never overwritten. Both directions,
+  // through the real stepper: the producer is the Contact input, the consumer is the Details row the registrant reads.
+  it("a contact renamed after the row was seeded: the untouched row follows, stays locked and still says 'That's you'", () => {
     const m = toDetails(true);
     expect(propsOf(rosterNameInputs(m)[0]!).readOnly, "premise: locked first").toBe(true);
     m.clickByText("Back");
     setWho(m, { name: "Mia Colette" });
     m.clickByText("Next");
     const inputs = rosterNameInputs(m);
-    expect(propsOf(inputs[0]!).value, "premise: the seed did not overwrite the row").toBe("Mia Cole");
-    expect(propsOf(inputs[0]!).readOnly, "a row that is not the contact's name is not locked").not.toBe(true);
+    expect(inputs, "one row").toHaveLength(1);
+    expect(propsOf(inputs[0]!).value, "the seeded row followed the rename").toBe("Mia Colette");
+    expect(propsOf(inputs[0]!).readOnly, "and is the contact's own row again: locked").toBe(true);
+    expect(m.pageText()).toContain(NOTE);
+  });
+
+  it("a row the registrant typed over the seed is never overwritten by a later rename: it stays, editable, with no note", () => {
+    const m = toDetails(true);
+    m.clickByText("Back");
+    setPlaying(m, false); // the row is theirs to edit once it no longer claims to be the contact
+    m.clickByText("Next");
+    (propsOf(rosterNameInputs(m)[0]!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "Amelia Cole" } });
+    m.clickByText("Back");
+    setPlaying(m, true);
+    setWho(m, { name: "Mia Colette" });
+    m.clickByText("Next");
+    const inputs = rosterNameInputs(m);
+    expect(inputs).toHaveLength(1);
+    expect(propsOf(inputs[0]!).value, "the typed name survives the rename").toBe("Amelia Cole");
+    expect(propsOf(inputs[0]!).readOnly, "it is not the contact's name, so it is not locked").not.toBe(true);
     expect(m.pageText()).not.toContain(NOTE);
   });
 
