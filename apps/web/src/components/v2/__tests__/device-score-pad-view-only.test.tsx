@@ -9,6 +9,7 @@ import es from "@/dictionaries/es/ui.json";
 import fr from "@/dictionaries/fr/ui.json";
 import nl from "@/dictionaries/nl/ui.json";
 import { officialLabelKey } from "@/lib/official-label";
+import { LOCKED_FIXTURE_STATUSES } from "@/lib/fixture-status";
 import type { ViewOnlyReason } from "@/lib/scan-screen";
 import { DeviceScorePad, type PadEventIn } from "@/components/v2/device-score-pad";
 import { ScorePad } from "@/components/v2/scorepad/registry";
@@ -929,5 +930,75 @@ describe("DeviceScorePad — a quick match's pad names no organiser (review Q1/Q
     const island = await staleStart("decided");
     expect(byTestId(island.tree(), "scan-view-only"), "decided is no View-only").toBeUndefined();
     expect(textOfTree(island.tree())).toContain(dict["engineError.ALREADY_DECIDED"]);
+  });
+});
+
+// Quick match plan 4, T3 review I1: the chrome's stale-write branch (`device-score-pad.tsx`, ALREADY_DECIDED → re-read →
+// View-only on a locked status) is NOT quick-match-gated — it serves every device-link pad, so an organiser's fixture in any
+// sport. The quick match rows above pin only the guest's copy; these pin the ordinary pad's half. The only organiser route in:
+// the organiser finalizes (or a fixture is cancelled) while a scorer's phone is up, and the scorer taps Start or "Void my last
+// entry". The branch reads a status alone, so the generic sport stands for every sport.
+describe("DeviceScorePad — an ordinary pad's stale Start or Void on a match now locked (T3 review I1)", () => {
+  /** The chrome write a scorer taps on a screen gone stale, and the screen it opens on. */
+  const TRIGGERS = {
+    start: { opensOn: () => ({ ...props("scheduled", null), initialEvents: [] }), testId: "score-start-match" },
+    void: { opensOn: () => props("decided", { kind: "win" }), testId: "device-void-mine" },
+  } as const;
+
+  const staleWrite = async (trigger: keyof typeof TRIGGERS, serverStatus: string) => {
+    api.postRefusal = { code: "ALREADY_DECIDED", status: 422 };
+    api.serverStatus = serverStatus;
+    const island = renderIsland(DeviceScorePad, TRIGGERS[trigger].opensOn());
+    // Empty case first: the screen opens live, with the control the scorer taps, and no View-only.
+    expect(byTestId(island.tree(), "scan-view-only"), "precondition: not View-only").toBeUndefined();
+    const button = byTestId(island.tree(), TRIGGERS[trigger].testId);
+    expect(button, `precondition: the ${trigger} control is on screen`).toBeDefined();
+    (propsOf(button!).onClick as () => void)();
+    await flush();
+    expect(api.posts, `the ${trigger} really went to the server`).toBe(1);
+    expect(api.stateReads, "the refusal re-reads the match once").toBe(1);
+    return island;
+  };
+
+  const ROWS = [
+    ["start", "finalized", "device.scan.viewOnly.finalized", "device.quickMatch.finished"],
+    ["start", "cancelled", "device.scan.viewOnly.cancelled", "device.quickMatch.notPlayed"],
+    ["void", "finalized", "device.scan.viewOnly.finalized", "device.quickMatch.finished"],
+    ["void", "cancelled", "device.scan.viewOnly.cancelled", "device.quickMatch.notPlayed"],
+  ] as const;
+
+  it.each(ROWS)(
+    "a stale %s refused ALREADY_DECIDED on a match now %s: View-only with the ordinary line, never the quick match's",
+    async (trigger, status, ordinaryKey, quickKey) => {
+      const island = await staleWrite(trigger, status);
+      const screen = byTestId(island.tree(), "scan-view-only");
+      expect(screen, "the refusal on a locked match moves the ordinary pad to View-only too").toBeDefined();
+      expect(textOf(screen)).toBe(dict[ordinaryKey]);
+      expect(textOf(screen), "a quick match's line on an organiser's fixture would be false").not.toBe(dict[quickKey]);
+      expect(byTestId(island.tree(), TRIGGERS[trigger].testId), "View-only offers no control to re-tap").toBeUndefined();
+      expect(textOfTree(island.tree()), "the refusal's 'already has a result' would be false here").not.toContain(
+        dict["engineError.ALREADY_DECIDED"],
+      );
+    },
+  );
+
+  it.each(["start", "void"] as const)(
+    "the negative pair: a stale %s on a match now DECIDED keeps the refusal's own words, no View-only",
+    async (trigger) => {
+      const island = await staleWrite(trigger, "decided");
+      expect(byTestId(island.tree(), "scan-view-only"), "decided is not locked: no View-only").toBeUndefined();
+      expect(textOfTree(island.tree())).toContain(dict["engineError.ALREADY_DECIDED"]);
+    },
+  );
+
+  it("anti-vacuity: every locked status is a row for both triggers", () => {
+    // The rows are typed by hand from the write path's lock (`append-event.ts`: finalized, cancelled); this pins that the
+    // table covers the shared set, so a status added to the lock without a row here goes red.
+    const covered = new Set(ROWS.map(([, status]) => status));
+    expect(covered.size, "rows checked").toBeGreaterThan(0);
+    expect([...covered].sort()).toEqual([...LOCKED_FIXTURE_STATUSES].sort());
+    for (const trigger of Object.keys(TRIGGERS)) {
+      expect(ROWS.filter(([t]) => t === trigger).map(([, s]) => s).sort(), trigger).toEqual([...LOCKED_FIXTURE_STATUSES].sort());
+    }
   });
 });

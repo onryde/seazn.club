@@ -24,8 +24,7 @@ import {
 } from "@/components/v2/fixture-console";
 import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
 import { scoringErrorText } from "@/lib/scoring-vocab";
-import { LOCKED_FIXTURE_STATUSES } from "@/lib/fixture-status";
-import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
+import { LOCKED_FIXTURE_REFUSAL_CODE, LOCKED_FIXTURE_STATUSES } from "@/lib/fixture-status";
 // S13/#422 W11 — the v2 scoring pad is now the only pad this dispatcher
 // renders (S12/#421's flag has been removed entirely, along with the seven
 // v1 pad components it used to choose between — this dispatcher never had a
@@ -416,7 +415,7 @@ export function DeviceScorePad({
           setError(msg("device.seqConflict"));
         } else if (
           err instanceof ApiV1Error &&
-          err.code === PLAYED_REFUSAL_CODE &&
+          err.code === LOCKED_FIXTURE_REFUSAL_CODE &&
           // Quick match plan 4, T3 (stale screens): the match was decided, finished or marked Not played (the quick match
           // home's skip) since this screen loaded, so a stale Start or void is refused ALREADY_DECIDED. Re-read it: a
           // finished or Not played match then says why on View-only (`viewOnlyKey`), where the refusal's own "already has a

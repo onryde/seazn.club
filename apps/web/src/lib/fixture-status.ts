@@ -4,6 +4,8 @@
 //
 // W2a (spec §5.4.6, ruling 79): `needs_decision` — a play-produced level result in a bracket stage, held: played,
 // not finished, nobody seated, closed by the organiser's `core.settle`.
+import type { EngineErrorCode } from "@seazn/engine/core";
+
 export const FIXTURE_STATUSES = [
   "scheduled",
   "in_play",
@@ -20,6 +22,11 @@ export type FixtureStatusValue = (typeof FIXTURE_STATUSES)[number];
  *  (`server/engine-db/append-event.ts` re-exports it and refuses on it). Here, in the client-safe module, so a client
  *  reader that must agree with the lock (the live-fixture transport) imports the SAME set instead of copying it. */
 export const LOCKED_FIXTURE_STATUSES: ReadonlySet<string> = new Set(["finalized", "cancelled"]);
+
+/** The engine code the write path refuses an append on a LOCKED fixture with (`append-event.ts` throws it). The device
+ *  pad's stale-write re-read keys on this name (quick match plan 4, T3 review m1), not on a history step's
+ *  `PLAYED_REFUSAL_CODE` that happens to share its value, so the two can never drift apart silently. */
+export const LOCKED_FIXTURE_REFUSAL_CODE = "ALREADY_DECIDED" as const satisfies EngineErrorCode;
 
 /** Where a match stands for the fixture console's "Match rules" block (`loadFixtureMatchRules`): not yet played; under way
  *  (played, or decided without play with a scored award - a correction refits it); decided without play with NO award to

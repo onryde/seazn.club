@@ -15,8 +15,9 @@ export const VIEW_ONLY_COPY: Readonly<Record<ViewOnlyReason, MessageKey>> = {
   no_opponent: "device.scan.viewOnly.noOpponent",
 };
 
-/** A quick match's own line for each View-only reason whose ordinary copy sends the scorer to an organiser; the reasons
- *  absent here (cancelled, no opponent) never named one and keep their words. */
+/** A quick match's own line for each View-only reason whose ordinary copy would mislead a guest: carried forward and
+ *  finalized send the scorer to an organiser, and cancelled is the home's "Not played" (says how to put it back). The
+ *  reason absent here (no opponent) never named one and keeps its words. */
 const QUICK_MATCH_VIEW_ONLY: Readonly<Partial<Record<ViewOnlyReason, MessageKey>>> = {
   carried_forward: "device.quickMatch.resultLocked",
   finalized: "device.quickMatch.finished",
