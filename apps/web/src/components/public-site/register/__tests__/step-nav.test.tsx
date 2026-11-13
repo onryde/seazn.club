@@ -182,6 +182,22 @@ describe("StepNav — the numbered bar (md and up)", () => {
     expect(checked, "anti-vacuity: every li at every position").toBe(FIVE.length ** 2 + FOUR.length ** 2);
   });
 
+  // B2 review m7: the numbered bar shows which step is current with colour alone; a screen reader reads a plain list of five names.
+  it("exactly the current step's <li> carries aria-current=\"step\", at every position of both orders, and no other does", () => {
+    let checked = 0;
+    for (const { label, order } of ORDERS) {
+      for (let at = 0; at < order.length; at++) {
+        const lis = items(faces(order, at, vi.fn()).bar);
+        expect(lis, `${label} @${at}`).toHaveLength(order.length);
+        lis.forEach((li, i) => {
+          expect(propsOf(li)["aria-current"], `${label} @${at}: step ${i} (${i === at ? "current" : i < at ? "finished" : "upcoming"})`).toBe(i === at ? "step" : undefined);
+          checked++;
+        });
+      }
+    }
+    expect(checked, "anti-vacuity: every li at every position").toBe(FIVE.length ** 2 + FOUR.length ** 2);
+  });
+
   it("the first step has nothing finished before it, so the bar there has no button at all", () => {
     expect(walk(faces(FIVE, 0, vi.fn()).bar).filter((e) => e.type === "button")).toHaveLength(0);
   });

@@ -97,7 +97,8 @@ export function StepNav({
             </>
           );
           return (
-            <li key={step} className="flex min-w-0 flex-1">
+            // The current step says so to assistive tech, as the colour does to the eye (B2 review m7).
+            <li key={step} aria-current={state === "current" ? "step" : undefined} className="flex min-w-0 flex-1">
               {state === "done" && onJump ? (
                 // Inside the bar's `overflow-hidden`, so the global focus ring (outline-offset 2px) would be clipped: drawn inside.
                 <button

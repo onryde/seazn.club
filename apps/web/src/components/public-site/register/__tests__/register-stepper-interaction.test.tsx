@@ -3732,6 +3732,9 @@ describe("B2 T8 — action bar: Back, named Continue, running total, one forward
     expect(cls).toMatch(/(?:^|\s)max-md:bottom-0(?:\s|$)/);
     expect(cls).toContain("env(safe-area-inset-bottom)");
     expect(cls, "no bare `sticky` that would stay sticky from md").not.toMatch(/(?:^|\s)sticky(?:\s|$)/);
+    // B2 review (shadow): the bar wears the step cards' own shadow token, not a one-off arbitrary value (`shadow-[...]`).
+    expect(cls, "the bar's shadow is the cards' token").toMatch(/(?:^|\s)max-md:shadow-sm(?:\s|$)/);
+    expect(cls, "and no arbitrary shadow value").not.toMatch(/shadow-\[/);
     expect(String(propsOf(one(m.island, "reg-next")).className)).toMatch(/(?:^|\s)max-md:flex-1(?:\s|$)/);
     // The running total is for a phone: from md the page itself carries the totals.
     expect(String(propsOf(one(m.island, "reg-bar-summary")).className)).toMatch(/(?:^|\s)md:hidden(?:\s|$)/);
@@ -4544,6 +4547,11 @@ describe("B2 T10 - Review: you, entries with players, answers, consent; Edit goe
     const note = one(m.island, "reg-bar-sent-to");
     expect(textOf(note)).toBe("Confirmation goes to mia@example.com");
     expect(String(propsOf(note).className), "md and up only").toMatch(/(?:^|\s)max-md:hidden(?:\s|$)/);
+    // B2 review m6: an address has no break points and may be 200 characters, in a flex row at md. `min-w-0` lets the note shrink below
+    // its text's width and `break-words` lets the address wrap there; without both a long one pushes the row past the page at 768.
+    const noteCls = String(propsOf(note).className);
+    expect(noteCls, "the note may shrink below its text").toMatch(/(?:^|\s)min-w-0(?:\s|$)/);
+    expect(noteCls, "and wrap an address that has no break points").toMatch(/(?:^|\s)break-words(?:\s|$)/);
     expect(String(propsOf(one(m.island, "reg-submit")).className), "with the note beside it, the button's own ml-auto is cancelled at md").toMatch(/(?:^|\s)md:ml-0(?:\s|$)/);
     m.clickByText("Back");
     expect(all(m.island, "reg-bar-summary"), "back on Consent: the total returns").toHaveLength(1);

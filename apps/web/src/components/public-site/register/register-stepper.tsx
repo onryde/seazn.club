@@ -688,7 +688,8 @@ export function RegisterStepper({
       {/* The action bar (B2 T8, spec §7.2) — ONE DOM, Back / running total / the one forward button, never a phone twin.
           Below `md` it is a bar pinned to the bottom of the register column (`sticky bottom-0`, full-bleed over the page's 16px gutter,
           padded for the home-indicator inset); from `md` it is the plain row it always was. Back is ABSENT on step 1, not disabled.
-          Tokens: surface + zinc-200 hairline + a soft upward shadow, the step cards' own (`bg-surface`, `border-zinc-200`).
+          Tokens: surface + zinc-200 hairline + `shadow-sm`, all three the step cards' own (`bg-surface`, `border-zinc-200`, `shadow-sm`).
+          No upward shadow token exists in the tree, so the hairline carries the bar's top edge.
           Stacking, against the fixed z-40 cookie banner (cookie-consent.tsx; dialogs are z-50 above both): from `md` the row is z-50,
           the fix-wave finding #6 escape hatch — the banner must never swallow a click on Back/Next, and the in-flow row is not pinned,
           so the banner can only brush it. Below `md` the bar is pinned to the very edge the banner also sits on, so z-50 there buried
@@ -700,7 +701,7 @@ export function RegisterStepper({
           `space-y-4` would otherwise leave a 16px margin under a sticky bar that should sit on the viewport's edge. */}
       <div
         data-testid="reg-bar"
-        className="relative flex flex-wrap items-center gap-x-3 gap-y-2 max-md:sticky max-md:bottom-0 max-md:z-30 md:z-50 max-md:-mx-4 max-md:mb-0 max-md:border-t max-md:border-zinc-200 max-md:bg-surface max-md:px-4 max-md:pt-3 max-md:pb-[max(0.75rem,env(safe-area-inset-bottom))] max-md:shadow-[0_-8px_16px_-12px_rgb(0_0_0/0.25)]"
+        className="relative flex flex-wrap items-center gap-x-3 gap-y-2 max-md:sticky max-md:bottom-0 max-md:z-30 md:z-50 max-md:-mx-4 max-md:mb-0 max-md:border-t max-md:border-zinc-200 max-md:bg-surface max-md:px-4 max-md:pt-3 max-md:pb-[max(0.75rem,env(safe-area-inset-bottom))] max-md:shadow-sm"
       >
         {barTotal ? (
           <p data-testid="reg-bar-summary" className="w-full text-sm font-semibold tabular-nums text-ink md:hidden">
@@ -726,7 +727,7 @@ export function RegisterStepper({
                 You section, and no spare width: hidden there, not a second tree. `md:ml-auto` pushes it, and the button after it (whose
                 own `ml-auto` is cancelled at md), to the row's end; without an address (cannot happen past Contact) there is no note. */}
             {sentTo !== "" && (
-              <p data-testid="reg-bar-sent-to" className="max-md:hidden md:ml-auto text-sm text-ink-muted">
+              <p data-testid="reg-bar-sent-to" className="max-md:hidden md:ml-auto min-w-0 break-words text-sm text-ink-muted">
                 {t("register.review.sentTo", { email: sentTo })}
               </p>
             )}
