@@ -130,6 +130,10 @@ const courtHoursOf = async (orgId: string): Promise<number> => {
   return n;
 };
 const seeds = (n: number): number[] => Array.from({ length: n }, (_, i) => i + 1);
+/** The division's name as the dictionary words it: the sport's own name, or — for Other, which builds the generic module
+ *  and names no sport — the claim's word for "other", not the module's "Generic". */
+const divisionNameFor = (locale: Locale, moduleKey: string): string =>
+  moduleKey === "generic" ? ui(locale, "funnel.claim.division.other") : ui(locale, `sport.${moduleKey}`);
 
 /** The kind a new division of this funnel sport defaults to: the engine module's declaration, laid over by the variant the
  *  claim builds (createDivision seeds the division's config from it). Other builds the generic module. */
@@ -213,7 +217,7 @@ describe.skipIf(!HAS_DB)("the claim builds the chosen format, its entrants and i
       expect(rows.map((r) => r.members), `${s.key}: name-only`).toEqual(rows.map(() => 0));
       expect(rows.map((r) => r.display_name), s.key).toEqual(seeds(n).map((i) => ui("en", NAME_KEY[want], i)));
       expect(await divisionNameOf(c.divisionId), `${s.key}: the division is named as the dictionary names its sport`).toBe(
-        ui("en", `sport.${s.module}`),
+        divisionNameFor("en", s.module),
       );
       kinds.add(want);
       checked++;
@@ -224,7 +228,8 @@ describe.skipIf(!HAS_DB)("the claim builds the chosen format, its entrants and i
 
   it("placeholder names, the venue and its courts follow the draft's language", async () => {
     // An individual sport and a team sport in every language: both name keys are read per locale.
-    const sports = [FUNNEL_SPORTS.find((s) => s.key === "badminton")!, FUNNEL_SPORTS.find((s) => s.key === "football")!];
+    // Other too: it names no sport, so its division takes the funnel's own word for it, never the module's "Generic".
+    const sports = ["badminton", "football", "other"].map((k) => FUNNEL_SPORTS.find((s) => s.key === k)!);
     const n = 3;
     let checked = 0;
     for (const locale of LOCALES) {
@@ -234,13 +239,20 @@ describe.skipIf(!HAS_DB)("the claim builds the chosen format, its entrants and i
         expect((await entrantsOf(c.divisionId)).map((e) => e.display_name), `${locale} ${s.key}`).toEqual(
           seeds(n).map((i) => ui(locale, NAME_KEY[kind], i)),
         );
-        expect(await divisionNameOf(c.divisionId), `${locale} ${s.key}: the division`).toBe(ui(locale, `sport.${s.module}`));
+        expect(await divisionNameOf(c.divisionId), `${locale} ${s.key}: the division`).toBe(divisionNameFor(locale, s.module));
         expect((await venuesOf(c.orgId)).map((v) => v.name), `${locale}: the venue`).toEqual([ui(locale, "funnel.claim.venue")]);
         expect((await courtsOf(c.orgId)).map((x) => x.name), `${locale}: the courts`).toEqual([1, 2].map((i) => ui(locale, "funnel.claim.court", i)));
         checked++;
       }
     }
-    expect(checked, "anti-vacuity: every language × both kinds").toBe(LOCALES.length * sports.length);
+    expect(checked, "anti-vacuity: every language × each sport").toBe(LOCALES.length * sports.length);
+    // Other's word is not the module's "Generic" in any language, and each language words it its own way.
+    for (const l of LOCALES) {
+      expect(ui(l, "funnel.claim.division.other"), `premise: ${l} words Other apart from Generic`).not.toBe(ui(l, "sport.generic"));
+    }
+    expect(new Set(LOCALES.map((l) => ui(l, "funnel.claim.division.other"))).size, "premise: every language words Other its own way").toBe(
+      LOCALES.length,
+    );
     // Each language can be told from the fallback only while the dictionaries differ.
     expect(new Set(LOCALES.map((l) => ui(l, NAME_KEY.individual))).size, "premise: every language names a player its own way").toBe(LOCALES.length);
     expect(new Set(LOCALES.map((l) => ui(l, "sport.football"))).size, "premise: the languages name football differently").toBeGreaterThan(1);

@@ -8511,5 +8511,6 @@
   "funnel.claim.entrant.pair": "Paar {n}",
   "funnel.claim.entrant.team": "Team {n}",
   "funnel.claim.venue": "Hoofdlocatie",
-  "funnel.claim.court": "Baan {n}"
+  "funnel.claim.court": "Baan {n}",
+  "funnel.claim.division.other": "Overig"
 }

@@ -193,7 +193,9 @@ export async function createFromDraft(
   // 0. Pre-flight.
   const dict = await getDictionary(draft.locale ?? DEFAULT_LOCALE, "ui");
   const { sport_key, variant_key } = await resolveSport(payload.sport);
-  const sportName = lookup(dict, `sport.${sport_key}`);
+  // Other (and a name the registry does not know) builds the generic module, whose dictionary name is "Generic" — a word
+  // for the engine, not for an organiser's division.
+  const sportName = lookup(dict, sport_key === "generic" ? "funnel.claim.division.other" : `sport.${sport_key}`);
   // Org-wide: a competition created a moment from now holds no Event Pass and no add-on aimed at it, so this is the
   // answer its division's entrant write will get.
   const cap = await getLimit(org.id, ENTRANT_CAP_KEY);

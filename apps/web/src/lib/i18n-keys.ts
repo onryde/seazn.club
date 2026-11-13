@@ -3405,6 +3405,7 @@ export type DictionaryKey =
   | "formats.meta.title"
   | "formats.subhead"
   | "funnel.claim.court"
+  | "funnel.claim.division.other"
   | "funnel.claim.entrant.individual"
   | "funnel.claim.entrant.pair"
   | "funnel.claim.entrant.team"

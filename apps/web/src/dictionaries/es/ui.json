@@ -8511,5 +8511,6 @@
   "funnel.claim.entrant.pair": "Pareja {n}",
   "funnel.claim.entrant.team": "Equipo {n}",
   "funnel.claim.venue": "Sede principal",
-  "funnel.claim.court": "Pista {n}"
+  "funnel.claim.court": "Pista {n}",
+  "funnel.claim.division.other": "Otro"
 }
