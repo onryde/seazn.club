@@ -101,7 +101,8 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { createStageTimer, type StageTimer } from "@/server/timing";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
-import { confirmRegistration, divisionCtx, soloPoolIsFull } from "../registrations";
+import { confirmRegistration, soloPoolIsFull } from "../registrations";
+import { cartAsWritten } from "./_registration-fixtures";
 import { assignSoloSignUp } from "../registration-assign";
 import {
   submitRegistrationGroup,
@@ -3373,13 +3374,9 @@ describe.skipIf(!HAS_DB)("submitRegistrationGroup: known_cart is the cart it jus
     answers: {},
   });
 
-  /** What the mint read before this change, against the committed cart. */
-  async function mintReads(groupId: string, firstDivisionId: string) {
-    const [group] = await sql<{ payment_method: string | null }[]>`select payment_method from registration_groups where id = ${groupId}`;
-    const payable = await sql<{ id: string }[]>`
-      select id from registrations where group_id = ${groupId} and status = 'pending' and amount_cents > 0 order by created_at`;
-    return { paymentMethod: group!.payment_method, payableIds: payable.map((r) => r.id), ctx: await divisionCtx(sql, firstDivisionId) };
-  }
+  /** What the mint read itself before it was handed the known cart, against the committed cart: `cartAsWritten`
+   *  (_registration-fixtures.ts), the one copy of those reads since B1 fix round 1 moved them out of the mint. */
+  const mintReads = cartAsWritten;
 
   it("a card cart (two divisions, one entry waitlisted): the method, the payable entries in cart order, the first entry's context", async () => {
     const card = await twoDivisions({ charges: true }, { entrant_kind: "individual", fee_cents: 1000, payment_method: "stripe", capacity: 1 });

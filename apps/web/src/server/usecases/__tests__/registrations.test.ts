@@ -173,6 +173,7 @@ import {
   SETTINGS_BASE,
   stripeRig,
   currencyRig,
+  cartAsWritten,
 } from "./_registration-fixtures";
 import { FIRST_PAID_EARN, balance, walletIdFor } from "@/lib/credits";
 import { staffAlertDrops, staffRows } from "./_money-fixtures";
@@ -5587,6 +5588,7 @@ describe.skipIf(!HAS_DB)("mintGroupCheckout — group-scoped Stripe session (RS0
       division.id,
       "http://test.local",
       first.access_token,
+      await cartAsWritten(first.registration.group_id, division.id),
     );
     expect(url).toBe("https://checkout.stripe.test/session");
 
@@ -5637,6 +5639,7 @@ describe.skipIf(!HAS_DB)("mintGroupCheckout — group-scoped Stripe session (RS0
       division.id,
       "http://test.local",
       paid.access_token,
+      await cartAsWritten(paid.registration.group_id, division.id),
     );
     expect(url).not.toBeNull();
 
@@ -5665,6 +5668,7 @@ describe.skipIf(!HAS_DB)("mintGroupCheckout — group-scoped Stripe session (RS0
       division.id,
       "http://test.local",
       first.access_token,
+      await cartAsWritten(first.registration.group_id, division.id),
     );
     expect(url).not.toBeNull();
 
@@ -5686,6 +5690,7 @@ describe.skipIf(!HAS_DB)("mintGroupCheckout — group-scoped Stripe session (RS0
       division.id,
       "http://test.local",
       res.access_token,
+      await cartAsWritten(res.registration.group_id, division.id),
     );
     expect(url).toBeNull();
     expect(stripeMock.checkoutCreate).not.toHaveBeenCalled();
@@ -5708,6 +5713,7 @@ describe.skipIf(!HAS_DB)("mintGroupCheckout — group-scoped Stripe session (RS0
       division.id,
       "http://test.local",
       res.access_token,
+      await cartAsWritten(res.registration.group_id, division.id),
     );
     expect(url).toBeNull();
     expect(stripeMock.checkoutCreate).not.toHaveBeenCalled();
@@ -5761,6 +5767,7 @@ describe.skipIf(!HAS_DB)("mintGroupCheckout — per-currency matrix (RS003 W4)",
         division.id,
         "http://test.local",
         first.access_token,
+        await cartAsWritten(first.registration.group_id, division.id),
       );
       expect(url).toBe("https://checkout.stripe.test/session");
 
@@ -5819,7 +5826,7 @@ describe.skipIf(!HAS_DB)("mintGroupCheckout — per-currency matrix (RS003 W4)",
       payment_method: "stripe",
     });
     await expect(
-      mintGroupCheckout(res.registration.group_id, division.id, "http://test.local", res.access_token),
+      mintGroupCheckout(res.registration.group_id, division.id, "http://test.local", res.access_token, await cartAsWritten(res.registration.group_id, division.id)),
     ).rejects.toMatchObject({ status: 422, code: "REGISTRATION_CURRENCY_UNAVAILABLE" });
     expect(stripeMock.checkoutCreate).not.toHaveBeenCalled();
   });
@@ -5841,7 +5848,7 @@ describe.skipIf(!HAS_DB)("mintGroupCheckout — per-currency matrix (RS003 W4)",
       payment_method: "stripe",
     });
     await expect(
-      mintGroupCheckout(res.registration.group_id, division.id, "http://test.local", res.access_token),
+      mintGroupCheckout(res.registration.group_id, division.id, "http://test.local", res.access_token, await cartAsWritten(res.registration.group_id, division.id)),
     ).rejects.toMatchObject({ status: 422, code: "REGISTRATION_CURRENCY_UNAVAILABLE" });
     expect(stripeMock.checkoutCreate).not.toHaveBeenCalled();
   });

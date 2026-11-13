@@ -115,13 +115,13 @@ export async function POST(req: Request, { params }: Ctx) {
     // Stripe itself, and the status page's resume-checkout path re-mints on
     // demand — so the honest response is "you are registered, there is no
     // payment link yet", not "your registration failed".
-    // mintGroupCheckout still THROWS for its direct callers (resume-checkout,
-    // waitlist promotion), where there is no committed-and-lost work to
-    // protect and a 422/503 is exactly what the caller should see.
+    // This route is mintGroupCheckout's only production caller; it is the one
+    // place that catches its throws. Resume-checkout and the player payment
+    // page mint through their own functions, which throw to their callers.
     let checkout_url: string | null = null;
     // For the timing line only: what the cart charges, as far as this route can tell without another read. `mintGroupCheckout`
     // answers null for a payable cart only when its group is not a card cart, so null here is an offline cart. The mint is handed the
-    // cart the submit just wrote (B1 T5), so it does not read the cart's method, payable entries or division context back.
+    // cart the submit just wrote (B1 T5) and requires it: it does not read the cart's method, payable entries or division context.
     let paymentMethod: "none" | "card" | "offline" | "mint_failed" = "none";
     if (result.amount_cents > 0) {
       try {

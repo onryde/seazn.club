@@ -32,9 +32,8 @@ import { loadSettings, divisionCtx, tokenMatchesHash, orgReg } from "./lookups";
  * (`notifySubmitted`), the organiser resend action
  * (`resendRegistrationConfirmation`) and the dispute-evidence
  * reconstruction (`buildDisputeEvidence`) — one query decides what "this
- * cart's confirmation email" contains, the same re-select-fresh-state
- * convention `mintGroupCheckout` uses rather than trusting a caller's
- * snapshot. Returns null (never throws) for a nonexistent group or one
+ * cart's confirmation email" contains, re-selecting fresh state rather
+ * than trusting a caller's snapshot. Returns null (never throws) for a nonexistent group or one
  * with no entries — should not happen in practice; kept as a defensive
  * no-op for the fire-and-forget submit-time caller.
  *

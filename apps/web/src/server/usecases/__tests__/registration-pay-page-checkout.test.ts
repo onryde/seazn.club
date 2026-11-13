@@ -20,7 +20,7 @@
 // "Pay on a paid entry 409" (moved to T5 by the ledger ruling: the first task where a producer issues a token).
 //
 // Real Postgres required; skipped without DATABASE_URL (matches every sibling usecase suite in this directory).
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import type Stripe from "stripe";
 
@@ -136,6 +136,7 @@ import {
   seedSecondEntry,
   loadWithGroup,
   SETTINGS_BASE,
+  cartAsWritten,
   type StripeRigResult,
 } from "./_registration-fixtures";
 
@@ -340,7 +341,7 @@ describe.skipIf(!HAS_DB)("payFromPayPage (player payment page, Task 3)", () => {
   it("a stored session covering [A,B] is not reused for A → a new create for [A] only", async () => {
     const { rig, reg: a, accessToken } = await cardEntry();
     const b = await seedSecondEntry(a.group_id, rig.division.id, 1500, "Entry B");
-    await mintGroupCheckout(a.group_id, rig.division.id, ORIGIN, accessToken);
+    await mintGroupCheckout(a.group_id, rig.division.id, ORIGIN, accessToken, await cartAsWritten(a.group_id, rig.division.id));
     const sAB = (await loadWithGroup(a.id)).checkout_session_id!;
     expect(stripeMock.store.get(sAB)!.metadata.registration_ids.split(",").sort()).toEqual([a.id, b.id].sort());
     // The input this guard exists for: an entry pointer naming a multi-entry session (hand-set; no producer stamps one).
@@ -648,7 +649,7 @@ describe.skipIf(!HAS_DB)("payFromPayPage (player payment page, Task 3)", () => {
 
   it("regression: in-app mints keep their return URLs (no opts)", async () => {
     const { rig, reg, accessToken } = await cardEntry({ refCode: "PQ" + randomUUID().slice(0, 4).toUpperCase() });
-    await mintGroupCheckout(reg.group_id, rig.division.id, ORIGIN, accessToken);
+    await mintGroupCheckout(reg.group_id, rig.division.id, ORIGIN, accessToken, await cartAsWritten(reg.group_id, rig.division.id));
     const statusBase =
       `${ORIGIN}/live/${rig.orgSlug}/${rig.competition.slug}/register/status` +
       `?rid=${reg.group_id}&token=${encodeURIComponent(accessToken)}`;
@@ -716,7 +717,7 @@ describe.skipIf(!HAS_DB)("payFromPayPage (player payment page, Task 3)", () => {
     async function cartWithOpenSession() {
       const { rig, reg: a, accessToken } = await cardEntry({ displayName: "Entry A" });
       const b = await seedSecondEntry(a.group_id, rig.division.id, 1500, "Entry B");
-      await mintGroupCheckout(a.group_id, rig.division.id, ORIGIN, accessToken);
+      await mintGroupCheckout(a.group_id, rig.division.id, ORIGIN, accessToken, await cartAsWritten(a.group_id, rig.division.id));
       const sAB = (await loadWithGroup(a.id)).checkout_session_id!;
       return { rig, a, b, sAB };
     }
@@ -1243,7 +1244,7 @@ describe.skipIf(!HAS_DB)("a late payment refunded after a lapse leaves both Pay 
   async function lateAndPendingSibling() {
     const w = await promotedEntry();
     const b = await seedSecondEntry(w.reg.group_id, w.rig.division.id, 1500, "Entry B");
-    await mintGroupCheckout(w.reg.group_id, w.rig.division.id, ORIGIN, w.accessToken);
+    await mintGroupCheckout(w.reg.group_id, w.rig.division.id, ORIGIN, w.accessToken, await cartAsWritten(w.reg.group_id, w.rig.division.id));
     const cs = (await pointersOf(w.reg.id)).cart!;
     const named = stripeMock.store.get(cs)!.metadata.registration_ids.split(",");
     expect([...named].sort(), "premise: one session names both entries").toEqual([w.reg.id, b.id].sort());
@@ -1580,7 +1581,7 @@ describe.skipIf(!HAS_DB)("the status page's Pay hands an open session out again 
   /** A card entry submitted the way the public register route does it: `mintGroupCheckout` mints the sign-up Checkout. */
   async function signedUp() {
     const { rig, reg, accessToken } = await cardEntry();
-    const url = await mintGroupCheckout(reg.group_id, rig.division.id, ORIGIN, accessToken);
+    const url = await mintGroupCheckout(reg.group_id, rig.division.id, ORIGIN, accessToken, await cartAsWritten(reg.group_id, rig.division.id));
     const s0 = (await cartPointer(reg.id))!;
     expect(url, "premise: the sign-up handed out the session the cart records").toBe(stripeMock.store.get(s0)!.url);
     return { rig, reg, accessToken, s0 };
@@ -1697,7 +1698,7 @@ describe.skipIf(!HAS_DB)("the status page's Pay hands an open session out again 
     it("a session that also covers a SIBLING is not this entry's to expire: left alone, as the supersede rule leaves it", async () => {
       const { rig, reg: a, accessToken } = await cardEntry({ displayName: "Entry A" });
       await seedSecondEntry(a.group_id, rig.division.id, 1500, "Entry B");
-      await mintGroupCheckout(a.group_id, rig.division.id, ORIGIN, accessToken);
+      await mintGroupCheckout(a.group_id, rig.division.id, ORIGIN, accessToken, await cartAsWritten(a.group_id, rig.division.id));
       const sAB = (await cartPointer(a.id))!;
       const now = new Date();
       stripeMock.store.get(sAB)!.expires_at = Math.floor(now.getTime() / 1000) + 9 * 60;
@@ -1712,7 +1713,7 @@ describe.skipIf(!HAS_DB)("the status page's Pay hands an open session out again 
   it("a sign-up session covering [A,B] is not handed to A's Pay (it would charge B too); A's own session then is, on the next press", async () => {
     const { rig, reg: a, accessToken } = await cardEntry({ displayName: "Entry A" });
     const b = await seedSecondEntry(a.group_id, rig.division.id, 1500, "Entry B");
-    await mintGroupCheckout(a.group_id, rig.division.id, ORIGIN, accessToken);
+    await mintGroupCheckout(a.group_id, rig.division.id, ORIGIN, accessToken, await cartAsWritten(a.group_id, rig.division.id));
     const sAB = (await cartPointer(a.id))!;
     expect(stripeMock.store.get(sAB)!.metadata.registration_ids?.split(",").sort(), "premise").toEqual([a.id, b.id].sort());
 
@@ -1959,10 +1960,10 @@ describe.skipIf(!HAS_DB)("A → sibling B → A on the status page: one payable 
 
 // ---------------------------------------------------------------------------------------------------------------------------------
 // Registration redesign B1 T5 (spec 2026-11-13 §3.3 item 3): the register route hands `mintGroupCheckout` the cart the submit has
-// just written (`known_cart`): its payment method, its payable entry ids in cart order and its division context. The mint then skips
-// its three reads of the same facts (the cart's method, its payable ids, the division context) and must create EXACTLY the session
-// it would have created from those reads. The oracle for "the same session" is the mint's own read path on the same cart, in the
-// same state; the oracle for "three fewer" is the three statements the read path issues and the known path does not.
+// just written (`known_cart`): its payment method, its payable entry ids in cart order and its division context. B1 fix round 1
+// (review M1) removed the mint's own read path for those facts (it had no production caller), so `known` is required; that the
+// known cart equals what those reads would answer is pinned where it is built (registration-submit.test.ts, "known_cart is the cart
+// it just wrote"), and suites that seed a cart without a submit take it from `cartAsWritten` (_registration-fixtures.ts).
 //
 // Sport: not applicable (Checkout is sport-agnostic).
 // ---------------------------------------------------------------------------------------------------------------------------------
@@ -1984,39 +1985,9 @@ describe.skipIf(!HAS_DB)("mintGroupCheckout with the cart the submit just wrote 
     return { value, statements: statementCount() - before };
   }
 
-  /** Back to the state before any mint: no session stamped on the cart, so the next mint takes the same path as the first. */
-  async function unstamp(groupId: string): Promise<void> {
-    await sql`update registration_groups set checkout_session_id = null where id = ${groupId}`;
-  }
-
-  /** The same cart minted twice in the same state: once from the mint's own reads, once from the known cart. */
-  async function bothWays() {
-    const warm = await cardCart();
-    await mintGroupCheckout(warm.a.group_id, warm.rig.division.id, ORIGIN, warm.accessToken); // warm-up: first-use caches, either way
-    const c = await cardCart();
-    stripeMock.checkoutCreate.mockClear();
-    const read = await counted(() => mintGroupCheckout(c.a.group_id, c.rig.division.id, ORIGIN, c.accessToken));
-    await unstamp(c.a.group_id);
-    const known = await counted(() => mintGroupCheckout(c.a.group_id, c.rig.division.id, ORIGIN, c.accessToken, c.known));
-    return { c, read, known };
-  }
-
-  it("mint with known cart issues 3 fewer statements than without (same cart, same state)", async () => {
-    const { read, known } = await bothWays();
-    expect(read.value, "premise: the read path minted").toMatch(/^https:\/\/checkout\.stripe\.test\//);
-    expect(known.value, "premise: the known path minted").toMatch(/^https:\/\/checkout\.stripe\.test\//);
-    expect(read.statements - known.statements, `read path ${read.statements}, known path ${known.statements}`).toBe(3);
-  });
-
-  it("mint with known cart creates the same Stripe session params, naming only the payable entries", async () => {
-    const { c } = await bothWays();
-    expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(2);
-    const [viaRead, viaKnown] = [createdParams(0), createdParams(1)];
-    expect(viaKnown).toEqual(viaRead);
-    // Anti-vacuity: the compared params do carry the cart, and never the waitlisted entry.
-    expect(viaKnown.metadata!.registration_ids).toBe([c.a.id, c.b.id].join(","));
-    expect(String(viaKnown.metadata!.registration_ids)).not.toContain(c.w.id);
-    expect(viaKnown.line_items, "one line per payable entry").toHaveLength(2);
+  it("known is required: the mint has no read path of its own to fall back on (a type-level pin, checked by tsc)", () => {
+    // No runtime body: `expectTypeOf` is erased at run time, and `tsc` fails this line if `known` ever becomes optional again.
+    expectTypeOf(mintGroupCheckout).parameter(4).toEqualTypeOf<KnownCart>();
   });
 
   it("known.payableIds empty returns null without a read or a Stripe call (the empty case)", async () => {
