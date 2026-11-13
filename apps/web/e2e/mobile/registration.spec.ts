@@ -408,6 +408,23 @@ test("register stepper: ENTRIES/DETAILS/CONSENT/REVIEW hold at this width, no ho
       });
       await expect(anon.getByText("Stepper Solo")).toBeVisible();
       await expectNoHorizontalScroll(anon);
+
+      // The org header scrolls away on a phone while the register form is up, and only then (B2 T8, spec 7.2; B2 review m9). The rule is
+      // a CSS `:has()` match no unit test can see, so it is read here as the browser computes it: `static` below the `md` breakpoint
+      // (768px, the spec's own number) on the register flow, `sticky` from md up, and `sticky` at EVERY width on a page that is not the
+      // register flow (the competition hub, under the same layout). The header keeps its `sticky` class in both states, so the locator
+      // finds it either way and the computed `position` is the thing under test.
+      const headerPosition = (page: typeof anon) =>
+        page.locator("header.sticky").first().evaluate((el) => getComputedStyle(el).position);
+      const PHONE_BELOW = 768;
+      expect(
+        await headerPosition(anon),
+        `the org header on the register flow at ${vw}px (static below ${PHONE_BELOW}, sticky from it)`,
+      ).toBe(vw < PHONE_BELOW ? "static" : "sticky");
+      await anon.goto(`/live/${org.slug}/${comp.data!.slug}`, { waitUntil: "load" });
+      expect(await headerPosition(anon), `the org header on a page that is not the register flow at ${vw}px: pinned at every width`).toBe(
+        "sticky",
+      );
     } finally {
       await anonCtx.close();
     }
