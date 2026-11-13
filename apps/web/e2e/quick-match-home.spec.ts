@@ -77,7 +77,8 @@ test("home (Task 5): a league of 4 with a 43-character side, at 320, 768 and 128
     await expect(page.getByTestId("qm-played"), `${width}`).toHaveText("0 of 6 matches played · deleted 7 days after the last score unless saved");
     await expect(page.getByTestId("qm-hero"), `${width}`).toContainText("Up next · match 1 of 6");
     await expect(page.getByTestId("qm-standings-row"), `${width}`).toHaveCount(4);
-    await expect(page.getByTestId("qm-standings").getByText(LONG), `${width}`).toBeVisible();
+    // The short table's own row header: the closed Full table's copy of the name is in the DOM too (a native <details>).
+    await expect(page.getByTestId("qm-standings-row").getByRole("rowheader", { name: LONG, exact: true }), `${width}`).toBeVisible();
     await expect(page.getByTestId("qm-match"), `${width}`).toHaveCount(6);
     await expect(page.getByTestId("qm-anyone"), `${width}`).toBeVisible();
     // Plan 3 Task 5 (D13 lifted): an unsaved match offers Save to anyone, a 44px target in the actions row.
@@ -101,6 +102,7 @@ test("Full table (owner 2026-11-12): at 1280, 768 and 320 the fold opens in plac
   const EN_UI = readDict("../src/dictionaries/en/ui.json");
   const EN_PUB = readDict("../src/dictionaries/en/public.json");
   const label = EN_UI["quickMatch.home.fullTable"]!;
+  const regionName = EN_PUB["table.regionCaptioned"]!.replace("{caption}", label);
   await createThroughSetup(page, [LONG, "Priya & Tom", "Lee & Ana", "Jo & Max"]);
   let checked = 0;
   const WIDTHS = [1280, 768, 320] as const;
@@ -115,12 +117,20 @@ test("Full table (owner 2026-11-12): at 1280, 768 and 320 the fold opens in plac
     await expect(short, `${width}`).toBeVisible();
     await expect(toggle, `${width}`).toContainText(label);
     await expect(region, `${width}: closed`).toBeHidden();
+    // Closed, the fold's table is in the DOM (no script: a native <details>) but NOT in the accessibility tree: one row
+    // header for the side (the short table's), and no region by the fold's name.
+    await expect(page.getByTestId("qm-full-table-row"), `${width}: closed, its rows are in the DOM`).toHaveCount(4);
+    await expect(page.getByRole("rowheader", { name: LONG, exact: true }), `${width}: closed, one row header for the side`).toHaveCount(1);
+    await expect(page.getByRole("region", { name: regionName }), `${width}: closed, the region is not exposed`).toHaveCount(0);
     expect((await toggle.boundingBox())?.height ?? 0, `${width}: the toggle is a 44px target`).toBeGreaterThanOrEqual(44);
 
     await toggle.click();
     await expect(fold, `${width}: open`).toHaveAttribute("open", "");
     await expect(region, `${width}`).toBeVisible();
     await expect(short, `${width}: one table at a time`).toBeHidden();
+    // Open, the accessibility tree swaps tables with the screen: the region by its name, still one row header for the side.
+    await expect(page.getByRole("region", { name: regionName }), `${width}: open, the region is exposed`).toHaveCount(1);
+    await expect(page.getByRole("rowheader", { name: LONG, exact: true }), `${width}: open, one row header for the side`).toHaveCount(1);
     // More than the short table's columns, Lost among them, and every side a row.
     const heads = page.getByTestId("qm-full-table-head").locator("th[title]");
     expect(await heads.count(), `${width}: more than P, W and Pts`).toBeGreaterThan(3);
@@ -130,7 +140,7 @@ test("Full table (owner 2026-11-12): at 1280, 768 and 320 the fold opens in plac
     // Its own scrolling region: a role, a name and a tab stop (axe's scrollable-region-focusable), and the page stays put.
     await expect(region).toHaveAttribute("role", "region");
     await expect(region).toHaveAttribute("tabindex", "0");
-    await expect(region).toHaveAttribute("aria-label", EN_PUB["table.regionCaptioned"]!.replace("{caption}", label));
+    await expect(region).toHaveAttribute("aria-label", regionName);
     await region.focus();
     await expect(region, `${width}: the region takes focus`).toBeFocused();
     await expectNoHorizontalScroll(page);
