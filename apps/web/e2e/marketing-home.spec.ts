@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { HERO_AUTO_PLAYS, heroScoreText, type HeroSceneKey } from "../src/components/marketing/hero-scenes";
+import { waitForHydration } from "./directory-kit";
 
 // The home page redirects signed-in users to /dashboard — run signed out.
 test.use({ storageState: { cookies: [], origins: [] } });
@@ -221,15 +222,26 @@ test.describe("marketing home (design/v3/12)", () => {
     await expect(scoreOf(page)).toHaveText(heroScoreText(sport, 1));
   });
 
-  test("the organiser's setup is one link below the Start, to the /start wizard", async ({ page }) => {
+  // Start wizard plan T5 (review m2): the link follows the hero's Sport select, so /start opens on the sport picked there.
+  // The SECOND offered sport, read off the select: a link stuck on the select's first (its default) cannot pass. The href is
+  // read BEFORE the click, so a link that only rewrote itself on the way out would fail here too.
+  test("the organiser's setup is one link below the Start, to the /start wizard, on the sport the select picked", async ({ page }) => {
     await page.goto("/en");
     const link = page.getByTestId("hero-event-link");
     await expect(link).toHaveText("Running a full league or tournament? Set up an event →");
     const box = await link.boundingBox();
     expect(box?.height ?? 0, "a 44px tap target").toBeGreaterThanOrEqual(44);
+    await waitForHydration(link);
+    const sport = (await offeredSports(page))[1]!;
+    await page.getByTestId("qm-cta-form").locator('select[name="sport"]').selectOption(sport);
+    await expect(link, "the link follows the pick").toHaveAttribute("href", `/en/start?sport=${sport}`);
     await link.click();
-    await page.waitForURL((url) => url.pathname === "/en/start");
-    await expect(page.getByRole("heading", { name: "Start your competition" })).toBeVisible();
+    await page.waitForURL((url) => url.pathname === "/en/start" && url.searchParams.get("sport") === sport);
+    const wizard = page.locator("[data-start-wizard]");
+    await expect(wizard).toHaveAttribute("data-step", "sport");
+    await expect(page.getByRole("heading", { name: "Set up an event" })).toBeVisible();
+    await expect(wizard.locator('input[name="sport"]:checked'), "the wizard opens on that sport, and only it").toHaveCount(1);
+    await expect(wizard.locator('input[name="sport"]:checked')).toHaveAttribute("value", sport);
   });
 
   test("nav flips from night to solid after the hero", async ({ page }) => {

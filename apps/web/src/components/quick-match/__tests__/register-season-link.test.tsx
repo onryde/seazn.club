@@ -154,6 +154,24 @@ describe("the door's href: /start with the sport, or plain /start", () => {
     expect(checked).toBe(refused.length);
   });
 
+  it("a sport given by its NAME is sent as its key (the docstring's \"by key or name, sent as its key\")", () => {
+    // The sports table's display names (start wizard plan N6 / T1's FUNNEL_SPORTS), typed here with the key each names:
+    // a name with a space or a different word from its key is the case a raw pass-through would get wrong.
+    const named: readonly (readonly [string, string])[] = [
+      ["Table Tennis", "tabletennis"],
+      ["table tennis", "tabletennis"],
+      ["Ice Hockey", "icehockey"],
+      ["Chess", "boardgame"],
+    ];
+    let checked = 0;
+    for (const [name, key] of named) {
+      expect(startHrefForSport("en", name), name).toBe(`/en/start?sport=${key}`);
+      expect(arrival(startHrefForSport("en", name)).sport, `${name}: /start opens on ${key}`).toBe(key);
+      checked++;
+    }
+    expect(checked).toBe(named.length);
+  });
+
   it("every sport the chips can emit round-trips: /start opens on it, in every language, with `sport` the only param", () => {
     let checked = 0;
     for (const lang of LOCALES) {
