@@ -281,10 +281,11 @@ const seedFixture = (id: string, home: number | null, away: number | null): Sche
  *  pairings are fixed in advance, so its rounds may run side by side), a bracket's with its feeds as dependencies (a bye
  *  or walkover is not a board, so it passes its own feeders through).
  *
- *  The product's fixture ids are random uuids, so the order the boards reach the placer is any order Auto-schedule can
- *  meet. Two are tried and the better kept: the draw's own, and the boards with the most still waiting on them first (a
+ *  Two orders are tried and the better kept: the draw's own, and the boards with the most still waiting on them first (a
  *  bracket's farthest from its final, a round robin's bigger pools within each round) — the second only when it differs,
- *  since a placement costs time quadratic in its boards. */
+ *  since a placement costs time quadratic in its boards. So the card's "≈" hours are an estimate: the best day a
+ *  schedule can reach (achievable, a legal board exists), not what the greedy placer's uuid-ordered fallback produces —
+ *  that one hands brackets over by fixture id and can run a slot or two longer (review-t1 m-R2). */
 function placeStage(draw: readonly PreviewDrawFixture[], courts: number, from: number): { end: number; listed: boolean } {
   const at = (round: number, seq: number) => `${round}:${seq}`;
   const byAt = new Map(draw.map((f) => [at(f.roundNo, f.seqInRound), f]));
