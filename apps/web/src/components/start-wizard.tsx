@@ -277,11 +277,13 @@ export function StartWizard({ initial, maxEntrants, today, utcDay, playSports }:
     </button>
   );
 
+  // md+: the heading's row is only as tall as the heading and the rail's row takes the rest, so the card spanning both never
+  // stretches the heading's row and the rail sits right under the heading on every step (sign-off D1).
   return (
     <div
       data-start-wizard
       data-step={s.step}
-      className="mx-auto w-full max-w-xl px-4 md:grid md:max-w-5xl md:grid-cols-[15rem_minmax(0,1fr)] md:gap-x-10 md:px-6 lg:grid-cols-[18rem_minmax(0,1fr)]"
+      className="mx-auto w-full max-w-xl px-4 md:grid md:max-w-5xl md:grid-cols-[15rem_minmax(0,1fr)] md:grid-rows-[auto_1fr] md:gap-x-10 md:px-6 lg:grid-cols-[18rem_minmax(0,1fr)]"
     >
       <h1 className="mk-display text-xs font-bold tracking-[0.22em] text-[var(--mk-lime)] md:col-start-1 md:row-start-1">
         {t("start.heading")}

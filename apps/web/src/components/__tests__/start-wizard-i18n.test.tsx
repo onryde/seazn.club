@@ -72,6 +72,7 @@ import { LOCALES, type Locale } from "@/lib/i18n-constants";
 import { parseStartPrefill } from "@/app/[lang]/(marketing)/start/prefill";
 import { CountStepper, StartWizard, type StartWizardProps } from "../start-wizard";
 import { pickWizardDict } from "../start-wizard-model";
+import { compileClasses } from "@/components/v2/__tests__/_compiled-css";
 
 const TODAY = "2026-11-12"; // a Thursday: the parser's tolerance, the UTC day less one
 const UTC_DAY = "2026-11-13"; // the server's UTC day, a Friday
@@ -469,6 +470,42 @@ describe("the wizard's edges", () => {
       await submit(island);
       expect(all(island).filter((e) => propsOf(e)["data-claim-url"] !== undefined)).toHaveLength(want);
     }
+  });
+});
+
+describe("the answers rail sits right under the heading at md+ on every step (sign-off D1)", () => {
+  // The card spans the heading's row and the rail's (md:row-span-2). With no row template both rows are auto, and a tall
+  // card's extra height is shared between them — the heading's row grew with the card, pushing the rail 18-242px down,
+  // a different distance on every step (measured at 768 and 1280). An explicit template whose first row is the heading's
+  // own height and whose second is flexible gives all the extra to the rail's row. apps/web vitest has no layout engine,
+  // so this pins the compiled template; the browser measurement is the fix round's report.
+  const tokens = (el: ReactElement) => String(propsOf(el).className ?? "").split(/\s+/).filter(Boolean);
+
+  it("the md grid declares an auto heading row and a flexible rail row, the two rows the card spans", async () => {
+    words.locale = "en";
+    words.dict = pageDict("en");
+    let checked = 0;
+    for (const step of ["sport", "size", "date", "email"]) {
+      const island = mount({ search: { sport: "football", entrants: "12", format: "league", step } });
+      expect(propsOf(all(island).find((e) => propsOf(e)["data-start-wizard"] !== undefined)!)["data-step"], "premise: the step opened").toBe(step);
+      const root = all(island).find((e) => propsOf(e)["data-start-wizard"] !== undefined)!;
+      const h1 = all(island).find((e) => e.type === "h1")!;
+      const rail = all(island).find((e) => e.type === "aside")!;
+      const card = all(island).find((e) => e.type === "section")!;
+      // The placement the template is written for: heading in row 1, rail in row 2, the card across both.
+      expect(tokens(h1), `${step}: heading`).toContain("md:row-start-1");
+      expect(tokens(rail), `${step}: rail`).toContain("md:row-start-2");
+      expect(tokens(card), `${step}: card`).toEqual(expect.arrayContaining(["md:row-start-1", "md:row-span-2"]));
+      const template = tokens(root).filter((c) => c.startsWith("md:grid-rows-"));
+      expect(template, `${step}: one md row template on the grid`).toHaveLength(1);
+      const compiled = (await compileClasses(template)).get(template[0]!)!;
+      const tracks = (compiled["grid-template-rows"] ?? "").split(/\s+/).filter(Boolean);
+      expect(tracks, `${step}: as many rows as the card spans`).toHaveLength(2);
+      expect(tracks[0], `${step}: the heading's row is the heading's own height`).toBe("auto");
+      expect(tracks[1], `${step}: the rail's row takes the card's extra height`).toMatch(/fr$/);
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
 });
 
