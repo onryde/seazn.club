@@ -43,10 +43,8 @@ async function seedCommunityOrg(): Promise<AuthCtx> {
 }
 
 describe.skipIf(!HAS_DB || !HAS_REDIS)("entitlement cache invalidation (real Redis)", () => {
-  // The client uses enableOfflineQueue:false, so a command fired before the
-  // socket is 'ready' rejects (incrWindow returns null). A long-lived server
-  // warms the singleton once; here we warm it explicitly before asserting —
-  // same pattern as rate-limit.redis.test.ts.
+  // A readiness check, same pattern as rate-limit.redis.test.ts: a Redis that
+  // never comes up fails here once, not as a stale read in every case.
   beforeAll(async () => {
     for (let i = 0; i < 50; i++) {
       if ((await incrWindow(`warmup:${randomUUID()}`, 5)) !== null) return;

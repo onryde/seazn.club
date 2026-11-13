@@ -10,7 +10,33 @@ import { log } from "@/server/logger";
  * unreachable, cache reads miss and writes no-op, so the app falls back to
  * Postgres. Redis is a latency optimisation, never a correctness dependency.
  */
-const globalForRedis = globalThis as unknown as { _redis?: Redis | null };
+const globalForRedis = globalThis as unknown as {
+  _redis?: Redis | null;
+  /** `connected()`'s bookkeeping, kept beside the client it describes so every module instance sharing the client
+   *  shares it too. */
+  _redisConnectState?: WeakMap<Redis, ConnectState>;
+};
+
+/**
+ * The longest a command waits for a connection that is still being established — the client's first connect after a
+ * cold start, or the reconnect after an established connection dropped — before it is sent anyway (and, with the
+ * offline queue off, fails at once into the caller's fallback).
+ */
+export const REDIS_CONNECT_WAIT_MS = 1_000;
+
+interface ConnectState {
+  /** The current connection reached `ready`. Cleared when it closes. */
+  established: boolean;
+  /** Redis reads as unreachable: since the last `ready`, a connection attempt failed or a wait ran out. */
+  down: boolean;
+  /** The one wait in progress, shared by every caller (one set of listeners however many there are). */
+  wait: Promise<void> | null;
+}
+
+const connectStates = (globalForRedis._redisConnectState ??= new WeakMap<Redis, ConnectState>());
+
+/** The statuses in which ioredis is (re)establishing a connection that may yet become `ready`. */
+const CONNECTING: ReadonlySet<string> = new Set(["wait", "connecting", "connect", "reconnecting"]);
 
 function client(): Redis | null {
   if (globalForRedis._redis !== undefined) return globalForRedis._redis;
@@ -22,6 +48,8 @@ function client(): Redis | null {
   const redis = new Redis(url, {
     lazyConnect: false,
     maxRetriesPerRequest: 1,
+    // No offline queue: a command never waits inside ioredis for a connection, so a Redis outage fails fast instead
+    // of hanging requests. `connected()` below is the one bounded exception.
     enableOfflineQueue: false,
     // Don't let a Redis outage crash the process; we fail open per call.
     retryStrategy: (times) => Math.min(times * 200, 2000),
@@ -29,8 +57,58 @@ function client(): Redis | null {
   redis.on("error", () => {
     /* swallow — callers handle null/misses */
   });
+  const state: ConnectState = { established: false, down: false, wait: null };
+  redis.on("ready", () => {
+    state.established = true;
+    state.down = false;
+  });
+  redis.on("close", () => {
+    // A connection that closes without ever becoming ready is a failed attempt: Redis is down. One that WAS ready
+    // dropped, and its reconnect is worth waiting for.
+    if (!state.established) state.down = true;
+    state.established = false;
+  });
+  connectStates.set(redis, state);
   globalForRedis._redis = redis;
   return redis;
+}
+
+/**
+ * Resolves once a connection that is still being established can be used — or when it fails, or after
+ * REDIS_CONNECT_WAIT_MS, whichever comes first. Never rejects. Nothing to wait for (undefined) when the client is
+ * ready, closed for good, or Redis is down.
+ */
+function untilConnected(c: Redis): Promise<void> | undefined {
+  const state = connectStates.get(c);
+  if (!state || state.down || !CONNECTING.has(c.status)) return undefined;
+  state.wait ??= new Promise<void>((resolve) => {
+    const settle = () => {
+      clearTimeout(bound);
+      c.off("ready", settle).off("close", settle).off("end", settle);
+      state.wait = null;
+      resolve();
+    };
+    const bound = setTimeout(() => {
+      // Never ready within the bound (a black-holed or hung Redis): read it as down, so every later command fails at
+      // once until a connection is ready again, instead of each sitting out the bound.
+      state.down = true;
+      settle();
+    }, REDIS_CONNECT_WAIT_MS);
+    c.once("ready", settle).once("close", settle).once("end", settle);
+  });
+  return state.wait;
+}
+
+/**
+ * `client()`, with its connection usable. Without this, the command that first BUILDS the client — and any command
+ * issued while a dropped connection reconnects — finds the socket not yet ready and, with no offline queue, fails on
+ * the spot: the first request after every cold start missed the cache, skipped a fail-open limit's count, or was
+ * refused by a fail-closed limit as an outage.
+ */
+async function connected(): Promise<Redis | null> {
+  const c = client();
+  if (c) await untilConnected(c);
+  return c;
 }
 
 /** True when a Redis URL is configured (cache is active). */
@@ -40,7 +118,7 @@ export function cacheEnabled(): boolean {
 
 /** Get + JSON-parse a cached value, or null on miss/error. */
 export async function cacheGet<T>(key: string): Promise<T | null> {
-  const c = client();
+  const c = await connected();
   if (!c) return null;
   try {
     const raw = await c.get(key);
@@ -52,7 +130,7 @@ export async function cacheGet<T>(key: string): Promise<T | null> {
 
 /** JSON-serialise + set with a TTL (seconds). No-op on error. */
 export async function cacheSet(key: string, value: unknown, ttlSeconds: number): Promise<void> {
-  const c = client();
+  const c = await connected();
   if (!c) return;
   try {
     await c.set(key, JSON.stringify(value), "EX", ttlSeconds);
@@ -69,7 +147,7 @@ export async function cacheSet(key: string, value: unknown, ttlSeconds: number):
  */
 export async function cacheDel(...keys: string[]): Promise<void> {
   if (keys.length === 0) return;
-  const c = client();
+  const c = await connected();
   if (!c) return;
   try {
     await c.del(...keys);
@@ -121,7 +199,7 @@ export function sendAfterDeleteOrBound(deleted: Promise<unknown>, send: () => vo
 
 /** Delete keys matching a glob pattern (e.g. "ent:{org}:*"). No-op on error. */
 export async function cacheDelPattern(pattern: string): Promise<void> {
-  const c = client();
+  const c = await connected();
   if (!c) return;
   try {
     const stream = c.scanStream({ match: pattern, count: 100 });
@@ -207,7 +285,7 @@ export type LeaseAttempt =
 /** GET a lease-guarded key without parsing it. */
 export async function cacheReadRaw(key: string): Promise<RawRead> {
   try {
-    const c = client();
+    const c = await connected();
     if (!c) return { kind: "unavailable" };
     const raw = await c.get(key);
     if (raw === null) return { kind: "absent" };
@@ -235,7 +313,7 @@ export async function cacheLeaseAcquire(
   mode: "absent" | "replace",
 ): Promise<LeaseAttempt> {
   try {
-    const c = client();
+    const c = await connected();
     if (!c) return { kind: "unavailable" };
     const token = randomUUID();
     const marker = LEASE_PREFIX + token;
@@ -282,7 +360,7 @@ export async function cacheLeaseFill(
   stale?: { key: string; ttlSeconds: number },
 ): Promise<boolean> {
   try {
-    const c = client();
+    const c = await connected();
     if (!c) return false;
     const raw = JSON.stringify(value);
     const landed = stale
@@ -298,7 +376,7 @@ export async function cacheLeaseFill(
 /** Give a lease back, if it is still this caller's. Never throws. */
 export async function cacheLeaseRelease(key: string, token: string): Promise<void> {
   try {
-    const c = client();
+    const c = await connected();
     if (!c) return;
     await c.eval(LEASE_RELEASE_LUA, 1, key, LEASE_PREFIX + token);
   } catch (err) {
@@ -340,7 +418,7 @@ function windowCountOf(r: unknown): WindowCount | null {
  * window.
  */
 export async function incrWindow(key: string, windowSeconds: number): Promise<WindowCount | null> {
-  const c = client();
+  const c = await connected();
   if (!c) return null;
   try {
     return windowCountOf(await c.eval(INCR_WINDOW_LUA, 1, key, String(windowSeconds)));
