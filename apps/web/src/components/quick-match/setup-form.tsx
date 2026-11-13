@@ -69,6 +69,9 @@ export interface SetupFormProps {
   copy: Readonly<Record<string, string>>;
   /** The `?e=` the server read (a refusal after a post that ran without the script), or null. */
   initialError: string | null;
+  /** The sport the form opens on: the `?sport=` the server read (the marketing hero's Sport select), already checked
+   *  against this offer (setup-props.ts `prefillSport`). Null or absent: the offer's first. */
+  initialSport?: string | null;
 }
 
 // ---- the pure rules (exported for the tests) ----------------------------------------------------------------------
@@ -171,11 +174,12 @@ interface SideRow {
   name: string;
 }
 
-export function QuickMatchSetupForm({ lang, sports, table, copy, initialError }: SetupFormProps) {
+export function QuickMatchSetupForm({ lang, sports, table, copy, initialError, initialSport }: SetupFormProps) {
   const msg: Msg = (key, vars) => interpolate(copy[key] ?? key, vars);
   const count = (key: string, n: number, vars?: Record<string, string | number>) => plural(copy, key, n, lang, vars);
 
-  const [sportKey, setSportKey] = useState(sports[0].sport_key);
+  // The kinds and rules below open on this sport's, since `sport` is read from it on the first render.
+  const [sportKey, setSportKey] = useState(initialSport ?? sports[0].sport_key);
   const sport = sports.find((s) => s.sport_key === sportKey) ?? sports[0];
   const [kind, setKind] = useState<EntrantKind>(sport.kinds[0].kind);
   const [variantKey, setVariantKey] = useState(sport.defaultVariant);

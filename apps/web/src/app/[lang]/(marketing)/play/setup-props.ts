@@ -56,6 +56,21 @@ export function setupSports(sports: readonly QuickMatchSport[], ui: Dict): Setup
   });
 }
 
+/**
+ * `?sport=` as the island may take it (owner 2026-11-13, "A, apply rec": the marketing hero's Sport select is a GET to
+ * this page): a sport this page's own offer lists, or null, so the form opens on its default (the offer's first). An
+ * unknown key, a sport the offer does not list, a blank or garbage is ignored; the raw value never reaches the island. A
+ * repeated `?sport=` reads its first. Keys are exact (`badminton`, never the funnel's `Badminton`).
+ */
+export function prefillSport(
+  raw: string | string[] | undefined,
+  sports: readonly Pick<SetupSport, "sport_key">[],
+): string | null {
+  const key = (Array.isArray(raw) ? raw[0] : raw)?.trim();
+  if (!key) return null;
+  return sports.some((s) => s.sport_key === key) ? key : null;
+}
+
 const KNOWN_CODES: ReadonlySet<string> = new Set(Object.values(QUICK_MATCH_ERRORS));
 
 /**

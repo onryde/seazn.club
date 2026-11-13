@@ -20,7 +20,7 @@ import { log } from "@/server/logger";
 import { quickMatchPreviewTable } from "@/server/usecases/quick-match-preview";
 import { readRecentQuickMatches } from "@/server/usecases/quick-match-recent";
 import { listQuickMatchSports, type QuickMatchSport } from "@/server/usecases/quick-match-sports";
-import { refusalCode, setupCopy, setupSports } from "./setup-props";
+import { prefillSport, refusalCode, setupCopy, setupSports } from "./setup-props";
 
 export const dynamic = "force-dynamic";
 
@@ -56,22 +56,25 @@ export default async function PlayPage({
   searchParams,
 }: {
   params: Promise<{ lang: string }>;
-  searchParams: Promise<{ e?: string | string[] }>;
+  searchParams: Promise<{ e?: string | string[]; sport?: string | string[] }>;
 }) {
   const { lang } = await params;
   if (!hasLocale(lang)) notFound();
   // The recent strip's rows (Task 9): fail-soft inside `readRecentQuickMatches` (pre-flight A9), read from the visitor
   // cookie only (never minted here: the create route mints it). With each row's played count, for the Continue card:
   // only this page shows it, so only this page pays the fixture read (review m5).
-  const [{ e }, d, ui, offer, recent] = await Promise.all([
+  const [{ e, sport }, d, ui, offer, recent] = await Promise.all([
     searchParams,
     getDictionary(lang, "marketing"),
     getDictionary(lang, "ui"),
     readOffer(),
     readRecentQuickMatches({ counts: true }),
   ]);
-  const [first, ...rest] = setupSports(offer, ui);
+  const sports = setupSports(offer, ui);
+  const [first, ...rest] = sports;
   const refused = refusalCode(e);
+  // The marketing hero's Sport select (owner 2026-11-13): a sport these chips list, else none and the form's default.
+  const initialSport = prefillSport(sport, sports);
   // Owner 2026-11-12 ("if same browser tries to create one more, show the first one"): the newest UNFINISHED match of this
   // browser's recent ones is met first, as a Continue card above the form; the strip keeps the others.
   const { resume, rest: recentRest } = splitRecent(recent);
@@ -111,6 +114,7 @@ export default async function PlayPage({
               table={quickMatchPreviewTable()}
               copy={setupCopy(d, ui)}
               initialError={refused}
+              initialSport={initialSport}
             />
           ) : (
             <section className="py-10">
