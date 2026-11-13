@@ -590,6 +590,16 @@ describe("register status page (RS007 rebuild)", () => {
       expect(html).toMatch(/Confirmation sent to <[^>]+>alex@example\.test<\/[a-z]+>\./);
     });
 
+    // B4 review m3: the address is the registrant's own, so the element that holds it is kept out of session replay. Read off the
+    // element that wraps the address itself (its class list, token by token), never a regex that survives the class being deleted.
+    it("the address sits in an element marked ph-no-capture", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce(BASE_VIEW);
+      const html = await render({ rid: "g1", token: "tok" });
+      const holders = [...html.matchAll(/<([a-z]+) class="([^"]*)">alex@example\.test<\/\1>/g)];
+      expect(holders.length, "one element holds the address").toBe(1);
+      expect(holders[0]![2]!.split(/\s+/)).toContain("ph-no-capture");
+    });
+
     it("reg-status-ref holds the cart reference and a Copy reference button", async () => {
       usecaseMock.groupById.mockResolvedValueOnce(BASE_VIEW);
       const html = await render({ rid: "g1", token: "tok" });
