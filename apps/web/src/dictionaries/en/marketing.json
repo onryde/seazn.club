@@ -496,6 +496,8 @@
   "quickMatch.setup.startCount.one": "· {count} match",
   "quickMatch.setup.startCount.other": "· {count} matches",
   "quickMatch.recent.title": "Your recent quick matches",
+  "quickMatch.continue.action": "Continue",
+  "quickMatch.continue.startNew": "Or start a new quick match",
   "quickMatch.errors.tooManyAlive": "You have {max} quick matches on the go on this device. Save one to make room, or wait for one to expire.",
   "quickMatch.errors.rateLimited": "Too many new matches from this network. Try again in a few minutes.",
   "quickMatch.errors.formatNotOffered": "That format isn't available for this match.",

@@ -496,6 +496,8 @@
   "quickMatch.setup.startCount.one": "· {count} match",
   "quickMatch.setup.startCount.other": "· {count} matchs",
   "quickMatch.recent.title": "Vos matchs rapides récents",
+  "quickMatch.continue.action": "Continuer",
+  "quickMatch.continue.startNew": "Ou lancez un nouveau match rapide",
   "quickMatch.errors.tooManyAlive": "Vous avez {max} matchs rapides en cours sur cet appareil. Enregistrez-en un pour faire de la place, ou attendez qu'un match expire.",
   "quickMatch.errors.rateLimited": "Trop de nouveaux matchs depuis ce réseau. Réessayez dans quelques minutes.",
   "quickMatch.errors.formatNotOffered": "Ce format n'est pas disponible pour ce match.",

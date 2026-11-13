@@ -102,6 +102,10 @@ export interface RecentQuickMatch {
   name: string;
   /** ISO 8601 (UTC). */
   createdAt: string;
+  /** `playedOf`, the home's own count (owner 2026-11-12: the setup page's Continue card says it, and is shown only while
+   *  `played < total`): the card never says a different "played" from the match's home. */
+  played: number;
+  total: number;
 }
 
 /**
@@ -120,19 +124,38 @@ export interface RecentQuickMatch {
  * caller decides what an unreadable strip is.
  */
 export async function listRecentQuickMatches(visitorHash: string, limit = 5): Promise<RecentQuickMatch[]> {
-  const rows = await withTenant(SYSTEM_ORG, (tx) => tx<{ id: string; name: string; created_at: Date; token_enc: Uint8Array }[]>`
-    select id, name, created_at, token_enc
-    from quick_matches
-    where visitor_hash = ${visitorHash} and (expires_at is null or expires_at > now())
-    order by created_at desc, id desc
-    limit ${limit * 2}`);
+  const { rows, fixtures } = await withTenant(SYSTEM_ORG, async (tx) => {
+    const rows = await tx<{ id: string; competition_id: string; name: string; created_at: Date; token_enc: Uint8Array }[]>`
+      select id, competition_id, name, created_at, token_enc
+      from quick_matches
+      where visitor_hash = ${visitorHash} and (expires_at is null or expires_at > now())
+      order by created_at desc, id desc
+      limit ${limit * 2}`;
+    if (rows.length === 0) return { rows, fixtures: [] };
+    // The same fixture read as the account list's (`listMyQuickMatches`), for `playedOf`.
+    const fixtures = await tx<(MatchLineRow & { competition_id: string })[]>`
+      select d.competition_id, f.status, f.outcome, f.home_entrant_id, f.away_entrant_id, f.home_slot_label, f.away_slot_label,
+             f.ext_key
+        from fixtures f
+        join divisions d on d.id = f.division_id
+       where d.competition_id = any(${rows.map((r) => r.competition_id)}::uuid[])`;
+    return { rows, fixtures };
+  });
+  const byCompetition = new Map<string, MatchLineRow[]>();
+  for (const f of fixtures) byCompetition.set(f.competition_id, [...(byCompetition.get(f.competition_id) ?? []), f]);
   const out: RecentQuickMatch[] = [];
   const skipped: { id: string; reason: HomeTokenOpenRefusal }[] = [];
   for (const r of rows) {
     if (out.length === limit) break;
     const opened = tryOpenHomeToken(r.token_enc);
-    if (opened.ok) out.push({ token: opened.token, name: r.name, createdAt: r.created_at.toISOString() });
-    else skipped.push({ id: r.id, reason: opened.reason });
+    if (opened.ok) {
+      out.push({
+        token: opened.token,
+        name: r.name,
+        createdAt: r.created_at.toISOString(),
+        ...playedOf(byCompetition.get(r.competition_id) ?? []),
+      });
+    } else skipped.push({ id: r.id, reason: opened.reason });
   }
   if (skipped.length > 0) {
     log.warn({ skipped }, "quick match recent strip: rows skipped, their home token could not be opened");

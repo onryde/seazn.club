@@ -496,6 +496,8 @@
   "quickMatch.setup.startCount.one": "· {count} wedstrijd",
   "quickMatch.setup.startCount.other": "· {count} wedstrijden",
   "quickMatch.recent.title": "Je recente snelle wedstrijden",
+  "quickMatch.continue.action": "Verder",
+  "quickMatch.continue.startNew": "Of begin een nieuwe snelle wedstrijd",
   "quickMatch.errors.tooManyAlive": "Je hebt {max} snelle wedstrijden lopen op dit apparaat. Bewaar er een om ruimte te maken, of wacht tot er een verloopt.",
   "quickMatch.errors.rateLimited": "Te veel nieuwe wedstrijden vanaf dit netwerk. Probeer het over een paar minuten opnieuw.",
   "quickMatch.errors.formatNotOffered": "Dat formaat is niet beschikbaar voor deze wedstrijd.",

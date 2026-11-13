@@ -496,6 +496,8 @@
   "quickMatch.setup.startCount.one": "· {count} partido",
   "quickMatch.setup.startCount.other": "· {count} partidos",
   "quickMatch.recent.title": "Tus partidos rápidos recientes",
+  "quickMatch.continue.action": "Continuar",
+  "quickMatch.continue.startNew": "O empieza un partido rápido nuevo",
   "quickMatch.errors.tooManyAlive": "Tienes {max} partidos rápidos en marcha en este dispositivo. Guarda uno para hacer sitio o espera a que caduque alguno.",
   "quickMatch.errors.rateLimited": "Demasiados partidos nuevos desde esta red. Vuelve a intentarlo en unos minutos.",
   "quickMatch.errors.formatNotOffered": "Ese formato no está disponible para este partido.",

@@ -87,6 +87,8 @@ import { hardDeleteQuickMatchCompetition } from "@/server/usecases/quick-match-d
 import { listRecentQuickMatches } from "@/server/usecases/quick-match-home";
 import { listQuickMatchSports } from "@/server/usecases/quick-match-sports";
 import { hashVisitorKey, mintVisitorKey, QUICK_MATCH_VISITOR_COOKIE } from "@/server/usecases/quick-match-tokens";
+import { systemAuth } from "@/lib/quick-match-auth";
+import { playToDecided } from "@/server/usecases/__tests__/_quick-match-probe";
 import enMarketing from "@/dictionaries/en/marketing.json";
 import frMarketing from "@/dictionaries/fr/marketing.json";
 import HomePage from "../page";
@@ -124,6 +126,15 @@ function stripOf(html: string): string | null {
 /** The homes the strip links to, in document order. */
 const stripHrefs = (html: string): string[] =>
   [...(stripOf(html) ?? "").matchAll(/<a\b[^>]*\bhref="([^"]*)"/g)].map((m) => m[1]!);
+
+/** The setup page's Continue card (owner 2026-11-12), or null when the page rendered none. */
+function cardOf(html: string): string | null {
+  const start = html.search(/<section\b[^>]*\bdata-testid="qm-continue"/);
+  if (start < 0) return null;
+  return html.slice(start, html.indexOf("</section>", start) + "</section>".length);
+}
+/** Where each part of the setup page starts in the HTML (-1 when absent), to read the order a guest meets them in. */
+const at = (html: string, testid: string) => html.search(new RegExp(`\\bdata-testid="${testid}"`));
 
 /** The CTA's anchor: the link whose text is the CTA label. */
 function ctaAnchor(html: string, label: string): string | undefined {
@@ -246,8 +257,12 @@ describe.skipIf(!HAS_DB)("the recent strip's rows (real createQuickMatch, real r
     await client?.end();
   });
 
-  /** One quick match for this visitor hash: two sides, one league match (the cheapest real create). */
-  async function make(visitorHash: string, name = `QM strip ${randomUUID().slice(0, 8)}`): Promise<CreatedQuickMatch> {
+  /** One quick match for this visitor hash: two sides, one league match (the cheapest real create), unless sides are given. */
+  async function make(
+    visitorHash: string,
+    name = `QM strip ${randomUUID().slice(0, 8)}`,
+    sides: string[] = ["Ravi", "Sam"],
+  ): Promise<CreatedQuickMatch> {
     const out = await createQuickMatch(
       {
         name,
@@ -255,7 +270,7 @@ describe.skipIf(!HAS_DB)("the recent strip's rows (real createQuickMatch, real r
         variant_key: BADMINTON.variant,
         kind: BADMINTON.kind,
         format: "league",
-        sides: ["Ravi", "Sam"],
+        sides,
         plays: 1,
         email: null,
         locale: "en",
@@ -268,6 +283,18 @@ describe.skipIf(!HAS_DB)("the recent strip's rows (real createQuickMatch, real r
   /** Dates the row, so "newest first" is decided by the column the read sorts on, not by insert order. */
   const dateRow = (id: string, createdAt: string) => sql`update quick_matches set created_at = ${createdAt} where id = ${id}`;
   const nameOf = async (id: string) => (await sql<{ name: string }[]>`select name from quick_matches where id = ${id}`)[0]!.name;
+  /** The match's fixtures with both sides seated, in play order: the real generator's rows. */
+  const seated = async (out: CreatedQuickMatch) =>
+    sql<{ id: string }[]>`
+      select f.id from fixtures f join divisions d on d.id = f.division_id
+       where d.competition_id = ${out.competitionId} and f.home_entrant_id is not null and f.away_entrant_id is not null
+       order by f.round_no, f.fixture_no`;
+  /** Decide `n` of its matches (all by default) through the real write path, as a guest's taps do. */
+  async function finish(out: CreatedQuickMatch, n = Infinity) {
+    const fixtures = (await seated(out)).slice(0, n);
+    expect(fixtures.length, "anti-vacuity: a match to decide").toBeGreaterThan(0);
+    for (const f of fixtures) expect(await playToDecided(systemAuth(), f.id)).toMatchObject({ kind: "decided" });
+  }
 
   it("lists this visitor's alive matches newest first, at most 5; a saved match (no expiry) is alive; the oldest drops off", async () => {
     const key = mintVisitorKey();
@@ -306,12 +333,15 @@ describe.skipIf(!HAS_DB)("the recent strip's rows (real createQuickMatch, real r
   });
 
   it("the setup page `/<lang>/play` shows the same strip from the same cookie (its second mount, Task 4's stub wired)", async () => {
+    // A FINISHED match: an unfinished one is the setup page's Continue card instead (owner 2026-11-12, cases below).
     const key = mintVisitorKey();
     const out = await make(hashVisitorKey(key));
+    await finish(out);
     jar.visitor = key;
     const html = await render("en", "play");
     expect(stripHrefs(html)).toEqual([`/q/${out.token}`]);
     expect(stripOf(html)).toContain(`>${await nameOf(out.id)}<`);
+    expect(cardOf(html), "a finished match is never the Continue card").toBeNull();
     jar.visitor = undefined;
     expect(stripOf(await render("en", "play")), "no cookie, no strip").toBeNull();
   });
@@ -424,5 +454,75 @@ describe.skipIf(!HAS_DB)("the recent strip's rows (real createQuickMatch, real r
     expect(said).toContain("malformed");
     expect(said).toContain("rejected");
     for (const out of [first, malformed, rejected, last]) expect(said).not.toContain(out.token);
+  });
+
+  // ── the setup page's Continue card (owner 2026-11-12: "if same browser tries to create one more, show the first one") ──
+
+  it("an unfinished match is met FIRST: the card (its name, its count, Continue to its home), then 'Or start a new quick match', then the form; it leaves the strip", async () => {
+    const key = mintVisitorKey();
+    // Three sides, once: the rulebook's 3·2/2 = 3 matches; one decided, so the count is the real fixtures', not a default.
+    const out = await make(hashVisitorKey(key), `QM continue ${randomUUID().slice(0, 8)}`, ["Ravi", "Sam", "Lee"]);
+    await finish(out, 1);
+    jar.visitor = key;
+    const html = await render("en", "play");
+    const card = cardOf(html);
+    expect(card, "the card is on the page").not.toBeNull();
+    expect(card).toMatch(new RegExp(`<h2\\b[^>]*>${await nameOf(out.id)}</h2>`));
+    expect(card).toContain(">1 of 3 matches played<");
+    expect([...card!.matchAll(/<a\b[^>]*\bhref="([^"]*)"[^>]*>([^<]*)<\/a>/g)].map((m) => [m[1], m[2]])).toEqual([
+      [`/q/${out.token}`, "Continue"],
+    ]);
+    // The order a guest meets them in: the card, the heading, the form; the form is never withheld.
+    const order = ["qm-continue", "qm-start-new", "qm-setup-form"].map((id) => at(html, id));
+    expect(order.every((i) => i >= 0), `all three are on the page: ${order}`).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(html).toContain(`>${enMarketing["quickMatch.continue.startNew"]}<`);
+    // Its one row is the card now, so there is no strip; the marketing home still lists it (the card is the setup page's).
+    expect(stripOf(html)).toBeNull();
+    expect(stripHrefs(await render("en", "home"))).toEqual([`/q/${out.token}`]);
+    expect(cardOf(await render("en", "home")), "the marketing home has no card").toBeNull();
+  });
+
+  it("several: the NEWEST unfinished match is the card; a newer finished one and an older unfinished one stay in the strip, newest first", async () => {
+    const key = mintVisitorKey();
+    const hash = hashVisitorKey(key);
+    const olderOpen = await make(hash);
+    const newerOpen = await make(hash);
+    const newestDone = await make(hash);
+    await finish(newestDone);
+    await dateRow(olderOpen.id, "2026-11-01T09:00:00.000Z");
+    await dateRow(newerOpen.id, "2026-11-03T09:00:00.000Z");
+    await dateRow(newestDone.id, "2026-11-05T09:00:00.000Z");
+    jar.visitor = key;
+    const html = await render("en", "play");
+    expect(cardOf(html)).toContain(`href="/q/${newerOpen.token}"`);
+    expect(cardOf(html)).toContain(">0 of 1 match played<");
+    expect(stripHrefs(html)).toEqual([`/q/${newestDone.token}`, `/q/${olderOpen.token}`]);
+  });
+
+  it("no card: only finished matches (they stay in the strip), and no cookie at all; neither has the 'start a new one' heading", async () => {
+    const key = mintVisitorKey();
+    const done = await make(hashVisitorKey(key));
+    await finish(done);
+    jar.visitor = key;
+    const finishedOnly = await render("en", "play");
+    expect(cardOf(finishedOnly)).toBeNull();
+    expect(at(finishedOnly, "qm-start-new")).toBe(-1);
+    expect(stripHrefs(finishedOnly)).toEqual([`/q/${done.token}`]);
+    jar.visitor = undefined;
+    const none = await render("en", "play");
+    expect(cardOf(none)).toBeNull();
+    expect(at(none, "qm-start-new")).toBe(-1);
+    expect(at(none, "qm-setup-form"), "the form is there either way").toBeGreaterThan(-1);
+  });
+
+  it("speaks the page's language: French Continue and heading", async () => {
+    const key = mintVisitorKey();
+    const out = await make(hashVisitorKey(key));
+    jar.visitor = key;
+    const html = await render("fr", "play");
+    expect(cardOf(html)).toMatch(new RegExp(`href="/q/${out.token}"[^>]*>${frMarketing["quickMatch.continue.action"]}</a>`));
+    expect(html).toContain(`>${frMarketing["quickMatch.continue.startNew"]}<`);
+    expect(frMarketing["quickMatch.continue.action"]).not.toBe(enMarketing["quickMatch.continue.action"]);
   });
 });

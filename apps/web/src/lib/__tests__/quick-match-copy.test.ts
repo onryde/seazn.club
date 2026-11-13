@@ -55,6 +55,10 @@ const MARKETING_KEYS = [
   "quickMatch.setup.startCount.one",
   "quickMatch.setup.startCount.other",
   "quickMatch.recent.title",
+  // Owner 2026-11-12: the setup page's Continue card and the heading over the form beneath it (its count line is the home's
+  // own `quickMatch.home.playedSaved`, so the card never says a different "played" from the match's home).
+  "quickMatch.continue.action",
+  "quickMatch.continue.startNew",
   "quickMatch.errors.tooManyAlive",
   "quickMatch.errors.rateLimited",
   "quickMatch.errors.formatNotOffered",
@@ -328,6 +332,9 @@ describe("quick match guest copy: plurals", () => {
     expect(interpolate(ui["quickMatch.home.notSaved"]!, { date: "19 November 2026" })).toBe(
       "Not saved — deleted on 19 November 2026",
     );
+    // Owner 2026-11-12: the setup page's Continue card and the heading over the form.
+    expect(m["quickMatch.continue.action"]).toBe("Continue");
+    expect(m["quickMatch.continue.startNew"]).toBe("Or start a new quick match");
     // A saved match (branch review A I3): the same count, no countdown.
     expect(plural(ui, "quickMatch.home.playedSaved", 6, "en", { played: 2 })).toBe("2 of 6 matches played");
     expect(plural(ui, "quickMatch.home.playedSaved", 1, "en", { played: 0 })).toBe("0 of 1 match played");

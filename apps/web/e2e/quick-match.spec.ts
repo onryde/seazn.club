@@ -218,6 +218,28 @@ test("Start creates the quick match: the browser lands on its home, /q/qm_…, w
   expect(cookies.some((c) => c.name === "seazn_qm_visitor" && c.httpOnly)).toBe(true);
 });
 
+test("Continue (owner 2026-11-12): back on /play after a Start, the unfinished match is met first, above the form, and Continue lands on its home; the form is still there", async ({ guest: page }) => {
+  const name = `e2e continue ${TAG}`;
+  const home = await createFromSetup(page, name, ["Ravi & Sam", "Priya & Tom"]);
+  await page.goto("/en/play");
+  const card = page.getByTestId("qm-continue");
+  await expect(card).toBeVisible();
+  await expect(card.getByRole("heading", { level: 2 })).toHaveText(name);
+  // A league of two sides, once: the rulebook's one match, none played yet.
+  await expect(page.getByTestId("qm-continue-played")).toHaveText(ui("quickMatch.home.playedSaved.one", { played: 0, count: 1 }));
+  await expect(page.getByTestId("qm-start-new")).toHaveText(mk("quickMatch.continue.startNew"));
+  // Met first: the card sits above the heading, and the heading above the form, which never goes away.
+  const [c, h, f] = await Promise.all([card, page.getByTestId("qm-start-new"), form(page)].map((l) => l.boundingBox()));
+  expect(c && h && f && c.y + c.height <= h.y && h.y + h.height <= f.y, "card, then the heading, then the form").toBe(true);
+  await expect(start(page)).toBeVisible();
+  // Its one row is the card now: the strip below has nothing left to list.
+  await expect(page.getByTestId("qm-recent")).toHaveCount(0);
+  await expectNoHorizontalScroll(page);
+  await page.getByTestId("qm-continue-link").click();
+  await page.waitForURL((url) => url.pathname === home, { timeout: NAV_MS });
+  await expect(page.getByTestId("qm-name")).toHaveText(name);
+});
+
 test("the real cap: five live quick matches on one visitor, and the sixth Start reads the cap's line and keeps the names (m10)", async ({ guest: page }) => {
   // Five REAL creates through the form's own fields (the page's fetch, so the visitor cookie the first one sets is the
   // one the next four carry), then a sixth through the Start button. QUICK_MATCH_MAX_ALIVE_PER_VISITOR is 5 (spec §7.9);

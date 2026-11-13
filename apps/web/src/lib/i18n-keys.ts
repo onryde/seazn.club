@@ -5956,6 +5956,8 @@ export type DictionaryKey =
   | "quickMatch.addMatch.home"
   | "quickMatch.addMatch.submit"
   | "quickMatch.backToMatch"
+  | "quickMatch.continue.action"
+  | "quickMatch.continue.startNew"
   | "quickMatch.cta"
   | "quickMatch.ctaHint"
   | "quickMatch.dead.hint"

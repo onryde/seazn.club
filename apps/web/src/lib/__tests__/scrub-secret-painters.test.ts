@@ -496,6 +496,8 @@ const PAINTERS: Record<string, { verdict: true | string; handoff?: string | stri
   "components/quick-match/score-form.tsx": { verdict: true },
   // The recent strip: each row links to its home, `/q/<home token>` (quick match plan 2 Task 9).
   "components/quick-match/recent-strip.tsx": { verdict: true },
+  // The setup page's Continue card (owner 2026-11-12): its one link is the newest unfinished match's home, `/q/<home token>`.
+  "components/quick-match/continue-card.tsx": { verdict: true },
   // Found once the scan learned to read an INLINE credential URL (ledger CARRY to T7): each page writes its own secret path
   // straight into a component's prop, which the old name-only scan never saw as a site of the page.
   "app/checkin/[token]/page.tsx": {
@@ -551,6 +553,8 @@ const QUICK_MATCH_PAINTERS = [
   "components/v2/quick-match-back-link.tsx",
   "components/quick-match/score-form.tsx",
   "components/quick-match/recent-strip.tsx",
+  // Owner 2026-11-12: the setup page's Continue card, a link to the newest unfinished match's home.
+  "components/quick-match/continue-card.tsx",
   // The home itself: it writes `routes.quickMatch(token)` inline into its islands' props (ledger CARRY to T7).
   "app/q/[token]/page.tsx",
   "components/quick-match/share.tsx",
@@ -631,6 +635,9 @@ describe("every element that paints a scrubbed secret carries ph-no-capture, or 
     // The recent strip's one row link (plan 2 Task 9): a host <a>, so its class is checked here and not handed off.
     const strip = painters.get("components/quick-match/recent-strip.tsx") ?? [];
     expect(strip.filter((site) => site.how === "attribute href" && site.tag === "a").map((site) => site.blocked)).toEqual([true]);
+    // The setup page's Continue card (owner 2026-11-12): one host <a> to the home, its class checked here.
+    const card = painters.get("components/quick-match/continue-card.tsx") ?? [];
+    expect(card.filter((site) => site.how === "attribute href" && site.tag === "a").map((site) => site.blocked)).toEqual([true]);
   });
 
   it("the home's Score form (Task 6): the page hands its action to QuickMatchScoreForm, whose host <form> carries the class", () => {

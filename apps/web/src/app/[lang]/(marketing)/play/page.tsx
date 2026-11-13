@@ -9,9 +9,10 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { MarketingShell } from "@/components/marketing/marketing-shell";
 import { ClearFlashParam } from "@/components/quick-match/clear-flash-param";
+import { ContinueCard, splitRecent } from "@/components/quick-match/continue-card";
 import { QuickMatchSetupForm } from "@/components/quick-match/setup-form";
 import { RecentStrip } from "@/components/quick-match/recent-strip";
-import { getDictionary, t } from "@/lib/i18n";
+import { getDictionary, plural, t } from "@/lib/i18n";
 import { DEFAULT_LOCALE, hasLocale, LOCALES } from "@/lib/i18n-constants";
 import { routes } from "@/lib/routes";
 import { log } from "@/server/logger";
@@ -69,6 +70,9 @@ export default async function PlayPage({
   ]);
   const [first, ...rest] = setupSports(offer, ui);
   const refused = refusalCode(e);
+  // Owner 2026-11-12 ("if same browser tries to create one more, show the first one"): the newest UNFINISHED match of this
+  // browser's recent ones is met first, as a Continue card above the form; the strip keeps the others.
+  const { resume, rest: recentRest } = splitRecent(recent);
 
   return (
     <MarketingShell variant="night-scroll" lang={lang}>
@@ -83,6 +87,20 @@ export default async function PlayPage({
         <div className="relative mx-auto w-full max-w-xl px-4">
           {/* `?e=` is read into `initialError` above: spent, so a reload does not show the refusal again (T6 review m2). */}
           <ClearFlashParam />
+          {resume ? (
+            <ContinueCard
+              item={resume}
+              labels={{
+                played: plural(ui, "quickMatch.home.playedSaved", resume.total, lang, { played: resume.played }),
+                action: t(d, "quickMatch.continue.action"),
+              }}
+            />
+          ) : null}
+          {resume && first ? (
+            <h2 data-testid="qm-start-new" className="mk-display mb-4 mt-10 text-lg font-semibold text-[var(--mk-cream)]">
+              {t(d, "quickMatch.continue.startNew")}
+            </h2>
+          ) : null}
           {first ? (
             <QuickMatchSetupForm
               lang={lang}
@@ -101,7 +119,7 @@ export default async function PlayPage({
               </p>
             </section>
           )}
-          <RecentStrip lang={lang} title={t(d, "quickMatch.recent.title")} items={recent} className="mt-10" />
+          <RecentStrip lang={lang} title={t(d, "quickMatch.recent.title")} items={recentRest} className="mt-10" />
         </div>
       </main>
     </MarketingShell>
