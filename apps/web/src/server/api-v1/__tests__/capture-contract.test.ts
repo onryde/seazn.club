@@ -63,7 +63,7 @@ const SHA256: Record<string, string> = {
   // MD-1 Task 6 (capture S4 Match Day design §7, §9.5): a Match Day code's approval review, its approve and its answers.
   "capture-matchday-approval.v1.json": "279ff1488a1108b3667f9e2f11f559579382f83b238d91da65440c810189f69c",
   // Task 8e (owner 2026-11-13): a Match Day code calls a match to a court — the candidates, the preview, the call, the Undo.
-  "capture-matchday-call.v1.json": "5319376e947103d9e86e31303ab8015b3741ddb69d77f5fdcd824779a47eefa4",
+  "capture-matchday-call.v1.json": "208749ecae47072ea17fbfa8fb4c4b84de49aa2831bc817aa0a9af79d2dc003b",
 };
 
 // ---------------------------------------------------------------------------------------------------------------

@@ -469,6 +469,8 @@ export const CaptureMatchdayCandidate = z.strictObject({
   match: CaptureMatchdayRow,
   source: z.enum(["this_court", "other_court", "no_court"]),
   from_court_name: z.string().nullable(),
+  /** True for an other_court candidate whose match is called onto that court and not started; false otherwise. */
+  called: z.boolean(),
   planned_at: MdInstant.nullable(),
   waiting_minutes: z.number().int().min(0),
   behind_minutes: z.number().int().min(0),
