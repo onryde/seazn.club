@@ -28,6 +28,7 @@ import {
   FILTER_NAMES,
 } from "@/components/registration-hub-registrant-filters";
 import { hasActiveFilters } from "@/components/registration-hub-registrant-derive";
+import { parseHubTabs } from "@/components/registration-hub-tabs-state";
 import { getDictionary, t } from "@/lib/i18n";
 import { compileClasses } from "@/components/v2/__tests__/_compiled-css";
 import { parseRegistrantsQuery } from "@/app/o/[orgSlug]/c/[compSlug]/registration/data";
@@ -412,7 +413,35 @@ const FULL_FOR_PHONE: RegistrantsFilters = { ...DEFAULT_FILTERS, status: "paid",
 
 describe("clearAllHref / clearOneHref — the pure href builders (B6 T20)", () => {
   it("clearAllHref is the bare tab URL: still on Registrants, no filter params (owner 1)", () => {
-    expect(clearAllHref()).toBe("?tab=registrants");
+    expect(clearAllHref(new URLSearchParams())).toBe("?tab=registrants");
+    expect(clearAllHref(new URLSearchParams("tab=registrants&status=paid&q=x&sort=oldest"))).toBe("?tab=registrants");
+  });
+
+  // B7 T22 ruling (2026-11-13): filters are not tabs. "Clear all" empties the FILTER
+  // state; the division settings tabs the organiser has open (`open`) are a different
+  // piece of state and must survive it. The address, not this component, knows them.
+  it("clearAllHref keeps every param the form does not own — B7's `open` — and drops every one it does", () => {
+    const href = clearAllHref(new URLSearchParams(FULL_QUERY));
+    const got = new URLSearchParams(href.slice(1));
+    expect(href.startsWith("?tab=registrants")).toBe(true);
+    expect([...got.keys()].sort()).toEqual(["open", "page", "tab"]);
+    expect(got.get("open")).toBe("a,b");
+    expect(got.get("tab")).toBe("registrants");
+    for (const owned of [...FILTER_NAMES, "q", "sort"]) expect(got.has(owned), owned).toBe(false);
+  });
+
+  it("clearAllHref from a division tab's address lands on Registrants and keeps that tab open", () => {
+    const got = new URLSearchParams(clearAllHref(new URLSearchParams("tab=division:d1&open=d1,d2&status=paid")).slice(1));
+    expect(got.get("tab")).toBe("registrants");
+    expect(got.get("open")).toBe("d1,d2");
+    expect(got.has("status")).toBe(false);
+  });
+
+  it("clearAllHref does not mutate its input, so a second call gives the same answer", () => {
+    const current = new URLSearchParams(FULL_QUERY);
+    const first = clearAllHref(current);
+    expect(current.toString()).toBe(new URLSearchParams(FULL_QUERY).toString());
+    expect(clearAllHref(current)).toBe(first);
   });
 
   it("names exactly the five narrowing controls a pill can clear", () => {
@@ -455,6 +484,40 @@ describe("clearAllHref / clearOneHref — the pure href builders (B6 T20)", () =
     const first = clearOneHref(current, "status");
     expect(current.toString()).toBe(new URLSearchParams(FULL_QUERY).toString());
     expect(clearOneHref(current, "status")).toBe(first);
+  });
+});
+
+describe("Clear all keeps the open division tabs (B7 T22 ruling) — the REAL links, read back by parseHubTabs", () => {
+  const OPENABLE = new Set(["a", "b"]);
+  const FULL: RegistrantsFilters = { ...DEFAULT_FILTERS, status: "confirmed", divisionId: "div-1", kind: "team", freeAgent: true, consentPending: true, text: "alex", sort: "oldest" };
+  /** The tab state a hub page would read from an href. */
+  const hubState = (href: string) => {
+    const q = new URL(href, "https://seazn.test").searchParams;
+    return parseHubTabs({ tab: q.get("tab") ?? undefined, open: q.get("open") ?? undefined }, OPENABLE);
+  };
+
+  it("the pill row's Clear all and the phone row's Clear all each land on Registrants with both tabs still open", () => {
+    const tree = render(FULL, FULL_QUERY);
+    const links = [
+      tree.find((e) => propsOf(e)["data-filter-clear-all"] !== undefined),
+      tree.find((e) => propsOf(e)["data-chip-clear-all"] !== undefined),
+    ];
+    let checked = 0;
+    for (const link of links) {
+      expect(link).toBeTruthy();
+      const href = String(propsOf(link!).href);
+      expect(hubState(href)).toEqual({ active: "registrants", open: ["a", "b"] });
+      const q = new URL(href, "https://seazn.test").searchParams;
+      for (const owned of [...FILTER_NAMES, "q", "sort"]) expect(q.has(owned), owned).toBe(false);
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("with no tab open the link is still the bare tab (nothing invented)", () => {
+    const tree = render({ ...DEFAULT_FILTERS, status: "paid" }, "tab=registrants&status=paid");
+    expect(propsOf(clearAllLink(tree)!).href).toBe(CLEAR_ALL_HREF);
+    expect(hubState(String(propsOf(clearAllLink(tree)!).href))).toEqual({ active: "registrants", open: [] });
   });
 });
 

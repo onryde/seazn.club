@@ -10,10 +10,16 @@
 // a `Modal` whose Show/Clear buttons sit in its `footer` prop, so this suite
 // expands `footer` too.
 //
-// What a harness cannot see is covered by the walkthroughs listed in the T21
-// report (mobile.spec.ts / registration-hub.spec.ts): focus trap, Escape, focus
-// return, the sheet's real tap area. Those come from `components/modal.tsx`,
-// which this suite pins as THE dialog (not a hand-rolled one).
+// What a harness cannot see, and who covers it. mobile.spec.ts (its "registration
+// hub filter bar" test, the <768 branch) drives: opening the sheet, a staged edit
+// that navigates nowhere, Escape + focus returning to the trigger, a discarded
+// edit gone on reopen, Reset twice, Show's one push, the sheet's accessible name,
+// and the chip x's tap area. The Tab trap and Escape themselves are
+// `components/modal.tsx`'s — modal.test.ts pins the trap's decision logic and the
+// wiring by source text, and nothing in e2e presses Tab inside this sheet. No
+// e2e measures the sheet's selects or switch rows for tap area (this suite pins
+// their classes only), and none scrolls the sheet's body. Both e2e specs are
+// written, not run, at the time of this commit.
 import { isValidElement } from "react";
 import type { ReactElement, ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -21,6 +27,7 @@ import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harn
 import { RegistrationHubRegistrantFilters } from "@/components/registration-hub-registrant-filters";
 import { Modal } from "@/components/modal";
 import { compileClasses } from "@/components/v2/__tests__/_compiled-css";
+import tailwindColors from "tailwindcss/colors";
 import { getDictionary, t } from "@/lib/i18n";
 import type { Dict } from "@/lib/i18n-constants";
 import { parseRegistrantsQuery } from "@/app/o/[orgSlug]/c/[compSlug]/registration/data";
@@ -73,6 +80,35 @@ const FULL_FILTERS: RegistrantsFilters = {
   text: "alex",
   sort: "oldest",
 };
+
+/** WCAG relative-luminance contrast of a Tailwind palette entry (`oklch(L C h)` or a hex) against white. */
+function contrastOnWhite(color: string): number {
+  const lin = (c: number) => Math.min(1, Math.max(0, c));
+  let r: number, g: number, b: number;
+  const ok = /^oklch\(\s*([\d.]+)%\s+([\d.]+)\s+([\d.]+)/.exec(color);
+  if (ok) {
+    const L = Number(ok[1]) / 100;
+    const C = Number(ok[2]);
+    const h = (Number(ok[3]) * Math.PI) / 180;
+    const a = C * Math.cos(h);
+    const bb = C * Math.sin(h);
+    const l = (L + 0.3963377774 * a + 0.2158037573 * bb) ** 3;
+    const m = (L - 0.1055613458 * a - 0.0638541728 * bb) ** 3;
+    const sv = (L - 0.0894841775 * a - 1.291485548 * bb) ** 3;
+    r = lin(4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * sv);
+    g = lin(-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * sv);
+    b = lin(-0.0041960863 * l - 0.7034186147 * m + 1.707614701 * sv);
+  } else {
+    const hex = color.replace("#", "");
+    const ch = (i: number) => {
+      const v = parseInt(hex.slice(i, i + 2), 16) / 255;
+      return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+    };
+    [r, g, b] = [ch(0), ch(2), ch(4)];
+  }
+  const Y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  return 1.05 / (Y + 0.05);
+}
 
 /** Like `walk`, plus a Modal's `footer` — where the Show/Clear buttons live. */
 function walkAll(node: ReactNode, out: ReactElement[] = []): ReactElement[] {
@@ -136,8 +172,8 @@ function open(isl: Island, typed?: string) {
 function close(isl: Island) {
   (propsOf(modal(isl.tree())!).onClose as () => void)();
 }
-function clearInSheet(isl: Island) {
-  const btn = byAttr(isl.tree(), "data-filter-sheet-clear")!;
+function resetInSheet(isl: Island) {
+  const btn = byAttr(isl.tree(), "data-filter-sheet-reset")!;
   (propsOf(btn).onClick as (e?: unknown) => void)({});
 }
 
@@ -251,6 +287,22 @@ describe("the sheet opens and closes without touching the URL", () => {
     const tree = island().tree();
     expect(modal(tree)).toBeUndefined();
     expect(sheetForm(tree)).toBeUndefined();
+  });
+
+  it("hands the Modal a localised Close label — in every locale, not the Modal's English default", async () => {
+    let checked = 0;
+    for (const locale of ["en", "es", "fr", "nl"] as const) {
+      const d = await getDictionary(locale, "ui");
+      const isl = island(DEFAULT_FILTERS, "tab=registrants", d);
+      open(isl);
+      const label = propsOf(modal(isl.tree())!).closeLabel;
+      expect(label, locale).toBe(t(d, "reg.filters.close"));
+      expect(label, locale).not.toBe("reg.filters.close");
+      checked += 1;
+    }
+    expect(checked).toBe(4);
+    const fr = await getDictionary("fr", "ui");
+    expect(t(fr, "reg.filters.close")).not.toBe("Close");
   });
 
   it("opening it renders the house Modal titled 'Filters' — and navigates nowhere", () => {
@@ -380,23 +432,53 @@ describe("the sheet holds status, division, kind, solo, consent and sort", () =>
   it("every control is a touch target: 44px selects, 44px switch rows, 44px footer buttons", () => {
     const { tree } = sheetNames();
     const els = walkAll(sheetForm(tree)!);
-    for (const sel of els.filter((e) => e.type === "select")) {
-      expect(tokens(sel), String(propsOf(sel).name)).toContain("h-11");
-    }
-    for (const label of els.filter((e) => e.type === "label" && propsOf(e).htmlFor === undefined)) {
-      expect(tokens(label)).toContain("min-h-11");
-    }
-    for (const attr of ["data-filter-sheet-clear", "data-filter-sheet-show"]) {
+    // Anti-vacuity: a loop over an empty list passes. The sheet has four selects, two
+    // switch rows and two footer buttons, and each count is asserted.
+    const selects = els.filter((e) => e.type === "select");
+    const switchRows = els.filter((e) => e.type === "label" && propsOf(e).htmlFor === undefined);
+    expect(selects.map((e) => propsOf(e).name)).toEqual(["status", "division_id", "kind", "sort"]);
+    expect(switchRows).toHaveLength(2);
+    for (const sel of selects) expect(tokens(sel), String(propsOf(sel).name)).toContain("h-11");
+    for (const label of switchRows) expect(tokens(label)).toContain("min-h-11");
+    const footer = ["data-filter-sheet-reset", "data-filter-sheet-show"];
+    for (const attr of footer) {
+      expect(byAttr(tree, attr), attr).toBeTruthy();
       expect(tokens(byAttr(tree, attr)!), attr).toContain("min-h-11");
+    }
+    expect(footer).toHaveLength(2);
+  });
+
+  // WCAG 1.4.11: the off track is what tells a switch is off, against the white row it
+  // sits on; the old slate-400 was 2.56:1. The expected number is the standard's (3:1),
+  // the colour is Tailwind's own palette entry for the class the sheet renders.
+  it("a switch's off track clears 3:1 against the white row, its on track too; both are real switches", () => {
+    const { tree } = sheetNames();
+    const boxes = walkAll(sheetForm(tree)!).filter((e) => e.type === "input" && propsOf(e).type === "checkbox");
+    expect(boxes.map((b) => propsOf(b).name)).toEqual(["free_agent", "consent_pending"]);
+    for (const box of boxes) expect(propsOf(box).role, String(propsOf(box).name)).toBe("switch");
+    const tracks = walkAll(sheetForm(tree)!).filter(
+      (e) => e.type === "span" && propsOf(e)["aria-hidden"] === "true" && tokens(e).includes("w-10"),
+    );
+    expect(tracks).toHaveLength(2);
+    for (const track of tracks) {
+      const off = tokens(track).find((c) => /^bg-[a-z]+-\d{2,3}$/.test(c))!;
+      const on = tokens(track).find((c) => /^peer-checked:bg-[a-z]+-\d{2,3}$/.test(c))!;
+      expect(off, "an off colour").toBeTruthy();
+      expect(on, "an on colour").toBeTruthy();
+      for (const cls of [off, on.replace("peer-checked:", "")]) {
+        const [, family, shade] = /^bg-([a-z]+)-(\d+)$/.exec(cls)!;
+        const palette = (tailwindColors as unknown as Record<string, Record<string, string>>)[family!]!;
+        expect(contrastOnWhite(palette[shade!]!), cls).toBeGreaterThanOrEqual(3);
+      }
     }
   });
 
-  it("the footer: Clear all (a button, never a link) and 'Show registrants' bound to the sheet's own form", () => {
+  it("the footer: Reset (a button, never a link) and 'Show registrants' bound to the sheet's own form", () => {
     const { tree } = sheetNames();
-    const clear = byAttr(tree, "data-filter-sheet-clear")!;
+    const clear = byAttr(tree, "data-filter-sheet-reset")!;
     const showBtn = byAttr(tree, "data-filter-sheet-show")!;
     expect(propsOf(clear).type).toBe("button");
-    expect(textOf(clear)).toBe("Clear all");
+    expect(textOf(clear)).toBe("Reset");
     expect(propsOf(showBtn).type).toBe("submit");
     expect(textOf(showBtn)).toBe("Show registrants");
     // A submit button outside its <form> reaches it through `form=<id>`.
@@ -499,14 +581,14 @@ describe("Show registrants applies the staged edits with ONE push", () => {
   });
 });
 
-describe("Clear all inside the sheet resets what is staged — it does not navigate", () => {
+describe("Reset inside the sheet empties what is staged — it does not navigate", () => {
   it("empties every control, remounts them (new keys), and pushes nothing", () => {
     const isl = island(FULL_FILTERS, FULL_QUERY);
     open(isl, "alex");
     const keyOf = (name: string) =>
       walkAll(sheetForm(isl.tree())!).find((e) => (e.type === "select" || e.type === "input") && propsOf(e).name === name)!.key;
     const before = ["status", "division_id", "kind", "free_agent", "consent_pending", "sort"].map(keyOf);
-    clearInSheet(isl);
+    resetInSheet(isl);
     const els = sheetElements(isl.tree());
     const get = (n: string) => els.find((e) => e.name === n)!;
     expect(get("status").value).toBe("");
@@ -521,10 +603,10 @@ describe("Clear all inside the sheet resets what is staged — it does not navig
     expect(sheetForm(isl.tree()), "the sheet stays open").toBeTruthy();
   });
 
-  it("Show after Clear all pushes the cleared bar — but keeps the search and every unknown param", () => {
+  it("Show after Reset pushes the cleared bar — but keeps the search and every unknown param", () => {
     const isl = island(FULL_FILTERS, FULL_QUERY);
     open(isl, "alex");
-    clearInSheet(isl);
+    resetInSheet(isl);
     show(isl);
     const { params } = pushed();
     for (const name of FIVE) expect(params.has(name), name).toBe(false);
@@ -535,10 +617,44 @@ describe("Clear all inside the sheet resets what is staged — it does not navig
     expect(hasNoActiveFilter(parseRegistrantsQuery(Object.fromEntries(params)))).toBe(true);
   });
 
-  it("closing after Clear all (without Show) leaves the URL's filters in force", () => {
+  // I-1 (T21 review): Reset used to flip a boolean (`cleared`), so the SECOND press produced
+  // the same keys as the first — React kept the nodes, and whatever the person had staged
+  // since stayed on screen and went out on Show. A REAL browser never re-applies a default to
+  // a node it keeps, so the only witness in a DOM-less harness is that every press renders a
+  // key no earlier render used. Each press is its own remount.
+  it("every Reset remounts every control under a key no earlier render had — press it again after staging and the controls are fresh again", () => {
+    const isl = island(FULL_FILTERS, FULL_QUERY);
+    open(isl, "alex");
+    const NAMES = ["status", "division_id", "kind", "free_agent", "consent_pending", "sort"];
+    const keysNow = () =>
+      NAMES.map(
+        (name) =>
+          walkAll(sheetForm(isl.tree())!).find((e) => (e.type === "select" || e.type === "input") && propsOf(e).name === name)!.key,
+      );
+    const seen = new Map<string, Set<string | null>>(NAMES.map((n) => [n, new Set()]));
+    const note = (keys: (string | null)[]) => keys.forEach((k, i) => seen.get(NAMES[i]!)!.add(k));
+    note(keysNow());
+    const PRESSES = 3;
+    for (let press = 1; press <= PRESSES; press += 1) {
+      resetInSheet(isl);
+      // Staging something between presses is a DOM act; the controls' rendered defaults are
+      // what a re-read after a remount would show.
+      const els = sheetElements(isl.tree());
+      for (const n of ["status", "division_id", "kind"]) expect(els.find((e) => e.name === n)!.value, `${n} after press ${press}`).toBe("");
+      expect(els.find((e) => e.name === "sort")!.value).toBe("newest");
+      expect(els.find((e) => e.name === "free_agent")!.checked).toBe(false);
+      note(keysNow());
+    }
+    for (const [name, keys] of seen) {
+      expect(keys.size, `${name}: one distinct key per render (open + ${PRESSES} presses)`).toBe(PRESSES + 1);
+    }
+    expect(nav.push).not.toHaveBeenCalled();
+  });
+
+  it("closing after Reset (without Show) leaves the URL's filters in force", () => {
     const isl = island(FULL_FILTERS, FULL_QUERY);
     open(isl);
-    clearInSheet(isl);
+    resetInSheet(isl);
     close(isl);
     expect(nav.push).not.toHaveBeenCalled();
     open(isl);
@@ -652,11 +768,18 @@ describe("the removable chips (phone) — the real producer of every pill's × h
     for (const name of FIVE) expect(typeof propsOf(chipClear(tree, name)!).href).toBe("string");
   });
 
-  it("the phone Clear all links to the bare tab and shows only while something narrows", () => {
+  it("the phone Clear all links to the bare tab (keeping B7's open tabs) and shows only while something narrows", () => {
     expect(byAttr(island().tree(), "data-chip-clear-all")).toBeUndefined();
     const link = byAttr(island(FULL_FILTERS, FULL_QUERY).tree(), "data-chip-clear-all")!;
-    expect(propsOf(link).href).toBe(`${ACTION}?tab=registrants`);
+    const href = String(propsOf(link).href);
+    expect(href.startsWith(`${ACTION}?tab=registrants`)).toBe(true);
+    const got = new URLSearchParams(href.slice(ACTION.length + 1));
+    expect(got.get("open")).toBe("a,b");
+    for (const owned of [...FIVE, "q", "sort"]) expect(got.has(owned), owned).toBe(false);
     expect(textOf(link)).toBe("Clear all");
+    // the sheet's own button is a different act and reads differently
+    const reset = byAttr(island().tree(), "data-filter-sheet-reset");
+    expect(reset, "the sheet is closed here").toBeUndefined();
   });
 
   it("chip and × are touch targets: 44px tall, 44px wide ×", () => {
@@ -724,18 +847,36 @@ describe("one DOM, two faces: what shows below md and what shows from md", () =>
 });
 
 describe("copy: the new keys exist in all four locales and the toggle labels are trimmed to the mock", () => {
-  it("reg.filters.open / show / sheetTitle resolve in en, es, fr and nl", async () => {
+  it("reg.filters.open / show / sheetTitle / reset / close resolve in en, es, fr and nl", async () => {
     let checked = 0;
     for (const locale of ["en", "es", "fr", "nl"] as const) {
       const d = await getDictionary(locale, "ui");
-      for (const key of ["reg.filters.open", "reg.filters.show", "reg.filters.sheetTitle"] as const) {
+      for (const key of ["reg.filters.open", "reg.filters.show", "reg.filters.sheetTitle", "reg.filters.reset", "reg.filters.close"] as const) {
         const text = t(d, key);
         expect(text, `${locale} ${key}`).not.toBe(key);
         expect(text.length, `${locale} ${key}`).toBeGreaterThan(0);
         checked += 1;
       }
     }
-    expect(checked).toBe(12);
+    expect(checked).toBe(20);
+  });
+
+  // m-6: two buttons on one phone screen both read "Clear all" and meant different things
+  // (the row link empties the URL's filters, search and sort; the sheet's button only
+  // empties what is staged). Different acts, different words — in every locale.
+  it("the sheet's footer button and the row's Clear all never read the same, in any locale", async () => {
+    let checked = 0;
+    for (const locale of ["en", "es", "fr", "nl"] as const) {
+      const d = await getDictionary(locale, "ui");
+      expect(t(d, "reg.filters.reset"), locale).not.toBe(t(d, "reg.filters.clearAll"));
+      const isl = island({ ...DEFAULT_FILTERS, status: "paid" }, "tab=registrants&status=paid", d);
+      open(isl);
+      const tree = isl.tree();
+      expect(textOf(byAttr(tree, "data-filter-sheet-reset")!), locale).toBe(t(d, "reg.filters.reset"));
+      expect(textOf(byAttr(tree, "data-chip-clear-all")!), locale).toBe(t(d, "reg.filters.clearAll"));
+      checked += 1;
+    }
+    expect(checked).toBe(4);
   });
 
   it("English: 'Solo sign-ups' and 'Consent pending' — the trailing 'only' is gone, here and everywhere the toggles read", async () => {
@@ -744,6 +885,8 @@ describe("copy: the new keys exist in all four locales and the toggle labels are
     expect(t(dict, "reg.filters.open")).toBe("Filters");
     expect(t(dict, "reg.filters.show")).toBe("Show registrants");
     expect(t(dict, "reg.filters.sheetTitle")).toBe("Filters");
+    expect(t(dict, "reg.filters.reset")).toBe("Reset");
+    expect(t(dict, "reg.filters.close")).toBe("Close");
   });
 
   it("every locale's toggle label is shorter than the pre-trim French one that clipped at 320 (34 characters)", async () => {

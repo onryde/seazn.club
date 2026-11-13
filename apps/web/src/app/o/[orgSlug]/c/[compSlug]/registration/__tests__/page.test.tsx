@@ -209,6 +209,7 @@ import { walk } from "@/components/__tests__/_hook-harness";
 import { propsOf, textOf } from "@/components/__tests__/_hook-harness";
 import { RegistrationHubSettingsPanel } from "@/components/registration-hub-settings-panel";
 import { RegistrationHubRegistrantsPanel } from "@/components/registration-hub-registrants-panel";
+import { parseHubTabs } from "@/components/registration-hub-tabs-state";
 import { compileClasses } from "@/components/v2/__tests__/_compiled-css";
 // Real (unmocked) dictionary loader — only `@/lib/resolve-locale` is mocked
 // above (pinned to "en"), so this reads the SAME dictionary the page itself
@@ -636,6 +637,121 @@ describe("registration hub — Registrants tab data wiring (RS005 W2a)", () => {
     const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
     const panel = tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!;
     expect(propsOf(panel).orgTz).toBe("Asia/Kolkata");
+  });
+});
+
+// B7 T22 ruling (2026-11-13): FILTERS ARE NOT TABS. The Registrants tab's two hrefs back to the bare tab
+// ("Clear filters" on a no-match table, and the table's own base for cart links) and the empty state's
+// "Open settings" CTA each used to rebuild the address from scratch, so following one closed the
+// organiser's open division settings tabs (`?open=<a>,<b>`). They carry `open` now. Read back with the
+// hub's own parser (parseHubTabs), not by string compare: that is what the page that receives the link does.
+describe("registration hub — clearHref / emptyCtaHref keep the open division tabs (B7 T22 ruling)", () => {
+  const A = "11111111-1111-4111-8111-111111111111";
+  const B = "22222222-2222-4222-8222-222222222222";
+  const C = "33333333-3333-4333-8333-333333333333";
+  const BASE = "/o/riverside/c/summer-league/registration";
+
+  async function hrefs(searchParams: Record<string, unknown>) {
+    const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants", ...searchParams }) }));
+    const props = propsOf(tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!);
+    return { clearHref: String(props.clearHref), emptyCtaHref: String(props.emptyCtaHref) };
+  }
+  const stateOf = (href: string, openable: string[]) => {
+    const q = new URL(href, "https://seazn.test").searchParams;
+    return parseHubTabs({ tab: q.get("tab") ?? undefined, open: q.get("open") ?? undefined }, new Set(openable));
+  };
+
+  it("with two tabs open, the clear link lands on Registrants and the CTA on Settings — both still carrying both tabs", async () => {
+    const { clearHref, emptyCtaHref } = await hrefs({ open: `${A},${B}`, status: "paid" });
+    expect(clearHref.startsWith(`${BASE}?`)).toBe(true);
+    expect(emptyCtaHref.startsWith(`${BASE}?`)).toBe(true);
+    expect(stateOf(clearHref, [A, B])).toEqual({ active: "registrants", open: [A, B] });
+    expect(stateOf(emptyCtaHref, [A, B])).toEqual({ active: "settings", open: [A, B] });
+    // and the clear link still drops the filters it exists to clear
+    expect(new URL(clearHref, "https://seazn.test").searchParams.has("status")).toBe(false);
+  });
+
+  it("with no open tab the two hrefs are exactly what they always were", async () => {
+    const { clearHref, emptyCtaHref } = await hrefs({});
+    expect(clearHref).toBe(`${BASE}?tab=registrants`);
+    expect(emptyCtaHref).toBe(`${BASE}?tab=settings`);
+  });
+
+  it("the grammar's own cap and de-duplication apply: three ids carry the last two, a repeat once", async () => {
+    expect(stateOf((await hrefs({ open: `${A},${B},${C}` })).clearHref, [A, B, C]).open).toEqual([B, C]);
+    expect(stateOf((await hrefs({ open: `${A},${B},${A}` })).clearHref, [A, B]).open).toEqual([B, A]);
+  });
+
+  it("what is not a division id is never carried into an href: no param smuggling through `open`", async () => {
+    const hostile = [`${A}&tab=settings`, "x,y", `${A},not-a-uuid`, "", `${B}%26status=paid`];
+    let checked = 0;
+    for (const open of hostile) {
+      const { clearHref, emptyCtaHref } = await hrefs({ open });
+      for (const href of [clearHref, emptyCtaHref]) {
+        const q = new URL(href, "https://seazn.test").searchParams;
+        expect([...q.keys()].filter((k) => k === "tab"), `${open}: one tab`).toHaveLength(1);
+        expect(q.has("status"), open).toBe(false);
+        for (const id of (q.get("open") ?? "").split(",").filter(Boolean)) expect(id, open).toMatch(/^[0-9a-f-]{36}$/);
+        checked += 1;
+      }
+    }
+    expect(checked).toBe(hostile.length * 2);
+    expect(stateOf((await hrefs({ open: `${A},not-a-uuid` })).clearHref, [A]).open).toEqual([A]);
+  });
+
+  it("a repeated ?open=a&open=b reads as its FIRST value, like every other repeated param on this page — and never throws", async () => {
+    const { clearHref, emptyCtaHref } = await hrefs({ open: [`${A},${B}`, C] });
+    expect(stateOf(clearHref, [A, B, C])).toEqual({ active: "registrants", open: [A, B] });
+    expect(stateOf(emptyCtaHref, [A, B, C]).open).toEqual([A, B]);
+    expect((await hrefs({ open: [] })).clearHref, "an empty array is absent").toBe(`${BASE}?tab=registrants`);
+  });
+});
+
+// B6 T21 review, item 7: an ARCHIVED division's id in ?division_id= must not narrow the table behind a
+// filter the bar shows as unset. Same ruling as a division that does not exist: ignore it.
+describe("registration hub — an archived division in ?division_id= is ignored, not silently applied (B6 T21 review)", () => {
+  const LIVE = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const ARCHIVED = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  const ALL = [{ id: "r1", group_id: "g1" }, { id: "r2", group_id: "g2" }, { id: "r3", group_id: "g3" }];
+
+  beforeEach(() => {
+    h.divisionOptions = [{ id: LIVE, name: "Open" }];
+    // The read model narrows by whatever division it is handed, archived or not — as the real one does.
+    listRegistrationsMock.mockImplementation((async (_auth: unknown, divisionId: string | null) =>
+      divisionId === null ? ALL : [ALL[0]]) as never);
+  });
+
+  async function panelFor(divisionId: string | undefined) {
+    const tree = walk(
+      await Page({ params, searchParams: Promise.resolve({ tab: "registrants", ...(divisionId ? { division_id: divisionId } : {}) }) }),
+    );
+    return { tree, props: propsOf(tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!) };
+  }
+
+  it("the table is every row, and the filters handed to the bar (and the export link) say no division", async () => {
+    const { tree, props } = await panelFor(ARCHIVED);
+    expect((props.rows as unknown[]).map((r) => (r as { id: string }).id)).toEqual(["r1", "r2", "r3"]);
+    expect((props.filters as { divisionId: string | null }).divisionId).toBeNull();
+    const exportHref = tree.find((e) => e.type === "a" && String(propsOf(e).href ?? "").includes("/registrations/export"));
+    expect(exportHref, "the export link is there").toBeTruthy();
+    expect(String(propsOf(exportHref!).href)).not.toContain("division_id");
+    expect(listRegistrationsMock).toHaveBeenCalledTimes(2);
+    const calls = listRegistrationsMock.mock.calls as unknown as unknown[][];
+    expect(calls[0]![1]).toBe(ARCHIVED);
+    expect(calls[1]![1]).toBeNull();
+  });
+
+  it("a division the dropdown lists still narrows — with ONE read", async () => {
+    const { props } = await panelFor(LIVE);
+    expect((props.rows as unknown[]).map((r) => (r as { id: string }).id)).toEqual(["r1"]);
+    expect((props.filters as { divisionId: string | null }).divisionId).toBe(LIVE);
+    expect(listRegistrationsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("no division filter: ONE read, nothing dropped", async () => {
+    const { props } = await panelFor(undefined);
+    expect((props.rows as unknown[]).length).toBe(3);
+    expect(listRegistrationsMock).toHaveBeenCalledTimes(1);
   });
 });
 

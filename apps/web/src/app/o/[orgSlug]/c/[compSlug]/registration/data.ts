@@ -16,6 +16,7 @@ import { HttpError } from "@/lib/errors";
 // (`import type {...} from ".../data"`), so there is no runtime cycle.
 // Used by registrantsExportHrefFor below (RS005 F3 finding 2).
 import { registrantsExportHref } from "@/components/registration-hub-registrant-derive";
+import { parseHubTabs } from "@/components/registration-hub-tabs-state";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { RegistrationHubRowData } from "@/components/registration-hub-division-row";
 import { entrantShapeOf } from "@/server/usecases/entrant-shape";
@@ -369,6 +370,60 @@ export async function fetchRegistrantRows(
     }
     throw err;
   }
+}
+
+/**
+ * B6 T21 review: `fetchDivisionOptions` lists only NON-archived divisions, but
+ * `listRegistrations` is happy to narrow by an ARCHIVED division of this
+ * competition — so a stale link (`?division_id=<archived>`) used to narrow the
+ * table while the pill, the chip and the sheet all read "unset": rows hidden by
+ * a filter nobody could see, or clear.
+ *
+ * Ruling: ignore it, exactly like a division that does not exist or belongs to
+ * another competition (`fetchRegistrantRows`, above): render unfiltered and let
+ * `filters.divisionId` say so. Cost if wrong: an organiser following an old link
+ * to an archived division's rows sees every row; no screen offers that filter,
+ * so nothing in the product points there. (The alternative — naming the archived
+ * division on the pill — needs a second query shape and a new label in four
+ * locales for a link nothing generates.)
+ *
+ * Called with the options the page already fetched concurrently with the rows,
+ * so the common case (no division filter, or a listed one) costs nothing; only
+ * the stale link pays one more read, the same "discovered a round trip later"
+ * shape as the 404 retry above. Not folded into `fetchRegistrantRows`: that
+ * would put a lookup on every filtered load, and `listRegistrations` itself is
+ * the API's read model, which must keep accepting an archived division.
+ */
+export async function dropArchivedDivisionFilter(
+  auth: AuthCtx,
+  competitionId: string,
+  query: RegistrantsRawQuery,
+  first: RegistrantRowsResult,
+  divisions: readonly DivisionOption[],
+): Promise<RegistrantRowsResult> {
+  const id = first.filters.divisionId;
+  if (id === null || divisions.some((d) => d.id === id)) return first;
+  // `division_id` is a first-value-wins param (`firstOf`): clearing it clears the lot.
+  return fetchRegistrantRows(auth, competitionId, { ...query, division_id: undefined });
+}
+
+/**
+ * B7 T22 ruling (2026-11-13): filters are not tabs. The Registrants tab's own
+ * links back to the bare tab (and its empty state's way to Settings) carry the
+ * organiser's open division tabs (`?open=<a>,<b>`) so following one does not
+ * close them. Read the way the hub reads them (`parseHubTabs`, so the same cap
+ * of 2 and the same de-duplication), but against the ids' SHAPE only: this page
+ * has no list of the competition's openable divisions on this tab, and a link it
+ * writes must be safe whatever it was given — a non-uuid (`x&tab=settings`) is
+ * dropped here, never spliced into an href. A repeated `?open=a&open=b` reads as
+ * its FIRST value, the house rule for a repeated param (`firstOf`, and now
+ * `parseHubTabs`).
+ */
+export function carriedOpenTabs(raw: string | string[] | undefined): string[] {
+  const first = firstOf(raw);
+  if (typeof first !== "string") return [];
+  const shaped = new Set(first.split(",").filter((id) => UUID_RE.test(id)));
+  return parseHubTabs({ tab: "registrants", open: first }, shaped).open;
 }
 
 /**

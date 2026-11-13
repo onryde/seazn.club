@@ -3086,6 +3086,8 @@
   "reg.filters.count.other": "{count} registrants",
   "reg.filters.open": "Filters",
   "reg.filters.show": "Show registrants",
+  "reg.filters.reset": "Reset",
+  "reg.filters.close": "Close",
   "reg.filters.sheetTitle": "Filters",
   "reg.pulse.confirmed": "confirmed",
   "reg.pulse.confirmedOf": "confirmed of {n}",

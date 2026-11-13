@@ -104,9 +104,18 @@ function carryOver(current: URLSearchParams, owned: readonly string[]): URLSearc
 /** "Clear all": the bare tab, no filter params (owner 1). NOT the bare
  *  `/registration` — that lands on the Settings tab (`resolveRegistrationHubTab`
  *  falls back to it), so "bare" means "no filter params, still on the tab".
- *  Query-only on purpose: the caller prefixes the route's own path. */
-export function clearAllHref(): string {
-  return "?tab=registrants";
+ *
+ *  Filters are not tabs (B7 T22 ruling, 2026-11-13): everything in the CURRENT
+ *  address that this form does not own rides along — the open division tabs
+ *  (`open`) above all — through the same `carryOver` rule as a "×" and a submit,
+ *  so the three ways of changing the filters cannot disagree about what survives.
+ *  `tab` comes first, so with nothing to carry the result is exactly the old
+ *  `?tab=registrants`. Query-only on purpose: the caller prefixes the route's own
+ *  path. */
+export function clearAllHref(current: URLSearchParams): string {
+  const params = new URLSearchParams({ tab: "registrants" });
+  for (const [name, value] of carryOver(current, FORM_FIELDS).entries()) params.append(name, value);
+  return `?${params.toString()}`;
 }
 
 /** The "×" on a pill or chip: the CURRENT query string minus the one param it
@@ -175,7 +184,7 @@ function useSearchDebounce() {
  * `name`, its auto-submit and its keyed remount (everything below still holds);
  * what is new is that a set filter shows "Label: Value" with a "×" link to the
  * URL without that param (`clearOneHref`), and "Clear all" links to the bare tab
- * (`clearAllHref`).
+ * (`clearAllHref`, which keeps whatever else the address carries).
  *
  * B6 T21 (mock A1, spec §8 "Below md"): one DOM, two faces. From md the bar above
  * is unchanged. Below md the pill row and the standalone sort fold away
@@ -288,9 +297,9 @@ export function RegistrationHubRegistrantFilters({
   const debounce = useSearchDebounce();
   const formId = useId();
   // The phone sheet. `null` = closed. While open it carries the search box's text
-  // as of the moment it opened, and whether "Clear all" has reset the staged
-  // controls. Local state only — never in the URL (spec §8).
-  const [sheet, setSheet] = useState<{ q: string; cleared: boolean } | null>(null);
+  // as of the moment it opened, and how many times "Reset" has been pressed (each
+  // press remounts the staged controls). Local state only — never in the URL (spec §8).
+  const [sheet, setSheet] = useState<{ q: string; resets: number } | null>(null);
 
   // Task 2 (RS005 R5): the single interception point for every submission,
   // however it was triggered — the onChange->requestSubmit() calls below,
@@ -339,7 +348,7 @@ export function RegistrationHubRegistrantFilters({
   // pushes the whole bar at once. A pending debounce is left running — closing
   // the sheet without applying must still search what was typed.
   function openSheet(e: { currentTarget: { form: { elements: unknown } | null } }) {
-    setSheet({ q: namedValue(e.currentTarget.form, "q") ?? filters.text, cleared: false });
+    setSheet({ q: namedValue(e.currentTarget.form, "q") ?? filters.text, resets: 0 });
   }
 
   // Show registrants: ONE push of the staged controls + the search text, then
@@ -440,7 +449,7 @@ export function RegistrationHubRegistrantFilters({
           {setSpecs.map((spec) => chip(ctx, spec))}
           {active && (
             <Link
-              href={hrefFor(clearAllHref())}
+              href={hrefFor(clearAllHref(current))}
               data-chip-clear-all
               className="inline-flex h-11 items-center rounded-full px-3 text-sm font-medium text-purple-700 hover:bg-purple-50 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-600"
             >
@@ -461,7 +470,7 @@ export function RegistrationHubRegistrantFilters({
 
           {active && (
             <Link
-              href={hrefFor(clearAllHref())}
+              href={hrefFor(clearAllHref(current))}
               data-filter-clear-all
               className="inline-flex h-10 items-center rounded-full px-3 text-sm font-medium text-purple-700 hover:bg-purple-50 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-600"
             >
@@ -482,9 +491,9 @@ export function RegistrationHubRegistrantFilters({
           kindOptions,
           formId,
           q: sheet.q,
-          cleared: sheet.cleared,
+          resets: sheet.resets,
           onSubmit: handleSheetSubmit,
-          onClear: () => setSheet({ ...sheet, cleared: true }),
+          onReset: () => setSheet({ ...sheet, resets: sheet.resets + 1 }),
           onClose: () => setSheet(null),
         })}
     </>

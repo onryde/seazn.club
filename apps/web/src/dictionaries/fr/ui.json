@@ -3086,6 +3086,8 @@
   "reg.filters.count.other": "{count} inscrits",
   "reg.filters.open": "Filtres",
   "reg.filters.show": "Voir les inscrits",
+  "reg.filters.reset": "Réinitialiser",
+  "reg.filters.close": "Fermer",
   "reg.filters.sheetTitle": "Filtres",
   "reg.pulse.confirmed": "confirmé(s)",
   "reg.pulse.confirmedOf": "confirmé(s) sur {n}",

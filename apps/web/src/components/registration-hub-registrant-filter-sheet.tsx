@@ -14,9 +14,12 @@
 //
 // Every control is uncontrolled, exactly like the bar's own: `defaultValue` from
 // the URL's filters at the moment the sheet opens, read back out of the DOM by
-// the form's submit handler. "Clear all" resets what is STAGED by remounting the
-// controls with empty defaults (a new `key`), which a real browser needs since it
-// never re-applies `defaultValue` to a node it already has; it does not navigate.
+// the form's submit handler. "Reset" empties what is STAGED by remounting the
+// controls with empty defaults (a new `key` EVERY press), which a real browser
+// needs since it never re-applies `defaultValue` to a node it already has; it does
+// not navigate. It is not called "Clear all": the bar's own Clear all is a link
+// that empties the URL's filters, the search and the sort, and two buttons on one
+// phone screen reading the same while doing different things is a trap.
 import type { FormEvent, ReactNode } from "react";
 import { Modal } from "@/components/modal";
 import { t } from "@/lib/i18n-runtime";
@@ -37,20 +40,25 @@ export interface FilterSheetProps {
   /** The search box's text when the sheet opened — carried as a hidden field, so
    *  Show applies the filters AND the search in one push. */
   q: string;
-  /** True after "Clear all": every control remounts with an empty default. */
-  cleared: boolean;
+  /** How many times "Reset" has been pressed since the sheet opened. Zero: the
+   *  controls start from the URL's filters. Any other number: they start empty, and
+   *  the number is part of every control's `key`, so EACH press is a fresh mount — a
+   *  boolean would give the second press the same keys as the first, React would keep
+   *  the nodes, and whatever was staged since would survive the press. */
+  resets: number;
   onSubmit: (e: FormEvent<HTMLFormElement>) => void;
-  onClear: () => void;
+  onReset: () => void;
   onClose: () => void;
 }
 
 const FIELD_LABEL = "mb-1 block text-xs font-medium text-slate-500";
 
 export function filterSheet(o: FilterSheetProps) {
-  const { dict, filters, divisions, formId, cleared } = o;
-  // A cleared sheet remounts every control: a real browser never re-applies
-  // `defaultValue` to a node it already holds.
-  const keyFor = (name: string) => `${name}:${cleared ? "cleared" : "open"}`;
+  const { dict, filters, divisions, formId, resets } = o;
+  const cleared = resets > 0;
+  // A reset sheet remounts every control: a real browser never re-applies
+  // `defaultValue` to a node it already holds. One key per press, never reused.
+  const keyFor = (name: string) => `${name}:${resets}`;
 
   function selectField(name: string, label: string, defaultValue: string, children: ReactNode) {
     const id = `${formId}-${name}`;
@@ -84,7 +92,7 @@ export function filterSheet(o: FilterSheetProps) {
         />
         <span
           aria-hidden="true"
-          className="relative h-6 w-10 shrink-0 rounded-full bg-slate-400 transition peer-checked:bg-purple-600 after:absolute after:left-0.5 after:top-0.5 after:h-5 after:w-5 after:rounded-full after:bg-white after:shadow after:transition peer-checked:after:translate-x-4"
+          className="relative h-6 w-10 shrink-0 rounded-full bg-slate-500 transition peer-checked:bg-purple-600 after:absolute after:left-0.5 after:top-0.5 after:h-5 after:w-5 after:rounded-full after:bg-white after:shadow after:transition peer-checked:after:translate-x-4"
         />
       </label>
     );
@@ -95,10 +103,11 @@ export function filterSheet(o: FilterSheetProps) {
       title={t(dict, "reg.filters.sheetTitle")}
       onClose={o.onClose}
       closeSize="lg"
+      closeLabel={t(dict, "reg.filters.close")}
       footer={
         <>
-          <button type="button" data-filter-sheet-clear onClick={o.onClear} className="btn min-h-11 px-2 text-purple-700 hover:bg-purple-50">
-            {t(dict, "reg.filters.clearAll")}
+          <button type="button" data-filter-sheet-reset onClick={o.onReset} className="btn min-h-11 px-2 text-purple-700 hover:bg-purple-50">
+            {t(dict, "reg.filters.reset")}
           </button>
           <button type="submit" form={formId} data-filter-sheet-show className="btn btn-primary min-h-11 flex-1 px-3">
             {t(dict, "reg.filters.show")}

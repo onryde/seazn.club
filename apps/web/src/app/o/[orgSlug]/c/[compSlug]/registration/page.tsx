@@ -42,6 +42,8 @@ import {
   fetchOrgCardUnsupportedCurrency,
   fetchOrgCurrency,
   fetchRegistrantRows,
+  dropArchivedDivisionFilter,
+  carriedOpenTabs,
   fetchDivisionOptions,
   fetchRegistrantDetails,
   fetchPoolSummary,
@@ -54,10 +56,10 @@ export default async function RegistrationHubPage({
   searchParams,
 }: {
   params: Promise<{ orgSlug: string; compSlug: string }>;
-  searchParams: Promise<RegistrantsRawQuery & { tab?: string }>;
+  searchParams: Promise<RegistrantsRawQuery & { tab?: string; open?: string | string[] }>;
 }) {
   const [{ orgSlug, compSlug }, rawSearchParams] = await Promise.all([params, searchParams]);
-  const { tab: rawTab, ...registrantsRawQuery } = rawSearchParams;
+  const { tab: rawTab, open: rawOpen, ...registrantsRawQuery } = rawSearchParams;
   const page = await requireCompetitionPage(orgSlug, compSlug, { tail: "/registration", search: searchOf(rawSearchParams) });
   const { auth, canEdit } = page;
   // requireCompetitionPage (page-auth.ts:192-201) only 404s a SCORER — that
@@ -172,11 +174,16 @@ export default async function RegistrationHubPage({
     // own result — run all three concurrently rather than making the other
     // two wait their turn behind it. Only fetchRegistrantDetails genuinely
     // needs registrants.rows, so it stays a sequential await AFTER this.
-    const [registrants, divisions, poolSummaryRows] = await Promise.all([
+    const [firstRead, divisions, poolSummaryRows] = await Promise.all([
       fetchRegistrantRows(auth, id, registrantsRawQuery),
       fetchDivisionOptions(auth, id),
       fetchPoolSummary(auth, id),
     ]);
+    // B6 T21 review: a `?division_id=` naming an ARCHIVED division is ignored (the
+    // dropdown cannot show it, so it must not narrow the table) — see the function.
+    const registrants = await dropArchivedDivisionFilter(auth, id, registrantsRawQuery, firstRead, divisions);
+    // Filters are not tabs (B7 T22): the two links back out of this tab keep the open ones.
+    const openTabs = carriedOpenTabs(rawOpen);
     // RS005 W2b: the row-expand detail's roster/siblings/form_fields for
     // EVERY row on the page, batched into 2 queries total (task 3) —
     // fetched here, eagerly, rather than on click: the row is a plain
@@ -222,11 +229,11 @@ export default async function RegistrationHubPage({
         locale={locale}
         orgTz={orgTz}
         filtersAction={routes.competitionRegistration(orgSlug, compSlug)}
-        clearHref={routes.competitionRegistration(orgSlug, compSlug, "registrants")}
+        clearHref={routes.competitionRegistration(orgSlug, compSlug, "registrants", undefined, openTabs)}
         emptyTitle={t(dict, "reg.hub.registrants.title")}
         emptyBody={t(dict, "reg.hub.registrants.body")}
         emptyCtaLabel={t(dict, "reg.hub.registrants.cta")}
-        emptyCtaHref={routes.competitionRegistration(orgSlug, compSlug, "settings")}
+        emptyCtaHref={routes.competitionRegistration(orgSlug, compSlug, "settings", undefined, openTabs)}
         details={details}
         poolSummary={poolSummary}
         orgSlug={orgSlug}

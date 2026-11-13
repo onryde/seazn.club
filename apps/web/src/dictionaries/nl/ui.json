@@ -3086,6 +3086,8 @@
   "reg.filters.count.other": "{count} inschrijvingen",
   "reg.filters.open": "Filters",
   "reg.filters.show": "Inschrijvingen tonen",
+  "reg.filters.reset": "Resetten",
+  "reg.filters.close": "Sluiten",
   "reg.filters.sheetTitle": "Filters",
   "reg.pulse.confirmed": "bevestigd",
   "reg.pulse.confirmedOf": "bevestigd van {n}",
