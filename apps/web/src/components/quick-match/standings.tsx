@@ -17,6 +17,11 @@
 // the short table steps aside (the section's `group-has` variant), so one table shows at a time. The full table is wider
 // than a phone: it scrolls sideways inside its own focusable region (tabIndex 0, a role and a name, as the public table's
 // region does), never the page.
+//
+// A League + Knockout's league (quick match plan 5 Task 7, D6, D9; mockup qmd13a01 §7-12): the header says how many go
+// through ("Top 2 go through", "Top 2 went through"); the rows that go through are lime-tinted (`through`), a dashed line
+// sits at the cut (`cutAbove`); while a tie at the cut is open its rows show "=" and "level — to decide" (orange,
+// `toDecide`), and once settled a row carries "decided by lot" or "picked" (`tag`). A plain League draws none of these.
 /** The public table's columns and cells for this league, already in the viewer's words: the page builds it. */
 export interface FullTableData {
   /** In the public table's order: the key, the printed abbreviation and the column's name in words. */
@@ -30,6 +35,8 @@ export interface StandingsView {
   title: string;
   /** "Counts played matches only" while a match is Not played (plan 4); null otherwise. */
   note: string | null;
+  /** A League + Knockout's "Top {count} go through" / "went through" (plan 5 T7); null for a plain League. */
+  caption?: string | null;
   /** The place column's name, for a screen reader (the mockup's header cell is blank). */
   rankLabel: string;
   sideLabel: string;
@@ -46,6 +53,16 @@ export interface StandingsView {
     /** One per column, in `columns` order. */
     cells: string[];
     leader: boolean;
+    /** A League + Knockout's row (plan 5 T7), absent on a plain League's: it goes (or went) through to the knockout. */
+    through?: boolean;
+    /** Its tie at the cut is open: the place reads "=" (hidden from a screen reader, which hears the tag) in orange. */
+    toDecide?: boolean;
+    /** The place is "=" (an open tie, or a tie the guests settled by Pick): printed, but not read out. */
+    placeHidden?: boolean;
+    /** "level — to decide", "decided by lot" or "picked", beside the name. */
+    tag?: { text: string; kind: "toDecide" | "lot" | "picked" } | null;
+    /** The cut: a dashed line above this row (the first row past the ones that go through, or the open tie's edge). */
+    cutAbove?: boolean;
   }[];
   /** The "Full table" fold; null when the public table has no column the short table lacks (nothing more to show). */
   full: {
@@ -70,6 +87,11 @@ export function QuickMatchStandings({ view }: { view: StandingsView }) {
         >
           {view.title}
         </h2>
+        {view.caption ? (
+          <p data-testid="qm-standings-caption" className="min-w-0 text-xs text-[#d9d2f2] [overflow-wrap:anywhere]">
+            {view.caption}
+          </p>
+        ) : null}
         {view.note !== null ? (
           <p data-testid="qm-standings-note" className="min-w-0 text-xs text-[#8d7fc0] [overflow-wrap:anywhere]">
             {view.note}
@@ -108,10 +130,16 @@ export function QuickMatchStandings({ view }: { view: StandingsView }) {
                 key={r.entrantId}
                 data-testid="qm-standings-row"
                 data-leader={r.leader ? "true" : undefined}
-                className={`border-b border-[rgba(59,42,110,0.6)] last:border-b-0 ${r.leader ? "bg-[rgba(163,230,53,0.08)]" : ""}`}
+                data-through={r.through ? "true" : undefined}
+                data-to-decide={r.toDecide ? "true" : undefined}
+                className={`border-b border-[rgba(59,42,110,0.6)] last:border-b-0 ${rowTint(r)}${r.cutAbove ? CUT : ""}`}
               >
                 <td className="app-display px-2 py-2 text-center text-base font-bold text-[color:var(--mk-lime)]">
-                  {view.levelLabel !== null ? (
+                  {r.placeHidden ? (
+                    <span aria-hidden="true" className={r.toDecide ? "text-[color:var(--mk-orange)]" : undefined}>
+                      {r.place}
+                    </span>
+                  ) : view.levelLabel !== null ? (
                     <>
                       <span aria-hidden="true">{r.place}</span>
                       <span className="sr-only">{view.levelLabel}</span>
@@ -120,9 +148,18 @@ export function QuickMatchStandings({ view }: { view: StandingsView }) {
                     r.place
                   )}
                 </td>
-                <th scope="row" className="truncate px-2 py-2 text-left font-normal text-cream">
-                  {r.name}
-                </th>
+                {r.tag ? (
+                  <th scope="row" className="px-2 py-2 text-left font-normal text-cream">
+                    <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+                      <span className="min-w-0 max-w-full truncate">{r.name}</span>
+                      {rowTag(r.tag)}
+                    </span>
+                  </th>
+                ) : (
+                  <th scope="row" className="truncate px-2 py-2 text-left font-normal text-cream">
+                    {r.name}
+                  </th>
+                )}
                 {r.cells.map((value, i) => (
                   <td
                     key={view.columns[i]!.key}
@@ -139,6 +176,32 @@ export function QuickMatchStandings({ view }: { view: StandingsView }) {
       </div>
       {view.full ? <QuickMatchFullTable view={view} full={view.full} /> : null}
     </section>
+  );
+}
+
+type Row = StandingsView["rows"][number];
+/** The row's tint: lime for the leader (a plain League) or a side going through (a League + Knockout), orange for a row of
+ *  an open tie at the cut, none otherwise (an empty string: a plain League's row class is what it always was). */
+function rowTint(r: Row): string {
+  if (r.toDecide) return "bg-[rgba(251,146,60,0.08)]";
+  return r.leader || r.through ? "bg-[rgba(163,230,53,0.08)]" : "";
+}
+/** The cut line: a dashed rule above the row, where the sides going through end (mockup qmd13a01 §8-9). */
+const CUT = " border-t-2 border-t-[#4a3a80] [border-top-style:dashed]";
+const TAG = {
+  toDecide: "bg-[rgba(251,146,60,0.16)] text-[color:var(--mk-orange)]",
+  lot: "border border-[#4a3a80] text-[#b7aede]",
+  picked: "bg-[rgba(163,230,53,0.14)] text-[color:var(--mk-lime)]",
+} as const satisfies Record<NonNullable<Row["tag"]>["kind"], string>;
+function rowTag(tag: NonNullable<Row["tag"]>) {
+  return (
+    <span
+      data-testid="qm-standings-tag"
+      data-kind={tag.kind}
+      className={`inline-flex min-w-0 max-w-full items-center rounded-full px-2 py-0.5 text-[11px] font-semibold leading-tight [overflow-wrap:anywhere] ${TAG[tag.kind]}`}
+    >
+      {tag.text}
+    </span>
   );
 }
 
@@ -193,7 +256,11 @@ export function QuickMatchFullTable({ view, full }: { view: StandingsView; full:
                 className={`border-b border-[rgba(59,42,110,0.6)] last:border-b-0 ${r.leader ? "bg-[rgba(163,230,53,0.08)]" : ""}`}
               >
                 <td className="app-display px-2 py-2 text-center text-base font-bold text-[color:var(--mk-lime)]">
-                  {view.levelLabel !== null ? (
+                  {r.placeHidden ? (
+                    <span aria-hidden="true" className={r.toDecide ? "text-[color:var(--mk-orange)]" : undefined}>
+                      {r.place}
+                    </span>
+                  ) : view.levelLabel !== null ? (
                     <>
                       <span aria-hidden="true">{r.place}</span>
                       <span className="sr-only">{view.levelLabel}</span>

@@ -36,6 +36,12 @@
 // Plan 4 Task 4: the row menu slot (`QuickMatchRowMenu`, one ⋯ per row, owner 2026-11-13). The list says what a row offers;
 // this page turns each item into its post (`routes.quickMatchScore` for Score and Edit result, `routes.quickMatchSkip`,
 // `routes.quickMatchPutBack`, each the home's own path plus a fixture id) and its words, and hands the island strings only.
+//
+// Plan 5 Task 7 (League + Knockout): the cut slot (`QuickMatchCutPrompt`, asked only while a tie at the cut is open: the
+// Pick panel posting `routes.quickMatchCutPick(token)` and, when a lot ordered the tie, the Toss form posting
+// `routes.quickMatchCutToss(token)`, with Back to the home's own path) and "Setting up the knockout"'s Refresh (the home's
+// own path). No advance runs here: the read itself retries the knockout's fill on every load (`readQuickMatchHome` step 0),
+// so a second phone whose answer was ALREADY_DECIDED lands on a home that shows the knockout filled.
 import type { Metadata } from "next";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { HtmlLang } from "@/components/i18n/html-lang";
@@ -43,10 +49,12 @@ import {
   homeFlash,
   QuickMatchDead,
   QuickMatchHomeView,
+  QuickMatchRefreshLink,
   type QuickMatchCopy,
   type QuickMatchSlots,
 } from "@/components/quick-match/home";
 import { QuickMatchAddMatch } from "@/components/quick-match/add-match";
+import { QuickMatchCutPrompt } from "@/components/quick-match/cut-prompt";
 import { QuickMatchRowMenu } from "@/components/quick-match/row-menu";
 import { ClearFlashParam } from "@/components/quick-match/clear-flash-param";
 import { matchSidesId, type RowMenuItem } from "@/components/quick-match/match-list";
@@ -190,6 +198,26 @@ export default async function QuickMatchHomePage({
         />
       );
     },
+    // A League + Knockout's tie at the cut (asked by the view only while it is open): the guests' two answers.
+    cut: (view) => (
+      <QuickMatchCutPrompt
+        pickAction={routes.quickMatchCutPick(token)}
+        tossAction={view.toss ? routes.quickMatchCutToss(token) : null}
+        backHref={routes.quickMatch(token)}
+        members={view.members}
+        seats={view.seats}
+        locale={locale}
+        words={{
+          pick: copy.t("quickMatch.cut.pick"),
+          toss: copy.t("quickMatch.cut.toss"),
+          back: copy.t("quickMatch.cut.back"),
+          question: copy.plural("quickMatch.cut.pickQuestion", view.seats),
+          // As written ("Send {names} through"): the island names the sides chosen.
+          send: copy.t("quickMatch.cut.send"),
+        }}
+      />
+    ),
+    refresh: <QuickMatchRefreshLink href={routes.quickMatch(token)} label={copy.t("quickMatch.home.refresh")} />,
   };
   const viewerId = home.row.savedByUserId === null ? null : ((await getCurrentUser())?.id ?? null);
   return (

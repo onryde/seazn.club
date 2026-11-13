@@ -523,16 +523,19 @@ const PAINTERS: Record<string, { verdict: true | string; handoff?: string | stri
   // The quick match home (plan 2 Tasks 6, 7, 8; plan 3 Task 5; plan 4 Task 4): builds `routes.quickMatchScore(token, fixture)`
   // inline into the Score form's `action`, `routes.quickMatch(token)` into the Share island's `path`,
   // `routes.quickMatchAddMatch(token)` into the "Add a match" form's `action`, `routes.quickMatchSaveConfirm(token)` into the
-  // Save form's `action`, and each row menu's posts (Score and Edit result, Not played, Put back) into its `*Action` props.
+  // Save form's `action`, and each row menu's posts (Score and Edit result, Not played, Put back) into its `*Action` props;
+  // plan 5 Task 7: a League + Knockout's tie at the cut (the Pick and Toss posts and Back) and Setting up's Refresh link.
   "app/q/[token]/page.tsx": {
     verdict:
-      "builds the home's own `/q/<token>` paths inline into its islands' props (the Score form's action, the Share island's path, the Add a match form's action, the Save form's action, the row menu's Score, Edit result, Not played and Put back actions) and paints them nowhere itself",
+      "builds the home's own `/q/<token>` paths inline into its islands' props (the Score form's action, the Share island's path, the Add a match form's action, the Save form's action, the row menu's Score, Edit result, Not played and Put back actions, the cut prompt's Pick, Toss and Back, the Refresh link's href) and paints them nowhere itself",
     handoff: [
       "components/quick-match/score-form.tsx",
       "components/quick-match/share.tsx",
       "components/quick-match/add-match.tsx",
       "components/quick-match/save-form.tsx",
       "components/quick-match/row-menu.tsx",
+      "components/quick-match/cut-prompt.tsx",
+      "components/quick-match/home.tsx",
     ],
   },
   // The home's Share (plan 2 Task 7): the home link in its read-only field, handed to the share sheet; the QR is `sensitive`.
@@ -542,6 +545,11 @@ const PAINTERS: Record<string, { verdict: true | string; handoff?: string | stri
   // The home's row menu (plan 4 Task 4): each item's form posts `/q/<home token>/score|skip|put-back/<fixture>`, and the
   // confirm sheet's form posts the skip.
   "components/quick-match/row-menu.tsx": { verdict: true },
+  // The tie at the cut (plan 5 Task 7): Pick posts `/q/<home token>/cut/pick`, Toss `/q/<home token>/cut/toss`, and Back
+  // links to the home.
+  "components/quick-match/cut-prompt.tsx": { verdict: true },
+  // "Setting up the knockout"'s Refresh (plan 5 Task 7, `QuickMatchRefreshLink`): a link to the home's own path.
+  "components/quick-match/home.tsx": { verdict: true },
   // Save (plan 3 Task 5): the form's action is `/q/<home token>/save/confirm`, on the home and on the save page.
   "components/quick-match/save-form.tsx": { verdict: true },
   // The save page (plan 3 Task 5): its back link to the home, and the Save form's action (a component site, checked there).
@@ -571,6 +579,9 @@ const QUICK_MATCH_PAINTERS = [
   "components/quick-match/my-list.tsx",
   // Plan 4 Task 4: each row's ⋯ menu, its items' posts and the confirm sheet's.
   "components/quick-match/row-menu.tsx",
+  // Plan 5 Task 7: the tie at the cut's Pick and Toss posts and Back, and Setting up's Refresh.
+  "components/quick-match/cut-prompt.tsx",
+  "components/quick-match/home.tsx",
 ];
 
 describe("every element that paints a scrubbed secret carries ph-no-capture, or its file says why not", () => {
@@ -709,6 +720,32 @@ describe("every element that paints a scrubbed secret carries ph-no-capture, or 
     const forms = menu.filter((site) => site.how === "attribute action" && site.tag === "form");
     expect(forms.length, "the item form and the sheet form").toBe(2);
     expect(forms.map((site) => site.blocked)).toEqual([true, true]);
+  });
+
+  it("the tie at the cut and Setting up (plan 5 Task 7): the page hands Pick, Toss and Back to QuickMatchCutPrompt and the home path to QuickMatchRefreshLink inline; every host element carries the class", () => {
+    const handed: [string, string][] = [
+      ["QuickMatchCutPrompt", "pickAction"],
+      ["QuickMatchCutPrompt", "tossAction"],
+      ["QuickMatchCutPrompt", "backHref"],
+      ["QuickMatchRefreshLink", "href"],
+    ];
+    for (const [component, prop] of handed) {
+      expect(known.props, `${component}.${prop}`).toEqual(expect.arrayContaining([{ component, prop, from: "app/q/[token]/page.tsx" }]));
+    }
+    const page = painters.get("app/q/[token]/page.tsx") ?? [];
+    const sites = page.filter((site) => site.tag === "QuickMatchCutPrompt" || site.tag === "QuickMatchRefreshLink");
+    expect(sites.map((site) => [site.tag, site.how, site.component]).sort()).toEqual(
+      handed.map(([component, prop]) => [component, `attribute ${prop}`, true]).sort(),
+    );
+    // In the island: the Pick form, the Toss form and Back; in the home, Refresh. Anti-vacuity: all four are found.
+    const prompt = painters.get("components/quick-match/cut-prompt.tsx") ?? [];
+    expect(prompt.map((site) => [site.tag, site.how, site.blocked]).sort()).toEqual([
+      ["a", "attribute href", true],
+      ["form", "attribute action", true],
+      ["form", "attribute action", true],
+    ]);
+    const home = painters.get("components/quick-match/home.tsx") ?? [];
+    expect(home.map((site) => [site.tag, site.how, site.blocked])).toEqual([["a", "attribute href", true]]);
   });
 
   it("Save (plan 3 Task 5): the home and the save page hand the action to QuickMatchSaveForm; its <form> and the page's back link carry the class", () => {
