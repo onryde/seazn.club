@@ -51,6 +51,7 @@ import { assignSoloSignUp } from "../registration-assign";
 import { approveRegistration } from "../registration-approval";
 import { joinTeamEntry, submitRegistrationGroup, type SubmitGroupEntryInput } from "../registration-submit";
 import { confirmRegistration, putRegistrationSettings } from "../registrations";
+import { createStageTimer, type StageTimer } from "@/server/timing";
 import { seedRegistration } from "./_registration-fixtures";
 import { linkWithoutPlayConsent, reconnectLichess, seedOwner } from "./_external-play-seed";
 
@@ -389,8 +390,9 @@ async function submit(
   submitter: Account,
   mates: number,
   contact: { dob?: string | null; guardian_name?: string; guardian_consent?: boolean } = { dob: ADULT },
-  /** `rosterless`: a team the captain enters without putting themselves on it (nobody on the roster; players join by the link). */
-  opts: { rosterless?: boolean } = {},
+  /** `rosterless`: a team the captain enters without putting themselves on it (nobody on the roster; players join by the link).
+   *  `timer`: the register route's stage timer, passed through to the usecase. */
+  opts: { rosterless?: boolean; timer?: StageTimer } = {},
 ): Promise<ReturnType<typeof submitRegistrationGroup>> {
   const entry: SubmitGroupEntryInput = {
     division_id: w.divisionId,
@@ -413,6 +415,7 @@ async function submit(
       privacy_consent: true,
       entries: [entry],
     },
+    opts.timer,
   );
 }
 
@@ -939,6 +942,29 @@ describe.skipIf(!HAS_DB)("approve: the seat ties the submitter's own person to t
 
     expect((await seatedPeople(secondReg)).map((p) => p.id), "the same person, not a second one").toEqual([firstPerson]);
     count("approve-tie");
+  });
+});
+
+// Registration redesign B0: the register route's timer also times the online-play reads, under `pre_tx` - the Lichess check per
+// online entry (`online`) and the seat gate per online division (`seat_gate`). A division that is not online runs neither, so it
+// times neither (the empty case). Not a writer scenario, so it does not count toward the tally below.
+describe.skipIf(!HAS_DB)("submit timing: the online-play reads are timed under pre_tx", () => {
+  it("an online division times online and seat_gate; one that is not online times neither, and both submits seat the player", async () => {
+    const onlineWorld = await world("individual", true);
+    const onlineTimer = createStageTimer();
+    const onlineRes = await submit(onlineWorld, "individual", await account(onlineWorld, "plays", false), 0, { dob: ADULT }, { timer: onlineTimer });
+    expect(Object.keys(onlineTimer.durations())).toEqual(expect.arrayContaining(["pre_tx", "pre_tx.online", "pre_tx.seat_gate", "tx"]));
+
+    const boardWorld = await world("individual", false);
+    const boardTimer = createStageTimer();
+    const boardRes = await submit(boardWorld, "individual", await account(boardWorld, "plays", false), 0, { dob: ADULT }, { timer: boardTimer });
+    expect(Object.keys(boardTimer.durations())).toEqual(expect.arrayContaining(["pre_tx", "tx"]));
+    expect(Object.keys(boardTimer.durations())).not.toContain("pre_tx.online");
+    expect(Object.keys(boardTimer.durations())).not.toContain("pre_tx.seat_gate");
+
+    for (const res of [onlineRes, boardRes]) {
+      expect(await seatedAfterSubmit(res.entries[0]!.registration_id)).toEqual({ status: "confirmed", people: 1 });
+    }
   });
 });
 

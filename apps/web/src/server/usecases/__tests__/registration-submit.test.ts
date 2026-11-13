@@ -57,6 +57,7 @@ import { HttpError } from "@/lib/errors";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { LEGAL_VERSION } from "@/lib/legal";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import { createStageTimer } from "@/server/timing";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { confirmRegistration, soloPoolIsFull } from "../registrations";
@@ -292,6 +293,48 @@ describe.skipIf(!HAS_DB)("submitRegistrationGroup", () => {
       select privacy_consent_at, privacy_consent_version from registration_groups where id = ${res.group_id}`;
     expect(group!.privacy_consent_at).not.toBeNull();
     expect(group!.privacy_consent_version).toBe(LEGAL_VERSION);
+  });
+
+  // Registration redesign B0: an optional timer (the public register route's) times each pre-transaction read under `pre_tx` and
+  // the transaction as `tx` (spec 2026-11-13 §3.2's stage list; this cart is free and not online, so no `online`/`seat_gate`).
+  // Two divisions, so each per-division read is entered twice and still reports as ONE stage. Then the same cart shape again
+  // with no timer: the second submit confirms exactly as the first did.
+  it("an optional timer records each pre-transaction stage and the transaction; without one the submit is unchanged", async () => {
+    const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    const second = await createDivision(owner, competition.id, {
+      name: "Second",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    });
+    await seedSettings(division.id, { entrant_kind: "individual", fee_cents: 0 });
+    await seedSettings(second.id, { entrant_kind: "individual", fee_cents: 0 });
+    const cart = (): SubmitGroupInput => ({
+      contact: baseContact(),
+      privacy_consent: true,
+      entries: [division.id, second.id].map((id) => ({
+        division_id: id,
+        entrant_kind: "individual" as const,
+        players: [{ full_name: "Timed " + randomUUID().slice(0, 6) }],
+        answers: {},
+      })),
+    });
+
+    const timer = createStageTimer();
+    const timedRes = await submitRegistrationGroup({ orgSlug, compSlug: competition.slug }, cart(), timer);
+    expect(Object.keys(timer.durations()).sort()).toEqual(
+      ["pre_tx", "pre_tx.division_ctx", "pre_tx.entitlements", "pre_tx.settings", "tx"],
+    );
+    expect(timer.header()).not.toBe("");
+
+    const plainRes = await submitRegistrationGroup({ orgSlug, compSlug: competition.slug }, cart());
+    for (const res of [timedRes, plainRes]) {
+      expect(res.entries.map((e) => e.status)).toEqual(["confirmed", "confirmed"]);
+      expect(res.amount_cents).toBe(0);
+    }
+    expect(Object.keys(plainRes).sort()).toEqual(Object.keys(timedRes).sort());
   });
 
   // Code-review fix (2026-08-30, item 1, CRITICAL) — this inline auto-confirm

@@ -11,6 +11,7 @@ import { baseUrl } from "@/lib/oauth";
 import { log } from "@/server/logger";
 import { explicitLocale } from "@/lib/explicit-locale";
 import { OutboxKeyUnavailableError, assertOutboxCanQueue } from "@/server/email-outbox";
+import { createStageTimer } from "@/server/timing";
 
 type Ctx = { params: Promise<{ orgSlug: string; slug: string }> };
 
@@ -28,14 +29,19 @@ type Ctx = { params: Promise<{ orgSlug: string; slug: string }> };
  * otherwise via `mintGroupCheckout`, which owns the payment_method/subtotal
  * gate and the currency validation; this route only wires the result
  * through.
+ *
+ * Every submit is timed per stage (registration redesign B0, server/timing.ts): one `register.submit.timing` log line carries
+ * the stage times and the cart's shape (counts and payment method only, never a name, id or slug), and the 201 carries a
+ * `Server-Timing` header only when REGISTER_SERVER_TIMING=1 (stage names are internal detail, so prod does not send them).
  */
 export async function POST(req: Request, { params }: Ctx) {
   return v1(async () => {
+    const timer = createStageTimer();
     const ip = clientIp(req.headers);
-    await rateLimit(`regsubmit:${ip}`, { max: 10, windowSeconds: 60 });
+    await timer.stage("rate_limit", () => rateLimit(`regsubmit:${ip}`, { max: 10, windowSeconds: 60 }));
     // Bot check (Cloudflare Turnstile): after the general per-IP bucket, before the body, the honeypot and the narrower bucket,
     // so a request that fails it spends one hit and not the competition's whole 5-per-5-minutes. 403 TURNSTILE_FAILED.
-    await requireTurnstile(req, "register");
+    await timer.stage("turnstile", () => requireTurnstile(req, "register"));
     const { orgSlug, slug } = await params;
     const input = await parseBody(req, PublicRegisterGroupRequest);
     // Honeypot (v3/05 §4): hidden on the real form; a filled value is a bot.
@@ -50,7 +56,7 @@ export async function POST(req: Request, { params }: Ctx) {
     // make one tenant's registrants spend the other's budget. The deleted
     // route keyed on `division_id`, a globally unique uuid, and had no such
     // ambiguity to lose.
-    await rateLimit(`regsubmit:${ip}:${orgSlug}:${slug}`, { max: 5, windowSeconds: 300 });
+    await timer.stage("rate_limit", () => rateLimit(`regsubmit:${ip}:${orgSlug}:${slug}`, { max: 5, windowSeconds: 300 }));
     // Can this box queue the confirmation at all? Asked BEFORE anything is committed. The submit commits the cart (and the mint below
     // may create a Checkout session) before the confirmation is queued, so a box that cannot seal the body (a Resend key set, no usable
     // outbox key) must refuse HERE, with nothing done: an enqueue that was the first to find out would leave a committed cart, and
@@ -68,7 +74,7 @@ export async function POST(req: Request, { params }: Ctx) {
     // paths structurally unable to supply one (an organiser entering a team
     // on someone's behalf must never bind their own user_id to a player's
     // person).
-    const sessionUser = await getCurrentUser();
+    const sessionUser = await timer.stage("user", () => getCurrentUser());
     const result = await submitRegistrationGroup(
       { orgSlug, compSlug: slug, sessionUserId: sessionUser?.id ?? null },
       {
@@ -78,6 +84,7 @@ export async function POST(req: Request, { params }: Ctx) {
         media_consent: input.media_consent,
         entries: input.entries,
       },
+      timer,
     );
     // `SubmitGroupResult` carries no `checkout_url` (registration-submit.ts
     // stays payment-agnostic) — the route adds it. Skipped entirely for a
@@ -100,15 +107,17 @@ export async function POST(req: Request, { params }: Ctx) {
     // waitlist promotion), where there is no committed-and-lost work to
     // protect and a 422/503 is exactly what the caller should see.
     let checkout_url: string | null = null;
+    // For the timing line only: what the cart charges, as far as this route can tell without another read. `mintGroupCheckout`
+    // answers null for a payable cart only when its group is not a card cart, so null here is an offline cart.
+    let paymentMethod: "none" | "card" | "offline" | "mint_failed" = "none";
     if (result.amount_cents > 0) {
       try {
-        checkout_url = await mintGroupCheckout(
-          result.group_id,
-          result.entries[0]!.division_id,
-          baseUrl(req),
-          result.access_token,
+        checkout_url = await timer.stage("mint", () =>
+          mintGroupCheckout(result.group_id, result.entries[0]!.division_id, baseUrl(req), result.access_token, timer),
         );
+        paymentMethod = checkout_url ? "card" : "offline";
       } catch (err) {
+        paymentMethod = "mint_failed";
         log.error(
           { err, group_id: result.group_id, org_slug: orgSlug, comp_slug: slug },
           "registration group submitted but checkout mint failed; returning 201 with no payment link",
@@ -123,7 +132,19 @@ export async function POST(req: Request, { params }: Ctx) {
     // the cart's own status page, and `checkout_url` stays in this response
     // only. notifySubmitted never throws — a mail failure must never turn
     // this already-committed cart into an error response.
-    await notifySubmitted(result.group_id, baseUrl(req), result.access_token);
-    return reply(201, { ...result, checkout_url });
+    await timer.stage("mail", () => notifySubmitted(result.group_id, baseUrl(req), result.access_token));
+    timer.mark("total");
+    log.info(
+      {
+        timing: timer.durations(),
+        divisions: new Set(input.entries.map((e) => e.division_id)).size,
+        entries: input.entries.length,
+        players: input.entries.reduce((n, e) => n + (e.players?.length ?? 0), 0),
+        payment_method: paymentMethod,
+      },
+      "register.submit.timing",
+    );
+    const timingHeader = process.env.REGISTER_SERVER_TIMING === "1" ? { "Server-Timing": timer.header() } : undefined;
+    return reply(201, { ...result, checkout_url }, timingHeader);
   });
 }

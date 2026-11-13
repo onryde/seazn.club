@@ -24,6 +24,7 @@ import { rosterDerivedName } from "@/lib/entrant-roster-name";
 import { LEGAL_VERSION } from "@/lib/legal";
 import { entryPriceCents, entryStanding, type EntryStanding } from "@/lib/registration-status";
 import { log } from "@/server/logger";
+import { timed, type StageTimer } from "@/server/timing";
 import { dispatchNow } from "@/server/email-outbox";
 import {
   SPOT_HOLDERS,
@@ -467,229 +468,240 @@ interface PreparedEntry {
  * public register route); RS005 W4 wires the confirmation email the same
  * way, from that same route, via `registrations/mail.ts`'s `notifySubmitted` —
  * it is no longer unimplemented, just still not this function's concern.
+ *
+ * `timer` (registration redesign B0) is the public register route's stage
+ * timer (server/timing.ts): the pre-transaction reads are timed under
+ * `pre_tx` and the transaction as `tx`. Every other caller passes none, and
+ * nothing is timed.
  */
 export async function submitRegistrationGroup(
   ctx: SubmitGroupCtx,
   input: SubmitGroupInput,
+  timer?: StageTimer,
 ): Promise<SubmitGroupResult> {
   if (input.entries.length === 0) throw new HttpError(422, "At least one entry is required");
 
   const now = new Date();
 
-  // Resolve every distinct division touched by the cart, sorted — the SAME
-  // order is used below for both settings validation and lock acquisition,
-  // so two concurrent carts touching an overlapping division set can never
-  // deadlock against each other.
-  const distinctDivisionIds = [...new Set(input.entries.map((e) => e.division_id))].sort();
-  const divisionCtxById = new Map<string, EntryDivisionCtx>();
-  for (const id of distinctDivisionIds) divisionCtxById.set(id, await loadEntryDivisionCtx(id));
+  // Everything before the transaction - the reads that resolve the cart and the checks that refuse it - is one `pre_tx` stage
+  // when the register route passes its timer (registration redesign B0), each read inside it a sub-stage. No timer: no timing.
+  const { distinctDivisionIds, first, orgId, competitionId, prepared, planLimit, seatGates } = await timed(timer, "pre_tx", async () => {
+    // Resolve every distinct division touched by the cart, sorted — the SAME
+    // order is used below for both settings validation and lock acquisition,
+    // so two concurrent carts touching an overlapping division set can never
+    // deadlock against each other.
+    const distinctDivisionIds = [...new Set(input.entries.map((e) => e.division_id))].sort();
+    const divisionCtxById = new Map<string, EntryDivisionCtx>();
+    for (const id of distinctDivisionIds) divisionCtxById.set(id, await timed(timer, "division_ctx", () => loadEntryDivisionCtx(id)));
 
-  const first = divisionCtxById.get(distinctDivisionIds[0]!)!;
-  for (const dc of divisionCtxById.values()) {
-    // A cart is scoped to ONE competition (route: /live/[org]/[comp]/register)
-    // — cross-competition/cross-org division ids are rejected the same way
-    // old submitRegistration 404'd an org/comp slug mismatch.
-    if (
-      dc.org_id !== first.org_id ||
-      dc.competition_id !== first.competition_id ||
-      dc.org_slug !== ctx.orgSlug ||
-      dc.comp_slug !== ctx.compSlug ||
-      !["public", "unlisted"].includes(dc.comp_visibility)
-    ) {
-      throw new HttpError(404, "division not found");
-    }
-  }
-  const orgId = first.org_id;
-  const competitionId = first.competition_id;
-  const seasonYear = seasonStartYearFrom(first.starts_on);
-
-  const settingsById = new Map<string, SubmitSettingsRow>();
-  for (const id of distinctDivisionIds) {
-    const s = await loadSubmitSettings(id);
-    if (!s || !windowOpen(s, now)) throw new HttpError(422, "Registration is not open for this division");
-    settingsById.set(id, s);
-  }
-
-  // One Stripe checkout per cart is the design (§4 step 5) — a cart whose
-  // PAID divisions disagree on how to collect payment cannot be paid in one
-  // session, so it must not be creatable at all (review MAJOR 1). Checked
-  // structurally here, before any waitlist outcome is known: a cart that can
-  // never be charged coherently 422s regardless of which entries end up
-  // waitlisted. Re-checked again under the lock below (paymentMethodsSeen)
-  // against LIVE settings — a concurrent edit could change which method a
-  // division charges between this read and the lock.
-  assertUniformPaymentMethod(settingsById.values());
-
-  // Per-entry structural + eligibility validation — pure, no writes, so a bad
-  // cart 422s before any transaction opens.
-  const prepared: PreparedEntry[] = [];
-  let registeringSelfAnywhere = false;
-  for (const entry of input.entries) {
-    const settings = settingsById.get(entry.division_id)!;
-    const divCtx = divisionCtxById.get(entry.division_id)!;
-    if (entry.entrant_kind !== settings.entrant_kind) {
-      throw new HttpError(422, `This division only accepts ${settings.entrant_kind} entries`);
-    }
-    // FU1 ruling 4: and the division itself must take that kind (its Entrant kinds) - the settings row can hold a kind the
-    // division has since stopped taking. The public panel does not open such a division; this refuses a stale page.
-    assertDivisionTakesKind(entrantShapeOf(divCtx), entry.entrant_kind);
-    if (entry.free_agent && (entry.entrant_kind !== "team" || !settings.allow_free_agents)) {
-      // "Solo sign-ups" is the organiser-facing name for this since
-      // 2026-08-25; `allow_free_agents` stays the column and the API field.
-      throw new HttpError(422, "Solo sign-ups are not accepted for this division");
-    }
-
-    // Polish wave P5 (H-1): a solo sign-up carries ONE player row - the person an organiser later places on a team (Assign has
-    // nothing to place without it). The form sends it; an entry sent without one (an older cart, an API caller) gets it from the
-    // contact - the name the panel already shows for it (`entryDisplayName`).
-    const rawPlayers = entry.free_agent && (entry.players ?? []).length === 0 ? [{ full_name: input.contact.name }] : (entry.players ?? []);
-    if (!entry.free_agent) {
-      if (entry.entrant_kind === "individual" && rawPlayers.length !== 1) {
-        throw new HttpError(422, "An individual entry needs exactly one player");
+    const first = divisionCtxById.get(distinctDivisionIds[0]!)!;
+    for (const dc of divisionCtxById.values()) {
+      // A cart is scoped to ONE competition (route: /live/[org]/[comp]/register)
+      // — cross-competition/cross-org division ids are rejected the same way
+      // old submitRegistration 404'd an org/comp slug mismatch.
+      if (
+        dc.org_id !== first.org_id ||
+        dc.competition_id !== first.competition_id ||
+        dc.org_slug !== ctx.orgSlug ||
+        dc.comp_slug !== ctx.compSlug ||
+        !["public", "unlisted"].includes(dc.comp_visibility)
+      ) {
+        throw new HttpError(404, "division not found");
       }
-      if (entry.entrant_kind === "pair" && rawPlayers.length !== 2) {
-        throw new HttpError(422, "A pair entry needs exactly two players");
-      }
-    } else if (rawPlayers.length > 1) {
-      throw new HttpError(422, "A free-agent entry takes at most one player");
+    }
+    const orgId = first.org_id;
+    const competitionId = first.competition_id;
+    const seasonYear = seasonStartYearFrom(first.starts_on);
+
+    const settingsById = new Map<string, SubmitSettingsRow>();
+    for (const id of distinctDivisionIds) {
+      const s = await timed(timer, "settings", () => loadSubmitSettings(id));
+      if (!s || !windowOpen(s, now)) throw new HttpError(422, "Registration is not open for this division");
+      settingsById.set(id, s);
     }
 
-    let selfIndex: number | null = null;
-    let ownRowIndex: number | null = null;
-    if (entry.free_agent) {
-      // A solo sign-up is the registrant looking for a team: its one row's consent is given at this submit (a minor needs a guardian) -
-      // `assignSoloSignUp` carries that consent onto the team's roster (P5 ruling).
-      selfIndex = 0;
-      registeringSelfAnywhere = true;
-      // Final review m4: but the row is the REGISTRANT only when it is theirs - the API said so (`registering_self`), no row was sent
-      // (it is made from the contact, above), or it carries the contact's own name (the form seeds the solo's row from the contact;
-      // a different name is somebody else, e.g. a secretary entering a player). Only then does it take the contact's dob, gender and
-      // email and the signed-in account: copying them onto "Sam" gave Sam the secretary's dob, email and account.
-      const sentNoRow = (entry.players ?? []).length === 0;
-      const contactsName = sameName(rawPlayers[0]?.full_name, input.contact.name);
-      ownRowIndex = entry.registering_self || sentNoRow || contactsName ? 0 : null;
-    } else if (entry.registering_self) {
-      const idx =
-        entry.self_player_index ??
-        (entry.entrant_kind === "individual" && rawPlayers.length === 1 ? 0 : undefined);
-      if (idx !== undefined && rawPlayers[idx]) {
-        selfIndex = idx;
-        ownRowIndex = idx;
+    // One Stripe checkout per cart is the design (§4 step 5) — a cart whose
+    // PAID divisions disagree on how to collect payment cannot be paid in one
+    // session, so it must not be creatable at all (review MAJOR 1). Checked
+    // structurally here, before any waitlist outcome is known: a cart that can
+    // never be charged coherently 422s regardless of which entries end up
+    // waitlisted. Re-checked again under the lock below (paymentMethodsSeen)
+    // against LIVE settings — a concurrent edit could change which method a
+    // division charges between this read and the lock.
+    assertUniformPaymentMethod(settingsById.values());
+
+    // Per-entry structural + eligibility validation — pure, no writes, so a bad
+    // cart 422s before any transaction opens.
+    const prepared: PreparedEntry[] = [];
+    let registeringSelfAnywhere = false;
+    for (const entry of input.entries) {
+      const settings = settingsById.get(entry.division_id)!;
+      const divCtx = divisionCtxById.get(entry.division_id)!;
+      if (entry.entrant_kind !== settings.entrant_kind) {
+        throw new HttpError(422, `This division only accepts ${settings.entrant_kind} entries`);
+      }
+      // FU1 ruling 4: and the division itself must take that kind (its Entrant kinds) - the settings row can hold a kind the
+      // division has since stopped taking. The public panel does not open such a division; this refuses a stale page.
+      assertDivisionTakesKind(entrantShapeOf(divCtx), entry.entrant_kind);
+      if (entry.free_agent && (entry.entrant_kind !== "team" || !settings.allow_free_agents)) {
+        // "Solo sign-ups" is the organiser-facing name for this since
+        // 2026-08-25; `allow_free_agents` stays the column and the API field.
+        throw new HttpError(422, "Solo sign-ups are not accepted for this division");
+      }
+
+      // Polish wave P5 (H-1): a solo sign-up carries ONE player row - the person an organiser later places on a team (Assign has
+      // nothing to place without it). The form sends it; an entry sent without one (an older cart, an API caller) gets it from the
+      // contact - the name the panel already shows for it (`entryDisplayName`).
+      const rawPlayers = entry.free_agent && (entry.players ?? []).length === 0 ? [{ full_name: input.contact.name }] : (entry.players ?? []);
+      if (!entry.free_agent) {
+        if (entry.entrant_kind === "individual" && rawPlayers.length !== 1) {
+          throw new HttpError(422, "An individual entry needs exactly one player");
+        }
+        if (entry.entrant_kind === "pair" && rawPlayers.length !== 2) {
+          throw new HttpError(422, "A pair entry needs exactly two players");
+        }
+      } else if (rawPlayers.length > 1) {
+        throw new HttpError(422, "A free-agent entry takes at most one player");
+      }
+
+      let selfIndex: number | null = null;
+      let ownRowIndex: number | null = null;
+      if (entry.free_agent) {
+        // A solo sign-up is the registrant looking for a team: its one row's consent is given at this submit (a minor needs a guardian) -
+        // `assignSoloSignUp` carries that consent onto the team's roster (P5 ruling).
+        selfIndex = 0;
         registeringSelfAnywhere = true;
+        // Final review m4: but the row is the REGISTRANT only when it is theirs - the API said so (`registering_self`), no row was sent
+        // (it is made from the contact, above), or it carries the contact's own name (the form seeds the solo's row from the contact;
+        // a different name is somebody else, e.g. a secretary entering a player). Only then does it take the contact's dob, gender and
+        // email and the signed-in account: copying them onto "Sam" gave Sam the secretary's dob, email and account.
+        const sentNoRow = (entry.players ?? []).length === 0;
+        const contactsName = sameName(rawPlayers[0]?.full_name, input.contact.name);
+        ownRowIndex = entry.registering_self || sentNoRow || contactsName ? 0 : null;
+      } else if (entry.registering_self) {
+        const idx =
+          entry.self_player_index ??
+          (entry.entrant_kind === "individual" && rawPlayers.length === 1 ? 0 : undefined);
+        if (idx !== undefined && rawPlayers[idx]) {
+          selfIndex = idx;
+          ownRowIndex = idx;
+          registeringSelfAnywhere = true;
+        }
+      }
+
+      // The self row's dob/gender/email fall back to the contact's cart-level
+      // values (design §4 step 1: "collected once") when the row itself didn't
+      // repeat them; any other row is untouched. `email` added for #22 — the
+      // captain's OWN email (`contact.email`, always present) is exactly the
+      // identity signal that lets a LATER registration for the same captain
+      // dedupe instead of minting a fresh person every time they self-link.
+      const players = rawPlayers.map((p, i) =>
+        i === ownRowIndex
+          ? {
+              ...p,
+              dob: p.dob ?? input.contact.dob ?? null,
+              gender: p.gender ?? input.contact.gender ?? null,
+              email: p.email ?? input.contact.email ?? null,
+            }
+          : p,
+      );
+
+      const issues = rosterIssues(
+        {
+          category: divCtx.category,
+          age_min: divCtx.age_min,
+          age_max: divCtx.age_max,
+          age_cutoff_month: divCtx.age_cutoff_month,
+          age_cutoff_day: divCtx.age_cutoff_day,
+        },
+        players.map((p) => ({ full_name: p.full_name, dob: p.dob, gender: p.gender })),
+        seasonYear,
+        // H-1: a solo sign-up is ONE person - their own eligibility applies; a roster's composition (a mixed team) is the team's.
+      ).filter((issue) => !entry.free_agent || issue.playerIndex != null);
+      if (issues.length > 0) throw eligibilityError(issues);
+
+      // T20: the Lichess link is demanded only while the club is offered online chess (the PostHog flag
+      // `online-chess`): with it off, nobody is asked to link an account for a feature they cannot see.
+      // M7 (T16 fix round 1): asked AS THE CLUB (`userId: null`), exactly as the entries step's public read
+      // (registrations/settings.ts publicRegistrationInfo) asked when it told this registrant a link is needed — so the notice
+      // and this demand cannot disagree. The person is still the one whose link is checked.
+      if (divisionPlaysOnline(divCtx) && (await timed(timer, "online", () => onlineChessOffered({ orgId: divCtx.org_id, userId: null })))) {
+        if (!entry.registering_self) {
+          throw new HttpError(
+            422,
+            "Sign in and link your Lichess account to register for online play",
+            "LICHESS_LINK_REQUIRED",
+          );
+        }
+        await timed(timer, "online", () => assertUserHasLichessForOnlinePlay(ctx.sessionUserId ?? null));
+      }
+
+      const answers = validateAnswers(settings.form_fields ?? [], entry.answers ?? {});
+      const displayName = entryDisplayName(entry, players, input.contact);
+      prepared.push({ input: entry, settings, players, selfIndex, ownRowIndex, displayName, answers });
+    }
+
+    // Guardian consent — the EFFECTIVE self dob decides minority, not
+    // `input.contact.dob` alone (guardian-consent-bypass fix, HIGH,
+    // 2026-08-26): `prepared[i].players[selfIndex].dob` already carries the
+    // SAME `p.dob ?? contact.dob` fallback applied above (~line 412-416), so
+    // a self-linked roster row's own dob — client-editable with no
+    // readOnly/disabled once a division requires_dob (roster-table.tsx:
+    // 116-118) — can no longer be masked by an adult `contact.dob` from step
+    // 1. A captain-entered OTHER player's own consent is still deferred to
+    // their claim/join moment (design §4 step 4) — this only widens the
+    // check to the CONTACT'S OWN row on every self-linked entry, which never
+    // gets a later claim moment.
+    const selfDobs = prepared
+      .map((p) => (p.selfIndex !== null ? p.players[p.selfIndex]?.dob : null))
+      .filter((dob): dob is string => Boolean(dob));
+    if (registeringSelfAnywhere && selfDobs.some((dob) => isMinor(dob, now))) {
+      if (!input.contact.guardian_consent || !input.contact.guardian_name?.trim()) {
+        throw new HttpError(422, "A guardian's name and consent are required for players under 18");
       }
     }
 
-    // The self row's dob/gender/email fall back to the contact's cart-level
-    // values (design §4 step 1: "collected once") when the row itself didn't
-    // repeat them; any other row is untouched. `email` added for #22 — the
-    // captain's OWN email (`contact.email`, always present) is exactly the
-    // identity signal that lets a LATER registration for the same captain
-    // dedupe instead of minting a fresh person every time they self-link.
-    const players = rawPlayers.map((p, i) =>
-      i === ownRowIndex
-        ? {
-            ...p,
-            dob: p.dob ?? input.contact.dob ?? null,
-            gender: p.gender ?? input.contact.gender ?? null,
-            email: p.email ?? input.contact.email ?? null,
-          }
-        : p,
-    );
+    // GDPR privacy consent (RS002 entry condition 2 — reinstated; nothing in
+    // the tree fails without this check today).
+    if (!input.privacy_consent) throw new HttpError(422, "Please agree to the privacy policy to register");
 
-    const issues = rosterIssues(
-      {
-        category: divCtx.category,
-        age_min: divCtx.age_min,
-        age_max: divCtx.age_max,
-        age_cutoff_month: divCtx.age_cutoff_month,
-        age_cutoff_day: divCtx.age_cutoff_day,
-      },
-      players.map((p) => ({ full_name: p.full_name, dob: p.dob, gender: p.gender })),
-      seasonYear,
-      // H-1: a solo sign-up is ONE person - their own eligibility applies; a roster's composition (a mixed team) is the team's.
-    ).filter((issue) => !entry.free_agent || issue.playerIndex != null);
-    if (issues.length > 0) throw eligibilityError(issues);
-
-    // T20: the Lichess link is demanded only while the club is offered online chess (the PostHog flag
-    // `online-chess`): with it off, nobody is asked to link an account for a feature they cannot see.
-    // M7 (T16 fix round 1): asked AS THE CLUB (`userId: null`), exactly as the entries step's public read
-    // (registrations/settings.ts publicRegistrationInfo) asked when it told this registrant a link is needed — so the notice
-    // and this demand cannot disagree. The person is still the one whose link is checked.
-    if (divisionPlaysOnline(divCtx) && (await onlineChessOffered({ orgId: divCtx.org_id, userId: null }))) {
-      if (!entry.registering_self) {
-        throw new HttpError(
-          422,
-          "Sign in and link your Lichess account to register for online play",
-          "LICHESS_LINK_REQUIRED",
-        );
+    // Card-payment entitlement gate, mirrors old submitRegistration exactly.
+    for (const s of settingsById.values()) {
+      if (s.fee_cents > 0 && s.payment_method === "stripe") {
+        if (!first.charges_enabled) {
+          throw new HttpError(
+            503,
+            "Card payments are temporarily unavailable for this event — try again shortly or contact the organiser",
+          );
+        }
+        await timed(timer, "entitlements", () => requireFeature(orgId, "registration.paid", competitionId));
       }
-      await assertUserHasLichessForOnlinePlay(ctx.sessionUserId ?? null);
     }
 
-    const answers = validateAnswers(settings.form_fields ?? [], entry.answers ?? {});
-    const displayName = entryDisplayName(entry, players, input.contact);
-    prepared.push({ input: entry, settings, players, selfIndex, ownRowIndex, displayName, answers });
-  }
+    // Plan cap resolved OUTSIDE the transaction on purpose (lib/entitlements.ts
+    // `assertWithinLimit` doc, entrants.ts:231 precedent): `getLimit` queries
+    // the pooled `sql` proxy, and issuing that from inside an open transaction
+    // that already pins a connection is the self-deadlock class that hung
+    // production twice (lib/db.ts's nesting-guard comment). Only the LOOKUP
+    // moves out — the count and every insert stay inside one transaction.
+    const planLimit = await timed(timer, "entitlements", () => getLimit(orgId, "entrants.per_division.max", competitionId));
 
-  // Guardian consent — the EFFECTIVE self dob decides minority, not
-  // `input.contact.dob` alone (guardian-consent-bypass fix, HIGH,
-  // 2026-08-26): `prepared[i].players[selfIndex].dob` already carries the
-  // SAME `p.dob ?? contact.dob` fallback applied above (~line 412-416), so
-  // a self-linked roster row's own dob — client-editable with no
-  // readOnly/disabled once a division requires_dob (roster-table.tsx:
-  // 116-118) — can no longer be masked by an adult `contact.dob` from step
-  // 1. A captain-entered OTHER player's own consent is still deferred to
-  // their claim/join moment (design §4 step 4) — this only widens the
-  // check to the CONTACT'S OWN row on every self-linked entry, which never
-  // gets a later claim moment.
-  const selfDobs = prepared
-    .map((p) => (p.selfIndex !== null ? p.players[p.selfIndex]?.dob : null))
-    .filter((dob): dob is string => Boolean(dob));
-  if (registeringSelfAnywhere && selfDobs.some((dob) => isMinor(dob, now))) {
-    if (!input.contact.guardian_consent || !input.contact.guardian_name?.trim()) {
-      throw new HttpError(422, "A guardian's name and consent are required for players under 18");
-    }
-  }
-
-  // GDPR privacy consent (RS002 entry condition 2 — reinstated; nothing in
-  // the tree fails without this check today).
-  if (!input.privacy_consent) throw new HttpError(422, "Please agree to the privacy policy to register");
-
-  // Card-payment entitlement gate, mirrors old submitRegistration exactly.
-  for (const s of settingsById.values()) {
-    if (s.fee_cents > 0 && s.payment_method === "stripe") {
-      if (!first.charges_enabled) {
-        throw new HttpError(
-          503,
-          "Card payments are temporarily unavailable for this event — try again shortly or contact the organiser",
-        );
+    // The online-play SEAT GATE (online-seat-gate.ts) for every online division in the cart, opened out here for the same reason as the plan cap:
+    // its flag question is a remote call and its probes run on the pooled `sql`. It asks about the people the inline confirm below SEATS - the
+    // submitter was asked above, by their own session link, and a teammate the captain typed in has no account to be asked about.
+    const seatGates = new Map<string, RegistrationSeatGate>();
+    for (const id of distinctDivisionIds) {
+      if (divisionPlaysOnline(divisionCtxById.get(id)!)) {
+        seatGates.set(id, await timed(timer, "seat_gate", () => openRegistrationSeatGate({ divisionId: id, auth: { orgId, userId: null } })));
       }
-      await requireFeature(orgId, "registration.paid", competitionId);
     }
-  }
-
-  // Plan cap resolved OUTSIDE the transaction on purpose (lib/entitlements.ts
-  // `assertWithinLimit` doc, entrants.ts:231 precedent): `getLimit` queries
-  // the pooled `sql` proxy, and issuing that from inside an open transaction
-  // that already pins a connection is the self-deadlock class that hung
-  // production twice (lib/db.ts's nesting-guard comment). Only the LOOKUP
-  // moves out — the count and every insert stay inside one transaction.
-  const planLimit = await getLimit(orgId, "entrants.per_division.max", competitionId);
-
-  // The online-play SEAT GATE (online-seat-gate.ts) for every online division in the cart, opened out here for the same reason as the plan cap:
-  // its flag question is a remote call and its probes run on the pooled `sql`. It asks about the people the inline confirm below SEATS - the
-  // submitter was asked above, by their own session link, and a teammate the captain typed in has no account to be asked about.
-  const seatGates = new Map<string, RegistrationSeatGate>();
-  for (const id of distinctDivisionIds) {
-    if (divisionPlaysOnline(divisionCtxById.get(id)!)) {
-      seatGates.set(id, await openRegistrationSeatGate({ divisionId: id, auth: { orgId, userId: null } }));
-    }
-  }
+    return { distinctDivisionIds, first, orgId, competitionId, prepared, planLimit, seatGates };
+  });
 
   const secret = mintRegistrationToken();
   const linkUserId = ctx.sessionUserId ?? null;
 
-  const txResult = await sql.begin(async (tx) => {
+  const txResult = await timed(timer, "tx", () => sql.begin(async (tx) => {
     // Deterministic lock order (sorted division ids, acquired sequentially)
     // — the ONLY safe way two transactions that both need several of the
     // same locks can never deadlock against each other.
@@ -1006,7 +1018,7 @@ export async function submitRegistrationGroup(
       where id = ${groupId}`;
 
     return { groupId: groupId!, refCode, subtotal, entryResults, autoConfirmedEntrantIds };
-  });
+  }));
 
   // RS008 gap (code-review fix, 2026-08-30): fire-and-forget, strictly AFTER
   // the transaction above has committed — see confirmRegistration's
