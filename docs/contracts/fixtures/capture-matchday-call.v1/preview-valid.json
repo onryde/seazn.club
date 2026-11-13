@@ -1,0 +1,40 @@
+{
+  "shifts": [
+    {
+      "fixture_id": "0a1b2c3d-4e5f-4a6b-9c8d-7e6f5a4b3c2d",
+      "label": "Ann & Bob v Cat & Dan",
+      "round_label": "R2",
+      "planned_at": "2026-11-07T11:30:00.000Z",
+      "estimated_at": "2026-11-07T11:45:00.000Z"
+    }
+  ],
+  "warnings": [
+    {
+      "kind": "pushes_later",
+      "count": 1
+    },
+    {
+      "kind": "rest_gap",
+      "person_name": "Eve Ellis",
+      "minutes": 5,
+      "min_rest": 20
+    },
+    {
+      "kind": "past_day_end",
+      "court_name": "Court 1",
+      "until": "2026-11-07T21:00:00.000Z"
+    },
+    {
+      "kind": "crosses_closure",
+      "court_name": "Court 1",
+      "from": "2026-11-07T12:00:00.000Z",
+      "until": "2026-11-07T13:00:00.000Z"
+    },
+    {
+      "kind": "court_closed",
+      "court_name": "Court 1",
+      "until": null,
+      "since": "2026-11-07T20:00:00.000Z"
+    }
+  ]
+}

@@ -73,6 +73,10 @@
       "description": "Whether the code was minted with \"can approve draws\": without it the phone shows an approval's banner with no button.",
       "type": "boolean"
     },
+    "can_call": {
+      "description": "Whether the code was minted with \"Call matches to courts\" (added 2026-11-13, Task 8e): with it the phone may call a match onto a court and Undo the call (capture-matchday-call.v1); without it the call and its Undo answer MD_NO_CALL, and the candidates still read.",
+      "type": "boolean"
+    },
     "courts": {
       "description": "One card per court in scope, in the order the web gives (the organisation's venue order, then its court order): the board's courts — every live division's candidate courts and every court holding one of the competition's matches today.",
       "type": "array",
@@ -894,6 +898,7 @@
     "opens_at",
     "expires_at",
     "can_approve",
+    "can_call",
     "courts",
     "no_court",
     "online",

@@ -12,6 +12,7 @@
     "label": "Court 2"
   },
   "can_approve": false,
+  "can_call": true,
   "courts": [
     {
       "court_id": "0e5f6a7b-8c9d-4e0f-8a1b-3c4d5e6f7a8b",

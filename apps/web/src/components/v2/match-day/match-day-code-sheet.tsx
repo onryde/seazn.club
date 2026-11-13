@@ -4,7 +4,7 @@
 // POST/GET /competitions/{id}/match-day-codes and POST /match-day-codes/{id}/revoke are editor-session only).
 //
 // The form: what the code covers (the whole competition, one venue, or some courts), its day (today by default) and
-// "Can approve draws" (off by default). A minted code shows as the Seazn QR, sensitive (it is a credential), above the
+// "Can approve draws" and "Call matches to courts" (each off by default). A minted code shows as the Seazn QR, sensitive (it is a credential), above the
 // competition's codes that can still open, each with Show QR and Withdraw.
 import { useCallback, useEffect, useState } from "react";
 import { Modal } from "@/components/modal";
@@ -49,6 +49,19 @@ export function scopeWords(dict: Dict, scope: MatchDayCodeScope, courts: readonl
   return names.length > 0 ? names.join(", ") : t(dict, "matchDay.code.scope.courts");
 }
 
+/** The mint's body: the scope, the day and the code's two powers, each off unless ticked (Task 8e adds the call). */
+export function mintBody(scope: MatchDayCodeScope, day: string, canApprove: boolean, canCall: boolean) {
+  return { scope, day, can_approve: canApprove, can_call: canCall };
+}
+
+/** A listed code's powers after its scope and day: " · Approves draws", " · Calls matches", both, or nothing. */
+export function powersWords(dict: Dict, c: Pick<MatchDayCode, "can_approve" | "can_call">): string {
+  return [c.can_approve ? t(dict, "matchDay.code.approves") : null, c.can_call ? t(dict, "matchDay.code.calls") : null]
+    .filter((w): w is string => w !== null)
+    .map((w) => ` · ${w}`)
+    .join("");
+}
+
 /** The request body for the form's choice; null while it names nothing to cover (no venue, no court ticked). */
 export function scopeBody(kind: ScopeKind, venueId: string | null, courtIds: ReadonlySet<string>): MatchDayCodeScope | null {
   if (kind === "competition") return { kind };
@@ -63,6 +76,7 @@ export function MatchDayCodeSheet({ competitionId, dict, locale, today, courts, 
   const [courtIds, setCourtIds] = useState<ReadonlySet<string>>(new Set());
   const [day, setDay] = useState(today);
   const [canApprove, setCanApprove] = useState(false);
+  const [canCall, setCanCall] = useState(false);
   const [codes, setCodes] = useState<MatchDayCode[] | null>(null);
   const [shown, setShown] = useState<{ id: string; qr: SeaznQr } | null>(null);
   const [busy, setBusy] = useState<Busy>(null);
@@ -97,7 +111,7 @@ export function MatchDayCodeSheet({ competitionId, dict, locale, today, courts, 
     setBusy({ kind: "minting" });
     setFailed(false);
     try {
-      const code = await apiV1<MatchDayCode>(`/api/v1/competitions/${competitionId}/match-day-codes`, { method: "POST", json: { scope: body, day, can_approve: canApprove } });
+      const code = await apiV1<MatchDayCode>(`/api/v1/competitions/${competitionId}/match-day-codes`, { method: "POST", json: mintBody(body, day, canApprove, canCall) });
       await show(code);
       await reload();
     } catch {
@@ -167,6 +181,10 @@ export function MatchDayCodeSheet({ competitionId, dict, locale, today, courts, 
         <label className="flex min-h-11 items-center gap-2 text-sm">
           <input type="checkbox" data-testid="md-code-approve" checked={canApprove} onChange={(e) => setCanApprove(e.target.checked)} />
           <span>{t(dict, "matchDay.code.approve")}</span>
+        </label>
+        <label className="flex min-h-11 items-center gap-2 text-sm">
+          <input type="checkbox" data-testid="md-code-call" checked={canCall} onChange={(e) => setCanCall(e.target.checked)} />
+          <span>{t(dict, "matchDay.code.call")}</span>
         </label>
         <button
           type="button"
@@ -276,7 +294,7 @@ function CodeList(props: {
             <li key={c.id} data-testid="md-code-row" className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm">
               <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
                 {scopeWords(dict, c.scope, props.courts)} · {when(c)}
-                {c.can_approve && ` · ${t(dict, "matchDay.code.approves")}`}
+                {powersWords(dict, c)}
               </span>
               {hasQr(c) && (
                 <button type="button" className="btn btn-ghost min-h-11" onClick={() => props.onShow(c)}>

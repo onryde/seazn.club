@@ -21,7 +21,8 @@ import { compactScore, scoreLine } from "@/lib/match-day/view";
 import { levelWords, type LevelWords } from "@/lib/score/levels";
 import { resolveSeedingSourceStage, seedingSourceReady } from "@/lib/seeding-source-ready";
 import { isSwissBoardSeated, nextUnseatedSwissRound } from "@/lib/swiss-shell";
-import { readBoard, type FixtureRow } from "./match-day";
+import type { Dict } from "@/lib/i18n-constants";
+import { readBoard, type Board, type FixtureRow } from "./match-day";
 import { IN_PLAY } from "./match-day-call";
 import { readMatchDayNames } from "./match-day-names";
 import { readRounds, roundOf } from "./match-day-rounds";
@@ -86,6 +87,8 @@ export type MatchDayCodeView = {
   opens_at: string;
   expires_at: string;
   can_approve: boolean;
+  /** "Call matches to courts" (Task 8e): the code may call a match to a court and Undo the call. */
+  can_call: boolean;
   courts: MatchDayCodeCourt[];
   no_court: MatchDayCodeRowView[];
   online: MatchDayCodeRowView[];
@@ -156,6 +159,24 @@ export function stageInScope(code: MatchDayCodeRow, competitionId: string, fixtu
   if (competitionId !== code.competitionId) return false;
   if (code.scope.kind === "competition") return true;
   return fixtures.some((f) => inScope(code, f));
+}
+
+/** A board row as `inScope` judges it (the day read's, and the code's candidates', match-day-code-call.ts): `venue_id` is its
+ *  court's venue on the board, the division live when the board lists it. */
+export function scopeFixtureOf(code: MatchDayCodeRow, board: Pick<Board, "courts" | "liveDivisions">, r: FixtureRow): ScopeFixture {
+  const venue = r.court_id === null ? undefined : board.courts.find((c) => c.court_id === r.court_id)?.venue_id;
+  return {
+    competition_id: code.competitionId,
+    court_id: r.court_id,
+    venue_id: venue ?? null,
+    status: r.status,
+    scheduled_at: r.scheduled_at,
+    finished_at: r.finished_at,
+    stage_status: r.stage_status,
+    home_entrant_id: r.home_entrant_id,
+    away_entrant_id: r.away_entrant_id,
+    division_live: board.liveDivisions.has(r.division_id),
+  };
 }
 
 /** A row's short score: the desk's own one-line form (court-list.tsx's row score), or null before any summary. */
@@ -305,6 +326,32 @@ async function scopeLabel(tx: Tx, code: MatchDayCodeRow, compName: string, court
   return ranked.map((id) => courtNames.get(id) ?? "").filter((n) => n !== "").join(", ");
 }
 
+/** The phone's row for each of `rows` (the day read's, and the code's candidates', match-day-code-call.ts): the board's round
+ *  codes and the desk's tags and seat labels, read once for all of them. */
+export async function codeRowViews(
+  tx: Tx,
+  rows: readonly FixtureRow[],
+  dict: Dict,
+  words: LevelWords,
+): Promise<(r: FixtureRow) => MatchDayCodeRowView> {
+  const rounds = await readRounds(tx, rows, dict);
+  const names = await readMatchDayNames(tx, rows, dict);
+  return (r) => ({
+    fixture_id: r.id,
+    sport_key: r.sport_key,
+    division_name: r.division_name,
+    round_label: roundOf(rounds, r.id).code,
+    round_tag: names.get(r.id)?.tag ?? null,
+    home: r.home,
+    away: r.away,
+    home_slot: names.get(r.id)?.homeSlot ?? null,
+    away_slot: names.get(r.id)?.awaySlot ?? null,
+    status: statusOf(r.status),
+    scheduled_at: isoOrNull(r.scheduled_at),
+    summary: shortScore(r, words),
+  });
+}
+
 /**
  * The day read (§9.3) for a code `resolveMatchDayCode` has accepted at `now`. Reads under the code's org (its issuer
  * vouches for it, `matchDayActor`), in the competition's own words; round codes in English (the phone localises around
@@ -316,20 +363,7 @@ export async function getMatchDayForCode(code: MatchDayCodeRow, now: Date): Prom
   const words = levelWords(await getDictionary(DEFAULT_LOCALE, "public"));
   return withTenant(code.orgId, async (tx) => {
     const board = await readBoard(tx, code.competitionId, now, { noCourt: code.scope.kind === "competition", finished: true });
-    const venueOfCourt = new Map(board.courts.map((c) => [c.court_id, c.venue_id]));
-    const covers = (r: FixtureRow): boolean =>
-      inScope(code, {
-        competition_id: code.competitionId,
-        court_id: r.court_id,
-        venue_id: r.court_id === null ? null : (venueOfCourt.get(r.court_id) ?? null),
-        status: r.status,
-        scheduled_at: r.scheduled_at,
-        finished_at: r.finished_at,
-        stage_status: r.stage_status,
-        home_entrant_id: r.home_entrant_id,
-        away_entrant_id: r.away_entrant_id,
-        division_live: board.liveDivisions.has(r.division_id),
-      });
+    const covers = (r: FixtureRow): boolean => inScope(code, scopeFixtureOf(code, board, r));
     const scope = code.scope;
     const courts = board.courts
       .filter((c) => scope.kind === "competition" || (scope.kind === "venue" ? c.venue_id === scope.venueId : scope.courtIds.includes(c.court_id)))
@@ -341,22 +375,7 @@ export async function getMatchDayForCode(code: MatchDayCodeRow, now: Date): Prom
       }));
     const noCourt = scope.kind === "competition" ? [...board.playingNoCourt, ...board.noCourt].filter(covers) : [];
     const shown = [...courts.flatMap((x) => [...(x.now ? [x.now] : []), ...x.next, ...x.finished]), ...noCourt];
-    const rounds = await readRounds(tx, shown, dict);
-    const names = await readMatchDayNames(tx, shown, dict);
-    const rowView = (r: FixtureRow): MatchDayCodeRowView => ({
-      fixture_id: r.id,
-      sport_key: r.sport_key,
-      division_name: r.division_name,
-      round_label: roundOf(rounds, r.id).code,
-      round_tag: names.get(r.id)?.tag ?? null,
-      home: r.home,
-      away: r.away,
-      home_slot: names.get(r.id)?.homeSlot ?? null,
-      away_slot: names.get(r.id)?.awaySlot ?? null,
-      status: statusOf(r.status),
-      scheduled_at: isoOrNull(r.scheduled_at),
-      summary: shortScore(r, words),
-    });
+    const rowView = await codeRowViews(tx, shown, dict, words);
     const label = await scopeLabel(tx, code, board.comp.name, board.courtNames, board.courts.map((c) => c.court_id));
     const approvals = await readApprovals(tx, code);
     return {
@@ -367,6 +386,7 @@ export async function getMatchDayForCode(code: MatchDayCodeRow, now: Date): Prom
       opens_at: code.opensAt.toISOString(),
       expires_at: code.expiresAt.toISOString(),
       can_approve: code.canApprove,
+      can_call: code.canCall,
       courts: courts.map(({ c, now: current, next, finished }) => ({
         court_id: c.court_id,
         court_name: c.court_name,

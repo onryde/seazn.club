@@ -13,6 +13,8 @@ import "server-only";
 import { HttpError } from "@/lib/errors";
 import {
   MD_APPROVE_LIMIT,
+  MD_CALL_LIMIT,
+  MD_CANDIDATES_LIMIT,
   MD_DAY_LIMIT,
   MD_FAIL_LIMIT,
   MD_OPEN_LIMIT,
@@ -34,14 +36,17 @@ const REFUSED: Record<MatchDayRefusal, { status: number; message: string }> = {
 /** The lookups a guessing client fails: no such code, or one that no longer opens. */
 const FAILED_LOOKUP: ReadonlySet<MatchDayRefusal> = new Set(["MD_UNKNOWN", "MD_WITHDRAWN", "MD_ENDED"]);
 
-/** Which per-code bucket a route spends: the day read, an approval's review or approve, or an open. */
-export type MdBudget = "day" | "review" | "approve" | "open";
+/** Which per-code bucket a route spends: the day read, an approval's review or approve, an open, a court's candidates, or a
+ *  call's preview, a call or an Undo call (Task 8e). */
+export type MdBudget = "day" | "review" | "approve" | "open" | "candidates" | "call";
 
 const BUDGET: Record<MdBudget, RateLimitConfig> = {
   day: MD_DAY_LIMIT,
   review: MD_REVIEW_LIMIT,
   approve: MD_APPROVE_LIMIT,
   open: MD_OPEN_LIMIT,
+  candidates: MD_CANDIDATES_LIMIT,
+  call: MD_CALL_LIMIT,
 };
 
 /** `Authorization: Bearer md_…` resolved at `now`, or the refusal as an HttpError the v1 envelope answers

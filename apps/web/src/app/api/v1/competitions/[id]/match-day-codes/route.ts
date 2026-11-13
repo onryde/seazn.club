@@ -30,6 +30,7 @@ function wire(row: MatchDayCodeRow, url: string | null): MatchDayCode {
     opens_at: row.opensAt.toISOString(),
     expires_at: row.expiresAt.toISOString(),
     can_approve: row.canApprove,
+    can_call: row.canCall,
   };
 }
 
@@ -42,7 +43,12 @@ export async function POST(req: Request, { params }: Ctx) {
     const { id } = await params;
     const auth = await requireResourceAuth(req, "competition", id, "write");
     const body = await parseBody(req, CreateMatchDayCode);
-    const { row, url } = await mintMatchDayCode(auth, id, { scope: scopeIn(body.scope), day: body.day, canApprove: body.can_approve });
+    const { row, url } = await mintMatchDayCode(auth, id, {
+      scope: scopeIn(body.scope),
+      day: body.day,
+      canApprove: body.can_approve,
+      canCall: body.can_call,
+    });
     return reply(201, wire(row, url));
   });
 }

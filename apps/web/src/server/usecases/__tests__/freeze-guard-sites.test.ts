@@ -101,9 +101,11 @@ const LEDGER: Record<string, [file: string, words: string]> = {
     "402s the whole call and writes NOTHING when the division's competition is frozen",
   ],
   "fixture-rules.ts#writeFixtureRulesOverride": [SWEEP, '"fixture-rules.ts#writeFixtureRulesOverride"'],
-  "match-day-call.ts#callFixtureToCourt": ["server/usecases/__tests__/match-day-call.test.ts", CALLS],
-  "match-day-call.ts#previewCall": ["server/usecases/__tests__/match-day-call.test.ts", CALLS],
-  "match-day-call.ts#undoCall": ["server/usecases/__tests__/match-day-call.test.ts", CALLS],
+  // Task 8e: the guards sit in the cores the desk's wrappers (callFixtureToCourt, previewCall, undoCall) and a Match Day
+  // code's call (match-day-code-call.ts) share; the desk's witness drives them through the wrappers.
+  "match-day-call.ts#callFixtureAs": ["server/usecases/__tests__/match-day-call.test.ts", CALLS],
+  "match-day-call.ts#previewCallAs": ["server/usecases/__tests__/match-day-call.test.ts", CALLS],
+  "match-day-call.ts#undoCallAs": ["server/usecases/__tests__/match-day-call.test.ts", CALLS],
   "registration-approval.ts#approveRegistration": [REGISTRATIONS, REG_SWEEP],
   "registration-approval.ts#promoteFromWaitlist": [REGISTRATIONS, "refuses promote on a frozen competition"],
   "registration-approval.ts#rejectRegistration": [REGISTRATIONS, "refuses reject on a frozen competition"],

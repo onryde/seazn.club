@@ -33,6 +33,9 @@ export type MatchDayCodeRow = {
   competitionId: string;
   scope: MatchDayScope;
   canApprove: boolean;
+  /** "Call matches to courts" (Task 8e, owner 2026-11-13): the code may call a match in its scope onto a court in its scope,
+   *  and Undo the call. Off unless ticked at mint. */
+  canCall: boolean;
   /** YYYY-MM-DD, the day the organiser picked, in `tz`. */
   day: string;
   tz: string;
@@ -46,7 +49,8 @@ export type MatchDayRefusal = "MD_UNKNOWN" | "MD_WITHDRAWN" | "MD_ENDED" | "MD_N
 
 export type MatchDayUse =
   | { kind: "open"; fixtureId: string }
-  | { kind: "approve"; stageId: string; approval: "swiss" | "draw" };
+  | { kind: "approve"; stageId: string; approval: "swiss" | "draw" }
+  | { kind: "call" | "undo_call"; fixtureId: string };
 
 const hashToken = (token: string): string => createHash("sha256").update(token, "utf8").digest("hex");
 const mintToken = (): string => MATCH_DAY_CODE_PREFIX + randomBytes(32).toString("base64url");
@@ -85,6 +89,7 @@ type DbRow = {
   venue_id: string | null;
   court_ids: string[] | null;
   can_approve: boolean;
+  can_call: boolean;
   day: string;
   tz: string;
   opens_at: Date;
@@ -95,7 +100,7 @@ type DbRow = {
 
 // `day::text`: a bare `date` comes back as a JS Date at local midnight, which is not the organiser's YYYY-MM-DD. A function,
 // not a module-level fragment: a fragment would bind to whichever client existed at import.
-const cols = () => sql`id, org_id, competition_id, scope_kind, venue_id, court_ids, can_approve, day::text as day, tz,
+const cols = () => sql`id, org_id, competition_id, scope_kind, venue_id, court_ids, can_approve, can_call, day::text as day, tz,
                        opens_at, expires_at, issued_by, revoked_at`;
 
 function scopeOf(r: DbRow): MatchDayScope {
@@ -111,6 +116,7 @@ function toRow(r: DbRow): MatchDayCodeRow {
     competitionId: r.competition_id,
     scope: scopeOf(r),
     canApprove: r.can_approve,
+    canCall: r.can_call,
     day: r.day,
     tz: r.tz,
     opensAt: r.opens_at,
@@ -161,14 +167,14 @@ async function checkedScope(auth: AuthCtx, scope: MatchDayScope): Promise<{ venu
 }
 
 /**
- * Mint a Match Day code (§3): its scope, its day (default: today in the competition's zone) and the "can approve
- * draws" tick. The token is sealed BEFORE the write, so a missing DEVICE_LINK_KEK writes nothing. A day already over
+ * Mint a Match Day code (§3): its scope, its day (default: today in the competition's zone), the "can approve
+ * draws" tick and the "Call matches to courts" tick (Task 8e; off when not given). The token is sealed BEFORE the write, so a missing DEVICE_LINK_KEK writes nothing. A day already over
  * is refused: such a code could never open.
  */
 export async function mintMatchDayCode(
   auth: AuthCtx,
   competitionId: string,
-  input: { scope: MatchDayScope; day?: string; canApprove: boolean },
+  input: { scope: MatchDayScope; day?: string; canApprove: boolean; canCall?: boolean },
 ): Promise<{ row: MatchDayCodeRow; url: string }> {
   requireSessionEditor(auth);
   const tz = await competitionZone(auth, competitionId);
@@ -180,9 +186,10 @@ export async function mintMatchDayCode(
   const token = mintToken();
   const sealed = sealToken(token);
   const [created] = await sql<DbRow[]>`
-    insert into match_day_codes (org_id, competition_id, scope_kind, venue_id, court_ids, can_approve, day, tz,
+    insert into match_day_codes (org_id, competition_id, scope_kind, venue_id, court_ids, can_approve, can_call, day, tz,
                                  opens_at, expires_at, tok_hash, token_enc, issued_by)
-    values (${auth.orgId}, ${competitionId}, ${input.scope.kind}, ${venueId}, ${courtIds}::uuid[], ${input.canApprove}, ${day}::date, ${tz},
+    values (${auth.orgId}, ${competitionId}, ${input.scope.kind}, ${venueId}, ${courtIds}::uuid[], ${input.canApprove},
+            ${input.canCall ?? false}, ${day}::date, ${tz},
             ${opensAt}, ${expiresAt}, ${hashToken(token)}, ${sealed}, ${auth.userId})
     returning ${cols()}`;
   return { row: toRow(created!), url: urlOf(token) };
@@ -275,13 +282,13 @@ export function matchDayActor(code: MatchDayCodeRow): AuthCtx {
   return { orgId: code.orgId, via: "match_day_code", userId: code.issuedBy, role: null, keyId: null };
 }
 
-/** Log a match opened or an approval made against the code that did it (§3). On the pooled client, or on `db`: a
+/** Log a match opened, an approval made, or a call or its Undo (Task 8e) against the code that did it (§3). On the pooled client, or on `db`: a
  *  transaction holding the pool's own role (the table is sealed: `withTenant`'s epilogue, used by the open alone), so the row commits
  *  or rolls back with the write it logs (MD-1 fix M4). */
 export async function logMatchDayUse(codeId: string, use: MatchDayUse, db?: Tx): Promise<void> {
   const q = db ?? sql;
-  if (use.kind === "open") {
-    await q`insert into match_day_code_uses (code_id, kind, fixture_id) values (${codeId}, 'open', ${use.fixtureId})`;
+  if (use.kind !== "approve") {
+    await q`insert into match_day_code_uses (code_id, kind, fixture_id) values (${codeId}, ${use.kind}, ${use.fixtureId})`;
     return;
   }
   await q`
