@@ -32,6 +32,40 @@ export function formatRefCode(chars: string): string {
   return `SZ-${chars.slice(0, 4)}-${chars.slice(4)}`;
 }
 
+// Per-entry references (registration redesign spec §6.2). Every entry of a cart shares the cart's ref code; an entry is told
+// apart by `registrations.cart_position`, its 1-based place in the cart, stored at submit and never renumbered (a deleted
+// sibling's division leaves a gap, so `…-3` still means the third entry the person sent).
+
+/** The largest position `registrations.cart_position` (Postgres smallint) can hold. */
+const MAX_CART_POSITION = 32767;
+
+/** The reference to quote for one entry: the cart ref alone for a one-entry cart, `SZ-XXXX-XXXX-<position>` otherwise.
+ *  `cartSize` counts every entry the cart still holds, whatever its status, so a withdrawal never renames a sibling. A
+ *  position above `cartSize` is legal: it is what a deleted sibling's division leaves behind. */
+export function entryReference(refCode: string, position: number, cartSize: number): string {
+  if (!Number.isInteger(position) || position < 1) {
+    throw new RangeError(`entryReference: position must be an integer >= 1, got ${position}`);
+  }
+  if (!Number.isInteger(cartSize) || cartSize < 1) {
+    throw new RangeError(`entryReference: cartSize must be an integer >= 1, got ${cartSize}`);
+  }
+  return cartSize < 2 ? refCode : `${refCode}-${position}`;
+}
+
+const ENTRY_REFERENCE = new RegExp(`^SZ-([${REF_ALPHABET}]{4}-[${REF_ALPHABET}]{4})(?:-([1-9][0-9]*))?$`);
+
+/** Reads `SZ-XXXX-XXXX` (position null) or `SZ-XXXX-XXXX-<n>`, trimmed and case-insensitive, over the ref alphabet only.
+ *  The checksum is not verified: a mistyped ref matches no row, which is all a search needs. Null for anything else,
+ *  including position 0 and a position the column could never hold. */
+export function parseEntryReference(input: string): { refCode: string; position: number | null } | null {
+  const m = ENTRY_REFERENCE.exec(input.trim().toUpperCase());
+  if (!m) return null;
+  const refCode = `SZ-${m[1]}`;
+  if (m[2] === undefined) return { refCode, position: null };
+  const position = Number(m[2]);
+  return position <= MAX_CART_POSITION ? { refCode, position } : null;
+}
+
 /** Unbiased random alphabet indices via rejection sampling. */
 function randomChars(n: number): string {
   const chars: string[] = [];
