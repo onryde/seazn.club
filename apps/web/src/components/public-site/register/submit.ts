@@ -98,10 +98,18 @@ export function resolvePostSubmitNavigation(
   competitionSlug: string,
 ): PostSubmitNavigation {
   if (result.checkout_url) return { kind: "checkout", url: result.checkout_url };
-  return {
-    kind: "status",
-    url: `${routes.publicRegisterStatus(orgSlug, competitionSlug)}?rid=${result.group_id}&token=${encodeURIComponent(result.access_token)}`,
-  };
+  return { kind: "status", url: registrationStatusUrl(result, orgSlug, competitionSlug) };
+}
+
+/** The committed cart's own status page (the `?rid=&token=` convention above), whichever way the submit then navigates. The
+ *  stepper also goes here when a browser restores the form from its back-forward cache after the cart was committed (B1 fix
+ *  round 1, M5). */
+export function registrationStatusUrl(
+  result: Pick<SubmitResultShape, "group_id" | "access_token">,
+  orgSlug: string,
+  competitionSlug: string,
+): string {
+  return `${routes.publicRegisterStatus(orgSlug, competitionSlug)}?rid=${result.group_id}&token=${encodeURIComponent(result.access_token)}`;
 }
 
 /**

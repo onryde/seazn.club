@@ -7,9 +7,17 @@
 
 /** Primary CTA — mirrors globals.css's markdown-button treatment
  *  (`bg-accent ... font-display uppercase tracking-wide text-white shadow`)
- *  so the stepper's own buttons read as the same product voice. */
+ *  so the stepper's own buttons read as the same product voice.
+ *
+ *  Busy (registration redesign B1 fix round 1, D1): a disabled button that
+ *  also says `aria-busy="true"` is WORKING, not unavailable, and its label is
+ *  the status the person reads while they wait ("Saving your place…"). It
+ *  keeps full strength and shows a progress cursor instead of the 40% dim.
+ *  Keyed on the ARIA attribute itself, so what is drawn and what a screen
+ *  reader is told cannot disagree; stacked on `disabled:` so it outranks
+ *  `disabled:opacity-40` by specificity whatever order the CSS is emitted in. */
 export const BTN_PRIMARY =
-  "inline-flex items-center justify-center gap-1.5 rounded-lg bg-accent px-4 py-2 font-display text-sm font-semibold uppercase tracking-wide text-accent-ink shadow-sm transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40";
+  "inline-flex items-center justify-center gap-1.5 rounded-lg bg-accent px-4 py-2 font-display text-sm font-semibold uppercase tracking-wide text-accent-ink shadow-sm transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40 disabled:aria-busy:cursor-progress disabled:aria-busy:opacity-100";
 
 /** Secondary/ghost — mirrors tabs.tsx's inactive-tab treatment. */
 export const BTN_GHOST =

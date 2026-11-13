@@ -160,11 +160,26 @@ let fakeSessionStorage: MapStorage;
 // computed independently via resolvePostSubmitNavigation's own (separately
 // unit-tested, submit.test.ts) logic rather than re-deriving it here.
 let assignMock: ReturnType<typeof vi.fn>;
+// B1 fix round 1 (M5): `location.replace` and the window's event listeners too, so the stepper's `pageshow` handler (back from Stripe
+// out of the back-forward cache) can be fired by a test the way invoice-pay-form.test.tsx fires its own.
+let replaceMock: ReturnType<typeof vi.fn>;
+type PageShowListener = (e: { persisted: boolean }) => void;
+let windowListeners: Record<string, PageShowListener[]>;
 beforeEach(() => {
   fakeSessionStorage = new MapStorage();
   (globalThis as { sessionStorage?: unknown }).sessionStorage = fakeSessionStorage;
   assignMock = vi.fn();
-  (globalThis as { window?: unknown }).window = { location: { assign: assignMock } };
+  replaceMock = vi.fn();
+  windowListeners = {};
+  (globalThis as { window?: unknown }).window = {
+    location: { assign: assignMock, replace: replaceMock },
+    addEventListener: (type: string, fn: PageShowListener) => {
+      (windowListeners[type] ??= []).push(fn);
+    },
+    removeEventListener: (type: string, fn: PageShowListener) => {
+      windowListeners[type] = (windowListeners[type] ?? []).filter((f) => f !== fn);
+    },
+  };
   apiV1Mock.impl.mockReset();
 });
 afterEach(() => {
@@ -2609,6 +2624,176 @@ describe("step 5 — staged submit button text (registration redesign B1 T6)", (
     await second.done;
 
     expect(atAssign.map((s) => s.label)).toEqual([OPENING]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B1 fix round 1 (review D1, D3, M5): the staged button is a STATUS the registrant reads while they wait, not a dead control.
+// D1: it says it is busy (aria-busy) through both phases, and the shared primary style keeps a busy button at full strength (its
+//     disabled dimming is for a button that is unavailable). The style is a class contract here; the computed opacity is witnessed
+//     in the B1 sign-off screenshots (no CSS engine in this node environment).
+// D3: the phase is announced through a polite status region that is mounted (empty) before the click: Chrome drops focus from the
+//     button the moment it is disabled, so its own label change is not read out.
+// M5: back from Stripe (or the status page), a browser may restore this page from its back-forward cache with the button frozen
+//     mid-phase. The cart is already committed, so the button must NOT come back to life (a second click is a second cart): the page
+//     goes to the cart's own status page instead, by `replace`, so Back from there does not land on the frozen form again.
+// Sport: not applicable (the register form is sport-agnostic).
+// ---------------------------------------------------------------------------
+
+describe("B1 fix round 1 — the staged button is a readable status (D1, D3) and survives Back from Stripe (M5)", () => {
+  const SAVING = "Saving your place…";
+  const OPENING = "Opening secure payment…";
+  const DIV_PAY_LATER: DivisionLike = { ...DIV_PAID, division_id: "div-pay-later-b1f", name: "Pay Later Singles", payment_method: "offline" };
+  const BASE_RESULT = { group_id: "g1", ref_code: "SZ-B1F-01", access_token: "tok1", currency: "gbp", entries: [] };
+  const NO_CHECKOUT = { ...BASE_RESULT, amount_cents: 0, checkout_url: null };
+  const WITH_CHECKOUT = { ...BASE_RESULT, amount_cents: 2500, checkout_url: "https://checkout.stripe.com/pay/xyz" };
+  // The cart's status page: the `?rid=&token=` convention (submit.ts, resolvePostSubmitNavigation), typed from it, not computed.
+  const STATUS_URL = `/live/${ORG_SLUG}/${COMPETITION_SLUG}/register/status?rid=g1&token=tok1`;
+
+  function deferred<T>() {
+    let resolve!: (v: T) => void;
+    let reject!: (e: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  async function reachReviewFor(division: DivisionLike) {
+    const m = mount([division]);
+    (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Alex Test", email: "alex@example.com" });
+    m.clickByText("Next");
+    setByAriaLabel(m.island, "Player 1 — Your name", "Alex Test");
+    m.clickByText("Next");
+    (propsOf(byId(m.island, "reg-consent-privacy")).onChange as (e: { target: { checked: boolean } }) => void)({
+      target: { checked: true },
+    });
+    m.clickByText("Next");
+    return m;
+  }
+
+  type Island = ReturnType<typeof mount>["island"];
+  const byTestId = (island: Island, id: string) => {
+    const el = island.tree().find((e) => propsOf(e)["data-testid"] === id);
+    expect(el, `[data-testid=${id}]`).toBeTruthy();
+    return el!;
+  };
+  const submitBtn = (island: Island) => byTestId(island, "reg-submit");
+  const busyOf = (island: Island) => propsOf(submitBtn(island))["aria-busy"] === true;
+  const spoken = (island: Island) => textOf(byTestId(island, "reg-submit-status"));
+  const clickSubmit = (island: Island) => (propsOf(submitBtn(island)).onClick as () => Promise<void>)();
+  const pageshow = (persisted: boolean) => {
+    for (const fn of [...(windowListeners.pageshow ?? [])]) fn({ persisted });
+  };
+
+  async function startSubmit(island: Island) {
+    const post = deferred<unknown>();
+    apiV1Mock.impl.mockReturnValueOnce(post.promise);
+    const done = clickSubmit(island);
+    await vi.waitFor(() => expect(apiV1Mock.impl, "the POST is in flight").toHaveBeenCalledTimes(1));
+    return { post, done };
+  }
+
+  it("D1: aria-busy is set through BOTH phases and cleared by an error; before the click it is not busy", async () => {
+    const { island } = await reachReviewFor(DIV_PAID);
+    expect(busyOf(island), "ready: not busy").toBe(false);
+    const seenAtAssign: boolean[] = [];
+    assignMock.mockImplementation(() => void seenAtAssign.push(busyOf(island)));
+
+    const first = await startSubmit(island);
+    expect(busyOf(island), "saving: busy").toBe(true);
+    first.post.reject(new ApiV1Error("Boom", 500, "INTERNAL"));
+    await first.done;
+    expect(busyOf(island), "after an error: not busy, so it reads as a button again").toBe(false);
+
+    apiV1Mock.impl.mockReset();
+    const second = await startSubmit(island);
+    second.post.resolve(WITH_CHECKOUT);
+    await second.done;
+    expect(seenAtAssign, "anti-vacuity: the navigation was reached once, in the opening-payment phase").toEqual([true]);
+  });
+
+  it("D1: the submit button's primary style restores full strength and a progress cursor for a busy button, and still dims a merely disabled one", async () => {
+    const { island } = await reachReviewFor(DIV_PAID);
+    const classes = String(propsOf(submitBtn(island)).className).split(/\s+/);
+    expect(classes, "an unavailable (disabled, not busy) button still dims").toContain("disabled:opacity-40");
+    // Stacked on `disabled:` so it outranks `disabled:opacity-40` by specificity, whatever order the CSS is emitted in.
+    expect(classes).toContain("disabled:aria-busy:opacity-100");
+    expect(classes).toContain("disabled:aria-busy:cursor-progress");
+  });
+
+  it("D3: one polite status region, mounted empty before the click, speaks each phase and empties again on an error", async () => {
+    const { island } = await reachReviewFor(DIV_PAID);
+    const region = byTestId(island, "reg-submit-status");
+    expect(propsOf(region).role).toBe("status");
+    expect(propsOf(region)["aria-live"]).toBe("polite");
+    expect(String(propsOf(region).className).split(/\s+/), "visually hidden: the button already shows the words").toContain("sr-only");
+    expect(island.tree().filter((e) => propsOf(e)["data-testid"] === "reg-submit-status"), "exactly one region").toHaveLength(1);
+    expect(spoken(island), "mounted, and empty, before anything happens").toBe("");
+
+    const heard: string[] = [];
+    assignMock.mockImplementation(() => void heard.push(spoken(island)));
+    const failed = await startSubmit(island);
+    expect(spoken(island)).toBe(SAVING);
+    failed.post.reject(new ApiV1Error("Boom", 500, "INTERNAL"));
+    await failed.done;
+    expect(spoken(island), "the error has its own alert; the status region goes quiet").toBe("");
+
+    apiV1Mock.impl.mockReset();
+    const ok = await startSubmit(island);
+    ok.post.resolve(WITH_CHECKOUT);
+    await ok.done;
+    expect(heard, "anti-vacuity: one navigation, announced as opening payment").toEqual([OPENING]);
+  });
+
+  it("D3: a free cart's region says it is saving, and never claims to be opening payment", async () => {
+    const { island } = await reachReviewFor(DIV_OPEN);
+    const heard: string[] = [];
+    assignMock.mockImplementation(() => void heard.push(spoken(island)));
+    const { post, done } = await startSubmit(island);
+    expect(spoken(island)).toBe(SAVING);
+    post.resolve(NO_CHECKOUT);
+    await done;
+    expect(heard).toEqual([SAVING]);
+  });
+
+  it.each([
+    { name: "card cart (back from Stripe)", division: DIV_PAID, result: WITH_CHECKOUT, left: "https://checkout.stripe.com/pay/xyz" },
+    { name: "pay-the-organiser-later cart (back from the status page)", division: DIV_PAY_LATER, result: NO_CHECKOUT, left: STATUS_URL },
+    { name: "free cart (back from the status page)", division: DIV_OPEN, result: NO_CHECKOUT, left: STATUS_URL },
+  ])("M5, $name: a restore from the back-forward cache goes to the cart's status page by replace, and never re-arms the button", async ({ division, result, left }) => {
+    const { island } = await reachReviewFor(division);
+    expect((windowListeners.pageshow ?? []).length, "one pageshow listener while the form is mounted").toBe(1);
+    const { post, done } = await startSubmit(island);
+    post.resolve(result);
+    await done;
+    expect(assignMock, "premise: the submit committed and the page left").toHaveBeenCalledWith(left);
+
+    pageshow(false); // a fresh load is not a restore
+    expect(replaceMock, "not persisted: nothing").not.toHaveBeenCalled();
+    pageshow(true);
+    expect(replaceMock).toHaveBeenCalledTimes(1);
+    expect(replaceMock).toHaveBeenCalledWith(STATUS_URL);
+    expect(propsOf(submitBtn(island)).disabled, "the committed cart's button stays dead: a second click would be a second cart").toBe(true);
+    expect(apiV1Mock.impl, "and nothing was posted again").toHaveBeenCalledTimes(1);
+  });
+
+  it("M5: a restore with no committed cart (before any submit, or after a failed one) changes nothing; the listener goes with the form", async () => {
+    const { island } = await reachReviewFor(DIV_PAID);
+    expect((windowListeners.pageshow ?? []).length, "premise: the form listens while mounted").toBe(1);
+    pageshow(true);
+    expect(replaceMock, "nothing submitted yet").not.toHaveBeenCalled();
+
+    const { post, done } = await startSubmit(island);
+    post.reject(new ApiV1Error("Boom", 500, "INTERNAL"));
+    await done;
+    pageshow(true);
+    expect(replaceMock, "a failed submit committed nothing").not.toHaveBeenCalled();
+    expect(propsOf(submitBtn(island)).disabled, "and the button is the retry it should be").toBe(false);
+
+    island.unmount();
+    expect((windowListeners.pageshow ?? []).length, "the listener goes with the form").toBe(0);
   });
 });
 

@@ -39,6 +39,7 @@ import {
   buildSubmitBody,
   classifySubmitFailure,
   lichessRefusalReason,
+  registrationStatusUrl,
   resolvePostSubmitNavigation,
   type LichessRefusal,
   type SubmitFailureKind,
@@ -333,6 +334,20 @@ export function RegisterStepper({
     }
   }, [hydrated, stepIndex]);
 
+  // B1 fix round 1 (review M5): Back from Stripe (or from the status page) can restore this page from the browser's back-forward
+  // cache, button frozen mid-phase ("Opening secure payment…", disabled). The cart is already committed, so the button must not
+  // come back to life (a second click is a second cart, sessionStorage having been cleared): the page goes to the cart's own status
+  // page instead, where the registrant can pay or see where they stand. `replace`, so Back from there does not land on this frozen
+  // form again. Set only once the POST has answered with a cart; a restore before that, or after a failed submit, changes nothing.
+  const committedStatusUrl = useRef<string | null>(null);
+  useEffect(() => {
+    const onPageShow = (e: PageTransitionEvent) => {
+      if (e.persisted && committedStatusUrl.current) window.location.replace(committedStatusUrl.current);
+    };
+    window.addEventListener("pageshow", onPageShow);
+    return () => window.removeEventListener("pageshow", onPageShow);
+  }, []);
+
   function dispatchCart(action: CartAction) {
     setCart((prev) => cartReducer(prev, action));
   }
@@ -449,6 +464,7 @@ export function RegisterStepper({
         }),
       );
       clearRegisterState(orgSlug, competitionSlug);
+      committedStatusUrl.current = registrationStatusUrl(result, orgSlug, competitionSlug);
       const nav = resolvePostSubmitNavigation(result, orgSlug, competitionSlug);
       // Keyed on the RESPONSE, not the cart's label: only a real checkout URL means "opening payment". The old document stays up until
       // the next one's response commits, so this label is on screen for the navigation's whole round trip.
@@ -631,6 +647,9 @@ export function RegisterStepper({
             data-testid="reg-submit"
             onClick={handleSubmit}
             disabled={submitting}
+            // Busy, not unavailable (B1 fix round 1, D1): BTN_PRIMARY keeps a disabled+busy button at full strength, so the phase
+            // label is read as "working", and assistive tech is told the same thing.
+            aria-busy={submitting}
             className={BTN_PRIMARY}
           >
             {submitButtonLabel}
@@ -641,6 +660,12 @@ export function RegisterStepper({
           </button>
         )}
       </div>
+      {/* The submit phase, said aloud (B1 fix round 1, D3): Chrome drops focus from the button the moment it is disabled, so its own
+          label change is not read out. Mounted on every step and empty until a submit starts (a live region injected already
+          filled is not reliably announced, own-tile.tsx), cleared when the phase returns to idle: an error has its own alert. */}
+      <p role="status" aria-live="polite" data-testid="reg-submit-status" className="sr-only">
+        {submitting ? submitButtonLabel : ""}
+      </p>
 
       {/* Honeypot — hidden and out of the tab order/accessibility tree, so
           no genuine visitor (sighted, keyboard, or screen-reader) ever
