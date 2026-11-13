@@ -45,6 +45,7 @@ import { createQuickMatchAnyFormat } from "@/server/usecases/__tests__/_quick-ma
 import { hardDeleteQuickMatchCompetition } from "@/server/usecases/quick-match-delete";
 import { readQuickMatchHome, resolveQuickMatchToken } from "@/server/usecases/quick-match-home";
 import { offerFor } from "@/server/usecases/quick-match-sports";
+import { putBackQuickMatchFixture, skipQuickMatchFixture } from "@/server/usecases/quick-match-skip";
 import { hashVisitorKey, mintVisitorKey } from "@/server/usecases/quick-match-tokens";
 import { scoreEvent } from "@/server/usecases/scoring";
 import { firstRallyFor, playToDecided } from "@/server/usecases/__tests__/_quick-match-probe";
@@ -89,13 +90,15 @@ const SIDES = ["Ravi & Sam", "Priya & Tom", "Lee & Ana", "Jo & Max"];
 let BADMINTON_V: string;
 
 /** The copy a refusal must print on the home, by the key T1's table (task-1-report.md) names for it: the dictionary's own
- *  English, never the route's or the map's answer. The finalized or cancelled 422 is the generic line (ledger CARRY to T6). */
+ *  English, never the route's or the map's answer. The finalized 422 is the generic line (ledger CARRY to T6); a match marked
+ *  Not played (the home's skip, quick match plan 4 T3) is its own line, the pad's own words for it. */
 const FLASH = {
   linkLimit: en["quickMatch.flash.linkLimit"],
   notReady: en["quickMatch.flash.notReady"],
   notFound: en["quickMatch.flash.notFound"],
   generic: en["quickMatch.flash.generic"],
   emailLimited: en["quickMatch.flash.emailLimited"],
+  notPlayed: en["quickMatch.flash.notPlayed"],
 };
 
 const league = (over: Partial<CreateQuickMatch> = {}): CreateQuickMatch => ({
@@ -401,6 +404,37 @@ describe.skipIf(!HAS_DB)("a refused tap lands back on the home with ?e=, which p
     expect(flashOf(await homeAt(res.headers.get("location")!))).toBe(FLASH.generic);
     expect(await linksOn(f0!.id)).toBe(1);
     expect(reported(), "a finalized match is a refusal, not a fault").toEqual([]);
+  });
+
+  // Quick match plan 4, T3 (stale screens): a Score tap from a home loaded before the match was marked Not played.
+  it("a match marked Not played: ?e= NOT_PLAYED, the home's Not played line; no link minted or reopened, never reported; put back, it scores", async () => {
+    const out = await create();
+    const [tapped, untapped] = await fixturesOf(out.competitionId);
+    const row = await resolveQuickMatchToken(out.token);
+    if (!row) throw new Error("precondition: the token resolves");
+    // One match had its pad opened before the skip, one never did: neither may be (re)opened while it is Not played.
+    const secret = await padSecret(await tap(out.token, tapped!.id));
+    let checked = 0;
+    for (const f of [tapped!, untapped!]) {
+      expect(await skipQuickMatchFixture(row, f.id), "premise: the skip lands").toEqual({ changed: true });
+      const linksBefore = await linksOn(f.id);
+      mintSpy.mockClear();
+      const res = await tap(out.token, f.id);
+      expect(await refusedWith(res, out.token), `fixture ${f.round_no}`).toBe(QUICK_MATCH_ERRORS.NOT_PLAYED);
+      expect(flashOf(await homeAt(res.headers.get("location")!))).toBe(FLASH.notPlayed);
+      expect(mintSpy, "the refusal is the link step's own (status read under the mint)").toHaveBeenCalledTimes(1);
+      expect(await linksOn(f.id), "no link minted").toBe(linksBefore);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    expect(reported(), "a Not played match is a refusal, not a fault").toEqual([]);
+    // The pair: put back, the old link reopens and scores; the untapped match mints its first.
+    expect(await putBackQuickMatchFixture(row, tapped!.id)).toMatchObject({ changed: true });
+    expect(await padSecret(await tap(out.token, tapped!.id)), "the same link reopens").toBe(secret);
+    await scoresARally(secret, tapped!.id);
+    expect(await putBackQuickMatchFixture(row, untapped!.id)).toMatchObject({ changed: true });
+    await padSecret(await tap(out.token, untapped!.id));
+    expect(await linksOn(untapped!.id)).toBe(1);
   });
 
   it("a match of another quick match: ?e= NOT_FOUND, the home's 'not part of this' line, no link on it; through its own home it mints", async () => {
@@ -829,9 +863,10 @@ describe.skipIf(!HAS_DB)("every answer", () => {
       const e = url.searchParams.get("e");
       if (e !== null) codes.add(e);
     }
-    // Every refusal the route sends is one T1's table gave copy (these four; an expiry sends none), each seen at least once.
+    // Every refusal the route sends is one T1's table gave copy (these five; an expiry sends none), each seen at least once.
     expect([...codes].sort()).toEqual(
       [
+        QUICK_MATCH_ERRORS.NOT_PLAYED,
         QUICK_MATCH_ERRORS.LINK_LIMITED,
         QUICK_MATCH_ERRORS.SIDES_UNKNOWN,
         QUICK_MATCH_ERRORS.ACTION_FAILED,

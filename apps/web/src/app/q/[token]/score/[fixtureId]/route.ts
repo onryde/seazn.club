@@ -6,7 +6,7 @@
 // answer is a 303 with a relative Location (D3), never JSON:
 //   - a tap that works lands in the scoring pad, `/score/<device link>`: plan 1's `ensureGuestDeviceLink` re-opens the
 //     match's live link or mints one, so a second tap, or a tap on a live or decided match, lands on the SAME link (Review
-//     Focus 1); only a finalized or cancelled match refuses;
+//     Focus 1); only a finalized match, or one marked Not played (`cancelled`, plan 4's skip), refuses;
 //   - a refusal lands back on the home, `routes.quickMatch(token)?e=<code>`, where the code (QUICK_MATCH_ERRORS) is printed as
 //     the viewer's own `quickMatch.flash.*` line (home.tsx `homeFlash`);
 //   - an unknown, changed or expired token lands on its own `/q/<token>` with nothing added: the home's one dead screen, which
@@ -19,7 +19,8 @@
 //   2. the fixture id's shape, before the mint limit is spent on it (plan-1 T8 review: a malformed id is a refusal, not a
 //      Postgres cast error);
 //   3. `ensureGuestDeviceLink`: the mint limit per quick match, the per-match check (a fixture of another quick match is a
-//      404), finalized or cancelled (422), both sides known (C18), then the link;
+//      404), Not played (422 NOT_PLAYED: someone skipped it after this page loaded), finalized (422), both sides known
+//      (C18), then the link;
 //   4. the tap is activity (C1): `touchQuickMatchActivity`, best-effort as the scoring path's touch is: the link already
 //      stands, so a failed touch is logged and the guest still lands in the pad.
 //
@@ -42,7 +43,7 @@ import { resolveQuickMatchToken } from "@/server/usecases/quick-match-home";
 /**
  * The guest's refusals, by the status and code they are thrown with, and the code `?e=` names for each. `code: undefined`
  * matches a code-less throw only. The copy for each is T1's table (task-1-report.md); the device link's code-less 422
- * (finalized or cancelled, device-links.ts `loadLinkableFixture`) is the generic line, not "not yet" (ledger CARRY to T6).
+ * (finalized, device-links.ts `assertLinkableStatus`) is the generic line, not "not yet" (ledger CARRY to T6).
  */
 const REFUSALS: readonly { status: number; code: string | undefined; e: string }[] = [
   // The mint limiter (`qm-mint:<quick match id>`, DEVICE_LINK_MINT_LIMIT): its 429 carries no code (lib/rate-limit.ts).
@@ -51,7 +52,9 @@ const REFUSALS: readonly { status: number; code: string | undefined; e: string }
   { status: 404, code: undefined, e: QUICK_MATCH_ERRORS.NOT_FOUND },
   // A side not known yet (C18): a waiting knockout seat, a bye.
   { status: 422, code: QUICK_MATCH_ERRORS.SIDES_UNKNOWN, e: QUICK_MATCH_ERRORS.SIDES_UNKNOWN },
-  // Finalized or cancelled: nothing left to score.
+  // Marked Not played (plan 4) since this page loaded: the home says to put it back first (T1 review G1), never "try again".
+  { status: 422, code: QUICK_MATCH_ERRORS.NOT_PLAYED, e: QUICK_MATCH_ERRORS.NOT_PLAYED },
+  // Finalized: nothing left to score.
   { status: 422, code: undefined, e: QUICK_MATCH_ERRORS.ACTION_FAILED },
 ];
 

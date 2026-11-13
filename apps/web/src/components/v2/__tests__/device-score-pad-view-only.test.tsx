@@ -864,7 +864,7 @@ describe("DeviceScorePad — a quick match's pad names no organiser (review Q1/Q
     expect(byTestId(island.tree(), "device-void-mine"), "View-only offers no undo").toBeUndefined();
   });
 
-  it("opened on View-only by the page: carried forward reads as locked, finalized as finished; cancelled keeps its own words", () => {
+  it("opened on View-only by the page: carried forward reads as locked, finalized as finished, cancelled as Not played", () => {
     const carried = renderIsland(DeviceScorePad, { ...quick("decided", { kind: "win" }), initialViewOnly: "carried_forward" as const });
     expect(textOf(byTestId(carried.tree(), "scan-view-only"))).toBe(dict["device.quickMatch.resultLocked"]);
     const finalized = renderIsland(DeviceScorePad, { ...quick("finalized", { kind: "win" }), initialViewOnly: "finalized" as const });
@@ -873,7 +873,61 @@ describe("DeviceScorePad — a quick match's pad names no organiser (review Q1/Q
     // The negative pair, same state, no prop: the ordinary pad keeps the organiser's finalised line.
     const ordinary = renderIsland(DeviceScorePad, { ...props("finalized", { kind: "win" }), initialViewOnly: "finalized" as const });
     expect(textOf(byTestId(ordinary.tree(), "scan-view-only"))).toBe(dict["device.scan.viewOnly.finalized"]);
+    // Quick match plan 4 (T1 review G1): a guest's match is cancelled only by the home's "Not played", so the pad says so
+    // and how to put it back, never the organiser's "cancelled" line.
     const cancelled = renderIsland(DeviceScorePad, { ...quick("cancelled", null), initialViewOnly: "cancelled" as const });
-    expect(textOf(byTestId(cancelled.tree(), "scan-view-only"))).toBe(dict["device.scan.viewOnly.cancelled"]);
+    expect(textOf(byTestId(cancelled.tree(), "scan-view-only"))).toBe(dict["device.quickMatch.notPlayed"]);
+    expect(textOfTree(cancelled.tree())).not.toMatch(ORGANISER);
+    const ordinaryCancelled = renderIsland(DeviceScorePad, { ...props("cancelled", null), initialViewOnly: "cancelled" as const });
+    expect(textOf(byTestId(ordinaryCancelled.tree(), "scan-view-only"))).toBe(dict["device.scan.viewOnly.cancelled"]);
+  });
+
+  // Quick match plan 4, T3 (stale screens): the home's "Not played" while a guest's pad is open on the match.
+  it("marked Not played behind a live guest pad: the next re-read lands on View-only with the Not played line", async () => {
+    const island = renderIsland(DeviceScorePad, quick("in_play", null));
+    const pad = island.tree().find((e) => e.type === ScorePad);
+    // Empty case first: live and in play, no View-only.
+    expect(pad, "precondition: the pad is up").toBeDefined();
+    expect(byTestId(island.tree(), "scan-view-only")).toBeUndefined();
+    api.serverStatus = "cancelled";
+    // The inner pad's own tap (refused on the server: the match is Not played) fires onEvents, whose re-read sees it.
+    (propsOf(pad!).onEvents as () => void)();
+    await flush();
+    expect(textOf(byTestId(island.tree(), "scan-view-only"))).toBe(dict["device.quickMatch.notPlayed"]);
+    expect(island.tree().find((e) => e.type === ScorePad), "no pad").toBeUndefined();
+    expect(textOfTree(island.tree())).not.toMatch(ORGANISER);
+  });
+
+  /** A stale Start: the guest's pad opened on Confirm, then the match was decided, finished or marked Not played
+   *  elsewhere, and the server refuses the Start ALREADY_DECIDED (the events route's played-fixture refusal). */
+  const staleStart = async (serverStatus: string) => {
+    api.postRefusal = { code: "ALREADY_DECIDED", status: 422 };
+    api.serverStatus = serverStatus;
+    const island = renderIsland(DeviceScorePad, { ...quick("scheduled", null), initialEvents: [] });
+    expect(byTestId(island.tree(), "scan-confirm"), "precondition: Confirm, with Start").toBeDefined();
+    expect(byTestId(island.tree(), "scan-view-only"), "precondition: not View-only").toBeUndefined();
+    (propsOf(byTestId(island.tree(), "score-start-match")!).onClick as () => void)();
+    await flush();
+    expect(api.posts, "the Start really went to the server").toBe(1);
+    expect(api.stateReads, "the refusal re-reads the match once").toBe(1);
+    return island;
+  };
+
+  it.each([
+    ["cancelled", "device.quickMatch.notPlayed"],
+    ["finalized", "device.quickMatch.finished"],
+  ] as const)("a stale Start refused ALREADY_DECIDED on a match now %s: View-only says why, and no 'already has a result' line", async (status, key) => {
+    const island = await staleStart(status);
+    expect(textOf(byTestId(island.tree(), "scan-view-only"))).toBe(dict[key]);
+    expect(byTestId(island.tree(), "scan-confirm"), "no Confirm, no Start").toBeUndefined();
+    expect(textOfTree(island.tree()), "the refusal's own words would be false here").not.toContain(
+      dict["engineError.ALREADY_DECIDED"],
+    );
+  });
+
+  it("the negative pair: a stale Start on a match now DECIDED keeps the refusal's own words", async () => {
+    const island = await staleStart("decided");
+    expect(byTestId(island.tree(), "scan-view-only"), "decided is no View-only").toBeUndefined();
+    expect(textOfTree(island.tree())).toContain(dict["engineError.ALREADY_DECIDED"]);
   });
 });

@@ -20,10 +20,13 @@ export const VIEW_ONLY_COPY: Readonly<Record<ViewOnlyReason, MessageKey>> = {
 const QUICK_MATCH_VIEW_ONLY: Readonly<Partial<Record<ViewOnlyReason, MessageKey>>> = {
   carried_forward: "device.quickMatch.resultLocked",
   finalized: "device.quickMatch.finished",
+  cancelled: "device.quickMatch.notPlayed",
 };
 
 /** Quick match (branch-fix A review Q1/Q2, controller rulings 2026-11-12): a guest's pad has no organiser to ask, so no
  *  View-only line sends the guest to one: carried forward says the result is locked, finalized that the match is finished.
+ *  Cancelled (quick match plan 4, T1 review G1): a guest's match is cancelled only by the home's "Not played", so the pad
+ *  says so and how to put it back, in the home's own Score refusal words (`quickMatch.flash.notPlayed`).
  *  Copy only: which screen a reason opens, and every control on it, stays the shared pad's. */
 export function viewOnlyKey(reason: ViewOnlyReason, quickMatch: boolean): MessageKey {
   return (quickMatch ? QUICK_MATCH_VIEW_ONLY[reason] : undefined) ?? VIEW_ONLY_COPY[reason];

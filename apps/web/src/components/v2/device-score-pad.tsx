@@ -24,6 +24,8 @@ import {
 } from "@/components/v2/fixture-console";
 import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
 import { scoringErrorText } from "@/lib/scoring-vocab";
+import { LOCKED_FIXTURE_STATUSES } from "@/lib/fixture-status";
+import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 // S13/#422 W11 — the v2 scoring pad is now the only pad this dispatcher
 // renders (S12/#421's flag has been removed entirely, along with the seven
 // v1 pad components it used to choose between — this dispatcher never had a
@@ -276,7 +278,7 @@ export function DeviceScorePad({
         // where nothing batches.
         setEvents(all);
         setLive(state);
-        return all;
+        return { events: all, state };
       } finally {
         if (timer !== null) clearTimeout(timer);
       }
@@ -412,6 +414,16 @@ export function DeviceScorePad({
         } else if (err instanceof ApiV1Error && err.code === "SEQ_CONFLICT") {
           await resync().catch(() => undefined);
           setError(msg("device.seqConflict"));
+        } else if (
+          err instanceof ApiV1Error &&
+          err.code === PLAYED_REFUSAL_CODE &&
+          // Quick match plan 4, T3 (stale screens): the match was decided, finished or marked Not played (the quick match
+          // home's skip) since this screen loaded, so a stale Start or void is refused ALREADY_DECIDED. Re-read it: a
+          // finished or Not played match then says why on View-only (`viewOnlyKey`), where the refusal's own "already has a
+          // result" would be false. Any other status, or a failed re-read, falls through to the refusal's own words.
+          LOCKED_FIXTURE_STATUSES.has((await resync().catch(() => null))?.state.status ?? "")
+        ) {
+          // View-only speaks: the re-read moved `live` onto the locked status, and no refusal line stands beside it.
         } else {
           // #427: an EngineError's message is the engine's own English and the
           // envelope carries it through ApiV1Error — localize by code first.
