@@ -159,7 +159,11 @@ export function StepReview({
                       </span>
                     )}
                   </div>
-                  {waitlisted && <p className="mt-1.5 text-xs text-amber-700">{t("register.entries.cart.waitlistNote")}</p>}
+                  {waitlisted && (
+                    <p data-testid="reg-review-waitlist" className="mt-1.5 text-xs font-medium text-amber-700">
+                      {t("register.cart.waitlistLine")}
+                    </p>
+                  )}
                   {staleClosed && <p className="mt-1.5 text-xs text-red-700">{t("register.entries.cart.closedNote")}</p>}
                 </li>
               );

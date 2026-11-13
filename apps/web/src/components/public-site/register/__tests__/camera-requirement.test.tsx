@@ -12,7 +12,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { t as tRuntime } from "@/lib/i18n-runtime";
+import { plural as pluralRuntime, t as tRuntime } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";
 import { CAMERA_POLICIES, type CameraPolicy } from "@/lib/camera-policy";
 
@@ -24,6 +24,8 @@ const DICTS = Object.fromEntries(
 const current = vi.hoisted(() => ({ locale: "en" as string }));
 vi.mock("@/components/i18n/dict-provider", () => ({
   useT: () => (key: string, vars?: Record<string, string | number>) => tRuntime(DICTS[current.locale as Loc], key, vars),
+  // DivisionCard now reads usePlural for its places-left line (B3 T12); this file renders cards with no capacity.
+  usePlural: () => (key: string, count: number, vars?: Record<string, string | number>) => pluralRuntime(DICTS[current.locale as Loc], key, count, current.locale as Loc, vars),
 }));
 
 import { DivisionCard } from "../division-card";

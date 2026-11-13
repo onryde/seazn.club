@@ -1,13 +1,14 @@
 "use client";
 // RS006 Step 2 — one division card (design §4 step 2). Badges: category,
-// age band, fee (+payment method), capacity/waitlist, window. A
+// age band, fee (+payment method), places (B3 T12, capacity.ts), window. A
 // self-ineligible-but-open division greys with the reason (design: "stay
 // pickable for team entries") — every Add control below still works
 // regardless, because only the CONTACT's own eligibility is in question,
 // never whether the division accepts entries at all (that's `open`).
-import { useT } from "@/components/i18n/dict-provider";
+import { usePlural, useT } from "@/components/i18n/dict-provider";
 import { formatMoneyExact } from "@/lib/currency";
 import { intlLocaleFor } from "@/lib/public-date-locale";
+import { capacityState } from "./capacity";
 import { INELIGIBLE_MESSAGE_KEY, type SelfEligibility } from "./eligibility-presentation";
 import { BTN_GHOST, BTN_PRIMARY } from "./styles";
 import type { DivisionLike } from "./types";
@@ -20,6 +21,11 @@ const CATEGORY_KEY = {
 } as const;
 
 const BADGE = "inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium";
+
+/** The places line (B3 T12). Its own constant, not BADGE plus overrides: two `rounded-*` or two `font-*` utilities on one element
+ *  leave the winner to stylesheet order. `rounded-2xl` + `max-w-full` + `leading-snug` so a long line ("Full · join the waiting list
+ *  (12 waiting)", longer still in nl/fr) wraps inside the card at 320 as a soft rectangle instead of overflowing a full pill. */
+const CAPACITY_LINE = "inline-flex max-w-full items-center rounded-2xl px-2.5 py-1 text-xs leading-snug";
 
 /** Viewer-LOCAL date, not the organiser's (RS006 fix wave finding #2,
  *  MEDIUM) — the ORGANISER's timezone is not plumbed to this client at all
@@ -69,6 +75,7 @@ export function DivisionCard({
   onAddPair,
   onAddIndividual,
   onAddSoloSignup,
+  inCart = 0,
 }: {
   division: DivisionLike;
   locale: string;
@@ -80,8 +87,15 @@ export function DivisionCard({
   onAddPair?: () => void;
   onAddIndividual?: () => void;
   onAddSoloSignup?: () => void;
+  /** How many TEAM entries the visitor's cart already holds in this division (`teamEntriesInCart`, capacity.ts): they take places
+   *  from the page-load count the card shows. 0 for a card rendered with no cart. */
+  inCart?: number;
 }) {
   const t = useT();
+  const plural = usePlural();
+  const capacity = capacityState(division, inCart);
+  // The Add buttons' label: on a full division (or one the cart has just filled) every entry kind joins the waiting list.
+  const waiting = capacity.kind === "waitlist";
   const categoryKey = CATEGORY_KEY[(division.category as keyof typeof CATEGORY_KEY) ?? "open"] ?? CATEGORY_KEY.open;
 
   const ageLabel =
@@ -159,14 +173,22 @@ export function DivisionCard({
             {ageLabel}
           </span>
         )}
-        {division.closed_reason === "full" ? (
-          <span className={`${BADGE} bg-amber-100 text-amber-800`}>{t("register.entries.badge.waitlist")}</span>
-        ) : (
-          division.capacity != null && (
-            <span className={`${BADGE} bg-zinc-100 text-ink-muted`} aria-label={t("register.capacity.taken", { taken: division.taken, capacity: division.capacity })}>
-              {division.taken}/{division.capacity}
-            </span>
-          )
+        {/* B3 T12 (spec §4.1): the places line replaces the old "3/32" chip and "Waitlist" chip. Said only when it helps the
+            visitor act: the organiser's capacity, 3 or fewer left, or full. An uncapped division says nothing. */}
+        {capacity.kind === "waitlist" && (
+          <span data-testid="division-capacity" data-state="waitlist" className={`${CAPACITY_LINE} bg-amber-100 font-medium text-amber-800`}>
+            {capacity.waiting > 0 ? t("register.capacity.fullWaitlistCount", { count: capacity.waiting }) : t("register.capacity.fullWaitlist")}
+          </span>
+        )}
+        {capacity.kind === "few" && (
+          <span data-testid="division-capacity" data-state="few" className={`${CAPACITY_LINE} bg-amber-100 font-bold text-amber-800`}>
+            {plural("register.capacity.left", capacity.left)}
+          </span>
+        )}
+        {capacity.kind === "places" && (
+          <span data-testid="division-capacity" data-state="places" className={`${CAPACITY_LINE} bg-zinc-100 font-medium text-ink-muted`}>
+            {plural("register.capacity.left", capacity.left)}
+          </span>
         )}
         {notYetOpen && division.opens_at && (
           <span className={`${BADGE} bg-zinc-100 text-ink-muted`}>
@@ -242,17 +264,17 @@ export function DivisionCard({
         <div className="mt-3.5 flex flex-wrap gap-2">
           {division.entrant_kind === "team" && onAddTeam && (
             <button type="button" onClick={onAddTeam} className={BTN_PRIMARY}>
-              {t("register.entries.add.team")}
+              {t(waiting ? "register.capacity.joinWaitlist" : "register.entries.add.team")}
             </button>
           )}
           {division.entrant_kind === "pair" && onAddPair && (
             <button type="button" onClick={onAddPair} className={BTN_PRIMARY}>
-              {t("register.entries.add.pair")}
+              {t(waiting ? "register.capacity.joinWaitlist" : "register.entries.add.pair")}
             </button>
           )}
           {division.entrant_kind === "individual" && onAddIndividual && (
             <button type="button" onClick={onAddIndividual} className={BTN_PRIMARY}>
-              {t("register.entries.add.individual")}
+              {t(waiting ? "register.capacity.joinWaitlist" : "register.entries.add.individual")}
             </button>
           )}
           {division.entrant_kind === "team" && division.allow_free_agents && onAddSoloSignup && (

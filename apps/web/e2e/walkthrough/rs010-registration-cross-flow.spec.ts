@@ -175,7 +175,7 @@ test("configure, register, join, waitlist, approve, opt-out — every screen agr
    *  (unclaimed) roster row is entered. */
   async function submitTeamEntry(
     anon: import("@playwright/test").Page,
-    opts: { name: string; email: string; team: string; extraRosterName?: string },
+    opts: { name: string; email: string; team: string; extraRosterName?: string; /** The division's Add control: "Add a team", or "Join waiting list" once it has no place left (B3 T12). */ cta?: RegExp },
   ): Promise<string> {
     await anon.goto(registerUrl, { waitUntil: "load" });
     await anon.getByRole("button", { name: /^accept$/i }).click({ timeout: 3000 }).catch(() => {});
@@ -188,7 +188,7 @@ test("configure, register, join, waitlist, approve, opt-out — every screen agr
     await anon.getByTestId("reg-next").click();
 
     // step 2: ENTRIES
-    await anon.getByRole("button", { name: /add a team/i }).click();
+    await anon.getByRole("button", { name: opts.cta ?? /add a team/i }).click();
     await anon.getByLabel(/team name/i).first().fill(opts.team);
     await anon.getByTestId("reg-next").click();
 
@@ -316,6 +316,8 @@ test("configure, register, join, waitlist, approve, opt-out — every screen agr
       name: overflowCaptainName,
       email: overflowEmail,
       team: overflowTeamName,
+      // The division is full (capacity 1, taken): its card now offers the waiting list, not "Add a team".
+      cta: /join waiting list/i,
     });
     await expect(
       overflowPage.getByText(/waitlist/i).first(),

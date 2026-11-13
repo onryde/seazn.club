@@ -6,6 +6,7 @@
 // self-eligibility once per render.
 import { useT } from "@/components/i18n/dict-provider";
 import { canAddEntry, type CartAction } from "./cart";
+import { teamEntriesInCart } from "./capacity";
 import { DivisionCard } from "./division-card";
 import { selfEligibilityForDivision } from "./eligibility-presentation";
 import { EntryCart } from "./entry-cart";
@@ -66,6 +67,7 @@ export function StepEntries({
                 locale={locale}
                 selfEligibility={selfEligibility}
                 imPlaying={imPlaying}
+                inCart={teamEntriesInCart(cart.entries, division.division_id)}
                 onAddTeam={canAdd && division.entrant_kind === "team" ? addAt("team") : undefined}
                 onAddPair={canAdd && division.entrant_kind === "pair" ? addAt("pair") : undefined}
                 onAddIndividual={canAdd && division.entrant_kind === "individual" ? addAt("individual") : undefined}

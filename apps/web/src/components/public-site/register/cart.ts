@@ -35,6 +35,7 @@
 // (a registrant may link themselves on more than one entry). `SET_SELF_ENTRY`
 // (cart-wide) is replaced by `SET_ENTRY_SELF` (per-entry); the old cart-level
 // `SET_SELF_PLAYER_INDEX` now carries an `id` too.
+import { cartWaitlisted } from "./capacity";
 import {
   MAX_CART_ENTRIES,
   type CartEntry,
@@ -484,9 +485,9 @@ export interface CartLineSummary {
    *  against live divisions, storage.ts's own doc comment). Undefined
    *  division counts as not-charged-now too (nothing to charge). */
   notChargedNow: boolean;
-  /** True specifically for the waitlist case (`closed_reason === "full"`) —
-   *  distinct from a stale-closed entry, same distinction entry-cart.tsx
-   *  already drew (fix wave finding #4) before this refactor. */
+  /** True when submit will put THIS entry on the waiting list (B3 T12): the division has no place left for it, counting the
+   *  earlier entries of the same cart in cart order (`cartWaitlisted`, capacity.ts). Never true for a solo sign-up. Distinct from
+   *  a stale-closed entry, same distinction entry-cart.tsx already drew (fix wave finding #4) before this refactor. */
   waitlisted: boolean;
   /** True for a NON-"full" closed reason (the division's window/payment
    *  method changed since this entry was added), as opposed to waitlisted. */
@@ -537,14 +538,21 @@ export function lineFeeCents(entry: { free_agent?: boolean }, division: Division
 
 export function summarizeCart(cart: CartState, divisions: readonly DivisionLike[]): CartSummary {
   const byId = new Map(divisions.map((d) => [d.division_id, d]));
+  // Who waits is decided per ENTRY, from the places each division has left and the cart's own order (B3 T12): with one place left,
+  // the first entry takes it and the second is queued, exactly as submit will do — not "every entry waits once the division reads
+  // full at page load". A stale-closed division is left out: its entries are blocked at Next (`staleClosed`), never queued.
+  const placesLeft = new Map<string, number | null>(
+    divisions.filter((d) => d.closed_reason == null || d.closed_reason === "full").map((d) => [d.division_id, d.remaining]),
+  );
+  const queued = cartWaitlisted(cart.entries, placesLeft);
   let subtotalCents = 0;
   let currency: string | null = null;
-  const lines: CartLineSummary[] = cart.entries.map((entry) => {
+  const lines: CartLineSummary[] = cart.entries.map((entry, i) => {
     const division = byId.get(entry.division_id);
-    const waitlisted = division?.closed_reason === "full";
+    const waitlisted = division != null && queued[i]!;
     const staleClosed = division != null && division.closed_reason != null && division.closed_reason !== "full";
-    const notChargedNow = division == null || division.closed_reason != null;
-    if (division && division.closed_reason == null) {
+    const notChargedNow = division == null || staleClosed || waitlisted;
+    if (division && !notChargedNow) {
       subtotalCents += lineFeeCents(entry, division);
       currency = division.currency;
     }

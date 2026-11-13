@@ -152,7 +152,11 @@ export function EntryCart({
                   </p>
                 )}
 
-                {willWaitlist && <p className="mt-1.5 text-xs text-amber-700">{t("register.entries.cart.waitlistNote")}</p>}
+                {willWaitlist && (
+                  <p data-testid="reg-cart-waitlist" className="mt-1.5 text-xs font-medium text-amber-700">
+                    {t("register.cart.waitlistLine")}
+                  </p>
+                )}
                 {/* Review finding 2 (2026-08-27): this note now BLOCKS
                     "Next" (validateEntries's staleClosedEntryId) rather than
                     being purely informational, so its copy is the stronger,

@@ -1227,7 +1227,7 @@ describe("finding #4 — a non-\"full\" closed division in the cart is excluded 
     // stronger, action-directed closedBlocking copy here instead of the
     // softer closedNote step-review.tsx's read-only summary still uses.
     expect(text).toContain("This division is no longer open and can't be charged — remove this entry to continue.");
-    expect(text).not.toContain("Not charged now — pay only if you're promoted from the waitlist."); // the WAITLIST note — a different case
+    expect(text).not.toContain("Waiting list — not charged now"); // the WAITLIST line — a different case
     expect(text).toContain("Free"); // subtotal excludes the stale fee entirely
     expect(text).not.toMatch(/£15(\.00)?/);
   });
@@ -1932,6 +1932,10 @@ const DIV_WAITLIST: DivisionLike = {
   division_id: "div-wait",
   name: "Full Division",
   closed_reason: "full",
+  // `closed_reason "full"` IS "open and 0 places left" on the wire (settings.ts): the cart reads the places, so the fixture states them.
+  capacity: 4,
+  remaining: 0,
+  taken: 4,
   fee_cents: 1000,
   free_agent_fee_cents: null,
   currency: "gbp",
@@ -1963,7 +1967,7 @@ describe("step 5 — REVIEW→PAY line items", () => {
     expect(text).toContain("Review and pay");
     expect(text).toContain("Paid Singles");
     expect(text).toContain("Full Division");
-    expect(text).toContain("Not charged now — pay only if you're promoted from the waitlist.");
+    expect(text).toContain("Waiting list — not charged now");
     // Subtotal is the PAID division's £25 alone — the waitlisted £10 never joins it.
     expect(text).toMatch(/£25(\.00)?/);
     expect(text).not.toMatch(/£35(\.00)?/);
@@ -3087,7 +3091,7 @@ describe("P4 - the REVIEW step labels each entry with its own payment method (W9
   });
 
   it("through the real stepper: the charged entry is labelled, the waitlisted one is not", () => {
-    const WAIT: DivisionLike = { ...CARD, division_id: "div-wait", name: "Full Division", closed_reason: "full" };
+    const WAIT: DivisionLike = { ...CARD, division_id: "div-wait", name: "Full Division", closed_reason: "full", capacity: 4, remaining: 0, taken: 4 };
     const m = mount([CARD, WAIT]);
     (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Rep", email: "rep@example.com" });
     m.clickByText("Next"); // -> ENTRIES
@@ -3421,6 +3425,62 @@ describe("B2 T8 — action bar: Back, named Continue, running total, one forward
     (propsOf(cartEl).dispatch as (a: object) => void)({ type: "REMOVE_ENTRY", id: ids[0] });
     (propsOf(m.island.tree().find((e) => e.type === EntryCart)!).dispatch as (a: object) => void)({ type: "REMOVE_ENTRY", id: ids[1] });
     expect(textOf(one(m.island, "reg-bar-summary")), "singular for one entry").toBe("1 entry · £25.00");
+  });
+
+  // B3 T12 (spec §4.1; plan Review Focus 2) — the seam from the cart to what the person SEES. The card, the cart row, the Review row,
+  // the total and the Pay button are five readers of one verdict; this drives the real stepper from the first Add to Review and
+  // reads each of them, because a verdict nobody renders is the inert seam the wave exists to avoid.
+  it("a division with ONE place left, two entries: the second reads 'Waiting list — not charged now' on the cart and on Review, and the total and Pay button carry ONE fee", () => {
+    const ONE_LEFT: DivisionLike = { ...DIV_PAID, division_id: "div-one-left", name: "Last Place", capacity: 8, remaining: 1, taken: 7, waitlisted: 0 };
+    const m = mount([ONE_LEFT, DIV_OPEN]);
+    fillWho(m);
+    m.clickByText("Next"); // -> ENTRIES
+    const cardText = () => textOf(walk((DivisionCard as unknown as ComponentFn)(propsOf(m.divisionCard("div-one-left")))));
+    expect(cardText(), "before any entry: one place left, an ordinary Add").toContain("1 place left");
+    expect(cardText()).toContain("Add an entry");
+
+    addEntry(m, "div-one-left");
+    expect(propsOf(m.divisionCard("div-one-left")).inCart, "the card is told what the cart holds").toBe(1);
+    expect(cardText(), "the cart took the last place: the card now says so").toContain("Join waiting list");
+    expect(m.entryCartText(), "one entry: it holds the place").not.toContain("Waiting list — not charged now");
+
+    addEntry(m, "div-one-left");
+    // Counted as ELEMENTS (the line's own testid), not as text matches: `textOf` over a flat `walk` repeats every nested element's text.
+    const waitingLines = walk((EntryCart as unknown as ComponentFn)(propsOf(m.island.tree().find((e) => e.type === EntryCart)!))).filter((e) => propsOf(e)["data-testid"] === "reg-cart-waitlist");
+    expect(waitingLines.map((e) => textOf(e)), "the cart labels exactly one entry, with the copy").toEqual(["Waiting list — not charged now"]);
+    expect(textOf(one(m.island, "reg-bar-summary")), "two entries, ONE fee").toBe("2 entries · £25.00");
+
+    m.clickByText("Next"); // -> DETAILS
+    const names = allByAriaLabel(m.island, "Player 1 — Your name");
+    expect(names, "premise: a row per entry").toHaveLength(2);
+    names.forEach((n, i) => (propsOf(n).onChange as (e: { target: { value: string } }) => void)({ target: { value: `Player ${i + 1}` } }));
+    m.clickByText("Next"); // -> CONSENT
+    consent(m);
+    m.clickByText("Next"); // -> REVIEW
+
+    const rows = walk(one(m.island, "reg-review-entries")).filter((e) => e.type === "li").map((e) => textOf(e));
+    expect(rows, "premise: both entries are on Review").toHaveLength(2);
+    expect(rows[0], "the first entry holds the place").not.toContain("Waiting list — not charged now");
+    expect(rows[0]).toContain("pay by card at sign-up");
+    expect(rows[1], "the second is on the waiting list").toContain("Waiting list — not charged now");
+    expect(rows[1], "and has no payment method to name").not.toContain("pay by card at sign-up");
+    expect(textOf(one(m.island, "reg-review-total")), "the total is one fee").toBe("£25.00");
+    expect(textOf(one(m.island, "reg-submit")), "and the button names that same fee").toBe("Pay £25.00 and enter");
+  });
+
+  it("with the first entry removed the second takes the place: no waiting label, and still one fee", () => {
+    const ONE_LEFT: DivisionLike = { ...DIV_PAID, division_id: "div-one-left", name: "Last Place", capacity: 8, remaining: 1, taken: 7, waitlisted: 0 };
+    const m = mount([ONE_LEFT, DIV_OPEN]);
+    fillWho(m);
+    m.clickByText("Next"); // -> ENTRIES
+    addEntry(m, "div-one-left");
+    addEntry(m, "div-one-left");
+    expect(m.entryCartText()).toContain("Waiting list — not charged now");
+    const first = m.entryCartCart().entries[0]!.id;
+    (propsOf(m.island.tree().find((e) => e.type === EntryCart)!).dispatch as (a: object) => void)({ type: "REMOVE_ENTRY", id: first });
+    expect(m.entryCartCart().entries, "premise: one entry left").toHaveLength(1);
+    expect(m.entryCartText(), "no stale 'waiting' label on the one that moved up").not.toContain("Waiting list — not charged now");
+    expect(textOf(one(m.island, "reg-bar-summary"))).toBe("1 entry · £25.00");
   });
 
   it("the running total shows on every step once the cart is payable, not only on Entries (the seeded single division on Contact)", () => {

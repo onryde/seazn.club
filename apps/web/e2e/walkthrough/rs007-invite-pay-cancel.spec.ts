@@ -239,24 +239,20 @@ test("RS007 witness — cancelling one of two cart entries drops the subtotal to
     await anon.waitForTimeout(500);
     await anon.screenshot({ path: `${SHOTS}/03-entries-first-team.png`, fullPage: true });
 
-    await anon.getByRole("button", { name: "Add a team", exact: true }).first().click();
+    // The first entry took the division's one place, so the card now reads "Join waiting list" (B3 T12: the card counts the
+    // visitor's own cart against the page-load places) — the second entry is the one the server will queue.
+    await anon.getByRole("button", { name: "Join waiting list", exact: true }).first().click();
     await anon.waitForTimeout(500);
     // Now two inputs exist; `.last()` is the one just added.
     await anon.getByPlaceholder("Team name").last().fill(TEAM_B);
     await anon.waitForTimeout(700);
-    // NOTE: the cart panel shows BOTH fees as payable here (subtotal £50, no
-    // "not charged now" note on either line) — confirmed live, not assumed.
-    // summarizeCart (cart.ts) predicts waitlisting from `division.closed_reason
-    // === "full"`, and `division` is the STATIC page-load snapshot
-    // (taken=0/capacity=1, still "open"), never re-derived against the cart's
-    // own contents. So the CLIENT is optimistic about a low-capacity division
-    // holding two of its own entries — a real UX quirk, but a DIFFERENT one
-    // from the two this spec exists to witness, so not asserted on here. The
-    // SERVER'S submit-time count is what actually governs (registration-
-    // submit.ts, verified by direct read: "counting happens INSIDE the lock,
-    // after every earlier entry in THIS SAME cart is already inserted"), and
-    // that is what the rest of this journey depends on and verifies below —
-    // Stripe checkout charges only entry A's fee, and B posts as waitlisted.
+    // The cart now says what the server will do (B3 T12, plan Review Focus 2): the second entry takes no place, so its row reads
+    // "Waiting list — not charged now" and the subtotal is ONE fee. Before this the cart priced both entries (subtotal £50, no note)
+    // because it read only whether the division looked full at page load, and the server then waitlisted the second at submit.
+    await expect(
+      anon.getByText("Waiting list — not charged now", { exact: true }),
+      "the second entry into a one-place division must be labelled as waiting on the cart",
+    ).toHaveCount(1);
     await anon.screenshot({ path: `${SHOTS}/04-entries-both-teams.png`, fullPage: true });
     await anon.getByTestId("reg-next").click();
 
@@ -295,14 +291,13 @@ test("RS007 witness — cancelling one of two cart entries drops the subtotal to
     await anon.screenshot({ path: `${SHOTS}/06-consent.png`, fullPage: true });
     await anon.getByTestId("reg-next").click();
 
-    // ---- STEP 5/BEAT 07 — REVIEW. step-review.tsx shares summarizeCart with
-    // the cart panel (same doc comment as above), so this ALSO shows the
-    // optimistic £50 pre-submit — the button below is clicked for whatever
-    // it says, not a hardcoded amount. What actually reaches Stripe is the
-    // SERVER's own submit-time computation, checked at BEAT 08 (the real
-    // checkout page) and BEAT 10 (the real post-payment entry statuses).
+    // ---- STEP 5/BEAT 07 — REVIEW. step-review.tsx shares summarizeCart with the cart panel, so the second entry is labelled
+    // "Waiting list — not charged now" here too and the total is the one fee. The button is clicked for whatever it says, not a
+    // hardcoded amount; what reaches Stripe is the SERVER's own submit-time computation, checked at BEAT 08 (the real checkout
+    // page) and BEAT 10 (the real post-payment entry statuses) — and now equals what this page quoted.
+    await expect(anon.getByText("Waiting list — not charged now", { exact: true })).toHaveCount(1);
     await anon.waitForTimeout(1000);
-    await anon.screenshot({ path: `${SHOTS}/07-review-both-fees-optimistic.png`, fullPage: true });
+    await anon.screenshot({ path: `${SHOTS}/07-review-second-entry-waiting.png`, fullPage: true });
     await anon.getByTestId("reg-submit").click();
 
     // ---- STEP 5 (cont.)/BEATS 08-09 — real Stripe Connect hosted checkout,
