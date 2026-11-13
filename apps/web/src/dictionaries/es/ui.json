@@ -410,6 +410,7 @@
   "register.capacity.fullWaitlistCount": "Completo · únete a la lista de espera ({count} en espera)",
   "register.capacity.joinWaitlist": "Unirse a la lista de espera",
   "register.cart.waitlistLine": "Lista de espera — no se cobra ahora",
+  "register.cart.nothingToPayNow": "Nada que pagar ahora",
   "register.closed.title": "La inscripción está cerrada",
   "register.closed.dashboard": "Ver el panel en directo",
   "register.section.identity": "Quién participa",

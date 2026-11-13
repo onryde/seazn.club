@@ -6,8 +6,7 @@
 // entries independently (singles + doubles at the same tournament is the
 // common racket-sports case); checking one does NOT uncheck another.
 import { useT } from "@/components/i18n/dict-provider";
-import { formatMoneyExact } from "@/lib/currency";
-import { summarizeCart, type CartAction } from "./cart";
+import { cartTotalText, summarizeCart, type CartAction } from "./cart";
 import { INELIGIBLE_MESSAGE_KEY, selfEligibilityForDivision } from "./eligibility-presentation";
 import { BTN_TEXT } from "./styles";
 import { mixedPaymentConflict, teamNameMissing } from "./validation";
@@ -58,7 +57,6 @@ export function EntryCart({
   // with step-review.tsx (step 5) — see that function's own doc comment
   // (cart.ts) for why this must not fork back into a second copy.
   const summary = summarizeCart(cart, divisions);
-  const { subtotalCents, currency } = summary;
   // P4 (W9): a card division and a pay-the-organiser one cannot be collected together, and the server refuses the cart as a whole. Said
   // HERE, live, the moment the second division is added - validateEntries (the SAME predicate) is what holds Next.
   const mixed = mixedPaymentConflict(cart, divisions);
@@ -230,8 +228,9 @@ export function EntryCart({
           <span className="font-display text-xs font-semibold uppercase tracking-wider text-ink-muted">
             {t("register.entries.cart.subtotal")}
           </span>
-          <span className="font-display text-lg font-bold text-ink">
-            {subtotalCents === 0 || !currency ? t("register.entries.free") : formatMoneyExact(subtotalCents, currency, locale)}
+          {/* The same words as Review's total (`cartTotalText`): "Nothing to pay now" when every entry waits (B3 review m1). */}
+          <span data-testid="reg-cart-subtotal" className="font-display text-right text-lg font-bold text-ink">
+            {cartTotalText(summary, t, locale)}
           </span>
         </div>
       )}

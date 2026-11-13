@@ -35,6 +35,8 @@
 // (a registrant may link themselves on more than one entry). `SET_SELF_ENTRY`
 // (cart-wide) is replaced by `SET_ENTRY_SELF` (per-entry); the old cart-level
 // `SET_SELF_PLAYER_INDEX` now carries an `id` too.
+import { formatMoneyExact } from "@/lib/currency";
+import type { TKey } from "@/lib/i18n-runtime";
 import { cartWaitlisted } from "./capacity";
 import {
   MAX_CART_ENTRIES,
@@ -599,6 +601,16 @@ export type ReviewHeadingKey = "register.review.heading" | "register.review.head
 export function reviewHeadingKey(summary: CartSummary): ReviewHeadingKey {
   const label = submitLabelKey(summary);
   return label === "register.submit.pay" || label === "register.submit.fee" ? "register.review.heading" : "register.review.headingPlain";
+}
+
+/** What the cart's total reads, the ONE text both totals show: Review's Total and the Entries cart's Subtotal (B3 review m1). A cart
+ *  whose every entry waits reads "Nothing to pay now" (owner ruling 2026-11-13) - it used to read "Free" over a priced division whose
+ *  queue the person is joining. Otherwise nothing charged reads "Free", and a charged total its amount (the waiting entries already
+ *  left out of `subtotalCents`). `t` is handed in, as `actionBarLabels` takes it, so this stays pure and tested on the real dictionary. */
+export function cartTotalText(summary: CartSummary, t: (key: TKey) => string, locale: string): string {
+  if (cartIsAllWaitlisted(summary)) return t("register.cart.nothingToPayNow");
+  if (summary.subtotalCents === 0 || !summary.currency) return t("register.entries.free");
+  return formatMoneyExact(summary.subtotalCents, summary.currency, locale);
 }
 
 /** The division that decides the cart's payment PRESENTATION — step 5's

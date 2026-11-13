@@ -6682,6 +6682,7 @@ export type DictionaryKey =
   | "register.capacity.joinWaitlist"
   | "register.capacity.left.one"
   | "register.capacity.left.other"
+  | "register.cart.nothingToPayNow"
   | "register.cart.waitlistLine"
   | "register.closed.dashboard"
   | "register.closed.title"

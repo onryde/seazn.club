@@ -1,7 +1,11 @@
 // RS006 chassis — cart reducer (pure, no DOM). Every action returns a NEW
 // state (no mutation) so back-navigation + sessionStorage round-tripping
 // (storage.ts) can treat CartState as a plain snapshot.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import type { Dict } from "@/lib/i18n-constants";
+import { t as tRuntime, type TKey } from "@/lib/i18n-runtime";
 import {
   MAX_ROSTER_PLAYERS,
   autoLinkObviousSelf,
@@ -9,6 +13,7 @@ import {
   canAddEntry,
   cartHasOtherPlayers,
   cartReducer,
+  cartTotalText,
   clearSelfLinkWhenNotPlaying,
   lineFeeCents,
   lineMethod,
@@ -1213,6 +1218,69 @@ describe("summarizeCart", () => {
       expect(reviewHeadingKey(summarizeCart(both, [full])), "the division fills under the cart: both wait, nothing is charged").toBe(PLAIN);
       const afterRemoval = cartReducer(both, { type: "REMOVE_ENTRY", id: "e1" });
       expect(reviewHeadingKey(summarizeCart(afterRemoval, [ONE_LEFT_STRIPE])), "removing the first lets the survivor take the place").toBe(PAY);
+    });
+  });
+
+  // Registration redesign B3 review m1 (owner ruling 2026-11-13): a cart whose every entry waits read "Free" in its total - on Review
+  // AND in the Entries cart's subtotal - though the person is joining a queue for a priced division, not entering a free one. It reads
+  // "Nothing to pay now". The expected words are the ruling's literals and the real English dictionary's, never read back from cart.ts.
+  describe("cartTotalText — the ONE text both totals (Review, the Entries cart) read", () => {
+    const EN_UI: Dict = JSON.parse(readFileSync(join(__dirname, "..", "..", "..", "..", "dictionaries", "en", "ui.json"), "utf8")) as Dict;
+    const tEn = (key: TKey) => tRuntime(EN_UI, key);
+    const STRIPE_PAID: DivisionLike = { ...OPEN_PAID, division_id: "stripe-paid", payment_method: "stripe" };
+    const FREE_DIV: DivisionLike = { ...TEAM_DIVISION, division_id: "free-div", fee_cents: 0, free_agent_fee_cents: null };
+    const ONE_LEFT_STRIPE: DivisionLike = { ...STRIPE_PAID, division_id: "one-left-stripe", capacity: 8, remaining: 1, taken: 7 };
+    const team = (id: string, division_id: string, patch: Partial<CartEntry> = {}) => entry({ id, division_id, entrant_kind: "team", ...patch });
+    const text = (entries: CartEntry[], divisions: DivisionLike[]) => cartTotalText(summarizeCart({ entries }, divisions), tEn, "en");
+    const NOTHING = "Nothing to pay now";
+
+    // The empty case first (TEST-STRATEGY): an empty cart waits for nothing, so it is not "Nothing to pay now".
+    it("an empty cart is not a waiting list: it reads Free", () => {
+      expect(text([], [WAITLIST_DIV])).toBe("Free");
+    });
+
+    it.each([
+      { name: "one entry into a full, priced division", entries: [team("e1", "waitlist")], divisions: [WAITLIST_DIV] },
+      { name: "two entries into a full division", entries: [team("e1", "waitlist"), team("e2", "waitlist")], divisions: [WAITLIST_DIV] },
+      {
+        name: "entries into two different full divisions",
+        entries: [team("e1", "waitlist"), team("e2", "waitlist-2")],
+        divisions: [WAITLIST_DIV, { ...WAITLIST_DIV, division_id: "waitlist-2" }],
+      },
+    ])("every entry waits ($name): 'Nothing to pay now', never Free", ({ entries, divisions }) => {
+      const summary = summarizeCart({ entries }, divisions);
+      expect(summary.lines.length > 0 && summary.lines.every((l) => l.waitlisted), "premise: every line waits").toBe(true);
+      expect(text(entries, divisions)).toBe(NOTHING);
+    });
+
+    it.each([
+      { name: "a free entry", entries: [team("e1", "free-div")], divisions: [FREE_DIV], want: "Free" },
+      { name: "a free entry beside a waiting one (the free division is entered)", entries: [team("e1", "free-div"), team("e2", "waitlist")], divisions: [FREE_DIV, WAITLIST_DIV], want: "Free" },
+      { name: "a stale-closed entry alone (it blocks Next; it does not wait)", entries: [team("e1", "stale")], divisions: [STALE_CLOSED_DIV], want: "Free" },
+      { name: "a charged card entry", entries: [team("e1", "stripe-paid")], divisions: [STRIPE_PAID], want: "£25.00" },
+      { name: "a charged entry beside a waiting one: the charged fee only", entries: [team("e1", "stripe-paid"), team("e2", "waitlist")], divisions: [STRIPE_PAID, WAITLIST_DIV], want: "£25.00" },
+    ])("not every entry waits ($name): '$want'", ({ entries, divisions, want }) => {
+      expect(text(entries, divisions)).toBe(want);
+    });
+
+    it("the text follows the cart: the division filling under it turns £25.00 into Nothing to pay now, and a removal turns it back", () => {
+      const both: CartState = { entries: [team("e1", "one-left-stripe"), team("e2", "one-left-stripe")] };
+      expect(cartTotalText(summarizeCart(both, [ONE_LEFT_STRIPE]), tEn, "en"), "one place left: the first seats and pays").toBe("£25.00");
+      const full: DivisionLike = { ...ONE_LEFT_STRIPE, remaining: 0 };
+      expect(cartTotalText(summarizeCart(both, [full]), tEn, "en"), "no place left: both wait").toBe(NOTHING);
+      const afterRemoval = cartReducer(both, { type: "REMOVE_ENTRY", id: "e1" });
+      expect(cartTotalText(summarizeCart(afterRemoval, [ONE_LEFT_STRIPE]), tEn, "en"), "the survivor takes the place").toBe("£25.00");
+    });
+
+    it("every locale has the words, translated (a missing key would fall back to English or the key)", () => {
+      let checked = 0;
+      for (const loc of ["en", "nl", "fr", "es"]) {
+        const d = JSON.parse(readFileSync(join(__dirname, "..", "..", "..", "..", "dictionaries", loc, "ui.json"), "utf8")) as Record<string, string>;
+        expect(d["register.cart.nothingToPayNow"], `${loc}: the words`).toBeTruthy();
+        if (loc !== "en") expect(d["register.cart.nothingToPayNow"], `${loc}: translated, not English`).not.toBe(NOTHING);
+        checked += 1;
+      }
+      expect(checked, "anti-vacuity: four locales").toBe(4);
     });
   });
 });

@@ -410,6 +410,7 @@
   "register.capacity.fullWaitlistCount": "Full · join the waiting list ({count} waiting)",
   "register.capacity.joinWaitlist": "Join waiting list",
   "register.cart.waitlistLine": "Waiting list — not charged now",
+  "register.cart.nothingToPayNow": "Nothing to pay now",
   "register.closed.title": "Registration is closed",
   "register.closed.dashboard": "See the live dashboard",
   "register.section.identity": "Who's entering",

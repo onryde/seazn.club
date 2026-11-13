@@ -410,6 +410,7 @@
   "register.capacity.fullWaitlistCount": "Vol · schrijf je in op de wachtlijst ({count} wachtend)",
   "register.capacity.joinWaitlist": "Inschrijven op de wachtlijst",
   "register.cart.waitlistLine": "Wachtlijst — nu niet in rekening gebracht",
+  "register.cart.nothingToPayNow": "Nu niets te betalen",
   "register.closed.title": "Inschrijving is gesloten",
   "register.closed.dashboard": "Bekijk het live dashboard",
   "register.section.identity": "Wie schrijft zich in",

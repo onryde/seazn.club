@@ -3530,6 +3530,28 @@ describe("B2 T8 — action bar: Back, named Continue, running total, one forward
     expect(textOf(one(m.island, "reg-review-total")), "and nothing is charged now").not.toContain("£10");
   });
 
+  // B3 review m1 (owner ruling 2026-11-13): a cart whose every entry waits read "Free" in BOTH totals - the Entries cart's subtotal and
+  // Review's total - though the division is priced and the person is joining its queue. Both read "Nothing to pay now" (the ruling's
+  // words), off the one cart.ts helper; driven through the real stepper so each consumer is proven, not just the helper.
+  it("a cart whose every entry waits: the Entries subtotal and the Review total both read 'Nothing to pay now', never Free", () => {
+    const m = mount([DIV_WAITLIST, DIV_OPEN]);
+    fillWho(m);
+    m.clickByText("Next"); // -> ENTRIES
+    addEntry(m, "div-wait");
+    const subtotal = () =>
+      walk((EntryCart as unknown as ComponentFn)(propsOf(m.island.tree().find((e) => e.type === EntryCart)!)))
+        .filter((e) => propsOf(e)["data-testid"] === "reg-cart-subtotal")
+        .map((e) => textOf(e));
+    expect(subtotal(), "the Entries cart's subtotal").toEqual(["Nothing to pay now"]);
+    m.clickByText("Next"); // -> DETAILS
+    setByAriaLabel(m.island, "Player 1 — Your name", "Alex Test");
+    m.clickByText("Next"); // -> CONSENT
+    consent(m);
+    m.clickByText("Next"); // -> REVIEW
+    expect(textOf(one(m.island, "reg-submit")), "premise: submit joins the waiting list").toBe("Join the waiting list");
+    expect(textOf(one(m.island, "reg-review-total")), "Review's total").toBe("Nothing to pay now");
+  });
+
   it("a cart with one charged entry and one waiting entry still says Pay, and quotes the CHARGED total only", () => {
     const m = mount([DIV_PAID, DIV_WAITLIST]);
     fillWho(m);

@@ -15,7 +15,7 @@ import type { ReactNode } from "react";
 import { useT } from "@/components/i18n/dict-provider";
 import { formatMoneyExact } from "@/lib/currency";
 import { entryDisplayName, UNNAMED_KEY } from "./entry-cart";
-import { type CartLineSummary, type CartSummary, lineFeeCents, lineMethod, payableDivision, reviewHeadingKey } from "./cart";
+import { type CartLineSummary, type CartSummary, cartTotalText, lineFeeCents, lineMethod, payableDivision, reviewHeadingKey } from "./cart";
 import { reviewEditTarget, type ReviewContent, type ReviewSection } from "./review-content";
 import { BTN_TEXT } from "./styles";
 import type { StepId } from "./types";
@@ -219,10 +219,10 @@ export function StepReview({
 
       <div className="mt-1 flex items-baseline justify-between gap-3 border-t border-zinc-200 pt-3">
         <span className="font-display text-xs font-semibold uppercase tracking-wider text-ink-muted">{t("register.review.total")}</span>
-        <span data-testid="reg-review-total" className="font-display text-3xl font-bold tabular-nums text-ink">
-          {summary.subtotalCents === 0 || !summary.currency
-            ? t("register.entries.free")
-            : formatMoneyExact(summary.subtotalCents, summary.currency, locale)}
+        {/* `cartTotalText`: the same words as the Entries cart's subtotal - "Nothing to pay now" when every entry waits (B3 review m1).
+            text-right: a phrase that wraps at 320 keeps its right edge on the column the amounts sit on. */}
+        <span data-testid="reg-review-total" className="font-display text-right text-3xl font-bold tabular-nums text-ink">
+          {cartTotalText(summary, t, locale)}
         </span>
       </div>
       {/* How a card cart is paid, once, under the number it is about. An offline or free cart has no Stripe page to warn of. */}
