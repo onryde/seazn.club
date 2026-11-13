@@ -11,6 +11,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { fmtDateTime, fmtPublicDeadline, fmtZoneAbbrev } from "@/lib/format";
 import { BTN_QUIET_LINK } from "@/components/public-site/register/styles";
+import { compileClasses } from "@/components/v2/__tests__/_compiled-css";
 import uiEn from "@/dictionaries/en/ui.json";
 
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => "en" }));
@@ -1283,4 +1284,27 @@ describe("register status page (RS007 rebuild)", () => {
       },
     );
   });
+});
+
+// Sign-off capture (2026-11-13): at 320 the hero reference wrapped mid-reference ("SZ-VXPW-FY4" / "N"): `break-all` at text-3xl in
+// Geist Mono (0.625em a character with tracking-wide) needs 225px, and the hero card leaves 222px inside the live layout's two 16px
+// gutters. The reference never breaks, and below 360px it steps down to 26px with normal tracking (still above the h1's text-2xl).
+// The browser fit at 320/360/375 is checked by the sign-off capture; here: the classes that make it, and that each one compiles.
+describe("the reference hero stays on one line (sign-off capture fix)", () => {
+  it("never breaks, and steps its size down below 360px; every class on it compiles", async () => {
+    usecaseMock.groupById.mockResolvedValueOnce(BASE_VIEW);
+    const html = await render({ rid: "g1", token: "tok" });
+    const hero = html.match(/<section[^>]*data-testid="reg-status-ref"[\s\S]*?<\/section>/)?.[0];
+    const p = hero?.match(/<p class="([^"]*)">SZ-TEST-01<\/p>/);
+    expect(p, "the hero's reference line").not.toBeNull();
+    const cls = p![1]!.split(/\s+/);
+    expect(cls, "never breaks inside the reference").toContain("whitespace-nowrap");
+    expect(cls).not.toContain("break-all");
+    for (const c of ["text-[26px]", "tracking-normal", "min-[360px]:text-3xl", "sm:text-4xl", "sm:tracking-wide"]) expect(cls, c).toContain(c);
+    const compiled = await compileClasses(cls);
+    expect(cls.length, "anti-vacuity: classes checked").toBeGreaterThan(8);
+    expect(cls.filter((c) => Object.keys(compiled.get(c) ?? {}).length === 0), "classes that compile to nothing").toEqual([]);
+    expect(compiled.get("text-[26px]")?.["font-size"]).toBe("26px");
+    expect(compiled.get("whitespace-nowrap")?.["white-space"]).toBe("nowrap");
+  }, 60_000);
 });

@@ -232,7 +232,12 @@ export default async function RegistrationStatusPage({ params, searchParams }: P
                 <p id="reg-status-ref-label" className="text-sm text-ink-muted">
                   {t(ui, "register.ticket.refLabel")}
                 </p>
-                <p className="mt-1 font-mono text-3xl font-semibold tracking-wide break-all text-ink select-all sm:text-4xl">{view.ref_code}</p>
+                {/* One line, never broken mid-reference (sign-off capture, 2026-11-13: "SZ-VXPW-FY4" / "N" at 320). Inside the live
+                    layout's gutters the card leaves 222px at 320, and 12 Geist Mono characters at text-3xl with tracking-wide need 225px,
+                    so below 360px it is 26px with normal tracking: still above the h1's text-2xl. */}
+                <p className="mt-1 font-mono text-[26px] font-semibold tracking-normal whitespace-nowrap text-ink select-all min-[360px]:text-3xl sm:text-4xl sm:tracking-wide">
+                  {view.ref_code}
+                </p>
               </div>
               <CopyReference reference={view.ref_code} />
             </div>
