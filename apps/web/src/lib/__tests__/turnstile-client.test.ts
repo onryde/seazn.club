@@ -763,21 +763,59 @@ describe("a token aged past its validity is never sent: re-arm, then wait for th
     expect(new Set(sent).size).toBe(2);
   });
 
-  // B1 fix round 1 (review M4): ONE refresh mechanism at expiry. `refresh-expired: "auto"` already has Cloudflare refresh an expired
-  // token itself (its documented default); the expired-callback used to call reset() on top of it, so two refreshes started at
-  // once (a second challenge, or an error mid-refresh). The callback now only forgets the dead token; the auto refresh brings the
-  // next one. The age check in token() (above) still re-arms on demand when no refresh has arrived.
-  it("expired-callback drops the token WITHOUT resetting (Cloudflare's auto refresh is the one mechanism): the next request waits for the refresh", async () => {
-    const { c, widget } = aged();
+  // Expiry (B1 fix rounds 1 and 2, review M4 then N1). `refresh-expired: "auto"` has Cloudflare refresh an expired token itself (its
+  // documented default), so the expired-callback does not reset() on top of it: that started two refreshes at once (M4). But the
+  // callback must not simply forget the token either. That left nothing for token() to re-arm from, so if the auto refresh never
+  // came (a backgrounded tab, a refresh that failed quietly) a submit after a 5-minute idle waited TOKEN_WAIT_MS and went tokenless
+  // into 403 TURNSTILE_FAILED (N1). The callback MARKS the held token dead: a refresh that lands first replaces it with no reset at
+  // all, and a request that finds it still dead re-arms once and waits for the fresh challenge.
+  it("expired-callback does not reset (Cloudflare's auto refresh goes first): a refresh that lands before the request is used with NO reset at all", async () => {
+    const { c, widget, clock } = aged();
     c.mount(CONTAINER, VIEW);
     await flush();
-    widget.solve("tok-x");
+    widget.solve("tok-x"); // t=0
+    clock.t = 300_000;
     widget.params()["expired-callback"]();
     expect(widget.api.reset, "no second refresh on top of Cloudflare's own").not.toHaveBeenCalled();
+    widget.solve("tok-y"); // the auto refresh, issued at t=300 000
+    clock.t = 330_000;
+    expect(await c.token()).toBe("tok-y");
+    expect(widget.api.reset, "the refresh made the token good again: nothing to re-arm").not.toHaveBeenCalled();
+  });
+
+  it("expired-callback with NO refresh after it: after a 5-minute idle the submit re-arms ONCE and gets the fresh token, never going tokenless (N1)", async () => {
+    const { c, widget, clock } = aged();
+    c.mount(CONTAINER, VIEW);
+    await flush();
+    widget.solve("tok-x"); // t=0, the form opens
+    clock.t = 300_000;
+    widget.params()["expired-callback"](); // and Cloudflare's auto refresh never arrives
+    clock.t = 600_000; // the registrant reaches Review
     let got: string | null | undefined;
     void c.token().then((t) => (got = t));
     await flush();
-    expect(got, "the expired token is not handed out").toBeUndefined();
+    expect(widget.api.reset, "re-armed once").toHaveBeenCalledTimes(1);
+    expect(widget.api.reset).toHaveBeenCalledWith("w1");
+    expect(got, "waiting for the fresh challenge: neither the dead token nor null").toBeUndefined();
+    widget.solve("tok-fresh");
+    await flush();
+    expect(got).toBe("tok-fresh");
+  });
+
+  it("the expiry mark does not lean on this clock: an expiry reported while the token still reads young here is never sent either, and re-arms", async () => {
+    // Cloudflare's 300 s runs from ISSUE on its side; `at` is when the callback reached this page. The two can disagree (a slow
+    // callback, a device clock that jumped), so the callback's word, not the age arithmetic, decides that this token is dead.
+    const { c, widget, clock } = aged();
+    c.mount(CONTAINER, VIEW);
+    await flush();
+    widget.solve("tok-x"); // t=0
+    clock.t = 10_000;
+    widget.params()["expired-callback"]();
+    let got: string | null | undefined;
+    void c.token().then((t) => (got = t));
+    await flush();
+    expect(got, "the expired token is not handed out, however young it reads").toBeUndefined();
+    expect(widget.api.reset, "re-armed once").toHaveBeenCalledTimes(1);
     widget.solve("tok-y");
     await flush();
     expect(got).toBe("tok-y");

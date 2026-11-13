@@ -53,8 +53,8 @@ export interface TurnstileController {
   /** Render the widget into `container`. Safe to call again after `unmount()` (React strict mode, a step that leaves and returns). */
   mount(container: HTMLElement, view: TurnstileMountView): void;
   unmount(): void;
-  /** The current token. Resolves at once if there is one no older than `TOKEN_MAX_AGE_MS`; an older one is dropped and the
-   *  widget re-armed. A widget that errored earlier is re-armed too. Otherwise waits (up to `TOKEN_WAIT_MS`) for the widget to
+  /** The current token. Resolves at once if there is one no older than `TOKEN_MAX_AGE_MS` and not reported expired; a dead one
+   *  is dropped and the widget re-armed. A widget that errored earlier is re-armed too. Otherwise waits (up to `TOKEN_WAIT_MS`) for the widget to
    *  produce one; null when there is no widget to wait for (no site key, the script never loaded), it errors again while waited
    *  on, or time ran out. Never rejects. */
   token(): Promise<string | null>;
@@ -89,8 +89,9 @@ export function createTurnstileController(opts: {
 
   let api: TurnstileApi | null = null;
   let widgetId: string | null = null;
-  /** The token the widget last produced, with when it arrived (its age decides whether it may still be sent). */
-  let held: { token: string; at: number } | null = null;
+  /** The token the widget last produced, with when it arrived. It may still be sent only while it is young (`TOKEN_MAX_AGE_MS`)
+   *  and Cloudflare has not reported it expired (`expired`, set by the expired-callback). */
+  let held: { token: string; at: number; expired?: true } | null = null;
   let failed = false;
   /** Inside Cloudflare's interactive phase: a box is on screen for the visitor to tick. */
   let interactive = false;
@@ -146,11 +147,13 @@ export function createTurnstileController(opts: {
               failed = true;
               settle(null);
             },
-            // Expired (300 s since issue): forget it. `refresh-expired: "auto"` has Cloudflare refresh the widget itself, and its next
-            // `callback` brings the new token; a reset here as well started a SECOND refresh on top (B1 fix round 1, review M4). The
-            // age check in `token()` still re-arms on demand when no fresh token has come.
+            // Expired (300 s since issue): MARK the held token dead, never send it again. `refresh-expired: "auto"` has Cloudflare
+            // refresh the widget itself, and its `callback` replaces the token; a reset here as well started a SECOND refresh on top
+            // (B1 fix round 1, review M4). Only nulling it was not enough either: if that refresh never comes (a backgrounded tab, a
+            // refresh that fails quietly) there was nothing left for `token()` to re-arm from, and a submit after a long idle waited
+            // TOKEN_WAIT_MS and went tokenless into 403 (round 2, review N1). A request that finds the mark re-arms and waits.
             "expired-callback": () => {
-              held = null;
+              if (held) held = { ...held, expired: true };
             },
             "timeout-callback": () => {
               held = null;
@@ -190,8 +193,9 @@ export function createTurnstileController(opts: {
 
     token() {
       if (!siteKey) return Promise.resolve(null);
-      // A token older than TOKEN_MAX_AGE_MS is treated as absent: re-arm, then wait below for the fresh one.
-      if (held && now() - held.at > TOKEN_MAX_AGE_MS) rearm();
+      // A dead token (reported expired, or older than TOKEN_MAX_AGE_MS) is treated as absent: re-arm, then wait below for the fresh
+      // one. Cloudflare's own refresh, when it lands first, has already replaced it, so this resets only when that did not happen.
+      if (held && (held.expired || now() - held.at > TOKEN_MAX_AGE_MS)) rearm();
       if (held?.token) return Promise.resolve(held.token);
       if (failed) {
         // No widget to re-arm (the script never loaded: a content blocker, no network): go without a token, at once.

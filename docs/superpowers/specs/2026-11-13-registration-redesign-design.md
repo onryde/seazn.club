@@ -153,7 +153,14 @@ No `Server-Timing` header and no timing helper exist anywhere in `apps/` or
    - `token()` treats a token older than `TOKEN_MAX_AGE_MS = 270_000` (300 s
      validity minus a 30 s margin) as absent. It calls `reset()` and waits for a
      new one.
-   - The expired-callback calls `reset()`, not only nulling the token.
+   - The expired-callback marks the held token expired. It does not call
+     `reset()`, because `refresh-expired: "auto"` already refreshes the token
+     and a reset on top starts a second refresh (B1 fix round 1, review M4).
+     It does not only null the token either, because then nothing re-arms if
+     the auto refresh never comes (round 2, review N1). A refresh that lands
+     first replaces the marked token. `token()` treats a marked token as
+     absent, like an aged one: it calls `reset()` once and waits for the
+     fresh challenge (bounded by `TOKEN_WAIT_MS`), never the dead token.
    - Every submit consumes its token, success or failure. `withTurnstile`
      already resets in `finally` (:170-180); keep that. A retry after an error
      gets a fresh token.
