@@ -222,9 +222,19 @@ const SHAPE_DOT =
 
 /**
  * A title as the screen shows it and as a screen reader says it (plan 5 T1 review C5): the owner's "League → Final" keeps its
- * arrow on screen, but the arrow is hidden from assistive tech, which would read it as "right arrow", and a hidden comma
- * takes its place, so VoiceOver says "League, Final". Every word of the visible title stays in the name, in order (WCAG 2.5.3).
+ * arrow on screen, but assistive tech would read the arrow as "right arrow". So the radio's NAME is the title's words joined
+ * by commas (`spokenShapeTitle`, its own `aria-label`: "League, Final"), and in the visible title, which browse mode also
+ * reads, the arrow is hidden with a visually hidden comma in its place. Every word of the visible title stays in the name, in
+ * order (WCAG 2.5.3). An `aria-label`, not `aria-labelledby` on the title: Chromium computes a labelledby name with the hidden
+ * comma as "League , Final" (an out-of-flow span gets spaces around it), while an aria-label is reported exactly.
  */
+function spokenShapeTitle(text: string): string {
+  return text
+    .split("→")
+    .map((part) => part.trim())
+    .filter((part) => part !== "")
+    .join(", ");
+}
 function shapeTitle(text: string): ReactNode {
   return text.split("→").map((part, k) => (
     <Fragment key={k}>
@@ -252,6 +262,7 @@ function shapeRow({
 }): ReactElement {
   const id = `qm-shape-${row.shape}`;
   const q = qualifiersOf(row.shape);
+  const title = msg(`quickMatch.setup.shape.${row.shape}`);
   // The name is the title alone; the hint (and a disabled row's reason) is the description, heard after the role.
   const describedBy = row.reason === null ? `${id}-hint` : `${id}-hint ${id}-why`;
   return (
@@ -263,7 +274,7 @@ function shapeRow({
         checked={checked}
         disabled={!row.enabled}
         onChange={() => onChoose(row.shape)}
-        aria-labelledby={`${id}-title`}
+        aria-label={spokenShapeTitle(title)}
         aria-describedby={describedBy}
         className="peer sr-only"
       />
@@ -273,7 +284,7 @@ function shapeRow({
           id={`${id}-title`}
           className={`block break-words text-[15px] font-semibold leading-snug ${row.enabled ? "text-[var(--mk-cream)]" : "text-[#8d7fc0]"}`}
         >
-          {shapeTitle(msg(`quickMatch.setup.shape.${row.shape}`))}
+          {shapeTitle(title)}
         </span>
         <span
           id={`${id}-hint`}

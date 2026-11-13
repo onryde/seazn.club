@@ -425,14 +425,25 @@ function spoken(node: unknown): string {
   return spoken(p.children);
 }
 const byId = (i: Island, id: string) => all(i).find((el) => propsOf(el).id === id);
-/** A radio's accessible name and description, read the way the browser computes them (aria-labelledby, aria-describedby). */
-function a11yOf(i: Island, value: string): { name: string; description: string } {
+/**
+ * A radio's accessible name and description as Chromium computes them: the name is the input's own `aria-label` (it wins over
+ * the wrapping label), the description its `aria-describedby` targets. `title` is what browse mode reads of the row's visible
+ * title (aria-hidden skipped, the visually hidden comma read), spaces before a comma dropped, as a reader voices them.
+ * Driven in a real browser (T6 shots, 2026-11-13): a hidden comma inside a labelledby title came out "League , Final", so the
+ * name is an aria-label, which Chromium reports exactly.
+ */
+function a11yOf(i: Island, value: string): { name: string; description: string; title: string } {
   const input = radio(i, "shape", value);
   if (!input) throw new Error(`no ${value} radio`);
   const ids = (attr: string) => String(propsOf(input)[attr] ?? "").split(/\s+/).filter(Boolean);
   const text = (attr: string) => ids(attr).map((id) => spoken(byId(i, id)).replace(/\s+/g, " ").trim()).join(" ");
-  if (ids("aria-labelledby").length === 0) throw new Error(`${value}: no aria-labelledby`);
-  return { name: text("aria-labelledby"), description: text("aria-describedby") };
+  const name = propsOf(input)["aria-label"];
+  if (typeof name !== "string") throw new Error(`${value}: no aria-label`);
+  if (ids("aria-labelledby").length > 0) throw new Error(`${value}: aria-labelledby would compete with the aria-label`);
+  const titleEl = byId(i, `qm-shape-${value}-title`);
+  if (!titleEl) throw new Error(`${value}: no title element`);
+  const title = spoken(titleEl).replace(/\s+/g, " ").replace(/ ,/g, ",").trim();
+  return { name, description: text("aria-describedby"), title };
 }
 
 describe("QuickMatchSetupForm: the screen as the mockup orders it", () => {
@@ -498,12 +509,14 @@ describe("QuickMatchSetupForm: the screen as the mockup orders it", () => {
       // Four sides, through this locale's own Add button, so every row is enabled.
       while (sideInputs(i).length < 4) click(buttonNamed(i, m["quickMatch.setup.addSide"]!));
       for (const shape of ["league", "final", "semis"] as const) {
-        const { name, description } = a11yOf(i, shape);
+        const { name, description, title: read } = a11yOf(i, shape);
         const title = m[`quickMatch.setup.shape.${shape}`]!;
         expect(name, `${lang} ${shape}: no arrow spoken`).not.toContain("→");
         // Every word of the visible title is in the name, in order (label in name, WCAG 2.5.3).
         const words = title.split("→").map((w) => w.trim());
         expect(name, `${lang} ${shape}`).toBe(words.join(", "));
+        // Browse mode reads the visible title too: the arrow hidden, a pause (the hidden comma) in its place.
+        expect(read, `${lang} ${shape}: the title as browse mode reads it`).toBe(words.join(", "));
         const hint = m[`quickMatch.setup.shape.${shape}Hint`]!.replace("{count}", shape === "final" ? "2" : "4");
         expect(description, `${lang} ${shape}: the hint describes it`).toBe(hint);
         checked++;
@@ -518,6 +531,7 @@ describe("QuickMatchSetupForm: the screen as the mockup orders it", () => {
     expect(a11yOf(en, "semis")).toEqual({
       name: "League, Semi-finals, Final",
       description: "Everyone plays everyone, then the top 4 play semi-finals and a final. Needs 4 or more sides",
+      title: "League, Semi-finals, Final",
     });
   });
 
