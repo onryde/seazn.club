@@ -20,6 +20,23 @@ export async function marketingSuite(): Promise<void> {
   check("marketing: home hero has no funnel form", !html.includes("data-start-funnel"));
   check("marketing: home SSR default draw", html.includes("GROUP STAGE"));
 
+  // The two doors into /start carry the sport (start wizard plan T5, T7). /play's "register to start a season" link names the
+  // sport its chips chose — before any script runs, the server's default — by its key; and /start, opened by such a link,
+  // renders the wizard on that sport: its chip is the checked radio in the server's markup.
+  const play = await fetch(`${BASE}/en/play`);
+  const playHtml = await play.text();
+  check("marketing: /en/play 200", play.status === 200);
+  const door = playHtml.match(/<a\b[^>]*\bdata-testid="qm-register-season"[^>]*>/)?.[0] ?? "";
+  check("marketing: /en/play's season door links /start with its sport", door.includes('href="/en/start?sport='));
+  const start = await fetch(`${BASE}/en/start?sport=tabletennis`);
+  const startHtml = await start.text();
+  check("marketing: /en/start?sport=tabletennis 200", start.status === 200);
+  check("marketing: /en/start renders the wizard at its first step", startHtml.includes('data-start-wizard="true" data-step="sport"'));
+  const checkedSport = [...startHtml.matchAll(/<input\b[^>]*\bname="sport"[^>]*>/g)]
+    .filter((m) => /\bchecked=""/.test(m[0]))
+    .map((m) => /\bvalue="([^"]*)"/.exec(m[0])?.[1]);
+  check("marketing: /en/start opens on the linked sport (one checked chip: tabletennis)", JSON.stringify(checkedSport) === '["tabletennis"]');
+
   const preview = await fetch(`${BASE}/api/public/format-preview`, {
     method: "POST",
     headers: { "content-type": "application/json" },
