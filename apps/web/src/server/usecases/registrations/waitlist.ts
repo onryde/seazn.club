@@ -74,10 +74,11 @@ export function freesTeamSlot(row: { status: string; free_agent: boolean }): boo
  * the oldest-first pick.
  *
  * "Oldest" is `coalesce(waitlisted_at, created_at)`, not bare `created_at`
- * (V378/RS007). A row that has never lapsed has `waitlisted_at = null`, so
- * this is byte-for-byte the old ordering for every pre-existing waitlisted
- * row. A row `sweepRegistrations`' lapse branch just returned to the
- * waitlist carries a fresh `waitlisted_at = now()`, which sorts it BEHIND
+ * (V378/RS007). A row that joined the waitlist at submit has
+ * `waitlisted_at = null`, so it waits from its `created_at`. A row
+ * `sweepRegistrations`' lapse branch just returned to the waitlist - or the
+ * organiser just moved there (`waitlistRegistration`, B3 review I1) -
+ * carries a fresh `waitlisted_at = now()`, which sorts it BEHIND
  * every row still waiting on its original `created_at` — the tail, not a
  * reclaimed place in line — even though its OWN `created_at` may be far
  * older than theirs. The order is `waitlistQueueKey`, the same one

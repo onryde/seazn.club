@@ -213,21 +213,66 @@ describe.skipIf(!HAS_DB)("one waitlist order everywhere: the place every surface
     expect(await expectOneOrder(rig.owner, rig.division.id, rig.settings, [a, b])).toBe(1);
   });
 
-  it("a solo sign-up the organiser put on the waitlist holds a place too, because promotion takes it in turn", async () => {
+  // Owner ruling (B3 review I1, 2026-11-13): the organiser moving an entry to the waitlist puts it at the BACK of the queue, the same as
+  // a lapse - fairness to everyone already waiting. Its own created_at, however old, buys it no place. Before the fix the move kept the
+  // entry's created_at as its queue key, so an entry made before everyone waiting jumped the whole queue.
+  it("a sign-up the organiser moves to the waitlist joins the BACK of the queue, behind everyone already waiting, however old it is", async () => {
     const rig = await stripeRig({ feeCents: 500 });
-    // A pending solo sign-up, older than the team below; the organiser's own action moves it to the waitlist.
+    // A team already waiting, and a pending solo sign-up made BEFORE it - the oldest entry of all.
+    const team = await waiting(rig, "Team", 1);
     const solo = await seedRegistration(rig.competition.id, rig.division.id, rig.settings, {
       displayName: `Solo ${Math.random().toString(36).slice(2, 7)}`,
       contactName: "Sam Solo",
     });
     await sql`update registrations set free_agent = true, created_at = now() - interval '3 days' where id = ${solo.registration.id}`;
-    await waitlistRegistration(rig.owner, solo.registration.id);
-    expect((await statusOf(solo.registration.id)).status, "premise: the organiser waitlisted the solo sign-up").toBe("waitlisted");
-    const team = await waiting(rig, "Team", 1);
+    expect(await promotionOrder(rig.division.id, rig.settings), "premise: only the team waits").toEqual([team.registration.id]);
 
+    await waitlistRegistration(rig.owner, solo.registration.id);
+    const moved = await statusOf(solo.registration.id);
+    expect(moved.status, "premise: the organiser waitlisted the solo sign-up").toBe("waitlisted");
+    expect(moved.waitlisted_at, "the move stamps when the entry joined the queue").not.toBeNull();
+
+    // The ruling, read off the queue promotion itself takes: the team first, the moved solo behind it (it still holds a place).
+    expect(await promotionOrder(rig.division.id, rig.settings), "the moved solo is taken last").toEqual([
+      team.registration.id,
+      solo.registration.id,
+    ]);
     expect(await expectOneOrder(rig.owner, rig.division.id, rig.settings, [solo, team]), "both waiting").toBe(2);
-    expect(await surfacesOf(rig.owner, rig.division.id, solo), "the solo sign-up, waiting longer").toEqual(same(1));
-    expect(await surfacesOf(rig.owner, rig.division.id, team)).toEqual(same(2));
+  });
+
+  it("lapsed, promoted again, then moved back by the organiser: it joins the back again, behind one who arrived after its lapse; a second move is refused", async () => {
+    const rig = await stripeRig({ feeCents: 500 });
+    const a = await waiting(rig, "A", 3);
+    const b = await waiting(rig, "B", 2);
+    // A is promoted, its pay window passes, and the real sweep lapses it back (stamping waitlisted_at) and offers the place to B.
+    const first = await sql.begin((tx) => promoteOldestWaitlisted(tx, rig.division.id, rig.settings));
+    expect(first?.id, "premise: the queue promotes A, the longest waiter").toBe(a.registration.id);
+    await sql`update registrations set promotion_expires_at = now() - interval '1 minute' where id = ${a.registration.id}`;
+    await sweepRegistrations(ORIGIN);
+    expect((await statusOf(a.registration.id)).status, "premise: the sweep lapsed A").toBe("waitlisted");
+    expect((await statusOf(b.registration.id)).status, "premise: the freed place went to B").toBe("pending");
+
+    // A's lapse pinned two hours back; D joins the waitlist an hour back - after A's lapse, so behind it.
+    await sql`update registrations set waitlisted_at = now() - interval '2 hours' where id = ${a.registration.id}`;
+    const d = await waiting(rig, "D", 0);
+    await sql`update registrations set created_at = now() - interval '1 hour' where id = ${d.registration.id}`;
+    expect(await promotionOrder(rig.division.id, rig.settings), "premise: A's lapse is older than D's arrival").toEqual([
+      a.registration.id,
+      d.registration.id,
+    ]);
+
+    // A is promoted again, and the organiser moves it back. Its lapse stamp is NOT its place any more: D waited since before the move.
+    const again = await sql.begin((tx) => promoteOldestWaitlisted(tx, rig.division.id, rig.settings));
+    expect(again?.id, "premise: the queue promotes A again").toBe(a.registration.id);
+    await waitlistRegistration(rig.owner, a.registration.id);
+    expect(await promotionOrder(rig.division.id, rig.settings), "the move puts A behind D").toEqual([d.registration.id, a.registration.id]);
+    expect(await expectOneOrder(rig.owner, rig.division.id, rig.settings, [a, b, d]), "A and D waiting, B holding a place").toBe(2);
+
+    // A second move: A is no longer pending, so it is refused, and A's place is exactly what the first move gave it.
+    const stamped = (await statusOf(a.registration.id)).waitlisted_at;
+    await expect(waitlistRegistration(rig.owner, a.registration.id)).rejects.toMatchObject({ status: 422 });
+    expect((await statusOf(a.registration.id)).waitlisted_at, "a refused move stamps nothing").toEqual(stamped);
+    expect(await promotionOrder(rig.division.id, rig.settings), "the queue is unchanged").toEqual([d.registration.id, a.registration.id]);
   });
 
   it("another division's waitlist does not count, however long it has waited", async () => {

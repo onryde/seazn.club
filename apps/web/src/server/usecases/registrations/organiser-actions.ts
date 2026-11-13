@@ -267,8 +267,11 @@ export async function waitlistRegistration(auth: AuthCtx, regId: string): Promis
     }
     const [div] = await tx<{ competition_id: string }[]>`
       select competition_id from divisions where id = ${reg.division_id}`;
+    // Owner ruling (registration redesign B3 review I1): the move joins the BACK of the queue, the same as a lapse (sweep.ts) -
+    // fairness to everyone already waiting. `waitlisted_at` is the queue key (`waitlistQueueKey`); left null, the entry's own
+    // created_at would put it ahead of everyone who joined the waitlist after it signed up.
     await tx`
-      update registrations set status = 'waitlisted', updated_at = now()
+      update registrations set status = 'waitlisted', waitlisted_at = now(), updated_at = now()
       where id = ${regId}`;
     await audit(tx, div.competition_id, auth.orgId, "registration.waitlisted", {
       registration_id: regId,
