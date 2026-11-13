@@ -10,19 +10,8 @@
 // that step. The block is `md:hidden` and the bar `max-md:hidden`, so the two never show at once and nothing is duplicated
 // beyond the step's name. Finished steps are NOT jumpable on a phone: the sticky Back is the phone's way back (§7.2).
 import { useT } from "@/components/i18n/dict-provider";
+import { STEP_LABEL_KEY } from "./steps";
 import type { StepId } from "./types";
-
-/** A step's name, by id — the rail's words and the action bar's "Continue to {step}" (one authority for what a step is called). */
-export const STEP_LABEL_KEY: Record<
-  StepId,
-  "register.nav.contact" | "register.nav.entries" | "register.nav.details" | "register.nav.consent" | "register.nav.review"
-> = {
-  who: "register.nav.contact",
-  entries: "register.nav.entries",
-  details: "register.nav.details",
-  consent: "register.nav.consent",
-  review: "register.nav.review",
-};
 
 /** One cell of the numbered bar. The same box whether the step is a button (finished, jump wired) or plain text, so a step does
  *  not change size when it is finished. */

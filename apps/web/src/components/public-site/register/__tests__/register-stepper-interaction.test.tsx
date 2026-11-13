@@ -67,6 +67,7 @@ import { plural as pluralRuntime, t as tRuntime } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";
 import { summarizeCart } from "../cart";
 import { DivisionCard } from "../division-card";
+import { ActionBar } from "../action-bar";
 import { EntryCart } from "../entry-cart";
 import { EntryDetails } from "../entry-details";
 import { FormFields } from "../form-fields";
@@ -113,6 +114,7 @@ const OPAQUE: ComponentFn[] = [
   FormFields,
   StepConsent,
   StepReview,
+  ActionBar,
 ] as unknown as ComponentFn[];
 
 /** Flattens the WHOLE tree in one pass, including everything rendered
@@ -3710,8 +3712,9 @@ describe("B2 T8 — action bar: Back, named Continue, running total, one forward
     expect(saving.widest).toBe(idle.widest);
     expect(opening.widest).toBe(idle.widest);
     // The sizer holds the LONGEST label of the three, which is not the idle one — so a sizer that tracked the current label would differ.
-    const longest = [idle.label, saving.label, opening.label].reduce((a, b) => (b.length > a.length ? b : a));
-    expect(idle.widest).toBe(longest);
+    // Written as the word a person would call longest, not recomputed with the module's own character-count rule (B2 review m8: a test
+    // that re-derives the rule with the same rule cannot disagree with it; action-bar-labels.test.ts pins the rule on known strings).
+    expect(idle.widest).toBe("Opening secure payment…");
     expect(idle.widest, "premise: the longest label is not the idle one").not.toBe(idle.label);
     // The ghost: the span's ::after draws data-widest, invisibly, in the SAME grid cell as the visible label — so the cell is as wide
     // and as tall as the longest label (the cell: after:col-start-1 / after:row-start-1, and the label's own col-start-1 / row-start-1).

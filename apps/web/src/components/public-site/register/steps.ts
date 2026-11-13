@@ -8,6 +8,19 @@
 // later session appending "consent"/"review" needs no change here either.
 import type { DivisionLike, StepId } from "./types";
 
+/** A step's name, by id: the rail's words and the action bar's "Continue to {step}" (one authority for what a step is called). Lives
+ *  here, in the pure module, because the label logic (action-bar-labels.ts) reads it as well as the rail component. */
+export const STEP_LABEL_KEY: Record<
+  StepId,
+  "register.nav.contact" | "register.nav.entries" | "register.nav.details" | "register.nav.consent" | "register.nav.review"
+> = {
+  who: "register.nav.contact",
+  entries: "register.nav.entries",
+  details: "register.nav.details",
+  consent: "register.nav.consent",
+  review: "register.nav.review",
+};
+
 /** Design §4: "step 2 collapses when the competition has one open division."
  *
  *  Narrowed (RS007, found by walking the shipped flow): collapse only when

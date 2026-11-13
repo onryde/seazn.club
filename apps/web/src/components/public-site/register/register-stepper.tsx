@@ -21,14 +21,11 @@ import { TurnstileWidget, useTurnstile } from "@/components/turnstile-widget";
 import { isTurnstileRefusal } from "@/lib/turnstile";
 import { withTurnstile } from "@/lib/turnstile-client";
 import { useHydrated } from "@/lib/use-client-snapshot";
-import { formatMoneyExact } from "@/lib/currency";
 import {
   autoLinkObviousSelf,
   autoSeedSingleDivision,
   cartReducer,
   clearSelfLinkWhenNotPlaying,
-  payableDivision,
-  submitLabelKey,
   summarizeCart,
   type CartAction,
 } from "./cart";
@@ -50,13 +47,14 @@ import { StepConsent } from "./step-consent";
 import { onlineDivisionNames, registerReturnPath, type RegisterLichessState } from "./register-lichess-card";
 import { StepDetails } from "./step-details";
 import { StepEntries } from "./step-entries";
-import { StepNav, STEP_LABEL_KEY } from "./step-nav";
+import { StepNav } from "./step-nav";
 import { StepReview } from "./step-review";
 import { reviewContent } from "./review-content";
 import { StepWho } from "./step-who";
 import { buildStepOrder, nextStepIndex, offersJoinCode, prevStepIndex, shouldCollapseEntries, stepFocusTransition } from "./steps";
 import { JoinCodeEntry } from "./join-code-entry";
-import { BTN_FORWARD, BTN_GHOST, LABEL_SIZER, LABEL_SIZER_TEXT } from "./styles";
+import { ActionBar } from "./action-bar";
+import { actionBarLabels, type SubmitPhase } from "./action-bar-labels";
 import {
   EMPTY_CART,
   EMPTY_CONSENT,
@@ -75,11 +73,6 @@ import {
   type DetailsValidation,
   type EntriesValidation,
 } from "./validation";
-
-/** Where the submit is (registration redesign B1 T6, spec §3.3 item 5). `saving`: the POST (and the bot-check token it waits for) is
- *  in flight. `opening_payment`: the response carried a `checkout_url` and the page is on its way to Stripe. A cart with no checkout
- *  goes `saving` straight to navigation, so `opening_payment` is never shown for a free or pay-the-organiser-later cart. */
-type SubmitPhase = "idle" | "saving" | "opening_payment";
 
 /** validation.ts's EntriesValidation error codes don't share a naming
  *  scheme with the register.errors.* dictionary keys — same reasoning as
@@ -381,29 +374,6 @@ export function RegisterStepper({
   // (handleSubmit/the nav row below) read this ONE result, never a second
   // computation (summarizeCart's own doc comment).
   const reviewSummary = summarizeCart(cart, info.divisions);
-  // Submit button label (design §4 step 5's three cases, plus B3 T12's fourth): free, pay-by-card-now, pay-the-organiser-later, or —
-  // when every entry waits — join the waiting list. `submitLabelKey` reads the SAME summary the total and the line items read, and
-  // `reviewPayable` reads `payableDivision` — the SAME lookup StepReview's own payment-method note reads — so they can never disagree.
-  const reviewPayable = payableDivision(reviewSummary);
-  const submitLabel = t(submitLabelKey(reviewSummary), {
-    fee: reviewSummary.currency ? formatMoneyExact(reviewSummary.subtotalCents, reviewSummary.currency, locale) : "",
-  });
-  // What the button says right now: its ready text, or the phase the submit is in (spec §3.3 item 5).
-  const submitButtonLabel =
-    submitPhase === "saving"
-      ? t("register.submit.saving")
-      : submitPhase === "opening_payment"
-        ? t("register.submit.openingPayment")
-        : submitLabel;
-  // The longest label this button will show for this cart: "Opening secure payment…" only exists for a card cart (a free or
-  // pay-the-organiser cart goes saving -> navigation). The button's label span is sized to it (LABEL_SIZER), so the click that
-  // changes the words does not change the button's width.
-  const phaseLabels = [
-    submitLabel,
-    t("register.submit.saving"),
-    ...(reviewPayable?.payment_method === "stripe" ? [t("register.submit.openingPayment")] : []),
-  ];
-  const widestPhaseLabel = phaseLabels.reduce((a, b) => (b.length > a.length ? b : a));
   // Clamped to the LAST real step, never stepOrder.length — "review" is a
   // genuine final step with its own Submit action, not a position before a
   // "coming soon" end-cap (matches the post-hydration restore's own clamp above).
@@ -412,17 +382,6 @@ export function RegisterStepper({
   // renders, and a stale stepIndex must not point past the new, shorter list.
   const clampedIndex = Math.min(stepIndex, stepOrder.length - 1);
   const currentStep = stepOrder[clampedIndex];
-  // The running total in the phone bar (spec §7.2): what the cart costs now, so the person is never a step away from the number.
-  // Hidden for an empty cart and for a cart that costs nothing (all free, or only waitlisted/closed entries): "3 entries · £0.00"
-  // says nothing. Same `reviewSummary` the Review step and the submit label read, so the three cannot disagree. Also hidden ON Review
-  // (B2 T10): the Review card's own total is on the page and the button reads "Pay £X and enter", so a third copy is a line of bar
-  // for nothing.
-  const barTotal =
-    currentStep !== "review" && reviewSummary.subtotalCents > 0 && reviewSummary.currency
-      ? plural("register.bar.summary", reviewSummary.lines.length, {
-          total: formatMoneyExact(reviewSummary.subtotalCents, reviewSummary.currency, locale),
-        })
-      : null;
   const canGoNext =
     currentStep === "who"
       ? contactValidation.valid
@@ -434,14 +393,19 @@ export function RegisterStepper({
             ? consentValidation.valid
             : false; // "review" advances via handleSubmit, never goNext
 
-  // Where the confirmation goes, for the Review bar's note (md and up). The address is valid by the time Review is reachable; trimmed
-  // as submit.ts trims it, so the note names what is actually sent.
-  const sentTo = contact.email.trim();
-
-  // What the forward button says: the step it leads to, by name (spec §7.2). Review has no such step, and no forward button either:
-  // its action is the submit.
+  // What the bar says, in the step it is on and the submit phase it is in. `stepAfter` is where the forward button leads (Review has no
+  // such step, and no forward button either: its action is the submit). Every label reads the SAME `reviewSummary` the Review step's
+  // total and line items read, so the button, the heading and the total cannot disagree.
   const stepAfter = stepOrder[nextStepIndex(clampedIndex, stepOrder)];
-  const continueLabel = stepAfter ? t("register.nav.continueTo", { step: t(STEP_LABEL_KEY[stepAfter]) }) : "";
+  const barLabels = actionBarLabels({
+    t,
+    plural,
+    locale,
+    summary: reviewSummary,
+    step: currentStep,
+    stepAfter,
+    phase: submitPhase,
+  });
 
   function goNext() {
     if (currentStep === "who") setWhoAttempted(true);
@@ -685,79 +649,18 @@ export function RegisterStepper({
           is 0px tall and its spacing collapses into its neighbours' (block flow), so no step's layout moves. */}
       <TurnstileWidget controller={turnstile} />
 
-      {/* The action bar (B2 T8, spec §7.2) — ONE DOM, Back / running total / the one forward button, never a phone twin.
-          Below `md` it is a bar pinned to the bottom of the register column (`sticky bottom-0`, full-bleed over the page's 16px gutter,
-          padded for the home-indicator inset); from `md` it is the plain row it always was. Back is ABSENT on step 1, not disabled.
-          Tokens: surface + zinc-200 hairline + `shadow-sm`, all three the step cards' own (`bg-surface`, `border-zinc-200`, `shadow-sm`).
-          No upward shadow token exists in the tree, so the hairline carries the bar's top edge.
-          Stacking, against the fixed z-40 cookie banner (cookie-consent.tsx; dialogs are z-50 above both): from `md` the row is z-50,
-          the fix-wave finding #6 escape hatch — the banner must never swallow a click on Back/Next, and the in-flow row is not pinned,
-          so the banner can only brush it. Below `md` the bar is pinned to the very edge the banner also sits on, so z-50 there buried
-          the banner under the bar (measured in a browser: its Accept/Reject hidden for as long as the bar is pinned, i.e. unanswerable).
-          z-30 puts the banner above the bar instead: a first visit answers the banner, then has the whole bar.
-          `gap-x-3` (B1 fix round 1, D2): at 320 a long translated label wraps and the forward button fills the row, which left it
-          flush against Back; the gap keeps the two targets apart at any label length. The summary is its own full-width line above the
-          buttons (three items do not fit one 320px row beside "Continue to Entries"), so the bar wraps. `max-md:mb-0`: the root's
-          `space-y-4` would otherwise leave a 16px margin under a sticky bar that should sit on the viewport's edge. */}
-      <div
-        data-testid="reg-bar"
-        className="relative flex flex-wrap items-center gap-x-3 gap-y-2 max-md:sticky max-md:bottom-0 max-md:z-30 md:z-50 max-md:-mx-4 max-md:mb-0 max-md:border-t max-md:border-zinc-200 max-md:bg-surface max-md:px-4 max-md:pt-3 max-md:pb-[max(0.75rem,env(safe-area-inset-bottom))] max-md:shadow-sm"
-      >
-        {barTotal ? (
-          <p data-testid="reg-bar-summary" className="w-full text-sm font-semibold tabular-nums text-ink md:hidden">
-            {barTotal}
-          </p>
-        ) : null}
-        {clampedIndex > 0 ? (
-          <button
-            type="button"
-            data-testid="reg-back"
-            onClick={goBack}
-            // In flight (B2 T8): the cart is on its way to the server; a Back now would show an earlier step over a submit that is
-            // still running. Re-enabled by the catch branch, with the button itself.
-            disabled={submitting}
-            className={`${BTN_GHOST} max-md:min-h-11`}
-          >
-            {t("register.nav.back")}
-          </button>
-        ) : null}
-        {currentStep === "review" ? (
-          <>
-            {/* From `md` the bar is a plain row, with room for where the confirmation goes (spec 7.3). Phones have the address in the
-                You section, and no spare width: hidden there, not a second tree. `md:ml-auto` pushes it, and the button after it (whose
-                own `ml-auto` is cancelled at md), to the row's end; without an address (cannot happen past Contact) there is no note. */}
-            {sentTo !== "" && (
-              <p data-testid="reg-bar-sent-to" className="max-md:hidden md:ml-auto min-w-0 break-words text-sm text-ink-muted">
-                {t("register.review.sentTo", { email: sentTo })}
-              </p>
-            )}
-            <button
-              type="button"
-              data-testid="reg-submit"
-              onClick={handleSubmit}
-              disabled={submitting}
-              // Busy, not unavailable (B1 fix round 1, D1): BTN_PRIMARY keeps a disabled+busy button at full strength, so the phase
-              // label is read as "working", and assistive tech is told the same thing.
-              aria-busy={submitting}
-              className={sentTo !== "" ? `${BTN_FORWARD} md:ml-0` : BTN_FORWARD}
-            >
-              <span data-widest={widestPhaseLabel} className={LABEL_SIZER}>
-                <span className={LABEL_SIZER_TEXT}>{submitButtonLabel}</span>
-              </span>
-            </button>
-          </>
-        ) : (
-          <button type="button" data-testid="reg-next" onClick={goNext} className={BTN_FORWARD}>
-            {continueLabel}
-          </button>
-        )}
-      </div>
-      {/* The submit phase, said aloud (B1 fix round 1, D3): Chrome drops focus from the button the moment it is disabled, so its own
-          label change is not read out. Mounted on every step and empty until a submit starts (a live region injected already
-          filled is not reliably announced, own-tile.tsx), cleared when the phase returns to idle: an error has its own alert. */}
-      <p role="status" aria-live="polite" data-testid="reg-submit-status" className="sr-only">
-        {submitting ? submitButtonLabel : ""}
-      </p>
+      {/* The action bar (B2 T8, spec §7.2): Back, the running total, the one forward button, and the submit phase said aloud. What it
+          says is computed in action-bar-labels.ts from this component's own state; how it looks and stacks is action-bar.tsx's. */}
+      <ActionBar
+        step={currentStep}
+        hasBack={clampedIndex > 0}
+        submitting={submitting}
+        labels={barLabels}
+        sentTo={contact.email.trim()}
+        onBack={goBack}
+        onNext={goNext}
+        onSubmit={handleSubmit}
+      />
 
       {/* Honeypot — hidden and out of the tab order/accessibility tree, so
           no genuine visitor (sighted, keyboard, or screen-reader) ever
