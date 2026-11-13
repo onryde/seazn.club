@@ -417,7 +417,7 @@ const SPEC_KINDS = [
   "registration_joined",
   "registration_rejected",
   "registration_promotion_lapsed",
-  // After the phase-3 spec's fifty-one and sponsor deals' one: the quick match design's two
+  // After the phase-3 spec's fifty-one, sponsor deals' one and the seven registrant lifecycle kinds: the quick match design's two
   // (docs/superpowers/specs/2026-11-03-quick-match-design.md §7.6, C2), typed from that design: the link mail at creation and the one
   // reminder before expiry.
   "quick_match_link",

@@ -76,7 +76,8 @@ const CHECKINS: string[] = [];
 const REPORTS: string[] = [];
 /** Player payment page tokens (`/r/pay/<token>`), from the REAL producer. */
 const PAYS: string[] = [];
-/** A quick match's home token (plan 1's minter; the `/q/<token>` route is plan 2 Task 5's): the fourth kind of credential. */
+/** A quick match's home token (plan 1's minter; the `/q/<token>` route is plan 2 Task 5's): the fifth kind of credential, after
+ *  the player payment page's. */
 const HOMES: string[] = Array.from({ length: MINTS }, () => mintHomeToken());
 const tomorrow = new Date(Date.now() + 24 * 3600_000);
 await (async () => {
@@ -277,9 +278,9 @@ describe("every /<path>/${token} template is scrubbed, or is knowingly public", 
       }
     }
     for (const prefix of Object.keys(PUBLIC_BUILDERS)) expect(builders.has(prefix), `${prefix} is no longer built anywhere: delete it`).toBe(true);
-    // (11 builders - 3 public) x 4 kinds (invite, check-in, sponsor report, home); 16 at 2 kinds, before plan 2 Task 5
-    // added the home token as a kind.
-    expect(scrubbed).toBeGreaterThanOrEqual(32);
+    // (11 builders - 3 public) x 5 kinds (invite, check-in, sponsor report, player pay page, home) = 40; 16 at 2 kinds, before
+    // plan 2 Task 5 added the home token as a kind, and 32 at 4, before the rebase onto main brought the player pay page token.
+    expect(scrubbed).toBeGreaterThanOrEqual(40);
     expect(kept).toBe(Object.keys(PUBLIC_BUILDERS).length * KINDS.length);
   });
 });
