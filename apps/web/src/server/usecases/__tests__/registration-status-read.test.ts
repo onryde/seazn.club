@@ -66,6 +66,7 @@ import {
   markRegistrationPaidOffline,
   promoteWaitlistedRow,
   publicCartByRef,
+  publicRegistrationStatusByRef,
   putRegistrationSettings,
   reconcileRegistration,
   reconcileRegistrationBySession,
@@ -1846,5 +1847,40 @@ describe.skipIf(!HAS_DB)("a typed entry reference finds the cart; a number the c
     const c = await cartOf(2);
     const cart = await withdrawRegistrationByRef(`${c.ref}-2`, c.entries[1]!.id, c.token);
     expect(cart.entries.map((e) => [e.display_name, e.status])).toEqual([["Entry 1", "pending"], ["Entry 2", "withdrawn"]]);
+  });
+
+  // Tidy round (re-review m4): a valid number names THAT entry. regByRef returns it (so /r/<ref>-2/ticket.png draws entry 2), and the
+  // by-ref withdraw holds the same rule: a number that names a different entry than the one asked for is the unknown-reference 404.
+  // The bare reference keeps the oldest-entry pick. Entry 2 is made the OLDER row here, so position and age disagree and the pick by
+  // number is witnessed rather than coinciding with the pick by age.
+  it("a valid number picks THAT entry over the oldest one: regByRef and the ticket's reader (tidy m4)", async () => {
+    const c = await cartOf(2);
+    const positions = await sql<{ id: string; cart_position: number }[]>`
+      select id, cart_position from registrations where group_id = ${c.groupId} order by cart_position`;
+    expect(positions.map((r) => [r.id, r.cart_position]), "premise: entry n sits at cart_position n").toEqual([
+      [c.entries[0]!.id, 1],
+      [c.entries[1]!.id, 2],
+    ]);
+    await sql`update registrations set created_at = now() - interval '1 hour' where id = ${c.entries[1]!.id}`;
+    expect((await regByRef(c.ref)).id, "premise: the bare reference picks the oldest row, now entry 2").toBe(c.entries[1]!.id);
+    let checked = 0;
+    for (const [n, entry] of [[1, c.entries[0]!], [2, c.entries[1]!]] as const) {
+      expect((await regByRef(`${c.ref}-${n}`)).id, `regByRef -${n}`).toBe(entry.id);
+      expect((await publicRegistrationStatusByRef(`${c.ref}-${n}`)).display_name, `the ticket's reader -${n}`).toBe(`Entry ${n}`);
+      checked += 2;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("by-ref withdraw: a number naming another entry is the unknown-reference 404 and changes nothing; the bare reference still names any entry (tidy m4)", async () => {
+    const c = await cartOf(2);
+    const baseline = shape(await failure(withdrawRegistrationByRef(freshRef(), c.entries[1]!.id, c.token)));
+    expect(baseline, "premise: an unknown reference is a 404").toEqual({ is: true, status: 404, message: "registration not found" });
+    expect(shape(await failure(withdrawRegistrationByRef(`${c.ref}-1`, c.entries[1]!.id, c.token))), "-1 with entry 2's id").toEqual(baseline);
+    expect(shape(await failure(withdrawRegistrationByRef(`${c.ref}-2`, c.entries[0]!.id, c.token))), "-2 with entry 1's id").toEqual(baseline);
+    const before = await sql<{ status: string }[]>`select status from registrations where group_id = ${c.groupId} order by cart_position`;
+    expect(before.map((r) => r.status), "the refusals changed nothing").toEqual(["pending", "pending"]);
+    const cart = await withdrawRegistrationByRef(c.ref, c.entries[0]!.id, c.token);
+    expect(cart.entries.map((e) => [e.display_name, e.status]), "the bare reference withdraws entry 1").toEqual([["Entry 1", "withdrawn"], ["Entry 2", "pending"]]);
   });
 });

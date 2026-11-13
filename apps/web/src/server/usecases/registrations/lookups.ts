@@ -157,20 +157,22 @@ export function typedReference(ref: string): { canonical: string; position: numb
 export async function regByRef(ref: string): Promise<RegistrationWithGroupRow> {
   const { canonical, position } = typedReference(ref);
   // ref_code lives on the cart now (V364) — shared by every entry in it. A
-  // cart can hold more than one entry (RS002/RS003 shipped group submit) —
-  // this picks the oldest deterministically rather than an arbitrary one,
-  // which is exactly right for THIS function's actual callers: the
-  // single-entry ticket.png render, self-withdraw's target row, and
-  // reconcile's status check — none of which need every entry. RS006
-  // decided /r/[ref] itself shows the WHOLE cart: see publicCartByRef below,
-  // which calls this for the checksum/lookup/404 behaviour and then
-  // re-selects every entry in the resolved group.
+  // cart can hold more than one entry (RS002/RS003 shipped group submit).
+  // A typed number names THAT entry (tidy round, re-review m4): `-2` returns
+  // the entry at cart_position 2, so /r/<ref>-2/ticket.png draws entry 2.
+  // A bare reference (or a number whose entry was deleted) picks the oldest
+  // deterministically, which is right for the bare callers: the ticket.png
+  // render, and reconcile's status check. RS006 decided /r/[ref] itself shows
+  // the WHOLE cart: see publicCartByRef, which calls this for the
+  // checksum/lookup/404 behaviour and then re-selects every entry in the
+  // resolved group. `nulls last`: a bare reference compares to null on every
+  // row, which leaves the age order alone.
   const [reg] = await sql<RegistrationWithGroupRow[]>`
     select ${regGroupCols(sql)}
     from registrations r join registration_groups g on g.id = r.group_id
     where g.ref_code = ${canonical}
       and (${position}::int is null or ${position}::int <= g.cart_size)
-    order by r.created_at, r.id limit 1`;
+    order by (r.cart_position = ${position}::int) desc nulls last, r.created_at, r.id limit 1`;
   if (!reg) throw new HttpError(404, "registration not found");
   return reg;
 }
@@ -185,7 +187,10 @@ export async function regByRef(ref: string): Promise<RegistrationWithGroupRow> {
  *  predicates at once, regardless of whether the token is otherwise valid
  *  for THAT other cart. A wrong ref, a wrong token, and a foreign entryId
  *  all 404 identically (RS006 follow-up: withdraw is per-entry now — see
- *  `withdrawRegistrationByRef`). */
+ *  `withdrawRegistrationByRef`). A typed number names an entry, as in
+ *  `regByRef` (tidy round, re-review m4): `<ref>-2` with entry 1's id is the
+ *  same 404, never a withdrawal of the entry the number did not name. The /r
+ *  page posts the bare cart reference, which names any entry of the cart. */
 export async function regByRefAndToken(
   ref: string,
   entryId: string,
@@ -196,7 +201,7 @@ export async function regByRefAndToken(
     select ${regGroupCols(sql)}
     from registrations r join registration_groups g on g.id = r.group_id
     where g.ref_code = ${canonical} and r.id = ${entryId}
-      and (${position}::int is null or ${position}::int <= g.cart_size)
+      and (${position}::int is null or (${position}::int <= g.cart_size and r.cart_position = ${position}::int))
       and g.access_token_hash = ${hashRegistrationToken(token)}`;
   if (!reg) throw new HttpError(404, "registration not found");
   return reg;
