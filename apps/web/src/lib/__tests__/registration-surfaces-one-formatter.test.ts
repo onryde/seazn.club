@@ -26,6 +26,14 @@ const MONEY_SURFACES = [
   "lib/email-templates/shared.ts",
 ];
 
+/** Surfaces that still print an amount, through a module listed above (B4 fix round 3, re-review m3): the Entries cart through cart.ts's
+ *  cartTotalText (B3 review m1), the stepper's action bar through action-bar-labels.ts (B2). They import neither formatter now, and
+ *  must never reach for `formatMinor` beside the shared spelling. */
+const NO_MINOR_SURFACES = [
+  "components/public-site/register/entry-cart.tsx",
+  "components/public-site/register/register-stepper.tsx",
+];
+
 /** A surface that prints a pay-by deadline. */
 const DEADLINE_SURFACES = [
   `${REG}/status/entry-card.tsx`,
@@ -48,6 +56,15 @@ describe("the registration surfaces share one money spelling and one deadline sp
     }
     expect(checked).toBe(MONEY_SURFACES.length);
     expect(checked).toBeGreaterThan(0);
+  });
+
+  it("a surface whose amount moved to a shared module never imports formatMinor (counted)", () => {
+    let checked = 0;
+    for (const rel of NO_MINOR_SURFACES) {
+      expect(importsName(read(rel), "formatMinor"), `${rel} imports formatMinor`).toBe(false);
+      checked += 1;
+    }
+    expect(checked).toBe(2);
   });
 
   it("every deadline surface goes through fmtPublicDeadline; none hand-rolls the old spelling (counted)", () => {
