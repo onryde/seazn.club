@@ -163,6 +163,10 @@ export interface EntryCardProps {
      *  render every pay-by date in regardless of where the org actually
      *  runs. */
     timezone: string;
+    /** B4 fix round 2: the page's h1 already says the card notice for this cart's only entry (`headlineCarriesUnavailableNotice`,
+     *  view-model.ts), so the card keeps its figure and does not say it again. Optional on purpose: left out, the card says the
+     *  notice, so a caller that forgets it repeats a sentence rather than hiding why the entry cannot be paid. */
+    unavailableNoticeInHeadline?: boolean;
   };
   orgSlug: string;
   competitionSlug: string;
@@ -263,7 +267,7 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
     moneyNode = (
       <div className="space-y-1">
         <p className="text-sm font-semibold text-ink">{feeLabel}</p>
-        <p className="text-sm text-amber-800">{t(ui, "register.status.pay.unavailable")}</p>
+        {!cart.unavailableNoticeInHeadline && <p className="text-sm text-amber-800">{t(ui, "register.status.pay.unavailable")}</p>}
       </div>
     );
   } else if (money.kind === "offline_due") {

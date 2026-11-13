@@ -18,6 +18,7 @@ import {
   effectivePayDeadline,
   entryCountsTowardTotal,
   entryDisplayName,
+  headlineCarriesUnavailableNotice,
   inviteLinks,
   moneyLine,
   poolPlaceByDate,
@@ -840,6 +841,26 @@ describe("status page outcome (B4 T15)", () => {
     });
   });
 
+  // B4 fix round 2 (controller ruling): on a one-entry cart whose h1 is the card notice, the card does not say it again. A cart of two
+  // or more keeps the notice on the card that owes, or the h1 alone would not say which entry it is about.
+  describe("headlineCarriesUnavailableNotice", () => {
+    // Every headline kind, forced complete by the type: a new kind fails tsc here until it is listed.
+    const KINDS: Record<HeadlineKind, true> = { pay: true, payUnavailable: true, received: true, pool: true, in: true, waitlist: true, closed: true };
+
+    it("only payUnavailable on a one-entry cart (every kind x 0, 1, 2 entries, counted)", () => {
+      let checked = 0;
+      const carried: string[] = [];
+      for (const kind of Object.keys(KINDS) as HeadlineKind[]) {
+        for (const count of [0, 1, 2]) {
+          if (headlineCarriesUnavailableNotice(count, kind)) carried.push(`${kind}x${count}`);
+          checked += 1;
+        }
+      }
+      expect(checked).toBe(21);
+      expect(carried).toEqual(["payUnavailablex1"]);
+    });
+  });
+
   describe("cartMoneySummary", () => {
     it("the empty cart pays nothing and owes nothing (the empty case, first)", () => {
       expect(cartMoneySummary([], CART)).toEqual({ paidCents: 0, dueCents: 0, waitlistedCents: 0 });
@@ -878,9 +899,25 @@ describe("status page outcome (B4 T15)", () => {
       expect(cartMoneySummary([{ ...confirmedCard, refunded_cents: 2000 }], CART).paidCents).toBe(0);
     });
 
-    it("window_closed is still owed: counted in due", () => {
+    // B4 fix round 2 (controller ruling): an entry past its pay-by date has lost its place and has no way to pay, so its fee is not
+    // "due". Counting it put "£24.00 still due" beside a card that says the place is gone. The rest of the cart counts as before.
+    it("window_closed is not due: alone it is Nothing to pay", () => {
       expect(resolveMoneyState(windowClosed, CART).kind, "premise: this fixture is window_closed").toBe("window_closed");
-      expect(cartMoneySummary([windowClosed], CART).dueCents).toBe(2400);
+      expect(cartMoneySummary([windowClosed], CART)).toEqual({ paidCents: 0, dueCents: 0, waitlistedCents: 0 });
+      expect(moneyLine(cartMoneySummary([windowClosed], CART))).toBe("nothing");
+    });
+
+    it("window_closed beside a pending card fee: only the payable fee is due", () => {
+      const cardFee = { ...unpaidCard, amount_cents: 1500 };
+      expect(resolveMoneyState(cardFee, CART).kind, "premise: still in its window").toBe("stripe_due");
+      // 1500, never 3900: the two fees differ, so counting the closed one cannot pass for counting the payable one.
+      expect(cartMoneySummary([windowClosed, cardFee], CART).dueCents).toBe(1500);
+      expect(moneyLine(cartMoneySummary([windowClosed, cardFee], CART))).toBe("due");
+    });
+
+    it("window_closed beside a card-paid entry: Paid, never 'still due'", () => {
+      expect(cartMoneySummary([windowClosed, confirmedCard], CART)).toEqual({ paidCents: 1500, dueCents: 0, waitlistedCents: 0 });
+      expect(moneyLine(cartMoneySummary([windowClosed, confirmedCard], CART))).toBe("paid");
     });
 
     it("a card fee owed while card payments are unavailable is still owed: counted in due (T15 ruling)", () => {
@@ -909,8 +946,8 @@ describe("status page outcome (B4 T15)", () => {
 
     // Two surfaces, one set of facts (B4 review m1). The headline says "Pay to finish entering" exactly when an entry can be paid on
     // this page (a Pay button or offline instructions: `stripe_due`, `offline_due`, spec §5.1 rule 2). The money line still names
-    // every owed fee, including the two with no way to pay here, so whenever something is due and nothing can be paid, the page
-    // never leads with "awaiting approval" for that debt: it leads with the card notice, or with the entry's siblings.
+    // a card fee owed while cards are unavailable (B4 fix round 2 took `window_closed` out of "due"), so whenever something is due
+    // and nothing can be paid, the page never leads with "awaiting approval" for that debt: it leads with the card notice.
     it("pay exactly when an entry can be paid here; an owed fee with no way to pay never reads as awaiting approval (counted)", () => {
       const palette = [unpaidCard, offlineDue, windowClosed, paidAwaiting, freeAwaiting, confirmedCard, confirmedFree, waived, waitlisted, withdrawn, expired, rejected, inPool, soloUnpaid];
       const PAYABLE = new Set(["stripe_due", "offline_due"]);

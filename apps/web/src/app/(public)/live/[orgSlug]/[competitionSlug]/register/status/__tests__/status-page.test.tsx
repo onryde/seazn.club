@@ -436,6 +436,7 @@ describe("register status page (RS007 rebuild)", () => {
   // fee waiver confirms an entry and keeps its fee (FP11). Each row's text is a literal from the spec's rendering table.
   describe("money line (B4 T15, spec §5.3)", () => {
     const moneyText = (html: string) => html.match(/data-testid="reg-status-money"[^>]*>([^<]*)</)?.[1]?.replace(/&#x27;/g, "'");
+    const CLOSED_AT = "2000-01-01T00:00:00.000Z"; // a pay-by date long gone: the entry is window_closed
     const MONEY_CASES: { name: string; entries: Record<string, unknown>[]; currency?: string; text: string }[] = [
       { name: "no entries at all -> Nothing to pay (the empty case)", entries: [], text: "Nothing to pay" },
       { name: "part-paid: a card-settled £15.00 and a pending card-due £24.00",
@@ -455,6 +456,15 @@ describe("register status page (RS007 rebuild)", () => {
         entries: [{ status: "waitlisted", amount_cents: 0, fee_if_promoted_cents: 0 }], text: "Nothing to pay" },
       { name: "all ended -> Nothing to pay", entries: [{ status: "expired", amount_cents: 1500 }, { status: "rejected", amount_cents: 900 }], text: "Nothing to pay" },
       { name: "a free confirmed entry -> Nothing to pay", entries: [{ status: "confirmed", amount_cents: 0 }], text: "Nothing to pay" },
+      // B4 fix round 2 (controller ruling): a fee past its pay-by date has lost its place and cannot be paid, so it is never "due".
+      { name: "past its pay-by date alone -> Nothing to pay",
+        entries: [{ status: "pending", amount_cents: 2400, promotion_expires_at: CLOSED_AT }], text: "Nothing to pay" },
+      { name: "past its pay-by date beside a pending card fee -> only the payable fee is due",
+        entries: [{ status: "pending", amount_cents: 2400, promotion_expires_at: CLOSED_AT }, { status: "pending", amount_cents: 1500 }],
+        text: "£15.00 due" },
+      { name: "past its pay-by date beside a card-paid entry -> Paid, never still due",
+        entries: [{ status: "pending", amount_cents: 2400, promotion_expires_at: CLOSED_AT }, { status: "confirmed", amount_cents: 1500, settled_by: "card" }],
+        text: "Paid £15.00" },
       { name: "the cart's own currency, two decimals (a whole amount keeps its .00)", currency: "eur",
         entries: [{ status: "waitlisted", amount_cents: 0, fee_if_promoted_cents: 1500 }], text: "€15.00 if a place opens — not due now" },
     ];
@@ -565,6 +575,37 @@ describe("register status page (RS007 rebuild)", () => {
       expect(html).not.toMatch(/Pay now/);
       expect(html).not.toContain("to keep your place");
       expect(html).toMatch(/data-testid="reg-status-money"[^>]*>£25\.00 due</);
+    });
+
+    // B4 fix round 2 (controller ruling): the card notice is said once. A one-entry cart's h1 IS the notice, so its card keeps the
+    // figure and drops the sentence; a cart of two or more keeps it on the card that owes, so the person can tell which entry it means.
+    const NOTICE = "Card payments aren't available right now — contact the organiser.";
+    const count = (html: string, text: string) => html.split(text).length - 1;
+
+    it("cards unavailable on a one-entry cart: the notice is the h1 only, the card keeps its figure", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce({ ...BASE_VIEW, charges_enabled: false, entries: [BASE_ENTRY] });
+      const html = (await render({ rid: "g1", token: "tok" })).replace(/&#x27;/g, "'");
+      expect(headline(html)).toBe(NOTICE);
+      expect(count(html, NOTICE), "said once, in the h1").toBe(1);
+      expect((html.match(/>£25\.00</g) || []).length, "the card still names its fee").toBe(1);
+    });
+
+    it("cards unavailable on a two-entry cart: the h1 and the owing card both say it, the confirmed card does not", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce({
+        ...BASE_VIEW,
+        charges_enabled: false,
+        entries: [
+          { ...BASE_ENTRY, id: "reg-1" },
+          { ...BASE_ENTRY, id: "reg-2", division_name: "Womens 35+", status: "confirmed" as const, settled_by: "card" as const },
+        ],
+      });
+      const html = (await render({ rid: "g1", token: "tok" })).replace(/&#x27;/g, "'");
+      expect(headline(html)).toBe(NOTICE);
+      const cards = html.match(/<li class="[^"]*rounded-xl[\s\S]*?(?=<li class="[^"]*rounded-xl|$)/g) ?? [];
+      expect(cards.length, "two entry cards").toBe(2);
+      expect(count(cards[0]!, NOTICE), "the owing card names it").toBe(1);
+      expect(count(cards[1]!, NOTICE), "the confirmed card does not").toBe(0);
+      expect(count(html, NOTICE), "h1 + the owing card").toBe(2);
     });
 
     it("past its pay-by date beside a confirmed entry: You're in, and the closed entry's card says it lost its place", async () => {

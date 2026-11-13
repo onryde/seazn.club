@@ -345,8 +345,12 @@ stays exported until no caller remains. All amounts are in cents.
     - The implementer pins the exact payload predicate against the tree, with
       one test per path, including a cart paid through one group checkout.
 - `dueCents` = Σ over entries whose `resolveMoneyState` kind is `stripe_due`,
-  `offline_due` or `window_closed` of `amount_cents`. `window_closed` is still
-  owed; it shows as due with no Pay button.
+  `offline_due` or `stripe_unavailable` of `amount_cents`. *Amended B4 fix
+  round 2 (controller ruling 2026-11-13): `window_closed` is NOT due. Its place
+  is lost and it cannot be paid, so "£X still due" beside its card's "it has
+  lost its place" was false; a mixed cart counts only the entries that still
+  hold their place.* `stripe_unavailable` stays due: the fee is owed, and the
+  card notice tells the person to contact the organiser.
 - Rendering:
 
 | Condition | Shows |

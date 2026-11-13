@@ -38,6 +38,7 @@ import { ResendConfirmation } from "./resend-confirmation";
 import {
   cartHeadline,
   cartMoneySummary,
+  headlineCarriesUnavailableNotice,
   moneyLine,
   receivedCount,
   whatHappensNext,
@@ -166,6 +167,8 @@ export default async function RegistrationStatusPage({ params, searchParams }: P
     // usecases/registrations/) — entry-card.tsx renders every deadline in this,
     // never a hardcoded UTC.
     timezone: view.org_timezone,
+    // B4 fix round 2: a one-entry cart's h1 IS the card notice, so its card does not repeat it.
+    unavailableNoticeInHeadline: headlineCarriesUnavailableNotice(view.entries.length, headline),
   };
 
   return (

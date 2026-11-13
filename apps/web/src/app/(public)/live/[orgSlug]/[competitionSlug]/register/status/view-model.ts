@@ -158,12 +158,14 @@ export interface CartPayFacts {
   charges_enabled: boolean;
 }
 
-/** Whether this entry owes its fee right now: every money state but `none`. That includes `stripe_unavailable` (the org cannot take a
- *  card today) and `window_closed` (the pay-by date has gone by, the sweep has not run yet): neither shows a Pay button, and both are
- *  still owed (spec §5.3), so the money line counts them due. The headline reads the money state itself (`entryHeadline`): only the
- *  two states with a way to pay here say "Pay to finish entering". */
-function owesFee(entry: StatusEntry, cart: CartPayFacts): boolean {
-  return resolveMoneyState(entry, cart).kind !== "none";
+/** Whether the money line counts this entry's fee as due: a fee owed on an entry that still holds its place. That is `stripe_due`,
+ *  `offline_due` and `stripe_unavailable` (the org cannot take a card today, and the person is told to contact the organiser: the fee
+ *  is still owed). NOT `window_closed` (B4 fix round 2, controller ruling): the pay-by date has gone by, the place is lost and there is
+ *  no way to pay, so "£X still due" beside the card's "it has lost its place" was false. The headline reads the money state itself
+ *  (`entryHeadline`): only the two states with a way to pay here say "Pay to finish entering". */
+function countsDue(entry: StatusEntry, cart: CartPayFacts): boolean {
+  const kind = resolveMoneyState(entry, cart).kind;
+  return kind !== "none" && kind !== "window_closed";
 }
 
 /** The page's outcome headline (spec §5.1). `payUnavailable` (B4 review m1, owner ruling 2026-11-13): a card fee is owed and the org
@@ -252,6 +254,13 @@ export function cartHeadline(entries: readonly HeadlineEntry[], cart: CartPayFac
 
 /** How many entries are waiting on the organiser's decision: the count the `received` headline and step are worded for. An entry that
  *  owes a fee is never one of them, including one owed with no way to pay here (B4 review m1). */
+/** B4 fix round 2 (controller ruling): whether the page's h1 already says the card notice for the cart's ONLY entry, so that entry's
+ *  card does not say it again. A cart of two or more keeps the notice on the card that owes: the h1 alone would not say which entry
+ *  it is about. */
+export function headlineCarriesUnavailableNotice(entryCount: number, headline: HeadlineKind): boolean {
+  return headline === "payUnavailable" && entryCount === 1;
+}
+
 export function receivedCount(entries: readonly HeadlineEntry[], cart: CartPayFacts): number {
   return entries.filter((e) => entryHeadline(e, cart) === "received").length;
 }
@@ -276,7 +285,7 @@ export interface MoneySummary {
  *  - `paidCents`: entries settled by `card` or `offline`, each `amount_cents − refunded_cents` floored at 0. By settlement, never by
  *    status: a fee waiver confirms the entry and keeps its `amount_cents` (FP11), so a status sum would show a comped entry as paid.
  *    Settlement is history, so a card-paid entry withdrawn past the refund line stays paid.
- *  - `dueCents`: the fees of entries that owe right now (`owesFee`), including the two owed states with no Pay button.
+ *  - `dueCents`: the fees of entries that owe right now and still hold their place (`countsDue`): never a `window_closed` one.
  *  - `waitlistedCents`: what promotions would set (`fee_if_promoted_cents`), never paid and never due.
  * A `waived` entry adds to none of the three.
  */
@@ -286,7 +295,7 @@ export function cartMoneySummary(entries: readonly MoneyEntry[], cart: CartPayFa
   let waitlistedCents = 0;
   for (const e of entries) {
     if (e.settled_by === "card" || e.settled_by === "offline") paidCents += Math.max(0, e.amount_cents - e.refunded_cents);
-    if (owesFee(e, cart)) dueCents += e.amount_cents;
+    if (countsDue(e, cart)) dueCents += e.amount_cents;
     if (e.status === "waitlisted") waitlistedCents += e.fee_if_promoted_cents ?? 0;
   }
   return { paidCents, dueCents, waitlistedCents };
