@@ -18,6 +18,7 @@ import { randomBytes } from "node:crypto";
 import { sql, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { deferred } from "@/lib/deferred";
+import { settleEach, valuesInOrder } from "@/lib/settle-in-order";
 import { getLimit, requireFeature } from "@/lib/entitlements";
 import { generateRefCode } from "@/lib/ref-code";
 import { rosterDerivedName } from "@/lib/entrant-roster-name";
@@ -404,27 +405,6 @@ function assertUniformPaymentMethod(settings: Iterable<{ fee_cents: number; paym
       "This cart mixes payment methods across divisions — submit these registrations separately",
     );
   }
-}
-
-/**
- * Registration redesign B1 T4: reads that used to run one division at a time now run together. `settleEach` runs `read` for every
- * id at once (`allSettled`, so a later read's failure is never left unhandled) and pairs each outcome with its id, in the order
- * given. The caller then walks the pairs in that order, so what a refused cart is told is what the serial loop told it: the
- * failure of the earliest id, never whichever read happened to fail first.
- */
-async function settleEach<T>(ids: readonly string[], read: (id: string) => Promise<T>): Promise<[string, PromiseSettledResult<T>][]> {
-  const settled = await Promise.allSettled(ids.map(read));
-  return ids.map((id, i) => [id, settled[i]!]);
-}
-
-/** The values by id, or the first failure in the pairs' order (see `settleEach`). */
-function valuesInOrder<T>(pairs: readonly [string, PromiseSettledResult<T>][]): Map<string, T> {
-  const out = new Map<string, T>();
-  for (const [id, r] of pairs) {
-    if (r.status === "rejected") throw r.reason;
-    out.set(id, r.value);
-  }
-  return out;
 }
 
 /** `team` needs a name; `pair` falls back to "player & partner" (the partner
