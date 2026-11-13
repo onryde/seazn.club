@@ -492,7 +492,9 @@ export function RegisterStepper({
       {/* A teammate handed a CODE (not a link) has no other door; the join page decides everything past the typed code. First step
           only: past it the person is building their own entry, and the door is a collapsed line, not a card. */}
       {joinCodeDoor && clampedIndex === 0 ? <JoinCodeEntry orgSlug={orgSlug} competitionSlug={competitionSlug} /> : null}
-      <StepNav order={stepOrder} currentIndex={clampedIndex} />
+      {/* B2 T7: a finished step is a button from `md` up (the bar's own rule); `setStepIndex(i)` is exactly what Back does, to any earlier
+          step — nothing typed is lost (the draft state lives here and in sessionStorage, not in the step that is left). */}
+      <StepNav order={stepOrder} currentIndex={clampedIndex} onJump={setStepIndex} />
 
       {currentStep === "who" && (
         <StepWho

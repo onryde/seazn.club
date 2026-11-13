@@ -78,6 +78,8 @@ import type { RegisterLichessState } from "../register-lichess-card";
 import { StepDetails } from "../step-details";
 import { StepEntries } from "../step-entries";
 import { StepReview } from "../step-review";
+import { StepNav } from "../step-nav";
+import { buildStepOrder } from "../steps";
 import { StepWho } from "../step-who";
 import { REGISTER_STATE_VERSION } from "../storage";
 import { EMPTY_CONTACT, type CartState, type DivisionLike, type FormFieldDef } from "../types";
@@ -3153,5 +3155,69 @@ describe("H — the join-code door shows on the first step only, and only where 
     for (let i = 0; i < 4; i++) m.clickByText("Back");
     m.stepWho();
     expect(joinDoors(m.island), "back on WHO").toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Registration redesign B2 T7 — the S1 rail is mounted with the stepper's REAL step order and a REAL jump. A rail whose tests
+// all hand it its own props proves the rail; the seam is the stepper handing it the order it actually walks and an `onJump` that
+// actually moves — without them every finished step is plain text and the desktop jump ships inert (AGENTS.md, recurring class 1).
+// ---------------------------------------------------------------------------
+
+describe("B2 T7 — the stepper mounts StepNav with its real order and a working onJump", () => {
+  const stepNav = (m: ReturnType<typeof mount>) => {
+    const el = m.island.tree().find((e) => e.type === StepNav);
+    expect(el, "StepNav is not in the stepper's tree").toBeTruthy();
+    return propsOf(el!) as { order: string[]; currentIndex: number; onJump?: (i: number) => void };
+  };
+  const fillWho = (m: ReturnType<typeof mount>) =>
+    (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Alex Test", email: "alex@example.com" });
+
+  it("two open divisions: the 5-step order the builder returns, on step 1 — and the rail follows each Next", () => {
+    const m = mount([DIV_OPEN, DIV_OPEN_2]);
+    const expected = buildStepOrder(2, "individual");
+    expect(expected, "premise: Entries is a step here").toHaveLength(5);
+    expect(stepNav(m).order).toEqual(expected);
+    expect(stepNav(m).currentIndex).toBe(0);
+    fillWho(m);
+    m.clickByText("Next"); // -> ENTRIES
+    expect(stepNav(m).currentIndex).toBe(1);
+  });
+
+  it("one open individual division (Entries collapses): the 4-step order — the total the rail shows is the walked list, not 5", () => {
+    const m = mount([DIV_OPEN]);
+    const expected = buildStepOrder(1, "individual");
+    expect(expected, "premise: Entries is gone here").toHaveLength(4);
+    expect(stepNav(m).order).toEqual(expected);
+  });
+
+  it("onJump is wired (not left undefined): jumping back from Entries re-opens Contact with what was typed still there", () => {
+    const m = mount([DIV_OPEN, DIV_OPEN_2]);
+    fillWho(m);
+    m.clickByText("Next"); // -> ENTRIES
+    expect(typeof stepNav(m).onJump, "onJump must be a function, or no finished step is ever a button").toBe("function");
+    stepNav(m).onJump!(0);
+    expect(stepNav(m).currentIndex).toBe(0);
+    const contact = propsOf(m.stepWho()).contact as { name: string; email: string };
+    expect(contact.name).toBe("Alex Test");
+    expect(contact.email).toBe("alex@example.com");
+  });
+
+  it("jumping lands on the step asked for, not just 'the one before': Details -> Entries, then -> Contact, and Next still walks forward from there", () => {
+    const m = mount([DIV_OPEN, DIV_OPEN_2]);
+    fillWho(m);
+    m.clickByText("Next"); // -> ENTRIES
+    (propsOf(m.divisionCard("div-open")).onAddIndividual as () => void)();
+    m.clickByText("Next"); // -> DETAILS
+    expect(stepNav(m).currentIndex).toBe(2);
+    stepNav(m).onJump!(1);
+    expect(stepNav(m).currentIndex, "one step back").toBe(1);
+    expect(m.island.tree().some((e) => e.type === EntryCart), "that is the ENTRIES step").toBe(true);
+    stepNav(m).onJump!(0);
+    expect(stepNav(m).currentIndex, "two steps back").toBe(0);
+    m.stepWho();
+    m.clickByText("Next"); // forward again: still ENTRIES, with the cart intact
+    expect(stepNav(m).currentIndex).toBe(1);
+    expect(m.entryCartCart().entries, "the entry added before jumping is still there").toHaveLength(1);
   });
 });

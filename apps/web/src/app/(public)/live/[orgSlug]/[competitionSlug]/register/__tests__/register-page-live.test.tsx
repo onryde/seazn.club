@@ -126,9 +126,13 @@ describe("register page (live — open divisions)", () => {
     expect(html).toContain('data-join-code="ABC123"');
   });
 
-  it("the step rail shows both Who and Entries (two open divisions — no collapse; uppercase is CSS text-transform, not literal content)", async () => {
+  it("the step rail shows both Contact and Entries (two open divisions — no collapse; uppercase is CSS text-transform, not literal content)", async () => {
     const html = await render();
-    expect(html).toMatch(/>Who</);
+    // B2 T7: the first step is named Contact (it was Who). Entries is its own step here, so it is also what the phone header says is NEXT.
+    expect(html).toMatch(/>Contact</);
+    expect(html).not.toMatch(/>Who</);
     expect(html).toMatch(/>Entries</);
+    expect(html).toContain("Step 1 of 5");
+    expect(html).toContain("Next: Entries");
   });
 });

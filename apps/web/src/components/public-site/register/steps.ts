@@ -6,7 +6,7 @@
 // appended below with NO change to nextStepIndex/prevStepIndex — see
 // steps.test.ts's "hypothetical" case, which predicted exactly this. A
 // later session appending "consent"/"review" needs no change here either.
-import type { StepId } from "./types";
+import type { DivisionLike, StepId } from "./types";
 
 /** Design §4: "step 2 collapses when the competition has one open division."
  *
@@ -36,6 +36,23 @@ export function shouldCollapseEntries(
  *  the door would only invite a dead end. The stepper also shows it on the first step only. */
 export function offersJoinCode(divisions: readonly { open: boolean; entrant_kind: "team" | "individual" | "pair" }[]): boolean {
   return divisions.some((d) => d.open && (d.entrant_kind === "team" || d.entrant_kind === "pair"));
+}
+
+/** Registration redesign B2 T7 (spec FP10) — what the page heading may say about when registration closes. Closing time lives on the
+ *  DIVISION (`registration_settings.closes_at`); the competition has none. So the heading names one only when every OPEN division
+ *  closes at the same instant, and otherwise says nothing (each card carries its own). Empty case first: no open division has no
+ *  shared time, the same answer as a disagreement. Closed divisions do not vote — nobody can enter them anyway.
+ *
+ *  A division with no `closes_at` never closes, so a line naming a time would be false for it: it breaks agreement, and "every open
+ *  division has no closing time" is `null` too (there is nothing to name). Two spellings of one instant agree (compared as instants,
+ *  not strings); an unreadable one never does. Returns the first open division's own string, untouched. */
+export function sharedClosesAt(divisions: readonly Pick<DivisionLike, "open" | "closes_at">[]): string | null {
+  const open = divisions.filter((d) => d.open);
+  const first = open[0]?.closes_at;
+  if (!first) return null;
+  const at = Date.parse(first);
+  // An unreadable time is NaN, and NaN is never equal to anything (itself included), so it falls out of the comparison as "no".
+  return open.every((d) => d.closes_at !== null && Date.parse(d.closes_at) === at) ? first : null;
 }
 
 /** The step list rendered today. `entries` drops out entirely (not merely
