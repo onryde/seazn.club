@@ -1,21 +1,34 @@
 // Quick match (spec docs/superpowers/specs/2026-11-03-quick-match-design.md C17, C22): the setup screen's match count
 // and knockout draw, folded from the real generator's structure (`previewStageDraw`, stages/preview.ts) — the same generate()
-// the create runs, over the same stage input (`quickMatchStageInput`), so the number on the Start button cannot drift
+// the create runs, over the same stage inputs (`quickMatchStageInputs`), so the number on the Start button cannot drift
 // from the fixtures generated (pre-flight A8) and there is never a second bracket algorithm (§4).
+//
+// League + Knockout (plan docs/superpowers/plans/2026-11-13-quick-match-5-league-knockout.md D1, T3; spec
+// docs/superpowers/specs/2026-11-12-quick-match-league-knockout-design.md §3, §12): ONE division of TWO stages, the league
+// and then the organiser's own `league_ko` template's knockout stage, which takes the top `qualifiers` (2 or 4) of the league
+// table. That count lives in the stage graph and nowhere else (D1). Its Start count is the league's plus the knockout's of
+// `qualifiers` sides (q − 1, no third place); only the league's rounds are previewed, since the bracket waits on the table.
 //
 // No string here is copy (pre-flight C2, C10): plan 2 names seed i after the i-th side as typed, a bye in words, and a
 // card and a waiting seat's feeder through `fixtureLabel`/`winnerOfLabel` (components/quick-match/fixture-label.ts), from
 // the round's role and the match's place among its round's non-bye matches.
 import type { RoundRole } from "@seazn/engine/competition";
+import { STAGE_TEMPLATES, type StageDraft } from "@/lib/format-templates";
 import {
   QUICK_MATCH_KNOCKOUT_MIN_SIDES,
   QUICK_MATCH_MAX_PLAYS,
   QUICK_MATCH_MAX_SIDES,
   QUICK_MATCH_MIN_SIDES,
+  QUICK_MATCH_QUALIFIERS,
+  QUICK_MATCH_SEMIS_MIN_SIDES,
 } from "@/lib/quick-match-constants";
 import { previewStageDraw, type PreviewDrawFeed } from "./stages";
 
-export type QuickMatchFormat = "league" | "knockout";
+/** The stored and API format (V506's and V517's check): `knockout` is kept for the rows that have it; a guest makes a League or a
+ *  League + Knockout. */
+export type QuickMatchFormat = "league" | "knockout" | "league_knockout";
+/** League + Knockout's count: the top 2 play a final, the top 4 semi-finals and a final (QUICK_MATCH_QUALIFIERS). */
+export type QuickMatchQualifiers = (typeof QUICK_MATCH_QUALIFIERS)[number];
 /** seed i = the i-th side as typed; feeder = the winner of round·seq; both null on a bye's empty seat. */
 export interface QuickMatchPreviewSide {
   seed: number | null;
@@ -37,18 +50,63 @@ export interface QuickMatchPreview {
   matchCount: number;
   rounds: QuickMatchPreviewRound[];
 }
-/** A PreviewStageInput, and Task 5's CreateStage once `seq: 1` is added: ONE input for the preview and the create. */
+/** A PreviewStageInput, and a CreateStage once its `seq` is added: ONE input for the preview and the create. The progression
+ *  is the league_ko template's (a League + Knockout's knockout stage), null on every other stage. */
 export interface QuickMatchStageInput {
-  kind: QuickMatchFormat;
+  kind: "league" | "knockout";
   name: string;
   config: { legs: number } | Record<string, never>;
-  progression: null;
+  progression: StageDraft["progression"];
 }
 
-export function quickMatchStageInput(input: { format: QuickMatchFormat; plays: number; name: string }): QuickMatchStageInput {
-  return input.format === "league"
-    ? { kind: "league", name: input.name, config: { legs: input.plays }, progression: null }
-    : { kind: "knockout", name: input.name, config: {}, progression: null };
+/** A format and a count that disagree (`league_knockout` ⇔ a count): the schema refuses the pair (`checkQualifiers`), but a
+ *  caller that builds its input in code never parsed one, so the stage graph refuses it too, as a fault. */
+function refuseQualifierMismatch(format: QuickMatchFormat, qualifiers: QuickMatchQualifiers | null): void {
+  if ((format === "league_knockout") !== (qualifiers !== null)) {
+    throw new Error(
+      format === "league_knockout"
+        ? "a league_knockout quick match needs qualifiers (2 or 4)"
+        : `a ${format} quick match takes no qualifiers, got ${qualifiers}`,
+    );
+  }
+}
+
+/** The organiser's League + Knockout template's KNOCKOUT stage (lib/format-templates.ts `league_ko`, P1), built for `q`: the
+ *  top q of the previous stage, rank order, drawn at setup. Its league is not reused: the template's is `legs: 1`, and a quick
+ *  match's league plays `plays` legs, so the league stays the quick match's own. */
+function templateKnockout(q: QuickMatchQualifiers): StageDraft {
+  const template = STAGE_TEMPLATES.find((t) => t.key === "league_ko");
+  if (!template) throw new Error("quick match: the league_ko template is missing");
+  const knockout = template.build({ qualified: q, swissRounds: 1, poolCount: 1, legs: 1 })[1];
+  if (knockout?.kind !== "knockout" || knockout.progression === null) {
+    throw new Error("quick match: the league_ko template's second stage is not a knockout fed by the league");
+  }
+  return knockout;
+}
+
+/**
+ * A quick match's stage graph, in seq order: ONE answer for the preview, the create and every reader that counts stages. A
+ * League or a Knockout is one stage; a League + Knockout is the league (`legs` = plays) then the league_ko template's knockout
+ * of the top `qualifiers`, both named after the match. A format and a count that disagree are refused, as a fault.
+ */
+export function quickMatchStageInputs(input: {
+  format: QuickMatchFormat;
+  plays: number;
+  name: string;
+  qualifiers: QuickMatchQualifiers | null;
+}): QuickMatchStageInput[] {
+  const { format, plays, name, qualifiers } = input;
+  refuseQualifierMismatch(format, qualifiers);
+  const league: QuickMatchStageInput = { kind: "league", name, config: { legs: plays }, progression: null };
+  if (format === "league") return [league];
+  if (format === "knockout") return [{ kind: "knockout", name, config: {}, progression: null }];
+  return [league, { kind: "knockout", name, config: {}, progression: templateKnockout(qualifiers!).progression }];
+}
+
+/** How many stages a quick match of `format` is built with: its stage graph's length (`quickMatchStageInputs`). The saver's
+ *  rename and the home's read refuse any other count. */
+export function quickMatchStageCount(format: QuickMatchFormat): number {
+  return format === "league_knockout" ? 2 : 1;
 }
 
 const EMPTY_SEAT: QuickMatchPreviewSide = { seed: null, feeder: null };
@@ -62,8 +120,15 @@ function seatOf(seed: number | null, from: PreviewDrawFeed | null, where: string
   return { seed, feeder: from ? { round: from.round, seq: from.seq } : null };
 }
 
-export function quickMatchPreview(input: { format: QuickMatchFormat; sides: number; plays: number }): QuickMatchPreview {
+export function quickMatchPreview(input: {
+  format: QuickMatchFormat;
+  sides: number;
+  plays: number;
+  /** League + Knockout's count; left out is null (every other format). */
+  qualifiers?: QuickMatchQualifiers | null;
+}): QuickMatchPreview {
   const { format, sides, plays } = input;
+  const qualifiers = input.qualifiers ?? null;
   // The create's own bounds (CreateQuickMatch: 2..6 sides, 1..2 plays). Below two sides the generator's preview
   // clamps the field up to two, so an unguarded "1 side" would preview a match the create refuses.
   if (!Number.isInteger(sides) || sides < QUICK_MATCH_MIN_SIDES || sides > QUICK_MATCH_MAX_SIDES) {
@@ -73,7 +138,23 @@ export function quickMatchPreview(input: { format: QuickMatchFormat; sides: numb
     throw new RangeError(`quick match plays must be 1 to ${QUICK_MATCH_MAX_PLAYS}, got ${plays}`);
   }
 
-  const draw = previewStageDraw(quickMatchStageInput({ format, plays, name: "" }), sides);
+  refuseQualifierMismatch(format, qualifiers);
+  // §3: a League + Knockout needs three sides (two would replay the league as its final), and semi-finals need four. The
+  // create's own refusals (FORMAT_NOT_OFFERED, SEMIS_TOO_FEW_SIDES), so the table holds no count for a match it would refuse.
+  if (format === "league_knockout" && (sides < QUICK_MATCH_KNOCKOUT_MIN_SIDES || (qualifiers === 4 && sides < QUICK_MATCH_SEMIS_MIN_SIDES))) {
+    throw new RangeError(`a league and knockout of the top ${qualifiers} needs more than ${sides} sides`);
+  }
+  const [first, knockout] = quickMatchStageInputs({ format, plays, name: "", qualifiers });
+  const preview = previewOf(first!, sides, format);
+  if (knockout === undefined) return preview;
+  // The knockout stage is drawn over its qualifiers: the top q seats of the table, so a bracket of q (no byes: q is 2 or 4).
+  const after = previewOf(knockout, qualifiers!, format);
+  return { matchCount: preview.matchCount + after.matchCount, rounds: preview.rounds };
+}
+
+/** One stage's preview over `sides` seats: its non-bye lines counted, its rounds folded. */
+function previewOf(stage: QuickMatchStageInput, sides: number, format: QuickMatchFormat): QuickMatchPreview {
+  const draw = previewStageDraw(stage, sides);
   if (draw.length === 0) throw new Error(`quickMatchPreview cannot name a draw of no fixtures (${format}, ${sides} sides)`);
 
   const rounds = new Map<number, QuickMatchPreviewRound>();
@@ -105,9 +186,9 @@ export function quickMatchPreview(input: { format: QuickMatchFormat; sides: numb
 // table serves every sport: the preview, the stage input it shares with the create, and the engine's generators all take
 // no sport (quick-match-preview-table.test.ts pins the first two inputs).
 //
-// League only (owner 2026-11-12, "take out"): a guest picks no knockout for now, so the table the setup page ships holds
-// no knockout cell. The knockout draws (`quickMatchKnockoutDraws`) are KEPT, unshipped, for League + Knockout, which
-// comes in a later PR and will preview its knockout phase the same way.
+// A guest picks a League or a League + Knockout (plan 5 D1; owner 2026-11-12 "take out" the plain Knockout), so the table the
+// setup page ships holds league cells and League + Knockout cells, and no plain knockout cell. The knockout draws
+// (`quickMatchKnockoutDraws`) are KEPT, unshipped.
 // ---------------------------------------------------------------------------
 
 /** A knockout seat on the setup screen: seed i (the i-th side as typed), or the winner of an earlier pair of this draw
@@ -129,9 +210,12 @@ export interface QuickMatchKnockoutCell {
   byes: number[];
   rounds: QuickMatchDrawRound[];
 }
-/** Keyed `"league:<sides>:<plays>"`. A key outside the table (one side, three plays) holds nothing, and every lookup is
- *  typed `| undefined`, so the compiler makes each caller handle that miss. */
-export type QuickMatchPreviewTable = { [key: `league:${number}:${number}`]: QuickMatchLeagueCell | undefined };
+/** Keyed `"league:<sides>:<plays>"`, and `"league_knockout:<sides>:<plays>:<qualifiers>"` for a League + Knockout (the top 2
+ *  from three sides, the top 4 from four, §3). A key outside the table (one side, three plays, semi-finals of three) holds
+ *  nothing, and every lookup is typed `| undefined`, so the compiler makes each caller handle that miss. */
+export type QuickMatchPreviewTable = { [key: `league:${number}:${number}`]: QuickMatchLeagueCell | undefined } & {
+  [key: `league_knockout:${number}:${number}:${number}`]: QuickMatchLeagueCell | undefined;
+};
 /** Keyed `"knockout:<sides>:1"`: a knockout carries no plays (its stage has no legs), so its key always ends `:1`. Not
  *  shipped to a guest today (League only); kept for League + Knockout. */
 export type QuickMatchKnockoutDraws = { [key: `knockout:${number}:1`]: QuickMatchKnockoutCell | undefined };
@@ -183,6 +267,12 @@ export function quickMatchPreviewTable(): QuickMatchPreviewTable {
   for (let sides = QUICK_MATCH_MIN_SIDES; sides <= QUICK_MATCH_MAX_SIDES; sides++) {
     for (let plays = 1; plays <= QUICK_MATCH_MAX_PLAYS; plays++) {
       table[`league:${sides}:${plays}`] = { matchCount: quickMatchPreview({ format: "league", sides, plays }).matchCount };
+      for (const qualifiers of QUICK_MATCH_QUALIFIERS) {
+        if (sides < QUICK_MATCH_KNOCKOUT_MIN_SIDES || (qualifiers === 4 && sides < QUICK_MATCH_SEMIS_MIN_SIDES)) continue;
+        table[`league_knockout:${sides}:${plays}:${qualifiers}`] = {
+          matchCount: quickMatchPreview({ format: "league_knockout", sides, plays, qualifiers }).matchCount,
+        };
+      }
     }
   }
   return table as QuickMatchPreviewTable;

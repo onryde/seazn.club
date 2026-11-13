@@ -20,7 +20,9 @@
 // (B8), and every count is that scope's.
 //
 // Sports: the orphan check runs badminton and football (E8: football, the team sport offered, has the widest fixture-side tables).
-// Every other case reads only the `quick_matches` row and the outbox, which no sport changes, so it uses badminton.
+// The League + Knockout case (plan 5 T3) runs chess, the one offered sport whose results the test steers (a resignation), so its
+// league can end level and draw a lot. Every other case reads only the `quick_matches` row and the outbox, which no sport changes,
+// so it uses badminton.
 //
 // Real Postgres required; skipped without DATABASE_URL.
 import { randomBytes, randomUUID } from "node:crypto";
@@ -140,13 +142,15 @@ import { FIRST_ATTEMPT_WINDOW_MS, MAX_EXPIRY_MS, enqueueEmail } from "@/server/e
 import { runOutboxTick } from "@/server/email-outbox/worker";
 import { ensureGuestDeviceLink } from "../device-links";
 import { touchQuickMatchActivity } from "../quick-match-activity";
-import { createQuickMatch, type CreatedQuickMatch } from "../quick-match-create";
+import { createQuickMatch, systemAuth, type CreatedQuickMatch } from "../quick-match-create";
 import { hardDeleteQuickMatchCompetition, type QuickMatchDeleteGuard } from "../quick-match-delete";
 import { resolveQuickMatchToken } from "../quick-match-home";
 import { saveQuickMatchForUser } from "../quick-match-save";
 import { listQuickMatchSports } from "../quick-match-sports";
 import { QUICK_MATCH_SWEEP_LIMIT, sweepQuickMatches, type QuickMatchSweepReport } from "../quick-match-sweep";
 import { hashVisitorKey, mintVisitorKey } from "../quick-match-tokens";
+import { scoreEvent } from "../scoring";
+import { completeStage } from "../stages";
 import { firstRallyFor, playToDecided } from "./_quick-match-probe";
 import { expectAllPresent, expectNoOrphans, idsOf, rowsRecorded, tablesRecorded } from "./_quick-match-orphans";
 import { makeUser } from "./_seed";
@@ -1028,5 +1032,62 @@ describe.skipIf(!HAS_DB)("the expiry leaves no orphan row in any table (§7.8, E
     expect(await sql`select 1 from organizations where id = ${QUICK_MATCH_SYSTEM_ORG_ID}`).toHaveLength(1);
     expect(await sql`select 1 from users where id = ${QUICK_MATCH_SYSTEM_USER_ID}`).toHaveLength(1);
     console.info(`orphan check (${sportKey}): ${rowsRecorded(probes)} rows in ${tables.size} tables before the sweep`);
+  });
+});
+
+describe.skipIf(!HAS_DB)("a League + Knockout expires whole: both stages, their lines, the lot and the seed proposal (plan 5 T3, P12)", () => {
+  it("a League → Final whose league ended level (a lot drawn, the knockout's proposal drafted) idle past 7 days leaves no stage, line, proposal or lot", async () => {
+    // single-sport: chess, so each result is steered (a resignation decides the game for the other side, the rulebook) into the
+    // circle that leaves all three level and makes the engine draw a lot; the delete itself reads no sport.
+    const chess = (await listQuickMatchSports()).find((x) => x.sport_key === "boardgame");
+    if (!chess) throw new Error("premise: chess is offered for quick matches");
+    const out = await create({
+      sport_key: "boardgame",
+      variant_key: chess.variants[0]!.variant_key,
+      kind: chess.kinds.at(-1)!,
+      format: "league_knockout",
+      qualifiers: 2,
+      sides: ["Asha", "Ben", "Cleo"],
+    });
+    const stages = await sql<{ id: string; kind: string }[]>`select id, kind from stages where division_id = ${out.divisionId} order by seq`;
+    expect(stages.map((st) => st.kind), "premise: two stages").toEqual(["league", "knockout"]);
+    const [league, knockout] = [...stages] as [{ id: string; kind: string }, { id: string; kind: string }];
+    const lines = await sql<{ id: string; home_entrant_id: string; away_entrant_id: string }[]>`
+      select id, home_entrant_id, away_entrant_id from fixtures where stage_id = ${league.id} order by round_no, fixture_no`;
+    expect(lines, "premise: 3·2/2 league matches").toHaveLength(3);
+    const ids = [...new Set(lines.flatMap((f) => [f.home_entrant_id, f.away_entrant_id]))].sort();
+    const pair = (x: string, y: string) => [x, y].sort().join("|");
+    // The circle: ids[0] beats ids[1], ids[1] beats ids[2], ids[2] beats ids[0], every game by resignation.
+    const winnerOf = new Map([[pair(ids[0]!, ids[1]!), ids[0]!], [pair(ids[1]!, ids[2]!), ids[1]!], [pair(ids[0]!, ids[2]!), ids[2]!]]);
+    for (const f of lines) {
+      const winner = winnerOf.get(pair(f.home_entrant_id, f.away_entrant_id))!;
+      await scoreEvent(systemAuth(), f.id, { expected_seq: 0, type: "core.start", payload: {} });
+      await scoreEvent(systemAuth(), f.id, { expected_seq: 1, type: "boardgame.result", payload: { winner, method: "resign" } });
+    }
+    await completeStage(systemAuth(), league.id, { publish: false });
+
+    const countIn = async (division: string) => {
+      const [c] = await sql<{ stages: number; fixtures: number; proposals: number; lots: number }[]>`
+        select (select count(*)::int from stages where division_id = ${division}) as stages,
+               (select count(*)::int from fixtures where division_id = ${division}) as fixtures,
+               (select count(*)::int from stage_seed_proposals where stage_id in (${league.id}, ${knockout.id})) as proposals,
+               (select count(*)::int from stage_lots_draws where stage_id in (${league.id}, ${knockout.id})) as lots`;
+      return c!;
+    };
+    // Anti-vacuity: every table the case is about holds this match's rows before the sweep.
+    const before = await countIn(out.divisionId);
+    expect(before.stages).toBe(2);
+    expect(before.fixtures, "3 league lines + 1 final").toBe(4);
+    expect(before.proposals, "completing the league drafted the knockout's seeding").toBeGreaterThan(0);
+    expect(before.lots, "the level league drew a lot").toBeGreaterThan(0);
+    const probes = await idsOf(out);
+    const tables = tablesRecorded(probes);
+    for (const t of ["stages", "fixtures", "stage_seed_proposals", "stage_lots_draws"]) expect(tables, `held rows in ${t}`).toContain(t);
+
+    await idleFor(out.id, SPEC_EXPIRY_DAYS + 1);
+    expect(await sweepQuickMatches({ baseUrl: BASE, onlyIds: [out.id] })).toEqual({ ...ZERO, checked: 1, expired: 1 });
+    expect(await countIn(out.divisionId)).toEqual({ stages: 0, fixtures: 0, proposals: 0, lots: 0 });
+    await expectNoOrphans(probes, "league_knockout");
+    console.info(`League + Knockout expiry: ${rowsRecorded(probes)} rows in ${tables.size} tables before the sweep`);
   });
 });

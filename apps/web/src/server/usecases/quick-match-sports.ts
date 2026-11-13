@@ -26,7 +26,7 @@ import { resolveModule } from "@/server/engine-db/registry";
 import { resolveFixtureCfg } from "@/server/engine-db/fixture-cfg";
 import { bracketMayEndLevel, type AnySportModule, type EntrantKind } from "@seazn/engine/sport";
 import { entrantShapeOf } from "./entrant-shape";
-import { quickMatchStageInput } from "./quick-match-preview";
+import { quickMatchStageInputs } from "./quick-match-preview";
 import { withStageDefaults } from "./stage-defaults";
 
 /** The probe's output, as committed: the refusal's CODE only, never the engine's message (B6f), and no kind per entry
@@ -60,7 +60,10 @@ const nothing = (): QuickMatchOffer => ({ offered: false, kinds: [], knockoutAll
  * asks the same `knockoutMayEndLevel` of the fold of every knockout fixture it creates.
  */
 export function quickMatchKnockoutCfg(mod: AnySportModule, variant_key: string, variantConfig: unknown): unknown {
-  const stage = withStageDefaults(mod, "knockout", variant_key, quickMatchStageInput({ format: "knockout", plays: 1, name: "" }).config);
+  // A plain Knockout's one stage. A League + Knockout's knockout stage is stored with the same config (`{}`, the league_ko
+  // template's), so this cfg is the one its matches play too.
+  const [knockout] = quickMatchStageInputs({ format: "knockout", plays: 1, name: "", qualifiers: null });
+  const stage = withStageDefaults(mod, "knockout", variant_key, knockout!.config);
   return resolveFixtureCfg({ config_snapshot: null, rules_override: null }, variantConfig, { kind: "knockout", config: stage }, mod);
 }
 

@@ -126,6 +126,31 @@ async function savedBy(userId: string): Promise<CreatedQuickMatch> {
   return qm;
 }
 
+/** A League → Final of three badminton pairs (plan 5: two stages) through the real create, saved by `userId` through the real
+ *  Save. One sport, as the rest of the rename cases: a rename reads no sport. */
+async function savedLeagueKnockout(userId: string): Promise<CreatedQuickMatch> {
+  const sport = (await listQuickMatchSports()).find((s) => s.sport_key === "badminton");
+  if (!sport) throw new Error("premise: badminton is offered for quick matches");
+  const qm = await createQuickMatch(
+    {
+      name: `QM owner lk ${randomUUID().slice(0, 8)}`,
+      sport_key: "badminton",
+      variant_key: sport.variants[0]!.variant_key,
+      kind: sport.kinds.at(-1)!,
+      format: "league_knockout",
+      qualifiers: 2,
+      sides: ["Side A", "Side B", "Side C"],
+      plays: 1,
+      email: null,
+      locale: "en",
+    },
+    { visitorHash: hashVisitorKey(mintVisitorKey()), mailAllowed: async () => true },
+  );
+  made.push(qm.competitionId);
+  expect(await saveQuickMatchForUser(userId, qm.id), "premise: saved").toBe("saved");
+  return qm;
+}
+
 const made: string[] = [];
 /** A quick match of `sportKey` through the real create, its first offered variant and its widest kind, two sides. */
 async function createOf(sportKey: string): Promise<CreatedQuickMatch> {
@@ -351,6 +376,41 @@ describe.skipIf(!HAS_DB)("PATCH /api/quick-match/<id>: the saver renames", () =>
     expect(answers[0]).toEqual(answers[2]);
     expect([await namesOf(theirs), await namesOf(nobodys)]).toEqual(before);
     expect((await saveStateOf(theirs.id)).saved_by_user_id).toBe(owner);
+  });
+
+  it("a League + Knockout (plan 5 D10): the rename writes its competition, its division and BOTH stages; a League's one stage alongside", async () => {
+    const me = await account("rename-lk");
+    const [lk, league] = [await savedLeagueKnockout(me), await savedBy(me)];
+    const [lkBefore, leagueBefore] = [await namesOf(lk), await namesOf(league)];
+    expect(lkBefore.stages, "premise: a League + Knockout is two stages, both named after the match").toHaveLength(2);
+    expect(leagueBefore.stages, "premise: a League is one stage").toHaveLength(1);
+    await signIn(me);
+
+    const lkRes = await patch(lk.id, { name: "League then final" });
+    expect(lkRes.status, await lkRes.clone().text()).toBe(200);
+    const after = await namesOf(lk);
+    expect(after.stages, "both stages renamed").toEqual(["League then final", "League then final"]);
+    expectRenamed({ ...after, stages: after.stages.slice(0, 1) }, lkBefore, "League then final");
+    expect((await patch(league.id, { name: "Just a league" })).status).toBe(200);
+    expectRenamed(await namesOf(league), leagueBefore, "Just a league");
+    // The second rename touched only its own match.
+    expect((await namesOf(lk)).quickMatch).toBe("League then final");
+  });
+
+  it("an assumption made a guard: a League + Knockout missing one of its two stages is refused as a fault, rolled back whole", async () => {
+    const me = await account("rename-lk-broken");
+    const lk = await savedLeagueKnockout(me);
+    // One stage of the two goes (the knockout, its waiting lines with it): a shape the create never makes.
+    await sql`delete from stages where id = ${lk.knockoutStageId}`;
+    const before = await namesOf(lk);
+    expect(before.stages, "premise: one stage left").toHaveLength(1);
+    await signIn(me);
+
+    const res = await patch(lk.id, { name: "Never written" });
+
+    expect(res.status).toBe(500);
+    expect(await namesOf(lk), "nothing renamed").toEqual(before);
+    expect(reported(), "a fault is reported").toHaveLength(1);
   });
 
   it("an assumption made a guard: a quick match without its one stage is refused as a fault, the rename rolled back whole", async () => {

@@ -39,7 +39,7 @@ export interface MyQuickMatchItem {
   name: string;
   /** null: the row's link could not be rebuilt (B29). */
   token: string | null;
-  format: "league" | "knockout";
+  format: "league" | "knockout" | "league_knockout";
   played: number;
   /** Matches marked Not played (plan 4): the line then says how many, as the match's home does. */
   notPlayed: number;
@@ -52,6 +52,7 @@ const TARGET = "min-h-11";
 const FORMAT_KEY = {
   league: "quickMatch.format.league",
   knockout: "quickMatch.format.knockout",
+  league_knockout: "quickMatch.format.league_knockout",
 } as const satisfies Record<MyQuickMatchItem["format"], MessageKey>;
 
 /** A row's line under its name: the format, then the home's own played line without its countdown (`playedLine`), so the

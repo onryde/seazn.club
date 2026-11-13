@@ -14,7 +14,24 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { msg } from "@/lib/messages";
 import { roundRoleLabel } from "@/lib/round-role-label";
 import { previewDivisionFixtures, previewStageDraw } from "../stages";
-import { quickMatchPreview, quickMatchStageInput, type QuickMatchPreview, type QuickMatchPreviewRound } from "../quick-match-preview";
+import { STAGE_TEMPLATES } from "@/lib/format-templates";
+import { QUICK_MATCH_KNOCKOUT_MIN_SIDES, QUICK_MATCH_SEMIS_MIN_SIDES } from "@/lib/quick-match-constants";
+import {
+  quickMatchPreview,
+  quickMatchStageCount,
+  quickMatchStageInputs,
+  type QuickMatchFormat,
+  type QuickMatchPreview,
+  type QuickMatchPreviewRound,
+  type QuickMatchStageInput,
+} from "../quick-match-preview";
+
+/** The one stage of a League or a Knockout (`quickMatchStageInputs` answers one for both). */
+const onlyStage = (format: "league" | "knockout", plays = 1, name = "x"): QuickMatchStageInput => {
+  const inputs = quickMatchStageInputs({ format, plays, name, qualifiers: null });
+  if (inputs.length !== 1) throw new Error(`premise: a ${format} is one stage, got ${inputs.length}`);
+  return inputs[0]!;
+};
 
 /** The byes the preview draws: its own bye lines (the preview no longer counts them; nothing in production read the count). */
 const byesOf = (p: QuickMatchPreview) => p.rounds.flatMap((r) => r.lines).filter((l) => l.bye).length;
@@ -73,7 +90,7 @@ describe("quickMatchPreview — the draw (C22)", () => {
     expect(r1.lines.filter((l) => l.bye).map((l) => l.home.seed).sort()).toEqual(holders);
     // The generator's own bye fixtures, read raw (the fold blanks a bye's away seat, so its output cannot witness
     // this): nobody sits opposite a bye holder and nothing feeds that seat.
-    const rawByes = previewStageDraw(quickMatchStageInput({ format: "knockout", plays: 1, name: "x" }), sides).filter((f) => f.bye);
+    const rawByes = previewStageDraw(onlyStage("knockout"), sides).filter((f) => f.bye);
     expect(rawByes).toHaveLength(holders.length);
     expect(rawByes.map((f) => [f.awaySeed, f.awayFrom])).toEqual(holders.map(() => [null, null]));
   });
@@ -112,7 +129,7 @@ describe("quickMatchPreview — the draw (C22)", () => {
       for (let sides = 2; sides <= 6; sides++)
         for (const plays of format === "league" ? [1, 2] : [1]) {
           const label = `${format} ${sides}×${plays}`;
-          const sections = previewDivisionFixtures([quickMatchStageInput({ format, plays, name: "x" })], sides)[0]!.sections;
+          const sections = previewDivisionFixtures([onlyStage(format, plays)], sides)[0]!.sections;
           const lines = sections.flatMap((s) => s.matches);
           const p = quickMatchPreview({ format, sides, plays });
           expect(p.matchCount, label).toBe(lines.filter((m) => m.away !== bye).length);
@@ -134,7 +151,7 @@ describe("quickMatchPreview — the draw (C22)", () => {
     // fed by a loser; quickMatchPreview refuses one rather than call it "the winner of" (see the guard test below).
     let feeds = 0;
     for (let sides = 2; sides <= 6; sides++) {
-      for (const f of previewStageDraw(quickMatchStageInput({ format: "knockout", plays: 1, name: "x" }), sides)) {
+      for (const f of previewStageDraw(onlyStage("knockout"), sides)) {
         for (const from of [f.homeFrom, f.awayFrom]) {
           if (!from) continue;
           expect(from.side, `${sides} sides R${f.roundNo}·${f.seqInRound}`).toBe("winner");
@@ -148,20 +165,109 @@ describe("quickMatchPreview — the draw (C22)", () => {
   });
 });
 
-describe("quickMatchStageInput — ONE stage input for the preview and the create (pre-flight A8)", () => {
-  it("a league carries its plays as legs; a knockout carries no config at all, whatever plays says", () => {
-    expect(quickMatchStageInput({ format: "league", plays: 3, name: "Sunday" })).toEqual({
-      kind: "league",
-      name: "Sunday",
-      config: { legs: 3 },
-      progression: null,
-    });
-    expect(quickMatchStageInput({ format: "knockout", plays: 3, name: "Sunday" })).toEqual({
-      kind: "knockout",
-      name: "Sunday",
-      config: {},
-      progression: null,
-    });
+describe("quickMatchStageInputs — ONE stage graph for the preview and the create (pre-flight A8; plan 5 T3)", () => {
+  it("a league carries its plays as legs; a knockout carries no config at all, whatever plays says: one stage each", () => {
+    expect(quickMatchStageInputs({ format: "league", plays: 3, name: "Sunday", qualifiers: null })).toEqual([
+      { kind: "league", name: "Sunday", config: { legs: 3 }, progression: null },
+    ]);
+    expect(quickMatchStageInputs({ format: "knockout", plays: 3, name: "Sunday", qualifiers: null })).toEqual([
+      { kind: "knockout", name: "Sunday", config: {}, progression: null },
+    ]);
+  });
+
+  it.each([2, 4] as const)(
+    "a League + Knockout (top %i): the league with its plays as legs, then the league_ko template's knockout stage, named after the match",
+    (q) => {
+      // The authority is the organiser's own template (lib/format-templates.ts `league_ko`, P1): its SECOND stage, built for q.
+      const template = STAGE_TEMPLATES.find((t) => t.key === "league_ko");
+      expect(template, "premise: the league_ko template exists").toBeDefined();
+      const [, templateKnockout] = template!.build({ qualified: q, swissRounds: 1, poolCount: 1, legs: 1 });
+      expect(templateKnockout?.kind, "premise: the template's second stage is its knockout").toBe("knockout");
+      const inputs = quickMatchStageInputs({ format: "league_knockout", plays: 2, name: "Sunday", qualifiers: q });
+      expect(inputs).toEqual([
+        { kind: "league", name: "Sunday", config: { legs: 2 }, progression: null },
+        { ...templateKnockout, name: "Sunday" },
+      ]);
+      // …and the spec's own words (§3, §7, D1), not only the template's: the top q of the previous stage, in rank order,
+      // drawn at setup so the bracket shows from the start. The count lives here and nowhere else.
+      expect(inputs[1]!.progression).toEqual({
+        sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: q }] }],
+        placement: "rank_order",
+        timing: "setup",
+      });
+    },
+  );
+
+  it("a format and a count that disagree are refused as a fault (the schema's rule, kept for callers that never parsed one)", () => {
+    const cases: [QuickMatchFormat, 2 | 4 | null][] = [["league_knockout", null], ["league", 2], ["league", 4], ["knockout", 4]];
+    let refused = 0;
+    for (const [format, qualifiers] of cases) {
+      expect(() => quickMatchStageInputs({ format, plays: 1, name: "x", qualifiers }), `${format} with ${qualifiers}`).toThrow(/qualifiers/);
+      refused++;
+    }
+    expect(refused).toBe(4);
+  });
+
+  it("quickMatchStageCount is the stage graph's length, for every format (the rename and the home read it)", () => {
+    // Expected from the spec: a League and a Knockout are one stage, a League + Knockout two (D10).
+    const owed: Record<QuickMatchFormat, number> = { league: 1, knockout: 1, league_knockout: 2 };
+    let checked = 0;
+    for (const format of Object.keys(owed) as QuickMatchFormat[]) {
+      const qualifiers = format === "league_knockout" ? 2 : null;
+      expect(quickMatchStageCount(format), format).toBe(owed[format]);
+      expect(quickMatchStageInputs({ format, plays: 1, name: "x", qualifiers }), format).toHaveLength(owed[format]);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+});
+
+describe("quickMatchPreview — League + Knockout: the league, then the knockout of the top q (plan 5 T3, mockup §6)", () => {
+  // The mockup's own numbers (the Start button): 6 sides Once + semis = 15 + 3; Twice = 30 + 3; 3 sides Once + final = 3 + 1.
+  it.each([
+    [6, 1, 4, 18],
+    [6, 2, 4, 33],
+    [3, 1, 2, 4],
+  ] as const)("%i sides × %i plays, top %i = %i matches", (sides, plays, qualifiers, n) => {
+    expect(quickMatchPreview({ format: "league_knockout", sides, plays, qualifiers }).matchCount).toBe(n);
+  });
+
+  it("its rounds are the league's: the knockout is counted, not drawn (the bracket waits on the table)", () => {
+    const p = quickMatchPreview({ format: "league_knockout", sides: 4, plays: 1, qualifiers: 4 });
+    const league = quickMatchPreview({ format: "league", sides: 4, plays: 1 });
+    expect(p.rounds).toEqual(league.rounds);
+    expect(p.rounds.every((r) => r.role === null)).toBe(true);
+    // 4·3/2 league + 3 knockout: the knockout counts though no round of it is shown.
+    expect(p.matchCount).toBe(6 + 3);
+  });
+
+  it("every combination equals the organiser preview of the same two stages (previewDivisionFixtures sizes the knockout from its progression)", () => {
+    const bye = msg("bracket.slot.bye");
+    let checked = 0;
+    for (const qualifiers of [2, 4] as const)
+      for (let sides = qualifiers === 4 ? QUICK_MATCH_SEMIS_MIN_SIDES : QUICK_MATCH_KNOCKOUT_MIN_SIDES; sides <= 6; sides++)
+        for (const plays of [1, 2]) {
+          const phases = previewDivisionFixtures(quickMatchStageInputs({ format: "league_knockout", plays, name: "x", qualifiers }), sides);
+          expect(phases, `${sides}×${plays} top ${qualifiers}: two phases`).toHaveLength(2);
+          const lines = phases.flatMap((ph) => ph.sections.flatMap((s) => s.matches)).filter((m) => m.away !== bye);
+          expect(quickMatchPreview({ format: "league_knockout", sides, plays, qualifiers }).matchCount, `${sides}×${plays} top ${qualifiers}`)
+            .toBe(lines.length);
+          checked++;
+        }
+    // q = 2: 3..6 sides; q = 4: 4..6 sides; each Once and Twice.
+    expect(checked).toBe((4 + 3) * 2);
+  });
+
+  it.each([
+    ["two sides (§3: no knockout row)", { sides: 2, qualifiers: 2 }],
+    ["semi-finals of three (§3)", { sides: 3, qualifiers: 4 }],
+  ] as const)("refuses %s, as the create does", (_label, { sides, qualifiers }) => {
+    expect(() => quickMatchPreview({ format: "league_knockout", sides, plays: 1, qualifiers })).toThrow(RangeError);
+  });
+
+  it("refuses a League + Knockout with no count, and a count on any other format", () => {
+    expect(() => quickMatchPreview({ format: "league_knockout", sides: 4, plays: 1 })).toThrow(/qualifiers/);
+    expect(() => quickMatchPreview({ format: "league", sides: 4, plays: 1, qualifiers: 2 })).toThrow(/qualifiers/);
   });
 });
 

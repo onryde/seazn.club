@@ -60,4 +60,9 @@ export const CreateQuickMatch = z
   })
   .strict()
   .superRefine(checkQualifiers);
-export type CreateQuickMatch = z.infer<typeof CreateQuickMatch>;
+type ParsedCreateQuickMatch = z.infer<typeof CreateQuickMatch>;
+/** What the create takes (usecases/quick-match-create.ts): the parsed body, except that `qualifiers` may be left out. The schema's
+ *  `.default(null)` puts it on every PARSED body (the route's), but a caller that builds the input in code, as every test rig does,
+ *  has no count to give a league: left out reads as null, and the create checks that the format and the count agree
+ *  (`league_knockout` ⇔ a count), as `checkQualifiers` does here. Every other field is the parsed body's, unchanged. */
+export type CreateQuickMatch = Omit<ParsedCreateQuickMatch, "qualifiers"> & Partial<Pick<ParsedCreateQuickMatch, "qualifiers">>;

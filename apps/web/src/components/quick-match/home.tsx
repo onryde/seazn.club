@@ -95,6 +95,7 @@ const KIND_KEY = {
 const FORMAT_KEY = {
   league: "quickMatch.format.league",
   knockout: "quickMatch.format.knockout",
+  league_knockout: "quickMatch.format.league_knockout",
 } as const satisfies Record<QuickMatchHome["row"]["format"], MessageKey>;
 
 /**
