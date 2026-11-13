@@ -120,7 +120,7 @@ describe.skipIf(!HAS_DB)("the day read for a Match Day code", () => {
       division_name: "Doubles",
       round_label: `R${await roundNo(f[0]!)}`,
       // A league round is its R{n} code, the same as round_label (F-T8-3); both seats have entrants, so no slot text.
-      round_tag: `R${await roundNo(f[0]!)}`,
+      round_tag: "R1", // f0 is the round robin's first round; a league round is its R{n} code, literally
       home: expect.any(String),
       away: expect.any(String),
       home_slot: null,
@@ -335,6 +335,19 @@ describe.skipIf(!HAS_DB)("the day read for a Match Day code", () => {
       const { code } = await codeFor(day, { kind: "competition" });
       const final = rowOf(await getMatchDayForCode(code, NOW), fin);
       expect([final.home_slot, final.away_slot]).toEqual(["Winner of SF·2", null]);
+    });
+  });
+
+  describe("group-sourced seats", () => {
+    it("a seat waiting on a group reads the desk's words, written out literally", async () => {
+      const [fx] = day.comp.fixtures;
+      await sql`update fixtures set home_entrant_id = null, away_entrant_id = null,
+        home_slot_label = ${sql.json({ key: "slot.winner_group", params: { g: "A" } })},
+        away_slot_label = ${sql.json({ key: "slot.runner_up_group", params: { g: "B" } })} where id = ${fx!.id}`;
+      const { code } = await codeFor(day, { kind: "competition" });
+      const view = await getMatchDayForCode(code, NOW);
+      const row = view.courts.flatMap((c) => [...(c.now ? [c.now] : []), ...c.next, ...c.finished]).concat(view.no_court).find((r) => r.fixture_id === fx!.id)!;
+      expect([row.home, row.away, row.home_slot, row.away_slot]).toEqual([null, null, "Winner of Group A", "Runner-up of Group B"]);
     });
   });
 
