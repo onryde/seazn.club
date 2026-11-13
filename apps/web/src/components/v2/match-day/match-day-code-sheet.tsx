@@ -4,7 +4,7 @@
 // POST/GET /competitions/{id}/match-day-codes and POST /match-day-codes/{id}/revoke are editor-session only).
 //
 // The form: what the code covers (the whole competition, one venue, or some courts), its day (today by default) and
-// "Can approve draws" and "Call matches to courts" (each off by default). A minted code shows as the Seazn QR, sensitive (it is a credential), above the
+// "Approve pairings and brackets" (owner, 2026-11-13: never "draws", which a scorer reads as drawn matches) and "Call matches to courts" (each off by default). A minted code shows as the Seazn QR, sensitive (it is a credential), above the
 // competition's codes that can still open, each with Show QR and Withdraw.
 import { useCallback, useEffect, useState } from "react";
 import { Modal } from "@/components/modal";
@@ -56,7 +56,7 @@ export function mintBody(scope: MatchDayCodeScope, day: string, canApprove: bool
   return { scope, day, can_approve: canApprove, can_call: canCall };
 }
 
-/** A listed code's powers after its scope and day: " · Approves draws", " · Calls matches", both, or nothing. */
+/** A listed code's powers after its scope and day: " · Approves pairings and brackets", " · Calls matches", both, or nothing. */
 export function powersWords(dict: Dict, c: Pick<MatchDayCode, "can_approve" | "can_call">): string {
   return [c.can_approve ? t(dict, "matchDay.code.approves") : null, c.can_call ? t(dict, "matchDay.code.calls") : null]
     .filter((w): w is string => w !== null)
