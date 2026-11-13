@@ -1,17 +1,34 @@
 "use client";
 
-import { useEffect, useRef } from "react";
-import type { FormEvent, ReactNode } from "react";
+import { useEffect, useId, useRef, useState } from "react";
+import type { FormEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Check, ChevronDown, Search, X } from "lucide-react";
+import { Search, SlidersHorizontal } from "lucide-react";
 import Link from "@/components/ui/console-link";
 import { t } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";
 import { hasActiveFilters } from "@/components/registration-hub-registrant-derive";
+import { filterSheet } from "@/components/registration-hub-registrant-filter-sheet";
+import {
+  FILTER_NAMES,
+  chip,
+  describeFilters,
+  divisionOptionEls,
+  kindOptionEls,
+  selectPill,
+  statusOptionEls,
+  togglePill,
+} from "@/components/registration-hub-registrant-filter-pills";
+import type { FilterName, PillContext } from "@/components/registration-hub-registrant-filter-pills";
 import type {
   RegistrantsFilters,
   DivisionOption,
 } from "@/app/o/[orgSlug]/c/[compSlug]/registration/data";
+
+// The filter vocabulary lives beside the pills; the bar's own module is where
+// callers (and the tests) have always imported it from.
+export { FILTER_NAMES };
+export type { FilterName };
 
 /** The minimal structural slice of a form control `buildFilteredHref` reads
  *  — deliberately NOT `HTMLInputElement`/`Element`: `form.elements`
@@ -43,8 +60,18 @@ type FilterFormElement = { name: string; value: string; type?: string; checked?:
  * (text/select/hidden, `tab` included) contributes unconditionally, empty
  * string included — filtered out below rather than special-cased, so `tab`
  * needs no carve-out: its value is simply never empty.
+ *
+ * B6 T21: the form's own fields come first, then every param of the LIVE
+ * address the form does not own (`current`) rides along — B7's `open` tabs, a
+ * stray `page` — by the same `carryOver` rule a pill's "×" uses, so the two
+ * ways of changing a filter cannot disagree about what survives. Before this a
+ * submit silently dropped them.
  */
-export function buildFilteredHref(action: string, elements: ArrayLike<FilterFormElement>): string {
+export function buildFilteredHref(
+  action: string,
+  elements: ArrayLike<FilterFormElement>,
+  current: URLSearchParams,
+): string {
   const params = new URLSearchParams();
   for (const el of Array.from(elements)) {
     if (!el.name) continue;
@@ -54,14 +81,25 @@ export function buildFilteredHref(action: string, elements: ArrayLike<FilterForm
     }
     if (el.value !== "") params.set(el.name, el.value);
   }
+  for (const [name, value] of carryOver(current, FORM_FIELDS).entries()) params.append(name, value);
   return `${action}?${params.toString()}`;
 }
 
-/** The five narrowing controls a pill can clear (B6 T20) — the form's own
- *  field names, which are also the URL param names. `q` is not here: the
- *  search box is cleared by emptying it, and "Clear all" covers it. */
-export const FILTER_NAMES = ["status", "division_id", "kind", "free_agent", "consent_pending"] as const;
-export type FilterName = (typeof FILTER_NAMES)[number];
+/** Every param the form itself writes. Anything else in the address is somebody
+ *  else's and is never dropped by a filter change. */
+const FORM_FIELDS: readonly string[] = ["tab", "q", "sort", ...FILTER_NAMES];
+
+/** THE carry-over rule, shared by "×" (`clearOneHref`) and a submit
+ *  (`buildFilteredHref`): a copy of the CURRENT address minus the params this
+ *  action owns. A copy, because the live `useSearchParams()` object is read-only
+ *  and a caller reusing one `current` for several links must get the same
+ *  answer each time; `delete` drops every copy of a repeated param (a
+ *  hand-edited URL), not just the first. */
+function carryOver(current: URLSearchParams, owned: readonly string[]): URLSearchParams {
+  const params = new URLSearchParams(current);
+  for (const name of owned) params.delete(name);
+  return params;
+}
 
 /** "Clear all": the bare tab, no filter params (owner 1). NOT the bare
  *  `/registration` — that lands on the Settings tab (`resolveRegistrationHubTab`
@@ -71,43 +109,65 @@ export function clearAllHref(): string {
   return "?tab=registrants";
 }
 
-/** The pill's "×": the CURRENT query string minus the one param this pill
+/** The "×" on a pill or chip: the CURRENT query string minus the one param it
  *  owns. Every other param rides along — tab, sort, the other filters and
  *  anything this form does not know about (B7's `open`) — and `tab` is
  *  re-asserted so a clear can never strand the organiser on Settings.
- *  Works on a copy: the live `useSearchParams()` object is read-only, and a
- *  caller reusing one `current` for several pills must get the same answer
- *  each time. `delete` drops every copy of a repeated param (a hand-edited
- *  URL), not just the first. Query-only, like `clearAllHref`. */
+ *  Query-only, like `clearAllHref`. */
 export function clearOneHref(current: URLSearchParams, name: FilterName): string {
-  const params = new URLSearchParams(current);
-  params.delete(name);
+  const params = carryOver(current, [name]);
   params.set("tab", "registrants");
   return `?${params.toString()}`;
 }
-
-/** The pill face — one shape for the three select pills and the two toggles
- *  (spec §8: every control 40px at md and up; 44px below it, the house touch
- *  height, until T21 folds the bar into a sheet). Unset = white with a violet
- *  hairline, the same violet `.input` and `.btn-ghost` borders use; set = the
- *  house `.chip` fill (purple-50, purple-700) with a stronger hairline. The
- *  hairline is an INSET RING, not a `border`: a border eats 1px a side from the
- *  padding box the absolutely-positioned native select fills, so the select (the
- *  real tap target) would measure 38px inside a 40px pill. `max-w-full`
- *  + `min-w-0` + the face's `truncate` keep a 43-character division name inside
- *  a 320px screen instead of widening the page. */
-const PILL_BASE = "inline-flex h-11 min-w-0 max-w-full items-center rounded-full text-[13.5px] ring-1 ring-inset transition md:h-10";
-const PILL_UNSET = "bg-white text-slate-600 ring-purple-200 hover:bg-purple-50";
-const PILL_SET = "bg-purple-50 font-medium text-purple-700 ring-purple-300";
 
 /** How long the search box waits after the last keystroke before it
  *  navigates — long enough that a normal typing cadence never fires a
  *  submit per character, short enough that the result still feels live. */
 const SEARCH_DEBOUNCE_MS = 300;
 
+/** The value of the control called `name` in a form's `elements`, or null when
+ *  there is no form or no such control. Typed against the same minimal shape
+ *  `buildFilteredHref` reads, so a test needs no DOM. */
+function namedValue(form: { elements: unknown } | null, name: string): string | null {
+  if (!form) return null;
+  const found = Array.from(form.elements as ArrayLike<FilterFormElement>).find((el) => el.name === name);
+  return found ? found.value : null;
+}
+
+/** The search box's debounce timer, kept in a hook of its own. A ref read by a
+ *  handler that the bar then hands to the pill helpers (`ctx.onChange`) trips the
+ *  React Compiler's "no refs during render" rule — it cannot tell the helper only
+ *  attaches it to an element — and a hook's returned functions are opaque to it,
+ *  which is the truth: they run in event handlers and effects, never in render.
+ *  `cancel` also flushes on unmount: a navigation away must not leave a stale
+ *  timer firing `requestSubmit()` on a form that is no longer in the document. */
+function useSearchDebounce() {
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (timer.current !== null) clearTimeout(timer.current);
+    };
+  }, []);
+  const cancel = () => {
+    if (timer.current !== null) {
+      clearTimeout(timer.current);
+      timer.current = null;
+    }
+  };
+  const schedule = (form: HTMLFormElement | null) => {
+    cancel();
+    timer.current = setTimeout(() => {
+      timer.current = null;
+      form?.requestSubmit();
+    }, SEARCH_DEBOUNCE_MS);
+  };
+  return { cancel, schedule };
+}
+
 /**
  * Registration hub — Registrants tab filter bar (RS005 W2a task 3, R4 task
- * 1 auto-submit, R5 task 2 URL filtering, B6 T20 the A3 pill bar).
+ * 1 auto-submit, R5 task 2 URL filtering, B6 T20 the A3 pill bar, T21 the phone
+ * sheet).
  *
  * B6 T20 (mock rfm12a01 §A3, spec §8) changed the FACE, not the mechanism:
  * two rows — search + sort, then one pill per filter — instead of a card of
@@ -115,8 +175,19 @@ const SEARCH_DEBOUNCE_MS = 300;
  * `name`, its auto-submit and its keyed remount (everything below still holds);
  * what is new is that a set filter shows "Label: Value" with a "×" link to the
  * URL without that param (`clearOneHref`), and "Clear all" links to the bare tab
- * (`clearAllHref`). Below md the same bar wraps at the 44px touch height until
- * T21 folds it into a sheet.
+ * (`clearAllHref`).
+ *
+ * B6 T21 (mock A1, spec §8 "Below md"): one DOM, two faces. From md the bar above
+ * is unchanged. Below md the pill row and the standalone sort fold away
+ * (`max-md:hidden`) and the bar is the search box plus ONE row (`md:hidden`): a
+ * "Filters" button with a count of what is set, a removable chip per set filter
+ * and "Clear all". The button opens `filterSheet` — a Modal holding every filter
+ * plus Sort whose edits are staged until "Show registrants" applies them with
+ * one push, through the SAME `buildFilteredHref`, so what the sheet writes and
+ * what a pill writes cannot differ. Whether the sheet is open is local state and
+ * never goes in the URL. The folded pill controls stay in the DOM (they carry the
+ * server's values into a search-box submit), so a phone's two copies of
+ * `select[name=status]` are told apart by the sheet being inside a dialog.
  *
  * Still a `<form method="GET">` — URL state, bookmarking, the back button
  * and shareable views all keep working — but it is no longer the browser's
@@ -214,16 +285,12 @@ export function RegistrationHubRegistrantFilters({
   // The live address, not the `filters` prop: a "×" has to keep every param
   // it does not own, and only the address knows them all (B6 T20).
   const current = useSearchParams();
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // Flush any pending debounce on unmount — a navigation away (or the
-  // component simply going away) must not leave a stale timer firing
-  // `requestSubmit()` on a form that is no longer in the document.
-  useEffect(() => {
-    return () => {
-      if (debounceRef.current !== null) clearTimeout(debounceRef.current);
-    };
-  }, []);
+  const debounce = useSearchDebounce();
+  const formId = useId();
+  // The phone sheet. `null` = closed. While open it carries the search box's text
+  // as of the moment it opened, and whether "Clear all" has reset the staged
+  // controls. Local state only — never in the URL (spec §8).
+  const [sheet, setSheet] = useState<{ q: string; cleared: boolean } | null>(null);
 
   // Task 2 (RS005 R5): the single interception point for every submission,
   // however it was triggered — the onChange->requestSubmit() calls below,
@@ -232,26 +299,18 @@ export function RegistrationHubRegistrantFilters({
   // event. `preventDefault` stops the browser's own (unfiltered) GET
   // navigation; `buildFilteredHref` reads the CURRENT DOM state (never the
   // `filters` prop — see the header comment) and drops empties.
-  function handleSubmit(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    // `.elements` types its members as bare `Element` (no `.name`/`.value`
-    // of their own) — every LISTED control here really is an input/select
-    // carrying both, `FilterFormElement`'s own comment explains why this
-    // is the cast site rather than a looser function signature.
-    const elements = e.currentTarget.elements as unknown as ArrayLike<{
-      name: string;
-      value: string;
-      type?: string;
-      checked?: boolean;
-    }>;
-    router.push(buildFilteredHref(action, elements));
+  //
+  // `.elements` types its members as bare `Element` (no `.name`/`.value`
+  // of their own) — every LISTED control here really is an input/select
+  // carrying both, `FilterFormElement`'s own comment explains why this
+  // is the cast site rather than a looser function signature.
+  function pushFrom(form: { elements: unknown }) {
+    router.push(buildFilteredHref(action, form.elements as ArrayLike<FilterFormElement>, current));
   }
 
-  function clearPending() {
-    if (debounceRef.current !== null) {
-      clearTimeout(debounceRef.current);
-      debounceRef.current = null;
-    }
+  function handleSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    pushFrom(e.currentTarget);
   }
 
   // Every dropdown/checkbox: submit the instant it changes. Any OUTSTANDING
@@ -260,7 +319,7 @@ export function RegistrationHubRegistrantFilters({
   // reads every field's LIVE value at call time), so the delayed one would
   // just be a redundant second navigation to the same URL.
   function submitOnChange(e: { target: { form: HTMLFormElement | null } }) {
-    clearPending();
+    debounce.cancel();
     e.target.form?.requestSubmit();
   }
 
@@ -269,226 +328,165 @@ export function RegistrationHubRegistrantFilters({
   // — not read again once the timer fires — so a re-render between the
   // keystroke and the timeout can never matter.
   function onSearchChange(e: { target: { form: HTMLFormElement | null } }) {
-    clearPending();
-    const form = e.target.form;
-    debounceRef.current = setTimeout(() => {
-      debounceRef.current = null;
-      form?.requestSubmit();
-    }, SEARCH_DEBOUNCE_MS);
+    debounce.schedule(e.target.form);
   }
 
-  // ── A3 pills (B6 T20; mock rfm12a01 §A3) ─────────────────────────────────
-  // Plain helper calls returning JSX, NOT nested components: the node-env
-  // harness renders one component one level deep, and a nested component
-  // would hide every select below from it (and from the next reader's grep).
-  //
-  // A select pill is a real native `<select>` laid over the pill's own face
-  // (`absolute inset-0 opacity-0`): the pill reads "Label: Value" (or the bare
-  // label) from server truth, the select does the picking, so the GET form, the
-  // auto-submit and `select[name=…]` all stay exactly as they were. The face is
-  // `pointer-events-none` so every tap lands on the select; the "×" sits above
-  // it (`relative z-10`) and is a plain link — it works with no JS.
+  // ── the phone sheet (B6 T21) ─────────────────────────────────────────────────
+
+  // Opening reads what is typed in the search box RIGHT NOW (the form this
+  // button sits in), not `filters.text`: a person who types and taps Filters
+  // inside the debounce window has text the URL does not hold yet, and the sheet
+  // pushes the whole bar at once. A pending debounce is left running — closing
+  // the sheet without applying must still search what was typed.
+  function openSheet(e: { currentTarget: { form: { elements: unknown } | null } }) {
+    setSheet({ q: namedValue(e.currentTarget.form, "q") ?? filters.text, cleared: false });
+  }
+
+  // Show registrants: ONE push of the staged controls + the search text, then
+  // the sheet closes. The pending search debounce is cancelled first — the push
+  // already carries that text, and left alone the timer would fire a second
+  // push AFTER this one, from the main form, overwriting the sheet's filters
+  // with the old ones.
+  function handleSheetSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    debounce.cancel();
+    pushFrom(e.currentTarget);
+    setSheet(null);
+  }
+
+  // ── the faces ────────────────────────────────────────────────────────────────
+  // Plain helper calls returning JSX (registration-hub-registrant-filter-pills.tsx),
+  // NOT nested components: the node-env harness renders one component one level
+  // deep, and a nested component would hide every select below from it (and from
+  // the next reader's grep).
   const hrefFor = (query: string) => `${action}${query}`;
-
-  function selectPill(opts: {
-    name: FilterName;
-    label: string;
-    /** The set value as the person reads it, or null when the pill is unset. */
-    valueText: string | null;
-    value: string;
-    children: ReactNode;
-  }) {
-    const { name, label, valueText, value, children } = opts;
-    const set = valueText !== null;
-    const text = set ? t(dict, "reg.filters.pill", { label, value: valueText }) : label;
-    return (
-      <div
-        data-filter-pill={name}
-        data-set={set ? "true" : "false"}
-        className={`relative ${PILL_BASE} ${set ? PILL_SET : PILL_UNSET} has-[select:focus-visible]:ring-2 has-[select:focus-visible]:ring-purple-400`}
-      >
-        <span className="pointer-events-none flex min-w-0 items-center pl-3">
-          <span data-pill-text className="truncate" title={text}>
-            {text}
-          </span>
-          {set ? null : <ChevronDown className="ml-1.5 mr-2.5 h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden="true" />}
-        </span>
-        <select
-          key={`${name}:${value}`}
-          name={name}
-          aria-label={label}
-          defaultValue={value}
-          onChange={submitOnChange}
-          className="absolute inset-0 h-full w-full cursor-pointer appearance-none opacity-0"
-        >
-          {children}
-        </select>
-        {set && (
-          <Link
-            href={hrefFor(clearOneHref(current, name))}
-            data-filter-clear-one={name}
-            aria-label={t(dict, "reg.filters.clearOne", { label })}
-            className="relative z-10 ml-0.5 grid h-full w-9 shrink-0 place-items-center rounded-r-full text-purple-600 hover:bg-purple-100"
-          >
-            <X className="h-3.5 w-3.5" aria-hidden="true" />
-          </Link>
-        )}
-      </div>
-    );
-  }
-
-  // A toggle pill is a label around a visually-hidden native checkbox: the
-  // state IS the checkbox, so the pill restyles itself the instant it is
-  // clicked (`has-[:checked]`), before the navigation lands. Still uncontrolled
-  // and still keyed on its own filter value (header comment, finding 3).
-  function togglePill(name: "free_agent" | "consent_pending", label: string, on: boolean | null) {
-    const set = on === true;
-    return (
-      <label
-        data-filter-pill={name}
-        data-set={set ? "true" : "false"}
-        className={`relative cursor-pointer gap-2 px-3 ${PILL_BASE} ${set ? PILL_SET : PILL_UNSET} has-[:checked]:bg-purple-50 has-[:checked]:ring-purple-300 has-[:checked]:font-medium has-[:checked]:text-purple-700 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-purple-400`}
-      >
-        <input
-          key={`${name}:${String(on)}`}
-          type="checkbox"
-          name={name}
-          value="1"
-          // Tri-state (`boolean | null`, RS005 F3 finding 2) coerced to a
-          // real boolean here — `defaultChecked` only accepts
-          // `boolean | undefined`, and `null`/unset must render the same
-          // as an explicit `false`: both are simply "not checked".
-          defaultChecked={set}
-          onChange={submitOnChange}
-          className="peer sr-only"
-        />
-        <span
-          aria-hidden="true"
-          className="grid h-4 w-4 shrink-0 place-items-center rounded border-[1.5px] border-slate-300 bg-white text-white peer-checked:border-purple-600 peer-checked:bg-purple-600 [&>svg]:opacity-0 peer-checked:[&>svg]:opacity-100"
-        >
-          <Check className="h-3 w-3" strokeWidth={3} />
-        </span>
-        <span data-pill-text className="truncate">
-          {label}
-        </span>
-      </label>
-    );
-  }
-
-  const divisionName = filters.divisionId ? (divisions.find((d) => d.id === filters.divisionId)?.name ?? null) : null;
+  const ctx: PillContext = {
+    dict,
+    clearHref: (name) => hrefFor(clearOneHref(current, name)),
+    onChange: submitOnChange,
+  };
+  const specs = describeFilters(dict, filters, divisions);
+  const [status, division, kind, solo, consent] = specs;
+  // The Filters count, the chips and the set pills all read these same specs, so
+  // the number on the button is exactly the number of chips beneath it.
+  const setSpecs = specs.filter((s) => s.set);
+  const active = hasActiveFilters(filters);
 
   return (
-    <form
-      method="GET"
-      action={action}
-      onSubmit={handleSubmit}
-      data-registration-hub-registrant-filters
-      className="mb-3 flex flex-col gap-2.5"
-    >
-      <input type="hidden" name="tab" value="registrants" />
+    <>
+      <form
+        method="GET"
+        action={action}
+        onSubmit={handleSubmit}
+        data-registration-hub-registrant-filters
+        className="mb-3 flex flex-col gap-2.5"
+      >
+        <input type="hidden" name="tab" value="registrants" />
 
-      {/* Row 1: search, then sort. No stacked labels anywhere — each control
-          is named by its aria-label, so nothing can sit out of line. */}
-      <div className="flex flex-wrap items-center gap-2 md:flex-nowrap">
-        <div className="relative min-w-0 max-md:w-full md:flex-1">
-          <Search
-            className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
-            aria-hidden="true"
-          />
-          <input
-            key={`q:${filters.text}`}
-            type="text"
-            name="q"
-            aria-label={t(dict, "reg.hub.registrants.filters.search")}
-            defaultValue={filters.text}
-            onChange={onSearchChange}
-            placeholder={t(dict, "reg.filters.searchPlaceholder")}
-            className="input h-11 pl-9 text-sm md:h-10"
-          />
-        </div>
-        <select
-          key={`sort:${filters.sort}`}
-          name="sort"
-          aria-label={t(dict, "reg.hub.registrants.filters.sort")}
-          defaultValue={filters.sort}
-          onChange={submitOnChange}
-          className="input h-11 w-auto shrink-0 text-sm md:h-10"
-        >
-          <option value="newest">{t(dict, "reg.hub.registrants.filters.sortNewest")}</option>
-          <option value="oldest">{t(dict, "reg.hub.registrants.filters.sortOldest")}</option>
-        </select>
-      </div>
-
-      {/* Row 2: one pill per filter, then "Clear all" while anything narrows
-          the rows — with nothing active there is nothing to clear, and a no-op
-          link would only invite an idle click. */}
-      <div className="flex flex-wrap items-center gap-2">
-        {selectPill({
-          name: "status",
-          label: t(dict, "reg.hub.registrants.filters.status"),
-          valueText: filters.status ? t(dict, `reg.hub.registrants.status.${filters.status}`) : null,
-          value: filters.status ?? "",
-          children: (
-            <>
-              <option value="">{t(dict, "reg.hub.registrants.filters.statusAll")}</option>
-              {statusOptions.map((s) => (
-                <option key={s} value={s}>
-                  {t(dict, `reg.hub.registrants.status.${s}`)}
-                </option>
-              ))}
-            </>
-          ),
-        })}
-
-        {selectPill({
-          name: "division_id",
-          label: t(dict, "reg.hub.registrants.filters.division"),
-          // A division id that matches no option (stale link, foreign id)
-          // reads as unset — never "Division: undefined".
-          valueText: divisionName,
-          value: filters.divisionId ?? "",
-          children: (
-            <>
-              <option value="">{t(dict, "reg.hub.registrants.filters.divisionAll")}</option>
-              {divisions.map((d) => (
-                <option key={d.id} value={d.id}>
-                  {d.name}
-                </option>
-              ))}
-            </>
-          ),
-        })}
-
-        {selectPill({
-          name: "kind",
-          label: t(dict, "reg.hub.registrants.filters.kind"),
-          valueText: filters.kind ? t(dict, `divset.entrants.kind.${filters.kind}`) : null,
-          value: filters.kind ?? "",
-          children: (
-            <>
-              <option value="">{t(dict, "reg.hub.registrants.filters.kindAll")}</option>
-              {kindOptions.map((k) => (
-                <option key={k} value={k}>
-                  {t(dict, `divset.entrants.kind.${k}`)}
-                </option>
-              ))}
-            </>
-          ),
-        })}
-
-        {togglePill("free_agent", t(dict, "reg.hub.registrants.filters.freeAgent"), filters.freeAgent)}
-        {togglePill("consent_pending", t(dict, "reg.hub.registrants.filters.consentPending"), filters.consentPending)}
-
-        {hasActiveFilters(filters) && (
-          <Link
-            href={hrefFor(clearAllHref())}
-            data-filter-clear-all
-            className="inline-flex h-11 items-center rounded-full px-3 text-[13.5px] font-medium text-purple-700 hover:bg-purple-50 hover:underline md:h-10"
+        {/* Row 1: search, then (from md) sort. No stacked labels anywhere — each
+            control is named by its aria-label, so nothing can sit out of line.
+            Below md Sort lives in the sheet. */}
+        <div className="flex flex-wrap items-center gap-2 md:flex-nowrap">
+          <div className="relative min-w-0 max-md:w-full md:flex-1">
+            <Search
+              className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
+              aria-hidden="true"
+            />
+            <input
+              key={`q:${filters.text}`}
+              type="text"
+              name="q"
+              aria-label={t(dict, "reg.hub.registrants.filters.search")}
+              defaultValue={filters.text}
+              onChange={onSearchChange}
+              placeholder={t(dict, "reg.filters.searchPlaceholder")}
+              className="input h-11 pl-9 text-sm md:h-10"
+            />
+          </div>
+          <select
+            key={`sort:${filters.sort}`}
+            name="sort"
+            aria-label={t(dict, "reg.hub.registrants.filters.sort")}
+            defaultValue={filters.sort}
+            onChange={submitOnChange}
+            className="input h-10 w-auto shrink-0 text-sm max-md:hidden"
           >
-            {t(dict, "reg.filters.clearAll")}
-          </Link>
-        )}
-      </div>
-    </form>
+            <option value="newest">{t(dict, "reg.hub.registrants.filters.sortNewest")}</option>
+            <option value="oldest">{t(dict, "reg.hub.registrants.filters.sortOldest")}</option>
+          </select>
+        </div>
+
+        {/* Below md: the Filters button, then one removable chip per set filter,
+            then "Clear all" while anything narrows. */}
+        <div data-filter-phone-row className="flex flex-wrap items-center gap-2 md:hidden">
+          <button
+            type="button"
+            data-filters-open
+            aria-haspopup="dialog"
+            onClick={openSheet}
+            className="inline-flex h-11 items-center gap-2 rounded-full bg-white px-4 text-sm font-medium text-purple-700 ring-1 ring-inset ring-purple-200 transition hover:bg-purple-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-600"
+          >
+            <SlidersHorizontal className="h-4 w-4 shrink-0" aria-hidden="true" />
+            {t(dict, "reg.filters.open")}
+            {setSpecs.length > 0 && (
+              <span
+                data-filters-count
+                className="grid h-5 min-w-5 place-items-center rounded-full bg-purple-600 px-1.5 text-xs font-semibold text-white"
+              >
+                {setSpecs.length}
+              </span>
+            )}
+          </button>
+          {setSpecs.map((spec) => chip(ctx, spec))}
+          {active && (
+            <Link
+              href={hrefFor(clearAllHref())}
+              data-chip-clear-all
+              className="inline-flex h-11 items-center rounded-full px-3 text-sm font-medium text-purple-700 hover:bg-purple-50 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-600"
+            >
+              {t(dict, "reg.filters.clearAll")}
+            </Link>
+          )}
+        </div>
+
+        {/* From md, row 2: one pill per filter, then "Clear all" while anything
+            narrows the rows — with nothing active there is nothing to clear, and a
+            no-op link would only invite an idle click. */}
+        <div data-filter-pill-row className="flex flex-wrap items-center gap-2 max-md:hidden">
+          {selectPill(ctx, status!, statusOptionEls(dict, statusOptions))}
+          {selectPill(ctx, division!, divisionOptionEls(dict, divisions))}
+          {selectPill(ctx, kind!, kindOptionEls(dict, kindOptions))}
+          {togglePill(ctx, solo!)}
+          {togglePill(ctx, consent!)}
+
+          {active && (
+            <Link
+              href={hrefFor(clearAllHref())}
+              data-filter-clear-all
+              className="inline-flex h-10 items-center rounded-full px-3 text-sm font-medium text-purple-700 hover:bg-purple-50 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-600"
+            >
+              {t(dict, "reg.filters.clearAll")}
+            </Link>
+          )}
+        </div>
+      </form>
+
+      {/* A sibling of the bar's form, not inside it: its own controls carry the
+          same names, and nested forms are not a thing. */}
+      {sheet &&
+        filterSheet({
+          dict,
+          filters,
+          divisions,
+          statusOptions,
+          kindOptions,
+          formId,
+          q: sheet.q,
+          cleared: sheet.cleared,
+          onSubmit: handleSheetSubmit,
+          onClear: () => setSheet({ ...sheet, cleared: true }),
+          onClose: () => setSheet(null),
+        })}
+    </>
   );
 }

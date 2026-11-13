@@ -181,18 +181,36 @@ describe("rows present", () => {
 // strip row (spec §8), which page.tsx owns. What the panel owes now is that it
 // does NOT also render one (two links to the same file), and the result line.
 describe("the panel no longer renders Export CSV (B6 T20 — it lives in the hub tab strip)", () => {
-  it("renders no export link whatever the viewer's rights or the rows", () => {
+  // The panel takes no export prop any more, so a check that only looked at what
+  // it was GIVEN could never fail (T20 review m7: the old /export scan read a tree
+  // that had no way to contain one). The bait: hand it the very prop and href the
+  // old panel rendered from — a regression that re-added the link would then show.
+  const BAIT = { exportHref: "/api/v1/competitions/c1/registrations/export?sort=newest" };
+
+  it("renders no export link whatever the viewer's rights or the rows — even when handed an export href", () => {
     let checked = 0;
     for (const canEdit of [true, false]) {
       for (const rows of [[ROW], []]) {
         const filters = rows.length === 0 ? ACTIVE_FILTERS : DEFAULT_FILTERS;
-        const tree = walk(RegistrationHubRegistrantsPanel({ ...BASE_PROPS, rows, filters, canEdit }));
+        const tree = walk(RegistrationHubRegistrantsPanel({ ...BASE_PROPS, ...BAIT, rows, filters, canEdit } as never));
+        // Anti-vacuity: the tree under test is the real panel, with its bar and count.
+        expect(tree.some((e) => e.type === RegistrationHubRegistrantFilters), "filter bar present").toBe(true);
+        expect(tree.some((e) => propsOf(e)["data-registration-hub-registrant-count"] !== undefined), "count line present").toBe(true);
         expect(textOf(tree[0]!)).not.toContain(t(dict, "reg.exportCsv"));
-        expect(tree.some((e) => String(propsOf(e).href ?? "").includes("/export"))).toBe(false);
+        const hrefs = tree.map((e) => String(propsOf(e).href ?? ""));
+        expect(hrefs.some((h) => h.includes("/export") || h.includes("/registrations/export"))).toBe(false);
+        expect(tree.some((e) => propsOf(e).download !== undefined)).toBe(false);
         checked += 1;
       }
     }
     expect(checked).toBe(4);
+  });
+
+  it("the scan can see an export link: the same walk finds one in a tree that has it", () => {
+    // Negative control for the check above — a scan that cannot find a planted link proves nothing.
+    const planted = walk(<a href={BAIT.exportHref}>{t(dict, "reg.exportCsv")}</a>);
+    expect(planted.some((e) => String(propsOf(e).href ?? "").includes("/export"))).toBe(true);
+    expect(textOf(planted[0]!)).toContain(t(dict, "reg.exportCsv"));
   });
 });
 

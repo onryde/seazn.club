@@ -404,6 +404,12 @@ function clearOneLink(tree: Tree, name: string) {
 const FULL_QUERY =
   "tab=registrants&status=confirmed&division_id=div-1&kind=team&free_agent=1&consent_pending=1&q=alex&sort=oldest&open=a,b&page=2";
 
+/** Every class token of an element — whole tokens, so `md:hidden` is not found
+ *  inside `max-md:hidden`. */
+const tokensOf = (el: ReactElement): string[] => String(propsOf(el).className ?? "").split(/\s+/).filter(Boolean);
+/** Two chips (status + solo) and nothing else narrowing: the phone bar's smallest non-empty state. */
+const FULL_FOR_PHONE: RegistrantsFilters = { ...DEFAULT_FILTERS, status: "paid", freeAgent: true };
+
 describe("clearAllHref / clearOneHref — the pure href builders (B6 T20)", () => {
   it("clearAllHref is the bare tab URL: still on Registrants, no filter params (owner 1)", () => {
     expect(clearAllHref()).toBe("?tab=registrants");
@@ -541,15 +547,16 @@ describe("filter pills (B6 T20)", () => {
 
   it("the × is a real link, not a button — no JS needed to clear a filter", () => {
     const tree = render({ ...DEFAULT_FILTERS, status: "paid" }, "tab=registrants&status=paid");
-    expect(tree.find((e) => e.type === "button")).toBeUndefined();
+    // The one <button> on the bar is the phone Filters trigger — never a clear control.
+    expect(tree.filter((e) => e.type === "button" && propsOf(e)["data-filters-open"] === undefined)).toHaveLength(0);
     expect(typeof propsOf(clearOneLink(tree, "status")!).href).toBe("string");
   });
 
   it("the two toggle pills always read their bare label; their state is the checkbox, not the text", () => {
     for (const filters of [DEFAULT_FILTERS, { ...DEFAULT_FILTERS, freeAgent: true, consentPending: true }]) {
       const tree = render(filters);
-      expect(pillText(tree, "free_agent")).toBe("Solo sign-ups only");
-      expect(pillText(tree, "consent_pending")).toBe("Consent pending only");
+      expect(pillText(tree, "free_agent")).toBe("Solo sign-ups");
+      expect(pillText(tree, "consent_pending")).toBe("Consent pending");
     }
   });
 });
@@ -590,6 +597,47 @@ describe("every control keeps its name; no control has a stacked visible label (
       checked += 1;
     }
     expect(checked).toBe(4);
+  });
+
+  // WCAG 2.5.3 (label in name): the select is laid over a face that reads
+  // "Status: Confirmed", so a screen-reader user who says "click Status
+  // Confirmed" must reach it — its accessible name has to CONTAIN what is drawn.
+  // T20 named it with the bare label while the face read the full pill text.
+  it("a select's accessible name is the full visible pill text, set or unset", () => {
+    const set = render(
+      { ...DEFAULT_FILTERS, status: "confirmed", divisionId: "div-2", kind: "team" },
+      "tab=registrants&status=confirmed&division_id=div-2&kind=team",
+    );
+    const unset = render();
+    let checked = 0;
+    for (const [name, label, value] of [
+      ["status", "Status", "Status: Confirmed"],
+      ["division_id", "Division", "Division: Mixed Doubles"],
+      ["kind", "Entrant kind", "Entrant kind: Team"],
+    ] as const) {
+      const sel = (tree: Tree) => walk(pillOf(tree, name)).find((e) => e.type === "select")!;
+      expect(propsOf(sel(set))["aria-label"], `${name} set`).toBe(value);
+      expect(propsOf(sel(set))["aria-label"], `${name} set = the face`).toBe(pillText(set, name));
+      expect(propsOf(sel(unset))["aria-label"], `${name} unset`).toBe(label);
+      expect(propsOf(sel(unset))["aria-label"], `${name} unset = the face`).toBe(pillText(unset, name));
+      checked += 1;
+    }
+    expect(checked).toBe(3);
+  });
+
+  // A tooltip needs a pointer: the face is `pointer-events-none`, so a `title`
+  // on it never shows. The full text (a 43-character division is clipped at 320)
+  // belongs on the element that actually receives the pointer — the select.
+  it("the full pill text is the select's title (the face cannot show one: it takes no pointer events)", () => {
+    const tree = render({ ...DEFAULT_FILTERS, divisionId: "div-2" }, "tab=registrants&division_id=div-2");
+    const pill = pillOf(tree, "division_id");
+    const select = walk(pill).find((e) => e.type === "select")!;
+    expect(propsOf(select).title).toBe("Division: Mixed Doubles");
+    const face = walk(pill).find((e) => propsOf(e)["data-pill-text"] !== undefined)!;
+    expect(propsOf(face).title).toBeUndefined();
+    const faceWrapper = walk(pill).find((e) => String(propsOf(e).className ?? "").split(/\s+/).includes("pointer-events-none"))!;
+    expect(faceWrapper, "the face wrapper takes no pointer events").toBeTruthy();
+    expect(propsOf(faceWrapper).title).toBeUndefined();
   });
 
   it("the search box is named and its placeholder promises name, email AND reference", () => {
@@ -781,22 +829,38 @@ describe("uncontrolled controls key on their OWN filter value, forcing a remount
   });
 });
 
-// R4 task 1: the button is gone — every control submits itself now.
+// R4 task 1: the submit button is gone — every control submits itself now. T21
+// adds ONE button, and it is not a submit: the phone "Filters" trigger.
 describe("no submit button", () => {
-  it("renders no <button> at all", () => {
+  it("renders no submit button; the only <button> is the phone Filters trigger, type=button", () => {
     const tree = render();
-    expect(tree.find((e) => e.type === "button")).toBeUndefined();
+    const buttons = tree.filter((e) => e.type === "button");
+    expect(buttons).toHaveLength(1);
+    expect(propsOf(buttons[0]!).type).toBe("button");
+    expect(propsOf(buttons[0]!)["data-filters-open"]).not.toBeUndefined();
+    expect(tree.filter((e) => propsOf(e).type === "submit")).toHaveLength(0);
   });
 });
 
-// B6 T20: "every control is 40 px tall" at md and up (spec §8, owner-approved
-// mock A3). Below md the bar keeps today's 44px touch height until T21 folds
-// it into a sheet — pinned at the class-list level (this suite has no viewport
-// to lay anything out in), the same technique the container-query regression
-// in datetime-split-field.test.tsx uses.
-describe("responsive layout (B6 T20)", () => {
-  it("every control is 40px tall at md and up and keeps the 44px touch height below it", () => {
-    const tree = render();
+// B6 T20/T21: "every control is 40 px tall" at md and up (spec §8, owner-approved
+// mock A3); the controls a phone shows (search, the Filters button, chips) keep
+// the 44px touch height. Pinned at the class-list level (this suite has no
+// viewport to lay anything out in): the height each control RESOLVES to at each
+// width is computed from its own class tokens, the same technique the
+// container-query regression in datetime-split-field.test.tsx uses.
+describe("responsive layout (B6 T20 + T21)", () => {
+  /** The `h-N` a class list resolves to at a width: `md:h-N` wins from md up. */
+  function heightAt(el: ReactElement, width: "phone" | "md"): number | null {
+    const toks = String(propsOf(el).className ?? "").split(/\s+/);
+    const find = (re: RegExp) => toks.map((t) => re.exec(t)).find((m) => m)?.[1];
+    const base = find(/^h-(\d+)$/);
+    const md = find(/^md:h-(\d+)$/);
+    const raw = width === "md" ? (md ?? base) : base;
+    return raw === undefined ? null : Number(raw);
+  }
+
+  it("every control the bar shows from md up is 40px tall — pills, Clear all, search and sort", () => {
+    const tree = render({ ...DEFAULT_FILTERS, status: "paid" }, "tab=registrants&status=paid");
     const controls = [
       tree.find((e) => e.type === "input" && propsOf(e).name === "q")!,
       tree.find((e) => e.type === "select" && propsOf(e).name === "sort")!,
@@ -805,23 +869,74 @@ describe("responsive layout (B6 T20)", () => {
       pillOf(tree, "kind"),
       pillOf(tree, "free_agent"),
       pillOf(tree, "consent_pending"),
+      clearAllLink(tree)!,
     ];
     let checked = 0;
     for (const el of controls) {
-      const cls = String(propsOf(el).className);
-      expect(cls, cls).toMatch(/(^|\s)md:h-10(\s|$)/);
-      expect(cls, cls).toMatch(/(^|\s)h-11(\s|$)/);
+      expect(heightAt(el, "md"), String(propsOf(el).className)).toBe(10);
       checked += 1;
     }
+    expect(checked).toBe(8);
+  });
+
+  it("every control the bar shows below md is 44px tall: the search box, the Filters button, each chip, its × and Clear all", () => {
+    const tree = render(FULL_FOR_PHONE, "tab=registrants&status=paid&free_agent=1");
+    const controls = [
+      tree.find((e) => e.type === "input" && propsOf(e).name === "q")!,
+      tree.find((e) => propsOf(e)["data-filters-open"] !== undefined)!,
+      ...tree.filter((e) => propsOf(e)["data-filter-chip"] !== undefined),
+      ...tree.filter((e) => propsOf(e)["data-chip-clear"] !== undefined),
+      tree.find((e) => propsOf(e)["data-chip-clear-all"] !== undefined)!,
+    ];
+    let checked = 0;
+    for (const el of controls) {
+      expect(heightAt(el, "phone"), String(propsOf(el).className)).toBe(11);
+      checked += 1;
+    }
+    // search + Filters + 2 chips + 2 × + Clear all.
     expect(checked).toBe(7);
   });
 
-  it("each pill's native select fills the pill, so the whole pill is the tap target", () => {
-    const tree = render();
+  // The tap area is the select's, not the face's: T20 shipped an overlay whose
+  // `absolute` could be deleted with every test still green (the select then
+  // measured 139px inside a 253px pill). So every class that makes the overlay
+  // the SAME BOX as its pill is pinned here, and e2e measures the boxes.
+  it("each pill's native select is laid over the whole pill, and everything else yields the pointer to it", () => {
+    const tree = render({ ...DEFAULT_FILTERS, status: "paid", divisionId: "div-1", kind: "team" }, "tab=registrants&status=paid&division_id=div-1&kind=team");
+    let checked = 0;
     for (const name of ["status", "division_id", "kind"]) {
-      const select = walk(pillOf(tree, name)).find((e) => e.type === "select")!;
-      expect(String(propsOf(select).className), name).toMatch(/(^|\s)inset-0(\s|$)/);
+      const pill = pillOf(tree, name);
+      expect(tokensOf(pill), `${name} pill is the containing block`).toContain("relative");
+      const select = walk(pill).find((e) => e.type === "select")!;
+      for (const cls of ["absolute", "inset-0", "h-full", "w-full", "opacity-0", "cursor-pointer"]) {
+        expect(tokensOf(select), `${name} select ${cls}`).toContain(cls);
+      }
+      const face = walk(pill).find((e) => tokensOf(e).includes("pointer-events-none"));
+      expect(face, `${name} face yields the pointer`).toBeTruthy();
+      // The × sits ABOVE the select (z-10) so its own tap lands on the link.
+      const clear = clearOneLink(tree, name)!;
+      expect(tokensOf(clear), `${name} ×`).toContain("relative");
+      expect(tokensOf(clear), `${name} ×`).toContain("z-10");
+      checked += 1;
     }
+    expect(checked).toBe(3);
+  });
+
+  it("the focus ring is the darker purple-600 (purple-400 was ~2.8:1) on every pill, and no ring uses purple-400", () => {
+    const tree = render({ ...DEFAULT_FILTERS, status: "paid" }, "tab=registrants&status=paid");
+    const ringed = [pillOf(tree, "status"), pillOf(tree, "division_id"), pillOf(tree, "kind"), pillOf(tree, "free_agent"), pillOf(tree, "consent_pending")];
+    for (const pill of ringed) {
+      const cls = String(propsOf(pill).className);
+      expect(cls, cls).toMatch(/focus-visible\]:ring-purple-600/);
+      expect(cls, cls).not.toMatch(/ring-purple-400/);
+    }
+  });
+
+  it("text is the house size (text-sm), never an arbitrary 13.5px", () => {
+    const tree = render({ ...DEFAULT_FILTERS, status: "paid" }, "tab=registrants&status=paid");
+    for (const el of tree) expect(String(propsOf(el).className ?? ""), String(el.type)).not.toMatch(/text-\[/);
+    expect(tokensOf(pillOf(tree, "status"))).toContain("text-sm");
+    expect(tokensOf(clearAllLink(tree)!)).toContain("text-sm");
   });
 
   // A mistyped Tailwind variant (`has-[:checkd]:`, `max-md:basi-full`) compiles to
@@ -876,6 +991,9 @@ describe("responsive layout (B6 T20)", () => {
 // URL is the shareable/bookmarkable artefact (the entire reason the filters
 // are a GET form), so it should carry only what's actually SET.
 describe("buildFilteredHref — the pure filtering logic (RS005 R5 task 2)", () => {
+  /** A bare address: nothing in the URL beyond what the form's own fields carry. */
+  const NO_PARAMS = new URLSearchParams();
+
   // A plain array stands in for `form.elements` (an HTMLFormControlsCollection)
   // — this suite runs `environment: "node"` with no jsdom (_hook-harness.tsx's
   // own header comment), so a real HTMLFormElement/FormData is never
@@ -894,12 +1012,12 @@ describe("buildFilteredHref — the pure filtering logic (RS005 R5 task 2)", () 
       el("kind", ""),
       el("q", ""),
       el("sort", "newest"),
-    ]);
+    ], NO_PARAMS);
     expect(href).toBe(`${ACTION}?tab=registrants&status=confirmed&sort=newest`);
   });
 
   it("drops a filter's key ENTIRELY once cleared back to empty — never an empty `key=`", () => {
-    const href = buildFilteredHref(ACTION, [el("tab", "registrants"), el("status", "")]);
+    const href = buildFilteredHref(ACTION, [el("tab", "registrants"), el("status", "")], NO_PARAMS);
     expect(href).not.toContain("status");
     expect(href).not.toContain("status=");
   });
@@ -908,18 +1026,18 @@ describe("buildFilteredHref — the pure filtering logic (RS005 R5 task 2)", () 
     const checked = buildFilteredHref(ACTION, [
       el("tab", "registrants"),
       el("free_agent", "1", { type: "checkbox", checked: true }),
-    ]);
+    ], NO_PARAMS);
     expect(checked).toContain("free_agent=1");
 
     const unchecked = buildFilteredHref(ACTION, [
       el("tab", "registrants"),
       el("free_agent", "1", { type: "checkbox", checked: false }),
-    ]);
+    ], NO_PARAMS);
     expect(unchecked).not.toContain("free_agent");
   });
 
   it("skips a field with no name at all (defensive — form.elements can include unnamed controls)", () => {
-    const href = buildFilteredHref(ACTION, [el("tab", "registrants"), el("", "stray")]);
+    const href = buildFilteredHref(ACTION, [el("tab", "registrants"), el("", "stray")], NO_PARAMS);
     expect(href).toBe(`${ACTION}?tab=registrants`);
   });
 
@@ -931,8 +1049,64 @@ describe("buildFilteredHref — the pure filtering logic (RS005 R5 task 2)", () 
       el("kind", ""),
       el("q", ""),
       el("sort", ""),
-    ]);
+    ], NO_PARAMS);
     expect(href).toBe(`${ACTION}?tab=registrants`);
+  });
+
+  // B6 T21 (T20 review): a "×" kept every param it did not own and a submit
+  // dropped them, so changing a filter while `open=a,b` (B7's open division
+  // tabs) was in the address silently closed the tabs. ONE rule now, both paths.
+  describe("params the form does not own ride through a submit exactly as they ride through a ×", () => {
+    const CURRENT = new URLSearchParams("tab=registrants&status=paid&q=old&sort=oldest&open=a,b&page=2&utm=x");
+    const FORM = [
+      el("tab", "registrants"),
+      el("status", "confirmed"),
+      el("q", ""),
+      el("sort", "newest"),
+    ];
+
+    it("keeps open/page/utm, replaces what the form owns, and never doubles a key", () => {
+      const params = new URLSearchParams(buildFilteredHref(ACTION, FORM, CURRENT).slice(ACTION.length + 1));
+      expect(params.get("open")).toBe("a,b");
+      expect(params.get("page")).toBe("2");
+      expect(params.get("utm")).toBe("x");
+      expect(params.getAll("status")).toEqual(["confirmed"]);
+      expect(params.getAll("sort")).toEqual(["newest"]);
+      // The form's own cleared field removes the stale value instead of inheriting it.
+      expect(params.has("q")).toBe(false);
+      expect(params.getAll("tab")).toEqual(["registrants"]);
+    });
+
+    it("agrees with clearOneHref on which params are carried, for every filter name", () => {
+      let checked = 0;
+      for (const name of FILTER_NAMES) {
+        const current = new URLSearchParams(`tab=registrants&${name}=1&open=a,b&page=2`);
+        const viaClear = new URLSearchParams(clearOneHref(current, name).slice(1));
+        const viaSubmit = new URLSearchParams(buildFilteredHref(ACTION, [el("tab", "registrants")], current).slice(ACTION.length + 1));
+        const foreign = (p: URLSearchParams) => [...p.entries()].filter(([k]) => k !== "tab" && !FILTER_NAMES.includes(k as never));
+        expect(foreign(viaSubmit), name).toEqual(foreign(viaClear));
+        expect(foreign(viaSubmit), name).toEqual([["open", "a,b"], ["page", "2"]]);
+        checked += 1;
+      }
+      expect(checked).toBe(5);
+    });
+
+    it("a repeated unknown param is carried whole, not collapsed to one copy", () => {
+      const params = new URLSearchParams(
+        buildFilteredHref(ACTION, [el("tab", "registrants")], new URLSearchParams("tab=registrants&x=1&x=2")).slice(ACTION.length + 1),
+      );
+      expect(params.getAll("x")).toEqual(["1", "2"]);
+    });
+
+    it("does not mutate the live address it was given", () => {
+      const before = CURRENT.toString();
+      buildFilteredHref(ACTION, FORM, CURRENT);
+      expect(CURRENT.toString()).toBe(before);
+    });
+
+    it("the form's own fields come first, so the tab stays at the front of the URL", () => {
+      expect(buildFilteredHref(ACTION, FORM, CURRENT).slice(ACTION.length + 1).startsWith("tab=registrants&status=confirmed")).toBe(true);
+    });
   });
 });
 
@@ -986,6 +1160,22 @@ describe("auto-submit URL filtering — wired through onSubmit (RS005 R5 task 2)
     const f = form(render());
     (propsOf(f).onSubmit as (e: unknown) => void)(submitEvent(BASELINE_ELEMENTS));
     expect(nav.push).toHaveBeenCalledWith(`${ACTION}?tab=registrants&sort=newest`);
+  });
+
+  it("carries the live address's unknown params through the push — changing a filter must not close B7's open tabs", () => {
+    const f = form(render(DEFAULT_FILTERS, "tab=registrants&status=paid&open=a,b&page=2"));
+    (propsOf(f).onSubmit as (e: unknown) => void)(
+      submitEvent([
+        { name: "tab", value: "registrants" },
+        { name: "status", value: "confirmed" },
+        { name: "q", value: "" },
+        { name: "sort", value: "newest" },
+      ]),
+    );
+    const pushed = new URL(String(nav.push.mock.calls[0]![0]), "https://seazn.test").searchParams;
+    expect(pushed.get("open")).toBe("a,b");
+    expect(pushed.get("page")).toBe("2");
+    expect(pushed.getAll("status")).toEqual(["confirmed"]);
   });
 
   it("uses router.push, not replace — a change is still its own back-button stop, same as the native submission it replaces", () => {
