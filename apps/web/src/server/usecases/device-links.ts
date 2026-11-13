@@ -134,11 +134,15 @@ async function linkableStatus(tx: Tx, fixtureId: string, competitionId?: string)
   return fixture.status;
 }
 
-async function loadLinkableFixture(tx: Tx, fixtureId: string, competitionId?: string): Promise<void> {
-  const status = await linkableStatus(tx, fixtureId, competitionId);
+/** A finalized or cancelled match: a code-less 422, nothing left to score. */
+function assertLinkableStatus(status: string): void {
   if (isFinishedFixtureStatus(status)) {
     throw new HttpError(422, `fixture is ${status} — nothing left to score`);
   }
+}
+
+async function loadLinkableFixture(tx: Tx, fixtureId: string, competitionId?: string): Promise<void> {
+  assertLinkableStatus(await linkableStatus(tx, fixtureId, competitionId));
 }
 
 /** Owner ruling Q1 (2026-09-23): the key is always set, and a server without
@@ -282,7 +286,8 @@ export async function ensureDeviceLink(
  *   - an expired row (one `findQuickMatchByCompetition` can still return) → 404 `QUICK_MATCH_ERRORS.EXPIRED`, as its
  *     home answers an expired token; a saved row has no expiry;
  *   - under the fixture's link lock, in the system org: a fixture outside THIS quick match's competition → 404 (the
- *     per-match check, §7.1 point 3: every quick match shares the one org); finalized or `cancelled` → 422; a match whose
+ *     per-match check, §7.1 point 3: every quick match shares the one org); a match marked Not played (`cancelled`, plan
+ *     4's skip) → 422 `QUICK_MATCH_ERRORS.NOT_PLAYED`; finalized → 422, code-less; a match whose
  *     two sides are not both known (a knockout round waiting for its feeders, a bye) → 422 `QUICK_MATCH_ERRORS.SIDES_UNKNOWN`
  *     (C18);
  *   - `ensureLocked`: the live sealed link re-opened (no write), or one minted that revokes any other.
@@ -297,7 +302,11 @@ export async function ensureGuestDeviceLink(qm: QuickMatchRow, fixtureId: string
   const auth = systemAuth();
   return withTenant(auth.orgId, async (tx) => {
     await lockFixtureLinks(tx, fixtureId);
-    await loadLinkableFixture(tx, fixtureId, qm.competitionId);
+    // A match marked Not played (plan 4's skip writes `cancelled`): its own code, so the home says to put it back first, not
+    // the generic "try again" (T1 review G1).
+    const status = await linkableStatus(tx, fixtureId, qm.competitionId);
+    if (status === "cancelled") throw new HttpError(422, "this match was marked Not played", QUICK_MATCH_ERRORS.NOT_PLAYED);
+    assertLinkableStatus(status);
     const [seats] = await tx<{ home_entrant_id: string | null; away_entrant_id: string | null }[]>`
       select home_entrant_id, away_entrant_id from fixtures where id = ${fixtureId}`;
     if (!seats?.home_entrant_id || !seats.away_entrant_id) {

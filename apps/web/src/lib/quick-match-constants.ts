@@ -140,4 +140,9 @@ export const QUICK_MATCH_ERRORS = {
    *  refused. The home hides Put back once the league is finished, so only a stale tap meets it:
    *  `quickMatch.flash.leagueFinished`. */
   LEAGUE_FINISHED: "QUICK_MATCH_LEAGUE_FINISHED",
+  /** A Score tap on a match marked Not played (plan 4; T1 review G1, controller ruling 2026-11-13): someone else skipped it
+   *  after this page loaded. The guest link refuses it (422, `ensureGuestDeviceLink`, device-links.ts) and mints nothing,
+   *  and the home shows `quickMatch.flash.notPlayed`, which says to put it back first: never the generic line, whose "try
+   *  again" would only loop. */
+  NOT_PLAYED: "QUICK_MATCH_NOT_PLAYED",
 } as const;
