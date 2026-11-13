@@ -26,7 +26,7 @@ import type { EligibilityIssue } from "@/lib/registration-rules";
 import { MAX_ROSTER_PLAYERS } from "./cart";
 import { rosterIssueMessageKey } from "./eligibility-presentation";
 import { parseRoster } from "./roster";
-import { BTN_GHOST, BTN_TEXT, FIELD } from "./styles";
+import { BTN_GHOST, BTN_TEXT, FIELD, FIELD_READONLY } from "./styles";
 import type { CartEntry, Gender, RosterPlayerState } from "./types";
 
 /** The SECOND row of a PAIR entry is the "partner field for pairs" the
@@ -42,6 +42,7 @@ export function RosterTable({
   requiresDob,
   requiresGender,
   issuesByRow,
+  contactRow = null,
   importText,
   onImportTextChange,
   onAddPlayer,
@@ -54,6 +55,9 @@ export function RosterTable({
   requiresGender: boolean;
   /** Keyed by 1-based playerIndex, matching EligibilityIssue's convention. */
   issuesByRow: Map<number, EligibilityIssue[]>;
+  /** The 0-based row that is the contact's own (roster.ts `contactRowIndex`), shown read-only with "That's you" (B2 T9); null when
+   *  none is. Decided by the caller, which knows the contact: this table renders what it is told. */
+  contactRow?: number | null;
   /** The paste textarea's draft — controlled from above, see this file's
    *  header for why. */
   importText: string;
@@ -79,6 +83,8 @@ export function RosterTable({
           {entry.players.map((p, i) => {
             const label = rowLabel(entry.entrant_kind, i, t);
             const issues = issuesByRow.get(i + 1) ?? [];
+            const isContactRow = i === contactRow;
+            const youNoteId = `reg-roster-you-${entry.id}-${i}`;
             return (
               <li key={i} className="min-w-0 rounded-lg border border-zinc-200 bg-canvas p-3">
                 <div className="flex items-center justify-between gap-2">
@@ -96,7 +102,7 @@ export function RosterTable({
                   <input
                     type="text"
                     maxLength={120}
-                    className={`${FIELD} min-w-0`}
+                    className={isContactRow ? `${FIELD} ${FIELD_READONLY} min-w-0` : `${FIELD} min-w-0`}
                     placeholder={t("register.who.name.placeholder")}
                     /* Bench hook. Every field in this row was addressable only
                      * by an aria-label built from TRANSLATED strings, which is
@@ -105,6 +111,10 @@ export function RosterTable({
                     data-testid="reg-roster-name"
                     data-player-row={i}
                     aria-label={`${label} — ${t("register.who.name.label")}`}
+                    // The contact's own row (B2 T9): a read-only INPUT, not text, so it keeps its label, its value, its hook and its
+                    // place in the form (the e2e specs read every roster name box, and a screen reader hears "read only").
+                    readOnly={isContactRow}
+                    aria-describedby={isContactRow ? youNoteId : undefined}
                     value={p.full_name}
                     onChange={(e) => onUpdatePlayer(i, { full_name: e.target.value })}
                   />
@@ -151,6 +161,12 @@ export function RosterTable({
                     </select>
                   )}
                 </div>
+
+                {isContactRow && (
+                  <p id={youNoteId} className="mt-1.5 text-xs text-ink-muted">
+                    {t("register.details.you")}
+                  </p>
+                )}
 
                 {issues.length > 0 && (
                   <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">

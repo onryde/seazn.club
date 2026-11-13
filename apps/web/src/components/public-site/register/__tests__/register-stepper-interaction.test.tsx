@@ -81,6 +81,7 @@ import { StepReview } from "../step-review";
 import { StepNav } from "../step-nav";
 import { buildStepOrder } from "../steps";
 import { StepWho } from "../step-who";
+import { FIELD } from "../styles";
 import { REGISTER_STATE_VERSION } from "../storage";
 import { EMPTY_CONTACT, type CartState, type DivisionLike, type FormFieldDef } from "../types";
 import { EntrantKind } from "@/server/api-v1/schemas/common";
@@ -912,7 +913,7 @@ describe("finding #5 — restoring a pristine saved snapshot never shows stale e
 
     const text = pageText();
     expect(text).not.toContain("Enter your name");
-    expect(text).not.toContain("Enter a valid email address");
+    expect(text).not.toContain("Enter an email address, like name@example.com");
     expect(text).not.toContain("Enter your date of birth");
     expect(text).not.toContain("Select an option");
     expect(text).toContain("We'll send your confirmation and reference here.");
@@ -3565,5 +3566,309 @@ describe("B2 T8 — action bar: Back, named Continue, running total, one forward
       checked++;
     }
     expect(checked, "anti-vacuity: all four locales").toBe(4);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Registration redesign B2 T9 — Contact and Details polish. Driven through the REAL stepper: the producers are the Contact inputs and
+// the Continue click, the consumers are what the registrant reads (the summary, the field state, the Details row, the questions).
+// ---------------------------------------------------------------------------
+
+describe("B2 T9 — Contact: error summary, invalid fields, the playing card", () => {
+  type M = ReturnType<typeof mount>;
+  const DIV_BOTH: DivisionLike = { ...DIV_OPEN, division_id: "div-both-t9", name: "Open Masters", requires_dob: true, requires_gender: true };
+
+  const setWho = (m: M, patch: object) => (propsOf(m.stepWho()).onChange as (p: object) => void)(patch);
+  const setPlaying = (m: M, v: boolean) => (propsOf(m.stepWho()).onImPlayingChange as (v: boolean) => void)(v);
+  const summaries = (m: M) => m.island.tree().filter((e) => propsOf(e)["data-testid"] === "reg-who-error-summary");
+  const alerts = (m: M) => m.island.tree().filter((e) => propsOf(e).role === "alert");
+  /** The stepper's own ref, as StepWho receives it, holding a stand-in for the element React attaches: the harness has no DOM, so
+   *  nothing else would ever put an element there. A `focus` call on it is the stepper asking for focus. */
+  function armFocus(m: M) {
+    const ref = propsOf(m.stepWho()).summaryRef as { current: unknown } | undefined;
+    expect(ref, "StepWho is handed the stepper's focus ref").toBeTruthy();
+    const focus = vi.fn();
+    ref!.current = { focus };
+    return { ref: ref!, focus };
+  }
+
+  it("a failed Continue on Contact focuses an alert naming both missing fields", () => {
+    const m = mount([DIV_OPEN]);
+    expect(summaries(m), "pristine: nothing is wrong yet, so no alert").toHaveLength(0);
+    const { ref, focus } = armFocus(m);
+
+    m.clickByText("Next");
+
+    expect(summaries(m), "exactly one summary").toHaveLength(1);
+    const summary = summaries(m)[0]!;
+    expect(propsOf(summary).role, "announced").toBe("alert");
+    expect(textOf(summary)).toBe("2 things to fix before you continue: Your name, Email");
+    expect(propsOf(summary).tabIndex, "focusable by script, out of the Tab order").toBe(-1);
+    expect(propsOf(summary).ref, "the element the stepper's ref attaches to").toBe(ref);
+    expect(focus, "and Continue asked for focus on it").toHaveBeenCalledTimes(1);
+  });
+
+  it("every failed Continue focuses it again, a fixed field drops out of it, and a Continue that passes does not", () => {
+    const m = mount([DIV_OPEN]);
+    const { focus } = armFocus(m);
+    m.clickByText("Next");
+    expect(focus).toHaveBeenCalledTimes(1);
+
+    setWho(m, { name: "Alex Test" });
+    m.clickByText("Next");
+    expect(textOf(summaries(m)[0]!), "one left, and the sentence says so in the singular").toBe("1 thing to fix before you continue: Email");
+    expect(focus, "a SECOND failed Continue focuses it again (a first-time-only effect would stay silent here)").toHaveBeenCalledTimes(2);
+
+    setWho(m, { email: "alex@example.com" });
+    m.clickByText("Next"); // valid -> leaves Contact
+    expect(summaries(m), "Contact is gone, and its summary with it").toHaveLength(0);
+    expect(focus, "a Continue that passes asks for no summary focus").toHaveBeenCalledTimes(2);
+  });
+
+  it("with a date of birth and a gender asked for, all four fields are named, in the order they sit on the page", () => {
+    const m = mount([DIV_BOTH]);
+    setPlaying(m, true);
+    m.clickByText("Next");
+    expect(textOf(summaries(m)[0]!)).toBe("4 things to fix before you continue: Your name, Email, Date of birth, Gender");
+  });
+
+  it("invalid fields carry aria-invalid and are described by their own error text; valid ones carry neither", () => {
+    const m = mount([DIV_BOTH]);
+    setPlaying(m, true);
+    m.clickByText("Next");
+    const expected = {
+      name: "Enter your name",
+      email: "Enter an email address, like name@example.com",
+      dob: "Enter your date of birth",
+      gender: "Select an option",
+    };
+    let checked = 0;
+    for (const [key, copy] of Object.entries(expected)) {
+      const field = byId(m.island, `reg-who-${key}`);
+      expect(propsOf(field)["aria-invalid"], `${key} is invalid`).toBe(true);
+      expect(propsOf(field)["aria-describedby"], `${key} points at its error`).toBe(`reg-who-${key}-error`);
+      expect(textOf(byId(m.island, `reg-who-${key}-error`)), `${key}'s error text`).toBe(copy);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: all four fields checked").toBe(4);
+    expect(alerts(m), "one alert (the summary), not one per field: four announcements of the same four problems is noise").toHaveLength(1);
+
+    setWho(m, { name: "Alex Test", email: "alex@example.com", dob: "1990-04-02", gender: "f" });
+    for (const key of Object.keys(expected)) {
+      const field = byId(m.island, `reg-who-${key}`);
+      expect(propsOf(field)["aria-invalid"], `${key} is valid now`).toBeUndefined();
+      expect(propsOf(field)["aria-describedby"], `${key} is described by its hint again`).toBe(`reg-who-${key}-hint`);
+      expect(byId(m.island, `reg-who-${key}-hint`), `${key}'s hint exists, so the reference is not dangling`).toBeTruthy();
+    }
+    expect(summaries(m), "and nothing is left to summarise").toHaveLength(0);
+    expect(alerts(m)).toHaveLength(0);
+  });
+
+  it("the danger border an invalid field gets is part of the shared field token, and every Contact field wears that token", () => {
+    expect(FIELD).toMatch(/(?:^|\s)aria-invalid:border-red-600(?:\s|$)/);
+    const m = mount([DIV_BOTH]);
+    setPlaying(m, true);
+    for (const key of ["name", "email", "dob", "gender"]) {
+      expect(propsOf(byId(m.island, `reg-who-${key}`)).className, `${key} uses FIELD`).toBe(FIELD);
+    }
+  });
+
+  it.each([
+    ["nothing typed", ""],
+    ["not an address", "not-an-email"],
+    ["missing the domain", "alex@"],
+  ])("the email error shows the example address (%s)", (_label, email) => {
+    const m = mount([DIV_OPEN]);
+    setWho(m, { name: "Alex Test", email });
+    m.clickByText("Next");
+    expect(textOf(byId(m.island, "reg-who-email-error"))).toBe("Enter an email address, like name@example.com");
+    expect(m.pageText(), "the old wording is gone").not.toContain("Enter a valid email address");
+  });
+
+  it("the playing card's label wraps the reg-who-playing input, so a tap on its text toggles it", () => {
+    const m = mount([DIV_BOTH]);
+    const tree = m.island.tree(); // one expansion: element identity is only stable within it
+    const boxes = tree.filter((e) => propsOf(e)["data-testid"] === "reg-who-playing");
+    expect(boxes, "one playing checkbox").toHaveLength(1);
+    const wrapping = tree.filter((e) => e.type === "label" && walk(e).includes(boxes[0]!));
+    expect(wrapping, "exactly one label wraps it").toHaveLength(1);
+    const title = "I'm one of the players";
+    const body = "We'll put you in as player 1 on every entry, so your results stay together.";
+    expect(textOf(wrapping[0]!)).toContain(title);
+    expect(textOf(wrapping[0]!)).toContain(body);
+    const titleEls = tree.filter((e) => propsOf(e).children === title);
+    expect(titleEls, "the title is rendered once").toHaveLength(1);
+    expect(walk(wrapping[0]!).includes(titleEls[0]!), "and it is inside that label, not beside it").toBe(true);
+    expect(m.pageText(), "the old wording is gone").not.toContain("I'm registering myself");
+    // Its pair: the card does something. Ticking it asks for the date of birth the contact's own row will need.
+    expect(m.island.tree().some((e) => propsOf(e).id === "reg-who-dob")).toBe(false);
+    (propsOf(boxes[0]!).onChange as (e: { target: { checked: boolean } }) => void)({ target: { checked: true } });
+    expect(m.island.tree().some((e) => propsOf(e).id === "reg-who-dob"), "ticked: the dob field appears").toBe(true);
+  });
+});
+
+describe("B2 T9 — Details: one card per entry, the contact's own row, the organiser's questions", () => {
+  type M = ReturnType<typeof mount>;
+  const setWho = (m: M, patch: object) => (propsOf(m.stepWho()).onChange as (p: object) => void)(patch);
+  const setPlaying = (m: M, v: boolean) => (propsOf(m.stepWho()).onImPlayingChange as (v: boolean) => void)(v);
+  const NOTE = "That's you. Change it on the Contact step.";
+  const rosterNameInputs = (m: M) =>
+    m.island
+      .tree()
+      .filter((e) => propsOf(e)["data-testid"] === "reg-roster-name")
+      .sort((a, b) => Number(propsOf(a)["data-player-row"]) - Number(propsOf(b)["data-player-row"]));
+  /** Contact filled, optionally playing, then on to Details (one open individual division collapses Entries away). */
+  function toDetails(playing: boolean, name = "Mia Cole"): M {
+    const m = mount([DIV_OPEN]);
+    setWho(m, { name, email: "mia@example.com", dob: "1990-04-02" });
+    if (playing) setPlaying(m, true);
+    m.clickByText("Next");
+    return m;
+  }
+
+  it("with imPlaying, Details shows Player 1 read-only as the contact name, with the note", () => {
+    const m = toDetails(true);
+    const inputs = rosterNameInputs(m);
+    expect(inputs, "one row").toHaveLength(1);
+    expect(propsOf(inputs[0]!).value).toBe("Mia Cole");
+    expect(propsOf(inputs[0]!).readOnly, "the contact's own row cannot be typed over").toBe(true);
+    expect(m.pageText()).toContain(NOTE);
+  });
+
+  it("without imPlaying, Player 1 is an editable input and there is no note", () => {
+    const m = toDetails(false);
+    const inputs = rosterNameInputs(m);
+    expect(inputs, "one row").toHaveLength(1);
+    expect(propsOf(inputs[0]!).readOnly, "someone else is being entered: the row is the registrant's to fill").not.toBe(true);
+    expect(propsOf(inputs[0]!).value).toBe("");
+    expect(m.pageText()).not.toContain(NOTE);
+  });
+
+  it("untick imPlaying after seeing it locked: the row keeps its name but is editable again, and the note goes", () => {
+    const m = toDetails(true);
+    expect(propsOf(rosterNameInputs(m)[0]!).readOnly, "premise: locked first").toBe(true);
+    m.clickByText("Back");
+    setPlaying(m, false);
+    m.clickByText("Next");
+    const inputs = rosterNameInputs(m);
+    expect(inputs).toHaveLength(1);
+    expect(propsOf(inputs[0]!).readOnly).not.toBe(true);
+    expect(propsOf(inputs[0]!).value, "the seeded name is the registrant's to keep or change").toBe("Mia Cole");
+    expect(m.pageText()).not.toContain(NOTE);
+  });
+
+  it("a contact renamed after the row was seeded: the row keeps the old name (the seed fills blanks only), stays editable and does not claim 'That's you'", () => {
+    const m = toDetails(true);
+    expect(propsOf(rosterNameInputs(m)[0]!).readOnly, "premise: locked first").toBe(true);
+    m.clickByText("Back");
+    setWho(m, { name: "Mia Colette" });
+    m.clickByText("Next");
+    const inputs = rosterNameInputs(m);
+    expect(propsOf(inputs[0]!).value, "premise: the seed did not overwrite the row").toBe("Mia Cole");
+    expect(propsOf(inputs[0]!).readOnly, "a row that is not the contact's name is not locked").not.toBe(true);
+    expect(m.pageText()).not.toContain(NOTE);
+  });
+
+  const FIELDS: FormFieldDef[] = [
+    { key: "shirt", label: "Shirt size", kind: "text", required: false },
+    { key: "emergency", label: "Emergency contact", kind: "text", required: true },
+    { key: "ack", label: "Court rules acknowledged", kind: "checkbox", required: false },
+    { key: "diet", label: "Dietary needs", kind: "select", options: ["None", "Vegetarian"], required: true },
+  ];
+  const DIV_ASKS: DivisionLike = { ...DIV_OPEN, division_id: "div-asks", name: "Asking Division", form_fields: FIELDS };
+
+  /** Two entries, so each card's own subtree is its own. */
+  function twoEntries(divisions: DivisionLike[]): M {
+    const m = mount(divisions);
+    setWho(m, { name: "Alex Test", email: "alex@example.com" });
+    m.clickByText("Next"); // -> ENTRIES
+    (propsOf(m.divisionCard(divisions[0]!.division_id)).onAddIndividual as () => void)();
+    (propsOf(m.divisionCard(divisions[0]!.division_id)).onAddIndividual as () => void)();
+    m.clickByText("Next"); // -> DETAILS
+    return m;
+  }
+  const isCard = (e: ReactElement) => /(?:^|\s)bg-surface(?:\s|$)/.test(String(propsOf(e).className ?? ""));
+
+  it("one card per entry: the step's heading and subtitle are not a card of their own", () => {
+    const m = twoEntries([DIV_OPEN, DIV_OPEN_2]);
+    const stepEl = m.island.tree().find((e) => e.type === StepDetails)!;
+    const sub = deepExpand((StepDetails as ComponentFn)(propsOf(stepEl)));
+    const cards = sub.filter(isCard);
+    expect(cards, "two entries, two cards (an intro card would make three)").toHaveLength(2);
+    const headings = sub.filter((e) => e.type === "h2");
+    expect(headings, "the step still has its one focus-target heading").toHaveLength(1);
+    expect(textOf(headings[0]!)).toBe("Player details");
+    for (const card of cards) expect(walk(card).includes(headings[0]!), "the heading is not inside an entry's card").toBe(false);
+
+    // The empty case: no entries is no cards, and the heading is still the step's heading.
+    const empty = deepExpand((StepDetails as ComponentFn)({ ...propsOf(stepEl), cart: { entries: [] } }));
+    expect(empty.filter(isCard)).toHaveLength(0);
+    expect(empty.filter((e) => e.type === "h2")).toHaveLength(1);
+  });
+
+  it("the organiser's questions sit under 'Questions from {org}', optional ones tagged and required ones not", () => {
+    const m = twoEntries([DIV_ASKS, DIV_OPEN_2]);
+    const tree = m.island.tree();
+    const headings = tree.filter((e) => e.type === "h4");
+    expect(headings, "one questions block per entry").toHaveLength(2);
+    for (const h of headings) expect(textOf(h)).toBe("Questions from Test Org");
+    expect(tree.some((e) => textOf(e) === "Event questions"), "the generic heading is gone").toBe(false);
+
+    const labels = tree.filter((e) => e.type === "label");
+    let tagged = 0;
+    let untagged = 0;
+    for (const f of FIELDS) {
+      const mine = labels.filter((l) => textOf(l).includes(f.label));
+      expect(mine, `${f.key}: one label per entry`).toHaveLength(2);
+      for (const l of mine) {
+        const hasTag = textOf(l).includes("Optional");
+        expect(hasTag, `${f.key} (required=${f.required})`).toBe(!f.required);
+        if (hasTag) tagged++;
+        else untagged++;
+      }
+    }
+    expect(tagged, "anti-vacuity: optional questions seen, per entry").toBe(FIELDS.filter((f) => !f.required).length * 2);
+    expect(untagged, "and required ones").toBe(FIELDS.filter((f) => f.required).length * 2);
+  });
+
+  it("a division that asks nothing gets no Questions heading (the empty case, through the stepper)", () => {
+    const m = twoEntries([DIV_OPEN, DIV_OPEN_2]);
+    expect(m.island.tree().filter((e) => e.type === "h4")).toHaveLength(0);
+    expect(m.pageText()).not.toContain("Questions from");
+  });
+});
+
+describe("B2 T9 — the new copy is in every locale", () => {
+  it("each locale carries the new keys with their placeholders, and none still carries the retired ones", () => {
+    const read = (loc: string) =>
+      JSON.parse(readFileSync(join(__dirname, "..", "..", "..", "..", "dictionaries", loc, "ui.json"), "utf8")) as Record<string, string>;
+    let checked = 0;
+    for (const loc of ["en", "es", "fr", "nl"]) {
+      const d = read(loc);
+      for (const k of ["register.errors.summary.one", "register.errors.summary.other"]) {
+        expect(d[k], `${loc}: ${k}`).toMatch(/\{count\}.*\{list\}/);
+      }
+      expect(d["register.details.questionsFrom"], `${loc}: questionsFrom`).toContain("{org}");
+      for (const k of [
+        "register.who.email.invalid",
+        "register.who.playing.title",
+        "register.who.playing.body",
+        "register.details.you",
+        "register.field.optional",
+      ]) {
+        expect(typeof d[k], `${loc}: ${k}`).toBe("string");
+        expect(d[k]!.trim().length, `${loc}: ${k} is not empty`).toBeGreaterThan(0);
+      }
+      for (const k of ["register.self.label", "register.self.hint", "register.errors.email", "register.section.questions"]) {
+        expect(d[k], `${loc}: the retired ${k} is gone`).toBeUndefined();
+      }
+      checked++;
+    }
+    expect(checked, "anti-vacuity: all four locales").toBe(4);
+    const en = read("en");
+    expect(en["register.who.email.invalid"]).toBe("Enter an email address, like name@example.com");
+    expect(en["register.who.playing.title"]).toBe("I'm one of the players");
+    expect(en["register.details.you"]).toBe("That's you. Change it on the Contact step.");
+    expect(en["register.field.optional"]).toBe("Optional");
   });
 });

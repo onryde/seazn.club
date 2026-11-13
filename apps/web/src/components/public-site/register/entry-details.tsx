@@ -11,7 +11,7 @@ import type { EligibilityIssue } from "@/lib/registration-rules";
 import type { CartAction } from "./cart";
 import { rosterEligibilityForDivision, rosterIssueMessageKey } from "./eligibility-presentation";
 import { FormFields } from "./form-fields";
-import { effectiveSelfPlayers } from "./roster";
+import { contactRowIndex, effectiveSelfPlayers } from "./roster";
 import { RosterTable } from "./roster-table";
 import { FIELD, FIELD_LABEL as LABEL } from "./styles";
 import type { CartEntry, ContactState, DivisionLike } from "./types";
@@ -38,6 +38,7 @@ export function EntryDetails({
   isSelfEntry,
   selfPlayerIndex,
   seasonStartYear,
+  orgName,
   dispatch,
   importText,
   onImportTextChange,
@@ -55,6 +56,8 @@ export function EntryDetails({
   isSelfEntry: boolean;
   selfPlayerIndex: number | null;
   seasonStartYear: number;
+  /** The organiser's name, for the questions heading ("Questions from {org}"). */
+  orgName: string;
   dispatch: (action: CartAction) => void;
   /** This entry's paste-roster draft — see roster-table.tsx's header for
    *  why it's controlled from RegisterStepper rather than local state. */
@@ -100,6 +103,8 @@ export function EntryDetails({
   const rowIssues = issuesByPlayerIndex(verdict.issues);
   const mixedUnmet = verdict.issues.some((i) => i.code === "MIXED_NEEDS_BOTH_GENDERS");
   const showSelfPicker = isSelfEntry && entry.entrant_kind !== "individual";
+  // B2 T9: the contact's own row is shown read-only ("That's you"), when the entry really has one (roster.ts contactRowIndex).
+  const contactRow = contactRowIndex(entry, contact);
 
   return (
     <div className="min-w-0 rounded-xl border border-zinc-200/80 bg-surface p-4 shadow-sm sm:p-6">
@@ -111,6 +116,7 @@ export function EntryDetails({
           requiresDob={division.requires_dob}
           requiresGender={division.requires_gender}
           issuesByRow={rowIssues}
+          contactRow={contactRow}
           importText={importText}
           onImportTextChange={onImportTextChange}
           onAddPlayer={() => dispatch({ type: "ADD_PLAYER", id: entry.id })}
@@ -187,6 +193,7 @@ export function EntryDetails({
             fields={division.form_fields}
             answers={entry.answers}
             entryId={entry.id}
+            orgName={orgName}
             // Per-key patch — the REDUCER owns the merge against its own
             // state (cart.ts's SET_ANSWER), not a whole object built here
             // from the render-time `entry` closure (fix wave finding #1:

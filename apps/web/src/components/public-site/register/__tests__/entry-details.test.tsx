@@ -26,12 +26,12 @@
 // EntryDetails), so it's called directly — no renderIsland, no jsdom (this
 // workspace has none, _hook-harness.tsx's own header).
 import { describe, expect, it, vi } from "vitest";
-import { propsOf, walk } from "@/components/__tests__/_hook-harness";
+import { propsOf, textOf, walk } from "@/components/__tests__/_hook-harness";
 import { cartReducer, type CartAction } from "../cart";
 import { EntryDetails } from "../entry-details";
 import { FormFields } from "../form-fields";
 import { RosterTable } from "../roster-table";
-import { EMPTY_CONTACT, EMPTY_ROSTER_PLAYER, type CartEntry, type CartState, type DivisionLike } from "../types";
+import { EMPTY_CONTACT, EMPTY_ROSTER_PLAYER, type CartEntry, type CartState, type DivisionLike, type FormFieldDef } from "../types";
 
 vi.mock("@/components/i18n/dict-provider", () => ({
   useT: () => (key: string) => key,
@@ -97,6 +97,7 @@ function fireTwoAnswerChanges(entry: CartEntry): CartState {
       isSelfEntry: false,
       selfPlayerIndex: null,
       seasonStartYear: 2026,
+      orgName: "Test Org",
       dispatch,
       importText: "",
       onImportTextChange: () => {},
@@ -156,6 +157,7 @@ describe("EntryDetails — the self-row picker says when it is the thing blockin
         isSelfEntry: true,
         selfPlayerIndex,
         seasonStartYear: 2026,
+        orgName: "Test Org",
         dispatch: () => {},
         importText: "",
         onImportTextChange: () => {},
@@ -202,6 +204,7 @@ describe("EntryDetails — a solo sign-up's card collects the player", () => {
         isSelfEntry: false,
         selfPlayerIndex: null,
         seasonStartYear: 2026,
+        orgName: "Test Org",
         dispatch,
         importText: "",
         onImportTextChange: () => {},
@@ -248,5 +251,228 @@ describe("EntryDetails — a solo sign-up's card collects the player", () => {
     (propsOf(roster!).onUpdatePlayer as (i: number, patch: object) => void)(0, { full_name: "Priya Raman" });
     const state = actions.reduce<CartState>((st, a) => cartReducer(st, a), { entries: [entry] });
     expect(state.entries[0]!.players).toEqual([{ ...EMPTY_ROSTER_PLAYER, full_name: "Priya Raman" }]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Registration redesign B2 T9 — the contact's own row is read-only on Details ("That's you. Change it on the Contact step."), and
+// ONLY when it truly is theirs. The row is the one the entry's self link resolves to (individual -> row 0, pair/team -> the pick) AND
+// it carries the contact's own name: showing a lock and "That's you" on a row named something else would be a lie, and a locked row
+// whose name drifted from the contact (details-seed.ts seeds blank rows only, so a rename after the first visit never reaches it)
+// would be a dead end. The expectations are written per case below, never computed from the rule under test.
+// ---------------------------------------------------------------------------
+
+describe("EntryDetails — the contact's own row is read-only, and only when it really is the contact's (B2 T9)", () => {
+  const CONTACT = { ...EMPTY_CONTACT, name: "Alex Test" };
+  const row = (full_name: string) => ({ ...EMPTY_ROSTER_PLAYER, full_name });
+
+  function render(entry: CartEntry, contact = CONTACT) {
+    const tree = walk(
+      EntryDetails({
+        entry,
+        division: DIVISION,
+        contact,
+        isSelfEntry: entry.registering_self,
+        selfPlayerIndex: entry.self_player_index,
+        seasonStartYear: 2026,
+        orgName: "Test Org",
+        dispatch: () => {},
+        importText: "",
+        onImportTextChange: () => {},
+      }),
+    );
+    const rosterEl = tree.find((el) => el.type === RosterTable);
+    expect(rosterEl, "the card renders the roster").toBeTruthy();
+    // The consumer: the roster rendered from the props EntryDetails handed it (RosterTable is hookless, called directly).
+    const cells = walk(RosterTable(propsOf(rosterEl!) as unknown as Parameters<typeof RosterTable>[0]));
+    const nameInputs = cells
+      .filter((el) => propsOf(el)["data-testid"] === "reg-roster-name")
+      .sort((a, b) => Number(propsOf(a)["data-player-row"]) - Number(propsOf(b)["data-player-row"]));
+    const notes = cells.filter((el) => propsOf(el).children === "register.details.you");
+    return { rosterEl: rosterEl!, nameInputs, notes };
+  }
+
+  const CASES: {
+    name: string;
+    entry: CartEntry;
+    contact?: typeof CONTACT;
+    readOnlyRows: number[];
+  }[] = [
+    {
+      name: "an individual registering themselves: row 0 is the contact's",
+      entry: makeEntry({ entrant_kind: "individual", registering_self: true, players: [row("Alex Test")] }),
+      readOnlyRows: [0],
+    },
+    {
+      name: "the match ignores stray spaces on either side",
+      entry: makeEntry({ entrant_kind: "individual", registering_self: true, players: [row("Alex Test  ")] }),
+      contact: { ...CONTACT, name: "  Alex Test" },
+      readOnlyRows: [0],
+    },
+    {
+      name: "an individual NOT registering themselves who shares the contact's name is somebody else's row",
+      entry: makeEntry({ entrant_kind: "individual", registering_self: false, players: [row("Alex Test")] }),
+      readOnlyRows: [],
+    },
+    {
+      name: "a row whose name is no longer the contact's (renamed on Contact after the seed) stays editable, with no 'That's you'",
+      entry: makeEntry({ entrant_kind: "individual", registering_self: true, players: [row("Alx Test")] }),
+      readOnlyRows: [],
+    },
+    {
+      name: "a pair: only the picked row (Player 2) is the contact's",
+      entry: makeEntry({
+        entrant_kind: "pair",
+        registering_self: true,
+        self_player_index: 1,
+        players: [row("Sam Reid"), row("Alex Test")],
+      }),
+      readOnlyRows: [1],
+    },
+    {
+      name: "a pair with the pick on Player 1: Player 2 stays editable",
+      entry: makeEntry({
+        entrant_kind: "pair",
+        registering_self: true,
+        self_player_index: 0,
+        players: [row("Alex Test"), row("Sam Reid")],
+      }),
+      readOnlyRows: [0],
+    },
+    {
+      name: "a team whose captain has not picked their row yet locks nothing, even if a row carries their name",
+      entry: makeEntry({ entrant_kind: "team", registering_self: true, self_player_index: null, players: [row("Alex Test")] }),
+      readOnlyRows: [],
+    },
+    {
+      name: "a team: the picked row is the contact's, the squad is not",
+      entry: makeEntry({
+        entrant_kind: "team",
+        registering_self: true,
+        self_player_index: 0,
+        players: [row("Alex Test"), row("Bo Lin")],
+      }),
+      readOnlyRows: [0],
+    },
+    {
+      name: "a solo sign-up has its own flow (the row may be someone else's): never locked",
+      entry: makeEntry({ entrant_kind: "team", free_agent: true, registering_self: true, players: [row("Alex Test")] }),
+      readOnlyRows: [],
+    },
+    {
+      name: "a blank contact name never locks a blank row (the empty case)",
+      entry: makeEntry({ entrant_kind: "individual", registering_self: true, players: [row("")] }),
+      contact: { ...CONTACT, name: "" },
+      readOnlyRows: [],
+    },
+  ];
+
+  it.each(CASES)("$name", ({ entry, contact, readOnlyRows }) => {
+    const { rosterEl, nameInputs, notes } = render(entry, contact);
+    expect(nameInputs.length, "anti-vacuity: every row rendered its name input").toBe(entry.players.length);
+    const locked = nameInputs.filter((el) => propsOf(el).readOnly === true).map((el) => Number(propsOf(el)["data-player-row"]));
+    expect(locked).toEqual(readOnlyRows);
+    expect(notes.length, "one 'That's you' note per locked row, none otherwise").toBe(readOnlyRows.length);
+    expect(propsOf(rosterEl).contactRow ?? null, "the seam: the roster is told which row it is").toBe(readOnlyRows[0] ?? null);
+    for (const el of nameInputs) {
+      expect(propsOf(el)["data-testid"], "a locked row keeps the e2e hook").toBe("reg-roster-name");
+    }
+  });
+
+  it("a locked row still has a name the registrant can read: the row's own value, and its note describes it", () => {
+    const entry = makeEntry({ entrant_kind: "individual", registering_self: true, players: [row("Alex Test")] });
+    const { nameInputs, notes } = render(entry);
+    const input = nameInputs[0]!;
+    expect(propsOf(input).value).toBe("Alex Test");
+    expect(propsOf(input)["aria-describedby"], "the input is described by the note").toBe(propsOf(notes[0]!).id);
+  });
+
+  it("an editable row has no note to be described by", () => {
+    const entry = makeEntry({ entrant_kind: "individual", registering_self: false, players: [row("")] });
+    const { nameInputs } = render(entry);
+    expect(propsOf(nameInputs[0]!)["aria-describedby"]).toBeUndefined();
+    expect(propsOf(nameInputs[0]!).readOnly).not.toBe(true);
+  });
+});
+
+// B2 T9 — the organiser's questions: an "Optional" tag on the ones that may be skipped, none on the required ones, and a heading
+// that names who is asking. No questions, no heading.
+describe("FormFields / EntryDetails — organiser questions (B2 T9)", () => {
+  const FIELDS: FormFieldDef[] = [
+    { key: "shirt", label: "Shirt size", kind: "text", required: false },
+    { key: "diet", label: "Dietary needs", kind: "select", options: ["None", "Vegetarian"], required: true },
+    { key: "ack", label: "Court rules acknowledged", kind: "checkbox", required: false },
+    { key: "emergency", label: "Emergency contact", kind: "text", required: true },
+    { key: "waiver", label: "Waiver accepted", kind: "checkbox", required: true },
+    { key: "pick", label: "Preferred slot", kind: "select", options: ["AM", "PM"], required: false },
+  ];
+
+  function renderFields(fields: readonly FormFieldDef[]) {
+    return walk(FormFields({ fields, answers: {}, onChange: () => {}, entryId: "e1", orgName: "Test Org" }));
+  }
+  /** The label a field is announced by: `label[for]` for a text/select, the wrapping label for a checkbox. */
+  function labelOf(tree: ReturnType<typeof walk>, f: FormFieldDef) {
+    const labels = tree.filter((el) => el.type === "label");
+    return f.kind === "checkbox"
+      ? labels.find((l) => textOf(l).includes(f.label))
+      : labels.find((l) => propsOf(l).htmlFor === `reg-field-e1-${f.key}`);
+  }
+
+  it("an optional question carries the Optional tag and a required one does not (every kind)", () => {
+    const tree = renderFields(FIELDS);
+    let tagged = 0;
+    let untagged = 0;
+    for (const f of FIELDS) {
+      const label = labelOf(tree, f);
+      expect(label, `no label found for ${f.key}`).toBeTruthy();
+      const hasTag = textOf(label!).includes("register.field.optional");
+      expect(hasTag, `${f.key} (${f.kind}, required=${f.required})`).toBe(!f.required);
+      if (hasTag) tagged++;
+      else untagged++;
+    }
+    expect(tagged, "anti-vacuity: the fixture has optional questions").toBe(FIELDS.filter((f) => !f.required).length);
+    expect(untagged, "anti-vacuity: and required ones").toBe(FIELDS.filter((f) => f.required).length);
+    expect(tagged).toBeGreaterThan(0);
+    expect(untagged).toBeGreaterThan(0);
+  });
+
+  it("the questions sit under a heading that names the organiser", () => {
+    const tree = renderFields(FIELDS);
+    const headings = tree.filter((el) => el.type === "h4");
+    expect(headings).toHaveLength(1);
+    expect(textOf(headings[0]!)).toBe("register.details.questionsFrom");
+    expect(tree.some((el) => textOf(el) === "register.section.questions"), "the old generic heading is gone").toBe(false);
+  });
+
+  function renderCard(form_fields: FormFieldDef[]) {
+    return walk(
+      EntryDetails({
+        entry: makeEntry(),
+        division: { ...DIVISION, form_fields },
+        contact: EMPTY_CONTACT,
+        isSelfEntry: false,
+        selfPlayerIndex: null,
+        seasonStartYear: 2026,
+        orgName: "Test Org",
+        dispatch: () => {},
+        importText: "",
+        onImportTextChange: () => {},
+      }),
+    );
+  }
+
+  it("the card hands FormFields the organiser's name (the heading's {org})", () => {
+    const el = renderCard(FIELDS).find((e) => e.type === FormFields);
+    expect(el, "FormFields rendered").toBeTruthy();
+    expect(propsOf(el!).orgName).toBe("Test Org");
+  });
+
+  it("zero organiser questions render no Questions heading at all (the empty case)", () => {
+    const tree = renderCard([]);
+    expect(tree.some((e) => e.type === FormFields), "no questions block").toBe(false);
+    expect(renderFields([]), "and FormFields itself renders nothing for an empty list, heading included").toHaveLength(0);
+    // Its positive pair, so the absence above is the card's choice and not a card that renders no headings at all.
+    expect(renderCard(FIELDS).filter((e) => e.type === FormFields)).toHaveLength(1);
+    expect(tree.some((e) => e.type === "h3"), "the card's own title is there either way").toBe(true);
   });
 });

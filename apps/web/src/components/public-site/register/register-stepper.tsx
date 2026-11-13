@@ -169,6 +169,11 @@ export function RegisterStepper({
   const [cart, setCart] = useState<CartState>(EMPTY_CART);
   const [stepIndex, setStepIndex] = useState(0);
   const [whoAttempted, setWhoAttempted] = useState(false);
+  // B2 T9: how many times Continue has failed on Contact. The error summary (step-who.tsx) is focused from an effect keyed on THIS,
+  // not on `whoAttempted`: that flips once, so a second failed Continue (the registrant fixed one field and tried again) would
+  // stay silent. The ref is the summary's own element, handed down through StepWho; it exists only while something is wrong.
+  const [whoFailedContinues, setWhoFailedContinues] = useState(0);
+  const whoSummaryRef = useRef<HTMLDivElement>(null);
   const [entriesAttempted, setEntriesAttempted] = useState(false);
   const [detailsAttempted, setDetailsAttempted] = useState(false);
   const [consentAttempted, setConsentAttempted] = useState(false);
@@ -316,6 +321,12 @@ export function RegisterStepper({
     setCart(clearSelfLinkWhenNotPlaying(autoLinkObviousSelf(cart, imPlaying), imPlaying));
   }
 
+  // B2 T9: a failed Continue on Contact moves focus to the error summary (a role=alert box naming what is wrong). By the time this
+  // runs the render that mounted the summary has committed, so the ref is attached. A failure count of 0 is "never failed": nothing to focus.
+  useEffect(() => {
+    if (whoFailedContinues > 0) whoSummaryRef.current?.focus();
+  }, [whoFailedContinues]);
+
   // Review finding #2 (MEDIUM) — move focus to the new step's own heading
   // on a REAL step transition (goNext/goBack), never on the initial mount
   // (including a restored snapshot that lands straight on a later step —
@@ -434,6 +445,7 @@ export function RegisterStepper({
     if (currentStep === "entries") setEntriesAttempted(true);
     if (currentStep === "details") setDetailsAttempted(true);
     if (currentStep === "consent") setConsentAttempted(true);
+    if (!canGoNext && currentStep === "who") setWhoFailedContinues((n) => n + 1);
     if (!canGoNext) return;
     // P4 (W1, W3): moving INTO details seeds its rows from the contact and the pair partner (details-seed.ts — blank rows only, so
     // going Back and Next again never overwrites what the registrant typed there).
@@ -538,6 +550,7 @@ export function RegisterStepper({
           onImPlayingChange={setImPlaying}
           requirements={requirements}
           errors={whoAttempted ? contactValidation.errors : {}}
+          summaryRef={whoSummaryRef}
         />
       )}
 
@@ -568,6 +581,7 @@ export function RegisterStepper({
             dispatch={dispatchCart}
             contact={contact}
             seasonStartYear={seasonStartYear}
+            orgName={info.org.name}
             importTextByEntry={importTextByEntry}
             onImportTextChange={(entryId, text) => setImportTextByEntry((m) => ({ ...m, [entryId]: text }))}
           />

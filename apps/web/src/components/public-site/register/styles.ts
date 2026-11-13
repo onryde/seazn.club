@@ -42,8 +42,21 @@ export const BTN_GHOST =
 export const BTN_TEXT =
   "font-display text-xs font-semibold uppercase tracking-wide text-ink-muted transition hover:text-accent-strong disabled:cursor-not-allowed disabled:opacity-40";
 
+/** The form control. `aria-invalid` is the single hook for the danger state (B2 T9): every field in this tree that sets the attribute gets
+ *  the red border and a red focus ring from here, so what is drawn and what a screen reader is told cannot disagree. The compound
+ *  `aria-invalid:focus:` forms keep the red on focus, where the plain `focus:border-accent` would otherwise win. */
 export const FIELD =
-  "w-full rounded-lg border border-zinc-200 bg-white px-3 py-2.5 text-sm text-ink outline-none transition placeholder:text-ink-muted/70 focus:border-accent focus:ring-2 focus:ring-accent-soft";
+  "w-full rounded-lg border border-zinc-200 bg-white px-3 py-2.5 text-sm text-ink outline-none transition placeholder:text-ink-muted/70 focus:border-accent focus:ring-2 focus:ring-accent-soft aria-invalid:border-red-600 aria-invalid:focus:border-red-600 aria-invalid:focus:ring-red-100";
+
+/** Added to FIELD on an `<input readOnly>` (B2 T9: the contact's own row on Details): the canvas fill and a plain cursor say "not for
+ *  typing" while the field keeps its box, its focus ring and its text colour. Spelled with `read-only:` on purpose and NOT folded into
+ *  FIELD: `:read-only` matches every `<select>` too, which would grey all of them. */
+export const FIELD_READONLY = "read-only:cursor-default read-only:bg-canvas";
+
+/** A small neutral tag beside a label ("Optional"). Sentence case and untracked, so it reads the same inside FIELD_LABEL's uppercase
+ *  tracking; the canvas fill and zinc-200 hairline are the roster row's own (roster-table.tsx). */
+export const TAG_NEUTRAL =
+  "inline-flex items-center rounded-full border border-zinc-200 bg-canvas px-2 py-0.5 text-[11px] font-medium normal-case tracking-normal text-ink-muted";
 
 export const FIELD_LABEL =
   "mb-1.5 block font-display text-[11px] font-semibold uppercase tracking-wider text-ink-muted";

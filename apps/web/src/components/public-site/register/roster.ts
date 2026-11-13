@@ -130,6 +130,30 @@ export function resolveSelfPlayerIndex(
   return entry.self_player_index ?? (entry.entrant_kind === "individual" && entry.players.length === 1 ? 0 : null);
 }
 
+/**
+ * The roster row Details shows read-only as the contact's own ("That's you. Change it on the Contact step."), or `null` when no row
+ * qualifies (B2 T9). Three things must hold, because the lock is a CLAIM about that row:
+ *  - the entry is linked to the contact (`registering_self`) and is not a solo sign-up, whose row may be somebody else's
+ *    (`soloRowIsContact`, final fix m4) and has its own flow;
+ *  - the link resolves to a row (`resolveSelfPlayerIndex`: an individual's row 0, a pair's or team's pick);
+ *  - that row carries the contact's own name (trimmed). Not an assumption: `details-seed.ts` fills a blank row once and never
+ *    overwrites, so a contact renamed after the first visit leaves the old name on the row. Locking it would show a name that is no
+ *    longer theirs with "That's you" under it, and leave the registrant no way to fix it; the row stays editable until it matches.
+ * A blank contact name never qualifies: an empty row would otherwise "match" it.
+ */
+export function contactRowIndex(
+  entry: Pick<CartEntry, "registering_self" | "self_player_index" | "entrant_kind" | "players"> & { free_agent?: boolean },
+  contact: Pick<ContactState, "name">,
+): number | null {
+  if (!entry.registering_self || entry.free_agent) return null;
+  const name = contact.name.trim();
+  if (name === "") return null;
+  const index = resolveSelfPlayerIndex(entry);
+  if (index === null) return null;
+  const row = entry.players[index];
+  return row !== undefined && row.full_name.trim() === name ? index : null;
+}
+
 /** A solo sign-up's row is the contact's own while it carries their name (trimmed, spacing and case aside) or no name yet - the form
  *  seeds it from the contact. Mirrors `sameName` in registration-submit.ts. */
 export function soloRowIsContact(rowName: string, contactName: string): boolean {

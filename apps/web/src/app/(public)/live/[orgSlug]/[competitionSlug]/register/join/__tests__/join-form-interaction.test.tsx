@@ -53,7 +53,7 @@ import { join as pathJoin } from "node:path";
 import type { ReactElement, ReactNode } from "react";
 import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
 import { ApiV1Error } from "@/lib/client-v1";
-import { t as tRuntime } from "@/lib/i18n-runtime";
+import { plural as pluralRuntime, t as tRuntime } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";
 import { StepConsent } from "@/components/public-site/register/step-consent";
 import { StepWho } from "@/components/public-site/register/step-who";
@@ -68,6 +68,9 @@ const EN_UI: Dict = JSON.parse(
 
 vi.mock("@/components/i18n/dict-provider", () => ({
   useT: () => (key: string, vars?: Record<string, string | number>) => tRuntime(EN_UI, key, vars),
+  // StepWho's error summary counts its problems (register.errors.summary.one/.other).
+  usePlural: () => (key: string, count: number, vars?: Record<string, string | number>) =>
+    pluralRuntime(EN_UI, key, count, "en", vars),
 }));
 
 type ComponentFn = (props: Record<string, unknown>) => ReactNode;
@@ -173,7 +176,7 @@ describe("slot picker", () => {
 });
 
 // ---------------------------------------------------------------------------
-// StepWho reuse — no "I'm registering myself" toggle on the join page
+// StepWho reuse — no "I'm one of the players" toggle on the join page
 // ---------------------------------------------------------------------------
 
 describe("StepWho reuse (showSelfToggle=false) — the join page never asks 'I'm playing'", () => {
@@ -181,7 +184,7 @@ describe("StepWho reuse (showSelfToggle=false) — the join page never asks 'I'm
     const { pageText, island } = mount();
     expect(pageText()).toContain("Your name");
     expect(pageText()).toContain("Email");
-    expect(pageText()).not.toContain("I'm registering myself");
+    expect(pageText()).not.toContain("I'm one of the players");
     const checkboxes = island.tree().filter((e) => e.type === "input" && propsOf(e).type === "checkbox");
     // Privacy + media consent checkboxes only (2) — no self-toggle checkbox.
     expect(checkboxes).toHaveLength(2);
