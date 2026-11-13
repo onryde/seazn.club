@@ -6722,6 +6722,7 @@
   "register.status.entry.awaitingTeamDeadline": "Si nadie te asigna a un equipo antes del {date}, se te reembolsará automáticamente.",
   "register.status.entry.assignedToTeam": "Asignado a {team}",
   "register.status.waitlisted.note": "Estás en lista de espera — no se debe ninguna cuota a menos que te promocionen.",
+  "register.status.waitlistPosition": "Eres el n.º {n} en la lista de espera",
   "register.status.waiting.payment": "Aún sin confirmar: a la espera del pago.",
   "register.status.waiting.approval": "Aún sin confirmar: a la espera de que el organizador apruebe esta inscripción.",
   "register.status.waiting.payment_and_approval": "Aún sin confirmar: a la espera del pago y de que el organizador apruebe esta inscripción.",

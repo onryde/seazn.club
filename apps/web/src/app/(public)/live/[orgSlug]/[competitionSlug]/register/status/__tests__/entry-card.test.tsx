@@ -56,6 +56,7 @@ function baseProps(): EntryCardProps {
       approval: "auto",
       approved: false,
       fee_if_promoted_cents: null,
+      waitlist_position: null,
       division_youth: false,
       division_player_name_display: null,
       players: [
@@ -287,4 +288,63 @@ describe("EntryCard — the deadline is written in the page's locale", () => {
       expect(html).not.toContain("IST");
     });
   }
+});
+
+// Registration redesign B3 T13: a waitlisted card says WHERE in the queue the entry is - "You're #{n} on the waiting list" - in place of
+// the bare waitlisted note (spec §4.2). The place is the read model's (`waitlist_position`, counted in the order promotion takes the
+// queue - registration-waitlist-position.test.ts); the expected words are the dictionaries', filled by the runtime `t`.
+describe("EntryCard — a waitlisted entry's place in the queue (B3 T13)", () => {
+  const UI = { en: uiEn, es: uiEs, fr: uiFr, nl: uiNl } as const;
+  const unescape = (s: string) => s.replace(/&#x27;/g, "'").replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, "&");
+  const render = (over: Partial<EntryCardProps["entry"]>, locale: keyof typeof UI = "en") => {
+    const props = baseProps();
+    return unescape(
+      renderToStaticMarkup(<EntryCard {...props} locale={locale} ui={UI[locale] as Dict} entry={{ ...props.entry, ...over }} />),
+    );
+  };
+  const raw = (locale: keyof typeof UI, key: string): string => {
+    const value = (UI[locale] as Record<string, string>)[key];
+    expect(typeof value, `premise: ${locale} has ${key}`).toBe("string");
+    return value!;
+  };
+
+  it("en, typed: You're #2 on the waiting list - and the bare note gives way to it", () => {
+    const html = render({ status: "waitlisted", waitlist_position: 2 });
+    expect(html).toContain("You're #2 on the waiting list");
+    expect(html).toContain('data-testid="reg-status-waitlist-position"');
+    expect(html).toContain('data-waitlist-position="2"');
+    expect(html).not.toContain(raw("en", "register.status.waitlisted.note"));
+  });
+
+  it("each locale states the place in its own words, with the number filled in", () => {
+    let judged = 0;
+    for (const locale of ["en", "es", "fr", "nl"] as const) {
+      const sentence = raw(locale, "register.status.waitlistPosition");
+      expect(sentence, `premise: ${locale} names the place`).toContain("{n}");
+      const html = render({ status: "waitlisted", waitlist_position: 7 }, locale);
+      expect(html, locale).toContain(sentence.replace("{n}", "7"));
+      expect(html, `${locale}: no unfilled placeholder`).not.toContain("{n}");
+      judged += 1;
+    }
+    expect(judged, "anti-vacuity: four locales").toBe(4);
+  });
+
+  it("the place tracks the entry (a different number renders a different line)", () => {
+    expect(render({ status: "waitlisted", waitlist_position: 3 })).toContain("You're #3 on the waiting list");
+    expect(render({ status: "waitlisted", waitlist_position: 3 })).not.toContain("You're #2");
+  });
+
+  it("a waitlisted entry with no known place keeps the waitlisted note and invents no number", () => {
+    const html = render({ status: "waitlisted", waitlist_position: null });
+    expect(html).toContain(raw("en", "register.status.waitlisted.note"));
+    expect(html).not.toContain('data-testid="reg-status-waitlist-position"');
+  });
+
+  it("an entry that is not waitlisted shows no place, even if one were set (the status gates it, not just the field)", () => {
+    for (const status of ["pending", "confirmed"] as const) {
+      const html = render({ status, waitlist_position: 2 });
+      expect(html, status).not.toContain('data-testid="reg-status-waitlist-position"');
+      expect(html, status).not.toContain("on the waiting list");
+    }
+  });
 });

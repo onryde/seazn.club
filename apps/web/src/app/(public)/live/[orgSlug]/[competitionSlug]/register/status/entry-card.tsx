@@ -116,6 +116,10 @@ export interface EntryCardProps {
      *  The card itself does not print it; the page's Subtotal does (`cartSubtotal`). Carried on the entry so one shape
      *  travels from the read model to both. */
     fee_if_promoted_cents: number | null;
+    /** Registration redesign B3 T13: a waitlisted entry's place in its division's queue (`GroupEntryView.waitlist_position`, counted in
+     *  the order promotion takes it), null otherwise. REQUIRED for the reason `assigned_team_name` is: an omitted value would silently
+     *  fall back to the bare waitlisted note on every card. */
+    waitlist_position: number | null;
     /** RS008: this entry's OWN division's youth/player_name_display policy —
      *  see `rosterPlayerDisplayName` (view-model.ts) for why it travels with
      *  the entry rather than the cart. */
@@ -289,7 +293,20 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
       </div>
     );
   } else if (entry.status === "waitlisted") {
-    moneyNode = <p className="text-sm text-ink-muted">{t(ui, "register.status.waitlisted.note")}</p>;
+    // B3 T13 (spec §4.2): the entry's place in the queue replaces the bare note - the one fact a waiting registrant wants, set like
+    // the money slot's other primary figures. An unknown place (the read model always gives one) keeps the note.
+    moneyNode =
+      entry.waitlist_position !== null ? (
+        <p
+          data-testid="reg-status-waitlist-position"
+          data-waitlist-position={entry.waitlist_position}
+          className="text-sm font-semibold text-ink"
+        >
+          {t(ui, "register.status.waitlistPosition", { n: entry.waitlist_position })}
+        </p>
+      ) : (
+        <p className="text-sm text-ink-muted">{t(ui, "register.status.waitlisted.note")}</p>
+      );
   } else if (showsFeeLine) {
     // paid/confirmed (the only remaining entryCountsTowardTotal-true
     // statuses once pending is excluded — pending always lands in one of

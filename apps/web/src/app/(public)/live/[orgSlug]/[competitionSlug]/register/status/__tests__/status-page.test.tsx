@@ -86,6 +86,8 @@ const BASE_ENTRY = {
   approval: "auto" as "auto" | "manual",
   approved: false,
   fee_if_promoted_cents: null as number | null,
+  // B3 T13: a waitlisted entry's place in its division's queue (GroupEntryView.waitlist_position), null on every other entry.
+  waitlist_position: null as number | null,
   // RS008: this entry's own division youth/player_name_display policy —
   // threaded onto GroupEntryView (buildGroupStatusView, usecases/registrations/group-status.ts).
   division_youth: false,
@@ -146,6 +148,18 @@ describe("register status page (RS007 rebuild)", () => {
     // single pending entry's own fee.
     expect(html).toContain("£25.00");
     expect(usecaseMock.groupById).toHaveBeenCalledWith("g1", "tok");
+  });
+
+  // B3 T13: the read model's place reaches the waitlisted entry's own card through the page (the seam between `groupById` and
+  // `EntryCard`), and only that card: the pending entry beside it states none.
+  it("a waitlisted entry's place in the queue reaches its card, and only its card", async () => {
+    usecaseMock.groupById.mockResolvedValueOnce({
+      ...BASE_VIEW,
+      entries: BASE_VIEW.entries.map((e) => (e.status === "waitlisted" ? { ...e, waitlist_position: 4 } : e)),
+    });
+    const html = (await render({ rid: "g1", token: "tok" })).replace(/&#x27;/g, "'");
+    expect(html).toContain("You're #4 on the waiting list");
+    expect(html.match(/data-testid="reg-status-waitlist-position"/g)?.length, "one waitlisted card, one place").toBe(1);
   });
 
   // B2 T8 (spec §7.2): the org header scrolls away on a phone only where `data-register-flow` is on the page (the register stepper). The

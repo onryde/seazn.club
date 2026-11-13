@@ -4,7 +4,7 @@
 // Every assertion is a differential over the four shipped locales, never one sampled language: an untranslated key renders as its own
 // raw token, and a locale whose word order buries the greeting would pass a single-language test.
 import { describe, expect, it } from "vitest";
-import { getDictionary } from "@/lib/i18n";
+import { getDictionary, t } from "@/lib/i18n";
 import { LOCALES } from "@/lib/i18n-constants";
 import {
   paymentReminderTemplate,
@@ -12,6 +12,7 @@ import {
   registrationPromotedTemplate,
   registrationTemplate,
 } from "@/lib/email-templates";
+import { money } from "@/lib/email-templates/shared";
 
 const CONTACT = "Dana Captain";
 const TEAM = "Riverside Rovers";
@@ -198,7 +199,9 @@ describe("a single-entry confirmation says what the entry is waiting on (V2)", (
     expect(checked, "anti-vacuity: five waiting states judged").toBe(5);
   });
 
-  it.each(LOCALES)("%s: nothing waiting - a confirmed entry, a waitlisted one - carries no status line and no review note", async (locale) => {
+  // A waitlisted entry whose place the producer did not give (`waitlistPosition` absent) keeps the plain waitlist intro and no number;
+  // with its place it carries a status line - see "a waiting-list entry states its place" (B3 T13) at the end of this file.
+  it.each(LOCALES)("%s: nothing waiting - a confirmed entry, a waitlisted one with no known place - carries no status line and no review note", async (locale) => {
     const dict = await dictOf(locale);
     const statusPrefix = raw(dict, "registration.textSingleStatus").split("{status}")[0]!.trim();
     expect(statusPrefix.length, "premise: the status line has a lead-in word").toBeGreaterThan(0);
@@ -336,5 +339,71 @@ describe("a registrant mail never names the contact back to themselves as the en
     expect(own.confirmationCart!.text).toContain("Open Doubles — ");
     expect(own.confirmationCart!.text).toContain("Masters Doubles — ");
     expect(own.reminder!.text).toContain("Open Doubles");
+  });
+});
+
+// Registration redesign B3 T13 (owner ruling 2026-11-13): the confirmation states a waiting-list entry honestly - its place in the queue
+// and that nothing is charged now ("On the waiting list — position #N, not charged now"). The place is the producer's
+// (`buildCartMail` reads the status page's own count; registration-waitlist-position.test.ts drives it); the expected words are the
+// dictionaries', filled by `t`, never this template's output. A waitlisted entry can still carry a fee (a lapsed promotion keeps it,
+// an organiser-waitlisted entry never had it zeroed): its line prints no amount beside "not charged now".
+describe("a waiting-list entry states its place and that nothing is charged now (B3 T13)", () => {
+  const unescape = (s: string) => s.replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+  const args = { orgName: "Riverside Club", competitionName: "Spring Open", contactName: CONTACT, currency: "gbp", paymentInstructions: null, statusUrl: "https://seazn.club/s" };
+  const waiting = (divisionName: string, waitlistPosition: number | undefined, feeCents = 0) => ({
+    displayName: TEAM,
+    divisionName,
+    status: "waitlisted",
+    feeCents,
+    approval: "auto" as const,
+    ...(waitlistPosition === undefined ? {} : { waitlistPosition }),
+  });
+  const holding = { displayName: TEAM, divisionName: DIVISION, status: "pending", feeCents: 1500, approval: "auto" as const, waitlistPosition: null };
+  const RAW = /\{\w+\}|\bregistration\.[a-zA-Z]+\b/;
+
+  it.each(LOCALES)("%s: a single waiting entry's status line names its place, in the html and the text", async (locale) => {
+    const dict = await dictOf(locale);
+    const label = t(dict, "registration.entryStatusWaitlistedPosition", { position: 3 });
+    expect(label, "premise: the label carries the number").toContain("3");
+    const out = registrationTemplate({ ...args, entries: [waiting(DIVISION, 3)], totalCents: 0 }, dict, locale);
+    expect(out.text).toContain(t(dict, "registration.textSingleStatus", { status: label }));
+    expect(unescape(words(out.html))).toContain(label);
+    for (const part of [out.subject, out.html, out.text]) expect(part, `${locale}: no raw token`).not.toMatch(RAW);
+  });
+
+  it.each(LOCALES)("%s: a cart's waiting line names its own place and no amount, while the place-holding line keeps its fee", async (locale) => {
+    const dict = await dictOf(locale);
+    const out = registrationTemplate(
+      { ...args, entries: [holding, waiting("Masters Doubles", 2, 1500)], totalCents: 1500 },
+      dict,
+      locale,
+    );
+    const lineOf = (division: string) => out.text.split("\n").find((l) => l.includes(division));
+    const label = t(dict, "registration.entryStatusWaitlistedPosition", { position: 2 });
+    expect(lineOf("Masters Doubles"), `${locale}: the waiting line, whole`).toBe(
+      t(dict, "registration.entryLineNoFee", { displayName: TEAM, divisionName: "Masters Doubles", status: label }),
+    );
+    const fee = money(1500, "gbp", locale);
+    expect(lineOf(DIVISION), `${locale}: premise - the holding line prints its fee`).toContain(fee);
+    expect(lineOf("Masters Doubles"), `${locale}: nothing charged now, so no amount`).not.toContain(fee);
+    expect(unescape(words(out.html)), `${locale}: html carries the waiting line's place`).toContain(label);
+    for (const part of [out.subject, out.html, out.text]) expect(part, `${locale}: no raw token`).not.toMatch(RAW);
+  });
+
+  it.each(LOCALES)("%s: a waiting entry whose place is not known keeps the plain waitlisted word - no number is invented", async (locale) => {
+    const dict = await dictOf(locale);
+    const out = registrationTemplate({ ...args, entries: [holding, waiting("Masters Doubles", undefined)], totalCents: 1500 }, dict, locale);
+    const line = out.text.split("\n").find((l) => l.includes("Masters Doubles"));
+    expect(line).toBe(
+      t(dict, "registration.entryLineNoFee", { displayName: TEAM, divisionName: "Masters Doubles", status: t(dict, "registration.entryStatusWaitlisted") }),
+    );
+  });
+
+  it("en, typed: the owner's words", async () => {
+    const dict = await dictOf("en");
+    const single = registrationTemplate({ ...args, entries: [waiting(DIVISION, 2)], totalCents: 0 }, dict, "en");
+    expect(single.text).toContain("Status: On the waiting list — position #2, not charged now");
+    const cart = registrationTemplate({ ...args, entries: [holding, waiting("Masters Doubles", 4, 1500)], totalCents: 1500 }, dict, "en");
+    expect(cart.text).toContain("Riverside Rovers · Masters Doubles — On the waiting list — position #4, not charged now\n");
   });
 });

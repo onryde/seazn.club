@@ -1,5 +1,5 @@
 import "server-only";
-// Waitlist promotion: the seat gate, promote the oldest, the promoted notice (see ./index.ts).
+// Waitlist promotion: the queue order and a place in it, the seat gate, promote the oldest, the promoted notice (see ./index.ts).
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { SPOT_HOLDERS } from "@/lib/registration-status";
@@ -14,10 +14,36 @@ import { isLichessRosterRefusal } from "../external-accounts";
 import { openRegistrationSeatGate, type RegistrationSeatGate, type SeatGate } from "../online-seat-gate";
 import { loadEntrantShape } from "../entrant-shape";
 import { divisionTakesKind } from "@/lib/division-entrant-kinds";
-import type { Tx, RegistrationSettingsRow, RegistrationWithGroupRow, DivisionCtx } from "./types";
+import type { AnySql, Tx, RegistrationSettingsRow, RegistrationWithGroupRow, DivisionCtx } from "./types";
 import { regGroupCols, loadSettings } from "./lookups";
 import { materialise } from "./materialise";
 import { issuePayLink, recordPayToken } from "./pay-token";
+
+/** The waitlist's queue order, the ONE statement of it: oldest first by `coalesce(waitlisted_at, created_at)`, then `id` (V378/RS007 -
+ *  see `promoteOldestWaitlisted`'s doc comment for why a lapsed promotion sorts by `waitlisted_at`). A comma list of `alias`'s keys,
+ *  so it reads as an `order by` and, in parentheses, as a row value. `promoteOldestWaitlisted` takes the queue by it and
+ *  `waitlistPositionSql` counts by it: the place a registrant is told is the place promotion takes. */
+function waitlistQueueKey(db: AnySql, alias: string) {
+  const r = db(alias);
+  return db`coalesce(${r}.waitlisted_at, ${r}.created_at), ${r}.id`;
+}
+
+/** A registration's 1-based place in its division's waitlist, or null when it is not waitlisted - one SQL expression over the row
+ *  aliased `alias` (registration redesign B3 T13). The count is of the waitlisted rows of the same division ahead of it in the queue
+ *  order promotion takes (`waitlistQueueKey`), so #1 is the next `promoteOldestWaitlisted` picks. Read by every surface that states a
+ *  place: the status page (`buildGroupStatusView`), the organiser list, the public status API and the confirmation mail. Before it,
+ *  the list and the API counted by `(created_at, id)` and told a lapsed promotion it was first while promotion had put it last.
+ *
+ *  Promotion also passes over a row another transaction holds (`skip locked`) or the seat gate refuses (an online division); those
+ *  keep their place here, as they do in the queue, which offers them the next freed spot. */
+export function waitlistPositionSql(db: AnySql, alias: string) {
+  const r = db(alias);
+  return db`case when ${r}.status = 'waitlisted' then (
+      select count(*)::int + 1 from registrations ahead
+      where ahead.division_id = ${r}.division_id and ahead.status = 'waitlisted'
+        and (${waitlistQueueKey(db, "ahead")}) < (${waitlistQueueKey(db, alias)})
+    ) else null end`;
+}
 
 /** RS012 ruling 1 — a status leaving SPOT_HOLDERS only frees a TEAM slot
  *  when the entry itself was ever counted as one; a solo sign-up
@@ -54,7 +80,8 @@ export function freesTeamSlot(row: { status: string; free_agent: boolean }): boo
  * waitlist carries a fresh `waitlisted_at = now()`, which sorts it BEHIND
  * every row still waiting on its original `created_at` — the tail, not a
  * reclaimed place in line — even though its OWN `created_at` may be far
- * older than theirs.
+ * older than theirs. The order is `waitlistQueueKey`, the same one
+ * `waitlistPositionSql` counts a registrant's place by.
  */
 /**
  * REVIEW FIX (money-path defect #5) — `excludeId` is optional, additive, and
@@ -92,10 +119,10 @@ export async function promoteOldestWaitlisted(
   const skipped: string[] = excludeId ? [excludeId] : [];
   for (;;) {
     const [picked] = await tx<{ id: string; group_id: string; free_agent: boolean }[]>`
-      select id, group_id, free_agent from registrations
-      where division_id = ${divisionId} and status = 'waitlisted'
-        ${skipped.length > 0 ? tx`and id <> all(${skipped})` : tx``}
-      order by coalesce(waitlisted_at, created_at), id limit 1
+      select r.id, r.group_id, r.free_agent from registrations r
+      where r.division_id = ${divisionId} and r.status = 'waitlisted'
+        ${skipped.length > 0 ? tx`and r.id <> all(${skipped})` : tx``}
+      order by ${waitlistQueueKey(tx, "r")} limit 1
       for update skip locked`;
     if (!picked) return null;
     if (!seatGate) return promoteWaitlistedRow(tx, picked.id, picked.group_id, settings);

@@ -192,7 +192,9 @@ describe.skipIf(!HAS_DB)("dispute evidence pack", () => {
     // (its own row) — the CART widening is specifically in the confirmation
     // email reconstruction below it.
     expect(pack.html).toContain("Confirmed");
-    expect(pack.html).toContain("Waitlisted");
+    // B3 T13 (owner ruling 2026-11-13): the cart mail states a waiting entry's place and that nothing is charged now. The
+    // reconstruction reads the place LIVE (as it reads every status): the division's only waiter, so #1.
+    expect(pack.html).toContain("On the waiting list — position #1, not charged now");
     // paymentInstructions/payDeadline stay forced null in the reconstruction
     // (unchanged by this wave) — no stray "Pay now" button from a stale mint.
     expect(pack.html).not.toContain("Pay now");

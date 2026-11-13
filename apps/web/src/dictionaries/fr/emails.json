@@ -183,6 +183,7 @@
   "registration.entryStatusPaid": "Payée",
   "registration.entryStatusConfirmed": "Confirmée",
   "registration.entryStatusWaitlisted": "Liste d'attente",
+  "registration.entryStatusWaitlistedPosition": "Sur liste d'attente — position n° {position}, non facturé pour l'instant",
   "registration.entryStatusWithdrawn": "Retirée",
   "registration.entryStatusExpired": "Expirée",
   "registration.entryStatusRejected": "Refusée",

@@ -25,6 +25,11 @@ export interface RegistrationEmailEntry {
   /** The organiser approved this entry while its fee was owed (V513, polish wave P5 W12): it waits on payment alone. Absent = not
    *  approved, which is every entry at submit; the cart mail's rebuild (resend, dispute evidence) reads the live column. */
   approved?: boolean;
+  /** A WAITLISTED entry's 1-based place in its division's queue, as the status page states it (registration redesign B3 T13: the
+   *  producer, `buildCartMail`, reads `waitlistPositionSql`); null on every other entry. With it the entry says its place and that
+   *  nothing is charged now (owner ruling 2026-11-13). Absent or null on a waitlisted entry = place unknown: the plain waitlisted word,
+   *  no number invented. */
+  waitlistPosition?: number | null;
 }
 
 /** One entry's "forward these links" block of the confirmation mail (polish wave P6; labelled per person in waves I and K): one
@@ -104,7 +109,13 @@ const WAITING_KEYS = {
   payment_and_approval: "registration.entryStatusAwaitingPaymentApproval",
 } as const;
 
+/** A waitlisted entry with a known place in its queue (B3 T13): its line and status say the place and "not charged now". */
+const knownWaitlistPlace = (e: RegistrationEmailEntry): number | null =>
+  e.status === "waitlisted" && typeof e.waitlistPosition === "number" ? e.waitlistPosition : null;
+
 function entryStatusLabel(dict: Dict, e: RegistrationEmailEntry): string {
+  const place = knownWaitlistPlace(e);
+  if (place !== null) return t(dict, "registration.entryStatusWaitlistedPosition", { position: place });
   const waiting = entryWaitingOn(e.status, e.feeCents, e.approval, e.approved ?? false);
   if (waiting) {
     return t(dict, e.status === "paid" && waiting === "approval" ? "registration.entryStatusPaidAwaitingApproval" : WAITING_KEYS[waiting]);
@@ -125,7 +136,9 @@ function entryLine(dict: Dict, e: RegistrationEmailEntry, currency: string, loca
   const names = { displayName: e.displayName, divisionName: e.divisionName };
   // Sign-off V8: the contact's own entry is listed by its division alone.
   const own = isOwnEntry(e.displayName, contactName);
-  return e.feeCents > 0
+  // B3 T13: a waitlisted entry is charged nothing now, so its line prints no amount - even one the row still carries (a lapsed
+  // promotion keeps its fee for a late payment's refund; an organiser-waitlisted entry's was never zeroed).
+  return e.feeCents > 0 && e.status !== "waitlisted"
     ? t(dict, ownKey("registration.entryLineWithFee", own), { ...names, status, amount: money(e.feeCents, currency, locale) })
     : t(dict, ownKey("registration.entryLineNoFee", own), { ...names, status });
 }
@@ -187,7 +200,9 @@ export function registrationTemplate(
   // It never lists itself (below), so a manual-approval entry used to read "received" and, in the preheader, "is in" while the
   // organiser had not decided. A wait on the organiser also says they decide, and that the approval mail follows.
   const singleWaiting = single && !waitlisted ? entryWaitingOn(first.status, first.feeCents, first.approval, first.approved ?? false) : null;
-  const singleStatus = singleWaiting ? entryStatusLabel(dict, first) : null;
+  // B3 T13 (owner ruling 2026-11-13): a single waitlisted entry states its place and that nothing is charged now, in the same status
+  // line, when the producer gave its place.
+  const singleStatus = singleWaiting || (waitlisted && knownWaitlistPlace(first) !== null) ? entryStatusLabel(dict, first) : null;
   const reviewWait = singleWaiting === "approval" || singleWaiting === "payment_and_approval";
   const statusBlock = singleStatus
     ? paragraph(

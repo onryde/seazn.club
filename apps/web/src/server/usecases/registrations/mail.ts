@@ -23,6 +23,7 @@ import { log } from "@/server/logger";
 import { audit } from "../audit";
 import type { RegistrationRow, RegistrationGroupRow, RegistrationWithGroupRow, DivisionCtx } from "./types";
 import { loadSettings, divisionCtx, tokenMatchesHash, orgReg } from "./lookups";
+import { waitlistPositionSql } from "./waitlist";
 
 /**
  * Assembles the CART-shaped confirmation mail for one group — every
@@ -87,7 +88,8 @@ export async function buildCartMail(
 
   // Each entry with its division's name and review mode (polish wave W7): two entries for one person are otherwise the same line,
   // and "Pending" alone does not say whether the entry waits on a payment, an approval or both (`entryWaitingOn`). A division
-  // with no settings row reviews nothing by hand, the same default the submit path uses.
+  // with no settings row reviews nothing by hand, the same default the submit path uses. A waitlisted entry's place in its queue
+  // (registration redesign B3 T13, owner ruling 2026-11-13) is the one the status page states: `waitlistPositionSql`.
   const entries = await sql<
     {
       id: string;
@@ -98,10 +100,12 @@ export async function buildCartMail(
       division_name: string;
       approval: "auto" | "manual";
       approved: boolean;
+      waitlist_position: number | null;
     }[]
   >`
     select r.id, r.division_id, r.display_name, r.status, r.amount_cents,
-           d.name as division_name, coalesce(rs.approval, 'auto') as approval, r.approved_at is not null as approved
+           d.name as division_name, coalesce(rs.approval, 'auto') as approval, r.approved_at is not null as approved,
+           ${waitlistPositionSql(sql, "r")} as waitlist_position
     from registrations r
     join divisions d on d.id = r.division_id
     left join registration_settings rs on rs.division_id = r.division_id
@@ -177,6 +181,7 @@ export async function buildCartMail(
         feeCents: e.amount_cents,
         approval: e.approval,
         approved: e.approved,
+        waitlistPosition: e.waitlist_position,
       })),
       totalCents,
       currency: group.currency,

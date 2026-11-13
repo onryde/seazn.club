@@ -635,12 +635,13 @@ describe.skipIf(!HAS_DB)("POST .../register — DB-backed", () => {
     expect(saw[0]!.subject).toBe(row.subject);
     // Every entry is in it, with its OWN status (the waitlisted one carries no charge, by construction upstream) and the cart's total.
     // Each on its own line with its own status, the words from the dictionary: the card entry that holds the spot is awaiting
-    // payment (polish wave: the status word says what is owed, not a bare "Pending"), the second is waitlisted.
+    // payment (polish wave: the status word says what is owed, not a bare "Pending"), the second is waitlisted - and says where in the
+    // queue and that nothing is charged now (B3 T13, owner ruling 2026-11-13): the division's only waiter, so #1.
     const lineOf = (name: string) => saw[0]!.text.split("\n").filter((l) => l.includes(name));
     expect(lineOf("First In")).toHaveLength(1);
     expect(lineOf("Second In")).toHaveLength(1);
     expect(lineOf("First In")[0]).toContain(dictionarySubject("en", "registration.entryStatusAwaitingPayment", {}));
-    expect(lineOf("Second In")[0]).toContain(dictionarySubject("en", "registration.entryStatusWaitlisted", {}));
+    expect(lineOf("Second In")[0]).toContain(dictionarySubject("en", "registration.entryStatusWaitlistedPosition", { position: "1" }));
     expect(lineOf("Second In")[0], "a waitlisted entry carries no charge").not.toContain("£");
     expect(saw[0]!.text).toContain("£15.00");
   });

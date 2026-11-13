@@ -6722,6 +6722,7 @@
   "register.status.entry.awaitingTeamDeadline": "If nobody places you on a team by {date}, you'll be automatically refunded.",
   "register.status.entry.assignedToTeam": "Assigned to {team}",
   "register.status.waitlisted.note": "You're on the waitlist — no fee is due unless you're promoted.",
+  "register.status.waitlistPosition": "You're #{n} on the waiting list",
   "register.status.waiting.payment": "Not confirmed yet: waiting for payment.",
   "register.status.waiting.approval": "Not confirmed yet: waiting for the organiser to approve this entry.",
   "register.status.waiting.payment_and_approval": "Not confirmed yet: waiting for payment and for the organiser to approve this entry.",

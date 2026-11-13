@@ -8,6 +8,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { omit } from "@/lib/omit";
 import type { Tx, RegistrationSettingsRow, RegistrationWithGroupRow, AnySql } from "./types";
 import { regGroupCols } from "./lookups";
+import { waitlistPositionSql } from "./waitlist";
 
 // ---------------------------------------------------------------------------
 // Organiser: list / confirm / waitlist / withdraw / refund / export
@@ -228,10 +229,12 @@ type RawListRow = RegistrationListRow & { access_token_hash: string };
  * `sports` is joined INNER, not LEFT, unlike `registration_settings` above —
  * `divisions.sport_key` is `not null references sports(key)` (V209), so
  * every division has exactly one sport row and this join can never drop one.
- * `waitlist_position`'s subquery counts waitlisted SIBLINGS (same division)
- * whose `(created_at, id)` tuple sorts strictly before this row's own, +1 —
- * exactly `promoteOldestWaitlisted`'s (this file) own `order by created_at,
- * id limit 1`, so position 1 is that function's pick on a quiescent table.
+ * `waitlist_position` is `waitlistPositionSql` (registrations/waitlist.ts):
+ * the waitlisted SIBLINGS (same division) ahead of this row in the queue
+ * order `promoteOldestWaitlisted` takes, +1, so position 1 is that
+ * function's pick on a quiescent table. Registration redesign B3 T13: this
+ * used to count by `(created_at, id)`, which put a lapsed promotion (back on
+ * the TAIL by `waitlisted_at`) at the head of the list.
  *
  * It is a SNAPSHOT of that order, not a lock on it, and the difference is
  * reachable: `promoteOldestWaitlisted` picks `for update skip locked`, so
@@ -326,11 +329,7 @@ export async function listRegistrations(
           where ev.competition_id = c.id
             and ev.type = 'registration.payment_reminded'
             and ev.payload->>'registration_id' = r.id::text) as last_reminded_at,
-        case when r.status = 'waitlisted' then (
-          (select count(*)::int from registrations w
-            where w.division_id = r.division_id and w.status = 'waitlisted'
-              and (w.created_at, w.id) < (r.created_at, r.id)) + 1
-        ) else null end as waitlist_position
+        ${waitlistPositionSql(tx, "r")} as waitlist_position
       from registrations r
       join registration_groups g on g.id = r.group_id
       join divisions d on d.id = r.division_id

@@ -9,6 +9,7 @@ import type { RegistrationSettingsRow, RegistrationRow, RegistrationGroupRow } f
 import { loadSettings, DUMMY_ACCESS_HASH, tokenMatchesHash, GROUP_ID_RE } from "./lookups";
 import { type ResolvedRefundPolicy, resolveRefundPolicy } from "./refunds";
 import { effectivePoolDeadline } from "./list";
+import { waitlistPositionSql } from "./waitlist";
 
 // ---------------------------------------------------------------------------
 // Group read model — /r/[ref] status page, multi-entry (RS002 W5, RS007)
@@ -75,6 +76,10 @@ export interface GroupEntryView {
    *  `promoteWaitlistedRow` writes); `null` for every other entry (their own `amount_cents` is the figure). A waitlisted entry's stored
    *  fee is 0 by construction, so the Subtotal could only say "Free": this is what lets it say what is not yet due. */
   fee_if_promoted_cents: number | null;
+  /** Registration redesign B3 T13: a WAITLISTED entry's 1-based place in its division's queue, null for every other entry. Counted in
+   *  the order promotion takes the queue (`waitlistPositionSql`, registrations/waitlist.ts), the same place the organiser list, the
+   *  public status API and the confirmation mail state. */
+  waitlist_position: number | null;
   /** V378/RS007: this entry's OWN pay-by deadline when it was promoted out
    *  of the waitlist — null for a never-promoted entry, whose deadline is
    *  the CART's own `GroupStatusView.expires_at` instead (see
@@ -262,6 +267,7 @@ async function buildGroupStatusView(
            r.amount_cents, r.refunded_cents, r.late_refunded_cents, r.free_agent, r.join_code, r.promotion_expires_at,
            r.payment_intent_id as entry_payment_intent_id, r.approved_at is not null as approved,
            d.youth as division_youth, d.player_name_display as division_player_name_display,
+           ${waitlistPositionSql(sql, "r")} as waitlist_position,
            -- RS009: the team an organiser placed this solo sign-up on, or
            -- null while they are still in the pool. free_agent records how
            -- the entry was MADE and never flips back, so it cannot answer

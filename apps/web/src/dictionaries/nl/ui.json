@@ -6722,6 +6722,7 @@
   "register.status.entry.awaitingTeamDeadline": "Als niemand je vóór {date} in een team plaatst, word je automatisch terugbetaald.",
   "register.status.entry.assignedToTeam": "Toegewezen aan {team}",
   "register.status.waitlisted.note": "Je staat op de wachtlijst — er is geen bijdrage verschuldigd tenzij je wordt geplaatst.",
+  "register.status.waitlistPosition": "Je bent #{n} op de wachtlijst",
   "register.status.waiting.payment": "Nog niet bevestigd: wacht op betaling.",
   "register.status.waiting.approval": "Nog niet bevestigd: wacht op goedkeuring door de organisator.",
   "register.status.waiting.payment_and_approval": "Nog niet bevestigd: wacht op betaling en op goedkeuring door de organisator.",

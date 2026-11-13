@@ -6,6 +6,7 @@ import type { RegistrationSettingsRow, RegistrationRow, AnySql } from "./types";
 import { hashRegistrationToken } from "./helpers";
 import { loadSettings, divisionCtx, regByToken, regByRef, regByRefAndToken } from "./lookups";
 import { withdrawCore } from "./withdraw";
+import { waitlistPositionSql } from "./waitlist";
 
 // ---------------------------------------------------------------------------
 // Public: status / withdraw / resume payment (token-gated)
@@ -89,17 +90,12 @@ export async function publicRegistrationStatus(
   // never change what an in-flight registrant owes (spec issue #8).
   const paymentDue = reg.status === "pending" && reg.amount_cents > 0;
   const offline = reg.payment_method !== "stripe";
-  // Queue position (PROMPT-52): created_at-then-id order — identical to the
-  // oldest-first order auto-promotion consumes, so "#N" never lies.
-  // The row's own created_at is read back in SQL (not passed from JS): a JS
-  // Date truncates to ms while timestamptz keeps µs, and the tuple compare
-  // would then exclude the row itself.
+  // Queue position (PROMPT-52): the place promotion takes, `waitlistPositionSql` (registrations/waitlist.ts) - the one count every
+  // surface states. It used to count by `(created_at, id)` here, which told a lapsed promotion it was first while promotion had put it
+  // on the tail (registration redesign B3 T13). Read off the row in SQL, never from a JS Date (ms, where timestamptz keeps µs).
   const [posRow] = reg.status === "waitlisted"
-    ? await sql<{ position: number }[]>`
-        select count(*)::int as position from registrations r
-        where r.division_id = ${reg.division_id} and r.status = 'waitlisted'
-          and (r.created_at, r.id) <=
-              (select created_at, id from registrations where id = ${reg.id})`
+    ? await sql<{ position: number | null }[]>`
+        select ${waitlistPositionSql(sql, "r")} as position from registrations r where r.id = ${reg.id}`
     : [];
   return {
     id: reg.id,

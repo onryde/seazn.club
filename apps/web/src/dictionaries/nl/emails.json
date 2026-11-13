@@ -183,6 +183,7 @@
   "registration.entryStatusPaid": "Betaald",
   "registration.entryStatusConfirmed": "Bevestigd",
   "registration.entryStatusWaitlisted": "Op de wachtlijst",
+  "registration.entryStatusWaitlistedPosition": "Op de wachtlijst — positie #{position}, nu niet in rekening gebracht",
   "registration.entryStatusWithdrawn": "Ingetrokken",
   "registration.entryStatusExpired": "Verlopen",
   "registration.entryStatusRejected": "Afgewezen",
