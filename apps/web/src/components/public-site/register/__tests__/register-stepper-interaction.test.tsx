@@ -81,9 +81,10 @@ import { StepReview } from "../step-review";
 import { StepNav } from "../step-nav";
 import { buildStepOrder } from "../steps";
 import { StepWho } from "../step-who";
-import { FIELD } from "../styles";
+import { FIELD, TAG_NEUTRAL } from "../styles";
 import { REGISTER_STATE_VERSION } from "../storage";
-import { EMPTY_CONTACT, type CartState, type DivisionLike, type FormFieldDef } from "../types";
+import { reviewContent } from "../review-content";
+import { EMPTY_CONSENT, EMPTY_CONTACT, type CartState, type DivisionLike, type FormFieldDef } from "../types";
 import { EntrantKind } from "@/server/api-v1/schemas/common";
 
 const EN_UI: Dict = JSON.parse(
@@ -1798,7 +1799,7 @@ describe("step 4 — CONSENT", () => {
     });
 
     clickByText("Next"); // media consent never touched — must NOT block
-    expect(pageText()).toContain("Review & pay");
+    expect(pageText()).toContain("Review and pay");
   });
 
   it("states owner ruling 5 plainly, at the moment of consent", () => {
@@ -1840,7 +1841,7 @@ describe("step 4 — CONSENT", () => {
       target: { checked: true },
     });
     clickByText("Next"); // both given — unblocked
-    expect(pageText()).toContain("Review & pay");
+    expect(pageText()).toContain("Review and pay");
   });
 
   it("never shows the guardian block for an adult contact, even when self-registering", () => {
@@ -1874,7 +1875,7 @@ describe("step 4 — CONSENT", () => {
       target: { checked: true },
     });
     clickByText("Next"); // privacy given, guardian info still missing — must stay BLOCKED
-    expect(pageText(), "must not advance without guardian consent").not.toContain("Review & pay");
+    expect(pageText(), "must not advance without guardian consent").not.toContain("Review and pay");
     expect(pageText()).toContain("Guardian consent is required");
   });
 
@@ -1959,7 +1960,7 @@ describe("step 5 — REVIEW→PAY line items", () => {
     clickByText("Next"); // -> REVIEW
 
     const text = pageText();
-    expect(text).toContain("Review & pay");
+    expect(text).toContain("Review and pay");
     expect(text).toContain("Paid Singles");
     expect(text).toContain("Full Division");
     expect(text).toContain("Not charged now — pay only if you're promoted from the waitlist.");
@@ -3066,7 +3067,13 @@ describe("P4 - the REVIEW step labels each entry with its own payment method (W9
         self_player_index: null,
       })),
     };
-    const out = (StepReview as unknown as ComponentFn)({ summary: summarizeCart(cart, [CARD, OFFLINE]), locale: "en" });
+    const out = (StepReview as unknown as ComponentFn)({
+      summary: summarizeCart(cart, [CARD, OFFLINE]),
+      content: reviewContent(cart, [CARD, OFFLINE], EMPTY_CONTACT, EMPTY_CONSENT),
+      locale: "en",
+      order: buildStepOrder(2, "individual"),
+      onEdit: vi.fn(),
+    });
     const rows = lines(out);
     expect(rows).toHaveLength(2);
     const card = rows.find((r) => r.includes("Open Singles"))!;
@@ -3891,5 +3898,432 @@ describe("B2 T9 — the new copy is in every locale", () => {
     expect(en["register.who.playing.title"]).toBe("I'm one of the players");
     expect(en["register.details.you"]).toBe("That's you. Change it on the Contact step.");
     expect(en["register.field.optional"]).toBe("Optional");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Registration redesign B2 T10 (spec 7.3) - Consent and Review. Driven through the REAL stepper: the producers are the form's own
+// inputs and Edit buttons, the consumers are what the registrant reads on Consent and Review. Literals are the spec's own words and the
+// values the test types; none is read back out of the code under test. Sport: not applicable (the register form is sport-agnostic).
+// ---------------------------------------------------------------------------
+
+/** A second mount in ONE test would restore the first one's draft from sessionStorage (and start on its last step): wipe it between mounts. */
+function freshStorage() {
+  fakeSessionStorage = new MapStorage();
+  (globalThis as { sessionStorage?: unknown }).sessionStorage = fakeSessionStorage;
+}
+
+describe("B2 T10 - Consent: Required and Optional tags, small print, one info line", () => {
+  type M = ReturnType<typeof mount>;
+  type Island = M["island"];
+  const DIV_TEAM_T10C: DivisionLike = { ...DIV_OPEN, division_id: "div-team-t10c", name: "Club Teams", entrant_kind: "team" };
+  const setWho = (m: M) => (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Mia Cole", email: "mia@example.com" });
+  const consentBox = (island: Island, id: string, checked: boolean) =>
+    (propsOf(byId(island, id)).onChange as (e: { target: { checked: boolean } }) => void)({ target: { checked } });
+  const byTestId = (island: Island, id: string) => island.tree().filter((e) => propsOf(e)["data-testid"] === id);
+
+  /** One individual division: Contact -> Details -> Consent. `playing`: the contact is the one player (their row is theirs, nobody else is named). */
+  function onConsent(playing = false): M {
+    const m = mount([DIV_OPEN]);
+    setWho(m);
+    if (playing) {
+      (propsOf(m.stepWho()).onChange as (p: object) => void)({ dob: "1990-04-02" });
+      (propsOf(m.stepWho()).onImPlayingChange as (v: boolean) => void)(true);
+    }
+    m.clickByText("Next"); // -> DETAILS
+    if (!playing) setByAriaLabel(m.island, "Player 1 \u2014 Your name", "Alex Other");
+    m.clickByText("Next"); // -> CONSENT
+    expect(m.island.tree().some((e) => e.type === StepConsent), "premise: on the Consent step").toBe(true);
+    return m;
+  }
+  /** The label that wraps an input, found within ONE expansion of the tree (element identity holds only inside one island.tree() call). */
+  function labelAround(island: Island, inputId: string) {
+    const tree = island.tree();
+    const input = tree.find((e) => propsOf(e).id === inputId)!;
+    const labels = tree.filter((e) => e.type === "label" && walk(e).includes(input));
+    expect(labels, `exactly one label wraps #${inputId}`).toHaveLength(1);
+    return labels[0]!;
+  }
+  const tagsIn = (label: ReactElement) => walk(label).filter((e) => propsOf(e).className === TAG_NEUTRAL);
+
+  it("each consent shows Required or Optional: privacy leads with Required, media with Optional, never the other way round", () => {
+    const m = onConsent();
+    const privacy = labelAround(m.island, "reg-consent-privacy");
+    const media = labelAround(m.island, "reg-consent-media");
+    const privacyTags = tagsIn(privacy);
+    const mediaTags = tagsIn(media);
+    expect(privacyTags.map((e) => textOf(e)), "privacy: one tag, Required").toEqual(["Required"]);
+    expect(mediaTags.map((e) => textOf(e)), "media: one tag, Optional").toEqual(["Optional"]);
+    // The tag LEADS: it is the first thing in the label's text, before the consent's own words.
+    expect(textOf(privacy).startsWith("Required"), "privacy: tag first").toBe(true);
+    expect(textOf(media).startsWith("Optional"), "media: tag first").toBe(true);
+    expect(textOf(privacy), "the pair: privacy is not marked Optional").not.toContain("Optional");
+    expect(textOf(media), "the pair: media is not marked Required").not.toContain("Required");
+  });
+
+  it("the legal sentence is small print UNDER the plain title, inside the same label, with the Privacy Policy link; the old long label is gone", () => {
+    const m = onConsent();
+    const label = labelAround(m.island, "reg-consent-privacy");
+    const nodes = walk(label);
+    const titleEl = nodes.find((e) => propsOf(e).children === "Store and use my details to run this competition");
+    expect(titleEl, "the plain title").toBeTruthy();
+    const legal = nodes.find((e) => typeof propsOf(e).children !== "string" && textOf(e).startsWith("I agree that Test Org and Seazn Club will store and process the details on this form"));
+    expect(legal, "the legal sentence is in the label").toBeTruthy();
+    expect(nodes.indexOf(titleEl!), "title comes before the legal sentence").toBeLessThan(nodes.indexOf(legal!));
+    expect(String(propsOf(titleEl!).className), "title is the label's main line").toContain("font-medium");
+    expect(String(propsOf(legal!).className), "the legal sentence is small print").toContain("text-xs");
+    const link = nodes.find((e) => e.type === "a");
+    expect(propsOf(link!).href).toBe("/legal/privacy");
+    expect(textOf(link!)).toBe("Privacy Policy");
+  });
+
+  it("the checkbox testids are kept: reg-consent-privacy is the input's id, reg-consent-grant its data-testid", () => {
+    const m = onConsent();
+    expect(propsOf(byId(m.island, "reg-consent-privacy"))["data-testid"]).toBe("reg-consent-grant");
+    expect(byTestId(m.island, "reg-consent-grant")).toHaveLength(1);
+  });
+
+  it("the required box turns red after a failed Continue, and only then; the optional box never does", () => {
+    const m = onConsent();
+    const box = (id: string) => String(propsOf(byTestId(m.island, id)[0]!).className);
+    expect(box("reg-consent-privacy-box"), "pristine").not.toContain("border-red-600");
+    m.clickByText("Next"); // privacy not ticked: refused
+    expect(m.island.tree().some((e) => e.type === StepConsent), "premise: still on Consent").toBe(true);
+    expect(box("reg-consent-privacy-box"), "refused: danger border").toContain("border-red-600");
+    expect(box("reg-consent-media-box"), "the optional consent is never an error").not.toContain("border-red-600");
+    consentBox(m.island, "reg-consent-privacy", true);
+    expect(box("reg-consent-privacy-box"), "ticked: the danger border is gone").not.toContain("border-red-600");
+  });
+
+  it("the other-players notice is ONE info line (icon + text), not a third box; and it only shows when the cart names other people", () => {
+    const m = mount([DIV_OPEN, DIV_TEAM_T10C]);
+    setWho(m);
+    m.clickByText("Next"); // -> ENTRIES
+    (propsOf(m.divisionCard("div-team-t10c")).onAddTeam as () => void)();
+    setByAriaLabel(m.island, "Team name", "Riverside");
+    m.clickByText("Next"); // -> DETAILS
+    const textarea = m.island.tree().find((e) => e.type === "textarea")!;
+    (propsOf(textarea).onChange as (e: { target: { value: string } }) => void)({ target: { value: "Jordan Blake\nSam Ortiz" } });
+    m.clickByText("Add 2 players from list");
+    m.clickByText("Next"); // -> CONSENT
+    const notices = byTestId(m.island, "reg-consent-roster-notice");
+    expect(notices, "the captain names other people: the notice shows").toHaveLength(1);
+    expect(textOf(notices[0]!)).toContain("You're entering other people in this registration.");
+    const classes = String(propsOf(notices[0]!).className).split(/\s+/);
+    expect(classes.filter((c) => c.startsWith("border") || c.startsWith("bg-")), "no box: no border, no fill").toEqual([]);
+    expect(walk(notices[0]!).some((e) => e.type === "svg"), "it leads with an icon").toBe(true);
+    // Its pair: the two real consents are still boxes, so the line above is the odd one out on purpose.
+    expect(String(propsOf(byTestId(m.island, "reg-consent-privacy-box")[0]!).className)).toContain("border");
+    // And the empty case: a registrant who IS the one player names nobody else, so there is nobody to notify.
+    freshStorage();
+    const solo = onConsent(true);
+    expect(byTestId(solo.island, "reg-consent-roster-notice"), "nobody else: no notice").toHaveLength(0);
+    // Its pair: the same one-player cart, entered on behalf of someone else, does name another person.
+    freshStorage();
+    expect(byTestId(onConsent(false).island, "reg-consent-roster-notice"), "someone else is named: the notice shows").toHaveLength(1);
+  });
+});
+
+describe("B2 T10 - Review: you, entries with players, answers, consent; Edit goes back and loses nothing", () => {
+  type M = ReturnType<typeof mount>;
+  type Island = M["island"];
+  const DIV_TEAM_T10: DivisionLike = {
+    ...DIV_OPEN, division_id: "div-team-t10", name: "Club Teams", entrant_kind: "team", fee_cents: 1500, payment_method: "stripe",
+  };
+  const DIV_ASKS_T10: DivisionLike = {
+    ...DIV_OPEN, division_id: "div-asks-t10", name: "Masters Singles", fee_cents: 1000, payment_method: "stripe",
+    form_fields: [
+      { key: "shirt", label: "Shirt size", kind: "text", required: false },
+      { key: "diet", label: "Dietary needs", kind: "select", options: ["None", "Vegetarian"], required: true },
+      { key: "ack", label: "Court rules acknowledged", kind: "checkbox", required: false },
+    ],
+  };
+  const all = (island: Island, id: string) => island.tree().filter((e) => propsOf(e)["data-testid"] === id);
+  const one = (island: Island, id: string) => {
+    const hits = all(island, id);
+    expect(hits, `exactly one [data-testid=${id}]`).toHaveLength(1);
+    return hits[0]!;
+  };
+  const setField = (island: Island, id: (x: string) => boolean, value: string) => {
+    const el = island.tree().find((e) => typeof propsOf(e).id === "string" && id(propsOf(e).id as string));
+    expect(el, "field").toBeTruthy();
+    (propsOf(el!).onChange as (e: { target: { value: string } }) => void)({ target: { value } });
+  };
+  const tick = (island: Island, id: string) =>
+    (propsOf(byId(island, id)).onChange as (e: { target: { checked: boolean } }) => void)({ target: { checked: true } });
+  const onStep = (island: Island, component: unknown) => island.tree().some((e) => e.type === component);
+  const stepNavIndex = (island: Island) => (propsOf(island.tree().find((e) => e.type === StepNav)!) as { currentIndex: number }).currentIndex;
+
+  /** Five steps, a card cart of a named team (two players) and a Masters single who answers all three organiser questions. */
+  function reachFullReview(opts: { media?: boolean } = {}): M {
+    const m = mount([DIV_TEAM_T10, DIV_ASKS_T10]);
+    (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "  Mia Cole ", email: "mia@example.com" });
+    m.clickByText("Next"); // -> ENTRIES
+    (propsOf(m.divisionCard("div-team-t10")).onAddTeam as () => void)();
+    (propsOf(m.divisionCard("div-asks-t10")).onAddIndividual as () => void)();
+    setByAriaLabel(m.island, "Team name", "Riverside");
+    m.clickByText("Next"); // -> DETAILS
+    const textarea = m.island.tree().find((e) => e.type === "textarea")!;
+    (propsOf(textarea).onChange as (e: { target: { value: string } }) => void)({ target: { value: "Jordan Blake\nSam Ortiz" } });
+    m.clickByText("Add 2 players from list");
+    (propsOf(allByAriaLabel(m.island, "Player 1 \u2014 Your name")[1]!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "Priya Raman" } });
+    setField(m.island, (id) => id.endsWith("-shirt"), "M");
+    setField(m.island, (id) => id.endsWith("-diet"), "Vegetarian");
+    const ack = m.island.tree().filter((e) => e.type === "input" && propsOf(e).type === "checkbox");
+    expect(ack, "premise: the one organiser checkbox").toHaveLength(1);
+    (propsOf(ack[0]!).onChange as (e: { target: { checked: boolean } }) => void)({ target: { checked: true } });
+    m.clickByText("Next"); // -> CONSENT
+    tick(m.island, "reg-consent-privacy");
+    if (opts.media) tick(m.island, "reg-consent-media");
+    m.clickByText("Next"); // -> REVIEW
+    expect(onStep(m.island, StepReview), "premise: on Review").toBe(true);
+    return m;
+  }
+
+  it("review lists contact, every entry with its players, the answers and the consent", () => {
+    const m = reachFullReview();
+    const you = textOf(one(m.island, "reg-review-you"));
+    expect(you).toContain("Mia Cole");
+    expect(you).toContain("mia@example.com");
+    const entries = m.island.tree().filter((e) => e.type === "li");
+    expect(entries, "two entries, two lines").toHaveLength(2);
+    const team = textOf(entries[0]!);
+    expect(team).toContain("Club Teams");
+    expect(team).toContain("Riverside");
+    expect(team, "the team's players, by name").toContain("Jordan Blake, Sam Ortiz");
+    const single = textOf(entries[1]!);
+    expect(single).toContain("Masters Singles");
+    expect(single, "the individual's one player").toContain("Priya Raman");
+    const answers = textOf(one(m.island, "reg-review-answers"));
+    expect(answers, "each question beside its own answer, in the order the organiser asked them; a ticked checkbox reads Yes").toMatch(
+      /Shirt size\s*M\s*Dietary needs\s*Vegetarian\s*Court rules acknowledged\s*Yes/,
+    );
+    const consent = textOf(one(m.island, "reg-review-consent"));
+    expect(consent, "privacy was ticked").toMatch(/Store and use my details to run this competition\s*Yes/);
+    expect(consent, "media was not").toMatch(/Photos and video of me from this event\s*No/);
+  });
+
+  it("two entries that were asked questions: each group names whose answers it is, and each answer stays with its own entry", () => {
+    const DIV_ASKS_2: DivisionLike = { ...DIV_ASKS_T10, division_id: "div-asks-t10-b", name: "Juniors Singles" };
+    const m = mount([DIV_ASKS_T10, DIV_ASKS_2]);
+    (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Mia Cole", email: "mia@example.com" });
+    m.clickByText("Next"); // -> ENTRIES
+    (propsOf(m.divisionCard("div-asks-t10")).onAddIndividual as () => void)();
+    (propsOf(m.divisionCard("div-asks-t10-b")).onAddIndividual as () => void)();
+    m.clickByText("Next"); // -> DETAILS
+    const names = allByAriaLabel(m.island, "Player 1 \u2014 Your name");
+    expect(names, "premise: one row per entry").toHaveLength(2);
+    (propsOf(names[0]!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "Priya Raman" } });
+    (propsOf(names[1]!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "Sam Ortiz" } });
+    const shirts = m.island.tree().filter((e) => typeof propsOf(e).id === "string" && (propsOf(e).id as string).endsWith("-shirt"));
+    const diets = m.island.tree().filter((e) => typeof propsOf(e).id === "string" && (propsOf(e).id as string).endsWith("-diet"));
+    expect([shirts.length, diets.length], "premise: both entries show both questions").toEqual([2, 2]);
+    const set = (el: ReactElement, value: string) => (propsOf(el).onChange as (e: { target: { value: string } }) => void)({ target: { value } });
+    set(shirts[0]!, "M");
+    set(diets[0]!, "Vegetarian");
+    set(shirts[1]!, "S");
+    set(diets[1]!, "None");
+    m.clickByText("Next"); // -> CONSENT
+    tick(m.island, "reg-consent-privacy");
+    m.clickByText("Next"); // -> REVIEW
+    expect(onStep(m.island, StepReview), "premise: on Review").toBe(true);
+    const answers = textOf(one(m.island, "reg-review-answers")).replace(/\s+/g, " ");
+    expect(answers, "each entry's heading, then its own answers, in cart order").toMatch(
+      /Masters Singles \u00b7 Priya Raman Shirt size M Dietary needs Vegetarian Court rules acknowledged No Juniors Singles \u00b7 Sam Ortiz Shirt size S Dietary needs None Court rules acknowledged No/,
+    );
+  });
+
+  it("a skipped optional question reads Not answered, in muted type, beside the answered one that reads its value", () => {
+    const m = mount([DIV_ASKS_T10]); // one division: four steps, no Entries
+    (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Mia Cole", email: "mia@example.com" });
+    m.clickByText("Next"); // -> DETAILS
+    setByAriaLabel(m.island, "Player 1 \u2014 Your name", "Priya Raman");
+    setField(m.island, (id) => id.endsWith("-diet"), "None"); // the one REQUIRED question; the shirt size is left blank
+    m.clickByText("Next"); // -> CONSENT
+    tick(m.island, "reg-consent-privacy");
+    m.clickByText("Next"); // -> REVIEW
+    expect(onStep(m.island, StepReview), "premise: on Review").toBe(true);
+    const section = one(m.island, "reg-review-answers");
+    expect(textOf(section).replace(/\s+/g, " ")).toMatch(/Shirt size Not answered Dietary needs None Court rules acknowledged No/);
+    const dds = walk(section).filter((e) => e.type === "dd");
+    expect(dds.map((e) => textOf(e)), "premise: one value cell per question").toEqual(["Not answered", "None", "No"]);
+    expect(String(propsOf(dds[0]!).className), "a missing answer is quieter than a given one").toContain("text-ink-muted");
+    expect(String(propsOf(dds[1]!).className), "...and the given one is not muted").not.toContain("text-ink-muted");
+  });
+
+  it("media consent ticked reads Yes (the pair of the No above)", () => {
+    const m = reachFullReview({ media: true });
+    expect(textOf(one(m.island, "reg-review-consent"))).toMatch(/Photos and video of me from this event\s*Yes/);
+  });
+
+  it("the consent rows state what was actually agreed: a privacy consent that is not given reads No, never an assumed Yes", () => {
+    // Not reachable through the form (Continue refuses without it), so it is driven directly: the row must read the state, not assume it.
+    const cart: CartState = { entries: [] };
+    const out = (StepReview as unknown as ComponentFn)({
+      summary: summarizeCart(cart, [DIV_OPEN]),
+      content: reviewContent(cart, [DIV_OPEN], EMPTY_CONTACT, { privacy_consent: false, media_consent: true }),
+      locale: "en",
+      order: buildStepOrder(2, "individual"),
+      onEdit: vi.fn(),
+    });
+    const section = walk(out).find((e) => propsOf(e)["data-testid"] === "reg-review-consent")!;
+    expect(textOf(section).replace(/\s+/g, " ")).toContain(
+      "Store and use my details to run this competition No Photos and video of me from this event Yes",
+    );
+  });
+
+  it("the four sections are headed You, Entries, Answers and Consent, each with one Edit", () => {
+    const m = reachFullReview();
+    const seen: string[] = [];
+    for (const [id, title] of [["you", "You"], ["entries", "Entries"], ["answers", "Answers"], ["consent", "Consent"]] as const) {
+      const section = one(m.island, `reg-review-${id}`);
+      const heading = walk(section).filter((e) => e.type === "h3");
+      expect(heading.map((h) => textOf(h)), `${id}: one heading`).toEqual([title]);
+      const edits = walk(section).filter((e) => propsOf(e)["data-testid"] === `reg-review-edit-${id}`);
+      expect(edits, `${id}: one Edit`).toHaveLength(1);
+      expect(textOf(edits[0]!).replace(/\s+/g, " ").trim(), `${id}: the Edit's name says which section`).toBe(`Edit ${title}`);
+      seen.push(id);
+    }
+    expect(seen, "anti-vacuity: all four sections").toHaveLength(4);
+  });
+
+  it("review with no organiser questions omits Answers (empty case), and its pair has them", () => {
+    const bare = mount([DIV_OPEN]);
+    (propsOf(bare.stepWho()).onChange as (p: object) => void)({ name: "Alex Test", email: "alex@example.com" });
+    bare.clickByText("Next"); // -> DETAILS (Entries collapsed)
+    setByAriaLabel(bare.island, "Player 1 \u2014 Your name", "Alex Test");
+    bare.clickByText("Next"); // -> CONSENT
+    tick(bare.island, "reg-consent-privacy");
+    bare.clickByText("Next"); // -> REVIEW
+    expect(onStep(bare.island, StepReview), "premise: on Review").toBe(true);
+    expect(all(bare.island, "reg-review-answers"), "nothing was asked: no Answers section").toHaveLength(0);
+    expect(all(bare.island, "reg-review-edit-answers"), "and no Edit for it").toHaveLength(0);
+    expect(all(bare.island, "reg-review-you"), "the other sections are still there").toHaveLength(1);
+    expect(all(bare.island, "reg-review-consent")).toHaveLength(1);
+    freshStorage();
+    expect(all(reachFullReview().island, "reg-review-answers"), "pair: questions asked, section shown").toHaveLength(1);
+  });
+
+  it.each([
+    { section: "you", step: StepWho, index: 0, where: "Contact" },
+    { section: "entries", step: StepEntries, index: 1, where: "Entries" },
+    { section: "answers", step: StepDetails, index: 2, where: "Details" },
+    { section: "consent", step: StepConsent, index: 3, where: "Consent" },
+  ])("each Edit jumps to its step and every value survives the round trip: Edit $section -> $where -> back to Review unchanged", ({ section, step, index }) => {
+    const m = reachFullReview({ media: true });
+    const before = ["you", "entries", "answers", "consent"].map((id) => textOf(one(m.island, `reg-review-${id}`)));
+    const submitBefore = textOf(one(m.island, "reg-submit"));
+    const edit = one(m.island, `reg-review-edit-${section}`);
+    expect(propsOf(edit).disabled, "idle: the Edit is live").not.toBe(true);
+    (propsOf(edit).onClick as () => void)();
+    expect(onStep(m.island, step), `Edit ${section} lands on ${index === 0 ? "Contact" : "its own step"}`).toBe(true);
+    expect(stepNavIndex(m.island), "and the rail agrees").toBe(index);
+    expect(onStep(m.island, StepReview), "Review is gone while editing").toBe(false);
+    // Forward again, unedited. A bounded walk: five steps at most, and it must take at least one Continue to get back.
+    let continues = 0;
+    while (!onStep(m.island, StepReview) && continues < 6) {
+      m.clickByText("Next");
+      continues++;
+    }
+    expect(onStep(m.island, StepReview), "back on Review").toBe(true);
+    expect(continues, "anti-vacuity: the walk went somewhere").toBe(4 - index);
+    const after = ["you", "entries", "answers", "consent"].map((id) => textOf(one(m.island, `reg-review-${id}`)));
+    expect(after, "every section reads exactly as it did").toEqual(before);
+    expect(textOf(one(m.island, "reg-submit")), "and so does the Pay label").toBe(submitBefore);
+  });
+
+  it("Edit Contact then changing the name: the Review shows the new name, and the Details row that followed it", () => {
+    const m = reachFullReview();
+    (propsOf(one(m.island, "reg-review-edit-you")).onClick as () => void)();
+    (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Maya Cole" });
+    let guard = 0;
+    while (!onStep(m.island, StepReview) && guard++ < 6) m.clickByText("Next");
+    expect(textOf(one(m.island, "reg-review-you"))).toContain("Maya Cole");
+    expect(textOf(one(m.island, "reg-review-you")), "the old name is gone").not.toContain("Mia Cole");
+  });
+
+  it("a one-division competition (Entries collapsed): Edit Entries goes to Details, where the players are, and Contact is still step 1", () => {
+    const m = mount([DIV_ASKS_T10]);
+    (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Alex Test", email: "alex@example.com" });
+    m.clickByText("Next"); // -> DETAILS
+    setByAriaLabel(m.island, "Player 1 \u2014 Your name", "Alex Test");
+    setField(m.island, (id) => id.endsWith("-diet"), "None");
+    m.clickByText("Next"); // -> CONSENT
+    tick(m.island, "reg-consent-privacy");
+    m.clickByText("Next"); // -> REVIEW
+    expect(onStep(m.island, StepReview), "premise: on Review").toBe(true);
+    (propsOf(one(m.island, "reg-review-edit-entries")).onClick as () => void)();
+    expect(onStep(m.island, StepDetails), "no Entries step to go to: Details").toBe(true);
+    expect(stepNavIndex(m.island)).toBe(1);
+    m.clickByText("Back"); // -> CONTACT
+    m.stepWho();
+    m.clickByText("Next");
+    m.clickByText("Next");
+    m.clickByText("Next");
+    (propsOf(one(m.island, "reg-review-edit-you")).onClick as () => void)();
+    expect(stepNavIndex(m.island), "Edit Contact is index 0 here too").toBe(0);
+  });
+
+  it("while a submit is in flight no Edit is live; after a failure they all are again", async () => {
+    const m = reachFullReview();
+    const ids = ["you", "entries", "answers", "consent"];
+    expect(ids.map((id) => propsOf(one(m.island, `reg-review-edit-${id}`)).disabled === true), "idle: none disabled").toEqual([false, false, false, false]);
+    let reject!: (e: unknown) => void;
+    apiV1Mock.impl.mockReturnValueOnce(new Promise((_, rej) => { reject = rej; }));
+    const done = (propsOf(one(m.island, "reg-submit")).onClick as () => Promise<void>)();
+    await vi.waitFor(() => expect(apiV1Mock.impl, "the POST is in flight").toHaveBeenCalledTimes(1));
+    expect(ids.map((id) => propsOf(one(m.island, `reg-review-edit-${id}`)).disabled === true), "in flight: all disabled").toEqual([true, true, true, true]);
+    reject(new ApiV1Error("Boom", 500, "INTERNAL"));
+    await done;
+    expect(ids.map((id) => propsOf(one(m.island, `reg-review-edit-${id}`)).disabled === true), "after a failure: live again").toEqual([false, false, false, false]);
+  });
+
+  it("the card cart says how it is paid, once, and the total is the sum; an offline or free cart says nothing about Stripe", () => {
+    const m = reachFullReview();
+    expect(textOf(one(m.island, "reg-review-card-note"))).toBe("You'll pay by card on a secure Stripe page, then come straight back here.");
+    expect(textOf(one(m.island, "reg-review-total"))).toBe("\u00a325.00");
+    for (const division of [{ ...DIV_OPEN, payment_method: "offline" as const, fee_cents: 1500 }, DIV_OPEN]) {
+      freshStorage();
+      const other = mount([division]);
+      (propsOf(other.stepWho()).onChange as (p: object) => void)({ name: "Alex Test", email: "alex@example.com" });
+      other.clickByText("Next");
+      setByAriaLabel(other.island, "Player 1 \u2014 Your name", "Alex Test");
+      other.clickByText("Next");
+      tick(other.island, "reg-consent-privacy");
+      other.clickByText("Next");
+      expect(onStep(other.island, StepReview), "premise: on Review").toBe(true);
+      expect(all(other.island, "reg-review-card-note"), `${division.payment_method} fee ${division.fee_cents}: no Stripe note`).toHaveLength(0);
+    }
+  });
+
+  it("the running total is dropped on Review (the Pay label already says the fee), still there on the steps before it, and Review adds 'Confirmation goes to {email}' for md and up", () => {
+    const m = mount([DIV_TEAM_T10, DIV_ASKS_T10]);
+    (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Mia Cole", email: "mia@example.com" });
+    m.clickByText("Next"); // -> ENTRIES
+    (propsOf(m.divisionCard("div-team-t10")).onAddTeam as () => void)();
+    (propsOf(m.divisionCard("div-asks-t10")).onAddIndividual as () => void)();
+    setByAriaLabel(m.island, "Team name", "Riverside");
+    expect(textOf(one(m.island, "reg-bar-summary")), "premise: Entries shows it").toBe("2 entries \u00b7 \u00a325.00");
+    expect(all(m.island, "reg-bar-sent-to"), "the note is a Review thing").toHaveLength(0);
+    m.clickByText("Next"); // -> DETAILS
+    expect(all(m.island, "reg-bar-summary"), "premise: Details shows it too").toHaveLength(1);
+    const textarea = m.island.tree().find((e) => e.type === "textarea")!;
+    (propsOf(textarea).onChange as (e: { target: { value: string } }) => void)({ target: { value: "Jordan Blake" } });
+    m.clickByText("Add 1 players from list");
+    (propsOf(allByAriaLabel(m.island, "Player 1 \u2014 Your name")[1]!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "Priya Raman" } });
+    setField(m.island, (id) => id.endsWith("-diet"), "None");
+    m.clickByText("Next"); // -> CONSENT
+    tick(m.island, "reg-consent-privacy");
+    m.clickByText("Next"); // -> REVIEW
+    expect(onStep(m.island, StepReview), "premise: on Review").toBe(true);
+    expect(textOf(one(m.island, "reg-submit")), "premise: the Pay label carries the fee").toBe("Pay \u00a325.00 and enter");
+    expect(all(m.island, "reg-bar-summary"), "Review: no total line").toHaveLength(0);
+    const note = one(m.island, "reg-bar-sent-to");
+    expect(textOf(note)).toBe("Confirmation goes to mia@example.com");
+    expect(String(propsOf(note).className), "md and up only").toMatch(/(?:^|\s)max-md:hidden(?:\s|$)/);
+    expect(String(propsOf(one(m.island, "reg-submit")).className), "with the note beside it, the button's own ml-auto is cancelled at md").toMatch(/(?:^|\s)md:ml-0(?:\s|$)/);
+    m.clickByText("Back");
+    expect(all(m.island, "reg-bar-summary"), "back on Consent: the total returns").toHaveLength(1);
+    expect(all(m.island, "reg-bar-sent-to"), "and the note leaves").toHaveLength(0);
   });
 });

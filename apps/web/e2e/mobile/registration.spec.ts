@@ -402,7 +402,7 @@ test("register stepper: ENTRIES/DETAILS/CONSENT/REVIEW hold at this width, no ho
       // Step 5 — REVIEW. Final frame; deliberately never taps Submit (that
       // would POST the real registration and navigate away — out of scope for
       // a width-coverage test).
-      await expect(anon.getByRole("heading", { name: "Review & pay", exact: true })).toBeVisible({
+      await expect(anon.getByRole("heading", { name: "Review and pay", exact: true })).toBeVisible({
         timeout: 20_000,
       });
       await expect(anon.getByText("Stepper Solo")).toBeVisible();

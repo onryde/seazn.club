@@ -3,14 +3,18 @@
 // carries owner ruling 5's names-public-by-default statement plainly at the
 // moment of consent), media (optional, never blocks), a guardian block for a
 // self-registering minor, and a captain-roster notice when the cart names
-// other people. Owns nothing beyond wiring — `guardianRequired`/
+// other people.
+//
+// B2 T10 (spec 7.3): each consent LEADS with a Required or Optional tag, so the one that blocks is clear before an error appears; the
+// long legal sentence is small print under the privacy consent's plain title; and the other-players notice is one info line (icon +
+// text), not a third look-alike box. The join page reuses this step verbatim and gets the same. Owns nothing beyond wiring — `guardianRequired`/
 // `cartHasOtherPlayers` (the two show/require decisions) are cart.ts/
 // validation.ts's pure functions, computed once per render exactly like
 // every other step's own live-feedback pieces (division-card.tsx's
 // selfIneligible, entry-details.tsx's mixedUnmet).
 import { useT } from "@/components/i18n/dict-provider";
 import { cartHasOtherPlayers } from "./cart";
-import { FIELD, FIELD_LABEL as LABEL } from "./styles";
+import { FIELD, FIELD_LABEL as LABEL, TAG_NEUTRAL } from "./styles";
 import { guardianRequired, type ConsentValidation } from "./validation";
 import { RegisterLichessCard, type RegisterLichessState } from "./register-lichess-card";
 import type { CartState, ConsentState, ContactState } from "./types";
@@ -73,7 +77,13 @@ export function StepConsent({
           footnote. */}
       <p className="mt-3 text-sm text-ink">{t("register.consent.namesPublic")}</p>
 
-      <div className="mt-4 rounded-lg border border-zinc-200 bg-canvas px-3.5 py-3">
+      {/* The required consent. The danger border is the registrant's own failed Continue (`errors.privacy` is only set after one), the
+          same red-600 FIELD gives an invalid input. The tag leads; the title is the plain ask; the legal sentence is small print under
+          it, inside the same label, so a tap anywhere on the box ticks it. `min-w-0` lets a long translated sentence wrap at 320. */}
+      <div
+        data-testid="reg-consent-privacy-box"
+        className={`mt-4 rounded-lg border bg-canvas px-3.5 py-3 ${errors.privacy ? "border-red-600" : "border-zinc-200"}`}
+      >
         <label className="flex cursor-pointer items-start gap-3">
           <input
             id="reg-consent-privacy"
@@ -85,16 +95,22 @@ export function StepConsent({
             aria-invalid={errors.privacy ? true : undefined}
             aria-describedby={errors.privacy ? "reg-consent-privacy-error" : undefined}
           />
-          <span className="text-sm text-ink">
-            {t("register.consent.data", { org: orgName })}{" "}
-            <a
-              href="/legal/privacy"
-              target="_blank"
-              rel="noreferrer"
-              className="underline decoration-dotted underline-offset-2 hover:text-accent-strong"
-            >
-              {t("register.consent.privacy")}
-            </a>
+          <span className="min-w-0">
+            <span className="mb-1 block">
+              <span className={TAG_NEUTRAL}>{t("register.consent.required")}</span>
+            </span>
+            <span className="block text-sm font-medium text-ink">{t("register.consent.privacy.title")}</span>
+            <span className="mt-0.5 block text-xs text-ink-muted">
+              {t("register.consent.data", { org: orgName })}{" "}
+              <a
+                href="/legal/privacy"
+                target="_blank"
+                rel="noreferrer"
+                className="underline decoration-dotted underline-offset-2 hover:text-accent-strong"
+              >
+                {t("register.consent.privacy")}
+              </a>
+            </span>
           </span>
         </label>
         {errors.privacy && (
@@ -104,7 +120,7 @@ export function StepConsent({
         )}
       </div>
 
-      <div className="mt-3 rounded-lg border border-zinc-200 bg-canvas px-3.5 py-3">
+      <div data-testid="reg-consent-media-box" className="mt-3 rounded-lg border border-zinc-200 bg-canvas px-3.5 py-3">
         <label className="flex cursor-pointer items-start gap-3">
           <input
             id="reg-consent-media"
@@ -113,8 +129,11 @@ export function StepConsent({
             checked={consent.media_consent}
             onChange={(e) => onConsentChange({ media_consent: e.target.checked })}
           />
-          <span>
-            <span className="block text-sm text-ink">{t("register.consent.media.label", { org: orgName })}</span>
+          <span className="min-w-0">
+            <span className="mb-1 block">
+              <span className={TAG_NEUTRAL}>{t("register.field.optional")}</span>
+            </span>
+            <span className="block text-sm font-medium text-ink">{t("register.consent.media.label", { org: orgName })}</span>
             <span className="mt-0.5 block text-xs text-ink-muted">{t("register.consent.media.hint")}</span>
           </span>
         </label>
@@ -167,9 +186,27 @@ export function StepConsent({
         </div>
       )}
 
+      {/* One info line, not a box (B2 T10): the two consents above are the things to decide; this only tells a captain what happens to
+          the people they name. The icon takes `text-accent-strong`, the colour BTN_GHOST's text already wears. */}
       {showRosterNotice && (
-        <p className="mt-4 rounded-lg border border-zinc-200 bg-canvas px-3.5 py-3 text-xs text-ink-muted">
-          {t("register.consent.rosterNotice")}
+        <p data-testid="reg-consent-roster-notice" className="mt-4 flex items-start gap-2 text-xs text-ink-muted">
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+            className="mt-px shrink-0 text-accent-strong"
+          >
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 11v5" />
+            <path d="M12 8h.01" />
+          </svg>
+          <span className="min-w-0">{t("register.consent.rosterNotice")}</span>
         </p>
       )}
     </div>

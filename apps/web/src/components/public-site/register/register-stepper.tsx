@@ -51,6 +51,7 @@ import { StepDetails } from "./step-details";
 import { StepEntries } from "./step-entries";
 import { StepNav, STEP_LABEL_KEY } from "./step-nav";
 import { StepReview } from "./step-review";
+import { reviewContent } from "./review-content";
 import { StepWho } from "./step-who";
 import { buildStepOrder, nextStepIndex, offersJoinCode, prevStepIndex, shouldCollapseEntries, stepFocusTransition } from "./steps";
 import { JoinCodeEntry } from "./join-code-entry";
@@ -406,16 +407,6 @@ export function RegisterStepper({
     ...(reviewPayable?.payment_method === "stripe" ? [t("register.submit.openingPayment")] : []),
   ];
   const widestPhaseLabel = phaseLabels.reduce((a, b) => (b.length > a.length ? b : a));
-  // The running total in the phone bar (spec §7.2): what the cart costs now, so the person is never a step away from the number.
-  // Hidden for an empty cart and for a cart that costs nothing (all free, or only waitlisted/closed entries): "3 entries · £0.00"
-  // says nothing. Same `reviewSummary` the Review step and the submit label read, so the three cannot disagree.
-  const barTotal =
-    reviewSummary.subtotalCents > 0 && reviewSummary.currency
-      ? plural("register.bar.summary", reviewSummary.lines.length, {
-          total: formatMoneyExact(reviewSummary.subtotalCents, reviewSummary.currency, locale),
-        })
-      : null;
-
   // Clamped to the LAST real step, never stepOrder.length — "review" is a
   // genuine final step with its own Submit action, not a position before a
   // "coming soon" end-cap (matches the post-hydration restore's own clamp above).
@@ -424,6 +415,17 @@ export function RegisterStepper({
   // renders, and a stale stepIndex must not point past the new, shorter list.
   const clampedIndex = Math.min(stepIndex, stepOrder.length - 1);
   const currentStep = stepOrder[clampedIndex];
+  // The running total in the phone bar (spec §7.2): what the cart costs now, so the person is never a step away from the number.
+  // Hidden for an empty cart and for a cart that costs nothing (all free, or only waitlisted/closed entries): "3 entries · £0.00"
+  // says nothing. Same `reviewSummary` the Review step and the submit label read, so the three cannot disagree. Also hidden ON Review
+  // (B2 T10): the Review card's own total is on the page and the button reads "Pay £X and enter", so a third copy is a line of bar
+  // for nothing.
+  const barTotal =
+    currentStep !== "review" && reviewSummary.subtotalCents > 0 && reviewSummary.currency
+      ? plural("register.bar.summary", reviewSummary.lines.length, {
+          total: formatMoneyExact(reviewSummary.subtotalCents, reviewSummary.currency, locale),
+        })
+      : null;
   const canGoNext =
     currentStep === "who"
       ? contactValidation.valid
@@ -434,6 +436,10 @@ export function RegisterStepper({
           : currentStep === "consent"
             ? consentValidation.valid
             : false; // "review" advances via handleSubmit, never goNext
+
+  // Where the confirmation goes, for the Review bar's note (md and up). The address is valid by the time Review is reachable; trimmed
+  // as submit.ts trims it, so the note names what is actually sent.
+  const sentTo = contact.email.trim();
 
   // What the forward button says: the step it leads to, by name (spec §7.2). Review has no such step, and no forward button either:
   // its action is the submit.
@@ -613,7 +619,15 @@ export function RegisterStepper({
 
       {currentStep === "review" && (
         <>
-          <StepReview summary={reviewSummary} locale={locale} />
+          <StepReview
+            summary={reviewSummary}
+            content={reviewContent(cart, info.divisions, contact, consent)}
+            locale={locale}
+            order={stepOrder}
+            // The same jump the step rail makes (`setStepIndex(i)` is exactly what Back does, to any earlier step): nothing typed is lost,
+            // the draft lives here and in sessionStorage. Not while a submit is in flight (the rail's own rule): the cart is already on its way.
+            onEdit={submitting ? undefined : setStepIndex}
+          />
           {submitError &&
             (submitError.lichess !== null ? (
               // A Lichess reason says WHAT is wrong and WHAT to do, so it stands alone: the generic "check your details"
@@ -710,20 +724,30 @@ export function RegisterStepper({
           </button>
         ) : null}
         {currentStep === "review" ? (
-          <button
-            type="button"
-            data-testid="reg-submit"
-            onClick={handleSubmit}
-            disabled={submitting}
-            // Busy, not unavailable (B1 fix round 1, D1): BTN_PRIMARY keeps a disabled+busy button at full strength, so the phase
-            // label is read as "working", and assistive tech is told the same thing.
-            aria-busy={submitting}
-            className={BTN_FORWARD}
-          >
-            <span data-widest={widestPhaseLabel} className={LABEL_SIZER}>
-              <span className={LABEL_SIZER_TEXT}>{submitButtonLabel}</span>
-            </span>
-          </button>
+          <>
+            {/* From `md` the bar is a plain row, with room for where the confirmation goes (spec 7.3). Phones have the address in the
+                You section, and no spare width: hidden there, not a second tree. `md:ml-auto` pushes it, and the button after it (whose
+                own `ml-auto` is cancelled at md), to the row's end; without an address (cannot happen past Contact) there is no note. */}
+            {sentTo !== "" && (
+              <p data-testid="reg-bar-sent-to" className="max-md:hidden md:ml-auto text-sm text-ink-muted">
+                {t("register.review.sentTo", { email: sentTo })}
+              </p>
+            )}
+            <button
+              type="button"
+              data-testid="reg-submit"
+              onClick={handleSubmit}
+              disabled={submitting}
+              // Busy, not unavailable (B1 fix round 1, D1): BTN_PRIMARY keeps a disabled+busy button at full strength, so the phase
+              // label is read as "working", and assistive tech is told the same thing.
+              aria-busy={submitting}
+              className={sentTo !== "" ? `${BTN_FORWARD} md:ml-0` : BTN_FORWARD}
+            >
+              <span data-widest={widestPhaseLabel} className={LABEL_SIZER}>
+                <span className={LABEL_SIZER_TEXT}>{submitButtonLabel}</span>
+              </span>
+            </button>
+          </>
         ) : (
           <button type="button" data-testid="reg-next" onClick={goNext} className={BTN_FORWARD}>
             {continueLabel}
