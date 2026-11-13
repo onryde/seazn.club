@@ -10,9 +10,9 @@
 import type { ReactNode } from "react";
 import { fmtPublicDate, UTC } from "@/lib/format";
 import { routes } from "@/lib/routes";
-import type { RecentQuickMatch } from "@/server/usecases/quick-match-home";
+import type { RecentQuickMatch, RecentQuickMatchWithCounts } from "@/server/usecases/quick-match-home";
 
-export type { RecentQuickMatch };
+export type { RecentQuickMatch, RecentQuickMatchWithCounts };
 
 export interface RecentStripProps {
   /** The page's locale: the date is written in it. */

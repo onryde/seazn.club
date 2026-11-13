@@ -66,6 +66,32 @@ vi.mock("next/headers", async (importOriginal) => {
     }),
   };
 });
+// Review m5: the queries the quick-match system org's `withTenant` handles run while `systemQueries.texts` is set, as
+// their SQL text (the tx is wrapped in a recording Proxy, player-stats-refresh.test.ts's pattern). Every other call, and
+// every call while it is null, is the real one untouched.
+const systemQueries = vi.hoisted(() => ({ texts: null as string[] | null }));
+vi.mock("@/lib/db", async (orig) => {
+  const real = await orig<typeof import("@/lib/db")>();
+  const { QUICK_MATCH_SYSTEM_ORG_ID: QM_ORG } = await import("@/lib/quick-match-constants");
+  const withTenant: typeof real.withTenant = (orgId, fn, opts) =>
+    real.withTenant(
+      orgId,
+      (tx) => {
+        const texts = systemQueries.texts;
+        if (texts === null || orgId !== QM_ORG) return fn(tx);
+        const spy = new Proxy(tx, {
+          apply(target, thisArg, args: unknown[]) {
+            const strings = args[0] as { raw?: readonly string[] } | undefined;
+            if (strings !== undefined && Array.isArray(strings.raw)) texts.push(strings.raw.join("?").replace(/\s+/g, " "));
+            return Reflect.apply(target as never, thisArg, args);
+          },
+        });
+        return fn(spy);
+      },
+      opts,
+    );
+  return { ...real, withTenant };
+});
 // The read itself is the real one; a case can make it throw once (A9's whole-read failure).
 vi.mock("@/server/usecases/quick-match-home", async (orig) => {
   const real = await orig<typeof import("@/server/usecases/quick-match-home")>();
@@ -552,6 +578,34 @@ describe.skipIf(!HAS_DB)("the recent strip's rows (real createQuickMatch, real r
     expect(cardOf(html)).toContain(`href="/q/${saved.token}"`);
     expect(html, "the expired match is nowhere on the page").not.toContain(`/q/${expired.token}`);
     expect(stripOf(html)).toBeNull();
+  });
+
+  // Review m5 (controller ruling 2026-11-13): only the setup page shows a match's played count (the Continue card), so only
+  // it pays the fixture read; the marketing home's strip (name and date) reads the matches and nothing else.
+  it("the marketing home's strip runs no fixture read; the setup page's does (its Continue card's count)", async () => {
+    const key = mintVisitorKey();
+    const out = await make(hashVisitorKey(key));
+    jar.visitor = key;
+    const fixtureReads = (texts: string[]) => texts.filter((q) => /\bfrom fixtures\b/i.test(q));
+    /** The page's HTML and the system org's queries its render ran. */
+    async function recorded(page: "home" | "play"): Promise<{ html: string; texts: string[] }> {
+      const texts: string[] = [];
+      systemQueries.texts = texts;
+      try {
+        return { html: await render("en", page), texts };
+      } finally {
+        systemQueries.texts = null;
+      }
+    }
+
+    const home = await recorded("home");
+    expect(stripHrefs(home.html), "the home's strip still lists the match").toEqual([`/q/${out.token}`]);
+    expect(home.texts.some((q) => /\bfrom quick_matches\b/i.test(q)), "anti-vacuity: the recorder saw the strip's read").toBe(true);
+    expect(fixtureReads(home.texts), "the home reads no fixture").toEqual([]);
+
+    const play = await recorded("play");
+    expect(cardOf(play.html), "the setup page's card has its count").toContain(">0 of 1 match played<");
+    expect(fixtureReads(play.texts), "the setup page reads the fixtures, once").toHaveLength(1);
   });
 
   it("speaks the page's language: French Continue and heading", async () => {

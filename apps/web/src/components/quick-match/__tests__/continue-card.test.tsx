@@ -15,7 +15,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { ContinueCard, splitRecent } from "../continue-card";
-import type { RecentQuickMatch } from "../recent-strip";
+import type { RecentQuickMatchWithCounts as RecentQuickMatch } from "../recent-strip";
 
 /** Home-token shaped (`qm_` + 43 base64url characters), as `mintHomeToken` writes them. */
 const token = (c: string) => `qm_${c.repeat(42)}x`;

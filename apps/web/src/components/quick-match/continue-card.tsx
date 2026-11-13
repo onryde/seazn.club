@@ -4,19 +4,21 @@
 // in the strip below it; a finished match is only ever in the strip. The form follows under its own heading: making another
 // is never blocked.
 //
-// The rows are the recent strip's (`readRecentQuickMatches`, the same visitor cookie, the same read, which carries each
-// match's `playedOf` count): no second query and no browser storage. A server component, handed its rows and words by the
+// The rows are the recent strip's (`readRecentQuickMatches({ counts: true })`, the same visitor cookie, the same read, which
+// then carries each match's `playedOf` count): no browser storage. A server component, handed its rows and words by the
 // page (eslint.config.mjs keeps every value import of @/server out of components/quick-match/**).
 import type { ReactNode } from "react";
 import { routes } from "@/lib/routes";
-import type { RecentQuickMatch } from "./recent-strip";
+import type { RecentQuickMatchWithCounts } from "./recent-strip";
 
 /**
  * The card's row and the strip's rows. `items` arrive newest first (the read sorts); the card is the first that still has a
  * match to play, and the strip keeps every other row in the order it was handed. A row with no matches at all has nothing to
  * continue (no producer makes one: a quick match has two sides at least), so it is never the card.
  */
-export function splitRecent(items: readonly RecentQuickMatch[]): { resume: RecentQuickMatch | null; rest: RecentQuickMatch[] } {
+export function splitRecent(
+  items: readonly RecentQuickMatchWithCounts[],
+): { resume: RecentQuickMatchWithCounts | null; rest: RecentQuickMatchWithCounts[] } {
   const resume = items.find((r) => r.played < r.total) ?? null;
   return { resume, rest: items.filter((r) => r !== resume) };
 }
@@ -27,7 +29,7 @@ export function ContinueCard({
   item,
   labels,
 }: {
-  item: RecentQuickMatch;
+  item: RecentQuickMatchWithCounts;
   /** In the page's language: the count line ("2 of 6 matches played") and the link's word. */
   labels: { played: string; action: string };
 }): ReactNode {

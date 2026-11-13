@@ -10,7 +10,7 @@ import "server-only";
 import { cookies } from "next/headers";
 import { unstable_rethrow } from "next/navigation";
 import { log } from "@/server/logger";
-import { listRecentQuickMatches, type RecentQuickMatch } from "./quick-match-home";
+import { listRecentQuickMatches, type RecentQuickMatch, type RecentQuickMatchWithCounts } from "./quick-match-home";
 import { hashVisitorKey, isVisitorKeyShaped, QUICK_MATCH_VISITOR_COOKIE } from "./quick-match-tokens";
 
 /**
@@ -22,8 +22,13 @@ import { hashVisitorKey, isVisitorKeyShaped, QUICK_MATCH_VISITOR_COOKIE } from "
  *  - a read that throws (the database): none, one warning (not an error: an outage would otherwise log an error per
  *    visitor with a cookie, on the busiest page);
  *  - a row whose home token does not open: skipped by `listRecentQuickMatches`, which warns once for the read.
+ *
+ * `counts: true` adds each row's played count (the setup page's Continue card); without it the read never touches the
+ * fixtures (review m5: the marketing home's strip shows a name and a date only).
  */
-export async function readRecentQuickMatches(): Promise<RecentQuickMatch[]> {
+export function readRecentQuickMatches(opts: { counts: true }): Promise<RecentQuickMatchWithCounts[]>;
+export function readRecentQuickMatches(opts?: { counts?: false }): Promise<RecentQuickMatch[]>;
+export async function readRecentQuickMatches({ counts = false }: { counts?: boolean } = {}): Promise<RecentQuickMatch[]> {
   let held: string | undefined;
   try {
     held = (await cookies()).get(QUICK_MATCH_VISITOR_COOKIE)?.value;
@@ -33,7 +38,8 @@ export async function readRecentQuickMatches(): Promise<RecentQuickMatch[]> {
   }
   if (held === undefined || !isVisitorKeyShaped(held)) return [];
   try {
-    return await listRecentQuickMatches(hashVisitorKey(held));
+    const visitorHash = hashVisitorKey(held);
+    return counts ? await listRecentQuickMatches(visitorHash, { counts: true }) : await listRecentQuickMatches(visitorHash);
   } catch (err) {
     log.warn({ err }, "quick match recent strip: the visitor's recent matches could not be read; the strip is hidden");
     return [];

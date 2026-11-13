@@ -60,13 +60,14 @@ export default async function PlayPage({
   const { lang } = await params;
   if (!hasLocale(lang)) notFound();
   // The recent strip's rows (Task 9): fail-soft inside `readRecentQuickMatches` (pre-flight A9), read from the visitor
-  // cookie only (never minted here: the create route mints it).
+  // cookie only (never minted here: the create route mints it). With each row's played count, for the Continue card:
+  // only this page shows it, so only this page pays the fixture read (review m5).
   const [{ e }, d, ui, offer, recent] = await Promise.all([
     searchParams,
     getDictionary(lang, "marketing"),
     getDictionary(lang, "ui"),
     readOffer(),
-    readRecentQuickMatches(),
+    readRecentQuickMatches({ counts: true }),
   ]);
   const [first, ...rest] = setupSports(offer, ui);
   const refused = refusalCode(e);

@@ -102,8 +102,12 @@ export interface RecentQuickMatch {
   name: string;
   /** ISO 8601 (UTC). */
   createdAt: string;
-  /** `playedOf`, the home's own count (owner 2026-11-12: the setup page's Continue card says it, and is shown only while
-   *  `played < total`): the card never says a different "played" from the match's home. */
+}
+
+/** A recent row with its played count: `playedOf`, the home's own count (owner 2026-11-12: the setup page's Continue card
+ *  says it, and is shown only while `played < total`), so the card never says a different "played" from the match's home.
+ *  Only that page reads it, so only it pays the fixture read (review m5: `listRecentQuickMatches`' `counts`). */
+export interface RecentQuickMatchWithCounts extends RecentQuickMatch {
   played: number;
   total: number;
 }
@@ -122,8 +126,20 @@ export interface RecentQuickMatch {
  * row does not cost the guest a place: the read fetches twice `limit` and stops at `limit` rows that open, so a damaged
  * newest row lets the next older live one in. A failure of the read itself (the database) still throws: the page's
  * caller decides what an unreadable strip is.
+ *
+ * `counts` (review m5, controller ruling 2026-11-13): each row's played count, from a second read of the matches' fixtures
+ * in the same transaction. Only the setup page asks (its Continue card); the marketing home's strip shows a name and a
+ * date, so it never runs the fixture read, and that read's failure can never hide its strip.
  */
-export async function listRecentQuickMatches(visitorHash: string, limit = 5): Promise<RecentQuickMatch[]> {
+export function listRecentQuickMatches(
+  visitorHash: string,
+  opts: { limit?: number; counts: true },
+): Promise<RecentQuickMatchWithCounts[]>;
+export function listRecentQuickMatches(visitorHash: string, opts?: { limit?: number; counts?: false }): Promise<RecentQuickMatch[]>;
+export async function listRecentQuickMatches(
+  visitorHash: string,
+  { limit = 5, counts = false }: { limit?: number; counts?: boolean } = {},
+): Promise<RecentQuickMatch[]> {
   const { rows, fixtures } = await withTenant(SYSTEM_ORG, async (tx) => {
     const rows = await tx<{ id: string; competition_id: string; name: string; created_at: Date; token_enc: Uint8Array }[]>`
       select id, competition_id, name, created_at, token_enc
@@ -131,7 +147,7 @@ export async function listRecentQuickMatches(visitorHash: string, limit = 5): Pr
       where visitor_hash = ${visitorHash} and (expires_at is null or expires_at > now())
       order by created_at desc, id desc
       limit ${limit * 2}`;
-    if (rows.length === 0) return { rows, fixtures: [] };
+    if (rows.length === 0 || !counts) return { rows, fixtures: null };
     // The same fixture read as the account list's (`listMyQuickMatches`), for `playedOf`.
     const fixtures = await tx<(MatchLineRow & { competition_id: string })[]>`
       select d.competition_id, f.status, f.outcome, f.home_entrant_id, f.away_entrant_id, f.home_slot_label, f.away_slot_label,
@@ -142,19 +158,15 @@ export async function listRecentQuickMatches(visitorHash: string, limit = 5): Pr
     return { rows, fixtures };
   });
   const byCompetition = new Map<string, MatchLineRow[]>();
-  for (const f of fixtures) byCompetition.set(f.competition_id, [...(byCompetition.get(f.competition_id) ?? []), f]);
+  for (const f of fixtures ?? []) byCompetition.set(f.competition_id, [...(byCompetition.get(f.competition_id) ?? []), f]);
   const out: RecentQuickMatch[] = [];
   const skipped: { id: string; reason: HomeTokenOpenRefusal }[] = [];
   for (const r of rows) {
     if (out.length === limit) break;
     const opened = tryOpenHomeToken(r.token_enc);
     if (opened.ok) {
-      out.push({
-        token: opened.token,
-        name: r.name,
-        createdAt: r.created_at.toISOString(),
-        ...playedOf(byCompetition.get(r.competition_id) ?? []),
-      });
+      const row: RecentQuickMatch = { token: opened.token, name: r.name, createdAt: r.created_at.toISOString() };
+      out.push(fixtures === null ? row : { ...row, ...playedOf(byCompetition.get(r.competition_id) ?? []) });
     } else skipped.push({ id: r.id, reason: opened.reason });
   }
   if (skipped.length > 0) {

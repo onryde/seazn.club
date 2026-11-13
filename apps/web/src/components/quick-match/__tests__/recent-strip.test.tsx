@@ -18,8 +18,8 @@ const TOKEN_A = `qm_${"A".repeat(42)}a`;
 const TOKEN_B = `qm_${"B".repeat(42)}b`;
 
 const rows: RecentQuickMatch[] = [
-  { token: TOKEN_A, name: "Friday doubles", createdAt: "2026-11-08T10:00:00.000Z", played: 1, total: 6 },
-  { token: TOKEN_B, name: "Badminton · Thu 6 Nov", createdAt: "2026-11-06T18:30:00.000Z", played: 1, total: 1 },
+  { token: TOKEN_A, name: "Friday doubles", createdAt: "2026-11-08T10:00:00.000Z" },
+  { token: TOKEN_B, name: "Badminton · Thu 6 Nov", createdAt: "2026-11-06T18:30:00.000Z" },
 ];
 
 const html = (items: readonly RecentQuickMatch[], lang = "en") =>
@@ -63,7 +63,7 @@ describe("RecentStrip", () => {
   });
 
   it("the date is the UTC calendar day whatever the server's zone: 23:30 UTC on the 8th reads the 8th", () => {
-    const late = html([{ token: TOKEN_A, name: "Late one", createdAt: "2026-11-08T23:30:00.000Z", played: 0, total: 1 }]);
+    const late = html([{ token: TOKEN_A, name: "Late one", createdAt: "2026-11-08T23:30:00.000Z" }]);
     expect(late).toMatch(/>8 Nov<\/time>/);
   });
 
@@ -83,7 +83,7 @@ describe("RecentStrip", () => {
 
   it("a long name truncates instead of widening the page: min-w-0 down the chain, `truncate` on the name, 44px rows", () => {
     const long = "The Thursday night mixed doubles ladder at the community hall, second court";
-    const markup = html([{ token: TOKEN_A, name: long, createdAt: "2026-11-08T10:00:00.000Z", played: 0, total: 1 }]);
+    const markup = html([{ token: TOKEN_A, name: long, createdAt: "2026-11-08T10:00:00.000Z" }]);
     const tag = anchors(markup)[0]!;
     // The tap target: at least 44px tall (min-h-11), and allowed to shrink below its content's width.
     expect(tag).toMatch(/\bclass="[^"]*\bmin-h-11\b/);
