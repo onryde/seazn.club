@@ -311,10 +311,13 @@ export const PublicRegistrationDivision = z.object({
   opens_at: z.string().nullable(),
   closes_at: z.string().nullable(),
   capacity: z.number().int().nullable(),
-  /** Spots left before new submissions waitlist; null = uncapped. */
+  /** Spots left before new submissions waitlist, counted against the cap submit enforces: min(capacity, the plan's
+   *  per-division entrant limit). null = neither caps the division. */
   remaining: z.number().int().nullable(),
   /** Spots taken — the masthead capacity meter (v3/05 §2). */
   taken: z.number().int(),
+  /** Entries on the waiting list behind this division (PROMPT-52); 0 when nobody waits. */
+  waitlisted: z.number().int().nonnegative(),
   open: z.boolean(),
   /** 'window' | 'full' (waitlist only) | 'payments_unavailable' | 'entry_kind_unavailable' (the settings' entrant kind is
    *  one the division's own entrant kinds do not include) | null */

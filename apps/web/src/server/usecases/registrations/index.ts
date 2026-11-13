@@ -27,6 +27,7 @@ import "server-only";
 //   mail                 registration mail: cart confirmation (submit, resend) and the payment reminder message
 //   lifecycle-mail       the registrant's lifecycle mails (payment received, approved, released, withdrawn by the organiser, joined, rejected, promotion lapsed): one queue producer per kind
 //   settings             organiser settings (defaults, get / put) and the public register-panel info
+//   places-left          the panel's places-left count, against submit's cap min(capacity, plan limit); pure, sibling-only
 //   checkout             minting and resuming a Stripe checkout for a registration or a cart
 //   pay-token            the player payment page's token: mint, record, issue a link, resolve a token to its entry
 //   pay-page             the player payment page's document: what /r/pay/<token> shows, decided by an ordered state table

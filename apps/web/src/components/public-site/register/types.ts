@@ -84,8 +84,14 @@ export interface DivisionLike {
   open: boolean;
   closed_reason: string | null;
   capacity: number | null;
+  /** Places left before a new entry waitlists, against the cap submit enforces: min(capacity, plan entrant limit).
+   *  null = neither caps the division. */
   remaining: number | null;
   taken: number;
+  /** Entries on the waiting list behind this division (registration redesign B3 T11). Optional on this narrow type, like
+   *  `online_play` and `eligibility_note`: every older hand-built fixture across the stepper's suites stays compiling.
+   *  The wire (`PublicRegistrationDivision`) always carries it; `undefined` reads as nobody waiting. */
+  waitlisted?: number;
   opens_at: string | null;
   closes_at: string | null;
   fee_cents: number;

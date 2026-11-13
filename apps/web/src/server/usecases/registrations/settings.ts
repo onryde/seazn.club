@@ -21,6 +21,7 @@ import {
 import { divisionTakesKind } from "@/lib/division-entrant-kinds";
 import type { RegistrationSettingsRow } from "./types";
 import { SETTINGS_COLS, loadSettings, windowOpen } from "./lookups";
+import { placesLeft } from "./places-left";
 
 // ---------------------------------------------------------------------------
 // Organiser: settings
@@ -390,7 +391,13 @@ export async function publicRegistrationInfo(
   // Task 9 resolves the last as community at read time) can still have OPEN
   // Stripe-fee divisions with Connect live. Scope by competition so an Event
   // Pass keeps THAT comp's paid intake open.
-  const paidEntitled = await hasFeature(comp.org_id, "registration.paid", comp.id);
+  //
+  // The plan's per-division entrant limit, read once for the panel with the same call submit makes before its
+  // transaction (registration redesign B3 T11): places left is counted against the cap submit enforces (./places-left).
+  const [paidEntitled, planLimit] = await Promise.all([
+    hasFeature(comp.org_id, "registration.paid", comp.id),
+    getLimit(comp.org_id, "entrants.per_division.max", comp.id),
+  ]);
 
   // T16: online play is stated only while the club is offered online chess — asked once, and only when a division
   // could play online at all (a club with no online division asks PostHog nothing).
@@ -400,8 +407,7 @@ export async function publicRegistrationInfo(
 
   const now = new Date();
   const divisions: PublicDivisionInfo[] = rows.map((r) => {
-    const remaining =
-      r.capacity === null ? null : Math.max(0, r.capacity - r.active);
+    const remaining = placesLeft({ capacity: r.capacity, planLimit, active: r.active });
     // A card division can't take submissions when Connect is broken OR the
     // paid entitlement is gone — closing it with an honest reason beats
     // accepting money we can't keep (spec #9, P2-10).

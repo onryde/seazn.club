@@ -63567,6 +63567,11 @@
                                 "minimum": -9007199254740991,
                                 "maximum": 9007199254740991
                               },
+                              "waitlisted": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
                               "open": {
                                 "type": "boolean"
                               },
@@ -63735,6 +63740,7 @@
                               "capacity",
                               "remaining",
                               "taken",
+                              "waitlisted",
                               "open",
                               "closed_reason",
                               "category",
@@ -63799,6 +63805,7 @@
                         "capacity": -9007199254740991,
                         "remaining": -9007199254740991,
                         "taken": -9007199254740991,
+                        "waitlisted": 0,
                         "open": true,
                         "closed_reason": "example",
                         "category": "example",
