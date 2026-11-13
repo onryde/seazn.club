@@ -335,6 +335,7 @@ describe("the empty case: a quick match with no match left", () => {
     },
     divisionId: "d-1",
     stageId: "s-1",
+    knockoutStageId: null,
     sport: { key: "badminton", labelKey: "sport.badminton" },
     kind: "pair",
     kindChosen: true,
@@ -344,6 +345,9 @@ describe("the empty case: a quick match with no match left", () => {
     played: 0,
     notPlayed: 0,
     total: 0,
+    league: { played: 0, notPlayed: 0, total: 0, done: false },
+    knockout: null,
+    champion: null,
     standings: {
       stage_id: "s-1", pool_id: null, computed_through_seq: 0, updated_at: null,
       rows: ["e-1", "e-2"].map((entrantId, i, ids) => ({
@@ -446,6 +450,7 @@ describe("the empty case: a quick match with no match left", () => {
     const settled = (summary: unknown, winnerEntrantId: string): QuickMatchFixture => ({
       id: "f-1", roundNo: 1, fixtureNo: 1, seqInRound: 1, home: side(1), away: side(2), homeSlotLabel: null, awaySlotLabel: null,
       status: "decided", summary, isBye: false, isFinal: false, winnerEntrantId, phase: "settled", resultMovedOn: false,
+      stage: "league", knockoutSeats: null,
     });
     const football = (f: QuickMatchFixture): QuickMatchHome => ({
       ...empty, sport: { ...empty.sport, key: "football", labelKey: "sport.football" }, fixtures: [f], played: 1, total: 1,
@@ -470,6 +475,7 @@ describe("the empty case: a quick match with no match left", () => {
     const fx = (id: string, n: number, over: Partial<QuickMatchFixture>): QuickMatchFixture => ({
       id, roundNo: 1, fixtureNo: n, seqInRound: n, home: side(1), away: side(2), homeSlotLabel: null, awaySlotLabel: null,
       status: "decided", summary: null, isBye: false, isFinal: false, winnerEntrantId: "e-1", phase: "settled", resultMovedOn: false,
+      stage: "league", knockoutSeats: null,
       ...over,
     });
     const fixtures = [
@@ -586,6 +592,7 @@ describe("the empty case: a quick match with no match left", () => {
     const settled = (over: Partial<QuickMatchFixture>): QuickMatchFixture => ({
       id: "f-1", roundNo: 1, fixtureNo: 1, seqInRound: 1, home: side(1), away: side(2), homeSlotLabel: null, awaySlotLabel: null,
       status: "decided", summary, isBye: false, isFinal: false, winnerEntrantId: "e-2", phase: "settled", resultMovedOn: false,
+      stage: "league", knockoutSeats: null,
       ...over,
     });
     const league = (f: QuickMatchFixture): QuickMatchHome => ({ ...empty, fixtures: [f], played: 1, total: 1 });
@@ -607,7 +614,7 @@ describe("the empty case: a quick match with no match left", () => {
     const fixture = (over: Partial<QuickMatchFixture>): QuickMatchFixture => ({
       id: "f-1", roundNo: 1, fixtureNo: 1, seqInRound: 1, home: side(1), away: side(2), homeSlotLabel: null,
       awaySlotLabel: null, status: "scheduled", summary: null, isBye: false, isFinal: false, winnerEntrantId: null,
-      phase: "ready", resultMovedOn: false, ...over,
+      phase: "ready", resultMovedOn: false, stage: "knockout", knockoutSeats: null, ...over,
     });
     const knockout = (label: unknown): QuickMatchHome => ({
       ...empty,
@@ -642,6 +649,7 @@ describe("the empty case: a quick match with no match left", () => {
     const fx = (id: string, n: number, over: Partial<QuickMatchFixture> = {}): QuickMatchFixture => ({
       id, roundNo: 1, fixtureNo: n, seqInRound: n, home: side(1), away: side(2), homeSlotLabel: null, awaySlotLabel: null,
       status: "scheduled", summary: null, isBye: false, isFinal: false, winnerEntrantId: null, phase: "ready", resultMovedOn: false,
+      stage: "league", knockoutSeats: null,
       ...over,
     });
     const settled = (id: string, n: number) => fx(id, n, { status: "decided", winnerEntrantId: "e-1", phase: "settled" });
