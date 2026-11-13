@@ -18,6 +18,8 @@ vi.mock("next/navigation", () => ({
 }));
 vi.mock("@/lib/auth", () => ({
   getCurrentUser: async () => ({ id: "u1", email: "player@example.com", display_name: "Pat" }),
+  // /me reads the session (T6 review m3: a staff impersonation sees quick matches without their links).
+  getCurrentSession: async () => ({ user: { id: "u1", email: "player@example.com", display_name: "Pat" }, impersonated: false }),
   getActiveOrgId: async () => null,
   getUserOrgs: async () => [],
 }));
@@ -54,6 +56,8 @@ vi.mock("@/server/usecases/me-officiating", () => ({
   listPendingOfficiatingClaims: async () => [],
 }));
 vi.mock("@/server/usecases/official-marks", () => ({ myMarksAverage: async () => null }));
+// /me lists the saved quick matches (quick match plan 3 T6); none here.
+vi.mock("@/server/usecases/quick-match-home", () => ({ listMyQuickMatches: async () => [] }));
 // page.tsx reads the Lichess card (chess T16) beside the lanes; nothing to link here, and no DB in CI's test job.
 vi.mock("@/server/usecases/me-lichess", () => ({
   myLichessLink: async () => ({ show: false, linkedUsername: null, needsReconsent: false, orgSlug: null }),

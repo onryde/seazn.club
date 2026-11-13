@@ -23,20 +23,26 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { sql } from "@/lib/db";
 import { FIXTURE_STATUSES } from "@/lib/fixture-status";
 import offerJson from "@/lib/quick-match-offer.generated.json";
-import { DEFAULT_LOCALE } from "@/lib/i18n-constants";
+import { DEFAULT_LOCALE, LOCALES } from "@/lib/i18n-constants";
 import { messages } from "@/lib/messages";
-import { variantWordKey } from "@/lib/variant-label-keys";
 import type { CreateQuickMatch } from "@/server/api-v1/schemas";
 import { forEachSportAsync } from "@seazn/engine/testkit";
+import { builtinModules } from "@seazn/engine/sports";
+import enPublic from "@/dictionaries/en/public.json";
+import { t as tRuntime } from "@/lib/i18n-runtime";
+import { quickMatchFullTable } from "@/app/q/[token]/full-table";
 import { listDivisionFixtures } from "../fixtures";
 import { touchQuickMatchActivity, touchQuickMatchActivityForFixture } from "../quick-match-activity";
-import { createQuickMatch, systemAuth, type CreatedQuickMatch } from "../quick-match-create";
+import { systemAuth, type CreatedQuickMatch } from "../quick-match-create";
+import { createQuickMatchAnyFormat } from "./_quick-match-knockout";
 import { hardDeleteQuickMatchCompetition } from "../quick-match-delete";
 import {
   findQuickMatchByCompetition,
   nextPlayable,
   readQuickMatchHome,
   resolveQuickMatchToken,
+  toRow,
+  type QuickMatchDbRow,
   type QuickMatchFixture,
   type QuickMatchHome,
   type QuickMatchRow,
@@ -85,7 +91,7 @@ const league4 = (over: Partial<CreateQuickMatch> = {}): CreateQuickMatch => ({
   locale: "en",
   ...over,
 });
-const create = (input: CreateQuickMatch = league4()) => createQuickMatch(input, { visitorHash: v() });
+const create = (input: CreateQuickMatch = league4()) => createQuickMatchAnyFormat(input, { visitorHash: v() });
 
 async function rowOf(out: CreatedQuickMatch): Promise<QuickMatchRow> {
   const row = await resolveQuickMatchToken(out.token);
@@ -137,6 +143,9 @@ const fx = (o: Partial<QuickMatchFixture> & Pick<QuickMatchFixture, "id" | "roun
   homeSlotLabel: null,
   awaySlotLabel: null,
   status: "scheduled",
+  seqInRound: 1,
+  phase: "ready",
+  resultMovedOn: false,
   summary: null,
   isBye: false,
   isFinal: false,
@@ -192,6 +201,28 @@ describe("nextPlayable (C11: the hero's next match)", () => {
   });
 });
 
+// ── the row ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+describe("toRow: a stored locale", () => {
+  // V515's check constraint keeps an unknown locale out of the column (T1's quick-match-email.test.ts proves it), so no DB
+  // row can carry one: the read's fallback is proven here, on the mapper itself, as defence in depth.
+  const dbRow = (locale: string): QuickMatchDbRow => ({
+    id: "qm-1", competition_id: "c-1", name: "n", format: "league", email: null, locale,
+    last_activity_at: new Date(0), expires_at: null, saved_by_user_id: null, token_enc: new Uint8Array(),
+  });
+  it("one the app does not speak reads as the default; each one it speaks reads as itself", () => {
+    expect(toRow(dbRow("xx")).locale).toBe(DEFAULT_LOCALE);
+    expect(toRow(dbRow("")).locale).toBe(DEFAULT_LOCALE);
+    let kept = 0;
+    for (const locale of LOCALES) {
+      expect(toRow(dbRow(locale)).locale).toBe(locale);
+      kept++;
+    }
+    expect(kept).toBe(4);   // en, fr, es, nl: the four dictionaries
+    expect(LOCALES.filter((l) => l !== DEFAULT_LOCALE).length, "a positive case that differs from the default").toBeGreaterThan(0);
+  });
+});
+
 // ── resolve and find ────────────────────────────────────────────────────────────────────────────────────────────────
 
 describe.skipIf(!HAS_DB)("resolveQuickMatchToken / findQuickMatchByCompetition", () => {
@@ -213,10 +244,6 @@ describe.skipIf(!HAS_DB)("resolveQuickMatchToken / findQuickMatchByCompetition",
     expect(await resolveQuickMatchToken(a.token.slice(0, -1))).toBeNull();   // one character short
     expect(await resolveQuickMatchToken(`${a.token} `)).toBeNull();
     expect(await resolveQuickMatchToken(mintHomeToken())).toBeNull();   // well shaped, never issued
-
-    // A stored locale the app no longer speaks reads as the default (toLocale), never as a broken page.
-    await sql`update quick_matches set locale = 'xx' where id = ${a.id}`;
-    expect((await resolveQuickMatchToken(a.token))!.locale).toBe(DEFAULT_LOCALE);
 
     await sql`update quick_matches set expires_at = now() - interval '1 second' where id = ${a.id}`;   // the sweep has not run yet
     expect(await resolveQuickMatchToken(a.token)).toBeNull();
@@ -314,7 +341,7 @@ describe.skipIf(!HAS_DB)("readQuickMatchHome", () => {
     expect(h.total).toBe(a.matchCount);   // C17: the number the Start button showed
     expect(h.played).toBe(0);
     expect(h.allPlayed).toBe(false);
-    expect(h.live).toBeNull();
+    expect(h.fixtures.filter((f) => f.phase === "live")).toEqual([]);
     expect(h.next!.roundNo).toBe(1);
     expect(h.next!.fixtureNo).toBe(1);
     expect(h.fixtures).toHaveLength(6);
@@ -328,14 +355,8 @@ describe.skipIf(!HAS_DB)("readQuickMatchHome", () => {
     expect(h.standings!.stage_id).toBe(a.stageId);
     expect(tableOf(h).map((r) => r.entrantId).sort()).toEqual(h.sides.map((s) => s.entrantId).sort());
     expect(h.kind).toBe("pair");
-    expect(h.sport).toEqual({
-      key: "badminton",
-      labelKey: "sport.badminton",
-      variantKey: BADMINTON_V,
-      variantLabelKey: variantWordKey("badminton", BADMINTON_V) ?? null,
-    });
+    expect(h.sport).toEqual({ key: "badminton", labelKey: "sport.badminton" });
     expect(Object.hasOwn(messages, h.sport.labelKey)).toBe(true);
-    expect(h.sport.variantLabelKey).not.toBeNull();   // every system badminton variant is named (variant-label-keys.ts)
   });
 
   it("never returns another quick match's division, fixtures or sides (isolation, §7.1 point 3)", async () => {
@@ -377,7 +398,7 @@ describe.skipIf(!HAS_DB)("readQuickMatchHome", () => {
       expect(h.played).toBe(0);
       expect(h.allPlayed).toBe(false);   // zero of zero is not a finished match: no winner card
       expect(h.next).toBeNull();
-      expect(h.live).toBeNull();
+      expect(h.fixtures.filter((f) => f.phase === "live")).toEqual([]);
       expect(h.sides).toHaveLength(SIDES.length);
     } finally {
       await hardDeleteQuickMatchCompetition(a.competitionId);
@@ -412,6 +433,35 @@ describe.skipIf(!HAS_DB)("readQuickMatchHome", () => {
     }
   });
 
+  it("refuses a stage that is neither a league nor a knockout: the moved-on read assumes no Swiss round to pair (review m3)", async () => {
+    const a = await create();
+    try {
+      expect((await homeOf(a)).fixtures.length, "the positive pair: the same match reads as a league").toBeGreaterThan(0);
+      await sql`update stages set kind = 'swiss' where id = ${a.stageId}`;   // a state no producer makes: the guard's own case
+      await expect(readQuickMatchHome(await rowOf(a))).rejects.toThrow(/is a swiss stage, not a league or a knockout/);
+    } finally {
+      await hardDeleteQuickMatchCompetition(a.competitionId);
+    }
+  });
+
+  it("refuses a settled fixture whose feed names a match outside its own division (review m4)", async () => {
+    // A knockout of 3: its bye is settled at the draw, so the moved-on read follows the bye's feed into the final.
+    const a = await create(league4({ format: "knockout", sides: SIDES.slice(0, 3) }));
+    const b = await create(league4({ format: "knockout", sides: SIDES.slice(0, 3) }));
+    try {
+      const bye = (await homeOf(a)).fixtures.find((f) => f.isBye);
+      expect(bye, "premise: a knockout of 3 draws one bye").toBeDefined();
+      const [fed] = await sql<{ winner_to_fixture: string | null }[]>`select winner_to_fixture from fixtures where id = ${bye!.id}`;
+      expect(fed!.winner_to_fixture, "premise: the bye feeds this match's own final").not.toBeNull();
+      const foreign = (await homeOf(b)).fixtures.find((f) => f.isFinal)!;
+      await sql`update fixtures set winner_to_fixture = ${foreign.id} where id = ${bye!.id}`;
+      await expect(readQuickMatchHome(await rowOf(a))).rejects.toThrow(/feeds .* outside its own division/);
+    } finally {
+      await hardDeleteQuickMatchCompetition(a.competitionId);
+      await hardDeleteQuickMatchCompetition(b.competitionId);
+    }
+  });
+
   it("a match in play is live and next, even past a lower-numbered one; only its own summary is read", async () => {
     const a = await create();
     let h = await homeOf(a);
@@ -419,7 +469,7 @@ describe.skipIf(!HAS_DB)("readQuickMatchHome", () => {
     expect(last.fixtureNo).toBeGreaterThan(h.next!.fixtureNo);   // precondition: it is not already next
     for (const req of await firstRallyFor(last.id)) await scoreEvent(systemAuth(), last.id, req);
     h = await homeOf(a);
-    expect(h.live!.id).toBe(last.id);
+    expect(h.fixtures.filter((f) => f.phase === "live").map((f) => f.id)).toEqual([last.id]);
     expect(h.next!.id).toBe(last.id);
     const [stored] = await sql<{ summary: unknown }[]>`select summary from match_states where fixture_id = ${last.id}`;
     expect(stored).toBeDefined();
@@ -450,7 +500,8 @@ describe.skipIf(!HAS_DB)("readQuickMatchHome", () => {
     expect(h.played).toBe(0);
     const undone = h.fixtures.find((f) => f.id === first.id)!;
     expect(undone.winnerEntrantId).toBeNull();
-    expect(h.live!.id).toBe(first.id);   // started and undecided again: in play
+    // started and undecided again: in play
+    expect(h.fixtures.filter((f) => f.phase === "live").map((f) => f.id)).toEqual([first.id]);
     expect(h.next!.id).toBe(first.id);
     expect(tableOf(h).reduce((n, row) => n + row.played, 0)).toBe(0);
   });
@@ -488,9 +539,59 @@ describe.skipIf(!HAS_DB)("readQuickMatchHome", () => {
     expect(h.played).toBe(2);
     expect(h.allPlayed).toBe(true);
     expect(h.next).toBeNull();
-    expect(h.live).toBeNull();
+    expect(h.fixtures.filter((f) => f.phase === "live")).toEqual([]);
     const done = h.fixtures.find((f) => f.id === final.id)!;
     expect(sideIds(done)).toContain(done.winnerEntrantId);
+  });
+
+  it("knockout of 5: each fixture carries its seq in round, so every waiting seat's label names exactly one feeder (D12)", async () => {
+    // Five sides: an 8-draw, three first-round byes, one real quarter-final, two semi-finals and the final (n - 1 = 4
+    // matches, §7.3). The expected seqs are the generator's own rows, read straight from `fixtures`, never from the read.
+    const k = await create(league4({ format: "knockout", sides: ["S1", "S2", "S3", "S4", "S5"] }));
+    try {
+      const h = await homeOf(k);
+      const stored = await sql<{ id: string; seq_in_round: number }[]>`
+        select id, seq_in_round from fixtures where division_id = ${k.divisionId}`;
+      expect(stored).toHaveLength(h.fixtures.length);
+      expect(h.fixtures.filter((f) => !f.isBye)).toHaveLength(4);   // the rulebook: a knockout of n is n - 1 matches
+      for (const f of h.fixtures) {
+        expect(f.seqInRound, `fixture ${f.id}`).toBe(stored.find((s) => s.id === f.id)!.seq_in_round);
+      }
+      // Within a round the seqs are 1..k, each once: a (round, seq) pair names one fixture.
+      for (const round of new Set(h.fixtures.map((f) => f.roundNo))) {
+        const seqs = h.fixtures.filter((f) => f.roundNo === round).map((f) => f.seqInRound).sort((a, b) => a - b);
+        expect(seqs, `round ${round}`).toEqual(seqs.map((_, i) => i + 1));
+      }
+      // Every unknown seat's label is a winner feed whose {round, seq} resolves to exactly one fixture of an earlier round.
+      let resolved = 0;
+      for (const f of h.fixtures) {
+        if (f.isBye) continue;   // a bye's empty seat carries no feeder
+        for (const [side, label] of [[f.home, f.homeSlotLabel], [f.away, f.awaySlotLabel]] as const) {
+          if (side !== null) continue;
+          const { key, params } = label as { key: string; params: { round: number; seq: number } };
+          expect(key).toBe("slot.winner_match");
+          const feeders = h.fixtures.filter((x) => x.roundNo === Number(params.round) && x.seqInRound === Number(params.seq));
+          expect(feeders, `${f.id}: ${JSON.stringify(label)}`).toHaveLength(1);
+          expect(feeders[0]!.roundNo).toBeLessThan(f.roundNo);
+          resolved++;
+        }
+      }
+      // The quarter-final's winner (one semi-final seat) and both seats of the final: three seats wait on a feeder.
+      expect(resolved).toBe(3);
+      // Each fixture's phase, by C11/C18 on a draw nothing has been played in: a bye is settled (its walkover), a match
+      // with both sides known is ready, one with a side still unknown waits. The list's Score and the hero's next agree.
+      let phased = 0;
+      for (const f of h.fixtures) {
+        const expected = f.isBye ? "settled" : f.home !== null && f.away !== null ? "ready" : "waiting";
+        expect(f.phase, `fixture ${f.roundNo}.${f.seqInRound}`).toBe(expected);
+        phased++;
+      }
+      expect(phased).toBe(stored.length);
+      expect(h.fixtures.filter((f) => f.phase === "waiting")).toHaveLength(2);   // the semi-final with a feeder, the final
+      expect(h.fixtures.find((f) => f.phase === "ready" && f.id === h.next!.id)).toBeDefined();
+    } finally {
+      await hardDeleteQuickMatchCompetition(k.competitionId);
+    }
   });
 
   it("reads every offered sport's home with that sport's own keys and kind (sweep)", async () => {
@@ -505,13 +606,29 @@ describe.skipIf(!HAS_DB)("readQuickMatchHome", () => {
       const out = await create(input);
       const h = await homeOf(out);
       // The setup screen's own names for this sport and variant (C1: keys, never English names), and the kind chosen.
-      expect(h.sport).toEqual({ key, labelKey: sport.labelKey, variantKey: variant.variant_key, variantLabelKey: variant.labelKey });
+      expect(h.sport).toEqual({ key, labelKey: sport.labelKey });
       expect(h.kind).toBe(kind);
+      // The kind is named only where the guest chose it: the setup screen shows its kind switch for >1 kind (h1).
+      expect(h.kindChosen, key).toBe(sport.kinds.length > 1);
+      // The table's points unit: FIDE's half-points for chess (win 1, draw ½), whole points for every other sport.
+      expect(h.pointsUnit, key).toBe(key === "boardgame" ? "half" : "whole");
       expect(h.total).toBe(quickMatchPreview({ format: "league", sides: 2, plays: 1 }).matchCount);
       expect(h.total).toBe(1);
       expect(h.next!.id).toBe(h.fixtures[0]!.id);
       expect([h.next!.home!.name, h.next!.away!.name].sort()).toEqual(["Side A", "Side B"]);
       expect(tableOf(h)).toHaveLength(2);
+      // The Full table's ingredients (owner 2026-11-12): the sport's own standings metrics, as the engine declares them, and
+      // the stage's table rules from the one loader (its tie-break order); the table built from them has more to show
+      // than the short table's P, W and Pts, in every offered sport, and a cell for every row.
+      expect(h.metricSpecs, key).toEqual(builtinModules.find((m) => m.key === key)!.metrics);
+      expect(h.tableRules, key).not.toBeNull();
+      expect(h.tableRules!.tiebreakers.length, key).toBeGreaterThan(0);
+      const full = quickMatchFullTable(h, (k) => tRuntime(enPublic, k));
+      const fullKeys = full!.columns.map((c) => c.key);
+      expect(fullKeys, key).toEqual(expect.arrayContaining(["played", "won", "points"]));
+      expect(fullKeys.filter((k) => !["played", "won", "drawn", "points"].includes(k)).length, `${key}: more than the short table`).toBeGreaterThan(0);
+      expect(Object.keys(full!.cells).sort(), key).toEqual(tableOf(h).map((r) => r.entrantId).sort());
+      for (const cells of Object.values(full!.cells)) expect(cells, key).toHaveLength(fullKeys.length);
       checked++;
       await hardDeleteQuickMatchCompetition(out.competitionId);
     });

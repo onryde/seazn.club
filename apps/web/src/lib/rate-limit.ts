@@ -57,6 +57,16 @@ export function retryAfterSeconds(ttlMs: number, windowSeconds: number): number 
 const tooMany = (retryAfter: number): HttpError =>
   new HttpError(429, TOO_MANY, undefined, undefined, { "Retry-After": String(retryAfter) });
 
+/** The fail-closed OUTAGE's 429s (Redis configured, no count), kept apart from a limit hit's for a caller's own log
+ *  (branch-fix A review m9: which limit refused a quick match's mail). Off the wire: on it the two stay the same code-less
+ *  429, so no caller that reads one changes. */
+const outages = new WeakSet<HttpError>();
+
+/** True only for the 429 `rateLimit` threw because the limiter could not count (an outage), never for a limit hit. */
+export function isRateLimitOutage(err: unknown): boolean {
+  return err instanceof HttpError && outages.has(err);
+}
+
 export async function rateLimit(
   key: string,
   { max, windowSeconds, failClosed = false }: RateLimitConfig,
@@ -71,7 +81,11 @@ export async function rateLimit(
     //    even for failClosed limits, so auth flows work without a Redis.
     //  - Redis configured but unreachable (a real outage): apply failClosed.
     //    There is no window to read, so Retry-After is the full window (R4).
-    if (failClosed && cacheEnabled()) throw tooMany(windowSeconds);
+    if (failClosed && cacheEnabled()) {
+      const outage = tooMany(windowSeconds);
+      outages.add(outage);
+      throw outage;
+    }
     return;
   }
 
@@ -103,6 +117,25 @@ export const MUTATION_LIMIT: RateLimitConfig = { max: 60, windowSeconds: 60 };
 
 /** Device-link mint AND reissue (a reissue IS a mint): one bucket, one number. */
 export const DEVICE_LINK_MINT_LIMIT: RateLimitConfig = { max: 10, windowSeconds: 60 };
+
+/**
+ * A guest's quick match create (POST /api/quick-match), per IP: quick match plan 2 pre-flight D2. A group on one club's
+ * wifi shares an IP, so the bound is loose; the real per-person bound is the visitor's alive cap
+ * (QUICK_MATCH_MAX_ALIVE_PER_VISITOR), and this one stops a cleared-cookie loop. Fail-open: a Redis blip must not lock a
+ * table of friends out of a game. Not EMAIL_LIMIT (5 per 300 s, fail-closed): plan 3 adds its own limit to a create that
+ * carries an email.
+ */
+export const QUICK_MATCH_CREATE_LIMIT: RateLimitConfig = { max: 20, windowSeconds: 600, failClosed: false };
+
+/**
+ * A quick match create's link mail, per RECIPIENT: one inbox is mailed at most 3 times a day, however many IPs the sender
+ * rotates through (quick match plan 3 T1 review I1, controller ruling 2026-11-08). The key is the sha256 of the lower-cased
+ * address, never the address itself. Fail-closed, as every mail-sending limit is: an outage answers no, and since branch
+ * review B m3 a no costs the MAIL, never the match (the create is made without the email; the home says so). Taken after
+ * EMAIL_LIMIT (per IP), and only once the create's own refusals have passed (the alive count, the offer, the format): the
+ * route hands both buckets to `createQuickMatch` as its `mailAllowed` gate.
+ */
+export const QUICK_MATCH_RECIPIENT_LIMIT: RateLimitConfig = { max: 3, windowSeconds: 24 * 3600, failClosed: true };
 
 /**
  * Cookie-consent recording (POST /api/consent), per IP. A person clicks the

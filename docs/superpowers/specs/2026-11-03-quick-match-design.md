@@ -175,7 +175,8 @@ The home page renders a private competition's table or bracket and fixture list 
 - An optional email is stored on the `quick_matches` row. It is **never verified at entry**, so it gets exactly one mail at creation and one reminder (C2, tracked by `reminder_sent_at`).
 - Use the outbox: `enqueueEmail` (`server/email-outbox/enqueue.ts:152`), locale from the setup screen. Follow the funnel's pattern (`api/funnel/start/route.ts:46-58`), where the row and its outbox mail commit together. Outbox rows reference their subject by free-text `ref_type`/`ref_id` with no foreign key (`V470:38-39`), so the sweep deletes them by that reference (§7.8).
 - The mail carries the link and the friendly name only.
-- Because the address is unverified, anyone can type a stranger's email on a match. The only effect is one stray match in that person's "Quick matches" list once they sign in, which they can delete (C13). Accepted.
+- ~~Because the address is unverified, anyone can type a stranger's email on a match. The only effect is one stray match in that person's "Quick matches" list once they sign in, which they can delete (C13). Accepted.~~
+- **Corrected 2026-11-08 (controller (PO rec, autonomous mandate); plan 3 branch review B m5):** "the only effect is one stray match" understated it. Because the address is unverified, anyone can type another person's email on a match, and once that person signs in with it, the by-email save (§7.7, C3) makes them **the match's saver**: the match stops expiring, and they get the saver's rename and delete rights (C13). They can rename the match, or delete it out from under the creator's friends, and the creator's own later Save answers "already saved by someone else". This is the intended behaviour of C3 and O8, not a defect, and it stays. Accepted. The address itself is forgotten at that save, because the saver is known from then on (branch review B m9).
 
 ### 7.7 Saving
 

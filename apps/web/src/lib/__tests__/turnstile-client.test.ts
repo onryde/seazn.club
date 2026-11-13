@@ -529,6 +529,107 @@ describe("strict-mode remount: unmount must not release a pending token() when a
   });
 });
 
+describe("awaitingVisitor and reveal: an interactive challenge with no token yet (quick match ruling 2026-11-12)", () => {
+  // Cloudflare's documented `before-interactive-callback` / `after-interactive-callback` bracket the time the widget shows a
+  // box to tick. In that window, with no token held, `token()` could only wait out TOKEN_WAIT_MS; a form asks this instead and
+  // shows the visitor the box. The invisible check (no interactive phase) never reads as awaiting, so it keeps the wait.
+  /** A container stand-in with the two DOM calls `reveal` makes, counted. */
+  const box = () => {
+    const calls: string[] = [];
+    const el = {
+      scrollIntoView: vi.fn((o: unknown) => void calls.push(`scroll:${JSON.stringify(o)}`)),
+      focus: vi.fn((o: unknown) => void calls.push(`focus:${JSON.stringify(o)}`)),
+    };
+    return { el: el as unknown as HTMLElement, calls };
+  };
+
+  it("the sequence: invisible running → interactive → ticked → spent and reset → interactive again → error → unmount (counted)", async () => {
+    const widget = fakeWidget({ autoSolve: false });
+    const { c } = controller({}, widget);
+    const seen: [string, boolean][] = [];
+    const at = (step: string) => seen.push([step, c.awaitingVisitor()]);
+    at("before mount");
+    c.mount(CONTAINER, VIEW);
+    await flush();
+    at("invisible check running");
+    widget.params()["before-interactive-callback"]();
+    at("interactive, no token");
+    widget.params()["after-interactive-callback"]();
+    widget.solve("tok-1");
+    at("ticked: token held");
+    c.reset();
+    at("token spent, widget reset");
+    widget.params()["before-interactive-callback"]();
+    at("interactive again");
+    widget.params()["error-callback"]();
+    at("errored: release the form, the server answers");
+    widget.params()["before-interactive-callback"]();
+    widget.solve("tok-2");
+    widget.params()["before-interactive-callback"]();
+    at("interactive after a good token cleared the error");
+    c.unmount();
+    at("unmounted");
+    expect(seen).toEqual([
+      ["before mount", false],
+      ["invisible check running", false],
+      ["interactive, no token", true],
+      ["ticked: token held", false],
+      ["token spent, widget reset", false],
+      ["interactive again", true],
+      ["errored: release the form, the server answers", false],
+      ["interactive after a good token cleared the error", false],
+      ["unmounted", false],
+    ]);
+  });
+
+  it("a token ends the interactive phase even if Cloudflare never calls after-interactive: its later expiry does not read as awaiting", async () => {
+    const widget = fakeWidget({ autoSolve: false });
+    const { c } = controller({}, widget);
+    c.mount(CONTAINER, VIEW);
+    await flush();
+    widget.params()["before-interactive-callback"]();
+    expect(c.awaitingVisitor()).toBe(true);
+    widget.solve("tok-1");
+    widget.params()["expired-callback"]();
+    expect(c.awaitingVisitor(), "the invisible refresh of an expired token is not a box to tick").toBe(false);
+  });
+
+  it("the invisible check never reads as awaiting, so token() still WAITS for it", async () => {
+    const widget = fakeWidget({ autoSolve: false });
+    const { c } = controller({}, widget);
+    c.mount(CONTAINER, VIEW);
+    await flush();
+    expect(c.awaitingVisitor()).toBe(false);
+    const p = c.token();
+    widget.solve("tok-1");
+    expect(await p).toBe("tok-1");
+  });
+
+  it("no site key (dev, e2e): never awaiting, and reveal touches nothing", () => {
+    const { c } = controller({ siteKey: "" });
+    const b = box();
+    c.mount(b.el, VIEW);
+    expect(c.awaitingVisitor()).toBe(false);
+    c.reveal();
+    expect(b.calls).toEqual([]);
+  });
+
+  it("reveal scrolls the widget's container to the middle of the screen, then focuses it without a second scroll", async () => {
+    const widget = fakeWidget({ autoSolve: false });
+    const { c } = controller({}, widget);
+    const b = box();
+    c.reveal();
+    expect(b.calls, "before mount there is nothing to reveal").toEqual([]);
+    c.mount(b.el, VIEW);
+    await flush();
+    c.reveal();
+    expect(b.calls).toEqual(['scroll:{"block":"center"}', 'focus:{"preventScroll":true}']);
+    c.unmount();
+    c.reveal();
+    expect(b.calls, "after unmount: nothing more").toHaveLength(2);
+  });
+});
+
 describe("loadTurnstileApi: the script tag", () => {
   type FakeScript = { src: string; async: boolean; defer: boolean; onload?: () => void; onerror?: () => void; remove: () => void };
   let scripts: FakeScript[];

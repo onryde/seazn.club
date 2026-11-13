@@ -24,6 +24,13 @@ export const FIXTURE_DELETED_REASON = "fixture_deleted";
 /** A newer email-change request ended the user's older queued confirmation: its token is gone, and the address it would reach is one
  *  the person has moved on from (phase-3 spec §5). Org-less account mail, so the change request cancels on the pooled handle. */
 export const EMAIL_CHANGE_SUPERSEDED_REASON = "email_change_superseded";
+/** A quick match was saved (quick match spec §7.7, plan 3 pre-flight D9): it no longer expires, so its queued "will be
+ *  deleted" reminder is moot. Cancelled on the system org's tenant handle (usecases/quick-match-save.ts). */
+export const QUICK_MATCH_SAVED_REASON = "quick_match_saved";
+/** A quick match had activity after its reminder was queued (quick match spec C1, C2; branch review B m6): the touch moved its
+ *  expiry 7 days out, so the queued "will be deleted" mail names an expiry that no longer holds. The new expiry gets its own
+ *  reminder. Cancelled on the system org's tenant handle (usecases/quick-match-activity.ts). */
+export const QUICK_MATCH_REARMED_REASON = "quick_match_rearmed";
 
 /**
  * Every reason a cancel may write. `status.ts` reads an `expired` row with one of these in `last_error` as "voided, not delivered":
@@ -36,6 +43,8 @@ export const CANCELLED_REASONS: readonly string[] = [
   BOARD_SETTLED_REASON,
   FIXTURE_DELETED_REASON,
   EMAIL_CHANGE_SUPERSEDED_REASON,
+  QUICK_MATCH_SAVED_REASON,
+  QUICK_MATCH_REARMED_REASON,
 ];
 
 type CancelledRecord = {

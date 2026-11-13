@@ -3,6 +3,7 @@ import { handler } from "@/lib/http";
 import { claimEmailInvite, inviteLanding } from "@/lib/invites";
 import { stampTermsAcceptance } from "@/lib/legal";
 import { rateLimit, AUTH_LIMIT } from "@/lib/rate-limit";
+import { saveQuickMatchesForVerifiedUser } from "@/server/usecases/quick-match-save";
 import { headers } from "next/headers";
 import { clientIp } from "@/lib/client-ip";
 
@@ -30,6 +31,8 @@ export async function POST(
     if (result.needs_signin) return { needs_signin: true };
 
     await createSession(result.user_id);
+    // Quick match §7.7: keep the matches a guest typed this verified address on (never throws; logs and goes on).
+    await saveQuickMatchesForVerifiedUser(result.user_id);
     await setActiveOrgId(result.org_id);
     // The button sat under the "By continuing, you agree…" notice — record the
     // acceptance, same as the magic-link path (GDPR spec 2026-07-14).

@@ -33,8 +33,20 @@ import { scrubScoreUrl, scrubSentryEvent } from "../scrub-score-url";
 const ORIGIN = "https://seazn.club";
 /** The words that name a secret route at the root (and `claims`, the API twin's plural). */
 const RESERVED = ["join", "claim", "checkin", "invites", "claims"] as const;
-/** The builders that take a SECRET and so are scrubbed by design; every other builder takes slugs and ids. */
-const SECRET_BUILDERS = new Set(["claim", "checkin"]);
+/** The builders that take a SECRET and so are scrubbed by design; every other builder takes slugs and ids. `quickMatch` is the
+ *  guest's home, `/q/<home token>` (quick match plan 2, A6), `quickMatchSave` its save page, `/q/<home token>/save`
+ *  (plan 3 Task 2, the reminder mail's link), `quickMatchScore` its Score post, `/q/<home token>/score/<fixture>`,
+ *  `quickMatchAddMatch` its "Add a match" post, `/q/<home token>/add-match` (plan 2 Task 8), and `quickMatchSaveConfirm` its
+ *  Save post, `/q/<home token>/save/confirm` (plan 3 Task 5). */
+const SECRET_BUILDERS = new Set([
+  "claim",
+  "checkin",
+  "quickMatch",
+  "quickMatchSave",
+  "quickMatchScore",
+  "quickMatchAddMatch",
+  "quickMatchSaveConfirm",
+]);
 
 const encode = (value: string, depth: number) => {
   let out = value;

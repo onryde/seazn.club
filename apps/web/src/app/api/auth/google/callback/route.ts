@@ -15,6 +15,7 @@ import {
   type VerifiedGoogleProfile,
 } from "@/lib/oauth";
 import { redirectLocal } from "@/lib/http";
+import { saveQuickMatchesForVerifiedUser } from "@/server/usecases/quick-match-save";
 
 // RELATIVE, so there is no origin to get wrong. This comment used to say
 // "redirect against the external base URL, not req.url", and its diagnosis was
@@ -115,6 +116,9 @@ export async function GET(req: Request) {
 
   // 5. Sign in.
   await createSession(userId);
+  // Quick match §7.7: keep the matches a guest typed this address on. The by-sub branch writes no `email_verified`, so
+  // the save reads it itself and does nothing for an unverified account (B19). Never throws; logs and goes on.
+  await saveQuickMatchesForVerifiedUser(userId);
 
   // 6. Honor a saved destination (invite link); otherwise ensure the user has
   //    an org (auto-provisioned if none) and land on the dashboard.

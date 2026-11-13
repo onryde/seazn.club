@@ -17,8 +17,28 @@ export const QUICK_MATCH_SYSTEM_ORG_SLUG = "seazn-quick-matches";
 /** Sides in one quick match, inclusive. */
 export const QUICK_MATCH_MAX_SIDES = 6;
 export const QUICK_MATCH_MIN_SIDES = 2;
-/** League plays per pair (legs), at most. */
-export const QUICK_MATCH_MAX_PLAYS = 4;
+/** C16: two sides is always a league; a knockout needs three. The create refuses a smaller one (FORMAT_NOT_OFFERED), the
+ *  preview table holds none, and the setup screen hides its format row below it. */
+export const QUICK_MATCH_KNOCKOUT_MIN_SIDES = QUICK_MATCH_MIN_SIDES + 1;
+/** The match name's and a side name's longest, in UTF-16 units after trimming. `CreateQuickMatch` REFUSES a longer one,
+ *  never clips it (E1), and the setup inputs carry the same bound so the browser stops it first. */
+export const QUICK_MATCH_NAME_MAX = 80;
+export const QUICK_MATCH_SIDE_NAME_MAX = 60;
+/** The setup inputs' `pattern` for the match name and each side name: at least one non-space character. The schema TRIMS,
+ *  so a leading or trailing space is fine and only an all-space name is refused; this lets the browser say so first
+ *  (branch review A M2), where `required` alone passes "   ". */
+export const QUICK_MATCH_NON_BLANK_PATTERN = ".*\\S.*";
+/** The account page's Quick matches section id (plan 3 Task 6): the saved home's "In your account" link lands on
+ *  `/me#<this>` (controller ruling on T6), and the /me list carries it. */
+export const QUICK_MATCH_ACCOUNT_SECTION_ID = "quick-matches";
+/** The email input's `pattern`: zod 4's own `.email()` regex (what `CreateQuickMatch` checks), respelled to compile under the
+ *  `v` flag HTML patterns use (zod's bare `-` in a class is a syntax error there), and anchored by the browser. The
+ *  browser's own `type="email"` check passes `ravi@gmail`; this stops it, and the other addresses the schema refuses, before
+ *  the post (branch review A I2). The setup form's test proves it agrees with the schema on a counted table. */
+export const QUICK_MATCH_EMAIL_PATTERN = "(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+\\-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}";
+/** League plays per pair (legs), at most: "Each pair plays" is Once | Twice (owner 2026-11-12). The create's schema and
+ *  the preview refuse more, so the setup screen and the server agree. */
+export const QUICK_MATCH_MAX_PLAYS = 2;
 /** Alive (unexpired, unsaved) quick matches one visitor key may hold. */
 export const QUICK_MATCH_MAX_ALIVE_PER_VISITOR = 5;
 /** Days without activity before an unsaved quick match expires. */
@@ -27,6 +47,10 @@ export const QUICK_MATCH_EXPIRY_DAYS = 7;
 export const QUICK_MATCH_REMINDER_HOURS_BEFORE = 24;
 /** The competition's `ends_on`, this many days after it is created. */
 export const QUICK_MATCH_ENDS_ON_DAYS = 365;
+/** Extra league matches ("Add a match", the decider, spec C5) one quick match may hold: the `adhoc-<n>` fixtures that
+ *  anyone with the home link can add. Bounds anonymous writes (spec §4; plan 2 pre-flight D4). The refusal's copy,
+ *  `quickMatch.flash.adhocLimit`, interpolates this number as `{max}`. */
+export const QUICK_MATCH_MAX_ADHOC = 10;
 
 /** Every quick match refusal's code (the third `HttpError` argument). The English message is for logs and API callers;
  *  plan 2 maps the code to copy, so a code a quick match path throws belongs here. quick-match-create.ts re-exports it. */
@@ -36,6 +60,72 @@ export const QUICK_MATCH_ERRORS = {
   SPORT_NOT_OFFERED: "QUICK_MATCH_SPORT_NOT_OFFERED",
   KIND_NOT_OFFERED: "QUICK_MATCH_KIND_NOT_OFFERED",
   VISITOR_INVALID: "QUICK_MATCH_VISITOR_INVALID",
-  /** A guest's Score tap on a quick match past its expiry (`ensureGuestDeviceLink`, device-links.ts). */
+  /** A guest's Score tap on a quick match past its expiry (`ensureGuestDeviceLink`, device-links.ts). Never a flash: the
+   *  Score route lands it on the bare home, the dead screen (plan 2 T6 review m1). */
   EXPIRED: "QUICK_MATCH_EXPIRED",
+  /** The create's per-IP limit (QUICK_MATCH_CREATE_LIMIT): the limiter's own 429 carries no code, so the create route
+   *  names it here for the setup page's `?e=` (plan 2 T3). */
+  RATE_LIMITED: "QUICK_MATCH_RATE_LIMITED",
+  /** A create refused or failed with no code of its own to show: a form the schema refuses, a server without
+   *  DEVICE_LINK_KEK, an unexpected error. The setup page shows its generic line (plan 2 T3). */
+  CREATE_FAILED: "QUICK_MATCH_CREATE_FAILED",
+  /** A Score tap on a match whose two sides are not both known yet: a knockout seat waiting for its feeders, or a bye
+   *  (`ensureGuestDeviceLink`, device-links.ts, spec C18). The home shows `quickMatch.flash.notReady`. */
+  SIDES_UNKNOWN: "QUICK_MATCH_SIDES_UNKNOWN",
+  /** A Score tap past the mint limit (DEVICE_LINK_MINT_LIMIT, per quick match): the limiter's own 429 carries no code, so
+   *  the Score route names it for the home's `?e=` (plan 2 T6, pre-flight A7). The home shows `quickMatch.flash.linkLimit`. */
+  LINK_LIMITED: "QUICK_MATCH_LINK_LIMITED",
+  /** A home action naming a match that is not part of this quick match: a fixture of another quick match or org, or a
+   *  fixture id that is no uuid (the Score route, plan 2 T6). The home shows `quickMatch.flash.notFound`. */
+  NOT_FOUND: "QUICK_MATCH_NOT_FOUND",
+  /** A home action refused or failed with no code of its own to show: a finalized or cancelled match (the device link's
+   *  code-less 422), a server without DEVICE_LINK_KEK, an unexpected error (plan 2 T6). The home shows its generic line. */
+  ACTION_FAILED: "QUICK_MATCH_ACTION_FAILED",
+  /** "Add a match" past `QUICK_MATCH_MAX_ADHOC` extra matches (plan 2 Task 8, pre-flight D4). The home shows
+   *  `quickMatch.flash.adhocLimit` with the cap as `{max}`. */
+  ADHOC_LIMIT: "QUICK_MATCH_ADHOC_LIMIT",
+  /** "Add a match" naming the same side twice (plan 2 Task 8): the home shows `quickMatch.flash.sameSide`. */
+  SAME_SIDE: "QUICK_MATCH_SAME_SIDE",
+  /** "Add a match" posted for a knockout (spec C5: a knockout has a winner by construction and takes no extra match; plan 2
+   *  Task 8). The home never draws the control there, so only a crafted post meets it: `quickMatch.flash.leagueOnly`. */
+  LEAGUE_ONLY: "QUICK_MATCH_LEAGUE_ONLY",
+  /** A programmer error, never a guest's refusal (500): a create given an email but no base URL to build the link mail's
+   *  link from (`createQuickMatch`, plan 3 Amend T1 [B2]). The create route always passes one, and reports a 5xx as a fault
+   *  whatever its code. */
+  BASE_URL_MISSING: "QUICK_MATCH_BASE_URL_MISSING",
+  /** NOT a refusal (branch review B m3, controller ruling 2026-11-08): the create MADE the match but sent no link mail, because
+   *  the per-IP mail bucket or the per-inbox one refused, or the limiter is down (both fail closed). The address is not stored.
+   *  The route lands on the new home with `?e=` this code, and the home prints `quickMatch.flash.emailLimited` as information,
+   *  never as an error: the link is right there to share or bookmark. */
+  EMAIL_LIMITED: "QUICK_MATCH_EMAIL_LIMITED",
+  /** The form's only fault is its email address, which `CreateQuickMatch`'s zod `.email()` refused (branch review A I2). The
+   *  setup screen shows `quickMatch.errors.emailInvalid`, keeping what was typed. */
+  EMAIL_INVALID: "QUICK_MATCH_EMAIL_INVALID",
+  /** The create's Cloudflare Turnstile check refused (owner 2026-11-12: "yes we need turnstile"): no token (a post without the
+   *  script carries none), a token Cloudflare refuses, or Cloudflare unreachable, which fails closed. The guest's refusal,
+   *  never a fault: the setup screen shows #1136's shared `turnstile.error`, keeping what was typed. */
+  TURNSTILE_FAILED: "QUICK_MATCH_TURNSTILE_FAILED",
+  /** Save (plan 3 Task 5): somebody else saved this match first (`saveQuickMatchForUser` answered "taken"). The confirm route
+   *  lands on the home with `?e=` this code, and the home shows `quickMatch.flash.taken`; the save page shows the same line. */
+  TAKEN: "QUICK_MATCH_TAKEN",
+  /** Save (plan 3 Task 5, ledger carry m5): the session is a staff member's impersonation of a user (the session's signed
+   *  `imp` claim, lib/auth.ts). Staff never save a guest's match into the account they are looking through, so nothing is
+   *  written; the home shows `quickMatch.flash.impersonating`. */
+  SAVE_IMPERSONATED: "QUICK_MATCH_SAVE_IMPERSONATED",
+  /** The account's Quick matches (plan 3 Task 6), `PATCH`/`DELETE /api/quick-match/<id>`: no session (401). The account list
+   *  shows `quickMatch.me.signedOut`. */
+  SIGNED_OUT: "QUICK_MATCH_SIGNED_OUT",
+  /** Rename (plan 3 Task 6, ledger carry: rename and delete refuse under impersonation): the session is a staff member's
+   *  impersonation (403). Staff never rename the match of the person they look through: `quickMatch.me.renameImpersonating`. */
+  RENAME_IMPERSONATED: "QUICK_MATCH_RENAME_IMPERSONATED",
+  /** Delete, the same carry (403): staff never hard-delete, for everyone with its link, the match of the person they look
+   *  through. `quickMatch.me.deleteImpersonating`. */
+  DELETE_IMPERSONATED: "QUICK_MATCH_DELETE_IMPERSONATED",
+  /** Rename (plan 3 Amend T6 [D14]): a name `CreateQuickMatch` would refuse, trimmed, 1 to QUICK_MATCH_NAME_MAX (422).
+   *  `quickMatch.me.renameInvalid`, with the bound as `{max}`. */
+  RENAME_INVALID: "QUICK_MATCH_RENAME_INVALID",
+  /** Rename or delete (plan 3 Amend T6 [B28]): no match this person has saved goes by that id: someone else's, nobody's, one
+   *  past its expiry, one deleted already, or no id at all. One answer for all of them (404), so it never says whether a match
+   *  exists. `quickMatch.me.notInAccount`. */
+  NOT_IN_ACCOUNT: "QUICK_MATCH_NOT_IN_ACCOUNT",
 } as const;

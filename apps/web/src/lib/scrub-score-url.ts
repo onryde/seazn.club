@@ -121,6 +121,13 @@ const ENCODED_SCORE_PATH = /(%(?:25)*2[Ff]score%(?:25)*2[Ff])[^%&/?#\s"'<>]+/g;
  */
 const BARE_TOKEN = /(dl|md)_[A-Za-z0-9_-]{32,}/g;
 /**
+ * A bare quick match home token (plan 3 Task 5): `mintHomeToken` makes `qm_` + 43 base64url chars, and a token with no
+ * `/q/` route root in front of it (an error message, a log field, a form body, a path where `q` is a slug and not the root)
+ * is still the match's credential. The same 32-character floor as BARE_TOKEN keeps the bare prefix and short runs. Applied
+ * LAST, so every route rule has already turned its own token into `[token]` and its output is unchanged.
+ */
+const BARE_HOME_TOKEN = /qm_[A-Za-z0-9_-]{32,}/g;
+/**
  * The overlay key as a query parameter: `key=` at the start of a query string (Sentry's `request.query_string` carries
  * no `?`) or after `?` / `&`, never inside another name (`monkey=`, `apikey=`). The value ends at the next `&`, `#`,
  * quote, angle bracket or space. Any value, not only the key's own length: a tampered or foreign key is scrubbed too.
@@ -261,6 +268,7 @@ const MAYBE_TOKEN = new RegExp(
     "%(?:25)*2[Ff]score%",
     "dl_",
     "md_",
+    "qm_",
     `${OVERLAY_KEY_PARAM}=`,
     `${OVERLAY_KEY_PARAM}%`,
     `${RELAY_PAGE_TOKEN_PARAM}=`,
@@ -289,7 +297,8 @@ export function scrubTokenQuery(query: string): string {
  *  match-room token in a `t=` query value (plain or encoded) becomes `[token]`, a team's join code in a
  *  `join_code=` / `join=` query value (plain or encoded) becomes `[code]`, the secret after a
  *  `SECRET_PATH_ROUTES` route root (`/claim/`, `/join/`, `/checkin/`, …; plain or encoded) becomes `[token]`, and a
- *  one-time sign-in token in the `token=` query value of a one-time route (plain or encoded) becomes `[token]`. */
+ *  one-time sign-in token in the `token=` query value of a one-time route (plain or encoded) becomes `[token]`, and a bare
+ *  quick match home token `qm_…` left anywhere else becomes `qm_[token]`. */
 export function scrubScoreUrl(value: string): string {
   if (!MAYBE_TOKEN.test(value)) return value;
   return value
@@ -310,7 +319,8 @@ export function scrubScoreUrl(value: string): string {
     .replace(SECRET_PATH, "$1[token]")
     .replace(ENCODED_SECRET_PATH, "$1[token]")
     .replace(ONE_TIME_ROUTE_QUERY, (_m, head: string, query: string) => head + scrubTokenQuery(query))
-    .replace(ENCODED_ONE_TIME_ROUTE_QUERY, (_m, head: string, query: string) => head + query.replace(ENCODED_TOKEN_PARAM, "$1$2[token]"));
+    .replace(ENCODED_ONE_TIME_ROUTE_QUERY, (_m, head: string, query: string) => head + query.replace(ENCODED_TOKEN_PARAM, "$1$2[token]"))
+    .replace(BARE_HOME_TOKEN, "qm_[token]");
 }
 
 /**

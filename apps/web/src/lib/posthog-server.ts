@@ -25,6 +25,14 @@ function getClient(): PostHog | null {
   return client;
 }
 
+/** The quick match's own events: the only ones the quick match system org sends (pre-flight D11; plan 3 D10; the deleted
+ *  event, controller ruling 2026-11-12). */
+const QUICK_MATCH_EVENTS: ReadonlySet<AnalyticsEvent> = new Set([
+  EVENTS.QUICK_MATCH_CREATED,
+  EVENTS.QUICK_MATCH_SAVED,
+  EVENTS.QUICK_MATCH_DELETED,
+]);
+
 export interface CaptureArgs {
   event: AnalyticsEvent;
   /** Stable person id — the user id. Use an `org:<id>` synthetic id only when
@@ -43,7 +51,7 @@ export async function captureServer(args: CaptureArgs): Promise<void> {
   // Quick match (pre-flight D11): a guest's create runs the organizer use cases under the one system org, and each fires
   // its organizer event. Those are not a club's funnel, so every event for that org is dropped here, at the one door,
   // except the quick match's own.
-  if (args.orgId === QUICK_MATCH_SYSTEM_ORG_ID && args.event !== EVENTS.QUICK_MATCH_CREATED) return;
+  if (args.orgId === QUICK_MATCH_SYSTEM_ORG_ID && !QUICK_MATCH_EVENTS.has(args.event)) return;
   const c = getClient();
   if (!c) return;
   try {

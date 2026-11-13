@@ -20,6 +20,10 @@ export function afterScheduleWrite(
    *  fixture (publish, start) passes its division's fixtures, read in its own
    *  transaction, never found by a keyspace SCAN. */
   fixtureIds: readonly string[],
+  /** `fixturePushes: false` sends no per-fixture push (the DEL still drops every key, and the division push still goes).
+   *  For a write whose fixtures nobody can be watching yet: a quick match's create, which starts a division its guest has
+   *  not seen (owner 2026-11-13: 30 broadcasts for six sides playing twice, measured). Every other caller leaves it. */
+  opts: { fixturePushes?: boolean } = {},
 ): void {
   fireDivisionRevalidate(divisionId, competitionId);
   // W2 — the competition HUB document (`pub:v1:hub:{competitionId}`) carries
@@ -58,7 +62,7 @@ export function afterScheduleWrite(
   const deleted = cacheDel(...keys).catch((err: unknown) => {
     log.error({ err, keys }, "schedule: a public Redis delete failed (the write stands)");
   });
-  const pushFixtures = fixtureIds.length <= SCHEDULE_FIXTURE_PUSH_CAP;
+  const pushFixtures = (opts.fixturePushes ?? true) && fixtureIds.length <= SCHEDULE_FIXTURE_PUSH_CAP;
   sendAfterDeleteOrBound(deleted, () => {
     void publishDivisionUpdate(divisionId, reason);
     if (pushFixtures) for (const id of fixtureIds) void publishFixtureUpdate(id, "schedule");

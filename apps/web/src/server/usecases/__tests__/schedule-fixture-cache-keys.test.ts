@@ -50,7 +50,17 @@ vi.mock("@/lib/realtime", async (importOriginal) => {
   };
 });
 
+// The quick match create's one analytics event reaches a mock, never PostHog (its own suites do the same).
+vi.mock("@/lib/posthog-server", async (orig) => ({
+  ...(await orig<typeof import("@/lib/posthog-server")>()),
+  captureServer: vi.fn(),
+}));
+
+import { randomBytes } from "node:crypto";
 import { sql } from "@/lib/db";
+import { createQuickMatch } from "../quick-match-create";
+import { listQuickMatchSports } from "../quick-match-sports";
+import { hashVisitorKey, mintVisitorKey } from "../quick-match-tokens";
 import { applySchedule, moveFixture, publishSchedule, putScheduleSettings, startDivision } from "../schedule";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
@@ -231,6 +241,41 @@ describe.skipIf(!HAS_DB)("a real schedule write drops the fixture documents it c
     expect(probe.fixturePushes.map(([id]) => id).sort()).toEqual(all);
     expect(new Set(probe.fixturePushes.map(([, reason]) => reason))).toEqual(new Set(["schedule"]));
     expect(probe.divisionPushes).toEqual([[rig.divisionId, "start"]]);
+  }, 120_000);
+
+  // Owner 2026-11-12/13: a quick match's CREATE started a division nobody can be watching yet (its home does not exist until
+  // this request answers), and fanned out one broadcast per fixture: 30 for six sides playing twice, measured. The create
+  // asks the shared after-write for NO per-fixture push; the DEL still drops every key, and the one division push stays.
+  // The pair is the case above: an organiser's start of the same shape still pushes every fixture.
+  it("a quick match create: every fixture key rides the one DEL, the division is pushed once, and NO fixture is pushed", async () => {
+    vi.stubEnv("DEVICE_LINK_KEK", randomBytes(32).toString("hex"));
+    try {
+      const badminton = (await listQuickMatchSports()).find((x) => x.sport_key === "badminton");
+      if (!badminton) throw new Error("badminton is not offered on this database: run `npm run sync:sports`");
+      await quiesce();
+      probe.hold = true;
+      const out = await createQuickMatch(
+        {
+          name: `QM pushes ${Math.random().toString(36).slice(2, 8)}`, sport_key: "badminton",
+          variant_key: badminton.variants[0]!.variant_key, kind: badminton.kinds[0]!, format: "league",
+          sides: ["A", "B", "C", "D"], plays: 1, email: null, locale: "en",
+        },
+        { visitorHash: hashVisitorKey(mintVisitorKey()), mailAllowed: async () => true },
+      );
+      const all = await fixtureIdsOf(out.divisionId);
+      // The rulebook's count: a single round robin of four is 4·3/2 = 6 matches, so there were six to push.
+      expect(all.length, "anti-vacuity: the create generated the round robin").toBe(6);
+      // The create's other steps drop keys of their own (its Generate's); the after-write's is the one DEL that names the
+      // hub and every fixture, as the organiser's start's does.
+      const own = probe.dels.filter((keys) => keys[0] === hubKey(out.competitionId) && all.every((id) => keys.includes(fixtureKey(id))));
+      expect(own, "one after-write DEL").toHaveLength(1);
+      expect(own[0]!.slice(1).sort()).toEqual([...all.map(fixtureKey), ...divisionKeys(out.divisionId)].sort());
+      await releaseDel();
+      expect(probe.fixturePushes, "no fixture of a match nobody can be watching is pushed").toEqual([]);
+      expect(probe.divisionPushes).toEqual([[out.divisionId, "start"]]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   }, 120_000);
 
   // W4 B2 fix round 1 (m4): a knockout's Generate over lines it already has creates nothing, yet changes seats in place. It

@@ -26,6 +26,11 @@ const card = vi.hoisted(() => ({ myLichessLink: vi.fn() }));
 vi.mock("@/server/usecases/me-lichess", () => card);
 vi.mock("@/lib/auth", () => ({
   getCurrentUser: loaders.getCurrentUser,
+  // /me reads the session (T6 review m3: a staff impersonation sees quick matches without their links).
+  getCurrentSession: async () => {
+    const user = await loaders.getCurrentUser();
+    return user ? { user, impersonated: false } : null;
+  },
   getUserOrgs: loaders.getUserOrgs,
   getActiveOrgId: loaders.getActiveOrgId,
 }));
@@ -42,6 +47,8 @@ vi.mock("@/server/usecases/me-officiating", () => ({
   listPendingOfficiatingClaims: async () => [],
 }));
 vi.mock("@/server/usecases/official-marks", () => ({ myMarksAverage: async () => null }));
+// /me lists the saved quick matches (quick match plan 3 T6); none here.
+vi.mock("@/server/usecases/quick-match-home", () => ({ listMyQuickMatches: async () => [] }));
 vi.mock("@/components/me/rsvp-control", () => ({ RsvpControl: () => <div /> }));
 vi.mock("@/components/me/officiating-lane", () => ({ OfficiatingLane: () => <div /> }));
 vi.mock("@/components/me/suspensions-lane", () => ({ SuspensionsLane: () => <div /> }));

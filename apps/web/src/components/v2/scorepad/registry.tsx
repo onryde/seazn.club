@@ -27,6 +27,7 @@ import type { RejectionInfo } from "./use-pad-pipeline";
 import { resolvePad } from "./v3/registry";
 import type { TFn } from "./v3/context-strip";
 import { PadHostV3 } from "./v3/pad-host";
+import { sideWordsFrom, withSideWords } from "./v3/side-words";
 
 // ---------------------------------------------------------------------------
 // Server -> client shape builders both page loaders need. Collected here
@@ -275,7 +276,15 @@ export function ScorePad(props: ScorePadProps) {
   // duplicated here rather than threaded through as a shared export: this
   // is the "component that resolves the skin" cricket.tsx's header points
   // at, a different component from `PadHostV3` with its own `useMsg()`.
-  const t: TFn = useCallback((key: string, vars?: Record<string, string | number>) => msg(key as MessageKey, vars), [msg]);
+  const msgT: TFn = useCallback((key: string, vars?: Record<string, string | number>) => msg(key as MessageKey, vars), [msg]);
+  const entrantNames = useMemo(() => entrantNamesFrom(props.home, props.away), [props.home, props.away]);
+  // Sign-off 2026-11-12: a side with no members (a quick match's name-only entrant) is called by its name where the pad
+  // says the side word; both this factory's `t` and the chassis's (the `sideWords` prop) carry it (v3/side-words.ts).
+  const sideWords = useMemo(
+    () => sideWordsFrom({ home: props.home, away: props.away }, entrantNames),
+    [props.home, props.away, entrantNames],
+  );
+  const t: TFn = useMemo(() => withSideWords(msgT, sideWords), [msgT, sideWords]);
   const resolution = useMemo((): ModuleResolution => {
     try {
       return { ok: true, module: resolveModuleClient(props.sportKey, props.moduleVersion) };
@@ -286,7 +295,6 @@ export function ScorePad(props: ScorePadProps) {
 
   const lineups = useMemo(() => lineupPairFrom(props.home, props.away), [props.home, props.away]);
   const personNames = useMemo(() => personNamesFrom(props.home, props.away), [props.home, props.away]);
-  const entrantNames = useMemo(() => entrantNamesFrom(props.home, props.away), [props.home, props.away]);
   const transport = useMemo(
     () => (props.auth.kind === "device_link" ? deviceLinkTransport(props.auth.token) : sessionTransport()),
     [props.auth],
@@ -328,6 +336,7 @@ export function ScorePad(props: ScorePadProps) {
       rulesVersion={props.rulesVersion}
       canOrganise={props.canOrganise}
       entrantNames={entrantNames}
+      sideWords={sideWords}
       fixtureId={props.fixtureId}
       lineups={lineups}
       identity={props.identity}

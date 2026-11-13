@@ -3,6 +3,7 @@
 // here and nowhere else.
 import { describe, expect, it } from "vitest";
 import { isPublicHubPath, routes } from "@/lib/routes";
+import { DEFAULT_LOCALE, LOCALES } from "@/lib/i18n-constants";
 
 describe("routes", () => {
   it("builds the /o hierarchy from slugs", () => {
@@ -131,6 +132,38 @@ describe("routes", () => {
     expect(routes.competitionRegistration("acme", "summer-smash", "settings")).toBe(
       "/o/acme/c/summer-smash/registration?tab=settings",
     );
+  });
+
+  it("builds the quick match setup screen under each shipped locale, and never a root path from anything else (counted)", () => {
+    // The locale set is the app's own (i18n-constants), the path the spec's: `/<lang>/play` (quick match plan 2, Task 4).
+    let checked = 0;
+    for (const locale of LOCALES) {
+      expect(routes.quickMatchSetup(locale)).toBe(`/${locale}/play`);
+      checked++;
+    }
+    expect(checked, "anti-vacuity").toBe(LOCALES.length);
+    // A value that names no shipped locale is the default's page: never `/join/play`, a secret route's root.
+    for (const bad of ["join", "xx", "", "../q"]) expect(routes.quickMatchSetup(bad), JSON.stringify(bad)).toBe(`/${DEFAULT_LOCALE}/play`);
+  });
+
+  it("builds a quick match home's Score post: the home token and the match, both in the path", () => {
+    expect(routes.quickMatchScore("qm_abc", "11111111-2222-3333-4444-555555555555")).toBe(
+      "/q/qm_abc/score/11111111-2222-3333-4444-555555555555",
+    );
+    // The same home the token's own builder names, so the two never drift apart.
+    expect(routes.quickMatchScore("qm_abc", "f")).toBe(`${routes.quickMatch("qm_abc")}/score/f`);
+  });
+
+  it("builds a quick match home's 'Add a match' post: the home token in the path, under the home (plan 2 Task 8)", () => {
+    expect(routes.quickMatchAddMatch("qm_abc")).toBe("/q/qm_abc/add-match");
+    // The same home the token's own builder names, so the two never drift apart.
+    expect(routes.quickMatchAddMatch("qm_abc")).toBe(`${routes.quickMatch("qm_abc")}/add-match`);
+  });
+
+  it("builds a quick match's Save post: the home token in the path, under the save page (plan 3 Task 5)", () => {
+    expect(routes.quickMatchSaveConfirm("qm_abc")).toBe("/q/qm_abc/save/confirm");
+    // The same save page the reminder links to, so the two never drift apart.
+    expect(routes.quickMatchSaveConfirm("qm_abc")).toBe(`${routes.quickMatchSave("qm_abc")}/confirm`);
   });
 });
 

@@ -5,7 +5,13 @@ import { z } from "zod";
 // The locale set and the create's own bounds. Both files are import-free, so the standalone generator loads them
 // like the other modules' lib imports.
 import { DEFAULT_LOCALE, LOCALES } from "../../../lib/i18n-constants.ts";
-import { QUICK_MATCH_MAX_PLAYS, QUICK_MATCH_MAX_SIDES, QUICK_MATCH_MIN_SIDES } from "../../../lib/quick-match-constants.ts";
+import {
+  QUICK_MATCH_MAX_PLAYS,
+  QUICK_MATCH_MAX_SIDES,
+  QUICK_MATCH_MIN_SIDES,
+  QUICK_MATCH_NAME_MAX,
+  QUICK_MATCH_SIDE_NAME_MAX,
+} from "../../../lib/quick-match-constants.ts";
 import { EntrantKind } from "./common.ts";
 
 // ---------------------------------------------------------------------------
@@ -18,16 +24,16 @@ import { EntrantKind } from "./common.ts";
  *  against the sport's own kinds (`offerFor(...).kinds`). Required, never defaulted: when the switch is hidden the
  *  client sends the sport's only kind, as it sends "league" when the format row is hidden.
  *
- *  A side name is trimmed, so one that is only whitespace is refused, and one over 60 UTF-16 units is REFUSED, never
- *  clipped (E1): a guest who typed it sees why, instead of finding a shorter name on the table. */
+ *  A side name is trimmed, so one that is only whitespace is refused, and one over QUICK_MATCH_SIDE_NAME_MAX (60) UTF-16
+ *  units is REFUSED, never clipped (E1): a guest who typed it sees why, instead of finding a shorter name on the table. */
 export const CreateQuickMatch = z
   .object({
-    name: z.string().trim().min(1).max(80),
+    name: z.string().trim().min(1).max(QUICK_MATCH_NAME_MAX),
     sport_key: z.string().min(1),
     variant_key: z.string().min(1),
     kind: EntrantKind,
     format: z.enum(["league", "knockout"]),
-    sides: z.array(z.string().trim().min(1).max(60)).min(QUICK_MATCH_MIN_SIDES).max(QUICK_MATCH_MAX_SIDES),
+    sides: z.array(z.string().trim().min(1).max(QUICK_MATCH_SIDE_NAME_MAX)).min(QUICK_MATCH_MIN_SIDES).max(QUICK_MATCH_MAX_SIDES),
     plays: z.number().int().min(1).max(QUICK_MATCH_MAX_PLAYS).default(1),
     email: z.string().email().max(254).nullable().default(null),
     // Precedent: app/api/funnel/start/route.ts's own `z.enum(LOCALES)`. There is no shared locale schema.

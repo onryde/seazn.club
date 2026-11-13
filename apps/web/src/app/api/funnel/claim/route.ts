@@ -8,6 +8,7 @@ import { createSession, setActiveOrgId } from "@/lib/auth";
 import { consumeFunnelDraft, createFromDraft } from "@/lib/funnel";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
+import { saveQuickMatchesForVerifiedUser } from "@/server/usecases/quick-match-save";
 
 const schema = z.object({ token: z.string().min(10) }).strict();
 
@@ -62,6 +63,8 @@ export async function POST(req: Request) {
     const userId = await resolveOrCreateVerifiedUser(draft.email);
     if (!userId) throw new Error("Could not resolve an account for this email.");
     await createSession(userId);
+    // Quick match §7.7: keep the matches a guest typed this verified address on (never throws; logs and goes on).
+    await saveQuickMatchesForVerifiedUser(userId);
 
     const { redirect, orgId } = await createFromDraft(userId, draft);
     await setActiveOrgId(orgId);

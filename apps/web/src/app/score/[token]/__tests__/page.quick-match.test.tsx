@@ -23,10 +23,11 @@ import { DeviceScorePad } from "@/components/v2/device-score-pad";
 import { QuickMatchBackLink } from "@/components/v2/quick-match-back-link";
 import { ScanWaiting } from "@/components/v2/scan-waiting";
 import type { CreateQuickMatch } from "@/server/api-v1/schemas";
-import { ensureDeviceLink, ensureGuestDeviceLink } from "@/server/usecases/device-links";
+import { deviceLinkOrgId, ensureDeviceLink, ensureGuestDeviceLink, resolveDeviceLinkToken } from "@/server/usecases/device-links";
 import { createQuickMatch, type CreatedQuickMatch } from "@/server/usecases/quick-match-create";
 import { hardDeleteQuickMatchCompetition } from "@/server/usecases/quick-match-delete";
 import { findQuickMatchByCompetition } from "@/server/usecases/quick-match-home";
+import { readScanFixture } from "@/server/usecases/scan-fixture";
 import { hashVisitorKey, mintVisitorKey } from "@/server/usecases/quick-match-tokens";
 import { seedOrg } from "@/server/usecases/__tests__/_seed";
 import { fixturesOf, seedStage } from "@/server/usecases/__tests__/_sheets-rig";
@@ -52,6 +53,21 @@ vi.mock("@/lib/posthog-server", async (orig) => ({
 vi.mock("@/server/usecases/quick-match-home", async (orig) => {
   const real = await orig<typeof import("@/server/usecases/quick-match-home")>();
   return { ...real, findQuickMatchByCompetition: vi.fn(real.findQuickMatchByCompetition) };
+});
+// The resolver and the dead link's org lookup: the real ones, switchable, for a refusal that carries no code (the
+// database failing, not the link).
+vi.mock("@/server/usecases/device-links", async (orig) => {
+  const real = await orig<typeof import("@/server/usecases/device-links")>();
+  return {
+    ...real,
+    resolveDeviceLinkToken: vi.fn(real.resolveDeviceLinkToken),
+    deviceLinkOrgId: vi.fn(real.deviceLinkOrgId),
+  };
+});
+// The page's own "match gone" screen: a link that resolves to a fixture the read cannot find. The real read, switchable.
+vi.mock("@/server/usecases/scan-fixture", async (orig) => {
+  const real = await orig<typeof import("@/server/usecases/scan-fixture")>();
+  return { ...real, readScanFixture: vi.fn(real.readScanFixture) };
 });
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -94,7 +110,7 @@ const twoSides = (): CreateQuickMatch => ({
 
 /** A fresh quick match, its one fixture, and that fixture's pad link minted through the guest's door (Task 8). */
 async function quickMatchPad(): Promise<{ out: CreatedQuickMatch; fixtureId: string; secret: string }> {
-  const out = await createQuickMatch(twoSides(), { visitorHash: hashVisitorKey(mintVisitorKey()) });
+  const out = await createQuickMatch(twoSides(), { visitorHash: hashVisitorKey(mintVisitorKey()), mailAllowed: async () => true });
   const [fx] = await sql<{ id: string }[]>`
     select id from fixtures
     where division_id = ${out.divisionId} and home_entrant_id is not null and away_entrant_id is not null
@@ -182,6 +198,8 @@ describe.skipIf(!HAS_DB)("the pad's way back to the quick match (C12)", () => {
 
     expect(backLinkWarnings(), "an opened home token is not a warning").toHaveLength(0);
     expect(find(tree, DeviceScorePad), "precondition: the pad itself renders").not.toBeNull();
+    // Review Q1/Q2: the pad is told it is a quick match's, so its decided and locked lines name no organiser.
+    expect((find(tree, DeviceScorePad)!.props as { quickMatch?: boolean }).quickMatch, "the copy seam: a guest's pad").toBe(true);
     expect(out.token.startsWith("qm_"), "precondition: the creator was handed a home token").toBe(true);
     const a = backAnchor(html);
     expect(a, "the back link is painted").not.toBeNull();
@@ -220,6 +238,7 @@ describe.skipIf(!HAS_DB)("the pad's way back to the quick match (C12)", () => {
     expect(backLinkWarnings(), "an ordinary pad has nothing to warn about").toHaveLength(0);
 
     expect(find(tree, DeviceScorePad), "precondition: the pad renders").not.toBeNull();
+    expect((find(tree, DeviceScorePad)!.props as { quickMatch?: boolean }).quickMatch, "an ordinary pad keeps the organiser's copy").toBe(false);
     expect(find(tree, QuickMatchBackLink)).toBeNull();
     expect(html).not.toContain('href="/q/');
     expect(html).not.toContain(EN_LABEL);
@@ -259,6 +278,8 @@ describe.skipIf(!HAS_DB)("the pad's way back to the quick match (C12)", () => {
       lookup().mockClear();
       const { tree, html } = await render(secret);
       expect(find(tree, DeviceScorePad), "the pad still renders").not.toBeNull();
+      // The system org is what makes a pad a guest's: an orphan has no organiser either.
+      expect((find(tree, DeviceScorePad)!.props as { quickMatch?: boolean }).quickMatch).toBe(true);
       expect(lookup(), "precondition: the system org's pad did ask").toHaveBeenCalledTimes(1);
       expect(html).not.toContain('href="/q/');
       expect(html).not.toContain(out.token);
@@ -407,5 +428,104 @@ describe.skipIf(!HAS_DB)("the pad's way back to the quick match (C12)", () => {
     } finally {
       locale.value = "en";
     }
+  });
+});
+
+// Controller ruling 2026-11-12: a quick match has no organiser, so on every dead screen the page draws (a link the
+// resolver refuses as revoked or expired, a match the page cannot read) the hint tells the guest what they can do: go
+// back to the quick match and tap Score, which mints them a fresh link. An ordinary org keeps the organiser's hint.
+describe.skipIf(!HAS_DB)("the dead link's hint names no organiser on a quick match (controller ruling 2026-11-12)", () => {
+  const QM_HINT = en["device.quickMatch.askFreshLink"];
+  const ORGANISER_HINT = en["device.askFreshLink"];
+  const ORGANISER = /organi[sz]er/i;
+  const revoke = (fixtureId: string) =>
+    sql`update device_links set revoked_at = now() where fixture_id = ${fixtureId} and revoked_at is null`;
+  const expire = (fixtureId: string) =>
+    sql`update device_links set expires_at = now() - interval '1 hour' where fixture_id = ${fixtureId} and revoked_at is null`;
+  /** An ordinary org's league match and its pad link (the negative pair's side). */
+  async function ordinaryPad(): Promise<{ fixtureId: string; secret: string }> {
+    const { auth } = await seedOrg("pro");
+    const { stage } = await seedStage(auth, "league", ["A", "B"]);
+    const [fixture] = await fixturesOf(stage.id);
+    expect(auth.orgId, "premise: not the system org").not.toBe(QUICK_MATCH_SYSTEM_ORG_ID);
+    return { fixtureId: fixture!.id, secret: (await ensureDeviceLink(auth, fixture!.id)).secret };
+  }
+
+  it.each([
+    { how: "revoked", kill: revoke, headline: "device.dead.revoked" },
+    { how: "expired", kill: expire, headline: "device.dead.expired" },
+  ] as const)("a quick match's $how link: sent back to the quick match, never to an organiser", async ({ kill, headline }) => {
+    const { fixtureId, secret } = await quickMatchPad();
+    expect(find((await render(secret)).tree, DeviceScorePad), "precondition: the link scores before it dies").not.toBeNull();
+    await kill(fixtureId);
+    const { html } = await render(secret);
+    expect(html, "precondition: the dead screen, for this code").toContain(en[headline]);
+    expect(html).toContain(QM_HINT);
+    expect(html).not.toMatch(ORGANISER);
+  });
+
+  it("an ordinary org's revoked link keeps the organiser's hint (the negative pair)", async () => {
+    const { fixtureId, secret } = await ordinaryPad();
+    await revoke(fixtureId);
+    const { html } = await render(secret);
+    expect(html, "precondition: the dead screen").toContain(en["device.dead.revoked"]);
+    expect(html).toContain(ORGANISER_HINT);
+    expect(html).not.toContain(QM_HINT);
+  });
+
+  it("a token no link holds names no org: the not-valid screen keeps the ordinary hint", async () => {
+    const { html } = await render(`dl_${randomUUID()}`);
+    expect(html, "precondition: the not-valid screen").toContain(en["device.dead.invalid"]);
+    expect(html).toContain(ORGANISER_HINT);
+    expect(html).not.toContain(QM_HINT);
+  });
+
+  it("a resolver failure with no code (the database, not the link): the not-valid screen it always had, no second query", async () => {
+    const { secret } = await quickMatchPad();
+    const down = new Error("connection terminated");
+    const realOrgId = vi.mocked(deviceLinkOrgId).getMockImplementation()!;
+    vi.mocked(resolveDeviceLinkToken).mockRejectedValueOnce(down);
+    vi.mocked(deviceLinkOrgId).mockClear();
+    // Were it asked, it would fail as the database does, and the page would throw instead of drawing a screen.
+    vi.mocked(deviceLinkOrgId).mockRejectedValueOnce(down);
+    try {
+      const { html } = await render(secret);
+      expect(html, "the screen a failed resolve always drew").toContain(en["device.dead.invalid"]);
+      expect(html).toContain(ORGANISER_HINT);
+      expect(vi.mocked(deviceLinkOrgId), "no org lookup for a refusal the resolver did not code").not.toHaveBeenCalled();
+    } finally {
+      // An unspent rejection must not reach the next case.
+      vi.mocked(deviceLinkOrgId).mockReset().mockImplementation(realOrgId);
+    }
+  });
+
+  it("a coded refusal whose org lookup then fails (the database, after the resolver): the plain dead screen, never a 500 (final review A m-1)", async () => {
+    const { fixtureId, secret } = await quickMatchPad();
+    await revoke(fixtureId);
+    const realOrgId = vi.mocked(deviceLinkOrgId).getMockImplementation()!;
+    vi.mocked(deviceLinkOrgId).mockClear();
+    vi.mocked(deviceLinkOrgId).mockRejectedValueOnce(new Error("connection terminated"));
+    try {
+      const { html } = await render(secret);
+      expect(vi.mocked(deviceLinkOrgId), "precondition: the coded refusal asked for the org, and that ask failed").toHaveBeenCalledTimes(1);
+      expect(html, "the revoked screen still draws, for its own code").toContain(en["device.dead.revoked"]);
+      expect(html, "with the hint a failed lookup cannot refine: the ordinary one").toContain(ORGANISER_HINT);
+      expect(html).not.toContain(QM_HINT);
+    } finally {
+      vi.mocked(deviceLinkOrgId).mockReset().mockImplementation(realOrgId);
+    }
+  });
+
+  it.each([
+    { who: "a quick match", pad: quickMatchPad, hint: QM_HINT, not: ORGANISER_HINT },
+    { who: "an ordinary org", pad: ordinaryPad, hint: ORGANISER_HINT, not: QM_HINT },
+  ])("a live link whose match the page cannot read ($who): the gone screen, with its own hint", async ({ pad, hint, not }) => {
+    const { secret } = await pad();
+    vi.mocked(readScanFixture).mockResolvedValueOnce(null);
+    const { html } = await render(secret);
+    expect(vi.mocked(readScanFixture), "precondition: the page asked the read").toHaveBeenCalled();
+    expect(html, "precondition: the gone screen").toContain(en["device.dead.gone"]);
+    expect(html).toContain(hint);
+    expect(html).not.toContain(not);
   });
 });

@@ -91,6 +91,16 @@ export const EVENTS = {
    *  `captureServer` drops every organizer event for that org. Carries { quick_match_id, sport_key, variant_key, kind,
    *  format, sides, plays }; never the match's name, the guest's email or the home token. */
   QUICK_MATCH_CREATED: "quick_match_created",
+  /** Quick match (plan 3 pre-flight D10): a signed-in person kept a quick match, one event per match saved. Sent for the
+   *  system org beside `QUICK_MATCH_CREATED`, so the two make the funnel. Carries { quick_match_id, via: "button" |
+   *  "email" }; never the match's name, an address or the home token. */
+  QUICK_MATCH_SAVED: "quick_match_saved",
+  /** Quick match (controller ruling 2026-11-12, for /admin/quick-matches): a quick match was hard-deleted, which leaves no row,
+   *  so this is the only record of it. One event per match deleted, by its saver's Delete (`via: "saver"`) or the sweep's
+   *  expiry (`via: "expiry"`); never the create's compensation or an orphan. Sent for the system org beside
+   *  `QUICK_MATCH_CREATED`. Carries { quick_match_id, via, sport_key, kind } (`quick_match_id` the row's uuid, the name the
+   *  created and saved events use, so the three join); never the match's name, an address, a user id or the home token. */
+  QUICK_MATCH_DELETED: "quick_match_deleted",
 } as const;
 
 export type AnalyticsEvent = (typeof EVENTS)[keyof typeof EVENTS];

@@ -82,6 +82,7 @@ This is a single typed constant in `apps/cron-worker/src/schedule.ts`, and it is
 | `registrations` | `/api/cron/registrations` | every firing | yes |
 | `billing-events` | `/api/cron/billing-events` | every firing | yes |
 | `funnel-remind` | `/api/funnel/remind` | every firing | yes |
+| `quick-match-expiry` (added 2026-11-08, quick match spec §7.8) | `/api/cron/quick-match-expiry` | every firing | yes |
 | `ai-previews` | `/api/cron/ai-previews` | HH = 03 | yes |
 | `relay-sweep` (added 2026-10-01, §13.1) | `/api/cron/relay-sweep` | HH = 04 | **never** |
 | `billing-quantity` | `/api/cron/billing-quantity` | HH = 06 | yes |

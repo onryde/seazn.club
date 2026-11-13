@@ -48,6 +48,10 @@ import {
   funnelClaimTemplate,
   funnelReminderTemplate,
   type FunnelEmailArgs,
+  quickMatchLinkTemplate,
+  quickMatchReminderTemplate,
+  type QuickMatchEmailArgs,
+  type QuickMatchReminderArgs,
   claimInviteTemplate,
   type ClaimInviteArgs,
   sponsorInvoiceTemplate,
@@ -429,6 +433,22 @@ export async function suspensionServedEmail(args: Omit<SuspensionServedArgs, "me
 export async function funnelReminderEmail(args: FunnelEmailArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
   return funnelReminderTemplate(args, dict);
+}
+
+/** A quick match's link mail at creation (quick match spec §7.6), RENDERED and not sent. The create (`createQuickMatch`, called by
+ *  `POST /api/quick-match`) queues what this returns on the email outbox (kind `quick_match_link`, not transactional) in its last
+ *  transaction, in the setup form's language, and the route makes the first attempt after commit. Nothing sends it directly. */
+export async function quickMatchLinkEmail(args: QuickMatchEmailArgs, locale: Locale): Promise<EmailContent> {
+  const dict = await getDictionary(locale, "emails");
+  return quickMatchLinkTemplate(args, dict);
+}
+
+/** A quick match's one reminder before expiry (quick match spec C2), RENDERED and not sent. Its producer is the expiry sweep (quick
+ *  match plan 3 Task 2), which queues what this returns on the email outbox (kind `quick_match_reminder`, not transactional). Nothing sends
+ *  it directly. */
+export async function quickMatchReminderEmail(args: QuickMatchReminderArgs, locale: Locale): Promise<EmailContent> {
+  const dict = await getDictionary(locale, "emails");
+  return quickMatchReminderTemplate(args, dict);
 }
 
 /** The confirm-your-new-address link, RENDERED and not sent. The email-change request (`api/auth/change-email`) queues what this

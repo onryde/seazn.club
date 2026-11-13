@@ -7,6 +7,7 @@ import { rateLimit, AUTH_LIMIT } from "@/lib/rate-limit";
 import { routes } from "@/lib/routes";
 import { isSameOriginRequest } from "@/lib/same-origin";
 import { claimByEmailLink, claimPerson, type ResolvedClaim } from "@/server/usecases/person-claims";
+import { saveQuickMatchesForVerifiedUser } from "@/server/usecases/quick-match-save";
 
 type Ctx = { params: Promise<{ token: string }> };
 
@@ -56,6 +57,8 @@ export async function POST(req: Request, { params }: Ctx) {
     // transaction, so the session is only minted once everything has committed.
     const { userId, claim } = await claimByEmailLink(token);
     await createSession(userId);
+    // Quick match §7.7: keep the matches a guest typed this verified address on (never throws; logs and goes on).
+    await saveQuickMatchesForVerifiedUser(userId);
     return answer(claim, true);
   });
 }

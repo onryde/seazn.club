@@ -198,6 +198,25 @@ export async function firstRallyFor(fixtureId: string): Promise<AppendEventReque
   ];
 }
 
+/**
+ * The engine's first PLAY event after `ledger` (the events the fixture already holds, in seq order), as the request that
+ * scores it at the next seq. `firstRallyFor` is this after a bare `core.start`; a Start that wrote something before it
+ * (tennis's toss on engine 8: `tennis.toss`, then `core.start`) passes the ledger the pad actually wrote, so the point is
+ * drawn from the match as it stands. Throws when the module has no such event here.
+ */
+export async function nextPlayFor(
+  fixtureId: string,
+  ledger: readonly { type: string; payload: Record<string, unknown> }[],
+): Promise<AppendEventRequest> {
+  const { module, cfg, lineups } = await fixtureFold(systemAuth(), fixtureId);
+  const prefix = ledger.map((e, seq) => makeEnvelope(seq, { type: e.type, payload: e.payload }));
+  const play = onePlayEvent(module, cfg, lineups, prefix);
+  if (play === null) {
+    throw new Error(`nextPlayFor: ${module.key} draws no play event after ${ledger.map((e) => e.type).join(", ")} on fixture ${fixtureId}`);
+  }
+  return { expected_seq: prefix.length, type: play.type, payload: play.payload };
+}
+
 const SIDE_NAMES = ["Side 1", "Side 2", "Side 3", "Side 4", "Side 5", "Side 6"];
 
 /** One create through the real tree, its own name and visitor (A16) and a fresh sealed token. */

@@ -11,7 +11,10 @@
 //    each credential segment) and from the route builders that scrubScoreUrl really changes (`routes.claim`, `routes.checkin`):
 //    a variable, property or function whose initialiser builds one of those URLs (`const claim_url = `${base}${routes.claim(s)}``)
 //    is secret-bound; so is the scrubbed `join_code` query parameter and its camelCase;
-//  - the names are followed through `useState` (`setLink(out.claim_url)` makes `link` secret-bound) and local `const`s;
+//  - the names are followed through `useState` (`setLink(out.claim_url)` makes `link` secret-bound) and local `const`s, through
+//    a `Promise.all` destructure by position (`const [names, href] = await Promise.all([…, homeHref(…)])`), and into the
+//    parameter of a function of the same file a secret is passed to (`scanColumn(href, …)` binds its `backHref`): the pad's
+//    way back to its quick match (`/q/<token>`) reaches its link only through both hops (quick match plan 2 Task 5, A6);
 //  - a secret handed to a COMPONENT as a prop is followed into that component's file: `<AuthForm next={`/claim/${token}`} />`
 //    makes `next` secret-bound there, and a template or `encodeURIComponent(...)` built from a bound name is bound too, so
 //    its `<a href={`/api/auth/google?next=${encodeURIComponent(next)}`}>` is a painter (review 2: the Google button's href
@@ -155,6 +158,8 @@ interface Known {
   local: Map<string, Set<string>>;
   /** Secrets handed to a component as a prop, and the call site: `<AuthForm next={`/claim/${token}`} />` -> AuthForm / next. */
   props: { component: string; prop: string; from: string }[];
+  /** Where each component of the scanned tree is declared (`componentDecls`): the files a prop hop can land in. */
+  components: Map<string, { fileName: string; exported: boolean }[]>;
 }
 
 /** Is this expression a credential URL, or a value derived straight from one (a template, a builder call, a bound name)? */
@@ -223,7 +228,13 @@ function learn(all: Source[]): Known {
   const components = componentDecls(all);
   const byDir = new Map<string, Source[]>();
   for (const s of all) if (s.tsx) byDir.set(path.dirname(s.file.fileName), [...(byDir.get(path.dirname(s.file.fileName)) ?? []), s]);
-  const known: Known = { endpoints: [], global: new Set(SEED_NAMES), local: new Map(all.map((s) => [s.file.fileName, new Set<string>(SEED_NAMES)])), props: [] };
+  const known: Known = {
+    endpoints: [],
+    global: new Set(SEED_NAMES),
+    local: new Map(all.map((s) => [s.file.fileName, new Set<string>(SEED_NAMES)])),
+    props: [],
+    components,
+  };
   for (let changed = true; changed; ) {
     changed = false;
     for (const { file, rel } of all) {
@@ -250,6 +261,17 @@ function learn(all: Source[]): Known {
         }
       };
       for (const e of known.endpoints) if (!isRoute && e.call.test(file.text)) addLocal(e.key);
+      // The parameters of the file's own named functions, so a secret passed to one binds the parameter it lands in.
+      const params = new Map<string, readonly ts.ParameterDeclaration[]>();
+      const collect = (n: ts.Node) => {
+        if (ts.isFunctionDeclaration(n) && n.name) params.set(n.name.text, n.parameters);
+        else if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer) {
+          const init = unwrap(n.initializer);
+          if (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) params.set(n.name.text, init.parameters);
+        }
+        ts.forEachChild(n, collect);
+      };
+      collect(file);
       const visit = (n: ts.Node) => {
         const secret = (x: ts.Expression) => isSecretValue(x, file, known, template, builders);
         if (ts.isJsxOpeningElement(n) || ts.isJsxSelfClosingElement(n)) {
@@ -276,6 +298,16 @@ function learn(all: Source[]): Known {
           if (ts.isArrayBindingPattern(n.name) && n.name.elements.length === 2 && n.initializer?.getText(file).startsWith("useState")) {
             const [state, setter] = n.name.elements as unknown as ts.BindingElement[];
             if (ts.isIdentifier(state!.name) && ts.isIdentifier(setter!.name)) setters.set(setter!.name.text, state!.name.text);
+          } else if (ts.isArrayBindingPattern(n.name) && n.initializer) {
+            // `const [a, b] = await Promise.all([x, y])`: each name is as secret as the value in its place.
+            const init = unwrap(n.initializer);
+            const list = ts.isCallExpression(init) && init.expression.getText(file) === "Promise.all" ? init.arguments[0] : undefined;
+            if (list && ts.isArrayLiteralExpression(list)) {
+              n.name.elements.forEach((el, i) => {
+                const value = list.elements[i];
+                if (ts.isBindingElement(el) && ts.isIdentifier(el.name) && value && !ts.isSpreadElement(value) && secret(value)) addLocal(el.name.text);
+              });
+            }
           } else if (ts.isIdentifier(n.name) && n.initializer) {
             const init = unwrap(n.initializer);
             if (ts.isArrowFunction(init) || ts.isFunctionExpression(init) ? buildsSecret(init, file, known, template, builders) : secret(init)) {
@@ -291,6 +323,13 @@ function learn(all: Source[]): Known {
           addLocal(n.left.text);
         } else if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && setters.has(n.expression.text) && n.arguments.some((a) => secret(a))) {
           addLocal(setters.get(n.expression.text)!);
+        } else if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && params.has(n.expression.text)) {
+          // A secret passed to a function of this file binds the parameter it lands in.
+          const declared = params.get(n.expression.text)!;
+          n.arguments.forEach((arg, i) => {
+            const param = declared[i];
+            if (param && ts.isIdentifier(param.name) && secret(arg)) addLocal(param.name.text);
+          });
         } else if (isRoute && ts.isPropertyAssignment(n) && ts.isIdentifier(n.name) && secret(n.initializer)) {
           // A JSON field an API route replies with crosses to every client that reads it.
           addGlobal(n.name.text);
@@ -329,9 +368,18 @@ interface Site {
   component: boolean;
   how: string;
 }
+/** The vocabulary `isSecretValue` reads, derived once (the one-time link scan walks the tree). */
+let vocabulary: { template: RegExp; builders: Set<string> } | undefined;
+const secretVocabulary = () => (vocabulary ??= { template: secretTemplate(), builders: new Set(secretBuilderNames()) });
+
 function sitesIn(file: ts.SourceFile, known: Known): Site[] {
   const secret = new Set([...known.global, ...known.local.get(file.fileName)!]);
+  const { template, builders } = secretVocabulary();
   const out: Site[] = [];
+  // A component the prop hop follows (`learn`): declared in the tree, and exported or in this file. Any other uppercase tag
+  // (`Link` from next/link, a third-party component) lands in a file the scan never reads, so its site is checked HERE.
+  const followed = (tag: string) =>
+    isComponentTag(tag) && (known.components.get(tag) ?? []).some((d) => d.exported || d.fileName === file.fileName);
   const carries = (el: ts.JsxOpeningLikeElement) =>
     el.attributes.properties.some((a) => {
       if (!ts.isJsxAttribute(a) || a.name.getText(file) !== "className") return false;
@@ -350,14 +398,17 @@ function sitesIn(file: ts.SourceFile, known: Known): Site[] {
   const visit = (n: ts.Node) => {
     if (ts.isJsxExpression(n) && n.expression) {
       const par = n.parent;
-      const hit = namesIn(n.expression).filter((x) => secret.has(x));
+      // A name bound to a credential URL, or the URL written inline (`href={routes.quickMatch(token)}`, `{`/claim/${t}`}`),
+      // which names nothing the scan learned: the value itself is the secret (ledger CARRY to T7).
+      const named = namesIn(n.expression).filter((x) => secret.has(x));
+      const hit = named.length || !isSecretValue(n.expression, file, known, template, builders) ? named : [n.expression.getText(file)];
       if (hit.length) {
         const line = file.getLineAndCharacterOfPosition(n.getStart(file)).line + 1;
         if (ts.isJsxAttribute(par)) {
           if (!NOT_PAINTED_ATTR.test(par.name.getText(file))) {
             const open = par.parent.parent as ts.JsxOpeningLikeElement;
             const tag = open.tagName.getText(file);
-            out.push({ line, names: hit, tag, blocked: ancestorsBlocked(open), component: isComponentTag(tag), how: `attribute ${par.name.getText(file)}` });
+            out.push({ line, names: hit, tag, blocked: ancestorsBlocked(open), component: followed(tag), how: `attribute ${par.name.getText(file)}` });
           }
         } else if (!hasJsx(n.expression)) {
           // A text child: `{link}`, `{t(..., { masked })}`. (An expression with JSX in it paints through that JSX.)
@@ -372,14 +423,21 @@ function sitesIn(file: ts.SourceFile, known: Known): Site[] {
   return out;
 }
 
+/** The sites of a hand-off file that do NOT hand the secret to a component declared in one of its named target files: a
+ *  site painted here, or a prop handed to some other component, is not the hand-off its verdict names. */
+function strayHandoffs(sites: Site[], targets: string[], known: Known): Site[] {
+  const files = new Set(targets.map((t) => path.join(SRC_DIR, t)));
+  return sites.filter((s) => !s.component || !(known.components.get(s.tag) ?? []).some((d) => files.has(d.fileName)));
+}
+
 // ---- the verdicts ---------------------------------------------------------------------------------------------------------
 
 /**
  * Every file with a painter, and its verdict: `true` = each painting element carries `ph-no-capture` (asserted); a string = why
- * the file paints no secret that needs it; `handoff` names the file a component passes the secret to as a prop. The props a
- * component receives a secret under are found by the scan (`Known.props`), not listed here.
+ * the file paints no secret that needs it; `handoff` names the file (or files) a component passes the secret to as a prop. The
+ * props a component receives a secret under are found by the scan (`Known.props`), not listed here.
  */
-const PAINTERS: Record<string, { verdict: true | string; handoff?: string }> = {
+const PAINTERS: Record<string, { verdict: true | string; handoff?: string | string[] }> = {
   "components/v2/invite-claim.tsx": { verdict: true },
   "components/v2/officials-shared.tsx": { verdict: true },
   "components/start-wizard.tsx": { verdict: true },
@@ -427,7 +485,86 @@ const PAINTERS: Record<string, { verdict: true | string; handoff?: string }> = {
     verdict:
       "paints the MASKED link (`/join/abcd…wxyz`: first and last four characters, deliberate against shoulder-surfing); the full URL goes only to the clipboard",
   },
+  // A quick match's pad: its way back to the home, `/q/<home token>` (quick match plan 1 Task 9; plan 2 Task 5, A6).
+  "components/v2/quick-match-back-link.tsx": { verdict: true },
+  "app/score/[token]/page.tsx": {
+    verdict: "builds the quick match's home URL and hands it to QuickMatchBackLink as its href; the page paints it nowhere itself",
+    handoff: "components/v2/quick-match-back-link.tsx",
+  },
+  // The home's Score control: its form's action is `/q/<home token>/score/<fixture>` (quick match plan 2 Task 6). The page
+  // builds it and hands it over as a prop, painting nothing itself, so the scan finds the painter here, not on the page.
+  "components/quick-match/score-form.tsx": { verdict: true },
+  // The recent strip: each row links to its home, `/q/<home token>` (quick match plan 2 Task 9).
+  "components/quick-match/recent-strip.tsx": { verdict: true },
+  // The setup page's Continue card (owner 2026-11-12): its one link is the newest unfinished match's home, `/q/<home token>`.
+  "components/quick-match/continue-card.tsx": { verdict: true },
+  // Found once the scan learned to read an INLINE credential URL (ledger CARRY to T7): each page writes its own secret path
+  // straight into a component's prop, which the old name-only scan never saw as a site of the page.
+  "app/checkin/[token]/page.tsx": {
+    verdict: "writes its own `/checkin/<token>` path into AuthForm's `next` prop inline and paints it nowhere itself",
+    handoff: "components/auth-form.tsx",
+  },
+  "app/claim/[token]/page.tsx": {
+    verdict: "writes its own `/claim/<token>` path into AuthForm's `next` prop inline and paints it nowhere itself",
+    handoff: "components/auth-form.tsx",
+  },
+  "app/join/[token]/page.tsx": {
+    verdict: "writes its own `/join/<token>` path into AuthForm's `next` prop inline and paints it nowhere itself",
+    handoff: "components/auth-form.tsx",
+  },
+  "components/claim-invite.tsx": {
+    verdict: "writes the invite's `/join/<token>` path into AuthForm's `next` prop inline and paints it nowhere itself",
+    handoff: "components/auth-form.tsx",
+  },
+  "components/claim-sign-in.tsx": {
+    verdict: "writes the claim's `/claim/<token>` path into AuthForm's `next` prop inline and paints it nowhere itself",
+    handoff: "components/auth-form.tsx",
+  },
+  // The quick match home (plan 2 Tasks 6, 7, 8; plan 3 Task 5): builds `routes.quickMatchScore(token, fixture)` inline into
+  // the Score form's `action`, `routes.quickMatch(token)` into the Share island's `path`, `routes.quickMatchAddMatch(token)`
+  // into the "Add a match" form's `action`, and `routes.quickMatchSaveConfirm(token)` into the Save form's `action`.
+  "app/q/[token]/page.tsx": {
+    verdict:
+      "builds the home's own `/q/<token>` paths inline into its islands' props (the Score form's action, the Share island's path, the Add a match form's action, the Save form's action) and paints them nowhere itself",
+    handoff: [
+      "components/quick-match/score-form.tsx",
+      "components/quick-match/share.tsx",
+      "components/quick-match/add-match.tsx",
+      "components/quick-match/save-form.tsx",
+    ],
+  },
+  // The home's Share (plan 2 Task 7): the home link in its read-only field, handed to the share sheet; the QR is `sensitive`.
+  "components/quick-match/share.tsx": { verdict: true },
+  // The home's "Add a match" (plan 2 Task 8): its form's action is `/q/<home token>/add-match`.
+  "components/quick-match/add-match.tsx": { verdict: true },
+  // Save (plan 3 Task 5): the form's action is `/q/<home token>/save/confirm`, on the home and on the save page.
+  "components/quick-match/save-form.tsx": { verdict: true },
+  // The save page (plan 3 Task 5): its back link to the home, and the Save form's action (a component site, checked there).
+  "app/q/[token]/save/page.tsx": { verdict: true },
+  // The account's Quick matches on /me (plan 3 Task 6): each row's name links to its home, `routes.quickMatch(token)`, built in
+  // the island from the token the page read, so the page hands over no URL and this file is the painter.
+  "components/quick-match/my-list.tsx": { verdict: true },
 };
+
+/** The files that paint a quick match's home URL, `/q/<token>`: every one must be FOUND by the scan, not just listed, or a
+ *  painter that loses its class goes unseen. Plan 2 Tasks 6, 7 and 9 add theirs (the Score form, the share link, the strip). */
+const QUICK_MATCH_PAINTERS = [
+  "app/score/[token]/page.tsx",
+  "components/v2/quick-match-back-link.tsx",
+  "components/quick-match/score-form.tsx",
+  "components/quick-match/recent-strip.tsx",
+  // Owner 2026-11-12: the setup page's Continue card, a link to the newest unfinished match's home.
+  "components/quick-match/continue-card.tsx",
+  // The home itself: it writes `routes.quickMatch(token)` inline into its islands' props (ledger CARRY to T7).
+  "app/q/[token]/page.tsx",
+  "components/quick-match/share.tsx",
+  "components/quick-match/add-match.tsx",
+  // Plan 3 Task 5: the Save form, and the save page (its back link, and the form's action it builds).
+  "components/quick-match/save-form.tsx",
+  "app/q/[token]/save/page.tsx",
+  // Plan 3 Task 6: the account's list of saved quick matches, each name a link to its home.
+  "components/quick-match/my-list.tsx",
+];
 
 describe("every element that paints a scrubbed secret carries ph-no-capture, or its file says why not", () => {
   const all = sources();
@@ -442,7 +579,19 @@ describe("every element that paints a scrubbed secret carries ph-no-capture, or 
   it("the scan found the vocabulary and the painters (anti-vacuity)", () => {
     expect(all.length).toBeGreaterThan(500);
     // The builders and segments come from the app, not from this test.
-    expect(secretBuilderNames().sort()).toEqual(["checkin", "claim"]);
+    // quickMatch: the guest's home, `/q/<token>` (quick match plan 2, A6); quickMatchSave: its save page, `/q/<token>/save`
+    // (plan 3 Task 2, the reminder mail's link); quickMatchScore: its Score post, `/q/<token>/score/<fixture>` (branch fix A);
+    // quickMatchAddMatch: its "Add a match" post, `/q/<token>/add-match` (plan 2 Task 8); quickMatchSaveConfirm: its Save post,
+    // `/q/<token>/save/confirm` (plan 3 Task 5).
+    expect(secretBuilderNames().sort()).toEqual([
+      "checkin",
+      "claim",
+      "quickMatch",
+      "quickMatchAddMatch",
+      "quickMatchSave",
+      "quickMatchSaveConfirm",
+      "quickMatchScore",
+    ]);
     expect(oneTimeLinkPaths().length).toBeGreaterThanOrEqual(5);
     expect(secretSegments().sort()).toEqual(expect.arrayContaining(["checkin", "claim", "join", "score"]));
     // The names the producers really use.
@@ -467,6 +616,97 @@ describe("every element that paints a scrubbed secret carries ph-no-capture, or 
     let sites = 0;
     for (const s of painters.values()) sites += s.length;
     expect(sites).toBeGreaterThanOrEqual(14);
+  });
+
+  it("the scan reaches every file that paints a quick match's home URL (A6): the pad's back link through two hops", () => {
+    let checked = 0;
+    for (const rel of QUICK_MATCH_PAINTERS) {
+      expect(painters.has(rel), `${rel} paints /q/<token>: the scan must find it`).toBe(true);
+      expect(PAINTERS[rel], `${rel} has a verdict`).toBeDefined();
+      checked++;
+    }
+    expect(checked).toBe(QUICK_MATCH_PAINTERS.length);
+    // The route the hops follow, so a refactor that breaks one of them reds here and not in a blind green.
+    expect(known.props).toEqual(
+      expect.arrayContaining([{ component: "QuickMatchBackLink", prop: "href", from: "app/score/[token]/page.tsx" }]),
+    );
+    const link = painters.get("components/v2/quick-match-back-link.tsx") ?? [];
+    expect(link.filter((site) => site.how === "attribute href" && site.tag === "a").map((site) => site.blocked)).toEqual([true]);
+    // The recent strip's one row link (plan 2 Task 9): a host <a>, so its class is checked here and not handed off.
+    const strip = painters.get("components/quick-match/recent-strip.tsx") ?? [];
+    expect(strip.filter((site) => site.how === "attribute href" && site.tag === "a").map((site) => site.blocked)).toEqual([true]);
+    // The setup page's Continue card (owner 2026-11-12): one host <a> to the home, its class checked here.
+    const card = painters.get("components/quick-match/continue-card.tsx") ?? [];
+    expect(card.filter((site) => site.how === "attribute href" && site.tag === "a").map((site) => site.blocked)).toEqual([true]);
+  });
+
+  it("the home's Score form (Task 6): the page hands its action to QuickMatchScoreForm, whose host <form> carries the class", () => {
+    // The hop the scan follows: the home page builds `routes.quickMatchScore(token, id)` straight into the prop.
+    expect(known.props).toEqual(
+      expect.arrayContaining([{ component: "QuickMatchScoreForm", prop: "action", from: "app/q/[token]/page.tsx" }]),
+    );
+    const form = painters.get("components/quick-match/score-form.tsx") ?? [];
+    expect(form.filter((site) => site.how === "attribute action" && site.tag === "form").map((site) => site.blocked)).toEqual([true]);
+    // ... and the page's own site, now that an inline credential URL is one: a component, so it is checked in that file.
+    const page = painters.get("app/q/[token]/page.tsx") ?? [];
+    expect(page.filter((site) => site.tag === "QuickMatchScoreForm").map((site) => [site.how, site.component])).toEqual([
+      ["attribute action", true],
+    ]);
+  });
+
+  it("the home's Share (Task 7): the page hands the home path to QuickMatchShare inline; the island's link field carries the class", () => {
+    // The hop: `path={routes.quickMatch(token)}`, written inline, so only the inline rule finds the page's site.
+    expect(known.props).toEqual(expect.arrayContaining([{ component: "QuickMatchShare", prop: "path", from: "app/q/[token]/page.tsx" }]));
+    const page = painters.get("app/q/[token]/page.tsx") ?? [];
+    expect(page.filter((site) => site.tag === "QuickMatchShare").map((site) => [site.how, site.component])).toEqual([["attribute path", true]]);
+    // In the island, the path becomes the URL its field shows, and the URL it hands to the share sheet (a component whose
+    // own file paints nothing of it: share-button.tsx is no painter).
+    const share = painters.get("components/quick-match/share.tsx") ?? [];
+    expect(share.filter((site) => site.tag === "input").map((site) => [site.how, site.blocked])).toEqual([["attribute value", true]]);
+    expect(share.filter((site) => site.tag === "ShareButton").map((site) => [site.how, site.component])).toEqual([["attribute url", true]]);
+    expect(known.props).toEqual(expect.arrayContaining([{ component: "ShareButton", prop: "url", from: "components/quick-match/share.tsx" }]));
+    expect(painters.has("components/share-button.tsx")).toBe(false);
+  });
+
+  it("the home's Add a match (Task 8): the page hands its action to QuickMatchAddMatch inline; the island's host <form> carries the class", () => {
+    // The hop: `action={routes.quickMatchAddMatch(token)}`, written inline, so only the inline rule finds the page's site.
+    expect(known.props).toEqual(
+      expect.arrayContaining([{ component: "QuickMatchAddMatch", prop: "action", from: "app/q/[token]/page.tsx" }]),
+    );
+    const page = painters.get("app/q/[token]/page.tsx") ?? [];
+    expect(page.filter((site) => site.tag === "QuickMatchAddMatch").map((site) => [site.how, site.component])).toEqual([
+      ["attribute action", true],
+    ]);
+    const form = painters.get("components/quick-match/add-match.tsx") ?? [];
+    expect(form.filter((site) => site.how === "attribute action" && site.tag === "form").map((site) => site.blocked)).toEqual([true]);
+  });
+
+  it("Save (plan 3 Task 5): the home and the save page hand the action to QuickMatchSaveForm; its <form> and the page's back link carry the class", () => {
+    let checked = 0;
+    for (const from of ["app/q/[token]/page.tsx", "app/q/[token]/save/page.tsx"]) {
+      // The hop: `action={routes.quickMatchSaveConfirm(token)}`, written inline, so only the inline rule finds each site.
+      expect(known.props).toEqual(expect.arrayContaining([{ component: "QuickMatchSaveForm", prop: "action", from }]));
+      const sites = painters.get(from) ?? [];
+      expect(sites.filter((site) => site.tag === "QuickMatchSaveForm").map((site) => [site.how, site.component]), from).toEqual([
+        ["attribute action", true],
+      ]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    const form = painters.get("components/quick-match/save-form.tsx") ?? [];
+    expect(form.filter((site) => site.how === "attribute action" && site.tag === "form").map((site) => site.blocked)).toEqual([true]);
+    // The save page's own <a>s, host elements, so each class is checked here and not handed off: "Sign in" with the save page
+    // as its `next` (review m2, signed out on a saved match), and the way back to the home.
+    const page = painters.get("app/q/[token]/save/page.tsx") ?? [];
+    expect(page.filter((site) => site.how === "attribute href" && site.tag === "a").map((site) => site.blocked)).toEqual([true, true]);
+  });
+
+  it("the account's Quick matches (plan 3 Task 6): each row's name is a host <a> to its home, carrying the class; the /me page paints no home URL", () => {
+    const list = painters.get("components/quick-match/my-list.tsx") ?? [];
+    // One <a>, the row's name link: a host element, so its class is checked here and not handed off.
+    expect(list.filter((site) => site.how === "attribute href" && site.tag === "a").map((site) => site.blocked)).toEqual([true]);
+    // The page hands the island the rows (tokens, not URLs): it builds no home URL, so it is no painter of one.
+    expect(painters.has("app/me/page.tsx")).toBe(false);
   });
 
   it("the painter files and the verdict table are the same set", () => {
@@ -496,9 +736,14 @@ describe("every element that paints a scrubbed secret carries ph-no-capture, or 
     let handoffs = 0;
     for (const [rel, { verdict, handoff }] of Object.entries(PAINTERS)) {
       if (handoff) {
-        handoffs++;
-        expect(PAINTERS[handoff]?.verdict, `${rel} hands the secret to ${handoff}, which must be verdict true`).toBe(true);
-        expect((painters.get(rel) ?? []).every((s) => s.component), `${rel}: a hand-off file paints only through components`).toBe(true);
+        const targets = [handoff].flat();
+        expect(targets.length, `${rel}: a hand-off names its file`).toBeGreaterThan(0);
+        for (const target of targets) {
+          handoffs++;
+          expect(PAINTERS[target]?.verdict, `${rel} hands the secret to ${target}, which must be verdict true`).toBe(true);
+        }
+        const strays = strayHandoffs(painters.get(rel) ?? [], targets, known).map((s) => `${rel}:${s.line} <${s.tag}> ${s.how}`);
+        expect(strays, `${rel}: a hand-off file paints only through its named targets' components:\n${strays.join("\n")}`).toEqual([]);
       }
       if (verdict === true) continue;
       expect((painters.get(rel) ?? []).length, `${rel}: stale entry`).toBeGreaterThan(0);
@@ -507,5 +752,87 @@ describe("every element that paints a scrubbed secret carries ph-no-capture, or 
     }
     expect(reasons).toBeGreaterThanOrEqual(3);
     expect(handoffs).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// Ledger CARRY to T7 (confirmed by the plan-2 T9 review): the scan used to find a painting site by the NAMES in its
+// expression only, so a credential URL written INLINE, `<a href={routes.quickMatch(token)}>`, named nothing it knew and
+// went unflagged. These files are parsed exactly as the scan parses the app's sources, and learned on their own.
+describe("the scan flags a credential URL written inline in JSX, not only a name bound to one", () => {
+  const sitesOf = (body: string, decls = ""): Site[] => {
+    const rel = "components/__painter-fixture__/inline.tsx";
+    const text = `import { routes } from "@/lib/routes";\nexport function Inline({ token }: { token: string }) {\n  return ${body};\n}\n${decls}`;
+    const src: Source = {
+      rel,
+      tsx: true,
+      file: ts.createSourceFile(path.join(SRC_DIR, rel), text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX),
+    };
+    return sitesIn(src.file, learn([src]));
+  };
+  const shape = (sites: Site[]) => sites.map((s) => [s.tag, s.how, s.blocked]);
+
+  it("an inline href built by a credential builder is a painter: unblocked bare, blocked under the class", () => {
+    expect(shape(sitesOf(`<a href={routes.quickMatch(token)}>open</a>`))).toEqual([["a", "attribute href", false]]);
+    expect(shape(sitesOf(`<p className="ph-no-capture"><a href={routes.quickMatch(token)}>open</a></p>`))).toEqual([
+      ["a", "attribute href", true],
+    ]);
+  });
+
+  it("an inline credential template, and one printed as text, are painters too", () => {
+    expect(shape(sitesOf(`<a href={\`/claim/\${token}\`}>claim</a>`))).toEqual([["a", "attribute href", false]]);
+    expect(shape(sitesOf(`<code>{routes.checkin(token)}</code>`))).toEqual([["code", "text", false]]);
+    // Handed to a component declared in the tree inline: a site of this file, checked in the component's own file.
+    const island = `function Island(_: { path: string }) {\n  return null;\n}\n`;
+    expect(sitesOf(`<Island path={routes.quickMatch(token)} />`, island).map((s) => [s.tag, s.component])).toEqual([["Island", true]]);
+  });
+
+  it("an uppercase tag the tree does not declare (`Link`, from next/link) is no hand-off: the scan cannot follow it, so it is a painter here", () => {
+    // Review minor (T7): every uppercase tag used to count as a component, so `<Link href={routes.quickMatch(token)}>` was
+    // skipped as "checked in its own file", a file the scan never reads.
+    expect(sitesOf(`<Link href={routes.quickMatch(token)}>open</Link>`).map((s) => [s.tag, s.how, s.blocked, s.component])).toEqual([
+      ["Link", "attribute href", false, false],
+    ]);
+    expect(sitesOf(`<Link className="ph-no-capture" href={routes.quickMatch(token)}>open</Link>`).map((s) => [s.tag, s.blocked, s.component])).toEqual([
+      ["Link", true, false],
+    ]);
+  });
+  it("an inline URL the scrubber leaves alone is not a painter (the negative pair)", () => {
+    expect(sitesOf(`<a href={routes.me()}>me</a>`)).toEqual([]);
+    expect(sitesOf(`<a href={\`/about/\${token}\`}>about</a>`)).toEqual([]);
+  });
+});
+
+// The hand-off rule, on a page and the form it hands its link to, parsed and learned exactly as the app's sources are.
+describe("a hand-off file passes its secret only to its named targets' components", () => {
+  const fixture = (rel: string, text: string): Source => ({
+    rel,
+    tsx: true,
+    file: ts.createSourceFile(path.join(SRC_DIR, rel), text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX),
+  });
+  const FORM = "components/__painter-fixture__/form.tsx";
+  const OTHER = "components/__painter-fixture__/other.tsx";
+  const strays = (body: string): string[] => {
+    const page = fixture(
+      "app/__painter-fixture__/page.tsx",
+      `import Link from "next/link";\nimport { routes } from "@/lib/routes";\nimport { Form } from "@/components/__painter-fixture__/form";\nimport { Other } from "@/components/__painter-fixture__/other";\nexport default function Page({ token }: { token: string }) {\n  return <main>${body}</main>;\n}\n`,
+    );
+    const form = fixture(FORM, `export function Form({ next }: { next: string }) {\n  return <a className="ph-no-capture" href={next}>go</a>;\n}\n`);
+    const other = fixture(OTHER, `export function Other({ next }: { next: string }) {\n  return <a className="ph-no-capture" href={next}>go</a>;\n}\n`);
+    const known = learn([page, form, other]);
+    return strayHandoffs(sitesIn(page.file, known), [FORM], known).map((s) => `<${s.tag}> ${s.how}`);
+  };
+
+  it("the named target's component is the hand-off (the positive pair)", () => {
+    expect(strays(`<Form next={routes.quickMatch(token)} />`)).toEqual([]);
+  });
+
+  it("an inline-href <Link> beside it is a stray: the link is painted in this file, not handed off", () => {
+    expect(strays(`<Form next={routes.quickMatch(token)} /><Link href={routes.quickMatch(token)}>open</Link>`)).toEqual([
+      "<Link> attribute href",
+    ]);
+  });
+
+  it("a component of the tree that is not one of the named targets is a stray too", () => {
+    expect(strays(`<Form next={routes.quickMatch(token)} /><Other next={routes.quickMatch(token)} />`)).toEqual(["<Other> attribute next"]);
   });
 });

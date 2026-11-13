@@ -84,7 +84,6 @@ export async function MarketingNav({
             links={LINKS.map((l) => ({ href: l.href, label: t(d, l.key) }))}
             openLabel={t(d, "nav.openMenu")}
             closeLabel={t(d, "nav.closeMenu")}
-            night={night}
             auth={
               user
                 ? [{ href: "/dashboard", label: `${t(d, "nav.dashboard")} →`, primary: true }]

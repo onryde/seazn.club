@@ -36,5 +36,6 @@ export function TurnstileWidget({ controller, className = "" }: { controller: Tu
     return () => controller.unmount();
   }, [controller, locale]);
   // `min-w-0 max-w-full`: never wider than the card it sits in, so it cannot put a horizontal scroll on the page at 320px.
-  return <div ref={box} data-testid="turnstile-widget" className={`min-w-0 max-w-full ${className}`.trim()} />;
+  // `tabIndex={-1}`: focusable by script only (the controller's `reveal`), never a stop in the tab order.
+  return <div ref={box} tabIndex={-1} data-testid="turnstile-widget" className={`min-w-0 max-w-full ${className}`.trim()} />;
 }

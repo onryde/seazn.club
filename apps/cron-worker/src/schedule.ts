@@ -86,6 +86,23 @@ export const JOBS: readonly Job[] = [
     manual: true,
     failureCounts: ["data.failed"],
   },
+  // Quick match spec §7.8, C1, C2 (plan 3 Task 3): one pass of the expiry sweep. It deletes the orphans a failed create left,
+  // re-arms the matches whose saver's account is gone, deletes the unsaved matches past their expiry, and queues the one
+  // reminder for the ones within 24 hours of it (the outbox worker sends it). Hourly is the slowest cadence that keeps the
+  // reminder useful: a match entering its 24-hour window is reminded with at least 23 hours left, and an expired match goes
+  // within the hour. A daily row could remind minutes before the delete; a fast row would run the sweep 60 times as often for
+  // the same result. Retried after a 502/503/504: claims are skip-locked, each delete re-reads its guard, and the reminder is
+  // enqueued once per expiry. `failed` counts rows whose step threw; `deferred` (rows past a step's 200-row limit) is not a
+  // failure, because the next hour reaches them.
+  {
+    id: "quick-match-expiry",
+    path: "/api/cron/quick-match-expiry",
+    trigger: TRIGGER_CRON,
+    due: { kind: "every" },
+    retry: true,
+    manual: true,
+    failureCounts: ["data.failed"],
+  },
   { id: "ai-previews", path: "/api/cron/ai-previews", trigger: TRIGGER_CRON, due: { kind: "daily", hourUtc: 3 }, retry: true, manual: true },
   // R1 (owner 2026-10-01): daily 04:17. Never retried: a re-send after a 5xx can
   // overlap a pass still alive server-side, and the sweep's overlap safety

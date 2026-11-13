@@ -28,6 +28,7 @@ import {
   CAPTURE_CODE_LIMIT,
   CAPTURE_FAIL_LIMIT,
   CAPTURE_START_LIMIT,
+  isRateLimitOutage,
   __setRateLimitCounterForTests,
 } from "@/lib/rate-limit";
 
@@ -75,6 +76,32 @@ describe("rateLimit (Upstash-only)", () => {
       await expect(
         rateLimit("login:1.2.3.4", { ...CFG, failClosed: true }),
       ).rejects.toBeInstanceOf(HttpError);
+    });
+  });
+
+  // Branch-fix A review m9 (controller ruling 2026-11-12): a caller's log names which limit refused, so the outage's 429 is
+  // told apart from a limit hit's, OFF the wire: on it the two stay the same code-less 429 they always were.
+  describe("isRateLimitOutage: the outage's 429, told apart from a limit hit's", () => {
+    const refusalOf = (p: Promise<void>) => p.then(() => null, (e: unknown) => e);
+
+    it("the fail-closed outage's 429 is one; a limit hit's is not; on the wire the two are the same", async () => {
+      cacheMock.incrWindow.mockResolvedValue(null);
+      const outage = await refusalOf(rateLimit("login:1.2.3.4", { ...CFG, failClosed: true }));
+      cacheMock.incrWindow.mockResolvedValue({ count: 4, ttlMs: 30_000 });
+      const hit = await refusalOf(rateLimit("login:1.2.3.4", { ...CFG, failClosed: true }));
+      expect(outage, "precondition: the outage refused").toBeInstanceOf(HttpError);
+      expect(hit, "precondition: the hit refused").toBeInstanceOf(HttpError);
+      expect(isRateLimitOutage(outage)).toBe(true);
+      expect(isRateLimitOutage(hit)).toBe(false);
+      const wire = (e: unknown) => ({ status: (e as HttpError).status, code: (e as HttpError).code, message: (e as HttpError).message });
+      expect(wire(outage), "the outage's wire is the limit's").toEqual(wire(hit));
+      expect(wire(outage).code, "no code on either: callers that read a code-less 429 are unchanged").toBeUndefined();
+    });
+
+    it("nothing else is one: another 429, another error, no error", () => {
+      expect(isRateLimitOutage(new HttpError(429, "Too many requests — slow down and try again."))).toBe(false);
+      expect(isRateLimitOutage(new Error("down"))).toBe(false);
+      expect(isRateLimitOutage(null)).toBe(false);
     });
   });
 

@@ -619,6 +619,7 @@ function renderHost(rig: Rig, events: readonly EventEnvelope[], o: { canOrganise
         stageKind: null,
         canOrganise: o.canOrganise,
         entrantNames: NAMES,
+        sideWords: {},
         fixtureId: "fx-w2e-t30",
         lineups: rig.lineups,
         identity: { recordedBy: "user-1", deviceLinkId: o.deviceLinkId ?? null },

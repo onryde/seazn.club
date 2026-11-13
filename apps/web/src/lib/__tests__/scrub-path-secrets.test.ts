@@ -63,6 +63,10 @@ const encode = (value: string, depth: number) => {
 /** The capture rule's placeholder is `[code]`, every other rule's `[token]`: both mean "a secret was here". */
 const normalised = (value: string) => value.split("[code]").join(PLACEHOLDER);
 const lowerHex = (value: string) => value.replace(/(%(?:25)*)([0-9A-F]{2})/g, (_, pct: string, hex: string) => pct + hex.toLowerCase());
+/** What a PUBLIC route's URL becomes: nothing of the route's own is scrubbed, but a quick match home token is a credential
+ *  wherever it stands (the bare `qm_` rule, quick match plan 3 Task 5), so one that sits in a public segment becomes
+ *  `qm_[token]`. Every other kind of token is left exactly as it was. */
+const publicOut = (url: string, kind: string, token: string) => (kind === "home" ? url.split(token).join(`qm_${PLACEHOLDER}`) : url);
 
 // ---- real tokens -------------------------------------------------------------------------------------------------
 
@@ -72,6 +76,9 @@ const CHECKINS: string[] = [];
 const REPORTS: string[] = [];
 /** Player payment page tokens (`/r/pay/<token>`), from the REAL producer. */
 const PAYS: string[] = [];
+/** A quick match's home token (plan 1's minter; the `/q/<token>` route is plan 2 Task 5's): the fifth kind of credential, after
+ *  the player payment page's. */
+const HOMES: string[] = Array.from({ length: MINTS }, () => mintHomeToken());
 const tomorrow = new Date(Date.now() + 24 * 3600_000);
 await (async () => {
   for (let i = 0; i < MINTS; i++) {
@@ -87,6 +94,7 @@ const KINDS: [string, string[]][] = [
   ["check-in", CHECKINS],
   ["sponsor report", REPORTS],
   ["player pay page", PAYS],
+  ["home", HOMES],
 ];
 
 describe("premise: the tokens are real and varied", () => {
@@ -120,7 +128,7 @@ describe("every route with a secret segment is scrubbed, or is knowingly public"
 
   it("the scan found the routes (anti-vacuity), and every one has a verdict; no verdict is stale", () => {
     const keys = routesFound.map((r) => r.key).sort();
-    expect(keys.length).toBeGreaterThanOrEqual(12);
+    expect(keys.length).toBeGreaterThanOrEqual(13);
     expect(keys, "a new [token]/[code]/[secret]/[ref] route needs a verdict in VERDICTS").toEqual(Object.keys(VERDICTS).sort());
   });
 
@@ -142,7 +150,7 @@ describe("every route with a secret segment is scrubbed, or is knowingly public"
               expect(scrubScoreUrl(out), "idempotent").toBe(out);
               scrubbed++;
             } else {
-              expect(scrubScoreUrl(url), `${route.key} (${verdict}): ${url}`).toBe(url);
+              expect(scrubScoreUrl(url), `${route.key} (${verdict}): ${url}`).toBe(publicOut(url, kind, token));
               kept++;
             }
           }
@@ -261,7 +269,7 @@ describe("every /<path>/${token} template is scrubbed, or is knowingly public", 
       for (const [kind, tokens] of KINDS) {
         const url = `${ORIGIN}${prefix.replace(/\[id\]/g, "00000000-0000-4000-8000-000000000002")}/${tokens[0]!}`;
         if (prefix in PUBLIC_BUILDERS) {
-          expect(scrubScoreUrl(url), `${prefix} (${PUBLIC_BUILDERS[prefix]})`).toBe(url);
+          expect(scrubScoreUrl(url), `${prefix} (${PUBLIC_BUILDERS[prefix]})`).toBe(publicOut(url, kind, tokens[0]!));
           kept++;
         } else {
           expect(scrubScoreUrl(url), `${prefix} / ${kind} (built in ${file}) must be scrubbed, or added to PUBLIC_BUILDERS with a reason`).not.toContain(tokens[0]!);
@@ -270,8 +278,9 @@ describe("every /<path>/${token} template is scrubbed, or is knowingly public", 
       }
     }
     for (const prefix of Object.keys(PUBLIC_BUILDERS)) expect(builders.has(prefix), `${prefix} is no longer built anywhere: delete it`).toBe(true);
-    // (11 builders - 3 public) x 2 kinds; 14 before quick match plan 1 Task 9 added `/q`.
-    expect(scrubbed).toBeGreaterThanOrEqual(16);
+    // (11 builders - 3 public) x 5 kinds (invite, check-in, sponsor report, player pay page, home) = 40; 16 at 2 kinds, before
+    // plan 2 Task 5 added the home token as a kind, and 32 at 4, before the rebase onto main brought the player pay page token.
+    expect(scrubbed).toBeGreaterThanOrEqual(40);
     expect(kept).toBe(Object.keys(PUBLIC_BUILDERS).length * KINDS.length);
   });
 });
@@ -285,7 +294,7 @@ describe("the credential URLs inside another URL (a sign-in next=): encoded at a
   ];
   it("sweeps every credential route's URLs x wrap x depth x hex case x token", () => {
     const credentialRoutes = secretRoutes().filter((r) => VERDICTS[r.key] === true);
-    expect(credentialRoutes.length).toBeGreaterThanOrEqual(9);
+    expect(credentialRoutes.length).toBeGreaterThanOrEqual(10);
     let checked = 0;
     const failures: string[] = [];
     for (const route of credentialRoutes) {
@@ -507,12 +516,11 @@ describe("the hooks scrub them wherever an event carries one", () => {
 // ---- a quick match's home token, `/q/<token>` -----------------------------------------------------------------------------
 //
 // Quick match plan 1 Task 9 (spec C12, O3, C19): the scoring pad links back to `/q/<home token>`, and whoever holds that token
-// can score every match of the quick match. The home PAGE (`app/q/[token]`) is plan 2's, so the file-system sweep above
-// cannot reach this route yet: until it does, this block is the route's sweep, on REAL home tokens from the real minter.
-// When plan 2 adds the route and its verdict, the sweeps above take it over too.
+// can score every match of the quick match. Plan 2 Task 5 added the page (`app/q/[token]`) and its verdict, so the file-system
+// sweeps above now reach the route with every kind of token, and the home tokens are a kind of their own (`KINDS`). This
+// block keeps the shapes the file system cannot list: the locale prefix, the calls under the page, a log line.
 
 describe("a quick match's home token, /q/<token>: scrubbed wherever a URL carries it", () => {
-  const HOMES = Array.from({ length: MINTS }, () => mintHomeToken());
   const sample = [HOMES[0]!, HOMES[7]!, HOMES[150]!, HOMES[299]!];
   /** Every shape the home URL takes: the page, behind an origin and the marketing locale prefix, with a query and a
    *  fragment, and the calls under it (plan 2's add-match route; the save hand-off spec C19 amended 2026-11-08 allows in a
@@ -579,17 +587,29 @@ describe("a quick match's home token, /q/<token>: scrubbed wherever a URL carrie
 
   it("a `q` that is not the route root is an address and is left alone; the positive pair loses the token", () => {
     const t = HOMES[0]!;
+    // The segment after a slug `q`, with no home token's `qm_` in front: what the ROOT anchor alone decides (a home token
+    // itself is scrubbed wherever it stands, by the bare rule, below).
+    const segment = t.slice("qm_".length);
     // A competition or club slug `q` sits after a path segment, never at the root; `/quick/`, `/qr/` and `/faq/` are other words.
-    const addresses = [`/o/club/c/q/${t}`, `/live/club/q/${t}`, `/quick/${t}`, `/qr/${t}`, `/faq/${t}`, "/q", "/q/", `${ORIGIN}/q/?from=pad`];
+    const addresses = (x: string) => [`/o/club/c/q/${x}`, `/live/club/q/${x}`, `/quick/${x}`, `/qr/${x}`, `/faq/${x}`];
+    const plain = [...addresses(segment), "/q", "/q/", `${ORIGIN}/q/?from=pad`];
     let checked = 0;
-    for (const p of addresses) {
+    for (const p of plain) {
       for (const input of [p, p.startsWith("/") ? `${ORIGIN}${p}` : p]) {
         expect(scrubScoreUrl(input), input).toBe(input);
         checked++;
       }
     }
-    expect(checked).toBe(addresses.length * 2);
+    expect(checked).toBe(plain.length * 2);
     expect(scrubScoreUrl(`${ORIGIN}/q/${t}`)).toBe(`${ORIGIN}/q/${PLACEHOLDER}`);
+    expect(scrubScoreUrl(`${ORIGIN}/q/${segment}`), "the root rule takes any segment after /q/").toBe(`${ORIGIN}/q/${PLACEHOLDER}`);
+    // Plan 3 Task 5: a real home token at any of those addresses is still the match's credential, scrubbed by the bare rule.
+    let bare = 0;
+    for (const p of addresses(t)) {
+      expect(scrubScoreUrl(`${ORIGIN}${p}`), p).toBe(`${ORIGIN}${p.split(t).join(`qm_${PLACEHOLDER}`)}`);
+      bare++;
+    }
+    expect(bare).toBe(5);
   });
 
   it("PostHog: the home's pageview, and an autocaptured click on the pad's back link", () => {

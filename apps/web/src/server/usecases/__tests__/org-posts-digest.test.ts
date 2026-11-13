@@ -13,9 +13,17 @@ import { isoWeekKeyUtc } from "@/server/news/enrichment";
 import { log } from "@/server/logger";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { generateWeeklyDigest, sweepWeeklyDigests, listPosts } from "../org-posts";
+import {
+  digestCandidateOrgIds,
+  generateWeeklyDigest,
+  newsAutoCompetitionScope,
+  sweepWeeklyDigests,
+  listPosts,
+} from "../org-posts";
 import { scoreEvent } from "../scoring";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
+import { systemAuth } from "@/lib/quick-match-auth";
+import { QUICK_MATCH_SYSTEM_ORG_ID, QUICK_MATCH_SYSTEM_USER_ID } from "@/lib/quick-match-constants";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -55,11 +63,17 @@ interface DivCtx {
   entrantB: string;
 }
 
-async function seedDivision(ctx: Ctx): Promise<DivCtx> {
+/** `made` receives the competition id straight after its insert, so a caller's cleanup still finds it when a later
+ *  insert throws. */
+async function seedDivision(
+  ctx: Ctx,
+  opts: { visibility?: "public" | "private"; made?: string[] } = {},
+): Promise<DivCtx> {
   const suffix = randomUUID().slice(0, 8);
   const [{ id: compId }] = await sql<{ id: string }[]>`
     insert into competitions (org_id, name, slug, visibility, created_by)
-    values (${ctx.orgId}, 'Cup', ${"cup-" + suffix}, 'public', ${ctx.userId}) returning id`;
+    values (${ctx.orgId}, 'Cup', ${"cup-" + suffix}, ${opts.visibility ?? "public"}, ${ctx.userId}) returning id`;
+  opts.made?.push(compId);
   const [{ id: divisionId }] = await sql<{ id: string }[]>`
     insert into divisions (competition_id, org_id, name, slug, sport_key, variant_key, config, module_version)
     values (${compId}, ${ctx.orgId}, 'Singles', ${"singles-" + suffix}, 'badminton', 'default',
@@ -188,6 +202,37 @@ async function moveDecidedActivityTo(orgId: string, atMs: number): Promise<void>
   const moved = await sql`
     update match_states set updated_at = ${new Date(atMs)} where org_id = ${orgId} returning fixture_id`;
   expect(moved).toHaveLength(1);
+}
+
+/**
+ * Activity for each arm of the sweep's candidate query, in a division of its own in `ctx`'s org, at `anchor`:
+ * `decided` is a match scored through the real scoring path whose fold is re-dated a day before the anchor (the
+ * first arm reads `match_states.updated_at`); `upcoming` is a fixture scheduled two days after it (the second arm
+ * reads `fixtures.scheduled_at`). Re-dated by FIXTURE id, never by org: the quick-match system org is shared with
+ * every other suite's quick matches. The competition is pushed onto `made` as soon as it is inserted, so a caller in
+ * the shared system org can delete it even when a later step throws. `visibility` is the competition's: real quick
+ * matches are private (C7).
+ */
+async function seedSweepActivity(
+  ctx: Ctx,
+  anchor: number,
+  arms: { decided: boolean; upcoming: boolean },
+  opts: { visibility?: "public" | "private"; made?: string[] } = {},
+): Promise<void> {
+  const div = await seedDivision(ctx, opts);
+  if (arms.decided) {
+    const fx = await decideWithRally(ctx, div, div.entrantA, div.entrantB);
+    const moved = await sql`
+      update match_states set updated_at = ${new Date(anchor - DAY_MS)} where fixture_id = ${fx} returning fixture_id`;
+    expect(moved).toHaveLength(1);
+  }
+  if (arms.upcoming) {
+    await sql`
+      insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round,
+        home_entrant_id, away_entrant_id, status, scheduled_at)
+      values (${div.stageId}, ${div.divisionId}, ${ctx.orgId}, 2, 1, ${div.entrantA}, ${div.entrantB}, 'scheduled',
+              ${new Date(anchor + 2 * DAY_MS)})`;
+  }
 }
 
 describe.skipIf(!HAS_DB)("weekly digest (P3 / D7)", () => {
@@ -502,6 +547,82 @@ describe.skipIf(!HAS_DB)("weekly digest (P3 / D7)", () => {
       where org_id = ${org.orgId} and auto_source ? 'cron_week'`;
     expect(await sweepWeeklyDigests(now)).toMatchObject({ orgsChecked: 1, digestsCreated: 1 });
     expect(await digests()).toHaveLength(3);
+  });
+
+  it("the quick-match system org is never a digest candidate, even with news.auto ON; a control org with the same activity is one", async () => {
+    // single-sport: badminton via seedDivision; the exclusion keys on the org id, never on sport.
+    // Quick match plan 3 Task 8 (E1): the system org holds every guest's quick match, so it has scored and scheduled
+    // fixtures all week. It must never get a weekly digest, and that must not hang on the community plan happening to
+    // lack `news.auto`: the feature is switched ON for it below, so only the candidate query's exclusion stands
+    // between it and a digest.
+    const [systemOrg] = await sql<{ id: string }[]>`select id from organizations where id = ${QUICK_MATCH_SYSTEM_ORG_ID}`;
+    expect(systemOrg, "premise: the system org is seeded (V506)").toBeDefined();
+    const [ownOverride] = await sql`
+      select 1 from org_entitlement_overrides where org_id = ${QUICK_MATCH_SYSTEM_ORG_ID} and feature_key = 'news.auto'`;
+    expect(ownOverride, "premise: the system org carries no news.auto override of its own, so the cleanup restores it").toBeUndefined();
+
+    const anchor = await freeSweepAnchor();
+    // Empty case first: at a free anchor nothing at all is a candidate, so every candidate below is a row seeded here.
+    expect(await digestCandidateOrgIds(anchor)).toEqual([]);
+
+    const decidedOnly = await seedOrg("pro");
+    const upcomingOnly = await seedOrg("pro");
+    await seedSweepActivity(decidedOnly, anchor, { decided: true, upcoming: false });
+    await seedSweepActivity(upcomingOnly, anchor, { decided: false, upcoming: true });
+    const system: Ctx = { auth: systemAuth(), orgId: QUICK_MATCH_SYSTEM_ORG_ID, userId: QUICK_MATCH_SYSTEM_USER_ID };
+    const systemCompIds: string[] = [];
+    try {
+      // The system org gets the activity of BOTH arms, scored through the same path its quick matches are, so each
+      // arm's exclusion is witnessed on its own: drop either one and the system org is back through that arm.
+      await seedSweepActivity(
+        system,
+        anchor,
+        { decided: true, upcoming: true },
+        { visibility: "private", made: systemCompIds },
+      );
+      await sql`
+        insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
+        values (${QUICK_MATCH_SYSTEM_ORG_ID}, 'news.auto', true, 'org-posts-digest.test: the system org with the feature ON')`;
+      await invalidateOrgEntitlements(QUICK_MATCH_SYSTEM_ORG_ID);
+      const scope = await newsAutoCompetitionScope(QUICK_MATCH_SYSTEM_ORG_ID);
+      expect(scope.permitted, "premise: news.auto is ON for the system org").toBe(true);
+      expect(scope.allowed).toContain(systemCompIds[0]);
+
+      // At the candidate selection: a verdict per seeded org. Anti-vacuity: three orgs checked, one per verdict.
+      const candidates = await digestCandidateOrgIds(anchor);
+      const verdicts = [
+        { org: "system, decided + upcoming", candidate: candidates.includes(QUICK_MATCH_SYSTEM_ORG_ID) },
+        { org: "control, decided only", candidate: candidates.includes(decidedOnly.orgId) },
+        { org: "control, upcoming only", candidate: candidates.includes(upcomingOnly.orgId) },
+      ];
+      expect(verdicts, JSON.stringify(verdicts)).toEqual([
+        { org: "system, decided + upcoming", candidate: false },
+        { org: "control, decided only", candidate: true },
+        { org: "control, upcoming only", candidate: true },
+      ]);
+      expect(candidates, "the anchor is free: the two controls and nothing else").toHaveLength(2);
+
+      // Through the sweep, twice (the second call is the same week's retry): the controls are checked and the system
+      // org is not, so it never gets a digest.
+      expect(await sweepWeeklyDigests(anchor)).toMatchObject({ orgsChecked: 2, digestsCreated: 2 });
+      expect(await sweepWeeklyDigests(anchor)).toMatchObject({ orgsChecked: 2, digestsCreated: 0 });
+      const systemDigests = await sql`
+        select id from org_posts where org_id = ${QUICK_MATCH_SYSTEM_ORG_ID} and kind = 'weekly_digest'`;
+      expect(systemDigests, "no weekly digest in the system org").toEqual([]);
+      for (const control of [decidedOnly, upcomingOnly]) {
+        const drafted = (await listPosts(control.auth, control.orgId)).filter((p) => p.kind === "weekly_digest");
+        expect(drafted, `control ${control.orgId}: one digest`).toHaveLength(1);
+      }
+    } finally {
+      await sql`
+        delete from org_entitlement_overrides where org_id = ${QUICK_MATCH_SYSTEM_ORG_ID} and feature_key = 'news.auto'`;
+      await invalidateOrgEntitlements(QUICK_MATCH_SYSTEM_ORG_ID);
+      // A digest only a broken exclusion writes, and this test's own competitions: the system org is shared.
+      await sql`
+        delete from org_posts where org_id = ${QUICK_MATCH_SYSTEM_ORG_ID}
+           and (kind = 'weekly_digest' or competition_id = any(${systemCompIds}::uuid[]))`;
+      if (systemCompIds.length > 0) await sql`delete from competitions where id = any(${systemCompIds}::uuid[])`;
+    }
   });
 
   it("digest window respects a non-UTC org timezone without throwing", async () => {

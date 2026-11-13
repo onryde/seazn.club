@@ -38,7 +38,7 @@ import { runTossThenStart } from "@/lib/start-with-toss";
 import { rulesVersionOf, type FixtureRulesResult } from "@/components/v2/scorepad/transport";
 import { resolveModuleClient } from "@/components/v2/scorepad/module-client";
 import { entrantDisplayName } from "@/lib/entrant-name";
-import { deadLinkKey, VIEW_ONLY_COPY, type ViewOnlyReason } from "@/lib/scan-screen";
+import { askFreshLinkKey, deadLinkKey, decidedKey, viewOnlyKey, type ViewOnlyReason } from "@/lib/scan-screen";
 import { officialLabelKey } from "@/lib/official-label";
 import { useTabReturn } from "@/components/v2/use-tab-return";
 import { eventOutToEnvelope } from "@/components/v2/scorepad/wire";
@@ -105,6 +105,10 @@ interface Props {
    *  This chrome's own writes ("Void my last entry", Start) send it, like the inner pad's taps: after a correction
    *  they are refused, never applied under rules the scorer did not see. Absent: sent as nothing (never checked). */
   rulesVersion?: number;
+  /** Quick match (branch-fix A review Q1/Q2, controller ruling 2026-11-12): a guest's pad, in the system org. Branches
+   *  the COPY only (`decidedKey`, `viewOnlyKey`, `askFreshLinkKey`): a guest has no organiser to ask. Absent: an
+   *  ordinary pad. */
+  quickMatch?: boolean;
 }
 
 const DEAD_CODES = new Set(["LINK_EXPIRED", "LINK_REVOKED", "LINK_INVALID", "UNAUTHENTICATED"]);
@@ -142,6 +146,7 @@ export function DeviceScorePad({
   scorePadV2 = null,
   initialViewOnly = null,
   rulesVersion: loadedRulesVersion,
+  quickMatch = false,
 }: Props) {
   const msg = useMsg();
   // Design audit 1.5: formatting only (a refusal's list of reasons) — English outside a provider.
@@ -508,7 +513,7 @@ export function DeviceScorePad({
       <div data-testid="scan-dead-link" className="flex min-h-[60vh] flex-col items-center justify-center text-center">
         <p className="text-4xl">⏱️</p>
         <h1 className="mt-3 text-lg font-semibold text-slate-100">{msg(deadLinkKey(dead))}</h1>
-        <p className="mt-2 text-sm text-slate-400">{msg("device.askFreshLink")}</p>
+        <p className="mt-2 text-sm text-slate-400">{msg(askFreshLinkKey(quickMatch))}</p>
       </div>
     );
   }
@@ -689,7 +694,7 @@ export function DeviceScorePad({
           role="status"
           className="rounded-md border border-slate-700 bg-slate-900 px-3 py-3 text-center text-sm text-slate-200"
         >
-          {msg(VIEW_ONLY_COPY[shownViewOnly])}
+          {msg(viewOnlyKey(shownViewOnly, quickMatch))}
         </p>
       )}
 
@@ -836,7 +841,7 @@ export function DeviceScorePad({
 
       {canAct && decided && scoring && (
         <p className="rounded-md border border-emerald-900/50 bg-emerald-950/60 px-3 py-2 text-sm text-emerald-300">
-          {msg("device.resultRecorded")}
+          {msg(decidedKey(quickMatch))}
         </p>
       )}
     </div>

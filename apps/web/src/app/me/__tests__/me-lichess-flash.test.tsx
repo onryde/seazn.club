@@ -21,9 +21,16 @@ vi.mock("next/navigation", () => ({
   redirect: (to: string) => {
     throw new Error(`redirected to ${to}`);
   },
+  // The page always mounts the quick match list island (it renders nothing with no row), which reads the router.
+  useRouter: () => ({ refresh: () => undefined }),
 }));
 vi.mock("@/lib/auth", () => ({
   getCurrentUser: loaders.getCurrentUser,
+  // /me reads the session (T6 review m3: a staff impersonation sees quick matches without their links).
+  getCurrentSession: async () => {
+    const user = await loaders.getCurrentUser();
+    return user ? { user, impersonated: false } : null;
+  },
   getUserOrgs: loaders.getUserOrgs,
   getActiveOrgId: loaders.getActiveOrgId,
 }));
@@ -40,6 +47,8 @@ vi.mock("@/server/usecases/me-officiating", () => ({
   listPendingOfficiatingClaims: async () => [],
 }));
 vi.mock("@/server/usecases/official-marks", () => ({ myMarksAverage: async () => null }));
+// /me lists the saved quick matches (quick match plan 3 T6); none here.
+vi.mock("@/server/usecases/quick-match-home", () => ({ listMyQuickMatches: async () => [] }));
 vi.mock("@/server/usecases/me-lichess", () => ({
   myLichessLink: async () => ({ show: false, linkedUsername: null, needsReconsent: false, orgSlug: null }),
 }));

@@ -4,7 +4,7 @@ export const dynamic = "force-dynamic";
 // render the shell; every scoring call from the client re-presents it as
 // `Authorization: Bearer dl_…`. The token lives in this tab only — never
 // localStorage.
-import { resolveDeviceLinkToken } from "@/server/usecases/device-links";
+import { deviceLinkOrgId, resolveDeviceLinkToken } from "@/server/usecases/device-links";
 import {
   getFixtureState,
   getLineup,
@@ -31,7 +31,7 @@ import { hasFeature } from "@/lib/entitlements";
 import { resolveScorePadBootstrap } from "@/server/usecases/fidelity";
 import { eventOutToEnvelope } from "@/components/v2/scorepad/wire";
 import { ScanWaiting } from "@/components/v2/scan-waiting";
-import { deadLinkKey, fixtureTimeLabel, scanScreen } from "@/lib/scan-screen";
+import { askFreshLinkKey, deadLinkKey, fixtureTimeLabel, scanScreen } from "@/lib/scan-screen";
 import { resultCarriedForward } from "@/server/usecases/carried-forward";
 import { scanMatchNames } from "@/server/usecases/scan-match-names";
 import { resolveVenueTz } from "@/lib/tz";
@@ -48,6 +48,7 @@ import { findQuickMatchByCompetition } from "@/server/usecases/quick-match-home"
 import { tryOpenHomeToken } from "@/server/usecases/quick-match-tokens";
 import { log } from "@/server/logger";
 import { QuickMatchBackLink } from "@/components/v2/quick-match-back-link";
+import { routes } from "@/lib/routes";
 import type { ReactNode } from "react";
 
 export default async function ScorePadPage({
@@ -65,9 +66,22 @@ export default async function ScorePadPage({
   try {
     link = await resolveDeviceLinkToken(token);
   } catch (err) {
-    // Expired / revoked / unknown → the doc 13 §7 dead-end screen, by CODE.
+    // Expired / revoked / unknown → the doc 13 §7 dead-end screen, by CODE. Its hint is a quick match's own when the dead
+    // link was a guest's (controller ruling 2026-11-12: no organiser to ask). Looked up only for a refusal the resolver
+    // coded: anything else (the database itself failing) keeps the screen it always had, never a second query's throw.
     const code = err instanceof HttpError ? (err.code ?? null) : null;
-    return <DeadLink message={t(deadLinkKey(code))} hint={t("device.askFreshLink")} />;
+    let quickMatch = false;
+    if (code !== null) {
+      try {
+        quickMatch = (await deviceLinkOrgId(token)) === QUICK_MATCH_SYSTEM_ORG_ID;
+      } catch {
+        // The lookup only refines the hint: its failure (the database, after the resolver answered) never costs the dead
+        // screen, which keeps its code's message and the ordinary hint (final review A m-1). No error object is logged: a
+        // driver error can carry the statement's parameters.
+        log.warn({ code }, "dead link: the org lookup for its hint failed; the ordinary hint is shown");
+      }
+    }
+    return <DeadLink message={t(deadLinkKey(code))} hint={t(askFreshLinkKey(quickMatch))} />;
   }
 
   // Server-trusted read context: this page IS the device-link surface, so it
@@ -83,7 +97,9 @@ export default async function ScorePadPage({
   };
 
   const fixture = await readScanFixture(link.org_id, link.fixture_id);
-  if (!fixture) return <DeadLink message={t("device.dead.gone")} hint={t("device.askFreshLink")} />;
+  if (!fixture) {
+    return <DeadLink message={t("device.dead.gone")} hint={t(askFreshLinkKey(link.org_id === QUICK_MATCH_SYSTEM_ORG_ID))} />;
+  }
 
   // Same brand chain as the public pages / noticeboard (Pro entitlements
   // resolved inside orgBoardChrome): the volunteer's pad wears club colors.
@@ -321,6 +337,8 @@ export default async function ScorePadPage({
         initialViewOnly={screen.screen === "view_only" ? screen.reason : null}
         // W2c Task 15 (X-SR-7): the chrome's own writes send the version the pad was loaded with.
         rulesVersion={rulesVersion}
+        // Branch-fix A review Q1/Q2: a guest's pad (the system org, orphan or not) names no organiser. Copy only.
+        quickMatch={link.org_id === QUICK_MATCH_SYSTEM_ORG_ID}
         />,
         ),
       )}
@@ -370,7 +388,7 @@ async function quickMatchHomeHref(orgId: string, competitionId: string): Promise
     }
     return null;
   }
-  return `/q/${opened.token}`;
+  return routes.quickMatch(opened.token);
 }
 
 /** Each (competition, reason) is warned about once per server process (ruling 2026-11-08): a waiting screen re-renders

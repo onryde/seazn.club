@@ -627,6 +627,13 @@ const WALKTHROUGH_SPECS: string[] = [
   // rules, a description typed with the Bold button, Create, and each exit of
   // the first-division screen. The only test that taps the form end to end.
   "new-competition-form.spec.ts",
+
+  // Quick match — a guest with no account, on a phone, from the marketing page's "Quick match" to a FINISHED quick
+  // match, every rally tapped on the pad: a badminton league of three (one side 40+ characters) played to its final
+  // table and checked against the record, a knockout of three through its bye and the lone semi-final into the final,
+  // and the recent strip on the marketing page opening both. The only test that carries one guest's browser from the
+  // setup form through the pad and back to the home's result; Share, Add a match and Save extend it.
+  "quick-match.spec.ts",
 ];
 
 /** The values of `E2E_WALKTHROUGH_SLICE` that e2e.yml dispatches. Named here

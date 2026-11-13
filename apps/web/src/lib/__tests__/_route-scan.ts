@@ -74,6 +74,8 @@ export const VERDICTS: Record<string, true | string> = {
   "claim/[token]": true,
   "score/[token]": true,
   "day/[token]": true,
+  // A quick match's home (plan 2 Task 5): the link IS the credential, anyone holding it scores (O3, C19).
+  "q/[token]": true,
   "api/invites/[token]": true,
   "api/checkin/[token]": true,
   "api/claims/[token]": true,

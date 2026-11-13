@@ -38,7 +38,9 @@ export type KindHook = {
  *  applied (R9). The five registration and refund kinds have no side effect to apply when a mail ends badly (spec §1), and nor
  *  have wave 2's ten money mails, wave 3's eight account and invite mails, wave 4's nine officials, discipline, report and
  *  billing-group mails, wave 5's funnel reminder and sixteen staff alerts, or sponsor deals' paid notice: each body renders at enqueue
- *  time and nothing waits on its outcome (phase-4 note). */
+ *  time and nothing waits on its outcome (phase-4 note). Nor have the quick match's link mail and reminder: the match lives or
+ *  expires on its own clock, whatever became of its mail (quick-match-save.ts drops the reminder rows its cancel ends on that
+ *  premise; its test pins it). */
 export const KIND_HOOKS: Record<OutboxKind, KindHook> = {
   magic_link: {},
   chess_invite: { onEndedBadly: chessInviteEndedBadly, findUnapplied: findUnappliedChessEndings },
@@ -99,6 +101,8 @@ export const KIND_HOOKS: Record<OutboxKind, KindHook> = {
   registration_joined: {},
   registration_rejected: {},
   registration_promotion_lapsed: {},
+  quick_match_link: {},
+  quick_match_reminder: {},
 };
 
 /** Does this kind have a hook to run for a row that ended badly? (A kind with none is not "skipped" when a tick runs out of

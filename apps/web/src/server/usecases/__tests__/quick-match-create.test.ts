@@ -19,7 +19,7 @@ import { EVENTS } from "@/lib/analytics-events";
 import { sql, withTenant } from "@/lib/db";
 import { captureServer } from "@/lib/posthog-server";
 import { isBye } from "@/lib/run-sheet-groups";
-import { QUICK_MATCH_SYSTEM_ORG_ID } from "@/lib/quick-match-constants";
+import { QUICK_MATCH_MAX_SIDES, QUICK_MATCH_MIN_SIDES, QUICK_MATCH_SYSTEM_ORG_ID } from "@/lib/quick-match-constants";
 import type { EntrantKind } from "@seazn/engine/sport";
 import { CreateQuickMatch } from "@/server/api-v1/schemas";
 import { createCompetition } from "../competitions";
@@ -40,7 +40,7 @@ vi.mock("@/lib/posthog-server", async (orig) => ({
   ...(await orig<typeof import("@/lib/posthog-server")>()),
   captureServer: vi.fn(),
 }));
-// The real offer, through a spy: Part B's Review Focus 5 case answers one call with an offer that refuses knockout.
+// The real offer, through a spy: the League-only case reads it, so it is the real offer that says a knockout is allowed.
 // The two post-commit steps, real but spied: a case asserts the create calls them, and the atomicity case fails one.
 vi.mock("../stages", async (orig) => {
   const real = await orig<typeof import("../stages")>();
@@ -272,11 +272,11 @@ describe.skipIf(!HAS_DB)("createQuickMatch (Part B: the guarded wrapper)", () =>
 
   it("refuses with 503 before it reads or writes anything when DEVICE_LINK_KEK is unset (Review Focus 4, E2)", async () => {
     const visitorHash = v();
-    for (let i = 0; i < 5; i++) await createQuickMatch(base(), { visitorHash });   // at the cap: a seal placed after the count answers 429, not 503
+    for (let i = 0; i < 5; i++) await createQuickMatch(base(), { visitorHash, mailAllowed: async () => true });   // at the cap: a seal placed after the count answers 429, not 503
     const b = base();
     vi.stubEnv("DEVICE_LINK_KEK", "");
     try {
-      await expect(createQuickMatch(b, { visitorHash, _failBeforeGenerateForTests: reachedTree }))
+      await expect(createQuickMatch(b, { visitorHash, mailAllowed: async () => true, _failBeforeGenerateForTests: reachedTree }))
         .rejects.toMatchObject({ status: 503, code: "DEVICE_LINK_KEK_MISSING" });
     } finally {
       vi.stubEnv("DEVICE_LINK_KEK", KEK);
@@ -286,42 +286,42 @@ describe.skipIf(!HAS_DB)("createQuickMatch (Part B: the guarded wrapper)", () =>
 
   it("refuses the 6th alive match for one visitor with 429 QUICK_MATCH_TOO_MANY_ALIVE, before the tree", async () => {
     const visitorHash = v();
-    for (let i = 0; i < 5; i++) await createQuickMatch(base(), { visitorHash });
+    for (let i = 0; i < 5; i++) await createQuickMatch(base(), { visitorHash, mailAllowed: async () => true });
     // The early count answers before the tree; without it, the hook fires first and the rejection is "reached the tree".
-    await expect(createQuickMatch(base(), { visitorHash, _failBeforeGenerateForTests: reachedTree }))
+    await expect(createQuickMatch(base(), { visitorHash, mailAllowed: async () => true, _failBeforeGenerateForTests: reachedTree }))
       .rejects.toMatchObject({ status: 429, code: "QUICK_MATCH_TOO_MANY_ALIVE" });
   });
 
   it("a visitor's SAVED matches do not count: five saved, the next create succeeds (§7.2 alive = unsaved)", async () => {
     const visitorHash = v();
-    for (let i = 0; i < 5; i++) await createQuickMatch(base(), { visitorHash });
+    for (let i = 0; i < 5; i++) await createQuickMatch(base(), { visitorHash, mailAllowed: async () => true });
     const { auth } = await seedOrg("community");   // a real user to have saved them
     await sql`update quick_matches set saved_by_user_id = ${auth.userId} where visitor_hash = ${visitorHash}`;
-    const out = await createQuickMatch(base(), { visitorHash });
+    const out = await createQuickMatch(base(), { visitorHash, mailAllowed: async () => true });
     expect(await sql`select 1 from quick_matches where id = ${out.id}`).toHaveLength(1);
   });
 
   it("a visitor's EXPIRED matches do not count: five made, the next create 8 days later succeeds (§7.2 alive = unexpired)", async () => {
     const visitorHash = v();
-    for (let i = 0; i < 5; i++) await createQuickMatch(base(), { visitorHash });
+    for (let i = 0; i < 5; i++) await createQuickMatch(base(), { visitorHash, mailAllowed: async () => true });
     const later = new Date(Date.now() + 8 * 24 * 3600 * 1000);   // past QUICK_MATCH_EXPIRY_DAYS (7) of the five
-    const out = await createQuickMatch(base(), { visitorHash, now: later });
+    const out = await createQuickMatch(base(), { visitorHash, mailAllowed: async () => true, now: later });
     expect(await sql`select 1 from quick_matches where id = ${out.id}`).toHaveLength(1);
   });
 
   it.each([[""], ["test-visitor-1"], ["A".repeat(64)], ["a".repeat(63)], ["g".repeat(64)]])(
     "refuses a visitorHash that is not sha256 hex (%j) with 400 QUICK_MATCH_VISITOR_INVALID, before anything",
     async (visitorHash) => {
-      await expect(createQuickMatch(base(), { visitorHash, _failBeforeGenerateForTests: reachedTree }))
+      await expect(createQuickMatch(base(), { visitorHash, mailAllowed: async () => true, _failBeforeGenerateForTests: reachedTree }))
         .rejects.toMatchObject({ status: 400, code: "QUICK_MATCH_VISITOR_INVALID" });
     },
   );
 
   it("two concurrent creates at 4 alive: exactly one succeeds (the locked recount, B5f)", async () => {
     const visitorHash = v();
-    for (let i = 0; i < 4; i++) await createQuickMatch(base(), { visitorHash });
+    for (let i = 0; i < 4; i++) await createQuickMatch(base(), { visitorHash, mailAllowed: async () => true });
     const pair = [base(), base()];
-    const both = await Promise.allSettled(pair.map((b) => createQuickMatch(b, { visitorHash })));
+    const both = await Promise.allSettled(pair.map((b) => createQuickMatch(b, { visitorHash, mailAllowed: async () => true })));
     expect(both.filter((r) => r.status === "fulfilled")).toHaveLength(1);
     expect(both.find((r) => r.status === "rejected")).toMatchObject({ reason: { status: 429, code: "QUICK_MATCH_TOO_MANY_ALIVE" } });
     // The loser leaves no competition, found by its own name; the winner's stands.
@@ -333,28 +333,33 @@ describe.skipIf(!HAS_DB)("createQuickMatch (Part B: the guarded wrapper)", () =>
     expect(n).toBe(5);
   });
 
-  it("refuses knockout for a variant whose rules can end level, even when asked directly (Review Focus 5)", async () => {
-    // Engine 3.0.2: no OFFERED variant's knockout can end level (each plays its sport's preset deciders to a winner; the
-    // only `false` in the catalog is cricket's, which the probe excludes), so no real offer reaches this guard today:
-    // quick-match-offer.test.ts pins both directions of the declaration across every variant. Here the offer that
-    // says no is the guard's input, and the real offer beside it says yes, so only the guard can refuse.
-    const real = await offerFor("badminton", BADMINTON_V);
-    expect(real).toMatchObject({ offered: true, knockoutAllowed: true });
-    vi.mocked(offerFor).mockResolvedValueOnce({ ...real, knockoutAllowed: false });
-    await expect(createQuickMatch({ ...base(), format: "knockout" }, { visitorHash: v(), _failBeforeGenerateForTests: reachedTree }))
-      .rejects.toMatchObject({ status: 422, code: "QUICK_MATCH_FORMAT_NOT_OFFERED" });
-  });
-
-  it("refuses knockout with two sides (C16)", async () => {
-    expect((await offerFor("badminton", BADMINTON_V)).knockoutAllowed).toBe(true);   // so only the side count can refuse here
-    await expect(createQuickMatch({ ...base(), format: "knockout", sides: sides.slice(0, 2) }, { visitorHash: v(), _failBeforeGenerateForTests: reachedTree }))
-      .rejects.toMatchObject({ status: 422, code: "QUICK_MATCH_FORMAT_NOT_OFFERED" });
+  it("refuses a knockout at every side count with QUICK_MATCH_FORMAT_NOT_OFFERED, before anything (owner 2026-11-12: League only)", async () => {
+    // The real offer says a knockout of this variant is allowed (`knockoutAllowed`, kept for League + Knockout), and 3..6
+    // sides were the old knockout's own range, so only the League-only guard can refuse here. Nothing is built: the tree's
+    // hook throws if it is reached, and no competition carries the asked name.
+    expect(await offerFor("badminton", BADMINTON_V)).toMatchObject({ offered: true, knockoutAllowed: true });
+    const many = [...sides, "Kim & Lou", "Ola & Pat"];
+    let checked = 0;
+    for (let n = QUICK_MATCH_MIN_SIDES; n <= QUICK_MATCH_MAX_SIDES; n++) {
+      const asked = { ...base(), format: "knockout" as const, sides: many.slice(0, n) };
+      expect(asked.sides, `${n} sides`).toHaveLength(n);
+      await expect(
+        createQuickMatch(asked, { visitorHash: v(), mailAllowed: async () => true, _failBeforeGenerateForTests: reachedTree }),
+        `a knockout of ${n}`,
+      ).rejects.toMatchObject({ status: 422, code: "QUICK_MATCH_FORMAT_NOT_OFFERED" });
+      expect(await sql`select 1 from competitions where org_id = ${SYSTEM_ORG} and name = ${asked.name}`, `${n}: nothing built`).toHaveLength(0);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: 2..6 sides").toBe(5);
+    // The positive pair: the same input as a league is made.
+    const league = await createQuickMatch({ ...base(), sides: many.slice(0, 3) }, { visitorHash: v(), mailAllowed: async () => true });
+    expect(await sql`select format from quick_matches where id = ${league.id}`).toEqual([{ format: "league" }]);
   });
 
   it("refuses a sport the probe excluded with QUICK_MATCH_SPORT_NOT_OFFERED", async () => {
     const [g] = await sql<{ key: string }[]>`
       select key from sport_variants where sport_key = 'generic' and is_system and org_id is null order by key limit 1`;   // excluded by the probe (Task 6, B6e)
-    await expect(createQuickMatch({ ...base(), sport_key: "generic", variant_key: g!.key, kind: "team" }, { visitorHash: v(), _failBeforeGenerateForTests: reachedTree }))
+    await expect(createQuickMatch({ ...base(), sport_key: "generic", variant_key: g!.key, kind: "team" }, { visitorHash: v(), mailAllowed: async () => true, _failBeforeGenerateForTests: reachedTree }))
       .rejects.toMatchObject({ status: 422, code: "QUICK_MATCH_SPORT_NOT_OFFERED" });
   });
 
@@ -363,7 +368,7 @@ describe.skipIf(!HAS_DB)("createQuickMatch (Part B: the guarded wrapper)", () =>
     expect(offered).toBe(true);   // so the sport check cannot be what refuses
     const missing = (["individual", "pair", "team"] as const).find((k) => !kinds.includes(k));
     expect(missing, "badminton takes every kind: this test has nothing to witness").toBeDefined();
-    await expect(createQuickMatch({ ...base(), kind: missing! }, { visitorHash: v(), _failBeforeGenerateForTests: reachedTree }))
+    await expect(createQuickMatch({ ...base(), kind: missing! }, { visitorHash: v(), mailAllowed: async () => true, _failBeforeGenerateForTests: reachedTree }))
       .rejects.toMatchObject({ status: 422, code: "QUICK_MATCH_KIND_NOT_OFFERED" });
   });
 
@@ -371,7 +376,7 @@ describe.skipIf(!HAS_DB)("createQuickMatch (Part B: the guarded wrapper)", () =>
     const cap = vi.mocked(captureServer);
     cap.mockClear();
     const b = { ...base(), email: "guest@example.com" };
-    const out = await createQuickMatch(b, { visitorHash: v() });
+    const out = await createQuickMatch(b, { visitorHash: v(), mailAllowed: async () => true, baseUrl: "https://qm-create.test" });
     const ours = cap.mock.calls.map(([a]) => a).filter((a) => a.event === EVENTS.QUICK_MATCH_CREATED);
     expect(ours).toHaveLength(1);
     expect(ours[0]).toMatchObject({
@@ -380,5 +385,16 @@ describe.skipIf(!HAS_DB)("createQuickMatch (Part B: the guarded wrapper)", () =>
     });
     const wire = JSON.stringify(ours[0]);
     for (const secret of [b.name, b.email, out.token]) expect(wire).not.toContain(secret);
+  });
+});
+
+// Branch-fix A review m6: the mail gate has no default. Optional, a caller that forgot it mailed with no limit at all (fail
+// open); required, the compiler refuses that caller. Checked by tsc (this file is in the scoped type check), not by vitest.
+describe("createQuickMatch's mail gate is required (review m6)", () => {
+  it("a create with no `mailAllowed` does not type-check", () => {
+    const omitted = (input: Parameters<typeof createQuickMatch>[0]) =>
+      // @ts-expect-error -- mailAllowed is required: there is no "every mail allowed" default to forget it into.
+      createQuickMatch(input, { visitorHash: "0".repeat(64) });
+    expect(omitted).toBeTypeOf("function");
   });
 });

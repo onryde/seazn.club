@@ -1,11 +1,15 @@
-// The Turnstile gate on the public POSTs, driven through the REAL route handlers: login, start, register, resend, join, and
-// withdraw (two routes share that action: the by-ref one and the registration-id one).
+// The Turnstile gate on the public POSTs, driven through the REAL route handlers: login, start, register, resend, join,
+// withdraw (two routes share that action: the by-ref one and the registration-id one), and quickmatch (the quick match setup
+// form, owner 2026-11-12: "yes we need turnstile").
 // server/__tests__/turnstile.test.ts proves the judgement; THIS file proves each route actually asks, asks for ITS
-// action, asks before it reads a body, and asks after its first rate limit and not before it.
+// action, asks before its work runs, and asks after its first rate limit and not before it.
 //
-// What "the handler body did not run" means here: every one of the seven reads its body with `req.json()` (directly, or through
+// What "the handler body did not run" means here: seven of the eight read their body with `req.json()` (directly, or through
 // `parseBody`), so a request spied on `json` that is refused with that spy untouched never got past the gate. That is a
 // stronger claim than "returned 403" (a gate placed after the read would also return 403) and needs no usecase mocked.
+// The eighth, the quick match create, is a FORM route: it reads its form before anything else, for the locale a refusal lands
+// on, and answers every post with a 303 (app/api/quick-match/route.ts). Its witness is therefore the create itself, a mocked
+// `createQuickMatch`, and its refusals are 303s back to the setup page with `?e=` (`expectGateRefused` and its two siblings).
 //
 // The surfaces are typed from the brief; two sweeps cross-check them. One against the actions lib/turnstile.ts DECLARES (a
 // declared action with no surface fails). One against the route TREE (every write handler under app/api is a surface here, sits
@@ -16,6 +20,7 @@
 //
 // Sport: not applicable. A bot check is sport-agnostic.
 import { resolve } from "node:path";
+import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const limiter = vi.hoisted(() => ({ calls: 0, refuse: false }));
@@ -24,8 +29,10 @@ vi.mock("@/lib/rate-limit", async (importOriginal) => ({
   rateLimit: vi.fn(async () => {
     limiter.calls++;
     if (limiter.refuse) {
+      // The real limiter's 429 (lib/rate-limit.ts `tooMany`): no code, a Retry-After. The quick match create tells its limiter
+      // from a fault by exactly that missing code, so a coded stand-in would read there as a server fault.
       const { HttpError } = await import("@/lib/errors");
-      throw new HttpError(429, "Too many requests", "RATE_LIMITED");
+      throw new HttpError(429, "Too many requests — slow down and try again.", undefined, undefined, { "Retry-After": "60" });
     }
   }),
 }));
@@ -35,17 +42,23 @@ vi.mock("next/headers", () => ({
 }));
 const logMock = vi.hoisted(() => ({ error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() }));
 vi.mock("@/server/logger", () => ({ log: logMock }));
-// The usecases a VALID body would reach (resend, both withdraws), so the good-token case can prove the real work is called.
+// The usecases a VALID body would reach (resend, both withdraws, the quick match create), so the good-token case can prove the
+// real work is called. The create answers what the route needs to land on a home: a home token, no link mail.
 const usecase = vi.hoisted(() => ({
   resend: vi.fn(async () => ({ sent: true })),
   withdraw: vi.fn(async () => ({ ok: true })),
   withdrawPublic: vi.fn(async () => ({ ok: true })),
+  quickMatch: vi.fn(async () => ({ token: `qm_${"A".repeat(43)}`, outboxRowId: null, emailLimited: false })),
 }));
 vi.mock("@/server/usecases/registrations", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/usecases/registrations")>()),
   resendRegistrationConfirmationPublic: usecase.resend,
   withdrawRegistrationByRef: usecase.withdraw,
   withdrawRegistrationPublic: usecase.withdrawPublic,
+}));
+vi.mock("@/server/usecases/quick-match-create", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/usecases/quick-match-create")>()),
+  createQuickMatch: usecase.quickMatch,
 }));
 
 // The join preview GET reads through this; mocked so the un-gated GET provably reaches its usecase (join POST is left real: it
@@ -67,6 +80,7 @@ import { POST as resend } from "@/app/api/v1/public/registrations/groups/[id]/re
 import { POST as withdraw } from "@/app/api/v1/public/registrations/by-ref/[ref]/withdraw/route";
 import { POST as withdrawById } from "@/app/api/v1/public/registrations/[id]/withdraw/route";
 import { GET as joinPreview } from "@/app/api/v1/public/orgs/[orgSlug]/competitions/[slug]/register/join/route";
+import { POST as quickMatch } from "@/app/api/quick-match/route";
 
 const SECRET = "1x0000000000000000000000000000000AA"; // Cloudflare's published always-pass test secret
 const HOST = "stg.seazn.test";
@@ -83,6 +97,8 @@ type Surface = {
    *  they are driven with `{}` and "reached the body" is `req.json` having been read (they answer 400 from their own schema). */
   validBody?: unknown;
   usecase?: ReturnType<typeof vi.fn>;
+  /** A FORM route's valid form (the quick match create): posted urlencoded instead of `validBody`, answered with 303s. */
+  form?: Record<string, string | string[]>;
 };
 
 const SURFACES: Surface[] = [
@@ -124,7 +140,24 @@ const SURFACES: Surface[] = [
     validBody: { token: "registrant-token-0123456789" },
     usecase: usecase.withdrawPublic,
   },
+  {
+    name: "quick match (POST /api/quick-match)",
+    file: "quick-match/route.ts",
+    action: "quickmatch",
+    call: (r) => quickMatch(r as NextRequest),
+    // The setup form's nine fields as a browser posts them (setup-form.tsx `setupBody`); CreateQuickMatch accepts it.
+    form: {
+      name: "Sunday doubles", sport_key: "badminton", variant_key: "bwf", kind: "pair", format: "league",
+      sides: ["Ravi & Sam", "Priya & Tom"], plays: "1", email: "", locale: "en",
+    },
+    usecase: usecase.quickMatch,
+  },
 ];
+
+/** Where the quick match create sends a refusal: its setup page, in the form's locale (`en` above), with the code. Typed, not
+ *  read from QUICK_MATCH_ERRORS: the setup page maps exactly these strings. */
+const QM_BOT_CHECK = "/en/play?e=QUICK_MATCH_TURNSTILE_FAILED";
+const QM_THROTTLED = "/en/play?e=QUICK_MATCH_RATE_LIMITED";
 
 // A stateful Cloudflare: a minted token is accepted once and only for the action and host it was minted for.
 const cf = (() => {
@@ -168,6 +201,50 @@ function post(body: unknown, headers: Record<string, string> = {}) {
   return { req, json };
 }
 
+/** A POST to surface `s` and its witness: `passed()` is how many times THIS request got past the gate. A JSON surface's witness
+ *  is its spied `json` reader. The form surface reads its form before the gate (for a refusal's locale), so its witness is the
+ *  create it reaches only past the gate, counted from this request on. */
+function hit(s: Surface, headers: Record<string, string> = {}): { req: Request; passed: () => number } {
+  if (!s.form) {
+    const { req, json } = post(s.validBody, headers);
+    return { req, passed: () => json.mock.calls.length };
+  }
+  const body = new URLSearchParams();
+  for (const [k, v] of Object.entries(s.form)) for (const x of [v].flat()) body.append(k, x);
+  const req = new NextRequest("https://x.test/api/quick-match", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded", ...headers },
+    body,
+  });
+  const work = s.usecase!;
+  const before = work.mock.calls.length;
+  return { req, passed: () => work.mock.calls.length - before };
+}
+
+/** The gate's refusal as `s` answers it: a JSON route's 403 `TURNSTILE_FAILED`; the form route's 303 to its setup page. */
+async function expectGateRefused(s: Surface, res: Response) {
+  if (s.form) {
+    expect([s.name, res.status, res.headers.get("location")]).toEqual([s.name, 303, QM_BOT_CHECK]);
+    return;
+  }
+  expect([s.name, res.status]).toEqual([s.name, 403]);
+  expect([s.name, await envelopeCode(res)]).toEqual([s.name, TURNSTILE_ERROR_CODE]);
+}
+/** Anything but the gate's refusal (the positive pair). The form route still answers a 303, never to the bot-check flash. */
+function expectNotGateRefused(s: Surface, res: Response) {
+  if (s.form) {
+    expect([s.name, res.status]).toEqual([s.name, 303]);
+    expect([s.name, res.headers.get("location")]).not.toEqual([s.name, QM_BOT_CHECK]);
+    return;
+  }
+  expect([s.name, res.status === 403]).toEqual([s.name, false]);
+}
+/** The first rate limit's refusal as `s` answers it: a JSON route's 429; the form route's 303 with its own code. */
+function expectThrottled(s: Surface, res: Response) {
+  if (s.form) expect([s.name, res.status, res.headers.get("location")]).toEqual([s.name, 303, QM_THROTTLED]);
+  else expect([s.name, res.status]).toEqual([s.name, 429]);
+}
+
 /** Production, on a named deployment, with the secret and the allowed host set: the only mode that checks. */
 function enforce() {
   vi.stubEnv("NODE_ENV", "production");
@@ -202,14 +279,16 @@ describe("the surfaces cover exactly the declared actions", () => {
       ...Object.fromEntries(TURNSTILE_ACTIONS.map((a) => [a, 1])),
       withdraw: 2,
     });
-    expect(SURFACES).toHaveLength(7);
+    expect(SURFACES).toHaveLength(8);
     expect(new Set(SURFACES.map((s) => s.file)).size, "one route file per surface").toBe(SURFACES.length);
   });
 
   // The per-surface "the work did / did not run" checks are guarded by `if (s.usecase)`; if that were silently false everywhere they
-  // would assert nothing. Three surfaces (resend, both withdraws) have a mocked usecase to watch, so exactly three must.
-  it("anti-vacuity: the usecase-watching assertions reach exactly resend and the two withdraws", () => {
-    expect(SURFACES.filter((s) => s.usecase).map((s) => s.action).sort()).toEqual(["resend", "withdraw", "withdraw"]);
+  // would assert nothing. Four surfaces (resend, both withdraws, the quick match create) have a mocked usecase to watch, so exactly
+  // four must. The form surface's whole witness is its usecase, so it must be one of them.
+  it("anti-vacuity: the usecase-watching assertions reach exactly resend, the two withdraws and the quick match create", () => {
+    expect(SURFACES.filter((s) => s.usecase).map((s) => s.action).sort()).toEqual(["quickmatch", "resend", "withdraw", "withdraw"]);
+    expect(SURFACES.filter((s) => s.form).map((s) => [s.action, s.usecase !== undefined])).toEqual([["quickmatch", true]]);
   });
 });
 
@@ -219,14 +298,14 @@ describe("TURNSTILE=off opens EVERY gated route, and only that value does", () =
     for (const s of SURFACES) {
       enforce();
       vi.stubEnv("TURNSTILE", "off");
-      const { req, json } = post(s.validBody);
+      const { req, passed } = hit(s);
       const res = await s.call(req);
-      expect([s.name, res.status === 403]).toEqual([s.name, false]);
-      expect([s.name, json.mock.calls.length]).toEqual([s.name, 1]);
+      expectNotGateRefused(s, res);
+      expect([s.name, passed()]).toEqual([s.name, 1]);
       checked++;
     }
     expect(checked, "gated routes opened by the switch").toBe(SURFACES.length);
-    expect(checked).toBe(7);
+    expect(checked).toBe(8);
     expect(cf.impl, "never asked Cloudflare").not.toHaveBeenCalled();
   });
 
@@ -234,9 +313,9 @@ describe("TURNSTILE=off opens EVERY gated route, and only that value does", () =
     let checked = 0;
     for (const s of SURFACES) {
       enforce();
-      const { req, json } = post(s.validBody);
-      expect([s.name, (await s.call(req)).status]).toEqual([s.name, 403]);
-      expect(json).not.toHaveBeenCalled();
+      const { req, passed } = hit(s);
+      await expectGateRefused(s, await s.call(req));
+      expect([s.name, passed()]).toEqual([s.name, 0]);
       checked++;
     }
     expect(checked).toBe(SURFACES.length);
@@ -320,11 +399,13 @@ describe("route-tree sweep: every write handler under app/api is gated, behind a
       ["harness", "export async function POST() { if (!fakeControlEnabled(process.env)) throw new Error(); }"],
       ["bearer", "export async function POST(req: Request) { const t = bearerOf(req); }"],
       ["session401", "export async function POST() { const u = await getCurrentUser(); if (!u) return json({}, { status: 401 }); }"],
+      ["session401", "export async function DELETE() { const s = await getCurrentSession(); if (!s) throw new HttpError(401, 'x'); }"],
     ];
     for (const [want, src] of cases) expect([want, door(src)]).toEqual([want, want]);
     // Lookalikes: the secret header with no CRON_SECRET in the file, getCurrentUser without a 401 (consent reads it optionally).
     expect(door("export async function POST(req: Request) { req.headers.get('x-cron-secret'); }")).toBe("anonymous");
     expect(door("export async function POST() { const u = await getCurrentUser(); return u?.id; }")).toBe("anonymous");
+    expect(door("export async function POST() { const s = await getCurrentSession(); return s?.user.id; }")).toBe("anonymous");
     expect(door("export async function POST() { await requireUserAgent(); }")).toBe("anonymous");
   });
 
@@ -396,33 +477,31 @@ describe("route-tree sweep: every write handler under app/api is gated, behind a
 });
 
 describe.each(SURFACES)("$name", (s) => {
-  it("enforce mode, no token: 403 TURNSTILE_FAILED before the body is read", async () => {
+  it("enforce mode, no token: refused by the gate before the handler's work (403 TURNSTILE_FAILED; the form route's 303)", async () => {
     enforce();
-    const { req, json } = post(s.validBody);
+    const { req, passed } = hit(s);
     const res = await s.call(req);
-    expect(res.status).toBe(403);
-    expect(await envelopeCode(res)).toBe(TURNSTILE_ERROR_CODE);
-    expect(json, "the body must not be read").not.toHaveBeenCalled();
+    await expectGateRefused(s, res);
+    expect(passed(), "the handler must not get past the gate").toBe(0);
     if (s.usecase) expect(s.usecase).not.toHaveBeenCalled();
     expect(cf.impl, "a request with no token never costs a call to Cloudflare").not.toHaveBeenCalled();
   });
 
-  it("enforce mode, a token Cloudflare refuses: 403 before the body is read", async () => {
+  it("enforce mode, a token Cloudflare refuses: refused before the handler's work", async () => {
     enforce();
-    const { req, json } = post(s.validBody, { [TURNSTILE_HEADER]: "never-minted" });
+    const { req, passed } = hit(s, { [TURNSTILE_HEADER]: "never-minted" });
     const res = await s.call(req);
-    expect(res.status).toBe(403);
-    expect(await envelopeCode(res)).toBe(TURNSTILE_ERROR_CODE);
-    expect(json).not.toHaveBeenCalled();
+    await expectGateRefused(s, res);
+    expect(passed()).toBe(0);
     expect(cf.seen).toEqual([SITEVERIFY_URL]);
   });
 
-  it("enforce mode, a good token minted for THIS action: the gate opens and the body is read (the positive pair)", async () => {
+  it("enforce mode, a good token minted for THIS action: the gate opens and the handler runs (the positive pair)", async () => {
     enforce();
-    const { req, json } = post(s.validBody, { [TURNSTILE_HEADER]: cf.mint(s.action) });
+    const { req, passed } = hit(s, { [TURNSTILE_HEADER]: cf.mint(s.action) });
     const res = await s.call(req);
-    expect(res.status, "not the gate's refusal").not.toBe(403);
-    expect(json, "the handler body ran").toHaveBeenCalledTimes(1);
+    expectNotGateRefused(s, res);
+    expect(passed(), "the handler body ran").toBe(1);
     if (s.usecase) expect(s.usecase).toHaveBeenCalledTimes(1);
     expect(cf.seen).toEqual([SITEVERIFY_URL]);
   });
@@ -431,10 +510,9 @@ describe.each(SURFACES)("$name", (s) => {
     enforce();
     let checked = 0;
     for (const other of TURNSTILE_ACTIONS.filter((a) => a !== s.action)) {
-      const { req, json } = post(s.validBody, { [TURNSTILE_HEADER]: cf.mint(other) });
-      const res = await s.call(req);
-      expect([other, res.status]).toEqual([other, 403]);
-      expect(json).not.toHaveBeenCalled();
+      const { req, passed } = hit(s, { [TURNSTILE_HEADER]: cf.mint(other) });
+      await expectGateRefused(s, await s.call(req));
+      expect([other, passed()]).toEqual([other, 0]);
       checked++;
     }
     expect(checked).toBe(TURNSTILE_ACTIONS.length - 1);
@@ -442,81 +520,80 @@ describe.each(SURFACES)("$name", (s) => {
 
   it("enforce mode, a token minted on another host is refused", async () => {
     enforce();
-    const { req, json } = post(s.validBody, { [TURNSTILE_HEADER]: cf.mint(s.action, "evil.example") });
-    expect((await s.call(req)).status).toBe(403);
-    expect(json).not.toHaveBeenCalled();
+    const { req, passed } = hit(s, { [TURNSTILE_HEADER]: cf.mint(s.action, "evil.example") });
+    await expectGateRefused(s, await s.call(req));
+    expect(passed()).toBe(0);
   });
 
   it("replay: the same token spent twice opens the gate once", async () => {
     enforce();
     const token = cf.mint(s.action);
-    const first = post(s.validBody, { [TURNSTILE_HEADER]: token });
-    expect((await s.call(first.req)).status, "first use").not.toBe(403);
-    expect(first.json).toHaveBeenCalledTimes(1);
-    const second = post(s.validBody, { [TURNSTILE_HEADER]: token });
+    const first = hit(s, { [TURNSTILE_HEADER]: token });
+    expectNotGateRefused(s, await s.call(first.req));
+    expect(first.passed(), "first use").toBe(1);
+    const second = hit(s, { [TURNSTILE_HEADER]: token });
     const res = await s.call(second.req);
-    expect(res.status, "second use of the same token").toBe(403);
-    expect(await envelopeCode(res)).toBe(TURNSTILE_ERROR_CODE);
-    expect(second.json).not.toHaveBeenCalled();
+    await expectGateRefused(s, res);
+    expect(second.passed(), "second use of the same token").toBe(0);
   });
 
-  it("a deployment whose secret is gone: 403 for everyone, a plausible token included, with no call to Cloudflare", async () => {
+  it("a deployment whose secret is gone: refused for everyone, a plausible token included, with no call to Cloudflare", async () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("ENV_NAME", "prod");
     vi.stubEnv("TURNSTILE_SECRET", "");
-    const { req, json } = post(s.validBody, { [TURNSTILE_HEADER]: cf.mint(s.action) });
-    expect((await s.call(req)).status).toBe(403);
-    expect(json).not.toHaveBeenCalled();
+    const { req, passed } = hit(s, { [TURNSTILE_HEADER]: cf.mint(s.action) });
+    await expectGateRefused(s, await s.call(req));
+    expect(passed()).toBe(0);
     expect(cf.impl).not.toHaveBeenCalled();
   });
 
-  it("skip mode (vitest, dev, a harness server): no token needed, the body is read, Cloudflare is not called", async () => {
-    const { req, json } = post(s.validBody); // NODE_ENV is "test"
-    expect((await s.call(req)).status).not.toBe(403);
-    expect(json).toHaveBeenCalledTimes(1);
+  it("skip mode (vitest, dev, a harness server): no token needed, the handler runs, Cloudflare is not called", async () => {
+    const { req, passed } = hit(s); // NODE_ENV is "test"
+    expectNotGateRefused(s, await s.call(req));
+    expect(passed()).toBe(1);
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("ENV_NAME", "ci");
-    const harness = post(s.validBody);
-    expect((await s.call(harness.req)).status).not.toBe(403);
-    expect(harness.json).toHaveBeenCalledTimes(1);
+    const harness = hit(s);
+    expectNotGateRefused(s, await s.call(harness.req));
+    expect(harness.passed()).toBe(1);
     expect(cf.impl).not.toHaveBeenCalled();
   });
 
-  it("TURNSTILE=off (enforce mode otherwise): no token needed, the body is read, the work runs, Cloudflare is not called", async () => {
+  it("TURNSTILE=off (enforce mode otherwise): no token needed, the handler runs, the work runs, Cloudflare is not called", async () => {
     enforce();
     vi.stubEnv("TURNSTILE", "off");
-    const { req, json } = post(s.validBody);
+    const { req, passed } = hit(s);
     const res = await s.call(req);
-    expect(res.status, "not the gate's refusal").not.toBe(403);
-    expect(json, "the handler body ran").toHaveBeenCalledTimes(1);
+    expectNotGateRefused(s, res);
+    expect(passed(), "the handler body ran").toBe(1);
     if (s.usecase) expect(s.usecase).toHaveBeenCalledTimes(1);
     expect(cf.impl).not.toHaveBeenCalled();
     expect(limiter.calls, "the limiter still ran (resend and others add narrower buckets after the first): the switch turns off the bot check, not the throttle").toBeGreaterThanOrEqual(1);
   });
 
-  it("TURNSTILE=off with the limiter refusing: still 429 (the switch does not open the throttle)", async () => {
+  it("TURNSTILE=off with the limiter refusing: still throttled (the switch does not open the throttle)", async () => {
     enforce();
     vi.stubEnv("TURNSTILE", "off");
     limiter.refuse = true;
-    const { req, json } = post(s.validBody);
-    expect((await s.call(req)).status).toBe(429);
-    expect(json).not.toHaveBeenCalled();
+    const { req, passed } = hit(s);
+    expectThrottled(s, await s.call(req));
+    expect(passed()).toBe(0);
   });
 
-  it("' off ' and 'OFF' open the gate; 'false', '0', 'no', '' and unset keep it shut (403, body unread)", async () => {
+  it("' off ' and 'OFF' open the gate; 'false', '0', 'no', '' and unset keep it shut (refused, handler not run)", async () => {
     let checked = 0;
     for (const [value, opens] of [[" off ", true], ["OFF", true], ["false", false], ["0", false], ["no", false], ["", false], [undefined, false]] as const) {
       vi.unstubAllEnvs();
       enforce();
       if (value !== undefined) vi.stubEnv("TURNSTILE", value);
-      const { req, json } = post(s.validBody);
+      const { req, passed } = hit(s);
       const res = await s.call(req);
       if (opens) {
-        expect([JSON.stringify(value), res.status === 403]).toEqual([JSON.stringify(value), false]);
-        expect(json).toHaveBeenCalledTimes(1);
+        expectNotGateRefused(s, res);
+        expect([JSON.stringify(value), passed()]).toEqual([JSON.stringify(value), 1]);
       } else {
-        expect([JSON.stringify(value), res.status]).toEqual([JSON.stringify(value), 403]);
-        expect(json).not.toHaveBeenCalled();
+        await expectGateRefused(s, res);
+        expect([JSON.stringify(value), passed()]).toEqual([JSON.stringify(value), 0]);
       }
       checked++;
     }
@@ -526,16 +603,15 @@ describe.each(SURFACES)("$name", (s) => {
   it("sits AFTER the first rate limit and not before it: a throttled request is refused by the limiter, never reaches Cloudflare", async () => {
     enforce();
     limiter.refuse = true;
-    const { req, json } = post(s.validBody, { [TURNSTILE_HEADER]: cf.mint(s.action) });
-    const res = await s.call(req);
-    expect(res.status).toBe(429);
-    expect(json).not.toHaveBeenCalled();
+    const { req, passed } = hit(s, { [TURNSTILE_HEADER]: cf.mint(s.action) });
+    expectThrottled(s, await s.call(req));
+    expect(passed()).toBe(0);
     expect(cf.impl).not.toHaveBeenCalled();
   });
 
   it("a refused token spends exactly ONE limiter hit (the first), so a failed check does not burn the narrower buckets", async () => {
     enforce();
-    const { req } = post(s.validBody, { [TURNSTILE_HEADER]: "never-minted" });
+    const { req } = hit(s, { [TURNSTILE_HEADER]: "never-minted" });
     await s.call(req);
     expect(limiter.calls).toBe(1);
   });

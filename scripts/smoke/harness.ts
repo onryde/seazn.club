@@ -1469,6 +1469,8 @@ export async function cleanup(tag: string): Promise<void> {
     `delivered+pass_${tag}@resend.dev`,
     `delivered+aboveprorung_${tag}@resend.dev`,
     `delivered+funnel_${tag}@resend.dev`,
+    // quickMatchSuite's saver: signs in only to press Save on one guest match (the match itself is the suite's to delete).
+    `delivered+qm_saver_${tag}@resend.dev`,
     `delivered+tos_${tag}@resend.dev`,
     `delivered+player_${tag}@resend.dev`,
     `delivered+ref_${tag}@resend.dev`,

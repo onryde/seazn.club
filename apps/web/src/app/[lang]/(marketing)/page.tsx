@@ -12,11 +12,14 @@ import { TheDraw } from "@/components/marketing/the-draw";
 import { MatchdayTools, AlsoInTheKit } from "@/components/marketing/matchday-tools";
 import { MotifDivider } from "@/components/marketing/motif-divider";
 import { TicketStubs } from "@/components/marketing/ticket-stubs";
+import { QuickMatchCta } from "@/components/marketing/quick-match-cta";
+import { RecentStrip } from "@/components/quick-match/recent-strip";
 import { marketingPreview } from "@/lib/marketing/format-preview";
 import { preferredCurrency } from "@/lib/currency-server";
 import { loadPricingMatrix } from "@/lib/pricing-matrix-server";
 import { getDictionary, t } from "@/lib/i18n";
 import { hasLocale } from "@/lib/i18n-constants";
+import { readRecentQuickMatches } from "@/server/usecases/quick-match-recent";
 
 export async function generateMetadata({
   params,
@@ -78,11 +81,16 @@ export default async function HomePage({ params }: { params: Promise<{ lang: str
   // and the full card can never quote different numbers for the same plan.
   // Empty on failure — `cardBullets` then drops the bullets it cannot fill
   // rather than rendering "{entrants} entrants per division".
-  const [liveNow, thisWeek, currency, planMatrix] = await Promise.all([
+  //
+  // `recentQuickMatches` (quick match plan 2 Task 9): the strip of this browser's quick matches, read from the visitor
+  // cookie. Fail-soft inside (`readRecentQuickMatches` answers none on any failure, pre-flight A9), so no `.catch` here:
+  // a `.catch` would also swallow Next's own render signal, which the reader rethrows on purpose.
+  const [liveNow, thisWeek, currency, planMatrix, recentQuickMatches] = await Promise.all([
     getDiscoveryLive().catch(() => []),
     getDiscoveryThisWeek().catch(() => []),
     preferredCurrency(null).catch(() => "usd" as const),
     loadPricingMatrix().catch(() => ({})),
+    readRecentQuickMatches(),
   ]);
   // SSR default draw = the configurator's no-JS fallback (design/v3/12 §4.4).
   const defaultDraw = marketingPreview("groups-knockout", 8);
@@ -121,6 +129,10 @@ export default async function HomePage({ params }: { params: Promise<{ lang: str
                   }}
                 />
               </div>
+              {/* Quick match (spec §5 step 1): the no-account door, beside the funnel. */}
+              <div className="mt-4">
+                <QuickMatchCta lang={lang} label={t(d, "quickMatch.cta")} hint={t(d, "quickMatch.ctaHint")} />
+              </div>
               <p className="mt-4 text-xs text-[#8d7fc0]">
                 {t(d, "home.hero.freeNote")}
                 <Link href="/pricing" className="underline hover:text-[var(--mk-lime)]">
@@ -132,6 +144,13 @@ export default async function HomePage({ params }: { params: Promise<{ lang: str
               <HeroVignette />
             </div>
           </div>
+          {/* A returning guest's quick matches, still on the night stage, under the hero (renders nothing for none). */}
+          <RecentStrip
+            lang={lang}
+            title={t(d, "quickMatch.recent.title")}
+            items={recentQuickMatches}
+            className="relative mx-auto mt-12 max-w-6xl px-4"
+          />
         </section>
 
         <LiveTicker fixtures={liveNow} />

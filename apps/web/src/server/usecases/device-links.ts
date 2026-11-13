@@ -283,7 +283,8 @@ export async function ensureDeviceLink(
  *     home answers an expired token; a saved row has no expiry;
  *   - under the fixture's link lock, in the system org: a fixture outside THIS quick match's competition → 404 (the
  *     per-match check, §7.1 point 3: every quick match shares the one org); finalized or `cancelled` → 422; a match whose
- *     two sides are not both known (a knockout round waiting for its feeders, a bye) → 422 QUICK_MATCH_SIDES_UNKNOWN (C18);
+ *     two sides are not both known (a knockout round waiting for its feeders, a bye) → 422 `QUICK_MATCH_ERRORS.SIDES_UNKNOWN`
+ *     (C18);
  *   - `ensureLocked`: the live sealed link re-opened (no write), or one minted that revokes any other.
  * A decided match still opens: its link may undo its own events until an organizer finalizes.
  */
@@ -300,7 +301,7 @@ export async function ensureGuestDeviceLink(qm: QuickMatchRow, fixtureId: string
     const [seats] = await tx<{ home_entrant_id: string | null; away_entrant_id: string | null }[]>`
       select home_entrant_id, away_entrant_id from fixtures where id = ${fixtureId}`;
     if (!seats?.home_entrant_id || !seats.away_entrant_id) {
-      throw new HttpError(422, "this match's sides are not known yet", "QUICK_MATCH_SIDES_UNKNOWN");
+      throw new HttpError(422, "this match's sides are not known yet", QUICK_MATCH_ERRORS.SIDES_UNKNOWN);
     }
     return ensureLocked(tx, auth, fixtureId, "quick-match");
   });
@@ -505,4 +506,15 @@ export async function resolveDeviceLinkToken(token: string): Promise<ResolvedDev
     throw new HttpError(401, "This device link has expired — ask the organiser", "LINK_EXPIRED");
   }
   return { id: link.id, org_id: link.org_id, fixture_id: link.fixture_id, issued_by: link.issued_by };
+}
+
+/**
+ * The org a dl_ token was issued in, whatever its state now (revoked, expired), or null for a token no link holds. For
+ * the dead-link screen's COPY only (a quick match's guest has no organiser to ask, controller ruling 2026-11-12): it
+ * authorises nothing, and a dead link stays dead.
+ */
+export async function deviceLinkOrgId(token: string): Promise<string | null> {
+  const [link] = await sql<{ org_id: string }[]>`
+    select org_id from device_links where token_hash = ${hashDeviceLinkToken(token)} limit 1`;
+  return link?.org_id ?? null;
 }

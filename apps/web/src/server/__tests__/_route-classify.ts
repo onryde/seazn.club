@@ -13,7 +13,8 @@
 //   webhook    a verified signature                                      constructEvent( / verifySignature(
 //   harness    a fake-driver control route                               fakeControlEnabled( / youtubeFakeRoutesEnabled( (404 outside a harness)
 //   bearer     a minted bearer credential read off the request           bearerOf( / captureBearer(  (both throw without one)
-//   session401 `getCurrentUser()` and an explicit 401 in the same body  (the legacy "Unauthorized" shape)
+//   session401 `getCurrentUser()` or `getCurrentSession()` and an explicit 401 in the same body  (the legacy "Unauthorized"
+//              shape; the session form is the one that can also read an impersonation, quick match /api/quick-match/<id>)
 //   via-usecase  none of the above in the handler, but a usecase function it calls (imported from "@/server/...") contains a
 //              billing / identity / staff door: one hop, no further
 //   anonymous  nothing detectable: this is the class the gate test requires to be gated or on the exempt list
@@ -123,7 +124,7 @@ export function classifyHandler(h: Handler, deps: ClassifyDeps): RouteClass {
   if (/\b(?:constructEvent|verifySignature)\(/.test(b)) return "webhook";
   if (/\b(?:fakeControlEnabled|youtubeFakeRoutesEnabled)\(/.test(b)) return "harness";
   if (/\b(?:bearerOf|captureBearer)\(/.test(b)) return "bearer";
-  if (/\bgetCurrentUser\(/.test(b) && /\b401\b/.test(b)) return "session401";
+  if (/\bgetCurrent(?:User|Session)\(/.test(b) && /\b401\b/.test(b)) return "session401";
   for (const imp of serverImports(h.source)) {
     if (!new RegExp(`\\b${imp.local}\\(`).test(b)) continue;
     const mod = deps.readModule(imp.from);

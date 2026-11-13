@@ -23,6 +23,9 @@ export interface TurnstileRenderParams {
   "error-callback": (code?: string) => boolean | void;
   "expired-callback": () => void;
   "timeout-callback": () => void;
+  /** Cloudflare's documented bracket around the time the widget shows the visitor a box to tick. */
+  "before-interactive-callback": () => void;
+  "after-interactive-callback": () => void;
 }
 
 export interface TurnstileMountView {
@@ -47,6 +50,13 @@ export interface TurnstileController {
   token(): Promise<string | null>;
   /** A token is single-use: forget it and have the widget fetch a fresh one (`turnstile.reset(widgetId)`). */
   reset(): void;
+  /** True while the widget shows the visitor a box to tick (between Cloudflare's before- and after-interactive callbacks) and
+   *  no token is held: `token()` could then only wait out `TOKEN_WAIT_MS`, so a form shows the box instead of posting. False
+   *  with no widget, for the invisible check, once a token arrives, after an error, a reset or an unmount. */
+  awaitingVisitor(): boolean;
+  /** Bring the widget's container to the middle of the screen and focus it (the container carries `tabIndex={-1}`), so the
+   *  visitor sees the box to tick. Nothing before a mount or after an unmount. */
+  reveal(): void;
 }
 
 export function createTurnstileController(opts: {
@@ -68,6 +78,10 @@ export function createTurnstileController(opts: {
   let widgetId: string | null = null;
   let token: string | null = null;
   let failed = false;
+  /** Inside Cloudflare's interactive phase: a box is on screen for the visitor to tick. */
+  let interactive = false;
+  /** The container the widget was rendered into, for `reveal`. */
+  let box: HTMLElement | null = null;
   /** Bumped by every mount and unmount, so a `load()` that resolves after the widget was torn down renders nothing. */
   let generation = 0;
   const waiters = new Set<(t: string | null) => void>();
@@ -81,6 +95,8 @@ export function createTurnstileController(opts: {
       if (!siteKey) return;
       const mine = ++generation;
       failed = false;
+      interactive = false;
+      box = container;
       void load().then(
         (loaded) => {
           if (mine !== generation) return;
@@ -94,6 +110,9 @@ export function createTurnstileController(opts: {
             callback: (t) => {
               token = t;
               failed = false;
+              // A token ends the interactive phase even if after-interactive never comes, so its later (invisible) refresh
+              // never reads as a box to tick.
+              interactive = false;
               settle(t);
             },
             // Cloudflare retries most failures itself and calls back with a token afterwards, so an error is only "failed
@@ -108,6 +127,12 @@ export function createTurnstileController(opts: {
             },
             "timeout-callback": () => {
               token = null;
+            },
+            "before-interactive-callback": () => {
+              interactive = true;
+            },
+            "after-interactive-callback": () => {
+              interactive = false;
             },
           });
         },
@@ -124,6 +149,8 @@ export function createTurnstileController(opts: {
       if (api && widgetId !== null) api.remove(widgetId);
       widgetId = null;
       token = null;
+      interactive = false;
+      box = null;
       // Whoever is waiting for a token is released with null only if NOTHING mounts straight after. React strict mode (dev) runs
       // an effect as mount, unmount, mount in one synchronous pass, and a click that arms the widget and asks for its token in the
       // same handler (resend) already has a `token()` waiting when that in-between unmount lands: releasing it there sent the
@@ -152,7 +179,19 @@ export function createTurnstileController(opts: {
     reset() {
       token = null;
       failed = false;
+      // A fresh challenge runs; if it needs the visitor, Cloudflare says so again (before-interactive).
+      interactive = false;
       if (api && widgetId !== null) api.reset(widgetId);
+    },
+
+    awaitingVisitor() {
+      return interactive && token === null && !failed;
+    },
+
+    reveal() {
+      if (!box) return;
+      box.scrollIntoView({ block: "center" });
+      box.focus({ preventScroll: true });
     },
   };
 }

@@ -540,6 +540,25 @@ describe("DeviceScorePad — a tab-return refresh that finds the link dead", () 
     ).toBe(false);
   });
 
+  // Controller ruling 2026-11-12: a quick match has no organiser, so its dead screen's hint says what the guest can do
+  // (go back and tap Score: that mints a fresh link). An ordinary pad keeps the organiser's. Keys typed from the ruling.
+  it.each([
+    { quickMatch: false, hint: "device.askFreshLink", not: "device.quickMatch.askFreshLink" },
+    { quickMatch: true, hint: "device.quickMatch.askFreshLink", not: "device.askFreshLink" },
+  ] as const)("quickMatch $quickMatch: the dead screen's hint is $hint", async ({ quickMatch, hint, not }) => {
+    const doc = stubDocument("visible");
+    stubWindow();
+    const island = renderIsland(DeviceScorePad, { ...baseProps(), quickMatch });
+
+    api.refuse = REVOKED;
+    fire(doc, "visibilitychange");
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(island.text(), "precondition: the pad is on the dead-link screen").toContain(deadCopy(REVOKED));
+    expect(island.text()).toContain(msgFor("en", hint));
+    expect(island.text()).not.toContain(msgFor("en", not));
+  });
+
   it("once dead, a return costs nothing: no listener fires a request", async () => {
     const doc = stubDocument("visible");
     const win = stubWindow();
