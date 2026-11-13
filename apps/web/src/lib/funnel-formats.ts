@@ -3,7 +3,7 @@
 // (lib/funnel.ts `createFromDraft`), so the card the organiser picked and the event they land on cannot disagree.
 //
 // Every count below is read off the SAME knobs the stage graph is built at (`funnelFormatKnobs`), never a second model;
-// lib/__tests__/funnel-formats.test.ts proves each against the engine's own draw.
+// lib/__tests__/funnel-formats.test.ts proves each against the engine's own draw, round by round.
 //
 // Pure and client-safe: format-templates.ts, format-bounds.ts and swiss-rounds.ts, each importable by the client.
 import { buildTemplateStages, clampKnob, type StageDraft, type TemplateKnobs } from "./format-templates";
@@ -30,7 +30,7 @@ const TEMPLATE_KEY: Record<FunnelFormat, string> = {
 /** The smallest field each format's graph can be drawn for. Groups + knockout needs two pools of two: a third entrant
  *  in two pools leaves one alone, which the first group draw refuses (C38, `group_too_few_entrants`). Every other format
  *  draws from two (the Swiss and the brackets refuse only a field under two). Pinned against the engine's draw, n 2..64,
- *  in the test. */
+ *  and against the house's size gate (`stageGraphSizeGate`) in the test. */
 const MIN_FIELD: Record<FunnelFormat, number> = {
   league: 2,
   "groups-knockout": 4,
@@ -49,16 +49,13 @@ export function funnelFormatMin(f: FunnelFormat): number {
   return MIN_FIELD[f];
 }
 
-const ceilLog2 = (n: number): number => Math.ceil(Math.log2(Math.max(2, n)));
-
 /**
  * The knobs `f`'s template is built at for a field of `n`. One set for every format (each template reads only its own):
  * - pools: about four to a pool, at least two pools, within FORMAT_BOUNDS.pools;
  * - qualified: the top two of every pool, within FORMAT_BOUNDS.qualify and never more than the field;
- * - Swiss rounds: ⌈log2 n⌉ + 1, within FORMAT_BOUNDS.swissRounds and never above the rulebook's SAFE maximum ⌊n/2⌋
- *   (rulebook-W3-swiss §3.1, `swissRoundsGuidance`): above it a rematch can be forced and the desk warns; the organiser
- *   who claims from the funnel never set the round count, so the claim stays where every round is guaranteed to pair.
- *   The hard maximum (n − 1, or n for an odd field), above which Start refuses, is therefore never reached either;
+ * - Swiss rounds: the house's recommendation for the field (`swissRoundsGuidance(n).recommended`: the owner's band table
+ *   in swiss-rounds.ts, capped at the rulebook's SAFE maximum ⌊n/2⌋), so the claimed Swiss plays what its Rules card
+ *   recommends, and every round is guaranteed to pair;
  * - legs: once.
  */
 export function funnelFormatKnobs(f: FunnelFormat, n: number): TemplateKnobs {
@@ -66,7 +63,7 @@ export function funnelFormatKnobs(f: FunnelFormat, n: number): TemplateKnobs {
   assertField(n);
   const poolCount = clampKnob(Math.max(2, Math.ceil(n / 4)), FORMAT_BOUNDS.pools.min, FORMAT_BOUNDS.pools.max);
   const qualified = Math.min(clampKnob(2 * poolCount, FORMAT_BOUNDS.qualify.min, FORMAT_BOUNDS.qualify.max), n);
-  const swissRounds = Math.min(ceilLog2(n) + 1, FORMAT_BOUNDS.swissRounds.max, swissRoundsGuidance(n).safeMax);
+  const swissRounds = swissRoundsGuidance(n).recommended;
   return { qualified, swissRounds, poolCount, legs: 1 };
 }
 
@@ -78,47 +75,91 @@ export function funnelFormatStages(f: FunnelFormat, n: number): StageDraft[] {
   return buildTemplateStages(TEMPLATE_KEY[f], knobs);
 }
 
-const pairs = (k: number): number => (k * (k - 1)) / 2;
-
-/** Matches a round robin over `n` split into `pools` pools plays: the pools are as even as the draw makes them (sizes
- *  differ by at most one). */
-function poolMatches(n: number, pools: number): number {
-  const size = Math.floor(n / pools);
-  const larger = n % pools;
-  return larger * pairs(size + 1) + (pools - larger) * pairs(size);
+/** Matches per round of a round robin over `n` split into `pools` pools (one pool = a league), played in parallel: the
+ *  pools are as even as the draw makes them (sizes differ by at most one); a pool of s plays s − 1 rounds (s even) or s
+ *  (odd, one sits out each round) of ⌊s/2⌋ matches. */
+function roundRobinRounds(n: number, pools: number, legs: number): number[] {
+  const small = Math.floor(n / pools);
+  const sizes = [small, small + 1];
+  const count = [pools - (n % pools), n % pools];
+  const roundsOf = (s: number) => (s < 2 ? 0 : s % 2 === 0 ? s - 1 : s);
+  const leg: number[] = [];
+  const total = Math.max(roundsOf(sizes[0]!), count[1]! > 0 ? roundsOf(sizes[1]!) : 0);
+  for (let r = 1; r <= total; r++) {
+    let matches = 0;
+    for (const i of [0, 1]) if (count[i]! > 0 && r <= roundsOf(sizes[i]!)) matches += count[i]! * Math.floor(sizes[i]! / 2);
+    leg.push(matches);
+  }
+  return Array.from({ length: legs }, () => leg).flat();
 }
 
-/** Matches PLAYED by `f`'s graph at `n` — a bracket's byes and a Swiss's bye are not matches. */
-export function funnelFormatMatches(f: FunnelFormat, n: number): number {
+/** A single-elimination bracket over `n`, padded to the next power of two B: round one plays n − B/2 (the top seeds'
+ *  byes are not matches), then B/4, B/8 … 1. */
+function bracketRounds(n: number): number[] {
+  const size = 2 ** Math.ceil(Math.log2(n));
+  const rounds = [n - size / 2];
+  for (let m = size / 4; m >= 1; m /= 2) rounds.push(m);
+  return rounds;
+}
+
+/** A double-elimination bracket over `n` in the engine's round order: the winners' bracket (as `bracketRounds`), the
+ *  losers' bracket, the final (drawn once: no reset). Losers' round one pairs round one's losers, so it plays only what
+ *  B/4 boards cannot absorb as walkovers (max(0, r1 − B/4)); round two meets each of round two's losers against a
+ *  round-one survivor (min(r1, B/4)); then two rounds of each B/8 … 1. */
+function doubleElimRounds(n: number): number[] {
+  const size = 2 ** Math.ceil(Math.log2(n));
+  const winners = bracketRounds(n);
+  const r1 = winners[0]!;
+  const losers: number[] = [];
+  if (size >= 4) {
+    losers.push(Math.max(0, r1 - size / 4), Math.min(r1, size / 4));
+    for (let m = size / 8; m >= 1; m /= 2) losers.push(m, m);
+  }
+  return [...winners, ...losers, 1];
+}
+
+/** Matches PLAYED in each round of `f`'s graph at `n`, in the order the rounds are played — a bracket's byes, its
+ *  walkovers and a Swiss's bye are not matches. A round with nothing to play is a 0. */
+export function funnelFormatRounds(f: FunnelFormat, n: number): number[] {
   const k = funnelFormatKnobs(f, n);
   switch (f) {
     case "league":
-      return k.legs * pairs(n);
+      return roundRobinRounds(n, 1, k.legs);
     case "groups-knockout":
-      return k.legs * poolMatches(n, k.poolCount) + (k.qualified - 1);
+      return [...roundRobinRounds(n, k.poolCount, k.legs), ...bracketRounds(k.qualified)];
     case "knockout":
-      return n - 1;
+      return bracketRounds(n);
     case "swiss":
-      return k.swissRounds * Math.floor(n / 2);
+      return Array.from({ length: k.swissRounds }, () => Math.floor(n / 2));
     case "double_elim":
-      // Everyone but the champion loses twice; the champion's possible loss in the final is not drawn (no reset).
-      return 2 * n - 2;
+      return doubleElimRounds(n);
   }
 }
 
-/** Roughly how many matches an entrant plays — the "how much do people play" number Best fit ranks by: the whole league;
- *  a full pool plus a bracket match; every Swiss round; one knockout match, two in double elimination. */
+/** Matches PLAYED by `f`'s graph at `n`: the sum of its rounds. */
+export function funnelFormatMatches(f: FunnelFormat, n: number): number {
+  return funnelFormatRounds(f, n).reduce((sum, m) => sum + m, 0);
+}
+
+/** The fewest matches any entrant is sure to play — the "how much does everyone play" number Best fit ranks by: the whole
+ *  league; a pool's round robin, plus a bracket match only for a pool small enough that all of it qualifies (the top
+ *  ⌊qualified / pools⌋ of each go through); every Swiss round, less the round an odd field's bye sits out; one knockout
+ *  match, two in double elimination. */
 export function funnelFormatPerEntrant(f: FunnelFormat, n: number): number {
   const k = funnelFormatKnobs(f, n);
   switch (f) {
     case "league":
       return k.legs * (n - 1);
-    case "groups-knockout":
-      return k.legs * (Math.ceil(n / k.poolCount) - 1) + 1;
+    case "groups-knockout": {
+      const small = Math.floor(n / k.poolCount);
+      const sizes = n % k.poolCount === 0 ? [small] : [small, small + 1];
+      const throughPerPool = Math.floor(k.qualified / k.poolCount);
+      return Math.min(...sizes.map((s) => k.legs * (s - 1) + (s <= throughPerPool ? 1 : 0)));
+    }
     case "knockout":
       return 1;
     case "swiss":
-      return k.swissRounds;
+      return k.swissRounds - (n % 2);
     case "double_elim":
       return 2;
   }
