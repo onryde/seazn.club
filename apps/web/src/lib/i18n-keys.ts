@@ -6129,6 +6129,7 @@ export type DictionaryKey =
   | "quickMatch.setup.plays"
   | "quickMatch.setup.plays.1"
   | "quickMatch.setup.plays.2"
+  | "quickMatch.setup.registerSeason"
   | "quickMatch.setup.removeSide"
   | "quickMatch.setup.rules"
   | "quickMatch.setup.sideLabel"

@@ -542,6 +542,7 @@
   "quickMatch.setup.tickCheck": "Marca la casilla de arriba y luego pulsa Empezar a jugar.",
   "quickMatch.setup.needsScript": "Para empezar un partido rápido hace falta JavaScript.",
   "quickMatch.setup.keepNote": "Sin cuenta. Se elimina {days} días después de la última puntuación, salvo que lo guardes.",
+  "quickMatch.setup.registerSeason": "O regístrate para empezar una temporada →",
   "quickMatch.setup.startCount.one": "· {count} partido",
   "quickMatch.setup.startCount.other": "· {count} partidos",
   "quickMatch.recent.title": "Tus partidos rápidos recientes",

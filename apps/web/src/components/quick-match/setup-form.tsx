@@ -40,6 +40,7 @@ import { routes } from "@/lib/routes";
 import { withTurnstile } from "@/lib/turnstile-client";
 import { useHydrated } from "@/lib/use-client-snapshot";
 import { TurnstileWidget, useTurnstile } from "@/components/turnstile-widget";
+import { RegisterSeasonLink } from "./register-season-link";
 
 /** The create route (app/api/quick-match/route.ts). It answers every post with a 303. */
 const CREATE_PATH = "/api/quick-match";
@@ -588,6 +589,7 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError, i
           </noscript>
         </div>
       </div>
+      <RegisterSeasonLink lang={lang} sportKey={sport.sport_key} label={msg("quickMatch.setup.registerSeason")} />
     </form>
   );
 }

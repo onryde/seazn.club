@@ -27,18 +27,19 @@ const LANDING_MS = 2400;
 // art reads it rather than owning it: its value is the snapshot, its `change` events the subscription. The server
 // snapshot is "nothing picked", so the server's markup (and the hydration that must match it) draws the page's sport; once
 // hydrated, a value the browser restored into the select (back navigation) shows at once. No select on the page (the
-// quick match offer is empty) reads as nothing picked, and subscribes to nothing.
+// quick match offer is empty) reads as nothing picked, and subscribes to nothing. The hero's organiser door reads the same
+// store (hero-event-link.tsx).
 function selectOnPage(): HTMLSelectElement | null {
   return document.getElementById(HERO_SPORT_SELECT_ID) as HTMLSelectElement | null;
 }
-function subscribeToSelect(onChange: () => void): () => void {
+export function subscribeToSelect(onChange: () => void): () => void {
   const select = selectOnPage();
   if (!select) return () => {};
   select.addEventListener("change", onChange);
   return () => select.removeEventListener("change", onChange);
 }
-const readSelect = (): string | null => selectOnPage()?.value ?? null;
-const readNothingPicked = (): string | null => null;
+export const readSelect = (): string | null => selectOnPage()?.value ?? null;
+export const readNothingPicked = (): string | null => null;
 
 /** Whether the art is on screen. `true` on the server and through hydration (the markup carries no hold, so the no-JS
  *  page plays as it always did) and wherever there is no IntersectionObserver (fail open, as use-start-on-view.ts does);
