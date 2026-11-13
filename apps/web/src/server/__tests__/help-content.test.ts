@@ -2,8 +2,12 @@
 // client-safe slug registry in lib/help.ts, the Tips deep-links and the
 // feature-area sections must all agree — a feature area or tip cannot ship
 // without its /help article, and a deleted article cannot leave dead links.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import FlexSearch from "flexsearch";
+import type { Dict } from "@/lib/i18n-constants";
+import { t } from "@/lib/i18n-runtime";
 import {
   HELP_SECTIONS, allHelpArticles, helpNav, helpPlainText, renderHelpMarkdown,
 } from "@/server/help-content";
@@ -62,5 +66,17 @@ describe("help content ⇄ registry ⇄ tips", () => {
     const results = index.search("waitlist");
     const slugs = results.flatMap((f) => f.result as string[]);
     expect(slugs).toContain("registration/waitlist");
+  });
+
+  // Registration redesign B3 review m4: the waitlist article quoted words no screen shows ("You're #2 in line", "full — waitlist: 3").
+  // The quotes are now the screens' own, read from the English dictionary the status page and the division card render (not typed
+  // here), so a copy change to either screen reds this until the article follows.
+  it("the waitlist article quotes the status page's and the division card's own words", () => {
+    const ui = JSON.parse(readFileSync(join(__dirname, "..", "..", "dictionaries", "en", "ui.json"), "utf8")) as Dict;
+    const article = onDisk.get("registration/waitlist");
+    expect(article, "premise: the article exists").toBeDefined();
+    const quotes = [t(ui, "register.status.waitlistPosition", { n: 2 }), t(ui, "register.capacity.fullWaitlistCount", { count: 3 })];
+    for (const q of quotes) expect(article!.markdown, q).toContain(q);
+    expect(quotes.length, "anti-vacuity: two quotes checked").toBe(2);
   });
 });
