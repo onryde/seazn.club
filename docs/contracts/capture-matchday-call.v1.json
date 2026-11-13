@@ -178,6 +178,10 @@
               }
             ]
           },
+          "called": {
+            "description": "true for an other_court candidate whose match is called onto that court and not started; false otherwise (a queued next match, a this_court or no_court candidate). A reader without it treats the candidate as not called.",
+            "type": "boolean"
+          },
           "planned_at": {
             "description": "The match's planned start as a UTC instant: where it waits, or a no-court match's own. null when it has none, and for a match called elsewhere (the call replaced its plan).",
             "anyOf": [
@@ -246,6 +250,7 @@
           "match",
           "source",
           "from_court_name",
+          "called",
           "planned_at",
           "waiting_minutes",
           "behind_minutes",

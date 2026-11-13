@@ -376,6 +376,7 @@ const contracts: Contract[] = [
         ...Object.fromEntries(Object.entries(MD_ROW).map(([field, text]) => [`candidates.match.${field}`, text])),
         "candidates.source": "this_court (the court's own next match), other_court (another court's next match, or a match called onto another court and not started), or no_court (a ready match with no court).",
         "candidates.from_court_name": "other_court: the court it waits on, or is called onto. null otherwise.",
+        "candidates.called": "true for an other_court candidate whose match is called onto that court and not started; false otherwise (a queued next match, a this_court or no_court candidate). A reader without it treats the candidate as not called.",
         "candidates.planned_at": "The match's planned start as a UTC instant: where it waits, or a no-court match's own. null when it has none, and for a match called elsewhere (the call replaced its plan).",
         "candidates.waiting_minutes": "Whole minutes from now until its estimated start where it waits; 0 for a called or no-court match.",
         "candidates.behind_minutes": "Whole minutes its estimated start is past its planned time; for a no-court match, how long its planned time has passed.",
