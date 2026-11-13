@@ -303,6 +303,17 @@ test("registrants tab: no-scroll, grid/card switch, expanded-row and filter-bar 
     expect(showBox.y + showBox.height, "Show registrants is inside the viewport").toBeLessThanOrEqual(viewport.height);
     expect(showBox.x + showBox.width).toBeLessThanOrEqual(viewport.width);
     await expectNoHorizontalScroll(page);
+    // The dialog is NAMED after its visible title (aria-labelledby -> the h3: axe's aria-dialog-name), its close button carries
+    // a label, and its body does not chain a swipe to the page behind it (overscroll-contain).
+    await expect(sheet, "the sheet is named after its title").toHaveAccessibleName("Filters");
+    await expect(sheet.getByRole("button", { name: "Close" }), "the sheet's close button is named").toBeVisible();
+    expect(
+      await sheet.locator("[data-filter-sheet-form]").evaluate((form) => {
+        const body = form.closest(".overflow-y-auto");
+        return body ? getComputedStyle(body).overscrollBehaviorY : "no scrolling body";
+      }),
+      "the sheet's scrolling body contains its overscroll",
+    ).toBe("contain");
 
     // 4c) Edits are STAGED: changing a select navigates nowhere, and closing the
     //     sheet (Escape) discards them and hands focus back to the button.
@@ -316,6 +327,19 @@ test("registrants tab: no-scroll, grid/card switch, expanded-row and filter-bar 
     expect(page.url()).toBe(before);
     await openSheet();
     await expect(sheet.locator('select[name="kind"]'), "a discarded edit is gone on reopen").toHaveValue("");
+
+    // 4c') Reset empties what is staged, EVERY time it is pressed. A real browser never re-applies a default to a node React
+    //      keeps, so a second press that kept its nodes left the second staged edit on screen (T21 review I-1) — which is
+    //      only a bug a real <select> can show.
+    const resetBtn = sheet.locator("[data-filter-sheet-reset]");
+    const kindSelect = sheet.locator('select[name="kind"]');
+    for (const [press, pick] of [["first", "individual"], ["second", "team"]] as const) {
+      await kindSelect.selectOption(pick);
+      await expect(kindSelect).toHaveValue(pick);
+      await resetBtn.click();
+      await expect(kindSelect, `${press} Reset empties the staged kind`).toHaveValue("");
+    }
+    expect(page.url(), "Reset navigates nowhere").toBe(before);
 
     // 4d) One select change, end to end: stage it, Show registrants applies it with ONE push.
     await sheet.locator('select[name="kind"]').selectOption("individual");
