@@ -8,8 +8,13 @@
 // a command, so before the connect wait every cold start lost its first one:
 // a cache read missed, a fail-open limit (MUTATION_LIMIT, CONSENT_LIMIT…)
 // silently skipped its count, and a fail-closed limit (AUTH_LIMIT,
-// EMAIL_LIMIT) refused the request as a Redis "outage". Prod machines
-// suspend/resume and staging machines stop/start, so it recurred all day.
+// EMAIL_LIMIT) refused the request as a Redis "outage". That is every process
+// start: each deploy or restart, and every staging machine start (fly.stg.toml
+// stops machines). The same rejection hit any command issued while a dropped
+// connection was reconnecting. NOT covered here: a prod machine resumed from
+// suspend (fly.toml) keeps its memoised client in status `ready` on a socket
+// that may have died while suspended, so neither the build nor the wait
+// applies; its first command rides on ioredis' resend after the reconnect.
 //
 // Each case below starts from "never connected" (the memoised client cleared)
 // so the helper under test sends the first command the new client ever sees.
@@ -31,8 +36,63 @@ import { EMAIL_LIMIT, MUTATION_LIMIT, rateLimit } from "@/lib/rate-limit";
 const HAS_REDIS = !!process.env.REDIS_URL;
 const REDIS_URL = process.env.REDIS_URL;
 const uniq = () => `test:cold:${randomUUID()}`;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * "Fails at once" for a call made while a reconnect is pending. A fixed number on purpose, not a fraction of
+ * REDIS_CONNECT_WAIT_MS: what it must tell apart is a call that waited for ioredis' NEXT retry (retryStrategy(2) =
+ * 400 ms after a refusal) from one that did not wait at all.
+ */
+const FAILS_AT_ONCE_MS = 200;
 
 const memo = globalThis as unknown as { _redis?: Redis | null };
+
+/** A TCP proxy in front of the real Redis that a test can refuse (stop listening), restore, and sever. */
+interface RedisProxy {
+  url: string;
+  /** Accept connections (again) on the same port. */
+  listen(): Promise<void>;
+  /** Stop listening AND drop every live connection: every attempt from now on is refused. Idempotent. */
+  refuse(): Promise<void>;
+  /** Drop every live connection, still listening. */
+  sever(): void;
+}
+
+async function redisProxy(): Promise<RedisProxy> {
+  const upstream = new URL(REDIS_URL!);
+  const sockets = new Set<net.Socket>();
+  const server = net.createServer((down) => {
+    const up = net.connect(Number(upstream.port || 6379), upstream.hostname);
+    for (const s of [down, up]) {
+      sockets.add(s);
+      s.on("error", () => {});
+      s.on("close", () => sockets.delete(s));
+    }
+    down.pipe(up);
+    up.pipe(down);
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const port = (server.address() as net.AddressInfo).port;
+  const sever = () => {
+    for (const s of sockets) s.destroy();
+  };
+  return {
+    url: `redis://127.0.0.1:${port}`,
+    sever,
+    async listen() {
+      server.listen(port, "127.0.0.1");
+      await once(server, "listening");
+    },
+    async refuse() {
+      if (!server.listening) return sever();
+      const closed = once(server, "close");
+      server.close();
+      sever();
+      await closed;
+    },
+  };
+}
 
 /** Forget the memoised client, so the next helper call builds — and connects — a new one. */
 function forgetClient(): void {
@@ -231,11 +291,32 @@ describe.skipIf(!HAS_REDIS)("the first command on a cold client (real Redis)", (
     }
   });
 
-  it("a command issued while a dropped connection is reconnecting waits for it and lands", async () => {
+  it("a command arriving in the ready-check window (status `connect`) waits for `ready` too", async () => {
+    const key = uniq();
+    forgetClient();
+    const first = cache.incrWindow(key, 60); // builds the client, which starts connecting
+    const c = liveClient();
+    await once(c, "connect");
+    // TCP is up and the ready check (INFO) is in flight; ioredis writes nothing else in this window.
+    expect(c.status).toBe("connect");
+    const second = cache.incrWindow(key, 60);
+
+    const counts = (await Promise.all([first, second])).map((w) => w?.count);
+    expect(counts.sort()).toEqual([1, 2]);
+    expect(await probe.get(key)).toBe("2");
+  });
+
+  // Idles past REDIS_CONNECT_WAIT_MS first: the cold start's own wait settled on `ready`, and its bound timer must
+  // have been cleared with it. A timer left armed would fire a second later, mark the READY client down, and the
+  // drop below — like every drop in prod, long after any wait — would fail on the spot again.
+  it("a command issued while a dropped connection is reconnecting waits for it and lands — long after the cold start's wait", async () => {
     const key = uniq();
     forgetClient();
     expect((await cache.incrWindow(key, 60))?.count).toBe(1);
     const c = liveClient();
+    await sleep(cache.REDIS_CONNECT_WAIT_MS + 250);
+    expect(c.status).toBe("ready");
+
     const clientId = await c.client("ID");
     const reconnecting = once(c, "reconnecting");
     await probe.client("KILL", "ID", String(clientId));
@@ -246,35 +327,15 @@ describe.skipIf(!HAS_REDIS)("the first command on a cold client (real Redis)", (
     expect(await probe.get(key)).toBe("2");
   });
 
-  // Outage → recovery → drop, through a TCP proxy this test opens and closes in
-  // front of the real Redis: a failed connection attempt marks Redis down (no
-  // waiting while it is), the next `ready` clears that, and a later drop of an
-  // established connection waits for its reconnect again.
+  // Outage → recovery → drop, through the proxy: a failed connection attempt
+  // marks Redis down (no waiting while it is), the next `ready` clears that,
+  // and a later drop of an established connection waits for its reconnect again.
   it("after an outage recovers, a later dropped connection is waited for again", async () => {
-    const upstream = new URL(REDIS_URL!);
-    const sockets = new Set<net.Socket>();
-    const proxy = net.createServer((down) => {
-      const up = net.connect(Number(upstream.port || 6379), upstream.hostname);
-      for (const s of [down, up]) {
-        sockets.add(s);
-        s.on("error", () => {});
-        s.on("close", () => sockets.delete(s));
-      }
-      down.pipe(up);
-      up.pipe(down);
-    });
-    const sever = () => {
-      for (const s of sockets) s.destroy();
-    };
-    proxy.listen(0, "127.0.0.1");
-    await once(proxy, "listening");
-    const port = (proxy.address() as net.AddressInfo).port;
-    proxy.close();
-    await once(proxy, "close");
-
+    const proxy = await redisProxy();
     try {
       // Outage: nothing listens on the port, so every attempt is refused.
-      process.env.REDIS_URL = `redis://127.0.0.1:${port}`;
+      await proxy.refuse();
+      process.env.REDIS_URL = proxy.url;
       forgetClient();
       const key = uniq();
       expect(await cache.incrWindow(key, 60)).toBeNull();
@@ -283,22 +344,55 @@ describe.skipIf(!HAS_REDIS)("the first command on a cold client (real Redis)", (
 
       // Recovery.
       const ready = once(c, "ready");
-      proxy.listen(port, "127.0.0.1");
-      await once(proxy, "listening");
+      await proxy.listen();
       await ready;
       expect((await cache.incrWindow(key, 60))?.count).toBe(1);
 
       // A drop of the now-established connection: the next command waits for the reconnect.
       const reconnecting = once(c, "reconnecting");
-      sever();
+      proxy.sever();
       await reconnecting;
       expect(c.status).not.toBe("ready");
       expect((await cache.incrWindow(key, 60))?.count).toBe(2);
       expect(await probe.get(key)).toBe("2");
     } finally {
       forgetClient();
-      sever();
-      proxy.close();
+      await proxy.refuse();
+    }
+  });
+
+  // The likeliest real outage: Redis was up, then went away. The drop is worth one wait (its reconnect might
+  // succeed); once that reconnect is refused, Redis is down and nothing waits again until it is back.
+  it("a live connection that drops into a refused Redis: one call waits for the failed reconnect, every later call fails at once", async () => {
+    const proxy = await redisProxy();
+    try {
+      process.env.REDIS_URL = proxy.url;
+      forgetClient();
+      const key = uniq();
+      expect((await cache.incrWindow(key, 60))?.count).toBe(1);
+      const c = liveClient();
+
+      const reconnecting = once(c, "reconnecting");
+      await proxy.refuse();
+      await reconnecting;
+      expect(c.status).not.toBe("ready");
+
+      const t1 = performance.now();
+      expect(await cache.incrWindow(key, 60)).toBeNull();
+      const firstMs = performance.now() - t1;
+      const t2 = performance.now();
+      expect(await cache.incrWindow(key, 60)).toBeNull();
+      const secondMs = performance.now() - t2;
+      const t3 = performance.now();
+      expect(await cache.incrWindow(key, 60)).toBeNull();
+      const thirdMs = performance.now() - t3;
+
+      expect(firstMs).toBeLessThan(cache.REDIS_CONNECT_WAIT_MS);
+      expect([secondMs, thirdMs].filter((ms) => ms >= FAILS_AT_ONCE_MS).map(Math.round)).toEqual([]);
+      expect(await probe.get(key)).toBe("1");
+    } finally {
+      forgetClient();
+      await proxy.refuse();
     }
   });
 });

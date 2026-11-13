@@ -22,21 +22,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { once } from "node:events";
 import net from "node:net";
 import type Redis from "ioredis";
-import {
-  REDIS_CONNECT_WAIT_MS,
-  cacheDel,
-  cacheDelPattern,
-  cacheGet,
-  cacheLeaseAcquire,
-  cacheLeaseFill,
-  cacheLeaseRelease,
-  cacheReadRaw,
-  cacheSet,
-  incrWindow,
-} from "@/lib/cache";
+import * as cache from "@/lib/cache";
 import { AUTH_LIMIT, EMAIL_LIMIT, MUTATION_LIMIT, rateLimit } from "@/lib/rate-limit";
 import { HttpError } from "@/lib/errors";
 
+const { REDIS_CONNECT_WAIT_MS } = cache;
 const memo = globalThis as unknown as { _redis?: Redis | null };
 const REDIS_URL = process.env.REDIS_URL;
 
@@ -55,6 +45,8 @@ type Outcome = { value: unknown } | { error: unknown };
 
 interface FallbackCase {
   name: string;
+  /** The lib/cache.ts export this case calls; none for a limiter case (rateLimit reaches Redis via incrWindow). */
+  helper?: string;
   call(key: string): Promise<unknown>;
   /** What the call must settle to while Redis is unreachable. */
   expectFallback(outcome: Outcome): void;
@@ -71,23 +63,62 @@ const refusesWith429 = (outcome: Outcome) => {
 };
 
 const CASES: FallbackCase[] = [
-  { name: "cacheGet", call: (k) => cacheGet(k), expectFallback: resolvesTo(null) },
-  { name: "cacheSet", call: (k) => cacheSet(k, { v: 1 }, 60), expectFallback: resolvesTo(undefined) },
-  { name: "cacheDel", call: (k) => cacheDel(k), expectFallback: resolvesTo(undefined) },
-  { name: "cacheDelPattern", call: (k) => cacheDelPattern(`${k}:*`), expectFallback: resolvesTo(undefined) },
-  { name: "cacheReadRaw", call: (k) => cacheReadRaw(k), expectFallback: resolvesTo({ kind: "unavailable" }) },
+  { name: "cacheGet", helper: "cacheGet", call: (k) => cache.cacheGet(k), expectFallback: resolvesTo(null) },
   {
-    name: "cacheLeaseAcquire",
-    call: (k) => cacheLeaseAcquire(k, 5_000, "absent"),
+    name: "cacheSet",
+    helper: "cacheSet",
+    call: (k) => cache.cacheSet(k, { v: 1 }, 60),
+    expectFallback: resolvesTo(undefined),
+  },
+  { name: "cacheDel", helper: "cacheDel", call: (k) => cache.cacheDel(k), expectFallback: resolvesTo(undefined) },
+  {
+    name: "cacheDelPattern",
+    helper: "cacheDelPattern",
+    call: (k) => cache.cacheDelPattern(`${k}:*`),
+    expectFallback: resolvesTo(undefined),
+  },
+  {
+    name: "cacheReadRaw",
+    helper: "cacheReadRaw",
+    call: (k) => cache.cacheReadRaw(k),
     expectFallback: resolvesTo({ kind: "unavailable" }),
   },
-  { name: "cacheLeaseFill", call: (k) => cacheLeaseFill(k, "t", { v: 1 }, 60), expectFallback: resolvesTo(false) },
-  { name: "cacheLeaseRelease", call: (k) => cacheLeaseRelease(k, "t"), expectFallback: resolvesTo(undefined) },
-  { name: "incrWindow", call: (k) => incrWindow(k, 60), expectFallback: resolvesTo(null) },
+  {
+    name: "cacheLeaseAcquire",
+    helper: "cacheLeaseAcquire",
+    call: (k) => cache.cacheLeaseAcquire(k, 5_000, "absent"),
+    expectFallback: resolvesTo({ kind: "unavailable" }),
+  },
+  {
+    name: "cacheLeaseFill",
+    helper: "cacheLeaseFill",
+    call: (k) => cache.cacheLeaseFill(k, "t", { v: 1 }, 60),
+    expectFallback: resolvesTo(false),
+  },
+  {
+    name: "cacheLeaseRelease",
+    helper: "cacheLeaseRelease",
+    call: (k) => cache.cacheLeaseRelease(k, "t"),
+    expectFallback: resolvesTo(undefined),
+  },
+  { name: "incrWindow", helper: "incrWindow", call: (k) => cache.incrWindow(k, 60), expectFallback: resolvesTo(null) },
   { name: "rateLimit fail-open (MUTATION_LIMIT)", call: (k) => rateLimit(k, MUTATION_LIMIT), expectFallback: resolvesTo(undefined) },
   { name: "rateLimit fail-closed (EMAIL_LIMIT)", call: (k) => rateLimit(k, EMAIL_LIMIT), expectFallback: refusesWith429 },
   { name: "rateLimit fail-closed (AUTH_LIMIT)", call: (k) => rateLimit(k, AUTH_LIMIT), expectFallback: refusesWith429 },
 ];
+
+/**
+ * The exports of lib/cache.ts that are functions but send no Redis command of their own. Every OTHER exported
+ * function must have an outage case above, so a helper added later cannot ship without a proven fallback.
+ */
+const NOT_REDIS_COMMANDS = new Set(["cacheEnabled", "sendAfterDeleteOrBound", "__resetLeaseFailureLogForTests"]);
+
+/** lib/cache.ts's Redis-command helpers, read from the module's own exports. */
+const redisCommandHelpers = () =>
+  Object.entries(cache)
+    .filter(([name, value]) => typeof value === "function" && !NOT_REDIS_COMMANDS.has(name))
+    .map(([name]) => name)
+    .sort();
 
 /**
  * Run every case at once and time each. A case still pending past the bound
@@ -128,6 +159,26 @@ function expectFallbacks(results: Awaited<ReturnType<typeof runAll>>): void {
 
 const slowerThan = (results: Awaited<ReturnType<typeof runAll>>, ms: number) =>
   results.filter((r) => r.ms >= ms).map((r) => `${r.name} ${Math.round(r.ms)}ms`);
+
+describe("the outage sweep covers lib/cache.ts", () => {
+  it("every Redis-command helper has an outage case", () => {
+    const helpers = redisCommandHelpers();
+    expect(helpers.length).toBeGreaterThan(0);
+    expect(helpers).toHaveLength(9);
+    expect(CASES.flatMap((c) => (c.helper ? [c.helper] : [])).sort()).toEqual(helpers);
+  });
+});
+
+// A DEL issued while the client connects or reconnects waits up to REDIS_CONNECT_WAIT_MS before it is sent, while the
+// realtime push after a write goes out at PUSH_AFTER_DELETE_BOUND_MS whether or not that DEL has settled
+// (sendAfterDeleteOrBound). Kept inside the push bound, the wait leaves the DEL room to land before its push, so a
+// page refetching on the push does not read the stale cached document it was told to drop.
+describe("the connect wait fits inside the push-after-delete bound", () => {
+  it("REDIS_CONNECT_WAIT_MS < PUSH_AFTER_DELETE_BOUND_MS", () => {
+    expect(cache.REDIS_CONNECT_WAIT_MS).toBeGreaterThan(0);
+    expect(cache.REDIS_CONNECT_WAIT_MS).toBeLessThan(cache.PUSH_AFTER_DELETE_BOUND_MS);
+  });
+});
 
 describe("an unreachable Redis fails within the connect wait", () => {
   const servers: net.Server[] = [];
