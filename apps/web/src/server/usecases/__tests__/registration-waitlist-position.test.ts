@@ -275,6 +275,55 @@ describe.skipIf(!HAS_DB)("one waitlist order everywhere: the place every surface
     expect(await promotionOrder(rig.division.id, rig.settings), "the queue is unchanged").toEqual([d.registration.id, a.registration.id]);
   });
 
+  // B4 review m6 (ruling 2026-11-13: hygiene, the lapse's parity). The organiser's move back to the waitlist takes back the promotion it
+  // held, exactly as the sweep's lapse does (sweep.ts): `promoted_at` and `promotion_expires_at` cleared (the public API reads
+  // promoted_at), and the cart's shared pay-by date cleared when no other entry in it is still pending. Before the fix the move left all
+  // three. Both directions: a lone entry's cart loses its date; a cart with another pending entry keeps it.
+  it("an organiser moving a promoted entry back to the waitlist takes back its promotion, like a lapse; a pending sibling keeps the cart's date", async () => {
+    const rig = await stripeRig({ feeCents: 500 });
+    const promotionOf = async (id: string) =>
+      (await sql<{ status: string; promoted_at: Date | null; promotion_expires_at: Date | null; expires_at: Date | null }[]>`
+        select r.status, r.promoted_at, r.promotion_expires_at, g.expires_at
+        from registrations r join registration_groups g on g.id = r.group_id where r.id = ${id}`)[0]!;
+
+    // A lone entry: promoted by the real queue, then moved back by the organiser.
+    const alone = await waiting(rig, "Alone", 2);
+    const first = await sql.begin((tx) => promoteOldestWaitlisted(tx, rig.division.id, rig.settings));
+    expect(first?.id, "premise: the queue promotes it").toBe(alone.registration.id);
+    const held = await promotionOf(alone.registration.id);
+    expect(held.status, "premise: promoted").toBe("pending");
+    expect(held.promoted_at, "premise: the promotion is stamped").not.toBeNull();
+    expect(held.promotion_expires_at, "premise: a card fee gives the promotion its own pay-by date").not.toBeNull();
+    expect(held.expires_at, "premise: the promotion opened the cart's pay-by date").not.toBeNull();
+
+    await waitlistRegistration(rig.owner, alone.registration.id);
+    expect(await promotionOf(alone.registration.id), "the move takes the whole promotion back").toEqual({
+      status: "waitlisted",
+      promoted_at: null,
+      promotion_expires_at: null,
+      expires_at: null,
+    });
+
+    // A cart with a second entry still pending: the move clears its own promotion but leaves the cart's date, which the sibling needs.
+    const shared = await waiting(rig, "Shared", 1);
+    const sibling = await seedSecondEntry(shared.registration.group_id, rig.division.id, 500, `Sibling ${Math.random().toString(36).slice(2, 7)}`);
+    expect(sibling.status, "premise: the sibling is pending").toBe("pending");
+    // Alone (moved back, waiting since the move) is behind Shared (waiting a day), so Shared is promoted next.
+    const second = await sql.begin((tx) => promoteOldestWaitlisted(tx, rig.division.id, rig.settings));
+    expect(second?.id, "premise: the queue promotes the shared-cart entry").toBe(shared.registration.id);
+    const cartDate = (await promotionOf(shared.registration.id)).expires_at;
+    expect(cartDate, "premise: the cart has a pay-by date").not.toBeNull();
+
+    await waitlistRegistration(rig.owner, shared.registration.id);
+    expect(await promotionOf(shared.registration.id), "its own promotion goes; the cart keeps the date its pending sibling owes by").toEqual({
+      status: "waitlisted",
+      promoted_at: null,
+      promotion_expires_at: null,
+      expires_at: cartDate,
+    });
+    expect((await promotionOf(sibling.id)).status, "the sibling is untouched").toBe("pending");
+  });
+
   it("another division's waitlist does not count, however long it has waited", async () => {
     const rig = await stripeRig({ feeCents: 500 });
     const other = await createDivision(rig.owner, rig.competition.id, {

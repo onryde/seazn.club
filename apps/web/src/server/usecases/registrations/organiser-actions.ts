@@ -11,7 +11,7 @@ import { audit } from "../audit";
 import type { RegistrationWithGroupRow } from "./types";
 import { loadSettings, divisionCtx, orgReg, orgRegAfter } from "./lookups";
 import { inviteUnclaimedMembers } from "./people";
-import { materialise } from "./materialise";
+import { clearExpiresIfNoLongerNeeded, materialise } from "./materialise";
 import { openRegistrationSeatGateFor } from "./waitlist";
 import { paymentReminderMessage, payDeadlineOf } from "./mail";
 import { issuePayLink, recordPayToken } from "./pay-token";
@@ -270,9 +270,16 @@ export async function waitlistRegistration(auth: AuthCtx, regId: string): Promis
     // Owner ruling (registration redesign B3 review I1): the move joins the BACK of the queue, the same as a lapse (sweep.ts) -
     // fairness to everyone already waiting. `waitlisted_at` is the queue key (`waitlistQueueKey`); left null, the entry's own
     // created_at would put it ahead of everyone who joined the waitlist after it signed up.
+    //
+    // B4 review m6: and it takes back a promotion the entry held, as the lapse does - `promoted_at` and `promotion_expires_at` cleared
+    // (the public status API reads promoted_at), and the cart's shared pay-by date cleared when no other entry in it is still pending.
+    // `amount_cents` is kept, as the lapse keeps it (sweep.ts, PR #677: a late payment's refund reads it).
     await tx`
-      update registrations set status = 'waitlisted', waitlisted_at = now(), updated_at = now()
+      update registrations
+      set status = 'waitlisted', waitlisted_at = now(),
+          promoted_at = null, promotion_expires_at = null, updated_at = now()
       where id = ${regId}`;
+    await clearExpiresIfNoLongerNeeded(tx, reg.group_id, regId);
     await audit(tx, div.competition_id, auth.orgId, "registration.waitlisted", {
       registration_id: regId,
     }, auth.userId);
