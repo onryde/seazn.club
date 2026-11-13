@@ -6,6 +6,8 @@ order: 3
 
 Every registration gets a **reference** like `SZ-7F3K-Q2ND`, shown on the confirmation ticket and in email. It's how players interact with their entry without creating an account.
 
+When one sign-up holds two or more entries, each entry also has its own reference — the cart's with the entry's number on the end, like `SZ-7F3K-Q2ND-2`. Mails about one entry quote it, and it opens the same page as the cart's reference.
+
 ## What a player can do with it
 
 Visiting `seazn.club/r/SZ-7F3K-Q2ND` shows a tear-off ticket for their whole cart — one stamp per entry (Received, Paid, Confirmed, Waitlist, Withdrawn…) — plus a QR code and a **Share** button that opens their phone's share sheet (WhatsApp on desktop) with a message and a link to the competition, ready for the family group chat.
