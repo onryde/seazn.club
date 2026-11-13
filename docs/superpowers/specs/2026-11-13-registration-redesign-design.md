@@ -374,20 +374,41 @@ the status page's card style.
 
 ### 6.1 Storage
 
-- Migration `V515__registration_cart_position.sql`. **Re-check the highest V
-  number after the rebase onto main.** This branch tops at V514; main tops at
-  V509.
-  - `alter table registrations add column cart_position smallint;`
-  - Backfill: `update registrations r set cart_position = x.n from (select id,
-    row_number() over (partition by group_id order by created_at, id) n from
-    registrations) x where x.id = r.id;`
-  - `alter table registrations alter column cart_position set not null;`
-  - `create unique index registrations_group_position_uq on
-    registrations(group_id, cart_position);`
-- The backfill is safe and loud: prod has 0 registrations (owner, 2026-11-12),
-  and stg data is test-only. The migration header says so.
-- Submit sets `cart_position` from the `prepared` index + 1 at both insert
-  sites (registration-submit.ts:853, :873). Nothing else ever writes it.
+*Amended 2026-11-13 (B5 T17 rulings A' and cart_size; B3 review m7, m8). The
+first draft had submit stamp `cart_position` from the `prepared` index; that
+broke ~27 direct-insert fixtures, seeds and smoke suites, and a derived cart
+size would have moved a suffix after a delete. The design below replaced it.*
+
+- Migration `V519__registration_cart_position.sql` (main took V515 quick match,
+  V516 match day, V517 quick match league knockout and V518 funnel draft
+  reference; renumbered from V517, then V518, at the two pre-PR rebases).
+  **Re-check the highest V number at PR time.**
+  - `registrations.cart_position smallint not null`: the entry's 1-based place
+    in its cart. Insert order is cart order: submit inserts a cart's entries one
+    by one in the order the person added them.
+  - `registration_groups.cart_size smallint not null default 0`: the largest
+    position the cart has handed out, which is how many entries it was sent
+    with. It decides whether a reference carries a suffix at all (§6.2).
+  - `check (cart_position >= 1)` and `unique (group_id, cart_position)`.
+- **The database is the only writer.** `trg_cart_position` (BEFORE INSERT on
+  `registrations`) raises the group's `cart_size` by one and gives the new value
+  to the entry. The UPDATE takes the group row lock, so two inserts into one
+  cart queue instead of racing. Submit, fixtures, e2e seeds and smoke inserts
+  name neither column. Every other write is refused by name (`cart_position:`):
+  - an insert that supplies `cart_position`;
+  - an entry for a group that does not exist;
+  - an update that changes an entry's `cart_position` or moves it to another
+    cart (`group_id`);
+  - an update that lowers a cart's `cart_size`;
+  - an insert into `registration_groups` with a `cart_size` other than 0.
+- **A suffix never changes after submit.** `cart_size` never shrinks, and a
+  deleted entry's number is never handed out again. A lone survivor of a
+  3-entry cart is still `-3`, and an entry added later to that cart is `-4`.
+- Backfill (marked block in the migration): every existing entry is numbered
+  within its group by `(created_at, id)`, the order the status page and the cart
+  mail already read a cart in. Each group's `cart_size` becomes the number of
+  entries it holds. This is safe and loud: prod has 0 registrations (owner,
+  2026-11-12), and stg data is test-only. The migration header says so.
 
 ### 6.2 Format
 
@@ -395,8 +416,10 @@ the status page's card style.
 `apps/web/src/lib/ref-code.ts`:
 - returns `refCode` when `cartSize < 2`
 - otherwise returns `` `${refCode}-${position}` ``
-- `cartSize` counts **every** entry of the cart, whatever its status, so a
-  withdrawal never changes another entry's reference.
+- `cartSize` is the cart's stored `registration_groups.cart_size` (§6.1): every
+  entry it was sent with, whatever its status now, and never less after a
+  delete. So neither a withdrawal nor a deleted division changes another entry's
+  reference.
 
 `parseEntryReference(input: string): { refCode: string; position: number |
 null } | null` accepts `SZ-XXXX-XXXX` or `SZ-XXXX-XXXX-<n>`. It is
