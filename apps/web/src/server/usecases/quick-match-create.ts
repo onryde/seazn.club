@@ -229,7 +229,9 @@ export async function createQuickMatchTree(
     // analytics they fire carry the system org, which `captureServer` drops (D11); the competition promotion's
     // lifecycle event is not fired at all, since the status was set here rather than promoted.
     await afterGenerateCommit(auth, stage.id, committed.write);
-    afterScheduleWrite(division.id, competition.id, "start", committed.started.fixtureIds);
+    // No per-fixture push (owner 2026-11-13): this division started in this request, so no match centre or pad can be
+    // subscribed to one of its fixtures yet. The DEL and the one division push are the organiser start's.
+    afterScheduleWrite(division.id, competition.id, "start", committed.started.fixtureIds, { fixturePushes: false });
 
     // 4. The number the Start button showed (A8, C17).
     const { matchCount } = quickMatchPreview({ format, sides: sides.length, plays });
