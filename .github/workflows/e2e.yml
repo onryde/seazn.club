@@ -118,32 +118,32 @@ on:
         required: false
         type: boolean
         default: false
-      # R4 S15: OFF unless asked for. On, the `walkthrough rest 2/2` leg also runs
+      # R4 S15: OFF unless asked for. On, the `walkthrough rest 2/3` leg also runs
       # e2e/walkthrough/sponsors-capture.spec.ts with SPONSOR_CAPTURE_DIR set (without it every test there skips) and
       # uploads the PNGs as the `sponsor-captures` artifact — the owner's sign-off pictures of the sponsor pages at
       # 320/768/1280, never committed. Off (and on every `push`), both steps are skipped by their `if:`.
       sponsor_captures:
-        description: "Also capture the sponsor pages (walkthrough rest 2/2 leg) and upload them as an artifact"
+        description: "Also capture the sponsor pages (walkthrough rest 2/3 leg) and upload them as an artifact"
         required: false
         type: boolean
         default: false
-      # Sponsor deals PR 2 (Batch J): OFF unless asked for. On, the same `walkthrough rest 2/2` leg also runs
+      # Sponsor deals PR 2 (Batch J): OFF unless asked for. On, the same `walkthrough rest 2/3` leg also runs
       # e2e/walkthrough/sponsor-deals-captures.spec.ts with SPONSOR_DEALS_CAPTURE_DIR set (without it every test there skips)
       # and uploads the PNGs as the `sponsor-deals-captures` artifact - the owner's sign-off pictures of the deals screens at
       # 320/768/1280 (and the deal page and the Add deal sheet in es/fr/nl at 1280), never committed. Off (and on every `push`),
       # both steps are skipped by their `if:`.
       sponsor_deals_captures:
-        description: "Also capture the sponsor deals screens (walkthrough rest 2/2 leg) and upload them as an artifact"
+        description: "Also capture the sponsor deals screens (walkthrough rest 2/3 leg) and upload them as an artifact"
         required: false
         type: boolean
         default: false
-      # Title sponsor poster (Task 10): OFF unless asked for. On, the same `walkthrough rest 2/2` leg also runs
+      # Title sponsor poster (Task 10): OFF unless asked for. On, the same `walkthrough rest 2/3` leg also runs
       # e2e/walkthrough/title-sponsor-poster-captures.spec.ts with TITLE_POSTER_CAPTURE_DIR set (without it every test there skips)
       # and uploads the PNGs as the `title-poster-captures` artifact - the owner's sign-off pictures of the competition hero's Title
       # sponsor poster and the sponsor editor at 320/768/1280 (and one at a phone's real size), never committed. Off (and on every
       # `push`), both steps are skipped by their `if:`.
       title_poster_captures:
-        description: "Also capture the Title sponsor poster screens (walkthrough rest 2/2 leg) and upload them as an artifact"
+        description: "Also capture the Title sponsor poster screens (walkthrough rest 2/3 leg) and upload them as an artifact"
         required: false
         type: boolean
         default: false
@@ -321,6 +321,9 @@ jobs:
     # deliberately NOT carved: overlay-compositor (overlay-compositor-e2e-wiring
     # pins it in "rest") and player-stats-stale-version (alphabetically it
     # would start after the gallery's tests and be heavy's tail).
+    # (2026-11-13: player-stats-stale-version IS carved now. It drifted into rest
+    # 2/4, which then hit the 20-minute cap with every test green, run
+    # 43474866080, 1209s. playwright.config.ts has the numbers.)
     #
     # Why a fourth rest leg now, after the paragraph above argued against one:
     # that paragraph's trigger — "a rest leg is once more the slowest in a
@@ -566,7 +569,7 @@ jobs:
           # pattern to look for when adding a leg: any step that reads the
           # Playwright JSON report sees only ITS OWN leg's tests. It keys on the
           # FILE, so it is correct for this cut too: event-pass.spec.ts lands in
-          # "rest" 1/2 and the other four legs report a notice.
+          # "rest" (one of its three shards) and the other legs report a notice.
           - group: walkthrough capture
             slug: walkthrough-capture
             project: walkthrough
@@ -579,18 +582,34 @@ jobs:
             slice: ""
             walkthrough_slice: stream
             args: --workers=3
-          - group: walkthrough rest 1/2
+          # REST RE-SHARDED THREE WAYS, 2026-11-13. Two ways had grown to the
+          # cap: rest 1/2 ran 931 / 1104 / 1161 / 1183s on the main pushes and
+          # was CANCELLED at 1206s twice (runs 43485266348 and a quick-match-skip
+          # push), with rest 2/2 at 751-957s; the job is 1200s. Playwright's
+          # shard is by test count, so the slow half is luck of the order.
+          # Three ways puts each near 600-700s for one more ~155s setup. The
+          # cost of the sixth walkthrough leg: `stripe:sync`, `stripe listen`
+          # and the Connect warning below now run six times, not five. The
+          # slugs keep walkthrough-rest-1/-2 so the opt-in capture steps, keyed
+          # on walkthrough-rest-2, still run on one leg.
+          - group: walkthrough rest 1/3
             slug: walkthrough-rest-1
             project: walkthrough
             slice: ""
             walkthrough_slice: rest
-            args: --workers=3 --shard=1/2
-          - group: walkthrough rest 2/2
+            args: --workers=3 --shard=1/3
+          - group: walkthrough rest 2/3
             slug: walkthrough-rest-2
             project: walkthrough
             slice: ""
             walkthrough_slice: rest
-            args: --workers=3 --shard=2/2
+            args: --workers=3 --shard=2/3
+          - group: walkthrough rest 3/3
+            slug: walkthrough-rest-3
+            project: walkthrough
+            slice: ""
+            walkthrough_slice: rest
+            args: --workers=3 --shard=3/3
           # FIFTH WALKTHROUGH LEG, 2026-11-12: sponsor-stream-matrix.spec.ts
           # (the L2 sponsor x stream matrix). Serial, and four of its five
           # tests take the WHOLE placement pool for a composed stream, so it
@@ -1391,7 +1410,7 @@ jobs:
 
       # R4 S15, the same shape as the overlay gallery's two steps above: opt-in (`sponsor_captures`), one leg so the
       # artifact name is unique, `!cancelled()` so a red spec step elsewhere does not cost the pictures. The leg is
-      # rest 2/2: the capture spec's own skipped tests count toward that shard, so it carries fewer real ones (run
+      # rest 2/3 (2/2 before 2026-11-13): the capture spec's own skipped tests count toward that shard, so it carries fewer real ones (run
       # 41277565323: rest 1/2 650 s, rest 2/2 586 s; the capture step itself took 21 s). The spec's own
       # last test refuses a missing, non-PNG or byte-identical capture (AGENTS.md class 10); the count below refuses an
       # empty directory, which is what a run with the env var lost would leave.
