@@ -10,7 +10,7 @@
 import type { RegistrationListRow } from "@/server/usecases/registrations";
 import type { RegistrationFormField } from "@/server/api-v1/schemas";
 import type { RegistrantsFilters, ConsentStatus } from "@/app/o/[orgSlug]/c/[compSlug]/registration/data";
-import { isTerminalRegistrationStatus } from "@/lib/registration-status";
+import { isTerminalRegistrationStatus, ownPaymentRefundedCents } from "@/lib/registration-status";
 // registrantKindLabel is reachable from registration-hub-registrant-filters.tsx
 // (a CLIENT component), which is why this pulls `t` from the client-safe
 // i18n-runtime rather than lib/i18n — lib/i18n starts with `import
@@ -170,7 +170,7 @@ export type RegistrantPaymentState =
 export function deriveRegistrantPaymentState(
   row: Pick<
     RegistrationListRow,
-    "amount_cents" | "refunded_cents" | "disputed_at" | "payment_intent_id" | "status"
+    "amount_cents" | "refunded_cents" | "disputed_at" | "entry_payment_intent_id" | "status"
   >,
 ): RegistrantPaymentState {
   if (row.disputed_at !== null) return "disputed";
@@ -180,7 +180,9 @@ export function deriveRegistrantPaymentState(
   if (row.status === "waitlisted") return "waitlisted";
   if (row.amount_cents === 0) return "free";
   if (row.status !== "paid" && row.status !== "confirmed") return "awaitingPayment";
-  return row.payment_intent_id === null ? "paidOffline" : "paid";
+  // Polish wave P5 (carry d): THIS entry's own card payment (V387). The cart's intent names whichever entry paid, so an
+  // entry marked paid in cash beside a card-paying sibling read "paid" by card.
+  return row.entry_payment_intent_id === null ? "paidOffline" : "paid";
 }
 
 /** RS009 walkthrough (2026-08-31) — the ONE place a row's "kind" is turned
@@ -234,6 +236,8 @@ export interface RegistrantActionFlags {
   canMarkPaid: boolean;
   /** RS005 R1 second wave finding — see the block comment below. */
   canResend: boolean;
+  /** Send payment reminder: a pending entry in a division that still charges; mirrors `sendPaymentReminder`'s own two 422s. */
+  canRemind: boolean;
   /** RS007 finding #16 — see the block comment below. */
   canRefund: boolean;
   /** RS009 — a solo sign-up still in the pool can be placed on a team. */
@@ -282,8 +286,10 @@ export interface RegistrantActionFlags {
  * instead; that only corrected itself after a failed click, coupled the UI
  * to error prose no test pins, and made two unrelated fixtures reword
  * themselves to avoid colliding with the match.
- * `row.payment_intent_id` is exact, not a proxy: it is the SAME cart-level
- * column `reg.payment_intent_id` resolves to server-side. Deliberately does
+ * `row.entry_payment_intent_id` is exact, not a proxy: it is the SAME per-entry
+ * column (`registrations.payment_intent_id`, V387) the server gate reads since
+ * polish wave P5 (the cart's intent is a sibling's on a cart where only the
+ * sibling paid, and let an unpaid entry through). Deliberately does
  * NOT also exclude an already-refunded 'paid' row the way `approveRegistration`
  * itself additionally does: the dispatch's own legality rule stops at
  * "pending, or paid on a manual division" (plus this wave's awaiting-payment
@@ -302,7 +308,8 @@ export interface RegistrantActionFlags {
  * canMarkPaid: `markRegistrationPaidOffline`'s own rule (usecases/registrations/organiser-actions.ts,
  * its checks) — status must still be `pending` ("Only pending
  * registrations can be marked paid" refuses every other status, including
- * `paid`), no `payment_intent_id` on file (a card payment refunds on the
+ * `paid`), no `entry_payment_intent_id` on file (THIS entry's own card
+ * payment refunds on the
  * payments trail instead), and a real fee owed (same `amount_cents` proxy
  * as approve's gate, same reasoning above). Identical to
  * `awaitingOfflineFee` below BY CONSTRUCTION, not coincidence: whenever an
@@ -337,9 +344,12 @@ export interface RegistrantActionFlags {
  * nothing to promote FROM.
  *
  * canRefund (RS007 finding #16): mirrors `refundRegistration`'s own two
- * refusals (usecases/registrations/organiser-actions.ts) exactly — "No payment to refund" when there is
- * no `payment_intent_id`, and "Already fully refunded" when
- * `amount_cents - refunded_cents <= 0`. Deliberately NOT gated on status:
+ * refusals (usecases/registrations/organiser-actions.ts) exactly — "No payment to refund" when THIS
+ * entry has no payment of its own (`entry_payment_intent_id`, V387 — never
+ * the cart's `payment_intent_id`, which a sibling's payment sets: polish wave
+ * W8, where an unpaid entry offered Refund and it refunded the sibling's
+ * money), and "Already fully refunded" when
+ * `amount_cents - ownPaymentRefundedCents(row) <= 0`. Deliberately NOT gated on status:
  * the usecase is not either, and the case that matters most is a WITHDRAWN
  * entry — past `refund_lock_at`, `withdrawCore` refuses to auto-refund and
  * the registrant is told at that moment that "any refund is at the
@@ -360,7 +370,10 @@ export function deriveRegistrantActionFlags(
     | "approval"
     | "amount_cents"
     | "refunded_cents"
+    | "late_refunded_cents"
     | "payment_intent_id"
+    | "entry_payment_intent_id"
+    | "approved_at"
     | "division_fee_cents"
     | "free_agent"
     | "assigned_team_id"
@@ -382,17 +395,25 @@ export function deriveRegistrantActionFlags(
   // error prose no test pins, and forced two unrelated test fixtures to be
   // reworded because their text collided with the match. Reading the same
   // value the server reads is correct on the FIRST render and cannot drift.
+  // Polish wave P5 (H-2): `division_fee_cents` is priced for THIS entry (a solo sign-up's own price, list.ts / entryPriceCents), so an
+  // unpaid solo is offered the reminder and Mark paid for what IT owes, never the team's fee.
   const feeOwed = row.division_fee_cents > 0;
-  const awaitingOfflineFee = row.status === "pending" && feeOwed && row.payment_intent_id === null;
+  // THIS entry's own payment (V387), never the cart's `payment_intent_id` (a sibling's payment sets it): polish wave P5, P1 carry.
+  const awaitingOfflineFee = row.status === "pending" && feeOwed && row.entry_payment_intent_id === null;
   const nonTerminal = !isTerminalRegistrationStatus(row.status);
   return {
-    canApprove: awaitingManualDecision && !awaitingOfflineFee,
+    // Polish wave P5 (W12): Approve is its own decision - offered while the fee is still due (the entry then stays pending until the
+    // payment confirms it) and gone once given (`approved_at`, V513). It used to wait for Mark paid, which was itself the approval.
+    canApprove: awaitingManualDecision && row.approved_at === null,
     canReject: awaitingManualDecision,
     canWithdraw: nonTerminal,
     canPromote: row.status === "waitlisted",
     canMarkPaid: awaitingOfflineFee,
     canResend: nonTerminal,
-    canRefund: row.payment_intent_id !== null && row.amount_cents - row.refunded_cents > 0,
+    canRemind: row.status === "pending" && feeOwed,
+    // The cap `refundRegistration` applies: what is left of THIS payment, never the refund history (a refunded LATE payment is not
+    // this payment's; polish wave final fix m2).
+    canRefund: row.entry_payment_intent_id !== null && row.amount_cents - ownPaymentRefundedCents(row) > 0,
     // A solo sign-up (an entry with no roster of its own) is the only kind of
     // row that can be placed on a team. `assigned_team_id` is derived from
     // the roster row pointing back at this entry, so these two flags are

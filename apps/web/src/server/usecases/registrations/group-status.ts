@@ -2,7 +2,7 @@ import "server-only";
 // The group (cart) read model behind the /r/[ref] status page (see ./index.ts).
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
-import { isTerminalRegistrationStatus } from "@/lib/registration-status";
+import { entryPriceCents, isTerminalRegistrationStatus, ownPaymentRefundedCents } from "@/lib/registration-status";
 import { isValidRefCode, normalizeRefCode } from "@/lib/ref-code";
 import { resolveVenueTz } from "@/lib/tz";
 import type { RegistrationSettingsRow, RegistrationRow, RegistrationGroupRow } from "./types";
@@ -64,6 +64,17 @@ export interface GroupEntryView {
    *  view-model.ts) reads THIS field now, per entry, so it can never be
    *  fooled by a sibling's stale write. */
   payment_method: "offline" | "stripe";
+  /** Polish wave P3 (W2, W12): this entry's OWN division's review mode (`registration_settings.approval`). With the entry's status and
+   *  fee it says what a not-yet-confirmed entry is WAITING ON (`entryWaitingOn`): the status page names it instead of a bare
+   *  "pending". A division with no settings row reviews nothing by hand, the same default the submit path uses. */
+  approval: "auto" | "manual";
+  /** Polish wave P5 (W12): the organiser approved this entry while its fee was still owed (`approved_at`, V513), so it waits on payment
+   *  alone - with `approval` it keeps the page from saying "awaiting approval" about an entry the organiser already said yes to. */
+  approved: boolean;
+  /** Polish wave P3 (W6): for a WAITLISTED entry, the fee a promotion would set (the division's own `fee_cents`, what
+   *  `promoteWaitlistedRow` writes); `null` for every other entry (their own `amount_cents` is the figure). A waitlisted entry's stored
+   *  fee is 0 by construction, so the Subtotal could only say "Free": this is what lets it say what is not yet due. */
+  fee_if_promoted_cents: number | null;
   /** V378/RS007: this entry's OWN pay-by deadline when it was promoted out
    *  of the waitlist — null for a never-promoted entry, whose deadline is
    *  the CART's own `GroupStatusView.expires_at` instead (see
@@ -93,6 +104,10 @@ export interface GroupEntryView {
    *  (see `resolveRefundPolicy`) — the status page's cancel-confirm copy
    *  reads this directly rather than re-deriving it. */
   refund_policy: ResolvedRefundPolicy;
+  /** Polish wave sign-off V6: everything sent back to the registrant for THIS entry (a withdrawal's or rejection's auto-refund, an
+   *  organiser's Refund, a late payment's refund) - the entry's `refunded_cents`, never the cart's. The status card names it, so a
+   *  rejected entry whose fee came back says so instead of reading only "Rejected". */
+  refunded_cents: number;
 }
 
 /** The whole cart, for the status page (design §4 step 6; RS007 builds the
@@ -230,8 +245,11 @@ async function buildGroupStatusView(
       | "allows_new_joiner"
       | "payment_method"
       | "pool_place_by_at"
+      | "approval"
+      | "fee_if_promoted_cents"
     > & {
       refunded_cents: number;
+      late_refunded_cents: number;
       promotion_expires_at: Date | null;
       /** V387/H1 — read to resolve THIS entry's refund policy, then
        *  destructured OUT below so it never reaches the public view: a
@@ -241,8 +259,8 @@ async function buildGroupStatusView(
     })[]
   >`
     select r.id, r.division_id, d.name as division_name, r.display_name, r.status,
-           r.amount_cents, r.refunded_cents, r.free_agent, r.join_code, r.promotion_expires_at,
-           r.payment_intent_id as entry_payment_intent_id,
+           r.amount_cents, r.refunded_cents, r.late_refunded_cents, r.free_agent, r.join_code, r.promotion_expires_at,
+           r.payment_intent_id as entry_payment_intent_id, r.approved_at is not null as approved,
            d.youth as division_youth, d.player_name_display as division_player_name_display,
            -- RS009: the team an organiser placed this solo sign-up on, or
            -- null while they are still in the pool. free_agent records how
@@ -277,9 +295,13 @@ async function buildGroupStatusView(
             payment_method: RegistrationSettingsRow["payment_method"];
             place_by_at: Date | null;
             closes_at: Date | null;
+            approval: RegistrationSettingsRow["approval"];
+            fee_cents: number;
+            free_agent_fee_cents: number | null;
           }[]
         >`
-          select division_id, refund_lock_at, entrant_kind, payment_method, place_by_at, closes_at
+          select division_id, refund_lock_at, entrant_kind, payment_method, place_by_at, closes_at, approval, fee_cents,
+                 free_agent_fee_cents
           from registration_settings
           where division_id in ${sql(divisionIds)}`
       : [];
@@ -317,6 +339,9 @@ async function buildGroupStatusView(
   // itself is missing — same convention promoteWaitlistedRow's own `method`
   // already uses.
   const paymentMethodByDivision = new Map(settingsRows.map((s) => [s.division_id, s.payment_method]));
+  // Polish wave P3: the DIVISION's review mode and fee, per entry, for the same reason as the method above: a cart can span divisions.
+  const approvalByDivision = new Map(settingsRows.map((s) => [s.division_id, s.approval]));
+  const priceByDivision = new Map(settingsRows.map((s) => [s.division_id, s]));
 
   // RS007: the resolved offline payment instructions — mirrors
   // buildCartMail's own "first entry that still carries a fee is
@@ -391,8 +416,9 @@ async function buildGroupStatusView(
     charges_enabled: comp?.charges_enabled ?? false,
     payment_instructions: paymentInstructions,
     org_timezone: refundTz,
-    entries: entries.map(({ refunded_cents, promotion_expires_at, entry_payment_intent_id, ...e }) => ({
+    entries: entries.map(({ refunded_cents, late_refunded_cents, promotion_expires_at, entry_payment_intent_id, ...e }) => ({
       ...e,
+      refunded_cents,
       promotion_expires_at: promotion_expires_at ? new Date(promotion_expires_at).toISOString() : null,
       allows_new_joiner: entrantKindByDivision.get(e.division_id) !== "pair",
       // Unknown (a division whose settings row is somehow missing) fails
@@ -411,6 +437,10 @@ async function buildGroupStatusView(
       // roster row.
       entrant_kind: e.free_agent ? "individual" : (entrantKindByDivision.get(e.division_id) ?? "individual"),
       payment_method: paymentMethodByDivision.get(e.division_id) ?? "offline",
+      approval: approvalByDivision.get(e.division_id) ?? "auto",
+      // A waitlisted entry only: a promotion sets the entry's fee to what IT costs on its division (`promoteWaitlistedRow`, a solo
+      // sign-up's own price - final review m3). Unknown (no settings row) reads as no fee to quote.
+      fee_if_promoted_cents: e.status === "waitlisted" ? entryPriceCents(priceByDivision.get(e.division_id), e.free_agent) : null,
       // RS012 stage 3b, widened by a later `/code-review high` finding:
       // awaitingTeamAssignment (view-model.ts) ALSO requires the entry not
       // be in a terminal status (withdrawn/rejected/expired) — added there
@@ -451,7 +481,8 @@ async function buildGroupStatusView(
         // is the honest answer when we cannot name this entry's charge.
         e.status === "paid" || e.status === "confirmed" ? entry_payment_intent_id : null,
         e.amount_cents,
-        refunded_cents,
+        // Polish wave P5 (carry b), the read twin of withdrawCore's: what was sent back of THIS payment, not the history.
+        ownPaymentRefundedCents({ refunded_cents, late_refunded_cents }),
       ),
     })),
   };

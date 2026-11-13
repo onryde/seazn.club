@@ -43,6 +43,8 @@ import { officialRoleLabel } from "../email-templates/official-assigned";
 import { PASS_KEYS, type PassKey } from "@/lib/currency";
 
 const LINK = "https://seazn.club/x?token=abc";
+/** A player payment page link (`/r/pay/<43-char token>`), what every chase mail links now. */
+const PAY_PAGE = "https://seazn.club/r/pay/" + "T".repeat(43);
 
 // Sponsor deals Task 23: the invoice links its numbered page (D14), never a Checkout session.
 const INVOICE_URL = "https://seazn.club/r/sponsor/invoice/tok_abc123";
@@ -74,6 +76,8 @@ const registrationArgs = {
   orgName: "Riverside Racquets",
   competitionName: "Spring Open 2026",
   displayName: "Alex",
+  divisionName: "Open Singles",
+  contactName: "Alex Contact",
   status: "pending",
   feeCents: 2500,
   currency: "gbp",
@@ -88,7 +92,8 @@ const registrationArgs = {
 const registrationCartArgs = {
   orgName: "Riverside Racquets",
   competitionName: "Spring Open 2026",
-  entries: [{ displayName: "Alex", status: "pending", feeCents: 2500 }],
+  contactName: "Alex Contact",
+  entries: [{ displayName: "Alex", status: "pending", feeCents: 2500, divisionName: "Singles", approval: "auto" as const }],
   totalCents: 2500,
   currency: "gbp",
   paymentInstructions: "Bank transfer\nRef: SPRING",
@@ -113,13 +118,14 @@ function makeBuilders(
     ["account-deletion", accountDeletionTemplate(dict), "accountDeletion.subject"],
     ["invite", inviteTemplate("Riverside Racquets", LINK, dict), "invite.subject"],
     ["registration", registrationTemplate(registrationCartArgs, dict), "registration.subject"],
-    ["payment-reminder", paymentReminderTemplate(registrationArgs, dict), "paymentReminder.subject"],
+    ["payment-reminder", paymentReminderTemplate({ ...registrationArgs, method: "offline", payPageUrl: PAY_PAGE }, dict), "paymentReminder.subject"],
     [
       "registration-promoted",
       registrationPromotedTemplate(
         {
           ...registrationArgs,
-          payUrl: LINK,
+          method: "card",
+          payPageUrl: PAY_PAGE,
           payDeadline: "2026-08-01T12:00:00Z",
           refCode: "SZ-ABCD-EFGH",
           refStatusUrl: "https://seazn.club/r/SZ-ABCD-EFGH",
@@ -135,6 +141,7 @@ function makeBuilders(
           orgName: "Riverside Racquets",
           competitionName: "Spring Open 2026",
           displayName: "Alex",
+          contactName: "Alex Contact",
           amountCents: 2500,
           currency: "gbp",
           refCode: "SZ-ABCD-EFGH",
@@ -372,34 +379,107 @@ describe("email builders compose from the html templates", () => {
     }
   });
 
-  it("card registration carries a Pay now button and the deadline", () => {
+  it("card registration carries a Pay now button to the given page, and the deadline; none without one", () => {
+    const statusPage = "https://seazn.club/live/o/c/register/status?rid=g1&token=t1";
     const out = registrationTemplate(
       {
         ...registrationCartArgs,
         paymentInstructions: null,
-        payUrl: "https://checkout.stripe.test/cs_1",
+        payPageUrl: statusPage,
         payDeadline: "2026-08-01T12:00:00Z",
       },
       emailsEn as Dict,
     );
-    expect(out.html).toContain("https://checkout.stripe.test/cs_1");
+    expect(out.html).toContain(statusPage.replace(/&/g, "&amp;"));
     expect(out.html).toContain("Pay now");
-    expect(out.text).toContain("https://checkout.stripe.test/cs_1");
+    expect(out.text).toContain(statusPage);
+    // The empty case: no page, no Pay button.
+    const none = registrationTemplate({ ...registrationCartArgs, paymentInstructions: null, payPageUrl: null }, emailsEn as Dict);
+    expect(none.html).not.toContain("Pay now");
   });
 
-  it("card payment reminder links the fresh checkout, offline keeps instructions", () => {
+  // Polish wave P3 (W4): the status page wrote a deadline "14 Nov 2026, 11:15 UTC" and the mail "Fri, 14 Nov, 11:15 UTC". All three mails that
+  // name a pay-by moment write the status page's spelling, in the org's zone and the recipient's locale (UTC / English when the producer
+  // names neither: the earlier behaviour).
+  describe("the pay-by deadline is the status page's spelling in all three mails that name one (polish wave P3, W4)", () => {
+    const AT = "2026-12-01T18:30:00Z";
+    const cardCart = { ...registrationCartArgs, paymentInstructions: null, payPageUrl: "https://seazn.club/s", payDeadline: AT };
+    const cardOne = { ...registrationArgs, paymentInstructions: null, method: "card" as const, payPageUrl: PAY_PAGE, payDeadline: AT };
+    const MAILS: [string, (zone: string | null, locale?: string) => { html: string; text: string }][] = [
+      ["registration", (z, l) => registrationTemplate({ ...cardCart, timeZone: z }, emailsEn as Dict, l)],
+      ["payment-reminder", (z, l) => paymentReminderTemplate({ ...cardOne, timeZone: z }, emailsEn as Dict, l)],
+      ["registration-promoted", (z, l) => registrationPromotedTemplate({ ...cardOne, timeZone: z }, emailsEn as Dict, l)],
+    ];
+
+    it("UTC and English when the producer names neither zone nor locale", () => {
+      let checked = 0;
+      for (const [name, build] of MAILS) {
+        const out = build(null);
+        expect(out.html, name).toContain("1 Dec 2026, 18:30 UTC");
+        expect(out.text, name).toContain("1 Dec 2026, 18:30 UTC");
+        expect(out.html, name).not.toContain("Tue, 1 Dec"); // the mail's own old spelling (weekday, no year)
+        checked += 1;
+      }
+      expect(checked).toBe(MAILS.length);
+      expect(checked).toBeGreaterThan(0);
+    });
+
+    it("the org's zone moves the time and names itself", () => {
+      for (const [name, build] of MAILS) {
+        const out = build("Asia/Kolkata");
+        expect(out.html, name).toContain("2 Dec 2026, 00:00 IST");
+        expect(out.text, name).toContain("2 Dec 2026, 00:00 IST");
+        expect(out.html, name).not.toContain("18:30 UTC");
+      }
+    });
+
+    it("the recipient's locale writes the date", () => {
+      for (const [name, build] of MAILS) {
+        const out = build("Europe/Amsterdam", "nl");
+        expect(out.html, name).toContain("1 dec 2026, 19:30 CET");
+        expect(out.html, name).not.toContain("1 Dec 2026");
+      }
+    });
+
+    it("no deadline: the undated wording, no stray date (the empty case)", () => {
+      const none = registrationTemplate({ ...cardCart, payDeadline: null }, emailsEn as Dict);
+      expect(none.html).not.toContain("18:30");
+      expect(none.html).toContain("Your spot is held — complete payment to confirm it.");
+    });
+  });
+
+  it("payment reminder: card has the Pay button to the payment page; offline keeps instructions and links the page's details", () => {
+    const en = emailsEn as Record<string, string>;
     const card = paymentReminderTemplate(
-      {
-        ...registrationArgs,
-        paymentInstructions: null,
-        checkoutUrl: "https://checkout.stripe.test/cs_2",
-        payDeadline: "2026-08-01T12:00:00Z",
-      },
+      { ...registrationArgs, paymentInstructions: null, method: "card", payPageUrl: PAY_PAGE, payDeadline: "2026-08-01T12:00:00Z" },
       emailsEn as Dict,
     );
-    expect(card.html).toContain("https://checkout.stripe.test/cs_2");
-    const offline = paymentReminderTemplate(registrationArgs, emailsEn as Dict);
+    expect(card.html).toContain(PAY_PAGE);
+    expect(card.text).toContain(PAY_PAGE);
+    expect(card.html).toContain(en["paymentReminder.payNow"]!.split("{")[0]!.trim());
+    expect(card.html).not.toContain(en["paymentReminder.viewDetails"]!);
+    const offline = paymentReminderTemplate({ ...registrationArgs, method: "offline", payPageUrl: PAY_PAGE }, emailsEn as Dict);
     expect(offline.html).toContain("Bank transfer");
+    expect(offline.html).toContain(en["paymentReminder.viewDetails"]!);
+    expect(offline.html).toContain(PAY_PAGE);
+    expect(offline.text).toContain(en["paymentReminder.textViewDetails"]!);
+    expect(offline.text).toContain(PAY_PAGE);
+    expect(offline.html).not.toContain(en["paymentReminder.payNow"]!.split("{")[0]!.trim());
+  });
+
+  it("promotion: card links the payment page as Pay; offline links its details; free links nothing", () => {
+    const en = emailsEn as Record<string, string>;
+    const card = registrationPromotedTemplate({ ...registrationArgs, method: "card", payPageUrl: PAY_PAGE }, emailsEn as Dict);
+    expect(card.text).toContain(PAY_PAGE);
+    expect(card.html).not.toContain(en["registrationPromoted.viewDetails"]!);
+    const offline = registrationPromotedTemplate({ ...registrationArgs, method: "offline", payPageUrl: PAY_PAGE }, emailsEn as Dict);
+    expect(offline.html).toContain("Bank transfer");
+    expect(offline.html).toContain(en["registrationPromoted.viewDetails"]!);
+    expect(offline.text).toContain(en["registrationPromoted.textViewDetails"]!);
+    expect(offline.text).toContain(PAY_PAGE);
+    const free = registrationPromotedTemplate({ ...registrationArgs, feeCents: 0, method: "offline", payPageUrl: null }, emailsEn as Dict);
+    expect(free.html).not.toContain("/r/pay/");
+    expect(free.text).not.toContain("/r/pay/");
   });
 
   it("dispute-lost email states the loss, the balance debit and who pays the fee", () => {
@@ -433,7 +513,7 @@ describe("email builders compose from the html templates", () => {
   it("refund email states the amount; dispute alert warns the organiser", () => {
     const refund = refundIssuedTemplate(
       {
-        orgName: "O", competitionName: "C", displayName: "D",
+        orgName: "O", competitionName: "C", displayName: "D", contactName: "Dee",
         amountCents: 1234, currency: "gbp", refCode: null,
       },
       emailsEn as Dict,
@@ -466,6 +546,27 @@ describe("email builders compose from the html templates", () => {
     expect(out.text).toContain("£250.00");
     expect(out.html).toContain("Court &amp; Co &lt;Ltd&gt;");
     expect(out.html).not.toContain("<Ltd>");
+  });
+
+  // Polish wave final fix m7: the registrant mails now write money in the recipient's language (each passes its locale); a mail
+  // that names none - the sponsor and dispute mails - keeps the en-GB spelling it always had. A dollar is where the two differ
+  // ("US$250.00" in en-GB, "$250.00" in en), so the case is USD; GBP is the control both spell the same.
+  it("a sponsor mail that names no language keeps the en-GB money spelling (US$ for a dollar, the control £ unchanged)", () => {
+    const en = emailsEn as Dict;
+    const receiptArgs = {
+      orgName: "Riverside Racquets",
+      packageName: "Gold — Spring Open",
+      sponsorName: "Court & Co",
+      amountCents: 25_000,
+      publicUrl: "https://seazn.club/live/riverside",
+    };
+    const cases: [string, string, string][] = [
+      ["invoice usd", sponsorInvoiceTemplate({ ...invoiceArgs, currency: "usd", pay: { by: "card" } }, en).text, "US$250.00"],
+      ["receipt usd", sponsorReceiptTemplate({ ...receiptArgs, currency: "usd" }, en).text, "US$250.00"],
+      ["invoice gbp", sponsorInvoiceTemplate({ ...invoiceArgs, currency: "gbp", pay: { by: "card" } }, en).text, "£250.00"],
+    ];
+    for (const [label, text, spelled] of cases) expect(text, label).toContain(spelled);
+    expect(cases.length, "anti-vacuity").toBe(3);
   });
 
   it("sponsor invoice by transfer: the bank details (escaped, every line) and the reference line; no card line", () => {
@@ -538,7 +639,7 @@ describe("email builders compose from the html templates", () => {
       {
         ...registrationCartArgs,
         competitionName: 'Spring <script>alert("x")</script>',
-        entries: [{ displayName: "A & B", status: "pending", feeCents: 2500 }],
+        entries: [{ displayName: "A & B", status: "pending", feeCents: 2500, divisionName: "Singles", approval: "auto" as const }],
       },
       emailsEn as Dict,
     );
@@ -574,7 +675,7 @@ describe("email builders compose from the html templates", () => {
 
   it("registration waitlist variant drops the fee panel", () => {
     const out = registrationTemplate(
-      { ...registrationCartArgs, entries: [{ displayName: "Alex", status: "waitlisted", feeCents: 0 }], totalCents: 0 },
+      { ...registrationCartArgs, entries: [{ displayName: "Alex", status: "waitlisted", feeCents: 0, divisionName: "Singles", approval: "auto" as const }], totalCents: 0 },
       emailsEn as Dict,
     );
     expect(out.html).toContain("on the waitlist");
@@ -600,8 +701,8 @@ describe("email builders compose from the html templates", () => {
       {
         ...registrationCartArgs,
         entries: [
-          { displayName: "Riverside A", status: "confirmed", feeCents: 0 },
-          { displayName: "Riverside B", status: "waitlisted", feeCents: 0 },
+          { displayName: "Riverside A", status: "confirmed", feeCents: 0, divisionName: "Singles", approval: "auto" as const },
+          { displayName: "Riverside B", status: "waitlisted", feeCents: 0, divisionName: "Singles", approval: "auto" as const },
         ],
         totalCents: 0,
       },
@@ -624,16 +725,18 @@ describe("email builders compose from the html templates", () => {
       {
         ...registrationCartArgs,
         entries: [
-          { displayName: "Team Paid", status: "pending", feeCents: 1500 },
-          { displayName: "Team Waitlisted", status: "waitlisted", feeCents: 0 },
+          { displayName: "Team Paid", status: "pending", feeCents: 1500, divisionName: "Singles", approval: "auto" as const },
+          { displayName: "Team Waitlisted", status: "waitlisted", feeCents: 0, divisionName: "Singles", approval: "auto" as const },
         ],
         totalCents: 1500,
       },
       emailsEn as Dict,
     );
-    expect(out.text).toContain("Team Paid — Pending (£15.00)");
-    expect(out.text).toContain("Team Waitlisted — Waitlisted");
-    expect(out.text).not.toContain("Team Waitlisted — Waitlisted (");
+    // Each line names its division and what the entry waits on (polish wave W7): a pending entry that owes a fee is "Awaiting
+    // payment", not a bare "Pending".
+    expect(out.text).toContain("Team Paid · Singles — Awaiting payment (£15.00)");
+    expect(out.text).toContain("Team Waitlisted · Singles — Waitlisted");
+    expect(out.text).not.toContain("Team Waitlisted · Singles — Waitlisted (");
   });
 
   // RS005 F1 finding 1: reusing this cart-shaped template for a RESEND (or a
@@ -643,7 +746,7 @@ describe("email builders compose from the html templates", () => {
   it("a settled (paid/confirmed) single entry gets no fee panel at all on resend/reconstruction", () => {
     for (const status of ["paid", "confirmed"] as const) {
       const out = registrationTemplate(
-        { ...registrationCartArgs, entries: [{ displayName: "Alex", status, feeCents: 2500 }] },
+        { ...registrationCartArgs, entries: [{ displayName: "Alex", status, feeCents: 2500, divisionName: "Singles", approval: "auto" as const }] },
         emailsEn as Dict,
       );
       expect(out.html, `status=${status}`).not.toContain("Entry fee");
@@ -659,7 +762,7 @@ describe("email builders compose from the html templates", () => {
   it("a withdrawn/rejected/expired single entry also gets no fee panel", () => {
     for (const status of ["withdrawn", "rejected", "expired"] as const) {
       const out = registrationTemplate(
-        { ...registrationCartArgs, entries: [{ displayName: "Alex", status, feeCents: 2500 }] },
+        { ...registrationCartArgs, entries: [{ displayName: "Alex", status, feeCents: 2500, divisionName: "Singles", approval: "auto" as const }] },
         emailsEn as Dict,
       );
       expect(out.html, `status=${status}`).not.toContain("Entry fee");
@@ -675,8 +778,8 @@ describe("email builders compose from the html templates", () => {
       {
         ...registrationCartArgs,
         entries: [
-          { displayName: "Already Paid", status: "confirmed", feeCents: 2500 },
-          { displayName: "Still Owing", status: "pending", feeCents: 1500 },
+          { displayName: "Already Paid", status: "confirmed", feeCents: 2500, divisionName: "Singles", approval: "auto" as const },
+          { displayName: "Still Owing", status: "pending", feeCents: 1500, divisionName: "Singles", approval: "auto" as const },
         ],
         // A caller might still pass the whole-cart historical subtotal here
         // (usecases/registrations/ folder's own `totalCents` field) — the template must
@@ -691,7 +794,7 @@ describe("email builders compose from the html templates", () => {
 
   it("payment reminder without instructions points at the organiser", () => {
     const out = paymentReminderTemplate(
-      { ...registrationArgs, paymentInstructions: null },
+      { ...registrationArgs, paymentInstructions: null, method: "offline", payPageUrl: PAY_PAGE },
       emailsEn as Dict,
     );
     expect(out.html).toContain("Please contact Riverside Racquets to arrange payment.");

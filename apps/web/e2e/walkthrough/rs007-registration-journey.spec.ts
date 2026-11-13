@@ -116,13 +116,18 @@ test("a captain enters a team, and a team-mate claims their spot from the link t
 
     // --------------------------------------------------- step 3: DETAILS
     // The captain plus two team-mates entered on their behalf.
+    // Since polish wave V1 the playing captain's roster OPENS with their own
+    // row (named, and picked as "which player are you"), so a name already on
+    // the roster is not added again — that would enter the captain twice.
     const roster = [`Journey Captain ${TAG}`, ...MATES];
+    // Each row carries TWO text inputs — "Your name" AND "Squad #" — so
+    // taking "the last text input" puts the name in the squad number, the
+    // roster stays nameless, and Next silently refuses to advance.
+    const boxes = anon.getByLabel(/Player \d+ — Your name/);
     for (const name of roster) {
+      const onRoster = await boxes.evaluateAll((els) => els.map((el) => (el as HTMLInputElement).value.trim()));
+      if (onRoster.includes(name)) continue;
       await anon.getByRole("button", { name: /\+ add player/i }).click();
-      // Each row carries TWO text inputs — "Your name" AND "Squad #" — so
-      // taking "the last text input" puts the name in the squad number, the
-      // roster stays nameless, and Next silently refuses to advance.
-      const boxes = anon.getByLabel(/Player \d+ — Your name/);
       await boxes.nth((await boxes.count()) - 1).fill(name);
     }
     await anon.locator('select[id^="reg-self-index"]').first().selectOption({ label: roster[0]! });
@@ -153,16 +158,15 @@ test("a captain enters a team, and a team-mate claims their spot from the link t
 
     // ------------------------------------------- the CLAIM link, FOLLOWED
     // The whole point of this spec. Read the href the page emits, assert it
-    // is a real join URL, then CLICK it — never build it.
-    const claim = anon.locator('a[href*="/register/join"]').first();
+    // is a real join URL, then FOLLOW it — never build it.
+    // Polish wave K: the status page prints no URL; each link rides its Copy button as data-href. Read exactly as emitted, never built.
+    const claim = anon.locator('[data-testid="reg-invite-copy"][data-href*="/register/join"]').first();
     await expect(claim, "the status page emits no claim link at all").toBeVisible();
-    const href = await claim.getAttribute("href");
+    const href = await claim.getAttribute("data-href");
     expect(href, "the claim link carries no join_code").toContain("join_code=");
 
-    const [claimResponse] = await Promise.all([
-      anon.waitForResponse((r) => r.url().includes("/register/join") && r.request().isNavigationRequest()),
-      claim.click(),
-    ]);
+    const claimResponse = await anon.goto(href!, { waitUntil: "load" });
+    if (!claimResponse) throw new Error("following the invite link produced no navigation response");
     // The defect this file exists for: the link rendered, and resolved to a
     // 404. Assert the STATUS, not the prose — a branded 404 still 404s.
     expect(
@@ -220,9 +224,10 @@ test("a captain enters a team, and a team-mate claims their spot from the link t
       // route to the state this segment DOES test: claim-accept, the /me
       // opt-out, and its effect on a re-rendered status page.
       await anon.goto(statusUrl, { waitUntil: "load" });
-      const secondClaim = anon.locator('a[href*="/register/join"]').first();
+      // Polish wave K: the status page prints no URL; each link rides its Copy button as data-href. Read exactly as emitted, never built.
+      const secondClaim = anon.locator('[data-testid="reg-invite-copy"][data-href*="/register/join"]').first();
       await expect(secondClaim, "the status page emits no second claim link for Mate Two").toBeVisible();
-      const secondHref = await secondClaim.getAttribute("href");
+      const secondHref = await secondClaim.getAttribute("data-href");
       const secondUrl = new URL(secondHref!, anon.url());
       const joinCode = secondUrl.searchParams.get("join_code")!;
       const player2Id = secondUrl.searchParams.get("player_id")!;
@@ -286,12 +291,15 @@ test("a captain enters a team, and a team-mate claims their spot from the link t
         anon.getByText(MATES[1]!),
         "Mate Two's raw full name is still visible after their own opt-out",
       ).not.toBeVisible();
+      // The name also appears in the captain's "Invite your teammates" block
+      // (a joined row); this beat is about the ROSTER, so read outside it.
+      const outsideInvite = 'xpath=self::*[not(ancestor::*[@data-testid="reg-invite"])]';
       await expect(
-        anon.getByText(mate2Masked),
+        anon.getByText(mate2Masked).locator(outsideInvite),
         `expected Mate Two's masked name ("${mate2Masked}") to be visible`,
       ).toBeVisible();
       await expect(
-        anon.getByText(MATES[0]!),
+        anon.getByText(MATES[0]!).locator(outsideInvite),
         "Mate One (never opted out) must still render in full",
       ).toBeVisible();
       await screenshotAtWidths(anon, testInfo, "12-standings-mixed-consent");

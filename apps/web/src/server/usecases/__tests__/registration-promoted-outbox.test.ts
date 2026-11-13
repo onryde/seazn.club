@@ -132,6 +132,9 @@ const rowsTo = (email: string) =>
       from email_outbox
      where kind = ${KIND} and lower(recipient) = lower(${email})
      order by created_at, id`;
+/** The payment-page tokens recorded for an entry (one per queued mail that carries a Pay link). */
+const payTokensOf = async (registrationId: string): Promise<number> =>
+  (await sql<{ n: number }[]>`select count(*)::int as n from registration_pay_tokens where registration_id = ${registrationId}`)[0]!.n;
 const rowsOfOrg = (orgId: string) => sql<{ id: string }[]>`select id from email_outbox where kind = ${KIND} and org_id = ${orgId}`;
 
 type Sent = { to: string; subject: string; idempotencyKey: string };
@@ -240,17 +243,21 @@ describe.skipIf(!HAS_DB)("the waitlist promotion email rides the outbox (DB)", (
     expect(await rowsOfOrg(d2.orgId)).toHaveLength(1);
   });
 
-  it("a replayed notifyPromoted for the same promotion queues one row", async () => {
-    const d = await fullDivision("offline");
+  it("a replayed notifyPromoted for the same promotion queues one row and records ONE pay token (fee-bearing division)", async () => {
+    const d = await fullDivision("offline"); // fee 1500: the promotion mail carries a pay link, so a token is at stake
     const q = await seedQueue(d);
     const promoted = await sql.begin((tx) => promoteWaitlistedRow(tx, q.waiting.registration.id, q.waiting.registration.group_id, d.settings));
     const row = await loadWithGroup(promoted!.id);
     const ctx = await divisionCtx(sql, d.division.id);
 
+    expect(row.amount_cents, "premise: the entry owes a fee, so each notify mints a link").toBeGreaterThan(0);
     await notifyPromoted(row, ctx, d.settings, ORIGIN, { firstAttempt: "worker" });
+    expect(await payTokensOf(row.id), "the first notify records its token").toBe(1);
     await notifyPromoted(row, ctx, d.settings, ORIGIN, { firstAttempt: "worker" });
 
     expect(await rowsTo(q.waitEmail)).toHaveLength(1);
+    // The replay queued nothing, so it records nothing: a token only for a mail that was queued (waitlist.ts `queued !== null`).
+    expect(await payTokensOf(row.id), "the replay records no second token").toBe(1);
   });
 
   it("the sweep's promotion is left to the worker", async () => {
@@ -284,18 +291,18 @@ describe.skipIf(!HAS_DB)("the waitlist promotion email rides the outbox (DB)", (
     const row = await loadWithGroup(promoted!.id);
     const ctx = await divisionCtx(sql, d.division.id);
     const spy = vi.spyOn(log, "error").mockImplementation(() => undefined as never);
-    stripeMock.checkoutCreate.mockClear();
 
     await notifyPromoted({ ...row, promoted_at: null }, ctx, d.settings, ORIGIN, { firstAttempt: "worker" });
 
     expect(await rowsTo(q.waitEmail)).toHaveLength(0);
-    expect(stripeMock.checkoutCreate, "refused before the pay link is minted").not.toHaveBeenCalled();
+    expect(await payTokensOf(row.id), "refused before any pay token is recorded").toBe(0);
     const logged = spy.mock.calls.map((c) => c[0] as { err?: Error; registrationId?: string });
     expect(logged.some((a) => a.registrationId === row.id && a.err instanceof Error && a.err.message === GUARD), "the refusal is named in the log").toBe(true);
 
     // The positive pair: the same row with its promoted_at is queued (the zero above is the guard).
     await notifyPromoted(row, ctx, d.settings, ORIGIN, { firstAttempt: "worker" });
     expect(await rowsTo(q.waitEmail)).toHaveLength(1);
+    expect(await payTokensOf(row.id), "the positive pair records its token").toBe(1);
   });
 
   it("after a refund-bearing withdrawal the promotion still queues", async () => {

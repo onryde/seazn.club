@@ -11,6 +11,10 @@ import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => "en" }));
+// Polish wave P6: the page mounts the "Have a join code?" field (inside the stepper's first step since wave H, because this comp has an
+// open team division), which reads the App Router for its one navigation. No router is mounted under a bare renderToStaticMarkup, so
+// it is replaced by an inert one (the field's own behaviour is join-code-entry.test.tsx).
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: () => {} }) }));
 vi.mock("@/server/usecases/registrations", () => ({
   publicRegistrationInfo: async () => ({
     competition: {
@@ -92,7 +96,21 @@ describe("register page (live — open divisions)", () => {
   it("renders the stepper shell, not the closed message", async () => {
     const html = await render();
     expect(html).not.toContain("Registration is not open for this competition.");
-    expect(html).not.toContain("<form");
+    // The old registration submission form stays gone (RS001). The one <form> on the open page is the "Have a join code?" field
+    // (polish wave P6), so the guard counts forms instead of banning the tag: a second one would be a submission form coming back.
+    expect(html).not.toContain('data-testid="register-form"');
+    expect(html.match(/<form/g) ?? []).toHaveLength(1);
+    expect(html).toContain('data-testid="register-join-code"');
+  });
+
+  it("offers the join-code field above the stepper, so a teammate with a code sees it before the first step", async () => {
+    const html = await render();
+    const field = html.indexOf('data-testid="register-join-code"');
+    const stepper = html.indexOf('id="reg-who-name"');
+    expect(field).toBeGreaterThan(-1);
+    expect(stepper).toBeGreaterThan(-1);
+    expect(field).toBeLessThan(stepper);
+    expect(html).toContain("Have a join code?");
   });
 
   it("shows the WHO step first — name/email fields, no division cards yet", async () => {

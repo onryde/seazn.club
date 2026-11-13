@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   entryDetailsComplete,
   guardianRequired,
+  mixedPaymentConflict,
   validateConsent,
   validateContact,
   validateDetails,
@@ -377,9 +378,18 @@ describe("validateEntries", () => {
 });
 
 describe("entryDetailsComplete", () => {
-  it("a free-agent entry is always complete — 'nothing extra' (design §4 step 3)", () => {
-    const freeAgent = entry({ id: "e1", division_id: "d1", entrant_kind: "team", free_agent: true });
-    expect(entryDetailsComplete(freeAgent, BASE_DIVISION)).toBe(true);
+  // Polish wave P5 (H-1): a solo sign-up's Details step collects its player (Assign places that row), so its one row must be named.
+  // A solo with no row at all (a cart saved before this) stays complete: the server makes the row from the contact.
+  it("a free-agent entry is complete when its one row is named, or when it has no row (an older cart); a blank row is not", () => {
+    const solo = (players: CartEntry["players"]) => entry({ id: "e1", division_id: "d1", entrant_kind: "team", free_agent: true, players });
+    const table: [CartEntry["players"], boolean][] = [
+      [[], true],
+      [[{ ...EMPTY_ROSTER_PLAYER }], false],
+      [[{ ...EMPTY_ROSTER_PLAYER, full_name: "   " }], false],
+      [[{ ...EMPTY_ROSTER_PLAYER, full_name: "Priya Raman" }], true],
+    ];
+    for (const [players, want] of table) expect(entryDetailsComplete(solo(players), BASE_DIVISION), JSON.stringify(players)).toBe(want);
+    expect(table.length, "four solo shapes checked").toBe(4);
   });
 
   describe("individual — exactly 1 named row required", () => {
@@ -558,6 +568,38 @@ describe("validateDetails — step 3's Next gate", () => {
       entries: [entry({ id: "e1", division_id: "d-mixed", entrant_kind: "team", free_agent: true })],
     };
     expect(validateDetails(cart, [MIXED_DIVISION], EMPTY_CONTACT, SEASON_START_YEAR).valid).toBe(true);
+  });
+
+  // H-1: the solo's ONE row is held to the person's own eligibility (the server's rule), never to a team's composition.
+  it("a solo's named row in a mixed division passes (one player is never a mixed roster); its own age band still blocks", () => {
+    const solo = (division_id: string, dob: string | null) =>
+      entry({
+        id: "e1",
+        division_id,
+        entrant_kind: "team",
+        free_agent: true,
+        players: [{ ...EMPTY_ROSTER_PLAYER, full_name: "Mia Solo", gender: "f", dob }],
+      });
+    expect(validateDetails({ ...EMPTY_CART, entries: [solo("d-mixed", null)] }, [MIXED_DIVISION], EMPTY_CONTACT, SEASON_START_YEAR).valid).toBe(true);
+    const under12: DivisionLike = { ...BASE_DIVISION, division_id: "d-u12", entrant_kind: "team", age_max: 11, requires_dob: true };
+    expect(validateDetails({ ...EMPTY_CART, entries: [solo("d-u12", "1990-01-01")] }, [under12], EMPTY_CONTACT, SEASON_START_YEAR).valid).toBe(false);
+    expect(
+      validateDetails({ ...EMPTY_CART, entries: [{ ...solo("d-mixed", null), players: [{ ...EMPTY_ROSTER_PLAYER }] }] }, [MIXED_DIVISION], EMPTY_CONTACT, SEASON_START_YEAR),
+    ).toEqual({ valid: false, error: "incomplete" });
+  });
+
+  // Final review m4 (the server's rule, registration-submit.ts): a solo's row falls back to the contact's dob/gender only while it IS
+  // the contact (their name, or no name yet). A solo entered for someone else answers for itself - the server refuses it otherwise,
+  // so the form must not let it through on the contact's answers.
+  it("a solo row named for SOMEONE ELSE does not borrow the contact's gender; the contact's own solo row does (m4)", () => {
+    const womens: DivisionLike = { ...BASE_DIVISION, division_id: "d-w", entrant_kind: "team", category: "womens", allow_free_agents: true };
+    const cartOf = (name: string): CartState => ({
+      ...EMPTY_CART,
+      entries: [entry({ id: "e1", division_id: "d-w", entrant_kind: "team", free_agent: true, players: [{ ...EMPTY_ROSTER_PLAYER, full_name: name }] })],
+    });
+    const contact: ContactState = { ...EMPTY_CONTACT, name: "Sue Secretary", gender: "f" };
+    expect(validateDetails(cartOf("Sam Player"), [womens], contact, SEASON_START_YEAR).valid, "someone else: their own gender is owed").toBe(false);
+    expect(validateDetails(cartOf(" sue  SECRETARY"), [womens], contact, SEASON_START_YEAR).valid, "the contact's own row: the fallback holds").toBe(true);
   });
 
   it("uses the CONTACT's dob/gender as a fallback for the self row — does not false-positive block on a blank self row (design: 'collected once')", () => {
@@ -786,6 +828,24 @@ describe("guardianRequired", () => {
     };
     expect(guardianRequired(cart, { dob: "2015-01-01" }, NOW)).toBe(false);
   });
+
+  // H-1: a solo sign-up's row is the registrant's own (the server treats it as their self row), so a minor there needs a guardian -
+  // from the row's own dob, falling back to the contact's, exactly as a self-linked row.
+  it("a solo sign-up counts as registering yourself: its row's dob (else the contact's) decides", () => {
+    const solo = (dob: string | null) => ({
+      entries: [entry({ id: "e1", division_id: "d1", entrant_kind: "team", free_agent: true, players: [{ ...EMPTY_ROSTER_PLAYER, full_name: "Kid", dob }] })],
+    });
+    const table: [string | null, string | null, boolean][] = [
+      ["2015-01-01", "1990-01-01", true],
+      ["1990-01-01", "2015-01-01", false],
+      [null, "2015-01-01", true],
+      [null, null, false],
+    ];
+    for (const [rowDob, contactDob, want] of table) {
+      expect(guardianRequired(solo(rowDob), { dob: contactDob }, NOW), `${rowDob} / ${contactDob}`).toBe(want);
+    }
+    expect(table.length, "four solo dob shapes checked").toBe(4);
+  });
 });
 
 describe("validateConsent", () => {
@@ -842,5 +902,86 @@ describe("validateConsent", () => {
   it("a minor NOT self-registering (nobody linked) never needs a guardian", () => {
     const result = validateConsent(unlinkedCart, minorSelfContact, { ...EMPTY_CONSENT, privacy_consent: true }, NOW);
     expect(result.valid).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Polish wave P4 (walkthrough W9) — a cart that mixes card and pay-the-organiser divisions can never be collected in one session, and the
+// server refuses it. The form used to let the registrant add both, fill four steps, and refuse only at submit. These are the rules the
+// ENTRIES step now applies as the second division is added; they mirror registration-submit.ts's assertUniformPaymentMethod: only a
+// division that actually charges (fee_cents > 0) counts, and a waitlisted one still does (the structural check runs before waitlisting).
+// ---------------------------------------------------------------------------
+
+describe("mixedPaymentConflict / validateEntries — a mixed card + offline cart is refused on the ENTRIES step (W9)", () => {
+  const SEASON_START_YEAR = 2026;
+  const CARD: DivisionLike = { ...BASE_DIVISION, division_id: "d-card", name: "Open Singles", fee_cents: 1500, payment_method: "stripe" };
+  const OFFLINE: DivisionLike = { ...BASE_DIVISION, division_id: "d-off", name: "Social Singles", fee_cents: 800, payment_method: "offline" };
+  const cartFor = (...divisionIds: string[]): CartState => ({
+    entries: divisionIds.map((id, i) => entry({ id: `e${i}`, division_id: id, entrant_kind: "individual" })),
+  });
+
+  it("the walkthrough's cart (Open Singles by card, Social Singles to the organiser) names BOTH divisions", () => {
+    expect(mixedPaymentConflict(cartFor("d-card", "d-off"), [CARD, OFFLINE])).toEqual({
+      cardDivision: "Open Singles",
+      offlineDivision: "Social Singles",
+    });
+    // Cart order does not matter: the card division is still the card one.
+    expect(mixedPaymentConflict(cartFor("d-off", "d-card"), [CARD, OFFLINE])).toEqual({
+      cardDivision: "Open Singles",
+      offlineDivision: "Social Singles",
+    });
+  });
+
+  it("blocks Next with a per-cart cause (error stays null, like the stale-closed and team-name causes) and clears once one side is removed", () => {
+    const mixed = validateEntries(cartFor("d-card", "d-off"), [CARD, OFFLINE], EMPTY_CONTACT, SEASON_START_YEAR);
+    expect(mixed.valid).toBe(false);
+    expect(mixed.error).toBeNull();
+    expect(mixed.mixedPayment).toEqual({ cardDivision: "Open Singles", offlineDivision: "Social Singles" });
+    const onlyCard = validateEntries(cartFor("d-card"), [CARD, OFFLINE], EMPTY_CONTACT, SEASON_START_YEAR);
+    expect(onlyCard.valid).toBe(true);
+    expect(onlyCard.mixedPayment).toBeNull();
+  });
+
+  it("the empty case: an empty cart and a one-entry cart are never a conflict", () => {
+    expect(mixedPaymentConflict(EMPTY_CART, [CARD, OFFLINE])).toBeNull();
+    expect(mixedPaymentConflict(cartFor("d-card"), [CARD, OFFLINE])).toBeNull();
+    expect(mixedPaymentConflict(cartFor("d-card", "d-card"), [CARD, OFFLINE]), "the same division twice (Add another)").toBeNull();
+  });
+
+  it("a division the server never collects for (fee 0) imposes no constraint, whatever its method", () => {
+    const freeOffline: DivisionLike = { ...OFFLINE, division_id: "d-free", fee_cents: 0 };
+    const freeCard: DivisionLike = { ...CARD, division_id: "d-free-card", fee_cents: 0 };
+    expect(mixedPaymentConflict(cartFor("d-card", "d-free"), [CARD, freeOffline])).toBeNull();
+    expect(mixedPaymentConflict(cartFor("d-off", "d-free-card"), [OFFLINE, freeCard])).toBeNull();
+  });
+
+  it("a waitlisted division still counts: the server's structural check runs before waitlisting", () => {
+    const fullOffline: DivisionLike = { ...OFFLINE, closed_reason: "full" };
+    expect(mixedPaymentConflict(cartFor("d-card", "d-off"), [CARD, fullOffline])).not.toBeNull();
+  });
+
+  it("an entry whose division is unknown, or a division with no method/fee given, is never a conflict (degrade, do not throw)", () => {
+    expect(mixedPaymentConflict(cartFor("d-card", "ghost"), [CARD])).toBeNull();
+    expect(mixedPaymentConflict(cartFor("a", "b"), [{ division_id: "a" }, { division_id: "b" }])).toBeNull();
+  });
+
+  it("the whole table: every method pair x fee pair conflicts exactly when both charge and the methods differ (counted)", () => {
+    const methods = ["stripe", "offline"] as const;
+    const fees = [0, 1000] as const;
+    let checked = 0;
+    let conflicts = 0;
+    for (const m1 of methods)
+      for (const m2 of methods)
+        for (const f1 of fees)
+          for (const f2 of fees) {
+            const a: DivisionLike = { ...BASE_DIVISION, division_id: "a", name: "A", fee_cents: f1, payment_method: m1 };
+            const b: DivisionLike = { ...BASE_DIVISION, division_id: "b", name: "B", fee_cents: f2, payment_method: m2 };
+            const want = f1 > 0 && f2 > 0 && m1 !== m2;
+            expect(mixedPaymentConflict(cartFor("a", "b"), [a, b]) !== null, `${m1}/${f1} + ${m2}/${f2}`).toBe(want);
+            checked += 1;
+            if (want) conflicts += 1;
+          }
+    expect(checked).toBe(16);
+    expect(conflicts, "premise: the table has conflicting rows (two: stripe+offline both ways round)").toBe(2);
   });
 });

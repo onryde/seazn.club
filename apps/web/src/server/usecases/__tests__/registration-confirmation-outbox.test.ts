@@ -213,7 +213,7 @@ const rowsOf = (groupId: string) =>
      order by created_at, id`;
 
 /** Every outbox row addressed to this address, of any kind (the proof that nothing was queued at all). */
-const rowsTo = (email: string) => sql<{ id: string }[]>`select id from email_outbox where lower(recipient) = lower(${email})`;
+const rowsTo = (email: string) => sql<{ id: string; kind: string }[]>`select id, kind from email_outbox where lower(recipient) = lower(${email}) order by created_at, id`;
 
 type Sent = { to: string; subject: string; html: string; text: string; idempotencyKey: string };
 const allCalls = (): Sent[] => deliverMock.mock.calls.map((c) => c[0] as Sent);
@@ -362,7 +362,7 @@ describe.skipIf(!HAS_DB)("the submit queues the confirmation on the outbox (DB)"
 
     // The same cart is notified again (a re-fire of the producer) while the provider is back.
     deliverMock.mockReset().mockImplementation(ok);
-    await notifySubmitted(groupId, ORIGIN, token, null);
+    await notifySubmitted(groupId, ORIGIN, token);
     const rows = await settled(groupId, 2);
     expect(rows.map((r) => r.status), "the older row was replaced, the newer one sent").toEqual(["replaced", "sent"]);
 
@@ -538,18 +538,18 @@ describe.skipIf(!HAS_DB)("the organiser's resend rides the outbox (DB)", () => {
     const w = await world();
     // A cart that does not exist.
     const missing = randomUUID();
-    await expect(notifySubmitted(missing, ORIGIN, "tok_x", null)).resolves.toBeUndefined();
+    await expect(notifySubmitted(missing, ORIGIN, "tok_x")).resolves.toBeUndefined();
     expect(await rowsOf(missing)).toHaveLength(0);
     // A cart with no entries.
     const [{ id: empty }] = await sql<{ id: string }[]>`
       insert into registration_groups (competition_id, contact_name, contact_email, access_token_hash, amount_cents, currency)
       values (${w.competition.id}, 'Ghost', ${address("ghost")}, ${randomUUID()}, 0, 'gbp') returning id`;
-    await expect(notifySubmitted(empty, ORIGIN, "tok_x", null)).resolves.toBeUndefined();
+    await expect(notifySubmitted(empty, ORIGIN, "tok_x")).resolves.toBeUndefined();
     expect(await rowsOf(empty)).toHaveLength(0);
     expect(enqueueGate.calls, "the producer never reached the writer").toBe(0);
     // The positive pair: a real cart under the same call is queued (the probe above can see a row).
     const { registration } = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("real") });
-    await notifySubmitted(registration.group_id, ORIGIN, "tok_x", null);
+    await notifySubmitted(registration.group_id, ORIGIN, "tok_x");
     expect(await settled(registration.group_id, 1)).toHaveLength(1);
   });
 
@@ -558,13 +558,18 @@ describe.skipIf(!HAS_DB)("the organiser's resend rides the outbox (DB)", () => {
     const { registration } = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("gone") });
     const groupId = registration.group_id;
     await withdrawRegistrationOrganiser(w.owner, registration.id);
+    // Polish wave P2 (W11): the organiser's withdrawal, which is this test's SETUP, queues its own "your entry was withdrawn" mail to the
+    // contact and delivers it. The baseline is taken after it, so the claim stays exactly what it was: the REFUSED resend adds nothing.
+    const baseline = await rowsTo(registration.contact_email);
+    expect(baseline.map((r) => r.kind), "premise: the withdrawal's own mail is the only row, and the resend has not run").toEqual(["registration_withdrawn"]);
+    const setupKey = idempotencyKey(baseline[0]!.id);
 
     const err = await resendRegistrationConfirmation(w.owner, registration.id, ORIGIN).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(HttpError);
     expect((err as HttpError).status).toBe(422);
     expect(await rowsOf(groupId), "nothing was queued").toHaveLength(0);
-    expect(await rowsTo(registration.contact_email)).toHaveLength(0);
-    expect(callsToAddress(registration.contact_email)).toHaveLength(0);
+    expect(await rowsTo(registration.contact_email), "no row of any kind was added to the address").toEqual(baseline);
+    expect(callsToAddress(registration.contact_email).filter((c) => c.idempotencyKey !== setupKey), "nothing else was sent").toHaveLength(0);
 
     // The positive pair: a live entry of the same org is resent and queued (so the zero above is the refusal).
     const live = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("live") });

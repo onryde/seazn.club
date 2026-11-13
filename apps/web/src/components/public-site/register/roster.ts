@@ -123,9 +123,18 @@ export function toGroupPlayers(
  * the registrant had already answered.
  */
 export function resolveSelfPlayerIndex(
-  entry: Pick<CartEntry, "self_player_index" | "entrant_kind" | "players">,
+  entry: Pick<CartEntry, "self_player_index" | "entrant_kind" | "players"> & { free_agent?: boolean },
 ): number | null {
+  // Polish wave P5 (H-1): a solo sign-up's one row is the registrant's own - the server's rule (registration-submit.ts).
+  if (entry.free_agent) return entry.players.length > 0 ? 0 : null;
   return entry.self_player_index ?? (entry.entrant_kind === "individual" && entry.players.length === 1 ? 0 : null);
+}
+
+/** A solo sign-up's row is the contact's own while it carries their name (trimmed, spacing and case aside) or no name yet - the form
+ *  seeds it from the contact. Mirrors `sameName` in registration-submit.ts. */
+export function soloRowIsContact(rowName: string, contactName: string): boolean {
+  const norm = (v: string) => v.trim().replace(/\s+/g, " ").toLocaleLowerCase();
+  return norm(rowName) === "" || norm(rowName) === norm(contactName);
 }
 
 /**
@@ -151,12 +160,15 @@ export function resolveSelfPlayerIndex(
  * convention.
  */
 export function effectiveSelfPlayers(
-  entry: Pick<CartEntry, "players" | "self_player_index" | "entrant_kind">,
-  contact: Pick<ContactState, "dob" | "gender">,
+  entry: Pick<CartEntry, "players" | "self_player_index" | "entrant_kind"> & { free_agent?: boolean },
+  contact: Pick<ContactState, "dob" | "gender"> & { name?: string },
 ): readonly RosterPlayerState[] {
   const { players } = entry;
   const selfIndex = resolveSelfPlayerIndex(entry);
   if (selfIndex === null || !players[selfIndex]) return players;
+  // Final review m4, the server's rule (registration-submit.ts): a solo sign-up's row takes the contact's dob/gender only while it IS the
+  // contact - their own name, or not named yet. A solo entered for someone else is that person's own row.
+  if (entry.free_agent && contact.name !== undefined && !soloRowIsContact(players[selfIndex]!.full_name, contact.name)) return players;
   return players.map((p, i) => (i === selfIndex ? { ...p, dob: p.dob ?? contact.dob, gender: p.gender ?? contact.gender } : p));
 }
 
@@ -187,10 +199,11 @@ export function effectiveSelfPlayers(
  * Returns null only when the entry isn't self-linked at all.
  */
 export function effectiveSelfDob(
-  entry: Pick<CartEntry, "registering_self" | "self_player_index" | "entrant_kind" | "players">,
+  entry: Pick<CartEntry, "registering_self" | "self_player_index" | "entrant_kind" | "players"> & { free_agent?: boolean },
   contact: Pick<ContactState, "dob">,
 ): string | null {
-  if (!entry.registering_self) return null;
+  // A solo sign-up is the registrant's own entry (P5 H-1), self-linked or not.
+  if (!entry.registering_self && !entry.free_agent) return null;
   const idx = resolveSelfPlayerIndex(entry);
   const row = idx !== null ? entry.players[idx] : undefined;
   return (row ? row.dob : null) ?? contact.dob;

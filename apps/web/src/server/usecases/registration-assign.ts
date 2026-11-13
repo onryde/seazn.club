@@ -256,7 +256,7 @@ export async function assignSoloSignUp(
     // returned nothing, and `inserted.id` was then dereferenced three times
     // on undefined. One read, one guard, no second lookup that can disagree
     // with the first.
-    const [player] = await tx<
+    const [row] = await tx<
       {
         id: string; full_name: string; email: string | null; dob: string | null;
         gender: string | null; user_id: string | null;
@@ -266,9 +266,19 @@ export async function assignSoloSignUp(
       select id, full_name, email, dob, gender, user_id, consent_status, consent_at
       from registration_players where registration_id = ${sourceId}
       order by created_at, id limit 1`;
-    if (!player) {
-      throw new HttpError(422, "This entry has no player details to place on a team");
-    }
+    // Polish wave P5 (H-1): a solo sign-up made before the form collected its player (none of those has a row) is placed as its
+    // registrant contact - the name the panel shows for it (submit's `entryDisplayName`), the person who filled the form and gave
+    // its consent. No dob or gender (never asked) and no account (an account is tied only to a row with a known dob,
+    // `deriveLinkUserId`). `materialise` / `joinExistingEntrant` resolve the person from this row as from any other.
+    const player = row ?? {
+      full_name: source.contact_name,
+      email: source.contact_email,
+      dob: null,
+      gender: null,
+      user_id: null,
+      consent_status: "granted",
+      consent_at: source.privacy_consent_at ?? source.created_at,
+    };
 
     const capReached = state.cap !== null && state.count + 1 >= state.cap;
     const [division] = await tx<{ category: string | null; competition_id: string; name: string }[]>`

@@ -55,6 +55,13 @@ const render = async (searchParams: Record<string, string>): Promise<string> =>
 // Mirrors view-model.test.ts's own FUTURE/PAST convention.
 const FUTURE = "2099-01-01T00:00:00.000Z";
 
+/** The invite block's words, read from the English dictionary (never typed here), for the page's own locale. */
+const invite = (key: string, vars: Record<string, string> = {}): string =>
+  Object.entries(vars).reduce(
+    (text, [k, v]) => text.replaceAll(`{${k}}`, v),
+    (uiEn as Record<string, string>)[`register.status.invite.${key}`]!,
+  );
+
 const BASE_ENTRY = {
   id: "reg-1",
   division_id: "div-1",
@@ -75,6 +82,10 @@ const BASE_ENTRY = {
   // division's registration_settings.payment_method), never the cart —
   // see resolveMoneyState's own doc comment (view-model.ts).
   payment_method: "stripe" as const,
+  // Polish wave P3: this entry's own division's review mode, and the fee a promotion off the waitlist would set (waitlisted only).
+  approval: "auto" as "auto" | "manual",
+  approved: false,
+  fee_if_promoted_cents: null as number | null,
   // RS008: this entry's own division youth/player_name_display policy —
   // threaded onto GroupEntryView (buildGroupStatusView, usecases/registrations/group-status.ts).
   division_youth: false,
@@ -86,6 +97,7 @@ const BASE_ENTRY = {
     consent: { public_name?: boolean } | null;
   }[],
   refund_policy: { refundable: true, deadline: "2026-09-15T00:00:00.000Z", amount_cents: 2500 },
+  refunded_cents: 0,
 };
 
 const BASE_VIEW = {
@@ -132,7 +144,7 @@ describe("register status page (RS007 rebuild)", () => {
     expect(html).toContain(">waitlisted<");
     // Subtotal excludes the waitlisted (amount_cents 0) entry — same as the
     // single pending entry's own fee.
-    expect(html).toContain("£25");
+    expect(html).toContain("£25.00");
     expect(usecaseMock.groupById).toHaveBeenCalledWith("g1", "tok");
   });
 
@@ -210,7 +222,7 @@ describe("register status page (RS007 rebuild)", () => {
     it("an unpaid CARD entry renders a working pay control naming the amount", async () => {
       usecaseMock.groupById.mockResolvedValueOnce(BASE_VIEW);
       const html = await render({ rid: "g1", token: "tok" });
-      expect(html).toContain("£25");
+      expect(html).toContain("£25.00");
       expect(html).toMatch(/Pay now/);
     });
 
@@ -239,7 +251,7 @@ describe("register status page (RS007 rebuild)", () => {
       // exact, tag-flanked occurrences: 1 is just the Subtotal, 2 proves
       // the card itself shows its own figure too.
       expect(
-        (html.match(/>£25</g) || []).length,
+        (html.match(/>£25\.00</g) || []).length,
         "the offline-due card itself must show its own fee, not just the page Subtotal",
       ).toBeGreaterThanOrEqual(2);
     });
@@ -274,7 +286,7 @@ describe("register status page (RS007 rebuild)", () => {
       // Same "Subtotal alone would satisfy a plain toContain" trap as the
       // offline case above — count exact, tag-flanked occurrences instead.
       expect(
-        (html.match(/>£25</g) || []).length,
+        (html.match(/>£25\.00</g) || []).length,
         "the stripe_unavailable card itself must show its own fee, not just the page Subtotal",
       ).toBeGreaterThanOrEqual(2);
     });
@@ -292,7 +304,7 @@ describe("register status page (RS007 rebuild)", () => {
       // tests above for why a plain toContain can't distinguish "the card
       // shows it" from "only the Subtotal does".
       expect(
-        (html.match(/>£25</g) || []).length,
+        (html.match(/>£25\.00</g) || []).length,
         "the confirmed card itself must show its own fee, not just the page Subtotal",
       ).toBeGreaterThanOrEqual(2);
     });
@@ -333,7 +345,7 @@ describe("register status page (RS007 rebuild)", () => {
       // "never a blank money section" rule FIX 1 already established for
       // stripe_unavailable/confirmed/free.
       expect(
-        (html.match(/>£25</g) || []).length,
+        (html.match(/>£25\.00</g) || []).length,
         "the window_closed card itself must still show its own fee",
       ).toBeGreaterThanOrEqual(2);
     });
@@ -397,7 +409,7 @@ describe("register status page (RS007 rebuild)", () => {
         ],
       });
       const html = await render({ rid: "g1", token: "tok" });
-      const subtotalMatch = html.match(/<span class="text-lg font-bold text-ink">([^<]*)<\/span>/);
+      const subtotalMatch = html.match(/data-testid="reg-status-subtotal-amount"[^>]*>([^<]*)</);
       expect(subtotalMatch, "subtotal span not found").not.toBeNull();
       // withdrawCore (usecases/registrations/withdraw.ts), the rejection path
       // (registration-approval.ts), and the expiry sweep (usecases/registrations/)
@@ -405,6 +417,68 @@ describe("register status page (RS007 rebuild)", () => {
       // so reg-2's stale 1000 must NOT be folded into the live subtotal.
       expect(subtotalMatch![1]).toContain("25");
       expect(subtotalMatch![1]).not.toContain("35");
+    });
+  });
+
+  // Polish wave P3 (walkthrough W6, W10, W11): a cart with nothing LIVE in it summed to 0 and the row printed "Free" -- for a waitlisted
+  // entry that owes a fee the moment it is promoted, and for an expired or withdrawn one. Each row below is a literal from the brief's
+  // ruling (amount / amount plus a "not due while waitlisted" note / "Nothing due"), never read back from `cartSubtotal`.
+  describe("subtotal words what is due, not just the live sum (P3)", () => {
+    const SUBTOTAL_CASES: { name: string; entries: Record<string, unknown>[]; amount: string; note: string | null }[] = [
+      { name: "all waitlisted, division fee 15.00 -> the fee a promotion would set, with the note, never Free",
+        entries: [{ status: "waitlisted", amount_cents: 0, fee_if_promoted_cents: 1500 }], amount: "£15.00", note: "Not due while waitlisted" },
+      { name: "two waitlisted entries add their promotion fees",
+        entries: [{ status: "waitlisted", amount_cents: 0, fee_if_promoted_cents: 1500 }, { status: "waitlisted", amount_cents: 0, fee_if_promoted_cents: 1000 }],
+        amount: "£25.00", note: "Not due while waitlisted" },
+      { name: "all waitlisted in a FREE division -> Free, no note (nothing would ever be due)",
+        entries: [{ status: "waitlisted", amount_cents: 0, fee_if_promoted_cents: 0 }], amount: "Free", note: null },
+      { name: "all withdrawn -> Nothing due, never Free",
+        entries: [{ status: "withdrawn", amount_cents: 1500, fee_if_promoted_cents: null }], amount: "Nothing due", note: null },
+      { name: "all expired -> Nothing due",
+        entries: [{ status: "expired", amount_cents: 1500, fee_if_promoted_cents: null }], amount: "Nothing due", note: null },
+      { name: "withdrawn + expired + rejected -> Nothing due",
+        entries: [{ status: "withdrawn", amount_cents: 1500, fee_if_promoted_cents: null }, { status: "expired", amount_cents: 500, fee_if_promoted_cents: null }, { status: "rejected", amount_cents: 900, fee_if_promoted_cents: null }],
+        amount: "Nothing due", note: null },
+      { name: "waitlisted + withdrawn -> the waitlisted fee (the ended entry adds nothing)",
+        entries: [{ status: "waitlisted", amount_cents: 0, fee_if_promoted_cents: 1500 }, { status: "withdrawn", amount_cents: 2500, fee_if_promoted_cents: null }],
+        amount: "£15.00", note: "Not due while waitlisted" },
+      { name: "a live entry wins: pending 25.00 + waitlisted -> 25.00 and NO waitlist note",
+        entries: [{ status: "pending", amount_cents: 2500, fee_if_promoted_cents: null }, { status: "waitlisted", amount_cents: 0, fee_if_promoted_cents: 1500 }],
+        amount: "£25.00", note: null },
+      { name: "a free confirmed entry is a genuinely free cart -> Free",
+        entries: [{ status: "confirmed", amount_cents: 0, fee_if_promoted_cents: null }], amount: "Free", note: null },
+      { name: "a confirmed entry beside a withdrawn one -> the confirmed fee only",
+        entries: [{ status: "confirmed", amount_cents: 1500, fee_if_promoted_cents: null }, { status: "withdrawn", amount_cents: 1500, fee_if_promoted_cents: null }],
+        amount: "£15.00", note: null },
+      { name: "no entries at all -> Nothing due (the empty case)", entries: [], amount: "Nothing due", note: null },
+    ];
+
+    it("every case prints its literal amount and note (counted)", async () => {
+      let checked = 0;
+      for (const c of SUBTOTAL_CASES) {
+        usecaseMock.groupById.mockResolvedValueOnce({
+          ...BASE_VIEW,
+          entries: c.entries.map((e, i) => ({ ...BASE_ENTRY, id: `reg-${i + 1}`, ...e })),
+        });
+        const html = await render({ rid: "g1", token: "tok" });
+        const amount = html.match(/data-testid="reg-status-subtotal-amount"[^>]*>([^<]*)</)?.[1];
+        expect(amount, c.name).toBe(c.amount);
+        const note = html.match(/data-testid="reg-status-subtotal-note"[^>]*>([^<]*)</)?.[1] ?? null;
+        expect(note, c.name).toBe(c.note);
+        checked += 1;
+      }
+      expect(checked).toBe(SUBTOTAL_CASES.length);
+      expect(checked).toBeGreaterThan(0);
+    });
+
+    it("the subtotal is the cart's own currency, to two decimals, in the page's locale (a whole amount keeps its .00)", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce({
+        ...BASE_VIEW,
+        currency: "eur",
+        entries: [{ ...BASE_ENTRY, status: "waitlisted" as const, amount_cents: 0, fee_if_promoted_cents: 1500 }],
+      });
+      const html = await render({ rid: "g1", token: "tok" });
+      expect(html.match(/data-testid="reg-status-subtotal-amount"[^>]*>([^<]*)</)?.[1]).toBe("€15.00");
     });
   });
 
@@ -506,15 +580,42 @@ describe("register status page (RS007 rebuild)", () => {
       // Finding #20: this used to read "1 of 2 confirmed" — the same word
       // the entry's own payment-status pill uses a few lines above (green
       // CONFIRMED = the fee landed). Roster-side copy now uses a check-in
-      // metaphor instead, so it can no longer be read as a payment state.
-      expect(html).toContain("1 of 2 checked in");
-      // The per-slot link names the unclaimed player and carries their id.
-      expect(html).toContain("join_code=JOIN123&amp;player_id=p2");
+      // metaphor instead, so it can no longer be read as a payment state. This entry is still PENDING, so (owner ruling on V7,
+      // 2026-11-12) its meter says who has joined - "checked in" is kept for a confirmed entry (pinned below).
+      expect(html).toContain("1 of 2 joined");
+      expect(html).not.toContain("checked in");
+      // The per-slot link carries the unclaimed player's id, on that slot's Copy button (polish wave K: no URL is printed).
+      expect(html).toContain('data-href="/live/riverside/summer-smash/register/join?join_code=JOIN123&amp;player_id=p2"');
       // The generic link carries no player_id.
-      expect(html).toMatch(/href="\/live\/riverside\/summer-smash\/register\/join\?join_code=JOIN123"/);
-      // join_code itself never appears bare in a way that leaks beyond the
-      // href it belongs in — spot-check it isn't duplicated as plain text.
-      expect(html.match(/JOIN123/g)?.length).toBe(2); // the two hrefs only
+      expect(html).toContain('data-href="/live/riverside/summer-smash/register/join?join_code=JOIN123"');
+      // The code is painted ONLY by the invite block's Copy buttons, once per link (two links, two), and none of it outside the
+      // block: no printed URL, no href (polish wave K; it was an href plus the printed URL per link before).
+      const block = html.slice(html.indexOf('data-testid="reg-invite"'));
+      expect(html.match(/JOIN123/g)?.length).toBe(2);
+      expect(block.match(/JOIN123/g)?.length).toBe(2);
+      expect(block).not.toContain(">http");
+      // The block lists BOTH roster slots (Sam has joined: chip only; Jordan has not: chip and Copy link), then the general link.
+      expect(html).toContain(invite("heading"));
+      expect(html).toContain(invite("intro"));
+      expect(html).toContain(invite("notListed"));
+      expect(html.match(/data-invite-slot/g)?.length).toBe(2);
+      expect(html.match(/data-testid="reg-invite-copy"/g)?.length).toBe(2);
+      // The whole block is under ph-no-capture (the join code is a capability).
+      expect(html).toMatch(/<section data-testid="reg-invite" class="ph-no-capture /);
+    });
+
+    // Polish wave P6 (the empty case the old inline gate hid): a team registered with NO roster has no roster box, and its captain
+    // still needs the general link to bring people in.
+    it("a team with no players at all still offers the general link, in its own block", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce({
+        ...BASE_VIEW,
+        entries: [{ ...BASE_ENTRY, join_code: "EMPTY01", players: [] }],
+      });
+      const html = await render({ rid: "g1", token: "tok" });
+      expect(html).toContain(invite("heading"));
+      expect(html).toContain(invite("notListed"));
+      expect(html).toContain('data-href="/live/riverside/summer-smash/register/join?join_code=EMPTY01"');
+      expect(html).not.toContain("player_id=");
     });
 
     // RS008: a roster row backed by a person who opted out via /me
@@ -555,6 +656,31 @@ describe("register status page (RS007 rebuild)", () => {
       // (consent: null is not an opt-out) — masking is per-person, not
       // blanket once any row on the entry has opted out.
       expect(html).toContain("Dev Patel");
+    });
+
+    // Polish wave P6: the invite rows name the SAME unclaimed person the roster does, so they mask the same way: by the linked person's
+    // own opt-out, and by a youth division's policy. Neither opted-out nor youth is the control: its row stays in full.
+    it("the invite row names an unclaimed player as masked as the roster row does (a person's opt-out, and a youth division), and a plain one stays in full", async () => {
+      const players = [
+        { id: "p1", full_name: "Priya Nair", consent_status: "pending" as const, consent: { public_name: false } },
+        { id: "p2", full_name: "Dev Patel", consent_status: "pending" as const, consent: null },
+      ];
+      usecaseMock.groupById.mockResolvedValueOnce({ ...BASE_VIEW, entries: [{ ...BASE_ENTRY, join_code: "MASK01", players }] });
+      const inviteBlock = (html: string) => html.slice(html.indexOf('data-testid="reg-invite"'));
+      const opted = await render({ rid: "g1", token: "tok" });
+      expect(opted).not.toContain("Priya Nair");
+      expect(inviteBlock(opted)).toContain(">Priya N.</span>");
+      expect(inviteBlock(opted)).toContain(">Dev Patel</span>");
+
+      usecaseMock.groupById.mockResolvedValueOnce({
+        ...BASE_VIEW,
+        entries: [{ ...BASE_ENTRY, join_code: "MASK02", division_youth: true, players }],
+      });
+      const youth = await render({ rid: "g1", token: "tok" });
+      expect(youth).not.toContain("Priya Nair");
+      expect(youth).not.toContain("Dev Patel");
+      expect(inviteBlock(youth)).toContain(">Priya N.</span>");
+      expect(inviteBlock(youth)).toContain(">Dev P.</span>");
     });
 
     // RS008 review fix #1 (Critical): the entry-card HEADING (entry.display_name)
@@ -654,6 +780,7 @@ describe("register status page (RS007 rebuild)", () => {
           {
             ...BASE_ENTRY,
             join_code: "PAIR456",
+            entrant_kind: "pair" as const,
             allows_new_joiner: false,
             players: [
               { id: "p1", full_name: "Sam Player", consent_status: "granted" as const, consent: null },
@@ -664,7 +791,12 @@ describe("register status page (RS007 rebuild)", () => {
       });
       const html = await render({ rid: "g1", token: "tok" });
       expect(html).toContain("join_code=PAIR456&amp;player_id=p2");
-      expect(html).not.toMatch(/href="\/live\/riverside\/summer-smash\/register\/join\?join_code=PAIR456"/);
+      expect(html).not.toContain('data-href="/live/riverside/summer-smash/register/join?join_code=PAIR456"');
+      // ... and it is worded for a pair: a partner, not teammates, and no "Someone not listed?" link.
+      expect(html).toContain(invite("headingPair"));
+      expect(html).toContain(invite("introPair"));
+      expect(html).not.toContain(invite("heading"));
+      expect(html).not.toContain(invite("notListed"));
     });
 
     // Bug (2026-08-27 review, FIX 2): the claim block gated on
@@ -692,8 +824,10 @@ describe("register status page (RS007 rebuild)", () => {
         });
         const html = await render({ rid: "g1", token: "tok" });
         expect(html).not.toContain("join_code=DEAD789");
-        expect(html).not.toContain("Send Jordan Player their claim link");
-        expect(html).not.toContain("Invite someone new to this entry");
+        expect(html).not.toContain('data-testid="reg-invite"');
+        expect(html).not.toContain(invite("heading"));
+        expect(html).not.toContain('data-testid="reg-invite-copy"');
+        expect(html).not.toContain(invite("notListed"));
       },
     );
   });

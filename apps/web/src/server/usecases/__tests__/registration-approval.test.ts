@@ -539,7 +539,9 @@ describe.skipIf(!HAS_DB)("reject/approve on a paid-awaiting-approval entry", () 
     // Simulate the payment having landed (ruling B: manual mode leaves this
     // at 'paid' via confirmPaidRegistration's own manual-mode gate) without
     // re-deriving the whole webhook path here.
-    await sql`update registrations set status = 'paid' where id = ${regId}`;
+    // The entry's OWN intent too, as confirmPaidRegistration stamps it with `status = 'paid'` (V387): refunds read the entry's
+    // payment, never the cart's (polish wave W8).
+    await sql`update registrations set status = 'paid', payment_intent_id = 'pi_test_fake' where id = ${regId}`;
     await sql`update registration_groups set payment_intent_id = 'pi_test_fake' where id = ${submitted.group_id}`;
 
     const rejected = await rejectRegistration(owner, regId);
@@ -569,7 +571,9 @@ describe.skipIf(!HAS_DB)("reject/approve on a paid-awaiting-approval entry", () 
       },
     );
     const regId = submitted.entries[0]!.registration_id;
-    await sql`update registrations set status = 'paid' where id = ${regId}`;
+    // The entry's OWN intent too, as confirmPaidRegistration stamps it with `status = 'paid'` (V387): refunds read the entry's
+    // payment, never the cart's (polish wave W8).
+    await sql`update registrations set status = 'paid', payment_intent_id = 'pi_test_fake' where id = ${regId}`;
     await sql`update registration_groups set payment_intent_id = 'pi_test_fake' where id = ${submitted.group_id}`;
     const [groupRow] = await sql<{ currency: string }[]>`
       select currency from registration_groups where id = ${submitted.group_id}`;
@@ -636,7 +640,9 @@ describe.skipIf(!HAS_DB)("reject/approve on a paid-awaiting-approval entry", () 
       },
     );
     const regId = submitted.entries[0]!.registration_id;
-    await sql`update registrations set status = 'paid' where id = ${regId}`;
+    // The entry's OWN intent too, as confirmPaidRegistration stamps it with `status = 'paid'` (V387): refunds read the entry's
+    // payment, never the cart's (polish wave W8).
+    await sql`update registrations set status = 'paid', payment_intent_id = 'pi_test_fake2' where id = ${regId}`;
     await sql`update registration_groups set payment_intent_id = 'pi_test_fake2' where id = ${submitted.group_id}`;
 
     // An organiser refunds it via the normal refund flow — which does NOT
@@ -1307,13 +1313,19 @@ describe.skipIf(!HAS_DB)("RS005 review: frozen entitlements block reject and pro
     const writes: Array<[string, string, string, (id: string) => Promise<unknown>]> = [
       ["approve", await reg("paid", "Frozen Approve"), "confirmed", (id) => approveRegistration(owner, id)],
       ["confirm", await reg("paid", "Frozen Confirm"), "confirmed", (id) => confirmRegistration(owner, id)],
-      ["mark paid", await reg("pending", "Frozen MarkPaid"), "confirmed", (id) => markRegistrationPaidOffline(owner, id)],
+      // Polish wave P5 (W12): on this MANUAL division a mark-paid entry nobody approved stays `paid`, awaiting approval.
+      ["mark paid", await reg("pending", "Frozen MarkPaid"), "paid", (id) => markRegistrationPaidOffline(owner, id)],
       ["confirm waived", await reg("pending", "Frozen Waived"), "confirmed", (id) => confirmRegistrationWaived(owner, id)],
+      // W12: Approve on an unpaid entry approves it with the fee still due (stays pending, approved_at stamped) - frozen too.
+      ["approve (fee due)", await reg("pending", "Frozen ApproveDue"), "pending", (id) => approveRegistration(owner, id)],
     ];
+    const approvedAtOf = async (id: string) =>
+      (await sql<{ approved_at: Date | null }[]>`select approved_at from registrations where id = ${id}`)[0]!.approved_at;
+    const approveDueId = writes[4]![1];
     const statusOf = async (id: string) =>
       (await sql<{ status: string }[]>`select status from registrations where id = ${id}`)[0]!.status;
     const before = await Promise.all(writes.map(([, id]) => statusOf(id)));
-    expect(before).toEqual(["paid", "paid", "pending", "pending"]);
+    expect(before).toEqual(["paid", "paid", "pending", "pending", "pending"]);
 
     await freezeCompetitions(orgId);
     let refused = 0;
@@ -1321,13 +1333,15 @@ describe.skipIf(!HAS_DB)("RS005 review: frozen entitlements block reject and pro
       await expect(write(id), what).rejects.toMatchObject({ status: 402, featureKey: "competitions.max_active" });
       refused++;
     }
-    expect(refused, "anti-vacuity: frozen refusals checked").toBe(4);
+    expect(refused, "anti-vacuity: frozen refusals checked").toBe(5);
     expect(await Promise.all(writes.map(([, id]) => statusOf(id))), "a refused transition must not have half-run").toEqual(before);
+    expect(await approvedAtOf(approveDueId), "a frozen Approve stamps no approval").toBeNull();
 
     // The pair: the freeze lifts (the override goes), and the same calls on the same rows go through.
     await sql`delete from org_entitlement_overrides where org_id = ${orgId} and feature_key = 'competitions.max_active'`;
     await invalidateOrgEntitlements(orgId);
     for (const [what, id, , write] of writes) await expect(write(id), what).resolves.toBeDefined();
     expect(await Promise.all(writes.map(([, id]) => statusOf(id)))).toEqual(writes.map(([, , after]) => after));
+    expect(await approvedAtOf(approveDueId), "thawed: the approval is recorded").not.toBeNull();
   });
 });

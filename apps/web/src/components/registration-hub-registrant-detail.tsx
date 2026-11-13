@@ -21,9 +21,9 @@
 import type { ReactNode } from "react";
 import { t } from "@/lib/i18n";
 import type { Dict } from "@/lib/i18n-constants";
-import { formatMinor, asCurrency } from "@/lib/currency";
+import { formatMoneyExact, asCurrency } from "@/lib/currency";
 import { fmtDateTime } from "@/lib/format";
-import { isTerminalRegistrationStatus } from "@/lib/registration-status";
+import { isTerminalRegistrationStatus, ownPaymentRefundedCents } from "@/lib/registration-status";
 import type { RegistrationFormField } from "@/server/api-v1/schemas";
 import type { RegistrationListRow } from "@/server/usecases/registrations";
 import type { RegistrantRosterPlayer, RegistrantCartSibling } from "@/app/o/[orgSlug]/c/[compSlug]/registration/data";
@@ -36,6 +36,7 @@ import {
   registrantKindLabel,
 } from "@/components/registration-hub-registrant-derive";
 import { RegistrationHubRegistrantJoinCode } from "@/components/registration-hub-registrant-join-code";
+import { joinLinkPath } from "@/lib/join-link";
 import { deriveRegistrantActionFlags } from "@/components/registration-hub-registrant-derive";
 import { RegistrationHubRegistrantActions } from "@/components/registration-hub-registrant-actions";
 import { RegistrationHubAssignPicker } from "@/components/registration-hub-assign-picker";
@@ -68,6 +69,10 @@ export interface RegistrationHubRegistrantDetailProps {
    *  (registrantRowAnchor) to land on the right row once the page reloads
    *  unfiltered. Same value as the panel's own `clearHref`. */
   baseHref: string;
+  /** The competition's own slugs (the console route's params): the join link a teammate opens is a public page of THIS competition,
+   *  `/live/<orgSlug>/<compSlug>/register/join` - the row carries no slug of its own. */
+  orgSlug: string;
+  compSlug: string;
 }
 
 function detailField(label: string, value: ReactNode): ReactNode {
@@ -90,6 +95,8 @@ export function RegistrationHubRegistrantDetail({
   siblings,
   formFields,
   baseHref,
+  orgSlug,
+  compSlug,
 }: RegistrationHubRegistrantDetailProps) {
   const paymentState = deriveRegistrantPaymentState(row);
   // ONE source with the buttons themselves — the actions component calls the
@@ -112,7 +119,7 @@ export function RegistrationHubRegistrantDetail({
       ? t(dict, "reg.hub.registrants.detail.paymentState.waitlisted")
       : row.amount_cents === 0
         ? t(dict, "reg.hub.row.fee.free")
-        : formatMinor(row.amount_cents, asCurrency(row.currency));
+        : formatMoneyExact(row.amount_cents, asCurrency(row.currency)); // owner ruling 2026-11-12: "£15.00", never "£15"
   const paymentMethodText = row.payment_method
     ? t(dict, row.payment_method === "stripe" ? "reg.settings.cardPayment" : "reg.settings.payOrganiser")
     : "—";
@@ -161,7 +168,7 @@ export function RegistrationHubRegistrantDetail({
         {showJoinCode && (
           <div className="mt-3">
             <RegistrationHubRegistrantJoinCode
-              code={row.join_code!}
+              joinPath={joinLinkPath(orgSlug, compSlug, row.join_code!)}
               label={t(dict, "reg.hub.registrants.detail.joinCode.label")}
               hint={t(dict, "reg.hub.registrants.detail.joinCode.hint")}
               copyLabel={t(dict, "reg.hub.registrants.detail.joinCode.copy")}
@@ -216,6 +223,8 @@ export function RegistrationHubRegistrantDetail({
                 )}
                 <span
                   data-registration-hub-registrant-consent={p.consent_status}
+                  // The pending chip explains itself (P4, W2): the same sentence the note below the list says, for a pointer.
+                  title={p.consent_status === "pending" ? t(dict, "reg.hub.registrants.detail.consent.pendingNote") : undefined}
                   className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${CONSENT_STATUS_STYLE[p.consent_status]}`}
                 >
                   {t(dict, `reg.hub.registrants.detail.consent.${p.consent_status}`)}
@@ -223,6 +232,13 @@ export function RegistrationHubRegistrantDetail({
               </li>
             ))}
           </ul>
+        )}
+        {/* P4 (W2): "Consent pending" beside a registrant who had ticked the privacy consent on the form read as a contradiction. It is the
+            player's OWN confirmation of their roster place - a different thing - and a tooltip alone does not exist on a touch screen. */}
+        {roster.some((p) => p.consent_status === "pending") && (
+          <p data-registration-hub-registrant-consent-note className="mt-2 text-xs leading-relaxed text-slate-500">
+            {t(dict, "reg.hub.registrants.detail.consent.pendingNote")}
+          </p>
         )}
       </section>
 
@@ -278,8 +294,19 @@ export function RegistrationHubRegistrantDetail({
             amountCents={row.amount_cents}
             divisionFeeCents={row.division_fee_cents}
             paymentIntentId={row.payment_intent_id}
-            refundedCents={row.refunded_cents}
+            entryPaymentIntentId={row.entry_payment_intent_id}
+            // Polish wave P5 (carry b): what was sent back of THIS payment (the Refund cap the server applies), never the history.
+            refundedCents={ownPaymentRefundedCents(row)}
+            lastRemindedAt={row.last_reminded_at ? new Date(row.last_reminded_at).toISOString() : null}
+            approvedAt={row.approved_at ? new Date(row.approved_at).toISOString() : null}
           />
+          {/* The organiser's own last payment-reminder press, in the org's timezone like "Submitted". A full-width line under the
+              buttons rather than a button label, so it reads at 320 without squeezing the row. */}
+          {row.last_reminded_at && (
+            <p data-registration-hub-registrant-last-reminded className="w-full text-xs text-slate-500">
+              {t(dict, "reg.remind.lastReminded", { when: fmtDateTime(orgTz, row.last_reminded_at) })}
+            </p>
+          )}
           {/* RS009 — placing a solo sign-up on a team. Its own component
               because it opens a sheet and owns a fetch, while the controls
               above are one-shot POSTs; folding it in would have given that

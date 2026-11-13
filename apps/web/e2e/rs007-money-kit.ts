@@ -11,7 +11,7 @@
 import { expect } from "@playwright/test";
 import type { APIRequestContext, Page } from "@playwright/test";
 import { apiJson } from "./helpers";
-import { fillHostedCheckout } from "./stripe-checkout-kit";
+import { fillHostedCheckout, submitHostedCheckout } from "./stripe-checkout-kit";
 
 export const ENABLED = process.env.CONNECT_WALKTHROUGH === "1";
 export const WATCH = process.env.WALKTHROUGH_WATCH === "1";
@@ -312,7 +312,7 @@ export async function payOnStripeCheckout(
   await fillHostedCheckout(page, cardholder);
   await page.waitForTimeout(1000);
   await shots?.("card-filled");
-  await page.locator(".SubmitButton, button[type=submit]").first().click();
+  await submitHostedCheckout(page);
 
   // `waitUntil: "commit"` — the webhook that flips the entry to paid races
   // this navigation, so the settle is done by the caller's own polling, not

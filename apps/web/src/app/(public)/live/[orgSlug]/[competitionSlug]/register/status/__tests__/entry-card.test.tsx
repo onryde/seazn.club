@@ -53,6 +53,9 @@ function baseProps(): EntryCardProps {
       allows_new_joiner: true,
       promotion_expires_at: null,
       payment_method: "offline",
+      approval: "auto",
+      approved: false,
+      fee_if_promoted_cents: null,
       division_youth: false,
       division_player_name_display: null,
       players: [
@@ -64,6 +67,7 @@ function baseProps(): EntryCardProps {
         },
       ],
       refund_policy: { refundable: false, deadline: null, amount_cents: 0 },
+      refunded_cents: 0,
     },
     cart: {
       expires_at: null,
@@ -90,7 +94,7 @@ describe("EntryCard — a displayNameById miss never falls back to the raw p.ful
     // Pins the CURRENT behaviour the claim-link fix now matches, so a future
     // edit cannot quietly diverge the two again in the other direction.
     const html = renderToStaticMarkup(<EntryCard {...baseProps()} />);
-    expect(html).toContain(">Not checked in<"); // the badge still renders
+    expect(html).toContain(">Not joined yet<"); // the badge still renders (a pending entry's word; owner ruling on V7, 2026-11-12)
     expect(html).not.toContain("undefined");
   });
 });

@@ -241,7 +241,7 @@ describe("minor joiner — guardian path", () => {
   });
 
   it("sends guardian_name/guardian_consent in the POST body once supplied — never the join_code anywhere but its own field", async () => {
-    apiV1Mock.queue.push({ ok: true, data: { registration_id: "reg-1", player_id: "p1", consent_status: "guardian" } });
+    apiV1Mock.queue.push({ ok: true, data: { registration_id: "reg-1", player_id: "p1", consent_status: "guardian", entry_state: "confirmed" } });
     const m = mount({ requiresDob: true, initialPlayerId: "p1" });
     fillWho(m, "2015-01-01");
 
@@ -283,7 +283,7 @@ describe("minor joiner — guardian path", () => {
 
 describe("consent wiring — RS007 defect #4", () => {
   it("sends privacy_consent/media_consent once both are ticked", async () => {
-    apiV1Mock.queue.push({ ok: true, data: { registration_id: "reg-1", player_id: "p1", consent_status: "granted" } });
+    apiV1Mock.queue.push({ ok: true, data: { registration_id: "reg-1", player_id: "p1", consent_status: "granted", entry_state: "confirmed" } });
     const m = mount({ initialPlayerId: "p1" });
     fillMinimalValidForm(m); // ticks privacy only
     const mediaBox = m.island.tree().find((e) => propsOf(e).id === "reg-consent-media")!;
@@ -293,7 +293,7 @@ describe("consent wiring — RS007 defect #4", () => {
   });
 
   it("a deliberate media-consent REFUSAL is sent as `false`, not omitted — must never be silently overridden server-side", async () => {
-    apiV1Mock.queue.push({ ok: true, data: { registration_id: "reg-1", player_id: "p1", consent_status: "granted" } });
+    apiV1Mock.queue.push({ ok: true, data: { registration_id: "reg-1", player_id: "p1", consent_status: "granted", entry_state: "confirmed" } });
     const m = mount({ initialPlayerId: "p1" });
     fillMinimalValidForm(m); // ticks privacy only — media stays unchecked
     await submit(m);
@@ -326,7 +326,7 @@ async function submit(m: ReturnType<typeof mount>) {
 
 describe("submit — success", () => {
   it("a CLAIM shows the success state with the fill meter unchanged in total, claimed +1", async () => {
-    apiV1Mock.queue.push({ ok: true, data: { registration_id: "reg-1", player_id: "p1", consent_status: "granted" } });
+    apiV1Mock.queue.push({ ok: true, data: { registration_id: "reg-1", player_id: "p1", consent_status: "granted", entry_state: "confirmed" } });
     const m = mount({ initialPlayerId: "p1", totalPlayers: 4, unclaimedSlots: [
       { player_id: "p1", full_name: "Sam Player" },
       { player_id: "p2", full_name: "Jordan Player" },
@@ -344,7 +344,7 @@ describe("submit — success", () => {
   });
 
   it("an INSERT ('I'm someone else') grows the total in the fill meter too", async () => {
-    apiV1Mock.queue.push({ ok: true, data: { registration_id: "reg-1", player_id: "new-1", consent_status: "granted" } });
+    apiV1Mock.queue.push({ ok: true, data: { registration_id: "reg-1", player_id: "new-1", consent_status: "granted", entry_state: "confirmed" } });
     const m = mount({ unclaimedSlots: [], allowNewPlayer: true, totalPlayers: 3 });
     const newRadio = m.radios()[0]!;
     (propsOf(newRadio).onChange as () => void)();
@@ -353,8 +353,74 @@ describe("submit — success", () => {
     expect(m.pageText()).toContain("4 of 4 checked in");
   });
 
+  // Polish wave P3 (W4, W13): "You're in / Your spot is confirmed" read as true for a team still awaiting payment or approval. The
+  // panel words each standing the server reports; only `confirmed` may say it. Expected copy is the dictionary's own, per standing.
+  describe("the success panel tells the truth about the entry's standing (P3)", () => {
+    const CASES: { state: string | null; includes: string[]; excludes: string[] }[] = [
+      { state: "confirmed", includes: ["You're in", "Your spot on Team Alpha is confirmed."], excludes: ["You've joined", "isn't confirmed yet"] },
+      { state: "waitlisted", includes: ["You've joined", "You're on the roster for Team Alpha.", "This entry is on the waiting list, so it isn't confirmed yet."], excludes: ["You're in", "is confirmed."] },
+      { state: "payment", includes: ["You've joined", "This entry isn't confirmed yet: it's still awaiting payment."], excludes: ["You're in", "is confirmed."] },
+      { state: "approval", includes: ["You've joined", "This entry isn't confirmed yet: it's still awaiting the organiser's approval."], excludes: ["You're in", "is confirmed."] },
+      { state: "payment_and_approval", includes: ["You've joined", "This entry isn't confirmed yet: it's still awaiting payment and the organiser's approval."], excludes: ["You're in", "is confirmed."] },
+      { state: null, includes: ["You've joined", "You're on the roster for Team Alpha."], excludes: ["You're in", "is confirmed.", "isn't confirmed yet"] },
+    ];
+
+    it("each standing prints its own panel (counted)", async () => {
+      let checked = 0;
+      for (const c of CASES) {
+        apiV1Mock.calls = [];
+        apiV1Mock.queue = [];
+        apiV1Mock.queue.push({ ok: true, data: { registration_id: "reg-1", player_id: "p1", consent_status: "granted", entry_state: c.state } });
+        const m = mount({ initialPlayerId: "p1", totalPlayers: 4 });
+        fillMinimalValidForm(m);
+        await submit(m);
+        for (const text of c.includes) expect(m.pageText(), `${c.state}: includes ${text}`).toContain(text);
+        for (const text of c.excludes) expect(m.pageText(), `${c.state}: excludes ${text}`).not.toContain(text);
+        checked += 1;
+      }
+      expect(checked).toBe(CASES.length);
+    });
+
+    it("a response that carries no entry_state at all never claims confirmed (the safe default, not a trusted one)", async () => {
+      apiV1Mock.queue.push({ ok: true, data: { registration_id: "reg-1", player_id: "p1", consent_status: "granted" } });
+      const m = mount({ initialPlayerId: "p1" });
+      fillMinimalValidForm(m);
+      await submit(m);
+      expect(m.pageText()).toContain("You've joined");
+      expect(m.pageText()).not.toContain("You're in");
+    });
+
+    it("a waitlisted entry's roster meter says 'registered', never 'checked in' (W6, W10, W11)", async () => {
+      apiV1Mock.queue.push({ ok: true, data: { registration_id: "reg-1", player_id: "p1", consent_status: "granted", entry_state: "waitlisted" } });
+      const m = mount({ initialPlayerId: "p1", totalPlayers: 4 });
+      fillMinimalValidForm(m);
+      await submit(m);
+      expect(m.pageText()).toContain("3 of 4 registered");
+      expect(m.pageText()).not.toContain("checked in");
+    });
+
+    // Polish wave sign-off V7 (reverses P3's "a payment-pending entry keeps the check-in wording"): the owner read "2 of 2 checked in"
+    // on a join to an unpaid entry as a claim nobody had made. An entry not yet confirmed (awaiting payment and/or approval), and a
+    // response that names no standing, say how many have JOINED. Expected text is the dictionary's own words with the figures filled.
+    it("an entry awaiting payment or approval (or naming no standing) says 'joined', never 'checked in' (counted)", async () => {
+      let checked = 0;
+      for (const state of ["payment", "approval", "payment_and_approval", null]) {
+        apiV1Mock.calls = [];
+        apiV1Mock.queue = [];
+        apiV1Mock.queue.push({ ok: true, data: { registration_id: "reg-1", player_id: "p1", consent_status: "granted", entry_state: state } });
+        const m = mount({ initialPlayerId: "p1", totalPlayers: 4 });
+        fillMinimalValidForm(m);
+        await submit(m);
+        expect(m.pageText(), String(state)).toContain("3 of 4 joined");
+        expect(m.pageText(), String(state)).not.toContain("checked in");
+        checked += 1;
+      }
+      expect(checked).toBe(4);
+    });
+  });
+
   it("does not send a player_id at all for the insert path", async () => {
-    apiV1Mock.queue.push({ ok: true, data: { registration_id: "reg-1", player_id: "new-1", consent_status: "granted" } });
+    apiV1Mock.queue.push({ ok: true, data: { registration_id: "reg-1", player_id: "new-1", consent_status: "granted", entry_state: "confirmed" } });
     const m = mount({ unclaimedSlots: [], allowNewPlayer: true });
     const newRadio = m.radios()[0]!;
     (propsOf(newRadio).onChange as () => void)();
@@ -424,7 +490,7 @@ describe("submit — designed failure states, never a raw server string", () => 
         total_players: 5,
       },
     });
-    apiV1Mock.queue.push({ ok: true, data: { registration_id: "reg-1", player_id: "p2", consent_status: "granted" } });
+    apiV1Mock.queue.push({ ok: true, data: { registration_id: "reg-1", player_id: "p2", consent_status: "granted", entry_state: "confirmed" } });
 
     const m = mount({
       initialPlayerId: "p1",

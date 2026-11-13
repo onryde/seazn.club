@@ -61,10 +61,12 @@
 //    holds it reads that sponsor's figures and frames, with no login - a bearer credential, though it sits under `/r/`;
 //  - a quick match's home `/q/<home token>` (`qm_` + 43 base64url; quick-match-tokens.ts): whoever holds it can score
 //    every match of that quick match (quick match spec O3, C19). The scoring pad links back to it (C12), so it is in the
-//    pad's DOM and in the navigation a click starts.
+//    pad's DOM and in the navigation a click starts;
+//  - the player payment page `/r/pay/<token>` and its Pay call `/r/pay/<token>/pay` (32 random bytes, base64url; a reminder
+//    mail's link; whoever holds it sees the entry's amount and reference and can open its Checkout): a bearer credential too.
 // Left alone: the registration reference `/r/<ref>` (a
 // lookup, not auth; the emailed `token` is what authorises a withdrawal) - a reference literally `sponsor` included, since
-// only a segment AFTER `/r/sponsor/` is a credential.
+// only a segment AFTER `/r/sponsor/` (or `/r/pay/`) is a credential.
 //
 // A team's JOIN CODE is a capability too (`generateRefCode`, 30^6): whoever holds it can join the entry. It rides the register
 // pages as `?join_code=<code>[&player_id=…]` (the join page and its preview request) and as `?join=<code>` (the register
@@ -190,6 +192,7 @@ const SECRET_PATH_ROUTES = [
   // only: a competition slug `q` (`/o/x/c/q/…`) is an address, not this route.
   "/q/",
   "/day/",
+  "/r/pay/",
 ] as const;
 /** The marketing locale prefix (`/fr/pricing`): a route root may follow it. */
 const LOCALE_PREFIX = LOCALES.join("|");

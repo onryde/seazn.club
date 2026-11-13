@@ -43,3 +43,102 @@ describe("SPOT_HOLDERS — single source of truth", () => {
     expect(page).not.toMatch(/const SPOT_HOLDERS\s*=/);
   });
 });
+
+// Polish wave P2: what an entry that is not yet confirmed is WAITING ON. One derivation for the mails (cart confirmation entry lines,
+// the joiner's confirmation) so "Pending" is never the whole answer. Every status x fee x approval cell is enumerated; the expected
+// answers are typed from the rules (a fee is owed only while pending; a manual-approval division always needs the organiser's yes),
+// never read back from the function.
+import { entryPriceCents, entryStanding, entryWaitingOn } from "@/lib/registration-status";
+
+describe("entryWaitingOn", () => {
+  const STATUSES = ["pending", "paid", "confirmed", "waitlisted", "withdrawn", "expired", "rejected"] as const;
+  const EXPECTED: Record<string, "payment" | "approval" | "payment_and_approval" | null> = {
+    "pending|fee|auto": "payment",
+    "pending|fee|manual": "payment_and_approval",
+    "pending|free|auto": null,
+    "pending|free|manual": "approval",
+    "paid|fee|auto": null,
+    "paid|fee|manual": "approval",
+    "paid|free|auto": null,
+    "paid|free|manual": "approval",
+  };
+
+  it("enumerates every status x fee x approval cell (anti-vacuity: 7 statuses x 2 x 2 = 28 cells checked)", () => {
+    let checked = 0;
+    for (const status of STATUSES) {
+      for (const [feeLabel, feeCents] of [["fee", 2500], ["free", 0]] as const) {
+        for (const approval of ["auto", "manual"] as const) {
+          const want = EXPECTED[`${status}|${feeLabel}|${approval}`] ?? null;
+          expect(entryWaitingOn(status, feeCents, approval, false), `${status} ${feeLabel} ${approval}`).toBe(want);
+          checked += 1;
+        }
+      }
+    }
+    expect(checked).toBe(28);
+  });
+
+  it("an unknown status waits on nothing (never throws on a value the column could grow)", () => {
+    expect(entryWaitingOn("something_new", 2500, "manual", false)).toBeNull();
+  });
+
+  // Polish wave P5 (W12): the organiser approved an entry whose fee was still owed (`approved_at`, V513). Their yes is given, so the entry
+  // waits on what an entry that needs no yes waits on: the expected value is the SAME table's auto-approval cell, never this function's
+  // own output. The approved stamp never adds a wait (an auto division's cells are unchanged by it).
+  it("an approved entry waits on what an auto-approval entry waits on: every status x fee x approval cell (28 checked)", () => {
+    let checked = 0;
+    let differs = 0;
+    for (const status of STATUSES) {
+      for (const [feeLabel, feeCents] of [["fee", 2500], ["free", 0]] as const) {
+        for (const approval of ["auto", "manual"] as const) {
+          const want = EXPECTED[`${status}|${feeLabel}|auto`] ?? null;
+          expect(entryWaitingOn(status, feeCents, approval, true), `approved ${status} ${feeLabel} ${approval}`).toBe(want);
+          if (want !== (EXPECTED[`${status}|${feeLabel}|${approval}`] ?? null)) differs += 1;
+          checked += 1;
+        }
+      }
+    }
+    expect(checked).toBe(28);
+    // The cells where approval changes the answer (manual pending/paid): the witness that this test can see the flag at all.
+    expect(differs).toBe(4);
+  });
+
+  it("the headline: a manual entry approved while its fee is owed waits on payment alone; unapproved, on both", () => {
+    expect(entryWaitingOn("pending", 2500, "manual", true)).toBe("payment");
+    expect(entryWaitingOn("pending", 2500, "manual", false)).toBe("payment_and_approval");
+  });
+});
+
+describe("entryStanding", () => {
+  it("reads the approved stamp too: an approved unpaid entry stands on its payment alone (polish wave P5, W12)", () => {
+    expect(entryStanding("pending", 2500, "manual", true)).toBe("payment");
+    expect(entryStanding("pending", 2500, "manual", false)).toBe("payment_and_approval");
+    // An unreadable review mode names nothing, approved or not; confirmed stays confirmed.
+    expect(entryStanding("pending", 2500, null, true)).toBeNull();
+    expect(entryStanding("confirmed", 2500, "manual", true)).toBe("confirmed");
+  });
+});
+
+// Polish wave P5 (H-2): what one entry costs, by RS009's rule (a solo sign-up pays its own price when the organiser set one; NULL = the
+// team's; 0 is free, never "unset"). Expected values are written per row from that rule.
+describe("entryPriceCents", () => {
+  it("prices every (team fee, solo fee, solo?) shape by the rule, and a missing settings row prices nothing (counted)", () => {
+    const rows: [number, number | null, boolean, number][] = [
+      [6000, 500, true, 500],
+      [6000, 500, false, 6000],
+      [6000, 0, true, 0],
+      [6000, 0, false, 6000],
+      [6000, null, true, 6000],
+      [6000, null, false, 6000],
+      [0, 500, true, 500],
+      [0, 500, false, 0],
+    ];
+    let checked = 0;
+    for (const [fee_cents, free_agent_fee_cents, solo, want] of rows) {
+      expect(entryPriceCents({ fee_cents, free_agent_fee_cents }, solo), `${fee_cents}/${free_agent_fee_cents}/${solo}`).toBe(want);
+      checked += 1;
+    }
+    expect(checked).toBe(8);
+    expect(entryPriceCents(null, true), "the empty case: no settings row").toBe(0);
+    expect(entryPriceCents(undefined, false)).toBe(0);
+  });
+});

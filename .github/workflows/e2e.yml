@@ -655,6 +655,10 @@ jobs:
       # CI-only envelope key for players' Lichess tokens (chess design §3.1). A DIFFERENT
       # value from DEVICE_LINK_KEK on purpose: one key must not open the other's rows.
       LICHESS_TOKEN_KEK: 9a8b7c6d5e4f30211203f4e5d6c7b8a99a8b7c6d5e4f30211203f4e5d6c7b8a9
+      # CI-only envelope key for queued email bodies (email outbox, owner ruling R13), NOT the sample key in .env.example
+      # (refused under NODE_ENV=production). Server and runner read this ONE value: the pay-page spec opens a queued
+      # reminder's sealed body to follow its /r/pay/<token> link (e2e/outbox-body-open.ts). Without it bodies are not sealed.
+      EMAIL_OUTBOX_KEK: 5e7a1c9d3b2f4086a1e5c7d9b3f204865e7a1c9d3b2f4086a1e5c7d9b3f20486
       # Public realtime-token minting (mintPublicFixtureToken, lib/realtime.ts).
       # Prefer ES256 (project JWKS shape); HS256 remains as fallback for older
       # helpers. CI-only dummy keypair (kid e2e-ci-dummy-es256) — generated for

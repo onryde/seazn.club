@@ -38,6 +38,12 @@ const NOT_A_SOLO_SIGNUP = {
   free_agent: false,
   assigned_team_id: null,
   division_started: false,
+  // No payment of THIS entry's own unless a case says so (polish wave W8: Refund reads the entry's intent, never the cart's).
+  entry_payment_intent_id: null,
+  // Not approved ahead of payment unless a case says so (polish wave P5, W12: V513 `approved_at`).
+  approved_at: null,
+  // No late payment sent back unless a case says so (V512; polish wave final fix m2).
+  late_refunded_cents: 0,
 } as const;
 
 describe("REGISTRANT_STATUS_STYLE", () => {
@@ -127,9 +133,14 @@ const PAYMENT_BASE = {
   amount_cents: 1500,
   refunded_cents: 0,
   disputed_at: null,
+  // The CART's intent (set by whichever entry paid) - read by nothing below; kept so a test can show it is ignored.
   payment_intent_id: null as string | null,
+  // THIS entry's own card payment (V387), the only intent the payment state reads (polish wave P5, carry d).
+  entry_payment_intent_id: null as string | null,
   status: "confirmed" as const,
 };
+/** A cart whose card payment was a SIBLING's: the cart's intent is set, this entry's own is not. */
+const CART_PAID_BY_SIBLING = { ...PAYMENT_BASE, payment_intent_id: "pi_sibling" };
 
 describe("deriveRegistrantPaymentState", () => {
   it("a disputed entry is 'disputed' regardless of anything else", () => {
@@ -148,7 +159,7 @@ describe("deriveRegistrantPaymentState", () => {
 
   it("a zero-fee entry is 'free', even with a non-null payment_intent_id — the CART might have paid by card for a fee-bearing sibling", () => {
     expect(
-      deriveRegistrantPaymentState({ ...PAYMENT_BASE, amount_cents: 0, payment_intent_id: "pi_123" }),
+      deriveRegistrantPaymentState({ ...PAYMENT_BASE, amount_cents: 0, entry_payment_intent_id: "pi_123" }),
     ).toBe("free");
   });
 
@@ -166,20 +177,34 @@ describe("deriveRegistrantPaymentState", () => {
   // V363/V364 moved onto `registration_groups` (CART-level, shared by every
   // entry in the cart) — reads the ENTRY's own `status` first instead.
   it("status paid/confirmed with no card payment_intent is 'paidOffline'", () => {
-    expect(deriveRegistrantPaymentState({ ...PAYMENT_BASE, status: "paid", payment_intent_id: null })).toBe(
+    expect(deriveRegistrantPaymentState({ ...PAYMENT_BASE, status: "paid", entry_payment_intent_id: null })).toBe(
       "paidOffline",
     );
     expect(
-      deriveRegistrantPaymentState({ ...PAYMENT_BASE, status: "confirmed", payment_intent_id: null }),
+      deriveRegistrantPaymentState({ ...PAYMENT_BASE, status: "confirmed", entry_payment_intent_id: null }),
     ).toBe("paidOffline");
   });
 
+  // Polish wave P5 (P1-review carry d): an entry marked paid in cash beside a sibling that paid by card read "Paid" (by card),
+  // because the label read the CART's intent. It reads the entry's own.
+  it("paid/confirmed with only a SIBLING's card payment on the cart is 'paidOffline'; the entry's own intent is 'paid'", () => {
+    const checked = (["paid", "confirmed"] as const).map((status) => {
+      expect(deriveRegistrantPaymentState({ ...CART_PAID_BY_SIBLING, status }), status).toBe("paidOffline");
+      expect(
+        deriveRegistrantPaymentState({ ...CART_PAID_BY_SIBLING, status, entry_payment_intent_id: "pi_sibling" }),
+        status,
+      ).toBe("paid");
+      return status;
+    });
+    expect(checked.length, "both settled statuses checked").toBe(2);
+  });
+
   it("status paid or confirmed WITH a card payment_intent is 'paid' (card payment captured)", () => {
-    expect(deriveRegistrantPaymentState({ ...PAYMENT_BASE, status: "paid", payment_intent_id: "pi_123" })).toBe(
+    expect(deriveRegistrantPaymentState({ ...PAYMENT_BASE, status: "paid", entry_payment_intent_id: "pi_123" })).toBe(
       "paid",
     );
     expect(
-      deriveRegistrantPaymentState({ ...PAYMENT_BASE, status: "confirmed", payment_intent_id: "pi_123" }),
+      deriveRegistrantPaymentState({ ...PAYMENT_BASE, status: "confirmed", entry_payment_intent_id: "pi_123" }),
     ).toBe("paid");
   });
 
@@ -189,7 +214,7 @@ describe("deriveRegistrantPaymentState", () => {
 
   it("a pending entry stays 'awaitingPayment' even when payment_intent_id is set — payment_intent_id alone never implies THIS entry is paid", () => {
     expect(
-      deriveRegistrantPaymentState({ ...PAYMENT_BASE, status: "pending", payment_intent_id: "pi_123" }),
+      deriveRegistrantPaymentState({ ...PAYMENT_BASE, status: "pending", entry_payment_intent_id: "pi_123" }),
     ).toBe("awaitingPayment");
   });
 
@@ -202,14 +227,14 @@ describe("deriveRegistrantPaymentState", () => {
       amount_cents: 1000,
       refunded_cents: 0,
       disputed_at: null,
-      payment_intent_id: null,
+      entry_payment_intent_id: null,
       status: "confirmed", // A was just marked paid -> materialised to confirmed
     });
     const entryB_stillPending = deriveRegistrantPaymentState({
       amount_cents: 2000,
       refunded_cents: 0,
       disputed_at: null,
-      payment_intent_id: null, // same cart column, untouched by A's mark-paid
+      entry_payment_intent_id: null, // B's own column, untouched by A's mark-paid
       status: "pending", // B's own status, untouched by A's mark-paid
     });
     expect(entryA_markedPaid).toBe("paidOffline");
@@ -352,8 +377,11 @@ describe("deriveRegistrantActionFlags", () => {
   // row's OWN quoted fee) as the fee signal in place of the division's live
   // registration_settings.fee_cents — see the function's own doc comment
   // for why (this pure function never sees the division's settings).
-  describe("approve's awaiting-payment carve-out (RS005 R1 finding 1)", () => {
-    it("approve is ABSENT on a manual, fee-bearing, unpaid, pending entry", () => {
+  //
+  // Polish wave P5 (W12) retires that carve-out: approveRegistration now APPROVES an unpaid entry (it stays pending with
+  // `approved_at`, V513, and its payment confirms it), so Approve is offered on an unpaid entry until it has been approved once.
+  describe("approve's awaiting-payment carve-out (RS005 R1 finding 1), retired by W12", () => {
+    it("approve is PRESENT on a manual, fee-bearing, unpaid, pending entry not yet approved (W12: approved, fee still due)", () => {
       expect(
         deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,
           status: "pending",
@@ -362,10 +390,24 @@ describe("deriveRegistrantActionFlags", () => {
           division_fee_cents: 1500,
           payment_intent_id: null,
         }).canApprove,
-      ).toBe(false);
+      ).toBe(true);
     });
 
-    it("approve is PRESENT once that same entry is paid (payment_intent_id set)", () => {
+    it("approve is ABSENT once that entry was approved ahead of its payment (approved_at set) - and Mark paid is still offered", () => {
+      const flags = deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,
+        status: "pending",
+        approval: "manual",
+        amount_cents: 1500, refunded_cents: 0,
+        division_fee_cents: 1500,
+        payment_intent_id: null,
+        approved_at: new Date("2026-11-12T10:00:00Z"),
+      });
+      expect(flags.canApprove).toBe(false);
+      expect(flags.canMarkPaid, "the money is still due: the organiser can record it").toBe(true);
+      expect(flags.canReject, "an approval is not irreversible before the money: reject stays").toBe(true);
+    });
+
+    it("approve is PRESENT once that same entry's OWN payment is recorded (entry_payment_intent_id set)", () => {
       expect(
         deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,
           status: "pending",
@@ -373,6 +415,22 @@ describe("deriveRegistrantActionFlags", () => {
           amount_cents: 1500, refunded_cents: 0,
           division_fee_cents: 1500,
           payment_intent_id: "pi_123",
+          entry_payment_intent_id: "pi_123",
+        }).canApprove,
+      ).toBe(true);
+    });
+
+    // Polish wave P5 (P1 carry): the cart's intent is set by whichever entry paid; on a cart where only a SIBLING paid it is the
+    // sibling's, and this entry still owes its fee. W12: Approve is offered (it approves with the fee due and seats nobody).
+    it("approve is PRESENT when only a SIBLING's payment sits on the cart (cart intent set, entry intent null) - W12 approves it, fee due", () => {
+      expect(
+        deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,
+          status: "pending",
+          approval: "manual",
+          amount_cents: 1000, refunded_cents: 0,
+          division_fee_cents: 1000,
+          payment_intent_id: "pi_sibling",
+          entry_payment_intent_id: null,
         }).canApprove,
       ).toBe(true);
     });
@@ -401,7 +459,7 @@ describe("deriveRegistrantActionFlags", () => {
       ).toBe(true);
     });
 
-    it("reject stays PRESENT in the exact case approve is hidden — rejectRegistration carries no awaiting-payment check, so an organiser can always decline outright before ever collecting money", () => {
+    it("reject stays PRESENT on an unpaid entry — rejectRegistration carries no awaiting-payment check, so an organiser can always decline outright before ever collecting money", () => {
       expect(
         deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,
           status: "pending",
@@ -418,9 +476,10 @@ describe("deriveRegistrantActionFlags", () => {
   // rule (usecases/registrations/) — status must still be 'pending', no
   // payment_intent_id on file (a card payment refunds on the payments
   // trail instead), and a real fee owed. Deliberately no approval-mode
-  // check: the usecase confirms identically on a manual or an auto
-  // division (registrations.test.ts's own "...still confirm on a MANUAL
-  // division — an organiser's explicit action IS the approval").
+  // check: the control is offered on a manual or an auto division alike.
+  // Polish wave P5 (W12): what it DOES differs - on a manual division an
+  // entry not yet approved stays `paid` (awaiting approval) instead of
+  // confirming; the payment is no longer the approval.
   describe("canMarkPaid (RS005 R1 finding 1's recovery path)", () => {
     it("is legal on a pending, fee-bearing, unpaid entry — on EITHER approval mode", () => {
       for (const approval of ["manual", "auto"] as const) {
@@ -436,7 +495,7 @@ describe("deriveRegistrantActionFlags", () => {
       }
     });
 
-    it("is ABSENT once a payment_intent_id already exists — a card payment refunds on the payments trail instead", () => {
+    it("is ABSENT once the entry's OWN payment intent exists — a card payment refunds on the payments trail instead", () => {
       expect(
         deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,
           status: "pending",
@@ -444,8 +503,24 @@ describe("deriveRegistrantActionFlags", () => {
           amount_cents: 1500, refunded_cents: 0,
           division_fee_cents: 1500,
           payment_intent_id: "pi_123",
+          entry_payment_intent_id: "pi_123",
         }).canMarkPaid,
       ).toBe(false);
+    });
+
+    // Polish wave P5 (P1 carry): markRegistrationPaidOffline refuses only THIS entry's own card payment; a sibling's intent on
+    // the cart left the unpaid entry with no way forward (no Approve, no Mark paid).
+    it("is PRESENT when only a SIBLING's payment sits on the cart (cart intent set, entry intent null)", () => {
+      expect(
+        deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,
+          status: "pending",
+          approval: "manual",
+          amount_cents: 1000, refunded_cents: 0,
+          division_fee_cents: 1000,
+          payment_intent_id: "pi_sibling",
+          entry_payment_intent_id: null,
+        }).canMarkPaid,
+      ).toBe(true);
     });
 
     it("is ABSENT on a free entry (amount_cents 0) — 'This division has no entry fee'", () => {
@@ -474,30 +549,37 @@ describe("deriveRegistrantActionFlags", () => {
       }
     });
 
-    it("is mutually exclusive with canApprove by construction — never both true for the same row", () => {
+    // Polish wave P5 (W12) replaces "mutually exclusive with canApprove": Approve and Mark paid are two decisions now, so both are
+    // offered on a manual entry that is unpaid and not yet approved. The rule, from the W12 ruling (never from this function):
+    // Approve is offered exactly while a MANUAL entry is pending|paid and not yet approved, whatever its money; the approval stamp
+    // never changes whether Mark paid is offered.
+    it("W12: canApprove = manual, pending|paid, not yet approved - whatever the money; approved_at never moves canMarkPaid", () => {
+      let checked = 0;
+      let both = 0;
       for (const status of RegistrationStatus.options) {
         for (const approval of ["auto", "manual"] as const) {
           for (const amount_cents of [0, 1500]) {
-            // Sweep the DIVISION fee too: it is what the gate actually reads,
-            // so varying only the entry's frozen amount would leave the real
-            // input unexercised — including the diverged combinations a fee
-            // edit produces.
             for (const division_fee_cents of [0, 1500]) {
             for (const payment_intent_id of [null, "pi_123"] as const) {
-              const flags = deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,
-                status,
-                approval,
-                amount_cents,
-                refunded_cents: 0,
-                division_fee_cents,
-                payment_intent_id,
-              });
-              expect(flags.canApprove && flags.canMarkPaid).toBe(false);
+            for (const entry_payment_intent_id of [null, "pi_123"] as const) {
+            for (const approved_at of [null, new Date("2026-11-12T10:00:00Z")]) {
+              const row = { ...NOT_A_SOLO_SIGNUP, status, approval, amount_cents, refunded_cents: 0, division_fee_cents, payment_intent_id, entry_payment_intent_id };
+              const flags = deriveRegistrantActionFlags({ ...row, approved_at });
+              const wantApprove = approval === "manual" && (status === "pending" || status === "paid") && approved_at === null;
+              expect(flags.canApprove, `${status} ${approval} fee ${division_fee_cents} approved ${approved_at !== null}`).toBe(wantApprove);
+              expect(flags.canMarkPaid).toBe(deriveRegistrantActionFlags({ ...row, approved_at: null }).canMarkPaid);
+              if (flags.canApprove && flags.canMarkPaid) both++;
+              checked++;
+            }
+            }
             }
             }
           }
         }
       }
+      expect(checked, "anti-vacuity").toBe(RegistrationStatus.options.length * 64);
+      // The split itself: rows that offer BOTH decisions exist (manual, pending, a fee owed, no own payment, not yet approved).
+      expect(both, "Approve and Mark paid are offered together somewhere").toBeGreaterThan(0);
     });
   });
 
@@ -513,6 +595,7 @@ describe("deriveRegistrantActionFlags", () => {
     canPromote: true,
     canMarkPaid: true,
     canResend: true,
+    canRemind: true,
     canRefund: true,
     canAssign: true,
     canUnassign: true,
@@ -524,11 +607,14 @@ describe("deriveRegistrantActionFlags", () => {
   // future is exercised here automatically rather than silently falling
   // through to whatever a branch's default does.
   it("returns a defined boolean for every real status × approval × fee × payment_intent combination", () => {
+    let swept = 0;
     for (const status of RegistrationStatus.options) {
       for (const approval of ["auto", "manual"] as const) {
         for (const amount_cents of [0, 1500]) {
           for (const division_fee_cents of [0, 1500]) {
           for (const payment_intent_id of [null, "pi_123"] as const) {
+          // Polish wave W8: the entry's OWN intent is a separate axis from the cart's — a sibling's payment sets the cart's alone.
+          for (const entry_payment_intent_id of [null, "pi_123"] as const) {
           // RS007 #16 — refunded_cents is a real input now (canRefund reads
           // `amount_cents - refunded_cents`), so it joins the sweep rather
           // than being pinned at 0: 1500 against a 1500 charge is the
@@ -541,6 +627,7 @@ describe("deriveRegistrantActionFlags", () => {
               refunded_cents,
               division_fee_cents,
               payment_intent_id,
+              entry_payment_intent_id,
             });
             // RS009: iterate the flags the function ACTUALLY returned rather
             // than a hand-listed seven. The list this replaces was written to
@@ -563,17 +650,40 @@ describe("deriveRegistrantActionFlags", () => {
             // FUTURE divergence between the two is a deliberate code change,
             // not a silent drift the sweep never notices.
             expect(flags.canResend).toBe(flags.canWithdraw);
+            // Player payment page: Send payment reminder is for a pending entry in a division that charges (the usecase's own two 422s).
+            expect(flags.canRemind).toBe(status === "pending" && division_fee_cents > 0);
             // RS007 #16 — canRefund must mirror refundRegistration's own two
             // refusals ("No payment to refund" / "Already fully refunded")
             // for EVERY combination, so an organiser is never shown a button
             // the server will reject, nor denied one it would have honoured.
-            expect(flags.canRefund).toBe(payment_intent_id !== null && amount_cents - refunded_cents > 0);
+            // Polish wave W8: on THIS entry's own payment - the cart's intent (a sibling's payment) never makes an entry refundable.
+            expect(flags.canRefund).toBe(entry_payment_intent_id !== null && amount_cents - refunded_cents > 0);
+            swept++;
+          }
           }
           }
           }
         }
       }
     }
+    // Anti-vacuity: every status × 2 approvals × 2 amounts × 2 fees × 2 cart intents × 2 entry intents × 2 refunded.
+    expect(swept).toBe(RegistrationStatus.options.length * 64);
+  });
+
+  describe("canRemind (player payment page)", () => {
+    const rowOf = (status: (typeof RegistrationStatus.options)[number], division_fee_cents: number) =>
+      deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP, status, approval: "auto", amount_cents: 1500, refunded_cents: 0, division_fee_cents, payment_intent_id: null });
+
+    it("is true only for a pending entry in a division with a fee; every other status, and a free division, is false", () => {
+      let checked = 0;
+      for (const status of RegistrationStatus.options) {
+        expect(rowOf(status, 1500).canRemind, `${status} with a fee`).toBe(status === "pending");
+        expect(rowOf(status, 0).canRemind, `${status} in a free division`).toBe(false);
+        checked += 2;
+      }
+      expect(checked, "anti-vacuity").toBe(RegistrationStatus.options.length * 2);
+      expect(rowOf("pending", 1500).canRemind, "the positive").toBe(true);
+    });
   });
 
   // RS007 finding #16. The refund endpoint and its confirm copy had existed
@@ -596,6 +706,34 @@ describe("deriveRegistrantActionFlags", () => {
       ).toBe(false);
     });
 
+    // Polish wave W8 (walkthrough s08b): a cart of two where only the SIBLING paid. The cart's intent is the sibling's payment;
+    // this entry has none of its own, so there is nothing of its to refund - the server refuses 422 and the control is hidden.
+    it("is false on an unpaid entry whose cart carries a SIBLING's payment (W8)", () => {
+      expect(
+        deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,
+          ...base,
+          status: "pending",
+          amount_cents: 1000,
+          refunded_cents: 0,
+          payment_intent_id: "pi_sibling",
+          entry_payment_intent_id: null,
+        }).canRefund,
+      ).toBe(false);
+    });
+
+    it("is true on the entry that paid, whatever the cart's intent says (W8 positive pair)", () => {
+      expect(
+        deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,
+          ...base,
+          status: "confirmed",
+          amount_cents: 1500,
+          refunded_cents: 0,
+          payment_intent_id: "pi_newer_sibling",
+          entry_payment_intent_id: "pi_own",
+        }).canRefund,
+      ).toBe(true);
+    });
+
     it("is true for a paid entry with a balance left", () => {
       expect(
         deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,
@@ -604,6 +742,7 @@ describe("deriveRegistrantActionFlags", () => {
           amount_cents: 2500,
           refunded_cents: 0,
           payment_intent_id: "pi_123",
+          entry_payment_intent_id: "pi_123",
         }).canRefund,
       ).toBe(true);
     });
@@ -616,6 +755,7 @@ describe("deriveRegistrantActionFlags", () => {
           amount_cents: 2500,
           refunded_cents: 1000,
           payment_intent_id: "pi_123",
+          entry_payment_intent_id: "pi_123",
         }).canRefund,
       ).toBe(true);
     });
@@ -628,8 +768,33 @@ describe("deriveRegistrantActionFlags", () => {
           amount_cents: 2500,
           refunded_cents: 2500,
           payment_intent_id: "pi_123",
+          entry_payment_intent_id: "pi_123",
         }).canRefund,
       ).toBe(false);
+    });
+
+    // Polish wave final fix m2: the cap is what is left of THIS payment - its refunds minus the refunds of LATE payments (V512,
+    // `ownPaymentRefundedCents`), the same cap `refundRegistration` applies. A re-promoted entry whose earlier, late payment was sent
+    // back in full and which then paid again has refunded_cents == amount_cents, all of it late: its own payment is untouched.
+    it("is TRUE on an entry whose refunds were all of a LATE payment, and follows the remaining balance of its own (m2)", () => {
+      const row = (refunded_cents: number, late_refunded_cents: number) =>
+        deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,
+          ...base,
+          status: "withdrawn",
+          amount_cents: 1500,
+          refunded_cents,
+          late_refunded_cents,
+          payment_intent_id: "pi_again",
+          entry_payment_intent_id: "pi_again",
+        }).canRefund;
+      const cases: [refunded: number, late: number, refundable: boolean][] = [
+        [1500, 1500, true], // all late: the current payment is whole
+        [2000, 1500, true], // 500 of the current payment back: 1000 left
+        [3000, 1500, false], // the current payment fully back
+        [1500, 0, false], // no late refunds: the history IS this payment's
+      ];
+      for (const [refunded, late, refundable] of cases) expect(row(refunded, late), `refunded ${refunded}, late ${late}`).toBe(refundable);
+      expect(cases.length, "anti-vacuity").toBe(4);
     });
 
     // The case the flag EXISTS for. Past refund_lock_at, withdrawCore
@@ -648,6 +813,7 @@ describe("deriveRegistrantActionFlags", () => {
           amount_cents: 4000,
           refunded_cents: 0,
           payment_intent_id: "pi_123",
+          entry_payment_intent_id: "pi_123",
         }).canRefund,
       ).toBe(true);
     });
@@ -660,6 +826,7 @@ describe("deriveRegistrantActionFlags", () => {
           amount_cents: 4000,
           refunded_cents: 0,
           payment_intent_id: "pi_123",
+          entry_payment_intent_id: "pi_123",
         }).canRefund,
       ).toBe(true);
     });
@@ -690,7 +857,7 @@ describe("deriveRegistrantActionFlags", () => {
     // existing entries. Reading `division_fee_cents` means the right control
     // renders on the FIRST render — the earlier attempt inferred the fee from
     // the server's 4xx text and only corrected itself after a failed click.
-    it("fee raised 0 -> 20.00 under a pending entry: mark paid, not approve", () => {
+    it("fee raised 0 -> 20.00 under a pending entry: mark paid is offered (and, W12, approve with the fee due)", () => {
       const flags = deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,
         status: "pending",
         approval: "manual",
@@ -699,7 +866,7 @@ describe("deriveRegistrantActionFlags", () => {
         payment_intent_id: null,
       });
       expect(flags.canMarkPaid, "the control the server would accept").toBe(true);
-      expect(flags.canApprove, "approveRegistration would 422 'mark it paid first'").toBe(false);
+      expect(flags.canApprove, "W12: approveRegistration approves it with the fee due").toBe(true);
     });
 
     it("fee dropped 20.00 -> 0 under a pending entry: approve, not mark paid", () => {
@@ -723,7 +890,7 @@ describe("deriveRegistrantActionFlags", () => {
         payment_intent_id: null,
       });
       expect(owed.canMarkPaid).toBe(true);
-      expect(owed.canApprove).toBe(false);
+      expect(owed.canApprove, "W12: approve is offered too (fee due)").toBe(true);
     });
   });
 });

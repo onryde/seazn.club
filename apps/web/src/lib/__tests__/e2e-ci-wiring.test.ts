@@ -201,6 +201,9 @@ const WALKTHROUGH_SPECS: string[] = [
   "rs007-invite-pay-cancel.spec.ts",
   "rs007-money-matrix.spec.ts",
   "event-pass.spec.ts",
+  // The player payment page's card path: chase mail -> /r/pay/<token> -> hosted Checkout -> "Paid", and a second Pay reusing
+  // the same session. Opt-in on the same secrets as registration-connect.spec.ts.
+  "registration-pay-page-card.spec.ts",
 
   // Registration — the entrant-facing journeys.
   "rs007-registration-journey.spec.ts",

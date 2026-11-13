@@ -10,9 +10,10 @@ import { resumeRegistrationCheckout } from "@/server/usecases/registrations";
 type Ctx = { params: Promise<{ id: string }> };
 
 /** (Re)open Stripe Checkout for a pending paid registration — abandoned
- *  first checkouts and waitlist promotions pay from here. Every call mints a
- *  Checkout Session, so on top of the public read budget it spends a per-IP
- *  CHECKOUT_LIMIT bucket of its own. */
+ *  first checkouts and waitlist promotions pay from here. A call hands the
+ *  entry's still-open session out again or mints one (polish wave W5), so on
+ *  top of the public read budget it spends a per-IP CHECKOUT_LIMIT bucket of
+ *  its own. */
 export async function POST(req: Request, { params }: Ctx) {
   return v1(async () => {
     await publicRateLimit(req);

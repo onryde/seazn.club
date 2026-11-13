@@ -35,3 +35,73 @@ export const TERMINAL_STATUSES = ["withdrawn", "rejected", "expired"] as const;
 export function isTerminalRegistrationStatus(status: string): boolean {
   return (TERMINAL_STATUSES as readonly string[]).includes(status);
 }
+
+/** What has been sent back of THIS entry's CURRENT payment (polish wave P5, P1-review carry b): its refund history
+ *  (`refunded_cents`, V368) minus the refunds of LATE payments (`late_refunded_cents`, V512) - a late payment is never the entry's
+ *  current payment (a late outcome never stamps its intent on the entry), and a re-promotion resets the fee but keeps the history.
+ *  The cap of every refund of the current payment is `amount_cents - ownPaymentRefundedCents(row)`: the organiser's Refund, the
+ *  withdrawal refund, the pool-deadline sweep, the reject refund, the panel's Refund control and the payment page all read this.
+ *  Dependency-free like the rest of this module, so the organiser panel (a client island) imports the same rule. */
+export function ownPaymentRefundedCents(row: { refunded_cents: number; late_refunded_cents: number }): number {
+  return Math.max(0, row.refunded_cents - row.late_refunded_cents);
+}
+
+/** What ONE entry costs on its division right now (RS009): a solo sign-up pays `free_agent_fee_cents` when the organiser set one - NULL
+ *  means "no separate price", the team's - and every other entry pays `fee_cents`. 0 is a real price (free), never "unset". The ONE
+ *  definition: submit prices an entry with it, and every organiser money gate (Approve, Confirm, Mark paid, the payment reminder) and the
+ *  panel's `division_fee_cents` read it, so a solo is never reminded, marked paid or held for the TEAM's fee (polish wave P5, H-2).
+ *  No settings row prices nothing. Dependency-free, like the rest of this module. */
+export function entryPriceCents(
+  settings: { fee_cents: number | null; free_agent_fee_cents: number | null } | null | undefined,
+  freeAgent: boolean,
+): number {
+  if (!settings) return 0;
+  return freeAgent && settings.free_agent_fee_cents !== null ? settings.free_agent_fee_cents : (settings.fee_cents ?? 0);
+}
+
+/** What an entry that is not yet confirmed is still WAITING ON (polish wave P2; the mails' answer to a bare "Pending"):
+ *  `payment` (its fee is owed), `approval` (a manual-approval division needs the organiser's yes) or both. `null` = nothing to
+ *  name: the entry is confirmed, waitlisted, ended, or pending with neither a fee nor a manual review (a state a free auto-approval
+ *  division never rests in), so the caller falls back to the status word.
+ *
+ *  A fee is owed only while the entry is `pending`; a `paid` entry has paid, so it waits on approval alone, and only when the
+ *  division reviews entries by hand. `feeCents` is the entry's OWN fee (`registrations.amount_cents`), never the cart's.
+ *
+ *  `approved` (polish wave P5, W12): the organiser already said yes to this entry (`registrations.approved_at`, V513) while its fee was
+ *  still owed - the entry stays `pending` and waits on its payment alone, which then confirms it. Every caller passes it: an entry the
+ *  organiser approved never reads "awaiting approval" again. */
+export type EntryWaitingOn = "payment" | "approval" | "payment_and_approval";
+export function entryWaitingOn(
+  status: string,
+  feeCents: number,
+  approval: "auto" | "manual",
+  approved: boolean,
+): EntryWaitingOn | null {
+  if (status !== "pending" && status !== "paid") return null;
+  const payment = status === "pending" && feeCents > 0;
+  const review = approval === "manual" && !approved;
+  if (payment && review) return "payment_and_approval";
+  if (payment) return "payment";
+  if (review) return "approval";
+  return null;
+}
+
+/** Where an entry STANDS, in words a person who just joined it can be told truthfully (polish wave P3: the join page said "you're in, your
+ *  spot is confirmed" for a team still awaiting payment or approval, and the mail already knew better): confirmed, on the waitlist, or still
+ *  waiting on payment and/or the organiser. `null` = nothing nameable (a pending entry with no fee under auto-approval is a state nothing
+ *  rests in), so a caller says nothing about the entry's standing rather than claim one; it never reads as `confirmed`.
+ *
+ *  `approval` is null when the division's review mode could not be read: a pending entry then names nothing, because "waiting for payment"
+ *  vs "waiting for approval" cannot be told apart without it. The ONE definition: the joiner mail (`lifecycle-mail.ts`) and the join
+ *  response (`joinTeamEntry`) both call this, so the mail and the page can never disagree about the same entry. */
+export type EntryStanding = "confirmed" | "waitlisted" | EntryWaitingOn;
+export function entryStanding(
+  status: string,
+  feeCents: number,
+  approval: "auto" | "manual" | null,
+  approved: boolean,
+): EntryStanding | null {
+  if (status === "confirmed") return "confirmed";
+  if (status === "waitlisted") return "waitlisted";
+  return approval === null ? null : entryWaitingOn(status, feeCents, approval, approved);
+}

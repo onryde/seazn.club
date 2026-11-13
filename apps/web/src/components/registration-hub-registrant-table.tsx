@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { ChevronDown } from "lucide-react";
 import { t } from "@/lib/i18n";
 import type { Dict } from "@/lib/i18n-constants";
-import { formatMinor, asCurrency } from "@/lib/currency";
+import { formatMoneyExact, asCurrency } from "@/lib/currency";
 import { fmtDateTime } from "@/lib/format";
 import { deriveCapacityMeter } from "@/components/registration-hub-row-derive";
 import {
@@ -143,18 +143,19 @@ export function renderRegistrantPaymentCell(
   dict: Dict,
 ): ReactNode {
   const currency = asCurrency(row.currency);
+  // Owner ruling 2026-11-12: the panel spells money as the player's pages and mails do (formatMoneyExact): "£15.00", never "£15".
   const amountText =
     row.status === "waitlisted"
       ? t(dict, "reg.hub.registrants.detail.paymentState.waitlisted")
       : row.amount_cents === 0
         ? t(dict, "reg.hub.row.fee.free")
-        : formatMinor(row.amount_cents, currency);
+        : formatMoneyExact(row.amount_cents, currency);
   return (
     <span className="flex flex-col">
       <span className="tabular-nums">{amountText}</span>
       {row.refunded_cents > 0 && (
         <span className="text-xs tabular-nums text-amber-700">
-          {t(dict, "reg.hub.registrants.table.refunded", { amount: formatMinor(row.refunded_cents, currency) })}
+          {t(dict, "reg.hub.registrants.table.refunded", { amount: formatMoneyExact(row.refunded_cents, currency) })}
         </span>
       )}
     </span>
@@ -175,6 +176,9 @@ export interface RegistrationHubRegistrantTableContext {
    *  current (possibly filtered) URL, or a sibling excluded by the active
    *  filter would link nowhere. Same value as the panel's own `clearHref`. */
   baseHref: string;
+  /** The console route's own slugs: the row detail builds the competition's public join link from them (polish wave P6). */
+  orgSlug: string;
+  compSlug: string;
 }
 
 /**
@@ -261,7 +265,7 @@ export function RegistrationHubRegistrantRow({
   siblings: RegistrantCartSibling[];
   formFields: RegistrationFormField[];
 }) {
-  const { dict, orgTz, canEdit, baseHref } = context;
+  const { dict, orgTz, canEdit, baseHref, orgSlug, compSlug } = context;
 
   return (
     <details
@@ -327,6 +331,8 @@ export function RegistrationHubRegistrantRow({
           siblings={siblings}
           formFields={formFields}
           baseHref={baseHref}
+          orgSlug={orgSlug}
+          compSlug={compSlug}
         />
       </div>
     </details>

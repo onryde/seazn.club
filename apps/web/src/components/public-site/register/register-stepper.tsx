@@ -21,7 +21,7 @@ import { TurnstileWidget, useTurnstile } from "@/components/turnstile-widget";
 import { isTurnstileRefusal } from "@/lib/turnstile";
 import { withTurnstile } from "@/lib/turnstile-client";
 import { useHydrated } from "@/lib/use-client-snapshot";
-import { formatMinor, type Currency } from "@/lib/currency";
+import { formatMoneyExact } from "@/lib/currency";
 import {
   autoLinkObviousSelf,
   autoSeedSingleDivision,
@@ -32,6 +32,7 @@ import {
   type CartAction,
 } from "./cart";
 import { lichessLinkStartHref } from "@/lib/lichess-link";
+import { seedDetailsRows } from "./details-seed";
 import { seasonStartYearFrom } from "./eligibility-presentation";
 import { clearRegisterState, REGISTER_STATE_VERSION, loadRegisterState, saveRegisterState } from "./storage";
 import {
@@ -50,7 +51,8 @@ import { StepEntries } from "./step-entries";
 import { StepNav } from "./step-nav";
 import { StepReview } from "./step-review";
 import { StepWho } from "./step-who";
-import { buildStepOrder, nextStepIndex, prevStepIndex, shouldCollapseEntries, stepFocusTransition } from "./steps";
+import { buildStepOrder, nextStepIndex, offersJoinCode, prevStepIndex, shouldCollapseEntries, stepFocusTransition } from "./steps";
+import { JoinCodeEntry } from "./join-code-entry";
 import { BTN_GHOST, BTN_PRIMARY } from "./styles";
 import {
   EMPTY_CART,
@@ -135,6 +137,8 @@ export function RegisterStepper({
   // and a seeded-but-unnameable team entry could disagree.
   const collapseEntries = shouldCollapseEntries(openDivisions.length, openDivisions[0]?.entrant_kind);
   const stepOrder = buildStepOrder(openDivisions.length, openDivisions[0]?.entrant_kind);
+  // Polish wave H: the "Have a join code?" door — first step only (below), and only where an open team/pair division exists.
+  const joinCodeDoor = offersJoinCode(info.divisions);
   const seasonStartYear = seasonStartYearFrom(info.competition.starts_on);
 
   // `false` on the server and in the hydration render, `true` from the render after (and on the first render of a
@@ -275,8 +279,8 @@ export function RegisterStepper({
     });
   }, [hydrated, orgSlug, competitionSlug, contact, imPlaying, cart, consent, stepIndex]);
 
-  // See cart.ts's autoLinkObviousSelf doc comment: links the one cart entry to
-  // "I'm playing" only when there is no ambiguity, never overriding an explicit
+  // See cart.ts's autoLinkObviousSelf doc comment: links every cart entry to
+  // "I'm playing" (one per division, polish wave V1), never overriding an explicit
   // choice. clearSelfLinkWhenNotPlaying is the inverse direction (fix wave
   // finding #2): un-toggling "I'm playing" must clear ANY self-link, auto- or
   // explicitly-made, or a stale registering_self:true with no dob collected
@@ -350,7 +354,7 @@ export function RegisterStepper({
     reviewSummary.subtotalCents === 0 || !reviewSummary.currency
       ? t("register.submit.free")
       : t(reviewPayable?.payment_method === "stripe" ? "register.submit.card" : "register.submit.fee", {
-          fee: formatMinor(reviewSummary.subtotalCents, reviewSummary.currency as Currency, locale),
+          fee: formatMoneyExact(reviewSummary.subtotalCents, reviewSummary.currency, locale),
         });
 
   // Clamped to the LAST real step, never stepOrder.length — "review" is a
@@ -378,6 +382,11 @@ export function RegisterStepper({
     if (currentStep === "details") setDetailsAttempted(true);
     if (currentStep === "consent") setConsentAttempted(true);
     if (!canGoNext) return;
+    // P4 (W1, W3): moving INTO details seeds its rows from the contact and the pair partner (details-seed.ts — blank rows only, so
+    // going Back and Next again never overwrites what the registrant typed there).
+    if (stepOrder[nextStepIndex(clampedIndex, stepOrder)] === "details") {
+      setCart((c) => seedDetailsRows(c, contact, info.divisions));
+    }
     setStepIndex((i) => nextStepIndex(i, stepOrder));
   }
   function goBack() {
@@ -443,6 +452,9 @@ export function RegisterStepper({
           them, and its recorder blocks only this class on the element that carries the value, which here would be the
           whole registration form. `hidden`, so it takes no space. */}
       {joinCode ? <span hidden className="ph-no-capture" data-join-code={joinCode} /> : null}
+      {/* A teammate handed a CODE (not a link) has no other door; the join page decides everything past the typed code. First step
+          only: past it the person is building their own entry, and the door is a collapsed line, not a card. */}
+      {joinCodeDoor && clampedIndex === 0 ? <JoinCodeEntry orgSlug={orgSlug} competitionSlug={competitionSlug} /> : null}
       <StepNav order={stepOrder} currentIndex={clampedIndex} />
 
       {currentStep === "who" && (

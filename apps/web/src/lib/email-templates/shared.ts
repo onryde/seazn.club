@@ -1,5 +1,6 @@
 // Shared text helpers for the email templates. HTML structure lives in the
 // ./html files and is composed by ./compose.ts.
+import { formatMoneyExact } from "@/lib/format-money-exact";
 
 export function escapeHtml(s: string): string {
   return s
@@ -9,9 +10,23 @@ export function escapeHtml(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
-export function money(cents: number, currency: string): string {
-  return new Intl.NumberFormat("en-GB", {
-    style: "currency",
-    currency: currency.toUpperCase(),
-  }).format(cents / 100);
+/** An amount as a mail writes it: the same spelling the status page, the review step and the payment page use (`formatMoneyExact`), in the
+ *  language the mail is written in. P3 (W1) made the digits agree ("£15" on a page, "£15.00" in its mail); P4 made the symbol agree - the
+ *  mail was pinned to en-GB, which writes a dollar "US$15.00" where the page writes "$15.00", and a French mail "£15.00" beside the page's
+ *  "15,00 £GB". Every registrant mail passes its recipient's language. A sender that names none - the sponsor, dispute and staff mails -
+ *  keeps the en-GB spelling every mail wrote before (polish wave final fix m7: P4 had moved that default to "en", changing those mails
+ *  with no test on them). */
+export function money(cents: number, currency: string, locale = "en-GB"): string {
+  return formatMoneyExact(cents, currency, locale);
 }
+
+/** Polish wave sign-off V8: the entry IS the recipient (an individual registering themself) when its name is theirs - compared trimmed,
+ *  spaces collapsed, case-folded, the way one person's name is typed twice. Such a mail names the entry by its division ("your entry in
+ *  Open Singles") instead of naming the person back to themselves. An empty name is nobody's: it never matches. */
+export function isOwnEntry(displayName: string, recipientName: string): boolean {
+  const norm = (name: string): string => name.trim().replace(/\s+/g, " ").toLocaleLowerCase();
+  return norm(displayName) !== "" && norm(displayName) === norm(recipientName);
+}
+
+/** The key's own-entry twin (`<key>Own`): the same sentence without the entry's name. */
+export const ownKey = (key: string, own: boolean): string => (own ? `${key}Own` : key);

@@ -157,6 +157,10 @@ export const Registration = z.object({
   refunded_at: z.string().nullable(),
   expires_at: z.string().nullable(),
   offline_marked_paid_at: z.string().nullable(),
+  /** When the organiser approved this entry on a manual-approval division while its fee was still owed (V513): the entry stays
+   *  `pending` until it is paid, and its payment then confirms it. Null when never approved that way (an entry approved after paying
+   *  is confirmed at once and carries no stamp). */
+  approved_at: z.string().nullable(),
   disputed_at: z.string().nullable(),
   entrant_id: Uuid.nullable(),
   promoted_at: z.string().nullable(),
@@ -212,6 +216,9 @@ export const RegistrationListEntry = Registration.extend({
    *  `unassignSoloSignUp`'s own refusal so the hub never renders a Remove
    *  button the server will refuse. */
   division_started: z.boolean(),
+  /** When the organiser last pressed "Send payment reminder" for this entry (the newest `registration.payment_reminded` audit row);
+   *  null if never. */
+  last_reminded_at: z.string().nullable(),
 });
 
 /** `POST /registrations/{id}/promote` body. `id` in the URL resolves which
@@ -576,6 +583,10 @@ export const PublicJoinResponse = z.object({
   registration_id: Uuid,
   player_id: Uuid,
   consent_status: z.enum(["granted", "guardian"]),
+  /** Where the entry the joiner just joined stands (polish wave P3, W4/W13; `JoinTeamEntryResult.entry_state`, registration-submit.ts):
+   *  confirmed, on the waitlist, or still waiting on payment and/or the organiser's approval. Only `confirmed` may be worded as "you're
+   *  in". null = nothing nameable (a pending entry with no fee under auto-approval), never to be read as confirmed. */
+  entry_state: z.enum(["confirmed", "waitlisted", "payment", "approval", "payment_and_approval"]).nullable(),
 });
 
 /** One CAPTAIN-ENTERED, still-`pending` slot on an entry — claimable by
@@ -599,6 +610,11 @@ export const PublicJoinPreviewResponse = z.object({
   competition_slug: z.string(),
   org_slug: z.string(),
   org_name: z.string(),
+  /** What kind of entry the link joins (polish wave P3, W3; `JoinPreviewResult.entrant_kind`, registration-submit.ts): the join page
+   *  says "this pair is full" only for a pair. */
+  entrant_kind: EntrantKind,
+  /** Whether the entry is confirmed (`JoinPreviewResult.entry_confirmed`): only then does a full entry's page use check-in words. */
+  entry_confirmed: z.boolean(),
   unclaimed_slots: z.array(PublicJoinPreviewSlot),
   allow_new_player: z.boolean(),
   /** RS007 join page — whether the WHO-equivalent step must collect a

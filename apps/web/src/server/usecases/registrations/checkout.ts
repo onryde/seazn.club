@@ -1,7 +1,7 @@
 import "server-only";
 // Minting and resuming a Stripe checkout for a registration or a cart (see ./index.ts).
 import type Stripe from "stripe";
-import { sql } from "@/lib/db";
+import { sql, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { getStripe } from "@/lib/stripe";
 import { isRegistrationCurrency } from "@/lib/currency";
@@ -131,6 +131,30 @@ async function mintOrTranslate(
   }
 }
 
+/** One Checkout line item per entry. Its narrow return type is assignable to Stripe's `LineItem` (checked by `satisfies` below) and
+ *  promises what Stripe's own type leaves optional - a quantity, a unit amount and a name on every line - so a reader that shows
+ *  what Checkout will charge (the player payment page, `./pay-page.ts`) reads the SAME lines without an "absent" branch. */
+export interface RegistrationLineItem {
+  quantity: number;
+  price_data: { currency: string; unit_amount: number; product_data: { name: string } };
+}
+
+/** The line items `createRegistrationCheckout` sends Stripe for `entries`: the single source of what a registration's Checkout
+ *  charges. Pure; the player payment page renders its amount from this, never from `amount_cents` read separately. */
+export function registrationLineItems(
+  entries: Pick<RegistrationWithGroupRow, "amount_cents" | "currency" | "display_name">[],
+  compName: string,
+): RegistrationLineItem[] {
+  return entries.map((reg) => ({
+    quantity: 1,
+    price_data: {
+      currency: reg.currency,
+      unit_amount: reg.amount_cents,
+      product_data: { name: `${compName} — entry fee (${reg.display_name})` },
+    },
+  })) satisfies Stripe.Checkout.SessionCreateParams.LineItem[];
+}
+
 /**
  * ONE Stripe checkout session for a SET of a cart's entries (RS003 W3a,
  * owner ruling 1) — not necessarily the whole cart: a waitlist promotion
@@ -162,7 +186,61 @@ export async function createRegistrationCheckout(
   ctx: DivisionCtx,
   origin: string,
   token: string | null,
+  opts: RegistrationCheckoutOpts = {},
 ): Promise<string> {
+  return (await mintRegistrationCheckout(groupId, registrationIds, ctx, origin, token, opts)).url;
+}
+
+/** `createRegistrationCheckout`'s optional sixth argument. `returnBase` replaces the computed return base (the in-app status
+ *  page for a token, else `/r/<ref>?src=email`); it must already carry its query string, since `&checkout=…` is appended to it. */
+export interface RegistrationCheckoutOpts {
+  returnBase?: string;
+}
+
+/** The player payment page's mint (plan 2026-11-11-player-payment-page, Task 3): `entryPointer` claims the entry's own
+ *  `registrations.pay_session_id` in the SAME transaction as the cart stamp, conditional on the value the caller read. */
+interface MintOpts extends RegistrationCheckoutOpts {
+  entryPointer?: { registrationId: string; read: string | null };
+}
+
+/** Thrown inside the stamp transaction to roll the cart stamp back when the entry pointer moved since it was read. */
+class EntryPointerMoved extends Error {}
+
+/**
+ * Mints one session for one entry from its payment page, claiming the entry's `pay_session_id` (read as `read` before minting).
+ * One transaction stamps the cart AND the entry pointer, both conditional, BEFORE the prior session is considered for
+ * expiry: a press that read the page before another press stamped must lose WITHOUT moving the cart pointer, or its
+ * supersede step would expire the session the other press already handed out (both presses would then end with nothing
+ * payable). A loser expires its own session and answers 409 `REGISTRATION_CHECKOUT_CONFLICT`, like a lost cart race.
+ */
+export async function mintEntryPayPageCheckout(
+  groupId: string,
+  registrationId: string,
+  ctx: DivisionCtx,
+  origin: string,
+  returnBase: string,
+  read: string | null,
+): Promise<string> {
+  const session = await mintRegistrationCheckout(groupId, [registrationId], ctx, origin, null, {
+    returnBase,
+    entryPointer: { registrationId, read },
+  });
+  return session.url;
+}
+
+async function mintRegistrationCheckout(
+  groupId: string,
+  registrationIds: string[],
+  ctx: DivisionCtx,
+  origin: string,
+  token: string | null,
+  opts: MintOpts,
+): Promise<{ id: string; url: string }> {
+  // An assumption held as a guard: the base is suffixed with `&checkout=…`, so one without a query string would build a
+  // return URL whose first parameter hides inside the path.
+  if (opts.returnBase !== undefined && !opts.returnBase.includes("?")) {
+    throw new Error("createRegistrationCheckout: returnBase must already carry its query string");
+  }
   const entries = await sql<RegistrationWithGroupRow[]>`
     select ${regGroupCols(sql)}
     from registrations r join registration_groups g on g.id = r.group_id
@@ -205,10 +283,10 @@ export async function createRegistrationCheckout(
   // meanwhile. Caught by `next build`'s type check, which runs the whole app —
   // not by the vitest suites, which never typecheck.
   const destination = org.stripe_account_id;
-  const returnBase = token
+  const returnBase = opts.returnBase ?? (token
     ? `${origin}${routes.publicRegisterStatus(ctx.org_slug, ctx.comp_slug)}` +
       `?rid=${groupId}&token=${encodeURIComponent(token)}`
-    : `${origin}/r/${firstEntry.ref_code}?src=email`;
+    : `${origin}/r/${firstEntry.ref_code}?src=email`);
   // The rate this charge uses: the competition's locked rate if it has one,
   // otherwise the live plan rate. Resolved ONCE and both charged and frozen onto
   // the registration, so the paid transition can stamp the competition with the
@@ -257,14 +335,7 @@ export async function createRegistrationCheckout(
       fee_percent: String(feePercent),
       destination_account: destination,
     },
-    line_items: entries.map((reg) => ({
-      quantity: 1,
-      price_data: {
-        currency: reg.currency,
-        unit_amount: reg.amount_cents,
-        product_data: { name: `${ctx.comp_name} — entry fee (${reg.display_name})` },
-      },
-    })),
+    line_items: registrationLineItems(entries, ctx.comp_name),
     payment_intent_data: {
       application_fee_amount: applicationFeeCents(subtotal, feePercent),
       transfer_data: { destination },
@@ -299,12 +370,44 @@ export async function createRegistrationCheckout(
   // NOT a row lock held across the Stripe call above — serialising every
   // checkout mint on one row for the length of a network round-trip is worse
   // than the race it closes.
-  const [stamped] = await sql<{ id: string }[]>`
-    update registration_groups
-    set checkout_session_id = ${session.id}, fee_percent = ${feePercent}, updated_at = now()
-    where id = ${groupId}
-      and checkout_session_id is not distinct from ${firstEntry.checkout_session_id}
-    returning id`;
+  //
+  // The payment page's entry pointer (`opts.entryPointer`) is claimed in the same transaction, on the same "is not distinct
+  // from the value read" terms; either condition failing rolls both back (see `mintEntryPayPageCheckout`).
+  const stampGroup = async (db: typeof sql | Tx) => {
+    const [row] = await db<{ id: string }[]>`
+      update registration_groups
+      set checkout_session_id = ${session.id}, fee_percent = ${feePercent}, updated_at = now()
+      where id = ${groupId}
+        and checkout_session_id is not distinct from ${firstEntry.checkout_session_id}
+      returning id`;
+    return row !== undefined;
+  };
+  const pointer = opts.entryPointer;
+  let stamped: boolean;
+  if (!pointer) {
+    stamped = await stampGroup(sql);
+  } else {
+    try {
+      stamped = await sql.begin(async (tx) => {
+        // Gap wave G2: the ENTRY row first, then the cart. Checkout completion (`confirmPaidRegistration`) locks the two in that
+        // order in one statement (`select … from registrations r join registration_groups g … for update`), so stamping the cart
+        // first here could deadlock against a webhook landing for the same entry mid-mint.
+        await tx`select 1 from registrations where id = ${pointer.registrationId} for update`;
+        if (!(await stampGroup(tx))) return false;
+        const [claimed] = await tx<{ id: string }[]>`
+          update registrations
+          set pay_session_id = ${session.id}, updated_at = now()
+          where id = ${pointer.registrationId} and group_id = ${groupId}
+            and pay_session_id is not distinct from ${pointer.read}
+          returning id`;
+        if (!claimed) throw new EntryPointerMoved();
+        return true;
+      });
+    } catch (err) {
+      if (!(err instanceof EntryPointerMoved)) throw err;
+      stamped = false;
+    }
+  }
   if (!stamped) {
     // Lost the race: a concurrent mint already stamped a DIFFERENT session
     // in between this call's read and this update. Nobody has THIS
@@ -332,7 +435,7 @@ export async function createRegistrationCheckout(
   if (firstEntry.checkout_session_id) {
     await expireSupersededCheckoutSession(firstEntry.checkout_session_id, registrationIds);
   }
-  return session.url;
+  return { id: session.id, url: session.url };
 }
 
 /**
@@ -395,12 +498,130 @@ export function checkoutRegistrationIds(session: Stripe.Checkout.Session): strin
   return (session.metadata?.registration_ids ?? "").split(",").filter(Boolean);
 }
 
+/** Stripe could not be read or written while deciding whether a stored session still pays. */
+const storedSessionUnreadable = () =>
+  new HttpError(502, "Stripe was unable to start this checkout — please try again shortly.");
+
+/**
+ * Whether a `complete` session still stands for money: `payment_status` `paid`, or `unpaid` behind a PaymentIntent that can still
+ * collect. Fail CLOSED: a session is dead only when it has no PaymentIntent, or the intent is `requires_payment_method` (a
+ * failed debit sent it back) or `canceled`. Every other status keeps the session alive - `processing` (a delayed method between
+ * the customer's confirmation and the bank's answer), `requires_action` (a voucher / bank-transfer method - customer_balance,
+ * OXXO, Boleto, Konbini - waiting for the customer to pay), `requires_confirmation`, `requires_capture`, and `succeeded` (the
+ * intent can settle before the session's own `payment_status` flips to `paid`) - because minting a second payable session beside
+ * one that can still land money is a double charge. An intent that cannot be read refuses (502).
+ *
+ * The one rule for both Pay buttons: the player payment page's (`payFromPayPage`, on the entry's `pay_session_id`) and the cart
+ * status page's (`resumeRegistrationCheckout`, on the cart's `checkout_session_id`).
+ */
+export async function completedSessionStillPays(stored: Stripe.Checkout.Session, registrationId: string): Promise<boolean> {
+  if (stored.payment_status === "paid") return true;
+  if (stored.payment_status !== "unpaid") return false;
+  const pi = stored.payment_intent;
+  if (pi === null) return false;
+  if (typeof pi !== "string") return intentCanStillCollect(pi.status);
+  try {
+    return intentCanStillCollect((await getStripe().paymentIntents.retrieve(pi)).status);
+  } catch (err) {
+    log.error({ err, registrationId }, "registration: could not read a completed session's payment");
+    throw storedSessionUnreadable();
+  }
+}
+
+function intentCanStillCollect(status: Stripe.PaymentIntent.Status): boolean {
+  return status !== "requires_payment_method" && status !== "canceled";
+}
+
+/**
+ * Refuses (409 `REGISTRATION_PAID_ONLINE`) while a stored session names this entry and can still land money
+ * (`completedSessionStillPays`) - a delayed debit still `processing`, a voucher waiting at `requires_action`, or a paid session
+ * whose webhook has not landed. Minting beside it would be a second payable session for the entry. Any other stored session -
+ * open (superseded after the mint, `expireSupersededCheckoutSession`), expired, a dead `complete` one, or a sibling's - is minted
+ * past. A read failure refuses (502) rather than mint beside a session that may still pay.
+ *
+ * Gap wave G1 (2026-11-12): the cart status page's Pay, on the cart's pointer. Fix round 1 (F2): each Pay button also puts the
+ * OTHER button's pointer through it - the status page the entry's `pay_session_id`, the payment page the cart's
+ * `checkout_session_id` - so a payment still landing through one button stops the other from minting a second.
+ */
+export async function refuseWhileSessionPays(
+  sessionId: string | null,
+  registrationId: string,
+): Promise<Stripe.Checkout.Session | null> {
+  if (!sessionId) return null;
+  let stored: Stripe.Checkout.Session;
+  try {
+    stored = await getStripe().checkout.sessions.retrieve(sessionId);
+  } catch (err) {
+    log.error({ err, registrationId }, "registration: could not read a stored checkout session");
+    throw storedSessionUnreadable();
+  }
+  if (stored.status !== "complete" || !checkoutRegistrationIds(stored).includes(registrationId)) return stored;
+  if (await completedSessionStillPays(stored, registrationId)) {
+    throw new HttpError(409, "A payment for this entry is already on its way", "REGISTRATION_PAID_ONLINE");
+  }
+  return stored;
+}
+
+/** A stored session is handed out again only while more than this is left of it (the sponsor rule's value, sponsors.ts). */
+export const PAY_SESSION_REUSE_MARGIN_MS = 10 * 60_000;
+
+/**
+ * The URL to hand out again instead of minting, or null: the stored session is still `open`, covers exactly this one entry, and
+ * has more than `PAY_SESSION_REUSE_MARGIN_MS` left. The one reuse rule for both Pay buttons (the payment page's, on the entry's
+ * `pay_session_id`; the cart status page's, on the cart's `checkout_session_id` and the entry's own).
+ *
+ * Polish wave W5 (walkthrough S05): Stripe keeps a Checkout session `open` through a declined card, a failed 3-D Secure challenge
+ * and the player backing out of Checkout (observed: `status: open`, PaymentIntent `requires_payment_method`), and the same URL
+ * takes another card - none of those is a reason to mint a new session.
+ */
+export function reusableSessionUrl(stored: Stripe.Checkout.Session, registrationId: string, now: Date): string | null {
+  if (stored.status !== "open" || !stored.url) return null;
+  const ids = checkoutRegistrationIds(stored);
+  if (ids.length !== 1 || ids[0] !== registrationId) return null;
+  return stored.expires_at * 1000 > now.getTime() + PAY_SESSION_REUSE_MARGIN_MS ? stored.url : null;
+}
+
+/** The stored session as Stripe holds it now; a read failure refuses (502). */
+export async function readStoredSession(id: string, registrationId: string): Promise<Stripe.Checkout.Session> {
+  try {
+    return await getStripe().checkout.sessions.retrieve(id);
+  } catch (err) {
+    log.error({ err, registrationId }, "registration: could not read the stored session");
+    throw storedSessionUnreadable();
+  }
+}
+
+/**
+ * Expires an open stored session and answers it as Stripe then holds it. Gap wave G3: Stripe refuses to expire a session that is
+ * no longer `open` (it timed out, or was paid in another tab, between the read and this call), which used to be a transient 502.
+ * On ANY expire failure the session is read again and that read decides - never the error text: no longer open → returned (the
+ * caller mints past an expired one, and puts a complete one through `completedSessionStillPays`); still open → a real failure,
+ * 502, since minting beside a session that can still pay is a double charge.
+ */
+export async function expireStoredSession(id: string, registrationId: string): Promise<Stripe.Checkout.Session> {
+  try {
+    return await getStripe().checkout.sessions.expire(id);
+  } catch (err) {
+    const current = await readStoredSession(id, registrationId);
+    if (current.status !== "open") {
+      // Fix round 1 (F6): the re-read settles it, but the refusal itself is kept - it is the only trace of why the expire failed.
+      log.info({ err, registrationId, status: current.status }, "registration: expire refused, the stored session had stopped being open");
+      return current;
+    }
+    log.error({ err, registrationId }, "registration: could not expire the stored session");
+    throw storedSessionUnreadable();
+  }
+}
+
 /** Resume/complete payment from the status page (pending paid regs — fresh
- *  submissions whose checkout was abandoned, and waitlist promotions). */
+ *  submissions whose checkout was abandoned, and waitlist promotions). Hands an
+ *  open session for this entry alone out again (`reusableSessionUrl`, on the
+ *  cart's pointer and the entry's own) before minting (polish wave W5). */
 export async function resumeRegistrationCheckout(
   regId: string,
   token: string,
   origin: string,
+  now: Date = new Date(),
 ): Promise<{ checkout_url: string }> {
   const reg = await regByToken(regId, token);
   if (reg.status !== "pending") {
@@ -436,13 +657,52 @@ export async function resumeRegistrationCheckout(
   // cart's shared window — this is the LOAD-BEARING half; the client-side
   // window_closed state is cosmetic without this.
   const deadline = reg.promotion_expires_at ?? reg.expires_at;
-  if (deadline && deadline.getTime() <= Date.now()) {
+  if (deadline && deadline.getTime() <= now.getTime()) {
     throw new HttpError(422, "This payment window has closed");
   }
   const ctx = await divisionCtx(sql, reg.division_id);
   if (!ctx.charges_enabled) {
     throw new HttpError(503, "Payments are not set up for this organiser yet");
   }
-  const url = await createRegistrationCheckout(reg.group_id, [reg.id], ctx, origin, token);
-  return { checkout_url: url };
+  const cart = await refuseWhileSessionPays(reg.checkout_session_id, reg.id);
+  // Fix round 1 (F2): the payment page's session too, when the cart pointer has moved past it (a sibling's mint).
+  const [own] = await sql<{ pay_session_id: string | null }[]>`select pay_session_id from registrations where id = ${reg.id}`;
+  const pageId = own?.pay_session_id && own.pay_session_id !== reg.checkout_session_id ? own.pay_session_id : null;
+  const page = await refuseWhileSessionPays(pageId, reg.id);
+  // Polish wave W5 (walkthrough S05: sign-up, decline, Pay now, Pay now opened three sessions): hand an open session for this
+  // entry out again rather than mint. Checked after the deadline and Connect refusals above, so a closed window or a disabled
+  // account hands out nothing.
+  for (const stored of [cart, page]) {
+    const reuse = stored ? reusableSessionUrl(stored, reg.id, now) : null;
+    if (reuse) return { checkout_url: reuse };
+  }
+  // The payment page's own session, when the cart pointer has moved past it, would stay payable beside the new one: expire it first
+  // (fail-closed, as the payment page expires its own). It is this entry's own pointer - only ever minted for this entry alone
+  // (`mintEntryPayPageCheckout`) - so no coverage check is owed.
+  //
+  // Polish wave final fix m8: the CART pointer's session too, when it is still open (inside the reuse margin, so not handed out
+  // above) and covers this entry alone. The mint's own supersede step (`expireSupersededCheckoutSession`) runs after the create and
+  // is best-effort, so a Stripe hiccup there left two payable sessions for the entry. A session that also covers a sibling is not
+  // this entry's to expire - the supersede's own subsumption rule leaves it too.
+  const cartIds = cart?.status === "open" ? checkoutRegistrationIds(cart) : [];
+  const cartIsOwn = cartIds.length > 0 && cartIds.every((id) => id === reg.id);
+  const beforeMint: [string | null, Stripe.Checkout.Session | null][] = [
+    [pageId, page],
+    [cartIsOwn ? reg.checkout_session_id : null, cart],
+  ];
+  for (const [id, stored] of beforeMint) {
+    if (!id || stored?.status !== "open") continue;
+    const settled = await expireStoredSession(id, reg.id);
+    if (settled.status === "complete" && (await completedSessionStillPays(settled, reg.id))) {
+      throw new HttpError(409, "A payment for this entry is already on its way", "REGISTRATION_PAID_ONLINE");
+    }
+  }
+  // Polish wave P5 (P1-review carry a): the session is recorded on the ENTRY's own pointer as well as the cart's. The cart holds one
+  // pointer for every entry, so a sibling's Pay moved it off this entry's session (A, then B, then A minted a second payable
+  // session for A); the entry's pointer keeps it findable by the reuse and expire-before-mint steps above. Claimed on the value read
+  // above, in the cart stamp's transaction (`mintRegistrationCheckout`).
+  const minted = await mintRegistrationCheckout(reg.group_id, [reg.id], ctx, origin, token, {
+    entryPointer: { registrationId: reg.id, read: own?.pay_session_id ?? null },
+  });
+  return { checkout_url: minted.url };
 }

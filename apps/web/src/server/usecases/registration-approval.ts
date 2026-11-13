@@ -12,6 +12,7 @@ import "server-only";
 import type postgres from "postgres";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { entryPriceCents, ownPaymentRefundedCents } from "@/lib/registration-status";
 import { log } from "@/server/logger";
 import { deferred } from "@/lib/deferred";
 import { dispatchNow } from "@/server/email-outbox";
@@ -37,10 +38,10 @@ import {
   releaseSoloSignUpPlacement,
   withdrawRegistrationOrganiser,
   clearExpiresIfNoLongerNeeded,
-  stripeRefund,
-  queueRefundReceipt,
-  maybeAlertRegistrationRefundFailed,
+  refundEntryUnderLock,
   inviteUnclaimedMembers,
+  queueRegistrationApprovedMails,
+  queueRegistrationRejectedMails,
   type RegistrationWithGroupRow,
   type RegistrationSettingsRow,
 } from "./registrations";
@@ -74,7 +75,7 @@ export async function loadApprovalSettings(tx: Tx, divisionId: string): Promise<
   const [row] = await tx<ApprovalSettingsRow[]>`
     select division_id, enabled, entrant_kind, opens_at, closes_at, capacity,
            fee_cents, refund_lock_at, form_fields, payment_method,
-           payment_instructions, updated_at, approval, allow_free_agents
+           payment_instructions, updated_at, approval, allow_free_agents, free_agent_fee_cents
     from registration_settings where division_id = ${divisionId}`;
   return row ?? null;
 }
@@ -105,6 +106,12 @@ async function divisionCompetitionId(tx: Tx, divisionId: string): Promise<string
  * change `status`, so a `paid` row an organiser refunded through the normal
  * refund flow was otherwise still approvable, materialising a free entrant
  * for money that had already gone back.
+ *
+ * Polish wave P5 (W12): an entry whose fee is still owed is APPROVED, not
+ * refused: it stays `pending` with `approved_at` stamped (V513), nobody is
+ * seated, and the registrant is mailed "approved - payment still due". Its
+ * payment (the card webhook or Mark paid) then confirms it. A second Approve
+ * of such an entry is a no-op (one stamp, one mail).
  */
 export async function approveRegistration(
   auth: AuthCtx,
@@ -117,9 +124,9 @@ export async function approveRegistration(
   const frozen = await frozenCompetitionIds(auth.orgId);
   // Approving seats the registrant: the seat gate, asked out here too (online-seat-gate.ts).
   const seatGate = await openRegistrationSeatGateFor(auth, regId);
-  const row = await withTenant(auth.orgId, async (tx) => {
+  const { row, mailIds } = await withTenant(auth.orgId, async (tx) => {
     const reg = await orgReg(tx, regId);
-    if (reg.status === "confirmed") return reg; // idempotent success
+    if (reg.status === "confirmed") return { row: reg, mailIds: [] as string[] }; // idempotent success: no second mail
     if (reg.status === "rejected") {
       throw new HttpError(422, "This registration was rejected and cannot be approved");
     }
@@ -129,28 +136,45 @@ export async function approveRegistration(
     // Whole-branch review MAJOR: refundRegistration does NOT change status,
     // so a 'paid' row an organiser already refunded stayed approvable —
     // checked here, off `reg` directly, before anything settings-dependent.
-    if (reg.refunded_cents > 0) {
+    // Polish wave P5 (carry b): a refund of its CURRENT payment, not a late payment's refund in the history.
+    if (ownPaymentRefundedCents(reg) > 0) {
       throw new HttpError(422, "This registration was already refunded and cannot be approved");
     }
     const settings = await loadApprovalSettings(tx, reg.division_id);
     if (settings?.approval !== "manual") {
       throw new HttpError(422, "This division uses automatic approval — there is nothing to approve manually");
     }
-    if ((settings.fee_cents ?? 0) > 0 && reg.status !== "paid" && reg.payment_intent_id === null) {
-      throw new HttpError(
-        422,
-        "Awaiting payment — mark it paid first, or approve once payment arrives",
-      );
-    }
+    // Polish wave P5 (P1 carry): THIS entry's own payment (V387), never the cart's - a sibling's payment sets the cart's intent, and
+    // reading it let an entry that paid nothing through this gate.
     const competitionId = await divisionCompetitionId(tx, reg.division_id);
     assertNotFrozen(frozen, competitionId);
+    // Polish wave P5 (W12): Approve and the payment are two decisions. An entry whose fee is still due is APPROVED and stays pending
+    // (payment due); the payment - the card webhook or Mark paid - then confirms it (`approved_at`, V513). It used to be refused
+    // ("mark it paid first"), so Approve could not be given before the money and Mark paid was the approval.
+    // H-2: THIS entry's price - a solo sign-up's own, never the team's (`entryPriceCents`).
+    if (entryPriceCents(settings, reg.free_agent) > 0 && reg.status !== "paid" && reg.entry_payment_intent_id === null) {
+      if (reg.approved_at !== null) return { row: reg, mailIds: [] as string[] }; // idempotent: approved once, mailed once
+      await tx`update registrations set approved_at = now(), updated_at = now() where id = ${regId}`;
+      await audit(tx, competitionId, auth.orgId, "registration.approved", {
+        registration_id: regId,
+        paid: false,
+        payment_due: true,
+      }, auth.userId);
+      const approved = await orgRegAfter(tx, regId);
+      return { row: approved, mailIds: await queueRegistrationApprovedMails(tx, { reg: approved }) };
+    }
     await materialise(tx, reg, settings.entrant_kind, seatGate);
     await audit(tx, competitionId, auth.orgId, "registration.approved", {
       registration_id: regId,
       paid: reg.status === "paid",
     }, auth.userId);
-    return orgRegAfter(tx, regId);
+    const after = await orgRegAfter(tx, regId);
+    // Polish wave P2 (W2, W13): the registrant is told, in the transaction that approves them (the contact, and every joined teammate
+    // with an address). Only an entry that IS confirmed after the write is told so.
+    return { row: after, mailIds: await queueRegistrationApprovedMails(tx, { reg: after }) };
   }, seatGate?.tenant);
+  // A request: the first attempt is made after the response.
+  if (mailIds.length > 0) deferred(() => dispatchNow(mailIds));
   fireDivisionRevalidate(row.division_id);
   // RS008: fire-and-forget, strictly AFTER the transaction above has
   // committed — see registrations/organiser-actions.ts's confirmRegistration for the
@@ -181,10 +205,10 @@ export async function approveRegistration(
  * manual-approval entry sitting at exactly `paid` awaiting review — before
  * this, that state could be APPROVED but never DECLINED, the precise gap
  * ruling B was invented to avoid. Rejecting a paid entry refunds it in the
- * same call (not the same SQL transaction — the Stripe network call happens
- * between two locked tx's, same two-phase pattern as
- * `withdrawCore`/`refundRegistration`: this entry's own remaining balance
- * only, never the cart's whole intent).
+ * same call: after the rejection commits, `refundEntryUnderLock` moves and
+ * books it under the entry's lock (final review m6, the shape every refund of
+ * an entry's own payment shares): this entry's own remaining balance only,
+ * never the cart's whole intent.
  */
 export async function rejectRegistration(
   auth: AuthCtx,
@@ -209,6 +233,8 @@ export async function rejectRegistration(
         promoted: null as RegistrationWithGroupRow | null,
         competitionId: null as string | null,
         refundable: null as RegistrationWithGroupRow | null,
+        refundCents: 0,
+        mailIds: [] as string[],
       };
     }
     if (reg.status !== "pending" && reg.status !== "paid") {
@@ -250,13 +276,24 @@ export async function rejectRegistration(
         from: "waitlist",
       }, auth.userId);
     }
+    // Polish wave W8: the entry's OWN payment (V387), never the cart's - the cart's intent is the newest payment in the cart, which on a
+    // cart whose entries paid in separate sessions is a sibling's. Null fails closed: nothing of this entry's to send back. Polish wave P5
+    // (carry b): the cap is THIS payment's - a late payment's refund in the history is not this one's. Computed ONCE, here: it is both
+    // what the refund below sends back and what the registrant's mail says is coming back.
+    const refundCents =
+      reg.status === "paid" && reg.entry_payment_intent_id ? Math.max(0, reg.amount_cents - ownPaymentRefundedCents(reg)) : 0;
+    // Polish wave P5 (P2 carry): tell the registrant, in the transaction that records the rejection; the request makes the first attempt.
+    const mailIds = await queueRegistrationRejectedMails(tx, { reg, refundCents });
     return {
       row: await orgRegAfter(tx, regId),
       promoted,
       competitionId,
       refundable: reg.status === "paid" ? reg : null,
+      refundCents,
+      mailIds,
     };
   });
+  if (result.mailIds.length > 0) deferred(() => dispatchNow(result.mailIds));
   fireDivisionRevalidate(result.row.division_id, result.competitionId ?? undefined);
   if (result.promoted) {
     const ctx = await divisionCtx(sql, result.row.division_id);
@@ -264,50 +301,23 @@ export async function rejectRegistration(
     void notifyPromoted(result.promoted, ctx, settings, fallbackOrigin(), { firstAttempt: "request" });
   }
 
-  if (result.refundable?.payment_intent_id) {
-    const remaining = result.refundable.amount_cents - result.refundable.refunded_cents;
-    if (remaining > 0) {
-      try {
-        // Read BEFORE the money moves (a failure after it would report a refund failure for a refund that went through).
-        const refundCtx = await divisionCtx(sql, result.row.division_id);
-        const refund = await stripeRefund(result.refundable.payment_intent_id, remaining);
-        // The registrant's receipt is queued in the same transaction as the refund's record; the request makes the first attempt.
-        const receiptId = await sql.begin(async (tx) => {
-          await tx`
-            update registrations set refunded_cents = refunded_cents + ${remaining}, updated_at = now()
-            where id = ${regId}`;
-          await tx`
-            update registration_groups
-            set refunded_cents = refunded_cents + ${remaining}, refunded_at = now(), updated_at = now()
-            where id = ${result.refundable!.group_id}`;
-          return queueRefundReceipt(tx, { reg: result.refundable!, ctx: refundCtx, amountCents: remaining, refundId: refund.id });
-        });
-        if (receiptId !== null) deferred(() => dispatchNow([receiptId]));
-        await audit(sql, result.competitionId!, auth.orgId, "registration.refunded", {
-          registration_id: regId,
-          amount_cents: remaining,
-          mode: "reject",
-          stripe_refund_id: refund.id,
-        }, auth.userId);
-      } catch (err) {
-        // Same fail-open contract as withdrawCore: a refund failure must not
-        // undo the reject decision — surfaces on the organiser console
-        // (rejected + refunded_cents < amount_cents).
-        await audit(sql, result.competitionId!, auth.orgId, "registration.refund_failed", {
-          registration_id: regId,
-          mode: "reject",
-        }, auth.userId);
-        await maybeAlertRegistrationRefundFailed({
-          registrationId: regId,
-          orgId: auth.orgId,
-          competitionId: result.competitionId!,
-          amountCents: remaining,
-          currency: result.refundable!.currency,
-          paymentIntentId: result.refundable!.payment_intent_id,
-          reason: err instanceof Error ? err.message : String(err),
-          mode: "reject",
-        });
-      }
+  // The amount was decided in the transaction (see `refundCents` there): the mail already told the payer this much is coming back.
+  // Final review m6: moved, capped and booked under the entry's lock with the shared key (`refundEntryUnderLock`), so an organiser's
+  // Refund pressed during this call waits and reads what it left instead of sending the same money back twice. A failure is recorded
+  // and alerted there; it never undoes the reject decision (it surfaces on the console as rejected + refunded_cents < amount_cents).
+  if (result.refundable?.entry_payment_intent_id && result.refundCents > 0) {
+    const refunded = await refundEntryUnderLock({
+      regId,
+      ctx: await divisionCtx(sql, result.row.division_id),
+      capCents: result.refundCents,
+      mode: "reject",
+      actorId: auth.userId,
+      currency: result.refundable.currency,
+    });
+    // The request makes the first attempt, after the response.
+    if (refunded?.receiptId) {
+      const receiptId = refunded.receiptId;
+      deferred(() => dispatchNow([receiptId]));
     }
   }
 

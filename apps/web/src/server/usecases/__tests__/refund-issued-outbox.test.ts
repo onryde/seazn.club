@@ -248,8 +248,11 @@ describe.skipIf(!HAS_DB)("the refund receipt rides the outbox (DB)", () => {
     await putRegistrationSettings(w.owner, w.division.id, { ...SETTINGS_BASE, payment_method: "stripe", fee_cents: 800, approval: "manual" });
     const email = address("reject");
     const seeded = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: email, locale: "nl" });
-    await sql`update registrations set status = 'paid' where id = ${seeded.registration.id}`;
-    await sql`update registration_groups set payment_intent_id = ${"pi_t11_" + randomUUID().slice(0, 8)} where id = ${seeded.registration.group_id}`;
+    // The entry's OWN intent as well as the cart's, as confirmPaidRegistration stamps it (V387): the reject refund reads the entry's
+    // payment, never the cart's (polish wave W8).
+    const intent = "pi_t11_" + randomUUID().slice(0, 8);
+    await sql`update registrations set status = 'paid', payment_intent_id = ${intent} where id = ${seeded.registration.id}`;
+    await sql`update registration_groups set payment_intent_id = ${intent} where id = ${seeded.registration.group_id}`;
 
     const rejected = await rejectRegistration(w.owner, seeded.registration.id);
 
@@ -316,6 +319,40 @@ describe.skipIf(!HAS_DB)("the refund receipt of a webhook or sweep refund waits 
     await handleRegistrationCheckoutCompleted(fakeSession(e.regId, 500));
     expect(refundIds).toHaveLength(1);
     expect(await rowsTo(e.email)).toHaveLength(1);
+  });
+
+  // Polish wave P5 (P1-review carry b): the sweep's cap is the CURRENT payment's. The history column keeps a late payment's refund
+  // (the state the late producer writes: `refunded_cents` and `late_refunded_cents` both carry it - proven through the real producer in
+  // registration-pay-page-checkout.test.ts), which the old cap (`amount - refunded`) read as this payment already sent back.
+  it("the pool-deadline sweep refunds the CURRENT payment in full although a late refund sits in the history (P5 carry b)", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    made.orgIds.push(orgId);
+    made.userIds.push(ownerId);
+    const owner = asOwner(orgId, ownerId);
+    await sql`update organizations set stripe_charges_enabled = true, stripe_account_id = ${"acct_" + randomUUID().slice(0, 8)} where id = ${orgId}`;
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      ...SETTINGS_BASE,
+      entrant_kind: "team",
+      allow_free_agents: true,
+      payment_method: "stripe",
+      fee_cents: 500,
+      closes_at: "2020-01-01T00:00:00Z",
+    });
+    const email = address("pool-late");
+    const seeded = await seedRegistration(competition.id, division.id, settings, { contactEmail: email, players: [{ name: "Solo Late" }] });
+    await sql`update registrations set free_agent = true where id = ${seeded.registration.id}`;
+    await handleRegistrationCheckoutCompleted(fakeSession(seeded.registration.id, 500));
+    await sql`update registrations set refunded_cents = 500, late_refunded_cents = 500 where id = ${seeded.registration.id}`;
+    stripeMock.refundCreate.mockClear();
+    refundIds = [];
+
+    const out = await sweepRegistrations("https://test.local");
+
+    expect(out.poolDeadlinePassed, "premise: the sweep withdrew the unplaced sign-up").toBeGreaterThanOrEqual(1);
+    expect(stripeMock.refundCreate).toHaveBeenCalledTimes(1);
+    expect(stripeMock.refundCreate.mock.calls[0]![0]).toMatchObject({ amount: 500 });
+    expect((await loadWithGroup(seeded.registration.id)).refunded_cents, "history: the late refund and this one").toBe(1000);
   });
 
   it("the pool-deadline sweep's refund queues a receipt and leaves the first attempt to the worker", async () => {

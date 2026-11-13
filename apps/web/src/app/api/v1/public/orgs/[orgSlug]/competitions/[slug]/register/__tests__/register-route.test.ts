@@ -455,13 +455,20 @@ describe.skipIf(!HAS_DB)("POST .../register — DB-backed", () => {
     expect(status).toBe(201);
     expect(body.data?.checkout_url).toBe("https://checkout.stripe.test/session");
     expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(1);
-    // RS005 W4: the pay link appears in the confirmation mail exactly when
-    // a checkout was actually minted.
+    // Player payment page (P5): the response keeps `checkout_url`, but the
+    // confirmation mail never carries it — its Pay button goes to the cart's
+    // own token-bearing status page.
     const row = await confirmationOf(String(body.data!.group_id));
     expect(row).toMatchObject({ kind: "registration_confirmation", ref_type: "registration_group", ref_id: body.data!.group_id, status: "sent" });
     const saw = providerSaw(row);
     expect(saw).toHaveLength(1);
-    expect(saw[0]!.text).toContain("https://checkout.stripe.test/session");
+    for (const part of [saw[0]!.text, saw[0]!.html]) {
+      expect(part).not.toContain("checkout.stripe");
+      expect(part).not.toContain("cs_test_");
+    }
+    expect(saw[0]!.text).toContain(
+      `/live/${orgSlug}/${competition.slug}/register/status?rid=${String(body.data!.group_id)}&token=${encodeURIComponent(String(body.data!.access_token))}`,
+    );
   });
 
   // submitRegistrationGroup COMMITS before the route mints. If a mint failure
@@ -570,10 +577,14 @@ describe.skipIf(!HAS_DB)("POST .../register — DB-backed", () => {
     expect(saw[0]!.to).toBe(contactEmail);
     expect(saw[0]!.subject).toBe(row.subject);
     // Every entry is in it, with its OWN status (the waitlisted one carries no charge, by construction upstream) and the cart's total.
-    expect(saw[0]!.text).toContain("First In");
-    expect(saw[0]!.text).toContain("Second In");
-    expect(saw[0]!.text).toContain("Pending");
-    expect(saw[0]!.text).toContain("Waitlisted");
+    // Each on its own line with its own status, the words from the dictionary: the card entry that holds the spot is awaiting
+    // payment (polish wave: the status word says what is owed, not a bare "Pending"), the second is waitlisted.
+    const lineOf = (name: string) => saw[0]!.text.split("\n").filter((l) => l.includes(name));
+    expect(lineOf("First In")).toHaveLength(1);
+    expect(lineOf("Second In")).toHaveLength(1);
+    expect(lineOf("First In")[0]).toContain(dictionarySubject("en", "registration.entryStatusAwaitingPayment", {}));
+    expect(lineOf("Second In")[0]).toContain(dictionarySubject("en", "registration.entryStatusWaitlisted", {}));
+    expect(lineOf("Second In")[0], "a waitlisted entry carries no charge").not.toContain("£");
     expect(saw[0]!.text).toContain("£15.00");
   });
 

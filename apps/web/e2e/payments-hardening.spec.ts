@@ -450,20 +450,19 @@ test.describe("T1 · competition delete is blocked while money is on file", () =
       { name: "Open", sport_key: "generic", variant_key: "score", config: GENERIC_CONFIG },
     );
     await withDb(async (sql) => {
-      // V363/V364: the payment envelope (payment_intent_id/refunded_cents/
-      // contact_email/access_token_hash) moved off the entry row onto the
-      // cart (registration_groups) — the guard now joins through it (see
-      // deleteCompetition's `liveMoney` query). org_id is trigger-filled on
-      // both inserts, never passed.
+      // Written as a real card payment leaves them: the paying intent on the cart (V364) AND on the entry it paid (V387 - the
+      // completion handler stamps every entry its session names; registration-refund-own-payment.test.ts proves it). The guard
+      // reads the ENTRY's own intent net of its refunds (deleteCompetition's `liveMoney`). org_id is trigger-filled, never passed.
+      const intent = uid("pi");
       const [{ id: groupId }] = await sql<{ id: string }[]>`
         insert into registration_groups
           (competition_id, contact_name, contact_email, access_token_hash,
            amount_cents, currency, payment_intent_id, refunded_cents)
         values (${cardComp.data!.id}, 'P', ${`p-${TAG}@x.test`}, ${uid("tok")},
-                2000, 'gbp', ${uid("pi")}, 0)
+                2000, 'gbp', ${intent}, 0)
         returning id`;
-      await sql`insert into registrations (division_id, group_id, status, display_name, amount_cents)
-        values (${cardDiv.data!.id}, ${groupId}, 'paid', 'P', 2000)`;
+      await sql`insert into registrations (division_id, group_id, status, display_name, amount_cents, payment_intent_id)
+        values (${cardDiv.data!.id}, ${groupId}, 'paid', 'P', 2000, ${intent})`;
     });
     const cardDel = await apiJson(page.request, `/api/v1/competitions/${cardComp.data!.id}`, "DELETE");
     expect(cardDel.status).toBe(409);
@@ -1009,15 +1008,16 @@ test.describe("Outbox · wave-2 money notices from the webhook", () => {
     );
     expect(entered.status).toBe(201);
 
-    // The card payment's intent lives on the cart (V364). The checkout mint
-    // fails on the seeded fake Connect account, so write it as a paid cart
-    // would carry it. The comp is fresh, so its one cart is this entry's.
-    const carts = await withDb((sql) =>
-      sql<{ id: string }[]>`
+    // The checkout mint fails on the seeded fake Connect account, so write the payment as a real one leaves it: the intent on the
+    // cart (V364, what the dispute handler matches) and on the entry it paid (V387). The comp is fresh, so its one cart is this entry's.
+    const carts = await withDb(async (sql) => {
+      const updated = await sql<{ id: string }[]>`
         update registration_groups set payment_intent_id = ${intent}
          where competition_id = ${compId}
-        returning id`,
-    );
+        returning id`;
+      await sql`update registrations set payment_intent_id = ${intent} where group_id = any(${updated.map((c) => c.id)})`;
+      return updated;
+    });
     expect(carts, "premise: the submit made exactly one cart on the fresh comp").toHaveLength(1);
 
     const did = uid("dp");

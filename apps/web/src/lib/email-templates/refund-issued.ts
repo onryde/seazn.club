@@ -1,11 +1,14 @@
 import { panel, paragraph, renderEmail } from "./compose";
-import { escapeHtml, money } from "./shared";
+import { escapeHtml, isOwnEntry, money, ownKey } from "./shared";
 import { t, type Dict } from "@/lib/i18n";
 
 export interface RefundIssuedArgs {
   orgName: string;
   competitionName: string;
+  /** The entry refunded (named in the body, in brackets). */
   displayName: string;
+  /** The person the mail is for: the greeting names them, never the entry (polish wave W4). */
+  contactName: string;
   amountCents: number;
   currency: string;
   refCode?: string | null;
@@ -17,8 +20,10 @@ export interface RefundIssuedArgs {
 export function refundIssuedTemplate(
   opts: RefundIssuedArgs,
   dict: Dict,
+  /** The language the mail is written in: the amount's own spelling follows it. */
+  locale = "en",
 ): { subject: string; html: string; text: string } {
-  const amount = money(opts.amountCents, opts.currency);
+  const amount = money(opts.amountCents, opts.currency, locale);
   const subject = t(dict, "refundIssued.subject", { competitionName: opts.competitionName });
   return {
     subject,
@@ -30,7 +35,8 @@ export function refundIssuedTemplate(
       title: t(dict, "refundIssued.title"),
       contentHtml:
         paragraph(
-          t(dict, "refundIssued.body", {
+          t(dict, ownKey("refundIssued.body", isOwnEntry(opts.displayName, opts.contactName)), {
+            contactName: escapeHtml(opts.contactName),
             displayName: escapeHtml(opts.displayName),
             amount,
             competitionName: escapeHtml(opts.competitionName),

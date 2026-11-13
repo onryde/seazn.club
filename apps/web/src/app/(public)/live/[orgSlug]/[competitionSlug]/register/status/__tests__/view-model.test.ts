@@ -7,11 +7,13 @@ import {
   awaitingTeamAssignment,
   canCancelEntry,
   canJoinEntry,
+  cartSubtotal,
   claimHref,
   classifyStatusActionFailure,
   effectivePayDeadline,
   entryCountsTowardTotal,
   entryDisplayName,
+  inviteLinks,
   poolPlaceByDate,
   publicCheckoutPath,
   publicResendPath,
@@ -19,6 +21,8 @@ import {
   resolveMoneyState,
   rosterCounts,
   rosterPlayerDisplayName,
+  rosterVocabulary,
+  type EntryStatus,
 } from "../view-model";
 
 describe("effectivePayDeadline", () => {
@@ -529,6 +533,87 @@ describe("claimHref", () => {
   });
 });
 
+// Polish wave P6: the captain's "Invite your teammates" block. WHICH links it offers is a rule of its own (the old inline condition
+// in entry-card.tsx), so it is pinned here, over every status and both entrant kinds, with a count. The URLs themselves are built by
+// the block (`joinLinkPath`, lib/join-link.ts), not here.
+describe("inviteLinks", () => {
+  const ALL_STATUSES: EntryStatus[] = ["pending", "paid", "confirmed", "waitlisted", "withdrawn", "expired", "rejected"];
+  const LIVE: EntryStatus[] = ["pending", "paid", "confirmed", "waitlisted"];
+  const players = [
+    { id: "p1", consent_status: "granted" as const },
+    { id: "p2", consent_status: "pending" as const },
+    { id: "p3", consent_status: "pending" as const },
+    { id: "p4", consent_status: "guardian" as const },
+  ];
+  const entry = (over: Partial<Parameters<typeof inviteLinks>[0]> = {}) => ({
+    status: "pending" as EntryStatus,
+    join_code: "JOIN123",
+    allows_new_joiner: true,
+    players,
+    ...over,
+  });
+
+  // Polish wave K (owner feedback): the block names EVERY roster slot with whether that person has joined, so the captain sees who is
+  // still to come; only a slot still to join gets a link. Granted and guardian are joined.
+  it("a team on a live entry: every slot in roster order, joined or not (granted and guardian are joined), and the general link", () => {
+    expect(inviteLinks(entry())).toEqual({
+      joinCode: "JOIN123",
+      slots: [
+        { id: "p1", joined: true },
+        { id: "p2", joined: false },
+        { id: "p3", joined: false },
+        { id: "p4", joined: true },
+      ],
+      generic: true,
+    });
+  });
+
+  it("a pair (allows_new_joiner false): both slots, the partner still to join, and NO general link", () => {
+    expect(inviteLinks(entry({ allows_new_joiner: false, players: players.slice(0, 2) }))).toEqual({
+      joinCode: "JOIN123",
+      slots: [
+        { id: "p1", joined: true },
+        { id: "p2", joined: false },
+      ],
+      generic: false,
+    });
+  });
+
+  it("every dead status offers nothing, however much else is still true; every live status offers links (counted, both directions)", () => {
+    let dead = 0;
+    let live = 0;
+    for (const status of ALL_STATUSES) {
+      const links = inviteLinks(entry({ status }));
+      if (LIVE.includes(status)) {
+        expect(links, status).not.toBeNull();
+        live++;
+      } else {
+        expect(links, status).toBeNull();
+        dead++;
+      }
+    }
+    expect([live, dead]).toEqual([4, 3]);
+  });
+
+  it("no join code (a free agent, a legacy row): nothing, even with unclaimed slots", () => {
+    expect(inviteLinks(entry({ join_code: null }))).toBeNull();
+  });
+
+  it("empty case: a team with every slot claimed still offers the general link; a pair with every slot claimed offers nothing", () => {
+    const claimed = players.map((p) => ({ ...p, consent_status: "granted" as const }));
+    expect(inviteLinks(entry({ players: claimed }))).toEqual({
+      joinCode: "JOIN123",
+      slots: claimed.map((p) => ({ id: p.id, joined: true })),
+      generic: true,
+    });
+    expect(inviteLinks(entry({ players: claimed, allows_new_joiner: false }))).toBeNull();
+  });
+
+  it("empty roster: a team with no players at all still offers the general link", () => {
+    expect(inviteLinks(entry({ players: [] }))).toEqual({ joinCode: "JOIN123", slots: [], generic: true });
+  });
+});
+
 describe("classifyStatusActionFailure — cancel/pay/resend's shared HTTP-status classifier (RS007 i18n follow-up)", () => {
   it("404 -> notFound (token/entryId/groupId no longer resolves)", () => {
     expect(classifyStatusActionFailure(404)).toBe("notFound");
@@ -559,5 +644,75 @@ describe("public write-path URL builders — the /public/ segment is load-bearin
 
   it("resend targets the PUBLIC group-scoped path", () => {
     expect(publicResendPath("grp-1")).toBe("/api/v1/public/registrations/groups/grp-1/resend");
+  });
+});
+
+// Polish wave P3 (W6, W10, W11): a waitlisted, expired or withdrawn page printed SUBTOTAL "Free" and a roster that read "Checked in".
+// The expectations below are the brief's rulings, written out per status; none is read back from the function under test.
+// Polish wave final fix (owner ruling on V7, 2026-11-12): only a CONFIRMED entry says "checked in"; an entry still awaiting payment,
+// approval or both (pending, paid) says its players have JOINED - "2 of 2 checked in" on an unpaid entry read as a false claim.
+describe("rosterVocabulary: 'checked in' only on a confirmed entry", () => {
+  // Every status a registration can hold (the DB CHECK on registrations.status), each with the ruling for it.
+  const RULING: [EntryStatus, "checkin" | "joined" | "registered"][] = [
+    ["pending", "joined"],
+    ["paid", "joined"],
+    ["confirmed", "checkin"],
+    ["waitlisted", "registered"],
+    ["withdrawn", "registered"],
+    ["expired", "registered"],
+    ["rejected", "registered"],
+  ];
+  it("one case per status (counted)", () => {
+    let checked = 0;
+    for (const [status, want] of RULING) {
+      expect(rosterVocabulary(status), status).toBe(want);
+      checked += 1;
+    }
+    expect(checked).toBe(7);
+    expect(new Set(RULING.map(([s]) => s)).size, "premise: no status listed twice").toBe(7);
+  });
+});
+
+describe("cartSubtotal: what the Subtotal row says (never a bare 'Free' for money that is simply not due)", () => {
+  const e = (status: EntryStatus, amount_cents: number, fee_if_promoted_cents: number | null = null) => ({
+    status,
+    amount_cents,
+    fee_if_promoted_cents,
+  });
+
+  it("live entries (pending, paid, confirmed) sum their own fees", () => {
+    expect(cartSubtotal([e("pending", 1500), e("confirmed", 1000)])).toEqual({ kind: "amount", cents: 2500 });
+    expect(cartSubtotal([e("paid", 1500)])).toEqual({ kind: "amount", cents: 1500 });
+  });
+
+  it("a live entry that is genuinely free reads as an amount of 0 (the page prints 'Free' for it)", () => {
+    expect(cartSubtotal([e("confirmed", 0)])).toEqual({ kind: "amount", cents: 0 });
+  });
+
+  it("an ended entry's stale fee never joins a live total (the earlier FIX 1)", () => {
+    expect(cartSubtotal([e("confirmed", 1000), e("withdrawn", 1500), e("expired", 700), e("rejected", 300)])).toEqual({
+      kind: "amount",
+      cents: 1000,
+    });
+  });
+
+  it("only waitlisted entries: the fee they WOULD owe if promoted, labelled not due (W6)", () => {
+    expect(cartSubtotal([e("waitlisted", 0, 1500)])).toEqual({ kind: "waitlisted", cents: 1500 });
+    expect(cartSubtotal([e("waitlisted", 0, 1500), e("waitlisted", 0, 1000)])).toEqual({ kind: "waitlisted", cents: 2500 });
+    // A waitlisted entry on a free division would owe nothing: the page prints that as 'Free', which is true.
+    expect(cartSubtotal([e("waitlisted", 0, 0)])).toEqual({ kind: "waitlisted", cents: 0 });
+    // The fee a promotion would set is unknown (a division with no settings row): nothing to quote.
+    expect(cartSubtotal([e("waitlisted", 0, null)])).toEqual({ kind: "waitlisted", cents: 0 });
+  });
+
+  it("a waitlisted entry beside an ended one is still the waitlist's amount; a live entry outranks both", () => {
+    expect(cartSubtotal([e("waitlisted", 0, 1500), e("withdrawn", 1000)])).toEqual({ kind: "waitlisted", cents: 1500 });
+    expect(cartSubtotal([e("waitlisted", 0, 1500), e("pending", 1000)])).toEqual({ kind: "amount", cents: 1000 });
+  });
+
+  it("every entry ended: nothing is due (W10, W11), and the empty cart says the same", () => {
+    expect(cartSubtotal([e("expired", 1500)])).toEqual({ kind: "nothing_due" });
+    expect(cartSubtotal([e("withdrawn", 1500), e("rejected", 1000)])).toEqual({ kind: "nothing_due" });
+    expect(cartSubtotal([])).toEqual({ kind: "nothing_due" });
   });
 });

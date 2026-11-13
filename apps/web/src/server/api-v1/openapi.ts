@@ -359,11 +359,11 @@ export const ROUTES: RouteSpec[] = [
   { path: "/competitions/{id}/registrations", method: "get", summary: "Cross-division organiser registration list — the Registrants tab read model (?status=&division_id=&kind=&free_agent=&consent_pending=&q=&sort=)", tag: "registration", response: z.array(S.RegistrationListEntry), query: REGISTRATION_LIST_QUERY },
   { path: "/competitions/{id}/registrations/export", method: "get", summary: "CSV export of a competition's registrations, same filters as the list; all plans (`exports`). Same per-player CSV shape as the division export above", tag: "registration", errors: [402], query: REGISTRATION_LIST_QUERY },
   { path: "/registrations/{id}/confirm", method: "post", summary: "Approve: materialise the entrant (idempotent)", tag: "registration", response: S.Registration, errors: [422] },
-  { path: "/registrations/{id}/mark-paid", method: "post", summary: "Record an offline (cash/bank) payment — confirms the entry", tag: "registration", response: S.Registration, errors: [422] },
+  { path: "/registrations/{id}/mark-paid", method: "post", summary: "Record an offline (cash/bank) payment — confirms the entry; on a manual-approval division an entry not yet approved stays paid, awaiting approval", tag: "registration", response: S.Registration, errors: [422] },
   { path: "/registrations/{id}/waive", method: "post", summary: "Confirm without payment (fee waived, audited)", tag: "registration", response: S.Registration, errors: [422] },
   // RS005 W1b — manual-approval review (registration-approval.ts). Approve
   // mirrors /confirm's idempotent-materialise shape; reject is terminal.
-  { path: "/registrations/{id}/approve", method: "post", summary: "Manual-approval review: pending|paid → confirmed, materialises the entrant (idempotent); refused on an auto-approval division, an already-rejected row, or one already refunded", tag: "registration", response: S.Registration, errors: [422] },
+  { path: "/registrations/{id}/approve", method: "post", summary: "Manual-approval review: paid (or a fee-free pending) → confirmed, materialises the entrant (idempotent); an unpaid entry is approved but stays pending (approved_at set) until its payment confirms it; refused on an auto-approval division, an already-rejected row, or one already refunded", tag: "registration", response: S.Registration, errors: [422] },
   { path: "/registrations/{id}/reject", method: "post", summary: "Manual-approval review: pending|paid → rejected (terminal); frees the spot (auto-promotes the waitlist) and refunds a paid entry", tag: "registration", response: S.Registration, errors: [422] },
   { path: "/registrations/{id}/waitlist", method: "post", summary: "Move a pending registration to the waitlist", tag: "registration", response: S.Registration, errors: [422] },
   // RS005 W1b — the id's own division promotes oldest-first by default;
@@ -371,7 +371,7 @@ export const ROUTES: RouteSpec[] = [
   { path: "/registrations/{id}/promote", method: "post", summary: "Promote from the waitlist: oldest-first in id's division by default, or an explicit registration_id override", tag: "registration", request: S.PromoteRegistration, response: S.Registration.nullable(), errors: [404, 422] },
   { path: "/registrations/{id}/withdraw", method: "post", summary: "Withdraw: frees the spot, auto-promotes, auto-refunds pre-lock", tag: "registration", response: S.Registration },
   { path: "/registrations/{id}/refund", method: "post", summary: "Manual refund (post-lock discretion; partial allowed; audited)", tag: "registration", request: S.RefundRegistration, response: S.Registration, errors: [422] },
-  { path: "/registrations/{id}/remind", method: "post", summary: "Email an unpaid registrant a payment reminder (offline pay)", tag: "registration", response: z.object({ sent: z.boolean() }), errors: [422] },
+  { path: "/registrations/{id}/remind", method: "post", summary: "Email an unpaid registrant a payment reminder linking their payment page (card and offline alike); at most 5 per entry per 24 hours", tag: "registration", response: z.object({ sent: z.boolean() }), errors: [422, 429] },
   // RS005 W4 — the confirmation mailer had zero callers before this wave; this
   // is the organiser-facing resend of the cart-shaped confirmation the
   // public register route now queues at submit. Each resend writes a

@@ -3,6 +3,7 @@ import "server-only";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { SPOT_HOLDERS } from "@/lib/registration-status";
+import { resolveVenueTz } from "@/lib/tz";
 import { registrationPromotedEmail } from "@/lib/email";
 import { deferred } from "@/lib/deferred";
 import { dispatchNow, enqueueEmailOnce, expiryWithin, recipientLocale } from "@/server/email-outbox";
@@ -16,7 +17,7 @@ import { divisionTakesKind } from "@/lib/division-entrant-kinds";
 import type { Tx, RegistrationSettingsRow, RegistrationWithGroupRow, DivisionCtx } from "./types";
 import { regGroupCols, loadSettings } from "./lookups";
 import { materialise } from "./materialise";
-import { createRegistrationCheckout } from "./checkout";
+import { issuePayLink, recordPayToken } from "./pay-token";
 
 /** RS012 ruling 1 — a status leaving SPOT_HOLDERS only frees a TEAM slot
  *  when the entry itself was ever counted as one; a solo sign-up
@@ -145,10 +146,20 @@ async function recordSkippedPromotion(tx: Tx, divisionId: string, registrationId
 
 /** Whether promoting a waitlisted entry under these settings SEATS it at once: a free entry on an auto-approval division confirms
  *  (and so materialises) on the spot. Every other promotion only opens a pay window or waits for the organiser, and seats nobody -
- *  its seat is made later, by a door that carries its own seat gate. The one statement of the rule, read by `promoteWaitlistedRow`
- *  to decide whether to materialise and by the callers that decide whether to open a gate. */
+ *  its seat is made later, by a door that carries its own seat gate. The one statement of the rule, read by `promoteWaitlistedRow`'s
+ *  fail-closed check and by the callers that decide whether to open a gate. Whether the promoted row itself confirms is decided on its
+ *  own price (`promotionConfirmsRow`); for a team row the two agree. */
 export function promotionSeats(settings: RegistrationSettingsRow | null): settings is RegistrationSettingsRow {
   return settings?.approval === "auto" && (settings.fee_cents ?? 0) === 0;
+}
+
+/** Whether promoting ONE row confirms it on the spot (re-review N1): auto approval and nothing owed by THIS entry - its own price, the
+ *  one the promotion just wrote (m3: a solo's `free_agent_fee_cents` when set, else the team fee). For a team row that is exactly
+ *  `promotionSeats` (its price is the team fee); a solo's differs when the two fees differ. Deciding on the team fee confirmed a solo
+ *  owing 5.00 in a free-for-teams division with the fee unpaid, and left a free solo in a paid-for-teams division pending with no door
+ *  to confirm it. A solo seats nobody (`materialise` confirms it and returns), so the seat gate is not needed for one. */
+function promotionConfirmsRow(settings: RegistrationSettingsRow | null, amountCents: number): settings is RegistrationSettingsRow {
+  return settings?.approval === "auto" && amountCents === 0;
 }
 
 /** The seat gate for an AUTOMATIC promotion on `divisionId` (a withdrawal, an expiry, a lapsed pay window), or undefined when a
@@ -245,15 +256,20 @@ export async function promoteWaitlistedRow(
   if (promotionSeats(settings) && !seatGate) {
     throw new HttpError(409, "Registration settings changed while this was being processed - try again");
   }
-  const feeCents = settings?.fee_cents ?? 0;
+  // What THIS entry costs (final review m3): a solo sign-up promoted off the waitlist owes its own price, never the team's - the rule
+  // submit priced it by and every organiser money gate reads (`entryPriceCents`, polish wave P5 H-2: `free_agent_fee_cents` for a solo
+  // when the organiser set one, else `fee_cents`). Written in the UPDATE itself (the row's own `free_agent`), so the promotion stays
+  // three statements (the envelope-atomicity pin in registration-approval.test.ts); the price it set comes back with `returning`.
+  const teamFee = settings?.fee_cents ?? 0;
+  const soloFee = settings?.free_agent_fee_cents ?? null;
   const method = settings?.payment_method ?? "offline";
-  const stripeWindow = method === "stripe" && feeCents > 0;
-  await tx`
+  const price = tx`(case when free_agent then coalesce(${soloFee}::int, ${teamFee}::int) else ${teamFee}::int end)`;
+  const [priced] = await tx<{ amount_cents: number }[]>`
     update registrations
     set status = 'pending', promoted_at = now(), updated_at = now(),
-        amount_cents = ${feeCents},
+        amount_cents = ${price},
         promotion_expires_at = case
-          when ${stripeWindow} then now() + interval '48 hours'
+          when ${method === "stripe"} and ${price} > 0 then now() + interval '48 hours'
           else null
         end,
         -- REVIEW FIX (money-path defect #12): every promotion opens a FRESH
@@ -263,7 +279,9 @@ export async function promoteWaitlistedRow(
         -- has this null, so the write is a no-op there.
         promotion_reminded_at = null,
         promotion_reminder_claimed_at = null
-    where id = ${regId}`;
+    where id = ${regId}
+    returning amount_cents`;
+  const stripeWindow = method === "stripe" && (priced?.amount_cents ?? 0) > 0;
   await tx`
     update registration_groups
     set payment_method = case
@@ -305,7 +323,8 @@ export async function promoteWaitlistedRow(
   // division sat at `pending` forever: no entrant materialised, never
   // counted toward the public entrant list, while `notifyPromoted` (below)
   // still emailed the registrant as if they were in.
-  if (promotionSeats(settings)) {
+  // Re-review N1: decided on the row's OWN price (above), not the team fee.
+  if (promotionConfirmsRow(settings, row.amount_cents)) {
     await materialise(tx, row, settings.entrant_kind, seatGate, "waitlist");
     const [confirmed] = await tx<RegistrationWithGroupRow[]>`
       select ${regGroupCols(tx)}
@@ -316,7 +335,8 @@ export async function promoteWaitlistedRow(
   return row;
 }
 
-/** Post-tx promoted email: card entries get a fresh token-free checkout link, offline entries the resolved instructions.
+/** Post-tx promoted email: an entry with a fee gets a link to its payment page (`/r/pay/<token>`, never a Checkout url) - card
+ *  entries as the Pay button, offline entries beside the resolved instructions; a free promotion links nothing.
  *  Exported for `registration-approval.ts` (RS002 W5) — `promoteFromWaitlist`
  *  reuses this verbatim rather than re-deriving the promoted-email shape.
  *
@@ -334,8 +354,7 @@ export async function notifyPromoted(
   opts: { firstAttempt: "request" | "worker" },
 ): Promise<void> {
   try {
-    // A promotion always stamps `promoted_at` and the once-key is built from it: refuse by name, BEFORE the pay link is minted
-    // (a Checkout session minted for an email that cannot be queued is a session nobody holds).
+    // A promotion always stamps `promoted_at` and the once-key is built from it: refuse by name, BEFORE the pay link is issued.
     if (promoted.promoted_at === null) throw new Error("notifyPromoted: a promoted registration has no promoted_at");
     // REVIEW FIX (#10): the DIVISION's own payment method — never
     // `promoted.payment_method` (registration_groups.payment_method, the
@@ -347,23 +366,20 @@ export async function notifyPromoted(
     // divisions). Same fallback convention promoteWaitlistedRow's own
     // `method` already uses.
     const method = settings?.payment_method ?? "offline";
-    let payUrl: string | null = null;
-    if (method === "stripe" && promoted.amount_cents > 0 && ctx.charges_enabled) {
-      try {
-        payUrl = await createRegistrationCheckout(promoted.group_id, [promoted.id], ctx, origin, null);
-      } catch {
-        /* the reminder sweep mints another */
-      }
-    }
+    // P3: card or offline, an entry that owes a fee gets its payment page. Nothing external happens: the page mints a Checkout
+    // session only when the player presses Pay (and answers Connect being off itself).
+    const link = promoted.amount_cents > 0 ? issuePayLink(origin) : null;
     const locale = await recipientLocale(sql, { pick: promoted.locale, userId: promoted.user_id, orgDefault: ctx.default_locale });
     const content = await registrationPromotedEmail(
       {
         orgName: ctx.org_name,
         competitionName: ctx.comp_name,
         displayName: promoted.display_name,
+        contactName: promoted.contact_name,
         feeCents: promoted.amount_cents,
         currency: promoted.currency,
-        payUrl,
+        method: method === "stripe" ? "card" : "offline",
+        payPageUrl: link?.url ?? null,
         // REVIEW FIX (#13b): this entry's OWN promotion_expires_at, never
         // `promoted.expires_at` (the GROUP's shared column, which a sibling's
         // own earlier/later promotion can leave disagreeing with this row) —
@@ -373,6 +389,7 @@ export async function notifyPromoted(
         // actually do. Same column pass (1b)'s own reminder mail already
         // uses. Null on an offline/free promotion, exactly as before.
         payDeadline: promoted.promotion_expires_at,
+        timeZone: resolveVenueTz(null, ctx.org_timezone),
         paymentInstructions:
           method === "offline" && promoted.amount_cents > 0
             ? (settings?.payment_instructions ?? ctx.payment_instructions)
@@ -382,16 +399,25 @@ export async function notifyPromoted(
       },
       locale,
     );
-    const id = await enqueueEmailOnce(sql, {
-      kind: "registration_promoted",
-      refType: "registration",
-      refId: promoted.id,
-      orgId: promoted.org_id,
-      to: promoted.contact_email,
-      ...content,
-      transactional: false,
-      expiresAt: expiryWithin(promoted.promotion_expires_at),
-      dedupeKey: `${promoted.id}:${promoted.promoted_at.toISOString()}`,
+    // The row and its link's token are ONE transaction: a token is recorded only for a mail that was queued (a replay queues
+    // nothing, so it records nothing).
+    const promotedAt = promoted.promoted_at;
+    const id = await sql.begin(async (tx) => {
+      const queued = await enqueueEmailOnce(tx, {
+        kind: "registration_promoted",
+        refType: "registration",
+        refId: promoted.id,
+        orgId: promoted.org_id,
+        to: promoted.contact_email,
+        ...content,
+        transactional: false,
+        expiresAt: expiryWithin(promoted.promotion_expires_at),
+        dedupeKey: `${promoted.id}:${promotedAt.toISOString()}`,
+      });
+      if (queued !== null && link) {
+        await recordPayToken(tx, { tokenHash: link.tokenHash, registrationId: promoted.id, orgId: promoted.org_id });
+      }
+      return queued;
     });
     // `null` = this promotion's mail is already queued (a replay): nothing more to attempt.
     if (opts.firstAttempt === "request" && id !== null) deferred(() => dispatchNow([id]));

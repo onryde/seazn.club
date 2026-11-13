@@ -5,6 +5,8 @@
 // field row here is a plain host-element <div>/<dt>/<dd>, not a nested custom
 // component (see the file's own comment on why: opaque-nesting-free by
 // construction, so no manual-invoke step is needed anywhere in this file).
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { propsOf, textOf, walk } from "@/components/__tests__/_hook-harness";
 import {
@@ -29,6 +31,7 @@ function row(over: Partial<RegistrationListRow> = {}): RegistrationListRow {
     answers: {},
     amount_cents: 1500,
     refunded_cents: 0,
+    late_refunded_cents: 0,
     entrant_id: null,
     promoted_at: null,
     withdrawn_at: null,
@@ -46,6 +49,7 @@ function row(over: Partial<RegistrationListRow> = {}): RegistrationListRow {
     payment_method: "stripe",
     checkout_session_id: null,
     payment_intent_id: null,
+    entry_payment_intent_id: null,
     expires_at: null,
     reminded_at: null,
     refunded_at: null,
@@ -100,6 +104,8 @@ function baseProps(over: Partial<RegistrationHubRegistrantDetailProps> = {}): Re
     siblings: [],
     formFields: [],
     baseHref: "/o/riverside/c/summer-league/registration?tab=registrants",
+    orgSlug: "riverside",
+    compSlug: "summer-league",
     ...over,
   };
 }
@@ -151,6 +157,12 @@ describe("RegistrationHubRegistrantDetail — contact and entry fields", () => {
     const text = textOf(RegistrationHubRegistrantDetail(baseProps({ row: row({ amount_cents: 2500, currency: "usd", payment_method: "stripe" }) })));
     expect(text).toContain("$25");
     expect(text).toContain(t(dict, "reg.settings.cardPayment"));
+  });
+
+  it("a whole amount keeps its pence (owner ruling 2026-11-12: '£15.00', never '£15')", () => {
+    const text = textOf(RegistrationHubRegistrantDetail(baseProps({ row: row({ amount_cents: 1500, currency: "gbp" }) })));
+    expect(text).toContain("£15.00");
+    expect(text).not.toMatch(/£15(?![.\d])/);
   });
 
   it("renders the offline payment method label", () => {
@@ -216,7 +228,24 @@ describe("RegistrationHubRegistrantDetail — join code (viewer/editor gating)",
     const tree = walk(RegistrationHubRegistrantDetail(baseProps({ row: row({ join_code: "TEAM-XYZ" }), canEdit: true })));
     const control = tree.find((e) => e.type === RegistrationHubRegistrantJoinCode);
     expect(control).toBeTruthy();
-    expect(propsOf(control!).code).toBe("TEAM-XYZ");
+    // Polish wave P6: the control is handed the competition's public join LINK, not the bare code. Typed from the route's own shape
+    // (`/live/<org>/<competition>/register/join?join_code=`), not built by the code under test.
+    expect(propsOf(control!).joinPath).toBe("/live/riverside/summer-league/register/join?join_code=TEAM-XYZ");
+    expect(propsOf(control!)).not.toHaveProperty("code");
+  });
+
+  it("the link follows the competition's slugs and the entry's own code (two competitions, two links)", () => {
+    const paths = [
+      { orgSlug: "riverside", compSlug: "summer-league", code: "TEAM-AAA" },
+      { orgSlug: "harbour", compSlug: "winter-cup", code: "TEAM-BBB" },
+    ].map(({ orgSlug, compSlug, code }) => {
+      const tree = walk(RegistrationHubRegistrantDetail(baseProps({ row: row({ join_code: code }), canEdit: true, orgSlug, compSlug })));
+      return propsOf(tree.find((e) => e.type === RegistrationHubRegistrantJoinCode)!).joinPath;
+    });
+    expect(paths).toEqual([
+      "/live/riverside/summer-league/register/join?join_code=TEAM-AAA",
+      "/live/harbour/winter-cup/register/join?join_code=TEAM-BBB",
+    ]);
   });
 
   it("is ABSENT from the markup for a viewer, even though the entry has a join_code (assert on rendered output, not the prop)", () => {
@@ -335,6 +364,50 @@ describe("RegistrationHubRegistrantDetail — roster (task 2 + acceptance)", () 
     ]);
   });
 
+  // Polish wave P4 (walkthrough W2): "Consent pending" sat beside a registrant who had ticked the privacy consent on the form, with no
+  // word on what it meant. It is the player's OWN confirmation of their place on the roster - a different thing - so the panel says so.
+  describe("the pending chip is explained (W2)", () => {
+    const NOTE =
+      "Pending means the player hasn't confirmed their own place on this roster yet (they do that from their claim email or the team's join link). It is separate from the privacy consent ticked on the registration form.";
+    const noteEls = (roster: RegistrantRosterPlayer[]) =>
+      walk(RegistrationHubRegistrantDetail(baseProps({ roster }))).filter(
+        (e) => propsOf(e)["data-registration-hub-registrant-consent-note"] !== undefined,
+      );
+
+    it("a roster with a pending player carries the note, in words, below the list", () => {
+      const els = noteEls([PLAYER_A, PLAYER_B]);
+      expect(els).toHaveLength(1);
+      expect(textOf(els[0]!)).toBe(NOTE);
+      expect(t(dict, "reg.hub.registrants.detail.consent.pendingNote")).toBe(NOTE);
+    });
+
+    it("the note is also the pending chip's own tooltip, and only the pending chip carries one", () => {
+      const tree = walk(RegistrationHubRegistrantDetail(baseProps({ roster: [PLAYER_A, PLAYER_B] })));
+      const chips = tree.filter((e) => propsOf(e)["data-registration-hub-registrant-consent"] !== undefined);
+      expect(chips.map((c) => propsOf(c)["data-registration-hub-registrant-consent"])).toEqual(["granted", "pending"]);
+      expect(propsOf(chips[0]!).title, "a granted chip needs no explaining").toBeUndefined();
+      expect(propsOf(chips[1]!).title).toBe(NOTE);
+    });
+
+    it("no pending player, or no roster at all: no note (the empty case answers no)", () => {
+      expect(noteEls([{ ...PLAYER_A, consent_status: "granted" }, { ...PLAYER_B, consent_status: "guardian" }])).toHaveLength(0);
+      expect(noteEls([])).toHaveLength(0);
+    });
+
+    it("the note exists in every locale's own words (raw files: getDictionary fills English for a missing key)", () => {
+      const key = "reg.hub.registrants.detail.consent.pendingNote";
+      const en = JSON.parse(readFileSync(join(__dirname, "..", "..", "dictionaries", "en", "ui.json"), "utf8"))[key] as string;
+      let checked = 0;
+      for (const loc of ["es", "fr", "nl"]) {
+        const v = JSON.parse(readFileSync(join(__dirname, "..", "..", "dictionaries", loc, "ui.json"), "utf8"))[key] as string | undefined;
+        expect(typeof v === "string" && v.length > 0, `${loc} has the key`).toBe(true);
+        expect(v, `${loc} is not the English copy`).not.toBe(en);
+        checked += 1;
+      }
+      expect(checked).toBe(3);
+    });
+  });
+
   it("shows the empty-roster message for a free agent / empty roster (degenerate case), not an empty list", () => {
     const text = textOf(RegistrationHubRegistrantDetail(baseProps({ roster: [] })));
     expect(text).toContain(t(dict, "reg.hub.registrants.detail.roster.empty"));
@@ -383,6 +456,7 @@ describe("RegistrationHubRegistrantDetail — action controls (RS005 W3, viewer/
             approval: "manual",
             amount_cents: 2500,
             payment_intent_id: "pi_456",
+            entry_payment_intent_id: "pi_own_789",
           }),
           canEdit: true,
         }),
@@ -396,7 +470,24 @@ describe("RegistrationHubRegistrantDetail — action controls (RS005 W3, viewer/
       approval: "manual",
       amountCents: 2500,
       paymentIntentId: "pi_456",
+      // Polish wave W8: Refund keys off the entry's OWN intent, so it must reach the island distinct from the cart's.
+      entryPaymentIntentId: "pi_own_789",
     });
+  });
+
+  // Polish wave P5 (carry b): a late payment's refund stays in `refunded_cents` (history) but is not this payment's; the island's
+  // Refund cap is what was sent back of the CURRENT payment, the same rule the server's refund applies.
+  it("hands the island the CURRENT payment's refunded amount, not the history (a late refund then an in-time payment)", () => {
+    const tree = walk(
+      RegistrationHubRegistrantDetail(
+        baseProps({
+          row: row({ status: "confirmed", amount_cents: 1500, refunded_cents: 2200, late_refunded_cents: 1500, entry_payment_intent_id: "pi_now" }),
+          canEdit: true,
+        }),
+      ),
+    );
+    const actions = tree.find((e) => e.type === RegistrationHubRegistrantActions);
+    expect(propsOf(actions!).refundedCents).toBe(700);
   });
 
   it("is ABSENT for a viewer — not merely disabled (owner ruling, 2026-08-25: mutating controls are absent, not disabled)", () => {

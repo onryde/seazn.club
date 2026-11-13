@@ -203,8 +203,8 @@ describe.skipIf(!HAS_DB)("#10/#13a — buildGroupStatusView resolves per-entry f
   });
 });
 
-describe.skipIf(!HAS_DB)("#10 — notifyPromoted mints a real pay link off the DIVISION's method (DB-backed: exercises the real Stripe-mint branch)", () => {
-  it("mints a checkout URL even though the cart's shared payment_method write was suppressed by a still-pending sibling", async () => {
+describe.skipIf(!HAS_DB)("#10 — notifyPromoted links a card pay page off the DIVISION's method (DB-backed)", () => {
+  it("links the card payment page even though the cart's shared payment_method write was suppressed by a still-pending sibling", async () => {
     const { competition, division, settings } = await stripeRig({ feeCents: 500 });
     const waiting = await seedRegistration(competition.id, division.id, settings, { status: "waitlisted" });
     await sql.begin((tx) =>
@@ -219,18 +219,19 @@ describe.skipIf(!HAS_DB)("#10 — notifyPromoted mints a real pay link off the D
     await notifyPromoted(promoted, ctx, settings, "http://test.local", { firstAttempt: "worker" });
 
     // Reverting the fix (reading promoted.payment_method, the null cart
-    // column) never even tries Stripe here — this is the "no way to pay"
-    // half of finding #10's own name.
-    expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(1);
+    // column) renders the offline shape here — no Pay button, the "no way to
+    // pay" half of finding #10's own name. Player payment page (Task 5): the
+    // link is the entry's payment page; no Checkout session is minted.
+    expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(0);
     expect(emailMock.promoted).toHaveBeenCalledTimes(1);
-    expect(emailMock.promoted.mock.calls[0]![0].payUrl).toBe("https://checkout.stripe.test/session");
+    expect(emailMock.promoted.mock.calls[0]![0].method).toBe("card");
+    expect(emailMock.promoted.mock.calls[0]![0].payPageUrl).toMatch(/^http:\/\/test\.local\/r\/pay\/[A-Za-z0-9_-]{43}$/);
   });
 });
 
 // Pure-function coverage for notifyPromoted's other two fixed inputs — no DB,
-// no Stripe call (both fixtures below use an OFFLINE division so the
-// payUrl-minting branch, which needs a real DB row, is never entered; the
-// STRIPE half of the division-vs-cart method fix is proven DB-backed above).
+// no Stripe call (both fixtures below use an OFFLINE division; the STRIPE
+// half of the division-vs-cart method fix is proven DB-backed above).
 describe("#10/#13b — notifyPromoted (pure function, offline branch — no DB)", () => {
   // The fixtures below are not rows (fake ids): what they pin is what the renderer is GIVEN. The enqueue that follows cannot write them,
   // so it fails and is logged; that is silenced here, and is not what these tests assert.
@@ -294,6 +295,8 @@ describe("#10/#13b — notifyPromoted (pure function, offline branch — no DB)"
       answers: {},
       amount_cents: 500,
       refunded_cents: 0,
+      late_refunded_cents: 0,
+      approved_at: null,
       entrant_id: null,
       promoted_at: now,
       promotion_expires_at: null,
@@ -351,7 +354,9 @@ describe("#10/#13b — notifyPromoted (pure function, offline branch — no DB)"
     expect(stripeMock.checkoutCreate).not.toHaveBeenCalled(); // never even tries Stripe for an offline division
     expect(emailMock.promoted).toHaveBeenCalledTimes(1);
     const args = emailMock.promoted.mock.calls[0]![0];
-    expect(args.payUrl).toBeNull();
+    // The offline shape: instructions, plus the page's details link (player payment page, Task 5).
+    expect(args.method).toBe("offline");
+    expect(args.payPageUrl).toMatch(/\/r\/pay\//);
     // Reverting the fix (reading promoted.payment_method, the null cart
     // column) makes this null too — no instructions AND no pay link.
     expect(args.paymentInstructions).toBe("Pay at the desk");
@@ -376,6 +381,15 @@ describe("#10/#13b — notifyPromoted (pure function, offline branch — no DB)"
 
     const args = emailMock.promoted.mock.calls[0]![0];
     expect(args.payDeadline).toEqual(entryDeadline);
+  });
+
+  it("names the ORG's zone so the mail writes the deadline the way the status page does; UTC when the org set none (polish wave P3, W4)", async () => {
+    const promoted = fakePromoted({ amount_cents: 500, promotion_expires_at: new Date("2099-09-01T12:00:00.000Z") });
+    await notifyPromoted(promoted, fakeCtx({ org_timezone: "Asia/Kolkata" }), fakeSettings(), "http://test.local", { firstAttempt: "worker" });
+    await notifyPromoted(promoted, fakeCtx({ org_timezone: null }), fakeSettings(), "http://test.local", { firstAttempt: "worker" });
+    expect(emailMock.promoted).toHaveBeenCalledTimes(2);
+    expect(emailMock.promoted.mock.calls[0]![0].timeZone).toBe("Asia/Kolkata");
+    expect(emailMock.promoted.mock.calls[1]![0].timeZone).toBe("UTC");
   });
 
   it("an offline promotion with no stripe window (promotion_expires_at null) sends no deadline — not the cart's unrelated expires_at", async () => {

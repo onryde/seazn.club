@@ -419,6 +419,14 @@ describe("registration hub — row-expand detail query wiring (RS005 W2b, task 3
     expect(h.divisionRowsQueries).toBe(0);
   });
 
+  it("hands the panel the route's own slugs (the row detail's join link is built from them)", async () => {
+    listRegistrationsMock.mockResolvedValueOnce([{ id: "r1", group_id: "g1" }]);
+    const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
+    const panel = propsOf(tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!);
+    expect(panel.orgSlug).toBe("riverside");
+    expect(panel.compSlug).toBe("summer-league");
+  });
+
   it("passes the resolved details straight through to the panel's details prop", async () => {
     listRegistrationsMock.mockResolvedValueOnce([{ id: "r1", group_id: "g1" }]);
     const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));

@@ -1,6 +1,7 @@
 import "server-only";
 // Withdrawal core shared by the public and organiser paths, and the solo placement release (see ./index.ts).
 import { sql } from "@/lib/db";
+import { ownPaymentRefundedCents } from "@/lib/registration-status";
 import { HttpError } from "@/lib/errors";
 import { deferred } from "@/lib/deferred";
 import { dispatchNow } from "@/server/email-outbox";
@@ -15,14 +16,9 @@ import { audit } from "../audit";
 import type { Tx, RegistrationWithGroupRow } from "./types";
 import { regGroupCols, loadSettings, divisionCtx, fallbackOrigin } from "./lookups";
 import { clearExpiresIfNoLongerNeeded } from "./materialise";
+import { queueRegistrationWithdrawnMails } from "./lifecycle-mail";
 import { freesTeamSlot, promoteOldestWaitlisted, openPromotionSeatGate, notifyPromoted } from "./waitlist";
-import {
-  stripeRefund,
-  queueRefundReceipt,
-  errText,
-  maybeAlertRegistrationRefundFailed,
-  resolveRefundPolicy,
-} from "./refunds";
+import { refundEntryUnderLock, resolveRefundPolicy } from "./refunds";
 
 /**
  * Release a solo sign-up's placement on someone else's team, if they have
@@ -110,7 +106,11 @@ export async function releaseSoloSignUpPlacement(
   return releasedFrom;
 }
 
-export async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | null): Promise<void> {
+/** WHO withdrew is an explicit fact, never inferred from `actorId`: an organiser acting through an API key has NO user id (api-v1/auth.ts),
+ *  and reading that as "the registrant" sent no mail and labelled the audit row wrongly. `actorId` is only the audit's actor column. */
+export type WithdrawnBy = "organiser" | "registrant";
+
+export async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | null, by: WithdrawnBy): Promise<void> {
   if (reg.status === "withdrawn") return; // idempotent
   // RULING A (RS002 W5 review, MAJOR): rejected is terminal from every
   // writer — reachable here from BOTH withdrawRegistrationOrganiser and the
@@ -167,7 +167,7 @@ export async function withdrawCore(reg: RegistrationWithGroupRow, actorId: strin
       : null;
     await audit(tx, ctx.competition_id, ctx.org_id, "registration.withdrawn", {
       registration_id: reg.id,
-      by: actorId ? "organiser" : "registrant",
+      by,
       promoted_registration_id: promoted?.id ?? null,
       released_from_registration_id: releasedFrom,
     }, actorId);
@@ -177,13 +177,16 @@ export async function withdrawCore(reg: RegistrationWithGroupRow, actorId: strin
         from: "waitlist",
       }, actorId);
     }
-    return { locked, promoted };
+    // Polish wave P2 (W11): the ORGANISER's withdrawal is news to the registrant; their own is not (the status page and the reference page,
+    // which refund and receipt on their own). Queued with the fact, so the two commit together.
+    const mailIds = by === "organiser" ? await queueRegistrationWithdrawnMails(tx, { reg: locked }) : [];
+    return { locked, promoted, mailIds };
   })) as unknown as
-    | { locked: RegistrationWithGroupRow; promoted: RegistrationWithGroupRow | null }
+    | { locked: RegistrationWithGroupRow; promoted: RegistrationWithGroupRow | null; mailIds: string[] }
     | null;
   if (!outcome) return;
   log.info(
-    { registrationId: reg.id, orgId: ctx.org_id, by: actorId ? "organiser" : "registrant" },
+    { registrationId: reg.id, orgId: ctx.org_id, by },
     "registration: withdrawn",
   );
 
@@ -209,6 +212,8 @@ export async function withdrawCore(reg: RegistrationWithGroupRow, actorId: strin
   }
 
   fireDivisionRevalidate(reg.division_id, ctx.competition_id);
+  const withdrawnMailIds = outcome.mailIds;
+  if (withdrawnMailIds.length > 0) deferred(() => dispatchNow(withdrawnMailIds));
   if (outcome.promoted) {
     void notifyPromoted(outcome.promoted, ctx, settings, fallbackOrigin(), { firstAttempt: "request" });
   }
@@ -244,60 +249,26 @@ export async function withdrawCore(reg: RegistrationWithGroupRow, actorId: strin
       ? locked.entry_payment_intent_id
       : null,
     locked.amount_cents,
-    locked.refunded_cents,
+    // Polish wave P5 (carry b): what was sent back of THIS payment, not the history (a late payment's refund is not this one's).
+    ownPaymentRefundedCents(locked),
   );
   if (policy.refundable) {
-    // RS002 (V368): THIS entry's own remaining balance — never the cart's
-    // whole intent (hazard 1) — so a sibling that already carries a partial
-    // refund (organiser discretion, then a late withdrawal) is never
-    // double-counted here either.
-    const remaining = policy.amount_cents;
-    try {
-      // Same value the policy above was resolved from — never the cart's.
-      const refund = await stripeRefund(locked.entry_payment_intent_id as string, remaining);
-      // Additive on BOTH tables (hazard 2 fixed), in ONE transaction (review
-      // fixup — matches refundRegistration's withTenant-wrapped pattern
-      // below: two separate autocommit statements could leave the entry and
-      // cart totals silently diverged if the second failed after the first
-      // committed, reachable today on a single-entry cart, no multi-entry
-      // cart needed).
-      // The registrant's receipt is queued in the SAME transaction (`ctx` was read before it). This is a request: the first attempt is
-      // made after the response, off the caller's path.
-      const receiptId = await sql.begin(async (tx) => {
-        await tx`
-          update registrations
-          set refunded_cents = refunded_cents + ${remaining}, updated_at = now()
-          where id = ${locked.id}`;
-        await tx`
-          update registration_groups
-          set refunded_cents = refunded_cents + ${remaining}, refunded_at = now(), updated_at = now()
-          where id = ${locked.group_id}`;
-        return queueRefundReceipt(tx, { reg: locked, ctx, amountCents: remaining, refundId: refund.id });
-      });
-      if (receiptId !== null) deferred(() => dispatchNow([receiptId]));
-      await audit(sql, ctx.competition_id, ctx.org_id, "registration.refunded", {
-        registration_id: reg.id,
-        amount_cents: remaining,
-        mode: "auto",
-        stripe_refund_id: refund.id,
-      }, actorId);
-    } catch (err) {
-      // Refund failure must not undo the withdrawal — surfaces on the
-      // organiser console (withdrawn + refunded_cents < amount_cents).
-      await audit(sql, ctx.competition_id, ctx.org_id, "registration.refund_failed", {
-        registration_id: reg.id,
-        mode: "auto",
-      }, actorId);
-      await maybeAlertRegistrationRefundFailed({
-        registrationId: reg.id,
-        orgId: ctx.org_id,
-        competitionId: ctx.competition_id,
-        amountCents: remaining,
-        currency: locked.currency,
-        paymentIntentId: locked.payment_intent_id,
-        reason: errText(err),
-        mode: "auto",
-      });
+    // RS002 (V368): THIS entry's own remaining balance - never the cart's whole intent (hazard 1). Final review m6: moved, capped
+    // and booked under the entry's lock, with the shared key, so an organiser's Refund pressed during this call waits and reads
+    // what it left instead of refunding the same money again. A failure is recorded and alerted there and never undoes the
+    // withdrawal (it surfaces on the organiser console as withdrawn + refunded_cents < amount_cents).
+    const refunded = await refundEntryUnderLock({
+      regId: locked.id,
+      ctx,
+      capCents: policy.amount_cents,
+      mode: "auto",
+      actorId,
+      currency: locked.currency,
+    });
+    // A request: the first attempt is made after the response, off the caller's path.
+    if (refunded?.receiptId) {
+      const receiptId = refunded.receiptId;
+      deferred(() => dispatchNow([receiptId]));
     }
   }
 }

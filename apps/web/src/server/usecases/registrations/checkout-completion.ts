@@ -15,6 +15,7 @@ import { inviteUnclaimedMembers } from "./people";
 import { materialise } from "./materialise";
 import { checkoutRegistrationIds } from "./checkout";
 import { stripeRefund, queueRefundReceipt, errText, maybeAlertRegistrationRefundFailed } from "./refunds";
+import { queueRegistrationPaidMail } from "./lifecycle-mail";
 
 /**
  * Payment-integrity fix: `createRegistrationCheckout` freezes
@@ -173,9 +174,31 @@ export async function handleRegistrationCheckoutCompleted(
   // replay, but silently swallowing one entry's failure here would land the
   // event as "processed" while that one entry stays paid-for and unconfirmed
   // forever, with nothing left to retry it.
+  let late = false;
   for (const regId of regIds) {
-    await confirmPaidRegistration(regId, paymentIntent, chargedFeePercent);
+    await confirmPaidRegistration(regId, paymentIntent, chargedFeePercent, session.id, () => {
+      late = true;
+    });
   }
+  // Fix round 1 (F1) + round 2: a late entry's session stays `complete` + `paid` at Stripe, and the status page's Pay reads it on
+  // the cart pointer as "a payment on its way" (409), so a re-promoted entry could never pay from there again. The pointer is
+  // cleared only HERE, after every entry the session names was handled: the same session can name a still-pending sibling, and
+  // that sibling's reconcile-on-return and Pay guard read this pointer - cleared before a confirm that then throws, the session
+  // would be off the pointer until Stripe's retry, and the sibling's Pay could mint a second session. Compare-and-clear, so a
+  // later session the status page already moved to is never touched.
+  if (late) {
+    await sql`update registration_groups set checkout_session_id = null, updated_at = now()
+              where checkout_session_id = ${session.id}`;
+  }
+  // Polish wave P2 (W1, W3) + fix round 1: "payment received" is ONE mail per payment, listing every entry THIS session paid (a cart that
+  // pays three entries is one mail of three lines), so it is queued once, here, after every named entry has been handled - not once per
+  // entry inside each entry's transaction. It reads what each entry IS from the books (confirmed, or paid and waiting for the organiser),
+  // and it is once-keyed on the payment: if the process died after the last entry committed and before this ran, Stripe re-delivers the
+  // event, every entry replays as a no-op, and this step queues the mail. A webhook has no response to defer behind, so the retry worker
+  // makes the first attempt.
+  await sql.begin((tx) =>
+    queueRegistrationPaidMail(tx, { regIds, paymentIntentId: paymentIntent, paymentRef: paymentIntent ?? session.id }),
+  );
 }
 
 /**
@@ -185,8 +208,13 @@ export async function handleRegistrationCheckoutCompleted(
  * `handleRegistrationCheckoutCompleted` never ran fulfilment for this session
  * (it gates on `payment_status`, and a failed session never reaches `paid`),
  * so there is nothing to undo — every named entry is left exactly where it
- * is, still `pending`, still payable. Only the failure is recorded, the same
- * "audit but do not act" shape as `registration.refund_failed` above.
+ * is, still `pending`, still payable. The failure is recorded, the same
+ * "audit but do not act" shape as `registration.refund_failed` above, and an
+ * entry whose payment-page pointer (`pay_session_id`) still names THIS session
+ * drops it - so the page's Stripe success return for the dead session no
+ * longer reads as "confirming", and the next Pay mints from an empty pointer.
+ * Conditional on the session id, so a later session the page already moved
+ * to is never cleared by a stale failure.
  */
 export async function handleRegistrationCheckoutAsyncPaymentFailed(
   session: Stripe.Checkout.Session,
@@ -207,6 +235,15 @@ export async function handleRegistrationCheckoutAsyncPaymentFailed(
       null,
     );
   }
+  await sql`
+    update registrations set pay_session_id = null, updated_at = now()
+    where id in ${sql(regIds)} and pay_session_id = ${session.id}`;
+  // Gap wave G1: the cart's pointer likewise, on the same terms (only while it still names THIS session), so the status page's next
+  // Pay mints from an empty pointer instead of re-reading a session that can no longer pay.
+  await sql`
+    update registration_groups set checkout_session_id = null, updated_at = now()
+    where id in (select group_id from registrations where id in ${sql(regIds)})
+      and checkout_session_id = ${session.id}`;
 }
 
 type PayOutcome =
@@ -230,7 +267,10 @@ type PayOutcome =
 async function confirmPaidRegistration(
   regId: string,
   paymentIntentId: string | null,
-  chargedFeePercent: number | null = null,
+  chargedFeePercent: number | null,
+  sessionId: string,
+  /** Called when this entry takes the late branch; the caller clears the cart pointer once every named entry is handled. */
+  onLate: () => void,
 ): Promise<void> {
   const outcome = (await sql.begin(async (tx) => {
     const [reg] = await tx<RegistrationWithGroupRow[]>`
@@ -372,12 +412,23 @@ async function confirmPaidRegistration(
                set payment_intent_id = coalesce(payment_intent_id, ${paymentIntentId}),
                    updated_at = now()
                where id = ${reg.group_id}`;
+      // Fix round 1 (F1): the late session stays `complete` + `paid` at Stripe forever, and both Pay buttons read a stored complete
+      // session that still pays as "a payment already on its way" (409). Left on either pointer, a re-promoted entry could never be
+      // paid again. The entry's own pointer is cleared here, only while it still names THIS session (the async-failed handler's
+      // compare-and-clear), so a later session the page already moved to is never touched. The CART pointer is shared with any
+      // sibling the session also names, so the caller clears it after the whole session is handled (fix round 2).
+      await tx`update registrations set pay_session_id = null, updated_at = now()
+               where id = ${regId} and pay_session_id = ${sessionId}`;
+      onLate();
       if (!paymentIntentId && !reg.payment_intent_id) return null;
+      // Fix round 1 (F3): the money to send back is THIS payment's. The cart's column is first-writer-wins: it can hold a
+      // sibling's payment, or this entry's EARLIER late payment (already refunded) after a re-promotion - refunding that one again
+      // would leave this payment kept.
       return {
         kind: "late",
         reg,
         competitionId: div.competition_id,
-        intent: (reg.payment_intent_id ?? paymentIntentId) as string,
+        intent: (paymentIntentId ?? reg.payment_intent_id) as string,
       };
     }
     const settings = await loadSettings(tx, reg.division_id);
@@ -426,7 +477,9 @@ async function confirmPaidRegistration(
     // registration-approval.ts's ApprovalSettingsRow.
     const [approvalRow] = await tx<{ approval: "auto" | "manual" }[]>`
       select approval from registration_settings where division_id = ${reg.division_id}`;
-    if (approvalRow?.approval === "manual") {
+    // Polish wave P5 (W12): an entry the organiser already approved while its fee was due (`approved_at`, V513) is confirmed by this
+    // payment - the approval was given; only the money was outstanding.
+    if (approvalRow?.approval === "manual" && reg.approved_at === null) {
       await audit(tx, div.competition_id, reg.org_id, "registration.paid_awaiting_approval", {
         registration_id: regId,
         amount_cents: reg.amount_cents,
@@ -505,7 +558,11 @@ async function confirmPaidRegistration(
     // no-op rather than a second real Stripe refund (nothing enforced that
     // before; relying on Stripe to reject an over-refund is not guaranteed
     // once a partial refund or dispute has left headroom on the intent).
-    if (outcome.kind === "late" && outcome.reg.refunded_cents >= outcome.reg.amount_cents) {
+    //
+    // Fix round 1 (F3): the question is per PAYMENT (`lateRefundAlreadyMade`), not the entry's running total. A re-promotion
+    // resets the fee and keeps `refunded_cents` (refund history), so the running total read a second late payment as already
+    // refunded and kept it.
+    if (outcome.kind === "late" && (await lateRefundAlreadyMade(outcome.reg, outcome.competitionId, outcome.intent))) {
       return;
     }
     // Read BEFORE the money moves: a failure here lands in `refund_failed` with nothing refunded, which is true, where the same failure
@@ -524,9 +581,12 @@ async function confirmPaidRegistration(
         // diverged, and the whole attempt would still land in the catch below
         // as `refund_failed` — a misleading audit trail for a refund that
         // actually succeeded).
+        // V512 (polish wave P5, carry b): booked as LATE too, so the cap of a later in-time payment (`ownPaymentRefundedCents`)
+        // is not eaten by this refund of a payment the entry never held.
         await tx`
           update registrations
-          set refunded_cents = refunded_cents + ${entryRefundCents}, updated_at = now()
+          set refunded_cents = refunded_cents + ${entryRefundCents},
+              late_refunded_cents = late_refunded_cents + ${entryRefundCents}, updated_at = now()
           where id = ${outcome.reg.id}`;
         await tx`
           update registration_groups
@@ -535,13 +595,16 @@ async function confirmPaidRegistration(
           where id = ${outcome.reg.group_id}`;
       }
       await queueRefundReceipt(tx, { reg: outcome.reg, ctx: ctxRefund, amountCents: entryRefundCents, refundId: refund.id });
+      // In the totals' transaction (fix round 1, F3): this row is what `lateRefundAlreadyMade` reads, so it and the totals commit
+      // together. `payment_intent_id` names the payment it sent back.
+      await audit(tx, outcome.competitionId, outcome.reg.org_id, "registration.refunded", {
+        registration_id: regId,
+        amount_cents: outcome.reg.amount_cents,
+        mode: outcome.kind === "late" ? "late_payment" : "duplicate",
+        stripe_refund_id: refund.id,
+        payment_intent_id: outcome.intent,
+      }, null);
     });
-    await audit(sql, outcome.competitionId, outcome.reg.org_id, "registration.refunded", {
-      registration_id: regId,
-      amount_cents: outcome.reg.amount_cents,
-      mode: outcome.kind === "late" ? "late_payment" : "duplicate",
-      stripe_refund_id: refund.id,
-    }, null);
   } catch (err) {
     await audit(sql, outcome.competitionId, outcome.reg.org_id, "registration.refund_failed", {
       registration_id: regId,
@@ -558,6 +621,22 @@ async function confirmPaidRegistration(
       mode: outcome.kind,
     });
   }
+}
+
+/**
+ * Fix round 1 (F3): whether THIS payment (`intent`) was already sent back as a late payment for this entry - a redelivered or
+ * re-reconciled session is then a no-op. Read from the entry's `registration.refunded` / `late_payment` rows, which name the
+ * payment they refunded. A row written before the payment was named on it cannot say which payment it was: for an entry with one,
+ * the old whole-entry rule stands (`refunded_cents >= amount_cents`), so a redelivery of that older session never refunds twice.
+ */
+async function lateRefundAlreadyMade(reg: RegistrationWithGroupRow, competitionId: string, intent: string): Promise<boolean> {
+  const rows = await sql<{ intent: string | null }[]>`
+    select payload->>'payment_intent_id' as intent from competition_events
+    where competition_id = ${competitionId} and type = 'registration.refunded'
+      and payload->>'registration_id' = ${reg.id} and payload->>'mode' = 'late_payment'`;
+  if (rows.some((r) => r.intent === intent)) return true;
+  if (rows.some((r) => r.intent === null)) return reg.refunded_cents >= reg.amount_cents;
+  return false;
 }
 
 /**
@@ -685,6 +764,30 @@ export async function reconcileRegistrationGroupBySession(
     if (sessionId !== group.checkout_session_id) return false;
     const session = await getStripe().checkout.sessions.retrieve(sessionId);
     if (session.payment_status !== "paid") return false;
+    await handleRegistrationCheckoutCompleted(session);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Reconcile-on-return for the player payment page (plan 2026-11-11-player-payment-page, Task 3): Stripe sends the player back to
+ * `/r/pay/<token>?…&session_id=…`, and this confirms the entry when the webhook is late. Keyed on the ENTRY (the page resolves its
+ * token to one), and the caller's `sessionId` is compared to that entry's own stored `pay_session_id` BEFORE any Stripe call - an
+ * old tab or a forged query never reaches `sessions.retrieve` (the same posture as the two siblings above). Rate-limited per entry
+ * like the group sibling, because the page has no `pending` gate of its own to stop a reload loop. Best-effort; never throws.
+ */
+export async function reconcileRegistrationByPaySession(registrationId: string, sessionId: string): Promise<boolean> {
+  try {
+    if (!GROUP_ID_RE.test(registrationId)) return false; // a uuid, like a group id
+    await rateLimit(`reg-pay-reconcile:${registrationId}`, { max: 5, windowSeconds: 60 });
+    const [reg] = await sql<{ pay_session_id: string | null }[]>`
+      select pay_session_id from registrations where id = ${registrationId}`;
+    if (!reg?.pay_session_id || sessionId !== reg.pay_session_id) return false;
+    const session = await getStripe().checkout.sessions.retrieve(sessionId);
+    if (session.payment_status !== "paid") return false;
+    if (!checkoutRegistrationIds(session).includes(registrationId)) return false;
     await handleRegistrationCheckoutCompleted(session);
     return true;
   } catch {

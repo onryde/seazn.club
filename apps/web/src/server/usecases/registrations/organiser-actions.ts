@@ -13,9 +13,13 @@ import { loadSettings, divisionCtx, orgReg, orgRegAfter } from "./lookups";
 import { inviteUnclaimedMembers } from "./people";
 import { materialise } from "./materialise";
 import { openRegistrationSeatGateFor } from "./waitlist";
-import { paymentReminderMessage } from "./mail";
-import { stripeRefund, queueRefundReceipt } from "./refunds";
+import { paymentReminderMessage, payDeadlineOf } from "./mail";
+import { issuePayLink, recordPayToken } from "./pay-token";
+import { stripeRefund, queueRefundReceipt, recordRefundFailure, registrationRefundKey } from "./refunds";
 import { withdrawCore } from "./withdraw";
+import { queueRegistrationApprovedMails, queueRegistrationPaidMail } from "./lifecycle-mail";
+import { REMINDER_CAP_PER_DAY, REMINDER_LIMIT_CODE } from "@/lib/registration-reminder";
+import { entryPriceCents, ownPaymentRefundedCents } from "@/lib/registration-status";
 
 /** Organiser approve (free regs and waitlist overrides). Paid-division regs
  *  must be paid first — confirming an unpaid one would gift the spot. */
@@ -27,9 +31,9 @@ export async function confirmRegistration(auth: AuthCtx, regId: string): Promise
   const frozen = await frozenCompetitionIds(auth.orgId);
   // The seat gate, asked out here for the same reason (online-seat-gate.ts): confirming seats the registrant.
   const seatGate = await openRegistrationSeatGateFor(auth, regId);
-  const row = await withTenant(auth.orgId, async (tx) => {
+  const { row, mailIds } = await withTenant(auth.orgId, async (tx) => {
     const reg = await orgReg(tx, regId);
-    if (reg.status === "confirmed") return reg;
+    if (reg.status === "confirmed") return { row: reg, mailIds: [] as string[] };
     // RULING A (RS002 W5 review, BLOCKER): rejected is terminal from EVERY
     // writer — an organiser explicitly confirming stays allowed on a manual
     // division (ruling B), but never on a REJECTED row regardless of mode.
@@ -40,7 +44,9 @@ export async function confirmRegistration(auth: AuthCtx, regId: string): Promise
     }
     if (reg.status === "withdrawn") throw new HttpError(422, "registration is withdrawn");
     const settings = await loadSettings(tx, reg.division_id);
-    if ((settings?.fee_cents ?? 0) > 0 && reg.status !== "paid" && reg.payment_intent_id === null) {
+    // Polish wave P5 (P1 carry): THIS entry's own payment (V387), never the cart's (a sibling's payment sets the cart's intent).
+    // Polish wave P5 (H-2): what THIS entry costs - a solo sign-up's own price, never the team's (`entryPriceCents`).
+    if (entryPriceCents(settings, reg.free_agent) > 0 && reg.status !== "paid" && reg.entry_payment_intent_id === null) {
       throw new HttpError(
         422,
         "Awaiting payment — use Mark paid once the fee arrives, or Confirm without payment to waive it",
@@ -54,8 +60,12 @@ export async function confirmRegistration(auth: AuthCtx, regId: string): Promise
       registration_id: regId,
       paid: reg.status === "paid",
     }, auth.userId);
-    return orgRegAfter(tx, regId);
+    const after = await orgRegAfter(tx, regId);
+    // Polish wave P2 (W2, W13): the organiser's confirm is an approval; the registrant is told in the same transaction.
+    return { row: after, mailIds: await queueRegistrationApprovedMails(tx, { reg: after }) };
   }, seatGate?.tenant);
+  // A request: the first attempt is made after the response.
+  if (mailIds.length > 0) deferred(() => dispatchNow(mailIds));
   fireDivisionRevalidate(row.division_id);
   // RS008: fire-and-forget, strictly AFTER the transaction above has
   // committed. `row.entrant_id` is null on an early-return before
@@ -67,8 +77,12 @@ export async function confirmRegistration(auth: AuthCtx, regId: string): Promise
 }
 
 /** Organiser: record an offline (cash/bank) payment — confirms in the same tx
- *  (payment = approval, spec §2). Card-paid rows are refused: their money
- *  trail lives on Stripe and must stay refundable there. */
+ *  on an auto-approval division (payment = approval, spec §2). Polish wave P5
+ *  (W12): on a MANUAL division the payment is no longer the approval: an entry
+ *  the organiser has not approved stays `paid` (awaiting approval) and Approve
+ *  confirms it; one already approved ahead of its payment (`approved_at`) is
+ *  confirmed here. Card-paid rows are refused: their money trail lives on
+ *  Stripe and must stay refundable there. */
 export async function markRegistrationPaidOffline(
   auth: AuthCtx,
   regId: string,
@@ -79,7 +93,7 @@ export async function markRegistrationPaidOffline(
   // needs no id the transaction has not read yet, and `assertNotFrozen` is pure.
   const frozen = await frozenCompetitionIds(auth.orgId);
   const seatGate = await openRegistrationSeatGateFor(auth, regId);
-  const row = await withTenant(auth.orgId, async (tx) => {
+  const { row, mailIds } = await withTenant(auth.orgId, async (tx) => {
     const reg = await orgReg(tx, regId);
     // RULING A (RS002 W5 review, BLOCKER): rejected is terminal from every
     // writer. Already implied by the `!== "pending"` check below (rejected
@@ -92,11 +106,13 @@ export async function markRegistrationPaidOffline(
     if (reg.status !== "pending") {
       throw new HttpError(422, `Only pending registrations can be marked paid (this one is ${reg.status})`);
     }
-    if (reg.payment_intent_id) {
+    // Polish wave P5 (P1 carry): paid by card means THIS entry's own payment, not the cart's - on a cart where only a sibling paid,
+    // the cart's intent is the sibling's and the unpaid entry was refused here although it had paid nothing.
+    if (reg.entry_payment_intent_id) {
       throw new HttpError(422, "This registration was paid by card — refund it on the payments trail instead");
     }
     const settings = await loadSettings(tx, reg.division_id);
-    if ((settings?.fee_cents ?? 0) <= 0) {
+    if (entryPriceCents(settings, reg.free_agent) <= 0) {
       throw new HttpError(422, "This division has no entry fee");
     }
     const [div] = await tx<{ competition_id: string }[]>`
@@ -110,13 +126,31 @@ export async function markRegistrationPaidOffline(
       update registration_groups
       set offline_marked_paid_at = now(), offline_marked_paid_by = ${auth.userId}, updated_at = now()
       where id = ${reg.group_id}`;
-    await materialise(tx, { ...reg, status: "paid" }, settings?.entrant_kind ?? "individual", seatGate);
+    // Polish wave P5 (W12): on a manual-approval division the payment is not the approval. An entry the organiser has not approved
+    // stays `paid` (awaiting approval) - Approve then confirms it - as a card payment does (`confirmPaidRegistration`, ruling B); one
+    // already approved (`approved_at`, V513) is confirmed by its payment.
+    const awaitingApproval = settings?.approval === "manual" && reg.approved_at === null;
+    if (!awaitingApproval) await materialise(tx, { ...reg, status: "paid" }, settings?.entrant_kind ?? "individual", seatGate);
     await audit(tx, div.competition_id, auth.orgId, "registration.offline_paid", {
       registration_id: regId,
       amount_cents: reg.amount_cents,
+      ...(awaitingApproval ? { awaiting_approval: true } : {}),
     }, auth.userId);
-    return orgRegAfter(tx, regId);
+    const after = await orgRegAfter(tx, regId);
+    // Polish wave P2 (W1, W3): "payment received" in the transaction that records it. The wording is what the entry IS after the write
+    // (confirmed, or - W12 - paid and awaiting the organiser's approval on a manual division). One mail per mark: the
+    // mark's own timestamp is the payment ref, so a re-promoted entry marked paid again is a new mail. THIS entry only: an offline payment
+    // is marked entry by entry, so its mail names that entry's own amount, never the cart's.
+    const [mark] = await tx<{ at: Date }[]>`select offline_marked_paid_at as at from registration_groups where id = ${reg.group_id}`;
+    const mailIds = await queueRegistrationPaidMail(tx, {
+      regIds: [regId],
+      paymentIntentId: null,
+      paymentRef: `offline:${mark!.at.toISOString()}`,
+    });
+    return { row: after, mailIds };
   }, seatGate?.tenant);
+  // A request: the first attempt is made after the response.
+  if (mailIds.length > 0) deferred(() => dispatchNow(mailIds));
   fireDivisionRevalidate(row.division_id);
   // RS008: fire-and-forget, strictly AFTER the transaction above has
   // committed — see confirmRegistration's identical wiring for why.
@@ -135,9 +169,9 @@ export async function confirmRegistrationWaived(
   // needs no id the transaction has not read yet, and `assertNotFrozen` is pure.
   const frozen = await frozenCompetitionIds(auth.orgId);
   const seatGate = await openRegistrationSeatGateFor(auth, regId);
-  const row = await withTenant(auth.orgId, async (tx) => {
+  const { row, mailIds } = await withTenant(auth.orgId, async (tx) => {
     const reg = await orgReg(tx, regId);
-    if (reg.status === "confirmed") return orgRegAfter(tx, regId);
+    if (reg.status === "confirmed") return { row: await orgRegAfter(tx, regId), mailIds: [] as string[] };
     // RULING A (RS002 W5 review, BLOCKER): rejected is terminal from every
     // writer. Already implied by the allowlist below (rejected is neither
     // pending nor waitlisted), but explicit and first for the same reason as
@@ -155,10 +189,14 @@ export async function confirmRegistrationWaived(
     await materialise(tx, reg, settings?.entrant_kind ?? "individual", seatGate);
     await audit(tx, div.competition_id, auth.orgId, "registration.fee_waived", {
       registration_id: regId,
-      fee_cents: settings?.fee_cents ?? 0,
+      fee_cents: entryPriceCents(settings, reg.free_agent),
     }, auth.userId);
-    return orgRegAfter(tx, regId);
+    const after = await orgRegAfter(tx, regId);
+    // Polish wave P2 (W2, W13): a comped entry is approved by the organiser; the registrant is told in the same transaction.
+    return { row: after, mailIds: await queueRegistrationApprovedMails(tx, { reg: after }) };
   }, seatGate?.tenant);
+  // A request: the first attempt is made after the response.
+  if (mailIds.length > 0) deferred(() => dispatchNow(mailIds));
   fireDivisionRevalidate(row.division_id);
   // RS008: fire-and-forget, strictly AFTER the transaction above has
   // committed — see confirmRegistration's identical wiring for why.
@@ -166,31 +204,53 @@ export async function confirmRegistrationWaived(
   return row;
 }
 
-/** Organiser: email an unpaid (offline) registrant a payment reminder. */
+/** Organiser: email an unpaid registrant a payment reminder linking their payment page (card and offline alike; P4). */
 export async function sendPaymentReminder(
   auth: AuthCtx,
   regId: string,
+  origin: string,
 ): Promise<{ sent: boolean }> {
   const reg = await withTenant(auth.orgId, (tx) => orgReg(tx, regId));
   const settings = await loadSettings(sql, reg.division_id);
-  const fee = settings?.fee_cents ?? 0;
+  const fee = entryPriceCents(settings, reg.free_agent);
   if (fee <= 0) throw new HttpError(422, "This division has no entry fee.");
   if (reg.status !== "pending") {
     throw new HttpError(422, "Payment reminders only apply to pending registrations.");
   }
   const ctx = await divisionCtx(sql, reg.division_id);
+  // The division's method first (an organiser may have switched it since the entry), then the cart's - the page's own rule.
+  const method = (settings?.payment_method ?? reg.payment_method) === "stripe" ? "card" : "offline";
+  const link = issuePayLink(origin);
   const message = await paymentReminderMessage(reg, ctx, {
-    feeCents: fee,
+    // The amount THIS entry was charged (the figure the payment page and Checkout use), never the division's live fee: an organiser
+    // may have edited the fee since sign-up, and the mail must not quote a price the entry will not be asked for.
+    feeCents: reg.amount_cents,
     // Division override first, org-wide fallback — same resolution as the
     // confirmation email; refCode personalises {{reference}}.
     paymentInstructions: settings?.payment_instructions ?? ctx.payment_instructions,
+    method,
+    payPageUrl: link.url,
+    // The entry's own pay-by moment (polish wave W4): the sweep's reminder quotes one, so the organiser's must too.
+    payDeadline: payDeadlineOf(reg),
     refCode: reg.ref_code,
   });
-  // The row and the audit entry are ONE transaction: an audit that fails queues no mail, and a mail the outbox refuses leaves no
-  // "reminded" entry behind. The mail is then attempted at once; `sent` is whether THAT attempt was accepted. A provider that is down
+  // The row, its link's token and the audit entry are ONE transaction: an audit that fails queues no mail and records no token, and
+  // a mail the outbox refuses leaves no "reminded" entry behind. The token's org is the entry's own (the tenant this tx runs as). The mail is then attempted at once; `sent` is whether THAT attempt was accepted. A provider that is down
   // answers `{ sent: false }` and the row stays queued for the retry worker. No once-key: a press is a deliberate mail.
   const id = await withTenant(auth.orgId, async (tx) => {
+    // The cap: lock the entry, THEN count, so two concurrent presses at four serialise and exactly one gets the fifth.
+    await tx`select 1 from registrations where id = ${reg.id} for update`;
+    const [{ n }] = await tx<{ n: number }[]>`
+      select count(*)::int as n from competition_events
+       where competition_id = ${ctx.competition_id}
+         and type = 'registration.payment_reminded'
+         and payload->>'registration_id' = ${reg.id}
+         and created_at > now() - interval '24 hours'`;
+    if (n >= REMINDER_CAP_PER_DAY) {
+      throw new HttpError(429, `This entry has had ${REMINDER_CAP_PER_DAY} reminders in the last 24 hours. Try again later.`, REMINDER_LIMIT_CODE);
+    }
     const queued = await enqueueEmail(tx, message);
+    await recordPayToken(tx, { tokenHash: link.tokenHash, registrationId: reg.id, orgId: reg.org_id });
     await audit(tx, ctx.competition_id, auth.orgId, "registration.payment_reminded", { registration_id: regId }, auth.userId);
     return queued;
   });
@@ -223,7 +283,7 @@ export async function withdrawRegistrationOrganiser(
   regId: string,
 ): Promise<RegistrationWithGroupRow> {
   const reg = await withTenant(auth.orgId, async (tx) => orgReg(tx, regId));
-  await withdrawCore(reg, auth.userId);
+  await withdrawCore(reg, auth.userId, "organiser");
   return withTenant(auth.orgId, async (tx) => orgRegAfter(tx, regId));
 }
 
@@ -233,21 +293,45 @@ export async function refundRegistration(
   regId: string,
   amountCents: number | undefined,
 ): Promise<RegistrationWithGroupRow> {
-  const reg = await withTenant(auth.orgId, async (tx) => orgReg(tx, regId));
-  if (!reg.payment_intent_id) throw new HttpError(422, "No payment to refund");
-  // RS002 (V368): reg.refunded_cents is THIS entry's own column now (hazard 3
-  // fixed) — a sibling's earlier refund can no longer drive this negative and
-  // falsely report an untouched entry as "already fully refunded".
-  const remaining = reg.amount_cents - reg.refunded_cents;
-  if (remaining <= 0) throw new HttpError(422, "Already fully refunded");
-  const amount = amountCents ?? remaining;
-  if (amount > remaining) {
-    throw new HttpError(422, `Refund exceeds the remaining ${remaining} cents`);
-  }
-  // Read before the money moves and before the tenant transaction opens (a pooled read inside it waits on the connection it holds).
-  const ctx = await divisionCtx(sql, reg.division_id);
-  const refund = await stripeRefund(reg.payment_intent_id, amount);
-  const { row, receiptId } = await withTenant(auth.orgId, async (tx) => {
+  const pre = await withTenant(auth.orgId, async (tx) => orgReg(tx, regId));
+  // Read before the tenant transaction opens (a pooled read inside it waits on the connection it holds).
+  const ctx = await divisionCtx(sql, pre.division_id);
+  // Polish wave P5 (P1-review carry c): the cap is read, the money moved and the refund booked under ONE lock on the entry row. Two
+  // refunds at once used to read the same cap before either booked, so both passed it and both moved money. The second now waits
+  // for the first to commit and reads the cap it left. The lock is held across the Stripe call on purpose (a refund is rare and
+  // per entry; a second refund of the same money is the failure being prevented). `orgReg` reads `for update` (entry and cart rows,
+  // in the order checkout completion locks them).
+  // Set when Stripe itself failed (not the booking after it): recorded once the transaction has rolled back, so the next press carries a
+  // new key when Stripe answered (final review m1).
+  let stripeFailure: unknown = undefined;
+  const refunded = await withTenant(auth.orgId, async (tx) => {
+    const reg = await orgReg(tx, regId);
+    // Polish wave W8 (walkthrough s08b): THIS entry's own payment, never the cart's. The cart's `payment_intent_id` is set by
+    // whichever entry paid last, so on a cart where only a sibling paid it named the sibling's payment, and Refund on the unpaid
+    // entry sent real money back off it. An entry with no payment of its own has nothing to refund; null fails closed (V387/H1).
+    const intent = reg.entry_payment_intent_id;
+    if (!intent) throw new HttpError(422, "No payment to refund");
+    // RS002 (V368): reg.refunded_cents is THIS entry's own column now (hazard 3
+    // fixed) — a sibling's earlier refund can no longer drive this negative and
+    // falsely report an untouched entry as "already fully refunded".
+    // Polish wave P5 (carry b): and only what was sent back of its CURRENT payment counts - a late payment's refund (kept in the
+    // history) is not this payment's, so a re-promoted entry that paid again is refundable in full.
+    const remaining = reg.amount_cents - ownPaymentRefundedCents(reg);
+    if (remaining <= 0) throw new HttpError(422, "Already fully refunded");
+    const amount = amountCents ?? remaining;
+    if (amount > remaining) {
+      throw new HttpError(422, `Refund exceeds the remaining ${remaining} cents`);
+    }
+    // The key names THIS refund (`registrationRefundKey`, the one format every refund path shares - final review m6): the entry, what
+    // its books held when the cap was read (under the lock, so it only moves when a refund is booked), the amount, and the failures
+    // Stripe answered so far. A retry of the same press after a failed booking is the same refund at Stripe; a second legitimate
+    // partial refund of the same amount reads a different total and so is a different key; a retry after Stripe refused (m1) is a
+    // new key, never the refusal replayed for 24 hours.
+    const idempotencyKey = await registrationRefundKey(tx, reg, amount);
+    const refund = await stripeRefund(intent, amount, { idempotencyKey }).catch((err: unknown) => {
+      stripeFailure = err;
+      throw err;
+    });
     const [div] = await tx<{ competition_id: string }[]>`
       select competition_id from divisions where id = ${reg.division_id}`;
     // Additive on BOTH tables: this entry's own total (V368) and the cart's
@@ -269,7 +353,13 @@ export async function refundRegistration(
       stripe_refund_id: refund.id,
     }, auth.userId);
     return { row: await orgRegAfter(tx, regId), receiptId };
+  }).catch(async (err: unknown) => {
+    if (stripeFailure !== undefined) {
+      await recordRefundFailure({ regId, competitionId: ctx.competition_id, orgId: auth.orgId, mode: "manual", err: stripeFailure, actorId: auth.userId });
+    }
+    throw err;
   });
+  const { row, receiptId } = refunded;
   // A request: the first attempt is made after the response.
   if (receiptId !== null) deferred(() => dispatchNow([receiptId]));
   return row;

@@ -90,13 +90,15 @@ function joinBody(over: Record<string, unknown> = {}): Record<string, unknown> {
 }
 
 function fakeResult(): JoinTeamEntryResult {
-  return { registration_id: randomUUID(), player_id: randomUUID(), consent_status: "granted" };
+  return { registration_id: randomUUID(), player_id: randomUUID(), consent_status: "granted", entry_state: "confirmed" };
 }
 
 function fakePreview(): JoinPreviewResult {
   return {
     registration_id: randomUUID(),
     display_name: "Joinable Team",
+    entrant_kind: "team",
+    entry_confirmed: false,
     division_name: "Open",
     competition_name: "Join Cup",
     competition_slug: "join-cup",

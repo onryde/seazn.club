@@ -32,6 +32,7 @@ import {
   classifyJoinFailure,
   defaultSlotChoice,
   joinerCart,
+  joinSuccessCopy,
   joinWhoRequirements,
   NEW_PLAYER_CHOICE,
   rosterMeterAfterJoin,
@@ -41,6 +42,7 @@ import {
   type SlotChoice,
 } from "./view-model";
 import { routes } from "@/lib/routes";
+import type { EntryStanding } from "@/lib/registration-status";
 
 export interface JoinFormProps {
   orgSlug: string;
@@ -103,6 +105,9 @@ export function JoinForm({
   const [failure, setFailure] = useState<JoinFailureKind | null>(null);
   const [meter, setMeter] = useState<{ claimed: number; total: number } | null>(null);
   const turnstile = useTurnstile("join");
+  // Polish wave P3 (W4/W13): where the entry the joiner just joined STANDS, as the server reported it. null = not reported or nothing
+  // nameable; the success panel then says "You've joined" and never "You're in" (joinSuccessCopy).
+  const [entryState, setEntryState] = useState<EntryStanding | null>(null);
 
   const requirements = joinWhoRequirements(requiresDob, requiresGender);
   const contactValidation = validateContact(contact, requirements);
@@ -145,13 +150,14 @@ export function JoinForm({
     setSubmitting(true);
     setFailure(null);
     try {
-      await withTurnstile(turnstile, (headers) =>
-        apiV1(joinSubmitUrl(orgSlug, competitionSlug), {
+      const joined = await withTurnstile(turnstile, (headers) =>
+        apiV1<{ entry_state?: EntryStanding | null }>(joinSubmitUrl(orgSlug, competitionSlug), {
           method: "POST",
           json: buildJoinBody(joinCode, selected!, contact, consent),
           headers,
         }),
       );
+      setEntryState(joined?.entry_state ?? null);
       // RS007 review fix L4: read `total` (state, kept fresh by
       // refreshSlots), never the `totalPlayers` prop directly — both
       // numbers must come from the SAME snapshot, the freshest one
@@ -166,15 +172,21 @@ export function JoinForm({
   }
 
   if (meter) {
+    const copy = joinSuccessCopy(entryState);
     return (
       <div role="status" className="rounded-xl border border-zinc-200/80 bg-surface p-4 shadow-sm sm:p-6">
         <div aria-hidden className="mb-3 h-0.5 w-10 bg-accent" />
-        <h2 className="font-display text-xl font-semibold uppercase tracking-wide text-ink">
-          {t("register.join.success.heading")}
+        <h2 data-testid="reg-join-success-heading" data-entry-state={entryState ?? "none"} className="font-display text-xl font-semibold uppercase tracking-wide text-ink">
+          {t(copy.headingKey)}
         </h2>
-        <p className="mt-2 text-sm text-ink">{t("register.join.success.body", { entry: displayName })}</p>
+        <p className="mt-2 text-sm text-ink">{t(copy.bodyKey, { entry: displayName })}</p>
+        {copy.stateKey && (
+          <p data-testid="reg-join-success-state" className="mt-1 text-sm text-ink">
+            {t(copy.stateKey)}
+          </p>
+        )}
         <p className="mt-1 text-sm text-ink-muted">
-          {t("register.status.roster.meter", { claimed: meter.claimed, total: meter.total })}
+          {t(copy.meterKey, { claimed: meter.claimed, total: meter.total })}
         </p>
         <a
           href={routes.publicHub(orgSlug, competitionSlug)}

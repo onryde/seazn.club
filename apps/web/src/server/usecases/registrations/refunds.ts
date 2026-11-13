@@ -7,8 +7,11 @@ import { refundIssuedEmail, registrationRefundFailedAlertEmail } from "@/lib/ema
 import { enqueueEmailOnce, expiryWithin, recipientLocale } from "@/server/email-outbox";
 import { isoFromZonedParts } from "@/lib/zoned-datetime";
 import { log } from "@/server/logger";
+import { ownPaymentRefundedCents } from "@/lib/registration-status";
 import { queueStaffAlert } from "../staff-alert";
+import { audit } from "../audit";
 import type { Tx, RegistrationWithGroupRow, DivisionCtx } from "./types";
+import { regGroupCols } from "./lookups";
 
 /** Mirror refunds made outside the app (Stripe dashboard) so the console
  *  never shows money we no longer hold. Monotonic — never regresses. */
@@ -25,6 +28,19 @@ export async function syncRegistrationRefund(charge: Stripe.Charge): Promise<voi
     set refunded_cents = greatest(refunded_cents, ${charge.amount_refunded}),
         refunded_at = coalesce(refunded_at, now()), updated_at = now()
     where payment_intent_id = ${intent}`;
+  // Polish wave final fix m5: the ENTRY's own total too, when the payment is one entry's alone (its own `payment_intent_id`, V387).
+  // The per-entry readers - the delete guards, the knockout desk, the panel's Refund - read it, and a dashboard refund never reached
+  // it: a fully refunded entry was still offered Refund (Stripe then refused) and never cleared a delete guard. What was sent back of
+  // THIS payment is `amount_refunded`, capped at the entry's price; a refunded LATE payment already in its history
+  // (`late_refunded_cents`, V512) is another payment's and stays on top. Monotonic like the cart's. A payment shared by several entries
+  // of a cart is not split by guessing: the cart mirror above is all it gets. An in-app refund holds the entry row across its Stripe
+  // call (`refundEntryUnderLock`, `refundRegistration`), so this waits for its booking and then finds nothing left to raise.
+  await sql`
+    update registrations
+    set refunded_cents = greatest(refunded_cents, late_refunded_cents + least(${charge.amount_refunded}::int, amount_cents)),
+        updated_at = now()
+    where payment_intent_id = ${intent}
+      and (select count(*) from registrations same where same.payment_intent_id = ${intent}) = 1`;
 }
 
 // ---------------------------------------------------------------------------
@@ -39,13 +55,18 @@ export async function syncRegistrationRefund(charge: Stripe.Charge): Promise<voi
 export async function stripeRefund(
   paymentIntentId: string,
   amountCents: number | undefined,
+  opts: { idempotencyKey?: string } = {},
 ): Promise<Stripe.Refund> {
-  return getStripe().refunds.create({
+  const params: Stripe.RefundCreateParams = {
     payment_intent: paymentIntentId,
     ...(amountCents !== undefined ? { amount: amountCents } : {}),
     reverse_transfer: true,
     refund_application_fee: true,
-  });
+  };
+  // Polish wave P5 (carry c), final review m6: a refund of an entry's own payment (the organiser's Refund, withdrawal, reject, the
+  // pool-deadline sweep) passes `registrationRefundKey`, so a retry of the same refund is the same refund at Stripe. The webhook's
+  // late and duplicate refunds keep the one-argument call (each is keyed by its own payment and replay-guarded by the webhook).
+  return opts.idempotencyKey ? getStripe().refunds.create(params, { idempotencyKey: opts.idempotencyKey }) : getStripe().refunds.create(params);
 }
 
 /**
@@ -80,6 +101,7 @@ export async function queueRefundReceipt(
           orgName: ctx.org_name,
           competitionName: ctx.comp_name,
           displayName: reg.display_name,
+          contactName: reg.contact_name,
           amountCents,
           currency: reg.currency,
           refCode: reg.ref_code,
@@ -100,6 +122,128 @@ export async function queueRefundReceipt(
     });
   } catch (err) {
     log.error({ err, registrationId: reg.id, refundId }, "registration: refund receipt could not be queued");
+    return null;
+  }
+}
+
+/** The error classes of a definitive refusal (stripe-node's `type`, as `billing-manage.ts` reads it). The SDK builds these
+ *  only from a 400/404 (invalid request) or a 402 (card) answer (`generateV1Error`), so the 4xx range comes with the type: a separate
+ *  status check would be a second guard nothing can reach. A 400 `idempotency_error` and a 429 rate limit get other types. */
+const DEFINITIVE_REFUSAL_TYPES: ReadonlySet<string> = new Set(["StripeCardError", "StripeInvalidRequestError"]);
+
+/** Whether Stripe DEFINITIVELY refused a refund call: a card or invalid-request error with a 4xx status (a drained connected account,
+ *  a charge already refunded, no such charge). The refund did not happen, and Stripe keeps the first answer to an idempotency key,
+ *  errors included, for 24 hours: the same key would only replay the refusal, so the next attempt needs a new one (final review m1).
+ *  Anything else keeps the key (re-review N2): a 5xx is indeterminate (Stripe documents that the refund may have executed), a rate limit
+ *  or an idempotency conflict was not processed, and a connection error or timeout got no answer at all. For those the same key is what
+ *  turns a retry into a replay of whatever Stripe did, instead of a second refund. */
+export function stripeRefusedDefinitively(err: unknown): boolean {
+  const e = err as { statusCode?: unknown; type?: unknown } | null;
+  // An answer from Stripe carries its HTTP status; an error the SDK raised before any request (or a timeout) carries none.
+  if (typeof e?.statusCode !== "number") return false;
+  return DEFINITIVE_REFUSAL_TYPES.has(String(e.type));
+}
+
+/**
+ * The Stripe idempotency key of a refund of ONE entry's own payment - the one format every refund path uses (the organiser's Refund,
+ * the withdrawal refund, the reject refund, the pool-deadline sweep; final review m6). Read UNDER the entry's lock, so its parts only
+ * move when a refund is booked or a failure recorded:
+ *  - `refunded_cents` as the books hold it: a second legitimate refund of the same amount reads a different total, so it is a
+ *    different refund; a retry of a refund whose booking was lost (Stripe moved the money, the transaction rolled back) reads the
+ *    same total and replays at Stripe instead of sending the money twice;
+ *  - the amount;
+ *  - the refusals Stripe gave this entry so far (`registration.refund_failed` rows with `stripe_answered`, true only for a definitive
+ *    refusal: `stripeRefusedDefinitively`): Stripe replays an answered error for 24 hours, so a retry after the organiser fixed the
+ *    cause (a topped-up connected account) must carry a new key or it is refused again (m1). A 5xx, a timeout or a connection error
+ *    is not counted (N2): the refund may have gone through, and the same key makes the retry a replay. No suffix while there are none,
+ *    so the key of an untroubled refund is unchanged.
+ */
+export async function registrationRefundKey(tx: Tx, reg: Pick<RegistrationWithGroupRow, "id" | "refunded_cents">, amountCents: number): Promise<string> {
+  const [{ n }] = await tx<{ n: number }[]>`
+    select count(*)::int as n from competition_events
+     where type = 'registration.refund_failed'
+       and payload->>'registration_id' = ${reg.id}
+       and payload->>'stripe_answered' = 'true'`;
+  return `registration-refund:${reg.id}:${reg.refunded_cents}:${amountCents}${n > 0 ? `:f${n}` : ""}`;
+}
+
+/** The record of a refund that did not go through: `registration.refund_failed` (the organiser console reads the shortfall, and
+ *  `registrationRefundKey` counts the answered ones). Written on the pool, after the refund's own transaction rolled back. */
+export async function recordRefundFailure(
+  a: { regId: string; competitionId: string; orgId: string; mode: string; err: unknown; actorId: string | null },
+): Promise<void> {
+  await audit(sql, a.competitionId, a.orgId, "registration.refund_failed", {
+    registration_id: a.regId,
+    mode: a.mode,
+    stripe_answered: stripeRefusedDefinitively(a.err),
+  }, a.actorId);
+}
+
+/**
+ * Refund THIS entry's own payment, the shape every automatic refund shares with the organiser's Refund (final review m6): the entry
+ * row (and its cart row) is locked, the cap is read under the lock (`amount_cents - ownPaymentRefundedCents`), Stripe is called
+ * with `registrationRefundKey`, and the refund is booked on both tables with its receipt and its audit entry - all inside the one
+ * transaction. A withdrawal or a rejection used to read the cap in its status-changing transaction and call Stripe after the commit,
+ * outside any lock and with no key: an organiser pressing Refund during that call read the same cap and both refunds moved money
+ * (on a shared-intent cart, a sibling's). Now the second caller waits for the first to book and reads what it left.
+ *
+ * `capCents` is the most this caller means to send back (the policy's amount, the amount the reject mail announced); the lock's
+ * own reading can only lower it. Returns what was refunded, or `null` when nothing was (no payment of this entry's own, nothing left
+ * under the lock, or Stripe refused - recorded and alerted, never thrown: the status change that asked for the refund has
+ * committed and must stand).
+ */
+export async function refundEntryUnderLock(a: {
+  regId: string;
+  ctx: DivisionCtx;
+  capCents: number;
+  mode: "auto" | "auto_pool_deadline" | "reject";
+  actorId: string | null;
+  /** For the failure alert when the failure came before the lock's own read (the caller's earlier read of the same entry). */
+  currency: string;
+}): Promise<{ amountCents: number; refundId: string; receiptId: string | null } | null> {
+  let attempted: { amount: number; intent: string; reg: RegistrationWithGroupRow } | null = null;
+  try {
+    return await sql.begin(async (tx) => {
+      const [locked] = await tx<RegistrationWithGroupRow[]>`
+        select ${regGroupCols(tx)}
+        from registrations r join registration_groups g on g.id = r.group_id
+        where r.id = ${a.regId} for update`;
+      const intent = locked?.entry_payment_intent_id;
+      if (!locked || !intent) return null;
+      const amount = Math.min(a.capCents, locked.amount_cents - ownPaymentRefundedCents(locked));
+      if (amount <= 0) return null;
+      attempted = { amount, intent, reg: locked };
+      const refund = await stripeRefund(intent, amount, { idempotencyKey: await registrationRefundKey(tx, locked, amount) });
+      await tx`
+        update registrations set refunded_cents = refunded_cents + ${amount}, updated_at = now()
+        where id = ${locked.id}`;
+      await tx`
+        update registration_groups
+        set refunded_cents = refunded_cents + ${amount}, refunded_at = now(), updated_at = now()
+        where id = ${locked.group_id}`;
+      const receiptId = await queueRefundReceipt(tx, { reg: locked, ctx: a.ctx, amountCents: amount, refundId: refund.id });
+      await audit(tx, a.ctx.competition_id, a.ctx.org_id, "registration.refunded", {
+        registration_id: locked.id,
+        amount_cents: amount,
+        mode: a.mode,
+        stripe_refund_id: refund.id,
+      }, a.actorId);
+      return { amountCents: amount, refundId: refund.id, receiptId };
+    }) as { amountCents: number; refundId: string; receiptId: string | null } | null;
+  } catch (err) {
+    // The refund failed (Stripe, or the booking after it): the transaction rolled back, and the status change that asked for it stands.
+    await recordRefundFailure({ regId: a.regId, competitionId: a.ctx.competition_id, orgId: a.ctx.org_id, mode: a.mode, err, actorId: a.actorId });
+    const tried = attempted as { amount: number; intent: string; reg: RegistrationWithGroupRow } | null;
+    await maybeAlertRegistrationRefundFailed({
+      registrationId: a.regId,
+      orgId: a.ctx.org_id,
+      competitionId: a.ctx.competition_id,
+      amountCents: tried?.amount ?? a.capCents,
+      currency: tried?.reg.currency ?? a.currency,
+      paymentIntentId: tried?.intent ?? null,
+      reason: errText(err),
+      mode: a.mode,
+    });
     return null;
   }
 }

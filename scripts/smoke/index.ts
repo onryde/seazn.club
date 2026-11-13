@@ -9,6 +9,7 @@ import { selectSmokeSuites, type SmokeSelection } from "../smoke-select.ts";
 import {
   type Session, newSession, call, check, writeManifest, signIn, tag, insertEntitlementOverride, setPlan, cleanup,
   counts,
+  summary,
 } from "./harness.ts";
 import { main } from "./main.ts";
 import { bracketFinishSuite } from "./suites/bracketFinish.ts";
@@ -35,6 +36,7 @@ import { onlineChessDeskSuite } from "./suites/onlineChessDesk.ts";
 import { epochFloorOverrideSuite } from "./suites/epochFloorOverride.ts";
 import { registrationOpenFlowSuite } from "./suites/registrationOpenFlow.ts";
 import { youtubeConnectSuite } from "./suites/youtubeConnect.ts";
+import { registrationPayPageSuite } from "./suites/registrationPayPage.ts";
 
 // --- SMOKE_ONLY (review R1): run named suites alone, without a full smoke -----
 type SubsetCtx = { admin: Session; org2Id: string; org2Slug: string };
@@ -66,6 +68,7 @@ const SELECTABLE_SUITES: Record<string, (c: SubsetCtx) => Promise<void>> = {
   w4KnockoutB: () => w4KnockoutBSuite(),
   youtubeConnect: () => youtubeConnectSuite(),
   deviceLinkFootball: () => deviceLinkFootballSuite(),
+  registrationPayPage: () => registrationPayPageSuite(),
 };
 
 /** The subset's setup: the same calls main() makes for this state, in main()'s order — the admin sign-in, the plan
@@ -103,14 +106,14 @@ try {
 (selection.mode === "all" ? main() : runSubset(selection.names))
   .then(async () => {
     await cleanup(tag);
-    console.log(`${counts().pass} passed, ${counts().fail} failed`);
+    console.log(summary());
     writeManifest();
     process.exit(counts().fail === 0 ? 0 : 1);
   })
   .catch(async (e) => {
     console.error("ERROR:", e instanceof Error ? e.message : String(e));
     await cleanup(tag);
-    console.log(`${counts().pass} passed, ${counts().fail} failed`);
+    console.log(summary());
     writeManifest();
     process.exit(1);
   });

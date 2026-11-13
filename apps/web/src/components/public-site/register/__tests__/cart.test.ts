@@ -11,6 +11,7 @@ import {
   cartReducer,
   clearSelfLinkWhenNotPlaying,
   lineFeeCents,
+  lineMethod,
   payableDivision,
   registeringSelfAnywhere,
   summarizeCart,
@@ -257,6 +258,30 @@ describe("cartReducer — UPDATE_ENTRY", () => {
     const next = cartReducer(named, { type: "UPDATE_ENTRY", id: "e1", patch: { free_agent: true } });
     expect(next.entries[0]!.free_agent).toBe(true);
     expect(next.entries[0]!.team_name).toBeNull();
+  });
+
+  // Polish wave P5 (H-1): a solo sign-up's Details step collects the player (Assign has nobody to place without a player row) -
+  // ONE row, the solo player's own, starting blank (details-seed fills it from the contact).
+  it("becoming a solo sign-up gives the entry ONE blank player row, whatever roster it had", () => {
+    const withRows: CartState = {
+      ...EMPTY_CART,
+      entries: [{ ...one.entries[0]!, players: [{ ...EMPTY_ROSTER_PLAYER, full_name: "Cap" }, { ...EMPTY_ROSTER_PLAYER }] }],
+    };
+    for (const cart of [one, withRows]) {
+      const next = cartReducer(cart, { type: "UPDATE_ENTRY", id: "e1", patch: { free_agent: true } });
+      expect(next.entries[0]!.players).toEqual([EMPTY_ROSTER_PLAYER]);
+    }
+    // Sequence: a second identical patch keeps the one row (no growth).
+    const twice = cartReducer(cartReducer(one, { type: "UPDATE_ENTRY", id: "e1", patch: { free_agent: true } }), {
+      type: "UPDATE_ENTRY",
+      id: "e1",
+      patch: { free_agent: true },
+    });
+    expect(twice.entries[0]!.players).toHaveLength(1);
+    // ...and a repeat never wipes a name the registrant already typed on the solo row.
+    const named = cartReducer(twice, { type: "UPDATE_PLAYER", id: "e1", index: 0, patch: { full_name: "Priya Raman" } });
+    const repeated = cartReducer(named, { type: "UPDATE_ENTRY", id: "e1", patch: { free_agent: true } });
+    expect(repeated.entries[0]!.players.map((p) => p.full_name)).toEqual(["Priya Raman"]);
   });
 });
 
@@ -626,12 +651,61 @@ describe("autoLinkObviousSelf — links the ONE cart entry to 'I'm playing' when
     expect(next).toBe(alreadyLinked);
   });
 
-  it("does nothing when the cart is empty or has 2+ entries — ambiguous, the rep must choose", () => {
+  it("does nothing when the cart is empty", () => {
     expect(autoLinkObviousSelf(EMPTY_CART, true)).toBe(EMPTY_CART);
-    const two: CartState = {
-      entries: [...oneEntry.entries, entry({ id: "e2", division_id: "d2", entrant_kind: "individual" })],
+  });
+
+  // Polish wave sign-off V1 (2026-11-12): a playing registrant is the player on EVERY entry they add. The old rule linked a cart of
+  // exactly one entry and "never guessed across 2+", so the second division's entry of a singles+doubles registrant came out with
+  // nobody linked: her own row typed again, stored consent-pending, and the panel showed her as "Consent pending" on her own entry.
+  it("links EVERY entry of a playing registrant across divisions — individual, pair and team alike", () => {
+    const three: CartState = {
+      entries: [
+        entry({ id: "e1", division_id: "d1", entrant_kind: "individual" }),
+        entry({ id: "e2", division_id: "d2", entrant_kind: "pair" }),
+        entry({ id: "e3", division_id: "d3", entrant_kind: "team" }),
+      ],
     };
-    expect(autoLinkObviousSelf(two, true)).toBe(two);
+    const next = autoLinkObviousSelf(three, true);
+    expect(next.entries.map((e) => e.registering_self)).toEqual([true, true, true]);
+    // Linking never records a decline, and never pre-picks a row (details-seed.ts does that from the contact).
+    expect(next.entries.map((e) => [e.self_link_declined, e.self_player_index])).toEqual([
+      [false, null],
+      [false, null],
+      [false, null],
+    ]);
+    // Second pass over the linked cart: nothing left to do, the same reference.
+    expect(autoLinkObviousSelf(next, true)).toBe(next);
+  });
+
+  it("links only the FIRST of two entries in one division — twice in one draw is the same person entered twice", () => {
+    const sameDivision: CartState = {
+      entries: [
+        entry({ id: "e1", division_id: "d1", entrant_kind: "individual" }),
+        entry({ id: "e2", division_id: "d1", entrant_kind: "individual" }),
+        entry({ id: "e3", division_id: "d2", entrant_kind: "individual" }),
+      ],
+    };
+    expect(autoLinkObviousSelf(sameDivision, true).entries.map((e) => e.registering_self)).toEqual([true, false, true]);
+    // A division that ALREADY has the registrant (the second entry, linked by hand) keeps that choice; the first is not added.
+    const handPicked: CartState = {
+      entries: [sameDivision.entries[0]!, { ...sameDivision.entries[1]!, registering_self: true }, sameDivision.entries[2]!],
+    };
+    expect(autoLinkObviousSelf(handPicked, true).entries.map((e) => e.registering_self)).toEqual([false, true, true]);
+  });
+
+  it("keeps an explicit 'not me' on one entry of a multi-entry cart, skips a solo entry, and still links the others", () => {
+    const mixed: CartState = {
+      entries: [
+        entry({ id: "e1", division_id: "d1", entrant_kind: "individual", self_link_declined: true }),
+        entry({ id: "e2", division_id: "d2", entrant_kind: "individual" }),
+        entry({ id: "fa", division_id: "d3", entrant_kind: "team", free_agent: true }),
+      ],
+    };
+    const next = autoLinkObviousSelf(mixed, true);
+    expect(next.entries.map((e) => e.registering_self)).toEqual([false, true, false]);
+    expect(next.entries[0]).toBe(mixed.entries[0]);
+    expect(next.entries[2]).toBe(mixed.entries[2]);
   });
 
   it("re-links automatically when the rep un-links then re-toggles imPlaying (still exactly one entry, still no explicit choice)", () => {
@@ -957,5 +1031,47 @@ describe("lineFeeCents — the quote must equal what the server charges (RS009)"
     // The `|| fee_cents` mistake would quote 6000 here — the full team fee
     // to someone the page is telling is free.
     expect(lineFeeCents({ free_agent: true }, { ...division, free_agent_fee_cents: 0 })).toBe(0);
+  });
+});
+
+
+// Polish wave P4 (walkthrough W9): the review step labelled the WHOLE 23-pound cart "pay by card at sign-up" although one of its two
+// entries was pay-the-organiser. Each line now carries its own division's method - and only a line that is charged now carries one.
+describe("lineMethod - how ONE cart line is paid, for the review step's per-entry label (W9)", () => {
+  const CARD: DivisionLike = { ...TEAM_DIVISION, division_id: "card", fee_cents: 1500, payment_method: "stripe" };
+  const OFFLINE: DivisionLike = { ...TEAM_DIVISION, division_id: "offline", fee_cents: 800, payment_method: "offline" };
+  const lineOf = (division: DivisionLike, patch: Partial<CartEntry> = {}) =>
+    summarizeCart({ entries: [entry({ id: "e1", division_id: division.division_id, entrant_kind: "team", ...patch })] }, [division]).lines[0]!;
+
+  it("a charged line reads its own division's method (the walkthrough's two entries, side by side)", () => {
+    const summary = summarizeCart(
+      { entries: [entry({ id: "a", division_id: "card", entrant_kind: "team" }), entry({ id: "b", division_id: "offline", entrant_kind: "team" })] },
+      [CARD, OFFLINE],
+    );
+    expect(summary.lines.map(lineMethod)).toEqual(["stripe", "offline"]);
+  });
+
+  it("a line that is not charged now has no method: free, waitlisted, stale-closed, a free solo price, or an unknown division", () => {
+    expect(lineMethod(lineOf({ ...CARD, fee_cents: 0 })), "free").toBeNull();
+    expect(lineMethod(lineOf({ ...CARD, closed_reason: "full" })), "waitlisted").toBeNull();
+    expect(lineMethod(lineOf({ ...CARD, closed_reason: "window" })), "stale-closed").toBeNull();
+    expect(lineMethod(lineOf({ ...CARD, free_agent_fee_cents: 0 }, { free_agent: true })), "a solo price of 0 on a paid division").toBeNull();
+    expect(lineMethod(summarizeCart({ entries: [entry({ id: "e1", division_id: "ghost", entrant_kind: "team" })] }, []).lines[0]!), "unknown division").toBeNull();
+  });
+
+  it("the whole table: every method x fee x state resolves to the method exactly when the line is charged now (counted)", () => {
+    let checked = 0;
+    let labelled = 0;
+    for (const method of ["stripe", "offline"] as const)
+      for (const fee of [0, 1500] as const)
+        for (const closed of [null, "full", "window"] as const) {
+          const got = lineMethod(lineOf({ ...CARD, payment_method: method, fee_cents: fee, closed_reason: closed }));
+          const charged = fee > 0 && closed === null;
+          expect(got, `${method}/${fee}/${closed}`).toBe(charged ? method : null);
+          checked += 1;
+          if (got) labelled += 1;
+        }
+    expect(checked).toBe(12);
+    expect(labelled, "premise: two rows are labelled (one per method)").toBe(2);
   });
 });

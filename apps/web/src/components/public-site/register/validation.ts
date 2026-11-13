@@ -152,6 +152,42 @@ export interface EntriesValidation {
    *  it would block submissions the server accepts, which is the same class
    *  of bug in the other direction. */
   missingTeamNameEntryId: string | null;
+  /** Polish wave P4 (walkthrough W9): the cart mixes a card division with a pay-the-organiser one — see `mixedPaymentConflict`. A
+   *  per-cart cause like the two above (`error` stays null), non-null exactly when THAT is why `valid` is false. The names ride along so
+   *  the cart can say which two divisions disagree. */
+  mixedPayment: MixedPayment | null;
+}
+
+/** The two divisions of a cart that cannot be collected together: one paid by card at sign-up, one paid to the organiser. */
+export interface MixedPayment {
+  cardDivision: string;
+  offlineDivision: string;
+}
+
+/**
+ * Does this cart mix a card division with a pay-the-organiser one? One Stripe checkout pays the whole cart, so the server refuses it
+ * (`registration-submit.ts`'s `assertUniformPaymentMethod`, 422 "This cart mixes payment methods across divisions"). Before this, the
+ * form let the registrant add both, fill in four steps, and only then refuse, under a generic "check your details" headline.
+ *
+ * MIRRORS that server rule exactly, which is why it is not "the cart's payable lines": only a division that charges (`fee_cents > 0`)
+ * counts, and a WAITLISTED one still does (the structural check runs before any entry is waitlisted). A division with no method or fee
+ * given, or one the cart names that is not in `divisions`, is never a conflict.
+ */
+export function mixedPaymentConflict(
+  cart: CartState,
+  divisions: readonly (Pick<DivisionLike, "division_id"> & Partial<Pick<DivisionLike, "name" | "fee_cents" | "payment_method">>)[],
+): MixedPayment | null {
+  const byId = new Map(divisions.map((d) => [d.division_id, d]));
+  let card: string | undefined;
+  let offline: string | undefined;
+  for (const entry of cart.entries) {
+    const division = byId.get(entry.division_id);
+    if (!division || !(division.fee_cents && division.fee_cents > 0)) continue;
+    const name = division.name ?? entry.division_id;
+    if (division.payment_method === "stripe") card ??= name;
+    else if (division.payment_method === "offline") offline ??= name;
+  }
+  return card !== undefined && offline !== undefined ? { cardDivision: card, offlineDivision: offline } : null;
 }
 
 /** `PublicRegisterGroupRequest.entries` is `.min(1).max(10)`
@@ -217,19 +253,27 @@ export function teamNameMissing(
 
 export function validateEntries(
   cart: CartState,
-  divisions: readonly Pick<DivisionLike, "division_id" | "category" | "age_min" | "age_max" | "closed_reason">[],
+  divisions: readonly (Pick<DivisionLike, "division_id" | "category" | "age_min" | "age_max" | "closed_reason"> &
+    Partial<Pick<DivisionLike, "name" | "fee_cents" | "payment_method">>)[],
   contact: Pick<ContactState, "dob" | "gender">,
   seasonStartYear: number,
 ): EntriesValidation {
   if (cart.entries.length === 0) {
-    return { valid: false, error: "cartEmpty", staleClosedEntryId: null, missingTeamNameEntryId: null };
+    return { valid: false, error: "cartEmpty", staleClosedEntryId: null, missingTeamNameEntryId: null, mixedPayment: null };
   }
 
   for (const entry of cart.entries) {
     const division = divisions.find((d) => d.division_id === entry.division_id);
     if (division && division.closed_reason != null && division.closed_reason !== "full") {
-      return { valid: false, error: null, staleClosedEntryId: entry.id, missingTeamNameEntryId: null };
+      return { valid: false, error: null, staleClosedEntryId: entry.id, missingTeamNameEntryId: null, mixedPayment: null };
     }
+  }
+
+  // P4 (W9): a cart the server is certain to refuse as a whole, however well every entry is filled in. Reported before the local typo
+  // below for the same reason a stale-closed division is: nothing about the cart can be submitted until one side is removed.
+  const mixedPayment = mixedPaymentConflict(cart, divisions);
+  if (mixedPayment) {
+    return { valid: false, error: null, staleClosedEntryId: null, missingTeamNameEntryId: null, mixedPayment };
   }
 
   // Checked BEFORE self-eligibility on purpose: a missing name is a typo the
@@ -238,7 +282,7 @@ export function validateEntries(
   // first means one trip back to this step, not two.
   for (const entry of cart.entries) {
     if (teamNameMissing(entry)) {
-      return { valid: false, error: null, staleClosedEntryId: null, missingTeamNameEntryId: entry.id };
+      return { valid: false, error: null, staleClosedEntryId: null, missingTeamNameEntryId: entry.id, mixedPayment: null };
     }
   }
 
@@ -248,11 +292,11 @@ export function validateEntries(
     if (!division) continue;
     const verdict = selfEligibilityForDivision(division, contact, seasonStartYear);
     if (!verdict.eligible) {
-      return { valid: false, error: "selfIneligible", staleClosedEntryId: null, missingTeamNameEntryId: null };
+      return { valid: false, error: "selfIneligible", staleClosedEntryId: null, missingTeamNameEntryId: null, mixedPayment: null };
     }
   }
 
-  return { valid: true, error: null, staleClosedEntryId: null, missingTeamNameEntryId: null };
+  return { valid: true, error: null, staleClosedEntryId: null, missingTeamNameEntryId: null, mixedPayment: null };
 }
 
 // ---------------------------------------------------------------------------
@@ -290,7 +334,9 @@ export function entryDetailsComplete(
   entry: CartEntry,
   division: Pick<DivisionLike, "form_fields">,
 ): boolean {
-  if (entry.free_agent) return true;
+  // Polish wave P5 (H-1): a solo sign-up's one row is the player an organiser places, so it must be named. A solo with no row (a
+  // cart saved before the form collected it) stays complete: the server makes the row from the contact.
+  if (entry.free_agent) return entry.players.every((p) => p.full_name.trim().length > 0);
 
   const required = requiredPlayerCount(entry.entrant_kind);
   if (required !== null && entry.players.length !== required) return false;
@@ -361,15 +407,22 @@ export interface DetailsValidation {
 export function validateDetails(
   cart: CartState,
   divisions: readonly DivisionLike[],
-  contact: Pick<ContactState, "dob" | "gender">,
+  contact: Pick<ContactState, "dob" | "gender"> & { name?: string },
   seasonStartYear: number,
 ): DetailsValidation {
   const byId = new Map(divisions.map((d) => [d.division_id, d]));
 
   for (const entry of cart.entries) {
-    if (entry.free_agent) continue;
     const division = byId.get(entry.division_id);
     if (!division) continue;
+    if (entry.free_agent) {
+      // P5 H-1: the solo player's OWN eligibility (with the contact's dob/gender as fallbacks, the server's self-row rule); a roster's
+      // composition is the team's - those issues carry no player index.
+      if (!entryDetailsComplete(entry, division)) return { valid: false, error: "incomplete" };
+      const solo = rosterEligibilityForDivision(division, effectiveSelfPlayers(entry, contact), seasonStartYear);
+      if (solo.issues.some((issue) => issue.playerIndex != null)) return { valid: false, error: "incomplete" };
+      continue;
+    }
 
     if (!entryDetailsComplete(entry, division)) return { valid: false, error: "incomplete" };
 

@@ -362,6 +362,9 @@ export function formatMinor(
   }).format(amount);
 }
 
+/** The one money spelling for a player's pages; defined in `format-money-exact.ts` so the mail core can reach it without this file. */
+export { formatMoneyExact } from "@/lib/format-money-exact";
+
 /**
  * Best-effort currency guess from an Accept-Language header — the fallback
  * when neither a subscription currency nor the switcher cookie exists.

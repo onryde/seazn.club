@@ -101,11 +101,12 @@ import { useMsg } from "@/components/i18n/dict-provider";
 import { lichessRegistrantRefusalText } from "@/components/v2/entrants-lichess-refusal";
 import { registrantKindRefusalText } from "@/lib/entrant-kind-refusal";
 import { deriveRegistrantActionFlags } from "@/components/registration-hub-registrant-derive";
+import { REMINDER_CAP_PER_DAY, REMINDER_CONFIRM_WITHIN_MS, REMINDER_LIMIT_CODE } from "@/lib/registration-reminder";
 import type { MessageKey } from "@/lib/messages";
 import type { RegistrationListRow } from "@/server/usecases/registrations";
 
 type Status = RegistrationListRow["status"];
-type ActionKey = "approve" | "reject" | "withdraw" | "promote" | "resend" | "mark-paid" | "refund";
+type ActionKey = "approve" | "reject" | "withdraw" | "promote" | "resend" | "remind" | "mark-paid" | "refund";
 
 export interface RegistrationHubRegistrantActionsProps {
   registrationId: string;
@@ -128,11 +129,21 @@ export interface RegistrationHubRegistrantActionsProps {
    *  offline/unpaid one. Both the approve-awaiting-payment exclusion and
    *  the markPaid gate key off this being null. */
   paymentIntentId: string | null;
+  /** THIS entry's own payment intent (`entry_payment_intent_id`, V387) — set only when a card payment landed for this entry.
+   *  Refund keys off this, never the cart's `paymentIntentId`: a sibling's payment sets the cart's, and an entry that paid nothing
+   *  has nothing to refund (polish wave W8). */
+  entryPaymentIntentId: string | null;
   /** THIS entry's own refunded total (V368 — `registrations.refunded_cents`,
    *  not the cart's). With `amountCents` it is what decides whether anything
    *  is left to refund, mirroring `refundRegistration`'s own
    *  "Already fully refunded" refusal. */
   refundedCents: number;
+  /** ISO time of the organiser's last "Send payment reminder" press for this entry; null if never. Within an hour of it, the next
+   *  press asks first. */
+  lastRemindedAt: string | null;
+  /** Polish wave P5 (W12): when the organiser approved this entry while its fee was still due (`approved_at`, V513), ISO; null if
+   *  never approved that way. Approve is then done and the payment confirms the entry. */
+  approvedAt: string | null;
 }
 
 function errorText(err: unknown): string {
@@ -146,13 +157,19 @@ export function RegistrationHubRegistrantActions({
   amountCents,
   divisionFeeCents,
   paymentIntentId,
+  entryPaymentIntentId,
   refundedCents,
+  lastRemindedAt,
+  approvedAt,
 }: RegistrationHubRegistrantActionsProps) {
   const msg = useMsg();
   const router = useRouter();
   const confirmDialog = useConfirm();
   const [optimisticStatus, setOptimisticStatus] = useState<Status>(status);
   const [promotedOptimistically, setPromotedOptimistically] = useState(false);
+  // W12: an approval that left the fee due changes no status, so the row's Approve is hidden by this until the refresh brings approvedAt.
+  const [approvedOptimistically, setApprovedOptimistically] = useState(false);
+  const approved = approvedAt !== null || approvedOptimistically;
   const [busy, setBusy] = useState<ActionKey | null>(null);
   const [feedback, setFeedback] = useState<{ tone: "success" | "error"; text: string } | null>(null);
   // RS005 F2 finding 3 — set once approve or mark-paid 422s with the
@@ -201,9 +218,13 @@ export function RegistrationHubRegistrantActions({
       status: optimisticStatus,
       approval,
       amount_cents: amountCents,
+      // Already THIS payment's refunds (the detail passes ownPaymentRefundedCents), so nothing of it is a late payment's.
       refunded_cents: refundedCents,
+      late_refunded_cents: 0,
       division_fee_cents: divisionFeeCents,
       payment_intent_id: paymentIntentId,
+      entry_payment_intent_id: entryPaymentIntentId,
+      approved_at: approved ? new Date(approvedAt ?? 0) : null,
       // RS009's two flags are computed by the same shared function so that
       // `hasAnyAction` counts them, but this component does not render either
       // control — the assign sheet is its own component, mounted beside this
@@ -235,7 +256,7 @@ export function RegistrationHubRegistrantActions({
     path: string,
     nextStatus: Status,
     successText: string,
-  ) {
+  ): Promise<boolean> {
     setBusy(action);
     setFeedback(null);
     setOptimisticStatus(nextStatus);
@@ -249,6 +270,7 @@ export function RegistrationHubRegistrantActions({
       latestStatusRef.current = nextStatus;
       setFeedback({ tone: "success", text: successText });
       router.refresh();
+      return true;
     } catch (err) {
       // Latest known server truth, never the click-time snapshot — finding 2.
       setOptimisticStatus(latestStatusRef.current);
@@ -265,13 +287,22 @@ export function RegistrationHubRegistrantActions({
       // unrelated approve/mark-paid 4xx (wrong division state, already
       // refunded, ...) must never flip this.
       setFeedback({ tone: "error", text });
+      return false;
     } finally {
       setBusy(null);
     }
   }
 
   async function approve() {
-    await runStatusAction("approve", "approve", "confirmed", msg("reg.hub.registrants.detail.actions.approved"));
+    // W12: an entry whose fee is still due is approved and stays pending - the payment confirms it (registration-approval.ts).
+    const paymentDue = flags.canMarkPaid;
+    const ok = await runStatusAction(
+      "approve",
+      "approve",
+      paymentDue ? "pending" : "confirmed",
+      msg(paymentDue ? "reg.hub.registrants.detail.actions.approvedPaymentDue" : "reg.hub.registrants.detail.actions.approved"),
+    );
+    if (ok && paymentDue) setApprovedOptimistically(true);
   }
 
   async function reject() {
@@ -303,17 +334,20 @@ export function RegistrationHubRegistrantActions({
   // fee outside the app... and confirms the entry. This is logged.") is
   // identical regardless of which surface triggers markRegistrationPaidOffline.
   async function markPaid() {
+    // W12: on a manual-approval division the payment is not the approval - an entry not yet approved stays `paid` (awaiting
+    // approval) and the dialog does not promise "confirms the entry" (organiser-actions.ts).
+    const awaitingApproval = approval === "manual" && !approved;
     const ok = await confirmDialog({
       title: msg("confirm.markPaidRegistration.title"),
-      body: msg("confirm.markPaidRegistration.body"),
-      confirmLabel: msg("confirm.markPaidRegistration.label"),
+      body: msg(awaitingApproval ? "confirm.markPaidRegistration.bodyAwaitingApproval" : "confirm.markPaidRegistration.body"),
+      confirmLabel: msg(awaitingApproval ? "confirm.markPaidRegistration.labelAwaitingApproval" : "confirm.markPaidRegistration.label"),
       tone: "default",
     });
     if (!ok) return;
     await runStatusAction(
       "mark-paid",
       "mark-paid",
-      "confirmed",
+      awaitingApproval ? "paid" : "confirmed",
       msg("reg.hub.registrants.detail.actions.markedPaid"),
     );
   }
@@ -408,6 +442,41 @@ export function RegistrationHubRegistrantActions({
     }
   }
 
+  // Send payment reminder. A press within the hour of the last one asks first (a double click is rarely meant); the server caps it at
+  // five a day regardless, and its refusal is said here in the organiser's language off its code, not in the server's English.
+  async function remind() {
+    if (lastRemindedAt !== null && Date.now() - Date.parse(lastRemindedAt) < REMINDER_CONFIRM_WITHIN_MS) {
+      const ok = await confirmDialog({
+        title: msg("reg.remind.confirmRecent.title"),
+        body: msg("reg.remind.confirmRecent.body"),
+        confirmLabel: msg("reg.action.remind"),
+        tone: "default",
+      });
+      if (!ok) return;
+    }
+    setBusy("remind");
+    setFeedback(null);
+    try {
+      const result = await apiV1<{ sent: boolean }>(`/api/v1/registrations/${registrationId}/remind`, { method: "POST" });
+      setFeedback(
+        result.sent
+          ? { tone: "success", text: msg("reg.remind.sent") }
+          : { tone: "error", text: msg("reg.remind.notSent") },
+      );
+      router.refresh();
+    } catch (err) {
+      setFeedback({
+        tone: "error",
+        text:
+          err instanceof ApiV1Error && err.code === REMINDER_LIMIT_CODE
+            ? msg("reg.remind.limit", { count: REMINDER_CAP_PER_DAY })
+            : failureText(err),
+      });
+    } finally {
+      setBusy(null);
+    }
+  }
+
   return (
     // `contents` on both wrappers, so these buttons become direct children of
     // the ONE flex-wrap row the detail panel provides. Each component used to
@@ -430,6 +499,11 @@ export function RegistrationHubRegistrantActions({
               ? msg("reg.hub.registrants.detail.actions.markingPaid")
               : msg("reg.hub.registrants.detail.actions.markPaid")}
           </button>
+        )}
+        {approved && optimisticStatus === "pending" && (
+          <span data-registration-hub-registrant-approved-awaiting-payment className="self-center text-xs text-ink-muted">
+            {msg("reg.hub.registrants.detail.actions.approvedPaymentDue")}
+          </span>
         )}
         {flags.canApprove && (
           <button
@@ -505,6 +579,18 @@ export function RegistrationHubRegistrantActions({
             {busy === "resend"
               ? msg("reg.hub.registrants.detail.actions.resending")
               : msg("reg.hub.registrants.detail.actions.resend")}
+          </button>
+        )}
+        {flags.canRemind && (
+          <button
+            type="button"
+            data-registration-hub-registrant-action="remind"
+            disabled={busy !== null}
+            onClick={remind}
+            title={msg("reg.action.remindTitle")}
+            className="btn btn-ghost text-xs"
+          >
+            {msg("reg.action.remind")}
           </button>
         )}
       </div>

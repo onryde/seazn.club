@@ -87,8 +87,10 @@ async function markPaidOnline(entrantId: string): Promise<void> {
   await withDb(async (sql) => {
     const rows = await sql<{ id: string; group_id: string }[]>`select id, group_id from registrations where entrant_id = ${entrantId}`;
     expect(rows.length, "premise: the entrant came from a registration").toBe(1);
-    await sql`update registration_groups set payment_intent_id = ${`pi_e2e_${rows[0]!.id.slice(0, 8)}`} where id = ${rows[0]!.group_id}`;
-    await sql`update registrations set amount_cents = 1500 where id = ${rows[0]!.id}`;
+    // As the completion handler writes a card payment: the intent on the cart AND on the entry it paid (the desk reads the entry's, V387).
+    const intent = `pi_e2e_${rows[0]!.id.slice(0, 8)}`;
+    await sql`update registration_groups set payment_intent_id = ${intent} where id = ${rows[0]!.group_id}`;
+    await sql`update registrations set amount_cents = 1500, payment_intent_id = ${intent} where id = ${rows[0]!.id}`;
   });
 }
 

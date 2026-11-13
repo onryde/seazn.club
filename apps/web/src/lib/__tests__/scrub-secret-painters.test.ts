@@ -393,9 +393,14 @@ const PAINTERS: Record<string, { verdict: true | string; handoff?: string }> = {
     handoff: "components/public-site/register/register-lichess-card.tsx",
   },
   "components/public-site/register/register-stepper.tsx": { verdict: true },
-  "app/(public)/live/[orgSlug]/[competitionSlug]/register/status/entry-card.tsx": { verdict: true },
+  // Polish wave P6: the captain's invite links are built and painted by InviteTeammates (each row is ph-no-capture); the card hands it the code.
+  "app/(public)/live/[orgSlug]/[competitionSlug]/register/status/entry-card.tsx": {
+    verdict: "passes the team's join code to InviteTeammates as a prop and paints nothing itself",
+    handoff: "app/(public)/live/[orgSlug]/[competitionSlug]/register/status/invite-teammates.tsx",
+  },
+  "app/(public)/live/[orgSlug]/[competitionSlug]/register/status/invite-teammates.tsx": { verdict: true },
   "components/registration-hub-registrant-detail.tsx": {
-    verdict: "passes the team's join code to RegistrationHubRegistrantJoinCode as a prop and paints nothing itself",
+    verdict: "passes the team's join link (built by joinLinkPath) to RegistrationHubRegistrantJoinCode as a prop and paints nothing itself",
     handoff: "components/registration-hub-registrant-join-code.tsx",
   },
   // The Lichess refusal's link: its `href` carries the return path, which carries the join code (`?join_code=`), a capability token.
@@ -411,6 +416,12 @@ const PAINTERS: Record<string, { verdict: true | string; handoff?: string }> = {
   "app/(public)/r/sponsor/invoice/[token]/page.tsx": {
     verdict: "builds the invoice's PDF link and pay action from the token and hands both to SponsorInvoiceView as props; it paints nothing itself",
     handoff: "components/sponsors/invoice-view.tsx",
+  },
+  // Player payment page (Task 4): the Pay form's action carries the token (`/r/pay/<token>/pay`).
+  "components/registrations/pay-page-view.tsx": { verdict: true },
+  "app/(public)/r/pay/[token]/page.tsx": {
+    verdict: "builds the Pay action from the token and hands it to PayPageView as a prop; it paints nothing itself",
+    handoff: "components/registrations/pay-page-view.tsx",
   },
   "components/org-team.tsx": {
     verdict:

@@ -1,7 +1,7 @@
 import "server-only";
 // The hourly pay-window sweep: reminders, expiries, promotions (see ./index.ts).
 import { sql } from "@/lib/db";
-import { SPOT_HOLDERS } from "@/lib/registration-status";
+import { SPOT_HOLDERS, ownPaymentRefundedCents } from "@/lib/registration-status";
 import { enqueueEmailOnce } from "@/server/email-outbox";
 import { log } from "@/server/logger";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
@@ -11,8 +11,9 @@ import { regGroupCols, loadSettings, divisionCtx } from "./lookups";
 import { clearExpiresIfNoLongerNeeded } from "./materialise";
 import { freesTeamSlot, promoteOldestWaitlisted, openPromotionSeatGate, notifyPromoted } from "./waitlist";
 import { paymentReminderMessage } from "./mail";
-import { createRegistrationCheckout } from "./checkout";
-import { stripeRefund, queueRefundReceipt, errText, maybeAlertRegistrationRefundFailed } from "./refunds";
+import { issuePayLink, recordPayToken } from "./pay-token";
+import { refundEntryUnderLock } from "./refunds";
+import { queueRegistrationExpiredMails, queueRegistrationPromotionLapsedMails } from "./lifecycle-mail";
 import { releaseSoloSignUpPlacement } from "./withdraw";
 import { effectivePoolDeadline } from "./list";
 
@@ -23,7 +24,8 @@ import { effectivePoolDeadline } from "./list";
 /**
  * Four passes over card pendings: (1a) T-24h payment reminders for
  * never-promoted entries, keyed on the CART's shared deadline, carrying a
- * fresh token-free checkout link, exactly once per registration
+ * fresh link to the entry's payment page (`/r/pay/<token>`, never a Checkout
+ * url — the page mints on Pay), exactly once per registration
  * (registration_groups.reminded_at); (1b) the same T-24h reminder for
  * PROMOTED entries, keyed on THEIR OWN deadline instead
  * (registrations.promotion_reminded_at — V379/RS007: a group-level mark
@@ -93,10 +95,17 @@ export async function sweepRegistrations(
   // OWN mark, so a still-pending sibling's own, unrelated reminder can never
   // be silenced by this one firing. See the V383 migration's own doc comment
   // for why this is named `submit_*`, not a bare `reminded_at`.
+  //
+  // Gap wave G5: the method is the DIVISION's (`registration_settings`, NOT NULL), the cart's snapshot only when the division has
+  // no settings row - the page's own resolution (`settings?.payment_method ?? reg.payment_method`, pay-page.ts). An organiser who
+  // switches a division to offline after a card entry was submitted leaves that cart saying `stripe`; asking the cart sent a card
+  // reminder to a page that then shows offline instructions.
   const due = await sql<RegistrationWithGroupRow[]>`
     select ${regGroupCols(sql)}
     from registrations r join registration_groups g on g.id = r.group_id
-    where r.status = 'pending' and r.promoted_at is null and g.payment_method = 'stripe'
+    left join registration_settings rs on rs.division_id = r.division_id
+    where r.status = 'pending' and r.promoted_at is null
+      and coalesce(rs.payment_method, g.payment_method) = 'stripe'
       and g.expires_at is not null
       and g.expires_at < now() + interval '24 hours'
       and g.expires_at > now()
@@ -105,40 +114,19 @@ export async function sweepRegistrations(
     limit 200`;
   for (const reg of due) {
     let claimed = false;
-    let minted = false;
     try {
       const ctx = await divisionCtx(sql, reg.division_id);
-      if (!ctx.charges_enabled) continue; // Connect broke — nothing to link to
-      // RS007 follow-up (V381) — the CAS-before-send claim (648c56503) only
-      // reverted on a THROWN failure. An ungraceful death (deploy, OOM,
-      // SIGKILL, container eviction) between this UPDATE committing and the
-      // queueing transaction below committing runs no `catch`, so a permanent claim would
-      // stick forever and `where submit_reminded_at is null` would never
-      // match this row again — a silently lost reminder, worse than the
-      // double-send the claim exists to prevent (routine here:
-      // registrations-sweep.yml's own curl --max-time 60 --retry lands while
-      // a 200-row serial sweep is still running server-side).
-      // submit_reminder_claimed_at is a LEASE instead of a permanent mark: it
-      // blocks a concurrent claim for REMINDER_LEASE_MINUTES, then goes
-      // stale and the row is claimable again, so a crash costs a delay,
-      // never the reminder. submit_reminded_at — set only in the queueing
-      // transaction below — stays the permanent record; the "due" SELECT above filters
-      // on THAT column alone, never the lease.
+      if (!ctx.charges_enabled) continue; // Connect broke — the page's Pay could not take the card
+      // RS007 follow-up (V381) — the claim is a LEASE, not a permanent mark: an ungraceful death (deploy, OOM, SIGKILL) between this
+      // UPDATE committing and the queueing transaction below committing runs no `catch`, so a permanent claim would silence this
+      // reminder forever. submit_reminder_claimed_at blocks a concurrent claim for REMINDER_LEASE_MINUTES, then goes stale and the
+      // row is claimable again; submit_reminded_at — set only in the queueing transaction — stays the permanent record, and the
+      // "due" SELECT above filters on THAT column alone.
       //
-      // REVIEW FIX (money-path defect #9) — the mint used to run BEFORE this
-      // claim, unconditionally: a losing invocation (a concurrent sweep that
-      // loses THIS claim below) still ran createRegistrationCheckout and
-      // stamped registration_groups.checkout_session_id with a session
-      // nobody would ever hold — the loser never queues a reminder, so
-      // nobody is ever given that URL, yet the group's shared session
-      // pointer now names it. A registrant who already has the WINNER's
-      // session URL (from a real, sent email) then pays via a session the
-      // group row no longer names, and the reconcile-on-return path
-      // (`sessionId !== reg.checkout_session_id`) refuses to confirm it —
-      // the webhook remains the eventual fulfilment path, but the fast
-      // return-and-confirm UX breaks for a payment that genuinely succeeded.
-      // Minting now happens ONLY after a successful claim, so a losing
-      // invocation never reaches Stripe at all.
+      // Player payment page (P1): the reminder links the entry's payment page, so nothing external happens here any more — no
+      // Checkout session is minted (the page mints one when the player presses Pay). The token, the queued row and the mark are
+      // ONE transaction, so any throw before it commits leaves nothing behind and simply releases the lease; the once-key makes a
+      // second run of this pass (a lapsed lease, a double sweep) queue nothing more.
       const [row] = await sql<{ id: string }[]>`
         update registrations
         set submit_reminder_claimed_at = now(), updated_at = now()
@@ -148,36 +136,31 @@ export async function sweepRegistrations(
         returning id`;
       if (!row) continue; // lease held by a concurrent sweep, or already sent
       claimed = true;
-      const url = await createRegistrationCheckout(reg.group_id, [reg.id], ctx, origin, null);
-      // The session exists from here, so nothing below releases the lease (spec §8): releasing it would mint a second session for the
-      // same entry at the next sweep (F8). Queueing the reminder and stamping the entry's mark are ONE transaction, so a reminder is
-      // either queued AND marked or neither; a send that later fails is the outbox's retry, not this pass's. The once-key makes a
-      // second run of this pass (a lapsed lease, a double sweep) queue nothing more.
-      minted = true;
+      const link = issuePayLink(origin);
       const message = await paymentReminderMessage(reg, ctx, {
         feeCents: reg.amount_cents,
         paymentInstructions: null,
-        checkoutUrl: url,
+        method: "card",
+        payPageUrl: link.url,
         payDeadline: reg.expires_at,
       });
       await sql.begin(async (tx) => {
-        await enqueueEmailOnce(tx, { ...message, dedupeKey: `${reg.id}:submit` });
+        // Gap wave G9: the token is recorded only for a mail this run queued. `null` = the once-key found this reminder already
+        // queued (its mark was lost), so the link in THIS body is never sent: recording it would leave a payable link nobody holds.
+        // Marked either way - the mail exists.
+        const queued = await enqueueEmailOnce(tx, { ...message, dedupeKey: `${reg.id}:submit` });
+        if (queued !== null) await recordPayToken(tx, { tokenHash: link.tokenHash, registrationId: reg.id, orgId: reg.org_id });
         await tx`update registrations set submit_reminded_at = now(), updated_at = now()
                  where id = ${reg.id}`;
       });
     } catch (err) {
-      if (minted) {
-        log.error(
-          { err, registrationId: reg.id },
-          "registrations: the payment reminder could not be queued after its Checkout session was minted",
-        );
-      } else if (claimed) {
-        // The mint (or anything before it) threw: no session exists, so clear the LEASE (not the still-null sent mark) and the next
-        // sweep retries promptly instead of waiting out the window.
+      log.error({ err, registrationId: reg.id }, "registrations: the payment reminder could not be queued");
+      if (claimed) {
+        // Nothing committed: clear the LEASE (not the still-null sent mark) and the next sweep retries promptly.
         await sql`update registrations set submit_reminder_claimed_at = null, updated_at = now()
                   where id = ${reg.id}`;
       }
-      continue; // submit_reminded_at stays null either way — a later sweep retries
+      continue; // submit_reminded_at stays null — a later sweep retries
     }
     reminded++;
   }
@@ -188,15 +171,21 @@ export async function sweepRegistrations(
   // `promotion_reminded_at` — never the group's `reminded_at`, which a cart
   // can share with a still-pending sibling (see (1a)'s comment and the
   // column's own doc comment on `registrations`, V379). `promotion_expires_at
-  // is not null` alone is enough to scope this to promoted, stripe-fee rows:
+  // is not null` scopes this to rows promoted with a stripe fee (the method check below covers a later switch):
   // `promoteWaitlistedRow` only ever sets it when the promotion itself
   // needed a stripe window (`amount_cents` > 0 at that moment), and nothing
   // else in the codebase writes it.
   // `r.promoted_at is not null` below is what makes `promoted_at` a Date here (the once-key names the promotion by it).
+  //
+  // Fix round 1 (F4): the window only proves the division took cards AT PROMOTION. An organiser who switches it to offline later
+  // leaves the window standing, so the method is resolved now, exactly as pass (1a) (G5) and the page do: the division's settings
+  // row, the cart's snapshot only when the division has none.
   const duePromoted = await sql<(RegistrationWithGroupRow & { promoted_at: Date })[]>`
     select ${regGroupCols(sql)}
     from registrations r join registration_groups g on g.id = r.group_id
+    left join registration_settings rs on rs.division_id = r.division_id
     where r.status = 'pending' and r.promoted_at is not null
+      and coalesce(rs.payment_method, g.payment_method) = 'stripe'
       and r.promotion_expires_at is not null
       and r.promotion_expires_at < now() + interval '24 hours'
       and r.promotion_expires_at > now()
@@ -205,21 +194,11 @@ export async function sweepRegistrations(
     limit 200`;
   for (const reg of duePromoted) {
     let claimed = false;
-    let minted = false;
     try {
       const ctx = await divisionCtx(sql, reg.division_id);
-      if (!ctx.charges_enabled) continue; // Connect broke — nothing to link to
-      // RS007 follow-up (V381) — same lease fix as pass (1a) above, on this
-      // entry's OWN mark (never the group's, per this pass's own doc
-      // comment on why).
-      //
-      // REVIEW FIX (money-path defect #9) — same reorder as pass (1a) above:
-      // this pass had the identical mint-before-claim shape (its own entry-
-      // scoped columns already avoided the CART-sibling repro #7 fixes, but
-      // a losing invocation under genuine concurrent sweep execution still
-      // wasted a mint and clobbered the group's shared checkout_session_id
-      // with a session nobody would ever hold). Claim first; a losing
-      // invocation now never reaches createRegistrationCheckout at all.
+      if (!ctx.charges_enabled) continue; // Connect broke — the page's Pay could not take the card
+      // RS007 follow-up (V381) — same lease as pass (1a) above, on this entry's OWN mark (never the group's, per this pass's own
+      // doc comment on why).
       const [row] = await sql<{ id: string }[]>`
         update registrations
         set promotion_reminder_claimed_at = now(), updated_at = now()
@@ -229,33 +208,35 @@ export async function sweepRegistrations(
         returning id`;
       if (!row) continue; // lease held by a concurrent sweep, or already sent
       claimed = true;
-      const url = await createRegistrationCheckout(reg.group_id, [reg.id], ctx, origin, null);
-      // As pass (1a): from the mint on nothing is released, and the row and this entry's OWN mark are one transaction. The once-key
-      // names this PROMOTION (`promoted_at`), so a re-promoted entry, whose second window gets its own reminder, is a new key.
-      minted = true;
+      // As pass (1a) (P2): the entry's payment page, no Checkout session; the token, the row and this entry's OWN mark are one
+      // transaction. The once-key names this PROMOTION (`promoted_at`), so a re-promoted entry, whose second window gets its own
+      // reminder, is a new key.
+      const link = issuePayLink(origin);
       const message = await paymentReminderMessage(reg, ctx, {
         feeCents: reg.amount_cents,
         paymentInstructions: null,
-        checkoutUrl: url,
+        method: "card",
+        payPageUrl: link.url,
         payDeadline: reg.promotion_expires_at,
       });
       await sql.begin(async (tx) => {
-        await enqueueEmailOnce(tx, { ...message, dedupeKey: `${reg.id}:promotion:${reg.promoted_at.toISOString()}` });
+        // Gap wave G9, as pass (1a): a token only for a mail this run queued; marked either way.
+        const queued = await enqueueEmailOnce(tx, {
+          ...message,
+          dedupeKey: `${reg.id}:promotion:${reg.promoted_at.toISOString()}`,
+        });
+        if (queued !== null) await recordPayToken(tx, { tokenHash: link.tokenHash, registrationId: reg.id, orgId: reg.org_id });
         await tx`update registrations set promotion_reminded_at = now(), updated_at = now()
                  where id = ${reg.id}`;
       });
     } catch (err) {
-      if (minted) {
-        log.error(
-          { err, registrationId: reg.id },
-          "registrations: the promotion payment reminder could not be queued after its Checkout session was minted",
-        );
-      } else if (claimed) {
-        // No session exists: clear the LEASE, not the (still-null) sent mark — see pass (1a).
+      log.error({ err, registrationId: reg.id }, "registrations: the promotion payment reminder could not be queued");
+      if (claimed) {
+        // Nothing committed: clear the LEASE, not the (still-null) sent mark — see pass (1a).
         await sql`update registrations set promotion_reminder_claimed_at = null, updated_at = now()
                   where id = ${reg.id}`;
       }
-      continue; // promotion_reminded_at stays null either way — a later sweep retries
+      continue; // promotion_reminded_at stays null — a later sweep retries
     }
     reminded++;
   }
@@ -334,6 +315,9 @@ export async function sweepRegistrations(
           from: "waitlist",
         }, null);
       }
+      // Polish wave P2 (W10): tell the registrant their unpaid place was released, in the transaction that releases it. The sweep has no
+      // response to defer behind, so the retry worker makes the first attempt.
+      await queueRegistrationExpiredMails(tx, { reg: locked, origin });
       return { promoted, settings, competitionId: div.competition_id };
     })) as unknown as {
       promoted: RegistrationWithGroupRow | null;
@@ -429,6 +413,9 @@ export async function sweepRegistrations(
           from: "waitlist",
         }, null);
       }
+      // Polish wave P5 (P2 carry): tell the registrant the held place went to the next in line and the entry is waiting again, in the
+      // transaction that puts it back. `locked` still carries the promotion it lost (the once-key). The worker makes the first attempt.
+      await queueRegistrationPromotionLapsedMails(tx, { reg: locked, origin });
       return { promoted, settings, competitionId: div.competition_id };
     })) as unknown as {
       promoted: RegistrationWithGroupRow | null;
@@ -539,46 +526,20 @@ export async function sweepRegistrations(
     if (
       (locked.status === "paid" || locked.status === "confirmed") &&
       locked.entry_payment_intent_id &&
-      locked.amount_cents - locked.refunded_cents > 0
+      locked.amount_cents - ownPaymentRefundedCents(locked) > 0
     ) {
-      const remaining = locked.amount_cents - locked.refunded_cents;
-      try {
-        const refund = await stripeRefund(locked.entry_payment_intent_id, remaining);
-        // The receipt is queued in the same transaction as the refund's record; a cron has no response to defer behind, so the first
-        // attempt is the worker's.
-        await sql.begin(async (tx) => {
-          await tx`
-            update registrations
-            set refunded_cents = refunded_cents + ${remaining}, updated_at = now()
-            where id = ${locked.id}`;
-          await tx`
-            update registration_groups
-            set refunded_cents = refunded_cents + ${remaining}, refunded_at = now(), updated_at = now()
-            where id = ${locked.group_id}`;
-          await queueRefundReceipt(tx, { reg: locked, ctx, amountCents: remaining, refundId: refund.id });
-        });
-        await audit(sql, ctx.competition_id, ctx.org_id, "registration.refunded", {
-          registration_id: locked.id,
-          amount_cents: remaining,
-          mode: "auto_pool_deadline",
-          stripe_refund_id: refund.id,
-        }, null);
-      } catch (err) {
-        await audit(sql, ctx.competition_id, ctx.org_id, "registration.refund_failed", {
-          registration_id: locked.id,
-          mode: "auto_pool_deadline",
-        }, null);
-        await maybeAlertRegistrationRefundFailed({
-          registrationId: locked.id,
-          orgId: ctx.org_id,
-          competitionId: ctx.competition_id,
-          amountCents: remaining,
-          currency: locked.currency,
-          paymentIntentId: locked.payment_intent_id,
-          reason: errText(err),
-          mode: "auto_pool_deadline",
-        });
-      }
+      // Polish wave P5 (carry b): the cap is THIS payment's - a late payment's refund in the history is not this one's. Final review
+      // m6: moved, capped and booked under the entry's lock with the shared key (`refundEntryUnderLock`), like every other refund
+      // path. The receipt is queued in the same transaction; a cron has no response to defer behind, so the first attempt is the
+      // worker's. A failure is recorded and alerted there.
+      await refundEntryUnderLock({
+        regId: locked.id,
+        ctx,
+        capCents: locked.amount_cents - ownPaymentRefundedCents(locked),
+        mode: "auto_pool_deadline",
+        actorId: null,
+        currency: locked.currency,
+      });
     }
   }
 

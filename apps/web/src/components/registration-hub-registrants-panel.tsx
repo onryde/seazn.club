@@ -77,6 +77,8 @@ export function RegistrationHubRegistrantsPanel({
   emptyCtaHref,
   details,
   poolSummary,
+  orgSlug,
+  compSlug,
 }: {
   rows: RegistrationListRow[];
   filters: RegistrantsFilters;
@@ -104,6 +106,9 @@ export function RegistrationHubRegistrantsPanel({
    *  every other competition, which is what keeps the banner below silent
    *  rather than an "everything's fine" wrapper. */
   poolSummary: PoolSummaryPanelRow[];
+  /** The console route's own slugs: a row's join link is the competition's public join page (polish wave P6). */
+  orgSlug: string;
+  compSlug: string;
 }) {
   const filtered = hasActiveFilters(filters);
 
@@ -231,7 +236,7 @@ export function RegistrationHubRegistrantsPanel({
       ) : (
         <RegistrationHubRegistrantTable
           rows={rows}
-          context={{ dict, orgTz, canEdit, baseHref: clearHref }}
+          context={{ dict, orgTz, canEdit, baseHref: clearHref, orgSlug, compSlug }}
           details={details}
         />
       )}

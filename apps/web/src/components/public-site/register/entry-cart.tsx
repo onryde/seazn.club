@@ -6,11 +6,11 @@
 // entries independently (singles + doubles at the same tournament is the
 // common racket-sports case); checking one does NOT uncheck another.
 import { useT } from "@/components/i18n/dict-provider";
-import { formatMinor, type Currency } from "@/lib/currency";
+import { formatMoneyExact } from "@/lib/currency";
 import { summarizeCart, type CartAction } from "./cart";
 import { INELIGIBLE_MESSAGE_KEY, selfEligibilityForDivision } from "./eligibility-presentation";
 import { BTN_TEXT } from "./styles";
-import { teamNameMissing } from "./validation";
+import { mixedPaymentConflict, teamNameMissing } from "./validation";
 import { MAX_CART_ENTRIES, type CartEntry, type CartState, type ContactState, type DivisionLike } from "./types";
 
 // Exported for step-review.tsx (step 5) — a cart line reads the same either
@@ -59,6 +59,9 @@ export function EntryCart({
   // (cart.ts) for why this must not fork back into a second copy.
   const summary = summarizeCart(cart, divisions);
   const { subtotalCents, currency } = summary;
+  // P4 (W9): a card division and a pay-the-organiser one cannot be collected together, and the server refuses the cart as a whole. Said
+  // HERE, live, the moment the second division is added - validateEntries (the SAME predicate) is what holds Next.
+  const mixed = mixedPaymentConflict(cart, divisions);
 
   return (
     <div className="rounded-xl border border-zinc-200/80 bg-surface p-4 shadow-sm sm:p-6">
@@ -204,6 +207,16 @@ export function EntryCart({
         </ul>
       )}
 
+      {mixed && (
+        <p
+          role="alert"
+          data-testid="reg-cart-mixed-payment"
+          className="mt-3 min-w-0 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700"
+        >
+          {t("register.entries.cart.mixedPayment", { cardDivision: mixed.cardDivision, offlineDivision: mixed.offlineDivision })}
+        </p>
+      )}
+
       {cart.entries.length >= MAX_CART_ENTRIES && (
         <p className="mt-2 text-xs text-ink-muted">{t("register.entries.cart.max", { max: MAX_CART_ENTRIES })}</p>
       )}
@@ -214,7 +227,7 @@ export function EntryCart({
             {t("register.entries.cart.subtotal")}
           </span>
           <span className="font-display text-lg font-bold text-ink">
-            {subtotalCents === 0 || !currency ? t("register.entries.free") : formatMinor(subtotalCents, currency as Currency, locale)}
+            {subtotalCents === 0 || !currency ? t("register.entries.free") : formatMoneyExact(subtotalCents, currency, locale)}
           </span>
         </div>
       )}

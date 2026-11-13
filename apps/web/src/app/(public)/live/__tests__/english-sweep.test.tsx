@@ -1542,6 +1542,8 @@ const EXCLUDED: Record<string, string> = {
   "[orgSlug]/[competitionSlug]/register/status/page.tsx": REGISTER,
   "../r/[ref]/page.tsx":
     "registration's by-reference status page, a sibling of /live in the public tree: written in the VISITOR's locale (`resolveLocale`) like the register flow, and not in Task 16's page list",
+  "../r/pay/[token]/page.tsx":
+    "a registrant's payment page, a sibling of /live in the public tree: the entry is written in the ENTRY's language (the mail's, `doc.locale`) and its head and throttled screen in the VISITOR's (`resolveLocale`), never the org's; its copy is pinned per locale by `r/pay/[token]/__tests__/page.test.tsx`",
 };
 
 /**
@@ -1614,6 +1616,16 @@ const NOT_RENDERED: Record<string, NotRendered> = {
     reason:
       "a route handler returning application/pdf: the sponsor's invoice drawn in the ORG's language (every label, state stamp and line, the date, the amount), or a short plain-text 404/429 in the reader's",
     provenBy: ["server/sponsors/__tests__/invoice-pdf.test.ts", "app/(public)/r/sponsor/invoice/[token]/__tests__/routes.test.ts"],
+  },
+  "../r/pay/[token]/not-found.tsx": {
+    reason:
+      "the registrant payment page's ONE 404 (unknown, malformed, withdrawn or rejected token): it takes no props and reads no token, so it is written in the VISITOR's locale (`resolveLocale`), never the org's, and its head is its own",
+    provenBy: ["app/(public)/r/pay/[token]/__tests__/page.test.tsx", "app/(public)/r/pay/[token]/__tests__/route-shape.test.ts"],
+  },
+  "../r/pay/[token]/pay/route.ts": {
+    reason:
+      "a POST route handler that answers 303 (to Stripe Checkout, or back to the payment page) and draws no page; its only words are a short plain-text refusal in the entry's language, or the reader's for a 404/429",
+    provenBy: ["app/(public)/r/pay/[token]/__tests__/routes.test.ts"],
   },
   "../r/sponsor/invoice/[token]/pay/route.ts": {
     reason:

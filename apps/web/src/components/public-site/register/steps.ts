@@ -31,6 +31,13 @@ export function shouldCollapseEntries(
   return openDivisionCount === 1 && entrantKind === "individual";
 }
 
+/** Polish wave H (owner ruling): the "Have a join code?" door is offered only when at least one OPEN division is a team or pair -
+ *  the kinds whose entries carry a join code a captain hands to teammates. An individual-only competition has no code to type, so
+ *  the door would only invite a dead end. The stepper also shows it on the first step only. */
+export function offersJoinCode(divisions: readonly { open: boolean; entrant_kind: "team" | "individual" | "pair" }[]): boolean {
+  return divisions.some((d) => d.open && (d.entrant_kind === "team" || d.entrant_kind === "pair"));
+}
+
 /** The step list rendered today. `entries` drops out entirely (not merely
  *  disabled) when collapsed — same "absent, not disabled" convention
  *  RS005's canEdit gating used for a control nobody should see at all.

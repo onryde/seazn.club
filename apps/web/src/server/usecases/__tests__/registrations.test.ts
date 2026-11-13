@@ -141,6 +141,7 @@ import {
 // exports"), needed here only to prove an already-placed solo sign-up is
 // excluded from the pool-deadline sweep.
 import { assignSoloSignUp } from "../registration-assign";
+import { approveRegistration } from "../registration-approval";
 // RS005 F1: "assert the rendered text, not just that it sent". The confirmation is now queued on the email outbox, so the text is
 // what the transport double was handed for the cart's row, read back through these.
 import { stubOutboxEnv } from "./_invite-mail";
@@ -697,6 +698,7 @@ describe.skipIf(!HAS_DB)("registration flows (doc 16 §1.1, PROMPT-20a)", () => 
         reverse_transfer: true,
         refund_application_fee: true,
       }),
+      expect.objectContaining({ idempotencyKey: expect.stringMatching(/^registration-refund:/) }), // the shared locked-refund key (final review m6)
     );
     const firstRow = await loadWithGroup(first.registration.id);
     expect(firstRow.refunded_cents).toBe(firstRow.amount_cents);
@@ -2385,6 +2387,12 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
           ?.split(",")
           .includes(id),
       ).length;
+    // Player payment page (Task 5): a reminder or promotion mail links the entry's payment page and mints NO Checkout session;
+    // each such mail records one pay-page token for its entry.
+    const tokensFor = async (id: string) => {
+      const [row] = await sql<{ n: string }[]>`select count(*)::text as n from registration_pay_tokens where registration_id = ${id}`;
+      return Number(row!.n);
+    };
     const regRow = (id: string) => loadWithGroup(id);
     // REVIEW FIX (money-path defect #7): pass (1a)'s sent mark moved off the
     // GROUP (registration_groups.reminded_at) onto the ENTRY
@@ -2413,12 +2421,13 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
     expect(first.reminded).toBeGreaterThanOrEqual(1); // A is among the reminded
     const remindedAt = await submitRemindedAt(a.registration.id);
     expect(remindedAt).not.toBeNull();
-    expect(checkoutsFor(a.registration.id)).toBe(1); // fresh session for the email
+    expect(await tokensFor(a.registration.id)).toBe(1); // one pay-page link for the email
+    expect(checkoutsFor(a.registration.id)).toBe(0); // and no Checkout session
 
     // submit_reminded_at guard: a second sweep must not re-remind A.
     await sweepRegistrations("http://test.local");
     expect(await submitRemindedAt(a.registration.id)).toEqual(remindedAt);
-    expect(checkoutsFor(a.registration.id)).toBe(1); // still exactly one, no re-send
+    expect(await tokensFor(a.registration.id)).toBe(1); // still exactly one, no re-send
 
     // Past the deadline → A expired + B promoted with a fresh window.
     // expires_at lives on the cart now (V364).
@@ -2442,7 +2451,8 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
       where type = 'registration.expired'
         and payload->>'registration_id' = ${a.registration.id}`;
     expect(expiredEvent.promoted_registration_id).toBe(b.registration.id);
-    expect(checkoutsFor(b.registration.id)).toBe(1); // promotion mints B's pay link
+    expect(await tokensFor(b.registration.id)).toBe(1); // the promotion mail links B's payment page
+    expect(checkoutsFor(b.registration.id)).toBe(0);
 
     // A further sweep is a no-op for OUR rows: nothing re-expires, nothing
     // re-promotes, and B (a fresh 48h window) is not yet reminder-due.
@@ -2451,8 +2461,9 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
     expect(await regRow(b.registration.id)).toEqual(bRow);
     expect(await auditCount("registration.expired", a.registration.id)).toBe(1);
     expect(await auditCount("registration.promoted", b.registration.id)).toBe(1);
-    expect(checkoutsFor(a.registration.id)).toBe(1); // A stays reminded exactly once
-    expect(checkoutsFor(b.registration.id)).toBe(1); // B not re-linked
+    expect(await tokensFor(a.registration.id)).toBe(1); // A stays reminded exactly once
+    expect(await tokensFor(b.registration.id)).toBe(1); // B not re-linked
+    expect(checkoutsFor(a.registration.id) + checkoutsFor(b.registration.id)).toBe(0);
   });
 
   // RS007 follow-up (this wave): the reminder mark was a RECEIPT (written
@@ -2509,6 +2520,12 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
           .includes(id),
       ).length;
     stripeMock.checkoutCreate.mockClear();
+    // Player payment page (Task 5): a reminder or promotion mail links the entry's payment page and mints NO Checkout session;
+    // each such mail records one pay-page token for its entry.
+    const tokensFor = async (id: string) => {
+      const [row] = await sql<{ n: string }[]>`select count(*)::text as n from registration_pay_tokens where registration_id = ${id}`;
+      return Number(row!.n);
+    };
 
     const res = await sweepRegistrations("https://test.local");
     expect(res.reminded).toBeGreaterThanOrEqual(2);
@@ -2516,8 +2533,9 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
     // Reverting to a group-level claim/mark makes this fail: A wins the
     // shared claim and B's own attempt finds it already non-null — B is
     // silently excluded from every future sweep.
-    expect(checkoutsFor(a.registration.id), "A reminded").toBe(1);
-    expect(checkoutsFor(b.id), "B reminded independently, not silenced by A's claim").toBe(1);
+    expect(await tokensFor(a.registration.id), "A reminded").toBe(1);
+    expect(await tokensFor(b.id), "B reminded independently, not silenced by A's claim").toBe(1);
+    expect(checkoutsFor(a.registration.id) + checkoutsFor(b.id), "no Checkout session for either").toBe(0);
 
     const submitRemindedAt = async (id: string) => {
       const [row] = await sql<{ submit_reminded_at: Date | null }[]>`
@@ -2529,8 +2547,8 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
 
     // A second sweep must not re-remind either.
     await sweepRegistrations("https://test.local");
-    expect(checkoutsFor(a.registration.id)).toBe(1);
-    expect(checkoutsFor(b.id)).toBe(1);
+    expect(await tokensFor(a.registration.id)).toBe(1);
+    expect(await tokensFor(b.id)).toBe(1);
   });
 
   // REVIEW FIX (money-path defect #9) — a losing claim used to mint a real
@@ -2540,8 +2558,9 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
   // so nobody is ever given that URL). Repro: two sweepRegistrations() calls
   // at once — both read the row as due, the claim lets one in, and pre-fix the
   // other still minted before its own claim attempt failed. Fixed by moving
-  // the mint to AFTER a successful claim, so a losing invocation never
-  // reaches createRegistrationCheckout at all.
+  // the mint to AFTER a successful claim; since the player payment page
+  // (Task 5) the reminder mints no session at all, so the race now pins:
+  // one pay-page token, one row, zero mints, and an untouched pointer.
   it("REVIEW FIX: a losing claim never mints a checkout — the group's session pointer is never clobbered by a session nobody holds", async () => {
     const { competition, division, settings } = await stripeRig();
     const contactEmail = `mint-race-${randomUUID().slice(0, 8)}@test.local`;
@@ -2558,15 +2577,14 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
         ?.split(",")
         .includes(a.registration.id),
     ).length;
-    // Reverting the fix (mint before claim) makes this fail: the racing
-    // invocation still mints a real session before its own claim attempt
-    // loses — TWO mints for one reminder that is only ever queued once.
-    expect(mintsForOurs, "exactly one mint — the loser's claim failed before it ever minted").toBe(1);
+    expect(mintsForOurs, "no mint at all — the reminder links the payment page").toBe(0);
     expect(await reminderRowsTo(contactEmail)).toHaveLength(1);
+    const [tok] = await sql<{ n: string }[]>`select count(*)::text as n from registration_pay_tokens where registration_id = ${a.registration.id}`;
+    expect(Number(tok!.n), "the loser issued no token either").toBe(1);
 
     const [groupRow] = await sql<{ checkout_session_id: string | null }[]>`
       select checkout_session_id from registration_groups where id = ${a.registration.group_id}`;
-    expect(groupRow!.checkout_session_id, "the winner's own session is what got stamped").not.toBeNull();
+    expect(groupRow!.checkout_session_id, "the cart's session pointer is untouched").toBeNull();
   });
 
   // V381/RS007: the claim above is now a LEASE, not a permanent mark — see
@@ -2764,6 +2782,66 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
     } as unknown as Stripe.Charge);
     row = await loadWithGroup(res.registration.id);
     expect(row.group_refunded_cents).toBe(300);
+  });
+
+  // Polish wave final fix m5: the per-entry readers (the delete guards, the knockout desk, the panel's Refund) read the ENTRY's own
+  // refunded_cents, which a dashboard refund never reached - after a full dashboard refund the panel still offered Refund (Stripe
+  // then refused it) and the delete guards never cleared. When the payment is ONE entry's alone, its own total now follows too.
+  describe("charge.refunded mirrors onto the entry whose payment it is (m5)", () => {
+    const sync = (intent: string, amount_refunded: number) =>
+      syncRegistrationRefund({ payment_intent: intent, amount_refunded } as unknown as Stripe.Charge);
+
+    it("a single entry's own total follows the dashboard: partial, then never regresses, then full; never past its price", async () => {
+      const { competition, division, settings } = await stripeRig();
+      const res = await seedRegistration(competition.id, division.id, settings, { amountCents: 500 });
+      await handleRegistrationCheckoutCompleted(fakeSession(res.registration.id, 500));
+      const intent = (await loadWithGroup(res.registration.id)).entry_payment_intent_id!;
+      expect(intent, "premise: the entry carries its own payment").toBeTruthy();
+      const own = async () => (await loadWithGroup(res.registration.id)).refunded_cents;
+      expect(await own(), "premise: nothing refunded yet").toBe(0);
+
+      const steps: [number, number, string][] = [
+        [300, 300, "partial"],
+        [100, 300, "never regresses"],
+        [500, 500, "full"],
+        [900, 500, "never past the entry's own price"],
+      ];
+      for (const [refunded, expected, label] of steps) {
+        await sync(intent, refunded);
+        expect(await own(), label).toBe(expected);
+      }
+      expect(steps.length, "anti-vacuity").toBe(4);
+    });
+
+    it("a refund of a LATE payment already on the entry is kept apart: the current payment's refund is added on top of it", async () => {
+      const { competition, division, settings } = await stripeRig();
+      const res = await seedRegistration(competition.id, division.id, settings, { amountCents: 500 });
+      await handleRegistrationCheckoutCompleted(fakeSession(res.registration.id, 500));
+      const intent = (await loadWithGroup(res.registration.id)).entry_payment_intent_id!;
+      // An earlier, late payment of 500 was sent back (V512): history 500, all of it late.
+      await sql`update registrations set refunded_cents = 500, late_refunded_cents = 500 where id = ${res.registration.id}`;
+
+      await sync(intent, 200);
+
+      const row = await loadWithGroup(res.registration.id);
+      expect(row.refunded_cents).toBe(700);
+      expect(row.late_refunded_cents).toBe(500);
+    });
+
+    it("a payment shared by two entries of one cart is left to the cart: neither entry's own total is guessed", async () => {
+      const { competition, division, settings } = await stripeRig();
+      const a = await seedRegistration(competition.id, division.id, settings, { amountCents: 500 });
+      const b = await seedSecondEntry(a.registration.group_id, division.id, 700, "Entry B");
+      await handleRegistrationCheckoutCompleted(fakeSession([a.registration.id, b.id], 1200));
+      const intent = (await loadWithGroup(a.registration.id)).entry_payment_intent_id!;
+      expect((await loadWithGroup(b.id)).entry_payment_intent_id, "premise: one payment for both entries").toBe(intent);
+
+      await sync(intent, 600);
+
+      expect((await loadWithGroup(a.registration.id)).refunded_cents).toBe(0);
+      expect((await loadWithGroup(b.id)).refunded_cents).toBe(0);
+      expect((await loadWithGroup(a.registration.id)).group_refunded_cents, "the cart mirror is unchanged").toBe(600);
+    });
   });
 
   // "waitlisted card submits take no window and no payment" DELETED (RS001
@@ -3142,11 +3220,16 @@ describe.skipIf(!HAS_DB)("RS002: entry-level refunds (multi-entry cart hazards)"
     // A goes stale/withdrawn, then its OWN abandoned checkout completes late.
     await sql`update registrations set status = 'withdrawn', withdrawn_at = now() where id = ${a.id}`;
     stripeMock.refundCreate.mockClear();
+    const late = fakeSession(a.id, a.amount_cents);
 
-    await handleRegistrationCheckoutCompleted(fakeSession(a.id, a.amount_cents));
+    await handleRegistrationCheckoutCompleted(late);
 
+    // Fix round 1 (F3): the late money is sent back on the payment that brought it (the late session's own intent), never the
+    // cart's first intent - which paid for A AND B, and refunding it would keep the late payment.
+    expect(late.payment_intent, "premise: the late payment is not the cart's").not.toBe(intent);
+    expect(stripeMock.refundCreate).toHaveBeenCalledTimes(1);
     expect(stripeMock.refundCreate).toHaveBeenCalledWith(
-      expect.objectContaining({ payment_intent: intent, amount: a.amount_cents }),
+      expect.objectContaining({ payment_intent: late.payment_intent, amount: a.amount_cents }),
     );
     const bAfter = await loadWithGroup(b.id);
     expect(bAfter.refunded_cents).toBe(0); // B's own money never moved
@@ -3161,6 +3244,7 @@ describe.skipIf(!HAS_DB)("RS002: entry-level refunds (multi-entry cart hazards)"
 
     expect(stripeMock.refundCreate).toHaveBeenCalledWith(
       expect.objectContaining({ payment_intent: intent, amount: a.amount_cents }),
+      expect.objectContaining({ idempotencyKey: expect.stringMatching(/^registration-refund:/) }), // the shared locked-refund key (final review m6)
     );
     const aAfter = await loadWithGroup(a.id);
     const bAfter = await loadWithGroup(b.id);
@@ -3240,10 +3324,11 @@ describe.skipIf(!HAS_DB)("RS002: entry-level refunds (multi-entry cart hazards)"
     // back, B still confirmed, A never refunded.
     expect(stripeMock.refundCreate).toHaveBeenCalledWith(
       expect.objectContaining({ payment_intent: intentA, amount: 1000 }),
+      expect.objectContaining({ idempotencyKey: expect.stringMatching(/^registration-refund:/) }), // the shared locked-refund key (final review m6)
     );
-    expect(stripeMock.refundCreate).not.toHaveBeenCalledWith(
-      expect.objectContaining({ payment_intent: intentB }),
-    );
+    // Read off every call's params (the call now carries a second argument, the key, so a one-matcher `not.toHaveBeenCalledWith`
+    // would pass on ANY call shape).
+    expect(stripeMock.refundCreate.mock.calls.map((c) => (c[0] as { payment_intent: string }).payment_intent)).not.toContain(intentB);
     const bAfter = await loadWithGroup(b.id);
     expect(bAfter.status).toBe("confirmed");
     expect(bAfter.refunded_cents).toBe(0);
@@ -3293,9 +3378,9 @@ describe.skipIf(!HAS_DB)("RS002: entry-level refunds (multi-entry cart hazards)"
     stripeMock.refundCreate.mockClear();
 
     const aRefunded = await refundRegistration(owner, a.id, undefined);
-    expect(stripeMock.refundCreate).toHaveBeenCalledWith(
-      expect.objectContaining({ payment_intent: intent, amount: a.amount_cents }),
-    );
+    // The manual refund carries a Stripe idempotency key as a second argument (polish wave P5, carry c): match the params alone.
+    expect(stripeMock.refundCreate).toHaveBeenCalledTimes(1);
+    expect(stripeMock.refundCreate.mock.calls[0]![0]).toMatchObject({ payment_intent: intent, amount: a.amount_cents });
     // refundRegistration writes the ENTRY's own refunded_cents (V368), not
     // just the group's accumulated total.
     expect(aRefunded.refunded_cents).toBe(a.amount_cents);
@@ -3303,9 +3388,8 @@ describe.skipIf(!HAS_DB)("RS002: entry-level refunds (multi-entry cart hazards)"
     // B's own remaining is computed from B's own numbers — must NOT throw
     // "Already fully refunded" for an entry nobody has touched yet.
     const bRefunded = await refundRegistration(owner, b.id, undefined);
-    expect(stripeMock.refundCreate).toHaveBeenLastCalledWith(
-      expect.objectContaining({ payment_intent: intent, amount: b.amount_cents }),
-    );
+    expect(stripeMock.refundCreate).toHaveBeenCalledTimes(2);
+    expect(stripeMock.refundCreate.mock.calls[1]![0]).toMatchObject({ payment_intent: intent, amount: b.amount_cents });
     expect(bRefunded.refunded_cents).toBe(b.amount_cents);
   });
 
@@ -4221,7 +4305,7 @@ describe.skipIf(!HAS_DB)("RS002 W5 review: RULING B — manual mode blocks the m
     expect(row!.entrant_id).not.toBeNull();
   });
 
-  it("markRegistrationPaidOffline and confirmRegistrationWaived still confirm on a MANUAL division — an organiser's explicit action IS the approval", async () => {
+  it("on a MANUAL division markRegistrationPaidOffline records the money and waits for Approve (W12); confirmRegistrationWaived still confirms", async () => {
     const { orgId, ownerId } = await seedOrg("pro");
     const owner = asOwner(orgId, ownerId);
     const { competition, division } = await rig(owner);
@@ -4240,16 +4324,17 @@ describe.skipIf(!HAS_DB)("RS002 W5 review: RULING B — manual mode blocks the m
       status: "pending",
     });
 
-    // markRegistrationPaidOffline confirms in the SAME call (payment =
-    // approval, its own doc comment) — an organiser marking an offline fee
-    // paid on a manual division IS the human decision ruling B carves out,
-    // so this materialises straight to 'confirmed', same as on an auto
-    // division. Only the AUTOMATIC Stripe-webhook path
-    // (confirmPaidRegistration) stops short at 'paid' on manual — see the
-    // sibling describe block above.
+    // Polish wave P5 (W12, owner ruling): Approve and the payment are two
+    // decisions. markRegistrationPaidOffline on a manual division used to
+    // confirm in the same call (payment = approval); now it stops at 'paid'
+    // exactly as the Stripe-webhook path (confirmPaidRegistration) does, and
+    // the organiser's Approve confirms it.
     const paid = await markRegistrationPaidOffline(owner, offlineReg.id);
-    expect(paid.status).toBe("confirmed");
-    expect(paid.entrant_id).not.toBeNull();
+    expect(paid.status).toBe("paid");
+    expect(paid.entrant_id, "not seated before the organiser's yes").toBeNull();
+    const approved = await approveRegistration(owner, offlineReg.id);
+    expect(approved.status).toBe("confirmed");
+    expect(approved.entrant_id).not.toBeNull();
 
     const waivedSettings = await putRegistrationSettings(owner, division.id, {
       enabled: true,
@@ -4774,9 +4859,15 @@ describe.skipIf(!HAS_DB)("RS007: sweep reminds a promoted entry off its OWN cloc
     // expires_at is in-window and submit_reminded_at is null) and stamp this
     // too, on top of pass (1b)'s own mark checked above.
     expect(cols!.submit_reminded_at, "pass (1a)'s mark stays untouched").toBeNull();
-    // Exactly one checkout link minted — two would mean two reminder emails
-    // for the same entry from two passes.
-    expect(checkoutsFor(promoted!.id)).toBe(1);
+    // Exactly one pay-page link issued — two would mean two reminder emails
+    // for the same entry from two passes (player payment page, Task 5: the
+    // reminder mints no Checkout session at all).
+    const tokensFor = async (id: string) => {
+      const [row] = await sql<{ n: string }[]>`select count(*)::text as n from registration_pay_tokens where registration_id = ${id}`;
+      return Number(row!.n);
+    };
+    expect(await tokensFor(promoted!.id)).toBe(1);
+    expect(checkoutsFor(promoted!.id)).toBe(0);
 
     // A second sweep must not re-remind.
     const remindedAt = cols!.promotion_reminded_at;
@@ -4784,7 +4875,7 @@ describe.skipIf(!HAS_DB)("RS007: sweep reminds a promoted entry off its OWN cloc
     const [cols2] = await sql<{ promotion_reminded_at: Date | null }[]>`
       select promotion_reminded_at from registrations where id = ${promoted!.id}`;
     expect(cols2!.promotion_reminded_at).toEqual(remindedAt);
-    expect(checkoutsFor(promoted!.id)).toBe(1); // still exactly one — no re-send
+    expect(await tokensFor(promoted!.id)).toBe(1); // still exactly one — no re-send
   });
 
   // V381/RS007 — same lease fix, same semantics, on this pass's OWN column
@@ -5091,6 +5182,7 @@ describe.skipIf(!HAS_DB)("RS012: sweepRegistrations pool-deadline pass", () => {
         reverse_transfer: true,
         refund_application_fee: true,
       }),
+      expect.objectContaining({ idempotencyKey: expect.stringMatching(/^registration-refund:/) }), // the shared locked-refund key (final review m6)
     );
 
     const withdrawnAudits = await auditRows(solo.registration.id, "registration.withdrawn");
@@ -5125,6 +5217,7 @@ describe.skipIf(!HAS_DB)("RS012: sweepRegistrations pool-deadline pass", () => {
       expect(res.poolDeadlinePassed, "premise: the sweep withdrew the entry").toBeGreaterThanOrEqual(1);
       expect(stripeMock.refundCreate, "premise: the refund was really attempted").toHaveBeenCalledWith(
         expect.objectContaining({ payment_intent: paid.entry_payment_intent_id, amount: 500 }),
+        expect.objectContaining({ idempotencyKey: expect.stringMatching(/^registration-refund:/) }), // the shared locked-refund key (final review m6)
       );
 
       // The withdrawal stands, and the refund really never landed: the alert reports a real gap.
@@ -6151,7 +6244,7 @@ describe.skipIf(!HAS_DB)("RS005 F1: swallowed registration-mail failures are now
     const spy = vi.spyOn(log, "error").mockImplementation(() => undefined as never);
 
     await expect(
-      notifySubmitted(missingGroupId, "https://test.local", "tok_x", null),
+      notifySubmitted(missingGroupId, "https://test.local", "tok_x"),
     ).resolves.toBeUndefined(); // still fire-and-forget — never throws
     expect(spy).toHaveBeenCalled();
     expect(spy.mock.calls[0]?.[0]).toMatchObject({ groupId: missingGroupId });
@@ -6170,7 +6263,7 @@ describe.skipIf(!HAS_DB)("RS005 F1: swallowed registration-mail failures are now
       returning id`;
     const spy = vi.spyOn(log, "error").mockImplementation(() => undefined as never);
 
-    await notifySubmitted(groupId, "https://test.local", "tok_x", null);
+    await notifySubmitted(groupId, "https://test.local", "tok_x");
     expect(spy).toHaveBeenCalled();
     expect(spy.mock.calls[0]?.[0]).toMatchObject({ groupId });
     expect(spy.mock.calls[0]?.[1]).toContain("no entries");
@@ -6188,7 +6281,7 @@ describe.skipIf(!HAS_DB)("RS005 F1: swallowed registration-mail failures are now
 
     const spy = vi.spyOn(log, "error").mockImplementation(() => undefined as never);
     await expect(
-      notifySubmitted(seeded.registration.group_id, "https://test.local", seeded.access_token, null),
+      notifySubmitted(seeded.registration.group_id, "https://test.local", seeded.access_token),
     ).resolves.toBeUndefined(); // fire-and-forget semantics preserved
     expect(spy).toHaveBeenCalled();
     expect(spy.mock.calls[0]?.[0]).toMatchObject({ groupId: seeded.registration.group_id });

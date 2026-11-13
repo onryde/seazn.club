@@ -10,7 +10,7 @@ export { transferOfferTemplate } from "./transfer-offer";
 export { transferCompleteTemplate } from "./transfer-complete";
 export { groupOrgRemovedTemplate } from "./group-org-removed";
 export { groupOrgLeftTemplate } from "./group-org-left";
-export { registrationTemplate, type RegistrationEmailArgs } from "./registration";
+export { registrationTemplate, type RegistrationEmailArgs, type RegistrationEmailInvite } from "./registration";
 export { paymentReminderTemplate, type PaymentReminderArgs } from "./payment-reminder";
 export {
   registrationPromotedTemplate,
@@ -21,6 +21,24 @@ export {
   type SoloSignUpAssignedArgs,
 } from "./solo-signup-assigned";
 export { refundIssuedTemplate, type RefundIssuedArgs } from "./refund-issued";
+export {
+  registrationPaidTemplate,
+  registrationApprovedTemplate,
+  registrationExpiredTemplate,
+  registrationWithdrawnTemplate,
+  registrationRejectedTemplate,
+  registrationPromotionLapsedTemplate,
+  registrationJoinedTemplate,
+  type LifecycleBase,
+  type RegistrationPaidArgs,
+  type RegistrationApprovedArgs,
+  type RegistrationExpiredArgs,
+  type RegistrationWithdrawnArgs,
+  type RegistrationRejectedArgs,
+  type RegistrationPromotionLapsedArgs,
+  type RegistrationJoinedArgs,
+  type JoinedState,
+} from "./registration-lifecycle";
 export { disputeAlertTemplate, type DisputeAlertArgs } from "./dispute-alert";
 export { disputeLostTemplate, type DisputeLostArgs } from "./dispute-lost";
 export { funnelClaimTemplate, funnelReminderTemplate, type FunnelEmailArgs } from "./funnel";

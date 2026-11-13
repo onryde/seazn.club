@@ -1,6 +1,6 @@
 // One cart entry, rendered as a self-contained "docket": status, money (pay
 // control / resolved instructions / nothing owed), roster fill meter with
-// per-player consent chips and claim links, and a cancel control.
+// per-player consent chips, the captain's "Invite your teammates" links, and a cancel control.
 //
 // Deliberately a PLAIN (non-async) function component, even though it
 // composes client islands (PayButton/CancelEntry): the page renders a LIST
@@ -10,27 +10,41 @@
 // offline instructions) is resolved ONCE in page.tsx and handed down here
 // as a plain string.
 import type { ReactNode } from "react";
-import { formatMinor, type Currency } from "@/lib/currency";
-import { fmtPublicDateTime, fmtPublicZoneAbbrev } from "@/lib/format";
+import { formatMoneyExact } from "@/lib/currency";
+import { fmtPublicDeadline } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import type { Dict, Locale } from "@/lib/i18n-constants";
+import { entryWaitingOn } from "@/lib/registration-status";
 import { CompetitionProse } from "@/components/public-site/competition-prose";
 import { PayButton } from "./pay-button";
 import { CancelEntry } from "./cancel-entry";
+import { InviteTeammates } from "./invite-teammates";
 import {
   assignedTeamName,
   awaitingTeamAssignment,
   canCancelEntry,
-  canJoinEntry,
-  claimHref,
   entryCountsTowardTotal,
   entryDisplayName,
+  inviteLinks,
   poolPlaceByDate,
   resolveMoneyState,
   rosterCounts,
   rosterPlayerDisplayName,
+  rosterVocabulary,
   type EntryStatus,
+  type RosterVocabulary,
 } from "./view-model";
+
+// The roster's key family per vocabulary (chips: claimed/pending; the meter). See `rosterVocabulary` for which entry gets which.
+const ROSTER_WORDS: Record<RosterVocabulary, { meter: string; claimed: string; pending: string }> = {
+  checkin: { meter: "register.status.roster.meter", claimed: "register.status.roster.claimed", pending: "register.status.roster.pending" },
+  joined: { meter: "register.status.roster.meterJoined", claimed: "register.status.roster.joined", pending: "register.status.roster.notJoined" },
+  registered: {
+    meter: "register.status.roster.meterRegistered",
+    claimed: "register.status.roster.registered",
+    pending: "register.status.roster.notRegistered",
+  },
+};
 
 const STATUS_TONE: Record<EntryStatus, { rail: string; badge: string }> = {
   pending: { rail: "bg-amber-400", badge: "bg-amber-50 text-amber-800 border-amber-200" },
@@ -91,6 +105,17 @@ export interface EntryCardProps {
      *  see resolveMoneyState's own doc comment (view-model.ts) for why this
      *  moved off the cart. */
     payment_method: "offline" | "stripe";
+    /** Polish wave P3 (W2, W12): this entry's OWN division's review mode, so a pending card can say whether it is waiting on the
+     *  organiser's approval as well as (or instead of) payment. REQUIRED for the same reason `assigned_team_name` is: an
+     *  omitted value would silently read as "no review" and the card would name only the payment. */
+    approval: "auto" | "manual";
+    /** Polish wave P5 (W12): the organiser approved this entry while its fee was still owed (V513), so it waits on payment alone.
+     *  REQUIRED for the reason `approval` is: an omitted value would read "awaiting approval" about an entry already approved. */
+    approved: boolean;
+    /** Polish wave P3 (W6): the fee a promotion off the waitlist WOULD set (the division's own fee), null on every other status.
+     *  The card itself does not print it; the page's Subtotal does (`cartSubtotal`). Carried on the entry so one shape
+     *  travels from the read model to both. */
+    fee_if_promoted_cents: number | null;
     /** RS008: this entry's OWN division's youth/player_name_display policy —
      *  see `rosterPlayerDisplayName` (view-model.ts) for why it travels with
      *  the entry rather than the cart. */
@@ -116,6 +141,9 @@ export interface EntryCardProps {
        *  same as an explicit null. */
       reason?: "no_deadline" | null;
     };
+    /** Polish wave sign-off V6: everything sent back for this entry (`GroupEntryView.refunded_cents`). REQUIRED for the reason
+     *  `approved` is: an omitted value would read as "nothing refunded" on a rejected entry whose fee came back. */
+    refunded_cents: number;
   };
   cart: {
     expires_at: string | null;
@@ -143,10 +171,17 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
   const tone = STATUS_TONE[entry.status];
   const money = resolveMoneyState(entry, cart);
   const roster = rosterCounts(entry.players);
-  const unclaimed = entry.players.filter((p) => p.consent_status === "pending");
+  // Polish wave P3 (W6, W10, W11) and the owner ruling on V7: only a confirmed entry's roster says "Checked in"; a pending or paid one
+  // says "Joined", a waitlisted, withdrawn, expired or rejected one "Registered". `rosterVocabulary` picks the key family once; the chips
+  // and the meter both read it.
+  const rosterWords = ROSTER_WORDS[rosterVocabulary(entry.status)];
+  // Polish wave P3 (W2, W12): WHY a pending entry is not confirmed. Suppressed once the payment window has closed: the
+  // window-closed message below is the true and more actionable statement, and "waiting for payment" beside it would read as
+  // an invitation to pay a window that no longer accepts payment.
+  const waitingOn = money.kind === "window_closed" ? null : entryWaitingOn(entry.status, entry.amount_cents, entry.approval, entry.approved);
   // RS008: every roster row's name, masked by division youth policy OR the
   // linked person's own consent opt-out. Resolved ONCE, by id, so the
-  // roster list below and the claim-link text (which names the SAME person
+  // roster list below and the invite rows (which name the SAME person
   // to the captain deciding who to invite) can never show two different
   // spellings of "masked" for one player. A plain for-of over the roster,
   // not a `.map` call, so the literal source text this file's own layout
@@ -170,7 +205,7 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
     player_name_display: entry.division_player_name_display,
   });
 
-  // FIX 1 (RS007 status-page review): formatMinor(entry.amount_cents, …)
+  // FIX 1 (RS007 status-page review): the entry's fee figure
   // used to appear ONLY inside the stripe_due "Pay now — {amount}" label,
   // so an offline_due/stripe_unavailable/paid/confirmed card named no
   // figure at all — a bank-transfer card showed instructions and a
@@ -185,7 +220,7 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
   const feeLabel =
     entry.amount_cents === 0
       ? t(ui, "register.entries.free")
-      : formatMinor(entry.amount_cents, cart.currency as Currency, locale);
+      : formatMoneyExact(entry.amount_cents, cart.currency, locale);
   const showsFeeLine = entryCountsTowardTotal(entry.status) && money.kind !== "stripe_due";
 
   // FIX #13(a): org-zone-aware, zone-labelled ("1 Sept 2026, 00:30 IST", not
@@ -198,13 +233,14 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
   // call (throws), so the two are composed by hand — same convention
   // officials-panel.tsx/timezone-preference.tsx already use elsewhere in
   // this codebase.
-  const deadlineLabel = (deadline: string) =>
-    `${fmtPublicDateTime(locale, cart.timezone, deadline)} ${fmtPublicZoneAbbrev(locale, cart.timezone, deadline)}`;
+  const deadlineLabel = (deadline: string) => fmtPublicDeadline(locale, cart.timezone, deadline);
 
   // RS012 review cleanup: computed once here rather than calling
   // `poolPlaceByDate(entry)` a second time inside the JSX below, which used
   // to force a redundant `as string` cast on the second call.
   const poolPlaceBy = poolPlaceByDate(entry);
+
+  const invites = inviteLinks(entry);
 
   let moneyNode: ReactNode = null;
   if (money.kind === "stripe_due") {
@@ -296,7 +332,21 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
           </span>
         </div>
 
+        {waitingOn && (
+          <p data-testid="reg-status-waiting" data-waiting-on={waitingOn} className="text-sm text-ink">
+            {t(ui, `register.status.waiting.${waitingOn}`)}
+          </p>
+        )}
+
         {moneyNode}
+
+        {/* Polish wave sign-off V6: what came back, on any entry money was sent back for - a rejected or withdrawn entry has no
+            money block above, so without this the page never said the fee was returned. */}
+        {entry.refunded_cents > 0 && (
+          <p data-testid="reg-status-refunded" className="text-sm text-ink-muted">
+            {t(ui, "register.status.entry.refunded", { amount: formatMoneyExact(entry.refunded_cents, cart.currency, locale) })}
+          </p>
+        )}
 
         {/* RS009 handoff — see awaitingTeamAssignment's own doc comment
             (view-model.ts) for why this check is INCOMPLETE (free_agent
@@ -333,7 +383,7 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
                 {t(ui, "register.status.roster.heading")}
               </p>
               <p className="text-xs text-ink-muted">
-                {t(ui, "register.status.roster.meter", { claimed: roster.claimed, total: roster.total })}
+                {t(ui, rosterWords.meter, { claimed: roster.claimed, total: roster.total })}
               </p>
             </div>
             {/* Each row wraps rather than letting the badge win. The badge is
@@ -357,53 +407,32 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
                         : "shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700"
                     }
                   >
-                    {t(ui, p.consent_status === "pending" ? "register.status.roster.pending" : "register.status.roster.claimed")}
+                    {t(ui, p.consent_status === "pending" ? rosterWords.pending : rosterWords.claimed)}
                   </span>
                 </li>
               ))}
             </ul>
-            {/* FIX 2 (RS007 status-page review): this used to gate on
-                join_code + roster shape alone, with NO status check —
-                withdrawCore never clears join_code, so a cancelled entry
-                kept offering claim/invite links that
-                joinTeamEntry/previewJoinEntry's own dead-entry gate 404s
-                every time (canJoinEntry, view-model.ts). */}
-            {canJoinEntry(entry.status) && entry.join_code && (unclaimed.length > 0 || entry.allows_new_joiner) && (
-              <ul className="mt-2 space-y-1 border-t border-zinc-200 pt-2">
-                {unclaimed.map((p) => (
-                  <li key={p.id}>
-                    <a
-                      href={claimHref(orgSlug, competitionSlug, entry.join_code!, p.id)}
-                      className="ph-no-capture text-xs font-medium text-accent-strong underline underline-offset-2"
-                    >
-                      {/* Code-review fix (2026-08-30, item 6): this used to
-                          fall back to the RAW p.full_name on a miss — the
-                          roster-name span above never has (it renders
-                          blank), so a map lookup that should structurally
-                          never miss (built from this same entry.players
-                          array, just above) leaked the unmasked name instead
-                          of failing the same safe way. Both now agree: blank
-                          on a miss, never p.full_name. */}
-                      {t(ui, "register.status.roster.claimLink", { name: displayNameById.get(p.id) ?? "" })}
-                    </a>
-                  </li>
-                ))}
-                {/* The generic (no player_id) link only ever works for a
-                    team — a pair's roster is fixed at two, and joinTeamEntry
-                    422s its insert-a-new-person path. */}
-                {entry.allows_new_joiner && (
-                  <li>
-                    <a
-                      href={claimHref(orgSlug, competitionSlug, entry.join_code)}
-                      className="ph-no-capture text-xs font-medium text-accent-strong underline underline-offset-2"
-                    >
-                      {t(ui, "register.status.roster.genericClaimLink")}
-                    </a>
-                  </li>
-                )}
-              </ul>
-            )}
           </div>
+        )}
+
+        {/* Polish wave P6: the captain's invite links, as their own block (a team registered with no roster still needs the generic
+            link, so it does not hang off the roster box). The gate is `inviteLinks` (view-model.ts), the rule this card used to hold
+            inline: a join code, a status that can still be joined (RS007 status-page review FIX 2: withdrawCore never clears the
+            code, so a cancelled entry kept offering links that joinTeamEntry/previewJoinEntry 404 every time), and either an
+            unclaimed slot or a team that may still grow. A pair has no generic link: its roster is fixed at two (joinTeamEntry 422s
+            the insert-a-new-person path). Names are the roster's own masked ones (displayNameById; code-review fix 2026-08-30 item 6:
+            blank on a miss, never the raw full_name). */}
+        {invites && (
+          <InviteTeammates
+            kind={entry.entrant_kind === "pair" ? "pair" : "team"}
+            entryName={headingName}
+            divisionName={entry.division_name}
+            orgSlug={orgSlug}
+            competitionSlug={competitionSlug}
+            joinCode={invites.joinCode}
+            slots={invites.slots.map((slot) => ({ id: slot.id, name: displayNameById.get(slot.id) ?? "", joined: slot.joined }))}
+            generic={invites.generic}
+          />
         )}
 
         {canCancelEntry(entry.status) && (
@@ -423,7 +452,7 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
               token={token}
               divisionName={entry.division_name}
               refundable={entry.refund_policy.refundable}
-              refundAmountFormatted={formatMinor(entry.refund_policy.amount_cents, cart.currency as Currency, locale)}
+              refundAmountFormatted={formatMoneyExact(entry.refund_policy.amount_cents, cart.currency, locale)}
             />
           </div>
         )}

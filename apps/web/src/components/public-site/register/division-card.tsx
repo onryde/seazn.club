@@ -6,7 +6,7 @@
 // regardless, because only the CONTACT's own eligibility is in question,
 // never whether the division accepts entries at all (that's `open`).
 import { useT } from "@/components/i18n/dict-provider";
-import { formatMinor, type Currency } from "@/lib/currency";
+import { formatMoneyExact } from "@/lib/currency";
 import { intlLocaleFor } from "@/lib/public-date-locale";
 import { INELIGIBLE_MESSAGE_KEY, type SelfEligibility } from "./eligibility-presentation";
 import { BTN_GHOST, BTN_PRIMARY } from "./styles";
@@ -93,7 +93,7 @@ export function DivisionCard({
           ? t("register.entries.age.max", { max: division.age_max })
           : null;
 
-  const feeLabel = division.fee_cents === 0 ? t("register.entries.free") : formatMinor(division.fee_cents, division.currency as Currency, locale);
+  const feeLabel = division.fee_cents === 0 ? t("register.entries.free") : formatMoneyExact(division.fee_cents, division.currency, locale);
 
   const now = new Date();
   // Absolute-INSTANT comparison: `new Date(iso)` parses the server's

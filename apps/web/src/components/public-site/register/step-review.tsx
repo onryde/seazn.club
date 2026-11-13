@@ -8,19 +8,12 @@
 // function — see summarizeCart's own doc comment for why forking it is the
 // specific thing the RS006 dispatch calls out not to do).
 import { useT } from "@/components/i18n/dict-provider";
-import { formatMinor, type Currency } from "@/lib/currency";
+import { formatMoneyExact } from "@/lib/currency";
 import { entryDisplayName, UNNAMED_KEY } from "./entry-cart";
-import { payableDivision, type CartSummary, lineFeeCents } from "./cart";
+import { type CartSummary, lineFeeCents, lineMethod } from "./cart";
 
 export function StepReview({ summary, locale }: { summary: CartSummary; locale: string }) {
   const t = useT();
-  // Every payable division in a cart shares one payment method by
-  // construction (assertUniformPaymentMethod, registration-submit.ts) — see
-  // payableDivision's own doc comment for why this is the SAME lookup the
-  // submit button's own label reads (register-stepper.tsx), never a second
-  // one.
-  const payable = payableDivision(summary);
-
   return (
     <div className="rounded-xl border border-zinc-200/80 bg-surface p-4 shadow-sm sm:p-6">
       <h2 tabIndex={-1} className="font-display text-xl font-semibold uppercase tracking-wide text-ink">
@@ -29,8 +22,12 @@ export function StepReview({ summary, locale }: { summary: CartSummary; locale: 
       <p className="mt-1 text-sm text-ink-muted">{t("register.review.subtitle")}</p>
 
       <ul className="mt-4 space-y-2.5">
-        {summary.lines.map(({ entry, division, waitlisted, staleClosed }) => {
+        {summary.lines.map((line) => {
+          const { entry, division, waitlisted, staleClosed } = line;
           const name = entryDisplayName(entry);
+          // P4 (W9): each entry says how IT is paid. This used to be one note under the subtotal, read off the first charged division,
+          // which mislabelled any entry that was paid another way. A line that is not charged now has no method to name.
+          const method = lineMethod(line);
           // `lineFeeCents`, not `division.fee_cents` — a solo sign-up is
           // charged the division's solo price, and reading the team fee here
           // quoted one number on screen while Stripe asked for another.
@@ -40,7 +37,7 @@ export function StepReview({ summary, locale }: { summary: CartSummary; locale: 
               ? null
               : lineFee === 0
                 ? t("register.entries.free")
-                : formatMinor(lineFee, division.currency as Currency, locale);
+                : formatMoneyExact(lineFee, division.currency, locale);
           return (
             <li key={entry.id} className="rounded-lg border border-zinc-200 bg-canvas p-3">
               <div className="flex flex-wrap items-start justify-between gap-2">
@@ -53,8 +50,15 @@ export function StepReview({ summary, locale }: { summary: CartSummary; locale: 
                   </p>
                 </div>
                 {feeLabel && (
-                  <span className="shrink-0 font-display text-sm font-semibold text-ink">
-                    {waitlisted || staleClosed ? t("register.entries.free") : feeLabel}
+                  <span className="shrink-0 text-right">
+                    <span className="block font-display text-sm font-semibold text-ink">
+                      {waitlisted || staleClosed ? t("register.entries.free") : feeLabel}
+                    </span>
+                    {method && (
+                      <span data-testid="reg-review-method" className="block font-sans text-xs font-normal text-ink-muted">
+                        {t(method === "stripe" ? "register.method.card" : "register.method.offline")}
+                      </span>
+                    )}
                   </span>
                 )}
               </div>
@@ -69,17 +73,10 @@ export function StepReview({ summary, locale }: { summary: CartSummary; locale: 
         <span className="font-display text-xs font-semibold uppercase tracking-wider text-ink-muted">
           {t("register.entries.cart.subtotal")}
         </span>
-        <span className="text-right">
-          <span className="font-display text-lg font-bold text-ink">
-            {summary.subtotalCents === 0 || !summary.currency
-              ? t("register.entries.free")
-              : formatMinor(summary.subtotalCents, summary.currency as Currency, locale)}
-          </span>
-          {payable && (
-            <span className="block font-sans text-xs font-normal text-ink-muted">
-              {t(payable.payment_method === "stripe" ? "register.method.card" : "register.method.offline")}
-            </span>
-          )}
+        <span className="font-display text-lg font-bold text-ink">
+          {summary.subtotalCents === 0 || !summary.currency
+            ? t("register.entries.free")
+            : formatMoneyExact(summary.subtotalCents, summary.currency, locale)}
         </span>
       </div>
     </div>

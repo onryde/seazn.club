@@ -59,6 +59,12 @@ const OTHER_VOCABULARY: ReadonlyMap<string, { literals: readonly StripeOnlyStatu
   ["lib/sponsor-invoice.ts", { literals: ["unpaid"], why: "INVOICE_STATES, the sponsor invoice's own derived state" }],
   ["server/sponsors/invoice-doc.ts", { literals: ["unpaid"], why: "invoiceState() derives it; the document reads it" }],
   ["components/sponsors/invoice-view.tsx", { literals: ["unpaid"], why: "the invoice page reads InvoiceState" }],
+  // Registration Checkout (player payment page): a Stripe Checkout SESSION's `payment_status` is paid | unpaid |
+  // no_payment_required. "unpaid" there means the session completed without settling (an async method still in flight).
+  [
+    "server/usecases/registrations/checkout.ts",
+    { literals: ["unpaid"], why: "Stripe Checkout Session payment_status, never subscriptions.status" },
+  ],
 ]);
 
 /** A bare `status`: the shape a comparison against `subscriptions.status` takes. Excused nowhere by OTHER_VOCABULARY. */

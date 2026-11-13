@@ -1,21 +1,42 @@
-import { button, linkFallback, panel, paragraph, renderEmail } from "./compose";
-import { escapeHtml, money } from "./shared";
+import { button, inlineLink, linkFallback, panel, panelHtml, paragraph, renderEmail } from "./compose";
+import { escapeHtml, isOwnEntry, money, ownKey } from "./shared";
+import { fmtPublicDeadline } from "@/lib/format";
 import { t, type Dict } from "@/lib/i18n";
 import {
   fillPaymentInstructions,
   paymentInstructionsText,
 } from "@/lib/payment-instructions";
+import { entryWaitingOn } from "@/lib/registration-status";
 
 /** One cart entry, as it renders in the confirmation email — its own
- *  display name, status and fee. `status` is the raw `registrations.status`
- *  word (`pending|paid|confirmed|waitlisted|withdrawn|expired|rejected`);
+ *  display name, division, status and fee. `status` is the raw
+ *  `registrations.status` word (`pending|paid|confirmed|waitlisted|withdrawn|expired|rejected`);
  *  an unrecognised value falls back to itself rather than throwing, the
  *  same defensiveness `formatDeadline` et al. already apply to caller
- *  input. */
+ *  input. `approval` is the entry's division's review mode: with the status and the
+ *  fee it decides what the line says the entry is WAITING ON (`entryWaitingOn`) instead of a bare "Pending". */
 export interface RegistrationEmailEntry {
   displayName: string;
+  /** The division this entry is in: two entries for one person are otherwise the same line (polish wave W7). */
+  divisionName: string;
   status: string;
   feeCents: number;
+  approval: "auto" | "manual";
+  /** The organiser approved this entry while its fee was owed (V513, polish wave P5 W12): it waits on payment alone. Absent = not
+   *  approved, which is every entry at submit; the cart mail's rebuild (resend, dispute evidence) reads the live column. */
+  approved?: boolean;
+}
+
+/** One entry's "forward these links" block of the confirmation mail (polish wave P6; labelled per person in waves I and K): one
+ *  link per teammate still to join (their own claim link, named), then for a team the general link (`name: null`, "Link for anyone
+ *  else"). Each `url` is the ABSOLUTE join url - a capability (whoever holds the code can join the entry), so only a producer that
+ *  already holds the cart token passes one (`buildCartMail` gates it exactly like the Pay button). */
+export interface RegistrationEmailInvite {
+  displayName: string;
+  divisionName: string;
+  kind: "team" | "pair";
+  /** In roster order, the general link last. Empty = nothing to invite to: the entry gets no block. */
+  links: { name: string | null; url: string }[];
 }
 
 /** RS005 W4 — cart-shaped (owner ruling 2026-08-25): one email per cart,
@@ -26,6 +47,9 @@ export interface RegistrationEmailEntry {
 export interface RegistrationEmailArgs {
   orgName: string;
   competitionName: string;
+  /** The person the mail is for (`registration_groups.contact_name`): the greeting names them, never the entry
+   *  (a team's name is not a person; polish wave W4). */
+  contactName: string;
   /** Always at least one entry. */
   entries: RegistrationEmailEntry[];
   /** The cart's payable subtotal (`registration_groups.amount_cents` —
@@ -35,20 +59,25 @@ export interface RegistrationEmailArgs {
   totalCents: number;
   currency: string;
   paymentInstructions: string | null;
-  /** Card entries (spec §3): direct pay link + the 48h deadline. */
-  payUrl?: string | null;
+  /** Card carts with a fee still owed: where the Pay button goes - the cart's own token-bearing status page (our details-first
+   *  page, which pays the whole cart), never a Checkout url. Null: no Pay button. */
+  payPageUrl?: string | null;
   payDeadline?: Date | string | null;
+  /** The organiser's zone (`organizations.timezone` resolved): the deadline is written in it. UTC when absent. */
+  timeZone?: string | null;
   statusUrl: string;
   /** Quotable reference (v3/05 §3) + its public status page. */
   refCode?: string | null;
   refStatusUrl?: string | null;
+  /** Team / pair entries the recipient (the captain) can invite people to: one block each, after the payment block. Absent or empty
+   *  = no invite block, which is every mail that carries no cart token (dispute evidence, the organiser's resend). */
+  invites?: RegistrationEmailInvite[];
 }
 
-export function formatDeadline(d: Date | string): string {
-  return new Date(d).toLocaleString("en-GB", {
-    weekday: "short", day: "numeric", month: "short",
-    hour: "2-digit", minute: "2-digit", timeZone: "UTC", timeZoneName: "short",
-  });
+/** A pay-by moment as the mails write it: the status page's own spelling ("14 Nov 2026, 11:15 UTC", `fmtPublicDeadline`), in the org's
+ *  zone and the recipient's locale. A producer that names neither gets UTC and English, which is what the mails always wrote. */
+export function formatDeadline(d: Date | string, locale = "en", timeZone: string | null | undefined = null): string {
+  return fmtPublicDeadline(locale, timeZone ?? "UTC", d);
 }
 
 /** `registrations.status` → its i18n key. Every value the column can hold
@@ -67,9 +96,21 @@ const ENTRY_STATUS_KEYS: Record<string, string> = {
   rejected: "registration.entryStatusRejected",
 };
 
-function entryStatusLabel(dict: Dict, status: string): string {
-  const key = ENTRY_STATUS_KEYS[status];
-  return key ? t(dict, key) : status;
+/** What an entry that is waiting says it is waiting on, keyed by (waiting-on, status): a `paid` entry has already paid, so its
+ *  approval-only wait reads "Paid, awaiting approval", where a `pending` one reads "Awaiting approval". */
+const WAITING_KEYS = {
+  payment: "registration.entryStatusAwaitingPayment",
+  approval: "registration.entryStatusAwaitingApproval",
+  payment_and_approval: "registration.entryStatusAwaitingPaymentApproval",
+} as const;
+
+function entryStatusLabel(dict: Dict, e: RegistrationEmailEntry): string {
+  const waiting = entryWaitingOn(e.status, e.feeCents, e.approval, e.approved ?? false);
+  if (waiting) {
+    return t(dict, e.status === "paid" && waiting === "approval" ? "registration.entryStatusPaidAwaitingApproval" : WAITING_KEYS[waiting]);
+  }
+  const key = ENTRY_STATUS_KEYS[e.status];
+  return key ? t(dict, key) : e.status;
 }
 
 /** One line of the entries panel/text list. Word order is entirely the
@@ -79,11 +120,14 @@ function entryStatusLabel(dict: Dict, status: string): string {
  *  HTML rendering escapes the WHOLE joined block once, in panel() (see
  *  registrationTemplate below) — escaping per-line here would double-escape
  *  a name like "A & B". */
-function entryLine(dict: Dict, e: RegistrationEmailEntry, currency: string): string {
-  const status = entryStatusLabel(dict, e.status);
+function entryLine(dict: Dict, e: RegistrationEmailEntry, currency: string, locale: string, contactName: string): string {
+  const status = entryStatusLabel(dict, e);
+  const names = { displayName: e.displayName, divisionName: e.divisionName };
+  // Sign-off V8: the contact's own entry is listed by its division alone.
+  const own = isOwnEntry(e.displayName, contactName);
   return e.feeCents > 0
-    ? t(dict, "registration.entryLineWithFee", { displayName: e.displayName, status, amount: money(e.feeCents, currency) })
-    : t(dict, "registration.entryLineNoFee", { displayName: e.displayName, status });
+    ? t(dict, ownKey("registration.entryLineWithFee", own), { ...names, status, amount: money(e.feeCents, currency, locale) })
+    : t(dict, ownKey("registration.entryLineNoFee", own), { ...names, status });
 }
 
 /** Registration confirmation — carries the offline (cash/bank) payment
@@ -92,6 +136,8 @@ function entryLine(dict: Dict, e: RegistrationEmailEntry, currency: string): str
 export function registrationTemplate(
   opts: RegistrationEmailArgs,
   dict: Dict,
+  /** The language the mail is written in: the deadline's own spelling follows it. */
+  locale = "en",
 ): { subject: string; html: string; text: string } {
   const single = opts.entries.length === 1;
   const first = opts.entries[0]!;
@@ -120,7 +166,7 @@ export function registrationTemplate(
     0,
   );
   const paid = owedCents > 0;
-  const amount = money(owedCents, opts.currency);
+  const amount = money(owedCents, opts.currency, locale);
   // Markdown instructions → plain text for the panel, with the registrant's
   // reference substituted for {{reference}}.
   const instructions = opts.paymentInstructions
@@ -129,11 +175,42 @@ export function registrationTemplate(
   const intro = single
     ? waitlisted
       ? t(dict, "registration.introWaitlist", { competitionName: escapeHtml(opts.competitionName) })
-      : t(dict, "registration.intro", {
+      : t(dict, ownKey("registration.intro", isOwnEntry(first.displayName, opts.contactName)), {
+          contactName: escapeHtml(opts.contactName),
           displayName: escapeHtml(first.displayName),
+          divisionName: escapeHtml(first.divisionName),
           competitionName: escapeHtml(opts.competitionName),
         })
     : t(dict, "registration.introCart", { competitionName: escapeHtml(opts.competitionName) });
+
+  // Polish wave sign-off V2: a single entry states what it is WAITING ON, in the same word its cart line would use (entryStatusLabel).
+  // It never lists itself (below), so a manual-approval entry used to read "received" and, in the preheader, "is in" while the
+  // organiser had not decided. A wait on the organiser also says they decide, and that the approval mail follows.
+  const singleWaiting = single && !waitlisted ? entryWaitingOn(first.status, first.feeCents, first.approval, first.approved ?? false) : null;
+  const singleStatus = singleWaiting ? entryStatusLabel(dict, first) : null;
+  const reviewWait = singleWaiting === "approval" || singleWaiting === "payment_and_approval";
+  const statusBlock = singleStatus
+    ? paragraph(
+        t(dict, "registration.singleStatus", { status: escapeHtml(singleStatus) }) +
+          (reviewWait ? " " + t(dict, "registration.approvalNote") : ""),
+      )
+    : "";
+  const statusText = singleStatus
+    ? "\n" + t(dict, "registration.textSingleStatus", { status: singleStatus }) + (reviewWait ? " " + t(dict, "registration.approvalNote") : "")
+    : "";
+  const preheader = waitlisted
+    ? t(dict, "registration.preheaderWaitlist", { competitionName: opts.competitionName })
+    : singleWaiting === "approval"
+      ? t(
+          dict,
+          first.status === "paid" ? "registration.preheaderPaidAwaitingApproval" : "registration.preheaderAwaitingApproval",
+          { competitionName: opts.competitionName },
+        )
+      : singleWaiting === "payment_and_approval"
+        ? t(dict, "registration.preheaderAwaitingPaymentApproval", { competitionName: opts.competitionName })
+        : paid
+          ? t(dict, "registration.preheaderPaid", { competitionName: opts.competitionName })
+          : t(dict, "registration.preheaderFree", { competitionName: opts.competitionName });
 
   // Entries panel — only for a genuine cart. A single entry already says
   // its own name/status in the intro line above; listing it again would
@@ -142,17 +219,17 @@ export function registrationTemplate(
     ? ""
     : panel(
         t(dict, "registration.entriesPanelTitle"),
-        opts.entries.map((e) => entryLine(dict, e, opts.currency)).join("\n"),
+        opts.entries.map((e) => entryLine(dict, e, opts.currency, locale, opts.contactName)).join("\n"),
       );
   const entriesText = single
     ? ""
     : "\n\n" +
       t(dict, "registration.textEntriesHeading") +
       "\n" +
-      opts.entries.map((e) => entryLine(dict, e, opts.currency)).join("\n");
+      opts.entries.map((e) => entryLine(dict, e, opts.currency, locale, opts.contactName)).join("\n");
 
-  const card = paid && !!opts.payUrl;
-  const deadline = opts.payDeadline ? formatDeadline(opts.payDeadline) : null;
+  const card = paid && !!opts.payPageUrl;
+  const deadline = opts.payDeadline ? formatDeadline(opts.payDeadline, locale, opts.timeZone) : null;
 
   const paymentBlock = card
     ? panel(
@@ -160,7 +237,7 @@ export function registrationTemplate(
         deadline
           ? t(dict, "registration.feeHeldUntil", { deadline })
           : t(dict, "registration.feeHeld"),
-      ) + button(t(dict, "registration.payNow", { amount }), opts.payUrl as string)
+      ) + button(t(dict, "registration.payNow", { amount }), opts.payPageUrl as string)
     : paid && instructions
       ? panel(t(dict, "registration.feePanelTitle", { amount }), instructions as string)
       : paid
@@ -175,7 +252,7 @@ export function registrationTemplate(
         ? t(dict, "registration.textHeldUntil", { deadline })
         : t(dict, "registration.textHeld")) +
       "\n" +
-      opts.payUrl
+      opts.payPageUrl
     : paid && instructions
       ? "\n\n" +
         t(dict, "registration.textFee", { amount }) +
@@ -187,16 +264,33 @@ export function registrationTemplate(
         ? "\n\n" + t(dict, "registration.textFeeContactOrganiser", { amount })
         : "";
 
+  // "Invite your teammates": the links are meant to be FORWARDED, so it is a panel the captain copies from, not a button. Each link
+  // is labelled with whose it is (waves I and K: three identical-looking URLs confused the captain): in html a hyperlink on the label,
+  // in text the label and the url on one line. `inlineLink` escapes the label and the url's `&`; the text part carries both verbatim.
+  const invites = (opts.invites ?? []).filter((i) => i.links.length > 0);
+  const inviteParts = invites.map((i) => {
+    const names = { displayName: i.displayName, divisionName: i.divisionName };
+    const title = t(dict, i.kind === "pair" ? "registration.invitePanelTitlePair" : "registration.invitePanelTitleTeam", names);
+    const body = t(dict, i.kind === "pair" ? "registration.inviteBodyPair" : "registration.inviteBodyTeam", names);
+    const links = i.links.map((l) => ({
+      label: l.name === null ? t(dict, "registration.inviteLinkAnyone") : t(dict, "registration.inviteLinkFor", { name: l.name }),
+      url: l.url,
+    }));
+    return { title, body, links };
+  });
+  const inviteBlock = inviteParts
+    .map((i) => panelHtml(i.title, escapeHtml(i.body) + "\n" + i.links.map((l) => inlineLink(l.label, l.url)).join("\n")))
+    .join("");
+  const inviteText = inviteParts
+    .map((i) => "\n\n" + i.title + "\n" + i.body + i.links.map((l) => "\n" + t(dict, "registration.inviteTextLine", { label: l.label, url: l.url })).join(""))
+    .join("");
+
   const subject = t(dict, "registration.subject", { competitionName: opts.competitionName });
   return {
     subject,
     html: renderEmail({
       subject,
-      preheader: waitlisted
-        ? t(dict, "registration.preheaderWaitlist", { competitionName: opts.competitionName })
-        : paid
-          ? t(dict, "registration.preheaderPaid", { competitionName: opts.competitionName })
-          : t(dict, "registration.preheaderFree", { competitionName: opts.competitionName }),
+      preheader,
       mastheadTag: opts.orgName,
       eyebrow: `${opts.orgName} · ${opts.competitionName}`,
       title: waitlisted
@@ -204,6 +298,7 @@ export function registrationTemplate(
         : t(dict, "registration.title"),
       contentHtml:
         paragraph(intro) +
+        statusBlock +
         entriesPanel +
         (opts.refCode
           ? panel(
@@ -214,6 +309,7 @@ export function registrationTemplate(
             )
           : "") +
         paymentBlock +
+        inviteBlock +
         button(t(dict, "registration.viewButton"), opts.statusUrl) +
         linkFallback(opts.statusUrl),
       footerNote: t(dict, "registration.footer", {
@@ -236,6 +332,7 @@ export function registrationTemplate(
               competitionName: opts.competitionName,
               orgName: opts.orgName,
             })) +
+      statusText +
       entriesText +
       (opts.refCode
         ? "\n\n" +
@@ -245,6 +342,7 @@ export function registrationTemplate(
             : "")
         : "") +
       paymentText +
+      inviteText +
       "\n\n" +
       t(dict, "registration.textView", { url: opts.statusUrl }),
   };

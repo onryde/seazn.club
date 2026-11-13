@@ -5,7 +5,7 @@
 // organiser one) are provable without a render.
 import { anyOptedOut, resolvePersonDisplayName } from "@/lib/name-display";
 import { isTerminalRegistrationStatus } from "@/lib/registration-status";
-import { routes } from "@/lib/routes";
+import { joinLinkPath } from "@/lib/join-link";
 
 export type EntryStatus =
   | "pending"
@@ -136,6 +136,43 @@ export function canCancelEntry(status: EntryStatus): boolean {
  */
 export function entryCountsTowardTotal(status: EntryStatus): boolean {
   return status === "pending" || status === "paid" || status === "confirmed";
+}
+
+/** What the Subtotal row says. Never a bare "Free" for money that is simply not due (polish wave P3, walkthrough W6/W10/W11: a waitlisted,
+ *  expired or withdrawn page read "Subtotal: Free" for an entry that owes a fee, or never will).
+ *  - `amount`: the live entries' fees summed (`entryCountsTowardTotal`). 0 is a genuinely free cart ("Free").
+ *  - `waitlisted`: nothing is live and a waitlisted entry remains: `cents` is the fee a promotion WOULD set (the division's own fee,
+ *    what `promoteWaitlistedRow` writes), shown with "not due while waitlisted". 0 is a free division ("Free").
+ *  - `nothing_due`: every entry has ended (withdrawn, expired, rejected), or there are none. Not "not charged": an entry withdrawn after it
+ *    paid was charged and refunded; "nothing due" is true of all of them. */
+export type CartSubtotal =
+  | { kind: "amount"; cents: number }
+  | { kind: "waitlisted"; cents: number }
+  | { kind: "nothing_due" };
+
+export function cartSubtotal(
+  entries: { status: EntryStatus; amount_cents: number; fee_if_promoted_cents: number | null }[],
+): CartSubtotal {
+  const live = entries.filter((e) => entryCountsTowardTotal(e.status));
+  if (live.length > 0) return { kind: "amount", cents: live.reduce((sum, e) => sum + e.amount_cents, 0) };
+  const waitlisted = entries.filter((e) => e.status === "waitlisted");
+  if (waitlisted.length > 0) {
+    return { kind: "waitlisted", cents: waitlisted.reduce((sum, e) => sum + (e.fee_if_promoted_cents ?? 0), 0) };
+  }
+  return { kind: "nothing_due" };
+}
+
+/** Which words the roster's chips and meter use.
+ *  - `checkin`: a CONFIRMED entry asks its players to check in ("Checked in", "Not checked in", "2 of 3 checked in").
+ *  - `joined`: a live entry that is not confirmed yet (pending, paid: awaiting payment, approval or both) says who has JOINED
+ *    ("Joined", "Not joined yet", "2 of 3 joined") - "2 of 2 checked in" on an unpaid entry read as attendance at an entry nobody had
+ *    confirmed (owner ruling on sign-off V7, 2026-11-12; the join success panel's meter says the same).
+ *  - `registered`: a waitlisted, withdrawn, expired or rejected entry has nothing to check in to (polish wave P3, W6/W10/W11).
+ *  Only `confirmed` says "checked in": a live status added later lands on `joined`, never on the check-in words. */
+export type RosterVocabulary = "checkin" | "joined" | "registered";
+export function rosterVocabulary(status: EntryStatus): RosterVocabulary {
+  if (status === "confirmed") return "checkin";
+  return entryCountsTowardTotal(status) ? "joined" : "registered";
 }
 
 /**
@@ -306,9 +343,40 @@ export function claimHref(
   joinCode: string,
   playerId?: string,
 ): string {
-  const qs = new URLSearchParams({ join_code: joinCode });
-  if (playerId) qs.set("player_id", playerId);
-  return `${routes.publicRegisterJoin(orgSlug, competitionSlug)}?${qs.toString()}`;
+  return joinLinkPath(orgSlug, competitionSlug, joinCode, playerId);
+}
+
+/** What a captain can hand out to bring people onto an entry (polish wave P6): one link per UNCLAIMED roster slot (opens the join page
+ *  with that slot already chosen) and, for a team, the general link anyone joining can use. Every slot is listed with whether its
+ *  person has joined (polish wave K): the block names the whole roster, and only a slot still to join carries a link. A pair has no general link (its roster is
+ *  fixed at two: `joinTeamEntry` 422s the insert-a-new-person path), so only its partner's slot link is real. The URLs are written by
+ *  the block that shows them (`joinLinkPath`, lib/join-link.ts); this says WHICH exist. */
+export interface InviteLinks {
+  /** The code the links are built from, narrowed to non-null by the gate below. */
+  joinCode: string;
+  /** Every roster slot, in roster order. `joined`: the person has taken the place (granted or guardian consent), so the slot has no
+   *  link to hand out. */
+  slots: { id: string; joined: boolean }[];
+  generic: boolean;
+}
+
+/**
+ * Which invite links this entry offers, or null when it offers none. The gate the card used to hold inline: a join code to build from
+ * (a free agent never mints one), a status that can still be joined (`canJoinEntry`), and something to offer (an unclaimed slot, or
+ * a team that may still grow). A link to an entry `joinTeamEntry` would refuse is a dead link, so a withdrawn, rejected or expired
+ * entry offers nothing even though its join code is never cleared.
+ */
+export function inviteLinks(entry: {
+  status: EntryStatus;
+  join_code: string | null;
+  allows_new_joiner: boolean;
+  players: { id: string; consent_status: "pending" | "granted" | "guardian" }[];
+}): InviteLinks | null {
+  if (!entry.join_code || !canJoinEntry(entry.status)) return null;
+  const slots = entry.players.map((p) => ({ id: p.id, joined: p.consent_status !== "pending" }));
+  // Something to hand out: a slot still to join, or a team that may still grow. A complete pair has no link left.
+  if (!slots.some((slot) => !slot.joined) && !entry.allows_new_joiner) return null;
+  return { joinCode: entry.join_code, slots, generic: entry.allows_new_joiner };
 }
 
 /**

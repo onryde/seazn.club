@@ -34,6 +34,11 @@ const FAILURE_KEY: Record<StatusActionFailureKind, MessageKey> = {
   generic: "register.status.pay.error.generic",
 };
 
+/** Gap wave G1: the one 409 that is not a race. `resumeRegistrationCheckout` refuses with this code while the cart's stored session
+ *  can still land money (a SEPA/Bacs debit processing, a voucher waiting to be paid): "refresh and try again" would loop the player
+ *  into the same refusal, so it gets its own "already on its way" copy. */
+const PAID_ONLINE_CODE = "REGISTRATION_PAID_ONLINE";
+
 export function PayButton({
   entryId,
   token,
@@ -47,7 +52,7 @@ export function PayButton({
 }) {
   const msg = useMsg();
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<{ kind: StatusActionFailureKind; detail: string } | null>(null);
+  const [error, setError] = useState<{ key: MessageKey; detail: string } | null>(null);
 
   async function pay() {
     setBusy(true);
@@ -60,8 +65,9 @@ export function PayButton({
       window.location.assign(checkout_url);
     } catch (err) {
       const status = err instanceof ApiV1Error ? err.status : undefined;
+      const paidOnline = err instanceof ApiV1Error && err.status === 409 && err.code === PAID_ONLINE_CODE;
       setError({
-        kind: classifyStatusActionFailure(status),
+        key: paidOnline ? "register.status.pay.error.paidOnline" : FAILURE_KEY[classifyStatusActionFailure(status)],
         detail: err instanceof Error ? err.message : String(err),
       });
       setBusy(false);
@@ -80,7 +86,7 @@ export function PayButton({
       </button>
       {error && (
         <div className="mt-1.5 space-y-0.5">
-          <p className="text-xs text-red-600">{msg(FAILURE_KEY[error.kind])}</p>
+          <p className="text-xs text-red-600">{msg(error.key)}</p>
           <p className="text-xs text-ink-muted">{error.detail}</p>
         </div>
       )}

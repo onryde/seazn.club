@@ -196,10 +196,14 @@ test("configure, register, join, waitlist, approve, opt-out — every screen agr
     // named-but-not-yet-claimed row (RS007's own "captain enters on behalf
     // of a team-mate" shape — 1 of N roster rows genuinely complete at
     // submit, the rest pending until the person themselves confirms it).
+    // Since polish wave V1 a playing captain's roster OPENS with their own row (named, and picked as "which player are you"), so a
+    // name already on the roster is not added a second time — re-adding it would enter the captain twice.
     const roster = opts.extraRosterName ? [opts.name, opts.extraRosterName] : [opts.name];
+    const boxes = anon.getByLabel(/Player \d+ — Your name/);
     for (const name of roster) {
+      const onRoster = await boxes.evaluateAll((els) => els.map((el) => (el as HTMLInputElement).value.trim()));
+      if (onRoster.includes(name)) continue;
       await anon.getByRole("button", { name: /\+ add player/i }).click();
-      const boxes = anon.getByLabel(/Player \d+ — Your name/);
       await boxes.nth((await boxes.count()) - 1).fill(name);
     }
     await anon.locator('select[id^="reg-self-index"]').first().selectOption({ label: opts.name });
@@ -277,9 +281,10 @@ test("configure, register, join, waitlist, approve, opt-out — every screen agr
     // status page emits (never constructed), the mate claiming their own
     // named row through the real /register/join UI.
     // =============================================================
-    const claim = captainPage.locator('a[href*="/register/join"]').first();
+    // Polish wave K: the status page prints no URL; each link rides its Copy button as data-href. Read exactly as emitted, never built.
+    const claim = captainPage.locator('[data-testid="reg-invite-copy"][data-href*="/register/join"]').first();
     await expect(claim, "the status page emits no claim link for the pending team-mate row").toBeVisible();
-    const claimHref = await claim.getAttribute("href");
+    const claimHref = await claim.getAttribute("data-href");
     expect(claimHref, "the claim link carries no join_code").toContain("join_code=");
 
     const matePage = await anonB.newPage();

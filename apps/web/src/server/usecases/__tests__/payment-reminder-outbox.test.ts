@@ -1,13 +1,15 @@
 // Phase 3 wave 1, Task 9: the payment reminder goes through the email outbox (kind `payment_reminder`, ref `registration/<reg id>`).
 // Producers under test, each driven through its REAL entry point:
 //   - `sweepRegistrations` pass 1a (a stripe cart's reminder, once-key `<reg id>:submit`) and pass 1b (a promoted entry's reminder, once-key
-//     `<reg id>:promotion:<promoted_at>`): the sweep claims, mints ONE Checkout session, then queues the row and stamps the entry's
-//     `*_reminded_at` in one transaction. The first attempt is the worker's, not the sweep's.
+//     `<reg id>:promotion:<promoted_at>`): the sweep claims, then records the entry's pay-page token, queues the row and stamps the
+//     entry's `*_reminded_at` in one transaction. No Checkout session is minted (player payment page, Task 5: the reminder links
+//     `/r/pay/<token>`; the page mints on Pay). The first attempt is the worker's, not the sweep's.
 //   - the organiser's manual reminder (`sendPaymentReminder`): row and audit entry in one tenant transaction, then the first attempt at once.
 // Only the network seams are replaced (Stripe, and `@/server/email-outbox/transport`). Rows, claim, retry and replace rule are the real ones.
 //
 // F8 is the defect this kind exists to close: a reminder whose send failed released its lease and the next sweep minted a NEW Checkout
-// session for the same entry, once per sweep. Now a send failure is the outbox's retry, and the sweep mints once.
+// session for the same entry, once per sweep. Now a send failure is the outbox's retry, and the sweep mints nothing at all: one row,
+// one pay-page token.
 //
 // Sport: not applicable. The reminder does not vary by sport (spec, Test strategy 4); the locale is the axis that varies.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -39,9 +41,28 @@ vi.mock("@/server/usecases/audit", async (importOriginal) => {
   };
 });
 
+// The organiser press's FIRST enqueue can be held (armed by one test), so two presses can be interleaved at the one point that matters:
+// after the first has counted its reminders and before it has recorded its own. Unarmed it is the real enqueue.
+const enqueueGate = vi.hoisted(() => ({ armed: false, entered: null as null | (() => void), release: null as null | Promise<void> }));
+vi.mock("@/server/email-outbox", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/email-outbox")>();
+  return {
+    ...actual,
+    enqueueEmail: async (...args: Parameters<typeof actual.enqueueEmail>) => {
+      if (enqueueGate.armed) {
+        enqueueGate.armed = false;
+        enqueueGate.entered?.();
+        await enqueueGate.release;
+      }
+      return actual.enqueueEmail(...args);
+    },
+  };
+});
+
 import { sql } from "@/lib/db";
 import type { Locale } from "@/lib/i18n-constants";
 import { HttpError } from "@/lib/errors";
+import { money } from "@/lib/email-templates/shared";
 import {
   promoteWaitlistedRow,
   putRegistrationSettings,
@@ -154,6 +175,10 @@ const callsTo = (email: string): Sent[] =>
   deliverMock.mock.calls.map((c) => c[0] as Sent).filter((c) => c.to.toLowerCase() === email.toLowerCase());
 const callsFor = (id: string): Sent[] => deliverMock.mock.calls.map((c) => c[0] as Sent).filter((c) => c.idempotencyKey === idempotencyKey(id));
 
+/** How many pay-page tokens this entry holds (one per queued reminder). */
+const tokensFor = async (regId: string): Promise<number> =>
+  Number((await sql<{ n: string }[]>`select count(*)::text as n from registration_pay_tokens where registration_id = ${regId}`)[0]!.n);
+
 /** How many Checkout sessions were minted for this entry (the session's metadata names its entries). */
 const mintsFor = (regId: string): number =>
   stripeMock.checkoutCreate.mock.calls.filter(([args]) =>
@@ -177,7 +202,7 @@ async function tickNow(ids: string[]): Promise<void> {
 // ---------------------------------------------------------------------------------------------------------------------------------
 
 describe.skipIf(!HAS_DB)("the sweep's payment reminders ride the outbox (DB)", () => {
-  it("F8: a due reminder gives one row and one Checkout session; nothing is released", async () => {
+  it("F8: a due reminder gives one row and one pay-page token, mints no Checkout session, and releases nothing", async () => {
     const w = await stripeWorld();
     const email = address("f8");
     const { registration } = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: email, locale: "fr" });
@@ -200,14 +225,15 @@ describe.skipIf(!HAS_DB)("the sweep's payment reminders ride the outbox (DB)", (
     });
     expect(row!.subject).toBe(dictionarySubject("fr", "paymentReminder.subject", { competitionName: w.competition.name }));
     expect(callsTo(email), "the sweep leaves the first attempt to the worker: the transport was not called").toHaveLength(0);
-    expect(mintsFor(registration.id), "one Checkout session").toBe(1);
+    expect(mintsFor(registration.id), "no Checkout session: the reminder links the payment page").toBe(0);
+    expect(await tokensFor(registration.id), "one pay-page token, recorded with the row").toBe(1);
     const m1 = await marks(registration.id);
     expect(m1.submit_reminded_at, "the entry's mark was stamped in the same commit as the row").not.toBeNull();
 
     // A second sweep: nothing more is queued and nothing more is minted.
     await sweepRegistrations(ORIGIN);
     expect(await rowsTo(email)).toHaveLength(1);
-    expect(mintsFor(registration.id)).toBe(1);
+    expect(await tokensFor(registration.id)).toBe(1);
 
     // The worker owns the first attempt once the request window is past. The provider answers 503: the row stays queued, attempt 1.
     deliverMock.mockReset().mockImplementation(later);
@@ -217,7 +243,7 @@ describe.skipIf(!HAS_DB)("the sweep's payment reminders ride the outbox (DB)", (
     expect(retrying).toMatchObject({ status: "queued", attempts: 1 });
     expect(retrying!.last_error).toMatch(/503/);
     expect(callsFor(row!.id)).toHaveLength(1);
-    expect(mintsFor(registration.id), "a failed send mints nothing more").toBe(1);
+    expect(await tokensFor(registration.id), "a failed send issues nothing more").toBe(1);
     expect((await marks(registration.id)).submit_reminded_at, "and the mark stays set").not.toBeNull();
 
     // A later tick, the provider back: sent, under the SAME key.
@@ -231,8 +257,31 @@ describe.skipIf(!HAS_DB)("the sweep's payment reminders ride the outbox (DB)", (
     // The second call: a sweep, the request path and a tick over a sent row change nothing.
     await sweepRegistrations(ORIGIN);
     expect(await rowsTo(email)).toHaveLength(1);
-    expect(mintsFor(registration.id)).toBe(1);
+    expect(await tokensFor(registration.id)).toBe(1);
+    expect(mintsFor(registration.id)).toBe(0);
     await assertNothingMoreToSend(KIND, [row!.id]);
+  });
+
+  // Final fix round F: the sweep passes no reference of its own, so its reminder used to print none; the message now falls back to the
+  // cart's ref code. Expected line: the recipient locale's own dictionary sentence filled with the cart's code, read from the database.
+  it("the sweep's reminder prints the cart's reference in the registrant's language (F)", async () => {
+    const w = await stripeWorld();
+    const email = address("fref");
+    const { registration } = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: email, locale: "fr" });
+    let [{ ref_code: ref }] = await sql<{ ref_code: string | null }[]>`select ref_code from registration_groups where id = ${registration.group_id}`;
+    if (!ref) {
+      ref = `SZ-F${registration.id.slice(0, 3).toUpperCase()}-TEST`;
+      await sql`update registration_groups set ref_code = ${ref} where id = ${registration.group_id}`;
+    }
+    await dueSoon(registration.group_id);
+    await sweepRegistrations(ORIGIN);
+    const [row] = await rowsTo(email);
+    deliverMock.mockReset().mockImplementation(ok);
+    await bornAgo([row!.id]);
+    await tickNow([row!.id]);
+    const sent = callsFor(row!.id)[0]!;
+    expect(sent.text.split("\n"), "the text part prints it on its own line").toContain(dictionarySubject("fr", "paymentReminder.textReference", { refCode: ref }));
+    expect(sent.html, "and the html part").toContain(ref);
   });
 
   it("a promoted entry's reminder is queued by pass 1b under its own once-key, and a re-promoted entry gets its second-cycle reminder", async () => {
@@ -255,7 +304,7 @@ describe.skipIf(!HAS_DB)("the sweep's payment reminders ride the outbox (DB)", (
     expect(afterFirst).toHaveLength(1);
     expect(afterFirst[0]).toMatchObject({ ref_type: "registration", ref_id: regId, status: "queued", attempts: 0, dedupe_key: `${regId}:promotion:${firstAt.toISOString()}` });
     expect(afterFirst[0]!.subject).toBe(dictionarySubject("es", "paymentReminder.subject", { competitionName: w.competition.name }));
-    expect(mintsFor(regId)).toBe(1);
+    expect(await tokensFor(regId)).toBe(1);
 
     // The entry lapses back to the waitlist and is promoted again: a new window, a new promoted_at.
     await sql`update registrations set status = 'waitlisted' where id = ${regId}`;
@@ -267,8 +316,9 @@ describe.skipIf(!HAS_DB)("the sweep's payment reminders ride the outbox (DB)", (
     expect(rows).toHaveLength(2);
     expect(rows.map((r) => r.dedupe_key)).toEqual([`${regId}:promotion:${firstAt.toISOString()}`, `${regId}:promotion:${secondAt.toISOString()}`]);
     expect(new Set(rows.map((r) => r.dedupe_key)).size, "two distinct once-keys").toBe(2);
-    expect(rows.map((r) => r.status), "the newer reminder carries the newer Checkout link, so it supersedes the unsent older one").toEqual(["replaced", "queued"]);
-    expect(mintsFor(regId), "one Checkout session per cycle").toBe(2);
+    expect(rows.map((r) => r.status), "the newer reminder carries the newer pay-page link, so it supersedes the unsent older one").toEqual(["replaced", "queued"]);
+    expect(await tokensFor(regId), "one pay-page token per cycle").toBe(2);
+    expect(mintsFor(regId), "and no Checkout session in either").toBe(0);
   });
 });
 
@@ -284,7 +334,7 @@ describe.skipIf(!HAS_DB)("the organiser's manual payment reminder rides the outb
     const audited = () =>
       sql`select 1 from competition_events where type = 'registration.payment_reminded' and org_id = ${w.orgId} and payload->>'registration_id' = ${registration.id}`;
 
-    expect(await sendPaymentReminder(w.owner, registration.id)).toEqual({ sent: true });
+    expect(await sendPaymentReminder(w.owner, registration.id, ORIGIN)).toEqual({ sent: true });
     const [row] = await rowsTo(email);
     expect(await rowsTo(email)).toHaveLength(1);
     expect(row).toMatchObject({
@@ -299,10 +349,14 @@ describe.skipIf(!HAS_DB)("the organiser's manual payment reminder rides the outb
     });
     expect(row!.subject).toBe(dictionarySubject("nl", "paymentReminder.subject", { competitionName: w.competition.name }));
     expect(callsFor(row!.id)).toHaveLength(1);
+    // Polish wave sign-off V5: the producer names the entry's REAL division (read from the row, not a fixture on both ends).
+    const [{ name: divisionName }] = await sql<{ name: string }[]>`select name from divisions where id = ${w.division.id}`;
+    expect(divisionName.length, "premise: the division has a name").toBeGreaterThan(0);
+    expect(callsFor(row!.id)[0]!.text, "the reminder names the division").toContain(divisionName);
     expect(await audited(), "the audit entry was written with the row").toHaveLength(1);
 
     // The second press: a deliberate second mail. The first has been sent, so the trigger marks it replaced and both went out.
-    expect(await sendPaymentReminder(w.owner, registration.id)).toEqual({ sent: true });
+    expect(await sendPaymentReminder(w.owner, registration.id, ORIGIN)).toEqual({ sent: true });
     const rows = await rowsTo(email);
     expect(rows).toHaveLength(2);
     expect(rows.map((r) => r.status)).toEqual(["replaced", "sent"]);
@@ -317,7 +371,7 @@ describe.skipIf(!HAS_DB)("the organiser's manual payment reminder rides the outb
     const { registration } = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: email });
     deliverMock.mockReset().mockImplementation(later);
 
-    expect(await sendPaymentReminder(w.owner, registration.id)).toEqual({ sent: false });
+    expect(await sendPaymentReminder(w.owner, registration.id, ORIGIN)).toEqual({ sent: false });
     const [row] = await rowsTo(email);
     expect(row).toMatchObject({ status: "queued", attempts: 1 });
     expect(row!.last_error).toMatch(/503/);
@@ -333,14 +387,16 @@ describe.skipIf(!HAS_DB)("the organiser's manual payment reminder rides the outb
     const { registration } = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: email });
     auditGate.failOnce = true;
 
-    await expect(sendPaymentReminder(w.owner, registration.id)).rejects.toThrow(/audit is down/);
+    await expect(sendPaymentReminder(w.owner, registration.id, ORIGIN)).rejects.toThrow(/audit is down/);
     expect(auditGate.failOnce, "premise: the audit write was reached and refused").toBe(false);
     expect(await rowsTo(email), "the enqueue rolled back with the audit").toHaveLength(0);
     expect(callsTo(email)).toHaveLength(0);
+    expect(await tokensFor(registration.id), "the pay-page token rolled back with the audit").toBe(0);
 
     // The positive pair: the next press (audit healthy) queues and sends.
-    expect(await sendPaymentReminder(w.owner, registration.id)).toEqual({ sent: true });
+    expect(await sendPaymentReminder(w.owner, registration.id, ORIGIN)).toEqual({ sent: true });
     expect(await rowsTo(email)).toHaveLength(1);
+    expect(await tokensFor(registration.id)).toBe(1);
   });
 
   it("empty input: a division with no fee is refused with a 422 and queues nothing", async () => {
@@ -348,7 +404,7 @@ describe.skipIf(!HAS_DB)("the organiser's manual payment reminder rides the outb
     const email = address("nofee");
     const { registration } = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: email });
 
-    const err = await sendPaymentReminder(w.owner, registration.id).catch((e: unknown) => e);
+    const err = await sendPaymentReminder(w.owner, registration.id, ORIGIN).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(HttpError);
     expect((err as HttpError).status).toBe(422);
     expect(await anyRowTo(email)).toHaveLength(0);
@@ -356,7 +412,7 @@ describe.skipIf(!HAS_DB)("the organiser's manual payment reminder rides the outb
 
     // The positive pair: the same entry, once the division has a fee, is reminded (so the zero above is the refusal).
     await putRegistrationSettings(w.owner, w.division.id, { ...SETTINGS_BASE, fee_cents: 1500, payment_method: "offline" });
-    expect(await sendPaymentReminder(w.owner, registration.id)).toEqual({ sent: true });
+    expect(await sendPaymentReminder(w.owner, registration.id, ORIGIN)).toEqual({ sent: true });
     expect(await rowsTo(email)).toHaveLength(1);
   });
 
@@ -366,7 +422,7 @@ describe.skipIf(!HAS_DB)("the organiser's manual payment reminder rides the outb
     const { registration } = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: gone });
     await withdrawRegistrationOrganiser(w.owner, registration.id);
 
-    const err = await sendPaymentReminder(w.owner, registration.id).catch((e: unknown) => e);
+    const err = await sendPaymentReminder(w.owner, registration.id, ORIGIN).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(HttpError);
     expect((err as HttpError).status).toBe(422);
     expect(await rowsTo(gone)).toHaveLength(0);
@@ -375,7 +431,7 @@ describe.skipIf(!HAS_DB)("the organiser's manual payment reminder rides the outb
     // The positive pair: a live entry of the same division is reminded.
     const live = address("live");
     const other = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: live });
-    expect(await sendPaymentReminder(w.owner, other.registration.id)).toEqual({ sent: true });
+    expect(await sendPaymentReminder(w.owner, other.registration.id, ORIGIN)).toEqual({ sent: true });
     expect(await rowsTo(live)).toHaveLength(1);
   });
 
@@ -390,7 +446,7 @@ describe.skipIf(!HAS_DB)("the organiser's manual payment reminder rides the outb
     for (const c of cases) {
       const email = address(`loc-${c.tag}`);
       const { registration } = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: email, locale: c.pick });
-      await sendPaymentReminder(w.owner, registration.id);
+      await sendPaymentReminder(w.owner, registration.id, ORIGIN);
       const [row] = await rowsTo(email);
       const subject = dictionarySubject(c.expected, "paymentReminder.subject", { competitionName: w.competition.name });
       expect(subject, `${c.tag}: the expected subject is not the English one`).not.toBe(dictionarySubject("en", "paymentReminder.subject", { competitionName: w.competition.name }));
@@ -398,5 +454,132 @@ describe.skipIf(!HAS_DB)("the organiser's manual payment reminder rides the outb
       checked += 1;
     }
     expect(checked, "anti-vacuity: both cases were driven").toBe(cases.length);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// 3. The organiser's limit (5 presses per entry per 24 h) and the figure the mail quotes (Task 6)
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+describe.skipIf(!HAS_DB)("the organiser's reminder is capped per entry, and quotes the amount charged (DB)", () => {
+  /** Seed `n` audit rows of `type` for an entry, each `ageMin` minutes old (the ledger the cap counts). */
+  async function seedAudit(w: Awaited<ReturnType<typeof offlineWorld>>, regId: string, n: number, ageMin: number, type = "registration.payment_reminded") {
+    for (let i = 0; i < n; i++) {
+      await sql`
+        insert into competition_events (competition_id, org_id, type, payload, actor_id, created_at)
+        values (${w.competition.id}, ${w.orgId}, ${type}, ${sql.json({ registration_id: regId })}, ${w.owner.userId}, now() - (${ageMin} * interval '1 minute'))`;
+    }
+  }
+  const refusal = async (p: Promise<unknown>) => {
+    const err = await p.catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(HttpError);
+    return err as HttpError;
+  };
+
+  it("empty case: an entry never reminded is sent", async () => {
+    const w = await offlineWorld();
+    const email = address("cap0");
+    const { registration } = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: email });
+    expect(await sendPaymentReminder(w.owner, registration.id, ORIGIN)).toEqual({ sent: true });
+    expect(await rowsTo(email)).toHaveLength(1);
+  });
+
+  it("five reminders inside 24 h: the sixth is a 429 PAYMENT_REMINDER_LIMIT, with no outbox row, no token and no audit row", async () => {
+    const w = await offlineWorld();
+    const email = address("cap5");
+    const { registration } = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: email });
+    await seedAudit(w, registration.id, 5, 30);
+    const audits = async () => (await sql`select 1 from competition_events where type = 'registration.payment_reminded' and payload->>'registration_id' = ${registration.id}`).length;
+    expect(await audits(), "premise: five seeded").toBe(5);
+
+    const err = await refusal(sendPaymentReminder(w.owner, registration.id, ORIGIN));
+    expect(err.status).toBe(429);
+    expect(err.code).toBe("PAYMENT_REMINDER_LIMIT");
+    expect(await anyRowTo(email)).toHaveLength(0);
+    expect(callsTo(email)).toHaveLength(0);
+    expect(await tokensFor(registration.id)).toBe(0);
+    expect(await audits(), "no sixth audit row").toBe(5);
+
+    // The positive pair: the same press at four is sent.
+    await sql`delete from competition_events where id = (select id from competition_events where type = 'registration.payment_reminded' and payload->>'registration_id' = ${registration.id} limit 1)`;
+    expect(await sendPaymentReminder(w.owner, registration.id, ORIGIN)).toEqual({ sent: true });
+  });
+
+  it("boundary: of five reminders one is 24 h + 1 min old, so the sixth press is sent; at 24 h - 1 min it is refused", async () => {
+    const w = await offlineWorld();
+    const old = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("capold") });
+    await seedAudit(w, old.registration.id, 4, 30);
+    await seedAudit(w, old.registration.id, 1, 24 * 60 + 1);
+    expect(await sendPaymentReminder(w.owner, old.registration.id, ORIGIN)).toEqual({ sent: true });
+
+    const young = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("capyoung") });
+    await seedAudit(w, young.registration.id, 4, 30);
+    await seedAudit(w, young.registration.id, 1, 24 * 60 - 1);
+    expect((await refusal(sendPaymentReminder(w.owner, young.registration.id, ORIGIN))).status).toBe(429);
+  });
+
+  it("the sweep's mails, other audit types and another entry's presses do not count", async () => {
+    const w = await offlineWorld();
+    const email = address("capkind");
+    const { registration } = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: email });
+    const other = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("capother") });
+    // Five sweep-style reminders for this entry (the sweep stamps the entry, it writes no organiser audit row), five other-type audit
+    // rows naming it, and five organiser reminders for ANOTHER entry.
+    await sql`update registrations set submit_reminded_at = now() - interval '1 hour', promotion_reminded_at = now() - interval '1 hour' where id = ${registration.id}`;
+    await seedAudit(w, registration.id, 5, 30, "registration.waitlisted");
+    await seedAudit(w, other.registration.id, 5, 30);
+    expect(await sendPaymentReminder(w.owner, registration.id, ORIGIN)).toEqual({ sent: true });
+    expect(await rowsTo(email)).toHaveLength(1);
+  });
+
+  it("two presses at four, interleaved after the first has counted: exactly one is sent, the other is the 429", async () => {
+    // Deterministic: press 1 is held after it counted four and before it recorded its own audit row. Press 2 is then started. With
+    // the entry's row locked by press 1, press 2 cannot read it until press 1 commits (and then counts five); without the lock it
+    // counts four as well and both go out.
+    const w = await offlineWorld();
+    const email = address("capconc");
+    const { registration } = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: email });
+    await seedAudit(w, registration.id, 4, 30);
+    let release!: () => void;
+    let entered!: () => void;
+    enqueueGate.release = new Promise<void>((r) => (release = r));
+    const inFlight = new Promise<void>((r) => (entered = r));
+    enqueueGate.entered = entered;
+    enqueueGate.armed = true;
+    const first = sendPaymentReminder(w.owner, registration.id, ORIGIN);
+    await inFlight;
+    const second = sendPaymentReminder(w.owner, registration.id, ORIGIN);
+    await new Promise((r) => setTimeout(r, 1500));
+    release();
+    const results = await Promise.allSettled([first, second]);
+    const ok = results.filter((r) => r.status === "fulfilled");
+    const refused = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+    expect(ok, "exactly one press went through").toHaveLength(1);
+    expect(refused).toHaveLength(1);
+    expect((refused[0]!.reason as HttpError).status).toBe(429);
+    expect(await tokensFor(registration.id)).toBe(1);
+    expect(await rowsTo(email)).toHaveLength(1);
+  });
+
+  it("a pending entry in a free division is still the 422", async () => {
+    const w = await offlineWorld(0);
+    const { registration } = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("capfree") });
+    expect((await refusal(sendPaymentReminder(w.owner, registration.id, ORIGIN))).status).toBe(422);
+  });
+
+  it("the mail quotes the amount the entry was charged, not the division's live fee (differential: fee edited after sign-up)", async () => {
+    const w = await offlineWorld(1500);
+    const email = address("capfee");
+    const { registration } = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: email });
+    expect(registration.amount_cents, "premise: charged at sign-up").toBe(1500);
+    await putRegistrationSettings(w.owner, w.division.id, { ...SETTINGS_BASE, fee_cents: 2500, payment_method: "offline", payment_instructions: "Pay at the desk" });
+    const [live] = await sql<{ fee_cents: number }[]>`select fee_cents from registration_settings where division_id = ${w.division.id}`;
+    expect(live!.fee_cents, "premise: the live fee moved").toBe(2500);
+    expect(live!.fee_cents).not.toBe(registration.amount_cents);
+
+    expect(await sendPaymentReminder(w.owner, registration.id, ORIGIN)).toEqual({ sent: true });
+    const [sent] = callsTo(email);
+    expect(sent!.html + sent!.text).toContain(money(1500, "gbp"));
+    expect(sent!.html + sent!.text).not.toContain(money(2500, "gbp"));
   });
 });

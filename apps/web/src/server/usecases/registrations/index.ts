@@ -25,8 +25,12 @@ import "server-only";
 //   materialise          confirmed entry -> entrant: materialise, join an existing entrant, clear the expiry
 //   waitlist             waitlist promotion: the seat gate, promote the oldest, the promoted notice
 //   mail                 registration mail: cart confirmation (submit, resend) and the payment reminder message
+//   lifecycle-mail       the registrant's lifecycle mails (payment received, approved, released, withdrawn by the organiser, joined, rejected, promotion lapsed): one queue producer per kind
 //   settings             organiser settings (defaults, get / put) and the public register-panel info
 //   checkout             minting and resuming a Stripe checkout for a registration or a cart
+//   pay-token            the player payment page's token: mint, record, issue a link, resolve a token to its entry
+//   pay-page             the player payment page's document: what /r/pay/<token> shows, decided by an ordered state table
+//   pay-page-checkout    the payment page's Pay: reuse-or-expire on the entry's own session, mint for the entry, return to the page
 //   checkout-completion  payment completion: the checkout webhooks, confirmPaidRegistration, reconcile-on-return
 //   refunds              refund money and policy: stripeRefund, receipts, the failure alert, the resolved policy
 //   disputes             chargeback handling and the dispute evidence pack
@@ -91,27 +95,37 @@ export {
   notifySubmitted,
   resendRegistrationConfirmation,
   resendRegistrationConfirmationPublic,
+  payDeadlineOf,
 } from "./mail";
 export { getRegistrationSettings, putRegistrationSettings, publicRegistrationInfo } from "./settings";
 export type { OrgPaymentDefaults, PublicDivisionInfo, PublicRegistrationInfoResult } from "./settings";
-export { mintGroupCheckout, resumeRegistrationCheckout } from "./checkout";
+export { mintGroupCheckout, resumeRegistrationCheckout, registrationLineItems } from "./checkout";
+export type { RegistrationLineItem, RegistrationCheckoutOpts } from "./checkout";
+export { mintPayToken, recordPayToken, issuePayLink, registrationIdByPayToken } from "./pay-token";
+export { PAY_PAGE_STATES, payPageState, payPageDocByToken } from "./pay-page";
+export type { PayPageState, PayPageDoc, PayPageFacts } from "./pay-page";
+export { PAY_SESSION_REUSE_MARGIN_MS, payFromPayPage } from "./pay-page-checkout";
 export {
   handleRegistrationCheckoutCompleted,
   handleRegistrationCheckoutAsyncPaymentFailed,
   reconcileRegistration,
   reconcileRegistrationBySession,
   reconcileRegistrationGroupBySession,
+  reconcileRegistrationByPaySession,
 } from "./checkout-completion";
 export {
   syncRegistrationRefund,
   stripeRefund,
   queueRefundReceipt,
   maybeAlertRegistrationRefundFailed,
+  refundEntryUnderLock,
+  registrationRefundKey,
   resolveRefundPolicy,
 } from "./refunds";
 export type { ResolvedRefundPolicy } from "./refunds";
 export { handleRegistrationDispute, buildDisputeEvidence } from "./disputes";
 export { releaseSoloSignUpPlacement } from "./withdraw";
+export { queueRegistrationApprovedMails, queueRegistrationJoinedMail, queueRegistrationRejectedMails } from "./lifecycle-mail";
 export {
   publicRegistrationStatus,
   withdrawRegistrationPublic,

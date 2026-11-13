@@ -17,11 +17,14 @@ import "server-only";
 import { randomBytes } from "node:crypto";
 import { sql, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { deferred } from "@/lib/deferred";
 import { getLimit, requireFeature } from "@/lib/entitlements";
 import { generateRefCode } from "@/lib/ref-code";
 import { rosterDerivedName } from "@/lib/entrant-roster-name";
 import { LEGAL_VERSION } from "@/lib/legal";
+import { entryPriceCents, entryStanding, type EntryStanding } from "@/lib/registration-status";
 import { log } from "@/server/logger";
+import { dispatchNow } from "@/server/email-outbox";
 import {
   SPOT_HOLDERS,
   REGISTRATION_TOKEN_PREFIX,
@@ -37,6 +40,7 @@ import {
   backfillPersonEmail,
   joinExistingEntrant,
   inviteUnclaimedMembers,
+  queueRegistrationJoinedMail,
   playerPersonConsentsByEmail,
   anyOptedOutByRegistration,
   type RegistrationRow,
@@ -199,6 +203,11 @@ export interface JoinTeamEntryResult {
   registration_id: string;
   player_id: string;
   consent_status: "granted" | "guardian";
+  /** Where the entry the joiner just joined STANDS (polish wave P3, W4/W13): confirmed, waitlisted, or still waiting on payment and/or the
+   *  organiser's approval. The join page says "you're in, your spot is confirmed" ONLY for `confirmed`; a team awaiting payment is not
+   *  confirmed because one more teammate arrived. `null` = nothing nameable (a pending entry with no fee under auto-approval), which the
+   *  page words neutrally and never as confirmed. Read under the same row lock the join writes under. */
+  entry_state: EntryStanding | null;
 }
 
 export interface JoinPreviewSlot {
@@ -218,6 +227,12 @@ export interface JoinPreviewResult {
   competition_slug: string;
   org_slug: string;
   org_name: string;
+  /** What kind of entry this link joins (polish wave P3, W3): lets the join page say "this PAIR is full" only for a pair, and the
+   *  generic roster-full copy for a team. */
+  entrant_kind: "team" | "individual" | "pair";
+  /** Whether the entry is confirmed (final fix round G, the V7 rule): a full entry's page says its players "checked in" only then;
+   *  an entry still waiting on payment or approval says its places are taken. */
+  entry_confirmed: boolean;
   unclaimed_slots: JoinPreviewSlot[];
   /** True only when this entry can still grow by adding someone NEW — never
    *  for a `pair` (fixed at two, claim-only) and never once the sport's
@@ -398,6 +413,12 @@ function entryDisplayName(
   return players[0]?.full_name?.trim() || contact.name;
 }
 
+/** Two typed person names are the same name: trimmed, inner whitespace collapsed, case-insensitive. Blank is never a match. */
+function sameName(a: string | null | undefined, b: string | null | undefined): boolean {
+  const norm = (v: string | null | undefined) => (v ?? "").trim().replace(/\s+/g, " ").toLocaleLowerCase();
+  return norm(a) !== "" && norm(a) === norm(b);
+}
+
 // ---------------------------------------------------------------------------
 // submitRegistrationGroup
 // ---------------------------------------------------------------------------
@@ -406,7 +427,11 @@ interface PreparedEntry {
   input: SubmitGroupEntryInput;
   settings: SubmitSettingsRow;
   players: SubmitGroupPlayerInput[];
+  /** The row whose consent this submit gives (the registrant's own, or a solo sign-up's one row - P5 ruling). */
   selfIndex: number | null;
+  /** The row that IS the registrant (final review m4): it alone takes the contact's dob/gender/email and the signed-in account.
+   *  Equal to `selfIndex` except on a solo sign-up entered for someone else. */
+  ownRowIndex: number | null;
   displayName: string;
   answers: Record<string, unknown>;
 }
@@ -514,7 +539,10 @@ export async function submitRegistrationGroup(
       throw new HttpError(422, "Solo sign-ups are not accepted for this division");
     }
 
-    const rawPlayers = entry.players ?? [];
+    // Polish wave P5 (H-1): a solo sign-up carries ONE player row - the person an organiser later places on a team (Assign has
+    // nothing to place without it). The form sends it; an entry sent without one (an older cart, an API caller) gets it from the
+    // contact - the name the panel already shows for it (`entryDisplayName`).
+    const rawPlayers = entry.free_agent && (entry.players ?? []).length === 0 ? [{ full_name: input.contact.name }] : (entry.players ?? []);
     if (!entry.free_agent) {
       if (entry.entrant_kind === "individual" && rawPlayers.length !== 1) {
         throw new HttpError(422, "An individual entry needs exactly one player");
@@ -527,12 +555,26 @@ export async function submitRegistrationGroup(
     }
 
     let selfIndex: number | null = null;
-    if (entry.registering_self) {
+    let ownRowIndex: number | null = null;
+    if (entry.free_agent) {
+      // A solo sign-up is the registrant looking for a team: its one row's consent is given at this submit (a minor needs a guardian) -
+      // `assignSoloSignUp` carries that consent onto the team's roster (P5 ruling).
+      selfIndex = 0;
+      registeringSelfAnywhere = true;
+      // Final review m4: but the row is the REGISTRANT only when it is theirs - the API said so (`registering_self`), no row was sent
+      // (it is made from the contact, above), or it carries the contact's own name (the form seeds the solo's row from the contact;
+      // a different name is somebody else, e.g. a secretary entering a player). Only then does it take the contact's dob, gender and
+      // email and the signed-in account: copying them onto "Sam" gave Sam the secretary's dob, email and account.
+      const sentNoRow = (entry.players ?? []).length === 0;
+      const contactsName = sameName(rawPlayers[0]?.full_name, input.contact.name);
+      ownRowIndex = entry.registering_self || sentNoRow || contactsName ? 0 : null;
+    } else if (entry.registering_self) {
       const idx =
         entry.self_player_index ??
         (entry.entrant_kind === "individual" && rawPlayers.length === 1 ? 0 : undefined);
       if (idx !== undefined && rawPlayers[idx]) {
         selfIndex = idx;
+        ownRowIndex = idx;
         registeringSelfAnywhere = true;
       }
     }
@@ -544,7 +586,7 @@ export async function submitRegistrationGroup(
     // identity signal that lets a LATER registration for the same captain
     // dedupe instead of minting a fresh person every time they self-link.
     const players = rawPlayers.map((p, i) =>
-      i === selfIndex
+      i === ownRowIndex
         ? {
             ...p,
             dob: p.dob ?? input.contact.dob ?? null,
@@ -564,7 +606,8 @@ export async function submitRegistrationGroup(
       },
       players.map((p) => ({ full_name: p.full_name, dob: p.dob, gender: p.gender })),
       seasonYear,
-    );
+      // H-1: a solo sign-up is ONE person - their own eligibility applies; a roster's composition (a mixed team) is the team's.
+    ).filter((issue) => !entry.free_agent || issue.playerIndex != null);
     if (issues.length > 0) throw eligibilityError(issues);
 
     // T20: the Lichess link is demanded only while the club is offered online chess (the PostHog flag
@@ -585,7 +628,7 @@ export async function submitRegistrationGroup(
 
     const answers = validateAnswers(settings.form_fields ?? [], entry.answers ?? {});
     const displayName = entryDisplayName(entry, players, input.contact);
-    prepared.push({ input: entry, settings, players, selfIndex, displayName, answers });
+    prepared.push({ input: entry, settings, players, selfIndex, ownRowIndex, displayName, answers });
   }
 
   // Guardian consent — the EFFECTIVE self dob decides minority, not
@@ -722,6 +765,10 @@ export async function submitRegistrationGroup(
     // committed — see the `void inviteUnclaimedMembers(...)` call below.
     const autoConfirmedEntrantIds: string[] = [];
 
+    // Polish wave J: each entry is stamped `created_at = clock_timestamp()` at its own insert (below), not the column's `now()`
+    // default, which is the TRANSACTION's start and so the same for every entry of this cart. The status page and the cart mail
+    // read entries `order by r.created_at, r.id`; with one shared moment the tie fell to the random row id and a cart read back in
+    // an order the person never chose. Inserted in `prepared` order (the cart's own), the moments now carry that order.
     for (const p of prepared) {
       // LIVE settings (fetched under the lock above), never the pre-lock
       // `p.settings` snapshot — review MAJOR 3.
@@ -770,10 +817,8 @@ export async function submitRegistrationGroup(
       // the team price" and is the default on every division, while 0 is a
       // real price meaning free. `||` would collapse the two and charge the
       // full team fee to a registrant the public page told was free.
-      const entryFeeCents =
-        p.input.free_agent && live.free_agent_fee_cents !== null
-          ? live.free_agent_fee_cents
-          : live.fee_cents;
+      // The ONE definition (lib/registration-status.ts), shared with every organiser money gate (polish wave P5, H-2).
+      const entryFeeCents = entryPriceCents(live, p.input.free_agent === true);
       const feeCents = waitlisted ? 0 : entryFeeCents;
       if (!waitlisted && feeCents > 0) paymentMethodsSeen.add(live.payment_method);
       const status: RegistrationRow["status"] = waitlisted ? "waitlisted" : "pending";
@@ -807,11 +852,11 @@ export async function submitRegistrationGroup(
               const [r] = await sp<RegistrationRow[]>`
                 insert into registrations
                   (group_id, division_id, display_name, status, answers,
-                   amount_cents, join_code, free_agent)
+                   amount_cents, join_code, free_agent, created_at)
                 values (
                   ${groupId}, ${p.input.division_id}, ${p.displayName}, ${status},
                   ${sp.json(p.answers as never)}, ${feeCents}, ${candidate},
-                  ${p.input.free_agent ?? false}
+                  ${p.input.free_agent ?? false}, clock_timestamp()
                 )
                 returning *`;
               return r;
@@ -826,10 +871,10 @@ export async function submitRegistrationGroup(
       } else {
         const [r] = await tx<RegistrationRow[]>`
           insert into registrations
-            (group_id, division_id, display_name, status, answers, amount_cents, free_agent)
+            (group_id, division_id, display_name, status, answers, amount_cents, free_agent, created_at)
           values (
             ${groupId}, ${p.input.division_id}, ${p.displayName}, ${status},
-            ${tx.json(p.answers as never)}, ${feeCents}, ${p.input.free_agent ?? false}
+            ${tx.json(p.answers as never)}, ${feeCents}, ${p.input.free_agent ?? false}, clock_timestamp()
           )
           returning *`;
         regRow = r!;
@@ -839,6 +884,8 @@ export async function submitRegistrationGroup(
       for (let i = 0; i < p.players.length; i++) {
         const player = p.players[i]!;
         const isSelf = i === p.selfIndex;
+        // The signed-in account links to the row that IS the registrant only (final review m4), never to a solo entered for someone else.
+        const isOwnRow = i === p.ownRowIndex;
         // The RESOLVED self row's own dob (review MINOR 6) — not
         // `input.contact.dob` directly. They usually agree (the self row
         // falls back to the contact's cart-level dob when it carries none of
@@ -846,7 +893,7 @@ export async function submitRegistrationGroup(
         // while `contact.dob` is null must still link: reading
         // `input.contact.dob` here silently failed to link an eligible adult
         // in that case, the #402/#404 dedupe producer going dormant.
-        const playerUserId = isSelf
+        const playerUserId = isOwnRow
           ? deriveLinkUserId(
               ctx.sessionUserId ?? null,
               {
@@ -1144,6 +1191,8 @@ export async function previewJoinEntry(joinCode: string): Promise<JoinPreviewRes
     competition_slug: divCtx.comp_slug,
     org_slug: divCtx.org_slug,
     org_name: divCtx.org_name,
+    entrant_kind: reg.entrant_kind,
+    entry_confirmed: reg.status === "confirmed",
     unclaimed_slots: unclaimedSlots,
     allow_new_player: allowNewPlayer,
     requires_dob: requiresDob({
@@ -1319,12 +1368,27 @@ export async function joinTeamEntry(
   // to sweep yet — materialise() itself will trigger the sweep whenever it
   // eventually runs).
   let materialisedEntrantId: string | null = null;
+  // Polish wave P2 (W13): the joiner's own "you're on the team" mail, queued in this transaction; its first attempt follows the response.
+  let joinedMailId: string | null = null;
+  // Polish wave P3: the locked row's status and fee, captured for `entry_state` (below). Initialised to values that name nothing: the
+  // transaction either assigns them or throws before the result is built.
+  let lockedStatus = "";
+  let lockedFeeCents = 0;
+  let lockedApproved = false;
 
   const playerId = await sql.begin(async (tx) => {
-    const [locked] = await tx<{ status: string; free_agent: boolean; entrant_id: string | null }[]>`
-      select status, free_agent, entrant_id from registrations where id = ${reg.id} for update`;
+    const [locked] = await tx<
+      { status: string; amount_cents: number; free_agent: boolean; entrant_id: string | null; approved: boolean }[]
+    >`
+      select status, amount_cents, free_agent, entrant_id, approved_at is not null as approved
+        from registrations where id = ${reg.id} for update`;
     if (!locked) throw new HttpError(404, "This join link is not valid");
     materialisedEntrantId = locked.entrant_id;
+    // Polish wave P3: the entry's standing as the row lock sees it (a join never changes status or fee), reported back so the page never
+    // says "confirmed" about an entry still awaiting payment or approval.
+    lockedStatus = locked.status;
+    lockedFeeCents = locked.amount_cents;
+    lockedApproved = locked.approved;
     if (locked.free_agent) throw new HttpError(422, "This entry has no roster to join yet");
     if (["withdrawn", "rejected", "expired"].includes(locked.status)) {
       throw new HttpError(422, "This entry is no longer accepting players");
@@ -1438,6 +1502,7 @@ export async function joinTeamEntry(
           await backfillPersonEmail(tx, claimed.person_id, claimedEmail);
         }
       }
+      joinedMailId = await queueRegistrationJoinedMail(tx, { registrationId: reg.id, playerId: claimed.id, playerName: input.player.full_name, to: claimedEmail, userId: linkUserId });
       return claimed.id;
     }
 
@@ -1476,6 +1541,7 @@ export async function joinTeamEntry(
         user_id: linkUserId,
       });
     }
+    joinedMailId = await queueRegistrationJoinedMail(tx, { registrationId: reg.id, playerId: player!.id, playerName: input.player.full_name, to: claimedEmail, userId: linkUserId });
     return player!.id;
   });
 
@@ -1488,6 +1554,8 @@ export async function joinTeamEntry(
   // this joiner (and any other already-granted, unclaimed member of the
   // SAME entrant) is swept in one call.
   if (materialisedEntrantId) void inviteUnclaimedMembers(reg.org_id, materialisedEntrantId);
+  const sendJoinedId: string | null = joinedMailId;
+  if (sendJoinedId !== null) deferred(() => dispatchNow([sendJoinedId]));
 
   log.info(
     {
@@ -1499,5 +1567,11 @@ export async function joinTeamEntry(
     "player joined team entry via link",
   );
 
-  return { registration_id: reg.id, player_id: playerId, consent_status: consentStatus };
+  // Polish wave P3 (W4/W13): where the entry stands, in the SAME words the joiner's mail uses (one definition, lib/registration-status.ts).
+  // The review mode is read live; unreadable (no settings row cannot happen past the join's own inner join, but it is a guard, not a
+  // comment) it names nothing rather than guess.
+  const settings = await loadSubmitSettings(reg.division_id);
+  const entryState = entryStanding(lockedStatus, lockedFeeCents, settings?.approval ?? null, lockedApproved);
+
+  return { registration_id: reg.id, player_id: playerId, consent_status: consentStatus, entry_state: entryState };
 }

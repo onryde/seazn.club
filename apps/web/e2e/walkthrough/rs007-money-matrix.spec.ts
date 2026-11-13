@@ -280,9 +280,11 @@ async function enterAndPay(
     // Every entrant kind arrives here with its own pre-rendered, EMPTY player
     // rows — one for `individual`, two for `pair` — and the step refuses to
     // advance with "Fill in the missing details above before continuing".
-    // Nothing above filled them: notably, the partner name typed on the
-    // entries step feeds only the pair's DISPLAY name, never its roster
-    // (finding #17), so a doubles scenario must name both rows explicitly.
+    // Nothing above filled them, except (since polish wave P4) the partner
+    // name typed on the entries step, which now arrives on the pair's Player 2
+    // row (it used to feed only the pair's DISPLAY name, finding #17). The loop
+    // below fills BLANK rows only, so a doubles scenario still names Player 1
+    // explicitly and Player 2 keeps the partner it was given.
     //
     // `opts.roster` is positional. Falling back to the captain's name for an
     // unnamed row is right for a singles entry (the row IS the captain) and
@@ -508,19 +510,18 @@ test("S2 doubles — a partner joins by invite link, then the organiser raises t
     await anon.waitForTimeout(1200);
     await anon.screenshot({ path: `${s.shots}/s2-07-status-paid.png`, fullPage: true });
 
-    // ---- the INVITE: read the anchor the page emits and CLICK it -------
+    // ---- the INVITE: read the link the page emits and FOLLOW it -------
     // Never construct the join URL. RS007's review found every claim link on
     // this page 404'ing while 3098 unit tests stayed green, because a
     // constructed URL proves the route exists and a rendered anchor proves
     // nothing at all. Only following the one the product emitted catches it.
-    const claimLink = anon.locator('a[href*="/register/join"]').first();
+    // Polish wave K: the status page prints no URL; each link rides its Copy button as data-href. Read exactly as emitted, never built.
+    const claimLink = anon.locator('[data-testid="reg-invite-copy"][data-href*="/register/join"]').first();
     await expect(claimLink, "the pair's card emits no claim link for the partner").toBeVisible({ timeout: 15_000 });
-    const href = await claimLink.getAttribute("href");
+    const href = await claimLink.getAttribute("data-href");
     expect(href, "the claim link carries no join_code").toContain("join_code=");
-    const [claimResponse] = await Promise.all([
-      anon.waitForResponse((r) => r.url().includes("/register/join") && r.request().isNavigationRequest()),
-      claimLink.click(),
-    ]);
+    const claimResponse = await anon.goto(href!, { waitUntil: "load" });
+    if (!claimResponse) throw new Error("following the invite link produced no navigation response");
     expect(claimResponse.status(), `the invite link resolved to ${claimResponse.status()}`).toBeLessThan(400);
     await anon.screenshot({ path: `${s.shots}/s2-08-join-form.png`, fullPage: true });
 

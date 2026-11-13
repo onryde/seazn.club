@@ -65,10 +65,12 @@ import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hoo
 import { ApiV1Error } from "@/lib/client-v1";
 import { t as tRuntime } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";
+import { summarizeCart } from "../cart";
 import { DivisionCard } from "../division-card";
 import { EntryCart } from "../entry-cart";
 import { EntryDetails } from "../entry-details";
 import { FormFields } from "../form-fields";
+import { JoinCodeEntry } from "../join-code-entry";
 import { RegisterStepper, type RegisterInfo } from "../register-stepper";
 import { RosterTable } from "../roster-table";
 import { StepConsent } from "../step-consent";
@@ -79,6 +81,7 @@ import { StepReview } from "../step-review";
 import { StepWho } from "../step-who";
 import { REGISTER_STATE_VERSION } from "../storage";
 import { EMPTY_CONTACT, type CartState, type DivisionLike, type FormFieldDef } from "../types";
+import { EntrantKind } from "@/server/api-v1/schemas/common";
 
 const EN_UI: Dict = JSON.parse(
   readFileSync(join(__dirname, "..", "..", "..", "..", "dictionaries", "en", "ui.json"), "utf8"),
@@ -513,17 +516,23 @@ describe("RS006 — a registrant may self-link more than one cart entry", () => 
 
     clickByText("Back"); // -> WHO
     (propsOf(stepWho()).onImPlayingChange as (v: boolean) => void)(true);
-    clickByText("Next"); // -> ENTRIES — 2 entries present, autoLinkObviousSelf is a no-op (ambiguous, the rep must choose)
+    clickByText("Next"); // -> ENTRIES — polish wave V1: a playing registrant is linked to EVERY entry, one per division
 
     const boxes = selfCheckboxes();
     expect(boxes, "two entries, two checkboxes").toHaveLength(2);
     expect(
-      boxes.every((b) => propsOf(b).checked === false),
-      "neither pre-checked — 2 entries is ambiguous for auto-link",
+      boxes.every((b) => propsOf(b).checked === true),
+      "both pre-checked — a playing registrant is the player on every entry until they say otherwise (V1)",
     ).toBe(true);
 
+    // Untick both ("not me" on each), then tick them back one at a time: the second tick must not undo the first.
+    for (let i = 0; i < 2; i++) {
+      (propsOf(selfCheckboxes()[i]!).onChange as (e: { target: { checked: boolean } }) => void)({ target: { checked: false } });
+    }
+    expect(entryCartCart().entries.map((e) => e.registering_self), "both unticked by hand").toEqual([false, false]);
+
     // Check the FIRST box.
-    (propsOf(boxes[0]!).onChange as (e: { target: { checked: boolean } }) => void)({ target: { checked: true } });
+    (propsOf(selfCheckboxes()[0]!).onChange as (e: { target: { checked: boolean } }) => void)({ target: { checked: true } });
     expect(entryCartCart().entries.map((e) => e.registering_self)).toEqual([true, false]);
 
     // Check the SECOND box too — must NOT uncheck the first.
@@ -668,15 +677,15 @@ describe('FIX 1 — an explicit "not me" survives an unrelated add-then-remove',
     (propsOf(box).onChange as (e: { target: { checked: boolean } }) => void)({ target: { checked: false } });
     expect(entryCartCart().entries.map((e) => e.registering_self), "explicit uncheck sticks").toEqual([false]);
 
-    // Add a SECOND, unrelated entry — two entries now, so autoLinkObviousSelf
-    // is a no-op (ambiguous), same as every other "2 entries" case in this
-    // file. The point of this step is purely to re-fire the
-    // cart.entries.length-keyed effect via 1 -> 2.
+    // Add a SECOND, unrelated entry: it re-fires the cart.entries.length-keyed
+    // pass via 1 -> 2. Since polish wave V1 a playing registrant is linked to
+    // every NEW entry, so the second one is linked — and the declined first
+    // one must not be, in the same pass.
     (propsOf(divisionCard("div-open-2")).onAddIndividual as () => void)();
     expect(
       entryCartCart().entries.map((e) => e.registering_self),
-      "still unlinked — the second entry was never linked either",
-    ).toEqual([false, false]);
+      "the declined entry stays unlinked; the new one is linked (V1)",
+    ).toEqual([false, true]);
 
     // Remove that second entry — back to exactly ONE entry: the SAME entry
     // that was explicitly declined above. This re-fires the effect a SECOND
@@ -743,7 +752,7 @@ describe("finding #3 — a self-linked ineligible entry blocks progression and s
   });
 
   it("an ineligible division does NOT block when it is not the self-linked one (design: stays pickable for team entries)", () => {
-    const { stepWho, divisionCard, clickByText, pageText } = mount([DIV_OPEN, DIV_WOMENS]);
+    const { stepWho, divisionCard, clickByText, pageText, selfCheckboxes, entryCartCart } = mount([DIV_OPEN, DIV_WOMENS]);
 
     (propsOf(stepWho()).onChange as (p: object) => void)({
       name: "Alex Test",
@@ -762,10 +771,17 @@ describe("finding #3 — a self-linked ineligible entry blocks progression and s
     (propsOf(stepWho()).onImPlayingChange as (v: boolean) => void)(true);
     clickByText("Next"); // -> ENTRIES
 
-    // autoLinkObviousSelf only fires for exactly ONE cart entry — with two
-    // entries present it never auto-links, so no verdict/self checkbox
-    // should be pinned to the womens entry, and Next must succeed.
-    expect(pageText()).not.toContain("Resolve the eligibility issue on your entry before continuing");
+    // Polish wave V1: a playing registrant is linked to EVERY entry, the
+    // womens one included, so the cart's own eligibility gate asks first —
+    // the registrant answers it by saying that entry is not them.
+    clickByText("Next");
+    expect(pageText(), "the auto-linked womens entry is gated like any self entry").toContain(
+      "Resolve the eligibility issue on your entry before continuing",
+    );
+    (propsOf(selfCheckboxes()[0]!).onChange as (e: { target: { checked: boolean } }) => void)({ target: { checked: false } });
+    expect(entryCartCart().entries.map((e) => e.registering_self), "womens entry unlinked, open entry kept").toEqual([false, true]);
+
+    // No longer the self-linked one: no verdict pins it, and Next must succeed.
     clickByText("Next"); // -> DETAILS (step 3)
     expect(pageText()).toContain("Player details");
   });
@@ -1862,6 +1878,9 @@ const DIV_WAITLIST: DivisionLike = {
   fee_cents: 1000,
   free_agent_fee_cents: null,
   currency: "gbp",
+  // The same method as DIV_PAID's: the server's uniform-method rule counts a waitlisted division too (it runs before waitlisting), so a
+  // card cart with an OFFLINE waitlisted division is a cart it refuses - and, since P4, one the ENTRIES step refuses as well.
+  payment_method: "stripe",
 };
 
 describe("step 5 — REVIEW→PAY line items", () => {
@@ -2375,5 +2394,348 @@ describe("step 5 — submit", () => {
     });
     const after = m.island.tree().filter((e) => propsOf(e)["data-testid"] === "reg-roster-name");
     expect(propsOf(after[0]!).value).toBe("Alex Test");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Polish wave P4 (walkthrough W1, W3) — Details starts from what steps 1 and 2 already collected. Driven through the REAL stepper:
+// the producer is the WHO/ENTRIES inputs, the consumer is the RosterTable the registrant sees on step 3; details-seed.test.ts owns the
+// rules, this owns that the stepper actually applies them on the way in (a pure rule nothing calls is the inert seam).
+// ---------------------------------------------------------------------------
+
+describe("P4 — the Details step is seeded from the contact (W1) and the pair partner (W3)", () => {
+  const rosterNames = (island: ReturnType<typeof mount>["island"]) =>
+    island
+      .tree()
+      .filter((e) => propsOf(e)["data-testid"] === "reg-roster-name")
+      .sort((a, b) => Number(propsOf(a)["data-player-row"]) - Number(propsOf(b)["data-player-row"]))
+      .map((e) => propsOf(e).value as string);
+
+  const DIV_SINGLES: DivisionLike = { ...DIV_OPEN, fee_cents: 1500, payment_method: "stripe" };
+  const DIV_PAIR: DivisionLike = { ...DIV_OPEN, division_id: "div-pair", name: "Mixed Doubles", entrant_kind: "pair" };
+
+  it("W1: 'I'm registering myself' puts the contact's own name on Player 1 (the registrant no longer types it twice)", () => {
+    const m = mount([DIV_SINGLES]);
+    (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Mia Cole", email: "mia@example.com", dob: "1990-04-02" });
+    (propsOf(m.stepWho()).onImPlayingChange as (v: boolean) => void)(true);
+    m.clickByText("Next"); // -> DETAILS (one individual division collapses ENTRIES)
+    expect(rosterNames(m.island)).toEqual(["Mia Cole"]);
+  });
+
+  it("the pair of W1: the same flow WITHOUT 'I'm registering myself' leaves Player 1 blank (someone else is being entered)", () => {
+    const m = mount([DIV_SINGLES]);
+    (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Mia Cole", email: "mia@example.com" });
+    m.clickByText("Next");
+    expect(rosterNames(m.island)).toEqual([""]);
+  });
+
+  it("W3: the partner typed on Entries is already on Player 2 when Details opens, and the registrant's own edit survives going Back and Next", () => {
+    const m = mount([DIV_PAIR]);
+    (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Mia Cole", email: "mia@example.com" });
+    m.clickByText("Next"); // -> ENTRIES
+    (propsOf(m.divisionCard("div-pair")).onAddPair as () => void)();
+    setByAriaLabel(m.island, "Partner's name (optional for now)", "Sam Reid");
+    m.clickByText("Next"); // -> DETAILS
+    expect(rosterNames(m.island), "the partner typed on step 2 arrives on Player 2").toEqual(["", "Sam Reid"]);
+
+    // The registrant corrects Player 2 and goes back and forward: the correction must not be put back to the step-2 spelling.
+    const row2 = m.island.tree().find((e) => propsOf(e)["data-testid"] === "reg-roster-name" && propsOf(e)["data-player-row"] === 1);
+    (propsOf(row2!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "Samuel Reid" } });
+    m.clickByText("Back"); // -> ENTRIES
+    m.clickByText("Next"); // -> DETAILS again
+    expect(rosterNames(m.island)).toEqual(["", "Samuel Reid"]);
+  });
+
+  it("a pair where the contact plays: Player 1 is the contact AND already picked as 'which player are you', so Next is not blocked by the picker", () => {
+    const m = mount([DIV_PAIR]);
+    (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Mia Cole", email: "mia@example.com", dob: "1990-04-02" });
+    (propsOf(m.stepWho()).onImPlayingChange as (v: boolean) => void)(true);
+    m.clickByText("Next"); // -> ENTRIES
+    (propsOf(m.divisionCard("div-pair")).onAddPair as () => void)();
+    setByAriaLabel(m.island, "Partner's name (optional for now)", "Sam Reid");
+    m.clickByText("Next"); // -> DETAILS
+    expect(rosterNames(m.island)).toEqual(["Mia Cole", "Sam Reid"]);
+    m.clickByText("Next"); // -> CONSENT: only reachable when validateDetails accepted the seeded roster and pick
+    expect(m.pageText(), "reached the consent step").toContain("Privacy");
+  });
+
+  // Polish wave sign-off V1 (2026-11-12): a playing registrant who adds entries in several divisions is the player on EVERY one -
+  // individual entries are the registrant, a pair or team has them as Player 1. Before, only a ONE-entry cart was linked: the second
+  // division's Player 1 was typed again and stored with consent pending, showing the registrant "Consent pending" on her own entry.
+  it("V1: a playing registrant's individual, pair and team entries all start with the contact as Player 1, and Next reaches consent", () => {
+    const m = mount([DIV_SINGLES, DIV_PAIR, DIV_TEAM]);
+    (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Mia Cole", email: "mia@example.com", dob: "1990-04-02" });
+    (propsOf(m.stepWho()).onImPlayingChange as (v: boolean) => void)(true);
+    m.clickByText("Next"); // -> ENTRIES
+    (propsOf(m.divisionCard("div-open")).onAddIndividual as () => void)();
+    (propsOf(m.divisionCard("div-pair")).onAddPair as () => void)();
+    (propsOf(m.divisionCard("div-team")).onAddTeam as () => void)();
+    expect(m.entryCartCart().entries.map((e) => [e.division_id, e.registering_self])).toEqual([
+      ["div-open", true],
+      ["div-pair", true],
+      ["div-team", true],
+    ]);
+    setByAriaLabel(m.island, "Team name", "Riverside"); // a team must be named to leave ENTRIES (RS007)
+    setByAriaLabel(m.island, "Partner's name (optional for now)", "Sam Reid");
+    m.clickByText("Next"); // -> DETAILS
+    // rosterNames orders by row index (stable across entries): the three Player 1 rows in cart order, then the pair's Player 2.
+    expect(rosterNames(m.island), "the contact on each entry's Player 1; the partner on the pair's Player 2").toEqual([
+      "Mia Cole",
+      "Mia Cole",
+      "Mia Cole",
+      "Sam Reid",
+    ]);
+    // Next reaches CONSENT on the seeded rows and picks alone: nothing typed on Details itself.
+    m.clickByText("Next");
+    expect(m.pageText(), "reached the consent step").toContain("Privacy");
+    m.clickByText("Back"); // -> DETAILS
+    m.clickByText("Back"); // -> ENTRIES, where the cart is inspectable
+    expect(
+      m.entryCartCart().entries.map((e) => [e.registering_self, e.self_player_index]),
+      "every entry still the registrant's; the pair's and team's pick is the contact's row (an individual's is implied row 0)",
+    ).toEqual([
+      [true, null],
+      [true, 0],
+      [true, 0],
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Polish wave P5 (H-1) — a solo sign-up's Details step collects the player Assign later places. Driven through the REAL stepper:
+// ENTRIES "sign up solo" -> DETAILS shows the solo's one row, started from the contact; Next goes on only once it is named.
+// ---------------------------------------------------------------------------
+
+describe("P5 H-1 — the solo sign-up's Details step carries the player", () => {
+  const DIV_TEAM_SOLO: DivisionLike = { ...DIV_OPEN, division_id: "div-team-solo", name: "Team Cup", entrant_kind: "team", allow_free_agents: true };
+  const rosterNames = (island: ReturnType<typeof mount>["island"]) =>
+    island
+      .tree()
+      .filter((e) => propsOf(e)["data-testid"] === "reg-roster-name")
+      .map((e) => propsOf(e).value as string);
+
+  function soloOnDetails() {
+    const m = mount([DIV_TEAM_SOLO]);
+    (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Jordan Lee", email: "jordan@example.com" });
+    m.clickByText("Next"); // -> ENTRIES
+    m.island.batch(() => (propsOf(m.divisionCard("div-team-solo")).onAddSoloSignup as () => void)());
+    m.clickByText("Next"); // -> DETAILS
+    return m;
+  }
+
+  it("the solo's one row is on the Details step, started from the contact, and Next reaches consent", () => {
+    const m = soloOnDetails();
+    expect(rosterNames(m.island), "one row, the contact's name").toEqual(["Jordan Lee"]);
+    m.clickByText("Next"); // -> CONSENT
+    expect(m.pageText(), "reached the consent step").toContain("Privacy");
+  });
+
+  it("a cleared name blocks Next on the Details step (the row is the player Assign places)", () => {
+    const m = soloOnDetails();
+    const row = m.island.tree().find((e) => propsOf(e)["data-testid"] === "reg-roster-name");
+    (propsOf(row!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "" } });
+    m.clickByText("Next");
+    expect(m.pageText(), "still on Details").not.toContain("Privacy");
+    expect(rosterNames(m.island)).toEqual([""]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Polish wave P4 (walkthrough W9) — the mixed card + offline cart is refused on the ENTRIES step, the moment the second division is added,
+// with the specific reason; it used to be refused only at submit under "check your details". Validation rules: validation.test.ts.
+// ---------------------------------------------------------------------------
+
+describe("P4 — a card + offline cart is refused on the ENTRIES step (W9)", () => {
+  const DIV_CARD: DivisionLike = { ...DIV_OPEN, division_id: "div-card", name: "Open Singles", fee_cents: 1500, payment_method: "stripe" };
+  const DIV_OFFLINE: DivisionLike = { ...DIV_OPEN, division_id: "div-offline", name: "Social Singles", fee_cents: 800, payment_method: "offline" };
+
+  function onEntries(divisions: DivisionLike[]) {
+    const m = mount(divisions);
+    (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Mia Cole", email: "mia@example.com" });
+    m.clickByText("Next"); // -> ENTRIES
+    return m;
+  }
+
+  it("says why, naming both divisions, as soon as the second one is added - and Next stays on the step", () => {
+    const m = onEntries([DIV_CARD, DIV_OFFLINE]);
+    (propsOf(m.divisionCard("div-card")).onAddIndividual as () => void)();
+    expect(m.entryCartText(), "one division: no refusal yet").not.toContain("can't mix payment methods");
+
+    (propsOf(m.divisionCard("div-offline")).onAddIndividual as () => void)();
+    expect(m.entryCartText()).toContain(
+      "One registration can't mix payment methods: Open Singles is paid by card at sign-up and Social Singles is paid to the organiser.",
+    );
+
+    m.clickByText("Next");
+    expect(m.island.tree().some((e) => e.type === StepDetails), "Next is refused: still on ENTRIES").toBe(false);
+    expect(m.island.tree().some((e) => e.type === EntryCart), "still on ENTRIES").toBe(true);
+  });
+
+  it("removing one side clears the refusal and Next goes on (the sequence, not just the state)", () => {
+    const m = onEntries([DIV_CARD, DIV_OFFLINE]);
+    (propsOf(m.divisionCard("div-card")).onAddIndividual as () => void)();
+    (propsOf(m.divisionCard("div-offline")).onAddIndividual as () => void)();
+    expect(m.entryCartText()).toContain("can't mix payment methods");
+
+    const offlineId = m.entryCartCart().entries.find((e) => e.division_id === "div-offline")!.id;
+    (propsOf(m.island.tree().find((e) => e.type === EntryCart)!).dispatch as (a: object) => void)({ type: "REMOVE_ENTRY", id: offlineId });
+    expect(m.entryCartText()).not.toContain("can't mix payment methods");
+
+    m.clickByText("Next");
+    expect(m.island.tree().some((e) => e.type === StepDetails), "no longer refused: on DETAILS").toBe(true);
+  });
+
+  // One island per test (the harness's hook state is global), so each pairing is its own case.
+  const FREE_OFFLINE: DivisionLike = { ...DIV_OFFLINE, division_id: "div-free", name: "Free Roll", fee_cents: 0 };
+  const DIV_CARD_2: DivisionLike = { ...DIV_CARD, division_id: "div-card-2", name: "Masters Singles" };
+  it.each([
+    ["two card divisions", DIV_CARD_2],
+    ["a card division beside a free offline one", FREE_OFFLINE],
+  ] as const)("%s are never refused: Next goes on", (_label, other) => {
+    const m = onEntries([DIV_CARD, other]);
+    (propsOf(m.divisionCard("div-card")).onAddIndividual as () => void)();
+    (propsOf(m.divisionCard(other.division_id)).onAddIndividual as () => void)();
+    expect(m.entryCartCart().entries, "premise: both were added").toHaveLength(2);
+    expect(m.entryCartText()).not.toContain("can't mix payment methods");
+    m.clickByText("Next");
+    expect(m.island.tree().some((e) => e.type === StepDetails)).toBe(true);
+  });
+});
+
+// Polish wave P4 (walkthrough W9) - the review step labels EACH entry with its own payment method, not the cart with one.
+describe("P4 - the REVIEW step labels each entry with its own payment method (W9)", () => {
+  const CARD: DivisionLike = { ...DIV_OPEN, division_id: "div-card", name: "Open Singles", fee_cents: 1500, payment_method: "stripe" };
+  const OFFLINE: DivisionLike = { ...DIV_OPEN, division_id: "div-offline", name: "Social Singles", fee_cents: 800, payment_method: "offline" };
+  const lines = (node: ReactNode) => walk(node).filter((e) => e.type === "li").map((e) => textOf(e));
+
+  it("a cart that mixes the two (only reachable from a restored draft now) never labels one entry with the other's method", () => {
+    const cart: CartState = {
+      entries: ["div-card", "div-offline"].map((division_id, i) => ({
+        id: `e${i}`,
+        division_id,
+        entrant_kind: "individual" as const,
+        team_name: null,
+        partner_name: null,
+        free_agent: false,
+        players: [],
+        answers: {},
+        registering_self: false,
+        self_player_index: null,
+      })),
+    };
+    const out = (StepReview as unknown as ComponentFn)({ summary: summarizeCart(cart, [CARD, OFFLINE]), locale: "en" });
+    const rows = lines(out);
+    expect(rows).toHaveLength(2);
+    const card = rows.find((r) => r.includes("Open Singles"))!;
+    const offline = rows.find((r) => r.includes("Social Singles"))!;
+    expect(card).toContain("pay by card at sign-up");
+    expect(card).not.toContain("pay the organiser");
+    expect(offline).toContain("pay the organiser");
+    expect(offline).not.toContain("pay by card at sign-up");
+    // The old cart-wide note under the subtotal is what mislabelled the walkthrough's 23-pound cart.
+    expect((textOf(out).match(/pay by card at sign-up/g) ?? []).length, "once, on its own line").toBe(1);
+  });
+
+  it("through the real stepper: the charged entry is labelled, the waitlisted one is not", () => {
+    const WAIT: DivisionLike = { ...CARD, division_id: "div-wait", name: "Full Division", closed_reason: "full" };
+    const m = mount([CARD, WAIT]);
+    (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Rep", email: "rep@example.com" });
+    m.clickByText("Next"); // -> ENTRIES
+    (propsOf(m.divisionCard("div-card")).onAddIndividual as () => void)();
+    (propsOf(m.divisionCard("div-wait")).onAddIndividual as () => void)();
+    m.clickByText("Next"); // -> DETAILS
+    const names = allByAriaLabel(m.island, "Player 1 — Your name");
+    (propsOf(names[0]!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "One" } });
+    (propsOf(names[1]!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "Two" } });
+    m.clickByText("Next"); // -> CONSENT
+    (propsOf(byId(m.island, "reg-consent-privacy")).onChange as (e: { target: { checked: boolean } }) => void)({ target: { checked: true } });
+    m.clickByText("Next"); // -> REVIEW
+    const rows = lines(m.island.tree());
+    const charged = rows.find((r) => r.includes("Open Singles"))!;
+    const waitlisted = rows.find((r) => r.includes("Full Division"))!;
+    expect(charged).toContain("pay by card at sign-up");
+    expect(waitlisted).not.toContain("pay by card at sign-up");
+    expect(waitlisted).not.toContain("pay the organiser");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Polish wave H — the "Have a join code?" door. It used to sit above the stepper on EVERY step (~220px at 320 wide), and on
+// competitions where no entry has a code to hand out. Owner ruling: first step only, collapsed, and only when at least one OPEN
+// division is a team or pair (the kinds whose entries carry a join code a captain hands to teammates).
+// ---------------------------------------------------------------------------
+
+/** The owner's rule, stated as the set it names — not read back from the code under test. */
+const KINDS_WITH_A_JOIN_CODE = new Set(["team", "pair"]);
+const joinDoors = (island: ReturnType<typeof mount>["island"]) => island.tree().filter((e) => e.type === JoinCodeEntry);
+
+describe("H — the join-code door shows on the first step only, and only where a join code can lead somewhere", () => {
+  it("an individual-only competition never offers it", () => {
+    const m = mount([DIV_OPEN, DIV_WOMENS]);
+    m.stepWho(); // on the first step
+    expect(joinDoors(m.island)).toHaveLength(0);
+  });
+
+  it("every entrant kind, one open division each: offered exactly for the kinds whose entries hand out a code", () => {
+    let checked = 0;
+    let offered = 0;
+    for (const kind of EntrantKind.options) {
+      const m = mount([{ ...DIV_OPEN, division_id: `div-${kind}`, entrant_kind: kind }]);
+      m.stepWho();
+      const doors = joinDoors(m.island);
+      expect(doors, kind).toHaveLength(KINDS_WITH_A_JOIN_CODE.has(kind) ? 1 : 0);
+      if (doors.length) {
+        offered += 1;
+        expect(propsOf(doors[0]!), `${kind}: the door names this competition`).toMatchObject({
+          orgSlug: ORG_SLUG,
+          competitionSlug: COMPETITION_SLUG,
+        });
+      }
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: every entrant kind").toBe(EntrantKind.options.length);
+    expect(offered, "anti-vacuity: some kind offers it").toBe(KINDS_WITH_A_JOIN_CODE.size);
+  });
+
+  it("a CLOSED team or pair division does not count — an individual comp with a closed team division stays without it", () => {
+    let checked = 0;
+    for (const kind of ["team", "pair"] as const) {
+      const m = mount([DIV_OPEN, { ...DIV_TEAM, entrant_kind: kind, open: false, closed_reason: "window" }]);
+      m.stepWho();
+      expect(joinDoors(m.island), kind).toHaveLength(0);
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("with an open pair division: on step 1, gone on every later step, and back when the person returns to step 1", () => {
+    const PAIR: DivisionLike = { ...DIV_TEAM, division_id: "div-pair", name: "Open Pairs", entrant_kind: "pair" };
+    const m = mount([DIV_OPEN, PAIR]);
+    m.stepWho();
+    expect(joinDoors(m.island), "WHO").toHaveLength(1);
+    (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Rep", email: "rep@example.com" });
+    m.clickByText("Next"); // -> ENTRIES
+    expect(m.island.tree().some((e) => e.type === StepWho), "left the first step").toBe(false);
+    const later: string[] = [];
+    expect(joinDoors(m.island), "ENTRIES").toHaveLength(0);
+    later.push("entries");
+    (propsOf(m.divisionCard("div-open")).onAddIndividual as () => void)();
+    m.clickByText("Next"); // -> DETAILS
+    expect(joinDoors(m.island), "DETAILS").toHaveLength(0);
+    later.push("details");
+    const names = allByAriaLabel(m.island, "Player 1 — Your name");
+    (propsOf(names[0]!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "One" } });
+    m.clickByText("Next"); // -> CONSENT
+    expect(joinDoors(m.island), "CONSENT").toHaveLength(0);
+    later.push("consent");
+    (propsOf(byId(m.island, "reg-consent-privacy")).onChange as (e: { target: { checked: boolean } }) => void)({ target: { checked: true } });
+    m.clickByText("Next"); // -> REVIEW
+    expect(m.island.tree().some((e) => e.type === StepReview), "reached REVIEW").toBe(true);
+    expect(joinDoors(m.island), "REVIEW").toHaveLength(0);
+    later.push("review");
+    expect(later, "anti-vacuity: every later step was visited").toEqual(["entries", "details", "consent", "review"]);
+    for (let i = 0; i < 4; i++) m.clickByText("Back");
+    m.stepWho();
+    expect(joinDoors(m.island), "back on WHO").toHaveLength(1);
   });
 });

@@ -258,12 +258,17 @@ describe.skipIf(!HAS_DB)("the solo sign-up assignment email rides the outbox (DB
   it("after a withdrawal: assigning a withdrawn solo sign-up is refused and queues nothing", async () => {
     const w = await world({ locale: "fr" });
     await withdrawRegistrationOrganiser(w.auth, w.solo.id);
+    // Polish wave P2 (W11): the organiser's withdrawal, this test's SETUP, queues its own "your entry was withdrawn" mail to the same address
+    // and delivers it. That mail's call is set aside by its idempotency key, so the claim stays what it was: the REFUSED assignment sent none.
+    const own = await sql<{ id: string }[]>`select id from email_outbox where kind = 'registration_withdrawn' and lower(recipient) = lower(${w.email})`;
+    expect(own, "premise: the withdrawal queued its own mail").toHaveLength(1);
+    const setupKey = idempotencyKey(own[0]!.id);
 
     await expect(assign(w)).rejects.toMatchObject({ status: 422, message: expect.stringMatching(/withdrawn/) });
 
     expect(await rowsTo(w.email)).toHaveLength(0);
     expect(await rosterNames(w.team.id)).not.toContain("Priya Raman");
-    expect(callsTo(w.email)).toHaveLength(0);
+    expect(callsTo(w.email).filter((c) => c.idempotencyKey !== setupKey)).toHaveLength(0);
   });
 
   it("a provider failure leaves the placement standing and the email queued for a retry", async () => {

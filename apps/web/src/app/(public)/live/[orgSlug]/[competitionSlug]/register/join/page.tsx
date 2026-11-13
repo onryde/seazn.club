@@ -164,6 +164,10 @@ export default async function RegisterJoinPage({ params, searchParams }: Props) 
   // already-public data (the entry/division names this page's own heading
   // shows), unlike the 404 branch above — no row is inserted, no form shown.
   const rosterFull = preview.unclaimed_slots.length === 0 && !preview.allow_new_player;
+  // Polish wave P3 (W3): a PAIR is full only when both of its fixed slots are claimed, which is exactly `unclaimed_slots` empty (a pair
+  // never allows a new player, so no cap applies). It says so in a pair's own words rather than the team's "roster is already full".
+  // A pair with a slot still open is not full: it never reaches this branch (its picker renders), whatever the roster's size.
+  const fullKind = preview.entrant_kind === "pair" ? "pair" : "roster";
 
   return (
     <DictProvider dict={ui} locale={locale}>
@@ -201,8 +205,13 @@ export default async function RegisterJoinPage({ params, searchParams }: Props) 
 
         {rosterFull ? (
           <div className="mt-6 rounded-xl border border-zinc-200/80 bg-surface p-4 shadow-sm sm:p-6">
-            <h2 className="font-display text-lg font-semibold text-ink">{t(ui, "register.join.full.heading")}</h2>
-            <p className="mt-2 text-sm text-ink-muted">{t(ui, "register.join.full.body")}</p>
+            <h2 data-testid="reg-join-full-heading" data-full-kind={fullKind} className="font-display text-lg font-semibold text-ink">
+              {t(ui, fullKind === "pair" ? "register.join.full.pair.heading" : "register.join.full.heading")}
+            </h2>
+            <p className="mt-2 text-sm text-ink-muted">
+              {/* Final fix round G (the V7 rule): "checked in" only for a confirmed entry; otherwise its places are just taken. */}
+              {t(ui, `${fullKind === "pair" ? "register.join.full.pair" : "register.join.full"}.${preview.entry_confirmed ? "body" : "bodyTaken"}`)}
+            </p>
             <Link
               href={routes.publicHub(preview.org_slug, preview.competition_slug)}
               className="mt-4 inline-block text-sm font-medium text-accent-strong underline underline-offset-2"

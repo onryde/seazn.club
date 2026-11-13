@@ -24,7 +24,7 @@ import {
   type SeededOrg,
 } from "../settings-support";
 import { claimConnectAccount, releaseConnectAccount, withDb, type ConnectClaim } from "../rs007-money-kit";
-import { fillHostedCheckout } from "../stripe-checkout-kit";
+import { fillHostedCheckout, submitHostedCheckout } from "../stripe-checkout-kit";
 import { pdfTextRuns } from "../pdf-uris";
 import { routes } from "../../src/lib/routes";
 
@@ -959,7 +959,7 @@ test.describe("Pro + Stripe Connect: Pay by card on the invoice page, through St
     // The test card on the hosted page (stripe-checkout-kit pins currency and billing country, so the page renders the same on every
     // runner), then Stripe returns the sponsor to the club's public hub.
     await fillHostedCheckout(inv, "Pier Outfitters");
-    await inv.locator(".SubmitButton, button[type=submit]").first().click();
+    await submitHostedCheckout(inv);
     await inv.waitForURL(/sponsorship=success/, { waitUntil: "commit", timeout: HOSTED_MS });
 
     // The payment, read at Stripe: complete, paid, and a succeeded PaymentIntent carrying the deal's metadata.

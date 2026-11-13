@@ -86,6 +86,9 @@ export const VERDICTS: Record<string, true | string> = {
   // Sponsor deals T22: the invoice link is the same kind of credential (32 random bytes; whoever holds it reads the invoice and
   // can open its Checkout), with its /pdf and /pay handlers.
   "(public)/r/sponsor/invoice/[token]": true,
+  // Player payment page: `/r/pay/<token>` (32 random bytes, base64url; opens an entry's amount, reference and Pay button) is a
+  // bearer credential beside the registration lookup above.
+  "(public)/r/pay/[token]": true,
   "api/v1/public/registrations/by-ref/[ref]": "the same reference; the withdrawal token rides the request body",
 };
 
