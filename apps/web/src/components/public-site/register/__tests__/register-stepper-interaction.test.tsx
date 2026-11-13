@@ -995,6 +995,22 @@ describe("the nav row never sits below the cookie banner", () => {
   });
 });
 
+// B1 fix round 1, D2: at 320 the forward button's label wraps to two lines in nl and fr ("Beveiligde betaling wordt geopend…",
+// "Enregistrement de votre place…"), the button grows to fill the row and `justify-between` alone left it flush against Back
+// (measured 0px in a real browser, the Playwright captures for this round). A row gap is the one thing that keeps them apart
+// whatever a translation's length, and this pins it on the same row class the cookie-banner contract reads above.
+describe("the nav row keeps Back and the forward button apart", () => {
+  it("register-stepper's Back/Next row carries a gap of at least 0.5rem", () => {
+    const stepperSrc = readFileSync(join(__dirname, "..", "register-stepper.tsx"), "utf8");
+    const rows = [...stepperSrc.matchAll(/className="([^"]*\bjustify-between\b[^"]*)"/g)].map((m) => m[1]!);
+    expect(rows.length, "anti-vacuity: exactly one Back/Next row in register-stepper.tsx").toBe(1);
+    const gap = rows[0]!.match(/(?:^|\s)gap-(\d+(?:\.\d+)?)(?:\s|$)/);
+    expect(gap, `no gap-N on the nav row: ${rows[0]}`).not.toBeNull();
+    // Tailwind's spacing scale: gap-N is N × 0.25rem, so gap-2 is the 0.5rem floor.
+    expect(Number(gap![1]), `nav row gap-${gap![1]}`).toBeGreaterThanOrEqual(2);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Review finding #2 (MEDIUM) — focus management across step transitions.
 // stepFocusTransition (steps.ts) carries the actual DECISION logic and gets

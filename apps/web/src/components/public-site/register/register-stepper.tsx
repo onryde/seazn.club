@@ -630,8 +630,10 @@ export function RegisterStepper({
           z-40 cookie banner never wins the tie and swallows a click on
           Back/Next (fix wave finding #6; regression-pinned in
           register-stepper-interaction.test.tsx via the SAME z-index
-          source-contract convention as cookie-consent-below-dialogs.test.ts). */}
-      <div className="relative z-50 flex items-center justify-between">
+          source-contract convention as cookie-consent-below-dialogs.test.ts).
+          `gap-3` (B1 fix round 1, D2): at 320 a long translated label wraps and the forward button fills the row, which left it
+          flush against Back; the gap keeps the two targets apart at any label length. */}
+      <div className="relative z-50 flex items-center justify-between gap-3">
         <button
           type="button"
           data-testid="reg-back"
