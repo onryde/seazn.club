@@ -725,6 +725,8 @@ describe("POST .../register — submit timing (routing)", () => {
     // 2 distinct divisions, 3 entries, 1 + 2 + 1 = 4 players: three different numbers, so a swapped count cannot pass.
     expect(line).toMatchObject({ divisions: 2, entries: 3, players: 4, payment_method: "none" });
     expect(Object.keys(line!).sort()).toEqual(["divisions", "entries", "payment_method", "players", "timing"]);
+    // Anti-vacuity: the loop below checks nothing on an empty `timing`, so pin that the route's own stages are all there first.
+    expect(Object.keys(line!.timing).sort()).toEqual([...ROUTE_STAGES].sort());
     for (const [stage, ms] of Object.entries(line!.timing)) {
       expect(stage).toMatch(/^[a-z_.]+$/);
       expect(typeof ms).toBe("number");

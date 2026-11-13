@@ -1,3 +1,4 @@
+import "server-only";
 // Per-stage wall-clock timer for one request (registration redesign B0, spec 2026-11-13-registration-redesign-design.md §3.2).
 // The public register route creates one per submit, threads it through `submitRegistrationGroup` and `mintGroupCheckout`, and
 // reports it twice: a `register.submit.timing` log line on every submit, and a `Server-Timing` response header only when

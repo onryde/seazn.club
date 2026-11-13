@@ -456,9 +456,9 @@ async function mintRegistrationCheckout(
  * zero-payable or non-stripe cart (owner ruling 5: an all-waitlisted,
  * all-free, or offline-payment-method group mints nothing) — it only
  * throws for a genuine failure (Connect not live, currency gone stale, a
- * real Stripe error). `timer` (registration redesign B0) is the register
- * route's: every read here and in the mint is timed as `mint_reads`, the
- * Stripe call as `stripe`; the other callers pass none.
+ * real Stripe error). `timer` (registration redesign B0) comes from its only
+ * caller, the register route: every read here and in the mint is timed as
+ * `mint_reads`, the Stripe call as `stripe`.
  */
 export async function mintGroupCheckout(
   groupId: string,
