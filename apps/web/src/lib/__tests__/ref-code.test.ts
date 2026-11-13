@@ -10,6 +10,7 @@ import {
   isValidRefCode,
   normalizeRefCode,
   parseEntryReference,
+  parseSearchReference,
   parseTypedReference,
 } from "@/lib/ref-code";
 
@@ -247,5 +248,91 @@ describe("parseTypedReference", () => {
 
   it("refuses nothing-shaped input", () => {
     for (const typed of ["", "   ", "SZ", "-2", "hello", "SZ-ABCD"]) expect(parseTypedReference(typed), JSON.stringify(typed)).toBeNull();
+  });
+});
+
+// Registration redesign B5 T19 (controller ruling 2026-11-13): the organiser's SEARCH box reads a reference looser than /r/ does. A
+// bank statement or a pasted mail line strips the dashes and spaces, so `SZ-ABCD-EFGH-2` reaches the box as `SZABCDEFGH2`, `SZ ABCD
+// EFGH 2` or `sz-abcd-efgh-2.`; `parseTypedReference` (the /r/ and by-ref lookups) stays strict and keeps refusing `${ref}2`.
+describe("parseSearchReference", () => {
+  /** A reference whose payload does not start with SZ, so the prefix-less spellings below are unambiguous. */
+  const plainRef = () => {
+    for (;;) {
+      const ref = generateRefCode();
+      if (!ref.startsWith("SZ-SZ")) return ref;
+    }
+  };
+
+  it("reads a bare cart reference however it was spelled: any case, with or without the SZ, dashes, spaces and trailing punctuation", () => {
+    const ref = plainRef();
+    const bare = ref.replace(/^SZ-/, "").replace("-", "");
+    const spellings = [ref, ref.toLowerCase(), ` ${ref} `, `SZ${bare}`, `sz ${bare.slice(0, 4)} ${bare.slice(4)}`, bare, bare.toLowerCase(), `${ref}.`, `(${ref}),`, `SZ_${bare}`];
+    for (const typed of spellings) expect(parseSearchReference(typed), JSON.stringify(typed)).toEqual({ refCode: ref, position: null });
+    expect(spellings.length, "anti-vacuity").toBe(10);
+  });
+
+  it("reads an entry's reference the same way, with the separators stripped as a bank statement leaves them", () => {
+    const ref = plainRef();
+    const bare = ref.replace(/^SZ-/, "").replace("-", "");
+    for (const position of [1, 2, 9, 10, 12, 32767]) {
+      const spellings = [
+        `${ref}-${position}`,
+        `${ref.toLowerCase()}-${position}`,
+        `SZ${bare}${position}`,
+        `sz${bare.toLowerCase()}${position}`,
+        `SZ ${bare.slice(0, 4)} ${bare.slice(4)} ${position}`,
+        `${ref}${position}`,
+        `${ref}-${position}.`,
+        `${bare}${position}`,
+        `  ${ref}  -  ${position}  `,
+      ];
+      for (const typed of spellings) expect(parseSearchReference(typed), JSON.stringify(typed)).toEqual({ refCode: ref, position });
+      expect(spellings.length, "anti-vacuity").toBe(9);
+    }
+  });
+
+  it("a payload that itself starts with SZ is read with or without the prefix", () => {
+    let ref = generateRefCode();
+    for (let i = 0; i < 20000 && !ref.startsWith("SZ-SZ"); i++) ref = generateRefCode();
+    expect(ref.startsWith("SZ-SZ"), "premise: drew a reference whose payload starts with SZ").toBe(true);
+    const bare = ref.replace(/^SZ-/, "").replace("-", "");
+    for (const typed of [ref, `SZ${bare}`, bare]) expect(parseSearchReference(typed), typed).toEqual({ refCode: ref, position: null });
+    for (const typed of [`${ref}-3`, `SZ${bare}3`, `${bare}3`]) expect(parseSearchReference(typed), typed).toEqual({ refCode: ref, position: 3 });
+  });
+
+  it("is a superset of parseTypedReference: everything it reads, it reads the same", () => {
+    let checked = 0;
+    for (let i = 0; i < 20; i++) {
+      const ref = generateRefCode();
+      for (const typed of [ref, ref.toLowerCase(), ` ${ref} `, `${ref}-2`, ` ${ref.toLowerCase()}-12 `]) {
+        const strict = parseTypedReference(typed);
+        expect(strict, typed).not.toBeNull();
+        expect(parseSearchReference(typed), typed).toEqual(strict);
+        checked += 1;
+      }
+    }
+    expect(checked, "anti-vacuity").toBe(100);
+  });
+
+  it("the /r/ reader stays strict: the same loose spellings are refused there", () => {
+    const ref = generateRefCode();
+    const bare = ref.replace(/^SZ-/, "").replace("-", "");
+    for (const typed of [`${ref}2`, `SZ${bare}2`, `SZ ${bare.slice(0, 4)} ${bare.slice(4)} 2`, `${ref}-2.`]) {
+      expect(parseTypedReference(typed), typed).toBeNull();
+      expect(parseSearchReference(typed), typed).not.toBeNull();
+    }
+  });
+
+  it("refuses what no entry can carry: position 0, a leading zero, past the column; and a mistyped, short, long or non-reference input", () => {
+    const ref = plainRef();
+    const bare = ref.replace(/^SZ-/, "").replace("-", "");
+    const refused = [`${ref}-0`, `${ref}-02`, `SZ${bare}02`, `${ref}-32768`, `${ref}-99999999`, `${ref}-x`, `SZ${bare}2X`, "", "   ", "SZ", "-2", "hello", "SZ-ABCD", `SZ-${bare.slice(0, 7)}`];
+    for (const typed of refused) expect(parseSearchReference(typed), JSON.stringify(typed)).toBeNull();
+    // The checksum still rejects one flipped character, with or without a suffix.
+    const chars = bare.split("");
+    chars[2] = REF_ALPHABET[(REF_ALPHABET.indexOf(chars[2]!) + 1) % REF_ALPHABET.length]!;
+    const typo = chars.join("");
+    for (const typed of [typo, `SZ${typo}`, `SZ${typo}2`, formatRefCode(typo), `${formatRefCode(typo)}-2`]) expect(parseSearchReference(typed), typed).toBeNull();
+    expect(refused.length, "anti-vacuity").toBe(14);
   });
 });

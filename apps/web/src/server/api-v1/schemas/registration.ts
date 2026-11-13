@@ -199,6 +199,14 @@ export const RegistrationListEntry = Registration.extend({
   /** 1-based rank within the division's waitlist; null for every other
    *  status. */
   waitlist_position: z.number().int().nullable(),
+  /** B5 (V519) — the two stored halves of this entry's OWN reference, which the row has always carried (`regGroupCols`) and the
+   *  organiser's registrant detail, the CSV's `entry_reference` column and the search now read. `cart_position` is the entry's 1-based
+   *  place in the cart it was sent in, never changed or reused after submit; `cart_size` is how many entries that cart was sent
+   *  with, never decremented. The reference to quote is `ref_code` for a cart sent with one entry, and `ref_code` + `-` + `cart_position`
+   *  for a cart sent with two or more (`entryReferenceOf`, `lib/ref-code.ts`) — so a withdrawn or deleted sibling never moves another entry's
+   *  reference, and an integration building the string itself must read `cart_size`, never count the rows it was sent. */
+  cart_position: z.number().int().min(1),
+  cart_size: z.number().int().min(1),
   /** RS009 — where a SOLO SIGN-UP currently sits, or null while still in the
    *  pool. Null on every non-solo-sign-up row. Derived from the roster row
    *  pointing back at this entry, never mirrored onto `registrations`, so the

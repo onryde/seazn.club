@@ -11,15 +11,17 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import type { OrgRole } from "@/lib/types";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { PaymentRequiredError } from "@/lib/errors";
+import { generateRefCode } from "@/lib/ref-code";
+import { RegistrationListEntry } from "@/server/api-v1/schemas";
 import {
   listRegistrations,
   exportRegistrationsCsv,
   promoteOldestWaitlisted,
   putRegistrationSettings,
 } from "../registrations";
-import { createDivision } from "../divisions";
+import { createDivision, deleteDivision } from "../divisions";
 import { openRegistrationSeatGate } from "../online-seat-gate";
-import { seedOrg, asOwner, rig, seedRegistration, SETTINGS_BASE } from "./_registration-fixtures";
+import { seedOrg, asOwner, rig, seedRegistration, seedSecondEntry, loadWithGroup, SETTINGS_BASE } from "./_registration-fixtures";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -815,5 +817,285 @@ describe.skipIf(!HAS_DB)("player payment page: the row carries when the organise
     const bRow = rows.find((r) => r.id === b.id)!;
     expect(bRow.last_reminded_at, "b's own reminder is its own").not.toBeNull();
     expect(bRow.last_reminded_at!.getTime()).toBeGreaterThan(rows.find((r) => r.id === a.id)!.last_reminded_at!.getTime());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Registration redesign B5 T19 (spec §6.3/§6.4): the organiser's side of the per-entry reference. The search finds an entry by the
+// reference the player quotes, the CSV carries it, and the row declares the two columns it is built from. Sport: not applicable —
+// registration is sport-agnostic, one generic division per entry.
+//
+// The fixture is one organiser's competition with four carts, so every search has something to be told apart from:
+//   X  three entries, sent in this order: Ann Alpha (division A, confirmed), Ann Beta (division B, pending), Ann Gamma (division A,
+//      WITHDRAWN)  -> references X-1, X-2, X-3
+//   Y  one entry, Zed Yankee            -> the bare reference Y
+//   N  one entry, Nia Nullref, whose cart has no reference at all (`ref_code` is nullable)
+// ---------------------------------------------------------------------------
+
+/** A reference whose payload does not start with "SZ": `normalizeRefCode` reads a leading "SZ" as the prefix, so the prefix-less
+ *  quoted form of such a code is unreadable (a 1-in-900 draw that would make the "without the SZ" case flake). */
+function freshRef(): string {
+  for (;;) {
+    const ref = generateRefCode();
+    if (!ref.startsWith("SZ-SZ")) return ref;
+  }
+}
+
+async function cartRig() {
+  const { orgId, owner, competition, division: divA, settings } = await baseRig({
+    form_fields: [{ key: "shirt_size", label: "Shirt size", kind: "text", required: false }],
+  });
+  const divB = await createDivision(owner, competition.id, {
+    name: "Division B " + Math.random().toString(36).slice(2, 8),
+    sport_key: "generic",
+    variant_key: "score",
+    config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+  });
+  await putRegistrationSettings(owner, divB.id, { ...SETTINGS_BASE, fee_cents: 0 });
+  const refX = freshRef();
+  const refY = freshRef();
+  const x1 = (
+    await seedRegistration(competition.id, divA.id, settings, { displayName: "Ann Alpha", status: "confirmed", refCode: refX })
+  ).registration;
+  const x2 = await seedSecondEntry(x1.group_id, divB.id, 0, "Ann Beta", "pending");
+  const x3 = await seedSecondEntry(x1.group_id, divA.id, 0, "Ann Gamma", "withdrawn");
+  const y1 = (await seedRegistration(competition.id, divA.id, settings, { displayName: "Zed Yankee", refCode: refY })).registration;
+  const n1 = (await seedRegistration(competition.id, divA.id, settings, { displayName: "Nia Nullref", refCode: null })).registration;
+  // The premise every test below stands on: the three entries of X were handed positions 1, 2, 3 and the cart's size is 3.
+  // Read back: a row loaded at its own insert carries the cart size of that moment, not the cart's final one.
+  const stored = async (...regs: { id: string }[]) => Promise.all(regs.map((r) => loadWithGroup(r.id)));
+  expect((await stored(x1, x2, x3)).map((r) => [r.cart_position, r.cart_size]), "premise: X is a 3-entry cart in sent order").toEqual([
+    [1, 3],
+    [2, 3],
+    [3, 3],
+  ]);
+  expect((await stored(y1, n1)).map((r) => [r.cart_position, r.cart_size]), "premise: Y and N are one-entry carts").toEqual([
+    [1, 1],
+    [1, 1],
+  ]);
+  /** The ids a search for `text` returns, sorted. */
+  const find = async (text: string, status: string | null = null) =>
+    (await listRegistrations(owner, null, status, { competition_id: competition.id, text })).map((r) => r.id).sort();
+  const ids = (...regs: { id: string }[]) => regs.map((r) => r.id).sort();
+  return { orgId, owner, competition, divA, divB, settings, refX, refY, x1, x2, x3, y1, n1, find, ids };
+}
+
+describe.skipIf(!HAS_DB)("B5 T19: the organiser's search finds an entry by its reference", () => {
+  it("the cart's reference finds every entry of the cart, a withdrawn one included, and nothing of another cart", async () => {
+    const { refX, x1, x2, x3, find, ids } = await cartRig();
+    expect(await find(refX)).toEqual(ids(x1, x2, x3));
+    // After a withdrawal: the withdrawn entry is still the player's entry, and an organiser looking up a transfer must find it.
+    expect(await find(refX, "withdrawn")).toEqual(ids(x3));
+    // The one-status filter narrows the reference match the way it narrows every other search.
+    expect(await find(refX, "confirmed")).toEqual(ids(x1));
+  });
+
+  it("a suffixed reference finds exactly that entry", async () => {
+    const { refX, x1, x2, x3, find, ids } = await cartRig();
+    expect(await find(`${refX}-2`)).toEqual(ids(x2));
+    expect(await find(`${refX}-1`)).toEqual(ids(x1));
+    // The withdrawn entry, by its own reference.
+    expect(await find(`${refX}-3`)).toEqual(ids(x3));
+  });
+
+  it("reads the reference however it was typed: any case, with or without the SZ and the dashes, spaces around and inside", async () => {
+    const { refX, x1, x2, x3, find, ids } = await cartRig();
+    const bare = refX.replace(/^SZ-/, "").replace("-", "");
+    const cartForms = [refX.toLowerCase(), `  ${refX}  `, `sz ${bare.slice(0, 4)} ${bare.slice(4)}`, bare, `SZ${bare}`, bare.toLowerCase()];
+    for (const typed of cartForms) expect(await find(typed), JSON.stringify(typed)).toEqual(ids(x1, x2, x3));
+    // A suffixed one: lowercase and padded, the way a pasted mail line reaches the box, and with the dashes and spaces a bank
+    // statement strips or doubles (controller ruling: the search is looser than /r/, which keeps refusing `${ref}2`).
+    const entryForms = [
+      `${refX.toLowerCase()}-2`,
+      `  ${refX}-2 `,
+      `SZ${bare}2`,
+      `sz ${bare.slice(0, 4)} ${bare.slice(4)} 2`,
+      `${refX}2`,
+      `${bare}2`,
+      `(${refX}-2).`,
+      `${refX}  -  2`,
+    ];
+    for (const typed of entryForms) expect(await find(typed), JSON.stringify(typed)).toEqual(ids(x2));
+    // The same loose spelling names the other entries, and a position past the cart's size is still nothing.
+    expect(await find(`SZ${bare}1`)).toEqual(ids(x1));
+    expect(await find(`SZ${bare}3`)).toEqual(ids(x3));
+    expect(await find(`SZ${bare}4`)).toEqual([]);
+    expect(cartForms.length + entryForms.length, "anti-vacuity: every spelling was searched").toBe(14);
+  });
+
+  it("a suffix past the cart's size finds nothing, and so does position 0", async () => {
+    const { refX, find } = await cartRig();
+    for (const typed of [`${refX}-4`, `${refX}-9`, `${refX}-32767`, `${refX}-0`]) expect(await find(typed), typed).toEqual([]);
+  });
+
+  it("a one-entry cart is found by its bare reference, and by `-1` as the mails could never print but a person may type", async () => {
+    const { refY, y1, find, ids } = await cartRig();
+    expect(await find(refY)).toEqual(ids(y1));
+    expect(await find(`${refY}-1`)).toEqual(ids(y1));
+    expect(await find(`${refY}-2`)).toEqual([]);
+  });
+
+  it("finds nothing for a reference no cart here holds, and for a mistyped one", async () => {
+    const { refX, find } = await cartRig();
+    expect(await find(freshRef())).toEqual([]);
+    // One character flipped: the checksum no longer holds, and no fragment of it is in any stored reference.
+    const chars = refX.replace("SZ-", "").replace("-", "").split("");
+    chars[3] = chars[3] === "2" ? "3" : "2";
+    expect(await find(`SZ-${chars.slice(0, 4).join("")}-${chars.slice(4).join("")}`)).toEqual([]);
+  });
+
+  it("a fragment of the reference as it is written (SZ-XXXX-XXXX) finds the cart: the half a person reads out", async () => {
+    const { refX, x1, x2, x3, find, ids } = await cartRig();
+    expect(await find(refX.slice(0, 7))).toEqual(ids(x1, x2, x3)); // "SZ-ABCD"
+    expect(await find(refX.slice(3, 7).toLowerCase())).toEqual(ids(x1, x2, x3)); // "abcd"
+    expect(await find(refX.slice(8, 13))).toEqual(ids(x1, x2, x3)); // "-EFGH"
+  });
+
+  it("LIKE metacharacters match literally on the reference branch too: `SZ-%` is not 'every cart with a reference'", async () => {
+    const { competition, owner, find } = await cartRig();
+    const all = await listRegistrations(owner, null, null, { competition_id: competition.id });
+    expect(all.length, "premise: five entries, four of them in carts that carry a reference").toBe(5);
+    expect(await find("SZ-%")).toEqual([]);
+    expect(await find("SZ-____-____")).toEqual([]);
+  });
+
+  it("name, email and contact searches are unchanged, and a reference in the OR does not widen them", async () => {
+    const { x1, x2, x3, y1, n1, find, ids } = await cartRig();
+    expect(await find("Ann")).toEqual(ids(x1, x2, x3));
+    expect(await find("zed yank")).toEqual(ids(y1));
+    // seedRegistration gives every cart the same contact email: the cart-level column, matched for every entry of every cart.
+    expect(await find("ALEX@test.local")).toEqual(ids(x1, x2, x3, y1, n1));
+    expect(await find("nobody at all")).toEqual([]);
+  });
+
+  it("a cart with no reference is found by name, and no reference text finds it", async () => {
+    const { n1, find, ids } = await cartRig();
+    expect(await find("Nullref")).toEqual(ids(n1));
+    expect(await find(freshRef())).toEqual([]);
+  });
+
+  it("a reference quoted from another organisation, or another competition of this one, finds nothing here", async () => {
+    const { owner, competition, refX, x1, x2, x3, find, ids } = await cartRig();
+    // Another organisation's cart.
+    const other = await baseRig();
+    const refW = freshRef();
+    const w1 = (await seedRegistration(other.competition.id, other.division.id, other.settings, { displayName: "Wren Elsewhere", refCode: refW })).registration;
+    expect(await find(refW), "another org's reference").toEqual([]);
+    expect(await find(`${refW}-1`), "another org's reference, suffixed").toEqual([]);
+    // The positive pair: the reference is real, and its own organiser finds it. Without this the empty result above proves nothing.
+    expect(
+      (await listRegistrations(other.owner, null, null, { competition_id: other.competition.id, text: refW })).map((r) => r.id),
+    ).toEqual([w1.id]);
+    // The same organisation's other competition.
+    const second = await rig(owner);
+    const secondSettings = await putRegistrationSettings(owner, second.division.id, { ...SETTINGS_BASE, fee_cents: 0 });
+    const refV = freshRef();
+    const v1 = (await seedRegistration(second.competition.id, second.division.id, secondSettings, { displayName: "Vera Elsewhere", refCode: refV })).registration;
+    expect(await find(refV), "another competition's reference").toEqual([]);
+    expect(
+      (await listRegistrations(owner, null, null, { competition_id: second.competition.id, text: refV })).map((r) => r.id),
+    ).toEqual([v1.id]);
+    // And this competition's own references are untouched by either.
+    expect(await find(refX)).toEqual(ids(x1, x2, x3));
+    expect(competition.id).not.toBe(second.competition.id);
+  });
+
+  it("an entry keeps its reference when a sibling's division is deleted: the survivor is still found by -3, and -2 finds nothing", async () => {
+    const { owner, divB, refX, x1, x3, find, ids } = await cartRig();
+    await putRegistrationSettings(owner, divB.id, { ...SETTINGS_BASE, enabled: false, fee_cents: 0 });
+    await deleteDivision(owner, divB.id);
+    expect(await find(`${refX}-2`)).toEqual([]);
+    expect(await find(`${refX}-3`)).toEqual(ids(x3));
+    expect(await find(refX)).toEqual(ids(x1, x3));
+  });
+});
+
+describe.skipIf(!HAS_DB)("B5 T19: the list row declares the columns an entry's reference is built from", () => {
+  it("cart_position and cart_size are on RegistrationListEntry, and a real row from listRegistrations satisfies them", async () => {
+    const { owner, competition, x1, x2, x3, y1 } = await cartRig();
+    const rows = await listRegistrations(owner, null, null, { competition_id: competition.id });
+    const shape = RegistrationListEntry.pick({ cart_position: true, cart_size: true });
+    // The seam is driven through its real producer: every row the read model returns, parsed by the schema that documents it.
+    let checked = 0;
+    for (const row of rows) {
+      const parsed = shape.parse(row);
+      expect(parsed, row.display_name).toEqual({ cart_position: row.cart_position, cart_size: row.cart_size });
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: all five entries parsed").toBe(5);
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    expect([x1, x2, x3].map((r) => [byId.get(r.id)!.cart_position, byId.get(r.id)!.cart_size])).toEqual([
+      [1, 3],
+      [2, 3],
+      [3, 3],
+    ]);
+    expect(byId.get(y1.id)).toMatchObject({ cart_position: 1, cart_size: 1 });
+  });
+});
+
+describe.skipIf(!HAS_DB)("B5 T19: the CSV carries the entry's reference as its last column", () => {
+  // The header the export had before this column, byte for byte (an owner's player columns, one form question).
+  const PREVIOUS_HEADER = [
+    "id", "registration_id", "ref_code", "division", "status", "kind", "display_name",
+    "contact_name", "contact_email", "amount_cents", "currency", "refunded_cents",
+    "payment_method", "waitlist_position", "created_at",
+    "player_name", "player_dob", "player_gender", "player_consent_status", "squad_number", "is_captain",
+    "shirt_size",
+  ];
+
+  it("gains one trailing column; every earlier column keeps its name and its place", async () => {
+    const { owner, competition } = await cartRig();
+    const header = (await exportRegistrationsCsv(owner, { competitionId: competition.id })).split("\n")[0]!.split(",");
+    expect(header).toEqual([...PREVIOUS_HEADER, "entry_reference"]);
+  });
+
+  it("writes each entry's own reference: X-1, X-2, X-3 for the 3-entry cart, the bare reference for a one-entry cart, blank for a cart with none", async () => {
+    const { owner, competition, refX, refY, x1, x2, x3, y1, n1 } = await cartRig();
+    const csv = await exportRegistrationsCsv(owner, { competitionId: competition.id });
+    const [head, ...lines] = csv.trimEnd().split("\n");
+    const cols = head!.split(",");
+    const idIdx = cols.indexOf("registration_id");
+    const refIdx = cols.indexOf("ref_code");
+    const entryIdx = cols.indexOf("entry_reference");
+    expect(entryIdx, "the column is the last one").toBe(cols.length - 1);
+    const rowOf = (id: string) => lines.map((l) => l.split(",")).filter((c) => c[idIdx] === id);
+    const expected: [{ id: string }, string, string][] = [
+      [x1, refX, `${refX}-1`],
+      [x2, refX, `${refX}-2`],
+      [x3, refX, `${refX}-3`],
+      [y1, refY, refY],
+      [n1, "", ""],
+    ];
+    for (const [reg, cart, entry] of expected) {
+      const rows = rowOf(reg.id);
+      expect(rows, "one row (no players)").toHaveLength(1);
+      // `ref_code` stays the cart's reference — an importer reading it keeps working — and the new column is the entry's.
+      expect(rows[0]![refIdx], "ref_code is unchanged: the cart's").toBe(cart);
+      expect(rows[0]![entryIdx]).toBe(entry);
+    }
+  });
+
+  it("repeats the entry's reference on every player row of the entry, and keeps every row as wide as the header, for a viewer too", async () => {
+    const { owner, competition, divA, settings, refX } = await cartRig();
+    const { registration } = await seedRegistration(competition.id, divA.id, settings, {
+      displayName: "Team Roster",
+      refCode: freshRef(),
+      players: [{ name: "Pat One" }, { name: "Pat Two" }],
+    });
+    for (const role of ["owner", "viewer"] as const) {
+      const csv = await exportRegistrationsCsv({ ...owner, role }, { competitionId: competition.id });
+      const [head, ...lines] = csv.trimEnd().split("\n");
+      const cols = head!.split(",");
+      const rows = lines.map((l) => l.split(","));
+      for (const r of rows) expect(r.length, `${role}: width`).toBe(cols.length);
+      const mine = rows.filter((r) => r[cols.indexOf("registration_id")] === registration.id);
+      expect(mine, `${role}: one row per player`).toHaveLength(2);
+      const ownRef = registration.ref_code;
+      expect(ownRef).toBeTruthy();
+      for (const r of mine) expect(r[cols.indexOf("entry_reference")], role).toBe(ownRef);
+      // The viewer's header drops the two personal columns but still ends with the reference.
+      expect(cols[cols.length - 1], role).toBe("entry_reference");
+      expect(csv, role).toContain(refX);
+    }
   });
 });

@@ -56585,6 +56585,16 @@
                               }
                             ]
                           },
+                          "cart_position": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 9007199254740991
+                          },
+                          "cart_size": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 9007199254740991
+                          },
                           "assigned_team_id": {
                             "anyOf": [
                               {
@@ -56664,6 +56674,8 @@
                           "roster_cap",
                           "consent_pending_count",
                           "waitlist_position",
+                          "cart_position",
+                          "cart_size",
                           "assigned_team_id",
                           "assigned_team_name",
                           "player_gender",
@@ -56715,6 +56727,8 @@
                       "roster_cap": -9007199254740991,
                       "consent_pending_count": -9007199254740991,
                       "waitlist_position": -9007199254740991,
+                      "cart_position": 1,
+                      "cart_size": 1,
                       "assigned_team_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                       "assigned_team_name": "example",
                       "player_gender": "example",
@@ -56872,7 +56886,7 @@
     },
     "/api/v1/divisions/{id}/registrations/export": {
       "get": {
-        "summary": "CSV export of registrations; all plans (`exports`). One row per player, `id`+`registration_id` both present (same value); player dob/gender omitted for a viewer/read-scope key",
+        "summary": "CSV export of registrations; all plans (`exports`). One row per player, `id`+`registration_id` both present (same value); player dob/gender omitted for a viewer/read-scope key. The LAST column is `entry_reference`: the entry's own reference (`ref_code` alone for a cart sent with one entry, `ref_code-<position>` for a cart sent with two or more; blank when the cart has none) — `ref_code` stays the cart's",
         "tags": [
           "registration"
         ],
@@ -57108,7 +57122,7 @@
     },
     "/api/v1/competitions/{id}/registrations": {
       "get": {
-        "summary": "Cross-division organiser registration list — the Registrants tab read model (?status=&division_id=&kind=&free_agent=&consent_pending=&q=&sort=)",
+        "summary": "Cross-division organiser registration list — the Registrants tab read model (?status=&division_id=&kind=&free_agent=&consent_pending=&q=&sort=). `q` matches the entry's name, the cart's contact name/email, or a reference: the cart's finds every entry of the cart, an entry's own `ref_code-<position>` finds that one entry",
         "tags": [
           "registration"
         ],
@@ -57466,6 +57480,16 @@
                               }
                             ]
                           },
+                          "cart_position": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 9007199254740991
+                          },
+                          "cart_size": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 9007199254740991
+                          },
                           "assigned_team_id": {
                             "anyOf": [
                               {
@@ -57545,6 +57569,8 @@
                           "roster_cap",
                           "consent_pending_count",
                           "waitlist_position",
+                          "cart_position",
+                          "cart_size",
                           "assigned_team_id",
                           "assigned_team_name",
                           "player_gender",
@@ -57596,6 +57622,8 @@
                       "roster_cap": -9007199254740991,
                       "consent_pending_count": -9007199254740991,
                       "waitlist_position": -9007199254740991,
+                      "cart_position": 1,
+                      "cart_size": 1,
                       "assigned_team_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                       "assigned_team_name": "example",
                       "player_gender": "example",

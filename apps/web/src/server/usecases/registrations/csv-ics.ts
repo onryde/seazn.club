@@ -6,6 +6,7 @@ import { requireFeature } from "@/lib/entitlements";
 import { toLocale } from "@/lib/i18n-constants";
 import { icsText, foldLine } from "@/lib/public-site";
 import { msgFor } from "@/lib/messages-i18n";
+import { entryReferenceOf } from "@/lib/ref-code";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { RegistrationFormField } from "@/server/api-v1/schemas";
 import type { RegistrationRow } from "./types";
@@ -145,12 +146,19 @@ export async function exportRegistrationsCsv(
   // registration's id (now simply repeated once per player row) rather
   // than losing it. See openapi.ts's summary for both export routes for the
   // documented shape.
+  //
+  // `entry_reference` (B5 T19, spec §6.3) is LAST, after the form's own question columns: appended, so every column an importer
+  // already reads keeps its name and its place. `ref_code` stays the CART's reference; this is the one to match a bank transfer
+  // against — `SZ-XXXX-XXXX-<n>` for an entry of a cart sent with 2+ entries, the bare reference otherwise (`entryReferenceOf`, the
+  // one reading of those columns), blank when the cart has no reference at all. English snake_case like every header here: this
+  // file's headers are machine column keys, not copy, and are not localised.
   const header = [
     "id", "registration_id", "ref_code", "division", "status", "kind", "display_name",
     "contact_name", "contact_email", "amount_cents", "currency", "refunded_cents",
     "payment_method", "waitlist_position", "created_at",
     ...playerHeader,
     ...fieldKeys,
+    "entry_reference",
   ];
   const lines: string[] = [];
   for (const r of rows) {
@@ -160,17 +168,18 @@ export async function exportRegistrationsCsv(
       r.payment_method, r.waitlist_position, new Date(r.created_at).toISOString(),
     ];
     const answerCols = fieldKeys.map((k) => (r.answers as Record<string, unknown>)[k] ?? "");
+    const entryReference = entryReferenceOf(r) ?? "";
     const players = playersByReg.get(r.id) ?? [];
     if (players.length === 0) {
       // One blank cell per player column, whichever set is in force — derived
       // from playerHeader so the two can never fall out of step.
-      lines.push([...entryCols, ...playerHeader.map(() => ""), ...answerCols].map(esc).join(","));
+      lines.push([...entryCols, ...playerHeader.map(() => ""), ...answerCols, entryReference].map(esc).join(","));
     } else {
       for (const p of players) {
         const playerCols = maySeePlayerPersonalData
           ? [p.full_name, p.dob, p.gender, p.consent_status, p.squad_number, p.is_captain]
           : [p.full_name, p.consent_status, p.squad_number, p.is_captain];
-        lines.push([...entryCols, ...playerCols, ...answerCols].map(esc).join(","));
+        lines.push([...entryCols, ...playerCols, ...answerCols, entryReference].map(esc).join(","));
       }
     }
   }

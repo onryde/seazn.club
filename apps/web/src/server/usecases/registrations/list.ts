@@ -4,6 +4,7 @@ import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { mayHoldBearerCredential } from "@/lib/types";
 import { SPOT_HOLDERS } from "@/lib/registration-status";
+import { parseSearchReference } from "@/lib/ref-code";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { omit } from "@/lib/omit";
 import type { Tx, RegistrationSettingsRow, RegistrationWithGroupRow, AnySql } from "./types";
@@ -25,7 +26,10 @@ export interface ListRegistrationsFilters {
   free_agent?: boolean;
   /** At least one player on the entry still has `consent_status = 'pending'`. */
   consent_pending?: boolean;
-  /** Matches the entry's display name or the cart's contact name/email. */
+  /** Matches the entry's display name, the cart's contact name/email, or the cart's reference: the reference as a person types it
+   *  (any case, with or without the SZ, dashes and spaces: `lib/ref-code.ts` `parseSearchReference`) finds every entry of its cart,
+   *  the entry's own `SZ-XXXX-XXXX-<n>` (or `SZXXXXXXXX<n>`) finds that one entry, and any fragment of the reference as it is
+   *  written finds the cart. */
   text?: string;
   /** RS005 W1a. Default `"oldest"` is `order by r.created_at, r.id` —
    *  UNCHANGED from pre-W1a, so the live `/api/v1/divisions/[id]/registrations`
@@ -300,6 +304,12 @@ export async function listRegistrations(
     // otherwise start escaping whatever follows it instead of matching
     // itself.
     const likePattern = (s: string) => "%" + s.replace(/[\\%_]/g, "\\$&") + "%";
+    // B5 T19 (spec §6.4): the same box finds an entry by the reference its player quotes. `parseSearchReference` is the search's own
+    // reader (lib/ref-code.ts): looser than /r/'s, because a bank statement strips the dashes and spaces (`SZABCDEFGH2`), and it still
+    // checks the checksum so a name is never read as a reference. A suffixed reference names ONE entry (`cart_position`); a bare one
+    // names its cart, so it finds every entry of it. A position past the cart's size matches no row on its own, because
+    // `cart_position <= cart_size` always holds (V519).
+    const typedRef = text ? parseSearchReference(text) : null;
     const rows = await tx<RawListRow[]>`
       select ${regGroupCols(tx)},
         d.name as division_name,
@@ -373,7 +383,15 @@ export async function listRegistrations(
           text
             ? tx`and (r.display_name ilike ${likePattern(text)} escape '\\'
                   or g.contact_name ilike ${likePattern(text)} escape '\\'
-                  or g.contact_email ilike ${likePattern(text)} escape '\\')`
+                  or g.contact_email ilike ${likePattern(text)} escape '\\'
+                  or g.ref_code ilike ${likePattern(text)} escape '\\'
+                  ${
+                    typedRef
+                      ? typedRef.position === null
+                        ? tx`or g.ref_code = ${typedRef.refCode}`
+                        : tx`or (g.ref_code = ${typedRef.refCode} and r.cart_position = ${typedRef.position})`
+                      : tx``
+                  })`
             : tx``
         }
       ${filters.sort === "newest" ? tx`order by r.created_at desc, r.id desc` : tx`order by r.created_at, r.id`}`;

@@ -126,3 +126,30 @@ export function parseTypedReference(raw: string): { refCode: string; position: n
   if (!isValidRefCode(refCode)) return null;
   return { refCode, position: entry?.position ?? null };
 }
+
+/** A reference as it reaches the organiser's SEARCH box (B5 T19, controller ruling 2026-11-13): the text a bank statement or a pasted
+ *  mail line leaves behind, where the dashes and spaces are gone or doubled and punctuation trails: `SZABCDEFGH2`, `sz abcd efgh 2`,
+ *  `(SZ-ABCD-EFGH-2).`. Everything but letters and digits is dropped, the rest is upper-cased, and the reference is read off the front:
+ *  an optional `SZ`, the 8 code characters (alphabet and checksum verified), then optionally the entry's position as plain digits.
+ *  A code is always exactly 8 characters, so a suffix never needs a separator to be told from it.
+ *
+ *  Deliberately NOT `parseTypedReference`: that one reads what a person types into /r/ and the by-ref lookups, which have always
+ *  refused `${ref}2` (the mails print `-2`, and a lookup that guessed would answer for the wrong cart on a typo). A search only lists
+ *  rows, so being generous costs nothing, and the checksum keeps a name from being read as a reference. Same result shape, and
+ *  anything `parseTypedReference` reads this reads identically.
+ *
+ *  A code whose payload itself starts with `SZ` is read both with the prefix first and without it; the first reading that holds up
+ *  wins. Both can hold only on a checksum coincidence (about 1 in 800,000 for a typed reference), and the cost is one search missing. */
+export function parseSearchReference(raw: string): { refCode: string; position: number | null } | null {
+  const s = raw.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  for (const body of s.startsWith("SZ") ? [s.slice(2), s] : [s]) {
+    const chars = body.slice(0, CODE_LEN);
+    const rest = body.slice(CODE_LEN);
+    if (chars.length !== CODE_LEN || !isValidRefCode(formatRefCode(chars))) continue;
+    if (rest === "") return { refCode: formatRefCode(chars), position: null };
+    if (!/^[1-9][0-9]{0,4}$/.test(rest)) continue;
+    const position = Number(rest);
+    if (position <= MAX_CART_POSITION) return { refCode: formatRefCode(chars), position };
+  }
+  return null;
+}
