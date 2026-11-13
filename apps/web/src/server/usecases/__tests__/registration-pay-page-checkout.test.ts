@@ -100,7 +100,7 @@ vi.mock("@/server/usecases/registrations/pay-page", async (importOriginal) => {
   };
 });
 
-import { sql } from "@/lib/db";
+import { sql, statementCount } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { isPayConfirming } from "@/lib/registration-pay";
 import { __setRateLimitCounterForTests } from "@/lib/rate-limit";
@@ -124,6 +124,7 @@ import {
   reconcileRegistrationByPaySession,
   resumeRegistrationCheckout,
   PAY_SESSION_REUSE_MARGIN_MS,
+  type KnownCart,
 } from "../registrations";
 import { createRegistrationCheckout } from "../registrations/checkout";
 import { approveRegistration, rejectRegistration } from "../registration-approval";
@@ -1953,5 +1954,117 @@ describe.skipIf(!HAS_DB)("A → sibling B → A on the status page: one payable 
     // ...and the page's own session is then handed out again on its next press (the reuse rule still holds for its own).
     expect(await payFromPayPage(token, ORIGIN)).toBe(url);
     expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Registration redesign B1 T5 (spec 2026-11-13 §3.3 item 3): the register route hands `mintGroupCheckout` the cart the submit has
+// just written (`known_cart`): its payment method, its payable entry ids in cart order and its division context. The mint then skips
+// its three reads of the same facts (the cart's method, its payable ids, the division context) and must create EXACTLY the session
+// it would have created from those reads. The oracle for "the same session" is the mint's own read path on the same cart, in the
+// same state; the oracle for "three fewer" is the three statements the read path issues and the known path does not.
+//
+// Sport: not applicable (Checkout is sport-agnostic).
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+describe.skipIf(!HAS_DB)("mintGroupCheckout with the cart the submit just wrote (registration redesign B1 T5)", () => {
+  /** A card cart of two pending paid entries and one waitlisted entry (never payable), and the known cart the submit would hand over. */
+  async function cardCart() {
+    const { rig, reg: a, accessToken } = await cardEntry();
+    const b = await seedSecondEntry(a.group_id, rig.division.id, 1500, "Entry B");
+    const w = await seedSecondEntry(a.group_id, rig.division.id, 1500, "Entry W", "waitlisted");
+    const known: KnownCart = { paymentMethod: "stripe", payableIds: [a.id, b.id], ctx: await divisionCtx(sql, rig.division.id) };
+    return { rig, a, b, w, accessToken, known };
+  }
+
+  /** Statements issued by one call. */
+  async function counted<T>(fn: () => Promise<T>): Promise<{ value: T; statements: number }> {
+    const before = statementCount();
+    const value = await fn();
+    return { value, statements: statementCount() - before };
+  }
+
+  /** Back to the state before any mint: no session stamped on the cart, so the next mint takes the same path as the first. */
+  async function unstamp(groupId: string): Promise<void> {
+    await sql`update registration_groups set checkout_session_id = null where id = ${groupId}`;
+  }
+
+  /** The same cart minted twice in the same state: once from the mint's own reads, once from the known cart. */
+  async function bothWays() {
+    const warm = await cardCart();
+    await mintGroupCheckout(warm.a.group_id, warm.rig.division.id, ORIGIN, warm.accessToken); // warm-up: first-use caches, either way
+    const c = await cardCart();
+    stripeMock.checkoutCreate.mockClear();
+    const read = await counted(() => mintGroupCheckout(c.a.group_id, c.rig.division.id, ORIGIN, c.accessToken));
+    await unstamp(c.a.group_id);
+    const known = await counted(() => mintGroupCheckout(c.a.group_id, c.rig.division.id, ORIGIN, c.accessToken, c.known));
+    return { c, read, known };
+  }
+
+  it("mint with known cart issues 3 fewer statements than without (same cart, same state)", async () => {
+    const { read, known } = await bothWays();
+    expect(read.value, "premise: the read path minted").toMatch(/^https:\/\/checkout\.stripe\.test\//);
+    expect(known.value, "premise: the known path minted").toMatch(/^https:\/\/checkout\.stripe\.test\//);
+    expect(read.statements - known.statements, `read path ${read.statements}, known path ${known.statements}`).toBe(3);
+  });
+
+  it("mint with known cart creates the same Stripe session params, naming only the payable entries", async () => {
+    const { c } = await bothWays();
+    expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(2);
+    const [viaRead, viaKnown] = [createdParams(0), createdParams(1)];
+    expect(viaKnown).toEqual(viaRead);
+    // Anti-vacuity: the compared params do carry the cart, and never the waitlisted entry.
+    expect(viaKnown.metadata!.registration_ids).toBe([c.a.id, c.b.id].join(","));
+    expect(String(viaKnown.metadata!.registration_ids)).not.toContain(c.w.id);
+    expect(viaKnown.line_items, "one line per payable entry").toHaveLength(2);
+  });
+
+  it("known.payableIds empty returns null without a read or a Stripe call (the empty case)", async () => {
+    const c = await cardCart();
+    const out = await counted(() =>
+      mintGroupCheckout(c.a.group_id, c.rig.division.id, ORIGIN, c.accessToken, { ...c.known, payableIds: [] }),
+    );
+    expect(out).toEqual({ value: null, statements: 0 });
+    expect(stripeMock.checkoutCreate).not.toHaveBeenCalled();
+  });
+
+  it.each([["offline" as const], [null]])("known.paymentMethod %j returns null without a read or a Stripe call", async (paymentMethod) => {
+    const c = await cardCart();
+    const out = await counted(() =>
+      mintGroupCheckout(c.a.group_id, c.rig.division.id, ORIGIN, c.accessToken, { ...c.known, paymentMethod }),
+    );
+    expect(out).toEqual({ value: null, statements: 0 });
+    expect(stripeMock.checkoutCreate).not.toHaveBeenCalled();
+  });
+
+  it("keeps the 503 when the known context says Connect is not live, before any Stripe call", async () => {
+    const c = await cardCart();
+    const err = await rejection(
+      mintGroupCheckout(c.a.group_id, c.rig.division.id, ORIGIN, c.accessToken, { ...c.known, ctx: { ...c.known.ctx, charges_enabled: false } }),
+    );
+    expect(err.status).toBe(503);
+    expect(err.message).toBe("Payments are not set up for this organiser yet");
+    expect(stripeMock.checkoutCreate).not.toHaveBeenCalled();
+  });
+
+  it("refuses a known cart whose context is another division's, before a read or a Stripe call", async () => {
+    const c = await cardCart();
+    const other = await cardCart();
+    const before = statementCount();
+    await expect(
+      mintGroupCheckout(c.a.group_id, c.rig.division.id, ORIGIN, c.accessToken, { ...c.known, ctx: other.known.ctx }),
+    ).rejects.toThrow("mintGroupCheckout: the known cart's context is not the division asked for");
+    expect(statementCount() - before).toBe(0);
+    expect(stripeMock.checkoutCreate).not.toHaveBeenCalled();
+  });
+
+  it("the sequence: a second mint from the same known cart supersedes the first, leaving one payable session per entry", async () => {
+    const c = await cardCart();
+    const first = await mintGroupCheckout(c.a.group_id, c.rig.division.id, ORIGIN, c.accessToken, c.known);
+    const second = await mintGroupCheckout(c.a.group_id, c.rig.division.id, ORIGIN, c.accessToken, c.known);
+    expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(2);
+    expect(second).not.toBe(first);
+    for (const id of [c.a.id, c.b.id]) expect(payableFor(id), `entry ${id}`).toHaveLength(1);
+    expect(payableFor(c.w.id)).toEqual([]);
   });
 });

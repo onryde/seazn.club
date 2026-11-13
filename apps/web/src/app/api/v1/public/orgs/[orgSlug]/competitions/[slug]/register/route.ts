@@ -12,6 +12,7 @@ import { log } from "@/server/logger";
 import { explicitLocale } from "@/lib/explicit-locale";
 import { OutboxKeyUnavailableError, assertOutboxCanQueue } from "@/server/email-outbox";
 import { createStageTimer } from "@/server/timing";
+import { deferred } from "@/lib/deferred";
 
 type Ctx = { params: Promise<{ orgSlug: string; slug: string }> };
 
@@ -86,6 +87,17 @@ export async function POST(req: Request, { params }: Ctx) {
       },
       timer,
     );
+    // `known_cart` is for the mint below only: it carries the org's payment instructions and Connect state, so it never reaches the 201.
+    const { known_cart: knownCart, ...submitted } = result;
+    // Cart-shaped confirmation (RS005 W4 finding: the confirmation mailer had ZERO callers before this wave — see notifySubmitted's own
+    // doc comment). Registration redesign B1 T5: handed to `deferred` the moment the cart is committed, so it is queued AFTER the
+    // response (in a request scope `after()` runs it once the 201 is out, and still runs it when anything below throws); the
+    // registrant no longer waits on the outbox write. It used to be queued after the mint attempt; it reads nothing the mint writes.
+    // The mail never carries the Checkout url (player payment page, P5): a card cart's Pay button goes to the cart's own status page,
+    // and `checkout_url` stays in this response only. notifySubmitted never throws — a mail failure must never turn this
+    // already-committed cart into an error response. `assertOutboxCanQueue()` above has already refused a box that could not queue it.
+    const origin = baseUrl(req);
+    deferred(() => notifySubmitted(result.group_id, origin, result.access_token));
     // `SubmitGroupResult` carries no `checkout_url` (registration-submit.ts
     // stays payment-agnostic) — the route adds it. Skipped entirely for a
     // zero-subtotal cart: no DB round trip needed to know there is nothing
@@ -108,12 +120,13 @@ export async function POST(req: Request, { params }: Ctx) {
     // protect and a 422/503 is exactly what the caller should see.
     let checkout_url: string | null = null;
     // For the timing line only: what the cart charges, as far as this route can tell without another read. `mintGroupCheckout`
-    // answers null for a payable cart only when its group is not a card cart, so null here is an offline cart.
+    // answers null for a payable cart only when its group is not a card cart, so null here is an offline cart. The mint is handed the
+    // cart the submit just wrote (B1 T5), so it does not read the cart's method, payable entries or division context back.
     let paymentMethod: "none" | "card" | "offline" | "mint_failed" = "none";
     if (result.amount_cents > 0) {
       try {
         checkout_url = await timer.stage("mint", () =>
-          mintGroupCheckout(result.group_id, result.entries[0]!.division_id, baseUrl(req), result.access_token, timer),
+          mintGroupCheckout(result.group_id, result.entries[0]!.division_id, origin, result.access_token, knownCart, timer),
         );
         paymentMethod = checkout_url ? "card" : "offline";
       } catch (err) {
@@ -124,15 +137,6 @@ export async function POST(req: Request, { params }: Ctx) {
         );
       }
     }
-    // Cart-shaped confirmation (RS005 W4 finding: the confirmation mailer had
-    // ZERO callers before this wave — see notifySubmitted's own doc
-    // comment), queued after the mint attempt resolves either way; its first
-    // attempt is made after the response. The mail never carries the
-    // Checkout url (player payment page, P5): a card cart's Pay button goes to
-    // the cart's own status page, and `checkout_url` stays in this response
-    // only. notifySubmitted never throws — a mail failure must never turn
-    // this already-committed cart into an error response.
-    await timer.stage("mail", () => notifySubmitted(result.group_id, baseUrl(req), result.access_token));
     timer.mark("total");
     log.info(
       {
@@ -145,6 +149,6 @@ export async function POST(req: Request, { params }: Ctx) {
       "register.submit.timing",
     );
     const timingHeader = process.env.REGISTER_SERVER_TIMING === "1" ? { "Server-Timing": timer.header() } : undefined;
-    return reply(201, { ...result, checkout_url }, timingHeader);
+    return reply(201, { ...submitted, checkout_url }, timingHeader);
   });
 }

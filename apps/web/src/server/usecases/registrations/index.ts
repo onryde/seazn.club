@@ -49,6 +49,7 @@ export type {
   RegistrationPlayerRow,
   RegistrationWithGroupRow,
   DivisionCtx,
+  KnownCart,
 } from "./types";
 export {
   REGISTRATION_TOKEN_PREFIX,

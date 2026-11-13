@@ -329,3 +329,15 @@ export interface DivisionCtx {
    *  against that snapshot, never to replace it. */
   currency: string;
 }
+
+/**
+ * The cart a submit has just committed, as `mintGroupCheckout` would otherwise read it straight back (registration redesign B1 T5):
+ * the cart's `payment_method` as written, its payable entries (`pending` with a fee) in cart order, and the division context of the
+ * cart's first entry. Built inside the submit's transaction and handed to the mint by the register route only; never sent to the
+ * client (it carries the org's payment instructions and Connect state).
+ */
+export interface KnownCart {
+  paymentMethod: "stripe" | "offline" | null;
+  payableIds: string[];
+  ctx: DivisionCtx;
+}

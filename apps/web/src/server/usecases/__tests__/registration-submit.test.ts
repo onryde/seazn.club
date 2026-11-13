@@ -101,7 +101,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { createStageTimer, type StageTimer } from "@/server/timing";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
-import { confirmRegistration, soloPoolIsFull } from "../registrations";
+import { confirmRegistration, divisionCtx, soloPoolIsFull } from "../registrations";
 import { assignSoloSignUp } from "../registration-assign";
 import {
   submitRegistrationGroup,
@@ -3338,5 +3338,88 @@ describe.skipIf(!HAS_DB)("submitRegistrationGroup: the pre-transaction reads run
     expect((err as HttpError).status).toBe(422);
     expect((err as HttpError).message).toBe("At least one entry is required");
     expect(paidFeatureCalls()).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Registration redesign B1 T5 (spec 2026-11-13 §3.3 item 3): the submit hands back `known_cart`, the facts the route's mint used to
+// read again straight after the commit: the cart's payment method, its payable entries (pending with a fee) in cart order, and the
+// division context of the cart's first entry. The oracle is exactly those reads, made here against the committed rows, so a known
+// cart that drifts from what the mint would have read cannot pass.
+//
+// Sport: not applicable (registration is sport-agnostic).
+// ---------------------------------------------------------------------------
+
+describe.skipIf(!HAS_DB)("submitRegistrationGroup: known_cart is the cart it just wrote (registration redesign B1 T5)", () => {
+  const DIVISION_CONFIG = { points: { w: 3, d: 1, l: 0 }, progressScore: false };
+
+  /** One competition, two divisions with the given settings; ids returned in DESCENDING id order, so a cart built in that order is
+   *  never the sorted (lock) order and "cart order" is witnessed. */
+  async function twoDivisions(orgOver: { charges: boolean }, settings: Parameters<typeof seedSettings>[1]) {
+    const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+    if (orgOver.charges) await sql`update organizations set stripe_charges_enabled = true where id = ${orgId}`;
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    const second = await createDivision(owner, competition.id, { name: "Known Two", sport_key: "generic", variant_key: "score", config: DIVISION_CONFIG });
+    const ids = [division.id, second.id].sort().reverse();
+    for (const id of ids) await seedSettings(id, settings);
+    return { orgSlug, competition, ids };
+  }
+
+  const entry = (divisionId: string): SubmitGroupEntryInput => ({
+    division_id: divisionId,
+    entrant_kind: "individual",
+    players: [{ full_name: "Known " + randomUUID().slice(0, 6) }],
+    answers: {},
+  });
+
+  /** What the mint read before this change, against the committed cart. */
+  async function mintReads(groupId: string, firstDivisionId: string) {
+    const [group] = await sql<{ payment_method: string | null }[]>`select payment_method from registration_groups where id = ${groupId}`;
+    const payable = await sql<{ id: string }[]>`
+      select id from registrations where group_id = ${groupId} and status = 'pending' and amount_cents > 0 order by created_at`;
+    return { paymentMethod: group!.payment_method, payableIds: payable.map((r) => r.id), ctx: await divisionCtx(sql, firstDivisionId) };
+  }
+
+  it("a card cart (two divisions, one entry waitlisted): the method, the payable entries in cart order, the first entry's context", async () => {
+    const card = await twoDivisions({ charges: true }, { entrant_kind: "individual", fee_cents: 1000, payment_method: "stripe", capacity: 1 });
+    const [hi, lo] = card.ids as [string, string];
+    // Cart order hi, lo, lo: the second `lo` entry finds lo's one place taken by the first and is waitlisted.
+    const res = await submitRegistrationGroup(
+      { orgSlug: card.orgSlug, compSlug: card.competition.slug },
+      { contact: baseContact(), privacy_consent: true, entries: [entry(hi), entry(lo), entry(lo)] },
+    );
+    expect(res.entries.map((e) => e.status), "premise: two pending, the third waitlisted").toEqual(["pending", "pending", "waitlisted"]);
+    expect(res.known_cart).toEqual(await mintReads(res.group_id, hi));
+    // Anti-vacuity: the compared cart does carry two payable entries in cart order, the hi division's first.
+    expect(res.known_cart.payableIds).toEqual([res.entries[0]!.registration_id, res.entries[1]!.registration_id]);
+    expect(res.known_cart.paymentMethod).toBe("stripe");
+    expect(res.known_cart.ctx.id).toBe(hi);
+  });
+
+  it("an offline paid cart: the method is offline, and the payable entries are still named (the mint declines on the method)", async () => {
+    const off = await twoDivisions({ charges: false }, { entrant_kind: "individual", fee_cents: 700, payment_method: "offline" });
+    const res = await submitRegistrationGroup(
+      { orgSlug: off.orgSlug, compSlug: off.competition.slug },
+      { contact: baseContact(), privacy_consent: true, entries: [entry(off.ids[0]!), entry(off.ids[1]!)] },
+    );
+    expect(res.known_cart).toEqual(await mintReads(res.group_id, off.ids[0]!));
+    expect(res.known_cart.paymentMethod).toBe("offline");
+    expect(res.known_cart.payableIds).toHaveLength(2);
+  });
+
+  it("the empty case: a free cart has no method and nothing payable; a second identical submit answers its own cart", async () => {
+    const free = await twoDivisions({ charges: false }, { entrant_kind: "individual", fee_cents: 0 });
+    const submit = () =>
+      submitRegistrationGroup(
+        { orgSlug: free.orgSlug, compSlug: free.competition.slug },
+        { contact: baseContact(), privacy_consent: true, entries: [entry(free.ids[1]!), entry(free.ids[0]!)] },
+      );
+    const first = await submit();
+    expect(first.known_cart).toEqual(await mintReads(first.group_id, free.ids[1]!));
+    expect(first.known_cart).toMatchObject({ paymentMethod: null, payableIds: [] });
+    const second = await submit();
+    expect(second.group_id).not.toBe(first.group_id);
+    expect(second.known_cart).toEqual(await mintReads(second.group_id, free.ids[1]!));
   });
 });

@@ -192,6 +192,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type Stripe from "stripe";
 import { sql } from "@/lib/db";
+import { flushDeferred } from "@/lib/deferred";
 
 vi.mock("@/lib/rate-limit", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/rate-limit")>()),
@@ -858,6 +859,8 @@ async function registrationConfirmationScenario(): Promise<KindScenario> {
         { params: Promise.resolve({ orgSlug, slug: competition.slug }) },
       );
       expect(res.status, "premise: the real route accepted the cart").toBe(201);
+      // Registration redesign B1 T5: the route queues the confirmation after its response (`deferred`); the harness reads the row next.
+      await flushDeferred();
     },
   };
 }

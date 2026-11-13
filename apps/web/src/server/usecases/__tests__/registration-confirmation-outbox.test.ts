@@ -61,6 +61,7 @@ vi.mock("@/server/email-outbox", async (importOriginal) => {
 });
 
 import { sql } from "@/lib/db";
+import { flushDeferred } from "@/lib/deferred";
 import { log } from "@/server/logger";
 import { LOCALES, type Locale } from "@/lib/i18n-constants";
 import { HttpError } from "@/lib/errors";
@@ -158,7 +159,9 @@ const address = (tag: string): string => `t8-${tag}-${randomUUID().slice(0, 8)}@
 
 type Submitted = { status: number; body: { ok: boolean; data?: Record<string, unknown>; error?: { message: string; code?: string } }; email: string };
 
-/** The real route POST. `cookie` is the registrant's locale pick (the footer switcher's cookie). */
+/** The real route POST. `cookie` is the registrant's locale pick (the footer switcher's cookie). The route queues the confirmation
+ *  after its response (registration redesign B1 T5, through `deferred`), so this waits for that tail before answering: what a case
+ *  reads next is what the submit left, never a race with it. */
 async function submit(
   w: Pick<World, "orgSlug" | "competition" | "division">,
   over: { cookie?: string; email?: string; players?: string[]; entry?: Record<string, unknown> } = {},
@@ -182,6 +185,7 @@ async function submit(
     }),
     { params: Promise.resolve({ orgSlug: w.orgSlug, slug: w.competition.slug }) },
   );
+  await flushDeferred();
   return { status: res.status, body: (await res.json()) as Submitted["body"], email };
 }
 

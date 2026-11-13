@@ -36,6 +36,25 @@ vi.mock("@/server/usecases/registration-submit", async (importOriginal) => {
   return { ...actual, submitRegistrationGroup: vi.fn(actual.submitRegistrationGroup) };
 });
 
+// Registration redesign B1 T5: the cart mail is handed to `deferred` and lands after the response, and the mint is handed the cart the
+// submit just wrote. Both seams wrap the REAL functions. `deferredState.hold`, when a test sets it, keeps every tail unrun the way a
+// request scope's after() keeps it until the response is out; the test then runs them itself.
+const deferredState = vi.hoisted(() => ({ hold: null as (() => unknown)[] | null }));
+vi.mock("@/lib/deferred", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/deferred")>();
+  return {
+    ...actual,
+    deferred: vi.fn((fn: () => unknown) => {
+      if (deferredState.hold) deferredState.hold.push(fn);
+      else actual.deferred(fn);
+    }),
+  };
+});
+vi.mock("@/server/usecases/registrations", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/usecases/registrations")>();
+  return { ...actual, notifySubmitted: vi.fn(actual.notifySubmitted), mintGroupCheckout: vi.fn(actual.mintGroupCheckout) };
+});
+
 const authState = vi.hoisted(() => ({ userId: null as string | null }));
 vi.mock("@/lib/auth", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/auth")>();
@@ -45,7 +64,9 @@ vi.mock("@/lib/auth", async (importOriginal) => {
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { rateLimit } from "@/lib/rate-limit";
+import { deferred, flushDeferred } from "@/lib/deferred";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import { mintGroupCheckout, notifySubmitted, type DivisionCtx } from "@/server/usecases/registrations";
 import {
   submitRegistrationGroup,
   type SubmitGroupResult,
@@ -103,6 +124,33 @@ function groupBody(over: Record<string, unknown> = {}): Record<string, unknown> 
   };
 }
 
+/** A context the fake results carry: never read by the routing cases (a zero-subtotal cart never reaches the mint). */
+const FAKE_CTX: DivisionCtx = {
+  id: "00000000-0000-4000-8000-0000000000c1",
+  competition_id: "00000000-0000-4000-8000-0000000000c2",
+  org_id: "00000000-0000-4000-8000-0000000000c3",
+  comp_name: "Fake Cup",
+  comp_slug: "cup",
+  comp_visibility: "public",
+  starts_on: null,
+  ends_on: null,
+  div_slug: "open",
+  org_slug: "acme",
+  org_name: "Acme",
+  default_locale: null,
+  payment_instructions: "Pay the treasurer at the door",
+  charges_enabled: false,
+  org_timezone: null,
+  currency: "usd",
+};
+
+/** The 201's `data` for a result: the result less `known_cart` (the route's own, never sent), plus the route's `checkout_url`. */
+function replyOf(result: SubmitGroupResult, checkout_url: string | null): Record<string, unknown> {
+  const sent: Record<string, unknown> = { ...result };
+  delete sent.known_cart;
+  return { ...sent, checkout_url };
+}
+
 function fakeResult(): SubmitGroupResult {
   return {
     group_id: randomUUID(),
@@ -120,6 +168,7 @@ function fakeResult(): SubmitGroupResult {
         free_agent: false,
       },
     ],
+    known_cart: { paymentMethod: null, payableIds: [], ctx: FAKE_CTX },
   };
 }
 
@@ -133,8 +182,15 @@ beforeEach(() => {
   }));
   transport.deliver.mockReset().mockImplementation(async () => ({ ok: true, providerId: `re_rr_${randomUUID()}` }));
   stubOutboxEnv();
+  deferredState.hold = null;
+  vi.mocked(deferred).mockClear();
+  vi.mocked(notifySubmitted).mockClear();
+  vi.mocked(mintGroupCheckout).mockClear();
 });
-afterEach(() => {
+afterEach(async () => {
+  // Every mail tail a case started finishes inside that case (with its outbox env), never in the next one.
+  deferredState.hold = null;
+  await flushDeferred();
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
 });
@@ -285,7 +341,7 @@ describe("POST .../register — routing", () => {
     );
     const { status, body } = await read(res);
     expect(status).toBe(201);
-    expect(body.data).toEqual({ ...fake, checkout_url: null });
+    expect(body.data).toEqual(replyOf(fake, null));
   });
 
   it("a signed-in registrant's session id reaches the usecase as sessionUserId", async () => {
@@ -627,8 +683,9 @@ describe.skipIf(!HAS_DB)("POST .../register — DB-backed", () => {
 // ---------------------------------------------------------------------------
 // Registration redesign B0 — per-stage submit timing (spec 2026-11-13-registration-redesign-design.md §3.2). Every submit logs one
 // `register.submit.timing` line; the `Server-Timing` header rides the 201 only when REGISTER_SERVER_TIMING is exactly "1". The
-// stage names below are the spec's list (rate_limit, turnstile, user, pre_tx + its sub-stages, tx, mint + its sub-stages, mail,
-// total), filtered by what each cart actually runs - never read back from the timer.
+// stage names below are the spec's list (rate_limit, turnstile, user, pre_tx + its sub-stages, tx, mint + its sub-stages, total),
+// filtered by what each cart actually runs - never read back from the timer. B1 T5 took `mail` off the list: the cart mail is queued
+// after the response, outside the request's clock.
 // ---------------------------------------------------------------------------
 
 /** The plan's Server-Timing grammar: `name;dur=N` entries, ", "-separated, at most one decimal. */
@@ -645,7 +702,7 @@ const headerStages = (res: Response): string[] =>
   (res.headers.get("server-timing") ?? "").split(", ").filter(Boolean).map((m) => m.split(";")[0]!);
 
 /** Route-level stages a submit runs whatever the cart (the usecase's own are added by the DB-backed cases). */
-const ROUTE_STAGES = ["rate_limit", "turnstile", "user", "mail", "total"];
+const ROUTE_STAGES = ["rate_limit", "turnstile", "user", "total"];
 
 describe("POST .../register — submit timing (routing)", () => {
   let infoSpy: ReturnType<typeof vi.spyOn>;
@@ -689,7 +746,7 @@ describe("POST .../register — submit timing (routing)", () => {
     vi.stubEnv("REGISTER_SERVER_TIMING", undefined);
     submitSpy.mockResolvedValueOnce(fake);
     const off = await read(await registerRoute(req(URL_("acme", "cup"), groupBody(), { "x-forwarded-for": "9.9.8.3" }), ctx("acme", "cup")));
-    expect(on.body.data).toEqual({ ...fake, checkout_url: null });
+    expect(on.body.data).toEqual(replyOf(fake, null));
     expect(off.body.data).toEqual(on.body.data);
   });
 
@@ -813,7 +870,8 @@ describe.skipIf(!HAS_DB)("POST .../register — submit timing (DB-backed)", () =
     expect(res.headers.get("server-timing")).toMatch(SERVER_TIMING_LIST);
   });
 
-  it("an offline paid cart reaches the mint, which reads and declines without calling Stripe; the method is offline", async () => {
+  // B1 T5: the mint declines from the cart the submit wrote (`known_cart`), so it no longer reads anything to say no.
+  it("an offline paid cart reaches the mint, which declines from the written cart without a read or a Stripe call; the method is offline", async () => {
     const rigd = await paidRig("offline");
     const res = await registerRoute(req(URL_(rigd.orgSlug, rigd.compSlug), oneEntry(rigd.divisionId), { "x-forwarded-for": "9.9.8.13" }), ctx(rigd.orgSlug, rigd.compSlug));
     const { status, body } = await read(res);
@@ -822,7 +880,144 @@ describe.skipIf(!HAS_DB)("POST .../register — submit timing (DB-backed)", () =
     expect(stripeMock.checkoutCreate).not.toHaveBeenCalled();
     const [line] = timingLines(infoSpy);
     expect(line!.payment_method).toBe("offline");
-    expect(Object.keys(line!.timing)).toEqual(expect.arrayContaining(["mint", "mint.mint_reads"]));
+    expect(Object.keys(line!.timing)).toContain("mint");
+    expect(Object.keys(line!.timing)).not.toContain("mint.mint_reads");
     expect(Object.keys(line!.timing)).not.toContain("mint.stripe");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Registration redesign B1 T5 (spec 2026-11-13 §3.3 item 3): the cart mail is handed to `deferred` as soon as the cart is committed,
+// so the 201 never waits on it; the mint is handed the cart the submit just wrote (`known_cart`), and the 201 never carries that.
+// "Exactly once" is counted straight after `flushDeferred()` (the tests-only wait for the tails), never polled into being.
+// ---------------------------------------------------------------------------
+
+/** Confirmation rows queued for these carts. */
+async function confirmationCount(groupIds: string[]): Promise<Record<string, number>> {
+  const rows = await sql<{ ref_id: string; n: number }[]>`
+    select ref_id, count(*)::int as n from email_outbox
+     where kind = 'registration_confirmation' and ref_type = 'registration_group' and ref_id = any(${groupIds}::text[])
+     group by ref_id`;
+  return Object.fromEntries(groupIds.map((id) => [id, rows.find((r) => r.ref_id === id)?.n ?? 0]));
+}
+
+describe("POST .../register — the cart mail after the response (routing, B1 T5)", () => {
+  it("route replies before the cart mail is enqueued: a mail that has not settled does not hold the 201", async () => {
+    const fake = fakeResult();
+    submitSpy.mockResolvedValueOnce(fake);
+    let release: () => void = () => {};
+    vi.mocked(notifySubmitted).mockImplementationOnce(() => new Promise<void>((resolve) => (release = resolve)));
+    const outcome = await Promise.race([
+      registerRoute(req(URL_("acme", "cup"), groupBody(), { "x-forwarded-for": "9.9.7.1" }), ctx("acme", "cup")),
+      new Promise<"held">((resolve) => setTimeout(() => resolve("held"), 3_000)),
+    ]);
+    try {
+      expect(outcome, "the 201 waited on the mail").not.toBe("held");
+      expect((outcome as Response).status).toBe(201);
+      expect(vi.mocked(notifySubmitted).mock.calls, "the mail was started, for this cart").toEqual([
+        [fake.group_id, "https://test.local", fake.access_token],
+      ]);
+      // It went through `deferred`: the route handed it a task, and that task is what started the mail.
+      expect(vi.mocked(deferred)).toHaveBeenCalled();
+      expect(vi.mocked(deferred).mock.invocationCallOrder[0]!).toBeLessThan(vi.mocked(notifySubmitted).mock.invocationCallOrder[0]!);
+    } finally {
+      release();
+    }
+  });
+});
+
+describe.skipIf(!HAS_DB)("POST .../register — the cart mail after the response; the known cart into the mint (DB-backed, B1 T5)", () => {
+  async function freeCart(): Promise<{ orgSlug: string; compSlug: string; divisionId: string }> {
+    const { orgSlug, orgId, ownerId } = await seedOrg();
+    const { competition, division } = await rig(asOwner(orgId, ownerId));
+    await seedSettings(division.id);
+    return { orgSlug, compSlug: competition.slug, divisionId: division.id };
+  }
+
+  const submitTo = (c: { orgSlug: string; compSlug: string; divisionId: string }, ip: string, email?: string) =>
+    registerRoute(
+      req(
+        URL_(c.orgSlug, c.compSlug),
+        groupBody({
+          ...(email ? { contact: { name: "Known Rep", email } } : {}),
+          entries: [{ division_id: c.divisionId, entrant_kind: "individual", players: [{ full_name: "Known Player" }], answers: {} }],
+        }),
+        { "x-forwarded-for": ip },
+      ),
+      ctx(c.orgSlug, c.compSlug),
+    );
+
+  it("deferred is handed the mail: held as after() holds it, nothing is queued when the 201 is out; run, it queues exactly one", async () => {
+    const c = await freeCart();
+    deferredState.hold = [];
+    const { status, body } = await read(await submitTo(c, "9.9.7.10"));
+    expect(status).toBe(201);
+    const groupId = String(body.data!.group_id);
+    expect(vi.mocked(notifySubmitted), "the mail had not started when the response was out").not.toHaveBeenCalled();
+    expect(await confirmationCount([groupId])).toEqual({ [groupId]: 0 });
+    expect(deferredState.hold.length, "premise: the route left a tail for after the response").toBeGreaterThan(0);
+    // The response is out: run the held tails as after() would, including the ones they start (the mail's own first attempt).
+    const held = deferredState.hold;
+    deferredState.hold = null;
+    while (held.length > 0) await held.shift()!();
+    expect(vi.mocked(notifySubmitted).mock.calls).toEqual([[groupId, "https://test.local", body.data!.access_token]]);
+    expect(await confirmationCount([groupId])).toEqual({ [groupId]: 1 });
+  });
+
+  it("cart mail still enqueued exactly once after a submit; the sequence: two submits give two rows, one each", async () => {
+    const c = await freeCart();
+    const first = await read(await submitTo(c, "9.9.7.11"));
+    const second = await read(await submitTo(c, "9.9.7.11"));
+    expect([first.status, second.status]).toEqual([201, 201]);
+    const ids = [String(first.body.data!.group_id), String(second.body.data!.group_id)];
+    expect(new Set(ids).size, "premise: two carts").toBe(2);
+    expect(await flushDeferred(), "premise: the mail tails were pending").toBeGreaterThan(0);
+    expect(await confirmationCount(ids)).toEqual({ [ids[0]!]: 1, [ids[1]!]: 1 });
+    expect(await flushDeferred(), "and nothing queues a second one later").toBe(0);
+    expect(await confirmationCount(ids)).toEqual({ [ids[0]!]: 1, [ids[1]!]: 1 });
+  });
+
+  it("a throw on the response path after the commit still queues the cart mail, exactly once", async () => {
+    const c = await freeCart();
+    const email = `rep-throw-${randomUUID().slice(0, 8)}@test.local`;
+    const info = vi.spyOn(log, "info").mockImplementation(((obj: unknown, msg?: string) => {
+      if (msg === "register.submit.timing") throw new Error("injected: the response path failed after the commit");
+    }) as never);
+    const errorSpy = vi.spyOn(log, "error").mockImplementation(() => undefined as never);
+    try {
+      const res = await submitTo(c, "9.9.7.12", email);
+      expect(res.status, "premise: the injected throw reached the response path").toBe(500);
+    } finally {
+      info.mockRestore();
+      errorSpy.mockRestore();
+    }
+    const groups = await sql<{ id: string }[]>`select id from registration_groups where contact_email = ${email}`;
+    expect(groups, "premise: the cart was committed before the throw").toHaveLength(1);
+    await flushDeferred();
+    expect(await confirmationCount([groups[0]!.id])).toEqual({ [groups[0]!.id]: 1 });
+  });
+
+  it("the route hands the mint the cart the submit wrote, and the 201 never carries it", async () => {
+    const { orgSlug, orgId, ownerId } = await seedOrg();
+    await sql`update organizations
+              set stripe_charges_enabled = true, stripe_account_id = ${"acct_" + randomUUID().slice(0, 8)},
+                  payment_instructions = 'Known-cart instructions never leave the server'
+              where id = ${orgId}`;
+    const { competition, division } = await rig(asOwner(orgId, ownerId));
+    await sql`
+      insert into registration_settings
+        (division_id, enabled, entrant_kind, fee_cents, payment_method, approval, allow_free_agents)
+      values (${division.id}, true, 'individual', 500, 'stripe', 'auto', false)`;
+    const res = await submitTo({ orgSlug, compSlug: competition.slug, divisionId: division.id }, "9.9.7.13");
+    const raw = await res.text();
+    expect(res.status).toBe(201);
+    const result = (await submitSpy.mock.results[0]!.value) as SubmitGroupResult;
+    expect(result.known_cart.payableIds, "premise: a payable card cart").toHaveLength(1);
+    const call = vi.mocked(mintGroupCheckout).mock.calls[0]!;
+    expect(call.slice(0, 5)).toEqual([result.group_id, division.id, "https://test.local", result.access_token, result.known_cart]);
+    const body = JSON.parse(raw) as Envelope;
+    expect(body.data?.checkout_url).toBe("https://checkout.stripe.test/session");
+    expect(Object.keys(body.data!)).not.toContain("known_cart");
+    for (const leak of ["known_cart", "payableIds", "Known-cart instructions", "charges_enabled"]) expect(raw).not.toContain(leak);
   });
 });

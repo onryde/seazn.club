@@ -46,6 +46,8 @@ import {
   anyOptedOutByRegistration,
   type RegistrationRow,
   type RegistrationSettingsRow,
+  type DivisionCtx,
+  type KnownCart,
 } from "./registrations";
 import { anyOptedOut, resolvePersonDisplayName } from "@/lib/name-display";
 import {
@@ -154,6 +156,9 @@ export interface SubmitGroupResult {
    *  ruling 7: a waitlisted entry is never charged at submit). */
   amount_cents: number;
   entries: SubmitGroupEntryResult[];
+  /** The cart as committed, for the register route's mint only (registration redesign B1 T5) — the route strips it from the 201:
+   *  it carries the org's payment instructions and Connect state. */
+  known_cart: KnownCart;
 }
 
 export interface JoinTeamEntryCtx {
@@ -326,6 +331,13 @@ interface EntryDivisionCtx {
   org_name: string;
   org_currency: string;
   charges_enabled: boolean;
+  /** The rest of `DivisionCtx` (registration redesign B1 T5), read in the same statement so the submit can hand the register route's
+   *  mint the context it would otherwise read again (`knownCtxOf`). */
+  div_slug: string;
+  ends_on: string | null;
+  default_locale: string | null;
+  payment_instructions: string | null;
+  org_timezone: string | null;
   sport_key: string;
   config: unknown;
   /** FU1 - with sport_key and config, resolves the division's allowed entrant kinds (entrant-shape.ts). */
@@ -340,13 +352,37 @@ async function loadEntryDivisionCtx(divisionId: string): Promise<EntryDivisionCt
            d.name as division_name,
            c.slug as comp_slug, c.name as comp_name, c.visibility as comp_visibility, c.starts_on,
            o.slug as org_slug, o.name as org_name, o.currency as org_currency,
-           o.stripe_charges_enabled as charges_enabled
+           o.stripe_charges_enabled as charges_enabled,
+           d.slug as div_slug, c.ends_on, o.default_locale, o.payment_instructions, o.timezone as org_timezone
     from divisions d
     join competitions c on c.id = d.competition_id
     join organizations o on o.id = c.org_id
     where d.id = ${divisionId}`;
   if (!row) throw new HttpError(404, "division not found");
   return row;
+}
+
+/** The `DivisionCtx` view of a division's submit context: the same columns `divisionCtx` (registrations/lookups.ts) selects, from the
+ *  read this submit already made, field for field (registration redesign B1 T5). */
+function knownCtxOf(c: EntryDivisionCtx): DivisionCtx {
+  return {
+    id: c.id,
+    competition_id: c.competition_id,
+    org_id: c.org_id,
+    comp_name: c.comp_name,
+    comp_slug: c.comp_slug,
+    comp_visibility: c.comp_visibility,
+    starts_on: c.starts_on,
+    ends_on: c.ends_on,
+    div_slug: c.div_slug,
+    org_slug: c.org_slug,
+    org_name: c.org_name,
+    default_locale: c.default_locale,
+    payment_instructions: c.payment_instructions,
+    charges_enabled: c.charges_enabled,
+    org_timezone: c.org_timezone,
+    currency: c.org_currency,
+  };
 }
 
 function eligibilityError(issues: EligibilityIssue[]): HttpError {
@@ -506,7 +542,7 @@ export async function submitRegistrationGroup(
 
   // Everything before the transaction - the reads that resolve the cart and the checks that refuse it - is one `pre_tx` stage
   // when the register route passes its timer (registration redesign B0), each read inside it a sub-stage. No timer: no timing.
-  const { distinctDivisionIds, first, orgId, competitionId, prepared, planLimit, seatGates } = await timed(timer, "pre_tx", async () => {
+  const { distinctDivisionIds, first, orgId, competitionId, prepared, planLimit, seatGates, leadCtx } = await timed(timer, "pre_tx", async () => {
     // Resolve every distinct division touched by the cart, sorted — the SAME
     // order is used below for both settings validation and lock acquisition,
     // so two concurrent carts touching an overlapping division set can never
@@ -730,7 +766,8 @@ export async function submitRegistrationGroup(
               settleEach(onlineIds, (id) => openRegistrationSeatGate({ divisionId: id, auth: { orgId, userId: null } })),
             ),
           );
-    return { distinctDivisionIds, first, orgId, competitionId, prepared, planLimit, seatGates };
+    const leadCtx = divisionCtxById.get(input.entries[0]!.division_id)!;
+    return { distinctDivisionIds, first, orgId, competitionId, prepared, planLimit, seatGates, leadCtx };
   });
 
   const secret = mintRegistrationToken();
@@ -799,7 +836,7 @@ export async function submitRegistrationGroup(
     if (!groupId) throw new HttpError(503, "could not allocate a reference — please retry");
 
     let subtotal = 0;
-    const paymentMethodsSeen = new Set<string>();
+    const paymentMethodsSeen = new Set<SubmitSettingsRow["payment_method"]>();
     const entryResults: SubmitGroupEntryResult[] = [];
     // RS008 gap (code-review fix, 2026-08-30): this cart-level auto-confirm
     // is the one materialise() convergence point that never fired the
@@ -1052,7 +1089,13 @@ export async function submitRegistrationGroup(
           updated_at = now()
       where id = ${groupId}`;
 
-    return { groupId: groupId!, refCode, subtotal, entryResults, autoConfirmedEntrantIds };
+    // The cart as just written, for the register route's mint (B1 T5): the method above, the payable entries in cart order.
+    const knownCart: KnownCart = {
+      paymentMethod: groupPaymentMethod,
+      payableIds: entryResults.filter((e) => e.status === "pending" && e.amount_cents > 0).map((e) => e.registration_id),
+      ctx: knownCtxOf(leadCtx),
+    };
+    return { groupId: groupId!, refCode, subtotal, entryResults, autoConfirmedEntrantIds, knownCart };
   }));
 
   // RS008 gap (code-review fix, 2026-08-30): fire-and-forget, strictly AFTER
@@ -1089,6 +1132,7 @@ export async function submitRegistrationGroup(
     currency: first.org_currency,
     amount_cents: txResult.subtotal,
     entries: txResult.entryResults,
+    known_cart: txResult.knownCart,
   };
 }
 

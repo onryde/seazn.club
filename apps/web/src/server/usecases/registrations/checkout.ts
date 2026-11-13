@@ -8,7 +8,7 @@ import { isRegistrationCurrency } from "@/lib/currency";
 import { routes } from "@/lib/routes";
 import { log } from "@/server/logger";
 import { timed, type StageTimer } from "@/server/timing";
-import type { RegistrationWithGroupRow, DivisionCtx } from "./types";
+import type { RegistrationWithGroupRow, DivisionCtx, KnownCart } from "./types";
 import { effectiveFeePercentFor, applicationFeeCents } from "./helpers";
 import { regGroupCols, loadSettings, divisionCtx, regByToken } from "./lookups";
 
@@ -459,28 +459,43 @@ async function mintRegistrationCheckout(
  * real Stripe error). `timer` (registration redesign B0) comes from its only
  * caller, the register route: every read here and in the mint is timed as
  * `mint_reads`, the Stripe call as `stripe`.
+ *
+ * `known` (registration redesign B1 T5) is the cart the submit has just
+ * committed, from the same caller: its method, payable ids and division
+ * context replace the three reads below, which would only read them back.
+ * Every other caller (resume, waitlist promotion, the tests) passes none and
+ * reads, since its cart may have moved since it was written.
  */
 export async function mintGroupCheckout(
   groupId: string,
   divisionId: string,
   origin: string,
   token: string,
+  known?: KnownCart,
   timer?: StageTimer,
 ): Promise<string | null> {
-  const [group] = await timed(timer, "mint_reads", () => sql<{ payment_method: string | null }[]>`
-    select payment_method from registration_groups where id = ${groupId}`);
-  if (!group || group.payment_method !== "stripe") return null;
-  const payable = await timed(timer, "mint_reads", () => sql<{ id: string }[]>`
-    select id from registrations
-    where group_id = ${groupId} and status = 'pending' and amount_cents > 0
-    order by created_at`);
-  if (payable.length === 0) return null;
-  const ctx = await timed(timer, "mint_reads", () => divisionCtx(sql, divisionId));
+  // An assumption held as a guard: the known cart is the one for this division, never another cart's facts minted under this id.
+  if (known && known.ctx.id !== divisionId) {
+    throw new Error("mintGroupCheckout: the known cart's context is not the division asked for");
+  }
+  const paymentMethod = known
+    ? known.paymentMethod
+    : (await timed(timer, "mint_reads", () => sql<{ payment_method: string | null }[]>`
+        select payment_method from registration_groups where id = ${groupId}`))[0]?.payment_method;
+  if (paymentMethod !== "stripe") return null;
+  const payableIds = known
+    ? known.payableIds
+    : (await timed(timer, "mint_reads", () => sql<{ id: string }[]>`
+        select id from registrations
+        where group_id = ${groupId} and status = 'pending' and amount_cents > 0
+        order by created_at`)).map((r) => r.id);
+  if (payableIds.length === 0) return null;
+  const ctx = known ? known.ctx : await timed(timer, "mint_reads", () => divisionCtx(sql, divisionId));
   if (!ctx.charges_enabled) {
     throw new HttpError(503, "Payments are not set up for this organiser yet");
   }
   // `createRegistrationCheckout`'s own call, made here so the timer can ride along: it lives on the internal MintOpts, not the public opts.
-  return (await mintRegistrationCheckout(groupId, payable.map((r) => r.id), ctx, origin, token, { timer })).url;
+  return (await mintRegistrationCheckout(groupId, payableIds, ctx, origin, token, { timer })).url;
 }
 
 // ---------------------------------------------------------------------------
