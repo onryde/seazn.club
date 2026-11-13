@@ -11,7 +11,17 @@ import { renderToStaticMarkup } from "react-dom/server";
 // dict-construction code path (not a hand-rolled stand-in), with only the
 // step-navigation-heavy StartWizard swapped for a thin stub that renders the
 // same <LegalNotice/> the real wizard renders on its final step.
+vi.mock("next/font/google", () => ({ Barlow_Condensed: () => ({ variable: "--mk-font-display", className: "" }) }));
 vi.mock("@/components/marketing-nav", () => ({ MarketingNav: () => null }));
+// The page's two live reads (the free plan's cap, the quick match offer), stubbed: this case is about the provider's scope.
+vi.mock("@/lib/funnel", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/funnel")>()),
+  funnelEntrantCap: async () => 64,
+}));
+vi.mock("@/server/usecases/quick-match-sports", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/usecases/quick-match-sports")>()),
+  listQuickMatchSports: async () => [],
+}));
 vi.mock("@/components/marketing-footer", () => ({ MarketingFooter: () => null }));
 vi.mock("@/components/start-wizard", async () => {
   const { LegalNotice } = await import("@/components/legal-notice");

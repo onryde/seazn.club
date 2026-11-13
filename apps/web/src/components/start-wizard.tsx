@@ -1,275 +1,728 @@
 "use client";
 
-// /start wizard (v3/07 §6): three steps in ~60 seconds, no auth. Step 2 IS
-// the product demo — the same pure recommendFormats the console uses, live.
-import { useMemo, useState } from "react";
-import { api } from "@/lib/client";
-import { recommendFormats, type Recommendation } from "@/lib/format-recommend";
-import { LegalNotice } from "@/components/legal-notice";
-import { useLocale, useT } from "@/components/i18n/dict-provider";
-import { TurnstileWidget, useTurnstile } from "@/components/turnstile-widget";
+// /start, the organiser's setup (start-wizard redesign, plan 2026-11-13 Task 4; owner-approved Option B of mock swr13a01):
+// four questions — Sport, Size and format, Date, Email — then Sent, in the house night look of /play. One DOM: phones read
+// a progress bar and "Step n of 4"; from `md` the answers pile up in a rail on the left. Every rule (what Next allows, which
+// card is selected, the body posted) is start-wizard-model.ts's; this file renders it and dispatches to it.
+//
+// The format cards are T1's one layer (`rankFormats` at the sport's match length, at the field the claim will build), so a
+// card's numbers are the event the emailed link builds. Its "≈" hours are the shortest day the schedule can reach.
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { Check, ChevronDown, Mail, Minus, Plus } from "lucide-react";
+import { api, ApiError } from "@/lib/client";
+import { FUNNEL_MORE_FORMATS, funnelFormatMin, type FunnelFormat } from "@/lib/funnel-formats";
+import { bestFitSlug, type RankedFormat } from "@/lib/format-recommend";
+import { routes } from "@/lib/routes";
 import { isTurnstileRefusal } from "@/lib/turnstile";
 import { withTurnstile } from "@/lib/turnstile-client";
+import { LegalNotice } from "@/components/legal-notice";
+import { useLocale, usePlural, useT } from "@/components/i18n/dict-provider";
+import { TurnstileWidget, useTurnstile } from "@/components/turnstile-widget";
+import type { StartPrefill } from "@/app/[lang]/(marketing)/start/prefill";
+import { FUNNEL_SPORTS } from "@/lib/funnel-sports";
+import {
+  FORMAT_NAME_KEY,
+  FORMAT_TAGLINE_KEY,
+  WIZARD_BOUNDS,
+  WIZARD_STEPS,
+  buildFunnelBody,
+  canAdvance,
+  initialWizardState,
+  nextEventDays,
+  parseCount,
+  plausibleEmail,
+  sportLabelKey,
+  wizardCards,
+  wizardField,
+  wizardReducer,
+  type WizardContext,
+  type WizardState,
+} from "./start-wizard-model";
 
-/** The wizard's sports. Canonical names: they are the `sport` query value (`/start?sport=Football`, The Draw's "Make it
- *  real") and what /api/funnel/start stores. Moved here from the home hero's funnel form, which the quick match start
- *  replaced (owner 2026-11-13); the wizard is the list's one reader now. */
-const FUNNEL_SPORTS = [
-  "Badminton",
-  "Table Tennis",
-  "Tennis",
-  "Chess",
-  "Carrom",
-  "Football",
-  "Cricket",
-  "Volleyball",
-  "Other",
-] as const;
-
-interface Initial {
-  sport?: string;
-  entrants?: number;
-  date?: string;
+export interface StartWizardProps {
+  /** The link's prefill (start/prefill.ts `parseStartPrefill`): never a raw query value. */
+  initial: StartPrefill;
+  /** The free plan's entrants per division (`funnelEntrantCap`), null = unlimited. */
+  maxEntrants: number | null;
+  /** The page's today (`wizardToday`): the earliest first day. */
+  today: string;
+  /** The sports /play offers a quick match of: the Sent screen's "score a quick match" shows for these only. */
+  playSports: readonly string[];
 }
 
-export function StartWizard({ initial }: { initial: Initial }) {
+// ---- house night tokens (as /play's setup form) --------------------------------------------------------------------
+const LABEL = "block text-xs font-semibold text-[#b7aede]";
+const HELP = "text-xs leading-relaxed text-[#8d7fc0]";
+const FOCUS =
+  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--mk-lime)]";
+const PEER_FOCUS =
+  "peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-[var(--mk-lime)]";
+const CHIP = `flex min-h-11 cursor-pointer items-center rounded-full border border-[#3b2a6e] bg-[rgb(36_22_80/0.7)] px-3.5 text-sm text-[#e8e2fb] transition hover:border-[#5b4a9e] peer-checked:border-[var(--mk-lime)] peer-checked:bg-[var(--mk-lime)] peer-checked:font-semibold peer-checked:text-[var(--mk-night)] ${PEER_FOCUS}`;
+const PRIMARY = `flex min-h-[52px] flex-1 items-center justify-center gap-2 rounded-xl bg-[var(--mk-lime)] px-5 text-base font-bold text-[var(--mk-night)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-40 ${FOCUS}`;
+const GHOST = `flex min-h-[52px] flex-none items-center justify-center rounded-xl border border-[#3b2a6e] px-5 text-sm font-semibold text-[var(--mk-cream)] transition hover:border-[#5b4a9e] ${FOCUS}`;
+const INPUT = `min-h-12 w-full min-w-0 rounded-[10px] border border-[#3b2a6e] bg-[#160c3a] px-3.5 text-[var(--mk-cream)] placeholder:text-[#7d71ad] ${FOCUS}`;
+const TICKET = "rounded-2xl border border-[#3b2a6e] bg-[rgb(36_22_80/0.55)] px-4 py-3 text-left";
+
+const MORE: ReadonlySet<FunnelFormat> = new Set(FUNNEL_MORE_FORMATS);
+
+type Done = { claim_url?: string };
+
+export function StartWizard({ initial, maxEntrants, today, playSports }: StartWizardProps) {
   const t = useT();
+  const plural = usePlural();
   const locale = useLocale();
-  const [step, setStep] = useState(0);
-  const [sport, setSport] = useState(initial.sport ?? "Badminton");
-  const [name, setName] = useState("");
-  const [entrants, setEntrants] = useState(initial.entrants ?? 16);
-  const [courts, setCourts] = useState(2);
-  const [hours, setHours] = useState(4);
-  const [format, setFormat] = useState<string | null>(null);
-  const [email, setEmail] = useState("");
+  const turnstile = useTurnstile("start");
+  const ctx: WizardContext = useMemo(() => ({ maxEntrants, today }), [maxEntrants, today]);
+  const [s, dispatch] = useReducer(
+    (state: WizardState, action: Parameters<typeof wizardReducer>[1]) => wizardReducer(state, action, ctx),
+    initial,
+    (p) => initialWizardState(p, ctx),
+  );
+  const [foldOpen, setFoldOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(initial.format !== null && MORE.has(initial.format));
+  const [picking, setPicking] = useState(() => s.date !== null && !nextEventDays(today).includes(s.date));
+  const [emailTouched, setEmailTouched] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [done, setDone] = useState<{ message: string; claim_url?: string } | null>(null);
-  const turnstile = useTurnstile("start");
+  const [done, setDone] = useState<Done | null>(null);
+  const heading = useRef<HTMLHeadingElement>(null);
+  const emailInput = useRef<HTMLInputElement>(null);
+  const firstStep = useRef(true);
 
-  const recs: Recommendation[] = useMemo(
-    () => recommendFormats({ entrants, courts, hours }),
-    [entrants, courts, hours],
-  );
+  // A new step moves focus to its question, so a screen reader hears where it is; the first render keeps the page's own.
+  useEffect(() => {
+    if (firstStep.current) {
+      firstStep.current = false;
+      return;
+    }
+    heading.current?.focus();
+  }, [s.step]);
 
-  const compName = name.trim() || t("start.wizard.compNameDefault", { sport });
+  const cards = wizardCards(s, ctx);
+  const field = wizardField(s.entrants, maxEntrants);
+  const capped = field < s.entrants;
+  const selected: RankedFormat | undefined = cards.find((c) => c.slug === s.format && c.available);
+  // The badge is T1's Best fit of the cards on screen, not the state's selection (which may be the organiser's own pick).
+  const bestFit = bestFitSlug(cards);
+  const sportName = t(sportLabelKey(s.sportKey));
+  const isOther = FUNNEL_SPORTS.find((x) => x.key === s.sportKey)?.module === "generic";
+  const defaultName = isOther ? t("start.wizard.compNameDefaultOther") : t("start.wizard.compNameDefault", { sport: sportName });
+  const eventName = s.name.trim() || defaultName;
+  const hours = (h: number) => t("start.wizard.estHours", { hours: new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }).format(h) });
+  const formatLine = (c: RankedFormat) => `${t(FORMAT_NAME_KEY[c.slug])} · ${plural("start.wizard.matchesCount", c.matches)}`;
+  const dayLabel = (iso: string, withYear = false) =>
+    new Intl.DateTimeFormat(locale, { weekday: "short", day: "numeric", month: "short", ...(withYear ? { year: "numeric" } : {}), timeZone: "UTC" }).format(
+      new Date(`${iso}T00:00:00Z`),
+    );
+  const players = (n: number) => plural("start.wizard.playersCount", n);
+  const playersValue = capped ? t("start.wizard.playersCapped", { field, entrants: s.entrants }) : String(s.entrants);
+  const emailState = plausibleEmail(s.email);
+  const showEmailError = emailTouched && emailState !== "ok";
 
-  async function submit(e: React.FormEvent) {
+  async function send(e: React.FormEvent) {
     e.preventDefault();
+    setEmailTouched(true);
+    if (plausibleEmail(s.email) !== "ok") {
+      emailInput.current?.focus();
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
       const res = await withTurnstile(turnstile, (headers) =>
-        api<{ message: string; claim_url?: string }>("/api/funnel/start", {
-          method: "POST",
-          json: {
-            email,
-            // The claim email is written in the language this page was shown in.
-            locale,
-            name: compName,
-            sport,
-            entrants,
-            ...(initial.date ? { start_date: initial.date } : {}),
-            ...(format ? { format } : {}),
-          },
-          headers,
-        }),
+        api<Done>("/api/funnel/start", { method: "POST", json: buildFunnelBody(s, locale, defaultName), headers }),
       );
-      setDone(res);
+      setDone(res ?? {});
+      dispatch({ type: "sent" });
     } catch (err) {
-      setError(isTurnstileRefusal(err) ? t("turnstile.error") : err instanceof Error ? err.message : t("start.wizard.genericError"));
+      setError(
+        isTurnstileRefusal(err)
+          ? t("turnstile.error")
+          : err instanceof ApiError && err.status === 429
+            ? t("start.wizard.tooMany")
+            : t("start.wizard.genericError"),
+      );
     } finally {
       setBusy(false);
     }
   }
 
-  if (done) {
+  const next = (e: React.FormEvent) => {
+    e.preventDefault();
+    dispatch({ type: "next" });
+  };
+  const back = () => dispatch({ type: "back" });
+
+  // ---- Sent (mock A4) --------------------------------------------------------------------------------------------
+  if (s.step === "sent") {
+    const [before, after] = t("start.wizard.sentTo").split("{email}");
+    const [wrongBefore, wrongAfter] = t("start.wizard.wrongAddress").split("{link}");
+    const [waitBefore, waitAfter] = t("start.wizard.whileYouWait").split("{link}");
     return (
-      <div className="card p-8 text-center" data-funnel-done>
-        <div className="mb-3 text-4xl">📬</div>
-        <h2 className="text-xl font-bold text-slate-900">{t("start.wizard.checkEmail")}</h2>
-        <p className="mt-2 text-sm text-slate-600">{done.message}</p>
-        <p className="mt-2 text-xs text-slate-400">
-          {t("start.wizard.claimNote", { name: compName })}
+      <div data-start-wizard data-step="sent" className="mx-auto w-full max-w-xl px-4 text-center">
+        <h1 className="sr-only">{t("start.heading")}</h1>
+        <div data-funnel-done role="status">
+          <div aria-hidden className="mx-auto grid h-16 w-16 place-items-center rounded-[18px] bg-[rgb(163_230_53/0.14)] text-[var(--mk-lime)]">
+            <Mail className="h-8 w-8" strokeWidth={1.8} />
+          </div>
+          <h2 ref={heading} tabIndex={-1} className="mk-display mt-4 text-4xl font-bold leading-none outline-none">
+            {t("start.wizard.checkEmail")}
+          </h2>
+          <p className="mx-auto mt-3 max-w-md break-words text-[15px] text-[#b7aede]">
+            {before}
+            <b className="font-semibold text-[var(--mk-cream)]">{s.email.trim()}</b>
+            {after}
+          </p>
+        </div>
+        <div className={`${TICKET} mt-6`}>
+          <p className="mk-display break-words text-xl font-bold">{eventName}</p>
+          <Summary
+            rows={[
+              [t("start.wizard.sport"), sportName],
+              [t("start.wizard.summary.players"), playersValue],
+              [t("start.wizard.format"), selected ? formatLine(selected) : "—"],
+              [t("start.wizard.firstDay"), s.date ? dayLabel(s.date, true) : t("start.wizard.notSure")],
+            ]}
+          />
+        </div>
+        <p className="mt-4 text-sm text-[#b7aede]">
+          {wrongBefore}
+          <button
+            type="button"
+            onClick={() => {
+              setError(null);
+              dispatch({ type: "changeEmail" });
+            }}
+            className={`inline-flex min-h-11 items-center font-semibold text-[var(--mk-lime)] underline underline-offset-4 ${FOCUS}`}
+          >
+            {t("start.wizard.changeIt")}
+          </button>
+          {wrongAfter}
         </p>
-        {done.claim_url && (
+        {playSports.includes(s.sportKey) ? (
+          <p className="mt-2 text-sm text-[#b7aede]">
+            {waitBefore}
+            <a
+              href={`${routes.quickMatchSetup(locale)}?sport=${encodeURIComponent(s.sportKey)}`}
+              data-testid="start-play-link"
+              className={`inline-flex min-h-11 items-center font-semibold text-[var(--mk-lime)] underline underline-offset-4 ${FOCUS}`}
+            >
+              {t("start.wizard.quickMatchLink")}
+            </a>
+            {waitAfter}
+          </p>
+        ) : null}
+        {done?.claim_url ? (
           <a
             href={done.claim_url}
             data-claim-url={done.claim_url}
-            className="ph-no-capture mt-4 inline-block text-xs text-purple-500 underline"
+            className="ph-no-capture mt-4 inline-flex min-h-11 items-center text-xs text-[#8d7fc0] underline"
           >
             {t("start.wizard.openDev")}
           </a>
-        )}
+        ) : null}
       </div>
     );
   }
 
+  // ---- the four questions ----------------------------------------------------------------------------------------
+  const stepIndex = WIZARD_STEPS.indexOf(s.step);
+  const stepLabel = (k: (typeof WIZARD_STEPS)[number]) => t(`start.wizard.steps.${k}`);
+  const answers: Record<(typeof WIZARD_STEPS)[number], string> = {
+    sport: sportName,
+    size: selected ? `${players(field)} · ${t(FORMAT_NAME_KEY[selected.slug])}` : players(field),
+    date: s.date ? dayLabel(s.date) : t("start.wizard.notSure"),
+    email: "",
+  };
+  const question = t(`start.wizard.q.${s.step}`);
+  const help = s.step === "sport" ? t("start.wizard.help.sport") : s.step === "date" ? t("start.wizard.help.date") : null;
+  const navRow = (primary: React.ReactNode) => (
+    <div className="mt-7 flex gap-2">
+      {s.step !== "sport" ? (
+        <button type="button" onClick={back} className={GHOST}>
+          ← {t("start.wizard.back")}
+        </button>
+      ) : null}
+      {primary}
+    </div>
+  );
+  const nextButton = (
+    <button type="submit" disabled={!canAdvance(s, ctx)} className={PRIMARY}>
+      {t("start.wizard.next")} →
+    </button>
+  );
+
   return (
-    <div data-start-wizard>
-      {/* Step rail */}
-      <ol className="mb-6 flex items-center justify-center gap-2 text-xs font-semibold uppercase tracking-wider">
-        {[t("start.wizard.steps.name"), t("start.wizard.steps.format"), t("start.wizard.steps.link")].map((label, i) => (
-          <li key={label} className="flex items-center gap-2">
-            {i > 0 && <span className="text-purple-200">—</span>}
-            <span className={i <= step ? "text-purple-600" : "text-slate-300"}>
-              {i + 1}. {label}
-            </span>
-          </li>
-        ))}
-      </ol>
+    <div
+      data-start-wizard
+      data-step={s.step}
+      className="mx-auto w-full max-w-xl px-4 md:grid md:max-w-5xl md:grid-cols-[15rem_minmax(0,1fr)] md:gap-x-10 md:px-6 lg:grid-cols-[18rem_minmax(0,1fr)]"
+    >
+      <h1 className="mk-display text-xs font-bold tracking-[0.22em] text-[var(--mk-lime)] md:col-start-1 md:row-start-1">
+        {t("start.heading")}
+      </h1>
 
-      {step === 0 && (
-        <form
-          className="card space-y-4 p-6"
-          onSubmit={(e) => {
-            e.preventDefault();
-            setStep(1);
-          }}
-        >
-          <label className="block">
-            <span className="label mb-1 block">{t("start.wizard.sport")}</span>
-            <select value={sport} onChange={(e) => setSport(e.target.value)} className="input w-full">
-              {FUNNEL_SPORTS.map((s) => (
-                <option key={s}>{s}</option>
-              ))}
-            </select>
-          </label>
-          <label className="block">
-            <span className="label mb-1 block">{t("start.wizard.compName")}</span>
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder={t("start.wizard.compNameDefault", { sport })}
-              className="input w-full"
-              maxLength={200}
-            />
-          </label>
-          <label className="block">
-            <span className="label mb-1 block">{t("start.wizard.entrants")}</span>
-            <input
-              type="number"
-              min={2}
-              max={256}
-              value={entrants}
-              onChange={(e) => setEntrants(Math.max(2, Number(e.target.value) || 2))}
-              className="input w-full"
-            />
-          </label>
-          <button type="submit" className="btn btn-primary w-full justify-center py-2.5">
-            {t("start.wizard.recommend")} →
-          </button>
-        </form>
-      )}
-
-      {step === 1 && (
-        <div className="card space-y-4 p-6">
-          <div className="grid grid-cols-2 gap-3">
-            <label className="block">
-              <span className="label mb-1 block">{t("start.wizard.courts")}</span>
-              <input
-                type="number"
-                min={1}
-                max={32}
-                value={courts}
-                onChange={(e) => setCourts(Math.max(1, Number(e.target.value) || 1))}
-                className="input w-full"
-              />
-            </label>
-            <label className="block">
-              <span className="label mb-1 block">{t("start.wizard.hours")}</span>
-              <input
-                type="number"
-                min={1}
-                max={72}
-                value={hours}
-                onChange={(e) => setHours(Math.max(1, Number(e.target.value) || 1))}
-                className="input w-full"
-              />
-            </label>
-          </div>
-
-          <div className="space-y-2" role="radiogroup" aria-label={t("start.wizard.formatsLabel")}>
-            {recs.map((r, i) => (
-              <button
-                key={r.slug}
-                type="button"
-                role="radio"
-                aria-checked={format === r.slug || (format === null && i === 0)}
-                onClick={() => setFormat(r.slug)}
-                className={`w-full rounded-xl border p-4 text-left transition ${
-                  format === r.slug || (format === null && i === 0)
-                    ? "border-purple-400 bg-purple-50"
-                    : "border-slate-200 hover:border-purple-200"
-                }`}
+      {/* The answers rail (desktop): the event taking shape, one row per question. */}
+      <aside aria-label={t("start.wizard.answers")} className="hidden md:col-start-1 md:row-start-2 md:block">
+        <p className="mk-display mt-2 break-words text-3xl font-bold leading-tight">{eventName}</p>
+        <ol className="mt-5">
+          {WIZARD_STEPS.map((k, i) => {
+            const state = i < stepIndex ? "done" : i === stepIndex ? "current" : "todo";
+            return (
+              <li
+                key={k}
+                data-rail-step={k}
+                aria-current={state === "current" ? "step" : undefined}
+                className="flex items-start gap-2.5 border-b border-[#2a1d5a] py-2.5 text-[13.5px] text-[#8d7fc0]"
               >
-                <p className="flex items-center justify-between font-semibold text-slate-800">
-                  {r.title}
-                  {i === 0 && (
-                    <span className="rounded-full bg-purple-100 px-2 py-0.5 text-[10px] font-bold uppercase text-purple-600">
-                      {t("start.wizard.bestFit")}
-                    </span>
-                  )}
-                </p>
-                <p className="mt-1 text-sm text-slate-500">{r.reason}</p>
-              </button>
-            ))}
-          </div>
+                <span
+                  aria-hidden
+                  className={`grid h-[22px] w-[22px] flex-none place-items-center rounded-full border text-[11px] ${
+                    state === "done"
+                      ? "border-[var(--mk-lime)] bg-[var(--mk-lime)] text-[var(--mk-night)]"
+                      : state === "current"
+                        ? "border-[var(--mk-lime)] text-[var(--mk-lime)]"
+                        : "border-[#3b2a6e] text-[#b7aede]"
+                  }`}
+                >
+                  {state === "done" ? <Check className="h-3 w-3" strokeWidth={3} /> : i + 1}
+                </span>
+                <span className="min-w-0 break-words">
+                  <b className="block font-semibold text-[var(--mk-cream)]">{stepLabel(k)}</b>
+                  {state === "done" ? answers[k] : null}
+                </span>
+              </li>
+            );
+          })}
+        </ol>
+      </aside>
 
-          <div className="flex gap-2">
-            <button type="button" onClick={() => setStep(0)} className="btn btn-ghost flex-none">
-              ← {t("start.wizard.back")}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                if (!format && recs[0]) setFormat(recs[0].slug);
-                setStep(2);
-              }}
-              className="btn btn-primary flex-1 justify-center"
-            >
-              {t("start.wizard.looksRight")} →
-            </button>
-          </div>
+      <section
+        aria-labelledby="start-q"
+        className="mt-2 min-w-0 md:col-start-2 md:row-span-2 md:row-start-1 md:mt-0 md:rounded-[20px] md:border md:border-[#3b2a6e] md:bg-[rgb(29_17_69/0.85)] md:p-6"
+      >
+        <div aria-hidden className="flex gap-1.5">
+          {WIZARD_STEPS.map((k, i) => (
+            <i key={k} className={`h-1 flex-1 rounded-full ${i <= stepIndex ? "bg-[var(--mk-lime)]" : "bg-[#3b2a6e]"}`} />
+          ))}
         </div>
-      )}
+        <p className="mt-2 text-xs text-[#b7aede]">
+          {t("start.wizard.stepOf", { n: stepIndex + 1, total: WIZARD_STEPS.length, label: stepLabel(WIZARD_STEPS[stepIndex]!) })}
+        </p>
+        <h2 id="start-q" ref={heading} tabIndex={-1} className="mk-display mt-1.5 text-[1.875rem] font-bold leading-[1.05] outline-none">
+          {question}
+        </h2>
+        {help ? <p className={`mt-1.5 ${HELP}`}>{help}</p> : null}
 
-      {step === 2 && (
-        <form className="card space-y-4 p-6" onSubmit={submit}>
-          <div className="rounded-xl bg-purple-50 p-4 text-sm text-purple-900">
-            <p className="font-semibold">“{compName}”</p>
-            <p className="mt-1 text-purple-700">
-              {sport} · {t("start.wizard.entrantsSuffix", { entrants })} ·{" "}
-              {recs.find((r) => r.slug === format)?.title ?? recs[0]?.title}
-            </p>
-          </div>
-          <label className="block">
-            <span className="label mb-1 block">{t("start.wizard.email")}</span>
-            <input
-              type="email"
-              required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@club.org"
-              className="input w-full"
-              maxLength={120}
+        {s.step === "sport" ? (
+          // A real GET form: before the script runs, Next still carries the chosen sport into the URL (the page prefills it).
+          <form method="get" action={`/${locale}/start`} onSubmit={next} className="mt-5">
+            <fieldset>
+              <legend className="sr-only">{t("start.wizard.sport")}</legend>
+              <div className="flex flex-wrap gap-1.5">
+                {FUNNEL_SPORTS.map((sport) => (
+                  <label key={sport.key}>
+                    <input
+                      type="radio"
+                      name="sport"
+                      value={sport.key}
+                      checked={s.sportKey === sport.key}
+                      onChange={() => dispatch({ type: "sport", key: sport.key })}
+                      className="peer sr-only"
+                    />
+                    <span className={CHIP}>{t(sportLabelKey(sport.key))}</span>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+            <label className="mt-6 block">
+              <span className={`${LABEL} mb-1.5`}>
+                {t("start.wizard.compName")} <span className="font-normal text-[#8d7fc0]">({t("start.wizard.optional")})</span>
+              </span>
+              <input
+                value={s.name}
+                onChange={(e) => dispatch({ type: "name", value: e.target.value })}
+                placeholder={defaultName}
+                maxLength={200}
+                autoComplete="off"
+                className={INPUT}
+              />
+            </label>
+            {navRow(nextButton)}
+          </form>
+        ) : null}
+
+        {s.step === "size" ? (
+          <form onSubmit={next} className="mt-5">
+            <span id="start-entrants" className={`${LABEL} mb-1.5`}>
+              {t("start.wizard.entrants")}
+            </span>
+            <CountStepper
+              labelId="start-entrants"
+              label={t("start.wizard.entrants")}
+              value={s.entrants}
+              bounds={WIZARD_BOUNDS.entrants}
+              onValue={(value) => dispatch({ type: "entrants", value })}
+              size="large"
+              describedBy={capped ? "start-cap-hint" : undefined}
             />
-          </label>
-          <p className="text-xs text-slate-400">{t("start.wizard.emailNote")}</p>
-          <LegalNotice className="text-left" />
-          {error && <p className="text-sm text-red-600">{error}</p>}
-          <TurnstileWidget controller={turnstile} />
-          <div className="flex gap-2">
-            <button type="button" onClick={() => setStep(1)} className="btn btn-ghost flex-none">
-              ← {t("start.wizard.back")}
-            </button>
-            <button type="submit" disabled={busy} className="btn btn-primary flex-1 justify-center">
-              {busy ? t("start.wizard.sending") : `${t("start.wizard.emailMe")} →`}
-            </button>
-          </div>
-        </form>
-      )}
+            {capped ? (
+              <p id="start-cap-hint" className="mt-2 text-xs leading-relaxed text-[#fdba74]">
+                {t("start.wizard.capHint", { cap: field })}
+              </p>
+            ) : null}
+
+            <div className="mt-4 rounded-xl border border-[#3b2a6e] bg-[rgb(36_22_80/0.45)]">
+              <button
+                type="button"
+                aria-expanded={foldOpen}
+                aria-controls="start-planning"
+                onClick={() => {
+                  setFoldOpen(!foldOpen);
+                  dispatch({ type: "planning" });
+                }}
+                className={`flex min-h-12 w-full min-w-0 flex-wrap items-center gap-x-2 rounded-xl px-3 text-left text-[13.5px] text-[#e8e2fb] ${FOCUS}`}
+              >
+                <ChevronDown aria-hidden className={`h-4 w-4 flex-none text-[var(--mk-lime)] transition ${foldOpen ? "" : "-rotate-90"}`} />
+                <span className="font-semibold">{t("start.wizard.planning")}</span>
+                <span className="ml-auto text-xs text-[#8d7fc0]">
+                  {plural("start.wizard.courtsCount", s.courts)} · {plural("start.wizard.hoursCount", s.hours)}
+                </span>
+              </button>
+              {foldOpen ? (
+                <div id="start-planning" className="border-t border-[#3b2a6e] p-3">
+                  <div className="grid grid-cols-1 gap-3 min-[400px]:grid-cols-2">
+                    <div className="min-w-0">
+                      <span id="start-courts" className={`${LABEL} mb-1`}>
+                        {t("start.wizard.courts")}
+                      </span>
+                      <CountStepper
+                        labelId="start-courts"
+                        label={t("start.wizard.courts")}
+                        value={s.courts}
+                        bounds={WIZARD_BOUNDS.courts}
+                        onValue={(value) => dispatch({ type: "courts", value })}
+                      />
+                    </div>
+                    <div className="min-w-0">
+                      <span id="start-hours" className={`${LABEL} mb-1`}>
+                        {t("start.wizard.hours")}
+                      </span>
+                      <CountStepper
+                        labelId="start-hours"
+                        label={t("start.wizard.hours")}
+                        value={s.hours}
+                        bounds={WIZARD_BOUNDS.hours}
+                        onValue={(value) => dispatch({ type: "hours", value })}
+                      />
+                    </div>
+                  </div>
+                  <p className={`mt-3 ${HELP}`}>{t("start.wizard.planningNote")}</p>
+                </div>
+              ) : null}
+            </div>
+
+            <fieldset className="mt-6 min-w-0">
+              <legend className="w-full">
+                <span className="flex w-full flex-wrap items-baseline justify-between gap-x-3 text-xs font-semibold text-[#b7aede]">
+                  <span>{t("start.wizard.format")}</span>
+                  <span className="font-normal text-[#8d7fc0]">
+                    {players(field)} · {plural("start.wizard.courtsCount", s.courts)} · {plural("start.wizard.hoursCount", s.hours)}
+                  </span>
+                </span>
+              </legend>
+              <div className="mt-2 grid grid-cols-1 gap-2 min-[360px]:grid-cols-2">
+                {cards
+                  .filter((c) => !MORE.has(c.slug) || moreOpen || s.format === c.slug)
+                  .map((c) => (
+                    <FormatCard
+                      key={c.slug}
+                      card={c}
+                      checked={s.format === c.slug && c.available}
+                      best={c.slug === bestFit}
+                      onPick={() => dispatch({ type: "format", slug: c.slug })}
+                      name={t(FORMAT_NAME_KEY[c.slug])}
+                      tagline={t(FORMAT_TAGLINE_KEY[c.slug])}
+                      stats={`${plural("start.wizard.matchesCount", c.matches)} · ${hours(c.estHours)}`}
+                      tag={
+                        !c.available
+                          ? t("start.wizard.needsAtLeast", { min: funnelFormatMin(c.slug) })
+                          : c.fits
+                            ? t("start.wizard.fits")
+                            : t("start.wizard.runsOver")
+                      }
+                      bestLabel={t("start.wizard.bestFit")}
+                    />
+                  ))}
+              </div>
+              {!moreOpen && !(s.format !== null && MORE.has(s.format)) ? (
+                <button
+                  type="button"
+                  onClick={() => setMoreOpen(true)}
+                  className={`mt-2 inline-flex min-h-11 items-center text-[13px] text-[#b7aede] underline underline-offset-[3px] ${FOCUS}`}
+                >
+                  {t("start.wizard.moreFormats")}
+                </button>
+              ) : null}
+            </fieldset>
+            {navRow(nextButton)}
+          </form>
+        ) : null}
+
+        {s.step === "date" ? (
+          <form onSubmit={next} className="mt-5">
+            <fieldset>
+              <legend className={`${LABEL} mb-2`}>{t("start.wizard.firstDay")}</legend>
+              <div className="flex flex-wrap gap-1.5">
+                {nextEventDays(today).map((d) => (
+                  <label key={d}>
+                    <input
+                      type="radio"
+                      name="date"
+                      value={d}
+                      checked={!picking && s.date === d}
+                      onChange={() => {
+                        setPicking(false);
+                        dispatch({ type: "date", value: d });
+                      }}
+                      className="peer sr-only"
+                    />
+                    <span className={CHIP}>{dayLabel(d)}</span>
+                  </label>
+                ))}
+                <label>
+                  <input
+                    type="radio"
+                    name="date"
+                    value="pick"
+                    checked={picking}
+                    onChange={() => setPicking(true)}
+                    className="peer sr-only"
+                  />
+                  <span className={`${CHIP} border-dashed text-[#b7aede]`}>{t("start.wizard.pickDate")}</span>
+                </label>
+                <label>
+                  <input
+                    type="radio"
+                    name="date"
+                    value="none"
+                    checked={!picking && s.date === null}
+                    onChange={() => {
+                      setPicking(false);
+                      dispatch({ type: "date", value: null });
+                    }}
+                    className="peer sr-only"
+                  />
+                  <span className={CHIP}>{t("start.wizard.notSure")}</span>
+                </label>
+              </div>
+            </fieldset>
+            {picking ? (
+              <label className="mt-5 block">
+                <span className={`${LABEL} mb-1.5`}>{t("start.wizard.steps.date")}</span>
+                <input
+                  type="date"
+                  min={today}
+                  value={s.date ?? ""}
+                  onChange={(e) => dispatch({ type: "date", value: e.target.value === "" ? null : e.target.value })}
+                  className={`${INPUT} [color-scheme:dark]`}
+                />
+              </label>
+            ) : null}
+            {navRow(nextButton)}
+          </form>
+        ) : null}
+
+        {s.step === "email" ? (
+          <form onSubmit={send} noValidate className="mt-4">
+            <div className={TICKET}>
+              <Summary
+                rows={[
+                  [t("start.wizard.sport"), sportName],
+                  [t("start.wizard.summary.players"), playersValue],
+                  [t("start.wizard.format"), selected ? `${formatLine(selected)} ${hours(selected.estHours)}` : "—"],
+                  [t("start.wizard.firstDay"), s.date ? dayLabel(s.date) : t("start.wizard.notSure")],
+                ]}
+              />
+            </div>
+            <label className="mt-5 block">
+              <span className={`${LABEL} mb-1.5`}>{t("start.wizard.email")}</span>
+              <input
+                ref={emailInput}
+                type="email"
+                inputMode="email"
+                autoComplete="email"
+                value={s.email}
+                onChange={(e) => dispatch({ type: "email", value: e.target.value })}
+                onBlur={() => setEmailTouched(s.email.trim() !== "")}
+                placeholder={t("start.wizard.emailPlaceholder")}
+                maxLength={120}
+                aria-invalid={showEmailError}
+                aria-describedby={showEmailError ? "start-email-error" : "start-email-note"}
+                className={`${INPUT} ${showEmailError ? "border-[#f87171] shadow-[0_0_0_3px_rgb(248_113_113/0.15)]" : ""}`}
+              />
+            </label>
+            {showEmailError ? (
+              <p id="start-email-error" className="mt-1.5 text-sm text-[#fca5a5]">
+                {emailState === "missingTld" ? t("start.wizard.emailMissingTld") : t("start.wizard.emailInvalid")}
+              </p>
+            ) : null}
+            <p id="start-email-note" className={`mt-2 ${HELP}`}>
+              {t("start.wizard.emailNote")}
+            </p>
+            <TurnstileWidget controller={turnstile} className="mt-3" />
+            <LegalNotice className="mt-3 text-left" />
+            {error ? (
+              <p role="alert" className="mt-3 text-sm text-[#fca5a5]">
+                {error}
+              </p>
+            ) : null}
+            {navRow(
+              <button type="submit" disabled={busy} className={PRIMARY}>
+                {busy ? t("start.wizard.sending") : `${t("start.wizard.emailMe")} →`}
+              </button>,
+            )}
+          </form>
+        ) : null}
+      </section>
+    </div>
+  );
+}
+
+function Summary({ rows }: { rows: readonly (readonly [string, string])[] }) {
+  return (
+    <dl className="grid grid-cols-[5.5rem_minmax(0,1fr)] gap-x-2.5 gap-y-1 text-[13px]">
+      {rows.map(([k, v]) => (
+        <div key={k} className="contents">
+          <dt className="text-[#8d7fc0]">{k}</dt>
+          <dd className="break-words text-[var(--mk-cream)]">{v}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function FormatCard({
+  card,
+  checked,
+  best,
+  onPick,
+  name,
+  tagline,
+  stats,
+  tag,
+  bestLabel,
+}: {
+  card: RankedFormat;
+  checked: boolean;
+  best: boolean;
+  onPick: () => void;
+  name: string;
+  tagline: string;
+  stats: string;
+  tag: string;
+  bestLabel: string;
+}) {
+  const tagTone = !card.available
+    ? "bg-[rgb(183_174_222/0.12)] text-[#b7aede]"
+    : card.fits
+      ? "bg-[rgb(163_230_53/0.16)] text-[var(--mk-lime)]"
+      : "bg-[rgb(251_146_60/0.14)] text-[#fdba74]";
+  return (
+    <label className="flex min-w-0" data-format-card={card.slug}>
+      <input
+        type="radio"
+        name="format"
+        value={card.slug}
+        checked={checked}
+        disabled={!card.available}
+        onChange={onPick}
+        className="peer sr-only"
+      />
+      <span
+        className={`flex w-full min-w-0 cursor-pointer flex-col gap-1 rounded-2xl border border-[#3b2a6e] bg-[rgb(36_22_80/0.6)] p-3 transition hover:border-[#5b4a9e] peer-checked:border-[var(--mk-lime)] peer-checked:bg-[rgb(163_230_53/0.08)] peer-checked:shadow-[inset_0_0_0_1px_var(--mk-lime)] peer-disabled:cursor-not-allowed peer-disabled:opacity-60 ${PEER_FOCUS}`}
+      >
+        <span className="break-words text-sm font-semibold text-[var(--mk-cream)]">{name}</span>
+        <span className="flex flex-wrap gap-1">
+          {best ? (
+            <span data-best-fit className="rounded-full bg-[var(--mk-lime)] px-2 py-0.5 text-[11px] font-bold text-[var(--mk-night)]">
+              {bestLabel}
+            </span>
+          ) : null}
+          <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${tagTone}`}>{tag}</span>
+        </span>
+        {card.available ? <span className="text-[13px] text-[#b7aede]">{stats}</span> : null}
+        <span className="text-xs leading-snug text-[#8d7fc0]">{tagline}</span>
+      </span>
+    </label>
+  );
+}
+
+/** A count with − and +, and a box the organiser can type into (mock B2's stepper). The box keeps what is typed until it
+ *  is a count (`parseCount`): a cleared box or a lone low digit never reaches the wizard, and leaving the box shows the
+ *  count again. */
+export function CountStepper({
+  labelId,
+  label,
+  value,
+  bounds,
+  onValue,
+  size = "small",
+  describedBy,
+}: {
+  labelId: string;
+  label: string;
+  value: number;
+  bounds: { min: number; max: number };
+  onValue: (n: number) => void;
+  size?: "large" | "small";
+  describedBy?: string;
+}) {
+  const t = useT();
+  const [draft, setDraft] = useState<string | null>(null);
+  const set = (n: number) => {
+    setDraft(null);
+    onValue(n);
+  };
+  const large = size === "large";
+  const button = `grid flex-none place-items-center text-[var(--mk-lime)] transition disabled:opacity-30 ${large ? "h-[52px] w-[52px]" : "h-11 w-11"} ${FOCUS}`;
+  return (
+    <div className="flex min-w-0 items-stretch overflow-hidden rounded-xl border border-[#3b2a6e] bg-[#241650]">
+      <button
+        type="button"
+        aria-label={t("start.wizard.stepper.less", { label })}
+        disabled={value <= bounds.min}
+        onClick={() => set(Math.max(bounds.min, value - 1))}
+        className={button}
+      >
+        <Minus aria-hidden className={large ? "h-5 w-5" : "h-4 w-4"} />
+      </button>
+      <input
+        type="text"
+        inputMode="numeric"
+        pattern="[0-9]*"
+        aria-labelledby={labelId}
+        aria-describedby={describedBy}
+        value={draft ?? String(value)}
+        onChange={(e) => {
+          setDraft(e.target.value);
+          const n = parseCount(e.target.value, bounds);
+          if (n !== null) onValue(n);
+        }}
+        onBlur={() => setDraft(null)}
+        // Inline size: the global `input { font-size: 16px }` under 640px is unlayered and outranks a utility class.
+        style={large ? { fontSize: "1.625rem" } : undefined}
+        className={`mk-display w-full min-w-0 flex-1 border-x border-[#3b2a6e] bg-transparent text-center font-bold text-[var(--mk-cream)] outline-none focus-visible:bg-[rgb(163_230_53/0.08)] ${large ? "min-h-[52px]" : "min-h-11 text-base"}`}
+      />
+      <button
+        type="button"
+        aria-label={t("start.wizard.stepper.more", { label })}
+        disabled={value >= bounds.max}
+        onClick={() => set(Math.min(bounds.max, value + 1))}
+        className={button}
+      >
+        <Plus aria-hidden className={large ? "h-5 w-5" : "h-4 w-4"} />
+      </button>
     </div>
   );
 }
