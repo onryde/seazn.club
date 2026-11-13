@@ -12,6 +12,9 @@ export { PUBLIC_HUB_ROOT };
 
 type Slug = string;
 
+/** The registration hub's `?tab=` values (spec 2026-11-13 §9.1). */
+export type RegistrationHubTabParam = "settings" | "registrants" | `division:${string}`;
+
 /** Whether `pathname` is inside the public spectator tree: `/live/<anything>`. A bare `/live` is the marketing wall
  *  (option A), and `/livex…` is neither. */
 export function isPublicHubPath(pathname: string): boolean {
@@ -85,11 +88,25 @@ export const routes = {
    *  keeps its exact prior output. This is the division page's own link
    *  into the hub, filtered to itself — design §5's obligation RS004
    *  deliberately deferred ("the filter lands with the real Registrants
-   *  table"). */
-  competitionRegistration: (org: Slug, comp: Slug, tab?: string, divisionId?: string) => {
+   *  table").
+   *
+   *  B7 T22 (spec 2026-11-13 §9.1): `tab` is the hub's tab grammar, a
+   *  division settings tab included (`division:<uuid>`), and `open` is the
+   *  open division tabs, least recently used first, written as one comma
+   *  list (`open=<a>,<b>`; an empty list writes nothing). Both are read back
+   *  by `parseHubTabs` (components/registration-hub-tabs-state.ts), which owns
+   *  every rule about them. */
+  competitionRegistration: (
+    org: Slug,
+    comp: Slug,
+    tab?: RegistrationHubTabParam,
+    divisionId?: string,
+    open?: string[],
+  ) => {
     const params: string[] = [];
     if (tab) params.push(`tab=${tab}`);
     if (divisionId) params.push(`division_id=${divisionId}`);
+    if (open && open.length > 0) params.push(`open=${open.join(",")}`);
     const base = `/o/${org}/c/${comp}/registration`;
     return params.length ? `${base}?${params.join("&")}` : base;
   },
