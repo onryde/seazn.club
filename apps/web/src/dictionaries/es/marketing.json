@@ -36,7 +36,7 @@
   "start.wizard.format": "Formato",
   "start.wizard.matchesCount.one": "{count} partido",
   "start.wizard.matchesCount.other": "{count} partidos",
-  "start.wizard.estHours": "≈{hours} h",
+  "start.wizard.estHours": "≈{hours} h",
   "start.wizard.fits": "Cabe",
   "start.wizard.runsOver": "Se pasa",
   "start.wizard.bestFit": "Ideal",

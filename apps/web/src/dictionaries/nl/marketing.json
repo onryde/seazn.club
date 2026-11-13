@@ -36,7 +36,7 @@
   "start.wizard.format": "Speelvorm",
   "start.wizard.matchesCount.one": "{count} wedstrijd",
   "start.wizard.matchesCount.other": "{count} wedstrijden",
-  "start.wizard.estHours": "≈{hours} u",
+  "start.wizard.estHours": "≈{hours} u",
   "start.wizard.fits": "Past",
   "start.wizard.runsOver": "Loopt uit",
   "start.wizard.bestFit": "Beste keuze",

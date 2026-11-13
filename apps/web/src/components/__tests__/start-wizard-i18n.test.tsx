@@ -128,6 +128,13 @@ const card = (island: Island, slug: string) => {
   return found!;
 };
 const pick = (island: Island, slug: string) => (propsOf(card(island, slug)).onPick as () => void)();
+/** Every row of every summary ticket on screen (B4's, Sent's), as the island hands them to Summary. */
+const summaryRows = (island: Island) =>
+  all(island)
+    .filter((e) => typeof e.type === "function" && e.type.name === "Summary")
+    .flatMap((e) => propsOf(e).rows as (readonly [string, string])[]);
+/** A count sentence in the locale's plural category — the dictionary file's words, never the island's. */
+const countWord = (key: string, n: number) => w(`${key}.${new Intl.PluralRules(words.locale).select(n)}`, { count: n });
 const stepLine = (n: number, key: string) => w("start.wizard.stepOf", { n, total: 4, label: w(`start.wizard.steps.${key}`) });
 
 function mount(props: Partial<StartWizardProps> & { search?: Record<string, string> } = {}): Island {
@@ -237,6 +244,9 @@ describe("the wizard, B1 → Sent, in every locale", () => {
       // B4 — a bad address refused in place, worded, with no request.
       expect(step(island)).toBe("email");
       expect(island.text()).toContain(stepLine(4, "email"));
+      // Planning was opened, so the claim will build its courts: the summary says so, as the fold words it (review-whole m3).
+      const planningRow = [w("start.wizard.planning"), `${countWord("start.wizard.courtsCount", 3)} · ${countWord("start.wizard.hoursCount", 4)}`];
+      expect(summaryRows(island).filter(([k]) => k === w("start.wizard.planning")), `${locale}: B4 shows the courts`).toEqual([planningRow]);
       change(input(island, "email"), "sam@harbourvale");
       await submit(island);
       expect(net.calls, `${locale}: nothing sent for a bad address`).toHaveLength(0);
@@ -269,6 +279,7 @@ describe("the wizard, B1 → Sent, in every locale", () => {
       expect(island.text()).toContain(w("start.wizard.checkEmail"));
       expect(island.text()).toContain("sam@harbourvale.org");
       expect(island.text()).not.toContain("one click away");
+      expect(summaryRows(island).filter(([k]) => k === w("start.wizard.planning")), `${locale}: Sent shows the courts`).toEqual([planningRow]);
       const playLink = all(island).find((e) => propsOf(e)["data-testid"] === "start-play-link");
       expect(propsOf(playLink!).href).toBe(`/${locale}/play?sport=tabletennis`);
       expect(textOf(playLink!)).toBe(w("start.wizard.quickMatchLink"));
@@ -408,9 +419,15 @@ describe("the wizard's edges", () => {
   it("a sport /play does not offer gets no quick match link on Sent", async () => {
     const island = mount({ search: { sport: "cricket" } });
     await toEmail(island);
+    // Planning never opened: the claim builds no courts, so neither summary claims any (review-whole m3).
+    const labels = () => summaryRows(island).map(([k]) => k);
+    expect(labels(), "B4: the summary is there").toContain(w("start.wizard.sport"));
+    expect(labels(), "B4: no courts row").not.toContain(w("start.wizard.planning"));
     change(input(island, "email"), "sam@harbourvale.org");
     await submit(island);
     expect(step(island)).toBe("sent");
+    expect(labels(), "Sent: the summary is there").toContain(w("start.wizard.sport"));
+    expect(labels(), "Sent: no courts row").not.toContain(w("start.wizard.planning"));
     expect(all(island).some((e) => propsOf(e)["data-testid"] === "start-play-link")).toBe(false);
     expect(net.calls[0]!.json!.sport, "cricket posts its catalogue name").toBe("Cricket");
     expect(net.calls[0]!.json, "Planning never opened: no courts or hours").not.toHaveProperty("courts");
@@ -452,6 +469,30 @@ describe("the wizard's edges", () => {
       await submit(island);
       expect(all(island).filter((e) => propsOf(e)["data-claim-url"] !== undefined)).toHaveLength(want);
     }
+  });
+});
+
+describe("the estimate's unit never wraps alone (sign-off D2: a lone \"h\" at 320)", () => {
+  // A no-break space between the number and its unit, in every locale: "≈5.7 h" may wrap before the ≈, never inside it.
+  const NBSP = String.fromCharCode(0xa0);
+
+  it("every locale's estimate holds its unit to the number, and the cards on B2 carry it so", async () => {
+    let checked = 0;
+    for (const locale of LOCALES) {
+      words.locale = locale;
+      words.dict = pageDict(locale);
+      const raw = w("start.wizard.estHours");
+      expect(raw.includes(" "), `${locale}: no breaking space in ${JSON.stringify(raw)}`).toBe(false);
+      const [, unit] = raw.split(`{hours}${NBSP}`);
+      expect(unit, `${locale}: the number is followed by a no-break space and a unit`).toMatch(/^\S+$/);
+      const island = mount({ search: { entrants: "12" } });
+      await submit(island);
+      const stats = cardsOf(island).map((c) => propsOf(c).stats as string);
+      expect(stats.length, `${locale}: anti-vacuity, cards on screen`).toBeGreaterThan(0);
+      for (const line of stats) expect(line.endsWith(`${NBSP}${unit}`), `${locale}: ${JSON.stringify(line)}`).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(LOCALES.length);
   });
 });
 

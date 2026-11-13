@@ -134,6 +134,11 @@ export function StartWizard({ initial, maxEntrants, today, utcDay, playSports }:
     );
   const players = (n: number) => plural("start.wizard.playersCount", n);
   const playersValue = capped ? t("start.wizard.playersCapped", { field, entrants: s.entrants }) : String(s.entrants);
+  // Planning opened: the claim will build these courts (the body carries them, `buildFunnelBody`), so both summaries say so,
+  // worded as the fold's own header words them (review-whole m3). Never opened: no row, and no courts built.
+  const planningRow: readonly (readonly [string, string])[] = s.planningOpen
+    ? [[t("start.wizard.planning"), `${plural("start.wizard.courtsCount", s.courts)} · ${plural("start.wizard.hoursCount", s.hours)}`]]
+    : [];
   const emailState = plausibleEmail(s.email);
   const showEmailError = emailTouched && emailState !== "ok";
 
@@ -200,6 +205,7 @@ export function StartWizard({ initial, maxEntrants, today, utcDay, playSports }:
               [t("start.wizard.sport"), sportName],
               [t("start.wizard.summary.players"), playersValue],
               [t("start.wizard.format"), selected ? formatLine(selected) : "—"],
+              ...planningRow,
               [t("start.wizard.firstDay"), s.date ? dayLabel(s.date, true) : t("start.wizard.notSure")],
             ]}
           />
@@ -562,6 +568,7 @@ export function StartWizard({ initial, maxEntrants, today, utcDay, playSports }:
                   [t("start.wizard.sport"), sportName],
                   [t("start.wizard.summary.players"), playersValue],
                   [t("start.wizard.format"), selected ? `${formatLine(selected)} ${hours(selected.estHours)}` : "—"],
+                  ...planningRow,
                   [t("start.wizard.firstDay"), s.date ? dayLabel(s.date) : t("start.wizard.notSure")],
                 ]}
               />

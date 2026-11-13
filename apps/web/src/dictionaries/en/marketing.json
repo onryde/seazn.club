@@ -36,7 +36,7 @@
   "start.wizard.format": "Format",
   "start.wizard.matchesCount.one": "{count} match",
   "start.wizard.matchesCount.other": "{count} matches",
-  "start.wizard.estHours": "≈{hours} h",
+  "start.wizard.estHours": "≈{hours} h",
   "start.wizard.fits": "Fits",
   "start.wizard.runsOver": "Runs over",
   "start.wizard.bestFit": "Best fit",
