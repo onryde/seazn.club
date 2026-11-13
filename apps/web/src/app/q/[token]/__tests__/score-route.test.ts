@@ -603,10 +603,21 @@ describe.skipIf(!HAS_DB)("an unknown, changed or expired token lands on its own 
 
 // ── where the home offers Score ───────────────────────────────────────────────────────────────────────────────────────
 
-/** Every Score form on the page: its action, the fixture its row names (the hero's has none), and its button's words. A form
- *  that posts anywhere but a match's Score route (a league's "Add a match", Task 8) is not one. */
-function scoreForms(html: string): { action: string; place: string; row: string | null; label: string }[] {
-  const out: { action: string; place: string; row: string | null; label: string }[] = [];
+interface PageForm {
+  action: string;
+  /** The Score form's own `data-place` (hero, row); "" for a row menu's item (plan 4 Task 4), which carries none. */
+  place: string;
+  row: string | null;
+  /** The form's first `data-testid`: its submit button's (qm-score, the menu's qm-menu-score / qm-edit-result / qm-skip,
+   *  the sheet's qm-skip-confirm). */
+  testId: string;
+  label: string;
+}
+
+/** Every form on the page, in page order: its action, the fixture its row names (the hero's, Save's and Add a match's have
+ *  none), its button's test id and its words. */
+function pageForms(html: string): PageForm[] {
+  const out: PageForm[] = [];
   // A list row carries its fixture id; the form inside it is that row's.
   const rowAt = (i: number) => {
     const before = html.slice(0, i);
@@ -616,19 +627,25 @@ function scoreForms(html: string): { action: string; place: string; row: string 
   };
   for (const m of html.matchAll(/<form([^>]*)>([\s\S]*?)<\/form>/g)) {
     const attrs = m[1]!;
-    if (!/\baction="[^"]*\/score\/[^"]*"/.test(attrs)) continue;
     out.push({
       action: /\baction="([^"]+)"/.exec(attrs)?.[1] ?? "",
       place: /\bdata-place="([^"]+)"/.exec(attrs)?.[1] ?? "",
       row: rowAt(m.index!),
+      testId: /\bdata-testid="([^"]+)"/.exec(m[2]!)?.[1] ?? "",
       label: m[2]!.replace(/<[^>]+>/g, "").trim(),
     });
   }
   return out;
 }
 
+/** Every Score form on the page (a form posting a match's Score route): the hero's, a playable row's, and a row menu's Score
+ *  or Edit result (plan 4 Task 4; owner 2026-11-13: one ⋯ menu per row). A form that posts anywhere else is not one. */
+function scoreForms(html: string): PageForm[] {
+  return pageForms(html).filter((f) => /\/score\/[^/]+$/.test(f.action));
+}
+
 describe.skipIf(!HAS_DB)("the home offers Score on a playable match only, each form posting to that match (C11, C18)", () => {
-  it("a fresh league of 4: 'Score this match' on match 1's hero, 'Score' on each of the 6 rows, every form a credential painter", async () => {
+  it("a fresh league of 4: 'Score this match' on match 1's hero, 'Score' on each of the 6 rows and in each row's menu, every form a credential painter", async () => {
     const out = await create();
     const fixtures = await fixturesOf(out.competitionId);
     const html = await homeAt(`/q/${out.token}`);
@@ -645,22 +662,41 @@ describe.skipIf(!HAS_DB)("the home offers Score on a playable match only, each f
       checked++;
     }
     expect(checked).toBe(fixtures.length);
+    // Each row's forms, in order (plan 4 Task 4: one ⋯ menu per row): its Score, then its menu's Score and "Not played", then
+    // the confirm sheet's "Mark not played". Score posts the match's Score route, the other two its skip.
+    let rowsChecked = 0;
+    for (const f of fixtures) {
+      expect(
+        pageForms(html)
+          .filter((x) => x.row === f.id)
+          .map((x) => [x.testId, x.action]),
+        f.id,
+      ).toEqual([
+        ["qm-score", `/q/${out.token}/score/${f.id}`],
+        ["qm-menu-score", `/q/${out.token}/score/${f.id}`],
+        ["qm-skip", `/q/${out.token}/skip/${f.id}`],
+        ["qm-skip-confirm", `/q/${out.token}/skip/${f.id}`],
+      ]);
+      rowsChecked++;
+    }
+    expect(rowsChecked).toBe(6);
     // A real form post (works with no script), and blocked from session replay: its action carries the home token (O3).
-    // Every form on the page: the 7 Score forms, then the ones that post elsewhere, in page order: Save (plan 3 Task 5) in the
-    // actions row, and the league's one "Add a match" (Task 8) below the list.
+    // Every form on the page: the 13 Score forms (hero, 6 rows, 6 menus), the 12 skip forms (6 menus, 6 sheets), then the
+    // ones that post elsewhere, in page order: Save (plan 3 Task 5) in the actions row, and the league's one "Add a match"
+    // (Task 8) below the list.
     const tags = [...html.matchAll(/<form[^>]*>/g)].map((m) => m[0]);
-    expect(tags.filter((t) => /\baction="[^"]*\/score\//.test(t))).toHaveLength(7);
-    expect(tags.filter((t) => !/\baction="[^"]*\/score\//.test(t)).map((t) => /\baction="([^"]+)"/.exec(t)?.[1])).toEqual([
-      `/q/${out.token}/save/confirm`,
-      `/q/${out.token}/add-match`,
-    ]);
+    expect(tags.filter((t) => /\baction="[^"]*\/score\//.test(t))).toHaveLength(13);
+    expect(tags.filter((t) => /\baction="[^"]*\/skip\//.test(t))).toHaveLength(12);
+    expect(
+      tags.filter((t) => !/\baction="[^"]*\/(score|skip)\//.test(t)).map((t) => /\baction="([^"]+)"/.exec(t)?.[1]),
+    ).toEqual([`/q/${out.token}/save/confirm`, `/q/${out.token}/add-match`]);
     for (const tag of tags) {
       expect(tag).toContain('method="post"');
       expect(tag).toMatch(/class="[^"]*\bph-no-capture\b/);
     }
   });
 
-  it("a decided match has no Score and the hero moves on, its row offers 'Edit result' on the same route; a live one reads 'Continue scoring' and keeps its row's", async () => {
+  it("a decided match has no Score and the hero moves on, its row's menu offers 'Edit result' on the same route; a live one reads 'Continue scoring' and keeps its row's", async () => {
     const out = await create();
     const [f0, f1] = await fixturesOf(out.competitionId);
     // Match 1 decided (played from its first event, `playToDecided`'s own premise).
@@ -672,9 +708,10 @@ describe.skipIf(!HAS_DB)("the home offers Score on a playable match only, each f
     );
     expect(await playToDecided(auth, f0!.id)).toMatchObject({ kind: "decided" });
     let forms = scoreForms(await homeAt(`/q/${out.token}`));
-    // Settled: no Score, and one secondary "Edit result" in its row, posting the same route (A-M6).
-    expect(forms.filter((f) => f.action.endsWith(`/${f0!.id}`)).map((f) => [f.place, f.row, f.label, f.action])).toEqual([
-      ["edit", f0!.id, en["quickMatch.home.editResult"], `/q/${out.token}/score/${f0!.id}`],
+    // Settled: no Score, and "Edit result" only in its row's ⋯ menu (owner 2026-11-13: no bordered button on a finished
+    // row), posting the same route (A-M6).
+    expect(forms.filter((f) => f.action.endsWith(`/${f0!.id}`)).map((f) => [f.testId, f.place, f.row, f.label, f.action])).toEqual([
+      ["qm-edit-result", "", f0!.id, en["quickMatch.home.editResult"], `/q/${out.token}/score/${f0!.id}`],
     ]);
     expect(forms.filter((f) => f.place === "hero").map((f) => [f.action, f.label])).toEqual([
       [`/q/${out.token}/score/${f1!.id}`, en["quickMatch.home.score"]],
@@ -686,7 +723,13 @@ describe.skipIf(!HAS_DB)("the home offers Score on a playable match only, each f
     expect(forms.filter((f) => f.place === "hero").map((f) => [f.action, f.label])).toEqual([
       [`/q/${out.token}/score/${f1!.id}`, en["quickMatch.home.continue"]],
     ]);
-    expect(forms.filter((f) => f.row === f1!.id).map((f) => f.label), "the live row keeps its Score").toEqual([en["quickMatch.home.scoreShort"]]);
+    expect(
+      forms.filter((f) => f.row === f1!.id).map((f) => [f.testId, f.label]),
+      "the live row keeps its Score, and its menu's",
+    ).toEqual([
+      ["qm-score", en["quickMatch.home.scoreShort"]],
+      ["qm-menu-score", en["quickMatch.home.scoreShort"]],
+    ]);
     expect(forms.filter((f) => f.place === "row")).toHaveLength(5);
   });
 
@@ -700,7 +743,7 @@ describe.skipIf(!HAS_DB)("the home offers Score on a playable match only, each f
     );
     const played = await playToDecided(auth, f0!.id);
     if (played.kind !== "decided") throw new Error(`precondition: match 1 decided, got ${JSON.stringify(played)}`);
-    const [edit] = scoreForms(await homeAt(`/q/${out.token}`)).filter((f) => f.place === "edit");
+    const [edit] = scoreForms(await homeAt(`/q/${out.token}`)).filter((f) => f.testId === "qm-edit-result");
     expect(edit?.row).toBe(f0!.id);
     // The form's own post: the same route a Score tap takes, a 303 into the pad for this match.
     const secret = await padSecret(await tap(out.token, edit!.action.split("/").at(-1)!));
@@ -739,7 +782,7 @@ describe.skipIf(!HAS_DB)("the home offers Score on a playable match only, each f
       select type from score_events where fixture_id = ${f0!.id} and type not like 'core.%' order by seq`;
     expect(live, "the decided shape this case exists for: one scoring event decided it").toHaveLength(1);
     let forms = scoreForms(await homeAt(`/q/${out.token}`));
-    expect(forms.map((f) => [f.place, f.row, f.label])).toEqual([["edit", f0!.id, en["quickMatch.home.editResult"]]]);
+    expect(forms.map((f) => [f.testId, f.row, f.label])).toEqual([["qm-edit-result", f0!.id, en["quickMatch.home.editResult"]]]);
     const secret = await padSecret(await tap(out.token, forms[0]!.action.split("/").at(-1)!));
     expect(await resolveDeviceLinkToken(secret)).toMatchObject({ fixture_id: f0!.id });
     const res = await postEvent(
@@ -754,8 +797,11 @@ describe.skipIf(!HAS_DB)("the home offers Score on a playable match only, each f
     const [after] = await sql<{ status: string }[]>`select status from fixtures where id = ${f0!.id}`;
     expect(after!.status, "reopened").not.toBe("decided");
     forms = scoreForms(await homeAt(`/q/${out.token}`));
-    expect(forms.some((f) => f.place === "edit"), "nothing settled: no Edit result").toBe(false);
-    expect(forms.filter((f) => f.row === f0!.id).map((f) => f.place), "the reopened game is scored again from its row").toEqual(["row"]);
+    expect(forms.some((f) => f.testId === "qm-edit-result"), "nothing settled: no Edit result").toBe(false);
+    expect(
+      forms.filter((f) => f.row === f0!.id).map((f) => f.testId),
+      "the reopened game is scored again from its row, and from its menu",
+    ).toEqual(["qm-score", "qm-menu-score"]);
   });
 
   it("a knockout of 4: a decided semi-final whose winner is seated in the final offers no 'Edit result', and the pad refuses it; the decided final offers it (A-M6)", async () => {
@@ -801,7 +847,7 @@ describe.skipIf(!HAS_DB)("the home offers Score on a playable match only, each f
     await decide(final.id);
     expect(await movedOnAgrees(out.token), "the decided final feeds nothing: still two").toBe(2);
     forms = scoreForms(await homeAt(`/q/${out.token}`));
-    expect(forms.map((f) => [f.place, f.row, f.label])).toEqual([["edit", final.id, en["quickMatch.home.editResult"]]]);
+    expect(forms.map((f) => [f.testId, f.row, f.label])).toEqual([["qm-edit-result", final.id, en["quickMatch.home.editResult"]]]);
   });
 
   it("a knockout of 3: the semi-final in the hero and its row; the waiting final and the bye offer none", async () => {
@@ -828,8 +874,15 @@ describe.skipIf(!HAS_DB)("the seam: the home's Score form names this route, and 
     const out = await create();
     const html = await homeAt(`/q/${out.token}`);
     const actions = [...html.matchAll(/<form[^>]*\baction="([^"]+)"/g)].map((m) => m[1]!);
-    expect(actions.filter((a) => a.includes("/score/")).length, "a fresh league offers Score on the hero and on every match").toBe(1 + 6);
-    expect(actions.filter((a) => !a.includes("/score/")), "and Save (plan 3 Task 5) and Add a match (Task 8), posting elsewhere").toEqual([
+    expect(
+      actions.filter((a) => a.includes("/score/")).length,
+      "a fresh league offers Score on the hero, on every match, and in every match's ⋯ menu",
+    ).toBe(1 + 6 + 6);
+    expect(actions.filter((a) => a.includes("/skip/")).length, "and Not played in every menu, and its sheet's confirm").toBe(6 + 6);
+    expect(
+      actions.filter((a) => !a.includes("/score/") && !a.includes("/skip/")),
+      "and Save (plan 3 Task 5) and Add a match (Task 8), posting elsewhere",
+    ).toEqual([
       `/q/${out.token}/save/confirm`,
       `/q/${out.token}/add-match`,
     ]);

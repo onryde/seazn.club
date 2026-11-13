@@ -10,6 +10,7 @@ import { notFound } from "next/navigation";
 import { MarketingShell } from "@/components/marketing/marketing-shell";
 import { ClearFlashParam } from "@/components/quick-match/clear-flash-param";
 import { ContinueCard, splitRecent } from "@/components/quick-match/continue-card";
+import { playedLine } from "@/components/quick-match/played-line";
 import { QuickMatchSetupForm } from "@/components/quick-match/setup-form";
 import { RecentStrip } from "@/components/quick-match/recent-strip";
 import { getDictionary, plural, t } from "@/lib/i18n";
@@ -92,7 +93,8 @@ export default async function PlayPage({
             <ContinueCard
               item={resume}
               labels={{
-                played: plural(ui, "quickMatch.home.playedSaved", resume.total, lang, { played: resume.played }),
+                // The home's own words, without its countdown (plan 4: "· K not played" when some were not played).
+                played: playedLine((key, count, vars) => plural(ui, key, count, lang, vars), resume, null),
                 action: t(d, "quickMatch.continue.action"),
               }}
             />

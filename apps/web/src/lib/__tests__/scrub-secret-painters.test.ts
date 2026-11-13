@@ -520,23 +520,28 @@ const PAINTERS: Record<string, { verdict: true | string; handoff?: string | stri
     verdict: "writes the claim's `/claim/<token>` path into AuthForm's `next` prop inline and paints it nowhere itself",
     handoff: "components/auth-form.tsx",
   },
-  // The quick match home (plan 2 Tasks 6, 7, 8; plan 3 Task 5): builds `routes.quickMatchScore(token, fixture)` inline into
-  // the Score form's `action`, `routes.quickMatch(token)` into the Share island's `path`, `routes.quickMatchAddMatch(token)`
-  // into the "Add a match" form's `action`, and `routes.quickMatchSaveConfirm(token)` into the Save form's `action`.
+  // The quick match home (plan 2 Tasks 6, 7, 8; plan 3 Task 5; plan 4 Task 4): builds `routes.quickMatchScore(token, fixture)`
+  // inline into the Score form's `action`, `routes.quickMatch(token)` into the Share island's `path`,
+  // `routes.quickMatchAddMatch(token)` into the "Add a match" form's `action`, `routes.quickMatchSaveConfirm(token)` into the
+  // Save form's `action`, and each row menu's posts (Score and Edit result, Not played, Put back) into its `*Action` props.
   "app/q/[token]/page.tsx": {
     verdict:
-      "builds the home's own `/q/<token>` paths inline into its islands' props (the Score form's action, the Share island's path, the Add a match form's action, the Save form's action) and paints them nowhere itself",
+      "builds the home's own `/q/<token>` paths inline into its islands' props (the Score form's action, the Share island's path, the Add a match form's action, the Save form's action, the row menu's Score, Edit result, Not played and Put back actions) and paints them nowhere itself",
     handoff: [
       "components/quick-match/score-form.tsx",
       "components/quick-match/share.tsx",
       "components/quick-match/add-match.tsx",
       "components/quick-match/save-form.tsx",
+      "components/quick-match/row-menu.tsx",
     ],
   },
   // The home's Share (plan 2 Task 7): the home link in its read-only field, handed to the share sheet; the QR is `sensitive`.
   "components/quick-match/share.tsx": { verdict: true },
   // The home's "Add a match" (plan 2 Task 8): its form's action is `/q/<home token>/add-match`.
   "components/quick-match/add-match.tsx": { verdict: true },
+  // The home's row menu (plan 4 Task 4): each item's form posts `/q/<home token>/score|skip|put-back/<fixture>`, and the
+  // confirm sheet's form posts the skip.
+  "components/quick-match/row-menu.tsx": { verdict: true },
   // Save (plan 3 Task 5): the form's action is `/q/<home token>/save/confirm`, on the home and on the save page.
   "components/quick-match/save-form.tsx": { verdict: true },
   // The save page (plan 3 Task 5): its back link to the home, and the Save form's action (a component site, checked there).
@@ -564,6 +569,8 @@ const QUICK_MATCH_PAINTERS = [
   "app/q/[token]/save/page.tsx",
   // Plan 3 Task 6: the account's list of saved quick matches, each name a link to its home.
   "components/quick-match/my-list.tsx",
+  // Plan 4 Task 4: each row's ⋯ menu, its items' posts and the confirm sheet's.
+  "components/quick-match/row-menu.tsx",
 ];
 
 describe("every element that paints a scrubbed secret carries ph-no-capture, or its file says why not", () => {
@@ -682,6 +689,23 @@ describe("every element that paints a scrubbed secret carries ph-no-capture, or 
     ]);
     const form = painters.get("components/quick-match/add-match.tsx") ?? [];
     expect(form.filter((site) => site.how === "attribute action" && site.tag === "form").map((site) => site.blocked)).toEqual([true]);
+  });
+
+  it("the row menu (plan 4 Task 4): the page hands each row's four posts to QuickMatchRowMenu inline; every host <form> in the island carries the class", () => {
+    // The hops: each `*Action={... ? routes.quickMatchX(token, row.fixtureId) : undefined}`, written inline.
+    const props = ["scoreAction", "editAction", "skipAction", "putBackAction"];
+    for (const prop of props) {
+      expect(known.props, prop).toEqual(expect.arrayContaining([{ component: "QuickMatchRowMenu", prop, from: "app/q/[token]/page.tsx" }]));
+    }
+    const page = painters.get("app/q/[token]/page.tsx") ?? [];
+    const handed = page.filter((site) => site.tag === "QuickMatchRowMenu");
+    expect(handed.map((site) => [site.how, site.component]).sort()).toEqual(props.map((p) => [`attribute ${p}`, true]).sort());
+    // In the island: the menu items' one <form> (the `item` helper, whose `action` parameter each call binds) and the confirm
+    // sheet's <form>; each a host element, so its class is checked here. Anti-vacuity: both are found.
+    const menu = painters.get("components/quick-match/row-menu.tsx") ?? [];
+    const forms = menu.filter((site) => site.how === "attribute action" && site.tag === "form");
+    expect(forms.length, "the item form and the sheet form").toBe(2);
+    expect(forms.map((site) => site.blocked)).toEqual([true, true]);
   });
 
   it("Save (plan 3 Task 5): the home and the save page hand the action to QuickMatchSaveForm; its <form> and the page's back link carry the class", () => {

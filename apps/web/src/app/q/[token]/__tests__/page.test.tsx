@@ -29,6 +29,7 @@ import type { CreateQuickMatch } from "@/server/api-v1/schemas";
 import { systemAuth, type CreatedQuickMatch } from "@/server/usecases/quick-match-create";
 import { createQuickMatchAnyFormat } from "@/server/usecases/__tests__/_quick-match-knockout";
 import { hardDeleteQuickMatchCompetition } from "@/server/usecases/quick-match-delete";
+import { skipQuickMatchFixture } from "@/server/usecases/quick-match-skip";
 import {
   readQuickMatchHome,
   resolveQuickMatchToken,
@@ -44,7 +45,9 @@ import * as standingsModule from "@/components/quick-match/standings";
 import * as drawModule from "@/components/quick-match/draw";
 import * as listModule from "@/components/quick-match/match-list";
 import * as saveFormModule from "@/components/quick-match/save-form";
-import { QuickMatchHomeShapeError, QuickMatchHomeView, type AddMatchView, type QuickMatchCopy } from "@/components/quick-match/home";
+import { homeFlash, QuickMatchHomeShapeError, QuickMatchHomeView, type AddMatchView, type QuickMatchCopy } from "@/components/quick-match/home";
+import type { RowMenuRequest } from "@/components/quick-match/match-list";
+import { QuickMatchRowMenu } from "@/components/quick-match/row-menu";
 import { QuickMatchShare } from "@/components/quick-match/share";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import en from "@/dictionaries/en/ui.json";
@@ -54,7 +57,7 @@ import { builtinModules } from "@seazn/engine/sports";
 import type { StandingsRow } from "@seazn/engine/competition";
 import type { Dict } from "@/lib/i18n-constants";
 import { withTenant } from "@/lib/db";
-import { QUICK_MATCH_SYSTEM_ORG_ID } from "@/lib/quick-match-constants";
+import { QUICK_MATCH_ERRORS, QUICK_MATCH_SYSTEM_ORG_ID } from "@/lib/quick-match-constants";
 import { stageTableRulesDocs } from "@/server/engine-db/table-rules";
 import { StandingsTable } from "@/components/public-site/standings-table";
 import type { FullTableData } from "@/components/quick-match/standings";
@@ -275,10 +278,14 @@ const enCopy = (): QuickMatchCopy => ({
   levels: levelWords(enPublic),
   pub: (k, v) => tRuntime(enPublic, k, v),
 });
-/** The slots T6, T7 and T8 fill: here, stand-ins that say where they were put. */
+/** The slots T6, T7 and T8 (and plan 4 T4) fill: here, stand-ins that say where they were put. */
 const stubSlots = () => ({
-  score: vi.fn((f: { id: string; live: boolean }, place: "hero" | "row" | "edit") => (
+  score: vi.fn((f: { id: string; live: boolean }, place: "hero" | "row") => (
     <span data-testid="slot-score" data-fixture-id={f.id} data-live={String(f.live)} data-place={place} />
+  )),
+  // Plan 4 Task 4: one row's ⋯ menu, handed what the row offers.
+  rowMenu: vi.fn((r: RowMenuRequest) => (
+    <span data-testid="slot-row-menu" data-fixture-id={r.fixtureId} data-items={r.items.map((i) => i.kind).join(",")} />
   )),
   share: <span data-testid="slot-share" />,
   // Task 8: handed what "Add a match" offers (every side, and the two its selects open at).
@@ -448,7 +455,7 @@ describe("the empty case: a quick match with no match left", () => {
     expect(checked).toBe(5);
   });
 
-  it("a settled row asks for the 'edit' slot once, unless its result moved the match on; a ready row asks for Score; nothing else asks (A-M6)", async () => {
+  it("each row's ⋯ menu offers what its phase allows (owner 2026-11-13): Score and Not played to play, Edit result when settled, Put back when Not played; Score itself only on the hero and a playable row", async () => {
     const side = (n: number) => ({ entrantId: `e-${n}`, name: `Side ${n}` });
     const fx = (id: string, n: number, over: Partial<QuickMatchFixture>): QuickMatchFixture => ({
       id, roundNo: 1, fixtureNo: n, seqInRound: n, home: side(1), away: side(2), homeSlotLabel: null, awaySlotLabel: null,
@@ -460,13 +467,32 @@ describe("the empty case: a quick match with no match left", () => {
       fx("f-moved", 2, { resultMovedOn: true }),
       fx("f-off", 3, { status: "abandoned", winnerEntrantId: null }),
       fx("f-ready", 4, { status: "scheduled", winnerEntrantId: null, phase: "ready" }),
+      fx("f-live", 5, { status: "in_play", winnerEntrantId: null, phase: "live" }),
+      fx("f-skipped", 6, { status: "cancelled", winnerEntrantId: null, phase: "notPlayed" }),
     ];
-    const { slots } = await renderView({ ...empty, fixtures, next: fixtures[3]!, played: 3, total: 4 });
+    // 3 settled + 1 Not played of 6: open.
+    const { slots } = await renderView({ ...empty, fixtures, next: fixtures[4]!, played: 3, notPlayed: 1, total: 6 });
+    const menus = slots.rowMenu.mock.calls.map(([r]) => `${r.fixtureId}:${r.items.map((i) => i.kind).join("+")}`).sort();
+    expect(menus).toEqual(["f-live:score+skip", "f-off:edit", "f-open:edit", "f-ready:score+skip", "f-skipped:putBack"]);
+    // Each request names its match as the row does (the ⋯'s accessible name) and carries D12's number.
+    for (const [r] of slots.rowMenu.mock.calls) {
+      expect([r.home, r.away], r.fixtureId).toEqual(["Side 1", "Side 2"]);
+      expect(r.n, r.fixtureId).toBe(fixtures.findIndex((f) => f.id === r.fixtureId) + 1);
+    }
+    // Score is the hero's and the playable rows' (never a settled row's: "Edit result" is in the menu now).
     const asked = slots.score.mock.calls.map(([f, place]) => `${f.id}:${place}`).sort();
-    expect(asked).toEqual(["f-off:edit", "f-open:edit", "f-ready:hero", "f-ready:row"]);
-    // The empty case: nothing settled, nothing to edit.
-    const none = await renderView({ ...empty, fixtures: [fixtures[3]!], next: fixtures[3]!, played: 0, total: 1 });
-    expect(none.slots.score.mock.calls.filter(([, place]) => place === "edit")).toEqual([]);
+    expect(asked).toEqual(["f-live:hero", "f-live:row", "f-ready:row"]);
+    // The empty case: nothing to offer, nothing asked.
+    const none = await renderView({ ...empty, fixtures: [fixtures[1]!], next: null, played: 1, total: 1, finished: true });
+    expect(none.slots.rowMenu).not.toHaveBeenCalled();
+    expect(byTestId(none.tree, "slot-row-menu")).toHaveLength(0);
+    // A knockout (P12, legacy rows: a bracket needs a winner): its playable rows draw no menu; a settled one keeps Edit result.
+    const ko = await renderView({
+      ...empty, row: { ...empty.row, format: "knockout" }, standings: null,
+      fixtures: [fixtures[0]!, fixtures[3]!, fixtures[4]!], next: fixtures[4]!, played: 1, total: 3,
+    });
+    expect(ko.slots.rowMenu.mock.calls.map(([r]) => `${r.fixtureId}:${r.items.map((i) => i.kind).join("+")}`)).toEqual(["f-open:edit"]);
+    expect(ko.slots.score.mock.calls.map(([f, place]) => `${f.id}:${place}`).sort()).toEqual(["f-live:hero", "f-live:row", "f-ready:row"]);
   });
 
   // Task 8 (C5): "Add a match" is the decider a level top asks for, so it opens at the stored table's top two, in the
@@ -592,6 +618,200 @@ describe("the empty case: a quick match with no match left", () => {
       refused++;
     }
     expect(refused).toBe(3);
+  });
+
+  // ── Not played (plan 4 Task 4) ─────────────────────────────────────────────────────────────────────────────────────
+  //
+  // A league's literals, counts typed by hand from the rows each case builds (never read back from `playedOf`), and the
+  // expected words hand-typed in English where the line is assembled from more than one key (T1 review M1: an expected
+  // value built from the same keys would mirror a wrong placeholder instead of catching it).
+  describe("Not played (plan 4 Task 4)", () => {
+    const side = (n: number) => ({ entrantId: `e-${n}`, name: `Side ${n}` });
+    const fx = (id: string, n: number, over: Partial<QuickMatchFixture> = {}): QuickMatchFixture => ({
+      id, roundNo: 1, fixtureNo: n, seqInRound: n, home: side(1), away: side(2), homeSlotLabel: null, awaySlotLabel: null,
+      status: "scheduled", summary: null, isBye: false, isFinal: false, winnerEntrantId: null, phase: "ready", resultMovedOn: false,
+      ...over,
+    });
+    const settled = (id: string, n: number) => fx(id, n, { status: "decided", winnerEntrantId: "e-1", phase: "settled" });
+    const skipped = (id: string, n: number) => fx(id, n, { status: "cancelled", phase: "notPlayed" });
+    const live = (id: string, n: number, headline: string) => fx(id, n, { status: "in_play", phase: "live", summary: { headline } });
+    /** The table after side 1 won: a leader at rank 1 (not level), side 2 below it. */
+    const leaderTable = {
+      ...empty.standings!,
+      rows: [
+        { entrantId: "e-1", played: 2, won: 2, drawn: 0, lost: 0, points: 4, metrics: {}, rank: 1, level: false, tieUnbroken: false },
+        { entrantId: "e-2", played: 2, won: 0, drawn: 0, lost: 2, points: 0, metrics: {}, rank: 2, level: false, tieUnbroken: false },
+      ],
+    };
+    const homeWith = (fixtures: QuickMatchFixture[], counts: { played: number; notPlayed: number; finished: boolean }, over: Partial<QuickMatchHome> = {}): QuickMatchHome => ({
+      ...empty,
+      fixtures,
+      next: fixtures.find((f) => f.phase === "live") ?? fixtures.find((f) => f.phase === "ready") ?? null,
+      total: fixtures.length,
+      ...counts,
+      ...over,
+    });
+    const menuOf = (calls: [RowMenuRequest][], id: string) => calls.map(([r]) => r).find((r) => r.fixtureId === id);
+
+    it("(b) a Not played row: its own state, the dashed mark, 'A v B' and the Not played label; Put back in its menu until the league finishes, then none", async () => {
+      // Open: 1 played, 1 Not played, 1 to play, of 3.
+      const open = await renderView(homeWith([settled("f-1", 1), skipped("f-2", 2), fx("f-3", 3)], { played: 1, notPlayed: 1, finished: false }));
+      const row = byTestId(open.tree, "qm-match").find((r) => r.props["data-fixture-id"] === "f-2")!;
+      expect(row.props["data-state"]).toBe("notPlayed");
+      expect(classOf(row).split(/\s+/)).toContain("border-dashed");
+      expect(words(oneByTestId(row, "qm-match-sides"))).toBe(`Side 1 ${en_("quickMatch.home.versus")} Side 2`);
+      expect(words(oneByTestId(row, "qm-not-played"))).toBe("Not played");
+      expect(menuOf(open.slots.rowMenu.mock.calls, "f-2")?.items).toEqual([{ kind: "putBack" }]);
+      expect(byTestId(row, "slot-row-menu")).toHaveLength(1);
+      expect(byTestId(row, "slot-score"), "a Not played match is never scored from the list").toHaveLength(0);
+      // The positive pair of the dashed mark: a row still to play is not dashed.
+      const ready = byTestId(open.tree, "qm-match").find((r) => r.props["data-fixture-id"] === "f-3")!;
+      expect(classOf(ready).split(/\s+/)).not.toContain("border-dashed");
+      // Finished (every match played or Not played): the label stays, Put back goes (§6), and so does its menu.
+      const done = await renderView(homeWith([settled("f-1", 1), skipped("f-2", 2), skipped("f-3", 3)], { played: 1, notPlayed: 2, finished: true }, { standings: leaderTable }));
+      const after = byTestId(done.tree, "qm-match").filter((r) => r.props["data-state"] === "notPlayed");
+      expect(after.map((r) => r.props["data-fixture-id"])).toEqual(["f-2", "f-3"]);
+      for (const r of after) {
+        expect(words(oneByTestId(r, "qm-not-played"))).toBe("Not played");
+        expect(byTestId(r, "slot-row-menu")).toHaveLength(0);
+      }
+      expect(done.slots.rowMenu.mock.calls.map(([r]) => r.fixtureId), "only the settled row keeps a menu (Edit result)").toEqual(["f-1"]);
+    });
+
+    it("(c) the played line names how many were not played and keeps the full total; saved or not; one match or many", async () => {
+      const unsaved = (fixtures: QuickMatchFixture[], played: number, notPlayed: number) =>
+        homeWith(fixtures, { played, notPlayed, finished: played + notPlayed === fixtures.length });
+      const saved = (h: QuickMatchHome): QuickMatchHome => ({ ...h, row: { ...h.row, expiresAt: null, savedByUserId: "u-1" } });
+      const three = [settled("f-1", 1), skipped("f-2", 2), fx("f-3", 3)];
+      const cases: [string, QuickMatchHome, string][] = [
+        ["1 of 3, 1 not played", unsaved(three, 1, 1), "1 of 3 matches played · 1 not played · deleted 7 days after the last score unless saved"],
+        ["the same, saved", saved(unsaved(three, 1, 1)), "1 of 3 matches played · 1 not played"],
+        ["one match, not played, saved", saved(unsaved([skipped("f-1", 1)], 0, 1)), "0 of 1 match played · 1 not played"],
+        ["two not played", saved(unsaved([skipped("f-1", 1), skipped("f-2", 2)], 0, 2)), "0 of 2 matches played · 2 not played"],
+      ];
+      for (const [name, home, line] of cases) {
+        expect(words(oneByTestId((await renderView(home)).tree, "qm-played")), name).toBe(line);
+      }
+      expect(cases).toHaveLength(4);
+      // The positive pair: nothing Not played keeps the earlier line (no "· 0 not played").
+      const none = await renderView(unsaved([settled("f-1", 1), fx("f-2", 2)], 1, 0));
+      expect(words(oneByTestId(none.tree, "qm-played"))).toBe("1 of 2 matches played · deleted 7 days after the last score unless saved");
+    });
+
+    it("(d) finished by skips with matches played: the winner card says how many were played and not, no hero, the Final table with its note", async () => {
+      const cases: [string, QuickMatchHome, string][] = [
+        ["2 played, 1 not", homeWith([settled("f-1", 1), skipped("f-2", 2), settled("f-3", 3)], { played: 2, notPlayed: 1, finished: true }, { standings: leaderTable }), "Top of the table after 2 played matches. 1 match was not played."],
+        ["1 played, 2 not", homeWith([settled("f-1", 1), skipped("f-2", 2), skipped("f-3", 3)], { played: 1, notPlayed: 2, finished: true }, { standings: leaderTable }), "Top of the table after 1 played match. 2 matches were not played."],
+      ];
+      for (const [name, home, note] of cases) {
+        const { tree } = await renderView(home);
+        const card = oneByTestId(tree, "qm-winner");
+        expect(words(oneByTestId(card, "qm-winner-kicker")), name).toBe(en_("quickMatch.home.winner"));
+        // `empty`'s sides: e-1 is "One", the leader of `leaderTable`.
+        expect(byTestId(card, "qm-winner-name").map(words), name).toEqual(["One"]);
+        expect(words(oneByTestId(card, "qm-winner-note")), name).toBe(note);
+        expect(byTestId(tree, "qm-hero"), name).toHaveLength(0);
+        expect(words(oneByTestId(tree, "qm-standings-title")), name).toBe("Final table");
+        expect(words(oneByTestId(tree, "qm-standings-note")), name).toBe("Counts played matches only");
+        expect(byTestId(tree, "qm-no-play"), name).toHaveLength(0);
+      }
+      expect(cases).toHaveLength(2);
+      // The positive pair: finished with every match played has no note; still open, the table is "Standings".
+      const allPlayed = await renderView(homeWith([settled("f-1", 1), settled("f-2", 2)], { played: 2, notPlayed: 0, finished: true }, { standings: leaderTable }));
+      expect(byTestId(allPlayed.tree, "qm-winner-note")).toHaveLength(0);
+      expect(words(oneByTestId(allPlayed.tree, "qm-standings-title"))).toBe("Final table");
+      const open = await renderView(homeWith([settled("f-1", 1), fx("f-2", 2)], { played: 1, notPlayed: 0, finished: false }, { standings: leaderTable }));
+      expect(words(oneByTestId(open.tree, "qm-standings-title"))).toBe("Standings");
+      expect(byTestId(open.tree, "qm-winner")).toHaveLength(0);
+    });
+
+    it("(e) finished with nothing played: 'No matches were played' and a new quick match, no table, no winner, no hero", async () => {
+      const cases: [string, QuickMatchHome, string][] = [
+        ["three", homeWith([skipped("f-1", 1), skipped("f-2", 2), skipped("f-3", 3)], { played: 0, notPlayed: 3, finished: true }), "All 3 matches were marked Not played, so there is no winner."],
+        ["the only one", homeWith([skipped("f-1", 1)], { played: 0, notPlayed: 1, finished: true }), "The only match was marked Not played, so there is no winner."],
+      ];
+      for (const [name, home, hint] of cases) {
+        const { tree, slots } = await renderView(home);
+        const card = oneByTestId(tree, "qm-no-play");
+        expect(words(oneByTestId(card, "qm-no-play-kicker")), name).toBe("League finished");
+        expect(words(oneByTestId(card, "qm-no-play-title")), name).toBe("No matches were played");
+        expect(words(oneByTestId(card, "qm-no-play-hint")), name).toBe(hint);
+        const start = oneByTestId(card, "qm-no-play-start");
+        // The viewer's own setup page (`/<lang>/play`, the dead link's way on), in the dead link's words.
+        expect([start.type, start.props.href, words(start)], name).toEqual(["a", "/en/play", "Start a new quick match"]);
+        expect(byTestId(tree, "qm-standings"), name).toHaveLength(0);
+        expect(byTestId(tree, "qm-winner"), name).toHaveLength(0);
+        expect(byTestId(tree, "qm-hero"), name).toHaveLength(0);
+        // Every match listed, Not played, with no Put back (the league is finished).
+        expect(byTestId(tree, "qm-match").map((r) => r.props["data-state"]), name).toEqual(home.fixtures.map(() => "notPlayed"));
+        expect(slots.rowMenu, name).not.toHaveBeenCalled();
+      }
+      expect(cases).toHaveLength(2);
+      // The positive pair: Not played but not finished is no "no play" (the table stays).
+      const open = await renderView(homeWith([skipped("f-1", 1), fx("f-2", 2)], { played: 0, notPlayed: 1, finished: false }));
+      expect(byTestId(open.tree, "qm-no-play")).toHaveLength(0);
+      expect(byTestId(open.tree, "qm-standings")).toHaveLength(1);
+    });
+
+    it("(f) the table's note says it counts played matches only while a match is Not played, and only then", async () => {
+      const withSkip = await renderView(homeWith([skipped("f-1", 1), fx("f-2", 2)], { played: 0, notPlayed: 1, finished: false }));
+      expect(words(oneByTestId(withSkip.tree, "qm-standings-note"))).toBe("Counts played matches only");
+      const without = await renderView(homeWith([fx("f-1", 1), fx("f-2", 2)], { played: 0, notPlayed: 0, finished: false }));
+      expect(byTestId(without.tree, "qm-standings-note")).toHaveLength(0);
+    });
+
+    it("(g)(h) the confirm sheet's words: bodyLast on the last open match, body otherwise; a live match's score as the partial line", async () => {
+      const copyOf = async (home: QuickMatchHome, id: string) => {
+        const { slots } = await renderView(home);
+        const item = menuOf(slots.rowMenu.mock.calls, id)?.items.find((i) => i.kind === "skip");
+        if (!item || item.kind !== "skip") throw new Error(`premise: ${id} offers Not played`);
+        return item.copy;
+      };
+      const title = en_("quickMatch.skip.title", { home: "Side 1", away: "Side 2" });
+      expect(title).toBe("Skip Side 1 v Side 2?");
+      const cases: [string, QuickMatchHome, string, keyof typeof en][] = [
+        // The only match left after one played: skipping it finishes the league.
+        ["last after a played one", homeWith([settled("f-1", 1), fx("f-2", 2)], { played: 1, notPlayed: 0, finished: false }), "f-2", "quickMatch.skip.bodyLast"],
+        // A Not played match counts as done, so the one beside it is the last.
+        ["last after a Not played one", homeWith([skipped("f-1", 1), fx("f-2", 2)], { played: 0, notPlayed: 1, finished: false }), "f-2", "quickMatch.skip.bodyLast"],
+        // A one-match league: its only match is the last (Review Focus 4: a mis-tap is warned).
+        ["a one-match league", homeWith([fx("f-1", 1)], { played: 0, notPlayed: 0, finished: false }), "f-1", "quickMatch.skip.bodyLast"],
+        ["two still to play", homeWith([settled("f-1", 1), fx("f-2", 2), fx("f-3", 3)], { played: 1, notPlayed: 0, finished: false }), "f-2", "quickMatch.skip.body"],
+        ["one live, one ready", homeWith([live("f-1", 1, "8–5"), fx("f-2", 2)], { played: 0, notPlayed: 0, finished: false }), "f-2", "quickMatch.skip.body"],
+      ];
+      for (const [name, home, id, body] of cases) {
+        const c = await copyOf(home, id);
+        expect(c.title, name).toBe(title);
+        expect(c.body, name).toBe(en[body]);
+        expect(c.partial, `${name}: nothing scored`).toBeNull();
+      }
+      expect(cases).toHaveLength(5);
+      expect(en["quickMatch.skip.bodyLast"]).not.toBe(en["quickMatch.skip.body"]);
+      // (h) A live match: its score as it stands, in the partial line; the last open one gets bodyLast too.
+      const c = await copyOf(homeWith([settled("f-1", 1), live("f-2", 2, "8–5")], { played: 1, notPlayed: 0, finished: false }), "f-2");
+      expect(c.partial).toBe("8–5 is already scored. It will not count in the table; it stays in the match history.");
+      expect(c.body).toBe(en["quickMatch.skip.bodyLast"]);
+    });
+
+    it("(i) the home's flash for the skip routes' refusals: a match with a result, a finished league, a match marked Not played", () => {
+      const cases: [string, string][] = [
+        [QUICK_MATCH_ERRORS.NOT_SKIPPABLE, "quickMatch.flash.notSkippable"],
+        [QUICK_MATCH_ERRORS.LEAGUE_FINISHED, "quickMatch.flash.leagueFinished"],
+        [QUICK_MATCH_ERRORS.NOT_PLAYED, "quickMatch.flash.notPlayed"],
+      ];
+      for (const [code, key] of cases) {
+        expect(homeFlash(code), code).toEqual({ key, tone: "refusal" });
+        expect(homeFlash(code)!.key, `${code} is not the generic line`).not.toBe("quickMatch.flash.generic");
+      }
+      expect(cases).toHaveLength(3);
+    });
+
+    it("(j) the list's order: still to play first, then Not played, then finished, each in play order", async () => {
+      const fixtures = [settled("f-1", 1), skipped("f-2", 2), fx("f-3", 3), settled("f-4", 4), skipped("f-5", 5), live("f-6", 6, "1–0")];
+      const { tree } = await renderView(homeWith(fixtures, { played: 2, notPlayed: 2, finished: false }));
+      expect(byTestId(tree, "qm-match").map((r) => r.props["data-fixture-id"])).toEqual(["f-3", "f-6", "f-2", "f-5", "f-1", "f-4"]);
+      expect(byTestId(tree, "qm-match").map((r) => words(oneByTestId(r, "qm-match-no"))), "D12's numbers follow the match").toEqual(["3", "6", "2", "5", "1", "4"]);
+    });
   });
 });
 
@@ -1294,6 +1514,98 @@ describe.skipIf(!HAS_DB)("the quick match home page", () => {
       home: top[0],
       away: top[1],
     });
+    await hardDeleteQuickMatchCompetition(out.competitionId);
+  });
+
+  // Plan 4 Task 4 (a), (b) on the REAL page: the row menus as the server renders them (each is a client island, rendered to
+  // its server HTML here), their posts the home's own paths. Badminton, the spec's example: the menu reads no sport (the
+  // sport sweep of skip and Put back is T3's, quick-match-skip.test.ts).
+  it("the row menus on the real page (plan 4 Task 4): a ready row's ⋯ posts Score and Not played and holds its sheet; a settled row's Edit result; a Not played row's Put back, gone once the league finishes", async () => {
+    locale.value = "en";
+    const out = await create(league({ sides: ["Ines", "Ravi", "Mika"] }));
+    const h0 = await homeOf(out);
+    const [m1, m2, m3] = h0.fixtures.filter((f) => !f.isBye);
+    expect(h0.total, "premise: a round robin of 3 is 3·2/2 = 3 matches").toBe(3);
+    const played = await playToDecided(systemAuth(), m1!.id);
+    if (played.kind !== "decided") throw new Error(`precondition: ${JSON.stringify(played)}`);
+    /** A row's server HTML: the row and its menu island (a client boundary, rendered as the server sends it). */
+    const rowHtml = (tree: ReactNode, id: string) => {
+      const hits = byTestId(tree, "qm-match").filter((r) => r.props["data-fixture-id"] === id);
+      expect(hits, `one row for ${id}`).toHaveLength(1);
+      return renderToStaticMarkup(hits[0]!);
+    };
+    const count = (html: string, needle: string) => html.split(needle).length - 1;
+    const name = (f: QuickMatchFixture) => `More actions for ${f.home!.name} v ${f.away!.name}`;
+
+    let page = await renderPage(out.token);
+    // (a) A ready row: its ⋯ named for its match; Score and Not played posting the home's own paths; the sheet's form posts
+    // the same skip; no Put back, no Edit result.
+    const ready = rowHtml(page.tree, m2!.id);
+    expect(ready).toContain(`aria-label="${name(m2!)}"`);
+    expect(ready).toContain('data-testid="qm-row-menu"');
+    expect(ready).toContain('data-testid="qm-skip"');
+    expect(count(ready, `action="/q/${out.token}/skip/${m2!.id}"`), "the menu's Not played and the sheet's confirm").toBe(2);
+    expect(count(ready, `action="/q/${out.token}/score/${m2!.id}"`), "the row's Score and the menu's Score").toBe(2);
+    expect(ready).toContain('data-testid="qm-skip-sheet"');
+    expect(ready).not.toContain('data-testid="qm-put-back"');
+    expect(ready).not.toContain('data-testid="qm-edit-result"');
+    // Every form carries the replay block (its action holds the home token, O3).
+    expect(count(ready, "<form"), "the row's Score, the menu's two, the sheet's").toBe(4);
+    for (const form of ready.match(/<form[^>]*>/g) ?? []) {
+      expect(form).toMatch(/\sclass="ph-no-capture[\s"]/);
+      expect(form, "a real post: it works without the script").toContain(' method="post"');
+    }
+    // A settled row: Edit result in its menu (the same Score route the pad reopens), no Score button, no Not played.
+    const done = rowHtml(page.tree, m1!.id);
+    expect(done).toContain('data-testid="qm-edit-result"');
+    expect(count(done, `action="/q/${out.token}/score/${m1!.id}"`)).toBe(1);
+    expect(done).not.toContain('data-testid="qm-score"');
+    expect(done).not.toContain("/skip/");
+    // The sheet's body for match 2: two matches still to play, so it can be put back.
+    expect(ready).toContain(en["quickMatch.skip.body"].replace(/'/g, "&#x27;"));
+
+    // (b) Match 2 marked Not played, through the home's own writer (`skipQuickMatchFixture`, plan 4 T3), as its sheet posts.
+    const qm = await resolveQuickMatchToken(out.token);
+    if (!qm) throw new Error("precondition: the quick match's token resolves");
+    const markNotPlayed = async (fixtureId: string) => {
+      expect(await skipQuickMatchFixture(qm, fixtureId), `premise: fixture ${fixtureId} was open and is now Not played`).toEqual({
+        changed: true,
+      });
+    };
+    await markNotPlayed(m2!.id);
+    page = await renderPage(out.token);
+    expect(words(oneByTestId(page.tree, "qm-played"))).toBe("1 of 3 matches played · 1 not played · deleted 7 days after the last score unless saved");
+    expect(byTestId(page.tree, "qm-match").map((r) => r.props["data-fixture-id"]), "to play, Not played, finished").toEqual([m3!.id, m2!.id, m1!.id]);
+    const skipped = rowHtml(page.tree, m2!.id);
+    expect(skipped).toContain('data-state="notPlayed"');
+    expect(skipped).toContain(">Not played<");
+    expect(skipped).toContain('data-testid="qm-put-back"');
+    expect(skipped).toContain(`action="/q/${out.token}/put-back/${m2!.id}"`);
+    expect(skipped).not.toContain('data-testid="qm-skip"');
+    expect(skipped).not.toContain('data-testid="qm-score"');
+    // The one match left: its sheet now warns that skipping it finishes the league (D6).
+    expect(rowHtml(page.tree, m3!.id)).toContain(en["quickMatch.skip.bodyLast"].replace(/'/g, "&#x27;"));
+    expect(words(oneByTestId(page.tree, "qm-standings-note"))).toBe("Counts played matches only");
+
+    // Match 3 too: the league is finished on its one played match. Put back is gone; the winner card says what was played.
+    await markNotPlayed(m3!.id);
+    page = await renderPage(out.token);
+    for (const id of [m2!.id, m3!.id]) {
+      const html = rowHtml(page.tree, id);
+      expect(html, id).toContain(">Not played<");
+      expect(html, id).not.toContain('data-testid="qm-row-menu"');
+      expect(html, id).not.toContain("/put-back/");
+    }
+    expect(rowHtml(page.tree, m1!.id), "Edit result stays: it reopens the league").toContain('data-testid="qm-edit-result"');
+    expect(byTestId(page.tree, "qm-hero")).toHaveLength(0);
+    expect(words(oneByTestId(page.tree, "qm-winner-note"))).toBe("Top of the table after 1 played match. 2 matches were not played.");
+    expect(words(oneByTestId(page.tree, "qm-standings-title"))).toBe("Final table");
+    // The winner is the side the played match's result names (the stored outcome, not computed here).
+    const decided = (await homeOf(out)).fixtures.find((f) => f.id === m1!.id)!;
+    const winner = decided.home!.entrantId === decided.winnerEntrantId ? decided.home! : decided.away!;
+    expect(byTestId(oneByTestId(page.tree, "qm-winner"), "qm-winner-name").map(words)).toEqual([winner.name]);
+    // Every row menu the page drew is the island, never a stand-in (anti-vacuity: one, Edit result's).
+    expect(all(page.tree, (el) => el.type === QuickMatchRowMenu)).toHaveLength(1);
     await hardDeleteQuickMatchCompetition(out.competitionId);
   });
 });
