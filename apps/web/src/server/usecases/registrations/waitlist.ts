@@ -16,7 +16,7 @@ import { loadEntrantShape } from "../entrant-shape";
 import { divisionTakesKind } from "@/lib/division-entrant-kinds";
 import type { AnySql, Tx, RegistrationSettingsRow, RegistrationWithGroupRow, DivisionCtx } from "./types";
 import { regGroupCols, loadSettings } from "./lookups";
-import { materialise } from "./materialise";
+import { clearExpiresIfNoLongerNeeded, materialise } from "./materialise";
 import { issuePayLink, recordPayToken } from "./pay-token";
 
 /** The waitlist's queue order, the ONE statement of it: oldest first by `coalesce(waitlisted_at, created_at)`, then `id` (V378/RS007 -
@@ -43,6 +43,25 @@ export function waitlistPositionSql(db: AnySql, alias: string) {
       where ahead.division_id = ${r}.division_id and ahead.status = 'waitlisted'
         and (${waitlistQueueKey(db, "ahead")}) < (${waitlistQueueKey(db, alias)})
     ) else null end`;
+}
+
+/** Put a pending entry back on its division's waitlist, at the BACK of the queue: the ONE write for it (B4 fix round 2). Two paths
+ *  take an entry back - the sweep's lapse of an unpaid promotion (sweep.ts) and the organiser's move (`waitlistRegistration`,
+ *  organiser-actions.ts) - and the organiser's hand-kept copy had drifted from the lapse (B4 review m6). The write:
+ *  - `waitlisted_at = now()`: the queue key (`waitlistQueueKey`), so it sorts behind everyone already waiting (owner ruling, B3
+ *    review I1: the organiser's move joins the back too, as the lapse does).
+ *  - `promoted_at`, `promotion_expires_at` cleared: the promotion it held is taken back (the public status API reads promoted_at).
+ *  - `amount_cents` KEPT: a checkout minted before the move can still complete, and `confirmPaidRegistration`'s late branch refunds
+ *    that payment from this column (PR #677; sweep.ts's lapse explains the defect clearing it caused).
+ *  - the cart's shared pay-by date cleared when no other entry in the cart is still pending (`clearExpiresIfNoLongerNeeded`).
+ *  It decides nothing: the caller holds the row (locked, or read under the org's tenant) and has checked that it is pending. */
+export async function returnToWaitlist(tx: Tx, reg: { id: string; group_id: string }): Promise<void> {
+  await tx`
+    update registrations
+    set status = 'waitlisted', waitlisted_at = now(),
+        promoted_at = null, promotion_expires_at = null, updated_at = now()
+    where id = ${reg.id}`;
+  await clearExpiresIfNoLongerNeeded(tx, reg.group_id, reg.id);
 }
 
 /** RS012 ruling 1 — a status leaving SPOT_HOLDERS only frees a TEAM slot
