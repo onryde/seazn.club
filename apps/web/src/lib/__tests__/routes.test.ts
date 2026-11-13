@@ -165,6 +165,17 @@ describe("routes", () => {
     // The same save page the reminder links to, so the two never drift apart.
     expect(routes.quickMatchSaveConfirm("qm_abc")).toBe(`${routes.quickMatchSave("qm_abc")}/confirm`);
   });
+
+  it("builds a quick match home's 'Not played' and 'Put back' posts: the home token and the match, both in the path (plan 4 T1)", () => {
+    const f = "11111111-2222-3333-4444-555555555555";
+    expect(routes.quickMatchSkip("qm_abc", f)).toBe(`/q/qm_abc/skip/${f}`);
+    expect(routes.quickMatchPutBack("qm_abc", f)).toBe(`/q/qm_abc/put-back/${f}`);
+    // The same home the token's own builder names, so the three never drift apart.
+    expect(routes.quickMatchSkip("qm_abc", "f1")).toBe(`${routes.quickMatch("qm_abc")}/skip/f1`);
+    expect(routes.quickMatchPutBack("qm_abc", "f1")).toBe(`${routes.quickMatch("qm_abc")}/put-back/f1`);
+    // Two different posts: a Put back must never land on the skip route, or the reverse.
+    expect(routes.quickMatchSkip("qm_abc", f)).not.toBe(routes.quickMatchPutBack("qm_abc", f));
+  });
 });
 
 describe("routes.orgSponsors (R4 S11: the Sponsors hub is top-level, not a Settings tab)", () => {

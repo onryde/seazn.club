@@ -128,4 +128,13 @@ export const QUICK_MATCH_ERRORS = {
    *  past its expiry, one deleted already, or no id at all. One answer for all of them (404), so it never says whether a match
    *  exists. `quickMatch.me.notInAccount`. */
   NOT_IN_ACCOUNT: "QUICK_MATCH_NOT_IN_ACCOUNT",
+  /** "Not played" (plan 4, spec 2026-11-12 §3 and §6): only an unplayed or in-progress league match (`scheduled`, `in_play`)
+   *  can be skipped. A match that already has a result, or any other status that is not open to a skip, is refused (422); a
+   *  tap from a page loaded before the match was settled meets it too. The home shows `quickMatch.flash.notSkippable`, which
+   *  points at Edit result. */
+  NOT_SKIPPABLE: "QUICK_MATCH_NOT_SKIPPABLE",
+  /** "Put back" (plan 4, spec §6): the league has finished, every match played or Not played, so its matches no longer
+   *  change (422). The home hides Put back once the league is finished, so only a stale tap meets it:
+   *  `quickMatch.flash.leagueFinished`. */
+  LEAGUE_FINISHED: "QUICK_MATCH_LEAGUE_FINISHED",
 } as const;

@@ -582,15 +582,18 @@ describe("every element that paints a scrubbed secret carries ph-no-capture, or 
     // quickMatch: the guest's home, `/q/<token>` (quick match plan 2, A6); quickMatchSave: its save page, `/q/<token>/save`
     // (plan 3 Task 2, the reminder mail's link); quickMatchScore: its Score post, `/q/<token>/score/<fixture>` (branch fix A);
     // quickMatchAddMatch: its "Add a match" post, `/q/<token>/add-match` (plan 2 Task 8); quickMatchSaveConfirm: its Save post,
-    // `/q/<token>/save/confirm` (plan 3 Task 5).
+    // `/q/<token>/save/confirm` (plan 3 Task 5); quickMatchSkip and quickMatchPutBack: its "Not played" and "Put back" posts,
+    // `/q/<token>/skip/<fixture>` and `/q/<token>/put-back/<fixture>` (plan 4 Task 1).
     expect(secretBuilderNames().sort()).toEqual([
       "checkin",
       "claim",
       "quickMatch",
       "quickMatchAddMatch",
+      "quickMatchPutBack",
       "quickMatchSave",
       "quickMatchSaveConfirm",
       "quickMatchScore",
+      "quickMatchSkip",
     ]);
     expect(oneTimeLinkPaths().length).toBeGreaterThanOrEqual(5);
     expect(secretSegments().sort()).toEqual(expect.arrayContaining(["checkin", "claim", "join", "score"]));
