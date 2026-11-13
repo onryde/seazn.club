@@ -16,6 +16,10 @@
 /** The id the hero's Sport select carries (quick-match-cta.tsx), and the one the art listens on (hero-vignette.tsx). */
 export const HERO_SPORT_SELECT_ID = "qm-cta-sport";
 
+/** The plays on load (design/v3/12 §4.2: three, then it rests). One landing each, so a scene's scorebug has this many
+ *  frames after its first, and rests on its last: the decided one (hero-scenes.test.tsx judges it per sport). */
+export const HERO_AUTO_PLAYS = 3;
+
 export interface HeroPoint {
   readonly x: number;
   readonly y: number;
@@ -57,12 +61,20 @@ export interface HeroSlide {
 }
 
 /** The scorebug's frames: `steps[0]` before any landing, one more per landing, held at the last. `rally`, `goals` and
- *  `carrom` read `home h–a away`; `tennis` calls the points (0, 15, 30, 40); `chess` writes half points (the engine stores
- *  1 / ½ / 0 as 2 / 1 / 0); `innings` reads `team runs/wickets`. */
+ *  `carrom` read `home h–a away`; `tennis` calls the points (0, 15, 30, 40) of one game, and once the game is won shows
+ *  the set's `games` with it counted; `chess` writes half points (the engine stores 1 / ½ / 0 as 2 / 1 / 0); `innings`
+ *  reads `team runs/wickets`. */
 export type HeroScore =
   | {
-      readonly kind: "rally" | "goals" | "carrom" | "tennis" | "chess";
+      readonly kind: "rally" | "goals" | "carrom" | "chess";
       readonly names: readonly [string, string];
+      readonly steps: readonly (readonly [number, number])[];
+    }
+  | {
+      readonly kind: "tennis";
+      readonly names: readonly [string, string];
+      /** The set's games before the game the steps play. */
+      readonly games: readonly [number, number];
       readonly steps: readonly (readonly [number, number])[];
     }
   | { readonly kind: "innings"; readonly names: readonly [string]; readonly steps: readonly (readonly [number, number])[] };
@@ -155,9 +167,10 @@ export const HERO_SCENES = {
       starAt: 2.4,
     },
   },
-  // Carrom, club rules (game to 29, the queen 5 below 24): a board scores the coins left, plus the queen.
+  // Carrom, club rules (game to 29, the queen 5 below 24): a board scores the opponent's coins left, plus the queen. Each
+  // landing sinks the queen and wins the board with one of Ravi's coins left, 6 a board, and the third reaches 29.
   carrom: {
-    score: { kind: "carrom", names: ["Asha", "Ravi"], steps: [[12, 9], [18, 9], [22, 9], [29, 9]] },
+    score: { kind: "carrom", names: ["Asha", "Ravi"], steps: [[11, 9], [17, 9], [23, 9], [29, 9]] },
     flight: {
       rest: pt(236, 160),
       toss: pt(236, 160),
@@ -199,9 +212,9 @@ export const HERO_SCENES = {
     flight: { rest: pt(300, 236), toss: pt(318, 90), hit: pt(329, 172), ctrl: pt(212, 60), land: pt(96, 236) },
     swing: { pivot: pt(352, 236), back: 25, strike: -20, over: -45, settle: -32, sway: -28 },
   },
-  // A game's points, called: 0–15, 15–15, 30–15, 40–15.
+  // Serving for the set at 5–4: 15–15, 30–15, 40–15, and the winner takes the game and the set, 6–4.
   tennis: {
-    score: { kind: "tennis", names: ["Moreau", "Silva"], steps: [[0, 1], [1, 1], [2, 1], [3, 1]] },
+    score: { kind: "tennis", names: ["Moreau", "Silva"], games: [5, 4], steps: [[1, 1], [2, 1], [3, 1], [4, 1]] },
     flight: { rest: pt(300, 284), toss: pt(280, 70), hit: pt(271, 159), ctrl: pt(176, 0), land: pt(82, 284) },
     swing: { pivot: pt(322, 298), back: 24, strike: -20, over: -45, settle: -32, sway: -28 },
   },
@@ -231,6 +244,17 @@ export function heroSceneLabelKey(scene: HeroSceneKey): `home.hero.scene.${HeroS
 /** ITF Rule 5(a): the call of a standard game's points won, 0 to 3. */
 const POINT_CALLS = ["0", "15", "30", "40"] as const;
 
+/** A tennis frame's score: the game's points called while it is on; once a side wins the point after 40 two clear, the
+ *  set's `games` with that game counted. Deuce and advantage are no frame the scorebug writes: a frame past 40 that is no
+ *  won game is refused, never written as a games score. */
+export function heroTennisCall(games: readonly [number, number], points: readonly [number, number]): string {
+  const [h, a] = points;
+  const last = POINT_CALLS.length - 1;
+  if (h <= last && a <= last) return `${POINT_CALLS[h]}–${POINT_CALLS[a]}`;
+  if (Math.abs(h - a) < 2) throw new Error(`hero tennis: ${h}–${a} is deuce or advantage, no frame the scorebug writes`);
+  return h > a ? `${games[0] + 1}–${games[1]}` : `${games[0]}–${games[1] + 1}`;
+}
+
 /** Half points written the chess way: 2 → "1", 1 → "½", 3 → "1½". */
 function halfPoints(n: number): string {
   const whole = Math.floor(n / 2);
@@ -244,7 +268,7 @@ export function heroScoreText(scene: HeroSceneKey, landings: number): string {
   const [home, away] = score.steps[Math.min(Math.max(landings, 0), score.steps.length - 1)]!;
   if (score.kind === "innings") return `${score.names[0]} ${home}/${away}`;
   const [a, b] = score.names;
-  if (score.kind === "tennis") return `${a} ${POINT_CALLS[home]}–${POINT_CALLS[away]} ${b}`;
+  if (score.kind === "tennis") return `${a} ${heroTennisCall(score.games, [home, away])} ${b}`;
   if (score.kind === "chess") return `${a} ${halfPoints(home)}–${halfPoints(away)} ${b}`;
   return `${a} ${home}–${away} ${b}`;
 }

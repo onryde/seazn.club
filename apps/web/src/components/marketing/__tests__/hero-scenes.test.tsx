@@ -13,6 +13,7 @@ import es from "@/dictionaries/es/marketing.json";
 import fr from "@/dictionaries/fr/marketing.json";
 import nl from "@/dictionaries/nl/marketing.json";
 import {
+  HERO_AUTO_PLAYS,
   HERO_CHESS,
   HERO_DEFAULT_SCENE,
   HERO_SCENES,
@@ -20,7 +21,9 @@ import {
   heroSceneKey,
   heroSceneLabelKey,
   heroScoreText,
+  heroTennisCall,
   type HeroSceneKey,
+  type HeroScore,
 } from "../hero-scenes";
 import { HeroSceneArt } from "../hero-scene-art";
 
@@ -128,6 +131,34 @@ function gameOver(score: readonly [number, number], rules: { setTo: number; winB
   return (top >= rules.setTo && Math.abs(score[0] - score[1]) >= rules.winBy) || (rules.cap !== null && top >= rules.cap);
 }
 
+/** The tennis scene's score: its names, and the set's games before the game its points play. */
+function tennisScore(sport: HeroSceneKey): Extract<HeroScore, { kind: "tennis" }> {
+  const { score } = HERO_SCENES[sport] as { score: HeroScore };
+  if (score.kind !== "tennis") throw new Error(`${sport} keeps no tennis score`);
+  return score;
+}
+
+/** ITF Rule 5: a game goes to the side that wins the point after 40 (the fourth) two clear; no-ad (Appendix V), the
+ *  point after 40–40 decides it. `null` while the game is on. */
+function tennisGameWon(points: readonly [number, number], calls: number, noAd: boolean): "home" | "away" | null {
+  const [h, a] = points;
+  if (Math.max(h, a) < calls) return null;
+  if (!noAd && Math.abs(h - a) < 2) return null;
+  return h > a ? "home" : "away";
+}
+
+/** ITF Rule 6 (a "tiebreak set"): won at `gamesTo` with `winBy` clear, or `tiebreakAt + 1` to `tiebreakAt` by the tiebreak. */
+function tennisSetWon(
+  games: readonly [number, number],
+  set: { gamesTo: number; winBy: number; tiebreakAt: number | null },
+): "home" | "away" | null {
+  const [h, a] = games;
+  const top = Math.max(h, a);
+  const clear = (top >= set.gamesTo && Math.abs(h - a) >= set.winBy) ||
+    (set.tiebreakAt !== null && top === set.tiebreakAt + 1 && Math.min(h, a) === set.tiebreakAt);
+  return clear ? (h > a ? "home" : "away") : null;
+}
+
 const checkers: Record<string, (sport: HeroSceneKey) => number> = {
   rally(sport) {
     const rules = defaultRules<{ setTo: number; winBy: number; cap: number | null }>(sport);
@@ -143,12 +174,21 @@ const checkers: Record<string, (sport: HeroSceneKey) => number> = {
   tennis(sport) {
     const calls = tennisPadRules.pointCalls;
     expect(calls.length).toBeGreaterThan(0);
+    const { game } = defaultRules<{ game: { noAd: boolean } }>(sport);
+    const { names, games } = tennisScore(sport);
     const steps = stepsOf(sport);
     steps.forEach((s, i) => {
-      // A standard game's points are called 0, 15, 30, 40 (ITF Rule 5(a)); four won with two clear ends the game.
-      for (const p of s) expect(p >= 0 && p < calls.length, `${sport} ${s}`).toBe(true);
       if (i > 0) expect(onePointApart(steps[i - 1]!, s), `${sport} step ${i}`).toBe(true);
-      expect(heroScoreText(sport, i)).toBe(`${HERO_SCENES[sport].score.names[0]} ${calls[s[0]]}–${calls[s[1]]} ${HERO_SCENES[sport].score.names[1]}`);
+      // A standard game's points are called 0, 15, 30, 40 (ITF Rule 5(a)) while it is on; the point that wins it counts a
+      // game into the set, and the scorebug then shows the set's games.
+      const won = tennisGameWon(s, calls.length, game.noAd);
+      if (won === null) {
+        for (const p of s) expect(p >= 0 && p < calls.length, `${sport} ${s}`).toBe(true);
+        expect(heroScoreText(sport, i)).toBe(`${names[0]} ${calls[s[0]]}–${calls[s[1]]} ${names[1]}`);
+      } else {
+        const after = won === "home" ? [games[0] + 1, games[1]] : [games[0], games[1] + 1];
+        expect(heroScoreText(sport, i)).toBe(`${names[0]} ${after[0]}–${after[1]} ${names[1]}`);
+      }
     });
     return steps.length;
   },
@@ -191,10 +231,14 @@ const checkers: Record<string, (sport: HeroSceneKey) => number> = {
         const prev = steps[i - 1]!;
         const side = s[0] !== prev[0] ? 0 : 1;
         expect(s[1 - side], `${sport} step ${i}: one board, one winner`).toBe(prev[1 - side]);
-        // A board scores the opponent's coins left, plus the queen while the winner is below the cap (ICF 52(b), 54).
+        // A board scores the opponent's coins left, plus the queen while the winner is below the cap (ICF 52(b), 54). Every
+        // landing sinks the queen (the scene's label), and the board's winner has pocketed all their own coins, so at least
+        // one of the opponent's is left: below the cap a board is worth the queen and a coin at least.
         const board = s[side]! - prev[side]!;
-        const most = coins * rules.pointsPerCoin + (prev[side]! < rules.queenCapAt ? rules.queenPoints : 0);
-        expect(board >= 1 && board <= most, `${sport} step ${i}: a board of ${board} (at most ${most})`).toBe(true);
+        const queen = prev[side]! < rules.queenCapAt ? rules.queenPoints : 0;
+        const least = queen + rules.pointsPerCoin;
+        const most = coins * rules.pointsPerCoin + queen;
+        expect(board >= least && board <= most, `${sport} step ${i}: a board of ${board} (from ${least} to ${most})`).toBe(true);
       }
       expect(heroScoreText(sport, i)).toBe(`${HERO_SCENES[sport].score.names[0]} ${s[0]}–${s[1]} ${HERO_SCENES[sport].score.names[1]}`);
     });
@@ -218,6 +262,78 @@ describe("hero scenes: each scorebug speaks its sport's score language (the engi
     }
     expect(sports, "sports checked").toBe(offeredSports.length);
     expect(steps).toBeGreaterThan(0);
+  });
+
+  // The plays rest on the scene's last frame, and that frame is a DECIDED one (owner review 2026-11-13: "pin the final frame
+  // per sport as a decided/won state"), for the side every landing scores for, the home side: judged by each sport's
+  // default rules from the engine, never by the scene's own comments.
+  it("the plays rest on the last frame, and it is decided for the scoring side under each sport's default rules", () => {
+    let sports = 0;
+    for (const sport of offeredSports as HeroSceneKey[]) {
+      const { score } = HERO_SCENES[sport] as { score: HeroScore };
+      const steps = score.steps;
+      const last = steps.at(-1)!;
+      expect(steps.length - 1, `${sport}: three plays on load, one landing each, rest on the last frame`).toBe(HERO_AUTO_PLAYS);
+      const before = steps.slice(0, -1);
+      switch (score.kind) {
+        case "rally": {
+          const rules = defaultRules<{ setTo: number; winBy: number; cap: number | null }>(sport);
+          for (const s of before) expect(gameOver(s, rules), `${sport} ${s}: still on`).toBe(false);
+          expect(gameOver(last, rules), `${sport} ${last}: the game won under ${JSON.stringify(rules)}`).toBe(true);
+          expect(last[0] > last[1], `${sport} ${last}: won by the home side`).toBe(true);
+          break;
+        }
+        case "tennis": {
+          const calls = tennisPadRules.pointCalls.length;
+          const { game, set } = defaultRules<{ game: { noAd: boolean }; set: { gamesTo: number; winBy: number; tiebreakAt: number | null } }>(sport);
+          for (const s of before) expect(tennisGameWon(s, calls, game.noAd), `${sport} ${s}: the game still on`).toBeNull();
+          expect(tennisGameWon(last, calls, game.noAd), `${sport} ${last}: the game won`).toBe("home");
+          // The game it wins takes the set: live at the games before it, won with it.
+          const { games } = tennisScore(sport);
+          expect(tennisSetWon(games, set), `${sport} ${games}: the set still on`).toBeNull();
+          expect(tennisSetWon([games[0] + 1, games[1]], set), `${sport}: the set won with the game`).toBe("home");
+          break;
+        }
+        case "carrom": {
+          const { gameTo } = defaultRules<{ gameTo: number }>(sport);
+          for (const s of before) expect(Math.max(...s), `${sport} ${s}: the game still on`).toBeLessThan(gameTo);
+          expect(last[0], `${sport} ${last}: the home side reaches ${gameTo}`).toBeGreaterThanOrEqual(gameTo);
+          expect(last[1]).toBeLessThan(gameTo);
+          break;
+        }
+        case "chess": {
+          // Each landing is a game decided over the board: the mate chess.js plays below, a win in the engine's points.
+          const { scoring } = defaultRules<{ scoring: { win: number; loss: number } }>(sport);
+          const prev = before.at(-1)!;
+          expect([last[0] - prev[0], last[1] - prev[1]], `${sport}: the last landing is a game won`).toEqual([scoring.win, scoring.loss]);
+          expect(last[0] > last[1], `${sport} ${last}: the home side ahead`).toBe(true);
+          break;
+        }
+        case "goals": {
+          // A goals sport is decided by the clock, which the scorebug does not show: its resting frame is a win for the side
+          // that scored, never level (the default rules' level score is a draw, or extra time and a shootout).
+          for (let i = 1; i < steps.length; i++) {
+            expect([steps[i]![0] - steps[i - 1]![0], steps[i]![1] - steps[i - 1]![1]], `${sport} landing ${i}: a home goal`).toEqual([1, 0]);
+          }
+          expect(last[0] > last[1], `${sport} ${last}: the home side ahead`).toBe(true);
+          break;
+        }
+        default:
+          throw new Error(`${sport}: no decided rule for "${score.kind}"`);
+      }
+      sports++;
+    }
+    expect(sports, "sports judged").toBe(offeredSports.length);
+    expect(sports).toBeGreaterThan(0);
+  });
+
+  it("tennis writes no deuce or advantage frame: past 40 a frame must be a won game, else it is refused", () => {
+    expect(heroTennisCall([5, 4], [3, 1])).toBe("40–15");
+    expect(heroTennisCall([5, 4], [4, 1])).toBe("6–4");
+    expect(heroTennisCall([5, 4], [1, 4])).toBe("5–5");
+    for (const points of [[4, 3], [3, 4], [5, 4]] as const) {
+      expect(() => heroTennisCall([5, 4], points), String(points)).toThrow(/deuce or advantage/);
+    }
   });
 
   it("the score holds at its last frame past the plays (a replay past it adds nothing), and never reads a negative frame", () => {
