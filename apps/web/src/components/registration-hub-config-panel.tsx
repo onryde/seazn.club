@@ -32,12 +32,26 @@
 // flat form, not better — so a 422 landing on a field inside a collapsed
 // section auto-reveals that section once (see the effect below and
 // registration-hub-config-panel-sections.ts).
-import { useState } from "react";
+//
+// B7 T23 (spec §9.3) — `layout: "page"` renders the same sections as a
+// division's own hub tab instead of a dialog: a heading, the sections in the
+// page, and a Save bar pinned to the bottom of the viewport that says whether
+// anything is unsaved ("All changes saved" / "{n} unsaved changes"), with
+// Cancel (back to the saved values; the tab stays) and Save changes (saves and
+// stays). From md up every section is open, its summary a heading, with a
+// sticky section index beside them; below md they stay accordions. Dirty is
+// the draft against the SAVED values the hook keeps (use-config-dirty.ts), and
+// a "Changed" tag marks each section holding an unsaved edit. The modal layout
+// is unchanged until T24 retires it.
+import { useEffect, useId, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import type { ReactEventHandler, ReactNode } from "react";
 import { Modal } from "@/components/modal";
 import Link from "@/components/ui/console-link";
-import { useMsg, useLocaleOrDefault } from "@/components/i18n/dict-provider";
+import { useMsg, useMsgPlural, useLocaleOrDefault } from "@/components/i18n/dict-provider";
+import { useMdUp } from "@/components/ui/use-md-up";
+import { useConfigDirty, type ConfigDirty } from "@/components/use-config-dirty";
+import { ConfigSaveBar, ConfigSectionIndex, sectionAnchor } from "@/components/registration-hub-config-page-chrome";
 import { routes } from "@/lib/routes";
 import type { Currency } from "@/lib/currency";
 import type { MessageKey } from "@/lib/messages";
@@ -170,6 +184,9 @@ export function Disclosure({
   open,
   hasError,
   onToggle,
+  anchorId,
+  fixedOpen = false,
+  changedLabel = null,
   children,
 }: {
   id: string;
@@ -182,13 +199,21 @@ export function Disclosure({
   // reading it was a type error nowhere — while the native `toggle` event
   // fired during commit hands the handler a null `currentTarget`.
   onToggle: ReactEventHandler<HTMLDetailsElement>;
+  /** B7 T23, page layout only: the element id the section index links to. */
+  anchorId?: string;
+  /** B7 T23, page layout from md up: the section is always open and its summary is a heading, not a control — out of the
+   *  tab order, a click does not fold it, no chevron. */
+  fixedOpen?: boolean;
+  /** B7 T23, page layout only: the "Changed" tag, shown while the section holds an unsaved edit. */
+  changedLabel?: string | null;
   children: ReactNode;
 }) {
   return (
     <details
+      id={anchorId}
       data-accordion-section={id}
-      className="card group overflow-hidden p-0"
-      open={open}
+      className={`card group overflow-hidden p-0${anchorId ? " scroll-mt-[calc(var(--app-header-h)+1rem)]" : ""}`}
+      open={fixedOpen || open}
       onToggle={onToggle}
     >
       {/* list-none + both marker rules: <summary> carries a native
@@ -196,16 +221,31 @@ export function Disclosure({
           engine (::marker in modern engines, ::-webkit-details-marker in
           WebKit/Blink) — hiding only one leaves the native triangle
           showing alongside the custom chevron below. */}
-      <summary className="marker:content-none flex cursor-pointer list-none items-center justify-between gap-2 p-4 text-sm font-semibold text-slate-700 [&::-webkit-details-marker]:hidden">
-        <span className="flex items-center gap-2">
+      <summary
+        tabIndex={fixedOpen ? -1 : undefined}
+        onClick={fixedOpen ? (e) => e.preventDefault() : undefined}
+        className={`marker:content-none flex ${fixedOpen ? "cursor-default" : "cursor-pointer"} list-none items-center justify-between gap-2 p-4 text-sm font-semibold text-slate-700 [&::-webkit-details-marker]:hidden`}
+      >
+        {/* The page's tag can push a long translated title past a 320px card: let the row wrap there (the modal is unchanged). */}
+        <span className={anchorId ? "flex min-w-0 flex-wrap items-center gap-2" : "flex items-center gap-2"}>
           {title}
           {hasError && <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-red-500" />}
+          {changedLabel && (
+            <span
+              data-section-changed
+              className="rounded-full bg-purple-50 px-2 py-0.5 text-xs font-medium text-purple-700 ring-1 ring-inset ring-purple-200"
+            >
+              {changedLabel}
+            </span>
+          )}
         </span>
-        <ChevronDown
-          className="h-4 w-4 shrink-0 text-slate-400 transition-transform group-open:rotate-180"
-          strokeWidth={1.75}
-          aria-hidden
-        />
+        {!fixedOpen && (
+          <ChevronDown
+            className="h-4 w-4 shrink-0 text-slate-400 transition-transform group-open:rotate-180"
+            strokeWidth={1.75}
+            aria-hidden
+          />
+        )}
       </summary>
       <div className="space-y-3 border-t border-purple-100 p-4">{children}</div>
     </details>
@@ -295,6 +335,11 @@ export function OrgTzDateTimePair({
   );
 }
 
+/** B7 T23: where the panel lives. `"modal"` (the default, today's Settings-list dialog) closes on Cancel; `"page"` is a
+ *  division's own hub tab, where Cancel returns every field to the saved values and the tab stays open — so it takes no
+ *  `onClose`. */
+type ConfigPanelLayout = { layout?: "modal"; onClose: () => void } | { layout: "page"; onClose?: undefined };
+
 export function RegistrationHubConfigPanel({
   division,
   orgTz,
@@ -303,9 +348,11 @@ export function RegistrationHubConfigPanel({
   feePercentPct,
   cardUnsupportedCurrency,
   waitlistedCount,
+  layout = "modal",
   onClose,
   onSaved,
-}: {
+  onDirtyChange,
+}: ConfigPanelLayout & {
   division: RegistrationHubConfigDivisionLike;
   /** organizations.timezone (or DEFAULT_TZ) — windows are edited in this
    *  zone, never browser-local (owner decision 1). */
@@ -324,10 +371,14 @@ export function RegistrationHubConfigPanel({
    *  charges whatever fee is live at promotion time, not what they saw when
    *  they joined — see MoneySection's own comment. */
   waitlistedCount: number;
-  onClose: () => void;
   onSaved: () => void;
+  /** B7 T23: told whenever the unsaved-changes answer moves (and once on mount, clean) — never on a keystroke that leaves the
+   *  count and sections as they were. The tab host's dirty dot and close/evict dialogs read it. */
+  onDirtyChange?: (dirty: ConfigDirty) => void;
 }) {
   const msg = useMsg();
+  const msgPlural = useMsgPlural();
+  const headingId = useId();
   // RS007/V380 — the cutoff fields' month <select> needs localised month
   // names (matching the division-creation wizard's own cutoff fields,
   // division-builder.tsx). Read here and passed down as a prop, same as
@@ -339,7 +390,7 @@ export function RegistrationHubConfigPanel({
   // names) — a silent English fallback there is correct, not a bug (see
   // useLocaleOrDefault's own doc comment, dict-provider.tsx).
   const locale = useLocaleOrDefault();
-  const { state, readOnly, loadError, busy, errors, formError, saveOutcome, patch, save } =
+  const { state, saved, readOnly, loadError, busy, errors, formError, saveOutcome, patch, save, reset } =
     useRegistrationConfigPanelState(division, onSaved, (code) =>
       code === CHESS_INDIVIDUAL_ONLY
         ? msg("divset.err.chessIndividualOnly")
@@ -347,6 +398,21 @@ export function RegistrationHubConfigPanel({
           ? msg("reg.settings.entrant.notAllowedError")
           : null,
     );
+  const dirty = useConfigDirty(saved, state);
+  // Latest callback in a ref, written in an effect (never during render), so the report below fires on the ANSWER moving and
+  // not on a parent handing down a fresh inline function each render — which, with a parent that stores the report in
+  // state, would be a render loop.
+  const onDirtyChangeRef = useRef(onDirtyChange);
+  useEffect(() => {
+    onDirtyChangeRef.current = onDirtyChange;
+  });
+  useEffect(() => {
+    onDirtyChangeRef.current?.(dirty);
+  }, [dirty]);
+  // Page layout from md up: every section open, with the index beside them (spec §9.3). Null until the browser has been asked;
+  // the sections only render once the GET has answered, by which time it has.
+  const mdUp = useMdUp();
+  const wide = layout === "page" && mdUp === true;
   const [openSections, setOpenSections] = useState<Record<SectionId, boolean>>(DEFAULT_OPEN);
   // Finding 3: the fee input's draft text, independent of fee_cents. Owned
   // HERE (not inside MoneySection) rather than as a useState in the section
@@ -441,10 +507,193 @@ export function RegistrationHubConfigPanel({
     setOpenSections((prev) => (prev[sectionId] ? prev : { ...prev, [sectionId]: true }));
   }
 
+  // The page layout's Cancel: every field back to the saved values, and the in-progress drafts the state never holds (the
+  // fee text, a half-typed clock) with them — or the inputs would keep showing what was just discarded.
+  function cancelEdits() {
+    reset();
+    setFeeText(null);
+    setSoloFeeText(null);
+    setDtDrafts({});
+    setClientErrors({});
+  }
+
+  const page = layout === "page";
+
+  const notices = (
+    <>
+      {saveOutcome === "put-failed" && (
+        <p
+          role="alert"
+          data-save-outcome="put-failed"
+          className="rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-sm text-amber-800"
+        >
+          {msg("reg.hub.config.partialSavePatchOk")}
+        </p>
+      )}
+      {saveOutcome === "patch-failed" && (
+        <p
+          role="alert"
+          data-save-outcome="patch-failed"
+          className="rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-sm text-amber-800"
+        >
+          {msg("reg.hub.config.partialSavePutOk")}
+        </p>
+      )}
+      {formError && (
+        <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-2.5 text-sm text-red-600">
+          {formError}
+        </p>
+      )}
+
+      {!state && !loadError && <p className="text-sm text-slate-500">{msg("reg.hub.config.loading")}</p>}
+      {loadError && (
+        <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-2.5 text-sm text-red-600">
+          {msg("reg.hub.config.loadError")}
+        </p>
+      )}
+    </>
+  );
+
+  const sections =
+    state &&
+    SECTION_IDS.map((id) => {
+      const hasError = SECTION_FIELDS[id].some((f) => fieldErrors[f]);
+      const content =
+        id === "eligibility" ? (
+          <EligibilitySection
+            state={state}
+            errors={fieldErrors}
+            patch={patch}
+            msg={msg}
+            locale={locale}
+            orgTz={orgTz}
+            dtDrafts={dtDrafts}
+            onDateTimeHalfChange={onDateTimeHalfChange}
+            individualOnly={division.individual_only === true}
+          />
+        ) : id === "schedule" ? (
+          <OpenCloseSection
+            state={state}
+            errors={fieldErrors}
+            patch={patch}
+            msg={msg}
+            orgTz={orgTz}
+            dtDrafts={dtDrafts}
+            onDateTimeHalfChange={onDateTimeHalfChange}
+            individualOnly={division.individual_only === true}
+            entryShapeLegacy={readOnly!.storedEntryShapeLegacy}
+            allowedKinds={division.allowed_kinds}
+          />
+        ) : id === "capacity" ? (
+          <CapacitySection state={state} errors={fieldErrors} patch={patch} msg={msg} />
+        ) : id === "money" ? (
+          <MoneySection
+            state={state}
+            errors={fieldErrors}
+            patch={patch}
+            msg={msg}
+            orgTz={orgTz}
+            orgSlug={orgSlug}
+            currency={currency}
+            feePercentPct={feePercentPct}
+            cardUnsupportedCurrency={cardUnsupportedCurrency}
+            waitlistedCount={waitlistedCount}
+            chargesEnabled={readOnly!.chargesEnabled}
+            orgPaymentInstructions={readOnly!.orgPaymentInstructions}
+            feeText={feeText}
+            onFeeText={setFeeText}
+            soloFeeText={soloFeeText}
+            onSoloFeeText={setSoloFeeText}
+            dtDrafts={dtDrafts}
+            onDateTimeHalfChange={onDateTimeHalfChange}
+          />
+        ) : (
+          <FormSection state={state} errors={fieldErrors} patch={patch} />
+        );
+      return (
+        <Disclosure
+          key={id}
+          id={id}
+          title={sectionTitle(id, msg, state.form_fields.length)}
+          open={openSections[id]}
+          hasError={hasError}
+          anchorId={page ? sectionAnchor(id, division.division_id) : undefined}
+          fixedOpen={wide}
+          changedLabel={page && dirty.sections.includes(id) ? msg("reg.config.changed") : null}
+          // Reads `e.target`, NOT `e.currentTarget`. <details> fires a
+          // native `toggle` event, and the three sections that mount
+          // with open={true} fire it synchronously while React is
+          // still committing — `currentTarget` is only bound for the
+          // duration of the dispatch, so by the time this handler ran
+          // it was null and every first Configure click crashed the
+          // page with "Cannot read properties of null (reading
+          // 'open')". `target` is the <details> element itself here
+          // and stays valid.
+          //
+          // B7 T23: ignored while the page holds every section open (md
+          // up). Those forced-open sections fire `toggle` as they mount,
+          // and recording it would open Money and the form for good the
+          // moment the window narrows to a phone.
+          onToggle={(e) => {
+            if (wide) return;
+            setOpenSections((prev) => ({
+              ...prev,
+              [id]: (e.target as HTMLDetailsElement).open,
+            }));
+          }}
+        >
+          {content}
+        </Disclosure>
+      );
+    });
+
+  if (page) {
+    const sectionTitles = Object.fromEntries(
+      SECTION_IDS.map((id) => [id, id === "form" ? msg("reg.settings.signupForm") : sectionTitle(id, msg, 0)]),
+    ) as Record<SectionId, string>;
+    return (
+      <section
+        data-registration-hub-config-panel
+        data-layout="page"
+        data-division-id={division.division_id}
+        data-save-outcome={saveOutcome ?? undefined}
+        aria-labelledby={headingId}
+        className="min-w-0 space-y-4"
+      >
+        <h2 id={headingId} className="break-words text-lg font-semibold text-slate-900">
+          {division.name}
+        </h2>
+        {notices}
+        {state && (
+          <div className="md:grid md:grid-cols-[10rem_minmax(0,1fr)] md:items-start md:gap-6">
+            <ConfigSectionIndex
+              divisionId={division.division_id}
+              label={msg("reg.config.sectionIndex")}
+              titles={sectionTitles}
+              changed={dirty.sections}
+            />
+            <div className="min-w-0 space-y-3">{sections}</div>
+          </div>
+        )}
+        {state && (
+          <ConfigSaveBar
+            dirty={dirty.dirty}
+            status={dirty.dirty ? msgPlural("reg.config.unsaved", dirty.count) : msg("reg.config.allSaved")}
+            busy={busy}
+            cancelLabel={msg("reg.hub.config.cancel")}
+            saveLabel={busy ? msg("reg.hub.config.saving") : msg("reg.hub.config.save")}
+            onCancel={cancelEdits}
+            onSave={saveAndReveal}
+          />
+        )}
+      </section>
+    );
+  }
+
   return (
     <Modal
       title={msg("reg.hub.config.title", { name: division.name })}
-      onClose={onClose}
+      onClose={onClose!}
       size="lg"
       footer={
         <>
@@ -471,122 +720,8 @@ export function RegistrationHubConfigPanel({
         data-save-outcome={saveOutcome ?? undefined}
         className="space-y-3"
       >
-        {saveOutcome === "put-failed" && (
-          <p
-            role="alert"
-            data-save-outcome="put-failed"
-            className="rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-sm text-amber-800"
-          >
-            {msg("reg.hub.config.partialSavePatchOk")}
-          </p>
-        )}
-        {saveOutcome === "patch-failed" && (
-          <p
-            role="alert"
-            data-save-outcome="patch-failed"
-            className="rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-sm text-amber-800"
-          >
-            {msg("reg.hub.config.partialSavePutOk")}
-          </p>
-        )}
-        {formError && (
-          <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-2.5 text-sm text-red-600">
-            {formError}
-          </p>
-        )}
-
-        {!state && !loadError && <p className="text-sm text-slate-500">{msg("reg.hub.config.loading")}</p>}
-        {loadError && (
-          <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-2.5 text-sm text-red-600">
-            {msg("reg.hub.config.loadError")}
-          </p>
-        )}
-
-        {state && (
-          <>
-            {SECTION_IDS.map((id) => {
-              const hasError = SECTION_FIELDS[id].some((f) => fieldErrors[f]);
-              const content =
-                id === "eligibility" ? (
-                  <EligibilitySection
-                    state={state}
-                    errors={fieldErrors}
-                    patch={patch}
-                    msg={msg}
-                    locale={locale}
-                    orgTz={orgTz}
-                    dtDrafts={dtDrafts}
-                    onDateTimeHalfChange={onDateTimeHalfChange}
-                    individualOnly={division.individual_only === true}
-                  />
-                ) : id === "schedule" ? (
-                  <OpenCloseSection
-                    state={state}
-                    errors={fieldErrors}
-                    patch={patch}
-                    msg={msg}
-                    orgTz={orgTz}
-                    dtDrafts={dtDrafts}
-                    onDateTimeHalfChange={onDateTimeHalfChange}
-                    individualOnly={division.individual_only === true}
-                    entryShapeLegacy={readOnly!.storedEntryShapeLegacy}
-                    allowedKinds={division.allowed_kinds}
-                  />
-                ) : id === "capacity" ? (
-                  <CapacitySection state={state} errors={fieldErrors} patch={patch} msg={msg} />
-                ) : id === "money" ? (
-                  <MoneySection
-                    state={state}
-                    errors={fieldErrors}
-                    patch={patch}
-                    msg={msg}
-                    orgTz={orgTz}
-                    orgSlug={orgSlug}
-                    currency={currency}
-                    feePercentPct={feePercentPct}
-                    cardUnsupportedCurrency={cardUnsupportedCurrency}
-                    waitlistedCount={waitlistedCount}
-                    chargesEnabled={readOnly!.chargesEnabled}
-                    orgPaymentInstructions={readOnly!.orgPaymentInstructions}
-                    feeText={feeText}
-                    onFeeText={setFeeText}
-                    soloFeeText={soloFeeText}
-                    onSoloFeeText={setSoloFeeText}
-                    dtDrafts={dtDrafts}
-                    onDateTimeHalfChange={onDateTimeHalfChange}
-                  />
-                ) : (
-                  <FormSection state={state} errors={fieldErrors} patch={patch} />
-                );
-              return (
-                <Disclosure
-                  key={id}
-                  id={id}
-                  title={sectionTitle(id, msg, state.form_fields.length)}
-                  open={openSections[id]}
-                  hasError={hasError}
-                  // Reads `e.target`, NOT `e.currentTarget`. <details> fires a
-                  // native `toggle` event, and the three sections that mount
-                  // with open={true} fire it synchronously while React is
-                  // still committing — `currentTarget` is only bound for the
-                  // duration of the dispatch, so by the time this handler ran
-                  // it was null and every first Configure click crashed the
-                  // page with "Cannot read properties of null (reading
-                  // 'open')". `target` is the <details> element itself here
-                  // and stays valid.
-                  onToggle={(e) =>
-                    setOpenSections((prev) => ({
-                      ...prev,
-                      [id]: (e.target as HTMLDetailsElement).open,
-                    }))
-                  }
-                >
-                  {content}
-                </Disclosure>
-              );
-            })}
-          </>
-        )}
+        {notices}
+        {sections}
       </div>
     </Modal>
   );

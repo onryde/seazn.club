@@ -51,6 +51,10 @@ export interface ReadOnlyEcho {
 interface Loaded {
   state: RegistrationConfigState;
   readOnly: ReadOnlyEcho;
+  /** B7 T23: what the server holds as far as this editor knows — the values it loaded, moved forward by each request that
+   *  LANDED, to what that request sent. The dirty check (use-config-dirty.ts) compares `state` against this, and `reset()`
+   *  restores it. Never the props the panel mounted with: after a save those are stale until the page refetches. */
+  saved: RegistrationConfigState;
 }
 
 export function useRegistrationConfigPanelState(
@@ -76,8 +80,10 @@ export function useRegistrationConfigPanelState(
       .then((data) => {
         if (cancelled) return;
         const individualOnly = division.individual_only === true;
+        const state = initialConfigState(data, division, individualOnly);
         setLoaded({
-          state: initialConfigState(data, division, individualOnly),
+          state,
+          saved: state,
           readOnly: {
             chargesEnabled: data.charges_enabled,
             orgPaymentInstructions: data.org_payment_instructions,
@@ -121,6 +127,17 @@ export function useRegistrationConfigPanelState(
     setBusy(false);
     const patchOk = patchResult.status === "fulfilled";
     const putOk = putResult.status === "fulfilled";
+    // Each body that landed is now what the server holds: move the saved values to what it SENT. Per body, because a partial
+    // save is half saved — keeping the landed half "unsaved" would let Cancel restore values the server no longer has, and the
+    // next save would quietly undo it. What was SENT, not the current draft: an edit typed while the save was in flight is
+    // still unsaved.
+    if (patchOk || putOk) {
+      setLoaded((prev) =>
+        prev
+          ? { ...prev, saved: { ...prev.saved, ...(patchOk ? patchBody : {}), ...(putOk ? putBody : {}) } }
+          : prev,
+      );
+    }
     if (patchOk && putOk) {
       setSaveOutcome("success");
       onSaved();
@@ -141,8 +158,18 @@ export function useRegistrationConfigPanelState(
     return nextErrors;
   }
 
+  /** B7 T23 (the page layout's Cancel): every field back to the saved values, and the outcome of the last save with them —
+   *  its banner and field errors were about the edits just discarded. */
+  function reset() {
+    setLoaded((prev) => (prev ? { ...prev, state: prev.saved } : prev));
+    setErrors({});
+    setFormError(null);
+    setSaveOutcome(null);
+  }
+
   return {
     state: loaded?.state ?? null,
+    saved: loaded?.saved ?? null,
     readOnly: loaded?.readOnly ?? null,
     loadError,
     busy,
@@ -151,5 +178,6 @@ export function useRegistrationConfigPanelState(
     saveOutcome,
     patch,
     save,
+    reset,
   };
 }
