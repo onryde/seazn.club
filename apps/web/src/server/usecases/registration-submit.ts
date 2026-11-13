@@ -810,6 +810,8 @@ export async function submitRegistrationGroup(
     // default, which is the TRANSACTION's start and so the same for every entry of this cart. The status page and the cart mail
     // read entries `order by r.created_at, r.id`; with one shared moment the tie fell to the random row id and a cart read back in
     // an order the person never chose. Inserted in `prepared` order (the cart's own), the moments now carry that order.
+    // The same insert order IS each entry's `cart_position`, the "-<n>" of its quoted reference: the database numbers every
+    // insert into a cart 1, 2, 3… (V519 trigger, the only writer) — never reorder this loop or insert an entry elsewhere.
     for (const p of prepared) {
       // LIVE settings (fetched under the lock above), never the pre-lock
       // `p.settings` snapshot — review MAJOR 3.

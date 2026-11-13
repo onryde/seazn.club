@@ -33,21 +33,22 @@ export function formatRefCode(chars: string): string {
 }
 
 // Per-entry references (registration redesign spec §6.2). Every entry of a cart shares the cart's ref code; an entry is told
-// apart by `registrations.cart_position`, its 1-based place in the cart, stored at submit and never renumbered (a deleted
-// sibling's division leaves a gap, so `…-3` still means the third entry the person sent).
+// apart by `registrations.cart_position`, its 1-based place in the cart. Both inputs are stored (V519) and never change after
+// submit, because an offline bank transfer quotes the reference: a deleted sibling's division leaves a gap, so `…-3` still
+// means the third entry the person sent, and a lone survivor of a 3-entry cart is still `…-3`.
 
 /** The largest position `registrations.cart_position` (Postgres smallint) can hold. */
 const MAX_CART_POSITION = 32767;
 
 /** The reference to quote for one entry: the cart ref alone for a one-entry cart, `SZ-XXXX-XXXX-<position>` otherwise.
- *  `cartSize` counts every entry the cart still holds, whatever its status, so a withdrawal never renames a sibling. A
- *  position above `cartSize` is legal: it is what a deleted sibling's division leaves behind. */
+ *  `cartSize` is the cart's stored `registration_groups.cart_size` — how many entries it was sent with, never decremented —
+ *  not a count of the entries that survive, so no withdrawal or division delete ever changes a reference. */
 export function entryReference(refCode: string, position: number, cartSize: number): string {
   if (!Number.isInteger(position) || position < 1) {
     throw new RangeError(`entryReference: position must be an integer >= 1, got ${position}`);
   }
-  if (!Number.isInteger(cartSize) || cartSize < 1) {
-    throw new RangeError(`entryReference: cartSize must be an integer >= 1, got ${cartSize}`);
+  if (!Number.isInteger(cartSize) || cartSize < position) {
+    throw new RangeError(`entryReference: cartSize must be an integer >= the position (${position}), got ${cartSize}`);
   }
   return cartSize < 2 ? refCode : `${refCode}-${position}`;
 }

@@ -75,9 +75,11 @@ describe("normalizeRefCode", () => {
   });
 });
 
-// Per-entry references (registration redesign spec §6.2, B5 T17). The rule: a cart of one entry is quoted by its cart
-// reference alone; a cart of two or more suffixes each entry with its stored, 1-based cart position. `cartSize` counts every
-// entry the cart still holds, whatever its status, so a withdrawal never renames a sibling.
+// Per-entry references (registration redesign spec §6.2, B5 T17, orchestrator ruling 2026-11-13). The rule: a cart of one
+// entry is quoted by its cart reference alone; a cart of two or more suffixes each entry with its stored, 1-based cart
+// position. `cartSize` is the cart's STORED size (`registration_groups.cart_size`, V519): how many entries it was sent with,
+// never decremented. A reference someone quoted on a bank transfer therefore never changes after submit — not on a
+// withdrawal, and not when a sibling's division is deleted.
 describe("entryReference", () => {
   const ref = generateRefCode();
 
@@ -90,9 +92,8 @@ describe("entryReference", () => {
     expect(entryReference(ref, 1, 2)).toBe(`${ref}-1`);
   });
 
-  it("a position past the surviving count stays as stored (a sibling's division was deleted)", () => {
-    // 3-entry cart, entry 2's division deleted: 2 entries survive, entry 3 keeps "-3" — never renumbered to "-2".
-    expect(entryReference(ref, 3, 2)).toBe(`${ref}-3`);
+  it("a lone survivor of a 3-entry cart keeps its suffix (the stored size is 3, not the 1 left)", () => {
+    expect(entryReference(ref, 3, 3)).toBe(`${ref}-3`);
   });
 
   it("refuses a position or cart size that cannot belong to a stored entry", () => {
@@ -103,11 +104,13 @@ describe("entryReference", () => {
       [Number.NaN, 2],
       [1, 0], // the entry itself is in the cart, so the cart holds at least one
       [1, 2.5],
+      [3, 2], // the stored size is the largest position the cart ever reached
+      [2, 1],
     ];
     for (const [position, cartSize] of bad) {
       expect(() => entryReference(ref, position, cartSize), `${position}/${cartSize}`).toThrow(RangeError);
     }
-    expect(bad.length).toBe(6);
+    expect(bad.length).toBe(8);
   });
 });
 
