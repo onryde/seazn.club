@@ -321,6 +321,9 @@ jobs:
     # deliberately NOT carved: overlay-compositor (overlay-compositor-e2e-wiring
     # pins it in "rest") and player-stats-stale-version (alphabetically it
     # would start after the gallery's tests and be heavy's tail).
+    # (2026-11-13: player-stats-stale-version IS carved now. It drifted into rest
+    # 2/4, which then hit the 20-minute cap with every test green, run
+    # 43474866080, 1209s. playwright.config.ts has the numbers.)
     #
     # Why a fourth rest leg now, after the paragraph above argued against one:
     # that paragraph's trigger — "a rest leg is once more the slowest in a
