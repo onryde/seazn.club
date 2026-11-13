@@ -176,6 +176,21 @@ describe("POST /q/<token>/cut/toss and /cut/pick (plan 5 T4)", () => {
         expect(mocks.touch).toHaveBeenCalledExactlyOnceWith(ROW.id);
       });
 
+      it("an advance that throws before it returns a promise is the same best-effort failure: logged, never reported, the bare home", async () => {
+        mocks.resolve.mockResolvedValue(ROW);
+        mocks.decide.mockResolvedValue({ through: [A] });
+        mocks.touch.mockResolvedValue(undefined);
+        const boom = new Error("threw synchronously");
+        mocks.advance.mockImplementationOnce(() => {
+          throw boom;
+        });
+        expect(landed(await call(route))).toBe(`/q/${TOKEN}`);
+        expect(mocks.logError).toHaveBeenCalledTimes(1);
+        expect(mocks.logError.mock.calls[0]![0]).toMatchObject({ err: boom, event: "quick_match_advance_failed" });
+        expect(reported()).toEqual([]);
+        expect(mocks.touch).toHaveBeenCalledExactlyOnceWith(ROW.id);
+      });
+
       it("a token read that throws is a fault: reported once, the generic line on this token's home, nothing called", async () => {
         const boom = new Error("db down");
         mocks.resolve.mockRejectedValue(boom);

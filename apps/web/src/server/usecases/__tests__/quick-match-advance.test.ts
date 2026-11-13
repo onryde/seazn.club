@@ -29,6 +29,7 @@ import { systemAuth } from "@/lib/quick-match-auth";
 import { QUICK_MATCH_ERRORS } from "@/lib/quick-match-constants";
 import { MUTATION_LIMIT, __setRateLimitCounterForTests } from "@/lib/rate-limit";
 import { requireFixtureActor, type AuthCtx } from "@/server/api-v1/auth";
+import { log } from "@/server/logger";
 import { declaredVariant } from "@/server/engine-db/__tests__/helpers/seed-bracket";
 import { CreateQuickMatch, CreateStage } from "@/server/api-v1/schemas";
 import { createCompetition } from "../competitions";
@@ -264,6 +265,16 @@ async function padPost(fixtureId: string, secret: string, body: unknown): Promis
     { params: Promise.resolve({ id: fixtureId }) },
   );
 }
+/** The `quick_match_advance_failed` lines a spy on the shared logger saw. */
+const advanceFailures = (spy: { mock: { calls: unknown[][] } }) =>
+  spy.mock.calls.filter(([o]) => (o as { event?: string } | undefined)?.event === "quick_match_advance_failed");
+/** The live league lot: the one unsuperseded draw completion stored for the league stage. */
+async function lotOf(m: Lk): Promise<string[]> {
+  const draws = await sql<{ drawn_order: string[] }[]>`
+    select drawn_order from stage_lots_draws where stage_id = ${m.leagueStageId} and superseded_at is null`;
+  expect(draws, "completion stored one lot for the one level class").toHaveLength(1);
+  return draws[0]!.drawn_order;
+}
 async function ledgerTail(fixtureId: string): Promise<{ count: number; lastId: string; lastSeq: number }> {
   const rows = await sql<{ id: string; seq: number }[]>`select id, seq from score_events where fixture_id = ${fixtureId} order by seq`;
   return { count: rows.length, lastId: rows.at(-1)!.id, lastSeq: rows.at(-1)!.seq };
@@ -371,6 +382,40 @@ describe.skipIf(!HAS_DB)("the advance: the knockout fills when the league ends (
     expect(await firstRound(m), "1st (the lot's first) v 4th (D), 2nd v 3rd by the lot").toEqual(sortedPairs([lot[0]!, d], [lot[1]!, lot[2]!]));
     expect(await decisionOf(m), "nobody was asked").toMatchObject({ value: null });
     expect(await proposalsOf(m)).toEqual({ confirmed: 1 });
+  });
+});
+
+describe.skipIf(!HAS_DB)("a failed advance never fails the score (P6, D2)", () => {
+  it("the hook rejects on the LAST league result: the pad's post through the real events route is still 201 with its result stored, the knockout stays empty, one quick_match_advance_failed line; the next advance fills it", async () => {
+    const m = await chessLk(["A", "B", "C"], 2);
+    await beat(m, "A", "B");
+    await beat(m, "A", "C");
+    const [last] = await between(m, "B", "C");
+    const pad = await padOf(m.row, last!.id);
+    const start = await padPost(last!.id, pad.secret, { expected_seq: 0, type: "core.start", payload: {} });
+    expect(start.status, await start.clone().text()).toBe(201);
+    const errors = vi.spyOn(log, "error");
+    try {
+      hookSpy.mockClear();
+      hookSpy.mockRejectedValueOnce(new Error("the advance failed after the commit"));
+      const res = await padPost(last!.id, pad.secret, {
+        expected_seq: 1,
+        type: "boardgame.result",
+        payload: { winner: m.id.get("B"), method: "resign" },
+      });
+      expect(res.status, `the score stands whatever the advance does: ${await res.clone().text()}`).toBe(201);
+      expect(hookSpy, "the hook ran (and failed) for this result").toHaveBeenCalledTimes(1);
+      expect(advanceFailures(errors), "logged once, as the advance's own event").toHaveLength(1);
+    } finally {
+      errors.mockRestore();
+    }
+    const [row] = await sql<{ winner: string | null }[]>`select outcome->>'winner' as winner from fixtures where id = ${last!.id}`;
+    expect(row!.winner, "the result is stored").toBe(m.id.get("B"));
+    expect(await koSeated(m), "nothing filled: the failure left the knockout as it was").toBe(0);
+    expect(await proposalsOf(m)).toEqual({});
+    // Retryable: the next advance (a home load, another post) takes it from there. A wins 2, B 1, C 0.
+    expect(await advanceQuickMatch(m.row)).toEqual({ state: "filled" });
+    expect(await firstRound(m)).toEqual([pairing(m.id.get("A")!, m.id.get("B")!)]);
   });
 });
 
@@ -542,6 +587,43 @@ describe.skipIf(!HAS_DB)("a tie at the cut: asked once, answered once (D5, §5, 
     await playWin(split!.id, q, pad.auth);
     expect(await firstRound(m), "the table that stands now decides, not the stale answer").toEqual([pairing(m.id.get("P")!, q)]);
   });
+
+  it("9b. the league reopened with the SAME tie (a P–Q result voided through the pad: Q and R still level for 2nd): the answer is dropped because the league is no longer done (§11), not because the tie moved; replayed, the same question is asked again", async () => {
+    const m = await chessLk(["P", "Q", "R"], 2, 2);
+    const [p, q, r] = ["P", "Q", "R"].map((n) => m.id.get(n)!) as [string, string, string];
+    const [, pq1] = await between(m, "P", "Q");
+    const pad = await padOf(m.row, pq1!.id); // minted while the match is open
+    await beat(m, "P", "Q", 0);
+    await beat(m, "P", "R", 0);
+    await beat(m, "P", "R", 1);
+    await beat(m, "Q", "R", 0);
+    await beat(m, "R", "Q", 1);
+    await playWin(pq1!.id, p, pad.auth); // the last league result
+    expect((await advanceQuickMatch(m.row)).state, "premise: Q and R level for 2nd").toBe("tie");
+    // A real answer through the usecase; the void lands before anything advanced from it.
+    expect(await decideQuickMatchCut(m.row, { how: "pick", entrantIds: [r] })).toEqual({ through: [r] });
+
+    const tail = await ledgerTail(pq1!.id);
+    const voided = await padPost(pq1!.id, pad.secret, { expected_seq: tail.lastSeq, type: "core.void", payload: { event_id: tail.lastId } });
+    expect(voided.status, await voided.clone().text()).toBe(201);
+    // The engine's own table: still P first, Q and R level on every step for 2nd, so the decision still names the open tie.
+    const table = await tableOf(m);
+    expect(table[0]!.entrantId).toBe(p);
+    expect(table.slice(1).every((row) => row.tieUnbroken === true), "premise: the void kept the tie (P–Q only)").toBe(true);
+    expect([table[1]!.entrantId, ...(table[1]!.tieBreak?.with ?? [])].sort(), "premise: the same class").toEqual([q, r].sort());
+    // The void's own hook advanced: the league is not done, so the answer goes.
+    expect((await decisionOf(m)).value, "§11: no question on a league that is not done").toBeNull();
+    expect(await advanceQuickMatch(m.row)).toEqual({ state: "league" });
+    expect(await koSeated(m)).toBe(0);
+    expect(await stageStatus(m.leagueStageId)).toBe("active");
+
+    // Replayed the same way: the same tie, asked again; the dropped pick does not fill.
+    await playWin(pq1!.id, p, pad.auth);
+    const asked = await advanceQuickMatch(m.row);
+    expect(asked.state === "tie" && asked.tie.entrantIds).toEqual([q, r].sort());
+    expect(await koSeated(m)).toBe(0);
+    expect((await decisionOf(m)).value).toBeNull();
+  });
 });
 
 describe.skipIf(!HAS_DB)("skips and the knockout (P14, D3)", () => {
@@ -644,6 +726,67 @@ describe.skipIf(!HAS_DB)("two phones at once (Review Focus 2)", () => {
   });
 });
 
+describe.skipIf(!HAS_DB)("two phones at once, nothing held (real Postgres, no gates)", () => {
+  const ROUNDS = 3;
+
+  it(`the last two league matches decided at once (two scoring hooks race to fill), ×${ROUNDS}: one confirmed proposal, one seed_confirmed, the final seated once, no advance failure`, async () => {
+    const errors = vi.spyOn(log, "error");
+    let rounds = 0;
+    try {
+      for (let i = 0; i < ROUNDS; i++) {
+        const m = await chessLk(["W", "X", "Y", "Z"], 2);
+        for (const [w, l] of [["W", "X"], ["W", "Y"], ["W", "Z"], ["X", "Y"]] as const) await beat(m, w, l);
+        const [xz] = await between(m, "X", "Z");
+        const [yz] = await between(m, "Y", "Z");
+        await Promise.all([playWin(xz!.id, m.id.get("X")!), playWin(yz!.id, m.id.get("Y")!)]);
+        // W 3 wins, X 2, Y 1, Z 0: the final is W v X.
+        // The loser's computed draft may be left stale by the winner's compute; only one is ever confirmed.
+        expect((await proposalsOf(m)).confirmed, `round ${i}`).toBe(1);
+        expect(await seedConfirmedEvents(m), `round ${i}`).toBe(1);
+        expect(await koSeated(m), `round ${i}: two seats, once`).toBe(2);
+        expect(await firstRound(m), `round ${i}`).toEqual([pairing(m.id.get("W")!, m.id.get("X")!)]);
+        rounds++;
+      }
+      expect(advanceFailures(errors), "a lost race is never logged as a failure").toEqual([]);
+    } finally {
+      errors.mockRestore();
+    }
+    expect(rounds).toBe(ROUNDS);
+  });
+
+  it(`Pick and Toss posted at once (each then advancing, as the routes do), ×${ROUNDS}: one answer stands, the other is ALREADY_DECIDED, and the final seats the answer that stood`, async () => {
+    let rounds = 0;
+    const outcomes = new Set<string>();
+    for (let i = 0; i < ROUNDS; i++) {
+      const m = await chessLk(["P", "Q", "R"], 2, 2);
+      for (const [w, l, nth] of [["P", "Q", 0], ["P", "Q", 1], ["P", "R", 0], ["P", "R", 1], ["Q", "R", 0], ["R", "Q", 1]] as const) {
+        await beat(m, w, l, nth);
+      }
+      const q = m.id.get("Q")!;
+      const post = (input: Parameters<typeof decideQuickMatchCut>[1]) =>
+        decideQuickMatchCut(m.row, input).then(async (out) => {
+          await advanceQuickMatch(m.row);
+          return { how: input.how, ...out };
+        });
+      const settled = await Promise.allSettled([post({ how: "pick", entrantIds: [q] }), post({ how: "toss" })]);
+      const ok = settled.filter((s) => s.status === "fulfilled");
+      const refused = settled.filter((s) => s.status === "rejected");
+      expect(ok, `round ${i}: one answer stands`).toHaveLength(1);
+      expect(refused).toHaveLength(1);
+      const err = (refused[0] as PromiseRejectedResult).reason as HttpError;
+      expect({ status: err.status, code: err.code }).toEqual({ status: 422, code: QUICK_MATCH_ERRORS.ALREADY_DECIDED });
+      const won = (ok[0] as PromiseFulfilledResult<{ how: string; through: string[] }>).value;
+      expect((await decisionOf(m)).value, "the stored answer is the one that stood").toMatchObject({ how: won.how, through: won.through });
+      expect(await firstRound(m)).toEqual([pairing(m.id.get("P")!, won.through[0]!)]);
+      expect(await proposalsOf(m)).toEqual({ confirmed: 1 });
+      outcomes.add(won.how);
+      rounds++;
+    }
+    expect(rounds).toBe(ROUNDS);
+    console.info(`pick v toss race: winners ${[...outcomes].join(", ")} over ${rounds} rounds`);
+  });
+});
+
 describe.skipIf(!HAS_DB)("nothing moves for anyone else (D2, P5)", () => {
   it("14. a plain League: the advance is plain and writes nothing; its scores reach the hook, which leaves it alone", async () => {
     const plain = await plainLeague(["A", "B", "C"]);
@@ -694,52 +837,74 @@ describe.skipIf(!HAS_DB)("nothing moves for anyone else (D2, P5)", () => {
   }, 60_000);
 });
 
-describe.skipIf(!HAS_DB)("every offered sport fills its knockout (one variant each)", () => {
-  it("3 sides, League → Final, the league played through the real write path: the final holds the stored table's top two, or the tie's answer", async () => {
+describe.skipIf(!HAS_DB)("every offered sport asks its tie at the cut (one variant each)", () => {
+  it("3 sides, League → Final, every league match decided the same way through the real write path: a circle, so every sport ASKS (P8: `seed` never breaks it); half answer by Toss (the stored lot's first two), half by Pick (the two the lot would not seat)", async () => {
     const offered = new Map((await listQuickMatchSports()).map((s) => [s.sport_key, s]));
     expect(OFFERED_SPORT_KEYS.length, "the offer names 9 sports").toBe(9);
     let checked = 0;
     let asked = 0;
+    let tossed = 0;
+    let picked = 0;
     const visited = await forEachSportAsync(async ({ key }) => {
       if (!OFFERED_SPORT_KEYS.includes(key)) return; // generic and the lineup sport: no guest makes one
       const sport = offered.get(key);
       expect(sport, `${key}: the offer and the catalog agree`).toBeDefined();
       const m = await lk({ sport_key: key, variant_key: sport!.variants[0]!.variant_key, kind: sport!.kinds.at(-1)!, sides: ["Side A", "Side B", "Side C"] });
-      for (const l of await linesOf(m.leagueStageId)) {
+      const lines = await linesOf(m.leagueStageId);
+      expect(lines, `${key}: a round robin of 3 is 3·2/2`).toHaveLength(3);
+      // A circle: every side is at home exactly once, and the probe's walk decides every match the same way (the same side of
+      // the line wins, by the same scoreline: chess's home side by resignation). Each side then has one win and one loss by
+      // the same scoreline, so the rulebook leaves all three level on every step before the lot.
+      expect(new Set(lines.map((l) => l.home_entrant_id)).size, `${key}: each side at home once`).toBe(3);
+      const winners = new Set<string>();
+      for (const l of lines) {
         if (key === "boardgame") {
-          // Chess: no rally walk to play; the home side resigns nobody, so the home side wins.
-          await playWin(l.id, l.home_entrant_id!);
+          await playWin(l.id, l.home_entrant_id!); // chess: no rally walk; the away side resigns
         } else {
           const played = await playToDecided(systemAuth(), l.id);
           expect(played.kind, `${key}: ${JSON.stringify(played)}`).toBe("decided");
         }
+        const [row] = await sql<{ winner: string | null }[]>`select outcome->>'winner' as winner from fixtures where id = ${l.id}`;
+        expect(row!.winner, `${key}: ${l.id} has a winner`).toBeTruthy();
+        winners.add(row!.winner!);
       }
+      expect(winners.size, `${key}: premise, a circle (each side won exactly one)`).toBe(3);
       const table = await tableOf(m);
-      expect(table, key).toHaveLength(3);
+      expect(table.every((r) => r.tieUnbroken === true), `${key}: all three level on every step (no seed split, P8)`).toBe(true);
+      expect(await koSeated(m), `${key}: a tie straddles the cut, so nothing filled`).toBe(0);
+      const state = await advanceQuickMatch(m.row);
+      expect(state.state, key).toBe("tie");
+      asked++;
+      const ids = table.map((r) => r.entrantId);
       let expected: string[];
-      if ((await koSeated(m)) === 0) {
-        // The hook asked instead of filling: rank 2 must be level with a side below the cut (the engine's own flag).
-        const second = table[1]!;
-        expect(second.tieUnbroken, `${key}: unfilled only when 2nd is level on every step`).toBe(true);
-        const cls = [second.entrantId, ...(second.tieBreak?.with ?? [])];
-        const seats = cls.filter((id) => table.findIndex((r) => r.entrantId === id) < 2).length;
-        const picked = [...cls].sort().slice(0, seats);
-        await decideQuickMatchCut(m.row, { how: "pick", entrantIds: picked });
+      if (checked % 2 === 0) {
+        const { through } = await decideQuickMatchCut(m.row, { how: "toss" });
         expect(await advanceQuickMatch(m.row), key).toEqual({ state: "filled" });
-        expected = [...table.slice(0, 2).map((r) => r.entrantId).filter((id) => !cls.includes(id)), ...picked];
-        asked++;
+        const lot = await lotOf(m);
+        expect([...lot].sort(), key).toEqual([...ids].sort());
+        expect(through, `${key}: the toss revealed the stored lot's first two`).toEqual(lot.slice(0, 2));
+        expected = lot.slice(0, 2);
+        tossed++;
       } else {
-        expected = table.slice(0, 2).map((r) => r.entrantId);
+        // The two the lot would NOT seat together: the live table's 2nd and 3rd (its order is the lot's).
+        const chosen = [ids[1]!, ids[2]!];
+        await decideQuickMatchCut(m.row, { how: "pick", entrantIds: chosen });
+        expect(await advanceQuickMatch(m.row), key).toEqual({ state: "filled" });
+        expected = chosen;
+        picked++;
       }
       expect(await firstRound(m), key).toEqual([pairing(...expected)]);
       expect(await proposalsOf(m), key).toEqual({ confirmed: 1 });
       checked++;
       await hardDeleteQuickMatchCompetition(m.out.competitionId);
     });
-    console.info(`quick match advance sweep: ${checked} offered sports filled their final (${asked} through a tie's answer), of ${visited} sport modules`);
+    console.info(`quick match advance sweep: ${checked} offered sports (${asked} asked; ${tossed} toss, ${picked} pick), of ${visited} sport modules`);
     expect(visited).toBeGreaterThan(0);
     expect(checked, "zero checked is a failure").toBeGreaterThan(0);
     expect(checked, "every offered sport, once").toBe(OFFERED_SPORT_KEYS.length);
+    expect(asked, "every circle is asked").toBe(checked);
+    expect(tossed, "Toss taken").toBeGreaterThan(0);
+    expect(picked, "Pick taken").toBeGreaterThan(0);
   }, SWEEP_TIMEOUT_MS);
 });
 

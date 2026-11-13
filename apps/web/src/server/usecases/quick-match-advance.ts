@@ -10,8 +10,10 @@ import "server-only";
 //
 // The interface, three doors and one read:
 //   - `loadLeagueCut(row)`: one read as the system org under the division's advisory lock (the key completion, the seed
-//     proposal's compute and its confirm take, so the read never sees half of one of them). The advance, the decision and
-//     the home (T5) ask it the same question.
+//     proposal's compute and its confirm take), so it never sees half of a completion, a compute or a confirm. Score appends
+//     take no division lock, so a result can land between its statements: nothing here relies on the read being a snapshot
+//     of the league. The fill's own serialisation is the confirm's (under that lock, against the proposal's status), and
+//     every caller reads again on its next pass. The advance, the decision and the home (T5) ask it the same question.
 //   - `advanceQuickMatch(row)`: QM-owned and idempotent (P5: the organiser's auto-advance is post-commit, swallows every
 //     failure and confirms no tie, so it is never used; `divisions.auto_progress` stays false). Each call takes the next
 //     step, D2: not a League + Knockout → plain; the knockout filled → filled; the league not done → league; a tie that
@@ -22,7 +24,10 @@ import "server-only";
 //     home load (the retry). Two phones racing it fill the knockout once (Review Focus 2): the confirm's own refusals
 //     (SEEDING_ALREADY_CONFIRMED, SEEDING_PROPOSAL_STALE) are the loser's, read as "look again", never as a failure.
 //   - `decideQuickMatchCut(row, input)`: Pick who goes through, or Toss a coin (D5). The first decision wins: written only
-//     over the value the read saw (compare-and-set), so a second phone's answer is refused ALREADY_DECIDED.
+//     over the value the read saw (compare-and-set), so a second phone's answer is refused ALREADY_DECIDED. The write is not
+//     conditioned on the league still being done: a void landing between the read and the write leaves an answer on a
+//     reopened league, which the route's advance (next) drops; if the replay has already finished the league with the same
+//     tie by then, the answer stands for it (§11: an answer stands while it names the same tie).
 //   - `afterQuickMatchScore(divisionId)`: the one call `scoring.ts`'s `onDecided` makes for a quick match's score.
 //
 // A stored decision answers the question only while it names the same tie (§11): an edit that changes the table, or a
@@ -300,7 +305,8 @@ const tieNotOpen = (why: string): HttpError =>
  *   6. Toss on a class the engine left in seed order (no lot was drawn): TIE_NOT_OPEN. Pick naming anything but exactly the
  *      open places' number of distinct members of the class: PICK_INVALID;
  *   7. the write, over exactly the value step 3 read (compare-and-set): zero rows means someone answered in between:
- *      ALREADY_DECIDED.
+ *      ALREADY_DECIDED. It does not re-check that the league is still done (see the header: a void in the gap leaves the
+ *      answer to the next advance, which keeps it only for the same tie on a finished league).
  * The caller then runs `advanceQuickMatch`, which fills the knockout from the answer.
  */
 export async function decideQuickMatchCut(
