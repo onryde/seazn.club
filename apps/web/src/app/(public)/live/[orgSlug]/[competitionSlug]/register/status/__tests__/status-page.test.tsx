@@ -774,6 +774,7 @@ describe("register status page (RS007 rebuild)", () => {
       const cards = html.match(/<li class="[^"]*rounded-xl[\s\S]*?(?=<li class="[^"]*rounded-xl|$)/g) ?? [];
       expect(cards.length, "two entry cards").toBe(2);
       expect(cards[0], "the closed entry's card").toContain("so it has lost its place");
+      expect(cards[0], "round 4: its chip says Closed, never pending").toMatch(/data-testid="reg-status-outcome"[^>]*>Closed<\/span>/);
       expect(cards[1], "the confirmed card says nothing of it").not.toContain("lost its place");
       expect(html).not.toContain("to keep your place");
     });
@@ -790,6 +791,7 @@ describe("register status page (RS007 rebuild)", () => {
       expect(cards[0]).toContain(">The time to pay for this place has passed. Your entry goes back to the end of the waiting list.<");
       expect(cards[0]).not.toContain("lost its place");
       expect(cards[0], "not waiting for a payment it can no longer take").not.toContain("waiting for payment");
+      expect(cards[0], "round 4: never PENDING under a waitlist headline").toMatch(/data-testid="reg-status-outcome"[^>]*>waitlisted<\/span>/);
       expect(html).not.toMatch(/Pay now|Pay by/);
       expect(html).not.toContain("to keep your place");
     });

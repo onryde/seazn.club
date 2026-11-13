@@ -394,3 +394,59 @@ describe("EntryCard — a waitlisted entry's place in the queue (B3 T13)", () =>
     }
   });
 });
+
+// B4 fix round 4 (controller ruling): past a pay-by date the row is still 'pending' until the sweep runs, but the chip says what the
+// sweep will do with it. A lapsed promotion goes back on the waitlist (the waitlisted chip and tone, never PENDING under a waitlist
+// headline); a never-promoted entry past the cart's date is expired (a "Closed" chip in the expired tone). The bench hook
+// `data-status` keeps the row's own status. Expected words come from each locale's dictionary, never from the component.
+describe("EntryCard — the chip past a pay-by date (B4 fix round 4)", () => {
+  const PAST = "2020-01-01T00:00:00.000Z";
+  const FUTURE = "2099-01-01T00:00:00.000Z";
+  const LOCALES = { en: uiEn, es: uiEs, fr: uiFr, nl: uiNl } as const;
+  const owing = { status: "pending" as const, amount_cents: 2500, payment_method: "stripe" as const };
+  const unescape = (s: string) => s.replace(/&#x27;/g, "'").replace(/&amp;/g, "&");
+  const render = (locale: keyof typeof LOCALES, entry: Partial<EntryCardProps["entry"]>, cart: Partial<EntryCardProps["cart"]> = {}) => {
+    const p = baseProps();
+    return renderToStaticMarkup(
+      <EntryCard {...p} locale={locale} ui={LOCALES[locale] as Dict} entry={{ ...p.entry, ...entry }} cart={{ ...p.cart, ...cart }} />,
+    );
+  };
+  const chip = (html: string) => {
+    const m = html.match(/<span data-testid="reg-status-outcome" data-status="([^"]*)"[^>]*class="([^"]*)">([^<]*)<\/span>/);
+    const rail = html.match(/<span aria-hidden="true" class="w-1\.5 shrink-0 ([^"]*)"/);
+    expect(m, "the outcome chip").not.toBeNull();
+    expect(rail, "the card rail").not.toBeNull();
+    return { status: m![1], cls: m![2], text: unescape(m![3]!), rail: rail![1] };
+  };
+
+  it("a lapsed promotion reads waitlisted, a never-promoted entry past the cart's date reads Closed, an in-window one stays pending", () => {
+    let checked = 0;
+    for (const locale of Object.keys(LOCALES) as (keyof typeof LOCALES)[]) {
+      const dict = LOCALES[locale] as Record<string, string>;
+      const waitlisted = chip(render(locale, { status: "waitlisted" }));
+      const expired = chip(render(locale, { status: "expired" }));
+      const pending = chip(render(locale, owing, { expires_at: FUTURE }));
+
+      const lapsed = chip(render(locale, { ...owing, promotion_expires_at: PAST }));
+      expect(lapsed.text, `${locale} lapsed`).toBe(dict["reg.status.waitlisted"]);
+      expect(lapsed.text, `${locale} lapsed is not pending`).not.toBe(dict["reg.status.pending"]);
+      expect([lapsed.cls, lapsed.rail], `${locale} lapsed tone`).toEqual([waitlisted.cls, waitlisted.rail]);
+      expect(lapsed.status, `${locale} lapsed bench hook`).toBe("pending");
+
+      const closed = chip(render(locale, owing, { expires_at: PAST }));
+      expect(closed.text, `${locale} closed`).toBe(dict["register.entries.badge.closed"]);
+      expect([closed.cls, closed.rail], `${locale} closed tone`).toEqual([expired.cls, expired.rail]);
+      expect(closed.status, `${locale} closed bench hook`).toBe("pending");
+
+      // The controls: inside the window (the cart's date or the promotion's own still ahead) the row's pending chip stays.
+      for (const inWindow of [chip(render(locale, owing, { expires_at: FUTURE })), chip(render(locale, { ...owing, promotion_expires_at: FUTURE }))]) {
+        expect(inWindow.text, `${locale} in window`).toBe(dict["reg.status.pending"]);
+        expect([inWindow.cls, inWindow.rail]).toEqual([pending.cls, pending.rail]);
+      }
+      expect(waitlisted.cls, `${locale} the two tones differ`).not.toBe(pending.cls);
+      expect(expired.cls).not.toBe(pending.cls);
+      checked += 4;
+    }
+    expect(checked).toBe(16);
+  });
+});

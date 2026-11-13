@@ -33,6 +33,7 @@ import {
   rosterPlayerDisplayName,
   rosterVocabulary,
   type EntryStatus,
+  type MoneyState,
   type RosterVocabulary,
 } from "./view-model";
 
@@ -66,6 +67,16 @@ const STATUS_KEY: Record<EntryStatus, string> = {
   withdrawn: "reg.status.withdrawn",
   expired: "reg.status.expired",
 };
+
+/** B4 fix round 4 (controller ruling): past a pay-by date the row stays 'pending' until the sweep runs, so the chip says what the
+ *  sweep will do with it. A lapsed promotion goes back on the waitlist: the waitlisted chip and tone, never PENDING under the
+ *  page's waitlist headline. A never-promoted entry past the cart's date is expired: "Closed" in the expired tone. Otherwise the
+ *  row's own status. `data-status` on the chip keeps the row's status either way (the bench reads it). */
+function entryChip(status: EntryStatus, money: MoneyState["kind"]): { key: string; tone: { rail: string; badge: string } } {
+  if (money === "promotion_lapsed") return { key: STATUS_KEY.waitlisted, tone: STATUS_TONE.waitlisted };
+  if (money === "window_closed") return { key: "register.entries.badge.closed", tone: STATUS_TONE.expired };
+  return { key: STATUS_KEY[status], tone: STATUS_TONE[status] };
+}
 
 export interface EntryCardProps {
   entry: {
@@ -183,8 +194,9 @@ export interface EntryCardProps {
 }
 
 export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale, ui }: EntryCardProps) {
-  const tone = STATUS_TONE[entry.status];
   const money = resolveMoneyState(entry, cart);
+  const chip = entryChip(entry.status, money.kind);
+  const tone = chip.tone;
   const roster = rosterCounts(entry.players);
   // Polish wave P3 (W6, W10, W11) and the owner ruling on V7: only a confirmed entry's roster says "Checked in"; a pending or paid one
   // says "Joined", a waitlisted, withdrawn, expired or rejected one "Registered". `rosterVocabulary` picks the key family once; the chips
@@ -388,7 +400,7 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
             data-registration-id={entry.id}
             className={`shrink-0 rounded-full border px-2.5 py-1 text-xs font-semibold tracking-wide uppercase ${tone.badge}`}
           >
-            {t(ui, STATUS_KEY[entry.status])}
+            {t(ui, chip.key)}
           </span>
         </div>
 
