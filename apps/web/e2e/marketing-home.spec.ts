@@ -69,6 +69,56 @@ test.describe("marketing home (design/v3/12)", () => {
     }
   });
 
+  // Owner 2026-11-13: the hero's art follows the Sport select, one scene per sport the quick match offers. The sports are
+  // read off the select as the page renders the offer, never typed here; the art is the vignette's `data-sport` box.
+  async function offeredSports(page: Page): Promise<string[]> {
+    const select = page.getByTestId("qm-cta-form").locator('select[name="sport"]');
+    await expect(select).toBeVisible();
+    const values = await select.locator("option").evaluateAll((os) => os.map((o) => (o as HTMLOptionElement).value));
+    expect(values.length, "the hero offers at least two sports").toBeGreaterThanOrEqual(2);
+    return values;
+  }
+  const runningAnimations = (page: Page) =>
+    page
+      .getByTestId("vignette-run")
+      .evaluate((el) => el.getAnimations({ subtree: true }).filter((a) => a.playState === "running").length);
+
+  test("the hero art follows the Sport select, one named scene per offered sport, each played on a pick", async ({ page }) => {
+    await page.goto("/en");
+    const sports = await offeredSports(page);
+    const select = page.getByTestId("qm-cta-form").locator('select[name="sport"]');
+    const art = page.locator("[data-sport]");
+    // The server draws the sport the select opens on.
+    await expect(art).toHaveAttribute("data-sport", sports[0]!);
+    const names = new Set<string>();
+    for (const sport of [...sports.slice(1), sports[0]!]) {
+      await select.selectOption(sport);
+      await expect(art).toHaveAttribute("data-sport", sport);
+      names.add((await art.locator("svg[role=img]").getAttribute("aria-label")) ?? "");
+      // A pick plays its scene at once: the object is in flight, not resting on the last sport's final frame.
+      expect(await runningAnimations(page), `${sport} plays on the pick`).toBeGreaterThan(0);
+    }
+    expect([...names].filter(Boolean).length, "each sport's scene has its own accessible name").toBe(sports.length);
+  });
+
+  test("reduced motion: a picked sport shows its final frame and plays nothing", async ({ browser }) => {
+    const ctx = await browser.newContext({ reducedMotion: "reduce", storageState: { cookies: [], origins: [] } });
+    const page = await ctx.newPage();
+    try {
+      await page.goto("/en");
+      const sports = await offeredSports(page);
+      await page.getByTestId("qm-cta-form").locator('select[name="sport"]').selectOption(sports[1]!);
+      await expect(page.locator("[data-sport]")).toHaveAttribute("data-sport", sports[1]!);
+      expect(await runningAnimations(page), "nothing moves under reduced motion").toBe(0);
+      // The final frame: the object rests where it lands, not at its starting point.
+      const ball = page.getByTestId("vignette-run").locator(".mk-ball").first();
+      expect(await ball.evaluate((el) => getComputedStyle(el).transform)).not.toBe("none");
+      await expect(page.getByTestId("scorebug")).not.toHaveText(/^\s*LIVE\s*$/);
+    } finally {
+      await ctx.close();
+    }
+  });
+
   test("the organiser's setup is one link below the Start, to the /start wizard", async ({ page }) => {
     await page.goto("/en");
     const link = page.getByTestId("hero-event-link");

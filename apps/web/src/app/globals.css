@@ -612,59 +612,100 @@ body {
 }
 
 /* Hero vignette choreography (~2.6s once, then idle). Transform/opacity only.
-   Geometry: the swinging object (`.mk-bat`, a badminton racket since review
-   m6) pivots at the grip (310,230); its head's sweet spot (310,148 at rest)
-   passes (282,152) when the swing crosses ~-20deg — the toss parks the
-   shuttle (`.mk-ball`, its cork at the origin) exactly there at 1.5s, so
-   contact reads mid-strings, never on the shaft. */
+   One choreography for every scene (components/marketing/hero-scenes.ts):
+   each scene sets its geometry inline as custom properties, so the keyframes
+   below read the scene's own points. The object (`.mk-ball`, drawn about its
+   origin) rests at --mk-rest, is tossed through --mk-toss to --mk-hit, where
+   the striker (`.mk-bat`, swung about --mk-pivot, or `.mk-slide`, the carrom
+   striker) meets it at 1.5s; it then flies the quadratic curve hit -> land
+   (--mk-f1..3 are that curve at t = 1/4, 1/2, 3/4, placed at ease-out times;
+   --mk-d1..3 the trail's dash offsets at the same points, by arc length)
+   and lands at 2.4s, when the scorebug moves (hero-vignette.tsx LANDING_MS).
+   `.mk-trail` draws the same curve as it flies; `.mk-net` is a goal's net. */
 .mk-vignette .mk-ball {
+  transform: translate(var(--mk-rest));
   animation:
     mk-ball-toss 1.1s cubic-bezier(0.3, 0, 0.4, 1) forwards,
-    mk-ball-fly 0.9s 1.5s cubic-bezier(0.2, 0.8, 0.3, 1) forwards;
-  transform: translate(322px, 252px);
+    mk-ball-fly 0.9s 1.5s linear forwards;
 }
 @keyframes mk-ball-toss {
-  40% { transform: translate(286px, 100px); }
-  100% { transform: translate(282px, 152px); }
+  40% { transform: translate(var(--mk-toss)) scale(var(--mk-lift, 1)); }
+  100% { transform: translate(var(--mk-hit)) scale(var(--mk-lift, 1)); }
 }
 @keyframes mk-ball-fly {
-  60% { transform: translate(120px, 90px); }
-  100% { transform: translate(58px, 246px); opacity: 0; }
+  0% { transform: translate(var(--mk-hit)) scale(var(--mk-lift, 1)); }
+  13.4% { transform: translate(var(--mk-f1)) scale(var(--mk-lift, 1)); }
+  29.3% { transform: translate(var(--mk-f2)) scale(var(--mk-lift, 1)); }
+  50% { transform: translate(var(--mk-f3)) scale(var(--mk-lift, 1)); }
+  100% { transform: translate(var(--mk-land)) scale(var(--mk-land-scale, 1)); }
+}
+.mk-vignette .mk-trail {
+  stroke-dasharray: 100 120;
+  stroke-dashoffset: 100;
+  animation: mk-trail-draw 0.9s 1.5s linear forwards;
+}
+@keyframes mk-trail-draw {
+  13.4% { stroke-dashoffset: var(--mk-d1, 75); }
+  29.3% { stroke-dashoffset: var(--mk-d2, 50); }
+  50% { stroke-dashoffset: var(--mk-d3, 25); }
+  100% { stroke-dashoffset: 0; }
 }
 .mk-vignette .mk-bat {
-  transform-origin: 310px 230px;
+  transform-origin: var(--mk-pivot);
+  transform: rotate(var(--mk-back));
   animation:
     mk-bat-swing 0.38s 1.31s cubic-bezier(0.3, 0, 0.2, 1.4) forwards,
     mk-bat-sway 3s 3s ease-in-out infinite;
-  transform: rotate(35deg);
 }
 @keyframes mk-bat-swing {
-  0% { transform: rotate(35deg); }
-  50% { transform: rotate(-20deg); }
-  75% { transform: rotate(-45deg); }
-  100% { transform: rotate(-32deg); }
+  0% { transform: rotate(var(--mk-back)); }
+  50% { transform: rotate(var(--mk-strike)); }
+  75% { transform: rotate(var(--mk-over)); }
+  100% { transform: rotate(var(--mk-settle)); }
 }
 @keyframes mk-bat-sway {
-  0%, 100% { transform: rotate(-32deg); }
-  50% { transform: rotate(-28deg); }
+  0%, 100% { transform: rotate(var(--mk-settle)); }
+  50% { transform: rotate(var(--mk-sway)); }
+}
+.mk-vignette .mk-slide {
+  transform: translate(var(--mk-s-rest));
+  animation: mk-slide-shot 2.2s linear forwards;
+}
+@keyframes mk-slide-shot {
+  0%, 14% { transform: translate(var(--mk-s-rest)); }
+  50%, 59.5% { transform: translate(var(--mk-s-aim)); }
+  68.2% { transform: translate(var(--mk-s-hit)); }
+  91%, 100% { transform: translate(var(--mk-s-end)); }
 }
 .mk-vignette .mk-star {
   opacity: 0;
-  transform-origin: 282px 152px;
-  animation: mk-star-pop 0.5s 1.5s cubic-bezier(0.2, 1.6, 0.4, 1) forwards;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: mk-star-pop 0.5s var(--mk-star-at, 1.5s) cubic-bezier(0.2, 1.6, 0.4, 1) forwards;
 }
 @keyframes mk-star-pop {
   0% { opacity: 0; transform: scale(0.2); }
   60% { opacity: 1; transform: scale(1.15); }
   100% { opacity: 0; transform: scale(0.9); }
 }
+.mk-vignette .mk-net {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: mk-net-bulge 0.5s 2.3s ease-out;
+}
+@keyframes mk-net-bulge { 40% { transform: scale(1.06); } }
 .mk-live-dot { animation: mk-pulse 1.6s 2.4s ease-in-out infinite; }
 @keyframes mk-pulse { 50% { opacity: 0.35; } }
 
+/* Reduced motion: the final frame, still. The object rests where it lands,
+   the striker at its follow-through, the flight drawn, nothing moves. */
 @media (prefers-reduced-motion: reduce) {
-  .mk-vignette .mk-ball { animation: none; opacity: 0; }
-  .mk-vignette .mk-bat { animation: none; transform: rotate(-32deg); }
+  .mk-vignette .mk-ball { animation: none; transform: translate(var(--mk-land)) scale(var(--mk-land-scale, 1)); }
+  .mk-vignette .mk-trail { animation: none; stroke-dashoffset: 0; }
+  .mk-vignette .mk-bat { animation: none; transform: rotate(var(--mk-settle)); }
+  .mk-vignette .mk-slide { animation: none; transform: translate(var(--mk-s-end)); }
   .mk-vignette .mk-star { animation: none; opacity: 0; }
+  .mk-vignette .mk-net { animation: none; }
   .mk-live-dot { animation: none; }
 }
 

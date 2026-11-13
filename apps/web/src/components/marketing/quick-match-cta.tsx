@@ -12,6 +12,7 @@
 // With no offer (none, or it could not be read) the select is left out and the Start alone leads to the setup page,
 // which says plainly that quick matches are unavailable (play/page.tsx).
 import { routes } from "@/lib/routes";
+import { HERO_SPORT_SELECT_ID } from "./hero-scenes";
 
 /** One sport of the setup screen's offer, named in the page's language (play/setup-props.ts `setupSports`). */
 export interface QuickMatchCtaSport {
@@ -49,7 +50,13 @@ export function QuickMatchCta({
         {first ? (
           <label className="min-w-0 flex-1">
             <span className="label">{copy.sport}</span>
-            <select name="sport" defaultValue={first.sport_key} className="input min-h-11 cursor-pointer">
+            {/* The id is the hero art's (hero-vignette.tsx): it draws the sport picked here. */}
+            <select
+              id={HERO_SPORT_SELECT_ID}
+              name="sport"
+              defaultValue={first.sport_key}
+              className="input min-h-11 cursor-pointer"
+            >
               {sports.map((s) => (
                 <option key={s.sport_key} value={s.sport_key}>
                   {s.name}

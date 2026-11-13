@@ -1,107 +1,87 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore, type CSSProperties } from "react";
+import { usePrefersReducedMotion } from "@/components/ui/use-prefers-reduced-motion";
+import { HeroSceneArt } from "./hero-scene-art";
+import { HERO_SPORT_SELECT_ID, heroSceneKey, heroSceneStyle, heroScoreText, type HeroSceneKey } from "./hero-scenes";
 
-/** Object-relay hero animation (design/v3/12 §4.2). No humans — the shuttle is
- *  the protagonist. Plays three times on load, then rests (manual replay stays).
- *  Fixed-height container so CLS stays 0; under prefers-reduced-motion the
- *  CSS shows the end state (shuttle on scorebug). */
+/** Object-relay hero animation (design/v3/12 §4.2). No humans — the ball, shuttle, puck or piece is the protagonist. It
+ *  draws the sport picked in the hero's Sport select (owner 2026-11-13), one scene per sport the quick match offers
+ *  (hero-scenes.ts). Plays three times on load, then rests (manual replay stays); a new sport plays again. Fixed-height
+ *  box, so CLS stays 0 and a swap never moves the page; under prefers-reduced-motion it shows the final frame at once
+ *  (the object where it lands, the score it scored) and plays nothing. */
 const AUTO_PLAYS = 3;
+/** One play's length, the pause included. */
+const PLAY_MS = 3300;
+/** The object's landing in the CSS choreography (globals.css: the fly's delay plus its duration). */
+const LANDING_MS = 2400;
 
-/** The sport the art draws (owner 2026-11-13, review m6): it sits beside the hero's quick match Sport select, so it is one
- *  the quick match offers, the one that select opens on (the offer's first), never cricket, which the quick match
- *  excludes (a lineup sport). */
-export const HERO_VIGNETTE_SPORT = "badminton";
+// The hero's Sport select as a store. The select is the server's (the quick match form works with no script), so the
+// art reads it rather than owning it: its value is the snapshot, its `change` events the subscription. The server
+// snapshot is "nothing picked", so the server's markup (and the hydration that must match it) draws the page's sport; once
+// hydrated, a value the browser restored into the select (back navigation) shows at once. No select on the page (the
+// quick match offer is empty) reads as nothing picked, and subscribes to nothing.
+function selectOnPage(): HTMLSelectElement | null {
+  return document.getElementById(HERO_SPORT_SELECT_ID) as HTMLSelectElement | null;
+}
+function subscribeToSelect(onChange: () => void): () => void {
+  const select = selectOnPage();
+  if (!select) return () => {};
+  select.addEventListener("change", onChange);
+  return () => select.removeEventListener("change", onChange);
+}
+const readSelect = (): string | null => selectOnPage()?.value ?? null;
+const readNothingPicked = (): string | null => null;
 
-/** Rally scoring: the game is won at 21 (from 16 the rallies cannot reach deuce), so a replay past it adds nothing. */
-const GAME_POINT = 21;
-
-/** The racket head's strings: one line per 6px, clipped to the head. */
-const STRINGS_X = [292, 298, 304, 310, 316, 322, 328];
-const STRINGS_Y = [114, 121, 128, 135, 142, 149, 156, 163, 170];
-
-export function HeroVignette({ label }: { label: string }) {
+export function HeroVignette({
+  sport,
+  labels,
+}: {
+  /** The sport the select opens on (the offer's first); the server draws it. None, or one with no scene: badminton. */
+  sport?: string | null;
+  /** Each scene's accessible name, in the page's language. */
+  labels: Readonly<Record<HeroSceneKey, string>>;
+}) {
+  const picked = useSyncExternalStore(subscribeToSelect, readSelect, readNothingPicked);
+  const scene = heroSceneKey(picked ?? sport);
+  const reduced = usePrefersReducedMotion();
   const [run, setRun] = useState(0);
-  // Badminton scorebug: each play is one rally — the struck shuttle lands on
-  // the chip and Kim takes the point (+1) as the LIVE dot starts pulsing.
-  const [points, setPoints] = useState(18);
+  // Landings so far, kept per scene: a new sport's score starts from its own first frame.
+  const [landed, setLanded] = useState<{ scene: HeroSceneKey; count: number }>({ scene, count: 0 });
 
   useEffect(() => {
-    if (run >= AUTO_PLAYS - 1) return;
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    const t = setTimeout(() => setRun((n) => n + 1), 3300);
+    if (reduced || run >= AUTO_PLAYS - 1) return;
+    const t = setTimeout(() => setRun((n) => n + 1), PLAY_MS);
     return () => clearTimeout(t);
-  }, [run]);
+  }, [run, scene, reduced]);
 
   useEffect(() => {
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    // 2.4s = the shuttle's landing moment in the CSS choreography (globals.css).
-    const t = setTimeout(() => setPoints((p) => Math.min(p + 1, GAME_POINT)), 2400);
+    if (reduced) return;
+    const t = setTimeout(() => setLanded((l) => ({ scene, count: (l.scene === scene ? l.count : 0) + 1 })), LANDING_MS);
     return () => clearTimeout(t);
-  }, [run]);
+  }, [run, scene, reduced]);
+
+  const count = landed.scene === scene ? landed.count : 0;
+  // Reduced motion: the final frame, so the object has landed and scored.
+  const score = heroScoreText(scene, reduced ? Math.max(count, 1) : count);
 
   return (
-    <div data-sport={HERO_VIGNETTE_SPORT} className="relative h-64 w-full max-w-md sm:h-72">
-      <div key={run} data-testid="vignette-run" className="mk-vignette absolute inset-0">
-        <svg viewBox="0 0 420 280" className="h-full w-full" role="img" aria-label={label}>
-          <defs>
-            <clipPath id="mk-racket-strings">
-              <ellipse cx="310" cy="142" rx="21" ry="30" />
-            </clipPath>
-          </defs>
-          {/* court line */}
-          <line
-            x1="24"
-            y1="236"
-            x2="396"
-            y2="236"
-            stroke="var(--mk-lime)"
-            strokeWidth="3"
-            strokeLinecap="round"
-            opacity="0.55"
-          />
-          {/* the net, side on: a post, its white tape and the mesh below it — the shuttle's flight clears it */}
-          <line x1="190" y1="236" x2="190" y2="160" stroke="#8d7fc0" strokeWidth="3" strokeLinecap="round" />
-          <rect x="186" y="164" width="8" height="40" fill="none" stroke="#8d7fc0" strokeWidth="1.5" strokeDasharray="3 3" />
-          <line x1="186" y1="164" x2="194" y2="164" stroke="var(--mk-cream)" strokeWidth="4" strokeLinecap="round" />
-          {/* racket: grip at the bottom pivot, head up — contact lands mid-strings */}
-          <g className="mk-bat">
-            <rect x="307" y="172" width="6" height="26" rx="3" fill="var(--mk-cream)" stroke="#1e1b2e" strokeWidth="2" />
-            <rect x="304" y="194" width="12" height="40" rx="6" fill="var(--mk-lime)" stroke="#1e1b2e" strokeWidth="3" />
-            <ellipse cx="310" cy="142" rx="25" ry="34" fill="#1a0f3e" stroke="#1e1b2e" strokeWidth="9" />
-            <g clipPath="url(#mk-racket-strings)" stroke="var(--mk-cream)" strokeWidth="1.2" opacity="0.55">
-              {STRINGS_X.map((x) => (
-                <line key={`x${x}`} x1={x} y1="104" x2={x} y2="180" />
-              ))}
-              {STRINGS_Y.map((y) => (
-                <line key={`y${y}`} x1="282" y1={y} x2="338" y2={y} />
-              ))}
-            </g>
-            <ellipse cx="310" cy="142" rx="25" ry="34" fill="none" stroke="var(--mk-cream)" strokeWidth="4.5" />
-          </g>
-          {/* impact star — pops at the head's sweet spot */}
-          <g className="mk-star">
-            <path
-              d="M282 152 l10 -22 6 20 20 -8 -14 18 22 6 -24 6 10 20 -20 -12 -6 22 -8 -22z"
-              fill="var(--mk-orange)"
-              stroke="#1e1b2e"
-              strokeWidth="3"
-              strokeLinejoin="round"
-            />
-          </g>
-          {/* the shuttle: cork at the origin (where the choreography steers it), feathers trailing up and right —
-              toss → hang → struck left over the net → lands on the scorebug */}
-          <g className="mk-ball">
-            <path
-              d="M1 -7.4 L7.4 -1 L26.2 -10.6 L10.6 -26.2 Z"
-              fill="#ffffff"
-              stroke="#1e1b2e"
-              strokeWidth="2.5"
-              strokeLinejoin="round"
-            />
-            <path d="M2.6 -5.8 L14.5 -22.4 M5.8 -2.6 L22.4 -14.5" stroke="#1e1b2e" strokeWidth="1.5" opacity="0.6" />
-            <circle r="7.5" fill="#f43f5e" stroke="#1e1b2e" strokeWidth="3" />
-          </g>
+    <div data-sport={scene} className="relative h-64 w-full max-w-md sm:h-96 lg:h-[27rem] lg:max-w-none">
+      {/* Keyed on the scene and the play: a new sport or a replay remounts it, which restarts the CSS choreography. */}
+      <div
+        key={`${scene}:${run}`}
+        data-testid="vignette-run"
+        className="mk-vignette absolute inset-0"
+        style={heroSceneStyle(scene) as CSSProperties}
+      >
+        <svg
+          viewBox="0 0 420 360"
+          preserveAspectRatio="xMidYMin meet"
+          className="h-full w-full"
+          role="img"
+          aria-label={labels[scene]}
+        >
+          <HeroSceneArt scene={scene} />
         </svg>
         {/* scorebug chip: the product end-state */}
         <div
@@ -109,12 +89,8 @@ export function HeroVignette({ label }: { label: string }) {
           className="absolute bottom-2 left-2 flex items-center gap-2 rounded-lg border border-[#3b2a6e] bg-[#1a0f3e] px-3 py-2"
         >
           <span className="mk-live-dot h-2.5 w-2.5 rounded-full bg-[var(--mk-live)]" />
-          <span className="mk-display text-xs font-semibold tracking-widest text-[var(--mk-lime)]">
-            LIVE
-          </span>
-          <span className="mk-display whitespace-nowrap text-sm font-bold tabular-nums text-[var(--mk-cream)]">
-            Kim {points}–16 Park
-          </span>
+          <span className="mk-display text-xs font-semibold tracking-widest text-[var(--mk-lime)]">LIVE</span>
+          <span className="mk-display whitespace-nowrap text-sm font-bold tabular-nums text-[var(--mk-cream)]">{score}</span>
         </div>
       </div>
       <button

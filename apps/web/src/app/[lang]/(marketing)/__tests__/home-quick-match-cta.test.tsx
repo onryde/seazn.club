@@ -126,6 +126,7 @@ import { scoreEvent } from "@/server/usecases/scoring";
 import enMarketing from "@/dictionaries/en/marketing.json";
 import frMarketing from "@/dictionaries/fr/marketing.json";
 import { getDictionary } from "@/lib/i18n";
+import { heroSceneKey, heroSceneLabelKey } from "@/components/marketing/hero-scenes";
 import HomePage from "../page";
 import PlayPage from "../play/page";
 import { setupSports } from "../play/setup-props";
@@ -331,11 +332,15 @@ describe("the hero's quick match start (spec §5 step 1, Option A)", () => {
     expect(start).toContain('aria-describedby="qm-cta-hint"');
     expect(form.body.indexOf(start!)).toBeGreaterThan(form.body.indexOf(select!));
     expect(heroOf(html)).toMatch(new RegExp(`<p\\b[^>]*\\bid="qm-cta-hint"[^>]*>${enMarketing["quickMatch.ctaHint"]}</p>`));
-    // Review m6: the art beside the select draws the sport the select opens on, never one it cannot give.
+    // Review m6: the art beside the select draws the sport the select opens on, never one it cannot give, and names that
+    // sport's scene (owner 2026-11-13: the art follows the select; hero-vignette.test.tsx drives the change itself).
     const selected = optionsOf(form.body).filter((o) => o.selected);
     expect(selected).toHaveLength(1);
     expect(artSportOf(html)).toBe(selected[0]!.value);
-    expect(unescape(artLabelOf(html) ?? "")).toBe(enMarketing["home.hero.vignetteLabel"]);
+    expect(heroSceneKey(selected[0]!.value), "the opening sport has its own scene").toBe(selected[0]!.value);
+    expect(unescape(artLabelOf(html) ?? "")).toBe(
+      (enMarketing as Record<string, string>)[heroSceneLabelKey(heroSceneKey(selected[0]!.value))],
+    );
   });
 
   it("the organiser's setup is a quiet link to `/en/start` under the Start; the funnel's fields and Setup button are gone", async () => {
@@ -386,7 +391,7 @@ describe("the hero's quick match start (spec §5 step 1, Option A)", () => {
     const names = setupSports(OFFER, ui).map((s) => s.name);
     expect(optionsOf(form.body).map((o) => unescape(o.label))).toEqual(names);
     expect(html).toContain(frMarketing["quickMatch.ctaHint"]);
-    expect(unescape(artLabelOf(html) ?? ""), "the art's French name").toBe(frMarketing["home.hero.vignetteLabel"]);
+    expect(unescape(artLabelOf(html) ?? ""), "the art's French name").toBe(frMarketing["home.hero.scene.badminton"]);
     expect(eventLinkOf(html, "fr")?.text).toBe(`${frMarketing["home.hero.eventPrompt"]} ${frMarketing["home.hero.eventLink"]}`);
     expect(eventLinkOf(html, "en"), "never the English path").toBeNull();
     expect(html).not.toContain('action="/en/play"');

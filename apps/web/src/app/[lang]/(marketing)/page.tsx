@@ -6,6 +6,7 @@ import { getDiscoveryLive, getDiscoveryThisWeek } from "@/server/public-site/dis
 import { ThisWeekSection } from "@/components/discovery-cards";
 import { MarketingShell } from "@/components/marketing/marketing-shell";
 import { HeroVignette } from "@/components/marketing/hero-vignette";
+import { HERO_SCENES, heroSceneLabelKey, type HeroSceneKey } from "@/components/marketing/hero-scenes";
 import { LiveTicker } from "@/components/marketing/live-ticker";
 import { TheDraw } from "@/components/marketing/the-draw";
 import { MatchdayTools, AlsoInTheKit } from "@/components/marketing/matchday-tools";
@@ -105,6 +106,10 @@ export default async function HomePage({ params }: { params: Promise<{ lang: str
     getDictionary(lang, "ui"),
   ]);
   const heroSports = setupSports(quickMatchOffer, ui);
+  // Every scene's accessible name, so a swap on the client names the new sport in the page's language.
+  const heroSceneLabels = Object.fromEntries(
+    (Object.keys(HERO_SCENES) as HeroSceneKey[]).map((scene) => [scene, t(d, heroSceneLabelKey(scene))]),
+  ) as Record<HeroSceneKey, string>;
   // SSR default draw = the configurator's no-JS fallback (design/v3/12 §4.4).
   const defaultDraw = marketingPreview("groups-knockout", 8);
 
@@ -163,8 +168,9 @@ export default async function HomePage({ params }: { params: Promise<{ lang: str
                 </Link>
               </p>
             </div>
-            <div className="w-full max-w-md justify-self-center">
-              <HeroVignette label={t(d, "home.hero.vignetteLabel")} />
+            {/* The art draws the sport the Sport select opens on, then follows the select (owner 2026-11-13). */}
+            <div className="w-full max-w-md justify-self-center lg:max-w-none">
+              <HeroVignette sport={heroSports[0]?.sport_key} labels={heroSceneLabels} />
             </div>
           </div>
           {/* A returning guest's quick matches, still on the night stage, under the hero (renders nothing for none). */}
