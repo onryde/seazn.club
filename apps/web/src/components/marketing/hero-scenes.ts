@@ -28,7 +28,7 @@ export interface HeroFlight {
   readonly hit: HeroPoint;
   readonly ctrl: HeroPoint;
   readonly land: HeroPoint;
-  /** Scale while carried (a chess piece lifted off the board). */
+  /** Scale while carried (1 when omitted). */
   readonly lift?: number;
   /** Scale where it comes to rest (a carrom coin dropping into its pocket). */
   readonly landScale?: number;
@@ -76,6 +76,62 @@ export interface HeroScene {
 
 const pt = (x: number, y: number): HeroPoint => ({ x, y });
 
+/** The chess scene's board, drawn the way chess is played online (owner 2026-11-13): eight files by eight ranks of
+ *  `square`, a8's top-left corner at (x, y), White at the near side (the bottom). Left of centre, so its h8 corner
+ *  clears the replay button at a phone's width; above y = 300, the scorebug's band. */
+export const HERO_BOARD = { x: 56, y: 24, square: 34 } as const;
+
+const FILES = "abcdefgh";
+
+/** A square's centre on the board, by name ("d1"). A name that is no square is refused, never drawn off the board. */
+export function heroChessSquare(name: string): HeroPoint {
+  const file = FILES.indexOf(name.charAt(0));
+  const rank = Number(name.slice(1));
+  if (name.length !== 2 || file < 0 || !Number.isInteger(rank) || rank < 1 || rank > 8) {
+    throw new Error(`hero chess: "${name}" is no square`);
+  }
+  const { x, y, square } = HERO_BOARD;
+  return pt(x + square * (file + 0.5), y + square * (8 - rank + 0.5));
+}
+
+/** The chess scene's position and the one move it plays: White (the home side) mates on the back rank. Squares by name,
+ *  pieces by their FEN letter (upper case White); `hints` are the mover's legal squares, dotted while it is picked.
+ *  hero-scenes.test.tsx plays the move through chess.js. */
+export const HERO_CHESS = {
+  pieces: {
+    a7: "p",
+    b7: "b",
+    f7: "p",
+    g7: "p",
+    h7: "p",
+    g8: "k",
+    b2: "q",
+    a2: "P",
+    f2: "P",
+    g2: "P",
+    h2: "P",
+    f3: "N",
+    d1: "R",
+    g1: "K",
+  },
+  move: { from: "d1", to: "d8" },
+  hints: ["d2", "d3", "d4", "d5", "d6", "d7", "d8", "a1", "b1", "c1", "e1", "f1"],
+} as const satisfies {
+  pieces: Readonly<Record<string, string>>;
+  move: { from: string; to: string };
+  hints: readonly string[];
+};
+
+/** The square of the side's king (`K` White, `k` Black) in the scene's position; a position without one is refused. */
+export function heroChessKing(king: "K" | "k"): string {
+  const square = Object.keys(HERO_CHESS.pieces).find((s) => HERO_CHESS.pieces[s as keyof typeof HERO_CHESS.pieces] === king);
+  if (!square) throw new Error(`hero chess: no ${king} on the board`);
+  return square;
+}
+
+const chessFrom = heroChessSquare(HERO_CHESS.move.from);
+const chessTo = heroChessSquare(HERO_CHESS.move.to);
+
 export const HERO_SCENES = {
   // Rally scoring to 15, two clear (BWF 3×15, the quick match's default badminton rules): 15–12 takes the game.
   badminton: {
@@ -83,18 +139,20 @@ export const HERO_SCENES = {
     flight: { rest: pt(290, 318), toss: pt(276, 96), hit: pt(272, 168), ctrl: pt(178, -40), land: pt(84, 289) },
     swing: { pivot: pt(318, 296), back: 30, strike: -20, over: -45, settle: -32, sway: -28 },
   },
-  // A board game: a mini-match in half points, one game a landing (a win, then a draw, then a win).
+  // Chess as it is played online: a mini-match in half points. Each play is White's mate (HERO_CHESS), so each landing is
+  // a game won by the home side, Petrova.
   boardgame: {
-    score: { kind: "chess", names: ["Petrova", "Lund"], steps: [[1, 1], [3, 1], [4, 2], [6, 2]] },
+    score: { kind: "chess", names: ["Petrova", "Lund"], steps: [[1, 1], [3, 1], [5, 1], [7, 1]] },
+    // A slide, not a flight: the piece leaves its square on the strike's beat and runs straight to the target (the control
+    // point is the move's midpoint); the impact is the mated king's square, as the piece lands.
     flight: {
-      rest: pt(320, 232),
-      toss: pt(320, 214),
-      hit: pt(320, 218),
-      ctrl: pt(322, 138),
-      land: pt(276, 144),
-      lift: 1.3,
-      star: pt(188, 100),
-      starAt: 2.3,
+      rest: chessFrom,
+      toss: chessFrom,
+      hit: chessFrom,
+      ctrl: pt((chessFrom.x + chessTo.x) / 2, (chessFrom.y + chessTo.y) / 2),
+      land: chessTo,
+      star: heroChessSquare(heroChessKing("k")),
+      starAt: 2.4,
     },
   },
   // Carrom, club rules (game to 29, the queen 5 below 24): a board scores the coins left, plus the queen.

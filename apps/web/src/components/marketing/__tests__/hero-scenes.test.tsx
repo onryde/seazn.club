@@ -1,5 +1,7 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+import { Chess } from "chess.js";
 import { builtinModules } from "@seazn/engine/sports";
 import { boardgame } from "@seazn/engine/sports/boardgame";
 import { carromPadRules, tennisPadRules } from "@seazn/engine/pad";
@@ -11,8 +13,10 @@ import es from "@/dictionaries/es/marketing.json";
 import fr from "@/dictionaries/fr/marketing.json";
 import nl from "@/dictionaries/nl/marketing.json";
 import {
+  HERO_CHESS,
   HERO_DEFAULT_SCENE,
   HERO_SCENES,
+  heroChessSquare,
   heroSceneKey,
   heroSceneLabelKey,
   heroScoreText,
@@ -228,4 +232,158 @@ describe("hero scenes: each scorebug speaks its sport's score language (the engi
     expect(checked).toBe(Object.keys(HERO_SCENES).length);
   });
 
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The chess scene is a board played online (owner 2026-11-13).
+// ---------------------------------------------------------------------------------------------------------------------
+
+// Owner 2026-11-13: the chess scene should look like chess played online, a green-and-white board (light #eeeed2, dark
+// #769656), its colours the scene's own and "not from game" (apps/web/src/games is Seazn Games, another product).
+const ONLINE_BOARD = { light: "#eeeed2", dark: "#769656" } as const;
+
+const attrsOf = (s: string): Record<string, string> =>
+  Object.fromEntries([...s.matchAll(/([\w:-]+)="([^"]*)"/g)].map((m) => [m[1]!, m[2]!]));
+
+/** A FEN from the scene's own position (squares by name, FEN letters), side to move first. */
+function fenOf(pieces: Readonly<Record<string, string>>, turn: "w" | "b"): string {
+  const ranks: string[] = [];
+  for (let rank = 8; rank >= 1; rank--) {
+    let row = "";
+    let empty = 0;
+    for (const file of "abcdefgh") {
+      const piece = pieces[`${file}${rank}`];
+      if (piece) {
+        row += `${empty || ""}${piece}`;
+        empty = 0;
+      } else empty++;
+    }
+    ranks.push(row + (empty || ""));
+  }
+  return `${ranks.join("/")} ${turn} - - 0 1`;
+}
+
+describe("hero scenes: the chess scene is a board played online (owner 2026-11-13)", () => {
+  const art = renderToStaticMarkup(
+    <svg>
+      <HeroSceneArt scene="boardgame" />
+    </svg>,
+  );
+
+  it("draws a whole 8×8 board in the owner's green and white: 32 squares of each, alternating, a light square at White's right", () => {
+    const squares = [...art.matchAll(/<rect\b([^>]*)>/g)]
+      .map((m) => attrsOf(m[1]!))
+      .filter((a) => a.fill === ONLINE_BOARD.light || a.fill === ONLINE_BOARD.dark)
+      .map((a) => ({ x: Number(a.x), y: Number(a.y), w: Number(a.width), h: Number(a.height), fill: a.fill! }));
+    expect(squares, "board squares in the owner's two colours").toHaveLength(64);
+    expect(squares.filter((s) => s.fill === ONLINE_BOARD.light)).toHaveLength(32);
+    expect(new Set(squares.map((s) => s.x)).size, "files").toBe(8);
+    expect(new Set(squares.map((s) => s.y)).size, "ranks").toBe(8);
+    const side = squares[0]!.w;
+    expect(side, "a square's side").toBeGreaterThan(0);
+    for (const s of squares) expect([s.w, s.h], "every square the same size").toEqual([side, side]);
+    // Neighbours along a rank and along a file differ in colour: 7 pairs a rank × 8 ranks, and the same down the files.
+    let pairs = 0;
+    for (const s of squares) {
+      for (const n of squares.filter((o) => (o.x === s.x + side && o.y === s.y) || (o.x === s.x && o.y === s.y + side))) {
+        expect(n.fill, `(${s.x}, ${s.y}) and (${n.x}, ${n.y})`).not.toBe(s.fill);
+        pairs++;
+      }
+    }
+    expect(pairs, "neighbouring pairs checked").toBe(2 * 7 * 8);
+    // FIDE Laws of Chess 2.1: the board is placed so the near corner square to each player's right is light. White sits
+    // at the bottom (the near side), so the bottom-right square, h1, is light.
+    const right = Math.max(...squares.map((s) => s.x));
+    const bottom = Math.max(...squares.map((s) => s.y));
+    expect(squares.find((s) => s.x === right && s.y === bottom)?.fill, "h1").toBe(ONLINE_BOARD.light);
+  });
+
+  it("takes nothing from the games module: no import of it in the scene's files, the two colours written in the art's own", () => {
+    let files = 0;
+    let read = 0;
+    for (const file of ["hero-scene-art.tsx", "hero-scenes.ts"]) {
+      const src = readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
+      // `from "x"`, a bare `import "x"` and `import("x")` alike.
+      const specs = [...src.matchAll(/\b(?:from|import)\s*\(?\s*["']([^"']+)["']/g)].map((m) => m[1]!);
+      for (const spec of specs) expect(spec, `${file} imports ${spec}`).not.toMatch(/(^|\/|@)games(\/|$)/);
+      read += specs.length;
+      files++;
+    }
+    expect(files).toBe(2);
+    // The art imports hero-scenes.ts and React at least: a scan that read none read nothing.
+    expect(read, "imports read").toBeGreaterThanOrEqual(2);
+    const own = readFileSync(new URL("../hero-scene-art.tsx", import.meta.url), "utf8").toLowerCase();
+    expect(own).toContain(`"${ONLINE_BOARD.light}"`);
+    expect(own).toContain(`"${ONLINE_BOARD.dark}"`);
+  });
+
+  it("the one move it plays is legal and mates (the laws of chess, played through chess.js), and the piece slides along it", () => {
+    const { pieces, move } = HERO_CHESS;
+    const named = Object.keys(pieces);
+    expect(named.length, "pieces on the board").toBeGreaterThan(2);
+    const game = new Chess(fenOf(pieces, "w"));
+    const played = game.move({ from: move.from, to: move.to });
+    expect(played.color, "White, the near side, plays it").toBe("w");
+    expect(game.isCheckmate(), `${move.from}-${move.to} mates`).toBe(true);
+    // The screen reader hears the move the picture plays: a rook's mate.
+    expect(played.piece).toBe("r");
+    expect(en[heroSceneLabelKey("boardgame")]).toMatch(/\brook\b.*\bcheckmate\b/i);
+    // The art draws every other piece where the position puts it, and the mover is the object that slides.
+    let drawn = 0;
+    for (const square of named.filter((s) => s !== move.from)) {
+      const at = heroChessSquare(square);
+      expect(art, `${pieces[square as keyof typeof pieces]} on ${square}`).toContain(`transform="translate(${at.x} ${at.y})`);
+      drawn++;
+    }
+    expect(drawn).toBe(named.length - 1);
+    // A slide: it starts on its square (no toss), runs straight (the control point on the line) and stops on the target.
+    const { flight } = HERO_SCENES.boardgame;
+    const from = heroChessSquare(move.from);
+    const to = heroChessSquare(move.to);
+    for (const p of [flight.rest, flight.toss, flight.hit]) expect(p).toEqual(from);
+    expect(flight.land).toEqual(to);
+    const cross = (flight.ctrl.x - from.x) * (to.y - from.y) - (flight.ctrl.y - from.y) * (to.x - from.x);
+    expect(cross, "the control point on the move's line").toBe(0);
+    // The impact is the mated king's: it pops on the king's square as the piece lands.
+    const king = named.find((s) => pieces[s as keyof typeof pieces] === "k");
+    expect(king, "Black's king").toBeDefined();
+    expect(flight.star).toEqual(heroChessSquare(king!));
+  });
+
+  it("dots exactly the mover's legal squares while it is picked (chess.js), one dot each, and refuses a name that is no square", () => {
+    const { pieces, move, hints } = HERO_CHESS;
+    const legal = new Chess(fenOf(pieces, "w")).moves({ square: move.from, verbose: true }).map((m) => m.to);
+    expect(legal.length, "the mover's legal squares").toBeGreaterThan(0);
+    expect([...hints].sort()).toEqual([...legal].sort());
+    const group = art.match(/<g\b[^>]*class="mk-hints"[^>]*>([\s\S]*?)<\/g>/)?.[1] ?? "";
+    let dotted = 0;
+    for (const square of hints) {
+      const at = heroChessSquare(square);
+      expect(group, `a dot on ${square}`).toMatch(new RegExp(`<circle\\b[^>]*cx="${at.x}"[^>]*cy="${at.y}"`));
+      dotted++;
+    }
+    expect(dotted).toBe(legal.length);
+    expect(group.match(/<circle\b/g)?.length, "no dot beyond them").toBe(legal.length);
+    for (const name of ["", "d", "d0", "d9", "i1", "D1", "d1x", "a10"]) {
+      expect(() => heroChessSquare(name), JSON.stringify(name)).toThrow(/no square/);
+    }
+    // White at the near side: a8 is up and to the left of h1.
+    const [a8, h1] = [heroChessSquare("a8"), heroChessSquare("h1")];
+    expect(a8.x < h1.x && a8.y < h1.y, "a8 top-left of h1").toBe(true);
+  });
+
+  it("each landing is the mating side's win: White is the home side, so every frame moves the home score by one game won", () => {
+    const { scoring } = defaultRules<{ scoring: { win: number; draw: number; loss: number } }>("boardgame");
+    const steps = stepsOf("boardgame");
+    let landings = 0;
+    for (let i = 1; i < steps.length; i++) {
+      expect([steps[i]![0] - steps[i - 1]![0], steps[i]![1] - steps[i - 1]![1]], `landing ${i}`).toEqual([scoring.win, scoring.loss]);
+      landings++;
+    }
+    expect(landings).toBe(steps.length - 1);
+    expect(landings).toBeGreaterThan(0);
+    // The owner's example: "Petrova ½–½ → 1½–½ Lund".
+    expect(heroScoreText("boardgame", 0)).toBe("Petrova ½–½ Lund");
+    expect(heroScoreText("boardgame", 1)).toBe("Petrova 1½–½ Lund");
+  });
 });

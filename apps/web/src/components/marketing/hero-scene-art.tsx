@@ -2,11 +2,22 @@
 // humans (design/v3/12 §4.2): the ball, shuttle, puck or piece is the protagonist. Each drawing has the same parts so the
 // one CSS choreography (globals.css) moves them all: `.mk-bat` (a striker that swings about its pivot) or `.mk-slide` (one
 // that slides), `.mk-star` (the impact), `.mk-trail` (the flight, drawn as it flies) and `.mk-ball` (the object, drawn
-// about its own origin, so the choreography's translate places it). `.mk-net` is a goal's net, which bulges as it scores.
+// about its own origin, so the choreography's translate places it). `.mk-net` is a goal's net, which bulges as it scores;
+// `.mk-pick`, `.mk-hints`, `.mk-dest` and `.mk-mate` are the chess board's cues around its one move.
 //
 // No directive: the client vignette imports it; nothing here holds state.
 import type { ReactNode } from "react";
-import { HERO_SCENES, heroTrailPath, type HeroFlight, type HeroPoint, type HeroSceneKey } from "./hero-scenes";
+import {
+  HERO_BOARD,
+  HERO_CHESS,
+  HERO_SCENES,
+  heroChessKing,
+  heroChessSquare,
+  heroTrailPath,
+  type HeroFlight,
+  type HeroPoint,
+  type HeroSceneKey,
+} from "./hero-scenes";
 
 const INK = "#1e1b2e";
 const MESH = "#b7aede";
@@ -358,81 +369,220 @@ function IceHockey() {
   );
 }
 
-/** Chess pieces, drawn about their own origin (about 40 tall). */
-const PIECE: Record<"knight" | "king" | "rook" | "pawn", ReactNode> = {
-  knight: (
-    <>
-      <path d="M-10 10 C-10 1 -1 -2 -4 -7 L-12 -3 Q-17 -5 -15 -11 L-5 -19 L-5 -24 L0 -20 Q12 -20 13 -5 Q14 5 10 10 Z" />
-      <rect x="-14" y="10" width="28" height="7" rx="3" />
-    </>
-  ),
-  king: (
-    <>
-      <path d="M-9 10 L-11 -4 Q0 -10 11 -4 L9 10 Z M-2 -8 L-2 -14 L-6 -14 L-6 -18 L-2 -18 L-2 -22 L2 -22 L2 -18 L6 -18 L6 -14 L2 -14 L2 -8 Z" />
-      <rect x="-13" y="10" width="26" height="7" rx="3" />
-    </>
-  ),
-  rook: (
-    <>
-      <path d="M-9 10 L-9 -8 L-12 -8 L-12 -18 L-7 -18 L-7 -13 L-2 -13 L-2 -18 L2 -18 L2 -13 L7 -13 L7 -18 L12 -18 L12 -8 L9 -8 L9 10 Z" />
-      <rect x="-13" y="10" width="26" height="7" rx="3" />
-    </>
-  ),
-  pawn: (
-    <>
-      <path d="M-8 10 Q-8 0 -3 -3 A6.5 6.5 0 1 1 3 -3 Q8 0 8 10 Z" />
-      <rect x="-12" y="10" width="24" height="7" rx="3" />
-    </>
-  ),
+// The chess scene: a board as chess is played online (owner 2026-11-13: "online / external chess play"). Its colours are
+// its own, never the games module's: the green-and-white board, the half-strength yellow that lights a picked piece's
+// square and the last move's two, the dots of shade on a picked piece's legal squares, the orange of a move's arrow, and
+// the red glow of a king in check.
+const BOARD_LIGHT = "#eeeed2";
+const BOARD_DARK = "#769656";
+const MOVE_LIGHT = "#ffff00";
+const HINT_SHADE = "#000000";
+const MOVE_ARROW = "#ffaa00";
+const CHECK_RED = "#e70000";
+const FILE_LETTERS = "abcdefgh";
+const WHITE_PIECE = "#fbfaf7";
+const BLACK_PIECE = "#2c2834";
+
+type PieceKind = "k" | "q" | "r" | "b" | "n" | "p";
+
+/** The pieces' silhouettes, drawn about the square's centre, about 29 tall: `body` takes the side's fill and outline,
+ *  `detail` the lines drawn on it. */
+const PIECES: Record<PieceKind, { body: ReactNode; detail?: ReactNode }> = {
+  p: {
+    body: (
+      <>
+        <path d="M-5.5 -2.2 H5.5 V0.3 H3.2 Q3.4 6 8.4 9.4 L9.4 13 H-9.4 L-8.4 9.4 Q-3.4 6 -3.2 0.3 H-5.5 Z" />
+        <circle cy="-7" r="5.4" />
+      </>
+    ),
+  },
+  r: {
+    body: (
+      <path d="M-9 -13.5 H-5 V-10.2 H-2 V-13.5 H2 V-10.2 H5 V-13.5 H9 V-6.5 L6.4 -4.2 L6.8 7 L10 9.6 L10 13 H-10 L-10 9.6 L-6.8 7 L-6.4 -4.2 L-9 -6.5 Z" />
+    ),
+    detail: <path d="M-6.4 -4.2 H6.4 M-6.8 7 H6.8" />,
+  },
+  n: {
+    body: (
+      <path d="M-7.5 13 H10 V9.8 Q10 8 8.6 7.4 Q11.4 -2 8.6 -7.4 Q5.6 -12.6 -0.6 -13.2 L-1.6 -16 L-4.4 -12.2 Q-6.6 -11 -8 -8 L-11.4 -2.4 Q-12.4 -0.2 -10.6 1.2 Q-8.8 2.2 -7.2 0.6 L-4.8 -1.4 Q-1.8 -1.2 -0.6 -3.4 Q0.6 1.2 -3.8 4.8 Q-7.6 8 -7.5 10.4 Z" />
+    ),
+    detail: (
+      <>
+        <circle cx="-3.6" cy="-7.4" r="1.25" stroke="none" />
+        <path d="M2.4 -11.6 Q7.2 -8 6.4 0" fill="none" />
+      </>
+    ),
+  },
+  b: {
+    body: (
+      <>
+        <path d="M-4.6 3.4 H4.6 L4.2 5.2 Q4.4 8.2 9 10 L9.6 13 H-9.6 L-9 10 Q-4.4 8.2 -4.2 5.2 Z" />
+        <path d="M0 -11 Q7.6 -5 5.8 0.6 Q5 2.8 3.6 3.4 H-3.6 Q-5 2.8 -5.8 0.6 Q-7.6 -5 0 -11 Z" />
+        <circle cy="-13" r="2.4" />
+      </>
+    ),
+    detail: <path d="M1.6 -6.8 L-1.8 -2.2" />,
+  },
+  q: {
+    body: (
+      <>
+        <path d="M-6.6 3 H6.6 L6.2 6 Q6.6 8.6 9.6 10 L10 13 H-10 L-9.6 10 Q-6.6 8.6 -6.2 6 Z" />
+        <path d="M-9.6 -6.8 L-6.6 3 H6.6 L9.6 -6.8 L5.4 -1.4 L4.8 -9.6 L1.4 -2 L0 -11.2 L-1.4 -2 L-4.8 -9.6 L-5.4 -1.4 Z" />
+        {[
+          [-9.8, -8],
+          [-4.9, -10.8],
+          [0, -12.6],
+          [4.9, -10.8],
+          [9.8, -8],
+        ].map(([cx, cy]) => (
+          <circle key={cx} cx={cx} cy={cy} r="1.9" />
+        ))}
+      </>
+    ),
+    detail: <path d="M-6.2 6 H6.2" />,
+  },
+  k: {
+    body: (
+      <>
+        <path d="M-6.6 3.6 H6.6 L6.2 6 Q6.6 8.6 9.6 10 L10 13 H-10 L-9.6 10 Q-6.6 8.6 -6.2 6 Z" />
+        <path d="M0 -6.4 Q-3.4 -9.4 -7 -8.4 Q-11.6 -6.6 -10 -1.4 L-6.6 3.6 H6.6 L10 -1.4 Q11.6 -6.6 7 -8.4 Q3.4 -9.4 0 -6.4 Z" />
+        <path d="M-1.4 -16.4 H1.4 V-14.2 H3.6 V-11.4 H1.4 V-6.6 H-1.4 V-11.4 H-3.6 V-14.2 H-1.4 Z" />
+      </>
+    ),
+    detail: <path d="M-6.2 6 H6.2" />,
+  },
 };
 
-function Piece({ kind, at, side }: { kind: keyof typeof PIECE; at: HeroPoint; side: "white" | "black" }) {
+/** A piece by its FEN letter (upper case White), about the origin. */
+function ChessPiece({ letter }: { letter: string }) {
+  const white = letter === letter.toUpperCase();
+  const { body, detail } = PIECES[letter.toLowerCase() as PieceKind];
   return (
-    <g
-      transform={`translate(${at.x} ${at.y})`}
-      fill={side === "white" ? "var(--mk-cream)" : INK}
-      stroke={side === "white" ? INK : "var(--mk-cream)"}
-      strokeWidth="2.5"
-      strokeLinejoin="round"
-    >
-      {PIECE[kind]}
-    </g>
+    <>
+      <g fill={white ? WHITE_PIECE : BLACK_PIECE} stroke={white ? INK : "#0d0b12"} strokeWidth="1.8" strokeLinejoin="round">
+        {body}
+      </g>
+      {detail ? (
+        <g fill={white ? INK : "#e6e2ef"} stroke={white ? INK : "#e6e2ef"} strokeWidth="1.4" strokeLinecap="round">
+          {detail}
+        </g>
+      ) : null}
+    </>
   );
 }
 
-/** The board: six files by five ranks of 44, from (122, 34); a square's centre. */
-const SQ = 44;
-const square = (file: number, rank: number): HeroPoint => ({ x: 122 + SQ * file + SQ / 2, y: 34 + SQ * rank + SQ / 2 });
+const CHESS_CLIP = "mk-chess-board";
+const CHECK_GLOW = "mk-chess-check";
 
 function Chess() {
   const { flight } = HERO_SCENES.boardgame;
-  const squares = Array.from({ length: 30 }, (_, i) => ({ file: i % 6, rank: Math.floor(i / 6) }));
+  const { pieces, move, hints } = HERO_CHESS;
+  const { x: left, y: top, square: side } = HERO_BOARD;
+  const edge = 8 * side;
+  /** A square's top-left corner, by name. */
+  const corner = (name: string) => {
+    const c = heroChessSquare(name);
+    return { x: c.x - side / 2, y: c.y - side / 2 };
+  };
+  const squares = Array.from({ length: 64 }, (_, i) => ({ file: i % 8, rank: 8 - Math.floor(i / 8) }));
+  // a1 is dark: a square is light when its file and rank (from 1) sum to an odd number.
+  const isLight = (file: number, rank: number) => (file + 1 + rank) % 2 === 1;
+  const king = heroChessKing("k");
+  const kingAt = corner(king);
+  const lit = (name: string, className: string) => {
+    const c = corner(name);
+    return <rect className={className} x={c.x} y={c.y} width={side} height={side} fill={MOVE_LIGHT} fillOpacity="0.5" />;
+  };
   return (
     <>
-      <rect x="112" y="24" width="284" height="240" rx="10" fill="#3b2a6e" stroke={INK} strokeWidth="3" />
-      {squares.map(({ file, rank }) => (
-        <rect
-          key={`${file}${rank}`}
-          x={122 + SQ * file}
-          y={34 + SQ * rank}
-          width={SQ}
-          height={SQ}
-          fill={(file + rank) % 2 === 0 ? "var(--mk-cream)" : "var(--mk-purple)"}
-        />
-      ))}
-      {/* the knight forks the king and the rook */}
-      <Piece kind="king" at={square(1, 1)} side="black" />
-      <Piece kind="rook" at={square(5, 1)} side="black" />
-      <Piece kind="pawn" at={square(2, 3)} side="white" />
-      <Piece kind="king" at={square(0, 4)} side="white" />
-      <Trail flight={flight} />
-      <Star at={flight.star!} />
+      <defs>
+        <clipPath id={CHESS_CLIP}>
+          <rect x={left} y={top} width={edge} height={edge} rx="5" />
+        </clipPath>
+        <radialGradient id={CHECK_GLOW}>
+          <stop offset="0" stopColor="#ff0000" />
+          <stop offset="0.3" stopColor={CHECK_RED} />
+          <stop offset="0.9" stopColor="#a90000" stopOpacity="0" />
+        </radialGradient>
+      </defs>
+      <rect x={left} y={top + 6} width={edge} height={edge} rx="6" fill="#07040f" opacity="0.45" />
+      <g clipPath={`url(#${CHESS_CLIP})`}>
+        {squares.map(({ file, rank }) => (
+          <rect
+            key={`${file}${rank}`}
+            x={left + side * file}
+            y={top + side * (8 - rank)}
+            width={side}
+            height={side}
+            fill={isLight(file, rank) ? BOARD_LIGHT : BOARD_DARK}
+          />
+        ))}
+        {/* the picked piece's square, which stays lit as the move's from-square; the target, lit as the piece leaves */}
+        {lit(move.from, "mk-pick")}
+        {lit(move.to, "mk-dest")}
+        {/* the mated king's square glows red as the piece lands */}
+        <rect className="mk-mate" x={kingAt.x} y={kingAt.y} width={side} height={side} fill={`url(#${CHECK_GLOW})`} />
+      </g>
+      {/* coordinates, the way an online board prints them: ranks down the a-file, files along the first rank */}
+      <g fontSize="7.5" fontWeight="700">
+        {Array.from({ length: 8 }, (_, i) => (
+          <text key={`r${i}`} x={left + 2.5} y={top + side * (7 - i) + 8.5} fill={isLight(0, i + 1) ? BOARD_DARK : BOARD_LIGHT}>
+            {i + 1}
+          </text>
+        ))}
+        {Array.from({ length: 8 }, (_, i) => (
+          <text
+            key={`f${i}`}
+            x={left + side * (i + 1) - 2.5}
+            y={top + edge - 2.5}
+            textAnchor="end"
+            fill={isLight(i, 1) ? BOARD_DARK : BOARD_LIGHT}
+          >
+            {FILE_LETTERS[i]}
+          </text>
+        ))}
+      </g>
+      {/* the picked piece's legal squares, dotted until it moves */}
+      <g className="mk-hints" fill={HINT_SHADE} fillOpacity="0.17">
+        {hints.map((name) => {
+          const c = heroChessSquare(name);
+          return <circle key={name} cx={c.x} cy={c.y} r={side * 0.16} />;
+        })}
+      </g>
+      {/* the move's arrow, drawn as the piece slides along it */}
+      <path
+        className="mk-trail"
+        d={heroTrailPath(flight)}
+        pathLength={100}
+        fill="none"
+        stroke={MOVE_ARROW}
+        strokeWidth={side * 0.2}
+        strokeLinecap="round"
+        opacity="0.75"
+      />
+      <g transform={`translate(${flight.star!.x} ${flight.star!.y})`}>
+        <circle className="mk-star" r={side * 0.9} fill={`url(#${CHECK_GLOW})`} />
+      </g>
+      {Object.entries(pieces)
+        .filter(([name]) => name !== move.from)
+        .map(([name, letter]) => {
+          const c = heroChessSquare(name);
+          return (
+            <g key={name} transform={`translate(${c.x} ${c.y})`}>
+              <ChessPiece letter={letter} />
+            </g>
+          );
+        })}
+      {/* mate: the badge on the king's square */}
+      <g className="mk-mate" transform={`translate(${kingAt.x + side - 3} ${kingAt.y + 3})`}>
+        <circle r="7" fill={CHECK_RED} stroke="#ffffff" strokeWidth="1.6" />
+        <text y="3.4" textAnchor="middle" fontSize="9.5" fontWeight="800" fill="#ffffff">
+          #
+        </text>
+      </g>
+      {/* the piece that moves */}
       <g className="mk-ball">
-        <Halo r={36} />
-        <g fill="var(--mk-cream)" stroke={INK} strokeWidth="3" strokeLinejoin="round" transform="scale(1.2)">
-          {PIECE.knight}
-          <circle cx="-3" cy="-13" r="1.6" fill={INK} stroke="none" />
-        </g>
+        <ChessPiece letter={pieces[move.from]} />
       </g>
     </>
   );
