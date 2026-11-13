@@ -129,6 +129,11 @@ const courtHoursOf = async (orgId: string): Promise<number> => {
   const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from court_hours where org_id = ${orgId}`;
   return n;
 };
+/** The UTC calendar day `k` days from now: the test's own calendar, never the claim's arithmetic. */
+const utcDayPlus = (k: number): string => {
+  const now = new Date();
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + k)).toISOString().slice(0, 10);
+};
 const seeds = (n: number): number[] => Array.from({ length: n }, (_, i) => i + 1);
 /** The division's name as the dictionary words it: the sport's own name, or — for Other, which builds the generic module
  *  and names no sport — the claim's word for "other", not the module's "Generic". */
@@ -447,7 +452,7 @@ describe.skipIf(!HAS_DB)("the claim builds the chosen format, its entrants and i
   });
 
   it("a date sets ends_on to the same day; no date leaves both empty", async () => {
-    const day = "2026-12-05";
+    const day = utcDayPlus(21);
     const cases = [
       { label: "dated", over: { start_date: day }, starts: day, ends: day },
       { label: "undated", over: {}, starts: null, ends: null },
@@ -461,5 +466,33 @@ describe.skipIf(!HAS_DB)("the claim builds the chosen format, its entrants and i
       checked++;
     }
     expect(checked).toBe(cases.length);
+  });
+
+  it("a first day before the UTC day less one, or not a calendar day, is refused before anything is written (review-t4 m1)", async () => {
+    // The UTC day less one is the earliest any visitor can still be on (the parser's tolerance), so it is kept; a day
+    // before it has passed for everyone. Refused at the top of the claim: no organisation, no competition.
+    const refused = [utcDayPlus(-2), utcDayPlus(-30), "2026-02-30", "soon", "2026-1-5"];
+    let checked = 0;
+    for (const start_date of refused) {
+      const email = address();
+      const userId = await seedUser(email);
+      const payload = { name: `${RUN} past ${randomUUID().slice(0, 6)}`, sport: "Badminton", entrants: 4, format: "league", start_date } as FunnelPayload;
+      const { token } = await createFunnelDraft(email, payload, sql, null);
+      const draft = await consumeFunnelDraft(token);
+      expect(draft, `${start_date}: the draft itself is claimable`).not.toBeNull();
+      await expect(createFromDraft(userId, draft!), start_date).rejects.toMatchObject({ status: 400 });
+      const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from organizations where created_by = ${userId}`;
+      expect(n, `${start_date}: no organisation`).toBe(0);
+      const [{ c }] = await sql<{ c: number }[]>`select count(*)::int as c from competitions where name = ${payload.name}`;
+      expect(c, `${start_date}: no competition`).toBe(0);
+      checked++;
+    }
+    expect(checked).toBe(refused.length);
+    // The pair: the UTC day less one and today are still a first day.
+    for (const day of [utcDayPlus(-1), utcDayPlus(0)]) {
+      const c = await claim({ entrants: 4, format: "league", start_date: day });
+      const [row] = await sql<{ starts_on: string | null }[]>`select starts_on::text from competitions where id = ${c.competitionId}`;
+      expect(row!.starts_on, day).toBe(day);
+    }
   });
 });

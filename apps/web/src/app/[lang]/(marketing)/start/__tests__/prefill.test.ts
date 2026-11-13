@@ -38,7 +38,7 @@ function searchParamsOf(qs: string): SearchParams {
   return out;
 }
 
-const NONE: StartPrefill = { sportKey: null, entrants: null, date: null, format: null };
+const NONE: StartPrefill = { sportKey: null, entrants: null, date: null, format: null, courts: null, hours: null, step: null };
 
 /** The bounds the start route's schema puts on the field size (the POST's authority). */
 const ENTRANTS = funnelPayloadSchema.shape.entrants;
@@ -73,10 +73,30 @@ describe("parseStartPrefill", () => {
     expect(rows.length).toBe(4);
   });
 
+  it("courts and hours are held to the start route's own bounds, and the step to the three it can restore", () => {
+    let checked = 0;
+    for (const field of ["courts", "hours"] as const) {
+      const schema = funnelPayloadSchema.shape[field].unwrap();
+      const lo = schema.minValue as number;
+      const hi = schema.maxValue as number;
+      expect(Number.isInteger(lo) && Number.isInteger(hi) && lo < hi, `premise: ${field} bounds`).toBe(true);
+      for (const [raw, want] of [[lo - 1, null], [lo, lo], [hi, hi], [hi + 1, null]] as const) {
+        expect(parseStartPrefill({ [field]: String(raw) }, TODAY)[field], `${field}=${raw}`).toBe(want);
+        expect(schema.safeParse(raw).success, `${field}=${raw}: the POST agrees`).toBe(want !== null);
+        checked++;
+      }
+    }
+    for (const step of ["size", "date", "email"] as const) {
+      expect(parseStartPrefill({ step }, TODAY).step).toBe(step);
+      checked++;
+    }
+    expect(checked).toBe(11);
+  });
+
   it("the empty case: no query, a blank query and the utm-only links prefill nothing", () => {
     const rows: [string, SearchParams][] = [
       ["no query", {}],
-      ["blank params", searchParamsOf("sport=&entrants=&date=&format=")],
+      ["blank params", searchParamsOf("sport=&entrants=&date=&format=&courts=&hours=&step=")],
       ["whitespace params", { sport: "  ", entrants: " ", date: "\t", format: " " }],
       // discover/page.tsx and run-your-own-cta.tsx link to /start with only campaign tags.
       ["discover", searchParamsOf("utm_source=discover&utm_medium=directory&utm_campaign=plg")],
@@ -102,7 +122,7 @@ describe("parseStartPrefill", () => {
         rows.push({
           name: `the draw ${format} ${n}`,
           qs: `sport=Football&entrants=${n}&format=${format}`,
-          want: { sportKey: "football", entrants: n, date: null, format },
+          want: { ...NONE, sportKey: "football", entrants: n, format },
         });
       }
     }
@@ -111,7 +131,7 @@ describe("parseStartPrefill", () => {
     rows.push({
       name: "legacy",
       qs: `sport=Badminton&entrants=8&date=${d3}`,
-      want: { sportKey: "badminton", entrants: 8, date: d3, format: null },
+      want: { ...NONE, sportKey: "badminton", entrants: 8, date: d3 },
     });
     // The wizard's own sports, by key or by name, in any case (Other included: it is a funnel sport).
     for (const s of FUNNEL_SPORTS) {
@@ -146,8 +166,9 @@ describe("parseStartPrefill", () => {
 
   // One valid link, then one field at a time made hostile: that field alone is dropped, the other three still prefill
   // (an over-refusing parser that drops the whole link on one bad field is caught here, not just a lax one).
-  const BASE = { sport: "tennis", entrants: "12", date: addDays(TODAY, 3), format: "league" } as const;
-  const BASE_WANT: StartPrefill = { sportKey: "tennis", entrants: 12, date: addDays(TODAY, 3), format: "league" };
+  // The wizard's own URL adds courts, hours and the step (review-t4 (a)); the producers' links never carry them.
+  const BASE = { sport: "tennis", entrants: "12", date: addDays(TODAY, 3), format: "league", courts: "3", hours: "6", step: "date" } as const;
+  const BASE_WANT: StartPrefill = { sportKey: "tennis", entrants: 12, date: addDays(TODAY, 3), format: "league", courts: 3, hours: 6, step: "date" };
   const GARBAGE: Record<keyof typeof BASE, string[]> = {
     sport: [
       "quidditch",
@@ -201,6 +222,19 @@ describe("parseStartPrefill", () => {
       "league;drop",
       "league".repeat(1000),
     ],
+    courts: ["0", "33", "-1", "1e1", "3.0", "+3", "03", "three", "9".repeat(400)],
+    hours: ["0", "73", "-6", "6h", "0x6", "6.5", "Infinity"],
+    step: [
+      // Sent is never a place a link lands: there is no address to have sent to.
+      "sent",
+      // The first question is the default, not a step to restore.
+      "sport",
+      "review",
+      "email;drop",
+      "<script>email</script>",
+      "2",
+      "e".repeat(5000),
+    ],
   };
 
   it("garbage in one field drops that field alone", () => {
@@ -221,12 +255,12 @@ describe("parseStartPrefill", () => {
     const rows: [string, SearchParams, StartPrefill][] = [
       [
         "padded",
-        { sport: " tennis ", entrants: " 12 ", date: ` ${addDays(TODAY, 3)} `, format: " league " },
+        { sport: " tennis ", entrants: " 12 ", date: ` ${addDays(TODAY, 3)} `, format: " league ", courts: " 3 ", hours: "6 ", step: " date" },
         BASE_WANT,
       ],
-      ["cased", { ...BASE, sport: "TeNNiS", format: "LEAGUE" }, BASE_WANT],
+      ["cased", { ...BASE, sport: "TeNNiS", format: "LEAGUE", step: "Date" }, BASE_WANT],
       // A `+` in a query string is a space, so `?entrants=+12` arrives as " 12".
-      ["plus-as-space", searchParamsOf(`sport=tennis&entrants=+12&date=${addDays(TODAY, 3)}&format=league`), BASE_WANT],
+      ["plus-as-space", searchParamsOf(`sport=tennis&entrants=+12&date=${addDays(TODAY, 3)}&format=league&courts=+3&hours=6&step=date`), BASE_WANT],
     ];
     for (const [name, sp, want] of rows) expect(parseStartPrefill(sp, TODAY), name).toEqual(want);
     expect(rows.length).toBe(3);
@@ -282,7 +316,7 @@ describe("parseStartPrefill", () => {
       ["null", null],
     ];
     for (const [name, v] of rows) {
-      const sp = { sport: v, entrants: v, date: v, format: v } as unknown as SearchParams;
+      const sp = { sport: v, entrants: v, date: v, format: v, courts: v, hours: v, step: v } as unknown as SearchParams;
       expect(parseStartPrefill(sp, TODAY), name).toEqual(NONE);
     }
     expect(rows.length).toBe(4);

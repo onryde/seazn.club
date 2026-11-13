@@ -38,6 +38,7 @@ import {
   wizardCards,
   wizardField,
   wizardReducer,
+  wizardQuery,
   wizardToday,
   type WizardAction,
   type WizardContext,
@@ -505,5 +506,176 @@ describe("model-based sequences (TEST-STRATEGY §10): every step keeps the wizar
       { numRuns: 150, seed: 20261113 },
     );
     expect(steps, "anti-vacuity: actions applied").toBeGreaterThan(500);
+  });
+});
+
+// The wizard's own URL (review-t4 (a)): what a refresh, a shared link or Back to /start restores. Sport, size, format,
+// first day, Courts and time and the step ride the query; the organiser's name and address NEVER do (PostHog and Sentry
+// record page URLs). The step is restored by replaying Next through the reducer, so canAdvance decides how far it goes.
+describe("the wizard's URL: what rides it, and what a reload restores", () => {
+  const reload = (s: WizardState, ctx: WizardContext) =>
+    initialWizardState(parseStartPrefill(Object.fromEntries(new URLSearchParams(wizardQuery(s))), ctx.today), ctx);
+  const restored = (s: WizardState) => ({
+    sportKey: s.sportKey,
+    entrants: s.entrants,
+    format: s.format,
+    formatPicked: s.formatPicked,
+    date: s.date,
+    planningOpen: s.planningOpen,
+    courts: s.courts,
+    hours: s.hours,
+    step: s.step === "sent" ? "email" : s.step,
+  });
+
+  it("a walk's query names exactly its answers, never the name or the address", () => {
+    let s = initialWizardState(NO_PREFILL, CAPPED);
+    for (const a of [
+      { type: "sport", key: "tabletennis" },
+      { type: "name", value: "Harbour Vale Open" },
+      { type: "next" },
+      { type: "entrants", value: 24 },
+      { type: "planning" },
+      { type: "courts", value: 3 },
+      { type: "hours", value: 6 },
+      { type: "format", slug: "knockout" },
+      { type: "next" },
+      { type: "date", value: "2026-11-21" },
+      { type: "next" },
+      { type: "email", value: "sam@harbourvale.org" },
+    ] as WizardAction[]) {
+      s = wizardReducer(s, a, CAPPED);
+    }
+    expect(s.step, "premise: the walk reached B4").toBe("email");
+    const q = new URLSearchParams(wizardQuery(s));
+    expect(Object.fromEntries(q)).toEqual({
+      sport: "tabletennis",
+      entrants: "24",
+      format: "knockout",
+      date: "2026-11-21",
+      courts: "3",
+      hours: "6",
+      step: "email",
+    });
+    expect(wizardQuery(s)).not.toMatch(/harbour|sam|name|email=/i);
+    // Sent keeps the email step's query: Sent itself is never restored (there is no address to have sent to).
+    expect(wizardQuery(wizardReducer(s, { type: "sent" }, CAPPED))).toBe(wizardQuery(s));
+  });
+
+  it("the empty case: the opening state's query is the sport and the size alone (Planning shut, nothing picked, no date)", () => {
+    const s = initialWizardState(NO_PREFILL, CTX);
+    expect(Object.fromEntries(new URLSearchParams(wizardQuery(s)))).toEqual({ sport: WIZARD_DEFAULTS.sportKey, entrants: String(WIZARD_DEFAULTS.entrants) });
+    expect(reload(s, CTX)).toEqual(s);
+  });
+
+  /** The step each answer's control is on (Next, Back, Sent and Change it are on every step that shows them). */
+  const ON_STEP: Partial<Record<WizardAction["type"], WizardState["step"]>> = {
+    sport: "sport",
+    name: "sport",
+    entrants: "size",
+    courts: "size",
+    hours: "size",
+    planning: "size",
+    format: "size",
+    date: "date",
+    email: "email",
+  };
+
+  it("round trip: every state a random walk reaches reloads to the same answers and step (property)", () => {
+    const action = fc.oneof(
+      fc.constantFrom(...FUNNEL_SPORTS.map((x) => x.key)).map((key): WizardAction => ({ type: "sport", key })),
+      fc.integer({ min: 2, max: 256 }).map((value): WizardAction => ({ type: "entrants", value })),
+      fc.integer({ min: 1, max: 32 }).map((value): WizardAction => ({ type: "courts", value })),
+      fc.integer({ min: 1, max: 72 }).map((value): WizardAction => ({ type: "hours", value })),
+      fc.constant<WizardAction>({ type: "planning" }),
+      fc.constantFrom(...ALL_FORMATS).map((slug): WizardAction => ({ type: "format", slug })),
+      fc.constantFrom(null, ...nextEventDays(TODAY), "2026-12-24").map((value): WizardAction => ({ type: "date", value })),
+      fc.string({ maxLength: 12 }).map((value): WizardAction => ({ type: "name", value })),
+      fc.constantFrom("sam@harbourvale.org", "x").map((value): WizardAction => ({ type: "email", value })),
+      // Weighted: an organiser mostly goes forward, and the email step must be reached to be checked.
+      { arbitrary: fc.constant<WizardAction>({ type: "next" }), weight: 12 },
+      fc.constant<WizardAction>({ type: "back" }),
+      fc.constant<WizardAction>({ type: "sent" }),
+    );
+    let states = 0;
+    const steps = new Set<string>();
+    fc.assert(
+      fc.property(fc.constantFrom(CTX, CAPPED), fc.array(action, { maxLength: 40 }), (ctx, actions) => {
+        let s = initialWizardState(NO_PREFILL, ctx);
+        for (const a of actions) {
+          // As the island: each control lives on its own step (the size box on Size, the chips on Date), and the courts
+          // and hours steppers inside the fold that opening dispatches Planning.
+          const home = ON_STEP[a.type];
+          if (home !== undefined && home !== s.step) continue;
+          if (a.type === "courts" || a.type === "hours") s = wizardReducer(s, { type: "planning" }, ctx);
+          s = wizardReducer(s, a, ctx);
+          const back = reload(s, ctx);
+          expect(restored(back)).toEqual(restored(s));
+          expect(back.name, "the name never rides the URL").toBe("");
+          expect(back.email, "the address never rides the URL").toBe("");
+          steps.add(s.step);
+          states++;
+        }
+      }),
+      { numRuns: 250, seed: 20261113 },
+    );
+    expect(states, "anti-vacuity: states checked").toBeGreaterThan(800);
+    expect([...steps].sort(), "every step was reached and reloaded (Sent as its email step)").toEqual(["date", "email", "sent", "size", "sport"]);
+  });
+
+  it("a step the answers cannot leave is where the replay stops: nothing fits at 40, so ?step=email opens on Size", () => {
+    expect(bestFitSlug(rankFormats({ entrants: 40, courts: 2, hours: 4, matchMinutes: funnelSportMatchMinutes(FUNNEL_SPORTS.find((x) => x.key === "badminton")!) })), "premise").toBeNull();
+    const rows: [string, Record<string, string>, string][] = [
+      ["nothing chosen at 40", { entrants: "40", step: "email" }, "size"],
+      ["League at 40 can leave Size", { entrants: "40", format: "league", step: "email" }, "email"],
+      ["date only", { step: "date" }, "date"],
+      ["size only", { step: "size" }, "size"],
+      ["no step", {}, "sport"],
+    ];
+    for (const [label, sp, want] of rows) {
+      expect(initialWizardState(parseStartPrefill(sp, TODAY), CTX).step, label).toBe(want);
+    }
+    expect(rows.length).toBe(5);
+  });
+
+  it("courts or hours in the link open Planning (so they are posted); neither leaves it shut", () => {
+    const rows: [Record<string, string>, boolean, number, number][] = [
+      [{ courts: "5" }, true, 5, WIZARD_DEFAULTS.hours],
+      [{ hours: "8" }, true, WIZARD_DEFAULTS.courts, 8],
+      [{ courts: "5", hours: "8" }, true, 5, 8],
+      [{ courts: "99" }, false, WIZARD_DEFAULTS.courts, WIZARD_DEFAULTS.hours],
+      [{}, false, WIZARD_DEFAULTS.courts, WIZARD_DEFAULTS.hours],
+    ];
+    for (const [sp, open, courts, hours] of rows) {
+      const s = initialWizardState(parseStartPrefill(sp, TODAY), CTX);
+      expect({ open: s.planningOpen, courts: s.courts, hours: s.hours }, JSON.stringify(sp)).toEqual({ open, courts, hours });
+      expect("courts" in buildFunnelBody(s, "en", "x"), JSON.stringify(sp)).toBe(open);
+    }
+    expect(rows.length).toBe(5);
+  });
+});
+
+// Two guards the reducer and the parser cover for each other (review-t4 m2), each reached here alone by a hand-built input.
+describe("guards behind guards, reached alone", () => {
+  it("canAdvance at Date refuses a date before today or not a day, though the reducer never lets one in", () => {
+    const at = { ...initialWizardState(NO_PREFILL, CTX), step: "date" } as WizardState;
+    const rows: [string | null, boolean][] = [
+      [null, true],
+      [TODAY, true],
+      ["2026-11-11", false],
+      ["2026-02-30", false],
+      ["soon", false],
+    ];
+    for (const [date, want] of rows) expect(canAdvance({ ...at, date }, CTX), String(date)).toBe(want);
+    expect(rows.length).toBe(5);
+  });
+
+  it("initialWizardState drops a prefill date before today, though the parser never hands one", () => {
+    const rows: [string, string | null][] = [
+      ["2026-11-11", null],
+      ["2026-02-30", null],
+      [TODAY, TODAY],
+    ];
+    for (const [date, want] of rows) expect(initialWizardState({ ...NO_PREFILL, date }, CTX).date, date).toBe(want);
+    expect(rows.length).toBe(3);
   });
 });

@@ -143,6 +143,7 @@ function mountStart(): Island {
     initial: parseStartPrefill({ sport: "badminton", entrants: "16" }, "2026-11-12"),
     maxEntrants: 64,
     today: "2026-11-12",
+    utcDay: "2026-11-13",
     playSports: [],
   });
 }

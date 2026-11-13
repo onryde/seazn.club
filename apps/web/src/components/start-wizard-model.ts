@@ -9,6 +9,7 @@ import { z } from "zod";
 import { bestFitSlug, rankFormats, type RankedFormat } from "@/lib/format-recommend";
 import { FUNNEL_SPORTS, funnelSportMatchMinutes, type FunnelSport } from "@/lib/funnel-sports";
 import { funnelFormatMin, isFunnelFormat, type FunnelFormat } from "@/lib/funnel-formats";
+import { funnelEarliestDay } from "@/lib/funnel-days";
 import { isIsoDay } from "@/lib/sponsor-report";
 import type { Locale } from "@/lib/i18n-constants";
 import type { StartPrefill } from "@/app/[lang]/(marketing)/start/prefill";
@@ -114,9 +115,10 @@ export function initialWizardState(p: StartPrefill, ctx: WizardContext): WizardS
     sportKey: p.sportKey !== null && sportOf(p.sportKey) ? p.sportKey : WIZARD_DEFAULTS.sportKey,
     name: "",
     entrants: p.entrants ?? WIZARD_DEFAULTS.entrants,
-    planningOpen: false,
-    courts: WIZARD_DEFAULTS.courts,
-    hours: WIZARD_DEFAULTS.hours,
+    // Courts and time ride the wizard's own URL only once Planning was opened, so either one means it was.
+    planningOpen: p.courts !== null || p.hours !== null,
+    courts: p.courts ?? WIZARD_DEFAULTS.courts,
+    hours: p.hours ?? WIZARD_DEFAULTS.hours,
     format: null,
     formatPicked: false,
     date: p.date !== null && validDate(p.date, ctx) ? p.date : null,
@@ -124,7 +126,31 @@ export function initialWizardState(p: StartPrefill, ctx: WizardContext): WizardS
   };
   // The link's format wins only where it can be built (The Draw's "Make it real"); below its minimum it is dropped.
   const linked = cardFor(base, ctx, p.format);
-  return settle(linked?.available ? { ...base, format: linked.slug, formatPicked: true } : base, ctx);
+  let s = settle(linked?.available ? { ...base, format: linked.slug, formatPicked: true } : base, ctx);
+  // The URL's step, replayed as Next through the reducer: canAdvance decides how far the answers can go.
+  while (p.step !== null && s.step !== p.step) {
+    const next = wizardReducer(s, { type: "next" }, ctx);
+    if (next.step === s.step) break;
+    s = next;
+  }
+  return s;
+}
+
+/** The wizard's answers as its own URL's query (review-t4 (a)), for `history.replaceState`: the sport, the size, the
+ *  organiser's own format pick (an unpicked selection is Best fit, which a reload re-reads), the first day, Courts and
+ *  time once Planning was opened, and the step after Sport (Sent keeps the email step: it is never restored). Never the
+ *  name or the address — PostHog and Sentry record page URLs. `parseStartPrefill` reads it back. */
+export function wizardQuery(s: WizardState): string {
+  const q = new URLSearchParams({ sport: s.sportKey, entrants: String(s.entrants) });
+  if (s.formatPicked && s.format !== null) q.set("format", s.format);
+  if (s.date !== null) q.set("date", s.date);
+  if (s.planningOpen) {
+    q.set("courts", String(s.courts));
+    q.set("hours", String(s.hours));
+  }
+  const step = s.step === "sent" ? "email" : s.step;
+  if (step !== "sport") q.set("step", step);
+  return q.toString();
 }
 
 const validDate = (d: string, ctx: WizardContext) => isIsoDay(d) && d >= ctx.today;
@@ -207,10 +233,11 @@ export function nextEventDays(today: string): string[] {
 }
 
 /** The page's today: the server's UTC day less one, the earliest calendar day any visitor can still be on, so a same-day
- *  link from west of UTC is kept (review-t3 m3). From the server clock only, never from a request. */
+ *  link from west of UTC is kept (review-t3 m3) — the parser's and the reducer's tolerance, which the claim refuses below
+ *  (lib/funnel-days.ts). From the server clock only, never from a request. The chips and the date box begin at the real
+ *  UTC day instead (`funnelUtcDay`, review-t4 m1). */
 export function wizardToday(now: Date): string {
-  const utcDay = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-  return isoOf(utcDay - DAY_MS);
+  return funnelEarliestDay(now);
 }
 
 /** The start route's own address rule (`z.string().email().max(120)`), so an address the wizard sends is never refused. */
@@ -242,22 +269,19 @@ export function buildFunnelBody(s: WizardState, locale: Locale, defaultName: str
   };
 }
 
-/** Each card's name: the one-click template's own label (the template the claim builds, `funnelFormatStages`). */
-export const FORMAT_NAME_KEY: Readonly<Record<FunnelFormat, string>> = {
-  league: "format.template.league.label",
-  "groups-knockout": "format.template.groups_ko.label",
-  knockout: "format.template.knockout.label",
-  swiss: "format.template.swiss.label",
-  double_elim: "format.template.double_elim.label",
-};
-/** Each card's one line: the format's own tagline (the formats page's). */
-export const FORMAT_TAGLINE_KEY: Readonly<Record<FunnelFormat, string>> = {
-  league: "format.league.tagline",
-  "groups-knockout": "format.groups-knockout.tagline",
-  knockout: "format.knockout.tagline",
-  swiss: "format.swiss.tagline",
-  double_elim: "format.double_elim.tagline",
-};
+/** Every dictionary prefix the wizard and what it mounts read: its own copy (`start.`), the sport chips (`sport.`), the
+ *  format cards (`format.`), <LegalNotice/> (`legal.`) and the bot check's refusal (`turnstile.`). The page hands its island
+ *  only these (review-t4 (b): the whole marketing + ui catalogue was ~600KB on every /start load). */
+export const WIZARD_DICT_PREFIXES = ["start.", "sport.", "format.", "legal.", "turnstile."] as const;
+
+/** `dict` cut to the wizard's prefixes. The island test reads its words through this same picker, so a key under a prefix
+ *  it misses fails there instead of falling back to a raw key in a browser. */
+export function pickWizardDict<V>(dict: Readonly<Record<string, V>>): Record<string, V> {
+  return Object.fromEntries(Object.entries(dict).filter(([k]) => WIZARD_DICT_PREFIXES.some((p) => k.startsWith(p))));
+}
+
+/** The cards' words: one authority, the copy seam beside `rankFormats` (lib/format-recommend.ts). */
+export { FORMAT_NAME_KEY, FORMAT_TAGLINE_KEY } from "@/lib/format-recommend";
 
 /** A sport chip's word: the sport's own (`ui` `sport.<key>`), or for Other — which names no sport — the wizard's. */
 export function sportLabelKey(key: string): string {

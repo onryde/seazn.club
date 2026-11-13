@@ -34,6 +34,8 @@ vi.mock("@/server/usecases/quick-match-sports", async (importOriginal) => ({
 import StartPage, { dynamic } from "../page";
 import { parseStartPrefill } from "../prefill";
 import { StartWizard, type StartWizardProps } from "@/components/start-wizard";
+import { WIZARD_DICT_PREFIXES } from "@/components/start-wizard-model";
+import { DictProvider } from "@/components/i18n/dict-provider";
 import { FUNNEL_SPORTS } from "@/lib/funnel-sports";
 import { LOCALES, type Locale } from "@/lib/i18n-constants";
 
@@ -115,16 +117,47 @@ describe("/start hands the wizard only what it parsed", () => {
       entrants: 16,
       date: null,
       format: "groups-knockout",
+      courts: null,
+      hours: null,
+      step: null,
     });
   });
 
   it("today is the server's UTC day less one: a same-day link from west of UTC is kept, the day before is dropped", async () => {
     const props = await islandProps({ date: "2026-11-12" });
     expect(props.today).toBe("2026-11-12");
+    expect(props.utcDay, "the chips and the date box start from the real UTC day (review-t4 m1)").toBe("2026-11-13");
     expect(props.initial.date, "Thursday the 12th is still today in the Americas").toBe("2026-11-12");
     expect((await islandProps({ date: "2026-11-11" })).initial.date).toBeNull();
     vi.setSystemTime(new Date("2027-01-01T05:00:00Z"));
-    expect((await islandProps({})).today).toBe("2026-12-31");
+    const newYear = await islandProps({});
+    expect(newYear.today).toBe("2026-12-31");
+    expect(newYear.utcDay).toBe("2027-01-01");
+  });
+
+  it("the island's dictionary is the wizard's slice only (review-t4 (b)): every key under one of its prefixes, every locale", async () => {
+    let checked = 0;
+    for (const lang of LOCALES) {
+      const root = await StartPage({ params: Promise.resolve({ lang }), searchParams: Promise.resolve({}) });
+      const providers: Record<string, unknown>[] = [];
+      const visit = (node: ReactNode) => {
+        if (Array.isArray(node)) return node.forEach(visit);
+        if (!isValidElement(node)) return;
+        const el = node as ReactElement<{ children?: ReactNode; dict?: Record<string, unknown> }>;
+        if (el.type === DictProvider) providers.push(el.props.dict!);
+        visit(el.props.children);
+      };
+      visit(root);
+      expect(providers, `${lang}: one provider around the island`).toHaveLength(1);
+      const keys = Object.keys(providers[0]!);
+      const full = { ...dict(lang as Locale, "marketing"), ...dict(lang as Locale, "ui") };
+      const wanted = Object.keys(full).filter((k) => WIZARD_DICT_PREFIXES.some((p) => k.startsWith(p)));
+      expect(keys.length, "premise: the slice is not empty").toBeGreaterThan(100);
+      expect(keys.sort(), `${lang}: exactly the wizard's prefixes`).toEqual(wanted.sort());
+      expect(keys.length, `${lang}: a slice, not the catalogue`).toBeLessThan(Object.keys(full).length / 10);
+      checked++;
+    }
+    expect(checked).toBe(LOCALES.length);
   });
 
   it("the cap and the quick match offer are the live reads; either failing is not a 500", async () => {

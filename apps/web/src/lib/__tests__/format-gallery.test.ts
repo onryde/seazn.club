@@ -160,10 +160,8 @@ describe("recommendFormats golden — 16 entrants, 2 courts, 4 hours", () => {
     expect(picks[0]!.slug).toBe("knockout");
     expect(picks[0]!.matches).toBe(15);
     expect(picks.map((p) => p.slug)).toEqual(["knockout", "double_elim", "groups-knockout"]);
-    for (const p of picks) {
-      expect(p.reason).toMatch(/matches/);
-      expect(p.reason.length).toBeLessThan(160); // one sentence, not an essay
-    }
+    // Numbers and a slug only: the strip words each pick from its dictionary (format-recommend-strip-i18n.test.tsx).
+    for (const p of picks) expect(Object.keys(p).sort()).toEqual(["estHours", "matches", "perEntrant", "slug"]);
   });
 
   it("with a full weekend the league leads (most play per entrant)", () => {

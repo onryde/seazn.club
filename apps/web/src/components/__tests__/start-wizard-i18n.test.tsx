@@ -60,25 +60,29 @@ vi.mock("@/components/i18n/dict-provider", async () => {
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
 import { ApiError } from "@/lib/client";
+import { TURNSTILE_ERROR_CODE } from "@/lib/turnstile";
 import { bestFitSlug, rankFormats, type RankedFormat } from "@/lib/format-recommend";
 import { FUNNEL_FORMATS, FUNNEL_MORE_FORMATS, funnelFormatMin } from "@/lib/funnel-formats";
 import { FUNNEL_SPORTS, funnelSportMatchMinutes } from "@/lib/funnel-sports";
 import { LOCALES, type Locale } from "@/lib/i18n-constants";
 import { parseStartPrefill } from "@/app/[lang]/(marketing)/start/prefill";
 import { CountStepper, StartWizard, type StartWizardProps } from "../start-wizard";
+import { pickWizardDict } from "../start-wizard-model";
 
-const TODAY = "2026-11-12"; // a Thursday
+const TODAY = "2026-11-12"; // a Thursday: the parser's tolerance, the UTC day less one
+const UTC_DAY = "2026-11-13"; // the server's UTC day, a Friday
 const evt = { preventDefault: () => {} };
 const MAIN: readonly string[] = FUNNEL_FORMATS;
 
 const readDict = (locale: Locale, file: "ui" | "marketing"): Record<string, unknown> =>
   JSON.parse(readFileSync(resolve(import.meta.dirname, "../../dictionaries", locale, `${file}.json`), "utf8")) as Record<string, unknown>;
-/** What the real page provides: the marketing catalogue with `ui` merged over it. */
-const pageDict = (locale: Locale) => ({ ...readDict(locale, "marketing"), ...readDict(locale, "ui") });
+/** What the real page provides: the marketing catalogue with `ui` merged over it, cut to the wizard's slice by the page's
+ *  own picker — so a key under a prefix the picker misses throws in the strict stub below (review-t4 (b)). */
+const pageDict = (locale: Locale) => pickWizardDict({ ...readDict(locale, "marketing"), ...readDict(locale, "ui") });
 /** A dictionary sentence with its slots filled — read from the file, never from the island. */
 const w = (key: string, vars: Record<string, string | number> = {}) => {
   const raw = words.dict[key];
@@ -132,6 +136,7 @@ function mount(props: Partial<StartWizardProps> & { search?: Record<string, stri
     initial: parseStartPrefill(search, TODAY),
     maxEntrants: 64,
     today: TODAY,
+    utcDay: UTC_DAY,
     playSports: ["tabletennis", "badminton"],
     ...rest,
   });
@@ -221,7 +226,7 @@ describe("the wizard, B1 → Sent, in every locale", () => {
       for (const d of ["2026-11-14", "2026-11-15", "2026-11-21"]) expect(island.text()).toContain(fmt.format(new Date(`${d}T00:00:00Z`)));
       expect(all(island).some((e) => e.type === "input" && propsOf(e).type === "date"), "no box before Pick a date").toBe(false);
       (propsOf(radio(island, "date", "pick")).onChange as () => void)();
-      expect(propsOf(input(island, "date")).min).toBe(TODAY);
+      expect(propsOf(input(island, "date")).min, "the box begins at the real UTC day").toBe(UTC_DAY);
       change(input(island, "date"), "2026-12-05");
       expect(propsOf(input(island, "date")).value).toBe("2026-12-05");
       (propsOf(radio(island, "date", "2026-11-14")).onChange as () => void)();
@@ -337,6 +342,42 @@ describe("the wizard's edges", () => {
     expect(cardsOf(island).filter((c) => propsOf(c).checked).map(slugOf)).toEqual([other]);
   });
 
+  it("the date chips and the date box start from the REAL UTC day, not the parser's day-early tolerance (review-t4 m1)", async () => {
+    // A Saturday in UTC: the tolerance day is the Friday, whose "next Saturday" would be today itself.
+    const island = mount({ today: "2026-11-13", utcDay: "2026-11-14" });
+    await submit(island);
+    await submit(island);
+    expect(step(island)).toBe("date");
+    expect(radios(island, "date").map((e) => propsOf(e).value), "strictly after today's Saturday").toEqual([
+      "2026-11-21",
+      "2026-11-22",
+      "2026-11-28",
+      "pick",
+      "none",
+    ]);
+    (propsOf(radio(island, "date", "pick")).onChange as () => void)();
+    expect(propsOf(input(island, "date")).min, "yesterday is not offered").toBe("2026-11-14");
+  });
+
+  it("Size, Date and Email never raise the browser's own validation bubble, in the browser's language (review-t4 m5)", async () => {
+    // The parser keeps a first day of the UTC day less one (west of UTC); the date box begins at the UTC day, so a
+    // native `min` check would refuse that link's own date in the browser's words.
+    const island = mount({ search: { date: TODAY } });
+    const noValidate = () => propsOf(all(island).find((e) => e.type === "form")!).noValidate;
+    await submit(island);
+    expect(step(island)).toBe("size");
+    expect(noValidate(), "size").toBe(true);
+    if (!cardsOf(island).some((c) => propsOf(c).checked)) pick(island, "league");
+    await submit(island);
+    expect(step(island)).toBe("date");
+    expect(noValidate(), "date").toBe(true);
+    expect(propsOf(input(island, "date")).value, "the link's own day, open in the box").toBe(TODAY);
+    expect(propsOf(input(island, "date")).min).toBe(UTC_DAY);
+    await submit(island);
+    expect(step(island), "the wizard's rule lets the link's day through").toBe("email");
+    expect(noValidate(), "email").toBe(true);
+  });
+
   it("a card below its minimum is disabled, cannot be picked, and says what it needs", async () => {
     const island = mount({ search: { entrants: "3" } });
     await submit(island);
@@ -376,9 +417,11 @@ describe("the wizard's edges", () => {
     expect(net.calls[0]!.json).not.toHaveProperty("hours");
   });
 
-  it("a refused send shows the wizard's own sentence (429: wait; anything else: try again), never the server's, and stays on B4", async () => {
+  it("a refused send shows the wizard's own sentence (bot check: the Turnstile line; 429: wait; anything else: try again), never the server's, and stays on B4", async () => {
     let checked = 0;
     for (const [rejection, key] of [
+      // The bot-check line lives under `turnstile.`, outside `start.`: the page's dictionary picker must carry it.
+      [new ApiError("Bot check failed", 403, TURNSTILE_ERROR_CODE), "turnstile.error"],
       [new ApiError("Too many requests", 429, "RATE_LIMITED"), "start.wizard.tooMany"],
       [new ApiError("Internal server error", 500, "ERROR"), "start.wizard.genericError"],
       [new TypeError("Failed to fetch"), "start.wizard.genericError"],
@@ -394,7 +437,7 @@ describe("the wizard's edges", () => {
       expect(propsOf(nextButton(island)).disabled, "the send button comes back").toBe(false);
       checked++;
     }
-    expect(checked).toBe(3);
+    expect(checked).toBe(4);
   });
 
   it("the dev claim link shows only when the route returned one", async () => {
@@ -409,6 +452,89 @@ describe("the wizard's edges", () => {
       await submit(island);
       expect(all(island).filter((e) => propsOf(e)["data-claim-url"] !== undefined)).toHaveLength(want);
     }
+  });
+});
+
+describe("the wizard's URL (review-t4 (a))", () => {
+  beforeEach(() => {
+    words.locale = "en";
+    words.dict = pageDict("en");
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("each answer replaces the page's URL with the wizard's query — never a push, never the name or the address — and a reload of it restores the step", async () => {
+    const urls: string[] = [];
+    vi.stubGlobal("window", {
+      location: { pathname: "/en/start", search: "" },
+      history: {
+        replaceState: (_state: unknown, _unused: string, url: string) => void urls.push(url),
+        pushState: () => {
+          throw new Error("the wizard never pushes a history entry (pushState is a later change)");
+        },
+      },
+    });
+    const island = mount({ search: {} });
+    expect(urls, "landing leaves the URL as it came").toEqual([]);
+    change(all(island).find((e) => e.type === "input" && propsOf(e).placeholder !== undefined)!, "Harbour Vale Open");
+    (propsOf(radio(island, "sport", "tabletennis")).onChange as () => void)();
+    await submit(island);
+    (propsOf(steppers(island)[0]!).onValue as (n: number) => void)(12);
+    click(buttonByText(island, w("start.wizard.planning")));
+    pick(island, "league");
+    await submit(island);
+    (propsOf(radio(island, "date", "2026-11-14")).onChange as () => void)();
+    await submit(island);
+    change(input(island, "email"), "sam@harbourvale.org");
+    await submit(island);
+    expect(step(island)).toBe("sent");
+    expect(urls.length, "anti-vacuity: the answers were written").toBeGreaterThan(3);
+    for (const url of urls) {
+      expect(url.startsWith("/en/start?"), url).toBe(true);
+      expect(url, "never the name or the address").not.toMatch(/harbour|sam|%40|name=|email=/i);
+    }
+    const last = new URLSearchParams(urls.at(-1)!.split("?")[1]);
+    expect(Object.fromEntries(last)).toEqual({
+      sport: "tabletennis",
+      entrants: "12",
+      format: "league",
+      date: "2026-11-14",
+      courts: "2",
+      hours: "4",
+      step: "email",
+    });
+    // The reload: the page parses that query and the island opens on B4 with every answer but the name and address.
+    vi.unstubAllGlobals();
+    const reloaded = mount({ search: Object.fromEntries(last) });
+    expect(step(reloaded)).toBe("email");
+    expect(propsOf(input(reloaded, "email")).value).toBe("");
+    await submit(reloaded);
+    expect(net.calls, "an empty address is not sent").toHaveLength(1);
+  });
+});
+
+describe("a reload with Courts and time in the URL", () => {
+  beforeEach(() => {
+    words.locale = "en";
+    words.dict = pageDict("en");
+  });
+
+  it("opens the fold on what it carried; without them the fold is shut", async () => {
+    const rows: [Record<string, string>, number][] = [
+      [{ courts: "3", hours: "6" }, 3],
+      [{}, 1],
+    ];
+    for (const [search, count] of rows) {
+      const island = mount({ search: { ...search, step: "size" } });
+      expect(step(island)).toBe("size");
+      expect(steppers(island), JSON.stringify(search)).toHaveLength(count);
+      if (count === 3) {
+        expect(steppers(island).map((e) => propsOf(e).value)).toEqual([16, 3, 6]);
+        expect(propsOf(buttonByText(island, w("start.wizard.planning")))["aria-expanded"]).toBe(true);
+      }
+    }
+    expect(rows.length).toBe(2);
   });
 });
 

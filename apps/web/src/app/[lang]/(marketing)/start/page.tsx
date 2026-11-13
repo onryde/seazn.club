@@ -2,9 +2,10 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { MarketingShell } from "@/components/marketing/marketing-shell";
 import { StartWizard } from "@/components/start-wizard";
-import { wizardToday } from "@/components/start-wizard-model";
+import { pickWizardDict, wizardToday } from "@/components/start-wizard-model";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { funnelEntrantCap } from "@/lib/funnel";
+import { funnelUtcDay } from "@/lib/funnel-days";
 import { LOCALES, hasLocale } from "@/lib/i18n-constants";
 import { getDictionary, t } from "@/lib/i18n";
 import { log } from "@/server/logger";
@@ -77,8 +78,11 @@ export default async function StartPage({
     readPlaySports(),
   ]);
   const dict = { ...marketingDict, ...uiDict };
-  // From the server clock only, never the request (parseStartPrefill refuses a bad today by throwing).
-  const today = wizardToday(new Date());
+  // From the server clock only, never the request (parseStartPrefill refuses a bad today by throwing): today is the
+  // parser's tolerance (UTC less one), the chips begin at the real UTC day.
+  const now = new Date();
+  const today = wizardToday(now);
+  const utcDay = funnelUtcDay(now);
   return (
     <MarketingShell variant="night-scroll" lang={lang}>
       <main className="relative -mt-16 min-h-[100svh] bg-[linear-gradient(180deg,var(--mk-night-2),var(--mk-night))] pb-16 pt-24 text-[var(--mk-cream)]">
@@ -91,11 +95,13 @@ export default async function StartPage({
           <noscript>
             <p className="mx-auto mb-4 max-w-xl px-4 text-sm text-[#fdba74]">{t(dict, "start.wizard.noScript")}</p>
           </noscript>
-          <DictProvider dict={dict} locale={lang}>
+          {/* Only the wizard's slice of the catalogue reaches the client (review-t4 (b)). */}
+          <DictProvider dict={pickWizardDict(dict)} locale={lang}>
             <StartWizard
               initial={parseStartPrefill(sp, today)}
               maxEntrants={maxEntrants}
               today={today}
+              utcDay={utcDay}
               playSports={playSports}
             />
           </DictProvider>

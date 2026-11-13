@@ -10,7 +10,10 @@ import crypto from "node:crypto";
 import { z } from "zod";
 import { sql, type Tx } from "@/lib/db";
 import { getLimit } from "@/lib/entitlements";
+import { funnelEarliestDay } from "@/lib/funnel-days";
 import { funnelFormatMin, funnelFormatStages, isFunnelFormat } from "@/lib/funnel-formats";
+import { HttpError } from "@/lib/errors";
+import { isIsoDay } from "@/lib/sponsor-report";
 import { getDictionary, t } from "@/lib/i18n";
 import { lookup } from "@/lib/i18n-runtime";
 import { DEFAULT_LOCALE, hasLocale, type Locale } from "@/lib/i18n-constants";
@@ -187,6 +190,8 @@ async function claimStep<T>(step: ClaimStep, competitionId: string, run: () => P
  * standard use-cases, so quotas/slugs/audit all apply as if typed by hand.
  *
  * In order (start-wizard redesign plan, 2026-11-13):
+ *   -. before anything, the first day: one that is not a calendar day or is before the UTC day less one is refused
+ *      (400), so a stale or hand-made draft writes nothing — not even the organisation;
  *   0. the organisation (the user's first, else a new one), then a PRE-FLIGHT of the reads and checks the build can make
  *      before its first write — the language, the sport, the entrant cap, the stage graph parsed as the API parses it.
  *      Not pre-flighted: the active-competition quota (createCompetition's own check, which refuses BEFORE its insert,
@@ -212,6 +217,11 @@ export async function createFromDraft(
   draft: FunnelDraft,
 ): Promise<{ redirect: string; orgId: string }> {
   const { payload } = draft;
+  // Before any write: a first day that is no calendar day, or that has passed for every visitor (before the UTC day less
+  // one, the /start parser's own tolerance), is refused — the draft was started days ago, or its body was hand-made.
+  if (payload.start_date !== undefined && (!isIsoDay(payload.start_date) || payload.start_date < funnelEarliestDay(new Date()))) {
+    throw new HttpError(400, "This event's first day has already passed.");
+  }
   const orgs = await getUserOrgs(userId);
   const org = orgs[0] ?? (await createOrgForUser(userId, `${payload.name} organisers`));
   const auth: AuthCtx = { orgId: org.id, via: "session", userId, role: "owner", keyId: null };

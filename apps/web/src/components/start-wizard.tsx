@@ -34,6 +34,7 @@ import {
   sportLabelKey,
   wizardCards,
   wizardField,
+  wizardQuery,
   wizardReducer,
   type WizardContext,
   type WizardState,
@@ -44,8 +45,10 @@ export interface StartWizardProps {
   initial: StartPrefill;
   /** The free plan's entrants per division (`funnelEntrantCap`), null = unlimited. */
   maxEntrants: number | null;
-  /** The page's today (`wizardToday`): the earliest first day. */
+  /** The page's today (`wizardToday`, the UTC day less one): the earliest first day a link or a pick may carry. */
   today: string;
+  /** The server's real UTC day (`funnelUtcDay`): where the date chips and the date box begin (review-t4 m1). */
+  utcDay: string;
   /** The sports /play offers a quick match of: the Sent screen's "score a quick match" shows for these only. */
   playSports: readonly string[];
 }
@@ -67,7 +70,7 @@ const MORE: ReadonlySet<FunnelFormat> = new Set(FUNNEL_MORE_FORMATS);
 
 type Done = { claim_url?: string };
 
-export function StartWizard({ initial, maxEntrants, today, playSports }: StartWizardProps) {
+export function StartWizard({ initial, maxEntrants, today, utcDay, playSports }: StartWizardProps) {
   const t = useT();
   const plural = usePlural();
   const locale = useLocale();
@@ -78,9 +81,10 @@ export function StartWizard({ initial, maxEntrants, today, playSports }: StartWi
     initial,
     (p) => initialWizardState(p, ctx),
   );
-  const [foldOpen, setFoldOpen] = useState(false);
+  // A reload of the wizard's own URL can arrive with Planning open (its courts and hours ride the query).
+  const [foldOpen, setFoldOpen] = useState(() => s.planningOpen);
   const [moreOpen, setMoreOpen] = useState(initial.format !== null && MORE.has(initial.format));
-  const [picking, setPicking] = useState(() => s.date !== null && !nextEventDays(today).includes(s.date));
+  const [picking, setPicking] = useState(() => s.date !== null && !nextEventDays(utcDay).includes(s.date));
   const [emailTouched, setEmailTouched] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -88,6 +92,20 @@ export function StartWizard({ initial, maxEntrants, today, playSports }: StartWi
   const heading = useRef<HTMLHeadingElement>(null);
   const emailInput = useRef<HTMLInputElement>(null);
   const firstStep = useRef(true);
+
+  // The answers ride the page's own URL (review-t4 (a)): a refresh or Back to /start restores them, and Next replays to the
+  // step. Replaced, never pushed (a history entry per answer is a later change), and never the name or the address —
+  // PostHog and Sentry record page URLs (`wizardQuery`). Landing leaves the URL as it came until the organiser answers.
+  const query = wizardQuery(s);
+  const firstQuery = useRef(true);
+  useEffect(() => {
+    if (firstQuery.current) {
+      firstQuery.current = false;
+      return;
+    }
+    if (typeof window === "undefined") return;
+    window.history.replaceState(null, "", `${window.location.pathname}?${query}`);
+  }, [query]);
 
   // A new step moves focus to its question, so a screen reader hears where it is; the first render keeps the page's own.
   useEffect(() => {
@@ -122,7 +140,8 @@ export function StartWizard({ initial, maxEntrants, today, playSports }: StartWi
   async function send(e: React.FormEvent) {
     e.preventDefault();
     setEmailTouched(true);
-    if (plausibleEmail(s.email) !== "ok") {
+    // B4's own Next rule (canAdvance at Email: the route's address rule), the one the dictionary's errors word.
+    if (!canAdvance(s, ctx)) {
       emailInput.current?.focus();
       return;
     }
@@ -353,7 +372,9 @@ export function StartWizard({ initial, maxEntrants, today, playSports }: StartWi
         ) : null}
 
         {s.step === "size" ? (
-          <form onSubmit={next} className="mt-5">
+          // noValidate: the count boxes' `pattern` and the date box's `min` would raise the browser's own bubble, in the
+          // browser's language; the wizard's rules and its dictionary decide instead (review-t4 m5).
+          <form onSubmit={next} noValidate className="mt-5">
             <span id="start-entrants" className={`${LABEL} mb-1.5`}>
               {t("start.wizard.entrants")}
             </span>
@@ -470,11 +491,11 @@ export function StartWizard({ initial, maxEntrants, today, playSports }: StartWi
         ) : null}
 
         {s.step === "date" ? (
-          <form onSubmit={next} className="mt-5">
+          <form onSubmit={next} noValidate className="mt-5">
             <fieldset>
               <legend className={`${LABEL} mb-2`}>{t("start.wizard.firstDay")}</legend>
               <div className="flex flex-wrap gap-1.5">
-                {nextEventDays(today).map((d) => (
+                {nextEventDays(utcDay).map((d) => (
                   <label key={d}>
                     <input
                       type="radio"
@@ -522,7 +543,7 @@ export function StartWizard({ initial, maxEntrants, today, playSports }: StartWi
                 <span className={`${LABEL} mb-1.5`}>{t("start.wizard.steps.date")}</span>
                 <input
                   type="date"
-                  min={today}
+                  min={utcDay}
                   value={s.date ?? ""}
                   onChange={(e) => dispatch({ type: "date", value: e.target.value === "" ? null : e.target.value })}
                   className={`${INPUT} [color-scheme:dark]`}
