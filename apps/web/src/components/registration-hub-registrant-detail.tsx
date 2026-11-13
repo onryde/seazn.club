@@ -22,6 +22,7 @@ import type { ReactNode } from "react";
 import { t } from "@/lib/i18n";
 import type { Dict } from "@/lib/i18n-constants";
 import { formatMoneyExact, asCurrency } from "@/lib/currency";
+import { entryReferenceOf } from "@/lib/ref-code";
 import { fmtDateTime } from "@/lib/format";
 import { isTerminalRegistrationStatus, ownPaymentRefundedCents } from "@/lib/registration-status";
 import type { RegistrationFormField } from "@/server/api-v1/schemas";
@@ -136,6 +137,14 @@ export function RegistrationHubRegistrantDetail({
   // `isTerminalRegistrationStatus` (@/lib/registration-status) is the SAME
   // source `deriveRegistrantActionFlags`'s canWithdraw/canResend use — a
   // plain server component importing it drags in nothing (dependency-free).
+  // The reference to match a transfer against (spec §6.3): this ENTRY's own, via the one reading of its three stored columns, so it
+  // is the string the pay page, the mails and the CSV quote. A cart sent with 2+ entries also shows the cart's, for the mail the
+  // person got about the whole cart. Both read the cart's STORED size, never the siblings still here: a lone survivor of a 3-entry
+  // cart is still `-3`, and `siblings` empty must not read as a cart of one. The entry's reference does not wrap: it is read aloud,
+  // copied and matched against a bank statement, and at 320px it would otherwise break after a hyphen (`SZ-7F3K-` / `Q2ND-2`); the
+  // label beside it is what gives way.
+  const entryRef = entryReferenceOf(row);
+  const cartRef = row.ref_code !== null && row.cart_size >= 2 ? row.ref_code : null;
   const showJoinCode = canEdit && row.join_code !== null && !isTerminalRegistrationStatus(row.status);
 
   return (
@@ -162,8 +171,19 @@ export function RegistrationHubRegistrantDetail({
             t(dict, "reg.hub.registrants.detail.field.paymentState"),
             t(dict, `reg.hub.registrants.detail.paymentState.${paymentState}`),
           )}
-          {detailField(t(dict, "reg.hub.registrants.detail.field.refCode"), row.ref_code ?? "—")}
+          {detailField(
+            t(dict, "reg.hub.registrants.detail.field.entryRef"),
+            <span data-registration-hub-registrant-entry-ref className="whitespace-nowrap tabular-nums">
+              {entryRef ?? "—"}
+            </span>,
+          )}
         </dl>
+        {cartRef !== null && (
+          // Under the Entry reference row, on its own line: beside the label it would squeeze a long label (nl, es) at 320px.
+          <p data-registration-hub-registrant-cart-ref className="mt-0.5 text-right text-xs tabular-nums text-slate-500">
+            {t(dict, "reg.hub.registrants.detail.cartRef", { ref: cartRef })}
+          </p>
+        )}
 
         {showJoinCode && (
           <div className="mt-3">

@@ -16,6 +16,7 @@ import {
 import { RegistrationHubRegistrantJoinCode } from "@/components/registration-hub-registrant-join-code";
 import { RegistrationHubRegistrantActions } from "@/components/registration-hub-registrant-actions";
 import { getDictionary, t } from "@/lib/i18n";
+import type { Locale } from "@/lib/i18n-constants";
 import type { RegistrationListRow } from "@/server/usecases/registrations";
 import type { RegistrantRosterPlayer, RegistrantCartSibling } from "@/app/o/[orgSlug]/c/[compSlug]/registration/data";
 
@@ -45,6 +46,8 @@ function row(over: Partial<RegistrationListRow> = {}): RegistrationListRow {
     user_id: null,
     locale: null,
     ref_code: "RC-ABC123",
+    cart_position: 1,
+    cart_size: 1,
     currency: "usd",
     payment_method: "stripe",
     checkout_session_id: null,
@@ -531,5 +534,65 @@ describe("RegistrationHubRegistrantDetail — no empty Actions heading", () => {
       (e) => propsOf(e)["aria-label"] === t(dict, "reg.hub.registrants.detail.section.actions"),
     );
     expect(headings.length).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Registration redesign B5 T19 (spec §6.3): the detail shows the ENTRY's own reference, the one a bank transfer quotes, and — for a
+// cart sent with 2+ entries — the cart's, so an organiser can tie the entry to the mail the person got about the whole cart.
+// ---------------------------------------------------------------------------
+const CART = "SZ-7F3K-Q2ND";
+const hook = (tree: ReturnType<typeof walk>, attr: string) => tree.filter((e) => attr in propsOf(e));
+
+describe("RegistrationHubRegistrantDetail — the entry's reference (B5 T19)", () => {
+  it("a one-entry cart: the Entry reference row carries the cart's reference alone, and there is no Cart line", () => {
+    const tree = walk(RegistrationHubRegistrantDetail(baseProps({ row: row({ ref_code: CART, cart_position: 1, cart_size: 1 }) })));
+    const entry = hook(tree, "data-registration-hub-registrant-entry-ref");
+    expect(entry, "exactly one entry reference").toHaveLength(1);
+    expect(textOf(entry[0]!)).toBe(CART);
+    expect(hook(tree, "data-registration-hub-registrant-cart-ref"), "a cart of one has no Cart line").toHaveLength(0);
+    expect(textOf(tree)).toContain(t(dict, "reg.hub.registrants.detail.field.entryRef"));
+    expect(textOf(tree)).not.toContain(`Cart ${CART}`);
+  });
+
+  it("an entry of a 2-entry cart: its own reference with the position, and a Cart line naming the cart's", () => {
+    const tree = walk(RegistrationHubRegistrantDetail(baseProps({ row: row({ ref_code: CART, cart_position: 2, cart_size: 2 }) })));
+    expect(textOf(hook(tree, "data-registration-hub-registrant-entry-ref")[0]!)).toBe(`${CART}-2`);
+    const cart = hook(tree, "data-registration-hub-registrant-cart-ref");
+    expect(cart).toHaveLength(1);
+    expect(textOf(cart[0]!)).toBe(`Cart ${CART}`);
+  });
+
+  it("is the stored size that decides, not the entries left: the lone survivor of a 3-entry cart is still -3 and still shows the Cart line", () => {
+    // `siblings` is empty (the others are gone), exactly the case a count-based rule would read as a one-entry cart.
+    const tree = walk(
+      RegistrationHubRegistrantDetail(baseProps({ row: row({ ref_code: CART, cart_position: 3, cart_size: 3 }), siblings: [] })),
+    );
+    expect(textOf(hook(tree, "data-registration-hub-registrant-entry-ref")[0]!)).toBe(`${CART}-3`);
+    expect(textOf(hook(tree, "data-registration-hub-registrant-cart-ref")[0]!)).toBe(`Cart ${CART}`);
+  });
+
+  it("a cart with no reference shows a dash, and no Cart line whatever its size", () => {
+    const tree = walk(RegistrationHubRegistrantDetail(baseProps({ row: row({ ref_code: null, cart_position: 2, cart_size: 2 }) })));
+    expect(textOf(hook(tree, "data-registration-hub-registrant-entry-ref")[0]!)).toBe("—");
+    expect(hook(tree, "data-registration-hub-registrant-cart-ref")).toHaveLength(0);
+  });
+
+  it("the row's label and the Cart line are real copy in all four locales, with the reference slot kept", async () => {
+    const wording = new Set<string>();
+    for (const locale of ["en", "es", "fr", "nl"] as Locale[]) {
+      const d = await getDictionary(locale, "ui");
+      const label = t(d, "reg.hub.registrants.detail.field.entryRef");
+      const cartLine = t(d, "reg.hub.registrants.detail.cartRef", { ref: CART });
+      expect(label.length, locale).toBeGreaterThan(3);
+      expect(cartLine, locale).toContain(CART);
+      expect(cartLine.replace(CART, "").trim().length, `${locale}: a word besides the reference`).toBeGreaterThan(2);
+      wording.add(label).add(cartLine);
+      // Rendered in that locale, through the component.
+      const tree = walk(RegistrationHubRegistrantDetail(baseProps({ dict: d, row: row({ ref_code: CART, cart_position: 2, cart_size: 2 }) })));
+      expect(textOf(tree), locale).toContain(label);
+      expect(textOf(hook(tree, "data-registration-hub-registrant-cart-ref")[0]!), locale).toBe(cartLine);
+    }
+    expect(wording.size, "anti-vacuity: four distinct labels and four distinct Cart lines").toBe(8);
   });
 });
