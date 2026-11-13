@@ -1011,13 +1011,18 @@ describe.skipIf(!HAS_DB)("readQuickMatchHome: a League + Knockout (plan 5 T5)", 
     expect({ knockout: again.knockout, next: again.next }, "a second load asks the same").toEqual({ knockout: asked.knockout, next: null });
 
     expect(await decideQuickMatchCut(m.row, { how: "pick", entrantIds: [third] })).toEqual({ through: [third] });
-    readRetry.mockRejectedValueOnce(new Error("the advance failed on this load"));
+    const failure = new Error("the advance failed on this load");
+    readRetry.mockRejectedValueOnce(failure);
     const errors = vi.spyOn(log, "error");
     let settling: QuickMatchHome;
     try {
       settling = await homeOf(m.out);
       expect(advanceFailures(errors), "logged once, as the advance's own event").toHaveLength(1);
-      expect(advanceFailures(errors)[0]![0]).toMatchObject({ quickMatch: m.row.id });
+      // Exactly these fields: the error itself, the event name, the quick match by id (never its token), and a message.
+      expect(advanceFailures(errors)[0]).toStrictEqual([
+        { err: failure, event: "quick_match_advance_failed", quickMatch: m.row.id },
+        expect.stringMatching(/advance failed on load/),
+      ]);
     } finally {
       errors.mockRestore();
     }
@@ -1056,6 +1061,9 @@ describe.skipIf(!HAS_DB)("readQuickMatchHome: a League + Knockout (plan 5 T5)", 
     expect(sorted(first.knockout!.byLot), "D6: every member of a class settled by toss").toEqual(ids);
     const seated = Object.fromEntries(rankSeats(first).map((s) => [s.rank, finalOf(first)[s.side]?.entrantId]));
     expect(seated, "the lot's first two, in its order").toEqual({ 1: lot[0], 2: lot[1] });
+    const koRows = await stageLines(m.out.knockoutStageId!);
+    expect(koRows, "premise: a League → Final's knockout is the one final").toHaveLength(1);
+    expect(first.next?.id, "the toss filled the final: it is next").toBe(koRows[0]!.id);
     const second = await homeOf(m.out);
     expect(second.knockout!.decision).toEqual(first.knockout!.decision);
     expect(second.knockout!.byLot).toEqual(first.knockout!.byLot);
@@ -1140,6 +1148,14 @@ describe.skipIf(!HAS_DB)("readQuickMatchHome: a League + Knockout (plan 5 T5)", 
     expect(filled.next?.stage).toBe("knockout");
     expect(filled.champion).toBeNull();
 
+    // Started means a knockout line is under way, a result or not: a semi-final only begun (its Start, no result) counts.
+    await scoreEvent(systemAuth(), semiOf(w).id, { expected_seq: 0, type: "core.start", payload: {} });
+    const begun = await homeOf(m.out);
+    expect(koLines(begun).map((f) => [f.id, f.phase]).filter(([, phase]) => phase !== "waiting" && phase !== "ready"),
+      "premise: one knockout line in play, none settled").toEqual([[semiOf(w).id, "live"]]);
+    expect(begun.knockout).toMatchObject({ state: "filled", started: true });
+    expect(begun.next?.id, "the match in play is next").toBe(semiOf(w).id);
+
     await playWin(semiOf(w).id, w);
     const onePlayed = await homeOf(m.out);
     expect(onePlayed.knockout).toMatchObject({ state: "filled", started: true });
@@ -1155,6 +1171,25 @@ describe.skipIf(!HAS_DB)("readQuickMatchHome: a League + Knockout (plan 5 T5)", 
     expect(done.champion).toEqual({ entrantId: x, finalFixtureId: final.id });
     expect(await rankedIds(m).then((t) => t[0]), "the table's leader is W, not the champion").toBe(w);
     expect({ played: done.played, total: done.total }).toEqual({ played: 9, total: 9 });
+    // Each line reads its OWN stage (carried-forward.ts): the league's stage is complete, so its results are locked; a
+    // semi-final's winner sits in the final, so it has moved on; the final feeds nothing and its knockout stage is not
+    // complete, so its result can still be edited (Edit result).
+    const [koStage] = await sql<{ status: string }[]>`select status from stages where id = ${m.out.knockoutStageId}`;
+    const [leagueStage] = await sql<{ status: string }[]>`select status from stages where id = ${m.out.stageId}`;
+    expect({ league: leagueStage!.status, ko: koStage!.status === "complete" }, "premise: the stages differ").toEqual({ league: "complete", ko: false });
+    expect(done.fixtures.filter((f) => f.stage === "league").every((f) => f.resultMovedOn)).toBe(true);
+    expect(koLines(done).map((f) => [f.isFinal, f.resultMovedOn]).sort()).toEqual([[false, true], [false, true], [true, false]]);
+
+    // A void of the final's result takes the champion back (the sequence): nobody has won, the final is in play and next.
+    const [tip] = await sql<{ id: string; seq: number }[]>`
+      select id, seq from score_events where fixture_id = ${final.id} order by seq desc limit 1`;
+    await scoreEvent(systemAuth(), final.id, { expected_seq: tip!.seq, type: "core.void", payload: { event_id: tip!.id } });
+    const reopened = await homeOf(m.out);
+    expect(reopened.champion).toBeNull();
+    expect(reopened.finished).toBe(false);
+    expect(finalOf(reopened)).toMatchObject({ winnerEntrantId: null, phase: "live" });
+    expect(reopened.next?.id).toBe(final.id);
+    expect(reopened.knockout).toMatchObject({ state: "filled", started: true });
   });
 
   it("(g) every league match skipped: nothing played, a seed-ordered class is never 'by lot' — final (3 level for 2 seats): Pick only, the picked marked; semis (4 level, all through): filled at once, no marker", async () => {
@@ -1202,7 +1237,9 @@ describe.skipIf(!HAS_DB)("readQuickMatchHome: a League + Knockout (plan 5 T5)", 
         insert into stages (division_id, org_id, seq, kind, name)
         select division_id, org_id, 3, kind, name from stages where id = ${m.out.knockoutStageId}`, /holds 3 stages, not 2/],
       ["one stage", (m) => sql`delete from stages where id = ${m.out.knockoutStageId}`, /holds 1 stages, not 2/],
-      ["the kinds swapped", (m) => sql`update stages set kind = 'knockout' where id = ${m.out.stageId}`, /a league then a knockout/],
+      // The home's own wording (the cut's read refuses the same shape in its own): the head's guard, not the cut's, refused.
+      ["the kinds swapped", (m) => sql`update stages set kind = 'knockout' where id = ${m.out.stageId}`,
+        /the home reads a League \+ Knockout over a league stage then a knockout stage/],
       ["a seat with no feeder", (m) => sql`update fixtures set winner_to_fixture = null where stage_id = ${m.out.knockoutStageId} and not is_final`,
         /names no league rank and no feeder/],
     ];

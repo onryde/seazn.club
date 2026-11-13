@@ -466,7 +466,7 @@ export async function readQuickMatchHome(row: QuickMatchRow): Promise<QuickMatch
     if (!stagesFit(row.format, stages.map((s) => s.kind))) {
       throw new Error(
         lk
-          ? `quick match ${row.id}: a League + Knockout is a league then a knockout, division ${division.id} holds [${stages.map((s) => s.kind).join(", ")}]`
+          ? `quick match ${row.id}: the home reads a League + Knockout over a league stage then a knockout stage; division ${division.id} holds [${stages.map((s) => s.kind).join(", ")}]`
           : `quick match ${row.id}: stage ${stages[0]!.id} is a ${stages[0]!.kind} stage, not a league or a knockout`,
       );
     }
@@ -542,13 +542,16 @@ export async function readQuickMatchHome(row: QuickMatchRow): Promise<QuickMatch
   const leagueCounts = leagueStage ? playedOf(leagueRows) : null;
   const leagueDone = leagueCounts !== null && isQuickMatchFinished(leagueCounts);
 
-  // A League + Knockout's state (§6, §11), from the cut's one read. A stored answer counts only on a league that is done by
-  // both reads (m9: until an advance drops it, an answer can sit on a reopened league).
-  const cutFinal = cut !== null && cut.leagueDone && leagueDone;
+  // A League + Knockout's state (§6, §11), from the cut's one read alone: whether its league is done, its tie, its stored
+  // answer and whether it filled are one locked read's, the same the advance decides on, so they never disagree with each
+  // other (a result landing between that read and the fixtures' moves the counts first; the next load moves the state). A
+  // stored answer counts only on a league that read saw done (m9: until an advance drops it, an answer can sit on a
+  // reopened league).
+  const cutFinal = cut !== null && cut.leagueDone;
   const decision = cutFinal ? cut.decision : null;
   const open = cut !== null ? openTie(cut.ties) : null;   // asked only of a done league (`state` below)
   const state: QuickMatchKnockoutState | null =
-    cut === null ? null : cut.filled ? "filled" : !leagueDone ? "league" : open !== null && decision === null ? "tie" : "settingUp";
+    cut === null ? null : cut.filled ? "filled" : !cut.leagueDone ? "league" : open !== null && decision === null ? "tie" : "settingUp";
   const question = state === "tie" ? open : null;
 
   /** A knockout seat of a League + Knockout (D7): the league rank its label names (a seat still waiting), else the line whose
