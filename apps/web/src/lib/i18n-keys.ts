@@ -3405,6 +3405,7 @@ export type DictionaryKey =
   | "formats.meta.title"
   | "formats.subhead"
   | "funnel.claim.card.dashboard"
+  | "funnel.claim.card.datePast"
   | "funnel.claim.card.done"
   | "funnel.claim.card.failedDetail"
   | "funnel.claim.card.failedTitle"

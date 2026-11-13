@@ -1,20 +1,27 @@
 // The emailed claim link's card (start wizard T2 follow-up, owner-ordered): every state is worded from the visitor's
 // own dictionary — never the route's English `error` — and a claim that failed AFTER it signed the organiser in points
 // them at their dashboard (the event may be partly built, or the plan refused it and nothing was added; the token is
-// spent) instead of "start again or sign in", and refreshes the page so the nav shows them signed in. A limiter's 429 is
+// spent) instead of "start again or sign in", and refreshes the page so the nav shows them signed in. A first day that
+// has passed (refused before anything was written) is its own card: nothing was set up, start again on /<lang>/start. A limiter's 429 is
 // "try again shortly": the link is still unused, so the card retries the same token.
 //
 // The island is driven through the real effect: `api` is the one stand-in, answering as the route answers (an ApiError
 // carrying the route's `code`), so the code → copy join is what is witnessed, not a fixture on both ends. Copy is read
 // off disk per locale, strictly (a missing key throws; msgFor would fall back to English and hide it).
 //
-// Sweep: every shipped language. Sport: not applicable — the card words no sport.
+// Sweep: every shipped language. Sport: the card words none; the first-day-passed link carries the page's sport key
+// (two sports and none — the key is the page's to read, pinned in app/start/claim/__tests__/page.test.tsx).
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { ReactElement, ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { LOCALES, type Locale } from "@/lib/i18n-constants";
-import { FUNNEL_CLAIM_INVALID, FUNNEL_CLAIM_PLAN_LIMIT, FUNNEL_CLAIM_SIGNED_IN } from "@/lib/funnel-claim-codes";
+import {
+  FUNNEL_CLAIM_DATE_PAST,
+  FUNNEL_CLAIM_INVALID,
+  FUNNEL_CLAIM_PLAN_LIMIT,
+  FUNNEL_CLAIM_SIGNED_IN,
+} from "@/lib/funnel-claim-codes";
 
 const h = vi.hoisted(() => ({
   locale: "en" as string,
@@ -45,6 +52,7 @@ vi.mock("@/components/i18n/dict-provider", async (importOriginal) => {
       if (typeof s !== "string") throw new Error(`${h.locale}/ui.json has no ${key}`);
       return s;
     },
+    useLocaleOrDefault: () => h.locale,
   };
 });
 
@@ -77,8 +85,8 @@ const hrefs = (els: ReactElement[]): string[] =>
   els.map((el) => (el.props as { href?: unknown }).href).filter((x): x is string => typeof x === "string");
 
 /** Mount the card on `token`, let the claim POST answer, and return what it then shows. */
-async function settle(token: string | null) {
-  const island = renderIsland(FunnelClaim, { token });
+async function settle(token: string | null, restartSport: string | null = null) {
+  const island = renderIsland(FunnelClaim, { token, restartSport });
   // The POST's promise, then its .then/.catch handler: a few microtask turns.
   for (let i = 0; i < 5; i++) await Promise.resolve();
   const els = island.tree();
@@ -138,6 +146,15 @@ const STATES = [
     links: ["/dashboard"],
   },
   {
+    // Refused before anything was written (lib/funnel.ts createFromDraft's first check), though the visitor IS signed in:
+    // never the "may be partly set up" card, and the way on is a fresh start in their own language.
+    name: "the first day has passed (nothing set up)",
+    token: "tok-date-past",
+    answer: () => Promise.reject(new ApiError(SERVER_TEXT, 400, FUNNEL_CLAIM_DATE_PAST)),
+    keys: ["datePast", "startAgain"],
+    links: (l: Locale) => [`/${l}/start`],
+  },
+  {
     name: "rate limited (the link is unused)",
     token: "tok-429",
     answer: () => Promise.reject(new ApiError("Too many requests", 429)),
@@ -190,7 +207,8 @@ describe("the funnel claim card", () => {
         }
         expect(got.text, `${label}: the route's English is never printed`).not.toContain("SERVER-ENGLISH");
         expect(got.text, `${label}: the network's English is never printed`).not.toContain("Failed to fetch");
-        expect([...got.hrefs].sort(), `${label}: the way forward`).toEqual([...s.links].sort());
+        const links: readonly string[] = typeof s.links === "function" ? s.links(l) : s.links;
+        expect([...got.hrefs].sort(), `${label}: the way forward`).toEqual([...links].sort());
         checked++;
       }
     }
@@ -211,7 +229,7 @@ describe("the funnel claim card", () => {
   it("posts the token once, and a claim that lands goes where the route says", async () => {
     h.answer = () => Promise.resolve({ redirect: "/o/x/c/y/d/z?tab=entrants" });
     const { island } = await settle("tok-1");
-    island.rerender({ token: "tok-1" });
+    island.rerender({ token: "tok-1", restartSport: null });
     for (let i = 0; i < 5; i++) await Promise.resolve();
     expect(h.posts, "one POST for one link").toEqual([{ method: "POST", json: { token: "tok-1" } }]);
     expect(h.pushes).toEqual(["/o/x/c/y/d/z?tab=entrants"]);
@@ -221,6 +239,7 @@ describe("the funnel claim card", () => {
     const cases = [
       { name: "signed in, part-built", answer: () => Promise.reject(new ApiError(SERVER_TEXT, 500, FUNNEL_CLAIM_SIGNED_IN)), refresh: 1 },
       { name: "signed in, plan limit", answer: () => Promise.reject(new ApiError(SERVER_TEXT, 402, FUNNEL_CLAIM_PLAN_LIMIT)), refresh: 1 },
+      { name: "signed in, first day passed", answer: () => Promise.reject(new ApiError(SERVER_TEXT, 400, FUNNEL_CLAIM_DATE_PAST)), refresh: 1 },
       { name: "dead link", answer: () => Promise.reject(new ApiError(SERVER_TEXT, 400, FUNNEL_CLAIM_INVALID)), refresh: 0 },
       { name: "failed before the session", answer: () => Promise.reject(new ApiError(SERVER_TEXT, 500)), refresh: 0 },
       { name: "rate limited", answer: () => Promise.reject(new ApiError("Too many requests", 429)), refresh: 0 },
@@ -233,7 +252,7 @@ describe("the funnel claim card", () => {
       expect(h.refreshes, c.name).toBe(c.refresh);
       checked++;
     }
-    expect(checked, "anti-vacuity: both signed-in failures and three signed-out ones").toBe(cases.length);
+    expect(checked, "anti-vacuity: the three signed-in failures and three signed-out ones").toBe(cases.length);
   });
 
   it("rate limited: Try again re-posts the SAME token, shows the working state meanwhile, and lands", async () => {
@@ -252,6 +271,32 @@ describe("the funnel claim card", () => {
       { method: "POST", json: { token: "tok-retry" } },
     ]);
     expect(h.pushes).toEqual(["/o/x/c/y/d/z?tab=entrants"]);
+  });
+
+  it("first day passed: Start again opens /<lang>/start on the draft's sport — only the sport rides the link", async () => {
+    // The sport is the page's (read from the draft by the token: app/start/claim/page.tsx); the card only words the link.
+    const cases = [
+      { sport: "badminton", query: "?sport=badminton" },
+      { sport: "tabletennis", query: "?sport=tabletennis" },
+      { sport: null, query: "" },
+    ];
+    let checked = 0;
+    for (const l of LOCALES) {
+      for (const c of cases) {
+        h.locale = l;
+        h.answer = () => Promise.reject(new ApiError(SERVER_TEXT, 400, FUNNEL_CLAIM_DATE_PAST));
+        const got = await settle("tok-date-past", c.sport);
+        expect(got.hrefs, `${l} ${c.sport}`).toEqual([`/${l}/start${c.query}`]);
+        expect(got.texts, `${l}: never the part-built card`).not.toContain(ui(l, "funnel.claim.card.signedInBody"));
+        expect(got.texts).toContain(ui(l, "funnel.claim.card.datePast"));
+        for (const href of got.hrefs) {
+          const q = new URL(href, "https://seazn.test").searchParams;
+          expect([...q.keys()].filter((k) => k !== "sport"), `${l}: nothing but the sport in the URL`).toEqual([]);
+        }
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: every language × a sport and none").toBe(LOCALES.length * cases.length);
   });
 
   it("a missing token posts nothing", async () => {

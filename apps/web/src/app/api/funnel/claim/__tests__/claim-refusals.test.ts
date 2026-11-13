@@ -7,6 +7,8 @@
 //                             through (a 5xx still reaches Sentry); the inner message does not reach the body.
 //   FUNNEL_CLAIM_PLAN_LIMIT — signed in, and the plan refused the competition itself (the quota, before its insert):
 //                             a 402 carrying its feature_key, and NOTHING of the event written.
+//   FUNNEL_CLAIM_DATE_PAST  — signed in, and the draft's first day is before the UTC day less one (createFromDraft's
+//                             first check): a 400, NOTHING written — not the part-built FUNNEL_CLAIM_SIGNED_IN.
 // Unnamed: a failure BEFORE the session (500, no code, no cookie, Sentry) and the limiter's 429 (the token unread).
 //
 // Driven through the REAL route over a real database, with a real draft from the real producer and the real
@@ -90,7 +92,12 @@ vi.mock("@/lib/auth", async (orig) => {
 import { sql } from "@/lib/db";
 import { createOrgForUser } from "@/lib/auth";
 import { createFunnelDraft, type FunnelPayload } from "@/lib/funnel";
-import { FUNNEL_CLAIM_INVALID, FUNNEL_CLAIM_PLAN_LIMIT, FUNNEL_CLAIM_SIGNED_IN } from "@/lib/funnel-claim-codes";
+import {
+  FUNNEL_CLAIM_DATE_PAST,
+  FUNNEL_CLAIM_INVALID,
+  FUNNEL_CLAIM_PLAN_LIMIT,
+  FUNNEL_CLAIM_SIGNED_IN,
+} from "@/lib/funnel-claim-codes";
 import { HttpError } from "@/lib/http";
 import { POST } from "../route";
 
@@ -138,6 +145,13 @@ function sessionUser(): string | null {
   if (!token) return null;
   return (JSON.parse(Buffer.from(token.split(".")[1]!, "base64url").toString("utf8")) as { uid: string }).uid;
 }
+/** The UTC calendar day `n` days from now, read off the clock (never the code under test). */
+const utcDayPlus = (n: number): string => {
+  const now = new Date();
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) + n * 86_400_000).toISOString().slice(0, 10);
+};
+const orgsCreatedBy = async (userId: string) =>
+  (await sql<{ n: number }[]>`select count(*)::int as n from organizations where created_by = ${userId}`)[0]!.n;
 const userOf = async (email: string) =>
   (await sql<{ id: string }[]>`select id from users where email = ${email} and deleted_at is null`)[0]?.id ?? null;
 
@@ -279,6 +293,42 @@ describe.skipIf(!HAS_DB)("the funnel claim's named refusals", () => {
     expect(partial.map((e) => e.obj), "logged by its step, with the refusal's status").toEqual([
       expect.objectContaining({ step: "stages", status: 402 }),
     ]);
+  });
+
+  it("a first day that has passed: 400 FUNNEL_CLAIM_DATE_PAST, signed in, NOTHING written — never the part-built card", async () => {
+    // New and returning organisers, two days and a month back: createFromDraft refuses before its first write.
+    const cases = [
+      { name: "a new organiser, two days back", day: utcDayPlus(-2), returning: false },
+      { name: "a new organiser, a month back", day: utcDayPlus(-30), returning: false },
+      { name: "a returning organiser, two days back", day: utcDayPlus(-2), returning: true },
+    ];
+    let checked = 0;
+    for (const c of cases) {
+      reset();
+      const o = c.returning ? await returningOrganiser() : null;
+      const { token, email } = await draft({ start_date: c.day }, o?.email ?? newAddress());
+      const got = await claim(token);
+      expect(got.status, c.name).toBe(400);
+      expect(got.body, c.name).toMatchObject({ ok: false, code: FUNNEL_CLAIM_DATE_PAST });
+      expect(got.body.code, `${c.name}: not the part-built refusal`).not.toBe(FUNNEL_CLAIM_SIGNED_IN);
+      const uid = await userOf(email);
+      expect(sessionUser(), `${c.name}: signed in, as the draft's address`).toBe(uid);
+      if (o) expect(await competitionsOf(o.orgId), `${c.name}: no competition`).toBe(0);
+      else expect(await orgsCreatedBy(uid!), `${c.name}: no organisation either`).toBe(0);
+      expect(h.errors.filter((e) => e.msg === "funnel_claim_build_partial"), `${c.name}: nothing part-built`).toEqual([]);
+      expect(h.captured, `${c.name}: an expected refusal, not a server fault`).toEqual([]);
+      expect(h.warned, `${c.name}: logged (no Sentry)`).toContain("funnel_claim_signed_in_refused");
+      h.jar.clear();
+      expect((await claim(token)).body.code, `${c.name}: the token is spent`).toBe(FUNNEL_CLAIM_INVALID);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every case").toBe(cases.length);
+    // The positive pair: the UTC day less one (the /start parser's own tolerance) still builds.
+    reset();
+    const { token } = await draft({ start_date: utcDayPlus(-1) });
+    const ok = await claim(token);
+    expect(ok.status, "the earliest kept day builds").toBe(200);
+    expect(ok.body.data?.redirect).toMatch(/^\/o\//);
   });
 
   it("making the new org the active one fails: FUNNEL_CLAIM_SIGNED_IN as well", async () => {

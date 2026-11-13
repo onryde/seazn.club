@@ -3,17 +3,25 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useMsg } from "@/components/i18n/dict-provider";
+import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
 import { ApiError, api } from "@/lib/client";
-import { FUNNEL_CLAIM_INVALID, FUNNEL_CLAIM_PLAN_LIMIT, FUNNEL_CLAIM_SIGNED_IN } from "@/lib/funnel-claim-codes";
+import {
+  FUNNEL_CLAIM_DATE_PAST,
+  FUNNEL_CLAIM_INVALID,
+  FUNNEL_CLAIM_PLAN_LIMIT,
+  FUNNEL_CLAIM_SIGNED_IN,
+} from "@/lib/funnel-claim-codes";
 
 /** Where a claim that did not land leaves the visitor.
  *  - `signedIn` / `limit`: the route set the session, then the event could not be finished (`signedIn`: it may be part
  *    built) or the plan refused the competition before anything was written (`limit`). The token is spent either way,
  *    so the way on is the dashboard.
+ *  - `datePast`: the route set the session, then refused the draft before anything was written because its first day has
+ *    passed. Nothing exists, so the way on is a fresh start on /<lang>/start with the draft's sport (never the dashboard
+ *    and its "may be partly built").
  *  - `tryLater`: the limiter refused the POST before the token was read, so the same link still works in a moment.
  *  - `missing` / `invalid` / `failed`: signed out, with a fresh start or a sign-in as the way on. */
-type Failure = "missing" | "invalid" | "failed" | "tryLater" | "signedIn" | "limit";
+type Failure = "missing" | "invalid" | "failed" | "tryLater" | "signedIn" | "limit" | "datePast";
 
 /** The route names its refusals with a `code`; a 429 is the limiter's; anything else (a 5xx before the session, the
  *  network) is the generic failure. The route's English `error` is never shown — the card words every state from the
@@ -22,16 +30,20 @@ function failureOf(e: unknown): Exclude<Failure, "missing"> {
   if (!(e instanceof ApiError)) return "failed";
   if (e.code === FUNNEL_CLAIM_SIGNED_IN) return "signedIn";
   if (e.code === FUNNEL_CLAIM_PLAN_LIMIT) return "limit";
+  if (e.code === FUNNEL_CLAIM_DATE_PAST) return "datePast";
   if (e.code === FUNNEL_CLAIM_INVALID) return "invalid";
   if (e.status === 429) return "tryLater";
   return "failed";
 }
 
 /** Consumes a funnel draft token: signs the visitor in, creates the drafted
- *  competition, and routes inside it (v3/07 §6). Mirrors <MagicLink>. */
-export function FunnelClaim({ token }: { token: string | null }) {
+ *  competition, and routes inside it (v3/07 §6). Mirrors <MagicLink>. `restartSport` is the draft's sport as /start's
+ *  key (the page reads it by the token), carried by the first-day-passed card's "Start again" — and nothing else is. */
+export function FunnelClaim({ token, restartSport = null }: { token: string | null; restartSport?: string | null }) {
   const router = useRouter();
   const msg = useMsg();
+  const locale = useLocaleOrDefault();
+  const restartHref = `/${locale}/start${restartSport ? `?${new URLSearchParams({ sport: restartSport })}` : ""}`;
   const [status, setStatus] = useState<"working" | "ok" | Failure>("working");
   const ran = useRef(false);
 
@@ -50,7 +62,7 @@ export function FunnelClaim({ token }: { token: string | null }) {
           const failure = failureOf(e);
           setStatus(failure);
           // The session cookie was set on this very response: the server-rendered nav above still says signed out.
-          if (failure === "signedIn" || failure === "limit") router.refresh();
+          if (failure === "signedIn" || failure === "limit" || failure === "datePast") router.refresh();
         });
     },
     [router],
@@ -86,6 +98,15 @@ export function FunnelClaim({ token }: { token: string | null }) {
           </p>
           <Link href="/dashboard" className="btn btn-primary mt-4 inline-block px-4">
             {msg("funnel.claim.card.dashboard")}
+          </Link>
+        </>
+      )}
+      {shown === "datePast" && (
+        <>
+          <div className="mb-3 text-4xl">📅</div>
+          <p className="font-semibold text-slate-800">{msg("funnel.claim.card.datePast")}</p>
+          <Link href={restartHref} className="btn btn-primary mt-4 inline-block px-4">
+            {msg("funnel.claim.card.startAgain")}
           </Link>
         </>
       )}

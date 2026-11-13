@@ -10,8 +10,10 @@ import crypto from "node:crypto";
 import { z } from "zod";
 import { sql, type Tx } from "@/lib/db";
 import { getLimit } from "@/lib/entitlements";
+import { FUNNEL_CLAIM_DATE_PAST } from "@/lib/funnel-claim-codes";
 import { funnelEarliestDay } from "@/lib/funnel-days";
 import { funnelFormatMin, funnelFormatStages, isFunnelFormat } from "@/lib/funnel-formats";
+import { funnelSportByKeyOrName } from "@/lib/funnel-sports";
 import { HttpError } from "@/lib/errors";
 import { isIsoDay } from "@/lib/sponsor-report";
 import { getDictionary, t } from "@/lib/i18n";
@@ -103,13 +105,19 @@ export async function consumeFunnelDraft(token: string): Promise<FunnelDraft | n
   });
 }
 
-/** The language the draft `token` names was started in, read WITHOUT claiming it: the emailed link carries no language,
- *  so the claim page words its card in this one first. Any draft the token names, used or expired too — a link opened a
- *  second time is still that visitor's, and its card ("this link didn't work") is theirs to read. Null when the token
- *  names no draft or the draft has no language. Only the locale is read: never the address or the payload. */
-export async function funnelDraftLocale(token: string): Promise<Locale | null> {
-  const [row] = await sql<{ locale: string | null }[]>`select locale from funnel_drafts where token = ${token} limit 1`;
-  return row?.locale != null && hasLocale(row.locale) ? row.locale : null;
+/** What the claim page reads of the draft `token` names, WITHOUT claiming it: the language it was started in (the emailed
+ *  link carries none, so the card is worded in this one first) and its sport as /start's key (the first-day-passed
+ *  card's "Start again" link carries it). Any draft the token names, used or expired too — a link opened a second time
+ *  is still that visitor's, and its card ("this link didn't work") is theirs to read. Each is null when the token names
+ *  no draft, the draft has no language, or its sport is none /start lists. Never the address, the name or the rest of
+ *  the payload. */
+export async function funnelDraftCard(token: string): Promise<{ locale: Locale | null; sportKey: string | null }> {
+  const [row] = await sql<{ locale: string | null; sport: string | null }[]>`
+    select locale, payload->>'sport' as sport from funnel_drafts where token = ${token} limit 1`;
+  return {
+    locale: row?.locale != null && hasLocale(row.locale) ? row.locale : null,
+    sportKey: row?.sport != null ? (funnelSportByKeyOrName(row.sport)?.key ?? null) : null,
+  };
 }
 
 /** How many entrants a division of a new organisation on `planKey` holds (the free plan by default: a claim with no
@@ -220,7 +228,7 @@ export async function createFromDraft(
   // Before any write: a first day that is no calendar day, or that has passed for every visitor (before the UTC day less
   // one, the /start parser's own tolerance), is refused — the draft was started days ago, or its body was hand-made.
   if (payload.start_date !== undefined && (!isIsoDay(payload.start_date) || payload.start_date < funnelEarliestDay(new Date()))) {
-    throw new HttpError(400, "This event's first day has already passed.");
+    throw new HttpError(400, "This event's first day has already passed — nothing was set up.", FUNNEL_CLAIM_DATE_PAST);
   }
   const orgs = await getUserOrgs(userId);
   const org = orgs[0] ?? (await createOrgForUser(userId, `${payload.name} organisers`));

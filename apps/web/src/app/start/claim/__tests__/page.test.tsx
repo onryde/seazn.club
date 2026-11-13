@@ -5,7 +5,8 @@
 //
 // The language, in order: the one the DRAFT was started in (read by the token, never claiming it — the emailed URL
 // carries none), then the real resolveLocale's (the switcher's cookie, then the browser's `x-seazn-locale`; nobody is
-// signed in). `next/headers` is the stand-in for the visitor. Sweep: every shipped language. Sport: not applicable.
+// signed in). `next/headers` is the stand-in for the visitor. Sweep: every shipped language. Sport: every funnel sport,
+// for the first-day-passed card's "Start again" link (the draft's sport as /start's key, read by the token).
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -39,6 +40,7 @@ import { HtmlLang } from "@/components/i18n/html-lang";
 import { MarketingNav } from "@/components/marketing-nav";
 import { sql } from "@/lib/db";
 import { consumeFunnelDraft, createFunnelDraft } from "@/lib/funnel";
+import { FUNNEL_SPORTS } from "@/lib/funnel-sports";
 import { LOCALES, type Locale } from "@/lib/i18n-constants";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -68,16 +70,16 @@ async function page(token?: string) {
   expect(langs, "one <html lang> writer").toHaveLength(1);
   return {
     locale: (provider.props as { locale: string }).locale,
-    card: cards[0]!.props as { token: string | null },
+    card: cards[0]!.props as { token: string | null; restartSport?: string | null },
     nav: (navs[0]!.props as { lang?: string }).lang,
     htmlLang: (langs[0]!.props as { lang?: string }).lang,
     html: renderToStaticMarkup(provider),
   };
 }
-async function draftIn(locale: Locale | null): Promise<string> {
+async function draftIn(locale: Locale | null, sport = "Badminton"): Promise<string> {
   const { token } = await createFunnelDraft(
     `${RUN}-${randomUUID().slice(0, 6)}@example.com`,
-    { name: `${RUN} ${randomUUID().slice(0, 6)}`, sport: "Badminton", entrants: 4 },
+    { name: `${RUN} ${randomUUID().slice(0, 6)}`, sport, entrants: 4 },
     sql,
     locale,
   );
@@ -144,6 +146,20 @@ describe("the funnel claim page", () => {
     // A link opened a second time is still that visitor's: its dead-link card is in their language too.
     world.browserLocale = "en";
     expect((await page(fr)).locale, "a used draft keeps its language").toBe("fr");
+  });
+
+  it.skipIf(!HAS_DB)("the card's Start again sport is the draft's, as /start's key; anything else carries none", async () => {
+    // The stored `sport` is the catalogue NAME the wizard posts (lib/funnel-sports.ts); /start's link takes the key.
+    let checked = 0;
+    for (const sp of FUNNEL_SPORTS) {
+      const got = await page(await draftIn("en", sp.name));
+      expect(got.card.restartSport, sp.name).toBe(sp.key);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every funnel sport").toBe(FUNNEL_SPORTS.length);
+    expect((await page(await draftIn("en", "Quidditch"))).card.restartSport, "a sport /start does not list").toBeNull();
+    expect((await page(`never-${randomUUID()}`)).card.restartSport, "a token that names no draft").toBeNull();
+    expect((await page()).card.restartSport, "no token").toBeNull();
   });
 
   it.skipIf(!HAS_DB)("no draft language falls to the visitor's: a draft started with none, and a token no draft was minted for", async () => {
