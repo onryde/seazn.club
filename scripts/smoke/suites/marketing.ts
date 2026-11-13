@@ -6,7 +6,18 @@ export async function marketingSuite(): Promise<void> {
   const html = await home.text();
   check("marketing: home 200", home.status === 200);
   check("marketing: home has The Draw", html.includes("The Draw"));
-  check("marketing: home has funnel form", html.includes("data-start-funnel"));
+  // The hero's one primary since owner 2026-11-13 (Option A): the quick match start, a plain GET form (it works with no
+  // script, which is all smoke reads) to the locale's setup page; the organiser's setup is a link to the locale's /start.
+  // The locale is whatever `/` negotiated, so the paths match any two-letter one.
+  const tagOf = (testid: string) => html.match(new RegExp(`<[a-z]+\\b[^>]*\\bdata-testid="${testid}"[^>]*>`))?.[0] ?? "";
+  const qmForm = tagOf("qm-cta-form");
+  check(
+    "marketing: home hero quick match start is a GET to the setup page",
+    qmForm.includes('method="get"') && /\baction="\/[a-z]{2}\/play"/.test(qmForm),
+  );
+  check("marketing: home hero sport select", /<select\b[^>]*\bname="sport"/.test(html));
+  check("marketing: home hero organiser link to /start", /\bhref="\/[a-z]{2}\/start"/.test(tagOf("hero-event-link")));
+  check("marketing: home hero has no funnel form", !html.includes("data-start-funnel"));
   check("marketing: home SSR default draw", html.includes("GROUP STAGE"));
 
   const preview = await fetch(`${BASE}/api/public/format-preview`, {

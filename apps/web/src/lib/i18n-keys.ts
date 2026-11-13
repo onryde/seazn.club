@@ -3519,6 +3519,8 @@ export type DictionaryKey =
   | "home.finale.eyebrow"
   | "home.finale.subhead"
   | "home.finale.title"
+  | "home.hero.eventLink"
+  | "home.hero.eventPrompt"
   | "home.hero.eyebrow"
   | "home.hero.freeNote"
   | "home.hero.subhead"

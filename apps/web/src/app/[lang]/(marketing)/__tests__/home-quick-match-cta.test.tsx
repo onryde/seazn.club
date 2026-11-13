@@ -5,8 +5,9 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { prerender } from "react-dom/static";
 
 // The marketing home's quick match door (plan 2 Task 9; spec docs/superpowers/specs/2026-11-03-quick-match-design.md §5
-// steps 1 and 5; pre-flight A9, A10, B9, D11): the "Quick match" call to action beside the start-a-competition funnel,
-// and, for a guest who has made quick matches on this browser, the strip of their recent ones.
+// steps 1 and 5; pre-flight A9, A10, B9, D11): the hero's quick match start, its one primary since owner 2026-11-13
+// (Option A: a Sport select and "Start a quick match", the organiser's setup a quiet link below), and, for a guest who
+// has made quick matches on this browser, the strip of their recent ones.
 //
 // The strip's read is tested HERE, through the real page (B9: the src/app job, ci.yml "Service-layer integration tests
 // outside src/server", runs this folder against a real Postgres; src/components has no DB job). Every quick match is made
@@ -97,6 +98,12 @@ vi.mock("@/server/usecases/quick-match-home", async (orig) => {
   const real = await orig<typeof import("@/server/usecases/quick-match-home")>();
   return { ...real, listRecentQuickMatches: vi.fn(real.listRecentQuickMatches) };
 });
+// The hero's Sport select lists the setup screen's own offer (owner 2026-11-13): stubbed per case below, the REAL one
+// otherwise (the DB-gated sweep drives the live catalog), play-page.test.tsx's pattern.
+vi.mock("@/server/usecases/quick-match-sports", async (orig) => {
+  const real = await orig<typeof import("@/server/usecases/quick-match-sports")>();
+  return { ...real, listQuickMatchSports: vi.fn(real.listQuickMatchSports) };
+});
 // The create's one analytics event reaches a mock, never PostHog.
 vi.mock("@/lib/posthog-server", async (orig) => ({
   ...(await orig<typeof import("@/lib/posthog-server")>()),
@@ -111,15 +118,17 @@ import type { CreateQuickMatch } from "@/server/api-v1/schemas";
 import { createQuickMatch, type CreatedQuickMatch } from "@/server/usecases/quick-match-create";
 import { hardDeleteQuickMatchCompetition } from "@/server/usecases/quick-match-delete";
 import { listRecentQuickMatches } from "@/server/usecases/quick-match-home";
-import { listQuickMatchSports } from "@/server/usecases/quick-match-sports";
+import { listQuickMatchSports, type QuickMatchSport } from "@/server/usecases/quick-match-sports";
 import { hashVisitorKey, mintVisitorKey, QUICK_MATCH_VISITOR_COOKIE } from "@/server/usecases/quick-match-tokens";
 import { systemAuth } from "@/lib/quick-match-auth";
 import { playToDecided } from "@/server/usecases/__tests__/_quick-match-probe";
 import { scoreEvent } from "@/server/usecases/scoring";
 import enMarketing from "@/dictionaries/en/marketing.json";
 import frMarketing from "@/dictionaries/fr/marketing.json";
+import { getDictionary } from "@/lib/i18n";
 import HomePage from "../page";
 import PlayPage from "../play/page";
+import { setupSports } from "../play/setup-props";
 
 /** A throwaway key of this file's own: every create seals a home token, and CI's src/app job has no DEVICE_LINK_KEK. */
 const KEK = kekBytes(32).toString("hex");
@@ -129,9 +138,13 @@ const HAS_DB = !!process.env.DATABASE_URL;
 /** D11: the strip lists this many rows at most. The ruling's number, typed. */
 const STRIP_CAP = 5;
 
-async function render(lang = "en", page: "home" | "play" = "home"): Promise<string> {
+async function render(
+  lang = "en",
+  page: "home" | "play" = "home",
+  search: Record<string, string> = {},
+): Promise<string> {
   const params = Promise.resolve({ lang });
-  const element = page === "home" ? await HomePage({ params }) : await PlayPage({ params, searchParams: Promise.resolve({}) });
+  const element = page === "home" ? await HomePage({ params }) : await PlayPage({ params, searchParams: Promise.resolve(search) });
   const { prelude } = await prerender(element);
   const reader = (prelude as ReadableStream<Uint8Array>).getReader();
   const decoder = new TextDecoder();
@@ -163,10 +176,55 @@ function cardOf(html: string): string | null {
 /** Where each part of the setup page starts in the HTML (-1 when absent), to read the order a guest meets them in. */
 const at = (html: string, testid: string) => html.search(new RegExp(`\\bdata-testid="${testid}"`));
 
-/** The CTA's anchor: the link whose text is the CTA label. */
-function ctaAnchor(html: string, label: string): string | undefined {
-  return [...html.matchAll(/<a\b[^>]*>([^<]*)<\/a>/g)].find((m) => m[1] === label)?.[0];
+/** The CTA's Start: the submit button whose text is the CTA label (owner 2026-11-13: a GET form's button, no longer a
+ *  link). The full tag and its text. */
+function ctaButton(html: string, label: string): string | undefined {
+  return [...html.matchAll(/<button\b[^>]*>([^<]*)<\/button>/g)].find((m) => m[1] === label)?.[0];
 }
+/** The hero: from the page's <main> to The Draw, the next section a visitor meets. */
+function heroOf(html: string): string {
+  const start = html.indexOf("<main");
+  const end = html.indexOf('id="the-draw"');
+  expect(start, "the page's <main>").toBeGreaterThan(-1);
+  expect(end, "The Draw").toBeGreaterThan(start);
+  return html.slice(start, end);
+}
+/** The hero's quick match form: its opening tag and its whole markup, or null when there is none. */
+function ctaFormOf(html: string): { tag: string; body: string } | null {
+  const hero = heroOf(html);
+  const start = hero.search(/<form\b[^>]*\bdata-testid="qm-cta-form"/);
+  if (start < 0) return null;
+  const body = hero.slice(start, hero.indexOf("</form>", start) + "</form>".length);
+  return { tag: body.match(/^<form\b[^>]*>/)![0], body };
+}
+/** The Sport select's options, in document order: value, label, and whether the server wrote it selected. */
+const optionsOf = (form: string) =>
+  [...form.matchAll(/<option\b([^>]*)>([^<]*)<\/option>/g)].map((m) => ({
+    value: m[1]!.match(/\bvalue="([^"]*)"/)?.[1] ?? "?",
+    label: m[2]!,
+    selected: /\sselected=""/.test(m[1]!),
+  }));
+/** The hero's organiser door: the link to `/<lang>/start`, its tag and its text (tags stripped). */
+function eventLinkOf(html: string, lang: string): { tag: string; text: string } | null {
+  const m = heroOf(html).match(new RegExp(`(<a\\b[^>]*\\bhref="/${lang}/start"[^>]*>)([\\s\\S]*?)</a>`));
+  return m ? { tag: m[1]!, text: m[2]!.replace(/<[^>]*>/g, "").replace(/<!-- -->/g, "") } : null;
+}
+
+/** A two-sport offer the hero lists in this order (the stubbed listQuickMatchSports): badminton, then chess. */
+const OFFER: QuickMatchSport[] = [
+  {
+    sport_key: "badminton",
+    labelKey: "sport.badminton",
+    kinds: ["individual", "pair"],
+    variants: [{ variant_key: "bwf", labelKey: "variant.badminton.bwf", knockoutAllowed: true }],
+  },
+  {
+    sport_key: "boardgame",
+    labelKey: "sport.boardgame",
+    kinds: ["individual"],
+    variants: [{ variant_key: "rapid", labelKey: "variant.boardgame.rapid", knockoutAllowed: true }],
+  },
+];
 
 // The visitor cookie's name is the create route's: the test's jar answers to the literal, so a renamed cookie reds here.
 it("the jar answers to the visitor cookie's real name", () => {
@@ -184,35 +242,146 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.stubEnv("DEVICE_LINK_KEK", KEK);
+  // Drops an unspent stub and goes back to the real read.
+  vi.mocked(listQuickMatchSports).mockReset();
 });
 
-describe("the Quick match call to action (spec §5 step 1)", () => {
-  it("sits in the hero beside the funnel form and leads to `/en/play`, with the dictionary's label and hint", async () => {
+/** React's escapes of dictionary copy, undone, so a NEGATIVE copy probe cannot pass on an escaped `'` or `&`. */
+const unescape = (s: string) =>
+  s.replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+
+// The hero's one primary (owner 2026-11-13, "A, apply rec": mockup 2026-11-13_marketing-hero-quick-match-first_hqm13a01,
+// Option A): a Sport select and the lime Start, a plain GET to the setup page, which opens on that sport (?sport=,
+// play-page.test.tsx). The organiser's setup is one quiet link below it. Expected values: the offer the page reads (OFFER,
+// the stubbed listQuickMatchSports; the live catalog in the DB-gated sweep) named by the setup screen's own
+// `setupSports`, the dictionaries' copy, and the two paths, `/<lang>/play` (spec §5 step 2) and `/<lang>/start`.
+describe("the hero's quick match start (spec §5 step 1, Option A)", () => {
+  it("the empty offer first: still a GET to `/en/play` with its Start (the setup page then says why), and no Sport select", async () => {
+    vi.mocked(listQuickMatchSports).mockResolvedValueOnce([]);
     const html = await render("en");
-    const label = enMarketing["quickMatch.cta"];
-    const anchor = ctaAnchor(html, label);
-    expect(anchor, `a link reading "${label}"`).toBeDefined();
-    expect(anchor).toContain('href="/en/play"');
-    expect(html).toContain(enMarketing["quickMatch.ctaHint"]);
-    // Beside the funnel: after its form, in the hero, before the next section of the page (The Draw).
-    const funnel = html.search(/<form\b[^>]*\bdata-start-funnel/);
-    const cta = html.indexOf(anchor!);
-    const draw = html.indexOf('id="the-draw"');
-    expect(funnel).toBeGreaterThan(-1);
-    expect(draw).toBeGreaterThan(-1);
-    expect(cta).toBeGreaterThan(funnel);
-    expect(cta).toBeLessThan(draw);
-    // A 44px tap target (min-h-11).
-    expect(anchor).toMatch(/\bclass="[^"]*\bmin-h-11\b/);
+    const form = ctaFormOf(html);
+    expect(form, "the quick match form").not.toBeNull();
+    expect(form!.tag).toContain('method="get"');
+    expect(form!.tag).toContain('action="/en/play"');
+    expect(ctaButton(form!.body, enMarketing["quickMatch.cta"]), "the Start").toBeDefined();
+    expect(form!.body).not.toContain("<select");
+    expect(optionsOf(form!.body)).toEqual([]);
   });
 
-  it("speaks the page's language and keeps it: French leads to `/fr/play`", async () => {
-    const html = await render("fr");
-    const anchor = ctaAnchor(html, frMarketing["quickMatch.cta"]);
-    expect(anchor, "the French label").toBeDefined();
-    expect(anchor).toContain('href="/fr/play"');
+  it("the offer cannot be read: the same Start alone, and the page still renders (fail-soft, as the strip is)", async () => {
+    vi.mocked(listQuickMatchSports).mockRejectedValueOnce(new Error("db down"));
+    const html = await render("en");
+    const form = ctaFormOf(html);
+    expect(form?.tag).toContain('action="/en/play"');
+    expect(form!.body).not.toContain("<select");
+    expect(ctaButton(form!.body, enMarketing["quickMatch.cta"])).toBeDefined();
+    expect(html).toContain('id="the-draw"');
+  });
+
+  it("an offer: a Sport select over it, in its order and with the setup screen's names, the first selected, then the Start (the positive pair of both above)", async () => {
+    vi.mocked(listQuickMatchSports).mockResolvedValueOnce(OFFER);
+    const [html, ui] = await Promise.all([render("en"), getDictionary("en", "ui")]);
+    const form = ctaFormOf(html)!;
+    expect(form.tag).toContain('method="get"');
+    expect(form.tag).toContain('action="/en/play"');
+    // On the night stage, the night panel (globals.css `.mk-funnel-night`: dark fields, lime submit), never a light one.
+    expect(form.tag).toMatch(/\bclass="[^"]*\bmk-funnel-night\b/);
+    expect(form.tag).not.toMatch(/\bbg-white\b/);
+    // The field the setup page reads: `?sport=` (play/setup-props.ts `prefillSport`).
+    const select = form.body.match(/<select\b[^>]*>/)?.[0];
+    expect(select, "the Sport select").toBeDefined();
+    expect(select).toContain('name="sport"');
+    expect(select).toMatch(/\bclass="[^"]*\bmin-h-11\b/);
+    const expected = setupSports(OFFER, ui);
+    expect(expected).toHaveLength(OFFER.length);
+    expect(optionsOf(form.body)).toEqual(expected.map((s, i) => ({ value: s.sport_key, label: s.name, selected: i === 0 })));
+    // Labelled with the setup screen's own word for the same choice.
+    expect(form.body).toContain(`>${enMarketing["quickMatch.setup.sport"]}<`);
+    // The Start: a submit button after the select, a 44px tap target, described by the line beneath the form.
+    const start = ctaButton(form.body, enMarketing["quickMatch.cta"]);
+    expect(start, "the Start").toBeDefined();
+    expect(start).toContain('type="submit"');
+    expect(start).toMatch(/\bclass="[^"]*\bmin-h-11\b/);
+    expect(start).toContain('aria-describedby="qm-cta-hint"');
+    expect(form.body.indexOf(start!)).toBeGreaterThan(form.body.indexOf(select!));
+    expect(heroOf(html)).toMatch(new RegExp(`<p\\b[^>]*\\bid="qm-cta-hint"[^>]*>${enMarketing["quickMatch.ctaHint"]}</p>`));
+  });
+
+  it("the organiser's setup is a quiet link to `/en/start` under the Start; the funnel's fields and Setup button are gone", async () => {
+    vi.mocked(listQuickMatchSports).mockResolvedValueOnce(OFFER);
+    const html = await render("en");
+    const hero = heroOf(html);
+    const plain = unescape(hero);
+    // Positive: the link, its words, its tap target, and where a visitor meets it: form, line, this link, then pricing.
+    const link = eventLinkOf(html, "en");
+    expect(link, "a link to /en/start").not.toBeNull();
+    expect(link!.text).toBe(`${enMarketing["home.hero.eventPrompt"]} ${enMarketing["home.hero.eventLink"]}`);
+    expect(link!.tag).toMatch(/\bclass="[^"]*\bmin-h-11\b/);
+    const order = [
+      hero.search(/<form\b[^>]*\bdata-testid="qm-cta-form"/),
+      hero.indexOf('id="qm-cta-hint"'),
+      hero.indexOf(link!.tag),
+      plain.indexOf(enMarketing["home.hero.upgradeLink"]),
+    ];
+    for (const i of order) expect(i, `order ${JSON.stringify(order)}`).toBeGreaterThan(-1);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    // Negative, each beside a positive: the hero's one form is the quick match's, with the Sport select, and nothing of
+    // the funnel's (its form, entrants and date fields, their labels, its Setup button, its /start?sport= hand-off).
+    expect(hero.match(/<form\b/g), "one form in the hero").toHaveLength(1);
+    expect(hero).toMatch(/<select\b[^>]*\bname="sport"/);
+    expect(hero).not.toContain("data-start-funnel");
+    expect(hero).not.toMatch(/\bname="entrants"/);
+    expect(hero).not.toMatch(/\bname="date"/);
+    expect(hero).not.toMatch(/\btype="date"/);
+    let removed = 0;
+    for (const key of ["funnel.entrants", "funnel.date", "funnel.submit"] as const) {
+      expect(enMarketing[key], `${key} still has copy to look for`).toBeTruthy();
+      expect(plain, key).not.toContain(enMarketing[key]);
+      removed++;
+    }
+    expect(removed).toBe(3);
+    expect(plain).not.toContain("/start?");
+    // The Start that stays (the positive of the Setup button's absence).
+    expect(ctaButton(hero, enMarketing["quickMatch.cta"])).toBeDefined();
+  });
+
+  it("speaks the page's language and keeps it: `/fr/play`, the French Start and names, the door to `/fr/start`", async () => {
+    vi.mocked(listQuickMatchSports).mockResolvedValueOnce(OFFER);
+    const [html, ui] = await Promise.all([render("fr"), getDictionary("fr", "ui")]);
+    const form = ctaFormOf(html)!;
+    expect(form.tag).toContain('action="/fr/play"');
+    expect(ctaButton(form.body, frMarketing["quickMatch.cta"]), "the French Start").toBeDefined();
+    expect(ctaButton(form.body, enMarketing["quickMatch.cta"]), "never the English one").toBeUndefined();
+    const names = setupSports(OFFER, ui).map((s) => s.name);
+    expect(optionsOf(form.body).map((o) => unescape(o.label))).toEqual(names);
     expect(html).toContain(frMarketing["quickMatch.ctaHint"]);
-    expect(html).not.toContain('href="/en/play"');
+    expect(eventLinkOf(html, "fr")?.text).toBe(`${frMarketing["home.hero.eventPrompt"]} ${frMarketing["home.hero.eventLink"]}`);
+    expect(eventLinkOf(html, "en"), "never the English path").toBeNull();
+    expect(html).not.toContain('action="/en/play"');
+  });
+});
+
+describe.skipIf(!HAS_DB)("the hero's Sport select over the live offer, through to /play (both real ends of the seam)", () => {
+  it("lists exactly the setup screen's sports, and each option, sent as the form names it, opens /play on that sport", async () => {
+    const [live, ui] = await Promise.all([listQuickMatchSports(), getDictionary("en", "ui")]);
+    const expected = setupSports(live, ui);
+    const form = ctaFormOf(await render("en"))!;
+    const field = form.body.match(/<select\b[^>]*\bname="([^"]*)"/)?.[1];
+    expect(field, "the select's field name").toBeDefined();
+    const options = optionsOf(form.body);
+    expect(options.map((o) => o.value)).toEqual(expected.map((s) => s.sport_key));
+    let checked = 0;
+    for (const o of options) {
+      const play = await render("en", "play", { [field!]: o.value });
+      const opened = (play.match(/<input[^>]*\bname="sport_key"[^>]*>/g) ?? [])
+        .filter((tag) => /\schecked=""/.test(tag))
+        .map((tag) => tag.match(/\bvalue="([^"]*)"/)?.[1]);
+      expect(opened, o.value).toEqual([o.value]);
+      checked++;
+    }
+    // Anti-vacuity: a DB without `sync:sports` offers nothing; and with one sport, preselecting cannot differ from the default.
+    expect(checked, "options swept").toBe(expected.length);
+    expect(checked).toBeGreaterThanOrEqual(2);
   });
 });
 
@@ -239,7 +408,7 @@ describe("the recent strip's cookie: read only, trusted only when it is a visito
     jar.throws = new Error("`cookies` was called outside a request scope");
     const html = await render();
     expect(stripOf(html)).toBeNull();
-    expect(ctaAnchor(html, enMarketing["quickMatch.cta"])).toBeDefined();
+    expect(ctaButton(html, enMarketing["quickMatch.cta"])).toBeDefined();
   });
 
   it("Next's own render signal from `cookies()` is never swallowed: it reaches the framework (unstable_rethrow)", async () => {
@@ -258,7 +427,7 @@ describe("the recent strip fails soft (A9): the busiest page never 500s on a gue
     const html = await render();
     expect(listRecentQuickMatches).toHaveBeenCalledTimes(1);
     expect(stripOf(html)).toBeNull();
-    expect(ctaAnchor(html, enMarketing["quickMatch.cta"])).toBeDefined();
+    expect(ctaButton(html, enMarketing["quickMatch.cta"])).toBeDefined();
     expect(warn).toHaveBeenCalledTimes(1);
     expect(error).not.toHaveBeenCalled();
   });
@@ -434,7 +603,7 @@ describe.skipIf(!HAS_DB)("the recent strip's rows (real createQuickMatch, real r
     jar.visitor = key;
     const html = await render();
     expect(stripOf(html)).toBeNull();
-    expect(ctaAnchor(html, enMarketing["quickMatch.cta"])).toBeDefined();
+    expect(ctaButton(html, enMarketing["quickMatch.cta"])).toBeDefined();
   });
 
   it("DEVICE_LINK_KEK unset: the CTA renders, the strip does not, no 500, and one warning names why", async () => {
@@ -446,7 +615,7 @@ describe.skipIf(!HAS_DB)("the recent strip's rows (real createQuickMatch, real r
     const html = await render();
     expect(stripOf(html)).toBeNull();
     expect(html).not.toContain(out.token);
-    expect(ctaAnchor(html, enMarketing["quickMatch.cta"])).toBeDefined();
+    expect(ctaButton(html, enMarketing["quickMatch.cta"])).toBeDefined();
     expect(warn).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(warn.mock.calls[0]![0])).toContain("kek_missing");
     // The positive pair: the same visitor under the key sees the row.
