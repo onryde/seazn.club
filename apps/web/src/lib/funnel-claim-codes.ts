@@ -8,3 +8,8 @@ export const FUNNEL_CLAIM_INVALID = "FUNNEL_CLAIM_INVALID";
 /** The visitor IS signed in (the session cookie was set) but building the drafted event failed part-way: the event may
  *  be partly built and the token is spent, so the way forward is their dashboard, not a fresh start or a sign-in. */
 export const FUNNEL_CLAIM_SIGNED_IN = "FUNNEL_CLAIM_SIGNED_IN";
+
+/** The visitor IS signed in, and their plan refused the competition itself (the active-competition quota, checked before
+ *  its insert): NOTHING of the event was written. The 402's `feature_key` rides beside it. A plan refusal after the
+ *  competition exists is FUNNEL_CLAIM_SIGNED_IN (part-built), not this. */
+export const FUNNEL_CLAIM_PLAN_LIMIT = "FUNNEL_CLAIM_PLAN_LIMIT";

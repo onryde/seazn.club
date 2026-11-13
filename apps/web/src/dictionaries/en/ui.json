@@ -8527,5 +8527,9 @@
   "funnel.claim.card.signIn": "sign in",
   "funnel.claim.card.signedInTitle": "You’re signed in",
   "funnel.claim.card.signedInBody": "We couldn’t finish setting up your competition, so it may be only partly built. Open your dashboard to check it and add anything missing.",
-  "funnel.claim.card.dashboard": "Go to your dashboard"
+  "funnel.claim.card.dashboard": "Go to your dashboard",
+  "funnel.claim.card.limitBody": "Your plan’s limit on active competitions was reached, so nothing was added. Open your dashboard to finish or archive an event, or upgrade your plan.",
+  "funnel.claim.card.tryLaterTitle": "Too many tries",
+  "funnel.claim.card.tryLaterBody": "Wait a moment, then try again. Your link hasn’t been used yet.",
+  "funnel.claim.card.tryAgain": "Try again"
 }

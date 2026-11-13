@@ -8527,5 +8527,9 @@
   "funnel.claim.card.signIn": "aanmelden",
   "funnel.claim.card.signedInTitle": "Je bent aangemeld",
   "funnel.claim.card.signedInBody": "We konden het instellen van je competitie niet afronden, dus mogelijk is die maar deels aangemaakt. Open je dashboard om te controleren wat er staat en vul aan wat ontbreekt.",
-  "funnel.claim.card.dashboard": "Naar je dashboard"
+  "funnel.claim.card.dashboard": "Naar je dashboard",
+  "funnel.claim.card.limitBody": "De limiet van je abonnement voor actieve competities is bereikt, dus er is niets toegevoegd. Open je dashboard om een evenement af te ronden of te archiveren, of upgrade je abonnement.",
+  "funnel.claim.card.tryLaterTitle": "Te veel pogingen",
+  "funnel.claim.card.tryLaterBody": "Wacht even en probeer het opnieuw. Je link is nog niet gebruikt.",
+  "funnel.claim.card.tryAgain": "Opnieuw proberen"
 }

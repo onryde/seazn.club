@@ -1,6 +1,8 @@
 // The emailed claim link's card (start wizard T2 follow-up, owner-ordered): every state is worded from the visitor's
 // own dictionary — never the route's English `error` — and a claim that failed AFTER it signed the organiser in points
-// them at their dashboard (the event may be partly built and the token is spent) instead of "start again or sign in".
+// them at their dashboard (the event may be partly built, or the plan refused it and nothing was added; the token is
+// spent) instead of "start again or sign in", and refreshes the page so the nav shows them signed in. A limiter's 429 is
+// "try again shortly": the link is still unused, so the card retries the same token.
 //
 // The island is driven through the real effect: `api` is the one stand-in, answering as the route answers (an ApiError
 // carrying the route's `code`), so the code → copy join is what is witnessed, not a fixture on both ends. Copy is read
@@ -12,17 +14,18 @@ import { resolve } from "node:path";
 import type { ReactElement, ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { LOCALES, type Locale } from "@/lib/i18n-constants";
-import { FUNNEL_CLAIM_INVALID, FUNNEL_CLAIM_SIGNED_IN } from "@/lib/funnel-claim-codes";
+import { FUNNEL_CLAIM_INVALID, FUNNEL_CLAIM_PLAN_LIMIT, FUNNEL_CLAIM_SIGNED_IN } from "@/lib/funnel-claim-codes";
 
 const h = vi.hoisted(() => ({
   locale: "en" as string,
   dicts: {} as Record<string, Record<string, string>>,
   pushes: [] as string[],
+  refreshes: 0,
   posts: [] as unknown[],
   answer: (async () => ({ redirect: "/o/x/c/y" })) as () => Promise<unknown>,
 }));
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: (url: string) => void h.pushes.push(url), refresh: () => {} }),
+  useRouter: () => ({ push: (url: string) => void h.pushes.push(url), refresh: () => void h.refreshes++ }),
 }));
 vi.mock("@/lib/client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/client")>()),
@@ -128,6 +131,20 @@ const STATES = [
     links: ["/dashboard"],
   },
   {
+    name: "the plan refused the competition (nothing added)",
+    token: "tok-limit",
+    answer: () => Promise.reject(new ApiError(SERVER_TEXT, 402, FUNNEL_CLAIM_PLAN_LIMIT)),
+    keys: ["signedInTitle", "limitBody", "dashboard"],
+    links: ["/dashboard"],
+  },
+  {
+    name: "rate limited (the link is unused)",
+    token: "tok-429",
+    answer: () => Promise.reject(new ApiError("Too many requests", 429)),
+    keys: ["tryLaterTitle", "tryLaterBody", "tryAgain"],
+    links: [],
+  },
+  {
     name: "claimed",
     token: "tok-ok",
     answer: () => Promise.resolve({ redirect: "/o/x/c/y/d/z?tab=entrants" }),
@@ -139,6 +156,7 @@ const STATES = [
 beforeEach(() => {
   h.locale = "en";
   h.pushes.length = 0;
+  h.refreshes = 0;
   h.posts.length = 0;
 });
 
@@ -196,6 +214,43 @@ describe("the funnel claim card", () => {
     island.rerender({ token: "tok-1" });
     for (let i = 0; i < 5; i++) await Promise.resolve();
     expect(h.posts, "one POST for one link").toEqual([{ method: "POST", json: { token: "tok-1" } }]);
+    expect(h.pushes).toEqual(["/o/x/c/y/d/z?tab=entrants"]);
+  });
+
+  it("signed in by this very response: the page refreshes (the nav still says signed out); a signed-out failure does not", async () => {
+    const cases = [
+      { name: "signed in, part-built", answer: () => Promise.reject(new ApiError(SERVER_TEXT, 500, FUNNEL_CLAIM_SIGNED_IN)), refresh: 1 },
+      { name: "signed in, plan limit", answer: () => Promise.reject(new ApiError(SERVER_TEXT, 402, FUNNEL_CLAIM_PLAN_LIMIT)), refresh: 1 },
+      { name: "dead link", answer: () => Promise.reject(new ApiError(SERVER_TEXT, 400, FUNNEL_CLAIM_INVALID)), refresh: 0 },
+      { name: "failed before the session", answer: () => Promise.reject(new ApiError(SERVER_TEXT, 500)), refresh: 0 },
+      { name: "rate limited", answer: () => Promise.reject(new ApiError("Too many requests", 429)), refresh: 0 },
+    ];
+    let checked = 0;
+    for (const c of cases) {
+      h.refreshes = 0;
+      h.answer = c.answer;
+      await settle(`tok-${checked}`);
+      expect(h.refreshes, c.name).toBe(c.refresh);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: both signed-in failures and three signed-out ones").toBe(cases.length);
+  });
+
+  it("rate limited: Try again re-posts the SAME token, shows the working state meanwhile, and lands", async () => {
+    h.answer = () => Promise.reject(new ApiError("Too many requests", 429));
+    const { island } = await settle("tok-retry");
+    const button = island.tree().find((el) => el.type === "button");
+    expect(button, "the retry control").toBeDefined();
+    let release!: (v: unknown) => void;
+    h.answer = () => new Promise((r) => (release = r));
+    island.batch(() => (button!.props as { onClick: () => void }).onClick());
+    expect(island.text(), "working while the retry is in flight").toContain(ui("en", "funnel.claim.card.working"));
+    release({ redirect: "/o/x/c/y/d/z?tab=entrants" });
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(h.posts, "the same link, twice").toEqual([
+      { method: "POST", json: { token: "tok-retry" } },
+      { method: "POST", json: { token: "tok-retry" } },
+    ]);
     expect(h.pushes).toEqual(["/o/x/c/y/d/z?tab=entrants"]);
   });
 

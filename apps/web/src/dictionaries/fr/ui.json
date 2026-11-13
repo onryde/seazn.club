@@ -8527,5 +8527,9 @@
   "funnel.claim.card.signIn": "se connecter",
   "funnel.claim.card.signedInTitle": "Vous êtes connecté",
   "funnel.claim.card.signedInBody": "Nous n’avons pas pu terminer la configuration de votre compétition : elle n’est peut-être que partiellement créée. Ouvrez votre tableau de bord pour la vérifier et compléter ce qui manque.",
-  "funnel.claim.card.dashboard": "Aller au tableau de bord"
+  "funnel.claim.card.dashboard": "Aller au tableau de bord",
+  "funnel.claim.card.limitBody": "La limite de compétitions actives de votre offre est atteinte : rien n’a été ajouté. Ouvrez votre tableau de bord pour terminer ou archiver un événement, ou changez d’offre.",
+  "funnel.claim.card.tryLaterTitle": "Trop de tentatives",
+  "funnel.claim.card.tryLaterBody": "Patientez un instant, puis réessayez. Votre lien n’a pas encore été utilisé.",
+  "funnel.claim.card.tryAgain": "Réessayer"
 }

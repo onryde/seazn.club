@@ -100,6 +100,15 @@ export async function consumeFunnelDraft(token: string): Promise<FunnelDraft | n
   });
 }
 
+/** The language the draft `token` names was started in, read WITHOUT claiming it: the emailed link carries no language,
+ *  so the claim page words its card in this one first. Any draft the token names, used or expired too — a link opened a
+ *  second time is still that visitor's, and its card ("this link didn't work") is theirs to read. Null when the token
+ *  names no draft or the draft has no language. Only the locale is read: never the address or the payload. */
+export async function funnelDraftLocale(token: string): Promise<Locale | null> {
+  const [row] = await sql<{ locale: string | null }[]>`select locale from funnel_drafts where token = ${token} limit 1`;
+  return row?.locale != null && hasLocale(row.locale) ? row.locale : null;
+}
+
 /** How many entrants a division of a new organisation on `planKey` holds (the free plan by default: a claim with no
  *  organisation yet makes one on it), read from the live plan catalogue — the number /start quotes beside its size
  *  stepper. `null` is unlimited; a plan with no row holds none, as the resolver reads a missing row (`getLimit`). */
@@ -145,16 +154,30 @@ const PLACEHOLDER_NAME_KEY: Record<EntrantKind, string> = {
 /** The writes after the competition, each named in the partial-build log. */
 type ClaimStep = "division" | "stages" | "entrants" | "venue";
 
+/** A write refused AFTER the competition exists: the event is part-built behind a spent token. `cause` is the use-case's
+ *  own refusal, unchanged (its status, its feature key); the claim route reads it to tell a part-built event from one
+ *  of which nothing was written. */
+export class FunnelClaimPartialError extends Error {
+  constructor(
+    readonly step: ClaimStep,
+    readonly competitionId: string,
+    override readonly cause: unknown,
+  ) {
+    super(cause instanceof Error ? cause.message : String(cause));
+    this.name = "FunnelClaimPartialError";
+  }
+}
+
 /** Run one write of a claim whose competition already exists. A refusal here leaves a half-built event behind a spent
  *  token, and a 4xx is logged by no one else (lib/http.ts logs 5xx only), so it is said once — which step, which
- *  competition; never the address, the token or the draft — and rethrown unchanged. */
+ *  competition; never the address, the token or the draft — and rethrown as a FunnelClaimPartialError around it. */
 async function claimStep<T>(step: ClaimStep, competitionId: string, run: () => Promise<T>): Promise<T> {
   try {
     return await run();
   } catch (err) {
     const status = typeof (err as { status?: unknown }).status === "number" ? (err as { status: number }).status : null;
     log.error({ step, competitionId, status }, "funnel_claim_build_partial");
-    throw err;
+    throw new FunnelClaimPartialError(step, competitionId, err);
   }
 }
 
@@ -164,9 +187,11 @@ async function claimStep<T>(step: ClaimStep, competitionId: string, run: () => P
  * standard use-cases, so quotas/slugs/audit all apply as if typed by hand.
  *
  * In order (start-wizard redesign plan, 2026-11-13):
- *   0. the organisation (the user's first, else a new one), then a PRE-FLIGHT of every read and every check the build
- *      can be refused on — the language, the sport, the cap, the stage graph parsed as the API parses it — before the
- *      first write of the event. Not one transaction: each use-case opens its own (`withTenant` never nests);
+ *   0. the organisation (the user's first, else a new one), then a PRE-FLIGHT of the reads and checks the build can make
+ *      before its first write — the language, the sport, the entrant cap, the stage graph parsed as the API parses it.
+ *      Not pre-flighted: the active-competition quota (createCompetition's own check, which refuses BEFORE its insert,
+ *      so a 402 there writes nothing of the event) and the stage kinds' plan features (createStages, after the
+ *      competition and division exist). Not one transaction: each use-case opens its own (`withTenant` never nests);
  *   1. the competition — one day long when the visitor gave a date (D5); undated otherwise (Q2: an end date needs a
  *      day the visitor never gave, the #376 residual);
  *   2. the division, of the sport's preferred variant, named as the sport is in the draft's language;
@@ -179,7 +204,8 @@ async function claimStep<T>(step: ClaimStep, competitionId: string, run: () => P
  *   5. the entrants: name-only, of the division's default kind, seeded 1..field, named in the draft's language;
  *   6. the courts, when the visitor opened Planning and the organisation has no active venue: one venue holding that
  *      many. The hours are never written (D1).
- * A write after the competition that is refused is logged by step (`claimStep`) and rethrown.
+ * A write after the competition that is refused is logged by step (`claimStep`) and rethrown as a
+ * FunnelClaimPartialError; a refusal before it (the quota, the pre-flight) is thrown as it came.
  */
 export async function createFromDraft(
   userId: string,

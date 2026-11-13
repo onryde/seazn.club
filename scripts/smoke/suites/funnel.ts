@@ -45,7 +45,10 @@ export async function funnelSuite(): Promise<void> {
     landing.status === 200 && landing.body.includes(`Funnel Fiesta ${tag}`),
   );
 
-  // Single-use: a second consume fails cleanly.
+  // Single-use: a second consume is the named dead-link refusal (the card words it), a 400 — never a 500.
   const again = await raw(visitor, "/api/funnel/claim", "POST", { token });
-  check("funnel: claim token is single-use", again.json.ok === false);
+  check(
+    "funnel: claim token is single-use (400 FUNNEL_CLAIM_INVALID)",
+    again.status === 400 && again.json.ok === false && (again.json as { code?: string }).code === "FUNNEL_CLAIM_INVALID",
+  );
 }

@@ -152,6 +152,13 @@ afterAll(async () => {
   if (!HAS_DB) return;
   await sql`delete from funnel_drafts where email like ${`${RUN}-%`}`;
   await sql`delete from org_entitlement_overrides where reason like ${`${RUN} %`}`;
+  // The claimants, their organisations and everything the claims built (competitions and below cascade with the org).
+  const ids = (await sql<{ id: string }[]>`select id from users where email like ${`${RUN}-%`}`).map((u) => u.id);
+  // Courts first: their (venue, org) key does not cascade from the venue, so an org delete would trip on it.
+  await sql`delete from courts where org_id in (select id from organizations where created_by = any(${ids}::uuid[]))`;
+  await sql`delete from organizations where created_by = any(${ids}::uuid[])`;
+  await sql`delete from subscriptions where owner_user_id = any(${ids}::uuid[])`;
+  await sql`delete from users where id = any(${ids}::uuid[])`;
   const globalForDb = globalThis as { _sql?: { end(): Promise<void> } };
   const client = globalForDb._sql;
   globalForDb._sql = undefined;
@@ -224,6 +231,21 @@ describe.skipIf(!HAS_DB)("the claim builds the chosen format, its entrants and i
     }
     expect(checked, "anti-vacuity: every funnel sport was claimed").toBe(FUNNEL_SPORTS.length);
     expect(kinds.size, "premise: the sweep holds more than one kind, so a kind written blind would red").toBeGreaterThan(1);
+  });
+
+  it("a sport the registry does not know (Padel) builds the generic module, its division named Other in the draft's language", async () => {
+    // resolveSport's fall-through, not the Other card: the name is free text on the draft.
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from sports where lower(name) = 'padel'`;
+    expect(n, "premise: the registry has no Padel").toBe(0);
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const c = await claim({ sport: "Padel", entrants: 4, format: "league" }, { locale });
+      const [d] = await sql<{ sport_key: string; name: string }[]>`select sport_key, name from divisions where id = ${c.divisionId}`;
+      expect(d!.sport_key, `${locale}: the generic module`).toBe("generic");
+      expect(d!.name, `${locale}: named Other, never "Generic" or "Padel"`).toBe(ui(locale, "funnel.claim.division.other"));
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every language").toBe(LOCALES.length);
   });
 
   it("placeholder names, the venue and its courts follow the draft's language", async () => {

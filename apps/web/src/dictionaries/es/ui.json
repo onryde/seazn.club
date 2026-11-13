@@ -8527,5 +8527,9 @@
   "funnel.claim.card.signIn": "iniciar sesión",
   "funnel.claim.card.signedInTitle": "Sesión iniciada",
   "funnel.claim.card.signedInBody": "No pudimos terminar de configurar tu competición, así que puede estar a medias. Abre tu panel para revisarla y añadir lo que falte.",
-  "funnel.claim.card.dashboard": "Ir a tu panel"
+  "funnel.claim.card.dashboard": "Ir a tu panel",
+  "funnel.claim.card.limitBody": "Has alcanzado el límite de competiciones activas de tu plan, así que no se ha añadido nada. Abre tu panel para finalizar o archivar un evento, o mejora tu plan.",
+  "funnel.claim.card.tryLaterTitle": "Demasiados intentos",
+  "funnel.claim.card.tryLaterBody": "Espera un momento y vuelve a intentarlo. Tu enlace aún no se ha usado.",
+  "funnel.claim.card.tryAgain": "Intentar de nuevo"
 }
