@@ -2,6 +2,14 @@
 // courts and the time budget → the 2–3 families that actually fit, each with
 // a one-sentence trade-off. No AI, no I/O — the golden test pins the ranking.
 import { omit } from "./omit";
+import {
+  FUNNEL_FORMATS,
+  FUNNEL_MORE_FORMATS,
+  funnelFormatMatches,
+  funnelFormatMin,
+  funnelFormatPerEntrant,
+  type FunnelFormat,
+} from "./funnel-formats";
 
 export interface RecommendInput {
   entrants: number;
@@ -107,4 +115,62 @@ export function recommendFormats(input: RecommendInput): Recommendation[] {
   });
 
   return scored.slice(0, 3).map((r) => omit(r, "fits"));
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The /start funnel's cards (start-wizard redesign, 2026-11-13). Unlike `recommendFormats` above (the console's strip),
+// every count is the format layer's own (lib/funnel-formats.ts), read off the same knobs the claim builds the stages at,
+// and nothing is dropped or reordered: every card in its fixed place, each telling whether it can be built at all
+// (`available`) and whether it fits the day (`fits`). Best fit is a separate, honest question (`bestFitSlug`).
+// ---------------------------------------------------------------------------------------------------------------------
+
+export interface RankedFormat {
+  slug: FunnelFormat;
+  matches: number;
+  estHours: number;
+  perEntrant: number;
+  /** Built AND inside the courts × hours budget. */
+  fits: boolean;
+  /** The field meets the format's minimum (`funnelFormatMin`). */
+  available: boolean;
+}
+
+/** Every funnel format, FUNNEL_FORMATS then FUNNEL_MORE_FORMATS, in that fixed order. Refuses courts that are not a whole
+ *  number of at least 1 and a day or match length that is not a positive number; a field that is not a whole number of
+ *  at least 2 is refused by the format layer itself (`funnelFormatKnobs`). */
+export function rankFormats(input: RecommendInput): RankedFormat[] {
+  const n = input.entrants;
+  const courts = input.courts;
+  const minutes = input.matchMinutes ?? 30;
+  if (!Number.isInteger(courts) || courts < 1) throw new RangeError(`courts must be a whole number of at least 1 (got ${courts})`);
+  if (!Number.isFinite(input.hours) || input.hours <= 0) throw new RangeError(`hours must be positive (got ${input.hours})`);
+  if (!Number.isFinite(minutes) || minutes <= 0) throw new RangeError(`matchMinutes must be positive (got ${minutes})`);
+  const capacity = Math.floor((input.hours * 60 * courts) / minutes);
+
+  return [...FUNNEL_FORMATS, ...FUNNEL_MORE_FORMATS].map((slug) => {
+    const matches = funnelFormatMatches(slug, n);
+    const available = n >= funnelFormatMin(slug);
+    return {
+      slug,
+      matches,
+      estHours: Math.round(((matches * minutes) / 60 / courts) * 10) / 10,
+      perEntrant: funnelFormatPerEntrant(slug, n),
+      fits: available && matches <= capacity,
+      available,
+    };
+  });
+}
+
+/** The card that wears Best fit: of the cards that fit, the one giving each entrant the most play, then the one with
+ *  fewer matches, then the first on the page. Null when nothing fits — no badge rather than a badge on a format that
+ *  runs over. */
+export function bestFitSlug(ranked: readonly RankedFormat[]): FunnelFormat | null {
+  let best: RankedFormat | null = null;
+  for (const r of ranked) {
+    if (!r.fits) continue;
+    if (best === null || r.perEntrant > best.perEntrant || (r.perEntrant === best.perEntrant && r.matches < best.matches)) {
+      best = r;
+    }
+  }
+  return best?.slug ?? null;
 }
