@@ -13,6 +13,7 @@ import { funnelPayloadSchema } from "@/lib/funnel";
 import { FUNNEL_FORMATS, FUNNEL_MORE_FORMATS } from "@/lib/funnel-formats";
 import { FUNNEL_SPORTS } from "@/lib/funnel-sports";
 import { MARKETING_FORMATS } from "@/lib/marketing/formats";
+import { DRAW_ENTRANTS } from "@/components/marketing/the-draw";
 import { parseStartPrefill, type StartPrefill } from "../prefill";
 
 type SearchParams = Record<string, string | string[] | undefined>;
@@ -48,8 +49,8 @@ const MAX = ENTRANTS.maxValue as number;
  *  Sport select can put in `?sport=`. */
 const OFFERED_KEYS = [...new Set(offerJson.offered.map((o) => o.sport_key))];
 
-/** The sizes The Draw's stepper can reach: it clamps to 4..16 (components/marketing/the-draw.tsx `step`, not exported). */
-const DRAW_SIZES = Array.from({ length: 16 - 4 + 1 }, (_, i) => 4 + i);
+/** Every size The Draw's stepper can reach, so every `entrants` its "Make it real" link can send. */
+const DRAW_SIZES = Array.from({ length: DRAW_ENTRANTS.max - DRAW_ENTRANTS.min + 1 }, (_, i) => DRAW_ENTRANTS.min + i);
 
 describe("parseStartPrefill", () => {
   it("the bounds it holds the size to are the start route's own", () => {
@@ -290,7 +291,12 @@ describe("parseStartPrefill", () => {
   it("refuses a today that is not a day, by name", () => {
     const bad = ["2026-02-30", "", "13/11/2026", `${TODAY}T00:00`, "today"];
     for (const today of bad) {
-      expect(() => parseStartPrefill({ date: addDays(TODAY, 3) }, today), JSON.stringify(today)).toThrow(RangeError);
+      const call = () => parseStartPrefill({ date: addDays(TODAY, 3) }, today);
+      expect(call, JSON.stringify(today)).toThrow(RangeError);
+      // Named: the parser, the rule, and the value it was handed.
+      expect(call, JSON.stringify(today)).toThrow(
+        `parseStartPrefill: today must be a YYYY-MM-DD calendar day, got ${JSON.stringify(today)}`,
+      );
     }
     expect(bad.length).toBe(5);
   });
