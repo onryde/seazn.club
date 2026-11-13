@@ -6,6 +6,8 @@
 // dispatcher (`runEvent` / `processStripeEvent`), the term-end through the real hourly sweep, and the bodies are opened from the
 // outbox row with the outbox's own `openBody`. The transport answers 503, so every row keeps its sealed body (a sent row has none to
 // open). Every invoice token was minted by the real `mintInvoiceToken` (wrapped, F9) and is resolved by the real `invoiceDocByToken`.
+// A send's first attempt is `deferred` tail work and is HELD here (`tail`), run only by `flushTail`: outside a request scope the real
+// `deferred` runs it inline and unawaited, which leases (`sending`) the row it just queued while the test reads it.
 //
 // Where each expected value comes from: the words from the four dictionaries (the org's language for the sponsor's invoice, the
 // OWNER's for the owner's notice); the number from T20's rule (an org's first invoice is SP-0001, typed here); the amounts from
@@ -23,9 +25,22 @@ vi.mock("@/lib/stripe", () => ({
     refunds: { create: stripe.refund },
   }),
 }));
-// 503: every row stays queued with its sealed body for the test to open.
+// 503: every row stays queued with its sealed body for the test to open. `wire` holds what reached the "provider" (the idempotency
+// key is `email-outbox/<row id>`), so a test can say which rows were ever attempted.
+const wire = vi.hoisted(() => [] as { idempotencyKey: string; to: string; text: string }[]);
 vi.mock("@/server/email-outbox/transport", () => ({
-  deliver: async () => ({ ok: false as const, reason: "http" as const, status: 503, errorName: "service_unavailable", detail: "later" }),
+  deliver: async (m: { idempotencyKey: string; to: string; text: string }) => {
+    wire.push({ idempotencyKey: m.idempotencyKey, to: m.to, text: m.text });
+    return { ok: false as const, reason: "http" as const, status: 503, errorName: "service_unavailable", detail: "later" };
+  },
+}));
+/** The request's tail work (`deferred`: a send's first attempt, the public-site bust), held until `flushTail` so "the row waits" is a
+ *  fact and not a race with the dispatcher (the convention of `seam.test.ts` and the S10 route test). */
+const tail = vi.hoisted(() => ({ tasks: [] as Array<() => unknown> }));
+vi.mock("@/lib/deferred", () => ({
+  deferred: (fn: () => unknown) => {
+    tail.tasks.push(fn);
+  },
 }));
 /** Every token the real producers minted, in order (F9). */
 const minted = vi.hoisted(() => [] as { dealId: string; token: string }[]);
@@ -106,6 +121,8 @@ const eventIds: string[] = [];
 
 beforeEach(() => {
   minted.length = 0;
+  wire.length = 0;
+  tail.tasks.length = 0;
   Object.assign(gap, { hook: null, at: 0, calls: 0, fired: 0 });
   stubOutboxEnv();
   vi.stubEnv("OAUTH_BASE_URL", APP);
@@ -121,21 +138,33 @@ afterAll(async () => {
   await cleanUp();
 });
 
-type Row = { id: string; status: string; recipient: string; recipient_user_id: string | null; subject: string; text: string; html: string };
+type Row = { id: string; status: string; attempts: number; recipient: string; recipient_user_id: string | null; subject: string; text: string; html: string };
 
 /** The rows of `kind` about deal `dealId`, oldest first, their bodies opened. A row a newer one for the same deal and address
  *  REPLACED (the outbox's replace rule: a resend supersedes an invoice still waiting to go) has no body left; its text reads "". */
 async function rowsOf(kind: "sponsor_invoice" | "sponsor_deal_paid" | "sponsor_receipt", dealId: string): Promise<Row[]> {
-  const rows = await sql<{ id: string; status: string; recipient: string; recipient_user_id: string | null; subject: string; body_sealed: Buffer | null }[]>`
-    select id, status, recipient, recipient_user_id, subject, body_sealed from email_outbox
+  const rows = await sql<{ id: string; status: string; attempts: number; recipient: string; recipient_user_id: string | null; subject: string; body_sealed: Buffer | null }[]>`
+    select id, status, attempts, recipient, recipient_user_id, subject, body_sealed from email_outbox
      where kind = ${kind} and ref_type = 'sponsor_order' and ref_id = ${dealId}
      order by created_at, id`;
   return rows.map((r) => {
     if (r.status === "replaced" && r.body_sealed === null) return { ...r, text: "", html: "" };
     expect(r.body_sealed, `premise: the ${kind} row (${r.status}) still holds its body`).not.toBeNull();
     const body = openBody(r.body_sealed!);
-    return { id: r.id, status: r.status, recipient: r.recipient, recipient_user_id: r.recipient_user_id, subject: r.subject, text: body.text, html: body.html };
+    return { id: r.id, status: r.status, attempts: r.attempts, recipient: r.recipient, recipient_user_id: r.recipient_user_id, subject: r.subject, text: body.text, html: body.html };
   });
+}
+/** Run the held tail work to completion, in order (a failing task is swallowed, as `deferred` itself does); how many ran. */
+async function flushTail(): Promise<number> {
+  const run = tail.tasks.splice(0);
+  for (const fn of run) {
+    try {
+      await fn();
+    } catch {
+      /* a tail task's own error never reaches the caller */
+    }
+  }
+  return run.length;
 }
 /** Every outbox row of the org, by kind (what a step mailed, or did not). */
 async function kindsOf(orgId: string): Promise<Record<string, number>> {
@@ -172,10 +201,10 @@ async function invoiceRowsOfOrg(orgId: string): Promise<number> {
   return (await sql<{ n: number }[]>`select count(*)::int as n from email_outbox where org_id = ${orgId} and kind = 'sponsor_invoice'`)[0]!.n;
 }
 /** `n` inert copies of the real invoice row `id` (status `replaced`, no body; each its own ref and once-key, so neither the replace
- *  rule nor the once-index touches them): rows the cap counts that nothing will ever send. The real row's first send is still
- *  running in the background (`deferred` is inline fire-and-forget outside a request), so the dispatcher may have leased it or
- *  marked it sent by the time it is copied: every column the dispatcher stamps is set to its queued-row value here, or a copy
- *  inherits a `lease_until` (the lease-only-while-sending CHECK refuses it) or a `provider_id` (its unique index refuses it). */
+ *  rule nor the once-index touches them): rows the cap counts that nothing will ever send. The real row's first send is HELD
+ *  here (`tail`), so it is still queued when copied; every column the dispatcher stamps is set to its queued-row value anyway, so
+ *  the copy stays valid whatever state the source is in (a copy would otherwise inherit a `lease_until`, which the
+ *  lease-only-while-sending CHECK refuses, or a `provider_id`, which its unique index refuses). */
 async function seedInvoiceRows(id: string, n: number): Promise<string> {
   const tag = `seed-${uniq()}`;
   await sql`
@@ -311,7 +340,11 @@ describe.skipIf(!HAS_DB)("the sponsor's invoice email links the numbered invoice
       const rows = await rowsOf("sponsor_invoice", deal.id);
       expect(rows, `${method}: two sends, two rows`).toHaveLength(2);
       // The resend replaced the first email while it still waited to go (the outbox's replace rule): the dead link is never sent.
-      expect(rows.map((r) => r.status), method).toEqual(["replaced", "queued"]);
+      // Both sends' first attempts are held (`tail`), so nothing has touched either row yet: the second is waiting, not leased.
+      expect(rows.map((r) => [r.status, r.attempts]), `${method}: replaced, and the live one waiting, before any attempt`).toEqual([
+        ["replaced", 0],
+        ["queued", 0],
+      ]);
       const mine = minted.filter((m) => m.dealId === deal.id).map((m) => m.token);
       expect(mine, `${method}: the create's token, then one per send`).toHaveLength(3);
       const first = mine[1]!;
@@ -323,6 +356,17 @@ describe.skipIf(!HAS_DB)("the sponsor's invoice email links the numbered invoice
       expect(mine.at(-1), method).toBe(second);
       for (const old of mine.slice(0, -1)) expect(await invoiceDocByToken(old), `${method}: ${old.slice(0, 6)}… is dead`).toBeNull();
       expect((await dealRow(deal.id)).invoice_send_count, method).toBe(2);
+      // Now let the held first attempts run through the real dispatcher (the 503 transport): the replaced row is never claimed, so
+      // its dead link never reaches the provider; the live row is attempted once, refused, and kept queued for its retry.
+      expect(await flushTail(), `${method}: the sends held their first attempts`).toBeGreaterThan(0);
+      const after = await rowsOf("sponsor_invoice", deal.id);
+      expect(after.map((r) => [r.status, r.attempts]), `${method}: after the attempts`).toEqual([
+        ["replaced", 0],
+        ["queued", 1],
+      ]);
+      expect(wire.map((m) => m.idempotencyKey), `${method}: only the live row reached the provider, once`).toEqual([`email-outbox/${rows[1]!.id}`]);
+      expect(wire[0]!.text, `${method}: and it carried the new link`).toContain(second);
+      wire.length = 0;
       checked++;
     }
     expect(checked).toBe(2);
