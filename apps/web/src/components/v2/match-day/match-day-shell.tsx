@@ -388,6 +388,7 @@ export function MatchDayShell({
           dict={dict}
           locale={locale}
           today={view.date}
+          zone={view.tz}
           courts={view.courts}
           venuesToday={view.venues_today}
           onClose={() => setCodeOpen(false)}

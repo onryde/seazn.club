@@ -184,6 +184,10 @@ export const SPONSOR_LINK_MISS_LIMIT: RateLimitConfig = { max: 30, windowSeconds
  *    runs a rolled-back Pair under the division lock: final review m4), and nobody reviews twice a second;
  *  - MD_APPROVE_LIMIT: an approval, per code — the first phone wins, a second is MD_ALREADY;
  *  - MD_OPEN_LIMIT: a match opened, per code — every row tap is an open (§6), an arbiter enters a round board by board;
+ *  - MD_CANDIDATES_LIMIT: a court's candidates, per code (Task 8e) — a read of the whole board under one tenant transaction,
+ *    asked on a tap of a free court, never polled;
+ *  - MD_CALL_LIMIT: a call's preview, a call and an Undo call, per code (Task 8e) — each takes the division and the org's
+ *    call locks (the preview none), and a tap is a preview then a call;
  *  - MD_FAIL_LIMIT: FAILED lookups (an unknown, withdrawn or ended token) per client IP; a failure past it answers 429
  *    instead of its refusal. A valid code is never refused for its neighbours' traffic, nor for this budget.
  * A new link minted by an open spends the console's mint number on top (`DEVICE_LINK_MINT_LIMIT`), keyed on the code
@@ -193,6 +197,8 @@ export const MD_DAY_LIMIT: RateLimitConfig = { max: 600, windowSeconds: 60 };
 export const MD_REVIEW_LIMIT: RateLimitConfig = { max: 1, windowSeconds: 1 };
 export const MD_APPROVE_LIMIT: RateLimitConfig = { max: 10, windowSeconds: 1 };
 export const MD_OPEN_LIMIT: RateLimitConfig = { max: 120, windowSeconds: 60 };
+export const MD_CANDIDATES_LIMIT: RateLimitConfig = { max: 120, windowSeconds: 60 };
+export const MD_CALL_LIMIT: RateLimitConfig = { max: 120, windowSeconds: 60 };
 export const MD_FAIL_LIMIT: RateLimitConfig = { max: 30, windowSeconds: 60 };
 
 /**

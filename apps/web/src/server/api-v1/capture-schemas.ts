@@ -327,8 +327,13 @@ export const CaptureMatchdayRow = z.strictObject({
   sport_key: z.string().min(1),
   division_name: z.string(),
   round_label: z.string().min(1).nullable(),
+  /** The match as the desk tags it: "SF·1", "F" for a round of one match, `R{n}` where no round is coded. */
+  round_tag: z.string().min(1).nullable(),
   home: z.string().nullable(),
   away: z.string().nullable(),
+  /** What the desk prints for a seat with no entrant ("Winner of Group A"); null when it has an entrant or no label. */
+  home_slot: z.string().nullable(),
+  away_slot: z.string().nullable(),
   status: z.enum(["upcoming", "in_play", "finished"]),
   scheduled_at: MdInstant.nullable(),
   /** The short score as the Match Day desk shows it in a row (`compactScore`, lib/match-day/view.ts): "1–1 · 14–9" while a set
@@ -342,6 +347,8 @@ export const CaptureMatchdayApproval = z.strictObject({
   label: z.string(),
   /** Swiss: the round awaiting pairing; a draw: null (MD-1 fix M1, the controller's ruling). */
   round: z.number().int().min(1).nullable(),
+  /** A draw whose source stages are all decided but not yet completed on the desk: listed, no button. Else null. */
+  waiting: z.enum(["stage_complete"]).nullable(),
 });
 export const CaptureMatchdayCourt = z.strictObject({
   court_id: z.uuid(),
@@ -360,6 +367,8 @@ export const CaptureMatchdayDay = z.strictObject({
   opens_at: MdInstant,
   expires_at: MdInstant,
   can_approve: z.boolean(),
+  /** Task 8e (additive): whether the code may call a match to a court (capture-matchday-call.v1). */
+  can_call: z.boolean(),
   courts: z.array(CaptureMatchdayCourt),
   no_court: z.array(CaptureMatchdayRow),
   online: z.array(CaptureMatchdayRow),
@@ -422,3 +431,86 @@ export type CaptureMatchdayApprovalRequest = z.infer<typeof CaptureMatchdayAppro
 /** The approve's 200: approved, by this request. A second phone's approve is the refusal MD_ALREADY, never this. */
 export const CaptureMatchdayApprovalOk = z.strictObject({ ok: z.literal(true) });
 export type CaptureMatchdayApprovalOk = z.infer<typeof CaptureMatchdayApprovalOk>;
+
+// ---------------------------------------------------------------------------------------------------------------
+// capture-matchday-call.v1 (Task 8e, owner 2026-11-13): a Match Day code calls a match to a court.
+// GET /match-day-code/courts/{courtId}/candidates, POST|DELETE /match-day-code/fixtures/{fixtureId}/call
+// ---------------------------------------------------------------------------------------------------------------
+
+/** The call routes' refusal words: the door's four, MD_OUT_OF_SCOPE, and the call's own two. Its own list, so the day read's,
+ *  the open's and the approvals' contracts are unchanged by it. */
+export const CaptureMatchdayCallRefusalCode = z.enum([
+  "MD_UNKNOWN", "MD_WITHDRAWN", "MD_ENDED", "MD_NOT_OPEN", "MD_OUT_OF_SCOPE", "MD_NO_CALL", "MD_CALL_REFUSED",
+]);
+export type CaptureMatchdayCallRefusalCode = z.infer<typeof CaptureMatchdayCallRefusalCode>;
+/** Why a call, its preview or its Undo was refused: the desk's own refusal, in the phone's words. */
+export const CaptureMatchdayCallReason = z.enum([
+  "not_candidate_court", "player_busy", "court_busy", "started", "not_ready", "not_called", "frozen", "not_code_call",
+]);
+export type CaptureMatchdayCallReason = z.infer<typeof CaptureMatchdayCallReason>;
+/** A call refusal: MD_CALL_REFUSED carries its `reason` (and, for some, a name); every other word is the day read's shape. */
+export const CaptureMatchdayCallRefusal = z.union([
+  z.strictObject({
+    code: z.literal("MD_CALL_REFUSED"),
+    message: z.string(),
+    reason: CaptureMatchdayCallReason,
+    person_name: z.string().optional(),
+    court_name: z.string().nullable().optional(),
+  }),
+  z.strictObject({
+    code: CaptureMatchdayCallRefusalCode.exclude(["MD_CALL_REFUSED"]),
+    message: z.string(),
+    opens_at: MdInstant.optional(),
+  }),
+]);
+export type CaptureMatchdayCallRefusal = z.infer<typeof CaptureMatchdayCallRefusal>;
+/** A match that could start on the court now, as the desk's free-court panel offers it. */
+export const CaptureMatchdayCandidate = z.strictObject({
+  match: CaptureMatchdayRow,
+  source: z.enum(["this_court", "other_court", "no_court"]),
+  from_court_name: z.string().nullable(),
+  planned_at: MdInstant.nullable(),
+  waiting_minutes: z.number().int().min(0),
+  behind_minutes: z.number().int().min(0),
+  blocked: z.strictObject({ kind: z.literal("player_busy"), person_name: z.string(), court_name: z.string().nullable() }).nullable(),
+});
+export const CaptureMatchdayCandidates = z.strictObject({
+  court_id: z.uuid(),
+  court_name: z.string(),
+  candidates: z.array(CaptureMatchdayCandidate),
+});
+export type CaptureMatchdayCandidates = z.infer<typeof CaptureMatchdayCandidates>;
+/** The call's body: the court, and whether this is the preview (writes nothing) or the call. */
+export const CaptureMatchdayCallRequest = z.strictObject({ court_id: z.uuid(), preview: z.boolean() });
+export type CaptureMatchdayCallRequest = z.infer<typeof CaptureMatchdayCallRequest>;
+const CaptureMatchdayCallWarning = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("pushes_later"), count: z.number().int().min(1) }),
+  z.strictObject({ kind: z.literal("rest_gap"), person_name: z.string(), minutes: z.number().int().min(0), min_rest: z.number().int().min(1) }),
+  z.strictObject({ kind: z.literal("past_day_end"), court_name: z.string(), until: MdInstant }),
+  z.strictObject({ kind: z.literal("crosses_closure"), court_name: z.string(), from: MdInstant, until: MdInstant }),
+  z.strictObject({ kind: z.literal("court_closed"), court_name: z.string(), until: MdInstant.nullable(), since: MdInstant.nullable() }),
+]);
+/** The preview's 200 (`preview: true`): the desk's knock-on, nothing written. */
+export const CaptureMatchdayCallPreview = z.strictObject({
+  shifts: z.array(
+    z.strictObject({
+      fixture_id: z.uuid(),
+      label: z.string(),
+      round_label: z.string().min(1),
+      planned_at: MdInstant,
+      estimated_at: MdInstant,
+    }),
+  ),
+  warnings: z.array(CaptureMatchdayCallWarning),
+});
+export type CaptureMatchdayCallPreview = z.infer<typeof CaptureMatchdayCallPreview>;
+/** The call's 200 (`preview: false`). */
+export const CaptureMatchdayCallOk = z.strictObject({ fixture_id: z.uuid(), court_id: z.uuid(), called_at: MdInstant });
+export type CaptureMatchdayCallOk = z.infer<typeof CaptureMatchdayCallOk>;
+/** The Undo call's 200: where the match is back to (nulls: it had no court, or no time). */
+export const CaptureMatchdayUndoOk = z.strictObject({
+  fixture_id: z.uuid(),
+  court_id: z.uuid().nullable(),
+  scheduled_at: MdInstant.nullable(),
+});
+export type CaptureMatchdayUndoOk = z.infer<typeof CaptureMatchdayUndoOk>;

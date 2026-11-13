@@ -96,6 +96,22 @@ describe.skipIf(!HAS_DB)("Match Day code routes", () => {
     expect(((await res.json()) as Envelope<MatchDayCode>).data!.can_approve).toBe(false);
   });
 
+  it("POST mints \"Call matches to courts\" when ticked, off when not, apart from can_approve; the list and the row say it (Task 8e)", async () => {
+    const day = await seedDay();
+    authState.userId = day.auth.userId!;
+    const calls = await mintPost(post({ scope: { kind: "competition" }, can_call: true }), ctx(day.comp.id));
+    expect(calls.status).toBe(201);
+    const caller = MatchDayCode.parse(((await calls.json()) as Envelope<MatchDayCode>).data);
+    expect([caller.can_call, caller.can_approve]).toEqual([true, false]);
+    const plain = ((await (await mintPost(post({ scope: { kind: "competition" }, can_approve: true }), ctx(day.comp.id))).json()) as Envelope<MatchDayCode>).data!;
+    expect([plain.can_call, plain.can_approve]).toEqual([false, true]);
+    expect((await mintPost(post({ scope: { kind: "competition" }, can_call: "yes" }), ctx(day.comp.id))).status).toBe(400);
+    const list = ((await (await listGet(get(), ctx(day.comp.id))).json()) as Envelope<MatchDayCode[]>).data!;
+    expect(list.map((c) => [c.id, c.can_call]).sort()).toEqual([[caller.id, true], [plain.id, false]].sort());
+    const rows = await sql<{ id: string; can_call: boolean }[]>`select id, can_call from match_day_codes where competition_id = ${day.comp.id}`;
+    expect(rows.map((r) => [r.id, r.can_call]).sort()).toEqual([[caller.id, true], [plain.id, false]].sort());
+  });
+
   it("an md_ bearer cannot mint, list or withdraw (403)", async () => {
     const day = await seedDay();
     authState.userId = day.auth.userId!;

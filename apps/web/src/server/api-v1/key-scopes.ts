@@ -408,6 +408,11 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   "POST /match-day-code/fixtures/:id/scoring-link",
   "GET /match-day-code/approvals/:kind/:stageId",
   "POST /match-day-code/approvals/:kind/:stageId",
+  // Task 8e (owner 2026-11-13): a code minted with "Call matches to courts" calls a match onto a court — a schedule write,
+  // bearing the md_ code only.
+  "GET /match-day-code/courts/:courtId/candidates",
+  "POST /match-day-code/fixtures/:id/call",
+  "DELETE /match-day-code/fixtures/:id/call",
   // Chess in-page board (2026-10-09 design §6): the room read names a player's
   // seat, the POSTs seat them, submit moves with that player's own stored
   // Lichess OAuth token, report their clock at zero, and stamp a camera gap

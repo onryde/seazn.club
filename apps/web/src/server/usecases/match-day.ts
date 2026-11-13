@@ -22,6 +22,7 @@ import type postgres from "postgres";
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { DEFAULT_LOCALE, getDictionary, type Locale } from "@/lib/i18n";
+import type { Dict } from "@/lib/i18n-constants";
 import { estimateQueue, rankCandidates } from "@/lib/match-day/estimate";
 import { withFindCourt } from "@/lib/match-day/view";
 import { routes } from "@/lib/routes";
@@ -893,27 +894,56 @@ export async function matchDayCandidates(
   now: Date = new Date(),
   opts: { locale?: Locale } = {},
 ): Promise<MatchDayCandidate[]> {
-  const nowMs = now.getTime();
   const dict = await getDictionary(opts.locale ?? DEFAULT_LOCALE, "ui");
-  const { picked, busy, courtNames, rounds } = await withTenant(auth.orgId, async (tx) => {
-    const board = await readBoard(tx, competitionId, now, { noCourt: true });
-    await targetCourt(tx, courtId);
-    const picked: {
-      row: FixtureRow;
-      source: MatchDayCandidate["source"];
-      from: string | null;
-      waiting: number;
-      behind: number;
-      /** The planned time the row prints (E2 item 1); null for a call, which replaced the plan. */
-      planned: Date | null;
-    }[] = [];
-    for (const c of board.courts) {
-      const mine = c.court_id === courtId;
-      if (!mine && c.state === "called" && c.current !== null && ready(c.current)) {
-        picked.push({ row: c.current, source: "other_court", from: c.court_name, waiting: 0, behind: 0, planned: null });
-      }
-      const next = c.queue.find((q) => ready(q.row));
-      if (next === undefined) continue;
+  const ranked = await withTenant(auth.orgId, (tx) => candidatesIn(tx, competitionId, courtId, now, dict));
+  const streams = await openStreamStates(auth, ranked.map((c) => c.row.id));
+  return ranked.map(({ candidate }) => ({ ...candidate, fixture: { ...candidate.fixture, stream: streams[candidate.fixture.id] ?? null } }));
+}
+
+/** One candidate as `candidatesIn` ranks it: the desk's row (its `fixture.stream` not yet read: null), and the board row it
+ *  came from, for a reader that shapes it otherwise (the Match Day code's candidates, match-day-code-call.ts). */
+export interface RankedCandidate {
+  candidate: MatchDayCandidate;
+  row: FixtureRow;
+}
+
+/**
+ * `matchDayCandidates`' reading, in the caller's tenant transaction, ranked by `rankCandidates` (Task 8e: shared with the Match
+ * Day code's candidates, never a copy). `keep` narrows the rows BEFORE anything is judged of them — a Match Day code's scope —
+ * so a match the caller may not see is never read for a busy player or a round code. 404 for a court that is not the org's, or
+ * is archived.
+ */
+export async function candidatesIn(
+  tx: Tx,
+  competitionId: string,
+  courtId: string,
+  now: Date,
+  dict: Dict,
+  opts: { keep?: (row: FixtureRow, board: Board) => boolean } = {},
+): Promise<RankedCandidate[]> {
+  const nowMs = now.getTime();
+  const board = await readBoard(tx, competitionId, now, { noCourt: true });
+  await targetCourt(tx, courtId);
+  const picked: {
+    row: FixtureRow;
+    source: MatchDayCandidate["source"];
+    from: string | null;
+    waiting: number;
+    behind: number;
+    /** The planned time the row prints (E2 item 1); null for a call, which replaced the plan. */
+    planned: Date | null;
+  }[] = [];
+  for (const c of board.courts) {
+    const mine = c.court_id === courtId;
+    if (!mine && c.state === "called" && c.current !== null && ready(c.current)) {
+      picked.push({ row: c.current, source: "other_court", from: c.court_name, waiting: 0, behind: 0, planned: null });
+    }
+    // The court's first ready queued match PER DIVISION (F-T8-6): the desk's panel filters by division, and a court whose first
+    // match is another division's would otherwise show "Nothing is waiting" beside a match of the filtered one in its queue.
+    const seenDivisions = new Set<string>();
+    for (const next of c.queue) {
+      if (!ready(next.row) || seenDivisions.has(next.row.division_id)) continue;
+      seenDivisions.add(next.row.division_id);
       picked.push({
         row: next.row,
         source: mine ? "this_court" : "other_court",
@@ -923,31 +953,32 @@ export async function matchDayCandidates(
         planned: next.planned_at,
       });
     }
-    for (const r of board.noCourt) {
-      picked.push({
-        row: r,
-        source: "no_court",
-        from: null,
-        waiting: 0,
-        behind: r.scheduled_at === null ? 0 : wholeMinutes(nowMs - new Date(r.scheduled_at).getTime()),
-        planned: r.scheduled_at === null ? null : new Date(r.scheduled_at),
-      });
-    }
-    const allowed = await callableCourtsByFixture(tx, picked.map((p) => p.row));
-    // A candidate for this court is one its division may play on, or one already planned on it (task F7: the call's own
-    // exemption, `assertCallable` — this court's queue never hides a match the call would take).
-    const usable = picked.filter((p) => p.row.court_id === courtId || allowed.get(p.row.id)?.has(courtId) === true);
-    const busy = await whoIsBusy(tx, usable.map((p) => p.row));
-    // Their round codes, as the board names them (E2 item 7), in the reader's language.
-    const rounds = await readRounds(tx, usable.map((p) => p.row), dict);
-    return { picked: usable, busy, courtNames: board.courtNames, rounds };
-  });
-  const streams = await openStreamStates(auth, picked.map((p) => p.row.id));
-  return rankCandidates(
-    picked.map((p) => {
+  }
+  for (const r of board.noCourt) {
+    picked.push({
+      row: r,
+      source: "no_court",
+      from: null,
+      waiting: 0,
+      behind: r.scheduled_at === null ? 0 : wholeMinutes(nowMs - new Date(r.scheduled_at).getTime()),
+      planned: r.scheduled_at === null ? null : new Date(r.scheduled_at),
+    });
+  }
+  const keep = opts.keep;
+  const seen = keep === undefined ? picked : picked.filter((p) => keep(p.row, board));
+  const allowed = await callableCourtsByFixture(tx, seen.map((p) => p.row));
+  // A candidate for this court is one its division may play on, or one already planned on it (task F7: the call's own
+  // exemption, `assertCallable` — this court's queue never hides a match the call would take).
+  const usable = seen.filter((p) => p.row.court_id === courtId || allowed.get(p.row.id)?.has(courtId) === true);
+  const busy = await whoIsBusy(tx, usable.map((p) => p.row));
+  // Their round codes, as the board names them (E2 item 7), in the reader's language.
+  const rounds = await readRounds(tx, usable.map((p) => p.row), dict);
+  const rowOf = new Map(usable.map((p) => [p.row.id, p.row]));
+  const ranked = rankCandidates(
+    usable.map((p) => {
       const holder = busy.get(p.row.id);
       return {
-        fixture: fixtureView(p.row, rounds, streams),
+        fixture: fixtureView(p.row, rounds, {}),
         source: p.source,
         from_court_name: p.from,
         waiting_minutes: p.waiting,
@@ -959,9 +990,10 @@ export async function matchDayCandidates(
             : {
                 kind: "player_busy" as const,
                 person_name: holder.name,
-                court_name: holder.court_id === null ? null : (courtNames.get(holder.court_id) ?? null),
+                court_name: holder.court_id === null ? null : (board.courtNames.get(holder.court_id) ?? null),
               },
       };
     }),
   );
+  return ranked.map((candidate) => ({ candidate, row: rowOf.get(candidate.fixture.id)! }));
 }

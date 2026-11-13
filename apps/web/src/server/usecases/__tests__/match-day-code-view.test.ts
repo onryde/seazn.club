@@ -119,8 +119,12 @@ describe.skipIf(!HAS_DB)("the day read for a Match Day code", () => {
       sport_key: "generic",
       division_name: "Doubles",
       round_label: `R${await roundNo(f[0]!)}`,
+      // A league round is its R{n} code, the same as round_label (F-T8-3); both seats have entrants, so no slot text.
+      round_tag: "R1", // f0 is the round robin's first round; a league round is its R{n} code, literally
       home: expect.any(String),
       away: expect.any(String),
+      home_slot: null,
+      away_slot: null,
       status: "in_play",
       scheduled_at: iso(0),
       summary: null,
@@ -261,6 +265,92 @@ describe.skipIf(!HAS_DB)("the day read for a Match Day code", () => {
     expect(after.courts[0]!.next).toEqual([]);
   });
 
+  describe("tags and slot labels (F-T8-3, F-T8-4)", () => {
+    /** A four-entrant knockout in its own division: two semi-finals, then the final, whose seats wait for the semi-finals.
+     *  Every match is planned on Court 1 today, so the day read lists all three. */
+    async function knockoutDay(): Promise<{ sf: string[]; fin: string }> {
+      const division = await createDivision(day.auth, day.comp.id, { ...GENERIC, name: "Cup", slug: "cup-ko" });
+      await createEntrants(day.auth, division.id, ["A", "B", "C", "D"].map((n, i) => ({ kind: "individual" as const, display_name: n, seed: i + 1, members: [] })));
+      const [ko] = await createStages(day.auth, division.id, { seq: 1, kind: "knockout", name: "Cup", config: {}, progression: null });
+      await generateStageFixtures(day.auth, ko!.id);
+      await sql`update divisions set status = 'active' where id = ${division.id}`;
+      const rows = await sql<{ id: string; round_no: number; seq_in_round: number }[]>`
+        select id, round_no, seq_in_round from fixtures where stage_id = ${ko!.id} order by round_no, seq_in_round`;
+      expect(rows.map((r) => [r.round_no, r.seq_in_round]), "premise: two semi-finals and a final").toEqual([[1, 1], [1, 2], [2, 1]]);
+      for (const [i, r] of rows.entries()) await place(day, r.id, 120 + i * 30, day.courts.c1);
+      return { sf: [rows[0]!.id, rows[1]!.id], fin: rows[2]!.id };
+    }
+    const rowOf = (view: Awaited<ReturnType<typeof getMatchDayForCode>>, id: string) =>
+      view.courts.flatMap((c) => [...(c.now ? [c.now] : []), ...c.next, ...c.finished]).find((r) => r.fixture_id === id)!;
+
+    it("the two semi-finals read apart (SF·1, SF·2), the final is F, and round_label is unchanged", async () => {
+      const { sf, fin } = await knockoutDay();
+      const { code } = await codeFor(day, { kind: "competition" });
+      const view = await getMatchDayForCode(code, NOW);
+      expect([rowOf(view, sf[0]!), rowOf(view, sf[1]!), rowOf(view, fin)].map((r) => [r.round_label, r.round_tag])).toEqual([
+        ["SF", "SF·1"],
+        ["SF", "SF·2"],
+        ["F", "F"],
+      ]);
+      expect(CaptureMatchdayDay.safeParse(view).success).toBe(true);
+    });
+
+    it("an empty seat reads as the desk words it; a seat with an entrant has no slot text", async () => {
+      const { sf, fin } = await knockoutDay();
+      // A seated seat can still carry a label stored from before its draw: the entrant's name wins, so no slot text.
+      await sql`update fixtures set home_slot_label = ${sql.json({ key: "slot.winner_match", params: { round: 1, seq: 2 } })} where id = ${sf[0]!}`;
+      const { code } = await codeFor(day, { kind: "competition" });
+      const view = await getMatchDayForCode(code, NOW);
+      const final = rowOf(view, fin);
+      expect([final.home, final.away]).toEqual([null, null]);
+      // The desk's own text for a seat fed by a semi-final (the board's "Winner of SF·1").
+      expect([final.home_slot, final.away_slot]).toEqual(["Winner of SF·1", "Winner of SF·2"]);
+      // A semi-final's seats are seated: the name is there, the slot text is not.
+      const semi = rowOf(view, sf[0]!);
+      expect([semi.home === null, semi.away === null, semi.home_slot, semi.away_slot]).toEqual([false, false, null, null]);
+    });
+
+    it("R116-4: an empty seat a walkover was won over names her, marked withdrawn, never its stored label", async () => {
+      const { sf, fin } = await knockoutDay();
+      const [one] = await sql<{ home_entrant_id: string; name: string }[]>`
+        select f.home_entrant_id, e.display_name as name from fixtures f join entrants e on e.id = f.home_entrant_id where f.id = ${sf[0]!}`;
+      const [two] = await sql<{ home_entrant_id: string }[]>`select home_entrant_id from fixtures where id = ${sf[1]!}`;
+      // Ruling 116's dead seat: she won SF·1, withdrew, and the final was awarded over her empty seat.
+      await sql`update fixtures set home_entrant_id = null, away_entrant_id = ${two!.home_entrant_id},
+        home_slot_label = ${sql.json({ key: "bracket.slot.bye" })}, status = 'forfeited',
+        outcome = ${sql.json({ kind: "award", winner: two!.home_entrant_id, loser: one!.home_entrant_id, reason: "withdrew" })}
+        where id = ${fin}`;
+      await sql`update fixtures set finished_at = ${iso(20)} where id = ${fin}`; // the status change stamps the wall clock
+      const { code } = await codeFor(day, { kind: "competition" });
+      const view = await getMatchDayForCode(code, NOW);
+      const final = rowOf(view, fin);
+      expect([final.home, final.home_slot, final.away_slot]).toEqual([null, `${one!.name} (withdrawn)`, null]);
+      expect(CaptureMatchdayDay.safeParse(view).success).toBe(true);
+    });
+
+    it("with no feed edge a seat reads its stored label; with neither feed nor label it is null", async () => {
+      const { fin } = await knockoutDay();
+      await sql`update fixtures set winner_to_fixture = null, winner_to_slot = null where winner_to_fixture = ${fin}`;
+      await sql`update fixtures set home_slot_label = ${sql.json({ key: "slot.winner_match", params: { round: 1, seq: 2 } })}, away_slot_label = null where id = ${fin}`;
+      const { code } = await codeFor(day, { kind: "competition" });
+      const final = rowOf(await getMatchDayForCode(code, NOW), fin);
+      expect([final.home_slot, final.away_slot]).toEqual(["Winner of SF·2", null]);
+    });
+  });
+
+  describe("group-sourced seats", () => {
+    it("a seat waiting on a group reads the desk's words, written out literally", async () => {
+      const [fx] = day.comp.fixtures;
+      await sql`update fixtures set home_entrant_id = null, away_entrant_id = null,
+        home_slot_label = ${sql.json({ key: "slot.winner_group", params: { g: "A" } })},
+        away_slot_label = ${sql.json({ key: "slot.runner_up_group", params: { g: "B" } })} where id = ${fx!.id}`;
+      const { code } = await codeFor(day, { kind: "competition" });
+      const view = await getMatchDayForCode(code, NOW);
+      const row = view.courts.flatMap((c) => [...(c.now ? [c.now] : []), ...c.next, ...c.finished]).concat(view.no_court).find((r) => r.fixture_id === fx!.id)!;
+      expect([row.home, row.away, row.home_slot, row.away_slot]).toEqual([null, null, "Winner of Group A", "Runner-up of Group B"]);
+    });
+  });
+
   describe("approvals", () => {
     /** A division in the same competition: a league of four, then `Finals`, a knockout drawn from it at setup. */
     async function drawDivision(): Promise<{ leagueId: string; finalsId: string }> {
@@ -292,8 +382,11 @@ describe.skipIf(!HAS_DB)("the day read for a Match Day code", () => {
       const { leagueId, finalsId } = await drawDivision();
       const { swissId } = await swissDivision();
       const { code } = await codeFor(day, { kind: "competition" }, true);
-      // Neither is ready: the league is not complete (its draw has no source yet), and Swiss round 1 is still to play.
-      expect((await getMatchDayForCode(code, NOW)).approvals).toEqual([]);
+      // Swiss round 1 is still to play, and the draw's league is decided but not completed on the desk: the draw is listed
+      // WAITING (F-T8-2), the Swiss is not listed.
+      expect((await getMatchDayForCode(code, NOW)).approvals).toEqual([
+        { kind: "draw", stage_id: finalsId, division_name: "Open", label: "Finals", round: null, waiting: "stage_complete" },
+      ]);
       const seated = await sql<{ n: number }[]>`
         select count(*)::int as n from fixtures where stage_id = ${swissId} and round_no = 1 and home_entrant_id is not null`;
       expect(seated[0]!.n, "the premise: round 1 is seated").toBe(2);
@@ -309,8 +402,8 @@ describe.skipIf(!HAS_DB)("the day read for a Match Day code", () => {
       expect(view.can_approve).toBe(true);
       expect(view.approvals).toEqual([
         // Fix M1: a draw has no round; a Swiss approval names the round awaiting pairing (round 1 played: round 2).
-        { kind: "draw", stage_id: finalsId, division_name: "Open", label: "Finals", round: null },
-        { kind: "swiss", stage_id: swissId, division_name: "Swiss Open", label: "Swiss", round: 2 },
+        { kind: "draw", stage_id: finalsId, division_name: "Open", label: "Finals", round: null, waiting: null },
+        { kind: "swiss", stage_id: swissId, division_name: "Swiss Open", label: "Swiss", round: 2, waiting: null },
       ]);
       expect(CaptureMatchdayDay.safeParse(view).success).toBe(true);
       // Round 2 seated: nothing waits until it is played.
@@ -323,7 +416,7 @@ describe.skipIf(!HAS_DB)("the day read for a Match Day code", () => {
       // Round 2 played: round 3 is the one awaiting pairing now.
       await sql`update fixtures set status = 'decided' where stage_id = ${swissId} and round_no = 2`;
       const later = (await getMatchDayForCode(code, NOW)).approvals.find((a) => a.kind === "swiss");
-      expect(later).toEqual({ kind: "swiss", stage_id: swissId, division_name: "Swiss Open", label: "Swiss", round: 3 });
+      expect(later).toEqual({ kind: "swiss", stage_id: swissId, division_name: "Swiss Open", label: "Swiss", round: 3, waiting: null });
     });
 
     it("approvals is listed with can_approve false too", async () => {
@@ -332,7 +425,35 @@ describe.skipIf(!HAS_DB)("the day read for a Match Day code", () => {
       const { code } = await codeFor(day, { kind: "competition" }, false);
       const view = await getMatchDayForCode(code, NOW);
       expect(view.can_approve).toBe(false);
-      expect(view.approvals).toEqual([{ kind: "draw", stage_id: finalsId, division_name: "Open", label: "Finals", round: null }]);
+      expect(view.approvals).toEqual([{ kind: "draw", stage_id: finalsId, division_name: "Open", label: "Finals", round: null, waiting: null }]);
+    });
+
+    it("F-T8-2 — a draw is waiting only while every match of its source is decided: one match still to play lists none; a forfeit counts as decided", async () => {
+      const { leagueId } = await drawDivision();
+      const { code } = await codeFor(day, { kind: "competition" }, true);
+      const [last] = await sql<{ id: string }[]>`select id from fixtures where stage_id = ${leagueId} limit 1`;
+      await setStatus(last!.id, "scheduled");
+      expect((await getMatchDayForCode(code, NOW)).approvals, "one match still to play").toEqual([]);
+      await setStatus(last!.id, "in_play");
+      expect((await getMatchDayForCode(code, NOW)).approvals, "one match in play").toEqual([]);
+      await setStatus(last!.id, "abandoned");
+      expect((await getMatchDayForCode(code, NOW)).approvals, "an abandoned match holds the stage, as it holds a Swiss round").toEqual([]);
+      await setStatus(last!.id, "forfeited");
+      expect((await getMatchDayForCode(code, NOW)).approvals.map((a) => a.waiting)).toEqual(["stage_complete"]);
+      await setStatus(last!.id, "finalized");
+      expect((await getMatchDayForCode(code, NOW)).approvals.map((a) => a.waiting)).toEqual(["stage_complete"]);
+    });
+
+    it("F-T8-2 — completing the stage turns the waiting draw into a ready one (waiting null); the contract accepts both", async () => {
+      const { leagueId } = await drawDivision();
+      const { code } = await codeFor(day, { kind: "competition" }, true);
+      const waiting = await getMatchDayForCode(code, NOW);
+      expect(waiting.approvals.map((a) => [a.kind, a.waiting])).toEqual([["draw", "stage_complete"]]);
+      expect(CaptureMatchdayDay.safeParse(waiting).success).toBe(true);
+      await sql`update stages set status = 'complete' where id = ${leagueId}`;
+      const ready = await getMatchDayForCode(code, NOW);
+      expect(ready.approvals.map((a) => [a.kind, a.waiting])).toEqual([["draw", null]]);
+      expect(CaptureMatchdayDay.safeParse(ready).success).toBe(true);
     });
 
     it("a venue code lists no approval for a stage with no match today on its courts", async () => {

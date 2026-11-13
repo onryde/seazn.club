@@ -1,0 +1,76 @@
+{
+  "court_id": "7b1e4c2a-3d5f-4a6b-8c9d-0e1f2a3b4c5d",
+  "court_name": "Court 1",
+  "candidates": [
+    {
+      "match": {
+        "fixture_id": "0a1b2c3d-4e5f-4a6b-9c8d-7e6f5a4b3c2d",
+        "sport_key": "badminton",
+        "division_name": "Men's Doubles",
+        "round_label": "R2",
+        "round_tag": "R2",
+        "home": "Ann & Bob",
+        "away": "Cat & Dan",
+        "home_slot": null,
+        "away_slot": null,
+        "status": "upcoming",
+        "scheduled_at": "2026-11-07T11:30:00.000Z",
+        "summary": null
+      },
+      "source": "elsewhere",
+      "from_court_name": null,
+      "planned_at": "2026-11-07T11:30:00.000Z",
+      "waiting_minutes": 0,
+      "behind_minutes": 0,
+      "blocked": null
+    },
+    {
+      "match": {
+        "fixture_id": "1b2c3d4e-5f6a-4b7c-8d9e-0f1a2b3c4d5e",
+        "sport_key": "badminton",
+        "division_name": "Men's Doubles",
+        "round_label": "R2",
+        "round_tag": "R2",
+        "home": "Eve & Fay",
+        "away": "Gus & Hal",
+        "home_slot": null,
+        "away_slot": null,
+        "status": "upcoming",
+        "scheduled_at": null,
+        "summary": null
+      },
+      "source": "no_court",
+      "from_court_name": null,
+      "planned_at": null,
+      "waiting_minutes": 0,
+      "behind_minutes": 0,
+      "blocked": null
+    },
+    {
+      "match": {
+        "fixture_id": "2c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f",
+        "sport_key": "badminton",
+        "division_name": "Men's Doubles",
+        "round_label": "R2",
+        "round_tag": "R2",
+        "home": "Ann & Cat",
+        "away": "Eve & Gus",
+        "home_slot": null,
+        "away_slot": null,
+        "status": "upcoming",
+        "scheduled_at": "2026-11-07T11:00:00.000Z",
+        "summary": null
+      },
+      "source": "other_court",
+      "from_court_name": "Court 2",
+      "planned_at": "2026-11-07T11:00:00.000Z",
+      "waiting_minutes": 25,
+      "behind_minutes": 10,
+      "blocked": {
+        "kind": "player_busy",
+        "person_name": "Ann Archer",
+        "court_name": "Court 3"
+      }
+    }
+  ]
+}

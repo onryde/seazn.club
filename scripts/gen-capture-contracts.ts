@@ -17,6 +17,8 @@ import {
   CaptureBeat, CaptureBeatAnswer, CaptureDescriptor, CaptureRefusal, CaptureScoringLinkOk, CaptureStartBody, CaptureStartOk,
   CaptureMatchdayDay, CaptureMatchdayRefusal, CaptureMatchdayOpen,
   CaptureMatchdayApprovalReview, CaptureMatchdayApprovalRequest, CaptureMatchdayApprovalOk,
+  CaptureMatchdayCandidates, CaptureMatchdayCallRequest, CaptureMatchdayCallPreview, CaptureMatchdayCallOk, CaptureMatchdayUndoOk,
+  CaptureMatchdayCallRefusal,
 } from "../apps/web/src/server/api-v1/capture-schemas.ts";
 import { CaptureQrV2 } from "../apps/web/src/lib/capture-qr.ts";
 
@@ -45,8 +47,11 @@ const MD_ROW: Record<string, string> = {
   sport_key: "The match's sport: it decides which pad the phone opens.",
   division_name: "The match's division.",
   round_label: "The round as the web's board codes it (R2, QF, SF, F, …).",
+  round_tag: "The match as the web desk and the schedule board tag it: SF·1 and SF·2 for the two semi-finals, F for a round of one match, the round's R{n} code where the board codes no round (a group or Swiss round). Additive to round_label.",
   home: "The first side's name; null while the seat has no entrant.",
   away: "The second side's name; null while the seat has no entrant.",
+  home_slot: "What the web desk prints for the first seat while it has no entrant (\"Winner of Group A\", \"Winner of SF·1\"), in English like round_label; null when the seat has an entrant or the web has no label for it.",
+  away_slot: "What the web desk prints for the second seat while it has no entrant; null when the seat has an entrant or the web has no label for it.",
   status: "upcoming (not started), in_play, or finished (decided, finalized, held, abandoned, forfeited or cancelled).",
   scheduled_at: "The match's planned start as a UTC instant; null when it has none.",
   summary: "The short score as the Match Day desk shows it in a row: a set sport's sets won, then the games and live points of the set in play (\"1–1 · 14–9\"; tennis \"1–0 · 3–2 · 40–30\", \"TB 3–2\"), the sport's own headline otherwise; the same form once finished (\"2–0\"). Never the full headline with every set's score. null before any.",
@@ -252,6 +257,7 @@ const contracts: Contract[] = [
         opens_at: "00:00 of day in tz, as a UTC instant. Before it the code answers 403 MD_NOT_OPEN.",
         expires_at: "24:00 of day in tz, as a UTC instant. From it the code answers 410 MD_ENDED.",
         can_approve: "Whether the code was minted with \"can approve draws\": without it the phone shows an approval's banner with no button.",
+        can_call: "Whether the code was minted with \"Call matches to courts\" (added 2026-11-13, Task 8e): with it the phone may call a match onto a court and Undo the call (capture-matchday-call.v1); without it the call and its Undo answer MD_NO_CALL, and the candidates still read.",
         courts: "One card per court in scope, in the order the web gives (the organisation's venue order, then its court order): the board's courts — every live division's candidate courts and every court holding one of the competition's matches today.",
         "courts.court_name": "The court's name as the web's board names it.",
         "courts.venue_name": "The court's venue's name.",
@@ -266,6 +272,7 @@ const contracts: Contract[] = [
         "approvals.stage_id": "The stage to review and approve.",
         "approvals.label": "The stage's name.",
         "approvals.round": "swiss only: the round awaiting pairing (the phone's \"Round 4 pairings are ready\"); null for a draw.",
+        "approvals.waiting": "stage_complete: a draw whose source stages are every one decided but not yet completed on the web desk. Listed so the phone can say \"complete the stage on the web desk\"; it has no button, and the approval routes still refuse it (MD_STALE). null for a ready draw and for a Swiss approval.",
         ...Object.fromEntries(
           ["courts.now", "courts.next", "courts.finished", "no_court", "online"].flatMap((at) =>
             Object.entries(MD_ROW).map(([field, text]) => [`${at}.${field}`, text]),
@@ -351,6 +358,82 @@ const contracts: Contract[] = [
           code: "The machine word the phone keys its copy on: one of the plan's MD_ words, a closed list. The v1 envelope's own answers (429 RATE_LIMITED, 404 NOT_FOUND, 422, 500 INTERNAL) are not md_ refusals and are outside this shape; the phone reads them by status.",
           message: "A plain English developer string; the phone never shows it.",
           opens_at: "MD_NOT_OPEN only: when the code's day starts, as a UTC instant.",
+        },
+      },
+    },
+  },
+  {
+    file: "capture-matchday-call.v1.json",
+    title: "Seazn Match Day code call, v1: GET /api/v1/match-day-code/courts/{courtId}/candidates, POST|DELETE /api/v1/match-day-code/fixtures/{fixtureId}/call",
+    root: {
+      twin: CaptureMatchdayCandidates,
+      description: `A phone holding a Match Day code calls a match onto a court (added 2026-11-13, Task 8e: the owner reversed ${MD_SPEC} §1/§3's "a code never calls a match to a court" for a code minted with "Call matches to courts"). Authenticated by Authorization: Bearer md_… only. The root is GET /api/v1/match-day-code/courts/{courtId}/candidates: the matches that could start on that court now, as the web desk's free-court panel offers them, limited to the code's scope; it needs no tick. POST /api/v1/match-day-code/fixtures/{fixtureId}/call with $defs.request previews the call ($defs.preview, nothing written) or makes it ($defs.call); DELETE on the same path undoes it ($defs.undo). The preview, the call and the Undo need a code minted with "Call matches to courts" (the day read's can_call). Every answer is \`data\` in the v1 envelope {ok: true, data, requestId}; $defs.refusal is \`error\` in {ok: false, error, requestId}. Nothing in it is a credential. ${PINNED_BY}`,
+      props: {
+        court_id: "The court asked about: one in the code's scope (a venue code's venue's courts, a courts code's courts; a whole-competition code any of the organisation's courts).",
+        court_name: "The court's name.",
+        candidates: "The matches that could start on the court now, best first, as the web desk ranks them: unblocked before blocked, then the court's own next match, then other courts' next matches (the furthest behind first) and matches called onto another court and not started, then the ready matches with no court. Only matches the code's day read could list (a venue or courts code never offers a match from a court it does not cover; the no-court matches are a whole-competition code's only), whose division may play on this court or that are already planned on it, with both sides known. Empty when there is none.",
+        "candidates.match": "The match as the day read lists it (capture-matchday-day.v1's row).",
+        ...Object.fromEntries(Object.entries(MD_ROW).map(([field, text]) => [`candidates.match.${field}`, text])),
+        "candidates.source": "this_court (the court's own next match), other_court (another court's next match, or a match called onto another court and not started), or no_court (a ready match with no court).",
+        "candidates.from_court_name": "other_court: the court it waits on, or is called onto. null otherwise.",
+        "candidates.planned_at": "The match's planned start as a UTC instant: where it waits, or a no-court match's own. null when it has none, and for a match called elsewhere (the call replaced its plan).",
+        "candidates.waiting_minutes": "Whole minutes from now until its estimated start where it waits; 0 for a called or no-court match.",
+        "candidates.behind_minutes": "Whole minutes its estimated start is past its planned time; for a no-court match, how long its planned time has passed.",
+        "candidates.blocked": "A hard stop, or null: a player of the match (a doubles partner counts; for a side with no roster, the side itself) is in a match playing, or called, elsewhere. The call would be refused MD_CALL_REFUSED player_busy.",
+        "candidates.blocked.person_name": "The busy player's name (or the side's, for a side with no roster).",
+        "candidates.blocked.court_name": "The court that match is on; null when it has none.",
+      },
+    },
+    defs: {
+      request: {
+        twin: CaptureMatchdayCallRequest,
+        description: "The call's body, POST /api/v1/match-day-code/fixtures/{fixtureId}/call: the court to call the match onto, and whether this is the preview.",
+        props: {
+          court_id: "The court: a free one in the code's scope, usually from the candidates.",
+          preview: "true: answer $defs.preview and write nothing. false: call the match now and answer $defs.call.",
+        },
+      },
+      preview: {
+        twin: CaptureMatchdayCallPreview,
+        description: "The preview's 200 (preview true): what calling the match onto the court now would do to the court's day, exactly as the web desk previews it. Nothing is written. A call that would be refused is refused here too, with the same refusal.",
+        props: {
+          shifts: "The court's unstarted matches today, in planned order, whose estimated start the call moves past their planned time. Planned times are never written: a call changes only the called match.",
+          "shifts.fixture_id": "The match pushed later.",
+          "shifts.label": "\"{home} v {away}\", with — for a side not yet known.",
+          "shifts.round_label": "Its round as the web's board codes it (R2, QF, SF, F, …), in English.",
+          "shifts.planned_at": "Its planned start, a UTC instant.",
+          "shifts.estimated_at": "Its estimated start after the call, a UTC instant.",
+          warnings: "What the operator confirms past (none refuses the call): pushes_later {count} — how many matches shift; rest_gap {person_name, minutes, min_rest} — a player's rest is under the division's minimum; past_day_end {court_name, until} — the court's queue runs past its last closing time today; crosses_closure {court_name, from, until} — the called match runs into a break in the court's hours; court_closed {court_name, until, since} — the court is closed now (until: when it reopens, null when not today; since: when its hours last ended, null when it has not opened today).",
+        },
+      },
+      call: {
+        twin: CaptureMatchdayCallOk,
+        description: "The call's 200 (preview false): the match is called onto the court now, logged against the code. The phone refreshes its day read: the court shows called.",
+        props: {
+          fixture_id: "The match called.",
+          court_id: "The court it is called onto.",
+          called_at: "When, a UTC instant: also its new scheduled time.",
+        },
+      },
+      undo: {
+        twin: CaptureMatchdayUndoOk,
+        description: "The Undo call's 200, DELETE /api/v1/match-day-code/fixtures/{fixtureId}/call: the match is back on the court and at the time it had before it was called, logged against the code. A code undoes only a call a Match Day code made (any code's), never the web desk's (MD_CALL_REFUSED not_code_call); the match must be in the code's scope where it is now, on the called court. The slot it goes back to is not judged against the code's scope: Undo puts back the organiser's plan, even on a court the code does not cover.",
+        props: {
+          fixture_id: "The match.",
+          court_id: "The court it is back on; null when it had none.",
+          scheduled_at: "The time it is back at, a UTC instant; null when it had none.",
+        },
+      },
+      refusal: {
+        twin: CaptureMatchdayCallRefusal,
+        description: "Every refusal, the envelope's error: 401 MD_UNKNOWN (no such code, or no md_ bearer), 410 MD_WITHDRAWN, 410 MD_ENDED, 403 MD_NOT_OPEN (with opens_at), 403 MD_NO_CALL (the code was minted without \"Call matches to courts\": the preview, the call and the Undo; the candidates still read), 403 MD_OUT_OF_SCOPE (the court, or the match where it is now, is not in the code's scope), 409 MD_CALL_REFUSED (the web desk's own refusal, with reason). A 404 NOT_FOUND (no such court or match), a 422 (a bad body), a 429 RATE_LIMITED (with Retry-After) and a 500 INTERNAL are the v1 envelope's own answers, outside this shape.",
+        props: {
+          code: "The machine word the phone keys its copy on: a closed list.",
+          message: "A plain English developer string; the phone never shows it.",
+          opens_at: "MD_NOT_OPEN only: when the code's day starts, as a UTC instant.",
+          reason: "MD_CALL_REFUSED only: not_candidate_court (the court is not one the match's division plays on), player_busy (a player is playing, or called, on another court), court_busy (the court has a match playing or called, from any competition), started (the match has started or is over; for an Undo, it has started), not_ready (a side is still to be decided), not_called (Undo: the match is not called, or the web board has moved it since), frozen (the competition is read-only on its organisation's plan), not_code_call (Undo: the match was called on the web desk, not by a Match Day code; undo it there).",
+          person_name: "player_busy only: the busy player's name (or the side's, for a side with no roster).",
+          court_name: "player_busy: the court the busy player is on (null when that match has no court); court_busy and not_candidate_court: the court asked for. Absent otherwise.",
         },
       },
     },

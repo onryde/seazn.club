@@ -1,0 +1,653 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://seazn.club/contracts/capture-matchday-call.v1.json",
+  "title": "Seazn Match Day code call, v1: GET /api/v1/match-day-code/courts/{courtId}/candidates, POST|DELETE /api/v1/match-day-code/fixtures/{fixtureId}/call",
+  "description": "A phone holding a Match Day code calls a match onto a court (added 2026-11-13, Task 8e: the owner reversed capture S4 Match Day design 2026-11-07 §1/§3's \"a code never calls a match to a court\" for a code minted with \"Call matches to courts\"). Authenticated by Authorization: Bearer md_… only. The root is GET /api/v1/match-day-code/courts/{courtId}/candidates: the matches that could start on that court now, as the web desk's free-court panel offers them, limited to the code's scope; it needs no tick. POST /api/v1/match-day-code/fixtures/{fixtureId}/call with $defs.request previews the call ($defs.preview, nothing written) or makes it ($defs.call); DELETE on the same path undoes it ($defs.undo). The preview, the call and the Undo need a code minted with \"Call matches to courts\" (the day read's can_call). Every answer is `data` in the v1 envelope {ok: true, data, requestId}; $defs.refusal is `error` in {ok: false, error, requestId}. Nothing in it is a credential. Vendored into the capture repo; its sha256, parity with its zod twin and its fixtures are pinned by apps/web/src/server/api-v1/__tests__/capture-contract.test.ts.",
+  "type": "object",
+  "properties": {
+    "court_id": {
+      "description": "The court asked about: one in the code's scope (a venue code's venue's courts, a courts code's courts; a whole-competition code any of the organisation's courts).",
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+    },
+    "court_name": {
+      "description": "The court's name.",
+      "type": "string"
+    },
+    "candidates": {
+      "description": "The matches that could start on the court now, best first, as the web desk ranks them: unblocked before blocked, then the court's own next match, then other courts' next matches (the furthest behind first) and matches called onto another court and not started, then the ready matches with no court. Only matches the code's day read could list (a venue or courts code never offers a match from a court it does not cover; the no-court matches are a whole-competition code's only), whose division may play on this court or that are already planned on it, with both sides known. Empty when there is none.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "match": {
+            "description": "The match as the day read lists it (capture-matchday-day.v1's row).",
+            "type": "object",
+            "properties": {
+              "fixture_id": {
+                "description": "The match.",
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              "sport_key": {
+                "description": "The match's sport: it decides which pad the phone opens.",
+                "type": "string",
+                "minLength": 1
+              },
+              "division_name": {
+                "description": "The match's division.",
+                "type": "string"
+              },
+              "round_label": {
+                "description": "The round as the web's board codes it (R2, QF, SF, F, …).",
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "round_tag": {
+                "description": "The match as the web desk and the schedule board tag it: SF·1 and SF·2 for the two semi-finals, F for a round of one match, the round's R{n} code where the board codes no round (a group or Swiss round). Additive to round_label.",
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "home": {
+                "description": "The first side's name; null while the seat has no entrant.",
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "away": {
+                "description": "The second side's name; null while the seat has no entrant.",
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "home_slot": {
+                "description": "What the web desk prints for the first seat while it has no entrant (\"Winner of Group A\", \"Winner of SF·1\"), in English like round_label; null when the seat has an entrant or the web has no label for it.",
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "away_slot": {
+                "description": "What the web desk prints for the second seat while it has no entrant; null when the seat has an entrant or the web has no label for it.",
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "status": {
+                "description": "upcoming (not started), in_play, or finished (decided, finalized, held, abandoned, forfeited or cancelled).",
+                "type": "string",
+                "enum": [
+                  "upcoming",
+                  "in_play",
+                  "finished"
+                ]
+              },
+              "scheduled_at": {
+                "description": "The match's planned start as a UTC instant; null when it has none.",
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "summary": {
+                "description": "The short score as the Match Day desk shows it in a row: a set sport's sets won, then the games and live points of the set in play (\"1–1 · 14–9\"; tennis \"1–0 · 3–2 · 40–30\", \"TB 3–2\"), the sport's own headline otherwise; the same form once finished (\"2–0\"). Never the full headline with every set's score. null before any.",
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "fixture_id",
+              "sport_key",
+              "division_name",
+              "round_label",
+              "round_tag",
+              "home",
+              "away",
+              "home_slot",
+              "away_slot",
+              "status",
+              "scheduled_at",
+              "summary"
+            ],
+            "additionalProperties": false
+          },
+          "source": {
+            "description": "this_court (the court's own next match), other_court (another court's next match, or a match called onto another court and not started), or no_court (a ready match with no court).",
+            "type": "string",
+            "enum": [
+              "this_court",
+              "other_court",
+              "no_court"
+            ]
+          },
+          "from_court_name": {
+            "description": "other_court: the court it waits on, or is called onto. null otherwise.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "planned_at": {
+            "description": "The match's planned start as a UTC instant: where it waits, or a no-court match's own. null when it has none, and for a match called elsewhere (the call replaced its plan).",
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "waiting_minutes": {
+            "description": "Whole minutes from now until its estimated start where it waits; 0 for a called or no-court match.",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "behind_minutes": {
+            "description": "Whole minutes its estimated start is past its planned time; for a no-court match, how long its planned time has passed.",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "blocked": {
+            "description": "A hard stop, or null: a player of the match (a doubles partner counts; for a side with no roster, the side itself) is in a match playing, or called, elsewhere. The call would be refused MD_CALL_REFUSED player_busy.",
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "player_busy"
+                  },
+                  "person_name": {
+                    "description": "The busy player's name (or the side's, for a side with no roster).",
+                    "type": "string"
+                  },
+                  "court_name": {
+                    "description": "The court that match is on; null when it has none.",
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "person_name",
+                  "court_name"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "match",
+          "source",
+          "from_court_name",
+          "planned_at",
+          "waiting_minutes",
+          "behind_minutes",
+          "blocked"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "court_id",
+    "court_name",
+    "candidates"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "request": {
+      "description": "The call's body, POST /api/v1/match-day-code/fixtures/{fixtureId}/call: the court to call the match onto, and whether this is the preview.",
+      "type": "object",
+      "properties": {
+        "court_id": {
+          "description": "The court: a free one in the code's scope, usually from the candidates.",
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+        },
+        "preview": {
+          "description": "true: answer $defs.preview and write nothing. false: call the match now and answer $defs.call.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "court_id",
+        "preview"
+      ],
+      "additionalProperties": false
+    },
+    "preview": {
+      "description": "The preview's 200 (preview true): what calling the match onto the court now would do to the court's day, exactly as the web desk previews it. Nothing is written. A call that would be refused is refused here too, with the same refusal.",
+      "type": "object",
+      "properties": {
+        "shifts": {
+          "description": "The court's unstarted matches today, in planned order, whose estimated start the call moves past their planned time. Planned times are never written: a call changes only the called match.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "fixture_id": {
+                "description": "The match pushed later.",
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              "label": {
+                "description": "\"{home} v {away}\", with — for a side not yet known.",
+                "type": "string"
+              },
+              "round_label": {
+                "description": "Its round as the web's board codes it (R2, QF, SF, F, …), in English.",
+                "type": "string",
+                "minLength": 1
+              },
+              "planned_at": {
+                "description": "Its planned start, a UTC instant.",
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+              },
+              "estimated_at": {
+                "description": "Its estimated start after the call, a UTC instant.",
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+              }
+            },
+            "required": [
+              "fixture_id",
+              "label",
+              "round_label",
+              "planned_at",
+              "estimated_at"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "warnings": {
+          "description": "What the operator confirms past (none refuses the call): pushes_later {count} — how many matches shift; rest_gap {person_name, minutes, min_rest} — a player's rest is under the division's minimum; past_day_end {court_name, until} — the court's queue runs past its last closing time today; crosses_closure {court_name, from, until} — the called match runs into a break in the court's hours; court_closed {court_name, until, since} — the court is closed now (until: when it reopens, null when not today; since: when its hours last ended, null when it has not opened today).",
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "pushes_later"
+                  },
+                  "count": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "kind",
+                  "count"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "rest_gap"
+                  },
+                  "person_name": {
+                    "type": "string"
+                  },
+                  "minutes": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "min_rest": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "kind",
+                  "person_name",
+                  "minutes",
+                  "min_rest"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "past_day_end"
+                  },
+                  "court_name": {
+                    "type": "string"
+                  },
+                  "until": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "court_name",
+                  "until"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "crosses_closure"
+                  },
+                  "court_name": {
+                    "type": "string"
+                  },
+                  "from": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                  },
+                  "until": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "court_name",
+                  "from",
+                  "until"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "court_closed"
+                  },
+                  "court_name": {
+                    "type": "string"
+                  },
+                  "until": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "since": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "court_name",
+                  "until",
+                  "since"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        }
+      },
+      "required": [
+        "shifts",
+        "warnings"
+      ],
+      "additionalProperties": false
+    },
+    "call": {
+      "description": "The call's 200 (preview false): the match is called onto the court now, logged against the code. The phone refreshes its day read: the court shows called.",
+      "type": "object",
+      "properties": {
+        "fixture_id": {
+          "description": "The match called.",
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+        },
+        "court_id": {
+          "description": "The court it is called onto.",
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+        },
+        "called_at": {
+          "description": "When, a UTC instant: also its new scheduled time.",
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+        }
+      },
+      "required": [
+        "fixture_id",
+        "court_id",
+        "called_at"
+      ],
+      "additionalProperties": false
+    },
+    "undo": {
+      "description": "The Undo call's 200, DELETE /api/v1/match-day-code/fixtures/{fixtureId}/call: the match is back on the court and at the time it had before it was called, logged against the code. A code undoes only a call a Match Day code made (any code's), never the web desk's (MD_CALL_REFUSED not_code_call); the match must be in the code's scope where it is now, on the called court. The slot it goes back to is not judged against the code's scope: Undo puts back the organiser's plan, even on a court the code does not cover.",
+      "type": "object",
+      "properties": {
+        "fixture_id": {
+          "description": "The match.",
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+        },
+        "court_id": {
+          "description": "The court it is back on; null when it had none.",
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scheduled_at": {
+          "description": "The time it is back at, a UTC instant; null when it had none.",
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "fixture_id",
+        "court_id",
+        "scheduled_at"
+      ],
+      "additionalProperties": false
+    },
+    "refusal": {
+      "description": "Every refusal, the envelope's error: 401 MD_UNKNOWN (no such code, or no md_ bearer), 410 MD_WITHDRAWN, 410 MD_ENDED, 403 MD_NOT_OPEN (with opens_at), 403 MD_NO_CALL (the code was minted without \"Call matches to courts\": the preview, the call and the Undo; the candidates still read), 403 MD_OUT_OF_SCOPE (the court, or the match where it is now, is not in the code's scope), 409 MD_CALL_REFUSED (the web desk's own refusal, with reason). A 404 NOT_FOUND (no such court or match), a 422 (a bad body), a 429 RATE_LIMITED (with Retry-After) and a 500 INTERNAL are the v1 envelope's own answers, outside this shape.",
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "code": {
+              "description": "The machine word the phone keys its copy on: a closed list.",
+              "type": "string",
+              "const": "MD_CALL_REFUSED"
+            },
+            "message": {
+              "description": "A plain English developer string; the phone never shows it.",
+              "type": "string"
+            },
+            "reason": {
+              "description": "MD_CALL_REFUSED only: not_candidate_court (the court is not one the match's division plays on), player_busy (a player is playing, or called, on another court), court_busy (the court has a match playing or called, from any competition), started (the match has started or is over; for an Undo, it has started), not_ready (a side is still to be decided), not_called (Undo: the match is not called, or the web board has moved it since), frozen (the competition is read-only on its organisation's plan), not_code_call (Undo: the match was called on the web desk, not by a Match Day code; undo it there).",
+              "type": "string",
+              "enum": [
+                "not_candidate_court",
+                "player_busy",
+                "court_busy",
+                "started",
+                "not_ready",
+                "not_called",
+                "frozen",
+                "not_code_call"
+              ]
+            },
+            "person_name": {
+              "description": "player_busy only: the busy player's name (or the side's, for a side with no roster).",
+              "type": "string"
+            },
+            "court_name": {
+              "description": "player_busy: the court the busy player is on (null when that match has no court); court_busy and not_candidate_court: the court asked for. Absent otherwise.",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "reason"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "code": {
+              "description": "The machine word the phone keys its copy on: a closed list.",
+              "type": "string",
+              "enum": [
+                "MD_UNKNOWN",
+                "MD_WITHDRAWN",
+                "MD_ENDED",
+                "MD_NOT_OPEN",
+                "MD_OUT_OF_SCOPE",
+                "MD_NO_CALL"
+              ]
+            },
+            "message": {
+              "description": "A plain English developer string; the phone never shows it.",
+              "type": "string"
+            },
+            "opens_at": {
+              "description": "MD_NOT_OPEN only: when the code's day starts, as a UTC instant.",
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+            }
+          },
+          "required": [
+            "code",
+            "message"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
+}

@@ -85,6 +85,24 @@ interface CallTarget {
   schedule_locked: boolean;
 }
 
+/**
+ * Who makes a call or its Undo (Task 8e, owner 2026-11-13): an organiser on the desk (`called_by`, the session's user), or a
+ * Match Day code minted with "Call matches to courts" (`called_by_code`; never the code's issuer, who did not make it). The
+ * desk's door (`requireResourceAuth`) and the code's door (`matchDayCodeOf` + match-day-code-call.ts) each decide who may;
+ * the rules of a call below are the same for both.
+ */
+export type CallActor = { kind: "user"; userId: string | null } | { kind: "match_day_code"; codeId: string };
+export type CallCaller = { orgId: string; actor: CallActor };
+
+/** The desk's caller: the organiser the session or key resolved to. */
+export const deskCaller = (auth: AuthCtx): CallCaller => ({ orgId: auth.orgId, actor: { kind: "user", userId: auth.userId } });
+
+/** A door's own rule, asked inside the call's transaction once the fixture is read (and, for a call or an Undo, locked), before
+ *  any rule of the call is judged or anything written: a Match Day code's scope (match-day-code-call.ts). Inside, so a board
+ *  edit cannot move the match out of scope between the check and the write. */
+export type CallGuard = (tx: Tx) => Promise<void>;
+export type CallOpts = { guard?: CallGuard };
+
 function refuse(code: CallRefusalCode, message: string, details?: Record<string, unknown>): never {
   throw new HttpError(409, message, code, details);
 }
@@ -498,11 +516,24 @@ export async function callFixtureToCourt(
   courtId: string,
   now: Date = new Date(),
 ): Promise<{ fixture_id: string; court_id: string; called_at: string }> {
+  return callFixtureAs(deskCaller(auth), fixtureId, courtId, now);
+}
+
+/** `callFixtureToCourt`'s core, for any caller (Task 8e): the desk's, or a Match Day code's with its scope as `opts.guard`. */
+export async function callFixtureAs(
+  caller: CallCaller,
+  fixtureId: string,
+  courtId: string,
+  now: Date = new Date(),
+  opts: CallOpts = {},
+): Promise<{ fixture_id: string; court_id: string; called_at: string }> {
+  const by = caller.actor.kind === "user" ? { user: caller.actor.userId, code: null } : { user: null, code: caller.actor.codeId };
   // Resolved BEFORE the transaction: the lookup queries the POOLED `sql` proxy (`getLimit`), and `withTenant` pins a pooled
   // connection for its whole callback (entitlement-freeze.ts). Keyed on the ORG, so it needs no id the transaction reads.
-  const frozen = await frozenCompetitionIds(auth.orgId);
-  const out = await withTenant(auth.orgId, async (tx) => {
-    const f = await readFixture(tx, auth.orgId, fixtureId, true);
+  const frozen = await frozenCompetitionIds(caller.orgId);
+  const out = await withTenant(caller.orgId, async (tx) => {
+    const f = await readFixture(tx, caller.orgId, fixtureId, true);
+    await opts.guard?.(tx);
     assertNotFrozen(frozen, f.competition_id);
     const court = await targetCourt(tx, courtId);
     const courtNames = await courtNamesById(tx);
@@ -517,11 +548,12 @@ export async function callFixtureToCourt(
        where id = ${f.id}`;
     await tx`
       insert into fixture_calls
-        (fixture_id, org_id, court_id, called_at, called_by, prev_court_id, prev_venue_id, prev_scheduled_at)
+        (fixture_id, org_id, court_id, called_at, called_by, called_by_code, prev_court_id, prev_venue_id, prev_scheduled_at)
       values
-        (${f.id}, ${auth.orgId}, ${court.id}, ${now}, ${auth.userId}, ${prev.court}, ${prev.venue}, ${prev.at})
+        (${f.id}, ${caller.orgId}, ${court.id}, ${now}, ${by.user}, ${by.code}, ${prev.court}, ${prev.venue}, ${prev.at})
       on conflict (fixture_id) do update
         set court_id = excluded.court_id, called_at = excluded.called_at, called_by = excluded.called_by,
+            called_by_code = excluded.called_by_code,
             prev_court_id = excluded.prev_court_id, prev_venue_id = excluded.prev_venue_id,
             prev_scheduled_at = excluded.prev_scheduled_at`;
     await recordScheduleEdit(tx, f, { at: now, court: court.id, venue: court.venue_id });
@@ -543,9 +575,19 @@ export async function undoCall(
   auth: AuthCtx,
   fixtureId: string,
 ): Promise<{ fixture_id: string; court_id: string | null; scheduled_at: string | null }> {
-  const frozen = await frozenCompetitionIds(auth.orgId); // before the transaction: see callFixtureToCourt
-  const out = await withTenant(auth.orgId, async (tx) => {
-    const f = await readFixture(tx, auth.orgId, fixtureId, true);
+  return undoCallAs(deskCaller(auth), fixtureId);
+}
+
+/** `undoCall`'s core, for any caller (Task 8e). The Undo writes no caller: it deletes the call row. */
+export async function undoCallAs(
+  caller: CallCaller,
+  fixtureId: string,
+  opts: CallOpts = {},
+): Promise<{ fixture_id: string; court_id: string | null; scheduled_at: string | null }> {
+  const frozen = await frozenCompetitionIds(caller.orgId); // before the transaction: see callFixtureToCourt
+  const out = await withTenant(caller.orgId, async (tx) => {
+    const f = await readFixture(tx, caller.orgId, fixtureId, true);
+    await opts.guard?.(tx);
     assertNotFrozen(frozen, f.competition_id);
     const call = await readCall(tx, f.id);
     if (!call) refuse(CALL_REFUSAL.NOT_CALLED, "this match is not called");
@@ -588,11 +630,23 @@ export async function previewCall(
   now: Date = new Date(),
   opts: { locale?: Locale } = {},
 ): Promise<CallPreview> {
+  return previewCallAs(deskCaller(auth), fixtureId, courtId, now, opts);
+}
+
+/** `previewCall`'s core, for any caller (Task 8e). Writes nothing, whoever asks. */
+export async function previewCallAs(
+  caller: CallCaller,
+  fixtureId: string,
+  courtId: string,
+  now: Date = new Date(),
+  opts: CallOpts & { locale?: Locale } = {},
+): Promise<CallPreview> {
   // Read before the transaction (a file, not a connection): the round names printed inside it are in the reader's language.
   const dict = await getDictionary(opts.locale ?? DEFAULT_LOCALE, "ui");
-  const frozen = await frozenCompetitionIds(auth.orgId); // before the transaction: see callFixtureToCourt
-  return withTenant(auth.orgId, async (tx) => {
-    const f = await readFixture(tx, auth.orgId, fixtureId, false);
+  const frozen = await frozenCompetitionIds(caller.orgId); // before the transaction: see callFixtureToCourt
+  return withTenant(caller.orgId, async (tx) => {
+    const f = await readFixture(tx, caller.orgId, fixtureId, false);
+    await opts.guard?.(tx);
     // The call's own refusal: a preview never offers a call that would be refused.
     assertNotFrozen(frozen, f.competition_id);
     const court = await targetCourt(tx, courtId);

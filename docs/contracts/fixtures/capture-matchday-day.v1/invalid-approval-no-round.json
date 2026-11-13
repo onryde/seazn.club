@@ -12,6 +12,7 @@
     "label": "Hall A"
   },
   "can_approve": true,
+  "can_call": false,
   "courts": [
     {
       "court_id": "0e5f6a7b-8c9d-4e0f-8a1b-3c4d5e6f7a8b",
@@ -31,7 +32,8 @@
       "stage_id": "3b8c9d0e-1f2a-4b3c-bd4e-6f7a8b9c0d1e",
       "division_name": "Men's singles",
       "label": "Finals",
-      "round": null
+      "round": null,
+      "waiting": null
     },
     {
       "kind": "swiss",

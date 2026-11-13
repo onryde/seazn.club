@@ -3,7 +3,10 @@
 import { describe, expect, it } from "vitest";
 import en from "@/dictionaries/en/ui.json";
 import type { MatchDayCourt } from "@/lib/match-day/types";
-import { codeVenues, hasQr, scopeBody, scopeWords } from "../match-day-code-sheet";
+import es from "@/dictionaries/es/ui.json";
+import fr from "@/dictionaries/fr/ui.json";
+import nl from "@/dictionaries/nl/ui.json";
+import { codeVenues, hasQr, mintBody, powersWords, scopeBody, scopeWords } from "../match-day-code-sheet";
 
 const court = (court_id: string, court_name: string, venue_id: string, venue_name: string) =>
   ({ court_id, court_name, venue_id, venue_name }) as MatchDayCourt;
@@ -50,5 +53,30 @@ describe("hasQr (MD-1 final review I3)", () => {
   it("offers Show QR only for a code listed with its url, never for one listed with url null", () => {
     expect(hasQr({ url: "https://seazn.club/day/md_x" })).toBe(true);
     expect(hasQr({ url: null })).toBe(false);
+  });
+});
+
+describe("the \"Call matches to courts\" tick (Task 8e)", () => {
+  it("the mint sends both powers, each as ticked", () => {
+    const scope = { kind: "competition" } as const;
+    expect(mintBody(scope, "2026-11-13", false, true)).toEqual({ scope, day: "2026-11-13", can_approve: false, can_call: true });
+    expect(mintBody(scope, "2026-11-13", true, false)).toEqual({ scope, day: "2026-11-13", can_approve: true, can_call: false });
+  });
+  it("a listed code names each power it has, and nothing for none", () => {
+    expect(powersWords(en, { can_approve: false, can_call: false })).toBe("");
+    expect(powersWords(en, { can_approve: false, can_call: true })).toBe(" · Calls matches");
+    expect(powersWords(en, { can_approve: true, can_call: true })).toBe(" · Approves draws · Calls matches");
+  });
+  it("the tick and the list's word are in the desk's four languages", () => {
+    expect(en["matchDay.code.call"]).toBe("Call matches to courts");
+    let checked = 0;
+    for (const dict of [es, fr, nl]) {
+      for (const key of ["matchDay.code.call", "matchDay.code.calls"] as const) {
+        expect(dict[key], key).toBeTruthy();
+        expect(dict[key], key).not.toBe(en[key]);
+        checked++;
+      }
+    }
+    expect(checked).toBe(6);
   });
 });

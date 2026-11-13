@@ -362,6 +362,8 @@ export const CreateMatchDayCode = z.object({
   day: z.iso.date().optional(),
   /** "Can approve draws": off unless ticked. */
   can_approve: z.boolean().default(false),
+  /** "Call matches to courts" (Task 8e): off unless ticked. */
+  can_call: z.boolean().default(false),
 });
 export type CreateMatchDayCode = z.infer<typeof CreateMatchDayCode>;
 
@@ -376,6 +378,7 @@ export const MatchDayCode = z.object({
   opens_at: z.string(),
   expires_at: z.string(),
   can_approve: z.boolean(),
+  can_call: z.boolean(),
 });
 export type MatchDayCode = z.infer<typeof MatchDayCode>;
 

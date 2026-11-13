@@ -12,6 +12,7 @@
     "label": "Court 2"
   },
   "can_approve": false,
+  "can_call": true,
   "courts": [
     {
       "court_id": "0e5f6a7b-8c9d-4e0f-8a1b-3c4d5e6f7a8b",
@@ -25,8 +26,11 @@
           "sport_key": "badminton",
           "division_name": "Men's doubles",
           "round_label": "QF",
+          "round_tag": "QF·2",
           "home": null,
           "away": null,
+          "home_slot": "Winner of Group A",
+          "away_slot": "Runner-up of Group B",
           "status": "upcoming",
           "scheduled_at": "2026-11-07T09:20:00.000Z",
           "summary": null

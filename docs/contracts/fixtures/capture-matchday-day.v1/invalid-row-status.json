@@ -12,6 +12,7 @@
     "label": "SAFE Open 2026"
   },
   "can_approve": false,
+  "can_call": false,
   "courts": [
     {
       "court_id": "6a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
@@ -23,8 +24,11 @@
         "sport_key": "badminton",
         "division_name": "Men's doubles",
         "round_label": "R1",
+        "round_tag": "R1",
         "home": "Ann & Bob",
         "away": "Cat & Dan",
+        "home_slot": null,
+        "away_slot": null,
         "status": "decided",
         "scheduled_at": "2026-11-07T10:00:00.000Z",
         "summary": "1–1 · 14–9"
@@ -35,8 +39,11 @@
           "sport_key": "badminton",
           "division_name": "Men's singles",
           "round_label": "R2",
+          "round_tag": "R2",
           "home": "Patel",
           "away": "Okafor",
+          "home_slot": null,
+          "away_slot": null,
           "status": "upcoming",
           "scheduled_at": "2026-11-07T09:40:00.000Z",
           "summary": null
@@ -48,8 +55,11 @@
           "sport_key": "badminton",
           "division_name": "Men's doubles",
           "round_label": "R1",
+          "round_tag": "R1",
           "home": "Ann & Bob",
           "away": "Cat & Dan",
+          "home_slot": null,
+          "away_slot": null,
           "status": "finished",
           "scheduled_at": "2026-11-07T08:00:00.000Z",
           "summary": "2–0"
@@ -68,8 +78,11 @@
           "sport_key": "badminton",
           "division_name": "Men's doubles",
           "round_label": "QF",
+          "round_tag": "QF",
           "home": null,
           "away": null,
+          "home_slot": null,
+          "away_slot": null,
           "status": "upcoming",
           "scheduled_at": "2026-11-07T09:20:00.000Z",
           "summary": null
@@ -84,8 +97,11 @@
       "sport_key": "badminton",
       "division_name": "Women's singles",
       "round_label": "R2",
+      "round_tag": "R2",
       "home": "Singh",
       "away": "Murphy",
+      "home_slot": null,
+      "away_slot": null,
       "status": "upcoming",
       "scheduled_at": null,
       "summary": null
