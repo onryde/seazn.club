@@ -89,6 +89,7 @@ import { listQuickMatchSports } from "@/server/usecases/quick-match-sports";
 import { hashVisitorKey, mintVisitorKey, QUICK_MATCH_VISITOR_COOKIE } from "@/server/usecases/quick-match-tokens";
 import { systemAuth } from "@/lib/quick-match-auth";
 import { playToDecided } from "@/server/usecases/__tests__/_quick-match-probe";
+import { scoreEvent } from "@/server/usecases/scoring";
 import enMarketing from "@/dictionaries/en/marketing.json";
 import frMarketing from "@/dictionaries/fr/marketing.json";
 import HomePage from "../page";
@@ -514,6 +515,43 @@ describe.skipIf(!HAS_DB)("the recent strip's rows (real createQuickMatch, real r
     expect(cardOf(none)).toBeNull();
     expect(at(none, "qm-start-new")).toBe(-1);
     expect(at(none, "qm-setup-form"), "the form is there either way").toBeGreaterThan(-1);
+  });
+
+  // Review m3 (controller ruling 2026-11-13): the card is the NEWEST match that is unfinished and not expired, saved or not.
+  it("the sequence: a finished match is no card; a void of its deciding event makes it unfinished, and it comes back as the card", async () => {
+    const key = mintVisitorKey();
+    const out = await make(hashVisitorKey(key));
+    const [only] = await seated(out);
+    expect(only, "premise: two sides, once: one match").toBeDefined();
+    const r = await playToDecided(systemAuth(), only!.id);
+    if (r.kind !== "decided") throw new Error(`premise: the match decides, got ${JSON.stringify(r)}`);
+    jar.visitor = key;
+    const done = await render("en", "play");
+    expect(cardOf(done), "decided: no card").toBeNull();
+    expect(stripHrefs(done)).toEqual([`/q/${out.token}`]);
+    // The real write path's void of the deciding event (quick-match-home.test.ts's sequence): the match is open again.
+    await scoreEvent(systemAuth(), only!.id, { expected_seq: r.lastSeq, type: "core.void", payload: { event_id: r.lastEventId } });
+    const reopened = await render("en", "play");
+    expect(cardOf(reopened), "voided: the card again").toContain(`href="/q/${out.token}"`);
+    expect(cardOf(reopened)).toContain(">0 of 1 match played<");
+    expect(stripOf(reopened), "its one row is the card").toBeNull();
+  });
+
+  it("saved or not: a SAVED unfinished match (no expiry) is the card; a newer unfinished one that has EXPIRED never is", async () => {
+    const key = mintVisitorKey();
+    const hash = hashVisitorKey(key);
+    const saved = await make(hash);
+    const expired = await make(hash);
+    // Saved as plan 3's save leaves it (a user, no expiry); the newer one is past its expiry (the sweep has not run yet).
+    await sql`update quick_matches set saved_by_user_id = ${QUICK_MATCH_SYSTEM_USER_ID}, expires_at = null where id = ${saved.id}`;
+    await sql`update quick_matches set expires_at = now() - interval '1 minute' where id = ${expired.id}`;
+    await dateRow(saved.id, "2026-11-03T09:00:00.000Z");
+    await dateRow(expired.id, "2026-11-05T09:00:00.000Z");
+    jar.visitor = key;
+    const html = await render("en", "play");
+    expect(cardOf(html)).toContain(`href="/q/${saved.token}"`);
+    expect(html, "the expired match is nowhere on the page").not.toContain(`/q/${expired.token}`);
+    expect(stripOf(html)).toBeNull();
   });
 
   it("speaks the page's language: French Continue and heading", async () => {
