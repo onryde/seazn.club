@@ -142,11 +142,12 @@ export function RegistrationHubRegistrantDetail({
   // The reference to match a transfer against (spec §6.3): this ENTRY's own, via the one reading of its three stored columns, so it
   // is the string the pay page, the mails and the CSV quote. A cart sent with 2+ entries also shows the cart's, for the mail the
   // person got about the whole cart. Both read the cart's STORED size, never the siblings still here: a lone survivor of a 3-entry
-  // cart is still `-3`, and `siblings` empty must not read as a cart of one. The entry's reference does not wrap: it is read aloud,
+  // cart is still `-3`, and `siblings` empty must not read as a cart of one. The Cart line shows exactly when the entry's own
+  // reference differs from the cart's (T19 review m6), so `entryReferenceOf` stays the one rule. The entry's reference does not wrap: it is read aloud,
   // copied and matched against a bank statement, and at 320px it would otherwise break after a hyphen (`SZ-7F3K-` / `Q2ND-2`); the
   // label beside it is what gives way.
   const entryRef = entryReferenceOf(row);
-  const cartRef = row.ref_code !== null && row.cart_size >= 2 ? row.ref_code : null;
+  const cartRef = entryRef !== row.ref_code ? row.ref_code : null;
   const showJoinCode = canEdit && row.join_code !== null && !isTerminalRegistrationStatus(row.status);
 
   return (
