@@ -45,9 +45,9 @@ import {
   queueRegistrationJoinedMail,
   playerPersonConsentsByEmail,
   anyOptedOutByRegistration,
+  knownCtxOf,
   type RegistrationRow,
   type RegistrationSettingsRow,
-  type DivisionCtx,
   type KnownCart,
 } from "./registrations";
 import { anyOptedOut, resolvePersonDisplayName } from "@/lib/name-display";
@@ -361,29 +361,6 @@ async function loadEntryDivisionCtx(divisionId: string): Promise<EntryDivisionCt
     where d.id = ${divisionId}`;
   if (!row) throw new HttpError(404, "division not found");
   return row;
-}
-
-/** The `DivisionCtx` view of a division's submit context: the same columns `divisionCtx` (registrations/lookups.ts) selects, from the
- *  read this submit already made, field for field (registration redesign B1 T5). */
-function knownCtxOf(c: EntryDivisionCtx): DivisionCtx {
-  return {
-    id: c.id,
-    competition_id: c.competition_id,
-    org_id: c.org_id,
-    comp_name: c.comp_name,
-    comp_slug: c.comp_slug,
-    comp_visibility: c.comp_visibility,
-    starts_on: c.starts_on,
-    ends_on: c.ends_on,
-    div_slug: c.div_slug,
-    org_slug: c.org_slug,
-    org_name: c.org_name,
-    default_locale: c.default_locale,
-    payment_instructions: c.payment_instructions,
-    charges_enabled: c.charges_enabled,
-    org_timezone: c.org_timezone,
-    currency: c.org_currency,
-  };
 }
 
 function eligibilityError(issues: EligibilityIssue[]): HttpError {

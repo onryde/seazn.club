@@ -20,7 +20,7 @@ import "server-only";
 //
 //   types                the row shapes, the division context and the SQL handle types the siblings share; types only
 //   helpers              pure helpers: token prefix and hash, fee math, #402 link policy, form answers
-//   lookups              shared loaders: settings, division context, registration rows by token / ref / org, token match
+//   lookups              shared loaders: settings, division context (and its projection from the submit's own read), registration rows by token / ref / org, token match
 //   people               the person behind a registration: lookup / create / reconcile, and claim invites
 //   materialise          confirmed entry -> entrant: materialise, join an existing entrant, clear the expiry
 //   waitlist             waitlist promotion: the seat gate, promote the oldest, the promoted notice
@@ -69,6 +69,7 @@ export {
   loadSettings,
   audit,
   divisionCtx,
+  knownCtxOf,
   fallbackOrigin,
   windowOpen,
   orgReg,

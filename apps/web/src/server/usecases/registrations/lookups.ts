@@ -83,6 +83,32 @@ export async function divisionCtx(db: AnySql, divisionId: string): Promise<Divis
   return row;
 }
 
+/** The `DivisionCtx` view of a division's submit context: the same columns `divisionCtx` above selects, from the
+ *  read this submit already made, field for field (registration redesign B1 T5). Moved here beside `divisionCtx` from
+ *  registration-submit.ts (B1 fix round 1, MOD-2); the submit's own row type is file-local there, and this folder never imports
+ *  that file, so the parameter names exactly what the projection reads: every `DivisionCtx` field, the org's currency under the
+ *  submit's name for it. */
+export function knownCtxOf(c: Omit<DivisionCtx, "currency"> & { org_currency: string }): DivisionCtx {
+  return {
+    id: c.id,
+    competition_id: c.competition_id,
+    org_id: c.org_id,
+    comp_name: c.comp_name,
+    comp_slug: c.comp_slug,
+    comp_visibility: c.comp_visibility,
+    starts_on: c.starts_on,
+    ends_on: c.ends_on,
+    div_slug: c.div_slug,
+    org_slug: c.org_slug,
+    org_name: c.org_name,
+    default_locale: c.default_locale,
+    payment_instructions: c.payment_instructions,
+    charges_enabled: c.charges_enabled,
+    org_timezone: c.org_timezone,
+    currency: c.org_currency,
+  };
+}
+
 
 /** Origin for emails fired from request-less paths (withdraw promotions):
  *  same override order as lib/base-url, localhost as the dev fallback.
