@@ -2,18 +2,24 @@
 // DB: every branch here is a plain function of plain data, so it is tested
 // directly rather than through a render.
 import { describe, expect, it } from "vitest";
+import uiEn from "@/dictionaries/en/ui.json";
+import uiEs from "@/dictionaries/es/ui.json";
+import uiFr from "@/dictionaries/fr/ui.json";
+import uiNl from "@/dictionaries/nl/ui.json";
 import {
   assignedTeamName,
   awaitingTeamAssignment,
   canCancelEntry,
   canJoinEntry,
-  cartSubtotal,
+  cartHeadline,
+  cartMoneySummary,
   claimHref,
   classifyStatusActionFailure,
   effectivePayDeadline,
   entryCountsTowardTotal,
   entryDisplayName,
   inviteLinks,
+  moneyLine,
   poolPlaceByDate,
   publicCheckoutPath,
   publicResendPath,
@@ -22,7 +28,9 @@ import {
   rosterCounts,
   rosterPlayerDisplayName,
   rosterVocabulary,
+  whatHappensNext,
   type EntryStatus,
+  type HeadlineKind,
 } from "../view-model";
 
 describe("effectivePayDeadline", () => {
@@ -673,46 +681,358 @@ describe("rosterVocabulary: 'checked in' only on a confirmed entry", () => {
   });
 });
 
-describe("cartSubtotal: what the Subtotal row says (never a bare 'Free' for money that is simply not due)", () => {
-  const e = (status: EntryStatus, amount_cents: number, fee_if_promoted_cents: number | null = null) => ({
-    status,
-    amount_cents,
-    fee_if_promoted_cents,
+// ---------------------------------------------------------------------------
+// Registration redesign B4 T15 (spec §5.1-5.3): the page's outcome headline, its money line and "What happens next". Every expected
+// value below is a literal from the spec's rule tables (or the T15 rulings named beside a row), never read back from the functions.
+// ---------------------------------------------------------------------------
+
+describe("status page outcome (B4 T15)", () => {
+  // Far past/future: resolveMoneyState reads deadlines against the real clock (see its own FIX #8).
+  const FUTURE = "2099-01-01T00:00:00.000Z";
+  const SOONER = "2098-06-01T00:00:00.000Z";
+  const PAST = "2000-01-01T00:00:00.000Z";
+  const CART = { expires_at: FUTURE, charges_enabled: true };
+
+  type Entry = Parameters<typeof cartMoneySummary>[0][number] & Parameters<typeof whatHappensNext>[0]["entries"][number];
+  const entry = (over: Partial<Entry> = {}): Entry => ({
+    status: "confirmed",
+    amount_cents: 0,
+    promotion_expires_at: null,
+    payment_method: "stripe",
+    settled_by: null,
+    refunded_cents: 0,
+    fee_if_promoted_cents: null,
+    join_code: null,
+    allows_new_joiner: true,
+    players: [],
+    ...over,
   });
 
-  it("live entries (pending, paid, confirmed) sum their own fees", () => {
-    expect(cartSubtotal([e("pending", 1500), e("confirmed", 1000)])).toEqual({ kind: "amount", cents: 2500 });
-    expect(cartSubtotal([e("paid", 1500)])).toEqual({ kind: "amount", cents: 1500 });
-  });
+  // One entry per state the rules name.
+  const unpaidCard = entry({ status: "pending", amount_cents: 2400, payment_method: "stripe" });
+  const offlineDue = entry({ status: "pending", amount_cents: 2400, payment_method: "offline" });
+  const windowClosed = entry({ status: "pending", amount_cents: 2400, promotion_expires_at: PAST });
+  const paidAwaiting = entry({ status: "paid", amount_cents: 1500, settled_by: "card" });
+  const freeAwaiting = entry({ status: "pending", amount_cents: 0 });
+  const confirmedCard = entry({ status: "confirmed", amount_cents: 1500, settled_by: "card" });
+  const confirmedFree = entry({ status: "confirmed", amount_cents: 0 });
+  const waived = entry({ status: "confirmed", amount_cents: 1500, settled_by: "waived" });
+  const waitlisted = entry({ status: "waitlisted", amount_cents: 0, fee_if_promoted_cents: 1500 });
+  const withdrawn = entry({ status: "withdrawn", amount_cents: 1500 });
+  const expired = entry({ status: "expired", amount_cents: 1500 });
+  const rejected = entry({ status: "rejected", amount_cents: 1500 });
 
-  it("a live entry that is genuinely free reads as an amount of 0 (the page prints 'Free' for it)", () => {
-    expect(cartSubtotal([e("confirmed", 0)])).toEqual({ kind: "amount", cents: 0 });
-  });
+  describe("cartHeadline", () => {
+    it("the empty cart is closed (the empty case, first)", () => {
+      expect(cartHeadline([], CART)).toBe("closed");
+    });
 
-  it("an ended entry's stale fee never joins a live total (the earlier FIX 1)", () => {
-    expect(cartSubtotal([e("confirmed", 1000), e("withdrawn", 1500), e("expired", 700), e("rejected", 300)])).toEqual({
-      kind: "amount",
-      cents: 1000,
+    // Spec §5.1: the first matching rule wins. Rule 2 is read as "any entry that owes its fee" (T15 ruling): a card fee owed while
+    // card payments are unavailable, and a fee owed past its pay-by date, are owed all the same — the money line counts them due
+    // (§5.3), so the headline names the same debt instead of "awaiting approval" (which rule 4 would otherwise say).
+    const RULES: { name: string; entries: Entry[]; cart?: Partial<typeof CART>; want: HeadlineKind }[] = [
+      { name: "rule 2: an unpaid card entry", entries: [unpaidCard], want: "pay" },
+      { name: "rule 2: an offline entry with its fee due", entries: [offlineDue], want: "pay" },
+      { name: "rule 2 (T15): a card fee owed while card payments are unavailable", entries: [unpaidCard], cart: { charges_enabled: false }, want: "pay" },
+      { name: "rule 2 (T15): a fee owed past its pay-by date", entries: [windowClosed], want: "pay" },
+      { name: "rule 3: a card-paid confirmed entry", entries: [confirmedCard], want: "in" },
+      { name: "rule 3: a waived entry is confirmed, not owed", entries: [waived], want: "in" },
+      { name: "rule 3: a free confirmed entry", entries: [confirmedFree], want: "in" },
+      { name: "rule 4: a paid entry awaiting approval", entries: [paidAwaiting], want: "received" },
+      { name: "rule 4: a free entry awaiting approval", entries: [freeAwaiting], want: "received" },
+      { name: "rule 5: a waitlisted entry", entries: [waitlisted], want: "waitlist" },
+      { name: "rule 6: only withdrawn", entries: [withdrawn], want: "closed" },
+      { name: "rule 6: only expired", entries: [expired], want: "closed" },
+      { name: "rule 6: only rejected", entries: [rejected], want: "closed" },
+      { name: "rule 6: withdrawn + expired + rejected", entries: [withdrawn, expired, rejected], want: "closed" },
+      // Precedence pairs (mixed carts).
+      { name: "pending-due + confirmed -> pay", entries: [confirmedCard, unpaidCard], want: "pay" },
+      { name: "pending-due + waitlisted -> pay", entries: [waitlisted, offlineDue], want: "pay" },
+      { name: "confirmed + waitlisted -> in", entries: [confirmedCard, waitlisted], want: "in" },
+      { name: "paid + waitlisted -> received", entries: [paidAwaiting, waitlisted], want: "received" },
+      { name: "confirmed + paid -> received (rule 3 needs no pending/paid entry)", entries: [confirmedCard, paidAwaiting], want: "received" },
+      { name: "confirmed + free pending -> received", entries: [confirmedFree, freeAwaiting], want: "received" },
+      { name: "confirmed + withdrawn -> in (an ended sibling changes nothing)", entries: [withdrawn, confirmedCard], want: "in" },
+      { name: "waitlisted + withdrawn -> waitlist", entries: [withdrawn, waitlisted], want: "waitlist" },
+      { name: "after a withdrawal clears the only debt: confirmed + withdrawn unpaid -> in", entries: [confirmedCard, { ...unpaidCard, status: "withdrawn" }], want: "in" },
+    ];
+
+    it("one case per rule and precedence pair (counted)", () => {
+      let checked = 0;
+      for (const r of RULES) {
+        expect(cartHeadline(r.entries, { ...CART, ...r.cart }), r.name).toBe(r.want);
+        checked += 1;
+      }
+      expect(checked).toBe(RULES.length);
+      expect(checked).toBeGreaterThan(0);
+      // Premise: every headline kind is reached by at least one row, so no kind is asserted vacuously.
+      expect(new Set(RULES.map((r) => r.want))).toEqual(new Set<HeadlineKind>(["pay", "in", "received", "waitlist", "closed"]));
+    });
+
+    it("the order of the entries never changes the answer (a second read of the same cart, reversed)", () => {
+      let checked = 0;
+      for (const r of RULES) {
+        expect(cartHeadline([...r.entries].reverse(), { ...CART, ...r.cart }), r.name).toBe(r.want);
+        checked += 1;
+      }
+      expect(checked).toBeGreaterThan(0);
     });
   });
 
-  it("only waitlisted entries: the fee they WOULD owe if promoted, labelled not due (W6)", () => {
-    expect(cartSubtotal([e("waitlisted", 0, 1500)])).toEqual({ kind: "waitlisted", cents: 1500 });
-    expect(cartSubtotal([e("waitlisted", 0, 1500), e("waitlisted", 0, 1000)])).toEqual({ kind: "waitlisted", cents: 2500 });
-    // A waitlisted entry on a free division would owe nothing: the page prints that as 'Free', which is true.
-    expect(cartSubtotal([e("waitlisted", 0, 0)])).toEqual({ kind: "waitlisted", cents: 0 });
-    // The fee a promotion would set is unknown (a division with no settings row): nothing to quote.
-    expect(cartSubtotal([e("waitlisted", 0, null)])).toEqual({ kind: "waitlisted", cents: 0 });
+  describe("cartMoneySummary", () => {
+    it("the empty cart pays nothing and owes nothing (the empty case, first)", () => {
+      expect(cartMoneySummary([], CART)).toEqual({ paidCents: 0, dueCents: 0, waitlistedCents: 0 });
+    });
+
+    it("partial: a card-settled £15 entry and a pending card-due £24 entry -> paid 1500, due 2400", () => {
+      expect(cartMoneySummary([confirmedCard, unpaidCard], CART)).toEqual({ paidCents: 1500, dueCents: 2400, waitlistedCents: 0 });
+    });
+
+    it("a waived entry is neither paid nor due, although it is confirmed and keeps its £15 fee (FP11)", () => {
+      expect(cartMoneySummary([waived], CART)).toEqual({ paidCents: 0, dueCents: 0, waitlistedCents: 0 });
+    });
+
+    it("refunded: £15 paid with £5 sent back -> paid 1000", () => {
+      expect(cartMoneySummary([{ ...confirmedCard, refunded_cents: 500 }], CART).paidCents).toBe(1000);
+    });
+
+    it("an offline (Mark paid) settlement counts as paid, the same as a card", () => {
+      expect(cartMoneySummary([{ ...confirmedCard, settled_by: "offline" }], CART).paidCents).toBe(1500);
+    });
+
+    it("after a withdrawal: a card-paid entry withdrawn and fully refunded has paid 0; one withdrawn before paying owes 0", () => {
+      expect(cartMoneySummary([{ ...confirmedCard, status: "withdrawn", refunded_cents: 1500 }], CART)).toEqual({
+        paidCents: 0,
+        dueCents: 0,
+        waitlistedCents: 0,
+      });
+      expect(cartMoneySummary([withdrawn], CART)).toEqual({ paidCents: 0, dueCents: 0, waitlistedCents: 0 });
+    });
+
+    it("a card-paid entry withdrawn past the refund line stays paid: settlement is history, not status", () => {
+      expect(cartMoneySummary([{ ...confirmedCard, status: "withdrawn" }], CART).paidCents).toBe(1500);
+    });
+
+    it("paid never goes below 0 when more was sent back than the fee", () => {
+      expect(cartMoneySummary([{ ...confirmedCard, refunded_cents: 2000 }], CART).paidCents).toBe(0);
+    });
+
+    it("window_closed is still owed: counted in due", () => {
+      expect(resolveMoneyState(windowClosed, CART).kind, "premise: this fixture is window_closed").toBe("window_closed");
+      expect(cartMoneySummary([windowClosed], CART).dueCents).toBe(2400);
+    });
+
+    it("a card fee owed while card payments are unavailable is still owed: counted in due (T15 ruling)", () => {
+      const cart = { ...CART, charges_enabled: false };
+      expect(resolveMoneyState(unpaidCard, cart).kind, "premise: this fixture is stripe_unavailable").toBe("stripe_unavailable");
+      expect(cartMoneySummary([unpaidCard], cart).dueCents).toBe(2400);
+    });
+
+    it("an offline fee due is due", () => {
+      expect(cartMoneySummary([offlineDue], CART).dueCents).toBe(2400);
+    });
+
+    it("a free entry and a free confirmed entry owe and paid nothing", () => {
+      expect(cartMoneySummary([freeAwaiting, confirmedFree], CART)).toEqual({ paidCents: 0, dueCents: 0, waitlistedCents: 0 });
+    });
+
+    it("a waitlisted entry's would-be fee is kept apart: never paid, never due", () => {
+      expect(cartMoneySummary([waitlisted, { ...waitlisted, fee_if_promoted_cents: 1000 }], CART)).toEqual({
+        paidCents: 0,
+        dueCents: 0,
+        waitlistedCents: 2500,
+      });
+      // The fee a promotion would set is unknown (no settings row): nothing to quote.
+      expect(cartMoneySummary([{ ...waitlisted, fee_if_promoted_cents: null }], CART).waitlistedCents).toBe(0);
+    });
+
+    // One predicate, two surfaces: the headline says "Pay to finish entering" exactly when the money line names an amount due.
+    it("the headline says pay exactly when something is due, across every pair of entry states and both Connect states (counted)", () => {
+      const palette = [unpaidCard, offlineDue, windowClosed, paidAwaiting, freeAwaiting, confirmedCard, confirmedFree, waived, waitlisted, withdrawn, expired, rejected];
+      let checked = 0;
+      let pays = 0;
+      for (const charges_enabled of [true, false]) {
+        const cart = { ...CART, charges_enabled };
+        for (const a of palette) {
+          for (const b of palette) {
+            const due = cartMoneySummary([a, b], cart).dueCents > 0;
+            expect(cartHeadline([a, b], cart) === "pay", `${a.status}/${a.amount_cents} + ${b.status}/${b.amount_cents}`).toBe(due);
+            checked += 1;
+            if (due) pays += 1;
+          }
+        }
+      }
+      expect(checked).toBe(palette.length * palette.length * 2);
+      // Both directions are exercised, or the equivalence is vacuous.
+      expect(pays).toBeGreaterThan(0);
+      expect(checked - pays).toBeGreaterThan(0);
+    });
   });
 
-  it("a waitlisted entry beside an ended one is still the waitlist's amount; a live entry outranks both", () => {
-    expect(cartSubtotal([e("waitlisted", 0, 1500), e("withdrawn", 1000)])).toEqual({ kind: "waitlisted", cents: 1500 });
-    expect(cartSubtotal([e("waitlisted", 0, 1500), e("pending", 1000)])).toEqual({ kind: "amount", cents: 1000 });
+  describe("moneyLine (spec §5.3 rendering table)", () => {
+    const sum = (paidCents: number, dueCents: number, waitlistedCents: number) => ({ paidCents, dueCents, waitlistedCents });
+    it("nothing paid, nothing due, nothing waiting: Nothing to pay (the empty case, first)", () => {
+      expect(moneyLine(sum(0, 0, 0))).toBe("nothing");
+    });
+    const TABLE: [ReturnType<typeof sum>, ReturnType<typeof moneyLine>][] = [
+      [sum(1500, 2400, 0), "paidDue"],
+      [sum(1500, 2400, 1500), "paidDue"],
+      [sum(1500, 0, 0), "paid"],
+      [sum(1500, 0, 1500), "paid"],
+      [sum(0, 2400, 0), "due"],
+      [sum(0, 2400, 1500), "due"],
+      [sum(0, 0, 1500), "waitlisted"],
+    ];
+    it("one row per condition (counted)", () => {
+      let checked = 0;
+      for (const [s, want] of TABLE) {
+        expect(moneyLine(s), JSON.stringify(s)).toBe(want);
+        checked += 1;
+      }
+      expect(checked).toBe(TABLE.length);
+    });
   });
 
-  it("every entry ended: nothing is due (W10, W11), and the empty cart says the same", () => {
-    expect(cartSubtotal([e("expired", 1500)])).toEqual({ kind: "nothing_due" });
-    expect(cartSubtotal([e("withdrawn", 1500), e("rejected", 1000)])).toEqual({ kind: "nothing_due" });
-    expect(cartSubtotal([])).toEqual({ kind: "nothing_due" });
+  describe("whatHappensNext (spec §5.2: real data only)", () => {
+    type View = Parameters<typeof whatHappensNext>[0];
+    const view = (over: Partial<View> = {}): View => ({
+      competition_name: "Summer Smash",
+      competition_starts_on: null,
+      competition_ends_on: null,
+      venue_name: null,
+      expires_at: FUTURE,
+      charges_enabled: true,
+      entries: [],
+      ...over,
+    });
+
+    it("no dates, no venue and a closed cart: no items, so the section is not shown (the empty case, first)", () => {
+      expect(whatHappensNext(view(), "closed")).toEqual([]);
+    });
+
+    it("a closed cart adds no step, even with dates and a venue", () => {
+      const items = whatHappensNext(view({ competition_starts_on: "2026-12-05", venue_name: "Riverside Courts" }), "closed");
+      expect(items.map((i) => i.kind)).toEqual(["dates", "venue"]);
+    });
+
+    it("a one-day event (ends_on equal to starts_on) says 'starts on'", () => {
+      expect(whatHappensNext(view({ competition_starts_on: "2026-12-05", competition_ends_on: "2026-12-05" }), "closed")).toEqual([
+        { kind: "dates", key: "register.status.next.starts", vars: { name: "Summer Smash", date: "2026-12-05" } },
+      ]);
+    });
+
+    it("no ends_on says 'starts on'", () => {
+      expect(whatHappensNext(view({ competition_starts_on: "2026-12-05" }), "closed")[0]!.key).toBe("register.status.next.starts");
+    });
+
+    it("an ends_on that differs says 'runs {start} to {end}'", () => {
+      expect(whatHappensNext(view({ competition_starts_on: "2026-12-05", competition_ends_on: "2026-12-07" }), "closed")).toEqual([
+        { kind: "dates", key: "register.status.next.runs", vars: { name: "Summer Smash", start: "2026-12-05", end: "2026-12-07" } },
+      ]);
+    });
+
+    it("an ends_on with no starts_on invents no start: no dates item", () => {
+      expect(whatHappensNext(view({ competition_ends_on: "2026-12-07" }), "closed")).toEqual([]);
+    });
+
+    it("a venue is named only when the read model names one", () => {
+      expect(whatHappensNext(view({ venue_name: "Riverside Courts" }), "closed")).toEqual([
+        { kind: "venue", key: "register.status.next.venue", vars: { venue: "Riverside Courts" } },
+      ]);
+    });
+
+    it("dates, then venue, then the step: at most three items", () => {
+      const items = whatHappensNext(
+        view({ competition_starts_on: "2026-12-05", venue_name: "Riverside Courts", entries: [waitlisted] }),
+        "waitlist",
+      );
+      expect(items.map((i) => i.kind)).toEqual(["dates", "venue", "step"]);
+    });
+
+    describe("the step, by headline", () => {
+      it("pay: names the EARLIEST pay-by deadline among the entries due", () => {
+        const promoted = { ...unpaidCard, promotion_expires_at: SOONER };
+        expect(whatHappensNext(view({ entries: [unpaidCard, promoted] }), "pay")).toEqual([
+          { kind: "step", key: "register.status.next.payBy", vars: { deadline: SOONER } },
+        ]);
+      });
+
+      it("pay with no deadline anywhere: 'Pay to keep your place', no invented date", () => {
+        expect(whatHappensNext(view({ expires_at: null, entries: [offlineDue] }), "pay")).toEqual([
+          { kind: "step", key: "register.status.next.pay", vars: {} },
+        ]);
+      });
+
+      it("pay owed only past its deadline: never names a date that has gone by", () => {
+        expect(whatHappensNext(view({ entries: [windowClosed] }), "pay")).toEqual([
+          { kind: "step", key: "register.status.next.pay", vars: {} },
+        ]);
+      });
+
+      it("received: the organiser reviews, counted over the entries awaiting the decision", () => {
+        expect(whatHappensNext(view({ entries: [paidAwaiting, freeAwaiting, waitlisted] }), "received")).toEqual([
+          { kind: "step", key: "register.status.next.received", vars: {}, count: 2 },
+        ]);
+        expect(whatHappensNext(view({ entries: [paidAwaiting] }), "received")[0]!.count).toBe(1);
+      });
+
+      it("waitlist: this page shows a promotion", () => {
+        expect(whatHappensNext(view({ entries: [waitlisted] }), "waitlist")).toEqual([
+          { kind: "step", key: "register.status.next.waitlist", vars: {} },
+        ]);
+      });
+
+      const pending = (id: string) => ({ id, consent_status: "pending" as const });
+      const joined = (id: string) => ({ id, consent_status: "granted" as const });
+
+      it("in, with a teammate still to join: send the invite links", () => {
+        const team = { ...confirmedCard, join_code: "JOIN1", players: [joined("p1"), pending("p2")] };
+        expect(whatHappensNext(view({ entries: [team] }), "in")).toEqual([{ kind: "step", key: "register.status.next.invite", vars: {} }]);
+      });
+
+      it("in, with everyone joined (only the general link left): nothing else to do", () => {
+        const team = { ...confirmedCard, join_code: "JOIN1", players: [joined("p1"), joined("p2")] };
+        expect(whatHappensNext(view({ entries: [team] }), "in")).toEqual([{ kind: "step", key: "register.status.next.done", vars: {} }]);
+      });
+
+      it("in, with no join code at all: nothing else to do", () => {
+        expect(whatHappensNext(view({ entries: [confirmedCard] }), "in")[0]!.key).toBe("register.status.next.done");
+      });
+
+      it("in, after a withdrawal: a withdrawn sibling's unclaimed slot asks for no invite (its link is dead)", () => {
+        const deadTeam = { ...withdrawn, join_code: "JOIN2", players: [pending("p3")] };
+        expect(whatHappensNext(view({ entries: [confirmedCard, deadTeam] }), "in")[0]!.key).toBe("register.status.next.done");
+      });
+    });
+
+    // Spec §5.2: no item promises an email, and the check-in wording belongs to the roster (FP9). Swept over every locale's own
+    // `register.status.next.*` copy, so a translation cannot reintroduce the promise either.
+    it("no next-step copy in any locale mentions email or checking in (counted)", () => {
+      const FORBIDDEN = /e-?mail|correo|courriel|check[- ]?in|inchecken|registro de llegada/i;
+      let checked = 0;
+      for (const [locale, dict] of Object.entries({ en: uiEn, es: uiEs, fr: uiFr, nl: uiNl })) {
+        const keys = Object.keys(dict).filter((k) => k.startsWith("register.status.next."));
+        expect(keys.length, `${locale} carries the next-step copy`).toBeGreaterThan(0);
+        for (const k of keys) {
+          expect((dict as Record<string, string>)[k], `${locale} ${k}`).not.toMatch(FORBIDDEN);
+          checked += 1;
+        }
+      }
+      expect(checked).toBeGreaterThan(0);
+    });
+
+    it("every key a next item can carry exists in every locale (counted)", () => {
+      const KEYS = ["starts", "runs", "venue", "payBy", "pay", "received.one", "received.other", "waitlist", "invite", "done", "title"];
+      let checked = 0;
+      for (const [locale, dict] of Object.entries({ en: uiEn, es: uiEs, fr: uiFr, nl: uiNl })) {
+        for (const k of KEYS) {
+          expect((dict as Record<string, string>)[`register.status.next.${k}`], `${locale} register.status.next.${k}`).toEqual(
+            expect.any(String),
+          );
+          checked += 1;
+        }
+      }
+      expect(checked).toBe(KEYS.length * 4);
+    });
   });
 });

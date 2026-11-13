@@ -108,12 +108,12 @@ export function canCancelEntry(status: EntryStatus): boolean {
 }
 
 /**
- * Whether this entry's fee counts as live, current money — folded into the
- * page's Subtotal line (page.tsx) AND shown as this entry's own figure on
- * its card (entry-card.tsx). ONE function drives both so the two can never
- * disagree about which entries count (RS007 status-page review FIX 1: the
+ * Whether this entry's fee counts as live, current money — shown as this
+ * entry's own figure on its card (entry-card.tsx), and used for the page's
+ * Subtotal line until B4 T15 replaced it with the money line
+ * (`cartMoneySummary`, by settlement). RS007 status-page review FIX 1: the
  * Subtotal used to sum every non-waitlisted entry, which silently included
- * a cancelled entry's stale fee forever — see below).
+ * a cancelled entry's stale fee forever — see below.
  *
  * True for pending/paid/confirmed. False for:
  *  - `waitlisted` — its `amount_cents` is always 0 by construction
@@ -138,28 +138,179 @@ export function entryCountsTowardTotal(status: EntryStatus): boolean {
   return status === "pending" || status === "paid" || status === "confirmed";
 }
 
-/** What the Subtotal row says. Never a bare "Free" for money that is simply not due (polish wave P3, walkthrough W6/W10/W11: a waitlisted,
- *  expired or withdrawn page read "Subtotal: Free" for an entry that owes a fee, or never will).
- *  - `amount`: the live entries' fees summed (`entryCountsTowardTotal`). 0 is a genuinely free cart ("Free").
- *  - `waitlisted`: nothing is live and a waitlisted entry remains: `cents` is the fee a promotion WOULD set (the division's own fee,
- *    what `promoteWaitlistedRow` writes), shown with "not due while waitlisted". 0 is a free division ("Free").
- *  - `nothing_due`: every entry has ended (withdrawn, expired, rejected), or there are none. Not "not charged": an entry withdrawn after it
- *    paid was charged and refunded; "nothing due" is true of all of them. */
-export type CartSubtotal =
-  | { kind: "amount"; cents: number }
-  | { kind: "waitlisted"; cents: number }
-  | { kind: "nothing_due" };
+// ---------------------------------------------------------------------------
+// Registration redesign B4 T15 (spec §5.1-5.3): what the page leads with. The headline, the money line and "What happens next"
+// are three answers read off the same entries; each is a pure function here and the page only words what they return.
+// ---------------------------------------------------------------------------
 
-export function cartSubtotal(
-  entries: { status: EntryStatus; amount_cents: number; fee_if_promoted_cents: number | null }[],
-): CartSubtotal {
-  const live = entries.filter((e) => entryCountsTowardTotal(e.status));
-  if (live.length > 0) return { kind: "amount", cents: live.reduce((sum, e) => sum + e.amount_cents, 0) };
-  const waitlisted = entries.filter((e) => e.status === "waitlisted");
-  if (waitlisted.length > 0) {
-    return { kind: "waitlisted", cents: waitlisted.reduce((sum, e) => sum + (e.fee_if_promoted_cents ?? 0), 0) };
+/** What the headline and the money line read off one entry. A `GroupEntryView` (usecases/registrations/group-status.ts) is one. */
+export interface StatusEntry {
+  status: EntryStatus;
+  amount_cents: number;
+  promotion_expires_at: string | null;
+  payment_method: "offline" | "stripe";
+}
+
+/** The cart-level facts `resolveMoneyState` reads. A `GroupStatusView` is one. */
+export interface CartPayFacts {
+  expires_at: string | null;
+  charges_enabled: boolean;
+}
+
+/** Whether this entry owes its fee right now: every money state but `none`. That includes `stripe_unavailable` (the org cannot take a
+ *  card today) and `window_closed` (the pay-by date has gone by, the sweep has not run yet): neither shows a Pay button, and both are
+ *  still owed (spec §5.3). ONE predicate for the headline's `pay` and the money line's due, so the page can never lead with "Pay to
+ *  finish entering" above "Nothing to pay", or the reverse. */
+function owesFee(entry: StatusEntry, cart: CartPayFacts): boolean {
+  return resolveMoneyState(entry, cart).kind !== "none";
+}
+
+/** The page's outcome headline (spec §5.1). */
+export type HeadlineKind = "pay" | "in" | "received" | "waitlist" | "closed";
+
+/**
+ * The cart's headline. The empty cart first, then the first matching rule wins:
+ *  - no entries → `closed`
+ *  - any entry that owes its fee (`owesFee`) → `pay`. The spec names `stripe_due` and `offline_due`; T15 also counts the two owed
+ *    states that have no Pay button, which the money line counts as due, so the headline names the debt the money line shows
+ *    rather than falling through to "awaiting approval".
+ *  - any `confirmed` entry and no `pending`/`paid` one → `in`
+ *  - any `pending` or `paid` entry → `received` (after `pay`, a pending entry here is a free one awaiting approval)
+ *  - any `waitlisted` entry → `waitlist`
+ *  - otherwise (only withdrawn, expired, rejected) → `closed`
+ */
+export function cartHeadline(entries: readonly StatusEntry[], cart: CartPayFacts): HeadlineKind {
+  if (entries.length === 0) return "closed";
+  if (entries.some((e) => owesFee(e, cart))) return "pay";
+  const has = (status: EntryStatus) => entries.some((e) => e.status === status);
+  if (has("confirmed") && !has("pending") && !has("paid")) return "in";
+  if (has("pending") || has("paid")) return "received";
+  if (has("waitlisted")) return "waitlist";
+  return "closed";
+}
+
+/** How many entries are waiting on the organiser's decision: the count the `received` headline and step are worded for. */
+export function receivedCount(entries: readonly StatusEntry[]): number {
+  return entries.filter((e) => e.status === "pending" || e.status === "paid").length;
+}
+
+/** What the money line reads off one entry beyond `StatusEntry`: how it was settled (T14, `GroupEntryView.settled_by`, history not
+ *  status), what was sent back, and a waitlisted entry's would-be fee. */
+export interface MoneyEntry extends StatusEntry {
+  settled_by: "card" | "offline" | "waived" | null;
+  refunded_cents: number;
+  fee_if_promoted_cents: number | null;
+}
+
+/** All in the cart's one currency (`GroupStatusView.currency`, snapshotted on the cart at submit; entries carry none). */
+export interface MoneySummary {
+  paidCents: number;
+  dueCents: number;
+  waitlistedCents: number;
+}
+
+/**
+ * The cart's money (spec §5.3).
+ *  - `paidCents`: entries settled by `card` or `offline`, each `amount_cents − refunded_cents` floored at 0. By settlement, never by
+ *    status: a fee waiver confirms the entry and keeps its `amount_cents` (FP11), so a status sum would show a comped entry as paid.
+ *    Settlement is history, so a card-paid entry withdrawn past the refund line stays paid.
+ *  - `dueCents`: the fees of entries that owe right now (`owesFee`), including the two owed states with no Pay button.
+ *  - `waitlistedCents`: what promotions would set (`fee_if_promoted_cents`), never paid and never due.
+ * A `waived` entry adds to none of the three.
+ */
+export function cartMoneySummary(entries: readonly MoneyEntry[], cart: CartPayFacts): MoneySummary {
+  let paidCents = 0;
+  let dueCents = 0;
+  let waitlistedCents = 0;
+  for (const e of entries) {
+    if (e.settled_by === "card" || e.settled_by === "offline") paidCents += Math.max(0, e.amount_cents - e.refunded_cents);
+    if (owesFee(e, cart)) dueCents += e.amount_cents;
+    if (e.status === "waitlisted") waitlistedCents += e.fee_if_promoted_cents ?? 0;
   }
-  return { kind: "nothing_due" };
+  return { paidCents, dueCents, waitlistedCents };
+}
+
+/** Which sentence the money line is (spec §5.3's table): "Paid £X · £Y still due", "Paid £X", "£Y due", "£Z if a place opens — not
+ *  due now", "Nothing to pay". */
+export type MoneyLineKind = "paidDue" | "paid" | "due" | "waitlisted" | "nothing";
+
+export function moneyLine(summary: MoneySummary): MoneyLineKind {
+  if (summary.paidCents > 0 && summary.dueCents > 0) return "paidDue";
+  if (summary.paidCents > 0) return "paid";
+  if (summary.dueCents > 0) return "due";
+  if (summary.waitlistedCents > 0) return "waitlisted";
+  return "nothing";
+}
+
+/**
+ * One line of "What happens next". `key` is the dictionary key; `count`, when present, makes it a `.one`/`.other` plural family.
+ * `vars` are RAW values the page localises: `date`, `start`, `end` are 'YYYY-MM-DD' calendar dates and `deadline` an ISO instant.
+ */
+export type NextItem = { kind: "dates" | "venue" | "step"; key: string; vars: Record<string, string>; count?: number };
+
+/** What "What happens next" reads. A `GroupStatusView` is one. */
+export interface NextFacts extends CartPayFacts {
+  competition_name: string;
+  competition_starts_on: string | null;
+  competition_ends_on: string | null;
+  venue_name: string | null;
+  entries: readonly (StatusEntry & Parameters<typeof inviteLinks>[0])[];
+}
+
+/**
+ * "What happens next" (spec §5.2), from real data only: the competition's own dates, the one venue the read model names, and one
+ * step for the headline. At most three items, in that order. No item promises an email or invents a time (FP9). The empty case: no
+ * dates, no venue and a `closed` cart give no items, and the page renders no section.
+ */
+export function whatHappensNext(view: NextFacts, headline: HeadlineKind): NextItem[] {
+  const items: NextItem[] = [];
+  const start = view.competition_starts_on;
+  if (start) {
+    const end = view.competition_ends_on;
+    items.push(
+      end && end !== start
+        ? { kind: "dates", key: "register.status.next.runs", vars: { name: view.competition_name, start, end } }
+        : { kind: "dates", key: "register.status.next.starts", vars: { name: view.competition_name, date: start } },
+    );
+  }
+  if (view.venue_name) items.push({ kind: "venue", key: "register.status.next.venue", vars: { venue: view.venue_name } });
+  const step = nextStep(view, headline);
+  if (step) items.push(step);
+  return items;
+}
+
+function nextStep(view: NextFacts, headline: HeadlineKind): NextItem | null {
+  const step = (key: string, vars: Record<string, string> = {}): NextItem => ({ kind: "step", key, vars });
+  switch (headline) {
+    case "pay": {
+      const deadline = earliestPayDeadline(view.entries, view);
+      return deadline ? step("register.status.next.payBy", { deadline }) : step("register.status.next.pay");
+    }
+    case "received":
+      return { ...step("register.status.next.received"), count: receivedCount(view.entries) };
+    case "waitlist":
+      return step("register.status.next.waitlist");
+    case "in":
+      // A teammate still to join is the one thing left to do. `inviteLinks` is the invite block's own gate, so this asks for
+      // exactly the links the block below offers (a withdrawn entry's dead link asks for nothing).
+      return view.entries.some((e) => inviteLinks(e)?.slots.some((slot) => !slot.joined))
+        ? step("register.status.next.invite")
+        : step("register.status.next.done");
+    case "closed":
+      return null;
+  }
+}
+
+/** The soonest pay-by date among the entries that can still be paid. A `window_closed` entry's date has gone by and is never named. */
+function earliestPayDeadline(entries: readonly StatusEntry[], cart: CartPayFacts): string | null {
+  let soonest: string | null = null;
+  for (const e of entries) {
+    const money = resolveMoneyState(e, cart);
+    if ((money.kind === "stripe_due" || money.kind === "offline_due") && money.deadline) {
+      if (soonest === null || Date.parse(money.deadline) < Date.parse(soonest)) soonest = money.deadline;
+    }
+  }
+  return soonest;
 }
 
 /** Which words the roster's chips and meter use.

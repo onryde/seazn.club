@@ -117,7 +117,7 @@ test.use({
 // and both defects it caught are now fixed (#11 `54b88fb9f`, #1 `af9c9021f`),
 // so a title asserting the bugs are present would read as a live failure to
 // anyone scanning a green run.
-test("RS007 witness — cancelling one of two cart entries drops the subtotal to what is still owed, and a promoted-but-unpaid sibling is never offered a refund off another entry's card", async ({
+test("RS007 witness — cancelling one of two cart entries drops the money line to what is still owed, and a promoted-but-unpaid sibling is never offered a refund off another entry's card", async ({
   page,
   browser,
   request,
@@ -465,18 +465,21 @@ test("RS007 witness — cancelling one of two cart entries drops the subtotal to
     // AFTER the confirmation — required shot.
     await anon.screenshot({ path: `${SHOTS}/15-after-cancel.png`, fullPage: true });
 
-    // ---- ASSERTION (a): the rendered subtotal must drop to what is still
-    // owed/paid (A alone) — status/page.tsx's subtotal only excludes
-    // "waitlisted", never "withdrawn". ----------------------------------
-    const subtotalLabel = anon.getByText("Subtotal", { exact: true });
-    const subtotalAmountText = (await subtotalLabel.locator("xpath=following-sibling::span[1]").textContent()) ?? "";
-    const renderedSubtotalCents = centsFromRenderedAmount(subtotalAmountText);
+    // ---- ASSERTION (a): the money line must drop to what is still
+    // owed/paid (A alone) — a withdrawn entry's stale fee is neither paid
+    // nor due. B4 T15: the Subtotal row became the money line, one sentence
+    // counted by settlement ("Paid £25.00"); B was never charged, so it adds
+    // nothing to paid, and withdrawn, nothing to due. ----------------------
+    const moneyLine = anon.getByTestId("reg-status-money");
+    await expect(moneyLine, "B is withdrawn and was never charged: nothing is still due").toHaveAttribute("data-due-cents", "0");
+    const moneyText = (await moneyLine.textContent()) ?? "";
     expect(
-      renderedSubtotalCents,
-      `DEFECT (a) witness: after withdrawing "${TEAM_B}" (£${(FEE_CENTS / 100).toFixed(2)}), the footer should read ` +
-        `£${(aBefore.amount_cents / 100).toFixed(2)} (A alone, still paid) but rendered "${subtotalAmountText.trim()}" ` +
-        `— status/page.tsx's subtotal filter excludes only "waitlisted", never "withdrawn", so B's fee keeps counting.`,
+      centsFromRenderedAmount(moneyText),
+      `DEFECT (a) witness: after withdrawing "${TEAM_B}" (£${(FEE_CENTS / 100).toFixed(2)}), the money line should read ` +
+        `Paid £${(aBefore.amount_cents / 100).toFixed(2)} (A alone, still paid) but rendered "${moneyText.trim()}" ` +
+        `— a withdrawn entry's fee must never count as paid or due.`,
     ).toBe(aBefore.amount_cents);
+    await expect(moneyLine, "A's card payment reads as paid").toHaveAttribute("data-money-kind", "paid");
 
     // B's card must also have lost its Cancel control (canCancelEntry is
     // false for withdrawn) — a re-cancel dead end would be its own defect.

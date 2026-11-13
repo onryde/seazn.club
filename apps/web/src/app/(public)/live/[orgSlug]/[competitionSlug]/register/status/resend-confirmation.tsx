@@ -20,6 +20,7 @@ import { isTurnstileRefusal } from "@/lib/turnstile";
 import { withTurnstile } from "@/lib/turnstile-client";
 import { useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
+import { BTN_QUIET_LINK } from "@/components/public-site/register/styles";
 import { classifyStatusActionFailure, publicResendPath, type StatusActionFailureKind } from "./view-model";
 
 /** Mirrors join-form.tsx's own FAILURE_KEY convention — an explicit map, so
@@ -73,7 +74,7 @@ export function ResendConfirmation({ groupId, token }: { groupId: string; token:
         type="button"
         disabled={busy}
         onClick={resend}
-        className="text-xs font-medium text-ink-muted underline underline-offset-2 hover:text-accent-strong disabled:opacity-50"
+        className={BTN_QUIET_LINK}
       >
         {busy ? msg("register.status.resend.busy") : msg("register.status.resend.cta")}
       </button>

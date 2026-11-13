@@ -43,6 +43,10 @@ export const BTN_GHOST =
 export const BTN_TEXT =
   "font-display text-xs font-semibold uppercase tracking-wide text-ink-muted transition hover:text-accent-strong disabled:cursor-not-allowed disabled:opacity-40";
 
+/** BTN_TEXT standing alone as a footer action at the 44px tap height (B4 T15, the status page's quiet footer: "Resend confirmation
+ *  email", and "Cancel this entry" in each card's footer), so it never competes with Pay for attention. */
+export const BTN_QUIET_LINK = `${BTN_TEXT} inline-flex min-h-11 items-center`;
+
 /** The form control. `aria-invalid` is the single hook for the danger state (B2 T9): every field in this tree that sets the attribute gets
  *  the red border and a red focus ring from here, so what is drawn and what a screen reader is told cannot disagree. The compound
  *  `aria-invalid:focus:` forms keep the red on focus, where the plain `focus:border-accent` would otherwise win. */

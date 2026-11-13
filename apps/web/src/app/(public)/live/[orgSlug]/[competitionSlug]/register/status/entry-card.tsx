@@ -113,7 +113,7 @@ export interface EntryCardProps {
      *  REQUIRED for the reason `approval` is: an omitted value would read "awaiting approval" about an entry already approved. */
     approved: boolean;
     /** Polish wave P3 (W6): the fee a promotion off the waitlist WOULD set (the division's own fee), null on every other status.
-     *  The card itself does not print it; the page's Subtotal does (`cartSubtotal`). Carried on the entry so one shape
+     *  The card itself does not print it; the page's money line does (`cartMoneySummary`). Carried on the entry so one shape
      *  travels from the read model to both. */
     fee_if_promoted_cents: number | null;
     /** Registration redesign B3 T13: a waitlisted entry's place in its division's queue (`GroupEntryView.waitlist_position`, counted in
@@ -216,9 +216,9 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
   // deadline with nothing to actually transfer. `feeLabel` is this entry's
   // own figure, phrased the SAME way the review step/cart already phrase a
   // zero fee (`register.entries.free`, never a bare "£0"). `showsFeeLine`
-  // is gated by the SAME `entryCountsTowardTotal` predicate the page's own
-  // Subtotal filters by (page.tsx), so a card can never show a fee the
-  // Subtotal disagrees about (or vice-versa) — and excludes `stripe_due`
+  // is gated by `entryCountsTowardTotal` (a withdrawn entry's stale fee is
+  // never shown as live; the page's money line, `cartMoneySummary`, counts
+  // it neither paid nor due either) — and excludes `stripe_due`
   // specifically because that state already names the figure inside its
   // own "Pay now — {amount}" button, right below.
   const feeLabel =

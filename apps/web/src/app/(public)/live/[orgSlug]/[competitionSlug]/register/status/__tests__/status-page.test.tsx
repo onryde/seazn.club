@@ -9,7 +9,8 @@
 // that the resolved view's data actually reaches the right sections.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { fmtDateTime, fmtZoneAbbrev } from "@/lib/format";
+import { fmtDateTime, fmtPublicDeadline, fmtZoneAbbrev } from "@/lib/format";
+import { BTN_TEXT } from "@/components/public-site/register/styles";
 import uiEn from "@/dictionaries/en/ui.json";
 
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => "en" }));
@@ -100,17 +101,26 @@ const BASE_ENTRY = {
   }[],
   refund_policy: { refundable: true, deadline: "2026-09-15T00:00:00.000Z", amount_cents: 2500 },
   refunded_cents: 0,
+  // B4 T14: how this entry's fee was settled (GroupEntryView.settled_by), history not status. null = nothing settled it.
+  settled_by: null as "card" | "offline" | "waived" | null,
 };
 
 const BASE_VIEW = {
-  ref_code: "SZ-TEST-01",
+  ref_code: "SZ-TEST-01" as string | null,
   contact_name: "Alex Test",
+  // B4 T15: the address the confirmation went to ("Confirmation sent to {email}.").
+  contact_email: "alex@example.test",
   currency: "gbp",
   amount_cents: 2500,
   payment_method: "stripe" as const,
   expires_at: FUTURE,
   refunded_cents: 0,
   competition_name: "Summer Smash",
+  // B4 T14: the competition's own dates and the one venue its published fixtures share; unset here, so "What happens next" has
+  // only its step.
+  competition_starts_on: null as string | null,
+  competition_ends_on: null as string | null,
+  venue_name: null as string | null,
   competition_slug: "summer-smash",
   org_slug: "riverside",
   org_name: "Riverside CC",
@@ -275,8 +285,8 @@ describe("register status page (RS007 rebuild)", () => {
       // the card itself shows its own figure too.
       expect(
         (html.match(/>£25\.00</g) || []).length,
-        "the offline-due card itself must show its own fee, not just the page Subtotal",
-      ).toBeGreaterThanOrEqual(2);
+        "the offline-due card itself must show its own fee (the money line reads \"£25.00 due\", never a bare figure)",
+      ).toBe(1);
     });
 
     // Bug (2026-08-27 browser sweep): payment_instructions is Markdown, and a
@@ -310,8 +320,8 @@ describe("register status page (RS007 rebuild)", () => {
       // offline case above — count exact, tag-flanked occurrences instead.
       expect(
         (html.match(/>£25\.00</g) || []).length,
-        "the stripe_unavailable card itself must show its own fee, not just the page Subtotal",
-      ).toBeGreaterThanOrEqual(2);
+        "the stripe_unavailable card itself must show its own fee (the money line reads \"£25.00 due\", never a bare figure)",
+      ).toBe(1);
     });
 
     it("a confirmed entry still names its own fee — no Pay control, no instructions, but not a blank money section (FIX 1)", async () => {
@@ -328,8 +338,8 @@ describe("register status page (RS007 rebuild)", () => {
       // shows it" from "only the Subtotal does".
       expect(
         (html.match(/>£25\.00</g) || []).length,
-        "the confirmed card itself must show its own fee, not just the page Subtotal",
-      ).toBeGreaterThanOrEqual(2);
+        "the confirmed card itself must show its own fee (the money line is a sentence, never a bare figure)",
+      ).toBe(1);
     });
 
     it("a genuinely free (amount_cents 0) confirmed entry reads as 'Free', never '£0' (FIX 1)", async () => {
@@ -344,8 +354,8 @@ describe("register status page (RS007 rebuild)", () => {
       // just the Subtotal.
       expect(
         (html.match(/>Free</g) || []).length,
-        "the confirmed card itself must read Free, not just the page Subtotal",
-      ).toBeGreaterThanOrEqual(2);
+        "the confirmed card itself must read Free (the money line says \"Nothing to pay\", never \"Free\")",
+      ).toBe(1);
     });
   });
 
@@ -370,7 +380,7 @@ describe("register status page (RS007 rebuild)", () => {
       expect(
         (html.match(/>£25\.00</g) || []).length,
         "the window_closed card itself must still show its own fee",
-      ).toBeGreaterThanOrEqual(2);
+      ).toBe(1);
     });
 
     it("an entry whose deadline is still ahead is unaffected (sanity — not simply hiding every Pay button)", async () => {
@@ -422,86 +432,157 @@ describe("register status page (RS007 rebuild)", () => {
     });
   });
 
-  describe("subtotal — never includes a cancelled entry's stale pre-cancellation fee (FIX 1)", () => {
-    it("excludes a withdrawn entry's amount_cents from the page Subtotal — withdrawCore never clears it", async () => {
-      usecaseMock.groupById.mockResolvedValueOnce({
-        ...BASE_VIEW,
-        entries: [
-          { ...BASE_ENTRY, id: "reg-1", status: "pending" as const, amount_cents: 2500 },
-          { ...BASE_ENTRY, id: "reg-2", status: "withdrawn" as const, amount_cents: 1000 },
-        ],
-      });
+  // B4 T15 (spec §5.3): the money line replaces the Subtotal. Paid is counted by SETTLEMENT (T14 `settled_by`), never by status: a
+  // fee waiver confirms an entry and keeps its fee (FP11). Each row's text is a literal from the spec's rendering table.
+  describe("money line (B4 T15, spec §5.3)", () => {
+    const moneyText = (html: string) => html.match(/data-testid="reg-status-money"[^>]*>([^<]*)</)?.[1]?.replace(/&#x27;/g, "'");
+    const MONEY_CASES: { name: string; entries: Record<string, unknown>[]; currency?: string; text: string }[] = [
+      { name: "no entries at all -> Nothing to pay (the empty case)", entries: [], text: "Nothing to pay" },
+      { name: "part-paid: a card-settled £15.00 and a pending card-due £24.00",
+        entries: [{ status: "confirmed", amount_cents: 1500, settled_by: "card" }, { status: "pending", amount_cents: 2400 }],
+        text: "Paid £15.00 · £24.00 still due" },
+      { name: "paid only", entries: [{ status: "confirmed", amount_cents: 1500, settled_by: "card" }], text: "Paid £15.00" },
+      { name: "paid offline (Mark paid)", entries: [{ status: "confirmed", amount_cents: 1500, settled_by: "offline" }], text: "Paid £15.00" },
+      { name: "due only", entries: [{ status: "pending", amount_cents: 2400 }], text: "£24.00 due" },
+      { name: "a waived entry never looks paid", entries: [{ status: "confirmed", amount_cents: 1500, settled_by: "waived" }], text: "Nothing to pay" },
+      { name: "refunded: £15.00 paid, £5.00 sent back",
+        entries: [{ status: "confirmed", amount_cents: 1500, settled_by: "card", refunded_cents: 500 }], text: "Paid £10.00" },
+      { name: "after a withdrawal: a withdrawn entry's stale fee is neither paid nor due (FIX 1)",
+        entries: [{ status: "pending", amount_cents: 2500 }, { status: "withdrawn", amount_cents: 1000 }], text: "£25.00 due" },
+      { name: "all waitlisted: what a promotion would cost, not due now",
+        entries: [{ status: "waitlisted", amount_cents: 0, fee_if_promoted_cents: 1500 }], text: "£15.00 if a place opens — not due now" },
+      { name: "all waitlisted in a free division -> Nothing to pay",
+        entries: [{ status: "waitlisted", amount_cents: 0, fee_if_promoted_cents: 0 }], text: "Nothing to pay" },
+      { name: "all ended -> Nothing to pay", entries: [{ status: "expired", amount_cents: 1500 }, { status: "rejected", amount_cents: 900 }], text: "Nothing to pay" },
+      { name: "a free confirmed entry -> Nothing to pay", entries: [{ status: "confirmed", amount_cents: 0 }], text: "Nothing to pay" },
+      { name: "the cart's own currency, two decimals (a whole amount keeps its .00)", currency: "eur",
+        entries: [{ status: "waitlisted", amount_cents: 0, fee_if_promoted_cents: 1500 }], text: "€15.00 if a place opens — not due now" },
+    ];
+
+    it("every case prints its literal sentence (counted)", async () => {
+      let checked = 0;
+      for (const c of MONEY_CASES) {
+        usecaseMock.groupById.mockResolvedValueOnce({
+          ...BASE_VIEW,
+          currency: c.currency ?? BASE_VIEW.currency,
+          entries: c.entries.map((e, i) => ({ ...BASE_ENTRY, id: `reg-${i + 1}`, ...e })),
+        });
+        const html = await render({ rid: "g1", token: "tok" });
+        expect(moneyText(html), c.name).toBe(c.text);
+        checked += 1;
+      }
+      expect(checked).toBe(MONEY_CASES.length);
+      expect(checked).toBeGreaterThan(0);
+    });
+
+    it("the Subtotal row is gone: one money line, no second total", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce(BASE_VIEW);
       const html = await render({ rid: "g1", token: "tok" });
-      const subtotalMatch = html.match(/data-testid="reg-status-subtotal-amount"[^>]*>([^<]*)</);
-      expect(subtotalMatch, "subtotal span not found").not.toBeNull();
-      // withdrawCore (usecases/registrations/withdraw.ts), the rejection path
-      // (registration-approval.ts), and the expiry sweep (usecases/registrations/)
-      // all touch ONLY status/timestamps — none ever clears amount_cents —
-      // so reg-2's stale 1000 must NOT be folded into the live subtotal.
-      expect(subtotalMatch![1]).toContain("25");
-      expect(subtotalMatch![1]).not.toContain("35");
+      expect(html.match(/data-testid="reg-status-money"/g)?.length).toBe(1);
+      expect(html).not.toContain(">Subtotal<");
+      expect(html).not.toContain("reg-status-subtotal");
     });
   });
 
-  // Polish wave P3 (walkthrough W6, W10, W11): a cart with nothing LIVE in it summed to 0 and the row printed "Free" -- for a waitlisted
-  // entry that owes a fee the moment it is promoted, and for an expired or withdrawn one. Each row below is a literal from the brief's
-  // ruling (amount / amount plus a "not due while waitlisted" note / "Nothing due"), never read back from `cartSubtotal`.
-  describe("subtotal words what is due, not just the live sum (P3)", () => {
-    const SUBTOTAL_CASES: { name: string; entries: Record<string, unknown>[]; amount: string; note: string | null }[] = [
-      { name: "all waitlisted, division fee 15.00 -> the fee a promotion would set, with the note, never Free",
-        entries: [{ status: "waitlisted", amount_cents: 0, fee_if_promoted_cents: 1500 }], amount: "£15.00", note: "Not due while waitlisted" },
-      { name: "two waitlisted entries add their promotion fees",
-        entries: [{ status: "waitlisted", amount_cents: 0, fee_if_promoted_cents: 1500 }, { status: "waitlisted", amount_cents: 0, fee_if_promoted_cents: 1000 }],
-        amount: "£25.00", note: "Not due while waitlisted" },
-      { name: "all waitlisted in a FREE division -> Free, no note (nothing would ever be due)",
-        entries: [{ status: "waitlisted", amount_cents: 0, fee_if_promoted_cents: 0 }], amount: "Free", note: null },
-      { name: "all withdrawn -> Nothing due, never Free",
-        entries: [{ status: "withdrawn", amount_cents: 1500, fee_if_promoted_cents: null }], amount: "Nothing due", note: null },
-      { name: "all expired -> Nothing due",
-        entries: [{ status: "expired", amount_cents: 1500, fee_if_promoted_cents: null }], amount: "Nothing due", note: null },
-      { name: "withdrawn + expired + rejected -> Nothing due",
-        entries: [{ status: "withdrawn", amount_cents: 1500, fee_if_promoted_cents: null }, { status: "expired", amount_cents: 500, fee_if_promoted_cents: null }, { status: "rejected", amount_cents: 900, fee_if_promoted_cents: null }],
-        amount: "Nothing due", note: null },
-      { name: "waitlisted + withdrawn -> the waitlisted fee (the ended entry adds nothing)",
-        entries: [{ status: "waitlisted", amount_cents: 0, fee_if_promoted_cents: 1500 }, { status: "withdrawn", amount_cents: 2500, fee_if_promoted_cents: null }],
-        amount: "£15.00", note: "Not due while waitlisted" },
-      { name: "a live entry wins: pending 25.00 + waitlisted -> 25.00 and NO waitlist note",
-        entries: [{ status: "pending", amount_cents: 2500, fee_if_promoted_cents: null }, { status: "waitlisted", amount_cents: 0, fee_if_promoted_cents: 1500 }],
-        amount: "£25.00", note: null },
-      { name: "a free confirmed entry is a genuinely free cart -> Free",
-        entries: [{ status: "confirmed", amount_cents: 0, fee_if_promoted_cents: null }], amount: "Free", note: null },
-      { name: "a confirmed entry beside a withdrawn one -> the confirmed fee only",
-        entries: [{ status: "confirmed", amount_cents: 1500, fee_if_promoted_cents: null }, { status: "withdrawn", amount_cents: 1500, fee_if_promoted_cents: null }],
-        amount: "£15.00", note: null },
-      { name: "no entries at all -> Nothing due (the empty case)", entries: [], amount: "Nothing due", note: null },
+  describe("outcome headline, reference hero and what happens next (B4 T15, spec §5.1-5.2)", () => {
+    const headline = (html: string) =>
+      html.match(/<h1[^>]*data-testid="reg-status-headline"[^>]*>([^<]*)</)?.[1]?.replace(/&#x27;/g, "'");
+
+    const HEADLINES: { name: string; entries: Record<string, unknown>[]; kind: string; text: string }[] = [
+      { name: "an unpaid card entry", entries: [{ status: "pending", amount_cents: 2500 }], kind: "pay", text: "Pay to finish entering" },
+      { name: "a confirmed entry", entries: [{ status: "confirmed", settled_by: "card" }], kind: "in", text: "You're in" },
+      { name: "one entry awaiting approval", entries: [{ status: "paid", settled_by: "card" }], kind: "received", text: "Entry received, awaiting approval" },
+      { name: "two entries awaiting approval (plural)", entries: [{ status: "paid", settled_by: "card" }, { status: "pending", amount_cents: 0 }],
+        kind: "received", text: "Entries received, awaiting approval" },
+      { name: "a waitlisted entry", entries: [{ status: "waitlisted", amount_cents: 0 }], kind: "waitlist", text: "You're on the waiting list" },
+      { name: "only withdrawn", entries: [{ status: "withdrawn" }], kind: "closed", text: "This registration is closed" },
+      { name: "no entries", entries: [], kind: "closed", text: "This registration is closed" },
     ];
 
-    it("every case prints its literal amount and note (counted)", async () => {
+    it("the h1 is the outcome, one literal per headline kind (counted)", async () => {
       let checked = 0;
-      for (const c of SUBTOTAL_CASES) {
+      for (const c of HEADLINES) {
         usecaseMock.groupById.mockResolvedValueOnce({
           ...BASE_VIEW,
           entries: c.entries.map((e, i) => ({ ...BASE_ENTRY, id: `reg-${i + 1}`, ...e })),
         });
         const html = await render({ rid: "g1", token: "tok" });
-        const amount = html.match(/data-testid="reg-status-subtotal-amount"[^>]*>([^<]*)</)?.[1];
-        expect(amount, c.name).toBe(c.amount);
-        const note = html.match(/data-testid="reg-status-subtotal-note"[^>]*>([^<]*)</)?.[1] ?? null;
-        expect(note, c.name).toBe(c.note);
+        expect(headline(html), c.name).toBe(c.text);
+        expect(html, c.name).toContain(`data-headline="${c.kind}"`);
+        expect(html.match(/<h1/g)?.length, `${c.name}: one h1`).toBe(1);
         checked += 1;
       }
-      expect(checked).toBe(SUBTOTAL_CASES.length);
-      expect(checked).toBeGreaterThan(0);
+      expect(checked).toBe(HEADLINES.length);
     });
 
-    it("the subtotal is the cart's own currency, to two decimals, in the page's locale (a whole amount keeps its .00)", async () => {
+    it("states where the confirmation went", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce(BASE_VIEW);
+      const html = await render({ rid: "g1", token: "tok" });
+      expect(html).toMatch(/Confirmation sent to <[^>]+>alex@example\.test<\/[a-z]+>\./);
+    });
+
+    it("reg-status-ref holds the cart reference and a Copy reference button", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce(BASE_VIEW);
+      const html = await render({ rid: "g1", token: "tok" });
+      const hero = html.match(/<section[^>]*data-testid="reg-status-ref"[\s\S]*?<\/section>/)?.[0];
+      expect(hero, "reference hero not found").toBeDefined();
+      expect(hero).toContain(">SZ-TEST-01<");
+      expect(hero).toContain("Your reference");
+      expect(hero).toMatch(/<button[^>]*data-testid="reg-status-copy-ref"[\s\S]*?Copy reference/);
+    });
+
+    it("a cart whose reference was never minted shows no hero and no Copy button (nothing to copy)", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce({ ...BASE_VIEW, ref_code: null });
+      const html = await render({ rid: "g1", token: "tok" });
+      expect(html, "anti-vacuity: the page still rendered").toContain("Mixed Doubles");
+      expect(html).not.toContain('data-testid="reg-status-ref"');
+      expect(html).not.toContain("Copy reference");
+    });
+
+    it("no dates, no venue and a closed cart: the section is not rendered (the empty case)", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce({ ...BASE_VIEW, entries: [{ ...BASE_ENTRY, status: "withdrawn" as const }] });
+      const html = await render({ rid: "g1", token: "tok" });
+      expect(html, "anti-vacuity: the page still rendered").toContain("Mixed Doubles");
+      expect(html).not.toContain('data-testid="reg-status-next"');
+      expect(html).not.toContain("What happens next");
+    });
+
+    it("dates, venue and the step render as sentences, the dates in the page's locale", async () => {
       usecaseMock.groupById.mockResolvedValueOnce({
         ...BASE_VIEW,
-        currency: "eur",
-        entries: [{ ...BASE_ENTRY, status: "waitlisted" as const, amount_cents: 0, fee_if_promoted_cents: 1500 }],
+        competition_starts_on: "2026-12-05",
+        competition_ends_on: "2026-12-07",
+        venue_name: "Riverside Courts",
+        entries: [{ ...BASE_ENTRY, status: "waitlisted" as const, amount_cents: 0, waitlist_position: 2 }],
       });
+      const html = (await render({ rid: "g1", token: "tok" })).replace(/&#x27;/g, "'");
+      const lines = [...html.matchAll(/<li[^>]*data-next-kind="([a-z]+)"[^>]*>([^<]*)</g)].map((m) => [m[1], m[2]]);
+      expect(lines).toEqual([
+        ["dates", "Summer Smash runs 5 Dec 2026 to 7 Dec 2026."],
+        ["venue", "Played at Riverside Courts."],
+        ["step", "If a place opens, your entry moves up and this page shows it."],
+      ]);
+      expect(html).toContain("What happens next");
+      // The T13 queue line still sits on the waitlisted card beside the headline's "You're on the waiting list".
+      expect(html).toContain("You're #2 on the waiting list");
+    });
+
+    it("a one-day event says 'starts on'", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce({
+        ...BASE_VIEW,
+        competition_starts_on: "2026-12-05",
+        competition_ends_on: "2026-12-05",
+        entries: [{ ...BASE_ENTRY, status: "confirmed" as const }],
+      });
+      const html = (await render({ rid: "g1", token: "tok" })).replace(/&#x27;/g, "'");
+      expect(html).toContain(">Summer Smash starts on 5 Dec 2026.<");
+      expect(html).toContain(">Nothing else to do. Keep this page — it's your entry.<");
+    });
+
+    it("pay: the step names the same pay-by deadline the card does, in the org's zone", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce(BASE_VIEW);
       const html = await render({ rid: "g1", token: "tok" });
-      expect(html.match(/data-testid="reg-status-subtotal-amount"[^>]*>([^<]*)</)?.[1]).toBe("€15.00");
+      expect(html).toContain(`>Pay by ${fmtPublicDeadline("en", "UTC", FUTURE)} to keep your place.<`);
     });
   });
 
@@ -532,6 +613,32 @@ describe("register status page (RS007 rebuild)", () => {
       usecaseMock.groupById.mockResolvedValueOnce(BASE_VIEW);
       const html = await render({ rid: "g1", token: "tok" });
       expect(html).toContain("Cancel this entry");
+    });
+
+    // B4 T15 (spec §5.1 item 7): Cancel is a quiet text link in the card's own footer, never a filled or outlined button. Its class is
+    // the register tree's quiet-action token (styles.ts BTN_TEXT) plus the 44px tap height.
+    it("Cancel renders as a link-styled button inside the card footer, not a filled button", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce({ ...BASE_VIEW, entries: [BASE_ENTRY] });
+      const html = await render({ rid: "g1", token: "tok" });
+      const card = html.match(/<li class="[^"]*rounded-xl[\s\S]*?<\/li>/)?.[0];
+      expect(card, "entry card not found").toBeDefined();
+      const footer = card!.match(/<div class="border-t[^"]*">[\s\S]*$/)?.[0];
+      expect(footer, "the card's footer").toBeDefined();
+      const button = footer!.match(/<button([^>]*)>Cancel this entry<\/button>/);
+      expect(button, "Cancel sits in the card's footer").not.toBeNull();
+      const cls = button![1]!.match(/class="([^"]*)"/)![1]!;
+      expect(cls).toBe(`${BTN_TEXT} inline-flex min-h-11 items-center`);
+      expect(cls).not.toMatch(/\bborder\b|\bbg-/);
+    });
+
+    it("Resend sits in the page's quiet footer, after the entries and the money line, as a text link", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce(BASE_VIEW);
+      const html = await render({ rid: "g1", token: "tok" });
+      const resend = html.match(/<button([^>]*)>Resend confirmation email<\/button>/);
+      expect(resend, "Resend button").not.toBeNull();
+      expect(resend![1]!.match(/class="([^"]*)"/)![1]).toBe(`${BTN_TEXT} inline-flex min-h-11 items-center`);
+      expect(html.indexOf("Resend confirmation email")).toBeGreaterThan(html.indexOf('data-testid="reg-status-money"'));
+      expect(html.indexOf('data-testid="reg-status-money"')).toBeGreaterThan(html.indexOf("Mixed Doubles"));
     });
 
     it("hides Cancel for an already-withdrawn entry", async () => {

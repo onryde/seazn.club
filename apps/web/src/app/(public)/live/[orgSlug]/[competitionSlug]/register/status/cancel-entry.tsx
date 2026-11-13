@@ -26,6 +26,7 @@ import { TurnstileWidget, useTurnstile } from "@/components/turnstile-widget";
 import { isTurnstileRefusal } from "@/lib/turnstile";
 import { withTurnstile } from "@/lib/turnstile-client";
 import type { MessageKey } from "@/lib/messages";
+import { BTN_QUIET_LINK } from "@/components/public-site/register/styles";
 import { classifyStatusActionFailure, publicWithdrawPath, type StatusActionFailureKind } from "./view-model";
 
 /** Mirrors join-form.tsx's own FAILURE_KEY convention — an explicit map, so
@@ -98,7 +99,7 @@ export function CancelEntry({
         type="button"
         disabled={busy}
         onClick={cancel}
-        className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-600 transition hover:border-red-400 disabled:opacity-50"
+        className={BTN_QUIET_LINK}
       >
         {busy ? msg("register.status.cancel.busy") : msg("register.status.cancel.cta")}
       </button>
