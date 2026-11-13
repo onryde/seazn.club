@@ -21,6 +21,8 @@ export interface TurnstileRenderParams {
   language: string;
   callback: (token: string) => void;
   "error-callback": (code?: string) => boolean | void;
+  /** `auto` (Cloudflare's default, passed explicitly): the widget refreshes an expired token itself. */
+  "refresh-expired": "auto";
   "expired-callback": () => void;
   "timeout-callback": () => void;
   /** Cloudflare's documented bracket around the time the widget shows the visitor a box to tick. */
@@ -41,12 +43,19 @@ export const FLEXIBLE_MIN_WIDTH = 300;
  *  two; an interactive one needs the visitor. Past this the request goes without a token and the server answers for it. */
 export const TOKEN_WAIT_MS = 20_000;
 
+/** The oldest token `token()` hands out. Cloudflare documents a token as valid for 300 s (and single-use); this is that less a
+ *  30 s margin for the request's own flight. A form that arms its widget when it OPENS (the register stepper) can hold a token
+ *  for minutes before the submit, so an older one is treated as absent: the widget is re-armed and the request waits for a fresh
+ *  token rather than sending one siteverify will refuse. */
+export const TOKEN_MAX_AGE_MS = 270_000;
+
 export interface TurnstileController {
   /** Render the widget into `container`. Safe to call again after `unmount()` (React strict mode, a step that leaves and returns). */
   mount(container: HTMLElement, view: TurnstileMountView): void;
   unmount(): void;
-  /** The current token. Resolves at once if there is one; otherwise waits (up to `TOKEN_WAIT_MS`) for the widget to produce one;
-   *  null when there is no widget to wait for (no site key), it failed, or time ran out. Never rejects. */
+  /** The current token. Resolves at once if there is one no older than `TOKEN_MAX_AGE_MS`; an older one is dropped and the
+   *  widget re-armed. Otherwise waits (up to `TOKEN_WAIT_MS`) for the widget to produce one; null when there is no widget to wait
+   *  for (no site key), it failed, or time ran out. Never rejects. */
   token(): Promise<string | null>;
   /** A token is single-use: forget it and have the widget fetch a fresh one (`turnstile.reset(widgetId)`). */
   reset(): void;
@@ -68,15 +77,19 @@ export function createTurnstileController(opts: {
   /** Test seams. */
   setTimeoutFn?: typeof setTimeout;
   clearTimeoutFn?: typeof clearTimeout;
+  /** The clock a token's age is read on (ms). */
+  now?: () => number;
 }): TurnstileController {
   const { siteKey, action, load } = opts;
   const waitMs = opts.waitMs ?? TOKEN_WAIT_MS;
   const setT = opts.setTimeoutFn ?? setTimeout;
   const clearT = opts.clearTimeoutFn ?? clearTimeout;
+  const now = opts.now ?? Date.now;
 
   let api: TurnstileApi | null = null;
   let widgetId: string | null = null;
-  let token: string | null = null;
+  /** The token the widget last produced, with when it arrived (its age decides whether it may still be sent). */
+  let held: { token: string; at: number } | null = null;
   let failed = false;
   /** Inside Cloudflare's interactive phase: a box is on screen for the visitor to tick. */
   let interactive = false;
@@ -88,6 +101,14 @@ export function createTurnstileController(opts: {
 
   const settle = (t: string | null) => {
     for (const w of [...waiters]) w(t);
+  };
+  /** Forget the token and have the widget run a fresh challenge (`turnstile.reset(widgetId)`); the next callback brings the token. */
+  const rearm = () => {
+    held = null;
+    failed = false;
+    // A fresh challenge runs; if it needs the visitor, Cloudflare says so again (before-interactive).
+    interactive = false;
+    if (api && widgetId !== null) api.reset(widgetId);
   };
 
   return {
@@ -107,8 +128,9 @@ export function createTurnstileController(opts: {
             appearance: "interaction-only",
             size: view.width < FLEXIBLE_MIN_WIDTH ? "compact" : "flexible",
             language: view.language,
+            "refresh-expired": "auto",
             callback: (t) => {
-              token = t;
+              held = { token: t, at: now() };
               failed = false;
               // A token ends the interactive phase even if after-interactive never comes, so its later (invisible) refresh
               // never reads as a box to tick.
@@ -118,15 +140,14 @@ export function createTurnstileController(opts: {
             // Cloudflare retries most failures itself and calls back with a token afterwards, so an error is only "failed
             // for now": it releases anyone waiting (they send without a token) and is cleared by the next good callback.
             "error-callback": () => {
-              token = null;
+              held = null;
               failed = true;
               settle(null);
             },
-            "expired-callback": () => {
-              token = null;
-            },
+            // Expired (300 s since issue): forget it AND re-arm, so a fresh token is on its way before anyone asks for one.
+            "expired-callback": rearm,
             "timeout-callback": () => {
-              token = null;
+              held = null;
             },
             "before-interactive-callback": () => {
               interactive = true;
@@ -148,7 +169,7 @@ export function createTurnstileController(opts: {
       const mine = ++generation;
       if (api && widgetId !== null) api.remove(widgetId);
       widgetId = null;
-      token = null;
+      held = null;
       interactive = false;
       box = null;
       // Whoever is waiting for a token is released with null only if NOTHING mounts straight after. React strict mode (dev) runs
@@ -163,7 +184,9 @@ export function createTurnstileController(opts: {
 
     token() {
       if (!siteKey) return Promise.resolve(null);
-      if (token) return Promise.resolve(token);
+      // A token older than TOKEN_MAX_AGE_MS is treated as absent: re-arm, then wait below for the fresh one.
+      if (held && now() - held.at > TOKEN_MAX_AGE_MS) rearm();
+      if (held?.token) return Promise.resolve(held.token);
       if (failed) return Promise.resolve(null);
       return new Promise<string | null>((resolve) => {
         const done = (t: string | null) => {
@@ -176,16 +199,10 @@ export function createTurnstileController(opts: {
       });
     },
 
-    reset() {
-      token = null;
-      failed = false;
-      // A fresh challenge runs; if it needs the visitor, Cloudflare says so again (before-interactive).
-      interactive = false;
-      if (api && widgetId !== null) api.reset(widgetId);
-    },
+    reset: rearm,
 
     awaitingVisitor() {
-      return interactive && token === null && !failed;
+      return interactive && held === null && !failed;
     },
 
     reveal() {

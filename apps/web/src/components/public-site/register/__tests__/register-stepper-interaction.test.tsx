@@ -2032,6 +2032,56 @@ describe("step 5 — submit", () => {
       expect(propsOf(widgets[0]!).controller).toBe(turnstileFake.controller);
     });
 
+    // Registration redesign B1 (spec §3.3 item 1): the invisible check starts when the form OPENS, not when Review does, so a
+    // typical Review dwell finds a token already waiting. One widget, a direct child of the stepper root (outside the step switch),
+    // in the SAME slot of the root's children on every step: React matches key-less children by slot, so the same slot is the
+    // same mounted widget, never torn down and re-rendered (which would restart the challenge) when the step changes.
+    // Not hidden and not aria-hidden: the widget is `interaction-only`, so when Cloudflare does need the visitor it shows a
+    // checkbox there, which must be seen and reachable.
+    it("the widget mounts on the first step and stays the same single root-level widget on every step through review", async () => {
+      const slots: string[] = [];
+      const checkStep = (island: ReturnType<typeof mount>["island"], step: string) => {
+        const tree = island.tree();
+        const widgets = tree.filter((e) => typeof e.type === "function" && e.type.name === "TurnstileWidgetStub");
+        expect(widgets, `${step}: exactly one widget`).toHaveLength(1);
+        expect(propsOf(widgets[0]!).controller, `${step}: wired to the controller that sends the request`).toBe(turnstileFake.controller);
+        const rootChildren = propsOf(tree[0]!).children as unknown[];
+        const slot = rootChildren.indexOf(widgets[0]);
+        expect(slot, `${step}: a direct child of the stepper root, outside the step switch`).toBeGreaterThanOrEqual(0);
+        const p = propsOf(widgets[0]!);
+        expect(p.hidden, `${step}: never hidden`).toBeUndefined();
+        expect(p["aria-hidden"], `${step}: never aria-hidden`).toBeUndefined();
+        slots.push(`${step}@${slot}`);
+      };
+
+      // A two-division competition: the Entries step is in the order too.
+      const two = mount([DIV_OPEN, DIV_OPEN_2]);
+      checkStep(two.island, "who");
+      (propsOf(two.stepWho()).onChange as (p: object) => void)({ name: "Alex Test", email: "alex@example.com" });
+      two.clickByText("Next");
+      checkStep(two.island, "entries");
+
+      // One division: Who, Details, Consent, Review. A fresh draft store: the first stepper saved its step there.
+      (globalThis as { sessionStorage?: unknown }).sessionStorage = new MapStorage();
+      const m = mount([DIV_OPEN]);
+      checkStep(m.island, "who");
+      (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Alex Test", email: "alex@example.com" });
+      m.clickByText("Next");
+      checkStep(m.island, "details");
+      setByAriaLabel(m.island, "Player 1 — Your name", "Alex Test");
+      m.clickByText("Next");
+      checkStep(m.island, "consent");
+      (propsOf(byId(m.island, "reg-consent-privacy")).onChange as (e: { target: { checked: boolean } }) => void)({
+        target: { checked: true },
+      });
+      m.clickByText("Next");
+      checkStep(m.island, "review");
+
+      const steps = slots.map((s) => s.split("@")[0]);
+      expect(steps, "anti-vacuity: every step of both orders was checked").toEqual(["who", "entries", "who", "details", "consent", "review"]);
+      expect(new Set(slots.map((s) => s.split("@")[1])).size, `one slot on every step: ${slots.join(", ")}`).toBe(1);
+    });
+
     it("a held token travels in the header on the register POST (never in the body), and the widget is reset afterwards", async () => {
       turnstileFake.token = "tok-from-widget";
       apiV1Mock.impl.mockResolvedValueOnce(FREE_RESULT);

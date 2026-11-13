@@ -527,8 +527,6 @@ export function RegisterStepper({
       {currentStep === "review" && (
         <>
           <StepReview summary={reviewSummary} locale={locale} />
-          {/* Mounted on the step that submits, so the invisible check starts when it is needed and a token is fresh at the click. */}
-          <TurnstileWidget controller={turnstile} />
           {submitError &&
             (submitError.lichess !== null ? (
               // A Lichess reason says WHAT is wrong and WHAT to do, so it stands alone: the generic "check your details"
@@ -580,6 +578,14 @@ export function RegisterStepper({
             ))}
         </>
       )}
+
+      {/* The bot check, mounted ONCE at the root, outside the step switch (registration redesign B1, spec §3.3 item 1): the
+          invisible challenge starts when the form opens, so a token is usually waiting by the time Review is reached, and a step
+          change never re-renders it. A token held too long is re-armed by the controller (TOKEN_MAX_AGE_MS). A plain laid-out box,
+          not `display:none` (Cloudflare renders into a laid-out node) and not aria-hidden: the widget is `interaction-only`, so
+          when Cloudflare needs the visitor it shows a checkbox HERE, above Back/Next on whatever step they are on. Invisible, it
+          is 0px tall and its spacing collapses into its neighbours' (block flow), so no step's layout moves. */}
+      <TurnstileWidget controller={turnstile} />
 
       {/* relative z-50: the SAME escape hatch cookie-consent.tsx documents
           for dialogs (its own header comment — "nothing needs to sit above

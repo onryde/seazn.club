@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TURNSTILE_ACTIONS, TURNSTILE_HEADER } from "@/lib/turnstile";
 import {
   FLEXIBLE_MIN_WIDTH,
+  TOKEN_MAX_AGE_MS,
   TOKEN_WAIT_MS,
   TURNSTILE_SCRIPT_SRC,
   createTurnstileController,
@@ -627,6 +628,110 @@ describe("awaitingVisitor and reveal: an interactive challenge with no token yet
     c.unmount();
     c.reveal();
     expect(b.calls, "after unmount: nothing more").toHaveLength(2);
+  });
+});
+
+// Registration redesign B1 (spec 2026-11-13 §3.3 item 1, Review Focus #1): the register form arms its widget when the form OPENS, so
+// by the time a person reaches Review the token can be minutes old. Cloudflare documents a token as valid for 300 seconds and
+// single-use; a token older than that fails siteverify. The controller therefore treats a held token older than TOKEN_MAX_AGE_MS
+// (300 s less a 30 s margin for the request's own flight) as absent: it re-arms the widget and waits for a fresh one, instead of
+// sending a dead token (or, before this, waiting out TOKEN_WAIT_MS and sending none).
+describe("a token aged past its validity is never sent: re-arm, then wait for the fresh one", () => {
+  /** A controller on a hand-driven clock. */
+  function aged(widget = fakeWidget({ autoSolve: false })) {
+    const clock = { t: 0 };
+    const { c } = controller({ now: () => clock.t }, widget);
+    return { c, widget, clock };
+  }
+
+  it("TOKEN_MAX_AGE_MS is Cloudflare's 300 s token validity less a 30 s margin", () => {
+    expect(TOKEN_MAX_AGE_MS).toBe(300_000 - 30_000);
+  });
+
+  it("token() re-arms when the held token is older than TOKEN_MAX_AGE_MS: one reset, and the NEXT token resolves it, never the stale one", async () => {
+    const { c, widget, clock } = aged();
+    c.mount(CONTAINER, VIEW);
+    await flush();
+    widget.solve("tok-stale"); // issued at t=0
+    clock.t = 271_000;
+    let got: string | null | undefined;
+    void c.token().then((t) => (got = t));
+    await flush();
+    expect(widget.api.reset, "the widget was re-armed once").toHaveBeenCalledTimes(1);
+    expect(widget.api.reset).toHaveBeenCalledWith("w1");
+    expect(got, "waiting for the fresh token, not answered with the stale one").toBeUndefined();
+    widget.solve("tok-fresh");
+    await flush();
+    expect(got).toBe("tok-fresh");
+  });
+
+  it("the boundary: a token exactly TOKEN_MAX_AGE_MS old is still used (no reset); one ms older is re-armed", async () => {
+    const { c, widget, clock } = aged();
+    c.mount(CONTAINER, VIEW);
+    await flush();
+    widget.solve("tok-a");
+    clock.t = TOKEN_MAX_AGE_MS;
+    expect(await c.token()).toBe("tok-a");
+    expect(widget.api.reset).not.toHaveBeenCalled();
+    clock.t = TOKEN_MAX_AGE_MS + 1;
+    void c.token();
+    await flush();
+    expect(widget.api.reset).toHaveBeenCalledTimes(1);
+  });
+
+  it("age runs from each token's OWN issue: the fresh token is used at once, and a second caller during the wait does not reset again", async () => {
+    const { c, widget, clock } = aged();
+    c.mount(CONTAINER, VIEW);
+    await flush();
+    widget.solve("tok-1"); // t=0
+    clock.t = 400_000;
+    const first = c.token();
+    const second = c.token(); // the token is already dropped: this one just waits
+    await flush();
+    expect(widget.api.reset, "one re-arm for both callers").toHaveBeenCalledTimes(1);
+    widget.solve("tok-2"); // issued at t=400 000
+    expect(await first).toBe("tok-2");
+    expect(await second).toBe("tok-2");
+    clock.t = 400_000 + 60_000; // the fresh token is a minute old
+    expect(await c.token()).toBe("tok-2");
+    expect(widget.api.reset).toHaveBeenCalledTimes(1);
+  });
+
+  it("a token is never reused across two submits: the first (re-armed for age) sends the fresh token, the second a fresh one again", async () => {
+    const { c, clock } = aged(fakeWidget()); // auto-solve: every render and every reset produces the next token
+    c.mount(CONTAINER, VIEW);
+    await flush(); // tok-1 at t=0
+    clock.t = 280_000;
+    const sent: string[] = [];
+    await withTurnstile(c, async (headers) => void sent.push(headers[TURNSTILE_HEADER]!));
+    await flush();
+    await withTurnstile(c, async (headers) => void sent.push(headers[TURNSTILE_HEADER]!));
+    expect(sent, "the stale tok-1 is never sent; each submit spends its own token").toEqual(["tok-2", "tok-3"]);
+    expect(new Set(sent).size).toBe(2);
+  });
+
+  it("expired-callback resets the widget exactly once and drops the token: the next request waits for the refresh", async () => {
+    const { c, widget } = aged();
+    c.mount(CONTAINER, VIEW);
+    await flush();
+    widget.solve("tok-x");
+    widget.params()["expired-callback"]();
+    expect(widget.api.reset).toHaveBeenCalledTimes(1);
+    expect(widget.api.reset).toHaveBeenCalledWith("w1");
+    let got: string | null | undefined;
+    void c.token().then((t) => (got = t));
+    await flush();
+    expect(got, "the expired token is not handed out").toBeUndefined();
+    widget.solve("tok-y");
+    await flush();
+    expect(got).toBe("tok-y");
+  });
+
+  it("render passes refresh-expired auto explicitly (Cloudflare refreshes an expired token itself)", async () => {
+    const { c, widget } = controller();
+    c.mount(CONTAINER, VIEW);
+    await flush();
+    expect(widget.params()["refresh-expired"]).toBe("auto");
   });
 });
 
