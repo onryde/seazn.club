@@ -14,6 +14,7 @@
 // the round's role and the match's place among its round's non-bye matches.
 import type { RoundRole } from "@seazn/engine/competition";
 import { STAGE_TEMPLATES, type StageDraft } from "@/lib/format-templates";
+import type { CreateStages } from "@/server/api-v1/schemas";
 import {
   QUICK_MATCH_KNOCKOUT_MIN_SIDES,
   QUICK_MATCH_MAX_PLAYS,
@@ -50,13 +51,17 @@ export interface QuickMatchPreview {
   matchCount: number;
   rounds: QuickMatchPreviewRound[];
 }
+/** One stage of `createStages`' body (the API's `CreateStage`). */
+export type CreateStageBody = Extract<CreateStages, readonly unknown[]>[number];
+
 /** A PreviewStageInput, and a CreateStage once its `seq` is added: ONE input for the preview and the create. The progression
- *  is the league_ko template's (a League + Knockout's knockout stage), null on every other stage. */
+ *  is the league_ko template's (a League + Knockout's knockout stage), null on every other stage, typed as the create's body
+ *  takes it, so the create passes it as it is and the compiler still checks it there. */
 export interface QuickMatchStageInput {
   kind: "league" | "knockout";
   name: string;
   config: { legs: number } | Record<string, never>;
-  progression: StageDraft["progression"];
+  progression: CreateStageBody["progression"];
 }
 
 /** A format and a count that disagree (`league_knockout` ⇔ a count): the schema refuses the pair (`checkQualifiers`), but a
@@ -100,7 +105,13 @@ export function quickMatchStageInputs(input: {
   const league: QuickMatchStageInput = { kind: "league", name, config: { legs: plays }, progression: null };
   if (format === "league") return [league];
   if (format === "knockout") return [{ kind: "knockout", name, config: {}, progression: null }];
-  return [league, { kind: "knockout", name, config: {}, progression: templateKnockout(qualifiers!).progression }];
+  return [league, { kind: "knockout", name, config: {}, progression: bodyProgression(templateKnockout(qualifiers!)) }];
+}
+
+/** The template's progression as the create's body types it. The same value: the template types its lists `readonly` (a draft
+ *  is never mutated), the body's zod type mutable, so the cast drops only that, on this value only. */
+function bodyProgression(knockout: StageDraft): CreateStageBody["progression"] {
+  return knockout.progression as CreateStageBody["progression"];
 }
 
 /** How many stages a quick match of `format` is built with: its stage graph's length (`quickMatchStageInputs`). The saver's
@@ -216,8 +227,8 @@ export interface QuickMatchKnockoutCell {
 export type QuickMatchPreviewTable = { [key: `league:${number}:${number}`]: QuickMatchLeagueCell | undefined } & {
   [key: `league_knockout:${number}:${number}:${number}`]: QuickMatchLeagueCell | undefined;
 };
-/** Keyed `"knockout:<sides>:1"`: a knockout carries no plays (its stage has no legs), so its key always ends `:1`. Not
- *  shipped to a guest today (League only); kept for League + Knockout. */
+/** Keyed `"knockout:<sides>:1"`: a knockout carries no plays (its stage has no legs), so its key always ends `:1`. Shipped to
+ *  no guest: a plain Knockout is not offered, and a League + Knockout's preview counts its knockout by `previewOf`, not these. */
 export type QuickMatchKnockoutDraws = { [key: `knockout:${number}:1`]: QuickMatchKnockoutCell | undefined };
 
 function knockoutCell(preview: QuickMatchPreview, sides: number): QuickMatchKnockoutCell {

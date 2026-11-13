@@ -243,7 +243,7 @@ function expectRenamed(after: Names, before: Names, name: string): void {
   expect(after.quickMatch, "quick_matches.name").toBe(name);
   expect(after.competition, "competitions.name").toBe(name);
   expect(after.divisions.map((d) => d.name), "divisions.name (the create copies it)").toEqual([name]);
-  expect(after.stages, "the stage's name (quickMatchStageInput copies it)").toEqual([name]);
+  expect(after.stages, "the stage's name (quickMatchStageInputs copies it)").toEqual([name]);
   expect(after.competitionSlug, "the competition's slug never changes").toBe(before.competitionSlug);
   expect(after.divisions.map((d) => d.slug), "the division's slug never changes").toEqual(before.divisions.map((d) => d.slug));
   expect(after.slugHistory, "no slug_history row: a keyless row the hard delete would orphan").toBe(0);

@@ -52,7 +52,7 @@ import {
   QUICK_MATCH_SYSTEM_USER_ID,
 } from "@/lib/quick-match-constants";
 import { routes } from "@/lib/routes";
-import type { CreateQuickMatch, CreateStages } from "@/server/api-v1/schemas";
+import type { CreateQuickMatch } from "@/server/api-v1/schemas";
 import { resolveModule } from "@/server/engine-db/registry";
 import { tableRulesOf } from "@/server/engine-db/table-rules";
 import { enqueueEmail, expiryWithin, recipientLocale } from "@/server/email-outbox";
@@ -63,7 +63,13 @@ import { createDivision } from "./divisions";
 import { createEntrants } from "./entrants";
 import { hardDeleteQuickMatchCompetition, QUICK_MATCH_OUTBOX_REF_TYPE } from "./quick-match-delete";
 import { cutTiebreakers } from "./quick-match-cut";
-import { quickMatchPreview, quickMatchStageInputs, type QuickMatchQualifiers, type QuickMatchStageInput } from "./quick-match-preview";
+import {
+  quickMatchPreview,
+  quickMatchStageInputs,
+  type CreateStageBody,
+  type QuickMatchQualifiers,
+  type QuickMatchStageInput,
+} from "./quick-match-preview";
 import { offerFor } from "./quick-match-sports";
 import { hashHomeToken, mintHomeToken, sealHomeToken } from "./quick-match-tokens";
 import { afterScheduleWrite, startDivisionInTx } from "./schedule";
@@ -196,6 +202,15 @@ function leagueCutOrder(division: CutOrderScope, league: QuickMatchStageInput): 
   return cutTiebreakers(sportDefault);
 }
 
+/** A league stage's config with its own tie-break order (Step 0). The create's one cast, on this value only, so every other field
+ *  of each stage stays checked: the body's config type is the API's, which names no `tiebreakers` (the API takes a stage's own
+ *  order on PUT .../rules), while `createStages`' door reads it (`stageConfigsAtCreate` keeps it; `refuseNewStageTable`
+ *  validates it on the stage's kind before any insert), as `replaceStages`' carried order goes in. */
+function withOwnOrder(config: QuickMatchStageInput["config"], order: TiebreakerKey[]): CreateStageBody["config"] {
+  const own: Record<string, unknown> = { ...config, tiebreakers: order };
+  return own as CreateStageBody["config"];
+}
+
 /** An email with no base URL to build its link from (plan 3 Amend T1 [B2]): a programmer error, never a silent create
  *  that mails nothing. Thrown before anything is minted or written. */
 function baseUrlMissing(): HttpError {
@@ -243,17 +258,14 @@ export async function createQuickMatchTree(
       config: { entrants: { kinds: [kind], defaultKind: kind } },
     });
     const inputs = quickMatchStageInputs({ format, plays, name, qualifiers });
-    // The cast: `CreateStages` is the API body's type, and the API takes a stage's own order on PUT .../rules, not in the body,
-    // so the type names no `tiebreakers`. The usecase's door does read one (`stageConfigsAtCreate` keeps it; `refuseNewStageTable`
-    // validates it on the stage's kind before any insert), as `replaceStages`' carried order goes in.
     const stages = await createStages(
       auth,
       division.id,
       inputs.map((s, i) => ({
         seq: i + 1,
         ...s,
-        config: format === "league_knockout" && s.kind === "league" ? { ...s.config, tiebreakers: leagueCutOrder(division, s) } : s.config,
-      })) as CreateStages,
+        config: format === "league_knockout" && s.kind === "league" ? withOwnOrder(s.config, leagueCutOrder(division, s)) : s.config,
+      })),
     );
     if (stages.length !== inputs.length) throw new Error(`quick match: createStages returned ${stages.length} of ${inputs.length} stages`);
     const [stage, knockout = null] = stages;

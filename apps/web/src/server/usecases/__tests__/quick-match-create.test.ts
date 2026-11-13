@@ -36,6 +36,7 @@ import { loadTableRules } from "@/server/engine-db/table-rules";
 import { CreateQuickMatch } from "@/server/api-v1/schemas";
 import { createCompetition } from "../competitions";
 import { listDivisionFixtures } from "../fixtures";
+import { UNDO_BARRIER_TYPES } from "../history";
 import { createQuickMatch, createQuickMatchTree, sealNewHomeToken, systemAuth } from "../quick-match-create";
 import { quickMatchPreview } from "../quick-match-preview";
 import { listQuickMatchSports, offerFor } from "../quick-match-sports";
@@ -512,6 +513,18 @@ describe.skipIf(!HAS_DB)("createQuickMatch (Part C: League + Knockout, two stage
 
     const [division] = await sql<{ auto_progress: boolean }[]>`select auto_progress from divisions where id = ${out.divisionId}`;
     expect(division!.auto_progress, "D2: the quick match advances itself; the organiser switch stays off").toBe(false);
+    // Both stages are ACTIVE and pinned from the moment of create: the knockout's setup-timing bracket starts its stage
+    // (`stages/setup-fixtures.ts`, pending → active + pin). So "the knockout has started" is never `stages.status`: it is a
+    // confirmed proposal (`seed_confirmed`) or a seated line, and neither exists yet.
+    const states = await sql<{ status: string; pinned: boolean }[]>`
+      select status, table_rules_pinned is not null as pinned from stages where division_id = ${out.divisionId} order by seq`;
+    expect(states, "league, then knockout: both active and pinned at create").toEqual([
+      { status: "active", pinned: true },
+      { status: "active", pinned: true },
+    ]);
+    expect(Object.keys(UNDO_BARRIER_TYPES), "premise: `seed_confirmed` is the confirm's ledger row").toContain("seed_confirmed");
+    const confirmed = await sql`select 1 from division_events where division_id = ${out.divisionId} and type = 'seed_confirmed'`;
+    expect(confirmed, "no seed confirmed at create").toHaveLength(0);
     expect(await sql`select format from quick_matches where id = ${out.id}`).toEqual([{ format: "league_knockout" }]);
     expect(out.matchCount, "the Start button's number").toBe(quickMatchPreview({ format: "league_knockout", sides: 4, plays: 1, qualifiers: 4 }).matchCount);
     expect(out.matchCount, "6 + 3 (rulebook)").toBe(9);
@@ -597,7 +610,9 @@ describe.skipIf(!HAS_DB)("createQuickMatch (Part C: League + Knockout, two stage
     expect((await make({ ...input(), kind: "pair" })).matchCount).toBe(6);
   });
 
-  it("refuses a format and a count that disagree (a caller that built its input in code, past the schema) with 400 VALIDATION", async () => {
+  it("refuses a format and a count that disagree (a caller that built its input in code, past the schema) with 400 VALIDATION, before the mail limit is asked; the tree alone refuses them too", async () => {
+    const email = "guest@qm-create.test";
+    const baseUrl = "https://qm-create.test";
     const cases: CreateQuickMatch[] = [
       { ...lk(2, 3), qualifiers: null },
       { ...lk(2, 3), qualifiers: undefined },
@@ -605,12 +620,27 @@ describe.skipIf(!HAS_DB)("createQuickMatch (Part C: League + Knockout, two stage
     ];
     let refused = 0;
     for (const asked of cases) {
-      await expect(createQuickMatch(asked, ctx(reachedTree)), `${asked.format} with ${asked.qualifiers}`)
+      const where = `${asked.format} with ${asked.qualifiers}`;
+      // The guarded create: refused before `ctx.mailAllowed`, so a refused create spends no mail bucket (its docstring, step 3).
+      const mailAllowed = vi.fn(async () => true as const);
+      await expect(createQuickMatch({ ...asked, email }, { visitorHash: v(), mailAllowed, baseUrl, _failBeforeGenerateForTests: reachedTree }), where)
         .rejects.toMatchObject({ status: 400, code: "VALIDATION" });
+      expect(mailAllowed, `${where}: no mail bucket spent`).not.toHaveBeenCalled();
       await nothingBuilt(asked.name);
+      // The tree on its own (the offer probe's door, no guard in front of it): the same refusal, nothing built.
+      const { kind, ...treeInput } = asked;
+      const treeName = uniq();
+      await expect(createQuickMatchTree({ ...treeInput, name: treeName }, kind, { visitorHash: v(), home: sealNewHomeToken() }), `tree: ${where}`)
+        .rejects.toMatchObject({ status: 400, code: "VALIDATION" });
+      await nothingBuilt(treeName);
       refused++;
     }
     expect(refused).toBe(3);
+    // The positive pair: a format and a count that agree, with an email, ask the mail limit once and are made.
+    const mailAllowed = vi.fn(async () => true as const);
+    const made = await createQuickMatch({ ...lk(2, 3), email }, { visitorHash: v(), mailAllowed, baseUrl });
+    lkMade.push(made.competitionId);
+    expect(mailAllowed, "an agreeing pair asks the mail limit").toHaveBeenCalledTimes(1);
   });
 
   it("quick_match_created carries the count: 2 for League → Final, 4 for semi-finals (and null for a League, Part B)", async () => {
