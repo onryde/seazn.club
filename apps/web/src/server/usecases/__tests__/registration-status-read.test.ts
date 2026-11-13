@@ -18,9 +18,14 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
-const stripeMock = vi.hoisted(() => ({ retrieve: vi.fn() }));
+// `refunds.create`: registration redesign B4 T14 drives the real organiser Refund and withdrawal over a card payment, to show a
+// refund never rewrites how an entry settled.
+const stripeMock = vi.hoisted(() => ({ retrieve: vi.fn(), refundCreate: vi.fn() }));
 vi.mock("@/lib/stripe", () => ({
-  getStripe: () => ({ checkout: { sessions: { retrieve: stripeMock.retrieve } } }),
+  getStripe: () => ({
+    checkout: { sessions: { retrieve: stripeMock.retrieve } },
+    refunds: { create: stripeMock.refundCreate },
+  }),
 }));
 
 // RS007 rebuild: resendRegistrationConfirmationPublic queues the cart's confirmation on the email outbox (kind
@@ -53,13 +58,21 @@ vi.mock("@/lib/rate-limit", async (importOriginal) => {
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import {
+  confirmRegistration,
+  confirmRegistrationWaived,
   groupById,
   groupByRef,
+  handleRegistrationCheckoutCompleted,
+  markRegistrationPaidOffline,
   publicCartByRef,
+  putRegistrationSettings,
   reconcileRegistration,
   reconcileRegistrationBySession,
   reconcileRegistrationGroupBySession,
+  refundRegistration,
   resendRegistrationConfirmationPublic,
+  withdrawRegistrationOrganiser,
+  type GroupStatusView,
 } from "@/server/usecases/registrations";
 import { generateRefCode } from "@/lib/ref-code";
 import { idempotencyKey } from "@/server/email-outbox/constants";
@@ -67,6 +80,8 @@ import { stubOutboxEnv } from "./_invite-mail";
 import { createDivision, patchDivision } from "../divisions";
 import {
   asOwner,
+  fakeSession,
+  farFutureDate,
   rig,
   seedOrg,
   seedRegistration,
@@ -100,6 +115,7 @@ async function stripeSettingsRig() {
 
 beforeEach(() => {
   stripeMock.retrieve.mockReset();
+  stripeMock.refundCreate.mockReset().mockImplementation(async () => ({ id: `re_sr_${randomUUID().slice(0, 8)}` }));
   transport.deliver.mockReset().mockImplementation(async () => ({ ok: true, providerId: `re_sr_${randomUUID()}` }));
   stubOutboxEnv();
   rateLimitMock.throttle = false;
@@ -559,6 +575,267 @@ describe.skipIf(!HAS_DB)("groupById — widened fields for the status page rebui
 
     const view = await groupById(registration.group_id, access_token);
     expect(view.entries[0]!.entrant_kind).toBe("individual");
+  });
+});
+
+// Registration redesign B4 T14 (spec §5.2, §5.3): what the status page's "what happens next" and money line read. The
+// derivations are pure and tested in registration-status-facts.test.ts; this drives the REAL writers — the competition row,
+// real fixtures carrying a venue, and every settle path (Mark paid, Confirm without payment, the card webhook, the organiser's
+// Confirm, Refund, withdrawal) — and reads the result back through groupById, the page's own read.
+//
+// Venue (FP1): `competitions` has no venue. A fixture carries one (`fixtures.venue_id`, V374, written from the court at
+// schedule apply), and the public site hides it while the division's schedule is unpublished (`status = 'setup'`,
+// public_fixtures_v / withCourtVenueNames), so a draft placement never names a venue here either.
+// Another sport: N/A — registration money and venues are sport-agnostic.
+describe.skipIf(!HAS_DB)("groupById — dates, venue and how each entry settled (registration redesign B4 T14)", () => {
+  /** An organiser-side division with an offline fee (0 = free) and the given review mode. */
+  async function offlineRig(feeCents: number, approval: "auto" | "manual" = "auto") {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      ...SETTINGS_BASE,
+      payment_method: "offline",
+      fee_cents: feeCents,
+      approval,
+    });
+    return { orgId, owner, competition, division, settings };
+  }
+
+  const venueRow = async (orgId: string, name: string): Promise<string> =>
+    (await sql<{ id: string }[]>`insert into venues (org_id, name) values (${orgId}, ${name}) returning id`)[0]!.id;
+
+  /** A stage and one fixture per element of `venueIds` (null = a fixture not placed at a venue yet), in the post-cutover shape
+   *  (V374): `venue_id` set, the frozen free-text `venue` left null. */
+  async function placeFixtures(orgId: string, divisionId: string, venueIds: (string | null)[]): Promise<void> {
+    const [{ id: stageId }] = await sql<{ id: string }[]>`
+      insert into stages (org_id, division_id, kind, name, seq)
+      values (${orgId}, ${divisionId}, 'league', 'League', 1) returning id`;
+    let n = 0;
+    for (const venueId of venueIds) {
+      n += 1;
+      await sql`
+        insert into fixtures (org_id, division_id, stage_id, fixture_no, round_no, seq_in_round, venue_id)
+        values (${orgId}, ${divisionId}, ${stageId}, ${n}, 1, ${n}, ${venueId})`;
+    }
+  }
+
+  const publishSchedule = (divisionId: string) => sql`update divisions set status = 'scheduled' where id = ${divisionId}`;
+
+  const settledOf = (view: GroupStatusView, regId: string) => {
+    const entry = view.entries.find((e) => e.id === regId);
+    if (!entry) throw new Error(`entry ${regId} is not in the cart`);
+    return entry.settled_by;
+  };
+
+  /** competition_events rows of one type for one entry, oldest first. */
+  const eventsOf = (type: string, regId: string) =>
+    sql<{ payload: Record<string, unknown> }[]>`
+      select payload from competition_events
+      where type = ${type} and payload->>'registration_id' = ${regId}
+      order by created_at, id`;
+
+  it("carries the competition's own starts_on and ends_on as plain dates, and null when the competition has none", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const startsOn = farFutureDate(40);
+    const endsOn = farFutureDate(42);
+    const { competition, division } = await rig(owner, { startsOn, endsOn });
+    const settings = await putRegistrationSettings(owner, division.id, { ...SETTINGS_BASE, payment_method: "offline", fee_cents: 0 });
+    const { registration, access_token } = await seedRegistration(competition.id, division.id, settings);
+
+    const view = await groupById(registration.group_id, access_token);
+    expect(view.competition_name).toBe(competition.name);
+    expect(view.competition_starts_on).toBe(startsOn);
+    expect(view.competition_ends_on).toBe(endsOn);
+
+    await sql`update competitions set starts_on = null, ends_on = null where id = ${competition.id}`;
+    const undated = await groupById(registration.group_id, access_token);
+    expect(undated.competition_starts_on).toBeNull();
+    expect(undated.competition_ends_on).toBeNull();
+  });
+
+  it("venue_name is null with no fixtures", async () => {
+    const { competition, division, settings } = await offlineRig(0);
+    await publishSchedule(division.id);
+    const { registration, access_token } = await seedRegistration(competition.id, division.id, settings);
+    const view = await groupById(registration.group_id, access_token);
+    expect(view.venue_name).toBeNull();
+  });
+
+  it("venue_name is the single venue all scheduled fixtures share — an unplaced fixture and another competition's venue never count", async () => {
+    const { orgId, owner, competition, division, settings } = await offlineRig(0);
+    const hall = "Riverside Sports Hall " + randomUUID().slice(0, 6);
+    const hallId = await venueRow(orgId, hall);
+    await placeFixtures(orgId, division.id, [hallId, hallId, null]);
+    await publishSchedule(division.id);
+    // The same org's OTHER competition, published, at another venue.
+    const other = await rig(owner);
+    const elsewhereId = await venueRow(orgId, "Elsewhere Arena " + randomUUID().slice(0, 6));
+    await placeFixtures(orgId, other.division.id, [elsewhereId]);
+    await publishSchedule(other.division.id);
+
+    const { registration, access_token } = await seedRegistration(competition.id, division.id, settings);
+    const view = await groupById(registration.group_id, access_token);
+    expect(view.venue_name).toBe(hall);
+  });
+
+  it("venue_name is null with two venues", async () => {
+    const { orgId, competition, division, settings } = await offlineRig(0);
+    const a = await venueRow(orgId, "Alpha Hall " + randomUUID().slice(0, 6));
+    const b = await venueRow(orgId, "Beta Arena " + randomUUID().slice(0, 6));
+    await placeFixtures(orgId, division.id, [a, b, a]);
+    await publishSchedule(division.id);
+    const { registration, access_token } = await seedRegistration(competition.id, division.id, settings);
+    const view = await groupById(registration.group_id, access_token);
+    expect(view.venue_name).toBeNull();
+  });
+
+  it("an unpublished division's draft venue is never named; the venue appears once its schedule is published", async () => {
+    const { orgId, owner, competition, division, settings } = await offlineRig(0);
+    const hall = "Draft Hall " + randomUUID().slice(0, 6);
+    await placeFixtures(orgId, division.id, [await venueRow(orgId, hall)]);
+    const { registration, access_token } = await seedRegistration(competition.id, division.id, settings);
+
+    // Still `setup`: the public site shows no venue for this schedule, and neither does this page.
+    expect((await groupById(registration.group_id, access_token)).venue_name).toBeNull();
+
+    await publishSchedule(division.id);
+    expect((await groupById(registration.group_id, access_token)).venue_name).toBe(hall);
+
+    // A second division of the same competition, still drafting at another venue: without the publication rule this would read
+    // as two venues and drop the line.
+    const drafting = await createDivision(owner, competition.id, {
+      name: "Draft " + randomUUID().slice(0, 4),
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    });
+    await placeFixtures(orgId, drafting.id, [await venueRow(orgId, "Other Draft Arena " + randomUUID().slice(0, 6))]);
+    expect((await groupById(registration.group_id, access_token)).venue_name).toBe(hall);
+  });
+
+  it("settled_by is null for a pending entry and for a waitlisted one", async () => {
+    const { competition, division, settings } = await offlineRig(1500);
+    const { registration, access_token } = await seedRegistration(competition.id, division.id, settings);
+    const waiting = await seedSecondEntry(registration.group_id, division.id, 0, "Waiting Entry", "waitlisted");
+    const view = await groupById(registration.group_id, access_token);
+    expect(view.entries).toHaveLength(2);
+    expect(settledOf(view, registration.id)).toBeNull();
+    expect(settledOf(view, waiting.id)).toBeNull();
+  });
+
+  it("settled_by is waived after the real confirmRegistrationWaived — the entry keeps its fee, so its status alone would read as paid", async () => {
+    const { owner, competition, division, settings } = await offlineRig(1500);
+    const { registration, access_token } = await seedRegistration(competition.id, division.id, settings);
+    await confirmRegistrationWaived(owner, registration.id);
+
+    const view = await groupById(registration.group_id, access_token);
+    const entry = view.entries[0]!;
+    expect(entry.status).toBe("confirmed");
+    expect(entry.amount_cents).toBe(1500); // FP11: a waiver confirms without touching the fee
+    expect(entry.settled_by).toBe("waived");
+
+    // Second call: already confirmed, a no-op that writes no second waiver; the answer does not move.
+    await confirmRegistrationWaived(owner, registration.id);
+    expect(await eventsOf("registration.fee_waived", registration.id)).toHaveLength(1);
+    expect(settledOf(await groupById(registration.group_id, access_token), registration.id)).toBe("waived");
+  });
+
+  it("a waitlisted entry confirmed without payment settles as waived", async () => {
+    const { owner, competition, division, settings } = await offlineRig(1500);
+    const { registration, access_token } = await seedRegistration(competition.id, division.id, settings, { status: "waitlisted" });
+    await confirmRegistrationWaived(owner, registration.id);
+    const view = await groupById(registration.group_id, access_token);
+    expect(view.entries[0]!.status).toBe("confirmed");
+    expect(view.entries[0]!.settled_by).toBe("waived");
+  });
+
+  it("settled_by is offline after markRegistrationPaidOffline", async () => {
+    const { owner, competition, division, settings } = await offlineRig(1500);
+    const { registration, access_token } = await seedRegistration(competition.id, division.id, settings);
+    await markRegistrationPaidOffline(owner, registration.id);
+    const view = await groupById(registration.group_id, access_token);
+    expect(view.entries[0]!.status).toBe("confirmed");
+    expect(view.entries[0]!.settled_by).toBe("offline");
+  });
+
+  it("an offline payment stays offline after the organiser approves it, although the approval writes registration.confirmed {paid: true}", async () => {
+    const { owner, competition, division, settings } = await offlineRig(1500, "manual");
+    const { registration, access_token } = await seedRegistration(competition.id, division.id, settings);
+    await markRegistrationPaidOffline(owner, registration.id);
+    const awaiting = await groupById(registration.group_id, access_token);
+    expect(awaiting.entries[0]!.status).toBe("paid");
+    expect(awaiting.entries[0]!.settled_by).toBe("offline");
+
+    await confirmRegistration(owner, registration.id);
+    // The trap is really laid: the LATEST event of the paid family is the organiser's confirm, with paid: true.
+    const confirms = await eventsOf("registration.confirmed", registration.id);
+    expect(confirms).toHaveLength(1);
+    expect(confirms[0]!.payload).toEqual({ registration_id: registration.id, paid: true });
+    const view = await groupById(registration.group_id, access_token);
+    expect(view.entries[0]!.status).toBe("confirmed");
+    expect(view.entries[0]!.settled_by).toBe("offline");
+  });
+
+  it("settled_by is card after a webhook-fulfilled group checkout for both entries of a 2-entry cart; a sibling the session did not name stays null", async () => {
+    const { competition, division, settings } = await stripeRig();
+    const a = await seedRegistration(competition.id, division.id, settings, { displayName: "Entry A", amountCents: 500 });
+    const b = await seedSecondEntry(a.registration.group_id, division.id, 500, "Entry B");
+    const unpaid = await seedSecondEntry(a.registration.group_id, division.id, 500, "Entry C — not in this session");
+
+    await handleRegistrationCheckoutCompleted(fakeSession([a.registration.id, b.id], 1000));
+
+    const view = await groupById(a.registration.group_id, a.access_token);
+    expect(view.entries.map((e) => e.status)).toEqual(["confirmed", "confirmed", "pending"]);
+    expect(settledOf(view, a.registration.id)).toBe("card");
+    expect(settledOf(view, b.id)).toBe("card");
+    expect(settledOf(view, unpaid.id)).toBeNull();
+  });
+
+  it("a card payment on a manual division is card while it awaits approval and after the organiser confirms it", async () => {
+    const { owner, competition, division, settings } = await stripeRig();
+    await sql`update registration_settings set approval = 'manual' where division_id = ${division.id}`;
+    const { registration, access_token } = await seedRegistration(competition.id, division.id, settings);
+
+    await handleRegistrationCheckoutCompleted(fakeSession(registration.id, 500));
+    const awaiting = await groupById(registration.group_id, access_token);
+    expect(awaiting.entries[0]!.status).toBe("paid");
+    expect(awaiting.entries[0]!.settled_by).toBe("card");
+
+    await confirmRegistration(owner, registration.id);
+    const view = await groupById(registration.group_id, access_token);
+    expect(view.entries[0]!.status).toBe("confirmed");
+    expect(view.entries[0]!.settled_by).toBe("card");
+  });
+
+  it("a refund or a withdrawal never rewrites how an entry settled — refunded_cents carries the money sent back", async () => {
+    const { owner, competition, division, settings } = await stripeRig();
+    const { registration, access_token } = await seedRegistration(competition.id, division.id, settings);
+    await handleRegistrationCheckoutCompleted(fakeSession(registration.id, 500));
+
+    await refundRegistration(owner, registration.id, 200);
+    const partly = await groupById(registration.group_id, access_token);
+    expect(partly.entries[0]!.status).toBe("confirmed");
+    expect(partly.entries[0]!.refunded_cents).toBe(200);
+    expect(partly.entries[0]!.settled_by).toBe("card");
+
+    // Withdrawn before the competition starts (refundable): the rest of the payment goes back too.
+    await withdrawRegistrationOrganiser(owner, registration.id);
+    const withdrawn = await groupById(registration.group_id, access_token);
+    expect(withdrawn.entries[0]!.status).toBe("withdrawn");
+    expect(withdrawn.entries[0]!.refunded_cents).toBe(500);
+    expect(withdrawn.entries[0]!.settled_by).toBe("card");
+  });
+
+  it("a free entry the organiser confirms settled nothing: null", async () => {
+    const { owner, competition, division, settings } = await offlineRig(0);
+    const { registration, access_token } = await seedRegistration(competition.id, division.id, settings);
+    await confirmRegistration(owner, registration.id);
+    expect((await eventsOf("registration.confirmed", registration.id)).map((e) => e.payload.paid)).toEqual([false]);
+    const view = await groupById(registration.group_id, access_token);
+    expect(view.entries[0]!.status).toBe("confirmed");
+    expect(view.entries[0]!.settled_by).toBeNull();
   });
 });
 

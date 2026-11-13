@@ -10,6 +10,7 @@ import { loadSettings, DUMMY_ACCESS_HASH, tokenMatchesHash, GROUP_ID_RE } from "
 import { type ResolvedRefundPolicy, resolveRefundPolicy } from "./refunds";
 import { effectivePoolDeadline } from "./list";
 import { waitlistPositionSql } from "./waitlist";
+import { competitionVenueName, settlementsByRegistration, type SettledBy } from "./status-facts";
 
 // ---------------------------------------------------------------------------
 // Group read model — /r/[ref] status page, multi-entry (RS002 W5, RS007)
@@ -113,6 +114,11 @@ export interface GroupEntryView {
    *  organiser's Refund, a late payment's refund) - the entry's `refunded_cents`, never the cart's. The status card names it, so a
    *  rejected entry whose fee came back says so instead of reading only "Rejected". */
   refunded_cents: number;
+  /** Registration redesign B4 T14: how THIS entry's fee was settled — "card", "offline" (Mark paid), "waived" (Confirm without
+   *  payment), or null when nothing settled it. History, not status: it outlives a refund (`refunded_cents`) and a withdrawal.
+   *  A waived entry keeps its `amount_cents`, so it must count as neither paid nor due. Derived in ./status-facts.ts (the
+   *  contract T15 renders is documented at its top). */
+  settled_by: SettledBy | null;
 }
 
 /** The whole cart, for the status page (design §4 step 6; RS007 builds the
@@ -138,6 +144,13 @@ export interface GroupStatusView {
   expires_at: string | null;
   refunded_cents: number;
   competition_name: string;
+  /** Registration redesign B4 T14: the competition's own dates, 'YYYY-MM-DD' (`date` columns, kept as plain strings), null when
+   *  unset. `ends_on` may equal `starts_on` (a one-day event). */
+  competition_starts_on: string | null;
+  competition_ends_on: string | null;
+  /** Registration redesign B4 T14 (spec §5.2, FP1): the one venue every placed fixture of a PUBLISHED division shares, else null
+   *  (no fixtures, two or more venues, or only draft schedules). `competitionVenueName`, ./status-facts.ts. */
+  venue_name: string | null;
   competition_slug: string;
   org_slug: string;
   org_name: string;
@@ -227,12 +240,12 @@ async function buildGroupStatusView(
   const [comp] = await sql<
     {
       comp_name: string; comp_slug: string; org_slug: string; org_name: string;
-      starts_on: string | null; charges_enabled: boolean; org_payment_instructions: string | null;
+      starts_on: string | null; ends_on: string | null; charges_enabled: boolean; org_payment_instructions: string | null;
       org_timezone: string | null;
     }[]
   >`
     select c.name as comp_name, c.slug as comp_slug, o.slug as org_slug, o.name as org_name,
-           c.starts_on, o.stripe_charges_enabled as charges_enabled,
+           c.starts_on, c.ends_on, o.stripe_charges_enabled as charges_enabled,
            o.payment_instructions as org_payment_instructions, o.timezone as org_timezone
     from competitions c join organizations o on o.id = c.org_id
     where c.id = ${group.competition_id}`;
@@ -252,6 +265,7 @@ async function buildGroupStatusView(
       | "pool_place_by_at"
       | "approval"
       | "fee_if_promoted_cents"
+      | "settled_by"
     > & {
       refunded_cents: number;
       late_refunded_cents: number;
@@ -391,6 +405,12 @@ async function buildGroupStatusView(
           where rp.registration_id in ${sql(entries.map((e) => e.id))}
           order by rp.created_at`
       : [];
+  // Registration redesign B4 T14: the venue line and each entry's settlement (./status-facts.ts), two independent reads.
+  const [venueName, settledByEntry] = await Promise.all([
+    competitionVenueName(group.competition_id),
+    settlementsByRegistration(group.competition_id, entries.map((e) => e.id)),
+  ]);
+
   const playersByEntry = new Map<string, GroupEntryPlayerView[]>();
   for (const p of players) {
     const list = playersByEntry.get(p.registration_id) ?? [];
@@ -415,6 +435,9 @@ async function buildGroupStatusView(
     expires_at: group.expires_at ? new Date(group.expires_at).toISOString() : null,
     refunded_cents: group.refunded_cents,
     competition_name: comp?.comp_name ?? "",
+    competition_starts_on: comp?.starts_on ?? null,
+    competition_ends_on: comp?.ends_on ?? null,
+    venue_name: venueName,
     competition_slug: comp?.comp_slug ?? "",
     org_slug: comp?.org_slug ?? "",
     org_name: comp?.org_name ?? "",
@@ -465,6 +488,7 @@ async function buildGroupStatusView(
           ? (poolPlaceByDivision.get(e.division_id)?.toISOString() ?? null)
           : null,
       players: playersByEntry.get(e.id) ?? [],
+      settled_by: settledByEntry.get(e.id) ?? null,
       refund_policy: resolveRefundPolicy(
         refundLockByDivision.get(e.division_id) ?? null,
         comp?.starts_on ?? null,

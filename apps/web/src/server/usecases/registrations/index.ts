@@ -38,6 +38,7 @@ import "server-only";
 //   withdraw             withdrawal core shared by the public and organiser paths, and the solo placement release
 //   public-status        token- and ref-gated public views: status, cart, public withdraw
 //   group-status         the group (cart) read model behind the /r/[ref] status page
+//   status-facts         what the status page states beyond the cart: the one venue a competition's published fixtures share, how each entry settled (card / offline / waived); the SettledBy type is re-exported, the rest is sibling-only
 //   sweep                the hourly pay-window sweep: reminders, expiries, promotions
 //   list                 organiser list read and the solo-pool capacity helpers it shares
 //   organiser-actions    organiser actions: confirm, mark paid, waive, remind, waitlist, withdraw, refund
@@ -140,6 +141,7 @@ export {
 export type { PublicStatusView, PublicRefView, PublicCartEntryView, PublicCartView } from "./public-status";
 export { groupByRef, groupById } from "./group-status";
 export type { GroupEntryPlayerView, GroupEntryView, GroupStatusView } from "./group-status";
+export type { SettledBy } from "./status-facts";
 export { sweepRegistrations } from "./sweep";
 export { rosterCapExpr, effectivePoolDeadline, soloPoolIsFull, listRegistrations } from "./list";
 export type { ListRegistrationsFilters, RegistrationListRow } from "./list";
