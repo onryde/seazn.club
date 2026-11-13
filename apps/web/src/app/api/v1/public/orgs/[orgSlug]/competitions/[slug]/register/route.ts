@@ -136,7 +136,7 @@ export async function POST(req: Request, { params }: Ctx) {
     timer.mark("total");
     log.info(
       {
-        timing: timer.summary(),
+        timing: timer.durations(),
         divisions: new Set(input.entries.map((e) => e.division_id)).size,
         entries: input.entries.length,
         players: input.entries.reduce((n, e) => n + (e.players?.length ?? 0), 0),

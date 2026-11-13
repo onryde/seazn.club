@@ -324,7 +324,7 @@ describe.skipIf(!HAS_DB)("submitRegistrationGroup", () => {
 
     const timer = createStageTimer();
     const timedRes = await submitRegistrationGroup({ orgSlug, compSlug: competition.slug }, cart(), timer);
-    expect(Object.keys(timer.summary()).sort()).toEqual(
+    expect(Object.keys(timer.durations()).sort()).toEqual(
       ["pre_tx", "pre_tx.division_ctx", "pre_tx.entitlements", "pre_tx.settings", "tx"],
     );
     expect(timer.header()).not.toBe("");

@@ -953,14 +953,14 @@ describe.skipIf(!HAS_DB)("submit timing: the online-play reads are timed under p
     const onlineWorld = await world("individual", true);
     const onlineTimer = createStageTimer();
     const onlineRes = await submit(onlineWorld, "individual", await account(onlineWorld, "plays", false), 0, { dob: ADULT }, { timer: onlineTimer });
-    expect(Object.keys(onlineTimer.summary())).toEqual(expect.arrayContaining(["pre_tx", "pre_tx.online", "pre_tx.seat_gate", "tx"]));
+    expect(Object.keys(onlineTimer.durations())).toEqual(expect.arrayContaining(["pre_tx", "pre_tx.online", "pre_tx.seat_gate", "tx"]));
 
     const boardWorld = await world("individual", false);
     const boardTimer = createStageTimer();
     const boardRes = await submit(boardWorld, "individual", await account(boardWorld, "plays", false), 0, { dob: ADULT }, { timer: boardTimer });
-    expect(Object.keys(boardTimer.summary())).toEqual(expect.arrayContaining(["pre_tx", "tx"]));
-    expect(Object.keys(boardTimer.summary())).not.toContain("pre_tx.online");
-    expect(Object.keys(boardTimer.summary())).not.toContain("pre_tx.seat_gate");
+    expect(Object.keys(boardTimer.durations())).toEqual(expect.arrayContaining(["pre_tx", "tx"]));
+    expect(Object.keys(boardTimer.durations())).not.toContain("pre_tx.online");
+    expect(Object.keys(boardTimer.durations())).not.toContain("pre_tx.seat_gate");
 
     for (const res of [onlineRes, boardRes]) {
       expect(await seatedAfterSubmit(res.entries[0]!.registration_id)).toEqual({ status: "confirmed", people: 1 });

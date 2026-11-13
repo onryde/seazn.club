@@ -16,7 +16,7 @@ describe("createStageTimer", () => {
   it("header() of an untouched timer is empty string, and its summary is empty", () => {
     const timer = createStageTimer(fakeClock().now);
     expect(timer.header()).toBe("");
-    expect(timer.summary()).toEqual({});
+    expect(timer.durations()).toEqual({});
   });
 
   it("sums repeated stages and nests names", async () => {
@@ -30,7 +30,7 @@ describe("createStageTimer", () => {
         t += 3;
       });
     });
-    expect(timer.summary()).toEqual({ pre_tx: 8, "pre_tx.settings": 8 });
+    expect(timer.durations()).toEqual({ pre_tx: 8, "pre_tx.settings": 8 });
   });
 
   it("records a stage whose fn throws, then rethrows the same error", async () => {
@@ -43,7 +43,7 @@ describe("createStageTimer", () => {
         throw boom;
       }),
     ).rejects.toBe(boom);
-    expect(timer.summary()).toEqual({ turnstile: 12 });
+    expect(timer.durations()).toEqual({ turnstile: 12 });
   });
 
   it("returns the stage fn's own value", async () => {
@@ -69,7 +69,7 @@ describe("createStageTimer", () => {
     const timer = createStageTimer(clock.now);
     await timer.stage("settings", async () => clock.advance(0.04));
     await timer.stage("settings", async () => clock.advance(0.04));
-    expect(timer.summary()).toEqual({ settings: 0.1 });
+    expect(timer.durations()).toEqual({ settings: 0.1 });
   });
 
   // B1 Task 4 runs the pre-transaction reads in parallel: two sibling stages in flight at once must each nest under their
@@ -89,9 +89,9 @@ describe("createStageTimer", () => {
       releaseA();
       await divisionCtx;
     });
-    expect(Object.keys(timer.summary()).sort()).toEqual(["pre_tx", "pre_tx.division_ctx", "pre_tx.settings"]);
+    expect(Object.keys(timer.durations()).sort()).toEqual(["pre_tx", "pre_tx.division_ctx", "pre_tx.settings"]);
     // division_ctx was open across settings' 6 ms and its own 4: overlapping stages each keep their own wall time.
-    expect(timer.summary()).toEqual({ pre_tx: 10, "pre_tx.division_ctx": 10, "pre_tx.settings": 6 });
+    expect(timer.durations()).toEqual({ pre_tx: 10, "pre_tx.division_ctx": 10, "pre_tx.settings": 6 });
   });
 
   it("a stage entered after its parent has finished is top-level again", async () => {
@@ -101,7 +101,7 @@ describe("createStageTimer", () => {
       await timer.stage("settings", async () => clock.advance(1));
     });
     await timer.stage("settings", async () => clock.advance(2));
-    expect(timer.summary()).toEqual({ pre_tx: 1, "pre_tx.settings": 1, settings: 2 });
+    expect(timer.durations()).toEqual({ pre_tx: 1, "pre_tx.settings": 1, settings: 2 });
   });
 
   it("two timers never share stages, and one timer's stage does not prefix the other's", async () => {
@@ -111,8 +111,8 @@ describe("createStageTimer", () => {
     await outer.stage("mint", async () => {
       await inner.stage("stripe", async () => clock.advance(7));
     });
-    expect(outer.summary()).toEqual({ mint: 7 });
-    expect(inner.summary()).toEqual({ stripe: 7 });
+    expect(outer.durations()).toEqual({ mint: 7 });
+    expect(inner.durations()).toEqual({ stripe: 7 });
   });
 
   it("mark(name) records the time since the timer was created, and a later mark replaces it", async () => {
@@ -122,10 +122,10 @@ describe("createStageTimer", () => {
     await timer.stage("tx", async () => clock.advance(40));
     clock.advance(2);
     timer.mark("total");
-    expect(timer.summary()).toEqual({ tx: 40, total: 42 });
+    expect(timer.durations()).toEqual({ tx: 40, total: 42 });
     clock.advance(8);
     timer.mark("total");
-    expect(timer.summary()).toEqual({ tx: 40, total: 50 });
+    expect(timer.durations()).toEqual({ tx: 40, total: 50 });
     expect(timer.header()).toMatch(SERVER_TIMING_LIST);
   });
 
@@ -141,13 +141,13 @@ describe("createStageTimer", () => {
     ).rejects.toThrow(/stage name/);
     expect(ran).toBe(false);
     expect(() => timer.mark(name)).toThrow(/stage name/);
-    expect(timer.summary()).toEqual({});
+    expect(timer.durations()).toEqual({});
   });
 
   it("the default clock is real time", async () => {
     const timer = createStageTimer();
     await timer.stage("wait", () => new Promise((r) => setTimeout(r, 25)));
-    expect(timer.summary().wait).toBeGreaterThanOrEqual(15);
+    expect(timer.durations().wait).toBeGreaterThanOrEqual(15);
   });
 });
 
@@ -167,6 +167,6 @@ describe("timed", () => {
     const clock = fakeClock();
     const timer = createStageTimer(clock.now);
     await expect(timed(timer, "settings", async () => (clock.advance(9), "ok"))).resolves.toBe("ok");
-    expect(timer.summary()).toEqual({ settings: 9 });
+    expect(timer.durations()).toEqual({ settings: 9 });
   });
 });

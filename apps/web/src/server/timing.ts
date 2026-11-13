@@ -18,7 +18,7 @@ export type StageTimer = {
   /** `Server-Timing` value: "rate_limit;dur=3.1, turnstile;dur=210.4, …", in the order stages were first entered; "" when none. */
   header(): string;
   /** Milliseconds per stage, rounded to 0.1. */
-  summary(): Record<string, number>;
+  durations(): Record<string, number>;
 };
 
 /** One segment of a stage path: also a Server-Timing metric name, so a token, and never a dot (the dot is the nesting). */
@@ -35,7 +35,7 @@ const round1 = (ms: number): number => Math.round(ms * 10) / 10;
 
 export function createStageTimer(now: () => number = () => performance.now()): StageTimer {
   const startedAt = now();
-  // Insertion order is first-entry order, which `header()` and `summary()` keep.
+  // Insertion order is first-entry order, which `header()` and `durations()` keep.
   const totals = new Map<string, number>();
 
   const timer: StageTimer = {
@@ -58,7 +58,7 @@ export function createStageTimer(now: () => number = () => performance.now()): S
     header(): string {
       return [...totals].map(([path, ms]) => `${path};dur=${round1(ms)}`).join(", ");
     },
-    summary(): Record<string, number> {
+    durations(): Record<string, number> {
       return Object.fromEntries([...totals].map(([path, ms]) => [path, round1(ms)]));
     },
   };
