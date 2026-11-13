@@ -6692,7 +6692,7 @@
   "register.status.pay.error.conflict": "Se acaba de iniciar otro intento de pago para esta inscripción — actualiza la página e inténtalo de nuevo.",
   "register.status.pay.error.paidOnline": "Ya hay un pago en curso para esta inscripción — aparecerá aquí en cuanto tu banco lo confirme.",
   "register.status.pay.error.generic": "No hemos podido iniciar el pago — inténtalo de nuevo o contacta con el organizador.",
-  "register.status.pay.windowClosed": "El plazo de pago para esta inscripción ha finalizado — contacta con el organizador si aún quieres pagar.",
+  "register.status.pay.windowClosed": "El plazo de pago para esta inscripción ha finalizado y ha perdido su plaza — contacta con el organizador si aún quieres inscribirte.",
   "register.status.offline.heading": "Cómo pagar",
   "register.status.cancel.cta": "Cancelar esta inscripción",
   "register.status.cancel.busy": "Cancelando…",

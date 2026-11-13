@@ -139,8 +139,12 @@ export default async function RegistrationStatusPage({ params, searchParams }: P
   const headline = cartHeadline(view.entries, view);
   const headlineText =
     headline === "received"
-      ? plural(ui, "register.status.headline.received", receivedCount(view.entries), locale)
-      : t(ui, `register.status.headline.${headline}`);
+      ? plural(ui, "register.status.headline.received", receivedCount(view.entries, view), locale)
+      : // B4 review m1: the card notice the owed entry's card already carries, as the page's lead line (owner ruling: the existing
+        // notice, not new copy).
+        headline === "payUnavailable"
+        ? t(ui, "register.status.pay.unavailable")
+        : t(ui, `register.status.headline.${headline}`);
   const money = cartMoneySummary(view.entries, view);
   const nextItems = whatHappensNext(view, headline);
   // The address is set in its own span (layout.tsx's poweredBy split): the template is split on its one placeholder.

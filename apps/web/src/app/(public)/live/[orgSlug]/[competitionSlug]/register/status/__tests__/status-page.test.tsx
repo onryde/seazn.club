@@ -488,15 +488,28 @@ describe("register status page (RS007 rebuild)", () => {
     const headline = (html: string) =>
       html.match(/<h1[^>]*data-testid="reg-status-headline"[^>]*>([^<]*)</)?.[1]?.replace(/&#x27;/g, "'");
 
-    const HEADLINES: { name: string; entries: Record<string, unknown>[]; kind: string; text: string }[] = [
+    const PAST = "2000-01-01T00:00:00.000Z";
+    const HEADLINES: { name: string; view?: Record<string, unknown>; entries: Record<string, unknown>[]; kind: string; text: string }[] = [
+      { name: "no entries (the empty case, first)", entries: [], kind: "closed", text: "This registration is closed" },
       { name: "an unpaid card entry", entries: [{ status: "pending", amount_cents: 2500 }], kind: "pay", text: "Pay to finish entering" },
+      // B4 review m1 (owner ruling 2026-11-13): the two owed states with no way to pay on this page.
+      { name: "a card fee owed while card payments are unavailable: the card notice, never Pay or awaiting approval",
+        view: { charges_enabled: false }, entries: [{ status: "pending", amount_cents: 2500 }],
+        kind: "payUnavailable", text: "Card payments aren't available right now — contact the organiser." },
+      { name: "a fee owed past its pay-by date: closed", entries: [{ status: "pending", amount_cents: 2500, promotion_expires_at: PAST }],
+        kind: "closed", text: "This registration is closed" },
+      { name: "past its pay-by date beside a confirmed entry: You're in",
+        entries: [{ status: "pending", amount_cents: 2500, promotion_expires_at: PAST }, { status: "confirmed", settled_by: "card" }],
+        kind: "in", text: "You're in" },
+      { name: "past its pay-by date beside a paid entry awaiting approval: one entry received (the closed one is not counted)",
+        entries: [{ status: "pending", amount_cents: 2500, promotion_expires_at: PAST }, { status: "paid", settled_by: "card" }],
+        kind: "received", text: "Entry received, awaiting approval" },
       { name: "a confirmed entry", entries: [{ status: "confirmed", settled_by: "card" }], kind: "in", text: "You're in" },
       { name: "one entry awaiting approval", entries: [{ status: "paid", settled_by: "card" }], kind: "received", text: "Entry received, awaiting approval" },
       { name: "two entries awaiting approval (plural)", entries: [{ status: "paid", settled_by: "card" }, { status: "pending", amount_cents: 0 }],
         kind: "received", text: "Entries received, awaiting approval" },
       { name: "a waitlisted entry", entries: [{ status: "waitlisted", amount_cents: 0 }], kind: "waitlist", text: "You're on the waiting list" },
       { name: "only withdrawn", entries: [{ status: "withdrawn" }], kind: "closed", text: "This registration is closed" },
-      { name: "no entries", entries: [], kind: "closed", text: "This registration is closed" },
     ];
 
     it("the h1 is the outcome, one literal per headline kind (counted)", async () => {
@@ -504,6 +517,7 @@ describe("register status page (RS007 rebuild)", () => {
       for (const c of HEADLINES) {
         usecaseMock.groupById.mockResolvedValueOnce({
           ...BASE_VIEW,
+          ...c.view,
           entries: c.entries.map((e, i) => ({ ...BASE_ENTRY, id: `reg-${i + 1}`, ...e })),
         });
         const html = await render({ rid: "g1", token: "tok" });
@@ -513,6 +527,37 @@ describe("register status page (RS007 rebuild)", () => {
         checked += 1;
       }
       expect(checked).toBe(HEADLINES.length);
+      // Premise: every headline kind the page can show is reached by a row here.
+      expect(new Set(HEADLINES.map((c) => c.kind))).toEqual(new Set(["pay", "payUnavailable", "in", "received", "waitlist", "closed"]));
+    });
+
+    // B4 review m1, the owed states' cards and steps. A card fee owed while cards are unavailable keeps its figure and the notice, has
+    // no Pay button, and "What happens next" never says "Pay to keep your place". A fee past its pay-by date beside a confirmed entry:
+    // the page leads with "You're in", and the closed entry's own card says it lost its place.
+    it("cards unavailable: the owed fee still shows, no Pay button, and no step asks to pay", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce({ ...BASE_VIEW, charges_enabled: false, entries: [BASE_ENTRY] });
+      const html = (await render({ rid: "g1", token: "tok" })).replace(/&#x27;/g, "'");
+      expect(headline(html), "premise: the card notice leads").toBe("Card payments aren't available right now — contact the organiser.");
+      expect(html).not.toMatch(/Pay now/);
+      expect(html).not.toContain("to keep your place");
+      expect(html).toMatch(/data-testid="reg-status-money"[^>]*>£25\.00 due</);
+    });
+
+    it("past its pay-by date beside a confirmed entry: You're in, and the closed entry's card says it lost its place", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce({
+        ...BASE_VIEW,
+        entries: [
+          { ...BASE_ENTRY, id: "reg-1", promotion_expires_at: PAST },
+          { ...BASE_ENTRY, id: "reg-2", division_name: "Womens 35+", status: "confirmed" as const, settled_by: "card" as const },
+        ],
+      });
+      const html = (await render({ rid: "g1", token: "tok" })).replace(/&#x27;/g, "'");
+      expect(headline(html)).toBe("You're in");
+      const cards = html.match(/<li class="[^"]*rounded-xl[\s\S]*?(?=<li class="[^"]*rounded-xl|$)/g) ?? [];
+      expect(cards.length, "two entry cards").toBe(2);
+      expect(cards[0], "the closed entry's card").toContain("so it has lost its place");
+      expect(cards[1], "the confirmed card says nothing of it").not.toContain("lost its place");
+      expect(html).not.toContain("to keep your place");
     });
 
     it("states where the confirmation went", async () => {

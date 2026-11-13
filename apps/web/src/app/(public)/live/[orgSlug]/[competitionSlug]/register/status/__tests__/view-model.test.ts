@@ -24,6 +24,7 @@ import {
   publicCheckoutPath,
   publicResendPath,
   publicWithdrawPath,
+  receivedCount,
   resolveMoneyState,
   rosterCounts,
   rosterPlayerDisplayName,
@@ -727,14 +728,25 @@ describe("status page outcome (B4 T15)", () => {
       expect(cartHeadline([], CART)).toBe("closed");
     });
 
-    // Spec §5.1: the first matching rule wins. Rule 2 is read as "any entry that owes its fee" (T15 ruling): a card fee owed while
-    // card payments are unavailable, and a fee owed past its pay-by date, are owed all the same — the money line counts them due
-    // (§5.3), so the headline names the same debt instead of "awaiting approval" (which rule 4 would otherwise say).
+    // Spec §5.1: the first matching rule wins. Rule 2 is the spec's own: an entry that can be paid here (a Pay button, or offline
+    // instructions). The two owed states with no way to pay here (B4 review m1, owner ruling 2026-11-13) never say "Pay to finish
+    // entering" and never fall through to "awaiting approval": a card fee owed while card payments are unavailable leads with the
+    // card notice (`payUnavailable`), and a fee owed past its pay-by date has lost its place (`closed`, or whatever its siblings say).
     const RULES: { name: string; entries: Entry[]; cart?: Partial<typeof CART>; want: HeadlineKind }[] = [
       { name: "rule 2: an unpaid card entry", entries: [unpaidCard], want: "pay" },
       { name: "rule 2: an offline entry with its fee due", entries: [offlineDue], want: "pay" },
-      { name: "rule 2 (T15): a card fee owed while card payments are unavailable", entries: [unpaidCard], cart: { charges_enabled: false }, want: "pay" },
-      { name: "rule 2 (T15): a fee owed past its pay-by date", entries: [windowClosed], want: "pay" },
+      { name: "m1: a card fee owed while card payments are unavailable", entries: [unpaidCard], cart: { charges_enabled: false }, want: "payUnavailable" },
+      { name: "m1: a fee owed past its pay-by date has lost its place", entries: [windowClosed], want: "closed" },
+      { name: "m1: a card fee past its pay-by date while cards are unavailable has lost its place too", entries: [windowClosed], cart: { charges_enabled: false }, want: "closed" },
+      // m1 precedence pairs: what each of the two lands on beside a sibling.
+      { name: "m1 ruling: window_closed + confirmed -> in (the closed entry's card says it lost its place)", entries: [windowClosed, confirmedCard], want: "in" },
+      { name: "m1: window_closed + paid awaiting approval -> received (for the paid one alone)", entries: [windowClosed, paidAwaiting], want: "received" },
+      { name: "m1: window_closed + waitlisted -> waitlist", entries: [windowClosed, waitlisted], want: "waitlist" },
+      { name: "m1: window_closed + a card entry still in its window -> pay", entries: [windowClosed, unpaidCard], want: "pay" },
+      { name: "m1: cards unavailable + confirmed -> payUnavailable (an owed fee outranks You're in, as pay does)", entries: [unpaidCard, confirmedCard], cart: { charges_enabled: false }, want: "payUnavailable" },
+      { name: "m1: cards unavailable + free awaiting approval -> payUnavailable", entries: [unpaidCard, freeAwaiting], cart: { charges_enabled: false }, want: "payUnavailable" },
+      { name: "m1: cards unavailable + an offline fee due -> pay (one of them can be paid here)", entries: [unpaidCard, offlineDue], cart: { charges_enabled: false }, want: "pay" },
+      { name: "m1: cards unavailable + window_closed -> payUnavailable", entries: [unpaidCard, windowClosed], cart: { charges_enabled: false }, want: "payUnavailable" },
       { name: "rule 3: a card-paid confirmed entry", entries: [confirmedCard], want: "in" },
       { name: "rule 3: a waived entry is confirmed, not owed", entries: [waived], want: "in" },
       { name: "rule 3: a free confirmed entry", entries: [confirmedFree], want: "in" },
@@ -766,7 +778,29 @@ describe("status page outcome (B4 T15)", () => {
       expect(checked).toBe(RULES.length);
       expect(checked).toBeGreaterThan(0);
       // Premise: every headline kind is reached by at least one row, so no kind is asserted vacuously.
-      expect(new Set(RULES.map((r) => r.want))).toEqual(new Set<HeadlineKind>(["pay", "in", "received", "waitlist", "closed"]));
+      expect(new Set(RULES.map((r) => r.want))).toEqual(new Set<HeadlineKind>(["pay", "payUnavailable", "in", "received", "waitlist", "closed"]));
+    });
+
+    // B4 review m1: the `received` headline and its step are worded for a count ("Entries received", "reviews your entries"). An entry
+    // owed with no way to pay here is not waiting on the organiser's decision, so it is never counted. Literals, one row per entry state.
+    it("receivedCount counts only the entries waiting on the organiser's decision, never an owed one (counted)", () => {
+      const COUNTS: { name: string; entries: Entry[]; cart?: Partial<typeof CART>; want: number }[] = [
+        { name: "the empty cart (the empty case, first)", entries: [], want: 0 },
+        { name: "paid awaiting approval", entries: [paidAwaiting], want: 1 },
+        { name: "free awaiting approval", entries: [freeAwaiting], want: 1 },
+        { name: "both awaiting", entries: [paidAwaiting, freeAwaiting], want: 2 },
+        { name: "window_closed is not awaiting a decision", entries: [windowClosed], want: 0 },
+        { name: "window_closed beside a paid one: only the paid one", entries: [windowClosed, paidAwaiting], want: 1 },
+        { name: "a card fee owed while cards are unavailable", entries: [unpaidCard, freeAwaiting], cart: { charges_enabled: false }, want: 1 },
+        { name: "a fee that can be paid now", entries: [unpaidCard, offlineDue], want: 0 },
+        { name: "confirmed, waitlisted and ended entries", entries: [confirmedCard, waitlisted, withdrawn, expired, rejected], want: 0 },
+      ];
+      let checked = 0;
+      for (const r of COUNTS) {
+        expect(receivedCount(r.entries, { ...CART, ...r.cart }), r.name).toBe(r.want);
+        checked += 1;
+      }
+      expect(checked).toBe(COUNTS.length);
     });
 
     it("the order of the entries never changes the answer (a second read of the same cart, reversed)", () => {
@@ -846,26 +880,40 @@ describe("status page outcome (B4 T15)", () => {
       expect(cartMoneySummary([{ ...waitlisted, fee_if_promoted_cents: null }], CART).waitlistedCents).toBe(0);
     });
 
-    // One predicate, two surfaces: the headline says "Pay to finish entering" exactly when the money line names an amount due.
-    it("the headline says pay exactly when something is due, across every pair of entry states and both Connect states (counted)", () => {
+    // Two surfaces, one set of facts (B4 review m1). The headline says "Pay to finish entering" exactly when an entry can be paid on
+    // this page (a Pay button or offline instructions: `stripe_due`, `offline_due`, spec §5.1 rule 2). The money line still names
+    // every owed fee, including the two with no way to pay here, so whenever something is due and nothing can be paid, the page
+    // never leads with "awaiting approval" for that debt: it leads with the card notice, or with the entry's siblings.
+    it("pay exactly when an entry can be paid here; an owed fee with no way to pay never reads as awaiting approval (counted)", () => {
       const palette = [unpaidCard, offlineDue, windowClosed, paidAwaiting, freeAwaiting, confirmedCard, confirmedFree, waived, waitlisted, withdrawn, expired, rejected];
+      const PAYABLE = new Set(["stripe_due", "offline_due"]);
       let checked = 0;
       let pays = 0;
+      let owedNotPayable = 0;
       for (const charges_enabled of [true, false]) {
         const cart = { ...CART, charges_enabled };
         for (const a of palette) {
           for (const b of palette) {
-            const due = cartMoneySummary([a, b], cart).dueCents > 0;
-            expect(cartHeadline([a, b], cart) === "pay", `${a.status}/${a.amount_cents} + ${b.status}/${b.amount_cents}`).toBe(due);
+            const name = `${a.status}/${a.amount_cents} + ${b.status}/${b.amount_cents}, charges ${charges_enabled}`;
+            const payable = [a, b].some((e) => PAYABLE.has(resolveMoneyState(e, cart).kind));
+            const headline = cartHeadline([a, b], cart);
+            expect(headline === "pay", name).toBe(payable);
+            if (payable) pays += 1;
+            if (!payable && cartMoneySummary([a, b], cart).dueCents > 0) {
+              owedNotPayable += 1;
+              // Waiting on the organiser is said only for an entry that is: a paid or free one owing nothing.
+              const awaiting = [a, b].some((e) => (e.status === "paid" || e.status === "pending") && resolveMoneyState(e, cart).kind === "none");
+              if (headline === "received") expect(awaiting, `${name}: received only for an entry awaiting approval`).toBe(true);
+            }
             checked += 1;
-            if (due) pays += 1;
           }
         }
       }
       expect(checked).toBe(palette.length * palette.length * 2);
-      // Both directions are exercised, or the equivalence is vacuous.
+      // Every direction is exercised, or the equivalence is vacuous.
       expect(pays).toBeGreaterThan(0);
       expect(checked - pays).toBeGreaterThan(0);
+      expect(owedNotPayable, "pairs owing a fee nobody can pay here").toBeGreaterThan(0);
     });
   });
 
@@ -963,10 +1011,24 @@ describe("status page outcome (B4 T15)", () => {
         ]);
       });
 
-      it("pay owed only past its deadline: never names a date that has gone by", () => {
-        expect(whatHappensNext(view({ entries: [windowClosed] }), "pay")).toEqual([
-          { kind: "step", key: "register.status.next.pay", vars: {} },
+      it("pay beside an entry past its deadline: names only the date still ahead, never one that has gone by", () => {
+        expect(whatHappensNext(view({ entries: [windowClosed, unpaidCard] }), "pay")).toEqual([
+          { kind: "step", key: "register.status.next.payBy", vars: { deadline: FUTURE } },
         ]);
+      });
+
+      // B4 review m1: neither owed state with no way to pay here may say "Pay to keep your place". Read through the real headline, so
+      // the step is the one the page shows for that cart.
+      it("a fee past its deadline alone: the cart is closed and adds no step", () => {
+        const v = view({ entries: [windowClosed] });
+        expect(cartHeadline(v.entries, v), "premise: the headline").toBe("closed");
+        expect(whatHappensNext(v, cartHeadline(v.entries, v))).toEqual([]);
+      });
+
+      it("a card fee owed while cards are unavailable: the headline is the card notice and there is no pay step", () => {
+        const v = view({ charges_enabled: false, entries: [unpaidCard] });
+        expect(cartHeadline(v.entries, v), "premise: the headline").toBe("payUnavailable");
+        expect(whatHappensNext(v, cartHeadline(v.entries, v))).toEqual([]);
       });
 
       it("received: the organiser reviews, counted over the entries awaiting the decision", () => {
@@ -974,6 +1036,8 @@ describe("status page outcome (B4 T15)", () => {
           { kind: "step", key: "register.status.next.received", vars: {}, count: 2 },
         ]);
         expect(whatHappensNext(view({ entries: [paidAwaiting] }), "received")[0]!.count).toBe(1);
+        // m1: an entry past its pay-by date is not awaiting a decision, so it is not counted ("your entry", not "your entries").
+        expect(whatHappensNext(view({ entries: [paidAwaiting, windowClosed] }), "received")[0]!.count).toBe(1);
       });
 
       it("waitlist: this page shows a promotion", () => {

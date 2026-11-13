@@ -159,39 +159,77 @@ export interface CartPayFacts {
 
 /** Whether this entry owes its fee right now: every money state but `none`. That includes `stripe_unavailable` (the org cannot take a
  *  card today) and `window_closed` (the pay-by date has gone by, the sweep has not run yet): neither shows a Pay button, and both are
- *  still owed (spec §5.3). ONE predicate for the headline's `pay` and the money line's due, so the page can never lead with "Pay to
- *  finish entering" above "Nothing to pay", or the reverse. */
+ *  still owed (spec §5.3), so the money line counts them due. The headline reads the money state itself (`entryHeadline`): only the
+ *  two states with a way to pay here say "Pay to finish entering". */
 function owesFee(entry: StatusEntry, cart: CartPayFacts): boolean {
   return resolveMoneyState(entry, cart).kind !== "none";
 }
 
-/** The page's outcome headline (spec §5.1). */
-export type HeadlineKind = "pay" | "in" | "received" | "waitlist" | "closed";
+/** The page's outcome headline (spec §5.1). `payUnavailable` (B4 review m1, owner ruling 2026-11-13): a card fee is owed and the org
+ *  cannot take a card today, so the page leads with the card notice ("contact the organiser"), never with Pay. */
+export type HeadlineKind = "pay" | "payUnavailable" | "in" | "received" | "waitlist" | "closed";
+
+/** Most pressing first (0): the cart's headline is the most pressing kind any of its entries reads as (`entryHeadline`). A `Record`, so
+ *  a kind added to `HeadlineKind` without a place here does not compile. */
+const HEADLINE_PRECEDENCE: Record<HeadlineKind, number> = { pay: 0, payUnavailable: 1, received: 2, in: 3, waitlist: 4, closed: 5 };
 
 /**
- * The cart's headline. The empty cart first, then the first matching rule wins:
- *  - no entries → `closed`
- *  - any entry that owes its fee (`owesFee`) → `pay`. The spec names `stripe_due` and `offline_due`; T15 also counts the two owed
- *    states that have no Pay button, which the money line counts as due, so the headline names the debt the money line shows
- *    rather than falling through to "awaiting approval".
- *  - any `confirmed` entry and no `pending`/`paid` one → `in`
- *  - any `pending` or `paid` entry → `received` (after `pay`, a pending entry here is a free one awaiting approval)
- *  - any `waitlisted` entry → `waitlist`
- *  - otherwise (only withdrawn, expired, rejected) → `closed`
+ * What ONE entry would put at the top of the page on its own. Money first, because an owed fee is the registrant's to act on:
+ *  - `stripe_due` / `offline_due` → `pay` (spec §5.1 rule 2: a Pay button, or offline instructions)
+ *  - `stripe_unavailable` → `payUnavailable` (owed, and no way to pay here: the card notice)
+ *  - `window_closed` → `closed`: the pay-by date has gone by and the sweep expires the entry on its next run, so it has lost its
+ *    place (B4 review m1). Never `pay` (nothing can be paid) and never `received` (nobody is reviewing it). Its card says so.
+ *  - otherwise by status: `pending`/`paid` → `received` (owing nothing, so waiting on the organiser), `confirmed` → `in`,
+ *    `waitlisted` → `waitlist`, withdrawn/expired/rejected → `closed`.
+ */
+function entryHeadline(entry: StatusEntry, cart: CartPayFacts): HeadlineKind {
+  switch (resolveMoneyState(entry, cart).kind) {
+    case "stripe_due":
+    case "offline_due":
+      return "pay";
+    case "stripe_unavailable":
+      return "payUnavailable";
+    case "window_closed":
+      return "closed";
+    case "none":
+      break;
+  }
+  switch (entry.status) {
+    case "pending":
+    case "paid":
+      return "received";
+    case "confirmed":
+      return "in";
+    case "waitlisted":
+      return "waitlist";
+    case "withdrawn":
+    case "expired":
+    case "rejected":
+      return "closed";
+  }
+}
+
+/**
+ * The cart's headline. The empty cart first (no entries → `closed`), then the most pressing kind any entry reads as
+ * (`entryHeadline`, in `HEADLINE_PRECEDENCE` order). That is spec §5.1's rule ladder: `pay`, then `in` only when nothing is
+ * `received` (a confirmed entry beside one awaiting approval reads `received`), then `waitlist`, then `closed`. With the m1 ruling:
+ * a card fee owed while cards are unavailable outranks everything but `pay`, and an entry past its pay-by date adds only `closed`,
+ * so beside a confirmed sibling the cart reads `in`.
  */
 export function cartHeadline(entries: readonly StatusEntry[], cart: CartPayFacts): HeadlineKind {
   if (entries.length === 0) return "closed";
-  if (entries.some((e) => owesFee(e, cart))) return "pay";
-  const has = (status: EntryStatus) => entries.some((e) => e.status === status);
-  if (has("confirmed") && !has("pending") && !has("paid")) return "in";
-  if (has("pending") || has("paid")) return "received";
-  if (has("waitlisted")) return "waitlist";
-  return "closed";
+  let headline: HeadlineKind = "closed";
+  for (const e of entries) {
+    const kind = entryHeadline(e, cart);
+    if (HEADLINE_PRECEDENCE[kind] < HEADLINE_PRECEDENCE[headline]) headline = kind;
+  }
+  return headline;
 }
 
-/** How many entries are waiting on the organiser's decision: the count the `received` headline and step are worded for. */
-export function receivedCount(entries: readonly StatusEntry[]): number {
-  return entries.filter((e) => e.status === "pending" || e.status === "paid").length;
+/** How many entries are waiting on the organiser's decision: the count the `received` headline and step are worded for. An entry that
+ *  owes a fee is never one of them, including one owed with no way to pay here (B4 review m1). */
+export function receivedCount(entries: readonly StatusEntry[], cart: CartPayFacts): number {
+  return entries.filter((e) => entryHeadline(e, cart) === "received").length;
 }
 
 /** What the money line reads off one entry beyond `StatusEntry`: how it was settled (T14, `GroupEntryView.settled_by`, history not
@@ -286,8 +324,11 @@ function nextStep(view: NextFacts, headline: HeadlineKind): NextItem | null {
       const deadline = earliestPayDeadline(view.entries, view);
       return deadline ? step("register.status.next.payBy", { deadline }) : step("register.status.next.pay");
     }
+    case "payUnavailable":
+      // The headline already says what to do (contact the organiser); nothing can be paid here, so no step names paying.
+      return null;
     case "received":
-      return { ...step("register.status.next.received"), count: receivedCount(view.entries) };
+      return { ...step("register.status.next.received"), count: receivedCount(view.entries, view) };
     case "waitlist":
       return step("register.status.next.waitlist");
     case "in":
