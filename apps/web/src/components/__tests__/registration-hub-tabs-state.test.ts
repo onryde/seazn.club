@@ -5,9 +5,12 @@
 // Every expected value below comes from the spec's own wording, never from
 // the module: the cap is 2 ("up to 2 division ids"), the order is LRU-first,
 // the eviction victim is `open[0]` (§9.2 "Evicts open[0] (LRU)"), and the URL
-// grammar is §9.1's. The model test at the bottom checks the same rules after
-// every step of random open / activate / close sequences against an
-// independent reference model (last-use timestamps, not list surgery).
+// grammar is §9.1's. The two properties at the bottom check the same rules
+// against an independent reference model (last-use timestamps, not list
+// surgery): one is a differential of `parseHubTabs` itself over random
+// addresses and `openable` sets, and the other starts from the model's own
+// reading of a random address and checks after every step of random
+// open / activate / close sequences.
 //
 // Registration is sport-agnostic: no sport sweep applies to tab state.
 import fc from "fast-check";
@@ -15,9 +18,11 @@ import { describe, expect, it } from "vitest";
 import {
   activate,
   closeDivision,
+  hubTabParam,
   hubTabsQuery,
   openDivision,
   parseHubTabs,
+  replaceHubTabs,
   type HubTab,
   type HubTabsState,
 } from "@/components/registration-hub-tabs-state";
@@ -28,10 +33,10 @@ const A = "aaaaaaaa-0000-4000-8000-000000000001";
 const B = "bbbbbbbb-0000-4000-8000-000000000002";
 const C = "cccccccc-0000-4000-8000-000000000003";
 const D = "dddddddd-0000-4000-8000-000000000004";
-/** A division of this competition with no registration settings, or another competition's. */
+/** An archived division, or another competition's: never openable. */
 const STRANGER = "eeeeeeee-0000-4000-8000-000000000005";
 const IDS = [A, B, C, D] as const;
-/** `openable` when the viewer can edit: every division with registration settings. */
+/** `openable` when the viewer can edit: every non-archived division on the Settings tab. */
 const ALL: ReadonlySet<string> = new Set(IDS);
 /** `openable` for a viewer without `canEdit` (spec §9.1). */
 const NONE: ReadonlySet<string> = new Set();
@@ -131,16 +136,26 @@ describe("parseHubTabs — URL to state (spec §9.1 normalisation)", () => {
     expect(parseHubTabs({ tab: "registrants", open: `${A},${B}` }, NONE)).toStrictEqual({ active: "registrants", open: [] });
   });
 
-  it("guard: Next's array-valued repeated ?open=a&open=b or ?tab=x&tab=y reads as absent instead of throwing", () => {
+  it("guard: Next's array-valued repeated ?open=a&open=b or ?tab=x&tab=y reads as its FIRST value (house rule, data.ts firstOf)", () => {
     // Next's real runtime shape for a repeated key is a string[], which the
     // `{ tab?: string; open?: string }` parameter cannot express; the cast
     // reaches that shape directly. A `.split` on it would crash the page.
-    const repeated = [A, B] as unknown as string;
-    expect(parseHubTabs({ tab: "registrants", open: repeated }, ALL)).toStrictEqual({ active: "registrants", open: [] });
-    expect(parseHubTabs({ tab: [`division:${A}`, "settings"] as unknown as string, open: A }, ALL)).toStrictEqual({
-      active: "settings",
-      open: [A],
+    const many = (...values: string[]) => values as unknown as string;
+    expect(parseHubTabs({ tab: "registrants", open: many(A, B) }, ALL)).toStrictEqual({ active: "registrants", open: [A] });
+    expect(parseHubTabs({ open: many(`${A},${B}`, C) }, ALL)).toStrictEqual({ active: "settings", open: [A, B] });
+    expect(parseHubTabs({ tab: many(`division:${A}`, "settings"), open: B }, ALL)).toStrictEqual({
+      active: { division: A },
+      open: [B, A],
     });
+    expect(parseHubTabs({ tab: many("registrants", "settings") }, ALL).active).toBe("registrants");
+    // An empty array (should Next ever produce one) is the same as absent.
+    expect(parseHubTabs({ tab: many(), open: many() }, ALL)).toStrictEqual({ active: "settings", open: [] });
+  });
+
+  it("differential shrink (seed 22013, path 11:0:2:2:3): open given as a one-element array [b] with openable {b} reads as [b]", () => {
+    // Shrunk by the differential property below against the pre-ruling
+    // module, which read any array as absent and answered open [].
+    expect(parseHubTabs({ open: [B] as unknown as string }, new Set([B]))).toStrictEqual({ active: "settings", open: [B] });
   });
 });
 
@@ -160,6 +175,61 @@ describe("hubTabsQuery — state to URL (spec §9.1 grammar)", () => {
   it("guard: an id the comma list cannot carry (empty, or holding a comma) is refused, never written into a URL that reads back differently", () => {
     expect(() => hubTabsQuery({ active: "settings", open: [""] })).toThrow(/cannot ride in the URL/);
     expect(() => hubTabsQuery({ active: "settings", open: [A, "x,y"] })).toThrow(/cannot ride in the URL/);
+  });
+});
+
+describe("hubTabParam — a tab as the route builder's ?tab= value", () => {
+  it("is §9.1's grammar for each kind of tab", () => {
+    expect(hubTabParam("settings")).toBe("settings");
+    expect(hubTabParam("registrants")).toBe("registrants");
+    expect(hubTabParam({ division: A })).toBe(`division:${A}`);
+  });
+
+  it("is the value hubTabsQuery writes, so a route href and a query agree", () => {
+    const s: HubTabsState = { active: { division: B }, open: [A, B] };
+    expect(hubTabsQuery(s).tab).toBe(hubTabParam(s.active));
+  });
+});
+
+describe("replaceHubTabs — the tab state onto a live address, replacing both keys", () => {
+  it("empty case first: closing the last tab REMOVES open from the address (a merge would keep it and the tab comes back)", () => {
+    const live = new URLSearchParams(`tab=division:${A}&open=${A}&status=paid`);
+    const next = replaceHubTabs(live, closeDivision(frozen({ active: { division: A }, open: [A] }), A));
+    expect(next.has("open")).toBe(false);
+    expect(next.get("tab")).toBe("settings");
+    expect(parseHubTabs({ tab: next.get("tab") ?? undefined, open: next.get("open") ?? undefined }, ALL)).toStrictEqual(EMPTY);
+  });
+
+  it("keeps every param it does not own, and writes tab and open once each even when the address repeated them", () => {
+    const live = new URLSearchParams(`open=${A}&open=${C}&tab=registrants&tab=settings&kind=team&status=paid`);
+    const next = replaceHubTabs(live, { active: { division: B }, open: [A, B] });
+    expect(next.getAll("tab")).toStrictEqual([`division:${B}`]);
+    expect(next.getAll("open")).toStrictEqual([`${A},${B}`]);
+    expect(next.get("kind")).toBe("team");
+    expect(next.get("status")).toBe("paid");
+  });
+
+  it("never writes to the address it was given", () => {
+    const live = new URLSearchParams(`tab=registrants&open=${A}&status=paid`);
+    const before = live.toString();
+    replaceHubTabs(live, EMPTY);
+    expect(live.toString()).toBe(before);
+  });
+});
+
+describe("guard: a state over the cap is refused by name (precondition, spec §9.1 'up to 2')", () => {
+  it("every function that takes a state throws on 3 open, naming itself, instead of answering wrongly", () => {
+    const over = frozen({ active: { division: C }, open: [A, B, C] });
+    expect(() => openDivision(over, D)).toThrow(/^openDivision: a hub tab state holds at most 2 open divisions, got 3/);
+    expect(() => activate(over, "settings")).toThrow(/^activate: a hub tab state holds at most 2 open divisions, got 3/);
+    expect(() => closeDivision(over, A)).toThrow(/^closeDivision: a hub tab state holds at most 2 open divisions, got 3/);
+    expect(() => hubTabsQuery(over)).toThrow(/^hubTabsQuery: a hub tab state holds at most 2 open divisions, got 3/);
+    expect(() => replaceHubTabs(new URLSearchParams(), over)).toThrow(/at most 2 open divisions, got 3/);
+  });
+
+  it("2 open is within the cap (the boundary is allowed)", () => {
+    const full = frozen({ active: { division: B }, open: [A, B] });
+    expect(closeDivision(full, A)).toStrictEqual({ active: { division: B }, open: [B] });
   });
 });
 
@@ -278,27 +348,16 @@ describe("closeDivision — × on a tab (spec §9.2)", () => {
   });
 });
 
+// The route builder's own exact strings live in lib/__tests__/routes.test.ts;
+// these are the seams: what one side writes, the other reads back.
 describe("the URL seams the tab state crosses", () => {
-  it("routes.competitionRegistration writes tab=division:<id> and open=<a>,<b>; an empty open writes nothing", () => {
-    expect(routes.competitionRegistration("acme", "cup", `division:${B}`, undefined, [A, B])).toBe(
-      `/o/acme/c/cup/registration?tab=division:${B}&open=${A},${B}`,
-    );
-    expect(routes.competitionRegistration("acme", "cup", "settings", undefined, [])).toBe(
-      "/o/acme/c/cup/registration?tab=settings",
-    );
-    // Every existing call shape is unchanged.
-    expect(routes.competitionRegistration("acme", "cup")).toBe("/o/acme/c/cup/registration");
-    expect(routes.competitionRegistration("acme", "cup", "registrants", A)).toBe(
-      `/o/acme/c/cup/registration?tab=registrants&division_id=${A}`,
-    );
-    // @ts-expect-error — `tab` is §9.1's grammar now, not any string.
-    routes.competitionRegistration("acme", "cup", "bogus");
-  });
-
   it("a route href read back the way Next hands it to the page parses to the state it was built from", () => {
     const s: HubTabsState = { active: { division: B }, open: [A, B] };
-    const href = routes.competitionRegistration("acme", "cup", tabParamFromSpec(s.active), undefined, s.open);
+    const href = routes.competitionRegistration("acme", "cup", hubTabParam(s.active), undefined, s.open);
     expect(parseHubTabs(tabParamsOf(href), ALL)).toStrictEqual(s);
+    // With the Registrants division filter riding alongside, too.
+    const filtered = routes.competitionRegistration("acme", "cup", "registrants", C, [A, B]);
+    expect(parseHubTabs(tabParamsOf(filtered), ALL)).toStrictEqual({ active: "registrants", open: [A, B] });
   });
 
   it("hubTabsQuery through a real URLSearchParams (which percent-encodes ':' and ',') parses back to the same state", () => {
@@ -356,21 +415,29 @@ const cmdArb: fc.Arbitrary<Cmd> = fc.oneof(
   },
   { weight: 2, arbitrary: idArb.map((id) => ({ k: "close" as const, id })) },
 );
-/** Where a session starts: any address an organiser could land on, hand-edited ones included. */
-const rawArb = fc.record(
+/** A query param the way Next hands it to a page: one string, or a string[] when the key repeats. */
+type RawValue = string | string[];
+type RawParams = { tab?: RawValue; open?: RawValue };
+
+const tabTokenArb = fc.constantFrom(
+  "settings",
+  "registrants",
+  "bogus",
+  "division:",
+  `division:${STRANGER}`,
+  ...IDS.map((id) => `division:${id}`),
+);
+const openListArb = fc.array(fc.constantFrom(...IDS, STRANGER, ""), { maxLength: 6 }).map((ids) => ids.join(","));
+/** Where a session starts: any address an organiser could land on, hand-edited and repeated keys included. */
+const rawArb: fc.Arbitrary<RawParams> = fc.record(
   {
-    tab: fc.constantFrom(
-      "settings",
-      "registrants",
-      "bogus",
-      "division:",
-      `division:${STRANGER}`,
-      ...IDS.map((id) => `division:${id}`),
-    ),
-    open: fc.array(fc.constantFrom(...IDS, STRANGER, ""), { maxLength: 6 }).map((ids) => ids.join(",")),
+    tab: fc.oneof({ weight: 4, arbitrary: tabTokenArb }, { weight: 1, arbitrary: fc.array(tabTokenArb, { maxLength: 3 }) }),
+    open: fc.oneof({ weight: 4, arbitrary: openListArb }, { weight: 1, arbitrary: fc.array(openListArb, { maxLength: 3 }) }),
   },
   { requiredKeys: [] },
 );
+/** The page passes Next's searchParams straight in; the parameter type cannot say string[]. */
+const asParams = (raw: RawParams) => raw as { tab?: string; open?: string };
 
 /** The reference model: open tabs as last-use timestamps (spec §9.1 "least
  *  recently used first"; cap 2), a different data structure from the
@@ -378,27 +445,50 @@ const rawArb = fc.record(
 class LruModel {
   private clock = 0;
   private readonly used = new Map<string, number>();
-  active: HubTab;
-  constructor(start: HubTabsState) {
-    this.active = start.active;
-    for (const id of start.open) this.used.set(id, ++this.clock);
+  active: HubTab = "settings";
+
+  /** The spec's reading of an address, done as an LRU: every openable id in
+   *  the open list is USED in order (so a repeat moves to the end and the cap
+   *  keeps the latest 2), then a requested division tab that is not open by
+   *  then is used too. A repeated key reads as its first value (house rule). */
+  static fromRaw(raw: RawParams, openable: ReadonlySet<string>): LruModel {
+    const first = (v: RawValue | undefined) => (Array.isArray(v) ? v[0] : v);
+    const model = new LruModel();
+    const open = first(raw.open);
+    for (const id of open === undefined ? [] : open.split(",")) if (openable.has(id)) model.use(id);
+    const tab = first(raw.tab);
+    if (tab?.startsWith("division:")) {
+      const id = tab.slice("division:".length);
+      if (openable.has(id) && !model.open.includes(id)) model.use(id);
+      model.active = model.open.includes(id) ? { division: id } : "settings";
+    } else {
+      model.active = tab === "registrants" ? "registrants" : "settings";
+    }
+    return model;
   }
+
   get open(): string[] {
     return [...this.used.entries()].sort((x, y) => x[1] - y[1]).map(([id]) => id);
   }
+
+  /** Marks `id` as the latest use; past the cap the least recently used goes, and is returned. */
+  private use(id: string): string | null {
+    this.used.set(id, ++this.clock);
+    if (this.used.size <= 2) return null;
+    const lru = this.open[0];
+    this.used.delete(lru);
+    return lru;
+  }
+
   apply(cmd: Cmd): string | null {
     if (cmd.k === "open") {
-      this.used.set(cmd.id, ++this.clock);
       this.active = { division: cmd.id };
-      if (this.used.size <= 2) return null;
-      const lru = this.open[0];
-      this.used.delete(lru);
-      return lru;
+      return this.use(cmd.id);
     }
     if (cmd.k === "activate") {
       if (typeof cmd.tab === "string") this.active = cmd.tab;
       else if (this.used.has(cmd.tab.division)) {
-        this.used.set(cmd.tab.division, ++this.clock);
+        this.use(cmd.tab.division);
         this.active = { division: cmd.tab.division };
       }
       return null;
@@ -411,29 +501,70 @@ class LruModel {
 
 const MODEL_SEED = 220_13;
 const MODEL_RUNS = 400;
+const DIFF_RUNS = 600;
+
+describe("differential: parseHubTabs against the LRU model's reading of the same address", () => {
+  it("agrees on every random address and every openable set (empty included), repeated keys and strangers included", () => {
+    const tally = { checked: 0, emptyOpenable: 0, repeatedKeys: 0, capped: 0, appended: 0, divisionActive: 0 };
+    fc.assert(
+      fc.property(rawArb, fc.subarray([...IDS]), (raw, openableIds) => {
+        const openable = new Set(openableIds);
+        const model = LruModel.fromRaw(raw, openable);
+        expect(parseHubTabs(asParams(raw), openable)).toStrictEqual({ active: model.active, open: model.open });
+        tally.checked += 1;
+        if (openable.size === 0) tally.emptyOpenable += 1;
+        if (Array.isArray(raw.tab) || Array.isArray(raw.open)) tally.repeatedKeys += 1;
+        const firstOpen = Array.isArray(raw.open) ? raw.open[0] : raw.open;
+        const kept = new Set((firstOpen ?? "").split(",").filter((id) => openable.has(id)));
+        if (kept.size > 2) tally.capped += 1;
+        if (typeof model.active !== "string") {
+          tally.divisionActive += 1;
+          if (!kept.has(model.active.division)) tally.appended += 1;
+        }
+      }),
+      { seed: MODEL_SEED, numRuns: DIFF_RUNS },
+    );
+    // Anti-vacuity: 0 checked is a failure, and so is a run that never reached
+    // an empty openable set, a repeated key, the cap, an appended division
+    // tab, or a division tab at all.
+    console.info(`[T22 differential] ${tally.checked} addresses checked`, tally);
+    expect(tally.checked).toBe(DIFF_RUNS);
+    for (const [branch, count] of Object.entries(tally)) expect(count, branch).toBeGreaterThan(0);
+  });
+});
 
 describe("model test: random open / activate / close sequences over 4 divisions", () => {
   it("after EVERY step: ≤ 2 open, no duplicates, an active division is open, the URL round-trips, and the state matches the LRU model", () => {
     const tally = { runs: 0, steps: 0, evictions: 0, activeCloses: 0, refusedActivates: 0, urlAppends: 0 };
+    /** A live address holding stale tab state and a filter: replacing must drop the former and keep the latter. */
+    const stale = new URLSearchParams(`tab=division:${D}&open=${A},${B},${C}&status=paid`);
 
     function checkStep(s: HubTabsState, model: LruModel): void {
       expect(s.open.length).toBeLessThanOrEqual(2);
       expect(new Set(s.open).size).toBe(s.open.length);
       if (typeof s.active !== "string") expect(s.open).toContain(s.active.division);
+      expect(s).toStrictEqual({ active: model.active, open: model.open });
       expect(parseHubTabs(hubTabsQuery(s), ALL)).toStrictEqual(s);
+      expect(hubTabParam(s.active)).toBe(tabParamFromSpec(s.active));
       const href = routes.competitionRegistration("acme", "cup", tabParamFromSpec(s.active), undefined, s.open);
       expect(parseHubTabs(tabParamsOf(href), ALL)).toStrictEqual(s);
-      expect(s).toStrictEqual({ active: model.active, open: model.open });
+      const replaced = replaceHubTabs(stale, s);
+      expect(parseHubTabs(tabParamsOf(`?${replaced.toString()}`), ALL)).toStrictEqual(s);
+      expect(replaced.get("status")).toBe("paid");
       tally.steps += 1;
     }
 
     fc.assert(
       fc.property(rawArb, fc.array(cmdArb, { maxLength: 24 }), (raw, cmds) => {
         tally.runs += 1;
-        let s = parseHubTabs(raw, ALL);
-        const requested = raw.tab?.startsWith("division:") ? raw.tab.slice("division:".length) : null;
-        if (requested && ALL.has(requested) && !raw.open?.split(",").includes(requested)) tally.urlAppends += 1;
-        const model = new LruModel(s);
+        // The start state is the MODEL's reading of the address, checked
+        // against the module's — never the module's reading fed to the model.
+        const model = LruModel.fromRaw(raw, ALL);
+        let s = parseHubTabs(asParams(raw), ALL);
+        const rawTab = Array.isArray(raw.tab) ? raw.tab[0] : raw.tab;
+        const rawOpen = Array.isArray(raw.open) ? raw.open[0] : raw.open;
+        const requested = rawTab?.startsWith("division:") ? rawTab.slice("division:".length) : null;
+        if (requested && ALL.has(requested) && !rawOpen?.split(",").includes(requested)) tally.urlAppends += 1;
         checkStep(s, model);
         for (const cmd of cmds) {
           const before = frozen(s);
