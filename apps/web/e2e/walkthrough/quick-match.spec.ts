@@ -8,7 +8,7 @@
 //       is decided → "Back to the quick match" → the home read back (the winner-first result, the table, the next match).
 //       Before the first match, Share (plan 2 T7): Copy puts the home's link on the clipboard, Show QR draws its QR,
 //       and the copied link opens the same home in a second browser with no cookie.
-//       The match between the two short-named sides is then CORRECTED (branch-fix A review I1): Edit result on its row →
+//       The match between the two short-named sides is then CORRECTED (branch-fix A review I1): Edit result in its row's ⋯ →
 //       the pad's decided screen (the quick match's own line, review Q2) → "Void my last entry" → the match reopens one
 //       rally short → every rally tapped for the OTHER side until it has the match → Back → the corrected result and table.
 //       At the end: three results, a table derived by hand from the rallies tapped, and the record agreeing.
@@ -28,6 +28,14 @@
 //       /me#quick-matches → the match is its one row, its name a link to the home → Rename → the new name on the row, in the record (all four names, the slug kept) and on
 //       the home its link opens → "In your account" again → Delete → the confirmation → "Delete for everyone" → the row and the section are gone,
 //       the record is gone, and the link is the dead screen for the second guest and the saver alike.
+//   (E) Not played (plan 4 Task 6), in a browser of its own: a night where matches can't be played. A league of three: its
+//       first match played; its second left part-way (a few rallies), then from its row's ⋯ menu "Not played" → the sheet
+//       (the score it had, the body that says it can be put back) → "Keep this match" changes nothing → again, "Mark not
+//       played" → the row reads Not played, the line "1 not played", the table untouched; the setup page's Continue card
+//       says the same; "Put back" → the row live at the score it had → Score resumes the pad there → the match finished; then
+//       the last match skipped (the sheet says the league finishes now) → the winner, "1 match was not played", the Final
+//       table, no Put back. A second league, of two, has its only match skipped → "No matches were played", no table, and
+//       "Start a new quick match" back to the setup page, which offers neither league to continue.
 //
 // ── WHAT IS A REACH AND WHAT IS THE TEST (README rule) ────────────────────────────────────────────────────────────
 // There is NO reach here: nothing is seeded and no API is called. Every quick match is made through the setup form,
@@ -49,7 +57,7 @@
 // Share (plan 2 T7), Add a match (plan 2 T8) and Save (plan 3) EXTEND this file, each at a marked `EXTENSION POINT`
 // below, at the place in the journey where it belongs, naming the state the page is in there. Share (step 3b) and Add a
 // match (step 7) are filled in; Save is its own journey, (D), in its own browser (plan 2 m6).
-import { test, expect, type BrowserContext, type Page } from "@playwright/test";
+import { test, expect, type BrowserContext, type Locator, type Page } from "@playwright/test";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -58,6 +66,7 @@ import { stageDefaultsFor } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { expectNoHorizontalScroll, loginUi, TAG, withDb } from "../helpers";
 import { consentedAnonymousState } from "../scorepad-a11y-kit";
+import { waitForHydration } from "../directory-kit";
 import { HOLD_MS } from "../../src/components/v2/scorepad/queue";
 import { HUMAN_FASTEST_REPEAT_MS } from "../../src/components/v2/scorepad/use-pad-pipeline";
 import { QUICK_MATCH_EXPIRY_DAYS } from "../../src/lib/quick-match-constants";
@@ -336,6 +345,46 @@ async function expectSettledOnHome(p: Page, fixtureId: string): Promise<void> {
     .toBe("settled");
 }
 
+/** A quick match's counts: matches played, marked Not played, and in all (spec 2026-11-12 §6: "N of M played · K not
+ *  played", M the full total). */
+interface Counts {
+  played: number;
+  notPlayed: number;
+  total: number;
+}
+/** Spec 2026-11-12 §3 "Edge" and plan 4 D4: a league whose every match is played or Not played is finished (one with no
+ *  match at all is not). */
+const isFinished = (c: Counts) => c.total > 0 && c.played + c.notPlayed === c.total;
+
+/** The played line's words. `countdown`: the unsaved home's "deleted N days after the last score" (C1), said only while a
+ *  match is left; a finished home names no clock the guest no longer runs (owner, plan 4 T4 review m1), and the setup
+ *  page's Continue card never carries one. A Not played match adds its own part, the total kept whole. */
+function playedWords(c: Counts, countdown: boolean): string {
+  const vars: Vars = countdown ? { played: c.played, days: QUICK_MATCH_EXPIRY_DAYS } : { played: c.played };
+  if (c.notPlayed === 0) return plural(ui, countdown ? "quickMatch.home.played" : "quickMatch.home.playedSaved", c.total, vars);
+  const skipped = plural(ui, "quickMatch.home.notPlayedPart", c.notPlayed);
+  return plural(ui, countdown ? "quickMatch.home.playedSkipped" : "quickMatch.home.playedSkippedSaved", c.total, { ...vars, skipped });
+}
+
+/** "Not saved — deleted on {date}" under Save, with any day in it: the day is written in the guest's own zone
+ *  (deletion-line.tsx), so only the words around it are pinned here. A function, never a module-scope constant: a load-time
+ *  throw (a renamed key) would report as zero collected tests rather than a red one (README). */
+function notSavedLine(): RegExp {
+  const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const [before, after] = ui("quickMatch.home.notSaved", { date: "@@date@@" }).split("@@date@@");
+  return new RegExp(`^${escape(before!)}\\S.*${escape(after!)}$`);
+}
+
+/** An UNSAVED home's played line: counting down while a match is left; once finished, with no countdown, and the deletion
+ *  said by the dated line under Save instead. */
+async function expectPlayedLine(p: Page, c: Counts): Promise<void> {
+  const finished = isFinished(c);
+  await expect(p.getByTestId("qm-played"), finished ? "finished: no countdown" : "a match left: the countdown").toHaveText(
+    playedWords(c, !finished),
+  );
+  if (finished) await expect(p.getByTestId("qm-not-saved"), "finished: its deletion is the dated line").toHaveText(notSavedLine());
+}
+
 // ── the pad ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
 type Side = "home" | "away";
@@ -517,8 +566,11 @@ async function correctResult(p: Page, made: Made, played: Played, rules: SetRule
   const was = played.winnerSide;
   const now = otherSide(was);
 
-  // ---- Edit result: on the settled row, a real 44px target ----
-  const edit = matchRow(p, played.fixtureId).getByTestId("qm-edit-result");
+  // ---- Edit result: in the settled row's ⋯ menu (owner 2026-11-13: one menu per row), a real 44px target ----
+  const settledRow = matchRow(p, played.fixtureId);
+  await waitForHydration(settledRow.getByTestId("qm-row-menu"), { timeout: STEP_MS });
+  await settledRow.getByTestId("qm-row-menu-toggle").click();
+  const edit = settledRow.getByTestId("qm-edit-result");
   await expect(edit).toHaveText(ui("quickMatch.home.editResult"));
   const box = await edit.boundingBox();
   expect(box?.height ?? 0, "Edit result is a 44px target").toBeGreaterThanOrEqual(44);
@@ -818,9 +870,8 @@ test("(A) a guest plays a badminton league of three from the marketing page to i
     results.push(played);
     read.push(played);
     const after = results.length;
-    await expect(page.getByTestId("qm-played")).toHaveText(
-      plural(ui, "quickMatch.home.played", total, { played: after, days: QUICK_MATCH_EXPIRY_DAYS }),
-    );
+    // The countdown while a match is left; the last result finishes the league, and its line then names no clock.
+    await expectPlayedLine(page, { played: after, notPlayed: 0, total });
     await expectTable(page, tableOf(sides, results, rules));
     if (after < total) {
       // The next match is offered: the hero names it, with its Score.
@@ -837,9 +888,7 @@ test("(A) a guest plays a badminton league of three from the marketing page to i
       read.push(corrected);
       corrections += 1;
       // The count of matches played does not move; the table does, re-derived from the corrected rallies.
-      await expect(page.getByTestId("qm-played")).toHaveText(
-        plural(ui, "quickMatch.home.played", total, { played: after, days: QUICK_MATCH_EXPIRY_DAYS }),
-      );
+      await expectPlayedLine(page, { played: after, notPlayed: 0, total });
       await expectTable(page, tableOf(sides, results, rules));
       expect(await expectRecorded(made, [corrected]), "the record holds the corrected result").toBe(1);
     }
@@ -924,9 +973,8 @@ test("(A) a guest plays a badminton league of three from the marketing page to i
   results.push(added);
   const final = tableOf(sides, results, rules);
   expect(final.map((t) => t.won), "still strict: no tie-break is needed to place it").toEqual([3, 1, 0]);
-  await expect(page.getByTestId("qm-played")).toHaveText(
-    plural(ui, "quickMatch.home.played", withAdded, { played: withAdded, days: QUICK_MATCH_EXPIRY_DAYS }),
-  );
+  // Finished again: the line names no countdown.
+  await expectPlayedLine(page, { played: withAdded, notPlayed: 0, total: withAdded });
   await expect(page.getByTestId("qm-hero"), "nothing left to play again").toHaveCount(0);
   await expect(page.getByTestId("qm-winner-name")).toHaveText([final[0]!.name]);
   await expect(page.getByTestId("qm-standings-row").getByRole("rowheader")).toHaveText(final.map((t) => t.name));
@@ -999,9 +1047,8 @@ test("(B) a guest plays a second badminton league, of two sides each playing onc
   // ---- 4. Finished: the winner card, the table the rallies made, the record agreeing ----
   const table = tableOf(sides, [played], rules);
   expect(table.map((t) => t.won), "the plan makes a strict table: no tie-break is needed to place it").toEqual([1, 0]);
-  await expect(page.getByTestId("qm-played")).toHaveText(
-    plural(ui, "quickMatch.home.played", total, { played: total, days: QUICK_MATCH_EXPIRY_DAYS }),
-  );
+  // Finished: the line names no countdown.
+  await expectPlayedLine(page, { played: total, notPlayed: 0, total });
   await expect(page.locator('[data-testid="qm-match"][data-state="settled"]')).toHaveCount(total);
   await expect(page.getByTestId("qm-hero"), "nothing left to play").toHaveCount(0);
   await expect(page.getByTestId("qm-winner-kicker")).toHaveText(ui("quickMatch.home.winner"));
@@ -1239,5 +1286,426 @@ test("(D) Save: a guest who typed an address saves the league into another accou
   } finally {
     await mine.close();
     await theirs.close();
+  }
+});
+
+// ── (E) Not played (plan 4 Task 6) ──────────────────────────────────────────────────────────────────────────────────────
+
+/** One rally a scorer taps, and whether it closes its game. */
+interface Rally {
+  side: Side;
+  closesGame: boolean;
+}
+
+/** Every rally of `games`, in the order `playHeroMatch` taps them: in each game the game's loser and winner alternate while
+ *  the loser scores, the winner runs to one short of the target, then closes it. `winnerSide` is the MATCH winner's seat. */
+function ralliesOf(games: readonly Game[], winnerSide: Side): Rally[] {
+  const out: Rally[] = [];
+  for (const [w, l] of games) {
+    const gameWinner = w > l ? winnerSide : otherSide(winnerSide);
+    const gameLoser = otherSide(gameWinner);
+    const [hi, lo] = [Math.max(w, l), Math.min(w, l)];
+    let won = 0;
+    for (let k = 0; k < lo; k += 1) {
+      out.push({ side: gameLoser, closesGame: false });
+      if (won < hi - 1) {
+        out.push({ side: gameWinner, closesGame: false });
+        won += 1;
+      }
+    }
+    for (; won < hi - 1; won += 1) out.push({ side: gameWinner, closesGame: false });
+    out.push({ side: gameWinner, closesGame: true });
+  }
+  return out;
+}
+
+/** The game in play's points after the first `n` rallies of `seq`: a closing rally opens the next game at nothing. */
+function boardAfter(seq: readonly Rally[], n: number): Record<Side, number> {
+  const board: Record<Side, number> = { home: 0, away: 0 };
+  for (const r of seq.slice(0, n)) {
+    if (r.closesGame) {
+      board.home = 0;
+      board.away = 0;
+    } else board[r.side] += 1;
+  }
+  return board;
+}
+
+/** Taps `seq` from `from` to its end at a scorer's cadence, checked as `playHeroMatch` checks its own: a closed game opens
+ *  the next at nothing, and before the deciding rally the board and the ledger hold every earlier one (the part tapped on
+ *  an earlier visit included). Returns how many it tapped. */
+async function tapFrom(p: Page, fixtureId: string, seq: readonly Rally[], from: number): Promise<number> {
+  const rallies = new Rallies(p);
+  for (let i = from; i < seq.length; i += 1) {
+    const last = i === seq.length - 1;
+    if (last) {
+      const board = boardAfter(seq, i);
+      await expect(points(p, "home"), "one rally short of the match").toHaveText(String(board.home));
+      await expect(points(p, "away")).toHaveText(String(board.away));
+      await expect
+        .poll(() => ralliesRecorded(fixtureId), {
+          timeout: HOLD_MS + STEP_MS + rallies.tapped * SEND_MS,
+          message: "the rallies before the deciding one never all reached the ledger",
+        })
+        .toBe(i);
+      await expect(pad(p).locator('[data-role="v3-rejection"]'), "no tap was refused").toHaveCount(0);
+    }
+    await rallies.tap(seq[i]!.side);
+    if (seq[i]!.closesGame && !last) {
+      await expect(points(p, "home"), "the next game opens at nothing").toHaveText("0");
+      await expect(points(p, "away")).toHaveText("0");
+    }
+  }
+  return rallies.tapped;
+}
+
+interface FixtureNow {
+  status: string;
+  events: number;
+  rallies: number;
+}
+/** One fixture as the record holds it: its status, every event in its ledger, and its rallies. A skip and a Put back
+ *  write the status only: the part played stays in the ledger as history (spec 2026-11-12 §3). */
+async function fixtureNow(fixtureId: string): Promise<FixtureNow> {
+  const [row] = await withDb(
+    (sql) => sql<FixtureNow[]>`
+      select f.status,
+             (select count(*)::int from score_events e where e.fixture_id = f.id) as events,
+             (select count(*)::int from score_events e where e.fixture_id = f.id and e.type = ${RALLY}) as rallies
+        from fixtures f where f.id = ${fixtureId}`,
+  );
+  if (!row) throw new Error(`the record has no fixture ${fixtureId}`);
+  return { status: row.status, events: row.events, rallies: row.rallies };
+}
+
+/** A match's two seats, by name, as the record holds them: the ⋯'s name and the sheet's title say them home first. */
+async function seatsOf(made: Made, fixtureId: string): Promise<{ home: string; away: string }> {
+  const { fixtures, nameOf } = await recordOf(made);
+  const f = fixtures.find((x) => x.id === fixtureId);
+  expect(f?.home && f.away, `the record seats both sides of match ${fixtureId}`).toBeTruthy();
+  return { home: nameOf.get(f!.home!)!, away: nameOf.get(f!.away!)! };
+}
+
+/** The stored table (V218: an ordered row list), by name. */
+async function storedTableOf(made: Made, nameOf: Map<string, string>): Promise<{ name: string; played: number; won: number; points: number; rank: number }[]> {
+  const stored = await withDb(
+    (sql) => sql<{ rows: { entrantId: string; played: number; won: number; points: number; rank: number }[] }[]>`
+      select s.rows from quick_matches q
+      join divisions d on d.competition_id = q.competition_id
+      join stages st on st.division_id = d.id
+      join standings_snapshots s on s.stage_id = st.id and s.pool_id is null
+      where q.token_hash = ${tokenHash(made.token)}`,
+  );
+  expect(stored, "one stored table for the league's one stage").toHaveLength(1);
+  return stored[0]!.rows.map((r) => ({ name: nameOf.get(r.entrantId)!, played: r.played, won: r.won, points: r.points, rank: r.rank }));
+}
+
+/**
+ * A row's "Not played", by hand, up to the sheet: the ⋯ (once the island has hydrated: before it, "Not played" posts with
+ * no sheet at all, D7), named for its match; "Not played" with its hint; the sheet, open, its title naming the match and
+ * its two answers, each a 44px target. Returns the open sheet.
+ */
+async function openSkipSheet(p: Page, row: Locator, seats: { home: string; away: string }): Promise<Locator> {
+  await waitForHydration(row.getByTestId("qm-row-menu"), { timeout: STEP_MS });
+  const toggle = row.getByTestId("qm-row-menu-toggle");
+  await expect(toggle, "the ⋯ names its match").toHaveAccessibleName(ui("quickMatch.home.moreActions", seats));
+  expect((await toggle.boundingBox())?.height ?? 0, "the ⋯ is a 44px target").toBeGreaterThanOrEqual(44);
+  await toggle.click();
+  const skip = row.getByTestId("qm-skip");
+  await expect(skip).toBeVisible();
+  await expect(skip).toContainText(ui("quickMatch.home.notPlayed"));
+  await expect(skip).toContainText(ui("quickMatch.home.notPlayedHint"));
+  await skip.click();
+  const sheet = row.getByTestId("qm-skip-sheet");
+  await expect(sheet, "Not played asks first").toBeVisible();
+  await expect(sheet.getByTestId("qm-skip-title")).toHaveText(ui("quickMatch.skip.title", seats));
+  const answers = [
+    [sheet.getByTestId("qm-skip-confirm"), ui("quickMatch.skip.confirm")],
+    [sheet.getByTestId("qm-skip-keep"), ui("quickMatch.skip.keep")],
+  ] as const;
+  for (const [button, words_] of answers) {
+    await expect(button).toHaveText(words_);
+    expect((await button.boundingBox())?.height ?? 0, `${words_} is a 44px target`).toBeGreaterThanOrEqual(44);
+  }
+  await expectNoHorizontalScroll(p);
+  return sheet;
+}
+
+/** One skip: the ⋯ hydration, measure and tap, Not played read and tapped, the sheet's words read and its two answers
+ *  measured, "Mark not played"; the post's 303 back to the home, the row read back; the record before and after. */
+const SKIP = { navs: 1, acts: 10, reads: 2 } as const;
+/** "Keep this match": the sheet opened as a skip opens it, Keep, the sheet closed and the row as it was; the record. */
+const KEEP = { navs: 0, acts: 10, reads: 1 } as const;
+/** Put back: the ⋯, Put back read, measured and tapped; the 303 and the row read back; the record. */
+const PUT_BACK = { navs: 1, acts: 4, reads: 1 } as const;
+/** The rest of (E): the setup page and Start, for each league; the half-played match's first visit to the pad and its
+ *  Back (the second visit is the match's own, PER_MATCH); the setup page's Continue card and its link back; "Start a new
+ *  quick match" and the setup page it opens. The home's reads between, the matches' rows, the ledger before leaving the
+ *  pad, the record after the second match, the seats of three matches and the stored table. */
+const NIGHT = { navs: 10, acts: 36, reads: 8 } as const;
+
+test("(E) Not played: a guest's league of three skips its half-played match and puts it back, then skips its last match and finishes on the two played, naming its winner; a league of two skipped entirely says no matches were played", async ({ browser }, info) => {
+  const rules = leagueRules();
+  const sides = [`Curlew Abara ${TAG}`, `Merlin Castellanos ${TAG}`, `Tern Haugland ${TAG}`];
+  const total = (sides.length * (sides.length - 1)) / 2;
+  // Two matches are played, both won by the one side that plays in both of them (the side the LAST match leaves out), so
+  // the league finishes with one leader on 2 wins. The second is left part-way first: `part` rallies of its first game.
+  const plans: readonly (readonly Game[])[] = [
+    [[rules.setTo, 1], [rules.setTo, 2]],
+    [[rules.setTo, 3], [rules.setTo, 5]],
+  ];
+  plans.forEach((g, i) => checkPlan(rules, g, `(E) match ${i + 1}`));
+  const skips = 3;
+  setBudget(
+    budgetFor({
+      navs: NIGHT.navs + skips * SKIP.navs + KEEP.navs + PUT_BACK.navs,
+      acts: NIGHT.acts + skips * SKIP.acts + KEEP.acts + PUT_BACK.acts,
+      reads: NIGHT.reads + skips * SKIP.reads + KEEP.reads + PUT_BACK.reads,
+      plans,
+    }),
+  );
+  const night = await browser.newContext({
+    storageState: await consentedAnonymousState(),
+    baseURL: info.project.use.baseURL,
+    viewport: PHONE,
+  });
+  try {
+    const p = await night.newPage();
+    const next = p.locator('[data-testid="qm-match"][data-next="true"]');
+    const listOrder = () => p.getByTestId("qm-match").evaluateAll((els) => els.map((el) => el.getAttribute("data-fixture-id")));
+
+    // ---- 1. A league of three, its three matches ----
+    await p.goto("/en/play");
+    const made = await startQuickMatch(p, `QM walk not played ${TAG}`, sides, total);
+    await expectPlayedLine(p, { played: 0, notPlayed: 0, total });
+    await expect(p.locator('[data-testid="qm-match"][data-state="ready"]'), "every match ready to score").toHaveCount(total);
+    const listed = await p.getByTestId("qm-match").evaluateAll((els) =>
+      els.map((el) => ({
+        id: el.getAttribute("data-fixture-id") ?? "",
+        n: Number(el.querySelector('[data-testid="qm-match-no"]')?.textContent),
+        sides: el.querySelector('[data-testid="qm-match-sides"]')?.textContent ?? "",
+      })),
+    );
+    const matchNo = (n: number) => {
+      const m = listed.find((x) => x.n === n);
+      expect(m, `the home lists match ${n}`).toBeDefined();
+      return { ...m!, named: sides.filter((s) => m!.sides.includes(s)) };
+    };
+    const [m1, m2, m3] = [matchNo(1), matchNo(2), matchNo(3)];
+    let paired = 0;
+    for (const m of [m1, m2, m3]) {
+      expect(m.named, `match ${m.n} names two of the league's sides`).toHaveLength(2);
+      paired += 1;
+    }
+    expect(paired, "anti-vacuity: matches read").toBe(total);
+    const champion = sides.find((s) => !m3.named.includes(s))!;
+    expect([m1.named, m2.named].every((n) => n.includes(champion)), "the side the last match leaves out plays both others").toBe(true);
+
+    // ---- 2. Match 1, played by hand ----
+    await expect(p.getByTestId("qm-hero-kicker")).toHaveText(ui("quickMatch.home.upNext", { n: 1, total }));
+    const first = await playHeroMatch(p, made, plans[0]!, () => champion, "after-result");
+    expect(first.fixtureId, "the hero's first match is match 1").toBe(m1.id);
+    await expectPlayedLine(p, { played: 1, notPlayed: 0, total });
+    await expectTable(p, tableOf(sides, [first], rules));
+
+    // ---- 3. Match 2, left part-way: Start, a few rallies of its first game, Back ----
+    await expect(p.getByTestId("qm-hero-kicker")).toHaveText(ui("quickMatch.home.upNext", { n: 2, total }));
+    await expect(next).toHaveAttribute("data-fixture-id", m2.id);
+    const seats2 = await seatsOf(made, m2.id);
+    await expect(p.getByTestId("qm-hero-home"), "the hero seats match 2 as the record does").toHaveText(seats2.home);
+    await expect(p.getByTestId("qm-hero-away")).toHaveText(seats2.away);
+    const champSide: Side = seats2.home === champion ? "home" : "away";
+    const seq = ralliesOf(plans[1]!, champSide);
+    expect(seq, "one rally per point of the plan").toHaveLength(tapsOf(plans[1]!));
+    const part = 5;
+    expect(seq.slice(0, part).some((r) => r.closesGame), "the part played stays inside the first game").toBe(false);
+    const partBoard = boardAfter(seq, part);
+    expect(partBoard.home, "a part score that reads differently home first and away first").not.toBe(partBoard.away);
+    await p.getByTestId("qm-hero").getByTestId("qm-score").click();
+    await p.waitForURL(/\/score\/dl_[A-Za-z0-9_-]+$/, { timeout: STEP_MS });
+    await expect(p.getByTestId("scan-confirm")).toBeVisible({ timeout: STEP_MS });
+    await p.getByTestId("score-start-match").click();
+    await expect(tapTarget(p, "home"), "Start opens the pad").toBeVisible({ timeout: STEP_MS });
+    const partTaps = new Rallies(p);
+    for (const r of seq.slice(0, part)) await partTaps.tap(r.side);
+    await expect(points(p, "home")).toHaveText(String(partBoard.home));
+    await expect(points(p, "away")).toHaveText(String(partBoard.away));
+    await expect
+      .poll(() => ralliesRecorded(m2.id), {
+        timeout: HOLD_MS + STEP_MS + part * SEND_MS,
+        message: "the part played never reached the ledger",
+      })
+      .toBe(part);
+    await p.getByTestId("quick-match-back-link").click();
+    await p.waitForURL((url) => url.pathname === made.path, { timeout: STEP_MS });
+    const row2 = matchRow(p, m2.id);
+    await expect(row2, "match 2 is live on the home").toHaveAttribute("data-state", "live", { timeout: STEP_MS });
+    // The row's score as it stands, home first: the live points the taps made, last.
+    const liveScore = new RegExp(`(?:^|\\D)${partBoard.home}\\D+${partBoard.away}\\s*$`);
+    await expect(row2.getByTestId("qm-match-score")).toHaveText(liveScore);
+    const shown = (await row2.getByTestId("qm-match-score").textContent())!.trim();
+    await expect(p.getByTestId("qm-hero-kicker"), "the hero is the live match").toHaveText(ui("quickMatch.home.liveMatch", { n: 2, total }));
+    const live = await fixtureNow(m2.id);
+    expect([live.status, live.rallies], "the record: in play, the part played in the ledger").toEqual(["in_play", part]);
+
+    // ---- 4. Not played, then "Keep this match": the sheet says the score it had and that it can be put back ----
+    const kept = await openSkipSheet(p, row2, seats2);
+    await expect(kept.getByTestId("qm-skip-partial"), "the score that will not count").toHaveText(ui("quickMatch.skip.partial", { score: shown }));
+    await expect(kept.getByTestId("qm-skip-body"), "a match is left after it: it can be put back").toHaveText(ui("quickMatch.skip.body"));
+    await kept.getByTestId("qm-skip-keep").click();
+    await expect(kept, "Keep closes the sheet").toBeHidden();
+    await expect(row2, "Keep changes nothing").toHaveAttribute("data-state", "live");
+    expect(await fixtureNow(m2.id), "Keep writes nothing").toEqual(live);
+
+    // ---- 5. Not played, "Mark not played": the row, the line, the table untouched, the hero on to match 3 ----
+    const skipping = await openSkipSheet(p, row2, seats2);
+    await skipping.getByTestId("qm-skip-confirm").click();
+    await expect(row2, "the post lands the row Not played").toHaveAttribute("data-state", "notPlayed", { timeout: STEP_MS });
+    expect(new URL(p.url()).search, "the bare home: no refusal").toBe("");
+    await expect(p.getByTestId("qm-flash")).toHaveCount(0);
+    await expect(row2.getByTestId("qm-not-played")).toHaveText(ui("quickMatch.home.notPlayed"));
+    await expect(row2.getByTestId("qm-match-sides")).toHaveText(`${seats2.home} ${ui("quickMatch.home.versus")} ${seats2.away}`);
+    await expectPlayedLine(p, { played: 1, notPlayed: 1, total });
+    await expect(p.getByTestId("qm-standings-note")).toHaveText(ui("quickMatch.home.countsPlayedOnly"));
+    await expectTable(p, tableOf(sides, [first], rules));
+    await expect(p.getByTestId("qm-hero-kicker")).toHaveText(ui("quickMatch.home.upNext", { n: 3, total }));
+    await expect(next).toHaveAttribute("data-fixture-id", m3.id);
+    // Plan 4 D8: still to play first, then Not played, then finished.
+    expect(await listOrder(), "open, then Not played, then finished").toEqual([m3.id, m2.id, m1.id]);
+    await expectNoHorizontalScroll(p);
+    expect(await fixtureNow(m2.id), "Not played: the status, and nothing appended (the part played stays as history)").toEqual({
+      ...live,
+      status: "cancelled",
+    });
+
+    // ---- 6. The guest leaves and comes back: the setup page offers the league to continue, in the home's own words ----
+    await p.goto("/en/play");
+    const resume = p.getByTestId("qm-continue");
+    await expect(resume, "a league with a match left is offered to continue").toBeVisible({ timeout: STEP_MS });
+    await expect(p.getByTestId("qm-continue-played")).toHaveText(playedWords({ played: 1, notPlayed: 1, total }, false));
+    await p.getByTestId("qm-continue-link").click();
+    await p.waitForURL((url) => url.pathname === made.path, { timeout: STEP_MS });
+
+    // ---- 7. Put back: the row live again, at the score it had ----
+    await waitForHydration(row2.getByTestId("qm-row-menu"), { timeout: STEP_MS });
+    await row2.getByTestId("qm-row-menu-toggle").click();
+    const putBack = row2.getByTestId("qm-put-back");
+    await expect(putBack).toHaveText(ui("quickMatch.home.putBack"));
+    expect((await putBack.boundingBox())?.height ?? 0, "Put back is a 44px target").toBeGreaterThanOrEqual(44);
+    await putBack.click();
+    await expect(row2, "Put back: live again").toHaveAttribute("data-state", "live", { timeout: STEP_MS });
+    await expect(row2.getByTestId("qm-match-score"), "at the score it had").toHaveText(shown);
+    expect(await fixtureNow(m2.id), "Put back: exactly as it was before the skip").toEqual(live);
+    await expectPlayedLine(p, { played: 1, notPlayed: 0, total });
+    await expect(p.getByTestId("qm-standings-note"), "nothing Not played: no note").toHaveCount(0);
+    await expect(p.getByTestId("qm-hero-kicker")).toHaveText(ui("quickMatch.home.liveMatch", { n: 2, total }));
+    await expect(next).toHaveAttribute("data-fixture-id", m2.id);
+
+    // ---- 8. Score: the pad resumes at the score it had; the rest of the match tapped ----
+    await p.getByTestId("qm-hero").getByTestId("qm-score").click();
+    await p.waitForURL(/\/score\/dl_[A-Za-z0-9_-]+$/, { timeout: STEP_MS });
+    await expect(tapTarget(p, "home"), "a live match opens on its pad").toBeVisible({ timeout: STEP_MS });
+    await expect(p.getByTestId("scan-confirm"), "no Start: it is already in play").toHaveCount(0);
+    await expect(points(p, "home"), "the pad resumes at the score it had").toHaveText(String(partBoard.home));
+    await expect(points(p, "away")).toHaveText(String(partBoard.away));
+    const rest = await tapFrom(p, m2.id, seq, part);
+    expect(part + rest, "every rally of the plan was tapped, over the two visits").toBe(tapsOf(plans[1]!));
+    await expect(p.getByText(ui("device.quickMatch.resultSaved")), "decided").toBeVisible({ timeout: DECIDE_MS });
+    await p.getByTestId("quick-match-back-link").click();
+    await p.waitForURL((url) => url.pathname === made.path, { timeout: STEP_MS });
+    await expectSettledOnHome(p, m2.id);
+    const second: Played = {
+      fixtureId: m2.id,
+      ...seats2,
+      winner: champion,
+      loser: champSide === "home" ? seats2.away : seats2.home,
+      winnerSide: champSide,
+      games: plans[1]!,
+      taps: tapsOf(plans[1]!),
+    };
+    await expect(row2.getByTestId("qm-match-sides")).toHaveText(ui("quickMatch.home.result", { winner: second.winner, loser: second.loser }));
+    await expect(row2.getByTestId("qm-match-score"), "the games read winner first").toHaveText(winnerFirst(second.games));
+    const results = [first, second];
+    await expectPlayedLine(p, { played: 2, notPlayed: 0, total });
+    await expectTable(p, tableOf(sides, results, rules));
+    // Both results in the record, every rally through the one link, the part tapped before the skip counted once.
+    expect(await expectRecorded(made, results)).toBe(results.length);
+
+    // ---- 9. The last match, Not played: the sheet says the league finishes now and the skip cannot be put back ----
+    const row3 = matchRow(p, m3.id);
+    await expect(row3).toHaveAttribute("data-state", "ready");
+    const last = await openSkipSheet(p, row3, await seatsOf(made, m3.id));
+    await expect(last.getByTestId("qm-skip-partial"), "nothing scored: no score line").toHaveCount(0);
+    await expect(last.getByTestId("qm-skip-body"), "the last match left").toHaveText(ui("quickMatch.skip.bodyLast"));
+    await last.getByTestId("qm-skip-confirm").click();
+    await expect(row3, "the post lands the row Not played").toHaveAttribute("data-state", "notPlayed", { timeout: STEP_MS });
+
+    // ---- 10. Finished on the two played: the winner, how many were not played, the Final table, no Put back ----
+    const table = tableOf(sides, results, rules);
+    expect(table.map((t) => t.won), "one leader on two wins").toEqual([2, 0, 0]);
+    expect(table[0]!.name, "the side that won both its matches").toBe(champion);
+    await expectPlayedLine(p, { played: 2, notPlayed: 1, total });
+    await expect(p.getByTestId("qm-hero"), "nothing left to play").toHaveCount(0);
+    await expect(p.getByTestId("qm-winner-kicker")).toHaveText(ui("quickMatch.home.winner"));
+    await expect(p.getByTestId("qm-winner-name")).toHaveText([champion]);
+    await expect(p.getByTestId("qm-winner-note"), "a short league is never mistaken for a full one").toHaveText(
+      `${plural(ui, "quickMatch.home.winnerAfter", 2)} ${plural(ui, "quickMatch.home.winnerSkipped", 1)}`,
+    );
+    await expect(p.getByTestId("qm-standings-title")).toHaveText(ui("quickMatch.home.finalTable"));
+    await expect(p.getByTestId("qm-standings-note")).toHaveText(ui("quickMatch.home.countsPlayedOnly"));
+    await expectTable(p, table);
+    await expect(row3.getByTestId("qm-not-played")).toHaveText(ui("quickMatch.home.notPlayed"));
+    await expect(row3.getByTestId("qm-row-menu"), "finished: nothing to put back, so no ⋯").toHaveCount(0);
+    await expect(p.getByTestId("qm-put-back"), "no Put back anywhere once finished").toHaveCount(0);
+    expect(await listOrder(), "Not played, then finished in play order").toEqual([m3.id, m1.id, m2.id]);
+    await expectNoHorizontalScroll(p);
+    expect(await fixtureNow(m3.id), "skipped untouched: nothing in its ledger").toEqual({ status: "cancelled", events: 0, rallies: 0 });
+    const { nameOf } = await recordOf(made);
+    const stored = await storedTableOf(made, nameOf);
+    const byName = <T extends { name: string }>(rows: readonly T[]) => [...rows].sort((a, b) => a.name.localeCompare(b.name));
+    expect(
+      byName(stored.map(({ name, played, won, points: pts }) => ({ name, played, won, points: pts }))),
+      "the stored table counts the two played matches only",
+    ).toEqual(byName(table.map(({ name, played, won, points: pts }) => ({ name, played, won, points: pts }))));
+    expect([stored[0]!.name, stored[0]!.rank], "the stored table's leader").toEqual([champion, 1]);
+
+    // ---- 11. A league of two, its only match Not played: no winner and no table ----
+    await p.goto("/en/play");
+    await expect(form(p)).toBeVisible({ timeout: STEP_MS });
+    await expect(p.getByTestId("qm-recent"), "the league finished by a skip is listed").toContainText(made.name);
+    await expect(p.getByTestId("qm-continue"), "…and is not offered to continue").toHaveCount(0);
+    const washout = await startQuickMatch(p, `QM walk washout ${TAG}`, [`Gannet Oyelaran ${TAG}`, `Shrike Vasquez ${TAG}`], 1);
+    await expectPlayedLine(p, { played: 0, notPlayed: 0, total: 1 });
+    await expect(p.getByTestId("qm-match")).toHaveCount(1);
+    const onlyId = (await p.getByTestId("qm-match").getAttribute("data-fixture-id"))!;
+    const only = matchRow(p, onlyId);
+    const sheet = await openSkipSheet(p, only, await seatsOf(washout, onlyId));
+    await expect(sheet.getByTestId("qm-skip-partial")).toHaveCount(0);
+    await expect(sheet.getByTestId("qm-skip-body"), "its only match is its last").toHaveText(ui("quickMatch.skip.bodyLast"));
+    await sheet.getByTestId("qm-skip-confirm").click();
+    await expect(only, "the post lands the row Not played").toHaveAttribute("data-state", "notPlayed", { timeout: STEP_MS });
+    await expect(p.getByTestId("qm-no-play-kicker")).toHaveText(ui("quickMatch.home.leagueFinished"));
+    await expect(p.getByTestId("qm-no-play-title")).toHaveText(ui("quickMatch.home.noPlay"));
+    await expect(p.getByTestId("qm-no-play-hint")).toHaveText(plural(ui, "quickMatch.home.noPlayHint", 1));
+    await expectPlayedLine(p, { played: 0, notPlayed: 1, total: 1 });
+    for (const id of ["qm-standings", "qm-winner", "qm-hero"]) await expect(p.getByTestId(id), `no play: no ${id}`).toHaveCount(0);
+    await expect(only.getByTestId("qm-row-menu"), "finished: no Put back").toHaveCount(0);
+    await expectNoHorizontalScroll(p);
+    expect(await fixtureNow(onlyId), "skipped untouched").toEqual({ status: "cancelled", events: 0, rallies: 0 });
+
+    // ---- 12. "Start a new quick match": the setup page, with neither league to continue ----
+    const start = p.getByTestId("qm-no-play-start");
+    await expect(start).toHaveText(ui("quickMatch.dead.startNew"));
+    expect((await start.boundingBox())?.height ?? 0, "Start a new quick match is a 44px target").toBeGreaterThanOrEqual(44);
+    await start.click();
+    await p.waitForURL((url) => url.pathname === "/en/play", { timeout: STEP_MS });
+    await expect(form(p)).toBeVisible({ timeout: STEP_MS });
+    const recent = p.getByTestId("qm-recent").getByRole("link");
+    await expect(recent, "this browser's two leagues, newest first").toHaveCount(2);
+    await expect(recent.nth(0)).toHaveAttribute("href", washout.path);
+    await expect(recent.nth(1)).toHaveAttribute("href", made.path);
+    await expect(p.getByTestId("qm-continue"), "both finished: nothing to continue").toHaveCount(0);
+  } finally {
+    await night.close();
   }
 });
