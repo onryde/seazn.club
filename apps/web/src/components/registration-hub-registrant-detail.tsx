@@ -76,11 +76,13 @@ export interface RegistrationHubRegistrantDetailProps {
   compSlug: string;
 }
 
+// Tidy round: `min-w-0 break-words` on the value, and `min-w-0` on every grid section, so a long value (a 40-character email, a
+// free-text answer) wraps inside the card at 320 instead of being clipped by the card's `overflow-hidden`.
 function detailField(label: string, value: ReactNode): ReactNode {
   return (
     <div className="flex justify-between gap-3">
       <dt className="text-slate-500">{label}</dt>
-      <dd className="text-right font-medium text-slate-800">{value}</dd>
+      <dd className="min-w-0 text-right font-medium break-words text-slate-800">{value}</dd>
     </div>
   );
 }
@@ -149,7 +151,7 @@ export function RegistrationHubRegistrantDetail({
 
   return (
     <div data-registration-hub-registrant-detail className="grid gap-5 sm:grid-cols-2">
-      <section aria-label={t(dict, "reg.hub.registrants.detail.section.contact")}>
+      <section className="min-w-0" aria-label={t(dict, "reg.hub.registrants.detail.section.contact")}>
         <h4 className={SECTION_HEADING}>{t(dict, "reg.hub.registrants.detail.section.contact")}</h4>
         <dl className="space-y-1 text-sm">
           {detailField(t(dict, "reg.hub.registrants.table.name"), row.contact_name)}
@@ -157,7 +159,7 @@ export function RegistrationHubRegistrantDetail({
         </dl>
       </section>
 
-      <section aria-label={t(dict, "reg.hub.registrants.detail.section.entry")}>
+      <section className="min-w-0" aria-label={t(dict, "reg.hub.registrants.detail.section.entry")}>
         <h4 className={SECTION_HEADING}>{t(dict, "reg.hub.registrants.detail.section.entry")}</h4>
         <dl className="space-y-1 text-sm">
           {detailField(t(dict, "reg.hub.registrants.detail.field.entryName"), row.display_name)}
@@ -198,7 +200,7 @@ export function RegistrationHubRegistrantDetail({
         )}
       </section>
 
-      <section className="sm:col-span-2" aria-label={t(dict, "reg.hub.registrants.detail.section.answers")}>
+      <section className="min-w-0 sm:col-span-2" aria-label={t(dict, "reg.hub.registrants.detail.section.answers")}>
         <h4 className={SECTION_HEADING}>{t(dict, "reg.hub.registrants.detail.section.answers")}</h4>
         {answers.length === 0 ? (
           <p className="text-sm text-slate-500">{t(dict, "reg.hub.registrants.detail.answers.empty")}</p>
@@ -218,7 +220,7 @@ export function RegistrationHubRegistrantDetail({
         )}
       </section>
 
-      <section className="sm:col-span-2" aria-label={t(dict, "reg.hub.registrants.detail.section.roster")}>
+      <section className="min-w-0 sm:col-span-2" aria-label={t(dict, "reg.hub.registrants.detail.section.roster")}>
         <h4 className={SECTION_HEADING}>{t(dict, "reg.hub.registrants.detail.section.roster")}</h4>
         {roster.length === 0 ? (
           <p className="text-sm text-slate-500">{t(dict, "reg.hub.registrants.detail.roster.empty")}</p>
@@ -263,7 +265,7 @@ export function RegistrationHubRegistrantDetail({
       </section>
 
       {siblings.length > 0 && (
-        <section className="sm:col-span-2" aria-label={t(dict, "reg.hub.registrants.detail.section.siblings")}>
+        <section className="min-w-0 sm:col-span-2" aria-label={t(dict, "reg.hub.registrants.detail.section.siblings")}>
           <h4 className={SECTION_HEADING}>{t(dict, "reg.hub.registrants.detail.section.siblings")}</h4>
           <ul className="space-y-1">
             {siblings.map((s) => (
@@ -304,7 +306,7 @@ export function RegistrationHubRegistrantDetail({
           nothing applies. Derived through the SHARED flag function, not a
           second rule that could disagree with the buttons it describes. */}
       {canEdit && hasAnyAction && (
-        <section className="sm:col-span-2" aria-label={t(dict, "reg.hub.registrants.detail.section.actions")}>
+        <section className="min-w-0 sm:col-span-2" aria-label={t(dict, "reg.hub.registrants.detail.section.actions")}>
           <h4 className={SECTION_HEADING}>{t(dict, "reg.hub.registrants.detail.section.actions")}</h4>
           <div className="flex flex-wrap items-center gap-2">
           <RegistrationHubRegistrantActions

@@ -7,6 +7,7 @@
 // construction, so no manual-invoke step is needed anywhere in this file).
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { isValidElement, type ReactElement, type ReactNode } from "react";
 import { describe, expect, it } from "vitest";
 import { propsOf, textOf, walk } from "@/components/__tests__/_hook-harness";
 import {
@@ -594,5 +595,46 @@ describe("RegistrationHubRegistrantDetail — the entry's reference (B5 T19)", (
       expect(textOf(hook(tree, "data-registration-hub-registrant-cart-ref")[0]!), locale).toBe(cartLine);
     }
     expect(wording.size, "anti-vacuity: four distinct labels and four distinct Cart lines").toBe(8);
+  });
+});
+
+// Tidy round (T19 ruling, no-new-issues): a long contact email overflowed the detail card at 320. The card is `overflow-hidden`, so
+// the email was CLIPPED rather than scrolling the page: a horizontal-scroll check cannot see it. Every grid or flex item on the way
+// from the detail's root down to the email's <dd> must be allowed to shrink (`min-w-0`), and the <dd> must wrap a word that cannot fit.
+describe("RegistrationHubRegistrantDetail — a long contact email wraps inside the card (tidy)", () => {
+  const LONG_EMAIL = "alexandra.featherstonehaugh@riverside-club.test";
+
+  function pathTo(node: ReactNode, pred: (el: ReactElement) => boolean, trail: ReactElement[] = []): ReactElement[] | null {
+    if (Array.isArray(node)) {
+      for (const n of node) {
+        const p = pathTo(n, pred, trail);
+        if (p) return p;
+      }
+      return null;
+    }
+    if (!isValidElement(node)) return null;
+    const here = [...trail, node];
+    if (pred(node)) return here;
+    return pathTo((node.props as { children?: ReactNode }).children, pred, here);
+  }
+  const classOf = (el: ReactElement) => String((el.props as { className?: string }).className ?? "");
+
+  it("every grid/flex item from the root to the email's <dd> may shrink, and the <dd> breaks the word", () => {
+    expect(LONG_EMAIL.length, "premise: longer than a 320px card's text width holds").toBeGreaterThanOrEqual(35);
+    const path = pathTo(
+      RegistrationHubRegistrantDetail(baseProps({ row: row({ contact_email: LONG_EMAIL }) })),
+      (el) => el.type === "dd" && (el.props as { children?: unknown }).children === LONG_EMAIL,
+    );
+    expect(path, "the email's <dd>").not.toBeNull();
+    let checked = 0;
+    for (let i = 1; i < path!.length; i++) {
+      if (!/(^|\s)(grid|flex|inline-flex)(\s|$)/.test(classOf(path![i - 1]!))) continue;
+      expect(classOf(path![i]!), `<${String(path![i]!.type)}> inside <${String(path![i - 1]!.type)} class="${classOf(path![i - 1]!)}">`).toMatch(
+        /(^|\s)min-w-0(\s|$)/,
+      );
+      checked += 1;
+    }
+    expect(checked, "the section in the grid and the <dd> in its row").toBe(2);
+    expect(classOf(path!.at(-1)!), "the <dd> wraps a word too long for it").toMatch(/(^|\s)break-words(\s|$)/);
   });
 });
