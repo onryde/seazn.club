@@ -2448,6 +2448,171 @@ describe("step 5 — submit", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Registration redesign B1 T6 (spec §3.3 item 5) — the submit button says what is happening: `idle` -> "Saving your place…" while the POST is
+// in flight -> "Opening secure payment…" ONLY once the response carries a `checkout_url`, then navigation. A free or pay-the-organiser cart
+// goes `saving` -> navigation and never shows the payment label. An error returns the ready text and re-enables the button.
+//
+// Driven through the real stepper (the producer is the click, the consumer is the label the button renders): the POST is held open with a
+// deferred promise so the in-flight label is read while it is in flight, and `location.assign` is stubbed to read the button AT the call.
+// Expected copy is the brief's own literals, never read back out of the dictionary the code under test reads.
+// ---------------------------------------------------------------------------
+
+describe("step 5 — staged submit button text (registration redesign B1 T6)", () => {
+  const SAVING = "Saving your place…";
+  const OPENING = "Opening secure payment…";
+  // The three review-step carts (design §4 step 5): free, pay by card now, pay the organiser later. fee_cents 2500 on both paid shapes.
+  const DIV_PAY_LATER: DivisionLike = { ...DIV_PAID, division_id: "div-pay-later", name: "Pay Later Singles", payment_method: "offline" };
+  const CARTS = [
+    { name: "free", division: DIV_OPEN, ready: "Enter the competition" },
+    { name: "card", division: DIV_PAID, ready: "Continue to payment — £25.00" },
+    { name: "pay-the-organiser-later", division: DIV_PAY_LATER, ready: "Enter — £25.00" },
+  ] as const;
+  const BASE_RESULT = { group_id: "g1", ref_code: "SZ-T6-01", access_token: "tok1", currency: "gbp", entries: [] };
+  const NO_CHECKOUT = { ...BASE_RESULT, amount_cents: 0, checkout_url: null };
+  const WITH_CHECKOUT = { ...BASE_RESULT, amount_cents: 2500, checkout_url: "https://checkout.stripe.com/pay/xyz" };
+
+  function deferred<T>() {
+    let resolve!: (v: T) => void;
+    let reject!: (e: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  async function reachReviewFor(division: DivisionLike) {
+    const m = mount([division]);
+    (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Alex Test", email: "alex@example.com" });
+    m.clickByText("Next"); // -> DETAILS (one division: ENTRIES is collapsed away)
+    setByAriaLabel(m.island, "Player 1 — Your name", "Alex Test");
+    m.clickByText("Next"); // -> CONSENT
+    (propsOf(byId(m.island, "reg-consent-privacy")).onChange as (e: { target: { checked: boolean } }) => void)({
+      target: { checked: true },
+    });
+    m.clickByText("Next"); // -> REVIEW
+    return m;
+  }
+
+  type Island = ReturnType<typeof mount>["island"];
+  const submitBtn = (island: Island) => {
+    const el = island.tree().find((e) => e.type === "button" && propsOf(e)["data-testid"] === "reg-submit");
+    expect(el, "the review step's submit button").toBeTruthy();
+    return el!;
+  };
+  const labelOf = (island: Island) => textOf(submitBtn(island));
+  const disabledOf = (island: Island) => propsOf(submitBtn(island)).disabled === true;
+  const clickSubmit = (island: Island) => (propsOf(submitBtn(island)).onClick as () => Promise<void>)();
+
+  /** Starts a submit whose POST stays open until the returned deferred settles; resolves once the request is actually in flight. */
+  async function startSubmit(island: Island) {
+    const post = deferred<unknown>();
+    apiV1Mock.impl.mockReturnValueOnce(post.promise);
+    const done = clickSubmit(island);
+    await vi.waitFor(() => expect(apiV1Mock.impl, "the POST is in flight").toHaveBeenCalledTimes(1));
+    return { post, done };
+  }
+
+  /** What the button read, and whether it was disabled, at the instant `location.assign` was called (the page leaves right after). */
+  function watchAssign(island: Island) {
+    const seen: { label: string; disabled: boolean }[] = [];
+    assignMock.mockImplementation(() => {
+      seen.push({ label: labelOf(island), disabled: disabledOf(island) });
+    });
+    return seen;
+  }
+
+  it.each(CARTS)("$name cart: the button reads its ready text first, then \"Saving your place…\" and stays disabled while the POST is in flight", async ({ division, ready }) => {
+    const { island } = await reachReviewFor(division);
+    expect(labelOf(island), "ready text before the click").toBe(ready);
+    expect(disabledOf(island), "enabled before the click").toBe(false);
+
+    const { post, done } = await startSubmit(island);
+    expect(labelOf(island), "in flight").toBe(SAVING);
+    expect(disabledOf(island), "disabled in flight — a second click must not double-submit").toBe(true);
+
+    post.resolve(NO_CHECKOUT);
+    await done;
+  });
+
+  it("card cart: \"Opening secure payment…\" appears after the response carries a checkout_url, and is what the button reads AT location.assign", async () => {
+    const { island } = await reachReviewFor(DIV_PAID);
+    const atAssign = watchAssign(island);
+    const { post, done } = await startSubmit(island);
+    expect(labelOf(island), "still the saving phase until the response arrives").toBe(SAVING);
+
+    post.resolve(WITH_CHECKOUT);
+    await done;
+
+    expect(atAssign, "anti-vacuity: location.assign was reached exactly once").toHaveLength(1);
+    expect(atAssign[0]!.label).toBe(OPENING);
+    expect(assignMock).toHaveBeenCalledWith("https://checkout.stripe.com/pay/xyz");
+    // The page is leaving: the button must not come back to life behind the navigation.
+    expect(labelOf(island), "after the navigation call").toBe(OPENING);
+    expect(disabledOf(island)).toBe(true);
+  });
+
+  it("the button stays disabled across BOTH phases (saving, then opening payment)", async () => {
+    const { island } = await reachReviewFor(DIV_PAID);
+    const atAssign = watchAssign(island);
+    const { post, done } = await startSubmit(island);
+    const inFlight = { label: labelOf(island), disabled: disabledOf(island) };
+
+    post.resolve(WITH_CHECKOUT);
+    await done;
+
+    expect([inFlight.label, atAssign[0]?.label], "two distinct phases were observed").toEqual([SAVING, OPENING]);
+    expect([inFlight.disabled, atAssign[0]?.disabled]).toEqual([true, true]);
+  });
+
+  it.each([CARTS[0], CARTS[2]])("$name cart: never shows \"Opening secure payment…\" - no checkout_url, so saving runs straight to navigation", async ({ division }) => {
+    const { island } = await reachReviewFor(division);
+    const atAssign = watchAssign(island);
+    const { post, done } = await startSubmit(island);
+    const inFlight = labelOf(island);
+
+    post.resolve(NO_CHECKOUT);
+    await done;
+
+    expect(atAssign, "anti-vacuity: location.assign was reached exactly once").toHaveLength(1);
+    expect([inFlight, atAssign[0]!.label, labelOf(island)]).toEqual([SAVING, SAVING, SAVING]);
+    expect(atAssign[0]!.disabled).toBe(true);
+    expect(assignMock).toHaveBeenCalledWith(`/live/${ORG_SLUG}/${COMPETITION_SLUG}/register/status?rid=g1&token=tok1`);
+  });
+
+  it.each(CARTS)("$name cart: an error returns the button to its ready text and re-enables it", async ({ division, ready }) => {
+    const { island } = await reachReviewFor(division);
+    const { post, done } = await startSubmit(island);
+    expect(labelOf(island)).toBe(SAVING);
+
+    post.reject(new ApiV1Error("Boom", 500, "INTERNAL"));
+    await done;
+
+    expect(labelOf(island), "ready text again").toBe(ready);
+    expect(disabledOf(island), "re-enabled so the registrant can retry").toBe(false);
+    expect(assignMock, "a failed submit never navigates").not.toHaveBeenCalled();
+  });
+
+  it("a retry after an error runs the whole sequence again: saving, then opening payment", async () => {
+    const { island } = await reachReviewFor(DIV_PAID);
+    const atAssign = watchAssign(island);
+
+    const first = await startSubmit(island);
+    first.post.reject(new ApiV1Error("Boom", 500, "INTERNAL"));
+    await first.done;
+    expect(labelOf(island)).toBe("Continue to payment — £25.00");
+
+    apiV1Mock.impl.mockReset();
+    const second = await startSubmit(island);
+    expect(labelOf(island), "second attempt starts from saving, not from a stale phase").toBe(SAVING);
+    second.post.resolve(WITH_CHECKOUT);
+    await second.done;
+
+    expect(atAssign.map((s) => s.label)).toEqual([OPENING]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Polish wave P4 (walkthrough W1, W3) — Details starts from what steps 1 and 2 already collected. Driven through the REAL stepper:
 // the producer is the WHO/ENTRIES inputs, the consumer is the RosterTable the registrant sees on step 3; details-seed.test.ts owns the
 // rules, this owns that the stepper actually applies them on the way in (a pure rule nothing calls is the inert seam).

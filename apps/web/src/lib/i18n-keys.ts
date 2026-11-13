@@ -6893,6 +6893,8 @@ export type DictionaryKey =
   | "register.submit.errorRejected"
   | "register.submit.fee"
   | "register.submit.free"
+  | "register.submit.openingPayment"
+  | "register.submit.saving"
   | "register.subtitle"
   | "register.supportedBy"
   | "register.ticket.admitOne"

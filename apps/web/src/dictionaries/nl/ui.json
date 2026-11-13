@@ -417,6 +417,8 @@
   "register.submit.free": "Deelnemen aan de competitie",
   "register.submit.fee": "Deelnemen — {fee}",
   "register.submit.card": "Doorgaan naar betaling — {fee}",
+  "register.submit.saving": "Je plek wordt opgeslagen…",
+  "register.submit.openingPayment": "Beveiligde betaling wordt geopend…",
   "register.method.card": "betaal per kaart bij inschrijving",
   "register.method.offline": "betaal de organisator",
   "register.payments.unavailable.title": "Kaartbetalingen zijn tijdelijk niet beschikbaar",

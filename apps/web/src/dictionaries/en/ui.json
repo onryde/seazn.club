@@ -417,6 +417,8 @@
   "register.submit.free": "Enter the competition",
   "register.submit.fee": "Enter — {fee}",
   "register.submit.card": "Continue to payment — {fee}",
+  "register.submit.saving": "Saving your place…",
+  "register.submit.openingPayment": "Opening secure payment…",
   "register.method.card": "pay by card at sign-up",
   "register.method.offline": "pay the organiser",
   "register.payments.unavailable.title": "Card payments are temporarily unavailable",

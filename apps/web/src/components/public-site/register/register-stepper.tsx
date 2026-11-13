@@ -73,6 +73,11 @@ import {
   type EntriesValidation,
 } from "./validation";
 
+/** Where the submit is (registration redesign B1 T6, spec §3.3 item 5). `saving`: the POST (and the bot-check token it waits for) is
+ *  in flight. `opening_payment`: the response carried a `checkout_url` and the page is on its way to Stripe. A cart with no checkout
+ *  goes `saving` straight to navigation, so `opening_payment` is never shown for a free or pay-the-organiser-later cart. */
+type SubmitPhase = "idle" | "saving" | "opening_payment";
+
 /** validation.ts's EntriesValidation error codes don't share a naming
  *  scheme with the register.errors.* dictionary keys — same reasoning as
  *  step-who.tsx's ERROR_KEY, an explicit map avoids silently building a key
@@ -181,8 +186,10 @@ export function RegisterStepper({
   // to whichever session wires the final submit body.
   const [website, setWebsite] = useState("");
   // Step 5's submit — NOT persisted (a refresh mid-submit should retry, not
-  // silently resume a stale "submitting" state).
-  const [submitting, setSubmitting] = useState(false);
+  // silently resume a stale "submitting" state). One field for both "is it busy" and "what does the button say": `submitting` below is
+  // derived, so the disabled state and the label can never disagree about which phase it is.
+  const [submitPhase, setSubmitPhase] = useState<SubmitPhase>("idle");
+  const submitting = submitPhase !== "idle";
   const turnstile = useTurnstile("register");
   // FIX 3 (RS006 fix wave) — was a bare `string | null` (whatever
   // `err.message` happened to be, rendered as-is, the ONLY thing the
@@ -356,6 +363,13 @@ export function RegisterStepper({
       : t(reviewPayable?.payment_method === "stripe" ? "register.submit.card" : "register.submit.fee", {
           fee: formatMoneyExact(reviewSummary.subtotalCents, reviewSummary.currency, locale),
         });
+  // What the button says right now: its ready text, or the phase the submit is in (spec §3.3 item 5).
+  const submitButtonLabel =
+    submitPhase === "saving"
+      ? t("register.submit.saving")
+      : submitPhase === "opening_payment"
+        ? t("register.submit.openingPayment")
+        : submitLabel;
 
   // Clamped to the LAST real step, never stepOrder.length — "review" is a
   // genuine final step with its own Submit action, not a position before a
@@ -401,10 +415,14 @@ export function RegisterStepper({
    * Navigation — the SAME `?rid=&token=` convention buildCartMail/
    * createRegistrationCheckout already mint). The sessionStorage draft is
    * cleared on EITHER success path: the cart is committed server-side
-   * either way, so nothing here should ever be replayed. `submitting` is
-   * deliberately left `true` on the success path — the page is about to
+   * either way, so nothing here should ever be replayed. The phase is
+   * deliberately left non-idle on the success path — the page is about to
    * navigate away, so there is no further interaction to unblock; only the
-   * catch branch resets it, so a failed attempt can be retried.
+   * catch branch returns it to `idle`, so a failed attempt can be retried.
+   * It is `saving` for the whole POST, becomes `opening_payment` only when
+   * the response carries a checkout (the label then says where the page is
+   * headed during the navigation), and stays `saving` for a free or
+   * pay-the-organiser-later cart, which goes straight to the status page.
    *
    * FIX 3 (RS006 fix wave) — the catch branch used to render `err.message`
    * verbatim as the ONLY thing the registrant saw: a bare server string
@@ -420,7 +438,7 @@ export function RegisterStepper({
    * resubmit — nothing is lost on a failed attempt.
    */
   async function handleSubmit() {
-    setSubmitting(true);
+    setSubmitPhase("saving");
     setSubmitError(null);
     try {
       const result = await withTurnstile(turnstile, (headers) =>
@@ -432,6 +450,9 @@ export function RegisterStepper({
       );
       clearRegisterState(orgSlug, competitionSlug);
       const nav = resolvePostSubmitNavigation(result, orgSlug, competitionSlug);
+      // Keyed on the RESPONSE, not the cart's label: only a real checkout URL means "opening payment". The old document stays up until
+      // the next one's response commits, so this label is on screen for the navigation's whole round trip.
+      if (nav.kind === "checkout") setSubmitPhase("opening_payment");
       window.location.assign(nav.url);
     } catch (err) {
       const status = err instanceof ApiV1Error ? err.status : undefined;
@@ -441,7 +462,7 @@ export function RegisterStepper({
         detail: isTurnstileRefusal(err) ? t("turnstile.error") : err instanceof Error ? err.message : String(err),
         lichess: err instanceof ApiV1Error ? lichessRefusalReason(err.status, err.code) : null,
       });
-      setSubmitting(false);
+      setSubmitPhase("idle");
     }
   }
 
@@ -612,7 +633,7 @@ export function RegisterStepper({
             disabled={submitting}
             className={BTN_PRIMARY}
           >
-            {submitLabel}
+            {submitButtonLabel}
           </button>
         ) : (
           <button type="button" data-testid="reg-next" onClick={goNext} className={BTN_PRIMARY}>

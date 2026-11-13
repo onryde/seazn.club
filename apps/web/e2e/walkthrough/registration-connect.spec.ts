@@ -272,7 +272,10 @@ test("RS006 — organiser settings, team entry, Stripe Connect payment", async (
 
     // A paid, card-enabled cart labels the submit "Continue to payment — £25.00"
     // (register.submit.card). The free label is "Enter the competition"; the
-    // pay-later label is "Enter — {fee}". Match all three.
+    // pay-later label is "Enter — {fee}". Match all three. These are the READY labels: once clicked the button reads "Saving your place…"
+    // and then "Opening secure payment…" (register.submit.saving / .openingPayment, disabled both times), so this locator is for the
+    // click only and the wait that follows is on the navigation, never on the label. (Same for the matching click in the other
+    // registration walkthroughs: rs007-invite-pay-cancel, rs007-money-matrix, rs007-registration-journey, rs010, rs012.)
     await anon
       .getByRole("button", { name: /Continue to payment|Enter the competition|Enter —/ })
       .first()

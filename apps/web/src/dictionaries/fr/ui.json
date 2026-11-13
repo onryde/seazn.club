@@ -417,6 +417,8 @@
   "register.submit.free": "S'inscrire à la compétition",
   "register.submit.fee": "S'inscrire — {fee}",
   "register.submit.card": "Passer au paiement — {fee}",
+  "register.submit.saving": "Enregistrement de votre place…",
+  "register.submit.openingPayment": "Ouverture du paiement sécurisé…",
   "register.method.card": "payer par carte lors de l'inscription",
   "register.method.offline": "payer l'organisateur",
   "register.payments.unavailable.title": "Les paiements par carte sont temporairement indisponibles",
