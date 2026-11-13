@@ -96,8 +96,16 @@ describe("resolveMoneyState — never a debt with no route to settle", () => {
   });
 
   it("a pending card entry with Stripe NOT live is stripe_unavailable — never a bare 'pay now' that 503s", () => {
+    // B4 fix round 3: with its pay-by date. The expiry pass expires the entry at that date whatever the org's Stripe state, so the
+    // card names it (the person has until then to sort the payment with the organiser).
     expect(resolveMoneyState(entry(), cart({ charges_enabled: false }))).toEqual({
       kind: "stripe_unavailable",
+      deadline: FUTURE,
+    });
+    const own = "2099-02-01T00:00:00.000Z";
+    expect(resolveMoneyState(entry({ promotion_expires_at: own }), cart({ charges_enabled: false }))).toEqual({
+      kind: "stripe_unavailable",
+      deadline: own,
     });
   });
 
@@ -146,13 +154,29 @@ describe("resolveMoneyState — never a debt with no route to settle", () => {
   // control (or offline instructions) above a deadline that has already
   // gone by, however the entry would otherwise be paid.
   describe("window_closed — the deadline has passed but the sweep has not caught up yet", () => {
-    it("a stripe entry past its OWN promotion deadline is window_closed, never stripe_due", () => {
+    // B4 fix round 3 (re-review I1): an entry past its OWN promotion deadline was promoted off the waitlist, and the sweep's lapse puts
+    // it back at the end of the waitlist (sweep.ts → returnToWaitlist); the expiry pass skips a promoted entry. Its own state, never
+    // window_closed, whose entry the expiry pass expires.
+    it("a stripe entry past its OWN promotion deadline is promotion_lapsed, never stripe_due or window_closed", () => {
       expect(
         resolveMoneyState(
           entry({ promotion_expires_at: PAST }),
           cart({ expires_at: FUTURE }), // cart's own clock still ahead — must not win
         ),
-      ).toEqual({ kind: "window_closed" });
+      ).toEqual({ kind: "promotion_lapsed" });
+    });
+
+    it("a promotion past its own deadline is promotion_lapsed whatever the cart says: offline, cards unavailable, cart clock gone too", () => {
+      const lapsed = [
+        resolveMoneyState(entry({ promotion_expires_at: PAST, payment_method: "offline" }), cart()),
+        resolveMoneyState(entry({ promotion_expires_at: PAST }), cart({ charges_enabled: false })),
+        resolveMoneyState(entry({ promotion_expires_at: PAST }), cart({ expires_at: PAST })),
+      ];
+      expect(lapsed).toEqual([{ kind: "promotion_lapsed" }, { kind: "promotion_lapsed" }, { kind: "promotion_lapsed" }]);
+    });
+
+    it("a promotion still inside its own window is payable even after the cart's shared clock has gone by", () => {
+      expect(resolveMoneyState(entry({ promotion_expires_at: FUTURE }), cart({ expires_at: PAST })).kind).toBe("stripe_due");
     });
 
     it("a stripe entry past the CART's shared deadline (never promoted) is window_closed, never stripe_due", () => {
@@ -717,7 +741,16 @@ describe("status page outcome (B4 T15)", () => {
   // One entry per state the rules name.
   const unpaidCard = entry({ status: "pending", amount_cents: 2400, payment_method: "stripe" });
   const offlineDue = entry({ status: "pending", amount_cents: 2400, payment_method: "offline" });
-  const windowClosed = entry({ status: "pending", amount_cents: 2400, promotion_expires_at: PAST });
+  // B4 fix round 3 (re-review I1): the two halves of "past its pay-by date", each built as the sweep sees it.
+  //  - `promotionLapsed`: promoted off the waitlist and past its OWN promotion_expires_at. The sweep's lapse puts it back at the end of
+  //    the waitlist (sweep.ts → returnToWaitlist); the expiry pass skips a promoted entry (`promoted_at is null`).
+  //  - `windowClosed`: never promoted, so its pay-by date is the CART's shared expires_at, past in CART_CLOSED. The expiry pass expires
+  //    it (and every other never-promoted pending entry of that cart: they share the date).
+  const promotionLapsed = entry({ status: "pending", amount_cents: 2400, promotion_expires_at: PAST });
+  const windowClosed = entry({ status: "pending", amount_cents: 2400 });
+  const CART_CLOSED = { expires_at: PAST };
+  // A promoted entry still inside its own window: payable after the cart's shared date has gone by.
+  const promotedInWindow = entry({ status: "pending", amount_cents: 1500, promotion_expires_at: FUTURE });
   const paidAwaiting = entry({ status: "paid", amount_cents: 1500, settled_by: "card" });
   const freeAwaiting = entry({ status: "pending", amount_cents: 0 });
   const confirmedCard = entry({ status: "confirmed", amount_cents: 1500, settled_by: "card" });
@@ -750,17 +783,23 @@ describe("status page outcome (B4 T15)", () => {
       { name: "rule 2: an unpaid card entry", entries: [unpaidCard], want: "pay" },
       { name: "rule 2: an offline entry with its fee due", entries: [offlineDue], want: "pay" },
       { name: "m1: a card fee owed while card payments are unavailable", entries: [unpaidCard], cart: { charges_enabled: false }, want: "payUnavailable" },
-      { name: "m1: a fee owed past its pay-by date has lost its place", entries: [windowClosed], want: "closed" },
-      { name: "m1: a card fee past its pay-by date while cards are unavailable has lost its place too", entries: [windowClosed], cart: { charges_enabled: false }, want: "closed" },
+      { name: "m1: a fee owed past the cart's pay-by date (never promoted) has lost its place", entries: [windowClosed], cart: CART_CLOSED, want: "closed" },
+      { name: "m1: the same while cards are unavailable has lost its place too", entries: [windowClosed], cart: { ...CART_CLOSED, charges_enabled: false }, want: "closed" },
+      { name: "round 3 I1: a promotion past its own pay-by date goes back to the waitlist", entries: [promotionLapsed], want: "waitlist" },
+      { name: "round 3 I1: the same with cards unavailable and the cart's date gone too: still the waitlist", entries: [promotionLapsed], cart: { ...CART_CLOSED, charges_enabled: false }, want: "waitlist" },
+      { name: "round 3 I1: a lapsed promotion + confirmed -> in", entries: [promotionLapsed, confirmedCard], want: "in" },
+      { name: "round 3 I1: a lapsed promotion + paid awaiting approval -> received", entries: [promotionLapsed, paidAwaiting], want: "received" },
+      { name: "round 3 I1: a lapsed promotion + a card entry in its window -> pay", entries: [promotionLapsed, unpaidCard], want: "pay" },
+      { name: "round 3 I1: a lapsed promotion + a never-promoted entry past the cart's date -> waitlist (above closed)", entries: [promotionLapsed, windowClosed], cart: CART_CLOSED, want: "waitlist" },
       // m1 precedence pairs: what each of the two lands on beside a sibling.
-      { name: "m1 ruling: window_closed + confirmed -> in (the closed entry's card says it lost its place)", entries: [windowClosed, confirmedCard], want: "in" },
-      { name: "m1: window_closed + paid awaiting approval -> received (for the paid one alone)", entries: [windowClosed, paidAwaiting], want: "received" },
-      { name: "m1: window_closed + waitlisted -> waitlist", entries: [windowClosed, waitlisted], want: "waitlist" },
-      { name: "m1: window_closed + a card entry still in its window -> pay", entries: [windowClosed, unpaidCard], want: "pay" },
+      { name: "m1 ruling: window_closed + confirmed -> in (the closed entry's card says it lost its place)", entries: [windowClosed, confirmedCard], cart: CART_CLOSED, want: "in" },
+      { name: "m1: window_closed + paid awaiting approval -> received (for the paid one alone)", entries: [windowClosed, paidAwaiting], cart: CART_CLOSED, want: "received" },
+      { name: "m1: window_closed + waitlisted -> waitlist", entries: [windowClosed, waitlisted], cart: CART_CLOSED, want: "waitlist" },
+      { name: "m1: window_closed + a promoted entry still in its own window -> pay", entries: [windowClosed, promotedInWindow], cart: CART_CLOSED, want: "pay" },
       { name: "m1: cards unavailable + confirmed -> payUnavailable (an owed fee outranks You're in, as pay does)", entries: [unpaidCard, confirmedCard], cart: { charges_enabled: false }, want: "payUnavailable" },
       { name: "m1: cards unavailable + free awaiting approval -> payUnavailable", entries: [unpaidCard, freeAwaiting], cart: { charges_enabled: false }, want: "payUnavailable" },
       { name: "m1: cards unavailable + an offline fee due -> pay (one of them can be paid here)", entries: [unpaidCard, offlineDue], cart: { charges_enabled: false }, want: "pay" },
-      { name: "m1: cards unavailable + window_closed -> payUnavailable", entries: [unpaidCard, windowClosed], cart: { charges_enabled: false }, want: "payUnavailable" },
+      { name: "m1: cards unavailable + window_closed -> payUnavailable", entries: [promotedInWindow, windowClosed], cart: { ...CART_CLOSED, charges_enabled: false }, want: "payUnavailable" },
       // I1: the player pool. A confirmed solo sign-up nobody has placed on a team yet.
       { name: "I1: a confirmed solo sign-up not yet on a team -> pool", entries: [inPool], want: "pool" },
       { name: "I1: once placed on a team -> in", entries: [placedSolo], want: "in" },
@@ -773,7 +812,8 @@ describe("status page outcome (B4 T15)", () => {
       { name: "I1: a solo sign-up that owes its fee -> pay", entries: [soloUnpaid], want: "pay" },
       { name: "I1: a waitlisted solo sign-up -> waitlist, not the pool", entries: [soloWaitlisted], want: "waitlist" },
       { name: "I1: a withdrawn solo sign-up -> closed, not the pool", entries: [soloWithdrawn], want: "closed" },
-      { name: "I1: a solo past its pay-by date -> closed, not the pool", entries: [{ ...soloUnpaid, promotion_expires_at: PAST }], want: "closed" },
+      { name: "I1: a solo never promoted, past the cart's pay-by date -> closed, not the pool", entries: [soloUnpaid], cart: CART_CLOSED, want: "closed" },
+      { name: "round 3 I1: a solo whose promotion lapsed -> waitlist, not the pool", entries: [{ ...soloUnpaid, promotion_expires_at: PAST }], want: "waitlist" },
       { name: "I1, after a withdrawal: a withdrawn solo beside a confirmed team -> in", entries: [confirmedCard, soloWithdrawn], want: "in" },
       { name: "rule 3: a card-paid confirmed entry", entries: [confirmedCard], want: "in" },
       { name: "rule 3: a waived entry is confirmed, not owed", entries: [waived], want: "in" },
@@ -819,8 +859,9 @@ describe("status page outcome (B4 T15)", () => {
         { name: "paid awaiting approval", entries: [paidAwaiting], want: 1 },
         { name: "free awaiting approval", entries: [freeAwaiting], want: 1 },
         { name: "both awaiting", entries: [paidAwaiting, freeAwaiting], want: 2 },
-        { name: "window_closed is not awaiting a decision", entries: [windowClosed], want: 0 },
-        { name: "window_closed beside a paid one: only the paid one", entries: [windowClosed, paidAwaiting], want: 1 },
+        { name: "window_closed is not awaiting a decision", entries: [windowClosed], cart: CART_CLOSED, want: 0 },
+        { name: "window_closed beside a paid one: only the paid one", entries: [windowClosed, paidAwaiting], cart: CART_CLOSED, want: 1 },
+        { name: "a lapsed promotion is not awaiting a decision", entries: [promotionLapsed, paidAwaiting], want: 1 },
         { name: "a card fee owed while cards are unavailable", entries: [unpaidCard, freeAwaiting], cart: { charges_enabled: false }, want: 1 },
         { name: "a fee that can be paid now", entries: [unpaidCard, offlineDue], want: 0 },
         { name: "confirmed, waitlisted and ended entries", entries: [confirmedCard, waitlisted, withdrawn, expired, rejected], want: 0 },
@@ -849,17 +890,29 @@ describe("status page outcome (B4 T15)", () => {
     // Every headline kind, forced complete by the type: a new kind fails tsc here until it is listed.
     const KINDS: Record<HeadlineKind, true> = { pay: true, payUnavailable: true, received: true, pool: true, in: true, waitlist: true, closed: true };
 
-    it("only payUnavailable on a one-entry cart (every kind x 0, 1, 2 entries, counted)", () => {
+    // Round 3 (re-review m5): "one entry" counts the cart's LIVE entries. A withdrawn, expired or rejected card beside the one that owes
+    // cannot be what the h1's notice is about, so it does not move the notice back onto the owing card.
+    const CARTS: [string, { status: EntryStatus }[]][] = [
+      ["empty", []],
+      ["one pending", [{ status: "pending" }]],
+      ["two pending", [{ status: "pending" }, { status: "pending" }]],
+      ["pending + withdrawn", [{ status: "pending" }, { status: "withdrawn" }]],
+      ["pending + expired + rejected", [{ status: "pending" }, { status: "expired" }, { status: "rejected" }]],
+      ["pending + confirmed", [{ status: "pending" }, { status: "confirmed" }]],
+      ["pending + waitlisted", [{ status: "pending" }, { status: "waitlisted" }]],
+    ];
+
+    it("only payUnavailable with exactly one live entry (every kind x 7 carts, counted)", () => {
       let checked = 0;
       const carried: string[] = [];
       for (const kind of Object.keys(KINDS) as HeadlineKind[]) {
-        for (const count of [0, 1, 2]) {
-          if (headlineCarriesUnavailableNotice(count, kind)) carried.push(`${kind}x${count}`);
+        for (const [name, entries] of CARTS) {
+          if (headlineCarriesUnavailableNotice(entries, kind)) carried.push(`${kind}: ${name}`);
           checked += 1;
         }
       }
-      expect(checked).toBe(21);
-      expect(carried).toEqual(["payUnavailablex1"]);
+      expect(checked).toBe(49);
+      expect(carried).toEqual(["payUnavailable: one pending", "payUnavailable: pending + withdrawn", "payUnavailable: pending + expired + rejected"]);
     });
   });
 
@@ -904,22 +957,34 @@ describe("status page outcome (B4 T15)", () => {
     // B4 fix round 2 (controller ruling): an entry past its pay-by date has lost its place and has no way to pay, so its fee is not
     // "due". Counting it put "£24.00 still due" beside a card that says the place is gone. The rest of the cart counts as before.
     it("window_closed is not due: alone it is Nothing to pay", () => {
-      expect(resolveMoneyState(windowClosed, CART).kind, "premise: this fixture is window_closed").toBe("window_closed");
-      expect(cartMoneySummary([windowClosed], CART)).toEqual({ paidCents: 0, dueCents: 0, waitlistedCents: 0 });
-      expect(moneyLine(cartMoneySummary([windowClosed], CART))).toBe("nothing");
+      const cart = { ...CART, ...CART_CLOSED };
+      expect(resolveMoneyState(windowClosed, cart).kind, "premise: this fixture is window_closed").toBe("window_closed");
+      expect(cartMoneySummary([windowClosed], cart)).toEqual({ paidCents: 0, dueCents: 0, waitlistedCents: 0 });
+      expect(moneyLine(cartMoneySummary([windowClosed], cart))).toBe("nothing");
     });
 
-    it("window_closed beside a pending card fee: only the payable fee is due", () => {
-      const cardFee = { ...unpaidCard, amount_cents: 1500 };
-      expect(resolveMoneyState(cardFee, CART).kind, "premise: still in its window").toBe("stripe_due");
+    it("a lapsed promotion is not due either: alone it is Nothing to pay", () => {
+      expect(resolveMoneyState(promotionLapsed, CART).kind, "premise: this fixture is promotion_lapsed").toBe("promotion_lapsed");
+      expect(cartMoneySummary([promotionLapsed], CART)).toEqual({ paidCents: 0, dueCents: 0, waitlistedCents: 0 });
+    });
+
+    it("window_closed beside a promoted entry still in its own window: only the payable fee is due", () => {
+      const cart = { ...CART, ...CART_CLOSED };
+      expect(resolveMoneyState(promotedInWindow, cart).kind, "premise: still in its window").toBe("stripe_due");
       // 1500, never 3900: the two fees differ, so counting the closed one cannot pass for counting the payable one.
-      expect(cartMoneySummary([windowClosed, cardFee], CART).dueCents).toBe(1500);
-      expect(moneyLine(cartMoneySummary([windowClosed, cardFee], CART))).toBe("due");
+      expect(cartMoneySummary([windowClosed, promotedInWindow], cart).dueCents).toBe(1500);
+      expect(moneyLine(cartMoneySummary([windowClosed, promotedInWindow], cart))).toBe("due");
+    });
+
+    it("a lapsed promotion beside a pending card fee: only the payable fee is due", () => {
+      const cardFee = { ...unpaidCard, amount_cents: 1500 };
+      expect(cartMoneySummary([promotionLapsed, cardFee], CART).dueCents).toBe(1500);
     });
 
     it("window_closed beside a card-paid entry: Paid, never 'still due'", () => {
-      expect(cartMoneySummary([windowClosed, confirmedCard], CART)).toEqual({ paidCents: 1500, dueCents: 0, waitlistedCents: 0 });
-      expect(moneyLine(cartMoneySummary([windowClosed, confirmedCard], CART))).toBe("paid");
+      const cart = { ...CART, ...CART_CLOSED };
+      expect(cartMoneySummary([windowClosed, confirmedCard], cart)).toEqual({ paidCents: 1500, dueCents: 0, waitlistedCents: 0 });
+      expect(moneyLine(cartMoneySummary([windowClosed, confirmedCard], cart))).toBe("paid");
     });
 
     it("a card fee owed while card payments are unavailable is still owed: counted in due (T15 ruling)", () => {
@@ -951,19 +1016,26 @@ describe("status page outcome (B4 T15)", () => {
     // a card fee owed while cards are unavailable (B4 fix round 2 took `window_closed` out of "due"), so whenever something is due
     // and nothing can be paid, the page never leads with "awaiting approval" for that debt: it leads with the card notice.
     it("pay exactly when an entry can be paid here; an owed fee with no way to pay never reads as awaiting approval (counted)", () => {
-      const palette = [unpaidCard, offlineDue, windowClosed, paidAwaiting, freeAwaiting, confirmedCard, confirmedFree, waived, waitlisted, withdrawn, expired, rejected, inPool, soloUnpaid];
+      const palette = [unpaidCard, offlineDue, windowClosed, promotionLapsed, promotedInWindow, paidAwaiting, freeAwaiting, confirmedCard, confirmedFree, waived, waitlisted, withdrawn, expired, rejected, inPool, soloUnpaid];
       const PAYABLE = new Set(["stripe_due", "offline_due"]);
       let checked = 0;
       let pays = 0;
       let owedNotPayable = 0;
-      for (const charges_enabled of [true, false]) {
-        const cart = { ...CART, charges_enabled };
+      let lapsedPairs = 0;
+      // The cart's shared pay-by date open and gone (round 3: the never-promoted half closes with it), cards on and off.
+      for (const expires_at of [FUTURE, PAST]) for (const charges_enabled of [true, false]) {
+        const cart = { ...CART, expires_at, charges_enabled };
         for (const a of palette) {
           for (const b of palette) {
-            const name = `${a.status}/${a.amount_cents} + ${b.status}/${b.amount_cents}, charges ${charges_enabled}`;
+            const name = `${a.status}/${a.amount_cents}/${a.promotion_expires_at} + ${b.status}/${b.amount_cents}/${b.promotion_expires_at}, cart ${expires_at}, charges ${charges_enabled}`;
             const payable = [a, b].some((e) => PAYABLE.has(resolveMoneyState(e, cart).kind));
             const headline = cartHeadline([a, b], cart);
             expect(headline === "pay", name).toBe(payable);
+            // Round 3 I1: an entry whose promotion lapsed goes back to the waitlist, so its cart never reads "closed".
+            if ([a, b].some((e) => resolveMoneyState(e, cart).kind === "promotion_lapsed")) {
+              expect(headline, `${name}: a lapsed promotion is never closed`).not.toBe("closed");
+              lapsedPairs += 1;
+            }
             if (payable) pays += 1;
             if (!payable && cartMoneySummary([a, b], cart).dueCents > 0) {
               owedNotPayable += 1;
@@ -975,7 +1047,8 @@ describe("status page outcome (B4 T15)", () => {
           }
         }
       }
-      expect(checked).toBe(palette.length * palette.length * 2);
+      expect(checked).toBe(palette.length * palette.length * 4);
+      expect(lapsedPairs, "pairs holding a lapsed promotion").toBeGreaterThan(0);
       // Every direction is exercised, or the equivalence is vacuous.
       expect(pays).toBeGreaterThan(0);
       expect(checked - pays).toBeGreaterThan(0);
@@ -1124,17 +1197,27 @@ describe("status page outcome (B4 T15)", () => {
       });
 
       it("pay beside an entry past its deadline: names only the date still ahead, never one that has gone by", () => {
-        expect(whatHappensNext(view({ entries: [windowClosed, unpaidCard] }), "pay", NOW)).toEqual([
+        expect(whatHappensNext(view({ entries: [promotionLapsed, unpaidCard] }), "pay", NOW)).toEqual([
+          { kind: "step", key: "register.status.next.payBy", vars: { deadline: FUTURE } },
+        ]);
+        // The cart's own date gone: the promoted entry still in its window names its own.
+        expect(whatHappensNext(view({ expires_at: PAST, entries: [windowClosed, promotedInWindow] }), "pay", NOW)).toEqual([
           { kind: "step", key: "register.status.next.payBy", vars: { deadline: FUTURE } },
         ]);
       });
 
       // B4 review m1: neither owed state with no way to pay here may say "Pay to keep your place". Read through the real headline, so
       // the step is the one the page shows for that cart.
-      it("a fee past its deadline alone: the cart is closed and adds no step", () => {
-        const v = view({ entries: [windowClosed] });
+      it("a fee past the cart's deadline alone: the cart is closed and adds no step", () => {
+        const v = view({ expires_at: PAST, entries: [windowClosed] });
         expect(cartHeadline(v.entries, v), "premise: the headline").toBe("closed");
         expect(whatHappensNext(v, cartHeadline(v.entries, v), NOW)).toEqual([]);
+      });
+
+      it("round 3 I1: a lapsed promotion alone: the waitlist step, never a pay step", () => {
+        const v = view({ entries: [promotionLapsed] });
+        expect(cartHeadline(v.entries, v), "premise: the headline").toBe("waitlist");
+        expect(whatHappensNext(v, cartHeadline(v.entries, v), NOW)).toEqual([{ kind: "step", key: "register.status.next.waitlist", vars: {} }]);
       });
 
       it("a card fee owed while cards are unavailable: the headline is the card notice and there is no pay step", () => {
@@ -1149,7 +1232,8 @@ describe("status page outcome (B4 T15)", () => {
         ]);
         expect(whatHappensNext(view({ entries: [paidAwaiting] }), "received", NOW)[0]!.count).toBe(1);
         // m1: an entry past its pay-by date is not awaiting a decision, so it is not counted ("your entry", not "your entries").
-        expect(whatHappensNext(view({ entries: [paidAwaiting, windowClosed] }), "received", NOW)[0]!.count).toBe(1);
+        expect(whatHappensNext(view({ expires_at: PAST, entries: [paidAwaiting, windowClosed] }), "received", NOW)[0]!.count).toBe(1);
+        expect(whatHappensNext(view({ entries: [paidAwaiting, promotionLapsed] }), "received", NOW)[0]!.count).toBe(1);
       });
 
       it("pool: the organiser places you on a team, and this page shows it", () => {

@@ -39,8 +39,11 @@ export type MoneyState =
   /** A card fee is due but the org's Connect account cannot currently take a
    *  payment — resumeRegistrationCheckout would 503. Its own state rather
    *  than folding into stripe_due so the page never renders a "Pay now"
-   *  button that is guaranteed to fail on click. */
-  | { kind: "stripe_unavailable" }
+   *  button that is guaranteed to fail on click. `deadline` (B4 fix round 3):
+   *  the expiry pass expires the entry at its pay-by date whatever the org's
+   *  Stripe state, so the card names the date the person has to sort the
+   *  payment with the organiser by. */
+  | { kind: "stripe_unavailable"; deadline: string | null }
   | { kind: "offline_due"; deadline: string | null }
   /** RS007 review fix #8 ("pay-then-refund on a stale deadline"): the sweep
    *  that expires an overdue pending entry (and auto-refunds a Stripe one)
@@ -52,8 +55,21 @@ export type MoneyState =
    *  that names a window already closed — resumeRegistrationCheckout
    *  carries the matching server-side re-check (usecases/registrations/checkout.ts), since a
    *  stale tab or a direct POST could otherwise still mint a real session
-   *  in the exact window this state exists to close off. */
-  | { kind: "window_closed" };
+   *  in the exact window this state exists to close off.
+   *
+   *  B4 fix round 3 (re-review I1): only a NEVER-promoted entry, whose pay-by
+   *  date is the cart's shared `expires_at`. The sweep's expiry pass expires
+   *  it, so it has lost its place. */
+  | { kind: "window_closed" }
+  /** B4 fix round 3 (re-review I1): an entry promoted off the waitlist and
+   *  past its OWN `promotion_expires_at`. The sweep's lapse puts it back at
+   *  the END of the waitlist (sweep.ts → returnToWaitlist), and the expiry
+   *  pass skips a promoted entry (`promoted_at is null`), so it has not lost
+   *  its place in the competition: it is waiting again. Nothing to pay, and
+   *  no Pay button for the same reason as window_closed. A non-null
+   *  `promotion_expires_at` is the promoted half: promoteWaitlistedRow writes
+   *  it with promoted_at, and returnToWaitlist clears the two together. */
+  | { kind: "promotion_lapsed" };
 
 /**
  * What, if anything, this entry currently owes and how to settle it — the
@@ -87,10 +103,10 @@ export function resolveMoneyState(
   // stripe_unavailable too — "the window closed" is the more actionable,
   // more honest fact than "Connect isn't live" when both happen to be true.
   if (deadline && new Date(deadline).getTime() <= Date.now()) {
-    return { kind: "window_closed" };
+    return entry.promotion_expires_at !== null ? { kind: "promotion_lapsed" } : { kind: "window_closed" };
   }
   if (entry.payment_method === "stripe") {
-    return cart.charges_enabled ? { kind: "stripe_due", deadline } : { kind: "stripe_unavailable" };
+    return cart.charges_enabled ? { kind: "stripe_due", deadline } : { kind: "stripe_unavailable", deadline };
   }
   return { kind: "offline_due", deadline };
 }
@@ -186,11 +202,12 @@ export function offlineInstructionsReference(
 /** Whether the money line counts this entry's fee as due: a fee owed on an entry that still holds its place. That is `stripe_due`,
  *  `offline_due` and `stripe_unavailable` (the org cannot take a card today, and the person is told to contact the organiser: the fee
  *  is still owed). NOT `window_closed` (B4 fix round 2, controller ruling): the pay-by date has gone by, the place is lost and there is
- *  no way to pay, so "£X still due" beside the card's "it has lost its place" was false. The headline reads the money state itself
- *  (`entryHeadline`): only the two states with a way to pay here say "Pay to finish entering". */
+ *  no way to pay, so "£X still due" beside the card's "it has lost its place" was false. NOT `promotion_lapsed` (round 3): the entry
+ *  goes back to the waitlist, and nothing is owed there. The headline reads the money state itself (`entryHeadline`): only the two
+ *  states with a way to pay here say "Pay to finish entering". */
 function countsDue(entry: StatusEntry, cart: CartPayFacts): boolean {
   const kind = resolveMoneyState(entry, cart).kind;
-  return kind !== "none" && kind !== "window_closed";
+  return kind === "stripe_due" || kind === "offline_due" || kind === "stripe_unavailable";
 }
 
 /** The page's outcome headline (spec §5.1). `payUnavailable` (B4 review m1, owner ruling 2026-11-13): a card fee is owed and the org
@@ -227,8 +244,11 @@ const HEADLINE_PRECEDENCE: Record<HeadlineKind, number> = {
  * What ONE entry would put at the top of the page on its own. Money first, because an owed fee is the registrant's to act on:
  *  - `stripe_due` / `offline_due` → `pay` (spec §5.1 rule 2: a Pay button, or offline instructions)
  *  - `stripe_unavailable` → `payUnavailable` (owed, and no way to pay here: the card notice)
- *  - `window_closed` → `closed`: the pay-by date has gone by and the sweep expires the entry on its next run, so it has lost its
- *    place (B4 review m1). Never `pay` (nothing can be paid) and never `received` (nobody is reviewing it). Its card says so.
+ *  - `window_closed` → `closed`: a never-promoted entry past the cart's pay-by date. The sweep's expiry pass expires it on its next
+ *    run, so it has lost its place (B4 review m1). Never `pay` (nothing can be paid) and never `received` (nobody is reviewing it).
+ *    Its card says so.
+ *  - `promotion_lapsed` → `waitlist` (B4 fix round 3, re-review I1): a promoted entry past its own pay-by date. The sweep's lapse puts
+ *    it back at the end of the waitlist, so the page says what the sweep is about to make true; its card says it goes back.
  *  - otherwise by status: `pending`/`paid` → `received` (owing nothing, so waiting on the organiser), `confirmed` → `pool` while it
  *    is a solo sign-up still waiting for a team (`awaitingTeamAssignment`), else `in`, `waitlisted` → `waitlist` (a waitlisted solo
  *    sign-up is waiting for a place before a team), withdrawn/expired/rejected → `closed`.
@@ -242,6 +262,8 @@ function entryHeadline(entry: HeadlineEntry, cart: CartPayFacts): HeadlineKind {
       return "payUnavailable";
     case "window_closed":
       return "closed";
+    case "promotion_lapsed":
+      return "waitlist";
     case "none":
       break;
   }
@@ -264,8 +286,8 @@ function entryHeadline(entry: HeadlineEntry, cart: CartPayFacts): HeadlineKind {
  * The cart's headline. The empty cart first (no entries → `closed`), then the most pressing kind any entry reads as
  * (`entryHeadline`, in `HEADLINE_PRECEDENCE` order). That is spec §5.1's rule ladder: `pay`, then `in` only when nothing is
  * `received` (a confirmed entry beside one awaiting approval reads `received`), then `waitlist`, then `closed`. With the m1 ruling:
- * a card fee owed while cards are unavailable outranks everything but `pay`, and an entry past its pay-by date adds only `closed`,
- * so beside a confirmed sibling the cart reads `in`.
+ * a card fee owed while cards are unavailable outranks everything but `pay`. An entry past its pay-by date adds only `closed` (never
+ * promoted: it is expired) or `waitlist` (a lapsed promotion: it goes back), so beside a confirmed sibling the cart reads `in`.
  */
 export function cartHeadline(entries: readonly HeadlineEntry[], cart: CartPayFacts): HeadlineKind {
   if (entries.length === 0) return "closed";
@@ -277,15 +299,16 @@ export function cartHeadline(entries: readonly HeadlineEntry[], cart: CartPayFac
   return headline;
 }
 
-/** How many entries are waiting on the organiser's decision: the count the `received` headline and step are worded for. An entry that
- *  owes a fee is never one of them, including one owed with no way to pay here (B4 review m1). */
-/** B4 fix round 2 (controller ruling): whether the page's h1 already says the card notice for the cart's ONLY entry, so that entry's
- *  card does not say it again. A cart of two or more keeps the notice on the card that owes: the h1 alone would not say which entry
- *  it is about. */
-export function headlineCarriesUnavailableNotice(entryCount: number, headline: HeadlineKind): boolean {
-  return headline === "payUnavailable" && entryCount === 1;
+/** B4 fix round 2 (controller ruling): whether the page's h1 already says the card notice for the cart's ONLY live entry, so that
+ *  entry's card does not say it again. A cart of two or more live entries keeps the notice on the card that owes: the h1 alone would
+ *  not say which entry it is about. Round 3 (re-review m5): a withdrawn, expired or rejected entry is not counted. Its card cannot be
+ *  what the notice is about. */
+export function headlineCarriesUnavailableNotice(entries: readonly { status: EntryStatus }[], headline: HeadlineKind): boolean {
+  return headline === "payUnavailable" && entries.filter((e) => !isTerminalRegistrationStatus(e.status)).length === 1;
 }
 
+/** How many entries are waiting on the organiser's decision: the count the `received` headline and step are worded for. An entry that
+ *  owes a fee is never one of them, including one owed with no way to pay here (B4 review m1). */
 export function receivedCount(entries: readonly HeadlineEntry[], cart: CartPayFacts): number {
   return entries.filter((e) => entryHeadline(e, cart) === "received").length;
 }

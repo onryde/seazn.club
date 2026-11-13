@@ -288,6 +288,24 @@ Same width and type scale as the register steps.
      approval")
    - any `waitlisted` entry → `waitlist` ("You're on the waiting list")
    - otherwise (only withdrawn/expired/rejected) → `closed`
+
+   *Amended B4 fix rounds 1–3 (review m1/I1, re-review I1/m1, controller
+   rulings 2026-11-13).* Each entry reads as one kind (`entryHeadline`, money
+   first, then status), and the cart takes the most pressing one, in this order:
+   `pay`, `payUnavailable`, `received`, `pool`, `in`, `waitlist`, `closed`.
+   - `stripe_unavailable` → `payUnavailable`: the h1 is the card notice ("Card
+     payments aren't available right now — contact the organiser."). On a cart
+     with one live entry the card does not repeat it.
+   - A confirmed solo sign-up nobody has placed on a team → `pool` ("You're in
+     the player pool"). It outranks `in`, whose "Nothing else to do" would be
+     false for the solo entry.
+   - Past its pay-by date, split as the sweep treats each half:
+     `window_closed` (never promoted: the cart's `expires_at` is gone, and the
+     expiry pass expires it) → `closed`, and its card says it has lost its
+     place. `promotion_lapsed` (promoted, and its own `promotion_expires_at` is
+     gone: the lapse puts it back at the end of the waitlist) → `waitlist`, and
+     its card says "The time to pay for this place has passed. Your entry goes
+     back to the end of the waiting list." Neither is ever `pay` or `received`.
    - Below the headline: "Confirmation sent to {email}." This states a fact:
      the mail is queued at submit.
 2. **Reference hero.** The cart ref in the largest type on the page, with a Copy
@@ -321,6 +339,12 @@ returns at most 3 items, in this order:
 | `dates` | `starts_on` set | "{name} starts on {date}." When `ends_on` is set and differs: "{name} runs {start} to {end}." |
 | `venue` | `venue_name` set | "Played at {venue}." |
 | `step` | by headline kind: `pay` → "Pay by {deadline} to keep your place." (no deadline → "Pay to keep your place."); `received` → "The organiser reviews your entry. This page shows their decision."; `waitlist` → "If a place opens, your entry moves up and this page shows it."; `in` with unclaimed teammate slots → "Send each teammate their invite link below."; `in` otherwise → "Nothing else to do. Keep this page — it's your entry."; `closed` → no step item |
+
+*Amended B4 fix rounds 1–3.* `pool` → "The organiser places you on a team. This
+page shows it." `payUnavailable` → no step item: any step would be "pay", which
+it cannot. The `dates` item is dropped once the competition is over
+(`ends_on ?? starts_on` before today in the org's zone). `pay`'s deadline is the
+soonest one still ahead, never a `window_closed` or `promotion_lapsed` entry's.
 
 - No item promises an email. No item invents a time.
 - The empty case: no `starts_on`, no venue and the `closed` kind gives zero

@@ -429,6 +429,28 @@ describe("register status page (RS007 rebuild)", () => {
       ).toBe(1);
     });
 
+    // B4 fix round 3 (re-review gap): the expiry pass expires a card entry at its pay-by date whatever the org's Stripe state, so the
+    // unavailable card names that date — the time the person has to sort the payment with the organiser.
+    it("a card fee owed while cards are unavailable names its pay-by date", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce({ ...BASE_VIEW, charges_enabled: false, entries: [BASE_ENTRY] });
+      const html = (await render({ rid: "g1", token: "tok" })).replace(/&#x27;/g, "'");
+      expect(html).toContain(`>Pay by ${fmtPublicDeadline("en", "UTC", FUTURE)}<`);
+    });
+
+    // B4 fix round 3 (re-review gap): an offline fee with no instructions from the organiser shows the fee and the date, never a
+    // "How to pay" heading with nothing under it. With instructions, the heading stays.
+    it("an offline fee with no instructions has no empty 'How to pay' heading; with instructions it keeps it", async () => {
+      const offline = { ...BASE_VIEW, payment_method: "offline" as const, entries: [{ ...BASE_ENTRY, payment_method: "offline" as const }] };
+      usecaseMock.groupById.mockResolvedValueOnce({ ...offline, payment_instructions: null });
+      const bare = await render({ rid: "g1", token: "tok" });
+      expect(bare, "premise: the fee is still named").toMatch(/>£25\.00</);
+      expect(bare).not.toContain(">How to pay<");
+      usecaseMock.groupById.mockResolvedValueOnce({ ...offline, payment_instructions: "Bank: Example Bank" });
+      const withText = await render({ rid: "g1", token: "tok" });
+      expect(withText).toContain(">How to pay<");
+      expect(withText).toContain("Bank: Example Bank");
+    });
+
     it("a confirmed entry still names its own fee — no Pay control, no instructions, but not a blank money section (FIX 1)", async () => {
       usecaseMock.groupById.mockResolvedValueOnce({
         ...BASE_VIEW,
@@ -542,7 +564,7 @@ describe("register status page (RS007 rebuild)", () => {
   describe("money line (B4 T15, spec §5.3)", () => {
     const moneyText = (html: string) => html.match(/data-testid="reg-status-money"[^>]*>([^<]*)</)?.[1]?.replace(/&#x27;/g, "'");
     const CLOSED_AT = "2000-01-01T00:00:00.000Z"; // a pay-by date long gone: the entry is window_closed
-    const MONEY_CASES: { name: string; entries: Record<string, unknown>[]; currency?: string; text: string }[] = [
+    const MONEY_CASES: { name: string; view?: Record<string, unknown>; entries: Record<string, unknown>[]; currency?: string; text: string }[] = [
       { name: "no entries at all -> Nothing to pay (the empty case)", entries: [], text: "Nothing to pay" },
       { name: "part-paid: a card-settled £15.00 and a pending card-due £24.00",
         entries: [{ status: "confirmed", amount_cents: 1500, settled_by: "card" }, { status: "pending", amount_cents: 2400 }],
@@ -561,15 +583,23 @@ describe("register status page (RS007 rebuild)", () => {
         entries: [{ status: "waitlisted", amount_cents: 0, fee_if_promoted_cents: 0 }], text: "Nothing to pay" },
       { name: "all ended -> Nothing to pay", entries: [{ status: "expired", amount_cents: 1500 }, { status: "rejected", amount_cents: 900 }], text: "Nothing to pay" },
       { name: "a free confirmed entry -> Nothing to pay", entries: [{ status: "confirmed", amount_cents: 0 }], text: "Nothing to pay" },
-      // B4 fix round 2 (controller ruling): a fee past its pay-by date has lost its place and cannot be paid, so it is never "due".
-      { name: "past its pay-by date alone -> Nothing to pay",
+      // B4 fix round 2 (controller ruling): a fee past its pay-by date cannot be paid, so it is never "due". Round 3: both halves, each
+      // as the sweep sees it — never promoted (the CART's date gone: the expiry pass expires it) and a lapsed promotion (its OWN date
+      // gone: the lapse puts it back on the waitlist).
+      { name: "past the cart's pay-by date alone -> Nothing to pay", view: { expires_at: CLOSED_AT },
+        entries: [{ status: "pending", amount_cents: 2400 }], text: "Nothing to pay" },
+      { name: "past the cart's pay-by date beside a promoted entry still in its window -> only the payable fee is due",
+        view: { expires_at: CLOSED_AT },
+        entries: [{ status: "pending", amount_cents: 2400 }, { status: "pending", amount_cents: 1500, promotion_expires_at: FUTURE }],
+        text: "£15.00 due" },
+      { name: "past the cart's pay-by date beside a card-paid entry -> Paid, never still due", view: { expires_at: CLOSED_AT },
+        entries: [{ status: "pending", amount_cents: 2400 }, { status: "confirmed", amount_cents: 1500, settled_by: "card" }],
+        text: "Paid £15.00" },
+      { name: "a lapsed promotion alone -> Nothing to pay",
         entries: [{ status: "pending", amount_cents: 2400, promotion_expires_at: CLOSED_AT }], text: "Nothing to pay" },
-      { name: "past its pay-by date beside a pending card fee -> only the payable fee is due",
+      { name: "a lapsed promotion beside a pending card fee -> only the payable fee is due",
         entries: [{ status: "pending", amount_cents: 2400, promotion_expires_at: CLOSED_AT }, { status: "pending", amount_cents: 1500 }],
         text: "£15.00 due" },
-      { name: "past its pay-by date beside a card-paid entry -> Paid, never still due",
-        entries: [{ status: "pending", amount_cents: 2400, promotion_expires_at: CLOSED_AT }, { status: "confirmed", amount_cents: 1500, settled_by: "card" }],
-        text: "Paid £15.00" },
       { name: "the cart's own currency, two decimals (a whole amount keeps its .00)", currency: "eur",
         entries: [{ status: "waitlisted", amount_cents: 0, fee_if_promoted_cents: 1500 }], text: "€15.00 if a place opens — not due now" },
     ];
@@ -579,6 +609,7 @@ describe("register status page (RS007 rebuild)", () => {
       for (const c of MONEY_CASES) {
         usecaseMock.groupById.mockResolvedValueOnce({
           ...BASE_VIEW,
+          ...c.view,
           currency: c.currency ?? BASE_VIEW.currency,
           entries: c.entries.map((e, i) => ({ ...BASE_ENTRY, id: `reg-${i + 1}`, ...e })),
         });
@@ -611,13 +642,17 @@ describe("register status page (RS007 rebuild)", () => {
       { name: "a card fee owed while card payments are unavailable: the card notice, never Pay or awaiting approval",
         view: { charges_enabled: false }, entries: [{ status: "pending", amount_cents: 2500 }],
         kind: "payUnavailable", text: "Card payments aren't available right now — contact the organiser." },
-      { name: "a fee owed past its pay-by date: closed", entries: [{ status: "pending", amount_cents: 2500, promotion_expires_at: PAST }],
-        kind: "closed", text: "This registration is closed" },
-      { name: "past its pay-by date beside a confirmed entry: You're in",
-        entries: [{ status: "pending", amount_cents: 2500, promotion_expires_at: PAST }, { status: "confirmed", settled_by: "card" }],
+      // Round 3 (re-review I1): each half of "past its pay-by date" as the sweep sees it.
+      { name: "never promoted, past the cart's pay-by date: closed (the expiry pass expires it)", view: { expires_at: PAST },
+        entries: [{ status: "pending", amount_cents: 2500 }], kind: "closed", text: "This registration is closed" },
+      { name: "a promotion past its own pay-by date: the waiting list (the lapse puts it back)",
+        entries: [{ status: "pending", amount_cents: 2500, promotion_expires_at: PAST }], kind: "waitlist", text: "You're on the waiting list" },
+      { name: "past the cart's pay-by date beside a confirmed entry: You're in", view: { expires_at: PAST },
+        entries: [{ status: "pending", amount_cents: 2500 }, { status: "confirmed", settled_by: "card" }],
         kind: "in", text: "You're in" },
-      { name: "past its pay-by date beside a paid entry awaiting approval: one entry received (the closed one is not counted)",
-        entries: [{ status: "pending", amount_cents: 2500, promotion_expires_at: PAST }, { status: "paid", settled_by: "card" }],
+      { name: "past the cart's pay-by date beside a paid entry awaiting approval: one entry received (the closed one is not counted)",
+        view: { expires_at: PAST },
+        entries: [{ status: "pending", amount_cents: 2500 }, { status: "paid", settled_by: "card" }],
         kind: "received", text: "Entry received, awaiting approval" },
       { name: "a confirmed entry", entries: [{ status: "confirmed", settled_by: "card" }], kind: "in", text: "You're in" },
       { name: "one entry awaiting approval", entries: [{ status: "paid", settled_by: "card" }], kind: "received", text: "Entry received, awaiting approval" },
@@ -713,11 +748,24 @@ describe("register status page (RS007 rebuild)", () => {
       expect(count(html, NOTICE), "h1 + the owing card").toBe(2);
     });
 
-    it("past its pay-by date beside a confirmed entry: You're in, and the closed entry's card says it lost its place", async () => {
+    // Round 3 (re-review m5): the one-entry rule counts LIVE entries. A withdrawn card beside the owing one is not what the h1 is about.
+    it("cards unavailable beside a withdrawn entry: one live entry, so the notice is the h1 only", async () => {
       usecaseMock.groupById.mockResolvedValueOnce({
         ...BASE_VIEW,
+        charges_enabled: false,
+        entries: [{ ...BASE_ENTRY, id: "reg-1" }, { ...BASE_ENTRY, id: "reg-2", division_name: "Womens 35+", status: "withdrawn" as const }],
+      });
+      const html = (await render({ rid: "g1", token: "tok" })).replace(/&#x27;/g, "'");
+      expect(headline(html)).toBe(NOTICE);
+      expect(count(html, NOTICE), "said once, in the h1").toBe(1);
+    });
+
+    it("past the cart's pay-by date beside a confirmed entry: You're in, and the closed entry's card says it lost its place", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce({
+        ...BASE_VIEW,
+        expires_at: PAST, // never promoted: the cart's shared date is this entry's, and the expiry pass expires it
         entries: [
-          { ...BASE_ENTRY, id: "reg-1", promotion_expires_at: PAST },
+          { ...BASE_ENTRY, id: "reg-1" },
           { ...BASE_ENTRY, id: "reg-2", division_name: "Womens 35+", status: "confirmed" as const, settled_by: "card" as const },
         ],
       });
@@ -727,6 +775,22 @@ describe("register status page (RS007 rebuild)", () => {
       expect(cards.length, "two entry cards").toBe(2);
       expect(cards[0], "the closed entry's card").toContain("so it has lost its place");
       expect(cards[1], "the confirmed card says nothing of it").not.toContain("lost its place");
+      expect(html).not.toContain("to keep your place");
+    });
+
+    // Round 3 (re-review I1): a promotion past its own pay-by date is put back at the END of the waitlist by the sweep's lapse
+    // (sweep.ts → returnToWaitlist), never expired. The page says so before the sweep runs: the waiting-list headline and the card's
+    // own sentence, never "lost its place", no Pay and no pay-by date.
+    it("a lapsed promotion: the waiting list leads, and its card says it goes back to the end of the list", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce({ ...BASE_VIEW, entries: [{ ...BASE_ENTRY, promotion_expires_at: PAST }] });
+      const html = (await render({ rid: "g1", token: "tok" })).replace(/&#x27;/g, "'");
+      expect(headline(html)).toBe("You're on the waiting list");
+      const cards = html.match(/<li class="[^"]*rounded-xl[\s\S]*?(?=<li class="[^"]*rounded-xl|$)/g) ?? [];
+      expect(cards.length, "one entry card").toBe(1);
+      expect(cards[0]).toContain(">The time to pay for this place has passed. Your entry goes back to the end of the waiting list.<");
+      expect(cards[0]).not.toContain("lost its place");
+      expect(cards[0], "not waiting for a payment it can no longer take").not.toContain("waiting for payment");
+      expect(html).not.toMatch(/Pay now|Pay by/);
       expect(html).not.toContain("to keep your place");
     });
 

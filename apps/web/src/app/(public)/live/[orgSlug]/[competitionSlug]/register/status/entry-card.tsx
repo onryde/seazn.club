@@ -192,8 +192,12 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
   const rosterWords = ROSTER_WORDS[rosterVocabulary(entry.status)];
   // Polish wave P3 (W2, W12): WHY a pending entry is not confirmed. Suppressed once the payment window has closed: the
   // window-closed message below is the true and more actionable statement, and "waiting for payment" beside it would read as
-  // an invitation to pay a window that no longer accepts payment.
-  const waitingOn = money.kind === "window_closed" ? null : entryWaitingOn(entry.status, entry.amount_cents, entry.approval, entry.approved);
+  // an invitation to pay a window that no longer accepts payment. The same for a lapsed promotion (B4 fix round 3): it goes back to
+  // the waitlist, where nothing is owed.
+  const waitingOn =
+    money.kind === "window_closed" || money.kind === "promotion_lapsed"
+      ? null
+      : entryWaitingOn(entry.status, entry.amount_cents, entry.approval, entry.approved);
   // RS008: every roster row's name, masked by division youth policy OR the
   // linked person's own consent opt-out. Resolved ONCE, by id, so the
   // roster list below and the invite rows (which name the SAME person
@@ -280,16 +284,27 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
       <div className="space-y-1">
         <p className="text-sm font-semibold text-ink">{feeLabel}</p>
         {!cart.unavailableNoticeInHeadline && <p className="text-sm text-amber-800">{t(ui, "register.status.pay.unavailable")}</p>}
+        {/* B4 fix round 3: the expiry pass expires the entry at this date whatever the org's Stripe state. */}
+        {money.deadline && (
+          <p className="text-xs text-ink-muted">
+            {t(ui, "register.status.money.deadline", { date: deadlineLabel(money.deadline) })}
+          </p>
+        )}
       </div>
     );
   } else if (money.kind === "offline_due") {
     moneyNode = (
       <div className="space-y-1.5">
         <p className="text-sm font-semibold text-ink">{feeLabel}</p>
-        <p className="text-xs font-semibold tracking-wide text-ink-muted uppercase">
-          {t(ui, "register.status.offline.heading")}
-        </p>
-        {cart.instructionsHtml ? <CompetitionProse html={cart.instructionsHtml} /> : null}
+        {/* B4 fix round 3: the heading only above instructions the organiser wrote, never "How to pay" over nothing. */}
+        {cart.instructionsHtml ? (
+          <>
+            <p className="text-xs font-semibold tracking-wide text-ink-muted uppercase">
+              {t(ui, "register.status.offline.heading")}
+            </p>
+            <CompetitionProse html={cart.instructionsHtml} />
+          </>
+        ) : null}
         {money.deadline && (
           <p className="text-xs text-ink-muted">
             {t(ui, "register.status.money.deadline", { date: deadlineLabel(money.deadline) })}
@@ -308,6 +323,11 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
         <p className="text-sm text-amber-800">{t(ui, "register.status.pay.windowClosed")}</p>
       </div>
     );
+  } else if (money.kind === "promotion_lapsed") {
+    // B4 fix round 3 (re-review I1): promoted off the waitlist and past its own pay-by date. The sweep's lapse puts it back at the
+    // END of the waitlist, never expires it, so the card says that, set like a waitlisted card's note: no fee figure (nothing is owed
+    // on the waitlist), no Pay. Cancel stays, as on any waitlisted card: it leaves the waitlist.
+    moneyNode = <p className="text-sm text-ink-muted">{t(ui, "register.status.pay.promotionLapsed")}</p>;
   } else if (entry.status === "waitlisted") {
     // B3 T13 (spec §4.2): the entry's place in the queue replaces the bare note - the one fact a waiting registrant wants, set like
     // the money slot's other primary figures. An unknown place (the read model always gives one) keeps the note.
@@ -325,8 +345,8 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
       );
   } else if (showsFeeLine) {
     // paid/confirmed (the only remaining entryCountsTowardTotal-true
-    // statuses once pending is excluded — pending always lands in one of
-    // the three money.kind branches above via resolveMoneyState).
+    // statuses once pending is excluded — an owing pending entry always
+    // lands in one of the money.kind branches above via resolveMoneyState).
     moneyNode = <p className="text-sm font-medium text-ink">{feeLabel}</p>;
   }
 

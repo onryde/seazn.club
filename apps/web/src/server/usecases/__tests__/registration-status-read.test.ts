@@ -64,6 +64,7 @@ import {
   groupByRef,
   handleRegistrationCheckoutCompleted,
   markRegistrationPaidOffline,
+  promoteWaitlistedRow,
   publicCartByRef,
   putRegistrationSettings,
   reconcileRegistration,
@@ -71,12 +72,14 @@ import {
   reconcileRegistrationGroupBySession,
   refundRegistration,
   resendRegistrationConfirmationPublic,
+  sweepRegistrations,
   withdrawRegistrationOrganiser,
   type GroupStatusView,
 } from "@/server/usecases/registrations";
 import { generateRefCode } from "@/lib/ref-code";
 import {
   cardEntryReference,
+  cartHeadline,
   offlineInstructionsReference,
 } from "@/app/(public)/live/[orgSlug]/[competitionSlug]/register/status/view-model";
 import { idempotencyKey } from "@/server/email-outbox/constants";
@@ -1669,5 +1672,48 @@ describe.skipIf(!HAS_DB)("groupById: each entry's own reference and the cart's s
     const soloView = await groupById(solo.groupId, solo.token);
     expect(offlineInstructionsReference(soloView.entries, soloView)).toBe(solo.ref);
     expect(soloView.entries.map((e) => cardEntryReference(e, soloView)), "a one-entry cart's card prints none").toEqual([null]);
+  });
+});
+
+// B4 fix round 3 (re-review I1): the page tells the person before the hourly sweep what the sweep is about to do. Read through the real
+// read model (`groupById`) and the page's own headline rule, before and after the real `sweepRegistrations`, for each half of "past its
+// pay-by date". The expected kinds come from the sweep's two passes (sweep.ts): the lapse puts a promoted entry back on the waitlist,
+// the expiry pass expires a never-promoted one.
+describe.skipIf(!HAS_DB)("the status headline before and after the sweep (B4 fix round 3)", () => {
+  it("a promotion past its own pay-by date reads the waiting list before the lapse and after it", async () => {
+    const { competition, division, settings } = await stripeRig({ feeCents: 500 });
+    const t = await seedRegistration(competition.id, division.id, settings, {
+      status: "waitlisted", contactEmail: `lapse-${randomUUID().slice(0, 8)}@test.local`,
+    });
+    await sql.begin((tx) => promoteWaitlistedRow(tx, t.registration.id, t.registration.group_id, settings));
+    await sql`update registrations set promotion_expires_at = now() - interval '1 minute' where id = ${t.registration.id}`;
+
+    const before = await groupById(t.registration.group_id, t.access_token);
+    expect(before.entries[0]!.status, "premise: promoted, and the sweep has not run").toBe("pending");
+    expect(cartHeadline(before.entries, before)).toBe("waitlist");
+
+    await sweepRegistrations("https://test.local");
+
+    const after = await groupById(t.registration.group_id, t.access_token);
+    expect(after.entries[0]!.status, "the lapse put it back").toBe("waitlisted");
+    expect(cartHeadline(after.entries, after)).toBe("waitlist");
+  });
+
+  it("never promoted, past the cart's pay-by date: closed before the expiry and after it", async () => {
+    const { competition, division, settings } = await stripeRig({ feeCents: 500 });
+    const t = await seedRegistration(competition.id, division.id, settings, {
+      status: "pending", contactEmail: `expire-${randomUUID().slice(0, 8)}@test.local`,
+    });
+    await sql`update registration_groups set expires_at = now() - interval '1 minute' where id = ${t.registration.group_id}`;
+
+    const before = await groupById(t.registration.group_id, t.access_token);
+    expect(before.entries[0]!.status, "premise: the sweep has not run").toBe("pending");
+    expect(cartHeadline(before.entries, before)).toBe("closed");
+
+    await sweepRegistrations("https://test.local");
+
+    const after = await groupById(t.registration.group_id, t.access_token);
+    expect(after.entries[0]!.status, "the expiry pass expired it").toBe("expired");
+    expect(cartHeadline(after.entries, after)).toBe("closed");
   });
 });

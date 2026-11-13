@@ -6693,6 +6693,7 @@
   "register.status.pay.error.paidOnline": "A payment for this entry is already on its way — it will show here once your bank confirms it.",
   "register.status.pay.error.generic": "We couldn't start the payment — please try again, or contact the organiser.",
   "register.status.pay.windowClosed": "The payment window for this entry has closed, so it has lost its place — contact the organiser if you still want to enter.",
+  "register.status.pay.promotionLapsed": "The time to pay for this place has passed. Your entry goes back to the end of the waiting list.",
   "register.status.offline.heading": "How to pay",
   "register.status.cancel.cta": "Cancel this entry",
   "register.status.cancel.busy": "Cancelling…",

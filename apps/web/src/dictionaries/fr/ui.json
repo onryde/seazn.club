@@ -6693,6 +6693,7 @@
   "register.status.pay.error.paidOnline": "Un paiement pour cette inscription est déjà en cours — il apparaîtra ici dès que votre banque l'aura confirmé.",
   "register.status.pay.error.generic": "Nous n'avons pas pu démarrer le paiement — veuillez réessayer, ou contactez l'organisateur.",
   "register.status.pay.windowClosed": "Le délai de paiement pour cette inscription est dépassé et elle a perdu sa place — contactez l'organisateur si vous souhaitez tout de même vous inscrire.",
+  "register.status.pay.promotionLapsed": "Le délai pour payer cette place est passé. Votre inscription retourne à la fin de la liste d'attente.",
   "register.status.offline.heading": "Comment payer",
   "register.status.cancel.cta": "Annuler cette inscription",
   "register.status.cancel.busy": "Annulation…",
