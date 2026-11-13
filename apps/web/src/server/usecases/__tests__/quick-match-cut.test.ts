@@ -33,9 +33,9 @@ import { createQuickMatch, systemAuth } from "../quick-match-create";
 import { hardDeleteQuickMatchCompetition } from "../quick-match-delete";
 import { listQuickMatchSports } from "../quick-match-sports";
 import { hashVisitorKey, mintVisitorKey } from "../quick-match-tokens";
-import { scoreEvent } from "../scoring";
 import { completeStage, getStandings } from "../stages";
 import { cutRowOf, cutTiebreakers, cutTies, openTie, tossThrough, type CutRow, type CutTie } from "../quick-match-cut";
+import { playCircle } from "./_quick-match-results";
 
 vi.stubEnv("DEVICE_LINK_KEK", kekBytes(32).toString("hex")); // a create seals a secret (A15)
 vi.mock("@/lib/posthog-server", async (orig) => ({
@@ -512,20 +512,9 @@ describe.skipIf(!HAS_DB)("the stored lot on a real league (plan T2 Step 2)", () 
     const ids = [...new Set(fixtures.flatMap((f) => [f.home_entrant_id, f.away_entrant_id]))].sort();
     expect(ids).toHaveLength(3);
 
-    // The circle: ids[0] beats ids[1], ids[1] beats ids[2], ids[2] beats ids[0].
-    const pair = (x: string, y: string) => [x, y].sort().join("|");
-    const winnerOf = new Map([
-      [pair(ids[0]!, ids[1]!), ids[0]!],
-      [pair(ids[1]!, ids[2]!), ids[1]!],
-      [pair(ids[0]!, ids[2]!), ids[2]!],
-    ]);
-    for (const f of fixtures) {
-      const winner = winnerOf.get(pair(f.home_entrant_id, f.away_entrant_id))!;
-      await scoreEvent(systemAuth(), f.id, { expected_seq: 0, type: "core.start", payload: {} });
-      await scoreEvent(systemAuth(), f.id, { expected_seq: 1, type: "boardgame.result", payload: { winner, method: "resign" } });
-      const [row] = await sql<{ winner: string | null }[]>`select outcome->>'winner' as winner from fixtures where id = ${f.id}`;
-      expect(row?.winner, "premise: the resignation decided the game").toBe(winner);
-    }
+    // The circle (`playCircle`): ids[0] beats ids[1], ids[1] beats ids[2], ids[2] beats ids[0], each game by resignation;
+    // `playWin` refuses a stored outcome naming anyone but the steered winner.
+    expect(await playCircle(fixtures)).toEqual(ids);
 
     const byRank = (rows: StandingsRow[]) => [...rows].sort((a, b) => (a.rank ?? Infinity) - (b.rank ?? Infinity)).map((r) => r.entrantId);
     const live = (await getStandings(systemAuth(), stageId)).rows as StandingsRow[];

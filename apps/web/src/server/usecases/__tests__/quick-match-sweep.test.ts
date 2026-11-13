@@ -149,10 +149,10 @@ import { saveQuickMatchForUser } from "../quick-match-save";
 import { listQuickMatchSports } from "../quick-match-sports";
 import { QUICK_MATCH_SWEEP_LIMIT, sweepQuickMatches, type QuickMatchSweepReport } from "../quick-match-sweep";
 import { hashVisitorKey, mintVisitorKey } from "../quick-match-tokens";
-import { scoreEvent } from "../scoring";
 import { completeStage } from "../stages";
 import { firstRallyFor, playToDecided } from "./_quick-match-probe";
 import { expectAllPresent, expectNoOrphans, idsOf, rowsRecorded, tablesRecorded } from "./_quick-match-orphans";
+import { playCircle } from "./_quick-match-results";
 import { makeUser } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -1055,15 +1055,9 @@ describe.skipIf(!HAS_DB)("a League + Knockout expires whole: both stages, their 
     const lines = await sql<{ id: string; home_entrant_id: string; away_entrant_id: string }[]>`
       select id, home_entrant_id, away_entrant_id from fixtures where stage_id = ${league.id} order by round_no, fixture_no`;
     expect(lines, "premise: 3·2/2 league matches").toHaveLength(3);
-    const ids = [...new Set(lines.flatMap((f) => [f.home_entrant_id, f.away_entrant_id]))].sort();
-    const pair = (x: string, y: string) => [x, y].sort().join("|");
-    // The circle: ids[0] beats ids[1], ids[1] beats ids[2], ids[2] beats ids[0], every game by resignation.
-    const winnerOf = new Map([[pair(ids[0]!, ids[1]!), ids[0]!], [pair(ids[1]!, ids[2]!), ids[1]!], [pair(ids[0]!, ids[2]!), ids[2]!]]);
-    for (const f of lines) {
-      const winner = winnerOf.get(pair(f.home_entrant_id, f.away_entrant_id))!;
-      await scoreEvent(systemAuth(), f.id, { expected_seq: 0, type: "core.start", payload: {} });
-      await scoreEvent(systemAuth(), f.id, { expected_seq: 1, type: "boardgame.result", payload: { winner, method: "resign" } });
-    }
+    // The circle (`playCircle`): with the ids sorted, ids[0] beats ids[1], ids[1] beats ids[2], ids[2] beats ids[0], every game
+    // by resignation.
+    await playCircle(lines);
     await completeStage(systemAuth(), league.id, { publish: false });
 
     const countIn = async (division: string) => {

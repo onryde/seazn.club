@@ -12,7 +12,8 @@ import "server-only";
 // Put back is the exact inverse (plan D2, the owner's PO ruling 2026-11-13: a mistaken skip costs the guests nothing): the
 // status is re-derived from the ledger by the write path's own rule (`foldFixture` + `fixtureStatusFromFold`, the
 // `refreeze.ts` precedent), so a match with nothing scored is ready again and a partly scored one is live at its score.
-// It is refused once the league is finished (`isQuickMatchFinished`, plan D4, the one "finished"): §6 hides Put back then,
+// It is refused once the league is finished (`isQuickMatchFinished` over the league stage's matches, plan D4, the one
+// "finished"; plan 5 P14: the league stage, so a League + Knockout's knockout never holds it open): §6 hides Put back then,
 // and only a stale tap meets the refusal.
 //
 // The checks, in this order, the same for both, each answering before the next runs:
@@ -21,8 +22,9 @@ import "server-only";
 //   3. one transaction as the system org. The fixture's advisory lock FIRST, the key `appendEvent` takes (D1), so the read
 //      below and the write after it see one status. Then the per-match check (the quick match spec's §7.1 point 3: every
 //      quick match shares one org, so RLS alone cannot keep two strangers apart): the fixture by id AND this quick match's
-//      competition, none → NOT_FOUND. A knockout, a match of a bracket, is never skippable (§3: a bracket needs a winner;
-//      T1 review G2): NOT_SKIPPABLE. A bye line is no match: NOT_FOUND.
+//      competition, none → NOT_FOUND. A knockout match, a match of a bracket, is never skippable (§3: a bracket needs a
+//      winner; T1 review G2), judged by the match's own stage (plan 5 P14: a League + Knockout's league matches are):
+//      NOT_SKIPPABLE. A bye line is no match: NOT_FOUND.
 //   4. Skip: already Not played → `{changed:false}` (D3, a second tap). Otherwise the guarded update; nothing moved (a
 //      result, or any other status) → NOT_SKIPPABLE. Put back: not Not played → `{changed:false}` (D3). The league finished
 //      → LEAGUE_FINISHED. Otherwise the fold's status.
@@ -63,14 +65,16 @@ async function preflight(row: QuickMatchRow, fixtureId: string): Promise<void> {
   }
 }
 
-/** The home's own "finished" (`isQuickMatchFinished` over `playedOf`, the division's fixtures as `listDivisionFixtures`
- *  scopes them) for the division holding `fixtureId`, in the caller's transaction. Put back's refusal and the pad's Not
- *  played screen (`withQuickMatchFinished`) ask it the same way. A fixture that is gone holds no division: no match, so
- *  not finished (the predicate's empty case). */
+/** The home's own "finished" (`isQuickMatchFinished` over `playedOf`) for the LEAGUE STAGE holding `fixtureId`, in the
+ *  caller's transaction. Put back's refusal and the pad's Not played screen (`withQuickMatchFinished`) ask it the same way.
+ *  By stage, not by division (plan 5 P14): a plain league is one stage, so the two are the same; a League + Knockout's
+ *  league is finished when its own matches are, and the knockout's unplayed lines must not keep Put back open until the
+ *  final (D3: Put back is refused once the league is done). A fixture that is gone holds no stage: no match, so not
+ *  finished (the predicate's empty case). */
 async function leagueFinishedFor(tx: Tx, fixtureId: string): Promise<boolean> {
   const matches = await tx<MatchLineRow[]>`
     select status, outcome, home_entrant_id, away_entrant_id, home_slot_label, away_slot_label, ext_key
-    from fixtures where division_id = (select division_id from fixtures where id = ${fixtureId})`;
+    from fixtures where stage_id = (select stage_id from fixtures where id = ${fixtureId})`;
   return isQuickMatchFinished(playedOf(matches));
 }
 
@@ -85,7 +89,9 @@ async function lockedMatch(tx: Tx, row: QuickMatchRow, fixtureId: string): Promi
     join stages s on s.id = f.stage_id
     where f.id = ${fixtureId} and d.competition_id = ${row.competitionId}`;
   if (!f) throw notFound();
-  if (row.format !== "league" || f.stage_kind !== "league") throw notSkippable("a knockout match needs a winner");
+  // By the match's own stage, whatever the quick match's format (plan 5 P14): a League + Knockout's league matches are
+  // skippable, its knockout's never are, and a legacy knockout holds no league stage at all.
+  if (f.stage_kind !== "league") throw notSkippable("a knockout match needs a winner");
   if (isBye(f)) throw notFound();
   return f;
 }

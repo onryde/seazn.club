@@ -10,7 +10,9 @@
 // touch are mocks, so every refusal the usecase can throw is driven through the route exactly as thrown, on BOTH routes.
 //
 // Expected codes come from QUICK_MATCH_ERRORS (T1), the refusals' table from the plan's Task 3 ("REFUSALS"), and the
-// activity rule from plan D5 (a skip and a put back are activity, best-effort); never from the route's own answer.
+// activity rule from plan D5 (a skip and a put back are activity, best-effort), and plan 5 D2 (caller b: a skip may finish a
+// League + Knockout's league, so the knockout's advance follows it, best-effort; a put back never finishes one, so none
+// follows it); never from the route's own answer.
 import * as Sentry from "@sentry/nextjs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -23,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   skip: vi.fn(),
   putBack: vi.fn(),
   touch: vi.fn(),
+  advance: vi.fn(),
   logError: vi.fn(),
 }));
 vi.mock("@sentry/nextjs", async (orig) => ({
@@ -35,6 +38,7 @@ vi.mock("@/server/usecases/quick-match-skip", () => ({
   putBackQuickMatchFixture: mocks.putBack,
 }));
 vi.mock("@/server/usecases/quick-match-activity", () => ({ touchQuickMatchActivity: mocks.touch }));
+vi.mock("@/server/usecases/quick-match-advance", () => ({ advanceQuickMatch: mocks.advance }));
 vi.mock("@/server/logger", () => ({ log: { error: mocks.logError, warn: vi.fn(), info: vi.fn(), debug: vi.fn() } }));
 
 import { POST as SKIP } from "../skip/[fixtureId]/route";
@@ -47,8 +51,8 @@ const reported = () => vi.mocked(Sentry.captureException).mock.calls.map(([err])
 
 /** Both routes, each with the usecase it calls. Every case below runs on each. */
 const ROUTES = [
-  { name: "skip", post: SKIP, usecase: mocks.skip, ok: { changed: true }, path: "skip" },
-  { name: "put back", post: PUT_BACK, usecase: mocks.putBack, ok: { changed: true, status: "scheduled" }, path: "put-back" },
+  { name: "skip", post: SKIP, usecase: mocks.skip, ok: { changed: true }, path: "skip", advances: true },
+  { name: "put back", post: PUT_BACK, usecase: mocks.putBack, ok: { changed: true, status: "scheduled" }, path: "put-back", advances: false },
 ] as const;
 
 function call(route: (typeof ROUTES)[number], token = TOKEN, fixtureId = FIXTURE) {
@@ -103,6 +107,14 @@ describe("POST /q/<token>/skip/<id> and /put-back/<id> (plan 4 T3)", () => {
         expect(route.usecase).toHaveBeenCalledExactlyOnceWith(ROW, FIXTURE);
         expect(mocks.touch).toHaveBeenCalledExactlyOnceWith(ROW.id);
         expect(mocks.touch.mock.invocationCallOrder[0]!).toBeGreaterThan(route.usecase.mock.invocationCallOrder[0]!);
+        if (route.advances) {
+          // Plan 5 D2 caller b: the advance, once, after the write and before the touch.
+          expect(mocks.advance).toHaveBeenCalledExactlyOnceWith(ROW);
+          expect(mocks.advance.mock.invocationCallOrder[0]!).toBeGreaterThan(route.usecase.mock.invocationCallOrder[0]!);
+          expect(mocks.advance.mock.invocationCallOrder[0]!).toBeLessThan(mocks.touch.mock.invocationCallOrder[0]!);
+        } else {
+          expect(mocks.advance, "a put back never finishes a league").not.toHaveBeenCalled();
+        }
         expect(reported()).toEqual([]);
       });
 
@@ -140,6 +152,7 @@ describe("POST /q/<token>/skip/<id> and /put-back/<id> (plan 4 T3)", () => {
         }
         expect(checked, "every refusal on the list").toBe(REFUSED.length);
         expect(mocks.touch, "a refusal is no activity").not.toHaveBeenCalled();
+        expect(mocks.advance, "a refusal changed nothing to advance").not.toHaveBeenCalled();
         expect(reported(), "a refusal is the guest's, not a fault").toEqual([]);
         expect(mocks.logError).not.toHaveBeenCalled();
       });
@@ -166,6 +179,30 @@ describe("POST /q/<token>/skip/<id> and /put-back/<id> (plan 4 T3)", () => {
         expect(mocks.logError).toHaveBeenCalledTimes(1);
         expect(reported(), "a touch failure is logged, not a route fault").toEqual([]);
       });
+
+      it("a competition gone since the token resolved (the usecase's 404 EXPIRED) lands on the bare home, its dead screen: no flash, never reported", async () => {
+        mocks.resolve.mockResolvedValue(ROW);
+        route.usecase.mockRejectedValueOnce(new HttpError(404, "gone", QUICK_MATCH_ERRORS.EXPIRED));
+        expect(landed(await call(route))).toBe(`/q/${TOKEN}`);
+        expect(reported()).toEqual([]);
+        expect(mocks.advance).not.toHaveBeenCalled();
+        expect(mocks.touch).not.toHaveBeenCalled();
+      });
+
+      if (route.advances) {
+        it("an advance that fails is logged (quick_match_advance_failed) and never reported: the skip stands, the guest lands on the bare home, the post is still activity", async () => {
+          mocks.resolve.mockResolvedValue(ROW);
+          route.usecase.mockResolvedValue(route.ok);
+          mocks.touch.mockResolvedValue(undefined);
+          const boom = new Error("confirm failed");
+          mocks.advance.mockRejectedValueOnce(boom);
+          expect(landed(await call(route))).toBe(`/q/${TOKEN}`);
+          expect(mocks.logError).toHaveBeenCalledTimes(1);
+          expect(mocks.logError.mock.calls[0]![0]).toMatchObject({ err: boom, event: "quick_match_advance_failed", quickMatch: ROW.id });
+          expect(reported(), "the home's next load retries it: not a route fault").toEqual([]);
+          expect(mocks.touch).toHaveBeenCalledExactlyOnceWith(ROW.id);
+        });
+      }
 
       it("a token read that throws is a fault: reported once, the generic line on this token's home, nothing called", async () => {
         const boom = new Error("db down");

@@ -14,7 +14,8 @@
 //
 // In this order (the checks themselves are `addQuickMatchDecider`'s, which lists them): the token (plan 1's
 // `resolveQuickMatchToken`; an expired row is null), then the form's two fields, then the add: the post limit, a league
-// only, both sides this quick match's own, two different sides, the cap. Then the add is activity (C1):
+// only (a League + Knockout's league while it runs: LEAGUE_COMPLETE once it is done), both sides this quick match's own, two
+// different sides, the cap. Then the add is activity (C1):
 // `touchQuickMatchActivity`, best-effort as the Score tap's is: the match already stands, so a failed touch is logged and the
 // guest still lands on the home.
 //
@@ -45,6 +46,8 @@ const REFUSALS: readonly { status: number; code: string | undefined; e: string }
   { status: 404, code: QUICK_MATCH_ERRORS.NOT_FOUND, e: QUICK_MATCH_ERRORS.NOT_FOUND },
   { status: 422, code: QUICK_MATCH_ERRORS.SAME_SIDE, e: QUICK_MATCH_ERRORS.SAME_SIDE },
   { status: 422, code: QUICK_MATCH_ERRORS.ADHOC_LIMIT, e: QUICK_MATCH_ERRORS.ADHOC_LIMIT },
+  // A League + Knockout whose league is done (plan 5 D3): its knockout fills from that league, so it takes no extra match.
+  { status: 422, code: QUICK_MATCH_ERRORS.LEAGUE_COMPLETE, e: QUICK_MATCH_ERRORS.LEAGUE_COMPLETE },
 ];
 
 /** The competition is gone since the token resolved (`addQuickMatchDecider`'s null home read): the dead link. */

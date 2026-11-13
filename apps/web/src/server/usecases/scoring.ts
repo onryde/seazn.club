@@ -1214,6 +1214,20 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
   if (context && (context.outcome as { kind?: string } | null)?.kind !== undefined) {
     await maybeAutoAdvance(auth, context.stage_id, context.division_id);
   }
+  // Quick match plan 5 (D2, P5, P6): a League + Knockout moves itself on, after a decision and a void alike (a void can take
+  // a finished league back, which drops a pending tie answer). After the commit, never in it, and best-effort like the hooks
+  // above: the score already stands. Only the system org's writes ask, and the module is loaded on demand, so an
+  // organiser's score pays one comparison and nothing else.
+  if (context && auth.orgId === QUICK_MATCH_SYSTEM_ORG_ID) {
+    try {
+      await (await import("./quick-match-advance")).afterQuickMatchScore(context.division_id);
+    } catch (err) {
+      log.error(
+        { err, event: "quick_match_advance_failed", divisionId: context.division_id },
+        "scoring: the quick match's knockout did not advance (score write unaffected)",
+      );
+    }
+  }
   // Only ever reached once the transaction above COMMITTED: a rollback throws
   // out of `withTenant`, so the ids of a fill that was undone never leave.
   return advanced;
