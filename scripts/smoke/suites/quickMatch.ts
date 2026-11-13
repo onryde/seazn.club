@@ -21,7 +21,11 @@ import {
  * 2. Not played (plan 4 T7, `notPlayedLeg`): a second league of two has its one match marked Not played through the home's own
  *    form; the home then reads "0 of 1 match played · 1 not played" and "No matches were played", a second tap changes
  *    nothing, a stale Put back is refused with QUICK_MATCH_LEAGUE_FINISHED, and the match's row stays `cancelled`.
- * 3. The sweep (plan 3 T7, extended past its amendment by the dispatch): two more matches, one aged past its expiry in SQL and
+ * 3. League + Knockout (plan 5 T10, `leagueKnockoutLeg`): League → Final of three sides draws its final waiting on the league's
+ *    top two; every league match marked Not played leaves the three level across the cut, so the home asks; Pick fills the
+ *    final from the route's own advance (one confirmed seed proposal), the home names who went through, and a second answer
+ *    is refused with QUICK_MATCH_ALREADY_DECIDED, changing nothing.
+ * 4. The sweep (plan 3 T7, extended past its amendment by the dispatch): two more matches, one aged past its expiry in SQL and
  *    one saved through the real Save post by a signed-in person and aged the same. `POST /api/cron/quick-match-expiry` with
  *    the cron secret answers a report with a number for every key, `failed` 0 and `expired` >= 1; then, per match: the
  *    expired unsaved one is gone (its row and its competition, each counted 1 before and 0 after), while the saved one and the match
@@ -48,7 +52,7 @@ const UI = JSON.parse(
 /** What a guest may create, as the probe recorded it (`quick-match-sports.ts` reads the same file). */
 const OFFER = JSON.parse(
   readFileSync(new URL("../../../apps/web/src/lib/quick-match-offer.generated.json", import.meta.url), "utf8"),
-) as { offered: { sport_key: string; variant_key: string }[] };
+) as { offered: { sport_key: string; variant_key: string; knockoutAllowed?: boolean }[] };
 
 const SPORT = "badminton";
 const TOKEN = /^\/q\/(qm_[A-Za-z0-9_-]{43})$/;
@@ -86,11 +90,15 @@ export function sweepTargetAllowed(base: string, databaseUrl: string | undefined
 }
 
 type Made = { status: number; token: string | null; where: string };
+/** The Format list's one radio (plan 5 D1, lib/quick-match-shape.ts `SETUP_SHAPES`): League | League → Final | League →
+ *  Semi-finals → Final. Spelled here because that module's `@/` imports do not load under node's type stripping. */
+type Shape = "league" | "final" | "semis";
 
-/** The setup form's post, as the page sends it (a form, not JSON), with the site's own Origin. `where` is the Location with
- *  the token blanked, for a label: the home token is the match's credential and never goes in a log. */
-async function createMatch(name: string, sides: readonly [string, string], variant: string): Promise<Made> {
-  const body = new URLSearchParams({ name, sport_key: SPORT, variant_key: variant, kind: "individual", format: "league", plays: "1", locale: "en" });
+/** The setup form's post, as the page sends it (a form, not JSON), with the site's own Origin: its format is the `shape` radio,
+ *  which the create route maps to the create's format and qualifiers (plan 5 D1). `where` is the Location with the token
+ *  blanked, for a label: the home token is the match's credential and never goes in a log. */
+async function createMatch(name: string, sides: readonly string[], variant: string, shape: Shape = "league"): Promise<Made> {
+  const body = new URLSearchParams({ name, sport_key: SPORT, variant_key: variant, kind: "individual", shape, plays: "1", locale: "en" });
   for (const side of sides) body.append("sides", side);
   const res = await fetch(`${BASE}/api/quick-match`, {
     method: "POST",
@@ -134,6 +142,16 @@ function hideToken(at: URL): string {
   return `${at.pathname.replace(/qm_[A-Za-z0-9_-]+/, "<token>")}${at.search}`;
 }
 
+/** A home control's post, as its `<form method="post">` sends it: no body, or the form's fields (the Pick panel's). */
+async function postAt(path: string, form?: URLSearchParams): Promise<{ status: number; at: URL }> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: "POST",
+    redirect: "manual",
+    ...(form ? { headers: { "content-type": "application/x-www-form-urlencoded" }, body: form } : {}),
+  });
+  return { status: res.status, at: new URL(res.headers.get("location") ?? "", BASE) };
+}
+
 /**
  * Step 2, Not played (quick match plan 4 Task 7; spec docs/superpowers/specs/2026-11-12-quick-match-cancel-and-skip-design.md
  * §3, §6). A league of two has one match. Its home offers that match's "Not played" form (the ⋯ menu's item, a plain post
@@ -175,10 +193,6 @@ async function notPlayedLeg(
   );
   if (!fixtureId) return;
 
-  const postAt = async (path: string) => {
-    const res = await fetch(`${BASE}${path}`, { method: "POST", redirect: "manual" });
-    return { status: res.status, at: new URL(res.headers.get("location") ?? "", BASE) };
-  };
   const skipped = await postAt(skipPath);
   check(
     `quick match not played: the Not played post answers 303 to the bare home (got ${skipped.status} ${hideToken(skipped.at)})`,
@@ -225,6 +239,200 @@ async function notPlayedLeg(
   check(
     `quick match not played: the match's row in the database is cancelled, the refused Put back undid nothing (got ${JSON.stringify(fx?.status ?? null)})`,
     fx?.status === "cancelled",
+  );
+}
+
+/** League → Final of three sides, each pair once: 3 league matches and the final (plan 5 Global Constraints, "3 sides Once +
+ *  final = 3 + 1 = 4"). */
+const LK_SIDES = 3;
+const LK_LEAGUE_MATCHES = (LK_SIDES * (LK_SIDES - 1)) / 2;
+const LK_PLACES: number = 2;
+
+/** The same members, in any order. */
+function sameSet(a: readonly (string | null)[], b: readonly string[]): boolean {
+  return a.length === b.length && JSON.stringify([...a].sort()) === JSON.stringify([...b].sort());
+}
+
+/** The knockout's seat lines, in card order (each card home then away): a seat's name, or what it waits on in words. Null when
+ *  the page draws no knockout section. */
+function knockoutSeats(html: string): string[] | null {
+  const at = html.indexOf(`data-testid="qm-knockout"`);
+  if (at === -1) return null;
+  const end = html.indexOf("</section>", at);
+  const part = html.slice(at, end === -1 ? undefined : end);
+  return [...part.matchAll(/data-testid="qm-draw-name"[^>]*>([^<]*)<\/span>/g)].map((m) => unescapeHtml(m[1] ?? ""));
+}
+
+/**
+ * Step 3, League + Knockout (quick match plan 5 Task 10; spec docs/superpowers/specs/2026-11-12-quick-match-league-knockout-
+ * design.md §5, §6, §11). A League → Final of three sides (the setup's `shape` radio, `final`) is created as two stages, a
+ * league then a knockout. Before any result its home draws the knockout (`qm-knockout`), the final waiting on "1st in the
+ * league" and "2nd in the league" (D7), asks nothing (no `qm-cut`), and offers Not played on the three league matches only (a
+ * bracket needs a winner). All three are marked Not played through those posts; the last finishes the league with the three
+ * level on nothing played, a class that straddles the cut (three sides, two places, D4 case 1). BEFORE the home is loaded
+ * again (its load retries the fill, so it would mask what the route's own advance did: T5 review carry) the database shows
+ * nothing decided and the knockout unfilled. The home then asks "Tie for 1st: 3 sides, 2 places" with Pick among the three as
+ * typed, and both of the final's seats read "— to decide".
+ *
+ * Nothing was played, so the engine drew no lot (the three stand in typing order: `CutTie.byLot` false, controller ruling
+ * T4): there is no coin, the home offers no Toss, and a Toss post (a crafted or stale one) is refused with
+ * QUICK_MATCH_TIE_NOT_OPEN and writes nothing. Pick then sends the two sides the typing order would NOT seat (the second and
+ * third typed), so a fill from typing order cannot pass for it; 303 to the bare home, and BEFORE the next home load the
+ * database holds that pick, ONE confirmed seed proposal for the knockout stage, and the final seated with exactly those two.
+ * The home then names both in `qm-cut-result` ("Picked to go through: …") and on the final's seats, with no question left. A
+ * second answer (Toss, as another phone's would be) is refused with QUICK_MATCH_ALREADY_DECIDED, whose flash is the
+ * dictionary's line, and changes nothing: still one confirmed proposal, the same pick, the same seats.
+ *
+ * Writes only through the guest's own posts, on its own tagged match, as step 2 does: no guard of the sweep's kind is owed.
+ */
+async function leagueKnockoutLeg(
+  db: ReturnType<typeof smokeDb>,
+  own: (name: string) => Promise<{ id: string; competition_id: string } | null>,
+  variant: string,
+): Promise<void> {
+  const name = `QM smoke ${tag} knockout`;
+  const typed = [`Ivy ${tag}`, `Jo ${tag}`, `Kit ${tag}`];
+  const made = await createMatch(name, typed, variant, "final");
+  const row = await own(name);
+  const [qm] = row ? await db<{ format: string }[]>`select format from quick_matches where id = ${row.id}` : [];
+  const stages = row
+    ? await db<{ id: string; kind: string }[]>`
+        select s.id, s.kind from stages s join divisions d on d.id = s.division_id
+         where d.competition_id = ${row.competition_id} order by s.seq`
+    : [];
+  const [leagueStage, koStage] = stages;
+  check(
+    `quick match knockout: League → Final of ${LK_SIDES} sides created as a league stage then a knockout one (got ${made.status} ${made.where}; row ${row ? "found" : "missing"}, format ${JSON.stringify(qm?.format ?? null)}; stages ${JSON.stringify(stages.map((s) => s.kind))})`,
+    made.status === 303 && made.token !== null && row !== null && qm?.format === "league_knockout" && stages.length === 2 &&
+      leagueStage?.kind === "league" && koStage?.kind === "knockout",
+  );
+  if (!made.token || !row || !leagueStage || !koStage || leagueStage.kind !== "league" || koStage.kind !== "knockout") return;
+  const homePath = `/q/${made.token}`;
+  const asks = (html: string) => html.includes(`data-testid="qm-cut"`);
+
+  /** What the database holds for the knockout: the stored decision, the stage's confirmed seed proposals, its lines' seats. */
+  const stored = async () => {
+    const [d] = await db<{ cut: { how?: unknown; through?: unknown } | null }[]>`
+      select cut_decision as cut from quick_matches where id = ${row.id}`;
+    const [p] = await db<{ n: number }[]>`
+      select count(*)::int as n from stage_seed_proposals where stage_id = ${koStage.id} and status = 'confirmed'`;
+    const lines = await db<{ home: string | null; away: string | null }[]>`
+      select home_entrant_id as home, away_entrant_id as away from fixtures where stage_id = ${koStage.id}`;
+    const raw: unknown = d?.cut?.through;
+    const through = Array.isArray(raw) ? raw.map(String) : null;
+    // Every knockout seat, home then away per line: the final's two once it has filled.
+    const seats = lines.flatMap((l) => [l.home, l.away]);
+    return { how: d?.cut?.how ?? null, through, confirmed: p?.n ?? -1, lines, seats };
+  };
+  const said = (s: Awaited<ReturnType<typeof stored>>) =>
+    `decision ${JSON.stringify(s.how === null ? null : { how: s.how, through: s.through?.length ?? null })}, ${s.confirmed} confirmed proposal(s), ${s.lines.length} knockout line(s) seated ${s.lines.map((l) => [l.home, l.away].filter(Boolean).length).join("/") || "-"}`;
+
+  // ── Before any result: the final waits on the league's top two, nothing is asked, Not played only on the league ────────
+  const rank1 = words("quickMatch.home.leagueRank.1");
+  const rank2 = words("quickMatch.home.leagueRank.2");
+  const before = await page(homePath);
+  const seatsBefore = knockoutSeats(before.html);
+  const skipIds = [...new Set([...before.html.matchAll(/action="\/q\/qm_[A-Za-z0-9_-]{43}\/skip\/([0-9a-f-]{36})"/g)].map((m) => m[1] ?? ""))];
+  const leagueLines = (await db<{ id: string }[]>`select id from fixtures where stage_id = ${leagueStage.id}`).map((f) => f.id);
+  check(
+    `quick match knockout: before a result the home draws the knockout, its final waiting on "${rank1}" then "${rank2}", asks nothing, and offers Not played on exactly the ${LK_LEAGUE_MATCHES} league matches (got ${before.status}; seats ${JSON.stringify(seatsBefore)}; cut ${asks(before.html) ? "asked" : "none"}; ${skipIds.length} skippable, the league stage's ${leagueLines.length} line(s) ${sameSet(skipIds, leagueLines) ? "exactly" : "NOT"})`,
+    before.status === 200 && rank1 !== "" && rank2 !== "" && JSON.stringify(seatsBefore) === JSON.stringify([rank1, rank2]) &&
+      !asks(before.html) && skipIds.length === LK_LEAGUE_MATCHES && sameSet(skipIds, leagueLines),
+  );
+  if (skipIds.length !== LK_LEAGUE_MATCHES) return;
+
+  // ── Every league match Not played: the league finishes level across the cut ────────────────────────────────────────────
+  const skips: { status: number; at: URL }[] = [];
+  for (const id of skipIds) skips.push(await postAt(`${homePath}/skip/${id}`));
+  const afterSkips = await stored(); // before any home load: what the skip route's own advance left
+  check(
+    `quick match knockout: each of the ${LK_LEAGUE_MATCHES} Not played posts answers 303 to the bare home, and the league finished level leaves nothing decided and the knockout unfilled (got ${skips.map((s) => `${s.status} ${hideToken(s.at)}`).join("; ")}; ${said(afterSkips)})`,
+    skips.length === LK_LEAGUE_MATCHES && skips.every((s) => s.status === 303 && s.at.pathname === homePath && s.at.search === "") &&
+      afterSkips.how === null && afterSkips.confirmed === 0 && afterSkips.lines.length === 1 &&
+      afterSkips.lines.every((l) => l.home === null && l.away === null),
+  );
+
+  const asked = await page(homePath);
+  const titleCopy = words(`quickMatch.cut.titleMany.${LK_PLACES === 1 ? "one" : "other"}`, {
+    place: words("quickMatch.home.rankShort.1"),
+    sides: LK_SIDES,
+    count: LK_PLACES,
+  });
+  const title = testidText(asked.html, "qm-cut-title", "h2");
+  const options = [...asked.html.matchAll(/name="entrant" value="([0-9a-f-]{36})"[^>]*>\s*<span[^>]*>([^<]*)<\/span>/g)].map((m) => ({
+    id: m[1] ?? "",
+    name: unescapeHtml(m[2] ?? ""),
+  }));
+  const pickPath = `${homePath}/cut/pick`;
+  const tossPath = `${homePath}/cut/toss`;
+  const pickForm = asked.html.includes(`action="${pickPath}"`);
+  const tossShown = asked.html.includes(`action="${tossPath}"`) || asked.html.includes(`data-testid="qm-cut-toss"`);
+  const toDecide = [rank1, rank2].map((seat) => words("quickMatch.home.toDecide", { seat }));
+  const seatsAsked = knockoutSeats(asked.html);
+  check(
+    `quick match knockout: the league over, all ${LK_SIDES} level on nothing played, the home asks "${titleCopy}" with Pick among the ${LK_SIDES} as typed, no Toss (no lot was drawn), and the final's seats read ${JSON.stringify(toDecide)} (got ${asked.status}; cut ${asks(asked.html) ? "asked" : "none"}, title ${JSON.stringify(title === null ? null : unescapeHtml(title))}; pick form ${pickForm ? "present" : "absent"}, options ${JSON.stringify(options.map((o) => o.name))}; toss ${tossShown ? "shown" : "none"}; seats ${JSON.stringify(seatsAsked)})`,
+    asked.status === 200 && asks(asked.html) && titleCopy !== "" && title !== null && unescapeHtml(title) === titleCopy && pickForm &&
+      JSON.stringify(options.map((o) => o.name)) === JSON.stringify(typed) && !tossShown && toDecide.every((w) => w !== "") &&
+      JSON.stringify(seatsAsked) === JSON.stringify(toDecide),
+  );
+  if (options.length !== LK_SIDES) return;
+
+  /** A refusal's landing: the home with `?e=<code>` and the flash it prints. */
+  const flashOf = async (at: URL) => {
+    const flashPage = at.pathname === homePath ? await page(`${at.pathname}${at.search}`) : null;
+    const text = flashPage ? testidText(flashPage.html, "qm-flash") : null;
+    return text === null ? null : unescapeHtml(text);
+  };
+
+  // ── Toss with no lot drawn: refused, nothing written ───────────────────────────────────────────────────────────────────
+  const coinless = await postAt(tossPath);
+  const coinlessStored = await stored();
+  const coinlessFlash = await flashOf(coinless.at);
+  const tieChanged = words("quickMatch.flash.tieChanged");
+  check(
+    `quick match knockout: a Toss post with no lot drawn answers 303 to the home with ?e=${QUICK_MATCH_ERRORS.TIE_NOT_OPEN}, whose flash reads "${tieChanged}", and writes nothing (got ${coinless.status} ${hideToken(coinless.at)}; flash ${JSON.stringify(coinlessFlash)}; ${said(coinlessStored)})`,
+    coinless.status === 303 && `${coinless.at.pathname}${coinless.at.search}` === `${homePath}?e=${QUICK_MATCH_ERRORS.TIE_NOT_OPEN}` &&
+      tieChanged !== "" && coinlessFlash === tieChanged && coinlessStored.how === null && coinlessStored.confirmed === 0,
+  );
+
+  // ── Pick the two typing order would NOT seat: the route's own advance fills the final ─────────────────────────────────
+  const chosen = options.slice(LK_SIDES - LK_PLACES);
+  const chosenIds = chosen.map((o) => o.id);
+  const form = new URLSearchParams();
+  for (const o of chosen) form.append("entrant", o.id);
+  const pick = await postAt(pickPath, form);
+  const filled = await stored(); // before any home load: the home's own retry would mask a route that never advanced
+  check(
+    `quick match knockout: Pick of ${JSON.stringify(chosen.map((o) => o.name))} answers 303 to the bare home, and before the home is loaded again the database holds that pick, ONE confirmed seed proposal for the knockout stage and the final seated with exactly those two (got ${pick.status} ${hideToken(pick.at)}; ${said(filled)}; seated the chosen ${filled.lines.length === 1 && sameSet(filled.seats, chosenIds)})`,
+    pick.status === 303 && pick.at.pathname === homePath && pick.at.search === "" && filled.how === "pick" &&
+      filled.through !== null && sameSet(filled.through, chosenIds) && filled.confirmed === 1 && filled.lines.length === 1 &&
+      sameSet(filled.seats, chosenIds),
+  );
+
+  const decided = await page(homePath);
+  const result = testidText(decided.html, "qm-cut-result", "div");
+  const list = (names: readonly string[]) => new Intl.ListFormat("en", { style: "long", type: "conjunction" }).format(names);
+  const names = chosen.map((o) => o.name);
+  const resultCopies = [names, [...names].reverse()].map((n) => words("quickMatch.cut.pickResult", { names: list(n) }));
+  const seatsDecided = knockoutSeats(decided.html);
+  check(
+    `quick match knockout: the home no longer asks, its qm-cut-result reads "${resultCopies[0]}" and the final's two seats name exactly those two (got ${decided.status}; cut ${asks(decided.html) ? "asked" : "none"}; result ${JSON.stringify(result === null ? null : unescapeHtml(result))}; seats ${JSON.stringify(seatsDecided)})`,
+    decided.status === 200 && !asks(decided.html) && result !== null && resultCopies.every((c) => c !== "") &&
+      resultCopies.includes(unescapeHtml(result)) && seatsDecided !== null && sameSet(seatsDecided, names) &&
+      names.every((n) => unescapeHtml(result).includes(n)),
+  );
+
+  // ── A second answer, as another phone's: refused, nothing moves ────────────────────────────────────────────────────────
+  const second = await postAt(tossPath);
+  const secondStored = await stored();
+  const secondFlash = await flashOf(second.at);
+  const alreadyDecided = words("quickMatch.flash.alreadyDecided");
+  check(
+    `quick match knockout: a second answer (Toss) answers 303 to the home with ?e=${QUICK_MATCH_ERRORS.ALREADY_DECIDED}, whose flash reads "${alreadyDecided}", and changes nothing: the same pick, one confirmed proposal, the same two seated (got ${second.status} ${hideToken(second.at)}; flash ${JSON.stringify(secondFlash)}; ${said(secondStored)})`,
+    second.status === 303 && `${second.at.pathname}${second.at.search}` === `${homePath}?e=${QUICK_MATCH_ERRORS.ALREADY_DECIDED}` &&
+      alreadyDecided !== "" && secondFlash === alreadyDecided && secondStored.how === "pick" && secondStored.through !== null &&
+      sameSet(secondStored.through, chosenIds) && secondStored.confirmed === 1 && secondStored.lines.length === 1 &&
+      sameSet(secondStored.seats, chosenIds),
   );
 }
 
@@ -338,7 +546,13 @@ export async function quickMatchSuite(): Promise<void> {
     // Its own function, so a check that stops it early never takes the sweep below with it.
     await notPlayedLeg(db, own, variant);
 
-    // ── 3. The sweep: an expired unsaved match goes, a saved one and the live one stay ────────────────────────────────────
+    // ── 3. League + Knockout: a tie at the cut is asked, decided once, and the final fills itself ─────────────────────────
+    // A variant whose knockout may be played (C23, the probe's `knockoutAllowed`); its own function, as step 2's.
+    const koVariant = OFFER.offered.find((o) => o.sport_key === SPORT && o.knockoutAllowed === true)?.variant_key ?? "";
+    check(`quick match knockout: the probe's offer lists a ${SPORT} variant whose knockout may be played (got ${JSON.stringify(koVariant)})`, koVariant !== "");
+    if (koVariant !== "") await leagueKnockoutLeg(db, own, koVariant);
+
+    // ── 4. The sweep: an expired unsaved match goes, a saved one and the live one stay ────────────────────────────────────
     const cronSecret = process.env.CRON_SECRET;
     if (!cronSecret) {
       check("quick match sweep: skipped (no CRON_SECRET in the smoke env, the cron route cannot be called); quick-match-sweep.test.ts covers it", true);
