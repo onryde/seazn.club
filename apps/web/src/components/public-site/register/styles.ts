@@ -43,9 +43,13 @@ export const BTN_GHOST =
 export const BTN_TEXT =
   "font-display text-xs font-semibold uppercase tracking-wide text-ink-muted transition hover:text-accent-strong disabled:cursor-not-allowed disabled:opacity-40";
 
-/** BTN_TEXT standing alone as a footer action at the 44px tap height (B4 T15, the status page's quiet footer: "Resend confirmation
- *  email", and "Cancel this entry" in each card's footer), so it never competes with Pay for attention. */
-export const BTN_QUIET_LINK = `${BTN_TEXT} inline-flex min-h-11 items-center`;
+/** A footer action set as a text link at the 44px tap height (B4 T15, the status page's quiet footer: "Resend confirmation email", and
+ *  "Cancel this entry" in each card's footer), so it never competes with Pay for attention. A link, not BTN_TEXT's uppercase label (B4
+ *  design review): sentence case, muted, with the public site's quiet underline (zinc-300, offset 2) that takes the accent on hover.
+ *  Busy is BTN_PRIMARY's rule: a disabled button that says `aria-busy="true"` is working, so it keeps full strength and a progress
+ *  cursor instead of the 40% dim. */
+export const BTN_QUIET_LINK =
+  "inline-flex min-h-11 items-center text-sm text-ink-muted underline decoration-zinc-300 underline-offset-2 transition hover:text-accent-strong hover:decoration-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-40 disabled:aria-busy:cursor-progress disabled:aria-busy:opacity-100";
 
 /** The form control. `aria-invalid` is the single hook for the danger state (B2 T9): every field in this tree that sets the attribute gets
  *  the red border and a red focus ring from here, so what is drawn and what a screen reader is told cannot disagree. The compound

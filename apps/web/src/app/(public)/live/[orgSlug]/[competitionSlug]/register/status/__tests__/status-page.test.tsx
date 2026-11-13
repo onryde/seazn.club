@@ -10,7 +10,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { fmtDateTime, fmtPublicDeadline, fmtZoneAbbrev } from "@/lib/format";
-import { BTN_TEXT } from "@/components/public-site/register/styles";
+import { BTN_QUIET_LINK } from "@/components/public-site/register/styles";
 import uiEn from "@/dictionaries/en/ui.json";
 
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => "en" }));
@@ -702,7 +702,7 @@ describe("register status page (RS007 rebuild)", () => {
     });
 
     // B4 T15 (spec §5.1 item 7): Cancel is a quiet text link in the card's own footer, never a filled or outlined button. Its class is
-    // the register tree's quiet-action token (styles.ts BTN_TEXT) plus the 44px tap height.
+    // the status page's quiet-link token (styles.ts BTN_QUIET_LINK): sentence case and underlined since the B4 design review.
     it("Cancel renders as a link-styled button inside the card footer, not a filled button", async () => {
       usecaseMock.groupById.mockResolvedValueOnce({ ...BASE_VIEW, entries: [BASE_ENTRY] });
       const html = await render({ rid: "g1", token: "tok" });
@@ -713,8 +713,9 @@ describe("register status page (RS007 rebuild)", () => {
       const button = footer!.match(/<button([^>]*)>Cancel this entry<\/button>/);
       expect(button, "Cancel sits in the card's footer").not.toBeNull();
       const cls = button![1]!.match(/class="([^"]*)"/)![1]!;
-      expect(cls).toBe(`${BTN_TEXT} inline-flex min-h-11 items-center`);
+      expect(cls).toBe(BTN_QUIET_LINK);
       expect(cls).not.toMatch(/\bborder\b|\bbg-/);
+      expect(cls.split(/\s+/)).not.toContain("uppercase");
     });
 
     it("Resend sits in the page's quiet footer, after the entries and the money line, as a text link", async () => {
@@ -722,7 +723,7 @@ describe("register status page (RS007 rebuild)", () => {
       const html = await render({ rid: "g1", token: "tok" });
       const resend = html.match(/<button([^>]*)>Resend confirmation email<\/button>/);
       expect(resend, "Resend button").not.toBeNull();
-      expect(resend![1]!.match(/class="([^"]*)"/)![1]).toBe(`${BTN_TEXT} inline-flex min-h-11 items-center`);
+      expect(resend![1]!.match(/class="([^"]*)"/)![1]).toBe(BTN_QUIET_LINK);
       expect(html.indexOf("Resend confirmation email")).toBeGreaterThan(html.indexOf('data-testid="reg-status-money"'));
       expect(html.indexOf('data-testid="reg-status-money"')).toBeGreaterThan(html.indexOf("Mixed Doubles"));
     });

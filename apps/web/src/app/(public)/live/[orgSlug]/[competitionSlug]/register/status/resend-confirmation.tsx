@@ -73,6 +73,7 @@ export function ResendConfirmation({ groupId, token }: { groupId: string; token:
       <button
         type="button"
         disabled={busy}
+        aria-busy={busy}
         onClick={resend}
         className={BTN_QUIET_LINK}
       >

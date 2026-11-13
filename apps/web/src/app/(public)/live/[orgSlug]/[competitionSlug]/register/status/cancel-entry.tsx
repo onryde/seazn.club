@@ -98,6 +98,7 @@ export function CancelEntry({
       <button
         type="button"
         disabled={busy}
+        aria-busy={busy}
         onClick={cancel}
         className={BTN_QUIET_LINK}
       >
