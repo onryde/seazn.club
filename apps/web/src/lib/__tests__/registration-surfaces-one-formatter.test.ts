@@ -15,9 +15,11 @@ const REG = "app/(public)/live/[orgSlug]/[competitionSlug]/register";
 /** A registration surface that prints an amount. */
 const MONEY_SURFACES = [
   "components/public-site/register/division-card.tsx",
-  "components/public-site/register/entry-cart.tsx",
+  // The Entries cart's subtotal (entry-cart.tsx) and Review's total are spelled by cart.ts's cartTotalText since B3 review m1.
+  "components/public-site/register/cart.ts",
   "components/public-site/register/step-review.tsx",
-  "components/public-site/register/register-stepper.tsx",
+  // The action bar's running total left the stepper for action-bar-labels.ts (B2, de0a4b1c3e).
+  "components/public-site/register/action-bar-labels.ts",
   `${REG}/status/entry-card.tsx`,
   `${REG}/status/page.tsx`,
   "components/registrations/pay-page-view.tsx",
