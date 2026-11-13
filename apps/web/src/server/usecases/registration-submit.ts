@@ -370,6 +370,27 @@ function assertUniformPaymentMethod(settings: Iterable<{ fee_cents: number; paym
   }
 }
 
+/**
+ * Registration redesign B1 T4: reads that used to run one division at a time now run together. `settleEach` runs `read` for every
+ * id at once (`allSettled`, so a later read's failure is never left unhandled) and pairs each outcome with its id, in the order
+ * given. The caller then walks the pairs in that order, so what a refused cart is told is what the serial loop told it: the
+ * failure of the earliest id, never whichever read happened to fail first.
+ */
+async function settleEach<T>(ids: readonly string[], read: (id: string) => Promise<T>): Promise<[string, PromiseSettledResult<T>][]> {
+  const settled = await Promise.allSettled(ids.map(read));
+  return ids.map((id, i) => [id, settled[i]!]);
+}
+
+/** The values by id, or the first failure in the pairs' order (see `settleEach`). */
+function valuesInOrder<T>(pairs: readonly [string, PromiseSettledResult<T>][]): Map<string, T> {
+  const out = new Map<string, T>();
+  for (const [id, r] of pairs) {
+    if (r.status === "rejected") throw r.reason;
+    out.set(id, r.value);
+  }
+  return out;
+}
+
 /** `team` needs a name; `pair` falls back to "player & partner" (the partner
  *  is cosmetic-only text, NOT a second player row — see the module doc);
  *  `individual`/free-agent uses the sole player's name, or the contact's. */
@@ -491,8 +512,15 @@ export async function submitRegistrationGroup(
     // so two concurrent carts touching an overlapping division set can never
     // deadlock against each other.
     const distinctDivisionIds = [...new Set(input.entries.map((e) => e.division_id))].sort();
-    const divisionCtxById = new Map<string, EntryDivisionCtx>();
-    for (const id of distinctDivisionIds) divisionCtxById.set(id, await timed(timer, "division_ctx", () => loadEntryDivisionCtx(id)));
+    // Every division's context and settings, read at once (registration redesign B1 T4): one batch of round trips, not two per
+    // division. The answers are then checked exactly as the serial loops checked them - every context first, then every setting,
+    // each in sorted id order - so a refused cart is told what it was always told (`settleEach`). A settings read for a division
+    // the context check then refuses is read and dropped: it changes nothing and is never shown.
+    const [ctxSettled, settingsSettled] = await Promise.all([
+      timed(timer, "division_ctx", () => settleEach(distinctDivisionIds, loadEntryDivisionCtx)),
+      timed(timer, "settings", () => settleEach(distinctDivisionIds, loadSubmitSettings)),
+    ]);
+    const divisionCtxById = valuesInOrder(ctxSettled);
 
     const first = divisionCtxById.get(distinctDivisionIds[0]!)!;
     for (const dc of divisionCtxById.values()) {
@@ -514,8 +542,10 @@ export async function submitRegistrationGroup(
     const seasonYear = seasonStartYearFrom(first.starts_on);
 
     const settingsById = new Map<string, SubmitSettingsRow>();
-    for (const id of distinctDivisionIds) {
-      const s = await timed(timer, "settings", () => loadSubmitSettings(id));
+    // One division at a time, as the serial loop went: its read's own failure, then its window, before the next division's.
+    for (const [id, read] of settingsSettled) {
+      if (read.status === "rejected") throw read.reason;
+      const s = read.value;
       if (!s || !windowOpen(s, now)) throw new HttpError(422, "Registration is not open for this division");
       settingsById.set(id, s);
     }
@@ -665,17 +695,17 @@ export async function submitRegistrationGroup(
     // the tree fails without this check today).
     if (!input.privacy_consent) throw new HttpError(422, "Please agree to the privacy policy to register");
 
-    // Card-payment entitlement gate, mirrors old submitRegistration exactly.
-    for (const s of settingsById.values()) {
-      if (s.fee_cents > 0 && s.payment_method === "stripe") {
-        if (!first.charges_enabled) {
-          throw new HttpError(
-            503,
-            "Card payments are temporarily unavailable for this event — try again shortly or contact the organiser",
-          );
-        }
-        await timed(timer, "entitlements", () => requireFeature(orgId, "registration.paid", competitionId));
+    // Card-payment entitlement gate, mirrors old submitRegistration exactly - asked ONCE per submit (registration redesign B1 T4):
+    // both questions are about the org and the competition, never the division, so the per-division loop asked the same thing
+    // again for every paid card division. Same order as before: Connect first (503), then the plan (402).
+    if ([...settingsById.values()].some((s) => s.fee_cents > 0 && s.payment_method === "stripe")) {
+      if (!first.charges_enabled) {
+        throw new HttpError(
+          503,
+          "Card payments are temporarily unavailable for this event — try again shortly or contact the organiser",
+        );
       }
+      await timed(timer, "entitlements", () => requireFeature(orgId, "registration.paid", competitionId));
     }
 
     // Plan cap resolved OUTSIDE the transaction on purpose (lib/entitlements.ts
@@ -689,12 +719,17 @@ export async function submitRegistrationGroup(
     // The online-play SEAT GATE (online-seat-gate.ts) for every online division in the cart, opened out here for the same reason as the plan cap:
     // its flag question is a remote call and its probes run on the pooled `sql`. It asks about the people the inline confirm below SEATS - the
     // submitter was asked above, by their own session link, and a teammate the captain typed in has no account to be asked about.
-    const seatGates = new Map<string, RegistrationSeatGate>();
-    for (const id of distinctDivisionIds) {
-      if (divisionPlaysOnline(divisionCtxById.get(id)!)) {
-        seatGates.set(id, await timed(timer, "seat_gate", () => openRegistrationSeatGate({ divisionId: id, auth: { orgId, userId: null } })));
-      }
-    }
+    // The online divisions' gates open together (registration redesign B1 T4); a gate that fails to open refuses the cart as the
+    // serial loop did, earliest division id first.
+    const onlineIds = distinctDivisionIds.filter((id) => divisionPlaysOnline(divisionCtxById.get(id)!));
+    const seatGates: Map<string, RegistrationSeatGate> =
+      onlineIds.length === 0
+        ? new Map()
+        : valuesInOrder(
+            await timed(timer, "seat_gate", () =>
+              settleEach(onlineIds, (id) => openRegistrationSeatGate({ divisionId: id, auth: { orgId, userId: null } })),
+            ),
+          );
     return { distinctDivisionIds, first, orgId, competitionId, prepared, planLimit, seatGates };
   });
 

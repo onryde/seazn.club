@@ -52,12 +52,53 @@ vi.mock("../registrations", async (importOriginal) => {
   };
 });
 
-import { sql } from "@/lib/db";
+// Registration redesign B1 T4: the pre-transaction reads run concurrently. Two seams, both inert unless a test arms them:
+//  - `requireFeature` is the REAL one, wrapped so a test can count its calls (asked once per submit, not once per division).
+//  - `dbDelay`: the pooled `sql` is the REAL one; a query the armed predicate picks (by its text and its parameters) waits `ms` before it
+//    runs, which turns "these reads overlap" and "the error is the serial loop's, not the first to settle" into wall-clock facts.
+//    `fail` picks a query to refuse instead (never sent): a read that fails, for the error-precedence cases.
+vi.mock("@/lib/entitlements", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/entitlements")>();
+  return { ...actual, requireFeature: vi.fn(actual.requireFeature) };
+});
+const dbDelay = vi.hoisted(() => ({
+  ms: 0,
+  when: null as ((text: string, params: unknown[]) => boolean) | null,
+  delayed: 0,
+  fail: null as ((text: string, params: unknown[]) => boolean) | null,
+  failed: 0,
+}));
+vi.mock("@/lib/db", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/db")>();
+  const sql = new Proxy(actual.sql, {
+    apply(target, thisArg, args: unknown[]) {
+      const first = args[0];
+      const tagged = Array.isArray(first) && "raw" in (first as object);
+      const refuse = dbDelay.fail;
+      if (tagged && refuse && refuse((first as string[]).join("?"), args.slice(1))) {
+        dbDelay.failed++;
+        const err = new Error("injected: this read failed");
+        return { then: (ok: (v: unknown) => unknown, ko: (e: unknown) => unknown) => Promise.reject(err).then(ok, ko) };
+      }
+      const pick = dbDelay.when;
+      if (tagged && dbDelay.ms > 0 && pick && pick((first as string[]).join("?"), args.slice(1))) {
+        dbDelay.delayed++;
+        const query = Reflect.apply(target, thisArg, args) as PromiseLike<unknown>;
+        const wait = new Promise((resolve) => setTimeout(resolve, dbDelay.ms));
+        return { then: (ok: (v: unknown) => unknown, ko: (e: unknown) => unknown) => wait.then(() => query).then(ok, ko) };
+      }
+      return Reflect.apply(target, thisArg, args);
+    },
+  });
+  return { ...actual, sql };
+});
+
+import { sql, statementCount } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
-import { invalidateOrgEntitlements } from "@/lib/entitlements";
+import { invalidateOrgEntitlements, requireFeature } from "@/lib/entitlements";
 import { LEGAL_VERSION } from "@/lib/legal";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { createStageTimer } from "@/server/timing";
+import { createStageTimer, type StageTimer } from "@/server/timing";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { confirmRegistration, soloPoolIsFull } from "../registrations";
@@ -253,6 +294,12 @@ beforeEach(() => {
   refCodeMock.callCount = 0;
   refCodeMock.fixedNextCalls = [];
   inviteSweepMock.fn.mockClear();
+  dbDelay.ms = 0;
+  dbDelay.when = null;
+  dbDelay.delayed = 0;
+  dbDelay.fail = null;
+  dbDelay.failed = 0;
+  vi.mocked(requireFeature).mockClear();
 });
 
 // ---------------------------------------------------------------------------
@@ -3071,5 +3118,225 @@ describe.skipIf(!HAS_DB)("RS012 — the solo sign-up pool has its own bound, sep
       expect(solo.entries[0]!.status).not.toBe("waitlisted");
       expect(solo.entries[0]!.free_agent).toBe(true);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Registration redesign B1 T4 (spec 2026-11-13 §3.3 item 2): the pre-transaction reads run concurrently. Every division's context
+// and settings read in one batch, the paid-feature check asked once per submit (its answer depends only on the org and the
+// competition), the seat gates of the online divisions opened together. What must NOT change is what a refused cart is told: the
+// serial loops reported the first failure phase by phase (contexts, then settings), and within a phase in SORTED division-id order
+// (the lock order, `distinctDivisionIds`), never cart order and never whichever read finished first.
+//
+// Sport: not applicable here (registration is sport-agnostic); the online-chess seat gates are covered in
+// online-seat-gate-writers.test.ts ("two online divisions in one cart").
+// ---------------------------------------------------------------------------
+
+describe.skipIf(!HAS_DB)("submitRegistrationGroup: the pre-transaction reads run together (registration redesign B1 T4)", () => {
+  const DIVISION_CONFIG = { points: { w: 3, d: 1, l: 0 }, progressScore: false };
+
+  /** A Connect-live pro org: one competition with `n` card divisions (fee 1000, stripe). */
+  async function cardCompetition(n: number) {
+    const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+    await sql`update organizations set stripe_charges_enabled = true where id = ${orgId}`;
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    const ids = [division.id];
+    for (let i = 1; i < n; i++) {
+      const d = await createDivision(owner, competition.id, { name: `Card ${i}`, sport_key: "generic", variant_key: "score", config: DIVISION_CONFIG });
+      ids.push(d.id);
+    }
+    for (const id of ids) await seedSettings(id, { entrant_kind: "individual", fee_cents: 1000, payment_method: "stripe" });
+    return { orgId, orgSlug, competition, ids };
+  }
+
+  const cartFor = (ids: string[]): SubmitGroupInput => ({
+    contact: baseContact(),
+    privacy_consent: true,
+    entries: ids.map((id) => ({
+      division_id: id,
+      entrant_kind: "individual" as const,
+      players: [{ full_name: "Pre " + randomUUID().slice(0, 6) }],
+      answers: {},
+    })),
+  });
+
+  /** The statements issued inside the `pre_tx` stage, counted around that stage through the timer the usecase already threads. */
+  function preTxCounter(): { timer: StageTimer; statements: () => number } {
+    const base = createStageTimer();
+    let counted = -1;
+    const timer: StageTimer = {
+      ...base,
+      async stage(name, fn) {
+        if (name !== "pre_tx") return base.stage(name, fn);
+        const before = statementCount();
+        try {
+          return await base.stage(name, fn);
+        } finally {
+          counted = statementCount() - before;
+        }
+      },
+    };
+    return {
+      timer,
+      statements: () => {
+        if (counted < 0) throw new Error("premise: the pre_tx stage never ran");
+        return counted;
+      },
+    };
+  }
+
+  const paidFeatureCalls = () => vi.mocked(requireFeature).mock.calls.filter(([, key]) => key === "registration.paid");
+
+  async function refusal(p: Promise<unknown>): Promise<unknown> {
+    return p.then(
+      () => {
+        throw new Error("expected the submit to be refused");
+      },
+      (err: unknown) => err,
+    );
+  }
+
+  it("requireFeature(registration.paid) is asked ONCE for a cart with two paid card divisions, and not at all for a free cart", async () => {
+    const card = await cardCompetition(2);
+    const res = await submitRegistrationGroup({ orgSlug: card.orgSlug, compSlug: card.competition.slug }, cartFor(card.ids));
+    expect(res.entries.map((e) => e.status), "premise: both card entries are pending payment").toEqual(["pending", "pending"]);
+    expect(paidFeatureCalls()).toEqual([[card.orgId, "registration.paid", card.competition.id]]);
+
+    vi.mocked(requireFeature).mockClear();
+    const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+    const { competition, division } = await rig(asOwner(orgId, ownerId));
+    await seedSettings(division.id, { entrant_kind: "individual", fee_cents: 0 });
+    const free = await submitRegistrationGroup({ orgSlug, compSlug: competition.slug }, cartFor([division.id]));
+    expect(free.entries[0]!.status, "premise: the free entry confirmed").toBe("confirmed");
+    expect(paidFeatureCalls(), "the empty case: no paid card division, no question").toEqual([]);
+  });
+
+  it("two paid card divisions with Connect not live: still the 503, and the paid feature is never asked (its precedence is unchanged)", async () => {
+    const card = await cardCompetition(2);
+    await sql`update organizations set stripe_charges_enabled = false where id = ${card.orgId}`;
+    const err = await refusal(submitRegistrationGroup({ orgSlug: card.orgSlug, compSlug: card.competition.slug }, cartFor(card.ids)));
+    expect(err).toBeInstanceOf(HttpError);
+    expect((err as HttpError).status).toBe(503);
+    expect(paidFeatureCalls()).toEqual([]);
+  });
+
+  it("pre-tx statements: each extra division adds exactly its own two reads (context + settings), never another entitlement round trip", async () => {
+    const card = await cardCompetition(3);
+    // Warm the pool first: concurrent reads may open more pooled connections, and a connection's one-time setup is not this submit's cost.
+    await submitRegistrationGroup({ orgSlug: card.orgSlug, compSlug: card.competition.slug }, cartFor(card.ids));
+
+    const one = preTxCounter();
+    await submitRegistrationGroup({ orgSlug: card.orgSlug, compSlug: card.competition.slug }, cartFor([card.ids[0]!]), one.timer);
+    const three = preTxCounter();
+    await submitRegistrationGroup({ orgSlug: card.orgSlug, compSlug: card.competition.slug }, cartFor(card.ids), three.timer);
+
+    expect(one.statements(), "anti-vacuity: the counter saw the one-division reads").toBeGreaterThanOrEqual(2);
+    // Spec §3.3 item 2: per division, one context read and one settings read; the entitlement and the plan cap once per submit.
+    expect(three.statements() - one.statements()).toBe(2 * 2);
+  });
+
+  it("the division reads overlap: three divisions' context and settings reads, each held 100 ms, finish inside about one hold, not six", async () => {
+    const card = await cardCompetition(3);
+    dbDelay.ms = 100;
+    dbDelay.when = (text) =>
+      text.includes("d.eligibility_note") || (text.includes("from registration_settings where division_id") && !text.includes("for update"));
+    const timer = createStageTimer();
+    const res = await submitRegistrationGroup({ orgSlug: card.orgSlug, compSlug: card.competition.slug }, cartFor(card.ids), timer);
+    expect(res.entries).toHaveLength(3);
+    expect(dbDelay.delayed, "anti-vacuity: all three context reads and all three settings reads were held").toBe(6);
+    const d = timer.durations();
+    expect(d["pre_tx.division_ctx"], "premise: the hold applied").toBeGreaterThanOrEqual(100);
+    expect(d["pre_tx.division_ctx"], "the three context reads overlap (serially: 300 ms)").toBeLessThan(200);
+    expect(d["pre_tx.settings"], "the three settings reads overlap (serially: 300 ms)").toBeLessThan(200);
+    expect(d["pre_tx"], "and the two batches overlap each other (serially: 600 ms)").toBeLessThan(300);
+  });
+
+  it("error precedence within a phase is the sorted division order, never the read that settles first, and never cart order", async () => {
+    const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+    const { competition } = await rig(asOwner(orgId, ownerId));
+    // Two context reads that both fail, distinguishably: a division that does not exist (404), sorted FIRST and held 100 ms, and an
+    // id the database itself refuses at once (not a uuid: 22P02). The serial loop read the sorted-first one first, so the 404 wins.
+    const missing = "00000000-0000-4000-8000-" + randomUUID().slice(-12);
+    const malformed = "zz-not-a-uuid";
+    const alone = await refusal(submitRegistrationGroup({ orgSlug, compSlug: competition.slug }, cartFor([malformed])));
+    expect((alone as { code?: string }).code, "premise: the malformed id is refused by the database, distinguishably").toBe("22P02");
+
+    dbDelay.ms = 100;
+    dbDelay.when = (text, params) => text.includes("d.eligibility_note") && params[0] === missing;
+    const seen: string[] = [];
+    for (const order of [[missing, malformed], [malformed, missing]]) {
+      const err = await refusal(submitRegistrationGroup({ orgSlug, compSlug: competition.slug }, cartFor(order)));
+      expect(err, `cart ${order.join(",")}`).toBeInstanceOf(HttpError);
+      expect((err as HttpError).status).toBe(404);
+      expect((err as HttpError).message).toBe("division not found");
+      seen.push(order[0]!);
+    }
+    expect(seen, "anti-vacuity: both cart orders were tried").toEqual([missing, malformed]);
+    expect(dbDelay.delayed, "premise: the missing division's read was held both times").toBe(2);
+  });
+
+  it("error precedence across phases: a missing division (context phase) beats a closed one (settings phase) even when the closed answer is in first", async () => {
+    const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+    const { competition, division: closed } = await rig(asOwner(orgId, ownerId));
+    await seedSettings(closed.id, { entrant_kind: "individual", fee_cents: 0, closes_at: "2020-01-01T00:00:00Z" });
+    const alone = await refusal(submitRegistrationGroup({ orgSlug, compSlug: competition.slug }, cartFor([closed.id])));
+    expect((alone as HttpError).status, "premise: the closed division alone is refused by the settings phase").toBe(422);
+    expect((alone as HttpError).message).toBe("Registration is not open for this division");
+
+    const missing = randomUUID();
+    dbDelay.ms = 100;
+    dbDelay.when = (text, params) => text.includes("d.eligibility_note") && params[0] === missing;
+    for (const order of [[closed.id, missing], [missing, closed.id]]) {
+      const err = await refusal(submitRegistrationGroup({ orgSlug, compSlug: competition.slug }, cartFor(order)));
+      expect((err as HttpError).status, `cart order ${order.indexOf(missing) === 0 ? "missing first" : "closed first"}`).toBe(404);
+    }
+    expect(dbDelay.delayed, "anti-vacuity: both orders ran with the missing division's read held").toBe(2);
+  });
+
+  it("error precedence within the settings phase is one division at a time: the earlier division's closed window beats a later read's failure", async () => {
+    const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    const other = await createDivision(owner, competition.id, { name: "Other", sport_key: "generic", variant_key: "score", config: DIVISION_CONFIG });
+    const [early, late] = [division.id, other.id].sort() as [string, string];
+    const isSettingsReadOf = (id: string) => (text: string, params: unknown[]) =>
+      text.includes("from registration_settings where division_id") && !text.includes("for update") && params[0] === id;
+
+    // The earlier division is closed, the later one's settings read fails: the serial loop refused the earlier one first.
+    await seedSettings(early, { entrant_kind: "individual", fee_cents: 0, closes_at: "2020-01-01T00:00:00Z" });
+    await seedSettings(late, { entrant_kind: "individual", fee_cents: 0 });
+    dbDelay.fail = isSettingsReadOf(late);
+    const closedFirst = await refusal(submitRegistrationGroup({ orgSlug, compSlug: competition.slug }, cartFor([late, early])));
+    expect((closedFirst as HttpError).status).toBe(422);
+    expect((closedFirst as HttpError).message).toBe("Registration is not open for this division");
+
+    // The pair: the earlier division open, the later read's own failure is what the cart is told.
+    await seedSettings(early, { entrant_kind: "individual", fee_cents: 0, closes_at: null });
+    const readFailed = await refusal(submitRegistrationGroup({ orgSlug, compSlug: competition.slug }, cartFor([late, early])));
+    expect((readFailed as Error).message).toBe("injected: this read failed");
+    expect(dbDelay.failed, "anti-vacuity: the later read was refused both times").toBe(2);
+  });
+
+  it("the SEQUENCE: a second identical submit is accepted the same way (no dedupe was added)", async () => {
+    const card = await cardCompetition(2);
+    const cart = cartFor(card.ids);
+    const first = await submitRegistrationGroup({ orgSlug: card.orgSlug, compSlug: card.competition.slug }, cart);
+    const second = await submitRegistrationGroup({ orgSlug: card.orgSlug, compSlug: card.competition.slug }, cart);
+    expect(second.group_id).not.toBe(first.group_id);
+    expect(second.entries.map((e) => e.status)).toEqual(first.entries.map((e) => e.status));
+    expect(second.amount_cents).toBe(first.amount_cents);
+    expect(paidFeatureCalls(), "once per submit").toHaveLength(2);
+  });
+
+  it("the empty case: an empty cart is refused by the existing guard before any read is issued", async () => {
+    const before = statementCount();
+    const err = await refusal(
+      submitRegistrationGroup({ orgSlug: "nobody", compSlug: "nothing" }, { contact: baseContact(), privacy_consent: true, entries: [] }),
+    );
+    expect(statementCount() - before, "no division read, no statement at all").toBe(0);
+    expect((err as HttpError).status).toBe(422);
+    expect((err as HttpError).message).toBe("At least one entry is required");
+    expect(paidFeatureCalls()).toEqual([]);
   });
 });
