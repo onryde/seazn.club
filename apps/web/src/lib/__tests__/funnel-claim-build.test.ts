@@ -189,12 +189,14 @@ afterAll(async () => {
 });
 
 describe.skipIf(!HAS_DB)("the claim builds the chosen format, its entrants and its courts (start wizard T2)", () => {
-  it("every funnel sport × every format builds the stage graph its card counted, and the graph draws the seeded field", async () => {
-    // Every sport: a stage write is sport-specific (the sport's stage tables, the kinds a sport refuses), so is its Generate.
+  // Every sport × every format, one case per sport (review-whole I2: as one case the 55 claims ran 17-29s against the
+  // repo-wide 30s testTimeout, vitest.config.ts). Every sport: a stage write is sport-specific (the sport's stage tables,
+  // the kinds a sport refuses), so is its Generate. The counter is shared, and the last case asserts it, so a sport case
+  // that is skipped or returns early cannot pass the sweep as checked.
+  let sweepChecked = 0;
+  it.each(FUNNEL_SPORTS)("$key × every format builds the stage graph its card counted, and the graph draws the seeded field", async (sport) => {
     const n = 12;
-    let checked = 0;
-    const pairs = FUNNEL_SPORTS.flatMap((sport) => ALL_FORMATS.map((format) => [sport, format] as const));
-    for (const [sport, format] of pairs) {
+    for (const format of ALL_FORMATS) {
       const label = `${sport.key} ${format}`;
       const c = await claim({ sport: sport.name, entrants: n, format });
       const stored = await stagesOf(c.divisionId);
@@ -229,9 +231,12 @@ describe.skipIf(!HAS_DB)("the claim builds the chosen format, its entrants and i
         select home_entrant_id as home, away_entrant_id as away from fixtures where stage_id = ${stored[0]!.id}`;
       const drawn = new Set(lines.flatMap((f) => [f.home, f.away]).filter((x): x is string => !!x));
       expect([...drawn].sort(), `${label}: every seeded entrant is drawn`).toEqual(entrants.map((e) => e.id).sort());
-      checked++;
+      sweepChecked++;
     }
-    expect(checked, "anti-vacuity: every funnel sport × every funnel format was claimed").toBe(FUNNEL_SPORTS.length * ALL_FORMATS.length);
+  });
+  it("anti-vacuity: the sweep above claimed every funnel sport × every funnel format", () => {
+    expect(FUNNEL_SPORTS.length * ALL_FORMATS.length, "premise: the sweep has pairs to claim").toBeGreaterThan(0);
+    expect(sweepChecked, "every pair was claimed and checked").toBe(FUNNEL_SPORTS.length * ALL_FORMATS.length);
   });
 
   it("entrants: n seeded name-only rows of the sport's default kind, every funnel sport", async () => {
