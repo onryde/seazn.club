@@ -21,10 +21,11 @@ import { isLevelTable, type StandingsRow } from "@seazn/engine/competition";
 import { forEachSportAsync } from "@seazn/engine/testkit";
 
 import { POST as postEvent } from "@/app/api/v1/fixtures/[id]/events/route";
+import { GET as getState } from "@/app/api/v1/fixtures/[id]/state/route";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import offerJson from "@/lib/quick-match-offer.generated.json";
-import { QUICK_MATCH_ERRORS } from "@/lib/quick-match-constants";
+import { QUICK_MATCH_ERRORS, QUICK_MATCH_SYSTEM_ORG_ID } from "@/lib/quick-match-constants";
 import { MUTATION_LIMIT, __setRateLimitCounterForTests } from "@/lib/rate-limit";
 import type { AppendEventRequest, CreateQuickMatch } from "@/server/api-v1/schemas";
 import { foldFixture } from "@/server/engine-db/fold";
@@ -33,7 +34,7 @@ import { addQuickMatchDecider } from "../quick-match-add";
 import { systemAuth, type CreatedQuickMatch } from "../quick-match-create";
 import { hardDeleteQuickMatchCompetition } from "../quick-match-delete";
 import { readQuickMatchHome, resolveQuickMatchToken, type QuickMatchHome, type QuickMatchRow } from "../quick-match-home";
-import { putBackQuickMatchFixture, skipQuickMatchFixture } from "../quick-match-skip";
+import { putBackQuickMatchFixture, skipQuickMatchFixture, withQuickMatchFinished } from "../quick-match-skip";
 import { listQuickMatchSports } from "../quick-match-sports";
 import { hashVisitorKey, mintVisitorKey } from "../quick-match-tokens";
 import { scoreEvent } from "../scoring";
@@ -520,4 +521,87 @@ describe.skipIf(!HAS_DB)("skip and put back in every offered sport (P14, Review 
     expect(checked, "zero checked is a failure").toBeGreaterThan(0);
     expect(checked, "every offered sport, once").toBe(OFFERED_SPORT_KEYS.length);
   }, SWEEP_TIMEOUT_MS);
+});
+
+// FR4 m2 (whole-branch review m2, controller PO rec 2026-11-13): a guest's pad on a Not played match reads `/state` on a
+// clock to see a Put back (FR3). Once the league is finished no Put back can come, so `/state` says so
+// (`quick_match_finished`, the home's own "finished": `isQuickMatchFinished` over `playedOf`), and the pad stops reading.
+// The key rides on a quick match's Not played match ONLY: a scheduled or live one, and an organiser's match whatever its
+// status, keep the body (and so the ETag) they always had. Expected values come from the counts the rows hold (a league of
+// 3 is 3 matches; finished when every one is played or Not played), never from the helper's own answer.
+describe.skipIf(!HAS_DB)("FR4 m2: /state tells a Not played pad whether its league has finished", () => {
+  /** `/state` through a guest's pad link, exactly as the pad reads it: the body and its ETag. */
+  async function readState(fixtureId: string, secret: string): Promise<{ body: Record<string, unknown>; etag: string | null }> {
+    const res = await getState(
+      new Request(`http://test.local/api/v1/fixtures/${fixtureId}/state`, { headers: { authorization: `Bearer ${secret}` } }),
+      { params: Promise.resolve({ id: fixtureId }) },
+    );
+    expect(res.status, await res.clone().text()).toBe(200);
+    const { data } = (await res.json()) as { data: Record<string, unknown> };
+    expect(data.fixture_id, "premise: the body is this match's").toBe(fixtureId);
+    return { body: data, etag: res.headers.get("etag") };
+  }
+
+  it("absent until the match is Not played; false while a match is open; true once every match is played or Not played; false again after Add a match", async () => {
+    const { out, row } = await make();
+    const fixtures = await fixturesOf(out.competitionId);
+    expect(fixtures, "premise: a round robin of 3 is 3·2/2 matches").toHaveLength(3);
+    const [m1, m2, m3] = fixtures;
+    // Links minted while each match can still be scored (a Not played match mints none, T1 review G1): a pad left open.
+    const links = new Map<string, string>();
+    for (const f of fixtures) links.set(f.id, (await ensureGuestDeviceLink(row, f.id)).secret);
+    const keyOf = async (f: Fx) => {
+      const { body } = await readState(f.id, links.get(f.id)!);
+      return "quick_match_finished" in body ? body.quick_match_finished : "absent";
+    };
+
+    expect(await keyOf(m1!), "scheduled: the body it always had").toBe("absent");
+    expect(await skipQuickMatchFixture(row, m1!.id)).toEqual({ changed: true });
+    expect(await keyOf(m1!), "1 Not played, 2 open").toBe(false);
+    expect(await keyOf(m2!), "an open match beside it keeps its body").toBe("absent");
+
+    expect(await skipQuickMatchFixture(row, m2!.id)).toEqual({ changed: true });
+    const open = await readState(m1!.id, links.get(m1!.id)!);
+    expect(open.body.quick_match_finished, "2 Not played, 1 open").toBe(false);
+
+    // The last open match is played to a result: every match is played or Not played.
+    const decided = await playToDecided(systemAuth(), m3!.id);
+    expect(decided.kind, "premise: m3 decided").toBe("decided");
+    const done = await readState(m1!.id, links.get(m1!.id)!);
+    expect(done.body.quick_match_finished, "finished").toBe(true);
+    expect(await keyOf(m2!), "every Not played match of it says so").toBe(true);
+    expect(await keyOf(m3!), "the decided match keeps its body").toBe("absent");
+    // The body moved with no event on m1, so its ETag moved too: a pad's revalidation can never answer 304 here.
+    expect(done.etag).not.toBe(open.etag);
+
+    // Review Focus 5: Add a match un-finishes it (finished is derived on every read), and the pad is told.
+    await addQuickMatchDecider(row, { home: m1!.home_entrant_id, away: m1!.away_entrant_id });
+    expect(await keyOf(m1!), "an added match is open").toBe(false);
+  });
+
+  it("a league finished by skips alone (nothing played) is finished too", async () => {
+    const { out, row } = await make(league({ sides: SIDES.slice(0, 2) }));
+    const [only] = await fixturesOf(out.competitionId);
+    const { secret } = await ensureGuestDeviceLink(row, only!.id);
+    expect(await skipQuickMatchFixture(row, only!.id)).toEqual({ changed: true });
+    expect((await readState(only!.id, secret)).body.quick_match_finished).toBe(true);
+  });
+
+  it("the gate: any other org's body, and a quick match's body in any other status, is returned as it was (the same object, no key)", async () => {
+    const organiser = { fixture_id: randomUUID(), status: "cancelled", last_seq: 0, summary: null, state: null, outcome: null };
+    // An organiser's cancelled match: the body untouched (no read is made for it: the fixture id names no row).
+    expect(await withQuickMatchFinished(randomUUID(), organiser)).toBe(organiser);
+    let checked = 0;
+    for (const status of ["scheduled", "in_play", "decided", "finalized", "abandoned"]) {
+      const body = { ...organiser, status };
+      expect(await withQuickMatchFinished(QUICK_MATCH_SYSTEM_ORG_ID, body), status).toBe(body);
+      checked++;
+    }
+    expect(checked, "anti-vacuity").toBe(5);
+    // The positive pair: the system org's cancelled body is a new object, with the key (a gone fixture holds no
+    // division, so no match: not finished, the empty case first).
+    const gone = await withQuickMatchFinished(QUICK_MATCH_SYSTEM_ORG_ID, organiser);
+    expect(gone).not.toBe(organiser);
+    expect(gone).toEqual({ ...organiser, quick_match_finished: false });
+  });
 });

@@ -35,7 +35,8 @@ export interface SkipCopy {
   /** The sheet's body: `quickMatch.skip.bodyLast` when skipping this match finishes the league (it then cannot be put back),
    *  `quickMatch.skip.body` otherwise. */
   body: string;
-  /** A live match's score that will not count ("8–5 is already scored…"); null for a match with nothing scored. */
+  /** A live match's line: its score that will not count ("8–5 is already scored…") once a score stands, else that it has
+   *  started with nothing scored (FR4 m1: a match only Started reads "0 — 0"); null for a match not in play. */
   partial: string | null;
 }
 
@@ -72,7 +73,6 @@ export type RowMenuItem = { kind: "score" } | { kind: "skip"; copy: SkipCopy } |
  *  name says which match), and what to offer, in order. Never empty. */
 export interface RowMenuRequest {
   fixtureId: string;
-  n: number;
   home: string;
   away: string;
   items: RowMenuItem[];
@@ -193,7 +193,7 @@ export function QuickMatchRow({
   const items = rowMenuItems(m);
   const menu =
     rowMenu && items.length > 0
-      ? rowMenu({ fixtureId: m.id, n: m.n, home: m.home.label, away: m.away.label, items })
+      ? rowMenu({ fixtureId: m.id, home: m.home.label, away: m.away.label, items })
       : null;
   return (
     <li

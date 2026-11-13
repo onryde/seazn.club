@@ -38,7 +38,7 @@ import {
 import { roundRoleFor } from "@/lib/round-role-label";
 import { routes } from "@/lib/routes";
 import { compactScore } from "@/lib/match-day/view";
-import { scoreLineOf, type LevelWords } from "@/lib/score/levels";
+import { scoreLineOf, type LevelWords, type ScoreLine } from "@/lib/score/levels";
 import { setBreakdown } from "@/lib/public-site";
 import { isQuickMatchFinished } from "@/lib/quick-match-finished";
 import type { QuickMatchFixture, QuickMatchHome, QuickMatchSide } from "@/server/usecases/quick-match-home";
@@ -204,6 +204,25 @@ function scoreText(f: QuickMatchFixture, sportKey: string, levels: LevelWords): 
   return line === null ? null : compactScore(line, levels);
 }
 
+/**
+ * Whether a live match has anything but noughts on the board (FR4 m1, whole-branch review m1): a match that was only
+ * Started is live at "0 — 0" and has scored nothing, so the confirm sheet must not call that score "already scored". Read
+ * from the engine's own figures, never its headline (a period sport's carries its period, "0 — 0 · P1"; a board game's
+ * reads "vs" until it is decided): a set sport's sets, games and points as `scoreLineOf` splits them (an advantage call is
+ * a point), else any figure on a side's own line (`ScoreSummary.perSide[].line`: goals, games and the board in play, a
+ * shoot-out's tally). A summary with no per-side lines is not the engine's shape: its score is quoted as before, so the
+ * sheet warns rather than hides.
+ */
+function scoreStands(line: ScoreLine, summary: unknown): boolean {
+  if (line.kind === "sets") {
+    const { won, mid, live } = line.levels;
+    return [...won, ...(mid ?? [])].some((n) => Number(n) > 0) || (live?.sides.some((s) => s !== "0") ?? false);
+  }
+  const perSide = (summary as { perSide?: unknown }).perSide;
+  if (!Array.isArray(perSide)) return true;
+  return perSide.some((s) => /[1-9]/.test(String((s as { line?: unknown } | null)?.line ?? "")));
+}
+
 /** A knockout fixture's role in its bracket, and its place among its round's NON-BYE fixtures: what `fixtureLabel` and
  *  `winnerOfLabel` (the setup preview's own helper, controller ruling 2026-11-08) number a card and a feeder by. */
 function placeOf(f: QuickMatchFixture, all: readonly QuickMatchFixture[]) {
@@ -256,14 +275,22 @@ export function buildHomeView(home: QuickMatchHome, copy: QuickMatchCopy, fullTa
   // The confirm sheet's body (plan 4 D6): skipping a match now finishes the league exactly when every OTHER match is played
   // or Not played, the one finished predicate asked one Not played ahead; then the sheet says it cannot be put back.
   const skipFinishes = isQuickMatchFinished({ played: home.played, notPlayed: home.notPlayed + 1, total: home.total });
-  const skipCopyOf = (f: QuickMatchFixture, home_: SeatView, away: SeatView): SkipCopy => {
-    const live = f.phase === "live" ? scoreText(f, home.sport.key, copy.levels) : null;
-    return {
-      title: t("quickMatch.skip.title", { home: home_.label, away: away.label }),
-      body: t(skipFinishes ? "quickMatch.skip.bodyLast" : "quickMatch.skip.body"),
-      partial: live === null ? null : t("quickMatch.skip.partial", { score: live }),
-    };
+  /** The partial line (D6): a live match's score that will not count, quoted only once a score stands (`scoreStands`); a
+   *  live match with nothing scored yet says it has started (FR4 m1). Nothing for a match not in play, or one whose summary
+   *  this reader cannot split. */
+  const partialOf = (f: QuickMatchFixture): string | null => {
+    if (f.phase !== "live") return null;
+    const line = scoreLineOf(f.summary);
+    if (line === null) return null;
+    return scoreStands(line, f.summary)
+      ? t("quickMatch.skip.partial", { score: compactScore(line, copy.levels) })
+      : t("quickMatch.skip.started");
   };
+  const skipCopyOf = (f: QuickMatchFixture, home_: SeatView, away: SeatView): SkipCopy => ({
+    title: t("quickMatch.skip.title", { home: home_.label, away: away.label }),
+    body: t(skipFinishes ? "quickMatch.skip.bodyLast" : "quickMatch.skip.body"),
+    partial: partialOf(f),
+  });
   const matches: MatchView[] = home.fixtures
     .filter((f) => !f.isBye)
     .map((f) => {

@@ -68,6 +68,11 @@ export interface PadEventIn {
   recorded_by?: string | null;
 }
 
+/** `/state`'s body as this pad reads it: the console's `LiveState`, plus the key the server adds on a quick match's Not
+ *  played match only (FR4 m2, `withQuickMatchFinished`): whether its league has finished, so no Put back can come. Absent
+ *  on every other match, an organiser's above all. */
+type PadLiveState = LiveState & { quick_match_finished?: boolean };
+
 interface Props {
   token: string;
   deviceLinkId: string;
@@ -97,7 +102,7 @@ interface Props {
   sport: SportInfo;
   home: PadSideInfo | null;
   away: PadSideInfo | null;
-  initialState: LiveState;
+  initialState: PadLiveState;
   initialEvents: PadEventIn[];
   /** Everything `<ScorePad/>` needs beyond what this component already has,
    *  resolved server-side (`resolveScorePadBootstrap`,
@@ -159,7 +164,7 @@ export function DeviceScorePad({
   const msg = useMsg();
   // Design audit 1.5: formatting only (a refusal's list of reasons) — English outside a provider.
   const locale = useLocaleOrDefault();
-  const [live, setLive] = useState<LiveState>(initialState);
+  const [live, setLive] = useState<PadLiveState>(initialState);
   const [events, setEvents] = useState<PadEventIn[]>(initialEvents);
   const [error, setError] = useState<string | null>(null);
   /** The resolver's CODE for a dead link (`LINK_REVOKED`, …), never its
@@ -245,7 +250,7 @@ export function DeviceScorePad({
             signal: controller?.signal,
           });
         const [state, first] = await Promise.all([
-          authed<LiveState>(`/api/v1/fixtures/${fixture.id}/state`, { signal: controller?.signal }),
+          authed<PadLiveState>(`/api/v1/fixtures/${fixture.id}/state`, { signal: controller?.signal }),
           readLedger(),
         ]);
         let all = first;
@@ -327,9 +332,10 @@ export function DeviceScorePad({
   }, [resync]);
   const handlePadEvents = useCallback(() => void refresh(), [refresh]);
 
-  /** Quick match plan 4, FR3 (T5 finding 1): the Not played screen's own re-read — its clock's tick and "Check again".
-   *  `handlePadEvents`'s refresh (bounded, `padSyncing`, a dead link lands on the dead screen), ONE at a time: a tick or
-   *  a tap while a read is still out adds nothing, so a slow network cannot stack reads on the clock. */
+  /** Quick match plan 4, FR3 (T5 finding 1): the Not played screen's own re-read — its clock's tick, "Check again" and
+   *  (FR4 m4) the tab return. `handlePadEvents`'s refresh (bounded, `padSyncing`, a dead link lands on the dead screen),
+   *  ONE at a time: a tick, a tap or a return while a read is still out adds nothing, so a slow network cannot stack
+   *  reads on the clock. */
   const recheckNotPlayed = useCallback(() => {
     if (recheckInFlight.current) return;
     recheckInFlight.current = true;
@@ -499,18 +505,25 @@ export function DeviceScorePad({
   //
   // Identity: `resync` is keyed on `[authed, fixture.id]`, `authed` on
   // `[token]`, `refresh` on `[resync]`, `handlePadEvents` on `[refresh]` — all
-  // stable for the life of the link, so this subscribes once.
-  useTabReturn(handlePadEvents, !dead);
-
+  // stable for the life of the link, so this subscribes once (and once more each
+  // time a quick match's Not played screen comes or goes, below).
+  //
   // Quick match plan 4, FR3 (T5 finding 1, controller PO rec 2026-11-13): a guest's match marked Not played on the home.
   // Put back is the home's too, on any phone, and nothing tells this one — no event is written, so neither the stream
-  // nor a tap can see it. So while this screen shows Not played it reads the match again: on a tab return (above), on
+  // nor a tap can see it. So while this screen shows Not played it reads the match again: on a tab return, on
   // "Check again", and every `NOT_PLAYED_RECHECK_MS` while the tab is visible. The clock is this screen's alone (the live
   // pad's freshness stays the stream's and the tab return's, `useTabReturn`'s "not an interval"): an organiser's fixture,
   // a live screen, a dead link and a hidden tab arm none, and a read that finds the match put back ends it.
+  //
+  // FR4 m4: on that screen the tab return goes through `recheckNotPlayed` too, so a return while the clock's or Check
+  // again's read is out adds no second one. FR4 m2: once `/state` says the league has finished (`notPlayedFinal`), no Put
+  // back can come: the clock and the tab return stop, and the line drops its Put back hint. Check again stays, a tap and
+  // not a poll: an Add a match on the home un-finishes the league, and the read that sees it brings both back.
   const notPlayed = quickMatch && live.status === "cancelled";
+  const notPlayedFinal = notPlayed && live.quick_match_finished === true;
+  useTabReturn(notPlayed ? recheckNotPlayed : handlePadEvents, !dead && !notPlayedFinal);
   useEffect(() => {
-    if (!notPlayed || dead) return;
+    if (!notPlayed || notPlayedFinal || dead) return;
     // No DOM, no clock: the same guard as `useTabReturn`'s (an effect never runs on the server; node vitest has none).
     if (typeof document === "undefined") return;
     let timer: ReturnType<typeof setInterval> | null = null;
@@ -529,7 +542,7 @@ export function DeviceScorePad({
       disarm();
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [notPlayed, dead, recheckNotPlayed]);
+  }, [notPlayed, notPlayedFinal, dead, recheckNotPlayed]);
 
   // Owner ruling 17 (2026-09-06) — the SAME predicate fixture-console.tsx
   // shares (this file already imports plain types from there — `SportInfo`,
@@ -775,7 +788,8 @@ export function DeviceScorePad({
           role="status"
           className="rounded-md border border-slate-700 bg-slate-900 px-3 py-3 text-center text-sm text-slate-200"
         >
-          {msg(viewOnlyKey(shownViewOnly, quickMatch))}
+          {/* FR4 m2: a finished league's Not played match says only that: no Put back can come. */}
+          {msg(notPlayedFinal && shownViewOnly === "cancelled" ? "device.quickMatch.notPlayedFinal" : viewOnlyKey(shownViewOnly, quickMatch))}
         </p>
       )}
 

@@ -163,6 +163,8 @@ const UI_KEYS = [
   "quickMatch.skip.body",
   "quickMatch.skip.bodyLast",
   "quickMatch.skip.partial",
+  // FR4 m1: a live match with nothing scored yet (only Started) says so, and quotes no score.
+  "quickMatch.skip.started",
   "quickMatch.skip.confirm",
   "quickMatch.skip.keep",
   "quickMatch.flash.notSkippable",
@@ -171,6 +173,8 @@ const UI_KEYS = [
   "device.quickMatch.notPlayed",
   // FR3 (T5 finding 1): the guest pad's Not played screen reads the match again on tap.
   "device.quickMatch.checkAgain",
+  // FR4 m2: the same screen once the league has finished: no Put back can come, so no hint.
+  "device.quickMatch.notPlayedFinal",
 ] as const;
 
 /** Every `quickMatch.*` key of one file in one locale, sorted. */
@@ -368,6 +372,20 @@ describe("quick match guest copy: plurals", () => {
     expect(checked).toBe(LOCALES.length);
   });
 
+  it("FR4: the finished league's pad line and the started sheet line are their own words in every locale (counted)", () => {
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const ui = DICTS[locale].ui;
+      // Not the open league's line, which says how to put the match back: on a finished league that hint is false.
+      expect(ui["device.quickMatch.notPlayedFinal"], locale).not.toBe(ui["device.quickMatch.notPlayed"]);
+      // Not the partial line: a match only Started has no score to quote, so the line takes none.
+      expect(ui["quickMatch.skip.started"], locale).not.toBe(ui["quickMatch.skip.partial"]);
+      expect(placeholders(ui["quickMatch.skip.started"]!), locale).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(LOCALES.length);
+  });
+
   // The word for "match" in each locale, singular and plural: the translation's own grammar, typed here as the rule,
   // never read back from the dictionary. A `.one`/`.other` pair written the wrong way round still has both keys and
   // still differs, so only the noun that comes back for 1 and for 2 can witness it.
@@ -512,6 +530,10 @@ describe("quick match guest copy: plurals", () => {
     expect(interpolate(ui["quickMatch.skip.partial"]!, { score: "8–5" })).toBe(
       "8–5 is already scored. It will not count in the table; it stays in the match history.",
     );
+    // FR4 m1: a match only Started has nothing to quote.
+    expect(ui["quickMatch.skip.started"]).toBe("This match has started, but nothing is scored yet.");
+    // FR4 m2: the pad's Not played line once the league has finished.
+    expect(ui["device.quickMatch.notPlayedFinal"]).toBe("This match was not played.");
     // The refusals, scoped to what was refused (T1 review I1: Edit result and Add a match still change a finished league;
     // G2: a knockout match is not skippable either, and has no result to point at).
     expect(ui["quickMatch.flash.leagueFinished"]).toBe("The league has finished, so a Not played match can't be put back.");

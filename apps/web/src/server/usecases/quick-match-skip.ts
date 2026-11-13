@@ -26,6 +26,10 @@ import "server-only";
 //   4. Skip: already Not played → `{changed:false}` (D3, a second tap). Otherwise the guarded update; nothing moved (a
 //      result, or any other status) → NOT_SKIPPABLE. Put back: not Not played → `{changed:false}` (D3). The league finished
 //      → LEAGUE_FINISHED. Otherwise the fold's status.
+//
+// The pad's half (FR4 m2, `withQuickMatchFinished`): `/state` tells a guest's pad on a Not played match whether its league
+// has finished, by the same read Put back refuses on (`leagueFinishedFor`), so the pad stops waiting for a Put back that
+// cannot come.
 import { withTenant, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { QUICK_MATCH_ERRORS, QUICK_MATCH_SYSTEM_ORG_ID } from "@/lib/quick-match-constants";
@@ -57,6 +61,17 @@ async function preflight(row: QuickMatchRow, fixtureId: string): Promise<void> {
   } catch {
     throw notFound();
   }
+}
+
+/** The home's own "finished" (`isQuickMatchFinished` over `playedOf`, the division's fixtures as `listDivisionFixtures`
+ *  scopes them) for the division holding `fixtureId`, in the caller's transaction. Put back's refusal and the pad's Not
+ *  played screen (`withQuickMatchFinished`) ask it the same way. A fixture that is gone holds no division: no match, so
+ *  not finished (the predicate's empty case). */
+async function leagueFinishedFor(tx: Tx, fixtureId: string): Promise<boolean> {
+  const matches = await tx<MatchLineRow[]>`
+    select status, outcome, home_entrant_id, away_entrant_id, home_slot_label, away_slot_label, ext_key
+    from fixtures where division_id = (select division_id from fixtures where id = ${fixtureId})`;
+  return isQuickMatchFinished(playedOf(matches));
 }
 
 /** Step 3, inside the caller's transaction: the lock, then the match as THIS quick match holds it. */
@@ -106,12 +121,8 @@ export async function putBackQuickMatchFixture(
   return withTenant(SYSTEM_ORG, async (tx) => {
     const f = await lockedMatch(tx, row, fixtureId);
     if (f.status !== "cancelled") return { changed: false, status: f.status };
-    // The home's own count (`playedOf`, over the division's fixtures as `listDivisionFixtures` scopes them), in this
-    // transaction: the league the guest saw finished is the one refused.
-    const matches = await tx<MatchLineRow[]>`
-      select status, outcome, home_entrant_id, away_entrant_id, home_slot_label, away_slot_label, ext_key
-      from fixtures where division_id = ${f.division_id}`;
-    if (isQuickMatchFinished(playedOf(matches))) {
+    // The home's own count, in this transaction: the league the guest saw finished is the one refused.
+    if (await leagueFinishedFor(tx, fixtureId)) {
       throw new HttpError(422, "the league has finished, so a Not played match can't be put back", QUICK_MATCH_ERRORS.LEAGUE_FINISHED);
     }
     const folded = await foldFixture(tx, fixtureId);
@@ -128,4 +139,21 @@ export async function putBackQuickMatchFixture(
     if (moved.length !== 1) throw new Error(`put back: fixture ${fixtureId} left Not played while the lock was held`);
     return { changed: true, status };
   });
+}
+
+/**
+ * FR4 m2 (whole-branch review m2, controller PO rec 2026-11-13): what `/state` adds for a guest's pad on a Not played match,
+ * `quick_match_finished`: whether its league has finished. That pad reads the match again on a clock to see a Put back
+ * (FR3); once the league is finished none can come (§6 hides Put back, and a stale one is refused LEAGUE_FINISHED), so the
+ * pad stops reading and its line drops the Put back hint. Only a quick match's (the system org's) Not played match carries
+ * the key: every other body, an organiser's above all, is handed back as it came (the same object, no query), so its shape
+ * and its ETag do not move. Called by the `/state` route and by the scan page for the pad's first paint.
+ */
+export async function withQuickMatchFinished<S extends { fixture_id: string; status: string }>(
+  orgId: string,
+  state: S,
+): Promise<S | (S & { quick_match_finished: boolean })> {
+  if (orgId !== SYSTEM_ORG || state.status !== "cancelled") return state;
+  const finished = await withTenant(SYSTEM_ORG, (tx) => leagueFinishedFor(tx, state.fixture_id));
+  return { ...state, quick_match_finished: finished };
 }

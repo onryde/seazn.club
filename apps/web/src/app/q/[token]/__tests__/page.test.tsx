@@ -45,7 +45,17 @@ import * as standingsModule from "@/components/quick-match/standings";
 import * as drawModule from "@/components/quick-match/draw";
 import * as listModule from "@/components/quick-match/match-list";
 import * as saveFormModule from "@/components/quick-match/save-form";
-import { homeFlash, QuickMatchHomeShapeError, QuickMatchHomeView, type AddMatchView, type QuickMatchCopy } from "@/components/quick-match/home";
+import {
+  buildHomeView,
+  homeFlash,
+  QuickMatchHomeShapeError,
+  QuickMatchHomeView,
+  type AddMatchView,
+  type QuickMatchCopy,
+} from "@/components/quick-match/home";
+import { foldMatchWithStoppage, isCoreEventType, mulberry32, outcomeOf } from "@seazn/engine/core";
+import { declaredCfgs, makeEnvelope } from "@seazn/engine/testkit";
+import offerJson from "@/lib/quick-match-offer.generated.json";
 import type { RowMenuRequest } from "@/components/quick-match/match-list";
 import { QuickMatchRowMenu } from "@/components/quick-match/row-menu";
 import { QuickMatchShare } from "@/components/quick-match/share";
@@ -474,11 +484,13 @@ describe("the empty case: a quick match with no match left", () => {
     const { slots } = await renderView({ ...empty, fixtures, next: fixtures[4]!, played: 3, notPlayed: 1, total: 6 });
     const menus = slots.rowMenu.mock.calls.map(([r]) => `${r.fixtureId}:${r.items.map((i) => i.kind).join("+")}`).sort();
     expect(menus).toEqual(["f-live:score+skip", "f-off:edit", "f-open:edit", "f-ready:score+skip", "f-skipped:putBack"]);
-    // Each request names its match as the row does (the ⋯'s accessible name) and carries D12's number.
+    // Each request names its match as the row does (the ⋯'s accessible name), and carries nothing the page does not read
+    // (FR4 m3: D12's number rode along unread after the ⋯ label moved to the sides; an inert field is a seam nobody tests).
     for (const [r] of slots.rowMenu.mock.calls) {
       expect([r.home, r.away], r.fixtureId).toEqual(["Side 1", "Side 2"]);
-      expect(r.n, r.fixtureId).toBe(fixtures.findIndex((f) => f.id === r.fixtureId) + 1);
+      expect(Object.keys(r).sort(), r.fixtureId).toEqual(["away", "fixtureId", "home", "items"]);
     }
+    expect(slots.rowMenu.mock.calls.length, "anti-vacuity: requests checked").toBe(5);
     // Score is the hero's and the playable rows' (never a settled row's: "Edit result" is in the menu now).
     const asked = slots.score.mock.calls.map(([f, place]) => `${f.id}:${place}`).sort();
     expect(asked).toEqual(["f-live:hero", "f-live:row", "f-ready:row"]);
@@ -634,7 +646,11 @@ describe("the empty case: a quick match with no match left", () => {
     });
     const settled = (id: string, n: number) => fx(id, n, { status: "decided", winnerEntrantId: "e-1", phase: "settled" });
     const skipped = (id: string, n: number) => fx(id, n, { status: "cancelled", phase: "notPlayed" });
-    const live = (id: string, n: number, headline: string) => fx(id, n, { status: "in_play", phase: "live", summary: { headline } });
+    /** A live match at `summary`, as `match_states` stores it. */
+    const liveAt = (id: string, n: number, summary: unknown) => fx(id, n, { status: "in_play", phase: "live", summary });
+    /** A live plain-score match: the engine's ScoreSummary shape, its headline and each side's own line ("8–5": 8, 5). */
+    const live = (id: string, n: number, headline: string) =>
+      liveAt(id, n, { headline, perSide: headline.split("–").map((line, i) => ({ entrantId: `e-${i + 1}`, line })) });
     /** The table after side 1 won: a leader at rank 1 (not level), side 2 below it. */
     const leaderTable = {
       ...empty.standings!,
@@ -818,6 +834,108 @@ describe("the empty case: a quick match with no match left", () => {
       const c = await copyOf(homeWith([settled("f-1", 1), live("f-2", 2, "8–5")], { played: 1, notPlayed: 0, finished: false }), "f-2");
       expect(c.partial).toBe("8–5 is already scored. It will not count in the table; it stays in the match history.");
       expect(c.body).toBe(en["quickMatch.skip.bodyLast"]);
+    });
+
+    // FR4 m1 (whole-branch review m1, controller PO rec 2026-11-13): a match that was only Started is live with a "0 — 0"
+    // summary, and the sheet used to say "0 — 0 is already scored". The engine is the oracle here, never the code under
+    // test: the summary a bare Start folds to, and then each sport event the module's OWN generator draws after it
+    // (accepted strictly as the next event and leaving the match undecided, the testkit's `onePlayEvent` rules). A score
+    // stands exactly when that event moved the engine's board off the Start's: a side's line (goals, sets, games, the board
+    // in play) or the set table (a rally's points, a tennis game or point). A period, a clock, a card, a shot, a substitution
+    // or a sanction moves neither, and the match has "started, nothing scored yet". Every offered sport and variant (the
+    // guest picks a variant), with no lineup, as a quick match plays.
+    describe("(h2) the partial line quotes a score only once one stands (FR4 m1)", () => {
+      const SEEDS = 64;
+      const NO_LINEUP = { home: { entrantId: "e-1", slots: [] }, away: { entrantId: "e-2", slots: [] } };
+      const modules = new Map(builtinModules.map((m) => [m.key, m]));
+      /** The engine's board: each side's line and the set table (with a tennis game's points), as one comparable string. */
+      const boardOf = (summary: { perSide: { line: string }[]; detail?: unknown }) => {
+        const detail = (summary.detail ?? {}) as { sets?: unknown; game?: unknown };
+        return JSON.stringify([summary.perSide.map((s) => s.line), detail.sets ?? null, detail.game ?? null]);
+      };
+      const sheetOf = (summary: unknown) => {
+        const view = buildHomeView(homeWith([liveAt("f-1", 1, summary), fx("f-2", 2)], { played: 0, notPlayed: 0, finished: false }), enCopy());
+        const row = view.matches.find((m) => m.id === "f-1")!;
+        if (!row.skipCopy) throw new Error("premise: a live league match offers Not played");
+        return { partial: row.skipCopy.partial, shown: row.score };
+      };
+      const startedLine = "This match has started, but nothing is scored yet.";
+
+      it("the words: a match only Started says it has started, and quotes no score", () => {
+        expect(en["quickMatch.skip.started"]).toBe(startedLine);
+        expect(en["quickMatch.skip.started"]).not.toContain("{score}");
+      });
+
+      it("every offered sport and variant: Start only → started; each event the engine draws after it → quoted iff it moved the board (counted)", () => {
+        let startOnly = 0;
+        let quoted = 0;
+        let unquoted = 0;
+        const faults: string[] = [];
+        for (const { sport_key, variant_key } of offerJson.offered) {
+          const m = modules.get(sport_key);
+          if (!m) throw new Error(`premise: the offer names ${sport_key}, which the engine does not register`);
+          const cfg = declaredCfgs(m).find((c) => c.name === variant_key)?.cfg;
+          if (cfg === undefined) throw new Error(`premise: ${sport_key} declares no variant ${variant_key}`);
+          const start = makeEnvelope(1, { type: "core.start", payload: {} });
+          const atStart = foldMatchWithStoppage(m, cfg, NO_LINEUP, [start]).state;
+          const startSummary = m.summary(atStart);
+          const at = `${sport_key}/${variant_key}`;
+          const startSheet = sheetOf(startSummary);
+          if (startSheet.partial !== startedLine) faults.push(`${at} Start only (${startSheet.shown}): ${startSheet.partial}`);
+          startOnly++;
+          const seen = new Set<string>();
+          for (let seed = 1; seed <= SEEDS; seed++) {
+            const drawn = m.arbitraryEvent?.(atStart, mulberry32(seed));
+            if (!drawn || isCoreEventType(drawn.type) || seen.has(drawn.type)) continue;
+            let folded: ReturnType<typeof foldMatchWithStoppage>;
+            try {
+              folded = foldMatchWithStoppage(m, cfg, NO_LINEUP, [start, makeEnvelope(2, drawn)], { strictFromSeq: 2 });
+            } catch {
+              continue;
+            }
+            if (outcomeOf(m, folded) !== null) continue;
+            seen.add(drawn.type);
+            const summary = m.summary(folded.state);
+            const sheet = sheetOf(summary);
+            if (boardOf(summary) !== boardOf(startSummary)) {
+              const want = en_("quickMatch.skip.partial", { score: sheet.shown! });
+              if (sheet.shown === null || sheet.partial !== want) faults.push(`${at} ${drawn.type} moved the board: ${sheet.partial}`);
+              quoted++;
+            } else {
+              if (sheet.partial !== startedLine) faults.push(`${at} ${drawn.type} left the board (${sheet.shown}): ${sheet.partial}`);
+              unquoted++;
+            }
+          }
+        }
+        console.info(`FR4 m1 partial sweep: ${startOnly} Start-only, ${quoted} scored, ${unquoted} unscored events`);
+        expect(faults).toEqual([]);
+        expect(startOnly, "anti-vacuity: every offered sport and variant").toBe(offerJson.offered.length);
+        expect(startOnly).toBeGreaterThan(0);
+        expect(quoted, "anti-vacuity: events that score").toBeGreaterThan(0);
+        expect(unquoted, "anti-vacuity: sport events that score nothing (a period, a card, a sanction)").toBeGreaterThan(0);
+      });
+
+      it("a summary that is not the engine's (no per-side lines) keeps its score quoted: the sheet warns rather than hides", () => {
+        expect(sheetOf({ headline: "0 — 0" }).partial).toBe(en_("quickMatch.skip.partial", { score: "0 — 0" }));
+        // The positive pair: the engine's own shape at nought says it has started.
+        expect(sheetOf({ headline: "0 — 0", perSide: [{ entrantId: "e-1", line: "0" }, { entrantId: "e-2", line: "0" }] }).partial).toBe(
+          startedLine,
+        );
+      });
+
+      // One sport: the render path is sport-blind past `buildHomeView`, which the sweep above covers for every sport.
+      it("through the page's own ⋯ request: a just-Started badminton match's sheet has the started line, never 'already scored'", async () => {
+        const m = modules.get("badminton")!;
+        const cfg = declaredCfgs(m)[0]!.cfg;
+        const start = makeEnvelope(1, { type: "core.start", payload: {} });
+        const summary = m.summary(foldMatchWithStoppage(m, cfg, NO_LINEUP, [start]).state);
+        const { slots } = await renderView(homeWith([liveAt("f-1", 1, summary), fx("f-2", 2)], { played: 0, notPlayed: 0, finished: false }));
+        const item = menuOf(slots.rowMenu.mock.calls, "f-1")?.items.find((i) => i.kind === "skip");
+        if (!item || item.kind !== "skip") throw new Error("premise: f-1 offers Not played");
+        expect(item.copy.partial).toBe(startedLine);
+        expect(item.copy.partial).not.toContain("already scored");
+        expect(item.copy.body, "the body is unchanged").toBe(en["quickMatch.skip.body"]);
+      });
     });
 
     it("(i) the home's flash for the skip routes' refusals: a match with a result, a finished league, a match marked Not played", () => {
