@@ -30,11 +30,11 @@ import {
 } from "@/lib/quick-match-constants";
 import { roundRoleFor } from "@/lib/round-role-label";
 import { routes } from "@/lib/routes";
-import { fmtPublicDate, UTC } from "@/lib/format";
 import { compactScore } from "@/lib/match-day/view";
 import { scoreLineOf, type LevelWords } from "@/lib/score/levels";
 import { setBreakdown } from "@/lib/public-site";
 import type { QuickMatchFixture, QuickMatchHome, QuickMatchSide } from "@/server/usecases/quick-match-home";
+import { QuickMatchDeletionLine } from "./deletion-line";
 import { QuickMatchStandings, type FullTableData, type StandingsView } from "./standings";
 import { QuickMatchDraw, type DrawCard, type DrawRound, type DrawSeat } from "./draw";
 import { QuickMatchList, type MatchView, type ScoreSlot, type SeatView } from "./match-list";
@@ -446,22 +446,20 @@ export function QuickMatchHomeView({
   const { t } = copy;
   const v = buildHomeView(home, copy, fullTable);
   const save = saveStateFor(home.row.savedByUserId, viewerId);
-  // Owner 2026-11-12: under Save, while nobody holds the match, the DAY it is deleted, from the row's own expiry. A calendar
-  // day in UTC: a quick match has no venue to name a zone, and the sweep deletes on the instant, not the viewer's midnight.
-  // No expiry, no line: a match whose saver's account was deleted is offered Save again (`saved_by_user_id` is ON DELETE SET
-  // NULL) but `expires_at` stays null, and nothing will delete it.
-  const deletedOn =
-    home.row.expiresAt === null
-      ? null
-      : fmtPublicDate(copy.locale, UTC, home.row.expiresAt, { day: "numeric", month: "long", year: "numeric" });
+  // Owner 2026-11-12: under Save, while nobody holds the match, the DAY it is deleted, from the row's own expiry, named in
+  // the guest's own zone and never late (`deletion-line.tsx`, review I1). No expiry, no line: a match whose saver's account
+  // was deleted is offered Save again (`saved_by_user_id` is ON DELETE SET NULL) but `expires_at` stays null, and nothing
+  // will delete it.
   const saveNode =
     save === "offer" && slots.save ? (
       <div className="flex min-w-0 flex-col gap-1.5">
         {slots.save}
-        {deletedOn ? (
-          <p data-testid="qm-not-saved" className="text-center text-[13px] leading-snug text-[#b7aede] [overflow-wrap:anywhere]">
-            {t("quickMatch.home.notSaved", { date: deletedOn })}
-          </p>
+        {home.row.expiresAt !== null ? (
+          <QuickMatchDeletionLine
+            expiresAt={home.row.expiresAt.toISOString()}
+            lang={copy.locale}
+            line={t("quickMatch.home.notSaved")}
+          />
         ) : null}
       </div>
     ) : save === "saved" ? (

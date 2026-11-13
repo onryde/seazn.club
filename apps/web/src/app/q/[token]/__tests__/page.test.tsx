@@ -58,6 +58,7 @@ import { QUICK_MATCH_SYSTEM_ORG_ID } from "@/lib/quick-match-constants";
 import { stageTableRulesDocs } from "@/server/engine-db/table-rules";
 import { StandingsTable } from "@/components/public-site/standings-table";
 import type { FullTableData } from "@/components/quick-match/standings";
+import { QuickMatchDeletionLine } from "@/components/quick-match/deletion-line";
 import QuickMatchHomePage, { generateMetadata } from "../page";
 import { quickMatchFullTable } from "../full-table";
 
@@ -151,6 +152,15 @@ function textOf(node: unknown): string {
   if (typeof node === "string" || typeof node === "number") return String(node);
   if (isValidElement(node)) return textOf((node.props as { children?: unknown }).children);
   return "";
+}
+/** The "Not saved — deleted on {date}" island (a client boundary: the guest's own zone, review I1): its element in the
+ *  expanded tree, and the line its server render ships (the never-late fallback day). Null when the tree has none. */
+function deletionLineOf(tree: ReactNode): { el: ReactElement<Record<string, unknown>>; served: string } | null {
+  const hits = all(tree, (el) => el.type === QuickMatchDeletionLine);
+  expect(hits.length, "at most one deletion line").toBeLessThanOrEqual(1);
+  if (hits.length === 0) return null;
+  const served = renderToStaticMarkup(hits[0]!).replace(/<[^>]+>/g, "").replace(/&#x27;/g, "'").replace(/&amp;/g, "&");
+  return { el: hits[0]!, served: served.replace(/\s+/g, " ").trim() };
 }
 /** Whitespace folded, so a sentence split over elements reads as one. */
 const words = (node: unknown) => textOf(node).replace(/\s+/g, " ").trim();
@@ -377,13 +387,25 @@ describe("the empty case: a quick match with no match left", () => {
     const frCopy: QuickMatchCopy = { ...enCopy(), locale: "fr", t: (k, v) => tRuntime(fr, k, v) };
 
     const unsaved = await view({ expiresAt: at, savedByUserId: null }, null);
-    expect(words(oneByTestId(unsaved, "qm-not-saved"))).toBe("Not saved — deleted on 19 November 2026");
+    // Review I1: the day is the guest's own (a client island names it in the browser's zone, `deletion-line.test.tsx`). The
+    // server ships the island the row's instant, the page's language and the raw line; its own HTML names the never-late
+    // day, the UTC day of expires_at − 14h: 10:00Z on the 19th − 14h = 20:00Z on the 18th.
+    const line = deletionLineOf(unsaved);
+    expect(line, "an unsaved match with an expiry shows the line").not.toBeNull();
+    expect(line!.el.props).toEqual({ expiresAt: "2026-11-19T10:00:00.000Z", lang: "en", line: en["quickMatch.home.notSaved"] });
+    expect(line!.served).toBe("Not saved — deleted on 18 November 2026");
     // Under Save: in the actions row, after the Save form in document order.
-    const order = all(oneByTestId(unsaved, "qm-actions"), (el) => ["slot-save", "qm-not-saved"].includes(String(el.props["data-testid"])));
-    expect(order.map((el) => el.props["data-testid"])).toEqual(["slot-save", "qm-not-saved"]);
-    expect(words(oneByTestId(await view({ expiresAt: at, savedByUserId: null }, null, frCopy), "qm-not-saved"))).toBe(
-      "Non enregistré — sera supprimé le 19 novembre 2026",
+    const order = all(
+      oneByTestId(unsaved, "qm-actions"),
+      (el) => el.props["data-testid"] === "slot-save" || el.type === QuickMatchDeletionLine,
     );
+    expect(order.map((el) => (el.type === QuickMatchDeletionLine ? "deletion-line" : el.props["data-testid"]))).toEqual([
+      "slot-save",
+      "deletion-line",
+    ]);
+    const frLine = deletionLineOf(await view({ expiresAt: at, savedByUserId: null }, null, frCopy));
+    expect(frLine!.el.props).toEqual({ expiresAt: "2026-11-19T10:00:00.000Z", lang: "fr", line: fr["quickMatch.home.notSaved"] });
+    expect(frLine!.served).toBe("Non enregistré — sera supprimé le 18 novembre 2026");
 
     // No line: the saver looking (Saved), anyone else looking at a saved match (no Save at all), and a match nobody holds
     // that has no expiry (its saver's account was deleted: `saved_by_user_id` is ON DELETE SET NULL and `expires_at` stays
@@ -394,7 +416,7 @@ describe("the empty case: a quick match with no match left", () => {
       ["nobody holds it, no expiry", await view({ expiresAt: null, savedByUserId: null }, null), true],
     ];
     for (const [who, tree, offersSave] of none) {
-      expect(byTestId(tree, "qm-not-saved"), who).toHaveLength(0);
+      expect(deletionLineOf(tree), who).toBeNull();
       expect(byTestId(tree, "slot-save"), `${who}: Save offered`).toHaveLength(offersSave ? 1 : 0);
     }
     expect(none).toHaveLength(3);
@@ -627,13 +649,15 @@ describe.skipIf(!HAS_DB)("the quick match home page", () => {
     expect([save.type, save.props.method, save.props.action]).toEqual(["form", "post", `/q/${out.token}/save/confirm`]);
     expect(words(oneByTestId(tree, "qm-save"))).toBe(en_("quickMatch.home.save"));
     expect(byTestId(tree, "qm-saved")).toHaveLength(0);
-    // Owner 2026-11-12: under Save, the day this match is deleted: the row's own expiry, as an en-GB calendar day in UTC.
+    // Owner 2026-11-12, review I1: under Save, the day this match is deleted. The island carries the row's own expiry; the
+    // server's HTML names the never-late day, the UTC calendar day of expires_at − 14h, in en-GB words.
     const [expiry] = await sql<{ expires_at: Date | null }[]>`select expires_at from quick_matches where id = ${out.id}`;
     expect(expiry?.expires_at, "premise: an unsaved match has an expiry").toBeInstanceOf(Date);
-    const day = new Intl.DateTimeFormat("en-GB", { timeZone: "UTC", day: "numeric", month: "long", year: "numeric" }).format(
-      expiry!.expires_at!,
-    );
-    expect(words(oneByTestId(tree, "qm-not-saved"))).toBe(`Not saved — deleted on ${day}`);
+    const early = new Date(expiry!.expires_at!.getTime() - 14 * 3_600_000);
+    const day = new Intl.DateTimeFormat("en-GB", { timeZone: "UTC", day: "numeric", month: "long", year: "numeric" }).format(early);
+    const line = deletionLineOf(tree);
+    expect(line?.el.props.expiresAt).toBe(expiry!.expires_at!.toISOString());
+    expect(line?.served).toBe(`Not saved — deleted on ${day}`);
     expect(byTestId(tree, "slot-score")).toHaveLength(0);
     expect(words(oneByTestId(tree, "qm-anyone"))).toBe(en_("quickMatch.home.anyoneCanScore"));
     expect(html).toContain(`<h2`);
