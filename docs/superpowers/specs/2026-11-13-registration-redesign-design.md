@@ -634,9 +634,9 @@ closeDivision(s, id): HubTabsState   // active falls back to "settings" if it wa
 ```
 
 - **Normalisation in `parseHubTabs`:**
-  - Ids not in `openable` are dropped. `openable` is the divisions with
-    registration settings in this competition when `canEdit` is true, and empty
-    when it is false.
+  - Ids not in `openable` are dropped. `openable` is every non-archived
+    division on the Settings tab (each row has "Open settings") when `canEdit`
+    is true, and empty when it is false.
   - Duplicates are dropped.
   - Only the last 2 ids are kept.
   - A `tab=division:X` whose X is not in `open` is appended, then the list is

@@ -95,7 +95,9 @@ export const routes = {
    *  open division tabs, least recently used first, written as one comma
    *  list (`open=<a>,<b>`; an empty list writes nothing). Both are read back
    *  by `parseHubTabs` (components/registration-hub-tabs-state.ts), which owns
-   *  every rule about them. */
+   *  every rule about them. An id the comma list cannot carry (empty, or
+   *  holding a comma) is refused, as `hubTabsQuery` refuses it: division ids
+   *  are uuids, so this "cannot happen", and is refused if it does. */
   competitionRegistration: (
     org: Slug,
     comp: Slug,
@@ -106,7 +108,13 @@ export const routes = {
     const params: string[] = [];
     if (tab) params.push(`tab=${tab}`);
     if (divisionId) params.push(`division_id=${divisionId}`);
-    if (open && open.length > 0) params.push(`open=${open.join(",")}`);
+    if (open && open.length > 0) {
+      const bad = open.find((id) => id === "" || id.includes(","));
+      if (bad !== undefined) {
+        throw new Error(`routes.competitionRegistration: the division id ${JSON.stringify(bad)} cannot ride in the URL's open list`);
+      }
+      params.push(`open=${open.join(",")}`);
+    }
     const base = `/o/${org}/c/${comp}/registration`;
     return params.length ? `${base}?${params.join("&")}` : base;
   },

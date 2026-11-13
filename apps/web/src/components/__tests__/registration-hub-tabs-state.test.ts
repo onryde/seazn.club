@@ -507,8 +507,8 @@ describe("differential: parseHubTabs against the LRU model's reading of the same
   it("agrees on every random address and every openable set (empty included), repeated keys and strangers included", () => {
     const tally = { checked: 0, emptyOpenable: 0, repeatedKeys: 0, capped: 0, appended: 0, divisionActive: 0 };
     fc.assert(
-      fc.property(rawArb, fc.subarray([...IDS]), (raw, openableIds) => {
-        const openable = new Set(openableIds);
+      fc.property(rawArb, fc.subarray<string>([...IDS]), (raw, openableIds) => {
+        const openable: ReadonlySet<string> = new Set(openableIds);
         const model = LruModel.fromRaw(raw, openable);
         expect(parseHubTabs(asParams(raw), openable)).toStrictEqual({ active: model.active, open: model.open });
         tally.checked += 1;
