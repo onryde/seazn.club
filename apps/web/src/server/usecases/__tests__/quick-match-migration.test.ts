@@ -56,20 +56,32 @@ describe.skipIf(!HAS_DB)("quick_matches migration", () => {
   // guests' one answer to a tie at the cut. Each case inserts a real row (a competition of its own, the system org) inside
   // one transaction that is rolled back, each statement in its own savepoint so a refused one does not abort the rest.
   // [case, format, cut_decision as JSON text (null: SQL null), the constraint that refuses it (null: accepted)].
+  // A stored decision is D5's shape: {how: "pick" | "toss", through: [ids], tie: [ids], at: iso}. Each refused shape below
+  // drops or bends ONE field of an otherwise whole decision, so the case that refuses it can only be that field's clause.
+  const at = '"at":"2026-11-13T20:00:00Z"';
+  const D = "quick_matches_cut_decision_object";
   const V517: [string, string, string | null, string | null][] = [
     // The empty case first: today's league with no decision.
     ["a league with no decision", "league", null, null],
     ["the legacy knockout format, kept for its rows", "knockout", null, null],
     ["league_knockout with no decision yet", "league_knockout", null, null],
-    ["league_knockout with an empty object", "league_knockout", "{}", null],
-    ["league_knockout with a toss decision (D5's shape)", "league_knockout", '{"how":"toss","through":["a"],"tie":["a","b"],"at":"2026-11-13T20:00:00Z"}', null],
+    ["league_knockout with a toss decision (D5's shape)", "league_knockout", `{"how":"toss","through":["a"],"tie":["a","b"],${at}}`, null],
+    ["league_knockout with a pick decision (D5's shape)", "league_knockout", `{"how":"pick","through":["c"],"tie":["b","c"],${at}}`, null],
     ["an unknown format", "swiss", null, "quick_matches_format_check"],
-    ["a decision that is an array", "league_knockout", "[]", "quick_matches_cut_decision_object"],
-    ["a decision that is a string", "league_knockout", '"pick"', "quick_matches_cut_decision_object"],
-    ["a decision that is a number", "league_knockout", "2", "quick_matches_cut_decision_object"],
+    ["a decision that is an array", "league_knockout", "[]", D],
+    ["a decision that is a string", "league_knockout", '"pick"', D],
+    ["a decision that is a number", "league_knockout", "2", D],
+    ["a decision that is JSON null (not SQL null)", "league_knockout", "null", D],
+    ["a decision that is an empty object", "league_knockout", "{}", D],
+    // A missing key reads as SQL NULL, and a CHECK that evaluates to NULL PASSES: these are the cases that prove it can't.
+    ["a decision with no how", "league_knockout", `{"through":["a"],"tie":["a","b"],${at}}`, D],
+    ["a decision whose how is neither pick nor toss", "league_knockout", `{"how":"coin","through":["a"],"tie":["a","b"],${at}}`, D],
+    ["a decision whose through is not an array", "league_knockout", `{"how":"toss","through":"a","tie":["a","b"],${at}}`, D],
+    ["a decision with no tie", "league_knockout", `{"how":"toss","through":["a"],${at}}`, D],
+    ["a decision whose at is not a string", "league_knockout", '{"how":"toss","through":["a"],"tie":["a","b"],"at":20261113}', D],
   ];
 
-  it("V517: quick_matches takes league_knockout and a cut decision that is null or a JSON object, nothing else (counted)", async () => {
+  it("V517: quick_matches takes league_knockout and a cut decision that is null or D5's shape, nothing else (counted)", async () => {
     const ROLLBACK = new Error("rollback");
     const seen: string[] = [];
     await sql
@@ -101,7 +113,7 @@ describe.skipIf(!HAS_DB)("quick_matches migration", () => {
         if (err !== ROLLBACK) throw err;
       });
     expect(seen, "anti-vacuity: every case ran").toEqual(V517.map(([name]) => name));
-    expect(V517).toHaveLength(9);
+    expect(V517).toHaveLength(16);
   });
 
   it("V517: the decision column is nullable jsonb with no default, so a new match has none (D5: the first write wins)", async () => {

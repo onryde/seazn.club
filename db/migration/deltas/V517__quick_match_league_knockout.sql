@@ -17,12 +17,25 @@
 -- 2. `quick_matches.cut_decision` (D5, spec §5 and §11): the guests' one answer to a tie that straddles the knockout's cut,
 --    `{how: "pick" | "toss", through: [entrant ids], tie: [the tied group's ids, sorted], at: iso}`. Null until somebody answers.
 --    The first answer wins: the decision usecase writes it only `where cut_decision is null`, and the advance clears a stale one
---    (an edited league result moved the table) with a compare-and-clear, so the question is asked again. The CHECK says only
---    that a stored decision is a JSON object; its fields are the usecase's contract (usecases/quick-match-advance.ts). Nullable
---    with no default, so every existing row reads "no decision".
+--    (an edited league result moved the table) with a compare-and-clear, so the question is asked again. The CHECK holds the
+--    shape: an object whose `how` is pick or toss, whose `through` and `tie` are arrays and whose `at` is a string, so `{}`, a
+--    JSON null or a half-written decision is refused. It does not check the ids (that `through` sits inside `tie`, the count):
+--    those are the decision usecase's contract (usecases/quick-match-advance.ts), read against the live table. A missing key
+--    reads as SQL NULL and a CHECK that evaluates to NULL passes, so the shape clause is coalesced to false. Nullable with no
+--    default, so every existing row reads "no decision".
 
 alter table quick_matches drop constraint quick_matches_format_check,
   add constraint quick_matches_format_check check (format in ('league', 'knockout', 'league_knockout'));
 
 alter table quick_matches add column cut_decision jsonb null
-  constraint quick_matches_cut_decision_object check (cut_decision is null or jsonb_typeof(cut_decision) = 'object');
+  constraint quick_matches_cut_decision_object check (
+    cut_decision is null
+    or coalesce(
+      jsonb_typeof(cut_decision) = 'object'
+        and cut_decision ->> 'how' in ('pick', 'toss')
+        and jsonb_typeof(cut_decision -> 'through') = 'array'
+        and jsonb_typeof(cut_decision -> 'tie') = 'array'
+        and jsonb_typeof(cut_decision -> 'at') = 'string',
+      false
+    )
+  );

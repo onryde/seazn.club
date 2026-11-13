@@ -751,7 +751,7 @@ describe("quick match guest copy: League + Knockout (plan 5 Task 1)", () => {
     expect(checked, "anti-vacuity").toBe(LOCALES.length * 3);
   });
 
-  it("en reads the spec's and the mockup's copy (spec §5 example; mockup qmd13a01 §6-12)", () => {
+  it("en reads the plan's key table and the spec's examples (plan 5 Task 1; spec §5, §11)", () => {
     const m = DICTS.en.marketing;
     const ui = DICTS.en.ui;
     expect(ui["quickMatch.format.league_knockout"]).toBe("League + Knockout");
@@ -776,5 +776,18 @@ describe("quick match guest copy: League + Knockout (plan 5 Task 1)", () => {
     expect(interpolate(ui["quickMatch.home.toDecide"]!, { seat: ui["quickMatch.home.leagueRank.2"]! })).toBe(
       "2nd in the league — to decide",
     );
+  });
+
+  // es: rankShort is the standalone ordinal ("1.º", "3.º"), which the draw prints on its own after a name. Before a noun
+  // Spanish shortens 1 and 3 ("1.er puesto"), so the tie's title must put {place} AFTER "puesto", never before it.
+  it("es names the tied place after its noun, where the standalone short rank reads right (counted)", () => {
+    const ui = DICTS.es.ui;
+    let checked = 0;
+    for (const key of ["quickMatch.cut.title", "quickMatch.cut.titleMany.one", "quickMatch.cut.titleMany.other"]) {
+      expect(ui[key], key).toMatch(/puesto \{place\}/);
+      expect(ui[key], key).not.toMatch(/\{place\}\s+puesto/);
+      checked++;
+    }
+    expect(checked, "anti-vacuity").toBe(3);
   });
 });

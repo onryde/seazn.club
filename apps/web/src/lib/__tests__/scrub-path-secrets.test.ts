@@ -539,6 +539,7 @@ describe("a quick match's home token, /q/<token>: scrubbed wherever a URL carrie
     `POST ${ORIGIN}/q/${t}/skip/11111111-2222-3333-4444-555555555555`,
     `/q/${t}/cut/toss`,
     `/q/${t}/cut/pick`,
+    `POST ${ORIGIN}/q/${t}/cut/toss`,
     `POST ${ORIGIN}/q/${t}/cut/pick`,
     `GET /q/${t}`,
     `navigated to "/q/${t}"`,
