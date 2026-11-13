@@ -54,8 +54,9 @@ export interface TurnstileController {
   mount(container: HTMLElement, view: TurnstileMountView): void;
   unmount(): void;
   /** The current token. Resolves at once if there is one no older than `TOKEN_MAX_AGE_MS`; an older one is dropped and the
-   *  widget re-armed. Otherwise waits (up to `TOKEN_WAIT_MS`) for the widget to produce one; null when there is no widget to wait
-   *  for (no site key), it failed, or time ran out. Never rejects. */
+   *  widget re-armed. A widget that errored earlier is re-armed too. Otherwise waits (up to `TOKEN_WAIT_MS`) for the widget to
+   *  produce one; null when there is no widget to wait for (no site key, the script never loaded), it errors again while waited
+   *  on, or time ran out. Never rejects. */
   token(): Promise<string | null>;
   /** A token is single-use: forget it and have the widget fetch a fresh one (`turnstile.reset(widgetId)`). */
   reset(): void;
@@ -138,14 +139,19 @@ export function createTurnstileController(opts: {
               settle(t);
             },
             // Cloudflare retries most failures itself and calls back with a token afterwards, so an error is only "failed
-            // for now": it releases anyone waiting (they send without a token) and is cleared by the next good callback.
+            // for now": it releases anyone waiting (they send without a token) and is cleared by the next good callback, or by
+            // the next `token()`, which re-arms a widget still failed (B1 fix round 1, review M3).
             "error-callback": () => {
               held = null;
               failed = true;
               settle(null);
             },
-            // Expired (300 s since issue): forget it AND re-arm, so a fresh token is on its way before anyone asks for one.
-            "expired-callback": rearm,
+            // Expired (300 s since issue): forget it. `refresh-expired: "auto"` has Cloudflare refresh the widget itself, and its next
+            // `callback` brings the new token; a reset here as well started a SECOND refresh on top (B1 fix round 1, review M4). The
+            // age check in `token()` still re-arms on demand when no fresh token has come.
+            "expired-callback": () => {
+              held = null;
+            },
             "timeout-callback": () => {
               held = null;
             },
@@ -187,7 +193,14 @@ export function createTurnstileController(opts: {
       // A token older than TOKEN_MAX_AGE_MS is treated as absent: re-arm, then wait below for the fresh one.
       if (held && now() - held.at > TOKEN_MAX_AGE_MS) rearm();
       if (held?.token) return Promise.resolve(held.token);
-      if (failed) return Promise.resolve(null);
+      if (failed) {
+        // No widget to re-arm (the script never loaded: a content blocker, no network): go without a token, at once.
+        if (!api || widgetId === null) return Promise.resolve(null);
+        // The widget errored and nothing has recovered it since. A form that arms at OPEN can sit in that state for minutes, and
+        // answering null would send its first submit tokenless (403 TURNSTILE_FAILED, B1 fix round 1, review M3): re-arm, then wait
+        // below for the fresh challenge, as bounded as any other wait. A second caller finds `failed` cleared and just waits.
+        rearm();
+      }
       return new Promise<string | null>((resolve) => {
         const done = (t: string | null) => {
           clearT(timer);

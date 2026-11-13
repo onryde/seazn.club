@@ -201,7 +201,60 @@ describe("a widget that is slow, failed, expired or absent never wedges the form
     const p = c.token();
     widget.params()["error-callback"]("300030");
     expect(await p).toBeNull();
-    expect(await c.token(), "and a later request is not made to wait again").toBeNull();
+    expect(widget.api.reset, "releasing the waiter is all the error does; nothing is re-armed yet").not.toHaveBeenCalled();
+  });
+
+  // B1 fix round 1 (review M3): the register form mounts its widget when the form OPENS, so an error on step 1 that Cloudflare does
+  // not recover from by itself used to latch `failed` until the submit, which then went WITHOUT a token and met 403 TURNSTILE_FAILED
+  // (before B1, Review's own mount cleared the latch). A request that finds the widget failed now re-arms it and waits, still
+  // bounded by TOKEN_WAIT_MS.
+  it("a request after an unrecovered error re-arms the widget ONCE and gets the next token, never a tokenless first submit", async () => {
+    const widget = fakeWidget({ autoSolve: false });
+    const { c } = controller({}, widget);
+    c.mount(CONTAINER, VIEW);
+    await vi.advanceTimersByTimeAsync(0);
+    widget.params()["error-callback"]("300030"); // step 1; nobody is waiting, and Cloudflare never calls back
+    await vi.advanceTimersByTimeAsync(60_000); // the registrant fills in the form
+    let got: string | null | undefined;
+    void c.token().then((t) => (got = t)); // the submit
+    await vi.advanceTimersByTimeAsync(0);
+    expect(widget.api.reset, "re-armed once").toHaveBeenCalledTimes(1);
+    expect(widget.api.reset).toHaveBeenCalledWith("w1");
+    expect(got, "waiting for the fresh challenge, not answered null").toBeUndefined();
+    widget.solve("tok-after-rearm");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(got).toBe("tok-after-rearm");
+  });
+
+  it("the re-armed wait is still bounded: a widget that errors again releases the request with null at once, and the next request re-arms again", async () => {
+    const widget = fakeWidget({ autoSolve: false });
+    const { c } = controller({}, widget);
+    c.mount(CONTAINER, VIEW);
+    await vi.advanceTimersByTimeAsync(0);
+    widget.params()["error-callback"]();
+    const first = c.token();
+    await vi.advanceTimersByTimeAsync(0);
+    widget.params()["error-callback"](); // the fresh challenge fails too (a site key the domain refuses, say)
+    expect(await first).toBeNull();
+    const second = c.token(); // the registrant clicks again
+    await vi.advanceTimersByTimeAsync(0);
+    expect(widget.api.reset, "one re-arm per request that found the widget failed").toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(TOKEN_WAIT_MS);
+    expect(await second, "and never longer than TOKEN_WAIT_MS").toBeNull();
+  });
+
+  it("two requests that find the widget failed at the same moment share ONE re-arm and the same fresh token", async () => {
+    const widget = fakeWidget({ autoSolve: false });
+    const { c } = controller({}, widget);
+    c.mount(CONTAINER, VIEW);
+    await vi.advanceTimersByTimeAsync(0);
+    widget.params()["error-callback"]();
+    const a = c.token();
+    const b = c.token();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(widget.api.reset).toHaveBeenCalledTimes(1);
+    widget.solve("tok-shared");
+    expect([await a, await b]).toEqual(["tok-shared", "tok-shared"]);
   });
 
   it("after reset() the SPENT token is never handed out again: a request that comes before the fresh challenge finishes waits for the new one", async () => {
@@ -238,15 +291,15 @@ describe("a widget that is slow, failed, expired or absent never wedges the form
     expect(got).toBe("tok-refreshed");
   });
 
-  it("a token that arrives after an error (Cloudflare retried on its own) is used", async () => {
+  it("a token that arrives after an error (Cloudflare retried on its own) is used, with nothing re-armed", async () => {
     const widget = fakeWidget({ autoSolve: false });
     const { c } = controller({}, widget);
     c.mount(CONTAINER, VIEW);
     await vi.advanceTimersByTimeAsync(0);
     widget.params()["error-callback"]();
-    expect(await c.token()).toBeNull();
     widget.solve("tok-after-retry");
     expect(await c.token()).toBe("tok-after-retry");
+    expect(widget.api.reset, "the good callback cleared the failure, so the request had nothing to re-arm").not.toHaveBeenCalled();
   });
 
   it("an expired token is forgotten (never sent), and the next one the widget produces is used", async () => {
@@ -710,14 +763,17 @@ describe("a token aged past its validity is never sent: re-arm, then wait for th
     expect(new Set(sent).size).toBe(2);
   });
 
-  it("expired-callback resets the widget exactly once and drops the token: the next request waits for the refresh", async () => {
+  // B1 fix round 1 (review M4): ONE refresh mechanism at expiry. `refresh-expired: "auto"` already has Cloudflare refresh an expired
+  // token itself (its documented default); the expired-callback used to call reset() on top of it, so two refreshes started at
+  // once (a second challenge, or an error mid-refresh). The callback now only forgets the dead token; the auto refresh brings the
+  // next one. The age check in token() (above) still re-arms on demand when no refresh has arrived.
+  it("expired-callback drops the token WITHOUT resetting (Cloudflare's auto refresh is the one mechanism): the next request waits for the refresh", async () => {
     const { c, widget } = aged();
     c.mount(CONTAINER, VIEW);
     await flush();
     widget.solve("tok-x");
     widget.params()["expired-callback"]();
-    expect(widget.api.reset).toHaveBeenCalledTimes(1);
-    expect(widget.api.reset).toHaveBeenCalledWith("w1");
+    expect(widget.api.reset, "no second refresh on top of Cloudflare's own").not.toHaveBeenCalled();
     let got: string | null | undefined;
     void c.token().then((t) => (got = t));
     await flush();
