@@ -47,11 +47,11 @@ Viewers can open the **Registrants** tab too, read-only: every entry and the CSV
 
 Registration never requires an account — anyone can enter with just an email address, and that stays true.
 
-A registrant who happens to be signed in sees one extra tick box: **I'm registering myself**. It names the account it would link to, so nobody on a shared device links an entry to whoever used the browser last. When they tick it, every division they enter attaches to the same player record, so their results, discipline history and profile photo stay together instead of splitting across a separate record per entry. Team entries add a follow-up: **Which player are you?**, so the roster row that is actually them gets the link and their team-mates are unaffected.
+Every registrant sees one tick box on the Contact step, signed in or not: **I'm one of the players**. Ticking it puts them in as player 1 on every entry they add, and asks for their date of birth. If they are also signed in and an adult, every division they enter attaches to the same player record, so their results, discipline history and profile photo stay together instead of splitting across a separate record per entry. Team entries add a follow-up: **Which player are you?**, so the roster row that is actually them gets the link and their team-mates are unaffected.
 
-Left unticked — or signed out — the entry behaves exactly as it always has.
+Left unticked — or signed out — nothing is linked to an account, and the entry behaves exactly as it always has.
 
-The tick box disappears whenever guardian details are in play, and the entry is never linked in that case even if the box was ticked first. A parent entering two children is signed in as one person for both, so linking there would fuse the two children into a single player record and merge their results. Matching names or dates of birth are only ever flagged for you to review; nothing is ever merged automatically.
+An entry is never linked while guardian details are in play (an under-18 registering themselves), even if the box was ticked first. A parent entering two children does not tick the box, so each child stays their own player record: linking the parent's account to both would fuse the two children into a single player record and merge their results. Matching names or dates of birth are only ever flagged for you to review; nothing is ever merged automatically.
 
 ## Under-18 divisions
 
