@@ -7,9 +7,9 @@
 //   - `touchQuickMatchActivity` / `...ForFixture`: the 7-day clock (C1) moved by activity, re-armed only while unsaved.
 //
 // Every quick match is made by the real producer, `createQuickMatch`, and every match result by the real write path
-// (`playToDecided` and `scoreEvent`), never by hand-inserted rows. The few direct UPDATEs below are the states a later
-// plan or a corrupt row would produce (a saved row, an expired one, a tampered seat, a match marked Not played before
-// plan 4 Task 3's writer exists: `markNotPlayed`), each named where it is made.
+// (`playToDecided` and `scoreEvent`), never by hand-inserted rows; every match marked Not played by the home's own writer
+// (`skipQuickMatchFixture`, plan 4 Task 3). The few direct UPDATEs below are the states a later plan or a corrupt row would
+// produce (a saved row, an expired one, a tampered seat), each named where it is made.
 //
 // Every case keys on its OWN quick match (pre-flight A16): the system org is shared by every case, every run and every
 // parallel test file, so nothing here counts the org's rows. Expected values come from the spec or the rulebook (round
@@ -56,6 +56,7 @@ import {
   type QuickMatchRow,
 } from "../quick-match-home";
 import { quickMatchPreview } from "../quick-match-preview";
+import { skipQuickMatchFixture } from "../quick-match-skip";
 import { listQuickMatchSports } from "../quick-match-sports";
 import { hashHomeToken, hashVisitorKey, mintHomeToken, mintVisitorKey, openHomeToken } from "../quick-match-tokens";
 import { scoreEvent } from "../scoring";
@@ -127,18 +128,12 @@ type TableRow = { entrantId: string; played: number; won: number };
 const tableOf = (h: QuickMatchHome) => (h.standings?.rows ?? []) as TableRow[];
 const sideIds = (f: QuickMatchFixture) => [f.home?.entrantId, f.away?.entrantId].filter((id): id is string => !!id);
 
-/**
- * Marks a match Not played. This STANDS IN for plan 4 Task 3's writer (`quick-match-skip.ts`, not built when this was
- * written) and makes the same guarded status write: under the fixture lock the write path takes (append-event.ts), only
- * `scheduled` or `in_play` becomes `cancelled`, and exactly one row moves. Task 3's own suite drives the real writer.
- */
-async function markNotPlayed(fixtureId: string): Promise<void> {
-  const moved = await sql.begin(async (tx) => {
-    await tx`select pg_advisory_xact_lock(hashtext(${"fixture:" + fixtureId}))`;
-    return tx<{ id: string }[]>`
-      update fixtures set status = 'cancelled' where id = ${fixtureId} and status in ('scheduled', 'in_play') returning id`;
-  });
-  expect(moved, `premise: fixture ${fixtureId} was open and is now Not played`).toHaveLength(1);
+/** Marks a match Not played through the home's own writer (`skipQuickMatchFixture`, plan 4 T3), as its home link would. */
+async function markNotPlayed(out: { token: string }, fixtureId: string): Promise<void> {
+  const row = await resolveQuickMatchToken(out.token);
+  if (!row) throw new Error("precondition: the quick match's token resolves");
+  expect(await skipQuickMatchFixture(row, fixtureId), `premise: fixture ${fixtureId} was open and is now Not played`)
+    .toEqual({ changed: true });
 }
 
 beforeAll(async () => {
@@ -658,7 +653,7 @@ describe.skipIf(!HAS_DB)("readQuickMatchHome", () => {
       expect(matches).toHaveLength(3);   // round robin of 3: 3·2/2
       const [m1, m2, m3] = matches as [QuickMatchFixture, QuickMatchFixture, QuickMatchFixture];
       expect(await playToDecided(systemAuth(), m1.id)).toMatchObject({ kind: "decided" });
-      await markNotPlayed(m2.id);
+      await markNotPlayed(out, m2.id);
 
       h = await homeOf(out);
       expect({ played: h.played, notPlayed: h.notPlayed, total: h.total, finished: h.finished })
@@ -671,7 +666,7 @@ describe.skipIf(!HAS_DB)("readQuickMatchHome", () => {
       const recent = async () => (await listRecentQuickMatches(visitorHash, { counts: true })).find((r) => r.token === out.token);
       expect(await recent()).toMatchObject({ played: 1, notPlayed: 1, total: 3 });
 
-      await markNotPlayed(m3.id);
+      await markNotPlayed(out, m3.id);
       h = await homeOf(out);
       expect({ played: h.played, notPlayed: h.notPlayed, total: h.total, finished: h.finished })
         .toEqual({ played: 1, notPlayed: 2, total: 3, finished: true });

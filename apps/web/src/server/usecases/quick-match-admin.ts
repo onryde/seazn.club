@@ -15,12 +15,13 @@ import "server-only";
 //     kernel's types are never play, by the engine's own declaration (`CORE_EVENT_SCHEMAS`, the list `playRecorded` reads):
 //     a Start alone is a guest who opened the pad and left, and a point taken back leaves nothing played. Two departures
 //     from `playRecorded`, both the ruling's: no chess exception (its `startIsPlay`: a chess Start alone is not played here
-//     either), and a sport event counts wherever it sits in the ledger. A bye's award is written onto its fixture with no
-//     event at all (bracket-seats.ts), so a knockout's day-one bye never reads as played. A result is a sport event too (the
-//     deciding rally, a chess result), and nothing else decides a quick match's real match: it has no organizer to settle
-//     or withdraw a side, and the one kernel result a scorer's pad sends (a disqualifying sanction's forfeit) follows its
-//     sanction, a sport event. That premise is a guard: a row whose matches are decided with no standing sport event is
-//     logged by id (`brokenPremise`).
+//     either), and a sport event counts wherever it sits in the ledger, on any fixture, whatever its status: a match marked
+//     Not played (plan 4) keeps its ledger (Put back restores it exactly as it was), so a point standing on it was played.
+//     A bye's award is written onto its fixture with no event at all (bracket-seats.ts), so a knockout's day-one bye never
+//     reads as played. A result is a sport event too (the deciding rally, a chess result), and nothing else decides a quick
+//     match's real match: it has no organizer to settle or withdraw a side, and the one kernel result a scorer's pad sends
+//     (a disqualifying sanction's forfeit) follows its sanction, a sport event. That premise is a guard: a row whose matches
+//     are decided with no standing sport event is logged by id (`brokenPremise`).
 //   - decided "x of y": the guest's own "{played} of {count}" (`playedOf`, quick-match-home.ts: non-bye fixtures, and the
 //     settled ones among them), so staff and the guest never read two numbers for one match; with "· K not played" beside
 //     it when matches were marked Not played (plan 4), the total staying the full count.

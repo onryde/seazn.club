@@ -14,8 +14,8 @@
 //
 // One sport (badminton), on purpose: the page renders the reads' rows, which the usecase suite already holds across two sports.
 //
-// Plan 4 Task 2: a match marked Not played counts as done. Before Task 3's writer exists, `markNotPlayed` below stands in
-// for it with the same guarded status write.
+// Plan 4 Task 2: a match marked Not played counts as done. Every match is marked Not played by the home's own writer
+// (`skipQuickMatchFixture`, plan 4 Task 3).
 //
 // Real Postgres required; skipped without DATABASE_URL. Rendered through react-dom/server (vitest runs `environment: "node"`).
 import { randomBytes, randomUUID } from "node:crypto";
@@ -73,6 +73,7 @@ import { createQuickMatch, systemAuth, type CreatedQuickMatch } from "@/server/u
 import { hardDeleteQuickMatchCompetition } from "@/server/usecases/quick-match-delete";
 import { resolveQuickMatchToken } from "@/server/usecases/quick-match-home";
 import { saveQuickMatchForUser } from "@/server/usecases/quick-match-save";
+import { skipQuickMatchFixture } from "@/server/usecases/quick-match-skip";
 import { listQuickMatchSports } from "@/server/usecases/quick-match-sports";
 import { hashHomeToken, hashVisitorKey, mintVisitorKey } from "@/server/usecases/quick-match-tokens";
 import { ensureGuestDeviceLink } from "@/server/usecases/device-links";
@@ -137,18 +138,12 @@ const rowsIn = (html: string): number => html.split('data-testid="qm-row"').leng
 /** Each listed row's Decided cell, in order. */
 const decidedCells = (html: string): string[] => [...html.matchAll(/data-testid="qm-decided"[^>]*>([^<]*)</g)].map((m) => m[1]!);
 
-/**
- * Marks a match Not played. This STANDS IN for plan 4 Task 3's writer (`quick-match-skip.ts`, not built when this was
- * written) and makes the same guarded status write: under the fixture lock the write path takes (append-event.ts), only
- * `scheduled` or `in_play` becomes `cancelled`, and exactly one row moves.
- */
-async function markNotPlayed(fixtureId: string): Promise<void> {
-  const moved = await sql.begin(async (tx) => {
-    await tx`select pg_advisory_xact_lock(hashtext(${"fixture:" + fixtureId}))`;
-    return tx<{ id: string }[]>`
-      update fixtures set status = 'cancelled' where id = ${fixtureId} and status in ('scheduled', 'in_play') returning id`;
-  });
-  expect(moved, `premise: fixture ${fixtureId} was open and is now Not played`).toHaveLength(1);
+/** Marks a match Not played through the home's own writer (`skipQuickMatchFixture`, plan 4 T3), as its home link would. */
+async function markNotPlayed(out: CreatedQuickMatch, fixtureId: string): Promise<void> {
+  const row = await resolveQuickMatchToken(out.token);
+  if (!row) throw new Error(`precondition: quick match ${out.id}'s token resolves`);
+  expect(await skipQuickMatchFixture(row, fixtureId), `premise: fixture ${fixtureId} was open and is now Not played`)
+    .toEqual({ changed: true });
 }
 const cell = (html: string, row: string, window: string): string | undefined =>
   html.match(new RegExp(`data-testid="qm-count-${row}-${window}"[^>]*>([^<]*)<`))?.[1];
@@ -329,13 +324,13 @@ describe.skipIf(!HAS_DB)("/admin/quick-matches renders what is there, and nothin
       }
 
       // One not played: x of y keeps the full total and says the rest; still one to play, still not finished.
-      await markNotPlayed(fixtures[1]!.id);
+      await markNotPlayed(league, fixtures[1]!.id);
       html = await render();
       expect(decidedCells(html)).toEqual(["1 of 3 · 1 not played"]);
       expect(cell(html, "finished", "30d")).toBe("0");
 
       // The last not played: every match played or not played, so it is finished in every window.
-      await markNotPlayed(fixtures[2]!.id);
+      await markNotPlayed(league, fixtures[2]!.id);
       html = await render();
       expect(decidedCells(html)).toEqual(["1 of 3 · 2 not played"]);
       for (const w of ["24h", "7d", "30d"]) {

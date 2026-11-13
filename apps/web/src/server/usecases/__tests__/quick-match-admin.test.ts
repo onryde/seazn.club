@@ -3,9 +3,8 @@
 //
 // Every quick match is made by the real producer (`createQuickMatch`), every Start, point, take-back and result by the real
 // write path (`scoreEvent`, `playToDecided`), every save by the real Save (`saveQuickMatchForUser`). The direct UPDATEs below are the
-// clock (`created_at`, `expires_at`), one state no guest path writes (a decided match with no score event), and a match
-// marked Not played before plan 4 Task 3's writer exists (`markNotPlayed`, its guarded status write), each named where it
-// is made. The session is the REAL one: `createSession` signs it into a cookie jar standing in for next/headers,
+// clock (`created_at`, `expires_at`) and one state no guest path writes (a decided match with no score event), each named
+// where it is made; every match marked Not played is marked by the real skip (`skipQuickMatchFixture`, plan 4 T3). The session is the REAL one: `createSession` signs it into a cookie jar standing in for next/headers,
 // and `requireStaff` reads it back.
 //
 // Expected values come from the seed table below (each row says what it is: played, finished, saved, expired, its age),
@@ -67,7 +66,9 @@ import {
   quickMatchAdminCounts,
   type QuickMatchAdminFilter,
 } from "../quick-match-admin";
+import { resolveQuickMatchToken } from "../quick-match-home";
 import { saveQuickMatchForUser } from "../quick-match-save";
+import { skipQuickMatchFixture } from "../quick-match-skip";
 import { listQuickMatchSports } from "../quick-match-sports";
 import { hashVisitorKey, mintVisitorKey } from "../quick-match-tokens";
 import { scoreEvent } from "../scoring";
@@ -177,18 +178,12 @@ async function decideFirst(out: CreatedQuickMatch): Promise<void> {
   expect(await playToDecided(systemAuth(), fixtureId), "premise: the match was played to a result").toMatchObject({ kind: "decided" });
 }
 
-/**
- * Marks a match Not played. This STANDS IN for plan 4 Task 3's writer (`quick-match-skip.ts`, not built when this was
- * written) and makes the same guarded status write: under the fixture lock the write path takes (append-event.ts), only
- * `scheduled` or `in_play` becomes `cancelled`, and exactly one row moves.
- */
-async function markNotPlayed(fixtureId: string): Promise<void> {
-  const moved = await sql.begin(async (tx) => {
-    await tx`select pg_advisory_xact_lock(hashtext(${"fixture:" + fixtureId}))`;
-    return tx<{ id: string }[]>`
-      update fixtures set status = 'cancelled' where id = ${fixtureId} and status in ('scheduled', 'in_play') returning id`;
-  });
-  expect(moved, `premise: fixture ${fixtureId} was open and is now Not played`).toHaveLength(1);
+/** Marks a match Not played through the home's own writer (`skipQuickMatchFixture`, plan 4 T3), as its home link would. */
+async function markNotPlayed(out: CreatedQuickMatch, fixtureId: string): Promise<void> {
+  const row = await resolveQuickMatchToken(out.token);
+  if (!row) throw new Error(`precondition: quick match ${out.id}'s token resolves`);
+  expect(await skipQuickMatchFixture(row, fixtureId), `premise: fixture ${fixtureId} was open and is now Not played`)
+    .toEqual({ changed: true });
 }
 
 /** The clock: the row's creation moved to `at`. */
@@ -216,7 +211,8 @@ interface Seed {
   ageMs: number;
   shape: Shape;
   /** What is done to it after the create. */
-  act: "none" | "start" | "rally" | "rallyVoid" | "result" | "decideFirst" | "decideAll" | "decideFirstSkipRest" | "save" | "expire";
+  act: "none" | "start" | "rally" | "rallyVoid" | "rallyThenSkip" | "result" | "decideFirst" | "decideAll" | "decideFirstSkipRest"
+    | "save" | "expire";
   played: boolean;
   finished: boolean;
   saved: boolean;
@@ -259,6 +255,10 @@ const SEEDS: Seed[] = [
   // or not played, so it is finished, though only one of its three was decided; a point stands, so it was played.
   { tag: "skipped", ageMs: 5 * 24 * HOUR_MS, shape: { sport_key: "badminton", format: "league", sides: THREE }, act: "decideFirstSkipRest",
     played: true, finished: true, saved: false, expired: false, decided: 1, total: 3, notPlayed: 2 },
+  // A point scored, then the match marked Not played (T2 review m2): the point still stands on its ledger (Put back restores
+  // the match as it was), so it was played; its one match is Not played, so it is finished, with nothing decided.
+  { tag: "rallyThenSkip", ageMs: 6 * 24 * HOUR_MS, shape: { sport_key: "badminton", format: "league", sides: TWO }, act: "rallyThenSkip",
+    played: true, finished: true, saved: false, expired: false, decided: 0, total: 1, notPlayed: 1 },
   { tag: "expired", ageMs: 10 * 24 * HOUR_MS, shape: { sport_key: "badminton", format: "league", sides: TWO }, act: "expire",
     played: false, finished: false, saved: false, expired: true, decided: 0, total: 1 },
   // A knockout of three: one seat sits out round one, and that bye is settled at the start without anyone playing. It is
@@ -295,7 +295,14 @@ beforeAll(async () => {
       await decideFirst(out);
       const open = (await fixturesOf(out.competitionId)).filter((f) => f.status === "scheduled");
       expect(open.length, "premise: two matches of three still to play").toBe(2);
-      for (const f of open) await markNotPlayed(f.id);
+      for (const f of open) await markNotPlayed(out, f.id);
+    }
+    if (s.act === "rallyThenSkip") {
+      await rally(out);
+      const [only, ...rest] = await fixturesOf(out.competitionId);
+      expect({ status: only?.status, rest: rest.length }, "premise: a league of two is one match, in play after a point")
+        .toEqual({ status: "in_play", rest: 0 });
+      await markNotPlayed(out, only!.id);
     }
     if (s.act === "decideAll") {
       for (const f of await fixturesOf(out.competitionId)) {
