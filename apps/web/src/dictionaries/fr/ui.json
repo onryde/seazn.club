@@ -3723,6 +3723,7 @@
   "device.quickMatch.resultLocked": "Ce résultat ne peut plus changer : le tour suivant a déjà commencé.",
   "device.quickMatch.finished": "Ce match est terminé.",
   "device.quickMatch.notPlayed": "Ce match est indiqué comme non joué. Rétablissez-le depuis la liste des matchs pour en marquer les points.",
+  "device.quickMatch.checkAgain": "Vérifier à nouveau",
   "device.scan.viewOnly.finalized": "Match terminé — résultat validé. Demandez à l'organisateur de le corriger.",
   "device.scan.viewOnly.cancelled": "Ce match a été annulé.",
   "device.scan.viewOnly.noOpponent": "Il n'y a pas de match à noter ici — un côté n'a pas d'adversaire.",

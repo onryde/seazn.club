@@ -169,6 +169,8 @@ const UI_KEYS = [
   "quickMatch.flash.leagueFinished",
   "quickMatch.flash.notPlayed",
   "device.quickMatch.notPlayed",
+  // FR3 (T5 finding 1): the guest pad's Not played screen reads the match again on tap.
+  "device.quickMatch.checkAgain",
 ] as const;
 
 /** Every `quickMatch.*` key of one file in one locale, sorted. */

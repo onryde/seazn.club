@@ -3670,6 +3670,7 @@
   "device.quickMatch.resultLocked": "Este resultado ya no puede cambiar: la siguiente ronda ya ha empezado.",
   "device.quickMatch.finished": "Este partido ha terminado.",
   "device.quickMatch.notPlayed": "Este partido se marcó como no jugado. Restáuralo desde la lista de partidos para puntuarlo.",
+  "device.quickMatch.checkAgain": "Volver a comprobar",
   "device.scan.viewOnly.finalized": "Partido terminado — resultado cerrado. Pide al organizador que lo corrija.",
   "device.scan.viewOnly.cancelled": "Este partido se ha cancelado.",
   "device.scan.viewOnly.noOpponent": "Aquí no hay partido que puntuar — un lado no tiene rival.",

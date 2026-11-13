@@ -3723,6 +3723,7 @@
   "device.quickMatch.resultLocked": "This result can't change: the next round has already started.",
   "device.quickMatch.finished": "This match is finished.",
   "device.quickMatch.notPlayed": "This match was marked Not played. Put it back from the match list to score it.",
+  "device.quickMatch.checkAgain": "Check again",
   "device.scan.viewOnly.finalized": "Match over — result finalised. Ask the organiser to correct it.",
   "device.scan.viewOnly.cancelled": "This match was cancelled.",
   "device.scan.viewOnly.noOpponent": "There is no match to score here — one side has no opponent.",

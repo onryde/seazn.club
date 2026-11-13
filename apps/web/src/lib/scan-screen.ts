@@ -45,6 +45,14 @@ export function askFreshLinkKey(quickMatch: boolean): MessageKey {
   return quickMatch ? "device.quickMatch.askFreshLink" : "device.askFreshLink";
 }
 
+/** Quick match plan 4, FR3 (T5 finding 1, controller PO rec 2026-11-13): how often a guest's pad that shows Not played
+ *  reads the match again while its tab is visible, so a Put back on another phone lifts it with no reload. Only that
+ *  screen polls, and only while visible: a hidden tab, an unmounted pad, a dead link or any other screen arms no timer,
+ *  and a re-read still in flight swallows the next tick. 10s: one `/state` + ledger pair per phone per 10s, on a screen
+ *  that has no controls to wait on; the tab return and "Check again" answer at once. Exported for the tests and the e2e
+ *  budget, which take it from here. */
+export const NOT_PLAYED_RECHECK_MS = 10_000;
+
 export type ScanScreen =
   | { screen: "view_only"; reason: ViewOnlyReason }
   | { screen: "division_not_started" }

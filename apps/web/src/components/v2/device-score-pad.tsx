@@ -5,7 +5,7 @@
 // undo OWN events, nothing else. Every call presents the dl_ token as a
 // Bearer header; the token stays in this tab (component prop), never storage.
 // Offline-tolerant: sends retry with the SAME idempotency key (doc 08 §4).
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { ScoringErrorBoundary } from "@/components/v2/scoring-error-boundary";
 // `OPPORTUNISTIC_RESYNC_MS` — the bound on this pad's opportunistic refresh
@@ -39,7 +39,14 @@ import { runTossThenStart } from "@/lib/start-with-toss";
 import { rulesVersionOf, type FixtureRulesResult } from "@/components/v2/scorepad/transport";
 import { resolveModuleClient } from "@/components/v2/scorepad/module-client";
 import { entrantDisplayName } from "@/lib/entrant-name";
-import { askFreshLinkKey, deadLinkKey, decidedKey, viewOnlyKey, type ViewOnlyReason } from "@/lib/scan-screen";
+import {
+  askFreshLinkKey,
+  deadLinkKey,
+  decidedKey,
+  NOT_PLAYED_RECHECK_MS,
+  viewOnlyKey,
+  type ViewOnlyReason,
+} from "@/lib/scan-screen";
 import { officialLabelKey } from "@/lib/official-label";
 import { useTabReturn } from "@/components/v2/use-tab-return";
 import { eventOutToEnvelope } from "@/components/v2/scorepad/wire";
@@ -200,6 +207,11 @@ export function DeviceScorePad({
   /** The `started` that `padSeed` was taken for. Starts as the page's own
    *  status, whose ledger IS the bootstrap. */
   const [seededStarted, setSeededStarted] = useState(initialState.status !== "scheduled");
+  /** Quick match plan 4, FR3: whether the last render showed a guest's match marked Not played (`notPlayed`, below). Its
+   *  fall to false is a Put back seen by a re-read: the pad then mounts on that read's ledger, never on `padSeed`. */
+  const [seenNotPlayed, setSeenNotPlayed] = useState(quickMatch && initialState.status === "cancelled");
+  /** FR3: a Not played re-read (the clock's or "Check again") is in flight; the next one waits for it (no pile-up). */
+  const recheckInFlight = useRef(false);
 
   const authed = useCallback(
     <T,>(url: string, options?: Parameters<typeof apiV1>[1]) =>
@@ -302,14 +314,29 @@ export function DeviceScorePad({
    *  BOUNDED (G1): the only clear of `padSyncing` is this `finally`, and the
    *  tab-return listener below now fires this too. See
    *  `OPPORTUNISTIC_RESYNC_MS`. */
-  const handlePadEvents = useCallback(() => {
+  const refresh = useCallback(() => {
     setPadSyncing(true);
-    void resync({ timeoutMs: OPPORTUNISTIC_RESYNC_MS })
-      .catch((err: unknown) => {
-        if (err instanceof ApiV1Error && DEAD_CODES.has(err.code)) setDead(err.code);
-      })
+    return resync({ timeoutMs: OPPORTUNISTIC_RESYNC_MS })
+      .then(
+        () => undefined,
+        (err: unknown) => {
+          if (err instanceof ApiV1Error && DEAD_CODES.has(err.code)) setDead(err.code);
+        },
+      )
       .finally(() => setPadSyncing(false));
   }, [resync]);
+  const handlePadEvents = useCallback(() => void refresh(), [refresh]);
+
+  /** Quick match plan 4, FR3 (T5 finding 1): the Not played screen's own re-read — its clock's tick and "Check again".
+   *  `handlePadEvents`'s refresh (bounded, `padSyncing`, a dead link lands on the dead screen), ONE at a time: a tick or
+   *  a tap while a read is still out adds nothing, so a slow network cannot stack reads on the clock. */
+  const recheckNotPlayed = useCallback(() => {
+    if (recheckInFlight.current) return;
+    recheckInFlight.current = true;
+    void refresh().finally(() => {
+      recheckInFlight.current = false;
+    });
+  }, [refresh]);
 
   /** Scorer sheets §4.5 — entering View-only while this screen is live, from
    *  either way in: this chrome's own `send()` refused, or the inner pad's
@@ -471,9 +498,38 @@ export function DeviceScorePad({
   // dead-screen `if (dead)` below, so "listening" and "live screen" agree.
   //
   // Identity: `resync` is keyed on `[authed, fixture.id]`, `authed` on
-  // `[token]`, `handlePadEvents` on `[resync]` — all stable for the life of the
-  // link, so this subscribes once.
+  // `[token]`, `refresh` on `[resync]`, `handlePadEvents` on `[refresh]` — all
+  // stable for the life of the link, so this subscribes once.
   useTabReturn(handlePadEvents, !dead);
+
+  // Quick match plan 4, FR3 (T5 finding 1, controller PO rec 2026-11-13): a guest's match marked Not played on the home.
+  // Put back is the home's too, on any phone, and nothing tells this one — no event is written, so neither the stream
+  // nor a tap can see it. So while this screen shows Not played it reads the match again: on a tab return (above), on
+  // "Check again", and every `NOT_PLAYED_RECHECK_MS` while the tab is visible. The clock is this screen's alone (the live
+  // pad's freshness stays the stream's and the tab return's, `useTabReturn`'s "not an interval"): an organiser's fixture,
+  // a live screen, a dead link and a hidden tab arm none, and a read that finds the match put back ends it.
+  const notPlayed = quickMatch && live.status === "cancelled";
+  useEffect(() => {
+    if (!notPlayed || dead) return;
+    // No DOM, no clock: the same guard as `useTabReturn`'s (an effect never runs on the server; node vitest has none).
+    if (typeof document === "undefined") return;
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const arm = () => {
+      if (timer === null && document.visibilityState === "visible") timer = setInterval(recheckNotPlayed, NOT_PLAYED_RECHECK_MS);
+    };
+    const disarm = () => {
+      if (timer !== null) clearInterval(timer);
+      timer = null;
+    };
+    // Hidden: stop. Shown again: re-arm (the tab return has already read it once).
+    const onVisibility = () => (document.visibilityState === "visible" ? arm() : disarm());
+    arm();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      disarm();
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [notPlayed, dead, recheckNotPlayed]);
 
   // Owner ruling 17 (2026-09-06) — the SAME predicate fixture-console.tsx
   // shares (this file already imports plain types from there — `SportInfo`,
@@ -546,6 +602,19 @@ export function DeviceScorePad({
     setSeededStarted(started);
     if (started) {
       setPadSeed(events.map((e) => eventOutToEnvelope(fixture.id, { ...e, recorded_by: e.recorded_by ?? null })));
+    }
+  }
+  // FR3: a Put back, seen by a re-read. A cancelled match counts as started, so `seededStarted` never moved across the
+  // skip and the inner pad would remount on the seed of its FIRST Start (T3 review m5b): put back live, it mounts on this
+  // read's ledger instead (the stored score; its first tap at the right seq). And a page that opened on Not played handed
+  // `viewOnly` its "cancelled": it is the status's reason, so it goes with the status, or View-only would never lift.
+  if (notPlayed !== seenNotPlayed) {
+    setSeenNotPlayed(notPlayed);
+    if (!notPlayed) {
+      if (viewOnly === "cancelled") setViewOnly(null);
+      if (started) {
+        setPadSeed(events.map((e) => eventOutToEnvelope(fixture.id, { ...e, recorded_by: e.recorded_by ?? null })));
+      }
     }
   }
   const scoring = live.status !== "finalized" && live.status !== "cancelled";
@@ -662,8 +731,9 @@ export function DeviceScorePad({
               {msg("device.live")}
             </span>
           ) : (
-            <span className="shrink-0 text-[11px] uppercase tracking-widest text-slate-400">
-              {scoreStatusLabel(msg, live.status)}
+            <span data-testid="scan-status" className="shrink-0 text-[11px] uppercase tracking-widest text-slate-400">
+              {/* FR3 (T5 finding 2): a guest's cancelled match is the home's Not played, in the home's own word. */}
+              {notPlayed ? msg("quickMatch.home.notPlayed") : scoreStatusLabel(msg, live.status)}
             </span>
           )}
         </div>
@@ -707,6 +777,19 @@ export function DeviceScorePad({
         >
           {msg(viewOnlyKey(shownViewOnly, quickMatch))}
         </p>
+      )}
+
+      {/* FR3: the Not played screen's "Check again" — the same read its clock makes, now; greyed while one is out. */}
+      {notPlayed && (
+        <button
+          type="button"
+          data-testid="scan-check-again"
+          disabled={padSyncing}
+          onClick={recheckNotPlayed}
+          className="flex h-12 w-full items-center justify-center rounded-full border border-slate-700 bg-slate-900 px-6 text-sm font-semibold text-slate-200 transition hover:border-slate-500 active:scale-[0.98] disabled:opacity-50"
+        >
+          {msg("device.quickMatch.checkAgain")}
+        </button>
       )}
 
       {error && (

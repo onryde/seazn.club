@@ -1841,6 +1841,7 @@ export type DictionaryKey =
   | "device.failed"
   | "device.live"
   | "device.quickMatch.askFreshLink"
+  | "device.quickMatch.checkAgain"
   | "device.quickMatch.finished"
   | "device.quickMatch.notPlayed"
   | "device.quickMatch.resultLocked"

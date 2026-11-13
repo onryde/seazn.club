@@ -9,6 +9,7 @@ import { expectQrDecodesAsPainted, expectQrEnlarges, expectWholeModuleScale } fr
 import { consentedAnonymousState } from "./scorepad-a11y-kit";
 import { HOLD_MS } from "../src/components/v2/scorepad/queue";
 import { HUMAN_FASTEST_REPEAT_MS } from "../src/components/v2/scorepad/use-pad-pipeline";
+import { NOT_PLAYED_RECHECK_MS } from "../src/lib/scan-screen";
 
 // Quick match plan 2 Task 5 (spec docs/superpowers/specs/2026-11-03-quick-match-design.md §5 step 3, §8): the guest's home
 // at `/q/<token>` in a real browser, at the three widths the task is verified at (320, 768, 1280), for a league and the dead
@@ -200,15 +201,26 @@ async function expectTappable(locator: Locator, what: string) {
  *  the Confirm card stays (seen on a loaded local run, the French case below). React's props key on the button is the
  *  signal; pressed once, never retried (a second Start is a write of its own). */
 async function pressStart(pad: Page) {
-  const start = pad.getByTestId("score-start-match");
+  await pressHydrated(pad.getByTestId("score-start-match"), "the pad's Start");
+}
+
+/** Press a plain island button (no form) once React has claimed it: before that a press is lost. Pressed once. */
+async function pressHydrated(control: Locator, what: string) {
   await expect
-    .poll(() => start.evaluate((el) => Object.keys(el).some((k) => k.startsWith("__reactProps$"))), {
-      message: "the pad's Start never hydrated",
+    .poll(() => control.evaluate((el) => Object.keys(el).some((k) => k.startsWith("__reactProps$"))), {
+      message: `${what} never hydrated`,
       timeout: 20_000,
     })
     .toBe(true);
-  await start.click();
+  await control.click();
 }
+
+/** FR3: a mark on the page's own window, so "no reload" is read, not assumed: a reload starts a window without it. */
+const markPage = (page: Page) => page.evaluate(() => void ((window as unknown as { fr3Mark?: number }).fr3Mark = 1));
+const samePage = (page: Page) => page.evaluate(() => (window as unknown as { fr3Mark?: number }).fr3Mark === 1);
+/** The pad's own read of the match (`/state`), as a request to wait on. */
+const stateRead = (page: Page, fixtureId: string) =>
+  page.waitForRequest((r) => r.method() === "GET" && new URL(r.url()).pathname.endsWith(`/fixtures/${fixtureId}/state`));
 
 test("Score (Task 6): a league of 4 at 320, 768 and 1280: Score on the hero and on each of the 6 matches, real 44px targets", async ({ guest: page }) => {
   await createThroughSetup(page, [LONG, "Priya & Tom", "Lee & Ana", "Jo & Max"]);
@@ -924,8 +936,8 @@ async function anotherPhone(browser: Browser) {
   return browser.newContext({ storageState: await consentedAnonymousState() });
 }
 
-test("Stale screens: a match skipped on another phone: the pad held on Confirm says Not played on Start and writes nothing; a home loaded before the skip lands Score on the Not played line", async ({ guest: page, browser }) => {
-  test.setTimeout(8 * 20_000);
+test("Stale screens: a match skipped on another phone: the pad held on Confirm says Not played on Start and writes nothing; a home loaded before the skip lands Score on the Not played line; the pad opened again on it says Not played, and once put back, Check again brings Confirm back with no reload", async ({ guest: page, browser }) => {
+  test.setTimeout(12 * 20_000);
   const sides = ["Ravi & Sam", "Priya & Tom", "Lee & Ana"];
   await createThroughSetup(page, sides);
   const home = new URL(page.url()).pathname;
@@ -957,7 +969,6 @@ test("Stale screens: a match skipped on another phone: the pad held on Confirm s
   const [started] = await withDb((sql) => sql<{ n: number }[]>`select count(*)::int as n from score_events where fixture_id = ${id}`);
   expect(started!.n, "the refused Start wrote nothing").toBe(0);
   expect((await recordOf([id])).get(id)?.status).toBe("cancelled");
-  await pad.close();
 
   // The stale home still shows the match ready, with Score: its post lands on the Not played line, the row now Not played.
   await expect(row, "the stale home, as loaded").toHaveAttribute("data-state", "ready");
@@ -971,11 +982,35 @@ test("Stale screens: a match skipped on another phone: the pad held on Confirm s
   await expect(page.getByTestId("qm-flash")).toHaveText(en("quickMatch.flash.notPlayed"));
   await expect(page.getByTestId("qm-flash")).toHaveAttribute("role", "alert");
   await expect(row, "the home, read again").toHaveAttribute("data-state", "notPlayed");
+
+  // FR3: the pad opened again on the Not played match — View-only from the page's first paint. Its pill says Not played
+  // (T5 finding 2, never "cancelled"), and Check again is a real target.
+  await pad.reload();
+  await expect(pad.getByTestId("scan-view-only")).toHaveText(en("device.quickMatch.notPlayed"));
+  await expect(pad.getByTestId("scan-status"), "the pill, in the home's word").toHaveText(en("quickMatch.home.notPlayed"));
+  const checkAgain = pad.getByTestId("scan-check-again");
+  await expect(checkAgain).toHaveText(en("device.quickMatch.checkAgain"));
+  await expectTappable(checkAgain, "Check again");
+  await markPage(pad);
+  // Put back on the home. It was never played, so it is ready again; on the pad, Check again reads it, and Confirm comes
+  // back with Start, on the same page (T5 finding 1: no reload).
+  await expectMenuHydrated(row, "the home, Not played");
+  await openRowMenu(row, "the home, Not played");
+  await postAndLand(page, row.getByTestId("qm-put-back"), "put-back");
+  await expect(row, "put back: ready again").toHaveAttribute("data-state", "ready");
+  const read = stateRead(pad, id);
+  await pressHydrated(checkAgain, "Check again");
+  await read;
+  await expect(pad.getByTestId("scan-view-only"), "Check again lifts View-only").toHaveCount(0, { timeout: 20_000 });
+  await expect(pad.getByTestId("score-start-match"), "Confirm, with Start").toBeVisible();
+  await expect(checkAgain, "Check again goes with the Not played screen").toHaveCount(0);
+  expect(await samePage(pad), "the same page: no reload").toBe(true);
+  await pad.close();
 });
 
-test("Pad left open: a rally on the pad, the match skipped on another phone (the sheet names the score that won't count): the next tap writes nothing and the pad says Not played; Put back restores it as it was, and the pad, looked at again, scores on", async ({ guest: page, browser }) => {
-  // Six page loads, two held rallies and the refused one's hold.
-  test.setTimeout(6 * 20_000 + 3 * (HOLD_MS + 20_000));
+test("Pad left open: a rally on the pad, the match skipped on another phone (the sheet names the score that won't count): the next tap writes nothing and the pad says Not played; Put back restores it as it was, and the pad, left open with no tap or reload, comes back by itself at the stored score and scores on", async ({ guest: page, browser }) => {
+  // Six page loads, two held rallies and the refused one's hold, and the Not played screen's own clock (FR3).
+  test.setTimeout(6 * 20_000 + 3 * (HOLD_MS + 20_000) + (NOT_PLAYED_RECHECK_MS + 20_000));
   const sides = ["Ravi & Sam", "Priya & Tom", "Lee & Ana"];
   await createThroughSetup(page, sides);
   const home = new URL(page.url()).pathname;
@@ -987,8 +1022,12 @@ test("Pad left open: a rally on the pad, the match skipped on another phone (the
   await pressStart(page);
   const homeHalf = page.locator('[data-role="pad-v3"] button[data-role="v3-scorebug-half"][data-side="home"]');
   await expect(homeHalf).toBeVisible({ timeout: 20_000 });
+  const halfAtStart = ((await homeHalf.textContent()) ?? "").trim();
   await homeHalf.click();
   await expect.poll(() => rallies(id), { timeout: HOLD_MS + 20_000, message: "the first rally never reached the ledger" }).toBe(1);
+  // What the pad shows for the home side once that rally is in: the score Put back must bring back (FR3).
+  await expect(homeHalf, "the pad shows the rally").not.toHaveText(halfAtStart);
+  const halfAfterRally = ((await homeHalf.textContent()) ?? "").trim();
 
   const other = await anotherPhone(browser);
   try {
@@ -1015,6 +1054,17 @@ test("Pad left open: a rally on the pad, the match skipped on another phone (the
     await expect(homeHalf, "View-only: no controls").toHaveCount(0);
     expect(await rallies(id), "the tap after the skip wrote nothing").toBe(1);
     expect((await recordOf([id])).get(id)?.status).toBe("cancelled");
+    // FR3 (T5 finding 2): the pill over that line says Not played, never "cancelled".
+    await expect(page.getByTestId("scan-status"), "the pill, in the home's word").toHaveText(en("quickMatch.home.notPlayed"));
+    // FR3 (T5 finding 1): Check again, a real target; while the match is still Not played a tap reads it and nothing moves.
+    const checkAgain = page.getByTestId("scan-check-again");
+    await expect(checkAgain).toHaveText(en("device.quickMatch.checkAgain"));
+    await expectTappable(checkAgain, "Check again");
+    const read = stateRead(page, id);
+    await pressHydrated(checkAgain, "Check again");
+    await read;
+    await expect(page.getByTestId("scan-view-only"), "still Not played: still View-only").toHaveText(en("device.quickMatch.notPlayed"));
+    await markPage(page);
 
     // Put back from the other phone: the match is live again at its score (plan Q1, PO rec: restored as it was).
     await openRowMenu(row, "the other phone, Not played");
@@ -1023,16 +1073,17 @@ test("Pad left open: a rally on the pad, the match skipped on another phone (the
     await expect(row.getByTestId("qm-match-score"), "at the score it had").toHaveText(scoreText);
     expect((await recordOf([id])).get(id)?.status).toBe("in_play");
 
-    // The scorer looks at the pad again (a tab return, as a phone coming back from the home does): it reads the match
-    // again, View-only lifts, and the next rally is recorded on top of the first.
-    await page.evaluate(() => {
-      Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
-      document.dispatchEvent(new Event("visibilitychange"));
-      Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
-      document.dispatchEvent(new Event("visibilitychange"));
+    // FR3: the pad is left exactly as it is — no tap, no tab return, no reload. Its Not played screen reads the match on
+    // its own clock (NOT_PLAYED_RECHECK_MS), sees it put back, and View-only lifts onto the pad.
+    await expect(page.getByTestId("scan-view-only"), "live again on the pad, by itself").toHaveCount(0, {
+      timeout: NOT_PLAYED_RECHECK_MS + 20_000,
     });
-    await expect(page.getByTestId("scan-view-only"), "live again on the pad").toHaveCount(0, { timeout: 20_000 });
+    expect(await samePage(page), "the same page: no reload").toBe(true);
     await expect(homeHalf).toBeVisible();
+    // Before any tap, the pad is at the stored score: it mounted on the read that saw the Put back, not on the seed of its
+    // first Start (T3 review m5b), which would show the side's score before the rally.
+    expect(((await homeHalf.textContent()) ?? "").trim(), "the pad comes back at the stored score").toBe(halfAfterRally);
+    await expect(page.getByTestId("scan-check-again"), "Check again goes with the Not played screen").toHaveCount(0);
     await homeHalf.click();
     await expect.poll(() => rallies(id), { timeout: HOLD_MS + 20_000, message: "the rally after Put back never reached the ledger" }).toBe(2);
     await expect(page.getByText(en("device.seqConflict")), "no stale-seq refusal").toHaveCount(0);
