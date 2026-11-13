@@ -60,15 +60,6 @@ export function registrationPulse(rows: DerivableReg[], capacity: number | null)
   return p;
 }
 
-/** 1-based queue positions, created_at asc then id asc — the same oldest-
- *  first order auto-promotion consumes, so "#N" never lies about the queue. */
-export function waitlistPositions(rows: DerivableReg[]): Map<string, number> {
-  const queue = rows
-    .filter((r) => r.status === "waitlisted")
-    .sort((a, b) => iso(a.created_at).localeCompare(iso(b.created_at)) || a.id.localeCompare(b.id));
-  return new Map(queue.map((r, i) => [r.id, i + 1]));
-}
-
 /** Ids of ACTIVE rows sharing a contact email with another active row in the
  *  set — a non-blocking organiser hint (parents entering two kids are legal). */
 export function duplicateContactIds(rows: DerivableReg[]): Set<string> {
