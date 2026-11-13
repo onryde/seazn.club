@@ -661,7 +661,79 @@ for each of the three cart shapes in §3.2.
 
 | Stage | free 1-entry | card 1-entry | card 3-division |
 |---|---|---|---|
-| (to be measured) | | | |
+| (see Before below) | | | |
+
+### Before (stg, 2026-11-13, 778d6d57aa)
+
+stg.seazn.club, comp stream-matrix-test-club/reg-smoke-2026-11-13, headed Chrome, Server-Timing stages confirmed on the POST. Median / p90 in ms.
+Shapes: card1 = Open Singles (card), card3 = Open + Masters + Junior (card cart), offline1 = Offline Singles. **n=5 per shape, not 10**: the run
+was cut short by the owner, and the route's per-IP rate limit (5 per 300 s per competition) forced 65 s spacing. Earlier runs lost their
+samples to a crash (stderr totals only, same range). pre_tx.seat_gate / pre_tx.online stages were not emitted by this build.
+
+**card1** (n=5, HTTP [201])
+
+| metric (ms) | median | p90 |
+|---|---|---|
+| server rate_limit | 8.6 | 14.1 |
+| server turnstile | 48.1 | 59.0 |
+| server user | 0.1 | 0.2 |
+| server pre_tx | 38.0 | 97.8 |
+| server pre_tx.division_ctx | 8.7 | 10.6 |
+| server pre_tx.settings | 5.6 | 6.0 |
+| server pre_tx.entitlements | 22.9 | 82.2 |
+| server tx | 61.3 | 94.3 |
+| server mint | 544.7 | 570.9 |
+| server mint.mint_reads | 33.4 | 45.1 |
+| server mint.stripe | 503.4 | 512.0 |
+| server mail | 44.6 | 117.9 |
+| server total | 720.9 | 934.9 |
+| client click->request (token) | 36 | 100 |
+| client request->response | 848 | 1050 |
+| client response->navigation | 389 | 652 |
+| client click->navigation (wall) | 1234 | 1730 |
+
+**card3** (n=5, HTTP [201])
+
+| metric (ms) | median | p90 |
+|---|---|---|
+| server rate_limit | 8.3 | 8.7 |
+| server turnstile | 39.0 | 44.1 |
+| server user | 0.1 | 0.1 |
+| server pre_tx | 66.8 | 111.0 |
+| server pre_tx.division_ctx | 16.7 | 29.8 |
+| server pre_tx.settings | 13.2 | 42.1 |
+| server pre_tx.entitlements | 23.1 | 68.1 |
+| server tx | 108.5 | 141.9 |
+| server mint | 595.2 | 709.7 |
+| server mint.mint_reads | 39.5 | 40.9 |
+| server mint.stripe | 555.1 | 660.4 |
+| server mail | 57.3 | 73.1 |
+| server total | 869.6 | 1055.0 |
+| client click->request (token) | 23 | 34 |
+| client request->response | 1010 | 1137 |
+| client response->navigation | 188 | 543 |
+| client click->navigation (wall) | 1225 | 1576 |
+
+**offline1** (n=5, HTTP [201])
+
+| metric (ms) | median | p90 |
+|---|---|---|
+| server rate_limit | 8.1 | 10.8 |
+| server turnstile | 38.7 | 50.3 |
+| server user | 0.1 | 0.1 |
+| server pre_tx | 51.1 | 72.7 |
+| server pre_tx.division_ctx | 16.3 | 22.6 |
+| server pre_tx.settings | 5.7 | 14.4 |
+| server pre_tx.entitlements | 22.6 | 43.8 |
+| server tx | 96.9 | 129.7 |
+| server mint | 11.3 | 25.8 |
+| server mint.mint_reads | 11.2 | 25.8 |
+| server mail | 90.2 | 159.3 |
+| server total | 314.9 | 409.0 |
+| client click->request (token) | 26 | 31 |
+| client request->response | 453 | 500 |
+| client response->navigation | 201 | 276 |
+| client click->navigation (wall) | 668 | 782 |
 
 ---
 
