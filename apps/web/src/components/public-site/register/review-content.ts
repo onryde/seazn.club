@@ -7,6 +7,7 @@
 // is the rest, built from the same three states the submit reads (cart, contact, consent), so the page cannot list something the
 // request does not carry.
 import type { CartState, ConsentState, ContactState, DivisionLike, StepId } from "./types";
+import { guardianRequired } from "./validation";
 
 /** One question an entry's division asked, with what was answered. `null` = not answered (a skipped optional question). A checkbox is
  *  never `null`: unticked is a definite `false`. */
@@ -28,13 +29,18 @@ export interface ReviewContent {
   /** Empty when no entry's division asks anything: Review then has no Answers section at all. */
   answers: ReviewAnswerGroup[];
   consents: { privacy: boolean; media: boolean };
+  /** The guardian the submit carries (`guardian_name`, `guardian_consent`), present exactly when the Consent step asked for one
+   *  (`guardianRequired`, validation.ts: a self-registering player under 18). null otherwise, even if values are still held from
+   *  before the registrant changed a date of birth: the step does not show them then, so Review does not either. */
+  guardian: { name: string; consent: boolean } | null;
 }
 
 export function reviewContent(
   cart: CartState,
   divisions: readonly DivisionLike[],
-  contact: Pick<ContactState, "name" | "email">,
+  contact: Pick<ContactState, "name" | "email" | "dob" | "guardian_name" | "guardian_consent">,
   consent: ConsentState,
+  now: Date,
 ): ReviewContent {
   const byId = new Map(divisions.map((d) => [d.division_id, d]));
   const answers: ReviewAnswerGroup[] = [];
@@ -57,6 +63,9 @@ export function reviewContent(
     contact: { name: contact.name.trim(), email: contact.email.trim() },
     answers,
     consents: { privacy: consent.privacy_consent, media: consent.media_consent },
+    guardian: guardianRequired(cart, contact, now)
+      ? { name: (contact.guardian_name ?? "").trim(), consent: contact.guardian_consent }
+      : null,
   };
 }
 

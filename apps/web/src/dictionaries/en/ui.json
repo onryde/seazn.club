@@ -6666,6 +6666,7 @@
   "register.review.section.answers": "Answers",
   "register.review.section.consent": "Consent",
   "register.review.consent.media": "Photos and video of me from this event",
+  "register.review.consent.guardian": "Guardian's consent",
   "register.review.yes": "Yes",
   "register.review.no": "No",
   "register.review.notAnswered": "Not answered",

@@ -61,19 +61,21 @@ const ASKS = division("d-asks", "Asking Division", FIELDS);
 const PLAIN = division("d-plain", "Plain Division");
 const contact = { ...EMPTY_CONTACT, name: "  Mia Cole ", email: " mia@example.com " };
 const consent = { privacy_consent: true, media_consent: false };
+/** A fixed "today", so the guardian rule's 18th-birthday boundary is a date in this file, not the clock's. */
+const NOW = new Date("2026-11-13T12:00:00Z");
 
 describe("reviewContent: who, what they answered, what they agreed to", () => {
   it("the contact is the trimmed name and email, and the consents are the two checkboxes' own state", () => {
-    const out = reviewContent({ entries: [] }, [], contact, consent);
+    const out = reviewContent({ entries: [] }, [], contact, consent, NOW);
     expect(out.contact).toEqual({ name: "Mia Cole", email: "mia@example.com" });
     expect(out.consents).toEqual({ privacy: true, media: false });
-    expect(reviewContent({ entries: [] }, [], contact, { privacy_consent: false, media_consent: true }).consents).toEqual({ privacy: false, media: true });
+    expect(reviewContent({ entries: [] }, [], contact, { privacy_consent: false, media_consent: true }, NOW).consents).toEqual({ privacy: false, media: true });
   });
 
   it("EMPTY: no entries, or entries whose divisions ask nothing, give no answers at all (Review then omits the section)", () => {
-    expect(reviewContent({ entries: [] }, [ASKS], EMPTY_CONTACT, EMPTY_CONSENT).answers).toEqual([]);
+    expect(reviewContent({ entries: [] }, [ASKS], EMPTY_CONTACT, EMPTY_CONSENT, NOW).answers).toEqual([]);
     const cart = { entries: [entry("e1", "d-plain"), entry("e2", "d-plain")] };
-    expect(reviewContent(cart, [PLAIN], EMPTY_CONTACT, EMPTY_CONSENT).answers).toEqual([]);
+    expect(reviewContent(cart, [PLAIN], EMPTY_CONTACT, EMPTY_CONSENT, NOW).answers).toEqual([]);
   });
 
   it("one group per entry whose division asks questions, in cart order, each line labelled by the organiser's own question", () => {
@@ -84,7 +86,7 @@ describe("reviewContent: who, what they answered, what they agreed to", () => {
         entry("e3", "d-asks", { answers: { shirt: "L", diet: "None", ack: false } }),
       ],
     };
-    const out = reviewContent(cart, [ASKS, PLAIN], contact, consent).answers;
+    const out = reviewContent(cart, [ASKS, PLAIN], contact, consent, NOW).answers;
     expect(out.map((g) => g.entryId), "the plain entry has no group").toEqual(["e1", "e3"]);
     expect(out[0]).toEqual({
       entryId: "e1",
@@ -100,7 +102,7 @@ describe("reviewContent: who, what they answered, what they agreed to", () => {
 
   it("an unanswered question is null, never an empty string, and an unticked checkbox is a definite false", () => {
     const cart = { entries: [entry("e1", "d-asks", { answers: { shirt: "   " } })] };
-    const lines = reviewContent(cart, [ASKS], contact, consent).answers[0]!.lines;
+    const lines = reviewContent(cart, [ASKS], contact, consent, NOW).answers[0]!.lines;
     expect(lines.map((l) => l.value)).toEqual([null, null, false]);
   });
 
@@ -108,7 +110,46 @@ describe("reviewContent: who, what they answered, what they agreed to", () => {
     const cart = {
       entries: [entry("solo", "d-asks", { free_agent: true, answers: { shirt: "stale" } }), entry("gone", "d-vanished")],
     };
-    expect(reviewContent(cart, [ASKS], contact, consent).answers).toEqual([]);
+    expect(reviewContent(cart, [ASKS], contact, consent, NOW).answers).toEqual([]);
+  });
+});
+
+// The guardian rows: submit sends guardian_name and guardian_consent, so Review (which "shows everything that will be sent") lists them
+// exactly when the Consent step asked for them. The rule is the rulebook's: a self-registering player under 18 needs a guardian. The
+// boundary pair is two birthdays, not the code's own arithmetic: 18 tomorrow is still a minor, 18 today is an adult.
+describe("reviewContent: the guardian rows", () => {
+  const MINOR_DOB = "2008-11-14";
+  const ADULT_DOB = "2008-11-13";
+  const guardian = { guardian_name: "  Pat Guardian ", guardian_consent: true };
+  const selfCart = (dob: string) => ({
+    entries: [entry("self", "d-plain", { registering_self: true, self_player_index: 0, players: [{ ...EMPTY_ROSTER_PLAYER, full_name: "Mia Cole", dob }] })],
+  });
+
+  it("a self-registering minor lists the guardian's trimmed name and their consent", () => {
+    const out = reviewContent(selfCart(MINOR_DOB), [PLAIN], { ...contact, ...guardian }, consent, NOW);
+    expect(out.guardian).toEqual({ name: "Pat Guardian", consent: true });
+    expect(reviewContent(selfCart(MINOR_DOB), [PLAIN], { ...contact, guardian_name: "Pat", guardian_consent: false }, consent, NOW).guardian).toEqual({
+      name: "Pat",
+      consent: false,
+    });
+  });
+
+  it("the 18th birthday is the boundary: 18 tomorrow lists the guardian, 18 today does not", () => {
+    expect(reviewContent(selfCart(MINOR_DOB), [PLAIN], { ...contact, ...guardian }, consent, NOW).guardian, "17, 18 tomorrow").toEqual({ name: "Pat Guardian", consent: true });
+    expect(reviewContent(selfCart(ADULT_DOB), [PLAIN], { ...contact, ...guardian }, consent, NOW).guardian, "18 today").toBeNull();
+  });
+
+  it("EMPTY / not asked: an empty cart, a cart nobody self-registers in, and an adult list no guardian, even with guardian values still held", () => {
+    expect(reviewContent({ entries: [] }, [], { ...contact, ...guardian }, consent, NOW).guardian).toBeNull();
+    const notSelf = { entries: [entry("e1", "d-plain", { players: [{ ...EMPTY_ROSTER_PLAYER, full_name: "Kid", dob: MINOR_DOB }] })] };
+    expect(reviewContent(notSelf, [PLAIN], { ...contact, ...guardian }, consent, NOW).guardian, "a parent entering a child registers nobody themselves").toBeNull();
+    expect(reviewContent(selfCart("1990-01-01"), [PLAIN], { ...contact, ...guardian }, consent, NOW).guardian).toBeNull();
+  });
+
+  it("the contact's own date of birth counts when the self row has none (the same effective dob the Consent step reads)", () => {
+    const noRowDob = { entries: [entry("self", "d-plain", { registering_self: true, self_player_index: 0 })] };
+    expect(reviewContent(noRowDob, [PLAIN], { ...contact, dob: MINOR_DOB, ...guardian }, consent, NOW).guardian).toEqual({ name: "Pat Guardian", consent: true });
+    expect(reviewContent(noRowDob, [PLAIN], { ...contact, dob: "1990-01-01", ...guardian }, consent, NOW).guardian).toBeNull();
   });
 });
 

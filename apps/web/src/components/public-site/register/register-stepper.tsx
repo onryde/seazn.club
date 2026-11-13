@@ -618,7 +618,7 @@ export function RegisterStepper({
         <>
           <StepReview
             summary={reviewSummary}
-            content={reviewContent(cart, info.divisions, contact, consent)}
+            content={reviewContent(cart, info.divisions, contact, consent, new Date())}
             locale={locale}
             order={stepOrder}
             // The same jump the step rail makes (`setStepIndex(i)` is exactly what Back does, to any earlier step): nothing typed is lost,

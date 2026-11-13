@@ -6666,6 +6666,7 @@
   "register.review.section.answers": "Respuestas",
   "register.review.section.consent": "Consentimiento",
   "register.review.consent.media": "Fotos y vídeos míos de este evento",
+  "register.review.consent.guardian": "Consentimiento del tutor",
   "register.review.yes": "Sí",
   "register.review.no": "No",
   "register.review.notAnswered": "Sin responder",

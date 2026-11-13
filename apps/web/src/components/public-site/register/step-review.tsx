@@ -208,6 +208,9 @@ export function StepReview({
           <dl className="space-y-1.5">
             {row("privacy", t("register.consent.privacy.title"), yesNo(content.consents.privacy))}
             {row("media", t("register.review.consent.media"), yesNo(content.consents.media))}
+            {/* The guardian pair the submit carries, listed exactly when the Consent step asked for it (review-content.ts). */}
+            {content.guardian && row("guardian-name", t("register.guardian.name.label"), content.guardian.name)}
+            {content.guardian && row("guardian-consent", t("register.review.consent.guardian"), yesNo(content.guardian.consent))}
           </dl>,
         )}
       </div>

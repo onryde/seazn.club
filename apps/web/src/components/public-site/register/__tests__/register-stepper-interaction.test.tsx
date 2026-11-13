@@ -3073,7 +3073,7 @@ describe("P4 - the REVIEW step labels each entry with its own payment method (W9
     };
     const out = (StepReview as unknown as ComponentFn)({
       summary: summarizeCart(cart, [CARD, OFFLINE]),
-      content: reviewContent(cart, [CARD, OFFLINE], EMPTY_CONTACT, EMPTY_CONSENT),
+      content: reviewContent(cart, [CARD, OFFLINE], EMPTY_CONTACT, EMPTY_CONSENT, new Date()),
       locale: "en",
       order: buildStepOrder(2, "individual"),
       onEdit: vi.fn(),
@@ -4283,7 +4283,7 @@ describe("B2 T10 - Review: you, entries with players, answers, consent; Edit goe
     const cart: CartState = { entries: [] };
     const out = (StepReview as unknown as ComponentFn)({
       summary: summarizeCart(cart, [DIV_OPEN]),
-      content: reviewContent(cart, [DIV_OPEN], EMPTY_CONTACT, { privacy_consent: false, media_consent: true }),
+      content: reviewContent(cart, [DIV_OPEN], EMPTY_CONTACT, { privacy_consent: false, media_consent: true }, new Date()),
       locale: "en",
       order: buildStepOrder(2, "individual"),
       onEdit: vi.fn(),
@@ -4447,5 +4447,57 @@ describe("B2 T10 - Review: you, entries with players, answers, consent; Edit goe
     m.clickByText("Back");
     expect(all(m.island, "reg-bar-summary"), "back on Consent: the total returns").toHaveLength(1);
     expect(all(m.island, "reg-bar-sent-to"), "and the note leaves").toHaveLength(0);
+  });
+
+  // B2 review m4: the submit sends the guardian's name and consent, so Review (which shows everything that will be sent) lists them
+  // exactly when the Consent step asked for them. Driven through the real stepper from a minor registering themselves.
+  describe("the guardian rows (B2 review m4)", () => {
+    function reachConsent(dob: string): M {
+      const m = mount([DIV_OPEN]);
+      (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Young Player", email: "young@example.com", dob });
+      (propsOf(m.stepWho()).onImPlayingChange as (v: boolean) => void)(true); // auto-links the sole entry
+      m.clickByText("Next"); // -> DETAILS
+      setByAriaLabel(m.island, "Player 1 \u2014 Your name", "Young Player");
+      m.clickByText("Next"); // -> CONSENT
+      tick(m.island, "reg-consent-privacy");
+      return m;
+    }
+    const consentText = (m: M) => textOf(one(m.island, "reg-review-consent"));
+
+    it("a self-registering minor's Review lists the guardian's name and consent beside the two checkboxes", () => {
+      const m = reachConsent(minorDob());
+      expect(onStep(m.island, StepConsent), "premise: the guardian block is up").toBe(true);
+      (propsOf(byId(m.island, "reg-guardian-name")).onChange as (e: { target: { value: string } }) => void)({ target: { value: "Pat Guardian" } });
+      tick(m.island, "reg-guardian-consent");
+      m.clickByText("Next"); // -> REVIEW
+      expect(onStep(m.island, StepReview), "premise: on Review").toBe(true);
+      const text = consentText(m);
+      expect(text).toContain("Guardian's name");
+      expect(text).toContain("Pat Guardian");
+      expect(text).toContain("Guardian's consent");
+      expect(text, "the guardian's consent row says Yes (it was ticked)").toMatch(/Guardian's consent\s*Yes/);
+      expect(text, "and the guardian's name row carries the typed name").toMatch(/Guardian's name\s*Pat Guardian/);
+      expect(text, "the two checkboxes are still listed").toContain("Photos and video of me from this event");
+    });
+
+    it("its pair: an adult registering themselves has a Review with no guardian rows at all", () => {
+      const m = reachConsent("1990-01-01");
+      expect(onStep(m.island, StepConsent), "premise: on Consent").toBe(true);
+      m.clickByText("Next"); // -> REVIEW
+      expect(onStep(m.island, StepReview), "premise: on Review").toBe(true);
+      const text = consentText(m);
+      expect(text, "premise: the section lists the checkboxes").toContain("Photos and video of me from this event");
+      expect(text).not.toContain("Guardian");
+    });
+
+    it("every locale words the new row", () => {
+      let checked = 0;
+      for (const loc of ["en", "es", "fr", "nl"]) {
+        const d = JSON.parse(readFileSync(join(__dirname, "..", "..", "..", "..", "dictionaries", loc, "ui.json"), "utf8")) as Record<string, string>;
+        expect(d["register.review.consent.guardian"], `${loc}: the guardian consent row's label`).toBeTruthy();
+        checked++;
+      }
+      expect(checked, "anti-vacuity: all four locales").toBe(4);
+    });
   });
 });

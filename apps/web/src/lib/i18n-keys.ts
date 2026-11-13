@@ -6839,6 +6839,7 @@ export type DictionaryKey =
   | "register.payments.unavailable.body"
   | "register.payments.unavailable.title"
   | "register.review.cardNote"
+  | "register.review.consent.guardian"
   | "register.review.consent.media"
   | "register.review.edit"
   | "register.review.heading"
