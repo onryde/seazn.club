@@ -374,7 +374,7 @@ the status page's card style.
 
 ### 6.1 Storage
 
-*Amended 2026-11-13 (B5 T17 rulings A' and cart_size; B3 review m7, m8). The
+*Amended 2026-11-13 (B5 T17 rulings A' and cart_size; B3 review m7, m8; B4 review m8). The
 first draft had submit stamp `cart_position` from the `prepared` index; that
 broke ~27 direct-insert fixtures, seeds and smoke suites, and a derived cart
 size would have moved a suffix after a delete. The design below replaced it.*
@@ -400,6 +400,9 @@ size would have moved a suffix after a delete. The design below replaced it.*
   - an update that changes an entry's `cart_position` or moves it to another
     cart (`group_id`);
   - an update that lowers a cart's `cart_size`;
+  - an update that raises a cart's `cart_size` anywhere but inside
+    `trg_cart_position`, and by anything but one (B4 review m8; the guard knows
+    the trigger's own write by `pg_trigger_depth() > 1`);
   - an insert into `registration_groups` with a `cart_size` other than 0.
 - **A suffix never changes after submit.** `cart_size` never shrinks, and a
   deleted entry's number is never handed out again. A lone survivor of a

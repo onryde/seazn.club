@@ -17,9 +17,9 @@
 -- ONE writer: trg_cart_position (BEFORE INSERT on registrations) bumps the group's cart_size — the UPDATE takes the group
 -- row lock, so two inserts into one group queue rather than race — and gives the new value to the entry. An insert may not
 -- supply a position (refused), an update may not change an entry's position or move it to another cart (refused), a
--- cart's size may not go down (refused), and a new cart starts at size 0 (an insert naming any other size is refused, or
--- its first entry would be numbered past 1 and a one-entry cart quoted with a suffix). Fixtures, e2e seeds and smoke
--- inserts name neither column and need no change.
+-- cart's size may not go down (refused) or be raised by anything but trg_cart_position (refused: B4 review m8), and a new
+-- cart starts at size 0 (an insert naming any other size is refused, or its first entry would be numbered past 1 and a
+-- one-entry cart quoted with a suffix). Fixtures, e2e seeds and smoke inserts name neither column and need no change.
 --
 -- !! DATA CHANGE — BACKFILL (marked block below) !!
 --   Every existing registration is numbered within its group by (created_at, id): the order the status page and the cart
@@ -79,17 +79,24 @@ end $$;
 create trigger trg_cart_position_frozen before update of cart_position, group_id on registrations
   for each row execute function registrations_freeze_cart_position();
 
-create or replace function registration_groups_cart_size_never_shrinks() returns trigger
+-- A cart's size moves one way, and only from its entries. It never goes down, and the one raise allowed is trg_cart_position's
+-- own `cart_size + 1`, which reaches this trigger NESTED inside it (pg_trigger_depth() = 2; a statement a person or a usecase
+-- sends fires it at depth 1). B4 review m8: a hand-written raise quoted a cart's entries as "-1 of 3" when it was sent with two,
+-- and numbered its next entry past a gap. An update that names the column without changing it (`cart_size = cart_size`) passes.
+create or replace function registration_groups_cart_size_only_from_entries() returns trigger
   language plpgsql as $$
 begin
   if new.cart_size < old.cart_size then
     raise exception 'cart_position: a cart''s size never shrinks (% -> %)', old.cart_size, new.cart_size;
   end if;
+  if new.cart_size <> old.cart_size and not (pg_trigger_depth() > 1 and new.cart_size = old.cart_size + 1) then
+    raise exception 'cart_position: only a new entry raises a cart''s size (% -> %)', old.cart_size, new.cart_size;
+  end if;
   return new;
 end $$;
 
-create trigger trg_cart_size_never_shrinks before update of cart_size on registration_groups
-  for each row execute function registration_groups_cart_size_never_shrinks();
+create trigger trg_cart_size_only_from_entries before update of cart_size on registration_groups
+  for each row execute function registration_groups_cart_size_only_from_entries();
 
 -- B3 review m7: the insert was the one way left to write a cart_size by hand. Only trg_cart_position raises it.
 create or replace function registration_groups_cart_size_starts_at_zero() returns trigger

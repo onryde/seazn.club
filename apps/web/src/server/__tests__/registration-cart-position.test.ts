@@ -170,6 +170,38 @@ describe.skipIf(!HAS_DB)("V519 cart_position / cart_size", () => {
     await dropOrg(orgId);
   });
 
+  // B4 review m8: raising a cart's size by hand was the last write left to anything but trg_cart_position. A cart bumped from 2 to 3
+  // by hand quotes its two entries "-1" and "-2" of a three-entry cart that never existed, and its next entry is "-4". Only an
+  // entry's insert raises it, by exactly one; the guard knows that write by its trigger depth (it runs inside trg_cart_position).
+  it("only a new entry raises a cart's size: a hand-written raise is refused, the insert trigger's is accepted", async () => {
+    const { orgId, compId, divId } = await seedOrgCompDiv();
+    const group = await seedGroup(compId);
+    await insertEntry(group.id, divId, "A");
+    await insertEntry(group.id, divId, "B");
+    const raises = ["cart_size + 1", "cart_size + 5", "3"];
+    for (const to of raises) {
+      expect(
+        await outcome(sql`update registration_groups set cart_size = ${sql.unsafe(to)} where id = ${group.id}`),
+        `-> ${to}`,
+      ).toContain("cart_position: only a new entry raises a cart's size");
+    }
+    expect(raises.length, "anti-vacuity: three hand raises refused").toBe(3);
+    expect(await cartSize(group.id), "a refused raise writes nothing").toBe(2);
+
+    // The positive pair: an unchanged size and another column are not raises, and the insert trigger still numbers entries,
+    // one at a time and several in one statement.
+    expect(await outcome(sql`update registration_groups set cart_size = cart_size where id = ${group.id}`)).toBe("accepted");
+    expect(await outcome(sql`update registration_groups set contact_name = 'Renamed' where id = ${group.id}`)).toBe("accepted");
+    expect((await insertEntry(group.id, divId, "C")).cart_position).toBe(3);
+    const pair = await sql<{ cart_position: number }[]>`
+      insert into registrations (group_id, division_id, display_name)
+      values (${group.id}, ${divId}, 'D'), (${group.id}, ${divId}, 'E')
+      returning cart_position`;
+    expect(pair.map((r) => r.cart_position).sort()).toEqual([4, 5]);
+    expect(await cartSize(group.id)).toBe(5);
+    await dropOrg(orgId);
+  });
+
   // B3 review m7: the insert was the one way left to write a cart_size by hand. A new cart that starts at 5 hands its first entry
   // number 6 and quotes every reference with a suffix it never earned (a one-entry cart is quoted bare). A cart starts at 0.
   it("a new group may not start at a cart_size of its own choosing; naming 0, or nothing, is accepted", async () => {
