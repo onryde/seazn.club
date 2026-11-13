@@ -185,12 +185,12 @@ test("configure, register, join, waitlist, approve, opt-out — every screen agr
     await anon.locator("#reg-who-email").fill(opts.email);
     await anon.getByRole("checkbox").first().check().catch(() => {});
     await anon.locator("#reg-who-dob").fill("1990-04-12").catch(() => {});
-    await anon.getByRole("button", { name: /^next$/i }).click();
+    await anon.getByTestId("reg-next").click();
 
     // step 2: ENTRIES
     await anon.getByRole("button", { name: /add a team/i }).click();
     await anon.getByLabel(/team name/i).first().fill(opts.team);
-    await anon.getByRole("button", { name: /^next$/i }).click();
+    await anon.getByTestId("reg-next").click();
 
     // step 3: DETAILS — the captain, real and complete; an optional second,
     // named-but-not-yet-claimed row (RS007's own "captain enters on behalf
@@ -207,16 +207,16 @@ test("configure, register, join, waitlist, approve, opt-out — every screen agr
       await boxes.nth((await boxes.count()) - 1).fill(name);
     }
     await anon.locator('select[id^="reg-self-index"]').first().selectOption({ label: opts.name });
-    await anon.getByRole("button", { name: /^next$/i }).click();
+    await anon.getByTestId("reg-next").click();
 
     // step 4: CONSENT
     await anon.locator("#reg-consent-privacy").check();
-    await anon.getByRole("button", { name: /^next$/i }).click();
+    await anon.getByTestId("reg-next").click();
 
     // step 5: REVIEW -> submit
     const [submitResponse] = await Promise.all([
       anon.waitForResponse((r) => r.url().includes("/register") && r.request().method() === "POST"),
-      anon.getByRole("button", { name: /^enter\b/i }).last().click(),
+      anon.getByTestId("reg-submit").click(),
     ]);
     expect(submitResponse.status(), `${opts.team}'s submission was refused outright`).toBeLessThan(300);
 

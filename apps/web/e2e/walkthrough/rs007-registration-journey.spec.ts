@@ -103,7 +103,7 @@ test("a captain enters a team, and a team-mate claims their spot from the link t
     await anon.getByRole("checkbox").first().check().catch(() => {});
     await anon.locator("#reg-who-dob").fill("1990-04-12").catch(() => {});
     await shot(anon, "01-who");
-    await anon.getByRole("button", { name: /^next$/i }).click();
+    await anon.getByTestId("reg-next").click();
 
     // --------------------------------------------------- step 2: ENTRIES
     await anon.getByRole("button", { name: /add a team/i }).click();
@@ -112,7 +112,7 @@ test("a captain enters a team, and a team-mate claims their spot from the link t
     // which the same wave gave it (it had only a placeholder before).
     await anon.getByLabel(/team name/i).first().fill(`Journey Team ${TAG}`);
     await shot(anon, "02-entries");
-    await anon.getByRole("button", { name: /^next$/i }).click();
+    await anon.getByTestId("reg-next").click();
 
     // --------------------------------------------------- step 3: DETAILS
     // The captain plus two team-mates entered on their behalf.
@@ -132,20 +132,21 @@ test("a captain enters a team, and a team-mate claims their spot from the link t
     }
     await anon.locator('select[id^="reg-self-index"]').first().selectOption({ label: roster[0]! });
     await shot(anon, "03-details");
-    await anon.getByRole("button", { name: /^next$/i }).click();
+    await anon.getByTestId("reg-next").click();
 
     // --------------------------------------------------- step 4: CONSENT
     // Privacy is required and versioned; media is optional. Leaving media
     // unticked is the realistic case AND proves the optional one is optional.
     await anon.locator("#reg-consent-privacy").check();
     await shot(anon, "04-consent");
-    await anon.getByRole("button", { name: /^next$/i }).click();
+    await anon.getByTestId("reg-next").click();
 
     // ---------------------------------------------------- step 5: REVIEW
     await shot(anon, "05-review");
-    // Labelled by what it does and what it costs ("Enter — free" / "Enter —
-    // £25"), never "Submit".
-    await anon.getByRole("button", { name: /^enter\b/i }).last().click();
+    // Labelled by what it does and what it costs ("Enter the competition" /
+    // "Enter — £25" / "Pay £25 and enter"), never "Submit" — so it is found by
+    // its testid, not its words (the words change with the cart).
+    await anon.getByTestId("reg-submit").click();
 
     // --------------------------------------------------- the STATUS page
     await anon.waitForURL(/\/register\/status\?/, { timeout: 30_000 });

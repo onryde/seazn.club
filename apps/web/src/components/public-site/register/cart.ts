@@ -565,7 +565,7 @@ export function lineMethod(line: CartLineSummary): DivisionLike["payment_method"
 }
 
 /** The division that decides the cart's payment PRESENTATION — step 5's
- *  submit button label (register.submit.card/.fee). (The review's per-entry
+ *  submit button label (register.submit.pay/.fee). (The review's per-entry
  *  method labels read `lineMethod` instead — one entry each, P4/W9.) The first line that
  *  is actually charged now (not waitlisted/stale-closed, fee > 0); every
  *  payable division in a cart shares one payment method by construction

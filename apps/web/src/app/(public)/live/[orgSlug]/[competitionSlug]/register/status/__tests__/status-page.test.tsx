@@ -148,6 +148,15 @@ describe("register status page (RS007 rebuild)", () => {
     expect(usecaseMock.groupById).toHaveBeenCalledWith("g1", "tok");
   });
 
+  // B2 T8 (spec §7.2): the org header scrolls away on a phone only where `data-register-flow` is on the page (the register stepper). The
+  // status page is where a person comes back to check or pay, and its header stays sticky: the marker must not be here.
+  it("does not carry data-register-flow, so the org header stays sticky on the status page", async () => {
+    usecaseMock.groupById.mockResolvedValueOnce(BASE_VIEW);
+    const html = await render({ rid: "g1", token: "tok" });
+    expect(html, "anti-vacuity: this is the real status page, not an empty render").toContain("SZ-TEST-01");
+    expect(html).not.toContain("data-register-flow");
+  });
+
   // RS008 review fix #9 (RS009 handoff) — gated ONLY on free_agent, no other
   // condition (see awaitingTeamAssignment's own doc comment for why this is
   // deliberately incomplete and owed to RS009).

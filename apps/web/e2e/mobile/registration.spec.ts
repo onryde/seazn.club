@@ -3,6 +3,7 @@
 
 import { test, expect } from "@playwright/test";
 import { TAG, apiJson, activeOrg, expectNoHorizontalScroll, loginUi } from "../helpers";
+import { consentedAnonymousState } from "../scorepad-a11y-kit";
 import { projectTag, projectViewport } from "./_shared";
 
 // Not serial: no test here reads state another test writes (no module-level `let` is shared), so one red does not skip the rest (AGENTS.md class 21).
@@ -316,7 +317,12 @@ test("register stepper: ENTRIES/DETAILS/CONSENT/REVIEW hold at this width, no ho
 
     const org = await activeOrg(page);
 
-    const anonCtx = await browser.newContext({ viewport: projectViewport() ?? undefined });
+    // Consent answered up front, as a person's first tap would: below `md` the register form's action bar is pinned to the same edge the
+    // cookie banner sits on, with the banner ABOVE it (register-stepper.tsx), so an unanswered banner covers the bar's Back/Next.
+    const anonCtx = await browser.newContext({
+      viewport: projectViewport() ?? undefined,
+      storageState: await consentedAnonymousState(),
+    });
     try {
       const anon = await anonCtx.newPage();
       await anon.goto(`/live/${org.slug}/${comp.data!.slug}/register`, { waitUntil: "load" });
@@ -344,7 +350,7 @@ test("register stepper: ENTRIES/DETAILS/CONSENT/REVIEW hold at this width, no ho
         anon.locator("#reg-who-dob"),
         "a contact who is not playing must NOT be asked for their own date of birth",
       ).toHaveCount(0);
-      await anon.getByRole("button", { name: "Next", exact: true }).click();
+      await anon.getByTestId("reg-next").click();
 
       // Step 2 — ENTRIES.
       await expect(anon.getByRole("heading", { name: "Choose your divisions", exact: true })).toBeVisible({
@@ -356,7 +362,7 @@ test("register stepper: ENTRIES/DETAILS/CONSENT/REVIEW hold at this width, no ho
         "adding the individual division must land one line in the cart",
       ).toBeVisible();
       await expectNoHorizontalScroll(anon);
-      await anon.getByRole("button", { name: "Next", exact: true }).click();
+      await anon.getByTestId("reg-next").click();
 
       // Step 3 — DETAILS. The point of this test: a requires_dob division's
       // roster row renders `input[type="date"]`, the widest control in the
@@ -381,7 +387,7 @@ test("register stepper: ENTRIES/DETAILS/CONSENT/REVIEW hold at this width, no ho
         "roster date-of-birth input right edge must stay within the viewport",
       ).toBeLessThanOrEqual(vw);
       await expectNoHorizontalScroll(anon);
-      await anon.getByRole("button", { name: "Next", exact: true }).click();
+      await anon.getByTestId("reg-next").click();
 
       // Step 4 — CONSENT. No self-link anywhere in the cart, so the guardian
       // block must be absent (guardianRequired keys off the cart's self-link,
@@ -391,7 +397,7 @@ test("register stepper: ENTRIES/DETAILS/CONSENT/REVIEW hold at this width, no ho
       await expect(anon.locator("#reg-guardian-name")).toHaveCount(0);
       await anon.locator("#reg-consent-privacy").check();
       await expectNoHorizontalScroll(anon);
-      await anon.getByRole("button", { name: "Next", exact: true }).click();
+      await anon.getByTestId("reg-next").click();
 
       // Step 5 — REVIEW. Final frame; deliberately never taps Submit (that
       // would POST the real registration and navigate away — out of scope for

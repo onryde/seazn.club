@@ -63,7 +63,7 @@ import { join } from "node:path";
 import type { ReactElement, ReactNode } from "react";
 import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
 import { ApiV1Error } from "@/lib/client-v1";
-import { t as tRuntime } from "@/lib/i18n-runtime";
+import { plural as pluralRuntime, t as tRuntime } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";
 import { summarizeCart } from "../cart";
 import { DivisionCard } from "../division-card";
@@ -91,6 +91,8 @@ const EN_UI: Dict = JSON.parse(
 
 vi.mock("@/components/i18n/dict-provider", () => ({
   useT: () => (key: string, vars?: Record<string, string | number>) => tRuntime(EN_UI, key, vars),
+  usePlural: () => (key: string, count: number, vars?: Record<string, string | number>) =>
+    pluralRuntime(EN_UI, key, count, "en", vars),
 }));
 
 // ---------------------------------------------------------------------------
@@ -290,8 +292,12 @@ function mount(
     expect(el, "EntryCart not in the tree — not on the ENTRIES step?").toBeTruthy();
     return propsOf(el!).cart as CartState;
   };
+  // "Next" here is the forward button's ROLE, not a label: its words are "Continue to {step}" (B2 T8) and move with the step, so it is
+  // found by its testid, the same hook the e2e suite uses. Every other button is still found by its visible text.
   const clickByText = (text: string) => {
-    const btn = island.tree().find((e) => e.type === "button" && textOf(e) === text);
+    const btn = island
+      .tree()
+      .find((e) => e.type === "button" && (text === "Next" ? propsOf(e)["data-testid"] === "reg-next" : textOf(e) === text));
     expect(btn, `no button with text "${text}"`).toBeTruthy();
     expect(propsOf(btn!).disabled, `button "${text}" is disabled`).not.toBe(true);
     (propsOf(btn!).onClick as () => void)();
@@ -962,7 +968,8 @@ describe("2026-08-27 review finding 3 — a non-playing contact is never forced 
 });
 
 // ---------------------------------------------------------------------------
-// Finding #6 — the nav row must sit above the cookie banner
+// Finding #6 — the nav row must sit above the cookie banner (from `md`; B2 T8: below `md` the pinned bar sits BELOW it, see the
+// describe below — measured in a browser, a z-50 bar pinned to the banner's own edge buried its Accept/Reject)
 // ---------------------------------------------------------------------------
 //
 // Source contract, same convention as cookie-consent-below-dialogs.test.ts
@@ -981,35 +988,50 @@ function zIndexOf(className: string): number {
   return Number(m![1]);
 }
 
-describe("the nav row never sits below the cookie banner", () => {
-  it("register-stepper's Back/Next row is z-50, strictly above the banner's z-40", () => {
-    const stepperSrc = readFileSync(join(__dirname, "..", "register-stepper.tsx"), "utf8");
-    const navRowMatch = stepperSrc.match(/className="([^"]*\bjustify-between\b[^"]*)"/);
-    expect(navRowMatch, "no Back/Next row class found in register-stepper.tsx").not.toBeNull();
-    const navZ = zIndexOf(navRowMatch![1]!);
+/** The action bar's own element (B2 T8): the one row Back and the forward button live in, read off the mounted stepper. */
+function actionBarClass(): string {
+  const m = mount([DIV_OPEN]);
+  const bar = m.island.tree().find((e) => propsOf(e)["data-testid"] === "reg-bar");
+  expect(bar, "the stepper renders no [data-testid=reg-bar] action bar").toBeTruthy();
+  return String(propsOf(bar!).className);
+}
 
+describe("the action bar and the cookie banner (z-order, per breakpoint)", () => {
+  const bannerZ = (): number => {
     const bannerSrc = readFileSync(join(__dirname, "..", "..", "..", "cookie-consent.tsx"), "utf8");
     const bannerMatch = bannerSrc.match(/className="([^"]*\bfixed\b[^"]*)"/);
     expect(bannerMatch, "no fixed banner class found in cookie-consent.tsx").not.toBeNull();
-    const bannerZ = zIndexOf(bannerMatch![1]!);
+    return zIndexOf(bannerMatch![1]!);
+  };
+  /** The bar's z-index at one breakpoint, read off its own class: `md:z-N` from md up, `max-md:z-N` below it. */
+  const barZ = (prefix: "md" | "max-md"): number => {
+    const m = actionBarClass().match(new RegExp(`(?:^|\\s)${prefix}:z-(\\d+)(?:\\s|$)`));
+    expect(m, `no ${prefix}:z-N on the action bar`).not.toBeNull();
+    return Number(m![1]);
+  };
 
-    expect(navZ, `nav row z-${navZ} must be ABOVE the cookie banner z-${bannerZ}`).toBeGreaterThan(bannerZ);
+  it("from md the row is z-50, strictly above the banner's z-40 (finding #6: the banner never swallows a click on Back/Next)", () => {
+    expect(barZ("md"), `md row z-${barZ("md")} must be ABOVE the cookie banner z-${bannerZ()}`).toBeGreaterThan(bannerZ());
+  });
+
+  it("below md the pinned bar is strictly BELOW the banner: the banner's Accept/Reject are never buried under it (but still under dialogs, z-50)", () => {
+    expect(barZ("max-md"), `phone bar z-${barZ("max-md")} must be BELOW the cookie banner z-${bannerZ()}`).toBeLessThan(bannerZ());
+    expect(barZ("max-md"), "a dialog (z-50) still covers the bar").toBeLessThan(50);
+    expect(actionBarClass(), "no un-prefixed z-N that would apply at both breakpoints").not.toMatch(/(?:^|\s)z-\d+(?:\s|$)/);
   });
 });
 
 // B1 fix round 1, D2: at 320 the forward button's label wraps to two lines in nl and fr ("Beveiligde betaling wordt geopend…",
-// "Enregistrement de votre place…"), the button grows to fill the row and `justify-between` alone left it flush against Back
+// "Enregistrement de votre place…"), the button grows to fill the row and a row with no gap left it flush against Back
 // (measured 0px in a real browser, the Playwright captures for this round). A row gap is the one thing that keeps them apart
-// whatever a translation's length, and this pins it on the same row class the cookie-banner contract reads above.
+// whatever a translation's length, and this pins it on the bar's own class (B2 T8: the bar is a wrapping flex row, so the gap is `gap-x-N`).
 describe("the nav row keeps Back and the forward button apart", () => {
-  it("register-stepper's Back/Next row carries a gap of at least 0.5rem", () => {
-    const stepperSrc = readFileSync(join(__dirname, "..", "register-stepper.tsx"), "utf8");
-    const rows = [...stepperSrc.matchAll(/className="([^"]*\bjustify-between\b[^"]*)"/g)].map((m) => m[1]!);
-    expect(rows.length, "anti-vacuity: exactly one Back/Next row in register-stepper.tsx").toBe(1);
-    const gap = rows[0]!.match(/(?:^|\s)gap-(\d+(?:\.\d+)?)(?:\s|$)/);
-    expect(gap, `no gap-N on the nav row: ${rows[0]}`).not.toBeNull();
+  it("register-stepper's action bar carries a horizontal gap of at least 0.5rem", () => {
+    const cls = actionBarClass();
+    const gap = cls.match(/(?:^|\s)gap(?:-x)?-(\d+(?:\.\d+)?)(?:\s|$)/);
+    expect(gap, `no gap-N / gap-x-N on the action bar: ${cls}`).not.toBeNull();
     // Tailwind's spacing scale: gap-N is N × 0.25rem, so gap-2 is the 0.5rem floor.
-    expect(Number(gap![1]), `nav row gap-${gap![1]}`).toBeGreaterThanOrEqual(2);
+    expect(Number(gap![1]), `action bar gap ${gap![1]}`).toBeGreaterThanOrEqual(2);
   });
 });
 
@@ -2374,7 +2396,7 @@ describe("step 5 — submit", () => {
 
   // Bench hook (B03r) — the public stepper has no other selector-free way to
   // find this button (its label is a translated string, "Enter the
-  // competition"/"Continue to payment" depending on the fee). Asserted on
+  // competition"/"Pay {fee} and enter" depending on the fee). Asserted on
   // the PROP value itself, not a truthiness check — propsOf reads the real
   // element props (no renderToStaticMarkup string here), so there is no
   // "$undefined" ambiguity to guard against, but pinning the exact string
@@ -2406,7 +2428,10 @@ describe("step 5 — submit", () => {
   // driver clicking Back to go forward looks exactly like a wizard that will
   // not advance.
   it('carries data-testid="reg-next" on Next and "reg-back" on Back, on the right buttons', async () => {
-    const m = mount([DIV_OPEN]);
+    // Back does not exist on the first step (B2 T8), so the pair is read from the second.
+    const m = mount([DIV_OPEN, DIV_OPEN_2]);
+    (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Alex Test", email: "alex@example.com" });
+    m.clickByText("Next"); // -> ENTRIES
     const row = m.island.tree().filter((e) => e.type === "button");
     const back = row.find((e) => propsOf(e)["data-testid"] === "reg-back");
     const next = row.find((e) => propsOf(e)["data-testid"] === "reg-next");
@@ -2414,9 +2439,8 @@ describe("step 5 — submit", () => {
     expect(back, "no reg-back button").toBeTruthy();
     expect(next, "no reg-next button").toBeTruthy();
 
-    // Back is the disabled-on-first-step one; Next is not. This is what
-    // distinguishes them beyond the label, which is a translated string.
-    expect(propsOf(back!).disabled, "reg-back should be disabled on the first step").toBe(true);
+    // Neither is disabled here; what distinguishes them beyond the label (a translated string) is the handler each one carries.
+    expect(propsOf(back!).disabled).not.toBe(true);
     expect(propsOf(next!).disabled).not.toBe(true);
     expect(propsOf(back!).onClick).not.toBe(propsOf(next!).onClick);
   });
@@ -2497,7 +2521,7 @@ describe("step 5 — staged submit button text (registration redesign B1 T6)", (
   const DIV_PAY_LATER: DivisionLike = { ...DIV_PAID, division_id: "div-pay-later", name: "Pay Later Singles", payment_method: "offline" };
   const CARTS = [
     { name: "free", division: DIV_OPEN, ready: "Enter the competition" },
-    { name: "card", division: DIV_PAID, ready: "Continue to payment — £25.00" },
+    { name: "card", division: DIV_PAID, ready: "Pay £25.00 and enter" },
     { name: "pay-the-organiser-later", division: DIV_PAY_LATER, ready: "Enter — £25.00" },
   ] as const;
   const BASE_RESULT = { group_id: "g1", ref_code: "SZ-T6-01", access_token: "tok1", currency: "gbp", entries: [] };
@@ -2633,7 +2657,7 @@ describe("step 5 — staged submit button text (registration redesign B1 T6)", (
     const first = await startSubmit(island);
     first.post.reject(new ApiV1Error("Boom", 500, "INTERNAL"));
     await first.done;
-    expect(labelOf(island)).toBe("Continue to payment — £25.00");
+    expect(labelOf(island)).toBe("Pay £25.00 and enter");
 
     apiV1Mock.impl.mockReset();
     const second = await startSubmit(island);
@@ -3219,5 +3243,327 @@ describe("B2 T7 — the stepper mounts StepNav with its real order and a working
     m.clickByText("Next"); // forward again: still ENTRIES, with the cart intact
     expect(stepNav(m).currentIndex).toBe(1);
     expect(m.entryCartCart().entries, "the entry added before jumping is still there").toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Registration redesign B2 T8 (spec §7.2) — the action bar. One DOM: a single `reg-bar` holds Back, the running total and the one forward
+// button, sticky on a phone and a plain row from `md`. Driven through the real stepper, read off the element tree it mounts: the pure
+// pieces (labels, count, total) come from the stepper's own state, so a test that hands the bar its props would prove the bar and miss
+// the seam (AGENTS.md recurring class 1). Expected words are the spec's own literals, never read back out of the dictionary the code reads.
+// Sport: not applicable (the register form is sport-agnostic).
+// ---------------------------------------------------------------------------
+
+describe("B2 T8 — action bar: Back, named Continue, running total, one forward button", () => {
+  type M = ReturnType<typeof mount>;
+  type Island = M["island"];
+  const DIV_PAID_2: DivisionLike = { ...DIV_PAID, division_id: "div-paid-2", name: "Paid Doubles" };
+  const DIV_PAY_LATER_T8: DivisionLike = { ...DIV_PAID, division_id: "div-later-t8", name: "Pay Later T8", payment_method: "offline" };
+
+  const all = (island: Island, id: string) => island.tree().filter((e) => propsOf(e)["data-testid"] === id);
+  const one = (island: Island, id: string) => {
+    const hits = all(island, id);
+    expect(hits, `exactly one [data-testid=${id}]`).toHaveLength(1);
+    return hits[0]!;
+  };
+  const nextLabel = (island: Island) => textOf(one(island, "reg-next"));
+  const fillWho = (m: M) => (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Alex Test", email: "alex@example.com" });
+  const consent = (m: M) =>
+    (propsOf(byId(m.island, "reg-consent-privacy")).onChange as (e: { target: { checked: boolean } }) => void)({ target: { checked: true } });
+  const addEntry = (m: M, divisionId: string) => (propsOf(m.divisionCard(divisionId)).onAddIndividual as () => void)();
+
+  /** Walks the 4-step form (one open division collapses Entries away) to Review. */
+  function reachReview(division: DivisionLike): M {
+    const m = mount([division]);
+    fillWho(m);
+    m.clickByText("Next"); // -> DETAILS
+    setByAriaLabel(m.island, "Player 1 — Your name", "Alex Test");
+    m.clickByText("Next"); // -> CONSENT
+    consent(m);
+    m.clickByText("Next"); // -> REVIEW
+    return m;
+  }
+
+  function deferred<T>() {
+    let resolve!: (v: T) => void;
+    let reject!: (e: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+  async function startSubmit(island: Island) {
+    const post = deferred<unknown>();
+    apiV1Mock.impl.mockReturnValueOnce(post.promise);
+    const done = (propsOf(one(island, "reg-submit")).onClick as () => Promise<void>)();
+    await vi.waitFor(() => expect(apiV1Mock.impl, "the POST is in flight").toHaveBeenCalledTimes(1));
+    return { post, done };
+  }
+  const WITH_CHECKOUT = {
+    group_id: "g1", ref_code: "SZ-T8-01", access_token: "tok1", currency: "gbp", entries: [],
+    amount_cents: 2500, checkout_url: "https://checkout.stripe.com/pay/xyz",
+  };
+
+  it("Back is absent on the first step, present and enabled from the second, absent again after going back to the first", () => {
+    const m = mount([DIV_OPEN, DIV_OPEN_2]);
+    expect(all(m.island, "reg-back"), "step 1: no Back at all (absent, not disabled)").toHaveLength(0);
+    fillWho(m);
+    m.clickByText("Next"); // -> ENTRIES
+    const back = one(m.island, "reg-back");
+    expect(propsOf(back).disabled, "step 2: an enabled Back").not.toBe(true);
+    expect(textOf(back)).toBe("Back");
+    m.clickByText("Back"); // -> WHO
+    expect(all(m.island, "reg-back"), "back on step 1: absent again").toHaveLength(0);
+  });
+
+  it("the forward button names the NEXT step on every step of the 5-step form, and Review has no forward button but the submit", () => {
+    const m = mount([DIV_OPEN, DIV_OPEN_2]);
+    const seen: string[] = [];
+    seen.push(nextLabel(m.island)); // WHO
+    fillWho(m);
+    m.clickByText("Next"); // -> ENTRIES
+    seen.push(nextLabel(m.island));
+    addEntry(m, "div-open");
+    m.clickByText("Next"); // -> DETAILS
+    seen.push(nextLabel(m.island));
+    setByAriaLabel(m.island, "Player 1 — Your name", "Alex Test");
+    m.clickByText("Next"); // -> CONSENT
+    seen.push(nextLabel(m.island));
+    consent(m);
+    m.clickByText("Next"); // -> REVIEW
+    expect(seen, "anti-vacuity: four labels read, one per non-final step").toEqual([
+      "Continue to Entries",
+      "Continue to Details",
+      "Continue to Consent",
+      "Continue to Review",
+    ]);
+    expect(all(m.island, "reg-next"), "Review: no reg-next").toHaveLength(0);
+    expect(textOf(one(m.island, "reg-submit"))).toBe("Enter the competition");
+  });
+
+  it("the 4-step form (one open division, Entries collapsed) skips Entries in the words too: Contact says Details", () => {
+    const m = mount([DIV_OPEN]);
+    const seen = [nextLabel(m.island)]; // WHO
+    fillWho(m);
+    m.clickByText("Next");
+    seen.push(nextLabel(m.island)); // DETAILS
+    setByAriaLabel(m.island, "Player 1 — Your name", "Alex Test");
+    m.clickByText("Next");
+    seen.push(nextLabel(m.island)); // CONSENT
+    expect(seen).toEqual(["Continue to Details", "Continue to Consent", "Continue to Review"]);
+  });
+
+  it("exactly one reg-next on each non-final step and exactly one reg-submit on Review: one DOM, no phone twin", () => {
+    const m = mount([DIV_OPEN, DIV_OPEN_2]);
+    let checked = 0;
+    const expectCounts = (next: number, submit: number, back: number, where: string) => {
+      expect(all(m.island, "reg-next"), `${where}: reg-next`).toHaveLength(next);
+      expect(all(m.island, "reg-submit"), `${where}: reg-submit`).toHaveLength(submit);
+      expect(all(m.island, "reg-back"), `${where}: reg-back`).toHaveLength(back);
+      expect(all(m.island, "reg-bar"), `${where}: reg-bar`).toHaveLength(1);
+      checked++;
+    };
+    expectCounts(1, 0, 0, "WHO");
+    fillWho(m);
+    m.clickByText("Next");
+    expectCounts(1, 0, 1, "ENTRIES");
+    addEntry(m, "div-open");
+    m.clickByText("Next");
+    expectCounts(1, 0, 1, "DETAILS");
+    setByAriaLabel(m.island, "Player 1 — Your name", "Alex Test");
+    m.clickByText("Next");
+    expectCounts(1, 0, 1, "CONSENT");
+    consent(m);
+    m.clickByText("Next");
+    expectCounts(0, 1, 1, "REVIEW");
+    expect(checked, "anti-vacuity: all five steps were counted").toBe(5);
+    // The bar carries the three controls: they are inside `reg-bar`, not siblings of it.
+    const inBar = walk(one(m.island, "reg-bar"));
+    expect(inBar.some((e) => propsOf(e)["data-testid"] === "reg-submit")).toBe(true);
+    expect(inBar.some((e) => propsOf(e)["data-testid"] === "reg-back")).toBe(true);
+  });
+
+  // One mount per test: the stepper restores its draft from sessionStorage, so a second mount in the same test would start on Review.
+  it.each([
+    { name: "card cart", division: DIV_PAID, words: "Pay £25.00 and enter" },
+    { name: "free cart", division: DIV_OPEN, words: "Enter the competition" },
+    { name: "offline fee", division: DIV_PAY_LATER_T8, words: "Enter — £25.00" },
+  ])("Review's button, $name: $words", ({ division, words }) => {
+    expect(textOf(one(reachReview(division).island, "reg-submit"))).toBe(words);
+  });
+
+  it("the running total: absent for an empty cart and a free cart, then 1 entry · £25.00, 2 entries · £50.00, and back down when one is removed", () => {
+    const m = mount([DIV_PAID, DIV_PAID_2, DIV_OPEN]);
+    fillWho(m);
+    m.clickByText("Next"); // -> ENTRIES
+    expect(all(m.island, "reg-bar-summary"), "empty cart: no summary").toHaveLength(0);
+
+    addEntry(m, "div-open");
+    expect(m.entryCartCart().entries, "premise: one free entry in the cart").toHaveLength(1);
+    expect(all(m.island, "reg-bar-summary"), "a free cart: no summary").toHaveLength(0);
+
+    addEntry(m, "div-paid");
+    expect(textOf(one(m.island, "reg-bar-summary")), "one paid entry, one free: the entries count includes both").toBe("2 entries · £25.00");
+    addEntry(m, "div-paid-2");
+    expect(textOf(one(m.island, "reg-bar-summary"))).toBe("3 entries · £50.00");
+
+    const cartEl = m.island.tree().find((e) => e.type === EntryCart)!;
+    const ids = m.entryCartCart().entries.map((e) => e.id);
+    (propsOf(cartEl).dispatch as (a: object) => void)({ type: "REMOVE_ENTRY", id: ids[0] });
+    (propsOf(m.island.tree().find((e) => e.type === EntryCart)!).dispatch as (a: object) => void)({ type: "REMOVE_ENTRY", id: ids[1] });
+    expect(textOf(one(m.island, "reg-bar-summary")), "singular for one entry").toBe("1 entry · £25.00");
+  });
+
+  it("the running total shows on every step once the cart is payable, not only on Entries (the seeded single division on Contact)", () => {
+    const m = mount([DIV_PAID]);
+    expect(textOf(one(m.island, "reg-bar-summary"))).toBe("1 entry · £25.00");
+    fillWho(m);
+    m.clickByText("Next"); // -> DETAILS
+    expect(textOf(one(m.island, "reg-bar-summary"))).toBe("1 entry · £25.00");
+  });
+
+  it("a free single-division cart shows no running total on any step", () => {
+    const m = mount([DIV_OPEN]);
+    expect(all(m.island, "reg-bar-summary")).toHaveLength(0);
+    fillWho(m);
+    m.clickByText("Next");
+    expect(all(m.island, "reg-bar-summary")).toHaveLength(0);
+  });
+
+  it("in flight, Back and the stepper's jump are both disabled (saving AND opening payment) and come back after a failure", async () => {
+    const { island } = reachReview(DIV_PAID);
+    // Premise: before the click both are live, so the in-flight assertions below are a CHANGE, not a constant.
+    expect(propsOf(one(island, "reg-back")).disabled, "idle: Back is live").not.toBe(true);
+    expect(typeof stepNavFor(island).onJump, "idle: the rail's jump is wired").toBe("function");
+
+    const first = await startSubmit(island);
+    expect(propsOf(one(island, "reg-back")).disabled, "saving: Back is disabled").toBe(true);
+    expect(stepNavFor(island).onJump, "saving: no finished step is a button").toBeUndefined();
+    first.post.reject(new ApiV1Error("Boom", 500, "INTERNAL"));
+    await first.done;
+    expect(propsOf(one(island, "reg-back")).disabled, "after a failure: Back is live again").not.toBe(true);
+    expect(typeof stepNavFor(island).onJump, "after a failure: the jump is live again").toBe("function");
+
+    apiV1Mock.impl.mockReset();
+    const seen: { backDisabled: boolean; jump: unknown }[] = [];
+    assignMock.mockImplementation(() => {
+      seen.push({ backDisabled: propsOf(one(island, "reg-back")).disabled === true, jump: stepNavFor(island).onJump });
+    });
+    const second = await startSubmit(island);
+    second.post.resolve(WITH_CHECKOUT);
+    await second.done;
+    expect(seen, "anti-vacuity: the navigation happened once").toHaveLength(1);
+    expect(seen[0]!.backDisabled, "opening payment: Back is disabled").toBe(true);
+    expect(seen[0]!.jump, "opening payment: no finished step is a button").toBeUndefined();
+  });
+
+  function stepNavFor(island: Island) {
+    const el = island.tree().find((e) => e.type === StepNav);
+    expect(el, "StepNav is not in the stepper's tree").toBeTruthy();
+    return propsOf(el!) as { onJump?: (i: number) => void };
+  }
+
+  it("the submit button keeps one width through idle, saving and opening payment: same box classes, same width-sizing label", async () => {
+    const { island } = reachReview(DIV_PAID);
+    const read = () => {
+      const btn = one(island, "reg-submit");
+      const sizer = walk(btn).find((e) => propsOf(e)["data-widest"] !== undefined);
+      expect(sizer, "the label sits in a sizer span that carries data-widest").toBeTruthy();
+      const text = walk(sizer!).find((e) => e !== sizer && textOf(e) === textOf(btn));
+      expect(text, "the visible label is its own span inside the sizer, in the ghost's cell").toBeTruthy();
+      return {
+        cls: String(propsOf(btn).className),
+        sizerCls: String(propsOf(sizer!).className),
+        textCls: String(propsOf(text!).className),
+        widest: String(propsOf(sizer!)["data-widest"]),
+        label: textOf(btn),
+      };
+    };
+    const idle = read();
+    const seen: ReturnType<typeof read>[] = [];
+    assignMock.mockImplementation(() => void seen.push(read()));
+    const run = await startSubmit(island);
+    const saving = read();
+    run.post.resolve(WITH_CHECKOUT);
+    await run.done;
+    const opening = seen[0]!;
+    expect(seen, "anti-vacuity: the navigation happened once").toHaveLength(1);
+
+    expect([idle.label, saving.label, opening.label], "premise: the three phases do read three different labels").toEqual([
+      "Pay £25.00 and enter",
+      "Saving your place…",
+      "Opening secure payment…",
+    ]);
+    expect(saving.cls).toBe(idle.cls);
+    expect(opening.cls).toBe(idle.cls);
+    expect(saving.widest).toBe(idle.widest);
+    expect(opening.widest).toBe(idle.widest);
+    // The sizer holds the LONGEST label of the three, which is not the idle one — so a sizer that tracked the current label would differ.
+    const longest = [idle.label, saving.label, opening.label].reduce((a, b) => (b.length > a.length ? b : a));
+    expect(idle.widest).toBe(longest);
+    expect(idle.widest, "premise: the longest label is not the idle one").not.toBe(idle.label);
+    // The ghost: the span's ::after draws data-widest, invisibly, in the SAME grid cell as the visible label — so the cell is as wide
+    // and as tall as the longest label (the cell: after:col-start-1 / after:row-start-1, and the label's own col-start-1 / row-start-1).
+    expect(idle.sizerCls).toMatch(/(?:^|\s)grid(?:\s|$)/);
+    expect(idle.sizerCls).toMatch(/after:content-\[attr\(data-widest\)\]/);
+    expect(idle.sizerCls).toMatch(/after:invisible/);
+    expect(idle.sizerCls).toMatch(/after:col-start-1/);
+    expect(idle.sizerCls).toMatch(/after:row-start-1/);
+    expect(idle.sizerCls, "a zero-height ghost would size the width only; a wrapped label at 320 would still grow the bar").not.toMatch(/after:h-0/);
+    expect(idle.textCls).toMatch(/(?:^|\s)col-start-1(?:\s|$)/);
+    expect(idle.textCls).toMatch(/(?:^|\s)row-start-1(?:\s|$)/);
+  });
+
+  it("the bar is sticky and safe-area padded on a phone, a plain row from md, and the forward button fills the phone row", () => {
+    const m = mount([DIV_PAID]); // a payable cart, so the running total is on screen too
+    const cls = String(propsOf(one(m.island, "reg-bar")).className);
+    expect(cls).toMatch(/(?:^|\s)max-md:sticky(?:\s|$)/);
+    expect(cls).toMatch(/(?:^|\s)max-md:bottom-0(?:\s|$)/);
+    expect(cls).toContain("env(safe-area-inset-bottom)");
+    expect(cls, "no bare `sticky` that would stay sticky from md").not.toMatch(/(?:^|\s)sticky(?:\s|$)/);
+    expect(String(propsOf(one(m.island, "reg-next")).className)).toMatch(/(?:^|\s)max-md:flex-1(?:\s|$)/);
+    // The running total is for a phone: from md the page itself carries the totals.
+    expect(String(propsOf(one(m.island, "reg-bar-summary")).className)).toMatch(/(?:^|\s)md:hidden(?:\s|$)/);
+  });
+
+  // Review Focus 5 (the sticky bar must not cover the focused field). A browser counts a control sitting behind the bar as already
+  // visible, so a focus leaves it there; a scroll margin on the controls is what moves it clear. Measured in Chromium against the bar's
+  // real classes: focusing a field hidden behind it left it hidden without the margin and 31px clear of the bar with it. The tallest the
+  // bar gets is 109px (320 to 430, a two-line label plus the total line), so the margin must reach at least that.
+  it("the controls under the stepper root keep a scroll margin at least as tall as the bar (109px at its worst), below md only", () => {
+    const m = mount([DIV_OPEN]);
+    const root = m.island.tree().find((e) => propsOf(e)["data-register-flow"] !== undefined)!;
+    const cls = String(propsOf(root).className);
+    const rule = cls.match(/(?:^|\s)max-md:\[&_:is\(([^)]*)\)\]:scroll-mb-(\d+)(?:\s|$)/);
+    expect(rule, `no max-md scroll-mb rule on the root: ${cls}`).not.toBeNull();
+    const controls = rule![1]!.split(",");
+    for (const tag of ["input", "select", "textarea", "button"]) expect(controls, `${tag} keeps the margin`).toContain(tag);
+    expect(Number(rule![2]) * 4, "the margin (Tailwind spacing N = N x 4px)").toBeGreaterThanOrEqual(109);
+  });
+
+  it("the stepper root carries data-register-flow (the marker the org header's phone scroll-away keys on)", () => {
+    const m = mount([DIV_OPEN]);
+    const root = m.island.tree()[0]!;
+    expect(propsOf(root)["data-register-flow"], "the root element is the marker's carrier").not.toBeUndefined();
+    expect(m.island.tree().filter((e) => propsOf(e)["data-register-flow"] !== undefined), "exactly one marker").toHaveLength(1);
+  });
+
+  it("every locale carries the new keys with their placeholders, and none still carries the two retired labels", () => {
+    const locales = ["en", "es", "fr", "nl"];
+    let checked = 0;
+    for (const loc of locales) {
+      const d = JSON.parse(
+        readFileSync(join(__dirname, "..", "..", "..", "..", "dictionaries", loc, "ui.json"), "utf8"),
+      ) as Record<string, string>;
+      expect(d["register.nav.continueTo"], `${loc}: continueTo`).toContain("{step}");
+      expect(d["register.submit.pay"], `${loc}: pay`).toContain("{fee}");
+      expect(d["register.bar.summary.one"], `${loc}: summary.one`).toMatch(/\{count\}.*\{total\}/);
+      expect(d["register.bar.summary.other"], `${loc}: summary.other`).toMatch(/\{count\}.*\{total\}/);
+      expect(d["register.submit.card"], `${loc}: the retired card label is gone`).toBeUndefined();
+      expect(d["register.nav.next"], `${loc}: the retired Next label is gone`).toBeUndefined();
+      checked++;
+    }
+    expect(checked, "anti-vacuity: all four locales").toBe(4);
   });
 });

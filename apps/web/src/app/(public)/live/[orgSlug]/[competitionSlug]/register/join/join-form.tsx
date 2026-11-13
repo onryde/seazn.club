@@ -310,6 +310,9 @@ export function JoinForm({
           data-testid="reg-join-submit"
           onClick={submit}
           disabled={submitting}
+          // Busy, not unavailable (B1 D1, applied here by B2 T8): BTN_PRIMARY keeps a disabled + aria-busy button at full strength,
+          // so "Joining…" reads as the status of a working button instead of a 40%-dimmed dead one.
+          aria-busy={submitting}
           className={BTN_PRIMARY}
         >
           {submitting ? t("register.join.submit.busy") : t("register.join.submit.cta")}

@@ -223,7 +223,7 @@ test("RS007 witness — cancelling one of two cart entries drops the subtotal to
     await anon.locator("#reg-who-name").fill(CAPTAIN_NAME);
     await anon.locator("#reg-who-email").fill(CAPTAIN_EMAIL);
     await anon.screenshot({ path: `${SHOTS}/02-who.png`, fullPage: true });
-    await anon.getByRole("button", { name: /^next$/i }).click();
+    await anon.getByTestId("reg-next").click();
 
     // ---- STEP 2/BEATS 03-04 — ENTRIES: two team entries, ONE division -----
     await expect(anon.getByRole("heading", { name: "Choose your divisions", exact: true })).toBeVisible({
@@ -258,7 +258,7 @@ test("RS007 witness — cancelling one of two cart entries drops the subtotal to
     // that is what the rest of this journey depends on and verifies below —
     // Stripe checkout charges only entry A's fee, and B posts as waitlisted.
     await anon.screenshot({ path: `${SHOTS}/04-entries-both-teams.png`, fullPage: true });
-    await anon.getByRole("button", { name: /^next$/i }).click();
+    await anon.getByTestId("reg-next").click();
 
     // ---- STEP 3/BEAT 05 — DETAILS: a roster per entry, captain_entered ----
     // Both cards render the SAME division heading text (one division, two
@@ -287,13 +287,13 @@ test("RS007 witness — cancelling one of two cart entries drops the subtotal to
       }
     }
     await anon.screenshot({ path: `${SHOTS}/05-details-both-rosters.png`, fullPage: true });
-    await anon.getByRole("button", { name: /^next$/i }).click();
+    await anon.getByTestId("reg-next").click();
 
     // ---- STEP 4/BEAT 06 — CONSENT ------------------------------------------
     await anon.waitForTimeout(600);
     await anon.locator("#reg-consent-privacy").check();
     await anon.screenshot({ path: `${SHOTS}/06-consent.png`, fullPage: true });
-    await anon.getByRole("button", { name: /^next$/i }).click();
+    await anon.getByTestId("reg-next").click();
 
     // ---- STEP 5/BEAT 07 — REVIEW. step-review.tsx shares summarizeCart with
     // the cart panel (same doc comment as above), so this ALSO shows the
@@ -303,10 +303,7 @@ test("RS007 witness — cancelling one of two cart entries drops the subtotal to
     // checkout page) and BEAT 10 (the real post-payment entry statuses).
     await anon.waitForTimeout(1000);
     await anon.screenshot({ path: `${SHOTS}/07-review-both-fees-optimistic.png`, fullPage: true });
-    await anon
-      .getByRole("button", { name: /Continue to payment|Enter the competition|Enter —/ })
-      .first()
-      .click();
+    await anon.getByTestId("reg-submit").click();
 
     // ---- STEP 5 (cont.)/BEATS 08-09 — real Stripe Connect hosted checkout,
     // interaction copied verbatim from registration-connect.spec.ts --------

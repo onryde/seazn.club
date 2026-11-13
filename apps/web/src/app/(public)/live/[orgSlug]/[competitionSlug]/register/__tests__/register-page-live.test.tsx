@@ -121,6 +121,14 @@ describe("register page (live — open divisions)", () => {
     expect(html).not.toContain("Mixed Doubles");
   });
 
+  // B2 T8 (spec §7.2): the org header scrolls away on a phone while this form is up, keyed on `:has([data-register-flow])` (layout.tsx,
+  // layout-header.test.tsx). The marker must be on exactly the stepper's root, and it is read with `="` because React serialises an omitted
+  // prop as `"$undefined"` — a bare `data-register-flow` substring would match in both states.
+  it("marks the stepper's root with data-register-flow, once (the page-level side of the header scroll-away)", async () => {
+    const html = await render();
+    expect(html.match(/data-register-flow="/g) ?? [], "exactly one marker on the open register page").toHaveLength(1);
+  });
+
   it("does not crash with a ?join= param present, and carries it as a data attribute (RS007 seam)", async () => {
     const html = await render("ABC123");
     expect(html).toContain('data-join-code="ABC123"');

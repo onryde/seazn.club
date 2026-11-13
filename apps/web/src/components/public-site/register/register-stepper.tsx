@@ -15,7 +15,7 @@
 // `?join=` deep-link (RS007): accepted as a prop and deliberately unused —
 // the seam is "render nothing, don't crash on the param" (RS006 prompt).
 import { useEffect, useRef, useState } from "react";
-import { useT } from "@/components/i18n/dict-provider";
+import { usePlural, useT } from "@/components/i18n/dict-provider";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { TurnstileWidget, useTurnstile } from "@/components/turnstile-widget";
 import { isTurnstileRefusal } from "@/lib/turnstile";
@@ -49,12 +49,12 @@ import { StepConsent } from "./step-consent";
 import { onlineDivisionNames, registerReturnPath, type RegisterLichessState } from "./register-lichess-card";
 import { StepDetails } from "./step-details";
 import { StepEntries } from "./step-entries";
-import { StepNav } from "./step-nav";
+import { StepNav, STEP_LABEL_KEY } from "./step-nav";
 import { StepReview } from "./step-review";
 import { StepWho } from "./step-who";
 import { buildStepOrder, nextStepIndex, offersJoinCode, prevStepIndex, shouldCollapseEntries, stepFocusTransition } from "./steps";
 import { JoinCodeEntry } from "./join-code-entry";
-import { BTN_GHOST, BTN_PRIMARY } from "./styles";
+import { BTN_FORWARD, BTN_GHOST, LABEL_SIZER, LABEL_SIZER_TEXT } from "./styles";
 import {
   EMPTY_CART,
   EMPTY_CONSENT,
@@ -132,6 +132,7 @@ export function RegisterStepper({
   lichess?: RegisterLichessState | null;
 }) {
   const t = useT();
+  const plural = usePlural();
   // I5: where a Lichess link start comes back to — this registration, its join code kept (the draft is in
   // sessionStorage, so the player lands back on the step they left).
   const lichessReturn = registerReturnPath(orgSlug, competitionSlug, joinCode ?? null);
@@ -375,7 +376,7 @@ export function RegisterStepper({
   const submitLabel =
     reviewSummary.subtotalCents === 0 || !reviewSummary.currency
       ? t("register.submit.free")
-      : t(reviewPayable?.payment_method === "stripe" ? "register.submit.card" : "register.submit.fee", {
+      : t(reviewPayable?.payment_method === "stripe" ? "register.submit.pay" : "register.submit.fee", {
           fee: formatMoneyExact(reviewSummary.subtotalCents, reviewSummary.currency, locale),
         });
   // What the button says right now: its ready text, or the phase the submit is in (spec §3.3 item 5).
@@ -385,6 +386,24 @@ export function RegisterStepper({
       : submitPhase === "opening_payment"
         ? t("register.submit.openingPayment")
         : submitLabel;
+  // The longest label this button will show for this cart: "Opening secure payment…" only exists for a card cart (a free or
+  // pay-the-organiser cart goes saving -> navigation). The button's label span is sized to it (LABEL_SIZER), so the click that
+  // changes the words does not change the button's width.
+  const phaseLabels = [
+    submitLabel,
+    t("register.submit.saving"),
+    ...(reviewPayable?.payment_method === "stripe" ? [t("register.submit.openingPayment")] : []),
+  ];
+  const widestPhaseLabel = phaseLabels.reduce((a, b) => (b.length > a.length ? b : a));
+  // The running total in the phone bar (spec §7.2): what the cart costs now, so the person is never a step away from the number.
+  // Hidden for an empty cart and for a cart that costs nothing (all free, or only waitlisted/closed entries): "3 entries · £0.00"
+  // says nothing. Same `reviewSummary` the Review step and the submit label read, so the three cannot disagree.
+  const barTotal =
+    reviewSummary.subtotalCents > 0 && reviewSummary.currency
+      ? plural("register.bar.summary", reviewSummary.lines.length, {
+          total: formatMoneyExact(reviewSummary.subtotalCents, reviewSummary.currency, locale),
+        })
+      : null;
 
   // Clamped to the LAST real step, never stepOrder.length — "review" is a
   // genuine final step with its own Submit action, not a position before a
@@ -404,6 +423,11 @@ export function RegisterStepper({
           : currentStep === "consent"
             ? consentValidation.valid
             : false; // "review" advances via handleSubmit, never goNext
+
+  // What the forward button says: the step it leads to, by name (spec §7.2). Review has no such step, and no forward button either:
+  // its action is the submit.
+  const stepAfter = stepOrder[nextStepIndex(clampedIndex, stepOrder)];
+  const continueLabel = stepAfter ? t("register.nav.continueTo", { step: t(STEP_LABEL_KEY[stepAfter]) }) : "";
 
   function goNext() {
     if (currentStep === "who") setWhoAttempted(true);
@@ -483,7 +507,16 @@ export function RegisterStepper({
   }
 
   return (
-    <div ref={containerRef} className="space-y-4">
+    // `data-register-flow` (B2 T8): the marker the org header's phone scroll-away keys on (layout.tsx, `group-has-[[data-register-flow]]`).
+    // On THIS root only: the status page and every other page under the org layout have none, so their header stays pinned.
+    // The scroll margin on the root's controls (below `md`): a control brought into view by focus (a tap on a field, Tab, the browser's
+    // own scroll) is kept clear of the sticky bar under it, which is up to ~120px tall. The browser counts a control behind the bar as
+    // visible, so without a margin it would leave a focused field sitting under the bar.
+    <div
+      ref={containerRef}
+      data-register-flow
+      className="space-y-4 max-md:[&_:is(input,select,textarea,button,summary,a)]:scroll-mb-32"
+    >
       {/* The RS007 seam marker. `ph-no-capture` on its OWN empty element, not on this root: the join code is a capability
           (anyone holding it can join the entry), PostHog replay records attributes before the `before_send` scrub can see
           them, and its recorder blocks only this class on the element that carries the value, which here would be the
@@ -493,8 +526,9 @@ export function RegisterStepper({
           only: past it the person is building their own entry, and the door is a collapsed line, not a card. */}
       {joinCodeDoor && clampedIndex === 0 ? <JoinCodeEntry orgSlug={orgSlug} competitionSlug={competitionSlug} /> : null}
       {/* B2 T7: a finished step is a button from `md` up (the bar's own rule); `setStepIndex(i)` is exactly what Back does, to any earlier
-          step — nothing typed is lost (the draft state lives here and in sessionStorage, not in the step that is left). */}
-      <StepNav order={stepOrder} currentIndex={clampedIndex} onJump={setStepIndex} />
+          step — nothing typed is lost (the draft state lives here and in sessionStorage, not in the step that is left). B2 T8: not while a
+          submit is in flight — the cart is already on its way, and a jump back would show a form the click has already sent. */}
+      <StepNav order={stepOrder} currentIndex={clampedIndex} onJump={submitting ? undefined : setStepIndex} />
 
       {currentStep === "who" && (
         <StepWho
@@ -626,25 +660,41 @@ export function RegisterStepper({
           is 0px tall and its spacing collapses into its neighbours' (block flow), so no step's layout moves. */}
       <TurnstileWidget controller={turnstile} />
 
-      {/* relative z-50: the SAME escape hatch cookie-consent.tsx documents
-          for dialogs (its own header comment — "nothing needs to sit above
-          a modal") — z-50 matches the confirm-dialog tier so the fixed,
-          z-40 cookie banner never wins the tie and swallows a click on
-          Back/Next (fix wave finding #6; regression-pinned in
-          register-stepper-interaction.test.tsx via the SAME z-index
-          source-contract convention as cookie-consent-below-dialogs.test.ts).
-          `gap-3` (B1 fix round 1, D2): at 320 a long translated label wraps and the forward button fills the row, which left it
-          flush against Back; the gap keeps the two targets apart at any label length. */}
-      <div className="relative z-50 flex items-center justify-between gap-3">
-        <button
-          type="button"
-          data-testid="reg-back"
-          onClick={goBack}
-          disabled={stepIndex === 0}
-          className={BTN_GHOST}
-        >
-          {t("register.nav.back")}
-        </button>
+      {/* The action bar (B2 T8, spec §7.2) — ONE DOM, Back / running total / the one forward button, never a phone twin.
+          Below `md` it is a bar pinned to the bottom of the register column (`sticky bottom-0`, full-bleed over the page's 16px gutter,
+          padded for the home-indicator inset); from `md` it is the plain row it always was. Back is ABSENT on step 1, not disabled.
+          Tokens: surface + zinc-200 hairline + a soft upward shadow, the step cards' own (`bg-surface`, `border-zinc-200`).
+          Stacking, against the fixed z-40 cookie banner (cookie-consent.tsx; dialogs are z-50 above both): from `md` the row is z-50,
+          the fix-wave finding #6 escape hatch — the banner must never swallow a click on Back/Next, and the in-flow row is not pinned,
+          so the banner can only brush it. Below `md` the bar is pinned to the very edge the banner also sits on, so z-50 there buried
+          the banner under the bar (measured in a browser: its Accept/Reject hidden for as long as the bar is pinned, i.e. unanswerable).
+          z-30 puts the banner above the bar instead: a first visit answers the banner, then has the whole bar.
+          `gap-x-3` (B1 fix round 1, D2): at 320 a long translated label wraps and the forward button fills the row, which left it
+          flush against Back; the gap keeps the two targets apart at any label length. The summary is its own full-width line above the
+          buttons (three items do not fit one 320px row beside "Continue to Entries"), so the bar wraps. `max-md:mb-0`: the root's
+          `space-y-4` would otherwise leave a 16px margin under a sticky bar that should sit on the viewport's edge. */}
+      <div
+        data-testid="reg-bar"
+        className="relative flex flex-wrap items-center gap-x-3 gap-y-2 max-md:sticky max-md:bottom-0 max-md:z-30 md:z-50 max-md:-mx-4 max-md:mb-0 max-md:border-t max-md:border-zinc-200 max-md:bg-surface max-md:px-4 max-md:pt-3 max-md:pb-[max(0.75rem,env(safe-area-inset-bottom))] max-md:shadow-[0_-8px_16px_-12px_rgb(0_0_0/0.25)]"
+      >
+        {barTotal ? (
+          <p data-testid="reg-bar-summary" className="w-full text-sm font-semibold tabular-nums text-ink md:hidden">
+            {barTotal}
+          </p>
+        ) : null}
+        {clampedIndex > 0 ? (
+          <button
+            type="button"
+            data-testid="reg-back"
+            onClick={goBack}
+            // In flight (B2 T8): the cart is on its way to the server; a Back now would show an earlier step over a submit that is
+            // still running. Re-enabled by the catch branch, with the button itself.
+            disabled={submitting}
+            className={`${BTN_GHOST} max-md:min-h-11`}
+          >
+            {t("register.nav.back")}
+          </button>
+        ) : null}
         {currentStep === "review" ? (
           <button
             type="button"
@@ -654,13 +704,15 @@ export function RegisterStepper({
             // Busy, not unavailable (B1 fix round 1, D1): BTN_PRIMARY keeps a disabled+busy button at full strength, so the phase
             // label is read as "working", and assistive tech is told the same thing.
             aria-busy={submitting}
-            className={BTN_PRIMARY}
+            className={BTN_FORWARD}
           >
-            {submitButtonLabel}
+            <span data-widest={widestPhaseLabel} className={LABEL_SIZER}>
+              <span className={LABEL_SIZER_TEXT}>{submitButtonLabel}</span>
+            </span>
           </button>
         ) : (
-          <button type="button" data-testid="reg-next" onClick={goNext} className={BTN_PRIMARY}>
-            {t("register.nav.next")}
+          <button type="button" data-testid="reg-next" onClick={goNext} className={BTN_FORWARD}>
+            {continueLabel}
           </button>
         )}
       </div>

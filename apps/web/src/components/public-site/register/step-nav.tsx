@@ -12,7 +12,8 @@
 import { useT } from "@/components/i18n/dict-provider";
 import type { StepId } from "./types";
 
-const STEP_LABEL_KEY: Record<
+/** A step's name, by id — the rail's words and the action bar's "Continue to {step}" (one authority for what a step is called). */
+export const STEP_LABEL_KEY: Record<
   StepId,
   "register.nav.contact" | "register.nav.entries" | "register.nav.details" | "register.nav.consent" | "register.nav.review"
 > = {

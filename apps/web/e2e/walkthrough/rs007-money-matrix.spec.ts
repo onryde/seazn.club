@@ -206,7 +206,7 @@ async function enterAndPay(
   await anon.locator("#reg-who-name").fill(opts.captainName);
   await anon.locator("#reg-who-email").fill(opts.captainEmail);
   await shot("01-who");
-  await anon.getByRole("button", { name: /^next$/i }).click();
+  await anon.getByTestId("reg-next").click();
   // Fail HERE if the stepper did not advance, rather than eighteen seconds
   // later on whichever locator the next step owns — a swallowed Next reads
   // as "the consent checkbox is missing", which sends the reader to the
@@ -249,7 +249,7 @@ async function enterAndPay(
     }
     await anon.waitForTimeout(600);
     await shot("02-entries");
-    await anon.getByRole("button", { name: /^next$/i }).click();
+    await anon.getByTestId("reg-next").click();
   } else {
     // The collapse is only legal for `individual`. If a team or pair division
     // ever lands here it is the exact defect that ruling was written for, and
@@ -298,22 +298,19 @@ async function enterAndPay(
       }
     }
     await shot("03-details");
-    await anon.getByRole("button", { name: /^next$/i }).click();
+    await anon.getByTestId("reg-next").click();
   }
 
   // ---- CONSENT -----------------------------------------------------------
   await anon.waitForTimeout(600);
   await anon.locator("#reg-consent-privacy").check();
   await shot("04-consent");
-  await anon.getByRole("button", { name: /^next$/i }).click();
+  await anon.getByTestId("reg-next").click();
 
   // ---- REVIEW, then real Stripe -----------------------------------------
   await anon.waitForTimeout(1000);
   await shot("05-review");
-  await anon
-    .getByRole("button", { name: /Continue to payment|Enter the competition|Enter —/ })
-    .first()
-    .click();
+  await anon.getByTestId("reg-submit").click();
 
   const statusUrl = await payOnStripeCheckout(anon, opts.captainName, async (n) => {
     await anon.screenshot({ path: `${s.shots}/${opts.shotPrefix}-06-${n}.png`, fullPage: true });

@@ -19,6 +19,21 @@
 export const BTN_PRIMARY =
   "inline-flex items-center justify-center gap-1.5 rounded-lg bg-accent px-4 py-2 font-display text-sm font-semibold uppercase tracking-wide text-accent-ink shadow-sm transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40 disabled:aria-busy:cursor-progress disabled:aria-busy:opacity-100";
 
+/** The action bar's forward button (B2 T8): the primary treatment, pushed to the row's end (`ml-auto`: Back is absent on the first step, so
+ *  `justify-between` would leave a lone button on the left) and, below `md`, filling whatever Back leaves of the row so it is the big
+ *  thumb target and its width does not depend on its label. `text-center` for a label that wraps at 320; `max-md:min-h-11` is the 44px
+ *  phone tap target (BTN_PRIMARY's own height is ~36px). */
+export const BTN_FORWARD = `${BTN_PRIMARY} ml-auto text-center max-md:min-h-11 max-md:flex-1`;
+
+/** A label that changes length while the button around it does not (B2 T8: "Pay £25.00 and enter" -> "Saving your place…" -> "Opening
+ *  secure payment…"). The outer span's `data-widest` carries the longest of the labels it will ever show; its `::after` draws that
+ *  text invisibly in the SAME grid cell as the visible label (LABEL_SIZER_TEXT), so the cell, and the button around it, is always as
+ *  wide AND as tall as the longest label — a click that changes the words moves nothing, including at 320 where the long ones wrap.
+ *  The ghost is generated content, so it is not in the button's text or its accessible name. */
+export const LABEL_SIZER = "grid after:invisible after:col-start-1 after:row-start-1 after:content-[attr(data-widest)]";
+/** The visible label, in the ghost's cell and centred against it (the cell may be taller than a short label). */
+export const LABEL_SIZER_TEXT = "col-start-1 row-start-1 self-center";
+
 /** Secondary/ghost — mirrors tabs.tsx's inactive-tab treatment. */
 export const BTN_GHOST =
   "inline-flex items-center justify-center gap-1.5 rounded-lg border border-accent-line bg-white px-4 py-2 font-display text-sm font-semibold uppercase tracking-wide text-accent-strong transition hover:bg-accent-soft disabled:cursor-not-allowed disabled:opacity-40";

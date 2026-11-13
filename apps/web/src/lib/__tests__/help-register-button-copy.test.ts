@@ -13,7 +13,7 @@ const SLUG = "registration/registering-for-a-competition";
 const BUTTON_KEYS = [
   "register.submit.free",
   "register.submit.fee",
-  "register.submit.card",
+  "register.submit.pay",
   "register.submit.saving",
   "register.submit.openingPayment",
 ] as const;
@@ -44,7 +44,7 @@ describe("help: the register form's submit button", () => {
     const s = section();
     const labels = new Set(BUTTON_KEYS.map((k) => EN[k]));
     const bold = [...s.matchAll(/\*\*([^*]+)\*\*/g)].map((m) => m[1]!);
-    const claimed = bold.filter((b) => /^(Enter|Continue|Saving|Opening)\b/.test(b));
+    const claimed = bold.filter((b) => /^(Enter|Pay|Continue|Saving|Opening)\b/.test(b));
     expect(claimed.length, "anti-vacuity: the page names the button at all").toBeGreaterThan(0);
     for (const c of claimed) expect(labels.has(c), `"${c}" is one of the button's labels`).toBe(true);
   });

@@ -10,7 +10,7 @@
 // identity stub, so assertions read actual copy.
 const apiV1Mock = vi.hoisted(() => ({
   calls: [] as { url: string; method?: string; json?: unknown; headers?: Record<string, string> }[],
-  queue: [] as ({ ok: true; data: unknown } | { ok: false; error: unknown })[],
+  queue: [] as ({ ok: true; data: unknown } | { ok: false; error: unknown } | { hold: Promise<unknown> })[],
 }));
 vi.mock("@/lib/client-v1", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/client-v1")>();
@@ -20,6 +20,8 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
       apiV1Mock.calls.push({ url, method: options?.method, json: options?.json, headers: options?.headers });
       const next = apiV1Mock.queue.shift();
       if (!next) return Promise.resolve(undefined);
+      // `hold`: a POST that stays open until the test settles it, so the in-flight button can be read while it is in flight.
+      if ("hold" in next) return next.hold;
       return next.ok ? Promise.resolve(next.data) : Promise.reject(next.error);
     },
   };
@@ -323,6 +325,43 @@ async function submit(m: ReturnType<typeof mount>) {
   const btn = m.island.tree().find((e) => e.type === "button" && textOf(e).includes("Confirm my spot"))!;
   await (propsOf(btn).onClick as () => Promise<void>)();
 }
+
+// B2 T8 (the B1 leftover): the join form's button has the same pattern as the register stepper's submit — disabled while the POST is in
+// flight, its label turning into the status ("Joining…"). BTN_PRIMARY keeps a button that is disabled AND `aria-busy` at full strength
+// (it is working, not unavailable); without the attribute it dimmed to 40% and the status read as a dead control. The attribute is the
+// seam (the style is keyed on it), so it is read off the element mid-flight, and cleared again once the POST has answered.
+describe("submit — the in-flight button is busy, not dimmed (B2 T8)", () => {
+  const joinButton = (m: ReturnType<typeof mount>) => {
+    const btn = m.island.tree().find((e) => propsOf(e)["data-testid"] === "reg-join-submit");
+    expect(btn, "the join button").toBeTruthy();
+    return btn!;
+  };
+
+  it("while the POST is open: disabled, aria-busy, reading Joining…; after a refusal: ready again, not busy", async () => {
+    let release!: () => void;
+    const hold = new Promise<unknown>((_, reject) => {
+      release = () => reject(new ApiV1Error("boom", 503, "INTERNAL"));
+    });
+    apiV1Mock.queue.push({ hold });
+    const m = mount({ initialPlayerId: "p1" });
+    fillMinimalValidForm(m);
+    expect(propsOf(joinButton(m)).disabled, "premise: ready before the click").not.toBe(true);
+    expect(propsOf(joinButton(m))["aria-busy"], "ready: not busy").not.toBe(true);
+
+    const click = (propsOf(joinButton(m)).onClick as () => Promise<void>)();
+    await vi.waitFor(() => expect(apiV1Mock.calls, "the POST is in flight").toHaveLength(1));
+    expect(textOf(joinButton(m))).toBe("Joining…");
+    expect(propsOf(joinButton(m)).disabled).toBe(true);
+    expect(propsOf(joinButton(m))["aria-busy"], "in flight: busy, so BTN_PRIMARY keeps it at full strength").toBe(true);
+    expect(String(propsOf(joinButton(m)).className), "the busy style is BTN_PRIMARY's own, keyed on aria-busy").toContain("disabled:aria-busy:opacity-100");
+
+    release();
+    await click;
+    expect(textOf(joinButton(m))).toBe("Confirm my spot");
+    expect(propsOf(joinButton(m)).disabled).not.toBe(true);
+    expect(propsOf(joinButton(m))["aria-busy"], "after the refusal: not busy").not.toBe(true);
+  });
+});
 
 describe("submit — success", () => {
   it("a CLAIM shows the success state with the fill meter unchanged in total, claimed +1", async () => {

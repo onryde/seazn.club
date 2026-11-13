@@ -1581,7 +1581,7 @@ test.describe("online chess — registration (I5)", () => {
   /** WHO → (ENTRIES) → DETAILS → CONSENT, through the real stepper. A competition with one open division skips
    *  ENTRIES (its one entry is added for the player); with several, "Add an entry" on this division's card. */
   async function toConsent(page: Page, divisionName: string, who: { name: string; email: string; playing?: boolean }): Promise<void> {
-    const next = () => page.getByRole("button", { name: /^next$/i }).click();
+    const next = () => page.getByTestId("reg-next").click();
     await page.locator("#reg-who-name").fill(who.name);
     const email = page.locator("#reg-who-email");
     if (await email.isEditable()) await email.fill(who.email);
@@ -1725,7 +1725,7 @@ test.describe("online chess — registration (I5)", () => {
 
     // Going ahead anyway: the server refuses (LICHESS_RECONSENT_REQUIRED) and the review step says RECONNECT, not link.
     await p.locator("#reg-consent-privacy").check();
-    await p.getByRole("button", { name: /^next$/i }).click();
+    await p.getByTestId("reg-next").click();
     await p.getByTestId("reg-submit").click();
     const refused = p.getByRole("alert").filter({ hasText: uiEn["register.lichessReconnectRequired"]! });
     await expect(refused).toBeVisible({ timeout: 30_000 });

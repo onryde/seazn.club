@@ -83,7 +83,7 @@ async function runOne(browser: import("@playwright/test").Browser, shape: Shape,
   try {
     await page.goto(`${TARGET}/live/${org}/${comp}/register`, { waitUntil: "domcontentloaded" });
     await page.waitForLoadState("networkidle").catch(() => null); // hydrate before filling, or the first Next lands on a dead handler
-    const next = () => page.getByRole("button", { name: /^next$/i }).click();
+    const next = () => page.getByTestId("reg-next").click();
 
     // who
     await page.locator("#reg-who-name").fill(name);

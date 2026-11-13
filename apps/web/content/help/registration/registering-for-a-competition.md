@@ -28,7 +28,7 @@ If you're entering other people — a squad, a couple of teammates — you'll se
 
 ## Paying, and what happens after
 
-Review shows exactly what you're about to submit and what it costs, and the button tells you what happens next: **Enter the competition** for a free entry, **Enter — {fee}** for pay-the-organiser divisions (you'll see how to pay on the next page), or **Continue to payment — {fee}** for card divisions, which takes you to a secure Stripe checkout.
+Review shows exactly what you're about to submit and what it costs, and the button tells you what happens next: **Enter the competition** for a free entry, **Enter — {fee}** for pay-the-organiser divisions (you'll see how to pay on the next page), or **Pay {fee} and enter** for card divisions, which takes you to a secure Stripe checkout.
 
 Once you press it, the button says what it's doing: **Saving your place…** while your entry is saved, then, for a card entry, **Opening secure payment…** while Stripe's checkout loads. Wait for the next page rather than pressing again; if something goes wrong the button comes back with its usual words and a note on what to do, and nothing you typed is lost.
 

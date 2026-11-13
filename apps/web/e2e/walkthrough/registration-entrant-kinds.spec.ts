@@ -147,7 +147,7 @@ test("a division narrowed after its registration was set up: the public card clo
     await anon.getByRole("button", { name: /^accept$/i }).click({ timeout: 3000 }).catch(() => {});
     await anon.locator("#reg-who-name").fill(`Kinds Visitor ${TAG}`, { timeout: 20_000 });
     await anon.locator("#reg-who-email").fill(`delivered+kinds-${TAG}@resend.dev`, { timeout: 20_000 });
-    await anon.getByRole("button", { name: /^next$/i }).click({ timeout: 20_000 });
+    await anon.getByTestId("reg-next").click({ timeout: 20_000 });
   };
   // The card is the INNERMOST rounded box holding the division's heading (the step's own panel is one too).
   const cardOf = (name: string) =>
