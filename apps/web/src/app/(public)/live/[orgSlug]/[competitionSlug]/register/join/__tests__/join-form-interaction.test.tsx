@@ -366,6 +366,49 @@ describe("submit — the in-flight button is busy, not dimmed (B2 T8)", () => {
   });
 });
 
+// B2 T10: the join page reuses StepWho, so it gets the same error summary - and the same focus move, which is the JOIN FORM's to make: the
+// summary only exists while something is wrong, so a failed Join hands StepWho a ref and asks it for focus, as the register stepper does on
+// a failed Continue. Without it the registrant taps Join, nothing visibly happens below the fold, and the alert is announced to nobody.
+describe("a failed Join focuses the Contact error summary (B2 T10)", () => {
+  type M = ReturnType<typeof mount>;
+  const summaries = (m: M) => m.island.tree().filter((e) => propsOf(e)["data-testid"] === "reg-who-error-summary");
+  const setField = (m: M, id: string, value: string) =>
+    (propsOf(m.island.tree().find((e) => propsOf(e).id === id)!).onChange as (e: { target: { value: string } }) => void)({ target: { value } });
+  /** The ref StepWho is handed, holding a stand-in for the element React would attach (no DOM here). */
+  function armFocus(m: M) {
+    const who = m.island.tree().find((e) => e.type === StepWho)!;
+    const ref = propsOf(who).summaryRef as { current: unknown } | undefined;
+    expect(ref, "StepWho is handed the join form's focus ref").toBeTruthy();
+    const focus = vi.fn();
+    ref!.current = { focus };
+    return { ref: ref!, focus };
+  }
+
+  it("focuses the summary on a failed Join, again on the next failed Join, and not when Contact is fine", async () => {
+    const m = mount({ initialPlayerId: "p1" });
+    expect(summaries(m), "pristine: nothing wrong yet, so no summary").toHaveLength(0);
+    const { ref, focus } = armFocus(m);
+
+    await submit(m);
+    expect(summaries(m), "one summary").toHaveLength(1);
+    expect(propsOf(summaries(m)[0]!).ref, "the element the join form's ref attaches to").toBe(ref);
+    expect(textOf(summaries(m)[0]!)).toBe("2 things to fix before you continue: Your name, Email");
+    expect(focus, "the failed Join asked for focus on it").toHaveBeenCalledTimes(1);
+
+    setField(m, "reg-who-name", "Alex Joiner");
+    await submit(m);
+    expect(textOf(summaries(m)[0]!)).toBe("1 thing to fix before you continue: Email");
+    expect(focus, "a SECOND failed Join focuses it again").toHaveBeenCalledTimes(2);
+
+    // Contact is now fine; the Join still fails (privacy consent): no summary exists, so nothing is focused.
+    setField(m, "reg-who-email", "alex@example.com");
+    await submit(m);
+    expect(summaries(m), "Contact is fine: no summary").toHaveLength(0);
+    expect(focus, "a Join refused for another reason asks for no summary focus").toHaveBeenCalledTimes(2);
+    expect(apiV1Mock.calls, "and nothing was posted").toHaveLength(0);
+  });
+});
+
 describe("submit — success", () => {
   it("a CLAIM shows the success state with the fill meter unchanged in total, claimed +1", async () => {
     apiV1Mock.queue.push({ ok: true, data: { registration_id: "reg-1", player_id: "p1", consent_status: "granted", entry_state: "confirmed" } });
