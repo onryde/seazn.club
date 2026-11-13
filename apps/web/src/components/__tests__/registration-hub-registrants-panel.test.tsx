@@ -62,7 +62,6 @@ const BASE_PROPS = {
   orgTz: "UTC",
   filtersAction: "/o/riverside/c/summer-league/registration",
   clearHref: "/o/riverside/c/summer-league/registration?tab=registrants",
-  exportHref: "/api/v1/competitions/comp-1/registrations/export?sort=newest",
   emptyTitle: t(dict, "reg.hub.registrants.title"),
   emptyBody: t(dict, "reg.hub.registrants.body"),
   emptyCtaLabel: t(dict, "reg.hub.registrants.cta"),
@@ -90,7 +89,9 @@ describe("no registrations at all — zero rows, no active filter", () => {
 
     expect(tree.find((e) => e.type === RegistrationHubRegistrantFilters)).toBeUndefined();
     expect(tree.find((e) => e.type === RegistrationHubRegistrantTable)).toBeUndefined();
-    expect(textOf(render([], DEFAULT_FILTERS))).not.toContain(t(dict, "reg.exportCsv"));
+    // No count line either: "0 registrants" above "no one's registered yet"
+    // would be the same message twice.
+    expect(tree.find((e) => propsOf(e)["data-registration-hub-registrant-count"] !== undefined)).toBeUndefined();
   });
 
   it("is never a literal TODO placeholder", () => {
@@ -176,14 +177,51 @@ describe("rows present", () => {
   });
 });
 
-describe("CSV export link — available to a viewer (owner ruling)", () => {
-  it("renders at exportHref with the reg.exportCsv label, regardless of canEdit", () => {
+// B6 T20: Export CSV left the panel — it sits right-aligned in the hub's tab
+// strip row (spec §8), which page.tsx owns. What the panel owes now is that it
+// does NOT also render one (two links to the same file), and the result line.
+describe("the panel no longer renders Export CSV (B6 T20 — it lives in the hub tab strip)", () => {
+  it("renders no export link whatever the viewer's rights or the rows", () => {
+    let checked = 0;
     for (const canEdit of [true, false]) {
-      const tree = walk(RegistrationHubRegistrantsPanel({ ...BASE_PROPS, rows: [ROW], filters: DEFAULT_FILTERS, canEdit }));
-      const link = tree.find((e) => propsOf(e).href === BASE_PROPS.exportHref)!;
-      expect(link).toBeTruthy();
-      expect(textOf(link)).toBe(t(dict, "reg.exportCsv"));
+      for (const rows of [[ROW], []]) {
+        const filters = rows.length === 0 ? ACTIVE_FILTERS : DEFAULT_FILTERS;
+        const tree = walk(RegistrationHubRegistrantsPanel({ ...BASE_PROPS, rows, filters, canEdit }));
+        expect(textOf(tree[0]!)).not.toContain(t(dict, "reg.exportCsv"));
+        expect(tree.some((e) => String(propsOf(e).href ?? "").includes("/export"))).toBe(false);
+        checked += 1;
+      }
     }
+    expect(checked).toBe(4);
+  });
+});
+
+describe("result line — '{n} registrants' (B6 T20)", () => {
+  function countLine(rows: RegistrationListRow[], filters: RegistrantsFilters) {
+    const tree = walk(render(rows, filters));
+    const el = tree.find((e) => propsOf(e)["data-registration-hub-registrant-count"] !== undefined);
+    return el ? textOf(el) : null;
+  }
+
+  it("says how many rows the table holds, singular for one and plural otherwise", () => {
+    const two = [ROW, { ...ROW, id: "reg-2" } as unknown as RegistrationListRow];
+    expect(countLine([ROW], DEFAULT_FILTERS)).toBe("1 registrant");
+    expect(countLine(two, DEFAULT_FILTERS)).toBe("2 registrants");
+  });
+
+  it("counts the FILTERED rows — a narrowed view says how many it kept", () => {
+    expect(countLine([ROW], ACTIVE_FILTERS)).toBe("1 registrant");
+  });
+
+  it("reads '0 registrants' when the filters matched nothing, beside the filter bar that can undo it", () => {
+    expect(countLine([], ACTIVE_FILTERS)).toBe("0 registrants");
+  });
+
+  it("uses the locale's own plural rule, not a hand-rolled === 1 (French counts 0 as singular)", async () => {
+    const fr = await getDictionary("fr", "ui");
+    const tree = walk(RegistrationHubRegistrantsPanel({ ...BASE_PROPS, dict: fr, locale: "fr", rows: [], filters: ACTIVE_FILTERS }));
+    const el = tree.find((e) => propsOf(e)["data-registration-hub-registrant-count"] !== undefined)!;
+    expect(textOf(el)).toBe("0 inscrit");
   });
 });
 

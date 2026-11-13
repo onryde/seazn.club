@@ -11,6 +11,7 @@ export const dynamic = "force-dynamic";
 //
 // RS005 W2b (row-click detail/actions on the Registrants tab) is next.
 import type { ReactNode } from "react";
+import { Download } from "lucide-react";
 import Link from "@/components/ui/console-link";
 import { requireCompetitionPage } from "@/server/page-auth";
 import { getCompetition } from "@/server/usecases/competitions";
@@ -29,6 +30,7 @@ import { RegistrationHubSettingsPanel } from "@/components/registration-hub-sett
 import { isChessSport } from "@/lib/chess-individual-only";
 import {
   RegistrationHubRegistrantsPanel,
+  registrantsTabIsBare,
   type PoolSummaryPanelRow,
 } from "@/components/registration-hub-registrants-panel";
 import type {
@@ -94,6 +96,10 @@ export default async function RegistrationHubPage({
   // lean on — that trick stopped working the moment a SECOND tab needed
   // its own context to branch on too.
   let panel: ReactNode;
+  // The tab strip's trailing slot (B6 T20, spec §8): Export CSV sits
+  // right-aligned on the tabs row, only on the Registrants tab and only when
+  // there is something to export. B7's strip component takes this node over.
+  let tabsEnd: ReactNode = null;
   if (tab === "settings") {
     const rawRows = await fetchDivisionRows(auth, id);
     const rows: RegistrationHubRowData[] = rawRows.map((r) => ({
@@ -189,6 +195,23 @@ export default async function RegistrationHubPage({
       href: `${routes.competitionRegistration(orgSlug, compSlug, "registrants", row.division_id)}&free_agent=1`,
     }));
 
+    // Same predicate the panel uses for its own bare empty state — nothing to
+    // export where the panel itself shows "no one's registered yet". A plain
+    // href, not a client fetch (documents-menu.tsx's convention for every
+    // export button); read-scope only (the route's own requireResourceAuth
+    // "read"), so it renders for a viewer too (owner ruling).
+    if (!registrantsTabIsBare(registrants.rows.length, registrants.filters)) {
+      tabsEnd = (
+        <a
+          href={registrantsExportHrefFor(id, registrants.filters)}
+          className="btn btn-ghost h-11 gap-2 text-sm max-md:ml-auto md:mb-1 md:h-10"
+        >
+          <Download className="h-4 w-4" aria-hidden="true" />
+          {t(dict, "reg.exportCsv")}
+        </a>
+      );
+    }
+
     panel = (
       <RegistrationHubRegistrantsPanel
         rows={registrants.rows}
@@ -200,10 +223,6 @@ export default async function RegistrationHubPage({
         orgTz={orgTz}
         filtersAction={routes.competitionRegistration(orgSlug, compSlug)}
         clearHref={routes.competitionRegistration(orgSlug, compSlug, "registrants")}
-        // RS005 F3 finding 2: registrantsExportHrefFor (data.ts) wraps
-        // registrantsExportHref so the negative-filter case (?free_agent=0
-        // etc.) is carried too — see that function's own comment.
-        exportHref={registrantsExportHrefFor(id, registrants.filters)}
         emptyTitle={t(dict, "reg.hub.registrants.title")}
         emptyBody={t(dict, "reg.hub.registrants.body")}
         emptyCtaLabel={t(dict, "reg.hub.registrants.cta")}
@@ -220,21 +239,33 @@ export default async function RegistrationHubPage({
     <main className="mx-auto max-w-4xl px-4 py-8">
       <h1 className="page-title mb-6">{t(dict, "reg.hub.title", { name: competition.name })}</h1>
 
-      <nav className="scroll-x scroll-x-fade mb-6 flex gap-1 whitespace-nowrap border-b border-slate-200">
-        {REGISTRATION_HUB_TABS.map((tabKey) => (
-          <Link
-            key={tabKey}
-            href={routes.competitionRegistration(orgSlug, compSlug, tabKey)}
-            className={`border-b-2 px-4 py-2 text-sm font-medium transition ${
-              tab === tabKey
-                ? "border-purple-600 text-purple-700"
-                : "border-transparent text-slate-500 hover:text-slate-800"
-            }`}
-          >
-            {t(dict, `reg.hub.tab.${tabKey}`)}
-          </Link>
-        ))}
-      </nav>
+      {/* The tab strip row: tabs on the left, `tabsEnd` (Export CSV) right-
+          aligned. From md up the row owns the rule under both; below md the
+          tabs keep their own scrolling strip and the trailing control wraps
+          to a right-aligned line under it, where Export always sat. The
+          `RS005 F3 finding 2` negative-filter case rides on
+          registrantsExportHrefFor (data.ts) — see that function's comment. */}
+      <div
+        data-registration-hub-tabs-row
+        className="mb-6 flex flex-wrap items-end justify-between gap-x-3 gap-y-2 md:flex-nowrap md:border-b md:border-slate-200"
+      >
+        <nav className="scroll-x scroll-x-fade flex min-w-0 grow gap-1 whitespace-nowrap border-b border-slate-200 max-md:basis-full md:border-b-0">
+          {REGISTRATION_HUB_TABS.map((tabKey) => (
+            <Link
+              key={tabKey}
+              href={routes.competitionRegistration(orgSlug, compSlug, tabKey)}
+              className={`border-b-2 px-4 py-2 text-sm font-medium transition ${
+                tab === tabKey
+                  ? "border-purple-600 text-purple-700"
+                  : "border-transparent text-slate-500 hover:text-slate-800"
+              }`}
+            >
+              {t(dict, `reg.hub.tab.${tabKey}`)}
+            </Link>
+          ))}
+        </nav>
+        {tabsEnd}
+      </div>
 
       {panel}
     </main>

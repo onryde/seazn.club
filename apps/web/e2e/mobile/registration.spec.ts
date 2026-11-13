@@ -201,7 +201,12 @@ test("registrants tab: no-scroll, grid/card switch, expanded-row and filter-bar 
   const statusSelect = filters.locator('select[name="status"]');
   const box = await statusSelect.boundingBox();
   expect(box, "filter status select must have a measurable box").not.toBeNull();
-  expect(box!.height, "filter controls must stay >=44px tall (touch target)").toBeGreaterThanOrEqual(44);
+  // B6 T20 (A3 pill bar): the select is laid over its pill, so its box IS the
+  // pill's. Below md the pill keeps the 44px touch height; from md up the owner-
+  // approved bar is 40px ("every control is 40 px tall", registration-redesign
+  // spec §8). md is 768, the same break the bar's own `md:h-10` switches at.
+  const filterControlMin = (projectViewport()?.width ?? 0) >= 768 ? 40 : 44;
+  expect(box!.height, `filter controls must stay >=${filterControlMin}px tall`).toBeGreaterThanOrEqual(filterControlMin);
   await expectNoHorizontalScroll(page);
 });
 

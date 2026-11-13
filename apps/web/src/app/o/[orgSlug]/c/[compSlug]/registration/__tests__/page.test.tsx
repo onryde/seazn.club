@@ -206,9 +206,10 @@ vi.mock("@/lib/db", () => ({
 
 import Page from "../page";
 import { walk } from "@/components/__tests__/_hook-harness";
-import { propsOf } from "@/components/__tests__/_hook-harness";
+import { propsOf, textOf } from "@/components/__tests__/_hook-harness";
 import { RegistrationHubSettingsPanel } from "@/components/registration-hub-settings-panel";
 import { RegistrationHubRegistrantsPanel } from "@/components/registration-hub-registrants-panel";
+import { compileClasses } from "@/components/v2/__tests__/_compiled-css";
 // Real (unmocked) dictionary loader — only `@/lib/resolve-locale` is mocked
 // above (pinned to "en"), so this reads the SAME dictionary the page itself
 // resolves. Used below to assert the panel receives the actual translated
@@ -532,28 +533,96 @@ describe("registration hub — Registrants tab data wiring (RS005 W2a)", () => {
     expect(propsOf(panel).emptyCtaHref).toBe("/o/riverside/c/summer-league/registration?tab=settings");
   });
 
-  it("builds the CSV export href off THIS competition's id", async () => {
+  // B6 T20: Export CSV moved out of the panel into the hub's tab strip row
+  // (spec §8) — the page now owns it, so the page tests own its href and gate.
+  const EXPORT_HREF = "/api/v1/competitions/comp-1/registrations/export?sort=newest";
+  const exportLinks = (tree: ReturnType<typeof walk>) =>
+    tree.filter((e) => e.type === "a" && String(propsOf(e).href ?? "").includes("/registrations/export"));
+  const tabsRow = (tree: ReturnType<typeof walk>) =>
+    tree.find((e) => propsOf(e)["data-registration-hub-tabs-row"] !== undefined)!;
+
+  it("builds the CSV export href off THIS competition's id, as ONE link in the tab strip row", async () => {
+    listRegistrationsMock.mockResolvedValueOnce([{ id: "r1", group_id: "g1" }]);
     const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
-    const panel = tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!;
-    expect(propsOf(panel).exportHref).toBe(
-      "/api/v1/competitions/comp-1/registrations/export?sort=newest",
-    );
+    const links = exportLinks(tree);
+    expect(links).toHaveLength(1);
+    expect(propsOf(links[0]!).href).toBe(EXPORT_HREF);
+    expect(textOf(links[0]!)).toBe(t(await getDictionary("en", "ui"), "reg.exportCsv"));
+    // In the strip row (beside the tabs), not handed down to the panel.
+    expect(walk(tabsRow(tree))).toContain(links[0]);
+    expect(propsOf(tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!).exportHref).toBeUndefined();
   });
 
   // RS005 F3 finding 2: the export href must carry the SAME filter the
   // table is actually showing, including the negative ("0") case — see
   // registrantsExportHrefFor's own comment (data.ts).
   it("carries the explicit '0' form on the export href when the table is narrowed to the negative case", async () => {
+    listRegistrationsMock.mockResolvedValueOnce([{ id: "r1", group_id: "g1" }]);
     const tree = walk(
       await Page({
         params,
         searchParams: Promise.resolve({ tab: "registrants", free_agent: "0", consent_pending: "0" }),
       }),
     );
-    const panel = tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!;
-    expect(propsOf(panel).exportHref).toBe(
+    expect(propsOf(exportLinks(tree)[0]!).href).toBe(
       "/api/v1/competitions/comp-1/registrations/export?sort=newest&free_agent=0&consent_pending=0",
     );
+  });
+
+  it("shows Export CSV to a viewer too (owner ruling: read-scope, never gated on canEdit)", async () => {
+    let checked = 0;
+    for (const canEdit of [true, false]) {
+      h.canEdit = canEdit;
+      listRegistrationsMock.mockResolvedValueOnce([{ id: "r1", group_id: "g1" }]);
+      const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
+      expect(exportLinks(tree), `canEdit=${canEdit}`).toHaveLength(1);
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("shows NO Export CSV where the panel shows 'no one's registered yet' — nothing to export (empty case first)", async () => {
+    // Default mock: zero rows, no filter.
+    const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
+    expect(exportLinks(tree)).toHaveLength(0);
+    // The tab strip itself is still there — only its trailing slot is empty.
+    expect(tabsRow(tree)).toBeTruthy();
+  });
+
+  it("keeps Export CSV when a filter matched nothing — the organiser still needs the file and the bar", async () => {
+    const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants", status: "rejected" }) }));
+    expect(exportLinks(tree)).toHaveLength(1);
+    expect(propsOf(exportLinks(tree)[0]!).href).toBe(
+      "/api/v1/competitions/comp-1/registrations/export?status=rejected&sort=newest",
+    );
+  });
+
+  // The strip row wraps Export under the tabs below md and sits beside them from
+  // md up — all of it Tailwind variants, and a mistyped one compiles to nothing
+  // and moves nothing. Read the classes off the real tree, not retyped here.
+  it("the tab strip row's classes are all real Tailwind — a typo would silently leave Export in the wrong place", async () => {
+    listRegistrationsMock.mockResolvedValueOnce([{ id: "r1", group_id: "g1" }]);
+    const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
+    const row = tabsRow(tree);
+    const inRow = walk(row);
+    const tokens = new Set<string>();
+    for (const el of inRow) {
+      for (const tok of String(propsOf(el).className ?? "").split(/\s+/)) if (tok) tokens.add(tok);
+    }
+    // `btn` / `btn-ghost` / `scroll-x` / `scroll-x-fade` are globals.css component classes.
+    for (const component of ["btn", "btn-ghost", "scroll-x", "scroll-x-fade"]) tokens.delete(component);
+    const compiled = await compileClasses([...tokens]);
+    const dead = [...tokens].filter((c) => Object.keys(compiled.get(c) ?? {}).length === 0);
+    expect(dead, `classes that compile to nothing: ${dead.join(" ")}`).toEqual([]);
+    for (const must of ["max-md:basis-full", "max-md:ml-auto", "md:flex-nowrap", "md:border-b"]) {
+      expect(tokens.has(must), must).toBe(true);
+    }
+  });
+
+  it("has no Export CSV on the Settings tab", async () => {
+    listRegistrationsMock.mockResolvedValueOnce([{ id: "r1", group_id: "g1" }]);
+    const tree = walk(await Page({ params, searchParams: noTab }));
+    expect(exportLinks(tree)).toHaveLength(0);
   });
 
   it("builds filtersAction as the tab's BARE path (no query string — a GET form submit would otherwise discard it)", async () => {

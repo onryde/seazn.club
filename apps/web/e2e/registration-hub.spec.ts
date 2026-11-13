@@ -1650,8 +1650,10 @@ test.describe("RS005 registrants tab", () => {
 
     // Scoped to the FORM: the filtered-empty state renders its own "Clear
     // filters" link, so an unscoped role lookup is a strict-mode violation on
-    // a competition with no matching rows.
-    await page.locator("form").getByRole("link", { name: /clear filters/i }).click();
+    // a competition with no matching rows. The bar's own link reads "Clear all"
+    // (B6 T20, A3 pill bar) — anchored, because each set pill's "×" is also a
+    // link in the form, named "Clear Status".
+    await page.locator("form").getByRole("link", { name: /^clear all$/i }).click();
     await page.waitForURL((u) => !u.search.includes("status="));
     await expect(
       page.locator('select[name="status"]'),
