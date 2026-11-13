@@ -30,6 +30,8 @@ const h = vi.hoisted(() => ({
   captured: [] as unknown[],
   warned: [] as string[],
   errors: [] as { obj: unknown; msg: string }[],
+  /** Every event the route sent PostHog, as sent. */
+  events: [] as { event: string; distinctId: string; properties?: Record<string, unknown> }[],
 }));
 vi.mock("@/lib/rate-limit", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/rate-limit")>()),
@@ -61,7 +63,7 @@ vi.mock("@sentry/nextjs", async (importOriginal) => ({
 }));
 vi.mock("@/lib/posthog-server", async (orig) => ({
   ...(await orig<typeof import("@/lib/posthog-server")>()),
-  captureServer: vi.fn(async () => {}),
+  captureServer: vi.fn(async (e: { event: string; distinctId: string; properties?: Record<string, unknown> }) => void h.events.push(e)),
 }));
 vi.mock("@/lib/funnel", async (orig) => {
   const actual = await orig<typeof import("@/lib/funnel")>();
@@ -99,6 +101,7 @@ import {
   FUNNEL_CLAIM_SIGNED_IN,
 } from "@/lib/funnel-claim-codes";
 import { HttpError } from "@/lib/http";
+import { EVENTS } from "@/lib/analytics-events";
 import { POST } from "../route";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -152,6 +155,8 @@ const utcDayPlus = (n: number): string => {
 };
 const orgsCreatedBy = async (userId: string) =>
   (await sql<{ n: number }[]>`select count(*)::int as n from organizations where created_by = ${userId}`)[0]!.n;
+/** The funnel_claimed events the route sent. */
+const claimedEvents = () => h.events.filter((e) => e.event === EVENTS.FUNNEL_CLAIMED);
 const userOf = async (email: string) =>
   (await sql<{ id: string }[]>`select id from users where email = ${email} and deleted_at is null`)[0]?.id ?? null;
 
@@ -165,6 +170,7 @@ function reset(): void {
   h.captured.length = 0;
   h.warned.length = 0;
   h.errors.length = 0;
+  h.events.length = 0;
 }
 beforeEach(reset);
 afterAll(async () => {
@@ -205,9 +211,20 @@ describe.skipIf(!HAS_DB)("the funnel claim's named refusals", () => {
       expect(sessionUser(), `${c.name}: nobody is signed in`).toBeNull();
       expect(h.builds, `${c.name}: nothing is built`).toBe(0);
       expect(h.captured, `${c.name}: an expected refusal is not a server fault`).toEqual([]);
+      expect(claimedEvents(), `${c.name}: nothing claimed, nothing counted`).toEqual([]);
       checked++;
     }
     expect(checked, "anti-vacuity: every dead link").toBe(cases.length);
+  });
+
+  it("a claim that lands: 200, and exactly one funnel_claimed carrying the draft's own sport and field", async () => {
+    // Not the rig's defaults (Badminton, 4): values a hard-coded or dropped property could not match by luck.
+    const { token, email } = await draft({ sport: "Table Tennis", entrants: 7, format: "league" });
+    const got = await claim(token);
+    expect(got.status).toBe(200);
+    expect(claimedEvents(), "one event, the draft's values").toEqual([
+      { event: EVENTS.FUNNEL_CLAIMED, distinctId: await userOf(email), properties: { sport: "Table Tennis", entrants: 7 } },
+    ]);
   });
 
   it("the limiter refuses: a 429 with no code, nobody signed in, and the link is still unused — it lands once let through", async () => {
@@ -318,6 +335,7 @@ describe.skipIf(!HAS_DB)("the funnel claim's named refusals", () => {
       expect(h.errors.filter((e) => e.msg === "funnel_claim_build_partial"), `${c.name}: nothing part-built`).toEqual([]);
       expect(h.captured, `${c.name}: an expected refusal, not a server fault`).toEqual([]);
       expect(h.warned, `${c.name}: logged (no Sentry)`).toContain("funnel_claim_signed_in_refused");
+      expect(claimedEvents(), `${c.name}: nothing was built, so no funnel_claimed`).toEqual([]);
       h.jar.clear();
       expect((await claim(token)).body.code, `${c.name}: the token is spent`).toBe(FUNNEL_CLAIM_INVALID);
       checked++;
