@@ -25,7 +25,8 @@ export type DrawSeat = SeatView & { score?: string; note?: string };
 
 export interface DrawCard {
   id: string;
-  /** The card's name ("Semi-final", "Semi-final 2", "Final": `fixtureLabel`); null for a bye, which is not a match. */
+  /** The card's name ("Semi-final", "Semi-final 2", "Final": `fixtureLabel`); null for a bye, which is not a match. A League +
+   *  Knockout's hero card not yet in play says it is next, as the hero does ("Up next · Final", plan 5 T7 review m1). */
   round: string | null;
   /** The round's sides-only fixture: one side goes straight through (C18, the generator's bye). */
   bye: boolean;

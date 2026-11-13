@@ -21,7 +21,9 @@
 // A League + Knockout's league (quick match plan 5 Task 7, D6, D9; mockup qmd13a01 §7-12): the header says how many go
 // through ("Top 2 go through", "Top 2 went through"); the rows that go through are lime-tinted (`through`), a dashed line
 // sits at the cut (`cutAbove`); while a tie at the cut is open its rows show "=" and "level — to decide" (orange,
-// `toDecide`), and once settled a row carries "decided by lot" or "picked" (`tag`). A plain League draws none of these.
+// `toDecide`), and once settled a row carries "decided by lot" or "picked" (`tag`). The "Full table" carries the same marks
+// row for row (T7 review m2). The caption and the note stack together on the right from md (m6). A plain League draws none
+// of these.
 /** The public table's columns and cells for this league, already in the viewer's words: the page builds it. */
 export interface FullTableData {
   /** In the public table's order: the key, the printed abbreviation and the column's name in words. */
@@ -77,6 +79,12 @@ export interface StandingsView {
 }
 
 export function QuickMatchStandings({ view }: { view: StandingsView }) {
+  const note =
+    view.note !== null ? (
+      <p data-testid="qm-standings-note" className="min-w-0 text-xs text-[#8d7fc0] [overflow-wrap:anywhere]">
+        {view.note}
+      </p>
+    ) : null;
   return (
     <section data-testid="qm-standings" aria-labelledby="qm-standings-title" className="group/standings min-w-0">
       <div className="mb-2 flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
@@ -88,15 +96,18 @@ export function QuickMatchStandings({ view }: { view: StandingsView }) {
           {view.title}
         </h2>
         {view.caption ? (
-          <p data-testid="qm-standings-caption" className="min-w-0 text-xs text-[#d9d2f2] [overflow-wrap:anywhere]">
-            {view.caption}
-          </p>
-        ) : null}
-        {view.note !== null ? (
-          <p data-testid="qm-standings-note" className="min-w-0 text-xs text-[#8d7fc0] [overflow-wrap:anywhere]">
-            {view.note}
-          </p>
-        ) : null}
+          // A League + Knockout's caption and note read as one aside (T7 review m6): on a phone the block is `contents`, so
+          // both stay items of this wrapping row exactly as before; from md they stack together on the right, so the
+          // caption never floats mid-row between the title and the note.
+          <div className="contents md:ml-auto md:flex md:min-w-0 md:flex-col md:items-end md:gap-y-0.5 md:text-right">
+            <p data-testid="qm-standings-caption" className="min-w-0 text-xs text-[#d9d2f2] [overflow-wrap:anywhere]">
+              {view.caption}
+            </p>
+            {note}
+          </div>
+        ) : (
+          note
+        )}
       </div>
       <div
         data-testid="qm-standings-short"
@@ -193,12 +204,14 @@ const TAG = {
   lot: "border border-[#4a3a80] text-[#b7aede]",
   picked: "bg-[rgba(163,230,53,0.14)] text-[color:var(--mk-lime)]",
 } as const satisfies Record<NonNullable<Row["tag"]>["kind"], string>;
-function rowTag(tag: NonNullable<Row["tag"]>) {
+/** The tag beside a name. The Full table's sizes its columns to their content (it scrolls), so its tag never breaks inside
+ *  a word (`whitespace-nowrap`): squeezed, the tag drops under the name whole instead. */
+function rowTag(tag: NonNullable<Row["tag"]>, testId = "qm-standings-tag", extra = "") {
   return (
     <span
-      data-testid="qm-standings-tag"
+      data-testid={testId}
       data-kind={tag.kind}
-      className={`inline-flex min-w-0 max-w-full items-center rounded-full px-2 py-0.5 text-[11px] font-semibold leading-tight [overflow-wrap:anywhere] ${TAG[tag.kind]}`}
+      className={`inline-flex min-w-0 max-w-full items-center rounded-full px-2 py-0.5 text-[11px] font-semibold leading-tight [overflow-wrap:anywhere] ${TAG[tag.kind]}${extra}`}
     >
       {tag.text}
     </span>
@@ -253,7 +266,10 @@ export function QuickMatchFullTable({ view, full }: { view: StandingsView; full:
                 key={r.entrantId}
                 data-testid="qm-full-table-row"
                 data-leader={r.leader ? "true" : undefined}
-                className={`border-b border-[rgba(59,42,110,0.6)] last:border-b-0 ${r.leader ? "bg-[rgba(163,230,53,0.08)]" : ""}`}
+                // The short table's marks, row for row (T7 review m2): the same tint, cut line, "=" and tag.
+                data-through={r.through ? "true" : undefined}
+                data-to-decide={r.toDecide ? "true" : undefined}
+                className={`border-b border-[rgba(59,42,110,0.6)] last:border-b-0 ${rowTint(r)}${r.cutAbove ? CUT : ""}`}
               >
                 <td className="app-display px-2 py-2 text-center text-base font-bold text-[color:var(--mk-lime)]">
                   {r.placeHidden ? (
@@ -270,7 +286,14 @@ export function QuickMatchFullTable({ view, full }: { view: StandingsView; full:
                   )}
                 </td>
                 <th scope="row" className="px-2 py-2 text-left font-normal text-cream">
-                  <span className="block max-w-[10rem] truncate">{r.name}</span>
+                  {r.tag ? (
+                    <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+                      <span className="block max-w-[10rem] truncate">{r.name}</span>
+                      {rowTag(r.tag, "qm-full-table-tag", " whitespace-nowrap")}
+                    </span>
+                  ) : (
+                    <span className="block max-w-[10rem] truncate">{r.name}</span>
+                  )}
                 </th>
                 {full.cells[i]!.map((value, k) => (
                   <td

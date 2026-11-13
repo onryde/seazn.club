@@ -234,4 +234,34 @@ describe("QuickMatchCutPrompt", () => {
     expect(click(one(i, "qm-cut-back")), "the script shuts the panel instead").toBe(true);
     expect(details.open).toBe(false);
   });
+
+  // T7 review m7: Pick is the panel's `<summary>`, and it hides once the panel opens, so the focus it held would fall to the
+  // page. Opening moves it to the question (the fieldset's legend, focusable by script only), which a screen reader reads
+  // out; Back shuts the panel and hides itself, so it hands the focus back to Pick. No DOM here: the panel's `toggle` is
+  // fired as the browser fires it (after `open` changed), against stand-ins for the elements the refs would hold. That a
+  // real browser fires `toggle` and moves the focus is the screenshot pass's to see, not this file's.
+  it("opening Pick moves the focus to the question; Back shuts the panel and returns it to Pick", () => {
+    const i = mount();
+    const legend = one(i, "qm-cut-question");
+    expect(legend.type).toBe("legend");
+    expect(propsOf(legend).tabIndex, "focusable by script, never a tab stop").toBe(-1);
+    const focused: string[] = [];
+    const set = (el: ReactElement, current: unknown) => ((propsOf(el).ref as { current: unknown }).current = current);
+    set(legend, { focus: () => focused.push("question") });
+    set(one(i, "qm-cut-pick"), { focus: () => focused.push("pick") });
+    const details = { open: false };
+    set(one(i, "qm-cut-pick-panel"), details);
+    const toggle = () => (propsOf(one(i, "qm-cut-pick-panel")).onToggle as () => void)();
+
+    details.open = true;
+    toggle();
+    expect(focused, "opened: the question").toEqual(["question"]);
+
+    (propsOf(one(i, "qm-cut-back")).onClick as (e: { preventDefault(): void }) => void)({ preventDefault() {} });
+    expect(details.open, "Back shut it").toBe(false);
+    expect(focused, "shut by Back: Pick again").toEqual(["question", "pick"]);
+    // The toggle that follows the shut moves nothing more.
+    toggle();
+    expect(focused).toEqual(["question", "pick"]);
+  });
 });

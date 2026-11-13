@@ -13,6 +13,8 @@
 //     one is cancelled until the page comes back from the back-forward cache (`pageshow` persisted), as the Score form does;
 //     the busy state is `aria-disabled` and its look, never `disabled` (disabling a submitter can cancel the post it started).
 //   - While the panel is open the Toss form steps aside (the wrapper's `group-has` variant: CSS only, so no-script too).
+//   - Pick hides once the panel opens, so the script moves the focus to the question (the legend, `tabIndex` -1), and Back,
+//     which hides with the panel, hands it back to Pick (T7 review m7).
 //   - Every element holding the home token (the two actions and Back, O3) carries `ph-no-capture`.
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent, type MouseEvent } from "react";
 import { Coins } from "lucide-react";
@@ -53,6 +55,8 @@ export function QuickMatchCutPrompt({ pickAction, tossAction, backHref, members,
   const [busy, setBusy] = useState(false);
   const locked = useRef(false);
   const panel = useRef<HTMLDetailsElement | null>(null);
+  const pick = useRef<HTMLElement | null>(null);
+  const question = useRef<HTMLLegendElement | null>(null);
   const many = seats > 1;
 
   // Back from the next page (bfcache): the page comes back exactly as it was left, locked mid-post. Unlock it.
@@ -99,17 +103,33 @@ export function QuickMatchCutPrompt({ pickAction, tossAction, backHref, members,
     if (el === null) return; // no panel to shut: follow the link (the reload shuts it)
     e.preventDefault();
     el.open = false;
+    // Back hides with the panel: the focus goes back to Pick, which shows again (never to the page).
+    pick.current?.focus();
+  }
+  // Pick (the summary) hides once the panel opens, and the focus it held would fall to the page (T7 review m7): move it to
+  // the question, which a screen reader reads out, one Tab from the first side.
+  function onToggle() {
+    if (panel.current?.open) question.current?.focus();
   }
 
   return (
     <div data-testid="qm-cut-actions" className="group/cut flex min-w-0 flex-col gap-2.5">
-      <details ref={panel} data-testid="qm-cut-pick-panel" className="min-w-0">
-        <summary data-testid="qm-cut-pick" className={`${PRIMARY} cursor-pointer list-none [details[open]>&]:hidden [&::-webkit-details-marker]:hidden`}>
+      <details ref={panel} onToggle={onToggle} data-testid="qm-cut-pick-panel" className="min-w-0">
+        <summary
+          ref={pick}
+          data-testid="qm-cut-pick"
+          className={`${PRIMARY} cursor-pointer list-none [details[open]>&]:hidden [&::-webkit-details-marker]:hidden`}
+        >
           {words.pick}
         </summary>
         <form method="post" action={pickAction} onSubmit={onPick} className="ph-no-capture flex min-w-0 flex-col gap-2.5">
           <fieldset className="min-w-0">
-            <legend data-testid="qm-cut-question" className="app-display text-base font-semibold text-cream [overflow-wrap:anywhere]">
+            <legend
+              ref={question}
+              tabIndex={-1}
+              data-testid="qm-cut-question"
+              className="app-display text-base font-semibold text-cream outline-none [overflow-wrap:anywhere]"
+            >
               {words.question}
             </legend>
             <div className="mt-2 flex min-w-0 flex-col gap-2">

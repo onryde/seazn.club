@@ -8552,7 +8552,7 @@
   "quickMatch.cut.tossBody": "Estaban empatados en todo. Todos los que tienen el enlace ven este mismo resultado.",
   "quickMatch.cut.pickResult": "Elección para pasar: {names}.",
   "quickMatch.flash.alreadyDecided": "Alguien ya ha decidido. Aquí tienes quién pasa.",
-  "quickMatch.flash.tieChanged": "La clasificación ha cambiado y la pregunta también. Vuelve a decidir.",
+  "quickMatch.flash.tieChanged": "La clasificación ha cambiado desde que abriste esta página. Así está ahora.",
   "quickMatch.flash.pickInvalid": "Elige exactamente el número de participantes que pasan.",
   "quickMatch.flash.leagueComplete": "La liga ha terminado, así que no se puede añadir ningún partido."
 }

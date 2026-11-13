@@ -804,4 +804,20 @@ describe("quick match guest copy: League + Knockout (plan 5 Task 1)", () => {
     }
     expect(checked, "anti-vacuity").toBe(3);
   });
+
+  // TIE_NOT_OPEN also lands when no tie is open at all (the league reopened by an edit, or the knockout filled), so its line
+  // says the table moved and shows where it stands; it never tells the guest to decide again (T7 review m5, controller
+  // ruling: neutral copy). The old imperative, per locale, is what must not come back.
+  it("the tie-changed flash is neutral in every locale: no 'decide again' (counted)", () => {
+    const decideAgain: Record<Locale, RegExp> = { en: /decide again/i, es: /vuelve a decidir/i, fr: /décidez à nouveau/i, nl: /beslis opnieuw/i };
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const v = DICTS[locale].ui["quickMatch.flash.tieChanged"] ?? "";
+      expect(v.trim(), locale).not.toBe("");
+      expect(v, locale).not.toMatch(decideAgain[locale]);
+      checked++;
+    }
+    expect(checked, "anti-vacuity").toBe(LOCALES.length);
+    expect(DICTS.en.ui["quickMatch.flash.tieChanged"]).toBe("The table changed since you opened this page. Here is where it stands.");
+  });
 });

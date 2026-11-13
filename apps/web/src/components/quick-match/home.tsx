@@ -436,8 +436,9 @@ export function buildHomeView(home: QuickMatchHome, copy: QuickMatchCopy, fullTa
 
   let standings: StandingsView | null = null;
   let leaders: string[] = [];
-  /** The table's rank-1 side, on a table some match has reached (a League + Knockout's champion "top of the league too"). */
-  let tableTop: string | null = null;
+  /** The sides sharing the table's top place, on a table some match has reached: a plain League's leaders, and what a League
+   *  + Knockout's champion is "top of the league too" among (T7 review m4: a lot's order inside the class is not a place). */
+  let tableTop: string[] = [];
   if (!knockout && home.standings) {
     const rows = home.standings.rows as {
       entrantId: string;
@@ -456,9 +457,9 @@ export function buildHomeView(home: QuickMatchHome, copy: QuickMatchCopy, fullTa
     // with (a tie split only by seed or lots is a tie): co-leaders, who share the top place.
     const level = isLevelTable(rows);
     const top = level ? undefined : rows.find((r) => r.rank === 1);
-    tableTop = top?.entrantId ?? null;
+    tableTop = top ? [top.entrantId, ...(top.tieUnbroken ? (top.tieBreak?.with ?? []) : [])] : [];
     // A League + Knockout's table names no leader (its winner is the final's): its marks are who goes through (`lkRows`).
-    leaders = top && lk === null ? [top.entrantId, ...(top.tieUnbroken ? (top.tieBreak?.with ?? []) : [])] : [];
+    leaders = lk === null ? tableTop : [];
     const draws = rows.some((r) => r.drawn > 0);
     const columns = (["played", "won", ...(draws ? (["drawn"] as const) : []), "points"] as const).map((key) => ({
       key,
@@ -534,7 +535,7 @@ export function buildHomeView(home: QuickMatchHome, copy: QuickMatchCopy, fullTa
         kicker: t("quickMatch.home.champion"),
         name: nameOf(entrantId),
         beat: score === null ? null : t("quickMatch.home.championBeat", { loser: loser.name, score }),
-        topToo: tableTop === entrantId ? t("quickMatch.home.championTopToo") : null,
+        topToo: tableTop.includes(entrantId) ? t("quickMatch.home.championTopToo") : null,
       };
     }
   } else if (home.finished) {
@@ -598,9 +599,12 @@ export function buildHomeView(home: QuickMatchHome, copy: QuickMatchCopy, fullTa
       const onWinnerLine = homeSeat.score !== undefined || awaySeat.score !== undefined;
       // A bye's card lists the side going through first, then the bye.
       const [first, second] = f.isBye && f.home === null ? [awaySeat, homeSeat] : [homeSeat, awaySeat];
+      // A League + Knockout's hero card says it is next, as the hero does ("Up next · Final", T7 review m1); once in play
+      // it keeps its bare name beside the Live mark.
+      const next = lk !== null && heroFixture !== null && heroFixture.id === f.id;
       const card: DrawCard = {
         id: f.id,
-        round: f.isBye ? null : roundName(f),
+        round: f.isBye ? null : next && f.phase !== "live" ? t("quickMatch.home.upNextRound", { round: roundName(f) }) : roundName(f),
         bye: f.isBye,
         isFinal: f.isFinal,
         live: f.phase === "live",
@@ -611,7 +615,7 @@ export function buildHomeView(home: QuickMatchHome, copy: QuickMatchCopy, fullTa
         // match to play, Edit result on a settled one the pad will reopen. Never Not played (a bracket needs a winner).
         ...(lk !== null
           ? {
-              next: heroFixture !== null && heroFixture.id === f.id,
+              next,
               play: f.phase === "ready" || f.phase === "live" ? { live: f.phase === "live" } : null,
               edit: f.phase === "settled" && !f.resultMovedOn,
             }

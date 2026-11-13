@@ -45,7 +45,8 @@ import * as standingsModule from "@/components/quick-match/standings";
 import * as drawModule from "@/components/quick-match/draw";
 import * as listModule from "@/components/quick-match/match-list";
 import * as saveFormModule from "@/components/quick-match/save-form";
-import { homeFlash, QuickMatchHomeView, type CutView, type QuickMatchCopy } from "@/components/quick-match/home";
+import { homeFlash, QuickMatchHomeShapeError, QuickMatchHomeView, type CutView, type QuickMatchCopy } from "@/components/quick-match/home";
+import type { FullTableData } from "@/components/quick-match/standings";
 import { QuickMatchCutPrompt } from "@/components/quick-match/cut-prompt";
 import type { RowMenuRequest } from "@/components/quick-match/match-list";
 import en from "@/dictionaries/en/ui.json";
@@ -365,9 +366,14 @@ const stubSlots = () => ({
   refresh: <span data-testid="slot-refresh" />,
 });
 type Slots = ReturnType<typeof stubSlots>;
-async function renderView(home: QuickMatchHome, o: { slots?: Slots; flash?: { text: string; tone: "refusal" | "info" } } = {}) {
+async function renderView(
+  home: QuickMatchHome,
+  o: { slots?: Slots; flash?: { text: string; tone: "refusal" | "info" }; fullTable?: FullTableData | null } = {},
+) {
   const slots = o.slots ?? stubSlots();
-  const tree = await expand(<QuickMatchHomeView home={home} copy={enCopy()} slots={slots as never} flash={o.flash ?? null} />);
+  const tree = await expand(
+    <QuickMatchHomeView home={home} copy={enCopy()} slots={slots as never} flash={o.flash ?? null} fullTable={o.fullTable ?? null} />,
+  );
   return { tree, slots };
 }
 
@@ -549,10 +555,11 @@ const championRavi = () => {
 
 // ── reading the page back ───────────────────────────────────────────────────────────────────────────────────────────
 
-/** The league table as printed: name, place as shown, its marks, its tag ("kind:words"), and the cut line above it. */
-function tableOf(tree: unknown) {
-  return byTestId(tree, "qm-standings-row").map((r) => {
-    const tag = byTestId(r, "qm-standings-tag")[0];
+/** The league table as printed: name, place as shown, its marks, its tag ("kind:words"), and the cut line above it. The
+ *  short table's rows by default; the "Full table" fold's with its own test ids (T7 review m2). */
+function tableOf(tree: unknown, rowId = "qm-standings-row", tagId = "qm-standings-tag") {
+  return byTestId(tree, rowId).map((r) => {
+    const tag = byTestId(r, tagId)[0];
     const tagText = tag ? words(tag) : null;
     const th = words(all(r, (el) => el.type === "th")[0]);
     return {
@@ -563,6 +570,13 @@ function tableOf(tree: unknown) {
       tag: tag ? `${String(tag.props["data-kind"])}:${tagText}` : null,
       cut: String(r.props.className).includes("[border-top-style:dashed]"),
     };
+  });
+}
+/** Each row's tint, by the mockup's two (qmd13a01 §8-9): lime for a side going through, orange for a tie still to decide. */
+function tintsOf(tree: unknown, rowId = "qm-standings-row") {
+  return byTestId(tree, rowId).map((r) => {
+    const cls = String(r.props.className);
+    return cls.includes("bg-[rgba(251,146,60,0.08)]") ? "orange" : cls.includes("bg-[rgba(163,230,53,0.08)]") ? "lime" : null;
   });
 }
 /** The knockout's cards in order: name, the next edge, each seat (its words, rank note, winner mark, score), its actions. */
@@ -809,13 +823,15 @@ describe("a League + Knockout's home, state by state (plan 5 Task 7)", () => {
       { name: "Ines", place: "3", through: false, toDecide: false, tag: lot, cut: true },
       { name: "Sofia", place: "4", through: false, toDecide: false, tag: null, cut: false },
     ]);
+    // The hero's card says it is next, as the hero does (T7 review m1): "Up next · Final", not the bare name.
     expect(cardsOf(tree)).toEqual([
       {
-        id: FINAL, round: FINAL_WORD, next: true,
+        id: FINAL, round: en_("quickMatch.home.upNextRound", { round: FINAL_WORD }), next: true,
         seats: [seat("Ravi", { note: short(1) }), seat("Mika", { note: `${short(2)} · ${en_("quickMatch.home.byLotShort")}` })],
         actions: ["score:row:false"],
       },
     ]);
+    expect(byTestId(oneByTestId(tree, "qm-draw-card"), "qm-live"), "not in play: no Live mark").toHaveLength(0);
     expect(slots.score.mock.calls.filter(([f]) => f.id === FINAL).map(([, place]) => place).sort()).toEqual(["hero", "row"]);
     for (const id of ["qm-cut", "qm-setting-up", "qm-champion"]) expect(has(tree, id), id).toBe(false);
     expect(slots.addMatch).not.toHaveBeenCalled();
@@ -846,6 +862,8 @@ describe("a League + Knockout's home, state by state (plan 5 Task 7)", () => {
       { id: SEMI_2, round: semiWord(2), next: true, seats: [seat("Ines", { note: short(2) }), seat("Mika", { note: short(3) })], actions: ["score:row:true"] },
       { id: FINAL, round: FINAL_WORD, next: false, seats: [seat("Ravi"), seat(en_("quickMatch.home.winnerOfSemi", { n: 2 }))], actions: [] },
     ]);
+    // The live next card keeps its name beside the Live mark (T7 review m1: "Up next" is for a card not yet in play).
+    expect(byTestId(tree, "qm-draw-card").map((c) => byTestId(c, "qm-live").map(words))).toEqual([[], [en_("quickMatch.home.live")], []]);
     expect(has(tree, "qm-cut-result"), "no tie was asked").toBe(false);
   });
 
@@ -871,6 +889,48 @@ describe("a League + Knockout's home, state by state (plan 5 Task 7)", () => {
       `${en_("quickMatch.home.championBeat", { loser: "Mika", score: WON_2_0 })} ${en_("quickMatch.home.championTopToo")}`,
     );
     expect(has(tree, "qm-cut-result")).toBe(false);
+  });
+
+  it("(g″) 'Top of the league too' follows the league's top place, shared or not, never the lot's order inside it (T7 review m4)", async () => {
+    // A League → Final of the four, each league line won at home (RR4): Ravi and Ines both win two, Mika and Sofia one.
+    // Ravi and Ines are level on everything, the lot ordered them, and both go through (§5 case 2: no question asked).
+    // The engine's trace names the OTHER rows of the class (`tieBreak.with` excludes the row itself).
+    const coTop = (lotFirst: QuickMatchSide, champion: QuickMatchSide) => {
+      const other = lotFirst === RAVI ? INES : RAVI;
+      return lkHome({
+        sides: FOUR,
+        fixtures: [
+          ...leagueOf(RR4, times(6, "home"), true),
+          ...finalOnly(7, [false, false], { home: RAVI, away: INES, result: { winner: champion, games: champion === RAVI ? HOME_WINS : AWAY_WINS } }),
+        ],
+        table: [row(lotFirst, 1, 3, 2, { with: [other], key: "lots" }), row(other, 2, 3, 2, { with: [lotFirst], key: "lots" }), row(MIKA, 3, 3, 1), row(SOFIA, 4, 3, 1)],
+        knockout: ko({ state: "filled", qualifiers: 2, started: true, byLot: ids(lotFirst, other) }),
+        champion: { entrantId: champion.entrantId, finalFixtureId: FINAL },
+      });
+    };
+    const topToo = en_("quickMatch.home.championTopToo");
+    const says = async (h: QuickMatchHome) => words(oneByTestId((await renderView(h)).tree, "qm-champion")).includes(topToo);
+    let checked = 0;
+    // The champion shares the top place: said, whichever way the lot ordered the class (the right answer differs from the
+    // lot's rank-1 row's in the second and third cases).
+    for (const [lotFirst, champion] of [[INES, INES], [RAVI, INES], [INES, RAVI], [RAVI, RAVI]] as const) {
+      expect(await says(coTop(lotFirst, champion)), `lot put ${lotFirst.name} 1st, ${champion.name} won the final`).toBe(true);
+      checked++;
+    }
+    // The same two rows split by a cascade step before the lot (the trace still names the other, but `tieUnbroken` is off):
+    // Ravi is 1st outright, so Ines, the champion, did not top the league.
+    const split = coTop(RAVI, INES);
+    const splitRows = (split.standings!.rows as { entrantId: string; tieUnbroken?: boolean; tieBreak?: object }[]).map((r) =>
+      r.entrantId === RAVI.entrantId || r.entrantId === INES.entrantId
+        ? { ...r, tieUnbroken: false, tieBreak: { key: "h2h", with: [r.entrantId === RAVI.entrantId ? INES.entrantId : RAVI.entrantId] } }
+        : r,
+    );
+    expect(await says({ ...split, standings: { ...split.standings!, rows: splitRows } as QuickMatchHome["standings"] }), "split: Ines strictly 2nd").toBe(false);
+    checked++;
+    // Strictly 2nd on the table (case (g)'s league): not said.
+    expect(await says(championInes()), "Ines strictly 2nd").toBe(false);
+    checked++;
+    expect(checked, "anti-vacuity").toBe(6);
   });
 
   it("(h) the skip warning counts the league's matches (T5 review): skipping the last league match finishes the league; Put back hides once the league is done", async () => {
@@ -915,6 +975,130 @@ describe("a League + Knockout's home, state by state (plan 5 Task 7)", () => {
     expect(words(oneByTestId(tree, "qm-flash"))).toBe("Someone already decided. Here is who goes through.");
     expect(oneByTestId(tree, "qm-flash").props.role).toBe("alert");
     expect(before(tree, "qm-flash", "qm-eyebrow")).toBe(true);
+    // TIE_NOT_OPEN also lands when no tie is open at all (the league reopened, or the knockout filled): its line says the
+    // table moved and shows where it stands, never "decide again" (T7 review m5, controller ruling: neutral copy).
+    expect(en_("quickMatch.flash.tieChanged")).toBe("The table changed since you opened this page. Here is where it stands.");
+  });
+});
+
+describe("the Full table carries a League + Knockout's marks (T7 review m2)", () => {
+  /** The public table's columns for this league, one the short table lacks (`lost`), so the fold is drawn; each cell names
+   *  its entrant, so a row's cells are seen to follow it. */
+  const fullOf = (sides: readonly QuickMatchSide[]): FullTableData => ({
+    columns: [
+      { key: "played", abbr: "P", word: "Played" },
+      { key: "lost", abbr: "L", word: "Lost" },
+    ],
+    cells: Object.fromEntries(sides.map((s) => [s.entrantId, ["6", `lost-${s.name}`]])),
+  });
+  const TO_DECIDE = `toDecide:${en_("quickMatch.home.levelToDecide")}`;
+  const LOT = `lot:${en_("quickMatch.home.byLot")}`;
+  const PICKED = `picked:${en_("quickMatch.home.picked")}`;
+  type Mark = ReturnType<typeof tableOf>[number];
+  const r_ = (name: string, place: string, through: boolean, toDecide: boolean, tag: string | null, cut: boolean): Mark => ({
+    name, place, through, toDecide, tag, cut,
+  });
+  // The same rows the short table's own cases expect ((b), (d), (e)), typed again here, and the mockup's tints.
+  const CASES: [string, () => QuickMatchHome, Mark[], ("lime" | "orange" | null)[]][] = [
+    ["an open tie for 2nd", tieFor2nd, [
+      r_("Ravi", "1", true, false, null, false), r_("Ines", "=", false, true, TO_DECIDE, true),
+      r_("Mika", "=", false, true, TO_DECIDE, false), r_("Sofia", "4", false, false, null, true),
+    ], ["lime", "orange", "orange", null]],
+    ["after a toss", tossedFor2nd, [
+      r_("Ravi", "1", true, false, null, false), r_("Mika", "2", true, false, LOT, false),
+      r_("Ines", "3", false, false, LOT, true), r_("Sofia", "4", false, false, null, false),
+    ], ["lime", "lime", null, null]],
+    ["after a Pick", pickedFor2nd, [
+      r_("Ravi", "1", true, false, null, false), r_("Ines", "=", true, false, PICKED, false),
+      r_("Mika", "=", false, false, null, true), r_("Sofia", "4", false, false, null, false),
+    ], ["lime", "lime", null, null]],
+  ];
+  it("row for row as the short table: the tint, the cut line, '=' and the tag; its cells follow the rows", async () => {
+    let rows = 0;
+    for (const [what, home, marks, tints] of CASES) {
+      const { tree } = await renderView(home(), { fullTable: fullOf(FOUR) });
+      expect(tableOf(tree), `${what}: the short table`).toEqual(marks);
+      expect(tintsOf(tree), `${what}: the short table's tints`).toEqual(tints);
+      const fold = oneByTestId(tree, "qm-full-table");
+      expect(tableOf(fold, "qm-full-table-row", "qm-full-table-tag"), `${what}: the Full table`).toEqual(marks);
+      expect(tintsOf(fold, "qm-full-table-row"), `${what}: the Full table's tints`).toEqual(tints);
+      expect(byTestId(fold, "qm-full-table-row").map((r) => byTestId(r, "qm-full-cell").map(words)[1]), what).toEqual(
+        marks.map((m) => `lost-${m.name}`),
+      );
+      // "=" is printed, never read: a screen reader hears the tag instead.
+      for (const r of byTestId(fold, "qm-full-table-row").filter((x) => words(all(x, (el) => el.type === "td")[0]) === "=")) {
+        expect(all(r, (el) => el.type === "span" && words(el) === "=")[0]?.props["aria-hidden"], what).toBe("true");
+      }
+      rows += marks.length;
+    }
+    expect(rows, "anti-vacuity: rows checked").toBe(12);
+  });
+});
+
+describe("the standings header groups its caption and note (T7 review m6)", () => {
+  it("a League + Knockout's caption and note share one block, flowing as before on a phone, stacked on the right from md", async () => {
+    // Every league match Not played: the caption ("Top 2 go through") and the note ("Counts played matches only") both show.
+    const { tree } = await renderView(allSkipped());
+    const caption = oneByTestId(tree, "qm-standings-caption");
+    const note = oneByTestId(tree, "qm-standings-note");
+    const holders = all(tree, (el) => {
+      const kids = ([] as unknown[]).concat(el.props.children ?? []);
+      return kids.includes(caption) && kids.includes(note);
+    });
+    expect(holders, "one block holds both").toHaveLength(1);
+    const cls = String(holders[0]!.props.className).split(/\s+/);
+    // Below md the block is `contents`: its two lines stay items of the header's own wrapping row (the phone is unchanged).
+    for (const c of ["contents", "md:flex", "md:flex-col", "md:items-end", "md:text-right"]) expect(cls, c).toContain(c);
+    // A plain League's header has no caption, so no block: its note stays the header row's own item (its markup unchanged).
+    const plain = await renderView({ ...plainLeague(), notPlayed: 1 });
+    const plainNote = oneByTestId(plain.tree, "qm-standings-note");
+    const row_ = all(plain.tree, (el) => ([] as unknown[]).concat(el.props.children ?? []).includes(plainNote));
+    expect(row_).toHaveLength(1);
+    expect(([] as unknown[]).concat(row_[0]!.props.children ?? []), "the title sits beside it").toContain(oneByTestId(plain.tree, "qm-standings-title"));
+  });
+});
+
+describe("the home refuses a League + Knockout read it was never given (T7 review m3)", () => {
+  /** A refusal: a `QuickMatchHomeShapeError` naming THIS fault, so one guard never passes for another. */
+  async function refused(h: QuickMatchHome, msg: RegExp) {
+    const err = await renderView(h).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err, String(msg)).toBeInstanceOf(QuickMatchHomeShapeError);
+    expect((err as Error).message).toMatch(msg);
+  }
+  const withLine = (h: QuickMatchHome, id: string, over: (f: QuickMatchFixture) => QuickMatchFixture): QuickMatchHome => {
+    expect(h.fixtures.some((f) => f.id === id), `premise: ${id} is a line`).toBe(true);
+    return { ...h, fixtures: h.fixtures.map((f) => (f.id === id ? over(f) : f)) };
+  };
+  const CASES: [string, () => QuickMatchHome, (h: QuickMatchHome) => QuickMatchHome, RegExp][] = [
+    ["a seat waits on a league rank past the ranks a knockout of 4 seats", midLeague,
+      (h) => withLine(h, SEMI_1, (f) => ({ ...f, knockoutSeats: { home: rankSeat(5), away: f.knockoutSeats!.away } })), /names league rank 5, which has no words/],
+    ["the champion's final is no seated line of the knockout", championInes,
+      (h) => ({ ...h, champion: { entrantId: INES.entrantId, finalFixtureId: "k-nowhere" } }), /the champion's final k-nowhere is not a seated line/],
+    ["the champion did not play the final", championInes,
+      (h) => ({ ...h, champion: { entrantId: SOFIA.entrantId, finalFixtureId: FINAL } }), /the champion e-sofia did not play the final k-final/],
+    ["a seat waits on a line the knockout does not have", midLeague,
+      (h) => withLine(h, FINAL, (f) => ({ ...f, knockoutSeats: { home: winnerSeat("k-nowhere"), away: f.knockoutSeats!.away } })), /waits on k-nowhere, which is no line of this knockout/],
+    ["a knockout line names no seats", midLeague, (h) => withLine(h, SEMI_2, (f) => ({ ...f, knockoutSeats: null })), /the knockout line k-semi-2 names no seats/],
+    ["the knockout asks about a tie but names none", tieFor2nd, (h) => ({ ...h, knockout: { ...h.knockout!, tie: null } }), /asks about a tie at the cut, but names none/],
+    ["the tie names a side the quick match does not hold", tieFor2nd,
+      (h) => ({ ...h, knockout: { ...h.knockout!, tie: { ...TIE_2ND, entrantIds: [INES.entrantId, "e-ghost"] } } }), /the tie at the cut names a side the quick match does not hold \(e-ines, e-ghost\)/],
+    ["a League + Knockout read with no knockout", tieFor2nd, (h) => ({ ...h, knockout: null }), /a League \+ Knockout read with no knockout or no league counts/],
+    ["a League + Knockout read with no league counts", midLeague, (h) => ({ ...h, league: null }), /a League \+ Knockout read with no knockout or no league counts/],
+  ];
+  // One test per guard (eight throws; the read-model guard has two ways in), each beside its positive pair: the same read,
+  // unbroken, renders.
+  for (const [what, base, broken, msg] of CASES) {
+    it(`refuses: ${what}`, async () => {
+      await expect(renderView(base()), "the positive pair").resolves.toBeDefined();
+      await refused(broken(base()), msg);
+    });
+  }
+  it("covers every guard (anti-vacuity)", () => {
+    expect(CASES).toHaveLength(9);
+    expect(new Set(CASES.map(([, , , msg]) => String(msg))).size, "eight distinct refusals").toBe(8);
   });
 });
 

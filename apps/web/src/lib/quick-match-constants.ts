@@ -160,7 +160,8 @@ export const QUICK_MATCH_ERRORS = {
   ALREADY_DECIDED: "QUICK_MATCH_ALREADY_DECIDED",
   /** A Pick or Toss post when no tie straddles the cut (plan 5 D5, 422): the league is not finished, or an edited result moved
    *  the table so the question is no longer the one the page showed (§11). Never a fault: the home shows
-   *  `quickMatch.flash.tieChanged`, which says to decide again on the fresh question. */
+   *  `quickMatch.flash.tieChanged`, which says the table changed and shows where it stands (neutral: no tie may be open
+   *  at all, so it never says to decide again; T7 review m5). */
   TIE_NOT_OPEN: "QUICK_MATCH_TIE_NOT_OPEN",
   /** A Pick post that does not name exactly the open places' number of distinct sides, all from the tied group (plan 5 D5, 422).
    *  The browser's own panel only enables Send at the right count, so a crafted or no-JS post meets it:

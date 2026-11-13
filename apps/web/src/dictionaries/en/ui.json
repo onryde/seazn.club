@@ -8552,7 +8552,7 @@
   "quickMatch.cut.tossBody": "They were level on everything. Everyone with the link sees this same result.",
   "quickMatch.cut.pickResult": "Picked to go through: {names}.",
   "quickMatch.flash.alreadyDecided": "Someone already decided. Here is who goes through.",
-  "quickMatch.flash.tieChanged": "The table changed, so the question changed. Decide again.",
+  "quickMatch.flash.tieChanged": "The table changed since you opened this page. Here is where it stands.",
   "quickMatch.flash.pickInvalid": "Choose exactly the number of sides that go through.",
   "quickMatch.flash.leagueComplete": "The league is complete, so no match can be added."
 }
