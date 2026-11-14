@@ -36,6 +36,7 @@ import {
   type CartEntry,
   type CartState,
   type ConsentState,
+  type ContactState,
   type DivisionLike,
 } from "../types";
 
@@ -61,11 +62,14 @@ const entry = (over: Partial<CartEntry>): CartEntry => ({
   ...over,
 });
 const cartOf = (...entries: CartEntry[]): CartState => ({ entries });
+// The registrant: an adult who gave no date of birth (the common parent, not playing). Fix round 1 (review I-1): only an adult can
+// consent as a guardian, so the contact is part of every question below.
+const PARENT: ContactState = { ...EMPTY_CONTACT, name: "Pat Parent" };
 const s = (loc: Loc, key: string) => String(DICTS[loc][key]);
 const esc = (v: string) => v.replaceAll("&", "&amp;").replaceAll("'", "&#x27;").replaceAll('"', "&quot;");
 
-describe("guardianForMinorsOffered: a typed-in player under 18 who is not the registrant", () => {
-  const cases: Array<[string, CartState, boolean]> = [
+describe("guardianForMinorsOffered: a typed-in player under 18 who is not the registrant, entered by an adult", () => {
+  const cases: Array<[string, CartState, boolean, ContactState?]> = [
     ["the empty cart", EMPTY_CART, false],
     ["a child entered for someone else", cartOf(entry({ players: [player("Kid", CHILD)] })), true],
     ["17, turning 18 tomorrow", cartOf(entry({ players: [player("Teen", SEVENTEEN)] })), true],
@@ -90,12 +94,33 @@ describe("guardianForMinorsOffered: a typed-in player under 18 who is not the re
       cartOf(entry({ players: [player("Adult", ADULT)] }), entry({ id: "e2", division_id: "d2", players: [player("Kid", CHILD)] })),
       true,
     ],
+    // Fix round 1 (review I-1): a registrant under 18 is nobody's guardian, whichever date the cart holds says so.
+    [
+      "A: a self-linked 17-year-old captain beside a 10-year-old teammate",
+      cartOf(entry({ entrant_kind: "team", registering_self: true, self_player_index: 0, players: [player("Kai", SEVENTEEN), player("Kid", CHILD)] })),
+      false,
+      { ...EMPTY_CONTACT, name: "Kai" },
+    ],
+    [
+      "B: a minor typed in as an ordinary row under the contact's own name, beside a sibling",
+      cartOf(entry({ entrant_kind: "team", players: [player(" zoe  KID ", SEVENTEEN), player("Sam", CHILD)] })),
+      false,
+      { ...EMPTY_CONTACT, name: "Zoe Kid" },
+    ],
+    ["a contact dob under 18, entering a child", cartOf(entry({ players: [player("Kid", CHILD)] })), false, { ...PARENT, dob: SEVENTEEN }],
+    ["a contact who turned 18 today, entering a child", cartOf(entry({ players: [player("Kid", CHILD)] })), true, { ...PARENT, dob: EIGHTEEN_TODAY }],
+    ["a blank contact name", cartOf(entry({ players: [player("Kid", CHILD)] })), false, { ...PARENT, name: "  " }],
+    [
+      "an adult row under the contact's own name beside a child",
+      cartOf(entry({ entrant_kind: "team", players: [player("Pat Parent", ADULT), player("Kid", CHILD)] })),
+      true,
+    ],
   ];
 
   it("answers each case by the rule (empty case first)", () => {
     let checked = 0;
-    for (const [name, cart, offered] of cases) {
-      expect(guardianForMinorsOffered(cart, NOW), name).toBe(offered);
+    for (const [name, cart, offered, contact = PARENT] of cases) {
+      expect(guardianForMinorsOffered(cart, contact, NOW), name).toBe(offered);
       checked++;
     }
     expect(checked).toBe(cases.length);
@@ -109,10 +134,15 @@ const MINOR_CART = cartOf(entry({ players: [player("Kid", "2016-05-01")] }));
 const ADULT_CART = cartOf(entry({ players: [player("Adult", "1990-01-01")] }));
 const SELF_MINOR_CART = cartOf(entry({ registering_self: true, players: [player("Me", "2016-05-01")] }));
 
-function consentStep(cart: CartState, consent: ConsentState = EMPTY_CONSENT, onConsentChange: (p: Partial<ConsentState>) => void = () => undefined) {
+function consentStep(
+  cart: CartState,
+  consent: ConsentState = EMPTY_CONSENT,
+  onConsentChange: (p: Partial<ConsentState>) => void = () => undefined,
+  contact: ContactState = PARENT,
+) {
   return (
     <StepConsent
-      contact={EMPTY_CONTACT}
+      contact={contact}
       onContactChange={() => undefined}
       consent={consent}
       onConsentChange={onConsentChange}
@@ -122,9 +152,9 @@ function consentStep(cart: CartState, consent: ConsentState = EMPTY_CONSENT, onC
     />
   );
 }
-const render = (cart: CartState, consent?: ConsentState, locale: Loc = "en") => {
+const render = (cart: CartState, consent?: ConsentState, locale: Loc = "en", contact: ContactState = PARENT) => {
   current.locale = locale;
-  return renderToStaticMarkup(consentStep(cart, consent));
+  return renderToStaticMarkup(consentStep(cart, consent, undefined, contact));
 };
 const BOX = 'data-testid="reg-consent-guardian-minors-box"';
 
@@ -164,7 +194,7 @@ describe("the consent step's guardian box", () => {
     const patches: Partial<ConsentState>[] = [];
     current.locale = "en";
     const tree = StepConsent({
-      contact: EMPTY_CONTACT,
+      contact: PARENT,
       onContactChange: () => undefined,
       consent: EMPTY_CONSENT,
       onConsentChange: (p) => patches.push(p),
@@ -180,41 +210,83 @@ describe("the consent step's guardian box", () => {
     expect(patches).toEqual([{ guardian_for_minors: true }, { guardian_for_minors: false }]);
   });
 
-  // The roster notice says each named player will be asked to confirm. Ticked, the minors will not be, so when they are EVERY other
-  // player nobody is left to ask and the line would contradict the box above it; with an adult or an undated player still to ask, it stays.
-  it("the roster notice steps aside only when the tick covers every other player", () => {
+  // The roster notice says who will be asked to confirm. Ticked, the minors will not be: when they are EVERY other player nobody is
+  // left to ask and the line steps aside; with an adult or an undated player still to ask, it names only them (fix round 1, review
+  // m-1: "each player you've named" beside the ticked box was a contradiction). A box that is not offered changes nothing.
+  it("the roster notice: unchanged unticked, gone when the tick covers everyone, narrowed when someone is still to ask", () => {
     const NOTICE = 'data-testid="reg-consent-roster-notice"';
     const ticked = { ...EMPTY_CONSENT, guardian_for_minors: true };
     const team = (...players: ReturnType<typeof player>[]) => cartOf(entry({ entrant_kind: "team", players }));
-    const cases: Array<[string, CartState, ConsentState, boolean]> = [
-      ["the empty cart names nobody", EMPTY_CART, ticked, false],
-      ["unticked, the child is asked", MINOR_CART, EMPTY_CONSENT, true],
-      ["ticked, the only other player is a child", MINOR_CART, ticked, false],
-      ["ticked, two children", team(player("Kid", "2016-05-01"), player("Sib", "2014-03-03")), ticked, false],
-      ["ticked, an adult is still asked", team(player("Kid", "2016-05-01"), player("Adult", "1990-01-01")), ticked, true],
-      ["ticked, an undated player is still asked", team(player("Kid", "2016-05-01"), player("Undated", null)), ticked, true],
+    const PLAYING = "register.consent.rosterNotice";
+    const NOT_PLAYING = "register.consent.rosterNoticeNotPlaying";
+    const G_PLAYING = "register.consent.rosterNoticeGuardian";
+    const G_NOT_PLAYING = "register.consent.rosterNoticeGuardianNotPlaying";
+    const KEYS = [PLAYING, NOT_PLAYING, G_PLAYING, G_NOT_PLAYING];
+    const cases: Array<[string, CartState, ConsentState, string | null, ContactState?]> = [
+      ["the empty cart names nobody", EMPTY_CART, ticked, null],
+      ["unticked, the child is asked", MINOR_CART, EMPTY_CONSENT, NOT_PLAYING],
+      ["ticked, the only other player is a child", MINOR_CART, ticked, null],
+      ["ticked, two children", team(player("Kid", "2016-05-01"), player("Sib", "2014-03-03")), ticked, null],
+      ["ticked, an adult is still asked", team(player("Kid", "2016-05-01"), player("Adult", "1990-01-01")), ticked, G_NOT_PLAYING],
+      ["ticked, an undated player is still asked", team(player("Kid", "2016-05-01"), player("Undated", null)), ticked, G_NOT_PLAYING],
       [
         "ticked, the registrant plays beside their child",
-        cartOf(entry({ entrant_kind: "team", registering_self: true, self_player_index: 0, players: [player("Me", "1990-01-01"), player("Kid", "2016-05-01")] })),
+        cartOf(entry({ entrant_kind: "team", registering_self: true, self_player_index: 0, players: [player("Pat Parent", "1990-01-01"), player("Kid", "2016-05-01")] })),
         ticked,
-        false,
+        null,
       ],
-      ["a stale tick with no minor to cover is ignored", ADULT_CART, ticked, true],
+      [
+        "ticked, the registrant plays beside their child and an adult",
+        cartOf(entry({ entrant_kind: "team", registering_self: true, self_player_index: 0, players: [player("Pat Parent", "1990-01-01"), player("Kid", "2016-05-01"), player("Coach", "1980-02-02")] })),
+        ticked,
+        G_PLAYING,
+      ],
+      ["a stale tick with no minor to cover is ignored", ADULT_CART, ticked, NOT_PLAYING],
+      [
+        "unticked, the registrant plays beside their child",
+        cartOf(entry({ entrant_kind: "team", registering_self: true, self_player_index: 0, players: [player("Pat Parent", "1990-01-01"), player("Kid", "2016-05-01")] })),
+        EMPTY_CONSENT,
+        PLAYING,
+      ],
       [
         "ticked, the child on one entry, an adult on another",
         cartOf(entry({ players: [player("Kid", "2016-05-01")] }), entry({ id: "e2", division_id: "d2", players: [player("Adult", "1990-01-01")] })),
         ticked,
-        true,
+        G_NOT_PLAYING,
+      ],
+      // A minor registrant is offered no box, so a tick changes nothing and "go back and tick “I'm one of the players”" stays.
+      [
+        "B: a minor typed in under their own name ticks it",
+        team(player("Zoe Kid", "2012-02-02"), player("Sam", "2016-05-01")),
+        ticked,
+        NOT_PLAYING,
+        { ...EMPTY_CONTACT, name: "Zoe Kid" },
       ],
     ];
     let checked = 0;
-    for (const [name, cart, consent, shown] of cases) {
-      expect(render(cart, consent).includes(NOTICE), name).toBe(shown);
+    for (const [name, cart, consent, key, contact = PARENT] of cases) {
+      const html = render(cart, consent, "en", contact);
+      expect(html.includes(NOTICE), `${name}: a notice`).toBe(key !== null);
+      // Which line: each key's own words (up to its "{box}") are on the page, and no other key's are.
+      for (const k of KEYS) expect(html.includes(esc(s("en", k).split("{box}")[0]!)), `${name}: ${k}`).toBe(k === key);
       checked++;
     }
     expect(checked).toBe(cases.length);
-    expect(cases.filter(([, , , shown]) => shown).length, "both answers are exercised").toBeGreaterThan(0);
-    expect(cases.filter(([, , , shown]) => !shown).length).toBeGreaterThan(1);
+    for (const k of [...KEYS, null]) expect(cases.some(([, , , key]) => key === k), `case for ${k}`).toBe(true);
+  });
+
+  it("the two narrowed notices are translated in every locale and keep the box name", () => {
+    let checked = 0;
+    for (const loc of LOCALES) {
+      for (const k of ["register.consent.rosterNoticeGuardian", "register.consent.rosterNoticeGuardianNotPlaying"]) {
+        expect(DICTS[loc][k], `${loc} ${k}`).toBeTypeOf("string");
+        if (loc !== "en") expect(s(loc, k), `${loc} ${k} is translated`).not.toBe(s("en", k));
+        checked++;
+      }
+      // The not-playing line names the box to tick, as its un-narrowed sibling does.
+      expect(s(loc, "register.consent.rosterNoticeGuardianNotPlaying"), loc).toContain("{box}");
+    }
+    expect(checked).toBe(8);
   });
 });
 
@@ -245,20 +317,24 @@ describe("what the submit and the review carry", () => {
     // A draft saved before the field existed has no key at all.
     ["an older draft without the field", MINOR_CART, { privacy_consent: true, media_consent: false }, false],
   ];
+  // Fix round 1 (review I-1): the same ticked cart, sent by a registrant under 18, carries no tick (the server ignores one anyway).
+  const MINOR_CONTACT: ContactState = { ...PARENT, dob: "2012-02-02" };
 
   it("the body sends guardian_for_minors only when the box is shown and ticked", () => {
     let checked = 0;
     for (const [name, cart, consent, sent] of cases) {
-      expect(buildSubmitBody(EMPTY_CONTACT, consent, cart, "").guardian_for_minors, name).toBe(sent);
+      expect(buildSubmitBody(PARENT, consent, cart, "").guardian_for_minors, name).toBe(sent);
       checked++;
     }
     expect(checked).toBe(cases.length);
+    expect(buildSubmitBody(MINOR_CONTACT, ticked, MINOR_CART, "").guardian_for_minors, "a registrant under 18").toBe(false);
   });
 
   it("the review lists the choice exactly when the consent step asked it", () => {
-    expect(reviewContent(MINOR_CART, DIVISIONS, EMPTY_CONTACT, ticked, new Date()).guardianForMinors).toBe(true);
-    expect(reviewContent(MINOR_CART, DIVISIONS, EMPTY_CONTACT, EMPTY_CONSENT, new Date()).guardianForMinors).toBe(false);
-    expect(reviewContent(ADULT_CART, DIVISIONS, EMPTY_CONTACT, ticked, new Date()).guardianForMinors).toBeNull();
-    expect(reviewContent(EMPTY_CART, DIVISIONS, EMPTY_CONTACT, EMPTY_CONSENT, new Date()).guardianForMinors).toBeNull();
+    expect(reviewContent(MINOR_CART, DIVISIONS, PARENT, ticked, new Date()).guardianForMinors).toBe(true);
+    expect(reviewContent(MINOR_CART, DIVISIONS, PARENT, EMPTY_CONSENT, new Date()).guardianForMinors).toBe(false);
+    expect(reviewContent(ADULT_CART, DIVISIONS, PARENT, ticked, new Date()).guardianForMinors).toBeNull();
+    expect(reviewContent(EMPTY_CART, DIVISIONS, PARENT, EMPTY_CONSENT, new Date()).guardianForMinors).toBeNull();
+    expect(reviewContent(MINOR_CART, DIVISIONS, MINOR_CONTACT, ticked, new Date()).guardianForMinors, "not asked of a minor").toBeNull();
   });
 });

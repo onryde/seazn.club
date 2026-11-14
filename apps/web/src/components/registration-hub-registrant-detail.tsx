@@ -252,6 +252,12 @@ export function RegistrationHubRegistrantDetail({
                 >
                   {t(dict, `reg.hub.registrants.detail.consent.${p.consent_status}`)}
                 </span>
+                {/* Owner rec 2026-11-14: who consented for a minor, on their own line under the name (a parent now often does). */}
+                {p.guardian_name?.trim() && (
+                  <span data-registration-hub-registrant-guardian className="basis-full text-xs text-slate-500">
+                    {t(dict, "reg.hub.registrants.detail.consent.guardianBy", { name: p.guardian_name.trim() })}
+                  </span>
+                )}
               </li>
             ))}
           </ul>

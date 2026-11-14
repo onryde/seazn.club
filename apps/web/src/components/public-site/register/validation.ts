@@ -5,8 +5,8 @@
 // "Next" doesn't let a cart through that the server will 400/422 on submit,
 // not to replace that check.
 import { isMinor } from "@/lib/registration-rules";
-import { registeringSelfAnywhere } from "./cart";
-import { effectiveSelfDob, effectiveSelfPlayers, resolveSelfPlayerIndex } from "./roster";
+import { registeringSelfAnywhere, rosterNoticeKey } from "./cart";
+import { effectiveSelfDob, effectiveSelfPlayers, resolveSelfPlayerIndex, sameName } from "./roster";
 import { rosterEligibilityForDivision, selfEligibilityForDivision } from "./eligibility-presentation";
 import type { CartEntry, CartState, ConsentState, ContactState, DivisionLike } from "./types";
 
@@ -469,21 +469,45 @@ export function guardianRequired(cart: CartState, contact: Pick<ContactState, "d
 }
 
 /**
- * Whether the consent step asks "I'm the parent or guardian of the players under 18 I'm entering" (Addendum 2b): some typed-in
- * player who is NOT the registrant has a dob under 18 today. Mirrors the server's `rowConsentAtSubmit` (registration-submit.ts),
- * which consents exactly those rows when the box is ticked: the registrant's own row (`resolveSelfPlayerIndex` on a self-linked
- * entry) and a solo sign-up's one row are the registrant's, whose own minority is `guardianRequired`'s, never this box's; a row
- * with no dob is never taken for a minor. Never required — unticked, those players confirm when they claim their place.
+ * Whether the consent step asks "I'm the parent or guardian of the players under 18 I'm entering" (Addendum 2b): an ADULT registrant
+ * (`registrantMayConsentForMinors`) entering some typed-in player who is NOT them and whose dob is under 18 today. Mirrors the server's
+ * `guardianForMinorsName` + `rowConsentAtSubmit` (registration-submit.ts), which consent exactly those rows when the box is ticked:
+ * the registrant's own row (`resolveSelfPlayerIndex` on a self-linked entry) and a solo sign-up's one row are the registrant's, whose
+ * own minority is `guardianRequired`'s, never this box's; a row with no dob is never taken for a minor. Never required — unticked,
+ * those players confirm when they claim their place.
  */
-export function guardianForMinorsOffered(cart: CartState, now: Date): boolean {
-  return otherPlayers(cart).some((p) => coveredMinor(p, now));
+export function guardianForMinorsOffered(cart: CartState, contact: Pick<ContactState, "name" | "dob">, now: Date): boolean {
+  return registrantMayConsentForMinors(cart, contact, now) && otherPlayers(cart).some((p) => datedMinor(p, now));
 }
 
-/** Addendum 2b: whether a ticked box consents for EVERY player the cart names besides the registrant, so the consent step's roster
- *  notice ("we'll ask each of them to confirm") would contradict it. An adult or undated row is still asked; no other row ⇒ false. */
-export function guardianCoversEveryOtherPlayer(cart: CartState, now: Date): boolean {
-  const others = otherPlayers(cart);
-  return others.length > 0 && others.every((p) => coveredMinor(p, now));
+/** Fix round 1 (review I-1, m-4): only an adult is anyone's guardian. A registrant under 18 by any date the cart holds for them — a
+ *  self-linked row (`guardianRequired`, their own guardian block), the contact's dob, or a typed-in row carrying the contact's own name
+ *  (`sameName`: that row is them) — is offered no box, and nor is a blank contact name. The server ignores a tick in each case. */
+function registrantMayConsentForMinors(cart: CartState, contact: Pick<ContactState, "name" | "dob">, now: Date): boolean {
+  if (contact.name.trim() === "") return false;
+  if (guardianRequired(cart, contact, now)) return false;
+  if (contact.dob && isMinor(contact.dob, now)) return false;
+  return !otherPlayers(cart).some((p) => sameName(p.full_name, contact.name) && datedMinor(p, now));
+}
+
+export type ConsentRosterNoticeKey =
+  | NonNullable<ReturnType<typeof rosterNoticeKey>>
+  | "register.consent.rosterNoticeGuardian"
+  | "register.consent.rosterNoticeGuardianNotPlaying";
+
+/** The consent step's line about the people the cart names, or none (Addendum 2b; fix round 1, review m-1). Unticked, or with no box
+ *  offered, it is `rosterNoticeKey`'s. Ticked, the minors will not be asked: when they are every other player the line steps aside
+ *  (nobody is left to ask); otherwise its narrowed twin names only the players still asked — 18 or over, or with no date of birth. */
+export function consentRosterNotice(
+  cart: CartState,
+  contact: Pick<ContactState, "name" | "dob">,
+  consent: Pick<ConsentState, "guardian_for_minors">,
+  now: Date,
+): ConsentRosterNoticeKey | null {
+  const key = rosterNoticeKey(cart);
+  if (key === null || consent.guardian_for_minors !== true || !guardianForMinorsOffered(cart, contact, now)) return key;
+  if (otherPlayers(cart).every((p) => datedMinor(p, now))) return null;
+  return key === "register.consent.rosterNotice" ? "register.consent.rosterNoticeGuardian" : "register.consent.rosterNoticeGuardianNotPlaying";
 }
 
 /** The typed-in rows that are not the registrant's own: a solo sign-up's row and a self-linked entry's resolved row are theirs. */
@@ -495,7 +519,7 @@ function otherPlayers(cart: CartState): CartEntry["players"] {
   });
 }
 
-const coveredMinor = (p: CartEntry["players"][number], now: Date): boolean => p.dob !== null && p.dob !== "" && isMinor(p.dob, now);
+const datedMinor = (p: CartEntry["players"][number], now: Date): boolean => p.dob !== null && p.dob !== "" && isMinor(p.dob, now);
 
 export interface ConsentValidation {
   valid: boolean;

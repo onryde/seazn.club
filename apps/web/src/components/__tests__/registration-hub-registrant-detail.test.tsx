@@ -638,3 +638,56 @@ describe("RegistrationHubRegistrantDetail — a long contact email wraps inside 
     expect(classOf(path!.at(-1)!), "the <dd> wraps a word too long for it").toMatch(/(^|\s)break-words(\s|$)/);
   });
 });
+
+// Guardian consent for minors (owner rec, 2026-11-14): a parent now routinely consents for the children they enter, so the organiser,
+// who confirms they hold guardian consent for a youth division, sees WHO gave it on the player's row — "Consent by guardian: <name>" —
+// wherever the row carries a guardian's name: a child consented for at submit or at their own claim ('guardian'), and a registrant
+// under 18 whose own row was consented with their guardian ('granted', guardian_name set). No name, or a blank one: no line.
+describe("RegistrationHubRegistrantDetail — the guardian who consented is named (owner rec)", () => {
+  const guardianLines = (roster: RegistrantRosterPlayer[]) =>
+    walk(RegistrationHubRegistrantDetail(baseProps({ roster }))).filter(
+      (e) => propsOf(e)["data-registration-hub-registrant-guardian"] !== undefined,
+    );
+
+  it("names the guardian on each row that has one, beside that row's own chip, and on no other row", () => {
+    const roster: RegistrantRosterPlayer[] = [
+      { ...PLAYER_A, consent_status: "granted", guardian_name: null },
+      { id: "p3", full_name: "Mia Cole", squad_number: null, is_captain: false, consent_status: "guardian", guardian_name: "Pat Parent" },
+      { id: "p4", full_name: "Kai Teen", squad_number: null, is_captain: false, consent_status: "granted", guardian_name: "Mum Teen" },
+      { ...PLAYER_B, consent_status: "pending" },
+    ];
+    const tree = walk(RegistrationHubRegistrantDetail(baseProps({ roster })));
+    const rows = tree.filter((e) => propsOf(e)["data-registration-hub-registrant-roster-player"] !== undefined);
+    expect(rows, "premise: one row per player").toHaveLength(4);
+    const lineOf = (rowEl: ReactElement) =>
+      walk(rowEl).filter((e) => propsOf(e)["data-registration-hub-registrant-guardian"] !== undefined).map((e) => textOf(e));
+    expect(rows.map(lineOf)).toEqual([[], ["Consent by guardian: Pat Parent"], ["Consent by guardian: Mum Teen"], []]);
+    expect(t(dict, "reg.hub.registrants.detail.consent.guardianBy", { name: "Pat Parent" })).toBe("Consent by guardian: Pat Parent");
+  });
+
+  it("no guardian's name, a blank one, or no roster: no line (the empty case answers no)", () => {
+    let checked = 0;
+    for (const roster of [
+      [],
+      [{ ...PLAYER_A, guardian_name: null }],
+      [{ ...PLAYER_B, consent_status: "guardian" as const, guardian_name: "   " }],
+      [PLAYER_A, PLAYER_B],
+    ]) {
+      expect(guardianLines(roster)).toHaveLength(0);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("the line's words are translated in every locale and carry the name", () => {
+    let checked = 0;
+    for (const loc of ["en", "es", "fr", "nl"] as const) {
+      const raw = JSON.parse(readFileSync(join(process.cwd(), "src", "dictionaries", loc, "ui.json"), "utf8")) as Record<string, string>;
+      const words = raw["reg.hub.registrants.detail.consent.guardianBy"];
+      expect(words, loc).toBeTypeOf("string");
+      expect(words, loc).toContain("{name}");
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+});

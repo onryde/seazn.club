@@ -69,7 +69,7 @@ export function reviewContent(
     guardian: guardianRequired(cart, contact, now)
       ? { name: (contact.guardian_name ?? "").trim(), consent: contact.guardian_consent }
       : null,
-    guardianForMinors: guardianForMinorsOffered(cart, now) ? consent.guardian_for_minors === true : null,
+    guardianForMinors: guardianForMinorsOffered(cart, contact, now) ? consent.guardian_for_minors === true : null,
   };
 }
 

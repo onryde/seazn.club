@@ -653,6 +653,10 @@ export interface RegistrantRosterPlayer {
   squad_number: number | null;
   is_captain: boolean;
   consent_status: ConsentStatus;
+  /** Who consented as this player's guardian, when someone did (owner rec 2026-11-14: the panel names them): the parent who ticked
+   *  "players under 18 I'm entering" at submit, the guardian a child named at their own claim, or a self-registering minor's guardian.
+   *  Always read by `fetchRegistrantDetails`; optional only so a fixture built before it existed still type-checks. */
+  guardian_name?: string | null;
 }
 
 export interface RegistrantCartSibling {
@@ -684,6 +688,7 @@ interface RawPlayerRow {
   squad_number: number | null;
   is_captain: boolean;
   consent_status: ConsentStatus;
+  guardian_name: string | null;
 }
 
 interface RawSiblingRow {
@@ -738,7 +743,7 @@ export async function fetchRegistrantDetails(
 
   return withTenant(auth.orgId, async (tx) => {
     const players = await tx<RawPlayerRow[]>`
-      select registration_id, id, full_name, squad_number, is_captain, consent_status
+      select registration_id, id, full_name, squad_number, is_captain, consent_status, guardian_name
       from registration_players
       where registration_id in ${tx(registrationIds)}
       order by is_captain desc, squad_number nulls last, full_name, id`;
@@ -752,6 +757,7 @@ export async function fetchRegistrantDetails(
         squad_number: p.squad_number,
         is_captain: p.is_captain,
         consent_status: p.consent_status,
+        guardian_name: p.guardian_name,
       });
       rosterByRegistration.set(p.registration_id, list);
     }

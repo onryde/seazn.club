@@ -355,7 +355,7 @@ export const ROUTES: RouteSpec[] = [
   // one-row-per-registration contract, `registration_id` is the current
   // name) — and varies by caller role: player dob/gender are editor-only,
   // OMITTED (not blanked) for a viewer session or a read-scope API key.
-  { path: "/divisions/{id}/registrations/export", method: "get", summary: "CSV export of registrations; all plans (`exports`). One row per player, `id`+`registration_id` both present (same value); player dob/gender omitted for a viewer/read-scope key. The LAST column is `entry_reference`: the entry's own reference (`ref_code` alone for a cart sent with one entry, `ref_code-<position>` for a cart sent with two or more; blank when the cart has none) — `ref_code` stays the cart's", tag: "registration", errors: [402] },
+  { path: "/divisions/{id}/registrations/export", method: "get", summary: "CSV export of registrations; all plans (`exports`). One row per player, `id`+`registration_id` both present (same value); player dob/gender omitted for a viewer/read-scope key. After the form's own question columns come `entry_reference`: the entry's own reference (`ref_code` alone for a cart sent with one entry, `ref_code-<position>` for a cart sent with two or more; blank when the cart has none) — `ref_code` stays the cart's — and, LAST, `player_guardian_name`: who consented as that player's guardian, blank where nobody did", tag: "registration", errors: [402] },
   // RS005 W1b — competition-wide Registrants tab: the same read model
   // (listRegistrations/exportRegistrationsCsv) as the division routes above,
   // scoped to a whole competition with the full RS005 W1a filter set.

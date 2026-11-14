@@ -8,6 +8,11 @@
 //  - every other row is exactly what it was: an adult or a row with no date of birth stays 'pending' (they confirm when they join), and
 //    the registrant's own row stays 'granted';
 //  - unticked: 'pending' as before; ticked with no minor in the cart: accepted and ignored (forgiving, never a 422);
+//  - only an ADULT can consent as a guardian (fix round 1, review I-1): a registrant under 18 — their own self-linked row, their
+//    contact dob, or a typed-in row carrying their own name says so — or a blank contact name leaves the tick ignored, every row
+//    pending, the same forgiving way (never a 422); a row carrying the contact's own name is never consented for as a child;
+//  - a guardian row written at submit carries the privacy consent it was given under (privacy_consent_at/_version, as the join path
+//    stamps a guardian row);
 //  - the hub's "Consent pending" (the consent_pending read) no longer counts a guardian-consented row;
 //  - the claim link: a guardian-consented row gets no join-link slot and a hand-made claim of it changes nothing (409), and the account
 //    link that does reach it (RS008's claim invite) links the account only and never touches, or re-asks, its consent.
@@ -23,6 +28,7 @@ vi.mock("@/server/email-outbox/transport", () => ({ deliver: transport.deliver }
 
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { LEGAL_VERSION } from "@/lib/legal";
 import { createDivision } from "../divisions";
 import { inviteUnclaimedMembers, listRegistrations, putRegistrationSettings } from "../registrations";
 import { claimPerson } from "../person-claims";
@@ -101,12 +107,14 @@ type PlayerRow = {
   consent_at: Date | null;
   guardian_name: string | null;
   privacy_consent_at: Date | null;
+  privacy_consent_version: string | null;
   person_id: string | null;
 };
 /** Every player row of a submitted cart, by name (each name is unique in a cart). */
 async function rowsByName(groupId: string): Promise<Map<string, PlayerRow>> {
   const rows = await sql<PlayerRow[]>`
-    select rp.id, rp.full_name, rp.consent_status, rp.consent_at, rp.guardian_name, rp.privacy_consent_at, rp.person_id
+    select rp.id, rp.full_name, rp.consent_status, rp.consent_at, rp.guardian_name, rp.privacy_consent_at, rp.privacy_consent_version,
+           rp.person_id
       from registration_players rp join registrations r on r.id = rp.registration_id
      where r.group_id = ${groupId}`;
   return new Map(rows.map((row) => [row.full_name, row]));
@@ -148,9 +156,18 @@ describe.skipIf(!HAS_DB)("guardian_for_minors at submit (DB)", () => {
       expect(row.guardian_name, name).toBe(CONTACT_NAME);
       expect(row.consent_at!.getTime(), `${name} consented at the submit`).toBeGreaterThanOrEqual(before.getTime());
       expect(row.consent_at!.getTime(), name).toBeLessThanOrEqual(after.getTime());
+      // The privacy consent the guardian gave on the form, on the child's own row (as the join path stamps one).
+      expect(row.privacy_consent_version, name).toBe(LEGAL_VERSION);
+      expect(row.privacy_consent_at!.getTime(), name).toBe(row.consent_at!.getTime());
     }
     for (const name of ["Cal Adult", "Dee Undated"]) {
-      expect(rows.get(name), name).toMatchObject({ consent_status: "pending", consent_at: null, guardian_name: null });
+      expect(rows.get(name), name).toMatchObject({
+        consent_status: "pending",
+        consent_at: null,
+        guardian_name: null,
+        privacy_consent_at: null,
+        privacy_consent_version: null,
+      });
     }
 
     // The hub: the team still waits on its adult; the individual entry (one guardian-consented minor) no longer reads Consent pending.
@@ -281,12 +298,14 @@ describe.skipIf(!HAS_DB)("the claim link on a guardian-consented row (DB)", () =
     const [person] = await sql<{ user_id: string | null }[]>`select user_id from persons where id = ${before.person_id}`;
     expect(person!.user_id, "the account is linked").toBe(userId);
     const after = (await rowsByName(res.group_id)).get("Ada Minor")!;
-    // ...and the guardian's consent is exactly as given: never re-asked, never replaced, no privacy consent stamped on the row.
+    // ...and the guardian's consent is exactly as given: never re-asked, never replaced (the privacy stamp is the submit's own).
+    expect(before.privacy_consent_version, "premise: the submit stamped the guardian's privacy consent").toBe(LEGAL_VERSION);
     expect(after).toMatchObject({
       consent_status: "guardian",
       guardian_name: CONTACT_NAME,
       consent_at: before.consent_at,
-      privacy_consent_at: null,
+      privacy_consent_at: before.privacy_consent_at,
+      privacy_consent_version: LEGAL_VERSION,
     });
   });
 
@@ -306,5 +325,123 @@ describe.skipIf(!HAS_DB)("the claim link on a guardian-consented row (DB)", () =
     expect(ada.person_id, "premise: the row resolved a person the sweep could have invited").not.toBeNull();
     const claims = await sql<{ id: string }[]>`select id from person_claims where person_id = ${ada.person_id}`;
     expect(claims).toEqual([]);
+  });
+});
+
+describe.skipIf(!HAS_DB)("fix round 1 (review I-1, m-4): only an adult registrant consents as a guardian (DB)", () => {
+  /** Every row of the cart, as [name, status, guardian_name], sorted by name. */
+  async function statuses(groupId: string) {
+    const rows = await rowsByName(groupId);
+    return [...rows.values()].map((row) => [row.full_name, row.consent_status, row.guardian_name]).sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+  }
+
+  it("A: a self-linked 15-year-old captain ticks it for a 10-year-old teammate: the teammate stays pending, the captain keeps their own guardian", async () => {
+    const r = await competitionRig();
+    const res = await submitRegistrationGroup(
+      { ...r.ctx, sessionUserId: null },
+      {
+        contact: { name: "Kai Captain", email: `${RUN}-kai@x.test`, dob: TEEN, guardian_name: "Mum Captain", guardian_consent: true },
+        privacy_consent: true,
+        guardian_for_minors: true,
+        entries: [
+          {
+            division_id: r.teamId,
+            entrant_kind: "team",
+            team_name: "Under-16s",
+            registering_self: true,
+            self_player_index: 0,
+            players: [{ full_name: "Kai Captain" }, { full_name: "Lou Minor", dob: CHILD }],
+            answers: {},
+          },
+        ],
+      },
+    );
+    expect(await statuses(res.group_id)).toEqual([
+      // The captain's own row: their own guardian's consent, as before this change.
+      ["Kai Captain", "granted", "Mum Captain"],
+      // A 15-year-old is nobody's guardian: the teammate confirms (with their own guardian) when they claim their spot.
+      ["Lou Minor", "pending", null],
+    ]);
+  });
+
+  it("B: a minor who types themselves in as an ordinary row (not linked as a player) ticks it: their own row and their sibling's stay pending", async () => {
+    const r = await competitionRig();
+    const res = await submitRegistrationGroup(
+      { ...r.ctx, sessionUserId: null },
+      {
+        // No contact dob and no self-link: the only sign of the registrant's age is the row that carries their own name.
+        contact: { name: "Zoe Kid", email: `${RUN}-zoe@x.test` },
+        privacy_consent: true,
+        guardian_for_minors: true,
+        entries: [
+          {
+            division_id: r.teamId,
+            entrant_kind: "team",
+            team_name: "Siblings",
+            players: [{ full_name: " zoe  KID ", dob: TEEN }, { full_name: "Sam Kid", dob: CHILD }],
+            answers: {},
+          },
+        ],
+      },
+    );
+    // Before the fix Zoe's own row was written 'guardian' in her own name, past the self-minor gate's demand for a separate guardian.
+    expect(await statuses(res.group_id)).toEqual([
+      [" zoe  KID ", "pending", null],
+      ["Sam Kid", "pending", null],
+    ]);
+  });
+
+  it("a registrant whose own contact dob is under 18, entering a child they do not play beside: the tick is ignored", async () => {
+    const r = await competitionRig();
+    const res = await submitRegistrationGroup(
+      { ...r.ctx, sessionUserId: null },
+      {
+        contact: { name: "Teen Sibling", email: `${RUN}-teen@x.test`, dob: TEEN },
+        privacy_consent: true,
+        guardian_for_minors: true,
+        entries: [{ division_id: r.kidsId, entrant_kind: "individual", players: [{ full_name: "Tiny Kid", dob: CHILD }], answers: {} }],
+      },
+    );
+    expect(await statuses(res.group_id)).toEqual([["Tiny Kid", "pending", null]]);
+  });
+
+  it("an adult's row typed in under the contact's own name is never consented for as a child, while the real child still is", async () => {
+    const r = await competitionRig();
+    const res = await submitRegistrationGroup(
+      { ...r.ctx, sessionUserId: null },
+      {
+        contact: { name: CONTACT_NAME, email: `${RUN}-named@x.test`, dob: ADULT },
+        privacy_consent: true,
+        guardian_for_minors: true,
+        entries: [
+          {
+            division_id: r.teamId,
+            entrant_kind: "team",
+            team_name: "Named",
+            // The parent typed themselves in as an ordinary row (an adult dob); the child beside them is the one the tick covers.
+            players: [{ full_name: CONTACT_NAME, dob: ADULT }, { full_name: "Uma Minor", dob: CHILD }],
+            answers: {},
+          },
+        ],
+      },
+    );
+    expect(await statuses(res.group_id)).toEqual([
+      [CONTACT_NAME, "pending", null],
+      ["Uma Minor", "guardian", CONTACT_NAME],
+    ]);
+  });
+
+  it("m-4: a contact name of only spaces (API-only) leaves the tick ignored rather than record a blank guardian", async () => {
+    const r = await competitionRig();
+    const res = await submitRegistrationGroup(
+      { ...r.ctx, sessionUserId: null },
+      {
+        contact: { name: "   ", email: `${RUN}-blank@x.test` },
+        privacy_consent: true,
+        guardian_for_minors: true,
+        entries: [{ division_id: r.kidsId, entrant_kind: "individual", players: [{ full_name: "Vic Minor", dob: CHILD }], answers: {} }],
+      },
+    );
+    expect(await statuses(res.group_id)).toEqual([["Vic Minor", "pending", null]]);
   });
 });

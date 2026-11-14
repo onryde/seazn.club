@@ -84,8 +84,8 @@ describe.skipIf(!HAS_DB)("GET /divisions/:id/registrations/export", () => {
         "amount_cents,currency,refunded_cents,payment_method,waitlist_position,created_at," +
         "player_name,player_dob,player_gender,player_consent_status,squad_number,is_captain," +
         // B5 T19: appended, never inserted — every column above keeps its name and its place. This division has no form questions,
-        // so the entry's own reference is the last cell.
-        "entry_reference",
+        // so the entry's own reference follows the player columns; the guardian's name (owner rec 2026-11-14) is appended after it.
+        "entry_reference,player_guardian_name",
     );
     expect(header.startsWith("id,"), "the pre-rewrite column must stay first").toBe(true);
     expect(body).toContain("Csv Export Case");

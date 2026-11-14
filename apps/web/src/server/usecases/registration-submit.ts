@@ -128,7 +128,8 @@ export interface SubmitGroupInput {
   /** Guardian consent for minors (owner 2026-11-14, final-fix-brief Addendum 2b): the registrant says they are the parent or
    *  guardian of the players under 18 they are entering. Ticked, every typed-in row that is not the registrant's own and whose dob
    *  is under 18 today is consented at this submit (`'guardian'`, in the contact's name) instead of waiting on a claim; every other
-   *  row is unchanged. Ticked with no such row it changes nothing (never a refusal). Undefined/false: pending as before. */
+   *  row is unchanged. Ticked with no such row, by a registrant under 18, or with a blank contact name it changes nothing (never a
+   *  refusal; `guardianForMinorsName`). Undefined/false: pending as before. */
   guardian_for_minors?: boolean;
   entries: SubmitGroupEntryInput[];
 }
@@ -441,20 +442,38 @@ function sameName(a: string | null | undefined, b: string | null | undefined): b
 
 /** The consent one typed-in roster row is written with at submit. The registrant's own row (or a solo sign-up's one row) is consented
  *  here by the registrant, with their guardian when they are a minor themselves (`submitRegistrationGroup`'s guardian gate). Any other
- *  row waits for that player to claim it (`'pending'`, design §2 ruling 4), unless the registrant ticked `guardian_for_minors` and the
- *  row's dob is under 18 today (`isMinor`, the gate's own threshold): then the registrant consents for that child, as their guardian,
- *  in the contact's name (Addendum 2b). A row with no dob is never taken for a minor. Consent is stamped `now()` unless pending. */
+ *  row waits for that player to claim it (`'pending'`, design §2 ruling 4), unless `guardianFor` names the adult registrant who
+ *  ticked `guardian_for_minors` (`guardianForMinorsName`) and the row's dob is under 18 today (`isMinor`, the gate's own threshold):
+ *  then the registrant consents for that child, as their guardian, in that name (Addendum 2b). A row with no dob is never taken for a
+ *  minor. Consent is stamped `now()` unless pending; a guardian row also carries the privacy consent it was given under (as the join
+ *  path stamps one). */
 function rowConsentAtSubmit(
   isSelf: boolean,
   player: SubmitGroupPlayerInput,
-  input: Pick<SubmitGroupInput, "contact" | "guardian_for_minors">,
+  contact: SubmitGroupInput["contact"],
+  guardianFor: string | null,
   now: Date,
 ): { status: "granted" | "guardian" | "pending"; guardianName: string | null } {
-  if (isSelf) return { status: "granted", guardianName: input.contact.guardian_name ?? null };
-  if (input.guardian_for_minors === true && player.dob && isMinor(player.dob, now)) {
-    return { status: "guardian", guardianName: input.contact.name.trim() };
-  }
+  if (isSelf) return { status: "granted", guardianName: contact.guardian_name ?? null };
+  if (guardianFor !== null && player.dob && isMinor(player.dob, now)) return { status: "guardian", guardianName: guardianFor };
   return { status: "pending", guardianName: null };
+}
+
+/** Who consents, as guardian, for the typed-in minors of this submit, or null when nobody does (Addendum 2b; fix round 1, review
+ *  I-1 and m-4). Only an ADULT registrant who ticked `guardian_for_minors` can: a registrant under 18 by any date the cart holds for
+ *  them — a self-linked row's own dob (`selfDobs`), the contact's dob, or a typed-in row carrying the contact's own name (`sameName`:
+ *  that row is them) — is nobody's guardian, and a blank contact name (API only; the form requires one) names nobody. Either way the
+ *  tick is ignored, every other row stays pending, the same forgiving way as a tick with no minor: never a refusal. */
+function guardianForMinorsName(input: SubmitGroupInput, selfDobs: readonly string[], rows: readonly SubmitGroupPlayerInput[], now: Date): string | null {
+  if (input.guardian_for_minors !== true) return null;
+  const name = input.contact.name.trim();
+  if (name === "") return null;
+  const registrantDobs = [
+    ...selfDobs,
+    input.contact.dob,
+    ...rows.filter((p) => sameName(p.full_name, input.contact.name)).map((p) => p.dob),
+  ];
+  return registrantDobs.some((dob) => dob && isMinor(dob, now)) ? null : name;
 }
 
 // ---------------------------------------------------------------------------
@@ -483,7 +502,8 @@ interface PreparedEntry {
  *  - guardian consent when the CONTACT is a minor registering themselves;
  *    privacy consent required, versioned
  *  - `guardian_for_minors`: the typed-in minors who are not the registrant
- *    are consented by the registrant as their guardian (`rowConsentAtSubmit`)
+ *    are consented by the registrant as their guardian (`rowConsentAtSubmit`),
+ *    only when the registrant is an adult (`guardianForMinorsName`)
  *  - capacity: row-lock per division (`FOR UPDATE` on `registration_settings`,
  *    same row and same reason old `submitRegistration` locked it — it always
  *    exists once registration is open, unlike the possibly-empty counted
@@ -524,7 +544,7 @@ export async function submitRegistrationGroup(
 
   // Everything before the transaction - the reads that resolve the cart and the checks that refuse it - is one `pre_tx` stage
   // when the register route passes its timer (registration redesign B0), each read inside it a sub-stage. No timer: no timing.
-  const { distinctDivisionIds, first, orgId, competitionId, prepared, planLimit, seatGates, leadCtx } = await timed(timer, "pre_tx", async () => {
+  const { distinctDivisionIds, first, orgId, competitionId, prepared, planLimit, seatGates, leadCtx, guardianFor } = await timed(timer, "pre_tx", async () => {
     // Resolve every distinct division touched by the cart, sorted — the SAME
     // order is used below for both settings validation and lock acquisition,
     // so two concurrent carts touching an overlapping division set can never
@@ -717,6 +737,9 @@ export async function submitRegistrationGroup(
     // the tree fails without this check today).
     if (!input.privacy_consent) throw new HttpError(422, "Please agree to the privacy policy to register");
 
+    // Addendum 2b: the adult registrant's name when they consent for the typed-in minors, else null (a minor registrant is nobody's guardian).
+    const guardianFor = guardianForMinorsName(input, selfDobs, prepared.flatMap((p) => p.players), now);
+
     // Card-payment entitlement gate, mirrors old submitRegistration exactly - asked ONCE per submit (registration redesign B1 T4):
     // both questions are about the org and the competition, never the division, so the per-division loop asked the same thing
     // again for every paid card division. Same order as before: Connect first (503), then the plan (402).
@@ -753,7 +776,7 @@ export async function submitRegistrationGroup(
             ),
           );
     const leadCtx = divisionCtxById.get(input.entries[0]!.division_id)!;
-    return { distinctDivisionIds, first, orgId, competitionId, prepared, planLimit, seatGates, leadCtx };
+    return { distinctDivisionIds, first, orgId, competitionId, prepared, planLimit, seatGates, leadCtx, guardianFor };
   });
 
   const secret = mintRegistrationToken();
@@ -977,17 +1000,20 @@ export async function submitRegistrationGroup(
               now,
             )
           : null;
-        const consent = rowConsentAtSubmit(isSelf, player, input, now);
+        const consent = rowConsentAtSubmit(isSelf, player, input.contact, guardianFor, now);
+        const byGuardian = consent.status === "guardian";
         const [written] = await tx<{ id: string }[]>`
           insert into registration_players
             (registration_id, full_name, dob, gender, email, source, consent_status,
-             consent_at, guardian_name, user_id, squad_number, is_captain)
+             consent_at, guardian_name, user_id, squad_number, is_captain,
+             privacy_consent_at, privacy_consent_version)
           values (
             ${regRow.id}, ${player.full_name}, ${player.dob ?? null}, ${player.gender ?? null},
             ${player.email ?? null},
             'captain_entered', ${consent.status},
             ${consent.status === "pending" ? null : tx`now()`}, ${consent.guardianName},
-            ${playerUserId}, ${player.squad_number ?? null}, ${player.is_captain ?? false}
+            ${playerUserId}, ${player.squad_number ?? null}, ${player.is_captain ?? false},
+            ${byGuardian ? tx`now()` : null}, ${byGuardian ? LEGAL_VERSION : null}
           )
           returning id`;
         if (isSelf) selfPlayerId = written!.id;

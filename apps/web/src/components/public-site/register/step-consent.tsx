@@ -9,14 +9,13 @@
 // B2 T10 (spec 7.3): each consent LEADS with a Required or Optional tag, so the one that blocks is clear before an error appears; the
 // long legal sentence is small print under the privacy consent's plain title; and the other-players notice is one info line (icon +
 // text), not a third look-alike box. The join page reuses this step verbatim and gets the same. Owns nothing beyond wiring — `guardianRequired`/
-// `rosterNoticeKey` (the two show/require decisions) are cart.ts/
+// `consentRosterNotice` (the two show/require decisions) are cart.ts/
 // validation.ts's pure functions, computed once per render exactly like
 // every other step's own live-feedback pieces (division-card.tsx's
 // selfIneligible, entry-details.tsx's mixedUnmet).
 import { useT } from "@/components/i18n/dict-provider";
-import { rosterNoticeKey } from "./cart";
 import { FIELD, FIELD_LABEL as LABEL, TAG_NEUTRAL } from "./styles";
-import { guardianCoversEveryOtherPlayer, guardianForMinorsOffered, guardianRequired, type ConsentValidation } from "./validation";
+import { consentRosterNotice, guardianForMinorsOffered, guardianRequired, type ConsentValidation } from "./validation";
 import { RegisterLichessCard, type RegisterLichessState } from "./register-lichess-card";
 import { ConsentCameraNotes, type CameraRequirement } from "./online-play-note";
 import type { CartState, ConsentState, ContactState } from "./types";
@@ -68,10 +67,9 @@ export function StepConsent({
   // and whether "Next" is blocked can never disagree again.
   const showGuardian = guardianRequired(cart, contact, new Date());
   // Addendum 2b: the one box a parent ticks for the children they are entering (not themselves). Optional, so no error state.
-  const showGuardianForMinors = guardianForMinorsOffered(cart, new Date());
-  // Ticked, and every other player is one of those minors: nobody is left to ask, so the notice would contradict the box.
-  const rosterNotice =
-    consent.guardian_for_minors === true && guardianCoversEveryOtherPlayer(cart, new Date()) ? null : rosterNoticeKey(cart);
+  const showGuardianForMinors = guardianForMinorsOffered(cart, contact, new Date());
+  // Ticked, the line about the other players steps aside or names only those still asked, so it never contradicts the box.
+  const rosterNotice = consentRosterNotice(cart, contact, consent, new Date());
 
   return (
     <div className="rounded-xl border border-zinc-200/80 bg-surface p-4 shadow-sm sm:p-6">
@@ -154,7 +152,7 @@ export function StepConsent({
 
       {/* Addendum 2b: the media box's shape (tag, plain title, small print), so it reads as one more optional consent. Its small print
           says what the tick changes for those players: the roster notice below is what happens to everyone else, and to them unticked;
-          it steps aside when the tick covers every other player. */}
+          ticked, it names only the players still asked, or steps aside when there are none (`consentRosterNotice`). */}
       {showGuardianForMinors && (
         <div data-testid="reg-consent-guardian-minors-box" className="mt-3 rounded-lg border border-zinc-200 bg-canvas px-3.5 py-3">
           <label className="flex cursor-pointer items-start gap-3">

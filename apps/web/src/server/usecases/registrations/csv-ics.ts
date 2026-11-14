@@ -73,6 +73,7 @@ export async function exportRegistrationsCsv(
     dob: string | null;
     gender: string | null;
     consent_status: string;
+    guardian_name: string | null;
     squad_number: number | null;
     is_captain: boolean;
   };
@@ -88,7 +89,7 @@ export async function exportRegistrationsCsv(
     const players =
       regIds.length > 0
         ? await tx<PlayerCsvRow[]>`
-            select registration_id, full_name, dob, gender, consent_status, squad_number, is_captain
+            select registration_id, full_name, dob, gender, consent_status, guardian_name, squad_number, is_captain
             from registration_players
             where registration_id in ${tx(regIds)}
             order by is_captain desc, created_at`
@@ -152,6 +153,9 @@ export async function exportRegistrationsCsv(
   // against — `SZ-XXXX-XXXX-<n>` for an entry of a cart sent with 2+ entries, the bare reference otherwise (`entryReferenceOf`, the
   // one reading of those columns), blank when the cart has no reference at all. English snake_case like every header here: this
   // file's headers are machine column keys, not copy, and are not localised.
+  //
+  // `player_guardian_name` (owner rec 2026-11-14, guardian consent for minors) is appended after it the same way: who consented as
+  // that player's guardian, blank where nobody did. Both roles: it is the consenting adult's name, the class `contact_name` already is.
   const header = [
     "id", "registration_id", "ref_code", "division", "status", "kind", "display_name",
     "contact_name", "contact_email", "amount_cents", "currency", "refunded_cents",
@@ -159,6 +163,7 @@ export async function exportRegistrationsCsv(
     ...playerHeader,
     ...fieldKeys,
     "entry_reference",
+    "player_guardian_name",
   ];
   const lines: string[] = [];
   for (const r of rows) {
@@ -173,13 +178,13 @@ export async function exportRegistrationsCsv(
     if (players.length === 0) {
       // One blank cell per player column, whichever set is in force — derived
       // from playerHeader so the two can never fall out of step.
-      lines.push([...entryCols, ...playerHeader.map(() => ""), ...answerCols, entryReference].map(esc).join(","));
+      lines.push([...entryCols, ...playerHeader.map(() => ""), ...answerCols, entryReference, ""].map(esc).join(","));
     } else {
       for (const p of players) {
         const playerCols = maySeePlayerPersonalData
           ? [p.full_name, p.dob, p.gender, p.consent_status, p.squad_number, p.is_captain]
           : [p.full_name, p.consent_status, p.squad_number, p.is_captain];
-        lines.push([...entryCols, ...playerCols, ...answerCols, entryReference].map(esc).join(","));
+        lines.push([...entryCols, ...playerCols, ...answerCols, entryReference, p.guardian_name ?? ""].map(esc).join(","));
       }
     }
   }

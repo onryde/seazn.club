@@ -155,6 +155,13 @@ export function contactRowIndex(
   return row !== undefined && row.full_name.trim() === name ? index : null;
 }
 
+/** Two typed person names are the same name: trimmed, inner whitespace collapsed, case-insensitive; blank is never a match. Mirrors
+ *  `sameName` in registration-submit.ts (guardian consent for minors, fix round 1: a row under the contact's own name is them). */
+export function sameName(a: string, b: string): boolean {
+  const norm = (v: string) => v.trim().replace(/\s+/g, " ").toLocaleLowerCase();
+  return norm(a) !== "" && norm(a) === norm(b);
+}
+
 /** A solo sign-up's row is the contact's own while it carries their name (trimmed, spacing and case aside) or no name yet - the form
  *  seeds it from the contact. Mirrors `sameName` in registration-submit.ts. */
 export function soloRowIsContact(rowName: string, contactName: string): boolean {

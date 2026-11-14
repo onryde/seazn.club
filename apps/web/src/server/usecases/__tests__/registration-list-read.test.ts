@@ -558,6 +558,38 @@ describe.skipIf(!HAS_DB)("RS005 review: the CSV's per-player personal data is ed
   });
 });
 
+// Owner rec 2026-11-14 (guardian consent for minors): a parent now routinely consents for the children they enter, and an organiser
+// confirming guardian consent for a youth division needs WHO gave it in the file they keep. One trailing column, `player_guardian_name`
+// (appended after `entry_reference`, so every column an importer reads keeps its place), for both roles: it is the consenting adult's
+// name, the same class of data as `contact_name`, which a viewer already exports. Blank where nobody consented as a guardian.
+describe.skipIf(!HAS_DB)("the CSV names the guardian who consented for a player (owner rec)", () => {
+  it("each player row carries its own guardian's name, blank for the others, in both roles, and every row keeps the header's width", async () => {
+    const { owner, competition, division, settings } = await baseRig();
+    const { registration } = await seedRegistration(competition.id, division.id, settings, {
+      displayName: "Family Entry",
+      players: [{ name: "Mia Cole", dob: "2015-06-20" }, { name: "Cal Adult", dob: "1990-01-01" }],
+    });
+    await sql`update registration_players set consent_status = 'guardian', guardian_name = 'Pat Parent'
+              where registration_id = ${registration.id} and full_name = 'Mia Cole'`;
+    await seedRegistration(competition.id, division.id, settings, { displayName: "No Roster" });
+
+    let checked = 0;
+    for (const role of ["owner", "viewer"] as const) {
+      const csv = await exportRegistrationsCsv({ ...owner, role }, { competitionId: competition.id });
+      const [head, ...lines] = csv.trimEnd().split("\n");
+      const cols = head!.split(",");
+      expect(cols.at(-1), role).toBe("player_guardian_name");
+      const nameIdx = cols.indexOf("player_name");
+      const byPlayer = new Map(lines.map((l) => l.split(",")).map((c) => [c[nameIdx]!, c]));
+      expect(byPlayer.get("Mia Cole")!.at(-1), `${role}: the guardian`).toBe("Pat Parent");
+      expect(byPlayer.get("Cal Adult")!.at(-1), `${role}: no guardian`).toBe("");
+      for (const l of lines) expect(l.split(",").length, `${role}: row width`).toBe(cols.length);
+      checked += lines.length;
+    }
+    expect(checked, "three rows (two players and a roster-less entry) per role").toBe(6);
+  });
+});
+
 describe.skipIf(!HAS_DB)("RS005 code-review: the filters agree with the columns they filter", () => {
   // A division with NO registration_settings row is a real, ordinary case —
   // the LEFT JOIN exists for it, and the SELECT coalesces its kind to
@@ -1231,7 +1263,8 @@ describe.skipIf(!HAS_DB)("B5 T19: the CSV carries the entry's reference as its l
   it("gains one trailing column; every earlier column keeps its name and its place", async () => {
     const { owner, competition } = await cartRig();
     const header = (await exportRegistrationsCsv(owner, { competitionId: competition.id })).split("\n")[0]!.split(",");
-    expect(header).toEqual([...PREVIOUS_HEADER, "entry_reference"]);
+    // ...and the guardian's name after it (owner rec 2026-11-14), appended the same way.
+    expect(header).toEqual([...PREVIOUS_HEADER, "entry_reference", "player_guardian_name"]);
   });
 
   it("writes each entry's own reference: X-1, X-2, X-3 for the 3-entry cart, the bare reference for a one-entry cart, blank for a cart with none", async () => {
@@ -1242,7 +1275,7 @@ describe.skipIf(!HAS_DB)("B5 T19: the CSV carries the entry's reference as its l
     const idIdx = cols.indexOf("registration_id");
     const refIdx = cols.indexOf("ref_code");
     const entryIdx = cols.indexOf("entry_reference");
-    expect(entryIdx, "the column is the last one").toBe(cols.length - 1);
+    expect(entryIdx, "the column follows every earlier one; only the guardian's name comes after it").toBe(cols.length - 2);
     const rowOf = (id: string) => lines.map((l) => l.split(",")).filter((c) => c[idIdx] === id);
     const expected: [{ id: string }, string, string][] = [
       [x1, refX, `${refX}-1`],
@@ -1278,8 +1311,8 @@ describe.skipIf(!HAS_DB)("B5 T19: the CSV carries the entry's reference as its l
       const ownRef = registration.ref_code;
       expect(ownRef).toBeTruthy();
       for (const r of mine) expect(r[cols.indexOf("entry_reference")], role).toBe(ownRef);
-      // The viewer's header drops the two personal columns but still ends with the reference.
-      expect(cols[cols.length - 1], role).toBe("entry_reference");
+      // The viewer's header drops the two personal columns but still ends with the reference, then the guardian's name (owner rec).
+      expect(cols.slice(-2), role).toEqual(["entry_reference", "player_guardian_name"]);
       expect(csv, role).toContain(refX);
     }
   });

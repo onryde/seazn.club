@@ -69,7 +69,7 @@ export function buildSubmitBody(
     },
     privacy_consent: consent.privacy_consent,
     media_consent: consent.media_consent,
-    guardian_for_minors: consent.guardian_for_minors === true && guardianForMinorsOffered(cart, now),
+    guardian_for_minors: consent.guardian_for_minors === true && guardianForMinorsOffered(cart, contact, now),
     entries: cart.entries.map((entry) => ({
       ...toGroupEntry(entry),
       players: toGroupPlayers(entry.players, entry.entrant_kind),
