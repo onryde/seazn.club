@@ -561,7 +561,8 @@ describe.skipIf(!HAS_DB)("submit: the inline confirm seats the whole roster, so 
 // link. On a manual-approval division the organiser's Approve is the first time the row is seated, so the gate must read the
 // submitter's link by the cart's account - and only for the submitter's own row: not for a teammate, not for a joiner, not for a row
 // the submit left untied on purpose (a minor, a guardian's entry). Every scenario below is built by the real submit (and the real
-// join link), never by writing the rows by hand.
+// join link), never by writing the rows by hand - but for one column of one row shape the submit no longer writes and the database
+// still holds (`legacyGuardianOnNoDob`: the real submit's row, with the guardian name the old submit put on it).
 
 const withdrawLink = async (a: Account): Promise<void> => {
   await sql`delete from user_external_accounts where user_id = ${a.userId}`;
@@ -577,6 +578,27 @@ const submitterPremises = async (registrationId: string, submitter: Account): Pr
   expect(rows[0]!.cart_user, "premise: but the cart remembers who was signed in").toBe(submitter.userId);
   expect(await seatedAfterSubmit(registrationId), "premise: manual approval seats nobody at submit").toEqual({ status: "pending", people: 0 });
 };
+
+/** A submitter's own row with a guardian named on it and no date of birth: untied ON PURPOSE (registration-submitter-account.ts).
+ *  The submit stopped writing this shape (e733005b0a: a self row names its guardian only when it is a minor, so no date of birth
+ *  names none - pinned here first), but every submit before it put the contact's guardian name on the self row whatever its date of
+ *  birth (v1.0.8-beta and origin/main: `isSelf ? contact.guardian_name : null`; their client sent a name left over after the dob was
+ *  cleared), nothing clears those rows, and the gate's `guardian_name` clause is what keeps them untied. So: the real submit's row,
+ *  then the one column the old submit wrote differently, and the rest of the shape pinned unchanged - the submitter's own row in
+ *  every other respect, so the guardian name is the only thing that can keep it untied. */
+async function legacyGuardianOnNoDob(w: World, guardian: Account): Promise<string> {
+  const guardianName = "Guardian " + guardian.lichessId;
+  const regId = (await submit(w, "individual", guardian, 0, { dob: null, guardian_name: guardianName, guardian_consent: true })).entries[0]!
+    .registration_id;
+  const shape = () => sql<{ user_id: string | null; dob: string | null; guardian_name: string | null; source: string; at_submit: boolean }[]>`
+    select user_id, dob::text as dob, guardian_name, source, (consent_at = created_at) as at_submit
+      from registration_players where registration_id = ${regId}`;
+  const own = { user_id: null, dob: null, source: "captain_entered", at_submit: true };
+  expect(await shape(), "premise: today's submit names no guardian on a self row with no date of birth").toEqual([{ ...own, guardian_name: null }]);
+  await sql`update registration_players set guardian_name = ${guardianName} where registration_id = ${regId}`;
+  expect(await shape(), "premise: the old submit's row - its guardian, and otherwise the submitter's own").toEqual([{ ...own, guardian_name: guardianName }]);
+  return regId;
+}
 
 describe.skipIf(!HAS_DB)("approve: a submitter who holds a link but gave no date of birth is seated by it", () => {
   for (const kind of ["individual", "team"] as const) {
@@ -732,14 +754,10 @@ describe.skipIf(!HAS_DB)("approve: a submitter who holds a link but gave no date
     count("approve-submitter");
   });
 
-  it("a guardian named on a submitter with no date of birth is refused too: the row was untied on purpose", async () => {
+  it("a guardian named on a submitter with no date of birth (a row the old submit wrote) is refused too: the row was untied on purpose", async () => {
     const w = await world("individual", true, { approval: "manual" });
     const guardian = await account(w, "plays", false);
-    const regId = (await submit(w, "individual", guardian, 0, { dob: null, guardian_name: "Guardian " + guardian.lichessId, guardian_consent: true }))
-      .entries[0]!.registration_id;
-    const [row] = await sql<{ user_id: string | null; dob: string | null; guardian_name: string | null }[]>`
-      select user_id, dob::text as dob, guardian_name from registration_players where registration_id = ${regId}`;
-    expect(row, "premise: no date of birth, a guardian on the row, untied").toMatchObject({ user_id: null, dob: null, guardian_name: expect.any(String) });
+    const regId = await legacyGuardianOnNoDob(w, guardian);
 
     const got = await refusalOf(approveRegistration(w.auth, regId));
 
@@ -866,11 +884,10 @@ describe.skipIf(!HAS_DB)("approve: the seat ties the submitter's own person to t
     count("approve-tie");
   });
 
-  it("an entry with a guardian named and no date of birth is not tied either", async () => {
+  it("an entry with a guardian named and no date of birth (a row the old submit wrote) is not tied either", async () => {
     const w = await world("individual", true, { approval: "manual" });
     const guardian = await account(w, "plays", false);
-    const regId = (await submit(w, "individual", guardian, 0, { dob: null, guardian_name: "Guardian " + guardian.lichessId, guardian_consent: true }))
-      .entries[0]!.registration_id;
+    const regId = await legacyGuardianOnNoDob(w, guardian);
     loseTheFlag();
 
     await approveRegistration(w.auth, regId);

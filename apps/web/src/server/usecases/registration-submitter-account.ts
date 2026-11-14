@@ -38,7 +38,10 @@ export const accountColumns = (db: Db) => db`
  *    - consented in the submit's own transaction: a teammate the captain typed in has no consent yet, and one who claimed their spot did
  *      so later, in a transaction of their own - neither is the submitter, and the cart's account is not theirs;
  *    - no date of birth and no guardian: a minor, or an entry made on a guardian's behalf, is untied ON PURPOSE (the account is the
- *      guardian's, not the player's), and an adult with a date of birth who is untied was untied for a reason the row does not show. */
+ *      guardian's, not the player's), and an adult with a date of birth who is untied was untied for a reason the row does not show.
+ *      Today's submit names a guardian only on a minor's own row, which has a date of birth; rows older submits wrote carry the
+ *      contact's guardian on a row with none, and nothing clears them, so the guardian clause stays for those (its killers:
+ *      `legacyGuardianOnNoDob` in online-seat-gate-writers.test.ts). */
 export function submitterAccount(row: PlayerAccountRow): string | null {
   if (row.cart_user === null) return null;
   if (row.source !== "captain_entered") return null;
