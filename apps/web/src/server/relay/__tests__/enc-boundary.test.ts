@@ -70,13 +70,20 @@ const YOUTUBE_OWNER = "server/youtube/token-store.ts";
 /** `token_enc` is named by TWO tables, each sealing its own token under DEVICE_LINK_KEK, so the column is one entry and
  *  its owners are the union (a scan by column name cannot tell the tables apart):
  *  - Quick match (V506, spec 2026-11-03 §7.1, C19): the home-page token's sealed envelope on `quick_matches`. SQL over it
- *    lives in exactly two files: the create that writes it, and the home read that returns it on
+ *    lives in the create that writes it and the home read that returns it on
  *    `QuickMatchRow.tokenEnc` (plan 1 Task 7) — the one row every later reader rebuilds the link from (the pad's back
- *    link, the saved list), so none of them names the column. A third reader joins these owners or reads the row.
+ *    link, the saved list), so none of them names the column; that read's row lives in quick-match-row.ts, below the home
+ *    (plan 5 T5). A new reader joins these owners or reads the row.
  *  - Match Day codes (V509, capture S4 design §3): the code's token at rest, so the desk can show the same QR again.
  *    Not `tok_enc` — that name is the stream code's, and only server/relay/** may name it. */
 const TOKEN_ENC_COLUMNS = ["token_enc"];
-const QUICK_MATCH_OWNERS = ["server/usecases/quick-match-create.ts", "server/usecases/quick-match-home.ts"];
+// quick-match-row.ts (quick match plan 5 T5): the row's type and its read by competition, moved verbatim out of the home
+// read and below it, so the League + Knockout advance reads the row without importing the home. The same read, a third file.
+const QUICK_MATCH_OWNERS = [
+  "server/usecases/quick-match-create.ts",
+  "server/usecases/quick-match-home.ts",
+  "server/usecases/quick-match-row.ts",
+];
 const MATCH_DAY_OWNER = "server/usecases/match-day-codes.ts";
 const TOKEN_ENC_OWNERS = [...QUICK_MATCH_OWNERS, MATCH_DAY_OWNER];
 
@@ -135,7 +142,7 @@ describe("*_enc columns never leave their owners", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("outside __tests__, only quick-match-create.ts, quick-match-home.ts and match-day-codes.ts name token_enc — and all three do", () => {
+  it("outside __tests__, only quick-match-create.ts, quick-match-home.ts, quick-match-row.ts and match-day-codes.ts name token_enc — and all four do", () => {
     const pattern = new RegExp(`\\b(${TOKEN_ENC_COLUMNS.join("|")})\\b`);
     const naming = walk(SRC)
       .map((f) => relative(SRC, f))
@@ -144,7 +151,7 @@ describe("*_enc columns never leave their owners", () => {
     expect([...naming].sort()).toEqual([...TOKEN_ENC_OWNERS].sort());
   });
 
-  it("each token_enc owner names only its own table: quick_matches for the two quick-match files, match_day_codes for match-day-codes.ts", () => {
+  it("each token_enc owner names only its own table: quick_matches for the three quick-match files, match_day_codes for match-day-codes.ts", () => {
     // The scan above is by column name, so it cannot tell the two tables apart; this one can. An owner naming the OTHER
     // table's name is a cross-read of a sealed token.
     const table = { quick: /\bquick_matches\b/, day: /\bmatch_day_codes\b/ };

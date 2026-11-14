@@ -28,6 +28,7 @@ import { LOCALES } from "@/lib/i18n-constants";
 import { QUICK_MATCH_ERRORS, QUICK_MATCH_MAX_SIDES, QUICK_MATCH_MIN_SIDES } from "@/lib/quick-match-constants";
 import { __setRateLimitCounterForTests, QUICK_MATCH_CREATE_LIMIT } from "@/lib/rate-limit";
 import { createCompetition } from "@/server/usecases/competitions";
+import { isBye } from "@/lib/run-sheet-groups";
 import { listDivisionFixtures } from "@/server/usecases/fixtures";
 import { systemAuth } from "@/server/usecases/quick-match-create";
 import { offerFor } from "@/server/usecases/quick-match-sports";
@@ -250,6 +251,90 @@ describe.skipIf(!HAS_DB)("POST /api/quick-match: the visitor's language (A-M8: /
     const refused = await post(form({ locale: "fr", sides: ["Solo"] }));
     expect(refused.headers.get("location")).toBe("/fr/play?e=QUICK_MATCH_CREATE_FAILED");
     expect(localeCookies(refused)).toEqual([]);
+  });
+});
+
+// Plan 5 Task 6 (D1): the setup form posts ONE radio, `shape` = league | final | semis, and the route maps it to the create's
+// `format` + `qualifiers`, so the page without its script needs no paired fields. Expected counts are the rulebook's (a round
+// robin of n sides played p times is p · n(n−1)/2; a single-elimination draw of q sides is q − 1) and the mockup's (qmd13a01
+// §6: 6 sides twice + semis = 33).
+describe.skipIf(!HAS_DB)("POST /api/quick-match: the Format list's `shape` (plan 5 D1)", () => {
+  /** The setup form as it now posts: `shape` in place of `format`. */
+  const shapeForm = (over: Fields = {}): Fields => {
+    const fields: Fields = { ...form(), shape: "league", ...over };
+    if (!("format" in over)) delete fields.format;
+    return fields;
+  };
+  /** The match a landed post made: its stored format, its non-bye lines, and its knockout stage's cut (the one authority, D1). */
+  async function made(res: Response) {
+    const row = (await resolveQuickMatchToken(landedToken(res)))!;
+    const [{ division_id, format }] = await sql<{ division_id: string; format: string }[]>`
+      select d.id as division_id, q.format from divisions d join quick_matches q on q.competition_id = d.competition_id
+       where q.id = ${row.id}`;
+    const lines = (await listDivisionFixtures(systemAuth(), division_id)).filter((f) => !isBye(f)).length;
+    const cut = await sql<{ to: string | null }[]>`
+      select progression->'sources'->0->'take'->0->>'to' as to from stages where division_id = ${division_id} and kind = 'knockout'`;
+    return { format, lines, cut: cut.map((c) => (c.to === null ? null : Number(c.to))) };
+  }
+  const refused = (res: Response, code: string) => {
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe(`/en/play?e=${code}`);
+  };
+
+  it("League: a league, no knockout stage (4 sides once = 6)", async () => {
+    expect(await made(await post(shapeForm({ shape: "league" })))).toEqual({ format: "league", lines: 6, cut: [] });
+  });
+
+  it("League → Final: the top 2 (3 sides once = 3 + 1 = 4, the mockup's number)", async () => {
+    const f = shapeForm({ shape: "final", sides: sides.slice(0, 3) });
+    expect(await made(await post(f))).toEqual({ format: "league_knockout", lines: 4, cut: [2] });
+  });
+
+  it("League → Semi-finals → Final: the top 4 (6 sides twice = 30 + 3 = 33, the mockup's number)", async () => {
+    const six = [...sides, "Kim & Lou", "Ola & Pat"];
+    const f = shapeForm({ shape: "semis", sides: six, plays: "2" });
+    expect(await made(await post(f))).toEqual({ format: "league_knockout", lines: 33, cut: [4] });
+  });
+
+  it("the create's own guards still answer through the shape: Semi-finals of 3 is SEMIS_TOO_FEW_SIDES, a Final of 2 FORMAT_NOT_OFFERED; nothing made", async () => {
+    const semis3 = shapeForm({ shape: "semis", sides: sides.slice(0, 3) });
+    refused(await post(semis3), "QUICK_MATCH_SEMIS_TOO_FEW_SIDES");
+    expect(await rowsNamed(semis3.name as string)).toHaveLength(0);
+    const final2 = shapeForm({ shape: "final", sides: sides.slice(0, 2) });
+    refused(await post(final2), "QUICK_MATCH_FORMAT_NOT_OFFERED");
+    expect(await rowsNamed(final2.name as string)).toHaveLength(0);
+  });
+
+  it("a shape that is not one of the three fails the form (CREATE_FAILED), never a guess; nothing made (counted)", async () => {
+    let checked = 0;
+    for (const shape of ["knockout", "league_knockout", "Final", "", "__proto__", "constructor"]) {
+      const f = shapeForm({ shape });
+      refused(await post(f), "QUICK_MATCH_CREATE_FAILED");
+      expect(await rowsNamed(f.name as string), JSON.stringify(shape)).toHaveLength(0);
+      checked++;
+    }
+    expect(checked).toBe(6);
+  });
+
+  it("a shape beside a format or a count, or posted twice, is refused, never merged: one radio is one fact (counted)", async () => {
+    const cases: Fields[] = [
+      shapeForm({ shape: "semis", format: "league" }),
+      shapeForm({ shape: "league", format: "league" }),
+      shapeForm({ shape: "final", qualifiers: "4" }),
+      shapeForm({ shape: ["final", "semis"] }),
+    ];
+    for (const f of cases) {
+      refused(await post(f), "QUICK_MATCH_CREATE_FAILED");
+      expect(await rowsNamed(f.name as string), JSON.stringify(f.shape)).toHaveLength(0);
+    }
+    expect(cases).toHaveLength(4);
+  });
+
+  it("a post with neither a shape nor a format is refused (the schema's format is required)", async () => {
+    const bare = shapeForm();
+    delete bare.shape;
+    refused(await post(bare), "QUICK_MATCH_CREATE_FAILED");
+    expect(await rowsNamed(bare.name as string)).toHaveLength(0);
   });
 });
 

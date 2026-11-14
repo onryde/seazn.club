@@ -159,6 +159,13 @@ Abuse note **(designer's call)**: the first decision wins; a second tap after th
 Exact copy beyond the hints above (all 4 locales); component structure; how the tie prompt is laid out at each width;
 the format value's spelling; whether the qualifier count lives on the quick_matches row or is read from the stage graph.
 
+## 13. Controller ruling after sign-off (2026-11-13, PO rec — owner may override)
+
+- Tennis and ice hockey default lists put `seed` (entry = typing order) before `lots`, which would silently decide a tie at
+  the cut — the §2 anti-goal. For **League + Knockout league stages only**, `seed` is removed from the stored list, so a
+  level-at-the-cut tie reaches pick/toss like every other sport. Plain League and organiser competitions keep the sport
+  default (§2's OWNER-confirmed line stands for them).
+
 ## 12. Calls fixed at sign-off (2026-11-13, approved with the page)
 
 - **OWNER 2026-11-13 ("6 B, but need to choose both SemFinal -> Final right and 2 only then Final")**: the format control is a

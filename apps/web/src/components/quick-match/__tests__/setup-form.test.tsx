@@ -7,8 +7,11 @@
 //  - the page's own copy and sport builders (`setupCopy`, `setupSports`) over the real en dictionaries, so a key the
 //    page forgets to hand over shows up here as a raw key in an English assertion.
 // Expected values come from the rulebook (spec C6, §7.3: a league is plays × n(n−1)/2 matches) and from T3's code table,
-// never from the island. A guest's quick match is a league (owner 2026-11-12, "take out" Knockout: League + Knockout comes
-// later), so the screen has no format control and no draw.
+// never from the island. The format is a stacked list of three whole choices (plan 5 Task 6; spec 2026-11-12-quick-match-
+// league-knockout §3, §12): League | League → Final (top 2) | League → Semi-finals → Final (top 4); a plain Knockout is not
+// offered. Owner 2026-11-14: all three rows are ALWAYS listed; one the sides or the rules cannot play yet is shown disabled
+// with its reason ("Needs 3 or more sides", "Needs 4 or more sides", "Not available for this sport"), never hidden. A League + Knockout's count is the league's plus the knockout's q − 1 (a single-elimination draw of q sides plays
+// q − 1 matches), and the mockup of record (qmd13a01 §6) gives 18, 33 and 4.
 //
 // Sport: the island sweeps four sports (badminton, chess, football, tennis): two kinds, one kind, team, and a sport whose
 // preferred variant is not its first. The full live offer is swept against the real DB in play-page.test.tsx.
@@ -72,9 +75,10 @@ import { CreateQuickMatch } from "@/server/api-v1/schemas";
 import { quickMatchPreviewTable, type QuickMatchPreviewTable } from "@/server/usecases/quick-match-preview";
 import type { QuickMatchSport } from "@/server/usecases/quick-match-sports";
 import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
-import { setupCopy, setupSports } from "@/app/[lang]/(marketing)/play/setup-props";
+import { prefillSport, setupCopy, setupSports } from "@/app/[lang]/(marketing)/play/setup-props";
 import { CONSENT_OPEN_ATTR } from "@/components/cookie-consent";
 import { TurnstileWidget } from "@/components/turnstile-widget";
+import { compileClasses } from "@/components/v2/__tests__/_compiled-css";
 import {
   QuickMatchSetupForm,
   matchCountOf,
@@ -216,7 +220,7 @@ describe("matchCountOf: the Start button's number is a lookup in the server's ta
     let checked = 0;
     for (let n = 2; n <= QUICK_MATCH_MAX_SIDES; n++) {
       for (let plays = 1; plays <= QUICK_MATCH_MAX_PLAYS; plays++) {
-        expect(matchCountOf(TABLE, n, plays), `league ${n}×${plays}`).toBe((plays * n * (n - 1)) / 2);
+        expect(matchCountOf(TABLE, n, plays, "league"), `league ${n}×${plays}`).toBe((plays * n * (n - 1)) / 2);
         checked++;
       }
     }
@@ -224,10 +228,33 @@ describe("matchCountOf: the Start button's number is a lookup in the server's ta
     expect(checked).toBe(10);
   });
 
-  it("a key outside the table is undefined, never a number (one side, seven sides, three plays)", () => {
-    expect(matchCountOf(TABLE, 1, 1)).toBeUndefined();
-    expect(matchCountOf(TABLE, 7, 1)).toBeUndefined();
-    expect(matchCountOf(TABLE, 3, 3)).toBeUndefined();
+  it("a League + Knockout is the league's count plus q − 1 (single elimination); 14 cells checked", () => {
+    // Final (q = 2) from 3 sides, Semi-finals (q = 4) from 4 (spec §3); both plays.
+    let checked = 0;
+    for (const [shape, q, from] of [["final", 2, 3], ["semis", 4, 4]] as const) {
+      for (let n = from; n <= QUICK_MATCH_MAX_SIDES; n++) {
+        for (let plays = 1; plays <= QUICK_MATCH_MAX_PLAYS; plays++) {
+          expect(matchCountOf(TABLE, n, plays, shape), `${shape} ${n}×${plays}`).toBe((plays * n * (n - 1)) / 2 + (q - 1));
+          checked++;
+        }
+      }
+    }
+    // Final: 4 side counts (3..6) × 2 plays; Semi-finals: 3 (4..6) × 2.
+    expect(checked).toBe(14);
+  });
+
+  it("the mockup's numbers (qmd13a01 §6): 6 sides once + semis = 18, twice = 33; 3 sides once + final = 4", () => {
+    expect(matchCountOf(TABLE, 6, 1, "semis")).toBe(18);
+    expect(matchCountOf(TABLE, 6, 2, "semis")).toBe(33);
+    expect(matchCountOf(TABLE, 3, 1, "final")).toBe(4);
+  });
+
+  it("a key outside the table is undefined, never a number (one side, seven sides, three plays, a knockout too small)", () => {
+    expect(matchCountOf(TABLE, 1, 1, "league")).toBeUndefined();
+    expect(matchCountOf(TABLE, 7, 1, "league")).toBeUndefined();
+    expect(matchCountOf(TABLE, 3, 3, "league")).toBeUndefined();
+    expect(matchCountOf(TABLE, 2, 1, "final"), "no final at two sides").toBeUndefined();
+    expect(matchCountOf(TABLE, 3, 1, "semis"), "no semi-finals at three sides").toBeUndefined();
   });
 });
 
@@ -243,6 +270,8 @@ describe("setupErrorKey: every refusal the create route can name has copy (T3's 
     QUICK_MATCH_EMAIL_INVALID: "quickMatch.errors.emailInvalid",
     // Review m2: #1136's shared sentence (reload, content blocker), not a quick-match copy of it.
     QUICK_MATCH_TURNSTILE_FAILED: "turnstile.error",
+    // Plan 5 T1 review C1: Semi-finals posted with fewer than four sides (an old tab, a crafted post).
+    QUICK_MATCH_SEMIS_TOO_FEW_SIDES: "quickMatch.errors.semisTooFewSides",
   };
 
   it("maps every QUICK_MATCH_ERRORS code; the count is every code there is", () => {
@@ -264,6 +293,28 @@ describe("setupErrorKey: every refusal the create route can name has copy (T3's 
     for (const key of [...Object.values(OWN), "quickMatch.errors.generic"]) {
       expect((COPY as Record<string, string>)[key], key).toEqual(expect.any(String));
     }
+  });
+
+  it("C1: the semi-finals refusal reads its line with the minimum filled in, in every locale, never a bare {min} (counted)", () => {
+    // The spec's number (§3: semi-finals need four sides), typed: never QUICK_MATCH_SEMIS_MIN_SIDES, which is what it pins.
+    const MIN = "4";
+    const dicts = { en: [enMarketing, enUi], es: [esMarketing, esUi], fr: [frMarketing, frUi], nl: [nlMarketing, nlUi] } as const;
+    let checked = 0;
+    for (const lang of LOCALES) {
+      const [marketing, ui] = dicts[lang];
+      const line = textOf(
+        byTestId(mount({ lang, copy: setupCopy(marketing, ui), initialError: QUICK_MATCH_ERRORS.SEMIS_TOO_FEW_SIDES }), "qm-setup-error")!,
+      );
+      const raw = (marketing as Record<string, string>)["quickMatch.errors.semisTooFewSides"]!;
+      expect(raw, `${lang}: the copy names the minimum`).toContain("{min}");
+      expect(line, lang).toBe(raw.replace("{min}", MIN));
+      expect(line, `${lang}: no placeholder left`).not.toMatch(/[{}]/);
+      checked++;
+    }
+    expect(checked).toBe(4);
+    expect(textOf(byTestId(mount({ initialError: QUICK_MATCH_ERRORS.SEMIS_TOO_FEW_SIDES }), "qm-setup-error")!)).toBe(
+      "Semi-finals need 4 or more sides.",
+    );
   });
 });
 
@@ -321,6 +372,7 @@ describe("setupBody: the form's fields, exactly (C3 under the form-post contract
     variant_key: "bwf",
     kind: "pair" as const,
     sides: ["A", "B", "C"],
+    shape: "league" as const,
     plays: 2,
     email: "",
     locale: "en" as const,
@@ -329,7 +381,7 @@ describe("setupBody: the form's fields, exactly (C3 under the form-post contract
   it("nine fields; sides repeated in typed order; a blank email is sent blank (the route maps it to none)", () => {
     const body = setupBody(base);
     expect([...new Set(body.keys())].sort()).toEqual(
-      ["email", "format", "kind", "locale", "name", "plays", "sides", "sport_key", "variant_key"].sort(),
+      ["email", "kind", "locale", "name", "plays", "shape", "sides", "sport_key", "variant_key"].sort(),
     );
     expect(body.getAll("sides")).toEqual(["A", "B", "C"]);
     expect(body.get("plays")).toBe("2");
@@ -337,40 +389,106 @@ describe("setupBody: the form's fields, exactly (C3 under the form-post contract
     expect(body.get("locale")).toBe("en");
   });
 
-  it("the format is always league (owner 2026-11-12: League only), and plays goes as picked: Once and Twice", () => {
-    for (const plays of [1, 2]) {
-      const body = setupBody({ ...base, plays });
-      expect(body.getAll("format"), `plays ${plays}`).toEqual(["league"]);
-      expect(body.get("plays")).toBe(String(plays));
+  it("the shape goes as picked, the radio's own word, never a format or a count (the route maps it, plan 5 D1); plays too", () => {
+    let checked = 0;
+    for (const shape of ["league", "final", "semis"] as const) {
+      for (const plays of [1, 2]) {
+        const body = setupBody({ ...base, shape, plays });
+        expect(body.getAll("shape"), `${shape} ${plays}`).toEqual([shape]);
+        expect(body.has("format"), "no format field: one radio, one fact").toBe(false);
+        expect(body.has("qualifiers")).toBe(false);
+        expect(body.get("plays")).toBe(String(plays));
+        checked++;
+      }
     }
+    expect(checked).toBe(6);
   });
 });
 
 // ---- the island ---------------------------------------------------------------------------------------------------
 
+/** The Format list's rows, in order: [value, disabled, checked]. */
+const shapeRows = (i: Island) =>
+  inputs(i, "shape").map((el) => [propsOf(el).value, propsOf(el).disabled === true, propsOf(el).checked === true]);
+/** The `<label>` around a shape radio (the row a thumb taps). */
+const shapeLabel = (i: Island, value: string) =>
+  all(i).find(
+    (el) => el.type === "label" && walk(propsOf(el).children as ReactElement).some((c) => c.type === "input" && propsOf(c).name === "shape" && propsOf(c).value === value),
+  );
+/** What a screen reader says for an element: its text, skipping every aria-hidden subtree (sr-only text is spoken). */
+function spoken(node: unknown): string {
+  if (node === null || node === undefined || typeof node === "boolean") return "";
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(spoken).join("");
+  const el = node as ReactElement;
+  const p = propsOf(el);
+  if (p["aria-hidden"] === true || p["aria-hidden"] === "true") return "";
+  return spoken(p.children);
+}
+const byId = (i: Island, id: string) => all(i).find((el) => propsOf(el).id === id);
+/**
+ * A radio's accessible name and description as Chromium computes them: the name is the input's own `aria-label` (it wins over
+ * the wrapping label), the description its `aria-describedby` targets. `title` is what browse mode reads of the row's visible
+ * title (aria-hidden skipped, the visually hidden comma read), spaces before a comma dropped, as a reader voices them.
+ * Driven in a real browser (T6 shots, 2026-11-13): a hidden comma inside a labelledby title came out "League , Final", so the
+ * name is an aria-label, which Chromium reports exactly.
+ */
+function a11yOf(i: Island, value: string): { name: string; description: string; title: string } {
+  const input = radio(i, "shape", value);
+  if (!input) throw new Error(`no ${value} radio`);
+  const ids = (attr: string) => String(propsOf(input)[attr] ?? "").split(/\s+/).filter(Boolean);
+  const text = (attr: string) => ids(attr).map((id) => spoken(byId(i, id)).replace(/\s+/g, " ").trim()).join(" ");
+  const name = propsOf(input)["aria-label"];
+  if (typeof name !== "string") throw new Error(`${value}: no aria-label`);
+  if (ids("aria-labelledby").length > 0) throw new Error(`${value}: aria-labelledby would compete with the aria-label`);
+  const titleEl = byId(i, `qm-shape-${value}-title`);
+  if (!titleEl) throw new Error(`${value}: no title element`);
+  const title = spoken(titleEl).replace(/\s+/g, " ").replace(/ ,/g, ",").trim();
+  return { name, description: text("aria-describedby"), title };
+}
+
 describe("QuickMatchSetupForm: the screen as the mockup orders it", () => {
-  it("opens on two side rows, no Format row (C16), Each pair plays standing alone, 2 of 6", () => {
+  it("opens on two side rows; the Format list shows all three, League chosen, both knockouts disabled with their reasons (owner 2026-11-14); 2 of 6", () => {
     const i = mount();
     expect(sideInputs(i)).toHaveLength(2);
-    expect(radio(i, "format", "league"), "no format choice at two sides").toBeUndefined();
-    expect(radio(i, "format", "knockout")).toBeUndefined();
-    expect(propsOf(hidden(i, "format")!).value).toBe("league");
+    expect(shapeRows(i)).toEqual([
+      ["league", false, true],
+      ["final", true, false],
+      ["semis", true, false],
+    ]);
+    expect(textOf(shapeLabel(i, "final")!), "League → Final says why").toContain("Needs 3 or more sides");
+    expect(textOf(shapeLabel(i, "semis")!), "Semi-finals says why").toContain("Needs 4 or more sides");
+    expect(textOf(shapeLabel(i, "league")!), "League can be played: no reason").not.toContain("Needs");
+    expect(inputs(i, "format"), "no format field: the radio posts `shape`").toEqual([]);
     expect([1, 2, 3].map((n) => radio(i, "plays", String(n)) !== undefined), "Once and Twice only (owner 2026-11-12)").toEqual([true, true, false]);
     expect(i.text()).toContain("2 of 6");
     expect(i.text()).toContain("Each pair plays");
+    expect(i.text()).toContain("Format");
   });
 
-  it("no Format row at any side count (owner 2026-11-12: League only, Knockout taken out); six is the cap", () => {
+  it("the list at every side count: 2 → both knockouts disabled; 3 → Semi-finals disabled; 4..6 → none; each disabled row with its own reason (counted)", () => {
     const i = mount();
+    // Spec §3 as the owner amended it 2026-11-14: every row listed, [value, disabled]; the reasons typed from the ruling.
+    const OWNER: Record<number, [string, boolean][]> = {
+      2: [["league", false], ["final", true], ["semis", true]],
+      3: [["league", false], ["final", false], ["semis", true]],
+      4: [["league", false], ["final", false], ["semis", false]],
+      5: [["league", false], ["final", false], ["semis", false]],
+      6: [["league", false], ["final", false], ["semis", false]],
+    };
     let checked = 0;
     for (let n = 2; n <= QUICK_MATCH_MAX_SIDES; n++) {
       if (sideInputs(i).length < n) click(buttonNamed(i, "+ Add a side"));
       expect(sideInputs(i), "the row was added").toHaveLength(n);
-      expect(radio(i, "format", "league"), `${n} sides`).toBeUndefined();
-      expect(radio(i, "format", "knockout"), `${n} sides`).toBeUndefined();
-      expect(inputs(i, "format").map((el) => [propsOf(el).type, propsOf(el).value]), `${n} sides`).toEqual([["hidden", "league"]]);
-      expect(i.text(), `${n} sides`).not.toMatch(/knockout|sits out|winners meet/i);
-      expect(byTestId(i, "qm-league-help"), `${n} sides: the league line stands`).toBeDefined();
+      expect(shapeRows(i).map(([v, d]) => [v, d]), `${n} sides`).toEqual(OWNER[n]);
+      const finalWhy = textOf(shapeLabel(i, "final") ?? <span />);
+      const semisWhy = textOf(shapeLabel(i, "semis") ?? <span />);
+      if (n < 3) expect(finalWhy, `${n} sides: League → Final keeps its reason visible`).toContain("Needs 3 or more sides");
+      else expect(finalWhy, `${n} sides: no reason on an enabled row`).not.toContain("Needs");
+      if (n < 4) expect(semisWhy, `${n} sides: Semi-finals keeps its reason visible`).toContain("Needs 4 or more sides");
+      else expect(semisWhy, `${n} sides: no reason on an enabled row`).not.toContain("Needs");
+      expect(i.text(), `${n} sides: the rules allow a knockout, so no rules reason`).not.toContain("Not available for this sport");
+      expect(i.text(), `${n} sides: no plain Knockout (owner 2026-11-12)`).not.toMatch(/\bKnockout\b/);
       checked++;
     }
     expect(checked, "anti-vacuity: 2..6 sides").toBe(5);
@@ -382,6 +500,72 @@ describe("QuickMatchSetupForm: the screen as the mockup orders it", () => {
     expect(sideInputs(i)).toHaveLength(6);
     expect(buttonNamed(i, "+ Add a side"), "no add past six").toBeUndefined();
     expect(i.text()).toContain("6 of 6");
+  });
+
+  it("each row is a title and its one-line hint, the count of who goes through filled in (2 and 4)", () => {
+    const i = mount();
+    fillSides(i, ["A", "B", "C", "D"]);
+    expect(textOf(shapeLabel(i, "league")!)).toContain("League");
+    // T6 review m1 (controller, 2026-11-13): the plain League row still says who wins.
+    expect(textOf(shapeLabel(i, "league")!)).toContain("Everyone plays everyone. Top of the table wins.");
+    expect(textOf(shapeLabel(i, "final")!)).toContain("Everyone plays everyone, then the top 2 play a final.");
+    expect(textOf(shapeLabel(i, "semis")!)).toContain("Everyone plays everyone, then the top 4 play semi-finals and a final.");
+    for (const v of ["league", "final", "semis"]) expect(textOf(shapeLabel(i, v)!), v).not.toMatch(/[{}]/);
+  });
+
+  it("C5: each choice's accessible name is in words, never the arrow, in every locale; its hint is its description (counted)", () => {
+    const dicts = { en: [enMarketing, enUi], es: [esMarketing, esUi], fr: [frMarketing, frUi], nl: [nlMarketing, nlUi] } as const;
+    let checked = 0;
+    for (const lang of LOCALES) {
+      const [marketing, ui] = dicts[lang];
+      const m = marketing as Record<string, string>;
+      const i = mount({ lang, copy: setupCopy(marketing, ui) });
+      // Four sides, through this locale's own Add button, so every row is enabled.
+      while (sideInputs(i).length < 4) click(buttonNamed(i, m["quickMatch.setup.addSide"]!));
+      for (const shape of ["league", "final", "semis"] as const) {
+        const { name, description, title: read } = a11yOf(i, shape);
+        const title = m[`quickMatch.setup.shape.${shape}`]!;
+        expect(name, `${lang} ${shape}: no arrow spoken`).not.toContain("→");
+        // Every word of the visible title is in the name, in order (label in name, WCAG 2.5.3).
+        const words = title.split("→").map((w) => w.trim());
+        expect(name, `${lang} ${shape}`).toBe(words.join(", "));
+        // Browse mode reads the visible title too: the arrow hidden, a pause (the hidden comma) in its place.
+        expect(read, `${lang} ${shape}: the title as browse mode reads it`).toBe(words.join(", "));
+        const hint = m[`quickMatch.setup.shape.${shape}Hint`]!.replace("{count}", shape === "final" ? "2" : "4");
+        expect(description, `${lang} ${shape}: the hint describes it`).toBe(hint);
+        checked++;
+      }
+      // The two knockout titles really do carry the arrow, so the assertion above is not vacuous.
+      expect(m["quickMatch.setup.shape.semis"], lang).toContain("→");
+    }
+    expect(checked, "4 locales × 3 choices").toBe(12);
+    // English, typed: what VoiceOver says.
+    const en = mount();
+    fillSides(en, ["A", "B", "C"]);
+    expect(a11yOf(en, "semis")).toEqual({
+      name: "League, Semi-finals, Final",
+      description: "Everyone plays everyone, then the top 4 play semi-finals and a final. Needs 4 or more sides",
+      title: "League, Semi-finals, Final",
+    });
+    // Two sides (owner 2026-11-14): League → Final is listed too, and its reason is part of what is heard.
+    const two = mount();
+    expect(a11yOf(two, "final")).toEqual({
+      name: "League, Final",
+      description: "Everyone plays everyone, then the top 2 play a final. Needs 3 or more sides",
+      title: "League, Final",
+    });
+    expect(a11yOf(two, "league").description, "an enabled row is described by its hint alone").toBe("Everyone plays everyone. Top of the table wins.");
+  });
+
+  it("the list is one radio group named Format, a real fieldset, so the browser posts one `shape`", () => {
+    const i = mount();
+    fillSides(i, ["A", "B", "C"]);
+    const group = all(i).filter((el) => propsOf(el).role === "radiogroup");
+    expect(group, "one radio group").toHaveLength(1);
+    expect(group[0]!.type).toBe("fieldset");
+    const legend = walk(propsOf(group[0]!).children as ReactElement).find((el) => el.type === "legend");
+    expect(textOf(legend!)).toBe("Format");
+    expect(walk(propsOf(group[0]!).children as ReactElement).filter((el) => el.type === "input" && propsOf(el).name === "shape")).toHaveLength(3);
   });
 
   it("rows 3 to 6 carry a × that removes exactly that row (D5); rows 1 and 2 carry none", () => {
@@ -408,6 +592,109 @@ describe("QuickMatchSetupForm: the screen as the mockup orders it", () => {
     expect(startText(i)).toBe("Start playing · 2 matches");
     fillSides(i, ["A", "B", "C", "D"]);
     expect(startText(i)).toBe("Start playing · 12 matches"); // 2 × 4·3/2
+  });
+
+  it("the Start count is league + knockout (the mockup's 18, 33 and 4), and moves with the choice both ways", () => {
+    const i = mount();
+    fillSides(i, ["Ines", "Mika", "Ravi", "Sofia", "Tom", "Lena"]);
+    expect(startText(i), "League is chosen at first").toBe("Start playing · 15 matches");
+    type(radio(i, "shape", "semis"), "semis");
+    expect(shapeRows(i).filter(([, , checked]) => checked).map(([v]) => v)).toEqual(["semis"]);
+    expect(startText(i)).toBe("Start playing · 18 matches");
+    type(radio(i, "plays", "2"), "2");
+    expect(startText(i), "Twice doubles the league part only").toBe("Start playing · 33 matches");
+    type(radio(i, "shape", "league"), "league");
+    expect(startText(i), "back to League").toBe("Start playing · 30 matches");
+
+    const three = mount();
+    fillSides(three, ["Ines", "Mika", "Ravi"]);
+    type(radio(three, "shape", "final"), "final");
+    expect(startText(three)).toBe("Start playing · 4 matches");
+  });
+
+  it("removing a side under a choice the list no longer offers falls back, and the count follows (semis → final → league)", () => {
+    const i = mount();
+    fillSides(i, ["A", "B", "C", "D"]);
+    type(radio(i, "shape", "semis"), "semis");
+    expect(startText(i)).toBe("Start playing · 9 matches"); // 6 + 3
+    click(buttonNamed(i, "Remove side 4"));
+    expect(shapeRows(i), "Semi-finals disabled; Final takes the check").toEqual([
+      ["league", false, false],
+      ["final", false, true],
+      ["semis", true, false],
+    ]);
+    expect(startText(i)).toBe("Start playing · 4 matches"); // 3 + 1
+    click(buttonNamed(i, "Remove side 3"));
+    expect(shapeRows(i), "two sides: League chosen, both knockouts listed and disabled").toEqual([
+      ["league", false, true],
+      ["final", true, false],
+      ["semis", true, false],
+    ]);
+    expect(startText(i)).toBe("Start playing · 1 match");
+    // Putting the sides back brings the guest's own choice back: it was never theirs to lose.
+    click(buttonNamed(i, "+ Add a side"));
+    click(buttonNamed(i, "+ Add a side"));
+    expect(shapeRows(i).filter(([, , checked]) => checked).map(([v]) => v)).toEqual(["semis"]);
+  });
+
+  it("C23: rules that may only play League list both knockouts disabled, \"Not available for this sport\", and a knockout chosen on other rules falls back to League", () => {
+    const leagueOnly: QuickMatchSport[] = OFFER.map((s) =>
+      s.sport_key === "tennis"
+        ? { ...s, variants: s.variants.map((v) => (v.variant_key === "fast4" ? { ...v, knockoutAllowed: false } : v)) }
+        : s,
+    );
+    const i = mount({ sports: setupSports(leagueOnly, enUi) as SetupFormProps["sports"] });
+    type(radio(i, "sport_key", "tennis"), "tennis");
+    fillSides(i, ["A", "B", "C", "D"]);
+    const select = () => all(i).find((el) => el.type === "select" && propsOf(el).name === "variant_key")!;
+    expect(propsOf(select()).value, "tennis opens on tour, which allows a knockout").toBe("tour");
+    type(radio(i, "shape", "semis"), "semis");
+    expect(startText(i)).toBe("Start playing · 9 matches");
+    type(select(), "fast4");
+    expect(shapeRows(i), "fast4: League chosen, both knockouts listed and disabled").toEqual([
+      ["league", false, true],
+      ["final", true, false],
+      ["semis", true, false],
+    ]);
+    expect(startText(i)).toBe("Start playing · 6 matches");
+    for (const v of ["final", "semis"]) {
+      expect(textOf(shapeLabel(i, v)!), `fast4 ${v}: the rules' reason`).toContain("Not available for this sport");
+      expect(a11yOf(i, v).description, `fast4 ${v}: heard after the hint`).toMatch(/ Not available for this sport$/);
+    }
+    expect(textOf(shapeLabel(i, "league")!), "League can be played on any rules").not.toContain("Not available");
+    type(select(), "tour");
+    expect(shapeRows(i), "tour again: all three can be picked, Semi-finals back").toEqual([
+      ["league", false, false],
+      ["final", false, false],
+      ["semis", false, true],
+    ]);
+    expect(i.text(), "tour: no rules reason").not.toContain("Not available for this sport");
+  });
+
+  it("C23 at six sides, then at two: on rules with no knockout the rules' reason holds at every side count and wins over 'Needs 3/4' (owner 2026-11-14)", () => {
+    const leagueOnly: QuickMatchSport[] = OFFER.map((s) =>
+      s.sport_key === "tennis" ? { ...s, variants: s.variants.map((v) => ({ ...v, knockoutAllowed: false })) } : s,
+    );
+    const i = mount({ sports: setupSports(leagueOnly, enUi) as SetupFormProps["sports"] });
+    type(radio(i, "sport_key", "tennis"), "tennis");
+    let checked = 0;
+    for (const names of [["A", "B", "C", "D", "E", "F"], ["A", "B"]]) {
+      if (names.length === 2) for (let n = 6; n > 2; n--) click(buttonNamed(i, `Remove side ${n}`));
+      fillSides(i, names);
+      expect(sideInputs(i), "the sides on screen").toHaveLength(names.length);
+      expect(shapeRows(i), `${names.length} sides`).toEqual([
+        ["league", false, true],
+        ["final", true, false],
+        ["semis", true, false],
+      ]);
+      for (const v of ["final", "semis"]) {
+        const why = textOf(shapeLabel(i, v)!);
+        expect(why, `${names.length} sides ${v}`).toContain("Not available for this sport");
+        expect(why, `${names.length} sides ${v}: one reason, the rules'`).not.toContain("Needs");
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: 2 side counts × 2 knockout rows").toBe(4);
   });
 
   it("'Each pair plays' offers Once and Twice, nothing more (owner 2026-11-12), at two sides and at six", () => {
@@ -492,6 +779,58 @@ describe("sport, kind and match rules (B4b-d, D6, C24)", () => {
     expect(inputs(i, "kind").filter((el) => propsOf(el).type === "radio")).toHaveLength(2);
   });
 
+  it("?sport= (the hero's sport): the OPENING sport's rules decide the knockout rows, never the offer's first; swept over every non-default sport, both ways (counted)", () => {
+    // Spec §3 (2026-11-12-quick-match-league-knockout): a knockout row only on rules that may play one (C23), from three
+    // sides, Semi-finals from four. Typed from the spec, never read from shapesOffered. Every live variant may play a
+    // knockout today (quick-match-offer.generated.json), so the default is made league-only here: with both free, a form
+    // that read the default sport's rules would list the same rows and this could not see it.
+    const KNOCKOUT: Record<number, [string, boolean][]> = {
+      3: [["league", false], ["final", false], ["semis", true]],
+      4: [["league", false], ["final", false], ["semis", false]],
+    };
+    // Rules with no knockout still list both knockout rows, disabled (owner 2026-11-14).
+    const LEAGUE_ONLY: [string, boolean][] = [["league", false], ["final", true], ["semis", true]];
+    const leagueOnly = (s: QuickMatchSport): QuickMatchSport => ({
+      ...s,
+      variants: s.variants.map((v) => ({ ...v, knockoutAllowed: false })),
+    });
+    // The page's own chain: `?sport=` through prefillSport (what page.tsx hands the island), then n sides typed.
+    const open = (offer: QuickMatchSport[], raw: string | undefined, n: number) => {
+      const sports = setupSports(offer, enUi) as SetupFormProps["sports"];
+      const i = mount({ sports, initialSport: prefillSport(raw, sports) });
+      fillSides(i, Array.from({ length: n }, (_, k) => `S${k + 1}`));
+      return i;
+    };
+    const rowsOf = (i: Island) => shapeRows(i).map(([v, d]) => [v, d]);
+    const first = OFFER[0]!.sport_key;
+    const opening = OFFER.slice(1).map((s) => s.sport_key);
+    expect(opening.length, "premise: at least two sports the form does not open on by default").toBeGreaterThanOrEqual(2);
+    let checked = 0;
+    for (const key of opening) {
+      // The default league-only, the opening sport free to play a knockout: its rows show.
+      const freeHere = OFFER.map((s) => (s.sport_key === key ? s : leagueOnly(s)));
+      for (const n of [3, 4]) {
+        const i = open(freeHere, key, n);
+        expect(propsOf(radio(i, "sport_key", key)!).checked, `premise: ?sport=${key} opens on it`).toBe(true);
+        expect(rowsOf(i), `?sport=${key}, ${n} sides, the default league-only`).toEqual(KNOCKOUT[n]);
+        expect(rowsOf(open(freeHere, undefined, n)), `the differential: no ?sport=, ${n} sides, opens on ${first}`).toEqual(LEAGUE_ONLY);
+        checked++;
+      }
+      // The sequence: from the opening sport to the default chip and back, the rows follow the sport on screen.
+      const moved = open(freeHere, key, 4);
+      type(radio(moved, "sport_key", first), first);
+      expect(rowsOf(moved), `${key} → ${first}: league-only`).toEqual(LEAGUE_ONLY);
+      type(radio(moved, "sport_key", key), key);
+      expect(rowsOf(moved), `${first} → ${key} again`).toEqual(KNOCKOUT[4]);
+      // Reverse: the default free, the opening sport league-only: both knockouts disabled, where the default's can be picked.
+      const onlyHere = OFFER.map((s) => (s.sport_key === key ? leagueOnly(s) : s));
+      expect(rowsOf(open(onlyHere, key, 4)), `?sport=${key}, itself league-only`).toEqual(LEAGUE_ONLY);
+      expect(rowsOf(open(onlyHere, undefined, 4)), `no ?sport=: ${first} lists all three`).toEqual(KNOCKOUT[4]);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every opening sport at 3 and 4 sides, plus its reverse").toBe(opening.length * 3);
+  });
+
   it("the kind words are the dictionary's (Singles / Doubles), never the engine's", () => {
     const i = mount();
     const kindLabels = all(i)
@@ -561,7 +900,7 @@ describe("submitting (the form-post contract, enhanced: ledger CARRY to T4)", ()
       sport_key: ["badminton"],
       variant_key: ["bwf-3x15"],
       kind: ["pair"],
-      format: ["league"],
+      shape: ["league"],
       sides: ["Ravi & Sam", "Priya & Tom", "Lee & Ana"],
       plays: ["1"],
       email: [""],
@@ -945,18 +1284,38 @@ describe("submitting (the form-post contract, enhanced: ledger CARRY to T4)", ()
     expect(byTestId(mount({ initialError: null }), "qm-setup-error")).toBeUndefined();
   });
 
-  it("every create posts format league with the plays picked (owner 2026-11-12); chess posts kind individual", async () => {
+  it("the enhanced post sends the shape on screen and the plays picked; chess posts kind individual", async () => {
     const { calls } = stubFetch([{ url: "http://localhost:3000/q/qm_lg", status: 200 }]);
     const i = mount();
     type(radio(i, "sport_key", "boardgame"), "boardgame");
     fillSides(i, ["A", "B", "C", "D"]);
     type(radio(i, "plays", "2"), "2");
+    type(radio(i, "shape", "semis"), "semis");
     await submit(i);
     const body = calls[0]!.init.body as URLSearchParams;
-    expect(body.getAll("format")).toEqual(["league"]);
+    expect(body.getAll("shape")).toEqual(["semis"]);
+    expect(body.has("format")).toBe(false);
     expect(body.get("plays")).toBe("2");
     expect(body.get("kind")).toBe("individual");
     expect(body.get("sport_key")).toBe("boardgame");
+  });
+
+  it("the post sends the choice the screen SHOWS: Semi-finals chosen, then a side removed, posts final (counted both ways)", async () => {
+    const { calls } = stubFetch([
+      { url: "http://localhost:3000/q/qm_a", status: 200 },
+      { url: "http://localhost:3000/q/qm_b", status: 200 },
+    ]);
+    const shown: string[] = [];
+    for (const drop of [false, true]) {
+      const i = mount();
+      fillSides(i, ["A", "B", "C", "D"]);
+      type(radio(i, "shape", "semis"), "semis");
+      if (drop) click(buttonNamed(i, "Remove side 4"));
+      shown.push(String(shapeRows(i).find(([, , checked]) => checked)![0]));
+      await submit(i);
+    }
+    expect(shown).toEqual(["semis", "final"]);
+    expect(calls.map((c) => (c.init.body as URLSearchParams).get("shape"))).toEqual(shown);
   });
 
   it("the form is a real post to the create route with its locale; before the script runs Start is live and `required` guards the names", () => {
@@ -1029,7 +1388,7 @@ describe("what a screen reader hears, what a thumb can hit, where the Start bar 
     expect(textOf(legend!)).toBe("Who plays");
   });
 
-  it("every tap target has a 44px floor of its own, and no element carries two text sizes or two vertical paddings; 15 checked", () => {
+  it("every tap target has a 44px floor of its own, and no element carries two text sizes or two vertical paddings; 18 checked", () => {
     const i = mount({}, { hydrate: true });
     fillSides(i, ["A", "B", "C"]); // a ×
     const faces = (name: string) =>
@@ -1045,6 +1404,8 @@ describe("what a screen reader hears, what a thumb can hit, where the Start bar 
       ["add", buttonNamed(i, "+ Add a side")!],
       ["rules", all(i).find((el) => el.type === "select")!],
       ["email", all(i).find((el) => el.type === "summary")!],
+      // The Format list: the whole row is the label a thumb taps (the radio itself is visually hidden).
+      ...(["league", "final", "semis"] as const).map((v): [string, ReactElement] => [`shape ${v}`, shapeLabel(i, v)!]),
     ];
     for (const [what, el] of targets) {
       const cls = classOf(el).split(/\s+/);
@@ -1053,9 +1414,34 @@ describe("what a screen reader hears, what a thumb can hit, where the Start bar 
       expect(cls.filter((c) => /^text-(xs|sm|base|lg|xl)$/.test(c)).length, `${what}: one text size`).toBeLessThanOrEqual(1);
       expect(cls.filter((c) => /^py-/.test(c)).length, `${what}: one vertical padding`).toBeLessThanOrEqual(1);
     }
-    // 4 chips, 2 kinds, 2 plays, 3 sides, ×, Add, rules, email.
-    expect(targets).toHaveLength(15);
+    // 4 chips, 2 kinds, 2 plays, 3 sides, ×, Add, rules, email, 3 format rows.
+    expect(targets).toHaveLength(18);
   });
+
+  it("the Format rows' checked, focus and disabled looks are CSS, so they hold before the script runs; every class compiles (counted)", async () => {
+    const i = mount();
+    fillSides(i, ["A", "B", "C"]);
+    const row = classOf(shapeLabel(i, "final")).split(/\s+/);
+    const off = classOf(shapeLabel(i, "semis")).split(/\s+/);
+    // A checked row is drawn by the browser from the radio's own state (no JS needed): the label's `has-checked:` and the
+    // dot's `peer-checked:`. React's `checked` only seeds it.
+    expect(row.filter((c) => c.startsWith("has-checked:")).length, "checked row look").toBeGreaterThan(0);
+    expect(row.filter((c) => c.startsWith("has-focus-visible:")).length, "keyboard focus shows on the row").toBeGreaterThan(0);
+    const dot = walk(propsOf(shapeLabel(i, "final")!).children as ReactElement).find((el) => el.type === "span" && propsOf(el)["aria-hidden"] === true)!;
+    const dotCls = classOf(dot).split(/\s+/);
+    expect(dotCls.filter((c) => c.startsWith("peer-checked:")).length, "the dot fills").toBeGreaterThan(0);
+    expect(off, "a disabled row reads as not pickable").toEqual(expect.arrayContaining(["cursor-not-allowed", "border-dashed"]));
+    expect(row, "an enabled row is not").not.toContain("cursor-not-allowed");
+    const variants = [...row, ...dotCls, ...off].filter((c) => /^(has-checked|has-focus-visible|peer-checked):/.test(c));
+    const compiled = await compileClasses(variants);
+    let nonEmpty = 0;
+    for (const c of variants) {
+      expect(Object.keys(compiled.get(c)!).length, `${c}: an unknown utility compiles to nothing`).toBeGreaterThan(0);
+      nonEmpty++;
+    }
+    expect(nonEmpty, "anti-vacuity").toBeGreaterThanOrEqual(5);
+    expect(nonEmpty).toBe(variants.length);
+  }, 30_000);
 
   it("the Start bar sticks inside the form below 640px, never as a fixed bar with a spacer, and un-docks while the cookie banner is open", () => {
     const i = mount();

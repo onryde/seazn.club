@@ -1,12 +1,12 @@
 // Quick match plan 2, Task 2 (pre-flight amendments D1, A2, A3, B2, C2): the setup screen's every match count, computed
 // on the server and handed to the setup island as a prop, so the number on the Start button is a lookup — never a fetch
-// that can land stale or out of order. A guest's quick match is a league (owner 2026-11-12, "take out" Knockout), so the
-// table holds league cells only; the knockout draws (`quickMatchKnockoutDraws`) are kept, unshipped, for League +
-// Knockout, and pinned here the same way.
+// that can land stale or out of order. A guest's quick match is a League or a League + Knockout (plan 5 D1; owner 2026-11-12
+// "take out" the plain Knockout), so the table holds league cells and League + Knockout cells; the knockout draws
+// (`quickMatchKnockoutDraws`) are kept, unshipped, and pinned here the same way.
 //
 // No DB. ONE table for every sport: the draw is the stage kind's, not the sport's. The engine's generators take no sport
 // (spec §7.3: a league is `generateRoundRobin({ entrants, seeds, config: { legs } })`, a knockout `generateSingleElim`),
-// the create builds its stage from `quickMatchStageInput` and its count from `quickMatchPreview`, neither of which takes
+// the create builds its stages from `quickMatchStageInputs` and its count from `quickMatchPreview`, neither of which takes
 // a sport — the type test below pins both inputs, so adding one reds here before a per-sport table is needed — and plan
 // 1's probe (`_quick-match-probe.ts` step 3) crosses the preview's count with real creates in every offered sport.
 //
@@ -15,11 +15,18 @@
 // templates.ts:104-107), the halves of an 8-draw are (1v8, 4v5) and (3v6, 2v7), and every match but the final sends one
 // side home, so a knockout of n plays n − 1 matches. Spec §7.3 step 3 names who sits out.
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
+import {
+  QUICK_MATCH_KNOCKOUT_MIN_SIDES,
+  QUICK_MATCH_MAX_PLAYS,
+  QUICK_MATCH_MAX_SIDES,
+  QUICK_MATCH_QUALIFIERS,
+  QUICK_MATCH_SEMIS_MIN_SIDES,
+} from "@/lib/quick-match-constants";
 import { previewStageDraw, type PreviewDrawFixture } from "../stages";
 import {
   quickMatchPreview,
   quickMatchPreviewTable,
-  quickMatchStageInput,
+  quickMatchStageInputs,
   type QuickMatchDrawSeat,
   quickMatchKnockoutDraws,
   type QuickMatchFormat,
@@ -31,6 +38,15 @@ import {
  *  needs three sides). */
 const LEAGUE_KEYS = [2, 3, 4, 5, 6].flatMap((n) => [1, 2].map((p) => `league:${n}:${p}`));
 const KNOCKOUT_KEYS = [3, 4, 5, 6].map((n) => `knockout:${n}:1`);
+/** League + Knockout (spec §3): the top 2 from three sides up, the top 4 from four (the constants the create refuses by). */
+const LK_KEYS = QUICK_MATCH_QUALIFIERS.flatMap((q) => {
+  const from = q === 4 ? QUICK_MATCH_SEMIS_MIN_SIDES : QUICK_MATCH_KNOCKOUT_MIN_SIDES;
+  return Array.from({ length: QUICK_MATCH_MAX_SIDES - from + 1 }, (_, i) => from + i).flatMap((n) =>
+    Array.from({ length: QUICK_MATCH_MAX_PLAYS }, (_, p) => `league_knockout:${n}:${p + 1}:${q}`),
+  );
+});
+/** The one stage of a Knockout. */
+const knockoutStage = () => quickMatchStageInputs({ format: "knockout", plays: 1, name: "x", qualifiers: null })[0]!;
 
 const knockout = (t: QuickMatchKnockoutDraws, n: number): QuickMatchKnockoutCell => {
   const cell = t[`knockout:${n}:1`];
@@ -49,11 +65,37 @@ const pairWords = (cell: QuickMatchKnockoutCell, pair: [QuickMatchDrawSeat, Quic
   pair.map((s) => seatWords(cell, s)).sort().join("v");
 
 describe("quickMatchPreviewTable — the cells", () => {
-  it("holds exactly the 10 league cells (2..6 sides × 1..2 plays) and no knockout cell (owner 2026-11-12: League only)", () => {
+  it("holds exactly the 10 league cells (2..6 sides × 1..2 plays), the League + Knockout cells, and no knockout cell", () => {
     const keys = Object.keys(quickMatchPreviewTable());
-    expect(keys.length).toBe(10); // anti-vacuity: an empty table is a failure, not a pass
-    expect(new Set(keys)).toEqual(new Set(LEAGUE_KEYS));
-    expect(keys.filter((k) => !k.startsWith("league:")), "nothing but leagues ships to a guest").toEqual([]);
+    // The League + Knockout cells, counted from the rulebook's ranges: top 2 over 3..6 sides, top 4 over 4..6, each Once and
+    // Twice: (4 + 3) × 2 = 14. (The plan's "12 at q=2 plus 6 at q=4, so 18" miscounted the q=2 range: 3..6 is four side counts.)
+    expect(LK_KEYS).toHaveLength((4 + 3) * 2);
+    expect(keys.length).toBe(10 + 14); // anti-vacuity: an empty table is a failure, not a pass
+    expect(new Set(keys)).toEqual(new Set([...LEAGUE_KEYS, ...LK_KEYS]));
+    expect(keys.filter((k) => k.startsWith("knockout:")), "no plain knockout ships to a guest (owner 2026-11-12)").toEqual([]);
+    // §3: no League + Knockout of two sides, and no semi-finals below four.
+    expect(keys.filter((k) => k.startsWith("league_knockout:2:")), "two sides: no knockout row").toEqual([]);
+    expect(keys.filter((k) => /^league_knockout:3:\d+:4$/.test(k)), "three sides: no semi-finals").toEqual([]);
+  });
+
+  it("every League + Knockout cell counts the league's round robin plus the knockout of the top q, q − 1 matches", () => {
+    // The rulebook: plays × n(n−1)/2 league matches, then a single-elimination of q sides, q − 1 matches (no third place). The
+    // knockout's count is crossed with the generator's own draw of q sides (`previewStageDraw`, raw, byes dropped), and the
+    // league's with the table's own league cell, so a cell is the sum of the two parts it promises.
+    const t = quickMatchPreviewTable();
+    let checked = 0;
+    for (const key of LK_KEYS) {
+      const [, n, plays, q] = key.split(":").map(Number) as [number, number, number, number];
+      const knockoutDrawn = previewStageDraw(knockoutStage(), q).filter((f) => !f.bye).length;
+      expect(knockoutDrawn, `the generator's knockout of ${q}`).toBe(q - 1);
+      const cell = t[key as `league_knockout:${number}:${number}:${number}`];
+      expect(cell?.matchCount, key).toBe((plays * n * (n - 1)) / 2 + (q - 1));
+      expect(cell?.matchCount, key).toBe(t[`league:${n}:${plays}`]!.matchCount + knockoutDrawn);
+      checked++;
+    }
+    expect(checked).toBe(14);
+    // The semi-finals' count is also the kept draw's own (`quickMatchKnockoutDraws`, the four-side bracket).
+    expect(knockout(quickMatchKnockoutDraws(), 4).matchCount).toBe(4 - 1);
   });
 
   it("the kept knockout draws hold exactly the 4 draws (3..6 sides), for League + Knockout", () => {
@@ -139,12 +181,13 @@ describe("quickMatchPreviewTable and quickMatchKnockoutDraws — the exhaustive 
     let cells = 0;
     let seats = 0;
     for (const key of [...Object.keys(t), ...Object.keys(draws)]) {
-      const [format, sides, plays] = key.split(":") as [QuickMatchFormat, string, string];
-      const input = { format, sides: Number(sides), plays: Number(plays) };
+      const [format, sides, plays, q] = key.split(":") as [QuickMatchFormat, string, string, string | undefined];
+      const qualifiers = q === undefined ? null : (Number(q) as 2 | 4);
+      const input = { format, sides: Number(sides), plays: Number(plays), qualifiers };
       const direct = quickMatchPreview(input);
       cells++;
-      if (format === "league") {
-        expect(t[key as `league:${number}:${number}`], key).toEqual({ matchCount: direct.matchCount });
+      if (format === "league" || format === "league_knockout") {
+        expect((t as Record<string, unknown>)[key], key).toEqual({ matchCount: direct.matchCount });
         continue;
       }
       const cell = knockout(draws, input.sides);
@@ -152,7 +195,7 @@ describe("quickMatchPreviewTable and quickMatchKnockoutDraws — the exhaustive 
       expect(cell.rounds.map((r) => r.role), key).toEqual(direct.rounds.map((r) => r.role));
       expect(cell.byes, key).toEqual(direct.rounds.flatMap((r) => r.lines.filter((l) => l.bye).map((l) => l.home.seed)));
 
-      const raw = previewStageDraw(quickMatchStageInput({ format: "knockout", plays: 1, name: "x" }), input.sides);
+      const raw = previewStageDraw(knockoutStage(), input.sides);
       const at = (round: number, seq: number): PreviewDrawFixture => {
         const f = raw.find((x) => x.roundNo === round && x.seqInRound === seq);
         if (!f) throw new Error(`${key}: no raw fixture R${round}·${seq}`);
@@ -176,7 +219,7 @@ describe("quickMatchPreviewTable and quickMatchKnockoutDraws — the exhaustive 
       }
       expect(cell.rounds.flatMap((r) => r.pairs), key).toHaveLength(raw.filter((x) => !x.bye).length);
     }
-    expect(cells).toBe(14); // anti-vacuity: 10 league cells + 4 knockout draws
+    expect(cells).toBe(28); // anti-vacuity: 10 league cells + 14 League + Knockout cells + 4 knockout draws
     expect(seats).toBe(28); // 2 × (2 + 3 + 4 + 5)
   });
 });
@@ -187,24 +230,34 @@ describe("quickMatchPreviewTable — ONE table for every sport, and small enough
     // added to any of the three reds here — mutated once, an optional `sport` on two of them gave TS2741 on both lines —
     // which is the moment a per-sport table would be owed.
     expectTypeOf(quickMatchPreviewTable).parameters.toEqualTypeOf<[]>();
-    expectTypeOf<Parameters<typeof quickMatchPreview>[0]>().toEqualTypeOf<{ format: QuickMatchFormat; sides: number; plays: number }>();
-    expectTypeOf<Parameters<typeof quickMatchStageInput>[0]>().toEqualTypeOf<{ format: QuickMatchFormat; plays: number; name: string }>();
+    expectTypeOf<Parameters<typeof quickMatchPreview>[0]>().toEqualTypeOf<{
+      format: QuickMatchFormat;
+      sides: number;
+      plays: number;
+      qualifiers?: 2 | 4 | null;
+    }>();
+    expectTypeOf<Parameters<typeof quickMatchStageInputs>[0]>().toEqualTypeOf<{
+      format: QuickMatchFormat;
+      plays: number;
+      name: string;
+      qualifiers: 2 | 4 | null;
+    }>();
   });
 
-  it("serializes inside a 2 KiB budget, and its shape holds exactly 20 keys", () => {
+  it("serializes inside a 2 KiB budget, and its shape holds exactly 48 keys", () => {
     // The table rides in every /play page payload: the budget is the requirement.
     const t = quickMatchPreviewTable();
     expect(JSON.stringify(t).length).toBeLessThanOrEqual(2048);
     // The shape's tripwire: every object key in the table, NOT descending into `role` (the engine's RoundRole may grow
-    // a field without the table changing shape). Hand count: 10 cell keys + 10 league `matchCount` = 20 (League only,
-    // owner 2026-11-12: no knockout cell rides in the page).
+    // a field without the table changing shape). Hand count: (10 league + 14 League + Knockout) cell keys, each with one
+    // `matchCount` = 48 (no plain knockout cell rides in the page, owner 2026-11-12).
     const keysIn = (v: unknown): number =>
       Array.isArray(v)
         ? v.reduce((n: number, x) => n + keysIn(x), 0)
         : v !== null && typeof v === "object"
           ? Object.entries(v).reduce((n, [k, x]) => n + 1 + (k === "role" ? 0 : keysIn(x)), 0)
           : 0;
-    expect(keysIn(t)).toBe(20);
+    expect(keysIn(t)).toBe(48);
   });
 });
 

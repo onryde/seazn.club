@@ -6,9 +6,13 @@ import "server-only";
 //
 // The checks, in this order, each refusing with its own QUICK_MATCH_ERRORS code before the next runs:
 //   1. the post limit, per quick match (`qm-add:<id>`, MUTATION_LIMIT): its 429 carries no code;
-//   2. the home read (`readQuickMatchHome`, the per-match check of §7.1 point 3): null when the competition is gone since
-//      the token resolved, answered as EXPIRED so the caller lands on the dead link;
-//   3. a league only (C5: a knockout has a winner by construction): LEAGUE_ONLY;
+//   2. the match's read, the per-match check of §7.1 point 3 (a League + Knockout's league by `loadLeagueCut`, which reads
+//      the two stages; any other format by `readQuickMatchHome`): null when the competition is gone since the token resolved,
+//      answered as EXPIRED so the caller lands on the dead link;
+//   3. a league only (C5: a knockout has a winner by construction): LEAGUE_ONLY. A League + Knockout takes its decider on
+//      its LEAGUE stage (plan 5 P15), and only until every league match is played or Not played (plan 5 D3, spec §6: the
+//      knockout fills, or its tie is asked, from that league, and an open extra match would hold it up): LEAGUE_COMPLETE.
+//      A plain league keeps taking one when it is finished: that is what a level table asks for (C5);
 //   4. both sides are THIS quick match's own sides, compared as the home reads them, BEFORE `addFixture` sees an id, so a
 //      missing field, a non-uuid or another quick match's side is a refusal and never a cast error: NOT_FOUND;
 //   5. two different sides: SAME_SIDE;
@@ -25,6 +29,7 @@ import { systemAuth } from "@/lib/quick-match-auth";
 import { QUICK_MATCH_ERRORS, QUICK_MATCH_MAX_ADHOC, QUICK_MATCH_SYSTEM_ORG_ID } from "@/lib/quick-match-constants";
 import { MUTATION_LIMIT, rateLimit } from "@/lib/rate-limit";
 import { addFixture } from "@/server/usecases/stages";
+import { loadLeagueCut } from "./quick-match-advance";
 import { readQuickMatchHome, type QuickMatchRow } from "./quick-match-home";
 
 /** The two sides the form names, as posted: null for a field that is missing or no string. */
@@ -57,21 +62,38 @@ async function adhocCount(stageId: string): Promise<number> {
   return row!.n;
 }
 
-export async function addQuickMatchDecider(row: QuickMatchRow, pick: AddMatchPick): Promise<{ fixtureId: string }> {
-  await rateLimit(`qm-add:${row.id}`, MUTATION_LIMIT);
+/** Steps 2 and 3: the league an extra match lands on and the match's own sides, or null when the competition is gone. */
+async function leagueOf(row: QuickMatchRow): Promise<{ stageId: string; sides: Set<string> } | null> {
+  if (row.format === "league_knockout") {
+    const cut = await loadLeagueCut(row);
+    if (cut === null) return null;
+    if (cut.leagueDone) {
+      throw new HttpError(422, "the league is complete, so it takes no extra match", QUICK_MATCH_ERRORS.LEAGUE_COMPLETE);
+    }
+    const entrants = await withTenant(QUICK_MATCH_SYSTEM_ORG_ID, (tx) => tx<{ id: string }[]>`
+      select id from entrants where division_id = ${cut.divisionId}`);
+    return { stageId: cut.leagueStageId, sides: new Set(entrants.map((e) => e.id)) };
+  }
   const home = await readQuickMatchHome(row);
-  if (!home) throw new HttpError(404, "quick match not found or expired", QUICK_MATCH_ERRORS.EXPIRED);
+  if (!home) return null;
   if (home.row.format !== "league") {
     throw new HttpError(422, "only a league takes an extra match", QUICK_MATCH_ERRORS.LEAGUE_ONLY);
   }
-  const sides = new Set(home.sides.map((s) => s.entrantId));
+  return { stageId: home.stageId, sides: new Set(home.sides.map((s) => s.entrantId)) };
+}
+
+export async function addQuickMatchDecider(row: QuickMatchRow, pick: AddMatchPick): Promise<{ fixtureId: string }> {
+  await rateLimit(`qm-add:${row.id}`, MUTATION_LIMIT);
+  const league = await leagueOf(row);
+  if (!league) throw new HttpError(404, "quick match not found or expired", QUICK_MATCH_ERRORS.EXPIRED);
+  const { sides, stageId } = league;
   if (pick.home === null || pick.away === null || !sides.has(pick.home) || !sides.has(pick.away)) {
     throw new HttpError(404, "both sides must be this quick match's own", QUICK_MATCH_ERRORS.NOT_FOUND);
   }
   if (pick.home === pick.away) throw new HttpError(422, "a side cannot play itself", QUICK_MATCH_ERRORS.SAME_SIDE);
-  if ((await adhocCount(home.stageId)) >= QUICK_MATCH_MAX_ADHOC) {
+  if ((await adhocCount(stageId)) >= QUICK_MATCH_MAX_ADHOC) {
     throw new HttpError(422, `a quick match takes at most ${QUICK_MATCH_MAX_ADHOC} extra matches`, QUICK_MATCH_ERRORS.ADHOC_LIMIT);
   }
-  const added = await addFixture(systemAuth(), home.stageId, { home_entrant_id: pick.home, away_entrant_id: pick.away });
+  const added = await addFixture(systemAuth(), stageId, { home_entrant_id: pick.home, away_entrant_id: pick.away });
   return { fixtureId: added.fixture_id };
 }

@@ -1,4 +1,4 @@
-import { test as base, expect, type Browser, type Locator, type Page } from "@playwright/test";
+import { test as base, expect, type Browser, type Locator, type Page, type Route } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -10,6 +10,7 @@ import { consentedAnonymousState } from "./scorepad-a11y-kit";
 import { HOLD_MS } from "../src/components/v2/scorepad/queue";
 import { HUMAN_FASTEST_REPEAT_MS } from "../src/components/v2/scorepad/use-pad-pipeline";
 import { NOT_PLAYED_RECHECK_MS } from "../src/lib/scan-screen";
+import { QUICK_MATCH_EXPIRY_DAYS } from "../src/lib/quick-match-constants";
 
 // Quick match plan 2 Task 5 (spec docs/superpowers/specs/2026-11-03-quick-match-design.md §5 step 3, §8): the guest's home
 // at `/q/<token>` in a real browser, at the three widths the task is verified at (320, 768, 1280), for a league and the dead
@@ -17,16 +18,19 @@ import { NOT_PLAYED_RECHECK_MS } from "../src/lib/scan-screen";
 // (`mobile.spec.ts`); this file is the home's own width check, which no unit test can see: the page's real width with a
 // 43-character side name, the hero, the table and the list laid out by the browser.
 //
-// A guest's quick match is a league (owner 2026-11-12, "take out": League + Knockout comes later), so no knockout can be
-// made here: the knockout home (the draw, the waiting final and its "not yet", Add a match refused) stays in code for
-// League + Knockout and is covered by its tests in app/q/[token]/__tests__/ (page, score-route and add-match-route) until then.
+// A guest's quick match is a League, or a League + Knockout (plan 5, docs/superpowers/plans/2026-11-13-quick-match-5-league-
+// knockout.md Task 8): the knockout fills itself from the league's table, asks the guests when a tie straddles the cut, and
+// names its champion. Those cases are the "Plan 5" block at the end of this file; a plain Knockout is still not offered.
 //
 // Every quick match here is made the way a guest makes one: the setup page's form, posted by its Start button, followed to
 // the home (the real producer, never a seed). Measured with `expectNoHorizontalScroll` (helpers.ts), which lifts the
 // `overflow-x: clip` backstop before it reads.
 //
 // Sport: badminton, clicked explicitly (A11), as quick-match.spec.ts does; the home has no sport-specific layout beyond its
-// score line, which the page test (app/q/[token]/__tests__/page.test.tsx) covers for badminton and football.
+// score line, which the page test (app/q/[token]/__tests__/page.test.tsx) covers for badminton and football. The plan 5 block
+// plays chess (one tap on the pad decides a game, owner R7-2), the one sport where a whole league and its knockout can be
+// played by taps inside a test's budget; the fill, the cut and the champion are one code path for every sport (T4's DB tests
+// sweep the offered sports).
 
 const test = base.extend<{ guest: Page }>({
   guest: async ({ browser }, provide) => {
@@ -1092,4 +1096,680 @@ test("Pad left open: a rally on the pad, the match skipped on another phone (the
   } finally {
     await other.close();
   }
+});
+
+// ── Plan 5 Task 8: League + Knockout ────────────────────────────────────────────────────────────────────────────────
+//
+// Plan docs/superpowers/plans/2026-11-13-quick-match-5-league-knockout.md Task 8 Step 2; spec
+// docs/superpowers/specs/2026-11-12-quick-match-league-knockout-design.md §5, §6, §11, §12 (mockup qmd13a01 §7-12, layout only).
+// What the unit and DB tests cannot see, and these do: a whole league and its knockout played through the real pad by taps,
+// the fill landing on the home, the tie question answered by a real Toss and a real Pick panel (after hydration), a second
+// phone's stale answer, and the stale posts an old tab still holds.
+//
+// The knockout fills inside the request that finished the league (the scoring hook, the decision routes); the home's own
+// read retries the fill on every load (T5), which would mask a hook or a route that never ran. So each fill is witnessed in
+// the record BEFORE the first home load after it: on the pad, between the deciding result's 201 and the way back; and for a
+// Toss or a Send, between the post and the page its 303 lands on (`beforeLanding`).
+//
+// Expected names come from the taps (the side each game is steered to) and the table read on screen, never from a typed
+// table; expected lines from the en dictionary; counts from the rulebook (a round robin of n plays n(n-1)/2 a pass; a
+// knockout of q plays q-1, no 3rd-place match); chess's round-robin order is points → direct encounter → wins →
+// Sonneborn-Berger → lots (engine BOARDGAME_RR_TIEBREAKERS; the cut drops seed, T2), so two sides who split their games and
+// lost both to the same third side are level on every step but the lot. The semi-finals' home/away order is the engine's
+// and is not pinned (T7 review G2): a semi is read as a pair.
+
+const MK_EN = readDict("../src/dictionaries/en/marketing.json");
+/** An en marketing line (the setup page's copy). */
+function mkEn(key: string, vars: Record<string, string | number> = {}): string {
+  const text = MK_EN[key];
+  if (typeof text !== "string") throw new Error(`the en marketing dictionary has no "${key}"`);
+  return text.replace(/\{(\w+)\}/g, (_, slot: string) => {
+    if (!Object.hasOwn(vars, slot)) throw new Error(`"${key}" needs {${slot}}`);
+    return String(vars[slot]);
+  });
+}
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** An en list of names, as the home joins them (`Intl.ListFormat`, the house rule). */
+const enList = (names: readonly string[]) => new Intl.ListFormat("en", { style: "long", type: "conjunction" }).format(names);
+
+/** How many go through for each knockout row of the setup's Format list (spec §12). */
+const LK_THROUGH = { final: 2, semis: 4 } as const;
+type LkShape = keyof typeof LK_THROUGH;
+/** A page load or a redirect followed: every budget below is built from it and the pad's hold (AGENTS.md class 20). */
+const LK_NAV_MS = 20_000;
+/** One chess game on the pad, from the home's Score to the home again: Score's 303, the pad's load, Start, the tap's hold
+ *  before it is sent, and the way back. */
+const LK_GAME_MS = HOLD_MS + 4 * LK_NAV_MS;
+/** A chess win as the home writes it, winner first: the rulebook's 1 point to 0 (FIDE), with the house dash. */
+const CHESS_WIN = "1–0";
+
+/** A League + Knockout of chess made the way a guest makes one: the setup page (hydrated first), the sides, the Format row,
+ *  how often each pair plays, and a Start count the rulebook agrees with; returns the home's path. */
+async function createLeagueKnockout(page: Page, name: string, sides: readonly string[], shape: LkShape, plays: 1 | 2): Promise<string> {
+  await page.goto("/en/play");
+  await expect(form(page)).toBeVisible();
+  await expect(page.getByTestId("qm-start"), "the island is live (blank sides hold Start)").toBeDisabled();
+  await form(page).getByText(en("sport.boardgame"), { exact: true }).click();
+  await form(page).getByLabel("Name", { exact: true }).fill(name);
+  for (let n = 3; n <= sides.length; n++) await page.getByRole("button", { name: "+ Add a side" }).click();
+  for (const [k, s] of sides.entries()) await side(page, k + 1).fill(s);
+  await form(page).locator(`label:has(input[name="shape"][value="${shape}"])`).click();
+  await expect(form(page).locator(`input[name="shape"][value="${shape}"]`)).toBeChecked();
+  if (plays === 2) await form(page).getByText(mkEn("quickMatch.setup.plays.2"), { exact: true }).click();
+  const n = sides.length;
+  const total = ((n * (n - 1)) / 2) * plays + LK_THROUGH[shape] - 1;
+  await expect(page.getByTestId("qm-start-count")).toHaveText(mkEn(`quickMatch.setup.startCount.${EN_RULES.select(total)}`, { count: total }));
+  await page.getByTestId("qm-start").click();
+  await page.waitForURL(/\/q\/qm_[^/?#]+$/, { timeout: LK_NAV_MS });
+  await expect(page.getByTestId("qm-eyebrow")).toHaveText(`${en("sport.boardgame")} · ${en("quickMatch.format.league_knockout")}`);
+  return new URL(page.url()).pathname;
+}
+
+const nextCard = (page: Page) => page.locator('[data-testid="qm-draw-card"][data-next="true"]');
+const cardOf = (page: Page, fixtureId: string) => page.locator(`[data-testid="qm-draw-card"][data-fixture-id="${fixtureId}"]`);
+
+async function heroSides(page: Page): Promise<[string, string]> {
+  const hero = page.getByTestId("qm-hero");
+  await expect(hero, "a match is up next").toBeVisible();
+  const read = async (id: string) => ((await hero.getByTestId(id).textContent()) ?? "").trim();
+  return [await read("qm-hero-home"), await read("qm-hero-away")];
+}
+
+interface Game {
+  fixtureId: string;
+  winner: string;
+  loser: string;
+}
+
+/**
+ * Play the match the home marks next on the pad. Chess: one tap on the winner's half decides the game (owner R7-2). Score
+ * (the hero's for a league match, the knockout card's own for a knockout one), Start, the half that names the winner, and the
+ * result written: the pad's own events post answered 201. Then `whileOnPad`, still on the pad (no home load since the
+ * result), then back by the pad's own link to the bare home. `winnerOf` picks the winner from the two sides the hero names.
+ */
+async function playNext(
+  page: Page,
+  home: string,
+  winnerOf: (homeSide: string, awaySide: string) => string,
+  whileOnPad?: (game: Game) => Promise<void>,
+): Promise<Game> {
+  const [h, a] = await heroSides(page);
+  const winner = winnerOf(h, a);
+  expect([h, a], `the steered winner plays this match (${h} v ${a})`).toContain(winner);
+  const knockout = (await nextCard(page).count()) > 0;
+  const holder = knockout ? nextCard(page) : nextRow(page);
+  await expect(holder, "one match is marked next").toHaveCount(1);
+  const fixtureId = (await holder.getAttribute("data-fixture-id"))!;
+  const score = knockout ? holder.getByTestId("qm-score") : page.getByTestId("qm-hero").getByTestId("qm-score");
+  await expectTappable(score, `${h} v ${a}: Score`);
+  await score.click();
+  await page.waitForURL(/\/score\/dl_[A-Za-z0-9_-]{43}$/, { timeout: LK_NAV_MS });
+  await expect(page.getByTestId("scan-confirm"), `${h} v ${a}: the pad's Confirm`).toBeVisible({ timeout: LK_NAV_MS });
+  await pressStart(page);
+  const half = page.locator(`[data-role="pad-v3"] button[data-role="v3-scorebug-half"][data-side="${winner === h ? "home" : "away"}"]`);
+  await expect(half).toBeVisible({ timeout: LK_NAV_MS });
+  await expect(half, "the half tapped names the winner").toHaveAttribute("aria-label", new RegExp(escapeRe(winner)));
+  const written = page.waitForResponse(
+    (r) =>
+      r.request().method() === "POST" &&
+      new URL(r.url()).pathname === `/api/v1/fixtures/${fixtureId}/events` &&
+      (r.request().postData() ?? "").includes('"boardgame.result"'),
+    { timeout: HOLD_MS + LK_NAV_MS },
+  );
+  await half.click();
+  expect((await written).status(), `${winner} beat ${winner === h ? a : h}: the result is written`).toBe(201);
+  await expect(page.getByText(en("device.quickMatch.resultSaved")), "the pad's decided line").toBeVisible({ timeout: LK_NAV_MS });
+  const game = { fixtureId, winner, loser: winner === h ? a : h };
+  if (whileOnPad) await whileOnPad(game);
+  await page.getByTestId("quick-match-back-link").click();
+  await page.waitForURL((u) => u.pathname === home && u.search === "", { timeout: LK_NAV_MS });
+  return game;
+}
+
+type LkRecord = Awaited<ReturnType<typeof lkRecord>>;
+/** The record of a quick match, from any one of its fixtures: its cut decision, and its knockout stage's fill (a confirmed
+ *  seed proposal) with every knockout line's seats by entrant name. */
+async function lkRecord(fixtureId: string) {
+  return withDb(async (sql) => {
+    const [qm] = await sql<{ cut: { how: string; through: string[]; tie: string[] } | null; division: string }[]>`
+      select q.cut_decision as cut, f.division_id::text as division
+      from fixtures f join divisions d on d.id = f.division_id join quick_matches q on q.competition_id = d.competition_id
+      where f.id = ${fixtureId}`;
+    expect(qm, "the fixture is a quick match's").toBeDefined();
+    const names = new Map(
+      (await sql<{ id: string; name: string }[]>`select id::text, display_name as name from entrants where division_id = ${qm!.division}`).map(
+        (e) => [e.id, e.name],
+      ),
+    );
+    const ko = await sql<{ id: string; home: string | null; away: string | null; is_final: boolean }[]>`
+      select f.id::text, f.home_entrant_id::text as home, f.away_entrant_id::text as away, f.is_final
+      from fixtures f join stages s on s.id = f.stage_id
+      where f.division_id = ${qm!.division} and s.kind = 'knockout' order by f.round_no, f.seq_in_round`;
+    const [{ confirmed }] = await sql<{ confirmed: number }[]>`
+      select count(*)::int as confirmed from stage_seed_proposals p join stages s on s.id = p.stage_id
+      where s.division_id = ${qm!.division} and s.kind = 'knockout' and p.status = 'confirmed'`;
+    const [league] = await sql<{ rows: { entrantId: string; rank: number }[] | null }[]>`
+      select ss.rows from stages s left join standings_snapshots ss on ss.stage_id = s.id and ss.pool_id is null
+      where s.division_id = ${qm!.division} and s.kind = 'league'`;
+    const nameOf = (id: string | null) => (id === null ? null : (names.get(id) ?? `?${id}`));
+    return {
+      cut: qm!.cut === null ? null : { how: qm!.cut.how, through: qm!.cut.through.map((id) => nameOf(id)!), tie: qm!.cut.tie.map((id) => nameOf(id)!) },
+      knockout: ko.map((f) => ({ id: f.id, home: nameOf(f.home), away: nameOf(f.away), isFinal: f.is_final })),
+      confirmed,
+      /** The stored league table's order, by name: the lot's order inside a class it ordered (§11: what a Toss reveals). */
+      leagueOrder: [...(league?.rows ?? [])].sort((x, y) => x.rank - y.rank).map((r) => nameOf(r.entrantId)!),
+    };
+  });
+}
+
+/**
+ * Read the record between a form post and the page its 303 lands on: the next post to `path` is sent from here unfollowed
+ * (`route.fetch`, maxRedirects 0), `read` runs, and the browser is handed the 303 to follow. So what `read` sees is the
+ * route's own work, before the home's read could retry it. Returns the read's result once the browser has the 303.
+ *
+ * The route stays registered for the page's life; a later post to `path` falls through. Seen twice on the toss with a
+ * `times: 1` route (2026-11-13): the 303 was fulfilled, the GET it redirects to stayed pending, and the click never
+ * returned until the test's budget ran out.
+ */
+async function beforeLanding<T>(page: Page, path: string, read: () => Promise<T>): Promise<() => Promise<{ status: number; seen: T }>> {
+  let answered: { status: number; seen: T } | null = null;
+  let failed: unknown = null;
+  let taken = false;
+  await page.route((url) => url.pathname === path, async (route: Route) => {
+    if (route.request().method() !== "POST" || taken) return route.fallback();
+    taken = true;
+    try {
+      const response = await route.fetch({ maxRedirects: 0 });
+      const seen = await read();
+      await route.fulfill({ response });
+      answered = { status: response.status(), seen };
+    } catch (err) {
+      failed = err;
+      await route.abort().catch(() => undefined);
+    }
+  });
+  return async () => {
+    await expect.poll(() => answered !== null || failed !== null, { message: `${path} was never posted`, timeout: LK_NAV_MS }).toBe(true);
+    if (failed !== null) throw failed;
+    return answered!;
+  };
+}
+
+/** The short table as a person sees it, top to bottom: each row's place (as painted: a level table's screen-reader word
+ *  left out), name, tag beside the name ("level — to decide", "decided by lot", "picked"; "" for none), and whether it is
+ *  marked going through. */
+async function tableRows(page: Page): Promise<{ place: string; name: string; tag: string; through: boolean }[]> {
+  const rows = page.getByTestId("qm-standings-short").getByTestId("qm-standings-row");
+  await expect(rows.first(), "the table has rows").toBeAttached();
+  return rows.evaluateAll((els) =>
+    els.map((el) => {
+      const cell = el.querySelector("td");
+      const painted = cell?.querySelector('[aria-hidden="true"]') ?? cell;
+      const header = el.querySelector('th[scope="row"]');
+      const tag = el.querySelector('[data-testid="qm-standings-tag"]');
+      const name = tag === null ? header : (header?.querySelector("span > span") ?? header);
+      return {
+        place: (painted?.textContent ?? "").trim(),
+        name: (name?.textContent ?? "").trim(),
+        tag: (tag?.textContent ?? "").trim(),
+        through: (el as HTMLElement).dataset.through === "true",
+      };
+    }),
+  );
+}
+
+/** A knockout card's two seats as their names read, in the card's order (a seat waiting reads its words). */
+async function seatsOf(card: Locator): Promise<string[]> {
+  return (await card.getByTestId("qm-draw-name").allTextContents()).map((t) => t.trim());
+}
+
+/** The bracket is above the table: the knockout's section comes first in the page and paints above it. */
+async function expectKnockoutFirst(page: Page, what: string) {
+  const order = await page.evaluate(() => {
+    const ko = document.querySelector('[data-testid="qm-knockout"]');
+    const table = document.querySelector('[data-testid="qm-standings"]');
+    if (ko === null || table === null) return null;
+    return {
+      first: (ko.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
+      above: ko.getBoundingClientRect().bottom <= table.getBoundingClientRect().top,
+    };
+  });
+  expect(order, `${what}: both the knockout and the table`).not.toBeNull();
+  expect(order, `${what}: the knockout above the table`).toEqual({ first: true, above: true });
+}
+
+/** The played line with the countdown (an unsaved home still being played): `played` of `total`, then `extra` parts. */
+const playedWithCountdown = (played: number, total: number, ...extra: string[]) =>
+  [en(`quickMatch.home.played.${EN_RULES.select(total)}`, { played, count: total, days: QUICK_MATCH_EXPIRY_DAYS }), ...extra].join(" · ");
+
+test("League → Semi-finals (plan 5 T8 (1) and (5)): a chess league of 4 played on the pad fills its semi-finals, 1st v 4th and 2nd v 3rd by the table on screen, before the home loads again; the bracket moves above the table and the hero says Semi-final 1; the league's rows offer no Edit result and a stale tab's Edit result opens the pad View-only, locked; the semi-finals and the final played on their own cards name the final's winner Champion, not the table's leader", async ({ guest: page }) => {
+  const sides = ["Ines Duarte", "Mika Laine", "Oskar Lind", LONG];
+  const league = (sides.length * (sides.length - 1)) / 2;
+  const knockout = LK_THROUGH.semis - 1;
+  // Derived, never flat (AGENTS.md #20): every game's loads and hold, and a dozen more loads (the stale tab, reloads, widths).
+  test.setTimeout((league + knockout) * LK_GAME_MS + 12 * LK_NAV_MS);
+  const home = await createLeagueKnockout(page, `e2e lk semis ${TAG}`, sides, "semis", 1);
+  // The steer: of any two, the one typed first wins the league game, so the table is the typing order, 3, 2, 1 and 0 wins.
+  const typed = (name: string) => sides.indexOf(name);
+
+  // ---- Before a game: the knockout's three cards wait on the league (D7), under the table, filling itself at the end ----
+  const ko = page.getByTestId("qm-knockout");
+  await expect(ko.getByTestId("qm-knockout-caption")).toHaveText(en("quickMatch.home.knockoutFills"));
+  const cards = ko.getByTestId("qm-draw-card");
+  await expect(cards).toHaveCount(knockout);
+  const semiSeats = [...(await seatsOf(cards.nth(0))), ...(await seatsOf(cards.nth(1)))];
+  expect(semiSeats.sort(), "the semi-finals wait on 1st to 4th in the league").toEqual(
+    [1, 2, 3, 4].map((r) => en(`quickMatch.home.leagueRank.${r}`)).sort(),
+  );
+  expect(await seatsOf(cards.nth(2)), "the final waits on both semi-finals").toEqual([
+    en("quickMatch.home.winnerOfSemi", { n: 1 }),
+    en("quickMatch.home.winnerOfSemi", { n: 2 }),
+  ]);
+  await expect(page.getByTestId("qm-played")).toHaveText(
+    playedWithCountdown(0, league + knockout, en("quickMatch.home.stagePart.split", { league, knockout })),
+  );
+  const tableFirst = await page.evaluate(() => {
+    const ko = document.querySelector('[data-testid="qm-knockout"]')!;
+    return (ko.compareDocumentPosition(document.querySelector('[data-testid="qm-standings"]')!) & Node.DOCUMENT_POSITION_PRECEDING) !== 0;
+  });
+  expect(tableFirst, "while the league is on, the table comes first").toBe(true);
+
+  // ---- The league, game by game on the pad. A second tab loads the home before the last game: it is stale after it ----
+  const atLast: { record?: LkRecord } = {};
+  let stale: Page | null = null;
+  for (let g = 1; g <= league; g++) {
+    await expect(page.getByTestId("qm-hero-kicker"), `game ${g}: the hero counts the league's matches (D8)`).toHaveText(
+      en("quickMatch.home.upNext", { n: g, total: league }),
+    );
+    if (g === league) {
+      stale = await page.context().newPage();
+      await stale.goto(home);
+      await expect(stale.locator('[data-testid="qm-match"][data-state="settled"]'), "the stale tab, as loaded").toHaveCount(league - 1);
+    }
+    const last = g === league;
+    await playNext(page, home, (h, a) => (typed(h) < typed(a) ? h : a), last ? async (game) => void (atLast.record = await lkRecord(game.fixtureId)) : undefined);
+  }
+  // The scoring hook filled the knockout inside the last game's write: read while the pad was still open, no home load since.
+  expect(atLast.record, "the record was read on the pad").toBeDefined();
+  const atFill = atLast.record!;
+  expect(atFill.confirmed, "one confirmed fill of the knockout").toBe(1);
+  expect(atFill.cut, "no tie, so no decision").toBeNull();
+  const semisInRecord = atFill.knockout.filter((f) => !f.isFinal);
+  expect(semisInRecord.map((f) => [f.home, f.away].sort()).sort(), "the record's semi-finals: 1st v 4th, 2nd v 3rd (the steer)").toEqual(
+    [[sides[0]!, sides[3]!].sort(), [sides[1]!, sides[2]!].sort()].sort(),
+  );
+
+  // ---- Filled: the table on screen, the semi-finals from it, the bracket above it, the hero on Semi-final 1 ----
+  const table = await tableRows(page);
+  expect(table.map((r) => r.name), "the table: the steer's order").toEqual(sides);
+  expect(table.every((r) => r.through), "all four went through").toBe(true);
+  const pairs = [
+    [table[0]!.name, table[3]!.name],
+    [table[1]!.name, table[2]!.name],
+  ];
+  const semiCards = [cards.nth(0), cards.nth(1)];
+  const onCards = await Promise.all(semiCards.map(async (c) => (await seatsOf(c)).sort()));
+  expect(onCards.sort(), "1st v 4th and 2nd v 3rd, from the table on screen (seat order not pinned, G2)").toEqual(pairs.map((p) => [...p].sort()).sort());
+  for (const card of semiCards) {
+    const names = await seatsOf(card);
+    const notes = (await card.getByTestId("qm-draw-note").allTextContents()).map((t) => t.trim());
+    expect(notes, "each seat says where it finished").toEqual(names.map((n) => en(`quickMatch.home.rankShort.${table.findIndex((r) => r.name === n) + 1}`)));
+  }
+  await expectKnockoutFirst(page, "filled");
+  await expect(ko.getByTestId("qm-knockout-caption"), "filled: no caption").toHaveCount(0);
+  await expect(page.getByTestId("qm-standings-title")).toHaveText(en("quickMatch.home.finalLeagueTable"));
+  await expect(page.getByTestId("qm-standings-caption")).toHaveText(en("quickMatch.home.wentThrough", { count: LK_THROUGH.semis }));
+  const semi1 = en("quickMatch.home.semiFinal", { n: 1 });
+  await expect(page.getByTestId("qm-hero-kicker")).toHaveText(en("quickMatch.home.upNextRound", { round: semi1 }));
+  await expect(nextCard(page).getByTestId("qm-draw-round"), "the next card says it is next (T7 m1)").toHaveText(
+    en("quickMatch.home.upNextRound", { round: semi1 }),
+  );
+  expect((await heroSides(page)).sort(), "the hero is the next card's match").toEqual((await seatsOf(nextCard(page))).sort());
+  await expect(page.getByTestId("qm-played")).toHaveText(playedWithCountdown(league, league + knockout, en("quickMatch.home.stagePart.knockoutOn")));
+  await expect(page.getByTestId("qm-add-match-open"), "the league is complete: no Add a match").toHaveCount(0);
+  // (5) Edit result after the fill: every league row is settled and its result has moved the match on, so none has a ⋯.
+  await expect(page.locator('[data-testid="qm-match"][data-state="settled"]')).toHaveCount(league);
+  await expect(page.getByTestId("qm-match").getByTestId("qm-row-menu"), "no ⋯ on a league row").toHaveCount(0);
+  await expect(page.getByTestId("qm-edit-result"), "no Edit result anywhere").toHaveCount(0);
+
+  // ---- (5) The stale tab still offers Edit result on a league row: it lands in the pad View-only, the result locked ----
+  const staleRow = stale!.locator('[data-testid="qm-match"][data-state="settled"]').first();
+  await openRowMenu(staleRow, "the stale tab");
+  const edit = staleRow.getByTestId("qm-edit-result");
+  await expect(edit).toHaveText(en("quickMatch.home.editResult"));
+  await edit.click();
+  await stale!.waitForURL(/\/score\/dl_[A-Za-z0-9_-]{43}$/, { timeout: LK_NAV_MS });
+  await expect(stale!.getByTestId("scan-view-only")).toHaveText(en("device.quickMatch.resultLocked"), { timeout: LK_NAV_MS });
+  await expect(stale!.locator('[data-role="pad-v3"] button[data-role="v3-scorebug-half"]'), "View-only: no halves to tap").toHaveCount(0);
+  await stale!.close();
+
+  // ---- The semi-finals on their cards: the lower-placed side wins each, so the final is 3rd v 4th ----
+  const upset = (h: string, a: string) => (typed(h) > typed(a) ? h : a);
+  const s1 = await playNext(page, home, upset);
+  const semi2 = en("quickMatch.home.semiFinal", { n: 2 });
+  await expect(page.getByTestId("qm-hero-kicker")).toHaveText(en("quickMatch.home.upNextRound", { round: semi2 }));
+  await expect(nextCard(page).getByTestId("qm-draw-round")).toHaveText(en("quickMatch.home.upNextRound", { round: semi2 }));
+  await expect(cardOf(page, s1.fixtureId).locator('[data-testid="qm-draw-seat"][data-winner="true"]')).toContainText(s1.winner);
+  await expect(cardOf(page, s1.fixtureId).getByTestId("qm-draw-seat-score"), "the winner's line carries the score").toHaveText(CHESS_WIN);
+  const s2 = await playNext(page, home, upset);
+  const final = en("bracket.round.final");
+  await expect(page.getByTestId("qm-hero-kicker")).toHaveText(en("quickMatch.home.upNextRound", { round: final }));
+  expect((await seatsOf(nextCard(page))).sort(), "the final: both semi-finals' winners").toEqual([s1.winner, s2.winner].sort());
+  expect([s1.winner, s2.winner].sort(), "the steer's upsets: 4th and 3rd").toEqual([table[3]!.name, table[2]!.name].sort());
+  const champion = table[2]!.name;
+  const f = await playNext(page, home, () => champion);
+
+  // ---- The champion: the final's winner, who they beat and by what; not top of the league, so no "too" ----
+  await expect(page.getByTestId("qm-champion-kicker")).toHaveText(en("quickMatch.home.champion"));
+  await expect(page.getByTestId("qm-champion-name")).toHaveText(champion);
+  await expect(page.getByTestId("qm-champion-beat"), "3rd in the league: no 'Top of the league too'").toHaveText(
+    en("quickMatch.home.championBeat", { loser: f.loser, score: CHESS_WIN }),
+  );
+  expect(champion, "the champion is not the table's leader (the steer's witness)").not.toBe(table[0]!.name);
+  await expect(page.getByTestId("qm-hero"), "nothing left to play").toHaveCount(0);
+  await expect(page.getByTestId("qm-winner"), "no league winner card: the final names the winner").toHaveCount(0);
+  await expect(page.getByTestId("qm-played")).toHaveText(en(`quickMatch.home.playedSaved.${EN_RULES.select(league + knockout)}`, { played: league + knockout, count: league + knockout }));
+  await atEachWidth(page, async (width) => {
+    await expect(page.getByTestId("qm-champion-name"), `${width}`).toHaveText(champion);
+    await expectKnockoutFirst(page, `${width}`);
+  });
+});
+
+/** Three sides, each pair twice (Twice), steered to a tie at 2nd: the first side wins all four of its games; the other two
+ *  split theirs (the first meeting to the side typed second, the next to the side typed third). Then they are level on every
+ *  chess round-robin step but the lot (points, direct encounter, wins, Sonneborn-Berger), straddling a cut of 2: "pick 1 of
+ *  2". The last game's record is read on the pad: nothing filled, nothing decided. */
+async function playToTieAtSecond(page: Page, home: string, sides: readonly [string, string, string]) {
+  const [top, b, c] = sides;
+  let meetings = 0;
+  const steer = (h: string, a: string) => {
+    if (h === top || a === top) return top;
+    meetings += 1;
+    return meetings === 1 ? b : c;
+  };
+  const games = 2 * 3;
+  const atLast: { record?: LkRecord } = {};
+  for (let g = 1; g <= games; g++) {
+    await playNext(page, home, steer, g === games ? async (game) => void (atLast.record = await lkRecord(game.fixtureId)) : undefined);
+  }
+  expect(meetings, "the two level sides met twice").toBe(2);
+  const open = atLast.record;
+  expect(open, "the record was read on the pad").toBeDefined();
+  expect([open!.cut, open!.confirmed, open!.knockout.flatMap((f) => [f.home, f.away])], "a tie at the cut: nothing decided, nothing filled").toEqual([
+    null,
+    0,
+    [null, null],
+  ]);
+  return open!;
+}
+
+/** The open question as the home asks it (§5, mockup §8): orange where the hero was, the tie named in the order typed, the
+ *  table's level rows marked "=", the knockout waiting for it, and no Add a match. */
+async function expectTieAtSecond(page: Page, sides: readonly [string, string, string], what: string) {
+  const [top, b, c] = sides;
+  await expect(page.getByTestId("qm-cut"), `${what}: the question`).toBeVisible();
+  await expect(page.getByTestId("qm-hero"), `${what}: no match is up next`).toHaveCount(0);
+  await expect(page.getByTestId("qm-cut-kicker")).toHaveText(en("quickMatch.cut.kicker.one", { count: 1 }));
+  await expect(page.getByTestId("qm-cut-title")).toHaveText(
+    en("quickMatch.cut.title", { place: en("quickMatch.home.rankShort.2"), names: enList([b, c]) }),
+  );
+  await expect(page.getByTestId("qm-cut-body")).toHaveText(en("quickMatch.cut.body"));
+  await expect(page.getByTestId("qm-knockout-caption")).toHaveText(en("quickMatch.home.knockoutWaiting"));
+  expect(await seatsOf(page.getByTestId("qm-draw-card")), `${what}: the final waits on 1st and the tie`).toEqual([
+    en("quickMatch.home.leagueRank.1"),
+    en("quickMatch.home.toDecide", { seat: en("quickMatch.home.leagueRank.2") }),
+  ]);
+  const rows = await tableRows(page);
+  expect(
+    rows.map((r) => [r.place, r.name, r.tag]),
+    `${what}: the leader, then the tie in the order typed, level and to decide (D9, never the lot's order)`,
+  ).toEqual([
+    ["1", top, ""],
+    ["=", b, en("quickMatch.home.levelToDecide")],
+    ["=", c, en("quickMatch.home.levelToDecide")],
+  ]);
+  await expect(page.getByTestId("qm-add-match-open"), `${what}: the league is complete`).toHaveCount(0);
+  await expectTappable(page.getByTestId("qm-cut-pick"), `${what}: Pick who goes through`);
+  await expectTappable(page.getByTestId("qm-cut-toss"), `${what}: Toss a coin`);
+  await expect(page.getByTestId("qm-cut-toss")).toHaveText(en("quickMatch.cut.toss"));
+  await expect(page.getByTestId("qm-cut-pick")).toHaveText(en("quickMatch.cut.pick"));
+}
+
+/** The stored lot's order inside the tie: the side a Toss sends through first (§11: the toss reveals the stored lot). */
+function lotOrder(record: LkRecord, tie: readonly string[]): string[] {
+  const order = record.leagueOrder.filter((n) => tie.includes(n));
+  expect([...order].sort(), "the stored table holds the whole tie").toEqual([...tie].sort());
+  return order;
+}
+
+test("Tie at the cut (plan 5 T8 (2)): Twice, 3 sides, League → Final, steered level at 2nd: the question shows; Toss fills the final with the stored lot's side before the home loads, the result line names it, a reload says the same; a second phone's stale Toss lands on 'Someone already decided' and the same names", async ({ guest: page, browser }) => {
+  const sides = ["Ines Duarte", "Mika Laine", "Oskar Lind"] as const;
+  test.setTimeout(6 * LK_GAME_MS + 12 * LK_NAV_MS);
+  const home = await createLeagueKnockout(page, `e2e lk toss ${TAG}`, sides, "final", 2);
+  const open = await playToTieAtSecond(page, home, sides);
+  await expectTieAtSecond(page, sides, "the tie");
+  // The side the lot already ranks ahead inside the tie: what a Toss must reveal (D5: no second draw).
+  const [tossed, other] = lotOrder(open, [sides[1], sides[2]]) as [string, string];
+
+  // A second phone holds the question as it is now.
+  const phone2Ctx = await anotherPhone(browser);
+  try {
+    const phone2 = await phone2Ctx.newPage();
+    await phone2.goto(home);
+    await expectTieAtSecond(phone2, sides, "the second phone");
+
+    // Toss: the decision and the fill are in the record before the page its 303 lands on is asked for.
+    const answered = await beforeLanding(page, `${home}/cut/toss`, () => lkRecord(open.knockout[0]!.id));
+    await page.getByTestId("qm-cut-toss").click();
+    const { status, seen } = await answered();
+    expect(status, "the toss answers with a redirect").toBe(303);
+    expect(seen.cut && { how: seen.cut.how, through: seen.cut.through, tie: [...seen.cut.tie].sort() }, "the toss's decision").toEqual({
+      how: "toss",
+      through: [tossed],
+      tie: [sides[1], sides[2]].sort(),
+    });
+    expect([seen.confirmed, [seen.knockout[0]!.home, seen.knockout[0]!.away].sort()], "filled by the toss route itself").toEqual([
+      1,
+      [sides[0], tossed].sort(),
+    ]);
+    await page.waitForURL((u) => u.pathname === home && u.search === "", { timeout: LK_NAV_MS });
+    const resultLines = [en("quickMatch.cut.tossResult", { names: tossed }), en("quickMatch.cut.tossBody")];
+    const expectTossed = async (p: Page, what: string) => {
+      await expect(p.getByTestId("qm-cut-result").locator("p"), `${what}: the toss's result`).toHaveText(resultLines);
+      await expect(p.getByTestId("qm-cut"), `${what}: the question is gone`).toHaveCount(0);
+      await expect(p.getByTestId("qm-hero-kicker"), what).toHaveText(en("quickMatch.home.upNextRound", { round: en("bracket.round.final") }));
+      const card = p.getByTestId("qm-draw-card");
+      expect((await seatsOf(card)).sort(), `${what}: the final`).toEqual([sides[0], tossed].sort());
+      const names = await seatsOf(card);
+      const notes = (await card.getByTestId("qm-draw-note").allTextContents()).map((t) => t.trim());
+      expect(notes, `${what}: 1st, and 2nd by lot`).toEqual(
+        names.map((n) => (n === sides[0] ? en("quickMatch.home.rankShort.1") : `${en("quickMatch.home.rankShort.2")} · ${en("quickMatch.home.byLotShort")}`)),
+      );
+      const rows = await tableRows(p);
+      expect(rows.map((r) => [r.name, r.tag, r.through]), `${what}: the lot's order, both marked decided by lot (D6)`).toEqual([
+        [sides[0], "", true],
+        [tossed, en("quickMatch.home.byLot"), true],
+        [other, en("quickMatch.home.byLot"), false],
+      ]);
+      await expectKnockoutFirst(p, what);
+    };
+    await expectTossed(page, "after the toss");
+    await page.reload();
+    await expectTossed(page, "reloaded");
+
+    // The second phone's Toss is stale: refused, its flash says someone decided, and it shows the same result.
+    const refused = phone2.waitForRequest((r) => {
+      const url = new URL(r.url());
+      return r.method() === "GET" && url.pathname === home && url.searchParams.get("e") === "QUICK_MATCH_ALREADY_DECIDED";
+    });
+    await phone2.getByTestId("qm-cut-toss").click();
+    expect((await refused).redirectedFrom()?.method(), "the stale toss's 303 landed on the refusal").toBe("POST");
+    const flash = phone2.getByTestId("qm-flash");
+    await expect(flash).toHaveText(en("quickMatch.flash.alreadyDecided"));
+    await expect(flash).toHaveAttribute("role", "alert");
+    await expectTossed(phone2, "the second phone");
+    const after = await lkRecord(open.knockout[0]!.id);
+    expect([after.cut?.how, after.cut?.through, after.confirmed], "the first answer stands, once").toEqual(["toss", [tossed], 1]);
+  } finally {
+    await phone2Ctx.close();
+  }
+});
+
+test("Pick (plan 5 T8 (3)): the same tie, the panel opened once the island runs: Send is disabled until one side is chosen and then names it; Back shuts the panel; Send fills the final with the side the lot had NOT ranked ahead, before the home loads; the table marks it picked; the final played, its winner is Champion and top of the league too", async ({ guest: page }) => {
+  const sides = ["Ines Duarte", "Mika Laine", "Oskar Lind"] as const;
+  test.setTimeout(7 * LK_GAME_MS + 10 * LK_NAV_MS);
+  const home = await createLeagueKnockout(page, `e2e lk pick ${TAG}`, sides, "final", 2);
+  const open = await playToTieAtSecond(page, home, sides);
+  await expectTieAtSecond(page, sides, "the tie");
+  // The pick a Toss would NOT make: the side the stored lot ranks behind, so a pick that merely followed the lot fails.
+  const [lotAhead, picked] = lotOrder(open, [sides[1], sides[2]]) as [string, string];
+
+  // The island is live once Send is disabled (the server's markup never disables it: the no-script path, T7).
+  const send = page.getByTestId("qm-cut-send");
+  await expect(send, "hydrated: Send waits for a choice").toBeDisabled({ timeout: LK_NAV_MS });
+  await page.getByTestId("qm-cut-pick").click();
+  await expect(page.getByTestId("qm-cut-pick-panel")).toHaveAttribute("open", "");
+  const question = page.getByTestId("qm-cut-question");
+  await expect(question).toHaveText(en("quickMatch.cut.pickQuestion.one", { count: 1 }));
+  await expect(question, "the focus moves to the question (T7 m7)").toBeFocused();
+  await expect(page.getByTestId("qm-cut-toss"), "the toss steps aside while the panel is open").toBeHidden();
+  const options = page.getByTestId("qm-cut-option");
+  await expect(options, "the tie's two sides, in the order typed").toHaveText([sides[1], sides[2]]);
+  await expect(options.locator("input"), "one place: radios").toHaveCount(2);
+  for (const input of await options.locator("input").all()) await expect(input).toHaveAttribute("type", "radio");
+  await expect(send).toBeDisabled();
+  await expect(send).toHaveText(en("quickMatch.cut.pick"));
+  for (let k = 0; k < 2; k++) await expectTappable(options.nth(k), `option ${k + 1}`);
+  const back = page.getByTestId("qm-cut-back");
+  await expectTappable(back, "Back");
+  await back.click();
+  await expect(page.getByTestId("qm-cut-pick-panel"), "Back shuts the panel").not.toHaveAttribute("open", "");
+  await expect(page.getByTestId("qm-cut-pick"), "and hands the focus back to Pick").toBeFocused();
+  await page.getByTestId("qm-cut-pick").click();
+  await options.filter({ hasText: picked }).click();
+  await expect(send, "one chosen of one place").toBeEnabled();
+  await expect(send).toHaveText(en("quickMatch.cut.send", { names: picked }));
+  await expectTappable(send, "Send");
+
+  const answered = await beforeLanding(page, `${home}/cut/pick`, () => lkRecord(open.knockout[0]!.id));
+  await send.click();
+  const { status, seen } = await answered();
+  expect(status).toBe(303);
+  expect([seen.cut?.how, seen.cut?.through], "the pick's decision").toEqual(["pick", [picked]]);
+  expect([seen.confirmed, [seen.knockout[0]!.home, seen.knockout[0]!.away].sort()], "filled by the pick route itself").toEqual([
+    1,
+    [sides[0], picked].sort(),
+  ]);
+  expect(picked, "the pick overrode the lot").not.toBe(lotAhead);
+  await page.waitForURL((u) => u.pathname === home && u.search === "", { timeout: LK_NAV_MS });
+  await expect(page.getByTestId("qm-cut-result").locator("p")).toHaveText([en("quickMatch.cut.pickResult", { names: picked })]);
+  const card = page.getByTestId("qm-draw-card");
+  expect((await seatsOf(card)).sort()).toEqual([sides[0], picked].sort());
+  const names = await seatsOf(card);
+  expect((await card.getByTestId("qm-draw-note").allTextContents()).map((t) => t.trim()), "picked, not by lot (D6)").toEqual(
+    names.map((n) => en(`quickMatch.home.rankShort.${n === sides[0] ? 1 : 2}`)),
+  );
+  const rows = await tableRows(page);
+  expect(rows.map((r) => [r.place, r.name, r.tag, r.through]), "the picked side first in the tie, marked picked; '=' for both").toEqual([
+    ["1", sides[0], "", true],
+    ["=", picked, en("quickMatch.home.picked"), true],
+    ["=", lotAhead, "", false],
+  ]);
+  await expectKnockoutFirst(page, "after the pick");
+
+  // The final: the league's leader wins it, so the champion tops the league too (the other polarity of (1)'s champion).
+  const f = await playNext(page, home, () => sides[0]);
+  expect(f.loser).toBe(picked);
+  await expect(page.getByTestId("qm-champion-name")).toHaveText(sides[0]);
+  await expect(page.getByTestId("qm-champion-beat")).toHaveText(
+    `${en("quickMatch.home.championBeat", { loser: picked, score: CHESS_WIN })} ${en("quickMatch.home.championTopToo")}`,
+  );
+  await expect(page.getByTestId("qm-cut-result"), "finished: the cut's answer has had its day").toHaveCount(0);
+});
+
+test("Every league match skipped (plan 5 T8 (4)): three level sides straddle a cut of 2 and no lot was drawn, so the home asks with Pick only; Send waits for exactly two; the pick fills the final before the home loads; a stale tab's Put back lands on 'The league has finished'", async ({ guest: page }) => {
+  test.setTimeout(14 * LK_NAV_MS);
+  const sides = ["Ines Duarte", "Mika Laine", "Oskar Lind"] as const;
+  const home = await createLeagueKnockout(page, `e2e lk skipped ${TAG}`, sides, "final", 1);
+  const league = 3;
+  let stale: Page | null = null;
+  let first: string | null = null;
+  for (let k = 1; k <= league; k++) {
+    const next = await nextMatch(page);
+    first ??= next.id;
+    await skipThroughSheet(page, next.row, en(k === league ? "quickMatch.skip.bodyLast" : "quickMatch.skip.body"), `skip ${k}`);
+    if (k === 1) {
+      // A second tab holds the home with one match Not played: its Put back is stale from the last skip on.
+      stale = await page.context().newPage();
+      await stale.goto(home);
+      await expect(rowOf(stale, first)).toHaveAttribute("data-state", "notPlayed");
+    }
+  }
+  // Nothing was played, so the three sides are level and the engine drew no lot (T4 ruling): the question, Pick only.
+  await expect(page.getByTestId("qm-cut")).toBeVisible();
+  await expect(page.getByTestId("qm-cut-kicker")).toHaveText(en("quickMatch.cut.kicker.other", { count: 2 }));
+  await expect(page.getByTestId("qm-cut-title")).toHaveText(
+    en("quickMatch.cut.titleMany.other", { place: en("quickMatch.home.rankShort.1"), sides: 3, count: 2 }),
+  );
+  await expect(page.getByTestId("qm-cut-toss"), "no lot was drawn: no Toss").toHaveCount(0);
+  await expect(page.getByTestId("qm-put-back"), "the league is done: no Put back").toHaveCount(0);
+  // M stays the whole match's (league + final, D8), the Not played part counted, then how M splits.
+  await expect(page.getByTestId("qm-played")).toHaveText(
+    [
+      en(`quickMatch.home.playedSkipped.${EN_RULES.select(league + 1)}`, {
+        played: 0,
+        count: league + 1,
+        skipped: enPlural("quickMatch.home.notPlayedPart", league),
+        days: QUICK_MATCH_EXPIRY_DAYS,
+      }),
+      en("quickMatch.home.stagePart.split", { league, knockout: 1 }),
+    ].join(" · "),
+  );
+
+  const send = page.getByTestId("qm-cut-send");
+  await expect(send, "hydrated: Send waits for a choice").toBeDisabled({ timeout: LK_NAV_MS });
+  await page.getByTestId("qm-cut-pick").click();
+  await expect(page.getByTestId("qm-cut-question")).toHaveText(en("quickMatch.cut.pickQuestion.other", { count: 2 }));
+  const options = page.getByTestId("qm-cut-option");
+  await expect(options, "all three, in the order typed").toHaveText([...sides]);
+  for (const input of await options.locator("input").all()) await expect(input, "two places: checkboxes").toHaveAttribute("type", "checkbox");
+  // Not the typing order's first two (the order the engine falls back to with no lot): the guests' own choice.
+  const chosen = [sides[0], sides[2]];
+  const tick = (name: string) => options.filter({ hasText: name }).click();
+  await tick(chosen[0]!);
+  await expect(send, "one of two places").toBeDisabled();
+  await tick(chosen[1]!);
+  await expect(send, "two of two").toBeEnabled();
+  await expect(send).toHaveText(en("quickMatch.cut.send", { names: enList(chosen) }));
+  await tick(sides[1]);
+  await expect(send, "three for two places").toBeDisabled();
+  await tick(sides[1]);
+  await expect(send, "two again").toBeEnabled();
+
+  const answered = await beforeLanding(page, `${home}/cut/pick`, () => lkRecord(first!));
+  await send.click();
+  const { status, seen } = await answered();
+  expect(status).toBe(303);
+  expect([seen.cut?.how, [...(seen.cut?.through ?? [])].sort()], "the pick's decision").toEqual(["pick", [...chosen].sort()]);
+  expect([seen.confirmed, [seen.knockout[0]!.home, seen.knockout[0]!.away].sort()], "filled by the pick route itself").toEqual([1, [...chosen].sort()]);
+  await page.waitForURL((u) => u.pathname === home && u.search === "", { timeout: LK_NAV_MS });
+  await expect(page.getByTestId("qm-cut-result").locator("p")).toHaveText([en("quickMatch.cut.pickResult", { names: enList(seen.cut!.through) })]);
+  expect((await seatsOf(page.getByTestId("qm-draw-card"))).sort()).toEqual([...chosen].sort());
+  await expect(page.getByTestId("qm-hero-kicker")).toHaveText(en("quickMatch.home.upNextRound", { round: en("bracket.round.final") }));
+
+  // The stale tab's Put back: refused, its flash says the league has finished, and nothing moved.
+  const staleRow = rowOf(stale!, first!);
+  await openRowMenu(staleRow, "the stale tab");
+  const refused = stale!.waitForRequest((r) => {
+    const url = new URL(r.url());
+    return r.method() === "GET" && url.pathname === home && url.searchParams.get("e") === "QUICK_MATCH_LEAGUE_FINISHED";
+  });
+  await staleRow.getByTestId("qm-put-back").click();
+  expect((await refused).redirectedFrom()?.method(), "the stale Put back's 303 landed on the refusal").toBe("POST");
+  await expect(stale!.getByTestId("qm-flash")).toHaveText(en("quickMatch.flash.leagueFinished"));
+  await expect(rowOf(stale!, first!)).toHaveAttribute("data-state", "notPlayed");
+  expect((await recordOf([first!])).get(first!)?.status, "the refused Put back wrote nothing").toBe("cancelled");
+  const after = await lkRecord(first!);
+  expect([after.confirmed, [after.knockout[0]!.home, after.knockout[0]!.away].sort()], "the final is as the pick filled it").toEqual([1, [...chosen].sort()]);
+  await stale!.close();
 });

@@ -4,9 +4,12 @@
 //
 // Everything it shows arrives as props from the server page (`app/[lang]/(marketing)/play/page.tsx`): the offer with its
 // names already resolved, the copy, and the whole preview table (`quickMatchPreviewTable`, pre-flight D1), so the match
-// count is a lookup, never a fetch that can land stale. A quick match is a league (owner 2026-11-12, "take out": League
-// + Knockout comes later), so the screen has no format control at all, and posts `format=league`. Server modules are
-// reached by `import type` only: eslint.config.mjs refuses a value import of @/server/** in src/components/quick-match/**.
+// count is a lookup, never a fetch that can land stale. The format is a stacked list of three whole choices (plan 5 Task 6;
+// spec 2026-11-12-quick-match-league-knockout §3, §12): League | League → Final (top 2) | League → Semi-finals → Final (top 4),
+// one radio named `shape` that the create route maps to `format` + `qualifiers` (lib/quick-match-shape.ts). All three rows are
+// always listed, one the sides or the rules cannot play shown disabled with its reason (owner 2026-11-14). A plain Knockout
+// is not offered (owner 2026-11-12). Server modules are reached by `import type` only: eslint.config.mjs refuses a value
+// import of @/server/** in src/components/quick-match/**.
 //
 // The form is a real `<form method="post" action="/api/quick-match">`, so it works before the script loads. Once it
 // runs, a submit is a fetch of the same fields that follows the route's 303 (ledger "CARRY to T4", decision log
@@ -18,7 +21,16 @@
 // widget in the form (`TurnstileWidget`, invisible unless Cloudflare needs a tap), and the enhanced submit sends its token in
 // the `cf-turnstile-response` header through `withTurnstile`, which resets the spent token after. A post without the script
 // carries no token, so the route refuses it with QUICK_MATCH_TURNSTILE_FAILED, which the page shows as its own line.
-import { useEffect, useRef, useState, useSyncExternalStore, type FormEvent } from "react";
+import {
+  Fragment,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type FormEvent,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import { Pencil, X } from "lucide-react";
 import type { EntrantKind } from "@seazn/engine/sport";
 import type { QuickMatchPreviewTable } from "@/server/usecases/quick-match-preview";
@@ -34,8 +46,18 @@ import {
   QUICK_MATCH_MIN_SIDES,
   QUICK_MATCH_NAME_MAX,
   QUICK_MATCH_NON_BLANK_PATTERN,
+  QUICK_MATCH_SEMIS_MIN_SIDES,
   QUICK_MATCH_SIDE_NAME_MAX,
 } from "@/lib/quick-match-constants";
+import {
+  effectiveShape,
+  minSidesOf,
+  qualifiersOf,
+  shapesOffered,
+  shapeToFormat,
+  type OfferedShape,
+  type SetupShape,
+} from "@/lib/quick-match-shape";
 import { routes } from "@/lib/routes";
 import { withTurnstile } from "@/lib/turnstile-client";
 import { useHydrated } from "@/lib/use-client-snapshot";
@@ -59,6 +81,8 @@ export interface SetupSport {
 export interface SetupVariant {
   key: string;
   name: string;
+  /** C23 (`offerFor`): a knockout of these rules can never end level, so League + Knockout may be offered on them. */
+  knockoutAllowed: boolean;
 }
 
 export interface SetupFormProps {
@@ -77,9 +101,17 @@ export interface SetupFormProps {
 
 // ---- the pure rules (exported for the tests) ----------------------------------------------------------------------
 
-/** The Start button's count: one lookup in the server's table. `undefined` outside it. */
-export function matchCountOf(table: QuickMatchPreviewTable, sides: number, plays: number): number | undefined {
-  return table[`league:${sides}:${plays}`]?.matchCount;
+/** The Start button's count: one lookup in the server's table, league + knockout for a League + Knockout (spec §12).
+ *  `undefined` outside it. */
+export function matchCountOf(
+  table: QuickMatchPreviewTable,
+  sides: number,
+  plays: number,
+  shape: SetupShape,
+): number | undefined {
+  const { format, qualifiers } = shapeToFormat(shape);
+  if (format === "league") return table[`league:${sides}:${plays}`]?.matchCount;
+  return table[`league_knockout:${sides}:${plays}:${qualifiers}`]?.matchCount;
 }
 
 /** The copy key for a refusal code, from T3's table; every other code (CREATE_FAILED, a crafted `?e=`) is generic. */
@@ -90,6 +122,8 @@ const ERROR_KEYS: Readonly<Record<string, string>> = {
   [QUICK_MATCH_ERRORS.KIND_NOT_OFFERED]: "quickMatch.errors.kindNotOffered",
   [QUICK_MATCH_ERRORS.FORMAT_NOT_OFFERED]: "quickMatch.errors.formatNotOffered",
   [QUICK_MATCH_ERRORS.EMAIL_INVALID]: "quickMatch.errors.emailInvalid",
+  // Semi-finals posted with fewer than four sides: an old tab, a crafted post (plan 5 T1 review C1). Reads `{min}`.
+  [QUICK_MATCH_ERRORS.SEMIS_TOO_FEW_SIDES]: "quickMatch.errors.semisTooFewSides",
   // #1136's shared sentence (reload, content blocker), as every guarded form shows a refused bot check (review m2).
   [QUICK_MATCH_ERRORS.TURNSTILE_FAILED]: "turnstile.error",
 };
@@ -120,14 +154,16 @@ export function submitOutcome(res: { url: string; status: number }): SubmitOutco
   return { kind: "refused", code: QUICK_MATCH_ERRORS.CREATE_FAILED };
 }
 
-/** The create's fields, exactly the nine `CreateQuickMatch` takes (C3); `sides` repeated in typed order. The format is
- *  always a league (owner 2026-11-12); a blank email is posted blank and the route maps it to none (B4e). */
+/** The create's fields, exactly the nine the form posts without its script (C3); `sides` repeated in typed order. The format
+ *  goes as the radio's own word, `shape`, which the route maps to `format` + `qualifiers` (plan 5 D1), so the enhanced post
+ *  and the plain one are one contract; a blank email is posted blank and the route maps it to none (B4e). */
 export function setupBody(input: {
   name: string;
   sport_key: string;
   variant_key: string;
   kind: EntrantKind;
   sides: readonly string[];
+  shape: SetupShape;
   plays: number;
   email: string;
   locale: Locale;
@@ -137,7 +173,7 @@ export function setupBody(input: {
   body.append("sport_key", input.sport_key);
   body.append("variant_key", input.variant_key);
   body.append("kind", input.kind);
-  body.append("format", "league");
+  body.append("shape", input.shape);
   for (const side of input.sides) body.append("sides", side);
   body.append("plays", String(input.plays));
   body.append("email", input.email.trim());
@@ -175,6 +211,104 @@ interface SideRow {
   name: string;
 }
 
+// ---- the Format list (plan 5 Task 6; mockup qmd13a01 §6, layout only, in the house night theme) ----------------------
+//
+// Each choice is a full-width row: the whole row is the radio's label (a thumb taps anywhere on it), with a dot, the title
+// and its one-line hint. The radio is visually hidden, so the checked look is the browser's own (`has-checked:` on the row,
+// `peer-checked:` on the dot) and holds before the script runs; React's `checked` only seeds it. A disabled row (owner
+// 2026-11-14: League → Final below three sides, Semi-finals below four, either knockout on rules that never play one) stays in
+// the list, dashed, with its reason under the hint, so a guest sees every format there is. Plain functions, not components, so the
+// island's harness sees every input they render.
+
+const SHAPE_ROW = "flex min-h-11 items-start gap-3 rounded-xl border px-3.5 py-3 transition motion-reduce:transition-none";
+const SHAPE_ROW_ON =
+  "cursor-pointer border-[#3b2a6e] bg-[#241650] hover:border-[#5b4a9e] has-checked:border-[var(--mk-lime)] has-checked:bg-[rgb(163_230_53/0.08)] has-focus-visible:outline has-focus-visible:outline-2 has-focus-visible:outline-offset-2 has-focus-visible:outline-[var(--mk-lime)]";
+const SHAPE_ROW_OFF = "cursor-not-allowed border-dashed border-[#3b2a6e] bg-transparent";
+const SHAPE_DOT =
+  "mt-0.5 h-[18px] w-[18px] shrink-0 rounded-full border-[1.5px] border-[#8d7fc0] transition-[border-width,border-color] motion-reduce:transition-none peer-checked:border-[5px] peer-checked:border-[var(--mk-lime)] peer-disabled:opacity-40";
+
+/**
+ * A title as the screen shows it and as a screen reader says it (plan 5 T1 review C5): the owner's "League → Final" keeps its
+ * arrow on screen, but assistive tech would read the arrow as "right arrow". So the radio's NAME is the title's words joined
+ * by commas (`spokenShapeTitle`, its own `aria-label`: "League, Final"), and in the visible title, which browse mode also
+ * reads, the arrow is hidden with a visually hidden comma in its place. Every word of the visible title stays in the name, in
+ * order (WCAG 2.5.3). An `aria-label`, not `aria-labelledby` on the title: Chromium computes a labelledby name with the hidden
+ * comma as "League , Final" (an out-of-flow span gets spaces around it), while an aria-label is reported exactly.
+ */
+function spokenShapeTitle(text: string): string {
+  return text
+    .split("→")
+    .map((part) => part.trim())
+    .filter((part) => part !== "")
+    .join(", ");
+}
+function shapeTitle(text: string): ReactNode {
+  return text.split("→").map((part, k) => (
+    <Fragment key={k}>
+      {k > 0 ? (
+        <>
+          <span aria-hidden> → </span>
+          <span className="sr-only">, </span>
+        </>
+      ) : null}
+      {part.trim()}
+    </Fragment>
+  ));
+}
+
+function shapeRow({
+  row,
+  checked,
+  onChoose,
+  msg,
+}: {
+  row: OfferedShape;
+  checked: boolean;
+  onChoose: (shape: SetupShape) => void;
+  msg: Msg;
+}): ReactElement {
+  const id = `qm-shape-${row.shape}`;
+  const q = qualifiersOf(row.shape);
+  const title = msg(`quickMatch.setup.shape.${row.shape}`);
+  // The name is the title alone; the hint (and a disabled row's reason) is the description, heard after the role.
+  const describedBy = row.reason === null ? `${id}-hint` : `${id}-hint ${id}-why`;
+  return (
+    <label key={row.shape} className={`${SHAPE_ROW} ${row.enabled ? SHAPE_ROW_ON : SHAPE_ROW_OFF}`}>
+      <input
+        type="radio"
+        name="shape"
+        value={row.shape}
+        checked={checked}
+        disabled={!row.enabled}
+        onChange={() => onChoose(row.shape)}
+        aria-label={spokenShapeTitle(title)}
+        aria-describedby={describedBy}
+        className="peer sr-only"
+      />
+      <span aria-hidden className={SHAPE_DOT} />
+      <span className="min-w-0 flex-1">
+        <span
+          id={`${id}-title`}
+          className={`block break-words text-[15px] font-semibold leading-snug ${row.enabled ? "text-[var(--mk-cream)]" : "text-[#8d7fc0]"}`}
+        >
+          {shapeTitle(title)}
+        </span>
+        <span
+          id={`${id}-hint`}
+          className={`mt-0.5 block text-[13px] leading-snug ${row.enabled ? "text-[#b7aede]" : "text-[#8d7fc0]"}`}
+        >
+          {msg(`quickMatch.setup.shape.${row.shape}Hint`, q === null ? undefined : { count: q })}
+        </span>
+        {row.reason !== null ? (
+          <span id={`${id}-why`} className="mt-1 block text-[13px] font-medium leading-snug text-[#d9d2f2]">
+            {msg(row.reason, { min: minSidesOf(row.shape) })}
+          </span>
+        ) : null}
+      </span>
+    </label>
+  );
+}
+
 export function QuickMatchSetupForm({ lang, sports, table, copy, initialError, initialSport }: SetupFormProps) {
   const msg: Msg = (key, vars) => interpolate(copy[key] ?? key, vars);
   const count = (key: string, n: number, vars?: Record<string, string | number>) => plural(copy, key, n, lang, vars);
@@ -194,6 +328,8 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError, i
     { id: 1, name: "" },
   ]);
   const [plays, setPlays] = useState(1);
+  /** The guest's own pick. What shows and posts is `shape` below: this one, unless the list no longer offers it. */
+  const [chosenShape, setChosenShape] = useState<SetupShape>("league");
   /** null: the name follows the suggestion; a string once the guest has typed one (B4h). */
   const [typedName, setTypedName] = useState<string | null>(null);
   const [email, setEmail] = useState("");
@@ -224,7 +360,9 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError, i
   const suggestion = date === null ? sport.name : msg("quickMatch.setup.suggestedName", { sport: sport.name, date });
   const name = typedName ?? suggestion;
 
-  const matches = matchCountOf(table, rows.length, plays);
+  const shapes = shapesOffered(rows.length, variant.knockoutAllowed);
+  const shape = effectiveShape(chosenShape, shapes);
+  const matches = matchCountOf(table, rows.length, plays, shape);
   const canStart = !submitting && name.trim() !== "" && rows.every((r) => r.name.trim() !== "");
 
   function chooseSport(key: string) {
@@ -281,6 +419,7 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError, i
             variant_key: variant.key,
             kind,
             sides: rows.map((r) => r.name),
+            shape,
             plays,
             email,
             locale: lang,
@@ -305,7 +444,9 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError, i
   }
 
   const errorLine =
-    error === null ? null : msg(setupErrorKey(error), { max: QUICK_MATCH_MAX_ALIVE_PER_VISITOR });
+    error === null
+      ? null
+      : msg(setupErrorKey(error), { max: QUICK_MATCH_MAX_ALIVE_PER_VISITOR, min: QUICK_MATCH_SEMIS_MIN_SIDES });
 
   return (
     <form
@@ -455,8 +596,13 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError, i
         </div>
       </div>
 
-      {/* A league, always (owner 2026-11-12): no format control, so nothing to choose; the post still names it. */}
-      <input type="hidden" name="format" value="league" />
+      <fieldset role="radiogroup" className="mt-6">
+        <legend className={LABEL}>{msg("quickMatch.setup.format")}</legend>
+        <div className="mt-1.5 flex flex-col gap-2">
+          {shapes.map((row) => shapeRow({ row, checked: row.shape === shape, onChoose: setChosenShape, msg }))}
+        </div>
+      </fieldset>
+
       <fieldset className="mt-5">
         <legend className={LABEL}>{msg("quickMatch.setup.plays")}</legend>
         <div className={`${SEG} mt-1.5`}>
@@ -474,9 +620,6 @@ export function QuickMatchSetupForm({ lang, sports, table, copy, initialError, i
             </label>
           ))}
         </div>
-        <p className={HELP} data-testid="qm-league-help">
-          {msg("quickMatch.setup.leagueHelp")}
-        </p>
       </fieldset>
 
       <label className="mt-6 block">

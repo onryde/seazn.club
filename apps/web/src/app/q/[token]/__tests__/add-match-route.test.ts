@@ -45,7 +45,8 @@ import { addFixture } from "@/server/usecases/stages";
 import { type CreatedQuickMatch } from "@/server/usecases/quick-match-create";
 import { createQuickMatchAnyFormat } from "@/server/usecases/__tests__/_quick-match-knockout";
 import { hardDeleteQuickMatchCompetition } from "@/server/usecases/quick-match-delete";
-import { readQuickMatchHome } from "@/server/usecases/quick-match-home";
+import { readQuickMatchHome, resolveQuickMatchToken } from "@/server/usecases/quick-match-home";
+import { skipQuickMatchFixture } from "@/server/usecases/quick-match-skip";
 import { offerFor } from "@/server/usecases/quick-match-sports";
 import { hashVisitorKey, mintVisitorKey } from "@/server/usecases/quick-match-tokens";
 import { scoreEvent } from "@/server/usecases/scoring";
@@ -387,6 +388,34 @@ describe.skipIf(!HAS_DB)("a refused add lands back on the home with ?e=, which p
     expect(checked).toBe(3);
     expect(flashOf(await homeAt(`/q/${cup.token}?e=${QUICK_MATCH_ERRORS.LEAGUE_ONLY}`))).toBe(FLASH.leagueOnly);
     expect(await fixturesOf(cup.competitionId)).toEqual(before);
+    expect(addSpy).not.toHaveBeenCalled();
+    expect(reported(), "a refusal, not a fault").toEqual([]);
+  });
+
+  it("a League + Knockout whose league is done (plan 5 D3, P15): LEAGUE_COMPLETE, nothing added, never a fault; while it runs, the pair lands on the LEAGUE stage", async () => {
+    // Badminton as the rest of this file; the home it lands on is not rendered here (a League + Knockout's home read is plan
+    // 5 T5's, and its flash line T7's): the code in the Location is this route's whole answer.
+    const out = await create(league({ format: "league_knockout", qualifiers: 2, sides: SIDES.slice(0, 3) }));
+    const row = await resolveQuickMatchToken(out.token);
+    if (!row) throw new Error("precondition: the League + Knockout resolves");
+    const [a, b] = await sidesOf(out.competitionId);
+    const [leagueStage] = await sql<{ id: string }[]>`
+      select id from stages where division_id = ${out.divisionId} and kind = 'league'`;
+    await addedOn(await add(out.token, pick(a!.id, b!.id)), out.token);
+    const [added] = await adhocOf(out.competitionId);
+    const [where] = await sql<{ stage_id: string }[]>`select stage_id from fixtures where id = ${added!.id}`;
+    expect(where!.stage_id, "an extra league match").toBe(leagueStage!.id);
+
+    let skipped = 0;
+    for (const f of await sql<{ id: string }[]>`select id from fixtures where stage_id = ${leagueStage!.id}`) {
+      await skipQuickMatchFixture(row, f.id);
+      skipped++;
+    }
+    expect(skipped, "every league match: a round robin of 3 is 3·2/2, and the extra one").toBe(4);
+    const before = await fixturesOf(out.competitionId);
+    addSpy.mockClear();
+    expect(await refusedWith(await add(out.token, pick(a!.id, b!.id)), out.token)).toBe(QUICK_MATCH_ERRORS.LEAGUE_COMPLETE);
+    expect(await fixturesOf(out.competitionId)).toEqual(before);
     expect(addSpy).not.toHaveBeenCalled();
     expect(reported(), "a refusal, not a fault").toEqual([]);
   });
@@ -753,6 +782,7 @@ describe.skipIf(!HAS_DB)("every answer", () => {
         QUICK_MATCH_ERRORS.LEAGUE_ONLY,
         QUICK_MATCH_ERRORS.NOT_FOUND,
         QUICK_MATCH_ERRORS.ADHOC_LIMIT,
+        QUICK_MATCH_ERRORS.LEAGUE_COMPLETE,
         QUICK_MATCH_ERRORS.ACTION_FAILED,
       ].sort(),
     );

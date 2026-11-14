@@ -121,6 +121,35 @@ describe("the /me row's line (plan 4 Task 4)", () => {
     expect(metaLine(item({ format: "knockout", played: 1, notPlayed: 0, total: 1 }), t, p)).toBe("Knockout · 1 of 1 match played");
   });
 
+  it("a League + Knockout says its own format (plan 5 T6), with the full count of league + knockout matches", () => {
+    // Spec §12: M counts league + knockout. 3 sides once + a final = 3 + 1.
+    expect(metaLine(item({ format: "league_knockout", played: 3, notPlayed: 0, total: 4 }), t, p)).toBe(
+      "League + Knockout · 3 of 4 matches played",
+    );
+  });
+
+  it("every format a row can hold has its own word in all four languages, never the raw key (3 formats × 4 locales)", () => {
+    // Typed: the stored formats (V506 + V517's check), never read from the list's own map.
+    const FORMATS = ["league", "knockout", "league_knockout"] as const;
+    let checked = 0;
+    for (const dict of [en, es, fr, nl] as Record<string, string>[]) {
+      const tl = (key: string) => dict[key] ?? key;
+      const pl = (key: string, count: number, vars?: Record<string, string | number>) => plural(dict, key, count, "en", vars);
+      const words = new Set<string>();
+      for (const format of FORMATS) {
+        const word = dict[`quickMatch.format.${format}`];
+        expect(word, format).toBeTypeOf("string");
+        const line = metaLine(item({ format, played: 1, notPlayed: 0, total: 4 }), tl, pl);
+        expect(line.startsWith(`${word} · `), `${format}: ${line}`).toBe(true);
+        expect(line).not.toContain("quickMatch.");
+        words.add(word!);
+        checked++;
+      }
+      expect(words.size, "three formats, three different words").toBe(3);
+    }
+    expect(checked).toBe(12);
+  });
+
   it("every line has its keys in all four languages, the Not played part a {count} plural", () => {
     let checked = 0;
     for (const dict of [en, es, fr, nl] as Record<string, string>[]) {

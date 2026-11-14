@@ -4,13 +4,24 @@ import { fileURLToPath } from "node:url";
 import { expectNoHorizontalScroll, loginUi, TAG, withDb } from "./helpers";
 import { consentedAnonymousState } from "./scorepad-a11y-kit";
 import { HOLD_MS } from "../src/components/v2/scorepad/queue";
-import { QUICK_MATCH_EXPIRY_DAYS, QUICK_MATCH_MAX_SIDES } from "../src/lib/quick-match-constants";
+import {
+  QUICK_MATCH_EXPIRY_DAYS,
+  QUICK_MATCH_KNOCKOUT_MIN_SIDES,
+  QUICK_MATCH_MAX_PLAYS,
+  QUICK_MATCH_MAX_SIDES,
+  QUICK_MATCH_QUALIFIERS,
+  QUICK_MATCH_SEMIS_MIN_SIDES,
+} from "../src/lib/quick-match-constants";
 
 // Quick match plan 2 (spec docs/superpowers/specs/2026-11-03-quick-match-design.md §5): the guest's surfaces in a real
 // browser, at 1280 (the `parallel` project). Task 4 writes the setup screen's cases; Task 10 extends this file with the
 // league flow (setup → home → Score → a rally → back) and the URL forms, and adds the seven-width case to mobile.spec.ts.
-// A quick match is a league (owner 2026-11-12, "take out": League + Knockout comes later), so the setup screen offers no
-// format at any number of sides, and a crafted knockout post is refused (the case after "a refused create").
+// Plan 5 (League + Knockout, docs/superpowers/plans/2026-11-13-quick-match-5-league-knockout.md Task 8; spec
+// docs/superpowers/specs/2026-11-12-quick-match-league-knockout-design.md §3, §12): the setup screen's Format is a stacked list
+// of three whole choices, League | League → Final | League → Semi-finals → Final, posted as ONE radio, `shape`. All three are
+// always listed (owner 2026-11-14): two sides show both knockout rows disabled, each with its reason; three show Semi-finals
+// disabled with its reason; four or more can pick all three.
+// A crafted plain knockout, a final of two sides and semi-finals of three are refused (the cases after "a refused create").
 //
 // What the island's unit tests cannot see, and these do: the real form post and its 303 followed by the browser's own
 // fetch (the visitor cookie set on a redirect, `res.url`), hydration (the suggested name dated in the BROWSER's zone),
@@ -59,25 +70,96 @@ async function openSetup(page: Page) {
   await choice(page, "Badminton").click();
 }
 
-/** No format to pick (owner 2026-11-12, League only): neither format's words name a radio in the form, and no draw is
- *  previewed. Returns how many formats it checked (anti-vacuity: never zero). */
-async function expectNoFormatChoice(page: Page, why: string): Promise<number> {
-  let checked = 0;
-  for (const format of ["league", "knockout"] as const) {
-    await expect(form(page).getByRole("radio", { name: ui(`quickMatch.format.${format}`), exact: true }), `${why}: no ${format} to pick`).toHaveCount(0);
-    checked += 1;
+// ── The Format list (plan 5 D1, spec §3, §12) ───────────────────────────────────────────────────────────────────────
+//
+// Every expected row, hint, reason and count comes from the spec's own rules and the en dictionary, never from the page's
+// helpers (lib/quick-match-shape.ts is the code under test): every row always listed (owner 2026-11-14); League always
+// pickable; League → Final from QUICK_MATCH_KNOCKOUT_MIN_SIDES (two sides would replay the league as its final) and
+// Semi-finals from QUICK_MATCH_SEMIS_MIN_SIDES, each shown disabled with "Needs {min} or more sides" below its minimum.
+// League → Final sends the top 2, Semi-finals the top 4 (spec §12; QUICK_MATCH_QUALIFIERS holds both).
+
+type Shape = "league" | "final" | "semis";
+/** How many go through for each knockout row (spec §12: "League → Final (top 2) | League → Semi-finals → Final (top 4)"). */
+const THROUGH = { final: 2, semis: 4 } as const;
+/** The radio's name as assistive tech reads it (plan 5 T1 review C5): the title's words in order, each "→" read as a comma
+ *  ("League, Semi-finals, Final"), never as "right arrow". */
+const spokenShape = (shape: Shape) =>
+  mk(`quickMatch.setup.shape.${shape}`)
+    .split("→")
+    .map((w) => w.trim())
+    .filter((w) => w !== "")
+    .join(", ");
+/** The whole row a thumb taps: the radio's label. */
+const shapeRow = (page: Page, shape: Shape) => form(page).locator(`label:has(input[name="shape"][value="${shape}"])`);
+const shapeRadio = (page: Page, shape: Shape) => form(page).getByRole("radio", { name: spokenShape(shape), exact: true });
+/** The rulebook's match count (spec §12, mockup qmd13a01 §6): the league's round robin, n(n-1)/2 a pass and `plays` passes,
+ *  then for a knockout a single bracket of the sides going through, which plays one fewer than it seats (no 3rd-place match). */
+const matchesOf = (sides: number, plays: number, shape: Shape) =>
+  ((sides * (sides - 1)) / 2) * plays + (shape === "league" ? 0 : THROUGH[shape] - 1);
+
+/** The Format list the spec offers at `sides`, with `checked` the choice that posts and counts: all three rows in order
+ *  (League, Final, Semi-finals; owner 2026-11-14: never hidden), each radio by its spoken name, enabled or not, its hint, and a
+ *  disabled row's reason under it. Returns how many rows it checked (anti-vacuity: never zero). */
+async function expectFormatList(page: Page, sides: number, checked: Shape, why: string): Promise<number> {
+  // The rows a badminton guest sees (its rules may play a knockout): a knockout row below its minimum says how many it needs.
+  const rows: { shape: Shape; needs: number | null }[] = [
+    { shape: "league", needs: null },
+    { shape: "final", needs: sides < QUICK_MATCH_KNOCKOUT_MIN_SIDES ? QUICK_MATCH_KNOCKOUT_MIN_SIDES : null },
+    { shape: "semis", needs: sides < QUICK_MATCH_SEMIS_MIN_SIDES ? QUICK_MATCH_SEMIS_MIN_SIDES : null },
+  ];
+  const radios = form(page).locator('input[type="radio"][name="shape"]');
+  await expect(radios, `${why}: the Format rows`).toHaveCount(rows.length);
+  expect(await radios.evaluateAll((els) => els.map((e) => (e as HTMLInputElement).value)), `${why}: in the list's order`).toEqual(
+    rows.map((r) => r.shape),
+  );
+  const reasonKey = { final: "quickMatch.setup.shape.finalNeeds", semis: "quickMatch.setup.shape.semisNeeds" } as const;
+  let seen = 0;
+  for (const { shape, needs } of rows) {
+    const radio = shapeRadio(page, shape);
+    await expect(radio, `${why}: ${shape} is named by its words`).toHaveCount(1);
+    if (needs === null) await expect(radio, `${why}: ${shape} can be picked`).toBeEnabled();
+    else await expect(radio, `${why}: ${shape} is shown but cannot be picked`).toBeDisabled();
+    if (shape === checked) await expect(radio, `${why}: ${shape} is the choice`).toBeChecked();
+    else await expect(radio, `${why}: ${shape} is not the choice`).not.toBeChecked();
+    const hint = shape === "league" ? mk("quickMatch.setup.shape.leagueHint") : mk(`quickMatch.setup.shape.${shape}Hint`, { count: THROUGH[shape] });
+    await expect(shapeRow(page, shape), `${why}: ${shape}'s hint`).toContainText(hint);
+    if (shape !== "league") {
+      const reason = mk(reasonKey[shape], { min: shape === "final" ? QUICK_MATCH_KNOCKOUT_MIN_SIDES : QUICK_MATCH_SEMIS_MIN_SIDES });
+      if (needs === null) await expect(shapeRow(page, shape).getByText(reason, { exact: true }), `${why}: ${shape} has no reason`).toHaveCount(0);
+      else {
+        await expect(shapeRow(page, shape).getByText(reason, { exact: true }), `${why}: ${shape}'s reason`).toBeVisible();
+        // The reason is heard with the hint (aria-describedby), as the Semi-finals row always was.
+        await expect(radio, `${why}: ${shape}'s description`).toHaveAccessibleDescription(`${hint} ${reason}`);
+      }
+    }
+    seen += 1;
   }
-  await expect(page.getByTestId("qm-draw"), `${why}: no draw`).toHaveCount(0);
-  expect(checked, `${why}: formats checked`).toBe(2);
-  return checked;
+  expect(seen, `${why}: rows checked`).toBe(rows.length);
+  return seen;
 }
 
-test("setup (C16, C17): two sides and no format to pick; Start waits for both names and counts one match; no sideways scroll", async ({ guest: page }) => {
+/** A Format row as a thumb meets it: 44px tall, and a tap at its centre lands on the row (`boundingBox()` measures paint, so
+ *  the hit is read with `elementFromPoint`, scrolled to the screen's middle first, clear of the docked Start bar). */
+async function expectRowTappable(row: ReturnType<Page["locator"]>, what: string) {
+  const seen = await row.evaluate((el) => {
+    el.scrollIntoView({ block: "center" });
+    const r = el.getBoundingClientRect();
+    const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return { height: r.height, hit: top !== null && (top === el || el.contains(top)) };
+  });
+  expect(seen.height, `${what}: 44px or more`).toBeGreaterThanOrEqual(44);
+  expect(seen.hit, `${what}: the tap lands on it`).toBe(true);
+}
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+test("setup (C16, C17; plan 5; owner 2026-11-14): two sides list all three formats, League chosen, both knockouts disabled with their reasons; Start waits for both names and counts one match; no sideways scroll", async ({ guest: page }) => {
   await openSetup(page);
   await expect(side(page, 1)).toBeVisible();
   await expect(side(page, 2)).toBeVisible();
   await expect(side(page, 3)).toHaveCount(0);
-  await expectNoFormatChoice(page, "two sides");
+  expect(await expectFormatList(page, 2, "league", "two sides")).toBe(3);
+  await expect(page.getByTestId("qm-draw"), "no draw is previewed").toHaveCount(0);
   await expect(page.getByText("Each pair plays")).toBeVisible();
   await expect(start(page)).toBeDisabled();
   await side(page, 1).fill("Ravi & Sam");
@@ -103,7 +185,7 @@ test("setup (B4h): after hydration the name is the sport and the browser's own d
   await expect(name).toHaveValue("Friday night");
 });
 
-test("setup (owner 2026-11-12, League only): at 3 to 6 sides there is no Knockout or League to pick, the league's help is on screen, and Start counts the round robin", async ({ guest: page }) => {
+test("setup (plan 5): League stays the choice at 3 to 6 sides, the Format list grows with the sides, and Start counts the round robin", async ({ guest: page }) => {
   await openSetup(page);
   const names = ["Ravi & Sam", "Priya & Tom", "Lee & Ana", "Jo & Max", "Kim & Raj", "Ana & Leo"];
   await side(page, 1).fill(names[0]!);
@@ -112,12 +194,11 @@ test("setup (owner 2026-11-12, League only): at 3 to 6 sides there is no Knockou
   for (let n = 3; n <= QUICK_MATCH_MAX_SIDES; n++) {
     await form(page).getByRole("button", { name: mk("quickMatch.setup.addSide") }).click();
     await side(page, n).fill(names[n - 1]!);
-    await expectNoFormatChoice(page, `${n} sides`);
-    await expect(form(page).getByTestId("qm-league-help"), `${n} sides`).toHaveText(mk("quickMatch.setup.leagueHelp"));
+    // Nobody picked a knockout: League stays the choice whatever the list grows to.
+    await expectFormatList(page, n, "league", `${n} sides`);
     await expect(form(page).getByText(mk("quickMatch.setup.plays"), { exact: true }), `${n} sides: how often each pair plays`).toBeVisible();
     // The rulebook's count, never the page's: a single round robin of n sides plays n(n-1)/2 matches ("Once" is the default).
-    const matches = (n * (n - 1)) / 2;
-    await expect(page.getByTestId("qm-start-count"), `${n} sides`).toHaveText(plural(mk, "quickMatch.setup.startCount", matches));
+    await expect(page.getByTestId("qm-start-count"), `${n} sides`).toHaveText(plural(mk, "quickMatch.setup.startCount", matchesOf(n, 1, "league")));
     await expectNoHorizontalScroll(page);
     checked += 1;
   }
@@ -129,6 +210,100 @@ test("setup (owner 2026-11-12, League only): at 3 to 6 sides there is no Knockou
   const [noteBox, startBox] = [await note.boundingBox(), await start(page).boundingBox()];
   expect(noteBox && startBox && noteBox.y + noteBox.height <= startBox.y, "the line sits above Start").toBe(true);
   await expect(form(page).getByRole("button", { name: mk("quickMatch.setup.addSide") }), "at the most sides there is no row to add").toHaveCount(0);
+});
+
+test("setup (plan 5 T8): the Format list at 320, 768 and 1280: 2 sides all three listed, both knockouts disabled with their reasons; 3 sides League → Final (4 matches), Semi-finals disabled with its reason; 6 sides with Semi-finals 18, Twice 33; back to 3 sides it falls back to League → Final and the count follows, and a 4th side brings Semi-finals back; every row a 44px target; no sideways scroll", async ({ guest: page }) => {
+  // The mockup's own numbers (qmd13a01 §6), pinned against the rulebook's count so neither drifts alone.
+  expect([matchesOf(6, 1, "semis"), matchesOf(6, 2, "semis"), matchesOf(3, 1, "final")], "the mockup's 18, 33 and 4").toEqual([18, 33, 4]);
+  expect(Object.values(THROUGH).sort(), "the two knockout rows send QUICK_MATCH_QUALIFIERS through").toEqual([...QUICK_MATCH_QUALIFIERS].sort());
+  const names = ["Ravi & Sam", "Priya & Tom", "Lee & Ana", "Jo & Max", "Kim & Raj", "Ana & Leo"];
+  const count = (sides: number, plays: number, shape: Shape, why: string) =>
+    expect(page.getByTestId("qm-start-count"), why).toHaveText(plural(mk, "quickMatch.setup.startCount", matchesOf(sides, plays, shape)));
+  const addSide = () => form(page).getByRole("button", { name: mk("quickMatch.setup.addSide") }).click();
+  const removeSide = (n: number) => form(page).getByRole("button", { name: mk("quickMatch.setup.removeSide", { n }) }).click();
+  let rows = 0;
+  let widths = 0;
+  for (const width of [320, 768, 1280] as const) {
+    await page.setViewportSize({ width, height: 900 });
+    await openSetup(page);
+    await side(page, 1).fill(names[0]!);
+    await side(page, 2).fill(names[1]!);
+    rows += await expectFormatList(page, 2, "league", `${width}, 2 sides`);
+    await count(2, 1, "league", `${width}, 2 sides`);
+
+    // Three sides: both knockout rows appear; Semi-finals is shown, disabled, with its reason. League → Final counts 3 + 1.
+    await addSide();
+    await side(page, 3).fill(names[2]!);
+    rows += await expectFormatList(page, 3, "league", `${width}, 3 sides`);
+    await shapeRow(page, "final").click();
+    rows += await expectFormatList(page, 3, "final", `${width}, 3 sides, League → Final`);
+    await count(3, 1, "final", `${width}, 3 sides, League → Final`);
+    await expectNoHorizontalScroll(page);
+
+    // Six sides, Semi-finals: 15 + 3; Twice doubles the league part only: 30 + 3.
+    for (let n = 4; n <= QUICK_MATCH_MAX_SIDES; n++) {
+      await addSide();
+      await side(page, n).fill(names[n - 1]!);
+    }
+    rows += await expectFormatList(page, 6, "final", `${width}, 6 sides`);
+    await shapeRow(page, "semis").click();
+    rows += await expectFormatList(page, 6, "semis", `${width}, 6 sides, Semi-finals`);
+    await count(6, 1, "semis", `${width}, 6 sides, Semi-finals, Once`);
+    await form(page).getByText(mk(`quickMatch.setup.plays.${QUICK_MATCH_MAX_PLAYS}`), { exact: true }).click();
+    await count(6, QUICK_MATCH_MAX_PLAYS, "semis", `${width}, 6 sides, Semi-finals, Twice`);
+    await form(page).getByText(mk("quickMatch.setup.plays.1"), { exact: true }).click();
+    await count(6, 1, "semis", `${width}, back to Once`);
+    // Every row is one tap target: the whole label, 44px, and a tap at its centre lands on it (the radio is visually hidden).
+    for (const shape of ["league", "final", "semis"] as const) await expectRowTappable(shapeRow(page, shape), `${width}: the ${shape} row`);
+    await expectNoHorizontalScroll(page);
+
+    // Back to three sides: Semi-finals can no longer be played, so the choice that posts falls back to League → Final and
+    // the count follows it; a fourth side brings the guest's own choice back.
+    for (let n = QUICK_MATCH_MAX_SIDES; n > 3; n--) await removeSide(n);
+    rows += await expectFormatList(page, 3, "final", `${width}, back to 3 sides`);
+    await count(3, 1, "final", `${width}, back to 3 sides`);
+    await addSide();
+    await side(page, 4).fill(names[3]!);
+    rows += await expectFormatList(page, 4, "semis", `${width}, a 4th side again`);
+    await count(4, 1, "semis", `${width}, a 4th side again`);
+    await expectNoHorizontalScroll(page);
+    widths += 1;
+  }
+  expect(widths).toBe(3);
+  // Seven reads of three rows a width (anti-vacuity: the list was read, not skipped; owner 2026-11-14: never fewer than 3).
+  expect(rows, "Format rows checked").toBe(3 * 7 * 3);
+});
+
+test("Start (plan 5 T8): League → Final of three sides lands on a home whose eyebrow says League + Knockout, its knockout waiting on 1st and 2nd in the league, and its played line counting both parts", async ({ guest: page }) => {
+  await openSetup(page);
+  await form(page).getByLabel("Name", { exact: true }).fill(`e2e lk start ${TAG}`);
+  await form(page).getByRole("button", { name: mk("quickMatch.setup.addSide") }).click();
+  for (const [i, s] of ["Ravi & Sam", "Priya & Tom", "Lee & Ana"].entries()) await side(page, i + 1).fill(s);
+  await shapeRow(page, "final").click();
+  // The post carries the one radio the route maps (plan 5 D1): `shape=final`, never a format of its own.
+  const posted = page.waitForRequest((r) => r.method() === "POST" && new URL(r.url()).pathname === "/api/quick-match");
+  await start(page).click();
+  const body = new URLSearchParams((await posted).postData() ?? "");
+  expect([body.getAll("shape"), body.has("format"), body.has("qualifiers")], "the post names the shape alone").toEqual([["final"], false, false]);
+  await page.waitForURL(/\/q\/qm_[^/?#]+$/, { timeout: NAV_MS });
+  await expect(page.getByTestId("qm-eyebrow"), "the eyebrow names the format").toHaveText(new RegExp(` · ${escapeRe(ui("quickMatch.format.league_knockout"))}$`));
+  const ko = page.getByTestId("qm-knockout");
+  await expect(ko).toBeVisible();
+  await expect(ko.getByTestId("qm-draw-title")).toHaveText(ui("quickMatch.home.knockout"));
+  await expect(ko.getByTestId("qm-knockout-caption")).toHaveText(ui("quickMatch.home.knockoutFills"));
+  // League → Final: one card, the final, its seats waiting on the league's top two (D7), no side seated yet.
+  await expect(ko.getByTestId("qm-draw-card")).toHaveCount(THROUGH.final - 1);
+  await expect(ko.getByTestId("qm-draw-name")).toHaveText([ui("quickMatch.home.leagueRank.1"), ui("quickMatch.home.leagueRank.2")]);
+  // A round robin of 3 plays 3, then a final: "0 of 4 matches played", and how the 4 split (D8).
+  const league = matchesOf(3, 1, "league");
+  const total = matchesOf(3, 1, "final");
+  await expect(page.getByTestId("qm-played")).toHaveText(
+    `${ui(`quickMatch.home.played.${EN_PLURAL.select(total)}`, { played: 0, count: total, days: QUICK_MATCH_EXPIRY_DAYS })} · ${ui("quickMatch.home.stagePart.split", { league, knockout: total - league })}`,
+  );
+  // The hero counts the league's matches only while the league is on (D8: "match 1 of 3").
+  await expect(page.getByTestId("qm-hero-kicker")).toHaveText(ui("quickMatch.home.upNext", { n: 1, total: league }));
+  await expect(page.getByTestId("qm-standings-caption")).toHaveText(ui("quickMatch.home.goThrough", { count: THROUGH.final }));
+  await expectNoHorizontalScroll(page);
 });
 
 test("setup (D5): the × on side 3 removes it and the count goes back with it; sides 1 and 2 have no ×", async ({ guest: page }) => {
@@ -168,43 +343,89 @@ test("a refused create shows its line and KEEPS the typed sides (the fetch follo
   await expect(start(page), "unlocked for another try").toBeEnabled();
 });
 
-test("a crafted knockout post is refused (owner 2026-11-12, League only): it lands on /en/play?e=QUICK_MATCH_FORMAT_NOT_OFFERED and the page says so", async ({ guest: page }) => {
-  // A stale page or a hand-made post: the setup form's own fields, the format alone changed to a knockout, posted by the
-  // browser itself as a plain form post (quick-match-home.spec.ts posts its crafted forms the same way). It reaches the
-  // create because this harness skips the bot check (the no-script case below says why); nothing is stubbed.
-  await openSetup(page);
-  await side(page, 1).fill("Ravi & Sam");
-  await side(page, 2).fill("Priya & Tom");
-  // The positive pair: the form the guest sees names a league, and only the crafted copy says otherwise.
-  await expect(form(page).locator('input[name="format"]')).toHaveValue("league");
-  // The refusal is caught as the redirected GET: `?e=` stays in the URL only until the page's ClearFlashParam takes it out.
-  const landed = page.waitForRequest((r) => {
-    if (r.method() !== "GET") return false;
-    const url = new URL(r.url());
-    return url.pathname === "/en/play" && url.searchParams.get("e") === "QUICK_MATCH_FORMAT_NOT_OFFERED";
-  });
-  const sent = await page.evaluate(() => {
-    const real = document.querySelector<HTMLFormElement>('[data-testid="qm-setup-form"]')!;
-    const fields = new FormData(real);
-    fields.set("format", "knockout");
-    const crafted = document.createElement("form");
-    crafted.method = "post";
-    crafted.action = real.action;
-    fields.forEach((value, name) => {
-      const input = document.createElement("input");
-      input.type = "hidden";
-      input.name = name;
-      input.value = String(value);
-      crafted.append(input);
+// A stale page or a hand-made post (plan 5, spec §3): the setup form's own fields with one field changed, posted by the browser
+// itself as a plain form post (quick-match-home.spec.ts posts its crafted forms the same way). Each reaches the create because
+// this harness skips the bot check (the no-script case below says why); nothing is stubbed. Each answer is the create's own
+// guard (quick-match-create.ts), read on the page as the setup screen's line for its code.
+const CRAFTED = [
+  {
+    what: "a plain knockout (no shape, a format of its own)",
+    sides: 2,
+    craft: { drop: ["shape"], set: { format: "knockout" } },
+    code: "QUICK_MATCH_FORMAT_NOT_OFFERED",
+    line: () => mk("quickMatch.errors.formatNotOffered"),
+  },
+  {
+    what: "League → Final of two sides (the league replayed as its final)",
+    sides: QUICK_MATCH_KNOCKOUT_MIN_SIDES - 1,
+    craft: { drop: [], set: { shape: "final" } },
+    code: "QUICK_MATCH_FORMAT_NOT_OFFERED",
+    line: () => mk("quickMatch.errors.formatNotOffered"),
+  },
+  {
+    what: "Semi-finals of three sides (an old tab: the row is disabled here)",
+    sides: QUICK_MATCH_SEMIS_MIN_SIDES - 1,
+    craft: { drop: [], set: { shape: "semis" } },
+    code: "QUICK_MATCH_SEMIS_TOO_FEW_SIDES",
+    line: () => mk("quickMatch.errors.semisTooFewSides", { min: QUICK_MATCH_SEMIS_MIN_SIDES }),
+  },
+] as const;
+
+test("crafted posts (plan 5): a plain knockout, League → Final of two sides and Semi-finals of three each land on /en/play?e=<code>, the page says why, and no home is made", async ({ guest: page }) => {
+  const names = ["Ravi & Sam", "Priya & Tom", "Lee & Ana"];
+  let refused = 0;
+  for (const c of CRAFTED) {
+    await openSetup(page);
+    for (let n = 3; n <= c.sides; n++) await form(page).getByRole("button", { name: mk("quickMatch.setup.addSide") }).click();
+    for (let n = 1; n <= c.sides; n++) await side(page, n).fill(names[n - 1]!);
+    // The positive pair: the form the guest sees posts the one radio, League (chosen); the row each case crafts is listed but
+    // cannot be picked at its side count (owner 2026-11-14: Semi-finals below four, League → Final below three).
+    await expect(form(page).locator('input[name="shape"]:checked'), c.what).toHaveValue("league");
+    await expect(form(page).locator('input[name="format"]'), `${c.what}: the form has no format field of its own`).toHaveCount(0);
+    await expect(shapeRadio(page, "semis"), c.what).toBeDisabled();
+    if (c.sides < QUICK_MATCH_KNOCKOUT_MIN_SIDES) await expect(shapeRadio(page, "final"), c.what).toBeDisabled();
+    else await expect(shapeRadio(page, "final"), c.what).toBeEnabled();
+    // The refusal is caught as the redirected GET: `?e=` stays in the URL only until the page's ClearFlashParam takes it out.
+    const landed = page.waitForRequest((r) => {
+      if (r.method() !== "GET") return false;
+      const url = new URL(r.url());
+      return url.pathname === "/en/play" && url.searchParams.get("e") === c.code;
     });
-    document.body.append(crafted);
-    crafted.submit();
-    return { format: fields.getAll("format").map(String), sides: fields.getAll("sides").length };
-  });
-  expect(sent, "the crafted post asks for one knockout of the two typed sides").toEqual({ format: ["knockout"], sides: 2 });
-  expect((await landed).redirectedFrom()?.method(), "the post's 303 landed on the refusal").toBe("POST");
-  await expect(page.getByTestId("qm-setup-error")).toHaveText(mk("quickMatch.errors.formatNotOffered"));
-  await expect(page, "no home was made: the guest is still on the setup page").toHaveURL(/\/en\/play$/);
+    const sent = await page.evaluate(({ drop, set }) => {
+      const real = document.querySelector<HTMLFormElement>('[data-testid="qm-setup-form"]')!;
+      const fields = new FormData(real);
+      for (const name of drop) fields.delete(name);
+      for (const [name, value] of Object.entries(set)) fields.set(name, value);
+      const crafted = document.createElement("form");
+      crafted.method = "post";
+      crafted.action = real.action;
+      fields.forEach((value, name) => {
+        const input = document.createElement("input");
+        input.type = "hidden";
+        input.name = name;
+        input.value = String(value);
+        crafted.append(input);
+      });
+      document.body.append(crafted);
+      crafted.submit();
+      return {
+        shape: fields.getAll("shape").map(String),
+        format: fields.getAll("format").map(String),
+        sides: fields.getAll("sides").length,
+      };
+    }, { drop: [...c.craft.drop] as string[], set: { ...c.craft.set } as Record<string, string> });
+    const want = c.craft.set as Record<string, string>;
+    expect(sent, `${c.what}: what the crafted post asks for`).toEqual({
+      shape: want.shape !== undefined ? [want.shape] : [],
+      format: want.format !== undefined ? [want.format] : [],
+      sides: c.sides,
+    });
+    expect((await landed).redirectedFrom()?.method(), `${c.what}: the post's 303 landed on the refusal`).toBe("POST");
+    await expect(page.getByTestId("qm-setup-error"), c.what).toHaveText(c.line());
+    await expect(page, `${c.what}: no home was made, the guest is still on the setup page`).toHaveURL(/\/en\/play$/);
+    refused += 1;
+  }
+  expect(refused, "crafted posts refused").toBe(CRAFTED.length);
 });
 
 test("Start creates the quick match: the browser lands on its home, /q/qm_…, with no query, and holds a visitor key", async ({ guest: page }) => {
@@ -285,10 +506,22 @@ test("without the script: the page says it needs JavaScript, Start is live, only
     await expect(start(page)).toBeEnabled();
     await expect(form(page).getByRole("radio", { name: "Badminton", exact: true })).toBeChecked();
     await expect(form(page).getByRole("radio", { name: "Tennis", exact: true })).toBeDisabled();
+    // Plan 5 D1: the Format list is real radios in the server's HTML. Two sides (no script adds a third) list all three
+    // (owner 2026-11-14), League already chosen and both knockouts disabled, so the plain post carries League as the one field
+    // the route maps, `shape` (a disabled radio is never posted).
+    await expect(form(page).locator('input[type="radio"][name="shape"]'), "no script: two sides, all three listed").toHaveCount(3);
+    await expect(shapeRadio(page, "league"), "League is chosen in the server's HTML").toBeChecked();
+    await expect(shapeRadio(page, "final"), "no script: League → Final shown, disabled").toBeDisabled();
+    await expect(shapeRadio(page, "semis"), "no script: Semi-finals shown, disabled").toBeDisabled();
+    await expect(shapeRow(page, "final")).toContainText(mk("quickMatch.setup.shape.finalNeeds", { min: QUICK_MATCH_KNOCKOUT_MIN_SIDES }));
     await side(page, 1).fill("Ravi & Sam");
     await side(page, 2).fill("Priya & Tom");
+    const posted = page.waitForRequest((r) => r.method() === "POST" && new URL(r.url()).pathname === "/api/quick-match");
     await start(page).click();
+    const body = new URLSearchParams((await posted).postData() ?? "");
+    expect([body.getAll("shape"), body.has("format")], "the plain post carries the chosen radio").toEqual([["league"], false]);
     await expect(page).toHaveURL(/\/q\/qm_[^/?#]+$/);
+    await expect(page.getByTestId("qm-eyebrow"), "a league was made").toHaveText(new RegExp(` · ${escapeRe(ui("quickMatch.format.league"))}$`));
   } finally {
     await ctx.close();
   }
@@ -305,8 +538,11 @@ test("every control a thumb taps is at least 44px tall, the × at least 44px wid
       boxes.push({ what, h: box!.height, w: box!.width });
     }
   };
-  // The radios are sr-only; their visible faces are the labels' spans.
-  await measure("chip/segment", form(page).locator("label:has(input[type=radio]) > span"));
+  // The radios are sr-only; a chip's or a segment's visible face is its label's span. A Format row (plan 5) is the whole
+  // label (the dot and the words are inside it), so the row is what is measured.
+  await measure("chip/segment", form(page).locator('label:has(input[type=radio]:not([name="shape"])) > span'));
+  await measure("format row", form(page).locator('label:has(input[name="shape"])'));
+  await expect(form(page).locator('label:has(input[name="shape"])'), "three sides: three Format rows").toHaveCount(3);
   await measure("side", form(page).locator('input[name="sides"]'));
   await measure("remove", form(page).getByRole("button", { name: "Remove side 3" }));
   await measure("add", form(page).getByRole("button", { name: "+ Add a side" }));
@@ -552,8 +788,8 @@ test("the account's Quick matches (plan 3 Task 6, review m5): two saved, one del
 // (quick-match-home.spec.ts) and the walkthrough (walkthrough/quick-match.spec.ts, which plays whole matches at 390 and
 // always leaves the pad by its own link): the BROWSER's Back from the pad after a rally reads the home fresh, and the home
 // opens from the link forms a guest really pastes. The seven widths are mobile.spec.ts's quick match cases. (Task 10's
-// knockout of four left with the owner's "take out" of 2026-11-12: a guest cannot make one; the knockout home stays
-// covered by its unit tests for League + Knockout.)
+// knockout of four left with the owner's "take out" of 2026-11-12; League + Knockout's home, its fill, its tie and its
+// champion are quick-match-home.spec.ts's plan 5 cases.)
 //
 // Every line the home is expected to read is the en dictionary's (never retyped); the score after one rally is the
 // rulebook's (rally-point scoring: the side that wins a rally adds one point); the match counts are the format's (a round
@@ -589,8 +825,8 @@ function plural(say: (key: string, vars?: Record<string, string | number>) => st
 /** A page load or a redirect followed (the flow's budget is built from it and the hold, AGENTS.md class 20). */
 const NAV_MS = 20_000;
 
-/** Make a quick match through the setup form (badminton, clicked) and land on its home; returns the home's path. A quick
- *  match is a league (owner 2026-11-12): there is no format to pick. */
+/** Make a quick match through the setup form (badminton, clicked) and land on its home; returns the home's path. The
+ *  Format list is left at its default, League. */
 async function createFromSetup(page: Page, name: string, sides: readonly string[]) {
   await openSetup(page);
   await form(page).getByLabel("Name", { exact: true }).fill(name);

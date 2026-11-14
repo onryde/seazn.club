@@ -192,6 +192,50 @@ describe("/<lang>/play: the form", () => {
     expect(html).not.toContain(">Start playing<");
   });
 
+  it("ships the Format list (plan 5 T6; owner 2026-11-14): all three `shape` radios at the two sides it opens on, League chosen, both knockouts disabled with their reasons; no `format` field", async () => {
+    vi.mocked(listQuickMatchSports).mockResolvedValueOnce(OFFER);
+    const html = await render("en");
+    const shapes = html.match(/<input[^>]*name="shape"[^>]*>/g) ?? [];
+    expect(shapes.map((el) => el.match(/value="([^"]*)"/)?.[1]), "every row is listed, in the list's order").toEqual(["league", "final", "semis"]);
+    const [league, final, semis] = shapes as [string, string, string];
+    expect(league, "chosen, so the plain post sends it").toContain('checked="');
+    expect(league, "League can be picked").not.toMatch(/\sdisabled=""/);
+    // A disabled radio is never posted, so the plain post at two sides can only carry League.
+    for (const [what, el] of [["final", final], ["semis", semis]] as const) {
+      expect(el, `${what}: shown, not pickable`).toMatch(/\sdisabled=""/);
+      expect(el, `${what}: not chosen`).not.toContain('checked="');
+      expect(el, `${what}: its reason is part of its description`).toContain(`aria-describedby="qm-shape-${what}-hint qm-shape-${what}-why"`);
+    }
+    expect(html).toMatch(/id="qm-shape-final-why"[^>]*>Needs 3 or more sides</);
+    expect(html).toMatch(/id="qm-shape-semis-why"[^>]*>Needs 4 or more sides</);
+    expect(html, "no format field: one radio, one fact").not.toMatch(/name="format"/);
+    expect(html).toContain('role="radiogroup"');
+    expect(html).toContain(">Format<");
+    // The old League-only line is gone: the row's hint says it, and "Top of the table wins" is false for a knockout.
+    expect(html).not.toContain('data-testid="qm-league-help"');
+  });
+
+  it("hands the island each rules' C23 knockoutAllowed as the offer says it, both ways (the list reads it, never a default)", async () => {
+    const mixed: QuickMatchSport[] = [
+      {
+        ...OFFER[0]!,
+        variants: [
+          { variant_key: "bwf", labelKey: "variant.badminton.bwf", knockoutAllowed: false },
+          { variant_key: "bwf-3x15", labelKey: "variant.badminton.bwf3x15", knockoutAllowed: true },
+        ],
+      },
+      OFFER[1]!,
+    ];
+    vi.mocked(listQuickMatchSports).mockResolvedValueOnce(mixed);
+    const props = await islandProps({});
+    const seen = props.sports.flatMap((sp) => sp.variants.map((v) => [sp.sport_key, v.key, v.knockoutAllowed]));
+    expect(seen).toEqual([
+      ["badminton", "bwf", false],
+      ["badminton", "bwf-3x15", true],
+      ["boardgame", "rapid", true],
+    ]);
+  });
+
   it("is dynamic (no cached render: the offer and ?e= are per request)", () => {
     expect(dynamic).toBe("force-dynamic");
   });
@@ -448,6 +492,7 @@ describe.skipIf(!HAS_DB)("/<lang>/play over the live offer (real listQuickMatchS
     const html = await render("en");
     const sports = setupSports(live, ui);
     let checked = 0;
+    let variants = 0;
     for (const s of sports) {
       expect(html, `${s.sport_key} chip`).toMatch(field("sport_key", s.sport_key));
       const body = {
@@ -465,8 +510,14 @@ describe.skipIf(!HAS_DB)("/<lang>/play over the live offer (real listQuickMatchS
       const offer = await offerFor(s.sport_key, s.defaultVariant);
       expect(offer.offered, `${s.sport_key}/${s.defaultVariant} offered`).toBe(true);
       expect(offer.kinds, `${s.sport_key} kinds`).toContain(body.kind);
+      // The Format list reads each rules' C23 answer (plan 5 T6): the island is handed exactly what the create's guard asks.
+      for (const v of s.variants) {
+        expect(v.knockoutAllowed, `${s.sport_key}/${v.key} knockoutAllowed`).toBe((await offerFor(s.sport_key, v.key)).knockoutAllowed);
+        variants++;
+      }
       checked++;
     }
+    expect(variants, "rules swept").toBeGreaterThanOrEqual(checked);
     // Anti-vacuity: a DB without `sync:sports` offers nothing, and an empty sweep proves nothing.
     expect(checked, "sports swept").toBeGreaterThan(0);
     expect(checked).toBe(live.length);

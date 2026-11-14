@@ -166,6 +166,11 @@ export const routes = {
   /** Its undo, "Put back", for a Not played match until the league finishes (plan 4 Task 1, spec §6): the same shape, its own
    *  route, under the same scrubbed `/q/` root. */
   quickMatchPutBack: (token: string, fixtureId: string) => `/q/${token}/put-back/${fixtureId}`,
+  /** A League + Knockout home's two answers to a tie at the cut (plan 5 Task 1, spec 2026-11-12 §5, §11): "Toss a coin",
+   *  which reveals the stored lot, and "Pick who goes through", whose sides ride the form body. The home token in the path,
+   *  never a query string, under the same scrubbed `/q/` root. */
+  quickMatchCutToss: (token: string) => `/q/${token}/cut/toss`,
+  quickMatchCutPick: (token: string) => `/q/${token}/cut/pick`,
   /** The quick match setup screen, `/<lang>/play` (plan 2 Task 4). Only the locale-PREFIXED path resolves (proxy.ts rewrites
    *  an unprefixed marketing path only when it is listed). A value that names no shipped locale builds the default's page,
    *  so this never builds a root path (`/join/play`) out of whatever it was handed. */

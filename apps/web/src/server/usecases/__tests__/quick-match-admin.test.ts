@@ -89,7 +89,9 @@ const foreignOrgs: string[] = [];
 
 interface Shape {
   sport_key: "badminton" | "football" | "boardgame";
-  format: "league" | "knockout";
+  format: "league" | "knockout" | "league_knockout";
+  /** League + Knockout's count (plan 5): the top 2 or 4 go through. */
+  qualifiers?: 2 | 4;
   sides: string[];
   locale?: "en" | "fr";
   email?: string | null;
@@ -111,6 +113,7 @@ async function create(shape: Shape): Promise<CreatedQuickMatch> {
       variant_key,
       kind,
       format: shape.format,
+      qualifiers: shape.qualifiers ?? null,
       sides: shape.sides,
       plays: 1,
       email: shape.email ?? null,
@@ -618,5 +621,34 @@ describe.skipIf(!HAS_DB)("the played premise is a guard, not a comment", () => {
     await listQuickMatchesForAdmin({ onlyIds: seedIds() });
     await quickMatchAdminCounts({ now: NOW, onlyIds: seedIds() });
     expect(logs.lines).toEqual([]);
+  });
+});
+
+describe.skipIf(!HAS_DB)("a League + Knockout: two stages, counted whole (plan 5 T3, P13, D8)", () => {
+  // "{decided} of {total}" over BOTH stages: the league's n(n-1)/2 and the knockout's q - 1, whose lines wait on the table (no bye:
+  // q is 2 or 4). Finished is the guest's own (`isQuickMatchFinished`): every line played or not played, so a league all played
+  // with its knockout unfilled is NOT finished. The rulebook's numbers, never the read's.
+  it.each([
+    [2, THREE, 3, 1],
+    [4, ["Ravi & Sam", "Priya & Tom", "Asha & Ben", "Jo & Max"], 6, 3],
+  ] as const)("top %i: before a point, then with the league all played and the knockout unfilled: total league + q − 1, not finished", async (q, sides, leagueLines, knockoutLines) => {
+    const out = await create({ sport_key: "badminton", format: "league_knockout", qualifiers: q, sides: [...sides] });
+    // The empty case first: nothing played.
+    const fresh = (await listQuickMatchesForAdmin({ onlyIds: [out.id] })).rows[0];
+    expect(fresh, "before a point").toMatchObject({ format: "league_knockout", decided: 0, notPlayed: 0, total: leagueLines + knockoutLines });
+    expect((await quickMatchAdminCounts({ now: new Date(), onlyIds: [out.id] }))["24h"]).toMatchObject({ created: 1, played: 0, finished: 0 });
+
+    const league = await sql<{ id: string }[]>`
+      select f.id from fixtures f join stages st on st.id = f.stage_id
+       where st.division_id = ${out.divisionId} and st.kind = 'league' order by f.round_no, f.fixture_no`;
+    expect(league, "premise: the league's lines").toHaveLength(leagueLines);
+    for (const f of league) {
+      expect(await playToDecided(systemAuth(), f.id), "premise: every league match played to a result").toMatchObject({ kind: "decided" });
+    }
+
+    const row = (await listQuickMatchesForAdmin({ onlyIds: [out.id] })).rows[0];
+    expect(row, "the league done, the knockout waiting").toMatchObject({ decided: leagueLines, notPlayed: 0, total: leagueLines + knockoutLines });
+    expect((await quickMatchAdminCounts({ now: new Date(), onlyIds: [out.id] }))["24h"], "played, but not finished: the final is not decided")
+      .toMatchObject({ created: 1, played: 1, finished: 0 });
   });
 });

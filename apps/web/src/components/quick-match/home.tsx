@@ -22,8 +22,17 @@
 //
 // Phone first: one column, each name wrapping or truncating inside a `min-w-0` chain, so a 40-character side never
 // widens a 320px screen. From `lg` the name, hero and actions hold a sticky left column beside the table and the list.
-import type { ReactNode } from "react";
-import { Check } from "lucide-react";
+//
+// League + Knockout (plan docs/superpowers/plans/2026-11-13-quick-match-5-league-knockout.md Task 7, D6-D9; spec
+// 2026-11-12-quick-match-league-knockout-design.md §5, §6, §11, §12; mockup qmd13a01 §7-12, layout only): the table on top
+// with the knockout drawn below it from the start ("1st in the league", "Winner of semi-final 1"); the league's matches
+// alone under "League matches". The hero follows `QuickMatchHome.knockout.state`: the league's next match ("match 3 of 6",
+// the league's own count), then the tie at the cut as a question (`qm-cut`, the `cut` slot answers it: Pick, and Toss when
+// a lot ordered the tie), "Setting up the knockout" (with a Refresh, the `refresh` slot) while an advance has not filled it,
+// then the knockout's next round, then the champion — the FINAL's winner, never the table's leader. Once the knockout fills,
+// it moves above the table (§12), the table is the final league table, and Add a match is gone (§6, D3).
+import type { CSSProperties, ReactNode } from "react";
+import { Check, RotateCw, Trophy } from "lucide-react";
 import { isLevelTable, pointsText, rankText } from "@seazn/engine/competition";
 import type { EntrantKind } from "@seazn/engine/sport";
 import type { Locale } from "@/lib/i18n-constants";
@@ -41,13 +50,20 @@ import { compactScore } from "@/lib/match-day/view";
 import { scoreLineOf, type LevelWords, type ScoreLine } from "@/lib/score/levels";
 import { setBreakdown } from "@/lib/public-site";
 import { isQuickMatchFinished } from "@/lib/quick-match-finished";
-import type { QuickMatchFixture, QuickMatchHome, QuickMatchSide } from "@/server/usecases/quick-match-home";
+import type {
+  QuickMatchFixture,
+  QuickMatchHome,
+  QuickMatchKnockout,
+  QuickMatchKnockoutSeat,
+  QuickMatchSide,
+} from "@/server/usecases/quick-match-home";
 import { QuickMatchDeletionLine } from "./deletion-line";
 import { QuickMatchStandings, type FullTableData, type StandingsView } from "./standings";
 import { QuickMatchDraw, type DrawCard, type DrawRound, type DrawSeat } from "./draw";
 import { QuickMatchList, type MatchView, type RowMenuSlot, type ScoreSlot, type SeatView, type SkipCopy } from "./match-list";
 import { fixtureLabel, winnerOfLabel, type FixtureLabel } from "./fixture-label";
 import { playedLine } from "./played-line";
+import { longestUnbreakableRun } from "./name-fit";
 
 type Vars = Record<string, string | number>;
 
@@ -72,6 +88,16 @@ export interface AddMatchView {
 }
 export type AddMatchSlot = (view: AddMatchView) => ReactNode;
 
+/** The tie at a League + Knockout's cut as the guests answer it (plan 5 D5, spec §5, §11): every side of the tie in the
+ *  order the guests typed them (never the lot's: the open question shows no lot order), how many of them go through
+ *  ("pick N of M"), and whether "Toss a coin" may be offered (`CutTie.byLot`: a tie no lot ordered has no coin to reveal). */
+export interface CutView {
+  members: { id: string; name: string }[];
+  seats: number;
+  toss: boolean;
+}
+export type CutSlot = (view: CutView) => ReactNode;
+
 /** What Tasks 6, 7 and 8 put on the home. Each is optional: an empty slot renders nothing. */
 export interface QuickMatchSlots {
   /** The Score control of a playable match: in the hero, and on its list row. Never offered for a waiting seat (C18). */
@@ -84,6 +110,11 @@ export interface QuickMatchSlots {
   /** Plan 4 Task 4: one row's ⋯ menu (Score and Not played, Edit result, or Put back), asked only for a row with something to
    *  offer (match-list.tsx `rowMenuItems`). */
   rowMenu?: RowMenuSlot;
+  /** Plan 5 Task 7: a League + Knockout's tie at the cut — the Pick panel and the Toss form (`cut-prompt.tsx`), asked only
+   *  while the question is open. */
+  cut?: CutSlot;
+  /** Plan 5 Task 7: "Setting up the knockout"'s Refresh (the home's own path, `QuickMatchRefreshLink`). */
+  refresh?: ReactNode;
 }
 
 const KIND_KEY = {
@@ -95,6 +126,7 @@ const KIND_KEY = {
 const FORMAT_KEY = {
   league: "quickMatch.format.league",
   knockout: "quickMatch.format.knockout",
+  league_knockout: "quickMatch.format.league_knockout",
 } as const satisfies Record<QuickMatchHome["row"]["format"], MessageKey>;
 
 /**
@@ -136,6 +168,12 @@ const FLASH: Readonly<Record<string, HomeFlash>> = {
   [QUICK_MATCH_ERRORS.LEAGUE_FINISHED]: { key: "quickMatch.flash.leagueFinished", tone: "refusal" },
   // The Score route on a match someone else marked Not played after this page loaded (T1 review G1): put it back first.
   [QUICK_MATCH_ERRORS.NOT_PLAYED]: { key: "quickMatch.flash.notPlayed", tone: "refusal" },
+  // A League + Knockout's cut (plan 5 T4's routes): a second answer (or one after the fill), a question the table no
+  // longer asks, a Pick of the wrong count, and Add a match once the league is complete.
+  [QUICK_MATCH_ERRORS.ALREADY_DECIDED]: { key: "quickMatch.flash.alreadyDecided", tone: "refusal" },
+  [QUICK_MATCH_ERRORS.TIE_NOT_OPEN]: { key: "quickMatch.flash.tieChanged", tone: "refusal" },
+  [QUICK_MATCH_ERRORS.PICK_INVALID]: { key: "quickMatch.flash.pickInvalid", tone: "refusal" },
+  [QUICK_MATCH_ERRORS.LEAGUE_COMPLETE]: { key: "quickMatch.flash.leagueComplete", tone: "refusal" },
 };
 const GENERIC_FLASH: HomeFlash = { key: "quickMatch.flash.generic", tone: "refusal" };
 export function homeFlash(e: string | string[] | undefined): HomeFlash | null {
@@ -163,10 +201,43 @@ interface Built {
   /** Finished with no match played (plan 4, spec §3 Edge): "No matches were played", in place of a winner and a table. */
   noPlay: { kicker: string; title: string; hint: string } | null;
   standings: StandingsView | null;
-  draw: DrawRound[] | null;
+  /** The bracket: a Knockout's "The draw", a League + Knockout's "Knockout" (with its caption while it waits). */
+  draw: { title: string; rounds: DrawRound[]; leagueKnockout: { caption: string | null } | null } | null;
   matches: MatchView[];
-  /** A league's "Add a match" (C5); null for a knockout, and for a quick match with fewer than two sides to pick. */
+  /** "All matches", or a League + Knockout's "League matches" (its knockout's lines are the bracket's cards). */
+  matchesTitle: string;
+  /** A league's "Add a match" (C5); null for a knockout, for a quick match with fewer than two sides to pick, and for a
+   *  League + Knockout whose league is complete (§6). */
   addMatch: AddMatchView | null;
+  /** A League + Knockout (plan 5 T7): the tie at the cut as the hero's question, while it is open. */
+  cut: { kicker: string; title: string; body: string; view: CutView } | null;
+  /** A League + Knockout: the league is done and the knockout not filled yet (spec §11). */
+  settingUp: { kicker: string; title: string; hint: string } | null;
+  /** A League + Knockout: how the tie at the cut was settled, above the knockout's hero (§11: the same on every phone). */
+  cutResult: string[] | null;
+  /** A League + Knockout: the final's winner (D8), once the final is decided. */
+  champion: { kicker: string; name: string; beat: string | null; topToo: string | null } | null;
+  /** A League + Knockout whose knockout has filled: the bracket above the table (§12). */
+  knockoutFirst: boolean;
+}
+
+/** A league rank's words, for the ranks a knockout of 2 or 4 seats (D7: keys per rank, no ordinal arithmetic). */
+const LEAGUE_RANK_KEY = {
+  1: "quickMatch.home.leagueRank.1",
+  2: "quickMatch.home.leagueRank.2",
+  3: "quickMatch.home.leagueRank.3",
+  4: "quickMatch.home.leagueRank.4",
+} as const satisfies Record<number, MessageKey>;
+const RANK_SHORT_KEY = {
+  1: "quickMatch.home.rankShort.1",
+  2: "quickMatch.home.rankShort.2",
+  3: "quickMatch.home.rankShort.3",
+  4: "quickMatch.home.rankShort.4",
+} as const satisfies Record<number, MessageKey>;
+/** The key for `rank`, refused loudly past the ranks a knockout of 4 seats: a rank the read never seats has no words. */
+function rankKey<K extends MessageKey>(keys: Readonly<Record<number, K>>, rank: number): K {
+  if (!Object.hasOwn(keys, rank)) throw new QuickMatchHomeShapeError(`a knockout seat names league rank ${rank}, which has no words`);
+  return keys[rank]!;
 }
 
 /** Each side's own line from the engine's summary (`ScoreSummary.perSide[{entrantId, line}]`), by entrant: null unless it
@@ -254,12 +325,18 @@ export function buildHomeView(home: QuickMatchHome, copy: QuickMatchCopy, fullTa
   const { t } = copy;
   const say = ({ key, params }: FixtureLabel) => t(key, params);
   const knockout = home.row.format === "knockout";
+  const lk = lkOf(home);
   const matchNo = new Map(home.fixtures.filter((f) => !f.isBye).map((f, i) => [f.id, i + 1]));
+  /** The bracket's own lines: a Knockout's every line (as it always was), a League + Knockout's knockout stage (its rounds
+   *  restart at 1, so a round's name is read among these alone, never beside the league's rounds). */
+  const bracket = lk === null ? home.fixtures : home.fixtures.filter((f) => f.stage === "knockout");
   /** A knockout card's name ("Semi-final", "Semi-final 2", "Final"); a bye is not a match and has none. */
   const roundName = (f: QuickMatchFixture): string => {
-    const { role, count, index } = placeOf(f, home.fixtures);
+    const { role, count, index } = placeOf(f, bracket);
     return say(fixtureLabel(role, f.roundNo, count, index));
   };
+  const listOf = (names: readonly string[]) =>
+    new Intl.ListFormat(copy.locale, { style: "long", type: "conjunction" }).format(names);
 
   const seat = (f: QuickMatchFixture, side: QuickMatchSide | null, label: unknown): SeatView => {
     const winner = side !== null && !f.isBye && f.phase === "settled" && side.entrantId === f.winnerEntrantId;
@@ -271,10 +348,16 @@ export function buildHomeView(home: QuickMatchHome, copy: QuickMatchCopy, fullTa
     return { name: null, label: say(winnerOfLabel(role, count, index, matchNo.get(feeder.id)!)), winner: false };
   };
 
+  // A League + Knockout's tie and "Setting up" need no guard of their own here: the league is done and no knockout seat
+  // holds a side yet, so the read has nothing next (T5) and the question or the wait stands in the hero's place (§6, §11).
   const heroFixture = home.finished ? null : home.next;
   // The confirm sheet's body (plan 4 D6): skipping a match now finishes the league exactly when every OTHER match is played
-  // or Not played, the one finished predicate asked one Not played ahead; then the sheet says it cannot be put back.
-  const skipFinishes = isQuickMatchFinished({ played: home.played, notPlayed: home.notPlayed + 1, total: home.total });
+  // or Not played, the one finished predicate asked one Not played ahead; then the sheet says it cannot be put back. A
+  // League + Knockout asks it of its league's own lines (D8): its knockout's are never skipped.
+  const skipCounts = lk !== null ? lk.league : home;
+  const skipFinishes = isQuickMatchFinished({ played: skipCounts.played, notPlayed: skipCounts.notPlayed + 1, total: skipCounts.total });
+  /** Put back is hidden once the league has finished (§6): a League + Knockout's league, else the match itself. */
+  const leagueOver = lk !== null ? lk.league.done : home.finished;
   /** The partial line (D6): a live match's score that will not count, quoted only once a score stands (`scoreStands`); a
    *  live match with nothing scored yet says it has started (FR4 m1). Nothing for a match not in play, or one whose summary
    *  this reader cannot split. */
@@ -292,7 +375,8 @@ export function buildHomeView(home: QuickMatchHome, copy: QuickMatchCopy, fullTa
     partial: partialOf(f),
   });
   const matches: MatchView[] = home.fixtures
-    .filter((f) => !f.isBye)
+    // A League + Knockout's list is its league's: the knockout's lines are the bracket's cards (mockup qmd13a01 §7).
+    .filter((f) => !f.isBye && (lk === null || f.stage === "league"))
     .map((f) => {
       const result =
         f.phase !== "settled" || f.home === null || f.away === null
@@ -307,7 +391,7 @@ export function buildHomeView(home: QuickMatchHome, copy: QuickMatchCopy, fullTa
       const homeSeat = seat(f, f.home, f.homeSlotLabel);
       const awaySeat = seat(f, f.away, f.awaySlotLabel);
       // Spec §6: only an unplayed or in-progress match is skippable, and only a league's (P12: a bracket needs a winner).
-      const skippable = !knockout && (f.phase === "ready" || f.phase === "live");
+      const skippable = !knockout && f.stage === "league" && (f.phase === "ready" || f.phase === "live");
       return {
         id: f.id,
         n: matchNo.get(f.id)!,
@@ -321,7 +405,7 @@ export function buildHomeView(home: QuickMatchHome, copy: QuickMatchCopy, fullTa
         editable: f.phase === "settled" && !f.resultMovedOn,
         skippable,
         // §6: Put back is hidden once the league has finished (the server refuses a stale one, LEAGUE_FINISHED).
-        putBack: !knockout && f.phase === "notPlayed" && !home.finished,
+        putBack: !knockout && f.stage === "league" && f.phase === "notPlayed" && !leagueOver,
         skipCopy: skippable ? skipCopyOf(f, homeSeat, awaySeat) : null,
       };
     });
@@ -330,9 +414,12 @@ export function buildHomeView(home: QuickMatchHome, copy: QuickMatchCopy, fullTa
   if (heroFixture !== null && heroFixture.home !== null && heroFixture.away !== null) {
     const live = heroFixture.phase === "live";
     const n = matchNo.get(heroFixture.id)!;
-    const kicker = knockout
-      ? t(live ? "quickMatch.home.liveRound" : "quickMatch.home.upNextRound", { round: roundName(heroFixture) })
-      : t(live ? "quickMatch.home.liveMatch" : "quickMatch.home.upNext", { n, total: home.total });
+    // A League + Knockout's league match counts among the league's matches only (D8: "match 3 of 6"); its knockout's is
+    // named by its round, as a Knockout's is (§6: "Semi-final 1").
+    const kicker =
+      knockout || heroFixture.stage === "knockout"
+        ? t(live ? "quickMatch.home.liveRound" : "quickMatch.home.upNextRound", { round: roundName(heroFixture) })
+        : t(live ? "quickMatch.home.liveMatch" : "quickMatch.home.upNext", { n, total: lk !== null ? lk.league.total : home.total });
     hero = {
       kicker,
       home: heroFixture.home.name,
@@ -350,6 +437,9 @@ export function buildHomeView(home: QuickMatchHome, copy: QuickMatchCopy, fullTa
 
   let standings: StandingsView | null = null;
   let leaders: string[] = [];
+  /** The sides sharing the table's top place, on a table some match has reached: a plain League's leaders, and what a League
+   *  + Knockout's champion is "top of the league too" among (T7 review m4: a lot's order inside the class is not a place). */
+  let tableTop: string[] = [];
   if (!knockout && home.standings) {
     const rows = home.standings.rows as {
       entrantId: string;
@@ -368,7 +458,9 @@ export function buildHomeView(home: QuickMatchHome, copy: QuickMatchCopy, fullTa
     // with (a tie split only by seed or lots is a tie): co-leaders, who share the top place.
     const level = isLevelTable(rows);
     const top = level ? undefined : rows.find((r) => r.rank === 1);
-    leaders = top ? [top.entrantId, ...(top.tieUnbroken ? (top.tieBreak?.with ?? []) : [])] : [];
+    tableTop = top ? [top.entrantId, ...(top.tieUnbroken ? (top.tieBreak?.with ?? []) : [])] : [];
+    // A League + Knockout's table names no leader (its winner is the final's): its marks are who goes through (`lkRows`).
+    leaders = lk === null ? tableTop : [];
     const draws = rows.some((r) => r.drawn > 0);
     const columns = (["played", "won", ...(draws ? (["drawn"] as const) : []), "points"] as const).map((key) => ({
       key,
@@ -393,28 +485,61 @@ export function buildHomeView(home: QuickMatchHome, copy: QuickMatchCopy, fullTa
               return cells;
             }),
           };
+    const plainRows = rows.map((r) => ({
+      entrantId: r.entrantId,
+      place: top && leaders.includes(r.entrantId) ? rankText(top, false) : rankText(r, level),
+      name: nameOf(r.entrantId),
+      cells: columns.map((c) => (c.key === "points" ? pointsText(r.points, home.pointsUnit) : String(r[c.key]))),
+      leader: leaders.includes(r.entrantId),
+    }));
+    const marked = lk === null ? null : lkRows(lk.ko, rows, plainRows, level, bracket, home.sides, t);
     standings = {
       // A finished league's table is final (mockup qmd13a01 §4); with a match Not played it says it counts played ones only.
-      title: t(home.finished ? "quickMatch.home.finalTable" : "quickMatch.home.standings"),
+      // A League + Knockout's is final once its league is done and nothing is left to ask (§12, mockup §9-12).
+      title: t(
+        lk !== null
+          ? lk.ko.state === "filled" || lk.ko.state === "settingUp"
+            ? "quickMatch.home.finalLeagueTable"
+            : "quickMatch.home.standings"
+          : home.finished
+            ? "quickMatch.home.finalTable"
+            : "quickMatch.home.standings",
+      ),
+      ...(lk !== null
+        ? { caption: t(lk.ko.filled ? "quickMatch.home.wentThrough" : "quickMatch.home.goThrough", { count: lk.ko.qualifiers }) }
+        : {}),
       note: home.notPlayed > 0 ? t("quickMatch.home.countsPlayedOnly") : null,
       rankLabel: t("ladder.rank"),
       sideLabel: t("quickMatch.home.sideCol"),
       levelLabel: level ? copy.pub("table.level") : null,
       columns,
-      full,
-      rows: rows.map((r) => ({
-        entrantId: r.entrantId,
-        place: top && leaders.includes(r.entrantId) ? rankText(top, false) : rankText(r, level),
-        name: nameOf(r.entrantId),
-        cells: columns.map((c) => (c.key === "points" ? pointsText(r.points, home.pointsUnit) : String(r[c.key]))),
-        leader: leaders.includes(r.entrantId),
-      })),
+      full: full === null || marked === null ? full : { ...full, cells: marked.order.map((i) => full.cells[i]!) },
+      rows: marked === null ? plainRows : marked.rows,
     };
   }
 
   let winner: Built["winner"] = null;
   let noPlay: Built["noPlay"] = null;
-  if (home.finished) {
+  let champion: Built["champion"] = null;
+  if (lk !== null) {
+    // The champion is the final's winner (D8), never the table's leader: the read names it once the final is decided.
+    if (home.champion !== null) {
+      const { entrantId, finalFixtureId } = home.champion;
+      const final = bracket.find((f) => f.id === finalFixtureId);
+      if (!final || final.home === null || final.away === null) {
+        throw new QuickMatchHomeShapeError(`the champion's final ${finalFixtureId} is not a seated line of this knockout`);
+      }
+      const loser = final.home.entrantId === entrantId ? final.away : final.away.entrantId === entrantId ? final.home : null;
+      if (loser === null) throw new QuickMatchHomeShapeError(`the champion ${entrantId} did not play the final ${final.id}`);
+      const score = settledScore(final, home.sport.key);
+      champion = {
+        kicker: t("quickMatch.home.champion"),
+        name: nameOf(entrantId),
+        beat: score === null ? null : t("quickMatch.home.championBeat", { loser: loser.name, score }),
+        topToo: tableTop.includes(entrantId) ? t("quickMatch.home.championTopToo") : null,
+      };
+    }
+  } else if (home.finished) {
     if (knockout) {
       const final = home.fixtures.find((f) => f.isFinal);
       if (final?.winnerEntrantId) winner = { kicker: t("quickMatch.home.winner"), names: [nameOf(final.winnerEntrantId)], note: null };
@@ -440,41 +565,142 @@ export function buildHomeView(home: QuickMatchHome, copy: QuickMatchCopy, fullTa
     }
   }
 
-  let draw: DrawRound[] | null = null;
-  if (knockout) {
+  /** A League + Knockout's knockout seat (D7): what it waits on in words while empty ("1st in the league", "2nd in the
+   *  league — to decide", "Winner of semi-final 1"); once a side sits in a league seat, its rank beside the name ("1st",
+   *  "2nd · by lot") until the match is played. */
+  const lkSeat = (f: QuickMatchFixture, s: QuickMatchSide | null, wait: QuickMatchKnockoutSeat, byLot: readonly string[]): DrawSeat => {
+    const won = s !== null && f.phase === "settled" && s.entrantId === f.winnerEntrantId;
+    if (wait.from === "league") {
+      if (s === null) {
+        const words = t(rankKey(LEAGUE_RANK_KEY, wait.rank));
+        return { name: null, label: wait.toDecide ? t("quickMatch.home.toDecide", { seat: words }) : words, winner: false };
+      }
+      const rank = t(rankKey(RANK_SHORT_KEY, wait.rank));
+      if (f.phase === "settled") return { name: s.name, label: s.name, winner: won };
+      return { name: s.name, label: s.name, winner: won, note: byLot.includes(s.entrantId) ? `${rank} · ${t("quickMatch.home.byLotShort")}` : rank };
+    }
+    if (s !== null) return { name: s.name, label: s.name, winner: won };
+    const feeder = bracket.find((x) => x.id === wait.fixtureId);
+    if (!feeder) throw new QuickMatchHomeShapeError(`a knockout seat waits on ${wait.fixtureId}, which is no line of this knockout`);
+    const { role, count, index } = placeOf(feeder, bracket);
+    return { name: null, label: say(winnerOfLabel(role, count, index, matchNo.get(feeder.id)!)), winner: false };
+  };
+
+  let draw: Built["draw"] = null;
+  if (knockout || lk !== null) {
     const byRound = new Map<number, DrawCard[]>();
-    for (const f of home.fixtures) {
+    for (const f of bracket) {
       // Settled: the score sits on the winner's line, read winner first (the mockup's card); live: under both seats.
       const settled = !f.isBye && f.phase === "settled" ? settledScore(f, home.sport.key) : null;
-      const withScore = (s: SeatView): DrawSeat => (s.winner && settled !== null ? { ...s, score: settled } : s);
-      const homeSeat = withScore(seat(f, f.home, f.homeSlotLabel));
-      const awaySeat = withScore(seat(f, f.away, f.awaySlotLabel));
+      const withScore = (s: DrawSeat): DrawSeat => (s.winner && settled !== null ? { ...s, score: settled } : s);
+      const seats = lk !== null ? f.knockoutSeats : null;
+      if (lk !== null && seats === null) throw new QuickMatchHomeShapeError(`the knockout line ${f.id} names no seats`);
+      const homeSeat = withScore(seats ? lkSeat(f, f.home, seats.home, lk!.ko.byLot) : seat(f, f.home, f.homeSlotLabel));
+      const awaySeat = withScore(seats ? lkSeat(f, f.away, seats.away, lk!.ko.byLot) : seat(f, f.away, f.awaySlotLabel));
       const onWinnerLine = homeSeat.score !== undefined || awaySeat.score !== undefined;
       // A bye's card lists the side going through first, then the bye.
       const [first, second] = f.isBye && f.home === null ? [awaySeat, homeSeat] : [homeSeat, awaySeat];
+      // A League + Knockout's hero card says it is next, as the hero does ("Up next · Final", T7 review m1); once in play
+      // it keeps its bare name beside the Live mark.
+      const next = lk !== null && heroFixture !== null && heroFixture.id === f.id;
       const card: DrawCard = {
         id: f.id,
-        round: f.isBye ? null : roundName(f),
+        round: f.isBye ? null : next && f.phase !== "live" ? t("quickMatch.home.upNextRound", { round: roundName(f) }) : roundName(f),
         bye: f.isBye,
         isFinal: f.isFinal,
         live: f.phase === "live",
         home: first,
         away: second,
         score: f.phase === "live" ? scoreText(f, home.sport.key, copy.levels) : onWinnerLine ? null : settled,
+        // A League + Knockout's cards carry what its list rows would (the list is the league's): the hero's edge, Score on a
+        // match to play, Edit result on a settled one the pad will reopen. Never Not played (a bracket needs a winner).
+        ...(lk !== null
+          ? {
+              next,
+              play: f.phase === "ready" || f.phase === "live" ? { live: f.phase === "live" } : null,
+              edit: f.phase === "settled" && !f.resultMovedOn,
+            }
+          : {}),
       };
       byRound.set(f.roundNo, [...(byRound.get(f.roundNo) ?? []), card]);
     }
-    draw = [...byRound.entries()].sort(([a], [b]) => a - b).map(([roundNo, cards]) => ({ roundNo, cards }));
+    const rounds = [...byRound.entries()].sort(([a], [b]) => a - b).map(([roundNo, cards]) => ({ roundNo, cards }));
+    draw =
+      lk !== null
+        ? {
+            title: t("quickMatch.home.knockout"),
+            rounds,
+            leagueKnockout: {
+              caption:
+                lk.ko.state === "league"
+                  ? t("quickMatch.home.knockoutFills")
+                  : lk.ko.state === "tie"
+                    ? t("quickMatch.home.knockoutWaiting")
+                    : null,
+            },
+          }
+        : { title: t("quickMatch.home.draw"), rounds, leagueKnockout: null };
   }
 
   // "Add a match" (C5, Task 8): the decider a level top asks for, so its selects open at the table's top two, in the
   // stored table's own order (the producer ranks it); before there is a table, at the first two sides as typed.
   let addMatch: Built["addMatch"] = null;
-  if (!knockout && home.sides.length >= 2) {
+  // A League + Knockout's league takes no match once it is complete (§6, D3: its knockout fills, or asks, from that league).
+  if (!knockout && home.sides.length >= 2 && !(lk !== null && lk.league.done)) {
     const ranked = ((home.standings?.rows ?? []) as { entrantId: string }[]).map((r) => r.entrantId);
     const [first, second] = ranked.length >= 2 ? ranked : home.sides.map((s) => s.entrantId);
     addMatch = { sides: home.sides.map((s) => ({ id: s.entrantId, name: s.name })), home: first!, away: second! };
   }
+
+  // The tie at the cut (§5, §11): the hero's question while it is open. Its sides are named in the order the guests typed
+  // them, never the lot's; "Tie for 2nd: Ines and Mika" for two, "Tie for 1st: 3 sides, 2 places" for more (pick N of M).
+  let cut: Built["cut"] = null;
+  let settingUp: Built["settingUp"] = null;
+  let cutResult: Built["cutResult"] = null;
+  if (lk !== null) {
+    const { ko } = lk;
+    if (ko.state === "tie") {
+      const tie = ko.tie;
+      if (tie === null) throw new QuickMatchHomeShapeError("the knockout asks about a tie at the cut, but names none");
+      const members = home.sides.filter((s) => tie.entrantIds.includes(s.entrantId));
+      if (members.length !== tie.entrantIds.length) {
+        throw new QuickMatchHomeShapeError(`the tie at the cut names a side the quick match does not hold (${tie.entrantIds.join(", ")})`);
+      }
+      const place = t(rankKey(RANK_SHORT_KEY, tie.place));
+      cut = {
+        kicker: copy.plural("quickMatch.cut.kicker", tie.seats),
+        title:
+          members.length === 2
+            ? t("quickMatch.cut.title", { place, names: listOf(members.map((m) => m.name)) })
+            : copy.plural("quickMatch.cut.titleMany", tie.seats, { place, sides: members.length }),
+        body: t("quickMatch.cut.body"),
+        view: { members: members.map((m) => ({ id: m.entrantId, name: m.name })), seats: tie.seats, toss: tie.byLot },
+      };
+    } else if (ko.state === "settingUp") {
+      settingUp = {
+        kicker: t("quickMatch.home.leagueFinished"),
+        title: t("quickMatch.home.settingUp"),
+        hint: t("quickMatch.home.settingUpHint"),
+      };
+    } else if (ko.state === "filled" && !home.finished && ko.decision !== null) {
+      // The answer, above the knockout's hero (mockup §9): the same names on every phone and every reload (§11).
+      const names = listOf(ko.decision.through.map(nameOf));
+      cutResult =
+        ko.decision.how === "toss"
+          ? [t("quickMatch.cut.tossResult", { names }), t("quickMatch.cut.tossBody")]
+          : [t("quickMatch.cut.pickResult", { names })];
+    }
+  }
+
+  // The played line keeps the whole match's N of M (D8, §12: league + knockout); a League + Knockout says how M splits
+  // while its league is on, and that the knockout is on once it has filled.
+  const playedText = playedLine(copy.plural, home, home.row.expiresAt === null || home.finished ? null : QUICK_MATCH_EXPIRY_DAYS);
+  const stagePart =
+    lk === null || home.finished
+      ? null
+      : lk.ko.state === "filled"
+        ? t("quickMatch.home.stagePart.knockoutOn")
+        : t("quickMatch.home.stagePart.split", { league: lk.league.total, knockout: home.total - lk.league.total });
 
   return {
     // The kind only where the guest chose it (the setup page shows its kind switch only then): "Chess · League".
@@ -486,15 +712,119 @@ export function buildHomeView(home: QuickMatchHome, copy: QuickMatchCopy, fullTa
     // guest no longer runs, and a league finished with nothing played has no score at all. Its deletion is still said, by
     // the dated "Not saved — deleted on …" line under Save. The Continue card and the account's list say the same words
     // (`playedLine`), without the countdown.
-    played: playedLine(copy.plural, home, home.row.expiresAt === null || home.finished ? null : QUICK_MATCH_EXPIRY_DAYS),
+    played: stagePart === null ? playedText : `${playedText} · ${stagePart}`,
     hero,
     winner,
     noPlay,
     standings,
     draw,
     matches,
+    matchesTitle: t(lk !== null ? "quickMatch.home.leagueMatches" : "quickMatch.home.all"),
     addMatch,
+    cut,
+    settingUp,
+    cutResult,
+    champion,
+    knockoutFirst: lk !== null && lk.ko.state === "filled",
   };
+}
+
+/** A League + Knockout's two reads the view leans on, refused loudly when the read did not give them. */
+function lkOf(home: QuickMatchHome): { ko: QuickMatchKnockout; league: NonNullable<QuickMatchHome["league"]> } | null {
+  if (home.row.format !== "league_knockout") return null;
+  if (home.knockout === null || home.league === null) {
+    throw new QuickMatchHomeShapeError("a League + Knockout read with no knockout or no league counts");
+  }
+  return { ko: home.knockout, league: home.league };
+}
+
+type TableRowIn = { entrantId: string; rank?: number };
+type ViewRow = StandingsView["rows"][number];
+
+/**
+ * A League + Knockout's table rows (D6, D9; mockup qmd13a01 §7-12), from the plain rows in the stored table's order:
+ *   - who goes through, lime: once filled, the sides the knockout's league seats hold (the confirmed fill is the one
+ *     authority); before, the top `qualifiers` by the table, less an open tie, less a tie settled by Pick but its picks;
+ *   - an OPEN tie at the cut (D9): its rows read "=" and "level — to decide", in the order the guests typed them — never
+ *     the lot's order, which the question has not revealed (§11);
+ *   - a tie settled by PICK: "=" (the lot did not decide it), the picked first, marked "picked";
+ *   - a tie the lot ordered (a toss, or sides who all go through, §5 case 2): their places, marked "decided by lot";
+ *   - a dashed line at the cut, between the sides going through, an open tie and the rest.
+ * A table no match has reached is level: no side is going anywhere yet, so nothing is marked until the knockout fills.
+ * `order[i]` is the plain row each new row came from (the full table's cells follow it).
+ */
+function lkRows(
+  ko: QuickMatchKnockout,
+  stored: readonly TableRowIn[],
+  plain: readonly ViewRow[],
+  level: boolean,
+  bracket: readonly QuickMatchFixture[],
+  sides: readonly QuickMatchSide[],
+  t: QuickMatchCopy["t"],
+): { rows: ViewRow[]; order: number[] } {
+  const open = new Set(ko.state === "tie" && ko.tie !== null ? ko.tie.entrantIds : []);
+  const pickClass = new Set(ko.decision?.how === "pick" ? ko.decision.tie : []);
+  const picked = new Set(ko.picked);
+  const byLot = new Set(ko.byLot);
+  const typed = new Map(sides.map((s, i) => [s.entrantId, i]));
+  const rankOf = new Map(stored.map((r) => [r.entrantId, r.rank ?? Number.POSITIVE_INFINITY]));
+  let through: Set<string>;
+  if (ko.filled) {
+    through = new Set(
+      bracket.flatMap((f) =>
+        (["home", "away"] as const).flatMap((at) => {
+          const s = f[at];
+          return s !== null && f.knockoutSeats?.[at].from === "league" ? [s.entrantId] : [];
+        }),
+      ),
+    );
+  } else {
+    through = new Set(
+      stored
+        .filter((r) => (r.rank ?? Number.POSITIVE_INFINITY) <= ko.qualifiers && !open.has(r.entrantId) && !pickClass.has(r.entrantId))
+        .map((r) => r.entrantId),
+    );
+    for (const id of picked) through.add(id);
+  }
+
+  // The display order: each open or picked class keeps its block of places, its rows reordered within it.
+  const order = plain.map((_, i) => i);
+  const reorder = (members: ReadonlySet<string>, key: (id: string) => number) => {
+    const places = order.flatMap((row, place) => (members.has(plain[row]!.entrantId) ? [place] : []));
+    const rowsIn = places.map((place) => order[place]!).sort((a, b) => key(plain[a]!.entrantId) - key(plain[b]!.entrantId) || a - b);
+    places.forEach((place, k) => (order[place] = rowsIn[k]!));
+  };
+  if (open.size > 0) reorder(open, (id) => typed.get(id) ?? Number.POSITIVE_INFINITY);
+  if (pickClass.size > 0) reorder(pickClass, (id) => (picked.has(id) ? 0 : 1) * 1e6 + (rankOf.get(id) ?? 0));
+
+  // A level table (nothing counted yet) sends nobody anywhere, so no tint and no line, until the knockout fills: the fill is
+  // the authority then, even over a league whose every match was Not played. A tie it asks about is marked either way.
+  const marks = ko.filled || !level;
+  const group = (id: string) => (open.has(id) ? 1 : through.has(id) ? 0 : 2);
+  const rows = order.map((i, k): ViewRow => {
+    const r = plain[i]!;
+    const id = r.entrantId;
+    const tag: ViewRow["tag"] = open.has(id)
+      ? { text: t("quickMatch.home.levelToDecide"), kind: "toDecide" }
+      : pickClass.has(id)
+        ? picked.has(id)
+          ? { text: t("quickMatch.home.picked"), kind: "picked" }
+          : null
+        : byLot.has(id)
+          ? { text: t("quickMatch.home.byLot"), kind: "lot" }
+          : null;
+    const prev = k > 0 ? plain[order[k - 1]!]!.entrantId : null;
+    return {
+      ...r,
+      ...(open.has(id) || pickClass.has(id) ? { place: "=", placeHidden: true } : {}),
+      leader: false,
+      through: marks && through.has(id),
+      ...(open.has(id) ? { toDecide: true } : {}),
+      ...(tag !== null ? { tag } : {}),
+      ...(marks && prev !== null && group(prev) !== group(id) ? { cutAbove: true } : {}),
+    };
+  });
+  return { rows, order };
 }
 
 // ── the page body ───────────────────────────────────────────────────────────────────────────────────────────────────
@@ -533,6 +863,17 @@ export function QuickMatchHomeView({
   const { t } = copy;
   const v = buildHomeView(home, copy, fullTable);
   const save = saveStateFor(home.row.savedByUserId, viewerId);
+  const drawNode = v.draw ? (
+    <QuickMatchDraw
+      title={v.draw.title}
+      rounds={v.draw.rounds}
+      byeLabel={t("bracket.slot.bye")}
+      liveLabel={t("quickMatch.home.live")}
+      leagueKnockout={
+        v.draw.leagueKnockout ? { caption: v.draw.leagueKnockout.caption, score: slots.score, rowMenu: slots.rowMenu } : undefined
+      }
+    />
+  ) : null;
   // Owner 2026-11-12: under Save, while nobody holds the match, the DAY it is deleted, from the row's own expiry, named in
   // the guest's own zone and never late (`deletion-line.tsx`, review I1). No expiry, no line: a match whose saver's account
   // was deleted is offered Save again (`saved_by_user_id` is ON DELETE SET NULL) but `expires_at` stays null, and nothing
@@ -590,21 +931,12 @@ export function QuickMatchHomeView({
                 {flash.text}
               </p>
             ) : null}
-            <div className="min-w-0">
-              <p data-testid="qm-eyebrow" className={`${LABEL} [overflow-wrap:anywhere]`}>
-                {v.eyebrow}
-              </p>
-              <h1
-                data-testid="qm-name"
-                className="app-display mt-1 text-[1.75rem] font-bold leading-[1.1] text-cream [overflow-wrap:anywhere] lg:text-[2.25rem]"
-              >
-                {home.row.name}
-              </h1>
-              <p data-testid="qm-played" className="mt-1.5 text-[13px] leading-snug text-[#b7aede]">
-                {v.played}
-              </p>
-            </div>
+            {titleBlock(v.eyebrow, home.row.name, v.played)}
+            {v.cutResult ? cutResultLine(v.cutResult) : null}
             {v.hero ? heroCard(v.hero, t, slots.score) : null}
+            {v.cut ? cutCard(v.cut, slots.cut) : null}
+            {v.settingUp ? settingUpCard(v.settingUp, slots.refresh) : null}
+            {v.champion ? championCard(v.champion) : null}
             {v.winner ? winnerCard(v.winner) : null}
             {v.noPlay ? noPlayCard(v.noPlay, routes.quickMatchSetup(copy.locale), t("quickMatch.dead.startNew")) : null}
             {slots.share || saveNode ? (
@@ -615,18 +947,13 @@ export function QuickMatchHomeView({
             ) : null}
           </div>
           <div className="flex min-w-0 flex-col gap-6">
+            {/* A League + Knockout's bracket moves above the table once it has filled (§12): it is what people watch. */}
+            {v.knockoutFirst ? drawNode : null}
             {v.standings ? <QuickMatchStandings view={v.standings} /> : null}
-            {v.draw ? (
-              <QuickMatchDraw
-                title={t("quickMatch.home.draw")}
-                rounds={v.draw}
-                byeLabel={t("bracket.slot.bye")}
-                liveLabel={t("quickMatch.home.live")}
-              />
-            ) : null}
+            {v.knockoutFirst ? null : drawNode}
             {v.matches.length > 0 ? (
               <QuickMatchList
-                title={t("quickMatch.home.all")}
+                title={v.matchesTitle}
                 matches={v.matches}
                 versus={t("quickMatch.home.versus")}
                 waits={t("quickMatch.home.waits")}
@@ -665,13 +992,47 @@ export function gantry(t: QuickMatchCopy["t"]): ReactNode {
   );
 }
 
-function heroCard(hero: NonNullable<Built["hero"]>, t: QuickMatchCopy["t"], score?: ScoreSlot): ReactNode {
+/** A name set large, sized to its longest unbreakable run (name-fit.ts; sign-off qlk14s1, 2026-11-14): the run goes in
+ *  `--qm-name-run`, and the element's `text-[length:clamp(1.25rem,calc(100cqi/var(--qm-name-run)/0.55),<size>)]` reads it
+ *  against the nearest `@container` — the size it was always set at, shrunk only as far as that run needs to fit the
+ *  container's width (0.55em a character: Barlow Condensed bold capitals average 0.50em, measured), never below 1.25rem.
+ *  So a line breaks between words; only a single run too long even at 1.25rem still breaks inside
+ *  (`[overflow-wrap:anywhere]`, the last resort). Each class is written out whole where it is used: Tailwind reads the
+ *  source, never a class built at run time. */
+function nameRun(text: string): CSSProperties {
+  return { "--qm-name-run": longestUnbreakableRun(text) } as CSSProperties;
+}
+
+/** The page's title: the format's eyebrow, the quick match's name and how much is played. The block is the size container
+ *  the name fits (a typed name can be one long word): 1.75rem at most, 2.25rem from lg. */
+export function titleBlock(eyebrow: string, name: string, played: string): ReactNode {
+  return (
+    <div className="@container min-w-0">
+      <p data-testid="qm-eyebrow" className={`${LABEL} [overflow-wrap:anywhere]`}>
+        {eyebrow}
+      </p>
+      <h1
+        data-testid="qm-name"
+        style={nameRun(name)}
+        className="app-display mt-1 text-[length:clamp(1.25rem,calc(100cqi/var(--qm-name-run)/0.55),1.75rem)] font-bold leading-[1.1] text-cream [overflow-wrap:anywhere] lg:text-[length:clamp(1.25rem,calc(100cqi/var(--qm-name-run)/0.55),2.25rem)]"
+      >
+        {name}
+      </h1>
+      <p data-testid="qm-played" className="mt-1.5 text-[13px] leading-snug text-[#b7aede]">
+        {played}
+      </p>
+    </div>
+  );
+}
+
+/** The next match: each side's name fits its own run in the card (`nameRun`), 1.6rem at most. */
+export function heroCard(hero: NonNullable<Built["hero"]>, t: QuickMatchCopy["t"], score?: ScoreSlot): ReactNode {
   const live = hero.fixture.live;
   return (
     <section
       data-testid="qm-hero"
       aria-labelledby="qm-hero-kicker"
-      className="min-w-0 rounded-2xl border border-[color:var(--mk-lime)] bg-night-2 p-4 shadow-[0_0_0_1px_rgba(163,230,53,0.12),0_18px_40px_-24px_rgba(163,230,53,0.45)]"
+      className="@container min-w-0 rounded-2xl border border-[color:var(--mk-lime)] bg-night-2 p-4 shadow-[0_0_0_1px_rgba(163,230,53,0.12),0_18px_40px_-24px_rgba(163,230,53,0.45)]"
     >
       <p
         id="qm-hero-kicker"
@@ -683,8 +1044,12 @@ function heroCard(hero: NonNullable<Built["hero"]>, t: QuickMatchCopy["t"], scor
         ) : null}
         <span className="min-w-0 [overflow-wrap:anywhere]">{hero.kicker}</span>
       </p>
-      <div className="app-display mt-2 flex min-w-0 flex-col gap-1 text-[1.6rem] font-bold leading-[1.1] text-cream">
-        <span data-testid="qm-hero-home" className="min-w-0 [overflow-wrap:anywhere]">
+      <div className="app-display mt-2 flex min-w-0 flex-col gap-1 font-bold leading-[1.1] text-cream">
+        <span
+          data-testid="qm-hero-home"
+          style={nameRun(hero.home)}
+          className="min-w-0 text-[length:clamp(1.25rem,calc(100cqi/var(--qm-name-run)/0.55),1.6rem)] [overflow-wrap:anywhere]"
+        >
           {hero.home}
         </span>
         {live && hero.score !== null ? (
@@ -694,7 +1059,11 @@ function heroCard(hero: NonNullable<Built["hero"]>, t: QuickMatchCopy["t"], scor
         ) : (
           <span className="text-base font-semibold text-[#b7aede]">{t("quickMatch.home.versus")}</span>
         )}
-        <span data-testid="qm-hero-away" className="min-w-0 [overflow-wrap:anywhere]">
+        <span
+          data-testid="qm-hero-away"
+          style={nameRun(hero.away)}
+          className="min-w-0 text-[length:clamp(1.25rem,calc(100cqi/var(--qm-name-run)/0.55),1.6rem)] [overflow-wrap:anywhere]"
+        >
           {hero.away}
         </span>
       </div>
@@ -703,12 +1072,140 @@ function heroCard(hero: NonNullable<Built["hero"]>, t: QuickMatchCopy["t"], scor
   );
 }
 
-function winnerCard(winner: NonNullable<Built["winner"]>): ReactNode {
+/** The tie at the cut, as the hero (plan 5 T7, spec §5, mockup qmd13a01 §8): orange where the hero is lime, so a question
+ *  never reads as a match to play. The answers are the page's (`cut` slot: the Pick panel and the Toss form). The title names
+ *  the tied sides, so it fits its longest run in the card (`nameRun`), 1.6rem at most. */
+export function cutCard(cut: NonNullable<Built["cut"]>, slot?: CutSlot): ReactNode {
+  return (
+    <section
+      data-testid="qm-cut"
+      aria-labelledby="qm-cut-title"
+      className="@container min-w-0 rounded-2xl border border-[color:var(--mk-orange)] bg-night-2 p-4 shadow-[0_0_0_1px_rgba(251,146,60,0.12),0_18px_40px_-24px_rgba(251,146,60,0.5)]"
+    >
+      <p
+        data-testid="qm-cut-kicker"
+        className="app-display text-sm font-semibold tracking-[0.06em] text-[color:var(--mk-orange)] [overflow-wrap:anywhere]"
+      >
+        {cut.kicker}
+      </p>
+      <h2
+        id="qm-cut-title"
+        data-testid="qm-cut-title"
+        style={nameRun(cut.title)}
+        className="app-display mt-2 text-[length:clamp(1.25rem,calc(100cqi/var(--qm-name-run)/0.55),1.6rem)] font-bold leading-[1.1] text-cream [overflow-wrap:anywhere]"
+      >
+        {cut.title}
+      </h2>
+      <p data-testid="qm-cut-body" className="mt-2 text-sm leading-snug text-[#d9d2f2] [overflow-wrap:anywhere]">
+        {cut.body}
+      </p>
+      {slot ? <div className="mt-4 min-w-0">{slot(cut.view)}</div> : null}
+    </section>
+  );
+}
+
+/** The league is done and the knockout not filled yet (spec §11, mockup qmd13a01 §12): what is happening, and a Refresh —
+ *  every load retries the fill. A calm card: there is nothing to tap but Refresh. */
+function settingUpCard(card: NonNullable<Built["settingUp"]>, refresh?: ReactNode): ReactNode {
+  return (
+    <section
+      data-testid="qm-setting-up"
+      aria-labelledby="qm-setting-up-title"
+      className="min-w-0 rounded-2xl border border-[#3b2a6e] bg-night-2 p-4"
+    >
+      <p data-testid="qm-setting-up-kicker" className="app-display text-sm font-semibold tracking-[0.06em] text-[#b7aede]">
+        {card.kicker}
+      </p>
+      <h2
+        id="qm-setting-up-title"
+        data-testid="qm-setting-up-title"
+        className="app-display mt-1.5 text-[1.6rem] font-bold leading-[1.1] text-cream [overflow-wrap:anywhere]"
+      >
+        {card.title}
+      </h2>
+      <p data-testid="qm-setting-up-hint" className="mt-2 text-sm leading-snug text-[#d9d2f2] [overflow-wrap:anywhere]">
+        {card.hint}
+      </p>
+      {refresh ? <div className="mt-4 min-w-0">{refresh}</div> : null}
+    </section>
+  );
+}
+
+/** "Setting up the knockout"'s Refresh: a plain link to the home's own path (`routes.quickMatch(token)`, built by the page),
+ *  so it works with no script and the load it starts retries the fill. The path holds the home token (O3): no capture. */
+export function QuickMatchRefreshLink({ href, label }: { href: string; label: string }) {
+  return (
+    <a
+      data-testid="qm-refresh"
+      href={href}
+      className="ph-no-capture app-display inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-[#4a3a80] px-5 py-2.5 text-center text-base font-semibold leading-tight text-cream hover:border-[#6b5aa6] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cream"
+    >
+      <RotateCw aria-hidden="true" className="h-4 w-4 flex-none" />
+      <span className="min-w-0 [overflow-wrap:anywhere]">{label}</span>
+    </a>
+  );
+}
+
+/** How the tie at the cut was settled (§11, mockup qmd13a01 §9), above the knockout's hero once it has filled. */
+function cutResultLine(lines: readonly string[]): ReactNode {
+  return (
+    <div
+      data-testid="qm-cut-result"
+      className="min-w-0 rounded-xl border border-[rgb(183_174_222/0.35)] bg-[rgb(183_174_222/0.08)] px-3 py-2.5 text-sm leading-snug text-[#d9d2f2] [overflow-wrap:anywhere]"
+    >
+      {lines.map((line, i) => (
+        <p key={i} className={i === 0 ? "font-semibold text-cream" : "mt-1"}>
+          {line}
+        </p>
+      ))}
+    </div>
+  );
+}
+
+/** The champion (D8, mockup qmd13a01 §11): the final's winner, who they beat and by what, and whether they topped the
+ *  league too. The one trophy on the page.
+ *
+ *  The name fits its longest run in the card (`nameRun`), 2rem at most (sign-off qlk14s1: at 320 a 43-character name
+ *  split "FEATHERSTONEHAUG / H-BRAY"). */
+export function championCard(champion: NonNullable<Built["champion"]>): ReactNode {
+  return (
+    <section
+      data-testid="qm-champion"
+      aria-labelledby="qm-champion-kicker"
+      className="@container min-w-0 rounded-2xl border border-[color:var(--mk-lime)] bg-night-2 p-4 shadow-[0_0_0_1px_rgba(163,230,53,0.12),0_18px_40px_-24px_rgba(163,230,53,0.45)]"
+    >
+      <p
+        id="qm-champion-kicker"
+        data-testid="qm-champion-kicker"
+        className="app-display flex min-w-0 items-center gap-2 text-sm font-semibold tracking-[0.06em] text-[color:var(--mk-lime)]"
+      >
+        <Trophy aria-hidden="true" className="h-4 w-4 flex-none" strokeWidth={2.25} />
+        <span className="min-w-0 [overflow-wrap:anywhere]">{champion.kicker}</span>
+      </p>
+      <p
+        data-testid="qm-champion-name"
+        style={nameRun(champion.name)}
+        className="app-display mt-2 text-[length:clamp(1.25rem,calc(100cqi/var(--qm-name-run)/0.55),2rem)] font-bold leading-[1.05] text-cream [overflow-wrap:anywhere]"
+      >
+        {champion.name}
+      </p>
+      {champion.beat !== null || champion.topToo !== null ? (
+        <p data-testid="qm-champion-beat" className="mt-2 text-sm leading-snug text-[#d9d2f2] [overflow-wrap:anywhere]">
+          {[champion.beat, champion.topToo].filter((x) => x !== null).join(" ")}
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
+/** A plain League's or Knockout's winner (co-leaders share the card): each name fits its own run in the card (`nameRun`),
+ *  1.75rem at most. */
+export function winnerCard(winner: NonNullable<Built["winner"]>): ReactNode {
   return (
     <section
       data-testid="qm-winner"
       aria-labelledby="qm-winner-kicker"
-      className="min-w-0 rounded-2xl border border-[color:var(--mk-lime)] bg-night-2 p-4"
+      className="@container min-w-0 rounded-2xl border border-[color:var(--mk-lime)] bg-night-2 p-4"
     >
       <p
         id="qm-winner-kicker"
@@ -724,7 +1221,8 @@ function winnerCard(winner: NonNullable<Built["winner"]>): ReactNode {
           <li
             key={i}
             data-testid="qm-winner-name"
-            className="app-display text-[1.75rem] font-bold leading-[1.1] text-cream [overflow-wrap:anywhere]"
+            style={nameRun(name)}
+            className="app-display text-[length:clamp(1.25rem,calc(100cqi/var(--qm-name-run)/0.55),1.75rem)] font-bold leading-[1.1] text-cream [overflow-wrap:anywhere]"
           >
             {name}
           </li>

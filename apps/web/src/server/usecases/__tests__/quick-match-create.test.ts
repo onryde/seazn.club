@@ -11,6 +11,12 @@
 // The wrapper is driven on badminton only: the sweep across every sport and variant is Task 6's probe
 // (`_quick-match-probe.ts`, through quick-match-offer.test.ts), which creates through the same tree.
 //
+// Part C (plan 5 Task 3) is League + Knockout: one division of two stages, the knockout's lines written at the create so the
+// bracket shows from the start, and the league's tiebreak order without the seed step (the P8 ruling). Its expected values come
+// from the rulebook (n(n-1)/2 + q - 1; 1v4, 2v3; 1v2), the mockup's Start counts, the spec's offer table (§3), the organiser's
+// own template and the engine's declarations (`defaultTiebreakers`, `descriptorLabel`). It sweeps every offered variant once
+// (C23), through the guarded create.
+//
 // Real Postgres required (RLS, triggers, the generator); skipped without DATABASE_URL.
 import { randomBytes as kekBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -20,13 +26,20 @@ import { sql, withTenant } from "@/lib/db";
 import { captureServer } from "@/lib/posthog-server";
 import { isBye } from "@/lib/run-sheet-groups";
 import { QUICK_MATCH_MAX_SIDES, QUICK_MATCH_MIN_SIDES, QUICK_MATCH_SYSTEM_ORG_ID } from "@/lib/quick-match-constants";
-import type { EntrantKind } from "@seazn/engine/sport";
+import { cutTiebreakers } from "../quick-match-cut";
+import type { AnySportModule, EntrantKind, TiebreakerKey } from "@seazn/engine/sport";
+import { descriptorLabel } from "@seazn/engine/competition";
+import { builtinModules } from "@seazn/engine/sports";
+import { declaredCfgs } from "@seazn/engine/testkit";
+import offerJson from "@/lib/quick-match-offer.generated.json";
+import { loadTableRules } from "@/server/engine-db/table-rules";
 import { CreateQuickMatch } from "@/server/api-v1/schemas";
 import { createCompetition } from "../competitions";
 import { listDivisionFixtures } from "../fixtures";
+import { UNDO_BARRIER_TYPES } from "../history";
 import { createQuickMatch, createQuickMatchTree, sealNewHomeToken, systemAuth } from "../quick-match-create";
 import { quickMatchPreview } from "../quick-match-preview";
-import { offerFor } from "../quick-match-sports";
+import { listQuickMatchSports, offerFor } from "../quick-match-sports";
 import { hardDeleteQuickMatchCompetition } from "../quick-match-delete";
 import { hashHomeToken, hashVisitorKey, mintVisitorKey, openHomeToken } from "../quick-match-tokens";
 import { afterScheduleWrite } from "../schedule";
@@ -381,7 +394,7 @@ describe.skipIf(!HAS_DB)("createQuickMatch (Part B: the guarded wrapper)", () =>
     expect(ours).toHaveLength(1);
     expect(ours[0]).toMatchObject({
       orgId: SYSTEM_ORG,
-      properties: { quick_match_id: out.id, sport_key: "badminton", variant_key: BADMINTON_V, kind: "pair", format: "league", sides: 4, plays: 1 },
+      properties: { quick_match_id: out.id, sport_key: "badminton", variant_key: BADMINTON_V, kind: "pair", format: "league", qualifiers: null, sides: 4, plays: 1 },
     });
     const wire = JSON.stringify(ours[0]);
     for (const secret of [b.name, b.email, out.token]) expect(wire).not.toContain(secret);
@@ -397,4 +410,276 @@ describe("createQuickMatch's mail gate is required (review m6)", () => {
       createQuickMatch(input, { visitorHash: "0".repeat(64) });
     expect(omitted).toBeTypeOf("function");
   });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Part C: League + Knockout (plan 5 Task 3, D1, D10; spec §3, §12, §13)
+// ---------------------------------------------------------------------------------------------------------------------
+
+/** The engine's own module and a variant's declared cfg (the authority for a sport's default tiebreak order, P8). */
+function moduleOf(sportKey: string): AnySportModule {
+  const mod = builtinModules.find((m) => m.key === sportKey);
+  if (mod === undefined) throw new Error(`premise: the engine registers no sport "${sportKey}"`);
+  return mod;
+}
+function declaredLeagueOrder(sportKey: string, variantKey: string): TiebreakerKey[] {
+  const mod = moduleOf(sportKey);
+  const declared = declaredCfgs(mod).find((c) => c.name === variantKey);
+  if (declared === undefined) throw new Error(`premise: ${sportKey} declares no variant "${variantKey}"`);
+  return mod.defaultTiebreakers("league", declared.cfg as never);
+}
+
+interface StageReadRow {
+  id: string;
+  seq: number;
+  kind: string;
+  config: Record<string, unknown>;
+  progression: unknown;
+}
+const stagesOf = async (divisionId: string): Promise<StageReadRow[]> => [
+  ...(await sql<StageReadRow[]>`select id, seq, kind, config, progression from stages where division_id = ${divisionId} order by seq`),
+];
+interface LabelledFixture {
+  id: string;
+  round_no: number;
+  home_entrant_id: string | null;
+  away_entrant_id: string | null;
+  home_slot_label: { key: string; params?: Record<string, unknown>; seed?: number } | null;
+  away_slot_label: { key: string; params?: Record<string, unknown>; seed?: number } | null;
+  winner_to_fixture: string | null;
+}
+const knockoutLinesOf = (stageId: string) =>
+  sql<LabelledFixture[]>`
+    select id, round_no, home_entrant_id, away_entrant_id, home_slot_label, away_slot_label, winner_to_fixture
+      from fixtures where stage_id = ${stageId} order by round_no, fixture_no`;
+/** A placeholder seat's rank, read off its label, after checking the label is the engine's own for that rank. */
+function rankOfSeat(label: LabelledFixture["home_slot_label"], where: string): number {
+  expect(label, `${where}: a waiting seat carries its label`).not.toBeNull();
+  const rank = label!.seed!;
+  // rank_order placement: the i-th seat is the i-th of the table, and the label says so in the engine's words.
+  expect(label, where).toEqual({ ...descriptorLabel({ kind: "rank_range", rank }), seed: rank });
+  return rank;
+}
+
+const SIX = ["Ravi & Sam", "Priya & Tom", "Lee & Ana", "Jo & Max", "Kim & Lou", "Ola & Pat"];
+const lkMade: string[] = [];
+
+describe.skipIf(!HAS_DB)("createQuickMatch (Part C: League + Knockout, two stages and the bracket from the start)", () => {
+  const reachedTree = () => { throw new Error("reached the tree"); };
+  const ctx = (hook?: () => void) => ({ visitorHash: v(), mailAllowed: async () => true as const, _failBeforeGenerateForTests: hook });
+  const lk = (qualifiers: 2 | 4, n: number, over: Partial<CreateQuickMatch> = {}): CreateQuickMatch => ({
+    ...input(), kind: "pair", format: "league_knockout", qualifiers, sides: SIX.slice(0, n), ...over,
+  });
+  const make = async (asked: CreateQuickMatch) => {
+    const out = await createQuickMatch(asked, ctx());
+    lkMade.push(out.competitionId);
+    return out;
+  };
+  const nothingBuilt = async (name: string) =>
+    expect(await sql`select 1 from competitions where org_id = ${SYSTEM_ORG} and name = ${name}`, `${name}: nothing built`).toHaveLength(0);
+
+  afterAll(async () => {
+    for (const id of lkMade.splice(0)) await hardDeleteQuickMatchCompetition(id).catch(() => undefined);
+  });
+
+  it("top 4 of 4: the league (seq 1, its own lot seed), then the knockout (seq 2, the top 4), 6 + 3 lines; every knockout seat waits on its rank, 1v4 and 2v3, no bye; auto_progress stays off", async () => {
+    const out = await make(lk(4, 4));
+    const stages = await stagesOf(out.divisionId);
+    expect(stages.map((st) => [st.seq, st.kind])).toEqual([[1, "league"], [2, "knockout"]]);
+    const [league, knockout] = stages as [StageReadRow, StageReadRow];
+    expect([out.stageId, out.knockoutStageId], "the first stage, then the knockout").toEqual([league.id, knockout.id]);
+    expect(league.config.legs, "each pair plays Once").toBe(1);
+    expect(league.config.rngSeed, "the league draws its own lot (P7: minted on every stage create)").toBeDefined();
+    expect(knockout.progression).toMatchObject({
+      sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
+      placement: "rank_order",
+      timing: "setup",
+    });
+
+    const leagueLines = await sql`select 1 from fixtures where stage_id = ${league.id}`;
+    expect(leagueLines, "4·3/2 league matches").toHaveLength(6);
+    const lines = await knockoutLinesOf(knockout.id);
+    expect(lines, "a knockout of 4 is 4 − 1 matches").toHaveLength(3);
+    expect(lines.every((f) => f.home_entrant_id === null && f.away_entrant_id === null), "nobody is seated before the league ends").toBe(true);
+    const all = await listDivisionFixtures(systemAuth(), out.divisionId);
+    expect(all.filter((f) => f.stage_id === knockout.id).filter((f) => isBye(f)), "q is 4: a full bracket, no bye line").toEqual([]);
+
+    const semis = lines.filter((f) => f.round_no === 1);
+    expect(semis).toHaveLength(2);
+    const pairs = new Set(semis.map((f, i) => [rankOfSeat(f.home_slot_label, `SF${i + 1} home`), rankOfSeat(f.away_slot_label, `SF${i + 1} away`)].sort().join("v")));
+    expect(pairs, "the rulebook's seeding (§3): 1st v 4th, 2nd v 3rd").toEqual(new Set(["1v4", "2v3"]));
+    const final = lines.find((f) => f.round_no === 2)!;
+    expect(semis.every((f) => f.winner_to_fixture === final.id), "both semi-finals feed the final").toBe(true);
+
+    const [division] = await sql<{ auto_progress: boolean }[]>`select auto_progress from divisions where id = ${out.divisionId}`;
+    expect(division!.auto_progress, "D2: the quick match advances itself; the organiser switch stays off").toBe(false);
+    // Both stages are ACTIVE and pinned from the moment of create: the knockout's setup-timing bracket starts its stage
+    // (`stages/setup-fixtures.ts`, pending → active + pin). So "the knockout has started" is never `stages.status`: it is a
+    // confirmed proposal (`seed_confirmed`) or a seated line, and neither exists yet.
+    const states = await sql<{ status: string; pinned: boolean }[]>`
+      select status, table_rules_pinned is not null as pinned from stages where division_id = ${out.divisionId} order by seq`;
+    expect(states, "league, then knockout: both active and pinned at create").toEqual([
+      { status: "active", pinned: true },
+      { status: "active", pinned: true },
+    ]);
+    expect(Object.keys(UNDO_BARRIER_TYPES), "premise: `seed_confirmed` is the confirm's ledger row").toContain("seed_confirmed");
+    const confirmed = await sql`select 1 from division_events where division_id = ${out.divisionId} and type = 'seed_confirmed'`;
+    expect(confirmed, "no seed confirmed at create").toHaveLength(0);
+    expect(await sql`select format from quick_matches where id = ${out.id}`).toEqual([{ format: "league_knockout" }]);
+    expect(out.matchCount, "the Start button's number").toBe(quickMatchPreview({ format: "league_knockout", sides: 4, plays: 1, qualifiers: 4 }).matchCount);
+    expect(out.matchCount, "6 + 3 (rulebook)").toBe(9);
+    expect(nonBye(all), "C17: never drifts").toHaveLength(out.matchCount);
+  });
+
+  it("top 2 of 3: three league lines and a final between 1st and 2nd; Twice doubles the league only", async () => {
+    const once = await make(lk(2, 3));
+    const [, knockout] = (await stagesOf(once.divisionId)) as [StageReadRow, StageReadRow];
+    const lines = await knockoutLinesOf(knockout.id);
+    expect(lines, "one final").toHaveLength(1);
+    const ranks = [rankOfSeat(lines[0]!.home_slot_label, "final home"), rankOfSeat(lines[0]!.away_slot_label, "final away")].sort();
+    expect(ranks, "§3: 1st v 2nd").toEqual([1, 2]);
+    expect(once.matchCount).toBe(3 + 1);
+    const twice = await make(lk(2, 3, { plays: 2 }));
+    expect(twice.matchCount, "2 × 3 league + 1 final").toBe(6 + 1);
+    expect(nonBye(await listDivisionFixtures(systemAuth(), twice.divisionId))).toHaveLength(7);
+  });
+
+  it("a plain League keeps one stage and no knockout stage id", async () => {
+    const out = await make({ ...input(), kind: "pair" });
+    expect((await stagesOf(out.divisionId)).map((st) => st.kind)).toEqual(["league"]);
+    expect(out.knockoutStageId).toBeNull();
+  });
+
+  // single-sport: tennis and ice hockey are the two sports whose default lists `seed` (P8), the only ones where the stored
+  // order differs from the default; every offered sport's stored order is swept in the C23 case below.
+  it.each(["tennis", "icehockey"])(
+    "Step 0 (P8 ruling): a League + Knockout %s league ranks by its default with no seed step; a plain League keeps the seed",
+    async (sportKey) => {
+      const sport = (await listQuickMatchSports()).find((x) => x.sport_key === sportKey);
+      expect(sport, `premise: ${sportKey} is offered`).toBeDefined();
+      const variant_key = sport!.variants[0]!.variant_key;
+      const declared = declaredLeagueOrder(sportKey, variant_key);
+      expect(declared, `premise: ${sportKey}'s default lists the seed before the lot`).toContain("seed");
+      const withoutSeed = declared.filter((k) => k !== "seed");
+      const asked = { ...input(), sport_key: sportKey, variant_key, kind: sport!.kinds.at(-1)!, sides: SIX.slice(0, 3) };
+
+      const knockoutNight = await make({ ...asked, format: "league_knockout", qualifiers: 2 });
+      const [league, knockout] = (await stagesOf(knockoutNight.divisionId)) as [StageReadRow, StageReadRow];
+      expect(league.config.tiebreakers, "the league stage's own order").toEqual(withoutSeed);
+      expect(knockout.config.tiebreakers, "the knockout ranks no table").toBeUndefined();
+      const rules = await withTenant(SYSTEM_ORG, (tx) => loadTableRules(tx, league.id));
+      expect(rules.tiebreakers, "what the table ranks by").toEqual(withoutSeed);
+
+      const plain = await make({ ...asked, format: "league" });
+      const [plainLeague] = (await stagesOf(plain.divisionId)) as [StageReadRow];
+      expect(plainLeague.config.tiebreakers, "a plain League stores no order of its own").toBeUndefined();
+      const plainRules = await withTenant(SYSTEM_ORG, (tx) => loadTableRules(tx, plainLeague.id));
+      expect(plainRules.tiebreakers, "and ranks by the sport's default, seed included (§13)").toEqual(declared);
+    },
+  );
+
+  it("refuses semi-finals of three with SEMIS_TOO_FEW_SIDES and any knockout of two with FORMAT_NOT_OFFERED, before anything (§3)", async () => {
+    const cases: [CreateQuickMatch, string][] = [
+      [lk(4, 3), "QUICK_MATCH_SEMIS_TOO_FEW_SIDES"],
+      [lk(2, 2), "QUICK_MATCH_FORMAT_NOT_OFFERED"],
+      [lk(4, 2), "QUICK_MATCH_FORMAT_NOT_OFFERED"],
+    ];
+    let refused = 0;
+    for (const [asked, code] of cases) {
+      await expect(createQuickMatch(asked, ctx(reachedTree)), `${asked.sides.length} sides, top ${asked.qualifiers}`)
+        .rejects.toMatchObject({ status: 422, code });
+      await nothingBuilt(asked.name);
+      refused++;
+    }
+    expect(refused).toBe(3);
+    // The positive pairs at each boundary: the final of three and the semi-finals of four are made.
+    expect((await make(lk(2, 3))).matchCount).toBe(3 + 1);
+    expect((await make(lk(4, 4))).matchCount).toBe(6 + 3);
+  });
+
+  it("refuses a variant whose knockout match may end level (C23: !knockoutAllowed) with FORMAT_NOT_OFFERED; the real offer makes it", async () => {
+    const real = await offerFor("badminton", BADMINTON_V);
+    expect(real.knockoutAllowed, "premise: badminton's real offer allows a knockout").toBe(true);
+    vi.mocked(offerFor).mockResolvedValueOnce({ ...real, knockoutAllowed: false });
+    const asked = lk(2, 4);
+    await expect(createQuickMatch(asked, ctx(reachedTree))).rejects.toMatchObject({ status: 422, code: "QUICK_MATCH_FORMAT_NOT_OFFERED" });
+    await nothingBuilt(asked.name);
+    // The same input, the real offer: made. And a plain League is never asked the knockout's question.
+    expect((await make({ ...asked, name: uniq() })).matchCount).toBe(6 + 1);
+    vi.mocked(offerFor).mockResolvedValueOnce({ ...real, knockoutAllowed: false });
+    expect((await make({ ...input(), kind: "pair" })).matchCount).toBe(6);
+  });
+
+  it("refuses a format and a count that disagree (a caller that built its input in code, past the schema) with 400 VALIDATION, before the mail limit is asked; the tree alone refuses them too", async () => {
+    const email = "guest@qm-create.test";
+    const baseUrl = "https://qm-create.test";
+    const cases: CreateQuickMatch[] = [
+      { ...lk(2, 3), qualifiers: null },
+      { ...lk(2, 3), qualifiers: undefined },
+      { ...input(), kind: "pair", qualifiers: 2 },
+    ];
+    let refused = 0;
+    for (const asked of cases) {
+      const where = `${asked.format} with ${asked.qualifiers}`;
+      // The guarded create: refused before `ctx.mailAllowed`, so a refused create spends no mail bucket (its docstring, step 3).
+      const mailAllowed = vi.fn(async () => true as const);
+      await expect(createQuickMatch({ ...asked, email }, { visitorHash: v(), mailAllowed, baseUrl, _failBeforeGenerateForTests: reachedTree }), where)
+        .rejects.toMatchObject({ status: 400, code: "VALIDATION" });
+      expect(mailAllowed, `${where}: no mail bucket spent`).not.toHaveBeenCalled();
+      await nothingBuilt(asked.name);
+      // The tree on its own (the offer probe's door, no guard in front of it): the same refusal, nothing built.
+      const { kind, ...treeInput } = asked;
+      const treeName = uniq();
+      await expect(createQuickMatchTree({ ...treeInput, name: treeName }, kind, { visitorHash: v(), home: sealNewHomeToken() }), `tree: ${where}`)
+        .rejects.toMatchObject({ status: 400, code: "VALIDATION" });
+      await nothingBuilt(treeName);
+      refused++;
+    }
+    expect(refused).toBe(3);
+    // The positive pair: a format and a count that agree, with an email, ask the mail limit once and are made.
+    const mailAllowed = vi.fn(async () => true as const);
+    const made = await createQuickMatch({ ...lk(2, 3), email }, { visitorHash: v(), mailAllowed, baseUrl });
+    lkMade.push(made.competitionId);
+    expect(mailAllowed, "an agreeing pair asks the mail limit").toHaveBeenCalledTimes(1);
+  });
+
+  it("quick_match_created carries the count: 2 for League → Final, 4 for semi-finals (and null for a League, Part B)", async () => {
+    const cap = vi.mocked(captureServer);
+    for (const q of [2, 4] as const) {
+      cap.mockClear();
+      const out = await make(lk(q, 4));
+      const ours = cap.mock.calls.map(([a]) => a).filter((a) => a.event === EVENTS.QUICK_MATCH_CREATED);
+      expect(ours, `top ${q}`).toHaveLength(1);
+      expect(ours[0]!.properties, `top ${q}`).toMatchObject({ quick_match_id: out.id, format: "league_knockout", qualifiers: q, sides: 4 });
+    }
+  });
+
+  it("every offered variant whose knockout cannot end level (C23) makes a League → Final of three: 3 + 1 lines, two stages, and a league order with no seed that ends in the lot", async () => {
+    const offered = (offerJson as { offered: { sport_key: string; variant_key: string; knockoutAllowed: boolean }[] }).offered;
+    const allowed = offered.filter((o) => o.knockoutAllowed);
+    expect(allowed.length, "anti-vacuity: the offer allows a knockout somewhere").toBeGreaterThan(0);
+    let checked = 0;
+    for (const { sport_key, variant_key } of allowed) {
+      const where = `${sport_key}/${variant_key}`;
+      const { kinds } = await offerFor(sport_key, variant_key);
+      const out = await createQuickMatch(
+        { ...input(), sport_key, variant_key, kind: kinds.at(-1)!, format: "league_knockout", qualifiers: 2, sides: ["Side 1", "Side 2", "Side 3"] },
+        ctx(),
+      );
+      try {
+        expect(nonBye(await listDivisionFixtures(systemAuth(), out.divisionId)), where).toHaveLength(3 + 1);
+        const [league, knockout] = (await stagesOf(out.divisionId)) as [StageReadRow, StageReadRow];
+        expect([league.kind, knockout?.kind], where).toEqual(["league", "knockout"]);
+        const stored = league.config.tiebreakers as string[];
+        expect(stored, where).toEqual(declaredLeagueOrder(sport_key, variant_key).filter((k) => k !== "seed"));
+        expect(stored.at(-1), `${where}: the toss reveals the lot, so the lot is last`).toBe("lots");
+        expect(stored, where).toEqual(cutTiebreakers(declaredLeagueOrder(sport_key, variant_key)));
+      } finally {
+        await hardDeleteQuickMatchCompetition(out.competitionId);
+      }
+      checked++;
+    }
+    expect(checked).toBe(allowed.length);
+    console.info(`League + Knockout C23 sweep: ${checked} offered variants made and deleted`);
+  }, 600_000);
 });

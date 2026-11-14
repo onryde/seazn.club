@@ -11,9 +11,14 @@ import "server-only";
 // Nothing here computes a result. The table is the stored one (`getStandings`), the bracket is the fixture rows as the
 // generator and the write path left them (winners already seated by `onDecided`, §7.10), and a bye is the shared
 // predicate (`isBye`, lib/run-sheet-groups.ts), never re-derived.
+//
+// A League + Knockout (plan docs/superpowers/plans/2026-11-13-quick-match-5-league-knockout.md T5; spec
+// docs/superpowers/specs/2026-11-12-quick-match-league-knockout-design.md §6, §11, §12) is one division with two stages,
+// read as one home: every line carries its stage, "N of M played" counts both (D8), the league's own counts drive its hero,
+// and the knockout's state (the question at the cut, Setting up, filled) is the advance's own cut (`loadLeagueCut`), never
+// the knockout stage's status. Its load is the advance's retry (D2 caller d).
 import { withTenant } from "@/lib/db";
 import { SETTLED_FIXTURE_STATUSES } from "@/lib/fixture-status";
-import { toLocale, type Locale } from "@/lib/i18n-constants";
 import { messages, type MessageKey } from "@/lib/messages";
 import { systemAuth } from "@/lib/quick-match-auth";
 import { QUICK_MATCH_SYSTEM_ORG_ID } from "@/lib/quick-match-constants";
@@ -27,7 +32,10 @@ import { stageTableRulesDocs, type StageTableRulesDoc } from "@/server/engine-db
 import { tableLayoutFor } from "@/server/public-site/standings-view";
 import { isCarriedForward, SETTLED_OPEN_STATUSES } from "./carried-forward";
 import { listDivisionFixtures } from "./fixtures";
-import type { QuickMatchFormat } from "./quick-match-preview";
+import { advanceQuickMatch, loadLeagueCut, type CutDecision } from "./quick-match-advance";
+import { openTie, type CutTie } from "./quick-match-cut";
+import { quickMatchStageCount, type QuickMatchFormat } from "./quick-match-preview";
+import { findQuickMatchByCompetition, isNotPlayed, playedOf, toRow, type QuickMatchDbRow, type QuickMatchRow } from "./quick-match-row";
 import { offerFor } from "./quick-match-sports";
 import { log } from "@/server/logger";
 import { hashHomeToken, isHomeTokenShaped, tryOpenHomeToken, type HomeTokenOpenRefusal } from "./quick-match-tokens";
@@ -38,50 +46,9 @@ const SYSTEM_ORG = QUICK_MATCH_SYSTEM_ORG_ID;
 // The one "finished" (plan 4 D4), client-safe in lib so the Continue card can read it too; every server caller takes it from
 // here, beside the count it reads.
 export { isQuickMatchFinished, type QuickMatchCounts };
-
-export interface QuickMatchRow {
-  id: string;
-  competitionId: string;
-  name: string;
-  format: QuickMatchFormat;
-  email: string | null;
-  locale: Locale;
-  lastActivityAt: Date;
-  /** null on a saved row (§7.7): alive, never expiring. */
-  expiresAt: Date | null;
-  savedByUserId: string | null;
-  /** The home token's sealed envelope (C19): `openHomeToken` rebuilds the page link from it. */
-  tokenEnc: Uint8Array;
-}
-
-export interface QuickMatchDbRow {
-  id: string;
-  competition_id: string;
-  name: string;
-  format: QuickMatchFormat;   // V506's check constraint: 'league' | 'knockout'
-  email: string | null;
-  locale: string;
-  last_activity_at: Date;
-  expires_at: Date | null;
-  saved_by_user_id: string | null;
-  token_enc: Uint8Array;
-}
-
-/** A `quick_matches` row as the app reads it. Exported for its pure test (the locale fallback below). */
-export const toRow = (r: QuickMatchDbRow): QuickMatchRow => ({
-  id: r.id,
-  competitionId: r.competition_id,
-  name: r.name,
-  format: r.format,
-  email: r.email,
-  // A locale the app does not speak reads as the default, never as a broken page. V515's check constraint keeps such a
-  // value out of the column; this stays as defence in depth (a locale dropped later would leave old rows behind it).
-  locale: toLocale(r.locale),
-  lastActivityAt: r.last_activity_at,
-  expiresAt: r.expires_at,
-  savedByUserId: r.saved_by_user_id,
-  tokenEnc: r.token_enc,
-});
+// The row and the count live below the home (`quick-match-row.ts`, plan 5 T5) so the League + Knockout advance can read them
+// without importing the home; every importer keeps reading them from here.
+export { findQuickMatchByCompetition, playedOf, toRow, type QuickMatchDbRow, type QuickMatchRow };
 
 /**
  * The quick match a home token opens, or null: a string that is not a home token's shape (checked before any lookup),
@@ -248,35 +215,6 @@ export async function listMyQuickMatches(userId: string, opts: { links: boolean 
   return out;
 }
 
-/** A match marked Not played (plan 4 D1): the skip writes `cancelled`, and no other quick match path does. The count and
- *  the phase read this one predicate. */
-const isNotPlayed = (f: { status: string }): boolean => f.status === "cancelled";
-
-/** A quick match's "{played} of {count}" (plan 2 Task 5, B7d): its matches are its non-bye fixtures (`isBye`, the shared
- *  predicate, never re-derived), the played ones are those whose status is settled (SETTLED_FIXTURE_STATUSES), and the Not
- *  played ones (plan 4) are counted beside them, never out of the total (§6: "N of M played · K not played", M the full
- *  total). The home, the Continue card, the account list and /admin read this one count. */
-export function playedOf(rows: readonly MatchLineRow[]): QuickMatchCounts {
-  const matches = rows.filter((r) => !isBye(r));
-  return {
-    played: matches.filter((r) => SETTLED_FIXTURE_STATUSES.has(r.status)).length,
-    notPlayed: matches.filter(isNotPlayed).length,
-    total: matches.length,
-  };
-}
-
-/**
- * The quick match whose competition this is, or null for any other competition — whatever its expiry: the row stands
- * until the sweep deletes it (plan 3), and a score re-arms it (D5). The pad's way back to the home (Task 9).
- */
-export async function findQuickMatchByCompetition(competitionId: string): Promise<QuickMatchRow | null> {
-  const [row] = await withTenant(SYSTEM_ORG, (tx) => tx<QuickMatchDbRow[]>`
-    select id, competition_id, name, format, email, locale, last_activity_at, expires_at, saved_by_user_id, token_enc
-    from quick_matches
-    where competition_id = ${competitionId}`);
-  return row ? toRow(row) : null;
-}
-
 export interface QuickMatchSide {
   entrantId: string;
   name: string;
@@ -309,16 +247,72 @@ export interface QuickMatchFixture {
   phase: QuickMatchPhase;
   /** A settled result that has already moved the match on (carried-forward.ts's own predicate, read from these rows): its
    *  winner or loser is seated in a later match, or the stage is complete. The pad refuses to reopen it
-   *  (RESULT_CARRIED_FORWARD), so the home offers it no "Edit result" (branch review A M6). False for anything not settled. */
+   *  (RESULT_CARRIED_FORWARD), so the home offers it no "Edit result" (branch review A M6). False for anything not settled.
+   *  Read against the line's OWN stage (plan 5 T5): a League + Knockout's league lines move on when the league completes, as
+   *  the knockout fills (D3). */
   resultMovedOn: boolean;
+  /** The kind of the stage the line belongs to (plan 5 T5): a League + Knockout holds both; a League or a Knockout one. */
+  stage: "league" | "knockout";
+  /** A League + Knockout's knockout line (plan 5 T5, D7): what each seat waits on, whether or not a side sits in it yet.
+   *  null on a league line and on every line of a plain League or Knockout (whose seats the slot labels already name). */
+  knockoutSeats: { home: QuickMatchKnockoutSeat; away: QuickMatchKnockoutSeat } | null;
 }
 
 export type QuickMatchPhase = "settled" | "live" | "ready" | "waiting" | "notPlayed";
 
+/**
+ * One seat of a League + Knockout's knockout line (plan 5 D7), from the line's stored slot label or, for a later round, the
+ * generator's own feed edge (`winner_to_fixture` / `winner_to_slot`):
+ *   - `league`: the side ranked `rank` in the league takes it ("1st in the league"), the first round's seats. It keeps its
+ *     rank once a side sits in it ("1st"). `toDecide`: the seat waits on the tie the guests are asked about (the cut's open
+ *     question, `QuickMatchKnockout.state === "tie"`): "2nd in the league — to decide";
+ *   - `winner`: the winner of `fixtureId`, a line of the same knockout ("Winner of semi-final 1").
+ */
+export type QuickMatchKnockoutSeat =
+  | { from: "league"; rank: number; toDecide: boolean }
+  | { from: "winner"; fixtureId: string };
+
+/**
+ * Where a League + Knockout stands (plan 5 D2, spec §6, §11), the hero follows it:
+ *   - `league`: a league match is still to play (or the league was reopened by an edit);
+ *   - `tie`: the league is done and a tie straddles the cut with no answer: the hero is the question (`tie`);
+ *   - `settingUp`: the league is done, nothing is left to ask, and the knockout is not filled yet: an advance has not run
+ *     or failed (logged); every home load retries it (spec §11, "Setting up the knockout");
+ *   - `filled`: the knockout's seats are filled from the league (its seed proposal is confirmed).
+ */
+export type QuickMatchKnockoutState = "league" | "tie" | "settingUp" | "filled";
+
+/** A League + Knockout's knockout, as the home shows it (plan 5 T5). */
+export interface QuickMatchKnockout {
+  /** How many of the league go through: the knockout's own progression (D1), 2 or 4. */
+  qualifiers: 2 | 4;
+  state: QuickMatchKnockoutState;
+  /** The seats are filled from the league (the confirmed seed proposal; never the knockout stage's status, which is active
+   *  from the create). */
+  filled: boolean;
+  /** A knockout line is in play or settled (from the lines themselves, never the stage's status): the bracket's turn. */
+  started: boolean;
+  /** The question (§5 case 1): the tie that straddles the cut, while it is open (`state === "tie"`); null otherwise. Its
+   *  `byLot` false means no lot ordered it (nothing was counted): Pick only, no Toss. */
+  tie: CutTie | null;
+  /** The guests' answer to the tie at the cut, once the league is done (m9: a stored answer on a reopened league is no
+   *  answer); kept after the fill, for the result line. */
+  decision: CutDecision | null;
+  /** D6, once the league is done: every member of a class the lot ordered that goes through whole (§5 case 2), and every
+   *  member of the straddling class when a toss settled it. Never a class the engine ordered by seed (`CutTie.byLot`
+   *  false): no lot was drawn for it. In the table's order. */
+  byLot: string[];
+  /** D6: the sides the guests picked through (a Pick's `through`), once the league is done. */
+  picked: string[];
+}
+
 export interface QuickMatchHome {
   row: QuickMatchRow;
   divisionId: string;
+  /** The FIRST stage: a League's or a Knockout's one stage, a League + Knockout's league (the add form, the full table). */
   stageId: string;
+  /** A League + Knockout's knockout stage (seq 2); null for a League or a Knockout (`CreatedQuickMatch.knockoutStageId`). */
+  knockoutStageId: string | null;
   /** Dictionary keys, never English names (C1/C10). */
   sport: { key: string; labelKey: MessageKey };
   /** The entrants' one kind (D2): the eyebrow's "sport · kind · format". */
@@ -328,15 +322,24 @@ export interface QuickMatchHome {
   kindChosen: boolean;
   /** In seed order: the order the guest typed them (C20). */
   sides: QuickMatchSide[];
-  /** In (round, fixture number) order, byes included. */
+  /** In (stage, round, fixture number) order, byes included: a League + Knockout's league lines first. */
   fixtures: QuickMatchFixture[];
   next: QuickMatchFixture | null;
   /** Non-bye fixtures whose status is settled (SETTLED_FIXTURE_STATUSES, B7d). */
   played: number;
   /** Non-bye fixtures marked Not played (plan 4): done, but no result. */
   notPlayed: number;
-  /** Non-bye fixtures: Task 5's matchCount (C17). Every match, played or not (§6). */
+  /** Non-bye fixtures: Task 5's matchCount (C17). Every match, played or not (§6); a League + Knockout's knockout lines
+   *  included, waiting seats and all (plan 5 D8, spec §12). */
   total: number;
+  /** The league stage's lines only (plan 5 D8: the hero's "match n of m" while the league is on), and `done` =
+   *  `isQuickMatchFinished` of them. A plain League's equal the match's own counts; null for a Knockout (no league). */
+  league: (QuickMatchCounts & { done: boolean }) | null;
+  /** A League + Knockout's knockout; null for a League or a Knockout. */
+  knockout: QuickMatchKnockout | null;
+  /** The final's winner (plan 5 D8: the champion comes from the final, never the table), once the final is settled; null
+   *  before, and for a League (its winner is its table's). */
+  champion: { entrantId: string; finalFixtureId: string } | null;
   /** The stored table of a league stage; null for a knockout, which has none (§7.10). */
   standings: StandingsOut | null;
   /** The unit the stored points are in (`TableLayout.unit`, the public table's own `tableLayoutFor` over the stage's
@@ -348,7 +351,8 @@ export interface QuickMatchHome {
    *  module refuses, as the public table falls back to its structural columns. */
   tableRules: StageTableRulesDoc | null;
   metricSpecs: MetricSpecLike[];
-  /** `isQuickMatchFinished`: at least one match, and every one played or Not played (plan 4 D4). Derived on each read. */
+  /** `isQuickMatchFinished`: at least one match, and every one played or Not played (plan 4 D4). Derived on each read. A
+   *  League + Knockout's counts its knockout too: it is finished once the final is decided (D8). */
   finished: boolean;
 }
 
@@ -389,20 +393,58 @@ const winnerOf = (outcome: unknown): string | null => {
 
 const isMessageKey = (k: string): k is MessageKey => Object.hasOwn(messages, k);
 
+/** The stage kinds a quick match of `format` is built with, in seq order (`quickMatchStageInputs`, T3): a League + Knockout is
+ *  a league then a knockout; a League or a Knockout is one stage of either kind (the read has always taken both, and Swiss
+ *  never). Anything else is refused loudly. */
+function stagesFit(format: QuickMatchFormat, kinds: readonly string[]): boolean {
+  if (kinds.length !== quickMatchStageCount(format)) return false;
+  return format === "league_knockout"
+    ? kinds[0] === "league" && kinds[1] === "knockout"
+    : kinds[0] === "league" || kinds[0] === "knockout";
+}
+
+/** A first-round knockout seat's stored slot label (`writeProgressionSetupFixtures`, T3): `slot.rank_range` with the league
+ *  rank it waits on. Any other label is not a rank seat. */
+function rankOfLabel(label: unknown): number | null {
+  const l = label as { key?: unknown; params?: { rank?: unknown } } | null;
+  return l?.key === "slot.rank_range" && typeof l.params?.rank === "number" ? l.params.rank : null;
+}
+
 /**
  * The quick match home's read, or null when the row's competition is gone (deleted since the row was resolved, Review
  * Focus 3). Every query runs as the system org (`withTenant(SYSTEM_ORG)`), each in its own transaction, in sequence
  * (withTenant never nests, lib/db.ts):
+ *   0. a League + Knockout only: THE RETRY (plan 5 D2, caller d; spec §11): `advanceQuickMatch` first, best-effort, so a
+ *      knockout a score, a skip or an answer left unfilled (its own advance failed, or a second phone's answer ran none)
+ *      fills on the next load. A failure is logged (`quick_match_advance_failed`) and the read goes on: the home then shows
+ *      "Setting up the knockout" (`knockout.state`), never a stuck page, and the next load tries again;
  *   1. THE PER-MATCH CHECK: the division by the row's own competition — none → null, before anything else is read — then
- *      its stage and its sides;
- *   2. the fixtures (`listDivisionFixtures`, scoped by that division);
- *   3. their summaries from `match_states`, by the ids just listed AND the row's competition (B7d);
- *   4. a league's stored table (`getStandings`).
- * A quick match is one division with one stage (§7.1); a competition holding more, or a seat naming an entrant outside
- * the division's own sides, is refused loudly rather than read half-right.
+ *      its stages and its sides;
+ *   2. a League + Knockout's cut (`loadLeagueCut`: the tie at the cut, the stored answer, whether the knockout is filled),
+ *      read BEFORE the fixtures, so a cut that says filled never meets seats older than it;
+ *   3. the fixtures (`listDivisionFixtures`, scoped by that division);
+ *   4. their summaries from `match_states`, by the ids just listed AND the row's competition (B7d);
+ *   5. the league's stored table (`getStandings`).
+ * A quick match is one division with the stages its format is built with (§7.1; plan 5 T3: a league then a knockout for a
+ * League + Knockout, one stage otherwise); a competition holding more, a stage graph of another shape, a seat naming an
+ * entrant outside the division's own sides, or a knockout seat that names neither a league rank nor a feeder, is refused
+ * loudly rather than read half-right.
  */
 export async function readQuickMatchHome(row: QuickMatchRow): Promise<QuickMatchHome | null> {
   const auth = systemAuth();
+  const lk = row.format === "league_knockout";
+
+  if (lk) {
+    // try/await, not `.catch`: an advance that throws before it returns a promise is the same best-effort failure.
+    try {
+      await advanceQuickMatch(row);
+    } catch (err) {
+      log.error(
+        { err, event: "quick_match_advance_failed", quickMatch: row.id },
+        "quick match home: the knockout's advance failed on load (the home shows Setting up and retries on its next load)",
+      );
+    }
+  }
 
   const head = await withTenant(SYSTEM_ORG, async (tx) => {
     const divisions = await tx<{ id: string; sport_key: string; variant_key: string; module_version: string }[]>`
@@ -412,23 +454,31 @@ export async function readQuickMatchHome(row: QuickMatchRow): Promise<QuickMatch
       throw new Error(`quick match ${row.id}: competition ${row.competitionId} holds ${divisions.length} divisions, not one`);
     }
     const division = divisions[0]!;
-    const stages = await tx<{ id: string; kind: string; status: string }[]>`
-      select id, kind, status from stages where division_id = ${division.id}`;
-    if (stages.length !== 1) {
-      throw new Error(`quick match ${row.id}: division ${division.id} holds ${stages.length} stages, not one`);
+    const stages = await tx<{ id: string; kind: string; status: string; seq: number }[]>`
+      select id, kind, status, seq from stages where division_id = ${division.id} order by seq, id`;
+    const owed = quickMatchStageCount(row.format);
+    if (stages.length !== owed) {
+      throw new Error(`quick match ${row.id}: division ${division.id} holds ${stages.length} stages, not ${owed === 1 ? "one" : owed}`);
     }
-    // CreateQuickMatch's format is a league or a knockout, never Swiss: `resultMovedOn` below reads no Swiss pairing on
-    // that premise (branch-fix A review m3), so any other kind is refused rather than read half-right.
-    const kind = stages[0]!.kind;
-    if (kind !== "league" && kind !== "knockout") {
-      throw new Error(`quick match ${row.id}: stage ${stages[0]!.id} is a ${kind} stage, not a league or a knockout`);
+    // CreateQuickMatch's stages are leagues and knockouts, never Swiss: `resultMovedOn` below reads no Swiss pairing on that
+    // premise (branch-fix A review m3), so any other kind, or a League + Knockout of another shape, is refused rather than
+    // read half-right.
+    if (!stagesFit(row.format, stages.map((s) => s.kind))) {
+      throw new Error(
+        lk
+          ? `quick match ${row.id}: the home reads a League + Knockout over a league stage then a knockout stage; division ${division.id} holds [${stages.map((s) => s.kind).join(", ")}]`
+          : `quick match ${row.id}: stage ${stages[0]!.id} is a ${stages[0]!.kind} stage, not a league or a knockout`,
+      );
     }
     const entrants = await tx<{ id: string; display_name: string; kind: EntrantKind }[]>`
       select id, display_name, kind from entrants where division_id = ${division.id} order by seed nulls last, created_at, id`;
-    return { division, stage: stages[0]!, entrants };
+    return { division, stages, entrants };
   });
   if (!head) return null;
-  const { division, stage, entrants } = head;
+  const { division, stages, entrants } = head;
+  const stageById = new Map(stages.map((s) => [s.id, s]));
+  const leagueStage = stages.find((s) => s.kind === "league") ?? null;
+  const knockoutStage = stages.find((s) => s.kind === "knockout") ?? null;
 
   const kinds = new Set(entrants.map((e) => e.kind));
   if (kinds.size !== 1) {
@@ -436,6 +486,9 @@ export async function readQuickMatchHome(row: QuickMatchRow): Promise<QuickMatch
   }
   const labelKey = `sport.${division.sport_key}`;
   if (!isMessageKey(labelKey)) throw new Error(`quick match ${row.id}: no dictionary key names sport ${division.sport_key}`);
+
+  const cut = lk ? await loadLeagueCut(row) : null;
+  if (lk && cut === null) return null;   // the competition went between the reads: the dead link, as step 1's null
 
   const sides: QuickMatchSide[] = entrants.map((e) => ({ entrantId: e.id, name: e.display_name }));
   const sideById = new Map(sides.map((s) => [s.entrantId, s]));
@@ -448,7 +501,23 @@ export async function readQuickMatchHome(row: QuickMatchRow): Promise<QuickMatch
 
   const rows: FixtureRow[] = await listDivisionFixtures(auth, division.id);
   const ids = rows.map((r) => r.id);
+  // A League + Knockout's filled first-round seats lose their slot labels to the fill (the confirm writes the entrant over
+  // the label), so their league rank is the confirmed proposal's (`destinationSlot` → `rank`, the seed that slot was drawn
+  // for). Read AFTER the fixtures: a seat seen filled was filled by a confirm already committed.
+  const filledSlotRank = new Map<string, number>(
+    lk
+      ? (await withTenant(SYSTEM_ORG, (tx) => tx<{ slot: string; rank: number }[]>`
+          select q->>'destinationSlot' as slot, (q->>'rank')::int as rank
+          from stage_seed_proposals p, jsonb_array_elements(p.computed->'qualifiers') q
+          where p.stage_id = ${knockoutStage!.id} and p.status = 'confirmed'`)).map((q) => [q.slot, q.rank])
+      : [],
+  );
   const rowById = new Map(rows.map((r) => [r.id, r]));
+  const stageOf = (r: FixtureRow) => {
+    const stage = stageById.get(r.stage_id);
+    if (!stage) throw new Error(`quick match ${row.id}: fixture ${r.id} belongs to stage ${r.stage_id}, outside its own stages`);
+    return stage;
+  };
   /** The seat a feed edge names (1 = home, 2 = away) is taken: carried-forward.ts's SQL, over the rows already loaded. A feed
    *  into a match outside this division's own rows is refused loudly, as a foreign entrant is above. */
   const feedFilled = (fixtureId: string, target: string | null | undefined, slot: number | null | undefined): boolean => {
@@ -468,8 +537,45 @@ export async function readQuickMatchHome(row: QuickMatchRow): Promise<QuickMatch
           where ms.fixture_id = any(${ids}::uuid[]) and d.competition_id = ${row.competitionId}`)).map((s) => [s.fixture_id, s.summary]),
   );
 
+  // The league's own lines (D8): its counts, and whether it is done, read off the same rows the list shows.
+  const leagueRows = leagueStage ? rows.filter((r) => r.stage_id === leagueStage.id) : [];
+  const leagueCounts = leagueStage ? playedOf(leagueRows) : null;
+  const leagueDone = leagueCounts !== null && isQuickMatchFinished(leagueCounts);
+
+  // A League + Knockout's state (§6, §11), from the cut's one read alone: whether its league is done, its tie, its stored
+  // answer and whether it filled are one locked read's, the same the advance decides on, so they never disagree with each
+  // other (a result landing between that read and the fixtures' moves the counts first; the next load moves the state). A
+  // stored answer counts only on a league that read saw done (m9: until an advance drops it, an answer can sit on a
+  // reopened league).
+  const cutFinal = cut !== null && cut.leagueDone;
+  const decision = cutFinal ? cut.decision : null;
+  const open = cut !== null ? openTie(cut.ties) : null;   // asked only of a done league (`state` below)
+  const state: QuickMatchKnockoutState | null =
+    cut === null ? null : cut.filled ? "filled" : !cut.leagueDone ? "league" : open !== null && decision === null ? "tie" : "settingUp";
+  const question = state === "tie" ? open : null;
+
+  /** A knockout seat of a League + Knockout (D7): the league rank its label names (a seat still waiting), else the line whose
+   *  winner the generator's edge sends into it (a later round), else the rank the confirmed proposal filled it for (a
+   *  first-round seat the fill took). None of the three is a stage graph this read does not know, refused loudly. */
+  const seatOf = (r: FixtureRow, side: "home" | "away"): QuickMatchKnockoutSeat => {
+    const label = rankOfLabel(side === "home" ? r.home_slot_label : r.away_slot_label);
+    if (label !== null) {
+      const toDecide = question !== null && label >= question.place && label < question.place + question.seats;
+      return { from: "league", rank: label, toDecide };
+    }
+    const slot = side === "home" ? 1 : 2;
+    const feeders = rows.filter((f) => f.winner_to_fixture === r.id && f.winner_to_slot === slot);
+    if (feeders.length === 1) return { from: "winner", fixtureId: feeders[0]!.id };
+    const filled = feeders.length === 0 ? filledSlotRank.get(`${r.id}:${side}`) : undefined;
+    if (filled === undefined) {
+      throw new Error(`quick match ${row.id}: knockout fixture ${r.id}'s ${side} seat names no league rank and no feeder`);
+    }
+    return { from: "league", rank: filled, toDecide: false };
+  };
+
   const fixtures = rows
     .map((r): QuickMatchFixture => {
+      const stage = stageOf(r);
       const home = sideOf(r.id, r.home_entrant_id);
       const away = sideOf(r.id, r.away_entrant_id);
       return {
@@ -492,22 +598,59 @@ export async function readQuickMatchHome(row: QuickMatchRow): Promise<QuickMatch
           isCarriedForward({
             winnerFeedFilled: feedFilled(r.id, r.winner_to_fixture, r.winner_to_slot),
             loserFeedFilled: feedFilled(r.id, r.loser_to_fixture, r.loser_to_slot),
-            // A league or a knockout (refused otherwise, above): there is no Swiss round to pair.
+            // Leagues and knockouts only (refused otherwise, above): there is no Swiss round to pair.
             swissNextRoundSeated: false,
             stageComplete: stage.status === "complete",
           }),
+        stage: stage.kind as QuickMatchFixture["stage"],
+        knockoutSeats: lk && stage.kind === "knockout" ? { home: seatOf(r, "home"), away: seatOf(r, "away") } : null,
       };
     })
-    .sort(byRoundThenNumber);
+    // Stage first: a League + Knockout's knockout lines are numbered after the league's, but their rounds restart at 1.
+    .sort((a, b) => stageOf(rowById.get(a.id)!).seq - stageOf(rowById.get(b.id)!).seq || byRoundThenNumber(a, b));
 
   const counts = playedOf(rows);
-  const standings = stage.kind === "league" ? await getStandings(auth, stage.id) : null;
-  const tableRules =
-    stage.kind === "league" ? ((await withTenant(SYSTEM_ORG, (tx) => stageTableRulesDocs(tx, [stage.id])))[stage.id] ?? null) : null;
-  const pointsUnit = stage.kind === "league" ? tableLayoutFor(tableRules).unit : PLAIN_LAYOUT.unit;
+  const knockoutLines = fixtures.filter((f) => f.stage === "knockout");
+  let knockout: QuickMatchKnockout | null = null;
+  if (cut !== null && state !== null) {
+    // D6, once the league is done: a lot-ordered class that goes through whole is "by lot"; the straddling class is "by lot"
+    // when a toss settled it, its picked sides "picked" when a pick did. A seed-ordered class is never "by lot".
+    const byLot: string[] = [];
+    let picked: string[] = [];
+    if (cutFinal) {
+      for (const tie of cut.ties) {
+        if (!tie.straddles) {
+          if (tie.byLot) byLot.push(...tie.ranked);
+        } else if (decision?.how === "toss") {
+          byLot.push(...tie.ranked);
+        } else if (decision?.how === "pick") {
+          picked = [...decision.through];
+        }
+      }
+    }
+    knockout = {
+      qualifiers: cut.qualifiers,
+      state,
+      filled: cut.filled,
+      started: knockoutLines.some((f) => f.phase === "live" || f.phase === "settled"),
+      tie: question,
+      decision,
+      byLot,
+      picked,
+    };
+  }
+  // The champion is the final's winner (D8), never the table's leader: a stored outcome names one only once the final is
+  // decided (a void clears it).
+  const final = knockoutLines.find((f) => f.isFinal && f.winnerEntrantId !== null) ?? null;
+
+  const standings = leagueStage ? await getStandings(auth, leagueStage.id) : null;
+  const tableRules = leagueStage
+    ? ((await withTenant(SYSTEM_ORG, (tx) => stageTableRulesDocs(tx, [leagueStage.id])))[leagueStage.id] ?? null)
+    : null;
+  const pointsUnit = leagueStage ? tableLayoutFor(tableRules).unit : PLAIN_LAYOUT.unit;
   // The division page's own fallback: a module this build cannot resolve shows the structural columns only.
   let metricSpecs: MetricSpecLike[] = [];
-  if (stage.kind === "league") {
+  if (leagueStage) {
     try {
       metricSpecs = resolveModule(division.sport_key, division.module_version).metrics;
     } catch {
@@ -519,7 +662,8 @@ export async function readQuickMatchHome(row: QuickMatchRow): Promise<QuickMatch
   return {
     row,
     divisionId: division.id,
-    stageId: stage.id,
+    stageId: stages[0]!.id,
+    knockoutStageId: lk ? knockoutStage!.id : null,
     sport: {
       key: division.sport_key,
       labelKey,
@@ -528,8 +672,13 @@ export async function readQuickMatchHome(row: QuickMatchRow): Promise<QuickMatch
     kindChosen,
     sides,
     fixtures,
+    // No stage rule is owed here: a knockout line has a side only once the league is done and the knockout filled (the
+    // advance, D2), and a league result is locked from then on (P16), so the two stages are never playable at once.
     next: nextPlayable(fixtures),
     ...counts,
+    league: leagueCounts === null ? null : { ...leagueCounts, done: leagueDone },
+    knockout,
+    champion: final === null ? null : { entrantId: final.winnerEntrantId!, finalFixtureId: final.id },
     standings,
     pointsUnit,
     tableRules,

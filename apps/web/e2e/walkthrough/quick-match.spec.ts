@@ -36,7 +36,16 @@
 //       the last match skipped (the sheet says the league finishes now) → the winner, "1 match was not played", the Final
 //       table, no Put back. A second league, of two, has its only match skipped → "No matches were played", no table, and
 //       "Start a new quick match" back to the setup page, which offers neither league to continue.
-//   (F) The season door (start wizard plan 2026-11-13, Task 6), in a browser of its own: under the setup's Start, "Or
+//   (F) League + Knockout (plan 5 Task 9), each night in a browser of its own. (F1) Four friends pick League → Semi-finals
+//       → Final (Start counts the league and the knockout), play the league by taps, and the bracket is drawn from the
+//       start, waiting on places. Before the league's last result the record holds the knockout's fill (`holdKnockout`),
+//       so the home reads "Setting up the knockout" with Refresh; released, Refresh fills it from the table, 1st v 4th and
+//       2nd v 3rd, above the table. (F2) The semi-finals and the final, by taps: each winner moves into the final, and the
+//       champion is the final's winner (a side the table put last). (F3) Three sides, each pair twice, steered so 2nd and
+//       3rd are level on everything: the question ("Tie for 2nd"), the engine's lot already stored. (F4) Toss → the stored
+//       lot's side in the final, the same after a reload, and on a friend's phone that taps Toss again (someone already
+//       decided). Each reads the record too. Each night is two tests because each half's derived budget must fit one leg.
+//   (G) The season door (start wizard plan 2026-11-13, Task 6), in a browser of its own: under the setup's Start, "Or
 //       register to start a season" names the sport the chips chose (Tennis, not the default) → the organiser's /start
 //       wizard opens on Tennis → a League of six, the first day not decided → the address → Sent, whose quick match link
 //       is on Tennis too → the claim link → the division: one League stage and six seeded players, no first day.
@@ -45,7 +54,9 @@
 // There is NO reach here: nothing is seeded and no API is called. Every quick match is made through the setup form,
 // every match is opened by the home's own Score, and every rally is a tap on the pad. The runner touches the database
 // only to READ the record (`withDb`, as the other walkthroughs read it): the guest has no organiser session, so the
-// organiser API cannot read a system-org fixture, and reading the record is the point.
+// organiser API cannot read a system-org fixture, and reading the record is the point. The one write is (F1)'s hold: a
+// trigger that refuses one knockout's fill for as long as the walkthrough needs to see "Setting up", dropped in a `finally`
+// (nothing a guest can do makes that fill fail, and the screen it owes is the thing under test).
 //
 // ── WHERE THE EXPECTED VALUES COME FROM ───────────────────────────────────────────────────────────────────────────
 // - The match rules: the engine's own badminton module (`builtinModules`), the "short" variant under each stage
@@ -61,7 +72,7 @@
 // Share (plan 2 T7), Add a match (plan 2 T8) and Save (plan 3) EXTEND this file, each at a marked `EXTENSION POINT`
 // below, at the place in the journey where it belongs, naming the state the page is in there. Share (step 3b) and Add a
 // match (step 7) are filled in; Save is its own journey, (D), in its own browser (plan 2 m6).
-import { test, expect, type BrowserContext, type Locator, type Page } from "@playwright/test";
+import { test, expect, type Browser, type BrowserContext, type Locator, type Page } from "@playwright/test";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -122,10 +133,14 @@ interface SetRules {
  *  owner 2026-11-12), parsed by the module's own schema (defaults filled). Called inside a test, never at module scope: a
  *  load-time throw reports as zero collected tests rather than a red one (README). */
 function leagueRules(): SetRules {
+  return stageRules("league");
+}
+/** The same, under a stage kind's own defaults: a League + Knockout's knockout lines play the knockout stage's (plan 5). */
+function stageRules(kind: "league" | "knockout"): SetRules {
   const mod = builtinModules.find((m) => m.key === SPORT);
   expect(mod, `premise: the engine ships ${SPORT}`).toBeDefined();
   expect(Object.keys(mod!.variants), `premise: ${SPORT} declares the "${VARIANT}" variant`).toContain(VARIANT);
-  const rules = mod!.configSchema.parse({ ...mod!.variants[VARIANT], ...stageDefaultsFor(mod!, "league", VARIANT) }) as SetRules;
+  const rules = mod!.configSchema.parse({ ...mod!.variants[VARIANT], ...stageDefaultsFor(mod!, kind, VARIANT) }) as SetRules;
   expect(rules.pointsMap["*"], "premise: badminton's table awards flat points for a win and a loss").toHaveLength(2);
   return rules;
 }
@@ -246,6 +261,19 @@ const PHONE = { width: 390, height: 844 } as const;
 
 let guest: BrowserContext | null = null;
 let page: Page;
+/** (F)'s night, in a browser of its own: (F1) plays the league and (F2) the knockout it filled, in the same browser. */
+let koNight: { ctx: BrowserContext; p: Page; made: Made; table: Tally[]; league: Played[] } | null = null;
+/** (F3)'s night: (F3) plays the league to its question and (F4) answers it, in the same browser. */
+let tieNight: {
+  ctx: BrowserContext;
+  p: Page;
+  made: Made;
+  table: Tally[];
+  results: Played[];
+  title: string;
+  lotFirst: string;
+  level: string[];
+} | null = null;
 
 test.beforeAll(async ({ browser }, info) => {
   // No session (a guest), the cookie banner already answered (it would sit over the docked Start bar), and a phone.
@@ -259,6 +287,8 @@ test.beforeAll(async ({ browser }, info) => {
 
 test.afterAll(async () => {
   await guest?.close();
+  await koNight?.ctx.close();
+  await tieNight?.ctx.close();
 });
 
 // ── the setup form ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -274,15 +304,38 @@ interface Made {
   sides: string[];
 }
 
-/** The setup form, filled and started the way a guest does it: badminton, Singles, the sides typed, each pair once, the
- *  short rules, and (when given) an address in the "Email me the link" fold. A quick match is a league (owner
- *  2026-11-12): there is no format to pick, at any number of sides. Lands on the home and returns its token. */
+/** The format choices (plan 5, spec §2): a stacked list, League first and chosen until another is. */
+const SHAPES = ["league", "final", "semis"] as const;
+type Shape = (typeof SHAPES)[number];
+/** How many go through to the knockout (spec §2: "League → Final" is the top 2, "League → Semi-finals → Final" the top 4). */
+const QUALIFIERS = { final: 2, semis: 4 } as const;
+/** Spec §3 / plan 5 Global Constraints, as the owner amended them 2026-11-14: all three rows always listed; below 3 sides
+ *  League → Final is disabled, "Needs 3 or more sides"; below 4 the semi-finals are, "Needs 4 or more sides"; 4 or more can
+ *  pick all three. */
+const KNOCKOUT_MIN_SIDES = 3;
+const SEMIS_MIN_SIDES = 4;
+/** A round robin of `n` where each pair meets `plays` times, and a single-elimination bracket of `q` seats: every match
+ *  puts one side out until one is left, so `q − 1` matches. */
+const leagueMatches = (n: number, plays: number) => (plays * n * (n - 1)) / 2;
+const knockoutMatches = (q: number) => q - 1;
+/** A format radio's accessible name: the title with its arrows read as commas ("League, Semi-finals, Final"). */
+const shapeName = (shape: Shape) =>
+  mk(`quickMatch.setup.shape.${shape}`)
+    .split("→")
+    .map((part) => part.trim())
+    .join(", ");
+const shapeRadio = (p: Page, shape: Shape) => form(p).getByRole("radio", { name: shapeName(shape), exact: true });
+
+/** The setup form, filled and started the way a guest does it: badminton, Singles, the sides typed, the format (League
+ *  unless `shape` names a knockout), each pair once (or `plays` times), the short rules, and (when given) an address in the
+ *  "Email me the link" fold. Every format row the sides allow is read first: offered, enabled or disabled with its reason,
+ *  and described by its hint. `matches` is what Start counts. Lands on the home and returns its token. */
 async function startQuickMatch(
   p: Page,
   name: string,
   sides: string[],
   matches: number,
-  opts: { email?: string } = {},
+  opts: { email?: string; shape?: Shape; plays?: 1 | 2 } = {},
 ): Promise<Made> {
   await expect(form(p)).toBeVisible({ timeout: STEP_MS });
   // The island is live once blank rows hold Start disabled (the server's no-script Start is enabled): typing before
@@ -297,21 +350,44 @@ async function startQuickMatch(
   for (const [i, side] of sides.entries()) {
     await form(p).getByLabel(mk("quickMatch.setup.sideLabel", { n: i + 1 }), { exact: true }).fill(side);
   }
-  // No format to pick, whatever the number of sides (owner 2026-11-12): neither format's words name a radio, and the
-  // league's own help is what the screen says instead.
+  // The format (plan 5 T6; owner 2026-11-14): every row is listed, each with its hint; a row the sides do not allow yet is
+  // shown disabled with its reason (2 sides: both knockouts; 3 sides: the semi-finals), never hidden.
   let formats = 0;
-  for (const format of ["league", "knockout"] as const) {
-    await expect(form(p).getByRole("radio", { name: ui(`quickMatch.format.${format}`), exact: true }), `no ${format} to pick`).toHaveCount(0);
+  for (const s of SHAPES) {
+    const radio = shapeRadio(p, s);
     formats += 1;
+    await expect(radio, `${sides.length} sides: the ${s} row is listed`).toHaveCount(1);
+    const hint = s === "league" ? mk("quickMatch.setup.shape.leagueHint") : mk(`quickMatch.setup.shape.${s}Hint`, { count: QUALIFIERS[s] });
+    const needs = s === "final" ? KNOCKOUT_MIN_SIDES : s === "semis" ? SEMIS_MIN_SIDES : null;
+    if (needs !== null && sides.length < needs) {
+      await expect(radio, `${sides.length} sides: ${s} shown, disabled`).toBeDisabled();
+      await expect(radio, "…with the reason").toHaveAccessibleDescription(
+        `${hint} ${mk(`quickMatch.setup.shape.${s === "final" ? "finalNeeds" : "semisNeeds"}`, { min: needs })}`,
+      );
+    } else {
+      await expect(radio, `${sides.length} sides: ${s} offered`).toBeEnabled();
+      await expect(radio).toHaveAccessibleDescription(hint);
+    }
   }
-  expect(formats, "anti-vacuity: formats checked").toBe(2);
-  await expect(form(p).getByTestId("qm-league-help")).toHaveText(mk("quickMatch.setup.leagueHelp"));
-  // Each pair once, the default: the count below is a single round robin's.
-  await expect(form(p).getByRole("radio", { name: mk("quickMatch.setup.plays.1"), exact: true })).toBeChecked();
+  expect(formats, "anti-vacuity: format rows checked").toBe(SHAPES.length);
+  await expect(shapeRadio(p, "league"), "League is chosen until another is").toBeChecked();
+  const shape = opts.shape ?? "league";
+  if (shape !== "league") {
+    // The row's visible face is what a guest taps (the radio itself is sr-only). `has` is relative to the label.
+    await form(p)
+      .locator("label")
+      .filter({ has: p.getByRole("radio", { name: shapeName(shape), exact: true }) })
+      .click({ timeout: REACH_MS });
+    await expect(shapeRadio(p, shape)).toBeChecked();
+  }
+  // Each pair once, the default, or twice when asked: the count below follows it.
+  const plays = opts.plays ?? 1;
+  if (plays !== 1) await choice(p, mk(`quickMatch.setup.plays.${plays}`)).click();
+  await expect(form(p).getByRole("radio", { name: mk(`quickMatch.setup.plays.${plays}`), exact: true })).toBeChecked();
   const rules = form(p).locator('select[name="variant_key"]');
   await rules.selectOption(VARIANT);
   await expect(rules).toHaveValue(VARIANT);
-  // Start counts what the league plays (a round robin's n(n-1)/2).
+  // Start counts every match the format plays: the league's round robin, and the knockout's after it (plan 5 D8).
   await expect(p.getByTestId("qm-start")).toContainText(plural(mk, "quickMatch.setup.startCount", matches));
   if (opts.email !== undefined) {
     await form(p).getByText(mk("quickMatch.setup.email"), { exact: true }).click();
@@ -347,6 +423,24 @@ async function expectSettledOnHome(p: Page, fixtureId: string): Promise<void> {
       { timeout: STEP_MS, intervals: [250, 1_000, 2_000], message: `match ${fixtureId} never read as finished on the home` },
     )
     .toBe("settled");
+}
+
+/** A League + Knockout's knockout card (plan 5 T7: its lines are cards in the bracket, never rows of the league's list). */
+const drawCard = (p: Page, fixtureId: string) => p.locator(`[data-testid="qm-draw-card"][data-fixture-id="${fixtureId}"]`);
+
+/** The home re-read until the knockout card `fixtureId` names its winner (`expectSettledOnHome`'s twin for a card). */
+async function expectKnockoutSettledOnHome(p: Page, fixtureId: string): Promise<void> {
+  const won = drawCard(p, fixtureId).locator('[data-testid="qm-draw-seat"][data-winner="true"]');
+  await expect
+    .poll(
+      async () => {
+        const n = await won.count();
+        if (n !== 1) await p.reload();
+        return n;
+      },
+      { timeout: STEP_MS, intervals: [250, 1_000, 2_000], message: `knockout match ${fixtureId} never named its winner on the home` },
+    )
+    .toBe(1);
 }
 
 /** A quick match's counts: matches played, marked Not played, and in all (spec 2026-11-12 §6: "N of M played · K not
@@ -452,6 +546,11 @@ interface Played {
  * `leave`: "after-result" waits for the device page's own "Result recorded" before going back, as a guest who watches
  * the screen does; "at-once" taps Back straight after the deciding rally, while the pad still HOLDS it (soft-commit),
  * so the result reaches the home only if the back link sends what the pad holds before it navigates (pad-flush.ts).
+ *
+ * `where`: "list" is a league's match, marked next in the match list; "knockout" is a League + Knockout's knockout line,
+ * marked next among the bracket's cards (the list is the league's, plan 5 T7), and read back off its card. `beforeBack` runs
+ * on the pad once the match reads decided, before Back: what the deciding rally did before any home load (needs
+ * "after-result").
  */
 async function playHeroMatch(
   p: Page,
@@ -459,8 +558,10 @@ async function playHeroMatch(
   games: readonly Game[],
   decide: (home: string, away: string) => string,
   leave: "after-result" | "at-once",
+  opts: { where?: "list" | "knockout"; beforeBack?: () => Promise<void> } = {},
 ): Promise<Played> {
-  const next = p.locator('[data-testid="qm-match"][data-next="true"]');
+  const where = opts.where ?? "list";
+  const next = p.locator(`[data-testid="${where === "list" ? "qm-match" : "qm-draw-card"}"][data-next="true"]`);
   await expect(next, "the home offers exactly one match next").toHaveCount(1);
   const fixtureId = (await next.getAttribute("data-fixture-id"))!;
   expect(fixtureId).toMatch(/^[0-9a-f-]{36}$/);
@@ -468,9 +569,13 @@ async function playHeroMatch(
   const away = (await p.getByTestId("qm-hero-away").textContent())!.trim();
   expect(made.sides, "the hero names two of this quick match's sides").toEqual(expect.arrayContaining([home, away]));
   expect(home, "the hero names two DIFFERENT sides").not.toBe(away);
-  // The hero's match IS the row marked next (the record below is read by that row's fixture id).
-  await expect(next.getByTestId("qm-match-sides"), "the row marked next is the hero's match").toContainText(home);
-  await expect(next.getByTestId("qm-match-sides")).toContainText(away);
+  // The hero's match IS the row (or card) marked next (the record below is read by its fixture id).
+  if (where === "list") {
+    await expect(next.getByTestId("qm-match-sides"), "the row marked next is the hero's match").toContainText(home);
+    await expect(next.getByTestId("qm-match-sides")).toContainText(away);
+  } else {
+    await expect(next.getByTestId("qm-draw-name"), "the card marked next seats the hero's two sides, as the hero does").toHaveText([home, away]);
+  }
   const winner = decide(home, away);
   expect([home, away], "the plan's winner plays in this match").toContain(winner);
   const loser = winner === home ? away : home;
@@ -547,14 +652,26 @@ async function playHeroMatch(
     });
     await expect(pad(p), "a decided match unmounts the pad").toHaveCount(0);
   }
+  if (opts.beforeBack) {
+    expect(leave, "beforeBack reads a decided pad").toBe("after-result");
+    await opts.beforeBack();
+  }
   await p.getByTestId("quick-match-back-link").click();
   await p.waitForURL((url) => url.pathname === made.path, { timeout: STEP_MS });
-  await expectSettledOnHome(p, fixtureId);
 
   // ---- What a person reads: the result, winner first ----
-  const row = matchRow(p, fixtureId);
-  await expect(row.getByTestId("qm-match-sides")).toHaveText(ui("quickMatch.home.result", { winner, loser }));
-  await expect(row.getByTestId("qm-match-score"), "the games read winner first").toHaveText(winnerFirst(games));
+  if (where === "list") {
+    await expectSettledOnHome(p, fixtureId);
+    const row = matchRow(p, fixtureId);
+    await expect(row.getByTestId("qm-match-sides")).toHaveText(ui("quickMatch.home.result", { winner, loser }));
+    await expect(row.getByTestId("qm-match-score"), "the games read winner first").toHaveText(winnerFirst(games));
+  } else {
+    // A knockout card names its winner on a line of its own, with the finished score on it, winner first (draw.tsx).
+    await expectKnockoutSettledOnHome(p, fixtureId);
+    const won = drawCard(p, fixtureId).locator('[data-testid="qm-draw-seat"][data-winner="true"]');
+    await expect(won.getByTestId("qm-draw-name"), "the card's winner line names the winner").toHaveText(winner);
+    await expect(won.getByTestId("qm-draw-seat-score"), "the games read winner first").toHaveText(winnerFirst(games));
+  }
   return { fixtureId, home, away, winner, loser, winnerSide, games, taps: rallies.tapped };
 }
 
@@ -1716,13 +1833,705 @@ test("(E) Not played: a guest's league of three skips its half-played match and 
   }
 });
 
-// ── (F) the season door ─────────────────────────────────────────────────────────────────────────────────────────────
+// ── (F) League + Knockout (plan 5 Task 9) ───────────────────────────────────────────────────────────────────────────────
+//
+// WHERE (F)'s EXPECTED VALUES COME FROM: the seeding is the spec's (§2: semi-finals 1st v 4th and 2nd v 3rd, a final of
+// the top 2; plan 5 Global Constraints); the league table is tallied in this file from the results tapped (`tableOf`); the
+// champion is the side the final's taps were made for; and the side a Toss sends through is the lot the ENGINE stored in
+// the league's table before Toss was tapped (spec §11: Toss reveals the stored lot, there is no second draw). Every sentence
+// is the en dictionary's.
+
+/** One stage of the quick match's division, in its order (`seq`). */
+interface StageRecord {
+  id: string;
+  kind: string;
+  status: string;
+}
+async function stagesOf(made: Made): Promise<StageRecord[]> {
+  return withDb(
+    (sql) => sql<StageRecord[]>`
+      select st.id, st.kind, st.status from quick_matches q
+      join divisions d on d.competition_id = q.competition_id
+      join stages st on st.division_id = d.id
+      where q.token_hash = ${tokenHash(made.token)}
+      order by st.seq`,
+  );
+}
+
+/** A knockout stage's seed proposals, oldest first: each one's status and who it sends where (by league place). */
+interface ProposalRecord {
+  status: string;
+  qualifiers: { leagueRank: number; entrantId: string }[];
+}
+async function proposalsOf(stageId: string): Promise<ProposalRecord[]> {
+  const rows = await withDb(
+    (sql) => sql<{ status: string; computed: { qualifiers?: { source: { rank: number }; entrantId: string }[] } }[]>`
+      select status, computed from stage_seed_proposals where stage_id = ${stageId} order by created_at, id`,
+  );
+  return rows.map((r) => ({
+    status: r.status,
+    qualifiers: (r.computed.qualifiers ?? []).map((x) => ({ leagueRank: x.source.rank, entrantId: x.entrantId })),
+  }));
+}
+
+/** The league stage's stored table (V218: ordered rows), with the engine's tie marks. */
+interface StoredRow {
+  entrantId: string;
+  played: number;
+  won: number;
+  points: number;
+  rank: number;
+  tieUnbroken?: boolean;
+  tieBreak?: { key?: string; with?: string[] };
+}
+async function leagueTableOf(made: Made): Promise<StoredRow[]> {
+  const stored = await withDb(
+    (sql) => sql<{ rows: StoredRow[] }[]>`
+      select s.rows from quick_matches q
+      join divisions d on d.competition_id = q.competition_id
+      join stages st on st.division_id = d.id and st.kind = 'league'
+      join standings_snapshots s on s.stage_id = st.id and s.pool_id is null
+      where q.token_hash = ${tokenHash(made.token)}`,
+  );
+  expect(stored, "one stored table for the league stage").toHaveLength(1);
+  return stored[0]!.rows;
+}
+
+/** The quick match's answer to a tie at the cut (plan 5 D5), or null while nobody has answered. */
+interface CutDecision {
+  how: string;
+  through: string[];
+  tie: string[];
+  at: string;
+}
+async function cutDecisionOf(made: Made): Promise<CutDecision | null> {
+  const [row] = await withDb(
+    (sql) => sql<{ d: CutDecision | null }[]>`select cut_decision as d from quick_matches where token_hash = ${tokenHash(made.token)}`,
+  );
+  if (!row) throw new Error("the quick match has no row");
+  return row.d;
+}
+
+/** A knockout stage's lines in bracket order, as the record holds them. */
+interface KnockoutLine {
+  id: string;
+  isFinal: boolean;
+  status: string;
+  winner: string | null;
+  home: string | null;
+  away: string | null;
+}
+async function knockoutLinesOf(stageId: string): Promise<KnockoutLine[]> {
+  return withDb(
+    (sql) => sql<KnockoutLine[]>`
+      select id, is_final as "isFinal", status, outcome->>'winner' as winner, home_entrant_id as home, away_entrant_id as away
+        from fixtures where stage_id = ${stageId} order by round_no, fixture_no`,
+  );
+}
+
+/**
+ * "Setting up the knockout" (spec §11, plan 5 T7 (c)) is what a guest sees when the league is done and the knockout did not
+ * fill. Nothing a guest does can make the fill fail, so the record does it: a trigger refuses the ONE write that fills THIS
+ * knockout (its seed proposal turning `confirmed`, inside the confirm's own transaction, which then rolls back whole). It is
+ * scoped to one stage id, so no other test's knockout is touched, and `releaseKnockout` drops it (always, in a `finally`).
+ * Never a product switch: the database refusing a write is the failure §11 owes a calm screen for.
+ */
+const HOLD = `qm_walk_hold_${TAG}`;
+async function holdKnockout(stageId: string): Promise<void> {
+  expect(stageId, "the hold names a stage by its uuid").toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  expect(HOLD, "the hold's name is a plain identifier").toMatch(/^[a-z0-9_]+$/);
+  await withDb(async (sql) => {
+    await sql.unsafe(`create function ${HOLD}() returns trigger language plpgsql as $hold$
+      begin
+        if new.stage_id = '${stageId}'::uuid and new.status = 'confirmed' then
+          raise exception 'walkthrough (F) holds knockout % in Setting up', new.stage_id;
+        end if;
+        return new;
+      end $hold$`);
+    await sql.unsafe(`create trigger ${HOLD} before insert or update on stage_seed_proposals for each row execute function ${HOLD}()`);
+  });
+}
+async function releaseKnockout(): Promise<void> {
+  await withDb(async (sql) => {
+    await sql.unsafe(`drop trigger if exists ${HOLD} on stage_seed_proposals`);
+    await sql.unsafe(`drop function if exists ${HOLD}()`);
+  });
+}
+
+/** The played line of a League + Knockout (D8): the whole match's N of M, then how M splits while the league is on, or that
+ *  the knockout is on once it has filled (`part`); a finished one says neither, and no countdown. */
+async function expectLkPlayedLine(p: Page, c: Counts, part: string | null): Promise<void> {
+  const finished = isFinished(c);
+  const line = playedWords(c, !finished);
+  await expect(p.getByTestId("qm-played"), finished ? "finished: no countdown" : "a match left: the countdown").toHaveText(
+    part === null ? line : `${line} · ${part}`,
+  );
+  if (finished) await expect(p.getByTestId("qm-not-saved"), "finished: its deletion is the dated line").toHaveText(notSavedLine());
+}
+
+/** The home's two blocks, the table and the knockout, in page order (§12: the bracket moves above the table once filled). */
+const blockOrder = (p: Page) =>
+  p
+    .locator('[data-testid="qm-standings"], [data-testid="qm-knockout"]')
+    .evaluateAll((els) => els.map((el) => el.getAttribute("data-testid")));
+
+/** Every knockout card as drawn: its name, whether it is the hero's, and each seat's words (a name, or what it waits on),
+ *  its note ("1st", "2nd · by lot") and whether it is the winner's line. */
+interface CardRead {
+  id: string;
+  round: string | null;
+  next: boolean;
+  seats: { label: string; note: string | null; winner: boolean }[];
+}
+const knockoutCards = (p: Page): Promise<CardRead[]> =>
+  p.getByTestId("qm-draw-card").evaluateAll((els) =>
+    els.map((el) => ({
+      id: el.getAttribute("data-fixture-id") ?? "",
+      round: el.querySelector('[data-testid="qm-draw-round"]')?.textContent?.trim() ?? null,
+      next: el.getAttribute("data-next") === "true",
+      seats: Array.from(el.querySelectorAll('[data-testid="qm-draw-seat"]')).map((s) => ({
+        label: s.querySelector('[data-testid="qm-draw-name"]')?.textContent?.trim() ?? "",
+        note: s.querySelector('[data-testid="qm-draw-note"]')?.textContent?.trim() ?? null,
+        winner: s.getAttribute("data-winner") === "true",
+      })),
+    })),
+  );
+/** Pairings, order-free: who meets whom, never who is seated home (plan 5 T7 review G2: home and away are the engine's). */
+const pairing = (pairs: readonly (readonly string[])[]) => pairs.map((x) => [...x].sort().join(" | ")).sort();
+const pairsOn = (cards: readonly CardRead[]) => pairing(cards.map((c) => c.seats.map((s) => s.label)));
+
+/** A League + Knockout's table row, by the side's name (a row's header also holds its tag, "decided by lot"). */
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const lkRow = (p: Page, name: string) =>
+  p.getByTestId("qm-standings-row").filter({ has: p.getByRole("rowheader").filter({ hasText: new RegExp(`^${escapeRe(name)}`) }) });
+
+/** A League + Knockout's table (plan 5 T7): every side's P, W, Pts, and no leader (its winner is the final's); where given,
+ *  each row's place as printed ("=" for a side level at the cut) and its tag (null: none). */
+async function expectLkTable(
+  p: Page,
+  table: readonly Tally[],
+  marks: { places?: ReadonlyMap<string, string>; tags?: ReadonlyMap<string, string | null> } = {},
+): Promise<void> {
+  let checked = 0;
+  for (const t of table) {
+    const row = lkRow(p, t.name);
+    await expect(row.getByTestId("qm-cell"), `${t.name}: P, W, Pts`).toHaveText(cellsOf(t));
+    const place = marks.places?.get(t.name);
+    if (place !== undefined) await expect(row.locator("td:first-child"), `${t.name}: its place`).toHaveText(place);
+    if (marks.tags?.has(t.name)) {
+      const tag = marks.tags.get(t.name)!;
+      const shown = row.getByTestId("qm-standings-tag");
+      if (tag === null) await expect(shown, `${t.name}: no tag`).toHaveCount(0);
+      else await expect(shown, `${t.name}: its tag`).toHaveText(tag);
+    }
+    checked += 1;
+  }
+  expect(checked, "anti-vacuity: table rows checked").toBe(table.length);
+  await expect(p.getByTestId("qm-standings-row"), "one row per side").toHaveCount(table.length);
+  await expect(p.locator('[data-testid="qm-standings-row"][data-leader="true"]'), "a League + Knockout's table names no leader").toHaveCount(0);
+}
+
+/** "Beat {loser} in the final, {score}." with the final's games, winner first: the words pinned, the score by its numbers. */
+function championBeatLine(loser: string, games: readonly Game[]): RegExp {
+  const [before, after] = ui("quickMatch.home.championBeat", { loser, score: "@@score@@" }).split("@@score@@");
+  return new RegExp(`^${escapeRe(before!)}${games.map(([w, l]) => `${w}\\D+${l}`).join("\\D+")}${escapeRe(after!)}$`);
+}
+
+/** A guest of their own: no session, the cookie banner answered, a phone. */
+const newGuest = async (browser: Browser, baseURL: string | undefined) =>
+  browser.newContext({ storageState: await consentedAnonymousState(), baseURL, viewport: PHONE });
+
+/** (F1)'s steps beyond its matches: the setup page, Start, and Refresh; the semi-finals chosen; the home's first paint (the
+ *  eyebrow, the line, the hero, the list, the three cards and their seats, the table's caption, the blocks' order), Setting
+ *  up (its card, Refresh measured, the bracket still waiting, the table), the fill (the hero, the order, the cards' names,
+ *  seats and notes, the line, the table); the stages and proposals at the start, on the pad, at Setting up and after the
+ *  fill, the hold and its release, the stored table and the record. */
+const KO_LEAGUE = { navs: 3, acts: 36, reads: 10 } as const;
+/** (F2)'s steps beyond its three matches: the bracket read after each, the hero's next round, the champion card and the
+ *  finished line; the stages, the proposal, the final's line and the record. */
+const KO_PLAY = { navs: 0, acts: 18, reads: 4 } as const;
+/** (F3)'s steps beyond its six matches: the setup page and Start; the home's first paint (the line, the list, the final's
+ *  seats, the caption), the question read and its two answers measured, the bracket, the table and the line at it; the
+ *  stages, proposals and decision at the question, the stored lot, and the record. */
+const KO_TIE = { navs: 2, acts: 24, reads: 6 } as const;
+/** (F4)'s steps: the friend's home, Toss's 303, the reload, the friend's stale Toss and its fresh load; the result, the hero
+ *  and the final's seats read four times, the order, caption, table and line once; the decision, proposals, stages and
+ *  final line after the toss, the decision again after the friend's, and the record. */
+const KO_TOSS = { navs: 5, acts: 26, reads: 6 } as const;
+
+test("(F1) League → Semi-finals → Final: four friends play the league by taps; when it ends the knockout reads Setting up, then fills itself from the table, 1st v 4th and 2nd v 3rd", async ({ browser }, info) => {
+  const rules = leagueRules();
+  // Typed in this order, and the plan makes the table strict in that order: each side beats every side typed after it
+  // (3, 2, 1, 0 wins), so no tie-break places anyone and nobody is asked (with all four going through, a tie would be the
+  // lot's anyway, D4 case 2). The long name finishes last in the league; (F2) then makes it the champion.
+  const longName = `The Remarkably Long-Named Knockout Night Club ${TAG}`;
+  expect(longName.replace(` ${TAG}`, "").length, "premise: the long side is 40+ characters").toBeGreaterThanOrEqual(40);
+  const sides = [`Wren Adeyemi ${TAG}`, `Ibis Kowalczyk ${TAG}`, `Heron Takahashi ${TAG}`, longName];
+  const q = QUALIFIERS.semis;
+  const league = leagueMatches(sides.length, 1);
+  const total = league + knockoutMatches(q);
+  const plans: readonly (readonly Game[])[] = [
+    [[rules.setTo, 1], [rules.setTo, 2]],
+    [[rules.setTo, 0], [rules.setTo, 3]],
+    [[rules.setTo, 2], [rules.setTo, 1]],
+    [[rules.setTo, 3], [rules.setTo, 0]],
+    [[rules.setTo, 1], [rules.setTo, 1]],
+    [[rules.setTo, 2], [rules.setTo, 2]],
+  ];
+  expect(plans, "one plan per match a round robin of four plays").toHaveLength(league);
+  plans.forEach((g, i) => checkPlan(rules, g, `(F1) league match ${i + 1}`));
+  setBudget(budgetFor({ navs: KO_LEAGUE.navs, acts: KO_LEAGUE.acts, reads: KO_LEAGUE.reads, plans }));
+  const typedFirst = (h: string, a: string) => (sides.indexOf(h) < sides.indexOf(a) ? h : a);
+  const rank = (r: number) => ui(`quickMatch.home.leagueRank.${r}`);
+  const semi = (n: number) => ui("quickMatch.home.semiFinal", { n });
+  const finalName = ui("bracket.round.final");
+  const waitsOnSemis = [ui("quickMatch.home.winnerOfSemi", { n: 1 }), ui("quickMatch.home.winnerOfSemi", { n: 2 })].sort();
+  const splitPart = ui("quickMatch.home.stagePart.split", { league, knockout: knockoutMatches(q) });
+
+  const ctx = await newGuest(browser, info.project.use.baseURL);
+  let handedOn = false;
+  try {
+    const p = await ctx.newPage();
+
+    // ---- 1. The setup page: four sides, League → Semi-finals → Final; Start counts the league and the knockout ----
+    await p.goto("/en/play");
+    const made = await startQuickMatch(p, `QM walk knockout ${TAG}`, sides, total, { shape: "semis" });
+
+    // ---- 2. The home: the league up next; the knockout drawn already, waiting on the table ----
+    await expect(p.getByTestId("qm-eyebrow")).toContainText(ui("quickMatch.format.league_knockout"));
+    await expectLkPlayedLine(p, { played: 0, notPlayed: 0, total }, splitPart);
+    await expect(p.getByTestId("qm-hero-kicker"), "the hero counts league matches only (D8)").toHaveText(
+      ui("quickMatch.home.upNext", { n: 1, total: league }),
+    );
+    await expect(p.getByTestId("qm-match"), "the match list is the league's").toHaveCount(league);
+    await expect(p.getByTestId("qm-draw-title")).toHaveText(ui("quickMatch.home.knockout"));
+    await expect(p.getByTestId("qm-knockout-caption")).toHaveText(ui("quickMatch.home.knockoutFills"));
+    await expect(p.getByTestId("qm-standings-caption")).toHaveText(ui("quickMatch.home.goThrough", { count: q }));
+    expect(await blockOrder(p), "while the league is on, its table comes first").toEqual(["qm-standings", "qm-knockout"]);
+    const drawn = await knockoutCards(p);
+    expect(drawn.map((c) => c.round), "two semi-finals, then the final").toEqual([semi(1), semi(2), finalName]);
+    expect(pairsOn(drawn.slice(0, 2)), "the semi-finals wait on 1st v 4th and 2nd v 3rd").toEqual(pairing([[rank(1), rank(4)], [rank(2), rank(3)]]));
+    expect(drawn[2]!.seats.map((s) => s.label).sort(), "the final waits on the semi-finals' winners").toEqual(waitsOnSemis);
+    expect(drawn.flatMap((c) => c.seats).filter((s) => s.note !== null), "no side is in the knockout yet").toEqual([]);
+    for (const id of ["qm-cut", "qm-setting-up", "qm-champion"]) await expect(p.getByTestId(id), `the league is on: no ${id}`).toHaveCount(0);
+    await expectNoHorizontalScroll(p);
+    const stages0 = await stagesOf(made);
+    expect(stages0.map((s) => s.kind), "two stages: the league, then its knockout").toEqual(["league", "knockout"]);
+    const koStageId = stages0[1]!.id;
+    expect(await proposalsOf(koStageId), "nothing proposed before the league ends").toEqual([]);
+
+    // ---- 3. The league, every rally tapped; before its last result, the knockout's fill is held ----
+    const results: Played[] = [];
+    for (const [k, games] of plans.entries()) {
+      const last = k === plans.length - 1;
+      if (last) await holdKnockout(koStageId);
+      const played = await playHeroMatch(
+        p,
+        made,
+        games,
+        typedFirst,
+        "after-result",
+        last
+          ? {
+              // On the pad, before any home load: the deciding rally's own request ran the advance (plan 5 D2, the scoring
+              // hook): the league is complete and the knockout's seeding proposed; its confirm is what the hold refused.
+              beforeBack: async () => {
+                await expect
+                  .poll(
+                    async () => [(await stagesOf(made))[0]!.status, (await proposalsOf(koStageId)).map((x) => x.status)],
+                    { timeout: STEP_MS, message: "the last league result never drove the knockout's advance" },
+                  )
+                  .toEqual(["complete", ["draft"]]);
+              },
+            }
+          : {},
+      );
+      results.push(played);
+      if (!last) {
+        await expectLkPlayedLine(p, { played: results.length, notPlayed: 0, total }, splitPart);
+        await expectLkTable(p, tableOf(sides, results, rules));
+        await expect(p.getByTestId("qm-hero-kicker")).toHaveText(ui("quickMatch.home.upNext", { n: results.length + 1, total: league }));
+      }
+      expect(await expectRecorded(made, [played])).toBe(1);
+    }
+    expect(results, "anti-vacuity: every league match was played").toHaveLength(league);
+    const table = tableOf(sides, results, rules);
+    expect(table.map((t) => t.won), "the plan makes a strict table").toEqual([3, 2, 1, 0]);
+    expect(table.map((t) => t.name), "…in the order the sides were typed").toEqual(sides);
+    const places = new Map(table.map((t, i) => [t.name, String(i + 1)]));
+
+    // ---- 4. Setting up: the league is done, the knockout did not fill; Refresh is offered ----
+    await expect(p.getByTestId("qm-setting-up-kicker")).toHaveText(ui("quickMatch.home.leagueFinished"));
+    await expect(p.getByTestId("qm-setting-up-title")).toHaveText(ui("quickMatch.home.settingUp"));
+    await expect(p.getByTestId("qm-setting-up-hint")).toHaveText(ui("quickMatch.home.settingUpHint"));
+    const refresh = p.getByTestId("qm-refresh");
+    await expect(refresh).toHaveText(ui("quickMatch.home.refresh"));
+    await expect(refresh, "Refresh loads this home again").toHaveAttribute("href", made.path);
+    expect((await refresh.boundingBox())?.height ?? 0, "Refresh is a 44px target").toBeGreaterThanOrEqual(44);
+    for (const id of ["qm-hero", "qm-cut", "qm-cut-result", "qm-champion", "qm-winner"]) {
+      await expect(p.getByTestId(id), `Setting up: no ${id}`).toHaveCount(0);
+    }
+    await expectLkPlayedLine(p, { played: league, notPlayed: 0, total }, splitPart);
+    await expect(p.getByTestId("qm-add-match-open"), "the league is complete: no match to add").toHaveCount(0);
+    await expect(p.getByTestId("qm-knockout-caption"), "no caption while it sets up").toHaveCount(0);
+    expect(pairsOn((await knockoutCards(p)).slice(0, 2)), "the bracket still waits on places").toEqual(
+      pairing([[rank(1), rank(4)], [rank(2), rank(3)]]),
+    );
+    await expect(p.getByTestId("qm-standings-title")).toHaveText(ui("quickMatch.home.finalLeagueTable"));
+    await expect(p.getByTestId("qm-standings-caption")).toHaveText(ui("quickMatch.home.goThrough", { count: q }));
+    await expectLkTable(p, table, { places });
+    expect(await blockOrder(p), "not filled: the table still comes first").toEqual(["qm-standings", "qm-knockout"]);
+    await expectNoHorizontalScroll(p);
+    expect(
+      (await proposalsOf(koStageId)).map((x) => x.status),
+      "every home load retried the fill, and the hold refused each: nothing confirmed",
+    ).toEqual(["draft"]);
+
+    // ---- 5. The hold released; Refresh: the knockout fills itself from the table ----
+    await releaseKnockout();
+    await refresh.click();
+    // A same-URL load: wait on what it shows, never on the URL (which already matches).
+    await expect(p.getByTestId("qm-setting-up"), "Refresh retried the fill").toHaveCount(0, { timeout: STEP_MS });
+    await expect(p.getByTestId("qm-hero-kicker"), "the knockout's first card is up next").toHaveText(
+      ui("quickMatch.home.upNextRound", { round: semi(1) }),
+    );
+    expect(await blockOrder(p), "filled: the bracket moves above the table").toEqual(["qm-knockout", "qm-standings"]);
+    await expect(p.getByTestId("qm-knockout-caption"), "filled: no caption").toHaveCount(0);
+    await expect(p.getByTestId("qm-standings-caption")).toHaveText(ui("quickMatch.home.wentThrough", { count: q }));
+    await expect(p.getByTestId("qm-cut-result"), "nobody was asked: no answer line").toHaveCount(0);
+    const filled = await knockoutCards(p);
+    expect(filled.map((c) => c.round), "the next card says so").toEqual([
+      ui("quickMatch.home.upNextRound", { round: semi(1) }),
+      semi(2),
+      finalName,
+    ]);
+    expect(filled.map((c) => c.next)).toEqual([true, false, false]);
+    expect(pairsOn(filled.slice(0, 2)), "1st v 4th and 2nd v 3rd, by name, from the table the taps made").toEqual(
+      pairing([[table[0]!.name, table[3]!.name], [table[1]!.name, table[2]!.name]]),
+    );
+    let noted = 0;
+    for (const seat of filled.slice(0, 2).flatMap((c) => c.seats)) {
+      expect(seat.note, `${seat.label}: its league place beside its name`).toBe(ui(`quickMatch.home.rankShort.${places.get(seat.label)}`));
+      noted += 1;
+    }
+    expect(noted, "anti-vacuity: semi-final seats read").toBe(q);
+    expect(filled[2]!.seats.map((s) => s.label).sort(), "the final still waits on the semi-finals").toEqual(waitsOnSemis);
+    await expectLkPlayedLine(p, { played: league, notPlayed: 0, total }, ui("quickMatch.home.stagePart.knockoutOn"));
+    await expectLkTable(p, table, { places });
+    await expectNoHorizontalScroll(p);
+
+    // ---- 6. The record: the league complete, ONE confirmed proposal sending the table's top four by place ----
+    const stages = await stagesOf(made);
+    expect(stages[0]!.status, "the league stage is complete").toBe("complete");
+    const proposals = await proposalsOf(koStageId);
+    expect(proposals.map((x) => x.status), "one proposal, confirmed").toEqual(["confirmed"]);
+    const { nameOf } = await recordOf(made);
+    expect(
+      [...proposals[0]!.qualifiers].sort((a, b) => a.leagueRank - b.leagueRank).map((x) => [x.leagueRank, nameOf.get(x.entrantId)]),
+      "the knockout took the league's top four, by place",
+    ).toEqual(table.map((t, i) => [i + 1, t.name]));
+    expect(
+      (await leagueTableOf(made)).map((r) => [nameOf.get(r.entrantId), r.rank]),
+      "the stored table is the one the rallies made",
+    ).toEqual(table.map((t, i) => [t.name, i + 1]));
+    expect(await expectRecorded(made, results)).toBe(league);
+
+    koNight = { ctx, p, made, table, league: results };
+    handedOn = true;
+  } finally {
+    await releaseKnockout();
+    if (!handedOn) await ctx.close();
+  }
+});
+
+test("(F2) the semi-finals and the final, by taps: each winner moves into the final, and the champion is the final's winner, not the table's top", async () => {
+  expect(koNight, "(F1) filled the knockout").not.toBeNull();
+  const { p, made, table, league } = koNight!;
+  const rules = stageRules("knockout");
+  // The upset night: 4th beats 1st, 2nd beats 3rd, and 4th takes the final. The champion is the final's winner (D8), so it
+  // is a side the table put LAST, and "Top of the league too" is never said of it.
+  const goesOn = [table[3]!.name, table[1]!.name, table[0]!.name, table[2]!.name];
+  const prefer = (h: string, a: string) => goesOn.find((x) => x === h || x === a)!;
+  const plans: readonly (readonly Game[])[] = [
+    [[rules.setTo, 4], [rules.setTo, 1]],
+    [[rules.setTo, 2], [rules.setTo, 5]],
+    [[rules.setTo, 3], [rules.setTo, 3]],
+  ];
+  plans.forEach((g, i) => checkPlan(rules, g, `(F2) knockout match ${i + 1}`));
+  setBudget(budgetFor({ navs: KO_PLAY.navs, acts: KO_PLAY.acts, reads: KO_PLAY.reads, plans }));
+  const total = league.length + plans.length;
+  const semi = (n: number) => ui("quickMatch.home.semiFinal", { n });
+  const finalName = ui("bracket.round.final");
+  const knockoutOn = ui("quickMatch.home.stagePart.knockoutOn");
+  const koStageId = (await stagesOf(made))[1]!.id;
+
+  // ---- 1. Semi-final 1, then semi-final 2: each winner's name moves into the final ----
+  const semis: Played[] = [];
+  for (const n of [1, 2]) {
+    await expect(p.getByTestId("qm-hero-kicker")).toHaveText(ui("quickMatch.home.upNextRound", { round: semi(n) }));
+    const played = await playHeroMatch(p, made, plans[n - 1]!, prefer, "after-result", { where: "knockout" });
+    semis.push(played);
+    const cards = await knockoutCards(p);
+    const final = cards[2]!;
+    expect(final.seats.map((s) => s.label), `the final seats semi-final ${n}'s winner`).toContain(played.winner);
+    if (n === 1) {
+      expect(final.seats.map((s) => s.label), "…and still waits on the other").toContain(ui("quickMatch.home.winnerOfSemi", { n: 2 }));
+      await expect(p.getByTestId("qm-hero-kicker")).toHaveText(ui("quickMatch.home.upNextRound", { round: semi(2) }));
+    } else {
+      expect(final.seats.map((s) => s.label).sort(), "both semi-finals' winners").toEqual(semis.map((s) => s.winner).sort());
+      expect(final.round, "the final is up next").toBe(ui("quickMatch.home.upNextRound", { round: finalName }));
+      expect(final.seats.map((s) => s.note), "a seat a semi-final filled carries no league place").toEqual([null, null]);
+    }
+    await expectLkPlayedLine(p, { played: league.length + n, notPlayed: 0, total }, knockoutOn);
+    await expectNoHorizontalScroll(p);
+  }
+  expect(pairing(semis.map((s) => [s.home, s.away])), "the semi-finals played were 1st v 4th and 2nd v 3rd").toEqual(
+    pairing([[table[0]!.name, table[3]!.name], [table[1]!.name, table[2]!.name]]),
+  );
+  expect(semis.map((s) => s.winner).sort(), "the planned winners went on").toEqual([table[3]!.name, table[1]!.name].sort());
+
+  // ---- 2. The final ----
+  await expect(p.getByTestId("qm-hero-kicker")).toHaveText(ui("quickMatch.home.upNextRound", { round: finalName }));
+  const final = await playHeroMatch(p, made, plans[2]!, prefer, "after-result", { where: "knockout" });
+  const champion = final.winner;
+  expect(champion, "the plan's champion").toBe(table[3]!.name);
+  expect(table.findIndex((t) => t.name === champion), "premise: the champion did not top the league").not.toBe(0);
+
+  // ---- 3. Finished: the champion card names the final's winner, who they beat and by what; nothing left to play ----
+  await expect(p.getByTestId("qm-champion-kicker")).toHaveText(ui("quickMatch.home.champion"));
+  await expect(p.getByTestId("qm-champion-name")).toHaveText(champion);
+  await expect(p.getByTestId("qm-champion-beat"), "the final's loser and score; never 'Top of the league too'").toHaveText(
+    championBeatLine(final.loser, final.games),
+  );
+  for (const id of ["qm-hero", "qm-winner", "qm-cut-result", "qm-setting-up"]) {
+    await expect(p.getByTestId(id), `finished: no ${id}`).toHaveCount(0);
+  }
+  await expectLkPlayedLine(p, { played: total, notPlayed: 0, total }, null);
+  expect(await blockOrder(p)).toEqual(["qm-knockout", "qm-standings"]);
+  await expect(p.getByTestId("qm-standings-title")).toHaveText(ui("quickMatch.home.finalLeagueTable"));
+  await expectLkTable(p, table, { places: new Map(table.map((t, i) => [t.name, String(i + 1)])) });
+  await expectNoHorizontalScroll(p);
+
+  // ---- 4. The record: the final decided for the champion, against the semi-finals' winners; one confirmed proposal ----
+  const { nameOf } = await recordOf(made);
+  const lines = await knockoutLinesOf(koStageId);
+  expect(lines, "the knockout's three lines").toHaveLength(plans.length);
+  const finals = lines.filter((l) => l.isFinal);
+  expect(finals, "one final").toHaveLength(1);
+  const theFinal = finals[0]!;
+  expect(theFinal.id, "the final played is the record's final").toBe(final.fixtureId);
+  expect(theFinal.status, "decided (a guest never finalizes)").toBe("decided");
+  expect(nameOf.get(theFinal.winner!), "the record's champion").toBe(champion);
+  expect([nameOf.get(theFinal.home!), nameOf.get(theFinal.away!)].sort(), "the final was the semi-finals' winners").toEqual(
+    semis.map((s) => s.winner).sort(),
+  );
+  expect((await proposalsOf(koStageId)).map((x) => x.status), "still one proposal, confirmed").toEqual(["confirmed"]);
+  const stages = await stagesOf(made);
+  // The league stays complete; the knockout, filled and played, is left active: nothing comes after it to complete it for,
+  // and a guest never finalizes (the final reads decided above). `finished` is the final's, division-wide (plan 5 D8).
+  expect(stages.map((s) => [s.kind, s.status]), "the stages as the night leaves them").toEqual([
+    ["league", "complete"],
+    ["knockout", "active"],
+  ]);
+  expect(await cutDecisionOf(made), "a strict table: nobody was asked").toBeNull();
+  expect(await expectRecorded(made, [...league, ...semis, final])).toBe(total);
+});
+
+test("(F3) a tie at the cut: three sides play each other twice, steered so 2nd and 3rd end level on everything; the guests are asked, Tie for 2nd, Pick or Toss, and the engine's lot is already stored", async ({ browser }, info) => {
+  const rules = leagueRules();
+  const sides = [`Puffin Achebe ${TAG}`, `Gull Moreno ${TAG}`, `Skua Nakamura ${TAG}`];
+  const [top, second, third] = sides as [string, string, string];
+  const q = QUALIFIERS.final;
+  const plays = 2;
+  const league = leagueMatches(sides.length, plays);
+  const total = league + knockoutMatches(q);
+  // Every match is the same two games from its winner's side, so the level pair is level on every key, not on wins alone:
+  // `top` beats both twice; the other two take one of their two meetings each.
+  const plan: readonly Game[] = [[rules.setTo, 1], [rules.setTo, 2]];
+  checkPlan(rules, plan, "(F3) every match");
+  const plans: readonly (readonly Game[])[] = Array.from({ length: league }, () => plan);
+  setBudget(budgetFor({ navs: KO_TIE.navs, acts: KO_TIE.acts, reads: KO_TIE.reads, plans }));
+  let meetings = 0;
+  const steer = (h: string, a: string) => {
+    if (h === top || a === top) return top;
+    meetings += 1;
+    return meetings === 1 ? second : third;
+  };
+  const rank = (r: number) => ui(`quickMatch.home.leagueRank.${r}`);
+  const level = [second, third];
+
+  const ctx = await newGuest(browser, info.project.use.baseURL);
+  let handedOn = false;
+  try {
+    const p = await ctx.newPage();
+
+    // ---- 1. Three sides, League → Final, each pair twice: the semi-finals are shown but cannot be picked ----
+    await p.goto("/en/play");
+    const made = await startQuickMatch(p, `QM walk toss ${TAG}`, sides, total, { shape: "final", plays });
+    await expect(p.getByTestId("qm-eyebrow")).toContainText(ui("quickMatch.format.league_knockout"));
+    const splitPart = ui("quickMatch.home.stagePart.split", { league, knockout: knockoutMatches(q) });
+    await expectLkPlayedLine(p, { played: 0, notPlayed: 0, total }, splitPart);
+    await expect(p.getByTestId("qm-match")).toHaveCount(league);
+    const drawn = await knockoutCards(p);
+    expect(drawn.map((c) => c.round), "one card: the final").toEqual([ui("bracket.round.final")]);
+    expect(drawn[0]!.seats.map((s) => s.label).sort(), "it waits on 1st and 2nd").toEqual([rank(1), rank(2)].sort());
+    await expect(p.getByTestId("qm-standings-caption")).toHaveText(ui("quickMatch.home.goThrough", { count: q }));
+    const koStageId = (await stagesOf(made))[1]!.id;
+
+    // ---- 2. The six league matches, steered: 2nd and 3rd end level on everything ----
+    const results: Played[] = [];
+    for (const games of plans) {
+      const played = await playHeroMatch(p, made, games, steer, "after-result");
+      results.push(played);
+      expect(await expectRecorded(made, [played])).toBe(1);
+    }
+    expect(meetings, "anti-vacuity: the level pair met twice").toBe(plays);
+    const table = tableOf(sides, results, rules);
+    expect(table.map((t) => t.won), "one clear top, two level below it").toEqual([2 * plays, 1, 1]);
+    expect(table[0]!.name).toBe(top);
+
+    // ---- 3. The question: the league finished, one place left, "Tie for 2nd", Pick or Toss ----
+    await expect(p.getByTestId("qm-cut-kicker")).toHaveText(plural(ui, "quickMatch.cut.kicker", 1));
+    const list = new Intl.ListFormat("en", { style: "long", type: "conjunction" });
+    const title = ui("quickMatch.cut.title", { place: ui("quickMatch.home.rankShort.2"), names: list.format(level) });
+    await expect(p.getByTestId("qm-cut-title"), "the level pair, in the order they were typed").toHaveText(title);
+    await expect(p.getByTestId("qm-cut-body")).toHaveText(ui("quickMatch.cut.body"));
+    await expect(p.getByTestId("qm-cut-toss")).toHaveText(ui("quickMatch.cut.toss"));
+    await expect(p.getByTestId("qm-cut-pick")).toHaveText(ui("quickMatch.cut.pick"));
+    for (const id of ["qm-cut-toss", "qm-cut-pick"]) {
+      expect((await p.getByTestId(id).boundingBox())?.height ?? 0, `${id} is a 44px target`).toBeGreaterThanOrEqual(44);
+    }
+    for (const id of ["qm-hero", "qm-setting-up", "qm-cut-result", "qm-add-match-open"]) {
+      await expect(p.getByTestId(id), `the question open: no ${id}`).toHaveCount(0);
+    }
+    await expect(p.getByTestId("qm-knockout-caption")).toHaveText(ui("quickMatch.home.knockoutWaiting"));
+    expect((await knockoutCards(p))[0]!.seats.map((s) => s.label).sort(), "the final's 2nd seat is the one to decide").toEqual(
+      [rank(1), ui("quickMatch.home.toDecide", { seat: rank(2) })].sort(),
+    );
+    const levelTag = ui("quickMatch.home.levelToDecide");
+    await expectLkTable(p, table, {
+      places: new Map([[top, "1"], [second, "="], [third, "="]]),
+      tags: new Map([[top, null], [second, levelTag], [third, levelTag]]),
+    });
+    await expectLkPlayedLine(p, { played: league, notPlayed: 0, total }, splitPart);
+    await expectNoHorizontalScroll(p);
+
+    // ---- 4. The record: the league still on (D3), nothing proposed, nobody has answered; the engine's lot stored ----
+    expect((await stagesOf(made))[0]!.status, "the league stays active while it asks").toBe("active");
+    expect(await proposalsOf(koStageId), "nothing proposed while it asks").toEqual([]);
+    expect(await cutDecisionOf(made), "nobody has answered").toBeNull();
+    const { nameOf } = await recordOf(made);
+    const stored = await leagueTableOf(made);
+    const levelRows = stored.filter((r) => level.includes(nameOf.get(r.entrantId)!));
+    expect(levelRows.map((r) => [r.tieUnbroken, r.tieBreak?.key]), "the engine left the pair level, ordered by the lot").toEqual([
+      [true, "lots"],
+      [true, "lots"],
+    ]);
+    const lotFirst = nameOf.get(stored.find((r) => r.rank === 2)!.entrantId)!;
+    expect(level, "the lot's 2nd is one of the level pair").toContain(lotFirst);
+    expect(await expectRecorded(made, results)).toBe(league);
+
+    tieNight = { ctx, p, made, table, results, title, lotFirst, level };
+    handedOn = true;
+  } finally {
+    if (!handedOn) await ctx.close();
+  }
+});
+
+test("(F4) Toss: the stored lot's side goes to the final, the league table marks the pair by lot, and a reload and a friend's phone that taps Toss again read the same", async ({ browser }, info) => {
+  expect(tieNight, "(F3) left the question open").not.toBeNull();
+  const { p, made, table, results, title, lotFirst, level } = tieNight!;
+  setBudget(budgetFor({ navs: KO_TOSS.navs, acts: KO_TOSS.acts, reads: KO_TOSS.reads, plans: [] }));
+  const top = table[0]!.name;
+  const lotSecond = level.find((n) => n !== lotFirst)!;
+  const q = QUALIFIERS.final;
+  const total = results.length + knockoutMatches(q);
+  const finalName = ui("bracket.round.final");
+  const koStageId = (await stagesOf(made))[1]!.id;
+  const { nameOf } = await recordOf(made);
+  const idOf = new Map([...nameOf].map(([id, name]) => [name, id]));
+
+  const friendCtx = await newGuest(browser, info.project.use.baseURL);
+  try {
+    // ---- 1. A friend opens the link while it asks: the same question on a second phone ----
+    const fp = await friendCtx.newPage();
+    await fp.goto(made.path);
+    await expect(fp.getByTestId("qm-cut-title"), "the friend's phone asks the same").toHaveText(title, { timeout: STEP_MS });
+
+    // ---- 2. Toss: the 303 back to the bare home; the stored lot's side goes through, said above the final ----
+    await p.getByTestId("qm-cut-toss").click();
+    // A same-URL 303: wait on what it shows, never on the URL (which already matches).
+    await expect(p.getByTestId("qm-cut"), "answered: the question goes").toHaveCount(0, { timeout: STEP_MS });
+    expect(new URL(p.url()).search, "the bare home: no refusal").toBe("");
+    await expect(p.getByTestId("qm-flash")).toHaveCount(0);
+    const resultLines = [ui("quickMatch.cut.tossResult", { names: lotFirst }), ui("quickMatch.cut.tossBody")];
+    const expectAnswered = async (pg: Page, how: string) => {
+      await expect(pg.getByTestId("qm-cut-result").locator("p"), `${how}: the toss's result`).toHaveText(resultLines);
+      await expect(pg.getByTestId("qm-hero-kicker"), `${how}: the final is up next`).toHaveText(
+        ui("quickMatch.home.upNextRound", { round: finalName }),
+      );
+      const [card] = await knockoutCards(pg);
+      expect(card!.seats.map((s) => [s.label, s.note]).sort(), `${how}: the final seats 1st and the toss's side, by lot`).toEqual(
+        [
+          [top, ui("quickMatch.home.rankShort.1")],
+          [lotFirst, `${ui("quickMatch.home.rankShort.2")} · ${ui("quickMatch.home.byLotShort")}`],
+        ].sort(),
+      );
+    };
+    await expectAnswered(p, "after the toss");
+    expect(await blockOrder(p), "filled: the bracket above the table").toEqual(["qm-knockout", "qm-standings"]);
+    await expect(p.getByTestId("qm-standings-caption")).toHaveText(ui("quickMatch.home.wentThrough", { count: q }));
+    const byLot = ui("quickMatch.home.byLot");
+    await expectLkTable(p, table, {
+      places: new Map([[top, "1"], [lotFirst, "2"], [lotSecond, "3"]]),
+      tags: new Map([[top, null], [lotFirst, byLot], [lotSecond, byLot]]),
+    });
+    await expectLkPlayedLine(p, { played: results.length, notPlayed: 0, total }, ui("quickMatch.home.stagePart.knockoutOn"));
+    await expectNoHorizontalScroll(p);
+    const decided = await cutDecisionOf(made);
+    expect(
+      decided && { how: decided.how, through: decided.through, tie: decided.tie },
+      "the record: a toss, the lot's side through, the tie it answered",
+    ).toEqual({ how: "toss", through: [idOf.get(lotFirst)], tie: level.map((n) => idOf.get(n)!).sort() });
+    expect((await proposalsOf(koStageId)).map((x) => x.status), "one proposal, confirmed").toEqual(["confirmed"]);
+    expect((await stagesOf(made))[0]!.status, "the league is complete once the knockout fills").toBe("complete");
+    const [line] = await knockoutLinesOf(koStageId);
+    expect([nameOf.get(line!.home!), nameOf.get(line!.away!)].sort(), "the record's final: 1st and the toss's side").toEqual(
+      [top, lotFirst].sort(),
+    );
+
+    // ---- 3. A reload reads the same ----
+    await p.reload();
+    await expectAnswered(p, "after a reload");
+
+    // ---- 4. The friend, still on the question, taps Toss too: someone already decided, and here is who goes through ----
+    await fp.getByTestId("qm-cut-toss").click();
+    await expect(fp.getByTestId("qm-flash"), "the second answer is refused, in plain words").toHaveText(
+      ui("quickMatch.flash.alreadyDecided"),
+      { timeout: STEP_MS },
+    );
+    await expect(fp.getByTestId("qm-flash")).toHaveAttribute("data-tone", "refusal");
+    await expect(fp.getByTestId("qm-cut")).toHaveCount(0);
+    await expectAnswered(fp, "the friend's phone");
+    expect(await cutDecisionOf(made), "the first answer stands, untouched").toEqual(decided);
+    await expectNoHorizontalScroll(fp);
+    // …and a fresh load of the link on that phone reads the same, with no refusal.
+    await fp.goto(made.path);
+    await expect(fp.getByTestId("qm-flash")).toHaveCount(0);
+    await expectAnswered(fp, "the friend's fresh load");
+    expect(await expectRecorded(made, results)).toBe(results.length);
+  } finally {
+    await friendCtx.close();
+  }
+});
+
+// ── (G) the season door ─────────────────────────────────────────────────────────────────────────────────────────────
 
 /** /play and the door's two reads; /start and its four answers (each a click or a fill and the step it lands on), Sent and
  *  its link; the claim and its landing; the record read back, and the entrants tab read. */
 const SEASON = { navs: 4, acts: 26, reads: 4 } as const;
 
-test("(F) the season door: /play's Tennis opens the /start wizard on Tennis, and the emailed link builds a Tennis league of the size asked", async ({ browser }, info) => {
+test("(G) the season door: /play's Tennis opens the /start wizard on Tennis, and the emailed link builds a Tennis league of the size asked", async ({ browser }, info) => {
   setBudget(budgetFor({ ...SEASON, plans: [] }));
   const PLAYERS = 6;
   const name = `QM walk season ${TAG}`;

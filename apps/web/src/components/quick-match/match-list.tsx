@@ -6,8 +6,9 @@
 // A SERVER component that takes its words already resolved (`MatchView`, built by home.tsx): nothing here reads a
 // dictionary, a token or a database. A row's Score control is a slot (`score`), filled by plan 2 Task 6 (the page's
 // `QuickMatchScoreForm`, described by the row's `matchSidesId`); a row that waits (a side still unknown, C18), is finished
-// or is Not played never gets one. Long side names wrap rather than push the row wider than a 320px screen (`min-w-0` on
-// every flex child, `[overflow-wrap:anywhere]` on the text).
+// or is Not played never gets one. Long side names never push the row wider than a 320px screen (`min-w-0` on every flex
+// child): a match still to play truncates each named seat on its own line rather than break it mid-word beside the Score
+// and ⋯ (sign-off qlk14s1, 2026-11-14: "Featherstoneh / augh-Bray" at 320); a finished row's sentence wraps at its words.
 //
 // The row's ⋯ menu (plan 4 Task 4; spec 2026-11-12 §6, Option A; owner 2026-11-13): ONE menu per row, a slot (`rowMenu`)
 // the page fills with `QuickMatchRowMenu`. What it offers is decided here, by the row's phase, in one exhaustive switch
@@ -257,11 +258,14 @@ export function QuickMatchRow({
 
 // Plain functions, not components (the score page's `scanColumn` convention): the row's element tree then holds what
 // they render, where the server render and its test both see it.
+/** A seat in "A v B": a waiting seat's words wrap; a name is one box no wider than the line (`inline-block max-w-full`)
+ *  that ends in an ellipsis rather than breaking (`truncate`), sat on the line's foot (`align-bottom`: an overflow box's
+ *  baseline is its bottom edge, which would lift it off the text beside it). */
 function seatText(seat: SeatView): ReactNode {
   return seat.name === null ? (
     <span className="text-[#b7aede]">{seat.label}</span>
   ) : (
-    <span className="font-semibold">{seat.name}</span>
+    <span className="inline-block max-w-full truncate align-bottom font-semibold">{seat.name}</span>
   );
 }
 

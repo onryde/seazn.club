@@ -346,6 +346,40 @@ describe.skipIf(!HAS_DB)("/admin/quick-matches renders what is there, and nothin
     }
   });
 
+  it("the format reads as staff say it (plan 5 T6): League, and League + Knockout, never the stored word", async () => {
+    await signInAs(true);
+    const ids = scope.ids;
+    const sport = (await listQuickMatchSports()).find((s) => s.sport_key === "badminton")!;
+    const lk = await createQuickMatch(
+      {
+        name: `QM admin page LK ${randomUUID().slice(0, 8)}`,
+        sport_key: "badminton",
+        variant_key: sport.variants[0]!.variant_key,
+        kind: sport.kinds.at(-1)!,
+        format: "league_knockout",
+        qualifiers: 2,
+        sides: [PLAIN_SIDE, "Asha & Ben", "Lee & Ana"],
+        plays: 1,
+        email: null,
+        locale: "en",
+      },
+      { visitorHash: hashVisitorKey(mintVisitorKey()), baseUrl: "https://qm-admin-page.test", mailAllowed: async () => true },
+    );
+    competitions.push(lk.competitionId);
+    scope.ids = [lk.id, S.played.id];
+    try {
+      const html = await render();
+      const cells = [...html.matchAll(/data-testid="qm-sport-format"[^>]*>([^<]*)</g)].map((m) => m[1]!);
+      // Newest first: the League + Knockout was made after the seeds.
+      expect(cells).toEqual([`badminton · League + Knockout · ${sport.kinds.at(-1)}`, `badminton · League · ${sport.kinds.at(-1)}`]);
+      expect(html, "never the stored spelling").not.toContain("league_knockout");
+      // The Decided cell counts league + knockout lines (spec §12): 3 + 1, none played yet.
+      expect(decidedCells(html)[0]).toBe("0 of 4");
+    } finally {
+      scope.ids = ids;
+    }
+  });
+
   it("the empty case: nothing in scope is the empty row, not an empty table", async () => {
     await signInAs(true);
     const ids = scope.ids;
