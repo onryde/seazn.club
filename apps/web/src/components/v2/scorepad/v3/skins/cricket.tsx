@@ -1360,11 +1360,14 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
   // caption (a DLS par is "be ahead of this line right now", not "reach
   // this total by the end") — see `chaseTarget`'s own doc for why that flag
   // is always false on the arithmetic-fallback branch, not a separate check.
+  // Sign-off 2026-11-14: every one of these four (and the free hit slot below) is fed by the ball alone (`fedBy`), so a
+  // pad that cannot record a ball (the guest's quick match pad, `quickMatchSkin`) drops them rather than print ▸ and ⚾.
+  const ball = ballEventType(state);
   const strip: StripItem[] = [
-    { value: `▸${strikerName}`, accent: true },
-    { value: nonStrikerName },
-    { value: dots.length > 0 ? dots.join(" ") : "—" },
-    { value: `⚾${bowlerName}` },
+    { value: `▸${strikerName}`, accent: true, fedBy: ball },
+    { value: nonStrikerName, fedBy: ball },
+    { value: dots.length > 0 ? dots.join(" ") : "—", fedBy: ball },
+    { value: `⚾${bowlerName}`, fedBy: ball },
   ];
   const target = chaseTarget(cfg, state);
   if (target) {
@@ -1396,8 +1399,8 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
     const freeHit = t("scorepad.skin.cricket.header.freeHit");
     strip.push(
       foldFreeHitPending(state)
-        ? { id: "freeHit", value: freeHit, accent: true, reserve: [freeHit] }
-        : { value: "", accent: true, reserved: true, reserve: [freeHit] },
+        ? { id: "freeHit", value: freeHit, accent: true, reserve: [freeHit], fedBy: ball }
+        : { value: "", accent: true, reserved: true, reserve: [freeHit], fedBy: ball },
     );
   }
 

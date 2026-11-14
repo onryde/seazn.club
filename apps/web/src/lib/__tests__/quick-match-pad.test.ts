@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import type { AnySportModule, FidelityBand, PadSpec } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { forEachSport } from "@seazn/engine/testkit";
-import { firstNamedPersonBand, QUICK_MATCH_BAND_CAPPED_SPORTS, quickMatchBandCeiling } from "../quick-match-pad";
+import { firstNamedPersonBand, personAttributedEvents, QUICK_MATCH_BAND_CAPPED_SPORTS, quickMatchBandCeiling } from "../quick-match-pad";
 
 const modules = builtinModules as readonly AnySportModule[];
 const moduleOf = (key: string): AnySportModule => {
@@ -100,5 +100,39 @@ describe("firstNamedPersonBand / quickMatchBandCeiling", () => {
     } as unknown as PadSpec;
     expect(firstNamedPersonBand(spec)).toBe(0);
     expect(() => quickMatchBandCeiling("cricket", spec)).toThrow(/band 0/);
+  });
+});
+
+// Sign-off 2026-11-14 (controller, PO rec): the guest's cricket pad still drew a Review tile. A review is about a player
+// (which batter, which bowler: the engine stamps both as optional person attributions), so it sits at band 1 and the cap
+// alone keeps it. The actions a quick match pad leaves out are read off the engine the same way: any person attribution.
+describe("personAttributedEvents: the actions about a player, required or optional", () => {
+  it("the empty case: a pad with no actions has none", () => {
+    expect(personAttributedEvents({ panels: [], fidelity: {} }).size).toBe(0);
+  });
+
+  it("cricket, every variant: the review is one though it needs nobody; the result, the toss and the close are not", () => {
+    const cricket = moduleOf("cricket");
+    let checked = 0;
+    for (const cfg of cfgsOf(cricket)) {
+      const spec = specOf(cricket, cfg);
+      const actions = spec.panels.flatMap((p) => p.actions);
+      const review = actions.find((a) => a.type === "cricket.review");
+      // Premise, from the engine: the review attributes people, requires none, and sits under the guest's ceiling, so
+      // the band cap alone would keep its tile on the guest's pad.
+      expect(review?.attribution?.some((x) => x.kind === "person"), "premise: the review attributes a person").toBe(true);
+      expect(needsPerson(review!), "premise: the review needs no named person").toBe(false);
+      expect(spec.fidelity["cricket.review"]!).toBeLessThanOrEqual(quickMatchBandCeiling("cricket", spec)!);
+      const about = personAttributedEvents(spec);
+      expect(about.has("cricket.review")).toBe(true);
+      for (const type of ["cricket.innings.summary", "cricket.innings.close", "cricket.toss"]) {
+        expect(about.has(type), type).toBe(false);
+      }
+      // The ball and the player line name a player too (required): above the ceiling already, and in the set.
+      expect(about.has("cricket.ball")).toBe(true);
+      expect(about.has("cricket.player.line")).toBe(true);
+      checked++;
+    }
+    expect(checked, "cricket cfgs checked").toBeGreaterThan(1);
   });
 });

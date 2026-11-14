@@ -46,3 +46,19 @@ export function quickMatchBandCeiling(sportKey: string, spec: PadSpec): Fidelity
   if (named === 0) throw new Error(`quick match: ${sportKey} needs a named player at band 0, so a guest cannot score it`);
   return (named - 1) as FidelityBand;
 }
+
+/**
+ * The actions about a player: any `person` attribution, required or optional. A quick match pad leaves them all out
+ * (sign-off 2026-11-14, controller PO rec): the ones that need a name already sit above the ceiling, and the ones that
+ * only ask for one (cricket's review: which batter, which bowler) would be recorded with that half blank, about sides
+ * that have nobody in them. Read off the engine's own attributions, like the ceiling; nothing here names an event.
+ */
+export function personAttributedEvents(spec: PadSpec): ReadonlySet<string> {
+  const out = new Set<string>();
+  for (const panel of spec.panels) {
+    for (const action of panel.actions) {
+      if ((action.attribution ?? []).some((a) => a.kind === "person")) out.add(action.type);
+    }
+  }
+  return out;
+}

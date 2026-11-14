@@ -104,10 +104,10 @@ import {
   type ActivityDetailResolver,
   type ActivityEvent,
 } from "./activity";
-import { MORE_SHEET_KEY, type ContextStripSpec, type DockChip, type DockSpec, type GuidedSheetSpec, type PadHostView, type PadPhase, type ScorebugSpec, type SkinDefV3, type SwapSlot, type TapEvent, type TileSpec } from "./types";
+import { MORE_SHEET_KEY, type ContextStripSpec, type DockChip, type DockSpec, type GuidedSheetSpec, type PadHostView, type PadPhase, type ScorebugSpec, type SkinDefV3, type StripItem, type SwapSlot, type TapEvent, type TileSpec } from "./types";
 import { sportThemeAttr, sportThemeStyle } from "./sport-theme";
 import { isOrganiserOnlyEvent, ORGANISER_ONLY } from "@/lib/organiser-only-events";
-import { quickMatchBandCeiling } from "@/lib/quick-match-pad";
+import { personAttributedEvents, quickMatchBandCeiling } from "@/lib/quick-match-pad";
 
 // ---------------------------------------------------------------------------
 // Pure builders — every decision this file makes, tested directly
@@ -329,6 +329,33 @@ export function withoutPersonSlots(spec: ContextStripSpec | null): ContextStripS
   if (spec === null) return null;
   const slots = spec.slots.filter((slot) => slot.kind === "mode");
   return slots.length === 0 ? null : { ...spec, slots };
+}
+
+/**
+ * The skin a capped (guest's) pad draws with (sign-off 2026-11-14, controller PO rec): the skin, less every action about
+ * a player and every strip slot nothing on this pad can feed. The cap alone kept cricket's Review (band 1: it only ASKS
+ * which batter and bowler, `personAttributedEvents`) and the strip's empty ▸ and ⚾ (a slot `fedBy` the ball, band 3).
+ * An adapter rather than a filter at each call, so the tile grid, the More sheet (the refusals), the Recording chip's
+ * counts (`reachableControls`) and the scorebug all see one pad. Null ceiling never reaches here: the organiser's pad
+ * draws with the skin itself.
+ */
+export function quickMatchSkin(skin: SkinDefV3, spec: PadSpec, ceiling: FidelityBand): SkinDefV3 {
+  const about = personAttributedEvents(spec);
+  const feeds = (item: StripItem) => item.fedBy === undefined || (spec.fidelity[item.fedBy] ?? 0) <= ceiling;
+  return {
+    ...skin,
+    tiles: (view) => {
+      const sheets = skin.sheets?.(view) ?? {};
+      const swaps = skin.swap?.(view) ?? [];
+      return skin.tiles(view).filter((tile) => !about.has(tileEventType(tile, sheets, swaps) ?? ""));
+    },
+    // Left out of the More sheet as well: a tile-less event is listed there unless something refuses it.
+    refusedEventTypes: (view) => [...(skin.refusedEventTypes?.(view) ?? []), ...about],
+    scorebug: (view) => {
+      const bug = skin.scorebug(view);
+      return { ...bug, strip: bug.strip.filter(feeds) };
+    },
+  };
 }
 
 /**
@@ -2092,6 +2119,12 @@ export function PadHostV3(props: PadHostV3Props) {
     [props.quickMatch, props.module.key, spec],
   );
   const [band, onBandChange] = usePadBand(props.fixtureId, spec.fidelity, bandCeiling);
+  // Quick match: the guest's pad draws its tiles, its scorebug, its refusals and its chip's counts with the capped skin
+  // (`quickMatchSkin`); every other skin call below reads `props.skin`, which the adapter leaves as it is.
+  const padSkin = useMemo(
+    () => (bandCeiling === null ? props.skin : quickMatchSkin(props.skin, spec, bandCeiling)),
+    [props.skin, spec, bandCeiling],
+  );
 
   const [phase, setPhase] = useState<PadPhase>("live");
   const [held, setHeld] = useState<HeldTap | null>(null);
@@ -2222,7 +2255,7 @@ export function PadHostV3(props: PadHostV3Props) {
   // machinery must reason about the tiles a scorer can actually see, or the
   // pad can snap to a phase whose only tiles were filtered away and show an
   // empty grid.
-  const allTiles = useMemo(() => props.skin.tiles(view), [props.skin, view]);
+  const allTiles = useMemo(() => padSkin.tiles(view), [padSkin, view]);
   const tiles = useMemo(
     () => filterTilesByBand(allTiles, sheets ?? {}, swapSlots, spec.fidelity, band),
     [allTiles, sheets, swapSlots, spec.fidelity, band],
@@ -2243,10 +2276,10 @@ export function PadHostV3(props: PadHostV3Props) {
   const bandActionCounts = useMemo(() => {
     const counts = {} as Record<FidelityBand, number>;
     for (const candidate of BANDS) {
-      counts[candidate] = reachableControls(props.skin, spec, view, candidate).total;
+      counts[candidate] = reachableControls(padSkin, spec, view, candidate).total;
     }
     return counts;
-  }, [props.skin, spec, view]);
+  }, [padSkin, spec, view]);
   const availablePhases = useMemo(() => phasesWithTiles(tiles), [tiles]);
   // G3: a skin's own phase(view), when declared, overrides the self-correcting
   // default below rather than being cross-checked against it — see
@@ -2254,7 +2287,7 @@ export function PadHostV3(props: PadHostV3Props) {
   const nextPhase = resolvePadPhase(props.skin.phase?.(view) ?? null, phase, availablePhases);
   if (nextPhase !== phase) setPhase(nextPhase);
 
-  const scorebugSpec = useMemo(() => props.skin.scorebug(view), [props.skin, view]);
+  const scorebugSpec = useMemo(() => padSkin.scorebug(view), [padSkin, view]);
   // Quick match: no person pickers on a capped (guest's) pad — nobody is in a quick match side (`withoutPersonSlots`).
   const contextSpec = useMemo(() => {
     const raw = props.skin.context?.(view) ?? null;
@@ -2342,8 +2375,8 @@ export function PadHostV3(props: PadHostV3Props) {
   // one. Built from `view` (not `padViewCtx`), because it is a SKIN call and
   // every skin method takes the same view bag.
   const refusedTypes = useMemo(
-    () => new Set(props.skin.refusedEventTypes?.(view) ?? []),
-    [props.skin, view],
+    () => new Set(padSkin.refusedEventTypes?.(view) ?? []),
+    [padSkin, view],
   );
   const moreActionsList = useMemo(
     () => moreActions(spec, padViewCtx, dedicated, refusedTypes),

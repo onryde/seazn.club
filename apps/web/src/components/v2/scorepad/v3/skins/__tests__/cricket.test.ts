@@ -957,9 +957,9 @@ describe("buildScorebug", () => {
 
   it("strip shows striker (accented, on-strike marker), non-striker, dots, bowler", () => {
     const spec = buildScorebug(view({ state: state({ innings: [innings()] }) }), t);
-    expect(spec.strip[0]).toEqual({ value: "▸Home One", accent: true });
-    expect(spec.strip[1]).toEqual({ value: "Home Two" });
-    expect(spec.strip[3]).toEqual({ value: "⚾Away One" });
+    expect(spec.strip[0]).toEqual({ value: "▸Home One", accent: true, fedBy: "cricket.ball" });
+    expect(spec.strip[1]).toEqual({ value: "Home Two", fedBy: "cricket.ball" });
+    expect(spec.strip[3]).toEqual({ value: "⚾Away One", fedBy: "cricket.ball" });
   });
 
   // Regression: v2's chaseValue/`ck-revised-target` (cricket-skin.tsx) showed
@@ -999,9 +999,9 @@ describe("buildScorebug", () => {
       );
       // Four base items, the target, then the held free-hit slot (S2-4 Task 10), which stays LAST.
       expect(spec.strip).toHaveLength(6);
-      expect(spec.strip[0]).toEqual({ value: "▸Home One", accent: true });
-      expect(spec.strip[1]).toEqual({ value: "Home Two" });
-      expect(spec.strip[3]).toEqual({ value: "⚾Away One" });
+      expect(spec.strip[0]).toEqual({ value: "▸Home One", accent: true, fedBy: "cricket.ball" });
+      expect(spec.strip[1]).toEqual({ value: "Home Two", fedBy: "cricket.ball" });
+      expect(spec.strip[3]).toEqual({ value: "⚾Away One", fedBy: "cricket.ball" });
       expect(spec.strip[4]).toEqual({
         label: "scorepad.skin.cricket.header.target",
         value: "165",
@@ -1065,7 +1065,7 @@ describe("buildScorebug", () => {
       ballEvent("f5", { ballInOver: 5, runs: { bat: 1 } }),
     ];
     const hundred = buildScorebug(view({ cfg: cfg({ ballsPerOver: 5, ballsPerInnings: 100 }), events }), t);
-    expect(hundred.strip[2]).toEqual({ value: "• 1 • 4 1" });
+    expect(hundred.strip[2]).toEqual({ value: "• 1 • 4 1", fedBy: "cricket.ball" });
     // The overs figure ALSO goes through ballsPerOverOf(view.cfg): at bpo=5,
     // 5 legal balls is a completed over ("1.0"); at a wrongly-assumed 6 it
     // would read "0.5" instead — a real, integration-level dependency on
@@ -1110,6 +1110,8 @@ describe("buildScorebug — free hit indicator (R2b)", () => {
       accent: true,
       // S2-4 Task 10: the slot reserves its own width, the same in both states (`StripItem.reserve`).
       reserve: ["scorepad.skin.cricket.header.freeHit"],
+      // Sign-off 2026-11-14: fed by the ball alone, so a pad that cannot record one drops it (`quickMatchSkin`).
+      fedBy: "cricket.ball",
     });
     expect(assertScorebugSpec(spec)).toEqual([]);
   });
@@ -1124,6 +1126,8 @@ describe("buildScorebug — free hit indicator (R2b)", () => {
       accent: true,
       reserved: true,
       reserve: ["scorepad.skin.cricket.header.freeHit"],
+      // Sign-off 2026-11-14: fed by the ball alone, so a pad that cannot record one drops it (`quickMatchSkin`).
+      fedBy: "cricket.ball",
     });
     expect(assertScorebugSpec(spec)).toEqual([]);
   });
