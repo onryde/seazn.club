@@ -30,6 +30,14 @@ import { consentedAnonymousState, dismissCookieBanner, measureOverflowPx } from 
 // build time — this process's value is only right when the server under test was built with the same env), and the ending is
 // queued behind it. `test.setTimeout` is derived from the constant too (AGENTS.md failure class 20: a blown budget reports
 // itself as a DATA defect).
+//
+// THE SERVER'S LEDGER IS NOT THE CHROME'S. The ledger read below (`GET /events`) shows the ending as soon as it COMMITS; the
+// chrome around the pad (the console's activity panel, the device's "Void my last entry") learns of it only when the pad's
+// own POST answers — measured 300-650 ms later for this deciding forfeit — and re-reads `/state` + `/events` then. A void
+// clicked inside that window acts on the read taken after the SANCTION: it targets the sanction (the panel's newest row then)
+// at `expected_seq` 2 and the server answers 409 SEQ_CONFLICT. Red 8-11/35 locally before and after #1218. So each void waits
+// for the chrome to SHOW the ending first — the console's newest row is the ending's id, the device says the result is
+// recorded — which is what a scorer sees before voiding it, and pins that the row voided is the ending, not a position.
 test.describe.configure({ mode: "parallel" });
 
 const BUDGET_MS = Math.max(120_000, 60_000 + 6 * HOLD_MS);
@@ -228,6 +236,10 @@ for (const sport of SPORTS) {
 
       // No prompt once it is decided; the device chrome's own "Void my last entry" takes the ending back.
       await expect(prompt(page)).toHaveCount(0);
+      // The chrome has read the ending (its `/state` says decided) before its "Void my last entry" names a seq: see the header.
+      await expect(page.getByText(EN["device.resultRecorded"]!), "the device chrome shows the result recorded").toBeVisible({
+        timeout: 30_000,
+      });
       await page.getByTestId("device-void-mine").click();
       await expect
         .poll(async () => (await typesOf(request, fx.fixtureId)).at(-1), { timeout: 30_000 })
@@ -316,6 +328,11 @@ for (const sport of SPORTS) {
 
     // 3. The organiser's void of the ending, from the activity row (two-step), brings the prompt back.
     const newestRow = page.locator('[data-role="v3-activity-row"]').first();
+    // The panel shows the ENDING as its newest row before it is voided (see the header): by id, not by position.
+    const endingId = (await ledger(request, fx.fixtureId)).at(-1)!.id;
+    await expect(newestRow, "the activity panel's newest row is the ending").toHaveAttribute("data-event-id", endingId, {
+      timeout: 30_000,
+    });
     await newestRow.locator('[data-role="v3-activity-void"]').click();
     await newestRow.locator('[data-role="v3-activity-void-confirm"]').click();
     await expect
@@ -418,6 +435,11 @@ test("badminton v3 official scorer: the disqualification asks, sends the pair, a
 
     // The official voids the ending from the activity row (two-step), and the prompt is back.
     const newestRow = page.locator('[data-role="v3-activity-row"]').first();
+    // The panel shows the ENDING as its newest row before it is voided (see the header): by id, not by position.
+    const endingId = (await ledger(request, fx.fixtureId)).at(-1)!.id;
+    await expect(newestRow, "the activity panel's newest row is the ending").toHaveAttribute("data-event-id", endingId, {
+      timeout: 30_000,
+    });
     await newestRow.locator('[data-role="v3-activity-void"]').click();
     await newestRow.locator('[data-role="v3-activity-void-confirm"]').click();
     await expect
