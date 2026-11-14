@@ -807,6 +807,29 @@ describe("usePadPipeline — a repeat tap while the previous POST is still in fl
     expect(homeScore(pad)).toBe(2);
   });
 
+  it("a second submit JOINS the drain already running: it settles only once its own POST is answered, not when it is queued", async () => {
+    const { transport, answer } = slowTransport();
+    const pad = mountPipeline(baseParams({ transport }));
+    const settled = { first: false, second: false };
+
+    const p1 = pad.current.submit(...TAP).then(() => void (settled.first = true));
+    await flush();
+    await vi.advanceTimersByTimeAsync(HUMAN_FASTEST_REPEAT_MS + 50);
+    const p2 = pad.current.submit(...TAP).then(() => void (settled.second = true));
+    await flush();
+    expect(pad.current.queueDepth, "the second tap is durably queued").toBe(2);
+    expect(settled.second, "queued is not sent: the second submit waits on the running drain").toBe(false);
+
+    answer(0, success(1));
+    await flush();
+    expect(settled.second, "the first POST answered; the second's own POST is still on the wire").toBe(false);
+
+    answer(1, success(2));
+    await Promise.all([p1, p2]);
+    expect(settled).toEqual({ first: true, second: true });
+    expect(pad.current.queueDepth).toBe(0);
+  });
+
   it("a second identical tap INSIDE the window is still refused while the first POST is pending — the double-tap guard is intact", async () => {
     const { transport, bodies, answer } = slowTransport();
     const pad = mountPipeline(baseParams({ transport }));
@@ -863,6 +886,7 @@ describe("usePadPipeline — a repeat tap while the previous POST is still in fl
     const [a, b, bRetry, c] = bodies;
     expect(bodies).toHaveLength(4);
     expect(bRetry!.idempotency_key, "B is retried under its OWN key — the server can dedupe it").toBe(b!.idempotency_key);
+    expect(bRetry!.expected_seq, "…and its ORIGINAL slot — a retry is a replay, never a recomputed claim").toBe(b!.expected_seq);
     expect(new Set([a!, b!, c!].map((x) => x.idempotency_key)).size, "three distinct events").toBe(3);
     expect([a!, b!, c!].map((x) => x.expected_seq), "one slot each, in tap order").toEqual([
       a!.expected_seq,
@@ -872,6 +896,274 @@ describe("usePadPipeline — a repeat tap while the previous POST is still in fl
     expect(pad.current.offline).toBe(false);
     expect(pad.current.queueDepth).toBe(0);
     expect(homeScore(pad), "exactly three points — none lost, none doubled").toBe(3);
+  });
+});
+
+// fix/pad-second-tap-in-flight review I-1/I-2 (m-4). Every queued tap is
+// stamped with the slot it will claim, on the assumption that each tap ahead of
+// it lands exactly one slot further on. Two ways that assumption breaks, both
+// reproduced from the reviewer's probes:
+//   I-1 — the tap ahead loses a race and lands a slot LATE, so the tap behind
+//         it meets that tap's own byte-identical row at its stamped slot; a
+//         retry used to read it as its own landed write and drop itself.
+//   I-2 — the tap ahead is REFUSED and never lands, so every tap behind it
+//         claims a slot the ledger never reaches: a 409 with no row to inspect,
+//         queued forever, with its point still on screen.
+//
+// The server here is not a script: it answers the way scoring.ts and
+// append-event.ts do, so the expected wire is the protocol's, never a copy of
+// the hook's own arithmetic. Single sport (generic) on purpose: the queue
+// sends whatever is queued and never reads the sport module.
+describe("usePadPipeline — a queued tap survives a conflict or a refused tap ahead of it", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const RECORDED_AT = "2026-11-14T00:00:00.000Z";
+
+  /**
+   * A POST is written only at `expected_seq === tip` and lands at tip + 1; a
+   * stale one is a 409 naming the real tip; a key the ledger already holds is
+   * answered from the ledger (W2's durable idempotency), never written twice.
+   * Every POST waits for `open()`, so a test can queue taps behind a pending
+   * one. `faults[i]` answers call #i itself without reaching the ledger — a
+   * lost request (network error) or a module refusal (422). `foreignWrite()`
+   * is another device scoring now, unseen by this pad until it reads the ledger.
+   */
+  function ledgerServer(opts: { faults?: Record<number, AppendCallResult> } = {}) {
+    const rows: LedgerSlotEvent[] = [];
+    const keyAt = new Map<number, string>();
+    const bodies: AppendEventBody[] = [];
+    const door = deferred<void>();
+    const tip = () => rows.length;
+    const transport: PadTransport = {
+      async appendEvent(_fixtureId, body) {
+        const call = bodies.push(body) - 1;
+        await door.promise;
+        const fault = opts.faults?.[call];
+        if (fault !== undefined) return fault;
+        const landedAt = [...keyAt].find(([, key]) => key === body.idempotency_key)?.[0];
+        if (landedAt !== undefined) return success(landedAt);
+        if (body.expected_seq !== tip()) {
+          return { kind: "conflict", currentSeq: tip(), message: `expected seq ${body.expected_seq}, ledger at ${tip()}` };
+        }
+        const seq = tip() + 1;
+        rows.push({
+          id: `row-${seq}`,
+          seq,
+          type: body.type,
+          payload: body.payload,
+          recorded_at: RECORDED_AT,
+          recorded_by: ME.recordedBy,
+          device_link_id: ME.deviceLinkId,
+        });
+        keyAt.set(seq, body.idempotency_key);
+        return success(seq);
+      },
+      async listEventsSince(_fixtureId, sinceSeq) {
+        return rows.filter((r) => r.seq > sinceSeq);
+      },
+      async getLastSeq() {
+        return tip();
+      },
+      async fetchState() {
+        return { status: "in_play", last_seq: tip(), state: null, summary: null, outcome: null };
+      },
+    };
+    return {
+      transport,
+      bodies,
+      /** The idempotency keys this pad's own rows were written under, in seq order. */
+      ownKeys: () => rows.filter((r) => r.recorded_by === ME.recordedBy).map((r) => keyAt.get(r.seq)),
+      foreignWrite: () => {
+        const seq = tip() + 1;
+        rows.push({
+          id: `row-${seq}`,
+          seq,
+          type: "generic.score",
+          payload: { by: "A", points: 1 },
+          recorded_at: RECORDED_AT,
+          recorded_by: "user-2",
+          device_link_id: null,
+        });
+      },
+      open: () => door.resolve(),
+    };
+  }
+
+  const flush = () => vi.advanceTimersByTimeAsync(0);
+  const running = (pad: { current: UsePadPipelineResult }) =>
+    (pad.current.state as { running?: { home: number; away: number } }).running;
+  const TAP = ["generic.score", { by: "H", points: 1 }] as const;
+  const REFUSED: AppendCallResult = { kind: "rejected", code: "INVALID_EVENT", message: "refused" };
+  const LOST: AppendCallResult = { kind: "network-error", message: "connection dropped" };
+
+  it("I-1: two identical taps; the first loses a race and lands a slot late, the second's first POST is lost — BOTH land, once each", async () => {
+    // Call #2 is B's first POST.
+    const server = ledgerServer({ faults: { 2: LOST } });
+    const pad = mountPipeline(baseParams({ transport: server.transport }));
+
+    const pA = pad.current.submit(...TAP);
+    await flush();
+    await vi.advanceTimersByTimeAsync(HUMAN_FASTEST_REPEAT_MS + 50); // a deliberate second tap
+    const pB = pad.current.submit(...TAP);
+    await flush();
+    expect(pad.current.queueDepth).toBe(2);
+
+    server.foreignWrite(); // another device takes seq 1 while A's POST is on the wire
+    server.open();
+    await Promise.all([pA, pB]);
+    expect(pad.current.queueDepth, "B is held after its lost POST").toBe(1);
+    expect(
+      server.bodies.map((b) => b.expected_seq),
+      "A stamped 0, renegotiated to 1 and landed at seq 2 — the slot B was stamped for; B's POST at 1 was lost",
+    ).toEqual([0, 1, 1]);
+
+    await pad.current.retryDrain();
+
+    const keys = server.ownKeys();
+    expect(keys, "two taps, two rows on the server").toHaveLength(2);
+    expect(new Set(keys).size, "two distinct events, neither written twice").toBe(2);
+    expect(server.bodies.at(-1)!.idempotency_key, "the last write is B's own").toBe(keys[1]);
+    expect(pad.current.queueDepth).toBe(0);
+    expect(pad.current.lastRejection).toBeNull();
+    expect(running(pad)?.home, "the pad shows both points, as the server holds them").toBe(2);
+  });
+
+  it("I-2: the head is refused with an identical tap queued behind it — the follower claims the freed slot and lands; no stale point stays on screen", async () => {
+    const server = ledgerServer({ faults: { 0: REFUSED } });
+    const pad = mountPipeline(baseParams({ transport: server.transport }));
+
+    const pA = pad.current.submit(...TAP);
+    await flush();
+    await vi.advanceTimersByTimeAsync(HUMAN_FASTEST_REPEAT_MS + 50);
+    const pB = pad.current.submit(...TAP);
+    await flush();
+
+    server.open();
+    await Promise.all([pA, pB]);
+
+    expect(pad.current.lastRejection?.code, "A's refusal is still said out loud").toBe("INVALID_EVENT");
+    expect(server.bodies.map((b) => b.expected_seq), "B claims the slot A never took, not the one after it").toEqual([0, 0]);
+    expect(pad.current.queueDepth).toBe(0);
+    expect(server.ownKeys(), "exactly one row, and it is B's").toEqual([server.bodies[1]!.idempotency_key]);
+    expect(running(pad)?.home, "the one point on screen is the one the server holds").toBe(1);
+  });
+
+  it("I-2, then a lost POST: the re-aimed follower keeps its NEW slot — on screen, in the queue, and on the retry", async () => {
+    const server = ledgerServer({ faults: { 0: REFUSED, 1: LOST } });
+    const pad = mountPipeline(baseParams({ transport: server.transport }));
+
+    const pA = pad.current.submit(...TAP);
+    await flush();
+    await vi.advanceTimersByTimeAsync(HUMAN_FASTEST_REPEAT_MS + 50);
+    const pB = pad.current.submit(...TAP);
+    await flush();
+    server.open();
+    await Promise.all([pA, pB]);
+
+    const [held] = await pad.current.queueStore.list();
+    expect(held?.expectedSeq, "durably re-aimed at the freed slot").toBe(0);
+    expect(
+      pad.current.events.map((e) => e.seq),
+      "the optimistic row moved with it: the slot it will land at, not the one after A",
+    ).toEqual([held!.expectedSeq + 1]);
+
+    await pad.current.retryDrain();
+
+    expect(server.bodies.map((b) => b.expected_seq), "refused, lost, retried — the retry replays the re-aimed slot").toEqual([0, 0, 0]);
+    expect(pad.current.queueDepth).toBe(0);
+    expect(server.ownKeys()).toHaveLength(1);
+    expect(running(pad)?.home).toBe(1);
+  });
+
+  it("I-2 after a reload: the refused head takes the tap bound to it (dropWith) along, and the tap behind BOTH moves down two slots", async () => {
+    const DB = "pad-tap-i2-bound";
+    const store = indexedDbQueueStore(DB);
+    const queued = (key: string, expectedSeq: number, by: "H" | "A", extra: Partial<PendingEvent> = {}): PendingEvent => ({
+      localId: `local-${key}`,
+      idempotencyKey: key,
+      type: "generic.score",
+      payload: { by, points: 1 },
+      expectedSeq,
+      createdAt: RECORDED_AT,
+      attempts: 0,
+      ...extra,
+    });
+    await enqueue(store, queued("a", 0, "H"));
+    await enqueue(store, queued("v", 1, "A", { dropWith: "a" }));
+    await enqueue(store, queued("c", 2, "H"));
+    const server = ledgerServer({ faults: { 0: REFUSED } });
+
+    const pad = mountPipeline(baseParams({ transport: server.transport, queueDbName: DB }));
+    await flush();
+    server.open();
+    await pad.current.retryDrain();
+
+    expect(
+      server.bodies.map((b) => [b.idempotency_key, b.expected_seq]),
+      "the bound tap is never sent; the last one claims the first free slot",
+    ).toEqual([
+      ["a", 0],
+      ["c", 0],
+    ]);
+    expect(pad.current.queueDepth).toBe(0);
+    expect(server.ownKeys()).toEqual(["c"]);
+    expect(running(pad)).toEqual({ home: 1, away: 0 });
+  });
+
+  it("I-2 through the undo path: an undo of the refused tap leaves too (its target never landed), and the tap behind both takes the first free slot", async () => {
+    const server = ledgerServer({ faults: { 0: REFUSED } });
+    const pad = mountPipeline(baseParams({ transport: server.transport }));
+
+    const pA = pad.current.submit(...TAP);
+    await flush();
+    const aKey = pad.current.events.at(-1)!.id; // a still-queued tap's row carries its idempotency key
+    const pV = pad.current.submit("core.void", { event_id: aKey });
+    await flush();
+    const pC = pad.current.submit("generic.score", { by: "A", points: 1 });
+    await flush();
+    expect(pad.current.queueDepth).toBe(3);
+
+    server.open();
+    await Promise.all([pA, pV, pC]);
+
+    expect(
+      server.bodies.map((b) => [b.type, b.expected_seq]),
+      "the undo of a tap that never landed is never sent; the tap behind both claims slot 0",
+    ).toEqual([
+      ["generic.score", 0],
+      ["generic.score", 0],
+    ]);
+    expect(pad.current.lastRejection?.code).toBe("VOID_TARGET_UNKNOWN");
+    expect(pad.current.queueDepth).toBe(0);
+    expect(server.ownKeys()).toEqual([server.bodies[1]!.idempotency_key]);
+    expect(running(pad)).toEqual({ home: 0, away: 1 });
+  });
+
+  it("an already-SENT tap behind a refused head is resent at its own slot, never re-aimed — e.g. a second tab sharing this queue already moved and sent it", async () => {
+    const DB = "pad-tap-i2-sent";
+    const store = indexedDbQueueStore(DB);
+    const base = { type: "generic.score", payload: { by: "H", points: 1 }, createdAt: RECORDED_AT };
+    await enqueue(store, { ...base, localId: "local-a", idempotencyKey: "a", expectedSeq: 0, attempts: 0 });
+    // Already re-aimed to the freed slot and on the wire once (its answer was lost).
+    await enqueue(store, { ...base, localId: "local-b", idempotencyKey: "b", expectedSeq: 0, attempts: 1 });
+    const server = ledgerServer({ faults: { 0: REFUSED } });
+
+    const pad = mountPipeline(baseParams({ transport: server.transport, queueDbName: DB }));
+    await flush();
+    server.open();
+    await pad.current.retryDrain();
+
+    expect(server.bodies.map((b) => [b.idempotency_key, b.expected_seq])).toEqual([
+      ["a", 0],
+      ["b", 0],
+    ]);
+    expect(pad.current.queueDepth).toBe(0);
+    expect(server.ownKeys()).toEqual(["b"]);
   });
 });
 

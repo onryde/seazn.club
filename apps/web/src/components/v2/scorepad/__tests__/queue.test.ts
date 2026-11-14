@@ -6,7 +6,17 @@
 import { describe, expect, it } from "vitest";
 import type { PendingEvent } from "../types";
 import { memoryQueueStore } from "../queue-store";
-import { depth, enqueue, markAcked, markDropped, peekInOrder, queueStatus, recordAttempt, renegotiateExpectedSeq } from "../queue";
+import {
+  depth,
+  enqueue,
+  markAcked,
+  markDropped,
+  peekInOrder,
+  queueStatus,
+  recordAttempt,
+  renegotiateExpectedSeq,
+  restampBehindDropped,
+} from "../queue";
 
 function event(idempotencyKey: string, overrides: Partial<PendingEvent> = {}): PendingEvent {
   return {
@@ -112,6 +122,81 @@ describe("renegotiateExpectedSeq", () => {
   it("is a no-op on an event that is no longer queued", async () => {
     const store = memoryQueueStore();
     await expect(renegotiateExpectedSeq(store, "ghost", 9)).resolves.toBeUndefined();
+  });
+});
+
+// fix/pad-second-tap-in-flight review I-2. Every queued entry was stamped
+// assuming each entry ahead of it lands one slot apiece; an entry that leaves
+// WITHOUT landing (a 422, a dead-letter, an undo whose target never existed)
+// frees its slot, and the entries behind it would otherwise claim a seq the
+// ledger never reaches — a 409 with no slot to inspect, forever.
+describe("restampBehindDropped", () => {
+  const stamps = async (store: ReturnType<typeof memoryQueueStore>) =>
+    (await peekInOrder(store)).map((e) => [e.idempotencyKey, e.expectedSeq] as const);
+
+  it("empty case: nothing dropped moves nothing, and an empty queue restamps nothing", async () => {
+    const empty = memoryQueueStore();
+    expect(await restampBehindDropped(empty, [], new Set())).toEqual([]);
+    expect(await restampBehindDropped(empty, ["a"], new Set(["a"]))).toEqual([]);
+
+    const store = memoryQueueStore();
+    await enqueue(store, event("b", { expectedSeq: 1 }));
+    expect(await restampBehindDropped(store, ["b"], new Set())).toEqual([]);
+    expect(await stamps(store)).toEqual([["b", 1]]);
+  });
+
+  it("the head dropped: every never-sent entry behind it moves down one slot, in place, nothing else touched", async () => {
+    const store = memoryQueueStore();
+    // `a` is the head that left the queue (already deleted, as sendOne's markDropped leaves it).
+    await enqueue(store, event("b", { expectedSeq: 1, type: "cricket.ball" }));
+    await enqueue(store, event("c", { expectedSeq: 2 }));
+
+    const moved = await restampBehindDropped(store, ["a", "b", "c"], new Set(["a"]));
+
+    expect(moved.map((e) => e.idempotencyKey), "both followers re-aimed").toEqual(["b", "c"]);
+    expect(await stamps(store)).toEqual([
+      ["b", 0],
+      ["c", 1],
+    ]);
+    expect((await peekInOrder(store))[0]).toEqual(event("b", { expectedSeq: 0, type: "cricket.ball" }));
+  });
+
+  it("the head AND an entry bound to it dropped: each survivor moves by the number of drops ahead of it", async () => {
+    const store = memoryQueueStore();
+    await enqueue(store, event("b", { expectedSeq: 1 })); // between the head and its bound follower
+    await enqueue(store, event("d", { expectedSeq: 3 })); // behind both
+
+    const moved = await restampBehindDropped(store, ["a", "b", "v", "d"], new Set(["a", "v"]));
+
+    expect(moved).toHaveLength(2);
+    expect(await stamps(store)).toEqual([
+      ["b", 0],
+      ["d", 1],
+    ]);
+  });
+
+  it("an entry already SENT keeps its stamp (a resend replays the original expected_seq); a never-sent one behind it still moves", async () => {
+    const store = memoryQueueStore();
+    await enqueue(store, event("b", { expectedSeq: 0, attempts: 1 })); // e.g. another tab sharing this queue re-aimed and sent it
+    await enqueue(store, event("c", { expectedSeq: 2 }));
+
+    const moved = await restampBehindDropped(store, ["a", "b", "c"], new Set(["a"]));
+
+    expect(moved.map((e) => e.idempotencyKey)).toEqual(["c"]);
+    expect(await stamps(store)).toEqual([
+      ["b", 0],
+      ["c", 1],
+    ]);
+  });
+
+  it("an entry named in the order but no longer queued is not resurrected", async () => {
+    const store = memoryQueueStore();
+    await enqueue(store, event("c", { expectedSeq: 2 }));
+
+    const moved = await restampBehindDropped(store, ["a", "b", "c"], new Set(["a"]));
+
+    expect(moved.map((e) => e.idempotencyKey)).toEqual(["c"]);
+    expect(await stamps(store)).toEqual([["c", 1]]);
   });
 });
 

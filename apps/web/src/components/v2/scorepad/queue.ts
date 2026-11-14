@@ -79,9 +79,11 @@ export async function recordAttempt(
   await patch(store, idempotencyKey, (event) => ({ ...event, ...fields }));
 }
 
-/** Persist a renegotiated expected_seq for a still-queued event — the ONLY
- *  legitimate way expectedSeq changes after enqueue, per the S10 replay
+/** Persist a renegotiated expected_seq for a still-queued event — one of the
+ *  TWO legitimate ways expectedSeq changes after enqueue, per the S10 replay
  *  ruling: only once a 409's ledger slot proves FOREIGN, never speculatively.
+ *  (The other is `restampBehindDropped` below, and only for an entry that has
+ *  never been sent.)
  *  Must be durable (not just an in-memory variable in pipeline.ts): if the
  *  tab dies again between renegotiating and the resend's ack, the NEXT
  *  replay must resend the renegotiated value, not the original one, or it
@@ -92,6 +94,51 @@ export async function renegotiateExpectedSeq(
   expectedSeq: number,
 ): Promise<void> {
   await patch(store, idempotencyKey, (event) => ({ ...event, expectedSeq }));
+}
+
+/**
+ * Re-aim the entries behind ones that left the queue WITHOUT landing — a
+ * refusal (422), a dead-letter, an undo whose target never existed, and every
+ * entry bound to one of those (`dropWith`). Returns the entries it moved, so a
+ * caller can move its optimistic mirror with them.
+ *
+ * fix/pad-second-tap-in-flight (review I-2). Each entry was stamped assuming
+ * every entry ahead of it lands exactly one slot further on; an entry that
+ * never lands leaves the ones behind it claiming a seq the ledger never
+ * reaches. That is a 409 whose slot is simply absent, which `resolveConflict`
+ * rightly calls indeterminate — so the entry stayed queued forever, every
+ * write behind it blocked, its point still on screen. Each survivor moves
+ * down by the number of dropped entries that were AHEAD of it in `order`
+ * (the queue as it stood before the drops, dropped entries included).
+ *
+ * Only a NEVER-SENT entry (`attempts === 0`) moves. One already on the wire
+ * keeps its stamp: its earlier send may have landed at exactly that slot, and
+ * a resend must replay it verbatim for a 409's slot inspection to recognise it
+ * (the S10 replay rule). By FIFO a tap behind the head has never been sent, so
+ * in a single tab this is every follower; the case it decides is a second tab
+ * sharing this queue that already re-aimed and sent one — moving it again
+ * would aim it below the ledger.
+ */
+export async function restampBehindDropped(
+  store: QueueStore,
+  order: readonly string[],
+  dropped: ReadonlySet<string>,
+): Promise<PendingEvent[]> {
+  const queued = new Map((await store.list()).map((e) => [e.idempotencyKey, e]));
+  const moved: PendingEvent[] = [];
+  let droppedAhead = 0;
+  for (const key of order) {
+    if (dropped.has(key)) {
+      droppedAhead += 1;
+      continue;
+    }
+    const entry = queued.get(key);
+    if (entry === undefined || droppedAhead === 0 || (entry.attempts ?? 0) > 0) continue;
+    const restamped = { ...entry, expectedSeq: entry.expectedSeq - droppedAhead };
+    await store.put(restamped);
+    moved.push(restamped);
+  }
+  return moved;
 }
 
 /** Derive an at-a-glance queue state for a future UI's "queue depth" /

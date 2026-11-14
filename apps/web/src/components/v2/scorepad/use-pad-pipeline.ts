@@ -334,6 +334,7 @@ import {
   peekInOrder,
   recordAttempt,
   releaseHeld,
+  restampBehindDropped,
 } from "./queue";
 import type { QueueStore } from "./queue-store";
 import { deepEqual, reconcile, sendOne } from "./pipeline";
@@ -1308,6 +1309,14 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
   // resolve BEFORE its own event was actually sent, showing a stale fold.
   const drainInFlight = useRef<Promise<void> | null>(null);
 
+  // Review I-1 — every seq an ack (or an already-applied verdict) has
+  // confirmed for one of THIS mount's own queued events. `sendOne` hands it to
+  // `resolveConflict`, which never reads a row at one of these seqs as a
+  // still-queued event's own landed write: an event leaves the queue on its
+  // ack, so the row is necessarily another event's. In memory only — a reload
+  // starts empty and the verdicts fall back to content + `attempts`.
+  const ackedSeqsRef = useRef<Set<number>>(new Set());
+
   // Review finding 2's double-submit guard. Two separate mechanisms, both
   // keyed on (type, payload) via pipeline.ts's own deepEqual (structural,
   // not reference — a fresh object literal per render must still compare
@@ -1591,6 +1600,29 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
       await drainInFlight.current;
       return;
     }
+    // Review I-2 — `head` just left the queue WITHOUT landing (a refusal, or an
+    // undo whose target never existed), taking `alsoDropped` with it.
+    // `queuedAfter` is the queue as it stands with `head` already gone. Every
+    // never-sent entry behind them was stamped to claim a slot one past each of
+    // them; re-aim those durably, and move their optimistic rows in the same
+    // commit the caller makes, so the mirror stays what `pendingToEnvelope`
+    // would build from the durable record (as a reload's seed would).
+    const reaimBehind = async (
+      head: PendingEvent,
+      queuedAfter: readonly PendingEvent[],
+      alsoDropped: readonly string[],
+      mirror: Map<string, EventEnvelope>,
+    ) => {
+      const moved = await restampBehindDropped(
+        store,
+        [head.idempotencyKey, ...queuedAfter.map((e) => e.idempotencyKey)],
+        new Set([head.idempotencyKey, ...alsoDropped]),
+      );
+      for (const entry of moved) {
+        const row = mirror.get(entry.idempotencyKey);
+        if (row !== undefined) mirror.set(entry.idempotencyKey, { ...row, seq: entry.expectedSeq + 1 });
+      }
+    };
     const run = (async () => {
       for (;;) {
         const queued = await peekInOrder(store);
@@ -1667,6 +1699,7 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
               await markDropped(store, next.idempotencyKey);
               const remaining = new Map(pendingEnvelopesRef.current);
               remaining.delete(next.idempotencyKey);
+              await reaimBehind(next, await store.list(), [], remaining);
               commitPendingEnvelopes(remaining);
               await refreshDepth();
               // No specific ENGINE_ERROR_KEY entry exists for a client-only
@@ -1696,7 +1729,7 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
           }
         }
 
-        const outcome = await sendOne(transport, store, fixtureId, eventToSend, identity);
+        const outcome = await sendOne(transport, store, fixtureId, eventToSend, identity, ackedSeqsRef.current);
         await refreshDepth();
 
         if (outcome.kind === "acked" || outcome.kind === "already-applied") {
@@ -1736,6 +1769,7 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
             confirmedSeq,
             confirmedId,
           );
+          ackedSeqsRef.current.add(acked.seq); // review I-1: this seq is now another event's, for every entry still queued
           // S12/#421 pass F — was a raw spread
           // (`[...ledgerEventsRef.current, acked]`), never routed through
           // mergeEnvelopesIntoLedger like the other writers into
@@ -1847,12 +1881,17 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
           // happened, so its followers go with it, from the queue AND the optimistic mirror. Left behind they drain
           // ALONE: a forfeit then ends (or is refused for) a match whose sanction was never recorded, and a void
           // deletes a scored event whose replacement was refused. Read from the SAME `boundTo` rule `dropHeld` uses.
-          const followers = boundTo(await store.list(), next.idempotencyKey);
+          const queuedAfter = await store.list();
+          const followers = boundTo(queuedAfter, next.idempotencyKey);
           for (const followerId of followers) await store.delete(followerId);
           if (followers.length > 0) await refreshDepth();
           const remaining = new Map(pendingEnvelopesRef.current);
           remaining.delete(next.idempotencyKey);
           for (const followerId of followers) remaining.delete(followerId);
+          // Review I-2: the refused entry and its followers never land, so the
+          // entries behind them move down into the slots they freed — left
+          // where they were stamped they claim a seq the ledger never reaches.
+          await reaimBehind(next, queuedAfter, followers, remaining);
           commitPendingEnvelopes(remaining);
           // W2c Task 15 (X-SR-7): the tap was made under rules the organiser has since corrected. Dropped above, never
           // resent; said out loud (`lastRejection`); and the pad moves to the corrected rules so the scorer retakes it
@@ -1966,11 +2005,17 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
     async (type: string, payload: unknown, opts?: { dropWith?: string }) => {
       // Synchronous section — no `await` above this point (see below for
       // why that matters to the in-flight guard too). `expectedSeq` assumes
-      // every event ahead (confirmed + already queued) lands, per the
-      // append/replay protocol's own documented assumption (pipeline.ts's
-      // drainQueue); a rare double-submit race that mis-assigns a slot
-      // self-heals via the SAME 409-renegotiation path the protocol already
-      // has, so this reads refs rather than awaiting the store.
+      // every event ahead (confirmed + already queued) lands exactly one slot
+      // further on, per the append/replay protocol's own documented
+      // assumption (pipeline.ts's drainQueue), and this reads refs rather
+      // than awaiting the store. When an event ahead does NOT land where it
+      // was stamped, the two directions are not alike: a stamp left too LOW
+      // (the one ahead landed late, or a foreign write took the slot) 409s
+      // against an occupied slot and renegotiates; a stamp left too HIGH (the
+      // one ahead never landed) 409s against a slot the ledger never reaches
+      // — no row to inspect, indeterminate, queued forever. Nothing heals
+      // that on the wire, so `runDrain` re-aims never-sent entries whenever
+      // one ahead of them leaves without landing (review I-2).
       const isSameAction = (o: { type: string; payload: unknown } | null): boolean =>
         o !== null && o.type === type && deepEqual(o.payload, payload);
       if (isSameAction(submitInFlight.current)) {
