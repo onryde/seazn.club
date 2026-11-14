@@ -24,6 +24,7 @@ import {
 import { reconcileSession } from "./expiry";
 import { type CameraFacts, endIfPhoneLost } from "./phone-lost";
 import { endIfAutoStopDue } from "./auto-stop";
+import { readYoutubeStatus } from "./youtube-status";
 
 /** T7 (§6.11): what one tick observed. currentSession builds its projection from this, so the projection stays
  *  byte-identical to the pre-extraction code (A10). The three observation fields are the block's own locals, moved
@@ -173,6 +174,11 @@ export async function tickSession(sessionId: string, deps: SessionDeps, cause: "
     camera = ended.camera;
     if (ended.cameraWord !== undefined) freshIngest = ended.cameraWord;   // a composed session's fresh word is its CAMERA's (R2008)
   }
+  // 6b: the YouTube live status word of a session on a YouTube Connect broadcast (owner direction 2026-11-14): one claimed read of
+  // YouTube per window, from 60 s after go-live, read-only, never throwing (youtube-status.ts). Whether the session is still live (a
+  // phone-lost end just above may have ended it: a read of an ended session is quota spent on nothing) is the claim's own
+  // `state = 'live'`, decided on the row in SQL - one guard, not a second one here that nothing could tell from it.
+  await readYoutubeStatus(row.id, deps);
   // 7: the automatic stop after the result (PR-2 T5, FP7: here once, so every caller of the tick reaches it). It returns an
   // ending or terminal row untouched on its own.
   row = await endIfAutoStopDue(row, deps, cause);

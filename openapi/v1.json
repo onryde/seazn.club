@@ -56133,6 +56133,22 @@
                                 }
                               ]
                             },
+                            "youtubeStatus": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "live_receiving",
+                                    "not_live",
+                                    "live_no_video",
+                                    "pasted_key"
+                                  ]
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
                             "target": {
                               "type": "object",
                               "properties": {
@@ -56325,6 +56341,7 @@
                             "replayUrl",
                             "replayParts",
                             "youtubeVideoUrl",
+                            "youtubeStatus",
                             "target",
                             "fixtureDecided",
                             "fixtureHeld",
@@ -56386,6 +56403,7 @@
                       }
                     ],
                     "youtubeVideoUrl": "example",
+                    "youtubeStatus": "live_receiving",
                     "target": {
                       "id": "example",
                       "kind": "youtube",
@@ -56929,6 +56947,22 @@
                             }
                           ]
                         },
+                        "youtubeStatus": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "live_receiving",
+                                "not_live",
+                                "live_no_video",
+                                "pasted_key"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "target": {
                           "type": "object",
                           "properties": {
@@ -57121,6 +57155,7 @@
                         "replayUrl",
                         "replayParts",
                         "youtubeVideoUrl",
+                        "youtubeStatus",
                         "target",
                         "fixtureDecided",
                         "fixtureHeld",
@@ -57177,6 +57212,7 @@
                       }
                     ],
                     "youtubeVideoUrl": "example",
+                    "youtubeStatus": "live_receiving",
                     "target": {
                       "id": "example",
                       "kind": "youtube",

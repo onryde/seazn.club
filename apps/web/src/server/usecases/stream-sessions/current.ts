@@ -20,6 +20,7 @@ import { fixtureContext } from "./lookups";
 import { outputSinceExpr } from "./ingest-poll";
 import { phoneFactsOf, ask10PhoneOf } from "./phone-lost";
 import { tickSession } from "./tick";
+import { youtubeStatusOf } from "./youtube-status";
 
 // ---------------------------------------------------------------------------
 // Reads and the organiser's commands
@@ -112,6 +113,7 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
     replayUrl: fx?.stream_url ?? null,
     replayParts: await fixtureReplayParts(row.org_id, fixtureId),
     youtubeVideoUrl: await sessionVideoUrl(row.org_id, row.id),
+    youtubeStatus: await youtubeStatusOf(row.id, row.state, target!.kind),
     target: { id: target!.id, kind: target!.kind, label: target!.label },
     fixtureDecided: fx?.status === "decided" || fx?.status === "finalized",
     fixtureHeld: fx?.status === "needs_decision",

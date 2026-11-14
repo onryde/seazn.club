@@ -40,9 +40,9 @@ import {
   AUTO_REFUSAL_KEYS, AUTO_REFUSAL_REMEDY, AUTO_WONT_START_KEY, HEALTH_KEYS, NOT_READY_KEYS, TAKEOVER_NOTICE_MS, autoOperatorHint, autoRefusalStrip, autoStopLine, autoSwitchNote,
   healthLine, phoneDetails, takeoverLineKey, takeoverNotice, type PhoneLinePart, type TakeoverAct,
   PRESENCE_WATCH_START, W5_REFUSAL_CODES, isW5Refusal, presenceAfterRefusal, readClearsW5, type CreateFailureCode, type PresenceWatch,
-  YOUTUBE_REFUSAL_FIX, youtubeRefusalOf, autoDestinationOf,
+  YOUTUBE_REFUSAL_FIX, youtubeRefusalOf, autoDestinationOf, YOUTUBE_STATUS_LINES, youtubeStatusLineOf,
 } from "../stream-session-view";
-import { YOUTUBE_LIVE_STATE_OF_REFUSAL, YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL, YOUTUBE_REFUSAL_CODES, YOUTUBE_REFUSAL_REMEDY } from "../youtube";
+import { YOUTUBE_LIVE_STATE_OF_REFUSAL, YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL, YOUTUBE_REFUSAL_CODES, YOUTUBE_REFUSAL_REMEDY, YOUTUBE_STATUS_VIEWS } from "../youtube";
 import { autoStartRefusalOf } from "@/server/usecases/stream-auto";
 import { youtubeRefusal } from "@/server/youtube/prepare";
 import fc from "fast-check";
@@ -76,7 +76,7 @@ const NOW = new Date("2026-09-14T12:10:00Z");
 const view = (over: Partial<StreamSessionView> = {}): StreamSessionView => ({
   id: "s", fixtureId: "f", mode: "passthrough", overlay: null, state: "live", desiredState: "live", failReason: null,
   health: null, ingest: { state: "connected", protocol: "srt" }, output: null, balance: 2,
-  startedAt: "2026-09-14T12:00:00Z", endedAt: null, replayUrl: null, replayParts: [], youtubeVideoUrl: null,
+  startedAt: "2026-09-14T12:00:00Z", endedAt: null, replayUrl: null, replayParts: [], youtubeVideoUrl: null, youtubeStatus: null,
   target: { id: "t", kind: "youtube", label: "Club" }, fixtureDecided: false, fixtureHeld: false, endReason: null, creditUsed: true, startCause: "organiser", restart: null, countdown: null, ...over,
 });
 
@@ -1845,5 +1845,62 @@ describe("youtubeLinkOf: the match page's link to the video on YouTube", () => {
     const old: Record<string, unknown> = { ...view({ state: "live" }) };
     delete old.youtubeVideoUrl;
     expect(youtubeLinkOf(old as unknown as StreamSessionView)).toBeNull();
+  });
+});
+
+// Owner direction 2026-11-14: the live YouTube status line. The server decides WHAT (`youtubeStatus`, proven through the real tick and the
+// real poll in server/youtube/__tests__/youtube-live-status.test.ts); this decides WHEN it shows (live only) and how it reads. The words
+// are the owner's three, typed here, plus the pasted-key sentence's key; the copy is read out of all four dictionaries.
+describe("youtubeStatusLineOf: the live YouTube status line", () => {
+  const WORDS = ["live_receiving", "not_live", "live_no_video", "pasted_key"] as const;
+  const TONE: Record<(typeof WORDS)[number], string> = { live_receiving: "emerald", not_live: "slate", live_no_video: "amber", pasted_key: "slate" };
+
+  it("EMPTY CASE FIRST: no session, and a live session with no word yet (YouTube is first read a minute after go-live), is no line", () => {
+    expect(youtubeStatusLineOf(null)).toBeNull();
+    expect(youtubeStatusLineOf(view({ state: "live", youtubeStatus: null }))).toBeNull();
+  });
+
+  it("the table is total over the wire's words, each word has a distinct key present in ALL FOUR dictionaries, and the tone is the brief's", () => {
+    expect(Object.keys(YOUTUBE_STATUS_LINES).sort(), "the table names exactly the wire's words").toEqual([...YOUTUBE_STATUS_VIEWS].sort());
+    expect([...YOUTUBE_STATUS_VIEWS].sort(), "and the wire's words are the owner's three plus pasted_key").toEqual([...WORDS].sort());
+    const keys = WORDS.map((w) => YOUTUBE_STATUS_LINES[w].key);
+    expect(new Set(keys).size, "no two words share a line").toBe(WORDS.length);
+    for (const w of WORDS) expect(YOUTUBE_STATUS_LINES[w].tone, w).toBe(TONE[w]);
+    expect(inEveryLocale(keys), "anti-vacuity: every key looked up in every locale").toBe(WORDS.length * LOCALES.length);
+    // The English is the spec's own sentence for the one the controller quoted.
+    expect(msg(YOUTUBE_STATUS_LINES.pasted_key.key)).toBe("YouTube status isn't available for a pasted key");
+  });
+
+  it("every session state x every word: the line shows only while the session is LIVE, and carries the word, its key and its tone", () => {
+    let shown = 0;
+    let hidden = 0;
+    for (const state of StreamSessionState.options) {
+      for (const word of WORDS) {
+        const got = youtubeStatusLineOf(view({ state, youtubeStatus: word }));
+        if (state === "live") {
+          expect(got, `${state} ${word}`).toEqual({ status: word, key: YOUTUBE_STATUS_LINES[word].key, tone: TONE[word] });
+          shown++;
+        } else {
+          expect(got, `${state} ${word}`).toBeNull();
+          hidden++;
+        }
+      }
+    }
+    expect({ shown, hidden }, "anti-vacuity: 1 live state x 4 words shown, 6 other states x 4 words hidden").toEqual({ shown: 4, hidden: 24 });
+  });
+
+  it("SEQUENCE: the same session read word by word shows each in turn, and the same word after it ends shows nothing", () => {
+    const seen = (["not_live", "live_receiving", "live_no_video", "live_receiving"] as const).map((w) => youtubeStatusLineOf(view({ id: "s1", state: "live", youtubeStatus: w }))?.status);
+    expect(seen).toEqual(["not_live", "live_receiving", "live_no_video", "live_receiving"]);
+    expect(youtubeStatusLineOf(view({ id: "s1", state: "completed", youtubeStatus: "live_receiving" }))).toBeNull();
+  });
+
+  it("a view from a server older than the field (no `youtubeStatus` on the wire), or one naming a word nobody declared, is no line - never `undefined` copy", () => {
+    const old: Record<string, unknown> = { ...view({ state: "live" }) };
+    delete old.youtubeStatus;
+    expect(youtubeStatusLineOf(old as unknown as StreamSessionView)).toBeNull();
+    for (const bad of ["live", "toString", "__proto__", "", "constructor"]) {
+      expect(youtubeStatusLineOf(view({ state: "live", youtubeStatus: bad as never })), bad).toBeNull();
+    }
   });
 });
