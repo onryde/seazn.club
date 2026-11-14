@@ -72,6 +72,7 @@
   "funnelClaim.button": "Terminer la configuration",
   "funnelClaim.footer": "Le lien fonctionne une seule fois et expire dans 7 jours. Si vous n'êtes pas à l'origine de cette demande, vous pouvez l'ignorer sans risque.",
   "funnelClaim.text": "Terminez la configuration de « {competitionName} » (le lien fonctionne une fois, expire dans 7 jours) : {link}",
+  "funnelClaim.reference": "Votre référence : {reference}",
   "funnelReminder.subject": "Vous planifiez toujours « {competitionName} » ?",
   "funnelReminder.preheader": "Votre compétition en brouillon expire dans quelques jours.",
   "funnelReminder.eyebrow": "Rappel",

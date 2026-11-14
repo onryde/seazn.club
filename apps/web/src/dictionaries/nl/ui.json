@@ -8583,6 +8583,9 @@
   "funnel.claim.card.dashboard": "Naar je dashboard",
   "funnel.claim.card.limitBody": "De limiet van je abonnement voor actieve competities is bereikt, dus er is niets toegevoegd. Open je dashboard om een evenement af te ronden of te archiveren, of upgrade je abonnement.",
   "funnel.claim.card.datePast": "De eerste dag van dit evenement is al voorbij, dus er is niets aangemaakt.",
+  "funnel.claim.card.replacedTitle": "Deze link is vervangen door een nieuwere",
+  "funnel.claim.card.replacedBody": "Bekijk je nieuwste e-mail ({reference}).",
+  "funnel.claim.card.replacedBodyNoReference": "Bekijk je nieuwste e-mail.",
   "funnel.claim.card.tryLaterTitle": "Te veel pogingen",
   "funnel.claim.card.tryLaterBody": "Wacht even en probeer het opnieuw. Je link is nog niet gebruikt.",
   "funnel.claim.card.tryAgain": "Opnieuw proberen"

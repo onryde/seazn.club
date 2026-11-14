@@ -11,7 +11,8 @@ import { resolveLocale } from "@/lib/resolve-locale";
  *  language, so the card is worded in the one the draft was started in (read by
  *  the token, never claiming it), else as /magic-link resolves it (the
  *  switcher's cookie, the account's, then the browser's). The draft's sport, read the same way, is what the card's
- *  "Start again" carries when the claim finds its first day has passed. */
+ *  "Start again" carries when the claim finds its first day has passed; its reference is what the card names when a newer
+ *  start replaced the link (V518). */
 export default async function FunnelClaimPage({
   searchParams,
 }: {
@@ -27,7 +28,7 @@ export default async function FunnelClaimPage({
       <MarketingNav lang={locale} />
       <main className="mx-auto max-w-md px-4 py-12">
         <DictProvider dict={ui} locale={locale}>
-          <FunnelClaim token={token ?? null} restartSport={draft?.sportKey ?? null} />
+          <FunnelClaim token={token ?? null} restartSport={draft?.sportKey ?? null} reference={draft?.reference ?? null} />
         </DictProvider>
       </main>
     </>

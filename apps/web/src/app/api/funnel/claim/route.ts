@@ -5,11 +5,12 @@ import { HttpError, PaymentRequiredError, handler } from "@/lib/http";
 import { rateLimit, AUTH_LIMIT } from "@/lib/rate-limit";
 import { sql } from "@/lib/db";
 import { createSession, setActiveOrgId } from "@/lib/auth";
-import { FunnelClaimPartialError, consumeFunnelDraft, createFromDraft } from "@/lib/funnel";
+import { FunnelClaimPartialError, consumeFunnelDraft, createFromDraft, replacedFunnelDraftReference } from "@/lib/funnel";
 import {
   FUNNEL_CLAIM_DATE_PAST,
   FUNNEL_CLAIM_INVALID,
   FUNNEL_CLAIM_PLAN_LIMIT,
+  FUNNEL_CLAIM_REPLACED,
   FUNNEL_CLAIM_SIGNED_IN,
 } from "@/lib/funnel-claim-codes";
 import { captureServer } from "@/lib/posthog-server";
@@ -19,6 +20,7 @@ import { saveQuickMatchesForVerifiedUser } from "@/server/usecases/quick-match-s
 
 const schema = z.object({ token: z.string().min(10) }).strict();
 const DEAD_LINK = "This setup link is invalid, expired, or already used.";
+const REPLACED_LINK = "This setup link was replaced by a newer one — check your latest email.";
 
 /** Turn an email into a friendly default display name (the part before @). */
 function displayNameFromEmail(email: string): string {
@@ -67,7 +69,9 @@ export async function POST(req: Request) {
     if (!body.success) throw new HttpError(400, DEAD_LINK, FUNNEL_CLAIM_INVALID);
     const draft = await consumeFunnelDraft(body.data.token);
     if (!draft) {
-      // An expected answer, not a fault: a 400 the card words in the visitor's language (no Sentry).
+      // An expected answer, not a fault: a 400 the card words in the visitor's language (no Sentry). A link a newer start replaced
+      // is told apart (V518): the way on is the latest email, not a fresh start.
+      if ((await replacedFunnelDraftReference(body.data.token)) !== null) throw new HttpError(400, REPLACED_LINK, FUNNEL_CLAIM_REPLACED);
       throw new HttpError(400, DEAD_LINK, FUNNEL_CLAIM_INVALID);
     }
 

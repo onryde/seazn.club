@@ -8583,6 +8583,9 @@
   "funnel.claim.card.dashboard": "Ir a tu panel",
   "funnel.claim.card.limitBody": "Has alcanzado el límite de competiciones activas de tu plan, así que no se ha añadido nada. Abre tu panel para finalizar o archivar un evento, o mejora tu plan.",
   "funnel.claim.card.datePast": "El primer día de este evento ya ha pasado, así que no se ha creado nada.",
+  "funnel.claim.card.replacedTitle": "Este enlace se ha sustituido por uno más reciente",
+  "funnel.claim.card.replacedBody": "Revisa tu correo más reciente ({reference}).",
+  "funnel.claim.card.replacedBodyNoReference": "Revisa tu correo más reciente.",
   "funnel.claim.card.tryLaterTitle": "Demasiados intentos",
   "funnel.claim.card.tryLaterBody": "Espera un momento y vuelve a intentarlo. Tu enlace aún no se ha usado.",
   "funnel.claim.card.tryAgain": "Intentar de nuevo"

@@ -341,6 +341,23 @@ describe.skipIf(!HAS_DB)("POST /api/funnel/remind queues the +24h reminder on th
     expect((await draftOf(p.id)).reminded_at).not.toBeNull();
   });
 
+  it("a draft a newer start replaced (V518) is never reminded; the live one that replaced it is, once", async () => {
+    // Both a day old: the address resubmitted the wizard a minute after the first start, and neither was claimed.
+    const email = address();
+    const replaced = await dueDraft(email);
+    const live = await dueDraft(email);
+    const [r] = await sql<{ replaced: boolean }[]>`select replaced_at is not null as replaced from funnel_drafts where id = ${replaced.id}`;
+    expect(r!.replaced, "premise: the resubmit replaced the first draft").toBe(true);
+
+    expect((await sweep()).status).toBe(200);
+
+    expect((await draftOf(replaced.id)).reminded_at, "the replaced draft is not stamped").toBeNull();
+    expect(enqueueCalls(replaced.id), "and was never asked").toHaveLength(0);
+    expect((await draftOf(live.id)).reminded_at, "the live one is").not.toBeNull();
+    const rows = await rowsOf(email);
+    expect(rows.map((row) => row.ref_id), "one reminder, the live draft's").toEqual([live.id]);
+  });
+
   it("Q3: a draft started on /fr/start is reminded in French; one started with no language is reminded in English", async () => {
     // Driven through the real start route, which writes the language the /start page posts (its `[lang]` segment) on the draft, and
     // then through this route, which reads it back: the seam is proven end to end, not by a seeded column.

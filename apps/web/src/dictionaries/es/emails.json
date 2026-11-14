@@ -72,6 +72,7 @@
   "funnelClaim.button": "Terminar de configurar",
   "funnelClaim.footer": "El enlace funciona una vez y caduca en 7 días. Si no solicitaste esto, puedes ignorarlo sin problema.",
   "funnelClaim.text": "Termina de configurar “{competitionName}” (el enlace funciona una vez, caduca en 7 días): {link}",
+  "funnelClaim.reference": "Tu referencia: {reference}",
   "funnelReminder.subject": "¿Aún planificando “{competitionName}”?",
   "funnelReminder.preheader": "Tu competición en borrador caduca en unos días.",
   "funnelReminder.eyebrow": "Recordatorio",

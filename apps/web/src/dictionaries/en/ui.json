@@ -8583,6 +8583,9 @@
   "funnel.claim.card.dashboard": "Go to your dashboard",
   "funnel.claim.card.limitBody": "Your plan’s limit on active competitions was reached, so nothing was added. Open your dashboard to finish or archive an event, or upgrade your plan.",
   "funnel.claim.card.datePast": "This event’s first day has already passed — nothing was set up.",
+  "funnel.claim.card.replacedTitle": "This link was replaced by a newer one",
+  "funnel.claim.card.replacedBody": "Check your latest email ({reference}).",
+  "funnel.claim.card.replacedBodyNoReference": "Check your latest email.",
   "funnel.claim.card.tryLaterTitle": "Too many tries",
   "funnel.claim.card.tryLaterBody": "Wait a moment, then try again. Your link hasn’t been used yet.",
   "funnel.claim.card.tryAgain": "Try again"

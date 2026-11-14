@@ -18,3 +18,9 @@ export const FUNNEL_CLAIM_PLAN_LIMIT = "FUNNEL_CLAIM_PLAN_LIMIT";
  *  createFromDraft refuses it before its first write, so NOTHING of the event exists. The way on is a fresh start on
  *  /start, not the dashboard (a "may be partly set up" card would be untrue). */
 export const FUNNEL_CLAIM_DATE_PAST = "FUNNEL_CLAIM_DATE_PAST";
+
+/** The token names a draft a newer start REPLACED (V518: the same address resubmitted the wizard, or the visitor moved the
+ *  draft to another address with its reference and replace key). Nothing happened and nobody was signed in: the newest email's
+ *  link is the one that works. The claim page names the draft's reference (`funnelDraftCard`) so the visitor knows which
+ *  email to look for. */
+export const FUNNEL_CLAIM_REPLACED = "FUNNEL_CLAIM_REPLACED";

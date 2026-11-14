@@ -8583,6 +8583,9 @@
   "funnel.claim.card.dashboard": "Aller au tableau de bord",
   "funnel.claim.card.limitBody": "La limite de compétitions actives de votre offre est atteinte : rien n’a été ajouté. Ouvrez votre tableau de bord pour terminer ou archiver un événement, ou changez d’offre.",
   "funnel.claim.card.datePast": "Le premier jour de cet événement est déjà passé : rien n’a été créé.",
+  "funnel.claim.card.replacedTitle": "Ce lien a été remplacé par un plus récent",
+  "funnel.claim.card.replacedBody": "Consultez votre dernier e-mail ({reference}).",
+  "funnel.claim.card.replacedBodyNoReference": "Consultez votre dernier e-mail.",
   "funnel.claim.card.tryLaterTitle": "Trop de tentatives",
   "funnel.claim.card.tryLaterBody": "Patientez un instant, puis réessayez. Votre lien n’a pas encore été utilisé.",
   "funnel.claim.card.tryAgain": "Réessayer"
