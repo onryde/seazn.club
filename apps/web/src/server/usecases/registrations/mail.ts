@@ -68,11 +68,11 @@ export async function buildCartMail(
   const [group] = await sql<
     Pick<
       RegistrationGroupRow,
-      | "contact_name" | "contact_email" | "locale" | "ref_code" | "amount_cents" | "currency"
+      | "contact_name" | "contact_email" | "locale" | "ref_code" | "cart_size" | "amount_cents" | "currency"
       | "expires_at" | "payment_method" | "competition_id" | "org_id" | "user_id"
     >[]
   >`
-    select contact_name, contact_email, locale, ref_code, amount_cents, currency, expires_at,
+    select contact_name, contact_email, locale, ref_code, cart_size, amount_cents, currency, expires_at,
            payment_method, competition_id, org_id, user_id
     from registration_groups where id = ${groupId}`;
   if (!group) {
@@ -102,9 +102,10 @@ export async function buildCartMail(
       approval: "auto" | "manual";
       approved: boolean;
       waitlist_position: number | null;
+      cart_position: number;
     }[]
   >`
-    select r.id, r.division_id, r.display_name, r.status, r.amount_cents,
+    select r.id, r.division_id, r.display_name, r.status, r.amount_cents, r.cart_position,
            d.name as division_name, coalesce(rs.approval, 'auto') as approval, r.approved_at is not null as approved,
            ${waitlistPositionSql(sql, "r")} as waitlist_position
     from registrations r
@@ -153,6 +154,15 @@ export async function buildCartMail(
     const settings = await loadSettings(sql, firstPaid.division_id);
     paymentInstructions = settings?.payment_instructions ?? ctx.payment_instructions;
   }
+  // The reference those instructions quote (final review m2) - the status page's rule (`offlineInstructionsReference`,
+  // register/status/view-model.ts), which the help page promises this mail keeps, and the paid mail's: when exactly one entry owes,
+  // the transfer is for that entry and quotes its own reference (`-2` in a cart sent with two or more); when several owe, the cart's,
+  // which finds them all. "Owes" is this mail's own rule, the one `owedCents` below sums. The reference panel stays the cart's.
+  const owing = entries.filter((e) => e.status === "pending" && e.amount_cents > 0);
+  const instructionsRef =
+    owing.length === 1
+      ? entryReferenceOf({ ref_code: group.ref_code, cart_position: owing[0]!.cart_position, cart_size: group.cart_size })
+      : group.ref_code;
 
   const statusUrl = token
     ? `${origin}${routes.publicRegisterStatus(ctx.org_slug, ctx.comp_slug)}?rid=${groupId}&token=${encodeURIComponent(token)}`
@@ -193,6 +203,7 @@ export async function buildCartMail(
       timeZone: resolveVenueTz(null, ctx.org_timezone),
       statusUrl,
       refCode: group.ref_code,
+      instructionsRef,
       refStatusUrl: group.ref_code ? `${origin}/r/${group.ref_code}` : null,
       invites,
     },

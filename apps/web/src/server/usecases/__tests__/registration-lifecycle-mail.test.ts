@@ -350,6 +350,46 @@ describe.skipIf(!HAS_DB)("the payment reminder and the cart mail quote the right
     expect(b.text, "and no entry's suffix anywhere").not.toContain(`${ref}-`);
     expect(b.html).not.toContain(`${ref}-`);
   });
+
+  // Final review m2: when exactly ONE entry of the cart owes, the offline transfer is for that entry, so the cart mail's instructions
+  // quote its own reference - the status page's rule (`offlineInstructionsReference`) and the help page's promise. The reference panel
+  // stays the cart's. The test above is the other branch (two owe: the cart's). The suffixes expected are the stored cart_position
+  // values, read back from the rows, never the producer's.
+  it("exactly one entry owes: the instructions quote that entry's -n, the panel the cart's; once none owes, the cart's again", async () => {
+    const panel = async (ref: string) => t(await getDictionary("en", "emails"), "registration.textRef", { refCode: ref });
+    const mailOf = async (groupId: string, token: string) => {
+      await notifySubmitted(groupId, ORIGIN, token);
+      return body("registration_confirmation", "registration_group", groupId);
+    };
+
+    // Entry 2 owes; entry 1 owes nothing (a free place in the same cart).
+    const { ref, first, second } = await twoEntryCart("m2-second");
+    expect([first.registration.cart_position, second.cart_position], "premise: the stored places").toEqual([1, 2]);
+    await sql`update registrations set amount_cents = 0 where id = ${first.registration.id}`;
+    let b = await mailOf(first.registration.group_id, first.access_token);
+    expect(b.text, "the one owing entry's reference fills the instructions").toContain(`quoting ${ref}-${second.cart_position}`);
+    expect(words(b.html)).toContain(`quoting ${ref}-${second.cart_position}`);
+    expect(b.text, "never the cart's in the instructions").not.toMatch(new RegExp(`quoting ${ref}(?!-${second.cart_position})`));
+    expect(b.text.split("\n"), "the panel keeps the cart's reference").toContain(await panel(ref));
+
+    // The SEQUENCE: entry 2 is paid, so none owes (the empty case) - the mail carries no instructions at all, so no entry's reference
+    // is quoted; the panel still names the cart.
+    await sql`update registrations set status = 'paid' where id = ${second.id}`;
+    b = await mailOf(first.registration.group_id, first.access_token);
+    expect(b.text, "nobody owes: no instructions").not.toContain("quoting");
+    expect(b.text, "and no entry's suffix anywhere").not.toContain(`${ref}-`);
+    expect(b.text.split("\n")).toContain(await panel(ref));
+
+    // Entry 1 owes; entry 2 waits on the list (nothing is owed there): -1, so the suffix is the owing entry's, not always the last.
+    const w = await offlineWorld(1500, "auto");
+    const ref1 = generateRefCode();
+    const lead = await seedRegistration(w.competition.id, w.division.id, w.settings, { displayName: "Maya Cole", contactEmail: address("m2-first"), refCode: ref1 });
+    await seedSecondEntry(lead.registration.group_id, w.division.id, 0, "Maya Cole Jr", "waitlisted");
+    b = await mailOf(lead.registration.group_id, lead.access_token);
+    expect(b.text).toContain(`quoting ${ref1}-${lead.registration.cart_position}`);
+    expect(lead.registration.cart_position, "premise: the lead is entry 1").toBe(1);
+    expect(b.text.split("\n")).toContain(await panel(ref1));
+  });
 });
 
 describe("payDeadlineOf (no database)", () => {

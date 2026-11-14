@@ -73,6 +73,9 @@ export interface RegistrationEmailArgs {
   statusUrl: string;
   /** Quotable reference (v3/05 §3) + its public status page. */
   refCode?: string | null;
+  /** The reference the payment instructions' {{reference}} is filled with, when it is not `refCode`: the one owing entry's own in a
+   *  cart sent with two or more (final review m2, `buildCartMail`). Absent: `refCode`. */
+  instructionsRef?: string | null;
   refStatusUrl?: string | null;
   /** Team / pair entries the recipient (the captain) can invite people to: one block each, after the payment block. Absent or empty
    *  = no invite block, which is every mail that carries no cart token (dispute evidence, the organiser's resend). */
@@ -183,7 +186,7 @@ export function registrationTemplate(
   // Markdown instructions → plain text for the panel, with the registrant's
   // reference substituted for {{reference}}.
   const instructions = opts.paymentInstructions
-    ? paymentInstructionsText(fillPaymentInstructions(opts.paymentInstructions, opts.refCode))
+    ? paymentInstructionsText(fillPaymentInstructions(opts.paymentInstructions, opts.instructionsRef ?? opts.refCode))
     : null;
   const intro = single
     ? waitlisted

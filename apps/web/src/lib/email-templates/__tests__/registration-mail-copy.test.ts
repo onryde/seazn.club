@@ -468,3 +468,39 @@ describe("a free promotion says what the promotion did (walk-fix F2)", () => {
     expect(words(card.html)).not.toContain("You're in");
   });
 });
+
+// Final review m2: the cart confirmation's offline instructions quote the reference the producer chose for them (`instructionsRef`: the
+// ONE owing entry's own, `buildCartMail`), while the reference panel keeps the cart's. Absent, the instructions quote the cart's - every
+// caller before m2. The producer's choice is pinned against the real cart in registration-lifecycle-mail.test.ts.
+describe("the cart confirmation fills {{reference}} with instructionsRef, and keeps refCode for its panel (final review m2)", () => {
+  const CART_REF = "SZ-ABCD-EFGH";
+  const args = {
+    orgName: "Riverside Club",
+    competitionName: "Spring Open",
+    contactName: CONTACT,
+    entries: [
+      { displayName: "Maya", divisionName: "Open Singles", status: "paid", feeCents: 1500, approval: "auto" as const },
+      { displayName: "Maya", divisionName: "Masters Singles", status: "pending", feeCents: 1200, approval: "auto" as const },
+    ],
+    totalCents: 2700,
+    currency: "gbp",
+    paymentInstructions: "Pay at the desk, quoting {{reference}}",
+    statusUrl: "https://seazn.club/s",
+    refCode: CART_REF,
+    refStatusUrl: `https://seazn.club/r/${CART_REF}`,
+  };
+
+  it.each(LOCALES)("%s: instructionsRef given, the instructions quote it (html and text) and the panel still names the cart", async (locale) => {
+    const dict = await dictOf(locale);
+    const out = registrationTemplate({ ...args, instructionsRef: `${CART_REF}-2` }, dict);
+    for (const part of [out.text, words(out.html)]) expect(part).toContain(`quoting ${CART_REF}-2`);
+    expect(out.text, "never the cart's reference in the instructions").not.toMatch(new RegExp(`quoting ${CART_REF}(?!-2)`));
+    expect(out.text, "the panel: the cart's reference").toContain(t(dict, "registration.textRef", { refCode: CART_REF }));
+  });
+
+  it.each(LOCALES)("%s: absent (every caller before m2), the instructions quote refCode", async (locale) => {
+    const out = registrationTemplate(args, await dictOf(locale));
+    expect(out.text).toContain(`quoting ${CART_REF}`);
+    expect(out.text).not.toContain(`${CART_REF}-`);
+  });
+});
