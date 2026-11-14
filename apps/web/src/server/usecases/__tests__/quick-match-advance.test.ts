@@ -123,7 +123,9 @@ vi.mock("@/lib/db", async (orig) => {
 });
 
 const HAS_DB = !!process.env.DATABASE_URL;
-const OFFERED_SPORT_KEYS = [...new Set(offerJson.offered.map((o) => o.sport_key))];
+/** The sports a guest can make a League + Knockout of: those offered a knockout. Cricket is offered League only (C11 as
+ *  amended 2026-11-14: a quick match plays no super over), so it is in the offer and not here. */
+const OFFERED_SPORT_KEYS = [...new Set(offerJson.offered.filter((o) => o.knockoutAllowed).map((o) => o.sport_key))];
 /** Its budget in its own cost driver (AGENTS.md class 20): a create, three results and an advance per sport. */
 const SWEEP_TIMEOUT_MS = Math.max(60_000, OFFERED_SPORT_KEYS.length * 30_000);
 let CHESS: { variant_key: string; kind: CreateQuickMatch["kind"] };
@@ -851,13 +853,14 @@ describe.skipIf(!HAS_DB)("nothing moves for anyone else (D2, P5)", () => {
 describe.skipIf(!HAS_DB)("every offered sport asks its tie at the cut (one variant each)", () => {
   it("3 sides, League → Final, every league match decided the same way through the real write path: a circle, so every sport ASKS (P8: `seed` never breaks it); half answer by Toss (the stored lot's first two), half by Pick (the two the lot would not seat)", async () => {
     const offered = new Map((await listQuickMatchSports()).map((s) => [s.sport_key, s]));
-    expect(OFFERED_SPORT_KEYS.length, "the offer names 9 sports").toBe(9);
+    expect(OFFERED_SPORT_KEYS.length, "9 sports are offered a knockout").toBe(9);
+    expect(offerJson.offered.some((o) => !o.knockoutAllowed), "premise: an offered sport is refused a knockout (cricket)").toBe(true);
     let checked = 0;
     let asked = 0;
     let tossed = 0;
     let picked = 0;
     const visited = await forEachSportAsync(async ({ key }) => {
-      if (!OFFERED_SPORT_KEYS.includes(key)) return; // generic and the lineup sport: no guest makes one
+      if (!OFFERED_SPORT_KEYS.includes(key)) return; // generic, and cricket (League only): no guest makes one
       const sport = offered.get(key);
       expect(sport, `${key}: the offer and the catalog agree`).toBeDefined();
       const m = await lk({ sport_key: key, variant_key: sport!.variants[0]!.variant_key, kind: sport!.kinds.at(-1)!, sides: ["Side A", "Side B", "Side C"] });

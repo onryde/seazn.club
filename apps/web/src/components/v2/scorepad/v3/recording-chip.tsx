@@ -69,6 +69,9 @@ export interface RecordingChipProps {
   /** The band the scorer is on right now — the host's own state, not a
    *  server value and not an entitlement. */
   activeBand: FidelityBand;
+  /** The rows the sheet offers, ascending: every band, unless the host caps the pad (a quick match's ceiling,
+   *  `bandsUpTo` in pad-host.tsx), where a band above the cap is a row the scorer could never use. */
+  bands?: readonly FidelityBand[];
   /** Report a pick. The host persists it per fixture; this component holds
    *  no band state of its own, so it can never disagree with the tile grid. */
   onBandChange: (band: FidelityBand) => void;
@@ -121,7 +124,7 @@ function meter(upTo: FidelityBand) {
  * the host (`pad-host.tsx`), which is also what filters the tiles — one value,
  * one owner, so a picked band and a rendered grid cannot drift.
  */
-export function RecordingChip({ activeBand, onBandChange, actionCounts, t, plural }: RecordingChipProps) {
+export function RecordingChip({ activeBand, bands = BANDS, onBandChange, actionCounts, t, plural }: RecordingChipProps) {
   const [open, setOpen] = useState(false);
   const chipRef = useRef<HTMLButtonElement | null>(null);
   const activeRowRef = useRef<HTMLButtonElement | null>(null);
@@ -225,7 +228,7 @@ export function RecordingChip({ activeBand, onBandChange, actionCounts, t, plura
               {t("pad.recording.question")}
             </h2>
             <div role="radiogroup" aria-label={pickLabel}>
-              {BANDS.map((band) => {
+              {bands.map((band) => {
                 const selected = band === activeBand;
                 return (
                   <button

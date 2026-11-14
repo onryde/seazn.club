@@ -46,6 +46,11 @@ import { contextOverridesDropped, filterTilesByBand, tileEventType } from "../..
 import type { Dict } from "@/lib/i18n-constants";
 import { t as realT } from "@/lib/i18n-runtime";
 import uiEn from "@/dictionaries/en/ui.json";
+import uiEs from "@/dictionaries/es/ui.json";
+import uiFr from "@/dictionaries/fr/ui.json";
+import uiNl from "@/dictionaries/nl/ui.json";
+
+const LOCALE_DICTS = { en: uiEn, es: uiEs, fr: uiFr, nl: uiNl } as const;
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -892,6 +897,66 @@ describe("buildScorebug", () => {
     expect(spec.halves[1]!.tappable).toBeUndefined();
   });
 
+  // Sign-off 2026-11-14 (controller, PO rec): the scorebug read "Batting 9/0" and never said WHO. It names the side whose
+  // innings the big number is: the fold's current innings, else the side the toss sent in (`battingFirst`). Each case is
+  // a REAL fold (`foldCricket`, entrants "H"/"A"), and at least one has the away side batting, so a constant "home"
+  // cannot pass. A side with no name (`{}` in a test view, or one side unnamed) keeps the plain "Batting".
+  describe("names the batting side (sign-off 2026-11-14)", () => {
+    const cfgT20 = cricket.configSchema.parse({});
+    const NAMES = { home: "Riverside", away: "Hillcrest" } as const;
+    const OVER = (runs: number) => ["cricket.innings.summary", { runs, wickets: 0, legalBalls: 6, partial: true }] as const;
+    const who = (specs: readonly CricketEventSpec[], entrantNames: PadHostView["entrantNames"] = NAMES) =>
+      buildScorebug(view({ cfg: cfgT20, state: foldCricket(cfgT20, specs), entrantNames }), t).halves[0]!.who[0]!.name;
+    const named = (side: "home" | "away") => `scorepad.skin.cricket.scorebug.battingSide(${JSON.stringify({ side: NAMES[side] })})`;
+
+    it("the empty case: no name for the batting side keeps the plain label, on every state below", () => {
+      expect(who([["core.start"]], {})).toBe("scorepad.skin.cricket.scorebug.batting");
+      expect(who([["cricket.toss", { wonBy: "A", elected: "bat" }], ["core.start"]], { home: "Riverside" })).toBe(
+        "scorepad.skin.cricket.scorebug.batting",
+      );
+    });
+
+    it("away wins the toss and bats: the away side, before its first over and after it", () => {
+      const toss: CricketEventSpec = ["cricket.toss", { wonBy: "A", elected: "bat" }];
+      expect(who([toss, ["core.start"]])).toBe(named("away"));
+      expect(who([toss, ["core.start"], OVER(9)])).toBe(named("away"));
+    });
+
+    it("away wins the toss and bowls: home bats first; after the close the away side's chase is named", () => {
+      const toss: CricketEventSpec = ["cricket.toss", { wonBy: "A", elected: "bowl" }];
+      expect(who([toss, ["core.start"], OVER(9)])).toBe(named("home"));
+      // The close: the big number is still home's innings (the fold's last one) until the chase opens, so is the name.
+      const closed: CricketEventSpec[] = [toss, ["core.start"], OVER(9), ["cricket.innings.close", { reason: "all_out" }]];
+      expect(who(closed)).toBe(named("home"));
+      expect(who([...closed, OVER(4)])).toBe(named("away"));
+    });
+
+    it("every locale puts the role word FIRST and the name last: a phone's two-line clamp only ever eats the name (whole review m5)", () => {
+      // At 320 a 43-character name ran the old "{side} batting" to three lines and the clamp cut "batting" off (measured,
+      // e2e/mobile/quick-match.spec.ts). The browser leg measures it; this pins the shape in every locale.
+      let checked = 0;
+      for (const [locale, dict] of Object.entries(LOCALE_DICTS)) {
+        const value = (dict as Record<string, string>)["scorepad.skin.cricket.scorebug.battingSide"]!;
+        expect(value.endsWith("{side}"), `${locale}: ${value}`).toBe(true);
+        expect(value.replace("{side}", "").trim().length, `${locale}: a role word before the name`).toBeGreaterThan(0);
+        checked++;
+      }
+      expect(checked).toBe(4);
+    });
+
+    it("the real dictionaries: every locale's label carries the side's name", () => {
+      const v = view({ cfg: cfgT20, state: foldCricket(cfgT20, [["core.start"]]), entrantNames: NAMES });
+      let checked = 0;
+      for (const [locale, dict] of Object.entries(LOCALE_DICTS)) {
+        const label = buildScorebug(v, (k, vars) => realT(dict as Dict, k, vars)).halves[0]!.who[0]!.name;
+        expect(label, locale).toContain("Riverside");
+        expect(label, locale).not.toBe("Riverside");
+        checked++;
+      }
+      expect(checked).toBe(4);
+    });
+  });
+
   it("context is variant · over · run rate, joined with the chassis separator", () => {
     const spec = buildScorebug(view(), t);
     expect(spec.context).toBe("T20 · scorepad.skin.cricket.context.over 0.5 · scorepad.skin.cricket.context.runRate 14.4");
@@ -905,9 +970,9 @@ describe("buildScorebug", () => {
 
   it("strip shows striker (accented, on-strike marker), non-striker, dots, bowler", () => {
     const spec = buildScorebug(view({ state: state({ innings: [innings()] }) }), t);
-    expect(spec.strip[0]).toEqual({ value: "▸Home One", accent: true });
-    expect(spec.strip[1]).toEqual({ value: "Home Two" });
-    expect(spec.strip[3]).toEqual({ value: "⚾Away One" });
+    expect(spec.strip[0]).toEqual({ value: "▸Home One", accent: true, fedBy: "cricket.ball" });
+    expect(spec.strip[1]).toEqual({ value: "Home Two", fedBy: "cricket.ball" });
+    expect(spec.strip[3]).toEqual({ value: "⚾Away One", fedBy: "cricket.ball" });
   });
 
   // Regression: v2's chaseValue/`ck-revised-target` (cricket-skin.tsx) showed
@@ -947,9 +1012,9 @@ describe("buildScorebug", () => {
       );
       // Four base items, the target, then the held free-hit slot (S2-4 Task 10), which stays LAST.
       expect(spec.strip).toHaveLength(6);
-      expect(spec.strip[0]).toEqual({ value: "▸Home One", accent: true });
-      expect(spec.strip[1]).toEqual({ value: "Home Two" });
-      expect(spec.strip[3]).toEqual({ value: "⚾Away One" });
+      expect(spec.strip[0]).toEqual({ value: "▸Home One", accent: true, fedBy: "cricket.ball" });
+      expect(spec.strip[1]).toEqual({ value: "Home Two", fedBy: "cricket.ball" });
+      expect(spec.strip[3]).toEqual({ value: "⚾Away One", fedBy: "cricket.ball" });
       expect(spec.strip[4]).toEqual({
         label: "scorepad.skin.cricket.header.target",
         value: "165",
@@ -1013,7 +1078,7 @@ describe("buildScorebug", () => {
       ballEvent("f5", { ballInOver: 5, runs: { bat: 1 } }),
     ];
     const hundred = buildScorebug(view({ cfg: cfg({ ballsPerOver: 5, ballsPerInnings: 100 }), events }), t);
-    expect(hundred.strip[2]).toEqual({ value: "• 1 • 4 1" });
+    expect(hundred.strip[2]).toEqual({ value: "• 1 • 4 1", fedBy: "cricket.ball" });
     // The overs figure ALSO goes through ballsPerOverOf(view.cfg): at bpo=5,
     // 5 legal balls is a completed over ("1.0"); at a wrongly-assumed 6 it
     // would read "0.5" instead — a real, integration-level dependency on
@@ -1058,6 +1123,8 @@ describe("buildScorebug — free hit indicator (R2b)", () => {
       accent: true,
       // S2-4 Task 10: the slot reserves its own width, the same in both states (`StripItem.reserve`).
       reserve: ["scorepad.skin.cricket.header.freeHit"],
+      // Sign-off 2026-11-14: fed by the ball alone, so a pad that cannot record one drops it (`quickMatchSkin`).
+      fedBy: "cricket.ball",
     });
     expect(assertScorebugSpec(spec)).toEqual([]);
   });
@@ -1072,6 +1139,8 @@ describe("buildScorebug — free hit indicator (R2b)", () => {
       accent: true,
       reserved: true,
       reserve: ["scorepad.skin.cricket.header.freeHit"],
+      // Sign-off 2026-11-14: fed by the ball alone, so a pad that cannot record one drops it (`quickMatchSkin`).
+      fedBy: "cricket.ball",
     });
     expect(assertScorebugSpec(spec)).toEqual([]);
   });

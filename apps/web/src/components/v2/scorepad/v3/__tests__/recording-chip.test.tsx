@@ -96,6 +96,16 @@ describe("RecordingChip — the sheet", () => {
     expect(rows().map((el) => propsOf(el)["aria-checked"])).toEqual([false, false, true, false]);
   });
 
+  it("a capped pad (a quick match's ceiling) offers only its own rows, the active one marked, and a pick among them", () => {
+    // Quick match cricket (decision log 2026-11-13): bands 0–1. The host hands the rows (`bandsUpTo`); none above.
+    const { open, rows, picks } = mount({ activeBand: 1, bands: [0, 1] });
+    open();
+    expect(rows().map((el) => propsOf(el)["data-band"])).toEqual([0, 1]);
+    expect(rows().map((el) => propsOf(el)["aria-checked"])).toEqual([false, true]);
+    (propsOf(rows()[0]!).onClick as () => void)();
+    expect(picks).toEqual([0]);
+  });
+
   it("gives every row its OWN band label and action count — never the active band's", () => {
     const { open, rows } = mount({ activeBand: 3 });
     open();

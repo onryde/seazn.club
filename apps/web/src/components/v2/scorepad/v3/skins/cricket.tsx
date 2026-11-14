@@ -1298,6 +1298,18 @@ export function resolvePhase(view: Pick<PadHostView, "state">): PadPhase {
 
 export type TFn = (key: string, vars?: Record<string, string | number>) => string;
 
+/**
+ * The batting half's label (sign-off 2026-11-14, controller PO rec: "Batting 9/0" never said who). The side whose innings
+ * the big number is: the fold's current innings (`currentInnings`, the SAME one the runs and wickets are read from), and
+ * before there is one, the side the toss sent in (`battingFirst`, which the engine also defaults). Named by its entrant
+ * name (`view.entrantNames`, the console heading's); a side with no name keeps the plain "Batting".
+ */
+function battingLabel(view: PadHostView, state: CricketStateShape, innings: CricketInningsShape | null, t: TFn): string {
+  const side = innings?.battingSide ?? state.battingFirst;
+  const name = side === undefined ? undefined : view.entrantNames[side];
+  return name ? t("scorepad.skin.cricket.scorebug.battingSide", { side: name }) : t("scorepad.skin.cricket.scorebug.batting");
+}
+
 export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
   const cfg = asCfg(view.cfg);
   const state = asState(view.state);
@@ -1348,11 +1360,14 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
   // caption (a DLS par is "be ahead of this line right now", not "reach
   // this total by the end") — see `chaseTarget`'s own doc for why that flag
   // is always false on the arithmetic-fallback branch, not a separate check.
+  // Sign-off 2026-11-14: every one of these four (and the free hit slot below) is fed by the ball alone (`fedBy`), so a
+  // pad that cannot record a ball (the guest's quick match pad, `quickMatchSkin`) drops them rather than print ▸ and ⚾.
+  const ball = ballEventType(state);
   const strip: StripItem[] = [
-    { value: `▸${strikerName}`, accent: true },
-    { value: nonStrikerName },
-    { value: dots.length > 0 ? dots.join(" ") : "—" },
-    { value: `⚾${bowlerName}` },
+    { value: `▸${strikerName}`, accent: true, fedBy: ball },
+    { value: nonStrikerName, fedBy: ball },
+    { value: dots.length > 0 ? dots.join(" ") : "—", fedBy: ball },
+    { value: `⚾${bowlerName}`, fedBy: ball },
   ];
   const target = chaseTarget(cfg, state);
   if (target) {
@@ -1384,8 +1399,8 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
     const freeHit = t("scorepad.skin.cricket.header.freeHit");
     strip.push(
       foldFreeHitPending(state)
-        ? { id: "freeHit", value: freeHit, accent: true, reserve: [freeHit] }
-        : { value: "", accent: true, reserved: true, reserve: [freeHit] },
+        ? { id: "freeHit", value: freeHit, accent: true, reserve: [freeHit], fedBy: ball }
+        : { value: "", accent: true, reserved: true, reserve: [freeHit], fedBy: ball },
     );
   }
 
@@ -1393,7 +1408,7 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
     context: contextParts.join(" · "),
     phase: resolvePhase(view),
     halves: [
-      { who: [{ name: t("scorepad.skin.cricket.scorebug.batting") }], big: `${runs}/${wickets}` },
+      { who: [{ name: battingLabel(view, state, innings, t) }], big: `${runs}/${wickets}` },
       { who: [{ name: t("scorepad.skin.cricket.scorebug.overs") }], big: oversText(legalBalls, bpo) },
     ],
     strip,

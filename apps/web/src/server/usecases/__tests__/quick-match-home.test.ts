@@ -1265,11 +1265,22 @@ describe.skipIf(!HAS_DB)("readQuickMatchHome: a League + Knockout (plan 5 T5)", 
   it("(j) reads every offered sport's League → Final with its two stages: 3 + 1 matches, the final's seats 1st and 2nd in the league (sweep)", async () => {
     const offered = new Map((await listQuickMatchSports()).map((s) => [s.sport_key, s]));
     let checked = 0;
+    let refused = 0;
     const visited = await forEachSportAsync(async ({ key }) => {
       const sport = offered.get(key);
       if (!sport) return;   // not offered: no quick match of it can exist to read
+      const variant = sport.variants.find((v) => v.knockoutAllowed);
+      if (!variant) {
+        // League only (cricket, C11 as amended 2026-11-14): the create refuses a League + Knockout of it, so no home to read.
+        await expect(create(league4({
+          sport_key: key, variant_key: sport.variants[0]!.variant_key, kind: sport.kinds.at(-1)!, format: "league_knockout", qualifiers: 2,
+          sides: ["Side A", "Side B", "Side C"],
+        })), key).rejects.toThrow(/is not offered a knockout/);
+        refused++;
+        return;
+      }
       const out = await create(league4({
-        sport_key: key, variant_key: sport.variants[0]!.variant_key, kind: sport.kinds.at(-1)!, format: "league_knockout", qualifiers: 2,
+        sport_key: key, variant_key: variant.variant_key, kind: sport.kinds.at(-1)!, format: "league_knockout", qualifiers: 2,
         sides: ["Side A", "Side B", "Side C"],
       }));
       try {
@@ -1284,8 +1295,9 @@ describe.skipIf(!HAS_DB)("readQuickMatchHome: a League + Knockout (plan 5 T5)", 
         await hardDeleteQuickMatchCompetition(out.competitionId);
       }
     });
-    console.info(`quick match League + Knockout home sweep: ${checked} offered sports read of ${visited} sport modules`);
+    console.info(`quick match League + Knockout home sweep: ${checked} offered sports read, ${refused} refused, of ${visited} sport modules`);
     expect(checked).toBeGreaterThan(0);
-    expect(checked).toBe(offered.size);
+    expect(refused, "anti-vacuity: a League-only sport was refused").toBeGreaterThan(0);
+    expect(checked + refused).toBe(offered.size);
   }, SWEEP_TIMEOUT_MS);
 });

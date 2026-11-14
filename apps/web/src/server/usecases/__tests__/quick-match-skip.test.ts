@@ -476,11 +476,11 @@ describe.skipIf(!HAS_DB)("skip and put back in every offered sport (P14, Review 
   // would refuse the put back (case 5).
   it("11. a league of 2 played twice, its first match started and scored once, skipped and put back: the stored state is byte-identical, the status returns, the table is unchanged", async () => {
     const offered = new Map((await listQuickMatchSports()).map((s) => [s.sport_key, s]));
-    expect(OFFERED_SPORT_KEYS.length, "the offer names 9 sports (P14)").toBe(9);
+    expect(OFFERED_SPORT_KEYS.length, "the offer names 10 sports (P14; cricket since 2026-11-14)").toBe(10);
     let checked = 0;
     let startOnly = 0;
     const visited = await forEachSportAsync(async ({ key }) => {
-      if (!OFFERED_SPORT_KEYS.includes(key)) return;   // generic and the lineup sport: no guest makes one
+      if (!OFFERED_SPORT_KEYS.includes(key)) return;   // generic: no guest makes one
       const sport = offered.get(key);
       expect(sport, `${key}: the offer and the catalog agree`).toBeDefined();
       const { out, row } = await make(league({

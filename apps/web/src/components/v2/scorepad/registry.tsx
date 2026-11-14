@@ -253,6 +253,8 @@ export interface ScorePadProps {
   rulesVersion: number | undefined;
   /** W2a D-O1 — forwarded to `PadHostV3.canOrganise`: the console passes its organiser flag, the device pad `false`. */
   canOrganise: boolean;
+  /** Quick match — forwarded to `PadHostV3.quickMatch`: only the device pad of a quick match passes it. */
+  quickMatch?: boolean;
 }
 
 type ModuleResolution = { ok: true; module: AnySportModule } | { ok: false; message: string };
@@ -335,6 +337,7 @@ export function ScorePad(props: ScorePadProps) {
       stageKind={props.stageKind}
       rulesVersion={props.rulesVersion}
       canOrganise={props.canOrganise}
+      quickMatch={props.quickMatch}
       entrantNames={entrantNames}
       sideWords={sideWords}
       fixtureId={props.fixtureId}

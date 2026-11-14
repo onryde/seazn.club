@@ -1,6 +1,6 @@
 // The marketing hero's illustrated scenes: one per sport the quick match offers, so the art beside the hero's Sport select
 // shows the sport picked there (owner 2026-11-13: "we already have cricket animation, so when user choose the sport can
-// we show relevant one?"). Cricket keeps its scene for the day the quick match offers it (a lineup sport, excluded today).
+// we show relevant one?"). Cricket's scene is a chase won (quick match cricket, decision log 2026-11-13).
 //
 // A plain module, no directive: the quick match form (a server component) reads `HERO_SPORT_SELECT_ID` from here, and a
 // value exported from a "use client" module would reach the server as a client reference, not the string.
@@ -63,7 +63,8 @@ export interface HeroSlide {
 /** The scorebug's frames: `steps[0]` before any landing, one more per landing, held at the last. `rally`, `goals` and
  *  `carrom` read `home h–a away`; `tennis` calls the points (0, 15, 30, 40) of one game, and once the game is won shows
  *  the set's `games` with it counted; `chess` writes half points (the engine stores 1 / ½ / 0 as 2 / 1 / 0); `innings`
- *  reads `team runs/wickets`. */
+ *  is a chase, the home side batting second: `steps` are its runs/wickets, `against` the away side's completed innings,
+ *  and it reads `home runs/wickets–runs/wickets away`. */
 export type HeroScore =
   | {
       readonly kind: "rally" | "goals" | "carrom" | "chess";
@@ -77,7 +78,13 @@ export type HeroScore =
       readonly games: readonly [number, number];
       readonly steps: readonly (readonly [number, number])[];
     }
-  | { readonly kind: "innings"; readonly names: readonly [string]; readonly steps: readonly (readonly [number, number])[] };
+  | {
+      readonly kind: "innings";
+      readonly names: readonly [string, string];
+      /** The innings the home side chases: the away side's runs and wickets. */
+      readonly against: readonly [number, number];
+      readonly steps: readonly (readonly [number, number])[];
+    };
 
 export interface HeroScene {
   readonly score: HeroScore;
@@ -182,9 +189,9 @@ export const HERO_SCENES = {
     },
     slide: { rest: pt(304, 190), aim: pt(282, 212), hit: pt(251, 177), end: pt(262, 190) },
   },
-  // Kept for the day the quick match offers cricket (a lineup sport, excluded today): a straight drive, four runs.
+  // Chasing 151: a straight drive for four each play, and the third passes the total.
   cricket: {
-    score: { kind: "innings", names: ["Falcons CC"], steps: [[142, 3], [146, 3], [150, 3], [154, 3]] },
+    score: { kind: "innings", names: ["Falcons", "Kites"], against: [151, 8], steps: [[142, 3], [146, 3], [150, 3], [154, 3]] },
     flight: { rest: pt(-30, 150), toss: pt(190, 288), hit: pt(288, 219), ctrl: pt(186, -10), land: pt(84, 286) },
     swing: { pivot: pt(316, 296), back: 35, strike: -20, over: -45, settle: -32, sway: -28 },
   },
@@ -266,7 +273,7 @@ function halfPoints(n: number): string {
 export function heroScoreText(scene: HeroSceneKey, landings: number): string {
   const { score } = HERO_SCENES[scene] as HeroScene;
   const [home, away] = score.steps[Math.min(Math.max(landings, 0), score.steps.length - 1)]!;
-  if (score.kind === "innings") return `${score.names[0]} ${home}/${away}`;
+  if (score.kind === "innings") return `${score.names[0]} ${home}/${away}–${score.against[0]}/${score.against[1]} ${score.names[1]}`;
   const [a, b] = score.names;
   if (score.kind === "tennis") return `${a} ${heroTennisCall(score.games, [home, away])} ${b}`;
   if (score.kind === "chess") return `${a} ${halfPoints(home)}–${halfPoints(away)} ${b}`;
