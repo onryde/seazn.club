@@ -137,6 +137,9 @@ export interface MatchDayCandidate {
   source: MatchDayCandidateSource;
   /** The court it waits on, for other_court; null otherwise. */
   from_court_name: string | null;
+  /** True when the match is the first match queued on `from_court_name`'s court, that court's very next; false for a later
+   *  match of its queue, for this_court and no_court, and for a called match (F-T8-16: "Next on" is said of the first only). */
+  first_in_queue: boolean;
   /** Whole minutes from now until its estimated start where it waits ("next on Court 2 · ~15 min"); 0 for no_court. */
   waiting_minutes: number;
   /** Whole minutes its estimated start where it waits is past its planned time ("25 min behind Court 1"); for no_court, how

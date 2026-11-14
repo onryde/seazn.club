@@ -7997,6 +7997,7 @@
   "matchDay.candidate.group.other_court": "Wacht elders",
   "matchDay.candidate.group.no_court": "Nog geen baan",
   "matchDay.candidate.where.here": "Volgende hier",
+  "matchDay.candidate.where.queuedOn": "In de wachtrij op {court}",
   "matchDay.candidate.where.nextOn": "Volgende op {court}",
   "matchDay.candidate.where.calledOn": "Opgeroepen naar {court}, niet begonnen",
   "matchDay.candidate.where.noCourt": "geen baan",

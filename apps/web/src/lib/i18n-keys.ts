@@ -4147,6 +4147,7 @@ export type DictionaryKey =
   | "matchDay.candidate.where.here"
   | "matchDay.candidate.where.nextOn"
   | "matchDay.candidate.where.noCourt"
+  | "matchDay.candidate.where.queuedOn"
   | "matchDay.candidate.where.unscheduled"
   | "matchDay.closure.later"
   | "matchDay.closure.rest"
