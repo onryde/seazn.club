@@ -358,7 +358,7 @@ describe.skipIf(!HAS_DB)("the sweep's payment reminders ride the outbox (DB)", (
 // ---------------------------------------------------------------------------------------------------------------------------------
 
 describe.skipIf(!HAS_DB)("the organiser's manual payment reminder rides the outbox (DB)", () => {
-  it("reports sent and records its audit entry in the same transaction; a second press is a second mail that supersedes the first", async () => {
+  it("reports sent and records its audit entry in the same transaction; a second press is a second mail that supersedes the first, which still records that it was sent", async () => {
     const w = await offlineWorld();
     const email = address("manual");
     const { registration } = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: email, locale: "nl" });
@@ -387,10 +387,20 @@ describe.skipIf(!HAS_DB)("the organiser's manual payment reminder rides the outb
     expect(await audited(), "the audit entry was written with the row").toHaveLength(1);
 
     // The second press: a deliberate second mail. The first has been sent, so the trigger marks it replaced and both went out.
+    // `replaced` means superseded, not unsent (outbox spec 2026-10-19 "replaced"; phase-3 §6 controller call 2026-10-25): the row keeps
+    // the provider's id and its send time, which is how an audit tells a sent-then-superseded reminder from one that never went
+    // (registration walk-fix F17, 2026-11-14: four of seven walkthrough reminders read `replaced` although each was sent).
     expect(await sendPaymentReminder(w.owner, registration.id, ORIGIN)).toEqual({ sent: true });
     const rows = await rowsTo(email);
     expect(rows).toHaveLength(2);
     expect(rows.map((r) => r.status)).toEqual(["replaced", "sent"]);
+    const proof = await sql<{ id: string; provider_id: string | null; sent_at: Date | null }[]>`
+      select id, provider_id, sent_at from email_outbox where id = any(${rows.map((r) => r.id)}::uuid[]) order by created_at, id`;
+    expect(proof.map((p) => p.id), "premise: the proof reads the two reminder rows, oldest first").toEqual(rows.map((r) => r.id));
+    for (const p of proof) {
+      expect(p.provider_id, "each row, the replaced one too, keeps the id the provider gave its send").toMatch(/^re_t9_/);
+      expect(p.sent_at, "and when it was sent").not.toBeNull();
+    }
     expect(callsTo(email), "each press is one mail").toHaveLength(2);
     expect(await audited()).toHaveLength(2);
     await assertNothingMoreToSend(KIND, rows.map((r) => r.id));
