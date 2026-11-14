@@ -74,7 +74,7 @@ import { CreateQuickMatch } from "@/server/api-v1/schemas";
 import { quickMatchPreviewTable, type QuickMatchPreviewTable } from "@/server/usecases/quick-match-preview";
 import type { QuickMatchSport } from "@/server/usecases/quick-match-sports";
 import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
-import { setupCopy, setupSports } from "@/app/[lang]/(marketing)/play/setup-props";
+import { prefillSport, setupCopy, setupSports } from "@/app/[lang]/(marketing)/play/setup-props";
 import { CONSENT_OPEN_ATTR } from "@/components/cookie-consent";
 import { TurnstileWidget } from "@/components/turnstile-widget";
 import { compileClasses } from "@/components/v2/__tests__/_compiled-css";
@@ -713,6 +713,57 @@ describe("sport, kind and match rules (B4b-d, D6, C24)", () => {
     // Positive pair: a two-kind sport does show the switch.
     type(radio(i, "sport_key", "tennis"), "tennis");
     expect(inputs(i, "kind").filter((el) => propsOf(el).type === "radio")).toHaveLength(2);
+  });
+
+  it("?sport= (the hero's sport): the OPENING sport's rules decide the knockout rows, never the offer's first; swept over every non-default sport, both ways (counted)", () => {
+    // Spec §3 (2026-11-12-quick-match-league-knockout): a knockout row only on rules that may play one (C23), from three
+    // sides, Semi-finals from four. Typed from the spec, never read from shapesOffered. Every live variant may play a
+    // knockout today (quick-match-offer.generated.json), so the default is made league-only here: with both free, a form
+    // that read the default sport's rules would list the same rows and this could not see it.
+    const KNOCKOUT: Record<number, [string, boolean][]> = {
+      3: [["league", false], ["final", false], ["semis", true]],
+      4: [["league", false], ["final", false], ["semis", false]],
+    };
+    const LEAGUE_ONLY: [string, boolean][] = [["league", false]];
+    const leagueOnly = (s: QuickMatchSport): QuickMatchSport => ({
+      ...s,
+      variants: s.variants.map((v) => ({ ...v, knockoutAllowed: false })),
+    });
+    // The page's own chain: `?sport=` through prefillSport (what page.tsx hands the island), then n sides typed.
+    const open = (offer: QuickMatchSport[], raw: string | undefined, n: number) => {
+      const sports = setupSports(offer, enUi) as SetupFormProps["sports"];
+      const i = mount({ sports, initialSport: prefillSport(raw, sports) });
+      fillSides(i, Array.from({ length: n }, (_, k) => `S${k + 1}`));
+      return i;
+    };
+    const rowsOf = (i: Island) => shapeRows(i).map(([v, d]) => [v, d]);
+    const first = OFFER[0]!.sport_key;
+    const opening = OFFER.slice(1).map((s) => s.sport_key);
+    expect(opening.length, "premise: at least two sports the form does not open on by default").toBeGreaterThanOrEqual(2);
+    let checked = 0;
+    for (const key of opening) {
+      // The default league-only, the opening sport free to play a knockout: its rows show.
+      const freeHere = OFFER.map((s) => (s.sport_key === key ? s : leagueOnly(s)));
+      for (const n of [3, 4]) {
+        const i = open(freeHere, key, n);
+        expect(propsOf(radio(i, "sport_key", key)!).checked, `premise: ?sport=${key} opens on it`).toBe(true);
+        expect(rowsOf(i), `?sport=${key}, ${n} sides, the default league-only`).toEqual(KNOCKOUT[n]);
+        expect(rowsOf(open(freeHere, undefined, n)), `the differential: no ?sport=, ${n} sides, opens on ${first}`).toEqual(LEAGUE_ONLY);
+        checked++;
+      }
+      // The sequence: from the opening sport to the default chip and back, the rows follow the sport on screen.
+      const moved = open(freeHere, key, 4);
+      type(radio(moved, "sport_key", first), first);
+      expect(rowsOf(moved), `${key} → ${first}: league-only`).toEqual(LEAGUE_ONLY);
+      type(radio(moved, "sport_key", key), key);
+      expect(rowsOf(moved), `${first} → ${key} again`).toEqual(KNOCKOUT[4]);
+      // Reverse: the default free, the opening sport league-only: League alone, where the default lists all three.
+      const onlyHere = OFFER.map((s) => (s.sport_key === key ? leagueOnly(s) : s));
+      expect(rowsOf(open(onlyHere, key, 4)), `?sport=${key}, itself league-only`).toEqual(LEAGUE_ONLY);
+      expect(rowsOf(open(onlyHere, undefined, 4)), `no ?sport=: ${first} lists all three`).toEqual(KNOCKOUT[4]);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every opening sport at 3 and 4 sides, plus its reverse").toBe(opening.length * 3);
   });
 
   it("the kind words are the dictionary's (Singles / Doubles), never the engine's", () => {

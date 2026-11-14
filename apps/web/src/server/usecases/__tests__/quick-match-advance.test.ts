@@ -44,6 +44,7 @@ import {
   loadLeagueCut,
 } from "../quick-match-advance";
 import type { CreatedQuickMatch } from "../quick-match-create";
+import { tossThrough } from "../quick-match-cut";
 import { hardDeleteQuickMatchCompetition } from "../quick-match-delete";
 import { readQuickMatchHome, resolveQuickMatchToken, type QuickMatchRow } from "../quick-match-home";
 import { putBackQuickMatchFixture, skipQuickMatchFixture } from "../quick-match-skip";
@@ -651,6 +652,16 @@ describe.skipIf(!HAS_DB)("skips and the knockout (P14, D3)", () => {
       .toEqual({ seats: 2, size: 3, byLot: false });
     await expectRefused(decideQuickMatchCut(m.row, { how: "toss" }), 422, QUICK_MATCH_ERRORS.TIE_NOT_OPEN);
     expect((await decisionOf(m)).value).toBeNull();
+    // A toss stored anyway (an old tab, a write that skipped the usecase's refusal): the right class, exactly `seats` of it,
+    // the order the toss would send. It fails only `answers()`'s last clause (a toss needs a class the lot ordered), so the
+    // advance must not fill from it: the question stays open and the stored toss is dropped (§11, review m1).
+    if (asked.state !== "tie") throw new Error("premise: the advance asks");
+    await writeDecision(m, { how: "toss", through: tossThrough(asked.tie), tie: asked.tie.entrantIds, at: new Date().toISOString() });
+    expect((await decisionOf(m)).value, "premise: the toss is stored").toMatchObject({ how: "toss" });
+    const again = await advanceQuickMatch(m.row);
+    expect(again.state === "tie" && again.tie.entrantIds, "a toss on a class no lot ordered answers nothing").toEqual(asked.tie.entrantIds);
+    expect((await decisionOf(m)).value, "the stored toss is cleared").toBeNull();
+    expect(await koSeated(m), "nothing filled from it").toBe(0);
     // Pick the two the typing order would NOT seat by default (A, B): B and C.
     const [b, c] = ["B", "C"].map((n) => m.id.get(n)!) as [string, string];
     await decideQuickMatchCut(m.row, { how: "pick", entrantIds: [c, b] });
