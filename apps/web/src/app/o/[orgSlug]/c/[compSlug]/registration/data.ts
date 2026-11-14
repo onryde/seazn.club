@@ -5,7 +5,7 @@
 // app-module-exports.test.ts is the sweep that says so. It caught these three
 // on RS004's first full CI run; nothing local runs that suite.
 import { withTenant } from "@/lib/db";
-import { SPOT_HOLDERS } from "@/lib/registration-status";
+import { SOLO_ASSIGNABLE_STATUSES, SPOT_HOLDERS } from "@/lib/registration-status";
 import { HttpError } from "@/lib/errors";
 // A real (non-type-only) VALUE import of a "components" module, into this
 // data layer — safe here (no bundling concern, unlike the client filter
@@ -503,7 +503,12 @@ export async function fetchDivisionOptions(
 export interface PoolSummaryRow {
   division_id: string;
   division_name: string;
+  /** Solo sign-ups an organiser can place on a team now (`SOLO_ASSIGNABLE_STATUSES`: confirmed, paid) — exactly the rows
+   *  whose hub row offers Assign (walk-fix F14). */
   waiting: number;
+  /** Solo sign-ups still owing their fee (`pending` with a fee of their own, `entryWaitingOn`'s "payment") — in the pool,
+   *  but Assign refuses them until they pay. Shown beside `waiting`, never inside it. */
+  awaiting_payment: number;
   free_slots: number;
   /** coalesce(place_by_at, closes_at) — the SAME fallback the Stage 2 sweep
    *  (usecases/registrations/ folder's duePool query) and the Stage 3b status page
@@ -525,10 +530,11 @@ export interface PoolSummaryRow {
  *  1. Which divisions have anyone actually waiting — the exact same
  *     "pooled" predicate `soloPoolIsFull` and the Stage 2 sweep's `duePool`
  *     already use (`free_agent = true`, `status in SPOT_HOLDERS`, and NOT
- *     already assigned via `registration_players.assigned_from_registration_id`).
- *     `having count(*) > 0` means a division with an empty (or fully-placed)
- *     pool never reaches queries 2/3 at all — the whole function returns
- *     `[]` when nothing needs attention, so the banner renders nothing.
+ *     already assigned via `registration_players.assigned_from_registration_id`),
+ *     split into `waiting` (assignable now) and `awaiting_payment` (walk-fix F14).
+ *     The `having` clause means a division with nobody in either never reaches
+ *     queries 2/3 at all — the whole function returns `[]` when nothing needs
+ *     attention, so the banner renders nothing.
  *  2. Free roster room on registered (non-terminal, non-waitlisted,
  *     non-free-agent) teams in those SAME divisions — deliberately the SAME
  *     population `listAssignTargets` (registration-assign.ts) already
@@ -554,8 +560,12 @@ export async function fetchPoolSummary(
   competitionId: string,
 ): Promise<PoolSummaryRow[]> {
   return withTenant(auth.orgId, async (tx) => {
-    const waitingRows = await tx<{ division_id: string; waiting: number }[]>`
-      select r.division_id, count(*)::int as waiting
+    // Walk-fix F14: `waiting` is the people Assign can seat, `awaiting_payment` the unpaid ones beside them. A free `pending`
+    // solo (awaiting a manual approval) is in neither — it owes no money and cannot be seated yet; its row offers Approve.
+    const waitingRows = await tx<{ division_id: string; waiting: number; awaiting_payment: number }[]>`
+      select r.division_id,
+        count(*) filter (where r.status in ${tx([...SOLO_ASSIGNABLE_STATUSES])})::int as waiting,
+        count(*) filter (where r.status = 'pending' and r.amount_cents > 0)::int as awaiting_payment
       from registrations r
       join divisions d on d.id = r.division_id
       where d.competition_id = ${competitionId} and d.archived_at is null
@@ -566,7 +576,8 @@ export async function fetchPoolSummary(
           where rp.assigned_from_registration_id = r.id
         )
       group by r.division_id
-      having count(*) > 0`;
+      having count(*) filter (where r.status in ${tx([...SOLO_ASSIGNABLE_STATUSES])}
+        or (r.status = 'pending' and r.amount_cents > 0)) > 0`;
     if (waitingRows.length === 0) return [];
     const divisionIds = waitingRows.map((w) => w.division_id);
 
@@ -611,6 +622,7 @@ export async function fetchPoolSummary(
         division_id: w.division_id,
         division_name: m?.division_name ?? "",
         waiting: w.waiting,
+        awaiting_payment: w.awaiting_payment,
         free_slots: slotsByDivision.get(w.division_id) ?? 0,
         // RS012 `/code-review high` finding 2 — the ONE effectivePoolDeadline
         // copy (usecases/registrations/list.ts, beside rosterCapExpr); the cast narrows

@@ -43,6 +43,7 @@ const POOL_ROW: PoolSummaryPanelRow = {
   division_id: "div-1",
   division_name: "Open Singles",
   waiting: 3,
+  awaiting_payment: 0,
   free_slots: 2,
   place_by_at: "2026-10-01T12:00:00.000Z",
   href: "/o/riverside/c/summer-league/registration?tab=registrants&division_id=div-1&free_agent=1",
@@ -311,6 +312,38 @@ describe("pool summary banner (RS012 scope item 4)", () => {
     // Not the plural forms at count 1.
     expect(text).not.toContain(t(dict, "reg.hub.registrants.pool.waiting.other", { count: 1 }));
     expect(text).not.toContain(t(dict, "reg.hub.registrants.pool.freeSlots.other", { count: 1 }));
+  });
+
+  // Walk-fix F14: the unpaid solo sign-ups are named beside the assignable count, never inside it — and the
+  // note is absent when nobody owes money (POOL_ROW's awaiting_payment is 0).
+  it("names the unpaid solo sign-ups beside the waiting count, plural-correct in every locale, and says nothing at 0", async () => {
+    let checked = 0;
+    for (const locale of ["en", "es", "fr", "nl"] as const) {
+      const d = await getDictionary(locale, "ui");
+      for (const awaiting of [1, 2]) {
+        const row: PoolSummaryPanelRow = { ...POOL_ROW, waiting: 0, awaiting_payment: awaiting };
+        const text = textOf(
+          bannerOf(
+            walk(
+              RegistrationHubRegistrantsPanel({ ...BASE_PROPS, dict: d, locale, rows: [ROW], filters: DEFAULT_FILTERS, poolSummary: [row] }),
+            ),
+          )!,
+        );
+        const form = new Intl.PluralRules(locale).select(awaiting) === "one" ? "one" : "other";
+        expect.soft(text, `${locale}/${awaiting}`).toContain(
+          t(d, `reg.hub.registrants.pool.awaitingPayment.${form}`, { count: awaiting }),
+        );
+        checked++;
+      }
+    }
+    expect(checked).toBe(8);
+
+    const none = textOf(
+      bannerOf(walk(RegistrationHubRegistrantsPanel({ ...BASE_PROPS, rows: [ROW], filters: DEFAULT_FILTERS, poolSummary: [POOL_ROW] })))!,
+    );
+    expect(none).toContain(t(dict, "reg.hub.registrants.pool.waiting.other", { count: 3 }));
+    expect(none).not.toContain(t(dict, "reg.hub.registrants.pool.awaitingPayment.other", { count: 0 }));
+    expect(none).not.toContain(t(dict, "reg.hub.registrants.pool.awaitingPayment.one", { count: 0 }));
   });
 
   it("omits the place-by line entirely when place_by_at is null — never 'Invalid Date'", () => {

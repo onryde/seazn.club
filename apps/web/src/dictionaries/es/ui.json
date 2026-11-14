@@ -1145,6 +1145,8 @@
   "reg.hub.registrants.pool.heading": "Inscripciones individuales esperando equipo",
   "reg.hub.registrants.pool.waiting.one": "{count} persona esperando",
   "reg.hub.registrants.pool.waiting.other": "{count} personas esperando",
+  "reg.hub.registrants.pool.awaitingPayment.one": "({count} pendiente de pago)",
+  "reg.hub.registrants.pool.awaitingPayment.other": "({count} pendientes de pago)",
   "reg.hub.registrants.pool.freeSlots.one": "{count} plaza libre en tus equipos",
   "reg.hub.registrants.pool.freeSlots.other": "{count} plazas libres en tus equipos",
   "reg.hub.registrants.pool.placeBy": "Se reembolsa automáticamente después del {date} si nadie las asigna",

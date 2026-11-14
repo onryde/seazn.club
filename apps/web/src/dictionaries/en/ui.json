@@ -1145,6 +1145,8 @@
   "reg.hub.registrants.pool.heading": "Solo sign-ups waiting for a team",
   "reg.hub.registrants.pool.waiting.one": "{count} person waiting",
   "reg.hub.registrants.pool.waiting.other": "{count} people waiting",
+  "reg.hub.registrants.pool.awaitingPayment.one": "({count} awaiting payment)",
+  "reg.hub.registrants.pool.awaitingPayment.other": "({count} awaiting payment)",
   "reg.hub.registrants.pool.freeSlots.one": "{count} free slot on your teams",
   "reg.hub.registrants.pool.freeSlots.other": "{count} free slots on your teams",
   "reg.hub.registrants.pool.placeBy": "Refunds automatically after {date} if nobody places them",

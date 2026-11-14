@@ -186,6 +186,10 @@ export function RegistrationHubRegistrantsPanel({
                           (registration-hub-config-panel.tsx's own header
                           comment on that different constraint). */}
                       {plural(dict, "reg.hub.registrants.pool.waiting", row.waiting, locale)}
+                      {/* Walk-fix F14: `waiting` is the people Assign can seat; the unpaid ones are named beside it, never
+                          counted in it (their rows offer Remind / Mark paid, not Assign). Absent when nobody owes money. */}
+                      {row.awaiting_payment > 0 &&
+                        ` ${plural(dict, "reg.hub.registrants.pool.awaitingPayment", row.awaiting_payment, locale)}`}
                       {" · "}
                       {plural(dict, "reg.hub.registrants.pool.freeSlots", row.free_slots, locale)}
                     </span>

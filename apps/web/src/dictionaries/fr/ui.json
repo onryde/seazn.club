@@ -1145,6 +1145,8 @@
   "reg.hub.registrants.pool.heading": "Inscriptions individuelles en attente d'une équipe",
   "reg.hub.registrants.pool.waiting.one": "{count} personne en attente",
   "reg.hub.registrants.pool.waiting.other": "{count} personnes en attente",
+  "reg.hub.registrants.pool.awaitingPayment.one": "({count} en attente de paiement)",
+  "reg.hub.registrants.pool.awaitingPayment.other": "({count} en attente de paiement)",
   "reg.hub.registrants.pool.freeSlots.one": "{count} place libre dans vos équipes",
   "reg.hub.registrants.pool.freeSlots.other": "{count} places libres dans vos équipes",
   "reg.hub.registrants.pool.placeBy": "Remboursement automatique après le {date} si personne ne les affecte",

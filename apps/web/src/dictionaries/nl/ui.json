@@ -1145,6 +1145,8 @@
   "reg.hub.registrants.pool.heading": "Solo-inschrijvingen die op een team wachten",
   "reg.hub.registrants.pool.waiting.one": "{count} persoon wachtend",
   "reg.hub.registrants.pool.waiting.other": "{count} personen wachtend",
+  "reg.hub.registrants.pool.awaitingPayment.one": "({count} wacht op betaling)",
+  "reg.hub.registrants.pool.awaitingPayment.other": "({count} wachten op betaling)",
   "reg.hub.registrants.pool.freeSlots.one": "{count} vrije plek in je teams",
   "reg.hub.registrants.pool.freeSlots.other": "{count} vrije plekken in je teams",
   "reg.hub.registrants.pool.placeBy": "Wordt na {date} automatisch terugbetaald als niemand ze plaatst",

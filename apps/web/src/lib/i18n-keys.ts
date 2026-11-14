@@ -6533,6 +6533,8 @@ export type DictionaryKey =
   | "reg.hub.registrants.kindNotAllowed"
   | "reg.hub.registrants.lichess.linkRequired.unnamed"
   | "reg.hub.registrants.lichess.reconnectRequired.unnamed"
+  | "reg.hub.registrants.pool.awaitingPayment.one"
+  | "reg.hub.registrants.pool.awaitingPayment.other"
   | "reg.hub.registrants.pool.freeSlots.one"
   | "reg.hub.registrants.pool.freeSlots.other"
   | "reg.hub.registrants.pool.heading"

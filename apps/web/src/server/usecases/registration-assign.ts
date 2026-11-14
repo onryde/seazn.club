@@ -18,6 +18,7 @@ import "server-only";
 // and this is a caller, not a second copy.
 import type postgres from "postgres";
 import { withTenant } from "@/lib/db";
+import { isSoloAssignableStatus } from "@/lib/registration-status";
 import { HttpError } from "@/lib/errors";
 import { log } from "@/server/logger";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -209,7 +210,7 @@ export async function assignSoloSignUp(
     // approved), and nothing downstream ever charges someone seated early —
     // assign is not a payment path. `paid` is fine: the money is in and only
     // the organiser's own confirm step is outstanding.
-    if (!["confirmed", "paid"].includes(source.status)) {
+    if (!isSoloAssignableStatus(source.status)) {
       throw new HttpError(
         422,
         `This entry is ${source.status} — confirm it (or mark it paid) before placing them on a team`,

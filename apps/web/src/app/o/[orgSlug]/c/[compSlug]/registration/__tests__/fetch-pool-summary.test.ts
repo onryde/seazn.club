@@ -13,6 +13,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { fetchPoolSummary, parseRegistrantsQuery } from "../data";
 import { seedOrg, asOwner, rig } from "@/server/usecases/__tests__/_registration-fixtures";
 import { putRegistrationSettings } from "@/server/usecases/registrations";
+import { deriveRegistrantActionFlags } from "@/components/registration-hub-registrant-derive";
 import { sql } from "@/lib/db";
 import { routes } from "@/lib/routes";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -131,10 +132,11 @@ async function seedTeamEntry(
   return reg.id;
 }
 
-async function seedSolo(
-  divisionId: string,
-  status: "pending" | "paid" | "confirmed" | "waitlisted" | "withdrawn" = "pending",
-): Promise<string> {
+type SoloStatus = "pending" | "paid" | "confirmed" | "waitlisted" | "withdrawn" | "rejected" | "expired";
+
+/** `amountCents` is the entry's OWN fee (`registrations.amount_cents`, the column `entryWaitingOn` reads for "waiting on
+ *  payment"); 0 = a free entry, so a `pending` one is waiting on the organiser's approval, never on money. */
+async function seedSolo(divisionId: string, status: SoloStatus = "pending", amountCents = 0): Promise<string> {
   const [{ competition_id: competitionId }] = await sql<{ competition_id: string }[]>`
     select competition_id from divisions where id = ${divisionId}`;
   const [group] = await sql<{ id: string }[]>`
@@ -142,8 +144,8 @@ async function seedSolo(
     values (${competitionId}, 'Solo Contact', ${`s-${randomUUID().slice(0, 8)}@test.local`}, ${`tok-${randomUUID()}`}, 'gbp')
     returning id`;
   const [reg] = await sql<{ id: string }[]>`
-    insert into registrations (group_id, division_id, display_name, free_agent, status)
-    values (${group.id}, ${divisionId}, ${"Solo " + randomUUID().slice(0, 4)}, true, ${status})
+    insert into registrations (group_id, division_id, display_name, free_agent, status, amount_cents)
+    values (${group.id}, ${divisionId}, ${"Solo " + randomUUID().slice(0, 4)}, true, ${status}, ${amountCents})
     returning id`;
   return reg.id;
 }
@@ -188,7 +190,7 @@ describe.skipIf(!HAS_DB)("fetchPoolSummary — real Postgres", () => {
     await seedTeamEntry(division.id, 4); // full: 4/4, free 0
     await seedTeamEntry(division.id, 1); // 1/4, free 3
     await seedTeamEntry(division.id, 2); // 2/4, free 2
-    await seedSolo(division.id, "pending");
+    await seedSolo(division.id, "confirmed");
 
     const rows = await fetchPoolSummary(owner, competition.id);
     expect(rows).toEqual([
@@ -196,6 +198,7 @@ describe.skipIf(!HAS_DB)("fetchPoolSummary — real Postgres", () => {
         division_id: division.id,
         division_name: division.name,
         waiting: 1,
+        awaiting_payment: 0,
         free_slots: 5,
         place_by_at: null,
       },
@@ -220,7 +223,7 @@ describe.skipIf(!HAS_DB)("fetchPoolSummary — real Postgres", () => {
     const { competition } = await rig(owner);
     const division = await seedCustomTeamDivision(owner, competition.id, { lineupSize: 2, benchMax: 1 });
     const team = await seedTeamEntry(division.id, 0);
-    const stillWaiting = await seedSolo(division.id, "pending");
+    const stillWaiting = await seedSolo(division.id, "paid");
     const assigned = await seedSolo(division.id, "confirmed");
     await markAssigned(team, assigned);
     await seedSolo(division.id, "withdrawn"); // never held a spot the sweep would count
@@ -241,21 +244,106 @@ describe.skipIf(!HAS_DB)("fetchPoolSummary — real Postgres", () => {
       benchMax: 0,
       closesAt: "2026-10-01T00:00:00Z",
     });
-    await seedSolo(withClosesOnly.id, "pending");
+    await seedSolo(withClosesOnly.id, "confirmed");
     const withNeither = await seedCustomTeamDivision(owner, competition.id, { lineupSize: 1, benchMax: 0 });
-    await seedSolo(withNeither.id, "pending");
+    await seedSolo(withNeither.id, "confirmed");
     const withPlaceBy = await seedCustomTeamDivision(owner, competition.id, {
       lineupSize: 1,
       benchMax: 0,
       placeByAt: "2026-09-15T00:00:00Z",
       closesAt: "2026-10-01T00:00:00Z", // place_by_at must win over this
     });
-    await seedSolo(withPlaceBy.id, "pending");
+    await seedSolo(withPlaceBy.id, "confirmed");
 
     const rows = await fetchPoolSummary(owner, competition.id);
     const byId = new Map(rows.map((r) => [r.division_id, r]));
     expect(byId.get(withClosesOnly.id)?.place_by_at).toBe("2026-10-01T00:00:00.000Z");
     expect(byId.get(withNeither.id)?.place_by_at).toBeNull();
     expect(byId.get(withPlaceBy.id)?.place_by_at).toBe("2026-09-15T00:00:00.000Z");
+  });
+  // Walk-fix F14: the banner said "4 people waiting" while one of the four (an unpaid solo) had no Assign control — assign is
+  // not a payment path, so the server refuses a `pending` source (registration-assign.ts) and the row offers no Assign.
+  // `waiting` is now the people Assign can seat; an unpaid solo is counted apart as `awaiting_payment`.
+  it("counts only the people Assign can seat as waiting; an unpaid solo is awaiting_payment, a free pending one is neither", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition } = await rig(owner);
+    const division = await seedCustomTeamDivision(owner, competition.id, { lineupSize: 2, benchMax: 1 });
+    await seedSolo(division.id, "confirmed");
+    await seedSolo(division.id, "paid", 200);
+    await seedSolo(division.id, "pending", 200); // unpaid
+    await seedSolo(division.id, "pending", 200); // unpaid
+    await seedSolo(division.id, "pending", 0); // free, awaiting the organiser's approval: not money, not assignable
+    await seedSolo(division.id, "waitlisted", 200);
+
+    const rows = await fetchPoolSummary(owner, competition.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ division_id: division.id, waiting: 2, awaiting_payment: 2 });
+  });
+
+  it("still lists a division whose only solo sign-ups are unpaid (waiting 0, awaiting_payment > 0) — and none whose only one awaits approval", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition } = await rig(owner);
+    const unpaidOnly = await seedCustomTeamDivision(owner, competition.id, { lineupSize: 2, benchMax: 1 });
+    await seedSolo(unpaidOnly.id, "pending", 500);
+    const approvalOnly = await seedCustomTeamDivision(owner, competition.id, { lineupSize: 2, benchMax: 1 });
+    await seedSolo(approvalOnly.id, "pending", 0);
+
+    const rows = await fetchPoolSummary(owner, competition.id);
+    expect(rows.map((r) => r.division_id)).toEqual([unpaidOnly.id]);
+    expect(rows[0]).toMatchObject({ waiting: 0, awaiting_payment: 1 });
+  });
+
+  // Parity sweep over every status a solo sign-up can be in: the banner's `waiting` holds a person exactly when that
+  // person's own hub row offers Assign (deriveRegistrantActionFlags — the control the walkthrough found missing on the
+  // counted row). One division per status, so each status's count is read on its own.
+  it("counts a solo sign-up as waiting exactly when its hub row offers Assign — every status", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition } = await rig(owner);
+    const cases: { status: SoloStatus; amountCents: number }[] = [
+      { status: "pending", amountCents: 300 },
+      { status: "pending", amountCents: 0 },
+      { status: "paid", amountCents: 300 },
+      { status: "confirmed", amountCents: 0 },
+      { status: "confirmed", amountCents: 300 },
+      { status: "waitlisted", amountCents: 300 },
+      { status: "withdrawn", amountCents: 300 },
+      { status: "rejected", amountCents: 300 },
+      { status: "expired", amountCents: 300 },
+    ];
+    const seeded: { status: SoloStatus; amountCents: number; divisionId: string }[] = [];
+    for (const c of cases) {
+      const division = await seedCustomTeamDivision(owner, competition.id, { lineupSize: 2, benchMax: 1 });
+      await seedSolo(division.id, c.status, c.amountCents);
+      seeded.push({ ...c, divisionId: division.id });
+    }
+
+    const byId = new Map((await fetchPoolSummary(owner, competition.id)).map((r) => [r.division_id, r]));
+    let checked = 0;
+    let assignable = 0;
+    for (const s of seeded) {
+      const flags = deriveRegistrantActionFlags({
+        status: s.status,
+        approval: "auto",
+        amount_cents: s.amountCents,
+        refunded_cents: 0,
+        late_refunded_cents: 0,
+        payment_intent_id: null,
+        entry_payment_intent_id: null,
+        approved_at: null,
+        division_fee_cents: s.amountCents,
+        free_agent: true,
+        assigned_team_id: null,
+        division_started: false,
+      });
+      expect.soft(byId.get(s.divisionId)?.waiting ?? 0, `${s.status}/${s.amountCents}`).toBe(flags.canAssign ? 1 : 0);
+      checked++;
+      if (flags.canAssign) assignable++;
+    }
+    expect(checked).toBe(cases.length);
+    // Both sides of the rule reached: some statuses are assignable, some are not.
+    expect(assignable).toBe(3);
   });
 });

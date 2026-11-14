@@ -10,7 +10,7 @@
 import type { RegistrationListRow } from "@/server/usecases/registrations";
 import type { RegistrationFormField } from "@/server/api-v1/schemas";
 import type { RegistrantsFilters, ConsentStatus } from "@/app/o/[orgSlug]/c/[compSlug]/registration/data";
-import { isTerminalRegistrationStatus, ownPaymentRefundedCents } from "@/lib/registration-status";
+import { isSoloAssignableStatus, isTerminalRegistrationStatus, ownPaymentRefundedCents } from "@/lib/registration-status";
 // registrantKindLabel is reachable from registration-hub-registrant-filters.tsx
 // (a CLIENT component), which is why this pulls `t` from the client-safe
 // i18n-runtime rather than lib/i18n — lib/i18n starts with `import
@@ -429,7 +429,7 @@ export function deriveRegistrantActionFlags(
       row.free_agent &&
       row.assigned_team_id === null &&
       nonTerminal &&
-      (row.status === "confirmed" || row.status === "paid"),
+      isSoloAssignableStatus(row.status),
     canUnassign: row.free_agent && row.assigned_team_id !== null && !row.division_started,
   };
 }
