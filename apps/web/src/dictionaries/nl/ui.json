@@ -6358,6 +6358,7 @@
   "scorepad.skin.cricket.context.over": "Over",
   "scorepad.skin.cricket.context.runRate": "RR",
   "scorepad.skin.cricket.scorebug.batting": "Aan slag",
+  "scorepad.skin.cricket.scorebug.battingSide": "{side} aan slag",
   "scorepad.skin.cricket.scorebug.overs": "Overs",
   "pad.cricket.sheet.toss.wonBy.title": "Wie heeft de toss gewonnen?",
   "pad.cricket.sheet.toss.elected.title": "Batten of bowlen?",

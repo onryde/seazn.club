@@ -99,21 +99,29 @@ const wholeTexts = (html: string): string[] =>
   [...html.matchAll(/>([^<>]+)</g)].map((m) => m[1]!.replace(/&amp;/g, "&").trim()).filter((s) => s.length > 0);
 
 /** The offered sports whose pad says NO side word even with rostered sides (the control's own render): there is no word
- *  for a name to stand in. Cricket (offered since 2026-11-14): its scorebug reads "Batting" and "Overs", never a side, and
- *  the striker/bowler pickers name players. Read off the render, never typed; the pin below says which sport it is today. */
+ *  for a name to stand in. Cricket (offered since 2026-11-14): its scorebug names the batting side by the entrant's name
+ *  ("Red Bibs batting", sign-off 2026-11-14), never by a side word, and the striker/bowler pickers name players. Read off
+ *  the render, never typed; the pin below says which sport it is today. */
 const WORDLESS = QM_SPORTS.filter((k) => {
   const texts = wholeTexts(render(k, true));
   return !SIDES.some((s) => texts.includes(WORD[s]));
 });
 
 describe("a name-only side is called by its name on the pad, in every sport a quick match offers", () => {
-  it("the sports whose pad says no side word at all: cricket, today (its scorebug names no side; a follow-up)", () => {
+  it("the sports whose pad says no side word at all: cricket, today (its scorebug names the batting side by name)", () => {
     expect(WORDLESS).toEqual(["cricket"]);
     // Nor does its name-only pad: no word, and no name standing where none stood.
     for (const k of WORDLESS) {
       const texts = wholeTexts(render(k, false));
       for (const s of SIDES) expect(texts.includes(WORD[s]) || texts.includes(NAMES[s]), `${k} ${s}`).toBe(false);
     }
+  });
+
+  it("cricket's scorebug names the batting side through the real ScorePad, rostered or not (sign-off 2026-11-14)", () => {
+    // After `core.start` with no toss the engine sends the home side in (`battingFirst`); the label is the dictionary's own.
+    const label = en["scorepad.skin.cricket.scorebug.battingSide"].replace("{side}", NAMES.home);
+    expect(label, "premise: the label is not the bare name").not.toBe(NAMES.home);
+    for (const rostered of [false, true]) expect(wholeTexts(render("cricket", rostered)), `rostered ${rostered}`).toContain(label);
   });
 
   it("no element reads Home or Away, and each side's name is on the pad", () => {

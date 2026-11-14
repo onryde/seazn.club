@@ -7843,6 +7843,7 @@ export type DictionaryKey =
   | "scorepad.skin.cricket.header.target"
   | "scorepad.skin.cricket.header.wickets"
   | "scorepad.skin.cricket.scorebug.batting"
+  | "scorepad.skin.cricket.scorebug.battingSide"
   | "scorepad.skin.cricket.scorebug.overs"
   | "scorepad.skin.football.group.cards"
   | "scorepad.skin.football.group.goals"

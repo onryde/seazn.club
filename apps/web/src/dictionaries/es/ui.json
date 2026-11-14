@@ -6358,6 +6358,7 @@
   "scorepad.skin.cricket.context.over": "Over",
   "scorepad.skin.cricket.context.runRate": "RR",
   "scorepad.skin.cricket.scorebug.batting": "Bateo",
+  "scorepad.skin.cricket.scorebug.battingSide": "{side} al bate",
   "scorepad.skin.cricket.scorebug.overs": "Overs",
   "pad.cricket.sheet.toss.wonBy.title": "¿Quién ganó el sorteo?",
   "pad.cricket.sheet.toss.elected.title": "¿Batear o lanzar?",
