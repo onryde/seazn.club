@@ -25,7 +25,7 @@ import "server-only";
 //   materialise          confirmed entry -> entrant: materialise, join an existing entrant, clear the expiry
 //   waitlist             waitlist promotion: the queue order and a place in it (sibling-only), the move back to its end (returnToWaitlist, sibling-only), the seat gate, promote the oldest, the promoted notice
 //   mail                 registration mail: cart confirmation (submit, resend) and the payment reminder message
-//   lifecycle-mail       the registrant's lifecycle mails (payment received, approved, released, withdrawn by the organiser, joined, rejected, promotion lapsed): one queue producer per kind
+//   lifecycle-mail       the registrant's lifecycle mails (payment received, approved, released, withdrawn by the organiser, joined, rejected, promotion lapsed, promotion skipped): one queue producer per kind
 //   settings             organiser settings (defaults, get / put) and the public register-panel info
 //   places-left          the panel's places-left count, against submit's cap min(capacity, plan limit); pure, sibling-only
 //   checkout             minting and resuming a Stripe checkout for a registration or a cart
