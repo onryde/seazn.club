@@ -186,7 +186,9 @@ vi.mock("@/lib/db", () => ({
       // queries, each distinguished by its own leading column list so none
       // of them can fall through to the divisionRowsQueries default below
       // (see the h.poolWaitingRows doc comment above for why that matters).
-      if (first.startsWith("select r.division_id, count(*)::int as waiting")) {
+      // Walk-fix F14 split the count into `waiting` / `awaiting_payment` (two `count(*) filter (...)` columns), so the query's
+      // first raw chunk now ends at the SOLO_ASSIGNABLE_STATUSES fragment.
+      if (/^select r\.division_id,\s+count\(\*\) filter \(where r\.status in$/.test(first)) {
         h.poolQueries += 1;
         return Promise.resolve(h.poolWaitingRows);
       }
@@ -522,7 +524,7 @@ describe("registration hub — Registrants tab data wiring (RS005 W2a)", () => {
   // the page's own href-building (division_id + free_agent=1, appended to
   // EACH row) rather than just that SOME array reached the prop.
   it("maps fetchPoolSummary's resolved rows onto the panel's poolSummary prop, with each row's own href", async () => {
-    h.poolWaitingRows = [{ division_id: "div-9", waiting: 2 }];
+    h.poolWaitingRows = [{ division_id: "div-9", waiting: 2, awaiting_payment: 1 }];
     h.poolSlotRows = [{ division_id: "div-9", free_slots: 3 }];
     h.poolMetaRows = [{ division_id: "div-9", division_name: "Div 9", place_by_at: null, closes_at: null }];
     const tree = walkPage(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
@@ -532,6 +534,7 @@ describe("registration hub — Registrants tab data wiring (RS005 W2a)", () => {
         division_id: "div-9",
         division_name: "Div 9",
         waiting: 2,
+        awaiting_payment: 1,
         free_slots: 3,
         place_by_at: null,
         href: "/o/riverside/c/summer-league/registration?tab=registrants&division_id=div-9&free_agent=1",
