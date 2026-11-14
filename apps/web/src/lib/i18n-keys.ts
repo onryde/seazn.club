@@ -9733,6 +9733,7 @@ export type DictionaryKey =
   | "stream.youtube.status.live_no_video"
   | "stream.youtube.status.live_receiving"
   | "stream.youtube.status.not_live"
+  | "stream.youtube.status.not_live_stuck"
   | "stream.youtube.status.pasted_key"
   | "streamDest.add"
   | "streamDest.anotherMatch"

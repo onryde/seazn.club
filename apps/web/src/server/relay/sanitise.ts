@@ -51,7 +51,7 @@ export const ALLOWED_KEYS: ReadonlySet<string> = new Set([
   // ignored late stop (§6.8.2 T24a). Ids and booleans only.
   "dead", "replacedPairingId", "claimRow", "held",
   // YouTube live status (2026-11-14): what YouTube said of a YouTube Connect broadcast and its stream - enum words only
-  // (BroadcastLife, StreamStatus, StreamHealth in server/youtube/port.ts); a `youtube_status` event carries them.
+  // (LifeCycle, StreamStatus, StreamHealth in server/youtube/port.ts); a `youtube_status` event carries them.
   "broadcastLife", "streamStatus", "healthStatus",
   // nesting containers
   "outputs", "inputs", "samples", "summary",

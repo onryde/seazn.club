@@ -672,7 +672,7 @@ const LEGACY = readModel({ legacy: true, phone: null, code: null });
 const session = (over: Partial<StreamSessionView> = {}): StreamSessionView => ({
   id: "s1", fixtureId: "f-1", mode: "passthrough", overlay: null, state: "warming", desiredState: "live",
   failReason: null, health: null, ingest: { state: "disconnected", protocol: null }, output: null,
-  balance: 2, startedAt: null, endedAt: null, replayUrl: null, replayParts: [], youtubeVideoUrl: null, youtubeStatus: null,
+  balance: 2, startedAt: null, endedAt: null, replayUrl: null, replayParts: [], youtubeVideoUrl: null, youtubeStatus: null, youtubeLiveForMs: null,
   target: { id: "t1", kind: "youtube", label: "Club" }, fixtureDecided: false, fixtureHeld: false, endReason: null, creditUsed: false,
   startCause: "organiser", restart: null, countdown: null,
   ...over,
@@ -5152,6 +5152,33 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     expect(bodyOf(island).view?.state, "premise: the session ended").toBe("completed");
     expect(line(), "no status line on an ended session").toBeUndefined();
   });
+
+  // Fix round 1, I2 (the inert-seam rule): the server's measured age travels through the container's OWN poll, so the line turns amber on
+  // the poll that carries the three-minute mark - no reload, no browser clock - and goes emerald on the poll that says it is live.
+  it("Fix round 1, I2: a not_live that persists turns amber ON THE POLL that carries the mark, and a flip to live replaces it - the browser's clock is never asked", async () => {
+    const WARN_MS = 3 * 60_000;
+    const LIVE = { id: "s1", state: "live" as const, startedAt: "2026-09-14T11:50:00Z", youtubeVideoUrl: "https://www.youtube.com/watch?v=vvvvvvvvvvv" };
+    const s = serve({ current: session({ ...LIVE, youtubeStatus: "not_live", youtubeLiveForMs: 60_000 }), targets: TARGETS });
+    const island = track(await mount(s));
+    const line = () => byTestId(walk(expandWithHooks(PhoneTabBody, bodyOf(island))), "stream-youtube-live-status");
+    const seenLine = () => [attr(line()!, "data-status"), attr(line()!, "data-tone"), textOf(line()!).replace(/\s+/g, " ").trim()];
+    expect(seenLine(), "the first poll: a minute in, not live - the plain slate line").toEqual(["not_live", "slate", m("stream.youtube.status.not_live")]);
+
+    let seen = 0;
+    for (const [age, word, tone, key] of [
+      [WARN_MS - 1, "not_live", "slate", "stream.youtube.status.not_live"],
+      [WARN_MS, "not_live", "amber", "stream.youtube.status.not_live_stuck"],
+      [WARN_MS + 5_000, "not_live", "amber", "stream.youtube.status.not_live_stuck"],
+      [WARN_MS + 10_000, "live_receiving", "emerald", "stream.youtube.status.live_receiving"],
+    ] as const) {
+      s.current = session({ ...LIVE, youtubeStatus: word, youtubeLiveForMs: age });
+      await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
+      await settle();
+      expect(seenLine(), `the poll at age ${age}`).toEqual([word, tone, m(key)]);
+      seen++;
+    }
+    expect(seen, "anti-vacuity: every poll was read").toBe(4);
+  });
 });
 
 // ─── R2006 (owner ruling 2026-10-19, "Option C"): the score on the Phone tab ───────────────────────────────────────────
@@ -6596,6 +6623,62 @@ describe("Owner direction 2026-11-14: the live YouTube status line", () => {
       }
     }
     expect(hidden, "anti-vacuity: 5 states x 4 words").toBe(20);
+  });
+
+  // Fix round 1, I2: a not_live that persists is amber. The ruling's three minutes (typed here) after live_at, on the server's measured
+  // age; the word and `data-status` stay not_live, only the line's copy, tone and icon move.
+  it("a not_live aged three minutes is the amber 'Still not live on YouTube' line - one ms short of it is still the slate one; the word and its hook never change", () => {
+    const WARN_MS = 3 * 60_000;
+    const at = (age: number | null) => liveView("not_live", { youtubeLiveForMs: age });
+    let checked = 0;
+    for (const [age, tone, key, Icon] of [
+      [null, "slate", "stream.youtube.status.not_live", Info],
+      [0, "slate", "stream.youtube.status.not_live", Info],
+      [WARN_MS - 1, "slate", "stream.youtube.status.not_live", Info],
+      [WARN_MS, "amber", "stream.youtube.status.not_live_stuck", TriangleAlert],
+      [WARN_MS + 1, "amber", "stream.youtube.status.not_live_stuck", TriangleAlert],
+      [60 * 60_000, "amber", "stream.youtube.status.not_live_stuck", TriangleAlert],
+    ] as const) {
+      const view = at(age);
+      const tree = body({ view, youtube: youtubeLinkOf(view), balance: 1 });
+      expect(allTestIds(tree, LINE).length, `age ${age}: still ONE line`).toBe(1);
+      const el = byTestId(tree, LINE)!;
+      expect(attr(el, "data-status"), `age ${age}: the word is still not_live`).toBe("not_live");
+      expect(attr(el, "data-tone"), `age ${age}`).toBe(tone);
+      expect(textAt(tree, LINE), `age ${age}`).toBe(m(key));
+      const icons = walk(propsOf(el).children as ReactElement[]).filter((k) => k.type === Icon);
+      expect(icons.length, `age ${age}: its icon`).toBe(1);
+      checked++;
+    }
+    expect(checked).toBe(6);
+    expect(m("stream.youtube.status.not_live_stuck"), "the ruling's sentence").toBe("Still not live on YouTube - check Studio");
+    // The positive pair: the same age on a word that is NOT not_live never becomes the 'still not live' line.
+    for (const w of ["live_receiving", "live_no_video"] as const) {
+      expect(attr(byTestId(body({ view: liveView(w, { youtubeLiveForMs: WARN_MS * 10 }), balance: 1 }), LINE)!, "data-tone"), w).toBe(TONE[w]);
+      expect(textAt(body({ view: liveView(w, { youtubeLiveForMs: WARN_MS * 10 }), balance: 1 }), LINE), w).toBe(m(`stream.youtube.status.${w}`));
+    }
+  });
+
+  it("the amber line reads as each locale's OWN sentence (checked === 4), and the three translated locales differ from English", () => {
+    const en = uiDict("en");
+    let checked = 0;
+    for (const l of LOCALES) {
+      const d = uiDict(l);
+      const view = liveView("not_live", { youtubeLiveForMs: 3 * 60_000 });
+      const html = renderToStaticMarkup(
+        <DictProvider dict={d} locale={l}>
+          <PhoneTabBody {...BODY} view={view} balance={1} youtube={youtubeLinkOf(view)} />
+        </DictProvider>,
+      );
+      const text = /data-testid="stream-youtube-live-status"[^>]*>(?:<[^>]*>)*<span[^>]*>([^<]+)</.exec(html)?.[1] ?? "";
+      const key = "stream.youtube.status.not_live_stuck";
+      expect(d[key], `${l} ${key}`).toBeTypeOf("string");
+      expect(text, `${l}: the drawn line`).toBe(d[key]);
+      expect(html, `${l}: amber`).toMatch(/data-status="not_live"[^>]*data-tone="amber"|data-tone="amber"[^>]*data-status="not_live"/);
+      if (l !== "en") expect(d[key], `${l} ${key} is translated`).not.toBe(en[key]);
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
 
   it("every locale (checked === 16): each word reads as that locale's own dictionary sentence, and the three translated locales differ from English", () => {

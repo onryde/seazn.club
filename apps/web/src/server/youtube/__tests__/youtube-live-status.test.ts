@@ -4,7 +4,11 @@
 //   * the first read is 60 s after the session went live, never before;
 //   * every change of word is ONE session event, written in the same transaction as the stored word; a read that changes nothing
 //     writes nothing;
-//   * an API error (or an answer that says nothing) is NOT a word: the previous one is carried and nothing is recorded;
+//   * an API error (or an answer that says nothing) is NOT a word: the previous one is carried and nothing is recorded - EXCEPT a dead
+//     grant, which clears the word (nothing will ever refresh it);
+//   * a broadcast YouTube is still starting (`liveStarting`) is not live: not_live, even beside an active, healthy stream;
+//   * a not_live that persists past NOT_LIVE_WARN_MS reads amber on the panel (the view carries the server's own age, `youtubeLiveForMs`);
+//   * a stream that has said live_receiving three reads in a row is read every five minutes, not every minute, until any other word;
 //   * a pasted key has no YouTube API behind it: no call, and the panel says the status is unavailable;
 //   * a session that has ended is never read.
 //
@@ -27,7 +31,11 @@ import { pairPresentPhone, rigUser, spendMonthlyStreamGrant } from "@/server/rel
 import { divisionRig, seedOrg } from "@/server/usecases/__tests__/_rig";
 import { grantCredits } from "@/server/usecases/stream-credits";
 import { createSession as organiserStart, currentSession, stopSession, tickOpenSessions, type SessionDeps } from "@/server/usecases/stream-sessions";
-import { YOUTUBE_STATUS_FIRST_READ_AFTER_MS, YOUTUBE_STATUS_READ_EVERY_MS } from "@/server/usecases/stream-sessions/youtube-status";
+import { youtubeStatusLineOf } from "@/lib/stream-session-view";
+import { NOT_LIVE_WARN_MS } from "@/lib/youtube";
+import {
+  YOUTUBE_STATUS_FIRST_READ_AFTER_MS, YOUTUBE_STATUS_READ_EVERY_MS, YOUTUBE_STATUS_STEADY_AFTER_READS, YOUTUBE_STATUS_STEADY_EVERY_MS,
+} from "@/server/usecases/stream-sessions/youtube-status";
 import { createStreamTarget } from "@/server/usecases/stream-targets";
 import { FakeYouTube } from "../fake";
 import { type YoutubeErrorCode } from "../port";
@@ -125,6 +133,13 @@ describe("the constants", () => {
   it("the read window is shorter than a minute, so prod's every-minute stream tick always finds it open (and not shorter than a poll, so one open panel is not a read per poll)", () => {
     expect(YOUTUBE_STATUS_READ_EVERY_MS).toBeLessThan(60 * SEC);
     expect(YOUTUBE_STATUS_READ_EVERY_MS, "STREAM_POLL_MS is 5 s: a window at or under it is a read per poll").toBeGreaterThan(5 * SEC);
+  });
+
+  it("the back-off numbers are the ruling's, typed here: three reads in a row, then five minutes less the cron's 5 s early allowance; the warn mark is three minutes", () => {
+    expect(YOUTUBE_STATUS_STEADY_AFTER_READS, "fix round 1, I3: three consecutive live_receiving reads").toBe(3);
+    expect(YOUTUBE_STATUS_STEADY_EVERY_MS, "every five minutes, with the same 5 s early-firing allowance the fast window carries").toBe(5 * 60 * SEC - 5 * SEC);
+    expect(YOUTUBE_STATUS_STEADY_EVERY_MS, "a firing a whole minute on finds the window open: 5 minutes of cron firings is the read").toBeLessThan(5 * 60 * SEC);
+    expect(NOT_LIVE_WARN_MS, "fix round 1, I2: three minutes after live_at").toBe(3 * 60 * SEC);
   });
 });
 
@@ -228,7 +243,7 @@ describe.skipIf(!HAS_DB)("the YouTube live status word: the real tick and the re
     expect(ev[2]!.payload).toEqual({ broadcastLife: "live", streamStatus: "ready", healthStatus: "noData" });
   });
 
-  it("an API ERROR is not a word: the previous word is carried, nothing is recorded, the tick does not fail - for each read, for a dead grant, the quota and an outage; the NEXT window reads again", async () => {
+  it("an API ERROR is not a word: the previous word is carried, nothing is recorded, the tick does not fail - for each read, for the quota, an outage and a live-blocked channel; the NEXT window reads again (a DEAD GRANT is the next test: it clears)", async () => {
     const r = await rig();
     const { sid, liveAt } = await r.live();
     const stream = await r.streamOf(sid);
@@ -239,20 +254,24 @@ describe.skipIf(!HAS_DB)("the YouTube live status word: the real tick and the re
     await readNow();
     expect((await r.view()).youtubeStatus, "premise: receiving").toBe("live_receiving");
 
-    const errors: [("broadcastLife" | "streamStatus" | "accessToken"), YoutubeErrorCode][] = [
-      ["broadcastLife", "youtube_unavailable"], ["broadcastLife", "youtube_limit_reached"], ["broadcastLife", "youtube_reconnect_needed"],
-      ["streamStatus", "youtube_unavailable"], ["streamStatus", "youtube_limit_reached"], ["streamStatus", "youtube_reconnect_needed"],
-      ["accessToken", "youtube_unavailable"],
+    // `insufficientLivePermissions` is Google's reason for "the channel may not go live" - a fact about the CHANNEL, not a dead grant
+    // (port.ts isLiveBlockedRefusal): a reconnect refusal WITH that reason is carried like an outage; without it, it is a dead grant.
+    const errors: [("broadcastLife" | "streamStatus" | "accessToken"), YoutubeErrorCode, string | undefined][] = [
+      ["broadcastLife", "youtube_unavailable", undefined], ["broadcastLife", "youtube_limit_reached", undefined],
+      ["broadcastLife", "youtube_reconnect_needed", "insufficientLivePermissions"],
+      ["streamStatus", "youtube_unavailable", undefined], ["streamStatus", "youtube_limit_reached", undefined],
+      ["streamStatus", "youtube_reconnect_needed", "insufficientLivePermissions"],
+      ["accessToken", "youtube_unavailable", undefined],
     ];
     let checked = 0;
-    for (const [method, code] of errors) {
+    for (const [method, code, reason] of errors) {
       // The truth moves to "no video"; YouTube cannot tell us: the word must stay where it was.
       r.fake.videoOff(stream);
-      r.fake.failNext(method, code);
+      r.fake.failNext(method, code, reason);
       const eventsBefore = (await r.events(sid)).length;
       const m = r.mark();
       const t = await readNow();
-      const what = `${method} refused ${code}`;
+      const what = `${method} refused ${code}${reason ? ` (${reason})` : ""}`;
       expect(r.since(m), `${what}: the call was made`).toContain(method);
       expect(t.failed, `${what}: the tick did not fail`).toBe(0);
       expect((await r.view()).youtubeStatus, `${what}: the previous word is carried, NOT live_no_video`).toBe("live_receiving");
@@ -276,21 +295,94 @@ describe.skipIf(!HAS_DB)("the YouTube live status word: the real tick and the re
     expect(checked, "anti-vacuity: every error case ran").toBe(errors.length);
   });
 
-  it("a status read is READ-ONLY on our side too: a dead grant is carried, and it does NOT move the connection to reconnect_needed (the end step owns that)", async () => {
-    const r = await rig();
-    const { liveAt } = await r.live();
-    r.setNow(liveAt + FIRST_READ_MS);
-    await r.cron();
-    expect((await r.view()).youtubeStatus, "premise: read once").toBe("not_live");
-    const [conn] = await sql<{ status: string }[]>`select status from org_youtube_connections where id = ${r.c.connectionId}`;
-    expect(conn!.status, "premise").toBe("connected");
+  // A DEAD GRANT (fix round 1, m2): the club's connection is revoked, or Google refuses the grant. Nothing will ever refresh the word, so
+  // the stale one is CLEARED - one event (word -> null), the panel shows no line - instead of left saying what was true before. The
+  // read stays read-only on OUR side: the connection is not moved to reconnect_needed here (the end step and the daily check own that).
+  it("a DEAD GRANT clears the stale word (one event, word -> null, no line) - whichever call Google refuses it on - and the connection is left as it was; once the grant works again the word comes back", async () => {
+    const dead: [("accessToken" | "broadcastLife" | "streamStatus"), string | undefined][] = [
+      ["accessToken", "invalidGrant"], ["broadcastLife", undefined], ["streamStatus", undefined],
+    ];
+    let checked = 0;
+    for (const [method, reason] of dead) {
+      const r = await rig();
+      const { sid, liveAt } = await r.live();
+      const stream = await r.streamOf(sid);
+      r.fake.videoOn(stream);
+      r.setNow(liveAt + FIRST_READ_MS);
+      await r.cron();
+      const what = `${method} refused reconnect_needed${reason ? ` (${reason})` : ""}`;
+      expect((await r.view()).youtubeStatus, `${what}: premise - a word to go stale`).toBe("live_receiving");
+      const [conn] = await sql<{ status: string }[]>`select status from org_youtube_connections where id = ${r.c.connectionId}`;
+      expect(conn!.status, `${what}: premise`).toBe("connected");
 
-    r.fake.failNext("accessToken", "youtube_reconnect_needed", "invalidGrant");
+      r.fake.failNext(method, "youtube_reconnect_needed", reason);
+      r.setNow(liveAt + FIRST_READ_MS + YOUTUBE_STATUS_READ_EVERY_MS);
+      expect((await r.cron()).failed, `${what}: the tick does not fail`).toBe(0);
+      const v = await r.view();
+      expect(v.youtubeStatus, `${what}: no word, NOT the last one`).toBeNull();
+      expect(v.youtubeLiveForMs, `${what}: and no age to judge it by`).toBeNull();
+      expect(youtubeStatusLineOf(v), `${what}: the panel shows no line`).toBeNull();
+      expect(await r.stored(sid), `${what}: stored word cleared`).toBeNull();
+      const ev = await r.events(sid);
+      expect(ev.map((e) => [e.from_state, e.to_state]), `${what}: one event for the clearing`).toEqual([[null, "live_receiving"], ["live_receiving", null]]);
+      expect(ev[1]!.payload, `${what}: says why, in words`).toEqual({ reason: "reconnect_needed" });
+      const [after] = await sql<{ status: string }[]>`select status from org_youtube_connections where id = ${r.c.connectionId}`;
+      expect(after!.status, `${what}: the connection is left as it was`).toBe("connected");
+
+      // Still dead next window: nothing left to clear, so NOTHING more is recorded (the quiet read stays quiet).
+      r.fake.failNext(method, "youtube_reconnect_needed", reason);
+      r.setNow(liveAt + FIRST_READ_MS + 2 * YOUTUBE_STATUS_READ_EVERY_MS);
+      await r.cron();
+      expect((await r.events(sid)).length, `${what}: a second dead read records nothing`).toBe(2);
+      expect((await r.view()).youtubeStatus).toBeNull();
+
+      // The grant works again: the word comes back from null (not from the stale word), as one more event.
+      r.setNow(liveAt + FIRST_READ_MS + 3 * YOUTUBE_STATUS_READ_EVERY_MS);
+      await r.cron();
+      expect((await r.view()).youtubeStatus, `${what}: back`).toBe("live_receiving");
+      expect((await r.events(sid)).map((e) => [e.from_state, e.to_state]).at(-1), `${what}: from nothing`).toEqual([null, "live_receiving"]);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: each refusal point ran").toBe(dead.length);
+  });
+
+  it("a revoked connection (no token to read with) is a dead grant too: the word is cleared and no call is made - and a session with no word yet records nothing (the empty case)", async () => {
+    // By hand: the real disconnect purges the broadcast rows first (so the claim finds nothing), which leaves this branch guarding the gap.
+    const r = await rig();
+    const { sid, liveAt } = await r.live();
+    const stream = await r.streamOf(sid);
+    r.fake.videoOn(stream);
+    // empty case first: revoked BEFORE any word was ever read - nothing to clear, nothing to record
+    await sql`update org_youtube_connections set status = 'revoked', refresh_token_enc = null, revoked_at = now() where id = ${r.c.connectionId}`;
+    const m = r.mark();
+    r.setNow(liveAt + FIRST_READ_MS);
+    expect((await r.cron()).failed).toBe(0);
+    expect(r.since(m), "no token, so no call to Google at all").toEqual([]);
+    expect(await r.stored(sid)).toBeNull();
+    expect(await r.events(sid), "no word was there to clear").toEqual([]);
+
+    // and with a word: put one in place by hand (as if read while the grant was good), then the revoked read clears it
+    await sql`update fixture_stream_sessions set youtube_status = 'live_receiving' where id = ${sid}`;
+    expect((await r.view()).youtubeStatus, "premise: a word to go stale").toBe("live_receiving");
     r.setNow(liveAt + FIRST_READ_MS + YOUTUBE_STATUS_READ_EVERY_MS);
     await r.cron();
-    expect((await r.view()).youtubeStatus, "carried").toBe("not_live");
-    const [after] = await sql<{ status: string }[]>`select status from org_youtube_connections where id = ${r.c.connectionId}`;
-    expect(after!.status, "the connection is left as it was").toBe("connected");
+    expect((await r.view()).youtubeStatus).toBeNull();
+    expect((await r.events(sid)).map((e) => [e.from_state, e.to_state])).toEqual([["live_receiving", null]]);
+    expect(r.since(m), "still no call").toEqual([]);
+  });
+
+  it("an unreadable stored token (a KEK fault) is NOT a dead grant: it is carried like an outage - the grant may be fine, we just cannot open it", async () => {
+    const r = await rig();
+    const { sid, liveAt } = await r.live();
+    r.fake.videoOn(await r.streamOf(sid));
+    r.setNow(liveAt + FIRST_READ_MS);
+    await r.cron();
+    expect((await r.view()).youtubeStatus, "premise").toBe("live_receiving");
+    await sql`update org_youtube_connections set refresh_token_enc = decode('00112233', 'hex') where id = ${r.c.connectionId}`;
+    r.setNow(liveAt + FIRST_READ_MS + YOUTUBE_STATUS_READ_EVERY_MS);
+    expect((await r.cron()).failed).toBe(0);
+    expect((await r.view()).youtubeStatus, "carried").toBe("live_receiving");
+    expect((await r.events(sid)).length, "nothing recorded").toBe(1);
   });
 
   it("YouTube saying nothing is not a word either: a live broadcast whose stream is `active` with NO health carries the previous word and records nothing", async () => {
@@ -311,6 +403,200 @@ describe.skipIf(!HAS_DB)("the YouTube live status word: the real tick and the re
     r.setNow(liveAt + FIRST_READ_MS + 2 * YOUTUBE_STATUS_READ_EVERY_MS);
     await r.cron();
     expect((await r.view()).youtubeStatus).toBe("live_no_video");
+  });
+
+  // I1: a broadcast YouTube is still STARTING is not live. YouTube's `liveStarting` ("Transition into LIVE has been requested") used to be
+  // collapsed to `live` by the adapter, so a healthy, active stream under it read live_receiving. Driven through the real tick and view.
+  it("a broadcast still `liveStarting` is not_live even with an ACTIVE, GOOD stream beside it (no stream read, the raw value on the event); when YouTube finishes the transition the word moves", async () => {
+    const r = await rig();
+    const { sid, liveAt } = await r.live();
+    const yt = await r.ytIdOf(sid);
+    r.fake.videoOn(await r.streamOf(sid));
+    r.fake.setLifeCycle(yt, "liveStarting");
+    const m = r.mark();
+    r.setNow(liveAt + FIRST_READ_MS);
+    expect((await r.cron()).failed).toBe(0);
+    expect((await r.view()).youtubeStatus, "Transition into LIVE has been requested: not live yet").toBe("not_live");
+    expect(r.statusReadsSince(m), "a broadcast that is not live needs no stream read").toEqual(["broadcastLife"]);
+    const ev = await r.events(sid);
+    expect(ev.map((e) => [e.from_state, e.to_state])).toEqual([[null, "not_live"]]);
+    expect(ev[0]!.payload, "the capture says what YouTube said, raw").toEqual({ broadcastLife: "liveStarting" });
+
+    r.fake.setLifeCycle(yt, null);   // YouTube is done starting: live, and the stream is active and good
+    r.setNow(liveAt + FIRST_READ_MS + YOUTUBE_STATUS_READ_EVERY_MS);
+    await r.cron();
+    expect((await r.view()).youtubeStatus, "the positive pair: the same stream, now under `live`").toBe("live_receiving");
+    expect((await r.events(sid)).map((e) => [e.from_state, e.to_state])).toEqual([[null, "not_live"], ["not_live", "live_receiving"]]);
+  });
+
+  // I2: not_live is "give it a moment" for a minute or two and "go and look" after that. The server measures the age (`youtubeLiveForMs`,
+  // on its clock at the response); the panel's view-model turns it amber from NOT_LIVE_WARN_MS (typed above, 3 minutes after live_at).
+  it("a not_live that PERSISTS turns amber at NOT_LIVE_WARN_MS after live_at - through the real view and the real view-model, both sides of the line - and one that flips to live goes emerald", async () => {
+    const r = await rig();
+    const { sid, liveAt } = await r.live();
+    const [row] = await sql<{ live_at: Date }[]>`select live_at from fixture_stream_sessions where id = ${sid}`;
+    const liveAtMs = new Date(row!.live_at).getTime();
+    expect(liveAtMs, "premise: live_at is the instant the session went live").toBe(liveAt);
+    const stuck = "stream.youtube.status.not_live_stuck";
+    const plain = "stream.youtube.status.not_live";
+
+    // EMPTY first: before the first read there is no word and so no age and no line
+    r.setNow(liveAtMs + 30 * SEC);
+    const early = await r.view();
+    expect([early.youtubeStatus, early.youtubeLiveForMs, youtubeStatusLineOf(early)], "no word, no age, no line").toEqual([null, null, null]);
+
+    let checked = 0;
+    for (const [dt, tone, key] of [
+      [FIRST_READ_MS, "slate", plain],
+      [2 * 60 * SEC, "slate", plain],
+      [NOT_LIVE_WARN_MS - 1, "slate", plain],
+      [NOT_LIVE_WARN_MS, "amber", stuck],
+      [NOT_LIVE_WARN_MS + 1, "amber", stuck],
+      [10 * 60 * SEC, "amber", stuck],
+    ] as const) {
+      r.setNow(liveAtMs + dt);
+      const v = await r.view();   // the poll is a tick: it may read, and the broadcast stays `ready` (no video), so the word stays not_live
+      expect(v.youtubeStatus, `+${dt} ms: the word does not change - only the line does`).toBe("not_live");
+      expect(v.youtubeLiveForMs, `+${dt} ms: the server's own age, on the test clock`).toBe(dt);
+      const line = youtubeStatusLineOf(v);
+      expect([dt, line?.status, line?.tone, line?.key]).toEqual([dt, "not_live", tone, key]);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every age checked").toBe(6);
+
+    // It flips: video arrives, the broadcast goes live. The same age, a different word: emerald, never the "still not live" copy.
+    r.fake.videoOn(await r.streamOf(sid));
+    r.setNow(liveAtMs + 12 * 60 * SEC);
+    const flipped = await r.view();
+    expect(flipped.youtubeStatus, "the broadcast kept being read while it was not live, so it can flip").toBe("live_receiving");
+    expect(flipped.youtubeLiveForMs).toBe(12 * 60 * SEC);
+    expect(youtubeStatusLineOf(flipped)).toMatchObject({ status: "live_receiving", tone: "emerald", key: "stream.youtube.status.live_receiving" });
+  });
+
+  // I3: the quota is shared by every org (10,000 units a day). A stream that has said live_receiving three reads in a row is read every
+  // five minutes; ANY other word brings the fast window back. Driven through the real tick; the run is read out of the row.
+  it("BACK-OFF: after three live_receiving reads in a row the next read waits the steady window (not the fast one), and a CHANGE of word brings the fast window straight back", async () => {
+    const r = await rig();
+    const { sid, liveAt } = await r.live();
+    const stream = await r.streamOf(sid);
+    r.fake.videoOn(stream);
+    const run = async () => (await sql<{ s: number }[]>`select youtube_status_steady as s from fixture_stream_sessions where id = ${sid}`)[0]!.s;
+    let reads = 0;
+    /** Tick at `at` through the cron and the poll, and say whether YouTube was asked. */
+    const asked = async (at: number): Promise<boolean> => {
+      const m = r.mark();
+      r.setNow(at);
+      await r.cron();
+      await r.view();
+      const calls = r.statusReadsSince(m);
+      if (calls.length > 0) reads++;
+      return calls.length > 0;
+    };
+
+    let t = liveAt + FIRST_READ_MS;
+    for (const want of [1, 2, 3]) {
+      expect(await asked(t), `read ${want}: a fast-window read`).toBe(true);
+      expect(await run(), `after read ${want} the run is ${want}`).toBe(want);
+      t += YOUTUBE_STATUS_READ_EVERY_MS;
+    }
+    const third = t - YOUTUBE_STATUS_READ_EVERY_MS;
+    expect((await r.view()).youtubeStatus).toBe("live_receiving");
+    // The back-off: where the fast window WOULD read, nothing is read.
+    expect(await asked(third + YOUTUBE_STATUS_READ_EVERY_MS), "a fast window after the third read: no read").toBe(false);
+    expect(await asked(third + 2 * YOUTUBE_STATUS_READ_EVERY_MS), "two fast windows on: still no read").toBe(false);
+    expect(await asked(third + YOUTUBE_STATUS_STEADY_EVERY_MS - 1), "one ms inside the steady window: no read").toBe(false);
+    expect(await asked(third + YOUTUBE_STATUS_STEADY_EVERY_MS), "AT the steady window: one read").toBe(true);
+    expect(await run(), "the run is capped at the threshold").toBe(YOUTUBE_STATUS_STEADY_AFTER_READS);
+    expect(await asked(third + YOUTUBE_STATUS_STEADY_EVERY_MS + YOUTUBE_STATUS_READ_EVERY_MS), "and the steady window starts again from THAT read").toBe(false);
+
+    // The stall: read at the next steady window. It is a change of word, so the run is zeroed and the fast window is back at once.
+    r.fake.videoOff(stream);
+    const slow = third + 2 * YOUTUBE_STATUS_STEADY_EVERY_MS;
+    expect(await asked(slow - 1), "the stall is not seen before the steady window is up").toBe(false);
+    expect(await asked(slow), "read at the steady window").toBe(true);
+    expect((await r.view()).youtubeStatus).toBe("live_no_video");
+    expect(await run(), "the word changed: the run is zero").toBe(0);
+    expect(await asked(slow + YOUTUBE_STATUS_READ_EVERY_MS - 1), "inside the fast window: no read").toBe(false);
+    expect(await asked(slow + YOUTUBE_STATUS_READ_EVERY_MS), "AT the fast window: read again - the fast window is back").toBe(true);
+    expect(reads, "anti-vacuity: 3 fast reads, 2 steady-window reads, 1 fast read after the change").toBe(6);
+    expect((await r.events(sid)).map((e) => [e.from_state, e.to_state])).toEqual([[null, "live_receiving"], ["live_receiving", "live_no_video"]]);
+  });
+
+  it("the run counts CONSECUTIVE live_receiving reads only: receiving, receiving, no video, receiving, receiving is still the fast window; the third in a row after that is not", async () => {
+    const r = await rig();
+    const { sid, liveAt } = await r.live();
+    const stream = await r.streamOf(sid);
+    const run = async () => (await sql<{ s: number }[]>`select youtube_status_steady as s from fixture_stream_sessions where id = ${sid}`)[0]!.s;
+    let t = liveAt + FIRST_READ_MS;
+    const read = async (video: boolean): Promise<void> => {
+      if (video) r.fake.videoOn(stream); else r.fake.videoOff(stream);
+      r.setNow(t);
+      await r.cron();
+      t += YOUTUBE_STATUS_READ_EVERY_MS;
+    };
+    // the stream must be live for a "no video" word: start it receiving
+    const seq: [boolean, number][] = [[true, 1], [true, 2], [false, 0], [true, 1], [true, 2], [true, 3]];
+    let checked = 0;
+    for (const [video, want] of seq) {
+      const m = r.mark();
+      await read(video);
+      expect(r.statusReadsSince(m).length, `read ${checked + 1}: the fast window held, so it was read`).toBeGreaterThan(0);
+      expect(await run(), `read ${checked + 1}`).toBe(want);
+      checked++;
+    }
+    expect(checked, "anti-vacuity").toBe(6);
+    const m = r.mark();
+    r.setNow(t);   // one fast window after the sixth read (t already advanced by it)
+    await r.cron();
+    expect(r.statusReadsSince(m), "three in a row at last: the fast window no longer reads").toEqual([]);
+  });
+
+  it("a stream that is NOT receiving is never backed off - not_live and live_no_video are read every fast window, however long they hold; and an error read leaves the run where it was", async () => {
+    const r = await rig();
+    const { sid, liveAt } = await r.live();
+    const stream = await r.streamOf(sid);
+    let t = liveAt + FIRST_READ_MS;
+    let reads = 0;
+    // 6 reads of a broadcast that is not live (bound, no video), then 6 of a live one that has no video
+    for (let i = 0; i < 6; i++) {
+      const m = r.mark();
+      r.setNow(t);
+      await r.cron();
+      if (r.statusReadsSince(m).length > 0) reads++;
+      t += YOUTUBE_STATUS_READ_EVERY_MS;
+    }
+    expect((await r.view()).youtubeStatus).toBe("not_live");
+    r.fake.videoOn(stream);
+    r.fake.videoOff(stream);   // went live, then the stall: live, nothing arriving
+    for (let i = 0; i < 6; i++) {
+      const m = r.mark();
+      r.setNow(t);
+      await r.cron();
+      if (r.statusReadsSince(m).length > 0) reads++;
+      t += YOUTUBE_STATUS_READ_EVERY_MS;
+    }
+    expect((await r.view()).youtubeStatus).toBe("live_no_video");
+    expect(reads, "every one of the 12 windows read YouTube").toBe(12);
+    expect((await sql<{ s: number }[]>`select youtube_status_steady as s from fixture_stream_sessions where id = ${sid}`)[0]!.s).toBe(0);
+
+    // An error read keeps the run: reach steady, then fail one steady-window read - the run stays and the next window is the steady one.
+    r.fake.videoOn(stream);
+    for (let i = 0; i < YOUTUBE_STATUS_STEADY_AFTER_READS; i++) {
+      r.setNow(t);
+      await r.cron();
+      t += YOUTUBE_STATUS_READ_EVERY_MS;
+    }
+    const run = async () => (await sql<{ s: number }[]>`select youtube_status_steady as s from fixture_stream_sessions where id = ${sid}`)[0]!.s;
+    expect(await run(), "premise: steady").toBe(YOUTUBE_STATUS_STEADY_AFTER_READS);
+    const lastRead = t - YOUTUBE_STATUS_READ_EVERY_MS;
+    r.fake.failNext("broadcastLife", "youtube_unavailable");
+    r.setNow(lastRead + YOUTUBE_STATUS_STEADY_EVERY_MS);
+    await r.cron();
+    expect(await run(), "the error read did not touch the run").toBe(YOUTUBE_STATUS_STEADY_AFTER_READS);
+    const m = r.mark();
+    r.setNow(lastRead + YOUTUBE_STATUS_STEADY_EVERY_MS + YOUTUBE_STATUS_READ_EVERY_MS);
+    await r.cron();
+    expect(r.statusReadsSince(m), "so the window after the failed read is still the steady one").toEqual([]);
   });
 
   it("the event and the stored word are ONE transaction: with the event refused, the word does not move (neither half alone), and the next window writes both", async () => {
@@ -347,6 +633,7 @@ describe.skipIf(!HAS_DB)("the YouTube live status word: the real tick and the re
     const ended = await r.view();
     expect(ended.state, "premise: stopped").toBe("completed");
     expect(ended.youtubeStatus, "no word once the session is over").toBeNull();
+    expect(ended.youtubeLiveForMs, "and no age").toBeNull();
 
     const m = r.mark();
     const before = (await r.events(sid)).length;
@@ -390,6 +677,7 @@ describe.skipIf(!HAS_DB)("the YouTube live status word: the real tick and the re
     const { sid, liveAt } = await r.live(pasted.id);
     const m = r.mark();
     expect((await r.view()).youtubeStatus, "said at once, while live: there is nothing to wait 60 s for").toBe("pasted_key");
+    expect((await r.view()).youtubeLiveForMs, "a pasted key has no word to age: no `still not live` can ever be said of it").toBeNull();
     for (const dt of [0, 30 * SEC, FIRST_READ_MS, FIRST_READ_MS + YOUTUBE_STATUS_READ_EVERY_MS, 10 * 60 * SEC]) {
       r.setNow(liveAt + dt);
       const t = await r.cron();

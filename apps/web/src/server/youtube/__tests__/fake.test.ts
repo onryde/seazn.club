@@ -12,7 +12,7 @@ import { describe, expect, it, vi } from "vitest";
 import pino from "pino";
 import { LOGGER_OPTIONS } from "@/server/logger";
 import { FakeYouTube } from "../fake";
-import { YouTubeError, STREAM_HEALTHS, STREAM_STATUSES, type StreamHealth, type StreamStatus, type YouTubePort } from "../port";
+import { YouTubeError, LIFE_CYCLES, STREAM_HEALTHS, STREAM_STATUSES, type StreamHealth, type StreamStatus, type YouTubePort } from "../port";
 import { youtubeLiveWordOf } from "../live-status";
 
 const START = new Date("2026-10-27T12:00:00Z");
@@ -117,8 +117,10 @@ describe("auto-start and auto-stop", () => {
 // reads - broadcastLife plus streamStatus - so a test of the tick can set the word it needs. YouTube's own value sets are typed in
 // port.ts (STREAM_STATUSES / STREAM_HEALTHS); this block reads them back as the whole range the control can pin.
 describe("streamStatus: what YouTube says of a stream, and a control to set it", () => {
-  const read = async (f: FakeYouTube, at: string, broadcastId: string, streamId: string) =>
-    youtubeLiveWordOf((await f.broadcastLife(at, broadcastId)).life, (await f.broadcastLife(at, broadcastId)).life === "live" ? await f.streamStatus(at, streamId) : null);
+  const read = async (f: FakeYouTube, at: string, broadcastId: string, streamId: string) => {
+    const { lifeCycle } = await f.broadcastLife(at, broadcastId);
+    return youtubeLiveWordOf(lifeCycle, lifeCycle === "live" ? await f.streamStatus(at, streamId) : null);
+  };
 
   it("a stream with no video is ready with no data; video arriving makes it active and good; video going away is no data again - while the broadcast stays live (enableAutoStop=false)", async () => {
     const { f, at } = await rig();
@@ -140,6 +142,41 @@ describe("streamStatus: what YouTube says of a stream, and a control to set it",
     expect(await read(f, at, broadcastId, streamId), "the stall: still live, nothing arriving").toBe("live_no_video");
     f.videoOn(streamId);
     expect(await read(f, at, broadcastId, streamId), "and back").toBe("live_receiving");
+  });
+
+  // liveBroadcasts `status.lifeCycleStatus`, typed here from YouTube's discovery document (youtube.googleapis.com/$discovery/rest?version=v3,
+  // schema LiveBroadcastStatus): nine values; the port admits the eight below and refuses the enum's zero value `lifeCycleStatusUnspecified`.
+  const YOUTUBE_LIFE_CYCLES = ["created", "ready", "testStarting", "testing", "liveStarting", "live", "complete", "revoked"];
+  // What the port's `life` makes of each (the collapse: a transitional value reads as where it is going), written out here.
+  const COLLAPSED: Record<string, string> = { created: "created", ready: "ready", testStarting: "testing", testing: "testing", liveStarting: "live", live: "live", complete: "complete", revoked: "revoked" };
+
+  it("setLifeCycle pins YouTube's RAW lifeCycleStatus - every one the port admits, the transitional ones included - and `life` is its collapse; null gives the broadcast back to the fake's own life", async () => {
+    const { f, at } = await rig();
+    const { streamId, broadcastId } = await boundPair(f, at);
+    f.videoOn(streamId);
+    expect([...LIFE_CYCLES], "the port admits exactly YouTube's documented values less the zero value").toEqual(YOUTUBE_LIFE_CYCLES);
+    let checked = 0;
+    for (const cycle of YOUTUBE_LIFE_CYCLES) {
+      f.setLifeCycle(broadcastId, cycle as (typeof LIFE_CYCLES)[number]);
+      const got = await f.broadcastLife(at, broadcastId);
+      expect([cycle, got.lifeCycle, got.life]).toEqual([cycle, cycle, COLLAPSED[cycle]]);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every raw value pinned").toBe(8);
+    f.setLifeCycle(broadcastId, "liveStarting");
+    expect(await read(f, at, broadcastId, streamId), "an ACTIVE, GOOD stream under a broadcast still liveStarting is not live yet").toBe("not_live");
+    f.setLifeCycle(broadcastId, null);
+    expect(await f.broadcastLife(at, broadcastId), "the pin is gone: the fake's own life (live: video was on at bind)").toMatchObject({ life: "live", lifeCycle: "live" });
+    expect(await read(f, at, broadcastId, streamId)).toBe("live_receiving");
+  });
+
+  it("setLifeCycle refuses a broadcast the fake does not have and a value the port never admits (the control validates), and pins nothing on a refusal", async () => {
+    const { f, at } = await rig();
+    const { broadcastId } = await boundPair(f, at);
+    expect(() => f.setLifeCycle("nope", "live")).toThrow(YouTubeError);
+    expect(() => f.setLifeCycle(broadcastId, "mystery" as never)).toThrow();
+    expect(() => f.setLifeCycle(broadcastId, "lifeCycleStatusUnspecified" as never), "the enum's zero value is not one the port admits").toThrow();
+    expect((await f.broadcastLife(at, broadcastId)).lifeCycle, "nothing was pinned").toBe("ready");
   });
 
   it("setStreamStatus pins every (status, health) YouTube can say - 6 x 6 - and null gives the stream back to its video", async () => {
@@ -230,10 +267,10 @@ describe("broadcastLife reports the actual start and end instants", () => {
     const at = await f.accessToken("1//rt-actual-0");
     const { streamId } = await f.insertStream(at, { title: "k" });
     const { broadcastId } = await f.insertBroadcast(at, bcast());
-    expect(await f.broadcastLife(at, broadcastId), "created").toEqual({ life: "created", actualStartAt: null, actualEndAt: null, madeForKids: false });
+    expect(await f.broadcastLife(at, broadcastId), "created").toEqual({ life: "created", lifeCycle: "created", actualStartAt: null, actualEndAt: null, madeForKids: false });
     await f.bind(at, broadcastId, streamId);
-    expect(await f.broadcastLife(at, broadcastId), "ready").toEqual({ life: "ready", actualStartAt: null, actualEndAt: null, madeForKids: false });
-    expect(await f.broadcastLife(at, "no-such-broadcast"), "absent").toEqual({ life: "absent", actualStartAt: null, actualEndAt: null, madeForKids: null });
+    expect(await f.broadcastLife(at, broadcastId), "ready").toEqual({ life: "ready", lifeCycle: "ready", actualStartAt: null, actualEndAt: null, madeForKids: false });
+    expect(await f.broadcastLife(at, "no-such-broadcast"), "absent").toEqual({ life: "absent", lifeCycle: "absent", actualStartAt: null, actualEndAt: null, madeForKids: null });
   });
 
   it("video arriving stamps the start (the clock then, not later reads); complete stamps the end; neither moves afterwards", async () => {
@@ -244,14 +281,14 @@ describe("broadcastLife reports the actual start and end instants", () => {
     c.set(5 * 60_000);   // 12:05 — video arrives
     f.videoOn(streamId);
     c.set(9 * 60_000);   // 12:09 — a read, not an event
-    expect(await f.broadcastLife(at, broadcastId)).toEqual({ life: "live", actualStartAt: new Date("2026-10-27T12:05:00Z"), actualEndAt: null, madeForKids: false });
+    expect(await f.broadcastLife(at, broadcastId)).toEqual({ life: "live", lifeCycle: "live", actualStartAt: new Date("2026-10-27T12:05:00Z"), actualEndAt: null, madeForKids: false });
     f.videoOff(streamId); c.set(10 * 60_000); f.videoOn(streamId);   // video returns: not a second start
     expect((await f.broadcastLife(at, broadcastId)).actualStartAt, "the first start stands").toEqual(new Date("2026-10-27T12:05:00Z"));
     c.set(50 * 60_000);   // 12:50 — the end step (inside the access token's hour)
     await f.complete(at, broadcastId);
     c.set(55 * 60_000);
     await f.complete(at, broadcastId);   // a second complete resolves (Google: redundantTransition) and moves nothing
-    expect(await f.broadcastLife(at, broadcastId)).toEqual({ life: "complete", actualStartAt: new Date("2026-10-27T12:05:00Z"), actualEndAt: new Date("2026-10-27T12:50:00Z"), madeForKids: false });
+    expect(await f.broadcastLife(at, broadcastId)).toEqual({ life: "complete", lifeCycle: "complete", actualStartAt: new Date("2026-10-27T12:05:00Z"), actualEndAt: new Date("2026-10-27T12:50:00Z"), madeForKids: false });
     expect(f.inspectBroadcast(broadcastId), "the control view shows the same instants").toMatchObject({ actualStartAt: new Date("2026-10-27T12:05:00Z"), actualEndAt: new Date("2026-10-27T12:50:00Z") });
   });
 
@@ -279,7 +316,7 @@ describe("broadcastLife reports the actual start and end instants", () => {
     const err = await rejection(f.complete(at, broadcastId));
     expect(err, "complete needs a live broadcast").toBeInstanceOf(YouTubeError);
     expect((err as YouTubeError).reason).toBe("invalidTransition");
-    expect(await f.broadcastLife(at, broadcastId), "a refused complete stamps nothing").toEqual({ life: "ready", actualStartAt: null, actualEndAt: null, madeForKids: false });
+    expect(await f.broadcastLife(at, broadcastId), "a refused complete stamps nothing").toEqual({ life: "ready", lifeCycle: "ready", actualStartAt: null, actualEndAt: null, madeForKids: false });
   });
 
   it("the instants are copies: mutating a returned Date does not move the fake's record", async () => {

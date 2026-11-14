@@ -56149,6 +56149,18 @@
                                 }
                               ]
                             },
+                            "youtubeLiveForMs": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
                             "target": {
                               "type": "object",
                               "properties": {
@@ -56342,6 +56354,7 @@
                             "replayParts",
                             "youtubeVideoUrl",
                             "youtubeStatus",
+                            "youtubeLiveForMs",
                             "target",
                             "fixtureDecided",
                             "fixtureHeld",
@@ -56404,6 +56417,7 @@
                     ],
                     "youtubeVideoUrl": "example",
                     "youtubeStatus": "live_receiving",
+                    "youtubeLiveForMs": 0,
                     "target": {
                       "id": "example",
                       "kind": "youtube",
@@ -56963,6 +56977,18 @@
                             }
                           ]
                         },
+                        "youtubeLiveForMs": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "target": {
                           "type": "object",
                           "properties": {
@@ -57156,6 +57182,7 @@
                         "replayParts",
                         "youtubeVideoUrl",
                         "youtubeStatus",
+                        "youtubeLiveForMs",
                         "target",
                         "fixtureDecided",
                         "fixtureHeld",
@@ -57213,6 +57240,7 @@
                     ],
                     "youtubeVideoUrl": "example",
                     "youtubeStatus": "live_receiving",
+                    "youtubeLiveForMs": 0,
                     "target": {
                       "id": "example",
                       "kind": "youtube",

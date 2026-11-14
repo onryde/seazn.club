@@ -104,6 +104,12 @@ export type YoutubeLiveWord = (typeof YOUTUBE_LIVE_WORDS)[number];
 export const YOUTUBE_STATUS_VIEWS = [...YOUTUBE_LIVE_WORDS, "pasted_key"] as const;
 export type YoutubeStatusView = (typeof YOUTUBE_STATUS_VIEWS)[number];
 
+/** How long after a session went live a `not_live` word stops being "give it a moment" and becomes "go and look": three minutes. A
+ *  broadcast YouTube still does not show live this long after the phone started sending (and 60 s of that is the wait for the first
+ *  read) will not get there by itself - the organiser should open Studio. The panel judges it on the server's own measurement
+ *  (`youtubeLiveForMs`), never the browser's clock (lib/stream-session-view.ts `youtubeStatusLineOf`). */
+export const NOT_LIVE_WARN_MS = 3 * 60_000;
+
 /** The replay link for a broadcast: a YouTube broadcast id is also the id of its video. */
 export const youtubeWatchUrl = (videoId: string): string => `https://www.youtube.com/watch?v=${videoId}`;
 

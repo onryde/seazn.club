@@ -72,12 +72,28 @@ export const isDeadGrantRefusal = (err: unknown): boolean =>
 export const BROADCAST_LIVES = ["created", "ready", "testing", "live", "complete", "revoked", "absent"] as const;
 export type BroadcastLife = (typeof BROADCAST_LIVES)[number];
 
-/** A liveStream's `status.streamStatus` (developers.google.com/youtube/v3/live/docs/liveStreams: active, created, error, inactive,
+/** What YouTube itself says a broadcast's life cycle is - liveBroadcasts `status.lifeCycleStatus` - for every value the adapter admits.
+ *  YouTube documents nine (its discovery document, youtube.googleapis.com/$discovery/rest?version=v3, schema LiveBroadcastStatus):
+ *  the eight below and `lifeCycleStatusUnspecified`, the enum's zero value, which the adapter refuses as undocumented-in-practice.
+ *  `testStarting` and `liveStarting` are the TRANSITIONAL ones (the discovery document: "Transition into TESTING / LIVE has been requested").
+ *
+ *  `BroadcastLife` above COLLAPSES the two transitional values to where they are going (`lifeOfCycle`): right for the end step, which
+ *  asks "is it running, so complete it". It is WRONG for a status line: a broadcast in `liveStarting` is not live yet (YouTube shows
+ *  "Preparing stream"), so the live status word is derived from this raw value, never from the collapsed one. */
+export const LIFE_CYCLES = ["created", "ready", "testStarting", "testing", "liveStarting", "live", "complete", "revoked"] as const;
+export type LifeCycle = (typeof LIFE_CYCLES)[number];
+
+/** The collapse: a transitional value reads as where it is going. The ONE place it is written (the adapter and the fake both call it). */
+export const lifeOfCycle = (c: LifeCycle): Exclude<BroadcastLife, "absent"> =>
+  c === "testStarting" ? "testing" : c === "liveStarting" ? "live" : c;
+
+/** A liveStream's `status.streamStatus` (YouTube's discovery document, schema LiveStreamStatus: active, created, error, inactive,
  *  ready), plus `absent` for an id YouTube does not know. `active` is the one that says YouTube is receiving video on the stream. */
 export const STREAM_STATUSES = ["created", "ready", "active", "inactive", "error", "absent"] as const;
 export type StreamStatus = (typeof STREAM_STATUSES)[number];
 
-/** A liveStream's `status.healthStatus.status` (same page: good, ok, bad, noData, revoked). */
+/** A liveStream's `status.healthStatus.status` (discovery document, schema LiveStreamHealthStatus: good, ok, bad, noData, revoked - the
+ *  reference page developers.google.com/youtube/v3/live/docs/liveStreams lists only the first four; `revoked` is in the discovery enum). */
 export const STREAM_HEALTHS = ["good", "ok", "bad", "noData", "revoked"] as const;
 export type StreamHealth = (typeof STREAM_HEALTHS)[number];
 
@@ -99,6 +115,9 @@ export interface StreamStatusInfo {
  *  a boolean) and for `absent`. The end step ORs a `true` into the broadcast's own stamp (V482): the stamp only ever goes false -> true. */
 export interface BroadcastLifeInfo {
   life: BroadcastLife;
+  /** What YouTube said, before the collapse (`LIFE_CYCLES`), or `absent`. `life` is always `lifeOfCycle(lifeCycle)`. Only the live status
+   *  word reads it (a broadcast in `liveStarting` is not live yet); everything else works from `life`. */
+  lifeCycle: LifeCycle | "absent";
   actualStartAt: Date | null;
   actualEndAt: Date | null;
   madeForKids: boolean | null;

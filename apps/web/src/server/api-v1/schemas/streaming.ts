@@ -167,10 +167,15 @@ export const StreamSessionCurrent = z
     youtubeVideoUrl: z.string().nullable(),
     /** Owner direction 2026-11-14: the ONE word the panel shows about a LIVE session's YouTube side (server/usecases/stream-sessions/
      *  youtube-status.ts). `live_receiving` / `not_live` / `live_no_video`: what YouTube says of the broadcast and its stream, read
-     *  from 60 s after go-live and then about once a minute; `pasted_key`: the session streams to a YouTube key somebody pasted, which
-     *  has no API behind it (no read is ever made). Null: nothing to say - not live, not YouTube, or no word read yet. An error
-     *  reading YouTube carries the previous word and is never a word of its own. */
+     *  from 60 s after go-live, about once a minute, and about once in five once `live_receiving` has held for three reads in a row;
+     *  `pasted_key`: the session streams to a YouTube key somebody pasted, which has no API behind it (no read is ever made). Null:
+     *  nothing to say - not live, not YouTube, no word read yet, or the club's grant is dead (the word is cleared, not left stale). An
+     *  error reading YouTube carries the previous word and is never a word of its own. */
     youtubeStatus: z.enum(YOUTUBE_STATUS_VIEWS).nullable(),
+    /** How long this session has been live, in ms, on the SERVER's clock at this response (the shape of `output.elapsedMs`: the
+     *  browser's clock is never asked). Present with a stored `youtubeStatus` word only - null for no word, `pasted_key`, or a session
+     *  with no `live_at`. The panel judges a `not_live` that has gone on too long ("Still not live on YouTube") on it. */
+    youtubeLiveForMs: z.number().int().min(0).nullable(),
     target: z.object({ id: z.string(), kind: StreamTargetKind, label: z.string() }),
     fixtureDecided: z.boolean(),
     /** W2a loop R, M2: the fixture is HELD (`needs_decision` — a level bracket result awaiting the organiser's settle).

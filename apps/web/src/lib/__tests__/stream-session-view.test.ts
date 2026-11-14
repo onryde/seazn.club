@@ -42,7 +42,7 @@ import {
   PRESENCE_WATCH_START, W5_REFUSAL_CODES, isW5Refusal, presenceAfterRefusal, readClearsW5, type CreateFailureCode, type PresenceWatch,
   YOUTUBE_REFUSAL_FIX, youtubeRefusalOf, autoDestinationOf, YOUTUBE_STATUS_LINES, youtubeStatusLineOf,
 } from "../stream-session-view";
-import { YOUTUBE_LIVE_STATE_OF_REFUSAL, YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL, YOUTUBE_REFUSAL_CODES, YOUTUBE_REFUSAL_REMEDY, YOUTUBE_STATUS_VIEWS } from "../youtube";
+import { NOT_LIVE_WARN_MS, YOUTUBE_LIVE_STATE_OF_REFUSAL, YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL, YOUTUBE_REFUSAL_CODES, YOUTUBE_REFUSAL_REMEDY, YOUTUBE_STATUS_VIEWS } from "../youtube";
 import { autoStartRefusalOf } from "@/server/usecases/stream-auto";
 import { youtubeRefusal } from "@/server/youtube/prepare";
 import fc from "fast-check";
@@ -76,7 +76,7 @@ const NOW = new Date("2026-09-14T12:10:00Z");
 const view = (over: Partial<StreamSessionView> = {}): StreamSessionView => ({
   id: "s", fixtureId: "f", mode: "passthrough", overlay: null, state: "live", desiredState: "live", failReason: null,
   health: null, ingest: { state: "connected", protocol: "srt" }, output: null, balance: 2,
-  startedAt: "2026-09-14T12:00:00Z", endedAt: null, replayUrl: null, replayParts: [], youtubeVideoUrl: null, youtubeStatus: null,
+  startedAt: "2026-09-14T12:00:00Z", endedAt: null, replayUrl: null, replayParts: [], youtubeVideoUrl: null, youtubeStatus: null, youtubeLiveForMs: null,
   target: { id: "t", kind: "youtube", label: "Club" }, fixtureDecided: false, fixtureHeld: false, endReason: null, creditUsed: true, startCause: "organiser", restart: null, countdown: null, ...over,
 });
 
@@ -1902,5 +1902,75 @@ describe("youtubeStatusLineOf: the live YouTube status line", () => {
     for (const bad of ["live", "toString", "__proto__", "", "constructor"]) {
       expect(youtubeStatusLineOf(view({ state: "live", youtubeStatus: bad as never })), bad).toBeNull();
     }
+  });
+
+  // Fix round 1, I2: a not_live that PERSISTS is not "nothing to act on". The server measures how long the session has been live
+  // (`youtubeLiveForMs`, its clock); from three minutes the same word reads amber with its own copy. Typed here from the ruling.
+  describe("a not_live that persists (I2)", () => {
+    const WARN_MS = 3 * 60_000;
+    const STUCK = { status: "not_live", key: "stream.youtube.status.not_live_stuck", tone: "amber" } as const;
+
+    it("the mark is the ruling's three minutes, and the new line's copy is in ALL FOUR dictionaries - and says so in each language's own words, not English", () => {
+      expect(NOT_LIVE_WARN_MS).toBe(WARN_MS);
+      expect(inEveryLocale([STUCK.key])).toBe(LOCALES.length);
+      expect(msg(STUCK.key), "the ruling's sentence").toBe("Still not live on YouTube - check Studio");
+      const texts = LOCALES.map((l) => dict(l)[STUCK.key]!);
+      expect(new Set(texts).size, "four different sentences: none is the English pasted into another locale").toBe(LOCALES.length);
+      for (const t of texts) expect(t, "names Studio, where the organiser goes").toContain("Studio");
+      expect(texts.map((t) => t.includes("{")), "no stray placeholder").toEqual([false, false, false, false]);
+    });
+
+    it("both sides of the line, for every word and every state: only a LIVE not_live aged NOT_LIVE_WARN_MS or more is the amber line; everything else is the table's", () => {
+      let stuck = 0;
+      let plain = 0;
+      let hidden = 0;
+      for (const state of StreamSessionState.options) {
+        for (const word of WORDS) {
+          for (const age of [null, 0, 1, WARN_MS - 1, WARN_MS, WARN_MS + 1, 24 * 3_600_000]) {
+            const got = youtubeStatusLineOf(view({ state, youtubeStatus: word, youtubeLiveForMs: age }));
+            const what = `${state} / ${word} / age ${age}`;
+            if (state !== "live") {
+              expect(got, what).toBeNull();
+              hidden++;
+            } else if (word === "not_live" && age !== null && age >= WARN_MS) {
+              expect(got, what).toEqual(STUCK);
+              stuck++;
+            } else {
+              expect(got, what).toEqual({ status: word, key: YOUTUBE_STATUS_LINES[word].key, tone: TONE[word] });
+              plain++;
+            }
+          }
+        }
+      }
+      // 1 live state x 4 words x 7 ages = 28 shown (not_live x {mark-1... } 3 stuck + 4 plain ages); 6 other states x 28 hidden
+      expect({ stuck, plain, hidden }, "anti-vacuity: every class met").toEqual({ stuck: 3, plain: 25, hidden: 6 * 28 });
+      expect(stuck, "the three ages at or past the mark").toBe(3);
+    });
+
+    it("the other words never go to the 'still not live' line, however old the session: live_no_video stays its own amber line, live_receiving stays emerald", () => {
+      const old = 6 * 3_600_000;
+      expect(youtubeStatusLineOf(view({ state: "live", youtubeStatus: "live_no_video", youtubeLiveForMs: old }))).toMatchObject({ key: "stream.youtube.status.live_no_video", tone: "amber" });
+      expect(youtubeStatusLineOf(view({ state: "live", youtubeStatus: "live_receiving", youtubeLiveForMs: old }))).toMatchObject({ key: "stream.youtube.status.live_receiving", tone: "emerald" });
+      expect(youtubeStatusLineOf(view({ state: "live", youtubeStatus: "pasted_key", youtubeLiveForMs: old }))).toMatchObject({ key: "stream.youtube.status.pasted_key", tone: "slate" });
+    });
+
+    it("SEQUENCE: the same session aged through the mark, then flipping to live, goes slate -> amber -> emerald; the status stays not_live until YouTube says otherwise", () => {
+      const seen = ([[0, "not_live"], [WARN_MS - 1, "not_live"], [WARN_MS, "not_live"], [WARN_MS + 5_000, "not_live"], [WARN_MS + 60_000, "live_receiving"]] as const)
+        .map(([age, word]) => youtubeStatusLineOf(view({ id: "s1", state: "live", youtubeStatus: word, youtubeLiveForMs: age })))
+        .map((l) => [l?.status, l?.tone]);
+      expect(seen).toEqual([["not_live", "slate"], ["not_live", "slate"], ["not_live", "amber"], ["not_live", "amber"], ["live_receiving", "emerald"]]);
+    });
+
+    it("no measurement is no warning: a view from a server older than the field, or one with a garbage age (a string, NaN, negative, null), stays the plain slate line", () => {
+      const old: Record<string, unknown> = { ...view({ state: "live", youtubeStatus: "not_live" }) };
+      delete old.youtubeLiveForMs;
+      expect(youtubeStatusLineOf(old as unknown as StreamSessionView)).toMatchObject({ key: "stream.youtube.status.not_live", tone: "slate" });
+      let checked = 0;
+      for (const bad of ["180000", Number.NaN, -5, null, undefined, true, {}]) {
+        expect(youtubeStatusLineOf(view({ state: "live", youtubeStatus: "not_live", youtubeLiveForMs: bad as never })), String(bad)).toMatchObject({ key: "stream.youtube.status.not_live", tone: "slate" });
+        checked++;
+      }
+      expect(checked).toBe(7);
+    });
   });
 });

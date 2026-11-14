@@ -39,8 +39,8 @@ import { createHash } from "node:crypto";
 // What it does not model: a daily stream-creation cap (unpublished) and a stream's own title rules.
 import { YOUTUBE_SCOPE, type YoutubePrivacy } from "@/lib/youtube";
 import {
-  LIST_BUDGET_SPENT, STREAM_HEALTHS, STREAM_STATUSES, YOUTUBE_ERROR_CODES, YouTubeError, type BroadcastLife, type BroadcastLifeInfo, type StreamHealth, type StreamListing,
-  type StreamStatus, type StreamStatusInfo, type VideoFacts, type YoutubeErrorCode, type YouTubePort,
+  LIFE_CYCLES, LIST_BUDGET_SPENT, STREAM_HEALTHS, STREAM_STATUSES, YOUTUBE_ERROR_CODES, YouTubeError, lifeOfCycle, type BroadcastLife, type BroadcastLifeInfo, type LifeCycle,
+  type StreamHealth, type StreamListing, type StreamStatus, type StreamStatusInfo, type VideoFacts, type YoutubeErrorCode, type YouTubePort,
 } from "./port";
 
 // Google's limits — "10 active streams allowed per channel and 3 active streams per stream key" — are the fake's OWN literals
@@ -95,6 +95,9 @@ interface Stream {
 interface Broadcast {
   id: string; channelId: string; title: string; description: string; scheduledStart: Date; privacy: YoutubePrivacy;
   madeForKids: boolean; streamId: string | null; life: Exclude<BroadcastLife, "absent">;
+  /** What a test PINNED YouTube's raw `lifeCycleStatus` to (`setLifeCycle`): `broadcastLife` reports it (and its collapse as `life`)
+   *  instead of `life`. null: `life` decides. Only the broadcast READ sees it - the fake's own transitions still run on `life`. */
+  pinnedCycle: LifeCycle | null;
   /** What YouTube decided of its own accord (`designateMadeForKids`), over what the club declared: null until it does. YouTube's
    *  CURRENT `status.madeForKids` is this when set, else what the broadcast was created with. `madeForKids` above stays what was SENT. */
   designated: boolean | null;
@@ -396,6 +399,16 @@ export class FakeYouTube implements YouTubePort {
     b.life = "revoked";
   }
 
+  /** YouTube says the broadcast is in `cycle` (its raw `lifeCycleStatus`, the transitional `testStarting` / `liveStarting` included) from
+   *  now on, whatever the fake's own life is: `broadcastLife` reports it, `life` is its collapse. `null` withdraws the pin. Read-only
+   *  on the fake's side - nothing it does (complete, end step) consults the pin. */
+  setLifeCycle(broadcastId: string, cycle: LifeCycle | null): void {
+    const b = this.broadcasts.get(broadcastId);
+    if (!b) throw new YouTubeError("youtube_not_found", "videoNotFound");
+    if (cycle !== null && !LIFE_CYCLES.includes(cycle)) throw new Error(`fake: unknown lifeCycleStatus ${String(cycle)}`);
+    b.pinnedCycle = cycle;
+  }
+
   // Counts need no ids (a refused Go live leaves no id to look up). Each takes an optional channel; without one it counts all.
   liveBroadcastCount(channelId?: string): number {
     return this.countBroadcasts(channelId, (b) => b.life === "live");
@@ -541,7 +554,7 @@ export class FakeYouTube implements YouTubePort {
     const id = `fakebc${this.pad()}`;
     this.broadcasts.set(id, {
       id, channelId: who.channelId, title: a.title, description: a.description, scheduledStart: a.scheduledStart, privacy: a.privacy,
-      madeForKids: a.madeForKids, designated: null, streamId: null, life: "created", actualStart: null, actualEnd: null,
+      madeForKids: a.madeForKids, designated: null, streamId: null, life: "created", pinnedCycle: null, actualStart: null, actualEnd: null,
     });
     return { broadcastId: id };
   }
@@ -572,9 +585,9 @@ export class FakeYouTube implements YouTubePort {
     const who = this.who(at);
     const b = this.ownBroadcast(who.channelId, broadcastId);
     // YouTube's `status.madeForKids` is, unless it decides otherwise, what the broadcast was created with (selfDeclaredMadeForKids).
-    return b
-      ? { life: b.life, actualStartAt: copyOf(b.actualStart), actualEndAt: copyOf(b.actualEnd), madeForKids: currentMadeForKids(b) }
-      : { life: "absent", actualStartAt: null, actualEndAt: null, madeForKids: null };
+    if (!b) return { life: "absent", lifeCycle: "absent", actualStartAt: null, actualEndAt: null, madeForKids: null };
+    const lifeCycle = b.pinnedCycle ?? b.life;
+    return { life: lifeOfCycle(lifeCycle), lifeCycle, actualStartAt: copyOf(b.actualStart), actualEndAt: copyOf(b.actualEnd), madeForKids: currentMadeForKids(b) };
   }
 
   /** liveStreams.list(part=status): a pinned answer if a test pinned one, else what the video says - `active` / `good` while video arrives, `ready` /

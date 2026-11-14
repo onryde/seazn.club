@@ -44,8 +44,8 @@ describe("relay wire enums equal their declarations", () => {
     ["StreamSessionCurrent.startCause ↔ fixture_stream_sessions.start_cause (V430)", S.StreamSessionCurrent.shape.startCause.options, lastCheckList("fixture_stream_sessions", "start_cause")],
     ["StreamIngest.protocol ↔ fixture_stream_sessions.ingest_protocol", S.StreamIngest.shape.protocol.unwrap().options, checkList("fixture_stream_sessions", "ingest_protocol")],
     ["StreamTargetKind ↔ org_stream_targets.kind", S.StreamTargetKind.options, checkList("org_stream_targets", "kind")],
-    // YouTube live status (V519, owner direction 2026-11-14): the stored words. The wire enum is these PLUS `pasted_key`, which is never stored.
-    ["YOUTUBE_LIVE_WORDS ↔ fixture_stream_sessions.youtube_status (V519, folded)", YOUTUBE_LIVE_WORDS, lastCheckList("fixture_stream_sessions", "youtube_status")],
+    // YouTube live status (V521, owner direction 2026-11-14): the stored words. The wire enum is these PLUS `pasted_key`, which is never stored.
+    ["YOUTUBE_LIVE_WORDS ↔ fixture_stream_sessions.youtube_status (V521, folded)", YOUTUBE_LIVE_WORDS, lastCheckList("fixture_stream_sessions", "youtube_status")],
   ];
 
   it("each wire enum equals the V410 CHECK list of the column it is stored in", () => {
@@ -109,7 +109,7 @@ describe("relay wire enums equal their declarations", () => {
     expect(Object.keys(S.StreamSessionCurrent.shape).sort()).toEqual([
       "balance", "countdown", "creditUsed", "desiredState", "endReason", "endedAt", "failReason", "fixtureDecided", "fixtureHeld", "fixtureId",
       "health", "id", "ingest", "mode", "output", "overlay", "replayParts", "replayUrl", "restart", "startCause", "startedAt", "state", "target",
-      "youtubeStatus", "youtubeVideoUrl",
+      "youtubeLiveForMs", "youtubeStatus", "youtubeVideoUrl",
     ]);
     expect(Object.keys(S).filter((k) => /^CaptureQr/.test(k))).toEqual([]);
   });
@@ -279,7 +279,7 @@ describe("relay request schemas refuse what they must", () => {
   it("StreamSessionCurrent is strict — a v1 `qr` riding along is refused", () => {
     const current = {
       id: "s", fixtureId: "f", mode: "passthrough", overlay: null, state: "warming", desiredState: "live", failReason: null,
-      health: null, ingest: null, output: null, balance: 3, startedAt: null, endedAt: null, replayUrl: null, replayParts: [], youtubeVideoUrl: null, youtubeStatus: null,
+      health: null, ingest: null, output: null, balance: 3, startedAt: null, endedAt: null, replayUrl: null, replayParts: [], youtubeVideoUrl: null, youtubeStatus: null, youtubeLiveForMs: null,
       target: { id: "t", kind: "youtube", label: "Club" }, fixtureDecided: false, fixtureHeld: false, endReason: null, creditUsed: false,
       startCause: "organiser", restart: null, countdown: null,
     };
@@ -372,6 +372,20 @@ describe("relay request schemas refuse what they must", () => {
     }
     expect(Object.values(S.StreamSessionCurrent.shape.youtubeStatus.unwrap().options), "the wire is the stored words plus pasted_key and nothing else")
       .toEqual([...YOUTUBE_LIVE_WORDS, "pasted_key"]);
+    // The server-measured age the "still not live" amber is judged on: REQUIRED (an absent field is refused, not read as "just started"),
+    // null or a whole number of ms >= 0; never a fraction, a negative, or a string.
+    const withoutLiveFor: Record<string, unknown> = { ...current };
+    delete withoutLiveFor.youtubeLiveForMs;
+    expect(S.StreamSessionCurrent.safeParse(withoutLiveFor).success, "absent").toBe(false);
+    let ages = 0;
+    for (const youtubeLiveForMs of [null, 0, 1, 180_000]) {
+      expect(S.StreamSessionCurrent.safeParse({ ...current, youtubeLiveForMs }).success, String(youtubeLiveForMs)).toBe(true);
+      ages++;
+    }
+    expect(ages, "null + 0 + 1 + the warn mark").toBe(4);
+    for (const bad of [-1, 1.5, "180000", true, Number.NaN]) {
+      expect(S.StreamSessionCurrent.safeParse({ ...current, youtubeLiveForMs: bad }).success, String(bad)).toBe(false);
+    }
     // T4 D3: output is REQUIRED (null, or {state, since, elapsedMs}) — an absent field would read as "nothing to warn about".
     const withoutOutput: Record<string, unknown> = { ...current };
     delete withoutOutput.output;

@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LOGGER_OPTIONS } from "@/server/logger";
 import { FakeYouTube, FAKE_YOUTUBE_METHODS } from "../fake";
 import { GoogleYouTube, mapGoogleError } from "../google";
+import { youtubeLiveWordOf } from "../live-status";
 import { YOUTUBE_ERROR_CODES, YouTubeError, type YouTubePort } from "../port";
 
 // ─── fixtures ──────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -410,7 +411,9 @@ describe("Data API request shapes (developers.google.com/youtube/v3/…)", () =>
 
   // liveStreams.list (developers.google.com/youtube/v3/live/docs/liveStreams/list), `part=status`: `status.streamStatus` is one of
   // active, created, error, inactive, ready; `status.healthStatus.status` one of good, ok, bad, noData, revoked. The wire strings are
-  // typed here from that page, and the stream-status table is every documented value.
+  // typed here from YouTube's DISCOVERY DOCUMENT (youtube.googleapis.com/$discovery/rest?version=v3, schemas LiveStreamStatus and
+  // LiveStreamHealthStatus): the reference page lists only good, ok, bad and noData for the health, `revoked` is in the enum. The
+  // stream-status table is every documented value.
   it("streamStatus: GET liveStreams?part=status&id=… (never `cdn`: that part carries the stream key); reads status.streamStatus and status.healthStatus.status", async () => {
     const statuses = ["active", "created", "error", "inactive", "ready"];
     const healths = ["good", "ok", "bad", "noData", "revoked"];
@@ -663,26 +666,73 @@ describe("broadcastLife reports the actual start and end (B2 fix I4)", () => {
     ({ id: "bc1", status: { lifeCycleStatus, ...(madeForKids === undefined ? {} : { madeForKids }) }, ...(snippet ? { snippet } : {}) });
 
   it("reads snippet.actualStartTime and actualEndTime as instants: live has a start and no end; complete has both; created, ready and revoked have neither", async () => {
-    const rows: [string, ReturnType<typeof item>, { life: string; start: string | null; end: string | null }][] = [
-      ["created", item("created", { title: "t" }), { life: "created", start: null, end: null }],
-      ["ready", item("ready", { title: "t", scheduledStartTime: "2026-10-27T12:00:00.000Z" }), { life: "ready", start: null, end: null }],
-      ["testing", item("testing", { title: "t" }), { life: "testing", start: null, end: null }],
-      ["live", item("live", { actualStartTime: "2026-10-27T12:05:00.000Z" }), { life: "live", start: "2026-10-27T12:05:00.000Z", end: null }],
-      ["liveStarting", item("liveStarting", { actualStartTime: "2026-10-27T12:05:00Z" }), { life: "live", start: "2026-10-27T12:05:00.000Z", end: null }],
-      ["complete", item("complete", { actualStartTime: "2026-10-27T12:05:00.000Z", actualEndTime: "2026-10-27T12:50:30.250Z" }), { life: "complete", start: "2026-10-27T12:05:00.000Z", end: "2026-10-27T12:50:30.250Z" }],
-      ["revoked, never live", item("revoked", {}), { life: "revoked", start: null, end: null }],
-      ["no snippet at all", item("live"), { life: "live", start: null, end: null }],
+    // `cycle` is YouTube's own value (the discovery document's `lifeCycleStatus` enum) the port reports RAW beside the collapsed `life`:
+    // `liveStarting` collapses to life "live" (the end step completes it) but is NOT live for the status line, so both are asserted.
+    const rows: [string, ReturnType<typeof item>, { life: string; cycle: string; start: string | null; end: string | null }][] = [
+      ["created", item("created", { title: "t" }), { life: "created", cycle: "created", start: null, end: null }],
+      ["ready", item("ready", { title: "t", scheduledStartTime: "2026-10-27T12:00:00.000Z" }), { life: "ready", cycle: "ready", start: null, end: null }],
+      ["testing", item("testing", { title: "t" }), { life: "testing", cycle: "testing", start: null, end: null }],
+      ["testStarting", item("testStarting", { title: "t" }), { life: "testing", cycle: "testStarting", start: null, end: null }],
+      ["live", item("live", { actualStartTime: "2026-10-27T12:05:00.000Z" }), { life: "live", cycle: "live", start: "2026-10-27T12:05:00.000Z", end: null }],
+      ["liveStarting", item("liveStarting", { actualStartTime: "2026-10-27T12:05:00Z" }), { life: "live", cycle: "liveStarting", start: "2026-10-27T12:05:00.000Z", end: null }],
+      ["complete", item("complete", { actualStartTime: "2026-10-27T12:05:00.000Z", actualEndTime: "2026-10-27T12:50:30.250Z" }), { life: "complete", cycle: "complete", start: "2026-10-27T12:05:00.000Z", end: "2026-10-27T12:50:30.250Z" }],
+      ["revoked, never live", item("revoked", {}), { life: "revoked", cycle: "revoked", start: null, end: null }],
+      ["no snippet at all", item("live"), { life: "live", cycle: "live", start: null, end: null }],
     ];
     let checked = 0;
     for (const [name, wire, want] of rows) {
       handler = () => res(200, { items: [wire] });
       const got = await driver().broadcastLife(AT, "bc1");
-      expect([name, got.life, got.actualStartAt?.toISOString() ?? null, got.actualEndAt?.toISOString() ?? null]).toEqual([name, want.life, want.start, want.end]);
+      expect([name, got.life, got.lifeCycle, got.actualStartAt?.toISOString() ?? null, got.actualEndAt?.toISOString() ?? null]).toEqual([name, want.life, want.cycle, want.start, want.end]);
       checked++;
     }
     expect(checked, "anti-vacuity: every row read").toBe(rows.length);
     handler = () => res(200, { items: [] });
-    expect(await driver().broadcastLife(AT, "bc1"), "absent: no instants").toEqual({ life: "absent", actualStartAt: null, actualEndAt: null, madeForKids: null });
+    expect(await driver().broadcastLife(AT, "bc1"), "absent: no instants").toEqual({ life: "absent", lifeCycle: "absent", actualStartAt: null, actualEndAt: null, madeForKids: null });
+  });
+
+  // The live status word, through the REAL driver: every `lifeCycleStatus` YouTube can put on the wire (the discovery document's nine,
+  // youtube.googleapis.com/$discovery/rest?version=v3, schema LiveBroadcastStatus - typed here, not read from the port) becomes the word
+  // the panel shows, with an ACTIVE, GOOD stream beside it. Only `live` is live: `liveStarting` ("Transition into LIVE has been
+  // requested") reads not_live, and it is the row that FAILED before fix round 1 (the adapter collapsed it to `live`, so a healthy
+  // stream under a broadcast YouTube was still starting read live_receiving). The zero value is refused, not read as anything.
+  it("every wire lifeCycleStatus -> the word, through the driver: only `live` can be live_*; liveStarting and testStarting are not_live; the enum's zero value is refused", async () => {
+    const wire: [string, "not_live" | "live_receiving" | "refused"][] = [
+      ["lifeCycleStatusUnspecified", "refused"],
+      ["created", "not_live"],
+      ["ready", "not_live"],
+      ["testing", "not_live"],
+      ["testStarting", "not_live"],
+      ["liveStarting", "not_live"],
+      ["live", "live_receiving"],
+      ["complete", "not_live"],
+      ["revoked", "not_live"],
+    ];
+    let checked = 0;
+    let refused = 0;
+    for (const [cycle, want] of wire) {
+      handler = () => res(200, { items: [item(cycle, cycle === "live" || cycle === "liveStarting" ? { actualStartTime: "2026-10-27T12:05:00Z" } : {})] });
+      let got: string;
+      try {
+        const life = await driver().broadcastLife(AT, "bc1");
+        // the stream under every one of them is active and good: the life cycle alone decides
+        got = youtubeLiveWordOf(life.lifeCycle, { status: "active", health: "good" }) ?? "no_evidence";
+      } catch (e) {
+        expect((e as YouTubeError).code, cycle).toBe("youtube_unavailable");
+        expect((e as YouTubeError).reason, cycle).toBe("unknownLifeCycleStatus");
+        got = "refused";
+        refused++;
+      }
+      expect([cycle, got]).toEqual([cycle, want]);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: all nine wire values met").toBe(9);
+    expect(refused, "exactly the zero value was refused").toBe(1);
+    // an undocumented value and a non-string are refused too, never guessed
+    for (const bad of ["Live", "LIVE", "paused", "", 7, null, undefined]) {
+      handler = () => res(200, { items: [{ id: "bc1", status: { lifeCycleStatus: bad } }] });
+      await expect(driver().broadcastLife(AT, "bc1"), String(bad)).rejects.toMatchObject({ code: "youtube_unavailable", reason: "unknownLifeCycleStatus" });
+    }
   });
 
   it("an instant Google sends in a shape it should not (a bad string, a number, null, an empty string) is NULL, and the life is still read — the end step must not stop on it", async () => {
