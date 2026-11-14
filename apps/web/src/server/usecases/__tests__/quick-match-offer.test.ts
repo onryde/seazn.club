@@ -22,7 +22,7 @@ import { isCoreEventType } from "@seazn/engine/core";
 import { bracketMayEndLevel, stageDefaultsFor, type AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { buildWalk, makeEnvelope, onePlayEvent } from "@seazn/engine/testkit";
-import { QUICK_MATCH_BAND_CAPPED_SPORTS, quickMatchBandCeiling } from "@/lib/quick-match-pad";
+import { personAttributedEvents, QUICK_MATCH_BAND_CAPPED_SPORTS, quickMatchBandCeiling } from "@/lib/quick-match-pad";
 import {
   decidingPrefix,
   PROBE_REDRAWS,
@@ -274,6 +274,9 @@ describe("quickMatchWalkModule: the probe walks a band-capped sport as the guest
   const cricket = builtinModules.find((m) => m.key === "cricket")!;
   const cfgOf = (mod: AnySportModule, variant: string) =>
     mod.configSchema.parse((mod.variants as Record<string, unknown>)[variant]);
+  /** The actions the pad can dispatch: its spec's declared ones (skin-dispatch.ts refuses any other). */
+  const padActions = (spec: { panels: readonly { actions: readonly { type: string }[] }[] }) =>
+    new Set(spec.panels.flatMap((p) => p.actions.map((x) => x.type)));
 
   it("an uncapped sport, and a capped sport with no generator, walk as the module itself", () => {
     let checked = 0;
@@ -305,6 +308,9 @@ describe("quickMatchWalkModule: the probe walks a band-capped sport as the guest
         if (isCoreEventType(e.type)) continue;
         expect(spec.fidelity[e.type], `${v}: ${e.type} is in the engine's band map`).toBeDefined();
         expect(spec.fidelity[e.type]!, `${v}: ${e.type}`).toBeLessThanOrEqual(ceiling);
+        // Whole review m1: and one the guest's pad has a button for (declared, about no player).
+        expect(padActions(spec).has(e.type), `${v}: ${e.type} is a pad action`).toBe(true);
+        expect(personAttributedEvents(spec).has(e.type), `${v}: ${e.type} is about a player`).toBe(false);
         sportEvents++;
       }
       // The play event the sweeps score after a Start is within the ceiling too (firstRallyFor's own draw).
@@ -332,6 +338,32 @@ describe("quickMatchWalkModule: the probe walks a band-capped sport as the guest
       }
     }
     expect(above + thrown).toBeGreaterThan(0);
+  });
+
+  it("whole review m1: a draw under the ceiling the guest's pad cannot record is redrawn: the review, a declare, a match close", () => {
+    const cfg = cfgOf(cricket, "t20");
+    const spec = cricket.padSpec!(cfg as never);
+    const ceiling = quickMatchBandCeiling("cricket", spec)!;
+    // Premises, from the engine: each is banded at or under the ceiling, so the band rule alone would let it through; the
+    // review is a pad action about a player, the other two are no action of a T20 pad at all.
+    expect(personAttributedEvents(spec).has("cricket.review"), "premise: the review is about a player").toBe(true);
+    for (const type of ["cricket.innings.declare", "cricket.match.close"]) expect(padActions(spec).has(type), type).toBe(false);
+    const cases = ["cricket.review", "cricket.innings.declare", "cricket.match.close"];
+    let checked = 0;
+    for (const type of cases) {
+      expect(spec.fidelity[type], `premise: ${type} is banded`).toBeDefined();
+      expect(spec.fidelity[type]!, `premise: ${type} under the ceiling`).toBeLessThanOrEqual(ceiling);
+      let calls = 0;
+      const stub = { ...cricket, arbitraryEvent: () => { calls++; return { type, payload: {} }; } } as unknown as AnySportModule;
+      expect(quickMatchWalkModule(stub, cfg).arbitraryEvent!(cricket.init(cfg as never, NAMELESS) as never, () => 0.5), type).toBeNull();
+      expect(calls, type).toBe(PROBE_REDRAWS);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+    // The control: an over summary (band 0, a pad action about nobody) passes on the first draw.
+    const over = { type: "cricket.innings.summary", payload: {} };
+    const pass = { ...cricket, arbitraryEvent: () => over } as unknown as AnySportModule;
+    expect(quickMatchWalkModule(pass, cfg).arbitraryEvent!(cricket.init(cfg as never, NAMELESS) as never, () => 0.5)).toEqual(over);
   });
 
   it("the redraw budget: a generator that only draws above the ceiling, or only throws, answers null after PROBE_REDRAWS tries", () => {

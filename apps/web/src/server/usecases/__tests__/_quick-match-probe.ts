@@ -40,7 +40,7 @@ import { createQuickMatchTree, sealNewHomeToken, systemAuth, type CreatedQuickMa
 import { hardDeleteQuickMatchCompetition } from "../quick-match-delete";
 import { quickMatchPreview, type QuickMatchFormat } from "../quick-match-preview";
 import { knockoutMayEndLevel, offerFor, type QuickMatchOfferJson } from "../quick-match-sports";
-import { quickMatchBandCeiling } from "@/lib/quick-match-pad";
+import { personAttributedEvents, quickMatchBandCeiling } from "@/lib/quick-match-pad";
 import { scoreEvent } from "../scoring";
 
 /** The probe's budgets: generator seeds tried per sport × variant, and events per walk. An unproven case names both. */
@@ -57,17 +57,24 @@ export const PROBE_REDRAWS = 64;
 
 /**
  * `module` as a guest's quick match pad can drive it under `cfg`: for a band-capped sport (`quickMatchBandCeiling`, cricket),
- * the generator redraws any sport event above the pad's ceiling (cricket's ball and player line) and any draw that throws
- * (cricket's "ran out of eligible players" with nobody in a side), up to PROBE_REDRAWS times, then answers null. Kernel
- * events and events the pad never classifies pass, as the pad's own band filter lets them. Every other sport, and a sport
- * with no generator, is `module` itself. A plain spread: the fold and the outcome read the module's own members.
+ * the generator redraws any sport event the guest's pad has no button for, and any draw that throws (cricket's "ran out
+ * of eligible players" with nobody in a side), up to PROBE_REDRAWS times, then answers null. A sport event the pad can
+ * record is one its spec DECLARES as an action (`spec.panels`: the pad's dispatch refuses any other, skin-dispatch.ts),
+ * at or below the ceiling in the engine's band map (an unbanded one is never filtered, as on the pad), and about no
+ * player (`personAttributedEvents`: the guest's pad leaves those out, `quickMatchSkin`). So cricket's ball and player
+ * line (above the ceiling), its review (about a player) and its declare, follow-on, revise and match close (banded, but
+ * no action on the pad) are all redrawn. Kernel events pass. Every other sport, and a sport with no generator, is
+ * `module` itself. A plain spread: the fold and the outcome read the module's own members.
  */
 export function quickMatchWalkModule(module: AnySportModule, cfg: unknown): AnySportModule {
   const spec = module.padSpec?.(cfg as never);
   const ceiling = spec ? quickMatchBandCeiling(module.key, spec) : null;
   const draw = module.arbitraryEvent;
   if (ceiling === null || spec === undefined || draw === undefined) return module;
-  const within = (type: string) => isCoreEventType(type) || (spec.fidelity[type] ?? 0) <= ceiling;
+  const declared = new Set(spec.panels.flatMap((panel) => panel.actions.map((action) => action.type)));
+  const about = personAttributedEvents(spec);
+  const within = (type: string) =>
+    isCoreEventType(type) || (declared.has(type) && !about.has(type) && (spec.fidelity[type] ?? 0) <= ceiling);
   return {
     ...module,
     arbitraryEvent(state: never, rng: () => number) {
