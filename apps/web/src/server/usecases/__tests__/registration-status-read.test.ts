@@ -1798,6 +1798,34 @@ describe.skipIf(!HAS_DB)("a typed entry reference finds the cart; a number the c
     expect((await regByRef(`${c.ref}-2`)).group_id, "regByRef").toBe(c.groupId);
   });
 
+  // Walk-fix F1 (walkthrough R14): `/r/<ref>-2` rendered the same cart ticket as the bare reference, so a person who typed entry 2's
+  // reference off a mail could not tell which entry it was. The page shows the whole cart still, FOCUSED on the entry the number
+  // names: `focus` is that entry (by `cart_position`, the number the mails print), null for the bare reference and for a number
+  // whose entry was deleted (the cart, unfocused, as before). Entry 2 is made the OLDER row, so position and age disagree and the
+  // focus by number is witnessed rather than coinciding with regByRef's oldest pick.
+  it("`<ref>-N` focuses entry N (by its printed number, not its age); the bare reference and a deleted entry's number focus nothing (F1)", async () => {
+    const c = await cartOf(2);
+    await sql`update registrations set created_at = now() - interval '1 hour' where id = ${c.entries[1]!.id}`;
+    expect((await publicCartByRef(c.ref)).focus, "the bare reference: no focus (empty case first)").toBeNull();
+    let checked = 0;
+    for (const [n, entry] of [[1, c.entries[0]!], [2, c.entries[1]!]] as const) {
+      for (const typed of [`${c.ref}-${n}`, ` ${c.ref.toLowerCase()}-${n} `]) {
+        const view = await publicCartByRef(typed);
+        expect(view.focus, typed).toEqual({ entry_id: entry.id, position: n });
+        expect(view.entries.map((e) => e.id).sort(), `${typed}: still the whole cart`).toEqual(c.entries.map((e) => e.id).sort());
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: two numbers, two spellings").toBe(4);
+
+    const three = await cartOf(3);
+    await sql`delete from registrations where id = ${three.entries[1]!.id}`;
+    const gone = await publicCartByRef(`${three.ref}-2`);
+    expect(gone.focus, "entry 2 was deleted: the cart, unfocused").toBeNull();
+    expect(gone.entries.map((e) => e.display_name)).toEqual(["Entry 1", "Entry 3"]);
+    expect((await publicCartByRef(`${three.ref}-3`)).focus).toEqual({ entry_id: three.entries[2]!.id, position: 3 });
+  });
+
   it("a number past the cart's size, zero and one past the column are the unknown-reference 404, through every by-ref door", async () => {
     const c = await cartOf(2);
     const unknown = freshRef();
