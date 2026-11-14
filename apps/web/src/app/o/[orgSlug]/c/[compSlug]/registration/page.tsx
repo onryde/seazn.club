@@ -1,18 +1,18 @@
 export const dynamic = "force-dynamic";
 // Registration hub (RS004 W2 shell + W3 Settings-tab data + W3c config
-// panel + RS005 W2a Registrants-tab data): route, two-tab chrome, guard,
-// the Settings tab's division rows plus its row-click config panel context,
-// and the Registrants tab's filtered row list.
+// panel + RS005 W2a Registrants-tab data): route, guard, the Settings tab's
+// division rows, and the Registrants tab's filtered row list.
 //
-// `?tab=settings|registrants` is read server-side, mirroring the division
-// page's pattern (d/[divSlug]/page.tsx:77-118) — there is no shared TabStrip
-// component and no client tabs component in this repo, so this inlines its
-// own <nav> the same way that page does.
-//
-// RS005 W2b (row-click detail/actions on the Registrants tab) is next.
+// B7 T24 (spec 2026-11-13 §9): the address is the tab state —
+// `?tab=settings|registrants|division:<id>&open=<a>,<b>` — read here with
+// `parseHubTabs` against the divisions the viewer may open, and handed to
+// `RegistrationHubTabsHost`, which draws the strip and keeps one settings page
+// mounted per open division tab. The host sits at ONE place in this tree on
+// every tab, so a tab switch (a soft navigation to this same page) keeps its
+// state, and with it every unsaved edit; the section on screen rides in as its
+// child. The settings of the (at most two) open divisions load on every tab.
 import type { ReactNode } from "react";
 import { Download } from "lucide-react";
-import Link from "@/components/ui/console-link";
 import { requireCompetitionPage } from "@/server/page-auth";
 import { getCompetition } from "@/server/usecases/competitions";
 import { feePercentFor } from "@/server/usecases/registrations";
@@ -21,11 +21,14 @@ import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t } from "@/lib/i18n";
 import { isValidIana, DEFAULT_TZ } from "@/lib/tz";
 import { asCurrency } from "@/lib/currency";
+import { resolveRegistrationHubTab } from "@/components/registration-hub-tab";
+import { parseHubTabs, type HubTabsState } from "@/components/registration-hub-tabs-state";
 import {
-  REGISTRATION_HUB_TABS,
-  resolveRegistrationHubTab,
-  type RegistrationHubTab,
-} from "@/components/registration-hub-tab";
+  RegistrationHubTabsHost,
+  type HubDivisionConfigContext,
+  type OpenDivisionConfig,
+  type OpenableDivision,
+} from "@/components/registration-hub-tabs-host";
 import { RegistrationHubSettingsPanel } from "@/components/registration-hub-settings-panel";
 import { isChessSport } from "@/lib/chess-individual-only";
 import {
@@ -43,11 +46,12 @@ import {
   fetchOrgCurrency,
   fetchRegistrantRows,
   dropArchivedDivisionFilter,
-  carriedOpenTabs,
   fetchDivisionOptions,
   fetchRegistrantDetails,
   fetchPoolSummary,
   registrantsExportHrefFor,
+  openDivisionConfigOf,
+  type RawDivisionRow,
   type RegistrantsRawQuery,
 } from "./data";
 
@@ -56,7 +60,7 @@ export default async function RegistrationHubPage({
   searchParams,
 }: {
   params: Promise<{ orgSlug: string; compSlug: string }>;
-  searchParams: Promise<RegistrantsRawQuery & { tab?: string; open?: string | string[] }>;
+  searchParams: Promise<RegistrantsRawQuery & { tab?: string | string[]; open?: string | string[] }>;
 }) {
   const [{ orgSlug, compSlug }, rawSearchParams] = await Promise.all([params, searchParams]);
   const { tab: rawTab, open: rawOpen, ...registrantsRawQuery } = rawSearchParams;
@@ -79,7 +83,13 @@ export default async function RegistrationHubPage({
   const locale = await resolveLocale();
   const dict = await getDictionary(locale, "ui");
   const competition = await getCompetition(auth, id);
-  const tab: RegistrationHubTab = resolveRegistrationHubTab(rawTab);
+  // Which section's data to read is known from `tab` alone: only Registrants has its own reads. Everything else — Settings,
+  // or a division tab — reads the Settings rows, which are also the divisions a tab can open there.
+  const tabParam = firstOf(rawTab);
+  const onRegistrants = resolveRegistrationHubTab(tabParam) === "registrants";
+  const openParam = firstOf(rawOpen);
+  const parseTabs = (openable: readonly OpenableDivision[]): HubTabsState =>
+    parseHubTabs({ tab: tabParam, open: openParam }, new Set(openable.map((d) => d.id)));
 
   // Registration windows are ORG-level (a registration window is not a
   // per-division venue setting) — organizations.timezone or DEFAULT_TZ,
@@ -97,13 +107,22 @@ export default async function RegistrationHubPage({
   // the `settingsContext === null` correlation trick this page used to
   // lean on — that trick stopped working the moment a SECOND tab needed
   // its own context to branch on too.
-  let panel: ReactNode;
+  let panel: ReactNode = null;
   // The tab strip's trailing slot (B6 T20, spec §8): Export CSV sits
   // right-aligned on the tabs row, only on the Registrants tab and only when
-  // there is something to export. B7's strip component takes this node over.
+  // there is something to export.
   let tabsEnd: ReactNode = null;
-  if (tab === "settings") {
+  let tabs: HubTabsState;
+  let openable: OpenableDivision[];
+  let divisionRows: RawDivisionRow[] = [];
+  let configContext: HubDivisionConfigContext | null = null;
+  if (!onRegistrants) {
     const rawRows = await fetchDivisionRows(auth, id);
+    divisionRows = rawRows;
+    // Every non-archived division, the same set fetchDivisionOptions lists (both read `archived_at is null`), when the viewer
+    // can edit; none for a viewer, who gets no division tab (T22).
+    openable = canEdit ? rawRows.map((r) => ({ id: r.division_id, name: r.name })) : [];
+    tabs = parseTabs(openable);
     const rows: RegistrationHubRowData[] = rawRows.map((r) => ({
       division_id: r.division_id,
       name: r.name,
@@ -139,6 +158,8 @@ export default async function RegistrationHubPage({
         ? await fetchOrgCardUnsupportedCurrency(auth)
         : rawRows[0]!.org_stripe_unsupported_currency;
     const feePercentPct = await feePercentFor(auth.orgId, id);
+    const currency = asCurrency(rawRows[0]?.org_currency ?? (await fetchOrgCurrency(auth)));
+    configContext = { orgTz, orgSlug, currency, feePercentPct, cardUnsupportedCurrency };
 
     const settingsContext: Omit<RegistrationHubRowContext, "onOpen"> = {
       dict,
@@ -147,7 +168,7 @@ export default async function RegistrationHubPage({
       // Finding 6: resolved independently of rawRows[0] rather than
       // defaulting to "usd" whenever there are no rows to read it off (a
       // competition with zero divisions) — see fetchOrgCurrency.
-      currency: asCurrency(rawRows[0]?.org_currency ?? (await fetchOrgCurrency(auth))),
+      currency,
       registerHref: routes.publicRegister(orgSlug, compSlug),
       registerQrFileName: `register-${competition.slug}.png`,
       showRegisterLink: competition.visibility !== "private",
@@ -157,33 +178,53 @@ export default async function RegistrationHubPage({
       canEdit,
     };
 
-    panel = (
-      <RegistrationHubSettingsPanel
-        title={t(dict, "reg.hub.settings.title")}
-        body={t(dict, "reg.hub.settings.body")}
-        rows={rows}
-        context={settingsContext}
-        orgSlug={orgSlug}
-        feePercentPct={feePercentPct}
-        cardUnsupportedCurrency={cardUnsupportedCurrency}
-      />
-    );
+    // A division tab on screen shows that division's settings page, which the host draws: no section panel under it.
+    if (tabs.active === "settings") {
+      panel = (
+        <RegistrationHubSettingsPanel
+          title={t(dict, "reg.hub.settings.title")}
+          body={t(dict, "reg.hub.settings.body")}
+          rows={rows}
+          context={settingsContext}
+        />
+      );
+    }
   } else {
     // RS012 `/code-review high` finding 6: fetchDivisionOptions and
     // fetchPoolSummary depend only on auth/id, not on fetchRegistrantRows'
     // own result — run all three concurrently rather than making the other
     // two wait their turn behind it. Only fetchRegistrantDetails genuinely
     // needs registrants.rows, so it stays a sequential await AFTER this.
-    const [firstRead, divisions, poolSummaryRows] = await Promise.all([
+    //
+    // B7 T24: with division tabs in the address (an editor's), their settings pages need the Settings rows and the fee cut
+    // too — read alongside, and only then, so a plain Registrants load reads exactly what it always did.
+    const wantsConfigs = canEdit && openParam !== undefined && openParam !== "";
+    const [firstRead, divisions, poolSummaryRows, configRows, feePercentPct] = await Promise.all([
       fetchRegistrantRows(auth, id, registrantsRawQuery),
       fetchDivisionOptions(auth, id),
       fetchPoolSummary(auth, id),
+      wantsConfigs ? fetchDivisionRows(auth, id) : null,
+      wantsConfigs ? feePercentFor(auth.orgId, id) : null,
     ]);
+    openable = canEdit ? divisions.map((d) => ({ id: d.id, name: d.name })) : [];
+    tabs = parseTabs(openable);
+    if (configRows !== null && feePercentPct !== null && tabs.open.length > 0) {
+      divisionRows = configRows;
+      // A division tab is open, so its row exists (the two reads list the same divisions): the org values ride on it.
+      const first = configRows[0]!;
+      configContext = {
+        orgTz,
+        orgSlug,
+        currency: asCurrency(first.org_currency),
+        feePercentPct,
+        cardUnsupportedCurrency: first.org_stripe_unsupported_currency,
+      };
+    }
     // B6 T21 review: a `?division_id=` naming an ARCHIVED division is ignored (the
     // dropdown cannot show it, so it must not narrow the table) — see the function.
     const registrants = await dropArchivedDivisionFilter(auth, id, registrantsRawQuery, firstRead, divisions);
-    // Filters are not tabs (B7 T22): the two links back out of this tab keep the open ones.
-    const openTabs = carriedOpenTabs(rawOpen);
+    // Filters are not tabs (B7 T22): every link this tab writes keeps the open ones.
+    const openTabs = tabs.open;
     // RS005 W2b: the row-expand detail's roster/siblings/form_fields for
     // EVERY row on the page, batched into 2 queries total (task 3) —
     // fetched here, eagerly, rather than on click: the row is a plain
@@ -199,7 +240,7 @@ export default async function RegistrationHubPage({
     // header comment: "this component never imports routes itself").
     const poolSummary: PoolSummaryPanelRow[] = poolSummaryRows.map((row) => ({
       ...row,
-      href: `${routes.competitionRegistration(orgSlug, compSlug, "registrants", row.division_id)}&free_agent=1`,
+      href: `${routes.competitionRegistration(orgSlug, compSlug, "registrants", row.division_id, openTabs)}&free_agent=1`,
     }));
 
     // Same predicate the panel uses for its own bare empty state — nothing to
@@ -242,39 +283,34 @@ export default async function RegistrationHubPage({
     );
   }
 
+  // The open tabs' settings pages, in the address's order. Each one is in the rows read above: `parseHubTabs` keeps only
+  // openable ids, and openable IS those rows (Settings) or the same set by another read (Registrants).
+  const openDivisions: OpenDivisionConfig[] = tabs.open.map((divisionId) => {
+    const row = divisionRows.find((r) => r.division_id === divisionId);
+    if (!row) throw new Error(`registration hub: open division ${divisionId} has no Settings row to load its page from`);
+    return openDivisionConfigOf(row);
+  });
+
   return (
     <main className="mx-auto max-w-4xl px-4 py-8">
       <h1 className="page-title mb-6">{t(dict, "reg.hub.title", { name: competition.name })}</h1>
 
-      {/* The tab strip row: tabs on the left, `tabsEnd` (Export CSV) right-
-          aligned. From md up the row owns the rule under both; below md the
-          tabs keep their own scrolling strip and the trailing control wraps
-          to a right-aligned line under it, where Export always sat. The
-          `RS005 F3 finding 2` negative-filter case rides on
-          registrantsExportHrefFor (data.ts) — see that function's comment. */}
-      <div
-        data-registration-hub-tabs-row
-        className="mb-6 flex flex-wrap items-end justify-between gap-x-3 gap-y-2 md:flex-nowrap md:border-b md:border-slate-200"
+      <RegistrationHubTabsHost
+        state={tabs}
+        divisions={openDivisions}
+        openable={openable}
+        config={configContext}
+        orgSlug={orgSlug}
+        compSlug={compSlug}
+        stripEnd={tabsEnd}
       >
-        <nav className="scroll-x scroll-x-fade flex min-w-0 grow gap-1 whitespace-nowrap border-b border-slate-200 max-md:basis-full md:border-b-0">
-          {REGISTRATION_HUB_TABS.map((tabKey) => (
-            <Link
-              key={tabKey}
-              href={routes.competitionRegistration(orgSlug, compSlug, tabKey)}
-              className={`border-b-2 px-4 py-2 text-sm font-medium transition ${
-                tab === tabKey
-                  ? "border-purple-600 text-purple-700"
-                  : "border-transparent text-slate-500 hover:text-slate-800"
-              }`}
-            >
-              {t(dict, `reg.hub.tab.${tabKey}`)}
-            </Link>
-          ))}
-        </nav>
-        {tabsEnd}
-      </div>
-
-      {panel}
+        {panel}
+      </RegistrationHubTabsHost>
     </main>
   );
+}
+
+/** A repeated param (`?tab=a&tab=b`, which Next hands over as an array) reads as its FIRST value — the house rule. */
+function firstOf(v: string | string[] | undefined): string | undefined {
+  return Array.isArray(v) ? v[0] : v;
 }

@@ -1,50 +1,38 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { SlidersHorizontal } from "lucide-react";
 import {
   RegistrationHubDivisionRow,
   type RegistrationHubRowData,
   type RegistrationHubRowContext,
 } from "@/components/registration-hub-division-row";
-import { RegistrationHubConfigPanel } from "@/components/registration-hub-config-panel";
+import { useHubTabs } from "@/components/registration-hub-tabs-host";
 
 /**
  * Registration hub — Settings tab (RS004 W3/W3c, design §5).
  *
  * W2 shipped this as a data-free designed frame; W3 filled it with one
- * `RegistrationHubDivisionRow` per division. W3c makes it stateful: it owns
- * which division's config panel (if any) is open and mounts
- * `RegistrationHubConfigPanel` for it — a client component now, since that
- * state has to live somewhere and the row/page split keeps rows themselves
- * (and `page.tsx`) exactly as read-only as before. With zero divisions the
+ * `RegistrationHubDivisionRow` per division. With zero divisions the
  * original W2 frame still renders unchanged.
+ *
+ * B7 T24: a row's "Open settings" opens the division's settings as a hub tab
+ * (registration-hub-tabs-host.tsx), which owns which divisions are open and
+ * asks before an open would close a tab holding unsaved edits. It was a dialog
+ * this component mounted until then.
  */
 export function RegistrationHubSettingsPanel({
   title,
   body,
   rows,
   context,
-  orgSlug,
-  feePercentPct,
-  cardUnsupportedCurrency,
 }: {
   title: string;
   body: string;
   rows: RegistrationHubRowData[];
-  /** Everything the rows share EXCEPT `onOpen` — this component supplies
-   *  that itself, since it is the one that owns "which row is open". */
+  /** Everything the rows share EXCEPT `onOpen` — the tab host supplies that. */
   context: Omit<RegistrationHubRowContext, "onOpen">;
-  orgSlug: string;
-  /** registration.fee_percent entitlement, resolved server-side (page.tsx). */
-  feePercentPct: number;
-  /** Non-null when the org's connected Stripe account settles outside the
-   *  registration currency allowlist. */
-  cardUnsupportedCurrency: string | null;
 }) {
-  const router = useRouter();
-  const [openDivisionId, setOpenDivisionId] = useState<string | null>(null);
+  const tabs = useHubTabs();
 
   if (rows.length === 0) {
     return (
@@ -61,54 +49,22 @@ export function RegistrationHubSettingsPanel({
     );
   }
 
-  const rowContext: RegistrationHubRowContext = { ...context, onOpen: setOpenDivisionId };
-  const openRow = rows.find((r) => r.division_id === openDivisionId) ?? null;
+  // An editor's rows each offer "Open settings", and only the host can open a tab: without one that button would do nothing.
+  if (context.canEdit && !tabs) {
+    throw new Error("RegistrationHubSettingsPanel: rendered outside RegistrationHubTabsHost, so Open settings has nothing to open");
+  }
+  const rowContext: RegistrationHubRowContext = {
+    ...context,
+    onOpen: (divisionId) => tabs?.openDivision(divisionId),
+  };
 
   return (
-    <>
-      <ul data-registration-hub-settings-panel className="flex flex-col gap-3">
-        {rows.map((row) => (
-          <li key={row.division_id}>
-            <RegistrationHubDivisionRow row={row} context={rowContext} />
-          </li>
-        ))}
-      </ul>
-
-      {openRow && (
-        <RegistrationHubConfigPanel
-          // Keyed by division so switching rows REMOUNTS the panel with fresh
-          // state, instead of the panel resetting its own state from inside an
-          // effect — that shape is a cascading render (react-hooks lint) and
-          // leaves one frame showing the previous division's values.
-          key={openRow.division_id}
-          division={{
-            division_id: openRow.division_id,
-            name: openRow.name,
-            individual_only: openRow.individual_only === true,
-            allowed_kinds: openRow.allowed_kinds,
-            category: openRow.category,
-            age_min: openRow.age_min,
-            age_max: openRow.age_max,
-            age_cutoff_month: openRow.age_cutoff_month,
-            age_cutoff_day: openRow.age_cutoff_day,
-            eligibility_note: openRow.eligibility_note,
-          }}
-          orgTz={context.orgTz}
-          orgSlug={orgSlug}
-          currency={context.currency}
-          feePercentPct={feePercentPct}
-          cardUnsupportedCurrency={cardUnsupportedCurrency}
-          waitlistedCount={openRow.waitlisted}
-          onClose={() => setOpenDivisionId(null)}
-          onSaved={() => {
-            // The row list is server-fetched (page.tsx); refresh re-runs
-            // that fetch so the row reflects what was just saved instead of
-            // this component trying to merge/predict the new server state.
-            setOpenDivisionId(null);
-            router.refresh();
-          }}
-        />
-      )}
-    </>
+    <ul data-registration-hub-settings-panel className="flex flex-col gap-3">
+      {rows.map((row) => (
+        <li key={row.division_id}>
+          <RegistrationHubDivisionRow row={row} context={rowContext} />
+        </li>
+      ))}
+    </ul>
   );
 }

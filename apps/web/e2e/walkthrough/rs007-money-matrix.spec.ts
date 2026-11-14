@@ -537,23 +537,25 @@ test("S2 doubles — a partner joins by invite link, then the organiser raises t
     await page.goto(`/o/${org.slug}/c/${comp.slug}/registration`, { waitUntil: "load" });
     await page.waitForTimeout(1500);
     // The Settings tab opens on a COLLAPSED division row — status, entrant
-    // kind, current fee and the share link, no editable fields. The config
-    // panel (and with it the fee input) is behind the row's own configure
-    // control, so an organiser raising a price taps that first.
+    // kind, current fee and the share link, no editable fields. The division's
+    // settings (and with them the fee input) open as a tab of their own behind
+    // the row's "Open settings" (B7 T24), so an organiser raising a price taps
+    // that first.
     await page
       .locator("[data-registration-hub-row-configure]")
       .first()
       .click();
+    await expect(page.getByTestId("reg-hub-tab-division")).toHaveAttribute("aria-current", "page", { timeout: 20_000 });
     await page.waitForTimeout(1200);
     await page.screenshot({ path: `${s.shots}/s2-10a-config-open.png`, fullPage: true });
 
-    // The panel is an accordion of native <details> sections, and `money` is
-    // the one that starts CLOSED (DEFAULT_OPEN in registration-hub-config-
-    // panel.tsx: eligibility/schedule/capacity open, money/form shut). The
-    // fee input therefore exists in the DOM but is genuinely `hidden` until
-    // an organiser opens the section — so this is a real click in the
-    // journey, not a workaround for the test.
-    await page.locator('[data-accordion-section="money"] summary').click();
+    // Below md the page is an accordion of native <details> sections, and
+    // `money` is the one that starts CLOSED (DEFAULT_OPEN in registration-hub-
+    // config-panel.tsx: eligibility/schedule/capacity open, money/form shut) —
+    // a real click in the journey there. From md up (this spec's 1280) every
+    // section is a plain open <section> with no summary to click (B7 T23).
+    const money = page.locator('[data-registration-hub-config-panel] [data-accordion-section="money"]');
+    if ((await money.evaluate((el) => el.tagName)) === "DETAILS") await money.locator("summary").click();
     await page.waitForTimeout(800);
     await page.screenshot({ path: `${s.shots}/s2-10b-money-section.png`, fullPage: true });
 

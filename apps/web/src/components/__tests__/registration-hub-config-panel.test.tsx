@@ -1,7 +1,7 @@
-// RS004 W3c/W4 — the row-click config panel: accordion sections
+// RS004 W3c/W4 — a division's registration settings page: accordion sections
 // (Eligibility/Open & close/Capacity default open, Money/sign-up form
-// default collapsed), built on the shared <Modal> primitive and the
-// useRegistrationConfigPanelState hook for fetch/patch/save.
+// default collapsed) over the useRegistrationConfigPanelState hook for
+// fetch/patch/save. A dialog until B7 T24 made it the hub's division tab.
 import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement, ReactNode } from "react";
@@ -88,6 +88,21 @@ import { configDirty, type ConfigDirty } from "@/components/use-config-dirty";
 import { toDivisionPatchBody, toRegistrationSettingsPutBody } from "@/components/registration-hub-config-state";
 import { ConfigSaveBar, ConfigSectionIndex, revealSection, sectionAnchor } from "@/components/registration-hub-config-page-chrome";
 import { compileClasses } from "@/components/v2/__tests__/_compiled-css";
+import postcss from "postcss";
+import tailwind from "@tailwindcss/postcss";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+/** The raw CSS Tailwind compiles `classes` to over the real globals.css — for an arbitrary variant, whose rule's selector is
+ *  not the class itself (compileClasses only reads `.class` rules). Under its own `from`: @tailwindcss/postcss caches one
+ *  compiler per `from` path for the life of the process, and a second compile under the same path answers with the FIRST
+ *  one's candidates — sharing globals.css's path would leave compileClasses' call later in this file compiling nothing. */
+async function compiledCss(classes: readonly string[]): Promise<string> {
+  const globals = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "app", "globals.css");
+  const input = `${readFileSync(globals, "utf8")}\n@source inline("${classes.join(" ")}");\n`;
+  const from = join(dirname(globals), "__config-panel-test.css");
+  return (await postcss([tailwind({ base: dirname(globals) })]).process(input, { from })).css;
+}
 import uiEn from "@/dictionaries/en/ui.json";
 
 type SectionType = (props: Record<string, unknown>) => ReactNode;
@@ -172,7 +187,6 @@ const BASE_PROPS = {
   // in this file that predates the re-price warning and asserts nothing
   // about it.
   waitlistedCount: 0,
-  onClose: vi.fn(),
   onSaved: vi.fn(),
 };
 
@@ -215,8 +229,8 @@ function flush() {
   return new Promise((r) => setTimeout(r, 0));
 }
 
-// walk() doesn't invoke opaque child components (Modal's children/footer,
-// the exported Section functions), so they're expanded manually. <details>/
+// walk() doesn't invoke opaque child components (the exported Section
+// functions, the Save bar and the section index), so they're expanded manually. <details>/
 // <summary> need NO special handling — they're plain host element types
 // walk() already descends into.
 function deepExpand(node: ReactNode): ReturnType<typeof walk> {
@@ -235,15 +249,10 @@ function deepExpand(node: ReactNode): ReturnType<typeof walk> {
   return out;
 }
 
+/** The panel's tree with every section, the section index and the Save bar expanded (B7 T24: it was a Modal's children and
+ *  footer until the dialog was retired). */
 function expandPanel(node: ReactNode) {
-  const out = walk(node);
-  const modal = out.find((e) => e.type === Modal);
-  if (modal) {
-    const p = propsOf(modal);
-    out.push(...deepExpand(p.children as ReactNode));
-    if (p.footer) out.push(...walk(p.footer as ReactNode));
-  }
-  return out;
+  return deepExpand(node);
 }
 
 /** Text of the DEEPLY expanded panel. `island.text()` only sees what the
@@ -289,16 +298,6 @@ beforeEach(() => {
   net.putGate = null;
   mdUp.value = null;
   revealed.anchors = [];
-});
-
-describe("RegistrationHubConfigPanel — built on Modal (keeps the focus trap)", () => {
-  it("renders through the shared <Modal> primitive with the right title/footer contract", async () => {
-    const island = renderIsland(RegistrationHubConfigPanel, BASE_PROPS, expandPanel);
-    await flush();
-    const modal = island.tree().find((e) => e.type === Modal)!;
-    expect(modal).toBeTruthy();
-    expect(propsOf(modal).title).toBe(t(uiEn, "reg.hub.config.title", { name: "Open Singles" }));
-  });
 });
 
 describe("RegistrationHubConfigPanel — loading and data wiring", () => {
@@ -542,7 +541,7 @@ describe("RegistrationHubConfigPanel — every routable field has a render site 
     const dtProps = { dtDrafts: {}, onDateTimeHalfChange: vi.fn() };
     const rendered = [
       ...walk(EligibilitySection({ ...commonProps, orgTz: "UTC", ...dtProps })),
-      ...walk(OpenCloseSection({ ...commonProps, orgTz: "UTC", allowedKinds: ALL_KINDS, ...dtProps })),
+      ...walk(OpenCloseSection({ ...commonProps, orgTz: "UTC", allowedKinds: ALL_KINDS, kindHintId: "hint", ...dtProps })),
       ...walk(CapacitySection(commonProps)),
       ...walk(
         MoneySection({
@@ -595,6 +594,7 @@ describe("RegistrationHubConfigPanel — the open-for-public toggle's not-live n
         msg: testMsg,
         orgTz: "UTC",
         allowedKinds: ALL_KINDS,
+        kindHintId: "hint",
         dtDrafts: {},
         onDateTimeHalfChange: vi.fn(),
       }),
@@ -704,13 +704,16 @@ describe("RegistrationHubConfigPanel — save outcome (finding 1)", () => {
 });
 
 describe("RegistrationHubConfigPanel — cancel", () => {
-  it("closes without writing anything", async () => {
-    const onClose = vi.fn();
-    const island = renderIsland(RegistrationHubConfigPanel, { ...BASE_PROPS, onClose }, expandPanel);
+  it("writes nothing and puts the edited field back (the page stays: there is nothing to close since T24)", async () => {
+    const island = renderIsland(RegistrationHubConfigPanel, BASE_PROPS, expandPanel);
     await flush();
+    (propsOf(findField(island.tree(), "capacity")!).onChange as (e: { target: { value: string } }) => void)({
+      target: { value: "40" },
+    });
+    expect(propsOf(findField(island.tree(), "capacity")!).value).toBe(40);
     const cancelBtn = island.tree().find((e) => e.type === "button" && propsOf(e)["data-action"] === "cancel")!;
     (propsOf(cancelBtn).onClick as () => void)();
-    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(propsOf(findField(island.tree(), "capacity")!).value).toBe(RESPONSE.capacity);
     expect(net.calls.some((c) => c.method === "PATCH" || c.method === "PUT")).toBe(false);
   });
 });
@@ -1703,6 +1706,33 @@ describe("RegistrationHubConfigPanel — only the division's allowed entrant kin
     expect(holds(label!, (x) => propsOf(x)["data-testid"] === "entrant-kind-not-allowed"), "the hint is outside the label").toBe(false);
   });
 
+  it("the refused-kind hint's id is the page's own, so two open division tabs never share one (B7 T24)", () => {
+    // The hub mounts a page per open division tab, and two can show this hint at once: each select must describe ITS hint.
+    const hintFor = (kindHintId: string) => {
+      const tree = walk(
+        OpenCloseSection({
+          state: { ...FULL_STATE, entrant_kind: "individual" },
+          errors: {},
+          patch: vi.fn(),
+          msg: testMsg,
+          orgTz: "UTC",
+          allowedKinds: TEAMS_ONLY,
+          kindHintId,
+          dtDrafts: {},
+          onDateTimeHalfChange: vi.fn(),
+        }),
+      );
+      return {
+        describedBy: propsOf(findField(tree, "entrant_kind")!)["aria-describedby"],
+        hintId: propsOf(testId(tree, "entrant-kind-not-allowed")!).id,
+      };
+    };
+    const first = hintFor("«a»");
+    const second = hintFor("«b»");
+    expect(first).toEqual({ describedBy: "«a»", hintId: "«a»" });
+    expect(second).toEqual({ describedBy: "«b»", hintId: "«b»" });
+  });
+
   it("a save of the refused kind is stopped on the page (no PUT) with the error on the entrant type; picking an offered kind clears it and saves that kind", async () => {
     net.getResponse = { ...RESPONSE, entrant_kind: "individual", allow_free_agents: false };
     const island = renderIsland(RegistrationHubConfigPanel, { ...BASE_PROPS, division: { ...DIVISION, allowed_kinds: TEAMS_ONLY } }, expandPanel);
@@ -1744,13 +1774,12 @@ describe("RegistrationHubConfigPanel — only the division's allowed entrant kin
 // B7 T23 (spec §9.3) — the panel as a PAGE (a division's own hub tab), with dirty tracking.
 // ---------------------------------------------------------------------------
 //
-// `layout: "page"` drops the Modal: the sections sit in the page, a Save bar is pinned to the bottom, and from md up every
+// The sections sit in the page (no Modal), a Save bar is pinned to the bottom, and from md up every
 // section is open with a section index beside them. Dirty means "differs from what the server holds as far as this editor
 // knows" — the values it loaded, moved forward by each request that landed — never "differs from the props it mounted with".
 // Every copy expectation comes from the English dictionary; the counts from what the test itself typed.
 describe("RegistrationHubConfigPanel — page layout (B7 T23)", () => {
-  // The page takes no onClose (Cancel resets; the tab stays), so the modal fixture's is blanked out.
-  const SHARED = { ...BASE_PROPS, onClose: undefined };
+  const SHARED = BASE_PROPS;
   type Change = (e: { target: { value?: string; checked?: boolean } }) => void;
 
   async function openPage(extra: Record<string, unknown> = {}) {
@@ -1758,7 +1787,7 @@ describe("RegistrationHubConfigPanel — page layout (B7 T23)", () => {
     const onSaved = vi.fn();
     const island = renderIsland(
       RegistrationHubConfigPanel,
-      { ...SHARED, onSaved, layout: "page" as const, onDirtyChange: (d: ConfigDirty) => void reports.push(d), ...extra },
+      { ...SHARED, onSaved, onDirtyChange: (d: ConfigDirty) => void reports.push(d), ...extra },
       deepExpand,
     );
     await flush();
@@ -1930,7 +1959,7 @@ describe("RegistrationHubConfigPanel — page layout (B7 T23)", () => {
     const later: ConfigDirty[] = [];
     // A parent passing an inline arrow hands down a new function every render; that alone must not report (a parent that
     // stores the report in state would otherwise re-render, pass a new arrow, and loop).
-    page.island.rerender({ ...SHARED, onSaved: page.onSaved, layout: "page" as const, onDirtyChange: (d) => void later.push(d) });
+    page.island.rerender({ ...SHARED, onSaved: page.onSaved, onDirtyChange: (d) => void later.push(d) });
     expect(later).toEqual([]);
     page.type("capacity", "40");
     expect(later).toEqual([{ dirty: true, count: 1, sections: ["capacity"] }]);
@@ -2328,6 +2357,23 @@ describe("RegistrationHubConfigPanel — page layout (B7 T23)", () => {
     expect(BAR_TALLEST_PX).toBeGreaterThan(0);
   });
 
+  it("that scroll padding holds only while the page is ON SCREEN: a page in a hidden hub tab adds none (B7 T24)", async () => {
+    // The hub keeps an open division's page mounted behind the tab on screen; Settings and Registrants have no Save bar.
+    const page = await openPage();
+    const cls = String(propsOf(page.root()).className)
+      .split(/\s+/)
+      .find((c) => c.includes(":scroll-pb-"))!;
+    expect(cls, "premise: the page carries its scroll-padding class").toBeDefined();
+    const css = await compiledCss([cls]);
+    const rules: string[] = [];
+    postcss.parse(css).walkRules((rule) => {
+      if (rule.nodes.some((n) => n.type === "decl" && n.prop === "scroll-padding-bottom")) rules.push(rule.selector);
+    });
+    // One rule, on the root, for a page that is not inside anything hidden.
+    expect(rules).toHaveLength(1);
+    expect(rules[0]).toMatch(/^html:has\(.+:not\(\[hidden\] \*\)\)$/);
+  });
+
   it("the save handle answers what each save did — refused, success, put-failed, patch-failed, both-failed — and empties on unmount (G1)", async () => {
     const handle: { current: ConfigSaveHandle | null } = { current: null };
     const page = await openPage({ saveHandleRef: handle });
@@ -2421,7 +2467,7 @@ describe("RegistrationHubConfigPanel — page layout (B7 T23)", () => {
     let answer!: (value: unknown) => void;
     net.getResponse = new Promise((resolve) => (answer = resolve));
     const handle: { current: ConfigSaveHandle | null } = { current: null };
-    const island = renderIsland(RegistrationHubConfigPanel, { ...SHARED, layout: "page" as const, saveHandleRef: handle }, deepExpand);
+    const island = renderIsland(RegistrationHubConfigPanel, { ...SHARED, saveHandleRef: handle }, deepExpand);
     await flush();
     expect(handle.current).not.toBeNull();
     expect(await handle.current!.save()).toBe("refused");
@@ -2547,41 +2593,5 @@ describe("RegistrationHubConfigPanel — page layout (B7 T23)", () => {
     } finally {
       vi.unstubAllGlobals();
     }
-  });
-});
-
-describe("RegistrationHubConfigPanel — the modal layout is unchanged by the page layout (B7 T23)", () => {
-  it("still a Modal with no section index, no save bar and no Changed tags, and Cancel still closes", async () => {
-    mdUp.value = true;
-    const onClose = vi.fn();
-    const island = renderIsland(RegistrationHubConfigPanel, { ...BASE_PROPS, onClose }, expandPanel);
-    await flush();
-    (propsOf(findField(island.tree(), "capacity")!).onChange as (e: { target: { value: string } }) => void)({
-      target: { value: "40" },
-    });
-    const tree = island.tree();
-    expect(tree.some((e) => e.type === Modal)).toBe(true);
-    expect(tree.some((e) => e.type === "nav")).toBe(false);
-    expect(tree.some((e) => propsOf(e)["data-config-save-bar"] !== undefined)).toBe(false);
-    expect(tree.some((e) => propsOf(e)["data-section-changed"] !== undefined)).toBe(false);
-    // md does not force the modal's sections open: its accordion defaults stand at every width.
-    expect(propsOf(accordionSection(tree, "money")!).open).toBe(false);
-    // Its sections are the disclosures they always were: no page anchors, no headings inside the summaries.
-    expect(tree.some((e) => e.type === "h3")).toBe(false);
-    expect(tree.filter((e) => e.type === "details").every((d) => propsOf(d).id === undefined)).toBe(true);
-    const cancel = tree.find((e) => e.type === "button" && propsOf(e)["data-action"] === "cancel")!;
-    (propsOf(cancel).onClick as () => void)();
-    expect(onClose).toHaveBeenCalledTimes(1);
-    expect(propsOf(findField(island.tree(), "capacity")!).value).toBe(40);
-  });
-
-  it("a refused save in the modal opens the section and does not scroll the page under it", async () => {
-    const island = renderIsland(RegistrationHubConfigPanel, { ...BASE_PROPS, onClose: vi.fn() }, expandPanel);
-    await flush();
-    net.putRejection = new ApiV1Error("Invalid input", 400, "VALIDATION", { issues: [{ path: ["fee_cents"], message: "no" }] });
-    const save = island.tree().find((e) => e.type === "button" && propsOf(e)["data-action"] === "save")!;
-    await (propsOf(save).onClick as () => Promise<unknown>)();
-    expect(propsOf(accordionSection(island.tree(), "money")!).open).toBe(true);
-    expect(revealed.anchors).toEqual([]);
   });
 });

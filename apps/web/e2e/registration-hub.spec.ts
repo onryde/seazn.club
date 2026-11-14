@@ -14,11 +14,11 @@
 //
 // Selectors used throughout (registration-hub-{division-row,config-panel}.tsx):
 //   [data-registration-hub-row][data-division-id]     one Settings-tab row
-//   [data-registration-hub-row-configure]              opens that row's panel
-//   [data-registration-hub-config-panel][data-division-id]
+//   [data-registration-hub-row-configure]              opens that row's settings tab
+//   [data-registration-hub-config-panel][data-division-id]  the division's settings page
 //   [data-field="<name>"]                              an editable panel input
 //   [data-field-error="<name>"]                         that field's own error
-//   [data-action="save" | "cancel"]                     panel footer buttons
+//   [data-action="save" | "cancel"]                     the page's pinned Save bar
 //   [data-registration-hub-entry]                       the overview nav pill
 //   [data-registration-hub-awaiting]                    its amber dot
 //   [data-registration-hub-tooltip]                     the hover/focus breakdown
@@ -86,26 +86,33 @@ async function seedDivision(
   return { competitionId: comp.data!.id, competitionSlug: comp.data!.slug, divisionId: div.data!.id };
 }
 
-/** Open a division's row-click config panel and wait past its own async GET
- *  (the panel renders a loading placeholder until that resolves — querying
- *  a field before it lands is an unawaited fetch, not a UI bug, and reads
- *  like one if this isn't done explicitly here).
+/** Open a division's settings page (B7 T24: a hub tab — it was a dialog) and wait past its own async GET
+ *  (the page renders a loading placeholder until that resolves — querying a field before it lands is an
+ *  unawaited fetch, not a UI bug, and reads like one if this isn't done explicitly here).
  *
- *  Returns the DIALOG (`role="dialog"`, Modal's own root), not the inner
- *  `[data-registration-hub-config-panel]` content div — Modal renders
- *  `children` and `footer` as SIBLING divs inside the dialog, so the
- *  Save/Cancel buttons (`data-action`, in `footer`) are not descendants of
- *  the content div at all. Field/field-error queries still resolve fine
- *  from the dialog (they're descendants either way); only the "is this a
- *  banner, not a field error" check below needs the narrower selector. */
+ *  When the page is already on screen — a reload of `?tab=division:<id>` restores it — it is used as it is;
+ *  otherwise the Settings row's "Open settings" opens its tab. Returns the page's own `<section>`, which
+ *  holds the fields, the banners (direct children) and the pinned Save bar. */
 async function openConfigPanel(page: Page, divisionId: string): Promise<Locator> {
-  const row = page.locator(`[data-registration-hub-row][data-division-id="${divisionId}"]`);
-  await expect(row).toBeVisible({ timeout: 20_000 });
-  await row.locator("[data-registration-hub-row-configure]").click();
-  const content = page.locator(`[data-registration-hub-config-panel][data-division-id="${divisionId}"]`);
+  const content = page.locator(
+    `[data-registration-hub-config-panel][data-layout="page"][data-division-id="${divisionId}"]`,
+  );
+  if (!(await content.isVisible())) {
+    const row = page.locator(`[data-registration-hub-row][data-division-id="${divisionId}"]`);
+    await expect(row).toBeVisible({ timeout: 20_000 });
+    await row.locator("[data-registration-hub-row-configure]").click();
+    await expect(
+      page.locator(`[data-testid="reg-hub-tab-division"][data-division-id="${divisionId}"]`),
+    ).toHaveAttribute("aria-current", "page", { timeout: 20_000 });
+  }
   await expect(content).toBeVisible({ timeout: 20_000 });
   await expect(content.locator('[data-field="category"]')).toBeVisible({ timeout: 20_000 });
-  return page.getByRole("dialog").filter({ has: content });
+  return content;
+}
+
+/** A save that went through: the page stays (it is a tab now) and its bar reads "All changes saved". */
+async function expectSaved(panel: Locator): Promise<void> {
+  await expect(panel.locator('[data-config-status="clean"]')).toBeVisible({ timeout: 20_000 });
 }
 
 async function save(panel: Locator): Promise<void> {
@@ -121,6 +128,8 @@ async function save(panel: Locator): Promise<void> {
 async function openSection(panel: Locator, id: string): Promise<void> {
   const section = panel.locator(`[data-accordion-section="${id}"]`);
   await expect(section).toHaveCount(1, { timeout: 20_000 });
+  // From md up the settings page shows every section open, as a plain <section> with nothing to expand (B7 T23).
+  if ((await section.evaluate((el) => el.tagName)) !== "DETAILS") return;
   if (await section.evaluate((el) => (el as HTMLDetailsElement).open)) return;
   await section.locator("summary").click();
   await expect
@@ -136,9 +145,7 @@ async function openSection(panel: Locator, id: string): Promise<void> {
  *  copy of a FIELD error — that is the context-free toast these tests exist
  *  to forbid. */
 function contextFreeBanner(panel: Locator): Locator {
-  return panel.locator(
-    '[data-registration-hub-config-panel] > p[role="alert"]:not([data-save-outcome])',
-  );
+  return panel.locator(':scope > p[role="alert"]:not([data-save-outcome])');
 }
 
 test.describe("RS004 registration hub", () => {
@@ -162,7 +169,7 @@ test.describe("RS004 registration hub", () => {
     await panel.locator('[data-field="entrant_kind"]').selectOption("team");
     await panel.locator('[data-field="allow_free_agents"]').check();
     await save(panel);
-    await expect(panel).toBeHidden({ timeout: 20_000 });
+    await expectSaved(panel);
 
     await page.reload({ waitUntil: "load" });
     const reopened = await openConfigPanel(page, divisionId);
@@ -183,7 +190,7 @@ test.describe("RS004 registration hub", () => {
     let panel = await openConfigPanel(page, divisionId);
     await panel.locator('[data-field="age_max"]').fill("18");
     await save(panel);
-    await expect(panel).toBeHidden({ timeout: 20_000 });
+    await expectSaved(panel);
 
     // Reopen so the STORED age_max=18 is what the next save patches against
     // — a real organiser session, not a same-request coincidence.
@@ -208,9 +215,9 @@ test.describe("RS004 registration hub", () => {
     // The PATCH carrying the age band failed while the settings PUT committed,
     // so the panel must say so rather than implying nothing saved.
     await expect(
-      panel.locator('[data-registration-hub-config-panel] > p[data-save-outcome="patch-failed"]'),
+      panel.locator(':scope > p[data-save-outcome="patch-failed"]'),
     ).toHaveCount(1);
-    await expect(panel).toBeVisible(); // rejected save — panel stays open
+    await expect(panel.locator('[data-config-status="failed"]')).toBeVisible(); // rejected save — the bar says so
   });
 
   // --- 2b. 422: allow_free_agents on a non-team division ---------------------
@@ -256,7 +263,7 @@ test.describe("RS004 registration hub", () => {
     // Mirror image of the age-band case: here the settings PUT is the half
     // that failed.
     await expect(
-      panel.locator('[data-registration-hub-config-panel] > p[data-save-outcome="put-failed"]'),
+      panel.locator(':scope > p[data-save-outcome="put-failed"]'),
     ).toHaveCount(1);
   });
 
@@ -278,7 +285,7 @@ test.describe("RS004 registration hub", () => {
     await panel.locator('[data-field="payment_method_offline"]').check();
     await panel.locator('[data-field="payment_instructions"]').fill("Pay the club treasurer in cash.");
     await save(panel);
-    await expect(panel).toBeHidden({ timeout: 20_000 });
+    await expectSaved(panel);
     await page.reload({ waitUntil: "load" });
 
     // PUT /registration-settings replaces the whole row every time — edit
@@ -289,7 +296,7 @@ test.describe("RS004 registration hub", () => {
     await expect(panel.locator('[data-field="capacity"]')).toHaveValue("40");
     await panel.locator('[data-field="capacity"]').fill("75");
     await save(panel);
-    await expect(panel).toBeHidden({ timeout: 20_000 });
+    await expectSaved(panel);
     await page.reload({ waitUntil: "load" });
 
     panel = await openConfigPanel(page, divisionId);
@@ -342,7 +349,7 @@ test.describe("RS004 registration hub", () => {
       await panel.locator('[data-field="closes_at_date"]').fill("2026-09-10");
       await panel.locator('[data-field="closes_at_time"]').selectOption("09:30");
       await save(panel);
-      await expect(panel).toBeHidden({ timeout: 20_000 });
+      await expectSaved(panel);
 
       await page.reload({ waitUntil: "load" });
       panel = await openConfigPanel(page, divisionId);

@@ -185,7 +185,7 @@ describe("RegistrationHubDivisionRow — fee", () => {
   });
 });
 
-describe("RegistrationHubDivisionRow — Configure affordance, same contract as before", () => {
+describe("RegistrationHubDivisionRow — Open settings, same contract as the Configure button before it", () => {
   it("calls context.onOpen with THIS row's division id", () => {
     const onOpen = vi.fn();
     const tree = walk(
@@ -201,7 +201,18 @@ describe("RegistrationHubDivisionRow — Configure affordance, same contract as 
   it("gives the button an accessible name naming the division", () => {
     const tree = walk(RegistrationHubDivisionRow({ row: { ...BASE_ROW, name: "Open Doubles" }, context: BASE_CONTEXT }));
     const btn = tree.find((e) => propsOf(e)["data-registration-hub-row-configure"] !== undefined);
-    expect(propsOf(btn!)["aria-label"]).toBe(t(uiEn, "reg.hub.row.configure", { name: "Open Doubles" }));
+    expect(propsOf(btn!)["aria-label"]).toBe(t(uiEn, "reg.hub.row.openSettingsFor", { name: "Open Doubles" }));
+  });
+
+  it("says what it does in visible words, and its accessible name starts with them (B7 T24)", () => {
+    const tree = walk(RegistrationHubDivisionRow({ row: { ...BASE_ROW, name: "Open Doubles" }, context: BASE_CONTEXT }));
+    const btn = tree.find((e) => propsOf(e)["data-registration-hub-row-configure"] !== undefined)!;
+    const visible = t(uiEn, "reg.hub.row.openSettings");
+    expect(textOf(btn).trim()).toBe(visible);
+    // Label in name (WCAG 2.5.3): a speech user says what they see.
+    expect(String(propsOf(btn)["aria-label"]).startsWith(visible)).toBe(true);
+    // Still a 44px target, now a worded one.
+    expect(String(propsOf(btn).className)).toMatch(/(^|\s)min-h-11(\s|$)/);
   });
 
   // RS005 W2a follow-up. Until 2026-08-25 the hub 404'd anyone who could not
@@ -538,7 +549,8 @@ describe("RegistrationHubDivisionRow — full text against a fixture, not spot-c
     const text = textOf(RegistrationHubDivisionRow({ row, context }));
 
     // Every text-bearing node the row renders, in DOM order: status pill,
-    // name, capacity, fee (the primary scan line), then window/entrant/
+    // name, capacity, fee, Open settings (the primary scan line, B7 T24 worded
+    // the button), then window/entrant/
     // approval/category/age/free-agents (the secondary line), then the
     // private notice (showRegisterLink: false above). This is text
     // ASSEMBLY, not a re-verification of each derivation's own formatting.
@@ -547,6 +559,7 @@ describe("RegistrationHubDivisionRow — full text against a fixture, not spot-c
       row.name,
       t(uiEn, "reg.hub.row.capacity.limited", { count: 5, capacity: 20 }),
       formatMinor(1999, "usd"),
+      t(uiEn, "reg.hub.row.openSettings"),
       t(uiEn, "reg.hub.row.window.none"),
       t(uiEn, "divset.entrants.kind.team"),
       t(uiEn, "reg.hub.row.approval.manual"),

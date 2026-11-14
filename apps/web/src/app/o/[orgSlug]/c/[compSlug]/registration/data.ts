@@ -16,7 +16,8 @@ import { HttpError } from "@/lib/errors";
 // (`import type {...} from ".../data"`), so there is no runtime cycle.
 // Used by registrantsExportHrefFor below (RS005 F3 finding 2).
 import { registrantsExportHref } from "@/components/registration-hub-registrant-derive";
-import { parseHubTabs } from "@/components/registration-hub-tabs-state";
+import type { OpenDivisionConfig } from "@/components/registration-hub-tabs-host";
+import { isChessSport } from "@/lib/chess-individual-only";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { RegistrationHubRowData } from "@/components/registration-hub-division-row";
 import { entrantShapeOf } from "@/server/usecases/entrant-shape";
@@ -382,10 +383,14 @@ export async function fetchRegistrantRows(
  * Ruling: ignore it, exactly like a division that does not exist or belongs to
  * another competition (`fetchRegistrantRows`, above): render unfiltered and let
  * `filters.divisionId` say so. Cost if wrong: an organiser following an old link
- * to an archived division's rows sees every row; no screen offers that filter,
- * so nothing in the product points there. (The alternative — naming the archived
- * division on the pill — needs a second query shape and a new label in four
- * locales for a link nothing generates.)
+ * to an archived division's rows sees every row. Such links ARE produced: the
+ * division page (d/[divSlug]/page.tsx) and its stages panel
+ * (components/v2/stages-panel.tsx) both link `?tab=registrants&division_id=<id>`,
+ * and both are still served for an archived division — `getDivision` and
+ * `divBySlugUncached` (server/slug-resolve.ts) read a division with no
+ * `archived_at` filter. Naming the archived division on the pill instead needs a
+ * second query shape and a new label in four locales, for the rows of a division
+ * that takes no more entries.
  *
  * Called with the options the page already fetched concurrently with the rows,
  * so the common case (no division filter, or a listed one) costs nothing; only
@@ -408,22 +413,28 @@ export async function dropArchivedDivisionFilter(
 }
 
 /**
- * B7 T22 ruling (2026-11-13): filters are not tabs. The Registrants tab's own
- * links back to the bare tab (and its empty state's way to Settings) carry the
- * organiser's open division tabs (`?open=<a>,<b>`) so following one does not
- * close them. Read the way the hub reads them (`parseHubTabs`, so the same cap
- * of 2 and the same de-duplication), but against the ids' SHAPE only: this page
- * has no list of the competition's openable divisions on this tab, and a link it
- * writes must be safe whatever it was given — a non-uuid (`x&tab=settings`) is
- * dropped here, never spliced into an href. A repeated `?open=a&open=b` reads as
- * its FIRST value, the house rule for a repeated param (`firstOf`, and now
- * `parseHubTabs`).
+ * B7 T24: an open division tab's settings page, from the division's Settings
+ * row (`fetchDivisionRows`) — the same fields the row-click dialog was handed
+ * before the tabs replaced it. Here, not in the page module (Next's fixed page
+ * export surface) and not in the host (a client module the page can only
+ * hand plain data to).
  */
-export function carriedOpenTabs(raw: string | string[] | undefined): string[] {
-  const first = firstOf(raw);
-  if (typeof first !== "string") return [];
-  const shaped = new Set(first.split(",").filter((id) => UUID_RE.test(id)));
-  return parseHubTabs({ tab: "registrants", open: first }, shaped).open;
+export function openDivisionConfigOf(raw: RawDivisionRow): OpenDivisionConfig {
+  return {
+    division: {
+      division_id: raw.division_id,
+      name: raw.name,
+      individual_only: isChessSport(raw.sport_key),
+      allowed_kinds: raw.allowed_kinds,
+      category: raw.category,
+      age_min: raw.age_min,
+      age_max: raw.age_max,
+      age_cutoff_month: raw.age_cutoff_month,
+      age_cutoff_day: raw.age_cutoff_day,
+      eligibility_note: raw.eligibility_note,
+    },
+    waitlistedCount: raw.waitlisted,
+  };
 }
 
 /**

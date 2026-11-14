@@ -13,6 +13,7 @@
 // own `canEdit` check. That is the behaviour this file's guard tests actually
 // exercise.
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import type { ReactNode } from "react";
 
 vi.mock("next/navigation", () => ({
   notFound: () => {
@@ -209,6 +210,7 @@ import { walk } from "@/components/__tests__/_hook-harness";
 import { propsOf, textOf } from "@/components/__tests__/_hook-harness";
 import { RegistrationHubSettingsPanel } from "@/components/registration-hub-settings-panel";
 import { RegistrationHubRegistrantsPanel } from "@/components/registration-hub-registrants-panel";
+import { RegistrationHubTabsHost, type HubDivisionConfigContext } from "@/components/registration-hub-tabs-host";
 import { parseHubTabs } from "@/components/registration-hub-tabs-state";
 import { compileClasses } from "@/components/v2/__tests__/_compiled-css";
 // Real (unmocked) dictionary loader — only `@/lib/resolve-locale` is mocked
@@ -224,6 +226,45 @@ const FOOTBALL = builtinModules.find((m) => m.key === "football")!;
 
 const params = Promise.resolve({ orgSlug: "riverside", compSlug: "summer-league" });
 const noTab = Promise.resolve({});
+
+// B7 T24: every tab renders inside RegistrationHubTabsHost (a client component, never invoked here). Its section panel is its
+// child, which walk() follows; the strip's trailing slot (Export CSV) rides as its `stripEnd` PROP, which walk() does not —
+// so the page's tree is read with that slot walked too.
+const hostOf = (tree: ReturnType<typeof walk>) => tree.find((e) => e.type === RegistrationHubTabsHost);
+function walkPage(node: ReactNode): ReturnType<typeof walk> {
+  const tree = walk(node);
+  const host = hostOf(tree);
+  return host ? [...tree, ...walk(propsOf(host).stripEnd as ReactNode)] : tree;
+}
+/** One Settings row as fetchDivisionRows' query returns it (before the loader resolves its allowed kinds). */
+const SETTINGS_ROW = {
+  division_id: "div-1",
+  name: "Open Singles",
+  sport_key: "football",
+  module_version: FOOTBALL.version,
+  config: {},
+  category: null,
+  age_min: null,
+  age_max: null,
+  age_cutoff_month: null,
+  age_cutoff_day: null,
+  eligibility_note: null,
+  enabled: true,
+  entrant_kind: "team",
+  opens_at: null,
+  closes_at: null,
+  capacity: null,
+  fee_cents: 0,
+  approval: "auto",
+  allow_free_agents: false,
+  taken: 0,
+  waitlisted: 0,
+  org_currency: "usd",
+  org_stripe_unsupported_currency: null,
+};
+
+/** What the host hands every division settings page (null when no division tab is open on a tab that needs none). */
+const configOf = (tree: ReturnType<typeof walk>) => propsOf(hostOf(tree)!).config as HubDivisionConfigContext | null;
 
 beforeEach(() => {
   h.canEdit = true;
@@ -271,14 +312,14 @@ describe("registration hub — RS005 owner/admin/viewer access (reverses RS004 r
     // — which is precisely the regression that would put a 403-only control
     // back in front of a read-only role.
     h.canEdit = false;
-    let panel = walk(await Page({ params, searchParams: noTab })).find(
+    let panel = walkPage(await Page({ params, searchParams: noTab })).find(
       (e) => e.type === RegistrationHubSettingsPanel,
     );
     expect(panel).toBeTruthy();
     expect((propsOf(panel!).context as { canEdit: boolean }).canEdit).toBe(false);
 
     h.canEdit = true;
-    panel = walk(await Page({ params, searchParams: noTab })).find(
+    panel = walkPage(await Page({ params, searchParams: noTab })).find(
       (e) => e.type === RegistrationHubSettingsPanel,
     );
     expect((propsOf(panel!).context as { canEdit: boolean }).canEdit).toBe(true);
@@ -292,7 +333,7 @@ describe("registration hub — RS005 owner/admin/viewer access (reverses RS004 r
 
 describe("registration hub — ?tab= switching", () => {
   it("defaults to the Settings panel with no ?tab=", async () => {
-    const tree = walk(await Page({ params, searchParams: noTab }));
+    const tree = walkPage(await Page({ params, searchParams: noTab }));
     expect(tree.some((e) => e.type === RegistrationHubSettingsPanel)).toBe(true);
     expect(tree.some((e) => e.type === RegistrationHubRegistrantsPanel)).toBe(false);
   });
@@ -305,7 +346,7 @@ describe("registration hub — ?tab= switching", () => {
     // dictionary's OWN resolved value (not a hardcoded "Registration
     // settings" string) means a real locale-copy change never breaks this
     // test either.
-    const tree = walk(await Page({ params, searchParams: noTab }));
+    const tree = walkPage(await Page({ params, searchParams: noTab }));
     const panel = tree.find((e) => e.type === RegistrationHubSettingsPanel)!;
     const props = propsOf(panel);
     const dict = await getDictionary("en", "ui");
@@ -314,13 +355,13 @@ describe("registration hub — ?tab= switching", () => {
   });
 
   it("falls back to Settings on a garbage ?tab=", async () => {
-    const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "bogus" }) }));
+    const tree = walkPage(await Page({ params, searchParams: Promise.resolve({ tab: "bogus" }) }));
     expect(tree.some((e) => e.type === RegistrationHubSettingsPanel)).toBe(true);
     expect(tree.some((e) => e.type === RegistrationHubRegistrantsPanel)).toBe(false);
   });
 
   it("switches to the Registrants panel with ?tab=registrants", async () => {
-    const tree = walk(
+    const tree = walkPage(
       await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }),
     );
     expect(tree.some((e) => e.type === RegistrationHubRegistrantsPanel)).toBe(true);
@@ -423,7 +464,7 @@ describe("registration hub — row-expand detail query wiring (RS005 W2b, task 3
 
   it("hands the panel the route's own slugs (the row detail's join link is built from them)", async () => {
     listRegistrationsMock.mockResolvedValueOnce([{ id: "r1", group_id: "g1" }]);
-    const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
+    const tree = walkPage(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
     const panel = propsOf(tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!);
     expect(panel.orgSlug).toBe("riverside");
     expect(panel.compSlug).toBe("summer-league");
@@ -431,7 +472,7 @@ describe("registration hub — row-expand detail query wiring (RS005 W2b, task 3
 
   it("passes the resolved details straight through to the panel's details prop", async () => {
     listRegistrationsMock.mockResolvedValueOnce([{ id: "r1", group_id: "g1" }]);
-    const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
+    const tree = walkPage(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
     const panel = tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!;
     const details = propsOf(panel).details as {
       rosterByRegistration: Map<string, unknown>;
@@ -461,14 +502,14 @@ describe("registration hub — Registrants tab data wiring (RS005 W2a)", () => {
   it("maps listRegistrations' resolved rows onto the panel's rows prop", async () => {
     const fakeRows = [{ id: "reg-1", display_name: "Alex Smith" }];
     listRegistrationsMock.mockResolvedValueOnce(fakeRows);
-    const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
+    const tree = walkPage(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
     const panel = tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!;
     expect(propsOf(panel).rows).toBe(fakeRows);
   });
 
   it("maps fetchDivisionOptions' resolved rows onto the panel's divisions prop", async () => {
     h.divisionOptions = [{ id: "div-1", name: "Open Singles" }];
-    const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
+    const tree = walkPage(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
     const panel = tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!;
     expect(propsOf(panel).divisions).toEqual([{ id: "div-1", name: "Open Singles" }]);
   });
@@ -484,7 +525,7 @@ describe("registration hub — Registrants tab data wiring (RS005 W2a)", () => {
     h.poolWaitingRows = [{ division_id: "div-9", waiting: 2 }];
     h.poolSlotRows = [{ division_id: "div-9", free_slots: 3 }];
     h.poolMetaRows = [{ division_id: "div-9", division_name: "Div 9", place_by_at: null, closes_at: null }];
-    const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
+    const tree = walkPage(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
     const panel = tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!;
     expect(propsOf(panel).poolSummary).toEqual([
       {
@@ -500,11 +541,11 @@ describe("registration hub — Registrants tab data wiring (RS005 W2a)", () => {
 
   it("threads canEdit through — true for an editor, false for a viewer", async () => {
     h.canEdit = true;
-    let tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
+    let tree = walkPage(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
     expect(propsOf(tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!).canEdit).toBe(true);
 
     h.canEdit = false;
-    tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
+    tree = walkPage(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
     expect(propsOf(tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!).canEdit).toBe(false);
   });
 
@@ -513,13 +554,13 @@ describe("registration hub — Registrants tab data wiring (RS005 W2a)", () => {
   // from this page's own `resolveLocale()` call (mocked to "en" above),
   // never a hardcoded default the panel invents on its own.
   it("threads the resolved locale through to the panel's locale prop", async () => {
-    const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
+    const tree = walkPage(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
     const panel = tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!;
     expect(propsOf(panel).locale).toBe("en");
   });
 
   it("passes the REAL empty-state strings from the dictionary — never a hardcoded literal or a mis-keyed lookup", async () => {
-    const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
+    const tree = walkPage(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
     const panel = tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!;
     const props = propsOf(panel);
     const dict = await getDictionary("en", "ui");
@@ -529,7 +570,7 @@ describe("registration hub — Registrants tab data wiring (RS005 W2a)", () => {
   });
 
   it("builds the empty-state cta href pointing at the Settings tab", async () => {
-    const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
+    const tree = walkPage(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
     const panel = tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!;
     expect(propsOf(panel).emptyCtaHref).toBe("/o/riverside/c/summer-league/registration?tab=settings");
   });
@@ -539,18 +580,18 @@ describe("registration hub — Registrants tab data wiring (RS005 W2a)", () => {
   const EXPORT_HREF = "/api/v1/competitions/comp-1/registrations/export?sort=newest";
   const exportLinks = (tree: ReturnType<typeof walk>) =>
     tree.filter((e) => e.type === "a" && String(propsOf(e).href ?? "").includes("/registrations/export"));
-  const tabsRow = (tree: ReturnType<typeof walk>) =>
-    tree.find((e) => propsOf(e)["data-registration-hub-tabs-row"] !== undefined)!;
+  /** The strip's trailing slot as the page hands it to the host (B7 T24: the strip itself is the host's). */
+  const stripEnd = (tree: ReturnType<typeof walk>) => walk(propsOf(hostOf(tree)!).stripEnd as ReactNode);
 
   it("builds the CSV export href off THIS competition's id, as ONE link in the tab strip row", async () => {
     listRegistrationsMock.mockResolvedValueOnce([{ id: "r1", group_id: "g1" }]);
-    const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
+    const tree = walkPage(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
     const links = exportLinks(tree);
     expect(links).toHaveLength(1);
     expect(propsOf(links[0]!).href).toBe(EXPORT_HREF);
     expect(textOf(links[0]!)).toBe(t(await getDictionary("en", "ui"), "reg.exportCsv"));
-    // In the strip row (beside the tabs), not handed down to the panel.
-    expect(walk(tabsRow(tree))).toContain(links[0]);
+    // In the strip's trailing slot (beside the tabs), not handed down to the panel.
+    expect(stripEnd(tree)).toContain(links[0]);
     expect(propsOf(tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!).exportHref).toBeUndefined();
   });
 
@@ -559,7 +600,7 @@ describe("registration hub — Registrants tab data wiring (RS005 W2a)", () => {
   // registrantsExportHrefFor's own comment (data.ts).
   it("carries the explicit '0' form on the export href when the table is narrowed to the negative case", async () => {
     listRegistrationsMock.mockResolvedValueOnce([{ id: "r1", group_id: "g1" }]);
-    const tree = walk(
+    const tree = walkPage(
       await Page({
         params,
         searchParams: Promise.resolve({ tab: "registrants", free_agent: "0", consent_pending: "0" }),
@@ -575,7 +616,7 @@ describe("registration hub — Registrants tab data wiring (RS005 W2a)", () => {
     for (const canEdit of [true, false]) {
       h.canEdit = canEdit;
       listRegistrationsMock.mockResolvedValueOnce([{ id: "r1", group_id: "g1" }]);
-      const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
+      const tree = walkPage(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
       expect(exportLinks(tree), `canEdit=${canEdit}`).toHaveLength(1);
       checked += 1;
     }
@@ -584,57 +625,55 @@ describe("registration hub — Registrants tab data wiring (RS005 W2a)", () => {
 
   it("shows NO Export CSV where the panel shows 'no one's registered yet' — nothing to export (empty case first)", async () => {
     // Default mock: zero rows, no filter.
-    const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
+    const tree = walkPage(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
     expect(exportLinks(tree)).toHaveLength(0);
     // The tab strip itself is still there — only its trailing slot is empty.
-    expect(tabsRow(tree)).toBeTruthy();
+    expect(hostOf(tree)).toBeTruthy();
+    expect(propsOf(hostOf(tree)!).stripEnd).toBeNull();
   });
 
   it("keeps Export CSV when a filter matched nothing — the organiser still needs the file and the bar", async () => {
-    const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants", status: "rejected" }) }));
+    const tree = walkPage(await Page({ params, searchParams: Promise.resolve({ tab: "registrants", status: "rejected" }) }));
     expect(exportLinks(tree)).toHaveLength(1);
     expect(propsOf(exportLinks(tree)[0]!).href).toBe(
       "/api/v1/competitions/comp-1/registrations/export?status=rejected&sort=newest",
     );
   });
 
-  // The strip row wraps Export under the tabs below md and sits beside them from
-  // md up — all of it Tailwind variants, and a mistyped one compiles to nothing
-  // and moves nothing. Read the classes off the real tree, not retyped here.
-  it("the tab strip row's classes are all real Tailwind — a typo would silently leave Export in the wrong place", async () => {
+  // Export wraps to its own right-aligned line below md and sits on the tabs row from md up — Tailwind variants, and a
+  // mistyped one compiles to nothing and moves nothing. The row's own classes are the strip's (registration-hub-tab-
+  // strip.test.tsx, B7 T24); this page owns the link's. Read off the real tree, not retyped here.
+  it("the Export link's classes are all real Tailwind — a typo would silently leave Export in the wrong place", async () => {
     listRegistrationsMock.mockResolvedValueOnce([{ id: "r1", group_id: "g1" }]);
-    const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
-    const row = tabsRow(tree);
-    const inRow = walk(row);
+    const tree = walkPage(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
     const tokens = new Set<string>();
-    for (const el of inRow) {
+    for (const el of stripEnd(tree)) {
       for (const tok of String(propsOf(el).className ?? "").split(/\s+/)) if (tok) tokens.add(tok);
     }
-    // `btn` / `btn-ghost` / `scroll-x` / `scroll-x-fade` are globals.css component classes.
-    for (const component of ["btn", "btn-ghost", "scroll-x", "scroll-x-fade"]) tokens.delete(component);
+    expect(tokens.size, "premise: the slot holds classed elements").toBeGreaterThan(0);
+    // `btn` / `btn-ghost` are globals.css component classes.
+    for (const component of ["btn", "btn-ghost"]) tokens.delete(component);
     const compiled = await compileClasses([...tokens]);
     const dead = [...tokens].filter((c) => Object.keys(compiled.get(c) ?? {}).length === 0);
     expect(dead, `classes that compile to nothing: ${dead.join(" ")}`).toEqual([]);
-    for (const must of ["max-md:basis-full", "max-md:ml-auto", "md:flex-nowrap", "md:border-b"]) {
-      expect(tokens.has(must), must).toBe(true);
-    }
+    for (const must of ["max-md:ml-auto", "md:mb-1"]) expect(tokens.has(must), must).toBe(true);
   });
 
   it("has no Export CSV on the Settings tab", async () => {
     listRegistrationsMock.mockResolvedValueOnce([{ id: "r1", group_id: "g1" }]);
-    const tree = walk(await Page({ params, searchParams: noTab }));
+    const tree = walkPage(await Page({ params, searchParams: noTab }));
     expect(exportLinks(tree)).toHaveLength(0);
   });
 
   it("builds filtersAction as the tab's BARE path (no query string — a GET form submit would otherwise discard it)", async () => {
-    const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
+    const tree = walkPage(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
     const panel = tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!;
     expect(propsOf(panel).filtersAction).toBe("/o/riverside/c/summer-league/registration");
   });
 
   it("resolves orgTz the SAME way the Settings tab does — org timezone, never UTC-by-coincidence", async () => {
     h.orgTimezone = "Asia/Kolkata";
-    const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
+    const tree = walkPage(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
     const panel = tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!;
     expect(propsOf(panel).orgTz).toBe("Asia/Kolkata");
   });
@@ -650,9 +689,15 @@ describe("registration hub — clearHref / emptyCtaHref keep the open division t
   const B = "22222222-2222-4222-8222-222222222222";
   const C = "33333333-3333-4333-8333-333333333333";
   const BASE = "/o/riverside/c/summer-league/registration";
+  // B7 T24: `open` is read against the divisions the viewer may open (an editor: every non-archived one), so A, B and C
+  // exist here — in the dropdown's read and in the Settings rows their tabs load from.
+  beforeEach(() => {
+    h.divisionOptions = [A, B, C].map((id, i) => ({ id, name: `Division ${i + 1}` }));
+    h.rows = [A, B, C].map((id, i) => ({ ...SETTINGS_ROW, division_id: id, name: `Division ${i + 1}` }));
+  });
 
   async function hrefs(searchParams: Record<string, unknown>) {
-    const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants", ...searchParams }) }));
+    const tree = walkPage(await Page({ params, searchParams: Promise.resolve({ tab: "registrants", ...searchParams }) }));
     const props = propsOf(tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!);
     return { clearHref: String(props.clearHref), emptyCtaHref: String(props.emptyCtaHref) };
   }
@@ -678,7 +723,10 @@ describe("registration hub — clearHref / emptyCtaHref keep the open division t
   });
 
   it("the grammar's own cap and de-duplication apply: three ids carry the last two, a repeat once", async () => {
-    expect(stateOf((await hrefs({ open: `${A},${B},${C}` })).clearHref, [A, B, C]).open).toEqual([B, C]);
+    // The raw value, as the link carries it (not through the parser, which would normalise a wrong value into a right one).
+    expect(new URL((await hrefs({ open: `${A},${B},${C}` })).clearHref, "https://seazn.test").searchParams.get("open")).toBe(
+      `${B},${C}`,
+    );
     expect(stateOf((await hrefs({ open: `${A},${B},${A}` })).clearHref, [A, B]).open).toEqual([B, A]);
   });
 
@@ -722,7 +770,7 @@ describe("registration hub — an archived division in ?division_id= is ignored,
   });
 
   async function panelFor(divisionId: string | undefined) {
-    const tree = walk(
+    const tree = walkPage(
       await Page({ params, searchParams: Promise.resolve({ tab: "registrants", ...(divisionId ? { division_id: divisionId } : {}) }) }),
     );
     return { tree, props: propsOf(tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!) };
@@ -787,7 +835,7 @@ describe("registration hub — array-valued query params never 500 the page (RS0
   });
 
   it("still renders the Registrants panel (not the error boundary) on a repeated param", async () => {
-    const tree = walk(
+    const tree = walkPage(
       await Page({ params, searchParams: Promise.resolve({ tab: "registrants", q: ["a", "b"] }) }),
     );
     expect(tree.some((e) => e.type === RegistrationHubRegistrantsPanel)).toBe(true);
@@ -829,7 +877,7 @@ describe("registration hub — Settings tab data wiring (RS004 W3)", () => {
         org_currency: "gbp",
       },
     ];
-    const tree = walk(await Page({ params, searchParams: noTab }));
+    const tree = walkPage(await Page({ params, searchParams: noTab }));
     const panel = tree.find((e) => e.type === RegistrationHubSettingsPanel)!;
     const props = propsOf(panel);
     expect(props.rows).toEqual([
@@ -874,7 +922,7 @@ describe("registration hub — Settings tab data wiring (RS004 W3)", () => {
       { ...base, division_id: "d-chess", name: "Blitz", sport_key: "boardgame" },
       { ...base, division_id: "d-foot", name: "Five-a-side", sport_key: "football" },
     ];
-    const tree = walk(await Page({ params, searchParams: noTab }));
+    const tree = walkPage(await Page({ params, searchParams: noTab }));
     const rows = propsOf(tree.find((e) => e.type === RegistrationHubSettingsPanel)!).rows as { division_id: string; individual_only: boolean }[];
     expect(rows.map((r) => [r.division_id, r.individual_only])).toEqual([
       ["d-chess", true],
@@ -884,21 +932,21 @@ describe("registration hub — Settings tab data wiring (RS004 W3)", () => {
 
   it("resolves the org timezone from organizations.timezone", async () => {
     h.orgTimezone = "Asia/Kolkata";
-    const tree = walk(await Page({ params, searchParams: noTab }));
+    const tree = walkPage(await Page({ params, searchParams: noTab }));
     const panel = tree.find((e) => e.type === RegistrationHubSettingsPanel)!;
     expect((propsOf(panel).context as { orgTz: string }).orgTz).toBe("Asia/Kolkata");
   });
 
   it("falls back to UTC when the org has no timezone set — never users.timezone or the cookie", async () => {
     h.orgTimezone = null;
-    const tree = walk(await Page({ params, searchParams: noTab }));
+    const tree = walkPage(await Page({ params, searchParams: noTab }));
     const panel = tree.find((e) => e.type === RegistrationHubSettingsPanel)!;
     expect((propsOf(panel).context as { orgTz: string }).orgTz).toBe("UTC");
   });
 
   it("shows the register link for a public competition, built via routes.publicRegister", async () => {
     h.competitionVisibility = "public";
-    const tree = walk(await Page({ params, searchParams: noTab }));
+    const tree = walkPage(await Page({ params, searchParams: noTab }));
     const panel = tree.find((e) => e.type === RegistrationHubSettingsPanel)!;
     const context = propsOf(panel).context as { showRegisterLink: boolean; registerHref: string };
     expect(context.showRegisterLink).toBe(true);
@@ -907,7 +955,7 @@ describe("registration hub — Settings tab data wiring (RS004 W3)", () => {
 
   it("hides the register link for a private competition", async () => {
     h.competitionVisibility = "private";
-    const tree = walk(await Page({ params, searchParams: noTab }));
+    const tree = walkPage(await Page({ params, searchParams: noTab }));
     const panel = tree.find((e) => e.type === RegistrationHubSettingsPanel)!;
     expect((propsOf(panel).context as { showRegisterLink: boolean }).showRegisterLink).toBe(false);
   });
@@ -921,7 +969,7 @@ describe("registration hub — Settings tab data wiring (RS004 W3)", () => {
   it("resolves the org currency independently of rows[0] — an empty rows list must not fall back to usd (finding 6)", async () => {
     h.rows = [];
     h.orgCurrency = "eur";
-    const tree = walk(await Page({ params, searchParams: noTab }));
+    const tree = walkPage(await Page({ params, searchParams: noTab }));
     const panel = tree.find((e) => e.type === RegistrationHubSettingsPanel)!;
     expect((propsOf(panel).context as { currency: string }).currency).toBe("eur");
   });
@@ -943,7 +991,7 @@ describe("registration hub — Settings tab data wiring (RS004 W3)", () => {
     h.rows = [];
     h.orgCurrency = "eur";
     h.orgStripeUnsupportedCurrency = "sek";
-    const tree = walk(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
+    const tree = walkPage(await Page({ params, searchParams: Promise.resolve({ tab: "registrants" }) }));
     expect(tree.find((e) => e.type === RegistrationHubSettingsPanel)).toBeUndefined();
     expect(h.currencyQueries).toBe(0);
     expect(h.unsupportedQueries).toBe(0);
@@ -956,26 +1004,23 @@ describe("registration hub — Settings tab data wiring (RS004 W3)", () => {
   it("resolves BOTH org fallbacks on the Settings tab when rows is empty (finding 6)", async () => {
     h.rows = [];
     h.orgStripeUnsupportedCurrency = "sek";
-    const tree = walk(await Page({ params, searchParams: noTab }));
-    const panel = tree.find((e) => e.type === RegistrationHubSettingsPanel)!;
-    expect(propsOf(panel).cardUnsupportedCurrency).toBe("sek");
+    const tree = walkPage(await Page({ params, searchParams: noTab }));
+    expect(configOf(tree)!.cardUnsupportedCurrency).toBe("sek");
     expect(h.currencyQueries).toBe(1);
     expect(h.unsupportedQueries).toBe(1);
   });
 });
 
 describe("registration hub — config panel context (RS004 W3c)", () => {
-  it("passes orgSlug through to the settings panel", async () => {
-    const tree = walk(await Page({ params, searchParams: noTab }));
-    const panel = tree.find((e) => e.type === RegistrationHubSettingsPanel)!;
-    expect(propsOf(panel).orgSlug).toBe("riverside");
+  it("passes orgSlug through to the division settings pages (the host's config)", async () => {
+    const tree = walkPage(await Page({ params, searchParams: noTab }));
+    expect(configOf(tree)!.orgSlug).toBe("riverside");
   });
 
   it("passes feePercentFor's resolved value as feePercentPct", async () => {
     feePercentForMock.mockResolvedValue(5);
-    const tree = walk(await Page({ params, searchParams: noTab }));
-    const panel = tree.find((e) => e.type === RegistrationHubSettingsPanel)!;
-    expect(propsOf(panel).feePercentPct).toBe(5);
+    const tree = walkPage(await Page({ params, searchParams: noTab }));
+    expect(configOf(tree)!.feePercentPct).toBe(5);
   });
 
   it("resolves fee_percent for THIS org and competition", async () => {
@@ -1004,9 +1049,8 @@ describe("registration hub — config panel context (RS004 W3c)", () => {
         org_stripe_unsupported_currency: "jpy",
       },
     ];
-    const tree = walk(await Page({ params, searchParams: noTab }));
-    const panel = tree.find((e) => e.type === RegistrationHubSettingsPanel)!;
-    expect(propsOf(panel).cardUnsupportedCurrency).toBe("jpy");
+    const tree = walkPage(await Page({ params, searchParams: noTab }));
+    expect(configOf(tree)!.cardUnsupportedCurrency).toBe("jpy");
   });
 
   it("is null (card supported) when the row carries no unsupported-currency value", async () => {
@@ -1030,9 +1074,8 @@ describe("registration hub — config panel context (RS004 W3c)", () => {
         org_stripe_unsupported_currency: null,
       },
     ];
-    const tree = walk(await Page({ params, searchParams: noTab }));
-    const panel = tree.find((e) => e.type === RegistrationHubSettingsPanel)!;
-    expect(propsOf(panel).cardUnsupportedCurrency).toBeNull();
+    const tree = walkPage(await Page({ params, searchParams: noTab }));
+    expect(configOf(tree)!.cardUnsupportedCurrency).toBeNull();
   });
 
   // Same "finding 6" shape as org currency: a Settings-tab competition with
@@ -1042,9 +1085,8 @@ describe("registration hub — config panel context (RS004 W3c)", () => {
   it("resolves cardUnsupportedCurrency independently of rows[0] on a zero-row settings tab", async () => {
     h.rows = [];
     h.orgStripeUnsupportedCurrency = "jpy";
-    const tree = walk(await Page({ params, searchParams: noTab }));
-    const panel = tree.find((e) => e.type === RegistrationHubSettingsPanel)!;
-    expect(propsOf(panel).cardUnsupportedCurrency).toBe("jpy");
+    const tree = walkPage(await Page({ params, searchParams: noTab }));
+    expect(configOf(tree)!.cardUnsupportedCurrency).toBe("jpy");
   });
 
   // Finding 4 (whole-branch review): org_stripe_unsupported_currency is
@@ -1077,5 +1119,148 @@ describe("registration hub — config panel context (RS004 W3c)", () => {
     ];
     await Page({ params, searchParams: noTab });
     expect(h.unsupportedQueries).toBe(0);
+  });
+});
+
+// B7 T24 — the division settings tabs. The address is the tab state; this page parses it against the divisions the viewer
+// may open (an editor: every non-archived division; a viewer: none) and hands it to the host, with the settings of the
+// open divisions loaded on whichever tab is on screen. The host's own behaviour (dialogs, history) is the e2e's.
+describe("registration hub — division settings tabs (B7 T24)", () => {
+  const A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  const GONE = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+  beforeEach(() => {
+    h.rows = [
+      { ...SETTINGS_ROW, division_id: A, name: "Blitz", sport_key: "boardgame", waitlisted: 4, age_cutoff_month: 9, age_cutoff_day: 1 },
+      { ...SETTINGS_ROW, division_id: B, name: "Five-a-side", waitlisted: 0 },
+    ];
+    h.divisionOptions = [
+      { id: A, name: "Blitz" },
+      { id: B, name: "Five-a-side" },
+    ];
+  });
+  const hostProps = (tree: ReturnType<typeof walk>) => propsOf(hostOf(tree)!);
+  const page = async (searchParams: Record<string, unknown>) => walkPage(await Page({ params, searchParams: Promise.resolve(searchParams) }));
+
+  it("the host sits at ONE place in the tree on every tab — the property that keeps an edit across a tab switch", async () => {
+    let checked = 0;
+    for (const searchParams of [{}, { tab: "registrants", open: A }, { tab: `division:${A}`, open: A }]) {
+      const tree = await page(searchParams);
+      const main = tree.find((e) => e.type === "main")!;
+      const kids = (propsOf(main).children as unknown[]).filter(Boolean) as { type: unknown }[];
+      expect(kids.map((k) => k.type), JSON.stringify(searchParams)).toEqual(["h1", RegistrationHubTabsHost]);
+      checked += 1;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("Settings: `open` is read against the Settings rows — an id that is not one is dropped; every row is openable", async () => {
+    const tree = await page({ open: `${A},${GONE}` });
+    expect(hostProps(tree).state).toEqual({ active: "settings", open: [A] });
+    expect(hostProps(tree).openable).toEqual([
+      { id: A, name: "Blitz" },
+      { id: B, name: "Five-a-side" },
+    ]);
+    // The Settings list is still the section on screen.
+    expect(tree.some((e) => e.type === RegistrationHubSettingsPanel)).toBe(true);
+  });
+
+  it("a division tab on screen: no section panel under it, and its settings page built from its Settings row", async () => {
+    const tree = await page({ tab: `division:${A}`, open: `${B},${A}` });
+    expect(hostProps(tree).state).toEqual({ active: { division: A }, open: [B, A] });
+    expect(tree.some((e) => e.type === RegistrationHubSettingsPanel)).toBe(false);
+    expect(tree.some((e) => e.type === RegistrationHubRegistrantsPanel)).toBe(false);
+    expect(listRegistrationsMock).not.toHaveBeenCalled();
+    expect(h.divisionRowsQueries).toBe(1);
+    // In the address's order. A chess row (boardgame) is individual-only; its waitlist count rides along.
+    expect(hostProps(tree).divisions).toEqual([
+      {
+        division: {
+          division_id: B,
+          name: "Five-a-side",
+          individual_only: false,
+          allowed_kinds: effectiveEntrantModel(FOOTBALL.entrantModel ?? null).kinds,
+          category: null,
+          age_min: null,
+          age_max: null,
+          age_cutoff_month: null,
+          age_cutoff_day: null,
+          eligibility_note: null,
+        },
+        waitlistedCount: 0,
+      },
+      expect.objectContaining({
+        division: expect.objectContaining({ division_id: A, name: "Blitz", individual_only: true, age_cutoff_month: 9, age_cutoff_day: 1 }),
+        waitlistedCount: 4,
+      }),
+    ]);
+    expect(configOf(tree)).toEqual({
+      orgTz: "UTC",
+      orgSlug: "riverside",
+      currency: "usd",
+      feePercentPct: 8,
+      cardUnsupportedCurrency: null,
+    });
+  });
+
+  it("Registrants with tabs open: their settings load too (Settings rows + fee cut, once each), against the dropdown's divisions", async () => {
+    feePercentForMock.mockResolvedValue(6);
+    const tree = await page({ tab: "registrants", open: `${A},${GONE}` });
+    expect(hostProps(tree).state).toEqual({ active: "registrants", open: [A] });
+    expect(h.divisionRowsQueries).toBe(1);
+    expect(feePercentForMock).toHaveBeenCalledTimes(1);
+    expect((hostProps(tree).divisions as { division: { division_id: string } }[]).map((d) => d.division.division_id)).toEqual([A]);
+    expect(configOf(tree)!.feePercentPct).toBe(6);
+    expect(tree.some((e) => e.type === RegistrationHubRegistrantsPanel)).toBe(true);
+  });
+
+  it("empty case first: Registrants with no tab open reads nothing extra and hands the host no config", async () => {
+    const tree = await page({ tab: "registrants" });
+    expect(hostProps(tree).state).toEqual({ active: "registrants", open: [] });
+    expect(hostProps(tree).divisions).toEqual([]);
+    expect(configOf(tree)).toBeNull();
+    expect(h.divisionRowsQueries).toBe(0);
+    expect(feePercentForMock).not.toHaveBeenCalled();
+  });
+
+  it("a viewer gets no division tab on any tab — `open` is dropped and nothing extra is read", async () => {
+    h.canEdit = false;
+    let checked = 0;
+    for (const searchParams of [{ open: A }, { tab: "registrants", open: A }, { tab: `division:${A}`, open: A }]) {
+      h.divisionRowsQueries = 0;
+      feePercentForMock.mockClear();
+      const tree = await page(searchParams);
+      const state = hostProps(tree).state as { active: unknown; open: string[] };
+      expect(state.open, JSON.stringify(searchParams)).toEqual([]);
+      expect(state.active).not.toEqual({ division: A });
+      expect(hostProps(tree).openable).toEqual([]);
+      expect(hostProps(tree).divisions).toEqual([]);
+      if (searchParams.tab === "registrants") {
+        expect(h.divisionRowsQueries).toBe(0);
+        expect(feePercentForMock).not.toHaveBeenCalled();
+      }
+      checked += 1;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("a stale division tab (archived since: not a Settings row) falls back to Settings and loads no page for it", async () => {
+    const tree = await page({ tab: `division:${GONE}`, open: GONE });
+    expect(hostProps(tree).state).toEqual({ active: "settings", open: [] });
+    expect(hostProps(tree).divisions).toEqual([]);
+    expect(tree.some((e) => e.type === RegistrationHubSettingsPanel)).toBe(true);
+  });
+
+  it("the solo-pool links on Registrants keep the open tabs too (filters are not tabs)", async () => {
+    h.poolWaitingRows = [{ division_id: B, waiting: 2 }];
+    h.poolSlotRows = [{ division_id: B, free_slots: 3 }];
+    h.poolMetaRows = [{ division_id: B, division_name: "Five-a-side", place_by_at: null, closes_at: null }];
+    const tree = await page({ tab: "registrants", open: A });
+    const [row] = propsOf(tree.find((e) => e.type === RegistrationHubRegistrantsPanel)!).poolSummary as { href: string }[];
+    const q = new URL(row!.href, "https://seazn.test").searchParams;
+    expect(q.get("open")).toBe(A);
+    expect(q.get("division_id")).toBe(B);
+    expect(q.get("free_agent")).toBe("1");
+    expect(q.get("tab")).toBe("registrants");
   });
 });

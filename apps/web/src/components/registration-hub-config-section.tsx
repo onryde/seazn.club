@@ -41,7 +41,13 @@ export function sectionTitle(id: SectionId, msg: Msg, formFieldCount: number): s
   }
 }
 
-/** B7 T23: what the page layout adds to a section. Absent in the modal, whose markup is unchanged. */
+/** A section's bare name, without the sign-up form's question count: the section index, and the hub's close prompt naming
+ *  the sections holding unsaved edits (T24). */
+export function sectionName(id: SectionId, msg: Msg): string {
+  return id === "form" ? msg("reg.settings.signupForm") : sectionTitle(id, msg, 0);
+}
+
+/** B7 T23: what the settings page adds to a section. Absent: the bare accordion. */
 export interface DisclosurePage {
   /** The element id the section index links to (sectionAnchor). */
   anchorId: string;

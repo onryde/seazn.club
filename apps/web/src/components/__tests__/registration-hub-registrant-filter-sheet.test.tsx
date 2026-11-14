@@ -10,16 +10,18 @@
 // a `Modal` whose Show/Clear buttons sit in its `footer` prop, so this suite
 // expands `footer` too.
 //
-// What a harness cannot see, and who covers it. mobile.spec.ts (its "registration
-// hub filter bar" test, the <768 branch) drives: opening the sheet, a staged edit
-// that navigates nowhere, Escape + focus returning to the trigger, a discarded
-// edit gone on reopen, Reset twice, Show's one push, the sheet's accessible name,
-// and the chip x's tap area. The Tab trap and Escape themselves are
-// `components/modal.tsx`'s — modal.test.ts pins the trap's decision logic and the
-// wiring by source text, and nothing in e2e presses Tab inside this sheet. No
-// e2e measures the sheet's selects or switch rows for tap area (this suite pins
-// their classes only), and none scrolls the sheet's body. Both e2e specs are
-// written, not run, at the time of this commit.
+// What a harness cannot see, and who covers it. One e2e drives the sheet:
+// mobile.spec.ts's "registration hub filter bar" test, in its <768 branch, which
+// CI's mobile projects run. It opens the sheet, stages an edit that navigates
+// nowhere, presses Escape and checks focus is back on the trigger, reopens to find
+// the discarded edit gone, presses Reset twice, applies one staged filter with
+// Show, checks the sheet's accessible name, and measures the chip x's tap area. It
+// does not count history entries, so "Show pushes once" is this suite's claim
+// alone. The Tab trap and Escape themselves are `components/modal.tsx`'s —
+// modal.test.ts pins the trap's decision logic and the wiring by source text, and
+// nothing in e2e presses Tab inside this sheet. No e2e measures the sheet's
+// selects or switch rows for tap area (this suite pins their classes only), and
+// none scrolls the sheet's body.
 import { isValidElement } from "react";
 import type { ReactElement, ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -27,7 +29,7 @@ import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harn
 import { RegistrationHubRegistrantFilters } from "@/components/registration-hub-registrant-filters";
 import { Modal } from "@/components/modal";
 import { compileClasses } from "@/components/v2/__tests__/_compiled-css";
-import tailwindColors from "tailwindcss/colors";
+import { contrastOnWhite, paletteColor } from "@/components/__tests__/_tailwind-contrast";
 import { getDictionary, t } from "@/lib/i18n";
 import type { Dict } from "@/lib/i18n-constants";
 import { parseRegistrantsQuery } from "@/app/o/[orgSlug]/c/[compSlug]/registration/data";
@@ -81,34 +83,6 @@ const FULL_FILTERS: RegistrantsFilters = {
   sort: "oldest",
 };
 
-/** WCAG relative-luminance contrast of a Tailwind palette entry (`oklch(L C h)` or a hex) against white. */
-function contrastOnWhite(color: string): number {
-  const lin = (c: number) => Math.min(1, Math.max(0, c));
-  let r: number, g: number, b: number;
-  const ok = /^oklch\(\s*([\d.]+)%\s+([\d.]+)\s+([\d.]+)/.exec(color);
-  if (ok) {
-    const L = Number(ok[1]) / 100;
-    const C = Number(ok[2]);
-    const h = (Number(ok[3]) * Math.PI) / 180;
-    const a = C * Math.cos(h);
-    const bb = C * Math.sin(h);
-    const l = (L + 0.3963377774 * a + 0.2158037573 * bb) ** 3;
-    const m = (L - 0.1055613458 * a - 0.0638541728 * bb) ** 3;
-    const sv = (L - 0.0894841775 * a - 1.291485548 * bb) ** 3;
-    r = lin(4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * sv);
-    g = lin(-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * sv);
-    b = lin(-0.0041960863 * l - 0.7034186147 * m + 1.707614701 * sv);
-  } else {
-    const hex = color.replace("#", "");
-    const ch = (i: number) => {
-      const v = parseInt(hex.slice(i, i + 2), 16) / 255;
-      return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
-    };
-    [r, g, b] = [ch(0), ch(2), ch(4)];
-  }
-  const Y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-  return 1.05 / (Y + 0.05);
-}
 
 /** Like `walk`, plus a Modal's `footer` — where the Show/Clear buttons live. */
 function walkAll(node: ReactNode, out: ReactElement[] = []): ReactElement[] {
@@ -440,12 +414,10 @@ describe("the sheet holds status, division, kind, solo, consent and sort", () =>
     expect(switchRows).toHaveLength(2);
     for (const sel of selects) expect(tokens(sel), String(propsOf(sel).name)).toContain("h-11");
     for (const label of switchRows) expect(tokens(label)).toContain("min-h-11");
-    const footer = ["data-filter-sheet-reset", "data-filter-sheet-show"];
-    for (const attr of footer) {
-      expect(byAttr(tree, attr), attr).toBeTruthy();
-      expect(tokens(byAttr(tree, attr)!), attr).toContain("min-h-11");
-    }
-    expect(footer).toHaveLength(2);
+    // Every element either footer hook marks, each once — a lookup per hook would pass on a duplicate.
+    const footer = [...allByAttr(tree, "data-filter-sheet-reset"), ...allByAttr(tree, "data-filter-sheet-show")];
+    expect(footer.map((e) => e.type)).toEqual(["button", "button"]);
+    for (const button of footer) expect(tokens(button)).toContain("min-h-11");
   });
 
   // WCAG 1.4.11: the off track is what tells a switch is off, against the white row it
@@ -466,9 +438,7 @@ describe("the sheet holds status, division, kind, solo, consent and sort", () =>
       expect(off, "an off colour").toBeTruthy();
       expect(on, "an on colour").toBeTruthy();
       for (const cls of [off, on.replace("peer-checked:", "")]) {
-        const [, family, shade] = /^bg-([a-z]+)-(\d+)$/.exec(cls)!;
-        const palette = (tailwindColors as unknown as Record<string, Record<string, string>>)[family!]!;
-        expect(contrastOnWhite(palette[shade!]!), cls).toBeGreaterThanOrEqual(3);
+        expect(contrastOnWhite(paletteColor(cls, "bg")), cls).toBeGreaterThanOrEqual(3);
       }
     }
   });
@@ -622,7 +592,7 @@ describe("Reset inside the sheet empties what is staged — it does not navigate
   // since stayed on screen and went out on Show. A REAL browser never re-applies a default to
   // a node it keeps, so the only witness in a DOM-less harness is that every press renders a
   // key no earlier render used. Each press is its own remount.
-  it("every Reset remounts every control under a key no earlier render had — press it again after staging and the controls are fresh again", () => {
+  it("every Reset, three presses in a row, renders every control under a key no earlier render used and back at its default", () => {
     const isl = island(FULL_FILTERS, FULL_QUERY);
     open(isl, "alex");
     const NAMES = ["status", "division_id", "kind", "free_agent", "consent_pending", "sort"];

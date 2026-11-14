@@ -2,9 +2,9 @@
 // design §5, "Scan line" treatment). Status pill, window (ORG timezone),
 // capacity meter, fee, entrant kind, category/age badges, approval mode,
 // free-agent flag, the public register link (or the private-competition
-// notice), and the Configure button that opens the row-click config panel
-// — wiring only, `context.onOpen` is owned by the settings-panel that
-// mounts the panel.
+// notice), and the "Open settings" button that opens the division's
+// settings tab (B7 T24) — wiring only, `context.onOpen` comes from the hub's
+// tab host through the settings panel.
 //
 // Built for an organiser scrolling a competition with ~20 divisions, who
 // scans for two things first — which divisions are OPEN, and which are
@@ -235,14 +235,17 @@ export function RegistrationHubDivisionRow({
           {feeText}
         </span>
         {context.canEdit && (
+          // B7 T24: worded, not an icon alone — it opens the division's settings as a tab, and says so. The accessible name
+          // adds the division (each row has one) and starts with the visible words, so speech input finds it by them.
           <button
             type="button"
             data-registration-hub-row-configure
             onClick={() => context.onOpen(row.division_id)}
-            aria-label={t(dict, "reg.hub.row.configure", { name: row.name })}
-            className="grid h-11 w-11 shrink-0 place-items-center rounded-full text-slate-400 transition hover:bg-purple-50 hover:text-purple-700"
+            aria-label={t(dict, "reg.hub.row.openSettingsFor", { name: row.name })}
+            className="inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-full px-3 text-sm font-medium text-purple-700 transition hover:bg-purple-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-500"
           >
             <SlidersHorizontal className="h-4 w-4" strokeWidth={1.75} aria-hidden />
+            {t(dict, "reg.hub.row.openSettings")}
           </button>
         )}
       </div>

@@ -147,8 +147,9 @@ test("configure, register, join, waitlist, approve, opt-out — every screen agr
   await expect(divRow, "the Settings tab never rendered a row for this division").toBeVisible({ timeout: 15_000 });
   await divRow.locator("[data-registration-hub-row-configure]").click();
 
-  const configPanel = page.locator("[data-registration-hub-config-panel]");
-  await expect(configPanel, "the row-click config panel never opened").toBeVisible({ timeout: 10_000 });
+  // B7 T24: the division's settings open as a hub tab of their own.
+  const configPanel = page.locator(`[data-registration-hub-config-panel][data-division-id="${divisionId}"]`);
+  await expect(configPanel, "the division's settings page never opened").toBeVisible({ timeout: 10_000 });
   // Every field below lives in a section that defaults OPEN (Eligibility,
   // Open & close, Capacity) — no disclosure needs expanding first.
   await configPanel.locator('select[data-field="entrant_kind"]').selectOption("team");
@@ -160,8 +161,13 @@ test("configure, register, join, waitlist, approve, opt-out — every screen agr
   await configPanel.locator('input[data-field="capacity"]').fill("1");
   await screenshotAtWidths(page, testInfo, "01-settings-configured");
   await expectNoHorizontalScroll(page);
-  await page.locator('[data-action="save"]').click();
-  await expect(configPanel, "saving the config panel never closed it").toBeHidden({ timeout: 10_000 });
+  await configPanel.locator('[data-action="save"]').click();
+  await expect(
+    configPanel.locator('[data-config-status="clean"]'),
+    "saving the division's settings never said it saved",
+  ).toBeVisible({ timeout: 10_000 });
+  // The row it changed is on the Settings tab; the settings tab stays open beside it.
+  await page.getByTestId("reg-hub-tab-settings").click();
   await expect(
     divRow.locator('[data-registration-hub-status="open"]'),
     "the division row must read OPEN once registration is enabled with no window set",
