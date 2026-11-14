@@ -1213,6 +1213,23 @@ describe("OverviewTab — the register CTA and the slots", () => {
     expect(render(shut)).not.toContain("mh-register-online-");
   });
 
+  // Walk-fix B review m4: the F5 branch (registration waiting on card payments) carries the online note too - a player reading
+  // "registration opens once..." still learns, before it opens, that the division plays online with a camera rule. After the reason.
+  it("registration WAITING on card payments with an online division: the reason, then the division's online note with its camera rule", () => {
+    const waiting = hubDoc({
+      divisions: [division("premier", { name: "Online Open", onlinePlay: { cameraPolicy: "required" } }), division("otb")],
+      info: info({ startsOn: "2026-09-01", registrationOpen: false, registrationWaitsOnCardPayments: true }),
+    });
+    const h = sectionHtml(render(waiting), "register").replace(/&#x27;/g, "'");
+    expect(h, "premise: the waiting branch, not the CTA").toContain(`data-testid="mh-register-unavailable"`);
+    expect(h).not.toContain(`data-testid="mh-register"`);
+    expect(h).toContain(`data-testid="mh-register-online-premier"`);
+    expect(h).not.toContain(`data-testid="mh-register-online-otb"`);
+    expect(h).toContain((en as Record<string, string>)["info.onlinePlay.named"]!.replace("{division}", "Online Open"));
+    expect(h).toContain((en as Record<string, string>)["info.camera.required"]!);
+    expect(h.indexOf(`data-testid="mh-register-unavailable"`), "the reason first").toBeLessThan(h.indexOf(`data-testid="mh-register-online-premier"`));
+  });
+
   it("registration OPEN → the CTA, at the document's own href, on a 44px tap target", () => {
     const h = render(open);
     // The tag read WHOLE, so the href and the tap area are pinned as the SAME
