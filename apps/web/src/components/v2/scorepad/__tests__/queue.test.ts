@@ -3,13 +3,14 @@
 // talks to a transport; these tests use memoryQueueStore() as the store,
 // since queue.ts's behaviour must not depend on which QueueStore backs it
 // (that contract is queue-store.test.ts's job).
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PendingEvent } from "../types";
 import { memoryQueueStore, type QueueStore } from "../queue-store";
 import {
   depth,
   dropHeld,
   enqueue,
+  enqueueHeld,
   flushHeldBefore,
   markAcked,
   markDropped,
@@ -20,7 +21,11 @@ import {
   releaseHeld,
   renegotiateExpectedSeq,
   restampBehindDropped,
+  takeBackHeld,
 } from "../queue";
+
+/** A `heldUntil` still ahead for the whole run: a tap that is held. */
+const STILL_HELD = Date.now() + 3_600_000;
 
 function event(idempotencyKey: string, overrides: Partial<PendingEvent> = {}): PendingEvent {
   return {
@@ -236,7 +241,7 @@ describe("restampBehindDropped", () => {
     it("a dock edit (mutateHeld) of a held tap behind the head", async () => {
       const { store, inner, atGate, release } = storeHoldingFirstPut();
       await enqueue(inner, event("b", { expectedSeq: 1 }));
-      await enqueue(inner, event("c", { expectedSeq: 2, heldUntil: 99_999 }));
+      await enqueue(inner, event("c", { expectedSeq: 2, heldUntil: STILL_HELD }));
 
       const restamp = restampBehindDropped(store, ["a", "b", "c"], new Set(["a"]));
       await atGate; // writing `b`
@@ -253,7 +258,7 @@ describe("restampBehindDropped", () => {
     it("a hold that ended (releaseHeld) on a tap behind the head is not re-held", async () => {
       const { store, inner, atGate, release } = storeHoldingFirstPut();
       await enqueue(inner, event("b", { expectedSeq: 1 }));
-      await enqueue(inner, event("c", { expectedSeq: 2, heldUntil: 99_999 }));
+      await enqueue(inner, event("c", { expectedSeq: 2, heldUntil: STILL_HELD }));
 
       const restamp = restampBehindDropped(store, ["a", "b", "c"], new Set(["a"]));
       await atGate;
@@ -341,7 +346,7 @@ describe("two queue writes to one entry, the second made at any point of the fir
   /** `b` and `c` queued behind `a`, which left without landing (already deleted, as a refusal leaves it); `c` is a held tap. */
   async function seed(inner: QueueStore) {
     await enqueue(inner, event("b", { expectedSeq: 1 }));
-    await enqueue(inner, event("c", { expectedSeq: 2, heldUntil: 99_999 }));
+    await enqueue(inner, event("c", { expectedSeq: 2, heldUntil: STILL_HELD }));
   }
   const reaim = (store: QueueStore) => restampBehindDropped(store, ["a", "b", "c"], new Set(["a"]));
   const entry = async (inner: QueueStore, key: string) => (await inner.list()).find((e) => e.idempotencyKey === key);
@@ -357,7 +362,7 @@ describe("two queue writes to one entry, the second made at any point of the fir
     for (let i = 0; i < 100 && !(a.settled && b.settled); i++) await step();
     expect([a.settled, b.settled], `n=${n}: rig: both calls answered`).toEqual([true, true]);
     expect([a.error, b.error], `n=${n}`).toEqual([undefined, undefined]);
-    return { inner, first: a.value, second: b.value };
+    return { inner, store, step, first: a.value, second: b.value };
   }
 
   const PICKED = { text: "c", scorer: "p9" };
@@ -392,7 +397,7 @@ describe("two queue writes to one entry, the second made at any point of the fir
         expect(picked, `n=${n}: the pick found the tap held`).toBe(true);
         expect(c?.payload, `n=${n}: the scorer picked is on the tap`).toEqual(PICKED);
         expect(c?.expectedSeq, `n=${n}: re-aimed into the freed slot`).toBe(1);
-        expect(c?.heldUntil, `n=${n}: still held`).toBe(99_999);
+        expect(c?.heldUntil, `n=${n}: still held`).toBe(STILL_HELD);
       },
     },
     {
@@ -495,6 +500,112 @@ describe("two queue writes to one entry, the second made at any point of the fir
         expect(windows, "points of the write the answer was made at").toBeGreaterThanOrEqual(2);
       });
     }
+  }
+
+  // Review rr5 (I). A held tap's entry waited its turn behind the write already
+  // running, while a plain tap made just after it was written at once: the plain
+  // tap went into the queue first, stamped one past the held tap now behind it.
+  /** Take back what a case left held, so no release tick outlives the test. */
+  async function takeBackLeftovers(run: { store: QueueStore; step: () => Promise<boolean> }, keys: readonly string[]) {
+    for (const key of keys) {
+      const gone = watch(dropHeld(run.store, key));
+      for (let i = 0; i < 50 && !gone.settled; i++) await run.step();
+      expect(gone.settled, `rig: ${key} cleared`).toBe(true);
+    }
+  }
+
+  it("a plain tap made right after a held tap, at any point of a queue write already running, is queued behind it", async () => {
+    const alone = steppedStore();
+    await seed(alone.inner);
+    const solo = watch(reaim(alone.store));
+    let calls = 0;
+    while (!solo.settled && (await alone.step())) calls += 1;
+
+    let windows = 0;
+    for (let n = 0; n <= calls + 1; n++) {
+      const run = await race(n, reaim, (s) =>
+        Promise.all([enqueueHeld(s, event("h", { expectedSeq: 3 }), 3_600_000, () => {}), enqueue(s, event("p", { expectedSeq: 4 }))]),
+      );
+      if (run === undefined) break;
+      windows += 1;
+      expect((await peekInOrder(run.inner)).map((e) => e.idempotencyKey), `n=${n}: in the order they were tapped`).toEqual([
+        "b",
+        "c",
+        "h",
+        "p",
+      ]);
+      await takeBackLeftovers(run, ["h"]);
+    }
+    expect(windows, "points of the running write the two taps were made at").toBe(calls);
+  });
+
+  // The flip side of writing the held tap at once: when its release of the taps
+  // held before it runs, a held tap made AFTER it can already be in the queue.
+  it("a held tap releases the held taps made before it, never one made after it, at any point of a queue write already running", async () => {
+    const alone = steppedStore();
+    await seed(alone.inner);
+    const solo = watch(reaim(alone.store));
+    let calls = 0;
+    while (!solo.settled && (await alone.step())) calls += 1;
+
+    let windows = 0;
+    for (let n = 0; n <= calls + 1; n++) {
+      const due = { first: 0, second: 0 };
+      const run = await race(n, reaim, (s) =>
+        Promise.all([
+          enqueueHeld(s, event("h1", { expectedSeq: 3 }), 3_600_000, () => (due.first += 1)),
+          enqueueHeld(s, event("h2", { expectedSeq: 4 }), 3_600_000, () => (due.second += 1)),
+        ]),
+      );
+      if (run === undefined) break;
+      windows += 1;
+      const held = (key: string) => peekInOrder(run.inner).then((all) => all.find((e) => e.idempotencyKey === key)?.heldUntil !== undefined);
+      expect([await held("c"), await held("h1"), await held("h2")], `n=${n}: c and h1 released, h2 still held`).toEqual([false, false, true]);
+      expect(due, `n=${n}: h1's release said once, h2's never`).toEqual({ first: 1, second: 0 });
+      await takeBackLeftovers(run, ["h2"]);
+    }
+    expect(windows, "points of the running write the two held taps were made at").toBe(calls);
+  });
+});
+
+// Review rr5 (m3). "Still held" is one rule, the drain's: the window has not run
+// out (`heldUntil` still ahead) — the drain sends a tap from its last moment on,
+// whether or not its release has been written (its tick not yet run, or waiting
+// behind another write). So a take-back, a drop and a dock pick refuse it from
+// that moment too, and change nothing: one that took it back could remove a tap
+// already on the wire.
+describe("a held tap whose window has run out, its release not yet written, is no longer held", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+  const END = 1_800_000_000_000;
+  const PICKED = { text: "c", scorer: "p9" };
+  const ACTS: readonly [string, (s: QueueStore) => Promise<unknown>, (answer: unknown) => boolean][] = [
+    ["a take-back (takeBackHeld)", (s) => takeBackHeld(s, "c", ["c", "d"], new Set(["c"])), (moved) => moved !== null],
+    ["a drop (dropHeld)", (s) => dropHeld(s, "c"), (dropped) => dropped === true],
+    ["a dock pick (mutateHeld)", (s) => mutateHeld(s, "c", (e) => ({ ...e, payload: PICKED })), (picked) => picked === true],
+  ];
+  for (const [name, act, accepted] of ACTS) {
+    it(`${name}: accepted while the window lasts, refused from its last moment on with the queue untouched`, async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      let checked = 0;
+      for (const [at, held] of [
+        [END - 1, true],
+        [END, false],
+        [END + 5_000, false],
+      ] as const) {
+        vi.setSystemTime(at);
+        const store = memoryQueueStore();
+        await enqueue(store, event("c", { expectedSeq: 1, heldUntil: END }));
+        await enqueue(store, event("d", { expectedSeq: 2 }));
+        const before = await peekInOrder(store);
+        expect(accepted(await act(store)), `${at - END}ms from the window's end: ${held ? "held" : "not held"}`).toBe(held);
+        if (held) expect(await peekInOrder(store), "accepted, so it acted").not.toEqual(before);
+        else expect(await peekInOrder(store), "refused, so nothing moved or left").toEqual(before);
+        checked += 1;
+      }
+      expect(checked, "moments checked").toBe(3);
+    });
   }
 });
 

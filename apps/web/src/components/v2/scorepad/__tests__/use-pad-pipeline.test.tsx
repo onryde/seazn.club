@@ -1579,14 +1579,7 @@ describe("usePadPipeline — a queued tap survives a conflict or a refused tap a
         delete: (key) => gated.delete(key).then(() => void log.push({ at: Date.now(), op: "delete", key })),
         clear: () => gated.clear(),
       });
-      /** When `key`'s hold ends on its own: its release tick is armed `HOLD_MS` out as its held write is answered —
-       *  a few ms after the `heldUntil` `submitHeld` reports, which is taken before that write is even asked for. */
-      const tickAt = (key: string) => {
-        const write = log.find((w) => w.op === "put" && w.key === key && w.held === true);
-        expect(write, `rig: ${key}'s held write is logged`).toBeDefined();
-        return write!.at + HOLD_MS;
-      };
-      return { ...gate, log, tickAt };
+      return { ...gate, log };
     }
     const HOME = ["generic.score", { by: "H", points: 1 }] as const;
     const AWAY = ["generic.score", { by: "A", points: 1 }] as const;
@@ -1616,8 +1609,8 @@ describe("usePadPipeline — a queued tap survives a conflict or a refused tap a
       let leads = 0;
       let endedWhileReaiming = 0;
       for (let lead = -2; lead <= 16; lead++) {
-        const { queue, server, pad, head, held, reaiming } = await heldBehindARefusal(`pad-tap-rr4-tick-${lead}`);
-        const tick = queue.tickAt(held.heldId);
+        const { server, pad, head, held, reaiming } = await heldBehindARefusal(`pad-tap-rr4-tick-${lead}`);
+        const tick = held.heldUntil; // its release tick fires as its window runs out
         // The refusal is answered `lead` ms before the held tap's own hold ends.
         await vi.advanceTimersByTimeAsync(tick - Date.now() - lead);
         server.open();
@@ -1680,7 +1673,7 @@ describe("usePadPipeline — a queued tap survives a conflict or a refused tap a
       let askedAsTheHoldEnded = 0;
       for (let lead = -4; lead <= 14; lead++) {
         const DB = `pad-tap-rr4-takeback-${lead}`;
-        const queue = loggedQueue(DB);
+        gatedQueue(DB, { inOrder: true });
         const server = ledgerServer();
         server.open();
         const pad = mountPipeline(baseParams({ transport: server.transport, queueDbName: DB }));
@@ -1692,7 +1685,7 @@ describe("usePadPipeline — a queued tap survives a conflict or a refused tap a
         expect([server.bodies.length, pad.current.queueDepth], "rig: nothing passes the held tap").toEqual([0, 2]);
 
         // The take-back is asked for `lead` ms before the hold ends on its own (after it, for a negative lead).
-        const tick = queue.tickAt(held.heldId);
+        const tick = held.heldUntil; // its release tick fires as its window runs out
         await vi.advanceTimersByTimeAsync(tick - Date.now() - lead);
         const askedAt = Date.now();
         const dropped = await settled(pad.current.dropHeldSubmission(held.heldId), `lead=${lead}: the take-back`);
@@ -1723,9 +1716,11 @@ describe("usePadPipeline — a queued tap survives a conflict or a refused tap a
 
     // The second call. A take-back decides "still held, so re-aim the taps behind
     // it" — two of the same tap at once (a double press) both decided it, and the
-    // tap behind moved down twice for one tap taken back: stamped below the
-    // ledger, a 409 forever. Once writes stopped losing each other this surfaced;
-    // before, one of the two shifts was lost and both take-backs answered true.
+    // tap behind moved down twice for one tap taken back: stamped a slot below the
+    // ledger, so a 409 and a renegotiation before it lands (a stamp too low
+    // recovers; only one too high strands). Once writes stopped losing each other
+    // this surfaced; before, one of the two shifts was lost and both take-backs
+    // answered true.
     it("two take-backs of one held tap at once, the second asked at ANY queue call of the first: one takes it back, the other is refused, and the tap behind lands at the freed slot", async () => {
       let windows = 0;
       for (let k = 1; k < 200; k++) {
@@ -1764,6 +1759,251 @@ describe("usePadPipeline — a queued tap survives a conflict or a refused tap a
         expect(rowsOf(pad.current.events), `k=${k}: the pad shows what the server holds`).toEqual(rowsOf(server.rows));
       }
       expect(windows, "queue calls the second take-back was asked at").toBeGreaterThanOrEqual(4);
+    });
+  });
+
+  // Review rr5. Every stuck tap found so far was stamped too HIGH — for a slot past
+  // the ledger's next one, which a 409 can never renegotiate down to — and each of
+  // these is a way a tap's place in the queue, its row, or its life came apart from
+  // the decision that set it. Generic: the queue never reads the sport (the C1 sweep
+  // above runs football too).
+  describe("a tap's place, row and life follow the decision that set them, against a queue that answers in order (review rr5)", () => {
+    const HOME = ["generic.score", { by: "H", points: 1 }] as const;
+    const AWAY = ["generic.score", { by: "A", points: 1 }] as const;
+    const AWAY_TWO = ["generic.score", { by: "A", points: 2 }] as const;
+    const byOf = (e: { payload: unknown }) => (e.payload as { by?: string }).by;
+
+    // A held tap's queue write waited its turn behind the queue writes already
+    // running (the drain answering the tap before it), while a plain tap made just
+    // after it wrote at once: the plain tap went into the queue FIRST, stamped one
+    // past the held tap behind it — a 409 at a slot the ledger never reaches, every
+    // retry, and the held tap stuck behind it.
+    it("a plain tap made right after a held tap, while the drain is still writing the queue, queues behind the held tap; both land, each at its own slot", async () => {
+      let made = 0;
+      let midWrite = 0;
+      let heldStillWriting = 0;
+      // k = 0: no write held up; k = 1.. holds the drain at its k-th queue call (and past the last of them, none).
+      for (let k = 0; k <= 12; k++) {
+        const DB = `pad-tap-rr5-held-then-plain-${k}`;
+        const queue = gatedQueue(DB, { inOrder: true });
+        const server = ledgerServer();
+        const pad = mountPipeline(baseParams({ transport: server.transport, queueDbName: DB }));
+        await drive(() => false, 20);
+        const first = pad.current.submit(...AWAY); // on the wire: answering it is the queue writing
+        await drive(() => false, 20);
+        if (k > 0) queue.arm(k);
+        server.open();
+        if (k > 0) await drive(queue.hit, 200);
+        if (queue.hit()) midWrite += 1;
+        const onDue = () => void pad.current.retryDrain();
+        const held = pad.current.submitHeld(...HOME, HOLD_MS, onDue);
+        let heldDone = false;
+        void held.then(() => (heldDone = true));
+        await flush();
+        if (!heldDone) heldStillWriting += 1;
+        const plain = pad.current.submit(...AWAY_TWO);
+        await flush();
+        queue.release();
+        made += 1;
+        const heldId = (await settled(held, `k=${k}: the held tap`))!.heldId;
+        await settled(first, `k=${k}: the first tap`);
+        await settled(plain, `k=${k}: the plain tap`);
+
+        const queued = await settled(pad.current.queueStore.list(), `k=${k}: the queue read`);
+        expect(
+          queued.map((e) => [e.idempotencyKey === heldId ? "held" : byOf(e), e.expectedSeq]),
+          `k=${k}: the held tap first, the plain tap behind it, each stamped for its own slot`,
+        ).toEqual([
+          ["held", 1],
+          ["A", 2],
+        ]);
+        await vi.advanceTimersByTimeAsync(HOLD_MS); // its hold ends; its own tick sends it, then the tap behind it
+        await drive(() => pad.current.queueDepth === 0 && server.rows.length === 3);
+        expect(server.bodies.map(wire), `k=${k}: each tap at the slot it was stamped for, first time`).toEqual([
+          [AWAY[0], AWAY[1], 0],
+          [HOME[0], HOME[1], 1],
+          [AWAY_TWO[0], AWAY_TWO[1], 2],
+        ]);
+        expect(server.ownKeys(), `k=${k}: each written once`).toEqual(server.bodies.map((b) => b.idempotency_key));
+        expect(pad.current.queueDepth, `k=${k}: nothing left queued`).toBe(0);
+        expect(rowsOf(pad.current.events), `k=${k}: the pad shows what the server holds`).toEqual(rowsOf(server.rows));
+
+        // A second call, the queue idle: the next held tap and a plain tap after it land in order too.
+        const heldAgain = pad.current.submitHeld(...HOME, HOLD_MS, onDue);
+        const plainAgain = pad.current.submit(...AWAY);
+        await settled(heldAgain, `k=${k}: the second held tap`);
+        await settled(plainAgain, `k=${k}: the second plain tap`);
+        await vi.advanceTimersByTimeAsync(HOLD_MS);
+        await drive(() => pad.current.queueDepth === 0 && server.rows.length === 5);
+        expect(server.bodies.slice(3).map(wire), `k=${k}: the second pair, after the first`).toEqual([
+          [HOME[0], HOME[1], 3],
+          [AWAY[0], AWAY[1], 4],
+        ]);
+        expect(rowsOf(pad.current.events), `k=${k}: after the second pair`).toEqual(rowsOf(server.rows));
+      }
+      expect(made, "moments checked").toBe(13);
+      expect(midWrite, "held taps made while the drain's queue write was held mid-way").toBeGreaterThanOrEqual(6);
+      expect(heldStillWriting, "plain taps made while the held tap's own queue call was still running").toBeGreaterThan(0);
+    });
+
+    // A take-back takes the tap's row (and its bound ones') off the screen at once,
+    // then decides in the queue. Refused there — the hold ran out meanwhile — the
+    // tap is sent after all, so its row must come back; it stayed gone while the
+    // tap was on the wire (and the re-aim deleted it again).
+    it("a take-back refused because the hold ran out while it was being decided leaves the tap's row on screen — while it is on the wire, and once it lands", async () => {
+      const outcomes = { takenBack: 0, refusedAtOnce: 0, refusedAfterStarting: 0 };
+      for (let lead = -3; lead <= 12; lead++) {
+        const DB = `pad-tap-rr5-refused-row-${lead}`;
+        gatedQueue(DB, { inOrder: true });
+        const server = ledgerServer(); // opened only once the rows have been checked with the tap on the wire
+        const pad = mountPipeline(baseParams({ transport: server.transport, queueDbName: DB }));
+        await drive(() => false, 20);
+        const onDue = () => void pad.current.retryDrain();
+        const held = (await settled(pad.current.submitHeld(...HOME, HOLD_MS, onDue), "rig: the held tap"))!;
+        const behind = pad.current.submit(...AWAY);
+        await drive(() => false, 20);
+        const both = [
+          [HOME[0], HOME[1], 1],
+          [AWAY[0], AWAY[1], 2],
+        ];
+        expect(rowsOf(pad.current.events), "rig: both rows on screen").toEqual(both);
+
+        // The take-back is asked for `lead` ms before the hold runs out (after it, for a negative lead).
+        await vi.advanceTimersByTimeAsync(held.heldUntil - Date.now() - lead);
+        const asked = pad.current.dropHeldSubmission(held.heldId);
+        let decided = false;
+        void asked.then(() => (decided = true));
+        let rowLeft = false;
+        for (let i = 0; i < 400 && !decided; i++) {
+          if (!pad.current.events.some((e) => e.id === held.heldId)) rowLeft = true;
+          await vi.advanceTimersByTimeAsync(1);
+        }
+        expect(decided, `lead=${lead}: rig: the take-back decided`).toBe(true);
+        const dropped = await asked;
+
+        if (dropped) {
+          outcomes.takenBack += 1;
+          expect(rowsOf(pad.current.events), `lead=${lead}: taken back, its row gone and the tap behind moved into its slot`).toEqual([
+            [AWAY[0], AWAY[1], 1],
+          ]);
+        } else {
+          if (rowLeft) outcomes.refusedAfterStarting += 1;
+          else outcomes.refusedAtOnce += 1;
+          expect(rowsOf(pad.current.events), `lead=${lead}: refused, so both rows are back where they were`).toEqual(both);
+          await drive(() => server.bodies.some((b) => b.idempotency_key === held.heldId));
+          expect(server.bodies.map((b) => b.idempotency_key), `lead=${lead}: rig: the tap is on the wire`).toEqual([held.heldId]);
+          expect(rowsOf(pad.current.events), `lead=${lead}: on the wire, still on screen`).toEqual(both);
+        }
+        server.open();
+        await settled(behind, `lead=${lead}: the tap behind`);
+        await drive(() => pad.current.queueDepth === 0 && server.rows.some((r) => byOf(r) === "A"));
+        expect(server.rows.filter((r) => byOf(r) === "H"), `lead=${lead}: recorded once if refused, never if taken back`).toHaveLength(dropped ? 0 : 1);
+        expect(pad.current.queueDepth, `lead=${lead}: nothing left queued`).toBe(0);
+        expect(rowsOf(pad.current.events), `lead=${lead}: the pad shows what the server holds`).toEqual(rowsOf(server.rows));
+      }
+      expect(outcomes.takenBack, "take-backs that took the tap back").toBeGreaterThan(0);
+      expect(outcomes.refusedAtOnce, "take-backs refused before anything moved").toBeGreaterThan(0);
+      expect(outcomes.refusedAfterStarting, "take-backs refused after the row had left the screen").toBeGreaterThan(0);
+    });
+
+    // "Still held" is the drain's own rule: the window has not run out. A tap whose
+    // window ran out is sendable although its release has not been written yet, so
+    // a take-back then must change nothing — not even for a moment on screen.
+    it("a take-back asked once the hold has run out, its release not yet written, is refused and moves nothing: the tap stays on screen and lands at its own slot", async () => {
+      let checked = 0;
+      for (const late of [0, 1, 1_000]) {
+        const DB = `pad-tap-rr5-run-out-${late}`;
+        gatedQueue(DB, { inOrder: true });
+        const server = ledgerServer();
+        server.open();
+        const pad = mountPipeline(baseParams({ transport: server.transport, queueDbName: DB }));
+        await drive(() => false, 20);
+        const onDue = () => void pad.current.retryDrain();
+        const held = (await settled(pad.current.submitHeld(...HOME, HOLD_MS, onDue), "rig: the held tap"))!;
+        const behind = pad.current.submit(...AWAY);
+        await drive(() => false, 20);
+        const both = rowsOf(pad.current.events);
+        expect(both, "rig: both rows on screen").toHaveLength(2);
+        // The clock passes the end of the window; no timer runs, so the release tick has not run.
+        vi.setSystemTime(held.heldUntil + late);
+        expect(
+          (await settled(pad.current.queueStore.list(), "rig: the queue read"))[0]?.heldUntil,
+          `late=${late}: rig: its release not written yet`,
+        ).toBe(held.heldUntil);
+
+        const asked = pad.current.dropHeldSubmission(held.heldId);
+        let decided = false;
+        void asked.then(() => (decided = true));
+        for (let i = 0; i < 400 && !decided; i++) {
+          expect(rowsOf(pad.current.events), `late=${late}: never off the screen, not even for a moment`).toEqual(both);
+          await vi.advanceTimersByTimeAsync(1);
+        }
+        expect(await asked, `late=${late}: too late to take back`).toBe(false);
+        expect(
+          (await settled(pad.current.queueStore.list(), "rig: the queue read")).map((e) => e.expectedSeq),
+          `late=${late}: nothing re-aimed`,
+        ).toEqual([0, 1]);
+
+        await vi.advanceTimersByTimeAsync(HOLD_MS); // its release tick runs and sends it
+        await settled(behind, `late=${late}: the tap behind`);
+        await drive(() => pad.current.queueDepth === 0 && server.rows.length === 2);
+        expect(server.bodies.map(wire), `late=${late}: each at its own slot, first time`).toEqual([
+          [HOME[0], HOME[1], 0],
+          [AWAY[0], AWAY[1], 1],
+        ]);
+        expect(rowsOf(pad.current.events), `late=${late}: the pad shows what the server holds`).toEqual(rowsOf(server.rows));
+        checked += 1;
+      }
+      expect(checked, "moments past the window checked").toBe(3);
+    });
+
+    // A refused tap takes the taps bound to it (`dropWith`) out of the queue. That
+    // delete did not wait its turn, so a take-back re-aiming the bound tap (it sits
+    // behind the taken-back one) could read it before the delete and write it back
+    // after: the bound tap — an amendment's void — sent ALONE, deleting a scored
+    // event the scorer never asked to lose. The queue as an amendment leaves it when
+    // the scorer's next held tap releases the re-append before the void is queued:
+    // the re-append, the held tap, the void bound to the re-append; seeded, as a
+    // reload finds it.
+    it("a tap bound to a refused tap leaves the queue for good, even while a take-back is re-aiming it: never sent", async () => {
+      let windows = 0;
+      for (let k = 1; k < 200; k++) {
+        const DB = `pad-tap-rr5-bound-${k}`;
+        const queue = gatedQueue(DB, { inOrder: true });
+        const store = queueStoreRegistry.get(DB)!;
+        const base = { createdAt: RECORDED_AT, attempts: 0, type: "generic.score" };
+        await settled(enqueue(store, { ...base, localId: "l-p", idempotencyKey: "p", payload: HOME[1], expectedSeq: 0 }), "rig: seed");
+        await settled(
+          enqueue(store, { ...base, localId: "l-h", idempotencyKey: "h", payload: AWAY[1], expectedSeq: 1, heldUntil: Date.now() + HOLD_MS }),
+          "rig: seed",
+        );
+        await settled(
+          enqueue(store, { ...base, localId: "l-v", idempotencyKey: "v", payload: AWAY_TWO[1], expectedSeq: 2, dropWith: "p" }),
+          "rig: seed",
+        );
+        const server = ledgerServer({ faults: { 0: REFUSED } });
+        const pad = mountPipeline(baseParams({ transport: server.transport, queueDbName: DB }));
+        await drive(() => server.bodies.length === 1, 60);
+        expect([server.bodies.map((b) => b.idempotency_key), pad.current.queueDepth], "rig: the re-append on the wire").toEqual([["p"], 3]);
+
+        queue.arm(k);
+        server.open();
+        await drive(queue.hit);
+        if (!queue.hit()) break; // the drain went idle before its k-th queue call: every window is covered
+        windows += 1;
+        const takeBack = pad.current.dropHeldSubmission("h");
+        await flush();
+        queue.release();
+        expect(await settled(takeBack, `k=${k}: the take-back`), `k=${k}: inside its window, taken back`).toBe(true);
+        await drive(() => pad.current.queueDepth === 0);
+        await drive(() => false, 40); // anything left to send has had its chance
+
+        expect(server.bodies.map((b) => b.idempotency_key), `k=${k}: the refused re-append only — the void bound to it never sent`).toEqual(["p"]);
+        expect(server.rows, `k=${k}: nothing recorded`).toEqual([]);
+        expect(pad.current.queueDepth, `k=${k}: nothing left queued`).toBe(0);
+        expect(pad.current.events, `k=${k}: nothing on screen`).toEqual([]);
+      }
+      expect(windows, "queue calls the take-back was made at").toBeGreaterThanOrEqual(6);
     });
   });
 

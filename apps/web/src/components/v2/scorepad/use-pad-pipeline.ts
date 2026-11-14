@@ -334,6 +334,7 @@ import {
   recordAttempt,
   releaseHeld,
   restampBehindDropped,
+  stillHeld,
   takeBackHeld,
 } from "./queue";
 import type { QueueStore } from "./queue-store";
@@ -1334,9 +1335,10 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
   // Review C1 — every tap's queue write still in progress, by idempotency key,
   // registered in the same synchronous step that puts its row on screen and
   // removed once the write settles. `reaimBehind` waits on the ones in its
-  // order: a row on screen is not yet an entry in the queue, and for a held tap
-  // (`enqueueHeld`) the write is not even issued until `flushHeldBefore`'s read
-  // has answered.
+  // order: a row on screen is not yet an entry in the queue until its write
+  // lands (both `enqueue` and `enqueueHeld` issue it in the tap's own tick, so
+  // on a queue that answers in order a later read sees it — the wait is the
+  // guarantee, not that ordering).
   const enqueuesInFlight = useRef<Map<string, Promise<void>>>(new Map());
 
   // Review finding 2's double-submit guard, keyed on (type, payload) via
@@ -1652,13 +1654,14 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
   // `restampBehindDropped` re-reads each entry before moving it and skips one it
   // cannot find, so a tap whose write had not landed by that read kept the
   // stamp past the dropped ones — a 409 against a slot the ledger never
-  // reaches, on every retry. A held tap's write waits on `flushHeldBefore`'s
-  // read first, so on a queue that answers in order (IndexedDB) the re-aim's
-  // read could be asked for before the write was.
+  // reaches, on every retry. (A held tap's write used to wait behind the queue
+  // writes already running, so the re-aim's read could be asked for before it.)
   //
   // `restamp` is the queue write that moves them: `restampBehindDropped`, or a
   // take-back's `takeBackHeld`, which answers null when the tap it would take
-  // back is no longer held (nothing moved). Resolves false then, true otherwise.
+  // back is no longer held: nothing moved in the queue, so no row moves either
+  // — resolves false, and the caller puts back the rows it took off. True
+  // otherwise.
   const reaimBehind = useCallback(
     async (
       order: readonly string[],
@@ -1673,14 +1676,15 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
       }
       if (writes.length > 0) await Promise.all(writes);
       const moved = await restamp(order, dropped);
+      if (moved === null) return false;
       const rows = new Map(pendingEnvelopesRef.current);
       for (const key of dropped) rows.delete(key);
-      for (const entry of moved ?? []) {
+      for (const entry of moved) {
         const row = rows.get(entry.idempotencyKey);
         if (row !== undefined) rows.set(entry.idempotencyKey, { ...row, seq: entry.expectedSeq + 1 });
       }
       commitPendingEnvelopes(rows);
-      return moved !== null;
+      return true;
     },
     [store, commitPendingEnvelopes],
   );
@@ -1720,7 +1724,7 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
         // the front — if a future wave allows more than one concurrently
         // held entry, this front-only stop needs to become a scan past the
         // held PREFIX, not just index [0].
-        if (next.heldUntil !== undefined && next.heldUntil > Date.now()) break;
+        if (stillHeld(next, Date.now())) break;
 
         // S12/#421 pass G — undo-before-reload (file header PASS G UPDATE,
         // _INDEX.md decision log). `next` itself is NEVER reassigned below —
@@ -1961,7 +1965,11 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
           const followers = boundTo(queuedAfter, next.idempotencyKey);
           const gone = new Set([next.idempotencyKey, ...followers]);
           const order = releaseRows([next, ...queuedAfter], gone);
-          for (const followerId of followers) await store.delete(followerId);
+          // Through the queue's own write (review rr5), so it waits its turn: a
+          // re-aim already reading a follower (it sits behind a taken-back tap)
+          // would otherwise write it back after this delete, and it would drain
+          // alone after all.
+          for (const followerId of followers) await markDropped(store, followerId);
           if (followers.length > 0) await refreshDepth();
           // Review I-2: the refused entry and its followers never land, so the
           // entries behind them move down into the slots they freed — left
@@ -2173,8 +2181,7 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
       // back-to-back actions have always taken. Tracked from this same
       // synchronous step as the row (review C1: `reaimBehind` waits on it) —
       // defensively: `enqueue` issues its put in this same tick (IndexedDB then
-      // answers a read asked for later after it), so unlike `submitHeld`'s write
-      // below there is no window here today. Kept so the two paths stay alike.
+      // answers a read asked for later after it), as `submitHeld`'s does below.
       await trackEnqueue(enqueuesInFlight.current, pending.idempotencyKey, enqueue(store, pending));
       await refreshDepth();
       await runDrain();
@@ -2245,10 +2252,11 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
       const heldUntil = Date.now() + holdMs;
       // Everything below is async. Deliberately NO runDrain() call here —
       // see this function's own doc: transmission stays deferred until
-      // `onDue` fires. Tracked from this same synchronous step as the row
-      // (review C1): `enqueueHeld` issues its put only after
-      // `flushHeldBefore`'s read (and after any queue write already running,
-      // queue.ts `exclusive`), and `reaimBehind` must not read before it.
+      // `onDue` fires. `enqueueHeld` issues its put in this same tick, like
+      // `enqueue` (review rr5: queued behind a running queue write, a plain tap
+      // made just after this one was written ahead of it), and resolves once
+      // the taps held before it are released too. Tracked from this same
+      // synchronous step as the row (review C1: `reaimBehind` waits on it).
       await trackEnqueue(enqueuesInFlight.current, pending.idempotencyKey, enqueueHeld(store, pending, holdMs, onDue));
       await refreshDepth();
       return { heldId: pending.idempotencyKey, heldUntil };
@@ -2268,7 +2276,9 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
       // caught here.
       const before = await store.list();
       const held = before.find((e) => e.idempotencyKey === id);
-      if (held === undefined || held.heldUntil === undefined) return false; // `takeBackHeld`'s own refusal, read before anything moves
+      // `takeBackHeld`'s own refusal, read before anything moves (`stillHeld`,
+      // the one rule: a tap whose window ran out may be on the wire already).
+      if (held === undefined || !stillHeld(held, Date.now())) return false;
       // Review I-B: every tap queued behind the held one was stamped for the
       // slots after it, which it now never takes — re-aimed exactly like a
       // refusal's followers, its row leaving at once (`releaseRows`). Re-aimed
@@ -2281,13 +2291,33 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
       // Review rr4: the read above only lets the take-back START. Whether the
       // tap is still held is decided again inside the one queue section that
       // re-aims and removes it (`takeBackHeld`): if its hold ended during these
-      // awaits (its own release tick, or a new held tap's `flushHeldBefore`), or
-      // another take-back of it (a double press) got there first, nothing moves
-      // and this one answers false — the tap is sent after all, at its own slot,
-      // with the taps behind it still stamped after it.
+      // awaits (its window ran out, a new held tap released it), or another
+      // take-back of it (a double press) got there first, nothing moves in the
+      // queue and this one answers false — the tap is sent after all, at its
+      // own slot, with the taps behind it still stamped after it.
+      //
+      // Review rr5: its rows (and its bound ones') already left the screen
+      // (`releaseRows`), so they come back: in their places, at the slots the
+      // queue now holds them for — unless one left the queue meanwhile (answered:
+      // its row is the ledger's now). Off the screen in between, as the
+      // decision had to wait; never left off for a tap that is sent.
       const gone = new Set([id, ...boundTo(before, id)]);
+      const takenOff = new Map(pendingEnvelopesRef.current);
       const order = releaseRows(before, gone);
       const dropped = await reaimBehind(order, gone, (o, g) => takeBackHeld(store, id, o, g));
+      if (!dropped) {
+        const queued = new Map((await store.list()).map((e) => [e.idempotencyKey, e]));
+        const now = pendingEnvelopesRef.current;
+        const rows = new Map<string, EventEnvelope>();
+        for (const [key, row] of takenOff) {
+          const current = now.get(key);
+          const entry = queued.get(key);
+          if (current !== undefined) rows.set(key, current);
+          else if (gone.has(key) && entry !== undefined) rows.set(key, { ...row, seq: entry.expectedSeq + 1 });
+        }
+        for (const [key, row] of now) if (!rows.has(key)) rows.set(key, row); // tapped since, in tap order
+        commitPendingEnvelopes(rows);
+      }
       await refreshDepth();
       // The take-back cancelled the held tap's own release tick, the one thing
       // that drains behind it: without this the taps behind it wait for the
@@ -2295,7 +2325,7 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
       void runDrain();
       return dropped;
     },
-    [store, refreshDepth, releaseRows, reaimBehind, runDrain],
+    [store, refreshDepth, releaseRows, reaimBehind, runDrain, commitPendingEnvelopes],
   );
 
   // S12/#421 — the raw list `foldedState` above was folded from, exposed for
