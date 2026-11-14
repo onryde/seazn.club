@@ -4,7 +4,7 @@ export const dynamic = "force-dynamic";
 import Link from "@/components/ui/console-link";
 import { UserPlus } from "lucide-react";
 import { StatusChip, divisionChipState } from "@/components/ui/status-chip";
-import { routes } from "@/lib/routes";
+import { routes, searchOf } from "@/lib/routes";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, plural, t } from "@/lib/i18n";
 import { sportLabel } from "@/lib/scoring-vocab";
@@ -152,7 +152,8 @@ export default async function DivisionPage({
   // FMT5: Settings › Format moved to the Fixtures tab's Division rules card; an address that asked for it by name lands on
   // the card with the Format dialog open. Before any read, and outside every try: `redirect` throws NEXT_REDIRECT.
   if (isOldFormatAddress(query)) redirect(formatDialogHref(orgSlug, compSlug, divSlug));
-  const page = await requireDivisionPage(orgSlug, compSlug, divSlug);
+  // A renamed org, competition or division redirects to this same tab, its query kept (review I3).
+  const page = await requireDivisionPage(orgSlug, compSlug, divSlug, { search: searchOf(query) });
   const { auth, canEdit } = page;
   const id = page.division.id;
   const locale = await resolveLocale();
