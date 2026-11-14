@@ -10,13 +10,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderIsland } from "@/components/__tests__/_hook-harness";
 import { PopStateGuardRoot, holdPopState, runPopStateGuard } from "@/components/popstate-guard";
 
-const added = vi.hoisted(() => ({ popstate: [] as unknown[], removed: [] as unknown[] }));
+const added = vi.hoisted(() => ({ popstate: [] as unknown[], removed: [] as unknown[], go: vi.fn() }));
 beforeEach(() => {
   added.popstate.length = 0;
   added.removed.length = 0;
+  added.go.mockClear();
   vi.stubGlobal("window", {
     addEventListener: (type: string, fn: unknown) => type === "popstate" && added.popstate.push(fn),
     removeEventListener: (type: string, fn: unknown) => type === "popstate" && added.removed.push(fn),
+    history: { go: added.go },
   });
   return () => vi.unstubAllGlobals();
 });
@@ -31,8 +33,33 @@ describe("popstate guard", () => {
     expect(added.removed).toEqual([runPopStateGuard]);
   });
 
-  it("empty case: with no guard held, a popstate passes untouched", () => {
-    expect(() => runPopStateGuard(event())).not.toThrow();
+  // T24 re-review n7: the empty case asserts what "untouched" means - the router still hears it (no stop), the browser's own
+  // handling stands (no preventDefault) and no history step is taken - after a guard was held and let go, the state every page
+  // that stops guarding leaves behind.
+  it("empty case: with no guard held (never, or held and released), a popstate passes untouched", () => {
+    const untouched = () => {
+      const e = { stopImmediatePropagation: vi.fn(), stopPropagation: vi.fn(), preventDefault: vi.fn() };
+      runPopStateGuard(e as unknown as PopStateEvent);
+      return e;
+    };
+    const stopper = (e: PopStateEvent) => {
+      e.stopImmediatePropagation();
+      window.history.go(1);
+    };
+    const release = holdPopState(stopper);
+    // The positive pair: while held, the guard does stop it.
+    expect(untouched().stopImmediatePropagation).toHaveBeenCalledTimes(1);
+    release();
+    added.go.mockClear();
+    let checked = 0;
+    for (const e of [untouched(), untouched()]) {
+      expect(e.stopImmediatePropagation).not.toHaveBeenCalled();
+      expect(e.stopPropagation).not.toHaveBeenCalled();
+      expect(e.preventDefault).not.toHaveBeenCalled();
+      checked++;
+    }
+    expect(added.go, "no history step").not.toHaveBeenCalled();
+    expect(checked).toBe(2);
   });
 
   it("runs the guard held now; a newer hold replaces it; a release only lets go of its own hold", () => {

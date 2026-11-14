@@ -124,8 +124,9 @@ function openedOrder(previous: readonly string[], ids: readonly string[]): strin
 /**
  * Where a click on a link would take the viewer OUT of the hub, as a path the router can push — or null when it would not
  * leave (another tab of the hub, a same-page anchor), would not unload anything (a download such as Export CSV, an API
- * route; a new window; another site), or is not a plain left click on a link (a modifier opens a new tab; a handler that
- * already prevented it has its own plans).
+ * route; a new window; another site), or is not a plain left click on a link (a modifier opens a new tab). `defaultPrevented`
+ * here can only be an EARLIER window capture listener's (it has its own plans): the guard runs in the window's capture phase,
+ * before any handler on the link itself, so an app onClick that prevents the click is never seen here (T24 re-review n2).
  */
 export function leaveHrefOfClick(event: MouseEvent, hubPathname: string, origin: string): string | null {
   if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return null;
@@ -316,7 +317,8 @@ export function RegistrationHubTabsHost({
   const pendingReveal = useRef<string | null>(null);
   useEffect(() => {
     const id = pendingReveal.current;
-    if (id === null || dialog !== null || !isDivisionTab(state.active, id)) return;
+    // No `dialog !== null` check (T24 re-review n4): showFailedTab sets the reveal and clears the dialog in one handler.
+    if (id === null || !isDivisionTab(state.active, id)) return;
     pendingReveal.current = null;
     handles.current.get(id)?.current?.reveal();
     // stateKey carries state.active: the tab coming on screen and the dialog going are the two moments to look again.
@@ -331,21 +333,28 @@ export function RegistrationHubTabsHost({
   // rules above).
   const restoring = useRef(0);
   const hubEntry = useRef<number | null>(null);
+  // The leave question - unless a dialog is busy (T24 re-review n1): a save in flight keeps its dialog, so its buttons stay
+  // disabled and the choice already made is the only one that runs. The navigation is still held (put back, or prevented).
+  function askToLeave(to: LeaveTo) {
+    setDialog((d) => (d?.busy ? d : { kind: "leave", to, busy: false }));
+  }
   // Where the hub sits in the session history, read after every commit that leaves the viewer on it — never while a held
-  // traversal is being put back, when the browser is briefly somewhere else.
+  // traversal is being put back: the browser is then briefly somewhere else, which the pathname check already skips (n4).
   useEffect(() => {
-    if (restoring.current === 0 && window.location?.pathname === pathname) hubEntry.current = historyIndex();
+    if (window.location?.pathname === pathname) hubEntry.current = historyIndex();
   });
   useEffect(() => {
     if (!anyDirty) return;
+    // A chosen leave that left the hub mounted (the router did not unmount it) and came back dirty is guarded again.
     leaving.current = false;
     const onClick = (event: MouseEvent) => {
       if (leaving.current) return;
       const href = leaveHrefOfClick(event, pathname, window.location.origin);
       if (href === null) return;
+      // preventDefault ONLY (T24 re-review n2): the click still reaches the link's own handlers - an account-menu item closes its
+      // menu in its onClick - and Next's Link, which runs that onClick first, then sees defaultPrevented and does not navigate.
       event.preventDefault();
-      event.stopPropagation();
-      setDialog({ kind: "leave", to: { via: "link", href }, busy: false });
+      askToLeave({ via: "link", href });
     };
     const onPopState = (event: PopStateEvent) => {
       if (leaving.current) return;
@@ -362,7 +371,7 @@ export function RegistrationHubTabsHost({
       const delta = now !== null && hubEntry.current !== null && now !== hubEntry.current ? now - hubEntry.current : -1;
       restoring.current += 1;
       window.history.go(-delta);
-      setDialog({ kind: "leave", to: { via: "history", delta }, busy: false });
+      askToLeave({ via: "history", delta });
     };
     window.addEventListener("click", onClick, true);
     const releasePopState = holdPopState(onPopState);

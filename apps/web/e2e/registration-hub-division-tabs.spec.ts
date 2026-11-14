@@ -771,5 +771,120 @@ for (const viewport of [
       await expect(divisionTab(page, a)).toHaveCount(0);
       expect(await storedCapacity(request, a), "the discarded 22 never reached the server").toBeNull();
     });
+
+    test("Back while Save and leave is saving keeps that dialog busy: its choice is the only one that runs (T24 re-review n1)", async ({ page, request }) => {
+      const s = await seed(page, request);
+      const [a] = s.ids;
+      const overview = `/o/${s.orgSlug}/c/${s.compSlug}`;
+      await page.goto(overview, { waitUntil: "load" });
+      // Into the hub by a client navigation, so Back has somewhere outside the hub to go.
+      const entry = page.locator("[data-registration-hub-entry]").filter({ visible: true }).first();
+      await waitForHydration(entry);
+      await entry.click();
+      await page.waitForURL((u) => u.pathname === hubPath(s), { timeout: 20_000 });
+      await openFromSettings(page, a);
+      await editCapacity(page, a, "23");
+      await afterEffects(page);
+
+      // The save is held at the network, so the dialog stays busy for as long as the test needs it to.
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => (release = resolve));
+      let puts = 0;
+      await page.route(`**/api/v1/divisions/${a}/registration-settings`, async (route) => {
+        if (route.request().method() !== "PUT") return route.fallback();
+        puts += 1;
+        await held;
+        await route.fallback();
+      });
+
+      await leaveLink(page).click();
+      await expect(dialog(page)).toContainText(copy("reg.hub.leave.title"), { timeout: 20_000 });
+      await dialogAction(page, "save").click();
+      await expect(dialogAction(page, "save")).toHaveText(copy("reg.hub.config.saving"), { timeout: 20_000 });
+      await expect(dialogAction(page, "save")).toBeDisabled();
+      await expect.poll(() => puts, { timeout: 20_000 }).toBe(1);
+
+      // Back mid-save: held and put back as ever, but the busy dialog is not swapped for a fresh, enabled leave question.
+      await page.goBack();
+      await expect.poll(() => new URL(page.url()).pathname, { timeout: 10_000 }).toBe(hubPath(s));
+      await afterEffects(page);
+      await expect(dialog(page)).toHaveCount(1);
+      await expect(dialogAction(page, "save"), "still the save in flight").toHaveText(copy("reg.hub.config.saving"));
+      for (const action of ["save", "discard", "dismiss"] as const) {
+        await expect(dialogAction(page, action), `${action} stays disabled while saving`).toBeDisabled();
+      }
+
+      // The save lands: the hub goes where the chosen leave was for (the link), once, and never back to the overview.
+      release();
+      await page.waitForURL((u) => u.pathname !== hubPath(s), { timeout: 20_000 });
+      await expect.poll(() => storedCapacity(request, a), { timeout: 20_000 }).toBe(23);
+      await afterEffects(page);
+      await page.waitForTimeout(500);
+      const landed = new URL(page.url()).pathname;
+      expect(landed, "not Back's destination").not.toBe(overview);
+      expect(landed, "not the hub").not.toBe(hubPath(s));
+      expect(puts, "one save").toBe(1);
+    });
+  });
+}
+
+// T24 re-review n2: the leave guard only prevents a link's default; the click still reaches the link's own handler. The account
+// menu closes itself in its items' onClick, so with the old stopPropagation its sheet stayed open over the hub while the leave
+// question opened behind it. At 390 (the phone sheet, portalled over a scrim) and at 1280 (the dropdown).
+for (const viewport of [
+  { width: 390, height: 844 },
+  { width: 1280, height: 800 },
+]) {
+  test.describe(`registration hub leave guard and the account menu @${viewport.width}`, () => {
+    test.use({ viewport });
+
+    test("an account-menu link with an unsaved edit: the menu closes and the leave question is on top; Discard and leave then goes", async ({ page, request }) => {
+      const s = await seed(page, request);
+      const [a] = s.ids;
+      await page.goto(hubPath(s), { waitUntil: "load" });
+      await openFromSettings(page, a);
+      await editCapacity(page, a, "24");
+      await afterEffects(page);
+
+      const trigger = page.locator('header.app-gantry [data-testid="account-menu-trigger"]');
+      const menu = page.getByTestId("account-menu");
+      const item = page.getByTestId("account-menu-settings");
+      const openMenu = async () => {
+        await waitForHydration(trigger);
+        await trigger.click();
+        await expect(item).toBeVisible({ timeout: 10_000 });
+      };
+      await openMenu();
+      const target = new URL(await item.evaluate((el) => (el as HTMLAnchorElement).href)).pathname;
+      expect(target, "premise: the menu item leaves the hub").not.toBe(hubPath(s));
+
+      await item.click();
+      await expect(dialog(page)).toContainText(copy("reg.hub.leave.title"), { timeout: 20_000 });
+      await expect(menu, "the menu closed itself").toHaveCount(0);
+      await expect(page.getByTestId("account-menu-scrim")).toHaveCount(0);
+      await expect(trigger).toHaveAttribute("aria-expanded", "false");
+      expect(new URL(page.url()).pathname, "held: still on the hub").toBe(hubPath(s));
+      // On top: what sits at the centre of the dialog's Keep editing is that button, nothing over it.
+      const onTop = await dialogAction(page, "dismiss").evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return at !== null && (at === el || el.contains(at));
+      });
+      expect(onTop, "the leave question is on top").toBe(true);
+
+      await dialogAction(page, "dismiss").click();
+      await expect(dialog(page)).toHaveCount(0);
+      await expect(capacity(page, a)).toHaveValue("24");
+
+      // The same item again, and this time Discard and leave: the menu's own destination, the edit never saved.
+      await afterEffects(page);
+      await openMenu();
+      await item.click();
+      await expect(dialog(page)).toContainText(copy("reg.hub.leave.title"), { timeout: 20_000 });
+      await expect(menu).toHaveCount(0);
+      await dialogAction(page, "discard").click();
+      await page.waitForURL((u) => u.pathname === target, { timeout: 20_000 });
+      expect(await storedCapacity(request, a), "the discarded 24 never reached the server").toBeNull();
+    });
   });
 }

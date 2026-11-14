@@ -654,7 +654,9 @@ describe("RegistrationHubTabsHost — leaving the hub with unsaved edits (fix ro
     host.dirty(B, ["money"]);
     const event = fire(listeners.click, linkClick(COMP)) as ReturnType<typeof linkClick>;
     expect(event.preventDefault).toHaveBeenCalledTimes(1);
-    expect(event.stopPropagation).toHaveBeenCalledTimes(1);
+    // T24 re-review n2: preventDefault ONLY. The click must still reach the link's own handlers - an account-menu item closes its
+    // menu in its onClick, and Next's Link runs that onClick before it sees defaultPrevented and stands down.
+    expect(event.stopPropagation).not.toHaveBeenCalled();
     const d = propsOf(host.dialog()!);
     expect(d.title).toBe(msg("reg.hub.leave.title"));
     const names = new Intl.ListFormat("en", { style: "long", type: "conjunction" }).format([NAMES[A]!, NAMES[B]!]);
@@ -780,6 +782,75 @@ describe("RegistrationHubTabsHost — leaving the hub with unsaved edits (fix ro
     win.index = 7;
     pop();
     expect(win.go).toHaveBeenLastCalledWith(-2);
+  });
+
+  // T24 re-review n1: a held navigation used to REPLACE whatever dialog was open - a busy one too - re-enabling its buttons, so a
+  // second choice could navigate twice once the first save settled. A busy dialog now stays as it is: the Back is put back and a
+  // link is held, and only the first choice runs.
+  it("n1: while a dialog is busy, Back is put back and a link is held, the busy dialog stays, and only the first leave runs", async () => {
+    const host = mount({ active: { division: A }, open: [A] });
+    host.dirty(A, ["capacity"]);
+    let settle: (r: ConfigSaveResult) => void = () => {};
+    host.handle(A, () => new Promise<ConfigSaveResult>((r) => (settle = r)));
+    fire(listeners.click, linkClick(COMP));
+    host.press("primary");
+    expect(propsOf(host.dialog()!).busy).toBe(true);
+
+    win.pathname = "/o/riverside";
+    const back = pop();
+    expect(back.stopImmediatePropagation, "the Back is still held").toHaveBeenCalledTimes(1);
+    expect(win.go, "and put back").toHaveBeenCalledWith(1);
+    expect(propsOf(host.dialog()!).busy, "the busy dialog was not replaced").toBe(true);
+    win.pathname = HUB;
+    pop(); // the put-back lands: swallowed
+    const link = fire(listeners.click, linkClick("/o/riverside")) as ReturnType<typeof linkClick>;
+    expect(link.preventDefault, "a link is still held").toHaveBeenCalledTimes(1);
+    expect(propsOf(host.dialog()!).busy).toBe(true);
+
+    settle("success");
+    await flush();
+    await flush();
+    expect(nav.push.mock.calls, "the first choice's destination, once").toEqual([[COMP]]);
+    expect(win.go, "no second traversal").toHaveBeenCalledTimes(1);
+  });
+
+  it("n1: a busy close dialog is not turned into the leave question by a Back past the hub", () => {
+    const host = mount({ active: { division: A }, open: [A] });
+    host.dirty(A, ["capacity"]);
+    host.handle(A, () => new Promise<ConfigSaveResult>(() => {}));
+    host.close(A);
+    host.press("primary");
+    const before = propsOf(host.dialog()!);
+    expect(before.busy).toBe(true);
+    expect(before.title).toBe(msg("reg.hub.close.title", { name: NAMES[A]! }));
+    win.pathname = COMP;
+    pop();
+    const after = propsOf(host.dialog()!);
+    expect(after.title, "still the close question").toBe(msg("reg.hub.close.title", { name: NAMES[A]! }));
+    expect(after.busy).toBe(true);
+    // The positive pair: with no dialog open, the same Back asks the leave question.
+    expect(msg("reg.hub.leave.title")).not.toBe(after.title);
+  });
+
+  // T24 re-review n4: `leaving` is reset when the guard re-arms. It matters only when a chosen leave leaves the hub MOUNTED (a
+  // router that did not navigate away): after Save and leave the pages are clean, so the guard stands down; a new edit must arm it
+  // again rather than let the next link out through unasked.
+  it("n4: after a Save and leave that left the hub mounted, a new edit arms the guard again", async () => {
+    const host = mount({ active: { division: A }, open: [A] });
+    host.dirty(A, ["capacity"]);
+    host.handle(A, async () => "success");
+    fire(listeners.click, linkClick(COMP));
+    host.press("primary");
+    await flush();
+    await flush();
+    expect(nav.push).toHaveBeenCalledWith(COMP);
+    // The page reports clean after its save; the router (mocked) kept the hub mounted.
+    host.dirty(A, []);
+    expect(listeners.click.size, "nothing unsaved: no guard").toBe(0);
+    host.dirty(A, ["money"]);
+    const again = fire(listeners.click, linkClick(COMP)) as ReturnType<typeof linkClick>;
+    expect(again.preventDefault, "the new edit is guarded").toHaveBeenCalledTimes(1);
+    expect(propsOf(host.dialog()!).title).toBe(msg("reg.hub.leave.title"));
   });
 
   it("Back and Forward inside the hub are the hub's own (the held-tab rules above): not intercepted", () => {
