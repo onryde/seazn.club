@@ -17,7 +17,7 @@
 //      Link clicks reads (S10's owed e2e); an editor creates a report link, sees it ONCE, and revokes it, with the row's stored hash
 //      checked against the url's token; a viewer reads the same numbers with no Share report, and both link routes refuse it (R19).
 //      Default viewport only (R17): no width claims here.
-// Width checks for the hub live in mobile.spec.ts (ruling R17: only that file runs in the seven width projects); this file holds its own
+// Width checks for the hub live in e2e/mobile/ (ruling R17: only the specs in that directory run in the seven width projects); this file holds its own
 // default viewport, plus the 320 pass the Competitions home entry exists for.
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";

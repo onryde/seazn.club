@@ -96,9 +96,9 @@ acquisition channel, so the share loop is a feature, not chrome.
   by the client is an inert seam (this repo's most repeated failure class).
 - `apps/web` vitest is `environment: "node"` — no DOM. Nothing about the tab
   rail, the accordion, the lightbox or the download button is unit-testable;
-  the walkthrough and `mobile.spec.ts` projects are the only witnesses.
-- `mobile.spec.ts` runs `describe.configure({ mode: "serial" })`: a red count
-  there is a FLOOR. Re-run after each fix until a full pass completes.
+  the walkthrough and `e2e/mobile/` projects are the only witnesses.
+- The serial files in `e2e/mobile/` (setup-fixture, slot-labels, progression-panel)
+  run `describe.configure({ mode: "serial" })`: a red count there is a FLOOR. Re-run after each fix until a full pass completes.
 - A scrolling rail is not clipped content: split on computed `overflow-x`
   (`overflowingIn` / `expectScorebugNotClipped` already do this) and give every
   excused box `tabindex="0"` + role + name, or axe reds at SERIOUS.

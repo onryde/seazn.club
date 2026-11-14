@@ -27,7 +27,7 @@ name: E2E
 #
 #   * WITHIN a job, the widths must stay serialized. `fullyParallel: true` is
 #     global, so Playwright would otherwise run projects concurrently, and all
-#     seven exercise mobile.spec.ts against the SAME org minted by that job's
+#     seven exercise the e2e/mobile/ specs against the SAME org minted by that job's
 #     `setup` project — the documented "7 width projects race each other over
 #     ONE org" flakiness (a settings-rename hangs 60s on a disabled Save under
 #     contention). `--workers=1` is therefore still mandatory per job and must
@@ -2285,7 +2285,7 @@ jobs:
           path: apps/web/playwright-report
           retention-days: 7
 
-      # R2008 free-gaps (owner ruling 2026-10-20): mobile.spec.ts renders the never-live countdown strip and failed card in
+      # R2008 free-gaps (owner ruling 2026-10-20): e2e/mobile/match-surfaces.spec.ts renders the never-live countdown strip and failed card in
       # fr and en, refunded and charged, and writes the panel's picture for each to test-results/never-live-copy/ so the
       # copy's fit is SEEN, not estimated. Always uploaded (a green run is the one whose pictures get looked at); never
       # committed. `slug` is this matrix's artifact-safe name, as above.

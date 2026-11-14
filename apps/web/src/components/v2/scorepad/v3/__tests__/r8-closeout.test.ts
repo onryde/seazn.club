@@ -4,7 +4,7 @@
 //
 // Pure: no DB, no browser, no network — so it runs in every job and cannot
 // self-skip.
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { HOLD_MS_DEFAULT } from "../../queue";
@@ -67,7 +67,7 @@ describe("the v2 pad's Timeline stays deleted", () => {
   });
 });
 
-describe("mobile.spec.ts entrant names carry no projectTag() decoration", () => {
+describe("e2e/mobile entrant names carry no projectTag() decoration", () => {
   // WS-I root-caused this file's intermittent 320px tennis scorebug clip to
   // the FIXTURE NAME, not the scorebug: `-${projectTag()}` on an ENTRANT is
   // pure decoration (an entrant name is scoped to one fixture, which `label`
@@ -81,19 +81,31 @@ describe("mobile.spec.ts entrant names carry no projectTag() decoration", () => 
   // being asserted is a naming convention inside a Playwright spec, which no
   // module can declare and this node-environment suite cannot execute. It
   // matches the narrow shape only — a `label:` may and should keep the suffix.
+  //
+  // The scan covers EVERY file in e2e/mobile/ (the former single mobile.spec.ts
+  // was split by area on 2026-11-13), and it is anti-vacuous: the convention it
+  // guards — a `${projectTag()}` suffix on a label — must be seen at least once,
+  // so a scan that reads nothing cannot pass.
   it("suffixes labels, never entrant names", () => {
-    const src = readFileSync(join(WEB_ROOT, "e2e/mobile.spec.ts"), "utf8");
-    const offenders = src
-      .split("\n")
-      .map((line, i) => ({ line: line.trim(), n: i + 1 }))
-      .filter(
-        ({ line }) =>
-          /(?:home|away)[A-Za-z0-9]*Name\s*=/i.test(line) && line.includes("${projectTag()}"),
-      );
+    const dir = join(WEB_ROOT, "e2e/mobile");
+    const files = readdirSync(dir).filter((f) => f.endsWith(".ts")).sort();
+    expect(files.length, "e2e/mobile/ holds the width-matrix files").toBeGreaterThan(1);
+    const lines = files.flatMap((f) =>
+      readFileSync(join(dir, f), "utf8")
+        .split("\n")
+        .map((line, i) => ({ line: line.trim(), n: i + 1, f })),
+    );
+    expect(
+      lines.filter(({ line }) => line.includes("${projectTag()}")).length,
+      "no projectTag() suffix found anywhere: the scan is reading nothing",
+    ).toBeGreaterThan(0);
+    const offenders = lines.filter(
+      ({ line }) => /(?:home|away)[A-Za-z0-9]*Name\s*=/i.test(line) && line.includes("${projectTag()}"),
+    );
     expect(
       offenders,
       `entrant name(s) still decorated with projectTag(): ${offenders
-        .map((o) => `mobile.spec.ts:${o.n}`)
+        .map((o) => `mobile/${o.f}:${o.n}`)
         .join(", ")}`,
     ).toEqual([]);
   });

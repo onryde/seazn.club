@@ -268,7 +268,7 @@ test("a durable min_rest_minutes rule the API stored binds on the board — and 
 
   // 375px: the panel is a bottom sheet at phone widths and nothing it adds may
   // push the page sideways. No mobile PROJECT runs this spec — playwright.config
-  // scopes `mobile-se`/`mobile-14` to mobile.spec.ts — so the viewport is set
+  // scopes `mobile-se`/`mobile-14` to the e2e/mobile/ specs — so the viewport is set
   // here or the width is never exercised at all.
   await page.setViewportSize({ width: 375, height: 800 });
   await expect(list).toBeVisible();

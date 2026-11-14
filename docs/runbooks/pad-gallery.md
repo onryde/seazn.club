@@ -105,7 +105,7 @@ Two things this deliberately does NOT change, so a narrowed run stays honest:
   must never leave a zero in that field — a missing measurement recorded as `0`
   reads later as "no overflow at 320" when nothing was measured.
 - **The seven-width e2e matrix is the real enforcement**, not this gallery.
-  `mobile.spec.ts` covers 320/360/375/390/430/768/834; trimming the sign-off
+  The `apps/web/e2e/mobile/` specs cover 320/360/375/390/430/768/834; trimming the sign-off
   sheet trims evidence for the owner's eye, never coverage.
 
 ### Per-sport extra states

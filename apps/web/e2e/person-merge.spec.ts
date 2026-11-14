@@ -83,7 +83,7 @@ test("an organiser merges a suggested duplicate, then undoes it", async ({ page 
   await expect(roster(page).getByText(KEEP_REF)).toBeVisible();
   await expect(roster(page).getByText(DUPE_REF)).toBeVisible();
 
-  // --- 1b. The same queue at a phone width. Only `mobile.spec.ts` is run by the
+  // --- 1b. The same queue at a phone width. Only the `e2e/mobile/` specs are run by the
   // mobile projects, so a surface that must hold at 375px checks itself here.
   await page.setViewportSize({ width: 375, height: 800 });
   await expect(card).toBeVisible();

@@ -1423,7 +1423,7 @@ test.describe("a competition past the pass line sells nothing", () => {
 
   test("the closed upgrade page is usable at 375px", async ({ page }) => {
     test.setTimeout(120_000);
-    // The mobile Playwright projects only match `mobile.spec.ts`, so a surface
+    // The mobile Playwright projects only match the specs in `e2e/mobile/`, so a surface
     // that must hold at a phone width either goes there or sets the viewport
     // itself. This one belongs with the rest of #376's proof.
     await page.setViewportSize({ width: 375, height: 812 });
