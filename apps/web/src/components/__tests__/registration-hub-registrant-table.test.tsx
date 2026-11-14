@@ -204,6 +204,14 @@ describe("renderRegistrantStatusCell — skipped by an automatic promotion (walk
     expect(textOf(renderRegistrantStatusCell(r, dict, ORG_TZ)), "the place still shows").toContain("#2");
   });
 
+  it("dated, it wraps on a phone row (320, every locale): two balanced lines in a tag, never a widow word in a pill", () => {
+    // Final fix round screenshot: at 320 "Skipped on 14 Nov: Lichess wasn't" / "linked" wrapped inside a rounded-full pill.
+    const classes = String(propsOf(chip(row({ status: "waitlisted", waitlist_position: 2, promotion_skipped_at: SKIPPED }))!).className).split(/\s+/);
+    expect(classes, "lines balanced, no lone last word").toContain("text-balance");
+    expect(classes, "a two-line pill reads as a blob: a tag's corners").not.toContain("rounded-full");
+    expect(classes).toContain("rounded-md");
+  });
+
   it("the date is the org's, not the server's: 23:30 UTC on the 14th is the 15th in Auckland", () => {
     const late = row({ status: "waitlisted", waitlist_position: 2, promotion_skipped_at: new Date("2026-11-14T23:30:00Z") });
     expect(textOf(chip(late, dict, "UTC")!)).toBe("Skipped on 14 Nov: Lichess wasn't linked");

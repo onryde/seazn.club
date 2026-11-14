@@ -123,12 +123,13 @@ export function renderRegistrantStatusCell(
       {/* Walk-fix F16: an automatic promotion passed this waiting entry over (no Lichess link that plays) - the organiser's answer to
           "why did the place go to someone behind them". The read model gives the time only while the entry waits; the status gates
           it here too. Amber, the hub's own "needs the registrant's action" tone, not a status of its own. Final review m1: dated and in
-          the past tense ("Skipped on 14 Nov: Lichess wasn't linked") - a later link re-runs nothing, and the words stay true. */}
+          the past tense ("Skipped on 14 Nov: Lichess wasn't linked") - a later link re-runs nothing, and the words stay true. Dated, it
+          wraps on a 320 row, so a tag's corners and balanced lines rather than a pill with a widow word. */}
       {row.status === "waitlisted" && row.promotion_skipped_at !== null && (
         <span
           data-testid="reg-hub-promotion-skipped"
           data-skipped-at={new Date(row.promotion_skipped_at).toISOString()}
-          className="inline-flex w-fit items-center rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800 ring-1 ring-amber-200"
+          className="inline-flex w-fit items-center rounded-md bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-balance text-amber-800 ring-1 ring-amber-200"
         >
           {t(dict, "reg.hub.registrants.table.promotionSkipped", {
             date: fmtDate(orgTz, row.promotion_skipped_at, { day: "numeric", month: "short" }),
