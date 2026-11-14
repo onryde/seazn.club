@@ -31,6 +31,7 @@ import {
   buildFunnelBody,
   canAdvance,
   heldStart,
+  keptReference,
   sendBody,
   initialWizardState,
   nextEventDays,
@@ -705,6 +706,18 @@ describe("the replace pair a resend carries", () => {
     ];
     for (const [answer, want] of rows) expect(heldStart(answer), JSON.stringify(answer)).toEqual(want);
     expect(rows.length).toBe(8);
+  });
+
+  it("the reference stayed only when the resend's answer names the one held (review m1): the server decides, not the resend", () => {
+    const held = { reference: "SZ-4K7Q2M", replaceKey: KEY };
+    const rows: [string, ReturnType<typeof heldStart>, ReturnType<typeof heldStart>, boolean][] = [
+      ["the first send: nothing held before", null, held, false],
+      ["a resend answered under the same reference", held, { reference: "SZ-4K7Q2M", replaceKey: "n".repeat(43) }, true],
+      ["a resend answered under a new reference (the pair was refused or the draft was gone)", held, { reference: "SZ-9XWQ3P", replaceKey: KEY }, false],
+      ["a resend answered without a pair", held, null, false],
+    ];
+    for (const [label, prev, next, want] of rows) expect(keptReference(prev, next), label).toBe(want);
+    expect(rows.length).toBe(4);
   });
 
   it("the first send carries no pair; a resend carries both, beside an unchanged body; the route's rule takes either", () => {

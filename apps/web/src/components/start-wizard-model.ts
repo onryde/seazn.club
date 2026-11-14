@@ -284,6 +284,13 @@ export function heldStart(answer: unknown): HeldStart | null {
   return typeof reference === "string" && typeof replaceKey === "string" ? { reference, replaceKey } : null;
 }
 
+/** The reference stayed across a resend: the resend's answer names the reference held from the send before. The server
+ *  decides — a pair it refused, or a draft already gone, answers a new reference — so the Sent screen says "the reference
+ *  stays the same" only on this (review m1). */
+export function keptReference(previous: HeldStart | null, next: HeldStart | null): boolean {
+  return previous !== null && next !== null && previous.reference === next.reference;
+}
+
 /** A send's body: once a start has answered, every resend carries its pair (`previousReference` + `replaceKey`), so the
  *  draft it wrote is replaced by its key — although the address changed (Change email) — and the reference in the inbox
  *  stays. Sent whether or not the address changed: the key is what keeps the reference, not the address. */
