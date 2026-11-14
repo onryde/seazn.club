@@ -473,7 +473,7 @@ describe.skipIf(!HAS_DB)("V363/V364 registration schema", () => {
       where tablename in ('registrations','registration_groups','registration_players')`;
     const names = new Set(rows.map((r) => String(r.indexname)));
     for (const idx of [
-      "registrations_group_idx",
+      "registrations_group_position_uq",
       "registrations_join_code_key",
       "registrations_promotion_expiry_idx",
       "registration_groups_ref_code_key",
@@ -485,6 +485,8 @@ describe.skipIf(!HAS_DB)("V363/V364 registration schema", () => {
     ]) {
       expect(names.has(idx), `missing index ${idx}`).toBe(true);
     }
+    // Dropped in V521: covered by registrations_group_position_uq's leading group_id.
+    expect(names.has("registrations_group_idx")).toBe(false);
   });
 });
 
