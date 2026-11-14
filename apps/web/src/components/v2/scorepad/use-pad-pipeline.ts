@@ -2056,10 +2056,18 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
         // Everything below is async.
         await enqueue(store, pending);
         await refreshDepth();
-        await runDrain();
       } finally {
+        // Released once the tap is durably queued, NOT after the network send
+        // below — the same scope `submitHeld` gives it. Held across the drain,
+        // it refused a scorer's deliberate second tap for the same side for as
+        // long as the first POST was on the wire (a slow connection = a lost
+        // point). A second submit now joins the drain already running
+        // (`runDrain`'s piggyback; the store is FIFO and `expectedSeq` above
+        // already counts this event as pending), which is the path two
+        // DIFFERENT back-to-back actions have always taken.
         submitInFlight.current = null;
       }
+      await runDrain();
     },
     [store, fixtureId, identity, commitPendingEnvelopes, markOwn, refreshDepth, runDrain, rulesVersion],
   );

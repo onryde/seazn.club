@@ -723,6 +723,158 @@ describe("usePadPipeline — double-submit guard (review finding 2)", () => {
   });
 });
 
+// fix/pad-second-tap-in-flight — a scorer taps the same side twice over a slow
+// connection. `submit()` held its same-tick guard (`submitInFlight`) across the
+// network drain, so a deliberate repeat seconds later, while the first POST was
+// still on the wire, was refused as DOUBLE_SUBMIT and the second point was
+// lost. The guard's own contract is "two calls landing in the SAME tick"; the
+// 250ms window (`lastAccepted`) is what catches one physical tap read twice.
+//
+// Every case here drives a transport whose POSTs answer only when the test
+// says so, because a POST that answers at once (fakeTransport's default) lets
+// the first submit fully resolve before the second starts — exactly how the
+// suite above stayed green over this defect.
+//
+// Single sport (generic) on purpose: the guard compares (type, payload) and
+// the drain sends whatever is queued; neither ever reads the sport module.
+describe("usePadPipeline — a repeat tap while the previous POST is still in flight", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** A transport whose every appendEvent call waits on its own gate. Gates
+   *  are created on demand, so `answer(i, …)` may run before or after call i
+   *  arrives. Every other read answers empty. */
+  function slowTransport() {
+    const bodies: AppendEventBody[] = [];
+    const gates: ReturnType<typeof deferred<AppendCallResult>>[] = [];
+    const gate = (i: number) => (gates[i] ??= deferred<AppendCallResult>());
+    const transport: PadTransport = {
+      async appendEvent(_fixtureId, body) {
+        bodies.push(body);
+        return gate(bodies.length - 1).promise;
+      },
+      async listEventsSince() {
+        return [];
+      },
+      async getLastSeq() {
+        return 0;
+      },
+      async fetchState() {
+        return { status: "in_play", last_seq: 0, state: null, summary: null, outcome: null };
+      },
+    };
+    return { transport, bodies, answer: (i: number, result: AppendCallResult) => gate(i).resolve(result) };
+  }
+
+  const flush = () => vi.advanceTimersByTimeAsync(0);
+  const homeScore = (pad: { current: UsePadPipelineResult }) =>
+    (pad.current.state as { running: { home: number; away: number } }).running.home;
+  const TAP = ["generic.score", { by: "H", points: 1 }] as const;
+
+  it("a second identical tap past the window, while the first POST is pending, is RECORDED and sent next with the following expected_seq", async () => {
+    const { transport, bodies, answer } = slowTransport();
+    const pad = mountPipeline(baseParams({ transport }));
+
+    const p1 = pad.current.submit(...TAP);
+    await flush();
+    expect(bodies, "the first tap's POST is on the wire and unanswered").toHaveLength(1);
+
+    // Deliberately past the double-tap window and beyond HUMAN_FASTEST_REPEAT_MS: a
+    // second, deliberate tap — not one press read twice.
+    await vi.advanceTimersByTimeAsync(Math.max(DOUBLE_SUBMIT_WINDOW_MS, HUMAN_FASTEST_REPEAT_MS) + 50);
+    const p2 = pad.current.submit(...TAP);
+    await flush();
+
+    expect(pad.current.lastRejection, "the second tap must not be refused").toBeNull();
+    expect(pad.current.queueDepth, "both taps held durably while the first POST is pending").toBe(2);
+    expect(homeScore(pad), "the pad shows both points at once").toBe(2);
+    expect(bodies, "FIFO: the second is not sent past the first's unanswered POST").toHaveLength(1);
+
+    answer(0, success(1));
+    await flush();
+    expect(bodies, "the second tap goes out as soon as the first is answered").toHaveLength(2);
+    answer(1, success(2));
+    await Promise.all([p1, p2]);
+
+    expect(bodies.map((b) => b.type)).toEqual([TAP[0], TAP[0]]);
+    expect(bodies[1]!.expected_seq, "consecutive slots, the second claiming the one after the first").toBe(bodies[0]!.expected_seq + 1);
+    expect(new Set(bodies.map((b) => b.idempotency_key)).size, "two distinct events, not one sent twice").toBe(2);
+    expect(pad.current.queueDepth).toBe(0);
+    expect(homeScore(pad)).toBe(2);
+  });
+
+  it("a second identical tap INSIDE the window is still refused while the first POST is pending — the double-tap guard is intact", async () => {
+    const { transport, bodies, answer } = slowTransport();
+    const pad = mountPipeline(baseParams({ transport }));
+
+    const p1 = pad.current.submit(...TAP);
+    await flush();
+    await vi.advanceTimersByTimeAsync(DOUBLE_SUBMIT_WINDOW_MS - 100); // one press read twice
+    await pad.current.submit(...TAP);
+
+    expect(pad.current.lastRejection?.code).toBe("DOUBLE_SUBMIT");
+    expect(pad.current.queueDepth, "only the first tap is held").toBe(1);
+    expect(homeScore(pad)).toBe(1);
+
+    answer(0, success(1));
+    await p1;
+    expect(bodies, "the refused repeat never reaches the transport").toHaveLength(1);
+    expect(homeScore(pad)).toBe(1);
+  });
+
+  it("three deliberate taps behind a slow POST all land in order; a network failure mid-way neither loses nor duplicates the later tap", async () => {
+    const { transport, bodies, answer } = slowTransport();
+    const pad = mountPipeline(baseParams({ transport }));
+    const SPACING = HUMAN_FASTEST_REPEAT_MS + 50;
+
+    const pA = pad.current.submit(...TAP);
+    await flush();
+    await vi.advanceTimersByTimeAsync(SPACING);
+    const pB = pad.current.submit(...TAP);
+    await flush();
+    await vi.advanceTimersByTimeAsync(SPACING);
+    const pC = pad.current.submit(...TAP);
+    await flush();
+
+    expect(pad.current.lastRejection).toBeNull();
+    expect(pad.current.queueDepth, "all three held while A's POST is pending").toBe(3);
+    expect(homeScore(pad)).toBe(3);
+    expect(bodies).toHaveLength(1);
+
+    answer(0, success(1)); // A lands
+    await flush();
+    expect(bodies, "B goes out next, alone").toHaveLength(2);
+    answer(1, { kind: "network-error", message: "connection dropped" }); // B's POST fails
+    await Promise.all([pA, pB, pC]);
+
+    expect(pad.current.offline).toBe(true);
+    expect(bodies, "the drain stops at B: C is never sent past an undelivered B").toHaveLength(2);
+    expect(pad.current.queueDepth, "B and C both still held — neither lost").toBe(2);
+    expect(homeScore(pad), "the pad still shows all three").toBe(3);
+
+    answer(2, success(2)); // B's retry
+    answer(3, success(3)); // C
+    await pad.current.retryDrain();
+
+    const [a, b, bRetry, c] = bodies;
+    expect(bodies).toHaveLength(4);
+    expect(bRetry!.idempotency_key, "B is retried under its OWN key — the server can dedupe it").toBe(b!.idempotency_key);
+    expect(new Set([a!, b!, c!].map((x) => x.idempotency_key)).size, "three distinct events").toBe(3);
+    expect([a!, b!, c!].map((x) => x.expected_seq), "one slot each, in tap order").toEqual([
+      a!.expected_seq,
+      a!.expected_seq + 1,
+      a!.expected_seq + 2,
+    ]);
+    expect(pad.current.offline).toBe(false);
+    expect(pad.current.queueDepth).toBe(0);
+    expect(homeScore(pad), "exactly three points — none lost, none doubled").toBe(3);
+  });
+});
+
 describe("usePadPipeline — live stream wiring (review finding 3)", () => {
   beforeEach(() => {
     vi.useFakeTimers();
