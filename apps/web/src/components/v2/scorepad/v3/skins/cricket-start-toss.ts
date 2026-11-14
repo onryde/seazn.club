@@ -5,7 +5,7 @@
 // core.start"), and the remote pad (`device-score-pad.tsx`) mounts the live pad only once the match has started, so the
 // skin's Toss tile (phase "pre") is never on screen there. Without this a quick match's guest could never say who batted
 // first, and the fold's default (home bats) would decide it. Asked only on a quick match pad (`useStartWithToss`'s
-// `cricketToss`): the console mounts its pad before the Start and keeps the Toss tile, and an organiser's remote pad is
+// `quickMatchToss`): the console mounts its pad before the Start and keeps the Toss tile, and an organiser's remote pad is
 // unchanged.
 //
 // Two required questions, each a `ChoiceDock` of its own: who won the toss (the two sides, named as typed), then what they

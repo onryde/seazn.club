@@ -581,13 +581,14 @@ export function DeviceScorePad({
   // `token` is the only field, so this is stable for the life of the link.
   const padAuth = useMemo(() => ({ kind: "device_link" as const, token }), [token]);
   // S2-7 (TN-TS-1): a tennis Start asks "Who serves first?" and sends the toss first (`runTossThenStart`). A quick match's
-  // cricket Start asks the toss too (decision log 2026-11-13; skins/cricket-start-toss.ts says why at Start).
+  // cricket Start asks the toss too (decision log 2026-11-13; skins/cricket-start-toss.ts says why at Start), and a quick
+  // match's carrom Start asks who breaks first (whole review m6; skins/carrom-start-toss.ts).
   const start = useStartWithToss({
     sportKey: sport.key,
     state: live.state,
     onStart: () => void send("core.start", {}),
     onTossThenStart: (toss) => runTossThenStart(live.last_seq, toss, send),
-    cricketToss: quickMatch,
+    quickMatchToss: quickMatch,
   });
 
   // Doc 13 §7: the pad's dead-end when the link dies mid-day.
