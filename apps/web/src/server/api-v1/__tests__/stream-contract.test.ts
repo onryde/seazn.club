@@ -44,8 +44,8 @@ describe("relay wire enums equal their declarations", () => {
     ["StreamSessionCurrent.startCause ↔ fixture_stream_sessions.start_cause (V430)", S.StreamSessionCurrent.shape.startCause.options, lastCheckList("fixture_stream_sessions", "start_cause")],
     ["StreamIngest.protocol ↔ fixture_stream_sessions.ingest_protocol", S.StreamIngest.shape.protocol.unwrap().options, checkList("fixture_stream_sessions", "ingest_protocol")],
     ["StreamTargetKind ↔ org_stream_targets.kind", S.StreamTargetKind.options, checkList("org_stream_targets", "kind")],
-    // YouTube live status (V521, owner direction 2026-11-14): the stored words. The wire enum is these PLUS `pasted_key`, which is never stored.
-    ["YOUTUBE_LIVE_WORDS ↔ fixture_stream_sessions.youtube_status (V521, folded)", YOUTUBE_LIVE_WORDS, lastCheckList("fixture_stream_sessions", "youtube_status")],
+    // YouTube live status (V522, owner direction 2026-11-14): the stored words. The wire enum is these PLUS `pasted_key`, which is never stored.
+    ["YOUTUBE_LIVE_WORDS ↔ fixture_stream_sessions.youtube_status (V522, folded)", YOUTUBE_LIVE_WORDS, lastCheckList("fixture_stream_sessions", "youtube_status")],
   ];
 
   it("each wire enum equals the V410 CHECK list of the column it is stored in", () => {

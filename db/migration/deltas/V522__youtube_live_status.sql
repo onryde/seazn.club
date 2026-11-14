@@ -1,4 +1,4 @@
--- V521 (feat/youtube-live-status): the YouTube live status line of a YouTube Connect session (owner direction 2026-11-14,
+-- V522 (feat/youtube-live-status): the YouTube live status line of a YouTube Connect session (owner direction 2026-11-14,
 -- docs/superpowers/specs/2026-11-14-stream-output-health-warning-design.md). V519 and V520 are open PR #1220's (registration).
 --
 -- While a session that streams into a YouTube Connect broadcast is live, the stream tick (and the organiser's poll) read YouTube -
