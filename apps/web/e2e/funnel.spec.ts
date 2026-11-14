@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { test, expect, type Browser, type BrowserContext, type Locator, type Page } from "@playwright/test";
-import { PROD_TARGET, TAG, withDb } from "./helpers";
+import { PROD_TARGET, TAG, apiJson, withDb } from "./helpers";
 import { consentedAnonymousState } from "./scorepad-a11y-kit";
 import { waitForHydration } from "./directory-kit";
 
@@ -117,6 +117,29 @@ async function sendAndExpectSent(w: Wizard): Promise<void> {
   await expect(heading).toHaveText(w.mk("start.wizard.checkEmail"));
   await expect(heading, "focus moves to the Sent heading").toBeFocused();
 }
+
+/** The Sent screen's reference line: the draft's own SZ- reference (the email prints the same), worded by the dictionary.
+ *  Returns it. */
+async function sentReference(w: Wizard, email: string): Promise<string> {
+  const line = w.root.locator("[data-funnel-reference]");
+  await expect(line).toBeVisible();
+  const reference = (await line.getAttribute("data-funnel-reference")) ?? "";
+  expect(reference, "an SZ- reference: six symbols, no 0/O/1/I").toMatch(/^SZ-[2-9A-HJ-NP-Z]{6}$/);
+  await expect(line).toHaveText(w.mk("start.wizard.reference").replace("{reference}", reference));
+  const stored = await withDb((sql) => sql<{ reference: string }[]>`
+    select reference from funnel_drafts where email = ${email} order by created_at desc limit 1`);
+  expect(stored[0]?.reference, "the reference shown is the newest draft's own").toBe(reference);
+  return reference;
+}
+
+/** The getting-started steps on screen (the Sent screen's or the landing's), as [key, state, aria-current]. */
+const stepStates = (steps: Locator): Promise<(string | null)[][]> =>
+  steps.evaluateAll((els) =>
+    els.map((el) => [el.getAttribute("data-step-key"), el.getAttribute("data-step-state"), el.getAttribute("aria-current")]),
+  );
+/** A day as the steps word it: the locale's short weekday, day and month (UTC: the event's calendar day). */
+const enDay = (iso: string): string =>
+  new Intl.DateTimeFormat("en", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" }).format(new Date(`${iso}T00:00:00Z`));
 
 /** The format cards on screen, in the order they are shown. */
 const cardOrder = (w: Wizard): Promise<(string | null)[]> =>
@@ -292,6 +315,24 @@ test("wizard → claim: the division holds the chosen format and the courts from
     await w.email().fill(email);
     await sendAndExpectSent(w);
 
+    // Sent (mock sss14a Option A): the draft's reference beside the address, the summary ending on the page's language, and
+    // the five steps ahead — the first current, step 3 counting the field chosen, step 5 the courts and the day picked.
+    await sentReference(w, email);
+    await expect(w.root.locator("dl")).toContainText(w.mk("start.wizard.language"));
+    await expect(w.root.locator("dl")).toContainText("English");
+    const ahead = w.root.locator("[data-getting-started-steps] > li");
+    expect(await stepStates(ahead), "step 1 is current, the rest wait").toEqual([
+      ["open", "current", "step"],
+      ["rename", "todo", null],
+      ["players", "todo", null],
+      ["generate", "todo", null],
+      ["schedule", "todo", null],
+    ]);
+    await expect(ahead.nth(2)).toContainText(ui("start.next.players.hint", { target: ENTRANTS }));
+    await expect(ahead.nth(4)).toContainText(
+      ui("start.next.schedule.courtsDate", { courts: ui("start.next.courts.other", { count: COURTS }), date: enDay(saturday) }),
+    );
+
     // The answers ride the URL (a refresh restores them, T4 (a)) — and never the address or the name: PostHog and Sentry
     // record page URLs. Every key is read, so a new one cannot slip in; the positive half proves the URL is written at all.
     const href = page.url();
@@ -343,6 +384,131 @@ test("wizard → claim: the division holds the chosen format and the courts from
     // Single-use: revisiting the link fails cleanly with a way forward.
     await page.goto(claimPath);
     await expect(page.locator("[data-funnel-claim]")).toContainText(ui("funnel.claim.card.invalidTitle"), { timeout: NAV_MS });
+  } finally {
+    await ctx.close();
+  }
+});
+
+test("Change email keeps every answer and resends under the same reference; the first link says it was replaced; the landing carries the steps on", async ({ browser }) => {
+  // Seven page loads or redirects (the start, the dead link, the claim and its landing, settings, two reloads) and ~60 acts.
+  test.setTimeout(7 * NAV_MS + 60 * ACT_MS);
+  const ENTRANTS = 8;
+  const ctx = await visitor(browser);
+  const page = await ctx.newPage();
+  const first = `delivered+e2e-funnel-change-a-${TAG}@resend.dev`;
+  const second = `delivered+e2e-funnel-change-b-${TAG}@resend.dev`;
+  // The replace key the route answers: read off the wire, to prove it never reaches the URL.
+  const keys: string[] = [];
+  page.on("response", async (r) => {
+    if (r.request().method() === "POST" && new URL(r.url()).pathname === "/api/funnel/start") {
+      const body = (await r.json().catch(() => null)) as { data?: { replaceKey?: string } } | null;
+      if (body?.data?.replaceKey) keys.push(body.data.replaceKey);
+    }
+  });
+  try {
+    // A link that carries the answers opens on Email (the URL replays to it): 8 players, a League, no first day.
+    await page.goto(`/en/start?sport=badminton&entrants=${ENTRANTS}&format=league&step=email`);
+    const w = wizardOf(page, "en");
+    await expect(w.root).toHaveAttribute("data-step", "email");
+    await waitForHydration(w.send());
+    await w.email().fill(first);
+    await sendAndExpectSent(w);
+    const reference = await sentReference(w, first);
+    await expect(w.root).toContainText(w.mk("start.wizard.referenceNote"));
+    const answers = new URL(page.url()).search;
+
+    // "Change it": Email again, every answer kept, the old address ready to edit, the banner naming the reference that stays.
+    await w.root.getByRole("button", { name: w.mk("start.wizard.changeIt"), exact: true }).click();
+    await expectAt(w, "email");
+    await expect(w.root.locator("[data-change-email]")).toHaveText(w.mk("start.wizard.changeBanner").replace("{reference}", reference));
+    await expect(w.root).toContainText(w.mk("start.wizard.answersKept"));
+    await expect(w.email(), "the address sent to, ready to edit").toHaveValue(first);
+    expect(new URL(page.url()).search, "the answers in the URL are the ones sent").toBe(answers);
+    await expect(w.root.locator("dl")).toContainText(ui("format.template.league.label"));
+    await expect(w.root.locator("dl")).toContainText(String(ENTRANTS));
+    await expect(w.send(), "the first-time label is gone").toHaveCount(0);
+    await w.email().fill(second);
+    await w.root.getByRole("button", { name: `${w.mk("start.wizard.sendNew")} →`, exact: true }).click();
+    await expect(w.root).toHaveAttribute("data-step", "sent", { timeout: NAV_MS });
+    await expect(w.root.locator("[data-funnel-done]")).toContainText(second);
+    expect(await sentReference(w, second), "the reference in the inbox stays").toBe(reference);
+    await expect(w.root).toContainText(w.mk("start.wizard.resentNote"));
+    expect(keys, "both starts answered a replace key").toHaveLength(2);
+    for (const secret of [first, second, encodeURIComponent(first), encodeURIComponent(second), ...keys]) {
+      expect(page.url(), "the URL never carries an address or a replace key").not.toContain(secret);
+    }
+    const drafts = await withDb((sql) => sql<{ email: string; live: boolean; reference: string }[]>`
+      select email, (replaced_at is null) as live, reference from funnel_drafts
+       where email in (${first}, ${second}) order by created_at, id`);
+    expect(drafts, "the first address's draft is replaced; the new address holds the one live draft").toEqual([
+      { email: first, live: false, reference },
+      { email: second, live: true, reference },
+    ]);
+
+    // The first email's link: replaced, and it names the reference to look for.
+    await page.goto(`/start/claim?token=${await draftToken(first)}`);
+    const card = page.locator("[data-funnel-claim]");
+    await expect(card).toContainText(ui("funnel.claim.card.replacedTitle"), { timeout: NAV_MS });
+    await expect(card).toContainText(reference);
+
+    // The newest link lands on the division, the steps carried on: step 1 ticked, rename current with its way on.
+    const landed = await claimAndLand(page, `/start/claim?token=${await draftToken(second)}`);
+    const panel = page.locator("[data-getting-started]");
+    const steps = panel.locator("[data-getting-started-steps] > li");
+    await expect(panel).toBeVisible();
+    expect(await stepStates(steps)).toEqual([
+      ["open", "done", null],
+      ["rename", "current", "step"],
+      ["players", "todo", null],
+      ["generate", "todo", null],
+      ["schedule", "todo", null],
+    ]);
+    await expect(panel).toContainText(ui("start.next.landing.done", { done: 1, total: 5 }));
+    await expect(steps.nth(2), "the list starts empty").toContainText(ui("start.next.players.progress", { count: 0, target: ENTRANTS }));
+    await expect(panel.locator("[data-step-action]"), "only the current step has a way on").toHaveCount(1);
+    const orgSlug = /^\/o\/([^/]+)\//.exec(landed)![1]!;
+    const rename = panel.locator('[data-step-action="rename"]');
+    await expect(rename).toHaveText(ui("start.next.action.rename"));
+    await expect(rename).toHaveAttribute("href", `/o/${orgSlug}/settings`);
+    await rename.click();
+    await page.waitForURL((u) => u.pathname === `/o/${orgSlug}/settings`, { timeout: NAV_MS });
+    await expect(page.getByTestId("org-name-input"), "the way on opens the organisation's name").toBeVisible({ timeout: NAV_MS });
+
+    // Renamed (the settings route, as the name field saves it) and the field filled to the size chosen: Generate is current.
+    const ids = await withDb((sql) => sql<{ org: string; division: string }[]>`
+      select o.id as org, d.id as division from divisions d
+        join competitions c on c.id = d.competition_id join organizations o on o.id = c.org_id
+       where o.slug = ${orgSlug} order by d.created_at limit 1`);
+    const renamed = await apiJson(page.request, `/api/orgs/${ids[0]!.org}`, "PATCH", { name: `Riverside Club ${TAG}` });
+    expect(renamed.status, JSON.stringify(renamed.error)).toBe(200);
+    // A rename moves the org's slug, and the old one only finds the org's dashboard: the landing again is at the new slug.
+    const [org] = await withDb((sql) => sql<{ slug: string }[]>`select slug from organizations where id = ${ids[0]!.org}`);
+    expect(org!.slug, "the rename moved the slug").not.toBe(orgSlug);
+    const relanded = landed.replace(`/o/${orgSlug}/`, `/o/${org!.slug}/`);
+    const added = await apiJson(
+      page.request,
+      `/api/v1/divisions/${ids[0]!.division}/entrants`,
+      "POST",
+      Array.from({ length: ENTRANTS }, (_, i) => ({ kind: "individual", display_name: `Player ${String.fromCharCode(65 + i)} ${TAG}` })),
+    );
+    expect(added.status, JSON.stringify(added.error)).toBe(201);
+    await page.goto(relanded);
+    await expect(panel).toBeVisible({ timeout: NAV_MS });
+    expect(await stepStates(steps)).toEqual([
+      ["open", "done", null],
+      ["rename", "done", null],
+      ["players", "done", null],
+      ["generate", "current", "step"],
+      ["schedule", "todo", null],
+    ]);
+    await expect(panel).toContainText(ui("start.next.landing.done", { done: 3, total: 5 }));
+    await expect(steps.nth(2)).toContainText(ui("start.next.players.progress", { count: ENTRANTS, target: ENTRANTS }));
+    const generate = panel.locator('[data-step-action="generate"]');
+    await expect(generate).toHaveText(ui("start.next.action.generate"));
+    await expect(generate).toHaveAttribute("href", /\/o\/[^/]+\/c\/[^/]+\/d\/[^/?]+\?tab=fixtures$/);
+    await generate.click();
+    await page.waitForURL((u) => u.searchParams.get("tab") === "fixtures", { timeout: NAV_MS });
+    await expect(page.locator("section.card[data-stage-id]"), "the fixtures tab, where Generate lives").toHaveCount(1);
   } finally {
     await ctx.close();
   }
