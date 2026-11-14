@@ -27,6 +27,7 @@ import { CreateStages, type CreateCompetition } from "@/server/api-v1/schemas";
 import { log } from "@/server/logger";
 import { createCompetition } from "@/server/usecases/competitions";
 import { createDivision } from "@/server/usecases/divisions";
+import { FUNNEL_DRAFT_REPLACED_REASON, cancelQueuedEmails } from "@/server/email-outbox/cancel";
 import { frozenMemberIds } from "@/server/usecases/entitlement-freeze";
 import { createStages } from "@/server/usecases/stages";
 import { createCourt, createVenue, listVenues } from "@/server/usecases/venues";
@@ -131,7 +132,15 @@ export async function createFunnelDraft(
     const replaced = [...new Set([...keyed, ...sameAddress].map((r) => r.id))];
     const reference = keyed[0]?.reference ?? sameAddress[0]?.reference ?? newFunnelReference();
     // Retired BEFORE the insert: the live-reference index admits one live draft per reference.
-    if (replaced.length > 0) await tx`update funnel_drafts set replaced_at = now() where id = any(${replaced}::uuid[])`;
+    if (replaced.length > 0) {
+      await tx`update funnel_drafts set replaced_at = now() where id = any(${replaced}::uuid[])`;
+      // A replaced draft's link is dead, so nothing still waiting to mail it may go out: its claim email queued for a retry, and
+      // its +24h reminder. Voided in this transaction, so the replace and the void commit together. Org-less rows on the pooled
+      // handle (`current_org_id()` null matches exactly those); a row already `sending` or `sent` is past recall.
+      for (const kind of ["funnel_claim", "funnel_reminder"] as const) {
+        await cancelQueuedEmails(tx, { kind, refType: "funnel_draft", refIds: replaced, reason: FUNNEL_DRAFT_REPLACED_REASON });
+      }
+    }
     // A replaced draft names the reference its latest email carries ("check your latest email, SZ-…"): when the replaced drafts
     // carried another one (a draft at the new address beside the one the key named), every replaced draft of that reference takes
     // the surviving one, so an old link never points the visitor at a code no live email carries.
