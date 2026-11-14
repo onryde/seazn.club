@@ -132,6 +132,17 @@ export function FunnelClaim({
               ? msg("funnel.claim.card.replacedBody", { reference })
               : msg("funnel.claim.card.replacedBodyNoReference")}
           </p>
+          {/* The latest email may be gone (deleted, another inbox): the dead-link card's own ways on (T1 review m5). */}
+          <p className="mt-4 text-sm text-slate-500">
+            <Link href="/start" className="font-medium text-purple-700 underline">
+              {msg("funnel.claim.card.startAgain")}
+            </Link>{" "}
+            {msg("funnel.claim.card.or")}{" "}
+            <Link href="/login" className="font-medium text-purple-700 underline">
+              {msg("funnel.claim.card.signIn")}
+            </Link>
+            .
+          </p>
         </>
       )}
       {shown === "tryLater" && (

@@ -163,12 +163,13 @@ const STATES = [
     links: (l: Locale) => [`/${l}/start`],
   },
   {
-    // V518: a newer start replaced this draft. Signed out, nothing built; the way on is the latest email, named by its reference.
+    // V518: a newer start replaced this draft. Signed out, nothing built; the way on is the latest email, named by its reference —
+    // or, as on the dead-link card, a fresh start or a sign-in (T1 review m5: the email may be gone).
     name: "replaced by a newer link",
     token: "tok-replaced",
     answer: () => Promise.reject(new ApiError(SERVER_TEXT, 400, FUNNEL_CLAIM_REPLACED)),
-    keys: ["replacedTitle", "replacedBody"],
-    links: [],
+    keys: ["replacedTitle", "replacedBody", "startAgain", "or", "signIn"],
+    links: ["/start", "/login"],
   },
   {
     name: "rate limited (the link is unused)",
