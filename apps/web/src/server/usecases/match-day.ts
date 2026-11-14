@@ -932,16 +932,18 @@ export async function candidatesIn(
     behind: number;
     /** The planned time the row prints (E2 item 1); null for a call, which replaced the plan. */
     planned: Date | null;
+    /** The match is first in `from`'s queue: that court's very next (F-T8-16). */
+    first: boolean;
   }[] = [];
   for (const c of board.courts) {
     const mine = c.court_id === courtId;
     if (!mine && c.state === "called" && c.current !== null && ready(c.current)) {
-      picked.push({ row: c.current, source: "other_court", from: c.court_name, waiting: 0, behind: 0, planned: null });
+      picked.push({ row: c.current, source: "other_court", from: c.court_name, waiting: 0, behind: 0, planned: null, first: false });
     }
     // The court's first ready queued match PER DIVISION (F-T8-6): the desk's panel filters by division, and a court whose first
     // match is another division's would otherwise show "Nothing is waiting" beside a match of the filtered one in its queue.
     const seenDivisions = new Set<string>();
-    for (const next of c.queue) {
+    for (const [place, next] of c.queue.entries()) {
       if (!ready(next.row) || seenDivisions.has(next.row.division_id)) continue;
       seenDivisions.add(next.row.division_id);
       picked.push({
@@ -951,6 +953,7 @@ export async function candidatesIn(
         waiting: wholeMinutes(next.estimated_at.getTime() - nowMs),
         behind: wholeMinutes(next.estimated_at.getTime() - next.planned_at.getTime()),
         planned: next.planned_at,
+        first: !mine && place === 0,
       });
     }
   }
@@ -962,6 +965,7 @@ export async function candidatesIn(
       waiting: 0,
       behind: r.scheduled_at === null ? 0 : wholeMinutes(nowMs - new Date(r.scheduled_at).getTime()),
       planned: r.scheduled_at === null ? null : new Date(r.scheduled_at),
+      first: false,
     });
   }
   const keep = opts.keep;
@@ -981,6 +985,7 @@ export async function candidatesIn(
         fixture: fixtureView(p.row, rounds, {}),
         source: p.source,
         from_court_name: p.from,
+        first_in_queue: p.first,
         waiting_minutes: p.waiting,
         behind_minutes: p.behind,
         planned_at: iso(p.planned),

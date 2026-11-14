@@ -4655,6 +4655,9 @@
                               }
                             ]
                           },
+                          "first_in_queue": {
+                            "type": "boolean"
+                          },
                           "waiting_minutes": {
                             "type": "integer",
                             "minimum": 0,
@@ -4717,6 +4720,7 @@
                           "fixture",
                           "source",
                           "from_court_name",
+                          "first_in_queue",
                           "waiting_minutes",
                           "behind_minutes",
                           "planned_at",
@@ -4776,6 +4780,7 @@
                       },
                       "source": "this_court",
                       "from_court_name": "example",
+                      "first_in_queue": true,
                       "waiting_minutes": 0,
                       "behind_minutes": 0,
                       "planned_at": "2026-08-01T09:00:00Z",

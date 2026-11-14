@@ -48,6 +48,11 @@ describe.skipIf(!HAS_DB)("matchDayCandidates — one per division per court", ()
     expect(fromCourt1).toEqual(expect.arrayContaining([["Doubles", doublesFirst.id], ["Singles", singlesFirst.id]]));
     expect(fromCourt1).toHaveLength(2);
 
+    // F-T8-16: the Doubles match is Court 1's very next; the Singles one is third in its queue, so not.
+    const firstOf = (id: string) => offered.find((c) => c.fixture.id === id)?.first_in_queue;
+    expect(firstOf(doublesFirst.id)).toBe(true);
+    expect(firstOf(singlesFirst.id)).toBe(false);
+
     // Filtering by the second division (what the desk's panel does) leaves the Singles match.
     expect(offered.filter((c) => c.fixture.division_name === "Singles").map((c) => c.fixture.id)).toContain(singlesFirst.id);
     // Filtering by the first division changes nothing from before: its first ready match.

@@ -212,6 +212,7 @@ export const MatchDayCandidate = z.object({
   fixture: MatchDayFixture,
   source: z.enum(["this_court", "other_court", "no_court"]),
   from_court_name: z.string().nullable(),
+  first_in_queue: z.boolean(),
   waiting_minutes: z.number().int().nonnegative(),
   behind_minutes: z.number().int().nonnegative(),
   // The match's planned time, when it has one (a match called elsewhere has none: the call replaced it).
