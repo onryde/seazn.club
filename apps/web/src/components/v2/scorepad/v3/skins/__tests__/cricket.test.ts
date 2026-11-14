@@ -931,6 +931,19 @@ describe("buildScorebug", () => {
       expect(who([...closed, OVER(4)])).toBe(named("away"));
     });
 
+    it("every locale puts the role word FIRST and the name last: a phone's two-line clamp only ever eats the name (whole review m5)", () => {
+      // At 320 a 43-character name ran the old "{side} batting" to three lines and the clamp cut "batting" off (measured,
+      // e2e/mobile/quick-match.spec.ts). The browser leg measures it; this pins the shape in every locale.
+      let checked = 0;
+      for (const [locale, dict] of Object.entries(LOCALE_DICTS)) {
+        const value = (dict as Record<string, string>)["scorepad.skin.cricket.scorebug.battingSide"]!;
+        expect(value.endsWith("{side}"), `${locale}: ${value}`).toBe(true);
+        expect(value.replace("{side}", "").trim().length, `${locale}: a role word before the name`).toBeGreaterThan(0);
+        checked++;
+      }
+      expect(checked).toBe(4);
+    });
+
     it("the real dictionaries: every locale's label carries the side's name", () => {
       const v = view({ cfg: cfgT20, state: foldCricket(cfgT20, [["core.start"]]), entrantNames: NAMES });
       let checked = 0;

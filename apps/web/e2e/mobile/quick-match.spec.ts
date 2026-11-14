@@ -103,7 +103,7 @@ async function qmFillSetup(
   page: Page,
   name: string,
   sides: readonly string[],
-  sport: "badminton" | "football" | "boardgame" | "cricket" = "badminton",
+  sport: "badminton" | "football" | "boardgame" | "cricket" | "carrom" = "badminton",
   opts: { knockout?: boolean } = {},
 ): Promise<void> {
   const knockout = opts.knockout ?? true;
@@ -456,9 +456,33 @@ test("quick match (cricket, League only): the knockout rows say why, Start asks 
     // batting: away won the toss and bowled, so home.
     await expect(pad.locator('[data-tile-id="review"]'), "no Review tile").toHaveCount(0);
     await expect(pad.locator('[data-role="v3-scorebug-strip"]'), "no strip: nothing on it is fed at this band").toHaveCount(0);
-    await expect(pad.locator('[data-role="v3-scorebug"]')).toContainText(
-      qmUi("scorepad.skin.cricket.scorebug.battingSide", { side: sideHome }),
+    const battingLabel = qmUi("scorepad.skin.cricket.scorebug.battingSide", { side: sideHome });
+    await expect(pad.locator('[data-role="v3-scorebug"]')).toContainText(battingLabel);
+    // Whole review m5: a long name must not cost the label its role word. The half's name line clamps (two lines on a
+    // phone); every box of the role word ("Batting", read off the dictionary) is painted inside the clamp's visible height.
+    expect(sideHome.length, "premise: the batting side carries a long name").toBeGreaterThanOrEqual(30);
+    const role = battingLabel.replace(sideHome, "").replace(/[:\s]+/g, " ").trim();
+    expect(role.length, "premise: the label has a role word beside the name").toBeGreaterThan(0);
+    const roleBoxes = await pad.locator('[data-role="v3-scorebug"]').evaluate(
+      (bug, { label, word }) => {
+        const who = [...bug.querySelectorAll("div")].find((d) => d.textContent === label);
+        if (!who) return { found: false, boxes: 0, hidden: 0 };
+        const text = [...who.querySelectorAll("span")].map((s) => s.firstChild).find((n) => n?.nodeType === Node.TEXT_NODE && n.textContent?.includes(word));
+        const node = text ?? who.firstChild;
+        if (!node || !node.textContent) return { found: false, boxes: 0, hidden: 0 };
+        const at = node.textContent.indexOf(word);
+        const range = document.createRange();
+        range.setStart(node, at);
+        range.setEnd(node, at + word.length);
+        const bottom = who.getBoundingClientRect().top + who.clientHeight;
+        const rects = [...range.getClientRects()];
+        return { found: true, boxes: rects.length, hidden: rects.filter((r) => r.bottom > bottom + 0.5).length };
+      },
+      { label: battingLabel, word: role },
     );
+    expect(roleBoxes.found, "the batting half's name line").toBe(true);
+    expect(roleBoxes.boxes, "anti-vacuity: the role word's boxes were measured").toBeGreaterThan(0);
+    expect(roleBoxes.hidden, `"${role}" is clamped away at this width`).toBe(0);
     await pad.locator('[data-role="v3-recording-chip"]').click();
     const bands = page.getByRole("radiogroup").locator("[data-band]");
     await expect(bands, "the Recording sheet offers the guest's bands only").toHaveCount(2);
@@ -517,6 +541,60 @@ test("quick match (cricket, League only): the knockout rows say why, Start asks 
     await ctx.close();
   }
   expect(painted, "anti-vacuity: the back link's boxes were measured").toBeGreaterThan(0);
+});
+
+// Whole review m6 (controller PO rec 2026-11-14): a quick match carrom Start asks "Who breaks first?" (the skin's own Toss
+// question), the toss the remote pad's Toss tile can never offer (it mounts after the Start); before, the home side broke
+// first in every game one. The answer is read back from the record: the toss naming the side picked, then the Start.
+test("quick match (carrom): Start asks who breaks first, names both sides, and the answer is the toss on the record; all hold at this width", async ({
+  browser,
+}) => {
+  // Two page loads or redirects, one hold read back (the toss and the Start), and ~10 local acts.
+  test.setTimeout(3 * QM_NAV_MS + (HOLD_MS + QM_NAV_MS) + 10 * QM_ACT_MS);
+  const ctx = await qmGuest(browser);
+  try {
+    const page = await ctx.newPage();
+    await qmFillSetup(page, `Mobile quick match carrom ${TAG}-${projectTag()}`, [QM_LONG, "Queens"], "carrom");
+    await qmStart(page);
+    const hero = page.getByTestId("qm-hero");
+    const fixtureId = (await page.locator('[data-testid="qm-match"][data-next="true"]').getAttribute("data-fixture-id"))!;
+    const sideHome = (await page.getByTestId("qm-hero-home").textContent())!.trim();
+    const sideAway = (await page.getByTestId("qm-hero-away").textContent())!.trim();
+    await hero.getByTestId("qm-score").click();
+    await page.waitForURL(/\/score\/dl_[A-Za-z0-9_-]+$/, { timeout: QM_NAV_MS });
+    await expect(page.getByTestId("scan-confirm")).toBeVisible({ timeout: QM_NAV_MS });
+    await page.getByTestId("score-start-match").click();
+
+    const question = page.getByTestId("score-start-toss");
+    await expect(question).toBeVisible({ timeout: QM_NAV_MS });
+    await expect(question).toContainText(qmUi("pad.carrom.sheet.toss.firstBreak.title"));
+    await expect(question.getByTestId("pad-dock-chip-home")).toContainText(sideHome);
+    await expect(question.getByTestId("pad-dock-chip-away")).toContainText(sideAway);
+    await expect(page.locator('[data-role="pad-v3"]'), "no pad until the toss is answered").toHaveCount(0);
+    await qmNotClipped(page, '[data-testid="score-start-toss"]', "the carrom toss question");
+    await expectNoHorizontalScroll(page);
+    for (const id of ["home", "away"]) await hitFloor(question.getByTestId(`pad-dock-chip-${id}`), `toss chip ${id}`, 44);
+    await question.getByTestId("pad-dock-chip-away").click();
+    await expect(page.locator('[data-role="pad-v3"] [data-role="v3-scorebug"]'), "the toss answered, the pad opens").toBeVisible({
+      timeout: QM_NAV_MS,
+    });
+
+    const [fx] = await withDb((sql) => sql<{ away_entrant_id: string }[]>`select away_entrant_id from fixtures where id = ${fixtureId}`);
+    await expect
+      .poll(
+        async () =>
+          withDb((sql) => sql<{ type: string; payload: Record<string, unknown> }[]>`
+            select type, payload from score_events where fixture_id = ${fixtureId} order by seq`),
+        { timeout: HOLD_MS + QM_NAV_MS, message: "the toss and the Start never reached the ledger" },
+      )
+      .toEqual([
+        { type: "carrom.toss", payload: { firstBreak: fx!.away_entrant_id } },
+        { type: "core.start", payload: {} },
+      ]);
+    await expectNoHorizontalScroll(page);
+  } finally {
+    await ctx.close();
+  }
 });
 
 // Quick match plan 4 Task 5 (docs/superpowers/plans/2026-11-13-quick-match-4-skip-match.md; spec

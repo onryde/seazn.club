@@ -100,7 +100,7 @@ const wholeTexts = (html: string): string[] =>
 
 /** The offered sports whose pad says NO side word even with rostered sides (the control's own render): there is no word
  *  for a name to stand in. Cricket (offered since 2026-11-14): its scorebug names the batting side by the entrant's name
- *  ("Red Bibs batting", sign-off 2026-11-14), never by a side word, and the striker/bowler pickers name players. Read off
+ *  ("Batting: Red Bibs", sign-off 2026-11-14), never by a side word, and the striker/bowler pickers name players. Read off
  *  the render, never typed; the pin below says which sport it is today. */
 const WORDLESS = QM_SPORTS.filter((k) => {
   const texts = wholeTexts(render(k, true));
