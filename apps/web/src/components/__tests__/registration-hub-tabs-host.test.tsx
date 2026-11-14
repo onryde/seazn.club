@@ -5,8 +5,9 @@
 // is under test is exactly the host's side of that seam. The router is a spy; a navigation the host asks for "lands" when
 // the test re-renders with the state that address parses to, as the server would send it. Expected addresses come from
 // spec §9.2's table (evict the least recently used; push to open or switch, replace to close), not from the host.
+import type { ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
+import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
 import type { ConfigDirty } from "@/components/use-config-dirty";
 import type { ConfigSaveHandle, ConfigSaveResult } from "@/components/registration-hub-config-panel";
 import type { HubTabsState } from "@/components/registration-hub-tabs-state";
@@ -26,6 +27,7 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(nav.search),
 }));
 
+import { holdPopState, runPopStateGuard } from "@/components/popstate-guard";
 import {
   RegistrationHubTabsHost,
   type HubDivisionConfigContext,
@@ -93,9 +95,12 @@ function mount(state: HubTabsState, openable = OPENABLE) {
   const pageOf = (id: string) => pages().find((e) => propsOf(e).id === id);
   const dirty = (id: string, sections: SectionId[], count = sections.length) =>
     (propsOf(pageOf(id)!).onDirtyChange as (d: ConfigDirty) => void)({ dirty: count > 0, count, sections });
+  /** Plays the page's save handle; returns its reveal, so a test can see when the host asks the page to show a refusal. */
   const handle = (id: string, save: () => Promise<ConfigSaveResult>) => {
-    const ref = { current: { save } as ConfigSaveHandle | null };
+    const reveal = vi.fn();
+    const ref = { current: { save, reveal } as ConfigSaveHandle | null };
     (propsOf(pageOf(id)!).register as (id: string, h: typeof ref) => () => void)(id, ref);
+    return reveal;
   };
   const dialog = () => tree().find((e) => propsOf(e).primary !== undefined && propsOf(e).dismiss !== undefined);
   type Action = { label: string; onClick: () => void };
@@ -108,30 +113,102 @@ function mount(state: HubTabsState, openable = OPENABLE) {
     }[];
   const close = (id: string) => stripTabs().find((tab) => tab.key === id)!.division!.onClose();
   const land = (next: HubTabsState, openableNow = openable) => island.rerender(propsFor(next, openableNow));
-  return { island, tree, api, pages, pageOf, dirty, handle, dialog, press, toast, stripTabs, close, land };
+  /** The division tabs, in strip order. */
+  const stripDivisions = () => stripTabs().filter((tab) => tab.division).map((tab) => tab.key);
+  /** The always-present live region the toast's words go through. */
+  const live = () => tree().filter((e) => propsOf(e).role === "status");
+  return { island, tree, api, pages, pageOf, dirty, handle, dialog, press, toast, stripTabs, close, land, stripDivisions, live };
 }
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
-const listeners = vi.hoisted(() => ({ beforeunload: new Set<(e: unknown) => void>() }));
+/** The Modal a dialog element renders (HubDialog is hookless: called as a function, as React would). */
+const modalOf = (dialogEl: ReactElement) =>
+  propsOf((dialogEl.type as (p: unknown) => ReactElement)(dialogEl.props)) as unknown as { onClose: () => void };
+
+const HUB = "/o/riverside/c/summer/registration";
+const ORIGIN = "https://seazn.test";
+
+/** The window's listeners by type: the beforeunload prompt and the capture-phase click guard (G1), each recording whether it
+ *  was added in the capture phase — the click guard must run before Next's Link. A popstate goes through the root layout's
+ *  guard instead (popstate-guard.tsx), driven here by `pop()`. */
+const listeners = vi.hoisted(() => ({
+  beforeunload: new Set<(e: unknown) => void>(),
+  click: new Set<(e: unknown) => void>(),
+  capture: new Map<unknown, boolean>(),
+}));
+const win = vi.hoisted(() => ({
+  pathname: "",
+  go: vi.fn(),
+  /** The Navigation API's current entry index, or undefined for a browser without it. */
+  index: undefined as number | undefined,
+}));
 beforeEach(() => {
   nav.push.mockClear();
   nav.replace.mockClear();
   nav.refresh.mockClear();
   nav.search = "";
-  listeners.beforeunload.clear();
+  win.pathname = HUB;
+  win.go.mockClear();
+  win.index = undefined;
+  for (const set of [listeners.beforeunload, listeners.click]) set.clear();
+  listeners.capture.clear();
+  // The guard is module state, and an earlier test's host is never unmounted: take back whatever it still holds.
+  holdPopState(() => {})();
+  const setOf = (type: string) => (type === "beforeunload" ? listeners.beforeunload : type === "click" ? listeners.click : null);
   vi.stubGlobal("window", {
     scrollY: 0,
     scrollTo: vi.fn(),
-    addEventListener: (type: string, fn: (e: unknown) => void) => {
-      if (type === "beforeunload") listeners.beforeunload.add(fn);
+    location: {
+      origin: ORIGIN,
+      get pathname() {
+        return win.pathname;
+      },
+    },
+    history: { go: win.go },
+    get navigation() {
+      return win.index === undefined ? undefined : { currentEntry: { index: win.index } };
+    },
+    addEventListener: (type: string, fn: (e: unknown) => void, capture?: boolean) => {
+      setOf(type)?.add(fn);
+      listeners.capture.set(fn, capture === true);
     },
     removeEventListener: (type: string, fn: (e: unknown) => void) => {
-      if (type === "beforeunload") listeners.beforeunload.delete(fn);
+      setOf(type)?.delete(fn);
     },
   });
   return () => vi.unstubAllGlobals();
 });
+
+/** A left click on a link, as the window's capture listener sees it. */
+function linkClick(href: string, opts: { target?: string; download?: boolean; button?: number; key?: "meta" | "ctrl" | "shift" | "alt"; prevented?: boolean } = {}) {
+  const anchor = {
+    href: new URL(href, ORIGIN).href,
+    getAttribute: (name: string) => (name === "target" ? (opts.target ?? null) : null),
+    hasAttribute: (name: string) => name === "download" && opts.download === true,
+  };
+  return {
+    defaultPrevented: opts.prevented === true,
+    button: opts.button ?? 0,
+    metaKey: opts.key === "meta",
+    ctrlKey: opts.key === "ctrl",
+    shiftKey: opts.key === "shift",
+    altKey: opts.key === "alt",
+    target: { closest: (selector: string) => (selector === "a[href]" ? anchor : null) },
+    preventDefault: vi.fn(),
+    stopPropagation: vi.fn(),
+  };
+}
+const fire = (set: Set<(e: unknown) => void>, event: unknown) => {
+  for (const fn of [...set]) fn(event);
+  return event;
+};
+/** A popstate, as the root layout's listener hands it to the guard the hub holds. */
+const pop = () => {
+  const event = { stopImmediatePropagation: vi.fn() };
+  runPopStateGuard(event as unknown as PopStateEvent);
+  return event;
+};
 
 describe("RegistrationHubTabsHost — mounting", () => {
   it("one settings page per open division, keyed by id, only the active one shown; Settings has none (empty case)", () => {
@@ -221,6 +298,10 @@ describe("RegistrationHubTabsHost — opening a third division (spec §9.2)", ()
       // In flight: nothing has moved, and the dialog's buttons are held.
       expect(nav.push, outcome).not.toHaveBeenCalled();
       expect(propsOf(host.dialog()!).busy).toBe(true);
+      // So is its own way out (Esc, its ×): a save in flight cannot be walked away from (fix round 1 m4).
+      modalOf(host.dialog()!).onClose();
+      expect(host.dialog(), outcome).toBeDefined();
+      expect(propsOf(host.dialog()!).busy, outcome).toBe(true);
       release(outcome);
       await flush();
       expect(nav.push, outcome).toHaveBeenCalledTimes(1);
@@ -318,6 +399,8 @@ describe("RegistrationHubTabsHost — Back off a dirty tab (spec §9.2, Review F
     expect(propsOf(host.pageOf(A)!).active).toBe(false);
     expect(nav.replace).toHaveBeenCalledTimes(1);
     expect(lastReplace().state).toEqual({ active: { division: A }, open: [A] });
+    // Without moving the page: the replace is a correction of the address, not a navigation the viewer made (fix round 1 m4).
+    expect(nav.replace.mock.calls.at(-1)![1]).toEqual({ scroll: false });
     expect(propsOf(host.dialog()!).title).toBe(msg("reg.hub.close.title", { name: NAMES[A]! }));
     // The replace lands; nothing is sent again.
     host.land({ active: { division: A }, open: [A] });
@@ -388,5 +471,323 @@ describe("RegistrationHubTabsHost — after a save", () => {
     expect(textOf(host.toast()!)).toContain(msg("reg.hub.saved"));
     expect(nav.refresh).toHaveBeenCalledTimes(1);
     expect(host.stripTabs().find((tab) => tab.key === A)!.division!.dirty).toBe(false);
+  });
+});
+
+describe("RegistrationHubTabsHost — fix round 1", () => {
+  it("m4: a dialog that is not busy closes on its own way out (Esc, ×) like Cancel — the positive pair of the busy guard", () => {
+    const host = mount({ active: "settings", open: [A, B] });
+    host.dirty(A, ["capacity"]);
+    host.api().openDivision(C);
+    modalOf(host.dialog()!).onClose();
+    expect(host.dialog()).toBeUndefined();
+    expect(nav.push).not.toHaveBeenCalled();
+  });
+
+  it("m4: opening a division the Settings tab does not offer is a wiring fault, refused by name", () => {
+    const host = mount({ active: "settings", open: [] }, OPENABLE.filter((d) => d.id !== C));
+    expect(() => host.api().openDivision(C)).toThrow(/not one the Settings tab can open/);
+    expect(nav.push).not.toHaveBeenCalled();
+  });
+
+  it("m4: the toast leaves on its own — Saved after 4s, a closed-to-make-room one (with Reopen) after 10s", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const host = mount({ active: "settings", open: [A, B] });
+      host.api().openDivision(C);
+      expect(host.toast()).toBeDefined();
+      vi.advanceTimersByTime(9_999);
+      expect(host.toast(), "an evicted toast stays 10s").toBeDefined();
+      vi.advanceTimersByTime(1);
+      expect(host.toast()).toBeUndefined();
+
+      host.land({ active: { division: C }, open: [B, C] });
+      (propsOf(host.pageOf(C)!).onSaved as () => void)();
+      expect(textOf(host.toast()!)).toContain(msg("reg.hub.saved"));
+      vi.advanceTimersByTime(3_999);
+      expect(host.toast(), "Saved stays 4s").toBeDefined();
+      vi.advanceTimersByTime(1);
+      expect(host.toast()).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("m2: the strip shows the division tabs in the order they were opened; activating one moves the address, not the tab", () => {
+    const host = mount({ active: { division: B }, open: [A, B] });
+    expect(host.stripDivisions()).toEqual([A, B]);
+    // A is clicked: the address puts it last (B is now the least recently used) — the strip keeps it where it was.
+    host.land({ active: { division: A }, open: [B, A] });
+    expect(host.stripDivisions()).toEqual([A, B]);
+    // C opens: B, the least recently used, makes room; C joins at the end.
+    host.api().openDivision(C);
+    expect(lastPush().state).toEqual({ active: { division: C }, open: [A, C] });
+    host.land({ active: { division: C }, open: [A, C] });
+    expect(host.stripDivisions()).toEqual([A, C]);
+    host.land({ active: { division: A }, open: [C, A] });
+    expect(host.stripDivisions()).toEqual([A, C]);
+    // A close takes it out; the next one opened goes last.
+    host.land({ active: { division: C }, open: [C] });
+    expect(host.stripDivisions()).toEqual([C]);
+    host.land({ active: { division: B }, open: [C, B] });
+    expect(host.stripDivisions()).toEqual([C, B]);
+  });
+
+  it("m2: a first render (a reload) has only the address to go on, so it shows the address's order — the recorded limit", () => {
+    expect(mount({ active: { division: A }, open: [B, A] }).stripDivisions()).toEqual([B, A]);
+    expect(mount({ active: "settings", open: [] }).stripDivisions()).toEqual([]);
+  });
+
+  it("m2: a tab held back after Back keeps its place in the strip when the host puts it back", () => {
+    const host = mount({ active: { division: A }, open: [A, B] });
+    host.dirty(A, ["capacity"]);
+    host.land({ active: { division: B }, open: [B] });
+    expect(lastReplace().state).toEqual({ active: { division: A }, open: [B, A] });
+    host.land({ active: { division: A }, open: [B, A] });
+    expect(host.stripDivisions()).toEqual([A, B]);
+  });
+
+  it("m3: Keep editing on a tab that is not on screen brings it on screen (push); on the tab on screen it moves nothing", () => {
+    const host = mount({ active: "settings", open: [A, B] });
+    host.dirty(A, ["capacity"]);
+    host.close(A);
+    host.press("dismiss");
+    expect(host.dialog()).toBeUndefined();
+    expect(nav.push).toHaveBeenCalledTimes(1);
+    expect(lastPush().state).toEqual({ active: { division: A }, open: [B, A] });
+    expect(nav.replace).not.toHaveBeenCalled();
+  });
+
+  it("m1: a failed Save and open lands on the failing tab and has ITS page reveal the refusal — once it is on screen", async () => {
+    const host = mount({ active: "settings", open: [A, B] });
+    host.dirty(A, ["schedule"]);
+    const reveal = host.handle(A, async () => "refused");
+    const other = host.handle(B, async () => "success");
+    host.api().openDivision(C);
+    host.press("primary");
+    await flush();
+    expect(lastPush().state).toEqual({ active: { division: A }, open: [B, A] });
+    expect(host.dialog()).toBeUndefined();
+    // Still hidden behind Settings until the push lands: a reveal now would scroll to nothing.
+    expect(reveal).not.toHaveBeenCalled();
+    host.land({ active: { division: A }, open: [B, A] });
+    expect(reveal).toHaveBeenCalledTimes(1);
+    expect(other).not.toHaveBeenCalled();
+    // Once: later renders of the same tab do not scroll the page back to it.
+    host.land({ active: { division: B }, open: [A, B] });
+    host.land({ active: { division: A }, open: [B, A] });
+    expect(reveal).toHaveBeenCalledTimes(1);
+  });
+
+  it("m1: a failed Save and close on the tab on screen reveals as the dialog goes (no navigation); a success reveals nothing", async () => {
+    let checked = 0;
+    for (const outcome of ["refused", "put-failed", "success"] as const) {
+      nav.push.mockClear();
+      const host = mount({ active: { division: A }, open: [A] });
+      host.dirty(A, ["capacity"]);
+      const reveal = host.handle(A, async () => outcome);
+      host.close(A);
+      host.press("primary");
+      await flush();
+      expect(host.dialog(), outcome).toBeUndefined();
+      expect(nav.push, outcome).not.toHaveBeenCalled();
+      expect(reveal, outcome).toHaveBeenCalledTimes(outcome === "success" ? 0 : 1);
+      checked += 1;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("m7: the toast's words go through a live region that is always in the document; the toast itself is not a second one", () => {
+    const host = mount({ active: "settings", open: [A, B] });
+    expect(host.live()).toHaveLength(1);
+    expect(textOf(host.live()[0]!)).toBe("");
+    host.api().openDivision(C);
+    expect(host.live()).toHaveLength(1);
+    expect(textOf(host.live()[0]!)).toBe(msg("reg.hub.evicted", { name: NAMES[A]! }));
+    expect(propsOf(host.toast()!).role).toBeUndefined();
+    (propsOf(host.tree().find((e) => propsOf(e)["aria-label"] === msg("reg.hub.toast.dismiss"))!).onClick as () => void)();
+    expect(host.toast()).toBeUndefined();
+    expect(host.live()).toHaveLength(1);
+    expect(textOf(host.live()[0]!)).toBe("");
+  });
+});
+
+describe("RegistrationHubTabsHost — the dialogs' buttons", () => {
+  it("stack below sm; from sm they share a row that wraps whole buttons, never a label inside one", () => {
+    const host = mount({ active: { division: A }, open: [A] });
+    host.dirty(A, ["capacity"]);
+    host.close(A);
+    const modal = modalOf(host.dialog()!) as unknown as { footer: import("react").ReactElement };
+    const footer = propsOf(modal.footer);
+    expect(String(footer.className).split(/\s+/)).toEqual(expect.arrayContaining(["flex-col", "sm:flex-row-reverse", "sm:flex-wrap"]));
+    const buttons = walk(modal.footer).filter((e) => propsOf(e)["data-reg-hub-dialog-action"] !== undefined);
+    expect(buttons.map((b) => propsOf(b)["data-reg-hub-dialog-action"])).toEqual(["save", "discard", "dismiss"]);
+    for (const b of buttons) expect(String(propsOf(b).className).split(/\s+/), String(propsOf(b)["data-reg-hub-dialog-action"])).toContain("sm:whitespace-nowrap");
+  });
+});
+
+describe("RegistrationHubTabsHost — leaving the hub with unsaved edits (fix round 1 G1)", () => {
+  const COMP = "/o/riverside/c/summer";
+
+  it("empty case: nothing unsaved, nothing guarded — no click listener, and a Back out goes through", () => {
+    const host = mount({ active: { division: A }, open: [A] });
+    win.pathname = COMP;
+    expect(listeners.click.size).toBe(0);
+    expect(pop().stopImmediatePropagation).not.toHaveBeenCalled();
+    win.pathname = HUB;
+    host.dirty(A, ["capacity"]);
+    expect(listeners.click.size).toBe(1);
+    // In the capture phase, so it runs before Next's Link (bubble phase).
+    for (const fn of listeners.click) expect(listeners.capture.get(fn)).toBe(true);
+    // Clean again: both guards stand down.
+    host.dirty(A, []);
+    expect(listeners.click.size).toBe(0);
+    win.pathname = COMP;
+    expect(pop().stopImmediatePropagation).not.toHaveBeenCalled();
+    expect(win.go).not.toHaveBeenCalled();
+    expect(host.dialog()).toBeUndefined();
+  });
+
+  it("a link out of the hub is held and asks, naming the tabs; Keep editing stays", () => {
+    const host = mount({ active: { division: A }, open: [A, B] });
+    host.dirty(A, ["capacity"]);
+    host.dirty(B, ["money"]);
+    const event = fire(listeners.click, linkClick(COMP)) as ReturnType<typeof linkClick>;
+    expect(event.preventDefault).toHaveBeenCalledTimes(1);
+    expect(event.stopPropagation).toHaveBeenCalledTimes(1);
+    const d = propsOf(host.dialog()!);
+    expect(d.title).toBe(msg("reg.hub.leave.title"));
+    const names = new Intl.ListFormat("en", { style: "long", type: "conjunction" }).format([NAMES[A]!, NAMES[B]!]);
+    expect(d.body).toBe(msg("reg.hub.leave.body.other", { count: 2, names }));
+    host.press("dismiss");
+    expect(host.dialog()).toBeUndefined();
+    expect(nav.push).not.toHaveBeenCalled();
+    expect(host.pageOf(A)).toBeDefined();
+  });
+
+  it("one unsaved tab: the body is singular; Discard and leave goes where the link pointed, and the reload prompt stands down", () => {
+    const host = mount({ active: { division: A }, open: [A] });
+    host.dirty(A, ["capacity"]);
+    fire(listeners.click, linkClick(`${COMP}?tab=fixtures#top`));
+    expect(propsOf(host.dialog()!).body).toBe(msg("reg.hub.leave.body.one", { count: 1, names: NAMES[A]! }));
+    host.press("discard");
+    expect(nav.push).toHaveBeenCalledWith(`${COMP}?tab=fixtures#top`);
+    expect(host.dialog()).toBeUndefined();
+    // Leaving now: a hard navigation the router may still make must not raise the browser's prompt on top.
+    const unload = { preventDefault: vi.fn(), returnValue: undefined as unknown };
+    fire(listeners.beforeunload, unload);
+    expect(unload.preventDefault).not.toHaveBeenCalled();
+    // And a second click on the way out is not asked about again.
+    const again = fire(listeners.click, linkClick(COMP)) as ReturnType<typeof linkClick>;
+    expect(again.preventDefault).not.toHaveBeenCalled();
+  });
+
+  it("Save and leave saves every unsaved tab, then goes; a save that does not go through stays, on the failing tab", async () => {
+    let checked = 0;
+    for (const failing of [null, B] as const) {
+      nav.push.mockClear();
+      const host = mount({ active: { division: A }, open: [A, B] });
+      host.dirty(A, ["capacity"]);
+      host.dirty(B, ["money"]);
+      const saved: string[] = [];
+      host.handle(A, async () => (saved.push(A), "success"));
+      host.handle(B, async () => (saved.push(B), failing === B ? "put-failed" : "success"));
+      fire(listeners.click, linkClick(COMP));
+      host.press("primary");
+      expect(propsOf(host.dialog()!).busy).toBe(true);
+      await flush();
+      await flush();
+      expect(saved, String(failing)).toEqual([A, B]);
+      expect(host.dialog()).toBeUndefined();
+      if (failing === null) {
+        expect(nav.push).toHaveBeenCalledWith(COMP);
+      } else {
+        expect(nav.push).not.toHaveBeenCalledWith(COMP);
+        expect(lastPush().state).toEqual({ active: { division: B }, open: [A, B] });
+      }
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("clicks that do not leave the hub, or are not a plain click on a link, go through untouched", () => {
+    const host = mount({ active: { division: A }, open: [A] });
+    host.dirty(A, ["capacity"]);
+    const passes: [string, ReturnType<typeof linkClick>][] = [
+      ["another tab of the hub", linkClick(`${HUB}?tab=registrants&open=${A}`)],
+      ["Export CSV (an API download)", linkClick("/api/v1/competitions/x/registrations.csv")],
+      ["a new window", linkClick(COMP, { target: "_blank" })],
+      ["a download", linkClick(COMP, { download: true })],
+      ["another site", linkClick("https://example.com/")],
+      ["a middle click", linkClick(COMP, { button: 1 })],
+      ["cmd-click", linkClick(COMP, { key: "meta" })],
+      ["ctrl-click", linkClick(COMP, { key: "ctrl" })],
+      ["shift-click", linkClick(COMP, { key: "shift" })],
+      ["alt-click", linkClick(COMP, { key: "alt" })],
+      ["already handled", linkClick(COMP, { prevented: true })],
+    ];
+    const notALink = { ...linkClick(COMP), target: { closest: () => null } };
+    let checked = 0;
+    for (const [why, event] of [...passes, ["not a link", notALink] as const]) {
+      fire(listeners.click, event);
+      expect(event.preventDefault, why).not.toHaveBeenCalled();
+      expect(event.stopPropagation, why).not.toHaveBeenCalled();
+      expect(host.dialog(), why).toBeUndefined();
+      checked += 1;
+    }
+    expect(checked).toBe(12);
+    // The positive pair, in the same state: a plain click on the same kind of link, leaving, is held.
+    expect((fire(listeners.click, linkClick(COMP)) as ReturnType<typeof linkClick>).preventDefault).toHaveBeenCalled();
+  });
+
+  it("Back past the hub is held: the address is put back, the router never sees it, and Discard goes back after all", () => {
+    const host = mount({ active: { division: A }, open: [A] });
+    host.dirty(A, ["capacity"]);
+    win.pathname = COMP;
+    const back = pop();
+    expect(back.stopImmediatePropagation).toHaveBeenCalledTimes(1);
+    // No Navigation API here: one step back is assumed, and one step forward undoes it.
+    expect(win.go).toHaveBeenCalledWith(1);
+    expect(propsOf(host.dialog()!).title).toBe(msg("reg.hub.leave.title"));
+    // The forward step lands on the hub again: swallowed too, so the router does not navigate to where it already is.
+    win.pathname = HUB;
+    const restored = pop();
+    expect(restored.stopImmediatePropagation).toHaveBeenCalledTimes(1);
+    expect(host.dialog()).toBeDefined();
+    host.press("discard");
+    expect(win.go).toHaveBeenLastCalledWith(-1);
+    // That traversal is the viewer's: through to the router.
+    win.pathname = COMP;
+    expect((pop()).stopImmediatePropagation).not.toHaveBeenCalled();
+    expect(nav.push).not.toHaveBeenCalled();
+  });
+
+  it("with the Navigation API, a jump of several entries (or Forward) is undone and redone by exactly that many", () => {
+    win.index = 5;
+    const host = mount({ active: { division: A }, open: [A] });
+    host.dirty(A, ["capacity"]);
+    win.pathname = "/o/riverside";
+    win.index = 2;
+    pop();
+    expect(win.go).toHaveBeenCalledWith(3);
+    win.pathname = HUB;
+    win.index = 5;
+    pop();
+    host.press("dismiss");
+    expect(host.dialog()).toBeUndefined();
+    // Forward, two entries on: put back by two.
+    win.pathname = "/o/riverside/c/summer/fixtures";
+    win.index = 7;
+    pop();
+    expect(win.go).toHaveBeenLastCalledWith(-2);
+  });
+
+  it("Back and Forward inside the hub are the hub's own (the held-tab rules above): not intercepted", () => {
+    const host = mount({ active: { division: A }, open: [A] });
+    host.dirty(A, ["capacity"]);
+    const inside = pop();
+    expect(inside.stopImmediatePropagation).not.toHaveBeenCalled();
+    expect(win.go).not.toHaveBeenCalled();
+    expect(host.dialog()).toBeUndefined();
   });
 });

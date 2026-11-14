@@ -15,11 +15,16 @@
 //   - the close button on a dirty tab asks (Save and close, Discard, Keep editing);
 //   - Back (or Forward) to an address without a dirty tab keeps that tab mounted, puts it back in the address and asks the
 //     close question — unless the division is no longer openable (archived, or the viewer lost edit rights), when it goes;
-//   - a reload or a tab close while anything is dirty gets the browser's own "leave site?" prompt.
+//   - a reload or a tab close while anything is dirty gets the browser's own "leave site?" prompt;
+//   - a link out of the hub, or Back (or Forward) past the hub's own history, while anything is dirty is held and asked
+//     about (Save and leave, Discard and leave, Keep editing) — a client navigation the browser never prompts for.
+// The strip shows the division tabs in the order they were OPENED, so a click never swaps two tabs under the pointer; the
+// address's `open` is least-recently-used order, which is only what picks the tab a third one evicts.
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { X } from "lucide-react";
 import { Modal } from "@/components/modal";
+import { holdPopState } from "@/components/popstate-guard";
 import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import {
   RegistrationHubConfigPanel,
@@ -77,9 +82,13 @@ export function useHubTabs(): HubTabsApi | null {
   return useContext(HubTabsContext);
 }
 
+/** Where a held navigation out of the hub was going: a link's path, or a history traversal of `delta` entries. */
+type LeaveTo = { via: "link"; href: string } | { via: "history"; delta: number };
+
 type Dialog =
   | { kind: "evict"; evicted: string; opening: string; next: HubTabsState; busy: boolean }
-  | { kind: "close"; id: string; busy: boolean };
+  | { kind: "close"; id: string; busy: boolean }
+  | { kind: "leave"; to: LeaveTo; busy: boolean };
 
 type Toast = { seq: number; text: string; reopen: string | null };
 
@@ -87,6 +96,8 @@ type Toast = { seq: number; text: string; reopen: string | null };
 interface Mounted {
   key: string;
   ids: string[];
+  /** The strip's order: the mounted pages in the order they were opened (a reload starts from the address's). */
+  order: string[];
   /** Each mounted page's config: from the server for the ids in the address, remembered for one held back after Back. */
   configs: Record<string, OpenDivisionConfig>;
   /** The org's clock and money, remembered the same way: an address with no division tab in it carries none. */
@@ -104,6 +115,39 @@ function byId(divisions: readonly OpenDivisionConfig[]): Record<string, OpenDivi
 }
 
 const isDivisionTab = (active: HubTab, id: string) => typeof active !== "string" && active.division === id;
+
+/** The ids still mounted, in the order they were first opened: the ones kept stay where they were, new ones go last. */
+function openedOrder(previous: readonly string[], ids: readonly string[]): string[] {
+  return [...previous.filter((id) => ids.includes(id)), ...ids.filter((id) => !previous.includes(id))];
+}
+
+/**
+ * Where a click on a link would take the viewer OUT of the hub, as a path the router can push — or null when it would not
+ * leave (another tab of the hub, a same-page anchor), would not unload anything (a download such as Export CSV, an API
+ * route; a new window; another site), or is not a plain left click on a link (a modifier opens a new tab; a handler that
+ * already prevented it has its own plans).
+ */
+export function leaveHrefOfClick(event: MouseEvent, hubPathname: string, origin: string): string | null {
+  if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return null;
+  const anchor = (event.target as Element | null)?.closest?.("a[href]") as HTMLAnchorElement | null | undefined;
+  if (!anchor) return null;
+  const target = anchor.getAttribute("target");
+  if ((target !== null && target !== "" && target !== "_self") || anchor.hasAttribute("download")) return null;
+  let url: URL;
+  try {
+    url = new URL(anchor.href, origin);
+  } catch {
+    return null;
+  }
+  if (url.origin !== origin || url.pathname === hubPathname || url.pathname.startsWith("/api/")) return null;
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
+/** The current session history entry's index, where the browser has the Navigation API; null where it does not. */
+function historyIndex(): number | null {
+  const index = (window as { navigation?: { currentEntry?: { index: number } | null } }).navigation?.currentEntry?.index;
+  return typeof index === "number" && index >= 0 ? index : null;
+}
 
 export function RegistrationHubTabsHost({
   state,
@@ -148,6 +192,7 @@ export function RegistrationHubTabsHost({
   const [mounted, setMounted] = useState<Mounted>(() => ({
     key: stateKey,
     ids: [...state.open],
+    order: [...state.open],
     configs: byId(divisions),
     shared: config,
   }));
@@ -160,7 +205,7 @@ export function RegistrationHubTabsHost({
     const ids = [...state.open, ...held];
     const configs: Record<string, OpenDivisionConfig> = byId(divisions);
     for (const id of held) configs[id] = mounted.configs[id]!;
-    current = { key: stateKey, ids, configs, shared: config ?? mounted.shared };
+    current = { key: stateKey, ids, order: openedOrder(mounted.order, ids), configs, shared: config ?? mounted.shared };
     setMounted(current);
     // A page that is no longer mounted reports nothing again (its onDirtyChange never fires on unmount): its entry goes here.
     const gone = mounted.ids.filter((id) => !ids.includes(id) && id in dirty);
@@ -211,11 +256,14 @@ export function RegistrationHubTabsHost({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [heldKey]);
 
-  // Reload or close with anything unsaved: the browser's own prompt (§9.2). Only while dirty, so a clean hub never asks.
+  // Reload or close with anything unsaved: the browser's own prompt (§9.2). Only while dirty, so a clean hub never asks —
+  // and not once the viewer has chosen to leave (below): a navigation the router turns into a full load must not ask again.
   const anyDirty = Object.values(dirty).some((d) => d.dirty);
+  const leaving = useRef(false);
   useEffect(() => {
     if (!anyDirty) return;
     const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (leaving.current) return;
       event.preventDefault();
       // Older Chromium and Safari show the prompt only when returnValue is set.
       event.returnValue = "";
@@ -261,6 +309,69 @@ export function RegistrationHubTabsHost({
     return save ? save() : "refused";
   }
 
+  // After a save that did not go through: the failing page, once it is on screen and the dialog has gone, shows what refused
+  // it. The page's own reveal already ran — under the dialog, and for the evicted page while it was hidden — and the dialog's
+  // focus restore, as it closes, scrolls back to whatever opened it. So the host asks once more, after both (fix round 1 m1).
+  // Effects run after the commit's unmount cleanups (the dialog's restore), and after the push has put the tab on screen.
+  const pendingReveal = useRef<string | null>(null);
+  useEffect(() => {
+    const id = pendingReveal.current;
+    if (id === null || dialog !== null || !isDivisionTab(state.active, id)) return;
+    pendingReveal.current = null;
+    handles.current.get(id)?.current?.reveal();
+    // stateKey carries state.active: the tab coming on screen and the dialog going are the two moments to look again.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dialog, stateKey]);
+
+  // Leaving the hub with anything unsaved (fix round 1 G1). A reload or a closed tab gets the browser's prompt (above); a link
+  // out of the hub — the app header's wordmark, a link in a panel — or Back past the hub's own history is a client navigation
+  // the browser never asks about, and it would unmount every open page with its edits. Both are held and asked about: a click
+  // on the window in the capture phase, before Next's Link hears it; a popstate through the root layout's guard
+  // (popstate-guard.tsx), the one listener that runs before Next's router. Back inside the hub is the hub's own (the held-tab
+  // rules above).
+  const restoring = useRef(0);
+  const hubEntry = useRef<number | null>(null);
+  // Where the hub sits in the session history, read after every commit that leaves the viewer on it — never while a held
+  // traversal is being put back, when the browser is briefly somewhere else.
+  useEffect(() => {
+    if (restoring.current === 0 && window.location?.pathname === pathname) hubEntry.current = historyIndex();
+  });
+  useEffect(() => {
+    if (!anyDirty) return;
+    leaving.current = false;
+    const onClick = (event: MouseEvent) => {
+      if (leaving.current) return;
+      const href = leaveHrefOfClick(event, pathname, window.location.origin);
+      if (href === null) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setDialog({ kind: "leave", to: { via: "link", href }, busy: false });
+    };
+    const onPopState = (event: PopStateEvent) => {
+      if (leaving.current) return;
+      if (restoring.current > 0) {
+        // The step that put the hub back: the router is already here, so it must not navigate again.
+        restoring.current -= 1;
+        event.stopImmediatePropagation();
+        return;
+      }
+      if (window.location.pathname === pathname) return;
+      event.stopImmediatePropagation();
+      // How far the traversal went, where the browser can say (a long-press jump, or Forward); else one step Back.
+      const now = historyIndex();
+      const delta = now !== null && hubEntry.current !== null && now !== hubEntry.current ? now - hubEntry.current : -1;
+      restoring.current += 1;
+      window.history.go(-delta);
+      setDialog({ kind: "leave", to: { via: "history", delta }, busy: false });
+    };
+    window.addEventListener("click", onClick, true);
+    const releasePopState = holdPopState(onPopState);
+    return () => {
+      window.removeEventListener("click", onClick, true);
+      releasePopState();
+    };
+  }, [anyDirty, pathname]);
+
   function forget(id: string) {
     setDirty((prev) => {
       if (!(id in prev)) return prev;
@@ -300,10 +411,34 @@ export function RegistrationHubTabsHost({
     else closeNow(id);
   }
 
-  /** After a save that did not go through: the page that refused it, on screen, its own reveal pointing at why. */
+  /** After a save that did not go through: the page that refused it, on screen, revealing why (the effect above). */
   function showFailedTab(id: string) {
+    pendingReveal.current = id;
     setDialog(null);
     if (!isDivisionTab(state.active, id)) navigate("push", activate(state, { division: id }));
+  }
+
+  /** Keep editing, from the close question: on the tab being edited — brought on screen if its × was pressed from another. */
+  function keepEditing(id: string) {
+    setDialog(null);
+    if (state.open.includes(id) && !isDivisionTab(state.active, id)) navigate("push", activate(state, { division: id }));
+  }
+
+  /** The held navigation out of the hub, let go. */
+  function leaveNow(to: LeaveTo) {
+    leaving.current = true;
+    setDialog(null);
+    if (to.via === "link") router.push(to.href);
+    else window.history.go(to.delta);
+  }
+
+  async function leaveSaveAndGo(d: Extract<Dialog, { kind: "leave" }>) {
+    setDialog({ ...d, busy: true });
+    for (const id of current.ids.filter(isDirty)) {
+      const result = await saveTab(id);
+      if (result !== "success") return showFailedTab(id);
+    }
+    leaveNow(d.to);
   }
 
   async function evictSaveAndOpen(d: Extract<Dialog, { kind: "evict" }>) {
@@ -330,7 +465,7 @@ export function RegistrationHubTabsHost({
       href: hrefFor(activate(state, key)),
       active: state.active === key,
     })),
-    ...state.open.map((id) => ({
+    ...current.order.filter((id) => state.open.includes(id)).map((id) => ({
       key: id,
       label: nameOf(id),
       href: hrefFor(activate(state, { division: id })),
@@ -344,10 +479,9 @@ export function RegistrationHubTabsHost({
     })),
   ];
 
-  const sectionsText = (id: string) =>
-    new Intl.ListFormat(locale, { style: "long", type: "conjunction" }).format(
-      (dirty[id]?.sections ?? []).map((section) => sectionName(section, msg)),
-    );
+  const listText = (items: string[]) => new Intl.ListFormat(locale, { style: "long", type: "conjunction" }).format(items);
+  const sectionsText = (id: string) => listText((dirty[id]?.sections ?? []).map((section) => sectionName(section, msg)));
+  const unsavedIds = current.order.filter(isDirty);
 
   return (
     <HubTabsContext.Provider value={{ openDivision: requestOpen }}>
@@ -409,14 +543,31 @@ export function RegistrationHubTabsHost({
           busyLabel={msg("reg.hub.config.saving")}
           primary={{ label: msg("reg.hub.close.save"), action: "save", onClick: () => void closeSaveAndClose(dialog) }}
           discard={{ label: msg("reg.hub.close.discard"), onClick: () => { setDialog(null); closeNow(dialog.id); } }}
+          dismiss={{ label: msg("reg.hub.close.keep"), onClick: () => keepEditing(dialog.id) }}
+          closeLabel={msg("reg.hub.close.keep")}
+        />
+      )}
+      {dialog?.kind === "leave" && (
+        <HubDialog
+          title={msg("reg.hub.leave.title")}
+          body={msgPlural("reg.hub.leave.body", unsavedIds.length, { names: listText(unsavedIds.map(nameOf)) })}
+          busy={dialog.busy}
+          busyLabel={msg("reg.hub.config.saving")}
+          primary={{ label: msg("reg.hub.leave.save"), action: "save", onClick: () => void leaveSaveAndGo(dialog) }}
+          discard={{ label: msg("reg.hub.leave.discard"), onClick: () => leaveNow(dialog.to) }}
           dismiss={{ label: msg("reg.hub.close.keep"), onClick: () => setDialog(null) }}
           closeLabel={msg("reg.hub.close.keep")}
         />
       )}
 
+      {/* The toast's words for a screen reader: one live region, always in the document, whose text changes — a region
+          inserted together with its text is not reliably announced (fix round 1 m7). The toast below is its visible twin. */}
+      <div role="status" data-reg-hub-toast-live className="sr-only">
+        {toast?.text ?? ""}
+      </div>
+
       {toast && (
         <div
-          role="status"
           data-reg-hub-toast
           className="fixed inset-x-4 top-[calc(var(--app-header-h)+0.75rem)] z-40 mx-auto flex max-w-md items-center gap-3 rounded-xl bg-slate-900 py-2 pl-4 pr-1 text-sm text-white shadow-lg"
         >
@@ -489,8 +640,9 @@ function RegistrationHubDivisionTab({
   );
 }
 
-/** The two unsaved-edit questions (evict, close): the save first, then the discard, then the way back out. Below sm the
- *  buttons stack with the save on top (§9.2: "At 320 the buttons stack with the primary first"). */
+/** The three unsaved-edit questions (evict, close, leave): the save first, then the discard, then the way back out. Below sm the
+ *  buttons stack with the save on top (§9.2: "At 320 the buttons stack with the primary first"). From sm they share a row and
+ *  never break a label: a row too narrow for all three (the leave labels, or any of them in fr/nl/es) wraps whole buttons. */
 function HubDialog({
   title,
   body,
@@ -518,12 +670,12 @@ function HubDialog({
       }}
       closeLabel={closeLabel}
       footer={
-        <div data-reg-hub-dialog-actions className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row-reverse">
+        <div data-reg-hub-dialog-actions className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row-reverse sm:flex-wrap">
           <button
             type="button"
             data-reg-hub-dialog-action={primary.action}
             disabled={busy}
-            className="btn btn-primary min-h-11"
+            className="btn btn-primary min-h-11 sm:whitespace-nowrap"
             onClick={primary.onClick}
           >
             {busy ? busyLabel : primary.label}
@@ -532,7 +684,7 @@ function HubDialog({
             type="button"
             data-reg-hub-dialog-action="discard"
             disabled={busy}
-            className="btn btn-ghost min-h-11 text-red-700 hover:bg-red-50"
+            className="btn btn-ghost min-h-11 text-red-700 hover:bg-red-50 sm:whitespace-nowrap"
             onClick={discard.onClick}
           >
             {discard.label}
@@ -541,7 +693,7 @@ function HubDialog({
             type="button"
             data-reg-hub-dialog-action="dismiss"
             disabled={busy}
-            className="btn btn-ghost min-h-11"
+            className="btn btn-ghost min-h-11 sm:whitespace-nowrap"
             onClick={dismiss.onClick}
           >
             {dismiss.label}

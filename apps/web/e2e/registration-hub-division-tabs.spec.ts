@@ -37,10 +37,14 @@ const copy = (key: string, vars: Record<string, string | number> = {}) => {
 
 const GENERIC_CONFIG = { points: { w: 3, d: 1, l: 0 }, progressScore: false };
 
-type Seeded = { orgSlug: string; compSlug: string; ids: [string, string, string]; names: [string, string, string] };
+type Seeded = { orgSlug: string; compSlug: string; ids: [string, string, string, ...string[]]; names: [string, string, string, ...string[]] };
 
-/** One competition and three divisions, none of them with a registration_settings row yet. */
-async function seed(page: Page, request: APIRequestContext, names: [string, string, string] = ["Open Singles", "Doubles", "Mixed"]): Promise<Seeded> {
+/** One competition and three (or more) divisions, none of them with a registration_settings row yet. */
+async function seed(
+  page: Page,
+  request: APIRequestContext,
+  names: [string, string, string, ...string[]] = ["Open Singles", "Doubles", "Mixed"],
+): Promise<Seeded> {
   const org = await activeOrg(page);
   const suffix = `${TAG}-${Math.random().toString(36).slice(2, 7)}`;
   const comp = await apiJson<{ id: string; slug: string }>(request, "/api/v1/competitions", "POST", {
@@ -143,6 +147,37 @@ async function editCapacity(page: Page, id: string, value: string) {
   await expect(divisionTab(page, id).locator("[data-reg-hub-tab-dirty]")).toBeVisible({ timeout: 20_000 });
 }
 
+/** A half-typed opening date: refused by the page on Save (in the schedule section), and unsaved — the tab shows the dot. */
+async function halfTypeOpeningDate(page: Page, id: string) {
+  await divisionPage(page, id).locator('[data-field="opens_at_date"]').fill("2030-01-01");
+  await expect(divisionTab(page, id).locator("[data-reg-hub-tab-dirty]")).toBeVisible({ timeout: 20_000 });
+}
+
+/** The schedule section's focus target on a page: its heading from md up (every section open), its summary below. */
+function scheduleFocus(page: Page, id: string, width: number): Locator {
+  const section = divisionPage(page, id).locator(`#section-schedule-${id}`);
+  return width >= 768 ? section.locator("[data-section-heading]") : section.locator(":scope > summary");
+}
+
+/** After a refused save: that page's schedule section has focus and is on screen, below the sticky header. */
+async function expectRefusalRevealed(page: Page, id: string, viewport: { width: number; height: number }) {
+  const focus = scheduleFocus(page, id, viewport.width);
+  await expect(focus).toBeFocused({ timeout: 10_000 });
+  const headerBottom = await page.evaluate(() => document.querySelector(".app-gantry")?.getBoundingClientRect().bottom ?? 0);
+  // Smooth scroll: wait for it to settle, then the focused element sits on screen, clear of the header.
+  await expect
+    .poll(async () => {
+      const top = (await focus.boundingBox())!.y;
+      await page.waitForTimeout(150);
+      return Math.abs((await focus.boundingBox())!.y - top) < 1 ? top : Number.NaN;
+    }, { timeout: 10_000 })
+    .toBeGreaterThanOrEqual(headerBottom - 1);
+  expect((await focus.boundingBox())!.y, "the focused refusal is on screen").toBeLessThan(viewport.height);
+}
+
+/** A link out of the hub in the app shell, on screen at every width: the header's wordmark (home). */
+const leaveLink = (page: Page) => page.locator('header.app-gantry a[href="/"]').first();
+
 /** A, then B, both from Settings; B on screen, open = A,B (A least recently used). */
 async function openTwo(page: Page, s: Seeded, editA?: string) {
   await openFromSettings(page, s.ids[0]);
@@ -196,6 +231,13 @@ for (const viewport of [
       await expectActive(page, a);
       // Activating moves A to the end of the list: B is now the least recently used.
       await expectAddress(page, { tab: `division:${a}`, open: [b, a] });
+      // The strip does not: tabs stay in the order they were opened, so a click never swaps them under the pointer (fix
+      // round 1 m2). Only a reload, which has nothing but the address, starts from the address's order.
+      expect(await stripDivisions(page)).toEqual([a, b]);
+      await divisionTab(page, b).click();
+      await expectActive(page, b);
+      await expectAddress(page, { tab: `division:${b}`, open: [a, b] });
+      expect(await stripDivisions(page)).toEqual([a, b]);
     });
 
     test("a third clean tab closes the least recently used one, says so, and Reopen brings it back", async ({ page, request }) => {
@@ -577,6 +619,157 @@ for (const viewport of [
         expect(hit, `a tap on ${name} reaches it`).toBe(name);
       }
       await expectNoHorizontalScroll(page);
+    });
+
+    test("a failed Save and open lands on the tab that refused it, with the refusal opened, on screen and focused (fix round 1 m1)", async ({ page, request }) => {
+      const s = await seed(page, request);
+      const [a, b, c] = s.ids;
+      await page.goto(hubPath(s), { waitUntil: "load" });
+      await openFromSettings(page, a);
+      await halfTypeOpeningDate(page, a);
+      await openFromSettings(page, b);
+      await clickOpenSettings(page, c);
+      await expect(dialog(page)).toBeVisible({ timeout: 20_000 });
+
+      await dialogAction(page, "save").click();
+      // The save was refused on the page: no swap. A comes on screen instead, its refusal revealed — after the dialog has
+      // gone, so the dialog's own focus restore cannot take it back.
+      await expect(dialog(page)).toHaveCount(0, { timeout: 20_000 });
+      await expectActive(page, a);
+      await expectAddress(page, { tab: `division:${a}`, open: [b, a] });
+      await expect(divisionTab(page, c)).toHaveCount(0);
+      await expectRefusalRevealed(page, a, viewport);
+      await expect(divisionPage(page, a).locator('[data-config-status="failed"]')).toBeVisible();
+    });
+
+    test("a failed Save and close on the tab on screen keeps it, with the refusal on screen and focused, not the × (fix round 1 m1)", async ({ page, request }) => {
+      const s = await seed(page, request);
+      const [a] = s.ids;
+      await page.goto(hubPath(s), { waitUntil: "load" });
+      await openFromSettings(page, a);
+      await halfTypeOpeningDate(page, a);
+      await page.evaluate(() => window.scrollTo(0, 0));
+
+      await closeButton(page, a).click();
+      await dialogAction(page, "save").click();
+      await expect(dialog(page)).toHaveCount(0, { timeout: 20_000 });
+      await expectActive(page, a);
+      await expectAddress(page, { tab: `division:${a}`, open: [a] });
+      await expectRefusalRevealed(page, a, viewport);
+      await expect(closeButton(page, a), "the dialog's focus restore did not win").not.toBeFocused();
+      expect(await storedCapacity(request, a)).toBeNull();
+    });
+
+    test("closing the tab on screen lands on Settings where it was scrolled to (fix round 1 m4)", async ({ page, request }) => {
+      // Enough divisions that the Settings list scrolls, at both widths.
+      const names = Array.from({ length: 12 }, (_, i) => `Division ${String(i + 1).padStart(2, "0")}`) as Seeded["names"];
+      const s = await seed(page, request, names);
+      const low = s.ids[9]!;
+      await page.goto(hubPath(s), { waitUntil: "load" });
+      await toSettings(page);
+      const row = page.locator(`[data-registration-hub-row][data-division-id="${low}"]`);
+      await row.scrollIntoViewIfNeeded();
+      await page.evaluate(() => window.scrollBy(0, 40));
+      const before = await page.evaluate(() => window.scrollY);
+      expect(before, "premise: Settings is scrolled down").toBeGreaterThan(200);
+
+      const open = row.locator("[data-registration-hub-row-configure]");
+      await waitForHydration(open);
+      await open.click();
+      await expectActive(page, low);
+      await closeButton(page, low).click();
+      await expect(sectionTab(page, "settings")).toHaveAttribute("aria-current", "page", { timeout: 20_000 });
+      await expectAddress(page, { tab: "settings", open: [] });
+      await expect.poll(() => page.evaluate(() => window.scrollY), { timeout: 10_000 }).toBeGreaterThan(before - 3);
+      expect(Math.abs((await page.evaluate(() => window.scrollY)) - before), "Settings is back where it was").toBeLessThanOrEqual(2);
+    });
+
+    test("the tab on screen is scrolled into the strip's view — on arrival and after a scripted switch (fix round 1 m4)", async ({ page, request }) => {
+      const s = await seed(page, request, ["Under-14 Girls Doubles — Saturday Morning", "Under-16 Boys Singles — Sunday Afternoon", "Mixed"]);
+      const [a, b] = s.ids;
+      const strip = page.getByRole("navigation", { name: copy("reg.hub.tabs.label") });
+      const inside = async (tab: Locator) => {
+        const [box, tabBox] = [(await strip.boundingBox())!, (await tab.boundingBox())!];
+        return tabBox.x >= box.x - 1 && tabBox.x + tabBox.width <= box.x + box.width + 1;
+      };
+      await page.goto(hubPath(s, `?tab=division:${b}&open=${a},${b}`), { waitUntil: "load" });
+      await expectActive(page, b);
+      await expect.poll(() => inside(divisionTab(page, b)), { timeout: 10_000 }).toBe(true);
+      // A switch the strip did not see coming (a script, a keyboard user's Enter): the strip still follows.
+      await waitForHydration(sectionTab(page, "settings"));
+      await sectionTab(page, "settings").evaluate((el) => (el as HTMLElement).click());
+      await expect(sectionTab(page, "settings")).toHaveAttribute("aria-current", "page", { timeout: 20_000 });
+      await expect.poll(() => inside(sectionTab(page, "settings")), { timeout: 10_000 }).toBe(true);
+      await expectNoHorizontalScroll(page);
+    });
+
+    test("a link out of the hub with an unsaved edit asks first: Keep editing stays, Save and leave saves then goes (fix round 1 G1)", async ({ page, request }) => {
+      const s = await seed(page, request);
+      const [a] = s.ids;
+      await page.goto(hubPath(s), { waitUntil: "load" });
+      await openFromSettings(page, a);
+      await editCapacity(page, a, "21");
+      await afterEffects(page);
+      const out = leaveLink(page);
+      await expect(out).toBeVisible();
+      const target = new URL(await out.evaluate((el) => (el as HTMLAnchorElement).href)).pathname;
+      expect(target, "premise: the link leaves the hub").not.toBe(hubPath(s));
+
+      await out.click();
+      await expect(dialog(page)).toBeVisible({ timeout: 20_000 });
+      await expect(dialog(page)).toContainText(copy("reg.hub.leave.title"));
+      await expect(dialog(page).locator("[data-reg-hub-dialog-body]")).toHaveText(copy("reg.hub.leave.body.one", { names: s.names[0] }));
+      expect(new URL(page.url()).pathname, "held: still on the hub").toBe(hubPath(s));
+      await dialogAction(page, "dismiss").click();
+      await expect(dialog(page)).toHaveCount(0);
+      await expectActive(page, a);
+      await expect(capacity(page, a)).toHaveValue("21");
+
+      await out.click();
+      await expect(dialog(page)).toBeVisible({ timeout: 20_000 });
+      await dialogAction(page, "save").click();
+      // Gone (the home link may redirect on to the org's home, so: anywhere but the hub).
+      await page.waitForURL((u) => u.pathname !== hubPath(s), { timeout: 20_000 });
+      await expect.poll(() => storedCapacity(request, a), { timeout: 20_000 }).toBe(21);
+    });
+
+    test("Back past the hub with an unsaved edit asks first: Keep editing stays, Discard and leave goes back (fix round 1 G1)", async ({ page, request }) => {
+      const s = await seed(page, request);
+      const [a] = s.ids;
+      const overview = `/o/${s.orgSlug}/c/${s.compSlug}`;
+      await page.goto(overview, { waitUntil: "load" });
+      // Into the hub by a client navigation, so the overview is the hub's previous entry in the same document.
+      const entry = page.locator("[data-registration-hub-entry]").filter({ visible: true }).first();
+      await waitForHydration(entry);
+      await entry.click();
+      await page.waitForURL((u) => u.pathname === hubPath(s), { timeout: 20_000 });
+      await openFromSettings(page, a);
+      await editCapacity(page, a, "22");
+      await afterEffects(page);
+
+      // Back inside the hub: the hub's own rule (the tab is held and the close question asked).
+      await page.goBack();
+      await expect(dialog(page)).toContainText(copy("reg.hub.close.title", { name: s.names[0] }), { timeout: 20_000 });
+      await dialogAction(page, "dismiss").click();
+      await expectActive(page, a);
+      await afterEffects(page);
+
+      // Back past the hub: held, the address put back, and asked.
+      await page.goBack();
+      await expect(dialog(page)).toContainText(copy("reg.hub.leave.title"), { timeout: 20_000 });
+      await expect.poll(() => new URL(page.url()).pathname, { timeout: 10_000 }).toBe(hubPath(s));
+      await dialogAction(page, "dismiss").click();
+      await expect(dialog(page)).toHaveCount(0);
+      await expectActive(page, a);
+      await expect(capacity(page, a), "the edit was never unmounted").toHaveValue("22");
+      await afterEffects(page);
+
+      await page.goBack();
+      await expect(dialog(page)).toContainText(copy("reg.hub.leave.title"), { timeout: 20_000 });
+      await dialogAction(page, "discard").click();
+      await page.waitForURL((u) => u.pathname === overview, { timeout: 20_000 });
+      await expect(divisionTab(page, a)).toHaveCount(0);
+      expect(await storedCapacity(request, a), "the discarded 22 never reached the server").toBeNull();
     });
   });
 }

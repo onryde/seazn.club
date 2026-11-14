@@ -230,6 +230,9 @@ export type ConfigSaveResult = "refused" | SaveOutcome;
  *  as the bar's button: the page's checks first, then both requests, then the reveal of whatever refused it. */
 export interface ConfigSaveHandle {
   save: () => Promise<ConfigSaveResult>;
+  /** Show what refused the last save again — its section opened, scrolled to and focused. For a host whose save ran while the
+   *  page was hidden or under a dialog, where the save's own reveal could not be seen (T24 fix round 1 m1). */
+  reveal: () => void;
 }
 
 export function RegistrationHubConfigPanel({
@@ -454,7 +457,7 @@ export function RegistrationHubConfigPanel({
   // It sends only the half that changed (re-review m3): a close must not fail on a request that carried nothing.
   useEffect(() => {
     if (!saveHandleRef) return;
-    saveHandleRef.current = { save: () => saveOnce(true) };
+    saveHandleRef.current = { save: () => saveOnce(true), reveal: () => reveal(firstErrorSection(fieldErrors)) };
     return () => {
       saveHandleRef.current = null;
     };

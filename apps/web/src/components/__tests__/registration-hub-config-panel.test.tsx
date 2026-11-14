@@ -87,22 +87,8 @@ import { SECTION_IDS, type SectionId } from "@/components/registration-hub-confi
 import { configDirty, type ConfigDirty } from "@/components/use-config-dirty";
 import { toDivisionPatchBody, toRegistrationSettingsPutBody } from "@/components/registration-hub-config-state";
 import { ConfigSaveBar, ConfigSectionIndex, revealSection, sectionAnchor } from "@/components/registration-hub-config-page-chrome";
-import { compileClasses } from "@/components/v2/__tests__/_compiled-css";
+import { compileClasses, compileCss } from "@/components/v2/__tests__/_compiled-css";
 import postcss from "postcss";
-import tailwind from "@tailwindcss/postcss";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-
-/** The raw CSS Tailwind compiles `classes` to over the real globals.css — for an arbitrary variant, whose rule's selector is
- *  not the class itself (compileClasses only reads `.class` rules). Under its own `from`: @tailwindcss/postcss caches one
- *  compiler per `from` path for the life of the process, and a second compile under the same path answers with the FIRST
- *  one's candidates — sharing globals.css's path would leave compileClasses' call later in this file compiling nothing. */
-async function compiledCss(classes: readonly string[]): Promise<string> {
-  const globals = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "app", "globals.css");
-  const input = `${readFileSync(globals, "utf8")}\n@source inline("${classes.join(" ")}");\n`;
-  const from = join(dirname(globals), "__config-panel-test.css");
-  return (await postcss([tailwind({ base: dirname(globals) })]).process(input, { from })).css;
-}
 import uiEn from "@/dictionaries/en/ui.json";
 
 type SectionType = (props: Record<string, unknown>) => ReactNode;
@@ -2364,7 +2350,7 @@ describe("RegistrationHubConfigPanel — page layout (B7 T23)", () => {
       .split(/\s+/)
       .find((c) => c.includes(":scroll-pb-"))!;
     expect(cls, "premise: the page carries its scroll-padding class").toBeDefined();
-    const css = await compiledCss([cls]);
+    const css = await compileCss([cls]);
     const rules: string[] = [];
     postcss.parse(css).walkRules((rule) => {
       if (rule.nodes.some((n) => n.type === "decl" && n.prop === "scroll-padding-bottom")) rules.push(rule.selector);
@@ -2399,6 +2385,40 @@ describe("RegistrationHubConfigPanel — page layout (B7 T23)", () => {
     expect(revealed.anchors.at(-1)).toBe(sectionAnchor("eligibility", "div-1"));
     page.island.unmount();
     expect(handle.current).toBeNull();
+  });
+
+  it("the handle's reveal shows the last refusal again — its section, else the page heading — for a host whose save ran out of sight (T24 fix round 1 m1)", async () => {
+    const handle: { current: ConfigSaveHandle | null } = { current: null };
+    const page = await openPage({ saveHandleRef: handle });
+    // Empty case: nothing refused yet, so there is no section to point at — the page's own heading.
+    revealed.anchors.length = 0;
+    handle.current!.reveal();
+    expect(revealed.anchors).toHaveLength(1);
+    const heading = page.tree().find((e) => propsOf(e).id === revealed.anchors[0]);
+    expect(heading?.type, "the anchor is the page's heading").toMatch(/^h[1-3]$/);
+    // A refusal on the page: the reveal goes to that refusal's section, every time it is asked.
+    page.type("capacity", "20000");
+    expect(await handle.current!.save()).toBe("refused");
+    revealed.anchors.length = 0;
+    handle.current!.reveal();
+    handle.current!.reveal();
+    expect(revealed.anchors).toEqual([sectionAnchor("capacity", "div-1"), sectionAnchor("capacity", "div-1")]);
+    // A server refusal in another section moves it there.
+    page.type("capacity", "40");
+    page.type("age_max", "17");
+    net.patchRejection = refusedOn("age_max");
+    expect(await handle.current!.save()).toBe("patch-failed");
+    revealed.anchors.length = 0;
+    handle.current!.reveal();
+    expect(revealed.anchors).toEqual([sectionAnchor("eligibility", "div-1")]);
+  });
+
+  it("each page's refused-kind hint id is its own useId, never a constant two open division tabs would share (T24 fix round 1 m4)", async () => {
+    const page = await openPage();
+    const section = page.tree().find((e) => e.type === OpenCloseSection);
+    expect(section, "premise: the schedule section is on the page").toBeDefined();
+    // The harness's useId answers «h<n>»: the id handed down came from the hook, which React makes unique per mounted page.
+    expect(propsOf(section!).kindHintId).toMatch(/^«h\d+»$/);
   });
 
   // ---- B7 T23 re-review (review-t23fix-report.md), folded into T24 ----

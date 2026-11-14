@@ -219,7 +219,9 @@ export function RegistrationHubDivisionRow({
         >
           {t(dict, `reg.hub.row.status.${status}`)}
         </span>
-        <h3 className="min-w-0 flex-1 truncate text-sm font-semibold text-slate-900">{row.name}</h3>
+        {/* An 8rem basis, not 0: on a narrow line the capacity, fee and Open settings wrap below before the name is squeezed
+            to an ellipsis alone (T24 fix round 1 m5). */}
+        <h3 className="min-w-0 flex-[1_1_8rem] truncate text-sm font-semibold text-slate-900">{row.name}</h3>
         <div className="flex shrink-0 items-center gap-1.5 text-xs text-slate-600">
           <span aria-hidden className="h-1 w-10 shrink-0 overflow-hidden rounded-full bg-slate-100">
             {capacity.percent !== null && (
@@ -236,7 +238,8 @@ export function RegistrationHubDivisionRow({
         </span>
         {context.canEdit && (
           // B7 T24: worded, not an icon alone — it opens the division's settings as a tab, and says so. The accessible name
-          // adds the division (each row has one) and starts with the visible words, so speech input finds it by them.
+          // adds the division (each row has one) AFTER the visible words, in every locale (the row test checks all four), so
+          // speech input finds it by what it shows.
           <button
             type="button"
             data-registration-hub-row-configure
