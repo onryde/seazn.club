@@ -765,6 +765,10 @@ export async function loadCompetitionHub(
   // Never throws the hub down: a competition with no registration settings at
   // all is a 404 from this reader, and that is not an error for a hub.
   const registration = await publicRegistrationInfo(orgSlug, compSlug).catch(() => null);
+  // Walk-fix F8: which divisions play online, and their camera policy - the panel's own answer, by division id.
+  const onlineCameraPolicy = new Map(
+    (registration?.divisions ?? []).filter((x) => x.online_play).map((x) => [x.division_id, x.camera_policy] as const),
+  );
 
   // ONE discipline read for every division, beside the details, and a READ:
   // no detection, no serving pass, no email — a hub rebuild has no
@@ -842,6 +846,7 @@ export async function loadCompetitionHub(
       line,
     }));
 
+    const cameraPolicy = onlineCameraPolicy.get(d.id);
     hubDivisions.push({
       id: d.id,
       slug: d.slug,
@@ -859,6 +864,7 @@ export async function loadCompetitionHub(
       // organiser Markdown. Blank prose is no prose.
       description: d.description ? (await renderProse(d.description)) || null : null,
       suspensions: squads.suspensions,
+      ...(cameraPolicy !== undefined ? { onlinePlay: { cameraPolicy } } : {}),
     });
     leaderDivisions.push({
       id: d.id,

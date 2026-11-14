@@ -17,6 +17,7 @@ import { cartHasOtherPlayers } from "./cart";
 import { FIELD, FIELD_LABEL as LABEL, TAG_NEUTRAL } from "./styles";
 import { guardianRequired, type ConsentValidation } from "./validation";
 import { RegisterLichessCard, type RegisterLichessState } from "./register-lichess-card";
+import { ConsentCameraNotes, type CameraRequirement } from "./online-play-note";
 import type { CartState, ConsentState, ContactState } from "./types";
 
 /** validation.ts's error codes don't share a naming scheme with the
@@ -38,6 +39,7 @@ export function StepConsent({
   orgName,
   errors,
   lichess = null,
+  cameraRequirements = [],
 }: {
   contact: ContactState;
   onContactChange: (patch: Partial<ContactState>) => void;
@@ -50,6 +52,10 @@ export function StepConsent({
   errors: ConsentValidation["errors"];
   /** I5 (T16 fix round 1): the Lichess link, when a selected division plays online — the stepper decides; null ⇒ none. */
   lichess?: { divisions: string[]; orgSlug: string; next: string; state: RegisterLichessState } | null;
+  /** Walk-fix F4: the camera requirement of each selected online division (`selectedCameraRequirements`) - stated HERE
+   *  because every competition reaches CONSENT, while a single-division one skips the ENTRIES card that also states it.
+   *  Empty (the join page, an over-the-board cart) ⇒ none. */
+  cameraRequirements?: readonly CameraRequirement[];
 }) {
   const t = useT();
   // Same "now" convention as division-card.tsx's own live window checks —
@@ -71,6 +77,8 @@ export function StepConsent({
       {lichess !== null && (
         <RegisterLichessCard divisions={lichess.divisions} orgSlug={lichess.orgSlug} next={lichess.next} state={lichess.state} />
       )}
+
+      <ConsentCameraNotes requirements={cameraRequirements} />
 
       {/* Owner ruling 5, stated plainly at the moment of consent — this IS
           the ruling's designated surface (RS006 dispatch §B), not a buried

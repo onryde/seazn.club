@@ -2024,6 +2024,55 @@ describe("step 4 — the Lichess link on CONSENT (I5)", () => {
   });
 });
 
+// Walk-fix F4: the camera requirement was stated only on the ENTRIES step's division card, which a single-division
+// competition skips - so a player there signed up never told their camera must be on. CONSENT (every competition reaches
+// it) now states it for each selected online division whose camera is required or optional, whatever the Lichess state.
+// Driven through the real stepper (the prop it hands StepConsent); the markup is pinned in camera-requirement.test.tsx.
+describe("step 4 — the camera requirement on CONSENT (walk-fix F4)", () => {
+  async function cameraOnConsent(divisions: DivisionLike[]) {
+    const m = mount(divisions, undefined, { lichess: null });
+    (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Alex Test", email: "alex@example.com" });
+    m.clickByText("Next"); // -> ENTRIES (several divisions) or DETAILS (one)
+    if (divisions.length > 1) {
+      for (const d of divisions) (propsOf(m.divisionCard(d.division_id)).onAddIndividual as () => void)();
+      m.clickByText("Next"); // -> DETAILS
+    }
+    for (const box of allByAriaLabel(m.island, "Player 1 — Full name")) {
+      (propsOf(box).onChange as (e: { target: { value: string } }) => void)({ target: { value: "Alex Test" } });
+    }
+    m.clickByText("Next"); // -> CONSENT
+    const el = m.island.tree().find((e) => e.type === StepConsent);
+    expect(el, "on the CONSENT step").toBeTruthy();
+    return propsOf(el!).cameraRequirements as unknown;
+  }
+
+  it("the empty case first: over the board, or online with the camera off — nothing to state", async () => {
+    expect(await cameraOnConsent([DIV_OPEN])).toEqual([]);
+  });
+
+  it("online, camera off — nothing to state", async () => {
+    expect(await cameraOnConsent([{ ...DIV_OPEN, online_play: true, camera_policy: "off" }])).toEqual([]);
+  });
+
+  it("a SINGLE-division competition (no ENTRIES step): its required camera reaches CONSENT, with no Lichess state at all", async () => {
+    expect(await cameraOnConsent([{ ...DIV_OPEN, online_play: true, camera_policy: "required" }])).toEqual([
+      { name: "Open Singles", policy: "required" },
+    ]);
+  });
+
+  it("optional is stated as optional", async () => {
+    expect(await cameraOnConsent([{ ...DIV_OPEN, online_play: true, camera_policy: "optional" }])).toEqual([
+      { name: "Open Singles", policy: "optional" },
+    ]);
+  });
+
+  it("several divisions: only the SELECTED online one with a camera policy, by name", async () => {
+    expect(
+      await cameraOnConsent([{ ...DIV_OPEN, online_play: true, camera_policy: "required" }, DIV_OPEN_2]),
+    ).toEqual([{ name: "Open Singles", policy: "required" }]);
+  });
+});
+
 describe("step 5 — submit", () => {
   /** Drives a single free (DIV_OPEN) cart from WHO through CONSENT, landing
    *  on REVIEW with privacy consent already given — the shared setup every

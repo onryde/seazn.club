@@ -45,6 +45,7 @@ import {
 } from "./submit";
 import { StepConsent } from "./step-consent";
 import { onlineDivisionNames, registerReturnPath, type RegisterLichessState } from "./register-lichess-card";
+import { selectedCameraRequirements } from "./online-play-note";
 import { StepDetails } from "./step-details";
 import { StepEntries } from "./step-entries";
 import { StepNav } from "./step-nav";
@@ -568,6 +569,7 @@ export function RegisterStepper({
               ? null
               : { divisions, orgSlug, next: lichessReturn, state: lichess };
           })()}
+          cameraRequirements={selectedCameraRequirements(cart, info.divisions)}
           contact={contact}
           onContactChange={(patch) => setContact((c) => ({ ...c, ...patch }))}
           consent={consent}

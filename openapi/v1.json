@@ -97072,6 +97072,23 @@
                                   ],
                                   "additionalProperties": false
                                 }
+                              },
+                              "onlinePlay": {
+                                "type": "object",
+                                "properties": {
+                                  "cameraPolicy": {
+                                    "type": "string",
+                                    "enum": [
+                                      "off",
+                                      "optional",
+                                      "required"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "cameraPolicy"
+                                ],
+                                "additionalProperties": false
                               }
                             },
                             "required": [

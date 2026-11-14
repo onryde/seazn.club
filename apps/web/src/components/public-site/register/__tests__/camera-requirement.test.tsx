@@ -29,6 +29,9 @@ vi.mock("@/components/i18n/dict-provider", () => ({
 }));
 
 import { DivisionCard } from "../division-card";
+import { StepConsent } from "../step-consent";
+import { selectedCameraRequirements } from "../online-play-note";
+import { EMPTY_CART } from "../types";
 import type { DivisionLike } from "../types";
 import type { PublicDivisionInfo } from "@/server/usecases/registrations";
 
@@ -154,5 +157,96 @@ describe("the ENTRIES step states online play and the camera, before signup", ()
       }
     }
     expect(checked).toBe(LOCALES.length * 3);
+  });
+});
+
+// Walk-fix F4: a single-division competition skips ENTRIES, so the division card above never renders there - CONSENT
+// states the camera requirement instead, in the same words and tones (the stepper's wiring is pinned in
+// register-stepper-interaction.test.tsx, "the camera requirement on CONSENT").
+describe("the CONSENT step states the camera requirement of each selected online division", () => {
+  const consent = (cameraRequirements: { name: string; policy: "required" | "optional" }[] | undefined, locale: Loc = "en") => {
+    current.locale = locale;
+    return renderToStaticMarkup(
+      <StepConsent
+        contact={{ name: "", email: "", phone: null, dob: null, gender: null, guardian_name: null, guardian_consent: false } as never}
+        onContactChange={() => undefined}
+        consent={{ privacy_consent: false, media_consent: false } as never}
+        onConsentChange={() => undefined}
+        cart={EMPTY_CART}
+        orgName="Northfield Chess Club"
+        errors={{}}
+        cameraRequirements={cameraRequirements}
+      />,
+    );
+  };
+
+  it("the empty case first: none (or an old caller passing nothing) - no camera note; the consent still renders", () => {
+    for (const reqs of [[], undefined]) {
+      const h = consent(reqs);
+      expect(h).not.toContain('data-testid="reg-consent-camera"');
+      expect(h).not.toContain(esc(s("en", "register.camera.required")));
+      expect(h).toContain('data-testid="reg-consent-grant"');
+    }
+  });
+
+  it("required: the division, the duty and the approved notice, amber, above the privacy consent - in every locale", () => {
+    let checked = 0;
+    for (const loc of LOCALES) {
+      const h = consent([{ name: "Online Open", policy: "required" }], loc);
+      const box = /<div[^>]*data-testid="reg-consent-camera"[^>]*>/.exec(h);
+      expect(box, `${loc}: the note`).not.toBeNull();
+      expect(box![0], loc).toContain('data-policy="required"');
+      expect(box![0], loc).toContain("bg-[#fef3c7]");
+      expect(h, loc).toContain("Online Open");
+      expect(h, loc).toContain(esc(s(loc, "register.camera.required")));
+      expect(h, loc).toContain(esc(s(loc, "onlineChess.camera.playerNotice")));
+      expect(h.indexOf('data-testid="reg-consent-camera"'), loc).toBeLessThan(h.indexOf('data-testid="reg-consent-grant"'));
+      checked++;
+    }
+    expect(checked).toBe(LOCALES.length);
+  });
+
+  it("optional says optional, lavender, without the duty's notice; two divisions get one note each", () => {
+    const h = consent([
+      { name: "Online Open", policy: "optional" },
+      { name: "Junior Online", policy: "required" },
+    ]);
+    const boxes = [...h.matchAll(/<div[^>]*data-testid="reg-consent-camera"[^>]*>/g)].map((m) => m[0]);
+    expect(boxes).toHaveLength(2);
+    expect(boxes[0]).toContain('data-policy="optional"');
+    expect(boxes[0]).toContain("bg-[#f3effc]");
+    expect(boxes[1]).toContain('data-policy="required"');
+    expect(h).toContain(esc(s("en", "register.camera.optional")));
+    // The notice belongs to the required division alone: once, not twice.
+    expect(h.split(esc(s("en", "onlineChess.camera.playerNotice"))).length - 1).toBe(1);
+  });
+});
+
+describe("selectedCameraRequirements — which selected divisions CONSENT states a camera for", () => {
+  const d = (id: string, online_play: boolean | undefined, camera_policy: CameraPolicy | undefined) => ({
+    division_id: id,
+    name: `Division ${id}`,
+    online_play,
+    camera_policy,
+  });
+  const cart = (...ids: string[]) => ({ entries: ids.map((division_id) => ({ division_id })) }) as never;
+
+  it("the empty case first: an empty cart states nothing", () => {
+    expect(selectedCameraRequirements(cart(), [d("a", true, "required")])).toEqual([]);
+  });
+
+  it("online with a policy only, in the cart's order, each once; not online / off / old wire / unknown id state nothing", () => {
+    const divisions = [
+      d("req", true, "required"),
+      d("opt", true, "optional"),
+      d("off", true, "off"),
+      d("otb", false, "required"), // not online: no camera to require, whatever the field says
+      d("old", undefined, undefined),
+    ];
+    const got = selectedCameraRequirements(cart("opt", "otb", "req", "off", "opt", "old", "ghost"), divisions);
+    expect(got).toEqual([
+      { name: "Division opt", policy: "optional" },
+      { name: "Division req", policy: "required" },
+    ]);
   });
 });

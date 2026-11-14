@@ -2136,6 +2136,46 @@ describe("InfoTab — divisions: prose, calendar and suspensions (division-page 
   });
 });
 
+// Walk-fix F8 (+ F4): the public page never said a division is played online, or that it needs a camera. An online
+// division's Info box says so (and the box exists for it alone), in every locale; a division that is not online says nothing.
+describe("InfoTab — an online division says it is played online, and its camera policy (walk-fix F8)", () => {
+  const LOCALES = { en, es, fr, nl } as const;
+  const render = (d: CompetitionHubDocT, dd: Dict = dict, locale: "en" | "es" | "fr" | "nl" = "en") =>
+    renderToStaticMarkup(<InfoTab doc={d} dict={dd} locale={locale} />);
+  const unesc = (h: string) => h.replace(/&#x27;/g, "'").replace(/&amp;/g, "&");
+
+  it("EMPTY FIRST: no division online - no online note, and no box made for it", () => {
+    const h = render(hubDoc({ divisions: [division("premier")], info: info({ calendars: [] }) }));
+    expect(h).not.toContain("mh-info-online-");
+    expect(h).not.toContain(`data-testid="mh-info-division-premier"`);
+  });
+
+  it("each camera policy, every locale: the online sentence always; required/optional say so; off says nothing about a camera", () => {
+    let checked = 0;
+    for (const [loc, dd] of Object.entries(LOCALES) as [keyof typeof LOCALES, Record<string, string>][]) {
+      for (const policy of ["off", "optional", "required"] as const) {
+        const doc = hubDoc({
+          divisions: [division("online-open", { onlinePlay: { cameraPolicy: policy } }), division("otb")],
+          info: info({ calendars: [] }),
+        });
+        const h = unesc(render(doc, dd as Dict, loc));
+        // The box exists for the online note alone (no prose, calendar or ban), and the over-the-board one does not.
+        expect(h, `${loc}/${policy}`).toContain(`data-testid="mh-info-division-online-open"`);
+        expect(h, `${loc}/${policy}`).not.toContain(`data-testid="mh-info-division-otb"`);
+        expect(h, `${loc}/${policy}`).toContain(`data-testid="mh-info-online-online-open"`);
+        expect(h, `${loc}/${policy}`).toContain(dd["info.onlinePlay.body"]!);
+        for (const p of ["optional", "required"] as const) {
+          if (p === policy) expect(h, `${loc}/${policy}`).toContain(dd[`info.camera.${p}`]!);
+          else expect(h, `${loc}/${policy}: not ${p}`).not.toContain(dd[`info.camera.${p}`]!);
+        }
+        if (loc !== "en") expect(dd["info.onlinePlay.body"], `${loc}: translated`).not.toBe(en["info.onlinePlay.body" as keyof typeof en]);
+        checked++;
+      }
+    }
+    expect(checked).toBe(12);
+  });
+});
+
 describe("InfoTab — a stage that plays different rules names them (per-stage rules, T7)", () => {
   const render = (d: CompetitionHubDocT, dd: Dict = dict) =>
     renderToStaticMarkup(<InfoTab doc={d} dict={dd} locale="en" />);
