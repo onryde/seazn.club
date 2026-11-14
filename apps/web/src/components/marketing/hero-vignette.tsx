@@ -5,12 +5,12 @@ import { usePrefersReducedMotion } from "@/components/ui/use-prefers-reduced-mot
 import { HeroSceneArt } from "./hero-scene-art";
 import {
   HERO_AUTO_PLAYS,
-  HERO_SPORT_SELECT_ID,
   heroSceneKey,
   heroSceneStyle,
   heroScoreText,
   type HeroSceneKey,
 } from "./hero-scenes";
+import { readNothingPicked, readSelect, subscribeToSelect } from "./hero-sport-select";
 
 /** Object-relay hero animation (design/v3/12 §4.2). No humans — the ball, shuttle, puck or piece is the protagonist. It
  *  draws the sport picked in the hero's Sport select (owner 2026-11-13), one scene per sport the quick match offers
@@ -22,23 +22,6 @@ import {
 const PLAY_MS = 3300;
 /** The object's landing in the CSS choreography (globals.css: the fly's delay plus its duration). */
 const LANDING_MS = 2400;
-
-// The hero's Sport select as a store. The select is the server's (the quick match form works with no script), so the
-// art reads it rather than owning it: its value is the snapshot, its `change` events the subscription. The server
-// snapshot is "nothing picked", so the server's markup (and the hydration that must match it) draws the page's sport; once
-// hydrated, a value the browser restored into the select (back navigation) shows at once. No select on the page (the
-// quick match offer is empty) reads as nothing picked, and subscribes to nothing.
-function selectOnPage(): HTMLSelectElement | null {
-  return document.getElementById(HERO_SPORT_SELECT_ID) as HTMLSelectElement | null;
-}
-function subscribeToSelect(onChange: () => void): () => void {
-  const select = selectOnPage();
-  if (!select) return () => {};
-  select.addEventListener("change", onChange);
-  return () => select.removeEventListener("change", onChange);
-}
-const readSelect = (): string | null => selectOnPage()?.value ?? null;
-const readNothingPicked = (): string | null => null;
 
 /** Whether the art is on screen. `true` on the server and through hydration (the markup carries no hold, so the no-JS
  *  page plays as it always did) and wherever there is no IntersectionObserver (fail open, as use-start-on-view.ts does);

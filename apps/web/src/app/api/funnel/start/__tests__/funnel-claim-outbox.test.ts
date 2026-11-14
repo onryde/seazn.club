@@ -204,6 +204,36 @@ describe.skipIf(!HAS_DB)("POST /api/funnel/start queues the claim link on the ou
     }
   });
 
+  it("a body with courts and hours is accepted and stored; out-of-range planning is refused and stores nothing", async () => {
+    // The wizard's Planning fold (start-wizard redesign T2): the claim builds the courts, so they ride the draft. The bounds are
+    // the fold's own (courts 1..32, hours 1..72).
+    const email = address();
+    const body = { email, name: competition(), sport: "Badminton", entrants: 8, format: "knockout", courts: 3, hours: 5 };
+    expect((await post(body)).status).toBe(200);
+    const [draft] = await sql<{ payload: Record<string, unknown> }[]>`select payload from funnel_drafts where email = ${email}`;
+    expect(draft!.payload).toEqual({ name: body.name, sport: "Badminton", entrants: 8, format: "knockout", courts: 3, hours: 5 });
+
+    const refused = [{ courts: 0 }, { courts: 33 }, { courts: 2.5 }, { hours: 0 }, { hours: 73 }, { courts: "3" }];
+    let checked = 0;
+    for (const bad of refused) {
+      const other = address();
+      expect((await post({ email: other, name: competition(), sport: "Badminton", entrants: 8, ...bad })).status, JSON.stringify(bad)).toBe(400);
+      expect(await draftsOf(other), `${JSON.stringify(bad)}: no draft`).toEqual([]);
+      expect(await claimRows(other), `${JSON.stringify(bad)}: no row`).toEqual([]);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every out-of-range body was posted").toBe(refused.length);
+  });
+
+  it("a bad email is a 400 and stores no draft", async () => {
+    // The wizard's missing-ending case (mock A3): an address with no domain ending is refused by the route, not only the page.
+    const email = `${RUN}-sam@harbourvale`;
+    expect((await post({ email, name: competition(), sport: "Badminton", entrants: 8 })).status).toBe(400);
+    expect(await draftsOf(email), "no draft").toEqual([]);
+    expect(await claimRows(email), "no row").toEqual([]);
+    expect(transport.deliver, "nothing sent").not.toHaveBeenCalled();
+  });
+
   it("empty: an invalid payload queues nothing", async () => {
     const email = address();
 

@@ -1,16 +1,24 @@
 import { z } from "zod";
 import { headers } from "next/headers";
 import { clientIp } from "@/lib/client-ip";
-import { handler } from "@/lib/http";
+import { HttpError, PaymentRequiredError, handler } from "@/lib/http";
 import { rateLimit, AUTH_LIMIT } from "@/lib/rate-limit";
 import { sql } from "@/lib/db";
 import { createSession, setActiveOrgId } from "@/lib/auth";
-import { consumeFunnelDraft, createFromDraft } from "@/lib/funnel";
+import { FunnelClaimPartialError, consumeFunnelDraft, createFromDraft } from "@/lib/funnel";
+import {
+  FUNNEL_CLAIM_DATE_PAST,
+  FUNNEL_CLAIM_INVALID,
+  FUNNEL_CLAIM_PLAN_LIMIT,
+  FUNNEL_CLAIM_SIGNED_IN,
+} from "@/lib/funnel-claim-codes";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
+import { log } from "@/server/logger";
 import { saveQuickMatchesForVerifiedUser } from "@/server/usecases/quick-match-save";
 
 const schema = z.object({ token: z.string().min(10) }).strict();
+const DEAD_LINK = "This setup link is invalid, expired, or already used.";
 
 /** Turn an email into a friendly default display name (the part before @). */
 function displayNameFromEmail(email: string): string {
@@ -54,10 +62,13 @@ export async function POST(req: Request) {
     const ip = clientIp(await headers());
     await rateLimit(`funnel-claim:${ip}`, AUTH_LIMIT);
 
-    const { token } = schema.parse(await req.json());
-    const draft = await consumeFunnelDraft(token);
+    // A token the schema refuses (a truncated link) names no draft either: the same dead-link answer, not "Invalid input".
+    const body = schema.safeParse(await req.json().catch(() => null));
+    if (!body.success) throw new HttpError(400, DEAD_LINK, FUNNEL_CLAIM_INVALID);
+    const draft = await consumeFunnelDraft(body.data.token);
     if (!draft) {
-      throw new Error("This setup link is invalid, expired, or already used.");
+      // An expected answer, not a fault: a 400 the card words in the visitor's language (no Sentry).
+      throw new HttpError(400, DEAD_LINK, FUNNEL_CLAIM_INVALID);
     }
 
     const userId = await resolveOrCreateVerifiedUser(draft.email);
@@ -66,8 +77,33 @@ export async function POST(req: Request) {
     // Quick match §7.7: keep the matches a guest typed this verified address on (never throws; logs and goes on).
     await saveQuickMatchesForVerifiedUser(userId);
 
-    const { redirect, orgId } = await createFromDraft(userId, draft);
-    await setActiveOrgId(orgId);
+    // From here the visitor IS signed in and the token is spent: a failure names that, so the card sends them to their
+    // dashboard instead of "start again or sign in". A plan refusal of the competition itself (the quota, refused before
+    // its insert) wrote nothing: FUNNEL_CLAIM_PLAN_LIMIT. A first day that has passed (createFromDraft's first check, before
+    // any write) wrote nothing either: FUNNEL_CLAIM_DATE_PAST, as thrown. Anything else may have left a part-built event (createFromDraft
+    // logs which step): FUNNEL_CLAIM_SIGNED_IN. The inner status rides through, so a 5xx still reaches Sentry and the
+    // handler's log (the inner error as `cause`); a 4xx the handler does not log is logged here; a 402 keeps its
+    // `feature_key`. The body carries neither the inner message nor anything personal.
+    let built: Awaited<ReturnType<typeof createFromDraft>>;
+    try {
+      built = await createFromDraft(userId, draft);
+      await setActiveOrgId(built.orgId);
+    } catch (err) {
+      const partial = err instanceof FunnelClaimPartialError;
+      const inner = partial ? err.cause : err;
+      const status = inner instanceof HttpError ? inner.status : 500;
+      if (status < 500) log.warn({ err: inner, status, partial }, "funnel_claim_signed_in_refused");
+      if (!partial && inner instanceof HttpError && inner.code === FUNNEL_CLAIM_DATE_PAST) throw inner;
+      const signedIn =
+        inner instanceof PaymentRequiredError
+          ? new PaymentRequiredError(inner.featureKey, {
+              ...inner.extra,
+              code: partial ? FUNNEL_CLAIM_SIGNED_IN : FUNNEL_CLAIM_PLAN_LIMIT,
+            })
+          : new HttpError(status, "Signed in, but the competition could not be finished.", FUNNEL_CLAIM_SIGNED_IN);
+      throw Object.assign(signedIn, { cause: err });
+    }
+    const { redirect } = built;
 
     await captureServer({
       event: EVENTS.FUNNEL_CLAIMED,

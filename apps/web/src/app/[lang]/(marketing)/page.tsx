@@ -13,6 +13,7 @@ import { MatchdayTools, AlsoInTheKit } from "@/components/marketing/matchday-too
 import { MotifDivider } from "@/components/marketing/motif-divider";
 import { TicketStubs } from "@/components/marketing/ticket-stubs";
 import { QuickMatchCta } from "@/components/marketing/quick-match-cta";
+import { HeroEventLink } from "@/components/marketing/hero-event-link";
 import { RecentStrip } from "@/components/quick-match/recent-strip";
 import { marketingPreview } from "@/lib/marketing/format-preview";
 import { preferredCurrency } from "@/lib/currency-server";
@@ -150,9 +151,9 @@ export default async function HomePage({ params }: { params: Promise<{ lang: str
               </div>
               {/* The organiser's setup, one quiet link below: the same /start wizard (it defaults the sport and field
                   size the hero no longer asks), so its server-side funnel events fire as before. Locale-prefixed, so
-                  the wizard keeps the page's language. */}
-              <Link
-                href={`/${lang}/start`}
+                  the wizard keeps the page's language; once the script runs it carries the Sport select's sport. */}
+              <HeroEventLink
+                lang={lang}
                 data-testid="hero-event-link"
                 className="group mt-3 inline-flex min-h-11 max-w-full items-center text-sm text-[#ddd6f5] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--mk-lime)]"
               >
@@ -160,7 +161,7 @@ export default async function HomePage({ params }: { params: Promise<{ lang: str
                   {t(d, "home.hero.eventPrompt")}{" "}
                   <span className="font-semibold text-[var(--mk-lime)]">{t(d, "home.hero.eventLink")}</span>
                 </span>
-              </Link>
+              </HeroEventLink>
               <p className="mt-2 text-xs text-[#8d7fc0]">
                 {t(d, "home.hero.freeNote")}
                 <Link href="/pricing" className="underline hover:text-[var(--mk-lime)]">

@@ -127,6 +127,8 @@ import enMarketing from "@/dictionaries/en/marketing.json";
 import frMarketing from "@/dictionaries/fr/marketing.json";
 import { getDictionary } from "@/lib/i18n";
 import { heroSceneKey, heroSceneLabelKey } from "@/components/marketing/hero-scenes";
+import { HeroEventLink } from "@/components/marketing/hero-event-link";
+import { isValidElement, type ReactElement, type ReactNode } from "react";
 import HomePage from "../page";
 import PlayPage from "../play/page";
 import { setupSports } from "../play/setup-props";
@@ -209,6 +211,22 @@ const optionsOf = (form: string) =>
 function eventLinkOf(html: string, lang: string): { tag: string; text: string } | null {
   const m = heroOf(html).match(new RegExp(`(<a\\b[^>]*\\bhref="/${lang}/start"[^>]*>)([\\s\\S]*?)</a>`));
   return m ? { tag: m[1]!, text: m[2]!.replace(/<[^>]*>/g, "").replace(/<!-- -->/g, "") } : null;
+}
+
+/** The hero's organiser doors as the page mounts them (its element tree, before any render): each one's props. The HTML
+ *  is the no-script page, which a plain link and the select follower write alike; the tree tells them apart. */
+async function heroDoors(lang: string): Promise<Record<string, unknown>[]> {
+  const root = await HomePage({ params: Promise.resolve({ lang }) });
+  const found: Record<string, unknown>[] = [];
+  const visit = (node: ReactNode) => {
+    if (Array.isArray(node)) return node.forEach(visit);
+    if (!isValidElement(node)) return;
+    const el = node as ReactElement<{ children?: ReactNode }>;
+    if (el.type === HeroEventLink) found.push(el.props as Record<string, unknown>);
+    visit(el.props.children);
+  };
+  visit(root);
+  return found;
 }
 
 /** The sport the hero's art draws (hero-vignette.tsx `data-sport`): exactly one in the hero, or a red. */
@@ -343,7 +361,7 @@ describe("the hero's quick match start (spec §5 step 1, Option A)", () => {
     );
   });
 
-  it("the organiser's setup is a quiet link to `/en/start` under the Start; the funnel's fields and Setup button are gone", async () => {
+  it("the organiser's setup is a quiet link to `/en/start` under the Start, mounted to follow the Sport select; the funnel's fields and Setup button are gone", async () => {
     vi.mocked(listQuickMatchSports).mockResolvedValueOnce(OFFER);
     const html = await render("en");
     const hero = heroOf(html);
@@ -362,7 +380,7 @@ describe("the hero's quick match start (spec §5 step 1, Option A)", () => {
     for (const i of order) expect(i, `order ${JSON.stringify(order)}`).toBeGreaterThan(-1);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
     // Negative, each beside a positive: the hero's one form is the quick match's, with the Sport select, and nothing of
-    // the funnel's (its form, entrants and date fields, their labels, its Setup button, its /start?sport= hand-off).
+    // the funnel's (its form, entrants and date fields, their labels, its Setup button).
     expect(hero.match(/<form\b/g), "one form in the hero").toHaveLength(1);
     expect(hero).toMatch(/<select\b[^>]*\bname="sport"/);
     expect(hero).not.toContain("data-start-funnel");
@@ -376,7 +394,16 @@ describe("the hero's quick match start (spec §5 step 1, Option A)", () => {
       removed++;
     }
     expect(removed).toBe(3);
+    // Changed on purpose (start wizard plan 2026-11-13 Task 5): once the script runs, the door carries the Sport select's
+    // sport, `/en/start?sport=<key>` (hero-event-link.test.tsx drives the select and /start's parser). The server's HTML
+    // is the page without the script, where the select's choice is unknown, so it writes the plain `/en/start`: no query
+    // at all, so a sport the visitor then changes is never sent wrong.
     expect(plain).not.toContain("/start?");
+    // ...and the link is the one that follows the select (the positive the plain HTML cannot show on its own).
+    vi.mocked(listQuickMatchSports).mockResolvedValueOnce(OFFER);
+    const doors = await heroDoors("en");
+    expect(doors, "one follower in the hero").toHaveLength(1);
+    expect(doors[0]).toMatchObject({ lang: "en", "data-testid": "hero-event-link" });
     // The Start that stays (the positive of the Setup button's absence).
     expect(ctaButton(hero, enMarketing["quickMatch.cta"])).toBeDefined();
   });
@@ -395,6 +422,9 @@ describe("the hero's quick match start (spec §5 step 1, Option A)", () => {
     expect(eventLinkOf(html, "fr")?.text).toBe(`${frMarketing["home.hero.eventPrompt"]} ${frMarketing["home.hero.eventLink"]}`);
     expect(eventLinkOf(html, "en"), "never the English path").toBeNull();
     expect(html).not.toContain('action="/en/play"');
+    // The follower is handed the page's language, so the sport it adds rides `/fr/start`.
+    vi.mocked(listQuickMatchSports).mockResolvedValueOnce(OFFER);
+    expect((await heroDoors("fr")).map((p) => p.lang)).toEqual(["fr"]);
   });
 });
 

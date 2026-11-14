@@ -34,6 +34,8 @@ const KNOWN = [
   "deviceLinkFootball",
   "registrationPayPage",
   "quickMatch",
+  "funnel",
+  "marketing",
 ] as const;
 
 describe("SMOKE_ONLY — selectSmokeSuites (review R1)", () => {
@@ -101,7 +103,8 @@ describe("SMOKE_ONLY — selectSmokeSuites (review R1)", () => {
     // youtubeConnect after that (YouTube Connect T21: its own two orgs and sign-ins, nothing from SubsetCtx);
     // deviceLinkFootball after that (S2-5 plan W: its own org and sign-in, nothing from SubsetCtx); registrationPayPage after that
     // (player payment page Task 4: its own org and sign-in, nothing from SubsetCtx); quickMatch last (quick match plan 2 T11 +
-    // plan 3 T7: the system org's guest matches and its own saver's sign-in, nothing from SubsetCtx).
+    // plan 3 T7: the system org's guest matches and its own saver's sign-in, nothing from SubsetCtx); funnel and marketing after it
+    // (start wizard plan T7: anonymous visitors and a fetch of public pages, nothing from SubsetCtx).
     const block = /const SELECTABLE_SUITES\b[\s\S]*?=\s*\{([\s\S]*?)\n\};/.exec(src)?.[1] ?? "";
     const names = [...block.matchAll(/^\s*(\w+):/gm)].map((m) => m[1]);
     expect(names.length, "the registry block was found and read").toBeGreaterThan(0);
