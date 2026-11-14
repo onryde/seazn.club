@@ -8,12 +8,12 @@
 // B2 T10 (spec 7.3): each consent LEADS with a Required or Optional tag, so the one that blocks is clear before an error appears; the
 // long legal sentence is small print under the privacy consent's plain title; and the other-players notice is one info line (icon +
 // text), not a third look-alike box. The join page reuses this step verbatim and gets the same. Owns nothing beyond wiring — `guardianRequired`/
-// `cartHasOtherPlayers` (the two show/require decisions) are cart.ts/
+// `rosterNoticeKey` (the two show/require decisions) are cart.ts/
 // validation.ts's pure functions, computed once per render exactly like
 // every other step's own live-feedback pieces (division-card.tsx's
 // selfIneligible, entry-details.tsx's mixedUnmet).
 import { useT } from "@/components/i18n/dict-provider";
-import { cartHasOtherPlayers } from "./cart";
+import { rosterNoticeKey } from "./cart";
 import { FIELD, FIELD_LABEL as LABEL, TAG_NEUTRAL } from "./styles";
 import { guardianRequired, type ConsentValidation } from "./validation";
 import { RegisterLichessCard, type RegisterLichessState } from "./register-lichess-card";
@@ -66,7 +66,7 @@ export function StepConsent({
   // guardian-consent-bypass fix, HIGH, 2026-08-26) so the block's visibility
   // and whether "Next" is blocked can never disagree again.
   const showGuardian = guardianRequired(cart, contact, new Date());
-  const showRosterNotice = cartHasOtherPlayers(cart);
+  const rosterNotice = rosterNoticeKey(cart);
 
   return (
     <div className="rounded-xl border border-zinc-200/80 bg-surface p-4 shadow-sm sm:p-6">
@@ -196,7 +196,7 @@ export function StepConsent({
 
       {/* One info line, not a box (B2 T10): the two consents above are the things to decide; this only tells a captain what happens to
           the people they name. The icon takes `text-accent-strong`, the colour BTN_GHOST's text already wears. */}
-      {showRosterNotice && (
+      {rosterNotice !== null && (
         <p data-testid="reg-consent-roster-notice" className="mt-4 flex items-start gap-2 text-xs text-ink-muted">
           <svg
             width="16"
@@ -214,7 +214,7 @@ export function StepConsent({
             <path d="M12 11v5" />
             <path d="M12 8h.01" />
           </svg>
-          <span className="min-w-0">{t("register.consent.rosterNotice")}</span>
+          <span className="min-w-0">{t(rosterNotice, { box: t("register.who.playing.title") })}</span>
         </p>
       )}
     </div>

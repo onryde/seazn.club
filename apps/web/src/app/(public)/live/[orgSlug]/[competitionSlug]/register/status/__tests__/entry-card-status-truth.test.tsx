@@ -204,12 +204,24 @@ describe("the roster never says 'Checked in' (W6, W10, W11; V7; walk-fix F10)", 
     expect(new Set(shapes.map(([s]) => s)), "both awaiting statuses seen").toEqual(new Set(AWAITING));
   });
 
-  it("a waitlisted, withdrawn, expired or rejected entry never says it checked in (counted)", () => {
+  // Walk-fix A fix round 1 (Part B's routed copy item): "Not registered yet" on a withdrawn, expired or rejected entry promised a
+  // registration that can no longer happen - the entry is over, and its join links are dead (canJoinEntry). Only a waitlisted entry,
+  // still alive, keeps "yet"; the ended ones say "Not registered".
+  const PENDING_CHIP: Partial<Record<EntryStatus, string>> = {
+    waitlisted: ">Not registered yet<",
+    withdrawn: ">Not registered<",
+    expired: ">Not registered<",
+    rejected: ">Not registered<",
+  };
+  it("a waitlisted, withdrawn, expired or rejected entry never says it checked in, and only the waitlisted one says 'yet' (counted)", () => {
     let checked = 0;
     for (const status of NOT_LIVE) {
       const markup = render(props({ status, players: PLAYERS }));
       expect(markup, status).toContain(">Registered<");
-      expect(markup, status).toContain(">Not registered yet<");
+      const chip = PENDING_CHIP[status];
+      expect(chip, `premise: ${status} has a ruling`).toBeTruthy();
+      expect(markup, status).toContain(chip!);
+      if (status !== "waitlisted") expect(markup, `${status}: an ended entry promises nothing`).not.toContain("Not registered yet");
       expect(markup, status).toContain(">1 of 2 registered<");
       expect(markup, status).not.toContain(">Checked in<");
       expect(markup, status).not.toContain(">Not checked in<");
@@ -252,9 +264,14 @@ describe("the roster never says 'Checked in' (W6, W10, W11; V7; walk-fix F10)", 
       const d = ui as Record<string, string>;
       const markup = render(props({ status: "withdrawn", players: PLAYERS }, {}, locale, ui));
       expect(markup, name).toContain(`>${d["register.status.roster.registered"]}<`);
-      expect(markup, name).toContain(`>${d["register.status.roster.notRegistered"]}<`);
+      expect(markup, name).toContain(`>${d["register.status.roster.notRegisteredEnded"]}<`);
+      expect(markup, name).not.toContain(`>${d["register.status.roster.notRegistered"]}<`);
       expect(markup, name).toContain(`>${d["register.status.roster.meterRegistered"]!.replace("{claimed}", "1").replace("{total}", "2")}<`);
       expect(d["register.status.roster.notRegistered"], `${name}: not the joined word`).not.toBe(d["register.status.roster.notJoined"]);
+      expect(d["register.status.roster.notRegisteredEnded"], `${name}: ended differs from "not yet"`).not.toBe(d["register.status.roster.notRegistered"]);
+      expect(d["register.status.roster.notRegisteredEnded"], `${name}: translated`).not.toBe((uiEn as Record<string, string>)["register.status.roster.notRegisteredEnded"]);
+      const waiting = render(props({ status: "waitlisted", players: PLAYERS }, {}, locale, ui));
+      expect(waiting, `${name} waitlisted`).toContain(`>${d["register.status.roster.notRegistered"]}<`);
       checked += 1;
     }
     expect(checked).toBe(3);

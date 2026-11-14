@@ -474,6 +474,17 @@ export function cartHasOtherPlayers(cart: CartState): boolean {
   });
 }
 
+/** Walk-fix A fix round 1: the CONSENT step's notice about the people the cart names, or none. "You're entering other people" is
+ *  true only when the registrant is a player somewhere in the cart (`registeringSelfAnywhere`): then every row that is not theirs is
+ *  someone else. With no self anywhere, a registrant who named THEMSELVES read it as false, so the line says each named player will
+ *  be asked, and names the box to tick if they are playing too. */
+export function rosterNoticeKey(
+  cart: CartState,
+): "register.consent.rosterNotice" | "register.consent.rosterNoticeNotPlaying" | null {
+  if (!cartHasOtherPlayers(cart)) return null;
+  return registeringSelfAnywhere(cart) ? "register.consent.rosterNotice" : "register.consent.rosterNoticeNotPlaying";
+}
+
 /** One cart line's payability, shared by `summarizeCart` below. */
 export interface CartLineSummary {
   entry: CartEntry;

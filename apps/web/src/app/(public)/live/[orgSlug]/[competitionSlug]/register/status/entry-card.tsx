@@ -46,6 +46,11 @@ const ROSTER_WORDS: Record<RosterVocabulary, { meter: string; claimed: string; p
     claimed: "register.status.roster.registered",
     pending: "register.status.roster.notRegistered",
   },
+  ended: {
+    meter: "register.status.roster.meterRegistered",
+    claimed: "register.status.roster.registered",
+    pending: "register.status.roster.notRegisteredEnded",
+  },
 };
 
 const STATUS_TONE: Record<EntryStatus, { rail: string; badge: string }> = {
@@ -205,6 +210,7 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
   const roster = rosterCounts(entry.players);
   // Polish wave P3 (W6, W10, W11), the owner ruling on V7 and walk-fix F10: a live entry's roster (pending, paid, confirmed) says
   // "Joined", a waitlisted, withdrawn, expired or rejected one "Registered" - never "Checked in", which registration has no step for.
+  // An ended one's unclaimed place says "Not registered", without the waitlisted entry's "yet" (walk-fix A fix round 1).
   // `rosterVocabulary` picks the key family once; the chips and the meter both read it.
   const rosterWords = ROSTER_WORDS[rosterVocabulary(entry.status)];
   // Polish wave P3 (W2, W12): WHY a pending entry is not confirmed. Suppressed once the payment window has closed: the

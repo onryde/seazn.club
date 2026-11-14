@@ -619,7 +619,7 @@
   "info.venues": "Locaties",
   "info.registration.open": "Inschrijving open",
   "info.registration.closed": "Inschrijving gesloten",
-  "info.registration.cardPaymentsUnavailable": "Kaartbetalingen zijn nog niet ingesteld voor deze competitie: inschrijven kan zodra de organisator de betalingen heeft ingesteld.",
+  "info.registration.cardPaymentsUnavailable": "Kaartbetalingen zijn op dit moment niet beschikbaar voor deze competitie: inschrijven kan zodra de organisator ze inschakelt.",
   "info.onlinePlay.body": "Wordt online gespeeld op Seazn. Om je in te schrijven heb je een gekoppeld Lichess-account nodig.",
   "info.onlinePlay.named": "{division} wordt online gespeeld op Seazn. Om je in te schrijven heb je een gekoppeld Lichess-account nodig.",
   "info.camera.required": "Spelers moeten hun camera aan hebben tijdens hun partijen.",

@@ -135,6 +135,22 @@ describe("register page (closed state) — every division closed, one for card p
     expect(checked).toBe(2);
   });
 
+  // Walk-fix A review m3: `payments_unavailable` is ONE reason for two causes - Connect cannot charge, or the plan's paid-registration
+  // entitlement is gone (cardPaymentsBroken, spec #9 / P2-10). "Finishes payment setup" was false for the second, so the sentence on
+  // both public surfaces names neither cause's remedy. English only: the words checked are English (the other locales' parity is
+  // i18n:check's job, and each was rewritten in the same commit).
+  it("the card-payments sentence names neither cause's remedy: no 'set up' / 'setup' on the register page or the public hub", async () => {
+    const en = await EN();
+    const pub = (await import("@/dictionaries/en/public.json")).default as Record<string, string>;
+    let checked = 0;
+    for (const [where, sentence] of [["register page", en["register.cardPaymentsUnavailable"]], ["public hub", pub["info.registration.cardPaymentsUnavailable"]]] as const) {
+      expect(sentence, `${where}: premise`).toBeTruthy();
+      expect(sentence, where).not.toMatch(/set ?up/i);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
   it("negative pair: window-closed alone keeps the plain not-open line and no card-payments sentence", async () => {
     const en = await EN();
     const html = unescape(await render([ALL_CLOSED_DIVISION]));

@@ -689,16 +689,18 @@ describe("public write-path URL builders — the /public/ segment is load-bearin
 // approval or both (pending, paid) says its players have JOINED - "2 of 2 checked in" on an unpaid entry read as a false claim.
 // Walk-fix F10 (2026-11-14): a CONFIRMED entry no longer says "checked in" either. Nobody checks in at registration - the roster counts
 // who has joined the entry (claimed their place) - so "1 of 1 checked in" on every confirmed entry read as an attendance nobody gave.
-describe("rosterVocabulary: no entry says 'checked in' - live entries say joined, the rest registered (walk-fix F10)", () => {
+// Walk-fix A fix round 1: an ENDED entry (withdrawn, expired, rejected) has its own family - its unclaimed places say "Not registered",
+// never "Not registered yet", which promised a registration its dead join links can no longer make. Waitlisted is still alive.
+describe("rosterVocabulary: no entry says 'checked in' - live entries say joined, waitlisted registered, ended ones ended (walk-fix F10)", () => {
   // Every status a registration can hold (the DB CHECK on registrations.status), each with the ruling for it.
-  const RULING: [EntryStatus, "joined" | "registered"][] = [
+  const RULING: [EntryStatus, "joined" | "registered" | "ended"][] = [
     ["pending", "joined"],
     ["paid", "joined"],
     ["confirmed", "joined"],
     ["waitlisted", "registered"],
-    ["withdrawn", "registered"],
-    ["expired", "registered"],
-    ["rejected", "registered"],
+    ["withdrawn", "ended"],
+    ["expired", "ended"],
+    ["rejected", "ended"],
   ];
   it("one case per status (counted)", () => {
     let checked = 0;
@@ -708,6 +710,14 @@ describe("rosterVocabulary: no entry says 'checked in' - live entries say joined
     }
     expect(checked).toBe(7);
     expect(new Set(RULING.map(([s]) => s)).size, "premise: no status listed twice").toBe(7);
+  });
+  it("'joined' is exactly the statuses that count toward the roster total - the two rules cannot drift (counted)", () => {
+    let checked = 0;
+    for (const [status] of RULING) {
+      expect(rosterVocabulary(status) === "joined", status).toBe(entryCountsTowardTotal(status));
+      checked += 1;
+    }
+    expect(checked).toBe(7);
   });
 });
 

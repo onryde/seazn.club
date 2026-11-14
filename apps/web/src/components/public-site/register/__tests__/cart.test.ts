@@ -12,6 +12,7 @@ import {
   autoSeedSingleDivision,
   canAddEntry,
   cartHasOtherPlayers,
+  rosterNoticeKey,
   cartReducer,
   cartTotalText,
   clearSelfLinkWhenNotPlaying,
@@ -922,6 +923,48 @@ describe("cartHasOtherPlayers", () => {
   it("false for a team entry with an EMPTY roster — nobody entered yet", () => {
     const cart: CartState = { entries: [entry({ id: "e1", division_id: "d1", entrant_kind: "team" })] };
     expect(cartHasOtherPlayers(cart)).toBe(false);
+  });
+});
+
+// Walk-fix A fix round 1 (Part B's routed item): "You're entering other people in this registration" showed to a registrant who left
+// "I'm one of the players" unticked and named THEMSELVES as the one player - the page told them they were entering someone else. The
+// claim is true only when the registrant is a player somewhere in the cart (`registeringSelfAnywhere`: their row is self-linked, or a
+// solo sign-up), so every OTHER row really is another person. With no self anywhere, the honest line is "each player you've named will
+// be asked", plus the box to tick if they are playing too.
+describe("rosterNoticeKey: which consent notice the cart has earned", () => {
+  const named = (name: string) => ({ ...EMPTY_ROSTER_PLAYER, full_name: name });
+  const cases: [string, CartState, ReturnType<typeof rosterNoticeKey>][] = [
+    ["the empty cart (first)", EMPTY_CART, null],
+    ["a solo self-linked individual: nobody else is named", {
+      entries: [{ ...entry({ id: "e1", division_id: "d1", entrant_kind: "individual", registering_self: true, self_player_index: 0 }), players: [named("Mia Cole")] }],
+    }, null],
+    ["playing in a pair beside a partner: other people, truly", {
+      entries: [{ ...entry({ id: "e1", division_id: "d1", entrant_kind: "pair", registering_self: true, self_player_index: 0 }), players: [named("Mia Cole"), named("Sam Ortiz")] }],
+    }, "register.consent.rosterNotice"],
+    ["playing in one entry, another entry for someone else", {
+      entries: [
+        { ...entry({ id: "e1", division_id: "d1", entrant_kind: "individual", registering_self: true, self_player_index: 0 }), players: [named("Mia Cole")] },
+        { ...entry({ id: "e2", division_id: "d2", entrant_kind: "individual" }), players: [named("Alex Cole")] },
+      ],
+    }, "register.consent.rosterNotice"],
+    ["not ticked, and the one player is named after the registrant: the walkthrough's case", {
+      entries: [{ ...entry({ id: "e1", division_id: "d1", entrant_kind: "individual" }), players: [named("Mia Cole")] }],
+    }, "register.consent.rosterNoticeNotPlaying"],
+    ["not ticked, a captain's team", {
+      entries: [{ ...entry({ id: "e1", division_id: "d1", entrant_kind: "team" }), players: [named("Jordan Blake"), named("Sam Ortiz")] }],
+    }, "register.consent.rosterNoticeNotPlaying"],
+    ["a free agent names nobody", { entries: [entry({ id: "e1", division_id: "d1", entrant_kind: "team", free_agent: true })] }, null],
+  ];
+  it("one case per cart shape (counted)", () => {
+    let checked = 0;
+    for (const [why, cart, want] of cases) {
+      expect(rosterNoticeKey(cart), why).toBe(want);
+      // The notice shows exactly when the cart names someone other than a self-linked row.
+      expect(rosterNoticeKey(cart) !== null, `${why}: shown iff other players`).toBe(cartHasOtherPlayers(cart));
+      checked += 1;
+    }
+    expect(checked).toBe(cases.length);
+    expect(new Set(cases.map(([, , w]) => w)).size, "all three answers reached").toBe(3);
   });
 });
 

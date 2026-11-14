@@ -315,6 +315,13 @@ export function offersResendConfirmation(headline: HeadlineKind): boolean {
   return headline !== "closed";
 }
 
+/** Walk-fix A fix round 1: the line under the headline. "Confirmation sent to {email}" states the submit's confirmation; under a
+ *  `closed` headline (nothing live - the carts that lose Resend, above) it confirmed nothing, so it says where the registration's
+ *  mail goes instead. */
+export function contactLineKey(headline: HeadlineKind): "register.status.sentTo" | "register.status.mailTo" {
+  return offersResendConfirmation(headline) ? "register.status.sentTo" : "register.status.mailTo";
+}
+
 /** How many entries are waiting on the organiser's decision: the count the `received` headline and step are worded for. An entry that
  *  owes a fee is never one of them, including one owed with no way to pay here (B4 review m1). */
 export function receivedCount(entries: readonly HeadlineEntry[], cart: CartPayFacts): number {
@@ -456,10 +463,22 @@ function earliestPayDeadline(entries: readonly StatusEntry[], cart: CartPayFacts
  *    "2 of 3 joined"). "2 of 2 checked in" on an unpaid entry read as attendance at an entry nobody had confirmed (owner ruling on
  *    sign-off V7, 2026-11-12), and on a confirmed one as an attendance nobody gave: registration has no check-in, the count is of
  *    claimed places (walk-fix F10, 2026-11-14; the join success panel's meter says the same).
- *  - `registered`: a waitlisted, withdrawn, expired or rejected entry has nothing to join any more (polish wave P3, W6/W10/W11). */
-export type RosterVocabulary = "joined" | "registered";
+ *  - `registered`: a waitlisted entry has nothing to join yet (polish wave P3, W6/W10/W11): "Registered", "Not registered yet".
+ *  - `ended`: a withdrawn, expired or rejected entry is over and its join links are dead (`canJoinEntry`), so an unclaimed place says
+ *    "Not registered" - "yet" promised a registration that can no longer happen (walk-fix A fix round 1).
+ *  One row per status, so a new status cannot compile without a ruling. */
+export type RosterVocabulary = "joined" | "registered" | "ended";
+const ROSTER_VOCABULARY: Record<EntryStatus, RosterVocabulary> = {
+  pending: "joined",
+  paid: "joined",
+  confirmed: "joined",
+  waitlisted: "registered",
+  withdrawn: "ended",
+  expired: "ended",
+  rejected: "ended",
+};
 export function rosterVocabulary(status: EntryStatus): RosterVocabulary {
-  return entryCountsTowardTotal(status) ? "joined" : "registered";
+  return ROSTER_VOCABULARY[status];
 }
 
 /**

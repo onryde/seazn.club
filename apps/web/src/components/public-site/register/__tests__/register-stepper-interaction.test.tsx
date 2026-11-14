@@ -1910,9 +1910,11 @@ describe("step 4 — CONSENT", () => {
     setByAriaLabel(island, "Player 1 — Full name", "Sam");
     setByAriaLabel(island, "Player 2 — Full name", "Jordan");
     clickByText("Next"); // -> CONSENT
+    // The rep did not tick "I'm one of the players": every named player is asked, and the line names the box (walk-fix A fix round 1).
     expect(pageText()).toContain(
-      "You're entering other people in this registration. We'll ask each of them to confirm their own details and consent when they join or claim their spot.",
+      "We'll ask each player you've named to confirm their own details and consent when they join or claim their spot. If you're playing too, go back and tick “I'm one of the players”.",
     );
+    expect(pageText()).not.toContain("You're entering other people");
   });
 
   it("the captain-roster notice is ABSENT when the only player is the self-linked contact", () => {
@@ -4413,7 +4415,12 @@ describe("B2 T10 - Consent: Required and Optional tags, small print, one info li
     m.clickByText("Next"); // -> CONSENT
     const notices = byTestId(m.island, "reg-consent-roster-notice");
     expect(notices, "the captain names other people: the notice shows").toHaveLength(1);
-    expect(textOf(notices[0]!)).toContain("You're entering other people in this registration.");
+    // Walk-fix A fix round 1: the captain did not tick "I'm one of the players", so the line says each NAMED player is asked, and names
+    // the box to tick if they are playing too - not "you're entering other people", which a registrant naming themselves read as false.
+    const notPlaying = tRuntime(EN_UI, "register.consent.rosterNoticeNotPlaying", { box: String(EN_UI["register.who.playing.title"]) });
+    expect(notPlaying, "premise: the not-playing line exists and names the box").toContain(String(EN_UI["register.who.playing.title"]));
+    expect(textOf(notices[0]!)).toContain(notPlaying);
+    expect(textOf(notices[0]!)).not.toContain("You're entering other people");
     const classes = String(propsOf(notices[0]!).className).split(/\s+/);
     expect(classes.filter((c) => c.startsWith("border") || c.startsWith("bg-")), "no box: no border, no fill").toEqual([]);
     expect(walk(notices[0]!).some((e) => e.type === "svg"), "it leads with an icon").toBe(true);
@@ -4426,6 +4433,26 @@ describe("B2 T10 - Consent: Required and Optional tags, small print, one info li
     // Its pair: the same one-player cart, entered on behalf of someone else, does name another person.
     freshStorage();
     expect(byTestId(onConsent(false).island, "reg-consent-roster-notice"), "someone else is named: the notice shows").toHaveLength(1);
+  });
+
+  it("a registrant who IS playing and names a teammate is told they are entering other people (walk-fix A fix round 1)", () => {
+    const m = mount([DIV_OPEN, DIV_TEAM_T10C]);
+    setWho(m);
+    (propsOf(m.stepWho()).onChange as (p: object) => void)({ dob: "1990-04-02" });
+    (propsOf(m.stepWho()).onImPlayingChange as (v: boolean) => void)(true);
+    m.clickByText("Next"); // -> ENTRIES
+    (propsOf(m.divisionCard("div-team-t10c")).onAddTeam as () => void)();
+    setByAriaLabel(m.island, "Team name", "Riverside");
+    m.clickByText("Next"); // -> DETAILS
+    const textarea = m.island.tree().find((e) => e.type === "textarea")!;
+    (propsOf(textarea).onChange as (e: { target: { value: string } }) => void)({ target: { value: "Jordan Blake\nSam Ortiz" } });
+    m.clickByText("Add 2 players from list");
+    m.clickByText("Next"); // -> CONSENT
+    expect(m.island.tree().some((e) => e.type === StepConsent), "premise: on the Consent step").toBe(true);
+    const notices = byTestId(m.island, "reg-consent-roster-notice");
+    expect(notices, "a teammate is named").toHaveLength(1);
+    expect(textOf(notices[0]!)).toContain(String(EN_UI["register.consent.rosterNotice"]));
+    expect(textOf(notices[0]!)).not.toContain(String(EN_UI["register.who.playing.title"]));
   });
 });
 

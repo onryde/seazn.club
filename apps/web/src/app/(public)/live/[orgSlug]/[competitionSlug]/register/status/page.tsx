@@ -40,6 +40,7 @@ import {
   cartMoneySummary,
   headlineCarriesUnavailableNotice,
   offersResendConfirmation,
+  contactLineKey,
   moneyLine,
   offlineInstructionsReference,
   receivedCount,
@@ -151,7 +152,8 @@ export default async function RegistrationStatusPage({ params, searchParams }: P
   const money = cartMoneySummary(view.entries, view);
   const nextItems = whatHappensNext(view, headline, new Date());
   // The address is set in its own span (layout.tsx's poweredBy split): the template is split on its one placeholder.
-  const [sentLead, sentTail = ""] = t(ui, "register.status.sentTo").split("{email}");
+  // A cart with nothing live says where its mail goes, not that a confirmation was sent (walk-fix A fix round 1, `contactLineKey`).
+  const [sentLead, sentTail = ""] = t(ui, contactLineKey(headline)).split("{email}");
 
   // Rendered ONCE (cart-level, not per entry — every offline-due entry in
   // this cart reads the SAME instructions) so EntryCard can stay a plain,

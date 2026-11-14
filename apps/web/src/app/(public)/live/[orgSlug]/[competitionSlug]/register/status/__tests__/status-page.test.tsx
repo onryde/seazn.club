@@ -1352,4 +1352,34 @@ describe("Resend confirmation email is offered only while a confirmation still m
     }
     expect(checked).toBe(10);
   });
+
+  // Walk-fix A fix round 1 (Part B's routed item): "Confirmation sent to {email}." sat under "This registration is closed" on a
+  // rejected cart - a confirmation of nothing. The same carts that lose Resend say where the registration's mail goes instead; the
+  // address stays out of session replay in both wordings.
+  it("a registration with nothing live says where its emails go, not that a confirmation was sent; every live state keeps the confirmation line", async () => {
+    const en = uiEn as Record<string, string>;
+    const [sentLead] = en["register.status.sentTo"]!.split("{email}");
+    const [mailLead] = (en["register.status.mailTo"] ?? "").split("{email}");
+    expect(sentLead, "premise").toBe("Confirmation sent to ");
+    expect(mailLead, "premise: the closed wording exists and differs").toBeTruthy();
+    expect(mailLead).not.toBe(sentLead);
+    const cases: [string, object, string, string][] = [
+      ["rejected", single({ status: "rejected" }), mailLead!, sentLead!],
+      ["expired", single({ status: "expired" }), mailLead!, sentLead!],
+      ["withdrawn", single({ status: "withdrawn" }), mailLead!, sentLead!],
+      ["closed", single({ status: "pending" }, { expires_at: PAST }), mailLead!, sentLead!],
+      ["pending", single({ status: "pending" }), sentLead!, mailLead!],
+      ["waitlisted", single({ status: "waitlisted", amount_cents: 0 }), sentLead!, mailLead!],
+      ["rejected beside confirmed", { ...BASE_VIEW, entries: [{ ...BASE_ENTRY, status: "rejected" as const }, { ...BASE_VIEW.entries[1]!, status: "confirmed" as const }] }, sentLead!, mailLead!],
+    ];
+    let checked = 0;
+    for (const [why, view, says, not] of cases) {
+      usecaseMock.groupById.mockResolvedValueOnce(view);
+      const html = await render({ rid: "g1", token: "tok" });
+      expect(html, why).toContain(`${says}<span class="ph-no-capture`);
+      expect(html, why).not.toContain(not);
+      checked += 1;
+    }
+    expect(checked).toBe(cases.length);
+  });
 });

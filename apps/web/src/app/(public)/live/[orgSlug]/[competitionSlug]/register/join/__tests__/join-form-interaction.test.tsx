@@ -529,7 +529,9 @@ describe("submit — designed failure states, never a raw server string", () => 
     // (`register.join.error.claimed`). The assertion is on the DESIGNED
     // message rather than the server's, which is the point of the test, so it
     // tracks the dictionary — it is not a wording-agnostic check by accident.
-    expect(m.pageText()).toContain("Someone else already checked in for that spot");
+    expect(m.pageText()).toContain("Someone else has already taken that spot");
+    // Registration has no check-in step (walk-fix F10 / A fix round 1): a taken spot is taken, never "checked in".
+    expect(m.pageText()).not.toMatch(/checked in/i);
     expect(m.pageText()).not.toContain("This player has already joined");
     expect(m.pageText()).toContain("Refresh available spots");
   });
