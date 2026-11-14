@@ -7997,6 +7997,7 @@
   "matchDay.candidate.group.other_court": "En attente ailleurs",
   "matchDay.candidate.group.no_court": "Pas encore de terrain",
   "matchDay.candidate.where.here": "Prochain ici",
+  "matchDay.candidate.where.queuedOn": "En attente sur {court}",
   "matchDay.candidate.where.nextOn": "Prochain sur {court}",
   "matchDay.candidate.where.calledOn": "Appelé sur {court}, pas commencé",
   "matchDay.candidate.where.noCourt": "sans terrain",

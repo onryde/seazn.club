@@ -110,6 +110,7 @@ const cand = (f: Partial<MatchDayFixture>): MatchDayCandidate => ({
   fixture: fx({ headline: null, started_at: null, ...f }),
   source: "other_court",
   from_court_name: "Court 1",
+  first_in_queue: true,
   waiting_minutes: 15,
   behind_minutes: 0,
   planned_at: null,

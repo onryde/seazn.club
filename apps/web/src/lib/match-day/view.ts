@@ -515,7 +515,7 @@ export function candidateWhere(dict: Dict, c: MatchDayCandidate, time: (iso: str
           : t(dict, "matchDay.candidate.where.noCourt")
         : called
           ? t(dict, "matchDay.candidate.where.calledOn", { court: c.from_court_name ?? "" })
-          : t(dict, "matchDay.candidate.where.nextOn", { court: c.from_court_name ?? "" });
+          : t(dict, c.first_in_queue ? "matchDay.candidate.where.nextOn" : "matchDay.candidate.where.queuedOn", { court: c.from_court_name ?? "" });
   const timing =
     c.behind_minutes > 0
       ? t(dict, "matchDay.candidate.when.behind", { minutes: c.behind_minutes })

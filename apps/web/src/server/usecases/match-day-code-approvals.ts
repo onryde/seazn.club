@@ -26,6 +26,7 @@ import { assertUuid } from "@/server/api-v1/auth";
 import { CaptureMatchdayRefusalCode, type CaptureMatchdayApprovalOk, type CaptureMatchdayApprovalReview } from "@/server/api-v1/capture-schemas";
 import { ENGINE_HTTP } from "@/server/api-v1/http";
 import { log } from "@/server/logger";
+import { liveCallSql } from "./match-day-call";
 import { stageInScope, type ScopeFixture } from "./match-day-code-view";
 import { logMatchDayUse, matchDayActor, type MatchDayCodeRow } from "./match-day-codes";
 import { readRounds, roundOf } from "./match-day-rounds";
@@ -159,7 +160,9 @@ async function stageForCode(code: MatchDayCodeRow, stageId: string): Promise<Sta
     if (!stage) throw new HttpError(404, "stage not found");
     const fixtures = await tx<FixtureScope[]>`
       select f.court_id, c.venue_id, f.status, f.scheduled_at, f.finished_at, f.home_entrant_id, f.away_entrant_id,
-             f.round_no, f.outcome, f.ext_key
+             f.round_no, f.outcome, f.ext_key,
+             exists (select 1 from fixture_calls fc join fixtures g on g.id = fc.fixture_id
+                      where fc.fixture_id = f.id and ${liveCallSql(tx)}) as called
         from fixtures f left join courts c on c.id = f.court_id
        where f.stage_id = ${stageId}`;
     const judged = fixtures.map((f) => ({

@@ -23,7 +23,7 @@ import { resolveSeedingSourceStage, seedingSourceReady } from "@/lib/seeding-sou
 import { isSwissBoardSeated, nextUnseatedSwissRound } from "@/lib/swiss-shell";
 import type { Dict } from "@/lib/i18n-constants";
 import { readBoard, type Board, type FixtureRow } from "./match-day";
-import { IN_PLAY } from "./match-day-call";
+import { IN_PLAY, liveCallSql } from "./match-day-call";
 import { readMatchDayNames } from "./match-day-names";
 import { readRounds, roundOf } from "./match-day-rounds";
 import type { MatchDayCodeRow } from "./match-day-codes";
@@ -109,6 +109,10 @@ export type ScopeFixture = {
   away_entrant_id: string | null;
   /** Its division is not archived: the desk's no-court lists draw from live divisions only. */
   division_live: boolean;
+  /** A call still holds on it (`liveCallSql`): it is called onto its court and not started. It is on that court NOW, so a code
+   *  that covers the court covers it whatever its date (F-T8-15: a call moves `scheduled_at` to the call time, and the day
+   *  after, the court's state still says called). */
+  called: boolean;
 };
 
 const SCHEDULED = "scheduled";
@@ -123,8 +127,8 @@ const within = (d: Date | null, from: Date, to: Date): boolean =>
  *    or none (final review I2);
  *  - WHERE: a whole-competition code covers every match, a court or none; a venue code its venue's courts; a courts code
  *    exactly its courts. A match with no court is covered by a whole-competition code only;
- *  - a match on a court, WHEN: in play (today's whatever its plan, match-day.ts ruling m5), or planned or finished within
- *    the code's day, `[opens_at, expires_at)`;
+ *  - a match on a court, WHEN: in play (today's whatever its plan, match-day.ts ruling m5), or called onto it and not started
+ *    (it is on the court now, whatever its date, F-T8-15), or planned or finished within the code's day, `[opens_at, expires_at)`;
  *  - a match with no court: the desk's two no-court lists (match-day.ts `readBoard`) — in play, or ready (`scheduled`, an active stage, both seats filled) and planned no later than the day's end or not
  *    at all.
  */
@@ -134,7 +138,7 @@ export function inScope(code: MatchDayCodeRow, f: ScopeFixture): boolean {
   if (scope.kind === "venue" && (f.court_id === null || f.venue_id !== scope.venueId)) return false;
   if (scope.kind === "courts" && (f.court_id === null || !scope.courtIds.includes(f.court_id))) return false;
   if (f.court_id === null) return noCourtListed(code, f);
-  if (f.status === IN_PLAY) return true;
+  if (f.status === IN_PLAY || f.called) return true;
   return within(f.scheduled_at, code.opensAt, code.expiresAt) || within(f.finished_at, code.opensAt, code.expiresAt);
 }
 
@@ -176,6 +180,7 @@ export function scopeFixtureOf(code: MatchDayCodeRow, board: Pick<Board, "courts
     home_entrant_id: r.home_entrant_id,
     away_entrant_id: r.away_entrant_id,
     division_live: board.liveDivisions.has(r.division_id),
+    called: r.called_at !== null,
   };
 }
 
@@ -217,6 +222,7 @@ interface StageFixtureRow {
   venue_id: string | null;
   scheduled_at: Date | null;
   finished_at: Date | null;
+  called: boolean;
 }
 
 /**
@@ -275,7 +281,9 @@ async function readApprovals(tx: Tx, code: MatchDayCodeRow): Promise<MatchDayApp
   }
   const fixtures = await tx<StageFixtureRow[]>`
     select f.id, f.stage_id, f.round_no, f.status, f.home_entrant_id, f.away_entrant_id, f.home_slot_label, f.away_slot_label,
-           f.outcome, f.ext_key, f.court_id, c.venue_id, f.scheduled_at, f.finished_at
+           f.outcome, f.ext_key, f.court_id, c.venue_id, f.scheduled_at, f.finished_at,
+           exists (select 1 from fixture_calls fc join fixtures g on g.id = fc.fixture_id
+                    where fc.fixture_id = f.id and ${liveCallSql(tx)}) as called
       from fixtures f left join courts c on c.id = f.court_id
      where f.stage_id in ${tx([...wanted])}`;
   const out: MatchDayApproval[] = [];

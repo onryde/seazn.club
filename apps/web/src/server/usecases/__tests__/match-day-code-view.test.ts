@@ -419,6 +419,19 @@ describe.skipIf(!HAS_DB)("the day read for a Match Day code", () => {
       expect(later).toEqual({ kind: "swiss", stage_id: swissId, division_name: "Swiss Open", label: "Swiss", round: 3, waiting: null });
     });
 
+    it("a narrowed code whose only in-scope match of a stage is a call from an earlier day still lists that stage's approval (F-T8-15)", async () => {
+      const { leagueId, finalsId } = await drawDivision();
+      await sql`update stages set status = 'complete' where id = ${leagueId}`;
+      const narrow = (await codeFor(day, { kind: "courts", courtIds: [day.courts.c3] }, true)).code;
+      expect((await getMatchDayForCode(narrow, NOW)).approvals, "no match of the stage on its courts today").toEqual([]);
+      // A Finals match called onto Court 3 two days ago and not started: it is on the court now, so the stage is in scope.
+      const [m] = await sql<{ id: string }[]>`select id from fixtures where stage_id = ${finalsId} limit 1`;
+      const when = iso(-2 * 24 * 60);
+      await sql`update fixtures set court_id = ${day.courts.c3}, scheduled_at = ${when} where id = ${m!.id}`;
+      await sql`insert into fixture_calls (fixture_id, org_id, court_id, called_at) values (${m!.id}, ${day.orgId}, ${day.courts.c3}, ${when})`;
+      expect((await getMatchDayForCode(narrow, NOW)).approvals.map((a) => [a.kind, a.stage_id])).toEqual([["draw", finalsId]]);
+    });
+
     it("approvals is listed with can_approve false too", async () => {
       const { leagueId, finalsId } = await drawDivision();
       await sql`update stages set status = 'complete' where id = ${leagueId}`;

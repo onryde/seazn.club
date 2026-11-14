@@ -107,7 +107,7 @@
             ]
           },
           "now": {
-            "description": "The match playing or called on the court, if it is the competition's and in the code's scope; null otherwise.",
+            "description": "The match playing or called on the court, if it is the competition's and in the code's scope; null otherwise. A match called onto the court and not started is its now whatever the date of the call.",
             "anyOf": [
               {
                 "type": "object",
