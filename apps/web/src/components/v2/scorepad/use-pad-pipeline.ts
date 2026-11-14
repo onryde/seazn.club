@@ -560,10 +560,10 @@ export interface UsePadPipelineResult {
    *  `pendingEnvelopes` entry `submitHeld` added, so the optimistic fold
    *  reverts exactly as if the tap never happened — the ONE piece of this
    *  undo `dropHeld` alone cannot do, since `pendingEnvelopes` is this
-   *  hook's own private state. Mirrors the same remove-from-
-   *  `pendingEnvelopes`-then-`refreshDepth` shape `runDrain`'s own
-   *  permanent-rejection branch already uses for an entry leaving the queue
-   *  without an ack. Returns `false`, a no-op, if `id` no longer names a
+   *  hook's own private state. Like `runDrain`'s permanent-rejection
+   *  branch, it re-aims every tap queued behind the dropped one (and moves
+   *  their rows), then starts a drain so they are sent now rather than on
+   *  the scorer's next tap. Returns `false`, a no-op, if `id` no longer names a
    *  currently-held entry (already sent, or already dropped) — the caller's
    *  job in that case is `submit("core.void", {event_id: id})`, exactly as
    *  today (this function makes no attempt at that fallback itself). */
@@ -896,8 +896,7 @@ function danglingVoidTargets(ledger: readonly EventEnvelope[]): string[] {
  *  `ledgerEvents` is checked, never `pendingEnvelopes`: `runDrain`'s queue is
  *  strict FIFO — one event is fully resolved (acked/already-applied/
  *  permanently rejected) before the next one's send is even attempted
- *  (pipeline.ts `drainQueue`'s own documented contract, mirrored by this
- *  hook's hand-rolled loop below) — and a void can only ever be enqueued
+ *  (`runDrain`'s own loop below) — and a void can only ever be enqueued
  *  AFTER its target (nothing to undo before it exists). So by the time
  *  THIS event's own turn in the loop comes, the target has necessarily
  *  reached a final state: acked (now in `ledgerEvents`) or permanently
@@ -1307,7 +1306,9 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
   // measurably happens (the mount effect's `peekInOrder` and `submit`'s own
   // `enqueue` race, and either can settle first) — so `submit()` could
   // resolve BEFORE its own event was actually sent, showing a stale fold.
-  const drainInFlight = useRef<Promise<void> | null>(null);
+  // Resolves `true` when the drain stopped on a queue read that came back
+  // empty — see `runDrain`'s first lines for why a waiter needs to know.
+  const drainInFlight = useRef<Promise<boolean> | null>(null);
 
   // Review I-1 — every seq an ack (or an already-applied verdict) has
   // confirmed for one of THIS mount's own queued events. `sendOne` hands it to
@@ -1592,43 +1593,68 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
     void reconcileAfterAck(merged);
   }, [params.initialEvents, commitLedgerEvents, reconcileAfterAck]);
 
-  const runDrain = useCallback(async () => {
-    // Piggyback on an already-running drain rather than no-op'ing: whatever
-    // it is currently draining necessarily includes anything queued before
-    // THIS call started (the store is FIFO and nothing removes an entry
-    // except a resolved send), so waiting for it is equivalent to running a
-    // fresh pass, without two loops touching the store at once.
-    if (drainInFlight.current) {
-      await drainInFlight.current;
-      return;
-    }
-    // Review I-2 — `head` just left the queue WITHOUT landing (a refusal, or an
-    // undo whose target never existed), taking `alsoDropped` with it.
-    // `queuedAfter` is the queue as it stands with `head` already gone. Every
-    // never-sent entry behind them was stamped to claim a slot one past each of
-    // them; re-aim those durably, and move their optimistic rows in the same
-    // commit the caller makes, so the mirror stays what `pendingToEnvelope`
-    // would build from the durable record (as a reload's seed would).
-    const reaimBehind = async (
-      head: PendingEvent,
-      queuedAfter: readonly PendingEvent[],
-      alsoDropped: readonly string[],
-      mirror: Map<string, EventEnvelope>,
-    ) => {
-      const moved = await restampBehindDropped(
-        store,
-        [head.idempotencyKey, ...queuedAfter.map((e) => e.idempotencyKey)],
-        new Set([head.idempotencyKey, ...alsoDropped]),
-      );
+  // Review I-2/I-A/I-B — giving back the slots of entries that leave the queue
+  // WITHOUT landing (a refusal, an undo dead-lettered because its target never
+  // landed, a take-back inside the hold window). Every never-sent entry behind
+  // them was stamped to claim a slot one past each of them, so it is re-aimed
+  // durably and its row moves with it, keeping the rows what `pendingToEnvelope`
+  // would build from the durable record (as a reload's seed would).
+  //
+  // In two halves, either side of the awaits. `releaseRows` is SYNCHRONOUS, and
+  // the caller runs it the moment it knows everything that is dropped: the
+  // dropped rows leave the screen and the re-aim's order is fixed in the same
+  // step. `submit` stamps by the row count, so every row on screen at that moment
+  // was stamped counting the dropped ones and is in the order — even a tap whose
+  // own queue write has not landed yet — and every tap made after it is stamped
+  // without them and is in no order, so nothing moves it twice. `queued` is the
+  // queue as last read, in queue order (another tab's entries included); a row
+  // not in it was tapped since, and follows in tap order.
+  const releaseRows = useCallback(
+    (queued: readonly PendingEvent[], dropped: ReadonlySet<string>): string[] => {
+      const order = queued.map((e) => e.idempotencyKey);
+      const listed = new Set(order);
+      for (const key of pendingEnvelopesRef.current.keys()) if (!listed.has(key)) order.push(key);
+      const rows = new Map(pendingEnvelopesRef.current);
+      for (const key of dropped) rows.delete(key);
+      commitPendingEnvelopes(rows);
+      return order;
+    },
+    [commitPendingEnvelopes],
+  );
+  // The awaited half: re-aim, then move rows on the rows as they are NOW. A copy
+  // taken before the awaits would wipe the row of a tap made during them.
+  // `dropped` is deleted again here for an entry bound to the dropped one that
+  // was only found after `releaseRows` ran.
+  const reaimBehind = useCallback(
+    async (order: readonly string[], dropped: ReadonlySet<string>) => {
+      const moved = await restampBehindDropped(store, order, dropped);
+      const rows = new Map(pendingEnvelopesRef.current);
+      for (const key of dropped) rows.delete(key);
       for (const entry of moved) {
-        const row = mirror.get(entry.idempotencyKey);
-        if (row !== undefined) mirror.set(entry.idempotencyKey, { ...row, seq: entry.expectedSeq + 1 });
+        const row = rows.get(entry.idempotencyKey);
+        if (row !== undefined) rows.set(entry.idempotencyKey, { ...row, seq: entry.expectedSeq + 1 });
       }
-    };
-    const run = (async () => {
+      commitPendingEnvelopes(rows);
+    },
+    [store, commitPendingEnvelopes],
+  );
+
+  const runDrain = useCallback(async () => {
+    // Wait out an already-running drain — never two loops on the store at
+    // once — and, if it stopped on an EMPTY read, make a pass of our own.
+    // Waiting alone was not enough there: an entry queued while that last read
+    // was in flight (IndexedDB answers after the tap's write was issued) is
+    // behind its last look, so the caller returned with its entry still queued
+    // and nothing left to send it. A drain that stopped at an entry that
+    // cannot go yet (held, or the network) is not re-run: everything behind
+    // that entry waits for it, as before.
+    for (let running = drainInFlight.current; running !== null; running = drainInFlight.current) {
+      if (!(await running)) return;
+    }
+    const run = (async (): Promise<boolean> => {
       for (;;) {
         const queued = await peekInOrder(store);
-        if (queued.length === 0) break;
+        if (queued.length === 0) return true;
         const next = queued[0]!;
 
         // ScoringPad v3 R1 chassis soft-commit (spec §2.3, task 4): a
@@ -1697,12 +1723,11 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
               // Never silently dropped — the exact defect this pass fixes.
               // Surfaced exactly like any other permanent rejection, and
               // removed so it is not retried forever against a target that
-              // will never exist.
+              // will never exist. Its row leaves before the first await (I-A).
+              const gone = new Set([next.idempotencyKey]);
+              const order = releaseRows(queued, gone);
               await markDropped(store, next.idempotencyKey);
-              const remaining = new Map(pendingEnvelopesRef.current);
-              remaining.delete(next.idempotencyKey);
-              await reaimBehind(next, await store.list(), [], remaining);
-              commitPendingEnvelopes(remaining);
+              await reaimBehind(order, gone);
               await refreshDepth();
               // No specific ENGINE_ERROR_KEY entry exists for a client-only
               // code like this — an empty message lets scoringErrorText
@@ -1868,6 +1893,14 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
           const known = knownRulesVersionRef.current;
           if (ackVersion !== undefined && known !== undefined && ackVersion > known) void reloadRules(ackVersion);
         } else if (outcome.kind === "rejected") {
+          // W2e T30 — an entry bound to this one (`dropWith`) exists only to FOLLOW it: the ending behind a
+          // disqualifying sanction, the void behind an amendment's re-append. A permanently refused parent never
+          // happened, so its followers go with it, from the queue AND the optimistic mirror. Left behind they drain
+          // ALONE: a forfeit then ends (or is refused for) a match whose sanction was never recorded, and a void
+          // deletes a scored event whose replacement was refused. Read from the SAME `boundTo` rule `dropHeld` uses.
+          // Review I-A: they and the refused entry leave the screen in the step that reads them (`releaseRows`), so a
+          // tap made from there on is stamped without them. Read fresh rather than from `queued`: a follower can be
+          // queued while its parent is on the wire, and its row must leave in that same step too.
           setOffline(false);
           // Cleared on every resolved outcome, exactly like `offline` — a
           // chip that latches "Catching up" forever lies the other way.
@@ -1878,41 +1911,35 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
             ...(outcome.nextMatch ? { nextMatch: outcome.nextMatch } : {}),
             ...(outcome.reason ? { reason: outcome.reason } : {}),
           });
-          // W2e T30 — an entry bound to this one (`dropWith`) exists only to FOLLOW it: the ending behind a
-          // disqualifying sanction, the void behind an amendment's re-append. A permanently refused parent never
-          // happened, so its followers go with it, from the queue AND the optimistic mirror. Left behind they drain
-          // ALONE: a forfeit then ends (or is refused for) a match whose sanction was never recorded, and a void
-          // deletes a scored event whose replacement was refused. Read from the SAME `boundTo` rule `dropHeld` uses.
           const queuedAfter = await store.list();
           const followers = boundTo(queuedAfter, next.idempotencyKey);
+          const gone = new Set([next.idempotencyKey, ...followers]);
+          const order = releaseRows([next, ...queuedAfter], gone);
           for (const followerId of followers) await store.delete(followerId);
           if (followers.length > 0) await refreshDepth();
-          const remaining = new Map(pendingEnvelopesRef.current);
-          remaining.delete(next.idempotencyKey);
-          for (const followerId of followers) remaining.delete(followerId);
           // Review I-2: the refused entry and its followers never land, so the
           // entries behind them move down into the slots they freed — left
           // where they were stamped they claim a seq the ledger never reaches.
-          await reaimBehind(next, queuedAfter, followers, remaining);
-          commitPendingEnvelopes(remaining);
+          await reaimBehind(order, gone);
           // W2c Task 15 (X-SR-7): the tap was made under rules the organiser has since corrected. Dropped above, never
           // resent; said out loud (`lastRejection`); and the pad moves to the corrected rules so the scorer retakes it
           // under them.
           if (outcome.code === "FIXTURE_RULES_CHANGED") void reloadRules(outcome.rulesVersion);
         } else {
           // stayed-queued: network failure, throttling, or an indeterminate
-          // 409 — stop here, in order, exactly like pipeline.ts's drainQueue.
+          // 409 — stop here, in order: nothing behind it may jump ahead.
           setOffline(outcome.reason === "network");
           setThrottled(outcome.reason === "throttled");
           break;
         }
       }
+      return false;
     })().finally(() => {
       drainInFlight.current = null;
     });
     drainInFlight.current = run;
     await run;
-  }, [store, transport, fixtureId, identity, refreshDepth, commitLedgerEvents, commitPendingEnvelopes, reconcileAfterAck, markOwn, reloadRules]);
+  }, [store, transport, fixtureId, identity, refreshDepth, commitLedgerEvents, commitPendingEnvelopes, reconcileAfterAck, markOwn, reloadRules, releaseRows, reaimBehind]);
 
   // Resume a leftover queue from a previous session (tab death/reload) —
   // seeding `pendingEnvelopes` from whatever the durable store already held
@@ -2009,16 +2036,18 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
       // same-tick repeat already finds `lastAccepted` written and meets the
       // window guard. `expectedSeq` assumes every event ahead (confirmed +
       // already queued) lands exactly one slot
-      // further on, per the append/replay protocol's own documented
-      // assumption (pipeline.ts's drainQueue), and this reads refs rather
+      // further on, per the append/replay protocol (pipeline.ts's
+      // `sendOne`, driven by `runDrain`), and this reads refs rather
       // than awaiting the store. When an event ahead does NOT land where it
       // was stamped, the two directions are not alike: a stamp left too LOW
       // (the one ahead landed late, or a foreign write took the slot) 409s
       // against an occupied slot and renegotiates; a stamp left too HIGH (the
       // one ahead never landed) 409s against a slot the ledger never reaches
       // — no row to inspect, indeterminate, queued forever. Nothing heals
-      // that on the wire, so `runDrain` re-aims never-sent entries whenever
-      // one ahead of them leaves without landing (review I-2).
+      // that on the wire, so never-sent entries are re-aimed whenever one
+      // ahead of them leaves without landing: `runDrain` for a refusal or a
+      // dead-lettered undo (review I-2), `dropHeldSubmission` for a take-back
+      // (review I-B).
       const isSameAction = (o: { type: string; payload: unknown } | null): boolean =>
         o !== null && o.type === type && deepEqual(o.payload, payload);
       const now = Date.now();
@@ -2184,17 +2213,28 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
       // partial fix but its own defect — the pad then shows the corrected event
       // retired with nothing in its place, which is exactly what a browser run
       // caught here.
-      const boundIds = boundTo(await store.list(), id);
+      const before = await store.list();
+      const held = before.find((e) => e.idempotencyKey === id);
+      if (held === undefined || held.heldUntil === undefined) return false; // `dropHeld`'s own refusal, read before anything moves
+      // Review I-B: every tap queued behind the held one was stamped for the
+      // slots after it, which it now never takes — re-aimed exactly like a
+      // refusal's followers, its row leaving at once (`releaseRows`). Re-aimed
+      // BEFORE the held tap leaves the queue: nothing passes a held tap
+      // (`runDrain` stops at it), so no send can race the re-aim. Deleted
+      // first, a drain started by a tap made meanwhile would send the next
+      // entry at its old stamp, and a sent entry is never re-aimed again.
+      const gone = new Set([id, ...boundTo(before, id)]);
+      const order = releaseRows(before, gone);
+      await reaimBehind(order, gone);
       const dropped = await dropHeld(store, id);
-      if (!dropped) return false;
-      const remaining = new Map(pendingEnvelopesRef.current);
-      remaining.delete(id);
-      for (const boundId of boundIds) remaining.delete(boundId);
-      commitPendingEnvelopes(remaining);
       await refreshDepth();
-      return true;
+      // The take-back cancelled the held tap's own release tick, the one thing
+      // that drains behind it: without this the taps behind it wait for the
+      // scorer's next one.
+      void runDrain();
+      return dropped;
     },
-    [store, commitPendingEnvelopes, refreshDepth],
+    [store, refreshDepth, releaseRows, reaimBehind, runDrain],
   );
 
   // S12/#421 — the raw list `foldedState` above was folded from, exposed for

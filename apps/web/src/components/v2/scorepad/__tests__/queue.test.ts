@@ -5,15 +5,17 @@
 // (that contract is queue-store.test.ts's job).
 import { describe, expect, it } from "vitest";
 import type { PendingEvent } from "../types";
-import { memoryQueueStore } from "../queue-store";
+import { memoryQueueStore, type QueueStore } from "../queue-store";
 import {
   depth,
   enqueue,
   markAcked,
   markDropped,
+  mutateHeld,
   peekInOrder,
   queueStatus,
   recordAttempt,
+  releaseHeld,
   renegotiateExpectedSeq,
   restampBehindDropped,
 } from "../queue";
@@ -197,6 +199,71 @@ describe("restampBehindDropped", () => {
 
     expect(moved.map((e) => e.idempotencyKey)).toEqual(["c"]);
     expect(await stamps(store)).toEqual([["c", 1]]);
+  });
+
+  // Review m1. The re-aim writes each survivor back whole (put-as-replace), so a
+  // copy read before an EARLIER survivor's write is stale by the time it is
+  // written: a dock edit (`mutateHeld`) or a hold ending (`releaseHeld`) that
+  // landed in between would be overwritten. Each case edits the LATER survivor
+  // while the re-aim is still writing the one ahead of it.
+  describe("an edit made while the re-aim is writing the entry AHEAD survives, and the edited entry still moves", () => {
+    /** `memoryQueueStore`, with the FIRST `put` held until `release()`. */
+    function storeHoldingFirstPut() {
+      const inner = memoryQueueStore();
+      let held = false;
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      let reached!: () => void;
+      const atGate = new Promise<void>((r) => (reached = r));
+      const store: QueueStore = {
+        list: () => inner.list(),
+        delete: (key) => inner.delete(key),
+        clear: () => inner.clear(),
+        async put(e) {
+          if (!held) {
+            held = true;
+            reached();
+            await gate;
+          }
+          return inner.put(e);
+        },
+      };
+      return { store, inner, atGate, release };
+    }
+
+    it("a dock edit (mutateHeld) of a held tap behind the head", async () => {
+      const { store, inner, atGate, release } = storeHoldingFirstPut();
+      await enqueue(inner, event("b", { expectedSeq: 1 }));
+      await enqueue(inner, event("c", { expectedSeq: 2, heldUntil: 99_999 }));
+
+      const restamp = restampBehindDropped(store, ["a", "b", "c"], new Set(["a"]));
+      await atGate; // writing `b`
+      expect(await mutateHeld(inner, "c", (e) => ({ ...e, payload: { text: "c", scorer: "p9" } })), "rig: c is held").toBe(true);
+      release();
+      const moved = await restamp;
+
+      expect(moved.map((e) => e.idempotencyKey)).toEqual(["b", "c"]);
+      const c = (await peekInOrder(inner)).find((e) => e.idempotencyKey === "c");
+      expect(c?.payload, "the scorer picked on the dock is still on the tap").toEqual({ text: "c", scorer: "p9" });
+      expect(c?.expectedSeq, "and it was still re-aimed").toBe(1);
+    });
+
+    it("a hold that ended (releaseHeld) on a tap behind the head is not re-held", async () => {
+      const { store, inner, atGate, release } = storeHoldingFirstPut();
+      await enqueue(inner, event("b", { expectedSeq: 1 }));
+      await enqueue(inner, event("c", { expectedSeq: 2, heldUntil: 99_999 }));
+
+      const restamp = restampBehindDropped(store, ["a", "b", "c"], new Set(["a"]));
+      await atGate;
+      await releaseHeld(inner, "c");
+      expect((await peekInOrder(inner)).find((e) => e.idempotencyKey === "c")?.heldUntil, "rig: released").toBeUndefined();
+      release();
+      await restamp;
+
+      const c = (await peekInOrder(inner)).find((e) => e.idempotencyKey === "c");
+      expect(c?.heldUntil, "a re-held tap has no tick left to send it").toBeUndefined();
+      expect(c?.expectedSeq).toBe(1);
+    });
   });
 });
 

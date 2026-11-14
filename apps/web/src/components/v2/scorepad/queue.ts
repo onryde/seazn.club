@@ -118,13 +118,18 @@ export async function renegotiateExpectedSeq(
  * in a single tab this is every follower; the case it decides is a second tab
  * sharing this queue that already re-aimed and sent one — moving it again
  * would aim it below the ledger.
+ *
+ * Each survivor is re-read right before it is written (review m1): the write
+ * replaces the whole entry, and a copy read before an earlier survivor's write
+ * would undo whatever `mutateHeld` (a dock pick) or `clearHeldFlag` (the hold
+ * ending) wrote to it meanwhile. The shift is a delta on the fresh copy, so a
+ * second re-aim running beside this one composes with it rather than racing it.
  */
 export async function restampBehindDropped(
   store: QueueStore,
   order: readonly string[],
   dropped: ReadonlySet<string>,
 ): Promise<PendingEvent[]> {
-  const queued = new Map((await store.list()).map((e) => [e.idempotencyKey, e]));
   const moved: PendingEvent[] = [];
   let droppedAhead = 0;
   for (const key of order) {
@@ -132,8 +137,9 @@ export async function restampBehindDropped(
       droppedAhead += 1;
       continue;
     }
-    const entry = queued.get(key);
-    if (entry === undefined || droppedAhead === 0 || (entry.attempts ?? 0) > 0) continue;
+    if (droppedAhead === 0) continue;
+    const entry = (await store.list()).find((e) => e.idempotencyKey === key);
+    if (entry === undefined || (entry.attempts ?? 0) > 0) continue;
     const restamped = { ...entry, expectedSeq: entry.expectedSeq - droppedAhead };
     await store.put(restamped);
     moved.push(restamped);
