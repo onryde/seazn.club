@@ -125,6 +125,11 @@ export interface SubmitGroupInput {
    *  Undefined/false both mean "not given"; the group row's
    *  media_consent_at/media_consent_version stay null either way. */
   media_consent?: boolean;
+  /** Guardian consent for minors (owner 2026-11-14, final-fix-brief Addendum 2b): the registrant says they are the parent or
+   *  guardian of the players under 18 they are entering. Ticked, every typed-in row that is not the registrant's own and whose dob
+   *  is under 18 today is consented at this submit (`'guardian'`, in the contact's name) instead of waiting on a claim; every other
+   *  row is unchanged. Ticked with no such row it changes nothing (never a refusal). Undefined/false: pending as before. */
+  guardian_for_minors?: boolean;
   entries: SubmitGroupEntryInput[];
 }
 
@@ -434,6 +439,24 @@ function sameName(a: string | null | undefined, b: string | null | undefined): b
   return norm(a) !== "" && norm(a) === norm(b);
 }
 
+/** The consent one typed-in roster row is written with at submit. The registrant's own row (or a solo sign-up's one row) is consented
+ *  here by the registrant, with their guardian when they are a minor themselves (`submitRegistrationGroup`'s guardian gate). Any other
+ *  row waits for that player to claim it (`'pending'`, design §2 ruling 4), unless the registrant ticked `guardian_for_minors` and the
+ *  row's dob is under 18 today (`isMinor`, the gate's own threshold): then the registrant consents for that child, as their guardian,
+ *  in the contact's name (Addendum 2b). A row with no dob is never taken for a minor. Consent is stamped `now()` unless pending. */
+function rowConsentAtSubmit(
+  isSelf: boolean,
+  player: SubmitGroupPlayerInput,
+  input: Pick<SubmitGroupInput, "contact" | "guardian_for_minors">,
+  now: Date,
+): { status: "granted" | "guardian" | "pending"; guardianName: string | null } {
+  if (isSelf) return { status: "granted", guardianName: input.contact.guardian_name ?? null };
+  if (input.guardian_for_minors === true && player.dob && isMinor(player.dob, now)) {
+    return { status: "guardian", guardianName: input.contact.name.trim() };
+  }
+  return { status: "pending", guardianName: null };
+}
+
 // ---------------------------------------------------------------------------
 // submitRegistrationGroup
 // ---------------------------------------------------------------------------
@@ -459,6 +482,8 @@ interface PreparedEntry {
  *    row — it is just one more row in `players`)
  *  - guardian consent when the CONTACT is a minor registering themselves;
  *    privacy consent required, versioned
+ *  - `guardian_for_minors`: the typed-in minors who are not the registrant
+ *    are consented by the registrant as their guardian (`rowConsentAtSubmit`)
  *  - capacity: row-lock per division (`FOR UPDATE` on `registration_settings`,
  *    same row and same reason old `submitRegistration` locked it — it always
  *    exists once registration is open, unlike the possibly-empty counted
@@ -952,6 +977,7 @@ export async function submitRegistrationGroup(
               now,
             )
           : null;
+        const consent = rowConsentAtSubmit(isSelf, player, input, now);
         const [written] = await tx<{ id: string }[]>`
           insert into registration_players
             (registration_id, full_name, dob, gender, email, source, consent_status,
@@ -959,8 +985,8 @@ export async function submitRegistrationGroup(
           values (
             ${regRow.id}, ${player.full_name}, ${player.dob ?? null}, ${player.gender ?? null},
             ${player.email ?? null},
-            'captain_entered', ${isSelf ? "granted" : "pending"},
-            ${isSelf ? tx`now()` : null}, ${isSelf ? (input.contact.guardian_name ?? null) : null},
+            'captain_entered', ${consent.status},
+            ${consent.status === "pending" ? null : tx`now()`}, ${consent.guardianName},
             ${playerUserId}, ${player.squad_number ?? null}, ${player.is_captain ?? false}
           )
           returning id`;

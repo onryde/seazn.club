@@ -113456,6 +113456,9 @@
                   "media_consent": {
                     "type": "boolean"
                   },
+                  "guardian_for_minors": {
+                    "type": "boolean"
+                  },
                   "entries": {
                     "minItems": 1,
                     "maxItems": 10,

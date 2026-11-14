@@ -460,6 +460,10 @@ export const PublicRegisterGroupRequest = z
      *  submit (RS006 §A). Stamped the same way (timestamp + LEGAL_VERSION,
      *  registration-submit.ts) when true; left null otherwise. */
     media_consent: z.boolean().optional(),
+    /** The registrant is the parent or guardian of the players under 18 they are entering (not themselves). Optional, never
+     *  blocks: true consents for every such row at this submit (`SubmitGroupInput.guardian_for_minors`, registration-submit.ts);
+     *  false or absent leaves them to confirm their own place. Ignored when the cart names no such player. */
+    guardian_for_minors: z.boolean().optional(),
     entries: z.array(PublicRegisterGroupEntry).min(1).max(10),
     /** Honeypot (v3/05 §4): hidden on the real form; the ROUTE decides what
      *  to do with a filled one, not this schema. */

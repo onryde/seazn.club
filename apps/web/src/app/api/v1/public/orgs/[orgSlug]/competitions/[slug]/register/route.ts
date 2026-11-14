@@ -83,6 +83,7 @@ export async function POST(req: Request, { params }: Ctx) {
         locale: explicitLocale(req),
         privacy_consent: input.privacy_consent,
         media_consent: input.media_consent,
+        guardian_for_minors: input.guardian_for_minors,
         entries: input.entries,
       },
       timer,

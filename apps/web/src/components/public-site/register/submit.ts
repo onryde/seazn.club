@@ -7,6 +7,7 @@
 // by-inspection wrappers around these two functions.
 import { toGroupEntry } from "./cart";
 import { toGroupPlayers } from "./roster";
+import { guardianForMinorsOffered } from "./validation";
 import type { CartState, ConsentState, ContactState } from "./types";
 import { routes } from "@/lib/routes";
 import { TURNSTILE_ERROR_CODE } from "@/lib/turnstile";
@@ -27,6 +28,9 @@ export interface SubmitRequestBody {
   };
   privacy_consent: boolean;
   media_consent: boolean;
+  /** True only while the consent step shows the box (`guardianForMinorsOffered`) AND it is ticked: a tick held from before a date
+   *  of birth changed is not on the page, so it is not sent (the server would ignore it anyway). */
+  guardian_for_minors: boolean;
   entries: Array<
     ReturnType<typeof toGroupEntry> & {
       players: ReturnType<typeof toGroupPlayers>;
@@ -52,6 +56,7 @@ export function buildSubmitBody(
   consent: ConsentState,
   cart: CartState,
   website: string,
+  now: Date = new Date(),
 ): SubmitRequestBody {
   return {
     contact: {
@@ -64,6 +69,7 @@ export function buildSubmitBody(
     },
     privacy_consent: consent.privacy_consent,
     media_consent: consent.media_consent,
+    guardian_for_minors: consent.guardian_for_minors === true && guardianForMinorsOffered(cart, now),
     entries: cart.entries.map((entry) => ({
       ...toGroupEntry(entry),
       players: toGroupPlayers(entry.players, entry.entrant_kind),

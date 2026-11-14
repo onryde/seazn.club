@@ -366,6 +366,20 @@ describe("POST .../register — routing", () => {
     );
     expect(submitSpy.mock.calls[0]![0]).toMatchObject({ sessionUserId: null });
   });
+
+  // Guardian consent for minors (final-fix-brief Addendum 2b): the consent step's one boolean reaches the usecase as sent, and its
+  // absence as absent (the usecase reads undefined as unticked). The route names every field it hands on, so a field the schema
+  // accepts and the route forgets would never arrive.
+  it("guardian_for_minors reaches the usecase as sent: true, false and absent", async () => {
+    const seen: unknown[] = [];
+    for (const [i, value] of ([true, false, undefined] as const).entries()) {
+      submitSpy.mockResolvedValueOnce(fakeResult());
+      const body = groupBody(value === undefined ? {} : { guardian_for_minors: value });
+      await registerRoute(req(URL_("acme", "cup"), body, { "x-forwarded-for": `9.9.9.${60 + i}` }), ctx("acme", "cup"));
+      seen.push(submitSpy.mock.calls[i]![1].guardian_for_minors);
+    }
+    expect(seen).toEqual([true, false, undefined]);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -475,6 +489,40 @@ describe.skipIf(!HAS_DB)("POST .../register — DB-backed", () => {
       select status, group_id from registrations where id = ${entries[0]!.registration_id}`;
     expect(row!.status).toBe("confirmed");
     expect(row!.group_id).toBe(body.data!.group_id);
+  });
+
+  // Addendum 2b, through the real route and the real usecase: a parent entering a child under 18 (not themselves) and ticking the
+  // consent step's box writes the child's row as guardian-consented in the parent's name; the same cart unticked leaves it pending.
+  it("guardian_for_minors: a typed-in child is guardian-consented when ticked, pending when not", async () => {
+    const { orgSlug, orgId, ownerId } = await seedOrg();
+    const { competition, division } = await rig(asOwner(orgId, ownerId));
+    await seedSettings(division.id);
+    const child = new Date();
+    child.setUTCFullYear(child.getUTCFullYear() - 9);
+    const childDob = child.toISOString().slice(0, 10);
+
+    const rowsFor = async (ticked: boolean, ip: string) => {
+      const res = await registerRoute(
+        req(
+          URL_(orgSlug, competition.slug),
+          groupBody({
+            contact: { name: "Pat Parent", email: `parent-${randomUUID().slice(0, 8)}@test.local` },
+            guardian_for_minors: ticked,
+            entries: [{ division_id: division.id, entrant_kind: "individual", players: [{ full_name: "Kid Player", dob: childDob }], answers: {} }],
+          }),
+          { "x-forwarded-for": ip },
+        ),
+        ctx(orgSlug, competition.slug),
+      );
+      const { status, body } = await read(res);
+      expect(status).toBe(201);
+      const [entry] = body.data!.entries as { registration_id: string }[];
+      return sql<{ consent_status: string; guardian_name: string | null }[]>`
+        select consent_status, guardian_name from registration_players where registration_id = ${entry!.registration_id}`;
+    };
+
+    expect(await rowsFor(true, "9.9.9.70")).toEqual([{ consent_status: "guardian", guardian_name: "Pat Parent" }]);
+    expect(await rowsFor(false, "9.9.9.71")).toEqual([{ consent_status: "pending", guardian_name: null }]);
   });
 
   // RS003 W3a: the route now wires mintGroupCheckout's result through for a

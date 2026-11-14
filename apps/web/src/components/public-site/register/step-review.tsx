@@ -213,6 +213,9 @@ export function StepReview({
             {/* The guardian pair the submit carries, listed exactly when the Consent step asked for it (review-content.ts). */}
             {content.guardian && row("guardian-name", t("register.guardian.name.label"), content.guardian.name)}
             {content.guardian && row("guardian-consent", t("register.review.consent.guardian"), yesNo(content.guardian.consent))}
+            {/* The parent's tick for the minors they entered, listed exactly when the Consent step showed its box (review-content.ts). */}
+            {content.guardianForMinors !== null &&
+              row("guardian-minors", t("register.review.consent.guardianForMinors"), yesNo(content.guardianForMinors))}
           </dl>,
         )}
       </div>

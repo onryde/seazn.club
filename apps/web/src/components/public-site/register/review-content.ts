@@ -7,7 +7,7 @@
 // is the rest, built from the same three states the submit reads (cart, contact, consent), so the page cannot list something the
 // request does not carry.
 import type { CartState, ConsentState, ContactState, DivisionLike, StepId } from "./types";
-import { guardianRequired } from "./validation";
+import { guardianForMinorsOffered, guardianRequired } from "./validation";
 
 /** One question an entry's division asked, with what was answered. `null` = not answered (a skipped optional question). A checkbox is
  *  never `null`: unticked is a definite `false`. */
@@ -33,6 +33,9 @@ export interface ReviewContent {
    *  (`guardianRequired`, validation.ts: a self-registering player under 18). null otherwise, even if values are still held from
    *  before the registrant changed a date of birth: the step does not show them then, so Review does not either. */
   guardian: { name: string; consent: boolean } | null;
+  /** "Parent or guardian of the players under 18" (Addendum 2b): the tick the submit carries, present exactly when the Consent step
+   *  showed the box (`guardianForMinorsOffered`, validation.ts). null otherwise, for the same reason as `guardian`. */
+  guardianForMinors: boolean | null;
 }
 
 export function reviewContent(
@@ -66,6 +69,7 @@ export function reviewContent(
     guardian: guardianRequired(cart, contact, now)
       ? { name: (contact.guardian_name ?? "").trim(), consent: contact.guardian_consent }
       : null,
+    guardianForMinors: guardianForMinorsOffered(cart, now) ? consent.guardian_for_minors === true : null,
   };
 }
 

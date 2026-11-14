@@ -1,7 +1,8 @@
 "use client";
 // RS006 Step 4 — CONSENT (design §4 step 4). Privacy (required, versioned —
 // carries owner ruling 5's names-public-by-default statement plainly at the
-// moment of consent), media (optional, never blocks), a guardian block for a
+// moment of consent), media (optional, never blocks), a guardian box for the
+// minors a parent enters (optional, Addendum 2b), a guardian block for a
 // self-registering minor, and a captain-roster notice when the cart names
 // other people.
 //
@@ -15,7 +16,7 @@
 import { useT } from "@/components/i18n/dict-provider";
 import { rosterNoticeKey } from "./cart";
 import { FIELD, FIELD_LABEL as LABEL, TAG_NEUTRAL } from "./styles";
-import { guardianRequired, type ConsentValidation } from "./validation";
+import { guardianCoversEveryOtherPlayer, guardianForMinorsOffered, guardianRequired, type ConsentValidation } from "./validation";
 import { RegisterLichessCard, type RegisterLichessState } from "./register-lichess-card";
 import { ConsentCameraNotes, type CameraRequirement } from "./online-play-note";
 import type { CartState, ConsentState, ContactState } from "./types";
@@ -66,7 +67,11 @@ export function StepConsent({
   // guardian-consent-bypass fix, HIGH, 2026-08-26) so the block's visibility
   // and whether "Next" is blocked can never disagree again.
   const showGuardian = guardianRequired(cart, contact, new Date());
-  const rosterNotice = rosterNoticeKey(cart);
+  // Addendum 2b: the one box a parent ticks for the children they are entering (not themselves). Optional, so no error state.
+  const showGuardianForMinors = guardianForMinorsOffered(cart, new Date());
+  // Ticked, and every other player is one of those minors: nobody is left to ask, so the notice would contradict the box.
+  const rosterNotice =
+    consent.guardian_for_minors === true && guardianCoversEveryOtherPlayer(cart, new Date()) ? null : rosterNoticeKey(cart);
 
   return (
     <div className="rounded-xl border border-zinc-200/80 bg-surface p-4 shadow-sm sm:p-6">
@@ -146,6 +151,30 @@ export function StepConsent({
           </span>
         </label>
       </div>
+
+      {/* Addendum 2b: the media box's shape (tag, plain title, small print), so it reads as one more optional consent. Its small print
+          says what the tick changes for those players: the roster notice below is what happens to everyone else, and to them unticked;
+          it steps aside when the tick covers every other player. */}
+      {showGuardianForMinors && (
+        <div data-testid="reg-consent-guardian-minors-box" className="mt-3 rounded-lg border border-zinc-200 bg-canvas px-3.5 py-3">
+          <label className="flex cursor-pointer items-start gap-3">
+            <input
+              id="reg-consent-guardian-minors"
+              type="checkbox"
+              className="mt-0.5 h-4 w-4 shrink-0 accent-accent"
+              checked={consent.guardian_for_minors === true}
+              onChange={(e) => onConsentChange({ guardian_for_minors: e.target.checked })}
+            />
+            <span className="min-w-0">
+              <span className="mb-1 block">
+                <span className={TAG_NEUTRAL}>{t("register.field.optional")}</span>
+              </span>
+              <span className="block text-sm font-medium text-ink">{t("register.consent.guardianForMinors.label")}</span>
+              <span className="mt-0.5 block text-xs text-ink-muted">{t("register.consent.guardianForMinors.hint")}</span>
+            </span>
+          </label>
+        </div>
+      )}
 
       {showGuardian && (
         <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3.5">

@@ -48,9 +48,13 @@ export const EMPTY_CONTACT: ContactState = {
 export interface ConsentState {
   privacy_consent: boolean;
   media_consent: boolean;
+  /** "I'm the parent or guardian of the players under 18 I'm entering" (Addendum 2b) — `PublicRegisterGroupRequest.
+   *  guardian_for_minors`, asked only while `guardianForMinorsOffered` (validation.ts). Optional, unlike its siblings, so a draft
+   *  saved before it existed restores as it is (absent reads as unticked) instead of the storage version bump dropping it. */
+  guardian_for_minors?: boolean;
 }
 
-export const EMPTY_CONSENT: ConsentState = { privacy_consent: false, media_consent: false };
+export const EMPTY_CONSENT: ConsentState = { privacy_consent: false, media_consent: false, guardian_for_minors: false };
 
 /** The subset of `PublicRegistrationDivision` (api-v1/schemas/registration.ts) the chassis'
  *  pure logic reads. Narrow on purpose — the same reason
