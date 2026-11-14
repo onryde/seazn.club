@@ -8,13 +8,28 @@
 // test's own arithmetic. Sequences: a second call after each step, a withdrawal and a disqualification, the empty competition,
 // another language, another organisation, and every funnel sport.
 // Real Postgres required — skipped without DATABASE_URL.
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+// Pass-through spies (every call runs the real code): the landing's read (`funnelGettingStarted`) is counted, so its early
+// return for a competition no /start draft built is witnessed doing no tenant read, no plan read and no dictionary work.
+const spied = vi.hoisted(() => ({ withTenant: 0, getDictionary: 0, getLimit: 0 }));
+vi.mock("@/lib/db", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/lib/db")>();
+  return { ...real, withTenant: ((...a: Parameters<typeof real.withTenant>) => (spied.withTenant++, real.withTenant(...a))) as typeof real.withTenant };
+});
+vi.mock("@/lib/i18n", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/lib/i18n")>();
+  return { ...real, getDictionary: ((...a: Parameters<typeof real.getDictionary>) => (spied.getDictionary++, real.getDictionary(...a))) as typeof real.getDictionary };
+});
+vi.mock("@/lib/entitlements", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/lib/entitlements")>();
+  return { ...real, getLimit: ((...a: Parameters<typeof real.getLimit>) => (spied.getLimit++, real.getLimit(...a))) as typeof real.getLimit };
+});
 import { sql } from "@/lib/db";
 import { createOrgForUser } from "@/lib/auth";
-import { getLimit } from "@/lib/entitlements";
+import { getLimit, invalidateOrgEntitlements } from "@/lib/entitlements";
 import { LOCALES, type Locale } from "@/lib/i18n-constants";
 import { consumeFunnelDraft, createFromDraft, createFunnelDraft, type FunnelPayload } from "@/lib/funnel";
 import { FUNNEL_SPORTS } from "@/lib/funnel-sports";
@@ -22,7 +37,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "@/server/usecases/competitions";
 import { archiveDivision, restoreDivision } from "@/server/usecases/divisions";
 import { createEntrants } from "@/server/usecases/entrants";
-import { gettingStarted } from "@/server/usecases/getting-started";
+import { funnelGettingStarted, gettingStarted } from "@/server/usecases/getting-started";
 import { generateStageFixturesUnpublished } from "@/server/usecases/stages";
 import { withdrawEntrantCascade } from "@/server/usecases/withdrawal";
 import type { CreateCompetition } from "@/server/api-v1/schemas";
@@ -234,6 +249,28 @@ describe.skipIf(!HAS_DB)("gettingStarted: the first steps of a competition the f
     expect((await gettingStarted(c.auth, c.competitionId)).entrants.target, "the choice, once unlimited").toBe(ask);
   });
 
+  it("an Event Pass on the competition lifts the target: the cap is read for THIS competition (review m3)", async () => {
+    const userId = await seedUser();
+    const org = await createOrgForUser(userId, `${RUN} passed`);
+    const freeCap = await getLimit(org.id, "entrants.per_division.max");
+    expect(freeCap, "premise: the free plan caps a division's field").not.toBeNull();
+    const ask = freeCap! + 5;
+    const c = await claim({ entrants: ask }, { userId });
+    expect((await gettingStarted(c.auth, c.competitionId)).entrants.target, "no pass: held to the plan's cap").toBe(freeCap);
+    // The pass, as a purchase writes it (pass_key from the column's default), and its cap from the plan matrix.
+    const [pass] = await sql<{ pass_key: string }[]>`
+      insert into competition_passes (competition_id, org_id) values (${c.competitionId}, ${c.orgId}) returning pass_key`;
+    const [row] = await sql<{ int_value: number | null }[]>`
+      select int_value from plan_entitlements where plan_key = ${pass!.pass_key} and feature_key = 'entrants.per_division.max'`;
+    const passCap = row?.int_value ?? null;
+    expect(passCap === null || passCap > freeCap!, "premise: the pass lifts the field above the free cap").toBe(true);
+    expect(passCap === null || ask <= passCap, "premise: the ask fits under the pass").toBe(true);
+    await invalidateOrgEntitlements(c.orgId);
+    expect((await gettingStarted(c.auth, c.competitionId)).entrants.target, "the pass lifts it to the choice").toBe(ask);
+    // The pair: another competition of the same organisation has no pass and stays capped.
+    expect(await getLimit(c.orgId, "entrants.per_division.max"), "the organisation's own cap is unmoved").toBe(freeCap);
+  });
+
   it("a competition no funnel built: no target; renamed against the claim's name of the event in any language; empty reads empty", async () => {
     const eventName = `${RUN} Hand-made Cup`;
     const cases = [
@@ -265,5 +302,54 @@ describe.skipIf(!HAS_DB)("gettingStarted: the first steps of a competition the f
     await expect(gettingStarted(mine.auth, randomUUID()), "none").rejects.toMatchObject({ status: 404 });
     // The pair: each reads its own.
     expect((await gettingStarted(theirs.auth, theirs.competitionId)).entrants.target).toBe(4);
+  });
+});
+
+describe.skipIf(!HAS_DB)("funnelGettingStarted: the landing's read stops at the draft (review I2)", () => {
+  beforeEach(() => {
+    spied.withTenant = 0;
+    spied.getDictionary = 0;
+    spied.getLimit = 0;
+  });
+
+  it("a competition no /start draft built (the empty case): null, and no tenant read, no plan read, no dictionary", async () => {
+    const userId = await seedUser();
+    const org = await createOrgForUser(userId, `${RUN} Hand-made Club`);
+    const auth: AuthCtx = { orgId: org.id, via: "session", userId, role: "owner", keyId: null };
+    const comp = await createCompetition(auth, { name: `${RUN} Hand-made Cup`, visibility: "private", branding: {} } as CreateCompetition);
+    const cases: [string, string][] = [
+      ["the caller's own hand-made competition", comp.id],
+      ["no competition at all", randomUUID()],
+    ];
+    let checked = 0;
+    for (const [label, id] of cases) {
+      spied.withTenant = spied.getDictionary = spied.getLimit = 0;
+      expect(await funnelGettingStarted(auth, id), label).toBeNull();
+      expect(spied, `${label}: nothing past the draft read`).toEqual({ withTenant: 0, getDictionary: 0, getLimit: 0 });
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+    // The pair: the full read of the same competition does all three kinds of work (so the counters can see them).
+    await gettingStarted(auth, comp.id);
+    expect(spied.withTenant, "the full read's tenant read is counted").toBeGreaterThan(0);
+    expect(spied.getDictionary, "…and its dictionary work").toBeGreaterThan(0);
+  });
+
+  it("a competition a /start draft built: the full read, the same answer as gettingStarted, after a step too", async () => {
+    const c = await claim({ entrants: 6 });
+    const first = await funnelGettingStarted(c.auth, c.competitionId);
+    expect(spied.withTenant, "the tenant read ran").toBeGreaterThan(0);
+    expect(spied.getLimit, "the plan's cap was read").toBeGreaterThan(0);
+    expect(first).toEqual(await gettingStarted(c.auth, c.competitionId));
+    expect(first!.entrants).toEqual({ count: 0, target: 6 });
+    await addEntrants(c, 2);
+    expect((await funnelGettingStarted(c.auth, c.competitionId))!.entrants, "a second call reads the field again").toEqual({ count: 2, target: 6 });
+  });
+
+  it("another organisation's /start competition is still a 404: the draft read never answers for the tenant read", async () => {
+    const mine = await claim({ entrants: 4 });
+    const theirs = await claim({ entrants: 4 });
+    await expect(funnelGettingStarted(mine.auth, theirs.competitionId)).rejects.toMatchObject({ status: 404 });
+    expect((await funnelGettingStarted(theirs.auth, theirs.competitionId))!.entrants.target, "the pair: its own").toBe(4);
   });
 });
