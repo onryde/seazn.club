@@ -1846,6 +1846,75 @@ describe.skipIf(!HAS_DB)("the status page's Pay hands an open session out again 
     expect(stripeMock.store.get(s0)!.status, "never two payable sessions").toBe("expired");
     expect(payableFor(reg.id)).toEqual([own]);
   });
+
+  // Walk-fix F12 (walkthrough R08: the reminder's payment page opened a different cs_ than the sign-up). The different id is the
+  // ruling above - the sign-up session returns with the cart's access token, rights a pay link does not carry - so it is not
+  // handed out. What is owed is "one payable session per entry": the sign-up session was retired only by the mint's supersede step,
+  // AFTER the create and best-effort, so a Stripe hiccup there left two payable sessions - the m8 gap, on the payment page's
+  // button. It is now retired BEFORE the mint, fail-closed, exactly as the status page's Pay retires it (m8, above).
+  describe("the payment page retires the cart's sign-up session before its mint, fail-closed (walk-fix F12)", () => {
+    const callOrder = (mock: typeof stripeMock.checkoutExpire, id: string): number => {
+      const i = mock.mock.calls.findIndex(([arg]) => arg === id);
+      expect(i, `${id} was called`).toBeGreaterThanOrEqual(0);
+      return mock.mock.invocationCallOrder[i]!;
+    };
+
+    it("sign-up -> back out -> reminder payment page -> payment page again: the sign-up session expired BEFORE the one mint, the page's session handed out both times", async () => {
+      const { reg, s0 } = await signedUp();
+      EVENTS[2]![1](stripeMock.store.get(s0)!); // backed out of Checkout: Stripe leaves it open
+      expect(stripeMock.store.get(s0)!.status, "premise: the sign-up session is still payable").toBe("open");
+      const token = await linkFor(reg);
+      const creates = stripeMock.checkoutCreate.mock.calls.length;
+
+      const first = await payFromPayPage(token, ORIGIN);
+
+      expect(callOrder(stripeMock.checkoutExpire, s0), "retired before the new session exists").toBeLessThan(
+        stripeMock.checkoutCreate.mock.invocationCallOrder.at(-1)!,
+      );
+      const own = (await payPointer(reg.id))!;
+      expect(first).toBe(stripeMock.store.get(own)!.url);
+      expect(payableFor(reg.id), "one payable session for the entry").toEqual([own]);
+
+      // The second press (a second reminder, or the same link again): the page's own session, no create, no expire.
+      const expires = stripeMock.checkoutExpire.mock.calls.length;
+      const again = await payFromPayPage(token, ORIGIN);
+      expect(again).toBe(first);
+      expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(creates + 1);
+      expect(stripeMock.checkoutExpire).toHaveBeenCalledTimes(expires);
+      expect(payableFor(reg.id)).toEqual([own]);
+    });
+
+    it("an expire that fails while the sign-up session is still open -> 502, zero create, the sign-up session the only payable one, no pointer moved", async () => {
+      const { reg, s0 } = await signedUp();
+      const token = await linkFor(reg);
+      stripeMock.checkoutExpire.mockRejectedValueOnce(new Error("stripe down"));
+      const creates = stripeMock.checkoutCreate.mock.calls.length;
+
+      const err = await rejection(payFromPayPage(token, ORIGIN));
+
+      expect(err.status).toBe(502);
+      expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(creates);
+      expect(payableFor(reg.id)).toEqual([s0]);
+      expect(await payPointer(reg.id)).toBeNull();
+      expect(await cartPointer(reg.id)).toBe(s0);
+    });
+
+    it("the sign-up session paid in another tab between the read and the expire -> 409 PAID_ONLINE, zero create", async () => {
+      const { reg } = await signedUp();
+      const token = await linkFor(reg);
+      stripeMock.checkoutExpire.mockImplementationOnce(async (id: string) => {
+        payInStripe(id);
+        throw Object.assign(new Error('Only Checkout Sessions with a status in ["open"] can be expired.'), { statusCode: 400 });
+      });
+      const creates = stripeMock.checkoutCreate.mock.calls.length;
+
+      const err = await rejection(payFromPayPage(token, ORIGIN));
+
+      expect(err.status).toBe(409);
+      expect(err.code).toBe("REGISTRATION_PAID_ONLINE");
+      expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(creates);
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------------------------------------------------------------
