@@ -2708,6 +2708,9 @@ test("(H) cricket, League only: a guest plays a league of two by overs — the t
     await expect(pad(p).locator('[data-role="v3-scorebug"]'), "the toss answered, the pad opens").toBeVisible({ timeout: STEP_MS });
     await expect(pad(p).locator('[data-tile-id="run0"]'), "no ball tile on the guest's pad").toHaveCount(0);
     await expect(pad(p).locator('[data-role="context-chip"]'), "no batter or bowler to pick").toHaveCount(0);
+    // Sign-off 2026-11-14: no Review on the guest's pad, and the scorebug names the side batting (the away side, its toss).
+    await expect(pad(p).locator('[data-tile-id="review"]'), "no Review tile on the guest's pad").toHaveCount(0);
+    await expect(pad(p).locator('[data-role="v3-scorebug"]')).toContainText(ui("scorepad.skin.cricket.scorebug.battingSide", { side: away }));
 
     // ---- 3. The away side bats first (its toss): one over of 9, then Close innings ----
     await cricketOver(p, 9);

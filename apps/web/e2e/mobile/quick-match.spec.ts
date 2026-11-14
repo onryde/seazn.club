@@ -451,6 +451,14 @@ test("quick match (cricket, League only): the knockout rows say why, Start asks 
     await expect(pad.locator('[data-role="context-chip"]'), "no batter or bowler picker").toHaveCount(0);
     await expect(pad.locator('[data-role="context-slot-message"]')).toHaveCount(0);
     await expect(pad).not.toContainText(qmUi("pad.cricket.context.bowler.blocked.noEligible"));
+    // Sign-off 2026-11-14 (controller, PO rec): no Review (it asks which batter and which bowler), no strip of empty ▸ and
+    // ⚾ (every slot of it is fed by the ball; the first innings has no target yet), and the batting half names the side
+    // batting: away won the toss and bowled, so home.
+    await expect(pad.locator('[data-tile-id="review"]'), "no Review tile").toHaveCount(0);
+    await expect(pad.locator('[data-role="v3-scorebug-strip"]'), "no strip: nothing on it is fed at this band").toHaveCount(0);
+    await expect(pad.locator('[data-role="v3-scorebug"]')).toContainText(
+      qmUi("scorepad.skin.cricket.scorebug.battingSide", { side: sideHome }),
+    );
     await pad.locator('[data-role="v3-recording-chip"]').click();
     const bands = page.getByRole("radiogroup").locator("[data-band]");
     await expect(bands, "the Recording sheet offers the guest's bands only").toHaveCount(2);
