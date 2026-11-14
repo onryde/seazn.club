@@ -7814,6 +7814,7 @@
   "register.lichess.reconnect.lead.other": "{divisions} are played online, on Seazn's board. Your Lichess account is linked, but Seazn can't submit your moves with it yet. Reconnect it before you enter.",
   "register.lichess.reconnect.cta": "Reconnect Lichess",
   "register.lichessReconnectRequired": "Your Lichess account is linked, but Seazn can't submit your moves with it yet. Reconnect it before you enter this division.",
+  "register.lichessSelfEntryRequired": "Online chess entries are personal: tick “{box}”, or ask the player to register with their own account.",
   "divset.timeControl.label": "Time control",
   "divset.timeControl.choose": "Choose a time control",
   "divset.timeControl.help": "Online games use one of these Lichess time controls. Lichess has no move delay.",

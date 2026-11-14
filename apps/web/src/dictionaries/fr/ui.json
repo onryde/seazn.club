@@ -7814,6 +7814,7 @@
   "register.lichess.reconnect.lead.other": "{divisions} se jouent en ligne, sur l'échiquier de Seazn. Votre compte Lichess est lié, mais Seazn ne peut pas encore jouer vos coups avec. Reconnectez-le avant de vous inscrire.",
   "register.lichess.reconnect.cta": "Reconnecter Lichess",
   "register.lichessReconnectRequired": "Votre compte Lichess est lié, mais Seazn ne peut pas encore jouer vos coups avec. Reconnectez-le avant de vous inscrire à cette division.",
+  "register.lichessSelfEntryRequired": "Les inscriptions aux échecs en ligne sont personnelles : cochez « {box} », ou demandez au joueur de s'inscrire avec son propre compte.",
   "divset.timeControl.label": "Cadence",
   "divset.timeControl.choose": "Choisissez une cadence",
   "divset.timeControl.help": "Les parties en ligne utilisent l'une de ces cadences Lichess. Lichess n'a pas de délai par coup.",

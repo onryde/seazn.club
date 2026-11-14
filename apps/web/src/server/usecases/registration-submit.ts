@@ -649,11 +649,15 @@ export async function submitRegistrationGroup(
       // (registrations/settings.ts publicRegistrationInfo) asked when it told this registrant a link is needed — so the notice
       // and this demand cannot disagree. The person is still the one whose link is checked.
       if (divisionPlaysOnline(divCtx) && (await timed(timer, "online", () => onlineChessOffered({ orgId: divCtx.org_id, userId: null })))) {
+        // Walk-fix F3: an online entry is personal - the seat gate seats the account that registered - so an entry made for
+        // SOMEONE ELSE is refused as that, with its own code, whatever the caller's own link: telling a linked player to link
+        // Lichess (the old LICHESS_LINK_REQUIRED here) was a remedy that changed nothing. The client says it in the visitor's
+        // language off the code (register-stepper.tsx), never this English.
         if (!entry.registering_self) {
           throw new HttpError(
             422,
-            "Sign in and link your Lichess account to register for online play",
-            "LICHESS_LINK_REQUIRED",
+            "Online chess entries are personal: tick \"I'm one of the players\", or ask the player to register with their own account",
+            "LICHESS_SELF_ENTRY_REQUIRED",
           );
         }
         await timed(timer, "online", () => assertUserHasLichessForOnlinePlay(ctx.sessionUserId ?? null));

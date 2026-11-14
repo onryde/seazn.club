@@ -195,6 +195,12 @@ describe("classifyJoinFailure — 409 here means a real conflict, unlike submit.
     expect(classifyJoinFailure(422)).toBe("rejected");
     expect(classifyJoinFailure(422, "lichess_link_required"), "codes are exact").toBe("rejected");
   });
+  // Walk-fix F3: the register stepper's third Lichess reason (an entry made for someone else) is not a join state: a join is
+  // always the joiner's own entry (joinTeam passes registering_self: true), so the server never answers it here, and the join
+  // page must not turn it into "link your Lichess account" - the remedy F3 removed.
+  it("422 LICHESS_SELF_ENTRY_REQUIRED is no join Lichess state: it stays 'rejected'", () => {
+    expect(classifyJoinFailure(422, "LICHESS_SELF_ENTRY_REQUIRED")).toBe("rejected");
+  });
   it("the status still comes first: a Lichess code on a 404 / 409 / 429 / 5xx / no-response is those, not a Lichess state", () => {
     let checked = 0;
     for (const [status, kind] of [[404, "notFound"], [409, "conflict"], [429, "rateLimited"], [500, "retry"], [503, "retry"], [undefined, "retry"], [400, "rejected"]] as const) {

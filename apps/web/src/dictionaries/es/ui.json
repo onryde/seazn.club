@@ -7814,6 +7814,7 @@
   "register.lichess.reconnect.lead.other": "{divisions} se juegan en línea, en el tablero de Seazn. Tu cuenta de Lichess está vinculada, pero Seazn aún no puede enviar tus movimientos con ella. Reconéctala antes de inscribirte.",
   "register.lichess.reconnect.cta": "Reconectar Lichess",
   "register.lichessReconnectRequired": "Tu cuenta de Lichess está vinculada, pero Seazn aún no puede enviar tus movimientos con ella. Reconéctala antes de inscribirte en esta división.",
+  "register.lichessSelfEntryRequired": "Las inscripciones de ajedrez en línea son personales: marca «{box}» o pide al jugador que se inscriba con su propia cuenta.",
   "divset.timeControl.label": "Ritmo de juego",
   "divset.timeControl.choose": "Elige un ritmo de juego",
   "divset.timeControl.help": "Las partidas en línea usan uno de estos ritmos de juego de Lichess. Lichess no admite retardo por jugada.",

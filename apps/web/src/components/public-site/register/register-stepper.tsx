@@ -605,7 +605,12 @@ export function RegisterStepper({
                   <path d="M12 17h.01" />
                   <path d="M10.3 3.9L2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" />
                 </svg>
-                {submitError.lichess === "link" ? (
+                {submitError.lichess === "self" ? (
+                  // Walk-fix F3: the entry is for someone else, and an online seat is the registering account's own. The fix is
+                  // on THIS form (the who step's box, named in its own words) or the player's own registration: no Lichess
+                  // action, because neither linking nor reconnecting changes the answer.
+                  <p className="m-0 min-w-0">{t("register.lichessSelfEntryRequired", { box: t("register.who.playing.title") })}</p>
+                ) : submitError.lichess === "link" ? (
                   <p className="m-0 min-w-0">
                     {t("register.lichessLinkRequired")}{" "}
                     {/* `ph-no-capture`: the return path carries the team's join code (`?join=`), url-encoded into this href. */}

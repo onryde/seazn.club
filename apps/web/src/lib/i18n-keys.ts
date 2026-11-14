@@ -6862,6 +6862,7 @@ export type DictionaryKey =
   | "register.lichessLinkCta"
   | "register.lichessLinkRequired"
   | "register.lichessReconnectRequired"
+  | "register.lichessSelfEntryRequired"
   | "register.method.card"
   | "register.method.offline"
   | "register.nav.back"

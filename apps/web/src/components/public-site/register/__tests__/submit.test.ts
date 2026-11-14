@@ -214,19 +214,25 @@ describe("lichessRefusalReason", () => {
     expect(lichessRefusalReason(422, "LICHESS_RECONSENT_REQUIRED")).toBe("reconnect");
   });
 
+  // Walk-fix F3: an entry made for SOMEONE ELSE into an online division is refused with its own code (registration-submit.ts),
+  // because "link your Lichess account" was a remedy that changed nothing for a registrant who is not playing.
+  it("422 + the self-entry code is `self`, a third reason distinct from the other two", () => {
+    expect(lichessRefusalReason(422, "LICHESS_SELF_ENTRY_REQUIRED")).toBe("self");
+  });
+
   it("the code alone is not enough: every other status, and no status, is no Lichess refusal (counted)", () => {
     let checked = 0;
     for (const status of [undefined, 200, 400, 401, 403, 404, 409, 429, 500, 503]) {
-      for (const code of ["LICHESS_LINK_REQUIRED", "LICHESS_RECONSENT_REQUIRED"]) {
+      for (const code of ["LICHESS_LINK_REQUIRED", "LICHESS_RECONSENT_REQUIRED", "LICHESS_SELF_ENTRY_REQUIRED"]) {
         expect(lichessRefusalReason(status, code), `${status} + ${code}`).toBeNull();
         checked++;
       }
     }
-    expect(checked, "anti-vacuity: 10 statuses x 2 codes").toBe(20);
+    expect(checked, "anti-vacuity: 10 statuses x 3 codes").toBe(30);
   });
 
   it("422 with any other code, or none, or a near-miss spelling, is no Lichess refusal", () => {
-    for (const code of [undefined, "", "DIVISION_FULL", "lichess_link_required", "LICHESS_LINK_REQUIRED ", "LICHESS_RECONSENT"]) {
+    for (const code of [undefined, "", "DIVISION_FULL", "lichess_link_required", "LICHESS_LINK_REQUIRED ", "LICHESS_RECONSENT", "LICHESS_SELF_ENTRY"]) {
       expect(lichessRefusalReason(422, code), String(code)).toBeNull();
     }
   });

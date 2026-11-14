@@ -2347,6 +2347,35 @@ describe("step 5 — submit", () => {
     expect(alerts(island)).toHaveLength(1);
   });
 
+  // Walk-fix F3: an online entry made for SOMEONE ELSE (the "I'm one of the players" box left clear) is refused as that,
+  // LICHESS_SELF_ENTRY_REQUIRED. The walkthrough's linked organiser was told to link Lichess - a remedy that changed nothing.
+  // So the block names the box to tick, in the box's OWN words (the who step's label, from the dictionary), and offers NO
+  // Lichess action: neither linking nor reconnecting is the fix.
+  it("LICHESS_SELF_ENTRY_REQUIRED: names the box to tick, alone, and offers no Lichess link or reconnect", async () => {
+    const island = await submitRefused(
+      new ApiV1Error("Online chess entries are personal: tick \"I'm one of the players\", or ask the player to register with their own account", 422, "LICHESS_SELF_ENTRY_REQUIRED"),
+    );
+
+    const block = refusalBlock(island);
+    const box = String(EN_UI["register.who.playing.title"]);
+    const template = String(EN_UI["register.lichessSelfEntryRequired"]);
+    expect(template, "the sentence names the box through {box}").toContain("{box}");
+    expect(textOf(block)).toContain(template.replace("{box}", box));
+    expect(textOf(block)).not.toContain(String(EN_UI["register.lichessLinkRequired"]));
+    expect(textOf(block)).not.toContain(String(EN_UI["register.lichessReconnectRequired"]));
+    let checked = 0;
+    for (const id of ["register-lichess-link", "register-lichess-reconnect-link"]) {
+      expect(island.tree().filter((e) => propsOf(e)["data-testid"] === id), `no ${id}`).toHaveLength(0);
+      checked++;
+    }
+    for (const line of GENERIC_LINES()) {
+      expect(island.tree().filter((e) => textOf(e).includes(line)), `the generic line "${line}" is not on the page`).toHaveLength(0);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: 2 Lichess actions + 2 generic lines were looked for").toBe(4);
+    expect(alerts(island), "the refusal is the only alert").toHaveLength(1);
+  });
+
   // The other direction: any OTHER refusal keeps the generic line (and no Lichess block). A 422 with a different code is
   // the near miss - same status as the Lichess reasons.
   it("a 422 that is NOT a Lichess reason keeps the generic line and its detail, and shows no Lichess block", async () => {
@@ -2360,11 +2389,11 @@ describe("step 5 — submit", () => {
 
   // The code alone is not the refusal: the join page keys on (422, code) (classifyJoinFailure) and the register page must
   // too, or a 409/5xx/403 that happens to carry the string is shown as an instruction to go and reconnect.
-  const NOT_422_CASES = ["LICHESS_LINK_REQUIRED", "LICHESS_RECONSENT_REQUIRED"].flatMap((code) =>
+  const NOT_422_CASES = ["LICHESS_LINK_REQUIRED", "LICHESS_RECONSENT_REQUIRED", "LICHESS_SELF_ENTRY_REQUIRED"].flatMap((code) =>
     [400, 403, 409, 500].map((status) => ({ code, status })),
   );
-  it("anti-vacuity: the status x code table below has its 2 codes x 4 statuses", () => {
-    expect(NOT_422_CASES).toHaveLength(8);
+  it("anti-vacuity: the status x code table below has its 3 codes x 4 statuses", () => {
+    expect(NOT_422_CASES).toHaveLength(12);
   });
   it.each(NOT_422_CASES)("a Lichess code on a $status is not shown as a Lichess refusal: $code keeps the generic line", async ({ code, status }) => {
     const island = await submitRefused(new ApiV1Error("some server text", status, code));

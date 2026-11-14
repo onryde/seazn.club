@@ -157,17 +157,21 @@ export function classifySubmitFailure(status: number | undefined, code?: string)
   return "rejected";
 }
 
-/** The two Lichess reasons a registration into an online-play division is refused for (owner 2026-10-25: registration holds
- *  a player to the seat gate's bar). `link`: no Lichess link at all. `reconnect`: a link that cannot play yet. */
-export type LichessRefusal = "link" | "reconnect";
+/** The Lichess reasons a registration into an online-play division is refused for (owner 2026-10-25: registration holds
+ *  a player to the seat gate's bar). `link`: no Lichess link at all. `reconnect`: a link that cannot play yet. `self`
+ *  (walk-fix F3): the entry is for someone else - an online seat is the registering account's own, so the fix is the
+ *  "I'm one of the players" box or the player's own registration, never a link. Only the register stepper can meet `self`:
+ *  a join is always the joiner's own entry (join/view-model.ts keeps it the generic `rejected`). */
+export type LichessRefusal = "link" | "reconnect" | "self";
 
 /** Which Lichess reason a failed registration or join answered with, or null for any other failure. ONE authority for the
  *  register stepper and the join page: the reason is the pair (HTTP 422, fixed code), never the code alone - the code is a
  *  string the server chose, and a 5xx or 409 that happens to carry it is not this refusal. The code is compared against
- *  these two fixed strings and never rendered. */
+ *  these fixed strings and never rendered. */
 export function lichessRefusalReason(status: number | undefined, code: string | undefined): LichessRefusal | null {
   if (status !== 422) return null;
   if (code === "LICHESS_LINK_REQUIRED") return "link";
   if (code === "LICHESS_RECONSENT_REQUIRED") return "reconnect";
+  if (code === "LICHESS_SELF_ENTRY_REQUIRED") return "self";
   return null;
 }

@@ -7814,6 +7814,7 @@
   "register.lichess.reconnect.lead.other": "{divisions} worden online gespeeld, op het bord van Seazn. Je Lichess-account is gekoppeld, maar Seazn kan er nog geen zetten mee doen. Verbind het opnieuw voordat je je inschrijft.",
   "register.lichess.reconnect.cta": "Lichess opnieuw verbinden",
   "register.lichessReconnectRequired": "Je Lichess-account is gekoppeld, maar Seazn kan er nog geen zetten mee doen. Verbind het opnieuw voordat je je inschrijft voor deze divisie.",
+  "register.lichessSelfEntryRequired": "Inschrijvingen voor online schaken zijn persoonlijk: vink ‘{box}’ aan, of vraag de speler zich met een eigen account in te schrijven.",
   "divset.timeControl.label": "Speeltempo",
   "divset.timeControl.choose": "Kies een speeltempo",
   "divset.timeControl.help": "Online partijen gebruiken een van deze Lichess-speeltempo's. Lichess kent geen vertraging per zet.",

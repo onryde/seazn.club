@@ -177,7 +177,7 @@ type Submitted = { status: number; body: { ok: boolean; data?: Record<string, un
  *  reads next is what the submit left, never a race with it. */
 async function submit(
   w: Pick<World, "orgSlug" | "competition" | "division">,
-  over: { cookie?: string; email?: string; players?: string[]; entry?: Record<string, unknown> } = {},
+  over: { cookie?: string; email?: string; players?: string[]; entry?: Record<string, unknown>; contactDob?: string } = {},
 ): Promise<Submitted> {
   const email = over.email ?? address("sub");
   const res = await registerRoute(
@@ -185,7 +185,7 @@ async function submit(
       method: "POST",
       headers: { "content-type": "application/json", "x-forwarded-for": "203.0.113.8", ...(over.cookie ? { cookie: over.cookie } : {}) },
       body: JSON.stringify({
-        contact: { name: "Alex Rep", email },
+        contact: { name: "Alex Rep", email, ...(over.contactDob ? { dob: over.contactDob } : {}) },
         privacy_consent: true,
         entries: (over.players ?? ["Solo Player"]).map((name) => ({
           division_id: w.division.id,
@@ -392,7 +392,8 @@ describe.skipIf(!HAS_DB)("the submit queues the confirmation on the outbox (DB)"
 
   it("a refused submit (the Lichess link demand) queues no confirmation; the same registrant is confirmed once the demand is off", async () => {
     // The online-chess flag is forced on, the division plays on Lichess and the registrant is anonymous: the submit is refused with
-    // 422 LICHESS_LINK_REQUIRED before any cart exists. #1020's refusal is left exactly as it is.
+    // 422 LICHESS_LINK_REQUIRED before any cart exists. #1020's refusal is left exactly as it is. The entry is the registrant's own
+    // (`registering_self`): an entry for someone else is refused earlier with its own code (walk-fix F3), not the link demand.
     const owner = await seedOwner();
     made.orgIds.push(owner.orgId);
     made.userIds.push(owner.userId!);
@@ -419,7 +420,8 @@ describe.skipIf(!HAS_DB)("the submit queues the confirmation on the outbox (DB)"
     vi.stubEnv("ONLINE_CHESS_ALWAYS", "1");
     forgetOnlineChessFlagCache();
     const email = address("lichess");
-    const refused = await submit(online, { email });
+    const own = { registering_self: true };
+    const refused = await submit(online, { email, entry: own, contactDob: "1990-04-12" });
     expect(refused.status).toBe(422);
     expect(refused.body.error?.code).toBe("LICHESS_LINK_REQUIRED");
     expect(await sql`select 1 from registration_groups where contact_email = ${email}`, "no cart was committed").toHaveLength(0);
@@ -429,7 +431,7 @@ describe.skipIf(!HAS_DB)("the submit queues the confirmation on the outbox (DB)"
     // The positive pair: with the demand off, the very same registrant is accepted and confirmed (so the refusal above was the demand).
     vi.stubEnv("ONLINE_CHESS_ALWAYS", undefined);
     forgetOnlineChessFlagCache();
-    const accepted = await submit(online, { email });
+    const accepted = await submit(online, { email, entry: own, contactDob: "1990-04-12" });
     expect(accepted.status).toBe(201);
     const [row] = await settled(String(accepted.body.data!.group_id), 1);
     expect(row).toMatchObject({ status: "sent", recipient: email });
