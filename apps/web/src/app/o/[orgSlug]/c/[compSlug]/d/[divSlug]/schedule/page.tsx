@@ -7,7 +7,7 @@ import Link from "@/components/ui/console-link";
 import { venueLabel } from "@/lib/venue";
 import { resolveVenueTz } from "@/lib/tz";
 import { requireDivisionPage } from "@/server/page-auth";
-import { routes } from "@/lib/routes";
+import { routes, searchOf } from "@/lib/routes";
 import { getDivision } from "@/server/usecases/divisions";
 import { getCompetition } from "@/server/usecases/competitions";
 import { listStages } from "@/server/usecases/stages";
@@ -74,12 +74,13 @@ export default async function DivisionSchedulePage({
   params: Promise<{ orgSlug: string; compSlug: string; divSlug: string }>;
   searchParams: Promise<{ tab?: string }>;
 }) {
-  const [{ orgSlug, compSlug, divSlug }, { tab: rawTab }] = await Promise.all([
+  const [{ orgSlug, compSlug, divSlug }, sp] = await Promise.all([
     params,
     searchParams,
   ]);
+  const rawTab = sp.tab;
   const tab: Tab = (TABS as readonly string[]).includes(rawTab ?? "") ? (rawTab as Tab) : "board";
-  const page = await requireDivisionPage(orgSlug, compSlug, divSlug, { tail: "/schedule" });
+  const page = await requireDivisionPage(orgSlug, compSlug, divSlug, { tail: "/schedule", search: searchOf(sp) });
   const { auth, canEdit } = page;
   // The GOVERNING venue clock (#448), resolved exactly as `loadSettings` does
   // it server-side — `resolveVenueTz(null, org.timezone)`, org → UTC, with the

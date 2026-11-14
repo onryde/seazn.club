@@ -47,6 +47,7 @@ import { sql } from "@/lib/db";
 import { createFunnelDraft, type FunnelPayload } from "@/lib/funnel";
 import { funnelReminderEmail } from "@/lib/email";
 import { enqueueEmailOnce } from "@/server/email-outbox";
+import { CANCELLED_REASONS, FUNNEL_DRAFT_REPLACED_REASON } from "@/server/email-outbox/cancel";
 import { idempotencyKey } from "@/server/email-outbox/constants";
 import { runOutboxTick } from "@/server/email-outbox/worker";
 import { bornAgo, dictionarySubject } from "@/server/email-outbox/__tests__/_kind-harness";
@@ -339,6 +340,71 @@ describe.skipIf(!HAS_DB)("POST /api/funnel/remind queues the +24h reminder on th
     expect(checked, "anti-vacuity: every non-due draft was judged").toBe(3);
     expect(await rowsOf(due)).toHaveLength(1);
     expect((await draftOf(p.id)).reminded_at).not.toBeNull();
+  });
+
+  it("a draft a newer start replaced (V518) is never reminded; the live one that replaced it is, once", async () => {
+    // Both a day old: the address resubmitted the wizard a minute after the first start, and neither was claimed.
+    const email = address();
+    const replaced = await dueDraft(email);
+    const live = await dueDraft(email);
+    const [r] = await sql<{ replaced: boolean }[]>`select replaced_at is not null as replaced from funnel_drafts where id = ${replaced.id}`;
+    expect(r!.replaced, "premise: the resubmit replaced the first draft").toBe(true);
+
+    expect((await sweep()).status).toBe(200);
+
+    expect((await draftOf(replaced.id)).reminded_at, "the replaced draft is not stamped").toBeNull();
+    expect(enqueueCalls(replaced.id), "and was never asked").toHaveLength(0);
+    expect((await draftOf(live.id)).reminded_at, "the live one is").not.toBeNull();
+    const rows = await rowsOf(email);
+    expect(rows.map((row) => row.ref_id), "one reminder, the live draft's").toEqual([live.id]);
+  });
+
+  it("a replace cancels the replaced draft's queued claim email AND reminder, in the start's transaction; the new draft's are kept", async () => {
+    // /start "Sent stepper" T1 follow-up (controller, 2026-11-14): a replaced draft's link is dead (the claim answers
+    // FUNNEL_CLAIM_REPLACED), so nothing still waiting to mail it may go out. The claim email's first attempt fails here (the
+    // provider is down), so its row waits for a retry — the not-yet-sent case — and the cron queues the +24h reminder beside it.
+    expect(CANCELLED_REASONS, "premise: the readers know the reason as a void").toContain(FUNNEL_DRAFT_REPLACED_REASON);
+    deliverMock.mockImplementation(unavailable);
+    const startBody = (body: Record<string, unknown>) =>
+      start(new Request(`${ORIGIN}/api/funnel/start`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }));
+    const outboxOf = (draftId: string) =>
+      sql<{ kind: string; status: string; last_error: string | null }[]>`
+        select kind, status, last_error from email_outbox where ref_type = 'funnel_draft' and ref_id = ${draftId} order by kind`;
+    const draftIdOf = async (email: string): Promise<string> =>
+      (await sql<{ id: string }[]>`select id from funnel_drafts where email = ${email} and replaced_at is null and used_at is null`)[0]!.id;
+
+    const email = address();
+    const payload = payloadOf();
+    const first = (await (await startBody({ email, ...payload })).json()) as { data: { reference: string; replaceKey: string } };
+    const a = await draftIdOf(email);
+    await sql`update funnel_drafts set created_at = now() - interval '25 hours' where id = ${a}`;
+    expect((await sweep()).status).toBe(200);
+    expect((await outboxOf(a)).map((r) => [r.kind, r.status]), "premise: the claim waits on a retry, the reminder is queued").toEqual([
+      ["funnel_claim", "queued"],
+      ["funnel_reminder", "queued"],
+    ]);
+
+    // 1. The same address sends the wizard again: A is replaced, and both its emails are voided with it.
+    const second = (await (await startBody({ email, ...payload })).json()) as { data: { reference: string; replaceKey: string } };
+    expect(second.data.reference, "premise: a keyless resubmit draws its own reference (T1 review m1)").not.toBe(first.data.reference);
+    const b = await draftIdOf(email);
+    expect(await outboxOf(a), "the replaced draft's claim and reminder are voided").toEqual([
+      { kind: "funnel_claim", status: "expired", last_error: FUNNEL_DRAFT_REPLACED_REASON },
+      { kind: "funnel_reminder", status: "expired", last_error: FUNNEL_DRAFT_REPLACED_REASON },
+    ]);
+    expect((await outboxOf(b)).map((r) => [r.kind, r.status]), "the new draft's claim is kept").toEqual([["funnel_claim", "queued"]]);
+
+    // 2. A second replace, by Change email (another address, the reference and the replace key): B's queued claim goes the same way,
+    //    and A's voided rows are not touched again.
+    const moved = address();
+    const third = await startBody({ email: moved, ...payload, previousReference: second.data.reference, replaceKey: second.data.replaceKey });
+    expect(third.status).toBe(200);
+    const c = await draftIdOf(moved);
+    expect(await outboxOf(b), "the address the visitor moved from: voided").toEqual([
+      { kind: "funnel_claim", status: "expired", last_error: FUNNEL_DRAFT_REPLACED_REASON },
+    ]);
+    expect((await outboxOf(c)).map((r) => [r.kind, r.status]), "the new address's claim is kept").toEqual([["funnel_claim", "queued"]]);
+    expect((await outboxOf(a)).map((r) => r.status), "A unchanged").toEqual(["expired", "expired"]);
   });
 
   it("Q3: a draft started on /fr/start is reminded in French; one started with no language is reminded in English", async () => {

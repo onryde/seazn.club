@@ -566,5 +566,12 @@
   "quickMatch.setup.shape.semisNeeds": "Il faut au moins {min} participants",
   "quickMatch.setup.shape.finalNeeds": "Il faut au moins {min} participants",
   "quickMatch.setup.shape.notForSport": "Non disponible pour ce sport",
-  "quickMatch.errors.semisTooFewSides": "Les demi-finales demandent au moins {min} participants."
+  "quickMatch.errors.semisTooFewSides": "Les demi-finales demandent au moins {min} participants.",
+  "start.wizard.reference": "Référence {reference}",
+  "start.wizard.referenceNote": "La même référence figure dans l’e-mail.",
+  "start.wizard.resentNote": "Seul le lien le plus récent fonctionne. La référence reste la même.",
+  "start.wizard.language": "Langue",
+  "start.wizard.changeBanner": "Votre lien précédent ne fonctionnera plus dès que vous en enverrez un nouveau. La référence {reference} reste la même.",
+  "start.wizard.answersKept": "Vos réponses sont conservées. Utilisez Retour pour en modifier une.",
+  "start.wizard.sendNew": "Envoyez-moi un nouveau lien"
 }

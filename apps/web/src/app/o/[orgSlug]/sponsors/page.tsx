@@ -27,7 +27,7 @@ import { OrgSponsors } from "@/components/org-sponsors";
 import { OnStreamTab } from "@/components/sponsors/on-stream-tab";
 import { OverviewTab } from "@/components/sponsors/overview-tab";
 import { PackageList } from "@/components/sponsors/package-list";
-import { routes } from "@/lib/routes";
+import { routes, searchOf } from "@/lib/routes";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t } from "@/lib/i18n";
 import {
@@ -77,12 +77,13 @@ export default async function SponsorsHubPage({
   }>;
 }) {
   const { orgSlug } = await params;
-  const page = await requireOrgPage(orgSlug, { tail: "/sponsors" });
+  const sp = await searchParams;
+  const page = await requireOrgPage(orgSlug, { tail: "/sponsors", search: searchOf(sp) });
   const { org: active, canEdit } = page;
   const locale = await resolveLocale();
   const dict = await getDictionary(locale, "ui");
 
-  const { tab: rawTab, scope: rawScope, period: rawPeriod, sponsor: rawSponsor, deal: rawDeal, edit: rawEdit } = await searchParams;
+  const { tab: rawTab, scope: rawScope, period: rawPeriod, sponsor: rawSponsor, deal: rawDeal, edit: rawEdit } = sp;
   const tab = resolveSponsorsTab(rawTab, canEdit);
 
   // ORG-LEVEL, so `hasFeatureOnAnyPass` and not `hasFeature` - the Settings tab's own reasoning, unchanged: the

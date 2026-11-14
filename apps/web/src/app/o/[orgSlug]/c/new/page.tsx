@@ -50,7 +50,7 @@ export default async function NewCompetitionPage({
   params: Promise<{ orgSlug: string }>;
 }) {
   const { orgSlug } = await params;
-  const { auth, canEdit } = await requireOrgPage(orgSlug);
+  const { auth, canEdit } = await requireOrgPage(orgSlug, { tail: "/c/new" });
   if (!canEdit) redirect(routes.orgHome(orgSlug));
   const locale = await resolveLocale();
   const dict = await getDictionary(locale, "ui");

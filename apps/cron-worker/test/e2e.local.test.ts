@@ -59,9 +59,11 @@ describe.skipIf(!BASE || !DB || !SECRET)("cron Worker E2E (wrangler dev → loca
 
   it("a pinned hourly slot stamps reminded_at on a due funnel draft, and runs exactly that slot's jobs", async () => {
     const token = `e2e-${randomUUID()}`;
+    // V518: every draft carries a reference, `SZ-` and six of these (funnel_drafts_reference_shape).
+    const reference = `SZ-${Array.from({ length: 6 }, () => "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"[Math.floor(Math.random() * 32)]).join("")}`;
     const [draft] = await sql<{ id: string }[]>`
-      insert into funnel_drafts (token, email, payload, expires_at, created_at)
-      values (${token}, ${`${token}@example.test`}, ${sql.json({})}, now() + interval '6 days', now() - interval '25 hours')
+      insert into funnel_drafts (token, email, payload, expires_at, created_at, reference)
+      values (${token}, ${`${token}@example.test`}, ${sql.json({})}, now() + interval '6 days', now() - interval '25 hours', ${reference})
       returning id`;
     const res = await fetch(
       `http://localhost:${PORT}/cdn-cgi/handler/scheduled?cron=${encodeURIComponent("17 * * * *")}&time=${SLOT}`,

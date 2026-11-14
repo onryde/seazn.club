@@ -9,6 +9,8 @@
 //                             a 402 carrying its feature_key, and NOTHING of the event written.
 //   FUNNEL_CLAIM_DATE_PAST  — signed in, and the draft's first day is before the UTC day less one (createFromDraft's
 //                             first check): a 400, NOTHING written — not the part-built FUNNEL_CLAIM_SIGNED_IN.
+//   FUNNEL_CLAIM_REPLACED   — the token names a draft a newer start replaced (V518): a 400, nobody signed in, nothing built;
+//                             the newest link claims.
 // Unnamed: a failure BEFORE the session (500, no code, no cookie, Sentry) and the limiter's 429 (the token unread).
 //
 // Driven through the REAL route over a real database, with a real draft from the real producer and the real
@@ -98,6 +100,7 @@ import {
   FUNNEL_CLAIM_DATE_PAST,
   FUNNEL_CLAIM_INVALID,
   FUNNEL_CLAIM_PLAN_LIMIT,
+  FUNNEL_CLAIM_REPLACED,
   FUNNEL_CLAIM_SIGNED_IN,
 } from "@/lib/funnel-claim-codes";
 import { HttpError } from "@/lib/http";
@@ -117,10 +120,10 @@ async function post(body: string): Promise<{ status: number; body: Envelope }> {
   return { status: res.status, body: (await res.json()) as Envelope };
 }
 const claim = (token: string) => post(JSON.stringify({ token }));
-async function draft(over: Partial<FunnelPayload> = {}, email = newAddress()): Promise<{ token: string; email: string }> {
+async function draft(over: Partial<FunnelPayload> = {}, email = newAddress()): Promise<{ token: string; email: string; reference: string }> {
   const payload = { name: `${RUN} ${randomUUID().slice(0, 6)}`, sport: "Badminton", entrants: 4, ...over } as FunnelPayload;
-  const { token } = await createFunnelDraft(email, payload);
-  return { token, email };
+  const { token, reference } = await createFunnelDraft(email, payload);
+  return { token, email, reference };
 }
 function newAddress(): string {
   const email = `${RUN}-${randomUUID().slice(0, 6)}@example.com`;
@@ -215,6 +218,46 @@ describe.skipIf(!HAS_DB)("the funnel claim's named refusals", () => {
       checked++;
     }
     expect(checked, "anti-vacuity: every dead link").toBe(cases.length);
+  });
+
+  it("a replaced link — the address resubmitted, or its draft was moved to another address — is 400 FUNNEL_CLAIM_REPLACED; the newest lands", async () => {
+    const email = newAddress();
+    const first = await draft({}, email);
+    const second = await draft({}, email);
+    expect(second.token, "premise: the resubmit wrote its own draft").not.toBe(first.token);
+    // Moved: the replace pair from a start at another address.
+    const movedFrom = await createFunnelDraft(newAddress(), { name: `${RUN} moved`, sport: "Badminton", entrants: 4 });
+    const movedTo = newAddress();
+    await createFunnelDraft(movedTo, { name: `${RUN} moved`, sport: "Badminton", entrants: 4 }, sql, null, {
+      reference: movedFrom.reference,
+      replaceKey: movedFrom.replaceKey,
+    });
+    const cases = [
+      { name: "the address resubmitted", token: first.token },
+      { name: "the draft moved to another address", token: movedFrom.token },
+    ];
+    let checked = 0;
+    for (const c of cases) {
+      reset();
+      const got = await claim(c.token);
+      expect(got.status, c.name).toBe(400);
+      expect(got.body, c.name).toMatchObject({ ok: false, code: FUNNEL_CLAIM_REPLACED });
+      expect(sessionUser(), `${c.name}: nobody is signed in`).toBeNull();
+      expect(h.builds, `${c.name}: nothing is built`).toBe(0);
+      expect(h.captured, `${c.name}: an expected refusal is not a server fault`).toEqual([]);
+      expect(claimedEvents(), `${c.name}: nothing counted`).toEqual([]);
+      expect(await usedAt(c.token), `${c.name}: the replaced draft is not spent by the refusal`).toBeNull();
+      checked++;
+    }
+    expect(checked, "anti-vacuity: both ways a link is replaced").toBe(cases.length);
+    // The pair: the newest link of the resubmitted address lands, once; a second try is the dead-link answer, not REPLACED.
+    reset();
+    expect((await claim(second.token)).status, "the newest link lands").toBe(200);
+    reset();
+    expect((await claim(second.token)).body.code, "spent, not replaced").toBe(FUNNEL_CLAIM_INVALID);
+    // A replaced link stays REPLACED after its successor was claimed.
+    reset();
+    expect((await claim(first.token)).body.code).toBe(FUNNEL_CLAIM_REPLACED);
   });
 
   it("a claim that lands: 200, and exactly one funnel_claimed carrying the draft's own sport and field", async () => {

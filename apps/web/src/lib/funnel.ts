@@ -3,9 +3,11 @@ import "server-only";
 // BEFORE authenticating; the draft rides a single-use emailed token that both
 // proves email ownership (like login_links) and carries the payload. Claiming
 // creates the org (if none), the competition and a division — with the format
-// the visitor picked as its stages, their field as seeded placeholder entrants,
-// and their courts as a venue (start-wizard redesign, 2026-11-13) — then lands
-// the new organiser inside it.
+// the visitor picked as its stages and their courts as a venue (start-wizard
+// redesign, 2026-11-13), and NO entrants: the field size they chose is the
+// target the getting-started read reports (/start "Sent stepper", 2026-11-14) —
+// then lands the new organiser inside it. An address holds one live draft at a
+// time, under a short reference that survives a resubmit (V518).
 import crypto from "node:crypto";
 import { z } from "zod";
 import { sql, type Tx } from "@/lib/db";
@@ -25,15 +27,13 @@ import { CreateStages, type CreateCompetition } from "@/server/api-v1/schemas";
 import { log } from "@/server/logger";
 import { createCompetition } from "@/server/usecases/competitions";
 import { createDivision } from "@/server/usecases/divisions";
-import { registrationDefaultKind } from "@/server/usecases/entrant-shape";
-import { createEntrants } from "@/server/usecases/entrants";
+import { FUNNEL_DRAFT_REPLACED_REASON, cancelQueuedEmails } from "@/server/email-outbox/cancel";
 import { frozenMemberIds } from "@/server/usecases/entitlement-freeze";
 import { createStages } from "@/server/usecases/stages";
 import { createCourt, createVenue, listVenues } from "@/server/usecases/venues";
 import { pickVariant } from "@/lib/preferred-variant";
 import { routes } from "@/lib/routes";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import type { EntrantKind } from "@seazn/engine/sport";
 
 const DRAFT_TTL_DAYS = 7;
 
@@ -64,38 +64,163 @@ export interface FunnelDraft {
   locale: Locale | null;
 }
 
-/** Create a draft on `db` and return its single-use claim token and the instant it stops working. The start route passes its
- *  transaction, so the draft and the outbox row that carries its token are committed together or not at all. `locale` is the
- *  language the visitor started it in (the start route's pick), kept for the +24h reminder; null when they gave none. */
+/** The reference alphabet (owner, 2026-11-14): digits and capitals less 0/O and 1/I, so a reference can be read aloud or
+ *  retyped from an email. 32 symbols, so a random byte's low five bits pick one without bias. */
+const REFERENCE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
+const REFERENCE_LENGTH = 6;
+
+/** A draft reference's shape: what the V518 CHECK holds and the start route accepts as `previousReference`. */
+export const FUNNEL_REFERENCE_SHAPE = /^SZ-[2-9A-HJ-NP-Z]{6}$/;
+
+/** A fresh draft reference, `SZ-` and six symbols (the V518 CHECK holds the same shape). */
+export function newFunnelReference(): string {
+  return `SZ-${Array.from(crypto.randomBytes(REFERENCE_LENGTH), (b) => REFERENCE_ALPHABET[b & 31]).join("")}`;
+}
+
+/** The insert refused because another LIVE draft already carries the reference (V518 `funnel_drafts_live_reference_idx`). */
+const isLiveReferenceCollision = (err: unknown): boolean =>
+  (err as { code?: string; constraint_name?: string } | null)?.code === "23505" &&
+  (err as { constraint_name?: string }).constraint_name === "funnel_drafts_live_reference_idx";
+
+/** The replace key is stored as this hash, never as given: the row must not hand out the proof that it was started here. */
+const replaceKeyHash = (key: string): string => crypto.createHash("sha256").update(key).digest("hex");
+
+/** An earlier draft the client names to replace (the Change-email flow): its reference and the replace key its start returned. */
+export interface FunnelPrevious {
+  reference: string;
+  replaceKey: string;
+}
+
+export interface CreatedFunnelDraft {
+  id: string;
+  token: string;
+  expiresAt: Date;
+  /** The draft's human reference: the keyed draft's when this start replaced one by its reference AND replace key, else a
+   *  fresh one (a keyless resubmit included: knowing an address never reveals its live draft's code). */
+  reference: string;
+  /** Opaque, returned to the client that started the draft and stored only as a hash: with the reference, it lets that client
+   *  (and nobody who merely knows or guesses the reference) replace this draft from another address. */
+  replaceKey: string;
+}
+
+/** Create a draft on `db` and return its single-use claim token, the instant it stops working, its reference and its replace key.
+ *  The start route passes its transaction, so the draft and the outbox row that carries its token are committed together or not
+ *  at all. `locale` is the language the visitor started it in (the start route's pick), kept for the +24h reminder; null when they
+ *  gave none.
+ *
+ *  ONE LIVE DRAFT PER ADDRESS (/start "Sent stepper" wave T1): every unused, unexpired, unreplaced draft of the same address
+ *  (case-insensitive) is marked replaced, and so is the draft `previous` names when its reference AND key match a live one (the
+ *  address may differ: the visitor changed it). Only that keyed replace keeps the reference (the Change-email flow: the client
+ *  proved it started the draft); every other start draws a fresh one (T1 review m1, controller 2026-11-14), so a resubmit from
+ *  an address someone merely knows never learns its live draft's code. The replaced drafts' queued claim email and reminder are
+ *  voided, and every replaced draft OF THOSE ADDRESSES that names a retired reference is rewritten to the new one (m4). A wrong
+ *  key, or a reference alone, replaces nothing (and says nothing). Starts for one address are serialised by an advisory lock on
+ *  the lower-cased address, so two at once cannot each find nothing and each leave a live draft. */
 export async function createFunnelDraft(
   email: string,
   payload: FunnelPayload,
   db: Tx | typeof sql = sql,
   locale: Locale | null = null,
-): Promise<{ id: string; token: string; expiresAt: Date }> {
-  const token = crypto.randomBytes(32).toString("base64url");
-  const expiresAt = new Date(Date.now() + DRAFT_TTL_DAYS * 86_400_000);
-  const [row] = await db<{ id: string }[]>`
-    insert into funnel_drafts (token, email, payload, expires_at, locale)
-    values (${token}, ${email}, ${db.json(payload)}, ${expiresAt.toISOString()}, ${locale})
-    returning id`;
-  return { id: row.id, token, expiresAt };
+  previous: FunnelPrevious | null = null,
+): Promise<CreatedFunnelDraft> {
+  const write = async (tx: Tx): Promise<CreatedFunnelDraft> => {
+    await tx`select pg_advisory_xact_lock(hashtext(${`funnel-draft:${email.toLowerCase()}`}))`;
+    const keyed = previous
+      ? await tx<{ id: string; reference: string; email: string }[]>`
+          select id, reference, email from funnel_drafts
+           where reference = ${previous.reference} and replace_key_hash = ${replaceKeyHash(previous.replaceKey)}
+             and used_at is null and replaced_at is null and expires_at > now()
+           for update`
+      : [];
+    const sameAddress = await tx<{ id: string; reference: string; email: string }[]>`
+      select id, reference, email from funnel_drafts
+       where lower(email) = lower(${email}) and used_at is null and replaced_at is null and expires_at > now()
+       order by created_at desc, id desc
+       for update`;
+    const replacedRows = [...keyed, ...sameAddress];
+    const replaced = [...new Set(replacedRows.map((r) => r.id))];
+    // Retired BEFORE the insert: the live-reference index admits one live draft per reference.
+    if (replaced.length > 0) {
+      await tx`update funnel_drafts set replaced_at = now() where id = any(${replaced}::uuid[])`;
+      // A replaced draft's link is dead, so nothing still waiting to mail it may go out: its claim email queued for a retry, and
+      // its +24h reminder. Voided in this transaction, so the replace and the void commit together. Org-less rows on the pooled
+      // handle (`current_org_id()` null matches exactly those); a row already `sending` or `sent` is past recall.
+      for (const kind of ["funnel_claim", "funnel_reminder"] as const) {
+        await cancelQueuedEmails(tx, { kind, refType: "funnel_draft", refIds: replaced, reason: FUNNEL_DRAFT_REPLACED_REASON });
+      }
+    }
+    const token = crypto.randomBytes(32).toString("base64url");
+    const replaceKey = crypto.randomBytes(32).toString("base64url");
+    const expiresAt = new Date(Date.now() + DRAFT_TTL_DAYS * 86_400_000);
+    // Under a savepoint, so a refused insert leaves the start's transaction usable for the one retry below.
+    const insert = (reference: string) =>
+      tx.savepoint(async (sp) => {
+        const [row] = await sp<{ id: string }[]>`
+          insert into funnel_drafts (token, email, payload, expires_at, locale, reference, replace_key_hash)
+          values (${token}, ${email}, ${sp.json(payload)}, ${expiresAt.toISOString()}, ${locale}, ${reference}, ${replaceKeyHash(replaceKey)})
+          returning id`;
+        return row!.id;
+      });
+    // The keyed draft's reference is free: it was retired above, under the lock. A FRESH one can name another address's live draft
+    // (32^6 codes; the live-reference index refuses it): drawn once more, never a 500 on a one-in-a-billion draw.
+    let reference = keyed[0]?.reference ?? newFunnelReference();
+    let id: string;
+    try {
+      id = await insert(reference);
+    } catch (err) {
+      if (keyed.length > 0 || !isLiveReferenceCollision(err)) throw err;
+      reference = newFunnelReference();
+      id = await insert(reference);
+    }
+    // A replaced draft names the reference its latest email carries ("check your latest email, SZ-…"): every replaced draft of a
+    // retired reference takes the new one, so an old link never points the visitor at a code no live email carries. Only at the
+    // replaced drafts' own addresses: references are unique among LIVE drafts alone, so a stranger's replaced draft may carry the
+    // same six symbols and is never rewritten (T1 review m4; funnel_drafts_email_idx serves the address filter).
+    const retired = [...new Set(replacedRows.map((r) => r.reference))].filter((r) => r !== reference);
+    if (retired.length > 0) {
+      const addresses = [...new Set(replacedRows.map((r) => r.email.toLowerCase()))];
+      await tx`
+        update funnel_drafts set reference = ${reference}
+         where lower(email) = any(${addresses}::text[]) and replaced_at is not null and reference = any(${retired}::text[])`;
+    }
+    return { id, token, expiresAt, reference, replaceKey };
+  };
+  // The pool opens its own transaction; a caller's transaction is used as it is (the lock is held until it commits). By identity:
+  // the pooled handle is a Proxy, so `"begin" in sql` is false.
+  return db === sql ? sql.begin(write) : write(db as Tx);
+}
+
+/** The reference of the draft `token` names when a newer start REPLACED it, else null (no such draft, or one that was not
+ *  replaced). What the claim reads after a refused consume, to tell "replaced by a newer link" from a dead one. Replaced is
+ *  terminal, so this read outside the consume's transaction cannot disagree with it. */
+export async function replacedFunnelDraftReference(token: string): Promise<string | null> {
+  const [row] = await sql<{ reference: string }[]>`
+    select reference from funnel_drafts where token = ${token} and replaced_at is not null limit 1`;
+  return row?.reference ?? null;
 }
 
 /**
  * Consume a claim token: mark it used and return the draft if it was valid,
- * unexpired and unused — otherwise null. Single-use inside one transaction,
+ * unexpired, unused and not replaced by a newer start — otherwise null. Single-use inside one transaction,
  * exactly like login-link consumption (clicking proves email ownership).
  */
 export async function consumeFunnelDraft(token: string): Promise<FunnelDraft | null> {
   return sql.begin(async (tx) => {
     const [row] = await tx<
-      { id: string; email: string; payload: unknown; expires_at: string; used_at: string | null; locale: string | null }[]
+      {
+        id: string;
+        email: string;
+        payload: unknown;
+        expires_at: string;
+        used_at: string | null;
+        replaced_at: string | null;
+        locale: string | null;
+      }[]
     >`
-      select id, email, payload, expires_at, used_at, locale
+      select id, email, payload, expires_at, used_at, replaced_at, locale
       from funnel_drafts where token = ${token}
       for update limit 1`;
-    if (!row || row.used_at || new Date(row.expires_at).getTime() < Date.now()) {
+    if (!row || row.used_at || row.replaced_at || new Date(row.expires_at).getTime() < Date.now()) {
       return null;
     }
     const parsed = funnelPayloadSchema.safeParse(row.payload);
@@ -108,17 +233,21 @@ export async function consumeFunnelDraft(token: string): Promise<FunnelDraft | n
 }
 
 /** What the claim page reads of the draft `token` names, WITHOUT claiming it: the language it was started in (the emailed
- *  link carries none, so the card is worded in this one first) and its sport as /start's key (the first-day-passed
- *  card's "Start again" link carries it). Any draft the token names, used or expired too — a link opened a second time
- *  is still that visitor's, and its card ("this link didn't work") is theirs to read. Each is null when the token names
- *  no draft, the draft has no language, or its sport is none /start lists. Never the address, the name or the rest of
- *  the payload. */
-export async function funnelDraftCard(token: string): Promise<{ locale: Locale | null; sportKey: string | null }> {
-  const [row] = await sql<{ locale: string | null; sport: string | null }[]>`
-    select locale, payload->>'sport' as sport from funnel_drafts where token = ${token} limit 1`;
+ *  link carries none, so the card is worded in this one first), its sport as /start's key (the first-day-passed
+ *  card's "Start again" link carries it) and its reference (the replaced-link card names the code to look for in the latest
+ *  email: a replaced draft carries its successor's reference — createFunnelDraft keeps them in step). Any draft the token
+ *  names, used, replaced or expired too — a link opened a second time is still that visitor's, and its card is theirs to read.
+ *  Each is null when the token names no draft, the draft has no language, or its sport is none /start lists. Never the
+ *  address, the name or the rest of the payload. */
+export async function funnelDraftCard(
+  token: string,
+): Promise<{ locale: Locale | null; sportKey: string | null; reference: string | null }> {
+  const [row] = await sql<{ locale: string | null; sport: string | null; reference: string }[]>`
+    select locale, payload->>'sport' as sport, reference from funnel_drafts where token = ${token} limit 1`;
   return {
     locale: row?.locale != null && hasLocale(row.locale) ? row.locale : null,
     sportKey: row?.sport != null ? (funnelSportByKeyOrName(row.sport)?.key ?? null) : null,
+    reference: row?.reference ?? null,
   };
 }
 
@@ -157,15 +286,8 @@ export async function resolveSport(
   return { sport_key: "generic", variant_key: generic?.variant_key ?? "score" };
 }
 
-/** The `ui` key each entrant kind's placeholder name reads; `{n}` is its seed. */
-const PLACEHOLDER_NAME_KEY: Record<EntrantKind, string> = {
-  individual: "funnel.claim.entrant.individual",
-  pair: "funnel.claim.entrant.pair",
-  team: "funnel.claim.entrant.team",
-};
-
 /** The writes after the competition, each named in the partial-build log. */
-type ClaimStep = "division" | "stages" | "entrants" | "venue";
+type ClaimStep = "draft" | "division" | "stages" | "venue";
 
 /** A write refused AFTER the competition exists: the event is part-built behind a spent token. `cause` is the use-case's
  *  own refusal, unchanged (its status, its feature key); the claim route reads it to tell a part-built event from one
@@ -210,7 +332,10 @@ async function claimTargetOrg(userId: string): Promise<OrgMembership | null> {
 
 /**
  * Turn a claimed draft into real structure for `userId` and return where to
- * land: inside the new competition on the division's entrants tab. Uses the
+ * land: inside the new competition on the division's entrants tab, which the
+ * organiser fills — the claim writes NO entrants (/start "Sent stepper" wave,
+ * owner 2026-11-14: the placeholder "Player 1, Player 2…" rows are gone; the
+ * size chosen is the target the getting-started read reports). Uses the
  * standard use-cases, so quotas/slugs/audit all apply as if typed by hand.
  *
  * In order (start-wizard redesign plan, 2026-11-13):
@@ -223,16 +348,16 @@ async function claimTargetOrg(userId: string): Promise<OrgMembership | null> {
  *      so a 402 there writes nothing of the event) and the stage kinds' plan features (createStages, after the
  *      competition and division exist). Not one transaction: each use-case opens its own (`withTenant` never nests);
  *   1. the competition — one day long when the visitor gave a date (D5); undated otherwise (Q2: an end date needs a
- *      day the visitor never gave, the #376 residual);
+ *      day the visitor never gave, the #376 residual) — and the draft stamped with it (V518 `competition_id`: where the
+ *      getting-started read finds the size chosen, and the name and language the organisation was given);
  *   2. the division, of the sport's preferred variant, named as the sport is in the draft's language;
- *   3. the field: the visitor's size held to the plan's per-division cap (D4, Q1). It is the ONE size both the stages
- *      and the entrants are built for, so a 256 ask on a 64-entrant plan builds a 64 field's graph and 64 entrants —
- *      never a bracket sized for entrants that do not exist;
+ *   3. the field: the visitor's size held to the plan's per-division cap (D4, Q1). It is the size the stages are built
+ *      for, so a 256 ask on a 64-entrant plan builds a 64 field's graph — never a bracket sized past what the plan holds;
  *   4. the stages of the format card they picked, the graph that card's match count was read off
  *      (lib/funnel-formats.ts); none for a format the funnel does not offer, a draft that names none (old drafts), or a
- *      field below the format's minimum — never a guess;
- *   5. the entrants: name-only, of the division's default kind, seeded 1..field, named in the draft's language;
- *   6. the courts, when the visitor opened Planning and the organisation has no active venue: one venue holding that
+ *      field below the format's minimum — never a guess. No stage is generated: Generate is the organiser's, once they
+ *      have entrants;
+ *   5. the courts, when the visitor opened Planning and the organisation has no active venue: one venue holding that
  *      many. The hours are never written (D1).
  * A write after the competition that is refused is logged by step (`claimStep`) and rethrown as a
  * FunnelClaimPartialError; a refusal before it (the quota, the pre-flight) is thrown as it came.
@@ -284,6 +409,13 @@ export async function createFromDraft(
       "funnel_claim_entrants_clamped",
     );
   }
+  await claimStep("draft", competition.id, async () => {
+    const [stamped] = await sql<{ id: string }[]>`
+      update funnel_drafts set competition_id = ${competition.id} where id = ${draft.id} returning id`;
+    // An assumption as a guard: nothing deletes a draft, so the one just consumed is there to stamp. Were it gone, the
+    // getting-started read could not find the size chosen — a server fault, not the visitor's.
+    if (!stamped) throw new HttpError(500, "the claimed funnel draft is gone");
+  });
 
   // 2.
   const division = await claimStep("division", competition.id, () =>
@@ -298,22 +430,7 @@ export async function createFromDraft(
   // 3-4.
   if (stages !== null) await claimStep("stages", competition.id, () => createStages(auth, division.id, stages));
 
-  // 5. A plan that holds no entrants (`field` 0) asks for an empty batch, which createEntrants writes nothing for.
-  const kind = registrationDefaultKind(division);
-  await claimStep("entrants", competition.id, () =>
-    createEntrants(
-      auth,
-      division.id,
-      Array.from({ length: field }, (_, i) => ({
-        kind,
-        display_name: t(dict, PLACEHOLDER_NAME_KEY[kind], { n: i + 1 }),
-        seed: i + 1,
-        members: [],
-      })),
-    ),
-  );
-
-  // 6.
+  // 5.
   const { courts } = payload;
   if (courts !== undefined) {
     await claimStep("venue", competition.id, async () => {

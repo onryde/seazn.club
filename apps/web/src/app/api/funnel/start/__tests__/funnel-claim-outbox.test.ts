@@ -41,18 +41,23 @@ type ClaimRow = {
 const address = (): string => `${RUN}-${randomUUID().slice(0, 8)}@x.test`;
 const competition = (): string => `Spring Open ${randomUUID().slice(0, 6)}`;
 
+/** What the route answers a start with (`handler`'s envelope, unwrapped). */
+type Started = { message?: string; reference?: string; replaceKey?: string; claim_url?: string };
 /** The visitor's start, as the /start page posts it (with the browser's cookie header, when one is given). */
-async function post(body: Record<string, unknown>, cookie?: string): Promise<{ status: number }> {
+async function post(body: Record<string, unknown>, cookie?: string): Promise<{ status: number; data: Started }> {
   const headers: Record<string, string> = { "content-type": "application/json", ...(cookie === undefined ? {} : { cookie }) };
   const res = await start(new Request(`${ORIGIN}/api/funnel/start`, { method: "POST", headers, body: JSON.stringify(body) }));
-  await res.text();
-  return { status: res.status };
+  const json = (await res.json()) as { data?: Started };
+  return { status: res.status, data: json.data ?? {} };
 }
+/** The reference shape, from the owner's rule (0-9 and A-Z less 0, O, 1, I; six of them), never from the code. */
+const RULE_SHAPE = new RegExp(`^SZ-[${[..."0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"].filter((c) => !"0O1I".includes(c)).join("")}]{6}$`);
 const startFor = (email: string, name: string, sport = "Badminton") => post({ email, name, sport, entrants: 8 });
 
 /** The drafts written for an address, oldest first. */
 const draftsOf = (email: string) =>
-  sql<{ id: string; token: string }[]>`select id, token from funnel_drafts where email = ${email} order by created_at, id`;
+  sql<{ id: string; token: string; reference: string; replaced: boolean }[]>`
+    select id, token, reference, replaced_at is not null as replaced from funnel_drafts where email = ${email} order by created_at, id`;
 /** The claim rows queued for an address, oldest first. */
 const claimRows = (email: string) =>
   sql<ClaimRow[]>`
@@ -187,21 +192,107 @@ describe.skipIf(!HAS_DB)("POST /api/funnel/start queues the claim link on the ou
     expect(subjects.size, "premise: every shipped language has its own subject").toBe(LOCALES.length);
   });
 
-  it("a second start is a second draft and a second email; neither replaces the other", async () => {
-    // Each start writes its own draft with its own single-use token, and both links work (P-W3-2): the ref is the draft, so the two
-    // rows are two documents and the replace rule leaves both alone.
+  it("a second start for the address replaces the first: one live draft, two emails, each printing its own draft's reference", async () => {
+    // /start "Sent stepper" T1 (owner, 2026-11-14): the visitor went back and sent the wizard again. Each start still emails its own
+    // link (the newest is the one that works) and the first draft is retired. With no replace key the resubmit draws a NEW
+    // reference (T1 review m1: knowing an address must not reveal its live draft's code), and the replaced draft is rewritten to
+    // name it — the code the replaced-link card shows is the one the latest email carries. Every start is counted
+    // (funnel_draft_created fires per POST, in the other file).
     const email = address();
-
-    expect((await startFor(email, competition())).status).toBe(200);
-    expect((await startFor(email, competition())).status).toBe(200);
+    const first = await startFor(email, competition());
+    const second = await startFor(email, competition());
+    expect([first.status, second.status]).toEqual([200, 200]);
+    expect(first.data.reference, "the answer carries the reference").toMatch(RULE_SHAPE);
+    expect(second.data.reference, "the keyless resubmit draws its own").toMatch(RULE_SHAPE);
+    expect(second.data.reference, "never the replaced draft's").not.toBe(first.data.reference);
+    expect(second.data.replaceKey, "each start answers its own replace key").not.toBe(first.data.replaceKey);
 
     const drafts = await draftsOf(email);
-    expect(drafts, "two drafts").toHaveLength(2);
+    expect(drafts.map((d) => [d.reference, d.replaced]), "the first is replaced and names the second's code; the second is live").toEqual([
+      [second.data.reference, true],
+      [second.data.reference, false],
+    ]);
     const rows = await claimRows(email);
-    expect(rows.map((r) => [r.ref_id, r.status])).toEqual(drafts.map((d) => [d.id, "sent"]));
+    expect(rows.map((r) => [r.ref_id, r.status]), "two emails, one per draft, both sent").toEqual(drafts.map((d) => [d.id, "sent"]));
+    const printed = [first.data.reference!, second.data.reference!];
+    let checked = 0;
     for (const [i, row] of rows.entries()) {
-      expect(callsFor(row.id)[0]!.text, `row ${i} carries its own draft's token`).toContain(`/start/claim?token=${drafts[i]!.token}`);
+      const mail = callsFor(row.id)[0]!;
+      expect(mail.text, `row ${i} carries its own draft's token`).toContain(`/start/claim?token=${drafts[i]!.token}`);
+      const line = dictionarySubject("en", "funnelClaim.reference", { reference: printed[i]! });
+      expect(mail.text, `row ${i}: the plain text prints the reference its start answered`).toContain(line);
+      expect(mail.html, `row ${i}: so does the HTML`).toContain(line);
+      checked++;
     }
+    expect(checked, "anti-vacuity: both emails read").toBe(2);
+  });
+
+  it("the reference line is the visitor's language in every shipped locale", async () => {
+    let checked = 0;
+    const lines = new Set<string>();
+    for (const locale of LOCALES) {
+      const email = address();
+      const got = await post({ email, name: competition(), sport: "Badminton", entrants: 8, locale });
+      expect(got.status, locale).toBe(200);
+      const [row] = await claimRows(email);
+      const mail = callsFor(row!.id)[0]!;
+      const line = dictionarySubject(locale, "funnelClaim.reference", { reference: got.data.reference! });
+      expect(mail.text, `${locale}: plain text`).toContain(line);
+      expect(mail.html, `${locale}: HTML`).toContain(line);
+      lines.add(dictionarySubject(locale, "funnelClaim.reference", { reference: "SZ-XXXXXX" }));
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every locale").toBe(LOCALES.length);
+    expect(lines.size, "premise: every locale words the line its own way").toBe(LOCALES.length);
+  });
+
+  it("Change email: the earlier start's reference and replace key, posted with a new address, carry the reference over", async () => {
+    const before = address();
+    const after = address();
+    const first = await startFor(before, competition());
+    const moved = await post({
+      email: after,
+      name: competition(),
+      sport: "Badminton",
+      entrants: 8,
+      previousReference: first.data.reference,
+      replaceKey: first.data.replaceKey,
+    });
+    expect(moved.status).toBe(200);
+    expect(moved.data.reference).toBe(first.data.reference);
+    expect((await draftsOf(before)).map((d) => d.replaced), "the old address's draft is replaced").toEqual([true]);
+    expect((await draftsOf(after)).map((d) => [d.reference, d.replaced])).toEqual([[first.data.reference, false]]);
+
+    // A wrong key is no error (the route says nothing about another visitor's draft): a fresh start, the other draft untouched.
+    const stranger = address();
+    const guessed = await post({
+      email: stranger,
+      name: competition(),
+      sport: "Badminton",
+      entrants: 8,
+      previousReference: first.data.reference,
+      replaceKey: "x".repeat(43),
+    });
+    expect(guessed.status).toBe(200);
+    expect(guessed.data.reference).not.toBe(first.data.reference);
+    expect((await draftsOf(after)).map((d) => d.replaced), "the live draft is untouched").toEqual([false]);
+  });
+
+  it("half a replace pair, or a reference out of shape, is refused: no draft, no email", async () => {
+    const bodies = [
+      { label: "a reference without its key", extra: { previousReference: "SZ-23HJKZ" } },
+      { label: "a key without its reference", extra: { replaceKey: "k".repeat(43) } },
+      { label: "a reference out of shape", extra: { previousReference: "SZ-0OI1AA", replaceKey: "k".repeat(43) } },
+    ];
+    let checked = 0;
+    for (const b of bodies) {
+      const email = address();
+      expect((await post({ email, name: competition(), sport: "Badminton", entrants: 8, ...b.extra })).status, b.label).toBe(400);
+      expect(await draftsOf(email), `${b.label}: no draft`).toEqual([]);
+      expect(await claimRows(email), `${b.label}: no row`).toEqual([]);
+      checked++;
+    }
+    expect(checked, "anti-vacuity").toBe(bodies.length);
   });
 
   it("a body with courts and hours is accepted and stored; out-of-range planning is refused and stores nothing", async () => {

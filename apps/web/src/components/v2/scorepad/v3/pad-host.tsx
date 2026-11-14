@@ -2834,8 +2834,9 @@ export function PadHostV3(props: PadHostV3Props) {
    * and neither is this function's own — the `canAmendRow` re-derivation above
    * (once the first replacement is in `pendingEnvelopes` the original is no
    * longer the newest folding event, so the second tap returns early), and
-   * failing that `submitHeld`'s own same-tick `submitInFlight` guard, which
-   * refuses an identical (type, payload) and returns `null`, for which
+   * failing that `submitHeld`'s own DOUBLE_SUBMIT_WINDOW_MS guard, which
+   * refuses an identical (type, payload) — a same-tick repeat included, since
+   * the first is recorded before any await — and returns `null`, for which
    * `runAmend` writes no void at all. A latch here would be a third answer to a question
    * two layers already answer; if one of them ever moves, this needs one.
    */

@@ -14,6 +14,7 @@ export const dynamic = "force-dynamic";
 // `?court=<id>` opens that court (B4: Needs you's "Find a court" names the free court whose candidates it means).
 // `?venue=<id>,<id>` (or `all`) is the venue filter's choice (E2 item 5); absent, the venues with a match today.
 import { requireCompetitionPage } from "@/server/page-auth";
+import { searchOf } from "@/lib/routes";
 import { getMatchDay } from "@/server/usecases/match-day";
 import { getCompetition, listFrozenCompetitions } from "@/server/usecases/competitions";
 import { orgPlanKey } from "@/lib/entitlements";
@@ -37,7 +38,7 @@ export default async function MatchDayPage({
   const query = await searchParams;
   const court = query.court;
   const venue = query.venue;
-  const page = await requireCompetitionPage(orgSlug, compSlug, { tail: "/match-day" });
+  const page = await requireCompetitionPage(orgSlug, compSlug, { tail: "/match-day", search: searchOf(query) });
   const id = page.competition.id;
   const locale = await resolveLocale();
   const [ui, pub, view, divisions, planKey, competition] = await Promise.all([

@@ -137,6 +137,32 @@ describe("resolveConflict — pure 409 ledger-slot decision", () => {
     };
     expect(resolveConflict(a, slot, ME, 41)).toEqual({ kind: "already-applied" });
   });
+
+  // fix/pad-second-tap-in-flight review I-1. Two identical own taps A then B:
+  // A lost a race, renegotiated, and landed one slot later than B was stamped
+  // to expect — so B's slot now holds A's row, byte-identical and ours. If B's
+  // first send was lost, its retry used to read that row as its own landed
+  // write and drop B. A seq this pad already holds an ACK for is another of
+  // its events' rows by construction (an event leaves the queue on its ack;
+  // the one being judged is still queued), so it can never be B's.
+  it("I-1: a content-matching own slot on a RETRY whose seq the pad already acked for ANOTHER event → renegotiates, never already-applied", () => {
+    expect(resolveConflict(event("a", { attempts: 1 }), ours, ME, 41, new Set([ours.seq]))).toEqual({
+      kind: "renegotiate",
+      expectedSeq: 41,
+    });
+  });
+
+  it("I-1 mirror: acked seqs that do NOT include the slot leave a genuine retry's already-applied verdict alone", () => {
+    expect(resolveConflict(event("a", { attempts: 1 }), ours, ME, 41, new Set([ours.seq - 1, ours.seq + 1]))).toEqual({
+      kind: "already-applied",
+    });
+  });
+
+  it("I-1, no currentSeq: a slot acked for another event is still never already-applied — indeterminate, not a guess", () => {
+    expect(resolveConflict(event("a", { attempts: 1 }), ours, ME, null, new Set([ours.seq]))).toEqual({
+      kind: "indeterminate",
+    });
+  });
 });
 
 describe("resolveConflict — undefined-vs-null identity normalisation (review finding 1)", () => {
@@ -287,6 +313,30 @@ describe("sendOne — the mutation-checked replay contract", () => {
     expect(outcome).toEqual({ kind: "already-applied", localId: "local-a", idempotencyKey: "a" });
     expect(await peekInOrder(store)).toEqual([]); // dropped
     expect(calls).toHaveLength(1); // NEVER resent
+  });
+
+  it("I-1: a RETRY's 409 against a byte-identical own row the pad already ACKED for another event → renegotiated and resent, never dropped", async () => {
+    const store = memoryQueueStore();
+    const pending = event("b", { expectedSeq: 10, type: "core.note", payload: { text: "same" }, attempts: 1 });
+    await store.put(pending);
+    const { transport, calls } = fakeTransport({
+      appendScript: {
+        b: [
+          { kind: "conflict", currentSeq: 11, message: "seq conflict" },
+          { kind: "ok", data: success(12) },
+        ],
+      },
+      slotsBySinceSeq: {
+        10: [{ seq: 11, type: "core.note", payload: { text: "same" }, recorded_by: "user-1", device_link_id: null }],
+      },
+    });
+
+    const outcome = await sendOne(transport, store, "fx-1", pending, ME, new Set([11]));
+
+    expect(outcome).toEqual({ kind: "acked", localId: "local-b", idempotencyKey: "b", result: success(12) });
+    expect(calls.map((c) => c.body.expected_seq), "original slot, then the tip the 409 named").toEqual([10, 11]);
+    expect(calls[1]?.body.idempotency_key).toBe("b");
+    expect(await peekInOrder(store)).toEqual([]);
   });
 
   it("409 whose slot holds a FOREIGN event → renegotiated and resent exactly once", async () => {

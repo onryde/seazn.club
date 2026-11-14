@@ -9,7 +9,7 @@ import {
 import { getUserOrgs } from "@/lib/auth";
 import { requireOrgPage } from "@/server/page-auth";
 import { redirect } from "next/navigation";
-import { routes } from "@/lib/routes";
+import { routes, searchOf } from "@/lib/routes";
 import { sql } from "@/lib/db";
 import { hasFeature, hasFeatureOnAnyPass } from "@/lib/entitlements";
 import { type OrgMember } from "@/lib/types";
@@ -110,14 +110,14 @@ export default async function SettingsPage({
   searchParams: Promise<{ tab?: string; email_change?: string; lichess?: string; [param: string]: string | string[] | undefined }>;
 }) {
   const { orgSlug } = await params;
-  const page = await requireOrgPage(orgSlug, { tail: "/settings" });
+  const rawParams = await searchParams;
+  const page = await requireOrgPage(orgSlug, { tail: "/settings", search: searchOf(rawParams) });
 
   // The Sponsors tab left Settings for the top-level Sponsors hub (R4 sponsors-on-stream S11). Old links - bookmarks,
   // the sidebar entry minted before the move - land here and forward with their query intact. This reads the RAW tab
   // and must stay ABOVE the SETTINGS_TABS fallback below: "sponsors" is no longer in SETTINGS_TABS, so after the
   // fallback it would read as "organization" and the redirect would never fire. It stays BELOW `requireOrgPage`, so a
   // non-member is refused here exactly as before. 307, not 308: nothing says this shim is forever.
-  const rawParams = await searchParams;
   if (rawParams.tab === "sponsors") redirect(legacySettingsSponsorsTarget(orgSlug, rawParams));
 
   const { user, org: active, canEdit, auth } = page;

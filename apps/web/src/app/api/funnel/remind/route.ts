@@ -19,7 +19,8 @@ import { enqueueEmailOnce, expiryWithin, onceKey, recipientLocale } from "@/serv
  *  whose stamp wrote a row asks for it (F6), the once-key `<draft id>:reminder`
  *  keeps a re-swept draft to one row, and a refused enqueue rolls the stamp
  *  back for the next run (D1: the run fails). The worker sends it, and retries
- *  a failed send (§9). Expired drafts are never revived. */
+ *  a failed send (§9). Expired drafts are never revived, and a draft a newer start
+ *  replaced (V518) is never reminded: its link no longer claims. */
 export async function POST(req: Request) {
   return handler(async () => {
     const secret = process.env.CRON_SECRET;
@@ -32,6 +33,7 @@ export async function POST(req: Request) {
     >`
       select id, token, email, payload, expires_at, locale from funnel_drafts
       where used_at is null
+        and replaced_at is null
         and reminded_at is null
         and created_at < now() - interval '24 hours'
         and expires_at > now()

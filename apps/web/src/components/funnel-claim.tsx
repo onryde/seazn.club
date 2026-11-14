@@ -9,6 +9,7 @@ import {
   FUNNEL_CLAIM_DATE_PAST,
   FUNNEL_CLAIM_INVALID,
   FUNNEL_CLAIM_PLAN_LIMIT,
+  FUNNEL_CLAIM_REPLACED,
   FUNNEL_CLAIM_SIGNED_IN,
 } from "@/lib/funnel-claim-codes";
 
@@ -20,8 +21,10 @@ import {
  *    passed. Nothing exists, so the way on is a fresh start on /<lang>/start with the draft's sport (never the dashboard
  *    and its "may be partly built").
  *  - `tryLater`: the limiter refused the POST before the token was read, so the same link still works in a moment.
+ *  - `replaced`: a newer start replaced this draft (V518). Signed out, nothing built; the way on is the latest email, which
+ *    carries the same reference — named when the page knows it.
  *  - `missing` / `invalid` / `failed`: signed out, with a fresh start or a sign-in as the way on. */
-type Failure = "missing" | "invalid" | "failed" | "tryLater" | "signedIn" | "limit" | "datePast";
+type Failure = "missing" | "invalid" | "failed" | "tryLater" | "signedIn" | "limit" | "datePast" | "replaced";
 
 /** The route names its refusals with a `code`; a 429 is the limiter's; anything else (a 5xx before the session, the
  *  network) is the generic failure. The route's English `error` is never shown — the card words every state from the
@@ -32,14 +35,24 @@ function failureOf(e: unknown): Exclude<Failure, "missing"> {
   if (e.code === FUNNEL_CLAIM_PLAN_LIMIT) return "limit";
   if (e.code === FUNNEL_CLAIM_DATE_PAST) return "datePast";
   if (e.code === FUNNEL_CLAIM_INVALID) return "invalid";
+  if (e.code === FUNNEL_CLAIM_REPLACED) return "replaced";
   if (e.status === 429) return "tryLater";
   return "failed";
 }
 
 /** Consumes a funnel draft token: signs the visitor in, creates the drafted
  *  competition, and routes inside it (v3/07 §6). Mirrors <MagicLink>. `restartSport` is the draft's sport as /start's
- *  key (the page reads it by the token), carried by the first-day-passed card's "Start again" — and nothing else is. */
-export function FunnelClaim({ token, restartSport = null }: { token: string | null; restartSport?: string | null }) {
+ *  key (the page reads it by the token), carried by the first-day-passed card's "Start again" — and nothing else is.
+ *  `reference` is the draft's reference (the page reads it by the token too), named by the replaced-link card. */
+export function FunnelClaim({
+  token,
+  restartSport = null,
+  reference = null,
+}: {
+  token: string | null;
+  restartSport?: string | null;
+  reference?: string | null;
+}) {
   const router = useRouter();
   const msg = useMsg();
   const locale = useLocaleOrDefault();
@@ -108,6 +121,28 @@ export function FunnelClaim({ token, restartSport = null }: { token: string | nu
           <Link href={restartHref} className="btn btn-primary mt-4 inline-block px-4">
             {msg("funnel.claim.card.startAgain")}
           </Link>
+        </>
+      )}
+      {shown === "replaced" && (
+        <>
+          <div className="mb-3 text-4xl">📬</div>
+          <p className="font-semibold text-slate-800">{msg("funnel.claim.card.replacedTitle")}</p>
+          <p className="mt-1 text-sm text-slate-600">
+            {reference
+              ? msg("funnel.claim.card.replacedBody", { reference })
+              : msg("funnel.claim.card.replacedBodyNoReference")}
+          </p>
+          {/* The latest email may be gone (deleted, another inbox): the dead-link card's own ways on (T1 review m5). */}
+          <p className="mt-4 text-sm text-slate-500">
+            <Link href="/start" className="font-medium text-purple-700 underline">
+              {msg("funnel.claim.card.startAgain")}
+            </Link>{" "}
+            {msg("funnel.claim.card.or")}{" "}
+            <Link href="/login" className="font-medium text-purple-700 underline">
+              {msg("funnel.claim.card.signIn")}
+            </Link>
+            .
+          </p>
         </>
       )}
       {shown === "tryLater" && (

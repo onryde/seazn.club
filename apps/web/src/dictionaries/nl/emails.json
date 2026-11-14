@@ -72,6 +72,7 @@
   "funnelClaim.button": "Instellen afronden",
   "funnelClaim.footer": "De link werkt eenmalig en verloopt over 7 dagen. Als je dit niet hebt aangevraagd, kun je het veilig negeren.",
   "funnelClaim.text": "Rond het instellen van “{competitionName}” af (link werkt eenmalig, verloopt over 7 dagen): {link}",
+  "funnelClaim.reference": "Je referentie: {reference}",
   "funnelReminder.subject": "Nog steeds “{competitionName}” aan het plannen?",
   "funnelReminder.preheader": "Je opgestelde competitie verloopt over een paar dagen.",
   "funnelReminder.eyebrow": "Herinnering",

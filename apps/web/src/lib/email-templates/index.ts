@@ -41,7 +41,7 @@ export {
 } from "./registration-lifecycle";
 export { disputeAlertTemplate, type DisputeAlertArgs } from "./dispute-alert";
 export { disputeLostTemplate, type DisputeLostArgs } from "./dispute-lost";
-export { funnelClaimTemplate, funnelReminderTemplate, type FunnelEmailArgs } from "./funnel";
+export { funnelClaimTemplate, funnelReminderTemplate, type FunnelClaimEmailArgs, type FunnelEmailArgs } from "./funnel";
 export {
   quickMatchLinkTemplate,
   quickMatchReminderTemplate,

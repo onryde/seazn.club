@@ -15,6 +15,7 @@ export const dynamic = "force-dynamic";
 import { notFound } from "next/navigation";
 import { divisionScoringClosed } from "@/lib/division-phase";
 import { requireDivisionPage } from "@/server/page-auth";
+import { searchOf } from "@/lib/routes";
 import { getDivision } from "@/server/usecases/divisions";
 import {
   arbiterRequestedRound,
@@ -34,8 +35,9 @@ export default async function DivisionArbiterPage({
   params: Promise<{ orgSlug: string; compSlug: string; divSlug: string }>;
   searchParams: Promise<{ fixture?: string | string[] }>;
 }) {
-  const [{ orgSlug, compSlug, divSlug }, { fixture }] = await Promise.all([params, searchParams]);
-  const page = await requireDivisionPage(orgSlug, compSlug, divSlug, { tail: "/arbiter" });
+  const [{ orgSlug, compSlug, divSlug }, sp] = await Promise.all([params, searchParams]);
+  const { fixture } = sp;
+  const page = await requireDivisionPage(orgSlug, compSlug, divSlug, { tail: "/arbiter", search: searchOf(sp) });
   // A viewer does not even load the division: this first `canEdit` only saves the read, the predicate below owns the rule.
   if (!page.canEdit) notFound();
   const division = await getDivision(page.auth, page.division.id);

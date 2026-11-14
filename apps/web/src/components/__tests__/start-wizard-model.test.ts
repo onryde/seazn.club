@@ -30,6 +30,9 @@ import {
   WIZARD_STEPS,
   buildFunnelBody,
   canAdvance,
+  heldStart,
+  keptReference,
+  sendBody,
   initialWizardState,
   nextEventDays,
   parseCount,
@@ -677,5 +680,59 @@ describe("guards behind guards, reached alone", () => {
     ];
     for (const [date, want] of rows) expect(initialWizardState({ ...NO_PREFILL, date }, CTX).date, date).toBe(want);
     expect(rows.length).toBe(3);
+  });
+});
+
+// The Change-email flow (/start "Sent stepper", owner 2026-11-14): the start route answers a `reference` and a `replaceKey`;
+// every resend carries both back, so the draft the first send wrote is replaced although the address changed. The route's own
+// rule for the pair (app/api/funnel/start/route.ts): `previousReference` the SZ- shape, `replaceKey` 32 to 100 characters, both
+// or neither. The DB half (the pair through the real route) is wizard-body-claim.test.ts.
+describe("the replace pair a resend carries", () => {
+  const ROUTE_PAIR = z
+    .object({ previousReference: z.string().regex(/^SZ-[2-9A-HJ-NP-Z]{6}$/).optional(), replaceKey: z.string().min(32).max(100).optional() })
+    .refine((b) => (b.previousReference === undefined) === (b.replaceKey === undefined));
+  const KEY = "k".repeat(43);
+
+  it("is held only when the answer carries both halves", () => {
+    const rows: [unknown, ReturnType<typeof heldStart>][] = [
+      [{ message: "x", reference: "SZ-4K7Q2M", replaceKey: KEY }, { reference: "SZ-4K7Q2M", replaceKey: KEY }],
+      [{ message: "x", reference: "SZ-4K7Q2M" }, null],
+      [{ message: "x", replaceKey: KEY }, null],
+      [{ message: "x" }, null],
+      [{ reference: 7, replaceKey: KEY }, null],
+      [undefined, null],
+      [null, null],
+      ["SZ-4K7Q2M", null],
+    ];
+    for (const [answer, want] of rows) expect(heldStart(answer), JSON.stringify(answer)).toEqual(want);
+    expect(rows.length).toBe(8);
+  });
+
+  it("the reference stayed only when the resend's answer names the one held (review m1): the server decides, not the resend", () => {
+    const held = { reference: "SZ-4K7Q2M", replaceKey: KEY };
+    const rows: [string, ReturnType<typeof heldStart>, ReturnType<typeof heldStart>, boolean][] = [
+      ["the first send: nothing held before", null, held, false],
+      ["a resend answered under the same reference", held, { reference: "SZ-4K7Q2M", replaceKey: "n".repeat(43) }, true],
+      ["a resend answered under a new reference (the pair was refused or the draft was gone)", held, { reference: "SZ-9XWQ3P", replaceKey: KEY }, false],
+      ["a resend answered without a pair", held, null, false],
+    ];
+    for (const [label, prev, next, want] of rows) expect(keptReference(prev, next), label).toBe(want);
+    expect(rows.length).toBe(4);
+  });
+
+  it("the first send carries no pair; a resend carries both, beside an unchanged body; the route's rule takes either", () => {
+    const s = run(initialWizardState(NO_PREFILL, CTX), [{ type: "email", value: "sam@harbourvale.org" }]);
+    const body = buildFunnelBody(s, "en", "Badminton tournament");
+    const first = sendBody(body, null);
+    expect(first, "the first send is the wizard's body as it was").toEqual(body);
+    expect(first).not.toHaveProperty("previousReference");
+    expect(first).not.toHaveProperty("replaceKey");
+    const resend = sendBody({ ...body, email: "sam@harbourvale.com" }, { reference: "SZ-4K7Q2M", replaceKey: KEY });
+    expect(resend).toEqual({ ...body, email: "sam@harbourvale.com", previousReference: "SZ-4K7Q2M", replaceKey: KEY });
+    for (const sent of [first, resend]) {
+      const { previousReference, replaceKey, ...rest } = sent as Record<string, unknown>;
+      expect(ROUTE_PAIR.safeParse({ previousReference, replaceKey }).success, JSON.stringify(sent)).toBe(true);
+      expect(ROUTE_BODY.safeParse(rest).success, "the rest is the route's body").toBe(true);
+    }
   });
 });

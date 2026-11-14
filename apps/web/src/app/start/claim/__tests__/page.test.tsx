@@ -70,7 +70,7 @@ async function page(token?: string) {
   expect(langs, "one <html lang> writer").toHaveLength(1);
   return {
     locale: (provider.props as { locale: string }).locale,
-    card: cards[0]!.props as { token: string | null; restartSport?: string | null },
+    card: cards[0]!.props as { token: string | null; restartSport?: string | null; reference?: string | null },
     nav: (navs[0]!.props as { lang?: string }).lang,
     htmlLang: (langs[0]!.props as { lang?: string }).lang,
     html: renderToStaticMarkup(provider),
@@ -160,6 +160,24 @@ describe("the funnel claim page", () => {
     expect((await page(await draftIn("en", "Quidditch"))).card.restartSport, "a sport /start does not list").toBeNull();
     expect((await page(`never-${randomUUID()}`)).card.restartSport, "a token that names no draft").toBeNull();
     expect((await page()).card.restartSport, "no token").toBeNull();
+  });
+
+  it.skipIf(!HAS_DB)("the card gets the draft's reference — the one its latest email carries, also for a replaced link; none without a draft", async () => {
+    // V518: the replaced-link card names the code to look for. A keyless resubmit draws a new reference (T1 review m1) and the
+    // replaced draft is rewritten to name it, so the replaced link and the live one read the same: the LATEST start's answer is the
+    // expected value, never the page's read.
+    const email = `${RUN}-${randomUUID().slice(0, 6)}@example.com`;
+    const payload = { name: `${RUN} ref`, sport: "Badminton", entrants: 4 };
+    const first = await createFunnelDraft(email, payload, sql, "en");
+    const second = await createFunnelDraft(email, payload, sql, "en");
+    let checked = 0;
+    for (const token of [first.token, second.token]) {
+      expect((await page(token)).card.reference, token === first.token ? "the replaced link" : "the live link").toBe(second.reference);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    expect((await page(`never-${randomUUID()}`)).card.reference, "a token that names no draft").toBeNull();
+    expect((await page()).card.reference, "no token").toBeNull();
   });
 
   it.skipIf(!HAS_DB)("no draft language falls to the visitor's: a draft started with none, and a token no draft was minted for", async () => {

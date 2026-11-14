@@ -566,5 +566,12 @@
   "quickMatch.setup.shape.semisNeeds": "Needs {min} or more sides",
   "quickMatch.setup.shape.finalNeeds": "Needs {min} or more sides",
   "quickMatch.setup.shape.notForSport": "Not available for this sport",
-  "quickMatch.errors.semisTooFewSides": "Semi-finals need {min} or more sides."
+  "quickMatch.errors.semisTooFewSides": "Semi-finals need {min} or more sides.",
+  "start.wizard.reference": "Reference {reference}",
+  "start.wizard.referenceNote": "The same reference is printed in the email.",
+  "start.wizard.resentNote": "Only the newest link works. The reference stays the same.",
+  "start.wizard.language": "Language",
+  "start.wizard.changeBanner": "Your earlier link will stop working when you send a new one. Reference {reference} stays.",
+  "start.wizard.answersKept": "Your answers are kept. Use Back to change any of them.",
+  "start.wizard.sendNew": "Send a new link"
 }

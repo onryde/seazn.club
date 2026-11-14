@@ -31,6 +31,10 @@ export const QUICK_MATCH_SAVED_REASON = "quick_match_saved";
  *  expiry 7 days out, so the queued "will be deleted" mail names an expiry that no longer holds. The new expiry gets its own
  *  reminder. Cancelled on the system org's tenant handle (usecases/quick-match-activity.ts). */
 export const QUICK_MATCH_REARMED_REASON = "quick_match_rearmed";
+/** A newer /start replaced the funnel draft (V518, /start "Sent stepper"): its claim link is dead (the claim answers
+ *  FUNNEL_CLAIM_REPLACED), so its claim email still waiting on a retry, and its +24h reminder, are moot. Org-less visitor mail,
+ *  cancelled on the pooled handle inside the start's transaction (lib/funnel.ts createFunnelDraft). */
+export const FUNNEL_DRAFT_REPLACED_REASON = "funnel_draft_replaced";
 
 /**
  * Every reason a cancel may write. `status.ts` reads an `expired` row with one of these in `last_error` as "voided, not delivered":
@@ -45,6 +49,7 @@ export const CANCELLED_REASONS: readonly string[] = [
   EMAIL_CHANGE_SUPERSEDED_REASON,
   QUICK_MATCH_SAVED_REASON,
   QUICK_MATCH_REARMED_REASON,
+  FUNNEL_DRAFT_REPLACED_REASON,
 ];
 
 type CancelledRecord = {
