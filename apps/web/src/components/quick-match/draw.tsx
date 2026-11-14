@@ -9,7 +9,9 @@
 //
 // A SERVER component over words home.tsx already resolved: no dictionary, token or database here. Two cards to a row on
 // every width, as the mockup draws them; each name truncates inside its card (`min-w-0` down the chain), so a 40-character
-// side never widens a 320px screen.
+// side never widens a 320px screen. A name gives up width before its rank note or score does, and a card's Score and ⋯
+// sit at its foot, so the two cards of a row line up whatever their seats hold (sign-off qlk14s1, 2026-11-14: a long
+// name's note wrapped under it and Semi-final 2's Score sat lower than Semi-final 1's).
 //
 // A League + Knockout's knockout (quick match plan 5 Task 7, D7; mockup qmd13a01 §7-12): the same cards under "Knockout",
 // with a caption while it waits ("Fills itself when the league ends", "Waiting for the tie"). A seat waiting on the league
@@ -132,7 +134,8 @@ export function QuickMatchDrawCard({
       data-bye={c.bye ? "true" : undefined}
       data-next={c.next ? "true" : undefined}
       className={[
-        "min-w-0 rounded-xl border px-2.5 py-2",
+        // A column, so the actions row can take the card's foot (`mt-auto`): a row's cards stretch to one height.
+        "flex min-w-0 flex-col rounded-xl border px-2.5 py-2",
         c.isFinal
           ? "col-span-2 border-[color:var(--mk-lime)] bg-[#241650]"
           : c.next
@@ -163,7 +166,7 @@ export function QuickMatchDrawCard({
         </p>
       ) : null}
       {scoreControl || menu ? (
-        <div data-testid="qm-draw-actions" className="mt-2 flex min-w-0 flex-wrap items-center justify-end gap-2">
+        <div data-testid="qm-draw-actions" className="mt-auto flex min-w-0 flex-wrap items-center justify-end gap-2 pt-2">
           {scoreControl}
           {menu}
         </div>
@@ -173,8 +176,11 @@ export function QuickMatchDrawCard({
 }
 
 /** One side's line (a plain function, so the card's tree holds it): the name, or the feeder in words while it waits, which
- *  WRAPS ("Winner of quarter-final 2" is not cut short); a winner's finished score at the line's end, wrapping below a
- *  long name rather than widening the card. */
+ *  WRAPS ("Winner of quarter-final 2" is not cut short); a rank note or a winner's finished score at the line's end.
+ *
+ *  A named seat starts from no width and grows (`flex-1`), so its length never pushes the note or score off the line: it
+ *  truncates instead, down to a 5rem floor. Only what will not fit beside 5rem of name (a badminton winner's "11–9 · 8–11
+ *  · 11–7" in a half-width card at 320) drops below it, never wider than the card. */
 function seatLine(seat: DrawSeat) {
   return (
     <p
@@ -185,7 +191,10 @@ function seatLine(seat: DrawSeat) {
         seat.winner ? "font-semibold text-[color:var(--mk-lime)]" : seat.name === null ? "text-[#b7aede]" : "text-cream",
       ].join(" ")}
     >
-      <span data-testid="qm-draw-name" className={seat.name === null ? "min-w-0 max-w-full break-words" : "min-w-0 max-w-full truncate"}>
+      <span
+        data-testid="qm-draw-name"
+        className={seat.name === null ? "min-w-0 max-w-full break-words" : "min-w-[min(100%,5rem)] flex-1 truncate"}
+      >
         {seat.label}
       </span>
       {seat.note !== undefined ? (

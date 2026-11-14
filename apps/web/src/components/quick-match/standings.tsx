@@ -24,6 +24,8 @@
 // `toDecide`), and once settled a row carries "decided by lot" or "picked" (`tag`). The "Full table" carries the same marks
 // row for row (T7 review m2). The caption and the note stack together on the right from md (m6). A plain League draws none
 // of these.
+import type { ReactNode } from "react";
+
 /** The public table's columns and cells for this league, already in the viewer's words: the page builds it. */
 export interface FullTableData {
   /** In the public table's order: the key, the printed abbreviation and the column's name in words. */
@@ -222,6 +224,23 @@ const FOCUS =
   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--mk-lime)]";
 const HEAD = "app-display px-2 py-1.5 text-[11px] font-semibold tracking-[0.08em] text-[#b7aede]";
 
+/** The Full table's side name: on a phone the column holds 10rem and the table scrolls sideways in its region; from md the
+ *  cap lifts and the name takes the room the numbers leave (sign-off qlk14s1: capped at 10rem beside ~400px of empty row
+ *  at 1280), still ending in an ellipsis when that is not enough. */
+const FULL_NAME = "block max-w-[10rem] truncate md:max-w-none";
+/** The side cell's content, from md: the cell asks for the table's whole width (`md:w-full` on the `th`), so the numeric
+ *  columns keep their own widths and the side column takes the rest. The inner box adds nothing to the column's width
+ *  (`w-0 min-w-full`: as wide as its cell and no wider), so a long name truncates instead of widening the table; the outer
+ *  box holds the column at 10rem at least, so a sport with many columns scrolls rather than squeezing the name to
+ *  nothing. Below md both boxes are plain blocks and the cell is what it was. */
+function fullSide(content: ReactNode): ReactNode {
+  return (
+    <span className="block md:min-w-[10rem]">
+      <span className="block md:w-0 md:min-w-full">{content}</span>
+    </span>
+  );
+}
+
 export function QuickMatchFullTable({ view, full }: { view: StandingsView; full: NonNullable<StandingsView["full"]> }) {
   return (
     <details data-testid="qm-full-table" className="group/full mt-1 min-w-0">
@@ -285,14 +304,16 @@ export function QuickMatchFullTable({ view, full }: { view: StandingsView; full:
                     r.place
                   )}
                 </td>
-                <th scope="row" className="px-2 py-2 text-left font-normal text-cream">
-                  {r.tag ? (
-                    <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
-                      <span className="block max-w-[10rem] truncate">{r.name}</span>
-                      {rowTag(r.tag, "qm-full-table-tag", " whitespace-nowrap")}
-                    </span>
-                  ) : (
-                    <span className="block max-w-[10rem] truncate">{r.name}</span>
+                <th scope="row" className="px-2 py-2 text-left font-normal text-cream md:w-full">
+                  {fullSide(
+                    r.tag ? (
+                      <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+                        <span className={FULL_NAME}>{r.name}</span>
+                        {rowTag(r.tag, "qm-full-table-tag", " whitespace-nowrap")}
+                      </span>
+                    ) : (
+                      <span className={FULL_NAME}>{r.name}</span>
+                    ),
                   )}
                 </th>
                 {full.cells[i]!.map((value, k) => (

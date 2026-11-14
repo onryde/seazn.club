@@ -31,7 +31,7 @@
 // a lot ordered the tie), "Setting up the knockout" (with a Refresh, the `refresh` slot) while an advance has not filled it,
 // then the knockout's next round, then the champion — the FINAL's winner, never the table's leader. Once the knockout fills,
 // it moves above the table (§12), the table is the final league table, and Add a match is gone (§6, D3).
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { Check, RotateCw, Trophy } from "lucide-react";
 import { isLevelTable, pointsText, rankText } from "@seazn/engine/competition";
 import type { EntrantKind } from "@seazn/engine/sport";
@@ -63,6 +63,7 @@ import { QuickMatchDraw, type DrawCard, type DrawRound, type DrawSeat } from "./
 import { QuickMatchList, type MatchView, type RowMenuSlot, type ScoreSlot, type SeatView, type SkipCopy } from "./match-list";
 import { fixtureLabel, winnerOfLabel, type FixtureLabel } from "./fixture-label";
 import { playedLine } from "./played-line";
+import { longestUnbreakableRun } from "./name-fit";
 
 type Vars = Record<string, string | number>;
 
@@ -1131,13 +1132,19 @@ function cutResultLine(lines: readonly string[]): ReactNode {
 }
 
 /** The champion (D8, mockup qmd13a01 §11): the final's winner, who they beat and by what, and whether they topped the
- *  league too. The one trophy on the page. */
-function championCard(champion: NonNullable<Built["champion"]>): ReactNode {
+ *  league too. The one trophy on the page.
+ *
+ *  The name is set at 2rem, shrunk only as far as its longest unbreakable run needs to fit the card's width (sign-off
+ *  qlk14s1: at 320 a 43-character name split "FEATHERSTONEHAUG / H-BRAY"). The card is a size container; the run's length
+ *  (`--qm-name-run`, name-fit.ts) at 0.55em a character (Barlow Condensed bold capitals average 0.50em, measured) gives
+ *  the size, never below 1.25rem, so a line breaks between words. Only a single run too long even at 1.25rem still
+ *  breaks inside (`[overflow-wrap:anywhere]`, the last resort). */
+export function championCard(champion: NonNullable<Built["champion"]>): ReactNode {
   return (
     <section
       data-testid="qm-champion"
       aria-labelledby="qm-champion-kicker"
-      className="min-w-0 rounded-2xl border border-[color:var(--mk-lime)] bg-night-2 p-4 shadow-[0_0_0_1px_rgba(163,230,53,0.12),0_18px_40px_-24px_rgba(163,230,53,0.45)]"
+      className="@container min-w-0 rounded-2xl border border-[color:var(--mk-lime)] bg-night-2 p-4 shadow-[0_0_0_1px_rgba(163,230,53,0.12),0_18px_40px_-24px_rgba(163,230,53,0.45)]"
     >
       <p
         id="qm-champion-kicker"
@@ -1149,7 +1156,8 @@ function championCard(champion: NonNullable<Built["champion"]>): ReactNode {
       </p>
       <p
         data-testid="qm-champion-name"
-        className="app-display mt-2 text-[2rem] font-bold leading-[1.05] text-cream [overflow-wrap:anywhere]"
+        style={{ "--qm-name-run": longestUnbreakableRun(champion.name) } as CSSProperties}
+        className="app-display mt-2 text-[length:clamp(1.25rem,calc(100cqi/var(--qm-name-run)/0.55),2rem)] font-bold leading-[1.05] text-cream [overflow-wrap:anywhere]"
       >
         {champion.name}
       </p>
