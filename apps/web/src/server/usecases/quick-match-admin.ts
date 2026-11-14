@@ -15,10 +15,13 @@ import "server-only";
 //     kernel's types are never play, by the engine's own declaration (`CORE_EVENT_SCHEMAS`, the list `playRecorded` reads):
 //     a Start alone is a guest who opened the pad and left, and a point taken back leaves nothing played. Two departures
 //     from `playRecorded`, both the ruling's: no chess exception (its `startIsPlay`: a chess Start alone is not played here
-//     either), and a sport event counts wherever it sits in the ledger, on any fixture, whatever its status: a match marked
+//     either), and a sport event counts on any fixture, whatever its status: a match marked
 //     Not played (plan 4) keeps its ledger (Put back restores it exactly as it was), so a point standing on it was played.
 //     A bye's award is written onto its fixture with no event at all (bracket-seats.ts), so a knockout's day-one bye never
-//     reads as played. A result is a sport event too (the deciding rally, a chess result), and nothing else decides a quick
+//     reads as played. With `playRecorded`, a sport event is play only AFTER a standing `core.start` on its own fixture
+//     (ruling 112): a toss is a sport event written BEFORE the Start (tennis's "Who serves first?", S2-7; quick match
+//     cricket's "Who won the toss?", decision log 2026-11-13), so a guest who answered the Start question and left did not
+//     play either. A result is a sport event too (the deciding rally, a chess result), and nothing else decides a quick
 //     match's real match: it has no organizer to settle or withdraw a side, and the one kernel result a scorer's pad sends
 //     (a disqualifying sanction's forfeit) follows its sanction, a sport event. That premise is a guard: a row whose matches
 //     are decided with no standing sport event is logged by id (`brokenPremise`).
@@ -126,7 +129,9 @@ function scopeSql(onlyIds: readonly string[] | undefined) {
  *  settle and the lineup family): none of them is play (`playRecorded`). Every other type is a sport's own. */
 const KERNEL_EVENT_TYPES: readonly string[] = Object.keys(CORE_EVENT_SCHEMAS);
 
-/** played (see the header): a standing sport event on any fixture of the match `q`: not a kernel type, and not voided. */
+/** played (see the header): a standing sport event on any fixture of the match `q`: not a kernel type, not voided, and after
+ *  a Start on its own fixture (a toss before the Start is not play). A Start taken back is not looked for: the fold takes
+ *  no play before a standing Start, and a toss re-asked after one is too rare a ledger to shape the read around. */
 function playedSql() {
   return sql`exists (
     select 1 from score_events se
@@ -134,7 +139,9 @@ function playedSql() {
       join divisions d on d.id = f.division_id
      where d.competition_id = q.competition_id
        and se.type <> all(${[...KERNEL_EVENT_TYPES]}::text[])
-       and not exists (select 1 from score_events v where v.voids_event_id = se.id))`;
+       and not exists (select 1 from score_events v where v.voids_event_id = se.id)
+       and exists (
+         select 1 from score_events st where st.fixture_id = se.fixture_id and st.type = 'core.start' and st.seq < se.seq))`;
 }
 
 /** Every fixture row of these competitions, by competition: ONE read, the columns `playedOf` reads. No org predicate here

@@ -16,7 +16,8 @@
 // The system org is shared by every case, run and parallel file: every read here passes `onlyIds` with the case's own ids,
 // and every count is that scope's.
 //
-// Sports: badminton for most rows, football for the finished one (the team sport offered, a different scoring module and
+// Sports: tennis and cricket for the toss-asking Starts (a toss is a sport event written before the Start; quick match
+// cricket, decision log 2026-11-13); badminton for most rows, football for the finished one (the team sport offered, a different scoring module and
 // entrant kind), and chess (boardgame) for the two rows where the ruling and the engine's own `playRecorded` part: a chess
 // Start alone, which the engine counts as play (`startIsPlay`) and the ruling does not, and a chess result, the one sport
 // offered whose match is decided by a result with no point before it.
@@ -72,7 +73,9 @@ import { skipQuickMatchFixture } from "../quick-match-skip";
 import { listQuickMatchSports } from "../quick-match-sports";
 import { hashVisitorKey, mintVisitorKey } from "../quick-match-tokens";
 import { scoreEvent } from "../scoring";
-import { firstRallyFor, playToDecided } from "./_quick-match-probe";
+import { firstRallyFor, nextPlayFor, playToDecided } from "./_quick-match-probe";
+import { cricketTossEvent } from "@/components/v2/scorepad/v3/skins/cricket-start-toss";
+import { startTossQuestion, tossEventFor } from "@/components/v2/scorepad/v3/skins/tennis";
 import { makeUser } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -88,7 +91,7 @@ const users: string[] = [];
 const foreignOrgs: string[] = [];
 
 interface Shape {
-  sport_key: "badminton" | "football" | "boardgame";
+  sport_key: "badminton" | "football" | "boardgame" | "tennis" | "cricket";
   format: "league" | "knockout" | "league_knockout";
   /** League + Knockout's count (plan 5): the top 2 or 4 go through. */
   qualifiers?: 2 | 4;
@@ -167,6 +170,40 @@ async function rallyThenVoid(out: CreatedQuickMatch): Promise<void> {
   expect(n, "premise: the point was taken back").toBe(1);
 }
 
+/** What a toss-asking Start writes (S2-7 tennis; quick match cricket, decision log 2026-11-13): the toss its question's
+ *  answer builds (the pad's own builders), then the Start. The toss is a sport event BEFORE the Start: not play. */
+async function tossThenStart(out: CreatedQuickMatch, sport_key: Shape["sport_key"]): Promise<string> {
+  const fixtureId = await firstPlayable(out.competitionId);
+  const [f] = await sql<{ home_entrant_id: string; away_entrant_id: string }[]>`
+    select home_entrant_id, away_entrant_id from fixtures where id = ${fixtureId}`;
+  const home = { id: f!.home_entrant_id, name: "home" };
+  const away = { id: f!.away_entrant_id, name: "away" };
+  const toss = sport_key === "tennis"
+    ? tossEventFor(startTossQuestion(home, away, (k) => k).chips[1]!)
+    : sport_key === "cricket"
+      ? cricketTossEvent(away.id, "bowl")
+      : null;
+  if (toss === null) throw new Error(`precondition: ${sport_key} asks no toss at Start`);
+  await scoreEvent(systemAuth(), fixtureId, { expected_seq: 0, type: toss.type, payload: toss.payload });
+  await scoreEvent(systemAuth(), fixtureId, { expected_seq: 1, type: "core.start", payload: {} });
+  const ledger = await sql<{ type: string }[]>`select type from score_events where fixture_id = ${fixtureId} order by seq`;
+  expect(ledger.map((e) => e.type), `premise: ${sport_key}'s toss stands before the Start`).toEqual([toss.type, "core.start"]);
+  return fixtureId;
+}
+
+/** The toss, the Start, then the engine's own first play event on that ledger (cricket's: an over or innings summary, at
+ *  the quick match's bands). With `takeBack`, that play is then voided: the toss and the Start stand, nothing played does. */
+async function tossStartPlay(out: CreatedQuickMatch, sport_key: Shape["sport_key"], takeBack: boolean): Promise<void> {
+  const fixtureId = await tossThenStart(out, sport_key);
+  const ledger = await sql<{ type: string; payload: Record<string, unknown> }[]>`
+    select type, payload from score_events where fixture_id = ${fixtureId} order by seq`;
+  const play = await nextPlayFor(fixtureId, ledger);
+  const { event_id } = await scoreEvent(systemAuth(), fixtureId, play);
+  if (takeBack) {
+    await scoreEvent(systemAuth(), fixtureId, { expected_seq: play.expected_seq + 1, type: "core.void", payload: { event_id } });
+  }
+}
+
 /** The match's one result, and nothing before it but the Start: the deciding event is the ledger's only sport event. */
 async function resultOnly(out: CreatedQuickMatch): Promise<void> {
   const fixtures = await fixturesOf(out.competitionId);
@@ -215,7 +252,7 @@ interface Seed {
   shape: Shape;
   /** What is done to it after the create. */
   act: "none" | "start" | "rally" | "rallyVoid" | "rallyThenSkip" | "result" | "decideFirst" | "decideAll" | "decideFirstSkipRest"
-    | "save" | "expire";
+    | "save" | "expire" | "tossStart" | "tossStartPlay" | "tossStartPlayVoid";
   played: boolean;
   finished: boolean;
   saved: boolean;
@@ -262,6 +299,19 @@ const SEEDS: Seed[] = [
   // the match as it was), so it was played; its one match is Not played, so it is finished, with nothing decided.
   { tag: "rallyThenSkip", ageMs: 6 * 24 * HOUR_MS, shape: { sport_key: "badminton", format: "league", sides: TWO }, act: "rallyThenSkip",
     played: true, finished: true, saved: false, expired: false, decided: 0, total: 1, notPlayed: 1 },
+  // A toss-asking Start (S2-7 tennis; quick match cricket): the toss is a sport event written BEFORE the Start, so the
+  // Start question answered and nothing scored is NOT played, in both sports (the engine's own rule, ruling 112: a sport
+  // event is play only after a Start).
+  { tag: "tennis-toss-start", ageMs: 7 * HOUR_MS, shape: { sport_key: "tennis", format: "league", sides: TWO }, act: "tossStart",
+    played: false, finished: false, saved: false, expired: false, decided: 0, total: 1 },
+  { tag: "cricket-toss-start", ageMs: 8 * HOUR_MS, shape: { sport_key: "cricket", format: "league", sides: ["Falcons", "Kites"] }, act: "tossStart",
+    played: false, finished: false, saved: false, expired: false, decided: 0, total: 1 },
+  // Cricket's first over summary after the toss and the Start: played.
+  { tag: "cricket-over", ageMs: 9 * HOUR_MS, shape: { sport_key: "cricket", format: "league", sides: ["Falcons", "Kites"] }, act: "tossStartPlay",
+    played: true, finished: false, saved: false, expired: false, decided: 0, total: 1 },
+  // That summary taken back: the toss and the Start still stand, nothing played does. NOT played.
+  { tag: "cricket-over-void", ageMs: 10 * HOUR_MS, shape: { sport_key: "cricket", format: "league", sides: ["Falcons", "Kites"] }, act: "tossStartPlayVoid",
+    played: false, finished: false, saved: false, expired: false, decided: 0, total: 1 },
   { tag: "expired", ageMs: 10 * 24 * HOUR_MS, shape: { sport_key: "badminton", format: "league", sides: TWO }, act: "expire",
     played: false, finished: false, saved: false, expired: true, decided: 0, total: 1 },
   // A knockout of three: one seat sits out round one, and that bye is settled at the start without anyone playing. It is
@@ -292,6 +342,9 @@ beforeAll(async () => {
     if (s.act === "start") await startOnly(out);
     if (s.act === "rally") await rally(out);
     if (s.act === "rallyVoid") await rallyThenVoid(out);
+    if (s.act === "tossStart") await tossThenStart(out, s.shape.sport_key);
+    if (s.act === "tossStartPlay") await tossStartPlay(out, s.shape.sport_key, false);
+    if (s.act === "tossStartPlayVoid") await tossStartPlay(out, s.shape.sport_key, true);
     if (s.act === "result") await resultOnly(out);
     if (s.act === "decideFirst") await decideFirst(out);
     if (s.act === "decideFirstSkipRest") {
