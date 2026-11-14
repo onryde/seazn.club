@@ -24,6 +24,12 @@ const stagesSpies = vi.hoisted(() => ({
   getStageRosterDrift: vi.fn(async () => ({ ghosts: [], unplaced: [] })),
 }));
 const competitionsSpy = vi.hoisted(() => ({ getCompetition: vi.fn() }));
+// The getting-started panel's courts count is read off the page's own venue list (empty for the registration cases).
+const venuesSpy = vi.hoisted(() => ({ listVenues: vi.fn(async (): Promise<unknown[]> => []) }));
+vi.mock("@/server/usecases/venues", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/usecases/venues")>()),
+  listVenues: venuesSpy.listVenues,
+}));
 
 vi.mock("@/server/page-auth", () => pageAuth);
 vi.mock("@/server/usecases/stages", () => stagesSpies);
@@ -98,6 +104,7 @@ vi.mock("@/server/usecases/stream-sessions", () => ({
 
 import DivisionPage from "../page";
 import Link from "@/components/ui/console-link";
+import { GettingStartedPanel } from "@/components/v2/getting-started-panel";
 
 /** Depth-first search of a returned server-component tree, collecting EVERY
  *  element of the given type — copied from seed-proposal-stage-pairing.test.tsx
@@ -176,5 +183,46 @@ describe("division page links into the Registration hub, this division pre-filte
     expect((link!.props as { href: string }).href).toBe(
       "/o/org/c/comp/registration?tab=registrants&division_id=div-1",
     );
+  });
+});
+
+// /start "Sent stepper" (owner-approved 2026-11-14): the division page is where the funnel claim lands, so it mounts the
+// getting-started panel — for an organiser who can act only (a viewer, or a billing-frozen club, has no step to take). The
+// panel itself decides whether the competition shows it (getting-started-panel.test.tsx); this pins the page's half: the
+// mount, its competition, and step 5's courts — the club's live courts on live venues.
+describe("division page mounts the getting-started panel for an organiser who can act", () => {
+  const COMPETITION = { id: "comp-1", name: "Riverside Open", starts_on: "2026-11-21", frozen: false, visibility: "private", slug: "comp" };
+  const court = (archived: boolean) => ({ id: crypto.randomUUID(), archived_at: archived ? "2026-11-01T00:00:00Z" : null });
+  beforeEach(() => {
+    pageAuth.requireDivisionPage.mockReset().mockResolvedValue(PAGE);
+    stagesSpies.listStages.mockReset().mockResolvedValue([]);
+    stagesSpies.getStageRosterDrift.mockReset().mockResolvedValue({ ghosts: [], unplaced: [] });
+    competitionsSpy.getCompetition.mockReset().mockResolvedValue(COMPETITION);
+    venuesSpy.listVenues.mockReset().mockResolvedValue([
+      { id: "v-live", archived_at: null, courts: [court(false), court(true), court(false)] },
+      { id: "v-archived", archived_at: "2026-11-01T00:00:00Z", courts: [court(false), court(false)] },
+      { id: "v-small", archived_at: null, courts: [court(false)] },
+    ]);
+  });
+
+  it("an organiser who can edit: one panel, for this competition, counting the live courts on live venues (3)", async () => {
+    const panels = findAll(await renderPage(), GettingStartedPanel);
+    expect(panels).toHaveLength(1);
+    const props = panels[0]!.props as Record<string, unknown>;
+    expect(props.competition).toMatchObject({ id: "comp-1", name: "Riverside Open", starts_on: "2026-11-21" });
+    expect([props.orgSlug, props.compSlug, props.divSlug]).toEqual(["org", "comp", "div"]);
+    expect(props.courts, "two live courts on the live venue, one on the small one; none from the archived venue").toBe(3);
+    expect(props.locale).toBe("en");
+    expect(props.auth).toBe(PAGE.auth);
+  });
+
+  it("a viewer (no edit right): no panel", async () => {
+    pageAuth.requireDivisionPage.mockResolvedValue({ ...PAGE, canEdit: false });
+    expect(findAll(await renderPage(), GettingStartedPanel)).toHaveLength(0);
+  });
+
+  it("a billing-frozen club: no panel (nothing it could act on)", async () => {
+    competitionsSpy.getCompetition.mockResolvedValue({ ...COMPETITION, frozen: true });
+    expect(findAll(await renderPage(), GettingStartedPanel)).toHaveLength(0);
   });
 });

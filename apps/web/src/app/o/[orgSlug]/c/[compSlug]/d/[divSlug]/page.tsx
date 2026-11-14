@@ -51,6 +51,7 @@ import { getScheduleSettings } from "@/server/usecases/schedule";
 // already makes for CourtMultiPicker (default includeArchived: false; the
 // picker excludes archived courts either way via `courtGroups`).
 import { listVenues } from "@/server/usecases/venues";
+import { GettingStartedPanel } from "@/components/v2/getting-started-panel";
 import { omit } from "@/lib/omit";
 import { openStreamStates } from "@/server/usecases/stream-sessions";
 import { resolveVenueTz } from "@/lib/tz";
@@ -867,6 +868,25 @@ export default async function DivisionPage({
             />
           </div>
         </div>
+
+        {/* /start "Sent stepper" (owner-approved 2026-11-14, mock sss14a section 4): where the funnel claim lands, the organiser
+            of a competition a /start draft built sees the five steps carried on from the Sent screen, until a match is scheduled.
+            Organisers who can act only (`editable`: a viewer or a billing-frozen club has no step to take). The panel reads its own
+            state and renders nothing outside those competitions. Courts: the club's live ones, for step 5's hint. */}
+        {editable ? (
+          <GettingStartedPanel
+            auth={auth}
+            competition={competition}
+            orgSlug={orgSlug}
+            compSlug={compSlug}
+            divSlug={divSlug}
+            courts={venues
+              .filter((v) => v.archived_at === null)
+              .reduce((n, v) => n + v.courts.filter((c) => c.archived_at === null).length, 0)}
+            dict={dict}
+            locale={locale}
+          />
+        ) : null}
 
         {/* v3/02 §3.3: tabs scroll horizontally with an edge fade — never wrap. */}
         <nav className="scroll-x scroll-x-fade mb-6 flex gap-1 whitespace-nowrap border-b border-slate-200">
