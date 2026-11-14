@@ -1216,8 +1216,15 @@ describe("usePadPipeline — a queued tap survives a conflict or a refused tap a
    * misses a tap made meanwhile — IndexedDB answers late). Every await in the
    * drain that touches the queue is one of these calls, so sweeping `k` puts a
    * tap at each point where a drop's handling can yield.
+   *
+   * `inOrder`: the calls also run one at a time, in the order they were made,
+   * each answered on a later task — as IndexedDB runs the requests on one
+   * object store. A read asked for after a write sees it; one asked for before
+   * the write was even issued does not, however long the write then waits. The
+   * later task is a timer, and a 0ms timer set while the fake clock is ticking
+   * is due 1ms on, so drive this queue by advancing the clock, not by `flush`.
    */
-  function gatedQueue(dbName: string) {
+  function gatedQueue(dbName: string, opts: { inOrder?: boolean } = {}) {
     const inner = memoryQueueStore();
     let target = 0;
     let calls = 0;
@@ -1230,13 +1237,26 @@ describe("usePadPipeline — a queued tap survives a conflict or a refused tap a
       hit = true;
       await gate.promise;
     };
+    let lane: Promise<unknown> = Promise.resolve();
     const gated =
       <T,>(op: () => Promise<T>) =>
       async (): Promise<T> => {
-        await step();
-        const answer = await op();
-        await step();
-        return answer;
+        const run = async () => {
+          await step();
+          const answer = await op();
+          await step();
+          return answer;
+        };
+        if (opts.inOrder !== true) return run();
+        const turn = lane.then(async () => {
+          await new Promise<void>((resolve) => setTimeout(resolve, 0));
+          return run();
+        });
+        lane = turn.then(
+          () => undefined,
+          () => undefined,
+        );
+        return turn;
       };
     queueStoreRegistry.set(dbName, {
       list: () => gated(() => inner.list())(),
@@ -1385,6 +1405,141 @@ describe("usePadPipeline — a queued tap survives a conflict or a refused tap a
     expect(windows, "queue calls a tap was made at").toBeGreaterThanOrEqual(8);
     expect(stampedCountingTheDrop, "taps stamped while the held row was still on screen (re-aimed)").toBeGreaterThan(0);
     expect(stampedAfterTheDrop, "taps stamped after it left (never re-aimed)").toBeGreaterThan(0);
+  });
+
+  // Review C1. `submitHeld` — the path every real v3 tap takes — puts its row on
+  // screen at once, but asks the queue to write it only once `flushHeldBefore`'s
+  // read has answered. Against a queue that answers in order (IndexedDB does), a
+  // held tap made while a refused tap's slot is given back could be in the
+  // re-aim's order with its write still behind the re-aim's read of it: skipped,
+  // it was written stamped past the refused tap — a 409 against a slot the ledger
+  // never reaches, on every retry, its point on screen and never recorded.
+  // Swept over every queue call from the refusal to the drain going idle, with
+  // 1–4 taps ahead of the held one (the refused tap, then 0–3 queued behind it).
+  // Generic and football (the sport whose goal is a held tap); the queue never
+  // reads the sport, so two stand for the registry. Then a second held tap.
+  describe("a held tap made while the drain gives back a refused tap's slot, against a queue that answers in order (review C1)", () => {
+    const football = resolveModuleClient("football", "1.0.0");
+    const footballCfg = football.configSchema.parse({});
+    const footballLineups = defaultLineupPair(resolvePositions(football, footballCfg));
+    const footballStart = { id: "fb-1", seq: 1, type: "core.start", payload: {} };
+    const SPORTS: readonly {
+      name: string;
+      params: Partial<UsePadPipelineParams>;
+      seed: LedgerSlotEvent[];
+      /** A scoring tap for side 0 (home) or 1 (away). */
+      tap: (side: number) => [string, Record<string, unknown>];
+    }[] = [
+      { name: "generic", params: {}, seed: [], tap: (side) => ["generic.score", { by: side === 0 ? "H" : "A", points: 1 }] },
+      {
+        name: "football",
+        params: {
+          module: football,
+          cfg: footballCfg,
+          lineups: footballLineups,
+          initialEvents: [{ ...footballStart, fixtureId: "fx-1", recordedAt: RECORDED_AT, recordedBy: "console-user" }],
+        },
+        seed: [{ ...footballStart, recorded_at: RECORDED_AT, recorded_by: "console-user", device_link_id: null }],
+        tap: (side) => ["football.goal", { by: side === 0 ? footballLineups.home.entrantId : footballLineups.away.entrantId }],
+      },
+    ];
+    /** `settle`, but each step advances the clock 1ms: the in-order queue answers on timers (`gatedQueue`). */
+    const drive = async (done: () => boolean, steps = 400) => {
+      for (let i = 0; i < steps && !done(); i++) await vi.advanceTimersByTimeAsync(1);
+    };
+    const settled = async <T,>(p: Promise<T>, what: string): Promise<T> => {
+      let done = false;
+      void p.then(
+        () => (done = true),
+        () => (done = true),
+      );
+      await drive(() => done);
+      expect(done, `rig: ${what} settled`).toBe(true);
+      return p;
+    };
+    const wire = (b: AppendEventBody) => [b.type, b.payload, b.expected_seq];
+    const rowsOf = (events: readonly { type: string; payload: unknown; seq: number }[]) => events.map((e) => [e.type, e.payload, e.seq]);
+
+    for (const sport of SPORTS) {
+      for (const ahead of [1, 2, 3, 4]) {
+        it(`${sport.name}, ${ahead} tap(s) ahead: a held tap made at ANY queue call lands at the next free slot, and so does a second one after it`, async () => {
+          const base = sport.seed.length;
+          // Consecutive taps are for alternate sides, so none is ever a double of the one before it.
+          const aheadTaps = Array.from({ length: ahead }, (_, i) => sport.tap(i % 2));
+          const [heldType, heldPayload] = sport.tap(ahead % 2);
+          const [secondType, secondPayload] = sport.tap((ahead + 1) % 2);
+          let windows = 0;
+          let stampedCountingTheDrop = 0;
+          let stampedAfterTheDrop = 0;
+          for (let k = 1; k < 200; k++) {
+            const DB = `pad-tap-c1-${sport.name}-${ahead}-${k}`;
+            const queue = gatedQueue(DB, { inOrder: true });
+            const heldAnswer = deferred<void>();
+            // #0 the refused tap, #1..#ahead-1 the taps queued behind it, #ahead the held tap made at the gate.
+            const server = ledgerServer({ seed: sport.seed, faults: { 0: REFUSED }, holdCall: { [ahead]: heldAnswer.promise } });
+            const pad = mountPipeline(baseParams({ ...sport.params, transport: server.transport, queueDbName: DB }));
+            await drive(() => false, 30);
+            const taps: Promise<unknown>[] = [];
+            for (const [type, payload] of aheadTaps) {
+              taps.push(pad.current.submit(type, payload));
+              await drive(() => false, 30);
+            }
+            expect([pad.current.queueDepth, server.bodies.length], "rig: every tap queued, the first on the wire").toEqual([ahead, 1]);
+
+            queue.arm(k);
+            server.open();
+            await drive(queue.hit);
+            if (!queue.hit()) {
+              await settled(Promise.all(taps), `k=${k}: the taps ahead`); // the drain went idle before its k-th queue call: every window is covered
+              break;
+            }
+            windows += 1;
+            const onDue = () => void pad.current.retryDrain();
+            const held = pad.current.submitHeld(heldType, heldPayload, HOLD_MS, onDue);
+            if (pad.current.events.at(-1)!.seq > base + ahead) stampedCountingTheDrop += 1;
+            else stampedAfterTheDrop += 1;
+            await flush();
+            queue.release();
+            expect(await settled(held, `k=${k}: the held tap's queue write`), `k=${k}`).not.toBeNull();
+            await settled(Promise.all(taps), `k=${k}: the taps ahead`);
+            await vi.advanceTimersByTimeAsync(HOLD_MS); // its hold ends and its own tick sends it
+            await drive(() => server.bodies.length === ahead + 1);
+            const heldKey = server.bodies[ahead]?.idempotency_key;
+            const rowOnTheWire = pad.current.events.find((e) => e.id === heldKey);
+            heldAnswer.resolve();
+            await drive(() => pad.current.queueDepth === 0);
+
+            expect(server.bodies.map(wire), `k=${k}: the refused tap takes no slot; every tap after it takes the next free one`).toEqual([
+              [aheadTaps[0]![0], aheadTaps[0]![1], base],
+              ...aheadTaps.slice(1).map(([type, payload], i) => [type, payload, base + i]),
+              [heldType, heldPayload, base + ahead - 1],
+            ]);
+            expect(rowOnTheWire?.seq, `k=${k}: the held tap's row stays on screen, at the seq it lands at`).toBe(base + ahead);
+            expect(pad.current.queueDepth, `k=${k}: nothing left queued`).toBe(0);
+            expect(server.ownKeys(), `k=${k}: each tap written once, the refused one never`).toEqual(
+              server.bodies.slice(1).map((b) => b.idempotency_key),
+            );
+            expect(rowsOf(pad.current.events), `k=${k}: the pad shows what the server holds`).toEqual(rowsOf(server.rows));
+
+            // A second call: the next held tap is stamped from the settled ledger and lands at the next slot.
+            const second = settled(pad.current.submitHeld(secondType, secondPayload, HOLD_MS, onDue), `k=${k}: the second held tap`);
+            expect(await second, `k=${k}`).not.toBeNull();
+            await vi.advanceTimersByTimeAsync(HOLD_MS);
+            await drive(() => server.bodies.length === ahead + 2 && pad.current.queueDepth === 0);
+            expect(server.bodies.slice(ahead + 1).map(wire), `k=${k}: the second held tap, at the slot after the first`).toEqual([
+              [secondType, secondPayload, base + ahead],
+            ]);
+            expect(pad.current.queueDepth, `k=${k}`).toBe(0);
+            expect(rowsOf(pad.current.events), `k=${k}: after the second held tap`).toEqual(rowsOf(server.rows));
+            expect(server.rows, `k=${k}`).toHaveLength(base + ahead + 1);
+          }
+          // Each tap ahead adds the queue calls of its own send and re-aim.
+          expect(windows, "queue calls a held tap was made at").toBeGreaterThanOrEqual(8 * ahead);
+          expect(stampedCountingTheDrop, "held taps stamped while the refused row was still on screen (re-aimed)").toBeGreaterThan(0);
+          expect(stampedAfterTheDrop, "held taps stamped after it left (never re-aimed)").toBeGreaterThan(0);
+        });
+      }
+    }
   });
 
   // Review I-B. A take-back inside the hold window removes the held tap without

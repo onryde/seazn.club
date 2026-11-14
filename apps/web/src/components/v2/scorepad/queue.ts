@@ -122,8 +122,15 @@ export async function renegotiateExpectedSeq(
  * Each survivor is re-read right before it is written (review m1): the write
  * replaces the whole entry, and a copy read before an earlier survivor's write
  * would undo whatever `mutateHeld` (a dock pick) or `clearHeldFlag` (the hold
- * ending) wrote to it meanwhile. The shift is a delta on the fresh copy, so a
- * second re-aim running beside this one composes with it rather than racing it.
+ * ending) wrote to it meanwhile. The shift is a delta on the fresh copy, so it
+ * builds on another re-aim's shift that has already been WRITTEN. Nothing here
+ * serialises two re-aims, though: two running at once on the same entry can
+ * both read it before either writes (list, list, put, put), and the second put
+ * then loses the first one's shift.
+ *
+ * An entry not in the queue when its read answers is skipped, so a caller must
+ * not call this until every entry in `order` has been written (review C1:
+ * `use-pad-pipeline`'s `reaimBehind` waits for the taps' queue writes first).
  */
 export async function restampBehindDropped(
   store: QueueStore,
@@ -309,6 +316,9 @@ export async function enqueueHeld(
   onDue: () => void,
 ): Promise<string> {
   const now = Date.now();
+  // The put is issued only once the flush's read has answered, so a read made
+  // after this call started can still miss the entry (review C1): a caller
+  // that shows the tap before this resolves waits for the whole call.
   await flushHeldBefore(store, now);
   await store.put({ ...event, heldUntil: now + holdMs });
   const timer = setTimeout(() => {
