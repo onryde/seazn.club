@@ -149,6 +149,7 @@ const cand = (
   fixture: fixture(id),
   source,
   from_court_name: source === "other_court" ? "Court 2" : null,
+  first_in_queue: false,
   waiting_minutes: o.waiting ?? 0,
   behind_minutes: o.behind ?? 0,
   planned_at: null,
