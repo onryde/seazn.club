@@ -120,10 +120,10 @@ test("a captain enters a team, and a team-mate claims their spot from the link t
     // row (named, and picked as "which player are you"), so a name already on
     // the roster is not added again — that would enter the captain twice.
     const roster = [`Journey Captain ${TAG}`, ...MATES];
-    // Each row carries TWO text inputs — "Your name" AND "Squad #" — so
+    // Each row carries TWO text inputs — "Full name" AND "Squad #" — so
     // taking "the last text input" puts the name in the squad number, the
     // roster stays nameless, and Next silently refuses to advance.
-    const boxes = anon.getByLabel(/Player \d+ — Your name/);
+    const boxes = anon.getByLabel(/Player \d+ — Full name/);
     for (const name of roster) {
       const onRoster = await boxes.evaluateAll((els) => els.map((el) => (el as HTMLInputElement).value.trim()));
       if (onRoster.includes(name)) continue;

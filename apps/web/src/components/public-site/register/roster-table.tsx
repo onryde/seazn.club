@@ -110,7 +110,9 @@ export function RosterTable({
                      * per player, so a driver needs the index too. */
                     data-testid="reg-roster-name"
                     data-player-row={i}
-                    aria-label={`${label} — ${t("register.who.name.label")}`}
+                    // Named by what the row SHOWS - its label and this box's placeholder (walk-fix F9). "Your name" (the Who
+                    // step's contact field) told a screen reader the partner's box was the registrant's own.
+                    aria-label={`${label} — ${t("register.who.name.placeholder")}`}
                     // The contact's own row (B2 T9): a read-only INPUT, not text, so it keeps its label, its value, its hook and its
                     // place in the form (the e2e specs read every roster name box, and a screen reader hears "read only").
                     readOnly={isContactRow}

@@ -880,7 +880,7 @@ describe("a restored EMPTY cart on a collapsed competition still gets its entry"
 
     // The seeded entry is what puts a roster row on DETAILS. With the cart
     // left empty there is no row, no entry, and REVIEW would 422.
-    const nameBox = island.tree().find((e) => propsOf(e)["aria-label"] === "Player 1 — Your name");
+    const nameBox = island.tree().find((e) => propsOf(e)["aria-label"] === "Player 1 — Full name");
     expect(
       nameBox,
       "a restored empty cart must still be seeded — otherwise DETAILS renders no entry and REVIEW 422s with no surface to fix it",
@@ -1459,7 +1459,7 @@ function setByAriaLabel(island: ReturnType<typeof mount>["island"], label: strin
 
 /** RosterTable's aria-label ("Player {n} — {field}") is scoped WITHIN one
  *  entry's own roster, not globally unique — a cart with two individual
- *  entries has two "Player 1 — Your name" fields. `.filter()` preserves
+ *  entries has two "Player 1 — Full name" fields. `.filter()` preserves
  *  tree order (walk() is depth-first, and StepDetails renders one entry's
  *  whole subtree before the next), so index 0/1/… lines up with cart.entries
  *  order. */
@@ -1525,9 +1525,9 @@ describe("step 3 — the mixed-composition meter blocks an all-male roster and c
     clickByText("+ Add player");
     clickByText("+ Add player");
 
-    setByAriaLabel(island, "Player 1 — Your name", "Sam A");
+    setByAriaLabel(island, "Player 1 — Full name", "Sam A");
     setByAriaLabel(island, "Player 1 — Gender", "m");
-    setByAriaLabel(island, "Player 2 — Your name", "Sam B");
+    setByAriaLabel(island, "Player 2 — Full name", "Sam B");
     setByAriaLabel(island, "Player 2 — Gender", "m");
 
     // The meter is LIVE (not gated behind "attempted") — same precedent as
@@ -1573,9 +1573,9 @@ describe("step 3 — an underage player is named BY ROW, not just anywhere on th
     clickByText("+ Add player");
     clickByText("+ Add player");
 
-    setByAriaLabel(island, "Player 1 — Your name", "Adult Player");
+    setByAriaLabel(island, "Player 1 — Full name", "Adult Player");
     setByAriaLabel(island, "Player 1 — Date of birth", "1990-01-01");
-    setByAriaLabel(island, "Player 2 — Your name", "Young Player");
+    setByAriaLabel(island, "Player 2 — Full name", "Young Player");
     setByAriaLabel(island, "Player 2 — Date of birth", "2020-01-01");
 
     // Scoped: slice the flat tree to JUST row 1 (the adult) — walk() is
@@ -1634,8 +1634,8 @@ describe("step 3 — pasting a roster via the textarea parses into named rows (p
     // Values live on the controlled inputs, not as rendered text (textOf()
     // never sees an <input>'s value — it has no `children`), so assert on
     // the actual input elements, not pageText().
-    const row1Name = island.tree().find((e) => propsOf(e)["aria-label"] === "Player 1 — Your name");
-    const row2Name = island.tree().find((e) => propsOf(e)["aria-label"] === "Player 2 — Your name");
+    const row1Name = island.tree().find((e) => propsOf(e)["aria-label"] === "Player 1 — Full name");
+    const row2Name = island.tree().find((e) => propsOf(e)["aria-label"] === "Player 2 — Full name");
     expect(propsOf(row1Name!).value).toBe("Jordan Blake");
     expect(propsOf(row2Name!).value).toBe("Sam Ortiz");
 
@@ -1671,7 +1671,7 @@ describe("2026-08-27 review finding 1 — a self-linked INDIVIDUAL entry's alrea
     (propsOf(stepWho()).onChange as (p: object) => void)({ name: "Self Row", email: "self@example.com", dob: "1990-01-01" });
     (propsOf(stepWho()).onImPlayingChange as (v: boolean) => void)(true); // auto-links the sole entry
     clickByText("Next"); // single open division collapses ENTRIES -> DETAILS
-    setByAriaLabel(island, "Player 1 — Your name", "Self Row");
+    setByAriaLabel(island, "Player 1 — Full name", "Self Row");
     // Deliberately NOT typing a dob into the roster row itself — the whole
     // point is that the WHO-step contact.dob already collected above must
     // satisfy this individual division's requires_dob via
@@ -1803,7 +1803,7 @@ describe("step 4 — CONSENT", () => {
     const { stepWho, clickByText, pageText, island } = mount([DIV_OPEN]);
     (propsOf(stepWho()).onChange as (p: object) => void)({ name: "Alex Test", email: "alex@example.com" });
     clickByText("Next"); // single open division collapses ENTRIES -> DETAILS
-    setByAriaLabel(island, "Player 1 — Your name", "Alex Test");
+    setByAriaLabel(island, "Player 1 — Full name", "Alex Test");
     clickByText("Next"); // -> CONSENT
 
     clickByText("Next"); // attempt to advance with no consent given — BLOCKED
@@ -1822,7 +1822,7 @@ describe("step 4 — CONSENT", () => {
     const { stepWho, clickByText, pageText, island } = mount([DIV_OPEN]);
     (propsOf(stepWho()).onChange as (p: object) => void)({ name: "Alex Test", email: "alex@example.com" });
     clickByText("Next"); // -> DETAILS
-    setByAriaLabel(island, "Player 1 — Your name", "Alex Test");
+    setByAriaLabel(island, "Player 1 — Full name", "Alex Test");
     clickByText("Next"); // -> CONSENT
     expect(pageText()).toContain(
       "By default, your name appears publicly on this event's pages. You can switch to showing initials any time from your profile.",
@@ -1834,7 +1834,7 @@ describe("step 4 — CONSENT", () => {
     (propsOf(stepWho()).onChange as (p: object) => void)({ name: "Young Player", email: "young@example.com", dob: minorDob() });
     (propsOf(stepWho()).onImPlayingChange as (v: boolean) => void)(true); // auto-links the sole entry
     clickByText("Next"); // -> DETAILS
-    setByAriaLabel(island, "Player 1 — Your name", "Young Player");
+    setByAriaLabel(island, "Player 1 — Full name", "Young Player");
     clickByText("Next"); // -> CONSENT
 
     expect(pageText()).toContain("Under-18 entry — guardian consent");
@@ -1865,7 +1865,7 @@ describe("step 4 — CONSENT", () => {
     (propsOf(stepWho()).onChange as (p: object) => void)({ name: "Adult Player", email: "adult@example.com", dob: "1990-01-01" });
     (propsOf(stepWho()).onImPlayingChange as (v: boolean) => void)(true);
     clickByText("Next"); // -> DETAILS
-    setByAriaLabel(island, "Player 1 — Your name", "Adult Player");
+    setByAriaLabel(island, "Player 1 — Full name", "Adult Player");
     clickByText("Next"); // -> CONSENT
     expect(pageText()).not.toContain("Under-18 entry — guardian consent");
   });
@@ -1875,7 +1875,7 @@ describe("step 4 — CONSENT", () => {
     (propsOf(stepWho()).onChange as (p: object) => void)({ name: "Self Row", email: "self@example.com", dob: "1990-01-01" });
     (propsOf(stepWho()).onImPlayingChange as (v: boolean) => void)(true); // auto-links the sole entry
     clickByText("Next"); // -> DETAILS
-    setByAriaLabel(island, "Player 1 — Your name", "Self Row");
+    setByAriaLabel(island, "Player 1 — Full name", "Self Row");
     // The roster row's OWN dob — not contact.dob — is what a real registrant
     // types here. No readOnly/disabled on this input (roster-table.tsx),
     // even though this IS the self-linked row.
@@ -1907,8 +1907,8 @@ describe("step 4 — CONSENT", () => {
     clickByText("Next"); // -> DETAILS
     clickByText("+ Add player");
     clickByText("+ Add player");
-    setByAriaLabel(island, "Player 1 — Your name", "Sam");
-    setByAriaLabel(island, "Player 2 — Your name", "Jordan");
+    setByAriaLabel(island, "Player 1 — Full name", "Sam");
+    setByAriaLabel(island, "Player 2 — Full name", "Jordan");
     clickByText("Next"); // -> CONSENT
     expect(pageText()).toContain(
       "You're entering other people in this registration. We'll ask each of them to confirm their own details and consent when they join or claim their spot.",
@@ -1923,7 +1923,7 @@ describe("step 4 — CONSENT", () => {
     (propsOf(stepWho()).onChange as (p: object) => void)({ name: "Solo Player", email: "solo@example.com", dob: "1990-01-01" });
     (propsOf(stepWho()).onImPlayingChange as (v: boolean) => void)(true); // auto-links the sole entry
     clickByText("Next"); // -> DETAILS
-    setByAriaLabel(island, "Player 1 — Your name", "Solo Player");
+    setByAriaLabel(island, "Player 1 — Full name", "Solo Player");
     clickByText("Next"); // -> CONSENT
     expect(pageText()).not.toContain("You're entering other people in this registration.");
   });
@@ -1969,7 +1969,7 @@ describe("step 5 — REVIEW→PAY line items", () => {
     (propsOf(divisionCard("div-wait")).onAddIndividual as () => void)();
     clickByText("Next"); // -> DETAILS
 
-    const nameInputs = allByAriaLabel(island, "Player 1 — Your name");
+    const nameInputs = allByAriaLabel(island, "Player 1 — Full name");
     expect(nameInputs, "expected one 'Player 1' row per entry").toHaveLength(2);
     (propsOf(nameInputs[0]!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "Player One" } });
     (propsOf(nameInputs[1]!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "Player Two" } });
@@ -1998,7 +1998,7 @@ describe("step 4 — the Lichess link on CONSENT (I5)", () => {
     const m = mount([division], undefined, { lichess });
     (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Alex Test", email: "alex@example.com" });
     m.clickByText("Next"); // -> DETAILS
-    setByAriaLabel(m.island, "Player 1 — Your name", "Alex Test");
+    setByAriaLabel(m.island, "Player 1 — Full name", "Alex Test");
     m.clickByText("Next"); // -> CONSENT
     const el = m.island.tree().find((e) => e.type === StepConsent);
     expect(el, "on the CONSENT step").toBeTruthy();
@@ -2032,7 +2032,7 @@ describe("step 5 — submit", () => {
     const m = mount([DIV_OPEN]);
     (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Alex Test", email: "alex@example.com" });
     m.clickByText("Next"); // -> DETAILS
-    setByAriaLabel(m.island, "Player 1 — Your name", "Alex Test");
+    setByAriaLabel(m.island, "Player 1 — Full name", "Alex Test");
     m.clickByText("Next"); // -> CONSENT
     (propsOf(byId(m.island, "reg-consent-privacy")).onChange as (e: { target: { checked: boolean } }) => void)({
       target: { checked: true },
@@ -2145,7 +2145,7 @@ describe("step 5 — submit", () => {
       (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Alex Test", email: "alex@example.com" });
       m.clickByText("Next");
       checkStep(m.island, "details");
-      setByAriaLabel(m.island, "Player 1 — Your name", "Alex Test");
+      setByAriaLabel(m.island, "Player 1 — Full name", "Alex Test");
       m.clickByText("Next");
       checkStep(m.island, "consent");
       (propsOf(byId(m.island, "reg-consent-privacy")).onChange as (e: { target: { checked: boolean } }) => void)({
@@ -2593,7 +2593,7 @@ describe("step 5 — staged submit button text (registration redesign B1 T6)", (
     const m = mount([division]);
     (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Alex Test", email: "alex@example.com" });
     m.clickByText("Next"); // -> DETAILS (one division: ENTRIES is collapsed away)
-    setByAriaLabel(m.island, "Player 1 — Your name", "Alex Test");
+    setByAriaLabel(m.island, "Player 1 — Full name", "Alex Test");
     m.clickByText("Next"); // -> CONSENT
     (propsOf(byId(m.island, "reg-consent-privacy")).onChange as (e: { target: { checked: boolean } }) => void)({
       target: { checked: true },
@@ -2757,7 +2757,7 @@ describe("B1 fix round 1 — the staged button is a readable status (D1, D3) and
     const m = mount([division]);
     (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Alex Test", email: "alex@example.com" });
     m.clickByText("Next");
-    setByAriaLabel(m.island, "Player 1 — Your name", "Alex Test");
+    setByAriaLabel(m.island, "Player 1 — Full name", "Alex Test");
     m.clickByText("Next");
     (propsOf(byId(m.island, "reg-consent-privacy")).onChange as (e: { target: { checked: boolean } }) => void)({
       target: { checked: true },
@@ -3163,7 +3163,7 @@ describe("P4 - the REVIEW step labels each entry with its own payment method (W9
     (propsOf(m.divisionCard("div-card")).onAddIndividual as () => void)();
     (propsOf(m.divisionCard("div-wait")).onAddIndividual as () => void)();
     m.clickByText("Next"); // -> DETAILS
-    const names = allByAriaLabel(m.island, "Player 1 — Your name");
+    const names = allByAriaLabel(m.island, "Player 1 — Full name");
     (propsOf(names[0]!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "One" } });
     (propsOf(names[1]!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "Two" } });
     m.clickByText("Next"); // -> CONSENT
@@ -3242,7 +3242,7 @@ describe("H — the join-code door shows on the first step only, and only where 
     m.clickByText("Next"); // -> DETAILS
     expect(joinDoors(m.island), "DETAILS").toHaveLength(0);
     later.push("details");
-    const names = allByAriaLabel(m.island, "Player 1 — Your name");
+    const names = allByAriaLabel(m.island, "Player 1 — Full name");
     (propsOf(names[0]!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "One" } });
     m.clickByText("Next"); // -> CONSENT
     expect(joinDoors(m.island), "CONSENT").toHaveLength(0);
@@ -3354,7 +3354,7 @@ describe("B2 T8 — action bar: Back, named Continue, running total, one forward
     const m = mount([division]);
     fillWho(m);
     m.clickByText("Next"); // -> DETAILS
-    setByAriaLabel(m.island, "Player 1 — Your name", "Alex Test");
+    setByAriaLabel(m.island, "Player 1 — Full name", "Alex Test");
     m.clickByText("Next"); // -> CONSENT
     consent(m);
     m.clickByText("Next"); // -> REVIEW
@@ -3404,7 +3404,7 @@ describe("B2 T8 — action bar: Back, named Continue, running total, one forward
     addEntry(m, "div-open");
     m.clickByText("Next"); // -> DETAILS
     seen.push(nextLabel(m.island));
-    setByAriaLabel(m.island, "Player 1 — Your name", "Alex Test");
+    setByAriaLabel(m.island, "Player 1 — Full name", "Alex Test");
     m.clickByText("Next"); // -> CONSENT
     seen.push(nextLabel(m.island));
     consent(m);
@@ -3425,7 +3425,7 @@ describe("B2 T8 — action bar: Back, named Continue, running total, one forward
     fillWho(m);
     m.clickByText("Next");
     seen.push(nextLabel(m.island)); // DETAILS
-    setByAriaLabel(m.island, "Player 1 — Your name", "Alex Test");
+    setByAriaLabel(m.island, "Player 1 — Full name", "Alex Test");
     m.clickByText("Next");
     seen.push(nextLabel(m.island)); // CONSENT
     expect(seen).toEqual(["Continue to Details", "Continue to Consent", "Continue to Review"]);
@@ -3448,7 +3448,7 @@ describe("B2 T8 — action bar: Back, named Continue, running total, one forward
     addEntry(m, "div-open");
     m.clickByText("Next");
     expectCounts(1, 0, 1, "DETAILS");
-    setByAriaLabel(m.island, "Player 1 — Your name", "Alex Test");
+    setByAriaLabel(m.island, "Player 1 — Full name", "Alex Test");
     m.clickByText("Next");
     expectCounts(1, 0, 1, "CONSENT");
     consent(m);
@@ -3517,7 +3517,7 @@ describe("B2 T8 — action bar: Back, named Continue, running total, one forward
     expect(textOf(one(m.island, "reg-bar-summary")), "ONE charged entry, ONE fee").toBe("1 entry · £25.00");
 
     m.clickByText("Next"); // -> DETAILS
-    const names = allByAriaLabel(m.island, "Player 1 — Your name");
+    const names = allByAriaLabel(m.island, "Player 1 — Full name");
     expect(names, "premise: a row per entry").toHaveLength(2);
     names.forEach((n, i) => (propsOf(n).onChange as (e: { target: { value: string } }) => void)({ target: { value: `Player ${i + 1}` } }));
     m.clickByText("Next"); // -> CONSENT
@@ -3574,7 +3574,7 @@ describe("B2 T8 — action bar: Back, named Continue, running total, one forward
         .map((e) => textOf(e));
     expect(subtotal(), "the Entries cart's subtotal").toEqual(["Nothing to pay now"]);
     m.clickByText("Next"); // -> DETAILS
-    setByAriaLabel(m.island, "Player 1 — Your name", "Alex Test");
+    setByAriaLabel(m.island, "Player 1 — Full name", "Alex Test");
     m.clickByText("Next"); // -> CONSENT
     consent(m);
     m.clickByText("Next"); // -> REVIEW
@@ -3589,7 +3589,7 @@ describe("B2 T8 — action bar: Back, named Continue, running total, one forward
     addEntry(m, "div-paid");
     addEntry(m, "div-wait");
     m.clickByText("Next"); // -> DETAILS
-    allByAriaLabel(m.island, "Player 1 — Your name").forEach((n, i) =>
+    allByAriaLabel(m.island, "Player 1 — Full name").forEach((n, i) =>
       (propsOf(n).onChange as (e: { target: { value: string } }) => void)({ target: { value: `Player ${i + 1}` } }),
     );
     m.clickByText("Next"); // -> CONSENT
@@ -3631,7 +3631,7 @@ describe("B2 T8 — action bar: Back, named Continue, running total, one forward
     addEntry(m, "div-paid");
     addEntry(m, "div-wait");
     m.clickByText("Next"); // -> DETAILS
-    allByAriaLabel(m.island, "Player 1 — Your name").forEach((n, i) =>
+    allByAriaLabel(m.island, "Player 1 — Full name").forEach((n, i) =>
       (propsOf(n).onChange as (e: { target: { value: string } }) => void)({ target: { value: `Player ${i + 1}` } }),
     );
     m.clickByText("Next"); // -> CONSENT
@@ -4212,7 +4212,7 @@ describe("B2 T10 - Consent: Required and Optional tags, small print, one info li
       (propsOf(m.stepWho()).onImPlayingChange as (v: boolean) => void)(true);
     }
     m.clickByText("Next"); // -> DETAILS
-    if (!playing) setByAriaLabel(m.island, "Player 1 \u2014 Your name", "Alex Other");
+    if (!playing) setByAriaLabel(m.island, "Player 1 \u2014 Full name", "Alex Other");
     m.clickByText("Next"); // -> CONSENT
     expect(m.island.tree().some((e) => e.type === StepConsent), "premise: on the Consent step").toBe(true);
     return m;
@@ -4347,7 +4347,7 @@ describe("B2 T10 - Review: you, entries with players, answers, consent; Edit goe
     const textarea = m.island.tree().find((e) => e.type === "textarea")!;
     (propsOf(textarea).onChange as (e: { target: { value: string } }) => void)({ target: { value: "Jordan Blake\nSam Ortiz" } });
     m.clickByText("Add 2 players from list");
-    (propsOf(allByAriaLabel(m.island, "Player 1 \u2014 Your name")[1]!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "Priya Raman" } });
+    (propsOf(allByAriaLabel(m.island, "Player 1 \u2014 Full name")[1]!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "Priya Raman" } });
     setField(m.island, (id) => id.endsWith("-shirt"), "M");
     setField(m.island, (id) => id.endsWith("-diet"), "Vegetarian");
     const ack = m.island.tree().filter((e) => e.type === "input" && propsOf(e).type === "checkbox");
@@ -4392,7 +4392,7 @@ describe("B2 T10 - Review: you, entries with players, answers, consent; Edit goe
     (propsOf(m.divisionCard("div-asks-t10")).onAddIndividual as () => void)();
     (propsOf(m.divisionCard("div-asks-t10-b")).onAddIndividual as () => void)();
     m.clickByText("Next"); // -> DETAILS
-    const names = allByAriaLabel(m.island, "Player 1 \u2014 Your name");
+    const names = allByAriaLabel(m.island, "Player 1 \u2014 Full name");
     expect(names, "premise: one row per entry").toHaveLength(2);
     (propsOf(names[0]!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "Priya Raman" } });
     (propsOf(names[1]!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "Sam Ortiz" } });
@@ -4418,7 +4418,7 @@ describe("B2 T10 - Review: you, entries with players, answers, consent; Edit goe
     const m = mount([DIV_ASKS_T10]); // one division: four steps, no Entries
     (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Mia Cole", email: "mia@example.com" });
     m.clickByText("Next"); // -> DETAILS
-    setByAriaLabel(m.island, "Player 1 \u2014 Your name", "Priya Raman");
+    setByAriaLabel(m.island, "Player 1 \u2014 Full name", "Priya Raman");
     setField(m.island, (id) => id.endsWith("-diet"), "None"); // the one REQUIRED question; the shirt size is left blank
     m.clickByText("Next"); // -> CONSENT
     tick(m.island, "reg-consent-privacy");
@@ -4472,7 +4472,7 @@ describe("B2 T10 - Review: you, entries with players, answers, consent; Edit goe
     const bare = mount([DIV_OPEN]);
     (propsOf(bare.stepWho()).onChange as (p: object) => void)({ name: "Alex Test", email: "alex@example.com" });
     bare.clickByText("Next"); // -> DETAILS (Entries collapsed)
-    setByAriaLabel(bare.island, "Player 1 \u2014 Your name", "Alex Test");
+    setByAriaLabel(bare.island, "Player 1 \u2014 Full name", "Alex Test");
     bare.clickByText("Next"); // -> CONSENT
     tick(bare.island, "reg-consent-privacy");
     bare.clickByText("Next"); // -> REVIEW
@@ -4527,7 +4527,7 @@ describe("B2 T10 - Review: you, entries with players, answers, consent; Edit goe
     const m = mount([DIV_ASKS_T10]);
     (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Alex Test", email: "alex@example.com" });
     m.clickByText("Next"); // -> DETAILS
-    setByAriaLabel(m.island, "Player 1 \u2014 Your name", "Alex Test");
+    setByAriaLabel(m.island, "Player 1 \u2014 Full name", "Alex Test");
     setField(m.island, (id) => id.endsWith("-diet"), "None");
     m.clickByText("Next"); // -> CONSENT
     tick(m.island, "reg-consent-privacy");
@@ -4568,7 +4568,7 @@ describe("B2 T10 - Review: you, entries with players, answers, consent; Edit goe
       const other = mount([division]);
       (propsOf(other.stepWho()).onChange as (p: object) => void)({ name: "Alex Test", email: "alex@example.com" });
       other.clickByText("Next");
-      setByAriaLabel(other.island, "Player 1 \u2014 Your name", "Alex Test");
+      setByAriaLabel(other.island, "Player 1 \u2014 Full name", "Alex Test");
       other.clickByText("Next");
       tick(other.island, "reg-consent-privacy");
       other.clickByText("Next");
@@ -4591,7 +4591,7 @@ describe("B2 T10 - Review: you, entries with players, answers, consent; Edit goe
     const textarea = m.island.tree().find((e) => e.type === "textarea")!;
     (propsOf(textarea).onChange as (e: { target: { value: string } }) => void)({ target: { value: "Jordan Blake" } });
     m.clickByText("Add 1 players from list");
-    (propsOf(allByAriaLabel(m.island, "Player 1 \u2014 Your name")[1]!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "Priya Raman" } });
+    (propsOf(allByAriaLabel(m.island, "Player 1 \u2014 Full name")[1]!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "Priya Raman" } });
     setField(m.island, (id) => id.endsWith("-diet"), "None");
     m.clickByText("Next"); // -> CONSENT
     tick(m.island, "reg-consent-privacy");
@@ -4621,7 +4621,7 @@ describe("B2 T10 - Review: you, entries with players, answers, consent; Edit goe
       (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Young Player", email: "young@example.com", dob });
       (propsOf(m.stepWho()).onImPlayingChange as (v: boolean) => void)(true); // auto-links the sole entry
       m.clickByText("Next"); // -> DETAILS
-      setByAriaLabel(m.island, "Player 1 \u2014 Your name", "Young Player");
+      setByAriaLabel(m.island, "Player 1 \u2014 Full name", "Young Player");
       m.clickByText("Next"); // -> CONSENT
       tick(m.island, "reg-consent-privacy");
       return m;

@@ -277,7 +277,7 @@ test("RS007 witness — cancelling one of two cart entries drops the money line 
       for (const name of mates) {
         await card.getByRole("button", { name: /\+ add player/i }).click();
         await anon.waitForTimeout(300);
-        const boxes = card.getByLabel(/Player \d+ — Your name/);
+        const boxes = card.getByLabel(/Player \d+ — Full name/);
         await boxes.nth((await boxes.count()) - 1).fill(name);
         await anon.waitForTimeout(200);
       }

@@ -232,9 +232,9 @@ test("RS006 — organiser settings, team entry, Stripe Connect payment", async (
     // PLAYING captain's roster opens with their own row (named, and picked as
     // "which player are you"), so a name already on it is not added again.
     // Each row's name input is reachable by its aria-label,
-    // "Player <n> — Your name" (roster-table.tsx).
+    // "Player <n> — Full name" (roster-table.tsx).
     const roster = ["Priya Raman", "Arun Menon", "Sofia Alves"];
-    const nameBoxes = anon.getByRole("textbox", { name: /Player \d+ — Your name/ });
+    const nameBoxes = anon.getByRole("textbox", { name: /Player \d+ — Full name/ });
     for (const name of roster) {
       const onRoster = await nameBoxes.evaluateAll((els) => els.map((el) => (el as HTMLInputElement).value.trim()));
       if (onRoster.includes(name)) continue;

@@ -205,7 +205,7 @@ test("configure, register, join, waitlist, approve, opt-out — every screen agr
     // Since polish wave V1 a playing captain's roster OPENS with their own row (named, and picked as "which player are you"), so a
     // name already on the roster is not added a second time — re-adding it would enter the captain twice.
     const roster = opts.extraRosterName ? [opts.name, opts.extraRosterName] : [opts.name];
-    const boxes = anon.getByLabel(/Player \d+ — Your name/);
+    const boxes = anon.getByLabel(/Player \d+ — Full name/);
     for (const name of roster) {
       const onRoster = await boxes.evaluateAll((els) => els.map((el) => (el as HTMLInputElement).value.trim()));
       if (onRoster.includes(name)) continue;
