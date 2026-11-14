@@ -589,7 +589,8 @@ describe.skipIf(!HAS_DB)("gate: the Lichess link demanded at sign-up", () => {
         {
           contact: contact(),
           privacy_consent: true,
-          entries: [{ division_id: g.divisionId, entrant_kind: "individual", players: [{ full_name: "Solo Player" }], answers: {} }],
+          // The registrant IS the player ("I'm one of the players" ticked): signed out, what they owe is the link.
+          entries: [{ division_id: g.divisionId, entrant_kind: "individual", registering_self: true, players: [{ full_name: "Solo Player" }], answers: {} }],
         },
       );
       if (s.offered) {
@@ -620,7 +621,7 @@ describe.skipIf(!HAS_DB)("gate: the Lichess link demanded at sign-up", () => {
         {
           contact: contact(),
           privacy_consent: true,
-          entries: [{ division_id: g.divisionId, entrant_kind: "individual", players: [{ full_name: "Solo Player" }], answers: {} }],
+          entries: [{ division_id: g.divisionId, entrant_kind: "individual", registering_self: true, players: [{ full_name: "Solo Player" }], answers: {} }],
         },
       );
       if (s.offered) expect(await refusal(submitted), s.label).toEqual({ status: 422, code: "LICHESS_LINK_REQUIRED" });
@@ -702,6 +703,49 @@ describe.skipIf(!HAS_DB)("gate: the Lichess link demanded at sign-up", () => {
     await reconnectLichess(me);
 
     expect((await submit()).entries.map((e) => e.status)).toEqual(["confirmed"]);
+  });
+
+  // Registration walk-fix F3 (walkthrough OC1 I6): a LINKED player who left "I'm one of the players" unticked was told to link Lichess,
+  // a remedy that changes nothing - the entry they were making is for someone else. An online entry is personal (the seat gate seats
+  // the account that registered), so the refusal names THAT: its own code, whoever is asking (signed out, signed in without a link,
+  // signed in with a link that plays). The flag decides as before: off (or PostHog throwing), the entry confirms.
+  it("registration for someone else: 422 LICHESS_SELF_ENTRY_REQUIRED whatever the caller's link (three callers); flag OFF or PostHog throwing confirms", async () => {
+    let checked = 0;
+    const callers: Array<{ name: string; session: (orgId: string) => Promise<string | null> }> = [
+      { name: "signed out", session: async () => null },
+      { name: "signed in, no link", session: async (orgId) => (await seedPlayer(orgId, "No Link", `sn${randomUUID().slice(0, 6)}`, false)).userId },
+      { name: "signed in, a link that plays", session: async (orgId) => (await seedPlayer(orgId, "Linked", `sl${randomUUID().slice(0, 6)}`, true)).userId },
+    ];
+    for (const c of callers) {
+      for (const s of FLAG_STATES) {
+        overrideOn();
+        const g = await onlineRegistration("individual", "auto");
+        const sessionUserId = await c.session(g.owner.orgId);
+        flagIs(s);
+        const submitted = submitRegistrationGroup(
+          { orgSlug: g.orgSlug, compSlug: g.compSlug, sessionUserId },
+          { contact: contact(), privacy_consent: true, entries: [{ ...soloEntry(g.divisionId), registering_self: false }] },
+        );
+        if (s.offered) expect(await refusal(submitted), `${c.name} / ${s.label}`).toEqual({ status: 422, code: "LICHESS_SELF_ENTRY_REQUIRED" });
+        else expect((await submitted).entries.map((e) => e.status), `${c.name} / ${s.label}`).toEqual(["confirmed"]);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: three callers x three flag states").toBe(9);
+  });
+
+  it("registration for someone else, the sequence: refused as personal, the same linked player ticks 'I'm one of the players', the submit confirms", async () => {
+    overrideOn();
+    const g = await onlineRegistration("individual", "auto");
+    const me = await seedPlayer(g.owner.orgId, "Ticks Later", `tl${randomUUID().slice(0, 6)}`, true);
+    flagIs(FLAG_STATES[0]!);
+    const submit = (registering_self: boolean) =>
+      submitRegistrationGroup(
+        { orgSlug: g.orgSlug, compSlug: g.compSlug, sessionUserId: me.userId },
+        { contact: contact(), privacy_consent: true, entries: [{ ...soloEntry(g.divisionId), registering_self }] },
+      );
+    expect(await refusal(submit(false))).toEqual({ status: 422, code: "LICHESS_SELF_ENTRY_REQUIRED" });
+    expect((await submit(true)).entries.map((e) => e.status)).toEqual(["confirmed"]);
   });
 
   it("the join link: a signed-in joiner whose link cannot play is refused as reconnect, before the next check (privacy consent)", async () => {
@@ -799,15 +843,15 @@ describe.skipIf(!HAS_DB)("gate: the Lichess link demanded at sign-up", () => {
         {
           contact: contact(),
           privacy_consent: true,
-          entries: [{ division_id: g.divisionId, entrant_kind: "individual", players: [{ full_name: "Solo Player" }], answers: {} }],
+          entries: [{ division_id: g.divisionId, entrant_kind: "individual", registering_self: true, players: [{ full_name: "Solo Player" }], answers: {} }],
         },
       ).then(
         () => "accepted",
         (e: unknown) => (e instanceof HttpError ? (e.code ?? `${e.status} ${e.message}`) : String(e)),
       );
-      // Another sport may refuse this entry for its own reasons; it is never asked for a Lichess link.
+      // Another sport may refuse this entry for its own reasons; it is never asked for a Lichess link, nor told an online entry is personal.
       if (stated) expect(answer, mod.key).toBe("LICHESS_LINK_REQUIRED");
-      else expect(answer, mod.key).not.toBe("LICHESS_LINK_REQUIRED");
+      else expect(["LICHESS_LINK_REQUIRED", "LICHESS_SELF_ENTRY_REQUIRED"], mod.key).not.toContain(answer);
       expect(flags.isServerFeatureEnabled.mock.calls.length > 0, `${mod.key}: the flag asked`).toBe(stated);
       checked++;
     }

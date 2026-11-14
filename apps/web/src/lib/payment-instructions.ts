@@ -1,6 +1,8 @@
 // Organiser payment instructions are Markdown with one token: {{reference}}
-// becomes the registrant's generated ref code wherever the instructions are
-// shown — so "quote {{reference}} on your bank transfer" personalises itself.
+// becomes the reference the registrant quotes wherever the instructions are
+// shown — the entry's own (`SZ-XXXX-XXXX-2` in a cart sent with two or more
+// entries) or the cart's, per surface (B5 T18) — so "quote {{reference}} on
+// your bank transfer" personalises itself.
 // Public pages render the Markdown through lib/prose; the email panels are
 // plain-text, so they get a readable stripped version instead.
 

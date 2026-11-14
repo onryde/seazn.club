@@ -1,6 +1,6 @@
 "use client";
 
-// Registration hub — the row-click config panel (RS004 W3c/W4, design §5,
+// Registration hub — a division's registration settings page (RS004 W3c/W4, design §5,
 // "grouped sections, progressive disclosure" treatment). Fetches the
 // division's full registration settings on open, edits every
 // registration_settings field plus the division-level eligibility fields
@@ -9,10 +9,7 @@
 //   PATCH /api/v1/divisions/{id}                       category/age_min/age_max
 //   PUT   /api/v1/divisions/{id}/registration-settings  everything else (FULL REPLACE)
 //
-// Built on <Modal> (components/modal.tsx) rather than a bespoke overlay —
-// that component already carries the 320px-safe chrome this repo has been
-// bitten by before (dvh not vh, bottom sheet under `sm`, safe-area padding,
-// Esc-to-close, focus). State shaping (GET response -> edit state -> the
+// State shaping (GET response -> edit state -> the
 // two save payloads) lives in registration-hub-config-state.ts, error
 // mapping in registration-hub-save-error.ts, and the fetch/patch/save
 // plumbing in the useRegistrationConfigPanelState hook
@@ -24,7 +21,7 @@
 // scrolling form. Eligibility/Open & close/Capacity default OPEN (short,
 // core fields most edits touch); Money and the sign-up form default
 // COLLAPSED (heavier, less-frequently-touched sub-UIs). At 320px this is
-// the whole point: a long modal form is punishing on a phone, and
+// the whole point: a long form is punishing on a phone, and
 // collapsing two of five sections meaningfully shortens the scroll without
 // hiding anything permanently.
 //
@@ -32,15 +29,35 @@
 // flat form, not better — so a 422 landing on a field inside a collapsed
 // section auto-reveals that section once (see the effect below and
 // registration-hub-config-panel-sections.ts).
-import { useState } from "react";
-import { ChevronDown } from "lucide-react";
-import type { ReactEventHandler, ReactNode } from "react";
-import { Modal } from "@/components/modal";
+//
+// B7 T23 (spec §9.3) — the sections render as a division's own hub tab (it
+// was a dialog until T24 retired it): a heading, the sections in the
+// page, and a Save bar pinned to the bottom of the viewport that says whether
+// anything is unsaved ("All changes saved" / "{n} unsaved changes"), with
+// Cancel (back to the saved values; the tab stays) and Save changes (saves and
+// stays). From md up every section is a plain open section under its own
+// heading, with a sticky section index beside them; below md they stay
+// accordions. Dirty is the draft against the SAVED values the hook keeps
+// (use-config-dirty.ts) plus any clock still half-typed, and a "Changed" tag
+// marks each section holding an unsaved edit. A save that does not go through
+// says so in the bar and scrolls to what refused it. The tab host
+// (registration-hub-tabs-host.tsx) mounts one per open division tab.
+import { useEffect, useId, useRef, useState } from "react";
+import type { RefObject } from "react";
 import Link from "@/components/ui/console-link";
-import { useMsg, useLocaleOrDefault } from "@/components/i18n/dict-provider";
+import { useMsg, useMsgPlural, useLocaleOrDefault } from "@/components/i18n/dict-provider";
+import { useMdUp } from "@/components/ui/use-md-up";
+import { useConfigDirty, type ConfigDirty } from "@/components/use-config-dirty";
+import {
+  ConfigSaveBar,
+  ConfigSectionIndex,
+  revealSection,
+  sectionAnchor,
+  type SaveBarState,
+} from "@/components/registration-hub-config-page-chrome";
+import { Disclosure, sectionName, sectionTitle, type Msg } from "@/components/registration-hub-config-section";
 import { routes } from "@/lib/routes";
 import type { Currency } from "@/lib/currency";
-import type { MessageKey } from "@/lib/messages";
 import { FormBuilder } from "@/components/registration-hub-form-builder";
 import type { DivisionCategoryValue } from "@/components/registration-hub-row-derive";
 import {
@@ -55,6 +72,7 @@ import { ENTRANT_KIND_NOT_ALLOWED, divisionTakesKind } from "@/lib/division-entr
 import {
   useRegistrationConfigPanelState,
   type RegistrationHubConfigDivisionLike,
+  type SaveOutcome,
 } from "@/components/use-registration-hub-config";
 import {
   SECTION_IDS,
@@ -76,14 +94,9 @@ import { fmtZoneAbbrev } from "@/lib/format";
  *  early — the same reason the division wizard's deadlines pass this. */
 const CUTOFF_TIME_OPTIONS = ["23:59"];
 
-type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
 /** The entrant-type select's order, unchanged from before FU1; filtered to the division's allowed kinds. */
 const KIND_OPTION_ORDER: readonly EntrantKindValue[] = ["individual", "team", "pair"];
-/** The refused-kind hint's id, for the select's aria-describedby. Static: one config panel is open at a time (a Modal), and
- *  OpenCloseSection must stay hookless (its tests call it directly), so useId is not available. */
-const ENTRANT_KIND_HINT_ID = "reg-config-entrant-kind-hint";
-
 /** The four fields this panel edits as a date+time PAIR rather than a
  *  single value — see registration-hub-tz-input.ts's header for why (the
  *  half-filled-value bug, RS005 R4 task 2). */
@@ -125,92 +138,6 @@ const DEFAULT_OPEN: Record<SectionId, boolean> = {
   money: false,
   form: false,
 };
-
-function sectionTitle(
-  id: SectionId,
-  msg: Msg,
-  formFieldCount: number,
-): string {
-  switch (id) {
-    case "eligibility":
-      return msg("reg.hub.config.eligibility");
-    case "schedule":
-      return msg("reg.settings.openClose");
-    case "capacity":
-      return msg("reg.settings.capacity");
-    case "money":
-      return msg("reg.settings.money");
-    case "form":
-      // NOT `usePlural`: it throws outside a `DictProvider` and this panel is
-      // rendered without one — the same reason and the same shape as
-      // create-org-form.tsx:134-140, which documents it. Safe rather than a
-      // shortcut: all four shipped locales (en/es/fr/nl) put the one/other
-      // boundary at exactly 1, so this ternary IS the plural rule for every
-      // locale the product has. A locale with a dual or paucal form would
-      // need the real Intl.PluralRules path.
-      //
-      // It said "1 extra questions" before, and a division with one extra
-      // question is the COMMON case, not an edge one.
-      return `${msg("reg.settings.signupForm")} · ${msg(
-        formFieldCount === 1 ? "reg.settings.extraQuestions.one" : "reg.settings.extraQuestions.other",
-        { count: formFieldCount },
-      )}`;
-  }
-}
-
-// Exported (not a private closure) for the same reason the section
-// components below are: _hook-harness.tsx's walk() never INVOKES a child
-// component — it only reads the static `.props.children` already authored
-// on it — so a test rendering this panel needs to call Disclosure(props)
-// directly to see what it actually renders. Safe here because Disclosure
-// holds no hooks of its own.
-export function Disclosure({
-  id,
-  title,
-  open,
-  hasError,
-  onToggle,
-  children,
-}: {
-  id: string;
-  title: string;
-  open: boolean;
-  hasError: boolean;
-  // The real DOM event type, not a hand-rolled `{ currentTarget: { open } }`
-  // shape. That invented type is what let a real crash through tsc once: it
-  // described `currentTarget` as always carrying an `open` boolean, so
-  // reading it was a type error nowhere — while the native `toggle` event
-  // fired during commit hands the handler a null `currentTarget`.
-  onToggle: ReactEventHandler<HTMLDetailsElement>;
-  children: ReactNode;
-}) {
-  return (
-    <details
-      data-accordion-section={id}
-      className="card group overflow-hidden p-0"
-      open={open}
-      onToggle={onToggle}
-    >
-      {/* list-none + both marker rules: <summary> carries a native
-          disclosure triangle via TWO different mechanisms depending on
-          engine (::marker in modern engines, ::-webkit-details-marker in
-          WebKit/Blink) — hiding only one leaves the native triangle
-          showing alongside the custom chevron below. */}
-      <summary className="marker:content-none flex cursor-pointer list-none items-center justify-between gap-2 p-4 text-sm font-semibold text-slate-700 [&::-webkit-details-marker]:hidden">
-        <span className="flex items-center gap-2">
-          {title}
-          {hasError && <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-red-500" />}
-        </span>
-        <ChevronDown
-          className="h-4 w-4 shrink-0 text-slate-400 transition-transform group-open:rotate-180"
-          strokeWidth={1.75}
-          aria-hidden
-        />
-      </summary>
-      <div className="space-y-3 border-t border-purple-100 p-4">{children}</div>
-    </details>
-  );
-}
 
 /**
  * One org-timezone date+time pair (RS005 R4 task 2), rendered as two native
@@ -295,6 +222,19 @@ export function OrgTzDateTimePair({
   );
 }
 
+/** B7 T23: what one Save did. `"refused"`: nothing was sent — the page's own checks stopped it (a half-typed clock, a value out
+ *  of range), or nothing had loaded to save. The rest are the hook's outcomes, named by what failed. */
+export type ConfigSaveResult = "refused" | SaveOutcome;
+
+/** B7 T23: Save, driven from outside the panel — the hub's division tabs ask to save before a tab closes (T24). The same save
+ *  as the bar's button: the page's checks first, then both requests, then the reveal of whatever refused it. */
+export interface ConfigSaveHandle {
+  save: () => Promise<ConfigSaveResult>;
+  /** Show what refused the last save again — its section opened, scrolled to and focused. For a host whose save ran while the
+   *  page was hidden or under a dialog, where the save's own reveal could not be seen (T24 fix round 1 m1). */
+  reveal: () => void;
+}
+
 export function RegistrationHubConfigPanel({
   division,
   orgTz,
@@ -303,8 +243,9 @@ export function RegistrationHubConfigPanel({
   feePercentPct,
   cardUnsupportedCurrency,
   waitlistedCount,
-  onClose,
   onSaved,
+  onDirtyChange,
+  saveHandleRef,
 }: {
   division: RegistrationHubConfigDivisionLike;
   /** organizations.timezone (or DEFAULT_TZ) — windows are edited in this
@@ -324,10 +265,18 @@ export function RegistrationHubConfigPanel({
    *  charges whatever fee is live at promotion time, not what they saw when
    *  they joined — see MoneySection's own comment. */
   waitlistedCount: number;
-  onClose: () => void;
   onSaved: () => void;
+  /** B7 T23: told whenever the unsaved-changes answer moves (and once on mount, clean) — never on a keystroke that leaves the
+   *  count and sections as they were. The tab host's dirty dot and close/evict dialogs read it. */
+  onDirtyChange?: (dirty: ConfigDirty) => void;
+  /** B7 T23: filled with a save handle while the panel is mounted (null after it unmounts). */
+  saveHandleRef?: RefObject<ConfigSaveHandle | null>;
 }) {
   const msg = useMsg();
+  const msgPlural = useMsgPlural();
+  const headingId = useId();
+  // The refused-kind hint's id, per page: two division tabs can be mounted at once (T24), and OpenCloseSection is hookless.
+  const kindHintId = useId();
   // RS007/V380 — the cutoff fields' month <select> needs localised month
   // names (matching the division-creation wizard's own cutoff fields,
   // division-builder.tsx). Read here and passed down as a prop, same as
@@ -339,7 +288,7 @@ export function RegistrationHubConfigPanel({
   // names) — a silent English fallback there is correct, not a bug (see
   // useLocaleOrDefault's own doc comment, dict-provider.tsx).
   const locale = useLocaleOrDefault();
-  const { state, readOnly, loadError, busy, errors, formError, saveOutcome, patch, save } =
+  const { state, saved, readOnly, loadError, busy, errors, formError, saveOutcome, patch, save, reset, clearFailure } =
     useRegistrationConfigPanelState(division, onSaved, (code) =>
       code === CHESS_INDIVIDUAL_ONLY
         ? msg("divset.err.chessIndividualOnly")
@@ -347,6 +296,10 @@ export function RegistrationHubConfigPanel({
           ? msg("reg.settings.entrant.notAllowedError")
           : null,
     );
+  // From md up: every section open, with the index beside them (spec §9.3). Null until the browser has been asked; the
+  // sections only render once the GET has answered, by which time it has.
+  const mdUp = useMdUp();
+  const wide = mdUp === true;
   const [openSections, setOpenSections] = useState<Record<SectionId, boolean>>(DEFAULT_OPEN);
   // Finding 3: the fee input's draft text, independent of fee_cents. Owned
   // HERE (not inside MoneySection) rather than as a useState in the section
@@ -382,18 +335,58 @@ export function RegistrationHubConfigPanel({
   // client-only ones layered on top so the freshest, most-actionable
   // message wins on a field that somehow has both.
   const fieldErrors: Partial<Record<ConfigFieldKey, string>> = { ...errors, ...clientErrors };
+  // A clock with one half typed and the other blank never reaches `state` (onDateTimeHalfChange below), and Save refuses it —
+  // so it is unsaved, and counted, in its own section (B7 T23 review I-1).
+  const pendingClocks = DATETIME_FIELDS.filter((f) => {
+    const draft = dtDrafts[f];
+    return draft !== undefined && isDateTimeHalvesIncomplete(draft);
+  });
+  const dirty = useConfigDirty(saved, state, pendingClocks);
+  // Back to the saved values (edited back by hand, or the failed half of a partial save restored): what the last failed save
+  // said was about edits that no longer exist, so it goes — the bar reading "All changes saved" over a failure banner is a
+  // contradiction (B7 T23 re-review m4). The sanctioned "adjust state when a value changes" shape: during render, on the
+  // transition only, never in an effect.
+  const [wasDirty, setWasDirty] = useState(false);
+  if (wasDirty !== dirty.dirty) {
+    setWasDirty(dirty.dirty);
+    if (!dirty.dirty) {
+      clearFailure();
+      setClientErrors((prev) => (Object.keys(prev).length === 0 ? prev : {}));
+    }
+  }
+  // Latest callback in a ref, written in an effect (never during render), so the report below fires on the ANSWER moving and
+  // not on a parent handing down a fresh inline function each render — which, with a parent that stores the report in
+  // state, would be a render loop.
+  const onDirtyChangeRef = useRef(onDirtyChange);
+  useEffect(() => {
+    onDirtyChangeRef.current = onDirtyChange;
+  });
+  useEffect(() => {
+    onDirtyChangeRef.current?.(dirty);
+  }, [dirty]);
 
   function onDateTimeHalfChange(field: DateTimeFieldKey, half: "date" | "time", value: string) {
     const current = dtDrafts[field] ?? orgTzDateTimeHalves(state![field], orgTz);
     const result = editOrgTzDateTimeHalf(current, half, value, orgTz);
-    setDtDrafts((prev) => ({ ...prev, [field]: result.halves }));
     // Never patch `state` while incomplete — that would be the exact bug
     // this task fixes, just moved one layer up: an in-progress half-typed
     // pair silently becoming a committed "unset". Leaving the committed
     // value untouched here means a save attempted mid-edit still saves
     // whatever was there BEFORE (blocked below by the incomplete check,
     // never silently nulled).
-    if (!result.incomplete) patch({ [field]: result.instant });
+    // The value before the draft: a renderer that does not batch the two (the static test harness) then never sees the
+    // finished draft over the old value — a clean moment that would read as "edited back" (re-review m4).
+    if (!result.incomplete) {
+      patch({ [field]: result.instant });
+      // A refusal of this clock for being half-typed is answered once both halves are in (B7 T23 re-review m4).
+      setClientErrors((prev) => {
+        if (!(field in prev)) return prev;
+        const next = { ...prev };
+        delete next[field];
+        return next;
+      });
+    }
+    setDtDrafts((prev) => ({ ...prev, [field]: result.halves }));
   }
 
   // Reveal whichever section holds the first error, at the moment the save
@@ -407,8 +400,9 @@ export function RegistrationHubConfigPanel({
   // computed value twice — which happens the moment the organiser toggles the
   // section by hand while the error is still live. Writing it once here means
   // the reveal survives until they deliberately close it again.
-  async function saveAndReveal() {
-    if (!state) return;
+  async function saveAndReveal(onlyChanged: boolean): Promise<ConfigSaveResult> {
+    // Nothing loaded: nothing to check or send (a host's Save before the GET answered).
+    if (!state) return "refused";
     // Client-side gate BEFORE the network round trip (RS005 R4 task 2): an
     // incomplete clock field, or anything validateConfigState catches, must
     // block the save outright — never merely warn after the fact. Datetime
@@ -430,165 +424,242 @@ export function RegistrationHubConfigPanel({
     }
     if (Object.keys(nextClientErrors).length > 0) {
       setClientErrors(nextClientErrors);
-      const sectionId = firstErrorSection(nextClientErrors);
-      if (sectionId) setOpenSections((prev) => (prev[sectionId] ? prev : { ...prev, [sectionId]: true }));
-      return;
+      reveal(firstErrorSection(nextClientErrors));
+      return "refused";
     }
     setClientErrors({});
-    const failed = await save();
-    const sectionId = firstErrorSection(failed);
-    if (!sectionId) return;
-    setOpenSections((prev) => (prev[sectionId] ? prev : { ...prev, [sectionId]: true }));
+    const result = await save({ onlyChanged });
+    if (result.outcome !== "success") reveal(firstErrorSection(result.errors));
+    return result.outcome;
   }
 
+  // One save at a time (B7 T23 re-review m2): a second ask while one is in flight — the bar's button, a host's handle — gets the
+  // SAME promise, so nothing is sent twice and `onSaved` fires once. A ref, written only by these handlers, never in render.
+  const inFlight = useRef<Promise<ConfigSaveResult> | null>(null);
+  function saveOnce(onlyChanged: boolean): Promise<ConfigSaveResult> {
+    if (inFlight.current) return inFlight.current;
+    const pending = saveAndReveal(onlyChanged).finally(() => {
+      inFlight.current = null;
+    });
+    inFlight.current = pending;
+    return pending;
+  }
+
+  // Open the section that refused the save, scroll to it and move focus there (to the page's heading when the refusal is a
+  // banner with no field — the banners sit at the top) — the Save bar is pinned, so on a long page the refusal would
+  // otherwise be out of sight (B7 T23 review m5).
+  function reveal(sectionId: SectionId | null) {
+    if (sectionId) setOpenSections((prev) => (prev[sectionId] ? prev : { ...prev, [sectionId]: true }));
+    revealSection(sectionId ? sectionAnchor(sectionId, division.division_id) : headingId);
+  }
+
+  // The latest save, for a host that saves from outside (T24's tab close): refreshed after every render, emptied on unmount.
+  // It sends only the half that changed (re-review m3): a close must not fail on a request that carried nothing.
+  useEffect(() => {
+    if (!saveHandleRef) return;
+    saveHandleRef.current = { save: () => saveOnce(true), reveal: () => reveal(firstErrorSection(fieldErrors)) };
+    return () => {
+      saveHandleRef.current = null;
+    };
+  });
+
+  // The page layout's Cancel: every field back to the saved values, and the in-progress drafts the state never holds (the
+  // fee text, a half-typed clock) with them — or the inputs would keep showing what was just discarded.
+  function cancelEdits() {
+    reset();
+    setFeeText(null);
+    setSoloFeeText(null);
+    setDtDrafts({});
+    setClientErrors({});
+  }
+
+  const notices = (
+    <>
+      {saveOutcome === "put-failed" && (
+        <p
+          role="alert"
+          data-save-outcome="put-failed"
+          className="rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-sm text-amber-800"
+        >
+          {msg("reg.hub.config.partialSavePatchOk")}
+        </p>
+      )}
+      {saveOutcome === "patch-failed" && (
+        <p
+          role="alert"
+          data-save-outcome="patch-failed"
+          className="rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-sm text-amber-800"
+        >
+          {msg("reg.hub.config.partialSavePutOk")}
+        </p>
+      )}
+      {formError && (
+        <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-2.5 text-sm text-red-600">
+          {formError}
+        </p>
+      )}
+
+      {!state && !loadError && <p className="text-sm text-slate-500">{msg("reg.hub.config.loading")}</p>}
+      {loadError && (
+        <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-2.5 text-sm text-red-600">
+          {msg("reg.hub.config.loadError")}
+        </p>
+      )}
+    </>
+  );
+
+  const sections =
+    state &&
+    SECTION_IDS.map((id) => {
+      const hasError = SECTION_FIELDS[id].some((f) => fieldErrors[f]);
+      const content =
+        id === "eligibility" ? (
+          <EligibilitySection
+            state={state}
+            errors={fieldErrors}
+            patch={patch}
+            msg={msg}
+            locale={locale}
+            orgTz={orgTz}
+            dtDrafts={dtDrafts}
+            onDateTimeHalfChange={onDateTimeHalfChange}
+            individualOnly={division.individual_only === true}
+          />
+        ) : id === "schedule" ? (
+          <OpenCloseSection
+            state={state}
+            errors={fieldErrors}
+            patch={patch}
+            msg={msg}
+            orgTz={orgTz}
+            dtDrafts={dtDrafts}
+            onDateTimeHalfChange={onDateTimeHalfChange}
+            individualOnly={division.individual_only === true}
+            entryShapeLegacy={readOnly!.storedEntryShapeLegacy}
+            allowedKinds={division.allowed_kinds}
+            kindHintId={kindHintId}
+          />
+        ) : id === "capacity" ? (
+          <CapacitySection state={state} errors={fieldErrors} patch={patch} msg={msg} />
+        ) : id === "money" ? (
+          <MoneySection
+            state={state}
+            errors={fieldErrors}
+            patch={patch}
+            msg={msg}
+            orgTz={orgTz}
+            orgSlug={orgSlug}
+            currency={currency}
+            feePercentPct={feePercentPct}
+            cardUnsupportedCurrency={cardUnsupportedCurrency}
+            waitlistedCount={waitlistedCount}
+            chargesEnabled={readOnly!.chargesEnabled}
+            orgPaymentInstructions={readOnly!.orgPaymentInstructions}
+            feeText={feeText}
+            onFeeText={setFeeText}
+            soloFeeText={soloFeeText}
+            onSoloFeeText={setSoloFeeText}
+            dtDrafts={dtDrafts}
+            onDateTimeHalfChange={onDateTimeHalfChange}
+          />
+        ) : (
+          <FormSection state={state} errors={fieldErrors} patch={patch} />
+        );
+      return (
+        <Disclosure
+          key={id}
+          id={id}
+          title={sectionTitle(id, msg, state.form_fields.length)}
+          open={openSections[id]}
+          hasError={hasError}
+          page={{
+            anchorId: sectionAnchor(id, division.division_id),
+            alwaysOpen: wide,
+            changedLabel: dirty.sections.includes(id) ? msg("reg.config.changed") : null,
+          }}
+          // Reads `e.target`, NOT `e.currentTarget`. <details> fires a
+          // native `toggle` event, and the three sections that mount
+          // with open={true} fire it synchronously while React is
+          // still committing — `currentTarget` is only bound for the
+          // duration of the dispatch, so by the time this handler ran
+          // it was null and every first Configure click crashed the
+          // page with "Cannot read properties of null (reading
+          // 'open')". `target` is the <details> element itself here
+          // and stays valid.
+          onToggle={(e) => {
+            setOpenSections((prev) => ({
+              ...prev,
+              [id]: (e.target as HTMLDetailsElement).open,
+            }));
+          }}
+        >
+          {content}
+        </Disclosure>
+      );
+    });
+
+  const sectionTitles = Object.fromEntries(SECTION_IDS.map((id) => [id, sectionName(id, msg)])) as Record<SectionId, string>;
+  // A save that did not go through (refused on the page, or by the server) while edits are still unsaved: the bar says so in
+  // place of the count, until the next save or Cancel. Clean wins — once nothing is unsaved, "All changes saved" is true.
+  // The page's own refusal sent nothing, which the line says (re-review m8); a server failure may have saved half.
+  const refusedHere = Object.keys(clientErrors).length > 0;
+  const saveFailed = (saveOutcome !== null && saveOutcome !== "success") || refusedHere;
+  const barState: SaveBarState = !dirty.dirty ? "clean" : saveFailed ? "failed" : "dirty";
   return (
-    <Modal
-      title={msg("reg.hub.config.title", { name: division.name })}
-      onClose={onClose}
-      size="lg"
-      footer={
-        <>
-          <button type="button" data-action="cancel" className="btn btn-ghost min-h-11" onClick={onClose}>
-            {msg("reg.hub.config.cancel")}
-          </button>
-          {state && (
-            <button
-              type="button"
-              data-action="save"
-              disabled={busy}
-              className="btn btn-primary min-h-11"
-              onClick={saveAndReveal}
-            >
-              {busy ? msg("reg.hub.config.saving") : msg("reg.hub.config.save")}
-            </button>
-          )}
-        </>
-      }
+    <section
+      data-registration-hub-config-panel
+      data-layout="page"
+      data-division-id={division.division_id}
+      data-save-outcome={saveOutcome ?? undefined}
+      aria-labelledby={headingId}
+      // While the page is on screen, the viewport's bottom 9rem is the pinned Save bar's (at most 129px tall: 320 wide, the
+      // failed save's line wrapped in French — measured in Chromium). As SCROLL PADDING on the root scroller, a control brought
+      // into view by focus (Tab, a tap, a failed save's reveal) stops above the bar instead of under it, which the browser
+      // would otherwise count as visible (WCAG 2.4.11). On the root, not as a margin on each control: Chromium reveals a
+      // focused textarea by its caret, which ignores the control's own scroll margin. Plus the home-indicator inset the bar
+      // pads itself by below md (re-review m6). Not while the page sits in a hidden tab (T24): the hub keeps an open division's
+      // page mounted behind the tab on screen, which has no Save bar to clear.
+      className="min-w-0 space-y-4 [html:has(&:not([hidden]_*))]:scroll-pb-[calc(9rem+env(safe-area-inset-bottom))]"
     >
-      <div
-        data-registration-hub-config-panel
-        data-division-id={division.division_id}
-        data-save-outcome={saveOutcome ?? undefined}
-        className="space-y-3"
+      {/* tabIndex -1: where focus goes after a save refused by a banner (they sit just below). */}
+      <h2
+        id={headingId}
+        tabIndex={-1}
+        className="scroll-mt-[calc(var(--app-header-h)+1rem)] break-words rounded-sm text-lg font-semibold text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 focus-visible:ring-offset-2"
       >
-        {saveOutcome === "put-failed" && (
-          <p
-            role="alert"
-            data-save-outcome="put-failed"
-            className="rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-sm text-amber-800"
-          >
-            {msg("reg.hub.config.partialSavePatchOk")}
-          </p>
-        )}
-        {saveOutcome === "patch-failed" && (
-          <p
-            role="alert"
-            data-save-outcome="patch-failed"
-            className="rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-sm text-amber-800"
-          >
-            {msg("reg.hub.config.partialSavePutOk")}
-          </p>
-        )}
-        {formError && (
-          <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-2.5 text-sm text-red-600">
-            {formError}
-          </p>
-        )}
-
-        {!state && !loadError && <p className="text-sm text-slate-500">{msg("reg.hub.config.loading")}</p>}
-        {loadError && (
-          <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-2.5 text-sm text-red-600">
-            {msg("reg.hub.config.loadError")}
-          </p>
-        )}
-
-        {state && (
-          <>
-            {SECTION_IDS.map((id) => {
-              const hasError = SECTION_FIELDS[id].some((f) => fieldErrors[f]);
-              const content =
-                id === "eligibility" ? (
-                  <EligibilitySection
-                    state={state}
-                    errors={fieldErrors}
-                    patch={patch}
-                    msg={msg}
-                    locale={locale}
-                    orgTz={orgTz}
-                    dtDrafts={dtDrafts}
-                    onDateTimeHalfChange={onDateTimeHalfChange}
-                    individualOnly={division.individual_only === true}
-                  />
-                ) : id === "schedule" ? (
-                  <OpenCloseSection
-                    state={state}
-                    errors={fieldErrors}
-                    patch={patch}
-                    msg={msg}
-                    orgTz={orgTz}
-                    dtDrafts={dtDrafts}
-                    onDateTimeHalfChange={onDateTimeHalfChange}
-                    individualOnly={division.individual_only === true}
-                    entryShapeLegacy={readOnly!.storedEntryShapeLegacy}
-                    allowedKinds={division.allowed_kinds}
-                  />
-                ) : id === "capacity" ? (
-                  <CapacitySection state={state} errors={fieldErrors} patch={patch} msg={msg} />
-                ) : id === "money" ? (
-                  <MoneySection
-                    state={state}
-                    errors={fieldErrors}
-                    patch={patch}
-                    msg={msg}
-                    orgTz={orgTz}
-                    orgSlug={orgSlug}
-                    currency={currency}
-                    feePercentPct={feePercentPct}
-                    cardUnsupportedCurrency={cardUnsupportedCurrency}
-                    waitlistedCount={waitlistedCount}
-                    chargesEnabled={readOnly!.chargesEnabled}
-                    orgPaymentInstructions={readOnly!.orgPaymentInstructions}
-                    feeText={feeText}
-                    onFeeText={setFeeText}
-                    soloFeeText={soloFeeText}
-                    onSoloFeeText={setSoloFeeText}
-                    dtDrafts={dtDrafts}
-                    onDateTimeHalfChange={onDateTimeHalfChange}
-                  />
-                ) : (
-                  <FormSection state={state} errors={fieldErrors} patch={patch} />
-                );
-              return (
-                <Disclosure
-                  key={id}
-                  id={id}
-                  title={sectionTitle(id, msg, state.form_fields.length)}
-                  open={openSections[id]}
-                  hasError={hasError}
-                  // Reads `e.target`, NOT `e.currentTarget`. <details> fires a
-                  // native `toggle` event, and the three sections that mount
-                  // with open={true} fire it synchronously while React is
-                  // still committing — `currentTarget` is only bound for the
-                  // duration of the dispatch, so by the time this handler ran
-                  // it was null and every first Configure click crashed the
-                  // page with "Cannot read properties of null (reading
-                  // 'open')". `target` is the <details> element itself here
-                  // and stays valid.
-                  onToggle={(e) =>
-                    setOpenSections((prev) => ({
-                      ...prev,
-                      [id]: (e.target as HTMLDetailsElement).open,
-                    }))
-                  }
-                >
-                  {content}
-                </Disclosure>
-              );
-            })}
-          </>
-        )}
-      </div>
-    </Modal>
+        {division.name}
+      </h2>
+      {notices}
+      {state && (
+        <div className="md:grid md:grid-cols-[10rem_minmax(0,1fr)] md:items-start md:gap-6">
+          <ConfigSectionIndex
+            divisionId={division.division_id}
+            label={msg("reg.config.sectionIndex")}
+            titles={sectionTitles}
+            changed={dirty.sections}
+            changedLabel={msg("reg.config.changed")}
+          />
+          <div className="min-w-0 space-y-3">{sections}</div>
+        </div>
+      )}
+      {state && (
+        <ConfigSaveBar
+          state={barState}
+          status={
+            barState === "clean"
+              ? msg("reg.config.allSaved")
+              : barState === "failed"
+                ? msg(refusedHere ? "reg.config.saveRefused" : "reg.config.saveFailed")
+                : msgPlural("reg.config.unsaved", dirty.count)
+          }
+          busy={busy}
+          cancelLabel={msg("reg.hub.config.cancel")}
+          saveLabel={busy ? msg("reg.hub.config.saving") : msg("reg.hub.config.save")}
+          onCancel={cancelEdits}
+          onSave={() => saveOnce(false)}
+        />
+      )}
+    </section>
   );
 }
 
@@ -599,7 +670,7 @@ export function RegistrationHubConfigPanel({
 // The sections carry NO heading of their own. Each is rendered inside a
 // disclosure whose summary already states the section name, so a heading here
 // printed the same word twice, one line apart (visible in the sign-off
-// screenshots: "Eligibility" above "Eligibility"). `sectionTitle` above is the
+// screenshots: "Eligibility" above "Eligibility"). `sectionTitle` (registration-hub-config-section.tsx) is the
 // single place a section is named.
 export function EligibilitySection({
   state,
@@ -835,6 +906,7 @@ export function OpenCloseSection({
   individualOnly = false,
   entryShapeLegacy = false,
   allowedKinds,
+  kindHintId,
 }: {
   state: RegistrationConfigState;
   errors: Partial<Record<ConfigFieldKey, string>>;
@@ -851,6 +923,9 @@ export function OpenCloseSection({
   entryShapeLegacy?: boolean;
   /** FU1: the division's allowed entrant kinds - the only ones the select offers. */
   allowedKinds: readonly EntrantKindValue[];
+  /** The refused-kind hint's id, for the select's aria-describedby: the page's own (useId), since the hub can hold two pages
+   *  at once (T24) and this section is hookless. */
+  kindHintId: string;
 }) {
   // A short, DST-correct abbreviation ("BST", "IST") rather than the raw
   // IANA string — matches the zone labelling the row already shows
@@ -889,7 +964,7 @@ export function OpenCloseSection({
             // FU1 fix round 2: a refused kind is an invalid value the save will not take; the hint below says why. Wired by
             // describedby (not nested in the label) so the select's NAME stays "Entrant type".
             aria-invalid={storedKindRefused || undefined}
-            aria-describedby={storedKindRefused ? ENTRANT_KIND_HINT_ID : undefined}
+            aria-describedby={storedKindRefused ? kindHintId : undefined}
             onChange={(e) => {
               const v = e.target.value as RegistrationConfigState["entrant_kind"];
               // Team-only setting (server 422s otherwise) — clear it locally
@@ -940,7 +1015,7 @@ export function OpenCloseSection({
         </label>
         {storedKindRefused && (
           <p
-            id={ENTRANT_KIND_HINT_ID}
+            id={kindHintId}
             data-testid="entrant-kind-not-allowed"
             role="status"
             className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800"

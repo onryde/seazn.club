@@ -4,7 +4,7 @@ import { timingSafeEqual } from "node:crypto";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { SPOT_HOLDERS } from "@/lib/registration-status";
-import { isValidRefCode, normalizeRefCode } from "@/lib/ref-code";
+import { parseTypedReference } from "@/lib/ref-code";
 import { audit } from "../audit";
 import type { Tx, RegistrationSettingsRow, RegistrationWithGroupRow, AnySql, DivisionCtx } from "./types";
 import { hashRegistrationToken } from "./helpers";
@@ -15,15 +15,19 @@ import { hashRegistrationToken } from "./helpers";
  *  SAME `sql`/`tx` instance as the surrounding query so the two tables'
  *  column list can only drift in one place. `g.refunded_cents` is aliased to
  *  `group_refunded_cents` so it never collides with `r.refunded_cents`
- *  (V368) — see the block comment above `RegistrationWithGroupRow`. */
+ *  (V368) — see the block comment above `RegistrationWithGroupRow`.
+ *
+ *  `r.cart_position` and `g.cart_size` (V519, registration redesign B5 T18) are the two stored halves of an entry's own reference:
+ *  `entryReferenceOf(row)` (lib/ref-code.ts) reads them with `ref_code`. `cart_size` is the cart's STORED size (how many entries it
+ *  was sent with), never a count of the entries read here, so a withdrawn or deleted sibling cannot move another entry's reference. */
 export function regGroupCols(db: AnySql) {
   return db`
     r.id, r.division_id, r.org_id, r.status, r.display_name, r.answers,
     r.amount_cents, r.refunded_cents, r.late_refunded_cents, r.approved_at, r.entrant_id, r.promoted_at, r.withdrawn_at,
     r.charged_at, r.promotion_expires_at, r.waitlisted_at,
     r.payment_intent_id as entry_payment_intent_id,
-    r.group_id, r.join_code, r.free_agent, r.created_at, r.updated_at,
-    g.contact_name, g.contact_email, g.user_id, g.locale, g.ref_code,
+    r.group_id, r.cart_position, r.join_code, r.free_agent, r.created_at, r.updated_at,
+    g.contact_name, g.contact_email, g.user_id, g.locale, g.ref_code, g.cart_size,
     g.access_token_hash, g.currency, g.payment_method, g.checkout_session_id,
     g.payment_intent_id, g.expires_at, g.reminded_at,
     g.refunded_cents as group_refunded_cents,
@@ -68,6 +72,15 @@ export async function loadSettings(db: AnySql, divisionId: string): Promise<Regi
  *  compiling unchanged. */
 export { audit };
 
+/** A division's name, for a mail that names it. Refused by name when the division is gone (a mail about a division that does not
+ *  exist is a wiring fault, never a blank). Moved here from lifecycle-mail.ts (walk-fix F2): the promotion mail names the division
+ *  it seated an entry in, too. */
+export async function divisionNameOf(db: AnySql, divisionId: string): Promise<string> {
+  const [row] = await db<{ name: string }[]>`select name from divisions where id = ${divisionId}`;
+  if (!row) throw new Error(`lifecycle mail: division ${divisionId} not found`);
+  return row.name;
+}
+
 export async function divisionCtx(db: AnySql, divisionId: string): Promise<DivisionCtx> {
   const [row] = await db<DivisionCtx[]>`
     select d.id, d.competition_id, d.org_id, d.slug as div_slug,
@@ -81,6 +94,32 @@ export async function divisionCtx(db: AnySql, divisionId: string): Promise<Divis
     where d.id = ${divisionId}`;
   if (!row) throw new HttpError(404, "division not found");
   return row;
+}
+
+/** The `DivisionCtx` view of a division's submit context: the same columns `divisionCtx` above selects, from the
+ *  read this submit already made, field for field (registration redesign B1 T5). Moved here beside `divisionCtx` from
+ *  registration-submit.ts (B1 fix round 1, MOD-2); the submit's own row type is file-local there, and this folder never imports
+ *  that file, so the parameter names exactly what the projection reads: every `DivisionCtx` field, the org's currency under the
+ *  submit's name for it. */
+export function knownCtxOf(c: Omit<DivisionCtx, "currency"> & { org_currency: string }): DivisionCtx {
+  return {
+    id: c.id,
+    competition_id: c.competition_id,
+    org_id: c.org_id,
+    comp_name: c.comp_name,
+    comp_slug: c.comp_slug,
+    comp_visibility: c.comp_visibility,
+    starts_on: c.starts_on,
+    ends_on: c.ends_on,
+    div_slug: c.div_slug,
+    org_slug: c.org_slug,
+    org_name: c.org_name,
+    default_locale: c.default_locale,
+    payment_instructions: c.payment_instructions,
+    charges_enabled: c.charges_enabled,
+    org_timezone: c.org_timezone,
+    currency: c.org_currency,
+  };
 }
 
 
@@ -115,25 +154,34 @@ export async function regByToken(regId: string, token: string): Promise<Registra
   return reg;
 }
 
+/** What a typed reference names: the cart's reference, and the entry number quoted (null for a bare one). The checksum rejects typos
+ *  before the DB sees them; dashes/case are normalised so "sz abcd efgh" read over a phone still resolves, and `SZ-ABCD-EFGH-2` as the
+ *  mails print it resolves to the cart (B5 T18 review m1). A reference no entry could carry is the one 404 an unknown reference gets. */
+export function typedReference(ref: string): { canonical: string; position: number | null } {
+  const typed = parseTypedReference(ref);
+  if (!typed) throw new HttpError(404, "registration not found");
+  return { canonical: typed.refCode, position: typed.position };
+}
+
 export async function regByRef(ref: string): Promise<RegistrationWithGroupRow> {
-  // Checksum rejects typos before the DB sees them; normalise dashes/case so
-  // "sz abcd efgh" read over a phone still resolves.
-  const canonical = normalizeRefCode(ref);
-  if (!isValidRefCode(canonical)) throw new HttpError(404, "registration not found");
+  const { canonical, position } = typedReference(ref);
   // ref_code lives on the cart now (V364) — shared by every entry in it. A
-  // cart can hold more than one entry (RS002/RS003 shipped group submit) —
-  // this picks the oldest deterministically rather than an arbitrary one,
-  // which is exactly right for THIS function's actual callers: the
-  // single-entry ticket.png render, self-withdraw's target row, and
-  // reconcile's status check — none of which need every entry. RS006
-  // decided /r/[ref] itself shows the WHOLE cart: see publicCartByRef below,
-  // which calls this for the checksum/lookup/404 behaviour and then
-  // re-selects every entry in the resolved group.
+  // cart can hold more than one entry (RS002/RS003 shipped group submit).
+  // A typed number names THAT entry (tidy round, re-review m4): `-2` returns
+  // the entry at cart_position 2, so /r/<ref>-2/ticket.png draws entry 2.
+  // A bare reference (or a number whose entry was deleted) picks the oldest
+  // deterministically, which is right for the bare callers: the ticket.png
+  // render, and reconcile's status check. RS006 decided /r/[ref] itself shows
+  // the WHOLE cart: see publicCartByRef, which calls this for the
+  // checksum/lookup/404 behaviour and then re-selects every entry in the
+  // resolved group. `nulls last`: a bare reference compares to null on every
+  // row, which leaves the age order alone.
   const [reg] = await sql<RegistrationWithGroupRow[]>`
     select ${regGroupCols(sql)}
     from registrations r join registration_groups g on g.id = r.group_id
     where g.ref_code = ${canonical}
-    order by r.created_at, r.id limit 1`;
+      and (${position}::int is null or ${position}::int <= g.cart_size)
+    order by (r.cart_position = ${position}::int) desc nulls last, r.created_at, r.id limit 1`;
   if (!reg) throw new HttpError(404, "registration not found");
   return reg;
 }
@@ -148,18 +196,21 @@ export async function regByRef(ref: string): Promise<RegistrationWithGroupRow> {
  *  predicates at once, regardless of whether the token is otherwise valid
  *  for THAT other cart. A wrong ref, a wrong token, and a foreign entryId
  *  all 404 identically (RS006 follow-up: withdraw is per-entry now — see
- *  `withdrawRegistrationByRef`). */
+ *  `withdrawRegistrationByRef`). A typed number names an entry, as in
+ *  `regByRef` (tidy round, re-review m4): `<ref>-2` with entry 1's id is the
+ *  same 404, never a withdrawal of the entry the number did not name. The /r
+ *  page posts the bare cart reference, which names any entry of the cart. */
 export async function regByRefAndToken(
   ref: string,
   entryId: string,
   token: string,
 ): Promise<RegistrationWithGroupRow> {
-  const canonical = normalizeRefCode(ref);
-  if (!isValidRefCode(canonical)) throw new HttpError(404, "registration not found");
+  const { canonical, position } = typedReference(ref);
   const [reg] = await sql<RegistrationWithGroupRow[]>`
     select ${regGroupCols(sql)}
     from registrations r join registration_groups g on g.id = r.group_id
     where g.ref_code = ${canonical} and r.id = ${entryId}
+      and (${position}::int is null or (${position}::int <= g.cart_size and r.cart_position = ${position}::int))
       and g.access_token_hash = ${hashRegistrationToken(token)}`;
   if (!reg) throw new HttpError(404, "registration not found");
   return reg;

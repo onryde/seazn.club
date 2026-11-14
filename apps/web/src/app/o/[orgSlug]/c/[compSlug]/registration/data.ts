@@ -5,7 +5,7 @@
 // app-module-exports.test.ts is the sweep that says so. It caught these three
 // on RS004's first full CI run; nothing local runs that suite.
 import { withTenant } from "@/lib/db";
-import { SPOT_HOLDERS } from "@/lib/registration-status";
+import { SOLO_ASSIGNABLE_STATUSES, SPOT_HOLDERS } from "@/lib/registration-status";
 import { HttpError } from "@/lib/errors";
 // A real (non-type-only) VALUE import of a "components" module, into this
 // data layer — safe here (no bundling concern, unlike the client filter
@@ -16,6 +16,8 @@ import { HttpError } from "@/lib/errors";
 // (`import type {...} from ".../data"`), so there is no runtime cycle.
 // Used by registrantsExportHrefFor below (RS005 F3 finding 2).
 import { registrantsExportHref } from "@/components/registration-hub-registrant-derive";
+import type { OpenDivisionConfig } from "@/components/registration-hub-tabs-host";
+import { isChessSport } from "@/lib/chess-individual-only";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { RegistrationHubRowData } from "@/components/registration-hub-division-row";
 import { entrantShapeOf } from "@/server/usecases/entrant-shape";
@@ -85,6 +87,11 @@ export interface RawDivisionRow {
    *  stripe-connect.ts's connectStatus(), which is owner-session-only and
    *  would 403 an admin opening this hub. */
   org_stripe_unsupported_currency: string | null;
+  /** How the division collects its fee (null: no settings row yet). Walk-fix F5: with `org_charges_enabled`, the Settings tab's
+   *  "card payments are not set up" banner (lib/registration-card-payments.ts `cardDivisionsWaitOnConnect`). */
+  payment_method: "offline" | "stripe" | null;
+  /** Same value on every row (org-level): whether Connect can charge cards now (`organizations.stripe_charges_enabled`). */
+  org_charges_enabled: boolean;
 }
 
 /** The Settings tab's one query: every (non-archived) division of this
@@ -117,6 +124,7 @@ export async function fetchDivisionRows(
         coalesce(rs.fee_cents, 0) as fee_cents,
         rs.approval,
         coalesce(rs.allow_free_agents, false) as allow_free_agents,
+        rs.payment_method,
         -- RS012 ruling 1: capacity/taken counts TEAM entries only — a
         -- solo sign-up ("free agent") never occupies a team slot, matching
         -- the submit-time gate this display must agree with
@@ -128,7 +136,8 @@ export async function fetchDivisionRows(
            where r.division_id = d.id and r.status = 'waitlisted') as waitlisted,
         (select currency from organizations where id = ${auth.orgId}) as org_currency,
         (select stripe_unsupported_currency from organizations where id = ${auth.orgId})
-          as org_stripe_unsupported_currency
+          as org_stripe_unsupported_currency,
+        (select stripe_charges_enabled from organizations where id = ${auth.orgId}) as org_charges_enabled
       from divisions d
       left join registration_settings rs on rs.division_id = d.id
       where d.competition_id = ${competitionId} and d.archived_at is null
@@ -372,6 +381,70 @@ export async function fetchRegistrantRows(
 }
 
 /**
+ * B6 T21 review: `fetchDivisionOptions` lists only NON-archived divisions, but
+ * `listRegistrations` is happy to narrow by an ARCHIVED division of this
+ * competition — so a stale link (`?division_id=<archived>`) used to narrow the
+ * table while the pill, the chip and the sheet all read "unset": rows hidden by
+ * a filter nobody could see, or clear.
+ *
+ * Ruling: ignore it, exactly like a division that does not exist or belongs to
+ * another competition (`fetchRegistrantRows`, above): render unfiltered and let
+ * `filters.divisionId` say so. Cost if wrong: an organiser following an old link
+ * to an archived division's rows sees every row. Such links ARE produced: the
+ * division page (d/[divSlug]/page.tsx) and its stages panel
+ * (components/v2/stages-panel.tsx) both link `?tab=registrants&division_id=<id>`,
+ * and both are still served for an archived division — `getDivision` and
+ * `divBySlugUncached` (server/slug-resolve.ts) read a division with no
+ * `archived_at` filter. Naming the archived division on the pill instead needs a
+ * second query shape and a new label in four locales, for the rows of a division
+ * that takes no more entries.
+ *
+ * Called with the options the page already fetched concurrently with the rows,
+ * so the common case (no division filter, or a listed one) costs nothing; only
+ * the stale link pays one more read, the same "discovered a round trip later"
+ * shape as the 404 retry above. Not folded into `fetchRegistrantRows`: that
+ * would put a lookup on every filtered load, and `listRegistrations` itself is
+ * the API's read model, which must keep accepting an archived division.
+ */
+export async function dropArchivedDivisionFilter(
+  auth: AuthCtx,
+  competitionId: string,
+  query: RegistrantsRawQuery,
+  first: RegistrantRowsResult,
+  divisions: readonly DivisionOption[],
+): Promise<RegistrantRowsResult> {
+  const id = first.filters.divisionId;
+  if (id === null || divisions.some((d) => d.id === id)) return first;
+  // `division_id` is a first-value-wins param (`firstOf`): clearing it clears the lot.
+  return fetchRegistrantRows(auth, competitionId, { ...query, division_id: undefined });
+}
+
+/**
+ * B7 T24: an open division tab's settings page, from the division's Settings
+ * row (`fetchDivisionRows`) — the same fields the row-click dialog was handed
+ * before the tabs replaced it. Here, not in the page module (Next's fixed page
+ * export surface) and not in the host (a client module the page can only
+ * hand plain data to).
+ */
+export function openDivisionConfigOf(raw: RawDivisionRow): OpenDivisionConfig {
+  return {
+    division: {
+      division_id: raw.division_id,
+      name: raw.name,
+      individual_only: isChessSport(raw.sport_key),
+      allowed_kinds: raw.allowed_kinds,
+      category: raw.category,
+      age_min: raw.age_min,
+      age_max: raw.age_max,
+      age_cutoff_month: raw.age_cutoff_month,
+      age_cutoff_day: raw.age_cutoff_day,
+      eligibility_note: raw.eligibility_note,
+    },
+    waitlistedCount: raw.waitlisted,
+  };
+}
+
+/**
  * RS005 F3 finding 2: wraps `registrantsExportHref` (registration-hub-
  * registrant-derive.ts, this wave's do-not-touch list — owned by a sibling
  * agent) so the CSV export link matches what `fetchRegistrantRows` actually
@@ -430,7 +503,12 @@ export async function fetchDivisionOptions(
 export interface PoolSummaryRow {
   division_id: string;
   division_name: string;
+  /** Solo sign-ups an organiser can place on a team now (`SOLO_ASSIGNABLE_STATUSES`: confirmed, paid) — exactly the rows
+   *  whose hub row offers Assign (walk-fix F14). */
   waiting: number;
+  /** Solo sign-ups still owing their fee (`pending` with a fee of their own, `entryWaitingOn`'s "payment") — in the pool,
+   *  but Assign refuses them until they pay. Shown beside `waiting`, never inside it. */
+  awaiting_payment: number;
   free_slots: number;
   /** coalesce(place_by_at, closes_at) — the SAME fallback the Stage 2 sweep
    *  (usecases/registrations/ folder's duePool query) and the Stage 3b status page
@@ -452,10 +530,11 @@ export interface PoolSummaryRow {
  *  1. Which divisions have anyone actually waiting — the exact same
  *     "pooled" predicate `soloPoolIsFull` and the Stage 2 sweep's `duePool`
  *     already use (`free_agent = true`, `status in SPOT_HOLDERS`, and NOT
- *     already assigned via `registration_players.assigned_from_registration_id`).
- *     `having count(*) > 0` means a division with an empty (or fully-placed)
- *     pool never reaches queries 2/3 at all — the whole function returns
- *     `[]` when nothing needs attention, so the banner renders nothing.
+ *     already assigned via `registration_players.assigned_from_registration_id`),
+ *     split into `waiting` (assignable now) and `awaiting_payment` (walk-fix F14).
+ *     The `having` clause means a division with nobody in either never reaches
+ *     queries 2/3 at all — the whole function returns `[]` when nothing needs
+ *     attention, so the banner renders nothing.
  *  2. Free roster room on registered (non-terminal, non-waitlisted,
  *     non-free-agent) teams in those SAME divisions — deliberately the SAME
  *     population `listAssignTargets` (registration-assign.ts) already
@@ -481,8 +560,12 @@ export async function fetchPoolSummary(
   competitionId: string,
 ): Promise<PoolSummaryRow[]> {
   return withTenant(auth.orgId, async (tx) => {
-    const waitingRows = await tx<{ division_id: string; waiting: number }[]>`
-      select r.division_id, count(*)::int as waiting
+    // Walk-fix F14: `waiting` is the people Assign can seat, `awaiting_payment` the unpaid ones beside them. A free `pending`
+    // solo (awaiting a manual approval) is in neither — it owes no money and cannot be seated yet; its row offers Approve.
+    const waitingRows = await tx<{ division_id: string; waiting: number; awaiting_payment: number }[]>`
+      select r.division_id,
+        count(*) filter (where r.status in ${tx([...SOLO_ASSIGNABLE_STATUSES])})::int as waiting,
+        count(*) filter (where r.status = 'pending' and r.amount_cents > 0)::int as awaiting_payment
       from registrations r
       join divisions d on d.id = r.division_id
       where d.competition_id = ${competitionId} and d.archived_at is null
@@ -493,7 +576,8 @@ export async function fetchPoolSummary(
           where rp.assigned_from_registration_id = r.id
         )
       group by r.division_id
-      having count(*) > 0`;
+      having count(*) filter (where r.status in ${tx([...SOLO_ASSIGNABLE_STATUSES])}
+        or (r.status = 'pending' and r.amount_cents > 0)) > 0`;
     if (waitingRows.length === 0) return [];
     const divisionIds = waitingRows.map((w) => w.division_id);
 
@@ -538,6 +622,7 @@ export async function fetchPoolSummary(
         division_id: w.division_id,
         division_name: m?.division_name ?? "",
         waiting: w.waiting,
+        awaiting_payment: w.awaiting_payment,
         free_slots: slotsByDivision.get(w.division_id) ?? 0,
         // RS012 `/code-review high` finding 2 — the ONE effectivePoolDeadline
         // copy (usecases/registrations/list.ts, beside rosterCapExpr); the cast narrows
@@ -568,6 +653,10 @@ export interface RegistrantRosterPlayer {
   squad_number: number | null;
   is_captain: boolean;
   consent_status: ConsentStatus;
+  /** Who consented as this player's guardian, when someone did (owner rec 2026-11-14: the panel names them): the parent who ticked
+   *  "players under 18 I'm entering" at submit, the guardian a child named at their own claim, or a self-registering minor's guardian.
+   *  Always read by `fetchRegistrantDetails`; optional only so a fixture built before it existed still type-checks. */
+  guardian_name?: string | null;
 }
 
 export interface RegistrantCartSibling {
@@ -599,6 +688,7 @@ interface RawPlayerRow {
   squad_number: number | null;
   is_captain: boolean;
   consent_status: ConsentStatus;
+  guardian_name: string | null;
 }
 
 interface RawSiblingRow {
@@ -653,7 +743,7 @@ export async function fetchRegistrantDetails(
 
   return withTenant(auth.orgId, async (tx) => {
     const players = await tx<RawPlayerRow[]>`
-      select registration_id, id, full_name, squad_number, is_captain, consent_status
+      select registration_id, id, full_name, squad_number, is_captain, consent_status, guardian_name
       from registration_players
       where registration_id in ${tx(registrationIds)}
       order by is_captain desc, squad_number nulls last, full_name, id`;
@@ -667,6 +757,7 @@ export async function fetchRegistrantDetails(
         squad_number: p.squad_number,
         is_captain: p.is_captain,
         consent_status: p.consent_status,
+        guardian_name: p.guardian_name,
       });
       rosterByRegistration.set(p.registration_id, list);
     }

@@ -26,7 +26,8 @@ export interface PaymentReminderArgs {
   payDeadline?: Date | string | null;
   /** The organiser's zone (`organizations.timezone` resolved): the deadline is written in it. UTC when absent. */
   timeZone?: string | null;
-  /** Fills {{reference}} in the instructions. */
+  /** The reference to quote for THIS entry (`entryReferenceOf`, lib/ref-code.ts): the cart's, with the entry's place in it for a 2+ cart.
+   *  Printed on its own line, and fills {{reference}} in the instructions. Named `refCode` for the i18n placeholder it fills. */
   refCode?: string | null;
 }
 
@@ -45,8 +46,8 @@ export function paymentReminderTemplate(
     ? paymentInstructionsText(fillPaymentInstructions(opts.paymentInstructions, opts.refCode))
     : null;
   const card = opts.method === "card";
-  // Final fix round F: the registrant's reference, printed on its own line whenever there is one (the cart's ref code; a per-entry suffix
-  // is a later wave). Organisers' instructions say "use your reference" without always writing the {{reference}} placeholder.
+  // Final fix round F: the registrant's reference, printed on its own line whenever there is one (B5 T18: this entry's own, `SZ-XXXX-XXXX-2`
+  // in a 2+ cart). Organisers' instructions say "use your reference" without always writing the {{reference}} placeholder.
   const refHtml = opts.refCode ? paragraph(t(dict, "paymentReminder.reference", { refCode: escapeHtml(opts.refCode) })) : "";
   const refText = opts.refCode ? "\n" + t(dict, "paymentReminder.textReference", { refCode: opts.refCode }) : "";
   const how = card

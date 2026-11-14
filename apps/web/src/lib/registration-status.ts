@@ -11,6 +11,17 @@
 /** Statuses that hold a capacity spot. */
 export const SPOT_HOLDERS = ["pending", "paid", "confirmed"] as const;
 
+/** Statuses of a solo sign-up an organiser may place on a team (walk-fix F14). A `pending` one has not paid (or, on a manual
+ *  division, has not been approved) and assign is not a payment path; `paid` is fine, the money is in and only the organiser's
+ *  confirm is outstanding. The ONE list: the server refusal (assignSoloSignUp), the hub row's Assign control and the
+ *  Registrants pool banner's "waiting" count all read it, so the banner never counts someone the row cannot seat. */
+export const SOLO_ASSIGNABLE_STATUSES = ["confirmed", "paid"] as const;
+
+/** True when a solo sign-up in this status may be placed on a team (`SOLO_ASSIGNABLE_STATUSES`). */
+export function isSoloAssignableStatus(status: string): boolean {
+  return (SOLO_ASSIGNABLE_STATUSES as readonly string[]).includes(status);
+}
+
 /** FU1 fix round 1 (I1): statuses of a LIVE registration that has no entrant yet - one a later door may still seat
  *  (pending, paid) or promote (waitlisted). A `confirmed` row with no entrant (a solo sign-up waiting for a team) is
  *  live too; callers add that case beside this list (`status = 'confirmed' and entrant_id is null`). A confirmed row

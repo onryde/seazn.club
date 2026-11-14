@@ -64,8 +64,8 @@ export function FormBuilder({
   // sits full-width under the list where it can't crowd the intro copy.
   return (
     <div className="space-y-3">
-      <p className="text-xs text-slate-400">{msg("reg.form.intro")}</p>
-      {fields.length === 0 && <p className="text-xs text-slate-400">{msg("reg.form.examples")}</p>}
+      <p className="text-xs text-slate-500">{msg("reg.form.intro")}</p>
+      {fields.length === 0 && <p className="text-xs text-slate-500">{msg("reg.form.examples")}</p>}
       {fields.map((f, i) => (
         <div key={i} className="space-y-2 rounded-md border border-slate-200 p-3">
           <label className="block text-xs text-slate-500">
@@ -135,7 +135,7 @@ export function FormBuilder({
               <button
                 type="button"
                 onClick={() => onChange(fields.filter((_, j) => j !== i))}
-                className="ml-auto text-xs text-red-500 hover:underline"
+                className="ml-auto text-xs text-red-700 hover:underline"
               >
                 {msg("reg.form.remove")}
               </button>
@@ -148,7 +148,7 @@ export function FormBuilder({
           {msg("reg.form.add")}
         </button>
       )}
-      <p className="text-[11px] text-slate-400">{msg("reg.form.saveNote")}</p>
+      <p className="text-[11px] text-slate-500">{msg("reg.form.saveNote")}</p>
     </div>
   );
 }

@@ -11,10 +11,11 @@
 // as a plain string.
 import type { ReactNode } from "react";
 import { formatMoneyExact } from "@/lib/currency";
-import { fmtPublicDeadline } from "@/lib/format";
+import { fmtPublicDate, fmtPublicDeadline } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import { entryWaitingOn } from "@/lib/registration-status";
+import { lichessLinkStartHref } from "@/lib/lichess-link";
 import { CompetitionProse } from "@/components/public-site/competition-prose";
 import { PayButton } from "./pay-button";
 import { CancelEntry } from "./cancel-entry";
@@ -23,6 +24,7 @@ import {
   assignedTeamName,
   awaitingTeamAssignment,
   canCancelEntry,
+  cardEntryReference,
   entryCountsTowardTotal,
   entryDisplayName,
   inviteLinks,
@@ -32,17 +34,22 @@ import {
   rosterPlayerDisplayName,
   rosterVocabulary,
   type EntryStatus,
+  type MoneyState,
   type RosterVocabulary,
 } from "./view-model";
 
 // The roster's key family per vocabulary (chips: claimed/pending; the meter). See `rosterVocabulary` for which entry gets which.
 const ROSTER_WORDS: Record<RosterVocabulary, { meter: string; claimed: string; pending: string }> = {
-  checkin: { meter: "register.status.roster.meter", claimed: "register.status.roster.claimed", pending: "register.status.roster.pending" },
   joined: { meter: "register.status.roster.meterJoined", claimed: "register.status.roster.joined", pending: "register.status.roster.notJoined" },
   registered: {
     meter: "register.status.roster.meterRegistered",
     claimed: "register.status.roster.registered",
     pending: "register.status.roster.notRegistered",
+  },
+  ended: {
+    meter: "register.status.roster.meterRegistered",
+    claimed: "register.status.roster.registered",
+    pending: "register.status.roster.notRegisteredEnded",
   },
 };
 
@@ -65,6 +72,17 @@ const STATUS_KEY: Record<EntryStatus, string> = {
   withdrawn: "reg.status.withdrawn",
   expired: "reg.status.expired",
 };
+
+/** B4 fix round 4 (controller ruling): past a pay-by date the row stays 'pending' until the sweep runs, so the chip says what the
+ *  sweep will do with it. A lapsed promotion goes back on the waitlist: the waitlisted chip and tone, never PENDING under the
+ *  page's waitlist headline. A never-promoted entry past the cart's date is expired: "closed" in the expired tone, the page's
+ *  own chip word (tidy round, re-review m6), set per locale like the other status chips. Otherwise the
+ *  row's own status. `data-status` on the chip keeps the row's status either way (the bench reads it). */
+function entryChip(status: EntryStatus, money: MoneyState["kind"]): { key: string; tone: { rail: string; badge: string } } {
+  if (money === "promotion_lapsed") return { key: STATUS_KEY.waitlisted, tone: STATUS_TONE.waitlisted };
+  if (money === "window_closed") return { key: "register.status.chip.closed", tone: STATUS_TONE.expired };
+  return { key: STATUS_KEY[status], tone: STATUS_TONE[status] };
+}
 
 export interface EntryCardProps {
   entry: {
@@ -113,9 +131,17 @@ export interface EntryCardProps {
      *  REQUIRED for the reason `approval` is: an omitted value would read "awaiting approval" about an entry already approved. */
     approved: boolean;
     /** Polish wave P3 (W6): the fee a promotion off the waitlist WOULD set (the division's own fee), null on every other status.
-     *  The card itself does not print it; the page's Subtotal does (`cartSubtotal`). Carried on the entry so one shape
+     *  The card itself does not print it; the page's money line does (`cartMoneySummary`). Carried on the entry so one shape
      *  travels from the read model to both. */
     fee_if_promoted_cents: number | null;
+    /** Registration redesign B3 T13: a waitlisted entry's place in its division's queue (`GroupEntryView.waitlist_position`, counted in
+     *  the order promotion takes it), null otherwise. REQUIRED for the reason `assigned_team_name` is: an omitted value would silently
+     *  fall back to the bare waitlisted note on every card. */
+    waitlist_position: number | null;
+    /** Walk-fix F16: when an automatic promotion last passed this WAITING entry over because its Lichess account is not linked to play
+     *  (`GroupEntryView.promotion_skipped_at`), null otherwise. REQUIRED for the reason `waitlist_position` is: an omitted value would
+     *  silently say nothing about a skip the registrant was mailed about. */
+    promotion_skipped_at: string | null;
     /** RS008: this entry's OWN division's youth/player_name_display policy —
      *  see `rosterPlayerDisplayName` (view-model.ts) for why it travels with
      *  the entry rather than the cart. */
@@ -144,8 +170,14 @@ export interface EntryCardProps {
     /** Polish wave sign-off V6: everything sent back for this entry (`GroupEntryView.refunded_cents`). REQUIRED for the reason
      *  `approved` is: an omitted value would read as "nothing refunded" on a rejected entry whose fee came back. */
     refunded_cents: number;
+    /** Registration redesign B5 T18: the reference to quote for THIS entry (`GroupEntryView.entry_ref`). REQUIRED for the reason
+     *  `approved` is: a card built without it would silently print no reference, in a cart that has one for each entry. */
+    entry_ref: string | null;
   };
   cart: {
+    /** Registration redesign B5 T18: how many entries the cart was SENT with (`GroupStatusView.cart_size`, stored, never shrinks). The card
+     *  prints its own reference only when this is two or more (`cardEntryReference`). REQUIRED: omitted, no card would print one. */
+    cart_size: number;
     expires_at: string | null;
     charges_enabled: boolean;
     /** Pre-rendered offline instructions (renderProse + fillPaymentInstructions
@@ -159,6 +191,10 @@ export interface EntryCardProps {
      *  render every pay-by date in regardless of where the org actually
      *  runs. */
     timezone: string;
+    /** B4 fix round 2: the page's h1 already says the card notice for this cart's only entry (`headlineCarriesUnavailableNotice`,
+     *  view-model.ts), so the card keeps its figure and does not say it again. Optional on purpose: left out, the card says the
+     *  notice, so a caller that forgets it repeats a sentence rather than hiding why the entry cannot be paid. */
+    unavailableNoticeInHeadline?: boolean;
   };
   orgSlug: string;
   competitionSlug: string;
@@ -168,17 +204,23 @@ export interface EntryCardProps {
 }
 
 export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale, ui }: EntryCardProps) {
-  const tone = STATUS_TONE[entry.status];
   const money = resolveMoneyState(entry, cart);
+  const chip = entryChip(entry.status, money.kind);
+  const tone = chip.tone;
   const roster = rosterCounts(entry.players);
-  // Polish wave P3 (W6, W10, W11) and the owner ruling on V7: only a confirmed entry's roster says "Checked in"; a pending or paid one
-  // says "Joined", a waitlisted, withdrawn, expired or rejected one "Registered". `rosterVocabulary` picks the key family once; the chips
-  // and the meter both read it.
+  // Polish wave P3 (W6, W10, W11), the owner ruling on V7 and walk-fix F10: a live entry's roster (pending, paid, confirmed) says
+  // "Joined", a waitlisted, withdrawn, expired or rejected one "Registered" - never "Checked in", which registration has no step for.
+  // An ended one's unclaimed place says "Not registered", without the waitlisted entry's "yet" (walk-fix A fix round 1).
+  // `rosterVocabulary` picks the key family once; the chips and the meter both read it.
   const rosterWords = ROSTER_WORDS[rosterVocabulary(entry.status)];
   // Polish wave P3 (W2, W12): WHY a pending entry is not confirmed. Suppressed once the payment window has closed: the
   // window-closed message below is the true and more actionable statement, and "waiting for payment" beside it would read as
-  // an invitation to pay a window that no longer accepts payment.
-  const waitingOn = money.kind === "window_closed" ? null : entryWaitingOn(entry.status, entry.amount_cents, entry.approval, entry.approved);
+  // an invitation to pay a window that no longer accepts payment. The same for a lapsed promotion (B4 fix round 3): it goes back to
+  // the waitlist, where nothing is owed.
+  const waitingOn =
+    money.kind === "window_closed" || money.kind === "promotion_lapsed"
+      ? null
+      : entryWaitingOn(entry.status, entry.amount_cents, entry.approval, entry.approved);
   // RS008: every roster row's name, masked by division youth policy OR the
   // linked person's own consent opt-out. Resolved ONCE, by id, so the
   // roster list below and the invite rows (which name the SAME person
@@ -212,9 +254,9 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
   // deadline with nothing to actually transfer. `feeLabel` is this entry's
   // own figure, phrased the SAME way the review step/cart already phrase a
   // zero fee (`register.entries.free`, never a bare "£0"). `showsFeeLine`
-  // is gated by the SAME `entryCountsTowardTotal` predicate the page's own
-  // Subtotal filters by (page.tsx), so a card can never show a fee the
-  // Subtotal disagrees about (or vice-versa) — and excludes `stripe_due`
+  // is gated by `entryCountsTowardTotal` (a withdrawn entry's stale fee is
+  // never shown as live; the page's money line, `cartMoneySummary`, counts
+  // it neither paid nor due either) — and excludes `stripe_due`
   // specifically because that state already names the figure inside its
   // own "Pay now — {amount}" button, right below.
   const feeLabel =
@@ -242,6 +284,11 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
 
   const invites = inviteLinks(entry);
 
+  // B5 T18 (spec §6.3): an entry of a 2+ cart quotes its own reference, small, under its name. The label is split on its one placeholder so
+  // the reference sits in its own span (select-all: one tap selects the reference, not the word before it), as the page's "sent to" line does.
+  const ownRef = cardEntryReference(entry, cart);
+  const [refLead, refTail = ""] = t(ui, "register.status.entry.reference").split("{reference}");
+
   let moneyNode: ReactNode = null;
   if (money.kind === "stripe_due") {
     const label = t(ui, "register.status.pay.cta", { amount: feeLabel });
@@ -259,17 +306,31 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
     moneyNode = (
       <div className="space-y-1">
         <p className="text-sm font-semibold text-ink">{feeLabel}</p>
-        <p className="text-sm text-amber-800">{t(ui, "register.status.pay.unavailable")}</p>
+        {!cart.unavailableNoticeInHeadline && <p className="text-sm text-amber-800">{t(ui, "register.status.pay.unavailable")}</p>}
+        {/* B4 fix round 3: the expiry pass expires the entry at this date whatever the org's Stripe state. */}
+        {money.deadline && (
+          <p className="text-xs text-ink-muted">
+            {t(ui, "register.status.money.deadline", { date: deadlineLabel(money.deadline) })}
+          </p>
+        )}
       </div>
     );
   } else if (money.kind === "offline_due") {
     moneyNode = (
       <div className="space-y-1.5">
         <p className="text-sm font-semibold text-ink">{feeLabel}</p>
-        <p className="text-xs font-semibold tracking-wide text-ink-muted uppercase">
-          {t(ui, "register.status.offline.heading")}
-        </p>
-        {cart.instructionsHtml ? <CompetitionProse html={cart.instructionsHtml} /> : null}
+        {/* B4 fix round 3: the heading only above instructions the organiser wrote, never "How to pay" over nothing. Tidy round
+            (re-review m3): with none from the division or the org, the card says the organiser will tell them, and names no route. */}
+        {cart.instructionsHtml ? (
+          <>
+            <p className="text-xs font-semibold tracking-wide text-ink-muted uppercase">
+              {t(ui, "register.status.offline.heading")}
+            </p>
+            <CompetitionProse html={cart.instructionsHtml} />
+          </>
+        ) : (
+          <p className="text-sm text-ink-muted">{t(ui, "register.status.offline.fallback")}</p>
+        )}
         {money.deadline && (
           <p className="text-xs text-ink-muted">
             {t(ui, "register.status.money.deadline", { date: deadlineLabel(money.deadline) })}
@@ -288,12 +349,64 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
         <p className="text-sm text-amber-800">{t(ui, "register.status.pay.windowClosed")}</p>
       </div>
     );
+  } else if (money.kind === "promotion_lapsed") {
+    // B4 fix round 3 (re-review I1): promoted off the waitlist and past its own pay-by date. The sweep's lapse puts it back at the
+    // END of the waitlist, never expires it, so the card says that, set like a waitlisted card's note: no fee figure (nothing is owed
+    // on the waitlist), no Pay. Cancel stays, as on any waitlisted card: it leaves the waitlist.
+    moneyNode = <p className="text-sm text-ink-muted">{t(ui, "register.status.pay.promotionLapsed")}</p>;
   } else if (entry.status === "waitlisted") {
-    moneyNode = <p className="text-sm text-ink-muted">{t(ui, "register.status.waitlisted.note")}</p>;
+    // B3 T13 (spec §4.2): the entry's place in the queue replaces the bare note - the one fact a waiting registrant wants, set like
+    // the money slot's other primary figures. An unknown place (the read model always gives one) keeps the note.
+    const place =
+      entry.waitlist_position !== null ? (
+        <p
+          data-testid="reg-status-waitlist-position"
+          data-waitlist-position={entry.waitlist_position}
+          className="text-sm font-semibold text-ink"
+        >
+          {t(ui, "register.status.waitlistPosition", { n: entry.waitlist_position })}
+        </p>
+      ) : (
+        <p className="text-sm text-ink-muted">{t(ui, "register.status.waitlisted.note")}</p>
+      );
+    // Walk-fix F16: an automatic promotion passed this entry over (its Lichess account is not linked to play; the read model gives the
+    // time only while the entry waits). Under the place, which still holds: why, and the one step that makes the next place theirs.
+    // Final review m1: linking re-runs nothing, so the note outlives its cause - it is written about the skip, dated in the org's zone
+    // ("A place opened on 14 November … wasn't linked"), which stays true once the player has linked. The
+    // amber and the Lichess violet are the register page's own Lichess card's (register-lichess-card.tsx), so the step reads as the same
+    // one. The link names no `next`: this page's address carries the cart's access token, which the sign-in and Lichess round trip would
+    // carry through more URLs; the flow lands on the player's home, whose Lichess card says the outcome.
+    moneyNode =
+      entry.promotion_skipped_at !== null ? (
+        <div className="space-y-2">
+          {place}
+          <div
+            role="note"
+            data-testid="reg-status-promotion-skipped"
+            data-skipped-at={entry.promotion_skipped_at}
+            className="space-y-2.5 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2.5"
+          >
+            <p className="text-sm text-amber-900">
+              {t(ui, "register.status.promotionSkipped.body", {
+                date: fmtPublicDate(locale, cart.timezone, entry.promotion_skipped_at, { day: "numeric", month: "long" }),
+              })}
+            </p>
+            <a
+              href={lichessLinkStartHref(orgSlug)}
+              data-testid="reg-status-promotion-skipped-link"
+              className="flex min-h-11 w-full items-center justify-center rounded-[10px] bg-[#7c3aed] px-4 py-2 text-center text-[15px] leading-snug font-semibold text-white no-underline hover:bg-[#6d28d9] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#7c3aed] sm:inline-flex sm:w-auto"
+            >
+              {t(ui, "register.status.promotionSkipped.link")}
+            </a>
+          </div>
+        </div>
+      ) : (
+        place
+      );
   } else if (showsFeeLine) {
     // paid/confirmed (the only remaining entryCountsTowardTotal-true
-    // statuses once pending is excluded — pending always lands in one of
-    // the three money.kind branches above via resolveMoneyState).
+    // statuses once pending is excluded — an owing pending entry always
+    // lands in one of the money.kind branches above via resolveMoneyState).
     moneyNode = <p className="text-sm font-medium text-ink">{feeLabel}</p>;
   }
 
@@ -311,6 +424,13 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
               {entry.division_name}
             </p>
             <p className="truncate font-display text-lg font-semibold text-ink">{headingName}</p>
+            {ownRef && (
+              <p data-testid="reg-status-entry-ref" data-entry-ref={ownRef} className="mt-0.5 font-mono text-xs break-all text-ink-muted">
+                {refLead}
+                <span className="select-all">{ownRef}</span>
+                {refTail}
+              </p>
+            )}
           </div>
           <span
             data-testid="reg-status-outcome"
@@ -328,7 +448,7 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
             data-registration-id={entry.id}
             className={`shrink-0 rounded-full border px-2.5 py-1 text-xs font-semibold tracking-wide uppercase ${tone.badge}`}
           >
-            {t(ui, STATUS_KEY[entry.status])}
+            {t(ui, chip.key)}
           </span>
         </div>
 
@@ -388,8 +508,8 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
             </div>
             {/* Each row wraps rather than letting the badge win. The badge is
                 shrink-0 and the name truncates, so at 320px a long status
-                label (originally "Awaiting confirmation" — renamed to "Not
-                checked in" by RS007 #20, see register.status.roster.pending)
+                label (originally "Awaiting confirmation", later "Not checked
+                in", now "Not joined yet" - register.status.roster.notJoined)
                 took the whole row and crushed the name to a few characters —
                 a roster that tells you a spot is unclaimed but not WHOSE it
                 is. Wrapping drops the badge to its own line there and gives

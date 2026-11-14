@@ -65,6 +65,8 @@ function row(over: Partial<RegistrationListRow>): RegistrationListRow {
     roster_cap: 1,
     status: "confirmed",
     waitlist_position: null,
+    // The read model always gives it (null unless a promotion skipped this waiting entry); left out, a waitlisted fixture drew the chip.
+    promotion_skipped_at: null,
     free_agent: false,
     assigned_team_id: null,
     assigned_team_name: null,
@@ -162,24 +164,89 @@ describe("renderRegistrantKindCell — a solo sign-up is not a team (RS009)", ()
 
 describe("renderRegistrantStatusCell — waitlist position (task 4)", () => {
   it("a waitlisted row shows its position", () => {
-    const text = textOf(renderRegistrantStatusCell(row({ status: "waitlisted", waitlist_position: 3 }), dict));
+    const text = textOf(renderRegistrantStatusCell(row({ status: "waitlisted", waitlist_position: 3 }), dict, ORG_TZ));
     expect(text).toContain("#3");
   });
 
   it("a non-waitlisted row shows NO position in the ordinary case (waitlist_position genuinely null)", () => {
-    const text = textOf(renderRegistrantStatusCell(row({ status: "confirmed", waitlist_position: null }), dict));
+    const text = textOf(renderRegistrantStatusCell(row({ status: "confirmed", waitlist_position: null }), dict, ORG_TZ));
     expect(text).not.toContain("#");
   });
 
   it("a non-waitlisted row shows NO position even if waitlist_position were somehow non-null (status gates it, not just the field)", () => {
-    const text = textOf(renderRegistrantStatusCell(row({ status: "confirmed", waitlist_position: 3 }), dict));
+    const text = textOf(renderRegistrantStatusCell(row({ status: "confirmed", waitlist_position: 3 }), dict, ORG_TZ));
     expect(text).not.toContain("#3");
   });
 
   it("carries a data hook naming the real status, for e2e/regression", () => {
-    const tree = walk(renderRegistrantStatusCell(row({ status: "rejected" }), dict));
+    const tree = walk(renderRegistrantStatusCell(row({ status: "rejected" }), dict, ORG_TZ));
     const pill = tree.find((e) => propsOf(e)["data-registration-hub-registrant-status"] !== undefined)!;
     expect(propsOf(pill)["data-registration-hub-registrant-status"]).toBe("rejected");
+  });
+});
+
+// Walk-fix F16 (ruling): an automatic promotion on an online-play division passed this waiting entry over (no Lichess link that plays).
+// The organiser's row says so beside the waitlist place while the entry waits (the read model, `promotion_skipped_at`, gives the time
+// only then; online-seat-gate-waitlist.test.ts pins that against the real walk). Final review m1: the chip is about the SKIP, a moment
+// that has passed - "Skipped on 14 Nov: Lichess wasn't linked" - so it stays true after the player links, which re-runs nothing. The
+// date is written in the org's zone, the hub's own spelling (`fmtDate`, en-GB on every organiser surface).
+describe("renderRegistrantStatusCell — skipped by an automatic promotion (walk-fix F16, final review m1)", () => {
+  const SKIPPED = new Date("2026-11-14T10:00:00Z");
+  const chip = (r: RegistrationListRow, d = dict, tz = ORG_TZ) =>
+    walk(renderRegistrantStatusCell(r, d, tz)).find((e) => propsOf(e)["data-testid"] === "reg-hub-promotion-skipped");
+
+  it("a waiting row that was skipped says when and why, in the past tense, beside its place", () => {
+    const r = row({ status: "waitlisted", waitlist_position: 2, promotion_skipped_at: SKIPPED });
+    const found = chip(r);
+    expect(found, "the chip").toBeDefined();
+    expect(textOf(found!)).toBe("Skipped on 14 Nov: Lichess wasn't linked");
+    expect(propsOf(found!)["data-skipped-at"], "the moment itself, for e2e").toBe(SKIPPED.toISOString());
+    expect(textOf(renderRegistrantStatusCell(r, dict, ORG_TZ)), "the place still shows").toContain("#2");
+  });
+
+  it("dated, it wraps on a phone row (320, every locale): two balanced lines in a tag, never a widow word in a pill", () => {
+    // Final fix round screenshot: at 320 "Skipped on 14 Nov: Lichess wasn't" / "linked" wrapped inside a rounded-full pill.
+    const classes = String(propsOf(chip(row({ status: "waitlisted", waitlist_position: 2, promotion_skipped_at: SKIPPED }))!).className).split(/\s+/);
+    expect(classes, "lines balanced, no lone last word").toContain("text-balance");
+    expect(classes, "a two-line pill reads as a blob: a tag's corners").not.toContain("rounded-full");
+    expect(classes).toContain("rounded-md");
+  });
+
+  it("the date is the org's, not the server's: 23:30 UTC on the 14th is the 15th in Auckland", () => {
+    const late = row({ status: "waitlisted", waitlist_position: 2, promotion_skipped_at: new Date("2026-11-14T23:30:00Z") });
+    expect(textOf(chip(late, dict, "UTC")!)).toBe("Skipped on 14 Nov: Lichess wasn't linked");
+    expect(textOf(chip(late, dict, "Pacific/Auckland")!)).toBe("Skipped on 15 Nov: Lichess wasn't linked");
+  });
+
+  it("every locale names it in its own words, dated, and none of them in the present tense", async () => {
+    let judged = 0;
+    const en = textOf(chip(row({ status: "waitlisted", waitlist_position: 2, promotion_skipped_at: SKIPPED }))!);
+    // Typed per locale (never the component's own output): the dictionary's sentence around the hub's date.
+    const want = {
+      es: "Saltado el 14 Nov: Lichess no estaba vinculado",
+      fr: "Passé le 14 Nov : Lichess n'était pas lié",
+      nl: "Overgeslagen op 14 Nov: Lichess was niet gekoppeld",
+    } as const;
+    for (const locale of ["es", "fr", "nl"] as const) {
+      const d = await getDictionary(locale, "ui");
+      const found = chip(row({ status: "waitlisted", waitlist_position: 2, promotion_skipped_at: SKIPPED }), d);
+      expect(found, locale).toBeDefined();
+      const words = textOf(found!);
+      expect(words, locale).toBe(want[locale]);
+      expect(words, `${locale}: translated`).not.toBe(en);
+      judged += 1;
+    }
+    expect(judged).toBe(3);
+  });
+
+  it("never skipped, no chip; and none on a row that is not waiting, whatever the field holds", () => {
+    expect(chip(row({ status: "waitlisted", waitlist_position: 2, promotion_skipped_at: null })), "never skipped").toBeUndefined();
+    let judged = 0;
+    for (const status of ["pending", "confirmed", "withdrawn"] as const) {
+      expect(chip(row({ status, promotion_skipped_at: SKIPPED })), status).toBeUndefined();
+      judged += 1;
+    }
+    expect(judged).toBe(3);
   });
 });
 

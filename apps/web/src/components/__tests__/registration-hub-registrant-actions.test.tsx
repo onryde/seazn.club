@@ -102,6 +102,7 @@ const PROPS: ActionProps = {
   entryPaymentIntentId: null,
   refundedCents: 0,
   lastRemindedAt: null,
+  remindersInWindow: 0,
   approvedAt: null,
 };
 
@@ -662,6 +663,7 @@ describe("RegistrationHubRegistrantActions — finding 2: a failure never resurr
       entryPaymentIntentId: null,
   refundedCents: 0,
       lastRemindedAt: null,
+      remindersInWindow: 0,
       approvedAt: null,
     });
     // The existing render-time prop-sync already reconciles to it —
@@ -869,6 +871,51 @@ describe("RegistrationHubRegistrantActions — send payment reminder", () => {
     const other = mount(owed);
     await press(other);
     expect(other.text()).toContain("Some other refusal");
+  });
+
+  // Registration walk-fix F13 (walkthrough R08, presses 6 and 7): the cap is known before the press, so at the cap the button says
+  // so and is disabled - no "Send another reminder?" dialog for a press the server will refuse. The count is the organiser's presses
+  // in the cap's own 24 h window (the row's `reminders_in_window`, read with the cap's own SQL). Below the cap nothing changes.
+  it("at the cap the button is disabled and says 'Reminder limit reached' (title: the limit sentence); pressing asks nothing and sends nothing; one below it still works", async () => {
+    const recent = ago(REMINDER_CONFIRM_WITHIN_MS - 60_000);
+    let checked = 0;
+    for (const n of [REMINDER_CAP_PER_DAY, REMINDER_CAP_PER_DAY + 2]) {
+      confirmMock.fn.mockClear();
+      net.calls.length = 0;
+      const island = mount({ ...owed, lastRemindedAt: recent, remindersInWindow: n });
+      const button = propsOf(findAction(island, "remind")!);
+      expect(button.disabled, `${n} presses: disabled`).toBe(true);
+      expect(String(button.children), `${n}: the label`).toBe(t(uiEn, "reg.action.remindLimitReached"));
+      expect(t(uiEn, "reg.action.remindLimitReached")).toBe("Reminder limit reached");
+      expect(button.title, `${n}: the reason`).toBe(t(uiEn, "reg.remind.limit", { count: REMINDER_CAP_PER_DAY }));
+      await (button.onClick as () => Promise<void>)();
+      expect(confirmMock.fn, `${n}: no dialog`).not.toHaveBeenCalled();
+      expect(net.calls, `${n}: no request`).toHaveLength(0);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity").toBe(2);
+
+    // One below the cap: the old behaviour, recent press asks first.
+    confirmMock.fn.mockClear();
+    net.next.set("remind", Promise.resolve({ sent: true }));
+    const below = mount({ ...owed, lastRemindedAt: recent, remindersInWindow: REMINDER_CAP_PER_DAY - 1 });
+    const live = propsOf(findAction(below, "remind")!);
+    expect(live.disabled).toBe(false);
+    expect(String(live.children)).toBe(t(uiEn, "reg.action.remind"));
+    await (live.onClick as () => Promise<void>)();
+    expect(confirmMock.fn).toHaveBeenCalledTimes(1);
+    expect(net.calls).toHaveLength(1);
+  });
+
+  it("'Reminder limit reached' exists in every locale and is not the send label", () => {
+    let checked = 0;
+    for (const [locale, dict] of [["en", uiEn], ["es", uiEs], ["fr", uiFr], ["nl", uiNl]] as const) {
+      const copy = (dict as Record<string, string>)["reg.action.remindLimitReached"];
+      expect(copy, `${locale}: the key exists`).toBeTruthy();
+      expect(copy, `${locale}: differs from the send label`).not.toBe((dict as Record<string, string>)["reg.action.remind"]);
+      checked += 1;
+    }
+    expect(checked).toBe(4);
   });
 
   // Gap wave G8 (ledger :64): the limit copy hardcoded "5" in every locale, so a change to REMINDER_CAP_PER_DAY (the cap the server

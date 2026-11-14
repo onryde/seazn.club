@@ -279,6 +279,7 @@ export function validHubDoc(): unknown {
       endsOn: null,
       venues: ["Riverside Oval"],
       registrationOpen: false,
+      registrationWaitsOnCardPayments: false,
       registerHref: "/riverside/autumn-cup/register",
       calendars: [{ divisionName: "Division A", href: "/riverside/autumn-cup/div-a.ics" }],
       presentHref: "/riverside/autumn-cup/present",

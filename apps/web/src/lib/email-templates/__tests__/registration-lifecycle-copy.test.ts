@@ -11,6 +11,7 @@ import {
   registrationJoinedTemplate,
   registrationPaidTemplate,
   registrationPromotionLapsedTemplate,
+  registrationPromotionSkippedTemplate,
   registrationRejectedTemplate,
   registrationWithdrawnTemplate,
   type JoinedState,
@@ -25,6 +26,8 @@ const COMP = "Spring Open";
 const ORG = "Riverside Club";
 const REF = "RVR-4821";
 const LINK = "https://seazn.club/live/riverside-club/spring-open";
+/** Walk-fix F16: the Lichess link start the skipped mail's one step points at (`lichessLinkStartHref`, absolute). */
+const LICHESS = "https://seazn.club/api/auth/lichess?org=riverside-club";
 
 const base = { orgName: ORG, competitionName: COMP, divisionName: DIVISION, displayName: ENTRY, refCode: REF };
 // The payment mail is CART-shaped (fix round 1): a list of entries, each with its own amount and standing.
@@ -55,6 +58,8 @@ async function renderAll(locale: (typeof LOCALES)[number]) {
     rejected: registrationRejectedTemplate({ ...base, contactName: PERSON }, dict),
     rejectedRefund: registrationRejectedTemplate({ ...base, contactName: PERSON, refundAmount: DUE }, dict),
     promotionLapsed: registrationPromotionLapsedTemplate({ ...base, contactName: PERSON, competitionUrl: LINK }, dict),
+    // Walk-fix F16: an automatic promotion passed the entry over (no Lichess link that plays).
+    promotionSkipped: registrationPromotionSkippedTemplate({ ...base, contactName: PERSON, linkUrl: LICHESS }, dict),
     ...Object.fromEntries(
       STATES.map((s) => [`joined_${s}`, registrationJoinedTemplate({ ...base, refCode: null, playerName: PERSON, state: s, competitionUrl: LINK }, dict)]),
     ),
@@ -75,13 +80,13 @@ describe("every lifecycle mail, in every locale", () => {
       expect(out.html, `${locale} ${name}: html names the division`).toContain(DIVISION);
       expect(out.text, `${locale} ${name}: text names the division`).toContain(DIVISION);
       for (const part of [out.subject, out.html, out.text]) {
-        expect(part, `${locale} ${name}: no raw dictionary token`).not.toMatch(/\b(registrationPaid|registrationApproved|registrationExpired|registrationWithdrawn|registrationJoined|registrationRejected|registrationPromotionLapsed)\.[a-zA-Z]+\b/);
+        expect(part, `${locale} ${name}: no raw dictionary token`).not.toMatch(/\b(registrationPaid|registrationApproved|registrationExpired|registrationWithdrawn|registrationJoined|registrationRejected|registrationPromotionLapsed|registrationPromotionSkipped)\.[a-zA-Z]+\b/);
         expect(part, `${locale} ${name}: no unfilled placeholder`).not.toMatch(/\{\w+\}/);
       }
       expect(out.subject, `${locale} ${name}: the subject is non-empty`).not.toBe("");
       checked += 1;
     }
-    expect(checked, "anti-vacuity: 7 kinds, joined in 5 states, paid in 5 (2 single + 3 cart), approved in 2, rejected in 2 = 17 renders").toBe(17);
+    expect(checked, "anti-vacuity: 8 kinds, joined in 5 states, paid in 5 (2 single + 3 cart), approved in 2, rejected in 2 = 18 renders").toBe(18);
   });
 
   it("the subjects differ between locales (an untranslated key would repeat the English one)", async () => {
@@ -94,7 +99,7 @@ describe("every lifecycle mail, in every locale", () => {
         checked += 1;
       }
     }
-    expect(checked, "anti-vacuity: every render of every non-English locale").toBe(51);
+    expect(checked, "anti-vacuity: every render of every non-English locale").toBe(54);
   });
 });
 
@@ -328,6 +333,7 @@ describe("a mail about the recipient's own entry calls it 'your entry', never th
       withdrawn: registrationWithdrawnTemplate({ ...ownBase, contactName: recipient }, dict),
       rejected: registrationRejectedTemplate({ ...ownBase, contactName: recipient, refundAmount: DUE }, dict),
       promotionLapsed: registrationPromotionLapsedTemplate({ ...ownBase, contactName: recipient, competitionUrl: LINK }, dict),
+      promotionSkipped: registrationPromotionSkippedTemplate({ ...ownBase, contactName: recipient, linkUrl: LICHESS }, dict),
     } as Record<string, { subject: string; html: string; text: string }>;
   }
 
@@ -343,13 +349,13 @@ describe("a mail about the recipient's own entry calls it 'your entry', never th
         expect(visible, `${locale} ${name}: html names the division`).toContain(SINGLES);
         expect(out.text, `${locale} ${name}: text names the division`).toContain(SINGLES);
         for (const part of [out.subject, out.html, out.text]) {
-          expect(part, `${locale} ${name}: no raw dictionary token`).not.toMatch(/\b(registrationPaid|registrationApproved|registrationExpired|registrationWithdrawn|registrationRejected|registrationPromotionLapsed)\.[a-zA-Z]+\b/);
+          expect(part, `${locale} ${name}: no raw dictionary token`).not.toMatch(/\b(registrationPaid|registrationApproved|registrationExpired|registrationWithdrawn|registrationRejected|registrationPromotionLapsed|registrationPromotionSkipped)\.[a-zA-Z]+\b/);
           expect(part, `${locale} ${name}: no unfilled placeholder`).not.toMatch(/\{\w+\}/);
         }
         checked += 1;
       }
     }
-    expect(checked, "anti-vacuity: 8 renders x 2 spellings").toBe(16);
+    expect(checked, "anti-vacuity: 9 renders x 2 spellings").toBe(18);
   });
 
   it("en, written out: the intro and the text say 'your entry' and the division", async () => {
@@ -370,7 +376,7 @@ describe("a mail about the recipient's own entry calls it 'your entry', never th
       expect(out.text, `${locale} ${name}: in the text too`).toContain(SELF);
       checked += 1;
     }
-    expect(checked).toBe(8);
+    expect(checked).toBe(9);
   });
 
   it.each(LOCALES)("%s: a cart mixing the recipient's own entry with a team names the team and not the recipient", async (locale) => {
@@ -383,5 +389,37 @@ describe("a mail about the recipient's own entry calls it 'your entry', never th
     expect(out.text).not.toContain(SELF);
     expect(out.text).toContain(ENTRY);
     expect(out.text).toContain(SINGLES);
+  });
+});
+
+// Walk-fix F16 (ruling): an automatic promotion on an online-play division passed the entry over because its Lichess account is not linked
+// to play. ONE mail per skip saying so, that the entry KEEPS its place, and the one step that makes the next place theirs: link Lichess.
+describe("registration_promotion_skipped (walk-fix F16)", () => {
+  it.each(LOCALES)("%s: the Link step is the mail's button and its text line; the place-kept panel and the reference are said", async (locale) => {
+    const dict = await dictOf(locale);
+    const out = registrationPromotionSkippedTemplate({ ...base, contactName: PERSON, linkUrl: LICHESS }, dict);
+    const html = out.html.replaceAll("&amp;", "&");
+    expect(html, "the button's href is the link start").toContain(`href="${LICHESS}"`);
+    expect(out.text, "the text carries the same link").toContain(LICHESS);
+    expect(words(out.html), "the reference is quoted").toContain(REF);
+    expect(out.text).toContain(REF);
+    const en = registrationPromotionSkippedTemplate({ ...base, contactName: PERSON, linkUrl: LICHESS }, await dictOf("en"));
+    if (locale !== "en") expect(words(out.html), `${locale}: translated, not the English body`).not.toBe(words(en.html));
+  });
+
+  it("en, written out: skipped, why, the place is kept, and the Link step", async () => {
+    const dict = await dictOf("en");
+    const own = registrationPromotionSkippedTemplate({ ...base, displayName: PERSON, contactName: PERSON, linkUrl: LICHESS }, dict);
+    expect(own.subject).toBe("You were skipped on the waiting list — Spring Open");
+    const visible = words(own.html);
+    expect(visible).toContain(
+      "Hi Dana Captain — a place opened in Open Doubles at Spring Open, but it could not go to you: games in this division are played on Lichess, and your Lichess account isn't linked to play yet. The place went to the next entry in line.",
+    );
+    expect(visible).toContain("Your entry keeps its place on the waiting list. Link your Lichess account, and the next place that opens can go to you.");
+    expect(visible).toContain("Link your Lichess account");
+    expect(own.text).toContain("Link your Lichess account:\n" + LICHESS);
+    // A contact entering someone else (an entry named for another): the entry is named, never "you".
+    const other = registrationPromotionSkippedTemplate({ ...base, contactName: PERSON, linkUrl: LICHESS }, dict);
+    expect(words(other.html)).toContain("but it could not go to Riverside Rovers: games in this division are played on Lichess");
   });
 });

@@ -11,6 +11,8 @@ import { renderIsland, walk, propsOf } from "@/components/__tests__/_hook-harnes
 const net = vi.hoisted(() => ({
   calls: [] as { url: string; method?: string; json?: unknown }[],
   rejection: null as unknown,
+  /** When set, the request waits on it (the withdraw is in flight). */
+  hold: null as Promise<unknown> | null,
 }));
 vi.mock("@/lib/client-v1", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/client-v1")>();
@@ -23,6 +25,7 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
         net.rejection = null;
         return Promise.reject(e);
       }
+      if (net.hold) return net.hold.then(() => ({}));
       return Promise.resolve({});
     },
   };
@@ -51,6 +54,7 @@ import { CancelEntry } from "../cancel-entry";
 beforeEach(() => {
   net.calls = [];
   net.rejection = null;
+  net.hold = null;
   router.refreshCount = 0;
   confirmMock.resolve = true;
   confirmMock.calls = [];
@@ -59,6 +63,31 @@ beforeEach(() => {
 const findButton = (tree: ReturnType<typeof walk>) => tree.find((e) => e.type === "button")!;
 
 describe("CancelEntry", () => {
+  // B4 review m2: once confirmed, the withdraw is in flight and the button is WORKING (aria-busy, full strength), not unavailable.
+  it("in flight: disabled, aria-busy and its busy label; before the click and after the answer, not busy", async () => {
+    let release!: () => void;
+    net.hold = new Promise<void>((r) => (release = r));
+    const island = renderIsland(CancelEntry, {
+      entryId: "reg-1",
+      token: "rg_tok",
+      divisionName: "Mixed Doubles",
+      refundable: true,
+      refundAmountFormatted: "£25.00",
+    });
+    expect(propsOf(findButton(island.tree()))["aria-busy"], "before the click").toBe(false);
+
+    const click = (propsOf(findButton(island.tree())).onClick as () => Promise<void>)();
+    await new Promise((r) => setTimeout(r, 0));
+    const busy = findButton(island.tree());
+    expect(textOf(busy), "premise: the withdraw is in flight").toBe("Cancelling…");
+    expect(propsOf(busy).disabled).toBe(true);
+    expect(propsOf(busy)["aria-busy"]).toBe(true);
+
+    release();
+    await click;
+    expect(propsOf(findButton(island.tree()))["aria-busy"]).toBe(false);
+  });
+
   it("calls the PUBLIC per-entry withdraw path (withdrawRegistrationPublic), never the organiser one, and refreshes on success", async () => {
     const island = renderIsland(CancelEntry, {
       entryId: "reg-1",

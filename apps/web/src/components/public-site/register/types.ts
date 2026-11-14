@@ -48,9 +48,13 @@ export const EMPTY_CONTACT: ContactState = {
 export interface ConsentState {
   privacy_consent: boolean;
   media_consent: boolean;
+  /** "I'm the parent or guardian of the players under 18 I'm entering" (Addendum 2b) — `PublicRegisterGroupRequest.
+   *  guardian_for_minors`, asked only while `guardianForMinorsOffered` (validation.ts). Optional, unlike its siblings, so a draft
+   *  saved before it existed restores as it is (absent reads as unticked) instead of the storage version bump dropping it. */
+  guardian_for_minors?: boolean;
 }
 
-export const EMPTY_CONSENT: ConsentState = { privacy_consent: false, media_consent: false };
+export const EMPTY_CONSENT: ConsentState = { privacy_consent: false, media_consent: false, guardian_for_minors: false };
 
 /** The subset of `PublicRegistrationDivision` (api-v1/schemas/registration.ts) the chassis'
  *  pure logic reads. Narrow on purpose — the same reason
@@ -84,8 +88,14 @@ export interface DivisionLike {
   open: boolean;
   closed_reason: string | null;
   capacity: number | null;
+  /** Places left before a new entry waitlists, against the cap submit enforces: min(capacity, plan entrant limit).
+   *  null = neither caps the division. */
   remaining: number | null;
   taken: number;
+  /** Entries on the waiting list behind this division (registration redesign B3 T11). Optional on this narrow type, like
+   *  `online_play` and `eligibility_note`: every older hand-built fixture across the stepper's suites stays compiling.
+   *  The wire (`PublicRegistrationDivision`) always carries it; `undefined` reads as nobody waiting. */
+  waitlisted?: number;
   opens_at: string | null;
   closes_at: string | null;
   fee_cents: number;
@@ -245,6 +255,19 @@ export interface CartEntry {
    *  `CartEntry` fixture in this tree sets it, and `undefined` reads the
    *  same as `false` everywhere it's checked. */
   self_link_declined?: boolean;
+  /** CLIENT-ONLY (never sent — `toGroupEntry` does not include it), same status as `id` and `self_link_declined`. What the DETAILS seed
+   *  (`details-seed.ts`) last gave THIS entry's contact row from Contact, one value per field; a key that is absent was never given.
+   *  It is how a later pass tells a row the form seeded ("Mia", still "Mia") from one the registrant edited ("Amelia"): the first
+   *  follows a Contact rename, the second never does. Kept on the entry, not in a stepper ref, so it rides the sessionStorage draft
+   *  with the cart. Optional: a draft saved before it existed has none and simply starts one on its next pass. */
+  seeded_from?: SeededFromContact;
+}
+
+/** `CartEntry.seeded_from`: the values the contact row last took from Contact. */
+export interface SeededFromContact {
+  name?: string;
+  dob?: string;
+  gender?: Gender;
 }
 
 /** The whole cart. Self-link state lives PER-ENTRY (`CartEntry.

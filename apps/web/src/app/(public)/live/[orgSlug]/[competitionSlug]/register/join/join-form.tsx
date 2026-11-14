@@ -15,7 +15,7 @@
 // server-provided text ever reaches this component's output, so there is
 // no path by which the code — or anything else server-side — could leak
 // into the page.
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useT } from "@/components/i18n/dict-provider";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { TurnstileWidget, useTurnstile } from "@/components/turnstile-widget";
@@ -100,6 +100,14 @@ export function JoinForm({
   const [contact, setContact] = useState<ContactState>(EMPTY_CONTACT);
   const [consent, setConsent] = useState<ConsentState>(EMPTY_CONSENT);
   const [attempted, setAttempted] = useState(false);
+  // B2 T10: how many Join taps failed on Contact. The error summary (step-who.tsx) is focused from an effect keyed on THIS count, not on
+  // `attempted` (which flips once): a second failed tap, after fixing one field, has to move focus again. Same seam as the register
+  // stepper's Continue; the ref is the summary's own element, which exists only while something is wrong.
+  const [failedContactTaps, setFailedContactTaps] = useState(0);
+  const contactSummaryRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (failedContactTaps > 0) contactSummaryRef.current?.focus();
+  }, [failedContactTaps]);
   const [submitting, setSubmitting] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [failure, setFailure] = useState<JoinFailureKind | null>(null);
@@ -146,7 +154,10 @@ export function JoinForm({
 
   async function submit() {
     setAttempted(true);
-    if (!canSubmit) return;
+    if (!canSubmit) {
+      if (!contactValidation.valid) setFailedContactTaps((n) => n + 1);
+      return;
+    }
     setSubmitting(true);
     setFailure(null);
     try {
@@ -248,6 +259,7 @@ export function JoinForm({
         requirements={requirements}
         errors={attempted ? contactValidation.errors : {}}
         showSelfToggle={false}
+        summaryRef={contactSummaryRef}
       />
 
       <StepConsent
@@ -310,6 +322,9 @@ export function JoinForm({
           data-testid="reg-join-submit"
           onClick={submit}
           disabled={submitting}
+          // Busy, not unavailable (B1 D1, applied here by B2 T8): BTN_PRIMARY keeps a disabled + aria-busy button at full strength,
+          // so "Joining…" reads as the status of a working button instead of a 40%-dimmed dead one.
+          aria-busy={submitting}
           className={BTN_PRIMARY}
         >
           {submitting ? t("register.join.submit.busy") : t("register.join.submit.cta")}

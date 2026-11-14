@@ -7,6 +7,7 @@ import { registrationEmail, paymentReminderEmail } from "@/lib/email";
 import type { RegistrationEmailArgs, RegistrationEmailInvite } from "@/lib/email-templates";
 import { routes } from "@/lib/routes";
 import { joinLinkPath } from "@/lib/join-link";
+import { entryReferenceOf } from "@/lib/ref-code";
 import { resolvePersonDisplayName } from "@/lib/name-display";
 import { resolveVenueTz } from "@/lib/tz";
 import { type Locale } from "@/lib/i18n-constants";
@@ -23,6 +24,7 @@ import { log } from "@/server/logger";
 import { audit } from "../audit";
 import type { RegistrationRow, RegistrationGroupRow, RegistrationWithGroupRow, DivisionCtx } from "./types";
 import { loadSettings, divisionCtx, tokenMatchesHash, orgReg } from "./lookups";
+import { waitlistPositionSql } from "./waitlist";
 
 /**
  * Assembles the CART-shaped confirmation mail for one group — every
@@ -32,9 +34,8 @@ import { loadSettings, divisionCtx, tokenMatchesHash, orgReg } from "./lookups";
  * (`notifySubmitted`), the organiser resend action
  * (`resendRegistrationConfirmation`) and the dispute-evidence
  * reconstruction (`buildDisputeEvidence`) — one query decides what "this
- * cart's confirmation email" contains, the same re-select-fresh-state
- * convention `mintGroupCheckout` uses rather than trusting a caller's
- * snapshot. Returns null (never throws) for a nonexistent group or one
+ * cart's confirmation email" contains, re-selecting fresh state rather
+ * than trusting a caller's snapshot. Returns null (never throws) for a nonexistent group or one
  * with no entries — should not happen in practice; kept as a defensive
  * no-op for the fire-and-forget submit-time caller.
  *
@@ -67,11 +68,11 @@ export async function buildCartMail(
   const [group] = await sql<
     Pick<
       RegistrationGroupRow,
-      | "contact_name" | "contact_email" | "locale" | "ref_code" | "amount_cents" | "currency"
+      | "contact_name" | "contact_email" | "locale" | "ref_code" | "cart_size" | "amount_cents" | "currency"
       | "expires_at" | "payment_method" | "competition_id" | "org_id" | "user_id"
     >[]
   >`
-    select contact_name, contact_email, locale, ref_code, amount_cents, currency, expires_at,
+    select contact_name, contact_email, locale, ref_code, cart_size, amount_cents, currency, expires_at,
            payment_method, competition_id, org_id, user_id
     from registration_groups where id = ${groupId}`;
   if (!group) {
@@ -88,7 +89,8 @@ export async function buildCartMail(
 
   // Each entry with its division's name and review mode (polish wave W7): two entries for one person are otherwise the same line,
   // and "Pending" alone does not say whether the entry waits on a payment, an approval or both (`entryWaitingOn`). A division
-  // with no settings row reviews nothing by hand, the same default the submit path uses.
+  // with no settings row reviews nothing by hand, the same default the submit path uses. A waitlisted entry's place in its queue
+  // (registration redesign B3 T13, owner ruling 2026-11-13) is the one the status page states: `waitlistPositionSql`.
   const entries = await sql<
     {
       id: string;
@@ -99,10 +101,13 @@ export async function buildCartMail(
       division_name: string;
       approval: "auto" | "manual";
       approved: boolean;
+      waitlist_position: number | null;
+      cart_position: number;
     }[]
   >`
-    select r.id, r.division_id, r.display_name, r.status, r.amount_cents,
-           d.name as division_name, coalesce(rs.approval, 'auto') as approval, r.approved_at is not null as approved
+    select r.id, r.division_id, r.display_name, r.status, r.amount_cents, r.cart_position,
+           d.name as division_name, coalesce(rs.approval, 'auto') as approval, r.approved_at is not null as approved,
+           ${waitlistPositionSql(sql, "r")} as waitlist_position
     from registrations r
     join divisions d on d.id = r.division_id
     left join registration_settings rs on rs.division_id = r.division_id
@@ -149,6 +154,15 @@ export async function buildCartMail(
     const settings = await loadSettings(sql, firstPaid.division_id);
     paymentInstructions = settings?.payment_instructions ?? ctx.payment_instructions;
   }
+  // The reference those instructions quote (final review m2) - the status page's rule (`offlineInstructionsReference`,
+  // register/status/view-model.ts), which the help page promises this mail keeps, and the paid mail's: when exactly one entry owes,
+  // the transfer is for that entry and quotes its own reference (`-2` in a cart sent with two or more); when several owe, the cart's,
+  // which finds them all. "Owes" is this mail's own rule, the one `owedCents` below sums. The reference panel stays the cart's.
+  const owing = entries.filter((e) => e.status === "pending" && e.amount_cents > 0);
+  const instructionsRef =
+    owing.length === 1
+      ? entryReferenceOf({ ref_code: group.ref_code, cart_position: owing[0]!.cart_position, cart_size: group.cart_size })
+      : group.ref_code;
 
   const statusUrl = token
     ? `${origin}${routes.publicRegisterStatus(ctx.org_slug, ctx.comp_slug)}?rid=${groupId}&token=${encodeURIComponent(token)}`
@@ -178,6 +192,7 @@ export async function buildCartMail(
         feeCents: e.amount_cents,
         approval: e.approval,
         approved: e.approved,
+        waitlistPosition: e.waitlist_position,
       })),
       totalCents,
       currency: group.currency,
@@ -188,6 +203,7 @@ export async function buildCartMail(
       timeZone: resolveVenueTz(null, ctx.org_timezone),
       statusUrl,
       refCode: group.ref_code,
+      instructionsRef,
       refStatusUrl: group.ref_code ? `${origin}/r/${group.ref_code}` : null,
       invites,
     },
@@ -454,7 +470,6 @@ export async function paymentReminderMessage(
     /** The entry's pay-by moment, named in the card mail so the player knows how long the spot is held. The sweep passes the one it
      *  keyed on; the organiser's manual reminder passes the entry's own (`payDeadlineOf`). */
     payDeadline?: Date | null;
-    refCode?: string | null;
   },
 ): Promise<OutboxMessage> {
   const locale = await recipientLocale(sql, { pick: reg.locale, userId: reg.user_id, orgDefault: ctx.default_locale });
@@ -480,9 +495,10 @@ export async function paymentReminderMessage(
         payPageUrl: o.payPageUrl,
         payDeadline: o.payDeadline,
         timeZone: resolveVenueTz(null, ctx.org_timezone),
-        // Final fix round F: every reminder prints the reference, so it falls back to the cart's own when the caller passed none (the
-        // sweep's card reminders).
-        refCode: o.refCode ?? reg.ref_code,
+        // Final fix round F: every reminder prints the reference (the sweep's card reminders too). B5 T18: a reminder is about ONE entry,
+        // so it is THIS entry's reference, read off the row here and nowhere else: a caller no longer passes one, so the organiser's manual
+        // reminder and the sweep's two passes cannot quote different strings for the same entry.
+        refCode: entryReferenceOf(reg),
       },
       locale,
     )),

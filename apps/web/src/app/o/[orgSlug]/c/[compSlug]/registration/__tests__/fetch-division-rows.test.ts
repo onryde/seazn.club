@@ -141,6 +141,28 @@ describe.skipIf(!HAS_DB)("fetchDivisionRows — real Postgres", () => {
     expect(row.org_stripe_unsupported_currency).toBe("jpy");
   });
 
+  // Walk-fix F5: the Settings tab's "card payments are not set up" banner reads the division's payment method and the org's charge
+  // state off these rows - proved here against the real columns, both ways, so the banner is not fed a fixture's guess.
+  it("carries the division's payment_method (null when unconfigured) and the org's stripe_charges_enabled on every row (F5)", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    let checked = 0;
+    for (const charges of [false, true]) {
+      await sql`update organizations set stripe_charges_enabled = ${charges} where id = ${orgId}`;
+      const rows = await fetchDivisionRows(owner, competition.id);
+      expect(rows.length, "anti-vacuity").toBeGreaterThan(0);
+      for (const r of rows) {
+        expect(r.org_charges_enabled, `${r.name} charges=${charges}`).toBe(charges);
+        checked++;
+      }
+    }
+    expect(checked).toBeGreaterThanOrEqual(2);
+    const [rs] = await sql<{ payment_method: string }[]>`select payment_method from registration_settings where division_id = ${division.id}`;
+    const row = (await fetchDivisionRows(owner, competition.id)).find((r) => r.division_id === division.id)!;
+    expect(row.payment_method, "the settings row's own method, or null with none").toBe(rs?.payment_method ?? null);
+  });
+
   // RS004 W3b review finding 3 — `order by d.name` alone has no tiebreaker,
   // so two same-named divisions have no guaranteed relative order (Postgres
   // may return them in either order, and that order may change between

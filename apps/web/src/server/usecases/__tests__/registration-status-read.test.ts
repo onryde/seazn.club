@@ -18,9 +18,14 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
-const stripeMock = vi.hoisted(() => ({ retrieve: vi.fn() }));
+// `refunds.create`: registration redesign B4 T14 drives the real organiser Refund and withdrawal over a card payment, to show a
+// refund never rewrites how an entry settled.
+const stripeMock = vi.hoisted(() => ({ retrieve: vi.fn(), refundCreate: vi.fn() }));
 vi.mock("@/lib/stripe", () => ({
-  getStripe: () => ({ checkout: { sessions: { retrieve: stripeMock.retrieve } } }),
+  getStripe: () => ({
+    checkout: { sessions: { retrieve: stripeMock.retrieve } },
+    refunds: { create: stripeMock.refundCreate },
+  }),
 }));
 
 // RS007 rebuild: resendRegistrationConfirmationPublic queues the cart's confirmation on the email outbox (kind
@@ -53,20 +58,40 @@ vi.mock("@/lib/rate-limit", async (importOriginal) => {
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import {
+  confirmRegistration,
+  confirmRegistrationWaived,
   groupById,
   groupByRef,
+  handleRegistrationCheckoutCompleted,
+  markRegistrationPaidOffline,
+  promoteWaitlistedRow,
   publicCartByRef,
+  publicRegistrationStatusByRef,
+  putRegistrationSettings,
   reconcileRegistration,
   reconcileRegistrationBySession,
   reconcileRegistrationGroupBySession,
+  refundRegistration,
   resendRegistrationConfirmationPublic,
+  sweepRegistrations,
+  withdrawRegistrationByRef,
+  withdrawRegistrationOrganiser,
+  type GroupStatusView,
 } from "@/server/usecases/registrations";
 import { generateRefCode } from "@/lib/ref-code";
+import { regByRef } from "../registrations/lookups";
+import {
+  cardEntryReference,
+  cartHeadline,
+  offlineInstructionsReference,
+} from "@/app/(public)/live/[orgSlug]/[competitionSlug]/register/status/view-model";
 import { idempotencyKey } from "@/server/email-outbox/constants";
 import { stubOutboxEnv } from "./_invite-mail";
 import { createDivision, patchDivision } from "../divisions";
 import {
   asOwner,
+  fakeSession,
+  farFutureDate,
   rig,
   seedOrg,
   seedRegistration,
@@ -100,6 +125,7 @@ async function stripeSettingsRig() {
 
 beforeEach(() => {
   stripeMock.retrieve.mockReset();
+  stripeMock.refundCreate.mockReset().mockImplementation(async () => ({ id: `re_sr_${randomUUID().slice(0, 8)}` }));
   transport.deliver.mockReset().mockImplementation(async () => ({ ok: true, providerId: `re_sr_${randomUUID()}` }));
   stubOutboxEnv();
   rateLimitMock.throttle = false;
@@ -378,6 +404,22 @@ describe.skipIf(!HAS_DB)("groupById — token gate", () => {
     expect(view.entries[0]!.players.map((p) => p.full_name)).toEqual(["Sam Player"]);
   });
 
+  // Registration redesign B4 T15: the status page says "Confirmation sent to {email}." The address is the cart's own, read from the
+  // group row by the real builder, never supplied by a page fixture. (The token-less `publicCartByRef` never carries it: below.)
+  it("carries the cart's contact email, the address its confirmation went to", async () => {
+    const { competition, division } = await stripeSettingsRig();
+    const contactEmail = `status-${randomUUID().slice(0, 8)}@test.local`;
+    const { registration, access_token } = await seedRegistration(
+      competition.id,
+      division.id,
+      { ...SETTINGS_BASE, fee_cents: 500, currency: "gbp", payment_method: "stripe" },
+      { refCode: freshRef(), contactEmail },
+    );
+
+    const view = await groupById(registration.group_id, access_token);
+    expect(view.contact_email).toBe(contactEmail);
+  });
+
   it("a malformed id string 404s cleanly rather than throwing a raw DB syntax error", async () => {
     await expect(groupById("not-a-uuid", "regtok_" + randomUUID())).rejects.toMatchObject({
       status: 404,
@@ -559,6 +601,267 @@ describe.skipIf(!HAS_DB)("groupById — widened fields for the status page rebui
 
     const view = await groupById(registration.group_id, access_token);
     expect(view.entries[0]!.entrant_kind).toBe("individual");
+  });
+});
+
+// Registration redesign B4 T14 (spec §5.2, §5.3): what the status page's "what happens next" and money line read. The
+// derivations are pure and tested in registration-status-facts.test.ts; this drives the REAL writers — the competition row,
+// real fixtures carrying a venue, and every settle path (Mark paid, Confirm without payment, the card webhook, the organiser's
+// Confirm, Refund, withdrawal) — and reads the result back through groupById, the page's own read.
+//
+// Venue (FP1): `competitions` has no venue. A fixture carries one (`fixtures.venue_id`, V374, written from the court at
+// schedule apply), and the public site hides it while the division's schedule is unpublished (`status = 'setup'`,
+// public_fixtures_v / withCourtVenueNames), so a draft placement never names a venue here either.
+// Another sport: N/A — registration money and venues are sport-agnostic.
+describe.skipIf(!HAS_DB)("groupById — dates, venue and how each entry settled (registration redesign B4 T14)", () => {
+  /** An organiser-side division with an offline fee (0 = free) and the given review mode. */
+  async function offlineRig(feeCents: number, approval: "auto" | "manual" = "auto") {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    const settings = await putRegistrationSettings(owner, division.id, {
+      ...SETTINGS_BASE,
+      payment_method: "offline",
+      fee_cents: feeCents,
+      approval,
+    });
+    return { orgId, owner, competition, division, settings };
+  }
+
+  const venueRow = async (orgId: string, name: string): Promise<string> =>
+    (await sql<{ id: string }[]>`insert into venues (org_id, name) values (${orgId}, ${name}) returning id`)[0]!.id;
+
+  /** A stage and one fixture per element of `venueIds` (null = a fixture not placed at a venue yet), in the post-cutover shape
+   *  (V374): `venue_id` set, the frozen free-text `venue` left null. */
+  async function placeFixtures(orgId: string, divisionId: string, venueIds: (string | null)[]): Promise<void> {
+    const [{ id: stageId }] = await sql<{ id: string }[]>`
+      insert into stages (org_id, division_id, kind, name, seq)
+      values (${orgId}, ${divisionId}, 'league', 'League', 1) returning id`;
+    let n = 0;
+    for (const venueId of venueIds) {
+      n += 1;
+      await sql`
+        insert into fixtures (org_id, division_id, stage_id, fixture_no, round_no, seq_in_round, venue_id)
+        values (${orgId}, ${divisionId}, ${stageId}, ${n}, 1, ${n}, ${venueId})`;
+    }
+  }
+
+  const publishSchedule = (divisionId: string) => sql`update divisions set status = 'scheduled' where id = ${divisionId}`;
+
+  const settledOf = (view: GroupStatusView, regId: string) => {
+    const entry = view.entries.find((e) => e.id === regId);
+    if (!entry) throw new Error(`entry ${regId} is not in the cart`);
+    return entry.settled_by;
+  };
+
+  /** competition_events rows of one type for one entry, oldest first. */
+  const eventsOf = (type: string, regId: string) =>
+    sql<{ payload: Record<string, unknown> }[]>`
+      select payload from competition_events
+      where type = ${type} and payload->>'registration_id' = ${regId}
+      order by created_at, id`;
+
+  it("carries the competition's own starts_on and ends_on as plain dates, and null when the competition has none", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const startsOn = farFutureDate(40);
+    const endsOn = farFutureDate(42);
+    const { competition, division } = await rig(owner, { startsOn, endsOn });
+    const settings = await putRegistrationSettings(owner, division.id, { ...SETTINGS_BASE, payment_method: "offline", fee_cents: 0 });
+    const { registration, access_token } = await seedRegistration(competition.id, division.id, settings);
+
+    const view = await groupById(registration.group_id, access_token);
+    expect(view.competition_name).toBe(competition.name);
+    expect(view.competition_starts_on).toBe(startsOn);
+    expect(view.competition_ends_on).toBe(endsOn);
+
+    await sql`update competitions set starts_on = null, ends_on = null where id = ${competition.id}`;
+    const undated = await groupById(registration.group_id, access_token);
+    expect(undated.competition_starts_on).toBeNull();
+    expect(undated.competition_ends_on).toBeNull();
+  });
+
+  it("venue_name is null with no fixtures", async () => {
+    const { competition, division, settings } = await offlineRig(0);
+    await publishSchedule(division.id);
+    const { registration, access_token } = await seedRegistration(competition.id, division.id, settings);
+    const view = await groupById(registration.group_id, access_token);
+    expect(view.venue_name).toBeNull();
+  });
+
+  it("venue_name is the single venue all scheduled fixtures share — an unplaced fixture and another competition's venue never count", async () => {
+    const { orgId, owner, competition, division, settings } = await offlineRig(0);
+    const hall = "Riverside Sports Hall " + randomUUID().slice(0, 6);
+    const hallId = await venueRow(orgId, hall);
+    await placeFixtures(orgId, division.id, [hallId, hallId, null]);
+    await publishSchedule(division.id);
+    // The same org's OTHER competition, published, at another venue.
+    const other = await rig(owner);
+    const elsewhereId = await venueRow(orgId, "Elsewhere Arena " + randomUUID().slice(0, 6));
+    await placeFixtures(orgId, other.division.id, [elsewhereId]);
+    await publishSchedule(other.division.id);
+
+    const { registration, access_token } = await seedRegistration(competition.id, division.id, settings);
+    const view = await groupById(registration.group_id, access_token);
+    expect(view.venue_name).toBe(hall);
+  });
+
+  it("venue_name is null with two venues", async () => {
+    const { orgId, competition, division, settings } = await offlineRig(0);
+    const a = await venueRow(orgId, "Alpha Hall " + randomUUID().slice(0, 6));
+    const b = await venueRow(orgId, "Beta Arena " + randomUUID().slice(0, 6));
+    await placeFixtures(orgId, division.id, [a, b, a]);
+    await publishSchedule(division.id);
+    const { registration, access_token } = await seedRegistration(competition.id, division.id, settings);
+    const view = await groupById(registration.group_id, access_token);
+    expect(view.venue_name).toBeNull();
+  });
+
+  it("an unpublished division's draft venue is never named; the venue appears once its schedule is published", async () => {
+    const { orgId, owner, competition, division, settings } = await offlineRig(0);
+    const hall = "Draft Hall " + randomUUID().slice(0, 6);
+    await placeFixtures(orgId, division.id, [await venueRow(orgId, hall)]);
+    const { registration, access_token } = await seedRegistration(competition.id, division.id, settings);
+
+    // Still `setup`: the public site shows no venue for this schedule, and neither does this page.
+    expect((await groupById(registration.group_id, access_token)).venue_name).toBeNull();
+
+    await publishSchedule(division.id);
+    expect((await groupById(registration.group_id, access_token)).venue_name).toBe(hall);
+
+    // A second division of the same competition, still drafting at another venue: without the publication rule this would read
+    // as two venues and drop the line.
+    const drafting = await createDivision(owner, competition.id, {
+      name: "Draft " + randomUUID().slice(0, 4),
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    });
+    await placeFixtures(orgId, drafting.id, [await venueRow(orgId, "Other Draft Arena " + randomUUID().slice(0, 6))]);
+    expect((await groupById(registration.group_id, access_token)).venue_name).toBe(hall);
+  });
+
+  it("settled_by is null for a pending entry and for a waitlisted one", async () => {
+    const { competition, division, settings } = await offlineRig(1500);
+    const { registration, access_token } = await seedRegistration(competition.id, division.id, settings);
+    const waiting = await seedSecondEntry(registration.group_id, division.id, 0, "Waiting Entry", "waitlisted");
+    const view = await groupById(registration.group_id, access_token);
+    expect(view.entries).toHaveLength(2);
+    expect(settledOf(view, registration.id)).toBeNull();
+    expect(settledOf(view, waiting.id)).toBeNull();
+  });
+
+  it("settled_by is waived after the real confirmRegistrationWaived — the entry keeps its fee, so its status alone would read as paid", async () => {
+    const { owner, competition, division, settings } = await offlineRig(1500);
+    const { registration, access_token } = await seedRegistration(competition.id, division.id, settings);
+    await confirmRegistrationWaived(owner, registration.id);
+
+    const view = await groupById(registration.group_id, access_token);
+    const entry = view.entries[0]!;
+    expect(entry.status).toBe("confirmed");
+    expect(entry.amount_cents).toBe(1500); // FP11: a waiver confirms without touching the fee
+    expect(entry.settled_by).toBe("waived");
+
+    // Second call: already confirmed, a no-op that writes no second waiver; the answer does not move.
+    await confirmRegistrationWaived(owner, registration.id);
+    expect(await eventsOf("registration.fee_waived", registration.id)).toHaveLength(1);
+    expect(settledOf(await groupById(registration.group_id, access_token), registration.id)).toBe("waived");
+  });
+
+  it("a waitlisted entry confirmed without payment settles as waived", async () => {
+    const { owner, competition, division, settings } = await offlineRig(1500);
+    const { registration, access_token } = await seedRegistration(competition.id, division.id, settings, { status: "waitlisted" });
+    await confirmRegistrationWaived(owner, registration.id);
+    const view = await groupById(registration.group_id, access_token);
+    expect(view.entries[0]!.status).toBe("confirmed");
+    expect(view.entries[0]!.settled_by).toBe("waived");
+  });
+
+  it("settled_by is offline after markRegistrationPaidOffline", async () => {
+    const { owner, competition, division, settings } = await offlineRig(1500);
+    const { registration, access_token } = await seedRegistration(competition.id, division.id, settings);
+    await markRegistrationPaidOffline(owner, registration.id);
+    const view = await groupById(registration.group_id, access_token);
+    expect(view.entries[0]!.status).toBe("confirmed");
+    expect(view.entries[0]!.settled_by).toBe("offline");
+  });
+
+  it("an offline payment stays offline after the organiser approves it, although the approval writes registration.confirmed {paid: true}", async () => {
+    const { owner, competition, division, settings } = await offlineRig(1500, "manual");
+    const { registration, access_token } = await seedRegistration(competition.id, division.id, settings);
+    await markRegistrationPaidOffline(owner, registration.id);
+    const awaiting = await groupById(registration.group_id, access_token);
+    expect(awaiting.entries[0]!.status).toBe("paid");
+    expect(awaiting.entries[0]!.settled_by).toBe("offline");
+
+    await confirmRegistration(owner, registration.id);
+    // The trap is really laid: the LATEST event of the paid family is the organiser's confirm, with paid: true.
+    const confirms = await eventsOf("registration.confirmed", registration.id);
+    expect(confirms).toHaveLength(1);
+    expect(confirms[0]!.payload).toEqual({ registration_id: registration.id, paid: true });
+    const view = await groupById(registration.group_id, access_token);
+    expect(view.entries[0]!.status).toBe("confirmed");
+    expect(view.entries[0]!.settled_by).toBe("offline");
+  });
+
+  it("settled_by is card after a webhook-fulfilled group checkout for both entries of a 2-entry cart; a sibling the session did not name stays null", async () => {
+    const { competition, division, settings } = await stripeRig();
+    const a = await seedRegistration(competition.id, division.id, settings, { displayName: "Entry A", amountCents: 500 });
+    const b = await seedSecondEntry(a.registration.group_id, division.id, 500, "Entry B");
+    const unpaid = await seedSecondEntry(a.registration.group_id, division.id, 500, "Entry C — not in this session");
+
+    await handleRegistrationCheckoutCompleted(fakeSession([a.registration.id, b.id], 1000));
+
+    const view = await groupById(a.registration.group_id, a.access_token);
+    expect(view.entries.map((e) => e.status)).toEqual(["confirmed", "confirmed", "pending"]);
+    expect(settledOf(view, a.registration.id)).toBe("card");
+    expect(settledOf(view, b.id)).toBe("card");
+    expect(settledOf(view, unpaid.id)).toBeNull();
+  });
+
+  it("a card payment on a manual division is card while it awaits approval and after the organiser confirms it", async () => {
+    const { owner, competition, division, settings } = await stripeRig();
+    await sql`update registration_settings set approval = 'manual' where division_id = ${division.id}`;
+    const { registration, access_token } = await seedRegistration(competition.id, division.id, settings);
+
+    await handleRegistrationCheckoutCompleted(fakeSession(registration.id, 500));
+    const awaiting = await groupById(registration.group_id, access_token);
+    expect(awaiting.entries[0]!.status).toBe("paid");
+    expect(awaiting.entries[0]!.settled_by).toBe("card");
+
+    await confirmRegistration(owner, registration.id);
+    const view = await groupById(registration.group_id, access_token);
+    expect(view.entries[0]!.status).toBe("confirmed");
+    expect(view.entries[0]!.settled_by).toBe("card");
+  });
+
+  it("a refund or a withdrawal never rewrites how an entry settled — refunded_cents carries the money sent back", async () => {
+    const { owner, competition, division, settings } = await stripeRig();
+    const { registration, access_token } = await seedRegistration(competition.id, division.id, settings);
+    await handleRegistrationCheckoutCompleted(fakeSession(registration.id, 500));
+
+    await refundRegistration(owner, registration.id, 200);
+    const partly = await groupById(registration.group_id, access_token);
+    expect(partly.entries[0]!.status).toBe("confirmed");
+    expect(partly.entries[0]!.refunded_cents).toBe(200);
+    expect(partly.entries[0]!.settled_by).toBe("card");
+
+    // Withdrawn before the competition starts (refundable): the rest of the payment goes back too.
+    await withdrawRegistrationOrganiser(owner, registration.id);
+    const withdrawn = await groupById(registration.group_id, access_token);
+    expect(withdrawn.entries[0]!.status).toBe("withdrawn");
+    expect(withdrawn.entries[0]!.refunded_cents).toBe(500);
+    expect(withdrawn.entries[0]!.settled_by).toBe("card");
+  });
+
+  it("a free entry the organiser confirms settled nothing: null", async () => {
+    const { owner, competition, division, settings } = await offlineRig(0);
+    const { registration, access_token } = await seedRegistration(competition.id, division.id, settings);
+    await confirmRegistration(owner, registration.id);
+    expect((await eventsOf("registration.confirmed", registration.id)).map((e) => e.payload.paid)).toEqual([false]);
+    const view = await groupById(registration.group_id, access_token);
+    expect(view.entries[0]!.status).toBe("confirmed");
+    expect(view.entries[0]!.settled_by).toBeNull();
   });
 });
 
@@ -1283,5 +1586,329 @@ describe.skipIf(!HAS_DB)("resendRegistrationConfirmationPublic (RS007)", () => {
     expect(saw[0]!.text).toContain(
       `https://test.local/live/${orgSlug}/${competition.slug}/register/status?rid=${registration.group_id}&token=${access_token}`,
     );
+  });
+});
+
+// Registration redesign B5 T18 (spec §6.3). The read model hands the status page each entry's own reference and how many entries the
+// cart was SENT with. Both come off the REAL rows (V519's trigger numbers the entries; `seedSecondEntry` inserts through it), and the
+// page's two rules (view-model.ts) are then run over the read model's own output: a fixture on both ends would prove the fixture.
+describe.skipIf(!HAS_DB)("groupById: each entry's own reference and the cart's size (B5 T18)", () => {
+  const SETTINGS = { ...SETTINGS_BASE, fee_cents: 500, currency: "gbp", payment_method: "offline" as const };
+
+  /** An offline division with `{{reference}}` instructions, and a cart of `size` entries owing a fee each. */
+  async function cartOf(size: number, ref: string | null = freshRef()) {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    await sql`
+      insert into registration_settings
+        (division_id, enabled, entrant_kind, fee_cents, payment_method, payment_instructions, approval, allow_free_agents)
+      values (${division.id}, true, 'individual', 500, 'offline', 'Quote {{reference}} to the club', 'auto', false)`;
+    const first = await seedRegistration(competition.id, division.id, SETTINGS, { refCode: ref, displayName: "Entry 1" });
+    const entries = [first.registration];
+    for (let n = 2; n <= size; n++) entries.push(await seedSecondEntry(first.registration.group_id, division.id, 500, `Entry ${n}`, "pending"));
+    return { entries, token: first.access_token, groupId: first.registration.group_id, ref, owner };
+  }
+  const refsById = (view: GroupStatusView) => Object.fromEntries(view.entries.map((e) => [e.display_name, e.entry_ref]));
+
+  it("a 2-entry cart: cart_size 2, each entry its own -n, the cart's reference still bare", async () => {
+    const c = await cartOf(2);
+    const view = await groupById(c.groupId, c.token);
+    expect(view.cart_size).toBe(2);
+    expect(view.ref_code).toBe(c.ref);
+    expect(refsById(view)).toEqual({ "Entry 1": `${c.ref}-1`, "Entry 2": `${c.ref}-2` });
+  });
+
+  it("a one-entry cart: cart_size 1 and the entry's reference IS the cart's", async () => {
+    const c = await cartOf(1);
+    const view = await groupById(c.groupId, c.token);
+    expect(view.cart_size).toBe(1);
+    expect(view.entries).toHaveLength(1);
+    expect(view.entries[0]!.entry_ref).toBe(c.ref);
+  });
+
+  it("the same read by ref (groupByRef) says the same", async () => {
+    const c = await cartOf(2);
+    const view = await groupByRef(c.ref!, c.token);
+    expect(view.cart_size).toBe(2);
+    expect(refsById(view)).toEqual({ "Entry 1": `${c.ref}-1`, "Entry 2": `${c.ref}-2` });
+  });
+
+  it("after entry 1 is withdrawn, entry 2 still reads -2 and the cart is still of size 2 (withdrawn rows are counted: the size is what it was sent with)", async () => {
+    const c = await cartOf(2);
+    await withdrawRegistrationOrganiser(c.owner, c.entries[0]!.id);
+    const view = await groupById(c.groupId, c.token);
+    expect(view.entries.find((e) => e.display_name === "Entry 1")!.status, "premise: entry 1 is withdrawn").toBe("withdrawn");
+    expect(view.cart_size).toBe(2);
+    expect(refsById(view)).toEqual({ "Entry 1": `${c.ref}-1`, "Entry 2": `${c.ref}-2` });
+  });
+
+  it("a deleted sibling leaves a gap: the lone survivor of a cart of three is still -3", async () => {
+    const c = await cartOf(3);
+    await sql`delete from registrations where id in ${sql([c.entries[0]!.id, c.entries[1]!.id])}`;
+    const view = await groupById(c.groupId, c.token);
+    expect(view.entries.map((e) => e.display_name), "premise: only entry 3 is left").toEqual(["Entry 3"]);
+    expect(view.cart_size).toBe(3);
+    expect(view.entries[0]!.entry_ref).toBe(`${c.ref}-3`);
+  });
+
+  it("a cart with no reference (the mint ran out of retries) has no entry reference either, but still its size", async () => {
+    const c = await cartOf(2, null);
+    const view = await groupById(c.groupId, c.token);
+    expect(view.ref_code).toBeNull();
+    expect(view.cart_size).toBe(2);
+    expect(view.entries.map((e) => e.entry_ref)).toEqual([null, null]);
+  });
+
+  // The seam: the read model's own output through the page's two rules.
+  it("the page's rules over the REAL read model: both due -> the cart's reference; one due -> that entry's; the card prints -n only in a 2+ cart", async () => {
+    const c = await cartOf(2);
+    const both = await groupById(c.groupId, c.token);
+    expect(offlineInstructionsReference(both.entries, both), "both entries owe: the cart's reference finds both").toBe(c.ref);
+    expect(both.entries.map((e) => cardEntryReference(e, both))).toEqual([`${c.ref}-1`, `${c.ref}-2`]);
+
+    await sql`update registrations set status = 'confirmed' where id = ${c.entries[0]!.id}`;
+    const one = await groupById(c.groupId, c.token);
+    expect(offlineInstructionsReference(one.entries, one), "one entry owes: its own reference").toBe(`${c.ref}-2`);
+
+    const solo = await cartOf(1);
+    const soloView = await groupById(solo.groupId, solo.token);
+    expect(offlineInstructionsReference(soloView.entries, soloView)).toBe(solo.ref);
+    expect(soloView.entries.map((e) => cardEntryReference(e, soloView)), "a one-entry cart's card prints none").toEqual([null]);
+  });
+
+  // Review m6: every cart above sits in ONE division. A cart is a person's whole basket, and the entries of one basket can sit in different
+  // divisions with different settings (a free one beside a paid one, a different payment method on the free one: a cart's PAID divisions
+  // agree on a method at submit, a free one owes nothing and need not). The references, the card rule and the offline rule are the same
+  // for it, read through the real reader.
+  it("a cart across two divisions: each entry is its own -n whichever division it is in, and the offline rule counts what is DUE, not what is in the cart", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division: paid } = await rig(owner);
+    await sql`
+      insert into registration_settings
+        (division_id, enabled, entrant_kind, fee_cents, payment_method, payment_instructions, approval, allow_free_agents)
+      values (${paid.id}, true, 'individual', 500, 'offline', 'Quote {{reference}} to the club', 'auto', false)`;
+    const free = await createDivision(owner, competition.id, {
+      name: "Free Social",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    });
+    await sql`
+      insert into registration_settings
+        (division_id, enabled, entrant_kind, fee_cents, payment_method, approval, allow_free_agents)
+      values (${free.id}, true, 'individual', 0, 'stripe', 'auto', false)`;
+
+    const ref = freshRef();
+    const first = await seedRegistration(competition.id, paid.id, SETTINGS, { refCode: ref, displayName: "Paid Entry" });
+    await seedSecondEntry(first.registration.group_id, free.id, 0, "Free Entry", "pending");
+    const view = await groupById(first.registration.group_id, first.access_token);
+    expect(view.entries.map((e) => [e.display_name, e.division_name, e.payment_method]), "premise: two divisions, two methods").toEqual([
+      ["Paid Entry", "Open", "offline"],
+      ["Free Entry", "Free Social", "stripe"],
+    ]);
+    expect(view.cart_size).toBe(2);
+    expect(view.entries.map((e) => e.entry_ref)).toEqual([`${ref}-1`, `${ref}-2`]);
+    expect(view.entries.map((e) => cardEntryReference(e, view)), "the card prints each entry's own").toEqual([`${ref}-1`, `${ref}-2`]);
+    expect(offlineInstructionsReference(view.entries, view), "exactly one entry owes (the free one owes nothing): its own reference").toBe(`${ref}-1`);
+
+    // The other way round: the entry that owes is entry 2, in the other division.
+    const second2 = await seedRegistration(competition.id, free.id, SETTINGS, { refCode: freshRef(), displayName: "Free First", amountCents: 0 });
+    const paidSecond = await seedSecondEntry(second2.registration.group_id, paid.id, 500, "Paid Second", "pending");
+    const flipped = await groupById(second2.registration.group_id, second2.access_token);
+    expect(flipped.entries.map((e) => e.display_name), "premise: the free entry is first").toEqual(["Free First", "Paid Second"]);
+    expect(flipped.entries.find((e) => e.id === paidSecond.id)!.entry_ref).toBe(`${flipped.ref_code}-2`);
+    expect(offlineInstructionsReference(flipped.entries, flipped), "the entry that owes holds position 2").toBe(`${flipped.ref_code}-2`);
+  });
+});
+
+// B4 fix round 3 (re-review I1): the page tells the person before the hourly sweep what the sweep is about to do. Read through the real
+// read model (`groupById`) and the page's own headline rule, before and after the real `sweepRegistrations`, for each half of "past its
+// pay-by date". The expected kinds come from the sweep's two passes (sweep.ts): the lapse puts a promoted entry back on the waitlist,
+// the expiry pass expires a never-promoted one.
+describe.skipIf(!HAS_DB)("the status headline before and after the sweep (B4 fix round 3)", () => {
+  it("a promotion past its own pay-by date reads the waiting list before the lapse and after it", async () => {
+    const { competition, division, settings } = await stripeRig({ feeCents: 500 });
+    const t = await seedRegistration(competition.id, division.id, settings, {
+      status: "waitlisted", contactEmail: `lapse-${randomUUID().slice(0, 8)}@test.local`,
+    });
+    await sql.begin((tx) => promoteWaitlistedRow(tx, t.registration.id, t.registration.group_id, settings));
+    await sql`update registrations set promotion_expires_at = now() - interval '1 minute' where id = ${t.registration.id}`;
+
+    const before = await groupById(t.registration.group_id, t.access_token);
+    expect(before.entries[0]!.status, "premise: promoted, and the sweep has not run").toBe("pending");
+    expect(cartHeadline(before.entries, before)).toBe("waitlist");
+
+    await sweepRegistrations("https://test.local");
+
+    const after = await groupById(t.registration.group_id, t.access_token);
+    expect(after.entries[0]!.status, "the lapse put it back").toBe("waitlisted");
+    expect(cartHeadline(after.entries, after)).toBe("waitlist");
+  });
+
+  it("never promoted, past the cart's pay-by date: closed before the expiry and after it", async () => {
+    const { competition, division, settings } = await stripeRig({ feeCents: 500 });
+    const t = await seedRegistration(competition.id, division.id, settings, {
+      status: "pending", contactEmail: `expire-${randomUUID().slice(0, 8)}@test.local`,
+    });
+    await sql`update registration_groups set expires_at = now() - interval '1 minute' where id = ${t.registration.group_id}`;
+
+    const before = await groupById(t.registration.group_id, t.access_token);
+    expect(before.entries[0]!.status, "premise: the sweep has not run").toBe("pending");
+    expect(cartHeadline(before.entries, before)).toBe("closed");
+
+    await sweepRegistrations("https://test.local");
+
+    const after = await groupById(t.registration.group_id, t.access_token);
+    expect(after.entries[0]!.status, "the expiry pass expired it").toBe("expired");
+    expect(cartHeadline(after.entries, after)).toBe("closed");
+  });
+});
+
+// Registration redesign B5 T18 review (m1). The mails now print an entry's own reference (`SZ-XXXX-XXXX-2`), and a person reads that off a
+// mail or a bank statement and types it into /r/<ref>. Every by-ref door takes the number and finds the cart by the reference it belongs to.
+// The number is held against what the cart was SENT with (`cart_size`, withdrawn rows counted): a number the cart never had is the same
+// 404 as a reference that does not exist, in message, status and cost, so the suffix is no oracle on how big a cart is.
+describe.skipIf(!HAS_DB)("a typed entry reference finds the cart; a number the cart never had is the unknown-reference 404 (B5 T18 review m1)", () => {
+  const SETTINGS = { ...SETTINGS_BASE, fee_cents: 500, currency: "gbp", payment_method: "stripe" as const };
+
+  async function cartOf(size: number) {
+    const { competition, division } = await stripeSettingsRig();
+    const ref = freshRef();
+    const first = await seedRegistration(competition.id, division.id, SETTINGS, { refCode: ref, displayName: "Entry 1" });
+    const entries = [first.registration];
+    for (let n = 2; n <= size; n++) entries.push(await seedSecondEntry(first.registration.group_id, division.id, 500, `Entry ${n}`, "pending"));
+    return { ref, token: first.access_token, groupId: first.registration.group_id, entries };
+  }
+  const failure = (p: Promise<unknown>) => p.then(() => null, (e: unknown) => e as HttpError);
+  /** What a caller (or an attacker) can read off a refusal. */
+  const shape = (e: HttpError | null) => (e ? { is: e instanceof HttpError, status: e.status, message: e.message } : null);
+
+  it("groupByRef and publicCartByRef resolve `<ref>-1` and `<ref>-2` of a 2-entry cart to the whole cart, as the bare reference does", async () => {
+    const c = await cartOf(2);
+    const bare = await groupByRef(c.ref, c.token);
+    for (const typed of [`${c.ref}-1`, `${c.ref}-2`, ` ${c.ref.toLowerCase()}-2 `]) {
+      const view = await groupByRef(typed, c.token);
+      expect(view.ref_code, typed).toBe(c.ref);
+      expect(view.entries.map((e) => e.id), typed).toEqual(bare.entries.map((e) => e.id));
+      const pub = await publicCartByRef(typed);
+      expect(pub.entries.map((e) => e.id), `publicCartByRef ${typed}`).toEqual(bare.entries.map((e) => e.id));
+    }
+    expect((await regByRef(`${c.ref}-2`)).group_id, "regByRef").toBe(c.groupId);
+  });
+
+  // Walk-fix F1 (walkthrough R14): `/r/<ref>-2` rendered the same cart ticket as the bare reference, so a person who typed entry 2's
+  // reference off a mail could not tell which entry it was. The page shows the whole cart still, FOCUSED on the entry the number
+  // names: `focus` is that entry (by `cart_position`, the number the mails print), null for the bare reference and for a number
+  // whose entry was deleted (the cart, unfocused, as before). Entry 2 is made the OLDER row, so position and age disagree and the
+  // focus by number is witnessed rather than coinciding with regByRef's oldest pick.
+  it("`<ref>-N` focuses entry N (by its printed number, not its age); the bare reference and a deleted entry's number focus nothing (F1)", async () => {
+    const c = await cartOf(2);
+    await sql`update registrations set created_at = now() - interval '1 hour' where id = ${c.entries[1]!.id}`;
+    expect((await publicCartByRef(c.ref)).focus, "the bare reference: no focus (empty case first)").toBeNull();
+    let checked = 0;
+    for (const [n, entry] of [[1, c.entries[0]!], [2, c.entries[1]!]] as const) {
+      for (const typed of [`${c.ref}-${n}`, ` ${c.ref.toLowerCase()}-${n} `]) {
+        const view = await publicCartByRef(typed);
+        expect(view.focus, typed).toEqual({ entry_id: entry.id, position: n });
+        expect(view.entries.map((e) => e.id).sort(), `${typed}: still the whole cart`).toEqual(c.entries.map((e) => e.id).sort());
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: two numbers, two spellings").toBe(4);
+
+    const three = await cartOf(3);
+    await sql`delete from registrations where id = ${three.entries[1]!.id}`;
+    const gone = await publicCartByRef(`${three.ref}-2`);
+    expect(gone.focus, "entry 2 was deleted: the cart, unfocused").toBeNull();
+    expect(gone.entries.map((e) => e.display_name)).toEqual(["Entry 1", "Entry 3"]);
+    expect((await publicCartByRef(`${three.ref}-3`)).focus).toEqual({ entry_id: three.entries[2]!.id, position: 3 });
+  });
+
+  it("a number past the cart's size, zero and one past the column are the unknown-reference 404, through every by-ref door", async () => {
+    const c = await cartOf(2);
+    const unknown = freshRef();
+    const baseline = shape(await failure(groupByRef(unknown, c.token)));
+    expect(baseline, "premise: an unknown reference is a 404").toEqual({ is: true, status: 404, message: "registration not found" });
+    let checked = 0;
+    for (const n of [3, 4, 0, 32768, 99999]) {
+      const typed = `${c.ref}-${n}`;
+      expect(shape(await failure(groupByRef(typed, c.token))), `groupByRef ${typed}`).toEqual(baseline);
+      expect(shape(await failure(publicCartByRef(typed))), `publicCartByRef ${typed}`).toEqual(baseline);
+      expect(shape(await failure(regByRef(typed))), `regByRef ${typed}`).toEqual(baseline);
+      expect(shape(await failure(withdrawRegistrationByRef(typed, c.entries[1]!.id, c.token))), `withdrawRegistrationByRef ${typed}`).toEqual(baseline);
+      checked += 4;
+    }
+    expect(checked, "anti-vacuity: every door, every number").toBe(20);
+    const [{ status }] = await sql<{ status: string }[]>`select status from registrations where id = ${c.entries[1]!.id}`;
+    expect(status, "a refused withdrawal changed nothing").toBe("pending");
+  });
+
+  it("a good number with the WRONG token and a bad number with the RIGHT token are the same refusal as an unknown reference (no oracle either way)", async () => {
+    const c = await cartOf(2);
+    const unknown = shape(await failure(groupByRef(freshRef(), c.token)));
+    expect(unknown).not.toBeNull();
+    expect(shape(await failure(groupByRef(`${c.ref}-2`, "regtok_" + randomUUID())))).toEqual(unknown);
+    expect(shape(await failure(groupByRef(`${c.ref}-9`, c.token)))).toEqual(unknown);
+  });
+
+  it("the cart's size is what it was SENT with: after entry 1 is withdrawn, -1 and -2 still resolve; a lone survivor of three keeps -3 and -4 is refused", async () => {
+    const c = await cartOf(2);
+    await sql`update registrations set status = 'withdrawn', withdrawn_at = now() where id = ${c.entries[0]!.id}`;
+    for (const n of [1, 2]) expect((await groupByRef(`${c.ref}-${n}`, c.token)).ref_code, `-${n}`).toBe(c.ref);
+
+    const three = await cartOf(3);
+    await sql`delete from registrations where id in ${sql([three.entries[0]!.id, three.entries[1]!.id])}`;
+    expect((await groupByRef(`${three.ref}-3`, three.token)).entries.map((e) => e.display_name), "premise: only entry 3 is left").toEqual(["Entry 3"]);
+    expect((await failure(groupByRef(`${three.ref}-4`, three.token)))?.status).toBe(404);
+  });
+
+  it("a one-entry cart takes its own bare reference and nothing numbered past 1", async () => {
+    const c = await cartOf(1);
+    expect((await groupByRef(c.ref, c.token)).entries).toHaveLength(1);
+    expect((await groupByRef(`${c.ref}-1`, c.token)).entries, "-1 is within a cart of one").toHaveLength(1);
+    expect((await failure(groupByRef(`${c.ref}-2`, c.token)))?.status).toBe(404);
+  });
+
+  it("self-withdraw by the typed reference of entry 2 withdraws entry 2 only, and answers with the whole cart", async () => {
+    const c = await cartOf(2);
+    const cart = await withdrawRegistrationByRef(`${c.ref}-2`, c.entries[1]!.id, c.token);
+    expect(cart.entries.map((e) => [e.display_name, e.status])).toEqual([["Entry 1", "pending"], ["Entry 2", "withdrawn"]]);
+  });
+
+  // Tidy round (re-review m4): a valid number names THAT entry. regByRef returns it (so /r/<ref>-2/ticket.png draws entry 2), and the
+  // by-ref withdraw holds the same rule: a number that names a different entry than the one asked for is the unknown-reference 404.
+  // The bare reference keeps the oldest-entry pick. Entry 2 is made the OLDER row here, so position and age disagree and the pick by
+  // number is witnessed rather than coinciding with the pick by age.
+  it("a valid number picks THAT entry over the oldest one: regByRef and the ticket's reader (tidy m4)", async () => {
+    const c = await cartOf(2);
+    const positions = await sql<{ id: string; cart_position: number }[]>`
+      select id, cart_position from registrations where group_id = ${c.groupId} order by cart_position`;
+    expect(positions.map((r) => [r.id, r.cart_position]), "premise: entry n sits at cart_position n").toEqual([
+      [c.entries[0]!.id, 1],
+      [c.entries[1]!.id, 2],
+    ]);
+    await sql`update registrations set created_at = now() - interval '1 hour' where id = ${c.entries[1]!.id}`;
+    expect((await regByRef(c.ref)).id, "premise: the bare reference picks the oldest row, now entry 2").toBe(c.entries[1]!.id);
+    let checked = 0;
+    for (const [n, entry] of [[1, c.entries[0]!], [2, c.entries[1]!]] as const) {
+      expect((await regByRef(`${c.ref}-${n}`)).id, `regByRef -${n}`).toBe(entry.id);
+      expect((await publicRegistrationStatusByRef(`${c.ref}-${n}`)).display_name, `the ticket's reader -${n}`).toBe(`Entry ${n}`);
+      checked += 2;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("by-ref withdraw: a number naming another entry is the unknown-reference 404 and changes nothing; the bare reference still names any entry (tidy m4)", async () => {
+    const c = await cartOf(2);
+    const baseline = shape(await failure(withdrawRegistrationByRef(freshRef(), c.entries[1]!.id, c.token)));
+    expect(baseline, "premise: an unknown reference is a 404").toEqual({ is: true, status: 404, message: "registration not found" });
+    expect(shape(await failure(withdrawRegistrationByRef(`${c.ref}-1`, c.entries[1]!.id, c.token))), "-1 with entry 2's id").toEqual(baseline);
+    expect(shape(await failure(withdrawRegistrationByRef(`${c.ref}-2`, c.entries[0]!.id, c.token))), "-2 with entry 1's id").toEqual(baseline);
+    const before = await sql<{ status: string }[]>`select status from registrations where group_id = ${c.groupId} order by cart_position`;
+    expect(before.map((r) => r.status), "the refusals changed nothing").toEqual(["pending", "pending"]);
+    const cart = await withdrawRegistrationByRef(c.ref, c.entries[0]!.id, c.token);
+    expect(cart.entries.map((e) => [e.display_name, e.status]), "the bare reference withdraws entry 1").toEqual([["Entry 1", "withdrawn"], ["Entry 2", "pending"]]);
   });
 });

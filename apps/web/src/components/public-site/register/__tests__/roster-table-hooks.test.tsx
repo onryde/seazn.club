@@ -22,14 +22,19 @@ import type { Dict } from "@/lib/i18n-constants";
 import { RosterTable } from "@/components/public-site/register/roster-table";
 import type { CartEntry } from "@/components/public-site/register/types";
 
-const EN_UI: Dict = JSON.parse(
-  readFileSync(join(__dirname, "..", "..", "..", "..", "dictionaries", "en", "ui.json"), "utf8"),
-) as Dict;
+function uiDict(locale: string): Dict {
+  return JSON.parse(
+    readFileSync(join(__dirname, "..", "..", "..", "..", "dictionaries", locale, "ui.json"), "utf8"),
+  ) as Dict;
+}
+const EN_UI: Dict = uiDict("en");
+/** The catalog `useT` reads, swapped per locale by the accessible-name sweep below (read at call time, after init). */
+let activeDict: Dict = EN_UI;
 
 // Same shape register-stepper-interaction.test.tsx uses: the real English
 // catalog, so a missing key surfaces rather than being masked by a stub.
 vi.mock("@/components/i18n/dict-provider", () => ({
-  useT: () => (key: string, vars?: Record<string, string | number>) => tRuntime(EN_UI, key, vars),
+  useT: () => (key: string, vars?: Record<string, string | number>) => tRuntime(activeDict, key, vars),
 }));
 
 function entryWithPlayers(n: number): CartEntry {
@@ -65,7 +70,7 @@ function mountRoster(players: number, opts?: { requiresDob?: boolean; requiresGe
   });
 }
 
-function hooked(island: ReturnType<typeof mountRoster>, testid: string) {
+function hooked(island: Pick<ReturnType<typeof mountRoster>, "tree">, testid: string) {
   return island.tree().filter((e) => propsOf(e)["data-testid"] === testid);
 }
 
@@ -146,5 +151,63 @@ describe("RosterTable — a solo sign-up's one row carries no team-roster contro
     const team = mountSolo(false);
     expect(hooked(team, "reg-roster-squad")).toHaveLength(1);
     expect(text(team).includes(tRuntime(EN_UI, "register.details.roster.addPlayer"))).toBe(true);
+  });
+});
+
+// Walk-fix F9: the partner's name box was announced "Player 2 · Partner — Your name" - a screen reader told the registrant
+// the partner's field was their own. Every row's name box is now named by what that row SHOWS: its row label and the field's
+// visible placeholder ("Full name"), never "Your name" (that word stays on the Who step's own contact field). The contact's own
+// row is told apart by its "That's you" note (aria-describedby), not by a different name.
+describe("RosterTable — a name box is named by its row's visible label, never 'Your name'", () => {
+  function mountKind(kind: "pair" | "team", players: number, contactRow: number | null) {
+    return renderIsland(RosterTable, {
+      entry: { ...entryWithPlayers(players), entrant_kind: kind },
+      requiresDob: false,
+      requiresGender: false,
+      issuesByRow: new Map(),
+      contactRow,
+      importText: "",
+      onImportTextChange: () => {},
+      onAddPlayer: () => {},
+      onRemovePlayer: () => {},
+      onUpdatePlayer: () => {},
+      onImportPlayers: () => {},
+    });
+  }
+
+  it("pair and team rows, contact row or not, in every locale", () => {
+    let checked = 0;
+    try {
+      for (const locale of ["en", "es", "fr", "nl"]) {
+        activeDict = uiDict(locale);
+        const visibleName = tRuntime(activeDict, "register.who.name.placeholder");
+        const yourName = tRuntime(activeDict, "register.who.name.label");
+        expect(visibleName, `${locale}: premise - the two words differ`).not.toBe(yourName);
+        for (const [kind, n, contactRow] of [
+          ["pair", 2, 0],
+          ["pair", 2, null],
+          ["team", 3, 0],
+          ["team", 3, null],
+        ] as const) {
+          const names = hooked(mountKind(kind, n, contactRow), "reg-roster-name");
+          expect(names, `${locale}/${kind}`).toHaveLength(n);
+          names.forEach((box, i) => {
+            const rowLabel =
+              kind === "pair" && i === 1
+                ? tRuntime(activeDict, "register.details.player.partnerLabel", { n: i + 1 })
+                : tRuntime(activeDict, "register.details.player.label", { n: i + 1 });
+            const name = String(propsOf(box)["aria-label"]);
+            expect.soft(name, `${locale}/${kind}/row ${i}`).toBe(`${rowLabel} — ${visibleName}`);
+            expect.soft(name.includes(yourName), `${locale}/${kind}/row ${i} says "${yourName}"`).toBe(false);
+            // Label-in-name: the visible placeholder is the box's own text, so the name a voice user says is on screen.
+            expect.soft(propsOf(box).placeholder, `${locale}/${kind}/row ${i} placeholder`).toBe(visibleName);
+            checked++;
+          });
+        }
+      }
+    } finally {
+      activeDict = EN_UI;
+    }
+    expect(checked).toBe(4 * (2 + 2 + 3 + 3));
   });
 });

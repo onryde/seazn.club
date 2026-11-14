@@ -33,6 +33,7 @@ import {
   registrationWithdrawnTemplate,
   registrationRejectedTemplate,
   registrationPromotionLapsedTemplate,
+  registrationPromotionSkippedTemplate,
   registrationJoinedTemplate,
   type RegistrationPaidArgs,
   type RegistrationApprovedArgs,
@@ -40,6 +41,7 @@ import {
   type RegistrationWithdrawnArgs,
   type RegistrationRejectedArgs,
   type RegistrationPromotionLapsedArgs,
+  type RegistrationPromotionSkippedArgs,
   type RegistrationJoinedArgs,
   disputeAlertTemplate,
   type DisputeAlertArgs,
@@ -612,6 +614,11 @@ export async function registrationRejectedEmail(args: RegistrationRejectedArgs, 
 
 export async function registrationPromotionLapsedEmail(args: RegistrationPromotionLapsedArgs, locale: Locale): Promise<EmailContent> {
   return registrationPromotionLapsedTemplate(args, await getDictionary(locale, "emails"));
+}
+
+/** Walk-fix F16: an automatic waitlist promotion passed the entry over (no Lichess link that plays); it keeps its place. */
+export async function registrationPromotionSkippedEmail(args: RegistrationPromotionSkippedArgs, locale: Locale): Promise<EmailContent> {
+  return registrationPromotionSkippedTemplate(args, await getDictionary(locale, "emails"));
 }
 
 export async function registrationJoinedEmail(args: RegistrationJoinedArgs, locale: Locale): Promise<EmailContent> {

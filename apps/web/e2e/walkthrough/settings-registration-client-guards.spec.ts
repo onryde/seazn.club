@@ -22,9 +22,9 @@ import { routes } from "../../src/lib/routes";
 
 /**
  * W7 of the settings walkthrough programme — the registration hub's config
- * panel (`/o/{org}/c/{comp}/registration`, the Settings tab's row-click
- * modal), driven for the three CLIENT-side behaviours no API-only spec can
- * see:
+ * panel (`/o/{org}/c/{comp}/registration`, a division's settings page, opened
+ * as a hub tab from the Settings tab's row — a modal until B7 T24), driven for
+ * the three CLIENT-side behaviours no API-only spec can see:
  *
  *  - case #20: the card-fee-minimum gate is real, not vacuous — it blocks the
  *    save before any network write, so the organiser learns about the problem
@@ -169,25 +169,31 @@ test.afterAll(async ({ browser }) => {
 // ---------------------------------------------------------------------------
 
 /**
- * Open a division's row-click config panel and wait past its own async GET
- * (the panel renders a loading placeholder until that resolves — querying a
- * field before it lands is an unawaited fetch, not a UI bug).
+ * Open a division's settings page (B7 T24: a hub tab — it was a dialog) and
+ * wait past its own async GET (the page renders a loading placeholder until
+ * that resolves — querying a field before it lands is an unawaited fetch, not
+ * a UI bug).
  *
- * Returns the DIALOG (`role="dialog"`, Modal's own root), not the inner
- * `[data-registration-hub-config-panel]` content div: Modal renders
- * `children` and `footer` as SIBLING divs, so `[data-action="save"]` is not a
- * descendant of the content div at all.
+ * When the page is already on screen — a reload of `?tab=division:<id>`
+ * restores it — it is used as it is; otherwise the Settings row's "Open
+ * settings" opens its tab. Returns the page's own `<section>`, which holds the
+ * fields, the banners (direct children) and the pinned Save bar.
  */
 async function openConfigPanel(page: Page, divisionId: string): Promise<Locator> {
-  const row = page.locator(`[data-registration-hub-row][data-division-id="${divisionId}"]`);
-  await expect(row).toBeVisible({ timeout: 20_000 });
-  await row.locator("[data-registration-hub-row-configure]").click();
   const content = page.locator(
-    `[data-registration-hub-config-panel][data-division-id="${divisionId}"]`,
+    `[data-registration-hub-config-panel][data-layout="page"][data-division-id="${divisionId}"]`,
   );
+  if (!(await content.isVisible())) {
+    const row = page.locator(`[data-registration-hub-row][data-division-id="${divisionId}"]`);
+    await expect(row).toBeVisible({ timeout: 20_000 });
+    await row.locator("[data-registration-hub-row-configure]").click();
+    await expect(
+      page.locator(`[data-testid="reg-hub-tab-division"][data-division-id="${divisionId}"]`),
+    ).toHaveAttribute("aria-current", "page", { timeout: 20_000 });
+  }
   await expect(content).toBeVisible({ timeout: 20_000 });
   await expect(content.locator('[data-field="category"]')).toBeVisible({ timeout: 20_000 });
-  return page.getByRole("dialog").filter({ has: content });
+  return content;
 }
 
 /**
@@ -201,6 +207,8 @@ async function openConfigPanel(page: Page, divisionId: string): Promise<Locator>
 async function openSection(panel: Locator, id: string): Promise<void> {
   const section = panel.locator(`[data-accordion-section="${id}"]`);
   await expect(section).toHaveCount(1, { timeout: 20_000 });
+  // From md up the settings page shows every section open, as a plain <section> with nothing to expand (B7 T23).
+  if ((await section.evaluate((el) => el.tagName)) !== "DETAILS") return;
   if (await section.evaluate((el) => (el as HTMLDetailsElement).open)) return;
   await section.locator("summary").click();
   await expect
@@ -222,7 +230,7 @@ function hubPath(): string {
   return routes.competitionRegistration(org.slug, comp.slug);
 }
 
-/** The row as the SERVER sees it — never the closed modal's stale local echo. */
+/** The row as the SERVER sees it — never the settings page's own local echo. */
 async function readSettings(
   request: APIRequestContext,
   divisionId: string,
@@ -271,9 +279,9 @@ test.describe("registration settings — client guards and the plan-limit race",
       // sentences, so this also fails if the message ever comes back from the
       // wire instead of the dictionary.
       await expect(fieldError).toHaveText(L.cardFeeMinimum);
-      // The panel stays open on a refused save — nothing was written, so
-      // closing it would read as a save that happened.
-      await expect(panel).toBeVisible();
+      // The edits stay on a refused save — nothing was written, so a clean
+      // bar would read as a save that happened.
+      await expect(panel.locator('[data-config-status="failed"]')).toBeVisible();
     } finally {
       await releaseDivision(request, div.id);
     }
@@ -321,10 +329,11 @@ test.describe("registration settings — client guards and the plan-limit race",
       await saveBtn.click();
       await saveBtn.click({ force: true });
 
-      // A whole save cycle ran: both halves succeeded, so `onSaved()` closed
-      // the modal. Waiting on that (rather than a bare sleep) is also what
-      // gives a second, later PUT time to show up in the count below.
-      await expect(panel).toBeHidden({ timeout: 20_000 });
+      // A whole save cycle ran: both halves succeeded, so the page's Save bar
+      // reads "All changes saved" (the page stays — it is a tab). Waiting on
+      // that (rather than a bare sleep) is also what gives a second, later PUT
+      // time to show up in the count below.
+      await expect(panel.locator('[data-config-status="clean"]')).toBeVisible({ timeout: 20_000 });
       expect(puts(), "one tap, one save cycle").toBe(1);
     } finally {
       await releaseDivision(request, div.id);
@@ -357,14 +366,14 @@ test.describe("registration settings — client guards and the plan-limit race",
       // use-registration-hub-config.ts) — i.e. the PATCH landed and the PUT
       // did not, which is precisely the half-save this case exists for.
       await expect(
-        panel.locator('[data-registration-hub-config-panel] > p[data-save-outcome="put-failed"]'),
+        panel.locator(':scope > p[data-save-outcome="put-failed"]'),
       ).toHaveCount(1, { timeout: 20_000 });
       const fieldError = panel.locator('[data-field-error="capacity"]');
       await expect(fieldError).toBeVisible();
       await expect(fieldError).toContainText(capacityOverLimitMessage(entrantLimit));
-      // A rejected save keeps the panel open — the organiser still has an
-      // unsaved capacity to fix.
-      await expect(panel).toBeVisible();
+      // A rejected save keeps the edits — the organiser still has an unsaved
+      // capacity to fix, and the bar says the save failed.
+      await expect(panel.locator('[data-config-status="failed"]')).toBeVisible();
 
       // The PATCH half genuinely landed (the point of case #23): reload, and
       // the age band is there.

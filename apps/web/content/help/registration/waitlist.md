@@ -8,15 +8,22 @@ Set a **capacity** on registration and the division can never overfill. Entry nu
 
 ## How it works
 
-- Waitlisted players get a ticket like everyone else, marked **WAITLIST**, with their live status at their reference link — including their **place in line** ("You're #2 in line").
-- The public division card shows the queue length too (*full — waitlist: 3*), so newcomers know what they're joining.
+- Waitlisted players get a reference like everyone else, marked **Waitlisted**, with their live status at their reference link — including their **place in line** ("You're #2 on the waiting list").
+- The public division card shows the queue length too (*Full · join the waiting list (3 waiting)*), so newcomers know what they're joining.
 - When a confirmed entry withdraws, the **first waitlisted entry promotes automatically** — they're notified by email, and if the division has an entry fee, payment is collected at promotion (never while waiting).
 - You can also promote manually from any waitlisted entry's row on the **Registrants** tab — filter to **Waitlisted** to see the whole queue at once.
+
+## Going back on the waitlist
+
+An entry that goes back on the waitlist joins the **back of the queue**, behind everyone already waiting — however early it first signed up:
+
+- A promoted entry that doesn't pay before its pay window closes goes back on the waitlist, and its place is offered to the next in line.
+- An entry you move to the waitlist yourself goes to the back the same way.
 
 ## Common questions
 
 **Do waitlisted players pay?** No — money is only taken when a real spot is theirs.
 
-**Can I see the queue order?** Yes — filter the **Registrants** tab to **Waitlisted** and each row shows its place in line (#1, #2, …), oldest-first; that's the automatic promotion order, and each registrant sees their own position on their status page too.
+**Can I see the queue order?** Yes — filter the **Registrants** tab to **Waitlisted** and each row shows its place in line (#1, #2, …), in the order entries joined the waitlist; that's the automatic promotion order, and each registrant sees their own position on their status page too.
 
 **Can I close the waitlist?** Closing registration stops new entries entirely; the existing queue keeps promoting on withdrawals until you withdraw the waitlisted entries too.

@@ -21,6 +21,8 @@ import {
 import { divisionTakesKind } from "@/lib/division-entrant-kinds";
 import type { RegistrationSettingsRow } from "./types";
 import { SETTINGS_COLS, loadSettings, windowOpen } from "./lookups";
+import { placesLeft } from "./places-left";
+import { CARD_PAYMENTS_UNAVAILABLE, cardPaymentsBroken } from "@/lib/registration-card-payments";
 
 // ---------------------------------------------------------------------------
 // Organiser: settings
@@ -390,7 +392,13 @@ export async function publicRegistrationInfo(
   // Task 9 resolves the last as community at read time) can still have OPEN
   // Stripe-fee divisions with Connect live. Scope by competition so an Event
   // Pass keeps THAT comp's paid intake open.
-  const paidEntitled = await hasFeature(comp.org_id, "registration.paid", comp.id);
+  //
+  // The plan's per-division entrant limit, read once for the panel with the same call submit makes before its
+  // transaction (registration redesign B3 T11): places left is counted against the cap submit enforces (./places-left).
+  const [paidEntitled, planLimit] = await Promise.all([
+    hasFeature(comp.org_id, "registration.paid", comp.id),
+    getLimit(comp.org_id, "entrants.per_division.max", comp.id),
+  ]);
 
   // T16: online play is stated only while the club is offered online chess — asked once, and only when a division
   // could play online at all (a club with no online division asks PostHog nothing).
@@ -400,25 +408,26 @@ export async function publicRegistrationInfo(
 
   const now = new Date();
   const divisions: PublicDivisionInfo[] = rows.map((r) => {
-    const remaining =
-      r.capacity === null ? null : Math.max(0, r.capacity - r.active);
+    const remaining = placesLeft({ capacity: r.capacity, planLimit, active: r.active });
     // A card division can't take submissions when Connect is broken OR the
     // paid entitlement is gone — closing it with an honest reason beats
     // accepting money we can't keep (spec #9, P2-10).
-    const paymentsBroken =
-      r.payment_method === "stripe" && r.fee_cents > 0 &&
-      (!comp.charges_enabled || !paidEntitled);
+    const paymentsBroken = cardPaymentsBroken(r, { charges_enabled: comp.charges_enabled, paid_entitled: paidEntitled });
     // FU1 ruling 3: a stored kind the division does not take (a row saved before the check, or Entrant kinds narrowed
     // since) never opens to the public - submit would refuse every entry. Named first: it outlasts the window and payments.
     const kindTaken = divisionTakesKind(entrantShapeOf(r).kinds, r.entrant_kind);
-    const open = kindTaken && windowOpen(r, now) && !paymentsBroken;
+    const inWindow = windowOpen(r, now);
+    const open = kindTaken && inWindow && !paymentsBroken;
+    // Walk-fix A review I1: a shut window (closed, or not open yet) outranks card payments. `payments_unavailable` is read
+    // as "registration opens once the organiser turns them on" (lib/registration-card-payments.ts), which is true only for a division the
+    // window would let in - a finished competition whose Connect charges pause must keep saying its window has closed.
     let reason: string | null = open
       ? null
       : !kindTaken
         ? "entry_kind_unavailable"
-        : paymentsBroken
-          ? "payments_unavailable"
-          : "window";
+        : !inWindow
+          ? "window"
+          : CARD_PAYMENTS_UNAVAILABLE;
     if (open && remaining === 0) reason = "full"; // still open — joins the waitlist
     return {
       division_id: r.division_id,

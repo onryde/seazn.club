@@ -6,6 +6,7 @@
 // self-eligibility once per render.
 import { useT } from "@/components/i18n/dict-provider";
 import { canAddEntry, type CartAction } from "./cart";
+import { teamEntriesInCart } from "./capacity";
 import { DivisionCard } from "./division-card";
 import { selfEligibilityForDivision } from "./eligibility-presentation";
 import { EntryCart } from "./entry-cart";
@@ -19,6 +20,7 @@ export function StepEntries({
   imPlaying,
   seasonStartYear,
   locale,
+  mixedPayment = null,
 }: {
   divisions: readonly DivisionLike[];
   cart: CartState;
@@ -27,6 +29,8 @@ export function StepEntries({
   imPlaying: boolean;
   seasonStartYear: number;
   locale: string;
+  /** The stepper's mixed-method refusal, worded (walk-fix B review m6) - mirrored beside the cart lines from md up. */
+  mixedPayment?: string | null;
 }) {
   const t = useT();
   const canAdd = canAddEntry(cart);
@@ -66,6 +70,7 @@ export function StepEntries({
                 locale={locale}
                 selfEligibility={selfEligibility}
                 imPlaying={imPlaying}
+                inCart={teamEntriesInCart(cart.entries, division.division_id)}
                 onAddTeam={canAdd && division.entrant_kind === "team" ? addAt("team") : undefined}
                 onAddPair={canAdd && division.entrant_kind === "pair" ? addAt("pair") : undefined}
                 onAddIndividual={canAdd && division.entrant_kind === "individual" ? addAt("individual") : undefined}
@@ -92,6 +97,7 @@ export function StepEntries({
         contact={contact}
         imPlaying={imPlaying}
         seasonStartYear={seasonStartYear}
+        mixedPayment={mixedPayment}
       />
     </div>
   );

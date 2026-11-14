@@ -43,6 +43,7 @@ const POOL_ROW: PoolSummaryPanelRow = {
   division_id: "div-1",
   division_name: "Open Singles",
   waiting: 3,
+  awaiting_payment: 0,
   free_slots: 2,
   place_by_at: "2026-10-01T12:00:00.000Z",
   href: "/o/riverside/c/summer-league/registration?tab=registrants&division_id=div-1&free_agent=1",
@@ -62,7 +63,6 @@ const BASE_PROPS = {
   orgTz: "UTC",
   filtersAction: "/o/riverside/c/summer-league/registration",
   clearHref: "/o/riverside/c/summer-league/registration?tab=registrants",
-  exportHref: "/api/v1/competitions/comp-1/registrations/export?sort=newest",
   emptyTitle: t(dict, "reg.hub.registrants.title"),
   emptyBody: t(dict, "reg.hub.registrants.body"),
   emptyCtaLabel: t(dict, "reg.hub.registrants.cta"),
@@ -90,7 +90,9 @@ describe("no registrations at all — zero rows, no active filter", () => {
 
     expect(tree.find((e) => e.type === RegistrationHubRegistrantFilters)).toBeUndefined();
     expect(tree.find((e) => e.type === RegistrationHubRegistrantTable)).toBeUndefined();
-    expect(textOf(render([], DEFAULT_FILTERS))).not.toContain(t(dict, "reg.exportCsv"));
+    // No count line either: "0 registrants" above "no one's registered yet"
+    // would be the same message twice.
+    expect(tree.find((e) => propsOf(e)["data-registration-hub-registrant-count"] !== undefined)).toBeUndefined();
   });
 
   it("is never a literal TODO placeholder", () => {
@@ -176,14 +178,69 @@ describe("rows present", () => {
   });
 });
 
-describe("CSV export link — available to a viewer (owner ruling)", () => {
-  it("renders at exportHref with the reg.exportCsv label, regardless of canEdit", () => {
+// B6 T20: Export CSV left the panel — it sits right-aligned in the hub's tab
+// strip row (spec §8), which page.tsx owns. What the panel owes now is that it
+// does NOT also render one (two links to the same file), and the result line.
+describe("the panel no longer renders Export CSV (B6 T20 — it lives in the hub tab strip)", () => {
+  // The panel takes no export prop any more, so a check that only looked at what
+  // it was GIVEN could never fail (T20 review m7: the old /export scan read a tree
+  // that had no way to contain one). The bait: hand it the very prop and href the
+  // old panel rendered from — a regression that re-added the link would then show.
+  const BAIT = { exportHref: "/api/v1/competitions/c1/registrations/export?sort=newest" };
+
+  it("renders no export link whatever the viewer's rights or the rows — even when handed an export href", () => {
+    let checked = 0;
     for (const canEdit of [true, false]) {
-      const tree = walk(RegistrationHubRegistrantsPanel({ ...BASE_PROPS, rows: [ROW], filters: DEFAULT_FILTERS, canEdit }));
-      const link = tree.find((e) => propsOf(e).href === BASE_PROPS.exportHref)!;
-      expect(link).toBeTruthy();
-      expect(textOf(link)).toBe(t(dict, "reg.exportCsv"));
+      for (const rows of [[ROW], []]) {
+        const filters = rows.length === 0 ? ACTIVE_FILTERS : DEFAULT_FILTERS;
+        const tree = walk(RegistrationHubRegistrantsPanel({ ...BASE_PROPS, ...BAIT, rows, filters, canEdit } as never));
+        // Anti-vacuity: the tree under test is the real panel, with its bar and count.
+        expect(tree.some((e) => e.type === RegistrationHubRegistrantFilters), "filter bar present").toBe(true);
+        expect(tree.some((e) => propsOf(e)["data-registration-hub-registrant-count"] !== undefined), "count line present").toBe(true);
+        expect(textOf(tree[0]!)).not.toContain(t(dict, "reg.exportCsv"));
+        const hrefs = tree.map((e) => String(propsOf(e).href ?? ""));
+        expect(hrefs.some((h) => h.includes("/export") || h.includes("/registrations/export"))).toBe(false);
+        expect(tree.some((e) => propsOf(e).download !== undefined)).toBe(false);
+        checked += 1;
+      }
     }
+    expect(checked).toBe(4);
+  });
+
+  it("the scan can see an export link: the same walk finds one in a tree that has it", () => {
+    // Negative control for the check above — a scan that cannot find a planted link proves nothing.
+    const planted = walk(<a href={BAIT.exportHref}>{t(dict, "reg.exportCsv")}</a>);
+    expect(planted.some((e) => String(propsOf(e).href ?? "").includes("/export"))).toBe(true);
+    expect(textOf(planted[0]!)).toContain(t(dict, "reg.exportCsv"));
+  });
+});
+
+describe("result line — '{n} registrants' (B6 T20)", () => {
+  function countLine(rows: RegistrationListRow[], filters: RegistrantsFilters) {
+    const tree = walk(render(rows, filters));
+    const el = tree.find((e) => propsOf(e)["data-registration-hub-registrant-count"] !== undefined);
+    return el ? textOf(el) : null;
+  }
+
+  it("says how many rows the table holds, singular for one and plural otherwise", () => {
+    const two = [ROW, { ...ROW, id: "reg-2" } as unknown as RegistrationListRow];
+    expect(countLine([ROW], DEFAULT_FILTERS)).toBe("1 registrant");
+    expect(countLine(two, DEFAULT_FILTERS)).toBe("2 registrants");
+  });
+
+  it("counts the FILTERED rows — a narrowed view says how many it kept", () => {
+    expect(countLine([ROW], ACTIVE_FILTERS)).toBe("1 registrant");
+  });
+
+  it("reads '0 registrants' when the filters matched nothing, beside the filter bar that can undo it", () => {
+    expect(countLine([], ACTIVE_FILTERS)).toBe("0 registrants");
+  });
+
+  it("uses the locale's own plural rule, not a hand-rolled === 1 (French counts 0 as singular)", async () => {
+    const fr = await getDictionary("fr", "ui");
+    const tree = walk(RegistrationHubRegistrantsPanel({ ...BASE_PROPS, dict: fr, locale: "fr", rows: [], filters: ACTIVE_FILTERS }));
+    const el = tree.find((e) => propsOf(e)["data-registration-hub-registrant-count"] !== undefined)!;
+    expect(textOf(el)).toBe("0 inscrit");
   });
 });
 
@@ -255,6 +312,38 @@ describe("pool summary banner (RS012 scope item 4)", () => {
     // Not the plural forms at count 1.
     expect(text).not.toContain(t(dict, "reg.hub.registrants.pool.waiting.other", { count: 1 }));
     expect(text).not.toContain(t(dict, "reg.hub.registrants.pool.freeSlots.other", { count: 1 }));
+  });
+
+  // Walk-fix F14: the unpaid solo sign-ups are named beside the assignable count, never inside it — and the
+  // note is absent when nobody owes money (POOL_ROW's awaiting_payment is 0).
+  it("names the unpaid solo sign-ups beside the waiting count, plural-correct in every locale, and says nothing at 0", async () => {
+    let checked = 0;
+    for (const locale of ["en", "es", "fr", "nl"] as const) {
+      const d = await getDictionary(locale, "ui");
+      for (const awaiting of [1, 2]) {
+        const row: PoolSummaryPanelRow = { ...POOL_ROW, waiting: 0, awaiting_payment: awaiting };
+        const text = textOf(
+          bannerOf(
+            walk(
+              RegistrationHubRegistrantsPanel({ ...BASE_PROPS, dict: d, locale, rows: [ROW], filters: DEFAULT_FILTERS, poolSummary: [row] }),
+            ),
+          )!,
+        );
+        const form = new Intl.PluralRules(locale).select(awaiting) === "one" ? "one" : "other";
+        expect.soft(text, `${locale}/${awaiting}`).toContain(
+          t(d, `reg.hub.registrants.pool.awaitingPayment.${form}`, { count: awaiting }),
+        );
+        checked++;
+      }
+    }
+    expect(checked).toBe(8);
+
+    const none = textOf(
+      bannerOf(walk(RegistrationHubRegistrantsPanel({ ...BASE_PROPS, rows: [ROW], filters: DEFAULT_FILTERS, poolSummary: [POOL_ROW] })))!,
+    );
+    expect(none).toContain(t(dict, "reg.hub.registrants.pool.waiting.other", { count: 3 }));
+    expect(none).not.toContain(t(dict, "reg.hub.registrants.pool.awaitingPayment.other", { count: 0 }));
+    expect(none).not.toContain(t(dict, "reg.hub.registrants.pool.awaitingPayment.one", { count: 0 }));
   });
 
   it("omits the place-by line entirely when place_by_at is null — never 'Invalid Date'", () => {

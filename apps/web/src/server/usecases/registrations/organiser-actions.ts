@@ -12,12 +12,13 @@ import type { RegistrationWithGroupRow } from "./types";
 import { loadSettings, divisionCtx, orgReg, orgRegAfter } from "./lookups";
 import { inviteUnclaimedMembers } from "./people";
 import { materialise } from "./materialise";
-import { openRegistrationSeatGateFor } from "./waitlist";
+import { openRegistrationSeatGateFor, returnToWaitlist } from "./waitlist";
 import { paymentReminderMessage, payDeadlineOf } from "./mail";
 import { issuePayLink, recordPayToken } from "./pay-token";
 import { stripeRefund, queueRefundReceipt, recordRefundFailure, registrationRefundKey } from "./refunds";
 import { withdrawCore } from "./withdraw";
 import { queueRegistrationApprovedMails, queueRegistrationPaidMail } from "./lifecycle-mail";
+import { remindersInWindowSql } from "./reminder-window";
 import { REMINDER_CAP_PER_DAY, REMINDER_LIMIT_CODE } from "@/lib/registration-reminder";
 import { entryPriceCents, ownPaymentRefundedCents } from "@/lib/registration-status";
 
@@ -226,13 +227,12 @@ export async function sendPaymentReminder(
     // may have edited the fee since sign-up, and the mail must not quote a price the entry will not be asked for.
     feeCents: reg.amount_cents,
     // Division override first, org-wide fallback — same resolution as the
-    // confirmation email; refCode personalises {{reference}}.
+    // confirmation email; the message fills {{reference}} with THIS entry's own reference (B5 T18).
     paymentInstructions: settings?.payment_instructions ?? ctx.payment_instructions,
     method,
     payPageUrl: link.url,
     // The entry's own pay-by moment (polish wave W4): the sweep's reminder quotes one, so the organiser's must too.
     payDeadline: payDeadlineOf(reg),
-    refCode: reg.ref_code,
   });
   // The row, its link's token and the audit entry are ONE transaction: an audit that fails queues no mail and records no token, and
   // a mail the outbox refuses leaves no "reminded" entry behind. The token's org is the entry's own (the tenant this tx runs as). The mail is then attempted at once; `sent` is whether THAT attempt was accepted. A provider that is down
@@ -240,12 +240,8 @@ export async function sendPaymentReminder(
   const id = await withTenant(auth.orgId, async (tx) => {
     // The cap: lock the entry, THEN count, so two concurrent presses at four serialise and exactly one gets the fifth.
     await tx`select 1 from registrations where id = ${reg.id} for update`;
-    const [{ n }] = await tx<{ n: number }[]>`
-      select count(*)::int as n from competition_events
-       where competition_id = ${ctx.competition_id}
-         and type = 'registration.payment_reminded'
-         and payload->>'registration_id' = ${reg.id}
-         and created_at > now() - interval '24 hours'`;
+    // The window's one predicate (reminder-window.ts): the hub row's `reminders_in_window` reads the same count to disable the button.
+    const [{ n }] = await tx<{ n: number }[]>`select ${remindersInWindowSql(tx, ctx.competition_id, reg.id)} as n`;
     if (n >= REMINDER_CAP_PER_DAY) {
       throw new HttpError(429, `This entry has had ${REMINDER_CAP_PER_DAY} reminders in the last 24 hours. Try again later.`, REMINDER_LIMIT_CODE);
     }
@@ -267,9 +263,13 @@ export async function waitlistRegistration(auth: AuthCtx, regId: string): Promis
     }
     const [div] = await tx<{ competition_id: string }[]>`
       select competition_id from divisions where id = ${reg.division_id}`;
-    await tx`
-      update registrations set status = 'waitlisted', updated_at = now()
-      where id = ${regId}`;
+    // Owner ruling (registration redesign B3 review I1): the move joins the BACK of the queue, the same as a lapse (sweep.ts) -
+    // fairness to everyone already waiting. `waitlisted_at` is the queue key (`waitlistQueueKey`); left null, the entry's own
+    // created_at would put it ahead of everyone who joined the waitlist after it signed up.
+    //
+    // B4 review m6, fix round 2: the move is the lapse's own write, `returnToWaitlist` (waitlist.ts) - the promotion taken back, the
+    // fee kept, the cart's pay-by date cleared when nothing else in it is pending.
+    await returnToWaitlist(tx, reg);
     await audit(tx, div.competition_id, auth.orgId, "registration.waitlisted", {
       registration_id: regId,
     }, auth.userId);

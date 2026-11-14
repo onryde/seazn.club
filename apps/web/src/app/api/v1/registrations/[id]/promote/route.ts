@@ -17,9 +17,11 @@ type Ctx = { params: Promise<{ id: string }> };
  *
  * `registration_id` in the body, when given, overrides which waitlisted entry
  * gets promoted (must belong to `id`'s division — promoteFromWaitlist 404s
- * otherwise); omitted, the oldest waitlisted entry in that division promotes
- * (promoteFromWaitlist's default, honouring the same order
- * promoteOldestWaitlisted's own `order by created_at, id` uses elsewhere).
+ * otherwise); omitted, the entry at the head of that division's queue
+ * promotes (promoteFromWaitlist's default: `promoteOldestWaitlisted`, which
+ * takes the queue in `waitlistQueueKey` order - `coalesce(waitlisted_at,
+ * created_at), id`, so a lapsed promotion or an organiser's move waits at the
+ * back - the same order every surface counts a place in line by).
  * Returns null when the default path finds nothing waitlisted.
  */
 export async function POST(req: Request, { params }: Ctx) {

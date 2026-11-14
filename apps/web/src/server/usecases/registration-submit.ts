@@ -18,6 +18,7 @@ import { randomBytes } from "node:crypto";
 import { sql, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { deferred } from "@/lib/deferred";
+import { settleEach, valuesInOrder } from "@/lib/settle-in-order";
 import { getLimit, requireFeature } from "@/lib/entitlements";
 import { generateRefCode } from "@/lib/ref-code";
 import { rosterDerivedName } from "@/lib/entrant-roster-name";
@@ -44,8 +45,10 @@ import {
   queueRegistrationJoinedMail,
   playerPersonConsentsByEmail,
   anyOptedOutByRegistration,
+  knownCtxOf,
   type RegistrationRow,
   type RegistrationSettingsRow,
+  type KnownCart,
 } from "./registrations";
 import { anyOptedOut, resolvePersonDisplayName } from "@/lib/name-display";
 import {
@@ -122,6 +125,12 @@ export interface SubmitGroupInput {
    *  Undefined/false both mean "not given"; the group row's
    *  media_consent_at/media_consent_version stay null either way. */
   media_consent?: boolean;
+  /** Guardian consent for minors (owner 2026-11-14, final-fix-brief Addendum 2b): the registrant says they are the parent or
+   *  guardian of the players under 18 they are entering. Ticked, every typed-in row that is not the registrant's own and whose dob
+   *  is under 18 today is consented at this submit (`'guardian'`, in the contact's name) instead of waiting on a claim; every other
+   *  row is unchanged. Ticked with no such row, by a registrant under 18, or with a blank contact name it changes nothing (never a
+   *  refusal; `guardianForMinorsName`). Undefined/false: pending as before. */
+  guardian_for_minors?: boolean;
   entries: SubmitGroupEntryInput[];
 }
 
@@ -154,6 +163,9 @@ export interface SubmitGroupResult {
    *  ruling 7: a waitlisted entry is never charged at submit). */
   amount_cents: number;
   entries: SubmitGroupEntryResult[];
+  /** The cart as committed, for the register route's mint only (registration redesign B1 T5) — the route strips it from the 201:
+   *  it carries the org's payment instructions and Connect state. */
+  known_cart: KnownCart;
 }
 
 export interface JoinTeamEntryCtx {
@@ -231,7 +243,7 @@ export interface JoinPreviewResult {
   /** What kind of entry this link joins (polish wave P3, W3): lets the join page say "this PAIR is full" only for a pair, and the
    *  generic roster-full copy for a team. */
   entrant_kind: "team" | "individual" | "pair";
-  /** Whether the entry is confirmed (final fix round G, the V7 rule): a full entry's page says its players "checked in" only then;
+  /** Whether the entry is confirmed (final fix round G, the V7 rule): a full entry's page says its players "have already joined" only then;
    *  an entry still waiting on payment or approval says its places are taken. */
   entry_confirmed: boolean;
   unclaimed_slots: JoinPreviewSlot[];
@@ -326,6 +338,13 @@ interface EntryDivisionCtx {
   org_name: string;
   org_currency: string;
   charges_enabled: boolean;
+  /** The rest of `DivisionCtx` (registration redesign B1 T5), read in the same statement so the submit can hand the register route's
+   *  mint the context it would otherwise read again (`knownCtxOf`). */
+  div_slug: string;
+  ends_on: string | null;
+  default_locale: string | null;
+  payment_instructions: string | null;
+  org_timezone: string | null;
   sport_key: string;
   config: unknown;
   /** FU1 - with sport_key and config, resolves the division's allowed entrant kinds (entrant-shape.ts). */
@@ -340,7 +359,8 @@ async function loadEntryDivisionCtx(divisionId: string): Promise<EntryDivisionCt
            d.name as division_name,
            c.slug as comp_slug, c.name as comp_name, c.visibility as comp_visibility, c.starts_on,
            o.slug as org_slug, o.name as org_name, o.currency as org_currency,
-           o.stripe_charges_enabled as charges_enabled
+           o.stripe_charges_enabled as charges_enabled,
+           d.slug as div_slug, c.ends_on, o.default_locale, o.payment_instructions, o.timezone as org_timezone
     from divisions d
     join competitions c on c.id = d.competition_id
     join organizations o on o.id = c.org_id
@@ -420,6 +440,45 @@ function sameName(a: string | null | undefined, b: string | null | undefined): b
   return norm(a) !== "" && norm(a) === norm(b);
 }
 
+/** The consent one typed-in roster row is written with at submit. The registrant's own row (or a solo sign-up's one row) is consented
+ *  here by the registrant, with their guardian named on it only when that row is a minor (`submitRegistrationGroup`'s guardian gate
+ *  demanded one; re-review m-1: an adult's own row never carries one). Any other
+ *  row waits for that player to claim it (`'pending'`, design §2 ruling 4), unless `guardianFor` names the adult registrant who
+ *  ticked `guardian_for_minors` (`guardianForMinorsName`) and the row's dob is under 18 today (`isMinor`, the gate's own threshold):
+ *  then the registrant consents for that child, as their guardian, in that name (Addendum 2b). A row with no dob is never taken for a
+ *  minor. Consent is stamped `now()` unless pending; a guardian row also carries the privacy consent it was given under (as the join
+ *  path stamps one). */
+function rowConsentAtSubmit(
+  isSelf: boolean,
+  player: SubmitGroupPlayerInput,
+  contact: SubmitGroupInput["contact"],
+  guardianFor: string | null,
+  now: Date,
+): { status: "granted" | "guardian" | "pending"; guardianName: string | null } {
+  // The contact's guardian is written only onto a self row that IS a minor (the join path's `minor ? guardian_name : null`): the hub
+  // and the CSV read guardian_name, and a name left in the contact (an adult who once typed a minor dob, an API caller) is no one's.
+  if (isSelf) return { status: "granted", guardianName: player.dob && isMinor(player.dob, now) ? (contact.guardian_name ?? null) : null };
+  if (guardianFor !== null && player.dob && isMinor(player.dob, now)) return { status: "guardian", guardianName: guardianFor };
+  return { status: "pending", guardianName: null };
+}
+
+/** Who consents, as guardian, for the typed-in minors of this submit, or null when nobody does (Addendum 2b; fix round 1, review
+ *  I-1 and m-4). Only an ADULT registrant who ticked `guardian_for_minors` can: a registrant under 18 by any date the cart holds for
+ *  them — a self-linked row's own dob (`selfDobs`), the contact's dob, or a typed-in row carrying the contact's own name (`sameName`:
+ *  that row is them) — is nobody's guardian, and a blank contact name (API only; the form requires one) names nobody. Either way the
+ *  tick is ignored, every other row stays pending, the same forgiving way as a tick with no minor: never a refusal. */
+function guardianForMinorsName(input: SubmitGroupInput, selfDobs: readonly string[], rows: readonly SubmitGroupPlayerInput[], now: Date): string | null {
+  if (input.guardian_for_minors !== true) return null;
+  const name = input.contact.name.trim();
+  if (name === "") return null;
+  const registrantDobs = [
+    ...selfDobs,
+    input.contact.dob,
+    ...rows.filter((p) => sameName(p.full_name, input.contact.name)).map((p) => p.dob),
+  ];
+  return registrantDobs.some((dob) => dob && isMinor(dob, now)) ? null : name;
+}
+
 // ---------------------------------------------------------------------------
 // submitRegistrationGroup
 // ---------------------------------------------------------------------------
@@ -445,6 +504,9 @@ interface PreparedEntry {
  *    row — it is just one more row in `players`)
  *  - guardian consent when the CONTACT is a minor registering themselves;
  *    privacy consent required, versioned
+ *  - `guardian_for_minors`: the typed-in minors who are not the registrant
+ *    are consented by the registrant as their guardian (`rowConsentAtSubmit`),
+ *    only when the registrant is an adult (`guardianForMinorsName`)
  *  - capacity: row-lock per division (`FOR UPDATE` on `registration_settings`,
  *    same row and same reason old `submitRegistration` locked it — it always
  *    exists once registration is open, unlike the possibly-empty counted
@@ -485,14 +547,21 @@ export async function submitRegistrationGroup(
 
   // Everything before the transaction - the reads that resolve the cart and the checks that refuse it - is one `pre_tx` stage
   // when the register route passes its timer (registration redesign B0), each read inside it a sub-stage. No timer: no timing.
-  const { distinctDivisionIds, first, orgId, competitionId, prepared, planLimit, seatGates } = await timed(timer, "pre_tx", async () => {
+  const { distinctDivisionIds, first, orgId, competitionId, prepared, planLimit, seatGates, leadCtx, guardianFor } = await timed(timer, "pre_tx", async () => {
     // Resolve every distinct division touched by the cart, sorted — the SAME
     // order is used below for both settings validation and lock acquisition,
     // so two concurrent carts touching an overlapping division set can never
     // deadlock against each other.
     const distinctDivisionIds = [...new Set(input.entries.map((e) => e.division_id))].sort();
-    const divisionCtxById = new Map<string, EntryDivisionCtx>();
-    for (const id of distinctDivisionIds) divisionCtxById.set(id, await timed(timer, "division_ctx", () => loadEntryDivisionCtx(id)));
+    // Every division's context and settings, read at once (registration redesign B1 T4): one batch of round trips, not two per
+    // division. The answers are then checked exactly as the serial loops checked them - every context first, then every setting,
+    // each in sorted id order - so a refused cart is told what it was always told (`settleEach`). A settings read for a division
+    // the context check then refuses is read and dropped: it changes nothing and is never shown.
+    const [ctxSettled, settingsSettled] = await Promise.all([
+      timed(timer, "division_ctx", () => settleEach(distinctDivisionIds, loadEntryDivisionCtx)),
+      timed(timer, "settings", () => settleEach(distinctDivisionIds, loadSubmitSettings)),
+    ]);
+    const divisionCtxById = valuesInOrder(ctxSettled);
 
     const first = divisionCtxById.get(distinctDivisionIds[0]!)!;
     for (const dc of divisionCtxById.values()) {
@@ -514,8 +583,10 @@ export async function submitRegistrationGroup(
     const seasonYear = seasonStartYearFrom(first.starts_on);
 
     const settingsById = new Map<string, SubmitSettingsRow>();
-    for (const id of distinctDivisionIds) {
-      const s = await timed(timer, "settings", () => loadSubmitSettings(id));
+    // One division at a time, as the serial loop went: its read's own failure, then its window, before the next division's.
+    for (const [id, read] of settingsSettled) {
+      if (read.status === "rejected") throw read.reason;
+      const s = read.value;
       if (!s || !windowOpen(s, now)) throw new HttpError(422, "Registration is not open for this division");
       settingsById.set(id, s);
     }
@@ -626,11 +697,15 @@ export async function submitRegistrationGroup(
       // (registrations/settings.ts publicRegistrationInfo) asked when it told this registrant a link is needed — so the notice
       // and this demand cannot disagree. The person is still the one whose link is checked.
       if (divisionPlaysOnline(divCtx) && (await timed(timer, "online", () => onlineChessOffered({ orgId: divCtx.org_id, userId: null })))) {
+        // Walk-fix F3: an online entry is personal - the seat gate seats the account that registered - so an entry made for
+        // SOMEONE ELSE is refused as that, with its own code, whatever the caller's own link: telling a linked player to link
+        // Lichess (the old LICHESS_LINK_REQUIRED here) was a remedy that changed nothing. The client says it in the visitor's
+        // language off the code (register-stepper.tsx), never this English.
         if (!entry.registering_self) {
           throw new HttpError(
             422,
-            "Sign in and link your Lichess account to register for online play",
-            "LICHESS_LINK_REQUIRED",
+            "Online chess entries are personal: tick \"I'm one of the players\", or ask the player to register with their own account",
+            "LICHESS_SELF_ENTRY_REQUIRED",
           );
         }
         await timed(timer, "online", () => assertUserHasLichessForOnlinePlay(ctx.sessionUserId ?? null));
@@ -665,17 +740,20 @@ export async function submitRegistrationGroup(
     // the tree fails without this check today).
     if (!input.privacy_consent) throw new HttpError(422, "Please agree to the privacy policy to register");
 
-    // Card-payment entitlement gate, mirrors old submitRegistration exactly.
-    for (const s of settingsById.values()) {
-      if (s.fee_cents > 0 && s.payment_method === "stripe") {
-        if (!first.charges_enabled) {
-          throw new HttpError(
-            503,
-            "Card payments are temporarily unavailable for this event — try again shortly or contact the organiser",
-          );
-        }
-        await timed(timer, "entitlements", () => requireFeature(orgId, "registration.paid", competitionId));
+    // Addendum 2b: the adult registrant's name when they consent for the typed-in minors, else null (a minor registrant is nobody's guardian).
+    const guardianFor = guardianForMinorsName(input, selfDobs, prepared.flatMap((p) => p.players), now);
+
+    // Card-payment entitlement gate, mirrors old submitRegistration exactly - asked ONCE per submit (registration redesign B1 T4):
+    // both questions are about the org and the competition, never the division, so the per-division loop asked the same thing
+    // again for every paid card division. Same order as before: Connect first (503), then the plan (402).
+    if ([...settingsById.values()].some((s) => s.fee_cents > 0 && s.payment_method === "stripe")) {
+      if (!first.charges_enabled) {
+        throw new HttpError(
+          503,
+          "Card payments are temporarily unavailable for this event — try again shortly or contact the organiser",
+        );
       }
+      await timed(timer, "entitlements", () => requireFeature(orgId, "registration.paid", competitionId));
     }
 
     // Plan cap resolved OUTSIDE the transaction on purpose (lib/entitlements.ts
@@ -689,13 +767,19 @@ export async function submitRegistrationGroup(
     // The online-play SEAT GATE (online-seat-gate.ts) for every online division in the cart, opened out here for the same reason as the plan cap:
     // its flag question is a remote call and its probes run on the pooled `sql`. It asks about the people the inline confirm below SEATS - the
     // submitter was asked above, by their own session link, and a teammate the captain typed in has no account to be asked about.
-    const seatGates = new Map<string, RegistrationSeatGate>();
-    for (const id of distinctDivisionIds) {
-      if (divisionPlaysOnline(divisionCtxById.get(id)!)) {
-        seatGates.set(id, await timed(timer, "seat_gate", () => openRegistrationSeatGate({ divisionId: id, auth: { orgId, userId: null } })));
-      }
-    }
-    return { distinctDivisionIds, first, orgId, competitionId, prepared, planLimit, seatGates };
+    // The online divisions' gates open together (registration redesign B1 T4); a gate that fails to open refuses the cart as the
+    // serial loop did, earliest division id first.
+    const onlineIds = distinctDivisionIds.filter((id) => divisionPlaysOnline(divisionCtxById.get(id)!));
+    const seatGates: Map<string, RegistrationSeatGate> =
+      onlineIds.length === 0
+        ? new Map()
+        : valuesInOrder(
+            await timed(timer, "seat_gate", () =>
+              settleEach(onlineIds, (id) => openRegistrationSeatGate({ divisionId: id, auth: { orgId, userId: null } })),
+            ),
+          );
+    const leadCtx = divisionCtxById.get(input.entries[0]!.division_id)!;
+    return { distinctDivisionIds, first, orgId, competitionId, prepared, planLimit, seatGates, leadCtx, guardianFor };
   });
 
   const secret = mintRegistrationToken();
@@ -764,7 +848,7 @@ export async function submitRegistrationGroup(
     if (!groupId) throw new HttpError(503, "could not allocate a reference — please retry");
 
     let subtotal = 0;
-    const paymentMethodsSeen = new Set<string>();
+    const paymentMethodsSeen = new Set<SubmitSettingsRow["payment_method"]>();
     const entryResults: SubmitGroupEntryResult[] = [];
     // RS008 gap (code-review fix, 2026-08-30): this cart-level auto-confirm
     // is the one materialise() convergence point that never fired the
@@ -781,6 +865,8 @@ export async function submitRegistrationGroup(
     // default, which is the TRANSACTION's start and so the same for every entry of this cart. The status page and the cart mail
     // read entries `order by r.created_at, r.id`; with one shared moment the tie fell to the random row id and a cart read back in
     // an order the person never chose. Inserted in `prepared` order (the cart's own), the moments now carry that order.
+    // The same insert order IS each entry's `cart_position`, the "-<n>" of its quoted reference: the database numbers every
+    // insert into a cart 1, 2, 3… (V519 trigger, the only writer) — never reorder this loop or insert an entry elsewhere.
     for (const p of prepared) {
       // LIVE settings (fetched under the lock above), never the pre-lock
       // `p.settings` snapshot — review MAJOR 3.
@@ -917,16 +1003,20 @@ export async function submitRegistrationGroup(
               now,
             )
           : null;
+        const consent = rowConsentAtSubmit(isSelf, player, input.contact, guardianFor, now);
+        const byGuardian = consent.status === "guardian";
         const [written] = await tx<{ id: string }[]>`
           insert into registration_players
             (registration_id, full_name, dob, gender, email, source, consent_status,
-             consent_at, guardian_name, user_id, squad_number, is_captain)
+             consent_at, guardian_name, user_id, squad_number, is_captain,
+             privacy_consent_at, privacy_consent_version)
           values (
             ${regRow.id}, ${player.full_name}, ${player.dob ?? null}, ${player.gender ?? null},
             ${player.email ?? null},
-            'captain_entered', ${isSelf ? "granted" : "pending"},
-            ${isSelf ? tx`now()` : null}, ${isSelf ? (input.contact.guardian_name ?? null) : null},
-            ${playerUserId}, ${player.squad_number ?? null}, ${player.is_captain ?? false}
+            'captain_entered', ${consent.status},
+            ${consent.status === "pending" ? null : tx`now()`}, ${consent.guardianName},
+            ${playerUserId}, ${player.squad_number ?? null}, ${player.is_captain ?? false},
+            ${byGuardian ? tx`now()` : null}, ${byGuardian ? LEGAL_VERSION : null}
           )
           returning id`;
         if (isSelf) selfPlayerId = written!.id;
@@ -1017,7 +1107,13 @@ export async function submitRegistrationGroup(
           updated_at = now()
       where id = ${groupId}`;
 
-    return { groupId: groupId!, refCode, subtotal, entryResults, autoConfirmedEntrantIds };
+    // The cart as just written, for the register route's mint (B1 T5): the method above, the payable entries in cart order.
+    const knownCart: KnownCart = {
+      paymentMethod: groupPaymentMethod,
+      payableIds: entryResults.filter((e) => e.status === "pending" && e.amount_cents > 0).map((e) => e.registration_id),
+      ctx: knownCtxOf(leadCtx),
+    };
+    return { groupId: groupId!, refCode, subtotal, entryResults, autoConfirmedEntrantIds, knownCart };
   }));
 
   // RS008 gap (code-review fix, 2026-08-30): fire-and-forget, strictly AFTER
@@ -1054,6 +1150,7 @@ export async function submitRegistrationGroup(
     currency: first.org_currency,
     amount_cents: txResult.subtotal,
     entries: txResult.entryResults,
+    known_cart: txResult.knownCart,
   };
 }
 

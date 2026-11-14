@@ -64,7 +64,7 @@ export default async function PublicOrgLayout({
       // emptied in-query otherwise); competition pages override deeper via
       // their own inline vars — the CSS cascade is the resolution chain.
       style={publicThemeStyle(org.branding)}
-      className={`${displayFont.variable} flex min-h-screen flex-col bg-canvas text-ink`}
+      className={`${displayFont.variable} group/site flex min-h-screen flex-col bg-canvas text-ink`}
     >
       {/* `<html lang>` in the org's language. The static root layout renders
           "en" for every route and only corrects it from the VISITOR's cookie;
@@ -72,7 +72,11 @@ export default async function PublicOrgLayout({
           here — after hydration, which is all a nested layout can do (the
           server HTML keeps the root's "en"; see layout-html-lang.test.tsx). */}
       <HtmlLang lang={locale} />
-      <header className="sticky top-0 z-40 bg-court text-court-ink shadow-md">
+      {/* Sticky everywhere, except on a phone while the register form is up (B2 T8, spec §7.2): there the sticky bar at the bottom needs
+          the room, and a registrant is filling a form, not navigating. `max-md:group-has-[[data-register-flow]]/site:static` reads "below md,
+          when the `site` group contains the stepper's `data-register-flow` marker": the status page, the hub and every other page carry no
+          marker, so their header stays pinned; md and up is untouched. */}
+      <header className="sticky top-0 z-40 bg-court text-court-ink shadow-md max-md:group-has-[[data-register-flow]]/site:static">
         <div className="mx-auto flex h-[52px] max-w-5xl items-center gap-3 px-4">
           {org.logo ? (
             // resolveLogoUrl(...) output — storage-served, covered by remotePatterns.

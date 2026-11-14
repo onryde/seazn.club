@@ -169,15 +169,17 @@ describe("register join page (RS007) — the URL entry-card.tsx already emits", 
       const html = await render({ join_code: "PAIRFULL" });
       expect(html).toContain('data-full-kind="pair"');
       expect(html).toContain("This pair is already full");
-      expect(html).toContain("Both players have already checked in.");
+      expect(html).toContain("Both players have already joined.");
+      expect(html).not.toMatch(/checked in/i);
       expect(html).not.toContain("This roster is already full");
       expect(html).not.toContain("Which one are you?");
     });
 
     // Final fix round G (the V7 rule on the join page): "Both players have already checked in" on a pair whose entry is still unpaid or
-    // unapproved claimed attendance at an entry nobody had confirmed. Only a CONFIRMED entry's full page uses check-in words; any other
-    // says the places are taken. Both kinds, both states (counted); the expected sentences are the dictionary's.
-    it("a full entry that is not confirmed says the places are TAKEN, never 'checked in'; a confirmed one keeps the check-in words (counted)", async () => {
+    // unapproved claimed attendance at an entry nobody had confirmed, so any entry but a CONFIRMED one says the places are taken. Walk-fix
+    // F10 / A fix round 1: registration has no check-in step at all, so the confirmed entry's page says its players have JOINED - no
+    // state of this page says "checked in". Both kinds, both states (counted); the expected sentences are the dictionary's.
+    it("a full entry that is not confirmed says the places are TAKEN; a confirmed one says everyone has JOINED; neither says 'checked in' (counted)", async () => {
       let checked = 0;
       for (const kind of ["pair", "team"] as const) {
         for (const confirmed of [false, true]) {
@@ -193,7 +195,7 @@ describe("register join page (RS007) — the URL entry-card.tsx already emits", 
           const want = uiEn[confirmed ? `${base}.body` : `${base}.bodyTaken`]!;
           expect(want, `premise: ${base} copy exists (${confirmed})`).toBeTruthy();
           expect(html, `${kind} confirmed=${confirmed}`).toContain(want.replace(/'/g, "&#x27;"));
-          if (!confirmed) expect(html, `${kind} unconfirmed: no check-in words`).not.toMatch(/checked in/i);
+          expect(html, `${kind} confirmed=${confirmed}: no check-in words`).not.toMatch(/checked in/i);
           checked += 1;
         }
       }

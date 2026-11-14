@@ -8,7 +8,7 @@ import { isRegistrationCurrency } from "@/lib/currency";
 import { routes } from "@/lib/routes";
 import { log } from "@/server/logger";
 import { timed, type StageTimer } from "@/server/timing";
-import type { RegistrationWithGroupRow, DivisionCtx } from "./types";
+import type { RegistrationWithGroupRow, DivisionCtx, KnownCart } from "./types";
 import { effectiveFeePercentFor, applicationFeeCents } from "./helpers";
 import { regGroupCols, loadSettings, divisionCtx, regByToken } from "./lookups";
 
@@ -172,9 +172,11 @@ export function registrationLineItems(
  *
  * Currency is validated BEFORE any Stripe call (owner ruling 4): the
  * group's snapshot must both be an allowlisted registration currency and
- * match the org's CURRENT currency (`ctx.currency`, read fresh by the
- * caller's `divisionCtx` call) — a snapshot gone stale since submit 422s
- * here, never as a Stripe-side error on a registrant's pay page.
+ * match the org's CURRENT currency (the mint's own `organizations` read,
+ * the same statement that reads the Connect account and
+ * `stripe_charges_enabled`; registration redesign B1 fix M2) — a snapshot
+ * gone stale since submit 422s here, never as a Stripe-side error on a
+ * registrant's pay page.
  *
  * Greenfield conversion (owner ruling 3): this used to key its metadata by
  * one entry alone, singular-registration-id shaped, until this session;
@@ -269,16 +271,21 @@ async function mintRegistrationCheckout(
       "REGISTRATION_CURRENCY_UNAVAILABLE",
     );
   }
-  if (firstEntry.currency !== ctx.currency) {
+  // The org's currency and Connect state come from THIS read, made at the moment of the mint, never from `ctx`: the register route's
+  // `ctx` is the submit's pre-transaction read (registration redesign B1 T5), so an org that changed its currency or lost Connect
+  // during the submit would otherwise be charged on stale facts. One statement either way: these columns ride the account-id read.
+  const [org] = await timed(opts.timer, "mint_reads", () => sql<
+    { stripe_account_id: string | null; currency: string; stripe_charges_enabled: boolean }[]
+  >`
+    select stripe_account_id, currency, stripe_charges_enabled from organizations where id = ${ctx.org_id}`);
+  if (org && firstEntry.currency !== org.currency) {
     throw new HttpError(
       422,
       "This organiser's currency has changed since this cart was created",
       "REGISTRATION_CURRENCY_UNAVAILABLE",
     );
   }
-  const [org] = await timed(opts.timer, "mint_reads", () => sql<{ stripe_account_id: string | null }[]>`
-    select stripe_account_id from organizations where id = ${ctx.org_id}`);
-  if (!org?.stripe_account_id) {
+  if (!org?.stripe_account_id || !org.stripe_charges_enabled) {
     throw new HttpError(503, "Payments are not set up for this organiser yet");
   }
   // Bound to a const because the session params are now built inside a closure
@@ -445,42 +452,50 @@ async function mintRegistrationCheckout(
 /**
  * Mints the group's checkout session right after submit, when the cart has
  * at least one payable (`pending`, `amount_cents > 0`) entry priced through
- * Stripe. Called by the public register route so `submitRegistrationGroup`
- * itself (registration-submit.ts, RS002) stays payment-agnostic — it never
- * imports Stripe. Re-reads `payment_method` and the payable entry ids
- * straight from the DB rather than trusting the caller's copy of
- * `SubmitGroupResult` (which has no `payment_method` field at all — it
- * predates this session, when the submit path had no Stripe concern to
- * expose): this keeps "should this mint, and for which entries" logic in
- * exactly one place. Returns null, never throws, for a
- * zero-payable or non-stripe cart (owner ruling 5: an all-waitlisted,
- * all-free, or offline-payment-method group mints nothing) — it only
- * throws for a genuine failure (Connect not live, currency gone stale, a
- * real Stripe error). `timer` (registration redesign B0) comes from its only
- * caller, the register route: every read here and in the mint is timed as
- * `mint_reads`, the Stripe call as `stripe`.
+ * Stripe. Called by the public register route — its only production caller —
+ * so `submitRegistrationGroup` itself (registration-submit.ts, RS002) stays
+ * payment-agnostic: it never imports Stripe. Resume (`resumeRegistrationCheckout`),
+ * the player payment page (`payFromPayPage`) and waitlist promotion (which
+ * links the payment page and mints nothing) never come through here.
+ *
+ * `known` (registration redesign B1 T5) is the cart the submit has just
+ * committed, from that one caller: the cart's `payment_method` as written,
+ * its payable entry ids in cart order, and the division context of its first
+ * entry. The submit builds it inside its transaction from the rows it wrote,
+ * with the same payable predicate this function used to read
+ * (registration-submit.ts, `known_cart`). The mint used to read those three
+ * facts back itself; B1 fix round 1 (review M1) removed that read path, which
+ * had no production caller left. `known.ctx` is the submit's PRE-transaction
+ * read, so it decides only the early 503 below; the org's currency and
+ * Connect state that the charge depends on are read fresh in the mint itself
+ * (`mintRegistrationCheckout`, B1 fix M2).
+ *
+ * Returns null, never throws, for a zero-payable or non-stripe cart (owner
+ * ruling 5: an all-waitlisted, all-free, or offline-payment-method group mints
+ * nothing) — it only throws for a genuine failure (Connect not live, currency
+ * gone stale, a real Stripe error). `timer` (registration redesign B0) comes
+ * from the route: the mint's reads are timed as `mint_reads`, the Stripe call
+ * as `stripe`.
  */
 export async function mintGroupCheckout(
   groupId: string,
   divisionId: string,
   origin: string,
   token: string,
+  known: KnownCart,
   timer?: StageTimer,
 ): Promise<string | null> {
-  const [group] = await timed(timer, "mint_reads", () => sql<{ payment_method: string | null }[]>`
-    select payment_method from registration_groups where id = ${groupId}`);
-  if (!group || group.payment_method !== "stripe") return null;
-  const payable = await timed(timer, "mint_reads", () => sql<{ id: string }[]>`
-    select id from registrations
-    where group_id = ${groupId} and status = 'pending' and amount_cents > 0
-    order by created_at`);
-  if (payable.length === 0) return null;
-  const ctx = await timed(timer, "mint_reads", () => divisionCtx(sql, divisionId));
-  if (!ctx.charges_enabled) {
+  // An assumption held as a guard: the known cart is the one for this division, never another cart's facts minted under this id.
+  if (known.ctx.id !== divisionId) {
+    throw new Error("mintGroupCheckout: the known cart's context is not the division asked for");
+  }
+  if (known.paymentMethod !== "stripe") return null;
+  if (known.payableIds.length === 0) return null;
+  if (!known.ctx.charges_enabled) {
     throw new HttpError(503, "Payments are not set up for this organiser yet");
   }
   // `createRegistrationCheckout`'s own call, made here so the timer can ride along: it lives on the internal MintOpts, not the public opts.
-  return (await mintRegistrationCheckout(groupId, payable.map((r) => r.id), ctx, origin, token, { timer })).url;
+  return (await mintRegistrationCheckout(groupId, known.payableIds, known.ctx, origin, token, { timer })).url;
 }
 
 // ---------------------------------------------------------------------------

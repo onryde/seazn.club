@@ -7,6 +7,7 @@
 // confirmed cart.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+import EN_UI from "@/dictionaries/en/ui.json";
 
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => "en" }));
 vi.mock("next/headers", () => ({
@@ -85,6 +86,7 @@ const BASE_VIEW = {
   ends_on: "2026-09-20",
   created_at: "2026-08-20T10:00:00.000Z",
   can_withdraw: false,
+  focus: null as { entry_id: string; position: number } | null,
   entries: [
     {
       id: "reg-1",
@@ -191,5 +193,102 @@ describe("/r/[ref] cart status page", () => {
     });
     const noneWithdrawable = await render("SZ-TEST-01", { token: "regtok_abc" });
     expect(noneWithdrawable).not.toContain("withdraw-stub");
+  });
+});
+
+// Walk-fix F1 (walkthrough R14): a typed entry reference (`/r/<ref>-2`, printed in the mails) rendered the same cart ticket as the
+// bare reference. Ruling: the page opens FOCUSED on that entry - the heading names it, its row comes first and open, and the other
+// entries fold under "Other entries in this registration". The copy is the dictionary's, filled here with the entry's own values.
+describe("/r/[ref] focused on the entry a typed number names (walk-fix F1)", () => {
+  const ui = EN_UI as Record<string, string>;
+  const fill = (key: string, vars: Record<string, string | number>) =>
+    Object.entries(vars).reduce((s, [k, v]) => s.split(`{${k}}`).join(String(v)), ui[key]!);
+  /** The rendered text of an element: tags out, the two entities React writes for this copy decoded. */
+  const text = (html: string) => html.replace(/<[^>]+>/g, "").replace(/&#x27;/g, "'").replace(/&amp;/g, "&");
+  const between = (html: string, open: RegExp, close: string) => {
+    const m = open.exec(html);
+    expect(m, String(open)).not.toBeNull();
+    const from = m!.index;
+    return html.slice(from, html.indexOf(close, from) + close.length);
+  };
+
+  it("the bare reference is the cart, unfocused: no entry heading, nothing folded (empty case first)", async () => {
+    usecases.publicCartByRef.mockResolvedValueOnce(BASE_VIEW);
+    const html = await render("SZ-TEST-01", {});
+    expect(html).not.toContain("<h1");
+    expect(html).not.toContain('data-testid="ref-focus-entry"');
+    expect(html).not.toContain("<details");
+    expect(html.indexOf("Alex Roberts"), "cart order").toBeLessThan(html.indexOf("Jamie Y."));
+  });
+
+  it("-2: the heading names entry 2, its row comes first and open, entry 1 folds under the other-entries line (closed)", async () => {
+    usecases.publicCartByRef.mockResolvedValueOnce({ ...BASE_VIEW, focus: { entry_id: "reg-2", position: 2 } });
+    const html = await render("SZ-TEST-01-2", {});
+    expect(usecases.publicCartByRef).toHaveBeenCalledWith("SZ-TEST-01-2", null);
+
+    const h1 = between(html, /<h1[\s>]/, "</h1>");
+    expect(text(h1)).toBe(fill("ref.focus.heading", { position: 2, name: "Jamie Y." }));
+    const focused = between(html, /data-testid="ref-focus-entry"/, "</section>");
+    expect(focused).toContain("Under 15");
+    expect(focused).toContain(h1);
+    expect(focused).not.toContain("Alex Roberts");
+
+    const others = between(html, /<details[^>]*data-testid="ref-other-entries"/, "</details>");
+    expect(others, "folded: no open attribute").not.toMatch(/<details[^>]*\sopen/);
+    expect(text(between(others, /<summary/, "</summary>"))).toBe(ui["ref.focus.others.one"]);
+    expect(others).toContain("Alex Roberts");
+    expect(others).toContain("Open");
+    expect(others).not.toContain("Jamie Y.");
+    expect(html.indexOf('data-testid="ref-focus-entry"'), "the focused entry comes first").toBeLessThan(html.indexOf("<details"));
+  });
+
+  it("-1 focuses entry 1 the same way, and two others fold under the plural line", async () => {
+    usecases.publicCartByRef.mockResolvedValueOnce({
+      ...BASE_VIEW,
+      focus: { entry_id: "reg-1", position: 1 },
+      entries: [...BASE_VIEW.entries, { id: "reg-3", status: "waitlisted" as const, display_name: "Sam Q.", division_name: "Veterans", can_withdraw: false }],
+    });
+    const html = await render("SZ-TEST-01-1", {});
+    expect(text(between(html, /<h1[\s>]/, "</h1>"))).toBe(fill("ref.focus.heading", { position: 1, name: "Alex Roberts" }));
+    const others = between(html, /<details[^>]*data-testid="ref-other-entries"/, "</details>");
+    expect(text(between(others, /<summary/, "</summary>"))).toBe(fill("ref.focus.others.other", { count: 2 }));
+    let checked = 0;
+    for (const name of ["Jamie Y.", "Sam Q."]) {
+      expect(others, name).toContain(name);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    expect(others).not.toContain("Alex Roberts");
+  });
+
+  it("a cart of one, typed -1: the entry is focused and nothing folds (no empty other-entries line)", async () => {
+    usecases.publicCartByRef.mockResolvedValueOnce({ ...BASE_VIEW, focus: { entry_id: "reg-1", position: 1 }, entries: [BASE_VIEW.entries[0]!] });
+    const html = await render("SZ-TEST-01-1", {});
+    expect(html).toContain('data-testid="ref-focus-entry"');
+    expect(html).not.toContain("<details");
+  });
+
+  it("a focus naming no entry on the page (cannot happen: the read takes it from the same rows) renders the cart, unfocused", async () => {
+    usecases.publicCartByRef.mockResolvedValueOnce({ ...BASE_VIEW, focus: { entry_id: "reg-gone", position: 2 } });
+    const html = await render("SZ-TEST-01-2", {});
+    expect(html).not.toContain("<h1");
+    expect(html).not.toContain("<details");
+    expect(html).toContain("Alex Roberts");
+    expect(html).toContain("Jamie Y.");
+  });
+
+  it("withdraw stays per entry when focused: the focused row and a folded sibling each carry their own control", async () => {
+    usecases.publicCartByRef.mockResolvedValueOnce({
+      ...BASE_VIEW,
+      can_withdraw: true,
+      focus: { entry_id: "reg-2", position: 2 },
+      entries: [
+        { ...BASE_VIEW.entries[0]!, can_withdraw: true },
+        { ...BASE_VIEW.entries[1]!, can_withdraw: true },
+      ],
+    });
+    const html = await render("SZ-TEST-01-2", { token: "regtok_abc" });
+    expect(between(html, /data-testid="ref-focus-entry"/, "</section>")).toContain('data-entry="reg-2"');
+    expect(between(html, /<details[^>]*data-testid="ref-other-entries"/, "</details>")).toContain('data-entry="reg-1"');
   });
 });

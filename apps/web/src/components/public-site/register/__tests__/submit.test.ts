@@ -11,6 +11,24 @@ import { describe, expect, it } from "vitest";
 import { buildSubmitBody, classifySubmitFailure, lichessRefusalReason, resolvePostSubmitNavigation } from "../submit";
 import { EMPTY_CART, EMPTY_CONSENT, EMPTY_CONTACT, type CartState, type ContactState } from "../types";
 
+/** One individual entry the registrant plays in themselves (self row 0, no dob of its own: the contact's applies). */
+const selfCart: CartState = {
+  entries: [
+    {
+      id: "e1",
+      division_id: "d1",
+      entrant_kind: "individual",
+      team_name: null,
+      partner_name: null,
+      free_agent: false,
+      players: [{ full_name: "Kid", dob: null, gender: null, email: "", squad_number: "", is_captain: false }],
+      answers: {},
+      registering_self: true,
+      self_player_index: 0,
+    },
+  ],
+};
+
 describe("buildSubmitBody", () => {
   it("maps contact/consent/cart onto PublicRegisterGroupRequest's wire shape, trimming name/email", () => {
     const contact: ContactState = {
@@ -67,11 +85,26 @@ describe("buildSubmitBody", () => {
   });
 
   it("carries guardian_name/guardian_consent through under contact, not as a sibling field", () => {
-    const contact: ContactState = { ...EMPTY_CONTACT, guardian_name: "Pat Guardian", guardian_consent: true };
-    const body = buildSubmitBody(contact, EMPTY_CONSENT, EMPTY_CART, "");
+    // A self-registering 10-year-old: the guardian block is on the consent step, so its name is sent.
+    const contact: ContactState = { ...EMPTY_CONTACT, name: "Kid", dob: "2016-05-01", guardian_name: "Pat Guardian", guardian_consent: true };
+    const body = buildSubmitBody(contact, EMPTY_CONSENT, selfCart, "");
     expect(body.contact.guardian_name).toBe("Pat Guardian");
     expect(body.contact.guardian_consent).toBe(true);
     expect(body).not.toHaveProperty("guardian_name");
+  });
+
+  // Guardian re-review m-1: the hub and the CSV now read the self row's guardian_name, so a name left in the contact after the
+  // guardian block hid (the dob corrected to an adult's, or no self-linked entry at all) is not sent: nobody's guardian.
+  it("sends no guardian_name when the consent step shows no guardian block (an adult, or nobody self-linked)", () => {
+    let checked = 0;
+    for (const [name, contact, cart] of [
+      ["an adult self-registrant", { ...EMPTY_CONTACT, name: "Kid", dob: "1990-01-01", guardian_name: "Leftover", guardian_consent: true }, selfCart],
+      ["a minor dob but nobody self-linked", { ...EMPTY_CONTACT, name: "Kid", dob: "2016-05-01", guardian_name: "Leftover", guardian_consent: true }, EMPTY_CART],
+    ] as const) {
+      expect(buildSubmitBody(contact, EMPTY_CONSENT, cart, "").contact.guardian_name, name).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 
   it("carries the honeypot field through untouched", () => {
@@ -214,19 +247,25 @@ describe("lichessRefusalReason", () => {
     expect(lichessRefusalReason(422, "LICHESS_RECONSENT_REQUIRED")).toBe("reconnect");
   });
 
+  // Walk-fix F3: an entry made for SOMEONE ELSE into an online division is refused with its own code (registration-submit.ts),
+  // because "link your Lichess account" was a remedy that changed nothing for a registrant who is not playing.
+  it("422 + the self-entry code is `self`, a third reason distinct from the other two", () => {
+    expect(lichessRefusalReason(422, "LICHESS_SELF_ENTRY_REQUIRED")).toBe("self");
+  });
+
   it("the code alone is not enough: every other status, and no status, is no Lichess refusal (counted)", () => {
     let checked = 0;
     for (const status of [undefined, 200, 400, 401, 403, 404, 409, 429, 500, 503]) {
-      for (const code of ["LICHESS_LINK_REQUIRED", "LICHESS_RECONSENT_REQUIRED"]) {
+      for (const code of ["LICHESS_LINK_REQUIRED", "LICHESS_RECONSENT_REQUIRED", "LICHESS_SELF_ENTRY_REQUIRED"]) {
         expect(lichessRefusalReason(status, code), `${status} + ${code}`).toBeNull();
         checked++;
       }
     }
-    expect(checked, "anti-vacuity: 10 statuses x 2 codes").toBe(20);
+    expect(checked, "anti-vacuity: 10 statuses x 3 codes").toBe(30);
   });
 
   it("422 with any other code, or none, or a near-miss spelling, is no Lichess refusal", () => {
-    for (const code of [undefined, "", "DIVISION_FULL", "lichess_link_required", "LICHESS_LINK_REQUIRED ", "LICHESS_RECONSENT"]) {
+    for (const code of [undefined, "", "DIVISION_FULL", "lichess_link_required", "LICHESS_LINK_REQUIRED ", "LICHESS_RECONSENT", "LICHESS_SELF_ENTRY"]) {
       expect(lichessRefusalReason(422, code), String(code)).toBeNull();
     }
   });

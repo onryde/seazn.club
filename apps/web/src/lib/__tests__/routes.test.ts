@@ -186,6 +186,38 @@ describe("routes", () => {
     // Two different posts: a pick must never land on the toss route, or the reverse.
     expect(routes.quickMatchCutToss("qm_abc")).not.toBe(routes.quickMatchCutPick("qm_abc"));
   });
+
+  // B7 T22 (spec 2026-11-13 §9.1): a division settings tab is
+  // `tab=division:<uuid>`, and the open division tabs ride as ONE comma list,
+  // least recently used first, read back by parseHubTabs
+  // (components/registration-hub-tabs-state.ts; its tests prove the read-back).
+  it("writes a division tab and the open list after division_id; an empty open list writes nothing", () => {
+    const a = "11111111-2222-3333-4444-555555555555";
+    const b = "66666666-7777-8888-9999-000000000000";
+    expect(routes.competitionRegistration("acme", "summer-smash", `division:${b}`, undefined, [a, b])).toBe(
+      `/o/acme/c/summer-smash/registration?tab=division:${b}&open=${a},${b}`,
+    );
+    expect(routes.competitionRegistration("acme", "summer-smash", "registrants", a, [a, b])).toBe(
+      `/o/acme/c/summer-smash/registration?tab=registrants&division_id=${a}&open=${a},${b}`,
+    );
+    expect(routes.competitionRegistration("acme", "summer-smash", undefined, undefined, [a])).toBe(
+      `/o/acme/c/summer-smash/registration?open=${a}`,
+    );
+    expect(routes.competitionRegistration("acme", "summer-smash", "settings", undefined, [])).toBe(
+      "/o/acme/c/summer-smash/registration?tab=settings",
+    );
+    // @ts-expect-error — `tab` is §9.1's grammar now, not any string.
+    routes.competitionRegistration("acme", "summer-smash", "bogus");
+  });
+
+  it("refuses an open id the comma list cannot carry (empty, or holding a comma), as hubTabsQuery does", () => {
+    expect(() => routes.competitionRegistration("acme", "summer-smash", "settings", undefined, [""])).toThrow(
+      /cannot ride in the URL's open list/,
+    );
+    expect(() => routes.competitionRegistration("acme", "summer-smash", "settings", undefined, ["x,y"])).toThrow(
+      /cannot ride in the URL's open list/,
+    );
+  });
 });
 
 describe("routes.orgSponsors (R4 S11: the Sponsors hub is top-level, not a Settings tab)", () => {

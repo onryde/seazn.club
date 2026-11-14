@@ -29,16 +29,27 @@ import type { RegistrationListRow } from "@/server/usecases/registrations";
  *  thing this panel needs that the raw row doesn't carry: the href into that
  *  division's pre-filtered Registrants table. Built by page.tsx from
  *  `division_id` + `routes.competitionRegistration`, exactly like
- *  `exportHref`/`clearHref`/`emptyCtaHref` below — this panel does not
+ *  `clearHref`/`emptyCtaHref` below — this panel does not
  *  import `routes` itself (see the panel doc comment). */
 export interface PoolSummaryPanelRow extends PoolSummaryRow {
   href: string;
 }
 
+/** True when the Registrants tab has nothing to show but its designed
+ *  "no one's registered yet" state: zero rows AND no filter narrowing them.
+ *  ONE authority for two readers (B6 T20): this panel (it renders only that
+ *  state then — no filter bar, no count) and page.tsx (the Export CSV link in
+ *  the tab strip — there is nothing to export either). Zero rows under an
+ *  active filter is NOT bare: the filter bar and Export stay, because the
+ *  organiser needs them to widen the view. */
+export function registrantsTabIsBare(rowCount: number, filters: RegistrantsFilters): boolean {
+  return rowCount === 0 && !hasActiveFilters(filters);
+}
+
 /**
  * Registration hub — Registrants tab (RS005 W2a). RS004 W2 shipped this as
  * a data-free designed placeholder; this wave replaces it with the real
- * read surface: an export link, the filter bar, and either the table or one
+ * read surface: the filter bar, and either the table or one
  * of TWO deliberately different empty states (task 5) — never the same
  * "no one's registered" copy for "your competition is empty" and "you have
  * over-filtered it", which would misinform an organiser about the former
@@ -51,7 +62,11 @@ export interface PoolSummaryPanelRow extends PoolSummaryRow {
  * still threaded to the root's `data-can-edit` attribute too, unchanged
  * from W2a.
  *
- * Every href (`filtersAction`/`clearHref`/`exportHref`/`emptyCtaHref`) is
+ * B6 T20: the Export CSV link no longer renders here — it sits right-aligned
+ * in the hub's tab strip row, which page.tsx owns (spec §8). This panel keeps
+ * the filter bar and the "{n} registrants" result line.
+ *
+ * Every href (`filtersAction`/`clearHref`/`emptyCtaHref`) is
  * pre-built by page.tsx via `routes.*`, exactly like the Settings panel's
  * `registerHref` — this component never imports `routes` itself. W2b reuses
  * `clearHref` a second time, as the table context's `baseHref`: a cart
@@ -70,7 +85,6 @@ export function RegistrationHubRegistrantsPanel({
   orgTz,
   filtersAction,
   clearHref,
-  exportHref,
   emptyTitle,
   emptyBody,
   emptyCtaLabel,
@@ -92,7 +106,6 @@ export function RegistrationHubRegistrantsPanel({
   orgTz: string;
   filtersAction: string;
   clearHref: string;
-  exportHref: string;
   emptyTitle: string;
   emptyBody: string;
   emptyCtaLabel: string;
@@ -110,12 +123,10 @@ export function RegistrationHubRegistrantsPanel({
   orgSlug: string;
   compSlug: string;
 }) {
-  const filtered = hasActiveFilters(filters);
-
   // "No registrations at all" — RS004's designed treatment, reused
   // byte-for-byte, and nothing ELSE on the tab: a filter bar or export
   // link above a "no one's registered yet" message has nothing to act on.
-  if (rows.length === 0 && !filtered) {
+  if (registrantsTabIsBare(rows.length, filters)) {
     return (
       <div data-registration-hub-registrants-panel data-can-edit={canEdit}>
         <RegistrationHubRegistrantEmpty
@@ -132,17 +143,6 @@ export function RegistrationHubRegistrantsPanel({
 
   return (
     <div data-registration-hub-registrants-panel data-can-edit={canEdit}>
-      <div className="mb-3 flex justify-end">
-        {/* A plain href, not a client fetch — this codebase's established
-            convention for every export button (documents-menu.tsx's own
-            header comment). Read-scope only (the route's own
-            requireResourceAuth(..., "read")), so this renders for a
-            viewer too (owner ruling). */}
-        <a href={exportHref} className="btn btn-ghost text-sm">
-          {t(dict, "reg.exportCsv")}
-        </a>
-      </div>
-
       {/* RS012 scope item 4 — the proactive pool banner. Rendered ONLY when
           some division actually has someone waiting (poolSummary.length),
           so a competition with nothing to act on gets no wrapper at all —
@@ -186,6 +186,10 @@ export function RegistrationHubRegistrantsPanel({
                           (registration-hub-config-panel.tsx's own header
                           comment on that different constraint). */}
                       {plural(dict, "reg.hub.registrants.pool.waiting", row.waiting, locale)}
+                      {/* Walk-fix F14: `waiting` is the people Assign can seat; the unpaid ones are named beside it, never
+                          counted in it (their rows offer Remind / Mark paid, not Assign). Absent when nobody owes money. */}
+                      {row.awaiting_payment > 0 &&
+                        ` ${plural(dict, "reg.hub.registrants.pool.awaitingPayment", row.awaiting_payment, locale)}`}
                       {" · "}
                       {plural(dict, "reg.hub.registrants.pool.freeSlots", row.free_slots, locale)}
                     </span>
@@ -215,10 +219,17 @@ export function RegistrationHubRegistrantsPanel({
         action={filtersAction}
         filters={filters}
         divisions={divisions}
-        clearHref={clearHref}
         statusOptions={RegistrationStatus.options}
         kindOptions={EntrantKind.options}
       />
+
+      {/* The result line (B6 T20): how many rows the table holds under the
+          current filters. Just the one number — "2 of 14" would need a second,
+          unfiltered count query and is not built (spec §8). `plural()` runs
+          the locale's real Intl.PluralRules, so French reads "0 inscrit". */}
+      <p data-registration-hub-registrant-count className="mb-3 text-sm text-slate-500">
+        {plural(dict, "reg.filters.count", rows.length, locale)}
+      </p>
 
       {rows.length === 0 ? (
         // "Filters matched nothing" — task 5's OTHER, deliberately different

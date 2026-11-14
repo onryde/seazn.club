@@ -79,6 +79,8 @@ export const OUTBOX_KINDS = [
   // reminder before expiry. Born on the outbox: neither ever had a direct sender.
   "quick_match_link",
   "quick_match_reminder",
+  // Walk-fix F16: an automatic waitlist promotion passed a waiting entry over (no Lichess link that plays). Literal, not transactional.
+  "registration_promotion_skipped",
 ] as const;
 export type OutboxKind = (typeof OUTBOX_KINDS)[number];
 
@@ -162,6 +164,8 @@ export const OUTBOX_KIND_FACTS: Readonly<Record<OutboxKind, { to: "account" | "l
   registration_promotion_lapsed: { to: "literal", transactional: false },
   quick_match_link: { to: "literal", transactional: false },
   quick_match_reminder: { to: "literal", transactional: false },
+  // Walk-fix F16: an automatic waitlist promotion passed a waiting entry over (no Lichess link that plays). Literal, not transactional.
+  registration_promotion_skipped: { to: "literal", transactional: false },
 };
 
 /** Mail ABOUT an account that is addressed to a literal address (phase-3 D5, wave 3): its verification and its email change. These kinds

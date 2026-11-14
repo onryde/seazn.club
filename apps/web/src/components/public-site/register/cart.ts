@@ -35,6 +35,9 @@
 // (a registrant may link themselves on more than one entry). `SET_SELF_ENTRY`
 // (cart-wide) is replaced by `SET_ENTRY_SELF` (per-entry); the old cart-level
 // `SET_SELF_PLAYER_INDEX` now carries an `id` too.
+import { formatMoneyExact } from "@/lib/currency";
+import type { TKey } from "@/lib/i18n-runtime";
+import { cartWaitlisted } from "./capacity";
 import {
   MAX_CART_ENTRIES,
   type CartEntry,
@@ -471,6 +474,17 @@ export function cartHasOtherPlayers(cart: CartState): boolean {
   });
 }
 
+/** Walk-fix A fix round 1: the CONSENT step's notice about the people the cart names, or none. "You're entering other people" is
+ *  true only when the registrant is a player somewhere in the cart (`registeringSelfAnywhere`): then every row that is not theirs is
+ *  someone else. With no self anywhere, a registrant who named THEMSELVES read it as false, so the line says each named player will
+ *  be asked, and names the box to tick if they are playing too. */
+export function rosterNoticeKey(
+  cart: CartState,
+): "register.consent.rosterNotice" | "register.consent.rosterNoticeNotPlaying" | null {
+  if (!cartHasOtherPlayers(cart)) return null;
+  return registeringSelfAnywhere(cart) ? "register.consent.rosterNotice" : "register.consent.rosterNoticeNotPlaying";
+}
+
 /** One cart line's payability, shared by `summarizeCart` below. */
 export interface CartLineSummary {
   entry: CartEntry;
@@ -484,9 +498,9 @@ export interface CartLineSummary {
    *  against live divisions, storage.ts's own doc comment). Undefined
    *  division counts as not-charged-now too (nothing to charge). */
   notChargedNow: boolean;
-  /** True specifically for the waitlist case (`closed_reason === "full"`) —
-   *  distinct from a stale-closed entry, same distinction entry-cart.tsx
-   *  already drew (fix wave finding #4) before this refactor. */
+  /** True when submit will put THIS entry on the waiting list (B3 T12): the division has no place left for it, counting the
+   *  earlier entries of the same cart in cart order (`cartWaitlisted`, capacity.ts). Never true for a solo sign-up. Distinct from
+   *  a stale-closed entry, same distinction entry-cart.tsx already drew (fix wave finding #4) before this refactor. */
   waitlisted: boolean;
   /** True for a NON-"full" closed reason (the division's window/payment
    *  method changed since this entry was added), as opposed to waitlisted. */
@@ -537,14 +551,21 @@ export function lineFeeCents(entry: { free_agent?: boolean }, division: Division
 
 export function summarizeCart(cart: CartState, divisions: readonly DivisionLike[]): CartSummary {
   const byId = new Map(divisions.map((d) => [d.division_id, d]));
+  // Who waits is decided per ENTRY, from the places each division has left and the cart's own order (B3 T12): with one place left,
+  // the first entry takes it and the second is queued, exactly as submit will do — not "every entry waits once the division reads
+  // full at page load". A stale-closed division is left out: its entries are blocked at Next (`staleClosed`), never queued.
+  const placesLeft = new Map<string, number | null>(
+    divisions.filter((d) => d.closed_reason == null || d.closed_reason === "full").map((d) => [d.division_id, d.remaining]),
+  );
+  const queued = cartWaitlisted(cart.entries, placesLeft);
   let subtotalCents = 0;
   let currency: string | null = null;
-  const lines: CartLineSummary[] = cart.entries.map((entry) => {
+  const lines: CartLineSummary[] = cart.entries.map((entry, i) => {
     const division = byId.get(entry.division_id);
-    const waitlisted = division?.closed_reason === "full";
+    const waitlisted = division != null && queued[i]!;
     const staleClosed = division != null && division.closed_reason != null && division.closed_reason !== "full";
-    const notChargedNow = division == null || division.closed_reason != null;
-    if (division && division.closed_reason == null) {
+    const notChargedNow = division == null || staleClosed || waitlisted;
+    if (division && !notChargedNow) {
       subtotalCents += lineFeeCents(entry, division);
       currency = division.currency;
     }
@@ -564,8 +585,47 @@ export function lineMethod(line: CartLineSummary): DivisionLike["payment_method"
   return lineFeeCents(line.entry, line.division) > 0 ? line.division.payment_method : null;
 }
 
+/** True when the cart is not empty and submit will put EVERY entry on the waiting list: the person is joining a queue, nothing is
+ *  charged and nothing is seated. An empty cart is never "all waiting" (`every` is true of no lines, which is why the length check
+ *  comes first). A stale-closed or unknown-division line is not waiting (it blocks Next instead), so it keeps this false. */
+export function cartIsAllWaitlisted(summary: CartSummary): boolean {
+  return summary.lines.length > 0 && summary.lines.every((l) => l.waitlisted);
+}
+
+/** Which dictionary key names Review's forward button (B3 T12, B2 review m3): what submit WILL DO, read off the same summary as the
+ *  total and the line items so the four cannot disagree. All waiting: join the waiting list (nothing is charged, nobody is seated).
+ *  Otherwise nothing charged now: the free label; a charged total: pay by card now (`pay`) or the organiser's fee (`fee`) — and the
+ *  fee it quotes is `subtotalCents`, which already leaves out every waiting entry (a mixed cart pays for what it seats). */
+export type SubmitLabelKey = "register.submit.waitlist" | "register.submit.free" | "register.submit.pay" | "register.submit.fee";
+
+export function submitLabelKey(summary: CartSummary): SubmitLabelKey {
+  if (cartIsAllWaitlisted(summary)) return "register.submit.waitlist";
+  if (summary.subtotalCents === 0 || !summary.currency) return "register.submit.free";
+  return payableDivision(summary)?.payment_method === "stripe" ? "register.submit.pay" : "register.submit.fee";
+}
+
+/** Which dictionary key heads the Review step (owner ruling 2026-11-13): "Review and pay" only when something is charged now, a plain
+ *  "Review" when nothing is (a free cart, or one whose every entry waits). Read off `submitLabelKey`, the verdict on the same summary,
+ *  so the heading and the button below it cannot disagree: the button says Pay or Enter with a fee exactly when the heading says pay. */
+export type ReviewHeadingKey = "register.review.heading" | "register.review.headingPlain";
+
+export function reviewHeadingKey(summary: CartSummary): ReviewHeadingKey {
+  const label = submitLabelKey(summary);
+  return label === "register.submit.pay" || label === "register.submit.fee" ? "register.review.heading" : "register.review.headingPlain";
+}
+
+/** What the cart's total reads, the ONE text both totals show: Review's Total and the Entries cart's Subtotal (B3 review m1). A cart
+ *  whose every entry waits reads "Nothing to pay now" (owner ruling 2026-11-13) - it used to read "Free" over a priced division whose
+ *  queue the person is joining. Otherwise nothing charged reads "Free", and a charged total its amount (the waiting entries already
+ *  left out of `subtotalCents`). `t` is handed in, as `actionBarLabels` takes it, so this stays pure and tested on the real dictionary. */
+export function cartTotalText(summary: CartSummary, t: (key: TKey) => string, locale: string): string {
+  if (cartIsAllWaitlisted(summary)) return t("register.cart.nothingToPayNow");
+  if (summary.subtotalCents === 0 || !summary.currency) return t("register.entries.free");
+  return formatMoneyExact(summary.subtotalCents, summary.currency, locale);
+}
+
 /** The division that decides the cart's payment PRESENTATION — step 5's
- *  submit button label (register.submit.card/.fee). (The review's per-entry
+ *  submit button label (register.submit.pay/.fee). (The review's per-entry
  *  method labels read `lineMethod` instead — one entry each, P4/W9.) The first line that
  *  is actually charged now (not waitlisted/stale-closed, fee > 0); every
  *  payable division in a cart shares one payment method by construction

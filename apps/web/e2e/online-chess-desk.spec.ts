@@ -1581,7 +1581,7 @@ test.describe("online chess — registration (I5)", () => {
   /** WHO → (ENTRIES) → DETAILS → CONSENT, through the real stepper. A competition with one open division skips
    *  ENTRIES (its one entry is added for the player); with several, "Add an entry" on this division's card. */
   async function toConsent(page: Page, divisionName: string, who: { name: string; email: string; playing?: boolean }): Promise<void> {
-    const next = () => page.getByRole("button", { name: /^next$/i }).click();
+    const next = () => page.getByTestId("reg-next").click();
     await page.locator("#reg-who-name").fill(who.name);
     const email = page.locator("#reg-who-email");
     if (await email.isEditable()) await email.fill(who.email);
@@ -1673,6 +1673,9 @@ test.describe("online chess — registration (I5)", () => {
     await expect(back.getByTestId("register-lichess-linked")).toHaveText(fill("settings.account.lichess.linkedAs", { username: lichessId }));
     await expect(back.getByTestId("register-lichess-start")).toHaveCount(0);
     await expect(back.getByTestId("register-lichess-flash")).toHaveCount(0);
+    // Walk-fix F7: done says done - its own title, and none of the "link now" prompt.
+    await expect(back.locator("#register-lichess-title")).toHaveText(uiEn["register.lichess.linked.title"]!);
+    await expect(back, "no Required chip").not.toContainText(uiEn["register.lichess.required"]!);
     expect(await noSidewaysScroll(p)).toBe(3);
     await shoot(p, "register-lichess-linked");
     await ctx.close();
@@ -1725,7 +1728,7 @@ test.describe("online chess — registration (I5)", () => {
 
     // Going ahead anyway: the server refuses (LICHESS_RECONSENT_REQUIRED) and the review step says RECONNECT, not link.
     await p.locator("#reg-consent-privacy").check();
-    await p.getByRole("button", { name: /^next$/i }).click();
+    await p.getByTestId("reg-next").click();
     await p.getByTestId("reg-submit").click();
     const refused = p.getByRole("alert").filter({ hasText: uiEn["register.lichessReconnectRequired"]! });
     await expect(refused).toBeVisible({ timeout: 30_000 });

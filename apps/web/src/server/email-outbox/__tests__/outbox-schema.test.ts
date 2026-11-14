@@ -48,8 +48,10 @@ const SPEC_STATUSES = [
 // `__email_outbox_registration_lifecycle.sql`, then polish wave P5's two (rejected, promotion lapsed) in
 // `V514__email_outbox_registration_rejected_lapsed.sql`, then the two quick match kinds, typed from the quick match design
 // (docs/superpowers/specs/2026-11-03-quick-match-design.md §7.6, C2): the link mail at creation and the one reminder before expiry,
-// in `V515__quick_match_lifecycle.sql`, which restates V514's list plus two and is therefore the LAST definer of the CHECK. The
-// vocabulary test compares constants.ts with it, and the live-CHECK read compares the database's constraint with it as well.
+// in `V515__quick_match_lifecycle.sql`, which restates V514's list plus two, then registration walk-fix F16's
+// `registration_promotion_skipped` in `V520__email_outbox_registration_promotion_skipped.sql`, which restates V515's list plus one
+// and is therefore the LAST definer of the CHECK. The vocabulary test compares constants.ts with it, and the live-CHECK read
+// compares the database's constraint with it as well.
 const SPEC_KINDS = [
   "magic_link", "chess_invite", "registration_confirmation", "payment_reminder", "registration_promoted",
   "refund_issued", "solo_signup_assigned",
@@ -73,6 +75,8 @@ const SPEC_KINDS = [
   "registration_rejected",
   "registration_promotion_lapsed",
   "quick_match_link", "quick_match_reminder",
+  // Walk-fix F16: an automatic promotion passed a waiting entry over (no Lichess link that plays).
+  "registration_promotion_skipped",
 ];
 
 describe("email outbox vocabularies (constants.ts)", () => {
@@ -81,11 +85,12 @@ describe("email outbox vocabularies (constants.ts)", () => {
     expect([...OUTBOX_STATUSES]).toEqual(SPEC_STATUSES);
   });
 
-  it("the kinds are the spec's fifty-one, in the spec's wave order, then sponsor deals' sponsor_deal_paid, then the registration lifecycle kinds, then the quick match design's two: sixty-one", () => {
+  it("the kinds are the spec's fifty-one, in the spec's wave order, then sponsor deals' sponsor_deal_paid, then the registration lifecycle kinds, then the quick match design's two, then walk-fix F16's one: sixty-two", () => {
     // The spec's Counts: "wave 1 has 5 kinds, wave 2 has 10, wave 3 has 8, wave 4 has 9 and wave 5 has 17, which makes 49. With
     // `magic_link` and `chess_invite` that is 51." Sponsor deals Task 23 (D13) adds one: 52. The registrant lifecycle kinds (polish
-    // waves P2 and P5) add seven: 59. The quick match design adds its link mail and its reminder (§7.6, C2): 61.
-    expect(SPEC_KINDS.length).toBe(61);
+    // waves P2 and P5) add seven: 59. The quick match design adds its link mail and its reminder (§7.6, C2): 61. Registration
+    // walk-fix F16 adds registration_promotion_skipped: 62.
+    expect(SPEC_KINDS.length).toBe(62);
     expect([...OUTBOX_KINDS]).toEqual(SPEC_KINDS);
   });
 
@@ -273,8 +278,8 @@ describe.skipIf(!HAS_DB)("email_outbox (V470)", () => {
     expect(kinds.length).toBeGreaterThan(0);
     expect(statuses).toEqual([...OUTBOX_STATUSES].sort());
     expect(kinds).toEqual([...OUTBOX_KINDS].sort());
-    // And the database's list is the typed sixty-one (V515: the spec's fifty-one, sponsor_deal_paid, the seven registrant lifecycle
-    // kinds, then the quick match design's two), read against the typed list, not only against constants.ts.
+    // And the database's list is the typed sixty-two (V520: the spec's fifty-one, sponsor_deal_paid, the seven registrant lifecycle
+    // kinds, the quick match design's two, then walk-fix F16's one), read against the typed list, not only against constants.ts.
     expect(kinds).toEqual([...SPEC_KINDS].sort());
   });
 

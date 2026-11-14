@@ -7,6 +7,7 @@
 // construction, so no manual-invoke step is needed anywhere in this file).
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { isValidElement, type ReactElement, type ReactNode } from "react";
 import { describe, expect, it } from "vitest";
 import { propsOf, textOf, walk } from "@/components/__tests__/_hook-harness";
 import {
@@ -16,6 +17,7 @@ import {
 import { RegistrationHubRegistrantJoinCode } from "@/components/registration-hub-registrant-join-code";
 import { RegistrationHubRegistrantActions } from "@/components/registration-hub-registrant-actions";
 import { getDictionary, t } from "@/lib/i18n";
+import type { Locale } from "@/lib/i18n-constants";
 import type { RegistrationListRow } from "@/server/usecases/registrations";
 import type { RegistrantRosterPlayer, RegistrantCartSibling } from "@/app/o/[orgSlug]/c/[compSlug]/registration/data";
 
@@ -45,6 +47,8 @@ function row(over: Partial<RegistrationListRow> = {}): RegistrationListRow {
     user_id: null,
     locale: null,
     ref_code: "RC-ABC123",
+    cart_position: 1,
+    cart_size: 1,
     currency: "usd",
     payment_method: "stripe",
     checkout_session_id: null,
@@ -531,5 +535,159 @@ describe("RegistrationHubRegistrantDetail — no empty Actions heading", () => {
       (e) => propsOf(e)["aria-label"] === t(dict, "reg.hub.registrants.detail.section.actions"),
     );
     expect(headings.length).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Registration redesign B5 T19 (spec §6.3): the detail shows the ENTRY's own reference, the one a bank transfer quotes, and — for a
+// cart sent with 2+ entries — the cart's, so an organiser can tie the entry to the mail the person got about the whole cart.
+// ---------------------------------------------------------------------------
+const CART = "SZ-7F3K-Q2ND";
+const hook = (tree: ReturnType<typeof walk>, attr: string) => tree.filter((e) => attr in propsOf(e));
+
+describe("RegistrationHubRegistrantDetail — the entry's reference (B5 T19)", () => {
+  it("a one-entry cart: the Entry reference row carries the cart's reference alone, and there is no Cart line", () => {
+    const tree = walk(RegistrationHubRegistrantDetail(baseProps({ row: row({ ref_code: CART, cart_position: 1, cart_size: 1 }) })));
+    const entry = hook(tree, "data-registration-hub-registrant-entry-ref");
+    expect(entry, "exactly one entry reference").toHaveLength(1);
+    expect(textOf(entry[0]!)).toBe(CART);
+    expect(hook(tree, "data-registration-hub-registrant-cart-ref"), "a cart of one has no Cart line").toHaveLength(0);
+    expect(textOf(tree)).toContain(t(dict, "reg.hub.registrants.detail.field.entryRef"));
+    expect(textOf(tree)).not.toContain(`Cart ${CART}`);
+  });
+
+  it("an entry of a 2-entry cart: its own reference with the position, and a Cart line naming the cart's", () => {
+    const tree = walk(RegistrationHubRegistrantDetail(baseProps({ row: row({ ref_code: CART, cart_position: 2, cart_size: 2 }) })));
+    expect(textOf(hook(tree, "data-registration-hub-registrant-entry-ref")[0]!)).toBe(`${CART}-2`);
+    const cart = hook(tree, "data-registration-hub-registrant-cart-ref");
+    expect(cart).toHaveLength(1);
+    expect(textOf(cart[0]!)).toBe(`Cart ${CART}`);
+  });
+
+  it("is the stored size that decides, not the entries left: the lone survivor of a 3-entry cart is still -3 and still shows the Cart line", () => {
+    // `siblings` is empty (the others are gone), exactly the case a count-based rule would read as a one-entry cart.
+    const tree = walk(
+      RegistrationHubRegistrantDetail(baseProps({ row: row({ ref_code: CART, cart_position: 3, cart_size: 3 }), siblings: [] })),
+    );
+    expect(textOf(hook(tree, "data-registration-hub-registrant-entry-ref")[0]!)).toBe(`${CART}-3`);
+    expect(textOf(hook(tree, "data-registration-hub-registrant-cart-ref")[0]!)).toBe(`Cart ${CART}`);
+  });
+
+  it("a cart with no reference shows a dash, and no Cart line whatever its size", () => {
+    const tree = walk(RegistrationHubRegistrantDetail(baseProps({ row: row({ ref_code: null, cart_position: 2, cart_size: 2 }) })));
+    expect(textOf(hook(tree, "data-registration-hub-registrant-entry-ref")[0]!)).toBe("—");
+    expect(hook(tree, "data-registration-hub-registrant-cart-ref")).toHaveLength(0);
+  });
+
+  it("the row's label and the Cart line are real copy in all four locales, with the reference slot kept", async () => {
+    const wording = new Set<string>();
+    for (const locale of ["en", "es", "fr", "nl"] as Locale[]) {
+      const d = await getDictionary(locale, "ui");
+      const label = t(d, "reg.hub.registrants.detail.field.entryRef");
+      const cartLine = t(d, "reg.hub.registrants.detail.cartRef", { ref: CART });
+      expect(label.length, locale).toBeGreaterThan(3);
+      expect(cartLine, locale).toContain(CART);
+      expect(cartLine.replace(CART, "").trim().length, `${locale}: a word besides the reference`).toBeGreaterThan(2);
+      wording.add(label).add(cartLine);
+      // Rendered in that locale, through the component.
+      const tree = walk(RegistrationHubRegistrantDetail(baseProps({ dict: d, row: row({ ref_code: CART, cart_position: 2, cart_size: 2 }) })));
+      expect(textOf(tree), locale).toContain(label);
+      expect(textOf(hook(tree, "data-registration-hub-registrant-cart-ref")[0]!), locale).toBe(cartLine);
+    }
+    expect(wording.size, "anti-vacuity: four distinct labels and four distinct Cart lines").toBe(8);
+  });
+});
+
+// Tidy round (T19 ruling, no-new-issues): a long contact email overflowed the detail card at 320. The card is `overflow-hidden`, so
+// the email was CLIPPED rather than scrolling the page: a horizontal-scroll check cannot see it. Every grid or flex item on the way
+// from the detail's root down to the email's <dd> must be allowed to shrink (`min-w-0`), and the <dd> must wrap a word that cannot fit.
+describe("RegistrationHubRegistrantDetail — a long contact email wraps inside the card (tidy)", () => {
+  const LONG_EMAIL = "alexandra.featherstonehaugh@riverside-club.test";
+
+  function pathTo(node: ReactNode, pred: (el: ReactElement) => boolean, trail: ReactElement[] = []): ReactElement[] | null {
+    if (Array.isArray(node)) {
+      for (const n of node) {
+        const p = pathTo(n, pred, trail);
+        if (p) return p;
+      }
+      return null;
+    }
+    if (!isValidElement(node)) return null;
+    const here = [...trail, node];
+    if (pred(node)) return here;
+    return pathTo((node.props as { children?: ReactNode }).children, pred, here);
+  }
+  const classOf = (el: ReactElement) => String((el.props as { className?: string }).className ?? "");
+
+  it("every grid/flex item from the root to the email's <dd> may shrink, and the <dd> breaks the word", () => {
+    expect(LONG_EMAIL.length, "premise: longer than a 320px card's text width holds").toBeGreaterThanOrEqual(35);
+    const path = pathTo(
+      RegistrationHubRegistrantDetail(baseProps({ row: row({ contact_email: LONG_EMAIL }) })),
+      (el) => el.type === "dd" && (el.props as { children?: unknown }).children === LONG_EMAIL,
+    );
+    expect(path, "the email's <dd>").not.toBeNull();
+    let checked = 0;
+    for (let i = 1; i < path!.length; i++) {
+      if (!/(^|\s)(grid|flex|inline-flex)(\s|$)/.test(classOf(path![i - 1]!))) continue;
+      expect(classOf(path![i]!), `<${String(path![i]!.type)}> inside <${String(path![i - 1]!.type)} class="${classOf(path![i - 1]!)}">`).toMatch(
+        /(^|\s)min-w-0(\s|$)/,
+      );
+      checked += 1;
+    }
+    expect(checked, "the section in the grid and the <dd> in its row").toBe(2);
+    expect(classOf(path!.at(-1)!), "the <dd> wraps a word too long for it").toMatch(/(^|\s)break-words(\s|$)/);
+  });
+});
+
+// Guardian consent for minors (owner rec, 2026-11-14): a parent now routinely consents for the children they enter, so the organiser,
+// who confirms they hold guardian consent for a youth division, sees WHO gave it on the player's row — "Consent by guardian: <name>" —
+// wherever the row carries a guardian's name: a child consented for at submit or at their own claim ('guardian'), and a registrant
+// under 18 whose own row was consented with their guardian ('granted', guardian_name set). No name, or a blank one: no line.
+describe("RegistrationHubRegistrantDetail — the guardian who consented is named (owner rec)", () => {
+  const guardianLines = (roster: RegistrantRosterPlayer[]) =>
+    walk(RegistrationHubRegistrantDetail(baseProps({ roster }))).filter(
+      (e) => propsOf(e)["data-registration-hub-registrant-guardian"] !== undefined,
+    );
+
+  it("names the guardian on each row that has one, beside that row's own chip, and on no other row", () => {
+    const roster: RegistrantRosterPlayer[] = [
+      { ...PLAYER_A, consent_status: "granted", guardian_name: null },
+      { id: "p3", full_name: "Mia Cole", squad_number: null, is_captain: false, consent_status: "guardian", guardian_name: "Pat Parent" },
+      { id: "p4", full_name: "Kai Teen", squad_number: null, is_captain: false, consent_status: "granted", guardian_name: "Mum Teen" },
+      { ...PLAYER_B, consent_status: "pending" },
+    ];
+    const tree = walk(RegistrationHubRegistrantDetail(baseProps({ roster })));
+    const rows = tree.filter((e) => propsOf(e)["data-registration-hub-registrant-roster-player"] !== undefined);
+    expect(rows, "premise: one row per player").toHaveLength(4);
+    const lineOf = (rowEl: ReactElement) =>
+      walk(rowEl).filter((e) => propsOf(e)["data-registration-hub-registrant-guardian"] !== undefined).map((e) => textOf(e));
+    expect(rows.map(lineOf)).toEqual([[], ["Consent by guardian: Pat Parent"], ["Consent by guardian: Mum Teen"], []]);
+    expect(t(dict, "reg.hub.registrants.detail.consent.guardianBy", { name: "Pat Parent" })).toBe("Consent by guardian: Pat Parent");
+  });
+
+  it("no guardian's name, a blank one, or no roster: no line (the empty case answers no)", () => {
+    let checked = 0;
+    for (const roster of [
+      [],
+      [{ ...PLAYER_A, guardian_name: null }],
+      [{ ...PLAYER_B, consent_status: "guardian" as const, guardian_name: "   " }],
+      [PLAYER_A, PLAYER_B],
+    ]) {
+      expect(guardianLines(roster)).toHaveLength(0);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("the line's words are translated in every locale and carry the name", () => {
+    let checked = 0;
+    for (const loc of ["en", "es", "fr", "nl"] as const) {
+      const raw = JSON.parse(readFileSync(join(process.cwd(), "src", "dictionaries", loc, "ui.json"), "utf8")) as Record<string, string>;
+      const words = raw["reg.hub.registrants.detail.consent.guardianBy"];
+      expect(words, loc).toBeTypeOf("string");
+      expect(words, loc).toContain("{name}");
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
 });

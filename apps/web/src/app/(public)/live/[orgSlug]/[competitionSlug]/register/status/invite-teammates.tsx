@@ -13,6 +13,17 @@
 // hook the walkthrough specs follow as the second person). scrub-secret-painters.test.ts holds the rule and finds this file because
 // the links are built here, by `joinLinkPath`.
 //
+// Layout (registration redesign B4 T16, spec 5.4). The block sits in the entry card's body, 222px wide at a 320 viewport, and that card
+// is `overflow-hidden`: anything that outgrows a row is CLIPPED, never scrolled, so the no-horizontal-scroll gate cannot see it. A row is
+// a `flex-wrap` of two groups, the person (name, then the joined / not-joined chip) and the buttons, and each group wraps in turn:
+//   - the person's group has a 12rem floor (`grow basis-48`, never `flex-1`, whose own 0% basis could outrank basis-*), so on a phone
+//     the buttons drop UNDER it rather than leaving the name ~130px wide; from a wide enough row they sit at its end;
+//   - inside it the chip drops under the name once the two no longer fit one line, and is itself `max-w-full`, so a long label wraps in
+//     its own pill instead of leaving the row;
+//   - the name wraps (`break-words`), it does not truncate: it is the one thing that tells the captain whose link a button copies;
+//   - every box from the name up to the section carries `min-w-0` (AGENTS.md: truncation and wrapping both need the whole chain).
+// The frame is the status page's own card (rounded-xl, a zinc-200 hairline) in the canvas tone, as a well inside the surface-toned entry card.
+//
 // What this does NOT say: which teammates were "already emailed an invite". Nothing mails a teammate who has not joined yet (the
 // only mail a teammate gets is the account-claim after they have), so there is nothing true to state.
 import { useId, useState, useSyncExternalStore } from "react";
@@ -28,8 +39,8 @@ const cannotShareOnServer = () => false;
 
 const BUTTON =
   "inline-flex min-h-11 items-center rounded-lg border border-zinc-200 bg-surface px-3 text-xs font-medium text-accent-strong shadow-sm transition hover:bg-accent-soft";
-const CHIP_JOINED = "shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700";
-const CHIP_WAITING = "shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700";
+const CHIP_JOINED = "max-w-full shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700";
+const CHIP_WAITING = "max-w-full shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700";
 
 /** Copy link and (where the device has a share sheet) Share, for one link. `describedBy` names whose link it is to a screen reader;
  *  `onCopied` runs once the link is really on the clipboard. When the clipboard refuses, the link is shown so it can be copied by
@@ -135,7 +146,7 @@ export function InviteTeammates({
   const pair = kind === "pair";
   const genericId = `${ids}-generic`;
   return (
-    <section data-testid="reg-invite" className="ph-no-capture min-w-0 space-y-3 rounded-lg bg-canvas p-3">
+    <section data-testid="reg-invite" className="ph-no-capture min-w-0 space-y-3 rounded-xl border border-zinc-200 bg-canvas p-3 sm:p-4">
       {/* Announced through an always-present live region (one hidden with display:none until it has text is never registered, so
           its first message would go unread); the same words are shown at the foot of the block for sighted users once there is
           something to say. First child, and out of flow (sr-only), so it adds no space to the block. */}
@@ -143,18 +154,18 @@ export function InviteTeammates({
         {announced}
       </p>
       <div className="space-y-1">
-        <h4 className="text-xs font-semibold tracking-wide text-ink-muted uppercase">
+        <h4 className="font-display text-sm font-semibold text-ink">
           {msg(pair ? "register.status.invite.headingPair" : "register.status.invite.heading")}
         </h4>
         <p className="text-xs text-ink-muted">{msg(pair ? "register.status.invite.introPair" : "register.status.invite.intro")}</p>
       </div>
       {slots.length > 0 && (
-        <ul className="divide-y divide-zinc-200">
+        <ul className="min-w-0 divide-y divide-zinc-200">
           {slots.map((slot, i) => {
             const nameId = `${ids}-slot-${i}`;
             return (
-              <li key={slot.id} data-invite-slot className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 py-2 first:pt-0 last:pb-0">
-                <div className="flex min-w-0 flex-1 basis-32 flex-wrap items-center gap-x-2 gap-y-1">
+              <li key={slot.id} data-invite-slot className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 py-3 first:pt-0 last:pb-0">
+                <div className="flex min-w-0 grow basis-48 flex-wrap items-center gap-x-2 gap-y-1">
                   {/* Wraps rather than truncates: the name is how the captain tells whose link this is, so all of it stays visible. */}
                   <span id={nameId} className="max-w-full min-w-0 text-sm font-medium break-words text-ink">
                     {slot.name}
@@ -188,7 +199,7 @@ export function InviteTeammates({
           data-invite-generic
           className={`flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 ${slots.length > 0 ? "border-t border-zinc-300 pt-3" : ""}`}
         >
-          <p id={genericId} className="min-w-0 flex-1 basis-32 text-sm font-medium text-ink">
+          <p id={genericId} className="min-w-0 grow basis-48 text-sm font-medium text-ink">
             {msg("register.status.invite.notListed")}
           </p>
           <InviteActions
@@ -202,7 +213,7 @@ export function InviteTeammates({
         </div>
       )}
       {announced && (
-        <p aria-hidden="true" className="text-xs font-medium text-emerald-700">
+        <p aria-hidden="true" className="text-xs font-medium break-words text-emerald-700">
           {announced}
         </p>
       )}

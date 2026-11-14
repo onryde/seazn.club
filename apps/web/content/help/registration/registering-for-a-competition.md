@@ -24,11 +24,13 @@ Every registration needs one thing before it submits: agreeing that the organisa
 
 Registering also means, by default, **your name appears publicly** on the competition's pages — standings, draws, results. You can switch to showing initials instead at any time from your own player home (sign in, then **My matches & teams** — the "What's public about you" card lets you turn your name, and your photo, off public pages per club you're registered with). A youth division shows shortened names regardless of this setting, whichever is stricter always wins ([youth divisions](/help/registration/youth)).
 
-If you're entering other people — a squad, a couple of teammates — you'll see a note that each of them confirms their own details and consent separately, when they join or claim their spot, rather than you consenting on their behalf. Registering yourself under 18 adds a guardian-consent step instead: a parent or guardian's name, and their own tick, alongside yours.
+If you're entering other people — a squad, a couple of teammates — you'll see a note that each of them confirms their own details and consent separately, when they join or claim their spot. If you're the parent or guardian of players under 18 you're entering, one more box on the same step lets you say so: ticked, your consent is recorded for those children (with a date of birth under 18) and they aren't asked to confirm it; anyone else you've named still confirms for themselves. Only an adult can tick it. Registering yourself under 18 adds a guardian-consent step instead: a parent or guardian's name, and their own tick, alongside yours.
 
 ## Paying, and what happens after
 
-Review shows exactly what you're about to submit and what it costs, and the button tells you what happens next: **Enter the competition** for a free entry, **Enter — {fee}** for pay-the-organiser divisions (you'll see how to pay on the next page), or **Continue to payment** for card divisions, which takes you to a secure Stripe checkout.
+Review shows exactly what you're about to submit and what it costs, and the button tells you what happens next: **Enter the competition** for a free entry, **Enter — {fee}** for pay-the-organiser divisions (you'll see how to pay on the next page), or **Pay {fee} and enter** for card divisions, which takes you to a secure Stripe checkout.
+
+Once you press it, the button says what it's doing: **Saving your place…** while your entry is saved, then, for a card entry, **Opening secure payment…** while Stripe's checkout loads. Wait for the next page rather than pressing again; if something goes wrong the button comes back with its usual words and a note on what to do, and nothing you typed is lost.
 
 Once you're through, you land on your **registration page** — the one place to check status, pay any entry that's still due, resend your confirmation email, invite teammates onto a team entry, and withdraw. It's also linked from your confirmation email and from your ticket at [your reference number](/help/registration/reference-numbers), which is the quicker page for a day-of "what's your status" check or for showing your ticket at check-in.
 

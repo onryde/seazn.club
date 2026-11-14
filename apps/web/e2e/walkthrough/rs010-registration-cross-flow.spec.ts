@@ -147,8 +147,9 @@ test("configure, register, join, waitlist, approve, opt-out — every screen agr
   await expect(divRow, "the Settings tab never rendered a row for this division").toBeVisible({ timeout: 15_000 });
   await divRow.locator("[data-registration-hub-row-configure]").click();
 
-  const configPanel = page.locator("[data-registration-hub-config-panel]");
-  await expect(configPanel, "the row-click config panel never opened").toBeVisible({ timeout: 10_000 });
+  // B7 T24: the division's settings open as a hub tab of their own.
+  const configPanel = page.locator(`[data-registration-hub-config-panel][data-division-id="${divisionId}"]`);
+  await expect(configPanel, "the division's settings page never opened").toBeVisible({ timeout: 10_000 });
   // Every field below lives in a section that defaults OPEN (Eligibility,
   // Open & close, Capacity) — no disclosure needs expanding first.
   await configPanel.locator('select[data-field="entrant_kind"]').selectOption("team");
@@ -160,8 +161,13 @@ test("configure, register, join, waitlist, approve, opt-out — every screen agr
   await configPanel.locator('input[data-field="capacity"]').fill("1");
   await screenshotAtWidths(page, testInfo, "01-settings-configured");
   await expectNoHorizontalScroll(page);
-  await page.locator('[data-action="save"]').click();
-  await expect(configPanel, "saving the config panel never closed it").toBeHidden({ timeout: 10_000 });
+  await configPanel.locator('[data-action="save"]').click();
+  await expect(
+    configPanel.locator('[data-config-status="clean"]'),
+    "saving the division's settings never said it saved",
+  ).toBeVisible({ timeout: 10_000 });
+  // The row it changed is on the Settings tab; the settings tab stays open beside it.
+  await page.getByTestId("reg-hub-tab-settings").click();
   await expect(
     divRow.locator('[data-registration-hub-status="open"]'),
     "the division row must read OPEN once registration is enabled with no window set",
@@ -175,7 +181,7 @@ test("configure, register, join, waitlist, approve, opt-out — every screen agr
    *  (unclaimed) roster row is entered. */
   async function submitTeamEntry(
     anon: import("@playwright/test").Page,
-    opts: { name: string; email: string; team: string; extraRosterName?: string },
+    opts: { name: string; email: string; team: string; extraRosterName?: string; /** The division's Add control: "Add a team", or "Join waiting list" once it has no place left (B3 T12). */ cta?: RegExp },
   ): Promise<string> {
     await anon.goto(registerUrl, { waitUntil: "load" });
     await anon.getByRole("button", { name: /^accept$/i }).click({ timeout: 3000 }).catch(() => {});
@@ -185,12 +191,12 @@ test("configure, register, join, waitlist, approve, opt-out — every screen agr
     await anon.locator("#reg-who-email").fill(opts.email);
     await anon.getByRole("checkbox").first().check().catch(() => {});
     await anon.locator("#reg-who-dob").fill("1990-04-12").catch(() => {});
-    await anon.getByRole("button", { name: /^next$/i }).click();
+    await anon.getByTestId("reg-next").click();
 
     // step 2: ENTRIES
-    await anon.getByRole("button", { name: /add a team/i }).click();
+    await anon.getByRole("button", { name: opts.cta ?? /add a team/i }).click();
     await anon.getByLabel(/team name/i).first().fill(opts.team);
-    await anon.getByRole("button", { name: /^next$/i }).click();
+    await anon.getByTestId("reg-next").click();
 
     // step 3: DETAILS — the captain, real and complete; an optional second,
     // named-but-not-yet-claimed row (RS007's own "captain enters on behalf
@@ -199,7 +205,7 @@ test("configure, register, join, waitlist, approve, opt-out — every screen agr
     // Since polish wave V1 a playing captain's roster OPENS with their own row (named, and picked as "which player are you"), so a
     // name already on the roster is not added a second time — re-adding it would enter the captain twice.
     const roster = opts.extraRosterName ? [opts.name, opts.extraRosterName] : [opts.name];
-    const boxes = anon.getByLabel(/Player \d+ — Your name/);
+    const boxes = anon.getByLabel(/Player \d+ — Full name/);
     for (const name of roster) {
       const onRoster = await boxes.evaluateAll((els) => els.map((el) => (el as HTMLInputElement).value.trim()));
       if (onRoster.includes(name)) continue;
@@ -207,16 +213,16 @@ test("configure, register, join, waitlist, approve, opt-out — every screen agr
       await boxes.nth((await boxes.count()) - 1).fill(name);
     }
     await anon.locator('select[id^="reg-self-index"]').first().selectOption({ label: opts.name });
-    await anon.getByRole("button", { name: /^next$/i }).click();
+    await anon.getByTestId("reg-next").click();
 
     // step 4: CONSENT
     await anon.locator("#reg-consent-privacy").check();
-    await anon.getByRole("button", { name: /^next$/i }).click();
+    await anon.getByTestId("reg-next").click();
 
     // step 5: REVIEW -> submit
     const [submitResponse] = await Promise.all([
       anon.waitForResponse((r) => r.url().includes("/register") && r.request().method() === "POST"),
-      anon.getByRole("button", { name: /^enter\b/i }).last().click(),
+      anon.getByTestId("reg-submit").click(),
     ]);
     expect(submitResponse.status(), `${opts.team}'s submission was refused outright`).toBeLessThan(300);
 
@@ -316,6 +322,8 @@ test("configure, register, join, waitlist, approve, opt-out — every screen agr
       name: overflowCaptainName,
       email: overflowEmail,
       team: overflowTeamName,
+      // The division is full (capacity 1, taken): its card now offers the waiting list, not "Add a team".
+      cta: /join waiting list/i,
     });
     await expect(
       overflowPage.getByText(/waitlist/i).first(),

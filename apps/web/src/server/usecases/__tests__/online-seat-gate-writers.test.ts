@@ -561,7 +561,8 @@ describe.skipIf(!HAS_DB)("submit: the inline confirm seats the whole roster, so 
 // link. On a manual-approval division the organiser's Approve is the first time the row is seated, so the gate must read the
 // submitter's link by the cart's account - and only for the submitter's own row: not for a teammate, not for a joiner, not for a row
 // the submit left untied on purpose (a minor, a guardian's entry). Every scenario below is built by the real submit (and the real
-// join link), never by writing the rows by hand.
+// join link), never by writing the rows by hand - but for one column of one row shape the submit no longer writes and the database
+// still holds (`legacyGuardianOnNoDob`: the real submit's row, with the guardian name the old submit put on it).
 
 const withdrawLink = async (a: Account): Promise<void> => {
   await sql`delete from user_external_accounts where user_id = ${a.userId}`;
@@ -577,6 +578,27 @@ const submitterPremises = async (registrationId: string, submitter: Account): Pr
   expect(rows[0]!.cart_user, "premise: but the cart remembers who was signed in").toBe(submitter.userId);
   expect(await seatedAfterSubmit(registrationId), "premise: manual approval seats nobody at submit").toEqual({ status: "pending", people: 0 });
 };
+
+/** A submitter's own row with a guardian named on it and no date of birth: untied ON PURPOSE (registration-submitter-account.ts).
+ *  The submit stopped writing this shape (e733005b0a: a self row names its guardian only when it is a minor, so no date of birth
+ *  names none - pinned here first), but every submit before it put the contact's guardian name on the self row whatever its date of
+ *  birth (v1.0.8-beta and origin/main: `isSelf ? contact.guardian_name : null`; their client sent a name left over after the dob was
+ *  cleared), nothing clears those rows, and the gate's `guardian_name` clause is what keeps them untied. So: the real submit's row,
+ *  then the one column the old submit wrote differently, and the rest of the shape pinned unchanged - the submitter's own row in
+ *  every other respect, so the guardian name is the only thing that can keep it untied. */
+async function legacyGuardianOnNoDob(w: World, guardian: Account): Promise<string> {
+  const guardianName = "Guardian " + guardian.lichessId;
+  const regId = (await submit(w, "individual", guardian, 0, { dob: null, guardian_name: guardianName, guardian_consent: true })).entries[0]!
+    .registration_id;
+  const shape = () => sql<{ user_id: string | null; dob: string | null; guardian_name: string | null; source: string; at_submit: boolean }[]>`
+    select user_id, dob::text as dob, guardian_name, source, (consent_at = created_at) as at_submit
+      from registration_players where registration_id = ${regId}`;
+  const own = { user_id: null, dob: null, source: "captain_entered", at_submit: true };
+  expect(await shape(), "premise: today's submit names no guardian on a self row with no date of birth").toEqual([{ ...own, guardian_name: null }]);
+  await sql`update registration_players set guardian_name = ${guardianName} where registration_id = ${regId}`;
+  expect(await shape(), "premise: the old submit's row - its guardian, and otherwise the submitter's own").toEqual([{ ...own, guardian_name: guardianName }]);
+  return regId;
+}
 
 describe.skipIf(!HAS_DB)("approve: a submitter who holds a link but gave no date of birth is seated by it", () => {
   for (const kind of ["individual", "team"] as const) {
@@ -732,14 +754,10 @@ describe.skipIf(!HAS_DB)("approve: a submitter who holds a link but gave no date
     count("approve-submitter");
   });
 
-  it("a guardian named on a submitter with no date of birth is refused too: the row was untied on purpose", async () => {
+  it("a guardian named on a submitter with no date of birth (a row the old submit wrote) is refused too: the row was untied on purpose", async () => {
     const w = await world("individual", true, { approval: "manual" });
     const guardian = await account(w, "plays", false);
-    const regId = (await submit(w, "individual", guardian, 0, { dob: null, guardian_name: "Guardian " + guardian.lichessId, guardian_consent: true }))
-      .entries[0]!.registration_id;
-    const [row] = await sql<{ user_id: string | null; dob: string | null; guardian_name: string | null }[]>`
-      select user_id, dob::text as dob, guardian_name from registration_players where registration_id = ${regId}`;
-    expect(row, "premise: no date of birth, a guardian on the row, untied").toMatchObject({ user_id: null, dob: null, guardian_name: expect.any(String) });
+    const regId = await legacyGuardianOnNoDob(w, guardian);
 
     const got = await refusalOf(approveRegistration(w.auth, regId));
 
@@ -866,11 +884,10 @@ describe.skipIf(!HAS_DB)("approve: the seat ties the submitter's own person to t
     count("approve-tie");
   });
 
-  it("an entry with a guardian named and no date of birth is not tied either", async () => {
+  it("an entry with a guardian named and no date of birth (a row the old submit wrote) is not tied either", async () => {
     const w = await world("individual", true, { approval: "manual" });
     const guardian = await account(w, "plays", false);
-    const regId = (await submit(w, "individual", guardian, 0, { dob: null, guardian_name: "Guardian " + guardian.lichessId, guardian_consent: true }))
-      .entries[0]!.registration_id;
+    const regId = await legacyGuardianOnNoDob(w, guardian);
     loseTheFlag();
 
     await approveRegistration(w.auth, regId);
@@ -965,6 +982,88 @@ describe.skipIf(!HAS_DB)("submit timing: the online-play reads are timed under p
     for (const res of [onlineRes, boardRes]) {
       expect(await seatedAfterSubmit(res.entries[0]!.registration_id)).toEqual({ status: "confirmed", people: 1 });
     }
+  });
+});
+
+// Registration redesign B1 T4: the seat gates of a cart's online divisions now open TOGETHER (one batch, not one division after the
+// other). Each entry must still be asked about by its OWN division's gate: a captain's team with an unlinked teammate is refused in
+// whichever of the two online divisions it sits, and the same captain alone in both is seated in both. Not a writer scenario, so
+// it does not count toward the tally below.
+describe.skipIf(!HAS_DB)("two online divisions in one cart: every entry is asked about by its own division's seat gate", () => {
+  /** A second online division in `w`'s competition, built the same way `world` builds the first. */
+  async function secondOnlineDivision(w: World, kind: Kind): Promise<string> {
+    const division = await createDivision(w.auth, w.competitionId, {
+      name: "Online 2",
+      sport_key: "boardgame",
+      variant_key: "classical",
+      config: { variant: "classical", onlinePlay: "lichess", clock: { base: 600, increment: 5 } },
+    });
+    await putRegistrationSettings(w.auth, division.id, {
+      enabled: true,
+      entrant_kind: "individual",
+      fee_cents: 0,
+      form_fields: [],
+      opens_at: null,
+      closes_at: null,
+      capacity: null,
+      refund_lock_at: null,
+      approval: "auto",
+      allow_free_agents: false,
+    });
+    await sql`update registration_settings set entrant_kind = ${kind}, allow_free_agents = ${kind === "team"} where division_id = ${division.id}`;
+    await sql`update divisions set config = config || ${sql.json({ entrants: { kinds: [kind], defaultKind: kind } })} where id = ${division.id}`;
+    return division.id;
+  }
+
+  const teamEntry = (divisionId: string, captain: Account, mates: number): SubmitGroupEntryInput => ({
+    division_id: divisionId,
+    entrant_kind: "team",
+    team_name: "Two Gates " + randomUUID().slice(0, 6),
+    players: [
+      { full_name: "Submitter " + captain.lichessId, is_captain: true },
+      ...Array.from({ length: mates }, (_, i) => ({ full_name: `Mate ${i + 1} ${randomUUID().slice(0, 6)}` })),
+    ],
+    registering_self: true,
+    self_player_index: 0,
+    answers: {},
+  });
+
+  const submitBoth = (w: World, captain: Account, entries: SubmitGroupEntryInput[], timer?: StageTimer) =>
+    submitRegistrationGroup(
+      { orgSlug: w.orgSlug, compSlug: w.compSlug, sessionUserId: captain.userId },
+      {
+        contact: { name: "Submitter " + captain.lichessId, email: `${captain.lichessId}@t.local`, dob: ADULT },
+        privacy_consent: true,
+        entries,
+      },
+      timer,
+    );
+
+  it("an unlinked teammate is refused as LINK in EITHER online division (sorted first or second); the captain alone is seated in both", async () => {
+    const w = await world("team", true);
+    const second = await secondOnlineDivision(w, "team");
+    const [early, late] = [w.divisionId, second].sort() as [string, string];
+    const captain = await account(w, "plays", false);
+    const refusedIn: string[] = [];
+
+    for (const withMate of [early, late]) {
+      const other = withMate === early ? late : early;
+      const got = await refusalOf(submitBoth(w, captain, [teamEntry(other, captain, 0), teamEntry(withMate, captain, 1)]));
+      expect(got.status, `mate in the ${withMate === early ? "sorted-first" : "sorted-second"} division`).toBe(422);
+      expect(got.code).toBe("LICHESS_LINK_REQUIRED");
+      refusedIn.push(withMate === early ? "early" : "late");
+    }
+    expect(refusedIn, "anti-vacuity: both divisions' gates were tried").toEqual(["early", "late"]);
+    const [{ n: written }] = await sql<{ n: number }[]>`select count(*)::int as n from registrations where division_id in (${early}, ${late})`;
+    expect(written, "both refused submits rolled back whole").toBe(0);
+
+    const timer = createStageTimer();
+    const ok = await submitBoth(w, captain, [teamEntry(early, captain, 0), teamEntry(late, captain, 0)], timer);
+    expect(Object.keys(timer.durations()), "one seat_gate stage for the batch of gates").toContain("pre_tx.seat_gate");
+    for (const e of ok.entries) {
+      expect(await seatedAfterSubmit(e.registration_id)).toEqual({ status: "confirmed", people: 1 });
+    }
+    expect(ok.entries.map((e) => e.division_id).sort()).toEqual([early, late]);
   });
 });
 

@@ -81,7 +81,7 @@ const stripeMock = vi.hoisted(() => {
 vi.mock("@/lib/stripe", () => ({ getStripe: () => stripeMock.stripe }));
 
 import { resumeRegistrationCheckout, mintGroupCheckout } from "../registrations";
-import { stripeRig, seedRegistration, seedSecondEntry, loadWithGroup } from "./_registration-fixtures";
+import { stripeRig, seedRegistration, seedSecondEntry, loadWithGroup, cartAsWritten } from "./_registration-fixtures";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -181,7 +181,7 @@ describe.skipIf(!HAS_DB)(
       // Re-mint for the WHOLE cart (both pending, payable entries): every id
       // the prior session covered (A) is also covered by the new mint, so
       // nothing is stranded — the corrected predicate must expire it.
-      await mintGroupCheckout(a.registration.group_id, division.id, "http://test.local", a.access_token);
+      await mintGroupCheckout(a.registration.group_id, division.id, "http://test.local", a.access_token, await cartAsWritten(a.registration.group_id, division.id));
 
       expect(stripeMock.checkoutRetrieve).toHaveBeenCalledWith(sessionA);
       expect(stripeMock.checkoutExpire).toHaveBeenCalledWith(sessionA);
@@ -198,7 +198,7 @@ describe.skipIf(!HAS_DB)(
       const b = await seedSecondEntry(a.registration.group_id, division.id, 500, "Entry B");
 
       // Prior session covers the WHOLE cart, {A,B}.
-      await mintGroupCheckout(a.registration.group_id, division.id, "http://test.local", a.access_token);
+      await mintGroupCheckout(a.registration.group_id, division.id, "http://test.local", a.access_token, await cartAsWritten(a.registration.group_id, division.id));
       const sessionAB = (await loadWithGroup(a.registration.id)).checkout_session_id!;
       stripeMock.checkoutRetrieve.mockResolvedValue(
         openSession(sessionAB, [a.registration.id, b.id]),
@@ -241,7 +241,7 @@ describe.skipIf(!HAS_DB)(
       // Re-minted through mintGroupCheckout, which reaches this step directly. A status-page resume no longer does for a session that
       // is the entry's own: it expires that one BEFORE minting, fail-closed (polish wave final fix m8,
       // registration-pay-page-checkout.test.ts), so the supersede step finds it already expired.
-      await mintGroupCheckout(first.registration.group_id, division.id, "http://test.local", first.access_token);
+      await mintGroupCheckout(first.registration.group_id, division.id, "http://test.local", first.access_token, await cartAsWritten(first.registration.group_id, division.id));
 
       expect(stripeMock.checkoutRetrieve).toHaveBeenCalledTimes(1); // the supersede step's read
       expect(stripeMock.checkoutExpire).toHaveBeenCalledWith(firstSessionId);

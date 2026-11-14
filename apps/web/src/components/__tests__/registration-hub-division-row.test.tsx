@@ -18,6 +18,12 @@ import { CopyLink } from "@/components/copy-link";
 import { t } from "@/lib/i18n-runtime";
 import { formatMinor } from "@/lib/currency";
 import uiEn from "@/dictionaries/en/ui.json";
+import uiEs from "@/dictionaries/es/ui.json";
+import uiFr from "@/dictionaries/fr/ui.json";
+import uiNl from "@/dictionaries/nl/ui.json";
+import { compileClasses } from "@/components/v2/__tests__/_compiled-css";
+
+const DICTS = { en: uiEn, es: uiEs, fr: uiFr, nl: uiNl } as const;
 import { effectiveEntrantModel } from "@seazn/engine/sport";
 
 // FU1 — every kind the engine knows (a sport with no entrant model takes them all). Derived, never typed here.
@@ -185,7 +191,7 @@ describe("RegistrationHubDivisionRow — fee", () => {
   });
 });
 
-describe("RegistrationHubDivisionRow — Configure affordance, same contract as before", () => {
+describe("RegistrationHubDivisionRow — Open settings, same contract as the Configure button before it", () => {
   it("calls context.onOpen with THIS row's division id", () => {
     const onOpen = vi.fn();
     const tree = walk(
@@ -201,7 +207,39 @@ describe("RegistrationHubDivisionRow — Configure affordance, same contract as 
   it("gives the button an accessible name naming the division", () => {
     const tree = walk(RegistrationHubDivisionRow({ row: { ...BASE_ROW, name: "Open Doubles" }, context: BASE_CONTEXT }));
     const btn = tree.find((e) => propsOf(e)["data-registration-hub-row-configure"] !== undefined);
-    expect(propsOf(btn!)["aria-label"]).toBe(t(uiEn, "reg.hub.row.configure", { name: "Open Doubles" }));
+    expect(propsOf(btn!)["aria-label"]).toBe(t(uiEn, "reg.hub.row.openSettingsFor", { name: "Open Doubles" }));
+  });
+
+  it("says what it does in visible words, and its accessible name starts with them — in every locale (B7 T24, fix round 1 m6)", () => {
+    let checked = 0;
+    for (const [locale, dict] of Object.entries(DICTS)) {
+      const tree = walk(RegistrationHubDivisionRow({ row: { ...BASE_ROW, name: "Open Doubles" }, context: { ...BASE_CONTEXT, dict } }));
+      const btn = tree.find((e) => propsOf(e)["data-registration-hub-row-configure"] !== undefined)!;
+      const visible = t(dict, "reg.hub.row.openSettings");
+      expect(textOf(btn).trim(), locale).toBe(visible);
+      // Label in name (WCAG 2.5.3): a speech user says what they see — so the name STARTS with it, the division after.
+      const name = String(propsOf(btn)["aria-label"]);
+      expect(name.startsWith(visible), `${locale}: "${name}" starts with "${visible}"`).toBe(true);
+      expect(name, locale).toContain("Open Doubles");
+      // Still a 44px target, now a worded one.
+      expect(String(propsOf(btn).className)).toMatch(/(^|\s)min-h-11(\s|$)/);
+      checked += 1;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("the name keeps a share of a narrow line: the items after it wrap before it is squeezed to nothing (fix round 1 m5)", async () => {
+    const tree = walk(RegistrationHubDivisionRow({ row: BASE_ROW, context: BASE_CONTEXT }));
+    const heading = tree.find((e) => e.type === "h3" && textOf(e) === BASE_ROW.name)!;
+    const basis = String(propsOf(heading).className).split(/\s+/).filter((c) => /^(flex-|basis-)/.test(c));
+    expect(basis, "premise: the name carries its flex sizing").not.toHaveLength(0);
+    const compiled = await compileClasses(basis);
+    const decls = Object.assign({}, ...basis.map((c) => compiled.get(c) ?? {})) as Record<string, string>;
+    // A flex-basis of at least 8rem (128px): at 320 the capacity, fee and Open settings go to the next line instead.
+    const value = decls["flex-basis"] ?? decls.flex?.split(/\s+/)[2] ?? "";
+    const rem = value.endsWith("rem") ? Number.parseFloat(value) : Number.NaN;
+    expect(rem, `flex-basis "${value}" from ${basis.join(" ")}`).toBeGreaterThanOrEqual(8);
+    expect(String(propsOf(heading).className)).toMatch(/(^|\s)truncate(\s|$)/);
   });
 
   // RS005 W2a follow-up. Until 2026-08-25 the hub 404'd anyone who could not
@@ -538,7 +576,8 @@ describe("RegistrationHubDivisionRow — full text against a fixture, not spot-c
     const text = textOf(RegistrationHubDivisionRow({ row, context }));
 
     // Every text-bearing node the row renders, in DOM order: status pill,
-    // name, capacity, fee (the primary scan line), then window/entrant/
+    // name, capacity, fee, Open settings (the primary scan line, B7 T24 worded
+    // the button), then window/entrant/
     // approval/category/age/free-agents (the secondary line), then the
     // private notice (showRegisterLink: false above). This is text
     // ASSEMBLY, not a re-verification of each derivation's own formatting.
@@ -547,6 +586,7 @@ describe("RegistrationHubDivisionRow — full text against a fixture, not spot-c
       row.name,
       t(uiEn, "reg.hub.row.capacity.limited", { count: 5, capacity: 20 }),
       formatMinor(1999, "usd"),
+      t(uiEn, "reg.hub.row.openSettings"),
       t(uiEn, "reg.hub.row.window.none"),
       t(uiEn, "divset.entrants.kind.team"),
       t(uiEn, "reg.hub.row.approval.manual"),

@@ -130,6 +130,38 @@ export function resolveSelfPlayerIndex(
   return entry.self_player_index ?? (entry.entrant_kind === "individual" && entry.players.length === 1 ? 0 : null);
 }
 
+/**
+ * The roster row Details shows read-only as the contact's own ("That's you. Change it on the Contact step."), or `null` when no row
+ * qualifies (B2 T9). Three things must hold, because the lock is a CLAIM about that row:
+ *  - the entry is linked to the contact (`registering_self`) and is not a solo sign-up, whose row may be somebody else's
+ *    (`soloRowIsContact`, final fix m4) and has its own flow;
+ *  - the link resolves to a row (`resolveSelfPlayerIndex`: an individual's row 0, a pair's or team's pick);
+ *  - that row carries the contact's own name (trimmed). Not an assumption: `details-seed.ts` lets a row it seeded follow a rename, but
+ *    never overwrites one the registrant typed over, so a contact renamed after that leaves the typed name on the row. Locking it would
+ *    show a name that is no longer theirs with "That's you" under it, and leave the registrant no way to fix it; the row stays editable
+ *    until it matches.
+ * A blank contact name never qualifies: an empty row would otherwise "match" it.
+ */
+export function contactRowIndex(
+  entry: Pick<CartEntry, "registering_self" | "self_player_index" | "entrant_kind" | "players"> & { free_agent?: boolean },
+  contact: Pick<ContactState, "name">,
+): number | null {
+  if (!entry.registering_self || entry.free_agent) return null;
+  const name = contact.name.trim();
+  if (name === "") return null;
+  const index = resolveSelfPlayerIndex(entry);
+  if (index === null) return null;
+  const row = entry.players[index];
+  return row !== undefined && row.full_name.trim() === name ? index : null;
+}
+
+/** Two typed person names are the same name: trimmed, inner whitespace collapsed, case-insensitive; blank is never a match. Mirrors
+ *  `sameName` in registration-submit.ts (guardian consent for minors, fix round 1: a row under the contact's own name is them). */
+export function sameName(a: string, b: string): boolean {
+  const norm = (v: string) => v.trim().replace(/\s+/g, " ").toLocaleLowerCase();
+  return norm(a) !== "" && norm(a) === norm(b);
+}
+
 /** A solo sign-up's row is the contact's own while it carries their name (trimmed, spacing and case aside) or no name yet - the form
  *  seeds it from the contact. Mirrors `sameName` in registration-submit.ts. */
 export function soloRowIsContact(rowName: string, contactName: string): boolean {

@@ -6,6 +6,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { FormBuilder, type FormField } from "@/components/registration-hub-form-builder";
+import { contrastOnWhite, paletteColor } from "@/components/__tests__/_tailwind-contrast";
 
 type F = (arg: { target: { value: string } } | { target: { checked: boolean } }) => void;
 type Click = () => void;
@@ -67,7 +68,7 @@ describe("FormBuilder — adding a field", () => {
   it("appends a valid default field (never a blank label, which would block save)", () => {
     const onChange = vi.fn();
     const island = renderIsland(FormBuilder, { fields: [ALL_KINDS[0]!], canEdit: true, onChange });
-    const addBtn = island.tree().find((e) => e.type === "button" && propsOf(e).onClick && !propsOf(e).className?.toString().includes("text-red-500"));
+    const addBtn = island.tree().find((e) => e.type === "button" && propsOf(e).onClick && !propsOf(e).className?.toString().includes("text-red-700"));
     (propsOf(addBtn!).onClick as Click)();
     expect(onChange).toHaveBeenCalledTimes(1);
     const next = onChange.mock.calls[0]![0] as FormField[];
@@ -85,7 +86,7 @@ describe("FormBuilder — adding a field", () => {
       required: false,
     }));
     const island = renderIsland(FormBuilder, { fields: twelve, canEdit: true, onChange: vi.fn() });
-    const addBtn = island.tree().find((e) => e.type === "button" && !propsOf(e).className?.toString().includes("text-red-500"));
+    const addBtn = island.tree().find((e) => e.type === "button" && !propsOf(e).className?.toString().includes("text-red-700"));
     expect(addBtn).toBeUndefined();
   });
 
@@ -102,7 +103,7 @@ describe("FormBuilder — adding a field", () => {
     function clickAdd() {
       const addBtn = island
         .tree()
-        .find((e) => e.type === "button" && !propsOf(e).className?.toString().includes("text-red-500"))!;
+        .find((e) => e.type === "button" && !propsOf(e).className?.toString().includes("text-red-700"))!;
       (propsOf(addBtn).onClick as Click)();
     }
     function rerenderWithLatest(): FormField[] {
@@ -122,7 +123,7 @@ describe("FormBuilder — adding a field", () => {
     // key's own suffix (2) on the next add.
     const removeButtons = island
       .tree()
-      .filter((e) => e.type === "button" && propsOf(e).className?.toString().includes("text-red-500"));
+      .filter((e) => e.type === "button" && propsOf(e).className?.toString().includes("text-red-700"));
     (propsOf(removeButtons[0]!).onClick as Click)();
     rerenderWithLatest();
 
@@ -175,7 +176,7 @@ describe("FormBuilder — editing a field", () => {
   it("remove drops exactly that field and keeps the others in order", () => {
     const onChange = vi.fn();
     const island = renderIsland(FormBuilder, { fields: ALL_KINDS, canEdit: true, onChange });
-    const removeButtons = island.tree().filter((e) => e.type === "button" && propsOf(e).className?.toString().includes("text-red-500"));
+    const removeButtons = island.tree().filter((e) => e.type === "button" && propsOf(e).className?.toString().includes("text-red-700"));
     expect(removeButtons).toHaveLength(3);
     (propsOf(removeButtons[1]!).onClick as Click)();
     const next = onChange.mock.calls[0]![0] as FormField[];
@@ -190,9 +191,29 @@ describe("FormBuilder — read-only (canEdit false)", () => {
     const inputsAndSelects = tree.filter((e) => e.type === "input" || e.type === "select");
     expect(inputsAndSelects.length).toBeGreaterThan(0);
     for (const el of inputsAndSelects) expect(propsOf(el).disabled).toBe(true);
-    const removeButtons = tree.filter((e) => e.type === "button" && propsOf(e).className?.toString().includes("text-red-500"));
+    const removeButtons = tree.filter((e) => e.type === "button" && propsOf(e).className?.toString().includes("text-red-700"));
     expect(removeButtons).toHaveLength(0);
-    const addButtons = tree.filter((e) => e.type === "button" && !propsOf(e).className?.toString().includes("text-red-500"));
+    const addButtons = tree.filter((e) => e.type === "button" && !propsOf(e).className?.toString().includes("text-red-700"));
     expect(addButtons).toHaveLength(0);
+  });
+});
+
+// B7 T24: the settings page shows every section open from md up, so this builder is on screen from the first paint (it sat in
+// a collapsed accordion in the dialog) — and axe flagged its grey help lines at serious. Every text colour it uses, with and
+// without fields (the examples line shows only while there are none), must clear WCAG 1.4.3's 4.5:1 on the white card: all of
+// it is small text (text-xs / 11px). The ratio is the standard's; each colour is Tailwind's own palette entry for the class.
+describe("FormBuilder — every text colour is readable on the white card (WCAG 1.4.3)", () => {
+  it("each text-<colour> class it renders, empty and with fields, clears 4.5:1", () => {
+    const seen = new Set<string>();
+    for (const fields of [[], ALL_KINDS]) {
+      for (const el of renderIsland(FormBuilder, { fields, canEdit: true, onChange: vi.fn() }).tree()) {
+        for (const cls of String(propsOf(el).className ?? "").split(/\s+/)) {
+          if (/^text-[a-z]+-\d{2,3}$/.test(cls)) seen.add(cls);
+        }
+      }
+    }
+    // Anti-vacuity: the help lines' grey and the Remove link's red at least.
+    expect(seen.size).toBeGreaterThanOrEqual(2);
+    for (const cls of seen) expect(contrastOnWhite(paletteColor(cls, "text")), cls).toBeGreaterThanOrEqual(4.5);
   });
 });

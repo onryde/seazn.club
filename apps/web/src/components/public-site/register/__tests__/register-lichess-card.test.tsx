@@ -119,6 +119,39 @@ describe("RegisterLichessCard — the consent step's Lichess link (I5, canvas Re
     expect(h).not.toContain('data-testid="register-lichess-flash"');
   });
 
+  // Walk-fix F7: a linked player's card still said "Link your Lichess account · Required" and "Link Lichess now, before you
+  // enter." beside the tick, so it read as if the link were still owed. Done says done: its own title and lead, no
+  // Required chip, no link start - and the reconnect copy stays the reconnect state's alone.
+  it("linked and playing: says it is done in every locale - its own title and lead, the linked name, no Required, no link", () => {
+    const LINKED: RegisterLichessState = { configured: true, linkedUsername: "ada_okonkwo", needsReconsent: false, flash: null };
+    const KEYS = ["register.lichess.linked.title", "register.lichess.linked.lead.one", "register.lichess.linked.lead.other"] as const;
+    let checked = 0;
+    for (const loc of LOCALES) {
+      for (const k of KEYS) {
+        const v = DICTS[loc][k];
+        expect(typeof v, `${loc}: ${k}`).toBe("string");
+        if (loc !== "en") expect(v, `${loc}: ${k} is translated`).not.toBe(DICTS.en[k]);
+        expect(String(v), `${loc}: ${k} has no banned character`).not.toMatch(BANNED_RE);
+      }
+      const h = render({ state: LINKED }, loc);
+      expect(h, `${loc}: done title`).toContain(esc(s(loc, "register.lichess.linked.title")));
+      expect(h, `${loc}: done lead`).toContain(esc(s(loc, "register.lichess.linked.lead.one").replace("{divisions}", "Open Swiss")));
+      expect(h, `${loc}: linked as`).toContain(esc(s(loc, "settings.account.lichess.linkedAs").replace("{username}", "ada_okonkwo")));
+      expect(h, `${loc}: the tick row`).toContain('data-testid="register-lichess-linked"');
+      // The pair: nothing that asks for a link.
+      expect(h, `${loc}: no link title`).not.toContain(esc(s(loc, "register.lichess.title")));
+      expect(h, `${loc}: no link-now lead`).not.toContain(esc(s(loc, "register.lichess.lead.one").replace("{divisions}", "Open Swiss")));
+      expect(h, `${loc}: no Required chip`).not.toContain(`>${esc(s(loc, "register.lichess.required"))}<`);
+      expect(h, `${loc}: no start`).not.toContain('data-testid="register-lichess-start"');
+      expect(h, `${loc}: no reconnect`).not.toContain('data-testid="register-lichess-reconnect"');
+      checked++;
+    }
+    expect(checked).toBe(LOCALES.length);
+    expect(render({ divisions: ["Open Swiss", "Junior Cup"], state: LINKED })).toContain(
+      esc(s("en", "register.lichess.linked.lead.other").replace("{divisions}", "Open Swiss and Junior Cup")),
+    );
+  });
+
   it("a failed link on the way back says why, and offers the start again; an unknown flash says nothing", () => {
     const h = render({ state: { ...UNLINKED, flash: "token" } });
     expect(h).toMatch(/data-testid="register-lichess-flash"[^>]*>[^<]*/);

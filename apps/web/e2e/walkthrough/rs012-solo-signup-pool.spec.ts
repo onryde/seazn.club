@@ -394,29 +394,29 @@ test("an unplaced solo sign-up sees its own deadline, is auto-withdrawn once it 
       await anon2.locator("#reg-who-name").fill(`RS012 Solo B2 ${suffix}`);
       await anon2.locator("#reg-who-email").fill(`delivered+rs012-solo-b2-${suffix}@resend.dev`);
       await shot(anon2, "05-pool-full-who");
-      await anon2.getByRole("button", { name: /^next$/i }).click();
+      await anon2.getByTestId("reg-next").click();
 
       // step 2: ENTRIES — "Sign up solo" is the only affordance a real
       // visitor has for a free-agent entry; never construct the cart state
       // by hand.
       await anon2.getByRole("button", { name: /sign up solo/i }).click();
       await shot(anon2, "06-pool-full-entries");
-      await anon2.getByRole("button", { name: /^next$/i }).click();
+      await anon2.getByTestId("reg-next").click();
 
       // step 3: DETAILS — a free-agent entry has nothing to fill in
       // (entryDetailsComplete is unconditionally true for one), so this
       // step is a single read-only note and Next.
-      await anon2.getByRole("button", { name: /^next$/i }).click();
+      await anon2.getByTestId("reg-next").click();
 
       // step 4: CONSENT
       await anon2.locator("#reg-consent-privacy").check();
-      await anon2.getByRole("button", { name: /^next$/i }).click();
+      await anon2.getByTestId("reg-next").click();
 
       // step 5: REVIEW — submit, and watch the REAL response land.
       await shot(anon2, "07-pool-full-review");
       const [submitResponse] = await Promise.all([
         anon2.waitForResponse((r) => r.url().includes("/register") && r.request().method() === "POST"),
-        anon2.getByRole("button", { name: /^enter\b/i }).last().click(),
+        anon2.getByTestId("reg-submit").click(),
       ]);
       expect(
         submitResponse.status(),

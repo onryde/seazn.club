@@ -117,7 +117,7 @@ test.use({
 // and both defects it caught are now fixed (#11 `54b88fb9f`, #1 `af9c9021f`),
 // so a title asserting the bugs are present would read as a live failure to
 // anyone scanning a green run.
-test("RS007 witness — cancelling one of two cart entries drops the subtotal to what is still owed, and a promoted-but-unpaid sibling is never offered a refund off another entry's card", async ({
+test("RS007 witness — cancelling one of two cart entries drops the money line to what is still owed, and a promoted-but-unpaid sibling is never offered a refund off another entry's card", async ({
   page,
   browser,
   request,
@@ -223,7 +223,7 @@ test("RS007 witness — cancelling one of two cart entries drops the subtotal to
     await anon.locator("#reg-who-name").fill(CAPTAIN_NAME);
     await anon.locator("#reg-who-email").fill(CAPTAIN_EMAIL);
     await anon.screenshot({ path: `${SHOTS}/02-who.png`, fullPage: true });
-    await anon.getByRole("button", { name: /^next$/i }).click();
+    await anon.getByTestId("reg-next").click();
 
     // ---- STEP 2/BEATS 03-04 — ENTRIES: two team entries, ONE division -----
     await expect(anon.getByRole("heading", { name: "Choose your divisions", exact: true })).toBeVisible({
@@ -239,26 +239,22 @@ test("RS007 witness — cancelling one of two cart entries drops the subtotal to
     await anon.waitForTimeout(500);
     await anon.screenshot({ path: `${SHOTS}/03-entries-first-team.png`, fullPage: true });
 
-    await anon.getByRole("button", { name: "Add a team", exact: true }).first().click();
+    // The first entry took the division's one place, so the card now reads "Join waiting list" (B3 T12: the card counts the
+    // visitor's own cart against the page-load places) — the second entry is the one the server will queue.
+    await anon.getByRole("button", { name: "Join waiting list", exact: true }).first().click();
     await anon.waitForTimeout(500);
     // Now two inputs exist; `.last()` is the one just added.
     await anon.getByPlaceholder("Team name").last().fill(TEAM_B);
     await anon.waitForTimeout(700);
-    // NOTE: the cart panel shows BOTH fees as payable here (subtotal £50, no
-    // "not charged now" note on either line) — confirmed live, not assumed.
-    // summarizeCart (cart.ts) predicts waitlisting from `division.closed_reason
-    // === "full"`, and `division` is the STATIC page-load snapshot
-    // (taken=0/capacity=1, still "open"), never re-derived against the cart's
-    // own contents. So the CLIENT is optimistic about a low-capacity division
-    // holding two of its own entries — a real UX quirk, but a DIFFERENT one
-    // from the two this spec exists to witness, so not asserted on here. The
-    // SERVER'S submit-time count is what actually governs (registration-
-    // submit.ts, verified by direct read: "counting happens INSIDE the lock,
-    // after every earlier entry in THIS SAME cart is already inserted"), and
-    // that is what the rest of this journey depends on and verifies below —
-    // Stripe checkout charges only entry A's fee, and B posts as waitlisted.
+    // The cart now says what the server will do (B3 T12, plan Review Focus 2): the second entry takes no place, so its row reads
+    // "Waiting list — not charged now" and the subtotal is ONE fee. Before this the cart priced both entries (subtotal £50, no note)
+    // because it read only whether the division looked full at page load, and the server then waitlisted the second at submit.
+    await expect(
+      anon.getByText("Waiting list — not charged now", { exact: true }),
+      "the second entry into a one-place division must be labelled as waiting on the cart",
+    ).toHaveCount(1);
     await anon.screenshot({ path: `${SHOTS}/04-entries-both-teams.png`, fullPage: true });
-    await anon.getByRole("button", { name: /^next$/i }).click();
+    await anon.getByTestId("reg-next").click();
 
     // ---- STEP 3/BEAT 05 — DETAILS: a roster per entry, captain_entered ----
     // Both cards render the SAME division heading text (one division, two
@@ -281,32 +277,28 @@ test("RS007 witness — cancelling one of two cart entries drops the subtotal to
       for (const name of mates) {
         await card.getByRole("button", { name: /\+ add player/i }).click();
         await anon.waitForTimeout(300);
-        const boxes = card.getByLabel(/Player \d+ — Your name/);
+        const boxes = card.getByLabel(/Player \d+ — Full name/);
         await boxes.nth((await boxes.count()) - 1).fill(name);
         await anon.waitForTimeout(200);
       }
     }
     await anon.screenshot({ path: `${SHOTS}/05-details-both-rosters.png`, fullPage: true });
-    await anon.getByRole("button", { name: /^next$/i }).click();
+    await anon.getByTestId("reg-next").click();
 
     // ---- STEP 4/BEAT 06 — CONSENT ------------------------------------------
     await anon.waitForTimeout(600);
     await anon.locator("#reg-consent-privacy").check();
     await anon.screenshot({ path: `${SHOTS}/06-consent.png`, fullPage: true });
-    await anon.getByRole("button", { name: /^next$/i }).click();
+    await anon.getByTestId("reg-next").click();
 
-    // ---- STEP 5/BEAT 07 — REVIEW. step-review.tsx shares summarizeCart with
-    // the cart panel (same doc comment as above), so this ALSO shows the
-    // optimistic £50 pre-submit — the button below is clicked for whatever
-    // it says, not a hardcoded amount. What actually reaches Stripe is the
-    // SERVER's own submit-time computation, checked at BEAT 08 (the real
-    // checkout page) and BEAT 10 (the real post-payment entry statuses).
+    // ---- STEP 5/BEAT 07 — REVIEW. step-review.tsx shares summarizeCart with the cart panel, so the second entry is labelled
+    // "Waiting list — not charged now" here too and the total is the one fee. The button is clicked for whatever it says, not a
+    // hardcoded amount; what reaches Stripe is the SERVER's own submit-time computation, checked at BEAT 08 (the real checkout
+    // page) and BEAT 10 (the real post-payment entry statuses) — and now equals what this page quoted.
+    await expect(anon.getByText("Waiting list — not charged now", { exact: true })).toHaveCount(1);
     await anon.waitForTimeout(1000);
-    await anon.screenshot({ path: `${SHOTS}/07-review-both-fees-optimistic.png`, fullPage: true });
-    await anon
-      .getByRole("button", { name: /Continue to payment|Enter the competition|Enter —/ })
-      .first()
-      .click();
+    await anon.screenshot({ path: `${SHOTS}/07-review-second-entry-waiting.png`, fullPage: true });
+    await anon.getByTestId("reg-submit").click();
 
     // ---- STEP 5 (cont.)/BEATS 08-09 — real Stripe Connect hosted checkout,
     // interaction copied verbatim from registration-connect.spec.ts --------
@@ -473,18 +465,21 @@ test("RS007 witness — cancelling one of two cart entries drops the subtotal to
     // AFTER the confirmation — required shot.
     await anon.screenshot({ path: `${SHOTS}/15-after-cancel.png`, fullPage: true });
 
-    // ---- ASSERTION (a): the rendered subtotal must drop to what is still
-    // owed/paid (A alone) — status/page.tsx's subtotal only excludes
-    // "waitlisted", never "withdrawn". ----------------------------------
-    const subtotalLabel = anon.getByText("Subtotal", { exact: true });
-    const subtotalAmountText = (await subtotalLabel.locator("xpath=following-sibling::span[1]").textContent()) ?? "";
-    const renderedSubtotalCents = centsFromRenderedAmount(subtotalAmountText);
+    // ---- ASSERTION (a): the money line must drop to what is still
+    // owed/paid (A alone) — a withdrawn entry's stale fee is neither paid
+    // nor due. B4 T15: the Subtotal row became the money line, one sentence
+    // counted by settlement ("Paid £25.00"); B was never charged, so it adds
+    // nothing to paid, and withdrawn, nothing to due. ----------------------
+    const moneyLine = anon.getByTestId("reg-status-money");
+    await expect(moneyLine, "B is withdrawn and was never charged: nothing is still due").toHaveAttribute("data-due-cents", "0");
+    const moneyText = (await moneyLine.textContent()) ?? "";
     expect(
-      renderedSubtotalCents,
-      `DEFECT (a) witness: after withdrawing "${TEAM_B}" (£${(FEE_CENTS / 100).toFixed(2)}), the footer should read ` +
-        `£${(aBefore.amount_cents / 100).toFixed(2)} (A alone, still paid) but rendered "${subtotalAmountText.trim()}" ` +
-        `— status/page.tsx's subtotal filter excludes only "waitlisted", never "withdrawn", so B's fee keeps counting.`,
+      centsFromRenderedAmount(moneyText),
+      `DEFECT (a) witness: after withdrawing "${TEAM_B}" (£${(FEE_CENTS / 100).toFixed(2)}), the money line should read ` +
+        `Paid £${(aBefore.amount_cents / 100).toFixed(2)} (A alone, still paid) but rendered "${moneyText.trim()}" ` +
+        `— a withdrawn entry's fee must never count as paid or due.`,
     ).toBe(aBefore.amount_cents);
+    await expect(moneyLine, "A's card payment reads as paid").toHaveAttribute("data-money-kind", "paid");
 
     // B's card must also have lost its Cancel control (canCancelEntry is
     // false for withdrawn) — a re-cancel dead end would be its own defect.

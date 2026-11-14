@@ -37,7 +37,7 @@ import { getStripe } from "@/lib/stripe";
 import { REGISTRATION_CURRENCIES } from "@/lib/currency";
 import { generateRefCode } from "@/lib/ref-code";
 import { mintGroupCheckout } from "@/server/usecases/registrations";
-import { asOwner, rig, seedOrg, seedRegistration, SETTINGS_BASE } from "./_registration-fixtures";
+import { asOwner, rig, seedOrg, seedRegistration, SETTINGS_BASE, cartAsWritten } from "./_registration-fixtures";
 
 const LIVE = process.env.BILLING_LIVE === "1" && !!process.env.STRIPE_SECRET_KEY;
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -142,6 +142,7 @@ describe.skipIf(!RUN)("group checkout — live per-currency destination charge",
         division.id,
         "https://live-probe.test",
         seeded.access_token,
+        await cartAsWritten(seeded.registration.group_id, division.id),
       );
       expect(url, "Stripe returned no checkout url").toBeTruthy();
       expect(url).toContain("checkout.stripe.com");
@@ -192,6 +193,7 @@ describe.skipIf(!RUN)("group checkout — live per-currency destination charge",
         division.id,
         "https://live-probe.test",
         seeded.access_token,
+        await cartAsWritten(seeded.registration.group_id, division.id),
       ),
     ).rejects.toMatchObject({ status: 422, code: "REGISTRATION_CURRENCY_UNAVAILABLE" });
     // Nothing was minted, so nothing needs expiring.

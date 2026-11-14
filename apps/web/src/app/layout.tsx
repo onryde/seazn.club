@@ -7,6 +7,7 @@ import { AnalyticsBootstrap } from "@/components/analytics-bootstrap";
 import { CookieConsent } from "@/components/cookie-consent";
 import { ConfirmProvider } from "@/components/ui/confirm-provider";
 import { HtmlLang } from "@/components/i18n/html-lang";
+import { PopStateGuardRoot } from "@/components/popstate-guard";
 
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({
@@ -67,6 +68,9 @@ export default function RootLayout({
             the only place mounting this. Cookie-driven here; authoritative
             where a layout passes `lang`. */}
         <HtmlLang />
+        {/* Before Next's router hears a Back: a page with unsaved edits (the registration hub) can hold one that would
+            leave it. Here, at the root, because only a listener added before the router's runs before it. */}
+        <PopStateGuardRoot />
         {/* Confirmation dialogs everywhere (v3/03 §3) — console and public
             trees both have destructive actions. */}
         <ConfirmProvider>{children}</ConfirmProvider>

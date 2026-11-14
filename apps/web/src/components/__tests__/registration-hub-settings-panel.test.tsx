@@ -1,12 +1,13 @@
 // RS004 W3/W3c — the Settings tab panel: an empty-frame (no divisions yet,
-// unchanged from W2) or a list of division rows, plus (W3c) the state for
-// "which row's config panel is open" and mounting RegistrationHubConfigPanel
-// for it. Stateful now (useState), so driven through the repo's hook
-// harness rather than called as a plain function.
+// unchanged from W2) or a list of division rows. B7 T24: a row's "Open
+// settings" asks the hub's tab host to open the division as a tab — the panel
+// no longer mounts a dialog of its own. The host's open is mocked here (its own
+// behaviour is the host's tests' and the e2e's); what this file proves is that
+// every row reaches it with ITS division, and that the panel refuses to render
+// an editor's rows with no host to open them.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { RegistrationHubSettingsPanel } from "@/components/registration-hub-settings-panel";
-import { RegistrationHubConfigPanel } from "@/components/registration-hub-config-panel";
 import {
   RegistrationHubDivisionRow,
   type RegistrationHubRowData,
@@ -19,10 +20,8 @@ import { effectiveEntrantModel } from "@seazn/engine/sport";
 // FU1 — every kind the engine knows (a sport with no entrant model takes them all). Derived, never typed here.
 const ALL_KINDS = effectiveEntrantModel(null).kinds;
 
-const nav = vi.hoisted(() => ({ refresh: vi.fn() }));
-vi.mock("next/navigation", () => ({
-  useRouter: () => ({ refresh: nav.refresh }),
-}));
+const host = vi.hoisted(() => ({ api: null as { openDivision: (id: string) => void } | null }));
+vi.mock("@/components/registration-hub-tabs-host", () => ({ useHubTabs: () => host.api }));
 
 const title = t(uiEn, "reg.hub.settings.title");
 const body = t(uiEn, "reg.hub.settings.body");
@@ -44,9 +43,6 @@ const ROW: RegistrationHubRowData = {
   category: null,
   age_min: null,
   age_max: null,
-  // RS007/V380 — non-null on purpose (see the config-panel `division` prop
-  // assertion below): a null default would round-trip "correctly" even if
-  // this panel's own division={{...}} construction dropped the fields.
   age_cutoff_month: 9,
   age_cutoff_day: 1,
   eligibility_note: "School-registered students only",
@@ -68,13 +64,12 @@ const BASE_PROPS = {
   body,
   rows: [ROW, { ...ROW, division_id: "div-2", name: "Open Doubles" }],
   context: CONTEXT,
-  orgSlug: "riverside",
-  feePercentPct: 8,
-  cardUnsupportedCurrency: null,
 };
 
+const openDivision = vi.fn();
 beforeEach(() => {
-  nav.refresh.mockClear();
+  openDivision.mockClear();
+  host.api = { openDivision };
 });
 
 describe("RegistrationHubSettingsPanel — empty (no divisions yet)", () => {
@@ -118,153 +113,45 @@ describe("RegistrationHubSettingsPanel — populated", () => {
   });
 
   it("still carries the panel's own data hook when populated", () => {
-    // The populated root is now a Fragment (a sibling slot is needed for the
-    // config panel), so the marker lives on the <ul> rather than tree()[0].
     const island = renderIsland(RegistrationHubSettingsPanel, BASE_PROPS);
     const list = island.tree().find((e) => e.type === "ul")!;
     expect(propsOf(list)).toHaveProperty("data-registration-hub-settings-panel");
   });
-
-  it("mounts no config panel until a row is opened", () => {
-    const island = renderIsland(RegistrationHubSettingsPanel, BASE_PROPS);
-    expect(island.tree().some((e) => e.type === RegistrationHubConfigPanel)).toBe(false);
-  });
 });
 
-describe("RegistrationHubSettingsPanel — opening/closing/saving the config panel (W3c)", () => {
-  it("clicking a row's onOpen mounts the config panel for THAT division", () => {
+describe("RegistrationHubSettingsPanel — Open settings opens a tab (B7 T24)", () => {
+  it("each row's onOpen asks the host to open THAT row's division, once, and nothing else", () => {
     const island = renderIsland(RegistrationHubSettingsPanel, BASE_PROPS);
     const rows = island.tree().filter((e) => e.type === RegistrationHubDivisionRow);
-    (propsOf(rows[1]!).context as RegistrationHubRowContext).onOpen("div-2");
-    const panel = island.tree().find((e) => e.type === RegistrationHubConfigPanel);
-    expect(panel).toBeTruthy();
-    expect(propsOf(panel!).division).toMatchObject({ division_id: "div-2", name: "Open Doubles" });
-    // RS007/V380 — this panel builds the config panel's `division` prop
-    // field-by-field (registration-hub-settings-panel.tsx); a `toMatchObject`
-    // check above would stay green even if the cutoff/note fields were
-    // silently left out of that object literal, so they get their own
-    // assertion here.
-    expect(propsOf(panel!).division).toMatchObject({
-      age_cutoff_month: 9,
-      age_cutoff_day: 1,
-      eligibility_note: "School-registered students only",
-    });
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      const { division_id } = propsOf(row).row as RegistrationHubRowData;
+      openDivision.mockClear();
+      (propsOf(row).context as RegistrationHubRowContext).onOpen(division_id);
+      expect(openDivision.mock.calls).toEqual([[division_id]]);
+    }
   });
 
-  // Owner ruling 2026-10-26: the config panel offers chess individual entry only. This panel builds the config
-  // panel's `division` prop field-by-field, so a flag the row carries but this literal omits would never arrive.
-  it("hands the open row's individual_only flag to the config panel - per row, and false when the row has none", () => {
-    const island = renderIsland(RegistrationHubSettingsPanel, {
-      ...BASE_PROPS,
-      rows: [ROW, { ...ROW, division_id: "div-2", name: "Blitz", individual_only: true }],
-    });
-    const rows = island.tree().filter((e) => e.type === RegistrationHubDivisionRow);
-    (propsOf(rows[1]!).context as RegistrationHubRowContext).onOpen("div-2");
-    expect(propsOf(island.tree().find((e) => e.type === RegistrationHubConfigPanel)!).division).toMatchObject({
-      division_id: "div-2",
-      individual_only: true,
-    });
-    (propsOf(rows[0]!).context as RegistrationHubRowContext).onOpen("div-1");
-    expect(propsOf(island.tree().find((e) => e.type === RegistrationHubConfigPanel)!).division).toMatchObject({
-      division_id: "div-1",
-      individual_only: false,
-    });
-  });
-
-  // FU1 — the config panel offers only the division's allowed kinds, and this panel builds its `division` prop
-  // field-by-field: a narrowed row whose kinds this literal dropped would offer every kind again.
-  it("hands the open row's allowed_kinds to the config panel - per row", () => {
-    const teamsOnly = effectiveEntrantModel(null, { entrants: { kinds: ["team"] } }).kinds;
-    expect(teamsOnly).not.toEqual(ALL_KINDS);
-    const island = renderIsland(RegistrationHubSettingsPanel, {
-      ...BASE_PROPS,
-      rows: [ROW, { ...ROW, division_id: "div-2", name: "Club teams", allowed_kinds: teamsOnly }],
-    });
-    const rows = island.tree().filter((e) => e.type === RegistrationHubDivisionRow);
-    (propsOf(rows[1]!).context as RegistrationHubRowContext).onOpen("div-2");
-    expect(propsOf(island.tree().find((e) => e.type === RegistrationHubConfigPanel)!).division).toMatchObject({
-      division_id: "div-2",
-      allowed_kinds: teamsOnly,
-    });
-    (propsOf(rows[0]!).context as RegistrationHubRowContext).onOpen("div-1");
-    expect(propsOf(island.tree().find((e) => e.type === RegistrationHubConfigPanel)!).division).toMatchObject({
-      division_id: "div-1",
-      allowed_kinds: ALL_KINDS,
-    });
-  });
-
-  it("passes orgTz/currency/orgSlug/feePercentPct/cardUnsupportedCurrency through to the config panel", () => {
-    const island = renderIsland(RegistrationHubSettingsPanel, {
-      ...BASE_PROPS,
-      context: { ...CONTEXT, orgTz: "Asia/Kolkata", currency: "inr" as const },
-      feePercentPct: 5,
-      cardUnsupportedCurrency: "jpy",
-    });
-    (propsOf(island.tree().find((e) => e.type === RegistrationHubDivisionRow)!).context as RegistrationHubRowContext).onOpen(
-      "div-1",
-    );
-    const panel = island.tree().find((e) => e.type === RegistrationHubConfigPanel)!;
-    expect(propsOf(panel)).toMatchObject({
-      orgTz: "Asia/Kolkata",
-      orgSlug: "riverside",
-      currency: "inr",
-      feePercentPct: 5,
-      cardUnsupportedCurrency: "jpy",
-    });
-  });
-
-  it("opening a different row switches which division's panel is mounted (only one at a time)", () => {
-    const island = renderIsland(RegistrationHubSettingsPanel, BASE_PROPS);
-    const context1 = propsOf(island.tree().filter((e) => e.type === RegistrationHubDivisionRow)[0]!)
-      .context as RegistrationHubRowContext;
-    context1.onOpen("div-1");
-    let panels = island.tree().filter((e) => e.type === RegistrationHubConfigPanel);
-    expect(panels).toHaveLength(1);
-    expect(propsOf(panels[0]!).division).toMatchObject({ division_id: "div-1" });
-
-    const context2 = propsOf(island.tree().filter((e) => e.type === RegistrationHubDivisionRow)[1]!)
-      .context as RegistrationHubRowContext;
-    context2.onOpen("div-2");
-    panels = island.tree().filter((e) => e.type === RegistrationHubConfigPanel);
-    expect(panels).toHaveLength(1);
-    expect(propsOf(panels[0]!).division).toMatchObject({ division_id: "div-2" });
-  });
-
-  it("onClose unmounts the panel without refreshing the router", () => {
+  it("mounts nothing of its own: no dialog, no settings page (the host owns the tabs)", () => {
     const island = renderIsland(RegistrationHubSettingsPanel, BASE_PROPS);
     (propsOf(island.tree().find((e) => e.type === RegistrationHubDivisionRow)!).context as RegistrationHubRowContext).onOpen(
       "div-1",
     );
-    const panel = island.tree().find((e) => e.type === RegistrationHubConfigPanel)!;
-    (propsOf(panel).onClose as () => void)();
-    expect(island.tree().some((e) => e.type === RegistrationHubConfigPanel)).toBe(false);
-    expect(nav.refresh).not.toHaveBeenCalled();
+    const types = new Set(island.tree().map((e) => e.type));
+    // The list, its items and the rows — nothing else at the top of the panel.
+    expect([...types].every((type) => type === "ul" || type === "li" || type === RegistrationHubDivisionRow)).toBe(true);
   });
 
-  // RS005 F4 — the Money section's re-price warning needs the OPEN row's own
-  // waitlisted count, not some other row's. A distinct value (3) on div-2,
-  // left at the ROW fixture's default (0) on div-1, so a mixup between rows
-  // (or a mixup with `taken`, also present on the row) cannot pass by
-  // coincidence.
-  it("passes the OPEN row's waitlisted count through to the config panel as waitlistedCount", () => {
-    const island = renderIsland(RegistrationHubSettingsPanel, {
-      ...BASE_PROPS,
-      rows: [ROW, { ...ROW, division_id: "div-2", name: "Open Doubles", taken: 7, waitlisted: 3 }],
-    });
-    const rows = island.tree().filter((e) => e.type === RegistrationHubDivisionRow);
-    (propsOf(rows[1]!).context as RegistrationHubRowContext).onOpen("div-2");
-    const panel = island.tree().find((e) => e.type === RegistrationHubConfigPanel)!;
-    expect(propsOf(panel).waitlistedCount).toBe(3);
+  it("refuses, by name, to render an editor's rows outside a tab host — Open settings would open nothing", () => {
+    host.api = null;
+    expect(() => renderIsland(RegistrationHubSettingsPanel, BASE_PROPS)).toThrow(/outside RegistrationHubTabsHost/);
   });
 
-  it("onSaved unmounts the panel AND refreshes the router so the row reflects what was saved", () => {
-    const island = renderIsland(RegistrationHubSettingsPanel, BASE_PROPS);
-    (propsOf(island.tree().find((e) => e.type === RegistrationHubDivisionRow)!).context as RegistrationHubRowContext).onOpen(
-      "div-1",
-    );
-    const panel = island.tree().find((e) => e.type === RegistrationHubConfigPanel)!;
-    (propsOf(panel).onSaved as () => void)();
-    expect(island.tree().some((e) => e.type === RegistrationHubConfigPanel)).toBe(false);
-    expect(nav.refresh).toHaveBeenCalledTimes(1);
+  it("positive pair: a viewer's rows (no Open settings) and the empty frame need no host", () => {
+    host.api = null;
+    const viewer = renderIsland(RegistrationHubSettingsPanel, { ...BASE_PROPS, context: { ...CONTEXT, canEdit: false } });
+    expect(viewer.tree().filter((e) => e.type === RegistrationHubDivisionRow)).toHaveLength(2);
+    const empty = renderIsland(RegistrationHubSettingsPanel, { ...BASE_PROPS, rows: [] });
+    expect(empty.text()).toContain(title);
   });
 });

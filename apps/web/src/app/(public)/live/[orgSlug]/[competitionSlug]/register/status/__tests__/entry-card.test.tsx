@@ -32,6 +32,7 @@ vi.mock("../view-model", async (importOriginal) => {
 });
 
 import { EntryCard, type EntryCardProps } from "../entry-card";
+import { lichessLinkStartHref } from "@/lib/lichess-link";
 import type { EntryStatus } from "../view-model";
 
 const RAW_LEAK_SENTINEL = "Raw-Leak-Sentinel-Full-Name";
@@ -56,6 +57,8 @@ function baseProps(): EntryCardProps {
       approval: "auto",
       approved: false,
       fee_if_promoted_cents: null,
+      waitlist_position: null,
+      promotion_skipped_at: null,
       division_youth: false,
       division_player_name_display: null,
       players: [
@@ -68,6 +71,7 @@ function baseProps(): EntryCardProps {
       ],
       refund_policy: { refundable: false, deadline: null, amount_cents: 0 },
       refunded_cents: 0,
+      entry_ref: "SZ-ABCD-EFGH-2",
     },
     cart: {
       expires_at: null,
@@ -75,6 +79,7 @@ function baseProps(): EntryCardProps {
       instructionsHtml: null,
       currency: "gbp",
       timezone: "UTC",
+      cart_size: 2,
     },
     orgSlug: "org",
     competitionSlug: "comp",
@@ -83,6 +88,50 @@ function baseProps(): EntryCardProps {
     ui: uiEn as Dict,
   };
 }
+
+// Registration redesign B5 T18 (spec §6.3): an entry of a cart sent with two or more entries quotes its own reference, small, under
+// its name; the page's hero still says the cart's.
+describe("EntryCard — its own reference (B5 T18)", () => {
+  const refLine = (html: string) => html.match(/<p data-testid="reg-status-entry-ref" data-entry-ref="([^"]*)"[^>]*>([\s\S]*?)<\/p>/);
+
+  it("a 2+ cart: the line names the reference in the dictionary's words, the reference alone in its own selectable span", () => {
+    const html = renderToStaticMarkup(<EntryCard {...baseProps()} />);
+    const m = refLine(html);
+    expect(m, "the reference line").not.toBeNull();
+    expect(m![1]).toBe("SZ-ABCD-EFGH-2");
+    const [lead, tail = ""] = (uiEn as Record<string, string>)["register.status.entry.reference"]!.split("{reference}");
+    expect(m![2]).toBe(`${lead}<span class="select-all">SZ-ABCD-EFGH-2</span>${tail}`);
+  });
+
+  it("sits after the division and the entry's name, so the two lines that name the entry stay together", () => {
+    const html = renderToStaticMarkup(<EntryCard {...baseProps()} />);
+    const at = (needle: string) => html.indexOf(needle);
+    expect(at("Open"), "division").toBeGreaterThan(-1);
+    expect(at("Team X")).toBeGreaterThan(at("Open"));
+    expect(at('data-testid="reg-status-entry-ref"')).toBeGreaterThan(at("Team X"));
+    expect(at('data-testid="reg-status-entry-ref"')).toBeLessThan(at('data-testid="reg-status-outcome"'));
+  });
+
+  it("a one-entry cart: no line (the empty case)", () => {
+    const p = baseProps();
+    const html = renderToStaticMarkup(<EntryCard {...p} cart={{ ...p.cart, cart_size: 1 }} entry={{ ...p.entry, entry_ref: "SZ-ABCD-EFGH" }} />);
+    expect(html, "anti-vacuity: the card rendered").toContain("Team X");
+    expect(refLine(html)).toBeNull();
+  });
+
+  it("no reference to print (the cart has none): no line, whatever the size", () => {
+    const p = baseProps();
+    const html = renderToStaticMarkup(<EntryCard {...p} entry={{ ...p.entry, entry_ref: null }} />);
+    expect(html).toContain("Team X");
+    expect(refLine(html)).toBeNull();
+  });
+
+  it("a withdrawn entry keeps its number: the line is still there, and says -2", () => {
+    const p = baseProps();
+    const html = renderToStaticMarkup(<EntryCard {...p} entry={{ ...p.entry, status: "withdrawn" }} />);
+    expect(refLine(html)![1]).toBe("SZ-ABCD-EFGH-2");
+  });
+});
 
 describe("EntryCard — a displayNameById miss never falls back to the raw p.full_name", () => {
   it("the claim-link text stays clear of the raw name even when rosterPlayerDisplayName's own map entry is missing", () => {
@@ -287,4 +336,232 @@ describe("EntryCard — the deadline is written in the page's locale", () => {
       expect(html).not.toContain("IST");
     });
   }
+});
+
+// Registration redesign B3 T13: a waitlisted card says WHERE in the queue the entry is - "You're #{n} on the waiting list" - in place of
+// the bare waitlisted note (spec §4.2). The place is the read model's (`waitlist_position`, counted in the order promotion takes the
+// queue - registration-waitlist-position.test.ts); the expected words are the dictionaries', filled by the runtime `t`.
+describe("EntryCard — a waitlisted entry's place in the queue (B3 T13)", () => {
+  const UI = { en: uiEn, es: uiEs, fr: uiFr, nl: uiNl } as const;
+  const unescape = (s: string) => s.replace(/&#x27;/g, "'").replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, "&");
+  const render = (over: Partial<EntryCardProps["entry"]>, locale: keyof typeof UI = "en") => {
+    const props = baseProps();
+    return unescape(
+      renderToStaticMarkup(<EntryCard {...props} locale={locale} ui={UI[locale] as Dict} entry={{ ...props.entry, ...over }} />),
+    );
+  };
+  const raw = (locale: keyof typeof UI, key: string): string => {
+    const value = (UI[locale] as Record<string, string>)[key];
+    expect(typeof value, `premise: ${locale} has ${key}`).toBe("string");
+    return value!;
+  };
+
+  it("en, typed: You're #2 on the waiting list - and the bare note gives way to it", () => {
+    const html = render({ status: "waitlisted", waitlist_position: 2 });
+    expect(html).toContain("You're #2 on the waiting list");
+    expect(html).toContain('data-testid="reg-status-waitlist-position"');
+    expect(html).toContain('data-waitlist-position="2"');
+    expect(html).not.toContain(raw("en", "register.status.waitlisted.note"));
+  });
+
+  it("each locale states the place in its own words, with the number filled in", () => {
+    let judged = 0;
+    for (const locale of ["en", "es", "fr", "nl"] as const) {
+      const sentence = raw(locale, "register.status.waitlistPosition");
+      expect(sentence, `premise: ${locale} names the place`).toContain("{n}");
+      const html = render({ status: "waitlisted", waitlist_position: 7 }, locale);
+      expect(html, locale).toContain(sentence.replace("{n}", "7"));
+      expect(html, `${locale}: no unfilled placeholder`).not.toContain("{n}");
+      judged += 1;
+    }
+    expect(judged, "anti-vacuity: four locales").toBe(4);
+  });
+
+  it("the place tracks the entry (a different number renders a different line)", () => {
+    expect(render({ status: "waitlisted", waitlist_position: 3 })).toContain("You're #3 on the waiting list");
+    expect(render({ status: "waitlisted", waitlist_position: 3 })).not.toContain("You're #2");
+  });
+
+  it("a waitlisted entry with no known place keeps the waitlisted note and invents no number", () => {
+    const html = render({ status: "waitlisted", waitlist_position: null });
+    expect(html).toContain(raw("en", "register.status.waitlisted.note"));
+    expect(html).not.toContain('data-testid="reg-status-waitlist-position"');
+  });
+
+  it("an entry that is not waitlisted shows no place, even if one were set (the status gates it, not just the field)", () => {
+    for (const status of ["pending", "confirmed"] as const) {
+      const html = render({ status, waitlist_position: 2 });
+      expect(html, status).not.toContain('data-testid="reg-status-waitlist-position"');
+      expect(html, status).not.toContain("on the waiting list");
+    }
+  });
+});
+
+// Walk-fix F16 (ruling): an automatic promotion on an online-play division passed this waiting entry over because its Lichess account is
+// not linked to play. The waiting card says so - the turn was skipped, why, the entry keeps its place - with the Link step (the club's own
+// link start, `lichessLinkStartHref`), beside the place in the queue. The read model gives the time only while the entry waits.
+// Final review m1: linking re-runs nothing, so the note outlives the cause - it is written about the skip, a dated moment that has
+// passed ("A place opened on 14 November … wasn't linked"), and stays true after the player links. The date is the org's
+// (`cart.timezone`) in the page's locale.
+describe("EntryCard — a waiting entry an automatic promotion skipped (walk-fix F16, final review m1)", () => {
+  const UI = { en: uiEn, es: uiEs, fr: uiFr, nl: uiNl } as const;
+  const unescape = (s: string) => s.replace(/&#x27;/g, "'").replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, "&");
+  const SKIPPED = "2026-11-14T10:00:00.000Z";
+  const render = (over: Partial<EntryCardProps["entry"]>, locale: keyof typeof UI = "en", timezone = "UTC") => {
+    const props = baseProps();
+    return unescape(
+      renderToStaticMarkup(
+        <EntryCard {...props} cart={{ ...props.cart, timezone }} locale={locale} ui={UI[locale] as Dict} entry={{ ...props.entry, ...over }} />,
+      ),
+    );
+  };
+  const raw = (locale: keyof typeof UI, key: string): string => {
+    const value = (UI[locale] as Record<string, string>)[key];
+    expect(typeof value, `premise: ${locale} has ${key}`).toBe("string");
+    return value!;
+  };
+  const notice = (html: string) => html.match(/<div[^>]*data-testid="reg-status-promotion-skipped"[^>]*>([\s\S]*?)<\/div>/);
+
+  it("en, typed: when the turn was skipped, why, the place is kept - and the Link button starts linking for THIS club", () => {
+    const html = render({ status: "waitlisted", waitlist_position: 2, promotion_skipped_at: SKIPPED });
+    const m = notice(html);
+    expect(m, "the notice").not.toBeNull();
+    expect(m![1]).toContain(
+      "A place opened on 14 November, but your turn was skipped: games here are played on Lichess, and your Lichess account wasn't linked to play. You keep your place in line. Once your account is linked, the next place that opens can go to you.",
+    );
+    expect(m![1]).toContain(`href="${lichessLinkStartHref("org")}"`);
+    expect(m![1]).toContain(">Link your Lichess account</a>");
+    expect(html, "the place in the queue still says where they are").toContain("You're #2 on the waiting list");
+  });
+
+  it("after a later link it still reads true: past tense, dated by the skip - never 'isn't linked yet'", () => {
+    // A linked player's page gets the same props: nothing the card reads changes when the account is linked (the DB walk in
+    // online-seat-gate-waitlist.test.ts pins that the read model keeps the skip's time after a reconnect). So the words must hold.
+    const body = notice(render({ status: "waitlisted", waitlist_position: 2, promotion_skipped_at: SKIPPED }))![1];
+    expect(body).toContain("14 November");
+    expect(body).toContain("wasn't linked");
+    expect(body).not.toMatch(/isn't linked|linked to play yet/);
+  });
+
+  it("the date is the org's: 23:30 UTC on the 14th is the 15th for a club in Kolkata", () => {
+    const late = { status: "waitlisted" as const, waitlist_position: 2, promotion_skipped_at: "2026-11-14T23:30:00.000Z" };
+    expect(notice(render(late, "en", "UTC"))![1]).toContain("A place opened on 14 November,");
+    expect(notice(render(late, "en", "Asia/Kolkata"))![1]).toContain("A place opened on 15 November,");
+  });
+
+  it("every locale says it in its own words around its own date, and the button names the step", () => {
+    let judged = 0;
+    // Typed per locale (the long day-month each language writes), never read back from the component.
+    const DATE = { en: "14 November", es: "14 de noviembre", fr: "14 novembre", nl: "14 november" } as const;
+    for (const locale of ["en", "es", "fr", "nl"] as const) {
+      const m = notice(render({ status: "waitlisted", waitlist_position: 2, promotion_skipped_at: SKIPPED }, locale));
+      expect(m, locale).not.toBeNull();
+      expect(raw(locale, "register.status.promotionSkipped.body"), `${locale}: the sentence carries the date`).toContain("{date}");
+      expect(m![1], locale).toContain(raw(locale, "register.status.promotionSkipped.body").replace("{date}", DATE[locale]));
+      expect(m![1], locale).toContain(raw(locale, "register.status.promotionSkipped.link"));
+      if (locale !== "en") expect(raw(locale, "register.status.promotionSkipped.body"), `${locale}: translated`).not.toBe(raw("en", "register.status.promotionSkipped.body"));
+      judged += 1;
+    }
+    expect(judged, "anti-vacuity: four locales").toBe(4);
+  });
+
+  it("never skipped, it says nothing; nor on an entry that is not waiting, whatever the field holds", () => {
+    expect(notice(render({ status: "waitlisted", waitlist_position: 2, promotion_skipped_at: null })), "never skipped").toBeNull();
+    let judged = 0;
+    for (const status of ["pending", "confirmed", "withdrawn"] as const) {
+      expect(notice(render({ status, promotion_skipped_at: SKIPPED })), status).toBeNull();
+      judged += 1;
+    }
+    expect(judged).toBe(3);
+  });
+});
+
+// B4 fix round 4 (controller ruling): past a pay-by date the row is still 'pending' until the sweep runs, but the chip says what the
+// sweep will do with it. A lapsed promotion goes back on the waitlist (the waitlisted chip and tone, never PENDING under a waitlist
+// headline); a never-promoted entry past the cart's date is expired (a "closed" chip in the expired tone). The bench hook
+// `data-status` keeps the row's own status. Expected words come from each locale's dictionary, never from the component.
+describe("EntryCard — the chip past a pay-by date (B4 fix round 4)", () => {
+  const PAST = "2020-01-01T00:00:00.000Z";
+  const FUTURE = "2099-01-01T00:00:00.000Z";
+  const LOCALES = { en: uiEn, es: uiEs, fr: uiFr, nl: uiNl } as const;
+  const owing = { status: "pending" as const, amount_cents: 2500, payment_method: "stripe" as const };
+  const unescape = (s: string) => s.replace(/&#x27;/g, "'").replace(/&amp;/g, "&");
+  const render = (locale: keyof typeof LOCALES, entry: Partial<EntryCardProps["entry"]>, cart: Partial<EntryCardProps["cart"]> = {}) => {
+    const p = baseProps();
+    return renderToStaticMarkup(
+      <EntryCard {...p} locale={locale} ui={LOCALES[locale] as Dict} entry={{ ...p.entry, ...entry }} cart={{ ...p.cart, ...cart }} />,
+    );
+  };
+  const chip = (html: string) => {
+    const m = html.match(/<span data-testid="reg-status-outcome" data-status="([^"]*)"[^>]*class="([^"]*)">([^<]*)<\/span>/);
+    const rail = html.match(/<span aria-hidden="true" class="w-1\.5 shrink-0 ([^"]*)"/);
+    expect(m, "the outcome chip").not.toBeNull();
+    expect(rail, "the card rail").not.toBeNull();
+    return { status: m![1], cls: m![2], text: unescape(m![3]!), rail: rail![1] };
+  };
+
+  it("a lapsed promotion reads waitlisted, a never-promoted entry past the cart's date reads Closed, an in-window one stays pending", () => {
+    let checked = 0;
+    for (const locale of Object.keys(LOCALES) as (keyof typeof LOCALES)[]) {
+      const dict = LOCALES[locale] as Record<string, string>;
+      const waitlisted = chip(render(locale, { status: "waitlisted" }));
+      const expired = chip(render(locale, { status: "expired" }));
+      const pending = chip(render(locale, owing, { expires_at: FUTURE }));
+
+      const lapsed = chip(render(locale, { ...owing, promotion_expires_at: PAST }));
+      expect(lapsed.text, `${locale} lapsed`).toBe(dict["reg.status.waitlisted"]);
+      expect(lapsed.text, `${locale} lapsed is not pending`).not.toBe(dict["reg.status.pending"]);
+      expect([lapsed.cls, lapsed.rail], `${locale} lapsed tone`).toEqual([waitlisted.cls, waitlisted.rail]);
+      expect(lapsed.status, `${locale} lapsed bench hook`).toBe("pending");
+
+      const closed = chip(render(locale, owing, { expires_at: PAST }));
+      // Tidy round (re-review m6): the status page's own chip word, set per locale beside the other status chips, never the
+      // register-entries badge's (a division's "Closed").
+      expect(dict["register.status.chip.closed"], `${locale} premise: the chip's own key exists`).toBeTruthy();
+      expect(closed.text, `${locale} closed`).toBe(dict["register.status.chip.closed"]);
+      expect([closed.cls, closed.rail], `${locale} closed tone`).toEqual([expired.cls, expired.rail]);
+      expect(closed.status, `${locale} closed bench hook`).toBe("pending");
+
+      // The controls: inside the window (the cart's date or the promotion's own still ahead) the row's pending chip stays.
+      for (const inWindow of [chip(render(locale, owing, { expires_at: FUTURE })), chip(render(locale, { ...owing, promotion_expires_at: FUTURE }))]) {
+        expect(inWindow.text, `${locale} in window`).toBe(dict["reg.status.pending"]);
+        expect([inWindow.cls, inWindow.rail]).toEqual([pending.cls, pending.rail]);
+      }
+      expect(waitlisted.cls, `${locale} the two tones differ`).not.toBe(pending.cls);
+      expect(expired.cls).not.toBe(pending.cls);
+      checked += 4;
+    }
+    expect(checked).toBe(16);
+  });
+});
+
+// Tidy round (re-review m3): an offline fee with no payment instructions (neither the division's nor the org's) says the organiser will
+// tell them how to pay, in each locale's own words. Instructions given, or a card fee, never show it.
+describe("EntryCard — an offline fee with no instructions (tidy m3)", () => {
+  const LOCALES = { en: uiEn, es: uiEs, fr: uiFr, nl: uiNl } as const;
+  const owing = { status: "pending" as const, amount_cents: 2500 };
+  const unescape = (s: string) => s.replace(/&#x27;/g, "'").replace(/&amp;/g, "&");
+  const render = (locale: keyof typeof LOCALES, entry: Partial<EntryCardProps["entry"]>, cart: Partial<EntryCardProps["cart"]> = {}) => {
+    const p = baseProps();
+    return unescape(
+      renderToStaticMarkup(
+        <EntryCard {...p} locale={locale} ui={LOCALES[locale] as Dict} entry={{ ...p.entry, ...entry }} cart={{ ...p.cart, ...cart }} />,
+      ),
+    );
+  };
+
+  it("says the organiser will tell them how to pay only when there is nothing else to go on", () => {
+    let checked = 0;
+    for (const locale of Object.keys(LOCALES) as (keyof typeof LOCALES)[]) {
+      const fallback = (LOCALES[locale] as Record<string, string>)["register.status.offline.fallback"];
+      expect(fallback, `${locale} premise: the key exists`).toBeTruthy();
+      const line = `>${fallback}<`;
+      expect(render(locale, { ...owing, payment_method: "offline" }, { instructionsHtml: null }), `${locale} no instructions`).toContain(line);
+      expect(render(locale, { ...owing, payment_method: "offline" }, { instructionsHtml: "<p>Bank: Example Bank</p>" }), `${locale} instructions`).not.toContain(line);
+      expect(render(locale, { ...owing, payment_method: "stripe" }, { instructionsHtml: null }), `${locale} card fee`).not.toContain(line);
+      expect(render(locale, { status: "confirmed", payment_method: "offline" }, { instructionsHtml: null }), `${locale} nothing owed`).not.toContain(line);
+      checked += 4;
+    }
+    expect(checked).toBe(16);
+  });
 });

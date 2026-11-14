@@ -11,7 +11,7 @@
 // file set) — this file only needs to prove THIS wave's new code threads
 // through to a real database correctly, not re-prove the read model.
 import { describe, expect, it } from "vitest";
-import { fetchRegistrantRows, fetchDivisionOptions } from "../data";
+import { dropArchivedDivisionFilter, fetchRegistrantRows, fetchDivisionOptions } from "../data";
 import { seedOrg, asOwner, rig, seedRegistration } from "@/server/usecases/__tests__/_registration-fixtures";
 import { createDivision } from "@/server/usecases/divisions";
 import { sql } from "@/lib/db";
@@ -141,5 +141,53 @@ describe.skipIf(!HAS_DB)("fetchDivisionOptions — real Postgres", () => {
 
     const options = await fetchDivisionOptions(owner, competition.id);
     expect(options).toHaveLength(1);
+  });
+});
+
+describe.skipIf(!HAS_DB)("an ARCHIVED division in ?division_id= — real Postgres (B6 T21 review, item 7)", () => {
+  async function archivedRig() {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asOwner(orgId, ownerId);
+    const { competition, division } = await rig(owner);
+    const archived = await createDivision(owner, competition.id, {
+      name: "Retired",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    });
+    await seedRegistration(competition.id, division.id, SETTINGS, { status: "pending" });
+    await seedRegistration(competition.id, division.id, SETTINGS, { status: "pending" });
+    await seedRegistration(competition.id, archived.id, SETTINGS, { status: "pending" });
+    await sql`update divisions set archived_at = now() where id = ${archived.id}`;
+    return { owner, competition, division, archived };
+  }
+
+  it("the read model still narrows to it (so the page must not hand it back): the premise of the drop", async () => {
+    const { owner, competition, archived } = await archivedRig();
+    const result = await fetchRegistrantRows(owner, competition.id, { division_id: archived.id });
+    expect(result.rows).toHaveLength(1);
+    expect(result.filters.divisionId).toBe(archived.id);
+  });
+
+  it("dropped against the REAL options list: every row comes back and the filter reads unset", async () => {
+    const { owner, competition, division, archived } = await archivedRig();
+    const query = { division_id: archived.id };
+    const options = await fetchDivisionOptions(owner, competition.id);
+    expect(options.map((o) => o.id), "the archived division is not offered").toEqual([division.id]);
+    const first = await fetchRegistrantRows(owner, competition.id, query);
+    const out = await dropArchivedDivisionFilter(owner, competition.id, query, first, options);
+    expect(out.rows).toHaveLength(3);
+    expect(out.filters.divisionId).toBeNull();
+  });
+
+  it("a live division is untouched by the same call", async () => {
+    const { owner, competition, division } = await archivedRig();
+    const query = { division_id: division.id };
+    const options = await fetchDivisionOptions(owner, competition.id);
+    const first = await fetchRegistrantRows(owner, competition.id, query);
+    const out = await dropArchivedDivisionFilter(owner, competition.id, query, first, options);
+    expect(out).toBe(first);
+    expect(out.rows).toHaveLength(2);
+    expect(out.filters.divisionId).toBe(division.id);
   });
 });

@@ -1179,6 +1179,57 @@ describe("OverviewTab — the register CTA and the slots", () => {
     info: info({ startsOn: "2026-09-01", registrationOpen: false }),
   });
 
+  // Walk-fix F5: shut only because card payments are not set up, the Register slot says why instead of vanishing; shut for any
+  // other reason it stays empty (the closed case below).
+  it("registration waiting on card payments: no CTA, the reason in its place (and the plain closed doc keeps neither)", () => {
+    const waits = render(hubDoc({ divisions: [division("premier")], info: info({ startsOn: "2026-09-01", registrationOpen: false, registrationWaitsOnCardPayments: true }) }));
+    const sentence = (en as Record<string, string>)["info.registration.cardPaymentsUnavailable"]!;
+    expect(waits).not.toContain(`data-testid="mh-register"`);
+    expect(waits).toContain(`data-testid="mh-register-unavailable"`);
+    expect(waits.replace(/&#x27;/g, "'")).toContain(sentence);
+    const plain = render(closed);
+    expect(plain).not.toContain(`data-testid="mh-register-unavailable"`);
+    expect(plain.replace(/&#x27;/g, "'")).not.toContain(sentence);
+  });
+
+  // Walk-fix F8 (+ F4): beside Register, each online division is named as played online, with its camera policy - the
+  // first thing a player deciding to enter reads. Nothing for a competition with no online division.
+  it("registration OPEN with an online division: the CTA, then that division named as online with its camera rule; none without", () => {
+    const online = hubDoc({
+      divisions: [division("premier", { name: "Online Open", onlinePlay: { cameraPolicy: "required" } }), division("otb")],
+      info: info({ startsOn: "2026-09-01", registrationOpen: true }),
+    });
+    const h = sectionHtml(render(online), "register").replace(/&#x27;/g, "'");
+    expect(h).toContain(`data-testid="mh-register"`);
+    expect(h).toContain(`data-testid="mh-register-online-premier"`);
+    expect(h).not.toContain(`data-testid="mh-register-online-otb"`);
+    expect(h).toContain((en as Record<string, string>)["info.onlinePlay.named"]!.replace("{division}", "Online Open"));
+    expect(h).toContain((en as Record<string, string>)["info.camera.required"]!);
+    expect(h.indexOf(`data-testid="mh-register"`)).toBeLessThan(h.indexOf(`data-testid="mh-register-online-premier"`));
+    // The pair: the same open doc with no online division has no note.
+    expect(render(open)).not.toContain("mh-register-online-");
+    // Registration closed: no register section, so no note there either (the Info tab still states it).
+    const shut = hubDoc({ divisions: online.divisions, info: info({ startsOn: "2026-09-01", registrationOpen: false }) });
+    expect(render(shut)).not.toContain("mh-register-online-");
+  });
+
+  // Walk-fix B review m4: the F5 branch (registration waiting on card payments) carries the online note too - a player reading
+  // "registration opens once..." still learns, before it opens, that the division plays online with a camera rule. After the reason.
+  it("registration WAITING on card payments with an online division: the reason, then the division's online note with its camera rule", () => {
+    const waiting = hubDoc({
+      divisions: [division("premier", { name: "Online Open", onlinePlay: { cameraPolicy: "required" } }), division("otb")],
+      info: info({ startsOn: "2026-09-01", registrationOpen: false, registrationWaitsOnCardPayments: true }),
+    });
+    const h = sectionHtml(render(waiting), "register").replace(/&#x27;/g, "'");
+    expect(h, "premise: the waiting branch, not the CTA").toContain(`data-testid="mh-register-unavailable"`);
+    expect(h).not.toContain(`data-testid="mh-register"`);
+    expect(h).toContain(`data-testid="mh-register-online-premier"`);
+    expect(h).not.toContain(`data-testid="mh-register-online-otb"`);
+    expect(h).toContain((en as Record<string, string>)["info.onlinePlay.named"]!.replace("{division}", "Online Open"));
+    expect(h).toContain((en as Record<string, string>)["info.camera.required"]!);
+    expect(h.indexOf(`data-testid="mh-register-unavailable"`), "the reason first").toBeLessThan(h.indexOf(`data-testid="mh-register-online-premier"`));
+  });
+
   it("registration OPEN → the CTA, at the document's own href, on a 44px tap target", () => {
     const h = render(open);
     // The tag read WHOLE, so the href and the tap area are pinned as the SAME

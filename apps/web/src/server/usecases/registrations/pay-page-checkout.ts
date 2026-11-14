@@ -7,6 +7,7 @@ import { HttpError } from "@/lib/errors";
 import { registrationPayPath } from "@/lib/registration-pay";
 import { divisionCtx } from "./lookups";
 import {
+  checkoutRegistrationIds,
   completedSessionStillPays,
   expireStoredSession,
   mintEntryPayPageCheckout,
@@ -42,7 +43,8 @@ export function returnsToPayPage(stored: Pick<Stripe.Checkout.Session, "success_
  *    below instead); `complete` and still able to land money (`completedSessionStillPays`: paid, or a delayed-method payment
  *    still in flight) → 409 (the webhook has not landed); `complete` with a payment that FAILED - the session stays
  *    `complete` + `unpaid` forever - or `expired` is dead and minted past;
- * 4. one mint for `[entry]` returning to the page, claiming the pointer on the value read in 3.
+ * 4. the cart's session, when it is open and covers this entry alone, expired (walk-fix F12; never handed out, see below);
+ * 5. one mint for `[entry]` returning to the page, claiming the pointer on the value read in 3.
  * A Stripe failure reading or expiring the stored session (or its PaymentIntent) refuses (502) rather than mint beside a session
  * that may still pay.
  */
@@ -70,10 +72,8 @@ export async function payFromPayPage(token: string, origin: string, now: Date = 
   // stop this page minting (or handing out) a second payment. The same rule the status page applies (`refuseWhileSessionPays`).
   // It never hands the cart's session OUT, even an open one for this entry alone (polish wave W5 ruling): that session returns to
   // the cart status page with the cart's access token in its URL - cancel and withdraw rights this pay link does not carry. The
-  // page's first press mints instead, and the mint expires the cart's session when it covers only this entry (subsumption).
-  if (row.cart_session_id && row.cart_session_id !== read) {
-    await refuseWhileSessionPays(row.cart_session_id, doc.registrationId);
-  }
+  // page's first press mints instead, and the cart's session is expired BEFORE that mint when it covers only this entry (F12).
+  const cart = row.cart_session_id && row.cart_session_id !== read ? await refuseWhileSessionPays(row.cart_session_id, doc.registrationId) : null;
   if (read) {
     let stored = await readStoredSession(read, doc.registrationId);
     if (stored.status === "open") {
@@ -85,6 +85,22 @@ export async function payFromPayPage(token: string, origin: string, now: Date = 
     }
     if (stored.status === "complete" && (await completedSessionStillPays(stored, doc.registrationId))) {
       throw new HttpError(409, "This entry has already been paid", "REGISTRATION_PAID_ONLINE");
+    }
+  }
+
+  // Walk-fix F12: the cart's session, still open and covering this entry alone (the sign-up session, or the status page's), is
+  // retired BEFORE the mint, fail-closed - the status page's rule for the same session (`resumeRegistrationCheckout`, m8). The
+  // mint's own supersede step runs after the create and is best-effort, so a Stripe hiccup there left two payable sessions for the
+  // entry. One that also covers a sibling is not this entry's to expire (the supersede's subsumption rule leaves it too). Nor is a
+  // session that returns to THIS page: on the cart pointer but not on the entry pointer this press read, it is a concurrent press's
+  // own, already handed out - that press won, and this one's mint loses its pointer claim (409 CONFLICT) instead.
+  if (cart?.status === "open" && !returnsToPayPage(cart)) {
+    const ids = checkoutRegistrationIds(cart);
+    if (ids.length > 0 && ids.every((id) => id === doc.registrationId)) {
+      const settled = await expireStoredSession(cart.id, doc.registrationId);
+      if (settled.status === "complete" && (await completedSessionStillPays(settled, doc.registrationId))) {
+        throw new HttpError(409, "A payment for this entry is already on its way", "REGISTRATION_PAID_ONLINE");
+      }
     }
   }
 

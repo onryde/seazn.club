@@ -141,6 +141,9 @@ export interface RegistrationHubRegistrantActionsProps {
   /** ISO time of the organiser's last "Send payment reminder" press for this entry; null if never. Within an hour of it, the next
    *  press asks first. */
   lastRemindedAt: string | null;
+  /** The organiser's presses for this entry inside the cap's 24 h window (the row's `reminders_in_window`, counted by the cap's own
+   *  SQL). At `REMINDER_CAP_PER_DAY` the button is disabled and says so: the server would refuse the press (walk-fix F13). */
+  remindersInWindow: number;
   /** Polish wave P5 (W12): when the organiser approved this entry while its fee was still due (`approved_at`, V513), ISO; null if
    *  never approved that way. Approve is then done and the payment confirms the entry. */
   approvedAt: string | null;
@@ -160,6 +163,7 @@ export function RegistrationHubRegistrantActions({
   entryPaymentIntentId,
   refundedCents,
   lastRemindedAt,
+  remindersInWindow,
   approvedAt,
 }: RegistrationHubRegistrantActionsProps) {
   const msg = useMsg();
@@ -444,7 +448,11 @@ export function RegistrationHubRegistrantActions({
 
   // Send payment reminder. A press within the hour of the last one asks first (a double click is rarely meant); the server caps it at
   // five a day regardless, and its refusal is said here in the organiser's language off its code, not in the server's English.
+  // Walk-fix F13: the cap is known before the press. At it the button is disabled (below), and a press that reaches here anyway asks
+  // nothing and sends nothing - the server's own 429 stays the authority for a count that grew after this page loaded.
+  const remindCapped = remindersInWindow >= REMINDER_CAP_PER_DAY;
   async function remind() {
+    if (remindCapped) return;
     if (lastRemindedAt !== null && Date.now() - Date.parse(lastRemindedAt) < REMINDER_CONFIRM_WITHIN_MS) {
       const ok = await confirmDialog({
         title: msg("reg.remind.confirmRecent.title"),
@@ -585,12 +593,13 @@ export function RegistrationHubRegistrantActions({
           <button
             type="button"
             data-registration-hub-registrant-action="remind"
-            disabled={busy !== null}
+            data-capped={remindCapped ? "true" : undefined}
+            disabled={busy !== null || remindCapped}
             onClick={remind}
-            title={msg("reg.action.remindTitle")}
+            title={remindCapped ? msg("reg.remind.limit", { count: REMINDER_CAP_PER_DAY }) : msg("reg.action.remindTitle")}
             className="btn btn-ghost text-xs"
           >
-            {msg("reg.action.remind")}
+            {remindCapped ? msg("reg.action.remindLimitReached") : msg("reg.action.remind")}
           </button>
         )}
       </div>

@@ -8,6 +8,7 @@ import { enqueueEmailOnce, expiryWithin, recipientLocale } from "@/server/email-
 import { isoFromZonedParts } from "@/lib/zoned-datetime";
 import { log } from "@/server/logger";
 import { ownPaymentRefundedCents } from "@/lib/registration-status";
+import { entryReferenceOf } from "@/lib/ref-code";
 import { queueStaffAlert } from "../staff-alert";
 import { audit } from "../audit";
 import type { Tx, RegistrationWithGroupRow, DivisionCtx } from "./types";
@@ -104,7 +105,9 @@ export async function queueRefundReceipt(
           contactName: reg.contact_name,
           amountCents,
           currency: reg.currency,
-          refCode: reg.ref_code,
+          // The refund names ONE entry and its amount (B5 T18 review): the reference to quote is that entry's own (`-2` in a cart sent with
+          // two or more), the one its payment was made against.
+          refCode: entryReferenceOf(reg),
         },
         locale,
       );

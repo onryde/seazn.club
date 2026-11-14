@@ -61,6 +61,9 @@ describe.skipIf(!HAS_DB)("fetchRegistrantDetails — real Postgres", () => {
       const roster2 = result.rosterByRegistration.get(reg2.id)!;
       expect(roster2).toHaveLength(1);
       expect(roster2[0]!.consent_status).toBe("guardian");
+      // Owner rec 2026-11-14: the panel names who consented — read off the row, null where nobody did as a guardian.
+      expect(roster2[0]!.guardian_name).toBe("Guardian Jordan");
+      expect(roster1.map((p) => p.guardian_name)).toEqual([null, null]);
     });
 
     it("an entry with NO players has no key in the map at all — the degenerate case", async () => {

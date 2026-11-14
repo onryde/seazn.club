@@ -22,6 +22,7 @@ import { plural, t } from "@/lib/i18n-runtime";
 import { rulesLineText } from "@/lib/rules-line";
 import type { CompetitionHubDocT } from "@/server/public-site/competition-hub-schema";
 import { CompetitionProse } from "../competition-prose";
+import { HubOnlinePlayNote } from "./online-play-note";
 
 export interface InfoTabProps {
   doc: CompetitionHubDocT;
@@ -219,10 +220,16 @@ export function InfoTab({
       suspensions: d.suspensions ?? [],
       stageLines: d.stageFormatLines ?? [],
       calendar: info.calendars.find((cal) => cal.href === `${d.href}/calendar.ics`) ?? null,
+      // Walk-fix F8: played online (and its camera policy) is content too.
+      onlinePlay: d.onlinePlay ?? null,
     }))
     .filter(
       (b) =>
-        b.description !== null || b.calendar !== null || b.suspensions.length > 0 || b.stageLines.length > 0,
+        b.description !== null ||
+        b.calendar !== null ||
+        b.suspensions.length > 0 ||
+        b.stageLines.length > 0 ||
+        b.onlinePlay !== null,
     );
   // What did NOT move: an entry no division's href owns keeps the old list,
   // with its index-fallback testid. Every entry moved → no list at all.
@@ -270,7 +277,15 @@ export function InfoTab({
         className="flex min-w-0 flex-wrap items-center gap-3"
       >
         <span className="text-sm text-ink">
-          {t(dict, info.registrationOpen ? "info.registration.open" : "info.registration.closed")}
+          {t(
+            dict,
+            info.registrationOpen
+              ? "info.registration.open"
+              : // Walk-fix F5: shut only for card payments, the row gives that reason and says registration will open.
+                info.registrationWaitsOnCardPayments
+                ? "info.registration.cardPaymentsUnavailable"
+                : "info.registration.closed",
+          )}
         </span>
         {info.registrationOpen ? (
           <Link
@@ -287,7 +302,7 @@ export function InfoTab({
         <section data-testid="mh-info-divisions" className="min-w-0 space-y-3">
           <h2 className={SECTION_TITLE_CLASS}>{t(dict, "info.divisions")}</h2>
           <div className="space-y-3">
-            {boxes.map(({ d, description, suspensions, stageLines, calendar }) => {
+            {boxes.map(({ d, description, suspensions, stageLines, calendar, onlinePlay }) => {
               const headingId = `mh-info-division-${d.slug}-name`;
               const calendarId = `mh-info-calendar-${d.slug}`;
               return (
@@ -299,6 +314,9 @@ export function InfoTab({
                   <h3 className="font-display text-lg font-semibold text-ink" id={headingId}>
                     {d.name}
                   </h3>
+                  {onlinePlay !== null ? (
+                    <HubOnlinePlayNote dict={dict} onlinePlay={onlinePlay} testId={`mh-info-online-${d.slug}`} />
+                  ) : null}
                   {description !== null ? (
                     <div data-testid={`mh-info-division-${d.slug}-description`} className="min-w-0">
                       <CompetitionProse html={description} />

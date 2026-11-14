@@ -4,10 +4,13 @@ import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { mayHoldBearerCredential } from "@/lib/types";
 import { SPOT_HOLDERS } from "@/lib/registration-status";
+import { parseSearchReference, referenceFragmentsOf } from "@/lib/ref-code";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { omit } from "@/lib/omit";
 import type { Tx, RegistrationSettingsRow, RegistrationWithGroupRow, AnySql } from "./types";
 import { regGroupCols } from "./lookups";
+import { promotionSkippedAtSql, waitlistPositionSql } from "./waitlist";
+import { remindersInWindowSql } from "./reminder-window";
 
 // ---------------------------------------------------------------------------
 // Organiser: list / confirm / waitlist / withdraw / refund / export
@@ -24,7 +27,12 @@ export interface ListRegistrationsFilters {
   free_agent?: boolean;
   /** At least one player on the entry still has `consent_status = 'pending'`. */
   consent_pending?: boolean;
-  /** Matches the entry's display name or the cart's contact name/email. */
+  /** Matches the entry's display name, the cart's contact name/email, or the cart's reference: the reference as a person types it
+   *  (any case, with or without the SZ, dashes and spaces: `lib/ref-code.ts` `parseSearchReference`) finds every entry of its cart,
+   *  the entry's own `SZ-XXXX-XXXX-<n>` (or `SZXXXXXXXX<n>`) finds that one entry, also when it sits inside pasted text
+   *  (`PAYMENT SZ-XXXX-XXXX-2 THANK YOU`), and a fragment of the reference finds the cart: without the dashes (`SZ7F3K`, straddling the
+   *  dash) from four letters or digits, and as written (`-7F3`, `SZ-7F3`) from a dash with three characters beyond the SZ. Anything
+   *  shorter, a bare digit included, is a name and e-mail search only. */
   text?: string;
   /** RS005 W1a. Default `"oldest"` is `order by r.created_at, r.id` —
    *  UNCHANGED from pre-W1a, so the live `/api/v1/divisions/[id]/registrations`
@@ -199,6 +207,13 @@ export interface RegistrationListRow extends Omit<RegistrationWithGroupRow, "acc
   /** When the organiser last pressed "Send payment reminder" for THIS entry: the newest `registration.payment_reminded` audit row naming
    *  it, null if never. The sweep's own reminders are not audit rows and do not count. */
   last_reminded_at: Date | null;
+  /** The organiser's presses for THIS entry inside the cap's window (reminder-window.ts, the cap's own count): at
+   *  REMINDER_CAP_PER_DAY the hub disables the button, since the press would be refused (walk-fix F13). */
+  reminders_in_window: number;
+  /** When an automatic promotion last passed this WAITING entry over because its Lichess account is not linked to play
+   *  (`promotionSkippedAtSql`, registrations/waitlist.ts), in its current wait; null otherwise. The hub shows "Skipped on <date>: Lichess
+   *  wasn't linked" beside the waitlist place (walk-fix F16, final review m1). */
+  promotion_skipped_at: Date | null;
 }
 
 /** Raw wire shape — `RegistrationListRow` plus the hash the query still
@@ -228,10 +243,12 @@ type RawListRow = RegistrationListRow & { access_token_hash: string };
  * `sports` is joined INNER, not LEFT, unlike `registration_settings` above —
  * `divisions.sport_key` is `not null references sports(key)` (V209), so
  * every division has exactly one sport row and this join can never drop one.
- * `waitlist_position`'s subquery counts waitlisted SIBLINGS (same division)
- * whose `(created_at, id)` tuple sorts strictly before this row's own, +1 —
- * exactly `promoteOldestWaitlisted`'s (this file) own `order by created_at,
- * id limit 1`, so position 1 is that function's pick on a quiescent table.
+ * `waitlist_position` is `waitlistPositionSql` (registrations/waitlist.ts):
+ * the waitlisted SIBLINGS (same division) ahead of this row in the queue
+ * order `promoteOldestWaitlisted` takes, +1, so position 1 is that
+ * function's pick on a quiescent table. Registration redesign B3 T13: this
+ * used to count by `(created_at, id)`, which put a lapsed promotion (back on
+ * the TAIL by `waitlisted_at`) at the head of the list.
  *
  * It is a SNAPSHOT of that order, not a lock on it, and the difference is
  * reachable: `promoteOldestWaitlisted` picks `for update skip locked`, so
@@ -297,6 +314,17 @@ export async function listRegistrations(
     // otherwise start escaping whatever follows it instead of matching
     // itself.
     const likePattern = (s: string) => "%" + s.replace(/[\\%_]/g, "\\$&") + "%";
+    // B5 T19 (spec §6.4): the same box finds an entry by the reference its player quotes. `parseSearchReference` is the search's own
+    // reader (lib/ref-code.ts): looser than /r/'s, because a bank statement strips the dashes and spaces (`SZABCDEFGH2`), and it still
+    // checks the checksum so a name is never read as a reference. A suffixed reference names ONE entry (`cart_position`); a bare one
+    // names its cart, so it finds every entry of it. A position past the cart's size matches no row on its own, because
+    // `cart_position <= cart_size` always holds (V519).
+    const typedRef = text ? parseSearchReference(text) : null;
+    // A PART of a reference finds its cart too (a person reads out `SZ-7F3K`, a bank statement keeps `SZ7F3KQ2` without the dash), but only
+    // from four letters or digits, or from a dash with three characters beyond the SZ. "sz" is in every reference, "Ann" in one in a few
+    // thousand and a digit in one in four, so a short name search must not list carts by their reference (B5 T19 review m2;
+    // `referenceFragmentsOf` says which is which).
+    const fragments = text ? referenceFragmentsOf(text) : { written: null, dashless: null };
     const rows = await tx<RawListRow[]>`
       select ${regGroupCols(tx)},
         d.name as division_name,
@@ -326,11 +354,9 @@ export async function listRegistrations(
           where ev.competition_id = c.id
             and ev.type = 'registration.payment_reminded'
             and ev.payload->>'registration_id' = r.id::text) as last_reminded_at,
-        case when r.status = 'waitlisted' then (
-          (select count(*)::int from registrations w
-            where w.division_id = r.division_id and w.status = 'waitlisted'
-              and (w.created_at, w.id) < (r.created_at, r.id)) + 1
-        ) else null end as waitlist_position
+        ${remindersInWindowSql(tx, tx`c.id`, tx`r.id::text`)} as reminders_in_window,
+        ${waitlistPositionSql(tx, "r")} as waitlist_position,
+        ${promotionSkippedAtSql(tx, "r")} as promotion_skipped_at
       from registrations r
       join registration_groups g on g.id = r.group_id
       join divisions d on d.id = r.division_id
@@ -374,7 +400,24 @@ export async function listRegistrations(
           text
             ? tx`and (r.display_name ilike ${likePattern(text)} escape '\\'
                   or g.contact_name ilike ${likePattern(text)} escape '\\'
-                  or g.contact_email ilike ${likePattern(text)} escape '\\')`
+                  or g.contact_email ilike ${likePattern(text)} escape '\\'
+                  ${
+                    fragments.written !== null
+                      ? tx`or g.ref_code ilike ${likePattern(fragments.written)} escape '\\'`
+                      : tx``
+                  }
+                  ${
+                    fragments.dashless !== null
+                      ? tx`or replace(g.ref_code, '-', '') ilike ${likePattern(fragments.dashless)} escape '\\'`
+                      : tx``
+                  }
+                  ${
+                    typedRef
+                      ? typedRef.position === null
+                        ? tx`or g.ref_code = ${typedRef.refCode}`
+                        : tx`or (g.ref_code = ${typedRef.refCode} and r.cart_position = ${typedRef.position})`
+                      : tx``
+                  })`
             : tx``
         }
       ${filters.sort === "newest" ? tx`order by r.created_at desc, r.id desc` : tx`order by r.created_at, r.id`}`;

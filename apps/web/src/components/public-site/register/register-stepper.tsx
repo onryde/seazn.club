@@ -15,19 +15,17 @@
 // `?join=` deep-link (RS007): accepted as a prop and deliberately unused —
 // the seam is "render nothing, don't crash on the param" (RS006 prompt).
 import { useEffect, useRef, useState } from "react";
-import { useT } from "@/components/i18n/dict-provider";
+import { usePlural, useT } from "@/components/i18n/dict-provider";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { TurnstileWidget, useTurnstile } from "@/components/turnstile-widget";
 import { isTurnstileRefusal } from "@/lib/turnstile";
 import { withTurnstile } from "@/lib/turnstile-client";
 import { useHydrated } from "@/lib/use-client-snapshot";
-import { formatMoneyExact } from "@/lib/currency";
 import {
   autoLinkObviousSelf,
   autoSeedSingleDivision,
   cartReducer,
   clearSelfLinkWhenNotPlaying,
-  payableDivision,
   summarizeCart,
   type CartAction,
 } from "./cart";
@@ -39,6 +37,7 @@ import {
   buildSubmitBody,
   classifySubmitFailure,
   lichessRefusalReason,
+  registrationStatusUrl,
   resolvePostSubmitNavigation,
   type LichessRefusal,
   type SubmitFailureKind,
@@ -46,14 +45,17 @@ import {
 } from "./submit";
 import { StepConsent } from "./step-consent";
 import { onlineDivisionNames, registerReturnPath, type RegisterLichessState } from "./register-lichess-card";
+import { selectedCameraRequirements } from "./online-play-note";
 import { StepDetails } from "./step-details";
 import { StepEntries } from "./step-entries";
 import { StepNav } from "./step-nav";
 import { StepReview } from "./step-review";
+import { reviewContent } from "./review-content";
 import { StepWho } from "./step-who";
 import { buildStepOrder, nextStepIndex, offersJoinCode, prevStepIndex, shouldCollapseEntries, stepFocusTransition } from "./steps";
 import { JoinCodeEntry } from "./join-code-entry";
-import { BTN_GHOST, BTN_PRIMARY } from "./styles";
+import { ActionBar } from "./action-bar";
+import { actionBarLabels, type SubmitPhase } from "./action-bar-labels";
 import {
   EMPTY_CART,
   EMPTY_CONSENT,
@@ -126,6 +128,7 @@ export function RegisterStepper({
   lichess?: RegisterLichessState | null;
 }) {
   const t = useT();
+  const plural = usePlural();
   // I5: where a Lichess link start comes back to — this registration, its join code kept (the draft is in
   // sessionStorage, so the player lands back on the step they left).
   const lichessReturn = registerReturnPath(orgSlug, competitionSlug, joinCode ?? null);
@@ -162,6 +165,13 @@ export function RegisterStepper({
   const [cart, setCart] = useState<CartState>(EMPTY_CART);
   const [stepIndex, setStepIndex] = useState(0);
   const [whoAttempted, setWhoAttempted] = useState(false);
+  // B2 T9: how many times Continue has failed on Contact. The error summary (step-who.tsx) is focused from an effect keyed on THIS,
+  // not on `whoAttempted`: that flips once, so a second failed Continue (the registrant fixed one field and tried again) would
+  // stay silent. The ref is the summary's own element, handed down through StepWho; it exists only while something is wrong.
+  const [whoFailedContinues, setWhoFailedContinues] = useState(0);
+  const whoSummaryRef = useRef<HTMLDivElement>(null);
+  // Walk-fix F6: the action bar's "why Continue cannot move on" notice, revealed and focused by a tap on Continue.
+  const barBlockedRef = useRef<HTMLParagraphElement>(null);
   const [entriesAttempted, setEntriesAttempted] = useState(false);
   const [detailsAttempted, setDetailsAttempted] = useState(false);
   const [consentAttempted, setConsentAttempted] = useState(false);
@@ -181,8 +191,10 @@ export function RegisterStepper({
   // to whichever session wires the final submit body.
   const [website, setWebsite] = useState("");
   // Step 5's submit — NOT persisted (a refresh mid-submit should retry, not
-  // silently resume a stale "submitting" state).
-  const [submitting, setSubmitting] = useState(false);
+  // silently resume a stale "submitting" state). One field for both "is it busy" and "what does the button say": `submitting` below is
+  // derived, so the disabled state and the label can never disagree about which phase it is.
+  const [submitPhase, setSubmitPhase] = useState<SubmitPhase>("idle");
+  const submitting = submitPhase !== "idle";
   const turnstile = useTurnstile("register");
   // FIX 3 (RS006 fix wave) — was a bare `string | null` (whatever
   // `err.message` happened to be, rendered as-is, the ONLY thing the
@@ -307,6 +319,12 @@ export function RegisterStepper({
     setCart(clearSelfLinkWhenNotPlaying(autoLinkObviousSelf(cart, imPlaying), imPlaying));
   }
 
+  // B2 T9: a failed Continue on Contact moves focus to the error summary (the box naming what is wrong, announced by this focus alone). By the time this
+  // runs the render that mounted the summary has committed, so the ref is attached. A failure count of 0 is "never failed": nothing to focus.
+  useEffect(() => {
+    if (whoFailedContinues > 0) whoSummaryRef.current?.focus();
+  }, [whoFailedContinues]);
+
   // Review finding #2 (MEDIUM) — move focus to the new step's own heading
   // on a REAL step transition (goNext/goBack), never on the initial mount
   // (including a restored snapshot that lands straight on a later step —
@@ -325,6 +343,20 @@ export function RegisterStepper({
       containerRef.current?.querySelector<HTMLHeadingElement>("h2")?.focus();
     }
   }, [hydrated, stepIndex]);
+
+  // B1 fix round 1 (review M5): Back from Stripe (or from the status page) can restore this page from the browser's back-forward
+  // cache, button frozen mid-phase ("Opening secure payment…", disabled). The cart is already committed, so the button must not
+  // come back to life (a second click is a second cart, sessionStorage having been cleared): the page goes to the cart's own status
+  // page instead, where the registrant can pay or see where they stand. `replace`, so Back from there does not land on this frozen
+  // form again. Set only once the POST has answered with a cart; a restore before that, or after a failed submit, changes nothing.
+  const committedStatusUrl = useRef<string | null>(null);
+  useEffect(() => {
+    const onPageShow = (e: PageTransitionEvent) => {
+      if (e.persisted && committedStatusUrl.current) window.location.replace(committedStatusUrl.current);
+    };
+    window.addEventListener("pageshow", onPageShow);
+    return () => window.removeEventListener("pageshow", onPageShow);
+  }, []);
 
   function dispatchCart(action: CartAction) {
     setCart((prev) => cartReducer(prev, action));
@@ -345,18 +377,6 @@ export function RegisterStepper({
   // (handleSubmit/the nav row below) read this ONE result, never a second
   // computation (summarizeCart's own doc comment).
   const reviewSummary = summarizeCart(cart, info.divisions);
-  // Submit button label (design §4 step 5's three cases): free, pay-by-card-
-  // now, or pay-the-organiser-later. Reads `payableDivision` — the SAME
-  // lookup StepReview's own payment-method note reads — so the two can
-  // never disagree (payableDivision's own doc comment).
-  const reviewPayable = payableDivision(reviewSummary);
-  const submitLabel =
-    reviewSummary.subtotalCents === 0 || !reviewSummary.currency
-      ? t("register.submit.free")
-      : t(reviewPayable?.payment_method === "stripe" ? "register.submit.card" : "register.submit.fee", {
-          fee: formatMoneyExact(reviewSummary.subtotalCents, reviewSummary.currency, locale),
-        });
-
   // Clamped to the LAST real step, never stepOrder.length — "review" is a
   // genuine final step with its own Submit action, not a position before a
   // "coming soon" end-cap (matches the post-hydration restore's own clamp above).
@@ -376,11 +396,41 @@ export function RegisterStepper({
             ? consentValidation.valid
             : false; // "review" advances via handleSubmit, never goNext
 
+  // What the bar says, in the step it is on and the submit phase it is in. `stepAfter` is where the forward button leads (Review has no
+  // such step, and no forward button either: its action is the submit). Every label reads the SAME `reviewSummary` the Review step's
+  // total and line items read, so the button, the heading and the total cannot disagree.
+  const stepAfter = stepOrder[nextStepIndex(clampedIndex, stepOrder)];
+  const barLabels = actionBarLabels({
+    t,
+    plural,
+    locale,
+    summary: reviewSummary,
+    step: currentStep,
+    stepAfter,
+    phase: submitPhase,
+  });
+
+  // Walk-fix F6 (P4 W9's refusal, moved): a card division and a pay-the-organiser one cannot be collected together, and the server refuses
+  // the cart as a whole. The action bar says so directly above Continue the moment the second division is added, from the SAME verdict
+  // that holds Next (validateEntries' `mixedPayment`), and a tap on Continue reveals and focuses that notice instead of advancing.
+  const mixed = currentStep === "entries" ? entriesValidation.mixedPayment : null;
+  const barBlocked =
+    mixed === null
+      ? null
+      : t("register.entries.cart.mixedPayment", { cardDivision: mixed.cardDivision, offlineDivision: mixed.offlineDivision });
+  function revealBarBlocked() {
+    const el = barBlockedRef.current;
+    // `nearest`: pinned in the phone's bar it is already on screen (no jump); in the desktop's in-flow row it scrolls just enough.
+    el?.scrollIntoView({ block: "nearest" });
+    el?.focus({ preventScroll: true });
+  }
+
   function goNext() {
     if (currentStep === "who") setWhoAttempted(true);
     if (currentStep === "entries") setEntriesAttempted(true);
     if (currentStep === "details") setDetailsAttempted(true);
     if (currentStep === "consent") setConsentAttempted(true);
+    if (!canGoNext && currentStep === "who") setWhoFailedContinues((n) => n + 1);
     if (!canGoNext) return;
     // P4 (W1, W3): moving INTO details seeds its rows from the contact and the pair partner (details-seed.ts — blank rows only, so
     // going Back and Next again never overwrites what the registrant typed there).
@@ -401,10 +451,14 @@ export function RegisterStepper({
    * Navigation — the SAME `?rid=&token=` convention buildCartMail/
    * createRegistrationCheckout already mint). The sessionStorage draft is
    * cleared on EITHER success path: the cart is committed server-side
-   * either way, so nothing here should ever be replayed. `submitting` is
-   * deliberately left `true` on the success path — the page is about to
+   * either way, so nothing here should ever be replayed. The phase is
+   * deliberately left non-idle on the success path — the page is about to
    * navigate away, so there is no further interaction to unblock; only the
-   * catch branch resets it, so a failed attempt can be retried.
+   * catch branch returns it to `idle`, so a failed attempt can be retried.
+   * It is `saving` for the whole POST, becomes `opening_payment` only when
+   * the response carries a checkout (the label then says where the page is
+   * headed during the navigation), and stays `saving` for a free or
+   * pay-the-organiser-later cart, which goes straight to the status page.
    *
    * FIX 3 (RS006 fix wave) — the catch branch used to render `err.message`
    * verbatim as the ONLY thing the registrant saw: a bare server string
@@ -420,7 +474,7 @@ export function RegisterStepper({
    * resubmit — nothing is lost on a failed attempt.
    */
   async function handleSubmit() {
-    setSubmitting(true);
+    setSubmitPhase("saving");
     setSubmitError(null);
     try {
       const result = await withTurnstile(turnstile, (headers) =>
@@ -431,7 +485,11 @@ export function RegisterStepper({
         }),
       );
       clearRegisterState(orgSlug, competitionSlug);
+      committedStatusUrl.current = registrationStatusUrl(result, orgSlug, competitionSlug);
       const nav = resolvePostSubmitNavigation(result, orgSlug, competitionSlug);
+      // Keyed on the RESPONSE, not the cart's label: only a real checkout URL means "opening payment". The old document stays up until
+      // the next one's response commits, so this label is on screen for the navigation's whole round trip.
+      if (nav.kind === "checkout") setSubmitPhase("opening_payment");
       window.location.assign(nav.url);
     } catch (err) {
       const status = err instanceof ApiV1Error ? err.status : undefined;
@@ -441,12 +499,21 @@ export function RegisterStepper({
         detail: isTurnstileRefusal(err) ? t("turnstile.error") : err instanceof Error ? err.message : String(err),
         lichess: err instanceof ApiV1Error ? lichessRefusalReason(err.status, err.code) : null,
       });
-      setSubmitting(false);
+      setSubmitPhase("idle");
     }
   }
 
   return (
-    <div ref={containerRef} className="space-y-4">
+    // `data-register-flow` (B2 T8): the marker the org header's phone scroll-away keys on (layout.tsx, `group-has-[[data-register-flow]]`).
+    // On THIS root only: the status page and every other page under the org layout have none, so their header stays pinned.
+    // The scroll margin on the root's controls (below `md`): a control brought into view by focus (a tap on a field, Tab, the browser's
+    // own scroll) is kept clear of the sticky bar under it, which is up to ~120px tall. The browser counts a control behind the bar as
+    // visible, so without a margin it would leave a focused field sitting under the bar.
+    <div
+      ref={containerRef}
+      data-register-flow
+      className="space-y-4 max-md:[&_:is(input,select,textarea,button,summary,a)]:scroll-mb-32"
+    >
       {/* The RS007 seam marker. `ph-no-capture` on its OWN empty element, not on this root: the join code is a capability
           (anyone holding it can join the entry), PostHog replay records attributes before the `before_send` scrub can see
           them, and its recorder blocks only this class on the element that carries the value, which here would be the
@@ -455,7 +522,10 @@ export function RegisterStepper({
       {/* A teammate handed a CODE (not a link) has no other door; the join page decides everything past the typed code. First step
           only: past it the person is building their own entry, and the door is a collapsed line, not a card. */}
       {joinCodeDoor && clampedIndex === 0 ? <JoinCodeEntry orgSlug={orgSlug} competitionSlug={competitionSlug} /> : null}
-      <StepNav order={stepOrder} currentIndex={clampedIndex} />
+      {/* B2 T7: a finished step is a button from `md` up (the bar's own rule); `setStepIndex(i)` is exactly what Back does, to any earlier
+          step — nothing typed is lost (the draft state lives here and in sessionStorage, not in the step that is left). B2 T8: not while a
+          submit is in flight — the cart is already on its way, and a jump back would show a form the click has already sent. */}
+      <StepNav order={stepOrder} currentIndex={clampedIndex} onJump={submitting ? undefined : setStepIndex} />
 
       {currentStep === "who" && (
         <StepWho
@@ -465,6 +535,7 @@ export function RegisterStepper({
           onImPlayingChange={setImPlaying}
           requirements={requirements}
           errors={whoAttempted ? contactValidation.errors : {}}
+          summaryRef={whoSummaryRef}
         />
       )}
 
@@ -478,6 +549,7 @@ export function RegisterStepper({
             imPlaying={imPlaying}
             seasonStartYear={seasonStartYear}
             locale={locale}
+            mixedPayment={barBlocked}
           />
           {entriesAttempted && !entriesValidation.valid && entriesValidation.error && (
             <p role="alert" className="text-sm text-red-600">
@@ -495,6 +567,7 @@ export function RegisterStepper({
             dispatch={dispatchCart}
             contact={contact}
             seasonStartYear={seasonStartYear}
+            orgName={info.org.name}
             importTextByEntry={importTextByEntry}
             onImportTextChange={(entryId, text) => setImportTextByEntry((m) => ({ ...m, [entryId]: text }))}
           />
@@ -514,6 +587,7 @@ export function RegisterStepper({
               ? null
               : { divisions, orgSlug, next: lichessReturn, state: lichess };
           })()}
+          cameraRequirements={selectedCameraRequirements(cart, info.divisions)}
           contact={contact}
           onContactChange={(patch) => setContact((c) => ({ ...c, ...patch }))}
           consent={consent}
@@ -526,9 +600,15 @@ export function RegisterStepper({
 
       {currentStep === "review" && (
         <>
-          <StepReview summary={reviewSummary} locale={locale} />
-          {/* Mounted on the step that submits, so the invisible check starts when it is needed and a token is fresh at the click. */}
-          <TurnstileWidget controller={turnstile} />
+          <StepReview
+            summary={reviewSummary}
+            content={reviewContent(cart, info.divisions, contact, consent, new Date())}
+            locale={locale}
+            order={stepOrder}
+            // The same jump the step rail makes (`setStepIndex(i)` is exactly what Back does, to any earlier step): nothing typed is lost,
+            // the draft lives here and in sessionStorage. Not while a submit is in flight (the rail's own rule): the cart is already on its way.
+            onEdit={submitting ? undefined : setStepIndex}
+          />
           {submitError &&
             (submitError.lichess !== null ? (
               // A Lichess reason says WHAT is wrong and WHAT to do, so it stands alone: the generic "check your details"
@@ -545,7 +625,12 @@ export function RegisterStepper({
                   <path d="M12 17h.01" />
                   <path d="M10.3 3.9L2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" />
                 </svg>
-                {submitError.lichess === "link" ? (
+                {submitError.lichess === "self" ? (
+                  // Walk-fix F3: the entry is for someone else, and an online seat is the registering account's own. The fix is
+                  // on THIS form (the who step's box, named in its own words) or the player's own registration: no Lichess
+                  // action, because neither linking nor reconnecting changes the answer.
+                  <p className="m-0 min-w-0">{t("register.lichessSelfEntryRequired", { box: t("register.who.playing.title") })}</p>
+                ) : submitError.lichess === "link" ? (
                   <p className="m-0 min-w-0">
                     {t("register.lichessLinkRequired")}{" "}
                     {/* `ph-no-capture`: the return path carries the team's join code (`?join=`), url-encoded into this href. */}
@@ -581,39 +666,28 @@ export function RegisterStepper({
         </>
       )}
 
-      {/* relative z-50: the SAME escape hatch cookie-consent.tsx documents
-          for dialogs (its own header comment — "nothing needs to sit above
-          a modal") — z-50 matches the confirm-dialog tier so the fixed,
-          z-40 cookie banner never wins the tie and swallows a click on
-          Back/Next (fix wave finding #6; regression-pinned in
-          register-stepper-interaction.test.tsx via the SAME z-index
-          source-contract convention as cookie-consent-below-dialogs.test.ts). */}
-      <div className="relative z-50 flex items-center justify-between">
-        <button
-          type="button"
-          data-testid="reg-back"
-          onClick={goBack}
-          disabled={stepIndex === 0}
-          className={BTN_GHOST}
-        >
-          {t("register.nav.back")}
-        </button>
-        {currentStep === "review" ? (
-          <button
-            type="button"
-            data-testid="reg-submit"
-            onClick={handleSubmit}
-            disabled={submitting}
-            className={BTN_PRIMARY}
-          >
-            {submitLabel}
-          </button>
-        ) : (
-          <button type="button" data-testid="reg-next" onClick={goNext} className={BTN_PRIMARY}>
-            {t("register.nav.next")}
-          </button>
-        )}
-      </div>
+      {/* The bot check, mounted ONCE at the root, outside the step switch (registration redesign B1, spec §3.3 item 1): the
+          invisible challenge starts when the form opens, so a token is usually waiting by the time Review is reached, and a step
+          change never re-renders it. A token held too long is re-armed by the controller (TOKEN_MAX_AGE_MS). A plain laid-out box,
+          not `display:none` (Cloudflare renders into a laid-out node) and not aria-hidden: the widget is `interaction-only`, so
+          when Cloudflare needs the visitor it shows a checkbox HERE, above Back/Next on whatever step they are on. Invisible, it
+          is 0px tall and its spacing collapses into its neighbours' (block flow), so no step's layout moves. */}
+      <TurnstileWidget controller={turnstile} />
+
+      {/* The action bar (B2 T8, spec §7.2): Back, the running total, the one forward button, and the submit phase said aloud. What it
+          says is computed in action-bar-labels.ts from this component's own state; how it looks and stacks is action-bar.tsx's. */}
+      <ActionBar
+        step={currentStep}
+        hasBack={clampedIndex > 0}
+        submitting={submitting}
+        labels={barLabels}
+        sentTo={contact.email.trim()}
+        blocked={barBlocked}
+        blockedRef={barBlockedRef}
+        onBack={goBack}
+        onNext={barBlocked !== null ? revealBarBlocked : goNext}
+        onSubmit={handleSubmit}
+      />
 
       {/* Honeypot — hidden and out of the tab order/accessibility tree, so
           no genuine visitor (sighted, keyboard, or screen-reader) ever

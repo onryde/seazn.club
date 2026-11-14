@@ -181,7 +181,8 @@ describe.skipIf(!HAS_DB)("POST /registrations/:id/resend-confirmation", () => {
     expect(lineOf("First Entry"), "the entry named in the URL").toHaveLength(1);
     expect(lineOf("Second Entry"), "the cart's other entry").toHaveLength(1);
     expect(lineOf("First Entry")[0]).toContain(dictionarySubject("en", "registration.entryStatusPending", {}));
-    expect(lineOf("Second Entry")[0]).toContain(dictionarySubject("en", "registration.entryStatusWaitlisted", {}));
+    // B3 T13: the waitlisted entry states its place (the division's only waiter: #1) and that nothing is charged now.
+    expect(lineOf("Second Entry")[0]).toContain(dictionarySubject("en", "registration.entryStatusWaitlistedPosition", { position: "1" }));
   });
 
   it("does not mint a fresh checkout — the resent mail carries no pay link", async () => {

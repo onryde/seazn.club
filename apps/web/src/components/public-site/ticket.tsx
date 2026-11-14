@@ -29,6 +29,14 @@ export interface TicketEntry {
   divisionName: string;
 }
 
+/** Walk-fix F1: the entry a typed reference names (`/r/<ref>-2`). Its row comes first and open under its own heading; the cart's
+ *  other entries fold under `othersLabel`. Both strings arrive localized from the page. */
+export interface TicketFocus {
+  entryId: string;
+  heading: string;
+  othersLabel: string;
+}
+
 export function TearOffTicket({
   refCode,
   entries,
@@ -39,6 +47,7 @@ export function TearOffTicket({
   qrDataUrl,
   actions,
   renderEntryAction,
+  focus,
   locale,
 }: {
   refCode: string | null;
@@ -59,10 +68,46 @@ export function TearOffTicket({
    *  cart-wide button in `actions`). Return null/undefined for a row with
    *  nothing to show. */
   renderEntryAction?: (entry: TicketEntry) => React.ReactNode;
+  /** Opens the ticket on one entry (walk-fix F1). A focus naming no entry here is ignored: the cart renders unfocused. */
+  focus?: TicketFocus | null;
 }) {
   const dates = startsOn
     ? `${startsOn}${endsOn && endsOn !== startsOn ? ` – ${endsOn}` : ""}`
     : null;
+  const focused = focus ? entries.find((e) => e.id === focus.entryId) : undefined;
+  const others = focused ? entries.filter((e) => e !== focused) : entries;
+
+  const stampOf = (entry: TicketEntry) => {
+    const stamp = STATUS_STAMP[entry.status] ?? STATUS_STAMP.pending!;
+    return (
+      <div className="flex shrink-0 flex-wrap items-center gap-2">
+        <span
+          className={`shrink-0 -rotate-6 rounded border-2 px-2.5 py-1 font-display text-lg font-bold tracking-widest ${stamp.tone}`}
+          aria-label={`Status: ${entry.status}`}
+        >
+          {msgFor(locale, stamp.labelKey)}
+        </span>
+        {renderEntryAction?.(entry)}
+      </div>
+    );
+  };
+  /** One row per cart entry: division + holder, and its own stamp. */
+  const rowOf = (entry: TicketEntry) => (
+    <div
+      key={entry.id}
+      className="flex flex-col gap-2 px-6 py-4 xs:flex-row xs:items-center xs:justify-between xs:gap-4"
+    >
+      <div className="min-w-0">
+        <p className="text-[11px] tracking-widest text-ink-muted uppercase">
+          {entry.divisionName}
+        </p>
+        <p className="text-lg font-semibold break-words text-ink xs:truncate">
+          {entry.displayName}
+        </p>
+      </div>
+      {stampOf(entry)}
+    </div>
+  );
 
   return (
     <div className="relative">
@@ -79,36 +124,38 @@ export function TearOffTicket({
           {dates && <p className="mt-1 text-sm text-ink-muted">{dates}</p>}
         </header>
 
-        {/* One row per cart entry: division + holder, and its own stamp. */}
-        <div className="divide-y divide-zinc-100">
-          {entries.map((entry) => {
-            const stamp = STATUS_STAMP[entry.status] ?? STATUS_STAMP.pending!;
-            return (
-              <div
-                key={entry.id}
-                className="flex flex-col gap-2 px-6 py-4 xs:flex-row xs:items-center xs:justify-between xs:gap-4"
-              >
-                <div className="min-w-0">
-                  <p className="text-[11px] tracking-widest text-ink-muted uppercase">
-                    {entry.divisionName}
-                  </p>
-                  <p className="text-lg font-semibold break-words text-ink xs:truncate">
-                    {entry.displayName}
-                  </p>
-                </div>
-                <div className="flex shrink-0 flex-wrap items-center gap-2">
-                  <span
-                    className={`shrink-0 -rotate-6 rounded border-2 px-2.5 py-1 font-display text-lg font-bold tracking-widest ${stamp.tone}`}
-                    aria-label={`Status: ${entry.status}`}
-                  >
-                    {msgFor(locale, stamp.labelKey)}
-                  </span>
-                  {renderEntryAction?.(entry)}
-                </div>
+        {focused && focus ? (
+          <>
+            {/* The entry the typed reference names: first, open, and the page's heading. The ink rule down its edge is the
+                ticket's "this one" mark - the stub below still carries the whole cart's reference and QR. */}
+            <section
+              data-testid="ref-focus-entry"
+              aria-labelledby="ref-focus-heading"
+              className="flex flex-col gap-3 border-l-4 border-ink px-6 py-5 xs:flex-row xs:items-center xs:justify-between xs:gap-4"
+            >
+              <div className="min-w-0">
+                <p className="text-[11px] tracking-widest text-ink-muted uppercase">{focused.divisionName}</p>
+                <h1 id="ref-focus-heading" className="mt-0.5 text-2xl leading-tight font-bold break-words text-ink">
+                  {focus.heading}
+                </h1>
               </div>
-            );
-          })}
-        </div>
+              {stampOf(focused)}
+            </section>
+            {others.length > 0 && (
+              <details data-testid="ref-other-entries" className="group border-t border-zinc-200">
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-6 py-3 text-sm font-medium text-ink-muted hover:text-ink [&::-webkit-details-marker]:hidden">
+                  <span className="min-w-0">{focus.othersLabel}</span>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="shrink-0 transition-transform group-open:rotate-180 motion-reduce:transition-none">
+                    <path d="m6 9 6 6 6-6" />
+                  </svg>
+                </summary>
+                <div className="divide-y divide-zinc-100 border-t border-zinc-100">{others.map(rowOf)}</div>
+              </details>
+            )}
+          </>
+        ) : (
+          <div className="divide-y divide-zinc-100">{entries.map(rowOf)}</div>
+        )}
 
         {/* Perforation: the tear line between ticket and stub */}
         <div className="relative" aria-hidden>

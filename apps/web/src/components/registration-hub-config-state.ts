@@ -106,7 +106,7 @@ export function initialConfigState(
   eligibility: DivisionEligibility,
   individualOnly = false,
 ): RegistrationConfigState {
-  return {
+  const stored: RegistrationConfigState = {
     category: eligibility.category,
     age_min: eligibility.age_min,
     age_max: eligibility.age_max,
@@ -114,20 +114,28 @@ export function initialConfigState(
     age_cutoff_day: eligibility.age_cutoff_day,
     eligibility_note: eligibility.eligibility_note,
     enabled: settings.enabled,
-    entrant_kind: individualOnly ? "individual" : settings.entrant_kind,
+    entrant_kind: settings.entrant_kind,
     opens_at: settings.opens_at,
     closes_at: settings.closes_at,
     capacity: settings.capacity,
     fee_cents: settings.fee_cents,
-    free_agent_fee_cents: individualOnly ? null : settings.free_agent_fee_cents,
+    free_agent_fee_cents: settings.free_agent_fee_cents,
     refund_lock_at: settings.refund_lock_at,
     place_by_at: settings.place_by_at,
     form_fields: settings.form_fields,
     payment_method: settings.payment_method,
     payment_instructions: settings.payment_instructions,
     approval: settings.approval,
-    allow_free_agents: individualOnly ? false : settings.allow_free_agents,
+    allow_free_agents: settings.allow_free_agents,
   };
+  return individualOnly ? asIndividualOnly(stored) : stored;
+}
+
+/** The one entry shape an individual-only (chess) division takes: individual, no solo pool, no solo price. What
+ *  `initialConfigState` seeds such a division with, and what the page's Cancel returns it to (B7 T23) — the saved values
+ *  themselves stay the stored row, so a legacy row reads as unsaved until a save moves it. */
+export function asIndividualOnly(state: RegistrationConfigState): RegistrationConfigState {
+  return { ...state, entrant_kind: "individual", free_agent_fee_cents: null, allow_free_agents: false };
 }
 
 /** PATCH /api/v1/divisions/{id} body — always all six keys together (a
