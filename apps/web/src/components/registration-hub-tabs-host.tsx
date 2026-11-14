@@ -652,8 +652,11 @@ function RegistrationHubDivisionTab({
 }
 
 /** The three unsaved-edit questions (evict, close, leave): the save first, then the discard, then the way back out. Below sm the
- *  buttons stack with the save on top (§9.2: "At 320 the buttons stack with the primary first"). From sm they share a row and
- *  never break a label: a row too narrow for all three (the leave labels, or any of them in fr/nl/es) wraps whole buttons. */
+ *  buttons stack with the save on top (§9.2: "At 320 the buttons stack with the primary first"). From sm they share ONE row, like
+ *  every other dialog's buttons, and never break a label. Final fix round (sign-off capture, 1280): at the default width the leave
+ *  labels needed 402px of a 400px row and "Keep editing" wrapped alone onto a second one; the widest set (nl leave) needs 491px.
+ *  The wide dialog (`size="lg"`, 624px of row, 560px at a 640px screen) holds every set in every locale on one line; the wrap
+ *  stays only as a net that moves whole buttons. */
 function HubDialog({
   title,
   body,
@@ -676,6 +679,7 @@ function HubDialog({
   return (
     <Modal
       title={title}
+      size="lg"
       onClose={() => {
         if (!busy) dismiss.onClick();
       }}

@@ -80,6 +80,30 @@ const dialogAction = (page: Page, action: "save" | "discard" | "dismiss") =>
   dialog(page).locator(`[data-reg-hub-dialog-action="${action}"]`);
 const toast = (page: Page) => page.locator("[data-reg-hub-toast]");
 
+/** The dialog's three buttons as laid out. Below 640 they stack, the save first (§9.2). From 640 they share ONE row like every
+ *  other dialog's, the way back out leftmost, and no label is cut (final fix round: "Keep editing" had wrapped alone at 1280). */
+async function expectDialogButtons(page: Page, width: number) {
+  const laid = await dialog(page)
+    .locator("[data-reg-hub-dialog-action]")
+    .evaluateAll((els) =>
+      els.map((el) => {
+        const r = el.getBoundingClientRect();
+        return { action: el.getAttribute("data-reg-hub-dialog-action") ?? "", top: Math.round(r.top), left: r.left, cut: el.scrollWidth > el.clientWidth };
+      }),
+    );
+  expect(laid.length, "anti-vacuity: the dialog's buttons").toBe(3);
+  const order = [...laid].sort((x, y) => x.top - y.top || x.left - y.left).map((x) => x.action);
+  const rows = new Set(laid.map((x) => x.top)).size;
+  if (width < 640) {
+    expect(order).toEqual(["save", "discard", "dismiss"]);
+    expect(rows, "stacked below 640").toBe(3);
+  } else {
+    expect(order).toEqual(["dismiss", "discard", "save"]);
+    expect(rows, `one row of buttons at ${width}`).toBe(1);
+    expect(laid.filter((x) => x.cut).map((x) => x.action), "no label cut").toEqual([]);
+  }
+}
+
 /** The address's tab state, as the host wrote it. */
 function addressOf(page: Page): { tab: string | null; open: string | null } {
   const params = new URL(page.url()).searchParams;
@@ -274,13 +298,7 @@ for (const viewport of [
         copy("reg.hub.evict.body", { name: s.names[0], next: s.names[2] }),
       );
       // Primary first: the save, then the discard, then the way back out — on screen in that order at 320, stacked.
-      const order = await dialog(page).locator("[data-reg-hub-dialog-action]").evaluateAll((els) =>
-        els
-          .map((el) => ({ action: el.getAttribute("data-reg-hub-dialog-action"), top: el.getBoundingClientRect().top, left: el.getBoundingClientRect().left }))
-          .sort((x, y) => x.top - y.top || x.left - y.left)
-          .map((x) => x.action),
-      );
-      expect(order).toEqual(viewport.width < 640 ? ["save", "discard", "dismiss"] : ["dismiss", "discard", "save"]);
+      await expectDialogButtons(page, viewport.width);
       await expect(dialogAction(page, "save")).toHaveText(copy("reg.hub.evict.save"));
 
       await dialogAction(page, "dismiss").click();
@@ -342,6 +360,7 @@ for (const viewport of [
       await expect(dialog(page).locator("[data-reg-hub-dialog-body]")).toHaveText(
         copy("reg.hub.close.body.one", { count: 1, sections: copy("reg.settings.capacity") }),
       );
+      await expectDialogButtons(page, viewport.width);
 
       await dialogAction(page, "dismiss").click();
       await expect(dialog(page)).toHaveCount(0);
@@ -547,6 +566,72 @@ for (const viewport of [
       await expectNoHorizontalScroll(page);
     });
 
+    test("the strip: every × on screen has its own name beside it, a long name truncates, the tab on screen is whole (final fix round)", async ({ page, request }) => {
+      // The sign-off capture's case: a short name opened first, then a long one. Uncapped, the long tab scrolled into view at 320
+      // pushed the short one's name off the strip's left edge and left its × there alone, a close button with no tab beside it.
+      const s = await seed(page, request, ["Elite Singles", "Under-16 Girls Singles — Saturday Morning Session, Hall B", "Mixed"]);
+      const [a, b] = s.ids;
+      await page.goto(hubPath(s), { waitUntil: "load" });
+      await openTwo(page, s);
+      await dismissToast(page);
+      const strip = page.getByRole("navigation", { name: copy("reg.hub.tabs.label") });
+      await strip.scrollIntoViewIfNeeded();
+
+      /** Each division tab whose × shows any part inside the strip: how much of its OWN name shows, what a tap there opens. */
+      const onScreen = () =>
+        strip.evaluate((nav) => {
+          const box = nav.getBoundingClientRect();
+          const shown = (r: DOMRect) => Math.max(0, Math.min(r.right, box.right) - Math.max(r.left, box.left));
+          return Array.from(nav.querySelectorAll<HTMLElement>("[data-reg-hub-tab-group]")).flatMap((group) => {
+            const close = group.querySelector<HTMLElement>('[data-testid="reg-hub-tab-close"]')!;
+            const label = group.querySelector<HTMLElement>("[data-reg-hub-tab-label]")!;
+            const [x, l, g] = [close.getBoundingClientRect(), label.getBoundingClientRect(), group.getBoundingClientRect()];
+            if (shown(x) === 0) return [];
+            const name = shown(l);
+            const at = name > 0 ? document.elementFromPoint(Math.max(l.left, box.left) + name / 2, l.top + l.height / 2) : null;
+            return [
+              {
+                id: close.getAttribute("data-division-id") ?? "",
+                nameShown: Math.round(name),
+                hit: at?.closest('[data-testid="reg-hub-tab-division"]')?.getAttribute("data-division-id") ?? null,
+                gap: Math.round(x.left - l.right),
+                whole: g.left >= box.left - 1 && g.right <= box.right + 1,
+              },
+            ];
+          });
+        });
+
+      let checked = 0;
+      for (const active of [b, a]) {
+        if (active === a) {
+          await divisionTab(page, a).click();
+          await expectActive(page, a);
+        }
+        // The strip scrolls the tab on screen into its view after the switch renders: settle on that first.
+        await expect.poll(async () => (await onScreen()).find((t) => t.id === active)?.whole ?? false, { timeout: 10_000 }).toBe(true);
+        const tabs = await onScreen();
+        expect(tabs.map((t) => t.id), "the tab on screen shows its ×").toContain(active);
+        for (const t of tabs) {
+          expect(t.nameShown, `× ${t.id} has its own name beside it (${active === a ? "short" : "long"} tab on screen)`).toBeGreaterThanOrEqual(24);
+          expect(t.hit, `a tap on ${t.id}'s visible name lands on that tab`).toBe(t.id);
+          // Attached: only the link's own 4px end padding between the name and its × (no edits here, so no dot).
+          expect(t.gap, `× ${t.id} sits right after its name`).toBeGreaterThanOrEqual(0);
+          expect(t.gap, `× ${t.id} sits right after its name`).toBeLessThanOrEqual(8);
+          checked += 1;
+        }
+      }
+      expect(checked, "anti-vacuity: × buttons checked across both states").toBeGreaterThanOrEqual(2);
+
+      // The long name truncates inside its tab (the min-w-0 chain holds) and still shows a readable part of itself.
+      const long = await divisionTab(page, b)
+        .locator("[data-reg-hub-tab-label]")
+        .evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth, overflow: getComputedStyle(el).textOverflow }));
+      expect(long.scroll, "the long name is cut, not spilled").toBeGreaterThan(long.client);
+      expect(long.client).toBeGreaterThanOrEqual(24);
+      expect(long.overflow).toBe("ellipsis");
+      await expectNoHorizontalScroll(page);
+    });
+
     test("axe: the hub with two division tabs open has no serious or critical issue", async ({ page, request }) => {
       const s = await seed(page, request);
       await page.goto(hubPath(s), { waitUntil: "load" });
@@ -720,6 +805,7 @@ for (const viewport of [
       await expect(dialog(page)).toContainText(copy("reg.hub.leave.title"));
       await expect(dialog(page).locator("[data-reg-hub-dialog-body]")).toHaveText(copy("reg.hub.leave.body.one", { names: s.names[0] }));
       expect(new URL(page.url()).pathname, "held: still on the hub").toBe(hubPath(s));
+      await expectDialogButtons(page, viewport.width);
       await dialogAction(page, "dismiss").click();
       await expect(dialog(page)).toHaveCount(0);
       await expectActive(page, a);

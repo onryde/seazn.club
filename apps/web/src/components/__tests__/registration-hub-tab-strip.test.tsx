@@ -131,6 +131,20 @@ describe("RegistrationHubTabStrip — division tabs", () => {
     expect(inside(group, link!) && inside(nav, group) && inside(row, nav)).toBe(true);
   });
 
+  // Final fix round (sign-off capture, 320): with two division tabs open each takes at most half the strip, so whenever the one on
+  // screen is scrolled into view its neighbour fits beside it and no × is left at the strip's edge without its name. One division
+  // tab has no × beside it to strand, and keeps the whole strip for its name. The browser proof (no × without its name, hit-tested,
+  // at 320) is registration-hub-division-tabs.spec.ts.
+  it("two division tabs: each group is capped at half the strip; one division tab (the empty case of a neighbour) is not", () => {
+    const groups = (tabs: HubStripTab[]) => render(tabs).tree().filter((e) => propsOf(e)["data-reg-hub-tab-group"] !== undefined);
+    const two = groups([section("settings"), section("registrants"), division(A, "Elite Singles"), division(B, "Under-16 Girls Singles — Saturday", { active: true })]);
+    expect(two).toHaveLength(2);
+    for (const g of two) expect(cls(g)).toContain("max-w-[50%]");
+    const one = groups([section("settings"), section("registrants"), division(A, "Under-16 Girls Singles — Saturday", { active: true })]);
+    expect(one).toHaveLength(1);
+    expect(cls(one[0]!)).not.toContain("max-w-[50%]");
+  });
+
   it("following a tab tells the host which one, before the link navigates", () => {
     const onFollow = vi.fn();
     const tree = render([section("settings", true), section("registrants"), division(A, "Open Singles")], { onFollow }).tree();
@@ -153,7 +167,7 @@ describe("RegistrationHubTabStrip — every class is real Tailwind", () => {
     const compiled = await compileClasses([...tokens]);
     const dead = [...tokens].filter((c) => Object.keys(compiled.get(c) ?? {}).length === 0);
     expect(dead, `classes that compile to nothing: ${dead.join(" ")}`).toEqual([]);
-    for (const must of ["max-md:basis-full", "md:flex-nowrap", "md:border-b", "max-w-[12rem]"]) {
+    for (const must of ["max-md:basis-full", "md:flex-nowrap", "md:border-b", "max-w-[12rem]", "max-w-[50%]"]) {
       expect(tokens.has(must), must).toBe(true);
     }
   });

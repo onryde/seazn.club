@@ -14,6 +14,12 @@
 // The scroller is the nav itself: it scrolls inside itself below the width the tabs need and never the page, and as a
 // scrolling region it is focusable (tabindex 0) and named (AGENTS.md class 23). The tab on screen is scrolled into view
 // whenever it changes, horizontally only, so arriving on a tab never moves the page.
+//
+// Final fix round (sign-off capture, 320): a division tab's name truncates beside its own ×, and with two division tabs open
+// each takes at most half the strip. Uncapped, a long name scrolled into view pushed its neighbour's name off the strip's
+// left edge and left that tab's × there alone, a close button with no tab beside it. At half each, both division tabs fit
+// side by side whenever the one on screen is in view, so the edge cuts through a section tab (which has no ×) instead.
+// Wide screens never reach the cap.
 import { useEffect, useRef, type ReactNode } from "react";
 import { X } from "lucide-react";
 import Link from "@/components/ui/console-link";
@@ -109,7 +115,7 @@ export function RegistrationHubTabStrip({
             <div
               key={tab.key}
               data-reg-hub-tab-group
-              className={`flex min-w-0 shrink-0 items-center border-b-2 transition-colors ${
+              className={`flex min-w-0 shrink-0 items-center border-b-2 transition-colors ${divisionTabs.length > 1 ? "max-w-[50%]" : ""} ${
                 tab.active ? "border-purple-600" : "border-transparent"
               }`}
             >
@@ -123,7 +129,9 @@ export function RegistrationHubTabStrip({
                   tab.active ? "text-purple-700" : "text-slate-500 hover:text-slate-800"
                 }`}
               >
-                <span className="min-w-0 max-w-[12rem] truncate">{tab.label}</span>
+                <span data-reg-hub-tab-label className="min-w-0 max-w-[12rem] truncate">
+                  {tab.label}
+                </span>
                 {division.dirty && (
                   <span
                     role="img"

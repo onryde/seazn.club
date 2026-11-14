@@ -626,6 +626,28 @@ describe("RegistrationHubTabsHost — the dialogs' buttons", () => {
   });
 });
 
+// Final fix round (sign-off capture, 1280): the leave labels needed 402px of the default dialog's 400px row, so "Keep editing" wrapped
+// alone onto a second row. Every hub question opens in the wide dialog, whose row holds the widest set (nl leave, 491px) in every locale
+// - measured in Chromium per locale and per dialog at 640, 768 and 1280 (final-fix-report.md); the 1280 leave row is pinned in the
+// browser by registration-hub-division-tabs.spec.ts. All three ask in the same width, so the questions stay alike.
+describe("RegistrationHubTabsHost — every unsaved-edit question opens in the wide dialog (final fix round)", () => {
+  it("close, evict and leave each pass size lg to the Modal", () => {
+    let checked = 0;
+    const close = mount({ active: { division: A }, open: [A] });
+    close.dirty(A, ["capacity"]);
+    close.close(A);
+    expect((modalOf(close.dialog()!) as unknown as { size?: string }).size, "close").toBe("lg");
+    checked++;
+
+    const evict = mount({ active: "settings", open: [A, B] });
+    evict.dirty(A, ["capacity"]);
+    evict.api().openDivision(C);
+    expect((modalOf(evict.dialog()!) as unknown as { size?: string }).size, "evict").toBe("lg");
+    checked++;
+    expect(checked).toBe(2);
+  });
+});
+
 describe("RegistrationHubTabsHost — leaving the hub with unsaved edits (fix round 1 G1)", () => {
   const COMP = "/o/riverside/c/summer";
 
@@ -665,6 +687,14 @@ describe("RegistrationHubTabsHost — leaving the hub with unsaved edits (fix ro
     expect(host.dialog()).toBeUndefined();
     expect(nav.push).not.toHaveBeenCalled();
     expect(host.pageOf(A)).toBeDefined();
+  });
+
+  it("final fix round: the leave question - the one whose row wrapped at 1280 - opens in the wide dialog too", () => {
+    const host = mount({ active: { division: A }, open: [A] });
+    host.dirty(A, ["capacity"]);
+    fire(listeners.click, linkClick(COMP));
+    expect(propsOf(host.dialog()!).title, "premise: the leave question").toBe(msg("reg.hub.leave.title"));
+    expect((modalOf(host.dialog()!) as unknown as { size?: string }).size).toBe("lg");
   });
 
   it("one unsaved tab: the body is singular; Discard and leave goes where the link pointed, and the reload prompt stands down", () => {
