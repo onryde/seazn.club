@@ -1510,9 +1510,9 @@ describe("the page loads only what the tab it shows needs, and nothing is carrie
     expect(h.listSponsorPackages, "its packages once").toHaveBeenCalledTimes(1);
   });
 
-  it("authorises from the URL (requireOrgPage with the hub's rename tail), before anything is read", async () => {
-    await render("sponsors");
-    expect(h.requireOrgPage).toHaveBeenCalledWith(ORG.slug, { tail: "/sponsors" });
+  it("authorises from the URL (requireOrgPage with the hub's rename tail and its query), before anything is read", async () => {
+    await render("sponsors", undefined, undefined, { sponsor: "s1" });
+    expect(h.requireOrgPage).toHaveBeenCalledWith(ORG.slug, { tail: "/sponsors", search: "?tab=sponsors&sponsor=s1" });
   });
 
   it("a refused page (not a member) reads nothing", async () => {

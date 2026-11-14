@@ -54,6 +54,7 @@ import { invalidateSlugCache } from "@/server/slug-resolve";
 import {
   requireCompetitionPage,
   requireDivisionPage,
+  requireBillingPage,
   requireFixturePage,
   requireOrgPage,
 } from "@/server/page-auth";
@@ -130,10 +131,12 @@ describe("searchOf: a page's query, as the redirect carries it", () => {
   });
 });
 
-// Every organiser page hands the chain its OWN path, or a renamed slug's old URL of that page lands one level up. The
-// expected tail comes from where the page FILE sits (the URL scheme: a gate at the division level keeps what is below
-// `d/[divSlug]`), never from the call. A source scan, because the chain is proven above and what is left is that each
-// page states its path: rendering 21 pages to read one argument would prove the same thing at the cost of their mocks.
+// Every organiser page hands the chain its OWN path, or a renamed slug's old URL of that page lands one level up; and a
+// page that reads its query hands that on too, or the redirect drops it (a checkout return's `?checkout&session_id`,
+// re-review m2). The expected tail comes from where the page FILE sits (the URL scheme: a gate at the division level keeps
+// what is below `d/[divSlug]`), never from the call. A source scan, because the chain is proven above and what is left
+// is that each page states its path and its query: rendering 21 pages to read one argument would prove the same thing at
+// the cost of their mocks.
 describe("every page under /o/{org} gives the chain its own path (review I3 sweep)", () => {
   const ORG_DIR = fileURLToPath(new URL("../../app/o/[orgSlug]/", import.meta.url));
   /** Where each gate's level sits in the tree: its tail is the page's path below this prefix. */
@@ -149,12 +152,13 @@ describe("every page under /o/{org} gives the chain its own path (review I3 swee
     "settings/payments": "a bare redirect to settings/connect, which carries the tail",
   };
 
-  it("names its own path as the tail, at its gate's level", () => {
+  it("names its own path as the tail, at its gate's level, and forwards its query when it reads one", () => {
     const pages = (readdirSync(ORG_DIR, { recursive: true }) as string[])
       .filter((f) => f.split(sep).at(-1) === "page.tsx")
       .map((f) => f.split(sep).slice(0, -1).join("/"));
     const seenUngated = new Set<string>();
     let checked = 0;
+    let forwarded = 0;
     for (const dir of pages) {
       const src = readFileSync(`${ORG_DIR}${dir}/page.tsx`, "utf8");
       const call = /\b(require(?:Org|Billing|Competition|Division|Fixture)Page)\(([\s\S]*?)\);/.exec(src);
@@ -176,11 +180,17 @@ describe("every page under /o/{org} gives the chain its own path (review I3 swee
         const below = level === "" ? dir : dir.slice(level.length + 1);
         expect(tail, `${dir}/page.tsx (${gate})`).toBe(below === "" ? undefined : `/${below}`);
       }
+      // A page with a query hands the gate all of it, through `searchOf` (lib/routes): encoded, repeats kept.
+      if (/\bsearchParams\b/.test(src)) {
+        expect(/\bsearch:\s*searchOf\(/.test(args), `${dir}/page.tsx reads searchParams but does not forward them to ${gate}`).toBe(true);
+        forwarded++;
+      }
       checked++;
     }
     expect([...seenUngated].sort(), "every ungated exemption still names a page").toEqual(Object.keys(UNGATED).sort());
     expect(checked, "pages checked").toBe(pages.length - Object.keys(UNGATED).length);
     expect(checked).toBeGreaterThanOrEqual(20);
+    expect(forwarded, "pages whose query was checked").toBeGreaterThanOrEqual(13);
   });
 });
 
@@ -202,6 +212,16 @@ describe.skipIf(!HAS_DB)("a renamed organisation's old URL keeps its page (revie
       ],
       ["a division page", () => requireDivisionPage(oldOrg, comp, div, { tail: "/schedule" }), `/o/${newOrg}/c/${comp}/d/${div}/schedule`],
       ["a match", () => requireFixturePage(oldOrg, comp, div, 3), `/o/${newOrg}/c/${comp}/d/${div}/f/3`],
+      [
+        "a match's checkout return",
+        () => requireFixturePage(oldOrg, comp, div, 3, { search: "?checkout=success&session_id=cs_1" }),
+        `/o/${newOrg}/c/${comp}/d/${div}/f/3?checkout=success&session_id=cs_1`,
+      ],
+      [
+        "billing's checkout return (re-review m2)",
+        () => requireBillingPage(oldOrg, { tail: "/settings/billing", search: "?checkout=success&session_id=cs_2" }),
+        `/o/${newOrg}/settings/billing?checkout=success&session_id=cs_2`,
+      ],
     ];
     let checked = 0;
     for (const [label, call, want] of cases) {
@@ -224,6 +244,35 @@ describe.skipIf(!HAS_DB)("a renamed organisation's old URL keeps its page (revie
     const page = await requireDivisionPage(newOrg, comp, div, { search: "?tab=entrants" });
     expect(page.org.id).toBe(chain.orgId);
     expect(page.division.slug).toBe(div);
+  });
+
+  // Re-review m1: a renamed COMPETITION or DIVISION used to send an old match URL to the competition's or division's
+  // home, losing the match and its query. Both renames happen once, below: the division first, then its competition.
+  it("a renamed competition or division keeps the match below it, and its query", async () => {
+    const { orgId, newOrg } = chain;
+    const auth: AuthCtx = { orgId, via: "session", userId: null, role: "owner", keyId: null };
+    const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: `${RUN} Shield`, visibility: "private", branding: {} });
+    const div = await createDivision(auth, comp.id, { name: "Masters", sport_key: "generic", variant_key: "score", config: GENERIC_CONFIG });
+    const [oldComp, newComp, oldDiv, newDiv] = [comp.slug, `${comp.slug}-renamed`, div.slug, `${div.slug}-renamed`];
+    await sql`update divisions set slug = ${newDiv} where id = ${div.id}`;
+    await recordSlugHistory(sql, "division", comp.id, oldDiv, div.id);
+    await invalidateSlugCache("division", comp.id, oldDiv, newDiv);
+    await sql`update competitions set slug = ${newComp} where id = ${comp.id}`;
+    await recordSlugHistory(sql, "competition", orgId, oldComp, comp.id);
+    await invalidateSlugCache("competition", orgId, oldComp, newComp);
+    const q = "?stream=open";
+    const cases: [string, () => Promise<unknown>, string][] = [
+      ["the division renamed", () => requireFixturePage(newOrg, newComp, oldDiv, 4, { search: q }), `/o/${newOrg}/c/${newComp}/d/${newDiv}/f/4${q}`],
+      // The segment below the renamed level rides as typed (the next hop renames it), as every level of the chain does.
+      ["the competition renamed", () => requireFixturePage(newOrg, oldComp, oldDiv, 4, { search: q }), `/o/${newOrg}/c/${newComp}/d/${oldDiv}/f/4${q}`],
+      ["the competition renamed, a division page", () => requireDivisionPage(newOrg, oldComp, newDiv, { tail: "/schedule", search: "?tab=grid" }), `/o/${newOrg}/c/${newComp}/d/${newDiv}/schedule?tab=grid`],
+    ];
+    let checked = 0;
+    for (const [label, call, want] of cases) {
+      expect(await redirectOf(call), label).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
   });
 
   it("a slug segment below the org rides the redirect encoded: it cannot add a path or a query", async () => {

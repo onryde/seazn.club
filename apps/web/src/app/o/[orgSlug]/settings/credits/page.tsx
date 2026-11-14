@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 // pool they spend from, so this page is member-visible and NOT payer-gated. The credit-pack purchases + CSV exports it
 // mounts are session-authed inside their own handlers.
 import { requireBillingPage } from "@/server/page-auth";
-import { routes } from "@/lib/routes";
+import { routes, searchOf } from "@/lib/routes";
 import { BillingCredits } from "@/components/billing-credits";
 import { BillingStreamCredits, type StreamPurchaseNotice } from "@/components/billing-stream-credits";
 import { CreditsKindSwitch, creditsKindOf } from "@/components/credits-kind-switch";
@@ -29,7 +29,7 @@ export default async function CreditsSettingsPage({
 }) {
   const { orgSlug } = await params;
   const sp = await searchParams;
-  const { org, viaPayer, auth } = await requireBillingPage(orgSlug, { tail: "/settings/credits" });
+  const { org, viaPayer, auth } = await requireBillingPage(orgSlug, { tail: "/settings/credits", search: searchOf(sp) });
   const orgId = org.id;
   const kind = creditsKindOf(sp.kind);
   const locale = await resolveLocale();

@@ -35,7 +35,7 @@ import { formatMinor, isPassKey } from "@/lib/currency";
 import { lowestPassRung } from "@/lib/pass-ladder";
 import { PassSeal } from "@/components/pass-seal";
 import { preferredCurrency } from "@/lib/currency-server";
-import { routes } from "@/lib/routes";
+import { routes, searchOf } from "@/lib/routes";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t, plural } from "@/lib/i18n";
 import { msgFor } from "@/lib/messages-i18n";
@@ -57,8 +57,9 @@ export default async function OrgHomePage({
 }) {
   const { orgSlug } = await params;
   // The switch's state is the URL (as the competition page's ledger does it): a reload or the back button keeps it.
-  const showFinished = (await searchParams).finished === "1";
-  const { auth, org, canEdit } = await requireOrgPage(orgSlug);
+  const sp = await searchParams;
+  const showFinished = sp.finished === "1";
+  const { auth, org, canEdit } = await requireOrgPage(orgSlug, { search: searchOf(sp) });
 
   // Reaching the dashboard is the end of first-run: mark onboarding done so a
   // user who left the wizard by any route (nav, back button) isn't sent back
