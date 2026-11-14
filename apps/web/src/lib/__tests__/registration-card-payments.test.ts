@@ -13,6 +13,14 @@ import {
 
 describe("cardPaymentsBroken: one card division", () => {
   const ORG_OK = { charges_enabled: true, paid_entitled: true };
+  // Hand-written from spec #9 / P2-10, not restated from the implementation's boolean (walk-fix A review m4): the ONLY broken
+  // rows are a card division with a fee whose org has lost Connect charges, the paid entitlement, or both. A free card
+  // division, and an offline one at any fee, take entries whatever the org's state.
+  const BROKEN_ROWS = new Set([
+    "stripe/1500/charges-off/entitled",
+    "stripe/1500/charges-on/not-entitled",
+    "stripe/1500/charges-off/not-entitled",
+  ]);
   it("the full table: only a card division with a fee, under a broken org, is broken (counted)", () => {
     let checked = 0;
     let broken = 0;
@@ -21,8 +29,8 @@ describe("cardPaymentsBroken: one card division", () => {
         for (const charges_enabled of [true, false]) {
           for (const paid_entitled of [true, false]) {
             const got = cardPaymentsBroken({ payment_method, fee_cents }, { charges_enabled, paid_entitled });
-            const want = payment_method === "stripe" && fee_cents > 0 && (!charges_enabled || !paid_entitled);
-            expect(got, JSON.stringify({ payment_method, fee_cents, charges_enabled, paid_entitled })).toBe(want);
+            const row = `${payment_method}/${fee_cents}/charges-${charges_enabled ? "on" : "off"}/${paid_entitled ? "" : "not-"}entitled`;
+            expect(got, row).toBe(BROKEN_ROWS.has(row));
             checked++;
             if (got) broken++;
           }

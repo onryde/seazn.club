@@ -156,6 +156,7 @@ import { OutboxKeyUnavailableError } from "@/server/email-outbox/seal";
 import { divisionEligibilityIssues } from "../registration-eligibility";
 import { isValidRefCode, generateRefCode } from "@/lib/ref-code";
 import { REGISTRATION_CURRENCIES, type Currency } from "@/lib/currency";
+import { registrationWaitsOnCardPayments } from "@/lib/registration-card-payments";
 import { LEGAL_VERSION } from "@/lib/legal";
 import { resolveNameDisplay } from "@/lib/name-display";
 
@@ -2138,6 +2139,37 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
     expect(div.open).toBe(false);
     expect(div.closed_reason).toBe("payments_unavailable");
     expect(div.payment_method).toBe("stripe");
+  });
+
+  // Walk-fix A review I1: "registration opens once the organiser finishes payment setup" is said wherever every division is
+  // closed and one is closed for card payments. A card division whose WINDOW is shut (closed weeks ago, or not open yet) is
+  // closed by the window whatever Connect does, so the window is its reason - otherwise a finished competition tells every
+  // visitor registration will open the moment Stripe pauses charges. Sequence: window past, window ahead, window open.
+  it("a shut window outranks card payments: closed_reason 'window' while Connect is off, 'payments_unavailable' only once the window opens", async () => {
+    const { orgId, orgSlug, owner, competition, division } = await stripeRig();
+    const readWithChargesOff = async (window: { opens_at: string | null; closes_at: string | null }) => {
+      // A card fee needs Connect to SAVE, so charges are on for the settings write and off for the read.
+      await sql`update organizations set stripe_charges_enabled = true where id = ${orgId}`;
+      await putRegistrationSettings(owner, division.id, { ...SETTINGS_BASE, payment_method: "stripe", fee_cents: 500, ...window });
+      await sql`update organizations set stripe_charges_enabled = false where id = ${orgId}`;
+      return publicRegistrationInfo(orgSlug, competition.slug);
+    };
+    const inThirtyDays = new Date(Date.now() + 30 * 86_400_000).toISOString();
+    const cases = [
+      { label: "closed in the past", window: { opens_at: null, closes_at: "2020-01-01T00:00:00Z" }, reason: "window", waits: false },
+      { label: "opens in the future", window: { opens_at: inThirtyDays, closes_at: null }, reason: "window", waits: false },
+      { label: "open now", window: { opens_at: null, closes_at: null }, reason: "payments_unavailable", waits: true },
+    ];
+    let checked = 0;
+    for (const c of cases) {
+      const info = await readWithChargesOff(c.window);
+      const div = info.divisions.find((d) => d.division_id === division.id)!;
+      expect(div.open, c.label).toBe(false);
+      expect(div.closed_reason, c.label).toBe(c.reason);
+      expect(registrationWaitsOnCardPayments(info.divisions), c.label).toBe(c.waits);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
   });
 
   // RS007 review fix M2 (2026-08-29): a 2026-08-27 revision made

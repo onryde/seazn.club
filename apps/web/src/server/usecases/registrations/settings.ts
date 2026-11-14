@@ -416,14 +416,18 @@ export async function publicRegistrationInfo(
     // FU1 ruling 3: a stored kind the division does not take (a row saved before the check, or Entrant kinds narrowed
     // since) never opens to the public - submit would refuse every entry. Named first: it outlasts the window and payments.
     const kindTaken = divisionTakesKind(entrantShapeOf(r).kinds, r.entrant_kind);
-    const open = kindTaken && windowOpen(r, now) && !paymentsBroken;
+    const inWindow = windowOpen(r, now);
+    const open = kindTaken && inWindow && !paymentsBroken;
+    // Walk-fix A review I1: a shut window (closed, or not open yet) outranks card payments. `payments_unavailable` is read
+    // as "opens once payment setup is finished" (lib/registration-card-payments.ts), which is true only for a division the
+    // window would let in - a finished competition whose Connect charges pause must keep saying its window has closed.
     let reason: string | null = open
       ? null
       : !kindTaken
         ? "entry_kind_unavailable"
-        : paymentsBroken
-          ? CARD_PAYMENTS_UNAVAILABLE
-          : "window";
+        : !inWindow
+          ? "window"
+          : CARD_PAYMENTS_UNAVAILABLE;
     if (open && remaining === 0) reason = "full"; // still open — joins the waitlist
     return {
       division_id: r.division_id,
