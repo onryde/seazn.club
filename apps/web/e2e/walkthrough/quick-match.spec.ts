@@ -907,8 +907,10 @@ test("(A) a guest plays a badminton league of three from the marketing page to i
   );
 
   // ---- 1. The marketing page's Quick match, to the setup page ----
+  // The hero's one primary since owner 2026-11-13: a Sport select (its default, the setup screen's first) and the Start, a
+  // GET to /en/play?sport=<that sport>; step 2 then picks Badminton on the setup page as before.
   await page.goto("/en");
-  const cta = page.getByTestId("qm-cta").getByRole("link", { name: mk("quickMatch.cta"), exact: true });
+  const cta = page.getByTestId("qm-cta").getByRole("button", { name: mk("quickMatch.cta"), exact: true });
   await expect(cta).toBeVisible({ timeout: STEP_MS });
   await expectNoHorizontalScroll(page);
   await cta.click();

@@ -4,9 +4,9 @@ import { notFound } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth";
 import { getDiscoveryLive, getDiscoveryThisWeek } from "@/server/public-site/discovery";
 import { ThisWeekSection } from "@/components/discovery-cards";
-import { StartFunnelForm } from "@/components/start-funnel-form";
 import { MarketingShell } from "@/components/marketing/marketing-shell";
 import { HeroVignette } from "@/components/marketing/hero-vignette";
+import { HERO_SCENES, heroSceneLabelKey, type HeroSceneKey } from "@/components/marketing/hero-scenes";
 import { LiveTicker } from "@/components/marketing/live-ticker";
 import { TheDraw } from "@/components/marketing/the-draw";
 import { MatchdayTools, AlsoInTheKit } from "@/components/marketing/matchday-tools";
@@ -20,6 +20,9 @@ import { loadPricingMatrix } from "@/lib/pricing-matrix-server";
 import { getDictionary, t } from "@/lib/i18n";
 import { hasLocale } from "@/lib/i18n-constants";
 import { readRecentQuickMatches } from "@/server/usecases/quick-match-recent";
+import { listQuickMatchSports } from "@/server/usecases/quick-match-sports";
+import { log } from "@/server/logger";
+import { setupSports } from "./play/setup-props";
 
 export async function generateMetadata({
   params,
@@ -85,13 +88,28 @@ export default async function HomePage({ params }: { params: Promise<{ lang: str
   // `recentQuickMatches` (quick match plan 2 Task 9): the strip of this browser's quick matches, read from the visitor
   // cookie. Fail-soft inside (`readRecentQuickMatches` answers none on any failure, pre-flight A9), so no `.catch` here:
   // a `.catch` would also swallow Next's own render signal, which the reader rethrows on purpose.
-  const [liveNow, thisWeek, currency, planMatrix, recentQuickMatches] = await Promise.all([
+  //
+  // `quickMatchOffer` (owner 2026-11-13, the hero's quick match start): the hero's Sport select lists exactly what the setup
+  // screen offers, read and named the way that page does (`listQuickMatchSports`, `setupSports`), so it never offers a
+  // sport /play would ignore. Empty on failure: the Start alone, and /play says why. The failure is logged at error, as
+  // /play logs the same read (review m3): the hero's one primary is dead until it recovers.
+  const [liveNow, thisWeek, currency, planMatrix, recentQuickMatches, quickMatchOffer, ui] = await Promise.all([
     getDiscoveryLive().catch(() => []),
     getDiscoveryThisWeek().catch(() => []),
     preferredCurrency(null).catch(() => "usd" as const),
     loadPricingMatrix().catch(() => ({})),
     readRecentQuickMatches(),
+    listQuickMatchSports().catch((err: unknown) => {
+      log.error({ err }, "marketing home: the quick match offer could not be read");
+      return [];
+    }),
+    getDictionary(lang, "ui"),
   ]);
+  const heroSports = setupSports(quickMatchOffer, ui);
+  // Every scene's accessible name, so a swap on the client names the new sport in the page's language.
+  const heroSceneLabels = Object.fromEntries(
+    (Object.keys(HERO_SCENES) as HeroSceneKey[]).map((scene) => [scene, t(d, heroSceneLabelKey(scene))]),
+  ) as Record<HeroSceneKey, string>;
   // SSR default draw = the configurator's no-JS fallback (design/v3/12 §4.4).
   const defaultDraw = marketingPreview("groups-knockout", 8);
 
@@ -118,30 +136,41 @@ export default async function HomePage({ params }: { params: Promise<{ lang: str
                 {t(d, "home.hero.title")}
               </h1>
               <p className="mt-4 max-w-md text-base text-[#b7aede]">{t(d, "home.hero.subhead")}</p>
+              {/* Quick match is the hero's one primary (owner 2026-11-13, Option A): a sport, then Start, no account. */}
               <div className="mt-8">
-                <StartFunnelForm
-                  variant="night"
-                  labels={{
-                    sport: t(d, "funnel.sport"),
-                    entrants: t(d, "funnel.entrants"),
-                    date: t(d, "funnel.date"),
-                    submit: t(d, "funnel.submit"),
+                <QuickMatchCta
+                  lang={lang}
+                  sports={heroSports}
+                  copy={{
+                    sport: t(d, "quickMatch.setup.sport"),
+                    start: t(d, "quickMatch.cta"),
+                    hint: t(d, "quickMatch.ctaHint"),
                   }}
                 />
               </div>
-              {/* Quick match (spec §5 step 1): the no-account door, beside the funnel. */}
-              <div className="mt-4">
-                <QuickMatchCta lang={lang} label={t(d, "quickMatch.cta")} hint={t(d, "quickMatch.ctaHint")} />
-              </div>
-              <p className="mt-4 text-xs text-[#8d7fc0]">
+              {/* The organiser's setup, one quiet link below: the same /start wizard (it defaults the sport and field
+                  size the hero no longer asks), so its server-side funnel events fire as before. Locale-prefixed, so
+                  the wizard keeps the page's language. */}
+              <Link
+                href={`/${lang}/start`}
+                data-testid="hero-event-link"
+                className="group mt-3 inline-flex min-h-11 max-w-full items-center text-sm text-[#ddd6f5] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--mk-lime)]"
+              >
+                <span className="min-w-0 underline decoration-[#4a3885] underline-offset-4 transition group-hover:decoration-[var(--mk-lime)]">
+                  {t(d, "home.hero.eventPrompt")}{" "}
+                  <span className="font-semibold text-[var(--mk-lime)]">{t(d, "home.hero.eventLink")}</span>
+                </span>
+              </Link>
+              <p className="mt-2 text-xs text-[#8d7fc0]">
                 {t(d, "home.hero.freeNote")}
                 <Link href="/pricing" className="underline hover:text-[var(--mk-lime)]">
                   {t(d, "home.hero.upgradeLink")}
                 </Link>
               </p>
             </div>
-            <div className="w-full max-w-md justify-self-center">
-              <HeroVignette />
+            {/* The art draws the sport the Sport select opens on, then follows the select (owner 2026-11-13). */}
+            <div className="w-full max-w-md justify-self-center lg:max-w-none">
+              <HeroVignette sport={heroSports[0]?.sport_key} labels={heroSceneLabels} />
             </div>
           </div>
           {/* A returning guest's quick matches, still on the night stage, under the hero (renders nothing for none). */}

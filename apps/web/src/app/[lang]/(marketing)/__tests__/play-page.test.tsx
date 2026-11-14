@@ -37,7 +37,8 @@ import { listQuickMatchSports, offerFor, type QuickMatchSport } from "@/server/u
 import { CreateQuickMatch } from "@/server/api-v1/schemas";
 import { getDictionary } from "@/lib/i18n";
 import PlayPage, { dynamic, generateMetadata } from "../play/page";
-import { refusalCode, setupSports } from "../play/setup-props";
+import { prefillSport, refusalCode, setupSports } from "../play/setup-props";
+import offerJson from "@/lib/quick-match-offer.generated.json";
 import { QuickMatchSetupForm, type SetupFormProps } from "@/components/quick-match/setup-form";
 import { QUICK_MATCH_ERRORS } from "@/lib/quick-match-constants";
 import { ClearFlashParam } from "@/components/quick-match/clear-flash-param";
@@ -66,6 +67,24 @@ const OFFER: QuickMatchSport[] = [
 /** An `<input>` with this name and value, whatever order React writes its attributes in (it puts `checked` between). */
 const field = (name: string, value: string) =>
   new RegExp(`<input[^>]*\\bname="${name}"[^>]*\\bvalue="${value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`);
+
+/** The sport chips the server's HTML writes `checked` (the sport the form opens on), by value, in document order. */
+const checkedSports = (html: string): string[] =>
+  (html.match(/<input[^>]*\bname="sport_key"[^>]*>/g) ?? [])
+    .filter((tag) => /\schecked=""/.test(tag))
+    .map((tag) => tag.match(/\bvalue="([^"]*)"/)?.[1] ?? "?");
+/** The sport chips the server's HTML writes `disabled` (pickable only once the script runs, I1), by value. */
+const disabledSports = (html: string): string[] =>
+  (html.match(/<input[^>]*\bname="sport_key"[^>]*>/g) ?? [])
+    .filter((tag) => /\sdisabled=""/.test(tag))
+    .map((tag) => tag.match(/\bvalue="([^"]*)"/)?.[1] ?? "?");
+
+/** Catalog sports the probe's offer does NOT list (every variant of them excluded): `?sport=` must ignore them. From the
+ *  offer's own generated file (quick-match-sports.ts reads the same one), never typed here. */
+const UNOFFERED_SPORTS: string[] = (() => {
+  const offered = new Set(offerJson.offered.map((o) => o.sport_key));
+  return [...new Set(offerJson.excluded.map((x) => x.sport_key))].filter((k) => !offered.has(k));
+})();
 
 async function render(lang: string, search: Record<string, string | string[]> = {}): Promise<string> {
   const element = await PlayPage({ params: Promise.resolve({ lang }), searchParams: Promise.resolve(search) });
@@ -282,7 +301,120 @@ describe("/<lang>/play?e=: a refusal read on the server (the no-JS path)", () =>
   });
 });
 
+// The marketing hero's Sport select posts `?sport=<key>` here (owner 2026-11-13, "A, apply rec": the hero's quick match
+// start). Every expected key comes from the offer the page reads (OFFER, the stubbed listQuickMatchSports) or from the
+// probe's generated offer file, never a list typed here. Boardgame is OFFER's SECOND sport, so a preselected boardgame
+// differs from the default the form opens on without one (the ordering-differential case).
+describe("/<lang>/play?sport=: the hero's sport, preselected", () => {
+  const offered = OFFER.map((s) => s.sport_key);
+
+  it("the empty case first: no ?sport=, or a blank one, hands the island null (it opens on the offer's first)", async () => {
+    let checked = 0;
+    const searches: Record<string, string | string[]>[] = [{}, { sport: "" }, { sport: "   " }, { sport: [] }];
+    for (const search of searches) {
+      vi.mocked(listQuickMatchSports).mockResolvedValueOnce(OFFER);
+      expect((await islandProps(search)).initialSport ?? null, JSON.stringify(search)).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("an offered sport is handed to the island as is; a repeated ?sport= reads its first", async () => {
+    let checked = 0;
+    for (const key of offered) {
+      vi.mocked(listQuickMatchSports).mockResolvedValueOnce(OFFER);
+      expect((await islandProps({ sport: key })).initialSport, key).toBe(key);
+      vi.mocked(listQuickMatchSports).mockResolvedValueOnce(OFFER);
+      expect((await islandProps({ sport: [` ${key} `, "cricket"] })).initialSport, `[${key}, …]`).toBe(key);
+      checked++;
+    }
+    expect(checked, "offered sports checked").toBe(OFFER.length);
+    expect(checked).toBeGreaterThanOrEqual(2);
+  });
+
+  it("a sport the offer does not list, an unknown key or garbage: ignored (null), never the raw value", async () => {
+    // A catalog sport the probe excludes, and an offered-elsewhere sport this offer lacks (football is in the generated
+    // offer but not in OFFER): both are "not on this page's chips".
+    const notHere = offerJson.offered.map((o) => o.sport_key).find((k) => !offered.includes(k));
+    expect(notHere, "a generated-offer sport missing from OFFER").toBeDefined();
+    expect(UNOFFERED_SPORTS.length, "the generated offer excludes at least one whole sport").toBeGreaterThan(0);
+    const ignored = [
+      ...UNOFFERED_SPORTS,
+      notHere!,
+      "Badminton", // keys are exact: the canonical funnel name is not a key
+      "badminton;drop table sports",
+      "<img src=x onerror=alert(1)>",
+      "../badminton",
+      "nope",
+    ];
+    let checked = 0;
+    for (const raw of ignored) {
+      vi.mocked(listQuickMatchSports).mockResolvedValueOnce(OFFER);
+      expect((await islandProps({ sport: raw })).initialSport ?? null, raw).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(ignored.length);
+    // The pure rule the page asks, over the same inputs: the empty offer lists nothing, so nothing is preselected.
+    for (const key of offered) expect(prefillSport(key, []), `${key} with no offer`).toBeNull();
+    expect(prefillSport(undefined, OFFER)).toBeNull();
+  });
+
+  it("the server's HTML opens on the preselected sport: its chip checked, the others disabled until the script runs (I1)", async () => {
+    vi.mocked(listQuickMatchSports).mockResolvedValueOnce(OFFER);
+    const plain = await render("en");
+    expect(checkedSports(plain), "no ?sport=: the offer's first").toEqual([offered[0]]);
+    let checked = 0;
+    for (const key of offered) {
+      vi.mocked(listQuickMatchSports).mockResolvedValueOnce(OFFER);
+      const html = await render("en", { sport: key });
+      expect(checkedSports(html), key).toEqual([key]);
+      expect(disabledSports(html), `${key}: the other chips wait for the script`).toEqual(offered.filter((k) => k !== key));
+      checked++;
+    }
+    expect(checked).toBe(OFFER.length);
+    // The preselected sport's own rules and kinds ride with it: boardgame plays one kind (a hidden `kind`), badminton two.
+    vi.mocked(listQuickMatchSports).mockResolvedValueOnce(OFFER);
+    const boardgame = await render("en", { sport: "boardgame" });
+    expect(boardgame).toMatch(/<input[^>]*\btype="hidden"[^>]*\bname="kind"[^>]*\bvalue="individual"/);
+    expect(boardgame).toMatch(/<option[^>]*\bvalue="rapid"[^>]*\bselected=""/);
+    expect(boardgame).not.toMatch(/<option[^>]*\bvalue="bwf"/);
+  });
+
+  it("an ignored ?sport= opens exactly as no ?sport= does", async () => {
+    vi.mocked(listQuickMatchSports).mockResolvedValueOnce(OFFER);
+    const plain = await render("en");
+    let checked = 0;
+    for (const raw of [...UNOFFERED_SPORTS, "nope"]) {
+      vi.mocked(listQuickMatchSports).mockResolvedValueOnce(OFFER);
+      const html = await render("en", { sport: raw });
+      expect(checkedSports(html), raw).toEqual(checkedSports(plain));
+      expect(html, `${raw} never reaches the page`).not.toContain(`"${raw}"`);
+      checked++;
+    }
+    expect(checked).toBeGreaterThanOrEqual(2);
+  });
+});
+
 describe.skipIf(!HAS_DB)("/<lang>/play over the live offer (real listQuickMatchSports, real offerFor)", () => {
+  it("?sport= for every live sport opens the form on it; a sport the offer excludes opens on the default", async () => {
+    const [live, ui] = await Promise.all([listQuickMatchSports(), getDictionary("en", "ui")]);
+    const sports = setupSports(live, ui);
+    let checked = 0;
+    for (const s of sports) {
+      expect(checkedSports(await render("en", { sport: s.sport_key })), s.sport_key).toEqual([s.sport_key]);
+      checked++;
+    }
+    // Anti-vacuity, and a differential: at least one live sport is not the default the form opens on anyway.
+    expect(checked, "live sports swept").toBe(sports.length);
+    expect(checked).toBeGreaterThanOrEqual(2);
+    let ignored = 0;
+    for (const raw of UNOFFERED_SPORTS) {
+      expect(checkedSports(await render("en", { sport: raw })), raw).toEqual([sports[0]!.sport_key]);
+      ignored++;
+    }
+    expect(ignored, "excluded sports swept").toBeGreaterThan(0);
+  });
+
   it("every offered sport is a chip, and its default (first kind, preferred rules, two sides, league) is a create the schema and the offer accept", async () => {
     const [live, ui] = await Promise.all([listQuickMatchSports(), getDictionary("en", "ui")]);
     const html = await render("en");

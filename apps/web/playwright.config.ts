@@ -120,6 +120,12 @@ const SERIAL_SPECS =
 //     729s — which lands near 1000s of job time, the original failure. Re-list
 //     (`E2E_PARALLEL_SLICE=rest npx playwright test --list --project=parallel
 //     --shard=2/4`) after any carve-out or large spec growth.
+// THAT RISK FIRED 2026-11-13: the --list above put it in rest 2/4, and 2/4
+// was cancelled at the 20-minute cap with every test green (run 43474866080:
+// 319 passed in 17.5 min of step, 1209s of job; 3/4 851s, 4/4 804s, heavy
+// 703s, 1/4 563s). It now joins PARALLEL_HEAVY: worst case it is heavy's tail,
+// ~703 + 306 = ~1010s, under the cap, and 2/4 drops by its 5.1 minutes. A
+// count shard cannot be told where a 306s test goes; a named carve-out can.
 // And match-room stays in "rest" too: its 53 tests are small (the longest is
 // 48s), so count shards split it well, and carved out it makes heavy 719s.
 // e2e.yml's e2e-parallel comment carries the measurements.
@@ -132,7 +138,7 @@ const SERIAL_SPECS =
 // it. apps/web/src/lib/__tests__/e2e-ci-wiring.test.ts pins that property,
 // and proves every file named here is real — a typo would otherwise give the
 // heavy leg fewer tests than it thinks and go green while they run nowhere.
-const PARALLEL_HEAVY = /(scorepad-v3-cricket|marketing-ai-demo|board-v3|online-chess-desk|overlay-gallery)\.spec\.ts/;
+const PARALLEL_HEAVY = /(scorepad-v3-cricket|marketing-ai-demo|board-v3|online-chess-desk|overlay-gallery|player-stats-stale-version)\.spec\.ts/;
 const PARALLEL_SLICE = process.env.E2E_PARALLEL_SLICE;
 
 // --- the walkthrough leg ---------------------------------------------------

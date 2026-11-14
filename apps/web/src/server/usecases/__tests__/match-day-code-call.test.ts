@@ -288,6 +288,20 @@ describe.skipIf(!HAS_DB)("calling a match to a court through a Match Day code (T
       ]);
     });
 
+    it("a candidate waiting on another court says `called` only once its match is called there and not started (F-T8-12)", async () => {
+      const { code } = await codeFor(day, { kind: "competition" }, true);
+      const calledOf = async () => (await candidatesForCode(code, day.courts.c2, NOW)).candidates.find((c) => c.match.fixture_id === A);
+      // A is queued next on Court 1: another court's next match, not called.
+      expect(await calledOf()).toMatchObject({ source: "other_court", from_court_name: expect.any(String), called: false });
+      // Called onto Court 3 and not started: the same candidate, now called there.
+      await callForCode(code, A, day.courts.c3, NOW);
+      expect(await calledOf()).toMatchObject({ source: "other_court", called: true });
+      // The court's own next match and every other candidate stay not called, and each answer still passes the contract's twin.
+      const offered = await candidatesForCode(code, day.courts.c2, NOW);
+      expect(offered.candidates.filter((c) => c.source !== "other_court").map((c) => c.called)).not.toContain(true);
+      expect(CaptureMatchdayCandidates.safeParse(offered).success).toBe(true);
+    });
+
     it("a desk call still records the organiser and no code", async () => {
       const { callFixtureToCourt } = await import("../match-day-call");
       await callFixtureToCourt(day.auth, A, day.courts.c2, NOW);

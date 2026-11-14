@@ -5,12 +5,26 @@
 import { useMemo, useState } from "react";
 import { api } from "@/lib/client";
 import { recommendFormats, type Recommendation } from "@/lib/format-recommend";
-import { FUNNEL_SPORTS } from "@/components/start-funnel-form";
 import { LegalNotice } from "@/components/legal-notice";
 import { useLocale, useT } from "@/components/i18n/dict-provider";
 import { TurnstileWidget, useTurnstile } from "@/components/turnstile-widget";
 import { isTurnstileRefusal } from "@/lib/turnstile";
 import { withTurnstile } from "@/lib/turnstile-client";
+
+/** The wizard's sports. Canonical names: they are the `sport` query value (`/start?sport=Football`, The Draw's "Make it
+ *  real") and what /api/funnel/start stores. Moved here from the home hero's funnel form, which the quick match start
+ *  replaced (owner 2026-11-13); the wizard is the list's one reader now. */
+const FUNNEL_SPORTS = [
+  "Badminton",
+  "Table Tennis",
+  "Tennis",
+  "Chess",
+  "Carrom",
+  "Football",
+  "Cricket",
+  "Volleyball",
+  "Other",
+] as const;
 
 interface Initial {
   sport?: string;

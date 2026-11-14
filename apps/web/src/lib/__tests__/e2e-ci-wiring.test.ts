@@ -955,6 +955,7 @@ describe("e2e CI wiring", () => {
       "capture",
       "rest",
       "rest",
+      "rest",
       "sponsor",
       "stream",
     ]);
@@ -964,7 +965,7 @@ describe("e2e CI wiring", () => {
     ).toBe(true);
     expect(legs.filter((l) => l.project !== "walkthrough" && l.wslice !== undefined)).toEqual([]);
 
-    // The carve-outs run whole; "rest" is the only sharded part, two ways.
+    // The carve-outs run whole; "rest" is the only sharded part, three ways (two until 2026-11-13).
     for (const sl of ["capture", "stream", "sponsor"]) {
       const leg = wt.filter((l) => l.wslice === sl);
       expect(leg, `exactly one ${sl} leg`).toHaveLength(1);
@@ -972,8 +973,8 @@ describe("e2e CI wiring", () => {
     }
     expect(
       wt.filter((l) => l.wslice === "rest").map((l) => l.args).sort(),
-      "the walkthrough rest slice must shard two ways, one leg per shard",
-    ).toEqual(["--workers=3 --shard=1/2", "--workers=3 --shard=2/2"]);
+      "the walkthrough rest slice must shard three ways, one leg per shard",
+    ).toEqual(["--workers=3 --shard=1/3", "--workers=3 --shard=2/3", "--workers=3 --shard=3/3"]);
     expect(
       wt.filter((l) => !l.args.startsWith("--workers=3")).map((l) => l.group),
       "a walkthrough leg lost --workers=3, which every replayed leg time assumes",
