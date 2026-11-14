@@ -204,6 +204,25 @@ async function tossStartPlay(out: CreatedQuickMatch, sport_key: Shape["sport_key
   }
 }
 
+/** Whole review m2: the toss, the Start, the Start taken back, the toss taken back and asked again. The second toss is a
+ *  standing sport event AFTER a Start (seq-wise), but that Start is void: the match is back before its Start, nothing played.
+ *  The ledger is the engine's to accept: a toss is taken only before a standing Start, so the fold must see none. */
+async function tossStartUndoneRetoss(out: CreatedQuickMatch, sport_key: Shape["sport_key"]): Promise<void> {
+  const fixtureId = await tossThenStart(out, sport_key);
+  const ids = await sql<{ id: string; type: string }[]>`select id, type from score_events where fixture_id = ${fixtureId} order by seq`;
+  const [toss, start] = ids;
+  await scoreEvent(systemAuth(), fixtureId, { expected_seq: 2, type: "core.void", payload: { event_id: start!.id } });
+  await scoreEvent(systemAuth(), fixtureId, { expected_seq: 3, type: "core.void", payload: { event_id: toss!.id } });
+  if (sport_key !== "cricket") throw new Error(`precondition: the re-toss is cricket's (got ${sport_key})`);
+  const [f] = await sql<{ home_entrant_id: string }[]>`select home_entrant_id from fixtures where id = ${fixtureId}`;
+  const again = cricketTossEvent(f!.home_entrant_id, "bat");
+  await scoreEvent(systemAuth(), fixtureId, { expected_seq: 4, type: again.type, payload: again.payload });
+  const ledger = await sql<{ type: string }[]>`select type from score_events where fixture_id = ${fixtureId} order by seq`;
+  expect(ledger.map((e) => e.type), "premise: the second toss stands after a voided Start").toEqual([
+    toss!.type, "core.start", "core.void", "core.void", again.type,
+  ]);
+}
+
 /** The match's one result, and nothing before it but the Start: the deciding event is the ledger's only sport event. */
 async function resultOnly(out: CreatedQuickMatch): Promise<void> {
   const fixtures = await fixturesOf(out.competitionId);
@@ -252,7 +271,7 @@ interface Seed {
   shape: Shape;
   /** What is done to it after the create. */
   act: "none" | "start" | "rally" | "rallyVoid" | "rallyThenSkip" | "result" | "decideFirst" | "decideAll" | "decideFirstSkipRest"
-    | "save" | "expire" | "tossStart" | "tossStartPlay" | "tossStartPlayVoid";
+    | "save" | "expire" | "tossStart" | "tossStartPlay" | "tossStartPlayVoid" | "tossStartUndoneRetoss";
   played: boolean;
   finished: boolean;
   saved: boolean;
@@ -312,6 +331,10 @@ const SEEDS: Seed[] = [
   // That summary taken back: the toss and the Start still stand, nothing played does. NOT played.
   { tag: "cricket-over-void", ageMs: 10 * HOUR_MS, shape: { sport_key: "cricket", format: "league", sides: ["Falcons", "Kites"] }, act: "tossStartPlayVoid",
     played: false, finished: false, saved: false, expired: false, decided: 0, total: 1 },
+  // Whole review m2: the Start taken back and the toss asked again. The new toss follows a Start by seq, but that Start is
+  // void: NOT played (a Start taken back is not a Start).
+  { tag: "cricket-retoss", ageMs: 11 * HOUR_MS, shape: { sport_key: "cricket", format: "league", sides: ["Falcons", "Kites"] }, act: "tossStartUndoneRetoss",
+    played: false, finished: false, saved: false, expired: false, decided: 0, total: 1 },
   { tag: "expired", ageMs: 10 * 24 * HOUR_MS, shape: { sport_key: "badminton", format: "league", sides: TWO }, act: "expire",
     played: false, finished: false, saved: false, expired: true, decided: 0, total: 1 },
   // A knockout of three: one seat sits out round one, and that bye is settled at the start without anyone playing. It is
@@ -345,6 +368,7 @@ beforeAll(async () => {
     if (s.act === "tossStart") await tossThenStart(out, s.shape.sport_key);
     if (s.act === "tossStartPlay") await tossStartPlay(out, s.shape.sport_key, false);
     if (s.act === "tossStartPlayVoid") await tossStartPlay(out, s.shape.sport_key, true);
+    if (s.act === "tossStartUndoneRetoss") await tossStartUndoneRetoss(out, s.shape.sport_key);
     if (s.act === "result") await resultOnly(out);
     if (s.act === "decideFirst") await decideFirst(out);
     if (s.act === "decideFirstSkipRest") {

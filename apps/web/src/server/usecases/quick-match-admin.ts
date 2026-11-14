@@ -130,8 +130,8 @@ function scopeSql(onlyIds: readonly string[] | undefined) {
 const KERNEL_EVENT_TYPES: readonly string[] = Object.keys(CORE_EVENT_SCHEMAS);
 
 /** played (see the header): a standing sport event on any fixture of the match `q`: not a kernel type, not voided, and after
- *  a Start on its own fixture (a toss before the Start is not play). A Start taken back is not looked for: the fold takes
- *  no play before a standing Start, and a toss re-asked after one is too rare a ledger to shape the read around. */
+ *  a STANDING Start on its own fixture (a toss before the Start is not play). A Start taken back is no Start (whole review
+ *  m2): a toss re-asked after one follows it by seq, and the match is back before its Start, nothing played. */
 function playedSql() {
   return sql`exists (
     select 1 from score_events se
@@ -141,7 +141,9 @@ function playedSql() {
        and se.type <> all(${[...KERNEL_EVENT_TYPES]}::text[])
        and not exists (select 1 from score_events v where v.voids_event_id = se.id)
        and exists (
-         select 1 from score_events st where st.fixture_id = se.fixture_id and st.type = 'core.start' and st.seq < se.seq))`;
+         select 1 from score_events st
+          where st.fixture_id = se.fixture_id and st.type = 'core.start' and st.seq < se.seq
+            and not exists (select 1 from score_events vs where vs.voids_event_id = st.id)))`;
 }
 
 /** Every fixture row of these competitions, by competition: ONE read, the columns `playedOf` reads. No org predicate here
