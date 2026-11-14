@@ -1,8 +1,6 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { test, expect, type Browser, type BrowserContext, type Locator, type Page } from "@playwright/test";
-import { builtinModules } from "@seazn/engine/sports";
-import { effectiveEntrantModel, type EntrantKind } from "@seazn/engine/sport";
 import { PROD_TARGET, TAG, withDb } from "./helpers";
 import { consentedAnonymousState } from "./scorepad-a11y-kit";
 import { waitForHydration } from "./directory-kit";
@@ -62,8 +60,10 @@ async function expectOneClaimEmail(email: string, subject: string): Promise<void
 
 // PROMPT-36 (v3/07 §6), rebuilt by the start wizard redesign (plan 2026-11-13, Task 6): the /start funnel end-to-end. A
 // fresh anonymous visitor answers the four questions (B1 Sport, B2 Size and format, B3 Date, B4 Email), gets the Sent
-// screen (A4), and the emailed claim link lands them signed in inside the competition it built — the format's stages, the
-// entrants and, when they opened Planning, the courts. Fresh context per test: the funnel must never depend on a session.
+// screen (A4), and the emailed claim link lands them signed in inside the competition it built — the format's stages and,
+// when they opened Planning, the courts. No entrant: the field size chosen is the getting-started target, and the organiser
+// adds the real names (/start "Sent stepper", owner 2026-11-14). Fresh context per test: the funnel must never depend on a
+// session.
 
 // ── the visitor's browser and the wizard ──────────────────────────────────────────────────────────────────────────
 
@@ -212,23 +212,24 @@ async function builtAt(divisionPath: string): Promise<Built> {
   });
 }
 
-/** The kind a new division of this sport and variant seeds its entrants as: the engine module's own declaration, laid
- *  over by the variant (never the claim's choice read back). */
-function engineDefaultKind(sportKey: string, variantKey: string): EntrantKind {
-  const mod = builtinModules.find((x) => x.key === sportKey);
-  expect(mod, `premise: the engine registers ${sportKey}`).toBeDefined();
-  const variants = (mod!.variants ?? {}) as Record<string, unknown>;
-  expect(variants[variantKey], `premise: ${sportKey} declares ${variantKey}`).toBeDefined();
-  return effectiveEntrantModel(mod!.entrantModel ?? null, variants[variantKey]).defaultKind;
+/** The field size the claim recorded as the target, read off the draft that built the competition the landing path names
+ *  (V518 `funnel_drafts.competition_id`). */
+async function targetOf(divisionPath: string): Promise<number | null> {
+  const [, org, comp] = /^\/o\/([^/]+)\/c\/([^/]+)/.exec(divisionPath) ?? [];
+  return withDb(async (sql) => {
+    const [row] = await sql<{ entrants: number | null }[]>`
+      select (f.payload->>'entrants')::int as entrants
+        from funnel_drafts f
+        join competitions c on c.id = f.competition_id
+        join organizations o on o.id = c.org_id
+       where o.slug = ${org ?? ""} and c.slug = ${comp ?? ""}`;
+    return row?.entrants ?? null;
+  });
 }
-
-/** The placeholder names the claim seeds, 1..n, as the en dictionary words them for `kind`. */
-const placeholderNames = (kind: EntrantKind, n: number): string[] =>
-  Array.from({ length: n }, (_, i) => ui(`funnel.claim.entrant.${kind}`, { n: i + 1 }));
 
 // ── the cases ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
-test("wizard → claim: the division holds the chosen format, its seeded entrants and the courts from Planning", async ({ browser }) => {
+test("wizard → claim: the division holds the chosen format and the courts from Planning, and no entrant", async ({ browser }) => {
   // Six page loads or redirects (the start, the claim and its landing, fixtures, venues, the dead link) and ~40 acts.
   test.setTimeout(6 * NAV_MS + 40 * ACT_MS);
   const ENTRANTS = 12;
@@ -319,22 +320,15 @@ test("wizard → claim: the division holds the chosen format, its seeded entrant
     expect(built.sportKey, "the division is the link's sport").toBe("football");
     // The rulebook's shape of a groups + knockout: a group stage, then its knockout (plan T2 table).
     expect(built.stages.map((s) => s.kind), "the format's stage graph").toEqual(["group", "knockout"]);
-    const kind = engineDefaultKind(built.sportKey, built.variantKey);
-    const names = placeholderNames(kind, ENTRANTS);
-    expect(built.entrants, "the field: seeded 1..n, the sport's default kind, named by the dictionary").toEqual(
-      names.map((display_name, i) => ({ seed: i + 1, kind, display_name })),
-    );
+    expect(built.entrants, "no placeholder entrant: the organiser adds the real names").toEqual([]);
+    expect(await targetOf(landed), "the size chosen is the draft's, stamped with the competition it built").toBe(ENTRANTS);
     expect(built.venues, "Planning's courts make one venue").toBe(1);
     expect(built.courts).toEqual(Array.from({ length: COURTS }, (_, i) => ui("funnel.claim.court", { n: i + 1 })));
     expect(built.courtHours, "the hours shaped only the estimate (D1)").toBe(0);
     expect([built.startsOn, built.endsOn], "a one-day event on the chosen Saturday (D5)").toEqual([saturday, saturday]);
 
-    // …and the organiser sees it. The entrants tab (where the claim lands): one row per entrant, each by its name.
-    // The name is the row's disclosure button, followed by its chevron glyph.
-    const rows = page.getByTestId("entrant-row-disclosure");
-    await expect(rows).toHaveCount(ENTRANTS);
-    const shown = (await rows.allTextContents()).map((t) => t.replace(/[▸▾]/g, "").trim());
-    expect([...shown].sort(), "each entrant's row names it").toEqual([...names].sort());
+    // …and the organiser sees it. The entrants tab (where the claim lands, its name already shown above): no entrant row.
+    await expect(page.getByTestId("entrant-row-disclosure"), "no placeholder row on the entrants tab").toHaveCount(0);
     // The fixtures tab holds the stage cards: one per stage, in the order the database seqs them.
     await page.goto(`${landed}?tab=fixtures`);
     const cards = page.locator("section.card[data-stage-id]");

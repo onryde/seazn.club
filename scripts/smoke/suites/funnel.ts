@@ -2,11 +2,13 @@
 import { newSession, raw, call, check, tag, checkOutboxRow, smokeDb, html, type Session } from "../harness.ts";
 
 /** What a claim built, read back from the division its redirect lands on (`/o/<org>/c/<comp>/d/<div>?tab=entrants`): the
- *  stage kinds in seq order, the entrants' seeds in seed order, the organisation's active venues and courts, and its
- *  court-hours rows. Null when the redirect names no division the database holds. */
+ *  stage kinds in seq order, how many entrants the division holds, the field size recorded on the draft stamped with the
+ *  competition (V518 `funnel_drafts.competition_id`; the getting-started target), the organisation's active venues and
+ *  courts, and its court-hours rows. Null when the redirect names no division the database holds. */
 async function builtBy(redirect: string): Promise<{
   stageKinds: string[];
-  seeds: (number | null)[];
+  entrants: number;
+  target: number | null;
   venues: number;
   courts: number;
   courtHours: number;
@@ -16,16 +18,18 @@ async function builtBy(redirect: string): Promise<{
   const [, org, comp, div] = m;
   const db = smokeDb();
   try {
-    const [row] = await db<{ division_id: string; org_id: string }[]>`
-      select d.id as division_id, o.id as org_id
+    const [row] = await db<{ division_id: string; org_id: string; competition_id: string }[]>`
+      select d.id as division_id, o.id as org_id, c.id as competition_id
         from divisions d
         join competitions c on c.id = d.competition_id
         join organizations o on o.id = c.org_id
        where o.slug = ${org} and c.slug = ${comp} and d.slug = ${div}`;
     if (!row) return null;
     const stages = await db<{ kind: string }[]>`select kind from stages where division_id = ${row.division_id} order by seq`;
-    const entrants = await db<{ seed: number | null }[]>`
-      select seed from entrants where division_id = ${row.division_id} order by seed nulls last, id`;
+    const [{ entrants }] = await db<{ entrants: number }[]>`
+      select count(*)::int as entrants from entrants where division_id = ${row.division_id}`;
+    const [draft] = await db<{ target: number | null }[]>`
+      select (payload->>'entrants')::int as target from funnel_drafts where competition_id = ${row.competition_id}`;
     const [{ venues }] = await db<{ venues: number }[]>`
       select count(*)::int as venues from venues where org_id = ${row.org_id} and archived_at is null`;
     const [{ courts }] = await db<{ courts: number }[]>`
@@ -33,14 +37,11 @@ async function builtBy(redirect: string): Promise<{
        where c.org_id = ${row.org_id} and c.archived_at is null and v.archived_at is null`;
     const [{ courtHours }] = await db<{ courtHours: number }[]>`
       select count(*)::int as "courtHours" from court_hours where org_id = ${row.org_id}`;
-    return { stageKinds: stages.map((s) => s.kind), seeds: entrants.map((e) => e.seed), venues, courts, courtHours };
+    return { stageKinds: stages.map((s) => s.kind), entrants, target: draft?.target ?? null, venues, courts, courtHours };
   } finally {
     await db.end();
   }
 }
-
-/** Seeds 1..n, the claim's own numbering (start wizard plan D4): typed here, never read from the code. */
-const oneTo = (n: number): number[] => Array.from({ length: n }, (_, i) => i + 1);
 
 /** A start, then its claim by the dev-exposed link's token. Returns the token and where the claim landed. */
 async function startAndClaim(
@@ -57,8 +58,9 @@ async function startAndClaim(
 
 export async function funnelSuite(): Promise<void> {
   // ── 1. The body every older client posts (start wizard plan D6): name, sport by its table NAME, a size, no format, no
-  //       Planning. It still starts and claims, and builds what it always did: the division and its field, no stage (a
-  //       draft that names no format builds none — never a guess, D4) and no venue.
+  //       Planning. It still starts and claims, and builds the division with no stage (a draft that names no format builds
+  //       none — never a guess, D4), no venue and no entrant: the 8 chosen are the draft's target (/start "Sent stepper",
+  //       owner 2026-11-14, removed the "Player 1..n" placeholders).
   const visitor = newSession();
   const funnelEmail = `delivered+funnel_${tag}@resend.dev`;
   const { token, redirect } = await startAndClaim(
@@ -97,10 +99,8 @@ export async function funnelSuite(): Promise<void> {
     const built = await builtBy(redirect);
     check("funnel: old-shaped body: the redirect names a division the database holds", built !== null);
     check("funnel: old-shaped body: no format, so no stage", built !== null && built.stageKinds.length === 0);
-    check(
-      "funnel: old-shaped body: its 8 entrants, seeded 1..8",
-      built !== null && JSON.stringify(built.seeds) === JSON.stringify(oneTo(8)),
-    );
+    check("funnel: old-shaped body: no placeholder entrant", built !== null && built.entrants === 0);
+    check("funnel: old-shaped body: the 8 chosen are the stamped draft's target", built !== null && built.target === 8);
     check("funnel: old-shaped body: no Planning, so no venue and no court", built !== null && built.venues === 0 && built.courts === 0);
   }
 
@@ -112,8 +112,8 @@ export async function funnelSuite(): Promise<void> {
   );
 
   // ── 2. The wizard's body (start wizard plan T7): a format, and the Planning fold's courts and hours. The claim builds the
-  //       format's stage graph (a knockout is one knockout stage, the rulebook's own shape), the field seeded 1..8, one venue
-  //       holding the 2 courts, and writes no court hours (D1: hours only shaped the card's estimate). A fresh visitor, so
+  //       format's stage graph (a knockout is one knockout stage, the rulebook's own shape), no entrant (8 is the target), one
+  //       venue holding the 2 courts, and writes no court hours (D1: hours only shaped the card's estimate). A fresh visitor, so
   //       the organisation it lands in is a new one with no venue of its own yet.
   const planner = newSession();
   const planned = await startAndClaim(
@@ -141,10 +141,8 @@ export async function funnelSuite(): Promise<void> {
       "funnel: knockout with Planning: one knockout stage",
       built !== null && JSON.stringify(built.stageKinds) === JSON.stringify(["knockout"]),
     );
-    check(
-      "funnel: knockout with Planning: 8 entrants, seeded 1..8",
-      built !== null && JSON.stringify(built.seeds) === JSON.stringify(oneTo(8)),
-    );
+    check("funnel: knockout with Planning: no placeholder entrant", built !== null && built.entrants === 0);
+    check("funnel: knockout with Planning: the 8 chosen are the target", built !== null && built.target === 8);
     check("funnel: knockout with Planning: one venue holding 2 courts", built !== null && built.venues === 1 && built.courts === 2);
     check("funnel: knockout with Planning: the hours write no court hours", built !== null && built.courtHours === 0);
   }
@@ -179,6 +177,52 @@ export async function funnelSuite(): Promise<void> {
     try {
       const [{ n }] = await db<{ n: number }[]>`select count(*)::int as n from competitions where name = ${lateName}`;
       check("funnel: past first day: nothing was built", n === 0);
+    } finally {
+      await db.end();
+    }
+  }
+
+  // ── 4. A resubmit (/start "Sent stepper", V518): the visitor went back and sent again. The same address replaces the live
+  //       draft under the SAME reference; the first link is then the named replaced refusal, and only the second builds.
+  //       Then Change email: a different address replaces it only with the reference AND the replace key the start
+  //       answered — the reference stays, and the second address's link is the one that builds.
+  const resubmitter = newSession();
+  const resubmitName = `Funnel Resubmit ${tag}`;
+  const resubmitEmail = `delivered+funnel_again_${tag}@resend.dev`;
+  type Started = { claim_url?: string; reference?: string; replaceKey?: string };
+  const first = (await call(resubmitter, "/api/funnel/start", "POST", { email: resubmitEmail, name: resubmitName, sport: "Badminton", entrants: 8 })) as Started;
+  const second = (await call(resubmitter, "/api/funnel/start", "POST", { email: resubmitEmail, name: resubmitName, sport: "Badminton", entrants: 10 })) as Started;
+  check("funnel: resubmit: the start answers a SZ- reference", /^SZ-[2-9A-HJ-NP-Z]{6}$/.test(first.reference ?? ""));
+  check("funnel: resubmit: the same address keeps its reference", !!first.reference && second.reference === first.reference);
+  const tokenOf = (s: Started) => new URL(s.claim_url ?? "http://x/").searchParams.get("token");
+  const firstClaim = await raw(resubmitter, "/api/funnel/claim", "POST", { token: tokenOf(first) });
+  check(
+    "funnel: resubmit: the first link is replaced (400 FUNNEL_CLAIM_REPLACED)",
+    firstClaim.status === 400 && (firstClaim.json as { code?: string }).code === "FUNNEL_CLAIM_REPLACED",
+  );
+  // Change email: the reference with its replace key moves the draft to the new address.
+  const movedEmail = `delivered+funnel_moved_${tag}@resend.dev`;
+  const moved = (await call(resubmitter, "/api/funnel/start", "POST", {
+    email: movedEmail,
+    name: resubmitName,
+    sport: "Badminton",
+    entrants: 10,
+    previousReference: second.reference,
+    replaceKey: second.replaceKey,
+  })) as Started;
+  check("funnel: change email: the reference carries over", !!second.reference && moved.reference === second.reference);
+  const secondClaim = await raw(resubmitter, "/api/funnel/claim", "POST", { token: tokenOf(second) });
+  check(
+    "funnel: change email: the old address's link is replaced (400 FUNNEL_CLAIM_REPLACED)",
+    secondClaim.status === 400 && (secondClaim.json as { code?: string }).code === "FUNNEL_CLAIM_REPLACED",
+  );
+  const movedClaim = (await call(resubmitter, "/api/funnel/claim", "POST", { token: tokenOf(moved) })) as { redirect: string };
+  check("funnel: change email: the new address's link builds", /^\/o\/[^/]+\/c\/funnel-resubmit[^/]*\/d\//.test(movedClaim.redirect));
+  if (process.env.DATABASE_URL) {
+    const db = smokeDb();
+    try {
+      const [{ n }] = await db<{ n: number }[]>`select count(*)::int as n from competitions where name = ${resubmitName}`;
+      check("funnel: resubmit: one competition, not one per submit", n === 1);
     } finally {
       await db.end();
     }

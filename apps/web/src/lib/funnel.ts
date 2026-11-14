@@ -27,15 +27,12 @@ import { CreateStages, type CreateCompetition } from "@/server/api-v1/schemas";
 import { log } from "@/server/logger";
 import { createCompetition } from "@/server/usecases/competitions";
 import { createDivision } from "@/server/usecases/divisions";
-import { registrationDefaultKind } from "@/server/usecases/entrant-shape";
-import { createEntrants } from "@/server/usecases/entrants";
 import { frozenMemberIds } from "@/server/usecases/entitlement-freeze";
 import { createStages } from "@/server/usecases/stages";
 import { createCourt, createVenue, listVenues } from "@/server/usecases/venues";
 import { pickVariant } from "@/lib/preferred-variant";
 import { routes } from "@/lib/routes";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import type { EntrantKind } from "@seazn/engine/sport";
 
 const DRAFT_TTL_DAYS = 7;
 
@@ -252,15 +249,8 @@ export async function resolveSport(
   return { sport_key: "generic", variant_key: generic?.variant_key ?? "score" };
 }
 
-/** The `ui` key each entrant kind's placeholder name reads; `{n}` is its seed. */
-const PLACEHOLDER_NAME_KEY: Record<EntrantKind, string> = {
-  individual: "funnel.claim.entrant.individual",
-  pair: "funnel.claim.entrant.pair",
-  team: "funnel.claim.entrant.team",
-};
-
 /** The writes after the competition, each named in the partial-build log. */
-type ClaimStep = "division" | "stages" | "entrants" | "venue";
+type ClaimStep = "draft" | "division" | "stages" | "venue";
 
 /** A write refused AFTER the competition exists: the event is part-built behind a spent token. `cause` is the use-case's
  *  own refusal, unchanged (its status, its feature key); the claim route reads it to tell a part-built event from one
@@ -305,7 +295,10 @@ async function claimTargetOrg(userId: string): Promise<OrgMembership | null> {
 
 /**
  * Turn a claimed draft into real structure for `userId` and return where to
- * land: inside the new competition on the division's entrants tab. Uses the
+ * land: inside the new competition on the division's entrants tab, which the
+ * organiser fills — the claim writes NO entrants (/start "Sent stepper" wave,
+ * owner 2026-11-14: the placeholder "Player 1, Player 2…" rows are gone; the
+ * size chosen is the target the getting-started read reports). Uses the
  * standard use-cases, so quotas/slugs/audit all apply as if typed by hand.
  *
  * In order (start-wizard redesign plan, 2026-11-13):
@@ -318,16 +311,16 @@ async function claimTargetOrg(userId: string): Promise<OrgMembership | null> {
  *      so a 402 there writes nothing of the event) and the stage kinds' plan features (createStages, after the
  *      competition and division exist). Not one transaction: each use-case opens its own (`withTenant` never nests);
  *   1. the competition — one day long when the visitor gave a date (D5); undated otherwise (Q2: an end date needs a
- *      day the visitor never gave, the #376 residual);
+ *      day the visitor never gave, the #376 residual) — and the draft stamped with it (V518 `competition_id`: where the
+ *      getting-started read finds the size chosen, and the name and language the organisation was given);
  *   2. the division, of the sport's preferred variant, named as the sport is in the draft's language;
- *   3. the field: the visitor's size held to the plan's per-division cap (D4, Q1). It is the ONE size both the stages
- *      and the entrants are built for, so a 256 ask on a 64-entrant plan builds a 64 field's graph and 64 entrants —
- *      never a bracket sized for entrants that do not exist;
+ *   3. the field: the visitor's size held to the plan's per-division cap (D4, Q1). It is the size the stages are built
+ *      for, so a 256 ask on a 64-entrant plan builds a 64 field's graph — never a bracket sized past what the plan holds;
  *   4. the stages of the format card they picked, the graph that card's match count was read off
  *      (lib/funnel-formats.ts); none for a format the funnel does not offer, a draft that names none (old drafts), or a
- *      field below the format's minimum — never a guess;
- *   5. the entrants: name-only, of the division's default kind, seeded 1..field, named in the draft's language;
- *   6. the courts, when the visitor opened Planning and the organisation has no active venue: one venue holding that
+ *      field below the format's minimum — never a guess. No stage is generated: Generate is the organiser's, once they
+ *      have entrants;
+ *   5. the courts, when the visitor opened Planning and the organisation has no active venue: one venue holding that
  *      many. The hours are never written (D1).
  * A write after the competition that is refused is logged by step (`claimStep`) and rethrown as a
  * FunnelClaimPartialError; a refusal before it (the quota, the pre-flight) is thrown as it came.
@@ -379,6 +372,13 @@ export async function createFromDraft(
       "funnel_claim_entrants_clamped",
     );
   }
+  await claimStep("draft", competition.id, async () => {
+    const [stamped] = await sql<{ id: string }[]>`
+      update funnel_drafts set competition_id = ${competition.id} where id = ${draft.id} returning id`;
+    // An assumption as a guard: nothing deletes a draft, so the one just consumed is there to stamp. Were it gone, the
+    // getting-started read could not find the size chosen — a server fault, not the visitor's.
+    if (!stamped) throw new HttpError(500, "the claimed funnel draft is gone");
+  });
 
   // 2.
   const division = await claimStep("division", competition.id, () =>
@@ -393,22 +393,7 @@ export async function createFromDraft(
   // 3-4.
   if (stages !== null) await claimStep("stages", competition.id, () => createStages(auth, division.id, stages));
 
-  // 5. A plan that holds no entrants (`field` 0) asks for an empty batch, which createEntrants writes nothing for.
-  const kind = registrationDefaultKind(division);
-  await claimStep("entrants", competition.id, () =>
-    createEntrants(
-      auth,
-      division.id,
-      Array.from({ length: field }, (_, i) => ({
-        kind,
-        display_name: t(dict, PLACEHOLDER_NAME_KEY[kind], { n: i + 1 }),
-        seed: i + 1,
-        members: [],
-      })),
-    ),
-  );
-
-  // 6.
+  // 5.
   const { courts } = payload;
   if (courts !== undefined) {
     await claimStep("venue", competition.id, async () => {

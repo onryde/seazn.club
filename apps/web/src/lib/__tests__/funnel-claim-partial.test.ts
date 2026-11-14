@@ -7,7 +7,8 @@
 //
 // Driven through the real claim path on a real database. Stand-ins: each later use-case is the real one, wrapped so a
 // test can make exactly one of them refuse; and the format layer's graph, which one case swaps for a graph the API
-// refuses (no shipped graph is refused: every funnel graph parses).
+// refuses (no shipped graph is refused: every funnel graph parses). The draft stamp (V518: the draft names the competition
+// it built) is refused for real — its draft row is gone, which its guard turns into a 500.
 // Real Postgres required — skipped without DATABASE_URL (test-infra recipe).
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -15,8 +16,11 @@ import { randomUUID } from "node:crypto";
 const rig = vi.hoisted(() => ({
   failAt: null as string | null,
   badGraph: false,
-  // Each step refuses with its own status (the division with a bare throw: none), so the log's `status` is read per step.
-  statusOf: { division: null, stages: 409, entrants: 402, venue: 503 } as Record<string, number | null>,
+  // Each step refuses with its own status (the division with a bare throw: none), so the log's `status` is read per step. The
+  // draft stamp's is its own guard's (a vanished draft is a server fault), not the rig's.
+  statusOf: { division: null, draft: 500, stages: 409, venue: 503 } as Record<string, number | null>,
+  /** Every createEntrants call a claim made: the claim writes no entrant (owner, 2026-11-14). */
+  entrantCalls: 0,
 }));
 async function refusal(step: string): Promise<Error> {
   const status = rig.statusOf[step];
@@ -42,7 +46,7 @@ vi.mock("@/server/usecases/stages", async (importOriginal) => {
 vi.mock("@/server/usecases/entrants", async (importOriginal) => {
   const real = await importOriginal<typeof import("@/server/usecases/entrants")>();
   return { ...real, createEntrants: (async (...a: Parameters<typeof real.createEntrants>) => {
-    if (rig.failAt === "entrants") throw await refusal("entrants");
+    rig.entrantCalls++;
     return real.createEntrants(...a);
   }) as typeof real.createEntrants };
 });
@@ -82,10 +86,10 @@ async function organiser(): Promise<{ userId: string; orgId: string; email: stri
 
 async function draftFor(email: string, over: Partial<FunnelPayload> = {}) {
   const payload: FunnelPayload = { name: `${RUN} ${randomUUID().slice(0, 6)}`, sport: "Badminton", entrants: 6, format: "league", courts: 2, ...over };
-  const { token } = await createFunnelDraft(email, payload, sql, "en");
+  const { token, id } = await createFunnelDraft(email, payload, sql, "en");
   const draft = await consumeFunnelDraft(token);
   expect(draft, "claimable").not.toBeNull();
-  return { draft: draft!, token, payload };
+  return { draft: draft!, token, payload, id };
 }
 
 const competitionsOf = (orgId: string) => sql<{ id: string }[]>`select id from competitions where org_id = ${orgId}`;
@@ -94,6 +98,7 @@ const partialLogs = (spy: { mock: { calls: unknown[][] } }) => spy.mock.calls.fi
 afterEach(() => {
   rig.failAt = null;
   rig.badGraph = false;
+  rig.entrantCalls = 0;
   vi.restoreAllMocks();
 });
 afterAll(async () => {
@@ -114,13 +119,16 @@ afterAll(async () => {
 
 describe.skipIf(!HAS_DB)("a claim refused half-way says which step, and a pre-flight refusal writes nothing (T2 m1)", () => {
   it("a write refused after the competition exists is logged by its step and rethrown; the log carries no address or token", async () => {
-    const steps = ["division", "stages", "entrants", "venue"] as const;
+    const steps = ["draft", "division", "stages", "venue"] as const;
     let checked = 0;
     for (const step of steps) {
       const o = await organiser();
-      const { draft, token } = await draftFor(o.email);
+      const { draft, token, id } = await draftFor(o.email);
       const errors = vi.spyOn(log, "error");
       rig.failAt = step;
+      // The stamp's guard: the claimed draft's row is gone by the time the competition exists ("cannot happen" — nothing deletes
+      // a draft — so it is a guard with a test, not a comment).
+      if (step === "draft") await sql`delete from funnel_drafts where id = ${id}`;
       const thrown = await createFromDraft(o.userId, draft).then(
         () => null,
         (e: unknown) => e,
@@ -133,7 +141,9 @@ describe.skipIf(!HAS_DB)("a claim refused half-way says which step, and a pre-fl
       expect(thrown, `${step}: a part-built refusal`).toBeInstanceOf(FunnelClaimPartialError);
       const partial = thrown as FunnelClaimPartialError;
       expect({ step: partial.step, competitionId: partial.competitionId }, step).toEqual({ step, competitionId: comps[0]!.id });
-      expect((partial.cause as Error).message, `${step}: the use-case's own refusal`).toBe("forced refusal (test)");
+      expect((partial.cause as Error).message, `${step}: the use-case's own refusal`).toBe(
+        step === "draft" ? "the claimed funnel draft is gone" : "forced refusal (test)",
+      );
       expect((partial.cause as { status?: number }).status ?? null, `${step}: its status`).toBe(rig.statusOf[step]);
       const logged = partialLogs(errors);
       expect(logged, `${step}: logged once`).toHaveLength(1);
@@ -148,13 +158,17 @@ describe.skipIf(!HAS_DB)("a claim refused half-way says which step, and a pre-fl
     expect(new Set(steps.map((s) => rig.statusOf[s])).size, "premise: every step refuses with its own status").toBe(steps.length);
   });
 
-  it("a claim that builds cleanly logs no partial build", async () => {
+  it("a claim that builds cleanly logs no partial build, writes no entrant, and stamps its draft with the competition", async () => {
     const o = await organiser();
-    const { draft } = await draftFor(o.email);
+    const { draft, id } = await draftFor(o.email);
     const errors = vi.spyOn(log, "error");
     await createFromDraft(o.userId, draft);
     expect(partialLogs(errors)).toEqual([]);
-    expect(await competitionsOf(o.orgId)).toHaveLength(1);
+    const comps = await competitionsOf(o.orgId);
+    expect(comps).toHaveLength(1);
+    expect(rig.entrantCalls, "the claim never asks for an entrant").toBe(0);
+    const [stamp] = await sql<{ competition_id: string | null }[]>`select competition_id from funnel_drafts where id = ${id}`;
+    expect(stamp!.competition_id, "the draft names the competition it built").toBe(comps[0]!.id);
   });
 
   it("a stage graph the API refuses is refused in the pre-flight: no competition, no division, no log", async () => {

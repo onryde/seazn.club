@@ -1,12 +1,16 @@
 // The emailed claim builds what the organiser chose on /start (start-wizard redesign, plan 2026-11-13 Task 2): the format
-// card they picked as its stage graph, the field they sized as name-only entrants seeded 1..N, and — when they opened
-// Planning — one venue with that many courts. Before this the claim built a bare division for every format (P1, measured).
+// card they picked as its stage graph, sized for the field they chose, and — when they opened Planning — one venue with that
+// many courts. Before that wave the claim built a bare division for every format (P1, measured).
+//
+// It writes NO entrants (/start "Sent stepper" wave T1, owner 2026-11-14: "remove" the placeholder "Player 1, Player 2…"
+// rows). The size chosen is the target the getting-started read reports (server/usecases/getting-started.ts), read off the
+// draft the claim stamps with the competition it built (V518).
 //
 // Driven through the REAL claim path: createFunnelDraft → consumeFunnelDraft → createFromDraft, read back from the tables.
 // Expected values never come from the claim: the stage kinds are the rulebook's (typed below), the template key is
 // detectTemplate's reading of the rows, each stage is the one the format cards counted (lib/funnel-formats.ts — the card
-// and the built event must not disagree), the entrant kind is the engine's declaration for the variant, every name is the
-// dictionary file on disk, and the cap is the live plan resolver's.
+// and the built event must not disagree), the entrant kind the organiser adds is the engine's declaration for the variant,
+// every name is the dictionary file on disk, and the cap is the live plan resolver's.
 // Real Postgres required — skipped without DATABASE_URL (test-infra recipe).
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
@@ -39,6 +43,9 @@ import { swissRoundsGuidance } from "@/lib/swiss-rounds";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { log } from "@/server/logger";
 import { frozenMemberIds } from "@/server/usecases/entitlement-freeze";
+import { ENGINE_HTTP } from "@/server/api-v1/http";
+import { createEntrants } from "@/server/usecases/entrants";
+import { EngineError } from "@seazn/engine/core";
 import { generateStageFixturesUnpublished } from "@/server/usecases/stages";
 import { archiveVenue, createCourt, createVenue } from "@/server/usecases/venues";
 import { builtinModules } from "@seazn/engine/sports";
@@ -64,11 +71,6 @@ const TEMPLATE_OF: Record<FunnelFormat, string> = {
   knockout: "knockout",
   swiss: "swiss",
   double_elim: "double_elim",
-};
-const NAME_KEY: Record<EntrantKind, string> = {
-  individual: "funnel.claim.entrant.individual",
-  pair: "funnel.claim.entrant.pair",
-  team: "funnel.claim.entrant.team",
 };
 
 // ── Dictionaries, read off disk ────────────────────────────────────────────────────────────────────────────────────────
@@ -101,6 +103,7 @@ interface Claimed {
   competitionId: string;
   divisionId: string;
   token: string;
+  draftId: string;
 }
 
 /** Start a draft as /api/funnel/start writes it, consume its token as the claim page does, and build it. */
@@ -111,7 +114,7 @@ async function claim(
   const email = opts.email ?? address();
   const userId = opts.userId ?? (await seedUser(email));
   const payload = { name: `${RUN} ${randomUUID().slice(0, 6)}`, sport: "Badminton", ...over } as FunnelPayload;
-  const { token } = await createFunnelDraft(email, payload, sql, opts.locale ?? null);
+  const { token, id: draftId } = await createFunnelDraft(email, payload, sql, opts.locale ?? null);
   const draft = await consumeFunnelDraft(token);
   expect(draft, "the draft is claimable").not.toBeNull();
   const { orgId } = await createFromDraft(userId, draft!);
@@ -120,8 +123,11 @@ async function claim(
       from competitions c join divisions d on d.competition_id = c.id
      where c.org_id = ${orgId} and c.name = ${payload.name}`;
   expect(rows, "one competition with one division").toHaveLength(1);
-  return { userId, orgId, competitionId: rows[0]!.competition_id, divisionId: rows[0]!.division_id, token };
+  return { userId, orgId, competitionId: rows[0]!.competition_id, divisionId: rows[0]!.division_id, token, draftId };
 }
+/** The competition the claim stamped on its draft (V518): what the getting-started read finds the chosen size by. */
+const stampedOn = async (draftId: string): Promise<string | null> =>
+  (await sql<{ competition_id: string | null }[]>`select competition_id from funnel_drafts where id = ${draftId}`)[0]?.competition_id ?? null;
 
 type StoredStage = { id: string; seq: number; kind: string; name: string; config: Record<string, unknown>; progression: StageDraft["progression"] };
 const stagesOf = (divisionId: string) =>
@@ -195,7 +201,7 @@ describe.skipIf(!HAS_DB)("the claim builds the chosen format, its entrants and i
   // the kinds a sport refuses), so is its Generate. The counter is shared, and the last case asserts it, so a sport case
   // that is skipped or returns early cannot pass the sweep as checked.
   let sweepChecked = 0;
-  it.each(FUNNEL_SPORTS)("$key × every format builds the stage graph its card counted, and the graph draws the seeded field", async (sport) => {
+  it.each(FUNNEL_SPORTS)("$key × every format builds the stage graph its card counted, writes no entrant, and the graph draws the field the organiser adds", async (sport) => {
     const n = 12;
     for (const format of ALL_FORMATS) {
       const label = `${sport.key} ${format}`;
@@ -220,10 +226,34 @@ describe.skipIf(!HAS_DB)("the claim builds the chosen format, its entrants and i
         expect(stored[0]!.config.rounds, "the Swiss plays the house's recommendation for the field").toBe(swissRoundsGuidance(n).recommended);
       }
 
-      // And the consumer: the organiser's Generate draws every seeded entrant into the first stage.
-      const entrants = await entrantsOf(c.divisionId);
-      expect(entrants).toHaveLength(n);
+      // No entrant is written (owner, 2026-11-14), and the draft names the competition it built (the target's home).
+      expect(await entrantsOf(c.divisionId), `${label}: no entrant`).toEqual([]);
+      expect(await stampedOn(c.draftId), `${label}: the draft names its competition`).toBe(c.competitionId);
       const auth: AuthCtx = { orgId: c.orgId, via: "session", userId: c.userId, role: "owner", keyId: null };
+      // An empty roster crashes nothing: Generate on the empty field is the engine's named refusal (STAGE_NOT_READY), which
+      // the API answers with its own mapped status (ENGINE_HTTP) — a 4xx, never a 500 — and writes no fixture.
+      const empty = await generateStageFixturesUnpublished(auth, stored[0]!.id).then(
+        (o) => ({ code: "generated", created: o.created }),
+        (e: unknown) => ({ code: EngineError.is(e) ? e.code : String((e as Error).message), created: 0 }),
+      );
+      expect(empty.code, `${label}: Generate on no entrant is the named refusal`).toBe("STAGE_NOT_READY");
+      expect(ENGINE_HTTP.STAGE_NOT_READY, "premise: the API answers it as a client error").toBeLessThan(500);
+      expect(
+        (await sql<{ n: number }[]>`select count(*)::int as n from fixtures where stage_id = ${stored[0]!.id}`)[0]!.n,
+        `${label}: no fixture row on the empty field`,
+      ).toBe(0);
+
+      // And the consumer: the field the organiser adds — n of the division's default kind — is drawn by Generate into the
+      // first stage the claim built for n.
+      const [div] = await sql<{ sport_key: string; variant_key: string }[]>`select sport_key, variant_key from divisions where id = ${c.divisionId}`;
+      const kind = engineDefaultKind(div!.sport_key, div!.variant_key);
+      await createEntrants(
+        auth,
+        c.divisionId,
+        seeds(n).map((i) => ({ kind, display_name: `${RUN} ${label} ${i}`, seed: i, members: [] })),
+      );
+      const entrants = await entrantsOf(c.divisionId);
+      expect(entrants, `${label}: the organiser's field`).toHaveLength(n);
       const outcome = await generateStageFixturesUnpublished(auth, stored[0]!.id);
       expect(outcome.created, `${label}: Generate created fixtures`).toBeGreaterThan(0);
       // A Swiss's first Generate lays every round's empty lines; the next one (Pair next) seats round 1.
@@ -240,26 +270,20 @@ describe.skipIf(!HAS_DB)("the claim builds the chosen format, its entrants and i
     expect(sweepChecked, "every pair was claimed and checked").toBe(FUNNEL_SPORTS.length * ALL_FORMATS.length);
   });
 
-  it("entrants: n seeded name-only rows of the sport's default kind, every funnel sport", async () => {
+  it("no entrants, every funnel sport, every format's empty case: the division named as the dictionary names its sport", async () => {
     const n = 6;
-    const kinds = new Set<string>();
     let checked = 0;
     for (const s of FUNNEL_SPORTS) {
       const c = await claim({ sport: s.name, entrants: n, format: "league" });
-      const want = engineDefaultKind(s.module, s.variant);
-      const rows = await entrantsOf(c.divisionId);
-      expect(rows.map((r) => r.seed), `${s.key}: seeds 1..${n}`).toEqual(seeds(n));
-      expect(new Set(rows.map((r) => r.kind)), `${s.key}: the ${want} the engine declares`).toEqual(new Set([want]));
-      expect(rows.map((r) => r.members), `${s.key}: name-only`).toEqual(rows.map(() => 0));
-      expect(rows.map((r) => r.display_name), s.key).toEqual(seeds(n).map((i) => ui("en", NAME_KEY[want], i)));
+      expect(await entrantsOf(c.divisionId), `${s.key}: no entrant is written`).toEqual([]);
+      const [{ any }] = await sql<{ any: number }[]>`select count(*)::int as any from entrants where org_id = ${c.orgId}`;
+      expect(any, `${s.key}: none anywhere in the organisation`).toBe(0);
       expect(await divisionNameOf(c.divisionId), `${s.key}: the division is named as the dictionary names its sport`).toBe(
         divisionNameFor("en", s.module),
       );
-      kinds.add(want);
       checked++;
     }
     expect(checked, "anti-vacuity: every funnel sport was claimed").toBe(FUNNEL_SPORTS.length);
-    expect(kinds.size, "premise: the sweep holds more than one kind, so a kind written blind would red").toBeGreaterThan(1);
   });
 
   it("a sport the registry does not know (Padel) builds the generic module, its division named Other in the draft's language", async () => {
@@ -277,8 +301,8 @@ describe.skipIf(!HAS_DB)("the claim builds the chosen format, its entrants and i
     expect(checked, "anti-vacuity: every language").toBe(LOCALES.length);
   });
 
-  it("placeholder names, the venue and its courts follow the draft's language", async () => {
-    // An individual sport and a team sport in every language: both name keys are read per locale.
+  it("the division, the venue and its courts follow the draft's language; no entrant in any language", async () => {
+    // An individual sport and a team sport in every language.
     // Other too: it names no sport, so its division takes the funnel's own word for it, never the module's "Generic".
     const sports = ["badminton", "football", "other"].map((k) => FUNNEL_SPORTS.find((s) => s.key === k)!);
     const n = 3;
@@ -286,10 +310,7 @@ describe.skipIf(!HAS_DB)("the claim builds the chosen format, its entrants and i
     for (const locale of LOCALES) {
       for (const s of sports) {
         const c = await claim({ sport: s.name, entrants: n, format: "league", courts: 2 }, { locale });
-        const kind = engineDefaultKind(s.module, s.variant);
-        expect((await entrantsOf(c.divisionId)).map((e) => e.display_name), `${locale} ${s.key}`).toEqual(
-          seeds(n).map((i) => ui(locale, NAME_KEY[kind], i)),
-        );
+        expect(await entrantsOf(c.divisionId), `${locale} ${s.key}: no entrant`).toEqual([]);
         expect(await divisionNameOf(c.divisionId), `${locale} ${s.key}: the division`).toBe(divisionNameFor(locale, s.module));
         expect((await venuesOf(c.orgId)).map((v) => v.name), `${locale}: the venue`).toEqual([ui(locale, "funnel.claim.venue")]);
         expect((await courtsOf(c.orgId)).map((x) => x.name), `${locale}: the courts`).toEqual([1, 2].map((i) => ui(locale, "funnel.claim.court", i)));
@@ -305,15 +326,16 @@ describe.skipIf(!HAS_DB)("the claim builds the chosen format, its entrants and i
       LOCALES.length,
     );
     // Each language can be told from the fallback only while the dictionaries differ.
-    expect(new Set(LOCALES.map((l) => ui(l, NAME_KEY.individual))).size, "premise: every language names a player its own way").toBe(LOCALES.length);
+    expect(new Set(LOCALES.map((l) => ui(l, "funnel.claim.venue"))).size, "premise: every language names the venue its own way").toBe(LOCALES.length);
     expect(new Set(LOCALES.map((l) => ui(l, "sport.football"))).size, "premise: the languages name football differently").toBeGreaterThan(1);
 
     // A draft started with no language falls to English.
-    const none = await claim({ entrants: 2, format: "league" }, { locale: null });
-    expect((await entrantsOf(none.divisionId)).map((e) => e.display_name)).toEqual([1, 2].map((i) => ui("en", NAME_KEY.individual, i)));
+    const none = await claim({ entrants: 2, format: "league", courts: 1 }, { locale: null });
+    expect((await venuesOf(none.orgId)).map((v) => v.name)).toEqual([ui("en", "funnel.claim.venue")]);
+    expect(await entrantsOf(none.divisionId)).toEqual([]);
   });
 
-  it("at the plan cap seeds every entrant; above it seeds the cap and builds the graph for the cap, not the ask", async () => {
+  it("at the plan cap builds the graph for the cap; above it builds the graph for the cap, not the ask; no entrant either way", async () => {
     // A fresh organisation on the free plan: the cap is the live resolver's, never a literal.
     const userId = await seedUser();
     const org = await createOrgForUser(userId, `${RUN} capped`);
@@ -321,7 +343,7 @@ describe.skipIf(!HAS_DB)("the claim builds the chosen format, its entrants and i
     expect(cap, "premise: the free plan caps a division's entrants").not.toBeNull();
     expect(cap!, "premise: the cap sits inside the funnel's 2..256, so the funnel can ask past it").toBeLessThan(256);
     expect(cap!, "premise: the cap can hold a Swiss").toBeGreaterThanOrEqual(funnelFormatMin("swiss"));
-    expect(await funnelEntrantCap(), "the number /start quotes is the number the claim seeds").toBe(cap);
+    expect(await funnelEntrantCap(), "the number /start quotes is the number the claim builds for").toBe(cap);
     // The Swiss round count moves with the field here, so a graph built for the ask would carry a different count.
     expect(swissRoundsGuidance(cap! + 1).recommended, "premise: cap and cap + 1 play different Swiss round counts").not.toBe(
       swissRoundsGuidance(cap!).recommended,
@@ -330,27 +352,28 @@ describe.skipIf(!HAS_DB)("the claim builds the chosen format, its entrants and i
     const clamped = () => info.mock.calls.filter((call) => call[1] === "funnel_claim_entrants_clamped");
 
     const at = await claim({ entrants: cap!, format: "swiss" }, { userId });
-    expect((await entrantsOf(at.divisionId)).map((e) => e.seed), "at the cap: everyone").toEqual(seeds(cap!));
+    expect(await entrantsOf(at.divisionId), "at the cap: no entrant").toEqual([]);
+    const [atSwiss] = await stagesOf(at.divisionId);
+    expect(atSwiss?.config.rounds, "at the cap: the graph for the cap").toBe(swissRoundsGuidance(cap!).recommended);
     expect(clamped(), "at the cap: nothing was clamped").toHaveLength(0);
 
     const above = await claim({ entrants: cap! + 1, format: "swiss" }, { userId });
-    const rows = await entrantsOf(above.divisionId);
-    expect(rows.map((e) => e.seed), "above the cap: the cap, seeded 1..cap").toEqual(seeds(cap!));
+    expect(await entrantsOf(above.divisionId), "above the cap: no entrant").toEqual([]);
     const [swiss] = await stagesOf(above.divisionId);
     expect(swiss?.config.rounds, "the graph is built for the field it holds").toBe(swissRoundsGuidance(cap!).recommended);
     expect(clamped(), "the clamp is logged once").toHaveLength(1);
     expect(clamped()[0]![0]).toMatchObject({ requested: cap! + 1, cap });
   });
 
-  it("the organisation's own cap decides: unlimited seeds every entrant; a cap of one seeds one and no stage; none seeds nothing", async () => {
+  it("the organisation's own cap decides the graph: unlimited builds for the ask; a cap of one or none builds no stage; no entrant ever", async () => {
     // A staff override on the claiming organisation (org_entitlement_overrides: null = unlimited), so the cap the claim
     // reads is this organisation's, not the free plan's quoted on /start.
     const freeCap = await funnelEntrantCap();
     expect(freeCap, "premise: the free plan has a cap to go past").not.toBeNull();
     const cases = [
-      { label: "unlimited", override: null, ask: freeCap! + 6, entrants: freeCap! + 6, stages: RULEBOOK_KINDS.league },
-      { label: "a cap of one", override: 1, ask: 4, entrants: 1, stages: [] as string[] },
-      { label: "a cap of none", override: 0, ask: 4, entrants: 0, stages: [] as string[] },
+      { label: "unlimited", override: null, ask: freeCap! + 6, stages: RULEBOOK_KINDS.league },
+      { label: "a cap of one", override: 1, ask: 4, stages: [] as string[] },
+      { label: "a cap of none", override: 0, ask: 4, stages: [] as string[] },
     ];
     let checked = 0;
     for (const k of cases) {
@@ -361,29 +384,30 @@ describe.skipIf(!HAS_DB)("the claim builds the chosen format, its entrants and i
         values (${org.id}, 'entrants.per_division.max', ${k.override}, ${`${RUN} funnel claim cap`})`;
       expect(await getLimit(org.id, "entrants.per_division.max"), `${k.label}: the resolver reads the override`).toBe(k.override);
       const c = await claim({ entrants: k.ask, format: "league" }, { userId });
-      expect((await entrantsOf(c.divisionId)).map((e) => e.seed), k.label).toEqual(seeds(k.entrants));
+      expect(await entrantsOf(c.divisionId), k.label).toEqual([]);
       expect((await stagesOf(c.divisionId)).map((s) => s.kind), k.label).toEqual(k.stages);
       checked++;
     }
     expect(checked, "anti-vacuity: every cap was driven").toBe(cases.length);
   });
 
-  it("below a format's minimum builds no stage, and at it builds one; the entrants are seeded either way", async () => {
+  it("below a format's minimum builds no stage, and at it builds one; no entrant either way", async () => {
     let checked = 0;
     for (const format of ALL_FORMATS) {
       const min = funnelFormatMin(format);
       if (min <= 2) continue; // the funnel's own floor is 2: no field below it reaches the claim
       const below = await claim({ entrants: min - 1, format });
       expect(await stagesOf(below.divisionId), `${format} at ${min - 1}`).toEqual([]);
-      expect((await entrantsOf(below.divisionId)).map((e) => e.seed), `${format} at ${min - 1}`).toEqual(seeds(min - 1));
+      expect(await entrantsOf(below.divisionId), `${format} at ${min - 1}`).toEqual([]);
       const at = await claim({ entrants: min, format });
       expect((await stagesOf(at.divisionId)).map((s) => s.kind), `${format} at ${min}`).toEqual(RULEBOOK_KINDS[format]);
+      expect(await entrantsOf(at.divisionId), `${format} at ${min}`).toEqual([]);
       checked++;
     }
     expect(checked, "anti-vacuity: a format with a minimum above the funnel's floor was driven").toBeGreaterThan(0);
   });
 
-  it("no format, or one the funnel does not offer, builds no stage; the entrants are seeded (old drafts keep claiming)", async () => {
+  it("no format, or one the funnel does not offer, builds no stage and no entrant (old drafts keep claiming)", async () => {
     const n = 5;
     const cases: { label: string; format?: string }[] = [
       { label: "absent" },
@@ -394,7 +418,7 @@ describe.skipIf(!HAS_DB)("the claim builds the chosen format, its entrants and i
     for (const c of cases) {
       const built = await claim({ entrants: n, ...(c.format === undefined ? {} : { format: c.format }) });
       expect(await stagesOf(built.divisionId), c.label).toEqual([]);
-      expect((await entrantsOf(built.divisionId)).map((e) => e.seed), c.label).toEqual(seeds(n));
+      expect(await entrantsOf(built.divisionId), c.label).toEqual([]);
       checked++;
     }
     expect(checked, "anti-vacuity").toBe(cases.length);
@@ -469,8 +493,12 @@ describe.skipIf(!HAS_DB)("the claim builds the chosen format, its entrants and i
     expect(second.divisionId).not.toBe(first.divisionId);
     expect((await stagesOf(first.divisionId)).map((s) => s.kind)).toEqual(RULEBOOK_KINDS.league);
     expect((await stagesOf(second.divisionId)).map((s) => s.kind)).toEqual(RULEBOOK_KINDS.knockout);
-    expect((await entrantsOf(first.divisionId)).map((e) => e.seed)).toEqual(seeds(4));
-    expect((await entrantsOf(second.divisionId)).map((e) => e.seed)).toEqual(seeds(8));
+    expect(await entrantsOf(first.divisionId)).toEqual([]);
+    expect(await entrantsOf(second.divisionId)).toEqual([]);
+    expect([await stampedOn(first.draftId), await stampedOn(second.draftId)], "each draft names its own competition").toEqual([
+      first.competitionId,
+      second.competitionId,
+    ]);
 
     expect(await consumeFunnelDraft(first.token), "the first link is spent").toBeNull();
   });
@@ -525,7 +553,7 @@ describe.skipIf(!HAS_DB)("the claim builds the chosen format, its entrants and i
         competitions: 1,
         divisions: 1,
         stages: RULEBOOK_KINDS["groups-knockout"].length,
-        entrants: 8,
+        entrants: 0,
         venues: 1,
         courts: 2,
       });
