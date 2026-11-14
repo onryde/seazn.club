@@ -2141,7 +2141,7 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
     expect(div.payment_method).toBe("stripe");
   });
 
-  // Walk-fix A review I1: "registration opens once the organiser finishes payment setup" is said wherever every division is
+  // Walk-fix A review I1: "registration opens once the organiser turns them on" is said wherever every division is
   // closed and one is closed for card payments. A card division whose WINDOW is shut (closed weeks ago, or not open yet) is
   // closed by the window whatever Connect does, so the window is its reason - otherwise a finished competition tells every
   // visitor registration will open the moment Stripe pauses charges. Sequence: window past, window ahead, window open.

@@ -97,7 +97,7 @@ export default async function RegisterPage({ params, searchParams }: Props) {
           <h1 className="mt-1 font-display text-4xl font-bold uppercase tracking-tight text-ink">
             {t(ui, "register.title")}
           </h1>
-          {/* Walk-fix F5: closed only because card payments are not set up is a reason the visitor is owed, and it says the
+          {/* Walk-fix F5: closed only because card payments aren't available is a reason the visitor is owed, and it says the
               registration will open - the bare "not open" read as final. */}
           {registrationWaitsOnCardPayments(info.divisions) ? (
             <p

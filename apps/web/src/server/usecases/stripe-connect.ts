@@ -463,7 +463,7 @@ export async function syncConnectAccount(account: Stripe.Account): Promise<void>
   // unconnected org's chosen currency is never touched by a sync.
   if (!row) return;
   // Walk-fix A review m2: whether a card division takes entries is read from this flag, and the public hub that says so
-  // (open state, the "opens once payment setup is finished" sentence) is cached under the org's public tag - on Fly a
+  // (open state, the "registration opens once the organiser turns them on" sentence) is cached under the org's public tag - on Fly a
   // suspended machine's cache clock stops, so "it ages out in 30s" is not a bound. Expire it on a flip, and only then:
   // account.updated fires for every requirement change, and each bust purges the CDN.
   if (row.charges_was !== row.charges_now) fireOrgRevalidate(row.slug);

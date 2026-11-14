@@ -1,4 +1,4 @@
-// "Card payments are not set up" - ONE derivation for every surface that says it (walk-fix F5). With Connect unable to charge, a
+// "Card payments aren't available right now" - ONE derivation for every surface that says it (walk-fix F5). With Connect unable to charge, a
 // card division cannot take an entry (settings.ts closes it as `payments_unavailable`, spec #9 / P2-10), and the walkthrough found
 // three surfaces silent about why: the register page ("not open"), the public competition page, and the organiser's hub
 // ("Open now"). Dependency-free, so the server read model, the server pages and the client components all ask the same functions.
@@ -16,7 +16,7 @@ export function cardPaymentsBroken(
 }
 
 /** The public pages: nothing is open, and at least one division is closed only for card payments - so "registration opens once
- *  the organiser finishes payment setup" is the reason a visitor is owed instead of a bare "not open". An open division anywhere
+ *  the organiser turns them on" is the reason a visitor is owed instead of a bare "not open". An open division anywhere
  *  (an offline or free one still registers; a full one still takes the waitlist) means registration is not waiting on this. */
 export function registrationWaitsOnCardPayments(
   divisions: readonly { open: boolean; closed_reason: string | null }[],

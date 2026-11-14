@@ -720,7 +720,7 @@ export function OverviewTab({
       </>
     ) : doc.info.registrationWaitsOnCardPayments ? (
       <>
-        {/* Walk-fix F5: no Register while card payments are not set up, and the reason in its place rather than nothing. */}
+        {/* Walk-fix F5: no Register while card payments aren't available, and the reason in its place rather than nothing. */}
         <p data-testid="mh-register-unavailable" className="max-w-prose text-sm text-ink-muted">
           {t(dict, "info.registration.cardPaymentsUnavailable")}
         </p>

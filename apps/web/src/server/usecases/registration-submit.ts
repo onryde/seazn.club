@@ -237,7 +237,7 @@ export interface JoinPreviewResult {
   /** What kind of entry this link joins (polish wave P3, W3): lets the join page say "this PAIR is full" only for a pair, and the
    *  generic roster-full copy for a team. */
   entrant_kind: "team" | "individual" | "pair";
-  /** Whether the entry is confirmed (final fix round G, the V7 rule): a full entry's page says its players "checked in" only then;
+  /** Whether the entry is confirmed (final fix round G, the V7 rule): a full entry's page says its players "have already joined" only then;
    *  an entry still waiting on payment or approval says its places are taken. */
   entry_confirmed: boolean;
   unclaimed_slots: JoinPreviewSlot[];

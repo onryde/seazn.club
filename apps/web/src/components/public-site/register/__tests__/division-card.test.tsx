@@ -229,10 +229,10 @@ describe("DivisionCard — entries unavailable for a kind the division does not 
   });
 });
 
-// Walk-fix F5: a card division closed because card payments are not set up said only "Card payments are temporarily unavailable"
+// Walk-fix F5: a card division closed because card payments aren't available said only "Card payments are temporarily unavailable"
 // (a badge). In a cart where offline/free divisions still register, the card now also says when it will open, in the same sentence
 // the all-closed register page uses.
-describe("DivisionCard — closed for card payments says it opens once payment setup is finished (walk-fix F5)", () => {
+describe("DivisionCard — closed for card payments says it opens once the organiser turns them on (walk-fix F5)", () => {
   const DIVISION: DivisionLike = {
     division_id: "div-1",
     name: "Card Singles",

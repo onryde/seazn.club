@@ -122,7 +122,7 @@ describe("register page (closed state) — every division closed, one for card p
   const EN = async () => (await import("@/dictionaries/en/ui.json")).default as Record<string, string>;
   const unescape = (html: string) => html.replace(/&#x27;/g, "'").replace(/&amp;/g, "&");
 
-  it("says card payments are not set up and registration opens once they are, instead of the bare not-open line", async () => {
+  it("says card payments aren't available and registration opens once the organiser turns them on, instead of the bare not-open line", async () => {
     const en = await EN();
     let checked = 0;
     for (const divisions of [[CARD_CLOSED], [CARD_CLOSED, ALL_CLOSED_DIVISION]]) {

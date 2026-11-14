@@ -419,7 +419,7 @@ export async function publicRegistrationInfo(
     const inWindow = windowOpen(r, now);
     const open = kindTaken && inWindow && !paymentsBroken;
     // Walk-fix A review I1: a shut window (closed, or not open yet) outranks card payments. `payments_unavailable` is read
-    // as "opens once payment setup is finished" (lib/registration-card-payments.ts), which is true only for a division the
+    // as "registration opens once the organiser turns them on" (lib/registration-card-payments.ts), which is true only for a division the
     // window would let in - a finished competition whose Connect charges pause must keep saying its window has closed.
     let reason: string | null = open
       ? null

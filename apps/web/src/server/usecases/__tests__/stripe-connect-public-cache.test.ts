@@ -1,7 +1,7 @@
 // Walk-fix A review m2 - a Connect charges flip expires the org's public pages. Real Postgres; skipped without DATABASE_URL.
 //
-// Whether card divisions can take entries (and so the hub's "Register" slot, its "registration opens once payment setup is
-// finished" sentence, and each division's open state) is read from `organizations.stripe_charges_enabled`, which only
+// Whether card divisions can take entries (and so the hub's "Register" slot, its "registration opens once the organiser
+// turns them on" sentence, and each division's open state) is read from `organizations.stripe_charges_enabled`, which only
 // `syncConnectAccount` writes. The hub document is cached under the org's public tag (`orgTag`, competition-hub.ts
 // `pub-hub-v5`, REVALIDATE_FAST), and on Fly a suspended machine's cache clock does not run - 32 minutes of staleness was
 // measured on stg (2026-10-14). So the sync must expire that tag itself when the flag changes, and only then: account.updated

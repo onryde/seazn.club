@@ -209,7 +209,7 @@ export default async function RegisterJoinPage({ params, searchParams }: Props) 
               {t(ui, fullKind === "pair" ? "register.join.full.pair.heading" : "register.join.full.heading")}
             </h2>
             <p className="mt-2 text-sm text-ink-muted">
-              {/* Final fix round G (the V7 rule): "checked in" only for a confirmed entry; otherwise its places are just taken. */}
+              {/* Final fix round G (the V7 rule): "have already joined" only for a confirmed entry; otherwise its places are just taken. */}
               {t(ui, `${fullKind === "pair" ? "register.join.full.pair" : "register.join.full"}.${preview.entry_confirmed ? "body" : "bodyTaken"}`)}
             </p>
             <Link
