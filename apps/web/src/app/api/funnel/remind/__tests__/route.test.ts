@@ -386,7 +386,7 @@ describe.skipIf(!HAS_DB)("POST /api/funnel/remind queues the +24h reminder on th
 
     // 1. The same address sends the wizard again: A is replaced, and both its emails are voided with it.
     const second = (await (await startBody({ email, ...payload })).json()) as { data: { reference: string; replaceKey: string } };
-    expect(second.data.reference, "premise: a replace (the reference carried over)").toBe(first.data.reference);
+    expect(second.data.reference, "premise: a keyless resubmit draws its own reference (T1 review m1)").not.toBe(first.data.reference);
     const b = await draftIdOf(email);
     expect(await outboxOf(a), "the replaced draft's claim and reminder are voided").toEqual([
       { kind: "funnel_claim", status: "expired", last_error: FUNNEL_DRAFT_REPLACED_REASON },

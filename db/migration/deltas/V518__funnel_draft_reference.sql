@@ -9,9 +9,9 @@
 --
 -- 1. `reference` — `SZ-` and six symbols from 23456789ABCDEFGHJKLMNPQRSTUVWXYZ (digits and capitals less 0/O and 1/I, so it can be
 --    read aloud or retyped from an email; owner, 2026-11-14). The start route returns it and the claim email prints it. A draft
---    that REPLACES another carries the replaced one's reference, so the visitor's code never changes while they resubmit; and a
---    replaced draft always names its live successor's reference (the start rewrites them in step), which is what the
---    replaced-link card shows. Rows from before this migration get a fresh one each. The CHECK holds the shape; uniqueness is
+--    that replaces another by its reference AND replace key (Change email) carries that reference; any other start draws a fresh
+--    one (T1 review m1). A replaced draft always names its live successor's reference (the start rewrites them in step, at the
+--    replaced drafts' own addresses), which is what the replaced-link card shows. Rows from before this migration get a fresh one each. The CHECK holds the shape; uniqueness is
 --    only among LIVE drafts (below).
 --
 -- 2. `replaced_at` — set when a newer start replaced this draft: the same address resubmitted (case-insensitive), or the client
@@ -28,7 +28,8 @@
 --    reports as the target ("0 of 8"), and the name and language its organisation was given.
 --
 -- `funnel_drafts_live_reference_idx` is the invariant "a reference names at most one live draft": a replace must retire the old
--- row before the new one carrying its reference is written. `funnel_drafts_live_email_idx` serves the start's per-address lookup.
+-- row before the new one carrying its reference is written. `funnel_drafts_email_idx` serves the start's per-address lookup of live
+-- drafts and its rewrite of the replaced ones' references, so it is not partial.
 
 alter table funnel_drafts
   add column reference text,
@@ -47,5 +48,5 @@ alter table funnel_drafts
   add constraint funnel_drafts_replaced_or_used check (replaced_at is null or used_at is null);
 
 create unique index funnel_drafts_live_reference_idx on funnel_drafts(reference) where used_at is null and replaced_at is null;
-create index funnel_drafts_live_email_idx on funnel_drafts(lower(email)) where used_at is null and replaced_at is null;
+create index funnel_drafts_email_idx on funnel_drafts(lower(email));
 create index funnel_drafts_competition_idx on funnel_drafts(competition_id) where competition_id is not null;

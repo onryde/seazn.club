@@ -1,18 +1,22 @@
-// One live draft per address, and a short reference that survives a resubmit (/start "Sent stepper" wave T1, owner-approved
+// One live draft per address, and a short reference (/start "Sent stepper" wave T1, owner-approved
 // 2026-11-14). The defect it closes: every POST /api/funnel/start wrote a NEW draft beside the old one, so an organiser who went
 // back and sent the wizard again held two live links — and claiming both built two competitions in one organisation.
 //
 // The rules, as the brief states them (never read off the code):
 //   - a reference is `SZ-` and six symbols from the digits and capitals less 0, O, 1 and I (owner change: six, not four);
-//   - a start for an address that has an unused, unexpired draft (case-insensitive) replaces it, and the new draft carries the
-//     SAME reference; the replaced draft's link no longer claims, and the claim can tell it was replaced (and by which reference);
+//   - a start for an address that has an unused, unexpired draft (case-insensitive) replaces it; the replaced draft's link no
+//     longer claims, and the claim can tell it was replaced, and by which reference;
 //   - a start that names an earlier draft by its reference AND the replace key the start returned for it replaces that draft
-//     even when the address differs (the Change-email flow); the reference alone, or a wrong key, replaces nothing.
+//     even when the address differs (the Change-email flow), and ONLY that start keeps the reference; the reference alone, or a
+//     wrong key, replaces nothing (T1 review m1, controller 2026-11-14: a keyless resubmit draws a NEW reference, so knowing an
+//     address never reveals its live draft's code);
+//   - every replaced draft names the reference of the draft that replaced it — scoped to the replaced drafts' own addresses, so
+//     a stranger's replaced draft that happens to carry the same code is never rewritten (m4).
 // Driven through the real writer (createFunnelDraft) and the real consumer (consumeFunnelDraft) on a real database.
 // Sport: not applicable — a draft's address and reference are read before its sport is (one payload throughout).
 // Real Postgres required — skipped without DATABASE_URL.
-import { afterAll, describe, expect, it } from "vitest";
-import { randomUUID } from "node:crypto";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import crypto, { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import {
   consumeFunnelDraft,
@@ -42,6 +46,10 @@ const liveOf = async (email: string): Promise<Row[]> =>
     select id, email, reference, used_at, replaced_at, (used_at is null and replaced_at is null and expires_at > now()) as live
       from funnel_drafts where lower(email) = lower(${email}) order by created_at, id`).filter((r) => r.live);
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 afterAll(async () => {
   if (!HAS_DB) return;
   await sql`delete from funnel_drafts where email ilike ${`${RUN}-%`}`;
@@ -68,7 +76,7 @@ describe("the draft reference (pure)", () => {
   });
 });
 
-describe.skipIf(!HAS_DB)("one live draft per address; the reference survives a resubmit (DB)", () => {
+describe.skipIf(!HAS_DB)("one live draft per address; the reference survives only a keyed replace (DB)", () => {
   it("a first start writes a draft whose reference is the one it returns, in the owner's shape, with a replace key", async () => {
     const email = address();
     const made = await createFunnelDraft(email, PAYLOAD);
@@ -98,14 +106,15 @@ describe.skipIf(!HAS_DB)("one live draft per address; the reference survives a r
     await sql`update funnel_drafts set reference = 'SZ-23HJKZ' where id = ${id}`;
   });
 
-  it("resubmitting the same address (any case): one live draft, the same reference, and the old link refused as REPLACED", async () => {
+  it("resubmitting the same address (any case): one live draft under a NEW reference, the old links refused as REPLACED naming it", async () => {
     const email = address();
     const first = await createFunnelDraft(email, PAYLOAD);
     const second = await createFunnelDraft(email.toUpperCase(), { ...PAYLOAD, entrants: 12 });
     const third = await createFunnelDraft(email, { ...PAYLOAD, entrants: 16 });
 
-    expect(second.reference, "the second start keeps the reference").toBe(first.reference);
-    expect(third.reference, "and so does the third").toBe(first.reference);
+    // No key: the resubmit replaces (one live draft) but never learns the code of the draft it replaced.
+    expect(new Set([first.reference, second.reference, third.reference]).size, "a fresh reference per keyless start").toBe(3);
+    expect(third.reference).toMatch(RULE_SHAPE);
     const live = await liveOf(email);
     expect(live.map((r) => r.id), "exactly one live draft: the latest").toEqual([third.id]);
     const rows = await rowsOf(email);
@@ -115,7 +124,7 @@ describe.skipIf(!HAS_DB)("one live draft per address; the reference survives a r
     let refused = 0;
     for (const old of [first, second]) {
       expect(await consumeFunnelDraft(old.token), "a replaced link does not claim").toBeNull();
-      expect(await replacedFunnelDraftReference(old.token), "the claim can tell it was replaced, and by which reference").toBe(first.reference);
+      expect(await replacedFunnelDraftReference(old.token), "replaced, and by the latest draft's reference").toBe(third.reference);
       refused++;
     }
     expect(refused).toBe(2);
@@ -223,7 +232,7 @@ describe.skipIf(!HAS_DB)("one live draft per address; the reference survives a r
     const chainAt = address();
     const x1 = await createFunnelDraft(chainAt, PAYLOAD);
     const x2 = await createFunnelDraft(chainAt, PAYLOAD);
-    expect(x2.reference, "premise: a resubmit kept X").toBe(x1.reference);
+    expect(await replacedFunnelDraftReference(x1.token), "premise: the resubmit's own reference X is what x1 names").toBe(x2.reference);
     const y = await createFunnelDraft(address(), PAYLOAD);
     const joined = await createFunnelDraft(chainAt, PAYLOAD, sql, null, { reference: y.reference, replaceKey: y.replaceKey });
     expect(joined.reference, "the key's reference wins").toBe(y.reference);
@@ -237,14 +246,90 @@ describe.skipIf(!HAS_DB)("one live draft per address; the reference survives a r
     expect((await liveOf(chainAt)).map((r) => [r.id, r.reference])).toEqual([[joined.id, y.reference]]);
   });
 
-  it("starts at once for one address leave exactly one live draft", async () => {
-    // Without a per-address lock, starts that run together each find no live draft and each write one.
+  it("starts at once for one address, in mixed case, leave exactly one live draft, and every replaced one names it", async () => {
+    // Without a per-address lock, starts that run together each find no live draft and each write one. The address is sent in
+    // three cases (as typed, upper, capitalised): the lock is the ADDRESS's, not the spelling's.
     const email = address();
-    const made = await Promise.all(Array.from({ length: 6 }, () => createFunnelDraft(email, PAYLOAD)));
+    const spellings = [email, email.toUpperCase(), email[0]!.toUpperCase() + email.slice(1)];
+    const made = await Promise.all(Array.from({ length: 12 }, (_, i) => createFunnelDraft(spellings[i % 3]!, PAYLOAD)));
     const live = await liveOf(email);
     expect(live, "one live draft").toHaveLength(1);
-    expect(new Set(made.map((m) => m.reference)).size, "one reference across them all").toBe(1);
-    expect((await rowsOf(email)).length, "anti-vacuity: every start wrote its draft").toBe(made.length);
+    const rows = await rowsOf(email);
+    expect(rows.length, "anti-vacuity: every start wrote its draft").toBe(made.length);
+    expect(new Set(rows.map((r) => r.email)).size, "premise: all three spellings were written").toBe(3);
+    expect(rows.filter((r) => r.reference !== live[0]!.reference), "every draft of the address names the live one's reference").toEqual([]);
+  });
+
+  it("the per-address lock is the address's, whatever its case: a start in another case waits for one in flight", async () => {
+    // Deterministic witness for the lock key's case-folding (T1 review m2): one start holds its transaction open; a start for the
+    // same address in UPPER case must wait on it (the advisory lock), so it is still pending while the first is open.
+    const email = address();
+    let second: Promise<unknown> | null = null;
+    let settledWhileHeld = false;
+    await sql.begin(async (tx) => {
+      await createFunnelDraft(email, PAYLOAD, tx);
+      second = createFunnelDraft(email.toUpperCase(), PAYLOAD).then(() => {
+        settledWhileHeld = true;
+      });
+      await new Promise((r) => setTimeout(r, 400));
+      expect(settledWhileHeld, "the upper-case start waited for the open one").toBe(false);
+    });
+    await second;
+    expect(settledWhileHeld, "and ran once it committed").toBe(true);
+    expect(await liveOf(email), "one live draft").toHaveLength(1);
+  });
+
+  it("a fresh reference that collides with another address's live draft is drawn once more, not a 500", async () => {
+    // 32^6 codes: a fresh draw can name a live draft elsewhere (the live-reference index refuses it). The writer draws once more.
+    // Forced here by handing the generator the same six bytes twice: once for the sitting draft, once for the first draw.
+    const real = crypto.randomBytes.bind(crypto);
+    const fixed = Buffer.from([1, 2, 3, 4, 5, 6]);
+    let sixes = 0;
+    const spy = vi.spyOn(crypto, "randomBytes").mockImplementation(((n: number) => {
+      if (n !== 6) return real(n);
+      sixes++;
+      return sixes <= 2 ? Buffer.from(fixed) : real(n);
+    }) as typeof crypto.randomBytes);
+    const sitting = await createFunnelDraft(address(), PAYLOAD);
+    const made = await createFunnelDraft(address(), PAYLOAD);
+    spy.mockRestore();
+    expect(sixes, "premise: the second start drew twice (the collision, then the retry)").toBe(3);
+    expect(made.reference, "a different code").not.toBe(sitting.reference);
+    expect(made.reference).toMatch(RULE_SHAPE);
+    const [s] = await sql<{ reference: string; replaced: boolean }[]>`
+      select reference, replaced_at is not null as replaced from funnel_drafts where id = ${sitting.id}`;
+    expect(s, "the sitting draft is untouched").toEqual({ reference: sitting.reference, replaced: false });
+  });
+
+  it("the rewrite is scoped to the replaced drafts' addresses: a stranger's replaced draft carrying the same code keeps it", async () => {
+    const mine = address();
+    const strangerAt = address();
+    const a1 = await createFunnelDraft(mine, PAYLOAD);
+    const s1 = await createFunnelDraft(strangerAt, PAYLOAD);
+    await createFunnelDraft(strangerAt, PAYLOAD); // s1 replaced
+    // The stranger's replaced draft happens to carry my live code (only live drafts are unique).
+    await sql`update funnel_drafts set reference = ${a1.reference} where id = ${s1.id}`;
+    const a2 = await createFunnelDraft(mine, PAYLOAD); // retires a1's code
+    expect(await replacedFunnelDraftReference(a1.token), "mine names the code that replaced it").toBe(a2.reference);
+    expect(await replacedFunnelDraftReference(s1.token), "the stranger's keeps its own").toBe(a1.reference);
+  });
+
+  it("the database holds the V518 invariants: replaced OR used, never both (23514); one live draft per code (23505)", async () => {
+    const a = await createFunnelDraft(address(), PAYLOAD);
+    const b = await createFunnelDraft(address(), PAYLOAD);
+    await expect(sql`update funnel_drafts set used_at = now(), replaced_at = now() where id = ${a.id}`).rejects.toMatchObject({
+      code: "23514",
+      constraint_name: "funnel_drafts_replaced_or_used",
+    });
+    await expect(sql`update funnel_drafts set reference = ${a.reference} where id = ${b.id}`, "two live drafts, one code").rejects.toMatchObject({
+      code: "23505",
+      constraint_name: "funnel_drafts_live_reference_idx",
+    });
+    // The pairs: a replaced draft may share a live code (it names its successor's), and replaced alone is taken.
+    await sql`update funnel_drafts set replaced_at = now() where id = ${b.id}`;
+    await sql`update funnel_drafts set reference = ${a.reference} where id = ${b.id}`;
+    const [row] = await sql<{ reference: string }[]>`select reference from funnel_drafts where id = ${b.id}`;
+    expect(row!.reference).toBe(a.reference);
   });
 
   it("the claim page's card read carries the draft's reference (live, replaced or claimed) and nothing for an unknown token", async () => {
@@ -253,11 +338,11 @@ describe.skipIf(!HAS_DB)("one live draft per address; the reference survives a r
     const second = await createFunnelDraft(email, PAYLOAD, sql, "fr");
     let checked = 0;
     for (const token of [first.token, second.token]) {
-      expect((await funnelDraftCard(token)).reference, token === first.token ? "replaced" : "live").toBe(first.reference);
+      expect((await funnelDraftCard(token)).reference, token === first.token ? "replaced: its successor's" : "live").toBe(second.reference);
       checked++;
     }
     await consumeFunnelDraft(second.token);
-    expect((await funnelDraftCard(second.token)).reference, "claimed").toBe(first.reference);
+    expect((await funnelDraftCard(second.token)).reference, "claimed").toBe(second.reference);
     expect((await funnelDraftCard(`never-${randomUUID()}`)).reference, "no draft").toBeNull();
     expect(checked).toBe(2);
   });

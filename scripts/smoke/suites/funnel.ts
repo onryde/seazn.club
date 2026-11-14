@@ -183,9 +183,9 @@ export async function funnelSuite(): Promise<void> {
   }
 
   // ── 4. A resubmit (/start "Sent stepper", V518): the visitor went back and sent again. The same address replaces the live
-  //       draft under the SAME reference; the first link is then the named replaced refusal, and only the second builds.
-  //       Then Change email: a different address replaces it only with the reference AND the replace key the start
-  //       answered — the reference stays, and the second address's link is the one that builds.
+  //       draft — under a NEW reference, since no replace key came with it (T1 review m1); the first link is then the named
+  //       replaced refusal, and only the second builds. Then Change email: a different address replaces it only with the
+  //       reference AND the replace key the start answered — the reference stays, and the second address's link builds.
   const resubmitter = newSession();
   const resubmitName = `Funnel Resubmit ${tag}`;
   const resubmitEmail = `delivered+funnel_again_${tag}@resend.dev`;
@@ -193,7 +193,10 @@ export async function funnelSuite(): Promise<void> {
   const first = (await call(resubmitter, "/api/funnel/start", "POST", { email: resubmitEmail, name: resubmitName, sport: "Badminton", entrants: 8 })) as Started;
   const second = (await call(resubmitter, "/api/funnel/start", "POST", { email: resubmitEmail, name: resubmitName, sport: "Badminton", entrants: 10 })) as Started;
   check("funnel: resubmit: the start answers a SZ- reference", /^SZ-[2-9A-HJ-NP-Z]{6}$/.test(first.reference ?? ""));
-  check("funnel: resubmit: the same address keeps its reference", !!first.reference && second.reference === first.reference);
+  check(
+    "funnel: resubmit: a keyless resubmit draws its own reference",
+    /^SZ-[2-9A-HJ-NP-Z]{6}$/.test(second.reference ?? "") && second.reference !== first.reference,
+  );
   const tokenOf = (s: Started) => new URL(s.claim_url ?? "http://x/").searchParams.get("token");
   const firstClaim = await raw(resubmitter, "/api/funnel/claim", "POST", { token: tokenOf(first) });
   check(

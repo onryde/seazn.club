@@ -224,7 +224,7 @@ describe.skipIf(!HAS_DB)("the funnel claim's named refusals", () => {
     const email = newAddress();
     const first = await draft({}, email);
     const second = await draft({}, email);
-    expect(second.reference, "premise: the resubmit kept the reference").toBe(first.reference);
+    expect(second.token, "premise: the resubmit wrote its own draft").not.toBe(first.token);
     // Moved: the replace pair from a start at another address.
     const movedFrom = await createFunnelDraft(newAddress(), { name: `${RUN} moved`, sport: "Badminton", entrants: 4 });
     const movedTo = newAddress();

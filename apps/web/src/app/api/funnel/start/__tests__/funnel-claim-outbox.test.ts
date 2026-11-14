@@ -192,31 +192,35 @@ describe.skipIf(!HAS_DB)("POST /api/funnel/start queues the claim link on the ou
     expect(subjects.size, "premise: every shipped language has its own subject").toBe(LOCALES.length);
   });
 
-  it("a second start for the address replaces the first: one live draft, two emails, ONE reference — printed in both, returned by both", async () => {
+  it("a second start for the address replaces the first: one live draft, two emails, each printing its own draft's reference", async () => {
     // /start "Sent stepper" T1 (owner, 2026-11-14): the visitor went back and sent the wizard again. Each start still emails its own
-    // link (the newest is the one that works), the first draft is retired, and the reference — the code the visitor can quote —
-    // is the same in both answers and both emails. Every start is counted (funnel_draft_created fires per POST, in the other file).
+    // link (the newest is the one that works) and the first draft is retired. With no replace key the resubmit draws a NEW
+    // reference (T1 review m1: knowing an address must not reveal its live draft's code), and the replaced draft is rewritten to
+    // name it — the code the replaced-link card shows is the one the latest email carries. Every start is counted
+    // (funnel_draft_created fires per POST, in the other file).
     const email = address();
     const first = await startFor(email, competition());
     const second = await startFor(email, competition());
     expect([first.status, second.status]).toEqual([200, 200]);
     expect(first.data.reference, "the answer carries the reference").toMatch(RULE_SHAPE);
-    expect(second.data.reference, "the resubmit keeps it").toBe(first.data.reference);
+    expect(second.data.reference, "the keyless resubmit draws its own").toMatch(RULE_SHAPE);
+    expect(second.data.reference, "never the replaced draft's").not.toBe(first.data.reference);
     expect(second.data.replaceKey, "each start answers its own replace key").not.toBe(first.data.replaceKey);
 
     const drafts = await draftsOf(email);
-    expect(drafts.map((d) => [d.reference, d.replaced]), "the first is replaced, the second is live").toEqual([
-      [first.data.reference, true],
-      [first.data.reference, false],
+    expect(drafts.map((d) => [d.reference, d.replaced]), "the first is replaced and names the second's code; the second is live").toEqual([
+      [second.data.reference, true],
+      [second.data.reference, false],
     ]);
     const rows = await claimRows(email);
     expect(rows.map((r) => [r.ref_id, r.status]), "two emails, one per draft, both sent").toEqual(drafts.map((d) => [d.id, "sent"]));
+    const printed = [first.data.reference!, second.data.reference!];
     let checked = 0;
     for (const [i, row] of rows.entries()) {
       const mail = callsFor(row.id)[0]!;
       expect(mail.text, `row ${i} carries its own draft's token`).toContain(`/start/claim?token=${drafts[i]!.token}`);
-      const line = dictionarySubject("en", "funnelClaim.reference", { reference: first.data.reference! });
-      expect(mail.text, `row ${i}: the plain text prints the reference`).toContain(line);
+      const line = dictionarySubject("en", "funnelClaim.reference", { reference: printed[i]! });
+      expect(mail.text, `row ${i}: the plain text prints the reference its start answered`).toContain(line);
       expect(mail.html, `row ${i}: so does the HTML`).toContain(line);
       checked++;
     }

@@ -77,6 +77,11 @@ export function newFunnelReference(): string {
   return `SZ-${Array.from(crypto.randomBytes(REFERENCE_LENGTH), (b) => REFERENCE_ALPHABET[b & 31]).join("")}`;
 }
 
+/** The insert refused because another LIVE draft already carries the reference (V518 `funnel_drafts_live_reference_idx`). */
+const isLiveReferenceCollision = (err: unknown): boolean =>
+  (err as { code?: string; constraint_name?: string } | null)?.code === "23505" &&
+  (err as { constraint_name?: string }).constraint_name === "funnel_drafts_live_reference_idx";
+
 /** The replace key is stored as this hash, never as given: the row must not hand out the proof that it was started here. */
 const replaceKeyHash = (key: string): string => crypto.createHash("sha256").update(key).digest("hex");
 
@@ -90,7 +95,8 @@ export interface CreatedFunnelDraft {
   id: string;
   token: string;
   expiresAt: Date;
-  /** The draft's human reference: the replaced draft's when this start replaced one, else a fresh one. */
+  /** The draft's human reference: the keyed draft's when this start replaced one by its reference AND replace key, else a
+   *  fresh one (a keyless resubmit included: knowing an address never reveals its live draft's code). */
   reference: string;
   /** Opaque, returned to the client that started the draft and stored only as a hash: with the reference, it lets that client
    *  (and nobody who merely knows or guesses the reference) replace this draft from another address. */
@@ -104,10 +110,12 @@ export interface CreatedFunnelDraft {
  *
  *  ONE LIVE DRAFT PER ADDRESS (/start "Sent stepper" wave T1): every unused, unexpired, unreplaced draft of the same address
  *  (case-insensitive) is marked replaced, and so is the draft `previous` names when its reference AND key match a live one (the
- *  address may differ: the visitor changed it). The new draft carries the replaced draft's reference — `previous`'s when it named
- *  one, else the address's latest — so the code in the visitor's inbox never changes while they resubmit; a fresh one otherwise.
- *  A wrong key, or a reference alone, replaces nothing (and says nothing): the start goes on as a fresh one. Starts for one address
- *  are serialised by an advisory lock, so two at once cannot each find nothing and each leave a live draft. */
+ *  address may differ: the visitor changed it). Only that keyed replace keeps the reference (the Change-email flow: the client
+ *  proved it started the draft); every other start draws a fresh one (T1 review m1, controller 2026-11-14), so a resubmit from
+ *  an address someone merely knows never learns its live draft's code. The replaced drafts' queued claim email and reminder are
+ *  voided, and every replaced draft OF THOSE ADDRESSES that names a retired reference is rewritten to the new one (m4). A wrong
+ *  key, or a reference alone, replaces nothing (and says nothing). Starts for one address are serialised by an advisory lock on
+ *  the lower-cased address, so two at once cannot each find nothing and each leave a live draft. */
 export async function createFunnelDraft(
   email: string,
   payload: FunnelPayload,
@@ -118,19 +126,19 @@ export async function createFunnelDraft(
   const write = async (tx: Tx): Promise<CreatedFunnelDraft> => {
     await tx`select pg_advisory_xact_lock(hashtext(${`funnel-draft:${email.toLowerCase()}`}))`;
     const keyed = previous
-      ? await tx<{ id: string; reference: string }[]>`
-          select id, reference from funnel_drafts
+      ? await tx<{ id: string; reference: string; email: string }[]>`
+          select id, reference, email from funnel_drafts
            where reference = ${previous.reference} and replace_key_hash = ${replaceKeyHash(previous.replaceKey)}
              and used_at is null and replaced_at is null and expires_at > now()
            for update`
       : [];
-    const sameAddress = await tx<{ id: string; reference: string }[]>`
-      select id, reference from funnel_drafts
+    const sameAddress = await tx<{ id: string; reference: string; email: string }[]>`
+      select id, reference, email from funnel_drafts
        where lower(email) = lower(${email}) and used_at is null and replaced_at is null and expires_at > now()
        order by created_at desc, id desc
        for update`;
-    const replaced = [...new Set([...keyed, ...sameAddress].map((r) => r.id))];
-    const reference = keyed[0]?.reference ?? sameAddress[0]?.reference ?? newFunnelReference();
+    const replacedRows = [...keyed, ...sameAddress];
+    const replaced = [...new Set(replacedRows.map((r) => r.id))];
     // Retired BEFORE the insert: the live-reference index admits one live draft per reference.
     if (replaced.length > 0) {
       await tx`update funnel_drafts set replaced_at = now() where id = any(${replaced}::uuid[])`;
@@ -141,21 +149,41 @@ export async function createFunnelDraft(
         await cancelQueuedEmails(tx, { kind, refType: "funnel_draft", refIds: replaced, reason: FUNNEL_DRAFT_REPLACED_REASON });
       }
     }
-    // A replaced draft names the reference its latest email carries ("check your latest email, SZ-…"): when the replaced drafts
-    // carried another one (a draft at the new address beside the one the key named), every replaced draft of that reference takes
-    // the surviving one, so an old link never points the visitor at a code no live email carries.
-    const retired = [...new Set([...keyed, ...sameAddress].map((r) => r.reference))].filter((r) => r !== reference);
-    if (retired.length > 0) {
-      await tx`update funnel_drafts set reference = ${reference} where replaced_at is not null and reference = any(${retired}::text[])`;
-    }
     const token = crypto.randomBytes(32).toString("base64url");
     const replaceKey = crypto.randomBytes(32).toString("base64url");
     const expiresAt = new Date(Date.now() + DRAFT_TTL_DAYS * 86_400_000);
-    const [row] = await tx<{ id: string }[]>`
-      insert into funnel_drafts (token, email, payload, expires_at, locale, reference, replace_key_hash)
-      values (${token}, ${email}, ${tx.json(payload)}, ${expiresAt.toISOString()}, ${locale}, ${reference}, ${replaceKeyHash(replaceKey)})
-      returning id`;
-    return { id: row!.id, token, expiresAt, reference, replaceKey };
+    // Under a savepoint, so a refused insert leaves the start's transaction usable for the one retry below.
+    const insert = (reference: string) =>
+      tx.savepoint(async (sp) => {
+        const [row] = await sp<{ id: string }[]>`
+          insert into funnel_drafts (token, email, payload, expires_at, locale, reference, replace_key_hash)
+          values (${token}, ${email}, ${sp.json(payload)}, ${expiresAt.toISOString()}, ${locale}, ${reference}, ${replaceKeyHash(replaceKey)})
+          returning id`;
+        return row!.id;
+      });
+    // The keyed draft's reference is free: it was retired above, under the lock. A FRESH one can name another address's live draft
+    // (32^6 codes; the live-reference index refuses it): drawn once more, never a 500 on a one-in-a-billion draw.
+    let reference = keyed[0]?.reference ?? newFunnelReference();
+    let id: string;
+    try {
+      id = await insert(reference);
+    } catch (err) {
+      if (keyed.length > 0 || !isLiveReferenceCollision(err)) throw err;
+      reference = newFunnelReference();
+      id = await insert(reference);
+    }
+    // A replaced draft names the reference its latest email carries ("check your latest email, SZ-…"): every replaced draft of a
+    // retired reference takes the new one, so an old link never points the visitor at a code no live email carries. Only at the
+    // replaced drafts' own addresses: references are unique among LIVE drafts alone, so a stranger's replaced draft may carry the
+    // same six symbols and is never rewritten (T1 review m4; funnel_drafts_email_idx serves the address filter).
+    const retired = [...new Set(replacedRows.map((r) => r.reference))].filter((r) => r !== reference);
+    if (retired.length > 0) {
+      const addresses = [...new Set(replacedRows.map((r) => r.email.toLowerCase()))];
+      await tx`
+        update funnel_drafts set reference = ${reference}
+         where lower(email) = any(${addresses}::text[]) and replaced_at is not null and reference = any(${retired}::text[])`;
+    }
+    return { id, token, expiresAt, reference, replaceKey };
   };
   // The pool opens its own transaction; a caller's transaction is used as it is (the lock is held until it commits). By identity:
   // the pooled handle is a Proxy, so `"begin" in sql` is false.

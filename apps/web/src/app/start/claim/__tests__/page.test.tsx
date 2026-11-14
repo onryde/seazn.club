@@ -163,15 +163,16 @@ describe("the funnel claim page", () => {
   });
 
   it.skipIf(!HAS_DB)("the card gets the draft's reference — the one its latest email carries, also for a replaced link; none without a draft", async () => {
-    // V518: the replaced-link card names the code to look for. A resubmit keeps the reference, so the replaced link and the live one
-    // read the same; the start's own answer is the expected value, never the page's read.
+    // V518: the replaced-link card names the code to look for. A keyless resubmit draws a new reference (T1 review m1) and the
+    // replaced draft is rewritten to name it, so the replaced link and the live one read the same: the LATEST start's answer is the
+    // expected value, never the page's read.
     const email = `${RUN}-${randomUUID().slice(0, 6)}@example.com`;
     const payload = { name: `${RUN} ref`, sport: "Badminton", entrants: 4 };
     const first = await createFunnelDraft(email, payload, sql, "en");
     const second = await createFunnelDraft(email, payload, sql, "en");
     let checked = 0;
     for (const token of [first.token, second.token]) {
-      expect((await page(token)).card.reference, token === first.token ? "the replaced link" : "the live link").toBe(first.reference);
+      expect((await page(token)).card.reference, token === first.token ? "the replaced link" : "the live link").toBe(second.reference);
       checked++;
     }
     expect(checked).toBe(2);
