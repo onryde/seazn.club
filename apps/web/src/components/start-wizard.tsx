@@ -5,10 +5,15 @@
 // a progress bar and "Step n of 4"; from `md` the answers pile up in a rail on the left. Every rule (what Next allows, which
 // card is selected, the body posted) is start-wizard-model.ts's; this file renders it and dispatches to it.
 //
+// Sent (/start "Sent stepper", owner-approved 2026-11-14, mock sss14a section 1 Option A): the address, the draft's reference
+// (printed in the email too), the summary of what the link builds, and the five steps ahead (lib/getting-started-steps.ts).
+// "Change it" reopens Email with every answer kept and the Change-email banner (mock section 2); the resend carries the first
+// answer's reference and replace key (`sendBody`), so the earlier link stops working and the reference stays.
+//
 // The format cards are T1's one layer (`rankFormats` at the sport's match length, at the field the claim will build), so a
 // card's numbers are the event the emailed link builds. Its "≈" hours are the shortest day the schedule can reach.
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { Check, ChevronDown, Mail, Minus, Plus } from "lucide-react";
+import { Check, ChevronDown, Info, Mail, Minus, Plus } from "lucide-react";
 import { api, ApiError } from "@/lib/client";
 import { FUNNEL_MORE_FORMATS, funnelFormatMin, type FunnelFormat } from "@/lib/funnel-formats";
 import { bestFitSlug, type RankedFormat } from "@/lib/format-recommend";
@@ -18,6 +23,9 @@ import { withTurnstile } from "@/lib/turnstile-client";
 import { LegalNotice } from "@/components/legal-notice";
 import { useLocale, usePlural, useT } from "@/components/i18n/dict-provider";
 import { TurnstileWidget, useTurnstile } from "@/components/turnstile-widget";
+import { GettingStartedStepper, type StepperItem } from "@/components/getting-started-stepper";
+import { LOCALE_LABELS } from "@/components/i18n/locale-switcher";
+import { scheduleHint, sentSteps, type GettingStartedStep } from "@/lib/getting-started-steps";
 import type { StartPrefill } from "@/app/[lang]/(marketing)/start/prefill";
 import { FUNNEL_SPORTS } from "@/lib/funnel-sports";
 import {
@@ -27,15 +35,18 @@ import {
   WIZARD_STEPS,
   buildFunnelBody,
   canAdvance,
+  heldStart,
   initialWizardState,
   nextEventDays,
   parseCount,
   plausibleEmail,
+  sendBody,
   sportLabelKey,
   wizardCards,
   wizardField,
   wizardQuery,
   wizardReducer,
+  type HeldStart,
   type WizardContext,
   type WizardState,
 } from "./start-wizard-model";
@@ -68,7 +79,10 @@ const TICKET = "rounded-2xl border border-[#3b2a6e] bg-[rgb(36_22_80/0.55)] px-4
 
 const MORE: ReadonlySet<FunnelFormat> = new Set(FUNNEL_MORE_FORMATS);
 
-type Done = { claim_url?: string };
+/** What the last send left: the dev claim link (a dev server only), the pair a resend carries back (never in the URL), and
+ *  whether that send was itself a resend. Null until the first send: then Email is the first-time step, after it the
+ *  Change-email one. */
+type Sent = { claimUrl: string | null; held: HeldStart | null; resent: boolean };
 
 export function StartWizard({ initial, maxEntrants, today, utcDay, playSports }: StartWizardProps) {
   const t = useT();
@@ -88,7 +102,7 @@ export function StartWizard({ initial, maxEntrants, today, utcDay, playSports }:
   const [emailTouched, setEmailTouched] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [done, setDone] = useState<Done | null>(null);
+  const [sent, setSent] = useState<Sent | null>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const emailInput = useRef<HTMLInputElement>(null);
   const firstStep = useRef(true);
@@ -154,9 +168,13 @@ export function StartWizard({ initial, maxEntrants, today, utcDay, playSports }:
     setError(null);
     try {
       const res = await withTurnstile(turnstile, (headers) =>
-        api<Done>("/api/funnel/start", { method: "POST", json: buildFunnelBody(s, locale, defaultName), headers }),
+        api<{ claim_url?: unknown }>("/api/funnel/start", {
+          method: "POST",
+          json: sendBody(buildFunnelBody(s, locale, defaultName), sent?.held ?? null),
+          headers,
+        }),
       );
-      setDone(res ?? {});
+      setSent({ claimUrl: typeof res?.claim_url === "string" ? res.claim_url : null, held: heldStart(res), resent: sent !== null });
       dispatch({ type: "sent" });
     } catch (err) {
       setError(
@@ -171,61 +189,120 @@ export function StartWizard({ initial, maxEntrants, today, utcDay, playSports }:
     }
   }
 
+  // One summary for B4 and Sent, in the mock's order (sport, format, players, courts, first day, language): the change-email
+  // step shows the answers the Sent screen showed. B4's format line adds the estimate; Sent's first day adds the year.
+  const summaryRows = (where: "email" | "sent"): readonly (readonly [string, string])[] => [
+    [t("start.wizard.sport"), sportName],
+    [
+      t("start.wizard.format"),
+      selected ? (where === "email" ? `${formatLine(selected)} ${hours(selected.estHours)}` : formatLine(selected)) : "—",
+    ],
+    [t("start.wizard.summary.players"), playersValue],
+    ...planningRow,
+    [t("start.wizard.firstDay"), s.date ? dayLabel(s.date, where === "sent") : t("start.wizard.notSure")],
+    [t("start.wizard.language"), LOCALE_LABELS[locale]],
+  ];
+  // Step 5 names the courts only when Planning was opened (only then does the claim build them) and the first day only when
+  // one was picked.
+  const schedule = scheduleHint(s.planningOpen ? s.courts : null, s.date);
+  const stepWords: Record<GettingStartedStep, { title: string; hint: string }> = {
+    open: { title: t("start.next.open.title"), hint: t("start.next.open.hint") },
+    rename: { title: t("start.next.rename.title"), hint: t("start.next.rename.hint") },
+    players: { title: t("start.next.players.title"), hint: t("start.next.players.hint", { target: field }) },
+    generate: {
+      title: t("start.next.generate.title"),
+      hint: selected
+        ? t("start.next.generate.hintFormat", { format: t(FORMAT_NAME_KEY[selected.slug]) })
+        : t("start.next.generate.hint"),
+    },
+    schedule: {
+      title: t("start.next.schedule.title"),
+      hint: t(schedule.key, {
+        ...(schedule.vars.courts !== undefined ? { courts: plural("start.next.courts", schedule.vars.courts) } : {}),
+        ...(schedule.vars.date !== undefined ? { date: dayLabel(schedule.vars.date) } : {}),
+      }),
+    },
+  };
+  const stepItems: StepperItem[] = sentSteps().map((row) => ({ ...row, ...stepWords[row.key] }));
+
   const next = (e: React.FormEvent) => {
     e.preventDefault();
     dispatch({ type: "next" });
   };
   const back = () => dispatch({ type: "back" });
 
-  // ---- Sent (mock A4) --------------------------------------------------------------------------------------------
+  // ---- Sent (mock sss14a section 1, Option A: one column at every width) -------------------------------------------
   if (s.step === "sent") {
     const [before, after] = t("start.wizard.sentTo").split("{email}");
     const [wrongBefore, wrongAfter] = t("start.wizard.wrongAddress").split("{link}");
     const [waitBefore, waitAfter] = t("start.wizard.whileYouWait").split("{link}");
+    const reference = sent?.held?.reference ?? null;
+    const [refBefore, refAfter] = t("start.wizard.reference").split("{reference}");
     return (
-      <div data-start-wizard data-step="sent" className="mx-auto w-full max-w-xl px-4 text-center">
+      <div data-start-wizard data-step="sent" className="mx-auto w-full max-w-xl px-4 md:max-w-2xl">
         <h1 className="sr-only">{t("start.heading")}</h1>
-        <div data-funnel-done role="status">
+        <div data-funnel-done role="status" className="text-center">
           <div aria-hidden className="mx-auto grid h-16 w-16 place-items-center rounded-[18px] bg-[rgb(163_230_53/0.14)] text-[var(--mk-lime)]">
             <Mail className="h-8 w-8" strokeWidth={1.8} />
           </div>
-          <h2 ref={heading} tabIndex={-1} className="mk-display mt-4 text-4xl font-bold leading-none outline-none">
+          <h2 ref={heading} tabIndex={-1} className="mk-display mt-4 text-4xl font-bold leading-none outline-none md:text-5xl">
             {t("start.wizard.checkEmail")}
           </h2>
-          <p className="mx-auto mt-3 max-w-md break-words text-[15px] text-[#b7aede]">
+          <p className="mx-auto mt-3 max-w-md text-[15px] text-[#b7aede] [overflow-wrap:anywhere]">
             {before}
             <b className="font-semibold text-[var(--mk-cream)]">{s.email.trim()}</b>
-            {after}
+            {after}{" "}
+            <span className="whitespace-nowrap">
+              {wrongBefore}
+              <button
+                type="button"
+                onClick={() => {
+                  setError(null);
+                  dispatch({ type: "changeEmail" });
+                }}
+                className={`inline-flex min-h-11 items-center font-semibold text-[var(--mk-lime)] underline underline-offset-4 ${FOCUS}`}
+              >
+                {t("start.wizard.changeIt")}
+              </button>
+              {wrongAfter}
+            </span>
           </p>
+          {reference ? (
+            <>
+              <p
+                data-funnel-reference={reference}
+                className="mt-2 inline-flex flex-wrap items-center justify-center gap-x-2 rounded-[10px] border border-dashed border-[#5b4b9c] px-3 py-1.5 text-[13px] text-[#b7aede]"
+              >
+                {refBefore}
+                <b className="font-mono text-[15px] font-semibold tracking-[0.06em] text-[var(--mk-cream)]">{reference}</b>
+                {refAfter}
+              </p>
+              <p className="mt-1.5 text-[12.5px] text-[#8d7fc0]">
+                {sent?.resent ? t("start.wizard.resentNote") : t("start.wizard.referenceNote")}
+              </p>
+            </>
+          ) : null}
         </div>
-        <div className={`${TICKET} mt-6`}>
-          <p className="mk-display break-words text-xl font-bold">{eventName}</p>
-          <Summary
-            rows={[
-              [t("start.wizard.sport"), sportName],
-              [t("start.wizard.summary.players"), playersValue],
-              [t("start.wizard.format"), selected ? formatLine(selected) : "—"],
-              ...planningRow,
-              [t("start.wizard.firstDay"), s.date ? dayLabel(s.date, true) : t("start.wizard.notSure")],
-            ]}
-          />
+        <div className="mt-6 flex flex-col gap-3.5">
+          <div className={TICKET}>
+            <p className="mk-display mb-2 break-words text-xl font-bold">{eventName}</p>
+            <Summary rows={summaryRows("sent")} />
+          </div>
+          <section aria-labelledby="start-next" className={`${TICKET} py-4`}>
+            <h3 id="start-next" className="mk-display mb-3 text-xl font-bold">
+              {t("start.next.title")}
+            </h3>
+            <GettingStartedStepper
+              items={stepItems}
+              label={t("start.next.title")}
+              nowLabel={t("start.next.now")}
+              doneLabel={t("start.next.doneLabel")}
+              tone="night"
+            />
+          </section>
         </div>
-        <p className="mt-4 text-sm text-[#b7aede]">
-          {wrongBefore}
-          <button
-            type="button"
-            onClick={() => {
-              setError(null);
-              dispatch({ type: "changeEmail" });
-            }}
-            className={`inline-flex min-h-11 items-center font-semibold text-[var(--mk-lime)] underline underline-offset-4 ${FOCUS}`}
-          >
-            {t("start.wizard.changeIt")}
-          </button>
-          {wrongAfter}
-        </p>
         {playSports.includes(s.sportKey) ? (
-          <p className="mt-2 text-sm text-[#b7aede]">
+          <p className="mt-5 text-center text-sm text-[#b7aede]">
             {waitBefore}
             <a
               href={`${routes.quickMatchSetup(locale)}?sport=${encodeURIComponent(s.sportKey)}`}
@@ -237,14 +314,16 @@ export function StartWizard({ initial, maxEntrants, today, utcDay, playSports }:
             {waitAfter}
           </p>
         ) : null}
-        {done?.claim_url ? (
-          <a
-            href={done.claim_url}
-            data-claim-url={done.claim_url}
-            className="ph-no-capture mt-4 inline-flex min-h-11 items-center text-xs text-[#8d7fc0] underline"
-          >
-            {t("start.wizard.openDev")}
-          </a>
+        {sent?.claimUrl ? (
+          <p className="text-center">
+            <a
+              href={sent.claimUrl}
+              data-claim-url={sent.claimUrl}
+              className="ph-no-capture mt-2 inline-flex min-h-11 items-center text-xs text-[#8d7fc0] underline"
+            >
+              {t("start.wizard.openDev")}
+            </a>
+          </p>
         ) : null}
       </div>
     );
@@ -564,17 +643,12 @@ export function StartWizard({ initial, maxEntrants, today, utcDay, playSports }:
 
         {s.step === "email" ? (
           <form onSubmit={send} noValidate className="mt-4">
-            <div className={TICKET}>
-              <Summary
-                rows={[
-                  [t("start.wizard.sport"), sportName],
-                  [t("start.wizard.summary.players"), playersValue],
-                  [t("start.wizard.format"), selected ? `${formatLine(selected)} ${hours(selected.estHours)}` : "—"],
-                  ...planningRow,
-                  [t("start.wizard.firstDay"), s.date ? dayLabel(s.date) : t("start.wizard.notSure")],
-                ]}
-              />
+            {/* Change email (mock sss14a section 2): a link went out from this page, so sending again replaces it. */}
+            {sent?.held ? <ChangeEmailBanner text={t("start.wizard.changeBanner")} reference={sent.held.reference} /> : null}
+            <div className={`${TICKET} ${sent?.held ? "mt-3" : ""}`}>
+              <Summary rows={summaryRows("email")} />
             </div>
+            {sent ? <p className={`mt-2 ${HELP}`}>{t("start.wizard.answersKept")}</p> : null}
             <label className="mt-5 block">
               <span className={`${LABEL} mb-1.5`}>{t("start.wizard.email")}</span>
               <input
@@ -609,7 +683,7 @@ export function StartWizard({ initial, maxEntrants, today, utcDay, playSports }:
             ) : null}
             {navRow(
               <button type="submit" disabled={busy} className={PRIMARY}>
-                {busy ? t("start.wizard.sending") : `${t("start.wizard.emailMe")} →`}
+                {busy ? t("start.wizard.sending") : `${sent ? t("start.wizard.sendNew") : t("start.wizard.emailMe")} →`}
               </button>,
             )}
           </form>
@@ -629,6 +703,24 @@ function Summary({ rows }: { rows: readonly (readonly [string, string])[] }) {
         </div>
       ))}
     </dl>
+  );
+}
+
+/** The Change-email banner: the earlier link stops working on the next send, and the reference stays. */
+function ChangeEmailBanner({ text, reference }: { text: string; reference: string }) {
+  const [before, after] = text.split("{reference}");
+  return (
+    <div
+      data-change-email
+      className="grid grid-cols-[1.25rem_minmax(0,1fr)] gap-2.5 rounded-xl border border-[rgb(163_230_53/0.4)] bg-[rgb(163_230_53/0.08)] px-3.5 py-3 text-left text-sm text-[#e9f9cf]"
+    >
+      <Info aria-hidden className="mt-0.5 h-[18px] w-[18px] text-[var(--mk-lime)]" />
+      <p>
+        {before}
+        <b className="font-mono tracking-[0.05em]">{reference}</b>
+        {after}
+      </p>
+    </div>
   );
 }
 

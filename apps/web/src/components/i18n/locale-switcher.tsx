@@ -3,7 +3,8 @@ import { useSyncExternalStore } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { LOCALES, type Locale } from "@/lib/i18n-constants";
 
-const LABELS: Record<Locale, string> = {
+/** Each language named in itself (an endonym): the switcher's rows, and /start's Language summary row. */
+export const LOCALE_LABELS: Record<Locale, string> = {
   en: "English",
   fr: "Français",
   es: "Español",
@@ -80,7 +81,7 @@ export function LocaleSwitcher() {
       >
         {LOCALES.map((l) => (
           <option key={l} value={l}>
-            {LABELS[l]}
+            {LOCALE_LABELS[l]}
           </option>
         ))}
       </select>

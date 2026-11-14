@@ -72,6 +72,7 @@ import { LOCALES, type Locale } from "@/lib/i18n-constants";
 import { parseStartPrefill } from "@/app/[lang]/(marketing)/start/prefill";
 import { CountStepper, StartWizard, type StartWizardProps } from "../start-wizard";
 import { pickWizardDict } from "../start-wizard-model";
+import { GettingStartedStepper, type StepperItem } from "../getting-started-stepper";
 import { compileClasses } from "@/components/v2/__tests__/_compiled-css";
 
 const TODAY = "2026-11-12"; // a Thursday: the parser's tolerance, the UTC day less one
@@ -161,9 +162,21 @@ async function toEmail(island: Island) {
   expect(step(island)).toBe("email");
 }
 
+/** The start route's answer (V518): the draft's reference and the opaque key a resend carries back. */
+const REFERENCE = "SZ-4K7Q2M";
+const KEY = "k".repeat(43);
+/** Each language named in itself, as the language switcher names it. */
+const ENDONYM: Record<Locale, string> = { en: "English", es: "Español", fr: "Français", nl: "Nederlands" };
+const stepperItems = (island: Island): StepperItem[] => {
+  const found = all(island).filter((e) => e.type === GettingStartedStepper);
+  expect(found, "one stepper").toHaveLength(1);
+  return propsOf(found[0]!).items as StepperItem[];
+};
+const banner = (island: Island) => all(island).filter((e) => typeof e.type === "function" && e.type.name === "ChangeEmailBanner");
+
 beforeEach(() => {
   net.calls = [];
-  net.response = { message: "Check your email — your competition is one click away." };
+  net.response = { message: "Check your email — your competition is one click away.", reference: REFERENCE, replaceKey: KEY };
   net.rejection = null;
 });
 
@@ -261,6 +274,10 @@ describe("the wizard, B1 → Sent, in every locale", () => {
       expect(island.text()).toContain(w("start.wizard.emailInvalid"));
       expect(net.calls).toHaveLength(0);
       change(input(island, "email"), "  sam@harbourvale.org ");
+      // The first-time step: no Change-email banner, no "answers kept" line, the first-time label.
+      expect(banner(island), "no banner before anything was sent").toHaveLength(0);
+      expect(island.text()).not.toContain(w("start.wizard.answersKept"));
+      expect(textOf(nextButton(island))).toBe(`${w("start.wizard.emailMe")} →`);
       await submit(island);
 
       // What reached the network: exactly what this walk built (D6 keys; Planning opened, so courts and hours ride).
@@ -288,14 +305,68 @@ describe("the wizard, B1 → Sent, in every locale", () => {
       const playLink = all(island).find((e) => propsOf(e)["data-testid"] === "start-play-link");
       expect(propsOf(playLink!).href).toBe(`/${locale}/play?sport=tabletennis`);
       expect(textOf(playLink!)).toBe(w("start.wizard.quickMatchLink"));
-      // "Wrong address? Change it" — back to B4 with every answer kept; the second send carries the new address only.
+      // The reference the route answered, beside the address (the email prints it too).
+      const ref = all(island).filter((e) => propsOf(e)["data-funnel-reference"] !== undefined);
+      expect(ref, "one reference line").toHaveLength(1);
+      expect(propsOf(ref[0]!)["data-funnel-reference"]).toBe(REFERENCE);
+      // textOf joins an element's children with spaces: compare the words, not the joins.
+      expect(textOf(ref[0]!).replace(/\s+/g, " ").trim()).toBe(w("start.wizard.reference", { reference: REFERENCE }));
+      expect(island.text()).toContain(w("start.wizard.referenceNote"));
+      expect(island.text()).not.toContain(w("start.wizard.resentNote"));
+      // The summary, in the mock's order, ending on the page's language named in itself.
+      const sentLabels = summaryRows(island).map(([k]) => k);
+      expect(sentLabels).toEqual([
+        w("start.wizard.sport"),
+        w("start.wizard.format"),
+        w("start.wizard.summary.players"),
+        w("start.wizard.planning"),
+        w("start.wizard.firstDay"),
+        w("start.wizard.language"),
+      ]);
+      expect(summaryRows(island).at(-1)).toEqual([w("start.wizard.language"), ENDONYM[locale]]);
+      // What happens next: five steps, the first current, each in the dictionary's words — the players target is the field
+      // the claim builds (64 of the 100 asked), step 4 names the card picked, step 5 the courts opened and the day picked.
+      const items = stepperItems(island);
+      expect(items.map((i) => [i.key, i.state])).toEqual([
+        ["open", "current"],
+        ["rename", "todo"],
+        ["players", "todo"],
+        ["generate", "todo"],
+        ["schedule", "todo"],
+      ]);
+      expect(items.map((i) => i.title)).toEqual(["open", "rename", "players", "generate", "schedule"].map((k) => w(`start.next.${k}.title`)));
+      expect(items.map((i) => i.hint)).toEqual([
+        w("start.next.open.hint"),
+        w("start.next.rename.hint"),
+        w("start.next.players.hint", { target: 64 }),
+        w("start.next.generate.hintFormat", { format: w("format.template.knockout.label") }),
+        w("start.next.schedule.courtsDate", { courts: countWord("start.next.courts", 3), date: fmt.format(new Date("2026-11-14T00:00:00Z")) }),
+      ]);
+      expect(items.every((i) => i.action === undefined), "Sent offers no step action: nothing exists yet").toBe(true);
+
+      // "Wrong address? Change it" — back to B4 with every answer kept, the old address ready to edit, the banner naming the
+      // reference that stays, and the resend's own label. The second send carries the new address and the first answer's pair.
       click(buttonByText(island, w("start.wizard.changeIt")));
       expect(step(island)).toBe("email");
+      expect(banner(island).map((e) => propsOf(e))).toEqual([{ text: w("start.wizard.changeBanner"), reference: REFERENCE }]);
+      expect(island.text()).toContain(w("start.wizard.answersKept"));
+      expect(propsOf(input(island, "email")).value, "the address sent to, ready to edit").toBe("  sam@harbourvale.org ");
+      expect(summaryRows(island).map(([k]) => k), "the same answers the Sent screen showed").toEqual(sentLabels);
+      expect(textOf(nextButton(island))).toBe(`${w("start.wizard.sendNew")} →`);
       change(input(island, "email"), "sam@harbourvale.com");
       await submit(island);
       expect(net.calls).toHaveLength(2);
-      expect(net.calls[1]!.json).toEqual({ ...net.calls[0]!.json, email: "sam@harbourvale.com" });
+      expect(net.calls[1]!.json).toEqual({
+        ...net.calls[0]!.json,
+        email: "sam@harbourvale.com",
+        previousReference: REFERENCE,
+        replaceKey: KEY,
+      });
       expect(step(island)).toBe("sent");
+      // Sent again: the new address, the same reference, and the line that says only the newest link works.
+      expect(island.text()).toContain("sam@harbourvale.com");
+      expect(island.text()).toContain(w("start.wizard.resentNote"));
+      expect(island.text()).not.toContain(w("start.wizard.referenceNote"));
       checked++;
     }
     expect(checked).toBe(LOCALES.length);
@@ -460,6 +531,25 @@ describe("the wizard's edges", () => {
       checked++;
     }
     expect(checked).toBe(4);
+  });
+
+  it("an answer without the pair shows no reference and no banner, and a resend replaces by address alone", async () => {
+    net.response = { message: "x" };
+    const island = mount();
+    await toEmail(island);
+    change(input(island, "email"), "sam@harbourvale.org");
+    await submit(island);
+    expect(step(island)).toBe("sent");
+    expect(all(island).filter((e) => propsOf(e)["data-funnel-reference"] !== undefined)).toHaveLength(0);
+    expect(stepperItems(island)).toHaveLength(5);
+    click(buttonByText(island, w("start.wizard.changeIt")));
+    expect(banner(island), "no reference to name: no banner").toHaveLength(0);
+    // Sent already: the resend label and the "answers kept" line still say this replaces the earlier send.
+    expect(textOf(nextButton(island))).toBe(`${w("start.wizard.sendNew")} →`);
+    await submit(island);
+    expect(net.calls).toHaveLength(2);
+    expect(net.calls[1]!.json).not.toHaveProperty("previousReference");
+    expect(net.calls[1]!.json).not.toHaveProperty("replaceKey");
   });
 
   it("the dev claim link shows only when the route returned one", async () => {

@@ -39,9 +39,11 @@ import { stubOutboxEnv } from "@/server/usecases/__tests__/_invite-mail";
 import { gettingStarted } from "@/server/usecases/getting-started";
 import {
   buildFunnelBody,
+  heldStart,
   initialWizardState,
   nextEventDays,
   plausibleEmail,
+  sendBody,
   wizardReducer,
   wizardToday,
   type WizardAction,
@@ -79,6 +81,15 @@ async function post(body: Record<string, unknown>): Promise<number> {
   );
   await res.text();
   return res.status;
+}
+
+/** POST and the route's answer, out of the handler's `{ ok, data }` envelope as the island's `api()` unwraps it. */
+async function postFor(body: Record<string, unknown>): Promise<{ status: number; json: Record<string, unknown> }> {
+  const res = await start(
+    new Request(`${ORIGIN}/api/funnel/start`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
+  );
+  const envelope = (await res.json()) as { data?: Record<string, unknown> };
+  return { status: res.status, json: envelope.data ?? {} };
 }
 
 /** The organiser's walk, as the island dispatches it: every action through the wizard's own reducer. */
@@ -216,6 +227,42 @@ describe.skipIf(!HAS_DB)("the wizard's body → POST /api/funnel/start → the c
     expect(events.map((e) => [e.distinctId, e.properties]), "one event per POST, each its own draft and size").toEqual([
       [`funnel:${drafts[0]!.id}`, { sport: "Badminton", entrants: 8 }],
       [`funnel:${drafts[1]!.id}`, { sport: "Badminton", entrants: 10 }],
+    ]);
+  });
+
+  it("Change email: the first answer's pair, held and sent back by the wizard's own helpers, replaces the first draft at another address; the reference stays", async () => {
+    const first = address();
+    const second = address();
+    const today = wizardToday(new Date());
+    const ctx: WizardContext = { maxEntrants: await funnelEntrantCap(), today };
+    const walked = drive("badminton", ctx, [
+      { type: "name", value: `${RUN} change email` },
+      { type: "next" },
+      { type: "format", slug: "league" },
+      { type: "next" },
+      { type: "next" },
+      { type: "email", value: first },
+    ]);
+    expect(walked.step, "premise: the walk reached B4").toBe("email");
+    const one = await postFor(sendBody(buildFunnelBody(walked, "en", "unused default"), null));
+    expect(one.status).toBe(200);
+    const held = heldStart(one.json);
+    expect(held, "the route's answer carries the pair the wizard holds").not.toBeNull();
+    // Sent, "Change it", the new address: the island's own transitions.
+    const changed = [{ type: "sent" }, { type: "changeEmail" }, { type: "email", value: second }].reduce(
+      (acc, a) => wizardReducer(acc, a as WizardAction, ctx),
+      walked,
+    );
+    expect(changed.step).toBe("email");
+    const two = await postFor(sendBody(buildFunnelBody(changed, "en", "unused default"), held));
+    expect(two.status).toBe(200);
+    expect(two.json.reference, "the reference in the inbox never changes").toBe(held!.reference);
+    const drafts = await sql<{ email: string; live: boolean; reference: string }[]>`
+      select email, (replaced_at is null) as live, reference from funnel_drafts
+       where email in (${first}, ${second}) order by created_at, id`;
+    expect(drafts, "the first address's draft is replaced; the new address holds the one live draft").toEqual([
+      { email: first, live: false, reference: held!.reference },
+      { email: second, live: true, reference: held!.reference },
     ]);
   });
 
