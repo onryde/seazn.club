@@ -24,6 +24,7 @@ import { lichessFlashCode } from "@/lib/lichess-link";
 import { lichessConfigured } from "@/lib/oauth";
 import { getLichessLink, lichessGrantPlays } from "@/server/usecases/external-accounts";
 import { routes } from "@/lib/routes";
+import { registrationWaitsOnCardPayments } from "@/lib/registration-card-payments";
 
 type Props = {
   params: Promise<{ orgSlug: string; competitionSlug: string }>;
@@ -96,7 +97,19 @@ export default async function RegisterPage({ params, searchParams }: Props) {
           <h1 className="mt-1 font-display text-4xl font-bold uppercase tracking-tight text-ink">
             {t(ui, "register.title")}
           </h1>
-          <p className="mt-4 text-sm text-zinc-500">{t(ui, "register.notOpen")}</p>
+          {/* Walk-fix F5: closed only because card payments are not set up is a reason the visitor is owed, and it says the
+              registration will open - the bare "not open" read as final. */}
+          {registrationWaitsOnCardPayments(info.divisions) ? (
+            <p
+              role="status"
+              data-testid="register-card-payments-unavailable"
+              className="mt-4 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900"
+            >
+              {t(ui, "register.cardPaymentsUnavailable")}
+            </p>
+          ) : (
+            <p className="mt-4 text-sm text-zinc-500">{t(ui, "register.notOpen")}</p>
+          )}
         </div>
       </DictProvider>
     );

@@ -229,6 +229,50 @@ describe("DivisionCard — entries unavailable for a kind the division does not 
   });
 });
 
+// Walk-fix F5: a card division closed because card payments are not set up said only "Card payments are temporarily unavailable"
+// (a badge). In a cart where offline/free divisions still register, the card now also says when it will open, in the same sentence
+// the all-closed register page uses.
+describe("DivisionCard — closed for card payments says it opens once payment setup is finished (walk-fix F5)", () => {
+  const DIVISION: DivisionLike = {
+    division_id: "div-1",
+    name: "Card Singles",
+    entrant_kind: "individual",
+    category: null,
+    age_min: null,
+    age_max: null,
+    requires_dob: false,
+    requires_gender: false,
+    allow_free_agents: false,
+    open: false,
+    closed_reason: "payments_unavailable",
+    capacity: null,
+    remaining: null,
+    taken: 0,
+    opens_at: null,
+    closes_at: null,
+    fee_cents: 1500,
+    free_agent_fee_cents: null,
+    currency: "GBP",
+    payment_method: "stripe",
+    form_fields: [],
+    eligibility_note: null,
+  };
+  const texts = (d: DivisionLike) =>
+    walk(DivisionCard({ division: d, locale: "en", selfEligibility: null, imPlaying: false })).map((el) => textOf(el));
+
+  it("names the reason and the remedy", () => {
+    expect(texts(DIVISION)).toContain("register.cardPaymentsUnavailable");
+  });
+  it("negative pair: the same card open, or closed for its window, does not", () => {
+    let checked = 0;
+    for (const d of [{ ...DIVISION, open: true, closed_reason: null }, { ...DIVISION, closed_reason: "window" }]) {
+      expect(texts(d), JSON.stringify(d.closed_reason)).not.toContain("register.cardPaymentsUnavailable");
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+});
+
 // Registration redesign B3 T12 (spec §4.1, owner ruling 2026-11-13). The card said "3/32" for any division with a capacity and a
 // "Waitlist" chip for a full one — and said nothing about the plan limit that submit enforces. It now says what a visitor can act
 // on: how many places are left when the organiser set a capacity or the division is nearly full, "Full · join the waiting list"

@@ -1179,6 +1179,19 @@ describe("OverviewTab — the register CTA and the slots", () => {
     info: info({ startsOn: "2026-09-01", registrationOpen: false }),
   });
 
+  // Walk-fix F5: shut only because card payments are not set up, the Register slot says why instead of vanishing; shut for any
+  // other reason it stays empty (the closed case below).
+  it("registration waiting on card payments: no CTA, the reason in its place (and the plain closed doc keeps neither)", () => {
+    const waits = render(hubDoc({ divisions: [division("premier")], info: info({ startsOn: "2026-09-01", registrationOpen: false, registrationWaitsOnCardPayments: true }) }));
+    const sentence = (en as Record<string, string>)["info.registration.cardPaymentsUnavailable"]!;
+    expect(waits).not.toContain(`data-testid="mh-register"`);
+    expect(waits).toContain(`data-testid="mh-register-unavailable"`);
+    expect(waits.replace(/&#x27;/g, "'")).toContain(sentence);
+    const plain = render(closed);
+    expect(plain).not.toContain(`data-testid="mh-register-unavailable"`);
+    expect(plain.replace(/&#x27;/g, "'")).not.toContain(sentence);
+  });
+
   it("registration OPEN → the CTA, at the document's own href, on a 44px tap target", () => {
     const h = render(open);
     // The tag read WHOLE, so the href and the tap area are pinned as the SAME

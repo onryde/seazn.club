@@ -98421,6 +98421,9 @@
                             "registrationOpen": {
                               "type": "boolean"
                             },
+                            "registrationWaitsOnCardPayments": {
+                              "type": "boolean"
+                            },
                             "registerHref": {
                               "type": "string"
                             },
@@ -98452,6 +98455,7 @@
                             "endsOn",
                             "venues",
                             "registrationOpen",
+                            "registrationWaitsOnCardPayments",
                             "registerHref",
                             "calendars",
                             "presentHref"
@@ -98717,6 +98721,7 @@
                         "example"
                       ],
                       "registrationOpen": true,
+                      "registrationWaitsOnCardPayments": true,
                       "registerHref": "example",
                       "calendars": [
                         {

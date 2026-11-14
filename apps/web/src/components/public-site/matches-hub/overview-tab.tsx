@@ -691,7 +691,7 @@ export function OverviewTab({
           </ul>
         </>
       ),
-    register: !doc.info.registrationOpen ? null : (
+    register: doc.info.registrationOpen ? (
       <Link
         data-testid="mh-register"
         href={doc.info.registerHref}
@@ -699,7 +699,12 @@ export function OverviewTab({
       >
         {t(dict, "landing.register")}
       </Link>
-    ),
+    ) : doc.info.registrationWaitsOnCardPayments ? (
+      // Walk-fix F5: no Register while card payments are not set up, and the reason in its place rather than nothing.
+      <p data-testid="mh-register-unavailable" className="max-w-prose text-sm text-ink-muted">
+        {t(dict, "info.registration.cardPaymentsUnavailable")}
+      </p>
+    ) : null,
     // Each slot brings its own chrome — `info-tab.tsx` states the rule and this
     // follows it: a heading over an absent block reads as content that failed
     // to load rather than content that does not exist.

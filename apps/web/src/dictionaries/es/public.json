@@ -619,6 +619,7 @@
   "info.venues": "Sedes",
   "info.registration.open": "Inscripciones abiertas",
   "info.registration.closed": "Inscripciones cerradas",
+  "info.registration.cardPaymentsUnavailable": "Los pagos con tarjeta aún no están configurados para esta competición: la inscripción se abrirá cuando el organizador termine de configurar los pagos.",
   "info.calendar": "Añadir al calendario",
   "info.share": "Compartir esta competición",
   "teams.members.one": "{count} miembro",

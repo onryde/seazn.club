@@ -22,6 +22,7 @@ import { divisionTakesKind } from "@/lib/division-entrant-kinds";
 import type { RegistrationSettingsRow } from "./types";
 import { SETTINGS_COLS, loadSettings, windowOpen } from "./lookups";
 import { placesLeft } from "./places-left";
+import { CARD_PAYMENTS_UNAVAILABLE, cardPaymentsBroken } from "@/lib/registration-card-payments";
 
 // ---------------------------------------------------------------------------
 // Organiser: settings
@@ -411,9 +412,7 @@ export async function publicRegistrationInfo(
     // A card division can't take submissions when Connect is broken OR the
     // paid entitlement is gone — closing it with an honest reason beats
     // accepting money we can't keep (spec #9, P2-10).
-    const paymentsBroken =
-      r.payment_method === "stripe" && r.fee_cents > 0 &&
-      (!comp.charges_enabled || !paidEntitled);
+    const paymentsBroken = cardPaymentsBroken(r, { charges_enabled: comp.charges_enabled, paid_entitled: paidEntitled });
     // FU1 ruling 3: a stored kind the division does not take (a row saved before the check, or Entrant kinds narrowed
     // since) never opens to the public - submit would refuse every entry. Named first: it outlasts the window and payments.
     const kindTaken = divisionTakesKind(entrantShapeOf(r).kinds, r.entrant_kind);
@@ -423,7 +422,7 @@ export async function publicRegistrationInfo(
       : !kindTaken
         ? "entry_kind_unavailable"
         : paymentsBroken
-          ? "payments_unavailable"
+          ? CARD_PAYMENTS_UNAVAILABLE
           : "window";
     if (open && remaining === 0) reason = "full"; // still open — joins the waitlist
     return {

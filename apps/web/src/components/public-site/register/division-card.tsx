@@ -12,6 +12,7 @@ import { capacityState } from "./capacity";
 import { INELIGIBLE_MESSAGE_KEY, type SelfEligibility } from "./eligibility-presentation";
 import { BTN_GHOST, BTN_PRIMARY } from "./styles";
 import type { DivisionLike } from "./types";
+import { CARD_PAYMENTS_UNAVAILABLE } from "@/lib/registration-card-payments";
 
 const CATEGORY_KEY = {
   open: "register.entries.category.open",
@@ -201,7 +202,7 @@ export function DivisionCard({
             {t("register.entries.window.closes", { date: windowDate(division.closes_at, locale) })}
           </span>
         )}
-        {division.closed_reason === "payments_unavailable" && (
+        {division.closed_reason === CARD_PAYMENTS_UNAVAILABLE && (
           <span className={`${BADGE} bg-red-50 text-red-700`}>{t("register.payments.unavailable.title")}</span>
         )}
         {/* FU1: the division's settings name an entry type the division itself does not take, so it is not open - the
@@ -210,6 +211,14 @@ export function DivisionCard({
           <span className={`${BADGE} bg-zinc-200 text-ink-muted`}>{t("register.entries.badge.kindUnavailable")}</span>
         )}
       </div>
+
+      {/* Walk-fix F5: the badge says card payments are unavailable; this says when the division opens (the all-closed
+          register page's own sentence), so a visitor in a cart whose other divisions still register is not left guessing. */}
+      {division.closed_reason === CARD_PAYMENTS_UNAVAILABLE && (
+        <p data-testid="division-card-payments-unavailable" className="mt-3 text-xs text-ink-muted">
+          {t("register.cardPaymentsUnavailable")}
+        </p>
+      )}
 
       {/* RS007/V380 — the retired jsonb "custom rule" note, now rendered
           (defect #3 the V380 migration's own header describes: written by

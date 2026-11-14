@@ -87,6 +87,11 @@ export interface RawDivisionRow {
    *  stripe-connect.ts's connectStatus(), which is owner-session-only and
    *  would 403 an admin opening this hub. */
   org_stripe_unsupported_currency: string | null;
+  /** How the division collects its fee (null: no settings row yet). Walk-fix F5: with `org_charges_enabled`, the Settings tab's
+   *  "card payments are not set up" banner (lib/registration-card-payments.ts `cardDivisionsWaitOnConnect`). */
+  payment_method: "offline" | "stripe" | null;
+  /** Same value on every row (org-level): whether Connect can charge cards now (`organizations.stripe_charges_enabled`). */
+  org_charges_enabled: boolean;
 }
 
 /** The Settings tab's one query: every (non-archived) division of this
@@ -119,6 +124,7 @@ export async function fetchDivisionRows(
         coalesce(rs.fee_cents, 0) as fee_cents,
         rs.approval,
         coalesce(rs.allow_free_agents, false) as allow_free_agents,
+        rs.payment_method,
         -- RS012 ruling 1: capacity/taken counts TEAM entries only — a
         -- solo sign-up ("free agent") never occupies a team slot, matching
         -- the submit-time gate this display must agree with
@@ -130,7 +136,8 @@ export async function fetchDivisionRows(
            where r.division_id = d.id and r.status = 'waitlisted') as waitlisted,
         (select currency from organizations where id = ${auth.orgId}) as org_currency,
         (select stripe_unsupported_currency from organizations where id = ${auth.orgId})
-          as org_stripe_unsupported_currency
+          as org_stripe_unsupported_currency,
+        (select stripe_charges_enabled from organizations where id = ${auth.orgId}) as org_charges_enabled
       from divisions d
       left join registration_settings rs on rs.division_id = d.id
       where d.competition_id = ${competitionId} and d.archived_at is null

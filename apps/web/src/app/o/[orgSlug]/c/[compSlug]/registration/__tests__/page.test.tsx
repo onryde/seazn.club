@@ -1264,3 +1264,44 @@ describe("registration hub — division settings tabs (B7 T24)", () => {
     expect(q.get("tab")).toBe("registrants");
   });
 });
+
+// Walk-fix F5 (walkthrough R17): with Connect unable to charge, the organiser's Registration > Settings read "Open now" on a card
+// division the public could not enter, and warned of nothing. The Settings tab now carries a banner that says card divisions are
+// closed to new registrations, with the way to fix it (Settings → Connect). Decided by the shared rule
+// (lib/registration-card-payments.ts `cardDivisionsWaitOnConnect`), fed from the Settings query's own rows.
+describe("registration hub — Settings warns when card divisions wait on payment setup (walk-fix F5)", () => {
+  const CARD = { ...SETTINGS_ROW, payment_method: "stripe", fee_cents: 1500 };
+  const bannerOf = async () =>
+    walkPage(await Page({ params, searchParams: noTab })).find((e) => propsOf(e)["data-testid"] === "reg-hub-card-payments");
+
+  it("no rows: no banner (empty case first)", async () => {
+    h.rows = [];
+    expect(await bannerOf()).toBeUndefined();
+  });
+
+  it("an enabled card division with a fee, Connect unable to charge: the banner, its sentence and the link to Connect", async () => {
+    h.rows = [{ ...CARD, org_charges_enabled: false }];
+    const banner = await bannerOf();
+    expect(banner).toBeTruthy();
+    const dict = await getDictionary("en", "ui");
+    expect(textOf(banner!)).toContain(t(dict, "reg.hub.cardPayments.banner"));
+    const link = walk(banner!).find((e) => propsOf(e).href !== undefined);
+    expect(propsOf(link!).href).toBe("/o/riverside/settings/connect");
+    expect(textOf(link!)).toBe(t(dict, "reg.hub.cardPayments.cta"));
+  });
+
+  it("negative pairs: Connect able to charge, a free, an offline or a disabled division -> no banner (counted)", async () => {
+    let checked = 0;
+    for (const row of [
+      { ...CARD, org_charges_enabled: true },
+      { ...CARD, fee_cents: 0, org_charges_enabled: false },
+      { ...CARD, payment_method: "offline", org_charges_enabled: false },
+      { ...CARD, enabled: false, org_charges_enabled: false },
+    ]) {
+      h.rows = [row];
+      expect(await bannerOf(), JSON.stringify(row)).toBeUndefined();
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+});

@@ -619,6 +619,7 @@
   "info.venues": "Venues",
   "info.registration.open": "Registration open",
   "info.registration.closed": "Registration closed",
+  "info.registration.cardPaymentsUnavailable": "Card payments aren't set up for this competition yet — registration opens once the organiser finishes payment setup.",
   "info.calendar": "Add to calendar",
   "info.share": "Share this competition",
   "teams.members.one": "{count} member",

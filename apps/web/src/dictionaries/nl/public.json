@@ -619,6 +619,7 @@
   "info.venues": "Locaties",
   "info.registration.open": "Inschrijving open",
   "info.registration.closed": "Inschrijving gesloten",
+  "info.registration.cardPaymentsUnavailable": "Kaartbetalingen zijn nog niet ingesteld voor deze competitie: inschrijven kan zodra de organisator de betalingen heeft ingesteld.",
   "info.calendar": "Aan agenda toevoegen",
   "info.share": "Deze competitie delen",
   "teams.members.one": "{count} lid",

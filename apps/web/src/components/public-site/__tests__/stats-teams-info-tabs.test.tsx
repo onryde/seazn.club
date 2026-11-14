@@ -1734,6 +1734,17 @@ describe("InfoTab", () => {
     expect(closed).not.toContain(`data-testid="mh-info-register"`);
   });
 
+  // Walk-fix F5: shut only because card payments are not set up, the row says so - and that it will open - in the dictionary's
+  // words, instead of the bare "Registration closed". Still no Register link: nothing could be entered.
+  it("registration waiting on card payments: the reason replaces the closed line, and still no Register link", () => {
+    const waits = render(hubDoc({ divisions: infoDivisions, info: info({ registrationOpen: false, registrationWaitsOnCardPayments: true }) }));
+    const row = waits.slice(waits.indexOf(`data-testid="mh-info-registration"`), waits.indexOf(`data-testid="mh-info-divisions"`));
+    const sentence = (en as Record<string, string>)["info.registration.cardPaymentsUnavailable"]!;
+    expect(row.replace(/&#x27;/g, "'")).toContain(sentence);
+    expect(row).not.toContain(en["info.registration.closed"]);
+    expect(waits).not.toContain(`data-testid="mh-info-register"`);
+  });
+
   it("one .ics link per division, INSIDE that division's box, and its testid comes from the division whose href it IS — never from its position in the array", () => {
     const h = render();
     // The calendars are in the opposite order to `doc.divisions`, so index

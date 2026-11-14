@@ -270,7 +270,15 @@ export function InfoTab({
         className="flex min-w-0 flex-wrap items-center gap-3"
       >
         <span className="text-sm text-ink">
-          {t(dict, info.registrationOpen ? "info.registration.open" : "info.registration.closed")}
+          {t(
+            dict,
+            info.registrationOpen
+              ? "info.registration.open"
+              : // Walk-fix F5: shut only for card payments, the row gives that reason and says registration will open.
+                info.registrationWaitsOnCardPayments
+                ? "info.registration.cardPaymentsUnavailable"
+                : "info.registration.closed",
+          )}
         </span>
         {info.registrationOpen ? (
           <Link

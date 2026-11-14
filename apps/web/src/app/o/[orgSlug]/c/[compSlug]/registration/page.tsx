@@ -12,6 +12,7 @@ export const dynamic = "force-dynamic";
 // state, and with it every unsaved edit; the section on screen rides in as its
 // child. The settings of the (at most two) open divisions load on every tab.
 import type { ReactNode } from "react";
+import Link from "@/components/ui/console-link";
 import { Download } from "lucide-react";
 import { requireCompetitionPage } from "@/server/page-auth";
 import { getCompetition } from "@/server/usecases/competitions";
@@ -54,6 +55,7 @@ import {
   type RawDivisionRow,
   type RegistrantsRawQuery,
 } from "./data";
+import { cardDivisionsWaitOnConnect } from "@/lib/registration-card-payments";
 
 export default async function RegistrationHubPage({
   params,
@@ -180,13 +182,33 @@ export default async function RegistrationHubPage({
 
     // A division tab on screen shows that division's settings page, which the host draws: no section panel under it.
     if (tabs.active === "settings") {
-      panel = (
+      // Walk-fix F5: a card division the public cannot enter (Connect cannot charge) reads "Open now" on its row, so the tab says
+      // so above the rows, with the way to fix it. The org's charge state rides on every row (zero rows: nothing to warn about).
+      const waitsOnConnect = cardDivisionsWaitOnConnect(rawRows, rawRows[0]?.org_charges_enabled ?? true);
+      const settingsPanel = (
         <RegistrationHubSettingsPanel
           title={t(dict, "reg.hub.settings.title")}
           body={t(dict, "reg.hub.settings.body")}
           rows={rows}
           context={settingsContext}
         />
+      );
+      panel = waitsOnConnect ? (
+        <div className="flex flex-col gap-3">
+          <div
+            role="status"
+            data-testid="reg-hub-card-payments"
+            className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900"
+          >
+            <p className="m-0 min-w-0 flex-1 basis-64">{t(dict, "reg.hub.cardPayments.banner")}</p>
+            <Link href={routes.connect(orgSlug)} className="shrink-0 font-semibold underline underline-offset-2 hover:text-amber-950">
+              {t(dict, "reg.hub.cardPayments.cta")}
+            </Link>
+          </div>
+          {settingsPanel}
+        </div>
+      ) : (
+        settingsPanel
       );
     }
   } else {

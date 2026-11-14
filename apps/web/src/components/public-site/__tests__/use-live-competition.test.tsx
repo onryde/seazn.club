@@ -275,6 +275,7 @@ function docWith(
       endsOn: null,
       venues: [],
       registrationOpen: false,
+      registrationWaitsOnCardPayments: false,
       registerHref: "/riverside/autumn-cup/register",
       calendars: [],
       presentHref: "/riverside/autumn-cup/present",

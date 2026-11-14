@@ -113,6 +113,7 @@ import type {
   DivisionTitleWireT,
 } from "./competition-hub-schema";
 import { routes } from "@/lib/routes";
+import { registrationWaitsOnCardPayments } from "@/lib/registration-card-payments";
 
 // ---------------------------------------------------------------- liveness
 
@@ -1126,6 +1127,7 @@ export async function loadCompetitionHub(
       endsOn: competition.ends_on,
       venues: [...venues].sort(),
       registrationOpen: registration?.divisions.some((x) => x.open) ?? false,
+      registrationWaitsOnCardPayments: registrationWaitsOnCardPayments(registration?.divisions ?? []),
       registerHref: `${base}/register`,
       calendars: hubDivisions.map((d) => ({
         divisionName: d.name,

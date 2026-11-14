@@ -441,6 +441,9 @@ export const HubInfo = z.object({
   endsOn: z.string().nullable(),
   venues: z.array(z.string()),
   registrationOpen: z.boolean(),
+  /** Walk-fix F5: nothing is open, and a division is shut only because card payments are not set up - the page gives that
+   *  reason (and that registration will open) instead of a bare "closed". Read off the same panel answer as `registrationOpen`. */
+  registrationWaitsOnCardPayments: z.boolean(),
   registerHref: z.string(),
   calendars: z.array(z.object({ divisionName: z.string(), href: z.string() })),
   presentHref: z.string(),

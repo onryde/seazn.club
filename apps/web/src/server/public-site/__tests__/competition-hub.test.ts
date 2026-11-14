@@ -1509,6 +1509,7 @@ describe("loadCompetitionHub — info", () => {
       endsOn: "2026-09-30",
       venues: ["Aylesbury Rec", "Riverside Park"],
       registrationOpen: false,
+      registrationWaitsOnCardPayments: false,
       registerHref: "/live/riverside/autumn-cup/register",
       calendars: [
         { divisionName: "Open", href: "/live/riverside/autumn-cup/open/calendar.ics" },
@@ -1525,6 +1526,30 @@ describe("loadCompetitionHub — info", () => {
     });
     const doc = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
     expect(doc.info.registrationOpen).toBe(true);
+  });
+
+  // Walk-fix F5: the public page gives the reason registration is shut when it is shut only for card payments - read off the SAME
+  // panel answer the Register button follows, never a second read of the org's Stripe state.
+  it("registrationWaitsOnCardPayments: all closed with one for card payments -> true; an open division, or another reason -> false (counted)", async () => {
+    const cases: [string, { open: boolean; closed_reason: string | null }[], boolean][] = [
+      ["card only", [{ open: false, closed_reason: "payments_unavailable" }], true],
+      ["card + window-closed", [{ open: false, closed_reason: "payments_unavailable" }, { open: false, closed_reason: "window" }], true],
+      ["card + an open offline division", [{ open: false, closed_reason: "payments_unavailable" }, { open: true, closed_reason: null }], false],
+      ["window-closed only", [{ open: false, closed_reason: "window" }], false],
+      ["no divisions", [], false],
+    ];
+    let checked = 0;
+    for (const [label, divisions, want] of cases) {
+      registrationMock.mockResolvedValue({
+        competition: { id: COMP.id, name: COMP.name, slug: COMP.slug, starts_on: null, ends_on: null },
+        org: { name: ORG.name, slug: ORG.slug, logo_url: null },
+        divisions,
+      });
+      const doc = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
+      expect(doc.info.registrationWaitsOnCardPayments, label).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
   });
 });
 
