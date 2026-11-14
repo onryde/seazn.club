@@ -81,6 +81,8 @@ const stripeMock = vi.hoisted(() => {
 vi.mock("@/lib/stripe", () => ({ getStripe: () => stripeMock.stripe }));
 
 import { resumeRegistrationCheckout, mintGroupCheckout } from "../registrations";
+import { createRegistrationCheckout } from "../registrations/checkout";
+import { divisionCtx } from "../registrations/lookups";
 import { stripeRig, seedRegistration, seedSecondEntry, loadWithGroup, cartAsWritten } from "./_registration-fixtures";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -207,10 +209,21 @@ describe.skipIf(!HAS_DB)(
       // A alone is re-minted (e.g. re-priced, or promoted and paying on its
       // own) — B's only payable link is still sessionAB, so expiring it here
       // would strand B exactly as the file-header bug describes.
-      await resumeRegistrationCheckout(a.registration.id, a.access_token, "http://test.local");
+      //
+      // Driven through the mint itself, not `resumeRegistrationCheckout`: since the cart double-pay fix (owner ruling 2026-11-14)
+      // an entry's own Pay retires an open cart session that names it BEFORE minting, siblings or not, so the status page never
+      // reaches this supersede step with sessionAB still open (registration-pay-page-checkout.test.ts, "an entry's Pay retires a
+      // sign-up session that also names a sibling"). The step's own subsumption rule is unchanged and still owed its test.
+      await createRegistrationCheckout(
+        a.registration.group_id,
+        [a.registration.id],
+        await divisionCtx(sql, division.id),
+        "http://test.local",
+        a.access_token,
+      );
 
       expect(stripeMock.checkoutRetrieve).toHaveBeenCalledWith(sessionAB);
-      expect(stripeMock.checkoutRetrieve).toHaveBeenCalledTimes(2); // the G1 guard's read, then the supersede step's
+      expect(stripeMock.checkoutRetrieve).toHaveBeenCalledTimes(1); // the supersede step's read (the mint has no guard read)
       expect(stripeMock.checkoutExpire).not.toHaveBeenCalled();
       // The cart's checkout_session_id still moves to the new session — only
       // the EXPIRE decision differs, never the stamp itself.

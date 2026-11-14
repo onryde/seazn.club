@@ -6,7 +6,8 @@
 //
 // Premise check (re-verified against the tree at 34f4e7ee7f before building on it, Task 3 brief "Session plumbing"):
 // - `createRegistrationCheckout` expires the group's prior session only on SUBSUMPTION (prior open AND its `registration_ids` all
-//   inside the new mint's ids), so a page mint for {A} leaves an open cart session for {A,B} alone (Review Focus 1).
+//   inside the new mint's ids), so the mint ALONE would leave an open cart session for {A,B} beside a page mint for {A} (Review
+//   Focus 1). Since the cart double-pay fix (owner ruling 2026-11-14) `payFromPayPage` retires that session itself, BEFORE the mint.
 // - the group stamp is conditional (`checkout_session_id is not distinct from` the value read); a loser expires its own session
 //   and answers 409 REGISTRATION_CHECKOUT_CONFLICT.
 // - every session carries an explicit comma-joined `metadata.registration_ids`; fulfilment confirms exactly the listed entries,
@@ -722,31 +723,19 @@ describe.skipIf(!HAS_DB)("payFromPayPage (player payment page, Task 3)", () => {
       return { rig, a, b, sAB };
     }
 
-    it("A pays from the page, then the cart session completes → A takes the duplicate refund, B confirmed", async () => {
+    // Cart double-pay fix (owner ruling 2026-11-14): this case used to pin the defect - A's page left the cart session open ("not
+    // subsumed: B still needs it"), the cart session then charged A a second time and only the `kind: "duplicate"` refund sent it
+    // back. A's Pay now retires the cart session before its mint, so the cart session can no longer charge A; the full sequence for
+    // both Pay buttons is "an entry's Pay retires a sign-up session that also names a sibling" (the W5 describe, below).
+    it("A pays from the page → the cart session is retired before A's mint; B is left to its own Pay", async () => {
       const { a, b, sAB } = await cartWithOpenSession();
-      const token = await linkFor(a);
 
-      await payFromPayPage(token, ORIGIN);
+      await payFromPayPage(await linkFor(a), ORIGIN);
+
       const sA = (await payPointer(a.id))!;
-      expect(stripeMock.store.get(sAB)!.status).toBe("open"); // not subsumed: B still needs it
-
-      await handleRegistrationCheckoutCompleted(payInStripe(sA));
-      expect((await loadWithGroup(a.id)).status).toBe("confirmed");
-
-      const cart = payInStripe(sAB);
-      await handleRegistrationCheckoutCompleted(cart);
-
-      expect((await loadWithGroup(b.id)).status).toBe("confirmed");
-      expect((await loadWithGroup(a.id)).status).toBe("confirmed");
-      // A's second charge goes back through the existing duplicate path: its own amount, on the cart session's intent.
-      expect(stripeMock.refundCreate).toHaveBeenCalledTimes(1);
-      expect(stripeMock.refundCreate).toHaveBeenCalledWith(
-        expect.objectContaining({ payment_intent: cart.payment_intent, amount: a.amount_cents }),
-      );
-      const refunds = await sql<{ mode: string }[]>`
-        select payload->>'mode' as mode from competition_events
-        where type = 'registration.refunded' and payload->>'registration_id' = ${a.id}`;
-      expect(refunds.map((r) => r.mode)).toEqual(["duplicate"]);
+      expect(stripeMock.store.get(sAB)!.status, "the cart session can no longer charge A").toBe("expired");
+      expect(payableFor(a.id)).toEqual([sA]);
+      expect(payableFor(b.id), "B mints its own through its own Pay").toEqual([]);
     });
 
     it("the cart session completes first → A and B confirmed, then A's page shows paid and Pay 409s", async () => {
@@ -1695,7 +1684,10 @@ describe.skipIf(!HAS_DB)("the status page's Pay hands an open session out again 
       expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(creates);
     });
 
-    it("a session that also covers a SIBLING is not this entry's to expire: left alone, as the supersede rule leaves it", async () => {
+    // Cart double-pay fix (owner ruling 2026-11-14): this case used to pin the defect - a session that also covered a sibling was
+    // "not this entry's to expire" and stayed payable beside the entry's new one. It is now retired too; the sibling pays through
+    // its own Pay (the full sequence: "an entry's Pay retires a sign-up session that also names a sibling", below).
+    it("a session that also covers a SIBLING is retired too: never two payable sessions for this entry", async () => {
       const { rig, reg: a, accessToken } = await cardEntry({ displayName: "Entry A" });
       await seedSecondEntry(a.group_id, rig.division.id, 1500, "Entry B");
       await mintGroupCheckout(a.group_id, rig.division.id, ORIGIN, accessToken, await cartAsWritten(a.group_id, rig.division.id));
@@ -1705,8 +1697,9 @@ describe.skipIf(!HAS_DB)("the status page's Pay hands an open session out again 
 
       await resumeRegistrationCheckout(a.id, accessToken, ORIGIN, now);
 
-      expect(stripeMock.checkoutExpire).not.toHaveBeenCalledWith(sAB);
-      expect(stripeMock.store.get(sAB)!.status).toBe("open");
+      expect(stripeMock.checkoutExpire).toHaveBeenCalledWith(sAB);
+      expect(stripeMock.store.get(sAB)!.status).toBe("expired");
+      expect(payableFor(a.id)).toEqual([(await cartPointer(a.id))!]);
     });
   });
 
@@ -1914,6 +1907,124 @@ describe.skipIf(!HAS_DB)("the status page's Pay hands an open session out again 
       expect(err.code).toBe("REGISTRATION_PAID_ONLINE");
       expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(creates);
     });
+  });
+
+  // Cart double-pay fix (owner ruling 2026-11-14): in a multi-entry card cart the sign-up session names EVERY entry. An entry's own
+  // Pay - the payment page's, or the status page's per-entry button - minted a session for that entry alone and left the sign-up
+  // session open because it also named a sibling, so the entry was payable twice (its new session, and the sign-up tab) with only
+  // `kind: "duplicate"`'s refund, after the fact, between the player and a double charge. Rule under test: an entry's Pay retires the
+  // cart's open session whenever it names this entry - alone or beside siblings - BEFORE the mint and fail-closed; each sibling stays
+  // payable through its own Pay; a session that does not name this entry (a sibling's own) is never this entry's to retire. The
+  // single-entry cart is unchanged and pinned above (F12 for the payment page; W5 reuse and m8 for the status page).
+  describe("an entry's Pay retires a sign-up session that also names a sibling (cart double-pay fix)", () => {
+    /** Two card entries in one cart, signed up the way the register route does it: ONE sign-up session naming both. */
+    async function signedUpPair() {
+      const { rig, reg: a, accessToken } = await cardEntry({ displayName: "Entry A" });
+      const b = await seedSecondEntry(a.group_id, rig.division.id, 1500, "Entry B");
+      await mintGroupCheckout(a.group_id, rig.division.id, ORIGIN, accessToken, await cartAsWritten(a.group_id, rig.division.id));
+      const sAB = (await cartPointer(a.id))!;
+      expect(stripeMock.store.get(sAB)!.metadata.registration_ids!.split(",").sort(), "premise: the sign-up names both").toEqual(
+        [a.id, b.id].sort(),
+      );
+      expect(payableFor(a.id), "premise: A is payable through the sign-up session").toEqual([sAB]);
+      expect(payableFor(b.id), "premise: B is payable through the sign-up session").toEqual([sAB]);
+      return { a, b, accessToken, sAB };
+    }
+    /** The two Pay buttons a player has for ONE entry; each answers the Checkout URL it hands out. */
+    const BUTTONS: [string, (entry: { id: string; org_id: string }, accessToken: string) => Promise<string>][] = [
+      ["the payment page", async (entry) => payFromPayPage(await linkFor(entry), ORIGIN)],
+      ["the status page", async (entry, accessToken) => (await resumeRegistrationCheckout(entry.id, accessToken, ORIGIN)).checkout_url],
+    ];
+    const sequenced = new Set<string>();
+
+    it.each(BUTTONS)(
+      "%s: A's Pay retires the sign-up session BEFORE its one mint; A's second press reuses; B's own Pay mints B's and leaves A's alone; each pays once, no refund",
+      async (label, pay) => {
+        const { a, b, accessToken, sAB } = await signedUpPair();
+
+        const urlA = await pay(a, accessToken);
+
+        const expiredAt = stripeMock.checkoutExpire.mock.calls.findIndex(([id]) => id === sAB);
+        expect(expiredAt, `${label}: the sign-up session is retired`).toBeGreaterThanOrEqual(0);
+        expect(stripeMock.checkoutExpire.mock.invocationCallOrder[expiredAt]!, `${label}: before A's session exists`).toBeLessThan(
+          stripeMock.checkoutCreate.mock.invocationCallOrder.at(-1)!,
+        );
+        expect(stripeMock.store.get(sAB)!.status, label).toBe("expired");
+        expect(stripeMock.checkoutCreate, `${label}: the sign-up, then A's one mint`).toHaveBeenCalledTimes(2);
+        expect(createdParams(1).metadata?.registration_ids, `${label}: A's session is A's alone`).toBe(a.id);
+        const payableA = payableFor(a.id);
+        expect(payableA, `${label}: exactly one payable session for A`).toHaveLength(1);
+        const sA = payableA[0]!;
+        expect(urlA, label).toBe(stripeMock.store.get(sA)!.url);
+        expect(payableFor(b.id), `${label}: B is paid through B's own Pay now`).toEqual([]);
+
+        // A's second press (a second reminder, the status page reloaded): A's own session again - no create, nothing expired.
+        const expires = stripeMock.checkoutExpire.mock.calls.length;
+        expect(await pay(a, accessToken), `${label}: A's second press`).toBe(urlA);
+        expect(stripeMock.checkoutCreate, `${label}: no create on the second press`).toHaveBeenCalledTimes(2);
+        expect(stripeMock.checkoutExpire.mock.calls.length, `${label}: nothing expired on the second press`).toBe(expires);
+
+        // B's own Pay: B's session, and A's - which does not name B - is left payable.
+        const urlB = await pay(b, accessToken);
+        expect(stripeMock.checkoutCreate, `${label}: B's one mint`).toHaveBeenCalledTimes(3);
+        expect(createdParams(2).metadata?.registration_ids, `${label}: B's session is B's alone`).toBe(b.id);
+        const payableB = payableFor(b.id);
+        expect(payableB, `${label}: exactly one payable session for B`).toHaveLength(1);
+        expect(urlB, label).toBe(stripeMock.store.get(payableB[0]!)!.url);
+        expect(stripeMock.checkoutExpire, `${label}: B's Pay never touches A's session`).not.toHaveBeenCalledWith(sA);
+        expect(payableFor(a.id), `${label}: A's session still pays`).toEqual([sA]);
+
+        // Each entry pays once, through its own session: both confirmed, nothing to refund.
+        await handleRegistrationCheckoutCompleted(payInStripe(sA));
+        await handleRegistrationCheckoutCompleted(payInStripe(payableB[0]!));
+        expect((await loadWithGroup(a.id)).status, label).toBe("confirmed");
+        expect((await loadWithGroup(b.id)).status, label).toBe("confirmed");
+        expect(stripeMock.refundCreate, `${label}: each entry was charged once`).not.toHaveBeenCalled();
+        sequenced.add(label);
+      },
+    );
+
+    it("the sequence covered both Pay buttons (counted; zero is a failure)", () => {
+      expect([...sequenced].sort()).toEqual(BUTTONS.map(([label]) => label).sort());
+    });
+
+    it.each(BUTTONS)(
+      "%s: an expire that fails while the sign-up session is still open -> 502, zero create, both entries still on the sign-up session, no pointer moved",
+      async (label, pay) => {
+        const { a, b, accessToken, sAB } = await signedUpPair();
+        stripeMock.checkoutExpire.mockRejectedValueOnce(new Error("stripe down"));
+        const creates = stripeMock.checkoutCreate.mock.calls.length;
+
+        const err = await rejection(pay(a, accessToken));
+
+        expect(err.status, label).toBe(502);
+        expect(stripeMock.checkoutExpire, `${label}: the refusal came from retiring the sign-up session`).toHaveBeenCalledWith(sAB);
+        expect(stripeMock.checkoutCreate, `${label}: never a second payable session for A`).toHaveBeenCalledTimes(creates);
+        expect(payableFor(a.id), label).toEqual([sAB]);
+        expect(payableFor(b.id), label).toEqual([sAB]);
+        expect(await cartPointer(a.id), label).toBe(sAB);
+        expect(await payPointer(a.id), label).toBeNull();
+      },
+    );
+
+    it.each(BUTTONS)(
+      "%s: the sign-up session paid in another tab between the read and the expire -> 409 PAID_ONLINE, zero create",
+      async (label, pay) => {
+        const { a, accessToken, sAB } = await signedUpPair();
+        stripeMock.checkoutExpire.mockImplementationOnce(async (id: string) => {
+          payInStripe(id);
+          throw Object.assign(new Error('Only Checkout Sessions with a status in ["open"] can be expired.'), { statusCode: 400 });
+        });
+        const creates = stripeMock.checkoutCreate.mock.calls.length;
+
+        const err = await rejection(pay(a, accessToken));
+
+        expect(err.status, label).toBe(409);
+        expect(err.code, label).toBe("REGISTRATION_PAID_ONLINE");
+        expect(stripeMock.checkoutExpire, label).toHaveBeenCalledWith(sAB);
+        expect(stripeMock.checkoutCreate, label).toHaveBeenCalledTimes(creates);
+      },
+    );
   });
 });
 
