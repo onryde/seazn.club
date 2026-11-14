@@ -8,6 +8,7 @@
 import type { DictionaryKey } from "@/lib/i18n-keys";
 import {
   QUICK_MATCH_KNOCKOUT_MIN_SIDES,
+  QUICK_MATCH_MIN_SIDES,
   QUICK_MATCH_QUALIFIERS,
   QUICK_MATCH_SEMIS_MIN_SIDES,
 } from "@/lib/quick-match-constants";
@@ -48,25 +49,42 @@ export interface OfferedShape {
   reason: DictionaryKey | null;
 }
 
+/** The fewest sides each choice is played with (spec §3): a knockout from three (two sides would replay the league as its
+ *  final), Semi-finals from four. A row below its minimum says so, with this number as its reason's `{min}`. */
+const MIN_SIDES: Record<SetupShape, number> = {
+  league: QUICK_MATCH_MIN_SIDES,
+  final: QUICK_MATCH_KNOCKOUT_MIN_SIDES,
+  semis: QUICK_MATCH_SEMIS_MIN_SIDES,
+};
+export function minSidesOf(shape: SetupShape): number {
+  return MIN_SIDES[shape];
+}
+
+/** Each knockout row's reason below its minimum ("Needs {min} or more sides"). */
+const NEEDS_SIDES: Record<Exclude<SetupShape, "league">, DictionaryKey> = {
+  final: "quickMatch.setup.shape.finalNeeds",
+  semis: "quickMatch.setup.shape.semisNeeds",
+};
+
 /**
- * The rows the list shows (spec §3, §12). League always. A knockout only where the variant may play one (C23,
- * `knockoutAllowed`) and from three sides (two sides: a league then a final between the same two is a repeat, so neither
- * knockout row is offered). Semi-finals need four: below that the row stays in the list, disabled, with its reason.
+ * The rows the list shows (spec §3, §12; owner 2026-11-14: "show default and disable like semifinal, other user doesn't know
+ * what format we have"): always all three, in the list's order, so a guest sees every format there is. League can always be
+ * picked. A knockout row is disabled, with its one-line reason, where the variant may never play one (C23,
+ * `knockoutAllowed`: "Not available for this sport") or below its minimum sides ("Needs {min} or more sides"). The rules'
+ * reason wins: one more side would not make that row playable.
  */
 export function shapesOffered(sides: number, knockoutAllowed: boolean): OfferedShape[] {
-  const league: OfferedShape = { shape: "league", enabled: true, reason: null };
-  if (!knockoutAllowed || sides < QUICK_MATCH_KNOCKOUT_MIN_SIDES) return [league];
-  const semis = sides >= QUICK_MATCH_SEMIS_MIN_SIDES;
-  return [
-    league,
-    { shape: "final", enabled: true, reason: null },
-    { shape: "semis", enabled: semis, reason: semis ? null : "quickMatch.setup.shape.semisNeeds" },
-  ];
+  return SETUP_SHAPES.map((shape): OfferedShape => {
+    if (shape === "league") return { shape, enabled: true, reason: null };
+    if (!knockoutAllowed) return { shape, enabled: false, reason: "quickMatch.setup.shape.notForSport" };
+    if (sides < MIN_SIDES[shape]) return { shape, enabled: false, reason: NEEDS_SIDES[shape] };
+    return { shape, enabled: true, reason: null };
+  });
 }
 
 /**
- * The choice that is posted and counted: the guest's own when the list still offers it, else the deepest choice still
- * offered that is not deeper than it (Semi-finals at three sides is Final; any knockout at two sides, or on a variant that may
+ * The choice that is posted and counted: the guest's own when its row can still be picked, else the deepest choice that can
+ * be picked that is not deeper than it (Semi-finals at three sides is Final; any knockout at two sides, or on a variant that may
  * only play League, is League). Derived on every render, so it never needs a reset when the sides or the rules change, and
  * putting the side back brings the guest's choice back.
  */

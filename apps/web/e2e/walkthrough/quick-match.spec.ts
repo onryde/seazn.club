@@ -309,8 +309,9 @@ const SHAPES = ["league", "final", "semis"] as const;
 type Shape = (typeof SHAPES)[number];
 /** How many go through to the knockout (spec §2: "League → Final" is the top 2, "League → Semi-finals → Final" the top 4). */
 const QUALIFIERS = { final: 2, semis: 4 } as const;
-/** Spec §3 / plan 5 Global Constraints: 2 sides offer League alone; 3 sides show the semi-finals disabled, "Needs 4 or more
- *  sides"; 4 or more offer all three. */
+/** Spec §3 / plan 5 Global Constraints, as the owner amended them 2026-11-14: all three rows always listed; below 3 sides
+ *  League → Final is disabled, "Needs 3 or more sides"; below 4 the semi-finals are, "Needs 4 or more sides"; 4 or more can
+ *  pick all three. */
 const KNOCKOUT_MIN_SIDES = 3;
 const SEMIS_MIN_SIDES = 4;
 /** A round robin of `n` where each pair meets `plays` times, and a single-elimination bracket of `q` seats: every match
@@ -349,21 +350,19 @@ async function startQuickMatch(
   for (const [i, side] of sides.entries()) {
     await form(p).getByLabel(mk("quickMatch.setup.sideLabel", { n: i + 1 }), { exact: true }).fill(side);
   }
-  // The format (plan 5 T6): the rows the number of sides allows, each with its hint; a row the sides do not allow yet is
-  // shown disabled with its reason (3 sides: the semi-finals), and a knockout is not shown at all below 3 sides.
+  // The format (plan 5 T6; owner 2026-11-14): every row is listed, each with its hint; a row the sides do not allow yet is
+  // shown disabled with its reason (2 sides: both knockouts; 3 sides: the semi-finals), never hidden.
   let formats = 0;
   for (const s of SHAPES) {
     const radio = shapeRadio(p, s);
     formats += 1;
-    if (s !== "league" && sides.length < KNOCKOUT_MIN_SIDES) {
-      await expect(radio, `${sides.length} sides: no ${s} row`).toHaveCount(0);
-      continue;
-    }
+    await expect(radio, `${sides.length} sides: the ${s} row is listed`).toHaveCount(1);
     const hint = s === "league" ? mk("quickMatch.setup.shape.leagueHint") : mk(`quickMatch.setup.shape.${s}Hint`, { count: QUALIFIERS[s] });
-    if (s === "semis" && sides.length < SEMIS_MIN_SIDES) {
-      await expect(radio, `${sides.length} sides: the semi-finals shown, disabled`).toBeDisabled();
+    const needs = s === "final" ? KNOCKOUT_MIN_SIDES : s === "semis" ? SEMIS_MIN_SIDES : null;
+    if (needs !== null && sides.length < needs) {
+      await expect(radio, `${sides.length} sides: ${s} shown, disabled`).toBeDisabled();
       await expect(radio, "…with the reason").toHaveAccessibleDescription(
-        `${hint} ${mk("quickMatch.setup.shape.semisNeeds", { min: SEMIS_MIN_SIDES })}`,
+        `${hint} ${mk(`quickMatch.setup.shape.${s === "final" ? "finalNeeds" : "semisNeeds"}`, { min: needs })}`,
       );
     } else {
       await expect(radio, `${sides.length} sides: ${s} offered`).toBeEnabled();

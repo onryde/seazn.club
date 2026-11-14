@@ -2,73 +2,141 @@
 // 2026-11-12-quick-match-league-knockout-design.md §3, §12): three whole choices, League | League → Final (top 2) |
 // League → Semi-finals → Final (top 4), offered by side count and by the variant's C23 `knockoutAllowed`.
 //
-// Expected values are the spec's §3 offer table and §12's sign-off line, typed here on purpose: never read from the module
-// under test, nor from its constants (a constant that moved would move both sides of the assertion). The mapping to the
-// create's fields is proven against the REAL consumer, `CreateQuickMatch`, so a shape the schema refuses reds here.
+// Owner 2026-11-14 ("can we show default and disable like semifinal, other user doesn't know what format we have"): the list
+// ALWAYS shows all three rows, in that order. A row that cannot be played yet is shown disabled with its one-line reason,
+// never hidden: League → Final below three sides "Needs 3 or more sides", Semi-finals below four "Needs 4 or more sides", and
+// on rules that may never play a knockout both knockout rows say "Not available for this sport", which wins over a side count.
+//
+// Expected values are the spec's §3 offer table, §12's sign-off line and the owner's 2026-11-14 ruling, typed here on purpose:
+// never read from the module under test, nor from its constants (a constant that moved would move both sides of the
+// assertion). The mapping to the create's fields is proven against the REAL consumer, `CreateQuickMatch`, so a shape the
+// schema refuses reds here.
 //
 // Sport: none. The choice reads only a side count and the variant's `knockoutAllowed`; which variants allow a knockout is the
 // offer probe's (quick-match-offer.test.ts) and the page test's.
 import { describe, expect, it } from "vitest";
 import { CreateQuickMatch } from "@/server/api-v1/schemas";
-import { effectiveShape, isSetupShape, SETUP_SHAPES, shapesOffered, shapeToFormat, type SetupShape } from "../quick-match-shape";
+import {
+  effectiveShape,
+  isSetupShape,
+  minSidesOf,
+  SETUP_SHAPES,
+  shapesOffered,
+  shapeToFormat,
+  type SetupShape,
+} from "../quick-match-shape";
 
-/** Spec §3 (and §12: "with 2 sides neither knockout row is offered"; "the top-4 row is disabled ... below 4 sides"). */
-const SPEC_TABLE: Record<number, [SetupShape, boolean][]> = {
-  2: [["league", true]],
+const NEEDS_3 = "quickMatch.setup.shape.finalNeeds";
+const NEEDS_4 = "quickMatch.setup.shape.semisNeeds";
+const NOT_FOR_SPORT = "quickMatch.setup.shape.notForSport";
+type Row = [SetupShape, boolean, string | null];
+const ALL_ON: Row[] = [
+  ["league", true, null],
+  ["final", true, null],
+  ["semis", true, null],
+];
+/** Spec §3 and §12, as the owner amended them 2026-11-14: [row, can be picked, the reason a disabled row gives]. */
+const SPEC_TABLE: Record<number, Row[]> = {
+  2: [
+    ["league", true, null],
+    ["final", false, NEEDS_3],
+    ["semis", false, NEEDS_4],
+  ],
   3: [
-    ["league", true],
-    ["final", true],
-    ["semis", false],
+    ["league", true, null],
+    ["final", true, null],
+    ["semis", false, NEEDS_4],
   ],
-  4: [
-    ["league", true],
-    ["final", true],
-    ["semis", true],
-  ],
-  5: [
-    ["league", true],
-    ["final", true],
-    ["semis", true],
-  ],
-  6: [
-    ["league", true],
-    ["final", true],
-    ["semis", true],
-  ],
+  4: ALL_ON,
+  5: ALL_ON,
+  6: ALL_ON,
 };
+/** Rules that may never play a knockout (C23): the rules' reason on both knockout rows, at every side count. */
+const RULES_SAY_NO: Row[] = [
+  ["league", true, null],
+  ["final", false, NOT_FOR_SPORT],
+  ["semis", false, NOT_FOR_SPORT],
+];
+const rowsOf = (sides: number, allowed: boolean): Row[] => shapesOffered(sides, allowed).map((r) => [r.shape, r.enabled, r.reason]);
 
-describe("shapesOffered: the rows the list shows, by side count and C23", () => {
-  it("follows spec §3 at 2..6 sides, both ways of knockoutAllowed; 10 cases checked", () => {
+describe("shapesOffered: the rows the list shows, by side count and C23 (owner 2026-11-14: always all three)", () => {
+  it("the fewest sides first (two): all three rows, League pickable, both knockout rows disabled with how many sides they need", () => {
+    expect(rowsOf(2, true)).toEqual(SPEC_TABLE[2]);
+  });
+
+  it("follows the table at 2..6 sides, both ways of knockoutAllowed; 10 cases checked", () => {
     let checked = 0;
     for (let sides = 2; sides <= 6; sides++) {
-      const allowed = shapesOffered(sides, true).map((r) => [r.shape, r.enabled]);
-      expect(allowed, `${sides} sides, knockout allowed`).toEqual(SPEC_TABLE[sides]);
+      expect(rowsOf(sides, true), `${sides} sides, knockout allowed`).toEqual(SPEC_TABLE[sides]);
       checked++;
-      // C23: a variant that may only play League offers only League, at every side count (spec §3's first bullet).
-      const leagueOnly = shapesOffered(sides, false).map((r) => [r.shape, r.enabled]);
-      expect(leagueOnly, `${sides} sides, knockout NOT allowed`).toEqual([["league", true]]);
+      // C23: rules that may only play League still LIST both knockout rows, disabled with the rules' reason.
+      expect(rowsOf(sides, false), `${sides} sides, knockout NOT allowed`).toEqual(RULES_SAY_NO);
       checked++;
     }
     expect(checked, "anti-vacuity: 5 side counts × 2").toBe(10);
   });
 
-  it("a disabled row names why (the one-line reason key); an enabled row names none", () => {
-    const rows = shapesOffered(3, true);
-    expect(rows.find((r) => r.shape === "semis")).toEqual({ shape: "semis", enabled: false, reason: "quickMatch.setup.shape.semisNeeds" });
-    let enabled = 0;
+  it("no row is ever hidden: three rows in the list's order at every side count, both ways (counted)", () => {
+    let rows = 0;
     for (let sides = 2; sides <= 6; sides++) {
-      for (const r of shapesOffered(sides, true).filter((x) => x.enabled)) {
-        expect(r.reason, `${sides} ${r.shape}`).toBeNull();
-        enabled++;
+      for (const allowed of [true, false]) {
+        const shapes = shapesOffered(sides, allowed).map((r) => r.shape);
+        expect(shapes, `${sides} ${allowed}`).toEqual(["league", "final", "semis"]);
+        rows += shapes.length;
       }
     }
-    // 1 + 2 + 3 + 3 + 3.
-    expect(enabled).toBe(12);
+    expect(rows, "anti-vacuity: 10 lists × 3 rows").toBe(30);
+  });
+
+  it("when both reasons hold (two sides on rules that never play a knockout), the rules' reason wins", () => {
+    expect(shapesOffered(2, false).find((r) => r.shape === "final")).toEqual({ shape: "final", enabled: false, reason: NOT_FOR_SPORT });
+    expect(shapesOffered(3, false).find((r) => r.shape === "semis")).toEqual({ shape: "semis", enabled: false, reason: NOT_FOR_SPORT });
+  });
+
+  it("every disabled row names why and every enabled row names none (counted both ways)", () => {
+    let enabled = 0;
+    let disabled = 0;
+    for (let sides = 2; sides <= 6; sides++) {
+      for (const allowed of [true, false]) {
+        for (const r of shapesOffered(sides, allowed)) {
+          if (r.enabled) {
+            expect(r.reason, `${sides} ${allowed} ${r.shape}`).toBeNull();
+            enabled++;
+          } else {
+            expect(r.reason, `${sides} ${allowed} ${r.shape}`).not.toBeNull();
+            disabled++;
+          }
+        }
+      }
+    }
+    // Allowed: 1 + 2 + 3 + 3 + 3 enabled; not allowed: League alone at each of 5 counts.
+    expect([enabled, disabled]).toEqual([12 + 5, 3 + 10]);
   });
 
   it("the list keeps the spec's order: League, then Final, then Semi-finals (the stacked list of §12)", () => {
     expect(SETUP_SHAPES).toEqual(["league", "final", "semis"]);
     expect(shapesOffered(6, true).map((r) => r.shape)).toEqual(["league", "final", "semis"]);
+  });
+});
+
+describe("minSidesOf: the `{min}` a 'Needs {min} or more sides' reason reads", () => {
+  it("League from two, League → Final from three, Semi-finals from four (spec §3)", () => {
+    expect(SETUP_SHAPES.map((s) => [s, minSidesOf(s)])).toEqual([
+      ["league", 2],
+      ["final", 3],
+      ["semis", 4],
+    ]);
+  });
+
+  it("a row that needs more sides turns on at exactly its own minimum, never a side early or late (counted)", () => {
+    let checked = 0;
+    for (const shape of ["final", "semis"] as const) {
+      const at = (sides: number) => shapesOffered(sides, true).find((r) => r.shape === shape)!;
+      expect(at(minSidesOf(shape) - 1).enabled, `${shape} one side short`).toBe(false);
+      expect(at(minSidesOf(shape)).enabled, `${shape} at its minimum`).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 });
 
@@ -137,5 +205,20 @@ describe("effectiveShape: a choice the list no longer offers falls back (plan 5 
   it("a variant that may only play League takes any knockout choice back to League", () => {
     expect(effectiveShape("semis", shapesOffered(6, false))).toBe("league");
     expect(effectiveShape("final", shapesOffered(6, false))).toBe("league");
+  });
+
+  it("whatever was chosen, the choice that posts is a row that can be picked: every choice × 2..6 sides × C23 (counted)", () => {
+    let checked = 0;
+    for (const chosen of SETUP_SHAPES) {
+      for (let sides = 2; sides <= 6; sides++) {
+        for (const allowed of [true, false]) {
+          const offered = shapesOffered(sides, allowed);
+          const posted = effectiveShape(chosen, offered);
+          expect(offered.find((r) => r.shape === posted)?.enabled, `${chosen} ${sides} ${allowed} → ${posted}`).toBe(true);
+          checked++;
+        }
+      }
+    }
+    expect(checked, "anti-vacuity: 3 × 5 × 2").toBe(30);
   });
 });

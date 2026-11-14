@@ -564,5 +564,7 @@
   "quickMatch.setup.shape.semis": "Championnat → Demi-finales → Finale",
   "quickMatch.setup.shape.semisHint": "Tout le monde affronte tout le monde, puis les {count} premiers jouent des demi-finales et une finale.",
   "quickMatch.setup.shape.semisNeeds": "Il faut au moins {min} participants",
+  "quickMatch.setup.shape.finalNeeds": "Il faut au moins {min} participants",
+  "quickMatch.setup.shape.notForSport": "Non disponible pour ce sport",
   "quickMatch.errors.semisTooFewSides": "Les demi-finales demandent au moins {min} participants."
 }

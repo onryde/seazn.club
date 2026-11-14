@@ -16,6 +16,7 @@ import { LOCALES, type Locale } from "@/lib/i18n-constants";
 import { interpolate, plural } from "@/lib/i18n-runtime";
 import {
   QUICK_MATCH_ERRORS,
+  QUICK_MATCH_KNOCKOUT_MIN_SIDES,
   QUICK_MATCH_MAX_ADHOC,
   QUICK_MATCH_MAX_PLAYS,
   QUICK_MATCH_QUALIFIERS,
@@ -90,6 +91,10 @@ const MARKETING_KEYS = [
   "quickMatch.setup.shape.semisHint",
   "quickMatch.setup.shape.semisNeeds",
   "quickMatch.errors.semisTooFewSides",
+  // Owner 2026-11-14: every row is always listed; League → Final below three sides, and both knockout rows on rules that may
+  // never play one, are disabled with their own reason.
+  "quickMatch.setup.shape.finalNeeds",
+  "quickMatch.setup.shape.notForSport",
 ] as const;
 
 const UI_KEYS = [
@@ -636,6 +641,7 @@ describe("quick match guest copy: constants are placeholders, never typed number
     // Plan 5: the semi-finals' minimum is QUICK_MATCH_SEMIS_MIN_SIDES, and a shape's count is its QUICK_MATCH_QUALIFIERS entry
     // (the knockout stage's own progression on a live match).
     ["marketing", "quickMatch.setup.shape.semisNeeds", "min"],
+    ["marketing", "quickMatch.setup.shape.finalNeeds", "min"],
     ["marketing", "quickMatch.errors.semisTooFewSides", "min"],
     ["marketing", "quickMatch.setup.shape.finalHint", "count"],
     ["marketing", "quickMatch.setup.shape.semisHint", "count"],
@@ -778,6 +784,9 @@ describe("quick match guest copy: League + Knockout (plan 5 Task 1)", () => {
       "Everyone plays everyone, then the top 4 play semi-finals and a final.",
     );
     expect(interpolate(m["quickMatch.setup.shape.semisNeeds"]!, { min: QUICK_MATCH_SEMIS_MIN_SIDES })).toBe("Needs 4 or more sides");
+    // Owner 2026-11-14 (verbatim reasons): League → Final below three sides, and both knockout rows on rules with no knockout.
+    expect(interpolate(m["quickMatch.setup.shape.finalNeeds"]!, { min: QUICK_MATCH_KNOCKOUT_MIN_SIDES })).toBe("Needs 3 or more sides");
+    expect(m["quickMatch.setup.shape.notForSport"]).toBe("Not available for this sport");
     // §5: "Tie for 2nd: Ines and Mika"; §11: "Tie for 2nd: 3 sides, 1 place".
     expect(interpolate(ui["quickMatch.cut.title"]!, { place: ui["quickMatch.home.rankShort.2"]!, names: "Ines and Mika" })).toBe(
       "Tie for 2nd: Ines and Mika",

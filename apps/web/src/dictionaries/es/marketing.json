@@ -564,5 +564,7 @@
   "quickMatch.setup.shape.semis": "Liga → Semifinales → Final",
   "quickMatch.setup.shape.semisHint": "Todos juegan contra todos y después los {count} primeros juegan semifinales y una final.",
   "quickMatch.setup.shape.semisNeeds": "Hacen falta {min} participantes o más",
+  "quickMatch.setup.shape.finalNeeds": "Hacen falta {min} participantes o más",
+  "quickMatch.setup.shape.notForSport": "No disponible para este deporte",
   "quickMatch.errors.semisTooFewSides": "Las semifinales necesitan {min} participantes o más."
 }

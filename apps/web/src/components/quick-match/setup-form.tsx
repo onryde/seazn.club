@@ -6,7 +6,8 @@
 // names already resolved, the copy, and the whole preview table (`quickMatchPreviewTable`, pre-flight D1), so the match
 // count is a lookup, never a fetch that can land stale. The format is a stacked list of three whole choices (plan 5 Task 6;
 // spec 2026-11-12-quick-match-league-knockout §3, §12): League | League → Final (top 2) | League → Semi-finals → Final (top 4),
-// one radio named `shape` that the create route maps to `format` + `qualifiers` (lib/quick-match-shape.ts). A plain Knockout
+// one radio named `shape` that the create route maps to `format` + `qualifiers` (lib/quick-match-shape.ts). All three rows are
+// always listed, one the sides or the rules cannot play shown disabled with its reason (owner 2026-11-14). A plain Knockout
 // is not offered (owner 2026-11-12). Server modules are reached by `import type` only: eslint.config.mjs refuses a value
 // import of @/server/** in src/components/quick-match/**.
 //
@@ -50,6 +51,7 @@ import {
 } from "@/lib/quick-match-constants";
 import {
   effectiveShape,
+  minSidesOf,
   qualifiersOf,
   shapesOffered,
   shapeToFormat,
@@ -213,8 +215,9 @@ interface SideRow {
 //
 // Each choice is a full-width row: the whole row is the radio's label (a thumb taps anywhere on it), with a dot, the title
 // and its one-line hint. The radio is visually hidden, so the checked look is the browser's own (`has-checked:` on the row,
-// `peer-checked:` on the dot) and holds before the script runs; React's `checked` only seeds it. A disabled row (Semi-finals
-// below four sides) stays in the list, dashed, with its reason under the hint. Plain functions, not components, so the
+// `peer-checked:` on the dot) and holds before the script runs; React's `checked` only seeds it. A disabled row (owner
+// 2026-11-14: League → Final below three sides, Semi-finals below four, either knockout on rules that never play one) stays in
+// the list, dashed, with its reason under the hint, so a guest sees every format there is. Plain functions, not components, so the
 // island's harness sees every input they render.
 
 const SHAPE_ROW = "flex min-h-11 items-start gap-3 rounded-xl border px-3.5 py-3 transition motion-reduce:transition-none";
@@ -298,7 +301,7 @@ function shapeRow({
         </span>
         {row.reason !== null ? (
           <span id={`${id}-why`} className="mt-1 block text-[13px] font-medium leading-snug text-[#d9d2f2]">
-            {msg(row.reason, { min: QUICK_MATCH_SEMIS_MIN_SIDES })}
+            {msg(row.reason, { min: minSidesOf(row.shape) })}
           </span>
         ) : null}
       </span>

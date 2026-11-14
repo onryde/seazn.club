@@ -564,5 +564,7 @@
   "quickMatch.setup.shape.semis": "League → Semi-finals → Final",
   "quickMatch.setup.shape.semisHint": "Everyone plays everyone, then the top {count} play semi-finals and a final.",
   "quickMatch.setup.shape.semisNeeds": "Needs {min} or more sides",
+  "quickMatch.setup.shape.finalNeeds": "Needs {min} or more sides",
+  "quickMatch.setup.shape.notForSport": "Not available for this sport",
   "quickMatch.errors.semisTooFewSides": "Semi-finals need {min} or more sides."
 }

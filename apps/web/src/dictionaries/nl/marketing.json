@@ -564,5 +564,7 @@
   "quickMatch.setup.shape.semis": "Competitie → Halve finales → Finale",
   "quickMatch.setup.shape.semisHint": "Iedereen speelt tegen iedereen, daarna speelt de top {count} halve finales en een finale.",
   "quickMatch.setup.shape.semisNeeds": "Minstens {min} deelnemers nodig",
+  "quickMatch.setup.shape.finalNeeds": "Minstens {min} deelnemers nodig",
+  "quickMatch.setup.shape.notForSport": "Niet beschikbaar voor deze sport",
   "quickMatch.errors.semisTooFewSides": "Voor halve finales zijn minstens {min} deelnemers nodig."
 }

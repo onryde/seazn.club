@@ -18,8 +18,9 @@ import {
 // league flow (setup → home → Score → a rally → back) and the URL forms, and adds the seven-width case to mobile.spec.ts.
 // Plan 5 (League + Knockout, docs/superpowers/plans/2026-11-13-quick-match-5-league-knockout.md Task 8; spec
 // docs/superpowers/specs/2026-11-12-quick-match-league-knockout-design.md §3, §12): the setup screen's Format is a stacked list
-// of three whole choices, League | League → Final | League → Semi-finals → Final, posted as ONE radio, `shape`. Two sides
-// offer League only; three offer League → Final with Semi-finals shown disabled and its reason; four or more offer all three.
+// of three whole choices, League | League → Final | League → Semi-finals → Final, posted as ONE radio, `shape`. All three are
+// always listed (owner 2026-11-14): two sides show both knockout rows disabled, each with its reason; three show Semi-finals
+// disabled with its reason; four or more can pick all three.
 // A crafted plain knockout, a final of two sides and semi-finals of three are refused (the cases after "a refused create").
 //
 // What the island's unit tests cannot see, and these do: the real form post and its 303 followed by the browser's own
@@ -72,9 +73,10 @@ async function openSetup(page: Page) {
 // ── The Format list (plan 5 D1, spec §3, §12) ───────────────────────────────────────────────────────────────────────
 //
 // Every expected row, hint, reason and count comes from the spec's own rules and the en dictionary, never from the page's
-// helpers (lib/quick-match-shape.ts is the code under test): League always; a knockout from QUICK_MATCH_KNOCKOUT_MIN_SIDES
-// (two sides would replay the league as its final); Semi-finals from QUICK_MATCH_SEMIS_MIN_SIDES, shown disabled with its
-// reason below that. League → Final sends the top 2, Semi-finals the top 4 (spec §12; QUICK_MATCH_QUALIFIERS holds both).
+// helpers (lib/quick-match-shape.ts is the code under test): every row always listed (owner 2026-11-14); League always
+// pickable; League → Final from QUICK_MATCH_KNOCKOUT_MIN_SIDES (two sides would replay the league as its final) and
+// Semi-finals from QUICK_MATCH_SEMIS_MIN_SIDES, each shown disabled with "Needs {min} or more sides" below its minimum.
+// League → Final sends the top 2, Semi-finals the top 4 (spec §12; QUICK_MATCH_QUALIFIERS holds both).
 
 type Shape = "league" | "final" | "semis";
 /** How many go through for each knockout row (spec §12: "League → Final (top 2) | League → Semi-finals → Final (top 4)"). */
@@ -95,36 +97,41 @@ const shapeRadio = (page: Page, shape: Shape) => form(page).getByRole("radio", {
 const matchesOf = (sides: number, plays: number, shape: Shape) =>
   ((sides * (sides - 1)) / 2) * plays + (shape === "league" ? 0 : THROUGH[shape] - 1);
 
-/** The Format list the spec offers at `sides`, with `checked` the choice that posts and counts: the rows in order (League,
- *  Final, Semi-finals), each radio by its spoken name, enabled or not, its hint, and a disabled row's reason under it. Returns
- *  how many rows it checked (anti-vacuity: never zero). */
+/** The Format list the spec offers at `sides`, with `checked` the choice that posts and counts: all three rows in order
+ *  (League, Final, Semi-finals; owner 2026-11-14: never hidden), each radio by its spoken name, enabled or not, its hint, and a
+ *  disabled row's reason under it. Returns how many rows it checked (anti-vacuity: never zero). */
 async function expectFormatList(page: Page, sides: number, checked: Shape, why: string): Promise<number> {
-  const rows: { shape: Shape; enabled: boolean }[] =
-    sides < QUICK_MATCH_KNOCKOUT_MIN_SIDES
-      ? [{ shape: "league", enabled: true }]
-      : [
-          { shape: "league", enabled: true },
-          { shape: "final", enabled: true },
-          { shape: "semis", enabled: sides >= QUICK_MATCH_SEMIS_MIN_SIDES },
-        ];
+  // The rows a badminton guest sees (its rules may play a knockout): a knockout row below its minimum says how many it needs.
+  const rows: { shape: Shape; needs: number | null }[] = [
+    { shape: "league", needs: null },
+    { shape: "final", needs: sides < QUICK_MATCH_KNOCKOUT_MIN_SIDES ? QUICK_MATCH_KNOCKOUT_MIN_SIDES : null },
+    { shape: "semis", needs: sides < QUICK_MATCH_SEMIS_MIN_SIDES ? QUICK_MATCH_SEMIS_MIN_SIDES : null },
+  ];
   const radios = form(page).locator('input[type="radio"][name="shape"]');
   await expect(radios, `${why}: the Format rows`).toHaveCount(rows.length);
   expect(await radios.evaluateAll((els) => els.map((e) => (e as HTMLInputElement).value)), `${why}: in the list's order`).toEqual(
     rows.map((r) => r.shape),
   );
-  const reason = mk("quickMatch.setup.shape.semisNeeds", { min: QUICK_MATCH_SEMIS_MIN_SIDES });
+  const reasonKey = { final: "quickMatch.setup.shape.finalNeeds", semis: "quickMatch.setup.shape.semisNeeds" } as const;
   let seen = 0;
-  for (const { shape, enabled } of rows) {
+  for (const { shape, needs } of rows) {
     const radio = shapeRadio(page, shape);
     await expect(radio, `${why}: ${shape} is named by its words`).toHaveCount(1);
-    if (enabled) await expect(radio, `${why}: ${shape} can be picked`).toBeEnabled();
+    if (needs === null) await expect(radio, `${why}: ${shape} can be picked`).toBeEnabled();
     else await expect(radio, `${why}: ${shape} is shown but cannot be picked`).toBeDisabled();
     if (shape === checked) await expect(radio, `${why}: ${shape} is the choice`).toBeChecked();
     else await expect(radio, `${why}: ${shape} is not the choice`).not.toBeChecked();
     const hint = shape === "league" ? mk("quickMatch.setup.shape.leagueHint") : mk(`quickMatch.setup.shape.${shape}Hint`, { count: THROUGH[shape] });
     await expect(shapeRow(page, shape), `${why}: ${shape}'s hint`).toContainText(hint);
-    if (enabled) await expect(shapeRow(page, shape).getByText(reason, { exact: true }), `${why}: ${shape} has no reason`).toHaveCount(0);
-    else await expect(shapeRow(page, shape).getByText(reason, { exact: true }), `${why}: ${shape}'s reason`).toBeVisible();
+    if (shape !== "league") {
+      const reason = mk(reasonKey[shape], { min: shape === "final" ? QUICK_MATCH_KNOCKOUT_MIN_SIDES : QUICK_MATCH_SEMIS_MIN_SIDES });
+      if (needs === null) await expect(shapeRow(page, shape).getByText(reason, { exact: true }), `${why}: ${shape} has no reason`).toHaveCount(0);
+      else {
+        await expect(shapeRow(page, shape).getByText(reason, { exact: true }), `${why}: ${shape}'s reason`).toBeVisible();
+        // The reason is heard with the hint (aria-describedby), as the Semi-finals row always was.
+        await expect(radio, `${why}: ${shape}'s description`).toHaveAccessibleDescription(`${hint} ${reason}`);
+      }
+    }
     seen += 1;
   }
   expect(seen, `${why}: rows checked`).toBe(rows.length);
@@ -146,12 +153,12 @@ async function expectRowTappable(row: ReturnType<Page["locator"]>, what: string)
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-test("setup (C16, C17; plan 5): two sides offer League alone, chosen; Start waits for both names and counts one match; no sideways scroll", async ({ guest: page }) => {
+test("setup (C16, C17; plan 5; owner 2026-11-14): two sides list all three formats, League chosen, both knockouts disabled with their reasons; Start waits for both names and counts one match; no sideways scroll", async ({ guest: page }) => {
   await openSetup(page);
   await expect(side(page, 1)).toBeVisible();
   await expect(side(page, 2)).toBeVisible();
   await expect(side(page, 3)).toHaveCount(0);
-  expect(await expectFormatList(page, 2, "league", "two sides")).toBe(1);
+  expect(await expectFormatList(page, 2, "league", "two sides")).toBe(3);
   await expect(page.getByTestId("qm-draw"), "no draw is previewed").toHaveCount(0);
   await expect(page.getByText("Each pair plays")).toBeVisible();
   await expect(start(page)).toBeDisabled();
@@ -205,7 +212,7 @@ test("setup (plan 5): League stays the choice at 3 to 6 sides, the Format list g
   await expect(form(page).getByRole("button", { name: mk("quickMatch.setup.addSide") }), "at the most sides there is no row to add").toHaveCount(0);
 });
 
-test("setup (plan 5 T8): the Format list at 320, 768 and 1280: 2 sides League only; 3 sides League → Final (4 matches), Semi-finals disabled with its reason; 6 sides with Semi-finals 18, Twice 33; back to 3 sides it falls back to League → Final and the count follows, and a 4th side brings Semi-finals back; every row a 44px target; no sideways scroll", async ({ guest: page }) => {
+test("setup (plan 5 T8): the Format list at 320, 768 and 1280: 2 sides all three listed, both knockouts disabled with their reasons; 3 sides League → Final (4 matches), Semi-finals disabled with its reason; 6 sides with Semi-finals 18, Twice 33; back to 3 sides it falls back to League → Final and the count follows, and a 4th side brings Semi-finals back; every row a 44px target; no sideways scroll", async ({ guest: page }) => {
   // The mockup's own numbers (qmd13a01 §6), pinned against the rulebook's count so neither drifts alone.
   expect([matchesOf(6, 1, "semis"), matchesOf(6, 2, "semis"), matchesOf(3, 1, "final")], "the mockup's 18, 33 and 4").toEqual([18, 33, 4]);
   expect(Object.values(THROUGH).sort(), "the two knockout rows send QUICK_MATCH_QUALIFIERS through").toEqual([...QUICK_MATCH_QUALIFIERS].sort());
@@ -263,8 +270,8 @@ test("setup (plan 5 T8): the Format list at 320, 768 and 1280: 2 sides League on
     widths += 1;
   }
   expect(widths).toBe(3);
-  // 1 + 3 + 3 + 3 + 3 + 3 + 3 rows a width (anti-vacuity: the list was read, not skipped).
-  expect(rows, "Format rows checked").toBe(3 * 19);
+  // Seven reads of three rows a width (anti-vacuity: the list was read, not skipped; owner 2026-11-14: never fewer than 3).
+  expect(rows, "Format rows checked").toBe(3 * 7 * 3);
 });
 
 test("Start (plan 5 T8): League → Final of three sides lands on a home whose eyebrow says League + Knockout, its knockout waiting on 1st and 2nd in the league, and its played line counting both parts", async ({ guest: page }) => {
@@ -371,10 +378,13 @@ test("crafted posts (plan 5): a plain knockout, League → Final of two sides an
     await openSetup(page);
     for (let n = 3; n <= c.sides; n++) await form(page).getByRole("button", { name: mk("quickMatch.setup.addSide") }).click();
     for (let n = 1; n <= c.sides; n++) await side(page, n).fill(names[n - 1]!);
-    // The positive pair: the form the guest sees posts the one radio, League (chosen); Semi-finals cannot be picked at three.
+    // The positive pair: the form the guest sees posts the one radio, League (chosen); the row each case crafts is listed but
+    // cannot be picked at its side count (owner 2026-11-14: Semi-finals below four, League → Final below three).
     await expect(form(page).locator('input[name="shape"]:checked'), c.what).toHaveValue("league");
     await expect(form(page).locator('input[name="format"]'), `${c.what}: the form has no format field of its own`).toHaveCount(0);
-    if (c.sides >= QUICK_MATCH_KNOCKOUT_MIN_SIDES) await expect(shapeRadio(page, "semis"), c.what).toBeDisabled();
+    await expect(shapeRadio(page, "semis"), c.what).toBeDisabled();
+    if (c.sides < QUICK_MATCH_KNOCKOUT_MIN_SIDES) await expect(shapeRadio(page, "final"), c.what).toBeDisabled();
+    else await expect(shapeRadio(page, "final"), c.what).toBeEnabled();
     // The refusal is caught as the redirected GET: `?e=` stays in the URL only until the page's ClearFlashParam takes it out.
     const landed = page.waitForRequest((r) => {
       if (r.method() !== "GET") return false;
@@ -496,10 +506,14 @@ test("without the script: the page says it needs JavaScript, Start is live, only
     await expect(start(page)).toBeEnabled();
     await expect(form(page).getByRole("radio", { name: "Badminton", exact: true })).toBeChecked();
     await expect(form(page).getByRole("radio", { name: "Tennis", exact: true })).toBeDisabled();
-    // Plan 5 D1: the Format list is real radios in the server's HTML. Two sides (no script adds a third) offer League alone,
-    // already chosen, so the plain post carries it as the one field the route maps, `shape`.
-    await expect(form(page).locator('input[type="radio"][name="shape"]'), "no script: two sides, League alone").toHaveCount(1);
+    // Plan 5 D1: the Format list is real radios in the server's HTML. Two sides (no script adds a third) list all three
+    // (owner 2026-11-14), League already chosen and both knockouts disabled, so the plain post carries League as the one field
+    // the route maps, `shape` (a disabled radio is never posted).
+    await expect(form(page).locator('input[type="radio"][name="shape"]'), "no script: two sides, all three listed").toHaveCount(3);
     await expect(shapeRadio(page, "league"), "League is chosen in the server's HTML").toBeChecked();
+    await expect(shapeRadio(page, "final"), "no script: League → Final shown, disabled").toBeDisabled();
+    await expect(shapeRadio(page, "semis"), "no script: Semi-finals shown, disabled").toBeDisabled();
+    await expect(shapeRow(page, "final")).toContainText(mk("quickMatch.setup.shape.finalNeeds", { min: QUICK_MATCH_KNOCKOUT_MIN_SIDES }));
     await side(page, 1).fill("Ravi & Sam");
     await side(page, 2).fill("Priya & Tom");
     const posted = page.waitForRequest((r) => r.method() === "POST" && new URL(r.url()).pathname === "/api/quick-match");

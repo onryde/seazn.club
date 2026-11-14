@@ -192,13 +192,22 @@ describe("/<lang>/play: the form", () => {
     expect(html).not.toContain(">Start playing<");
   });
 
-  it("ships the Format list (plan 5 T6): one `shape` radio, League, chosen, at the two sides it opens on; no `format` field", async () => {
+  it("ships the Format list (plan 5 T6; owner 2026-11-14): all three `shape` radios at the two sides it opens on, League chosen, both knockouts disabled with their reasons; no `format` field", async () => {
     vi.mocked(listQuickMatchSports).mockResolvedValueOnce(OFFER);
     const html = await render("en");
     const shapes = html.match(/<input[^>]*name="shape"[^>]*>/g) ?? [];
-    expect(shapes, "two sides: League alone (spec §12)").toHaveLength(1);
-    expect(shapes[0]).toMatch(/value="league"/);
-    expect(shapes[0], "chosen, so the plain post sends it").toContain('checked="');
+    expect(shapes.map((el) => el.match(/value="([^"]*)"/)?.[1]), "every row is listed, in the list's order").toEqual(["league", "final", "semis"]);
+    const [league, final, semis] = shapes as [string, string, string];
+    expect(league, "chosen, so the plain post sends it").toContain('checked="');
+    expect(league, "League can be picked").not.toMatch(/\sdisabled=""/);
+    // A disabled radio is never posted, so the plain post at two sides can only carry League.
+    for (const [what, el] of [["final", final], ["semis", semis]] as const) {
+      expect(el, `${what}: shown, not pickable`).toMatch(/\sdisabled=""/);
+      expect(el, `${what}: not chosen`).not.toContain('checked="');
+      expect(el, `${what}: its reason is part of its description`).toContain(`aria-describedby="qm-shape-${what}-hint qm-shape-${what}-why"`);
+    }
+    expect(html).toMatch(/id="qm-shape-final-why"[^>]*>Needs 3 or more sides</);
+    expect(html).toMatch(/id="qm-shape-semis-why"[^>]*>Needs 4 or more sides</);
     expect(html, "no format field: one radio, one fact").not.toMatch(/name="format"/);
     expect(html).toContain('role="radiogroup"');
     expect(html).toContain(">Format<");
