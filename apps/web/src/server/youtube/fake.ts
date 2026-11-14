@@ -39,7 +39,8 @@ import { createHash } from "node:crypto";
 // What it does not model: a daily stream-creation cap (unpublished) and a stream's own title rules.
 import { YOUTUBE_SCOPE, type YoutubePrivacy } from "@/lib/youtube";
 import {
-  LIST_BUDGET_SPENT, YOUTUBE_ERROR_CODES, YouTubeError, type BroadcastLife, type BroadcastLifeInfo, type StreamListing, type VideoFacts, type YoutubeErrorCode, type YouTubePort,
+  LIST_BUDGET_SPENT, STREAM_HEALTHS, STREAM_STATUSES, YOUTUBE_ERROR_CODES, YouTubeError, type BroadcastLife, type BroadcastLifeInfo, type StreamHealth, type StreamListing,
+  type StreamStatus, type StreamStatusInfo, type VideoFacts, type YoutubeErrorCode, type YouTubePort,
 } from "./port";
 
 // Google's limits — "10 active streams allowed per channel and 3 active streams per stream key" — are the fake's OWN literals
@@ -73,7 +74,7 @@ type PortMethod = Exclude<keyof YouTubePort, "mode">;
 // A Record, not an array: tsc refuses a port method added to the interface and forgotten here.
 const PORT_METHODS: Record<PortMethod, true> = {
   authorizeUrl: true, exchangeCode: true, accessToken: true, listMyChannels: true, liveEnabled: true, insertStream: true,
-  deleteStream: true, listStreams: true, insertBroadcast: true, bind: true, broadcastLife: true, complete: true, deleteBroadcast: true,
+  deleteStream: true, listStreams: true, insertBroadcast: true, bind: true, broadcastLife: true, streamStatus: true, complete: true, deleteBroadcast: true,
   existingVideos: true, revoke: true,
 };
 /** Every method of the port (not `mode`), in one place for the control route's schema and for sweeps. */
@@ -86,7 +87,11 @@ type Channel = { id: string; title: string };
 type LiveState = "enabled" | "not_enabled" | "blocked";
 /** Scope a control to one channel: only calls made with that channel's tokens see it. Absent: every channel. */
 export type FakeScope = { channelId: string };
-interface Stream { id: string; title: string; channelId: string; video: boolean }
+interface Stream {
+  id: string; title: string; channelId: string; video: boolean;
+  /** What a test PINNED YouTube to say of this stream (`setStreamStatus`); null: the video decides (`streamStatus`). */
+  pinned: StreamStatusInfo | null;
+}
 interface Broadcast {
   id: string; channelId: string; title: string; description: string; scheduledStart: Date; privacy: YoutubePrivacy;
   madeForKids: boolean; streamId: string | null; life: Exclude<BroadcastLife, "absent">;
@@ -356,6 +361,19 @@ export class FakeYouTube implements YouTubePort {
     this.stream(streamId).video = false;
   }
 
+  /** Pins what YouTube says of a stream (`streamStatus`): its `streamStatus` and `healthStatus.status`, whatever the video does - how a test
+   *  holds a stall (a live broadcast whose stream reads `active` / `bad`, or `inactive`) or any other word. `null` takes the pin away: the video
+   *  decides again. Only a value YouTube says is accepted (the port's STREAM_STATUSES, STREAM_HEALTHS, or no health), and a stream the fake does
+   *  not have is refused (`youtube_not_found`): a typo is not a pin that never fires. */
+  setStreamStatus(streamId: string, info: { status: StreamStatus; health: StreamHealth | null } | null): void {
+    const stream = this.stream(streamId);
+    if (info !== null) {
+      if (!STREAM_STATUSES.includes(info.status)) throw new Error("setStreamStatus: not a streamStatus YouTube says");
+      if (info.health !== null && !STREAM_HEALTHS.includes(info.health)) throw new Error("setStreamStatus: not a healthStatus YouTube says");
+    }
+    stream.pinned = info === null ? null : { status: info.status, health: info.health };
+  }
+
   /** The video is deleted on YouTube (Studio, or the 30-day refresh finding it gone): the broadcast is absent from now on. */
   deleteVideo(videoId: string): void {
     if (!this.broadcasts.delete(videoId)) throw new YouTubeError("youtube_not_found", "videoNotFound");
@@ -477,7 +495,7 @@ export class FakeYouTube implements YouTubePort {
     this.requireChannel(who.refreshToken);
     this.requireLiveEnabled(who.channelId);
     const id = `fakestream${this.pad()}`;
-    this.streams.set(id, { id, title: a.title, channelId: who.channelId, video: false });
+    this.streams.set(id, { id, title: a.title, channelId: who.channelId, video: false, pinned: null });
     return { streamId: id, ingest: { url: FAKE_INGEST_URL, streamKey: `fakekey-${this.pad()}` } };
   }
 
@@ -557,6 +575,18 @@ export class FakeYouTube implements YouTubePort {
     return b
       ? { life: b.life, actualStartAt: copyOf(b.actualStart), actualEndAt: copyOf(b.actualEnd), madeForKids: currentMadeForKids(b) }
       : { life: "absent", actualStartAt: null, actualEndAt: null, madeForKids: null };
+  }
+
+  /** liveStreams.list(part=status): a pinned answer if a test pinned one, else what the video says - `active` / `good` while video arrives, `ready` /
+   *  `noData` while it does not (the fake does not tell `ready` from `inactive`; a test that needs `inactive` pins it). Another channel's stream is
+   *  absent to this token, like a stream that was never made or was deleted. Read-only. */
+  async streamStatus(at: string, streamId: string): Promise<StreamStatusInfo> {
+    this.enter("streamStatus", this.channelOfAccess(at));
+    const who = this.who(at);
+    const stream = this.streams.get(streamId);
+    if (!stream || stream.channelId !== who.channelId) return { status: "absent", health: null };
+    if (stream.pinned !== null) return { status: stream.pinned.status, health: stream.pinned.health };
+    return stream.video ? { status: "active", health: "good" } : { status: "ready", health: "noData" };
   }
 
   async complete(at: string, broadcastId: string): Promise<void> {

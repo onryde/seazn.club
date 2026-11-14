@@ -121,7 +121,7 @@ describe("GoogleYouTube is a live YouTubePort", () => {
       expect(typeof (g as unknown as Record<string, unknown>)[m], m).toBe("function");
       checked++;
     }
-    expect(checked, "anti-vacuity: the declared methods").toBe(15);
+    expect(checked, "anti-vacuity: the declared methods").toBe(16);
   });
 });
 
@@ -405,6 +405,63 @@ describe("Data API request shapes (developers.google.com/youtube/v3/…)", () =>
       handler = () => res(200, { items: [item] });
       const err = (await rejection(driver().broadcastLife(AT, "bc1"))) as YouTubeError;
       expect([err.code, err.reason]).toEqual(["youtube_unavailable", "unknownLifeCycleStatus"]);
+    }
+  });
+
+  // liveStreams.list (developers.google.com/youtube/v3/live/docs/liveStreams/list), `part=status`: `status.streamStatus` is one of
+  // active, created, error, inactive, ready; `status.healthStatus.status` one of good, ok, bad, noData, revoked. The wire strings are
+  // typed here from that page, and the stream-status table is every documented value.
+  it("streamStatus: GET liveStreams?part=status&id=… (never `cdn`: that part carries the stream key); reads status.streamStatus and status.healthStatus.status", async () => {
+    const statuses = ["active", "created", "error", "inactive", "ready"];
+    const healths = ["good", "ok", "bad", "noData", "revoked"];
+    let checked = 0;
+    for (const streamStatus of statuses) {
+      for (const health of [...healths, null]) {
+        sent = [];
+        const status = health === null ? { streamStatus } : { streamStatus, healthStatus: { status: health } };
+        handler = () => res(200, { items: [{ id: "strm1", status }] });
+        expect(await driver().streamStatus(AT, "strm1"), `${streamStatus} / ${health}`).toEqual({ status: streamStatus, health });
+        const u = new URL(sent[0]!.url);
+        expect([sent[0]!.method, u.pathname, u.searchParams.get("part"), u.searchParams.get("id")]).toEqual(["GET", "/youtube/v3/liveStreams", "status", "strm1"]);
+        expect(sent, "one request, read-only").toHaveLength(1);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: 5 statuses x (5 healths + none)").toBe(30);
+  });
+
+  it("streamStatus: no item for the id (empty items, no items key, or another stream's item) is `absent` with no health", async () => {
+    for (const body of [{ items: [] }, { kind: "youtube#liveStreamListResponse" }, { items: [{ id: "someoneElse", status: { streamStatus: "active", healthStatus: { status: "good" } } }] }]) {
+      handler = () => res(200, body);
+      expect(await driver().streamStatus(AT, "strm1"), JSON.stringify(body)).toEqual({ status: "absent", health: null });
+    }
+  });
+
+  it("streamStatus: a value Google never documented is refused (youtube_unavailable), not guessed - the caller reads that as no answer", async () => {
+    const cases: [unknown, string][] = [
+      [{ id: "strm1", status: { streamStatus: "mystery" } }, "unknownStreamStatus"],
+      [{ id: "strm1" }, "unknownStreamStatus"],
+      [{ id: "strm1", status: {} }, "unknownStreamStatus"],
+      [{ id: "strm1", status: { streamStatus: "active", healthStatus: { status: "mystery" } } }, "unknownHealthStatus"],
+      [{ id: "strm1", status: { streamStatus: "active", healthStatus: { status: 7 } } }, "unknownHealthStatus"],
+    ];
+    for (const [item, reason] of cases) {
+      handler = () => res(200, { items: [item] });
+      const err = (await rejection(driver().streamStatus(AT, "strm1"))) as YouTubeError;
+      expect([err.code, err.reason], JSON.stringify(item)).toEqual(["youtube_unavailable", reason]);
+    }
+  });
+
+  it("streamStatus: Google's refusals map as every other call's do (a dead grant, the quota, an outage), and none is answered as a word", async () => {
+    const rows: [Reply, string][] = [
+      [apiError(401, "authError"), "youtube_reconnect_needed"],
+      [apiError(403, "quotaExceeded"), "youtube_limit_reached"],
+      [res(503, {}, "unavailable"), "youtube_unavailable"],
+      [new Error("socket hang up"), "youtube_unavailable"],
+    ];
+    for (const [reply, code] of rows) {
+      handler = () => reply;
+      expect(((await rejection(driver().streamStatus(AT, "strm1"))) as YouTubeError).code).toBe(code);
     }
   });
 
@@ -994,6 +1051,7 @@ const CALLS: Record<RequestMethod, (g: YouTubePort) => Promise<unknown>> = {
   insertBroadcast: (g) => g.insertBroadcast(AT, { title: "t", description: "d", scheduledStart: new Date("2026-11-03T14:30:00Z"), privacy: "unlisted", madeForKids: false }),
   bind: (g) => g.bind(AT, "bc1", "strm1"),
   broadcastLife: (g) => g.broadcastLife(AT, "bc1"),
+  streamStatus: (g) => g.streamStatus(AT, "strm1"),
   complete: (g) => g.complete(AT, "bc1"),
   deleteBroadcast: (g) => g.deleteBroadcast(AT, "bc1"),
   existingVideos: (g) => g.existingVideos(AT, ["vid1"]),
@@ -1003,13 +1061,13 @@ const CALLS: Record<RequestMethod, (g: YouTubePort) => Promise<unknown>> = {
 describe("secrets stay out of every URL and ride in the Authorization header or a POST body", () => {
   it("every request-making method: no URL holds the access token, refresh token, code, verifier or client secret; Data API calls carry `Authorization: Bearer <at>`", async () => {
     const methods = FAKE_YOUTUBE_METHODS.filter((m): m is RequestMethod => m !== "authorizeUrl");
-    expect(methods.length, "the port's 14 methods other than authorizeUrl").toBe(14);
+    expect(methods.length, "the port's 15 methods other than authorizeUrl").toBe(15);
     expect(Object.keys(CALLS).sort(), "the table covers exactly those").toEqual([...methods].sort());
     const g = driver();
     for (const m of methods) await CALLS[m](g);
 
-    // exchangeCode makes TWO requests (token, then tokeninfo): 14 methods, 15 requests.
-    expect(sent).toHaveLength(15);
+    // exchangeCode makes TWO requests (token, then tokeninfo): 15 methods, 16 requests.
+    expect(sent).toHaveLength(16);
     let checked = 0;
     let bearer = 0;
     let formBodies = 0;
@@ -1037,8 +1095,8 @@ describe("secrets stay out of every URL and ride in the Authorization header or 
       }
       checked++;
     }
-    expect(checked, "anti-vacuity: every captured request was checked").toBe(15);
-    expect([bearer, formBodies], "11 Data API calls + 4 OAuth form calls").toEqual([11, 4]);
+    expect(checked, "anti-vacuity: every captured request was checked").toBe(16);
+    expect([bearer, formBodies], "12 Data API calls + 4 OAuth form calls").toEqual([12, 4]);
   });
 
   it("revoke and tokeninfo send the token in a form POST body, never the query string", async () => {
@@ -1245,11 +1303,11 @@ describe("failures are codes, whatever Google (or the network) said", () => {
       expect([m, b instanceof YouTubeError && b.code]).toEqual([m, "youtube_unavailable"]);
       checked++;
     }
-    expect(checked, "14 methods").toBe(14);
+    expect(checked, "15 methods").toBe(15);
   });
 
   it("a 200 whose body is not JSON is youtube_unavailable / malformedResponse for every method that reads the body", async () => {
-    const readers: RequestMethod[] = ["exchangeCode", "accessToken", "listMyChannels", "liveEnabled", "insertStream", "listStreams", "insertBroadcast", "broadcastLife", "existingVideos"];
+    const readers: RequestMethod[] = ["exchangeCode", "accessToken", "listMyChannels", "liveEnabled", "insertStream", "listStreams", "insertBroadcast", "broadcastLife", "streamStatus", "existingVideos"];
     let checked = 0;
     for (const m of readers) {
       handler = () => res(200, undefined, `{"id": ${AT}`);

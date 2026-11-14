@@ -91,6 +91,19 @@ export const YOUTUBE_REFUSAL_REMEDY: Record<YoutubeRefusalCode, "fix_destination
   youtube_unavailable: "retry",
 };
 
+/** The ONE word the stream panel shows for a live YouTube Connect session (owner direction 2026-11-14): what YouTube itself says of the
+ *  broadcast and its stream. Derived server-side (server/youtube/live-status.ts), carried on the session projection, drawn by the panel.
+ *  `live_receiving`: the broadcast is live and the stream is active and healthy; `not_live`: the broadcast is not live;
+ *  `live_no_video`: the broadcast is live but YouTube is receiving no video (the stream is not active, or its health is noData / bad). */
+export const YOUTUBE_LIVE_WORDS = ["live_receiving", "not_live", "live_no_video"] as const;
+export type YoutubeLiveWord = (typeof YOUTUBE_LIVE_WORDS)[number];
+
+/** What the session projection's `youtubeStatus` can say: a live word, or `pasted_key` - the session streams to a YouTube key somebody
+ *  pasted, which has no API behind it, so there is no status to read (the panel says so). Null: nothing to say (not live, not YouTube,
+ *  or no word read yet). */
+export const YOUTUBE_STATUS_VIEWS = [...YOUTUBE_LIVE_WORDS, "pasted_key"] as const;
+export type YoutubeStatusView = (typeof YOUTUBE_STATUS_VIEWS)[number];
+
 /** The replay link for a broadcast: a YouTube broadcast id is also the id of its video. */
 export const youtubeWatchUrl = (videoId: string): string => `https://www.youtube.com/watch?v=${videoId}`;
 

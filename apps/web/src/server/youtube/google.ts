@@ -16,7 +16,8 @@ import "server-only";
 import { GOOGLE_AUTH_URL, GOOGLE_TOKEN_URL, googleConfigured } from "@/lib/oauth";
 import { YOUTUBE_SCOPE, type YoutubePrivacy } from "@/lib/youtube";
 import {
-  LIST_BUDGET_SPENT, YOUTUBE_CALL_BOUND_MS, YouTubeError, type BroadcastLife, type BroadcastLifeInfo, type StreamListing, type VideoFacts, type YoutubeErrorCode, type YouTubePort,
+  LIST_BUDGET_SPENT, STREAM_HEALTHS, STREAM_STATUSES, YOUTUBE_CALL_BOUND_MS, YouTubeError, type BroadcastLife, type BroadcastLifeInfo, type StreamHealth, type StreamListing,
+  type StreamStatus, type StreamStatusInfo, type VideoFacts, type YoutubeErrorCode, type YouTubePort,
 } from "./port";
 
 const API = "https://www.googleapis.com/youtube/v3";
@@ -200,6 +201,11 @@ const LIFE: Record<string, Exclude<BroadcastLife, "absent">> = {
   complete: "complete", revoked: "revoked",
 };
 
+// liveStreams `status.streamStatus` and `status.healthStatus.status`: the values Google documents (the port's own lists, minus `absent`,
+// which is the port's word for "no such stream", never a wire value).
+const STREAM_STATUS_WIRE: ReadonlySet<string> = new Set(STREAM_STATUSES.filter((s) => s !== "absent"));
+const STREAM_HEALTH_WIRE: ReadonlySet<string> = new Set(STREAM_HEALTHS);
+
 const badTitle = (t: unknown): boolean => typeof t !== "string" || t.trim() === "" || Array.from(t).length > BROADCAST_TITLE_MAX_CHARS || /[<>]/.test(t);
 
 export class GoogleYouTube implements YouTubePort {
@@ -382,6 +388,27 @@ export class GoogleYouTube implements YouTubePort {
       life: LIFE[life]!, actualStartAt: isoDate(snippet?.actualStartTime), actualEndAt: isoDate(snippet?.actualEndTime),
       madeForKids: typeof kids === "boolean" ? kids : null,
     };
+  }
+
+  /** liveStreams.list(part=status, id), …/live/docs/liveStreams/list: READ-ONLY, 1 quota unit (a list call, like `broadcastLife`). `part` is
+   *  `status` ALONE and never `cdn`: the `cdn` part carries `ingestionInfo.streamName`, the stream key, which this call must never fetch.
+   *  `status.streamStatus` (active, created, error, inactive, ready) and `status.healthStatus.status` (good, ok, bad, noData, revoked). No
+   *  item for the id is `absent`. A `streamStatus` Google never documented is refused, as `broadcastLife` refuses an undocumented life:
+   *  the caller reads a refusal as no answer and carries its previous word. A stream that has never carried video may have no
+   *  `healthStatus` at all: that is `health: null` (no health said), not a refusal; a `healthStatus.status` that IS there but is not one of
+   *  the five is refused. */
+  async streamStatus(at: string, streamId: string): Promise<StreamStatusInfo> {
+    const items = parseBody(await api(at, "GET", "liveStreams", { query: { part: "status", id: streamId } })).items;
+    const row = (Array.isArray(items) ? items : []).map(asRecord).find((i) => i?.id === streamId);
+    if (!row) return { status: "absent", health: null };
+    const status = asRecord(row.status);
+    const streamStatus = status?.streamStatus;
+    if (typeof streamStatus !== "string" || !STREAM_STATUS_WIRE.has(streamStatus)) throw new YouTubeError("youtube_unavailable", "unknownStreamStatus");
+    const healthStatus = asRecord(status?.healthStatus);
+    const health = healthStatus?.status;
+    if (health === undefined || health === null) return { status: streamStatus as StreamStatus, health: null };
+    if (typeof health !== "string" || !STREAM_HEALTH_WIRE.has(health)) throw new YouTubeError("youtube_unavailable", "unknownHealthStatus");
+    return { status: streamStatus as StreamStatus, health: health as StreamHealth };
   }
 
   /** liveBroadcasts.transition(complete). `redundantTransition` (403) is YouTube saying it is already there: that resolves. */

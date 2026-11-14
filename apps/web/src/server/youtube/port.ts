@@ -67,8 +67,26 @@ export const isDeadGrantRefusal = (err: unknown): boolean =>
   err instanceof YouTubeError && err.code === "youtube_reconnect_needed" && !isLiveBlockedRefusal(err);
 
 /** A broadcast's place in YouTube's life cycle (liveBroadcasts `status.lifeCycleStatus`), plus `absent` for an id YouTube
- *  does not know (deleted, or never there). */
-export type BroadcastLife = "created" | "ready" | "testing" | "live" | "complete" | "revoked" | "absent";
+ *  does not know (deleted, or never there). A runtime list as well as a type, so a sweep (live-status.test.ts) enumerates the very
+ *  values the port can answer. */
+export const BROADCAST_LIVES = ["created", "ready", "testing", "live", "complete", "revoked", "absent"] as const;
+export type BroadcastLife = (typeof BROADCAST_LIVES)[number];
+
+/** A liveStream's `status.streamStatus` (developers.google.com/youtube/v3/live/docs/liveStreams: active, created, error, inactive,
+ *  ready), plus `absent` for an id YouTube does not know. `active` is the one that says YouTube is receiving video on the stream. */
+export const STREAM_STATUSES = ["created", "ready", "active", "inactive", "error", "absent"] as const;
+export type StreamStatus = (typeof STREAM_STATUSES)[number];
+
+/** A liveStream's `status.healthStatus.status` (same page: good, ok, bad, noData, revoked). */
+export const STREAM_HEALTHS = ["good", "ok", "bad", "noData", "revoked"] as const;
+export type StreamHealth = (typeof STREAM_HEALTHS)[number];
+
+/** What YouTube says of a stream, read with liveStreams.list(part=status): its status, and the health YouTube reports on it. `health`
+ *  is `null` when YouTube gave none (the field is absent for a stream that has never carried video) and for `absent`. */
+export interface StreamStatusInfo {
+  status: StreamStatus;
+  health: StreamHealth | null;
+}
 
 /** What YouTube says about a broadcast: its place in the life cycle, and the instants it ACTUALLY started and ended (liveBroadcasts
  *  `snippet.actualStartTime` — "only available once the broadcast's state is live" — and `snippet.actualEndTime` — "only
@@ -134,6 +152,10 @@ export interface YouTubePort {
   ): Promise<{ broadcastId: string }>;
   bind(at: string, broadcastId: string, streamId: string): Promise<void>;
   broadcastLife(at: string, broadcastId: string): Promise<BroadcastLifeInfo>;
+  /** READ-ONLY (liveStreams.list part=status, 1 quota unit): what YouTube says of the stream a broadcast is bound to - is video arriving
+   *  on it (`status` active) and how healthy (`health`). A stream YouTube does not know is `{ status: "absent", health: null }`. A value
+   *  Google never documented is refused (`youtube_unavailable`), never guessed at. Nothing is changed at YouTube. */
+  streamStatus(at: string, streamId: string): Promise<StreamStatusInfo>;
   /** A broadcast that is already complete resolves. */
   complete(at: string, broadcastId: string): Promise<void>;
   /** A broadcast that is already absent resolves. */
