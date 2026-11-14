@@ -20,13 +20,14 @@ import { getDictionary, t } from "@/lib/i18n";
 import { lookup } from "@/lib/i18n-runtime";
 import { DEFAULT_LOCALE, hasLocale, type Locale } from "@/lib/i18n-constants";
 import { createOrgForUser, getUserOrgs } from "@/lib/auth";
-import { isEditorRole } from "@/lib/types";
+import type { OrgMembership } from "@/lib/types";
 import { CreateStages, type CreateCompetition } from "@/server/api-v1/schemas";
 import { log } from "@/server/logger";
 import { createCompetition } from "@/server/usecases/competitions";
 import { createDivision } from "@/server/usecases/divisions";
 import { registrationDefaultKind } from "@/server/usecases/entrant-shape";
 import { createEntrants } from "@/server/usecases/entrants";
+import { frozenMemberIds } from "@/server/usecases/entitlement-freeze";
 import { createStages } from "@/server/usecases/stages";
 import { createCourt, createVenue, listVenues } from "@/server/usecases/venues";
 import { pickVariant } from "@/lib/preferred-variant";
@@ -193,6 +194,20 @@ async function claimStep<T>(step: ClaimStep, competitionId: string, run: () => P
   }
 }
 
+/** The existing organisation a claim builds into, or null for a new one: the oldest the user OWNS; else the oldest they
+ *  administer on a seat the plan has not frozen (doc 10 §2.4 — the seat requireOrgAuth refuses a write through; owners are
+ *  never frozen). Never one they only view, nor a frozen seat's: the use-cases the claim calls re-check neither the role nor
+ *  the seat, so either would write an event into someone else's organisation past its owners (review-whole I1). */
+async function claimTargetOrg(userId: string): Promise<OrgMembership | null> {
+  const orgs = await getUserOrgs(userId); // oldest first
+  const owned = orgs.find((o) => o.role === "owner");
+  if (owned) return owned;
+  for (const o of orgs) {
+    if (o.role === "admin" && !(await frozenMemberIds(o.id)).has(userId)) return o;
+  }
+  return null;
+}
+
 /**
  * Turn a claimed draft into real structure for `userId` and return where to
  * land: inside the new competition on the division's entrants tab. Uses the
@@ -201,8 +216,9 @@ async function claimStep<T>(step: ClaimStep, competitionId: string, run: () => P
  * In order (start-wizard redesign plan, 2026-11-13):
  *   -. before anything, the first day: one that is not a calendar day or is before the UTC day less one is refused
  *      (400), so a stale or hand-made draft writes nothing — not even the organisation;
- *   0. the organisation (the user's first they may edit, else a new one), then a PRE-FLIGHT of the reads and checks the build can make
- *      before its first write — the language, the sport, the entrant cap, the stage graph parsed as the API parses it.
+ *   0. the organisation (`claimTargetOrg`: the oldest the user owns, else the oldest they administer on an unfrozen seat,
+ *      else a new one), then a PRE-FLIGHT of the reads and checks the build can make before its first write — the
+ *      language, the sport, the entrant cap, the stage graph parsed as the API parses it.
  *      Not pre-flighted: the active-competition quota (createCompetition's own check, which refuses BEFORE its insert,
  *      so a 402 there writes nothing of the event) and the stage kinds' plan features (createStages, after the
  *      competition and division exist). Not one transaction: each use-case opens its own (`withTenant` never nests);
@@ -232,13 +248,11 @@ export async function createFromDraft(
     throw new HttpError(400, "This event's first day has already passed — nothing was set up.", FUNNEL_CLAIM_DATE_PAST);
   }
   const dict = await getDictionary(draft.locale ?? DEFAULT_LOCALE, "ui");
-  // The first of the user's organisations (oldest first) where their role may edit; none such, a new one of their own,
-  // named in the draft's language. Never an organisation they only view: the use-cases below do not re-check the role,
-  // so a viewer's claim would write an event into someone else's organisation (review-whole I1). The claim acts with the
-  // role the user holds there — owner only of the organisation it just created.
-  const editable = (await getUserOrgs(userId)).find((o) => isEditorRole(o.role));
-  const org = editable ?? (await createOrgForUser(userId, t(dict, "funnel.claim.orgName", { name: payload.name })));
-  const auth: AuthCtx = { orgId: org.id, via: "session", userId, role: editable?.role ?? "owner", keyId: null };
+  // The organisation the claim builds into (`claimTargetOrg`); none such, a new one of their own, named in the draft's
+  // language. The claim acts with the role the user holds there — owner of the organisation it just created.
+  const target = await claimTargetOrg(userId);
+  const org = target ?? (await createOrgForUser(userId, t(dict, "funnel.claim.orgName", { name: payload.name })));
+  const auth: AuthCtx = { orgId: org.id, via: "session", userId, role: target?.role ?? "owner", keyId: null };
 
   // 0. Pre-flight.
   const { sport_key, variant_key } = await resolveSport(payload.sport);

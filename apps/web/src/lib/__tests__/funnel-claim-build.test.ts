@@ -38,6 +38,7 @@ import { detectTemplate, type StageDraft } from "@/lib/format-templates";
 import { swissRoundsGuidance } from "@/lib/swiss-rounds";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { log } from "@/server/logger";
+import { frozenMemberIds } from "@/server/usecases/entitlement-freeze";
 import { generateStageFixturesUnpublished } from "@/server/usecases/stages";
 import { archiveVenue, createCourt, createVenue } from "@/server/usecases/venues";
 import { builtinModules } from "@seazn/engine/sports";
@@ -475,9 +476,11 @@ describe.skipIf(!HAS_DB)("the claim builds the chosen format, its entrants and i
   });
 
   // ── Which organisation the claim builds into (review-whole I1) ────────────────────────────────────────────────────────
-  // The first of the claimant's organisations, oldest first, where their role may edit (lib/types.ts EDITOR_ROLES); none
-  // such, a new one of their own. The use-cases do not re-check the role, so a claim into an organisation the claimant
-  // only VIEWS would write an event there behind its owners' backs.
+  // The oldest the claimant owns; else the oldest they administer on a seat the plan has not frozen; else a new one of
+  // their own. The use-cases do not re-check the role or the seat, so a claim into an organisation the claimant only
+  // VIEWS, or through a frozen seat, would write an event there behind its owners' backs.
+  // One sport (the claim helper's Badminton) throughout: the organisation is chosen before the sport is read, and from
+  // the claimant's memberships alone.
   /** Every row a claim can write, counted in one organisation. */
   const writtenIn = async (orgId: string) => {
     const [row] = await sql<{ competitions: number; divisions: number; stages: number; entrants: number; venues: number; courts: number }[]>`
@@ -553,19 +556,59 @@ describe.skipIf(!HAS_DB)("the claim builds the chosen format, its entrants and i
     expect(seen.auths).toEqual([{ orgId: own.id, role: "owner" }]);
   });
 
-  it("an ADMIN of an older organisation who owns a newer one builds into the older: the first editable by age, acting as admin", async () => {
-    // The pair to the viewer: an admin may edit, so the oldest editable organisation is the one they administer — and the
-    // claim acts with the role they hold there, never a hand-typed owner.
+  it("an ADMIN of an older organisation who owns a newer one lands in the one they own, acting as its owner", async () => {
+    // An organisation the claimant owns outranks one they administer, whatever the age: the admin seat is someone else's
+    // to freeze or take back, the owned one is theirs (owner ruling, 2026-11-14).
     expect(isEditorRole("admin"), "premise: an admin can edit").toBe(true);
     const administered = await someoneElsesOrg("administered, older");
     const userId = await seedUser();
     const own = await createOrgForUser(userId, `${RUN} own, newer`);
     await seat(administered, userId, "admin");
+    const [{ older }] = await sql<{ older: boolean }[]>`
+      select (select created_at from organizations where id = ${administered}) < (select created_at from organizations where id = ${own.id}) as older`;
+    expect(older, "premise: the administered organisation is the older, so it comes first by age").toBe(true);
+    expect((await frozenMemberIds(administered)).has(userId), "premise: the admin seat is live, so only ownership can outrank it").toBe(false);
     seen.auths.length = 0;
-    const c = await claim({ entrants: 4, format: "league" }, { userId });
-    expect(c.orgId, "the older, editable organisation").toBe(administered);
-    expect(seen.auths, "as the admin they are there").toEqual([{ orgId: administered, role: "admin" }]);
-    expect(await writtenIn(own.id), "nothing in their own, newer organisation").toEqual(NOTHING);
+    const c = await claim({ entrants: 4, format: "league", courts: 2 }, { userId });
+    expect(c.orgId, "the organisation they own").toBe(own.id);
+    expect(seen.auths, "as its owner").toEqual([{ orgId: own.id, role: "owner" }]);
+    expect(await writtenIn(administered), "nothing in the one they administer").toEqual(NOTHING);
+  });
+
+  it("an ADMIN who owns none builds into the one they administer — unless the plan froze their seat: then a new one, nothing in the frozen", async () => {
+    // A seat over the plan's members.max is read-only (doc 10 §2.4; requireOrgAuth refuses its writes), owners exempt. The
+    // use-cases below the claim do not re-check the seat, so a claim through a frozen one would write past the freeze.
+    const cases = [
+      { label: "within the seat limit", frozen: false },
+      { label: "over it", frozen: true },
+    ];
+    let checked = 0;
+    for (const k of cases) {
+      const administered = await someoneElsesOrg(`administered, ${k.label}`);
+      const userId = await seedUser();
+      await seat(administered, userId, "admin");
+      if (k.frozen) {
+        const limit = await getLimit(administered, "members.max");
+        expect(limit, "premise: the free plan caps its seats").not.toBeNull();
+        // Members seated after the admin, until the organisation holds more than its plan allows (the owner, the admin and
+        // `limit` more): the freeze keeps the most recently seated, so the admin, seated first, is past the line.
+        for (let i = 0; i < limit!; i++) await seat(administered, await seedUser(), "viewer");
+      }
+      expect((await frozenMemberIds(administered)).has(userId), `${k.label}: premise — the freeze's own reading of the seat`).toBe(k.frozen);
+      seen.auths.length = 0;
+      const c = await claim({ entrants: 4, format: "league", courts: 2 }, { userId });
+      if (k.frozen) {
+        expect(c.orgId, `${k.label}: never the frozen seat's organisation`).not.toBe(administered);
+        expect(await writtenIn(administered), `${k.label}: zero rows in it`).toEqual(NOTHING);
+        expect(await roleIn(c.orgId, userId), `${k.label}: a new organisation the claimant owns`).toBe("owner");
+        expect(seen.auths, `${k.label}: acting as its owner`).toEqual([{ orgId: c.orgId, role: "owner" }]);
+      } else {
+        expect(c.orgId, `${k.label}: the administered organisation`).toBe(administered);
+        expect(seen.auths, `${k.label}: as the admin they are there, never a hand-typed owner`).toEqual([{ orgId: administered, role: "admin" }]);
+      }
+      checked++;
+    }
+    expect(checked, "anti-vacuity: both seats driven").toBe(cases.length);
   });
 
   it("a date sets ends_on to the same day; no date leaves both empty", async () => {

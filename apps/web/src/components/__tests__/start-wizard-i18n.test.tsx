@@ -216,10 +216,14 @@ describe("the wizard, B1 → Sent, in every locale", () => {
       expect(steppers(island)).toHaveLength(3);
       expect(island.text()).toContain(w("start.wizard.planningNote"));
       (propsOf(steppers(island)[1]!).onValue as (n: number) => void)(3);
+      // Off the default 4, so the summaries and the body below can only show what this stepper was set to.
+      const hoursStepper = steppers(island).find((e) => propsOf(e).labelId === "start-hours");
+      expect(hoursStepper, "the hours stepper").toBeTruthy();
+      (propsOf(hoursStepper!).onValue as (n: number) => void)(6);
       pick(island, "knockout");
       expect(cardsOf(island).filter((c) => propsOf(c).checked).map(slugOf)).toEqual(["knockout"]);
-      // The badge is T1's Best fit of the cards on screen (3 courts now), not the organiser's own pick.
-      const at64c3 = rankFormats({ entrants: 64, courts: 3, hours: 4, matchMinutes: matchMinutes("tabletennis") });
+      // The badge is T1's Best fit of the cards on screen (3 courts, 6 hours now), not the organiser's own pick.
+      const at64c3 = rankFormats({ entrants: 64, courts: 3, hours: 6, matchMinutes: matchMinutes("tabletennis") });
       const best3 = bestFitSlug(at64c3);
       expect(best3, "premise: the badge and the pick differ here").not.toBe("knockout");
       expect(cardsOf(island).filter((c) => propsOf(c).best).map(slugOf)).toEqual(best3 === null ? [] : [best3]);
@@ -246,7 +250,7 @@ describe("the wizard, B1 → Sent, in every locale", () => {
       expect(step(island)).toBe("email");
       expect(island.text()).toContain(stepLine(4, "email"));
       // Planning was opened, so the claim will build its courts: the summary says so, as the fold words it (review-whole m3).
-      const planningRow = [w("start.wizard.planning"), `${countWord("start.wizard.courtsCount", 3)} · ${countWord("start.wizard.hoursCount", 4)}`];
+      const planningRow = [w("start.wizard.planning"), `${countWord("start.wizard.courtsCount", 3)} · ${countWord("start.wizard.hoursCount", 6)}`];
       expect(summaryRows(island).filter(([k]) => k === w("start.wizard.planning")), `${locale}: B4 shows the courts`).toEqual([planningRow]);
       change(input(island, "email"), "sam@harbourvale");
       await submit(island);
@@ -271,7 +275,7 @@ describe("the wizard, B1 → Sent, in every locale", () => {
         start_date: "2026-11-14",
         format: "knockout",
         courts: 3,
-        hours: 4,
+        hours: 6,
       });
 
       // Sent (A4) — the dictionary's words, never the server's English message.
