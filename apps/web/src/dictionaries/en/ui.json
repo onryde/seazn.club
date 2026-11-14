@@ -8611,5 +8611,11 @@
   "start.next.action.rename": "Rename organisation",
   "start.next.action.players": "Add players",
   "start.next.action.generate": "Generate fixtures",
-  "start.next.action.schedule": "Schedule matches"
+  "start.next.action.schedule": "Schedule matches",
+  "start.next.teams.title": "Add your teams",
+  "start.next.teams.progress": "{count} of {target} teams",
+  "start.next.pairs.title": "Add your pairs",
+  "start.next.pairs.progress": "{count} of {target} pairs",
+  "start.next.action.teams": "Add teams",
+  "start.next.action.pairs": "Add pairs"
 }

@@ -105,6 +105,8 @@ vi.mock("@/server/usecases/stream-sessions", () => ({
 import DivisionPage from "../page";
 import Link from "@/components/ui/console-link";
 import { GettingStartedPanel } from "@/components/v2/getting-started-panel";
+import { builtinModules } from "@seazn/engine/sports";
+import { effectiveEntrantModel } from "@seazn/engine/sport";
 
 /** Depth-first search of a returned server-component tree, collecting EVERY
  *  element of the given type — copied from seed-proposal-stage-pairing.test.tsx
@@ -214,6 +216,23 @@ describe("division page mounts the getting-started panel for an organiser who ca
     expect(props.courts, "two live courts on the live venue, one on the small one; none from the archived venue").toBe(3);
     expect(props.locale).toBe("en");
     expect(props.auth).toBe(PAGE.auth);
+    // Step 3's noun (review m2): the division's default entrant kind, as the engine declares it for its sport.
+    const mod = builtinModules.find((m) => m.key === "generic");
+    expect(mod, "premise: the engine registers the generic module").toBeTruthy();
+    expect(props.entrantKind).toBe(effectiveEntrantModel(mod!.entrantModel ?? null, {}).defaultKind);
+  });
+
+  it("a division whose entries are pairs: the panel is told so (the division's own kinds, not the sport's default)", async () => {
+    const { getDivision } = await import("@/server/usecases/divisions");
+    const base = await (getDivision as unknown as () => Promise<Record<string, unknown>>)();
+    const config = { entrants: { kinds: ["pair", "team"], defaultKind: "pair" } };
+    vi.mocked(getDivision).mockResolvedValueOnce({ ...base, config } as never);
+    const mod = builtinModules.find((m) => m.key === "generic");
+    const want = effectiveEntrantModel(mod!.entrantModel ?? null, config).defaultKind;
+    expect(want, "premise: the division's kinds move the default off the sport's").not.toBe(effectiveEntrantModel(mod!.entrantModel ?? null, {}).defaultKind);
+    const panels = findAll(await renderPage(), GettingStartedPanel);
+    expect(panels).toHaveLength(1);
+    expect((panels[0]!.props as Record<string, unknown>).entrantKind).toBe(want);
   });
 
   it("a viewer (no edit right): no panel", async () => {

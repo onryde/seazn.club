@@ -883,6 +883,7 @@ export default async function DivisionPage({
             courts={venues
               .filter((v) => v.archived_at === null)
               .reduce((n, v) => n + v.courts.filter((c) => c.archived_at === null).length, 0)}
+            entrantKind={entrantModel.defaultKind}
             dict={dict}
             locale={locale}
           />

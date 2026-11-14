@@ -13,8 +13,10 @@ import { isValidElement, type ReactElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GettingStarted } from "@/server/usecases/getting-started";
 
-const read = vi.hoisted(() => ({ gettingStarted: vi.fn() }));
+const read = vi.hoisted(() => ({ funnelGettingStarted: vi.fn() }));
 vi.mock("@/server/usecases/getting-started", () => read);
+const logged = vi.hoisted(() => ({ log: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } }));
+vi.mock("@/server/logger", () => logged);
 
 import { GettingStartedPanel, type GettingStartedPanelProps } from "../getting-started-panel";
 import { GettingStartedStepper, type StepperItem } from "@/components/getting-started-stepper";
@@ -44,6 +46,7 @@ const props = (locale: Locale, patch: Partial<GettingStartedPanelProps> = {}): G
   compSlug: "open",
   divSlug: "singles",
   courts: 0,
+  entrantKind: "individual",
   dict: dictOf(locale),
   locale,
   ...patch,
@@ -72,25 +75,68 @@ const textOf = (node: ReactNode): string =>
         ? String(node)
         : "";
 
-async function render(locale: Locale, p: GettingStarted, patch: Partial<GettingStartedPanelProps> = {}) {
-  read.gettingStarted.mockResolvedValue(p);
+async function render(locale: Locale, p: GettingStarted | null, patch: Partial<GettingStartedPanelProps> = {}) {
+  read.funnelGettingStarted.mockResolvedValue(p);
   const tree = (await GettingStartedPanel(props(locale, patch))) as ReactNode;
   const steppers = findAll(tree, (el) => el.type === GettingStartedStepper);
   return { tree, steppers, items: steppers.length === 1 ? ((steppers[0]!.props as { items: StepperItem[] }).items) : [] };
 }
 
-beforeEach(() => read.gettingStarted.mockReset());
+beforeEach(() => {
+  read.funnelGettingStarted.mockReset();
+  logged.log.error.mockReset();
+});
 
 describe("hidden: a competition no /start draft built, or one with a match scheduled", () => {
   it("renders nothing, and reads the caller's own competition", async () => {
     let checked = 0;
-    for (const p of [progress({ target: null }), progress({ fixturesGenerated: true, fixtureScheduled: true, count: 8, orgRenamed: true })]) {
+    // null: the read stopped at the draft (no /start draft built it, review I2); no target; a match on the schedule.
+    for (const p of [null, progress({ target: null }), progress({ fixturesGenerated: true, fixtureScheduled: true, count: 8, orgRenamed: true })]) {
       const { tree } = await render("en", p);
       expect(tree, JSON.stringify(p)).toBeNull();
-      expect(read.gettingStarted).toHaveBeenLastCalledWith(AUTH, "comp-1");
+      expect(read.funnelGettingStarted).toHaveBeenLastCalledWith(AUTH, "comp-1");
       checked++;
     }
-    expect(checked).toBe(2);
+    expect(checked).toBe(3);
+    expect(logged.log.error, "nothing failed").not.toHaveBeenCalled();
+  });
+
+  it("a read that fails renders nothing and is logged, so the division page around it never 500s (review I2)", async () => {
+    const boom = new Error("connection reset");
+    read.funnelGettingStarted.mockRejectedValue(boom);
+    const tree = await GettingStartedPanel(props("en"));
+    expect(tree).toBeNull();
+    expect(logged.log.error).toHaveBeenCalledTimes(1);
+    expect(logged.log.error.mock.calls[0]![0]).toMatchObject({ event: "getting_started_failed", competitionId: "comp-1", err: boom });
+  });
+});
+
+describe("step 3 names what the division takes: players, teams or pairs (review m2)", () => {
+  // The kind is the division's default entrant kind (the engine's entrant model, as the page computes it); the words are
+  // the dictionary's, one family per kind.
+  const KINDS = [
+    ["individual", "start.next.players.title", "start.next.players.progress", "start.next.action.players"],
+    ["team", "start.next.teams.title", "start.next.teams.progress", "start.next.action.teams"],
+    ["pair", "start.next.pairs.title", "start.next.pairs.progress", "start.next.action.pairs"],
+  ] as const;
+
+  it("every kind in every locale: the title, the count and the way on", async () => {
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const dict = dictOf(locale);
+      for (const [kind, title, count, action] of KINDS) {
+        const { items } = await render(locale, progress({ orgRenamed: true, count: 3 }), { entrantKind: kind });
+        const step = items.find((i) => i.key === "players")!;
+        const label = `${locale} ${kind}`;
+        expect(step.title, label).toBe(w(dict, title));
+        expect(step.hint, label).toBe(w(dict, count, { count: 3, target: 8 }));
+        expect(step.action, label).toEqual({ href: HREF.players, label: w(dict, action) });
+        checked++;
+      }
+      // The three families are three different sentences in this locale (a copy-paste across kinds would pass the above).
+      expect(new Set(KINDS.map(([, , count]) => w(dict, count, { count: 3, target: 8 }))).size, locale).toBe(3);
+    }
+    expect(checked).toBe(LOCALES.length * KINDS.length);
   });
 });
 
