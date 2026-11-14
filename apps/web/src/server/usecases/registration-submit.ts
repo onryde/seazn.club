@@ -441,7 +441,8 @@ function sameName(a: string | null | undefined, b: string | null | undefined): b
 }
 
 /** The consent one typed-in roster row is written with at submit. The registrant's own row (or a solo sign-up's one row) is consented
- *  here by the registrant, with their guardian when they are a minor themselves (`submitRegistrationGroup`'s guardian gate). Any other
+ *  here by the registrant, with their guardian named on it only when that row is a minor (`submitRegistrationGroup`'s guardian gate
+ *  demanded one; re-review m-1: an adult's own row never carries one). Any other
  *  row waits for that player to claim it (`'pending'`, design §2 ruling 4), unless `guardianFor` names the adult registrant who
  *  ticked `guardian_for_minors` (`guardianForMinorsName`) and the row's dob is under 18 today (`isMinor`, the gate's own threshold):
  *  then the registrant consents for that child, as their guardian, in that name (Addendum 2b). A row with no dob is never taken for a
@@ -454,7 +455,9 @@ function rowConsentAtSubmit(
   guardianFor: string | null,
   now: Date,
 ): { status: "granted" | "guardian" | "pending"; guardianName: string | null } {
-  if (isSelf) return { status: "granted", guardianName: contact.guardian_name ?? null };
+  // The contact's guardian is written only onto a self row that IS a minor (the join path's `minor ? guardian_name : null`): the hub
+  // and the CSV read guardian_name, and a name left in the contact (an adult who once typed a minor dob, an API caller) is no one's.
+  if (isSelf) return { status: "granted", guardianName: player.dob && isMinor(player.dob, now) ? (contact.guardian_name ?? null) : null };
   if (guardianFor !== null && player.dob && isMinor(player.dob, now)) return { status: "guardian", guardianName: guardianFor };
   return { status: "pending", guardianName: null };
 }

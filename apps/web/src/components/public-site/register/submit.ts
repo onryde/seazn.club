@@ -7,7 +7,7 @@
 // by-inspection wrappers around these two functions.
 import { toGroupEntry } from "./cart";
 import { toGroupPlayers } from "./roster";
-import { guardianForMinorsOffered } from "./validation";
+import { guardianForMinorsOffered, guardianRequired } from "./validation";
 import type { CartState, ConsentState, ContactState } from "./types";
 import { routes } from "@/lib/routes";
 import { TURNSTILE_ERROR_CODE } from "@/lib/turnstile";
@@ -64,7 +64,9 @@ export function buildSubmitBody(
       email: contact.email.trim(),
       dob: contact.dob,
       gender: contact.gender,
-      guardian_name: contact.guardian_name,
+      // Only while the consent step shows the guardian block (a self-linked minor): a name left in the contact after it hid is no
+      // one's guardian, and the hub and the CSV read the self row's guardian_name (guardian re-review m-1; the server gates it too).
+      guardian_name: guardianRequired(cart, contact, now) ? contact.guardian_name : null,
       guardian_consent: contact.guardian_consent,
     },
     privacy_consent: consent.privacy_consent,

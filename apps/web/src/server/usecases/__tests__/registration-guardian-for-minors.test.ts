@@ -30,7 +30,8 @@ import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { LEGAL_VERSION } from "@/lib/legal";
 import { createDivision } from "../divisions";
-import { inviteUnclaimedMembers, listRegistrations, putRegistrationSettings } from "../registrations";
+import { exportRegistrationsCsv, inviteUnclaimedMembers, listRegistrations, putRegistrationSettings } from "../registrations";
+import { fetchRegistrantDetails } from "@/app/o/[orgSlug]/c/[compSlug]/registration/data";
 import { claimPerson } from "../person-claims";
 import {
   joinTeamEntry,
@@ -443,5 +444,82 @@ describe.skipIf(!HAS_DB)("fix round 1 (review I-1, m-4): only an adult registran
       },
     );
     expect(await statuses(res.group_id)).toEqual([["Vic Minor", "pending", null]]);
+  });
+});
+
+// Re-review of 35c1294940. m-2: the self-linked row's OWN dob is one of the dates that make a registrant a minor, isolated here (a
+// self row named differently from the contact, with no contact dob, so neither the contact-dob nor the name-match source covers it).
+// m-1: the hub and the CSV now READ guardian_name, so the submit writes the contact's guardian name onto the self row only when that
+// row is a minor — the join path's rule (`minor ? guardian_name : null`) — never a leftover one under an adult's own row.
+describe.skipIf(!HAS_DB)("re-review: the self row's own dob, and the self row's guardian name (DB)", () => {
+  async function selfCart(r: Rig, over: { selfDob: string; guardianName: string }) {
+    return submitRegistrationGroup(
+      { ...r.ctx, sessionUserId: null },
+      {
+        // No contact dob: the self row's own dob is the only date the cart holds for the registrant.
+        contact: { name: "Kai Captain", email: `${RUN}-${randomUUID().slice(0, 6)}@x.test`, guardian_name: over.guardianName, guardian_consent: true },
+        privacy_consent: true,
+        guardian_for_minors: true,
+        entries: [
+          {
+            division_id: r.teamId,
+            entrant_kind: "team",
+            team_name: `Self ${randomUUID().slice(0, 4)}`,
+            registering_self: true,
+            self_player_index: 0,
+            // "Kai", not "Kai Captain": the name-match source does not see this row as the contact's.
+            players: [{ full_name: "Kai", dob: over.selfDob }, { full_name: "Lou Minor", dob: CHILD }],
+            answers: {},
+          },
+        ],
+      },
+    );
+  }
+
+  /** What the organiser reads for each player of a cart: the hub detail's guardian name and the CSV's `player_guardian_name` cell. */
+  async function organiserView(r: Rig, groupId: string) {
+    const regs = await sql<{ id: string; group_id: string }[]>`select id, group_id from registrations where group_id = ${groupId}`;
+    const details = await fetchRegistrantDetails(r.owner, regs);
+    const hub = new Map(regs.flatMap((reg) => (details.rosterByRegistration.get(reg.id) ?? []).map((p) => [p.full_name, p.guardian_name ?? null] as const)));
+    const csv = await exportRegistrationsCsv(r.owner, { competitionId: r.competitionId });
+    const [head, ...lines] = csv.trimEnd().split("\n");
+    const cols = head!.split(",");
+    const regIds = new Set(regs.map((reg) => reg.id));
+    const cells = new Map(
+      lines
+        .map((l) => l.split(","))
+        .filter((c) => regIds.has(c[cols.indexOf("registration_id")]!))
+        .map((c) => [c[cols.indexOf("player_name")]!, c[cols.indexOf("player_guardian_name")]!] as const),
+    );
+    return { hub, cells };
+  }
+
+  it("m-2: a self-linked 16-year-old (no contact dob, a name unlike the contact's) ticks it: the teammate stays pending", async () => {
+    const r = await competitionRig();
+    const res = await selfCart(r, { selfDob: TEEN, guardianName: "Mum Captain" });
+    const rows = await rowsByName(res.group_id);
+    expect(rows.get("Lou Minor"), "a 16-year-old is nobody's guardian").toMatchObject({ consent_status: "pending", guardian_name: null });
+    // The self row: consented with the guardian the gate demanded, and the organiser sees who.
+    expect(rows.get("Kai")).toMatchObject({ consent_status: "granted", guardian_name: "Mum Captain" });
+    const { hub, cells } = await organiserView(r, res.group_id);
+    expect(hub.get("Kai")).toBe("Mum Captain");
+    expect(cells.get("Kai")).toBe("Mum Captain");
+  });
+
+  it("m-1: an adult self row never carries the guardian name left in the contact; the organiser sees none, the child still covered", async () => {
+    const r = await competitionRig();
+    const res = await selfCart(r, { selfDob: ADULT, guardianName: "Leftover Guardian" });
+    const rows = await rowsByName(res.group_id);
+    expect(rows.get("Kai"), "an adult's own row has no guardian").toMatchObject({ consent_status: "granted", guardian_name: null });
+    expect(rows.get("Lou Minor"), "the adult's tick still covers the child").toMatchObject({ consent_status: "guardian", guardian_name: "Kai Captain" });
+    const { hub, cells } = await organiserView(r, res.group_id);
+    let checked = 0;
+    for (const [name, guardian] of [["Kai", null], ["Lou Minor", "Kai Captain"]] as const) {
+      expect(hub.get(name), `hub: ${name}`).toBe(guardian);
+      expect(cells.get(name), `csv: ${name}`).toBe(guardian ?? "");
+      checked++;
+    }
+    expect(checked).toBe(2);
+    expect(hub.size, "premise: the hub read both rows").toBe(2);
   });
 });

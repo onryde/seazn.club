@@ -11,6 +11,24 @@ import { describe, expect, it } from "vitest";
 import { buildSubmitBody, classifySubmitFailure, lichessRefusalReason, resolvePostSubmitNavigation } from "../submit";
 import { EMPTY_CART, EMPTY_CONSENT, EMPTY_CONTACT, type CartState, type ContactState } from "../types";
 
+/** One individual entry the registrant plays in themselves (self row 0, no dob of its own: the contact's applies). */
+const selfCart: CartState = {
+  entries: [
+    {
+      id: "e1",
+      division_id: "d1",
+      entrant_kind: "individual",
+      team_name: null,
+      partner_name: null,
+      free_agent: false,
+      players: [{ full_name: "Kid", dob: null, gender: null, email: "", squad_number: "", is_captain: false }],
+      answers: {},
+      registering_self: true,
+      self_player_index: 0,
+    },
+  ],
+};
+
 describe("buildSubmitBody", () => {
   it("maps contact/consent/cart onto PublicRegisterGroupRequest's wire shape, trimming name/email", () => {
     const contact: ContactState = {
@@ -67,11 +85,26 @@ describe("buildSubmitBody", () => {
   });
 
   it("carries guardian_name/guardian_consent through under contact, not as a sibling field", () => {
-    const contact: ContactState = { ...EMPTY_CONTACT, guardian_name: "Pat Guardian", guardian_consent: true };
-    const body = buildSubmitBody(contact, EMPTY_CONSENT, EMPTY_CART, "");
+    // A self-registering 10-year-old: the guardian block is on the consent step, so its name is sent.
+    const contact: ContactState = { ...EMPTY_CONTACT, name: "Kid", dob: "2016-05-01", guardian_name: "Pat Guardian", guardian_consent: true };
+    const body = buildSubmitBody(contact, EMPTY_CONSENT, selfCart, "");
     expect(body.contact.guardian_name).toBe("Pat Guardian");
     expect(body.contact.guardian_consent).toBe(true);
     expect(body).not.toHaveProperty("guardian_name");
+  });
+
+  // Guardian re-review m-1: the hub and the CSV now read the self row's guardian_name, so a name left in the contact after the
+  // guardian block hid (the dob corrected to an adult's, or no self-linked entry at all) is not sent: nobody's guardian.
+  it("sends no guardian_name when the consent step shows no guardian block (an adult, or nobody self-linked)", () => {
+    let checked = 0;
+    for (const [name, contact, cart] of [
+      ["an adult self-registrant", { ...EMPTY_CONTACT, name: "Kid", dob: "1990-01-01", guardian_name: "Leftover", guardian_consent: true }, selfCart],
+      ["a minor dob but nobody self-linked", { ...EMPTY_CONTACT, name: "Kid", dob: "2016-05-01", guardian_name: "Leftover", guardian_consent: true }, EMPTY_CART],
+    ] as const) {
+      expect(buildSubmitBody(contact, EMPTY_CONSENT, cart, "").contact.guardian_name, name).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 
   it("carries the honeypot field through untouched", () => {
