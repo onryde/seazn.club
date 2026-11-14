@@ -1673,6 +1673,9 @@ test.describe("online chess — registration (I5)", () => {
     await expect(back.getByTestId("register-lichess-linked")).toHaveText(fill("settings.account.lichess.linkedAs", { username: lichessId }));
     await expect(back.getByTestId("register-lichess-start")).toHaveCount(0);
     await expect(back.getByTestId("register-lichess-flash")).toHaveCount(0);
+    // Walk-fix F7: done says done - its own title, and none of the "link now" prompt.
+    await expect(back.locator("#register-lichess-title")).toHaveText(uiEn["register.lichess.linked.title"]!);
+    await expect(back, "no Required chip").not.toContainText(uiEn["register.lichess.required"]!);
     expect(await noSidewaysScroll(p)).toBe(3);
     await shoot(p, "register-lichess-linked");
     await ctx.close();

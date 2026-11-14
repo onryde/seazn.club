@@ -83,14 +83,21 @@ export function RegisterLichessCard({
     >
       <div className="flex items-center justify-between gap-2">
         <h3 id="register-lichess-title" className="m-0 min-w-0 text-[17px] font-semibold text-[#2e1065]">
-          {t(reconnect ? "register.lichess.reconnect.title" : "register.lichess.title")}
+          {t(done ? "register.lichess.linked.title" : reconnect ? "register.lichess.reconnect.title" : "register.lichess.title")}
         </h3>
-        <span className="shrink-0 rounded-full bg-[#2e1065] px-2.5 py-0.5 text-xs font-semibold text-white">
-          {t("register.lichess.required")}
-        </span>
+        {/* Walk-fix F7: "Required" is a thing still owed - a done card does not wear it. */}
+        {!done && (
+          <span className="shrink-0 rounded-full bg-[#2e1065] px-2.5 py-0.5 text-xs font-semibold text-white">
+            {t("register.lichess.required")}
+          </span>
+        )}
       </div>
       <p className="m-0 text-sm leading-[1.45] text-[#2e1065] [overflow-wrap:anywhere]">
-        {plural(reconnect ? "register.lichess.reconnect.lead" : "register.lichess.lead", divisions.length, { divisions: names })}
+        {plural(
+          done ? "register.lichess.linked.lead" : reconnect ? "register.lichess.reconnect.lead" : "register.lichess.lead",
+          divisions.length,
+          { divisions: names },
+        )}
       </p>
       {done ? (
         <div
