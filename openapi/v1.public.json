@@ -56639,6 +56639,11 @@
                                 "type": "null"
                               }
                             ]
+                          },
+                          "reminders_in_window": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
                           }
                         },
                         "required": [
@@ -56680,7 +56685,8 @@
                           "assigned_team_name",
                           "player_gender",
                           "division_started",
-                          "last_reminded_at"
+                          "last_reminded_at",
+                          "reminders_in_window"
                         ],
                         "additionalProperties": false
                       }
@@ -56733,7 +56739,8 @@
                       "assigned_team_name": "example",
                       "player_gender": "example",
                       "division_started": true,
-                      "last_reminded_at": "example"
+                      "last_reminded_at": "example",
+                      "reminders_in_window": 0
                     }
                   ],
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
@@ -57534,6 +57541,11 @@
                                 "type": "null"
                               }
                             ]
+                          },
+                          "reminders_in_window": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
                           }
                         },
                         "required": [
@@ -57575,7 +57587,8 @@
                           "assigned_team_name",
                           "player_gender",
                           "division_started",
-                          "last_reminded_at"
+                          "last_reminded_at",
+                          "reminders_in_window"
                         ],
                         "additionalProperties": false
                       }
@@ -57628,7 +57641,8 @@
                       "assigned_team_name": "example",
                       "player_gender": "example",
                       "division_started": true,
-                      "last_reminded_at": "example"
+                      "last_reminded_at": "example",
+                      "reminders_in_window": 0
                     }
                   ],
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"

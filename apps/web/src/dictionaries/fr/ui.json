@@ -3194,6 +3194,7 @@
   "reg.action.waiveTitle": "Confirmer sans paiement (frais dispensés, enregistré)",
   "reg.action.remind": "Envoyer un rappel de paiement",
   "reg.action.remindTitle": "Envoyer par e-mail un rappel de paiement à l'inscrit",
+  "reg.action.remindLimitReached": "Limite de rappels atteinte",
   "reg.action.refund": "Rembourser",
   "reg.action.refundTitle": "Rembourser le montant restant — l'inscription conserve sa place",
   "reg.action.retryRefund": "Réessayer le remboursement",

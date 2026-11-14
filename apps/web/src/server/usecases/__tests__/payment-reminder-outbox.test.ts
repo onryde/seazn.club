@@ -64,7 +64,9 @@ import type { Locale } from "@/lib/i18n-constants";
 import { HttpError } from "@/lib/errors";
 import { money } from "@/lib/email-templates/shared";
 import { generateRefCode } from "@/lib/ref-code";
+import { REMINDER_CAP_PER_DAY } from "@/lib/registration-reminder";
 import {
+  listRegistrations,
   promoteWaitlistedRow,
   putRegistrationSettings,
   sendPaymentReminder,
@@ -557,6 +559,33 @@ describe.skipIf(!HAS_DB)("the organiser's reminder is capped per entry, and quot
     await seedAudit(w, young.registration.id, 4, 30);
     await seedAudit(w, young.registration.id, 1, 24 * 60 - 1);
     expect((await refusal(sendPaymentReminder(w.owner, young.registration.id, ORIGIN))).status).toBe(429);
+  });
+
+  // Walk-fix F13: the hub disables the button at the cap, off the row's `reminders_in_window`. That count must be the cap's own, or the
+  // button would be disabled for a press the server accepts (or offered for one it refuses). Expected values come from the cap rule
+  // (REMINDER_CAP_PER_DAY presses in a rolling 24 h), and each case is checked against the usecase itself, both ways.
+  it("the hub row's reminders_in_window is the cap's own count: empty 0, at the cap it refuses, one aged past 24 h is not counted (DB)", async () => {
+    const w = await offlineWorld();
+    const countOf = async (regId: string) => (await listRegistrations(w.owner, w.division.id, null)).find((r) => r.id === regId)!.reminders_in_window;
+
+    const fresh = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("capwin0") });
+    expect(await countOf(fresh.registration.id), "empty case: never reminded").toBe(0);
+
+    const at = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("capwin5") });
+    await seedAudit(w, at.registration.id, REMINDER_CAP_PER_DAY - 1, 30);
+    await seedAudit(w, at.registration.id, 1, 24 * 60 - 1);
+    expect(await countOf(at.registration.id), "24 h - 1 min is inside the window").toBe(REMINDER_CAP_PER_DAY);
+    expect((await refusal(sendPaymentReminder(w.owner, at.registration.id, ORIGIN))).status, "and the cap refuses it").toBe(429);
+
+    const aged = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("capwin4") });
+    await seedAudit(w, aged.registration.id, REMINDER_CAP_PER_DAY - 1, 30);
+    await seedAudit(w, aged.registration.id, 1, 24 * 60 + 1);
+    // Noise the count must refuse: another type naming the entry, and another entry's presses.
+    await seedAudit(w, aged.registration.id, 3, 10, "registration.waitlisted");
+    expect(await countOf(aged.registration.id), "24 h + 1 min is outside; other types never count").toBe(REMINDER_CAP_PER_DAY - 1);
+    expect(await sendPaymentReminder(w.owner, aged.registration.id, ORIGIN), "and the cap sends it").toEqual({ sent: true });
+    expect(await countOf(aged.registration.id), "the press it just made counts").toBe(REMINDER_CAP_PER_DAY);
+    expect(await countOf(fresh.registration.id), "another entry's presses never leak into this one").toBe(0);
   });
 
   it("the sweep's mails, other audit types and another entry's presses do not count", async () => {

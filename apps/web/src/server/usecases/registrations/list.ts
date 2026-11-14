@@ -10,6 +10,7 @@ import { omit } from "@/lib/omit";
 import type { Tx, RegistrationSettingsRow, RegistrationWithGroupRow, AnySql } from "./types";
 import { regGroupCols } from "./lookups";
 import { waitlistPositionSql } from "./waitlist";
+import { remindersInWindowSql } from "./reminder-window";
 
 // ---------------------------------------------------------------------------
 // Organiser: list / confirm / waitlist / withdraw / refund / export
@@ -206,6 +207,9 @@ export interface RegistrationListRow extends Omit<RegistrationWithGroupRow, "acc
   /** When the organiser last pressed "Send payment reminder" for THIS entry: the newest `registration.payment_reminded` audit row naming
    *  it, null if never. The sweep's own reminders are not audit rows and do not count. */
   last_reminded_at: Date | null;
+  /** The organiser's presses for THIS entry inside the cap's window (reminder-window.ts, the cap's own count): at
+   *  REMINDER_CAP_PER_DAY the hub disables the button, since the press would be refused (walk-fix F13). */
+  reminders_in_window: number;
 }
 
 /** Raw wire shape — `RegistrationListRow` plus the hash the query still
@@ -346,6 +350,7 @@ export async function listRegistrations(
           where ev.competition_id = c.id
             and ev.type = 'registration.payment_reminded'
             and ev.payload->>'registration_id' = r.id::text) as last_reminded_at,
+        ${remindersInWindowSql(tx, tx`c.id`, tx`r.id::text`)} as reminders_in_window,
         ${waitlistPositionSql(tx, "r")} as waitlist_position
       from registrations r
       join registration_groups g on g.id = r.group_id

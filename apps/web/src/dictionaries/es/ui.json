@@ -3194,6 +3194,7 @@
   "reg.action.waiveTitle": "Confirmar sin pago (cuota eximida, registrada)",
   "reg.action.remind": "Enviar recordatorio de pago",
   "reg.action.remindTitle": "Envía por correo un recordatorio de pago al inscrito",
+  "reg.action.remindLimitReached": "Límite de recordatorios alcanzado",
   "reg.action.refund": "Reembolsar",
   "reg.action.refundTitle": "Reembolsa el importe restante: la inscripción conserva su plaza",
   "reg.action.retryRefund": "Reintentar reembolso",

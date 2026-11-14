@@ -18,6 +18,7 @@ import { issuePayLink, recordPayToken } from "./pay-token";
 import { stripeRefund, queueRefundReceipt, recordRefundFailure, registrationRefundKey } from "./refunds";
 import { withdrawCore } from "./withdraw";
 import { queueRegistrationApprovedMails, queueRegistrationPaidMail } from "./lifecycle-mail";
+import { remindersInWindowSql } from "./reminder-window";
 import { REMINDER_CAP_PER_DAY, REMINDER_LIMIT_CODE } from "@/lib/registration-reminder";
 import { entryPriceCents, ownPaymentRefundedCents } from "@/lib/registration-status";
 
@@ -239,12 +240,8 @@ export async function sendPaymentReminder(
   const id = await withTenant(auth.orgId, async (tx) => {
     // The cap: lock the entry, THEN count, so two concurrent presses at four serialise and exactly one gets the fifth.
     await tx`select 1 from registrations where id = ${reg.id} for update`;
-    const [{ n }] = await tx<{ n: number }[]>`
-      select count(*)::int as n from competition_events
-       where competition_id = ${ctx.competition_id}
-         and type = 'registration.payment_reminded'
-         and payload->>'registration_id' = ${reg.id}
-         and created_at > now() - interval '24 hours'`;
+    // The window's one predicate (reminder-window.ts): the hub row's `reminders_in_window` reads the same count to disable the button.
+    const [{ n }] = await tx<{ n: number }[]>`select ${remindersInWindowSql(tx, ctx.competition_id, reg.id)} as n`;
     if (n >= REMINDER_CAP_PER_DAY) {
       throw new HttpError(429, `This entry has had ${REMINDER_CAP_PER_DAY} reminders in the last 24 hours. Try again later.`, REMINDER_LIMIT_CODE);
     }

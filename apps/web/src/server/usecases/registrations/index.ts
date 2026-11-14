@@ -42,6 +42,7 @@ import "server-only";
 //   sweep                the hourly pay-window sweep: reminders, expiries, promotions
 //   list                 organiser list read and the solo-pool capacity helpers it shares
 //   organiser-actions    organiser actions: confirm, mark paid, waive, remind, waitlist, withdraw, refund
+//   reminder-window      the payment-reminder cap's window: one SQL count read by the press (cap) and the hub row; sibling-only
 //   csv-ics              files: the organiser CSV export and the registrant .ics attachment
 
 export type {

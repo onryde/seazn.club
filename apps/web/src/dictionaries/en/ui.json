@@ -3194,6 +3194,7 @@
   "reg.action.waiveTitle": "Confirm without payment (fee waived, logged)",
   "reg.action.remind": "Send payment reminder",
   "reg.action.remindTitle": "Email the registrant a payment reminder",
+  "reg.action.remindLimitReached": "Reminder limit reached",
   "reg.action.refund": "Refund",
   "reg.action.refundTitle": "Refund the remaining amount — the entry keeps its spot",
   "reg.action.retryRefund": "Retry refund",

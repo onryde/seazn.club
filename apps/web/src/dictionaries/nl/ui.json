@@ -3194,6 +3194,7 @@
   "reg.action.waiveTitle": "Bevestigen zonder betaling (vergoeding kwijtgescholden, gelogd)",
   "reg.action.remind": "Betalingsherinnering sturen",
   "reg.action.remindTitle": "E-mail de ingeschrevene een betalingsherinnering",
+  "reg.action.remindLimitReached": "Limiet voor herinneringen bereikt",
   "reg.action.refund": "Terugbetalen",
   "reg.action.refundTitle": "Betaal het resterende bedrag terug — de inschrijving behoudt zijn plek",
   "reg.action.retryRefund": "Terugbetaling opnieuw proberen",

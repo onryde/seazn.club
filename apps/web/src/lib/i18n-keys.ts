@@ -6310,6 +6310,7 @@ export type DictionaryKey =
   | "reg.action.refund"
   | "reg.action.refundTitle"
   | "reg.action.remind"
+  | "reg.action.remindLimitReached"
   | "reg.action.remindTitle"
   | "reg.action.retryRefund"
   | "reg.action.retryRefundTitle"

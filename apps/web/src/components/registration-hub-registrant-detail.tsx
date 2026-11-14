@@ -321,6 +321,7 @@ export function RegistrationHubRegistrantDetail({
             // Polish wave P5 (carry b): what was sent back of THIS payment (the Refund cap the server applies), never the history.
             refundedCents={ownPaymentRefundedCents(row)}
             lastRemindedAt={row.last_reminded_at ? new Date(row.last_reminded_at).toISOString() : null}
+            remindersInWindow={row.reminders_in_window}
             approvedAt={row.approved_at ? new Date(row.approved_at).toISOString() : null}
           />
           {/* The organiser's own last payment-reminder press, in the org's timezone like "Submitted". A full-width line under the

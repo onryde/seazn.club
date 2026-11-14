@@ -55,6 +55,7 @@ const PROPS: ActionProps = {
   entryPaymentIntentId: null,
   refundedCents: 0,
   lastRemindedAt: null,
+  remindersInWindow: 0,
   approvedAt: null,
 };
 const mount = (o: Partial<ActionProps> = {}) => renderIsland(RegistrationHubRegistrantActions, { ...PROPS, ...o });

@@ -227,6 +227,9 @@ export const RegistrationListEntry = Registration.extend({
   /** When the organiser last pressed "Send payment reminder" for this entry (the newest `registration.payment_reminded` audit row);
    *  null if never. */
   last_reminded_at: z.string().nullable(),
+  /** The organiser's presses for this entry inside the reminder cap's 24 h window (the cap's own count); at the cap the hub disables
+   *  Send payment reminder, since the press would be refused with PAYMENT_REMINDER_LIMIT. */
+  reminders_in_window: z.number().int().nonnegative(),
 });
 
 /** `POST /registrations/{id}/promote` body. `id` in the URL resolves which
