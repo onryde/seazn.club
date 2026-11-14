@@ -8,7 +8,9 @@ import type { PendingEvent } from "../types";
 import { memoryQueueStore, type QueueStore } from "../queue-store";
 import {
   depth,
+  dropHeld,
   enqueue,
+  flushHeldBefore,
   markAcked,
   markDropped,
   mutateHeld,
@@ -265,6 +267,235 @@ describe("restampBehindDropped", () => {
       expect(c?.expectedSeq).toBe(1);
     });
   });
+});
+
+// Lost updates (review rr4). Every write below replaces a whole entry with a
+// copy it read first, so two of them on one entry, both reading before either
+// writes (list, list, put, put), lose the first write. A queue that answers in
+// call order (IndexedDB runs the requests on one object store that way) does
+// exactly that whenever the second call is made while the first one's read is
+// answered and its write not yet issued. Each case makes the second call after
+// every number of the first call's queue answers, so it lands in every window
+// the first one opens, and checks that BOTH effects are in the queue.
+describe("two queue writes to one entry, the second made at any point of the first, both take effect", () => {
+  /**
+   * `memoryQueueStore`, but every call waits its turn, one at a time in the
+   * order it was made, and moves only when the test calls `step()`: one step
+   * RUNS the oldest waiting call against the store, the next HANDS its answer
+   * back to the caller. Between the two, a call made now is issued before
+   * anything the caller does with the answer — as on IndexedDB, where a read's
+   * transaction completes, and another one already asked for can run, before
+   * the reader's code resumes. A read made before a write was issued answers
+   * without it.
+   */
+  function steppedStore() {
+    const inner = memoryQueueStore();
+    const waiting: { run: () => Promise<unknown>; settle: (answer: { value?: unknown; error?: unknown }) => void }[] = [];
+    let ran: (() => void) | undefined;
+    const turn = <T,>(op: () => Promise<T>) =>
+      new Promise<T>((resolve, reject) => {
+        waiting.push({ run: op, settle: (a) => ("error" in a ? reject(a.error) : resolve(a.value as T)) });
+      });
+    const store: QueueStore = {
+      list: () => turn(() => inner.list()),
+      put: (e) => turn(() => inner.put(e)),
+      delete: (key) => turn(() => inner.delete(key)),
+      clear: () => turn(() => inner.clear()),
+    };
+    const idle = () => new Promise<void>((resolve) => setImmediate(resolve));
+    return {
+      store,
+      inner,
+      /** Hand back the answer of the call that last ran, or else run the oldest waiting call; false when neither. */
+      async step(): Promise<boolean> {
+        await idle();
+        if (ran !== undefined) {
+          const handBack = ran;
+          ran = undefined;
+          handBack();
+          await idle();
+          return true;
+        }
+        const next = waiting.shift();
+        if (next === undefined) return false;
+        const answer = await next.run().then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        );
+        ran = () => next.settle(answer);
+        return true;
+      },
+    };
+  }
+
+  /** Track a call's outcome without awaiting it. */
+  function watch<T>(p: Promise<T>) {
+    const box: { settled: boolean; value?: T; error?: unknown } = { settled: false };
+    p.then(
+      (value) => Object.assign(box, { settled: true, value }),
+      (error: unknown) => Object.assign(box, { settled: true, error }),
+    );
+    return box;
+  }
+
+  /** `b` and `c` queued behind `a`, which left without landing (already deleted, as a refusal leaves it); `c` is a held tap. */
+  async function seed(inner: QueueStore) {
+    await enqueue(inner, event("b", { expectedSeq: 1 }));
+    await enqueue(inner, event("c", { expectedSeq: 2, heldUntil: 99_999 }));
+  }
+  const reaim = (store: QueueStore) => restampBehindDropped(store, ["a", "b", "c"], new Set(["a"]));
+  const entry = async (inner: QueueStore, key: string) => (await inner.list()).find((e) => e.idempotencyKey === key);
+
+  /** Run `first`, make `second` after `n` of the queue's answers, answer everything; undefined once `first` settles within `n`. */
+  async function race(n: number, first: (s: QueueStore) => Promise<unknown>, second: (s: QueueStore) => Promise<unknown>) {
+    const { store, inner, step } = steppedStore();
+    await seed(inner);
+    const a = watch(first(store));
+    for (let i = 0; i < n; i++) await step();
+    if (a.settled) return undefined;
+    const b = watch(second(store));
+    for (let i = 0; i < 100 && !(a.settled && b.settled); i++) await step();
+    expect([a.settled, b.settled], `n=${n}: rig: both calls answered`).toEqual([true, true]);
+    expect([a.error, b.error], `n=${n}`).toEqual([undefined, undefined]);
+    return { inner, first: a.value, second: b.value };
+  }
+
+  const PICKED = { text: "c", scorer: "p9" };
+  const AGAINST_THE_REAIM: readonly {
+    name: string;
+    run: (s: QueueStore) => Promise<unknown>;
+    check: (n: number, inner: QueueStore, moved: PendingEvent[], result: unknown) => Promise<void>;
+  }[] = [
+    {
+      name: "the held tap's hold ending (releaseHeld) — not re-held, and re-aimed",
+      run: (s) => releaseHeld(s, "c"),
+      check: async (n, inner) => {
+        const c = await entry(inner, "c");
+        expect(c?.heldUntil, `n=${n}: released`).toBeUndefined();
+        expect(c?.expectedSeq, `n=${n}: re-aimed into the freed slot`).toBe(1);
+      },
+    },
+    {
+      name: "a leaving control releasing every held tap (flushHeldBefore, pad-flush) — not re-held, and re-aimed",
+      run: (s) => flushHeldBefore(s, Date.now()),
+      check: async (n, inner) => {
+        const c = await entry(inner, "c");
+        expect(c?.heldUntil, `n=${n}: released`).toBeUndefined();
+        expect(c?.expectedSeq, `n=${n}: re-aimed into the freed slot`).toBe(1);
+      },
+    },
+    {
+      name: "a dock pick on the held tap (mutateHeld) — the pick kept, and re-aimed",
+      run: (s) => mutateHeld(s, "c", (e) => ({ ...e, payload: PICKED })),
+      check: async (n, inner, _moved, picked) => {
+        const c = await entry(inner, "c");
+        expect(picked, `n=${n}: the pick found the tap held`).toBe(true);
+        expect(c?.payload, `n=${n}: the scorer picked is on the tap`).toEqual(PICKED);
+        expect(c?.expectedSeq, `n=${n}: re-aimed into the freed slot`).toBe(1);
+        expect(c?.heldUntil, `n=${n}: still held`).toBe(99_999);
+      },
+    },
+    {
+      name: "the send's pre-send marker (recordAttempt) — recorded, and the stamp is the one the re-aim reported",
+      run: (s) => recordAttempt(s, "c", { attempts: 1 }),
+      check: async (n, inner, moved) => {
+        const c = await entry(inner, "c");
+        expect(c?.attempts, `n=${n}: the marker is on the tap`).toBe(1);
+        // Moved before the marker landed (re-aimed), or seen as sent and left where it was stamped.
+        const reported = moved.some((e) => e.idempotencyKey === "c");
+        expect(c?.expectedSeq, `n=${n}: the queue holds what the re-aim reported (moved: ${reported})`).toBe(reported ? 1 : 2);
+      },
+    },
+    {
+      name: "a take-back of the held tap (dropHeld) — gone, never written back",
+      run: (s) => dropHeld(s, "c"),
+      check: async (n, inner, _moved, dropped) => {
+        expect(dropped, `n=${n}: taken back`).toBe(true);
+        expect(await entry(inner, "c"), `n=${n}: a taken-back tap is not in the queue`).toBeUndefined();
+      },
+    },
+  ];
+
+  for (const competitor of AGAINST_THE_REAIM) {
+    it(`a re-aim behind a dropped tap, against ${competitor.name}`, async () => {
+      // The windows: every queue answer the re-aim waits for when it runs alone.
+      const alone = steppedStore();
+      await seed(alone.inner);
+      const solo = watch(reaim(alone.store));
+      let calls = 0;
+      while (!solo.settled && (await alone.step())) calls += 1;
+      expect(calls, "rig: the re-aim alone reads and writes the queue").toBeGreaterThan(0);
+
+      let windows = 0;
+      for (let n = 0; n <= calls + 1; n++) {
+        const run = await race(n, reaim, competitor.run);
+        if (run === undefined) break;
+        windows += 1;
+        expect((await entry(run.inner, "b"))?.expectedSeq, `n=${n}: the entry ahead is re-aimed too`).toBe(0);
+        await competitor.check(n, run.inner, run.first as PendingEvent[], run.second);
+      }
+      expect(windows, "points of the re-aim the second write was made at").toBe(calls);
+    });
+  }
+
+  // The take-back and the hold ending are both decided on one read of the held
+  // tap: never both. Taken back means it is gone for good; refused means it was
+  // released and stays queued, to be sent.
+  for (const [firstName, first, second] of [
+    ["the take-back first", (s: QueueStore) => dropHeld(s, "c"), (s: QueueStore) => releaseHeld(s, "c")],
+    ["the hold ending first", (s: QueueStore) => releaseHeld(s, "c"), (s: QueueStore) => dropHeld(s, "c")],
+  ] as const) {
+    it(`a take-back racing the held tap's hold ending, ${firstName}: taken back XOR released, never both`, async () => {
+      let windows = 0;
+      const outcomes = { takenBack: 0, released: 0 };
+      for (let n = 0; n < 20; n++) {
+        const run = await race(n, first, second);
+        if (run === undefined) break;
+        windows += 1;
+        const dropped = (firstName === "the take-back first" ? run.first : run.second) as boolean;
+        const c = await entry(run.inner, "c");
+        if (dropped) {
+          outcomes.takenBack += 1;
+          expect(c, `n=${n}: taken back, so it is not in the queue to be sent`).toBeUndefined();
+        } else {
+          outcomes.released += 1;
+          expect(c?.heldUntil, `n=${n}: refused, so it was released and stays queued`).toBeUndefined();
+          expect(c?.expectedSeq, `n=${n}`).toBe(2);
+        }
+      }
+      expect(windows, "points of the first call the second was made at").toBeGreaterThanOrEqual(2);
+      expect(outcomes.takenBack + outcomes.released, "outcomes checked").toBe(windows);
+    });
+  }
+
+  // The drain sends a held tap once its `heldUntil` has passed, even before its
+  // own tick has run, so the answer that deletes it can arrive while its hold
+  // ending (or a late dock pick) is still writing it back. A delete that ran
+  // between that write's read and its put was undone: the answered tap back in
+  // the queue, to be sent again.
+  const LATE_WRITES = [
+    ["its hold ending (releaseHeld)", (s: QueueStore) => releaseHeld(s, "c")],
+    ["a dock pick (mutateHeld)", (s: QueueStore) => mutateHeld(s, "c", (e) => ({ ...e, payload: PICKED }))],
+  ] as const;
+  const ANSWERS = [
+    ["acked (markAcked)", markAcked],
+    ["refused (markDropped)", markDropped],
+  ] as const;
+  for (const [writeName, write] of LATE_WRITES) {
+    for (const [answerName, answer] of ANSWERS) {
+      it(`a held tap ${answerName} while ${writeName} is writing it stays out of the queue`, async () => {
+        let windows = 0;
+        for (let n = 0; n < 20; n++) {
+          const run = await race(n, write, (s) => answer(s, "c"));
+          if (run === undefined) break;
+          windows += 1;
+          expect(await entry(run.inner, "c"), `n=${n}: answered, so gone for good`).toBeUndefined();
+          expect((await entry(run.inner, "b"))?.expectedSeq, `n=${n}: nothing else touched`).toBe(1);
+        }
+        expect(windows, "points of the write the answer was made at").toBeGreaterThanOrEqual(2);
+      });
+    }
+  }
 });
 
 describe("queueStatus", () => {

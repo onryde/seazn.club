@@ -327,7 +327,6 @@ import { indexedDbQueueStore } from "./queue-store";
 import {
   boundTo,
   depth,
-  dropHeld,
   enqueue,
   enqueueHeld,
   markDropped,
@@ -335,6 +334,7 @@ import {
   recordAttempt,
   releaseHeld,
   restampBehindDropped,
+  takeBackHeld,
 } from "./queue";
 import type { QueueStore } from "./queue-store";
 import { deepEqual, reconcile, sendOne } from "./pipeline";
@@ -1655,22 +1655,32 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
   // reaches, on every retry. A held tap's write waits on `flushHeldBefore`'s
   // read first, so on a queue that answers in order (IndexedDB) the re-aim's
   // read could be asked for before the write was.
+  //
+  // `restamp` is the queue write that moves them: `restampBehindDropped`, or a
+  // take-back's `takeBackHeld`, which answers null when the tap it would take
+  // back is no longer held (nothing moved). Resolves false then, true otherwise.
   const reaimBehind = useCallback(
-    async (order: readonly string[], dropped: ReadonlySet<string>) => {
+    async (
+      order: readonly string[],
+      dropped: ReadonlySet<string>,
+      restamp: (order: readonly string[], dropped: ReadonlySet<string>) => Promise<PendingEvent[] | null> = (o, d) =>
+        restampBehindDropped(store, o, d),
+    ): Promise<boolean> => {
       const writes: Promise<void>[] = [];
       for (const key of order) {
         const write = enqueuesInFlight.current.get(key);
         if (write !== undefined) writes.push(write);
       }
       if (writes.length > 0) await Promise.all(writes);
-      const moved = await restampBehindDropped(store, order, dropped);
+      const moved = await restamp(order, dropped);
       const rows = new Map(pendingEnvelopesRef.current);
       for (const key of dropped) rows.delete(key);
-      for (const entry of moved) {
+      for (const entry of moved ?? []) {
         const row = rows.get(entry.idempotencyKey);
         if (row !== undefined) rows.set(entry.idempotencyKey, { ...row, seq: entry.expectedSeq + 1 });
       }
       commitPendingEnvelopes(rows);
+      return moved !== null;
     },
     [store, commitPendingEnvelopes],
   );
@@ -2161,7 +2171,10 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
       // (`runDrain`'s piggyback; the store is FIFO and `expectedSeq` above
       // already counts this event as pending) — the path two DIFFERENT
       // back-to-back actions have always taken. Tracked from this same
-      // synchronous step as the row (review C1: `reaimBehind` waits on it).
+      // synchronous step as the row (review C1: `reaimBehind` waits on it) —
+      // defensively: `enqueue` issues its put in this same tick (IndexedDB then
+      // answers a read asked for later after it), so unlike `submitHeld`'s write
+      // below there is no window here today. Kept so the two paths stay alike.
       await trackEnqueue(enqueuesInFlight.current, pending.idempotencyKey, enqueue(store, pending));
       await refreshDepth();
       await runDrain();
@@ -2234,7 +2247,8 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
       // see this function's own doc: transmission stays deferred until
       // `onDue` fires. Tracked from this same synchronous step as the row
       // (review C1): `enqueueHeld` issues its put only after
-      // `flushHeldBefore`'s read, and `reaimBehind` must not read before it.
+      // `flushHeldBefore`'s read (and after any queue write already running,
+      // queue.ts `exclusive`), and `reaimBehind` must not read before it.
       await trackEnqueue(enqueuesInFlight.current, pending.idempotencyKey, enqueueHeld(store, pending, holdMs, onDue));
       await refreshDepth();
       return { heldId: pending.idempotencyKey, heldUntil };
@@ -2245,7 +2259,7 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
   // R2 (spec §2.3) — see UsePadPipelineResult.dropHeldSubmission's own doc.
   const dropHeldSubmission = useCallback(
     async (id: string): Promise<boolean> => {
-      // R8/#675 — read the bound set BEFORE the drop, because `dropHeld`
+      // R8/#675 — read the bound set BEFORE the drop, because `takeBackHeld`
       // cascade-deletes it from the queue and it is gone afterwards. Same
       // `boundTo` rule both layers use, never a second copy of it: clearing the
       // queue while leaving the optimistic mirror holding the void is not a
@@ -2254,7 +2268,7 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
       // caught here.
       const before = await store.list();
       const held = before.find((e) => e.idempotencyKey === id);
-      if (held === undefined || held.heldUntil === undefined) return false; // `dropHeld`'s own refusal, read before anything moves
+      if (held === undefined || held.heldUntil === undefined) return false; // `takeBackHeld`'s own refusal, read before anything moves
       // Review I-B: every tap queued behind the held one was stamped for the
       // slots after it, which it now never takes — re-aimed exactly like a
       // refusal's followers, its row leaving at once (`releaseRows`). Re-aimed
@@ -2262,14 +2276,18 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
       // still ahead) `runDrain` stops at it, so no send behind it can race the
       // re-aim. Deleted first, a drain started by a tap made meanwhile would
       // send the next entry at its old stamp, and a sent entry is never
-      // re-aimed again. Only while the hold lasts: if it ends during these
-      // awaits (its own release tick, or a new held tap's `flushHeldBefore`),
-      // `dropHeld` below refuses and the tap is sent after all, at its own
-      // slot, which the entries behind it were just moved down into.
+      // re-aimed again.
+      //
+      // Review rr4: the read above only lets the take-back START. Whether the
+      // tap is still held is decided again inside the one queue section that
+      // re-aims and removes it (`takeBackHeld`): if its hold ended during these
+      // awaits (its own release tick, or a new held tap's `flushHeldBefore`), or
+      // another take-back of it (a double press) got there first, nothing moves
+      // and this one answers false — the tap is sent after all, at its own slot,
+      // with the taps behind it still stamped after it.
       const gone = new Set([id, ...boundTo(before, id)]);
       const order = releaseRows(before, gone);
-      await reaimBehind(order, gone);
-      const dropped = await dropHeld(store, id);
+      const dropped = await reaimBehind(order, gone, (o, g) => takeBackHeld(store, id, o, g));
       await refreshDepth();
       // The take-back cancelled the held tap's own release tick, the one thing
       // that drains behind it: without this the taps behind it wait for the
