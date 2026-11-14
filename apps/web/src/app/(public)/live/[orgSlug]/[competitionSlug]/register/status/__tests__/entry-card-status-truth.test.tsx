@@ -141,7 +141,7 @@ describe("a pending entry says what it is waiting on (W2, W12)", () => {
   });
 });
 
-describe("the roster says 'Checked in' only on a confirmed entry (W6, W10, W11; final fix ruling on V7)", () => {
+describe("the roster never says 'Checked in' (W6, W10, W11; V7; walk-fix F10)", () => {
   const PLAYERS = [
     { id: "p1", full_name: "Mia Cole", consent_status: "granted" as const, consent: null },
     { id: "p2", full_name: "Dev Kapoor", consent_status: "pending" as const, consent: null },
@@ -149,13 +149,33 @@ describe("the roster says 'Checked in' only on a confirmed entry (W6, W10, W11; 
   const NOT_LIVE: EntryStatus[] = ["waitlisted", "withdrawn", "expired", "rejected"];
   const AWAITING: EntryStatus[] = ["pending", "paid"];
 
-  it("a confirmed entry keeps the check-in words: the chips and the meter", () => {
+  // Walk-fix F10: nobody checks in at registration. A confirmed entry's roster counts who has JOINED it, the same words as an entry
+  // still awaiting payment or approval - "1 of 1 checked in" on every confirmed entry claimed an attendance nobody gave.
+  it("a confirmed entry says 'Joined': the chips and the meter (walk-fix F10)", () => {
     const markup = render(props({ status: "confirmed", players: PLAYERS }));
-    expect(markup).toContain(">Checked in<");
-    expect(markup).toContain(">Not checked in<");
-    expect(markup).toContain(">1 of 2 checked in<");
-    expect(markup).not.toContain(">Joined<");
+    expect(markup).toContain(">Joined<");
+    expect(markup).toContain(">Not joined yet<");
+    expect(markup).toContain(">1 of 2 joined<");
+    expect(markup).not.toMatch(/checked in/i);
     expect(markup).not.toContain(">Registered<");
+  });
+
+  it("the walkthrough's own case: a confirmed individual whose one player is the registrant reads '1 of 1 joined' (walk-fix F10)", () => {
+    const markup = render(props({ status: "confirmed", amount_cents: 0, players: [PLAYERS[0]!] }));
+    expect(markup).toContain(">1 of 1 joined<");
+    expect(markup).not.toMatch(/checked in/i);
+  });
+
+  it("no locale carries the roster's check-in words any more (walk-fix F10: a key nothing renders is a key that drifts)", () => {
+    const gone = ["register.status.roster.meter", "register.status.roster.claimed", "register.status.roster.pending"];
+    let checked = 0;
+    for (const [name, ui] of [["en", uiEn], ["es", uiEs], ["fr", uiFr], ["nl", uiNl]] as const) {
+      for (const key of gone) {
+        expect(Object.prototype.hasOwnProperty.call(ui, key), `${name} ${key}`).toBe(false);
+        checked += 1;
+      }
+    }
+    expect(checked).toBe(12);
   });
 
   // Owner ruling on V7 (2026-11-12): an entry still awaiting payment, approval or both has not been confirmed, so nobody on it has
@@ -220,7 +240,6 @@ describe("the roster says 'Checked in' only on a confirmed entry (W6, W10, W11; 
       expect(markup, name).toContain(`>${d["register.status.roster.joined"]}<`);
       expect(markup, name).toContain(`>${d["register.status.roster.notJoined"]}<`);
       expect(markup, name).toContain(`>${d["register.status.roster.meterJoined"]!.replace("{claimed}", "1").replace("{total}", "2")}<`);
-      expect(d["register.status.roster.joined"], `${name}: not the check-in word`).not.toBe(d["register.status.roster.claimed"]);
       checked += 1;
     }
     expect(checked).toBe(3);
@@ -235,7 +254,7 @@ describe("the roster says 'Checked in' only on a confirmed entry (W6, W10, W11; 
       expect(markup, name).toContain(`>${d["register.status.roster.registered"]}<`);
       expect(markup, name).toContain(`>${d["register.status.roster.notRegistered"]}<`);
       expect(markup, name).toContain(`>${d["register.status.roster.meterRegistered"]!.replace("{claimed}", "1").replace("{total}", "2")}<`);
-      expect(d["register.status.roster.notRegistered"], `${name}: not the check-in word`).not.toBe(d["register.status.roster.pending"]);
+      expect(d["register.status.roster.notRegistered"], `${name}: not the joined word`).not.toBe(d["register.status.roster.notJoined"]);
       checked += 1;
     }
     expect(checked).toBe(3);

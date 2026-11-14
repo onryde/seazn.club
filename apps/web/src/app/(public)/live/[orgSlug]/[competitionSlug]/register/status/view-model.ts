@@ -452,15 +452,13 @@ function earliestPayDeadline(entries: readonly StatusEntry[], cart: CartPayFacts
 }
 
 /** Which words the roster's chips and meter use.
- *  - `checkin`: a CONFIRMED entry asks its players to check in ("Checked in", "Not checked in", "2 of 3 checked in").
- *  - `joined`: a live entry that is not confirmed yet (pending, paid: awaiting payment, approval or both) says who has JOINED
- *    ("Joined", "Not joined yet", "2 of 3 joined") - "2 of 2 checked in" on an unpaid entry read as attendance at an entry nobody had
- *    confirmed (owner ruling on sign-off V7, 2026-11-12; the join success panel's meter says the same).
- *  - `registered`: a waitlisted, withdrawn, expired or rejected entry has nothing to check in to (polish wave P3, W6/W10/W11).
- *  Only `confirmed` says "checked in": a live status added later lands on `joined`, never on the check-in words. */
-export type RosterVocabulary = "checkin" | "joined" | "registered";
+ *  - `joined`: a live entry (pending, paid, confirmed) says who has JOINED it - claimed their place ("Joined", "Not joined yet",
+ *    "2 of 3 joined"). "2 of 2 checked in" on an unpaid entry read as attendance at an entry nobody had confirmed (owner ruling on
+ *    sign-off V7, 2026-11-12), and on a confirmed one as an attendance nobody gave: registration has no check-in, the count is of
+ *    claimed places (walk-fix F10, 2026-11-14; the join success panel's meter says the same).
+ *  - `registered`: a waitlisted, withdrawn, expired or rejected entry has nothing to join any more (polish wave P3, W6/W10/W11). */
+export type RosterVocabulary = "joined" | "registered";
 export function rosterVocabulary(status: EntryStatus): RosterVocabulary {
-  if (status === "confirmed") return "checkin";
   return entryCountsTowardTotal(status) ? "joined" : "registered";
 }
 

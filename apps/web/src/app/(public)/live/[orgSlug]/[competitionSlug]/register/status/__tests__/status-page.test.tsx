@@ -1036,7 +1036,7 @@ describe("register status page (RS007 rebuild)", () => {
       // the entry's own payment-status pill uses a few lines above (green
       // CONFIRMED = the fee landed). Roster-side copy now uses a check-in
       // metaphor instead, so it can no longer be read as a payment state. This entry is still PENDING, so (owner ruling on V7,
-      // 2026-11-12) its meter says who has joined - "checked in" is kept for a confirmed entry (pinned below).
+      // 2026-11-12) its meter says who has joined - and since walk-fix F10 a confirmed one does too (pinned below).
       expect(html).toContain("1 of 2 joined");
       expect(html).not.toContain("checked in");
       // The per-slot link carries the unclaimed player's id, on that slot's Copy button (polish wave K: no URL is printed).
@@ -1197,21 +1197,20 @@ describe("register status page (RS007 rebuild)", () => {
       // The entry pill still legitimately says CONFIRMED — this finding is
       // about the ROSTER's vocabulary, not the entry's own money status.
       expect(html).toContain(">confirmed<");
-      // The roster's per-row badges and its meter use a check-in metaphor —
-      // who has personally shown up, not whether the entry (or a refund) is
-      // valid — deliberately distinct from both "confirm" (the entry's own
-      // money word) and "claim" (which carries its own money-adjacent
-      // reading: an insurance claim, an expense claim).
-      expect(html).toContain(">Not checked in<");
-      expect(html).toContain(">Checked in<");
-      expect(html).toContain("1 of 2 checked in");
+      // The roster's per-row badges and its meter say who has JOINED the entry — not whether the entry (or a refund) is valid —
+      // deliberately distinct from both "confirm" (the entry's own money word) and "claim" (which carries its own money-adjacent
+      // reading: an insurance claim, an expense claim). Walk-fix F10: no longer "checked in", which claimed an attendance nobody gave.
+      expect(html).toContain(">Not joined yet<");
+      expect(html).toContain(">Joined<");
+      expect(html).toContain("1 of 2 joined");
+      expect(html).not.toMatch(/checked in/i);
       // ...and nowhere does the roster block reuse "confirm" or "claim" —
       // pinned against the dictionary source directly (not string-sliced
       // out of the render) so this fails the moment any of the three keys
       // drifts back toward payment vocabulary, whatever the exact wording
       // becomes.
       const roster = uiEn as Record<string, string>;
-      for (const key of ["register.status.roster.pending", "register.status.roster.claimed", "register.status.roster.meter"]) {
+      for (const key of ["register.status.roster.notJoined", "register.status.roster.joined", "register.status.roster.meterJoined"]) {
         // Strip interpolation placeholders first — `.meter`'s own template
         // variable is literally named "{claimed}" in the SOURCE string
         // (view-model.ts's RosterCounts field), which would otherwise trip

@@ -421,10 +421,10 @@ describe("submit — success", () => {
     expect(m.pageText()).toContain("You're in");
     // totalPlayers 4, 2 unclaimed before -> 2 already granted; claiming ONE
     // more (p1) makes 3, total stays 4.
-    // RS007 #20: roster-side copy renamed off "confirm" (register.status.
-    // roster.meter) — it shares this key with the status page's own meter,
-    // so it can no longer be misread as a payment state.
-    expect(m.pageText()).toContain("3 of 4 checked in");
+    // RS007 #20: roster-side copy renamed off "confirm" — it shares its key with the status page's own meter, so it can no longer
+    // be misread as a payment state. Walk-fix F10: a confirmed entry's meter says "joined" too; nobody checks in at registration.
+    expect(m.pageText()).toContain("3 of 4 joined");
+    expect(m.pageText()).not.toMatch(/checked in/i);
     expect(m.pageText()).toContain("Team Alpha");
   });
 
@@ -435,7 +435,7 @@ describe("submit — success", () => {
     (propsOf(newRadio).onChange as () => void)();
     fillMinimalValidForm(m);
     await submit(m);
-    expect(m.pageText()).toContain("4 of 4 checked in");
+    expect(m.pageText()).toContain("4 of 4 joined");
   });
 
   // Polish wave P3 (W4, W13): "You're in / Your spot is confirmed" read as true for a team still awaiting payment or approval. The
@@ -596,8 +596,8 @@ describe("submit — designed failure states, never a raw server string", () => 
     (propsOf(remaining).onChange as () => void)();
     await submit(m);
 
-    expect(m.pageText()).toContain("5 of 5 checked in");
-    expect(m.pageText()).not.toContain("4 of 4 checked in");
+    expect(m.pageText()).toContain("5 of 5 joined");
+    expect(m.pageText()).not.toContain("4 of 4 joined");
   });
 
   // Bug (2026-08-27 review, FIX 4): NEW_PLAYER_CHOICE ("new") is never a

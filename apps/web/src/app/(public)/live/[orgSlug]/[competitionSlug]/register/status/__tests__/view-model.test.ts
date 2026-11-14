@@ -687,12 +687,14 @@ describe("public write-path URL builders — the /public/ segment is load-bearin
 // The expectations below are the brief's rulings, written out per status; none is read back from the function under test.
 // Polish wave final fix (owner ruling on V7, 2026-11-12): only a CONFIRMED entry says "checked in"; an entry still awaiting payment,
 // approval or both (pending, paid) says its players have JOINED - "2 of 2 checked in" on an unpaid entry read as a false claim.
-describe("rosterVocabulary: 'checked in' only on a confirmed entry", () => {
+// Walk-fix F10 (2026-11-14): a CONFIRMED entry no longer says "checked in" either. Nobody checks in at registration - the roster counts
+// who has joined the entry (claimed their place) - so "1 of 1 checked in" on every confirmed entry read as an attendance nobody gave.
+describe("rosterVocabulary: no entry says 'checked in' - live entries say joined, the rest registered (walk-fix F10)", () => {
   // Every status a registration can hold (the DB CHECK on registrations.status), each with the ruling for it.
-  const RULING: [EntryStatus, "checkin" | "joined" | "registered"][] = [
+  const RULING: [EntryStatus, "joined" | "registered"][] = [
     ["pending", "joined"],
     ["paid", "joined"],
-    ["confirmed", "checkin"],
+    ["confirmed", "joined"],
     ["waitlisted", "registered"],
     ["withdrawn", "registered"],
     ["expired", "registered"],

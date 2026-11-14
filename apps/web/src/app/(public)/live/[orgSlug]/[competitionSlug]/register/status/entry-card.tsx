@@ -40,7 +40,6 @@ import {
 
 // The roster's key family per vocabulary (chips: claimed/pending; the meter). See `rosterVocabulary` for which entry gets which.
 const ROSTER_WORDS: Record<RosterVocabulary, { meter: string; claimed: string; pending: string }> = {
-  checkin: { meter: "register.status.roster.meter", claimed: "register.status.roster.claimed", pending: "register.status.roster.pending" },
   joined: { meter: "register.status.roster.meterJoined", claimed: "register.status.roster.joined", pending: "register.status.roster.notJoined" },
   registered: {
     meter: "register.status.roster.meterRegistered",
@@ -204,9 +203,9 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
   const chip = entryChip(entry.status, money.kind);
   const tone = chip.tone;
   const roster = rosterCounts(entry.players);
-  // Polish wave P3 (W6, W10, W11) and the owner ruling on V7: only a confirmed entry's roster says "Checked in"; a pending or paid one
-  // says "Joined", a waitlisted, withdrawn, expired or rejected one "Registered". `rosterVocabulary` picks the key family once; the chips
-  // and the meter both read it.
+  // Polish wave P3 (W6, W10, W11), the owner ruling on V7 and walk-fix F10: a live entry's roster (pending, paid, confirmed) says
+  // "Joined", a waitlisted, withdrawn, expired or rejected one "Registered" - never "Checked in", which registration has no step for.
+  // `rosterVocabulary` picks the key family once; the chips and the meter both read it.
   const rosterWords = ROSTER_WORDS[rosterVocabulary(entry.status)];
   // Polish wave P3 (W2, W12): WHY a pending entry is not confirmed. Suppressed once the payment window has closed: the
   // window-closed message below is the true and more actionable statement, and "waiting for payment" beside it would read as

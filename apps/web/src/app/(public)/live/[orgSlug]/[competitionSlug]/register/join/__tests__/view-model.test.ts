@@ -281,7 +281,8 @@ describe("rosterMeterAfterJoin", () => {
 // "nothing nameable") words the join as joining, never as confirmed. Expected keys are written out per standing, not derived.
 describe("joinSuccessCopy", () => {
   const TABLE: { state: EntryStanding | null; heading: string; body: string; stateKey: string | null; meter: string }[] = [
-    { state: "confirmed", heading: "register.join.success.heading", body: "register.join.success.body", stateKey: null, meter: "register.status.roster.meter" },
+    // Walk-fix F10: a confirmed entry's meter says joined as well — nobody checks in at registration.
+    { state: "confirmed", heading: "register.join.success.heading", body: "register.join.success.body", stateKey: null, meter: "register.status.roster.meterJoined" },
     { state: "waitlisted", heading: "register.join.success.joinedHeading", body: "register.join.success.joinedBody", stateKey: "register.join.success.state.waitlisted", meter: "register.status.roster.meterRegistered" },
     { state: "payment", heading: "register.join.success.joinedHeading", body: "register.join.success.joinedBody", stateKey: "register.join.success.state.payment", meter: "register.status.roster.meterJoined" },
     { state: "approval", heading: "register.join.success.joinedHeading", body: "register.join.success.joinedBody", stateKey: "register.join.success.state.approval", meter: "register.status.roster.meterJoined" },
@@ -308,10 +309,13 @@ describe("joinSuccessCopy", () => {
     expect(claims).toEqual(["confirmed"]);
   });
 
-  // Polish wave sign-off V7: "2 of 2 checked in" on the success panel of a join to an UNPAID entry. Only a confirmed entry's meter
-  // says checked in; a waitlisted one says registered (P3); every other standing, and the unnameable one, says joined.
-  it("only `confirmed` gets the check-in meter: the other five never do", () => {
-    const checkIn = TABLE.filter((c) => joinSuccessCopy(c.state).meterKey === "register.status.roster.meter").map((c) => c.state);
-    expect(checkIn).toEqual(["confirmed"]);
+  // Polish wave sign-off V7: "2 of 2 checked in" on the success panel of a join to an UNPAID entry. Walk-fix F10 took the check-in
+  // meter off the confirmed entry too: a waitlisted one says registered (P3); every other standing, confirmed included, says joined.
+  it("only `waitlisted` gets the registered meter; every other standing says joined (walk-fix F10, counted)", () => {
+    const registered = TABLE.filter((c) => joinSuccessCopy(c.state).meterKey === "register.status.roster.meterRegistered").map((c) => c.state);
+    const joined = TABLE.filter((c) => joinSuccessCopy(c.state).meterKey === "register.status.roster.meterJoined").map((c) => c.state);
+    expect(registered).toEqual(["waitlisted"]);
+    expect(joined).toEqual(["confirmed", "payment", "approval", "payment_and_approval", null]);
+    expect(registered.length + joined.length).toBe(TABLE.length);
   });
 });
