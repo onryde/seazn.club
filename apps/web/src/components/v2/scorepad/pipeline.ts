@@ -563,6 +563,7 @@ export interface DrainReport {
  * outcome (acked, already-applied, or permanently rejected) before starting
  * the next, and stops the moment an event stays queued, leaving the rest of
  * the queue exactly where it was for a later call (reconnect, a timer, …).
+ * TEST-ONLY, and not the production drain: that is `use-pad-pipeline.ts`'s `runDrain`.
  */
 export async function drainQueue(
   transport: ScoringTransport,

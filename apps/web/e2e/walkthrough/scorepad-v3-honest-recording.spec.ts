@@ -313,25 +313,16 @@ test("badminton v3 doubles: an unanswered dock drains PARTIAL, an answered one d
 // (use-pad-pipeline.ts) / `rejectionText` (pad-host.tsx), rendered as
 // `data-role="v3-rejection"`, `role="alert"`.
 //
-// MEASURED AGAINST THIS BUILD (2026-09-01): the assertion below is the
-// correct, intended behaviour and is left exactly as specified — it
-// currently FAILS for the two un-awaited `click()` calls below. There are
-// TWO separate guards in `use-pad-pipeline.ts`'s `submitHeld`: the WINDOW
-// guard (a repeat within `DOUBLE_SUBMIT_WINDOW_MS` of the last ACCEPTED
-// submit, after it has fully resolved) is the one R7-43 made visible — its
-// own unit test title says so explicitly ("the refusal is now VISIBLE, not
-// silent"). But `submitHeld` also has an IN-FLIGHT guard (a synchronous
-// second submit of the identical action while the first is still inside its
-// own async chain) — its own unit test is titled "an in-flight guard drops a
-// SYNCHRONOUS second submit" and asserts only the transport call count,
-// never `lastRejection`. Confirmed live: two `click()` calls with a real
-// 10ms gap between them correctly show the banner (the WINDOW guard); two
-// with NO gap at all (this test, and `Promise.all` in general) hit the
-// IN-FLIGHT guard instead and record nothing on screen. A genuinely
-// simultaneous double-fire (the literal "one physical tap read twice" this
-// whole feature exists for) is arguably closer to the in-flight case than
-// the window case, so the higher-value half of R7-43 may still be silent.
-// See this file's final report.
+// ONE guard decides it: `use-pad-pipeline.ts`'s `submitHeld` (and `submit`)
+// refuse an identical action within `DOUBLE_SUBMIT_WINDOW_MS` of the last
+// ACCEPTED one, judged and recorded (`lastAccepted`) in the synchronous
+// section before the first `await`. So the second of two un-awaited
+// `click()`s — no gap at all, as here and in `Promise.all` — is inside the
+// window by construction and refused visibly, exactly like a repeat 10ms
+// later. The separate in-flight guard that used to drop a same-tick repeat
+// SILENTLY (no `lastRejection`) is gone (fix/pad-second-tap-in-flight): the
+// window alone decides, and a deliberate repeat after it is recorded even
+// while the first tap is still being written.
 test("badminton v3: a genuine sub-250ms double records ONE rally and tells the scorer the repeat was refused", async ({
   page,
 }) => {
