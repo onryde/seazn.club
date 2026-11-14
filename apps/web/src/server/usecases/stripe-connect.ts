@@ -16,6 +16,7 @@ import { sql } from "@/lib/db";
 import { isRegistrationCurrency } from "@/lib/currency";
 import { HttpError } from "@/lib/errors";
 import { log } from "@/server/logger";
+import { fireOrgRevalidate } from "@/server/public-site/revalidate";
 import { requireFeature } from "@/lib/entitlements";
 import { getStripe } from "@/lib/stripe";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -435,8 +436,8 @@ export async function syncConnectAccount(account: Stripe.Account): Promise<void>
   // exists before onboarding completes, and there is nothing to lock to yet.
   const settlement = account.default_currency?.toLowerCase() ?? null;
   const supported = settlement !== null && isRegistrationCurrency(settlement);
-  const [row] = await sql<{ id: string; currency: string }[]>`
-    update organizations
+  const [row] = await sql<{ id: string; slug: string; currency: string; charges_was: boolean; charges_now: boolean }[]>`
+    update organizations o
     set stripe_charges_enabled  = ${account.charges_enabled === true},
         stripe_payouts_enabled  = ${account.payouts_enabled === true},
         stripe_disabled_reason  = ${account.requirements?.disabled_reason ?? null},
@@ -454,11 +455,18 @@ export async function syncConnectAccount(account: Stripe.Account): Promise<void>
               ? null
               : settlement
         }
-    where stripe_account_id = ${account.id}
-    returning id, currency`;
+    -- The flag as it stood before this write, so the public pages are expired only when card charging actually flips.
+    from (select id, stripe_charges_enabled as charges_was from organizations where stripe_account_id = ${account.id}) prev
+    where o.id = prev.id
+    returning o.id, o.slug, o.currency, prev.charges_was, o.stripe_charges_enabled as charges_now`;
   // No row: the account belongs to no org here (or the org disconnected). An
   // unconnected org's chosen currency is never touched by a sync.
   if (!row) return;
+  // Walk-fix A review m2: whether a card division takes entries is read from this flag, and the public hub that says so
+  // (open state, the "opens once payment setup is finished" sentence) is cached under the org's public tag - on Fly a
+  // suspended machine's cache clock stops, so "it ages out in 30s" is not a bound. Expire it on a flip, and only then:
+  // account.updated fires for every requirement change, and each bust purges the CDN.
+  if (row.charges_was !== row.charges_now) fireOrgRevalidate(row.slug);
   if (supported) {
     log.info(
       { org_id: row.id, account_id: account.id, currency: settlement },
