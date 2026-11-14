@@ -400,14 +400,19 @@ describe("EntryCard — a waitlisted entry's place in the queue (B3 T13)", () =>
 // Walk-fix F16 (ruling): an automatic promotion on an online-play division passed this waiting entry over because its Lichess account is
 // not linked to play. The waiting card says so - the turn was skipped, why, the entry keeps its place - with the Link step (the club's own
 // link start, `lichessLinkStartHref`), beside the place in the queue. The read model gives the time only while the entry waits.
-describe("EntryCard — a waiting entry an automatic promotion skipped (walk-fix F16)", () => {
+// Final review m1: linking re-runs nothing, so the note outlives the cause - it is written about the skip, a dated moment that has
+// passed ("A place opened on 14 November … wasn't linked"), and stays true after the player links. The date is the org's
+// (`cart.timezone`) in the page's locale.
+describe("EntryCard — a waiting entry an automatic promotion skipped (walk-fix F16, final review m1)", () => {
   const UI = { en: uiEn, es: uiEs, fr: uiFr, nl: uiNl } as const;
   const unescape = (s: string) => s.replace(/&#x27;/g, "'").replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, "&");
   const SKIPPED = "2026-11-14T10:00:00.000Z";
-  const render = (over: Partial<EntryCardProps["entry"]>, locale: keyof typeof UI = "en") => {
+  const render = (over: Partial<EntryCardProps["entry"]>, locale: keyof typeof UI = "en", timezone = "UTC") => {
     const props = baseProps();
     return unescape(
-      renderToStaticMarkup(<EntryCard {...props} locale={locale} ui={UI[locale] as Dict} entry={{ ...props.entry, ...over }} />),
+      renderToStaticMarkup(
+        <EntryCard {...props} cart={{ ...props.cart, timezone }} locale={locale} ui={UI[locale] as Dict} entry={{ ...props.entry, ...over }} />,
+      ),
     );
   };
   const raw = (locale: keyof typeof UI, key: string): string => {
@@ -417,24 +422,42 @@ describe("EntryCard — a waiting entry an automatic promotion skipped (walk-fix
   };
   const notice = (html: string) => html.match(/<div[^>]*data-testid="reg-status-promotion-skipped"[^>]*>([\s\S]*?)<\/div>/);
 
-  it("en, typed: the turn was skipped, why, the place is kept - and the Link button starts linking for THIS club", () => {
+  it("en, typed: when the turn was skipped, why, the place is kept - and the Link button starts linking for THIS club", () => {
     const html = render({ status: "waitlisted", waitlist_position: 2, promotion_skipped_at: SKIPPED });
     const m = notice(html);
     expect(m, "the notice").not.toBeNull();
     expect(m![1]).toContain(
-      "A place opened, but your turn was skipped: games here are played on Lichess, and your Lichess account isn't linked to play yet. You keep your place in line.",
+      "A place opened on 14 November, but your turn was skipped: games here are played on Lichess, and your Lichess account wasn't linked to play. You keep your place in line. Once your account is linked, the next place that opens can go to you.",
     );
     expect(m![1]).toContain(`href="${lichessLinkStartHref("org")}"`);
     expect(m![1]).toContain(">Link your Lichess account</a>");
     expect(html, "the place in the queue still says where they are").toContain("You're #2 on the waiting list");
   });
 
-  it("every locale says it in its own words, and the button names the step", () => {
+  it("after a later link it still reads true: past tense, dated by the skip - never 'isn't linked yet'", () => {
+    // A linked player's page gets the same props: nothing the card reads changes when the account is linked (the DB walk in
+    // online-seat-gate-waitlist.test.ts pins that the read model keeps the skip's time after a reconnect). So the words must hold.
+    const body = notice(render({ status: "waitlisted", waitlist_position: 2, promotion_skipped_at: SKIPPED }))![1];
+    expect(body).toContain("14 November");
+    expect(body).toContain("wasn't linked");
+    expect(body).not.toMatch(/isn't linked|linked to play yet/);
+  });
+
+  it("the date is the org's: 23:30 UTC on the 14th is the 15th for a club in Kolkata", () => {
+    const late = { status: "waitlisted" as const, waitlist_position: 2, promotion_skipped_at: "2026-11-14T23:30:00.000Z" };
+    expect(notice(render(late, "en", "UTC"))![1]).toContain("A place opened on 14 November,");
+    expect(notice(render(late, "en", "Asia/Kolkata"))![1]).toContain("A place opened on 15 November,");
+  });
+
+  it("every locale says it in its own words around its own date, and the button names the step", () => {
     let judged = 0;
+    // Typed per locale (the long day-month each language writes), never read back from the component.
+    const DATE = { en: "14 November", es: "14 de noviembre", fr: "14 novembre", nl: "14 november" } as const;
     for (const locale of ["en", "es", "fr", "nl"] as const) {
       const m = notice(render({ status: "waitlisted", waitlist_position: 2, promotion_skipped_at: SKIPPED }, locale));
       expect(m, locale).not.toBeNull();
-      expect(m![1], locale).toContain(raw(locale, "register.status.promotionSkipped.body"));
+      expect(raw(locale, "register.status.promotionSkipped.body"), `${locale}: the sentence carries the date`).toContain("{date}");
+      expect(m![1], locale).toContain(raw(locale, "register.status.promotionSkipped.body").replace("{date}", DATE[locale]));
       expect(m![1], locale).toContain(raw(locale, "register.status.promotionSkipped.link"));
       if (locale !== "en") expect(raw(locale, "register.status.promotionSkipped.body"), `${locale}: translated`).not.toBe(raw("en", "register.status.promotionSkipped.body"));
       judged += 1;

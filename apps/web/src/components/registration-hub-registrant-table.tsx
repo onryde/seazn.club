@@ -3,7 +3,7 @@ import { ChevronDown } from "lucide-react";
 import { t } from "@/lib/i18n";
 import type { Dict } from "@/lib/i18n-constants";
 import { formatMoneyExact, asCurrency } from "@/lib/currency";
-import { fmtDateTime } from "@/lib/format";
+import { fmtDate, fmtDateTime } from "@/lib/format";
 import { deriveCapacityMeter } from "@/components/registration-hub-row-derive";
 import {
   REGISTRANT_STATUS_STYLE,
@@ -104,6 +104,8 @@ export function renderRegistrantKindCell(
 export function renderRegistrantStatusCell(
   row: Pick<RegistrationListRow, "status" | "waitlist_position" | "promotion_skipped_at">,
   dict: Dict,
+  /** The org's zone (`RegistrationHubRegistrantTableContext.orgTz`): the skip chip's date is written in it. */
+  orgTz: string,
 ): ReactNode {
   return (
     <span className="flex flex-col items-start gap-0.5">
@@ -120,13 +122,17 @@ export function renderRegistrantStatusCell(
       )}
       {/* Walk-fix F16: an automatic promotion passed this waiting entry over (no Lichess link that plays) - the organiser's answer to
           "why did the place go to someone behind them". The read model gives the time only while the entry waits; the status gates
-          it here too. Amber, the hub's own "needs the registrant's action" tone, not a status of its own. */}
+          it here too. Amber, the hub's own "needs the registrant's action" tone, not a status of its own. Final review m1: dated and in
+          the past tense ("Skipped on 14 Nov: Lichess wasn't linked") - a later link re-runs nothing, and the words stay true. */}
       {row.status === "waitlisted" && row.promotion_skipped_at !== null && (
         <span
           data-testid="reg-hub-promotion-skipped"
+          data-skipped-at={new Date(row.promotion_skipped_at).toISOString()}
           className="inline-flex w-fit items-center rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800 ring-1 ring-amber-200"
         >
-          {t(dict, "reg.hub.registrants.table.promotionSkipped")}
+          {t(dict, "reg.hub.registrants.table.promotionSkipped", {
+            date: fmtDate(orgTz, row.promotion_skipped_at, { day: "numeric", month: "short" }),
+          })}
         </span>
       )}
     </span>
@@ -295,7 +301,7 @@ export function RegistrationHubRegistrantRow({
         <span data-registration-hub-registrant-card className="flex min-w-0 flex-1 flex-col gap-1 sm:hidden">
           <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
             <span className="font-medium text-slate-900">{row.display_name}</span>
-            {renderRegistrantStatusCell(row, dict)}
+            {renderRegistrantStatusCell(row, dict, orgTz)}
           </span>
           <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
             <span>{row.division_name}</span>
@@ -321,7 +327,7 @@ export function RegistrationHubRegistrantRow({
           </span>
           <span className="min-w-0 text-sm text-slate-700">{row.division_name}</span>
           <span className="min-w-0 text-sm text-slate-700">{renderRegistrantKindCell(row, dict)}</span>
-          <span className="min-w-0 text-sm text-slate-700">{renderRegistrantStatusCell(row, dict)}</span>
+          <span className="min-w-0 text-sm text-slate-700">{renderRegistrantStatusCell(row, dict, orgTz)}</span>
           <span className="min-w-0 text-sm text-slate-700">{renderRegistrantPaymentCell(row, dict)}</span>
           <span className="min-w-0 text-sm text-slate-700">{fmtDateTime(orgTz, row.created_at)}</span>
         </span>

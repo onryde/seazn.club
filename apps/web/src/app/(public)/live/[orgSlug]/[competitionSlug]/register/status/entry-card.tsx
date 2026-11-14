@@ -11,7 +11,7 @@
 // as a plain string.
 import type { ReactNode } from "react";
 import { formatMoneyExact } from "@/lib/currency";
-import { fmtPublicDeadline } from "@/lib/format";
+import { fmtPublicDate, fmtPublicDeadline } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import { entryWaitingOn } from "@/lib/registration-status";
@@ -370,7 +370,9 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
         <p className="text-sm text-ink-muted">{t(ui, "register.status.waitlisted.note")}</p>
       );
     // Walk-fix F16: an automatic promotion passed this entry over (its Lichess account is not linked to play; the read model gives the
-    // time only while the entry waits). Under the place, which still holds: why, and the one step that makes the next place theirs. The
+    // time only while the entry waits). Under the place, which still holds: why, and the one step that makes the next place theirs.
+    // Final review m1: linking re-runs nothing, so the note outlives its cause - it is written about the skip, dated in the org's zone
+    // ("A place opened on 14 November … wasn't linked"), which stays true once the player has linked. The
     // amber and the Lichess violet are the register page's own Lichess card's (register-lichess-card.tsx), so the step reads as the same
     // one. The link names no `next`: this page's address carries the cart's access token, which the sign-in and Lichess round trip would
     // carry through more URLs; the flow lands on the player's home, whose Lichess card says the outcome.
@@ -384,7 +386,11 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
             data-skipped-at={entry.promotion_skipped_at}
             className="space-y-2.5 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2.5"
           >
-            <p className="text-sm text-amber-900">{t(ui, "register.status.promotionSkipped.body")}</p>
+            <p className="text-sm text-amber-900">
+              {t(ui, "register.status.promotionSkipped.body", {
+                date: fmtPublicDate(locale, cart.timezone, entry.promotion_skipped_at, { day: "numeric", month: "long" }),
+              })}
+            </p>
             <a
               href={lichessLinkStartHref(orgSlug)}
               data-testid="reg-status-promotion-skipped-link"

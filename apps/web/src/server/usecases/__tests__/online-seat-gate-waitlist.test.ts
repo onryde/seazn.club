@@ -95,6 +95,20 @@ vi.mock("../external-accounts", async (importOriginal) => {
   };
 });
 
+// Final review m1 renders the two surfaces that state a skip from the real reads: the status card's Cancel reads the router and the
+// confirm dialog at render time, which a server test has neither of (the status page's own tests stub the same two).
+vi.mock("next/navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/navigation")>()),
+  useRouter: () => ({ refresh: () => {} }),
+}));
+vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => async () => false }));
+
+import { createElement, Fragment } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import uiEn from "@/dictionaries/en/ui.json";
+import type { Dict } from "@/lib/i18n-constants";
+import { EntryCard } from "@/app/(public)/live/[orgSlug]/[competitionSlug]/register/status/entry-card";
+import { renderRegistrantStatusCell } from "@/components/registration-hub-registrant-table";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -572,6 +586,50 @@ describe.skipIf(!HAS_DB)("walk-fix F16: a skip is told to the registrant and sho
     expect((await statusOf(a.id)).status, "premise: A, linked now, took the next spot").toBe("confirmed");
     expect(await rowSkipsOf(r, [a.id]), "promoted: the row no longer says skipped").toEqual([null]);
     expect(await cardSkipOf(a.cart), "nor does the card").toBeNull();
+  });
+
+  // Final review m1: linking re-runs nothing (only the next freed place does), so after the player links - the remedy both surfaces
+  // offer - the row and the card still carry the skip. The words they render from these real reads are about that moment: dated and
+  // in the past tense, so they stay true. The expected date is written by Intl here, in the org's zone, not by the components.
+  it("after a LATER link, the row and the card keep the skip's time, and both render it dated and in the past tense", async () => {
+    const r = await rig(true);
+    const first = await player(r, "none");
+    const a = await enterWithCart(r, first);
+    const b = await enter(r, await player(r, "plays"), "waitlisted");
+    const holder = await enter(r, null, "pending");
+    await withdrawRegistrationOrganiser(r.auth, holder);
+    expect((await statusOf(b)).status, "premise: B was promoted over A").toBe("confirmed");
+    const [skippedAt] = await rowSkipsOf(r, [a.id]);
+    expect(skippedAt, "premise: A's row says it was skipped").toBeInstanceOf(Date);
+
+    await reconnectLichess(first);
+    expect((await statusOf(a.id)).status, "linking frees nothing: A still waits").toBe("waitlisted");
+
+    const row = (await listRegistrations(r.auth, r.divisionId, null)).find((x) => x.id === a.id)!;
+    expect(row.promotion_skipped_at, "the row keeps the skip's time").toEqual(skippedAt);
+    const view = await groupById(a.cart.id, a.cart.token);
+    const entry = view.entries[0]!;
+    expect(entry.promotion_skipped_at, "so does the card").not.toBeNull();
+    expect(new Date(entry.promotion_skipped_at!).getTime(), "the same moment").toBe(skippedAt!.getTime());
+
+    const tz = view.org_timezone;
+    const day = (month: "long" | "short") => new Intl.DateTimeFormat("en-GB", { timeZone: tz, day: "numeric", month }).format(skippedAt!);
+    const chip = renderToStaticMarkup(createElement(Fragment, null, renderRegistrantStatusCell(row, uiEn as Dict, tz))).replace(/&#x27;/g, "'");
+    expect(chip, "the organiser's chip").toContain(`Skipped on ${day("short")}: Lichess wasn't linked`);
+    const card = renderToStaticMarkup(
+      createElement(EntryCard, {
+        entry,
+        cart: { cart_size: view.cart_size, expires_at: view.expires_at, charges_enabled: view.charges_enabled, instructionsHtml: null, currency: view.currency, timezone: tz },
+        orgSlug: view.org_slug,
+        competitionSlug: view.competition_slug,
+        token: a.cart.token,
+        locale: "en",
+        ui: uiEn as Dict,
+      }),
+    ).replace(/&#x27;/g, "'");
+    expect(card, "the registrant's note").toContain(`A place opened on ${day("long")}, but your turn was skipped`);
+    expect(card).toContain("wasn't linked to play");
+    for (const html of [chip, card]) expect(html, "never the present tense").not.toMatch(/isn't linked|not linked to play yet|Lichess not linked/);
   });
 
   it("a skip from an EARLIER wait does not follow the entry back onto the waitlist", async () => {
