@@ -598,6 +598,23 @@ export function reusableSessionUrl(stored: Stripe.Checkout.Session, registration
   return stored.expires_at * 1000 > now.getTime() + PAY_SESSION_REUSE_MARGIN_MS ? stored.url : null;
 }
 
+/**
+ * Whether the cart's stored session must be retired (`expireStoredSession`, fail-closed) BEFORE an entry's own mint: it is `open`
+ * and names this entry - alone, or beside siblings. The one rule for both per-entry Pay buttons (the payment page's
+ * `payFromPayPage`, the cart status page's `resumeRegistrationCheckout`).
+ *
+ * Cart double-pay fix (owner ruling 2026-11-14): the sign-up session of a multi-entry cart names EVERY entry, and one that also named
+ * a sibling used to be left open (the mint's own supersede step keeps its subsumption rule), so the entry stayed payable twice - its
+ * new session and the sign-up tab. The siblings it also named stay payable through their own Pay. A session that does not name this
+ * entry (a sibling's own) is never this entry's to retire.
+ */
+export function openSessionNamesEntry(
+  stored: Stripe.Checkout.Session | null,
+  registrationId: string,
+): stored is Stripe.Checkout.Session {
+  return stored?.status === "open" && checkoutRegistrationIds(stored).includes(registrationId);
+}
+
 /** The stored session as Stripe holds it now; a read failure refuses (502). */
 export async function readStoredSession(id: string, registrationId: string): Promise<Stripe.Checkout.Session> {
   try {
@@ -698,14 +715,13 @@ export async function resumeRegistrationCheckout(
   // (`mintEntryPayPageCheckout`) - so no coverage check is owed.
   //
   // Polish wave final fix m8: the CART pointer's session too, when it is still open (inside the reuse margin, so not handed out
-  // above) and covers this entry alone. The mint's own supersede step (`expireSupersededCheckoutSession`) runs after the create and
-  // is best-effort, so a Stripe hiccup there left two payable sessions for the entry. A session that also covers a sibling is not
-  // this entry's to expire - the supersede's own subsumption rule leaves it too.
-  const cartIds = cart?.status === "open" ? checkoutRegistrationIds(cart) : [];
-  const cartIsOwn = cartIds.length > 0 && cartIds.every((id) => id === reg.id);
+  // above) and names this entry. The mint's own supersede step (`expireSupersededCheckoutSession`) runs after the create and is
+  // best-effort, so a Stripe hiccup there left two payable sessions for the entry. Cart double-pay fix (2026-11-14): a session that
+  // ALSO names a sibling (a multi-entry cart's sign-up session) is retired too - never handed out above, it would otherwise stay
+  // payable for this entry beside the new one (`openSessionNamesEntry`).
   const beforeMint: [string | null, Stripe.Checkout.Session | null][] = [
     [pageId, page],
-    [cartIsOwn ? reg.checkout_session_id : null, cart],
+    [openSessionNamesEntry(cart, reg.id) ? reg.checkout_session_id : null, cart],
   ];
   for (const [id, stored] of beforeMint) {
     if (!id || stored?.status !== "open") continue;
