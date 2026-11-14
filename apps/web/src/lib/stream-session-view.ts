@@ -27,7 +27,9 @@ import { fmtNumber } from "@/lib/format";
 import type { MessageKey } from "@/lib/messages";
 import { DESTINATION_NOT_ALLOWED, TARGET_UNREADABLE } from "@/lib/stream-destinations";
 import { RELAY_PLAN_GATES } from "@/lib/stream-plan-gates";
-import { YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL, YOUTUBE_REFUSAL_CODES, isYoutubeRefusalCode, type YoutubeRefusalCode } from "@/lib/youtube";
+import {
+  NOT_LIVE_WARN_MS, YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL, YOUTUBE_REFUSAL_CODES, isYoutubeRefusalCode, type YoutubeRefusalCode, type YoutubeStatusView,
+} from "@/lib/youtube";
 import type {
   StreamEndReason, StreamFailReason, StreamLostCountdown, StreamPhone, StreamSessionCurrent, StreamTarget,
 } from "@/server/api-v1/schemas";
@@ -112,6 +114,34 @@ export function youtubeLinkOf(view: Pick<StreamSessionView, "state" | "youtubeVi
   if (!view || typeof url !== "string") return null;
   const at = phoneTabState(view);
   return { url, live: at === "provisioning" || at === "warming" || at === "live" };
+}
+
+/** Owner direction 2026-11-14: the ONE line about a live session's YouTube side. The server decides WHAT (`youtubeStatus`: what YouTube
+ *  says of the broadcast and its stream, or `pasted_key` for a destination with no API behind it); this says WHEN it is shown - only
+ *  while the session is live (a positive list through `phoneTabState`, so a state added later shows nothing until named) - and HOW:
+ *  its copy key and its tone. A TABLE over the closed word list (registry over branching), proven total by stream-session-view.test.ts
+ *  against `YOUTUBE_STATUS_VIEWS`. Tone is the panel's own vocabulary: emerald (it is working), amber (the organiser should look),
+ *  slate (nothing to act on - not live yet, or no status to give). Null for no word, and for a view from a server older than the
+ *  field (`undefined` on the wire), which never becomes a line.
+ *
+ *  A `not_live` that PERSISTS is not "nothing to act on": once the session has been live NOT_LIVE_WARN_MS (the server's own measurement,
+ *  `youtubeLiveForMs`, never the browser's clock) the same word reads amber with its own copy - "Still not live on YouTube - check
+ *  Studio". The status stays `not_live` (the wire and the `data-status` hook do not change); only the line's key and tone do. */
+export type YoutubeStatusLine = { status: YoutubeStatusView; key: MessageKey; tone: "emerald" | "amber" | "slate" };
+export const YOUTUBE_NOT_LIVE_STUCK_LINE: { key: MessageKey; tone: YoutubeStatusLine["tone"] } = { key: "stream.youtube.status.not_live_stuck", tone: "amber" };
+export const YOUTUBE_STATUS_LINES: Record<YoutubeStatusView, { key: MessageKey; tone: YoutubeStatusLine["tone"] }> = {
+  live_receiving: { key: "stream.youtube.status.live_receiving", tone: "emerald" },
+  not_live: { key: "stream.youtube.status.not_live", tone: "slate" },
+  live_no_video: { key: "stream.youtube.status.live_no_video", tone: "amber" },
+  pasted_key: { key: "stream.youtube.status.pasted_key", tone: "slate" },
+};
+export function youtubeStatusLineOf(view: Pick<StreamSessionView, "state" | "youtubeStatus" | "youtubeLiveForMs"> | null): YoutubeStatusLine | null {
+  const word = view?.youtubeStatus;
+  if (!view || typeof word !== "string" || !Object.hasOwn(YOUTUBE_STATUS_LINES, word)) return null;
+  if (phoneTabState(view) !== "live") return null;
+  // A view from a server older than the field has no `youtubeLiveForMs`: not stuck (no measurement is no evidence of a long wait).
+  const stuck = word === "not_live" && typeof view.youtubeLiveForMs === "number" && view.youtubeLiveForMs >= NOT_LIVE_WARN_MS;
+  return { status: word, ...(stuck ? YOUTUBE_NOT_LIVE_STUCK_LINE : YOUTUBE_STATUS_LINES[word]) };
 }
 
 export const STATE_PILL_KEYS: Record<PhoneTabState, MessageKey> = {

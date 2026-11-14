@@ -21,7 +21,7 @@ import { LADDER_RUNGS } from "../../relay/domain/ladder.ts";
 // for the same reason as the imports above; lib/stream-destinations.ts is deliberately import-free.
 import { STREAM_PLATFORMS } from "../../../lib/stream-destinations.ts";
 // YouTube Connect (T8): the privacy vocabulary is lib/youtube.ts's own list (constants only; loads bare under strip-types).
-import { YOUTUBE_PRIVACIES } from "../../../lib/youtube.ts";
+import { YOUTUBE_PRIVACIES, YOUTUBE_STATUS_VIEWS } from "../../../lib/youtube.ts";
 // R2007 PR B — the compositor's programme phases, the overlay page's phase channels and the loopback phase endpoint's
 // constants. RELATIVE with `.ts` for the same reason; lib/relay-phase.ts is deliberately import-free.
 import { PHASE_CHANNELS, PROGRAMME_PHASES, RELAY_PHASE_LONG_POLL_MAX_MS, RELAY_PHASE_PATH, RELAY_PHASE_PORT, type RelayPhaseReply as RelayPhaseReplyWire } from "../../../lib/relay-phase.ts";
@@ -165,6 +165,17 @@ export const StreamSessionCurrent = z
      *  its YouTube Connect broadcast once YouTube gave it its id, in any state but `failed`. Null for a pasted key, before the id is
      *  known, and once the channel is disconnected (the broadcast rows are purged). The panel's "On YouTube" card links it. */
     youtubeVideoUrl: z.string().nullable(),
+    /** Owner direction 2026-11-14: the ONE word the panel shows about a LIVE session's YouTube side (server/usecases/stream-sessions/
+     *  youtube-status.ts). `live_receiving` / `not_live` / `live_no_video`: what YouTube says of the broadcast and its stream, read
+     *  from 60 s after go-live, about once a minute, and about once in five once `live_receiving` has held for three reads in a row;
+     *  `pasted_key`: the session streams to a YouTube key somebody pasted, which has no API behind it (no read is ever made). Null:
+     *  nothing to say - not live, not YouTube, no word read yet, or the club's grant is dead (the word is cleared, not left stale). An
+     *  error reading YouTube carries the previous word and is never a word of its own. */
+    youtubeStatus: z.enum(YOUTUBE_STATUS_VIEWS).nullable(),
+    /** How long this session has been live, in ms, on the SERVER's clock at this response (the shape of `output.elapsedMs`: the
+     *  browser's clock is never asked). Present with a stored `youtubeStatus` word only - null for no word, `pasted_key`, or a session
+     *  with no `live_at`. The panel judges a `not_live` that has gone on too long ("Still not live on YouTube") on it. */
+    youtubeLiveForMs: z.number().int().min(0).nullable(),
     target: z.object({ id: z.string(), kind: StreamTargetKind, label: z.string() }),
     fixtureDecided: z.boolean(),
     /** W2a loop R, M2: the fixture is HELD (`needs_decision` — a level bracket result awaiting the organiser's settle).

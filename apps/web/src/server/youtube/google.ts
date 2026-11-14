@@ -16,7 +16,8 @@ import "server-only";
 import { GOOGLE_AUTH_URL, GOOGLE_TOKEN_URL, googleConfigured } from "@/lib/oauth";
 import { YOUTUBE_SCOPE, type YoutubePrivacy } from "@/lib/youtube";
 import {
-  LIST_BUDGET_SPENT, YOUTUBE_CALL_BOUND_MS, YouTubeError, type BroadcastLife, type BroadcastLifeInfo, type StreamListing, type VideoFacts, type YoutubeErrorCode, type YouTubePort,
+  LIFE_CYCLES, LIST_BUDGET_SPENT, STREAM_HEALTHS, STREAM_STATUSES, YOUTUBE_CALL_BOUND_MS, YouTubeError, lifeOfCycle, type BroadcastLifeInfo, type LifeCycle, type StreamHealth,
+  type StreamListing, type StreamStatus, type StreamStatusInfo, type VideoFacts, type YoutubeErrorCode, type YouTubePort,
 } from "./port";
 
 const API = "https://www.googleapis.com/youtube/v3";
@@ -194,11 +195,15 @@ async function deleteResource(at: string, path: "liveBroadcasts" | "liveStreams"
   }
 }
 
-// liveBroadcasts `status.lifeCycleStatus` -> the port's BroadcastLife. The two transitional values read as where they are going.
-const LIFE: Record<string, Exclude<BroadcastLife, "absent">> = {
-  created: "created", ready: "ready", testStarting: "testing", testing: "testing", liveStarting: "live", live: "live",
-  complete: "complete", revoked: "revoked",
-};
+// liveBroadcasts `status.lifeCycleStatus`: the values the adapter admits (the port's LIFE_CYCLES: YouTube's nine, less the enum's zero
+// value `lifeCycleStatusUnspecified`, which is refused). `life` is the port's collapse of one (`lifeOfCycle`: the two transitional values
+// read as where they are going); the raw value rides along as `lifeCycle` for the one reader that must not collapse it.
+const LIFE_CYCLE_WIRE: ReadonlySet<string> = new Set<string>(LIFE_CYCLES);
+
+// liveStreams `status.streamStatus` and `status.healthStatus.status`: the values Google documents (the port's own lists, minus `absent`,
+// which is the port's word for "no such stream", never a wire value).
+const STREAM_STATUS_WIRE: ReadonlySet<string> = new Set(STREAM_STATUSES.filter((s) => s !== "absent"));
+const STREAM_HEALTH_WIRE: ReadonlySet<string> = new Set(STREAM_HEALTHS);
 
 const badTitle = (t: unknown): boolean => typeof t !== "string" || t.trim() === "" || Array.from(t).length > BROADCAST_TITLE_MAX_CHARS || /[<>]/.test(t);
 
@@ -370,18 +375,42 @@ export class GoogleYouTube implements YouTubePort {
   async broadcastLife(at: string, broadcastId: string): Promise<BroadcastLifeInfo> {
     const items = parseBody(await api(at, "GET", "liveBroadcasts", { query: { part: "status,snippet", id: broadcastId } })).items;
     const row = (Array.isArray(items) ? items : []).map(asRecord).find((i) => i?.id === broadcastId);
-    if (!row) return { life: "absent", actualStartAt: null, actualEndAt: null, madeForKids: null };
+    if (!row) return { life: "absent", lifeCycle: "absent", actualStartAt: null, actualEndAt: null, madeForKids: null };
     const status = asRecord(row.status);
-    const life = status?.lifeCycleStatus;
-    // A value Google never documented is refused, not guessed at: the caller would act on it (delete, complete).
-    if (typeof life !== "string" || !Object.hasOwn(LIFE, life)) throw new YouTubeError("youtube_unavailable", "unknownLifeCycleStatus");
+    const raw = status?.lifeCycleStatus;
+    // A value the adapter does not admit (Google's `lifeCycleStatusUnspecified`, or one it never documented) is refused, not guessed at:
+    // the caller would act on it (delete, complete).
+    if (typeof raw !== "string" || !LIFE_CYCLE_WIRE.has(raw)) throw new YouTubeError("youtube_unavailable", "unknownLifeCycleStatus");
+    const lifeCycle = raw as LifeCycle;
     const snippet = asRecord(row.snippet);
     // `status.madeForKids`: YouTube's own current designation. Only a real boolean is an answer; anything else is "did not say".
     const kids = status?.madeForKids;
     return {
-      life: LIFE[life]!, actualStartAt: isoDate(snippet?.actualStartTime), actualEndAt: isoDate(snippet?.actualEndTime),
+      life: lifeOfCycle(lifeCycle), lifeCycle, actualStartAt: isoDate(snippet?.actualStartTime), actualEndAt: isoDate(snippet?.actualEndTime),
       madeForKids: typeof kids === "boolean" ? kids : null,
     };
+  }
+
+  /** liveStreams.list(part=status, id), …/live/docs/liveStreams/list: READ-ONLY, 1 quota unit (a list call, like `broadcastLife`). `part` is
+   *  `status` ALONE and never `cdn`: the `cdn` part carries `ingestionInfo.streamName`, the stream key, which this call must never fetch.
+   *  `status.streamStatus` (active, created, error, inactive, ready) and `status.healthStatus.status` (good, ok, bad, noData, revoked: the
+   *  discovery document's enums - the reference page lists only the first four health values). No
+   *  item for the id is `absent`. A `streamStatus` Google never documented is refused, as `broadcastLife` refuses an undocumented life:
+   *  the caller reads a refusal as no answer and carries its previous word. A stream that has never carried video may have no
+   *  `healthStatus` at all: that is `health: null` (no health said), not a refusal; a `healthStatus.status` that IS there but is not one of
+   *  the five is refused. */
+  async streamStatus(at: string, streamId: string): Promise<StreamStatusInfo> {
+    const items = parseBody(await api(at, "GET", "liveStreams", { query: { part: "status", id: streamId } })).items;
+    const row = (Array.isArray(items) ? items : []).map(asRecord).find((i) => i?.id === streamId);
+    if (!row) return { status: "absent", health: null };
+    const status = asRecord(row.status);
+    const streamStatus = status?.streamStatus;
+    if (typeof streamStatus !== "string" || !STREAM_STATUS_WIRE.has(streamStatus)) throw new YouTubeError("youtube_unavailable", "unknownStreamStatus");
+    const healthStatus = asRecord(status?.healthStatus);
+    const health = healthStatus?.status;
+    if (health === undefined || health === null) return { status: streamStatus as StreamStatus, health: null };
+    if (typeof health !== "string" || !STREAM_HEALTH_WIRE.has(health)) throw new YouTubeError("youtube_unavailable", "unknownHealthStatus");
+    return { status: streamStatus as StreamStatus, health: health as StreamHealth };
   }
 
   /** liveBroadcasts.transition(complete). `redundantTransition` (403) is YouTube saying it is already there: that resolves. */

@@ -35,6 +35,7 @@ import "server-only";
 //   panel-reads   the organiser panels' readers: the credits card, the run sheet's open-stream states
 //   phone-lost    the phone-lost ends: the facts they judge on, the camera evidence, endIfPhoneLost
 //   auto-stop     the automatic stop after the result (7.3): its facts, verdict and endIfAutoStopDue
+//   youtube-status the YouTube live status word of a YouTube Connect session: the 60 s gate, the claimed read, the event
 //   tick          who advances a session: tickSession and the stream-tick pass over every open session
 //   current       the organiser's projection: latestRow and currentSession
 //   stop          the organiser's Stop: the automatic-start block stamp and stopSession

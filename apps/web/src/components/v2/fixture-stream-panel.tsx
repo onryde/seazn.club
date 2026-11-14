@@ -87,6 +87,7 @@ import {
   YOUTUBE_REFUSAL_FIX,
   youtubeRefusalOf,
   youtubeLinkOf,
+  youtubeStatusLineOf,
   type YoutubeLink,
   type CreateFailureCode,
   type CreateErrorHolder,
@@ -1738,6 +1739,14 @@ const PILL: Record<PhoneTabState, string> = {
 };
 
 const CHIP = "rounded-md bg-slate-100 px-2 py-1 text-[11px] text-slate-700";
+/** Owner direction 2026-11-14: the live YouTube status line's look per tone (`YOUTUBE_STATUS_LINES` in lib/stream-session-view.ts decides
+ *  the tone). The same emerald / amber / slate vocabulary as the restart line and the takeover notice; the icon repeats what the words
+ *  say, so colour is never the only carrier. */
+const YOUTUBE_STATUS_LOOK = {
+  emerald: { text: "text-emerald-800", icon: "text-emerald-600", Icon: Check },
+  amber: { text: "text-amber-800", icon: "text-amber-600", Icon: TriangleAlert },
+  slate: { text: "text-slate-600", icon: "text-slate-500", Icon: Info },
+} as const;
 /** §8a: solid red, deliberately NOT `.btn-danger` (a white outline) — the one irreversible control on a panel that is
  *  on air. It opens the repo's confirm dialog. Shared by the tab and the stop probe (G2). */
 const STOP_BUTTON =
@@ -2088,6 +2097,25 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
         </a>
       </div>
     </div>
+  ) : null;
+
+  // Owner direction 2026-11-14: the ONE line about the live session's YouTube side, next to the video card - what YouTube says of the
+  // broadcast and its stream (live and receiving / not live / live with no video), or that a pasted key has no status to give. It is
+  // the server's word (`youtubeStatus`); `youtubeStatusLineOf` says whether it shows (live only) and in which tone. No word yet (YouTube
+  // is first read a minute after go-live), no line - never a placeholder.
+  const youtubeStatusLine = youtubeStatusLineOf(p.view);
+  const statusLook = youtubeStatusLine ? YOUTUBE_STATUS_LOOK[youtubeStatusLine.tone] : null;
+  const youtubeStatusEl = youtubeStatusLine && statusLook ? (
+    <p
+      data-testid="stream-youtube-live-status"
+      data-status={youtubeStatusLine.status}
+      data-tone={youtubeStatusLine.tone}
+      role="status"
+      className={`flex min-w-0 items-start gap-1.5 px-1 text-xs ${statusLook.text}`}
+    >
+      <statusLook.Icon aria-hidden className={`mt-px h-3.5 w-3.5 shrink-0 ${statusLook.icon}`} strokeWidth={1.8} />
+      <span className="min-w-0">{msg(youtubeStatusLine.key)}</span>
+    </p>
   ) : null;
 
   // PR-2 T10 (§7.1, Option A states 1–2): the switch under the picker — the whole row is the control (44 px), its caption
@@ -2551,6 +2579,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
           </details>
           {!legacy && state === "live" && codeDisclosure}
           {youtubeCard}
+          {youtubeStatusEl}
         </div>
       )}
 

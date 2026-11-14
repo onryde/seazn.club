@@ -56133,6 +56133,34 @@
                                 }
                               ]
                             },
+                            "youtubeStatus": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "live_receiving",
+                                    "not_live",
+                                    "live_no_video",
+                                    "pasted_key"
+                                  ]
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "youtubeLiveForMs": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
                             "target": {
                               "type": "object",
                               "properties": {
@@ -56325,6 +56353,8 @@
                             "replayUrl",
                             "replayParts",
                             "youtubeVideoUrl",
+                            "youtubeStatus",
+                            "youtubeLiveForMs",
                             "target",
                             "fixtureDecided",
                             "fixtureHeld",
@@ -56386,6 +56416,8 @@
                       }
                     ],
                     "youtubeVideoUrl": "example",
+                    "youtubeStatus": "live_receiving",
+                    "youtubeLiveForMs": 0,
                     "target": {
                       "id": "example",
                       "kind": "youtube",
@@ -56929,6 +56961,34 @@
                             }
                           ]
                         },
+                        "youtubeStatus": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "live_receiving",
+                                "not_live",
+                                "live_no_video",
+                                "pasted_key"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "youtubeLiveForMs": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "target": {
                           "type": "object",
                           "properties": {
@@ -57121,6 +57181,8 @@
                         "replayUrl",
                         "replayParts",
                         "youtubeVideoUrl",
+                        "youtubeStatus",
+                        "youtubeLiveForMs",
                         "target",
                         "fixtureDecided",
                         "fixtureHeld",
@@ -57177,6 +57239,8 @@
                       }
                     ],
                     "youtubeVideoUrl": "example",
+                    "youtubeStatus": "live_receiving",
+                    "youtubeLiveForMs": 0,
                     "target": {
                       "id": "example",
                       "kind": "youtube",

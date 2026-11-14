@@ -20,6 +20,7 @@ import { fixtureContext } from "./lookups";
 import { outputSinceExpr } from "./ingest-poll";
 import { phoneFactsOf, ask10PhoneOf } from "./phone-lost";
 import { tickSession } from "./tick";
+import { youtubeStatusOf } from "./youtube-status";
 
 // ---------------------------------------------------------------------------
 // Reads and the organiser's commands
@@ -75,6 +76,7 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
     // M6: the elapsed on THIS clock, at this response — the client judges D3 on it, never on the browser's clock.
     output = { state: outputObserved, since: since.toISOString(), elapsedMs: Math.max(0, deps.now().getTime() - since.getTime()) };
   }
+  const yt = await youtubeStatusOf(row.id, row.state, target!.kind, deps.now());
   const allowance = await restartAllowance(sql, { orgId: row.org_id, fixtureId, excludeSessionId: null }, deps.now());
   // W24 (§6.12, T9): the countdown to the end the tick will make, from the clocks the tick judges (phoneFactsOf: the
   // phone's beat, the last connected sample, first ingest) and the row's warming entry, on this response's clock, and
@@ -112,6 +114,7 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
     replayUrl: fx?.stream_url ?? null,
     replayParts: await fixtureReplayParts(row.org_id, fixtureId),
     youtubeVideoUrl: await sessionVideoUrl(row.org_id, row.id),
+    youtubeStatus: yt.status, youtubeLiveForMs: yt.liveForMs,
     target: { id: target!.id, kind: target!.kind, label: target!.label },
     fixtureDecided: fx?.status === "decided" || fx?.status === "finalized",
     fixtureHeld: fx?.status === "needs_decision",

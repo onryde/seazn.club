@@ -91,6 +91,25 @@ export const YOUTUBE_REFUSAL_REMEDY: Record<YoutubeRefusalCode, "fix_destination
   youtube_unavailable: "retry",
 };
 
+/** The ONE word the stream panel shows for a live YouTube Connect session (owner direction 2026-11-14): what YouTube itself says of the
+ *  broadcast and its stream. Derived server-side (server/youtube/live-status.ts), carried on the session projection, drawn by the panel.
+ *  `live_receiving`: the broadcast is live and the stream is active and healthy; `not_live`: the broadcast is not live;
+ *  `live_no_video`: the broadcast is live but YouTube is receiving no video (the stream is not active, or its health is noData / bad). */
+export const YOUTUBE_LIVE_WORDS = ["live_receiving", "not_live", "live_no_video"] as const;
+export type YoutubeLiveWord = (typeof YOUTUBE_LIVE_WORDS)[number];
+
+/** What the session projection's `youtubeStatus` can say: a live word, or `pasted_key` - the session streams to a YouTube key somebody
+ *  pasted, which has no API behind it, so there is no status to read (the panel says so). Null: nothing to say (not live, not YouTube,
+ *  or no word read yet). */
+export const YOUTUBE_STATUS_VIEWS = [...YOUTUBE_LIVE_WORDS, "pasted_key"] as const;
+export type YoutubeStatusView = (typeof YOUTUBE_STATUS_VIEWS)[number];
+
+/** How long after a session went live a `not_live` word stops being "give it a moment" and becomes "go and look": three minutes. A
+ *  broadcast YouTube still does not show live this long after the phone started sending (and 60 s of that is the wait for the first
+ *  read) will not get there by itself - the organiser should open Studio. The panel judges it on the server's own measurement
+ *  (`youtubeLiveForMs`), never the browser's clock (lib/stream-session-view.ts `youtubeStatusLineOf`). */
+export const NOT_LIVE_WARN_MS = 3 * 60_000;
+
 /** The replay link for a broadcast: a YouTube broadcast id is also the id of its video. */
 export const youtubeWatchUrl = (videoId: string): string => `https://www.youtube.com/watch?v=${videoId}`;
 
