@@ -7,6 +7,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { formatMoneyExact } from "@/lib/currency";
+import { flushDeferred } from "@/lib/deferred";
 
 const stripeMock = vi.hoisted(() => {
   const refundCreate = vi.fn();
@@ -1066,17 +1067,19 @@ const withdrawAudit = async (regId: string) =>
 const statusOf = async (regId: string): Promise<string> => (await sql<{ status: string }[]>`select status from registrations where id = ${regId}`)[0]!.status;
 
 describe.skipIf(!HAS_DB)("withdrawn: the organiser withdraws an entry (real withdrawRegistrationOrganiser)", () => {
-  it("the contact is told in their language: who, which entry, which division; the first attempt is made after the response", async () => {
+  it.each([
+    { provider: "answers at once", slowMs: 0 },
+    { provider: "is slow to answer (a loaded machine)", slowMs: 400 },
+  ])("the contact is told in their language: who, which entry, which division; the first attempt is made after the response (provider $provider)", async ({ slowMs }) => {
+    if (slowMs > 0) deliverMock.mockImplementation(async () => new Promise((resolve) => setTimeout(() => resolve(later()), slowMs)));
     const w = await offlineWorld(1500, "auto");
     const to = address("wd");
     const reg = await seedRegistration(w.competition.id, w.division.id, w.settings, { displayName: TEAM, contactEmail: to, locale: "es", refCode: `P2-${randomUUID().slice(0, 6)}` });
     await sql`update registration_groups set contact_name = ${CONTACT} where id = ${reg.registration.group_id}`;
     await withdrawRegistrationOrganiser(w.owner, reg.registration.id);
     expect(await statusOf(reg.registration.id), "premise: the real usecase withdrew it").toBe("withdrawn");
-    await vi.waitFor(async () => {
-      const [r] = await withdrawnRows(reg.registration.id);
-      if (!r || r.attempts < 1) throw new Error("the request's attempt has not been made yet");
-    });
+    // Wait for the whole deferred attempt, not its claim (the claim counts it while the row is still `sending`).
+    expect(await flushDeferred(), "premise: the withdrawal left its first attempt as a deferred tail").toBeGreaterThanOrEqual(1);
     const rows = await withdrawnRows(reg.registration.id);
     expect(rows.map((r) => r.recipient.toLowerCase())).toEqual([to]);
     expect(rows[0]!.status).toBe("queued");
@@ -1343,15 +1346,18 @@ describe.skipIf(!HAS_DB)("joined: a teammate joins an entry (real joinTeamEntry)
     expect(checked, "anti-vacuity: every row of the table was driven").toBe(7);
   });
 
-  it("the mail greets the joiner, names the entry and its division, links the public page, and never leaks the captain's reference; the first attempt follows the response", async () => {
+  it.each([
+    { provider: "answers at once", slowMs: 0 },
+    { provider: "is slow to answer (a loaded machine)", slowMs: 400 },
+  ])("the mail greets the joiner, names the entry and its division, links the public page, and never leaks the captain's reference; the first attempt follows the response (provider $provider)", async ({ slowMs }) => {
+    if (slowMs > 0) deliverMock.mockImplementation(async () => new Promise((resolve) => setTimeout(() => resolve(later()), slowMs)));
     const e = await teamEntry({ status: "confirmed" });
     const to = address("joiner-copy");
     await join(e.joinCode, to);
-    // The dispatch runs after the response, on its own: wait for the attempt rather than race it. The provider answers 503, so the row stays queued.
-    await vi.waitFor(async () => {
-      const [r] = await joinedRows(e.reg.id);
-      if (!r || r.attempts < 1) throw new Error("the request's attempt has not been made yet");
-    });
+    // The dispatch runs after the response, on its own (a deferred tail): wait for the whole attempt, not for its claim. The claim counts
+    // the attempt while the row is still `sending`; only when the provider has answered (503) is the row back to `queued`. Polling on
+    // `attempts >= 1` read `sending` whenever the provider was slower than the poll (CI smoke, 2026-11-14).
+    expect(await flushDeferred(), "premise: the join left its first attempt as a deferred tail").toBeGreaterThanOrEqual(1);
     const [row] = await joinedRows(e.reg.id);
     expect(row!.status).toBe("queued");
     expect(row!.attempts, "a request path: one attempt, made after the response").toBe(1);
