@@ -61,7 +61,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
 import { ApiError } from "@/lib/client";
 import { ApiV1Error } from "@/lib/client-v1";
-import { t as tRuntime } from "@/lib/i18n-runtime";
+import { plural as pluralRuntime, t as tRuntime } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";
 
 const dict = (locale: string, file: string): Dict =>
@@ -74,11 +74,13 @@ const BOT_CHECK_SENTENCE = String(EN_UI["turnstile.error"]);
 vi.mock("@/components/i18n/dict-provider", () => ({
   useMsg: () => (key: string, vars?: Record<string, string | number>) => tRuntime(EN_UI, key, vars),
   useT: () => (key: string, vars?: Record<string, string | number>) => tRuntime(START_PAGE_DICT, key, vars),
+  usePlural: () => (key: string, count: number, vars?: Record<string, string | number>) => pluralRuntime(START_PAGE_DICT, key, count, "en", vars),
   useLocale: () => "en",
 }));
 
 import { AuthForm } from "../auth-form";
 import { StartWizard } from "../start-wizard";
+import { parseStartPrefill } from "../../app/[lang]/(marketing)/start/prefill";
 import { WithdrawByRef } from "../public-site/withdraw-by-ref";
 import { ResendConfirmation } from "../../app/(public)/live/[orgSlug]/[competitionSlug]/register/status/resend-confirmation";
 import { CancelEntry } from "../../app/(public)/live/[orgSlug]/[competitionSlug]/register/status/cancel-entry";
@@ -110,8 +112,10 @@ interface Surface {
   Err: typeof ApiError | typeof ApiV1Error;
   /** Mount and run the submit once; resolves when the request has settled. */
   run(): Promise<Island>;
-  /** The widget is on the page from the start (login, start) or only once the person has pressed the control (resend, withdraw). */
+  /** The widget is on the page from the start (login) or only once the person has pressed the control (resend, withdraw). */
   widgetOnMount: boolean;
+  /** The island with its widget on the page when that is neither mount nor after the request (start: its last step, B4). */
+  armed?: () => Promise<Island>;
   /** Mount only (no submit), with the widget's presence readable. */
   mount(): Island;
   /** The page text after a request. */
@@ -135,19 +139,38 @@ async function runAuth() {
 }
 
 function mountStart(): Island {
-  return renderIsland(StartWizard, { initial: { sport: "Badminton", entrants: 16 } });
+  return renderIsland(StartWizard, {
+    initial: parseStartPrefill({ sport: "badminton", entrants: "16" }, "2026-11-12"),
+    maxEntrants: 64,
+    today: "2026-11-12",
+    utcDay: "2026-11-13",
+    playSports: [],
+  });
+}
+const submitStep = async (island: Island, want: string) => {
+  const root = island.tree().find((e) => propsOf(e)["data-step"] !== undefined);
+  expect(propsOf(root!)["data-step"], "the step being submitted").toBe(want);
+  expect(widgets(island), `the widget on ${want}`).toHaveLength(want === "email" ? 1 : 0);
+  await (propsOf(byType(island, "form")[0]!).onSubmit as (e: typeof evt) => unknown)(evt);
+};
+/** B1 Sport → B2 Size and format → B3 Date, each step's own form submitted: the island on B4, the one step with the widget
+ *  (a successful send moves on to Sent, which has none). */
+async function armStart() {
+  const island = mountStart();
+  await submitStep(island, "sport");
+  // A format is chosen (Best fit when one fits, else League by hand), or Next stays shut.
+  const cards = island.tree().filter((e) => typeof e.type === "function" && e.type.name === "FormatCard");
+  if (!cards.some((c) => propsOf(c).checked)) (propsOf(cards.find((c) => (propsOf(c).card as { slug: string }).slug === "league")!).onPick as () => void)();
+  await submitStep(island, "size");
+  await submitStep(island, "date");
+  return island;
 }
 async function runStart() {
-  const island = mountStart();
-  (propsOf(byType(island, "form")[0]!).onSubmit as (e: typeof evt) => void)(evt); // step 0 -> 1
-  const looksRight = byType(island, "button").find((b) => textOf(b).includes(String(START_PAGE_DICT["start.wizard.looksRight"])));
-  expect(looksRight, "step 1's continue button").toBeTruthy();
-  (propsOf(looksRight!).onClick as () => void)(); // step 1 -> 2
+  const island = await armStart();
   const email = island.tree().find((e) => e.type === "input" && propsOf(e).type === "email");
-  expect(email, "step 2's email field").toBeTruthy();
+  expect(email, "B4's email field").toBeTruthy();
   (propsOf(email!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "player@example.com" } });
-  const form = byType(island, "form")[0]!;
-  await (propsOf(form).onSubmit as (e: typeof evt) => Promise<void>)(evt);
+  await submitStep(island, "email");
   return island;
 }
 
@@ -199,7 +222,7 @@ const SURFACES: Surface[] = [
   },
   {
     name: "start (start-wizard)", action: "start", fn: "api", url: "/api/funnel/start", Err: ApiError,
-    run: runStart, mount: mountStart, widgetOnMount: false, text: (i) => textOf(i.tree()),
+    run: runStart, mount: mountStart, widgetOnMount: false, armed: armStart, text: (i) => textOf(i.tree()),
   },
   {
     name: "resend (resend-confirmation)", action: "resend", fn: "apiV1", url: "/api/v1/public/registrations/groups/grp-1/resend", Err: ApiV1Error,
@@ -229,7 +252,7 @@ describe("the six surfaces send the widget's token, reset it, and say the bot ch
   for (const s of SURFACES) {
     describe(s.name, () => {
       it(`asks for the "${s.action}" widget and, once it is on the page, mounts exactly one wired to the controller that sends the request`, async () => {
-        const island = s.widgetOnMount ? s.mount() : await s.run();
+        const island = s.widgetOnMount ? s.mount() : await (s.armed ?? s.run)();
         expect(turnstileFake.actions.length, "anti-vacuity: the hook ran").toBeGreaterThan(0);
         expect(turnstileFake.actions.every((a) => a === s.action), `every useTurnstile call asks for "${s.action}"`).toBe(true);
         const found = widgets(island);
@@ -311,7 +334,7 @@ describe("the six surfaces send the widget's token, reset it, and say the bot ch
 
   it("login and start mount theirs on the form itself (start: on the step that submits, not before)", () => {
     expect(widgets(mountAuth())).toHaveLength(1);
-    expect(widgets(mountStart()), "start's step 0 has no widget").toHaveLength(0);
+    expect(widgets(mountStart()), "start's first step (Sport) has no widget").toHaveLength(0);
   });
 
   it("anti-vacuity: the refusal sentence is real English copy, not an empty string or the key", () => {

@@ -10,11 +10,14 @@ export async function i18nSuite(): Promise<void> {
   const fr = await fetch(`${BASE}/fr/start`);
   const frHtml = await fr.text();
   check("i18n: /fr/start 200", fr.status === 200);
-  check("i18n: /fr/start renders French", frHtml.includes("Lancez votre comp"));
+  // The wizard's heading, read from the dictionary the page renders (never a typed copy of it).
+  const startHeading = (lang: string): string =>
+    (JSON.parse(readFileSync(new URL(`../../../apps/web/src/dictionaries/${lang}/marketing.json`, import.meta.url), "utf8")) as Record<string, string>)["start.heading"];
+  check("i18n: /fr/start renders French", frHtml.includes(`>${startHeading("fr")}<`));
 
   const en = await fetch(`${BASE}/en/start`);
   const enHtml = await en.text();
-  check("i18n: /en/start renders English", enHtml.includes("Start your competition"));
+  check("i18n: /en/start renders English", enHtml.includes(`>${startHeading("en")}<`) && !enHtml.includes(`>${startHeading("fr")}<`));
 
   const bare = await fetch(`${BASE}/start`, { redirect: "manual" });
   check("i18n: /start rewrites to en (200, no redirect)", bare.status === 200);

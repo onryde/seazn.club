@@ -62,6 +62,7 @@ import { STORAGE_KEY as GAME_2048_STORAGE_KEY, type GameState as Game2048State }
 import { openMatchActions } from "./helpers/match-actions";
 import { consolePanel, openConsolePanel } from "./helpers/console-panels";
 import { posterSvg, routePosterArt, storagePublicUrl } from "./helpers/poster-art";
+import { waitForHydration } from "./directory-kit";
 
 // v3/02 §4 viewport gate — runs ONLY in the mobile-se / mobile-14 projects
 // (375×667, 390×844). Every audited route must render with zero page-level
@@ -1743,6 +1744,9 @@ test("public surfaces: no horizontal scroll (v3/11 gap 12)", async ({ browser })
       // and "/pricing" already on this list, not authed console pages.
       "/games",
       "/games/chess-quest",
+      // The organiser's /start wizard (start wizard plan 2026-11-13, T6): its first step as a link lands on it. Every step,
+      // walked, is the "start wizard" case at the end of this file.
+      "/en/start?sport=football",
       // RS007's two new surfaces, POPULATED — an empty state holds at any
       // width, so visiting them without a real rid/token/join_code would be
       // the vacuous pass this file's own #349 comment warns about.
@@ -8970,4 +8974,116 @@ test("quick match (League + Knockout): the tie at the cut, its Pick panel open, 
   expect(scanned, "anti-vacuity: every surface had boxes to scan").toBeGreaterThan(40);
   expect(judged, "anti-vacuity: axe judged the question, the panel and the bracket").toBeGreaterThan(0);
   expect(targets, "anti-vacuity: buttons hit-tested").toBe(2 + 3 + 2 + 2);
+});
+
+// The organiser's /start wizard (start wizard plan 2026-11-13, Task 6) at this width, walked as a visitor walks it: Sport (a
+// realistic 49-character event name typed), Size and format with Planning OPEN and More formats unfolded (all five cards),
+// the date chips and the date box, the address refused once (its error line showing) and then sent, and Sent. At each step:
+// no sideways scroll, nothing clipped inside the wizard (`overflowingIn`; a box that scrolls must be a tab stop, AGENTS.md
+// class 23), and the step's controls 44px targets a tap reaches (`hitFloor` hit-tests their edges and centre). Then /play's
+// door to it ("Or register to start a season"): it follows the chips, and at its resting place — scrolled to the screen's foot,
+// where the docked Start bar sits below 640px — a tap lands on the door, not on the bar. A guest's own context, as the quick
+// match cases. After the quick match cases, LAST for the same reason (AGENTS.md class 21): a red here skips nothing after it.
+test("start wizard: every step holds at this width with Planning open, and /play's season door is a reachable 44px link that follows the chips", async ({
+  browser,
+}) => {
+  // Three page loads, the start's POST, and ~50 local acts and measurements.
+  test.setTimeout(4 * QM_NAV_MS + 50 * QM_ACT_MS);
+  const ctx = await qmGuest(browser);
+  let scanned = 0;
+  let steps = 0;
+  try {
+    const page = await ctx.newPage();
+    const wizard = page.locator("[data-start-wizard]");
+    const next = wizard.getByRole("button", { name: `${qmMk("start.wizard.next")} →`, exact: true });
+    const hold = async (step: string, label: string): Promise<void> => {
+      await expect(wizard).toHaveAttribute("data-step", step);
+      await expectNoHorizontalScroll(page);
+      scanned += await qmNotClipped(page, "[data-start-wizard]", `the wizard, ${label}`);
+      steps += 1;
+    };
+
+    // ── Sport ──
+    await page.goto("/en/start?sport=football", { waitUntil: "load" });
+    await waitForHydration(next);
+    await wizard.getByRole("textbox", { name: qmMk("start.wizard.compName") }).fill("The Harbourside Wednesday Night Five-a-Side League");
+    await hold("sport", "Sport with a long name");
+    await hitFloor(wizard.getByText(qmUi("sport.icehockey"), { exact: true }), "a sport chip", 44);
+    await hitFloor(next, "Next (Sport)", 44);
+    await next.click();
+
+    // ── Size and format: Planning open, More formats unfolded ──
+    await expect(wizard).toHaveAttribute("data-step", "size");
+    const entrants = qmMk("start.wizard.entrants");
+    await wizard.getByRole("textbox", { name: entrants, exact: true }).fill("12");
+    const fold = wizard.locator('button[aria-controls="start-planning"]');
+    await fold.click();
+    await expect(fold).toHaveAttribute("aria-expanded", "true");
+    await wizard.getByRole("textbox", { name: qmMk("start.wizard.courts"), exact: true }).fill("4");
+    await wizard.getByRole("textbox", { name: qmMk("start.wizard.hours"), exact: true }).fill("6");
+    await wizard.getByRole("button", { name: qmMk("start.wizard.moreFormats"), exact: true }).click();
+    await expect(wizard.locator("[data-format-card]"), "the four fixed cards and Double elimination").toHaveCount(5);
+    await hold("size", "Size and format, Planning open, five cards");
+    await hitFloor(wizard.getByRole("button", { name: qmMk("start.wizard.stepper.more", { label: entrants }), exact: true }), "the size's +", 44);
+    await hitFloor(fold, "the Planning fold", 44);
+    await hitFloor(wizard.locator('[data-format-card="double_elim"]'), "a format card", 44);
+    await wizard.locator('[data-format-card="groups-knockout"]').click();
+    await hitFloor(next, "Next (Size and format)", 44);
+    await next.click();
+
+    // ── Date: the chips, then the date box opened ──
+    await expect(wizard).toHaveAttribute("data-step", "date");
+    await hold("date", "Date, the chips");
+    const pick = page.locator('input[name="date"][value="pick"]');
+    await hitFloor(wizard.locator("label").filter({ has: pick }), "Pick a date…", 44);
+    await wizard.locator("label").filter({ has: pick }).click();
+    await expect(wizard.locator('input[type="date"]')).toBeVisible();
+    await hold("date", "Date, the date box open");
+    const firstDay = await page.locator('input[name="date"]').first().getAttribute("value");
+    await wizard.locator("label").filter({ has: page.locator(`input[name="date"][value="${firstDay}"]`) }).click();
+    await next.click();
+
+    // ── Email: refused once (its error line is the step at its tallest), then sent ──
+    await expect(wizard).toHaveAttribute("data-step", "email");
+    const email = wizard.getByLabel(qmMk("start.wizard.email"), { exact: true });
+    const send = wizard.getByRole("button", { name: `${qmMk("start.wizard.emailMe")} →`, exact: true });
+    await email.fill("sam@harbourvale");
+    await send.click();
+    await expect(wizard.locator("#start-email-error")).toHaveText(qmMk("start.wizard.emailMissingTld"));
+    await hold("email", "Email, the address refused");
+    await hitFloor(send, "Email me the link", 44);
+    await email.fill(`delivered+e2e-mobile-start-${TAG}-${projectTag()}@resend.dev`);
+    await send.click();
+
+    // ── Sent ──
+    await expect(wizard).toHaveAttribute("data-step", "sent", { timeout: QM_NAV_MS });
+    await hold("sent", "Sent");
+    await hitFloor(wizard.getByRole("button", { name: qmMk("start.wizard.changeIt"), exact: true }), "Change it", 44);
+    await hitFloor(wizard.getByTestId("start-play-link"), "score a quick match", 44);
+
+    // ── /play's season door ──
+    await page.goto("/en/play", { waitUntil: "load" });
+    const form = page.getByTestId("qm-setup-form");
+    await expect(form).toBeVisible({ timeout: QM_NAV_MS });
+    await expect(page.getByTestId("qm-start")).toBeDisabled();
+    const door = page.getByTestId("qm-register-season");
+    await expect(door).toHaveText(qmMk("quickMatch.setup.registerSeason"));
+    await form.getByText(qmUi("sport.tennis"), { exact: true }).click();
+    await expect(door, "the door follows the chip").toHaveAttribute("href", "/en/start?sport=tennis");
+    await hitFloor(door, "Or register to start a season", 44);
+    // At its resting place: the door at the screen's foot, where a docked Start bar would cover it if it sat inside the bar.
+    const atFoot = await door.evaluate((el) => {
+      el.scrollIntoView({ block: "end", inline: "nearest" });
+      const r = el.getBoundingClientRect();
+      const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      return { reached: at !== null && (at === el || el.contains(at)), hit: at?.closest("[data-testid]")?.getAttribute("data-testid") ?? null };
+    });
+    expect(atFoot.reached, `at the screen's foot a tap on the door lands on ${atFoot.hit}`).toBe(true);
+    // The setup form's own clip scan (the door inside it) is the quick match case's, which folds the docked bar's bleed back.
+    await expectNoHorizontalScroll(page);
+  } finally {
+    await ctx.close();
+  }
+  expect(steps, "anti-vacuity: every step was held (Sport, Size, Date ×2, Email, Sent)").toBe(6);
+  expect(scanned, "anti-vacuity: every step had boxes to scan").toBeGreaterThan(6 * 10);
 });

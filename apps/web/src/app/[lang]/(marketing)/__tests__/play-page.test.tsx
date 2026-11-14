@@ -38,6 +38,7 @@ import { CreateQuickMatch } from "@/server/api-v1/schemas";
 import { getDictionary } from "@/lib/i18n";
 import PlayPage, { dynamic, generateMetadata } from "../play/page";
 import { prefillSport, refusalCode, setupSports } from "../play/setup-props";
+import { parseStartPrefill } from "../start/prefill";
 import offerJson from "@/lib/quick-match-offer.generated.json";
 import { QuickMatchSetupForm, type SetupFormProps } from "@/components/quick-match/setup-form";
 import { QUICK_MATCH_ERRORS } from "@/lib/quick-match-constants";
@@ -395,7 +396,69 @@ describe("/<lang>/play?sport=: the hero's sport, preselected", () => {
   });
 });
 
+// Under the Start, a quiet door to the organiser's /start wizard carrying the chosen sport (owner 2026-11-13,
+// quick-match-decision-log.md "Or register to start a season"; start wizard plan Task 5). The island test
+// (components/quick-match/__tests__/register-season-link.test.tsx) follows the chips and pins where it sits; this is the
+// server's HTML, which is the whole page without the script. Expected: the offer's first sport or the `?sport=` read, the
+// dictionaries' words, and `/<lang>/start` as /start's parser reads it.
+describe("/<lang>/play: the door to a season, under the Start", () => {
+  /** Every `qm-register-season` link in the HTML: its href and its text. */
+  const doors = (html: string) =>
+    [...html.matchAll(/<a\b([^>]*\bdata-testid="qm-register-season"[^>]*)>([^<]*)<\/a>/g)].map((m) => ({
+      href: m[1]!.match(/\bhref="([^"]*)"/)?.[1],
+      text: m[2]!,
+    }));
+
+  it("the empty case first: no offer, no form, no Start, so no door", async () => {
+    vi.mocked(listQuickMatchSports).mockResolvedValueOnce([]);
+    const html = await render("en");
+    expect(html).not.toContain('data-testid="qm-start"');
+    expect(doors(html)).toEqual([]);
+  });
+
+  it("once, after the Start, with the offer's first sport and each locale's words (the positive pair)", async () => {
+    let checked = 0;
+    for (const lang of ["en", "es", "fr", "nl"] as const) {
+      vi.mocked(listQuickMatchSports).mockResolvedValueOnce(OFFER);
+      const [html, d] = await Promise.all([render(lang), getDictionary(lang, "marketing")]);
+      const found = doors(html);
+      expect(found, `${lang}: one door`).toHaveLength(1);
+      expect(html, lang).toContain(`href="/${lang}/start?sport=${OFFER[0]!.sport_key}"`);
+      expect(found[0]!.text.replace(/&#x27;/g, "'"), lang).toBe(d["quickMatch.setup.registerSeason"]);
+      const door = html.search(/data-testid="qm-register-season"/);
+      expect(door, `${lang}: after the Start`).toBeGreaterThan(html.search(/data-testid="qm-start"/));
+      expect(door, `${lang}: inside the form`).toBeLessThan(html.indexOf("</form>"));
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("carries the sport `?sport=` opened the form on, not the offer's first (the ordering differential)", async () => {
+    vi.mocked(listQuickMatchSports).mockResolvedValueOnce(OFFER);
+    const html = await render("en", { sport: OFFER[1]!.sport_key });
+    expect(OFFER[1]!.sport_key, "premise: not the default").not.toBe(OFFER[0]!.sport_key);
+    expect(doors(html).map((d) => d.href)).toEqual([`/en/start?sport=${OFFER[1]!.sport_key}`]);
+  });
+});
+
 describe.skipIf(!HAS_DB)("/<lang>/play over the live offer (real listQuickMatchSports, real offerFor)", () => {
+  it("the door under the Start carries every live sport through to /start's parser", async () => {
+    const [live, ui] = await Promise.all([listQuickMatchSports(), getDictionary("en", "ui")]);
+    const sports = setupSports(live, ui);
+    let checked = 0;
+    for (const s of sports) {
+      const html = await render("en", { sport: s.sport_key });
+      const href = html.match(/<a\b[^>]*\bdata-testid="qm-register-season"[^>]*>/)?.[0].match(/\bhref="([^"]*)"/)?.[1];
+      expect(href, s.sport_key).toBeDefined();
+      const url = new URL(href!, "https://seazn.test");
+      expect(url.pathname).toBe("/en/start");
+      expect(parseStartPrefill(Object.fromEntries(url.searchParams), "2026-11-13").sportKey, s.sport_key).toBe(s.sport_key);
+      checked++;
+    }
+    expect(checked, "live sports swept").toBe(sports.length);
+    expect(checked).toBeGreaterThanOrEqual(2);
+  });
+
   it("?sport= for every live sport opens the form on it; a sport the offer excludes opens on the default", async () => {
     const [live, ui] = await Promise.all([listQuickMatchSports(), getDictionary("en", "ui")]);
     const sports = setupSports(live, ui);

@@ -11,6 +11,9 @@ import {
 import { clubNames } from "@/lib/marketing/club-names";
 import { DrawMindmap } from "./draw-mindmap";
 
+/** The field sizes The Draw's stepper reaches, and so the `entrants` its "Make it real" link can send to /start. */
+export const DRAW_ENTRANTS = { min: 4, max: 16 } as const;
+
 /** The Draw (design/v3/12 §4.4): the visitor's first real interaction. SSR
  *  passes the default groups-knockout/8 draw so the section works without JS;
  *  control changes hit the public preview API (response is the { ok, data }
@@ -49,7 +52,7 @@ export function TheDraw({ initialPhases }: { initialPhases: PreviewPhase[] }) {
     void load(f, entrants);
   };
   const step = (delta: number) => {
-    const n = Math.min(Math.max(entrants + delta, 4), 16);
+    const n = Math.min(Math.max(entrants + delta, DRAW_ENTRANTS.min), DRAW_ENTRANTS.max);
     if (n === entrants) return;
     setEntrants(n);
     void load(format, n);

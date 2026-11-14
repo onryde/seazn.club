@@ -45,6 +45,10 @@
 //       3rd are level on everything: the question ("Tie for 2nd"), the engine's lot already stored. (F4) Toss → the stored
 //       lot's side in the final, the same after a reload, and on a friend's phone that taps Toss again (someone already
 //       decided). Each reads the record too. Each night is two tests because each half's derived budget must fit one leg.
+//   (G) The season door (start wizard plan 2026-11-13, Task 6), in a browser of its own: under the setup's Start, "Or
+//       register to start a season" names the sport the chips chose (Tennis, not the default) → the organiser's /start
+//       wizard opens on Tennis → a League of six, the first day not decided → the address → Sent, whose quick match link
+//       is on Tennis too → the claim link → the division: one League stage and six seeded players, no first day.
 //
 // ── WHAT IS A REACH AND WHAT IS THE TEST (README rule) ────────────────────────────────────────────────────────────
 // There is NO reach here: nothing is seeded and no API is called. Every quick match is made through the setup form,
@@ -73,7 +77,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { LEVEL_RANK } from "@seazn/engine/competition";
-import { stageDefaultsFor } from "@seazn/engine/sport";
+import { effectiveEntrantModel, stageDefaultsFor } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { expectNoHorizontalScroll, loginUi, TAG, withDb } from "../helpers";
 import { consentedAnonymousState } from "../scorepad-a11y-kit";
@@ -2519,5 +2523,111 @@ test("(F4) Toss: the stored lot's side goes to the final, the league table marks
     expect(await expectRecorded(made, results)).toBe(results.length);
   } finally {
     await friendCtx.close();
+  }
+});
+
+// ── (G) the season door ─────────────────────────────────────────────────────────────────────────────────────────────
+
+/** /play and the door's two reads; /start and its four answers (each a click or a fill and the step it lands on), Sent and
+ *  its link; the claim and its landing; the record read back, and the entrants tab read. */
+const SEASON = { navs: 4, acts: 26, reads: 4 } as const;
+
+test("(G) the season door: /play's Tennis opens the /start wizard on Tennis, and the emailed link builds a Tennis league of the size asked", async ({ browser }, info) => {
+  setBudget(budgetFor({ ...SEASON, plans: [] }));
+  const PLAYERS = 6;
+  const name = `QM walk season ${TAG}`;
+  const email = `delivered+e2e-qm-season-${TAG}@resend.dev`;
+  const season = await browser.newContext({
+    storageState: await consentedAnonymousState(),
+    baseURL: info.project.use.baseURL,
+    viewport: PHONE,
+  });
+  try {
+    const p = await season.newPage();
+
+    // ---- 1. /play: the door under Start follows the chips. Tennis, not the offer's first, so a door stuck on the
+    //         default cannot pass ----
+    await p.goto("/en/play");
+    await expect(form(p)).toBeVisible({ timeout: STEP_MS });
+    await expect(p.getByTestId("qm-start")).toBeDisabled();
+    const door = p.getByTestId("qm-register-season");
+    await expect(door).toHaveText(mk("quickMatch.setup.registerSeason"));
+    await choice(p, ui("sport.tennis")).click();
+    await expect(form(p).getByRole("radio", { name: ui("sport.tennis"), exact: true })).toBeChecked();
+    await expect(door, "the door names the chosen sport").toHaveAttribute("href", "/en/start?sport=tennis");
+    await expectNoHorizontalScroll(p);
+
+    // ---- 2. Through the door: B1 opens on Tennis, and only Tennis ----
+    await door.click();
+    await p.waitForURL((u) => u.pathname === "/en/start" && u.searchParams.get("sport") === "tennis", { timeout: STEP_MS });
+    const wizard = p.locator("[data-start-wizard]");
+    const next = wizard.getByRole("button", { name: `${mk("start.wizard.next")} →`, exact: true });
+    await expect(wizard).toHaveAttribute("data-step", "sport");
+    await waitForHydration(next);
+    await expect(wizard.getByRole("radio", { name: ui("sport.tennis"), exact: true })).toBeChecked();
+    await expect(wizard.locator('input[name="sport"]:checked')).toHaveCount(1);
+    await wizard.getByRole("textbox", { name: mk("start.wizard.compName") }).fill(name);
+    await next.click();
+
+    // ---- 3. B2: six players, a League ----
+    await expect(wizard).toHaveAttribute("data-step", "size");
+    await wizard.getByRole("textbox", { name: mk("start.wizard.entrants"), exact: true }).fill(String(PLAYERS));
+    await wizard.locator('[data-format-card="league"]').click();
+    await expect(wizard.locator('input[name="format"][value="league"]')).toBeChecked();
+    await next.click();
+
+    // ---- 4. B3: not sure yet ----
+    await expect(wizard).toHaveAttribute("data-step", "date");
+    // `has` is queried INSIDE each label, so it is a bare selector (one chained from the wizard never matches).
+    const notSure = p.locator('input[name="date"][value="none"]');
+    await wizard.locator("label").filter({ has: notSure }).click();
+    await expect(notSure).toBeChecked();
+    await next.click();
+
+    // ---- 5. B4 → Sent: its quick match link is on Tennis too (a sport /play offers) ----
+    await expect(wizard).toHaveAttribute("data-step", "email");
+    await wizard.getByLabel(mk("start.wizard.email"), { exact: true }).fill(email);
+    await wizard.getByRole("button", { name: `${mk("start.wizard.emailMe")} →`, exact: true }).click();
+    await expect(wizard).toHaveAttribute("data-step", "sent", { timeout: STEP_MS });
+    await expect(wizard.getByTestId("start-play-link")).toHaveAttribute("href", "/en/play?sport=tennis");
+    await expectNoHorizontalScroll(p);
+
+    // ---- 6. The emailed link: its token is the draft's own column (a production target emails it, never shows it) ----
+    const token = await withDb(async (sql) => {
+      const [d] = await sql<{ token: string }[]>`select token from funnel_drafts where email = ${email} order by created_at desc limit 1`;
+      return d?.token;
+    });
+    expect(token, "the start stored a draft for the address").toBeTruthy();
+    await p.goto(`/start/claim?token=${token}`);
+    await p.waitForURL(/\/o\/[^/]+\/c\/[^/]+\/d\/[^/?]+\?tab=entrants/, { timeout: STEP_MS });
+
+    // ---- 7. The record: a Tennis division, one League stage, six players seeded 1..6 of the sport's own default kind and
+    //         named by the dictionary, and no first day (Not sure yet) ----
+    const built = await withDb(async (sql) => {
+      const [d] = await sql<{ id: string; sport_key: string; variant_key: string; starts_on: string | null }[]>`
+        select d.id, d.sport_key, d.variant_key, c.starts_on::text
+          from competitions c join divisions d on d.competition_id = c.id where c.name = ${name}`;
+      expect(d, "the claim built the competition and its division").toBeTruthy();
+      const stages = await sql<{ kind: string }[]>`select kind from stages where division_id = ${d!.id} order by seq`;
+      const entrants = await sql<{ seed: number | null; kind: string; display_name: string }[]>`
+        select seed, kind, display_name from entrants where division_id = ${d!.id} order by seed nulls last, id`;
+      return { ...d!, stages: stages.map((s) => s.kind), entrants: [...entrants] };
+    });
+    expect(built.sport_key, "the division is the door's sport").toBe("tennis");
+    expect(built.stages, "a League is one league stage").toEqual(["league"]);
+    const mod = builtinModules.find((m) => m.key === built.sport_key);
+    expect(mod, "premise: the engine registers tennis").toBeDefined();
+    const variants = (mod!.variants ?? {}) as Record<string, unknown>;
+    expect(variants[built.variant_key], `premise: tennis declares ${built.variant_key}`).toBeDefined();
+    const kind = effectiveEntrantModel(mod!.entrantModel ?? null, variants[built.variant_key]).defaultKind;
+    expect(built.entrants).toEqual(
+      Array.from({ length: PLAYERS }, (_, i) => ({ seed: i + 1, kind, display_name: ui(`funnel.claim.entrant.${kind}`, { n: i + 1 }) })),
+    );
+    expect(built.starts_on, "Not sure yet: no first day").toBeNull();
+
+    // ---- 8. …and the new organiser sees them: one row per player on the entrants tab the link landed on ----
+    await expect(p.getByTestId("entrant-row-disclosure")).toHaveCount(PLAYERS);
+  } finally {
+    await season.close();
   }
 });

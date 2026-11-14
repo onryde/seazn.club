@@ -3,11 +3,12 @@
 // Recommendation strip (v3/06 §4): entrants + courts + hours → the 2–3
 // formats that fit, each with its one-sentence trade-off. Pure function
 // (lib/format-recommend), recomputed as the inputs change; picking one
-// selects the matching template in the wizard.
+// selects the matching template in the wizard. Every word is the dictionary's:
+// the template's name, the count and the day, the format's tagline.
 import { useMemo, useState } from "react";
 import { Lightbulb } from "lucide-react";
-import { recommendFormats } from "@/lib/format-recommend";
-import { useMsg } from "@/components/i18n/dict-provider";
+import { FORMAT_NAME_KEY, FORMAT_TAGLINE_KEY, recommendFormats } from "@/lib/format-recommend";
+import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 
 export function FormatRecommendStrip({
   initialEntrants = 16,
@@ -18,6 +19,9 @@ export function FormatRecommendStrip({
   onPick?: (familySlug: string) => void;
 }) {
   const msg = useMsg();
+  const plural = useMsgPlural();
+  const locale = useLocaleOrDefault();
+  const hoursOf = (h: number) => new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }).format(h);
   const [entrants, setEntrants] = useState(initialEntrants);
   const [courts, setCourts] = useState(2);
   const [hours, setHours] = useState(4);
@@ -75,9 +79,12 @@ export function FormatRecommendStrip({
               <span className="shrink-0 font-mono text-xs text-purple-500">{i + 1}.</span>
               <span className="text-sm">
                 <span className="font-semibold text-slate-800 group-hover:text-purple-800">
-                  {p.title}
+                  {msg(FORMAT_NAME_KEY[p.slug])}
                 </span>{" "}
-                <span className="text-slate-500">{p.reason}</span>
+                <span className="text-slate-500">
+                  {plural("recommend.matches", p.matches)}, {plural("recommend.time", courts, { hours: hoursOf(p.estHours) })} —{" "}
+                  {msg(FORMAT_TAGLINE_KEY[p.slug])}
+                </span>
               </span>
             </button>
           </li>
