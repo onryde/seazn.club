@@ -36,6 +36,7 @@ import {
   buildFunnelBody,
   canAdvance,
   heldStart,
+  keptReference,
   initialWizardState,
   nextEventDays,
   parseCount,
@@ -82,7 +83,7 @@ const MORE: ReadonlySet<FunnelFormat> = new Set(FUNNEL_MORE_FORMATS);
 /** What the last send left: the dev claim link (a dev server only), the pair a resend carries back (never in the URL), and
  *  whether that send was itself a resend. Null until the first send: then Email is the first-time step, after it the
  *  Change-email one. */
-type Sent = { claimUrl: string | null; held: HeldStart | null; resent: boolean };
+type Sent = { claimUrl: string | null; held: HeldStart | null; referenceKept: boolean };
 
 export function StartWizard({ initial, maxEntrants, today, utcDay, playSports }: StartWizardProps) {
   const t = useT();
@@ -174,7 +175,12 @@ export function StartWizard({ initial, maxEntrants, today, utcDay, playSports }:
           headers,
         }),
       );
-      setSent({ claimUrl: typeof res?.claim_url === "string" ? res.claim_url : null, held: heldStart(res), resent: sent !== null });
+      const held = heldStart(res);
+      setSent({
+        claimUrl: typeof res?.claim_url === "string" ? res.claim_url : null,
+        held,
+        referenceKept: keptReference(sent?.held ?? null, held),
+      });
       dispatch({ type: "sent" });
     } catch (err) {
       setError(
@@ -278,7 +284,7 @@ export function StartWizard({ initial, maxEntrants, today, utcDay, playSports }:
                 {refAfter}
               </p>
               <p className="mt-1.5 text-[12.5px] text-[#8d7fc0]">
-                {sent?.resent ? t("start.wizard.resentNote") : t("start.wizard.referenceNote")}
+                {sent?.referenceKept ? t("start.wizard.resentNote") : t("start.wizard.referenceNote")}
               </p>
             </>
           ) : null}

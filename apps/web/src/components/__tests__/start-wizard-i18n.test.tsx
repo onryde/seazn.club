@@ -533,6 +533,23 @@ describe("the wizard's edges", () => {
     expect(checked).toBe(4);
   });
 
+  it("a resend answered under ANOTHER reference shows that one, with the first-send note, never \"the reference stays\" (review m1)", async () => {
+    const island = mount();
+    await toEmail(island);
+    change(input(island, "email"), "sam@harbourvale.org");
+    await submit(island);
+    click(buttonByText(island, w("start.wizard.changeIt")));
+    net.response = { message: "x", reference: "SZ-9XWQ3P", replaceKey: "n".repeat(43) };
+    change(input(island, "email"), "sam@harbourvale.com");
+    await submit(island);
+    expect(net.calls[1]!.json, "the pair was sent").toMatchObject({ previousReference: REFERENCE, replaceKey: KEY });
+    expect(step(island)).toBe("sent");
+    const shown = all(island).map((e) => propsOf(e)["data-funnel-reference"]).filter((v) => v !== undefined);
+    expect(shown, "the answer's own reference").toEqual(["SZ-9XWQ3P"]);
+    expect(island.text()).toContain(w("start.wizard.referenceNote"));
+    expect(island.text()).not.toContain(w("start.wizard.resentNote"));
+  });
+
   it("an answer without the pair shows no reference and no banner, and a resend replaces by address alone", async () => {
     net.response = { message: "x" };
     const island = mount();

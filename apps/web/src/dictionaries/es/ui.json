@@ -8612,5 +8612,11 @@
   "start.next.action.rename": "Cambiar el nombre",
   "start.next.action.players": "Añadir jugadores",
   "start.next.action.generate": "Generar enfrentamientos",
-  "start.next.action.schedule": "Programar partidos"
+  "start.next.action.schedule": "Programar partidos",
+  "start.next.teams.title": "Añade tus equipos",
+  "start.next.teams.progress": "{count} de {target} equipos",
+  "start.next.pairs.title": "Añade tus parejas",
+  "start.next.pairs.progress": "{count} de {target} parejas",
+  "start.next.action.teams": "Añadir equipos",
+  "start.next.action.pairs": "Añadir parejas"
 }

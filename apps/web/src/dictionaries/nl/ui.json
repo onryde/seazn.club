@@ -8612,5 +8612,11 @@
   "start.next.action.rename": "Naam wijzigen",
   "start.next.action.players": "Spelers toevoegen",
   "start.next.action.generate": "Wedstrijden genereren",
-  "start.next.action.schedule": "Wedstrijden plannen"
+  "start.next.action.schedule": "Wedstrijden plannen",
+  "start.next.teams.title": "Voeg je teams toe",
+  "start.next.teams.progress": "{count} van {target} teams",
+  "start.next.pairs.title": "Voeg je koppels toe",
+  "start.next.pairs.progress": "{count} van {target} koppels",
+  "start.next.action.teams": "Teams toevoegen",
+  "start.next.action.pairs": "Koppels toevoegen"
 }

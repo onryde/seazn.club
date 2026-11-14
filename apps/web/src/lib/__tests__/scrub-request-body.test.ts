@@ -117,6 +117,9 @@ const BODY_VERDICTS: Record<string, true | string> = {
   "api/auth/magic-link/consume": true,
   "api/auth/verify-email": true,
   "api/funnel/claim": true,
+  // A resend carries the earlier start's `replaceKey` (with its `previousReference`): the capability that replaces that
+  // draft and keeps its reference (/start "Sent stepper", review I1).
+  "api/funnel/start": true,
   "api/v1/public/registrations/[id]/checkout": true,
   "api/v1/public/registrations/[id]/withdraw": true,
   "api/v1/public/registrations/by-ref/[ref]/withdraw": true,
@@ -128,7 +131,6 @@ const BODY_VERDICTS: Record<string, true | string> = {
   "api/billing/address": "`postal_code` is a billing address field",
   "api/v1/public/orgs/[orgSlug]/competitions/[slug]/register": "`ref_code` is the registration reference, a lookup as /r/[ref] is, not auth; the access token is in the response",
   "api/auth/magic-link": "the body is an email and a `next`; the token is minted and emailed, never received; a `next` secret path is scrubbed in place",
-  "api/funnel/start": "the body is an email and the draft; the claim token is minted and emailed, never received",
   "api/quick-match": "the body is the guest's setup form (a name, the sport, the sides, an optional email); the home token is minted and answered in the 303's Location, never received",
   "api/orgs/[id]/invites": "the body is the invite's role, email and limits; the token is only in the response",
   "api/v1/orgs/[id]/sponsors/[sponsorId]/report-links": "the body is the report link's competition and dates; its token is minted and returned once (R4 S13), never received",
@@ -377,6 +379,29 @@ describe("an event on a route that takes a credential in its body loses its body
     }
     expect(failures.slice(0, 5), `${failures.length} of ${checked} failed`).toEqual([]);
     expect(checked).toBe(apiLinkRoutes.length * BODY_WITNESSES.length * FORMS.length);
+  });
+});
+
+describe("the /start resend's replace key never reaches Sentry (review I1)", () => {
+  // The key is minted as 32 random bytes in base64url (lib/funnel.ts createDraft); the body is the wizard's resend
+  // (start-wizard-model.ts sendBody): the answers, the address, and the held pair.
+  const replaceKey = randomBytes(32).toString("base64url");
+  const body = { sport: "badminton", email: "organiser@example.test", locale: "en", previousReference: "SZ-ABCDEF", replaceKey };
+
+  it("every form of a /api/funnel/start event loses the body, and with it the key", () => {
+    const failures: string[] = [];
+    let checked = 0;
+    for (const form of FORMS) {
+      checkDropped(`api/funnel/start / ${form.name}`, form.event({ key: "api/funnel/start", url: "/api/funnel/start" }, body), replaceKey, failures);
+      checked++;
+    }
+    expect(failures, `${failures.length} of ${checked} failed`).toEqual([]);
+    expect(checked).toBe(FORMS.length);
+  });
+
+  it("the same body on a route that is not a credential reader is kept, key and all (the positive pair)", () => {
+    const out = scrubSentryEvent({ event_id: "p1", request: { method: "POST", url: `${ORIGIN}/api/funnel/starts`, data: body } });
+    expect(JSON.stringify(out), "a neighbouring path is not the start route").toContain(replaceKey);
   });
 });
 

@@ -34,11 +34,14 @@ async function claimedOrgName(locale: Locale, eventName: string): Promise<string
   return t(await getDictionary(locale, "ui"), "funnel.claim.orgName", { name: eventName });
 }
 
-/** The getting-started state of `competitionId`, read in the caller's organisation: a competition another organisation holds (or
- *  none) is a 404, as `getCompetition` answers. */
-export async function gettingStarted(auth: AuthCtx, competitionId: string): Promise<GettingStarted> {
+type ProgressRow = { name: string; org_name: string; entrants: number; generated: boolean; scheduled: boolean };
+type ClaimedDraft = { entrants: number | null; name: string | null; locale: string | null };
+
+/** The competition's own state, read in the caller's organisation: a competition another organisation holds (or none) is a
+ *  404, as `getCompetition` answers. */
+async function progressRow(auth: AuthCtx, competitionId: string): Promise<ProgressRow> {
   const row = await withTenant(auth.orgId, async (tx) => {
-    const [found] = await tx<{ name: string; org_name: string; entrants: number; generated: boolean; scheduled: boolean }[]>`
+    const [found] = await tx<ProgressRow[]>`
       select c.name, o.name as org_name,
              (select count(*)::int from entrants e join divisions d on d.id = e.division_id
                where d.competition_id = c.id and d.archived_at is null and e.status in ('registered', 'confirmed')) as entrants,
@@ -51,15 +54,23 @@ export async function gettingStarted(auth: AuthCtx, competitionId: string): Prom
     return found;
   });
   if (!row) throw new HttpError(404, "competition not found");
+  return row;
+}
 
-  // funnel_drafts is org-less (pre-auth) and outside RLS: read on the pool, only after the tenant read proved the competition is
-  // the caller's. The payload was parsed strictly when it was claimed (consumeFunnelDraft), so `entrants` is an integer there.
-  const [draft] = await sql<{ entrants: number | null; name: string | null; locale: string | null }[]>`
+/** The /start draft that built `competitionId`, if one did (V518 stamps it; `funnel_drafts_competition_idx`). funnel_drafts is
+ *  org-less (pre-auth) and outside RLS, so it is read on the pool, and nothing of it is answered unless the tenant read proves
+ *  the competition is the caller's. The payload was parsed strictly when it was claimed (consumeFunnelDraft), so `entrants` is
+ *  an integer there. */
+async function claimedDraft(competitionId: string): Promise<ClaimedDraft | undefined> {
+  const [draft] = await sql<ClaimedDraft[]>`
     select case when jsonb_typeof(payload->'entrants') = 'number' then (payload->>'entrants')::int end as entrants,
            payload->>'name' as name, locale
       from funnel_drafts where competition_id = ${competitionId}
      order by used_at desc nulls last, created_at desc limit 1`;
+  return draft;
+}
 
+async function progressOf(auth: AuthCtx, competitionId: string, row: ProgressRow, draft: ClaimedDraft | undefined): Promise<GettingStarted> {
   const defaults = draft?.name
     ? [await claimedOrgName(draft.locale !== null && hasLocale(draft.locale) ? draft.locale : DEFAULT_LOCALE, draft.name)]
     : await Promise.all(LOCALES.map((l) => claimedOrgName(l, row.name)));
@@ -76,4 +87,22 @@ export async function gettingStarted(auth: AuthCtx, competitionId: string): Prom
     fixturesGenerated: row.generated,
     fixtureScheduled: row.scheduled,
   };
+}
+
+/** The getting-started state of `competitionId`, read in the caller's organisation: a competition another organisation holds (or
+ *  none) is a 404, as `getCompetition` answers. */
+export async function gettingStarted(auth: AuthCtx, competitionId: string): Promise<GettingStarted> {
+  const row = await progressRow(auth, competitionId);
+  return progressOf(auth, competitionId, row, await claimedDraft(competitionId));
+}
+
+/** The landing's read (the division page's getting-started panel, on every editor's view of every division): the draft first,
+ *  on its index, and null — with no tenant read, no plan read and no dictionary work — when no /start draft with a field size
+ *  built the competition, which is the stepper's own rule for showing nothing (lib/getting-started-steps.ts landingSteps: no
+ *  target). Otherwise the full read: a /start competition another organisation holds is still a 404. A null answers the same
+ *  for a competition the caller cannot see, so it tells nothing of one (review I2). */
+export async function funnelGettingStarted(auth: AuthCtx, competitionId: string): Promise<GettingStarted | null> {
+  const draft = await claimedDraft(competitionId);
+  if (draft?.entrants == null) return null;
+  return progressOf(auth, competitionId, await progressRow(auth, competitionId), draft);
 }

@@ -474,17 +474,38 @@ test("Change email keeps every answer and resends under the same reference; the 
     await page.waitForURL((u) => u.pathname === `/o/${orgSlug}/settings`, { timeout: NAV_MS });
     await expect(page.getByTestId("org-name-input"), "the way on opens the organisation's name").toBeVisible({ timeout: NAV_MS });
 
-    // Renamed (the settings route, as the name field saves it) and the field filled to the size chosen: Generate is current.
+    // Renamed through the card the way on opened: its one Save sends the name, the slug regenerates, and the tab follows.
     const ids = await withDb((sql) => sql<{ org: string; division: string }[]>`
       select o.id as org, d.id as division from divisions d
         join competitions c on c.id = d.competition_id join organizations o on o.id = c.org_id
        where o.slug = ${orgSlug} order by d.created_at limit 1`);
-    const renamed = await apiJson(page.request, `/api/orgs/${ids[0]!.org}`, "PATCH", { name: `Riverside Club ${TAG}` });
-    expect(renamed.status, JSON.stringify(renamed.error)).toBe(200);
-    // A rename moves the org's slug, and the old one only finds the org's dashboard: the landing again is at the new slug.
+    await page.getByTestId("org-name-input").fill(`Riverside Club ${TAG}`);
+    const patch = page.waitForResponse((r) => r.url().includes(`/api/orgs/${ids[0]!.org}`) && r.request().method() === "PATCH");
+    await page.getByTestId("org-profile-card").getByRole("button", { name: ui("settings.org.saveChanges"), exact: true }).click();
+    expect((await patch).status(), "the rename PATCH").toBe(200);
     const [org] = await withDb((sql) => sql<{ slug: string }[]>`select slug from organizations where id = ${ids[0]!.org}`);
     expect(org!.slug, "the rename moved the slug").not.toBe(orgSlug);
+    await page.waitForURL((u) => u.pathname === `/o/${org!.slug}/settings`, { timeout: NAV_MS });
+
+    // The OLD landing URL (the claim email's, a bookmark) keeps its division and its tab under the new slug (review I3):
+    // it used to land on the org's dashboard. And the steps there have moved on: renamed, so adding players is current.
     const relanded = landed.replace(`/o/${orgSlug}/`, `/o/${org!.slug}/`);
+    await page.goto(`${landed}?tab=entrants`);
+    await page.waitForURL((u) => u.pathname === relanded && u.searchParams.get("tab") === "entrants", { timeout: NAV_MS });
+    await expect(panel).toBeVisible({ timeout: NAV_MS });
+    expect(await stepStates(steps)).toEqual([
+      ["open", "done", null],
+      ["rename", "done", null],
+      ["players", "current", "step"],
+      ["generate", "todo", null],
+      ["schedule", "todo", null],
+    ]);
+    await expect(panel).toContainText(ui("start.next.landing.done", { done: 2, total: 5 }));
+    const addPlayers = panel.locator('[data-step-action="players"]');
+    await expect(addPlayers).toHaveText(ui("start.next.action.players"));
+    await expect(addPlayers).toHaveAttribute("href", `${relanded}?tab=entrants#add-entrant`);
+
+    // The field filled to the size chosen: Generate is current.
     const added = await apiJson(
       page.request,
       `/api/v1/divisions/${ids[0]!.division}/entrants`,

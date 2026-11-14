@@ -82,7 +82,7 @@
 // (`{ token, next }`), so a Sentry error on that route carries the working credential in `request.data`. A Sentry event
 // whose request URL or transaction names such a route loses its body, the way a capture route's does (`isCaptureEvent`):
 // the POST routes in `BODY_CREDENTIAL_ROUTES` (sign-in consume, email verification, email-change confirmation, funnel
-// claim, a registrant's withdraw / checkout / resend, and a team's join POST) and every route with a secret in its path (`SECRET_PATH_ROUTES`: the invite and claim
+// claim, the funnel start's resend, a registrant's withdraw / checkout / resend, and a team's join POST) and every route with a secret in its path (`SECRET_PATH_ROUTES`: the invite and claim
 // accepts, check-in, revoke). Only a Sentry event has a body to drop.
 //
 // A sampled TRANSACTION carries the request's query string a second time, in its span data, WITH its `?` and beside a URL
@@ -421,7 +421,8 @@ function isOneTimeTokenEvent(event: Event): boolean {
 /**
  * The POST routes that read a CREDENTIAL from the request body, as Next route templates (`[id]` is one path segment):
  * the sign-in consume `{ token, next }`, the email verification `{ token, next }`, the email-change confirmation (its
- * token rides the query; any body goes with it), the funnel claim `{ token }`, the registrant's access-token calls
+ * token rides the query; any body goes with it), the funnel claim `{ token }`, the funnel start, whose resend carries the
+ * earlier start's `replaceKey` (the capability that replaces that draft), the registrant's access-token calls
  * (withdraw, checkout, resend), and the team join POST, whose body carries the join code (`{ join_code, … }`). There is
  * no password route any more (password sign-in was removed 2026-10-19); one added later must be listed here again, and
  * scrub-request-body.test.ts fails until it is. A route whose secret is in its PATH is not listed:
@@ -433,6 +434,7 @@ export const BODY_CREDENTIAL_ROUTES = [
   "/api/auth/verify-email",
   "/api/auth/change-email/confirm",
   "/api/funnel/claim",
+  "/api/funnel/start",
   "/api/v1/public/registrations/[id]/checkout",
   "/api/v1/public/registrations/[id]/withdraw",
   "/api/v1/public/registrations/by-ref/[ref]/withdraw",

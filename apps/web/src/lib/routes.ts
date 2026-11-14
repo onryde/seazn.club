@@ -18,6 +18,19 @@ export function isPublicHubPath(pathname: string): boolean {
   return pathname.startsWith(`${PUBLIC_HUB_ROOT}/`) && pathname.length > PUBLIC_HUB_ROOT.length + 1;
 }
 
+/** A page's search params as a query string to carry onto another URL (a rename redirect, page-auth `RenameTail`): every
+ *  value (a repeated one too), an absent one dropped, encoded by URLSearchParams so no value adds a parameter; empty when
+ *  there are none. */
+export function searchOf(params: Readonly<Record<string, string | readonly string[] | undefined>>): string {
+  const q = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined) continue;
+    for (const v of typeof value === "string" ? [value] : value) q.append(key, v);
+  }
+  const s = q.toString();
+  return s ? `?${s}` : "";
+}
+
 export const routes = {
   orgHome: (org: Slug) => `/o/${org}`,
   orgSettings: (org: Slug, tab?: string) =>
