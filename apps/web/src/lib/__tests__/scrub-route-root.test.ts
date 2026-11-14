@@ -61,14 +61,25 @@ const encode = (value: string, depth: number) => {
   return out;
 };
 
-type Builder = (...args: string[]) => string;
+/** The builders' LIST parameters: every other argument is a slug or an id, a string, but these take a list, so the probe hands
+ *  them `[word]`, never a bare string - `competitionRegistration`'s `open`, the registration hub's open division tabs (B7 T22),
+ *  written as `open=<id>,<id>`. The word still reaches the URL through it, as an open tab's id (pinned below, so this table cannot
+ *  name a parameter that is not there). A list parameter missing here is handed a string, and the probe throws before any test. */
+const LIST_PARAMS: Record<string, { at: number; key: string }> = { competitionRegistration: { at: 4, key: "open" } };
+
+type Builder = (...args: (string | string[])[]) => string;
 const builders = Object.entries(routes).filter(([name]) => !SECRET_BUILDERS.has(name)) as [string, Builder][];
 
-/** Every route builder called with a reserved word for every argument (`fn.length` counts declared parameters, optional ones included). */
+/** Every route builder called with a reserved word for every argument (`fn.length` counts declared parameters, optional ones
+ *  included); a list parameter gets the word as its one item. */
 function probes(): { name: string; word: string; url: string }[] {
   const out: { name: string; word: string; url: string }[] = [];
   for (const [name, fn] of builders) {
-    for (const word of RESERVED) out.push({ name, word, url: fn(...Array.from({ length: Math.max(fn.length, 4) }, () => word)) });
+    const list = LIST_PARAMS[name];
+    for (const word of RESERVED) {
+      const args = Array.from({ length: Math.max(fn.length, 4) }, (_, i) => (i === list?.at ? [word] : word));
+      out.push({ name, word, url: fn(...args) });
+    }
   }
   return out;
 }
@@ -84,6 +95,15 @@ describe("a slug named like a secret route is not a secret (probes built by the 
     // The shapes the review found: a slug `join` below a competition, and below a public page.
     expect(all.some((p) => p.word === "join" && p.url.includes("/c/join/d/join"))).toBe(true);
     expect(all.some((p) => p.word === "claim" && p.url.startsWith("/live/claim/claim"))).toBe(true);
+    // Every list parameter is a real one: the word reaches the URL through it, for every reserved word.
+    let listed = 0;
+    for (const [name, { key }] of Object.entries(LIST_PARAMS)) {
+      for (const p of all.filter((q) => q.name === name)) {
+        expect(new URL(p.url, ORIGIN).searchParams.get(key), `${name}(${p.word})`).toBe(p.word);
+        listed++;
+      }
+    }
+    expect(listed).toBe(Object.keys(LIST_PARAMS).length * RESERVED.length);
   });
 
   it("scrubScoreUrl leaves each URL alone: bare, after an origin, with a query, in a login next= at every depth and hex case, in a transaction name", () => {
