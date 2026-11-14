@@ -579,12 +579,14 @@ export function DeviceScorePad({
   //
   // `token` is the only field, so this is stable for the life of the link.
   const padAuth = useMemo(() => ({ kind: "device_link" as const, token }), [token]);
-  // S2-7 (TN-TS-1): a tennis Start asks "Who serves first?" and sends the toss first (`runTossThenStart`).
+  // S2-7 (TN-TS-1): a tennis Start asks "Who serves first?" and sends the toss first (`runTossThenStart`). A quick match's
+  // cricket Start asks the toss too (decision log 2026-11-13; skins/cricket-start-toss.ts says why at Start).
   const start = useStartWithToss({
     sportKey: sport.key,
     state: live.state,
     onStart: () => void send("core.start", {}),
     onTossThenStart: (toss) => runTossThenStart(live.last_seq, toss, send),
+    cricketToss: quickMatch,
   });
 
   // Doc 13 §7: the pad's dead-end when the link dies mid-day.
@@ -940,6 +942,8 @@ export function DeviceScorePad({
               // ending of its OWN side's disqualifying sanction, directly after it (W2e D13), which the pad's ending prompt
               // offers it when the server's own predicate (`scorerMayForfeit`) says it may (X-ST-2, D-O1).
               canOrganise={false}
+              // Quick match (decision log 2026-11-13): the guest's pad scores a capped sport (cricket) up to its ceiling.
+              quickMatch={quickMatch}
               onEvents={handlePadEvents}
               onTerminalRefusal={enterCarriedForward}
             />
