@@ -4,8 +4,8 @@
 // Continue reveals and focuses it and stays on the step. Removing the conflict lifts all of it and Continue advances.
 //
 // Driven in a browser against a prod build: what a phone SEES (the notice inside the viewport, not covered - an elementFromPoint
-// hit-test at its centre and at Continue's) is not provable in node. Widths 320 and 390 (the walkthrough's), plus 1280 (one DOM: the
-// desktop row carries the same notice). Seeded the way an organiser sets it up: a Pro org with card payments on, one card division and
+// hit-test at its centre and at Continue's) is not provable in node. Widths 320 and 390 (the walkthrough's), plus 768 and 1280 (one DOM:
+// the desktop row carries the same notice). Seeded the way an organiser sets it up: a Pro org with card payments on, one card division and
 // one pay-the-organiser division, both written through the real settings API.
 import { test, expect, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
@@ -20,6 +20,7 @@ const enUi = JSON.parse(
 const VIEWPORTS = [
   { width: 320, height: 568 },
   { width: 390, height: 844 },
+  { width: 768, height: 1024 },
   { width: 1280, height: 900 },
 ] as const;
 
@@ -95,7 +96,10 @@ test.describe("a mixed-method cart is refused in the action bar, above Continue 
         expect(n.inViewport, `${vp.width}: the notice is on screen`).toBe(true);
         expect(n.hit, `${vp.width}: the notice is covered by ${n.covering}`).toBe(true);
       } else {
-        await notice.scrollIntoViewIfNeeded();
+        // From md the row sits in the page's flow (not pinned): scroll to Continue, and the notice above it is in view too.
+        await next.scrollIntoViewIfNeeded();
+        const n = await hitAtCentre(page, "reg-bar-blocked");
+        expect(n.inViewport && n.hit, `${vp.width}: the notice is on screen and uncovered (${n.covering})`).toBe(true);
       }
       const c = await hitAtCentre(page, "reg-next");
       expect(c.hit, `${vp.width}: Continue is covered by ${c.covering}`).toBe(true);
