@@ -1310,3 +1310,47 @@ describe("the reference hero stays on one line (sign-off capture fix)", () => {
     expect(compiled.get("whitespace-nowrap")?.["white-space"]).toBe("nowrap");
   }, 60_000);
 });
+
+describe("Resend confirmation email is offered only while a confirmation still means something (walk-fix F11)", () => {
+  const RESEND = (uiEn as Record<string, string>)["register.status.resend.cta"]!;
+  const PAST = "2000-01-01T00:00:00.000Z";
+  type Status = "pending" | "paid" | "confirmed" | "waitlisted" | "withdrawn" | "expired" | "rejected";
+  const single = (over: Omit<Partial<typeof BASE_ENTRY>, "status"> & { status?: Status }, cart: Partial<typeof BASE_VIEW> = {}) => ({
+    ...BASE_VIEW,
+    ...cart,
+    cart_size: 1,
+    entries: [{ ...BASE_ENTRY, entry_ref: null, ...over }],
+  });
+
+  it("a registration with nothing live (rejected, expired, withdrawn, past its pay-by date) has no Resend; every live state keeps it", async () => {
+    expect(RESEND, "premise: the button's words").toBe("Resend confirmation email");
+    const dead: [string, object][] = [
+      ["rejected", single({ status: "rejected" })],
+      ["expired", single({ status: "expired" })],
+      ["withdrawn", single({ status: "withdrawn" })],
+      // A never-promoted entry past the cart's pay-by date: closed (the sweep expires it next).
+      ["closed", single({ status: "pending" }, { expires_at: PAST })],
+      ["two dead entries", { ...BASE_VIEW, entries: BASE_VIEW.entries.map((e, i) => ({ ...e, status: i === 0 ? ("rejected" as const) : ("withdrawn" as const) })) }],
+    ];
+    const live: [string, object][] = [
+      ["pending", single({ status: "pending" })],
+      ["confirmed", single({ status: "confirmed", amount_cents: 0 })],
+      ["waitlisted", single({ status: "waitlisted", amount_cents: 0 })],
+      ["paid", single({ status: "paid" })],
+      // One dead entry beside a live one: the confirmation still covers the live one.
+      ["rejected beside confirmed", { ...BASE_VIEW, entries: [{ ...BASE_ENTRY, status: "rejected" as const }, { ...BASE_VIEW.entries[1]!, status: "confirmed" as const }] }],
+    ];
+    let checked = 0;
+    for (const [why, view] of dead) {
+      usecaseMock.groupById.mockResolvedValueOnce(view);
+      expect(await render({ rid: "g1", token: "tok" }), why).not.toContain(RESEND);
+      checked += 1;
+    }
+    for (const [why, view] of live) {
+      usecaseMock.groupById.mockResolvedValueOnce(view);
+      expect(await render({ rid: "g1", token: "tok" }), why).toContain(RESEND);
+      checked += 1;
+    }
+    expect(checked).toBe(10);
+  });
+});

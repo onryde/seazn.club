@@ -39,6 +39,7 @@ import {
   cartHeadline,
   cartMoneySummary,
   headlineCarriesUnavailableNotice,
+  offersResendConfirmation,
   moneyLine,
   offlineInstructionsReference,
   receivedCount,
@@ -294,9 +295,11 @@ export default async function RegistrationStatusPage({ params, searchParams }: P
 
         {/* Quiet footer (spec §5.1 item 7): a text link, not a button competing with Pay. Each entry's Cancel is its own card's
             footer link. */}
-        <div className="mt-4">
-          <ResendConfirmation groupId={rid} token={token} />
-        </div>
+        {offersResendConfirmation(headline) && (
+          <div className="mt-4">
+            <ResendConfirmation groupId={rid} token={token} />
+          </div>
+        )}
       </div>
     </DictProvider>
   );

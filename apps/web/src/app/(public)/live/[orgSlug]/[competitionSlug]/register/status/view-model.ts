@@ -307,6 +307,14 @@ export function headlineCarriesUnavailableNotice(entries: readonly { status: Ent
   return headline === "payUnavailable" && entries.filter((e) => !isTerminalRegistrationStatus(e.status)).length === 1;
 }
 
+/** Walk-fix F11: whether the page offers "Resend confirmation email". Not when nothing in the registration is live any more - every
+ *  entry rejected, expired, withdrawn or past its pay-by date, which is exactly when the cart's headline reads `closed`
+ *  (`cartHeadline`: any live entry outranks it). A confirmation of an entry that has gone is moot, and a mail the player asks for
+ *  about it only confuses. One dead entry beside a live one keeps it: the confirmation still covers the live one. */
+export function offersResendConfirmation(headline: HeadlineKind): boolean {
+  return headline !== "closed";
+}
+
 /** How many entries are waiting on the organiser's decision: the count the `received` headline and step are worded for. An entry that
  *  owes a fee is never one of them, including one owed with no way to pay here (B4 review m1). */
 export function receivedCount(entries: readonly HeadlineEntry[], cart: CartPayFacts): number {
