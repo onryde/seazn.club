@@ -654,10 +654,12 @@ closeDivision(s, id): HubTabsState   // active falls back to "settings" if it wa
 | Opening an already-open division | Activates it, no duplicate | push |
 | Opening a 3rd division | Evicts `open[0]` (LRU). If the evicted tab is dirty: dialog "{name} has unsaved changes" with Save and open / Discard and open / Cancel. If clean: swap, then a toast "Closed {name} to make room." with **Reopen**, which runs `openDivision` again and so evicts the next LRU. | push |
 | × on a clean tab | Closes it; active returns to Settings at the saved scroll position | replace |
-| × on a dirty tab | Dialog "Close {name}? You have {n} unsaved changes in {sections}." with Save and close / Discard / Keep editing. At 320 the buttons stack with the primary first. | replace on close |
+| × on a dirty tab | Dialog "Close {name}? You have {n} unsaved changes in {sections}." with Save and close / Discard / Keep editing. At 320 the buttons stack with the primary first. Keep editing on a tab that is not on screen brings it on screen. | replace on close; push on Keep editing from another tab |
 | Switching tabs | Unsaved edits are kept in memory; a dirty tab shows a dot | push |
 | Browser Back that drops a dirty tab from `open` | The host `router.replace`s the tab back in and shows the × dialog | — |
 | Reload or close with any dirty tab | `beforeunload` prompt | — |
+| A link out of the hub, or Back/Forward past the hub's own history, with any dirty tab | Held; dialog "Leave with unsaved changes? {names} has/have unsaved changes." with Save and leave / Discard and leave / Keep editing. Downloads (Export CSV), new-window and modified clicks, and links to another hub tab pass through. | Back is put back at once; Discard goes on |
+| A save from a dialog that does not go through | The failing tab comes on screen, its refusal opened, scrolled to and focused | push if not on screen |
 | Save changes | Saves and stays; toast "Saved"; the dot clears | — |
 | Cancel | Resets to the last saved values; the tab stays open | — |
 
@@ -666,7 +668,16 @@ closeDivision(s, id): HubTabsState   // active falls back to "settings" if it wa
 client host, `RegistrationHubTabsHost`. It is always rendered by `page.tsx` at a
 stable tree position. It mounts one `RegistrationHubDivisionTab` per id in
 `open`, keyed by division id, and hides the inactive ones with `hidden`. The
-Settings and Registrants server panels render as its children.
+section on screen (Settings or Registrants, server rendered) arrives as its one
+`children` slot: the server renders only the section on screen, so one slot is
+all the host needs *(amended T24 fix round 1: the draft read "panels render as
+its children", plural)*.
+
+**Strip order** *(ruling, T24 fix round 1)*: the strip shows the division tabs in
+the order they were OPENED, so clicking a tab never swaps two tabs under the
+pointer. `open`'s least-recently-used order only picks the tab a third one
+evicts. A reload has only the address, so it shows `open`'s order — a recorded
+limit.
 
 `page.tsx` loads the config rows for the ≤ 2 open divisions on **every** tab, so
 the host can mount them. Soft navigation keeps a client component's state when
@@ -697,12 +708,17 @@ there. Do not assume it.
 ### 9.4 Tab strip
 
 - Extract it from page.tsx :223-236 into `RegistrationHubTabStrip`:
-  - `role="tablist"` with `aria-label="Registration sections"`;
+  - a `<nav aria-label="Registration sections">` of links, the one on screen
+    `aria-current="page"` *(amended T24 fix round 1 — the draft read
+    `role="tablist"`: every tab is a link with its own history entry, and a
+    division tab carries a sibling close button, which axe's
+    `aria-required-children` (critical) refuses inside a tablist and
+    `nested-interactive` refuses inside a tab)*;
   - `tabindex="0"` on the scroll container (AGENTS.md class 23: a scrolling
     region owes focusability and a name);
   - `overflow-x-auto`, scrolling inside itself, never the page;
   - the active tab scrolled into view (`ScrollActiveTabIntoView`).
-- A division tab has `role="tab"`:
+- A division tab is a link (`aria-current="page"` when on screen):
   - its name truncates with an ellipsis at `max-w-[12rem]`, with `min-w-0` up
     the chain;
   - a dirty dot (`aria-label="Unsaved changes"`);
