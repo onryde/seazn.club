@@ -19,6 +19,7 @@ import { foldClient } from "../../module-client";
 import {
   bandsUpTo,
   capBand,
+  padBandCeiling,
   dedicatedEventTypes,
   defaultBandFor,
   filterTilesByBand,
@@ -72,6 +73,28 @@ function drawn(view: PadHostView, nameless: boolean) {
 }
 const START = [{ type: "core.start", payload: {} }];
 const AFTER_AN_OVER = [...START, { type: "cricket.innings.summary", payload: { runs: 9, wickets: 0, legalBalls: 6, boundaries: 1, partial: true } }];
+
+describe("padBandCeiling: the organiser's pad has no ceiling, the guest's has its sport's (whole review m3)", () => {
+  it("every variant of every engine sport: an organiser's pad (flag absent or false) is never capped; a quick match's is its sport's ceiling", () => {
+    let checked = 0;
+    let capped = 0;
+    for (const mod of modules) {
+      if (!mod.padSpec) continue;
+      for (const v of Object.values((mod.variants ?? {}) as Record<string, unknown>)) {
+        const spec = mod.padSpec(mod.configSchema.parse(v) as never);
+        expect(padBandCeiling(undefined, mod.key, spec), `${mod.key}: organiser, no flag`).toBeNull();
+        expect(padBandCeiling(false, mod.key, spec), `${mod.key}: organiser`).toBeNull();
+        const guest = padBandCeiling(true, mod.key, spec);
+        expect(guest, `${mod.key}: guest`).toBe(quickMatchBandCeiling(mod.key, spec));
+        if (guest !== null) capped++;
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: sport×variants").toBeGreaterThan(0);
+    // Not vacuous: cricket's guest pad is capped (at 1, every variant), so a leak to the organiser's would read non-null.
+    expect(capped, "capped guest pads").toBe(Object.keys(cricket.variants as object).length);
+  });
+});
 
 describe("capBand / bandsUpTo / withoutPersonSlots: the empty cases first", () => {
   it("no ceiling leaves the band and the four bands alone; a ceiling caps and cuts", () => {
@@ -284,7 +307,7 @@ describe("the host wires the cap only for a quick match (the seam, read in the s
   // which this change leaves alone.
   const src = readFileSync(resolve(import.meta.dirname, "../pad-host.tsx"), "utf8");
   it("the ceiling is read only when the pad is a quick match's, and the band, the chip's rows and the strip all take it", () => {
-    expect(src).toMatch(/props\.quickMatch\s*\?\s*quickMatchBandCeiling\(props\.module\.key, spec\)\s*:\s*null/);
+    expect(src).toContain("() => padBandCeiling(props.quickMatch, props.module.key, spec),");
     expect(src).toContain("const [band, onBandChange] = usePadBand(props.fixtureId, spec.fidelity, bandCeiling);");
     expect(src).toMatch(/<RecordingChip\s+activeBand=\{band\}\s+onBandChange=\{onBandChange\}\s+bands=\{bandsUpTo\(bandCeiling\)\}/);
     expect(src).toMatch(/bandCeiling === null \? raw : withoutPersonSlots\(raw\)/);

@@ -314,6 +314,12 @@ export function usePadBand(
 // pad, and every sport a quick match does not cap, is exactly as before.
 // ---------------------------------------------------------------------------
 
+/** The pad's band ceiling: a quick match's (the guest's) sport ceiling, null on every other pad (whole review m3: the
+ *  organiser's pad is the case a leak would break, so it is a pure function a test calls both ways). */
+export function padBandCeiling(quickMatch: boolean | undefined, sportKey: string, spec: PadSpec): FidelityBand | null {
+  return quickMatch === true ? quickMatchBandCeiling(sportKey, spec) : null;
+}
+
 /** The band a capped pad records at: the scorer's band, never above `ceiling`. */
 export function capBand(band: FidelityBand, ceiling: FidelityBand | null): FidelityBand {
   return ceiling === null || band <= ceiling ? band : ceiling;
@@ -2115,7 +2121,7 @@ export function PadHostV3(props: PadHostV3Props) {
   // THE RECORDING BAND's storage and pick: `usePadBand`, below the component.
   // Quick match: the guest's ceiling (`capBand` above), null for every other pad.
   const bandCeiling = useMemo(
-    () => (props.quickMatch ? quickMatchBandCeiling(props.module.key, spec) : null),
+    () => padBandCeiling(props.quickMatch, props.module.key, spec),
     [props.quickMatch, props.module.key, spec],
   );
   const [band, onBandChange] = usePadBand(props.fixtureId, spec.fidelity, bandCeiling);
