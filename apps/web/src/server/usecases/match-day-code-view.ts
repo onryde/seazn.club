@@ -23,7 +23,7 @@ import { resolveSeedingSourceStage, seedingSourceReady } from "@/lib/seeding-sou
 import { isSwissBoardSeated, nextUnseatedSwissRound } from "@/lib/swiss-shell";
 import type { Dict } from "@/lib/i18n-constants";
 import { readBoard, type Board, type FixtureRow } from "./match-day";
-import { IN_PLAY } from "./match-day-call";
+import { IN_PLAY, liveCallSql } from "./match-day-call";
 import { readMatchDayNames } from "./match-day-names";
 import { readRounds, roundOf } from "./match-day-rounds";
 import type { MatchDayCodeRow } from "./match-day-codes";
@@ -111,8 +111,8 @@ export type ScopeFixture = {
   division_live: boolean;
   /** A call still holds on it (`liveCallSql`): it is called onto its court and not started. It is on that court NOW, so a code
    *  that covers the court covers it whatever its date (F-T8-15: a call moves `scheduled_at` to the call time, and the day
-   *  after, the court's state still says called). Absent reads as not called. */
-  called?: boolean;
+   *  after, the court's state still says called). */
+  called: boolean;
 };
 
 const SCHEDULED = "scheduled";
@@ -138,7 +138,7 @@ export function inScope(code: MatchDayCodeRow, f: ScopeFixture): boolean {
   if (scope.kind === "venue" && (f.court_id === null || f.venue_id !== scope.venueId)) return false;
   if (scope.kind === "courts" && (f.court_id === null || !scope.courtIds.includes(f.court_id))) return false;
   if (f.court_id === null) return noCourtListed(code, f);
-  if (f.status === IN_PLAY || f.called === true) return true;
+  if (f.status === IN_PLAY || f.called) return true;
   return within(f.scheduled_at, code.opensAt, code.expiresAt) || within(f.finished_at, code.opensAt, code.expiresAt);
 }
 
@@ -222,6 +222,7 @@ interface StageFixtureRow {
   venue_id: string | null;
   scheduled_at: Date | null;
   finished_at: Date | null;
+  called: boolean;
 }
 
 /**
@@ -280,7 +281,9 @@ async function readApprovals(tx: Tx, code: MatchDayCodeRow): Promise<MatchDayApp
   }
   const fixtures = await tx<StageFixtureRow[]>`
     select f.id, f.stage_id, f.round_no, f.status, f.home_entrant_id, f.away_entrant_id, f.home_slot_label, f.away_slot_label,
-           f.outcome, f.ext_key, f.court_id, c.venue_id, f.scheduled_at, f.finished_at
+           f.outcome, f.ext_key, f.court_id, c.venue_id, f.scheduled_at, f.finished_at,
+           exists (select 1 from fixture_calls fc join fixtures g on g.id = fc.fixture_id
+                    where fc.fixture_id = f.id and ${liveCallSql(tx)}) as called
       from fixtures f left join courts c on c.id = f.court_id
      where f.stage_id in ${tx([...wanted])}`;
   const out: MatchDayApproval[] = [];

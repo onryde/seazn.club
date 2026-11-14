@@ -543,6 +543,15 @@ describe.skipIf(!HAS_DB)("calling a match to a court through a Match Day code (T
   });
 
   describe("Next on, or queued on (F-T8-16)", () => {
+    it("a court whose very next match has a side to decide: the first READY match after it is queued, not first_in_queue", async () => {
+      // A is Court 1's very next, with a side still to be decided; D follows it and is ready.
+      await sql`update fixtures set away_entrant_id = null where id = ${A}`;
+      const { code } = await codeFor(day, { kind: "competition" }, true);
+      const offered = (await candidatesForCode(code, day.courts.c2, NOW)).candidates;
+      expect(offered.find((c) => c.match.fixture_id === A)).toBeUndefined();
+      expect(offered.find((c) => c.match.fixture_id === D)).toMatchObject({ source: "other_court", from_court_name: "Court 1", first_in_queue: false });
+    });
+
     it("the code's candidates say first_in_queue for a court's very next match only, never for this_court or a called one", async () => {
       const solo = [await person(day.orgId, "Ida Iyer"), await person(day.orgId, "Jon Joy")];
       const singles = await seedCompetition(day.auth, "Singles", solo.map((p) => [p]), {

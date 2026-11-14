@@ -183,7 +183,7 @@
             "type": "boolean"
           },
           "first_in_queue": {
-            "description": "true when the match is the first match queued on from_court_name's court, that court's very next; false for a later match of its queue, for a this_court or no_court candidate and for a called match. A reader without it treats the candidate as not first.",
+            "description": "true when the match is the first match queued on from_court_name's court, that court's very next; false for a later match of its queue, for a this_court or no_court candidate and for a called match. A court's very next match counts even if a side of it is still to be decided: the first ready match behind it is false. The field is required; an older server omits it, and a reader treats its absence as true (it keeps \"Next on\").",
             "type": "boolean"
           },
           "planned_at": {

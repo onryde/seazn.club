@@ -471,7 +471,7 @@ export const CaptureMatchdayCandidate = z.strictObject({
   from_court_name: z.string().nullable(),
   /** True for an other_court candidate whose match is called onto that court and not started; false otherwise. */
   called: z.boolean(),
-  /** True when the match is the first match queued on `from_court_name`'s court, that court's very next; false for a later match of its queue, for a this_court or no_court candidate and for a called match. */
+  /** True when the match is the first match queued on `from_court_name`'s court, that court's very next; false for a later match of its queue, for a this_court or no_court candidate and for a called match. A court's very next match counts even when a side of it is still to be decided (the first ready match behind it is false). */
   first_in_queue: z.boolean(),
   planned_at: MdInstant.nullable(),
   waiting_minutes: z.number().int().min(0),
