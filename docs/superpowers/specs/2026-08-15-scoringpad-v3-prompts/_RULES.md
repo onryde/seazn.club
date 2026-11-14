@@ -66,7 +66,7 @@ regression — a wave that defers one names the wave that owes it, in the PR
 body. UI text changed → `git grep -a` old AND new across `e2e/` first.
 New user-facing strings → all 4 dictionaries (`en,es,fr,nl`, flat dotted
 keys) + `i18n:check`. Widths 320/768/1280 by screenshot + the seven-width
-`mobile.spec.ts` matrix for any new surface. 44px floor. Contrast computed
+`e2e/mobile/<area>.spec.ts` matrix for any new surface. 44px floor. Contrast computed
 from tokens, then axe per skin.
 
 ## 6. Ship checklist (per wave)

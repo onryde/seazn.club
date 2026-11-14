@@ -101,7 +101,7 @@ describe("R2005 e2e wiring: the composed overlay spec runs against a server that
       expect(new RegExp(body).test(path), `${what} does not select the spec`).toBe(false);
       checked++;
     }
-    expect(/[\\/]e2e[\\/]walkthrough[\\/]/.test(path) || /mobile\.spec\.ts/.test(path), "not a walkthrough, not mobile").toBe(false);
+    expect(/[\\/]e2e[\\/]walkthrough[\\/]/.test(path) || /[\\/]e2e[\\/]mobile[\\/]/.test(path), "not a walkthrough, not mobile").toBe(false);
     expect(checked, "carve-outs checked").toBe(2);
   });
 

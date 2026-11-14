@@ -63,6 +63,7 @@ interface ProjectLike {
   name?: string;
   testMatch?: Pattern;
   testIgnore?: Pattern;
+  fullyParallel?: boolean;
 }
 
 function asRegExps(pattern: Pattern): RegExp[] {
@@ -716,6 +717,64 @@ describe("e2e CI wiring", () => {
       selected.every((f) => f.startsWith("walkthrough/")),
       "the walkthrough project selected something outside e2e/walkthrough/",
     ).toBe(true);
+  });
+
+  it("gives the width matrix its own seven projects: every e2e/mobile spec runs in all seven, and in no other project", async () => {
+    // `e2e/mobile.spec.ts` was split into e2e/mobile/*.spec.ts. A width spec that the `parallel` project ALSO selected would run
+    // twice (once at 1280, once per width) and one that no width project selected would run at no width at all. `orphans` above
+    // can only see the second: a spec selected twice is not an orphan.
+    const unset = await configFor(undefined);
+    const variants: { projects: ProjectLike[] }[] = [unset, await configFor("heavy"), await configFor("rest")];
+    for (const sl of WALKTHROUGH_SLICES) variants.push(await configFor(undefined, sl));
+    const widths = unset.projects.filter((p) => /^(mobile|tablet)-/.test(p.name ?? ""));
+    expect(widths.map((p) => p.name).sort(), "premise: the seven width projects").toEqual([
+      "mobile-14",
+      "mobile-320",
+      "mobile-360",
+      "mobile-430",
+      "mobile-se",
+      "tablet-768",
+      "tablet-834",
+    ]);
+    const all = specFiles();
+    const matrix = all.filter((f) => f.startsWith("mobile/"));
+    expect(matrix.length, "e2e/mobile/ holds the width-matrix specs (zero would pass anything)").toBeGreaterThan(1);
+    // The OLD filename must stay dead. Before the split that one path was the width matrix (every width project matched it and
+    // `parallel` ignored it); now nothing names it, so a file recreated there (several live rule files used to tell agents to add
+    // width coverage to it) is picked up by `parallel`'s default testMatch and runs once at 1280 with zero width coverage, where
+    // `projectViewport()` reports 1280 and every phone-only branch passes vacuously.
+    expect(
+      all.filter((f) => !f.startsWith("mobile/") && /(^|\/)mobile\.spec\.ts$/.test(f)),
+      "width specs live in e2e/mobile/<area>.spec.ts; a recreated e2e/mobile.spec.ts runs at 1280 only",
+    ).toEqual([]);
+    for (const p of widths) {
+      expect(
+        all.filter((f) => selects(p, f)),
+        `${p.name} selects exactly the e2e/mobile specs`,
+      ).toEqual(matrix);
+      // One shared signed-in org: the old single serial file never spread across workers locally, and the global is
+      // `fullyParallel: true`, so each width project turns it off. Strict `false`, not falsy: undefined inherits the global.
+      expect(p.fullyParallel, `${p.name} must set fullyParallel: false (in-file order on one worker, one shared org)`).toBe(false);
+    }
+    // EVERY project that is not a width one, in EVERY slice variant of the config, read from the real config rather than listed
+    // here: a hand-written list cannot notice a NEW project that selects the width specs. The name set is pinned on purpose, so a
+    // new project forces someone to decide here whether it may select e2e/mobile/.
+    const others = variants.flatMap((c) => c.projects.filter((p) => !widths.some((w) => w.name === p.name)));
+    const otherNames = [...new Set(others.map((p) => p.name))].sort();
+    expect(otherNames, "premise: the non-width projects (a new project must be decided here, not slip past)").toEqual([
+      "gallery",
+      "parallel",
+      "serial",
+      "setup",
+      "walkthrough",
+    ]);
+    expect(others.length, "premise: every variant carries every non-width project").toBe(otherNames.length * variants.length);
+    for (const p of others) {
+      expect(
+        matrix.filter((f) => selects(p, f)),
+        `${p.name} must not select a width-matrix spec`,
+      ).toEqual([]);
+    }
   });
 
   it("splits the walkthrough project into capture + stream + sponsor + rest with nothing lost and nothing run twice", async () => {

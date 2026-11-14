@@ -210,10 +210,10 @@ From `AGENTS.md` at the worktree root — the ones that WILL fire here:
   grep for dictionary copy passes in EVERY state (the payload carries it) —
   drive the DOM.
 - **`-g` on a Playwright sweep is a filename sweep in costume;
-  `mobile.spec.ts` is serial** (`describe.configure({ mode: "serial" })`), so a
-  red count there is a FLOOR. Run whole spec files; re-run after each fix until
+  some `e2e/mobile/` files are serial** (`describe.configure({ mode: "serial" })`), so a
+  red count there is a FLOOR. Run every file in `e2e/mobile/`; re-run after each fix until
   a full pass completes. The fixtures tab already has seven-width cases
-  (`mobile.spec.ts:578,2715,2907,3096,3189`).
+  (formerly `mobile.spec.ts:578,2715,2907,3096,3189`, now in `e2e/mobile/`).
 - **A folded control is not visible — wait on `toBeAttached`, not
   `toBeVisible`**, open EVERY instance of the disclosure, and gate the open on
   the toggle being visible, not on a width literal. Do not weaken an assertion

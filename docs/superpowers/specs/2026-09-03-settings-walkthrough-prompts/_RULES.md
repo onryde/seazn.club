@@ -78,7 +78,7 @@ The shared Pro user outlives the test that borrowed from it.
 3. "Did it persist?" is an API read. "Does it render back?" is the one reload.
 4. The matrix's API half uses `APIRequestContext`, no page.
 5. No `waitForTimeout`. `expect.poll` / `waitForResponse` only.
-6. No screenshots, no axe — `gallery.capture` and `mobile.spec.ts` own those.
+6. No screenshots, no axe — `gallery.capture` and the `e2e/mobile/` specs own those.
 7. Derived timeouts: `Math.max(FLOOR, base + n * per_unit)`, never a flat
    constant beside a derived cost.
 

@@ -1,6 +1,6 @@
 // Archive a sponsor (spec 2026-11-11-sponsor-archive, plan Task 8) - the journey in a real browser. Run by CI only (e2e.yml: the
-// `parallel` project joins it by the default testMatch; never locally). The seven widths live in mobile.spec.ts (ruling R17: only that
-// file runs in the seven width projects); this file holds its own default viewport.
+// `parallel` project joins it by the default testMatch; never locally). The seven widths live in e2e/mobile/ (ruling R17: only the specs in
+// that directory run in the seven width projects); this file holds its own default viewport.
 //
 // What no vitest suite can see (apps/web vitest is environment "node": markup, no router, no focus, no public cache):
 //   A1 golden path   a Gold sponsor with an ended, PAID offline deal (numbered invoice) is archived from its page, announced; the list
