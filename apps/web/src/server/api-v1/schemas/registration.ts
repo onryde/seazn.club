@@ -231,7 +231,8 @@ export const RegistrationListEntry = Registration.extend({
    *  Send payment reminder, since the press would be refused with PAYMENT_REMINDER_LIMIT. */
   reminders_in_window: z.number().int().nonnegative(),
   /** When an automatic waitlist promotion last passed this waiting entry over because its Lichess account is not linked to play, in
-   *  its current wait; null otherwise (and on every entry that is not waitlisted). The hub shows "Skipped - Lichess not linked". */
+   *  its current wait; null otherwise (and on every entry that is not waitlisted). The hub shows "Skipped on <date>: Lichess wasn't
+   *  linked". */
   promotion_skipped_at: z.string().nullable(),
 });
 

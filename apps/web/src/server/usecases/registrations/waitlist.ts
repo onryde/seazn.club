@@ -198,7 +198,7 @@ async function recordSkippedPromotion(tx: Tx, divisionId: string, registrationId
 
 /** When an automatic promotion last passed the row aliased `alias` over (`registration.promotion_skipped`, recordSkippedPromotion) IN ITS
  *  CURRENT WAIT, else null - one SQL expression, the ONE statement of "this entry was skipped" (walk-fix F16). Read by the organiser's
- *  row (`RegistrationListRow.promotion_skipped_at`: the "Skipped - Lichess not linked" chip) and the registrant's status card
+ *  row (`RegistrationListRow.promotion_skipped_at`: the "Skipped on <date>: Lichess wasn't linked" chip) and the registrant's status card
  *  (`GroupEntryView.promotion_skipped_at`: why, and the Link step). Null unless the row is waitlisted, and a skip older than the wait it is
  *  in (`coalesce(waitlisted_at, created_at)`, the queue key's own start: an entry promoted and put back, or moved back by the organiser,
  *  starts a new wait) is not this wait's. */

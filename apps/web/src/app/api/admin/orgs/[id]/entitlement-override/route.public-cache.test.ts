@@ -38,9 +38,11 @@ describe.skipIf(!HAS_DB)("an entitlement override expires the org's public pages
   it("premise, as a guard: every plan grants registration.paid, so no plan change can flip card payments", async () => {
     const rows = await sql<{ plan_key: string; granted: boolean }[]>`
       select plan_key, coalesce(bool_value, false) as granted from plan_entitlements where feature_key = 'registration.paid'`;
-    const plans = await sql<{ plan_key: string }[]>`select distinct plan_key from plan_entitlements`;
+    // Every plan an org can be on, from `plans` itself (final fix review m-2): a plan with no entitlement row at all resolves to deny
+    // (lib/entitlements.ts), so counting plans from plan_entitlements would never see it.
+    const plans = await sql<{ key: string }[]>`select key from plans`;
     expect(plans.length, "anti-vacuity: the catalog has plans").toBeGreaterThan(0);
-    expect(rows.map((r) => r.plan_key).sort(), "every plan has a registration.paid row").toEqual(plans.map((p) => p.plan_key).sort());
+    expect(rows.map((r) => r.plan_key).sort(), "every plan has a registration.paid row").toEqual(plans.map((p) => p.key).sort());
     for (const r of rows) expect(r.granted, `${r.plan_key} grants registration.paid`).toBe(true);
   });
 

@@ -211,8 +211,8 @@ export interface RegistrationListRow extends Omit<RegistrationWithGroupRow, "acc
    *  REMINDER_CAP_PER_DAY the hub disables the button, since the press would be refused (walk-fix F13). */
   reminders_in_window: number;
   /** When an automatic promotion last passed this WAITING entry over because its Lichess account is not linked to play
-   *  (`promotionSkippedAtSql`, registrations/waitlist.ts), in its current wait; null otherwise. The hub shows "Skipped - Lichess not
-   *  linked" beside the waitlist place (walk-fix F16). */
+   *  (`promotionSkippedAtSql`, registrations/waitlist.ts), in its current wait; null otherwise. The hub shows "Skipped on <date>: Lichess
+   *  wasn't linked" beside the waitlist place (walk-fix F16, final review m1). */
   promotion_skipped_at: Date | null;
 }
 

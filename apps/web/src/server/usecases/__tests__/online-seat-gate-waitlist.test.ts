@@ -514,7 +514,7 @@ async function enterWithCart(r: Rig, p: SeedPlayer): Promise<{ id: string; cart:
 }
 
 // Walk-fix F16 (ruling): the skip is TOLD. One mail per act that passed the entry over, to its contact (an online entry is personal), with the
-// Link step; the entry keeps its place. The organiser's row shows "Skipped - Lichess not linked" and the registrant's waiting card says why,
+// Link step; the entry keeps its place. The organiser's row shows "Skipped on <date>: Lichess wasn't linked" and the registrant's waiting card says why,
 // while the entry waits - a skip from an earlier wait, or an entry since promoted, shows nothing.
 describe.skipIf(!HAS_DB)("walk-fix F16: a skip is told to the registrant and shown to the organiser", () => {
   afterEach(() => {

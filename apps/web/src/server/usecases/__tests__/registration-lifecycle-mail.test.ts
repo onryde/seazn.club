@@ -389,6 +389,18 @@ describe.skipIf(!HAS_DB)("the payment reminder and the cart mail quote the right
     expect(b.text).toContain(`quoting ${ref1}-${lead.registration.cart_position}`);
     expect(lead.registration.cart_position, "premise: the lead is entry 1").toBe(1);
     expect(b.text.split("\n")).toContain(await panel(ref1));
+
+    // After a withdrawal (final fix review m-3): entry 1 withdrawn, its fee KEPT on the row (no withdrawal writer zeroes it), entry 2
+    // still owes. Only a pending entry owes, so one owes and the instructions quote -2; counting the withdrawn fee would make it two
+    // and quote the cart's.
+    const wd = await twoEntryCart("m2-withdrawn");
+    await sql`update registrations set status = 'withdrawn', withdrawn_at = now() where id = ${wd.first.registration.id}`;
+    const [kept] = await sql<{ amount_cents: number }[]>`select amount_cents from registrations where id = ${wd.first.registration.id}`;
+    expect(kept!.amount_cents, "premise: the withdrawn entry keeps its fee").toBeGreaterThan(0);
+    b = await mailOf(wd.first.registration.group_id, wd.first.access_token);
+    expect(b.text, "the one pending entry's reference").toContain(`quoting ${wd.ref}-${wd.second.cart_position}`);
+    expect(b.text, "never the cart's in the instructions").not.toMatch(new RegExp(`quoting ${wd.ref}(?!-${wd.second.cart_position})`));
+    expect(b.text.split("\n")).toContain(await panel(wd.ref));
   });
 });
 
