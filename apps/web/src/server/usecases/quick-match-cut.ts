@@ -128,7 +128,8 @@ export function tossThrough(tie: CutTie): string[] {
 
 /**
  * The tiebreak order a League + Knockout quick match's LEAGUE stage is stored with: the sport's default for a league
- * (`module.defaultTiebreakers("league", cfg)`) with every `seed` step removed, every other step kept in its order.
+ * (the `sportDefault` the table-rules loader resolves, `tableRulesOf`) with every `seed` step removed, every other step
+ * kept in its order.
  * Controller ruling 2026-11-13 (plan Q1's PO rec): a quick match seeds its sides in the order they were typed, so a seed
  * step (tennis and ice hockey list one before `lots`, P8) would separate two sides level at the cut by typing order,
  * silently: the spec's anti-goal. Without it they reach the lot, and the cut asks. Plain League quick matches and
