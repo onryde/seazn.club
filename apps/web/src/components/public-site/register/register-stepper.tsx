@@ -170,6 +170,8 @@ export function RegisterStepper({
   // stay silent. The ref is the summary's own element, handed down through StepWho; it exists only while something is wrong.
   const [whoFailedContinues, setWhoFailedContinues] = useState(0);
   const whoSummaryRef = useRef<HTMLDivElement>(null);
+  // Walk-fix F6: the action bar's "why Continue cannot move on" notice, revealed and focused by a tap on Continue.
+  const barBlockedRef = useRef<HTMLParagraphElement>(null);
   const [entriesAttempted, setEntriesAttempted] = useState(false);
   const [detailsAttempted, setDetailsAttempted] = useState(false);
   const [consentAttempted, setConsentAttempted] = useState(false);
@@ -407,6 +409,21 @@ export function RegisterStepper({
     stepAfter,
     phase: submitPhase,
   });
+
+  // Walk-fix F6 (P4 W9's refusal, moved): a card division and a pay-the-organiser one cannot be collected together, and the server refuses
+  // the cart as a whole. The action bar says so directly above Continue the moment the second division is added, from the SAME verdict
+  // that holds Next (validateEntries' `mixedPayment`), and a tap on Continue reveals and focuses that notice instead of advancing.
+  const mixed = currentStep === "entries" ? entriesValidation.mixedPayment : null;
+  const barBlocked =
+    mixed === null
+      ? null
+      : t("register.entries.cart.mixedPayment", { cardDivision: mixed.cardDivision, offlineDivision: mixed.offlineDivision });
+  function revealBarBlocked() {
+    const el = barBlockedRef.current;
+    // `nearest`: pinned in the phone's bar it is already on screen (no jump); in the desktop's in-flow row it scrolls just enough.
+    el?.scrollIntoView({ block: "nearest" });
+    el?.focus({ preventScroll: true });
+  }
 
   function goNext() {
     if (currentStep === "who") setWhoAttempted(true);
@@ -664,8 +681,10 @@ export function RegisterStepper({
         submitting={submitting}
         labels={barLabels}
         sentTo={contact.email.trim()}
+        blocked={barBlocked}
+        blockedRef={barBlockedRef}
         onBack={goBack}
-        onNext={goNext}
+        onNext={barBlocked !== null ? revealBarBlocked : goNext}
         onSubmit={handleSubmit}
       />
 

@@ -1990,6 +1990,81 @@ describe("step 5 — REVIEW→PAY line items", () => {
   });
 });
 
+// Walk-fix F6: a cart mixing a card division with a pay-the-organiser one was refused by a notice under the cart - below the fold
+// and under the sticky bar on a phone - while Continue looked enabled and did nothing. The notice now sits IN the bar, directly
+// above Continue (one DOM, every width); Continue is aria-disabled and described by it; tapping it reveals and focuses the notice
+// instead of advancing. Removing the conflict lifts all three.
+describe("ENTRIES — a mixed-method cart is refused in the action bar, above Continue (walk-fix F6)", () => {
+  const DIV_OFFLINE_PAID: DivisionLike = { ...DIV_OPEN, division_id: "div-off-paid", name: "Social Singles", fee_cents: 1500, payment_method: "offline" };
+  const sentence = tRuntime(EN_UI, "register.entries.cart.mixedPayment", { cardDivision: "Paid Singles", offlineDivision: "Social Singles" });
+
+  function mixedCart() {
+    const m = mount([DIV_PAID, DIV_OFFLINE_PAID]);
+    (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Rep", email: "rep@example.com" });
+    m.clickByText("Next"); // -> ENTRIES
+    (propsOf(m.divisionCard("div-paid")).onAddIndividual as () => void)();
+    (propsOf(m.divisionCard("div-off-paid")).onAddIndividual as () => void)();
+    return m;
+  }
+  const byTestId = (m: ReturnType<typeof mount>, id: string) => m.island.tree().filter((e) => propsOf(e)["data-testid"] === id);
+  const onEntries = (m: ReturnType<typeof mount>) => m.island.tree().some((e) => e.type === EntryCart);
+
+  it("the empty case first: a single-method cart has no bar notice and an enabled, undescribed Continue", () => {
+    const m = mount([DIV_PAID, DIV_OFFLINE_PAID]);
+    (propsOf(m.stepWho()).onChange as (p: object) => void)({ name: "Rep", email: "rep@example.com" });
+    m.clickByText("Next");
+    (propsOf(m.divisionCard("div-paid")).onAddIndividual as () => void)();
+    expect(byTestId(m, "reg-bar-blocked")).toHaveLength(0);
+    const next = byTestId(m, "reg-next")[0]!;
+    expect(propsOf(next)["aria-disabled"]).toBeUndefined();
+    expect(propsOf(next)["aria-describedby"]).toBeUndefined();
+  });
+
+  it("mixed: ONE notice, in the bar before Continue, an alert that Continue is disabled by and described by", () => {
+    const m = mixedCart();
+    const notices = byTestId(m, "reg-bar-blocked");
+    expect(notices, "exactly one notice - the cart's own copy is gone").toHaveLength(1);
+    expect(byTestId(m, "reg-cart-mixed-payment")).toHaveLength(0);
+    const notice = notices[0]!;
+    expect(textOf(notice)).toBe(sentence);
+    expect(propsOf(notice).role).toBe("alert");
+    expect(propsOf(notice).tabIndex, "focusable by script, not in the tab order").toBe(-1);
+    const next = byTestId(m, "reg-next")[0]!;
+    expect(propsOf(next)["aria-disabled"]).toBe(true);
+    expect(propsOf(next)["aria-describedby"]).toBe(propsOf(notice).id);
+    // Inside the bar, and before the button in it.
+    const bar = m.island.tree().find((e) => propsOf(e)["data-testid"] === "reg-bar")!;
+    const inBar = walk(bar).map((e) => propsOf(e)["data-testid"]);
+    expect(inBar.indexOf("reg-bar-blocked"), "the notice is in the bar").toBeGreaterThan(-1);
+    expect(inBar.indexOf("reg-bar-blocked"), "above Continue").toBeLessThan(inBar.indexOf("reg-next"));
+  });
+
+  it("tapping Continue reveals and focuses the notice, and stays on ENTRIES; removing an entry lifts it and Continue advances", () => {
+    const m = mixedCart();
+    const notice = byTestId(m, "reg-bar-blocked")[0]!;
+    const focus = vi.fn();
+    const scrollIntoView = vi.fn();
+    const ref = propsOf(notice).ref as { current: unknown };
+    expect(ref && typeof ref === "object" && "current" in ref, "the notice carries the stepper's ref").toBe(true);
+    ref.current = { focus, scrollIntoView };
+    (propsOf(byTestId(m, "reg-next")[0]!).onClick as () => void)();
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(focus).toHaveBeenCalledTimes(1);
+    expect(onEntries(m), "still on ENTRIES").toBe(true);
+    // A second tap does it again (not a one-shot).
+    (propsOf(byTestId(m, "reg-next")[0]!).onClick as () => void)();
+    expect(focus).toHaveBeenCalledTimes(2);
+    expect(onEntries(m)).toBe(true);
+
+    m.clickByText(tRuntime(EN_UI, "register.entries.cart.remove"));
+    expect(byTestId(m, "reg-bar-blocked")).toHaveLength(0);
+    expect(propsOf(byTestId(m, "reg-next")[0]!)["aria-disabled"]).toBeUndefined();
+    m.clickByText("Next"); // -> DETAILS
+    expect(onEntries(m), "advanced off ENTRIES").toBe(false);
+    expect(focus, "the advancing tap does not reveal").toHaveBeenCalledTimes(2);
+  });
+});
+
 // I5 (T16 fix round 1): the consent step offers the Lichess link for the SELECTED online divisions, starting back to
 // this registration — driven through the real stepper, from WHO to CONSENT, so the wiring (not just the card) is proven.
 describe("step 4 — the Lichess link on CONSENT (I5)", () => {
@@ -3101,10 +3176,10 @@ describe("P4 — a card + offline cart is refused on the ENTRIES step (W9)", () 
   it("says why, naming both divisions, as soon as the second one is added - and Next stays on the step", () => {
     const m = onEntries([DIV_CARD, DIV_OFFLINE]);
     (propsOf(m.divisionCard("div-card")).onAddIndividual as () => void)();
-    expect(m.entryCartText(), "one division: no refusal yet").not.toContain("can't mix payment methods");
+    expect(m.pageText(), "one division: no refusal yet").not.toContain("can't mix payment methods");
 
     (propsOf(m.divisionCard("div-offline")).onAddIndividual as () => void)();
-    expect(m.entryCartText()).toContain(
+    expect(m.pageText()).toContain(
       "One registration can't mix payment methods: Open Singles is paid by card at sign-up and Social Singles is paid to the organiser.",
     );
 
@@ -3117,11 +3192,11 @@ describe("P4 — a card + offline cart is refused on the ENTRIES step (W9)", () 
     const m = onEntries([DIV_CARD, DIV_OFFLINE]);
     (propsOf(m.divisionCard("div-card")).onAddIndividual as () => void)();
     (propsOf(m.divisionCard("div-offline")).onAddIndividual as () => void)();
-    expect(m.entryCartText()).toContain("can't mix payment methods");
+    expect(m.pageText()).toContain("can't mix payment methods");
 
     const offlineId = m.entryCartCart().entries.find((e) => e.division_id === "div-offline")!.id;
     (propsOf(m.island.tree().find((e) => e.type === EntryCart)!).dispatch as (a: object) => void)({ type: "REMOVE_ENTRY", id: offlineId });
-    expect(m.entryCartText()).not.toContain("can't mix payment methods");
+    expect(m.pageText()).not.toContain("can't mix payment methods");
 
     m.clickByText("Next");
     expect(m.island.tree().some((e) => e.type === StepDetails), "no longer refused: on DETAILS").toBe(true);

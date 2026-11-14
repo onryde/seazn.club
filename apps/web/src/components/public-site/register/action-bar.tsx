@@ -6,6 +6,7 @@
 //
 // Below `md` it is a bar pinned to the bottom of the register column (`sticky bottom-0`, full-bleed over the page's 16px gutter,
 // padded for the home-indicator inset); from `md` it is the plain row it always was. Back is ABSENT on step 1, not disabled.
+import type { Ref } from "react";
 import { useT } from "@/components/i18n/dict-provider";
 import type { ActionBarLabels } from "./action-bar-labels";
 import { BTN_FORWARD, BTN_GHOST, LABEL_SIZER, LABEL_SIZER_TEXT } from "./styles";
@@ -17,6 +18,8 @@ export function ActionBar({
   submitting,
   labels,
   sentTo,
+  blocked = null,
+  blockedRef,
   onBack,
   onNext,
   onSubmit,
@@ -29,6 +32,13 @@ export function ActionBar({
   labels: ActionBarLabels;
   /** The address the confirmation goes to (Review's md+ note). "" shows no note. Trimmed by the caller, as submit.ts trims it. */
   sentTo: string;
+  /** Walk-fix F6: why the forward button cannot move on, when the reason is not a field the registrant can see beside it (a mixed-method
+   *  cart). Drawn IN the bar, directly above the button, so it is on screen wherever the button is (on a phone the bar is pinned and
+   *  a notice under the cart sat below the fold, under the bar); the button is then `aria-disabled` and described by it. What a tap
+   *  does then is the stepper's (`onNext`): it reveals and focuses this notice through `blockedRef`. Null = nothing blocks. */
+  blocked?: string | null;
+  /** The notice's element, for the stepper's reveal (a ref of its own prop: react-hooks/refs reads a ref inside an object as a read). */
+  blockedRef?: Ref<HTMLParagraphElement>;
   onBack: () => void;
   onNext: () => void;
   /** Passed straight to the button's onClick, so what it returns (the stepper's submit is async) is what a caller of the handler awaits. */
@@ -52,6 +62,20 @@ export function ActionBar({
         data-testid="reg-bar"
         className="relative flex flex-wrap items-center gap-x-3 gap-y-2 max-md:sticky max-md:bottom-0 max-md:z-30 md:z-50 max-md:-mx-4 max-md:mb-0 max-md:border-t max-md:border-zinc-200 max-md:bg-surface max-md:px-4 max-md:pt-3 max-md:pb-[max(0.75rem,env(safe-area-inset-bottom))] max-md:shadow-sm"
       >
+        {blocked !== null && step !== "review" ? (
+          // `role="alert"`: said when the cart becomes mixed, as the cart's own notice used to be. `tabIndex={-1}`: focusable by the
+          // stepper's reveal, never a tab stop. `w-full`: its own line above the summary and the buttons, at every width.
+          <p
+            id="reg-bar-blocked"
+            ref={blockedRef}
+            role="alert"
+            tabIndex={-1}
+            data-testid="reg-bar-blocked"
+            className="w-full min-w-0 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700 [overflow-wrap:anywhere] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-600"
+          >
+            {blocked}
+          </p>
+        ) : null}
         {labels.total ? (
           <p data-testid="reg-bar-summary" className="w-full text-sm font-semibold tabular-nums text-ink md:hidden">
             {labels.total}
@@ -100,7 +124,16 @@ export function ActionBar({
             </button>
           </>
         ) : (
-          <button type="button" data-testid="reg-next" onClick={onNext} className={BTN_FORWARD}>
+          <button
+            type="button"
+            data-testid="reg-next"
+            onClick={onNext}
+            // Not `disabled`: a disabled button takes no tap and no focus, so the reveal could never run. `aria-disabled` says it to
+            // assistive tech, the notice says why, and the styles dim it the way `disabled` would.
+            aria-disabled={blocked !== null ? true : undefined}
+            aria-describedby={blocked !== null ? "reg-bar-blocked" : undefined}
+            className={`${BTN_FORWARD} aria-disabled:cursor-not-allowed aria-disabled:opacity-40`}
+          >
             {labels.continueLabel}
           </button>
         )}
