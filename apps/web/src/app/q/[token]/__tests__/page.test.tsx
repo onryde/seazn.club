@@ -39,7 +39,7 @@ import {
 import { listQuickMatchSports } from "@/server/usecases/quick-match-sports";
 import { hashVisitorKey, mintHomeToken, mintVisitorKey } from "@/server/usecases/quick-match-tokens";
 import { scoreEvent } from "@/server/usecases/scoring";
-import { playToDecided } from "@/server/usecases/__tests__/_quick-match-probe";
+import { playToDecided, quickMatchWalkModule } from "@/server/usecases/__tests__/_quick-match-probe";
 import * as homeModule from "@/components/quick-match/home";
 import * as standingsModule from "@/components/quick-match/standings";
 import * as drawModule from "@/components/quick-match/draw";
@@ -893,7 +893,8 @@ describe("the empty case: a quick match with no match left", () => {
           startOnly++;
           const seen = new Set<string>();
           for (let seed = 1; seed <= SEEDS; seed++) {
-            const drawn = m.arbitraryEvent?.(atStart, mulberry32(seed));
+            // As the guest's pad drives the sport: a band-capped sport (cricket) draws nothing above its quick match ceiling.
+            const drawn = quickMatchWalkModule(m, cfg).arbitraryEvent?.(atStart, mulberry32(seed));
             if (!drawn || isCoreEventType(drawn.type) || seen.has(drawn.type)) continue;
             let folded: ReturnType<typeof foldMatchWithStoppage>;
             try {

@@ -116,6 +116,13 @@ export interface StripItem {
    * nobody can say who serves" assertion (`toHaveCount(0)`) still counts zero.
    */
   reserved?: boolean;
+  /**
+   * The event type whose recording is this slot's only source (cricket's striker, non-striker, over dots, bowler and
+   * free hit: the ball). A pad that cannot record that event drops the slot (`quickMatchSkin`, pad-host.tsx: the guest's
+   * capped pad, sign-off 2026-11-14), where it would only ever print an empty ▸ or ⚾. Absent: the slot shows on every
+   * pad. Never rendered.
+   */
+  fedBy?: string;
 }
 // Fix round 2 (Task 5 review, Important — controller ruling): servingLabel
 // is a deliberate, additive contract change. The chassis (v3/scorebug.tsx)

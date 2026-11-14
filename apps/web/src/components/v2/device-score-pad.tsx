@@ -5,7 +5,7 @@
 // undo OWN events, nothing else. Every call presents the dl_ token as a
 // Bearer header; the token stays in this tab (component prop), never storage.
 // Offline-tolerant: sends retry with the SAME idempotency key (doc 08 §4).
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { ScoringErrorBoundary } from "@/components/v2/scoring-error-boundary";
 // `OPPORTUNISTIC_RESYNC_MS` — the bound on this pad's opportunistic refresh
@@ -51,6 +51,7 @@ import { officialLabelKey } from "@/lib/official-label";
 import { useTabReturn } from "@/components/v2/use-tab-return";
 import { eventOutToEnvelope } from "@/components/v2/scorepad/wire";
 import { scoreStatusLabel } from "@/lib/score-status-label";
+import { headlineRuns } from "@/lib/score-headline";
 import type { EventEnvelope } from "@seazn/engine/core";
 
 export type PadSideInfo = SideInfo;
@@ -579,12 +580,15 @@ export function DeviceScorePad({
   //
   // `token` is the only field, so this is stable for the life of the link.
   const padAuth = useMemo(() => ({ kind: "device_link" as const, token }), [token]);
-  // S2-7 (TN-TS-1): a tennis Start asks "Who serves first?" and sends the toss first (`runTossThenStart`).
+  // S2-7 (TN-TS-1): a tennis Start asks "Who serves first?" and sends the toss first (`runTossThenStart`). A quick match's
+  // cricket Start asks the toss too (decision log 2026-11-13; skins/cricket-start-toss.ts says why at Start), and a quick
+  // match's carrom Start asks who breaks first (whole review m6; skins/carrom-start-toss.ts).
   const start = useStartWithToss({
     sportKey: sport.key,
     state: live.state,
     onStart: () => void send("core.start", {}),
     onTossThenStart: (toss) => runTossThenStart(live.last_seq, toss, send),
+    quickMatchToss: quickMatch,
   });
 
   // Doc 13 §7: the pad's dead-end when the link dies mid-day.
@@ -765,12 +769,26 @@ export function DeviceScorePad({
           </p>
           {/* Fluid LED numerals: clamp to the phone's width so set-score
               headlines like "1 — 0 · 21-18 (16-12)" never wrap mid-number —
-              each " · " group is atomic, wraps only between groups. */}
-          <p className="mt-2 font-mono text-[clamp(1.5rem,8.5vw,3rem)] font-bold leading-tight tabular-nums tracking-tight text-emerald-300 [text-shadow:0_0_24px_rgba(52,211,153,0.35)]">
-            {(summary?.headline ?? "0 — 0").split(" · ").map((group, i, all) => (
-              <span key={i} className="inline-block whitespace-nowrap">
-                {group}
-                {i < all.length - 1 && <span className="mx-2 text-slate-400">·</span>}
+              a group that fits a 320px line is one unbreakable run, as it
+              always was; a longer one (a decided cricket match, "10/0 (1) —
+              9/0 (1)", ran off a phone's card: sign-off qmc14a) is one run
+              per side (`headlineRuns`), so a line breaks only between groups
+              or between that group's two sides. */}
+          <p
+            data-testid="scan-headline"
+            className="mt-2 font-mono text-[clamp(1.5rem,8.5vw,3rem)] font-bold leading-tight tabular-nums tracking-tight text-emerald-300 [text-shadow:0_0_24px_rgba(52,211,153,0.35)]"
+          >
+            {headlineRuns(summary?.headline ?? "0 — 0").map((runs, i, all) => (
+              <span key={i} className="inline-block">
+                {runs.map((run, j) => (
+                  <Fragment key={j}>
+                    {j > 0 ? " " : null}
+                    <span className="inline-block whitespace-nowrap">
+                      {run}
+                      {j === runs.length - 1 && i < all.length - 1 && <span className="mx-2 text-slate-400">·</span>}
+                    </span>
+                  </Fragment>
+                ))}
               </span>
             ))}
           </p>
@@ -940,6 +958,8 @@ export function DeviceScorePad({
               // ending of its OWN side's disqualifying sanction, directly after it (W2e D13), which the pad's ending prompt
               // offers it when the server's own predicate (`scorerMayForfeit`) says it may (X-ST-2, D-O1).
               canOrganise={false}
+              // Quick match (decision log 2026-11-13): the guest's pad scores a capped sport (cricket) up to its ceiling.
+              quickMatch={quickMatch}
               onEvents={handlePadEvents}
               onTerminalRefusal={enterCarriedForward}
             />

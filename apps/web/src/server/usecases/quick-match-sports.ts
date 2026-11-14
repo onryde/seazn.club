@@ -16,7 +16,12 @@ import "server-only";
 //     it creates, so the offer's composed answer is proven against the fold the match plays. The presets are why
 //     football, hockey and ice hockey are offered a knockout (extra time and penalties, a shoot-out, overtime decide a
 //     level match). The earlier rule's `supportsDraws(cfg, "knockout")` was false for every variant, and its
-//     tie / no-result clause (D10) refused only cricket, which the probe excludes by name.
+//     tie / no-result clause (D10) refused only cricket.
+//     A sport a quick match scores below its full detail (`quickMatchBandCeiling`, lib/quick-match-pad.ts: cricket, bands
+//     0–1, decision log 2026-11-13) cannot play a decider recorded above that ceiling: cricket's knockout preset is the
+//     super over, whose balls are band 3. Its knockout is therefore asked as it would really be played, the variant's own
+//     cfg with no preset decider (`quickMatchKnockoutCfg`'s `presetDeciders: false`), and a tie there stands, so League +
+//     Knockout is not offered (the setup screen's "Not available for this sport"). A tie in a League is a tie.
 import offerJson from "@/lib/quick-match-offer.generated.json";
 import { isChessSport } from "@/lib/chess-individual-only";
 import { sql } from "@/lib/db";
@@ -24,7 +29,8 @@ import { messages, type MessageKey } from "@/lib/messages";
 import { variantWordKey } from "@/lib/variant-label-keys";
 import { resolveModule } from "@/server/engine-db/registry";
 import { resolveFixtureCfg } from "@/server/engine-db/fixture-cfg";
-import { bracketMayEndLevel, type AnySportModule, type EntrantKind } from "@seazn/engine/sport";
+import { bracketMayEndLevel, type AnySportModule, type EntrantKind, type PadSpec } from "@seazn/engine/sport";
+import { QUICK_MATCH_BAND_CAPPED_SPORTS, quickMatchBandCeiling } from "@/lib/quick-match-pad";
 import { entrantShapeOf } from "./entrant-shape";
 import { quickMatchStageInputs } from "./quick-match-preview";
 import { withStageDefaults } from "./stage-defaults";
@@ -40,6 +46,9 @@ export interface QuickMatchOfferJson {
 }
 
 const OFFER = offerJson as QuickMatchOfferJson;
+
+/** A sport that declares no pad has no band to cap. */
+const NO_PAD: PadSpec = { panels: [], fidelity: {} };
 
 export interface QuickMatchOffer {
   offered: boolean;
@@ -59,11 +68,17 @@ const nothing = (): QuickMatchOffer => ({ offered: false, kinds: [], knockoutAll
  * `bracketMayEndLevel`) answers of the variant's cfg ⊕ the knockout stage's defaults. The probe checks real fixtures: it
  * asks the same `knockoutMayEndLevel` of the fold of every knockout fixture it creates.
  */
-export function quickMatchKnockoutCfg(mod: AnySportModule, variant_key: string, variantConfig: unknown): unknown {
+export function quickMatchKnockoutCfg(
+  mod: AnySportModule,
+  variant_key: string,
+  variantConfig: unknown,
+  opts: { presetDeciders?: boolean } = {},
+): unknown {
   // A plain Knockout's one stage. A League + Knockout's knockout stage is stored with the same config (`{}`, the league_ko
-  // template's), so this cfg is the one its matches play too.
+  // template's), so this cfg is the one its matches play too. `presetDeciders: false` leaves the stage's preset deciders
+  // out: the knockout a band-capped quick match pad could actually play (see the header).
   const [knockout] = quickMatchStageInputs({ format: "knockout", plays: 1, name: "", qualifiers: null });
-  const stage = withStageDefaults(mod, "knockout", variant_key, knockout!.config);
+  const stage = opts.presetDeciders === false ? knockout!.config : withStageDefaults(mod, "knockout", variant_key, knockout!.config);
   return resolveFixtureCfg({ config_snapshot: null, rules_override: null }, variantConfig, { kind: "knockout", config: stage }, mod);
 }
 
@@ -88,7 +103,12 @@ function offerOf({ sport_key, variant_key, module_version, config }: SystemVaria
   const kinds: EntrantKind[] = isChessSport(sport_key)
     ? ["individual"]
     : [...entrantShapeOf({ sport_key, module_version, config }).kinds];
-  const knockoutAllowed = !knockoutMayEndLevel(mod, quickMatchKnockoutCfg(mod, variant_key, config));
+  // A band-capped sport plays its knockout without the preset deciders it could not record (see the header).
+  // Only a capped sport's pad spec is built (an uncapped sport's offer never parses its cfg here).
+  const capped =
+    QUICK_MATCH_BAND_CAPPED_SPORTS.has(sport_key) &&
+    quickMatchBandCeiling(sport_key, mod.padSpec?.(mod.configSchema.parse(config) as never) ?? NO_PAD) !== null;
+  const knockoutAllowed = !knockoutMayEndLevel(mod, quickMatchKnockoutCfg(mod, variant_key, config, { presetDeciders: !capped }));
   const offered = OFFER.offered.some((o) => o.sport_key === sport_key && o.variant_key === variant_key);
   return { offered, kinds, knockoutAllowed };
 }

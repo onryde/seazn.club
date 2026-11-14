@@ -25,6 +25,9 @@ import {
  *    top two; every league match marked Not played leaves the three level across the cut, so the home asks; Pick fills the
  *    final from the route's own advance (one confirmed seed proposal), the home names who went through, and a second answer
  *    is refused with QUICK_MATCH_ALREADY_DECIDED, changing nothing.
+ * 3b. Cricket, League only (decision log 2026-11-14, `cricketLeg`): a League → Final of cricket sides is refused back to the
+ *    setup page with QUICK_MATCH_FORMAT_NOT_OFFERED; a League of two is scored through the link as the quick match pad sends
+ *    it (toss, Start, an over, Close innings, a chasing over) and decided for the side batting second, as the toss seated it.
  * 4. The sweep (plan 3 T7, extended past its amendment by the dispatch): two more matches, one aged past its expiry in SQL and
  *    one saved through the real Save post by a signed-in person and aged the same. `POST /api/cron/quick-match-expiry` with
  *    the cron secret answers a report with a number for every key, `failed` 0 and `expired` >= 1; then, per match: the
@@ -37,8 +40,8 @@ import {
  *    fail-closed) unless BOTH the server and the database are on this machine (`sweepTargetAllowed`): CI's job and a seazn-env
  *    label, never staging or production (a staging server also enforces the bot check, which this post does not answer).
  *
- * One sport, badminton (plan 3 Amend T7 [E8]): smoke proves the routes are alive end to end; the cascade closure over two
- * sports is quick-match-sweep.test.ts's orphan test. No email is typed (Amend T7 [A8]), so no mail is queued.
+ * Badminton for steps 1 to 4 (plan 3 Amend T7 [E8]): smoke proves the routes are alive end to end; the cascade closure over two
+ * sports is quick-match-sweep.test.ts's orphan test. Step 3b is cricket's own, the one League-only sport with its own Start. No email is typed (Amend T7 [A8]), so no mail is queued.
  *
  * Teardown: the system org belongs to no run, so `cleanup(tag)` never reaches these rows. `finally` deletes this suite's own:
  * the outbox rows by ref, then each competition, which cascades to its quick_matches row and everything under it; and it
@@ -55,6 +58,12 @@ const OFFER = JSON.parse(
 ) as { offered: { sport_key: string; variant_key: string; knockoutAllowed?: boolean }[] };
 
 const SPORT = "badminton";
+/** The League-only sport the cricket leg creates (spec C11 as amended 2026-11-14), and the variant it prefers when offered. */
+const CRICKET = "cricket";
+const CRICKET_VARIANT = "t20";
+/** Cricket's sides are teams (its entrant model, `entrantShapeOf`: the create answers KIND_NOT_OFFERED to any other kind). */
+const CRICKET_KIND = "team";
+const CRICKET_FINAL = { shape: "final", sport: CRICKET, kind: CRICKET_KIND } as const;
 const TOKEN = /^\/q\/(qm_[A-Za-z0-9_-]{43})$/;
 const DL = /^\/score\/(dl_[A-Za-z0-9_-]+)$/;
 const REPORT_KEYS = ["checked", "rearmed", "reminded", "expired", "orphans", "failed", "deferred"] as const;
@@ -97,8 +106,13 @@ type Shape = "league" | "final" | "semis";
 /** The setup form's post, as the page sends it (a form, not JSON), with the site's own Origin: its format is the `shape` radio,
  *  which the create route maps to the create's format and qualifiers (plan 5 D1). `where` is the Location with the token
  *  blanked, for a label: the home token is the match's credential and never goes in a log. */
-async function createMatch(name: string, sides: readonly string[], variant: string, shape: Shape = "league"): Promise<Made> {
-  const body = new URLSearchParams({ name, sport_key: SPORT, variant_key: variant, kind: "individual", shape, plays: "1", locale: "en" });
+async function createMatch(
+  name: string,
+  sides: readonly string[],
+  variant: string,
+  { shape = "league", sport = SPORT, kind = "individual" }: { shape?: Shape; sport?: string; kind?: "individual" | "team" } = {},
+): Promise<Made> {
+  const body = new URLSearchParams({ name, sport_key: sport, variant_key: variant, kind, shape, plays: "1", locale: "en" });
   for (const side of sides) body.append("sides", side);
   const res = await fetch(`${BASE}/api/quick-match`, {
     method: "POST",
@@ -292,7 +306,7 @@ async function leagueKnockoutLeg(
 ): Promise<void> {
   const name = `QM smoke ${tag} knockout`;
   const typed = [`Ivy ${tag}`, `Jo ${tag}`, `Kit ${tag}`];
-  const made = await createMatch(name, typed, variant, "final");
+  const made = await createMatch(name, typed, variant, { shape: "final" });
   const row = await own(name);
   const [qm] = row ? await db<{ format: string }[]>`select format from quick_matches where id = ${row.id}` : [];
   const stages = row
@@ -436,6 +450,111 @@ async function leagueKnockoutLeg(
   );
 }
 
+/**
+ * Step 3b, cricket (decision log 2026-11-13/14; spec C11 as amended 2026-11-14): cricket is offered League only, scored at a
+ * guest's bands (toss, Start, over summaries, Close innings). First the refusal: a League → Final of three cricket sides answers
+ * 303 back to the setup page with `?e=QUICK_MATCH_FORMAT_NOT_OFFERED` and writes no match. Then the positive pair, a League of
+ * two: through the device link the pad's own writes go in, in the order the quick match pad sends them (its Start asks the
+ * toss, `cricket-start-toss.ts`): the toss (the away side won and chose to bat, so the AWAY side bats first: the fold's default
+ * without a toss is the home side, so the toss is witnessed), the Start, one over of 8 as the over sheet sends it (the innings
+ * so far, `partial`), Close innings, then the home side's chasing over of 9, which passes 8: the match is decided, its winner
+ * the home side (the engine's answer, read from `fixtures.outcome`; a toss the fold ignored would make it the away side), and
+ * the finished home names that side as the winner. Writes only through the guest's own posts, on its own tagged matches, as step 1 does.
+ */
+async function cricketLeg(
+  db: ReturnType<typeof smokeDb>,
+  own: (name: string) => Promise<{ id: string; competition_id: string } | null>,
+): Promise<void> {
+  const offered = OFFER.offered.filter((o) => o.sport_key === CRICKET);
+  check(
+    `quick match cricket: the probe offers cricket, League only (${offered.length} variant(s): ${offered.map((o) => `${o.variant_key}${o.knockoutAllowed === true ? "+KO" : ""}`).join(", ")})`,
+    offered.length > 0 && offered.every((o) => o.knockoutAllowed !== true),
+  );
+  const variant = offered.find((o) => o.variant_key === CRICKET_VARIANT)?.variant_key ?? offered[0]?.variant_key ?? "";
+  if (variant === "") return;
+
+  // The refusal: League → Final is not a cricket quick match.
+  const koName = `QM smoke ${tag} cricket final`;
+  const refused = await createMatch(koName, [`Owls ${tag}`, `Rooks ${tag}`, `Wrens ${tag}`], variant, CRICKET_FINAL);
+  const koRow = await own(koName);
+  const expectedAt = `?e=${QUICK_MATCH_ERRORS.FORMAT_NOT_OFFERED}`;
+  check(
+    `quick match cricket: a League → Final is refused back to the setup page with ${expectedAt} and no match written (got ${refused.status} ${refused.where}; rows ${koRow ? 1 : 0})`,
+    refused.status === 303 && refused.token === null && refused.where.endsWith(expectedAt) && koRow === null,
+  );
+
+  // The positive pair: a League of two, scored to a won chase.
+  const name = `QM smoke ${tag} cricket`;
+  const home = `Falcons ${tag}`;
+  const away = `Kites ${tag}`;
+  const made = await createMatch(name, [home, away], variant, { sport: CRICKET, kind: CRICKET_KIND });
+  const row = await own(name);
+  check(
+    `quick match cricket: a League of two answers 303 to its home and writes one row (got ${made.status} ${made.where}; rows ${row ? 1 : 0})`,
+    made.status === 303 && made.token !== null && row !== null,
+  );
+  if (!made.token || !row) return;
+  const homePath = `/q/${made.token}`;
+  const before = await page(homePath);
+  const fixtureIds = [...new Set([...before.html.matchAll(/action="\/q\/qm_[A-Za-z0-9_-]{43}\/score\/([0-9a-f-]{36})"/g)].map((m) => m[1]))];
+  const fixtureId = fixtureIds.length === 1 ? fixtureIds[0] : undefined;
+  check(`quick match cricket: the home carries one match's Score form (${fixtureIds.length} distinct)`, fixtureId !== undefined);
+  if (!fixtureId) return;
+  const tap = await fetch(`${BASE}${homePath}/score/${fixtureId}`, { method: "POST", redirect: "manual" });
+  const padAt = new URL(tap.headers.get("location") ?? "", BASE);
+  const secret = padAt.search === "" ? (DL.exec(padAt.pathname)?.[1] ?? null) : null;
+  check(`quick match cricket: Score answers 303 into the scoring pad (got ${tap.status})`, tap.status === 303 && secret !== null);
+  if (!secret) return;
+  const asPad = { authorization: `Bearer ${secret}`, "content-type": "application/json" };
+  const bootRes = await fetch(`${BASE}/api/v1/device-link`, { headers: asPad });
+  type Side = { entrant_id?: string };
+  const boot = ((await bootRes.json().catch(() => ({}))) as { data?: { fixture_id?: string; sides?: { home?: Side; away?: Side } } }).data;
+  const homeId = boot?.sides?.home?.entrant_id ?? "";
+  const awayId = boot?.sides?.away?.entrant_id ?? "";
+  check(
+    `quick match cricket: the pad's link opens the match with both sides known (got ${bootRes.status}, same match ${boot?.fixture_id === fixtureId})`,
+    bootRes.status === 200 && boot?.fixture_id === fixtureId && homeId !== "" && awayId !== "",
+  );
+  if (homeId === "" || awayId === "") return;
+
+  let seq = 0;
+  const post = async (type: string, payload: unknown) => {
+    const res = await fetch(`${BASE}/api/v1/fixtures/${fixtureId}/events`, {
+      method: "POST",
+      headers: asPad,
+      body: JSON.stringify({ expected_seq: seq++, type, payload }),
+    });
+    const json = (await res.json().catch(() => ({}))) as { error?: { code?: string } };
+    return `${res.status}${json.error?.code ? ` ${json.error.code}` : ""}`;
+  };
+  const answers = [
+    await post("cricket.toss", { wonBy: awayId, elected: "bat" }),
+    await post("core.start", {}),
+    await post("cricket.innings.summary", { runs: 8, wickets: 0, legalBalls: 6, partial: true }),
+    await post("cricket.innings.close", { reason: "other" }),
+    await post("cricket.innings.summary", { runs: 9, wickets: 0, legalBalls: 6, partial: true }),
+  ];
+  const ledgerRes = await fetch(`${BASE}/api/v1/fixtures/${fixtureId}/events?since_seq=0`, { headers: asPad });
+  const ledger = ((await ledgerRes.json().catch(() => ({}))) as { data?: { type: string }[] }).data ?? [];
+  const types = ["cricket.toss", "core.start", "cricket.innings.summary", "cricket.innings.close", "cricket.innings.summary"];
+  check(
+    `quick match cricket: toss, Start, an over of 8, Close innings and a chasing over of 9 each go in, in that order (answers ${answers.join(", ")}; ledger ${ledger.map((e) => e.type).join(", ")})`,
+    answers.every((a) => a === "201") && JSON.stringify(ledger.map((e) => e.type)) === JSON.stringify(types),
+  );
+  const [fx] = await db<{ status: string; outcome: { winner?: string } | null }[]>`
+    select status, outcome from fixtures where id = ${fixtureId}`;
+  check(
+    `quick match cricket: the away side won the toss and batted, so the chase past 8 decides the match for the home side batting second (status ${fx?.status}, winner ${fx?.outcome?.winner === homeId ? "home" : fx?.outcome?.winner === awayId ? "away" : JSON.stringify(fx?.outcome)})`,
+    fx?.status === "decided" && fx.outcome?.winner === homeId,
+  );
+  const after = await page(homePath);
+  const winner = testidText(after.html, "qm-winner-name", "li");
+  check(
+    `quick match cricket: the finished home names the home side the winner (got ${after.status}, ${JSON.stringify(winner === null ? null : unescapeHtml(winner))})`,
+    after.status === 200 && winner !== null && unescapeHtml(winner) === home,
+  );
+}
+
 export async function quickMatchSuite(): Promise<void> {
   const variant = OFFER.offered.find((o) => o.sport_key === SPORT)?.variant_key ?? "";
   check(`quick match: the probe's offer lists a ${SPORT} variant to create (got ${JSON.stringify(variant)})`, variant !== "");
@@ -551,6 +670,9 @@ export async function quickMatchSuite(): Promise<void> {
     const koVariant = OFFER.offered.find((o) => o.sport_key === SPORT && o.knockoutAllowed === true)?.variant_key ?? "";
     check(`quick match knockout: the probe's offer lists a ${SPORT} variant whose knockout may be played (got ${JSON.stringify(koVariant)})`, koVariant !== "");
     if (koVariant !== "") await leagueKnockoutLeg(db, own, koVariant);
+
+    // ── 3b. Cricket: League only (a League → Final refused), and a League of two scored to a won chase ────────────────────
+    await cricketLeg(db, own);
 
     // ── 4. The sweep: an expired unsaved match goes, a saved one and the live one stay ────────────────────────────────────
     const cronSecret = process.env.CRON_SECRET;

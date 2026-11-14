@@ -233,10 +233,24 @@ describe("the quick match's pad copy: no organiser to ask (review Q1/Q2)", () =>
 
   it("the rulings' English, verbatim", () => {
     const en = load("en");
-    expect(en["device.quickMatch.resultSaved"]).toBe("Result saved. To correct it, undo the last point and play it again.");
+    // Whole review m4: sport-neutral (it said "undo the last point" under a cricket chase); it names the button beside it.
+    expect(en["device.quickMatch.resultSaved"]).toBe("Result saved. To correct it, void your last entry and record it again.");
     expect(en["device.quickMatch.resultLocked"]).toBe("This result can't change: the next round has already started.");
     expect(en["device.quickMatch.finished"]).toBe("This match is finished.");
     expect(en["device.quickMatch.askFreshLink"]).toBe("Go back to the quick match and tap Score again.");
+  });
+
+  it("the decided line says no racket word in any locale: a cricket or football guest reads it too (whole review m4)", () => {
+    // Each language's own word for a rally point, the word the old line used.
+    const POINT: Record<string, RegExp> = { en: /\bpoint\b/i, es: /\bpunto\b/i, fr: /\bpoint\b/i, nl: /\bpunt\b/i };
+    let checked = 0;
+    for (const [locale, word] of Object.entries(POINT)) {
+      const line = load(locale)["device.quickMatch.resultSaved"];
+      expect(line, `${locale}: present`).toBeTruthy();
+      expect(line, locale).not.toMatch(word);
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
 
   it("an ordinary pad keeps every reason's own copy, the organiser's decided line and its fresh-link hint (the negative pair)", () => {

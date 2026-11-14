@@ -69,7 +69,7 @@ describe("usePadBand — the Recording band remembered per device", () => {
     // under the node harness, old code and new alike), so the wiring is pinned
     // here and driven for real by e2e/scoring-free.spec.ts's hydration test.
     const src = readFileSync(resolve(__dirname, "../pad-host.tsx"), "utf8");
-    expect(src).toContain("const [band, onBandChange] = usePadBand(props.fixtureId, spec.fidelity);");
+    expect(src).toContain("const [band, onBandChange] = usePadBand(props.fixtureId, spec.fidelity, bandCeiling);");
     expect(src).toMatch(/<RecordingChip\s+activeBand=\{band\}\s+onBandChange=\{onBandChange\}/);
   });
 
@@ -97,6 +97,23 @@ describe("usePadBand — the Recording band remembered per device", () => {
   it("a junk stored value reads as the default", () => {
     store.set(bandStorageKey("fx-1"), "every-detail");
     expect(bandOf(renderIsland(Probe, { fixtureId: "fx-1" }, undefined, { hydrate: true }))).toBe(DEFAULT);
+  });
+
+  it("a ceiling (a quick match's) caps the default, a stored band and a pick alike; no ceiling caps nothing", () => {
+    // Quick match cricket (decision log 2026-11-13). The rule is sport-agnostic storage; football's default is above 1.
+    function Capped({ fixtureId, ceiling }: { fixtureId: string; ceiling: FidelityBand | null }) {
+      const [band, onBandChange] = usePadBand(fixtureId, fidelity, ceiling);
+      return <i data-band={band} onClick={onBandChange as unknown as () => void} />;
+    }
+    expect(bandOf(renderIsland(Capped, { fixtureId: "fx-1", ceiling: 1 })), "the default, capped").toBe(1);
+    store.set(bandStorageKey("fx-1"), "3");
+    const island = renderIsland(Capped, { fixtureId: "fx-1", ceiling: 1 }, undefined, { hydrate: true });
+    expect(bandOf(island), "a stored 3, capped").toBe(1);
+    pick(island, 0);
+    expect(bandOf(island)).toBe(0);
+    pick(island, 2);
+    expect(bandOf(island), "a pick above the ceiling, capped").toBe(1);
+    expect(bandOf(renderIsland(Capped, { fixtureId: "fx-1", ceiling: null }, undefined, { hydrate: true })), "no ceiling").toBe(2);
   });
 
   it("a storage that throws: mounts at the default and a pick still changes the band", () => {

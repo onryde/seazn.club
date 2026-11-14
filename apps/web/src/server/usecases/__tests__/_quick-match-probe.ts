@@ -5,10 +5,10 @@
 // For every sport module (swept with the engine's own `forEachSportAsync`, which reports how many it visited) × each of
 // its system variants the engine declares (`walkableVariants`: never a system row another suite seeded):
 //   1. generic is excluded with QUICK_MATCH_GENERIC and nothing is created: the probe is the one source that keeps it off
-//      the setup screen and out of the API (B6e). A LINEUP sport (cricket) is excluded the same way, by name, with
-//      QUICK_MATCH_LINEUP_SPORT (spec C11, controller ruling 2026-11-07): the engine's walk CAN score cricket with no
-//      lineup, through innings summaries, but a guest on the cricket pad meets mostly named-person actions it cannot use,
-//      and a summary-only match is not the product C11 deferred to v2;
+//      the setup screen and out of the API (B6e). Cricket is no longer excluded by name (C11 as amended, owner 2026-11-13
+//      "yes", decision log 2026-11-13): a quick match scores it at bands 0–1 only (lib/quick-match-pad.ts), so the probe
+//      proves it at those bands — every walk it plays is drawn through `quickMatchWalkModule`, which redraws any event the
+//      guest's pad could not record (a ball, a player line), so "offered" means a guest's own pad can finish the match;
 //   2. THE OFFER: a league of 2 sides and 1 play through the real create (`createQuickMatchTree`, never the guarded
 //      wrapper: the probe must not go through the offer it is producing, A9), with the variant's registration default
 //      kind, then ONE COMPLETE MATCH scored on its only fixture through the real write path (`scoreEvent`, what
@@ -40,6 +40,7 @@ import { createQuickMatchTree, sealNewHomeToken, systemAuth, type CreatedQuickMa
 import { hardDeleteQuickMatchCompetition } from "../quick-match-delete";
 import { quickMatchPreview, type QuickMatchFormat } from "../quick-match-preview";
 import { knockoutMayEndLevel, offerFor, type QuickMatchOfferJson } from "../quick-match-sports";
+import { personAttributedEvents, quickMatchBandCeiling } from "@/lib/quick-match-pad";
 import { scoreEvent } from "../scoring";
 
 /** The probe's budgets: generator seeds tried per sport × variant, and events per walk. An unproven case names both. */
@@ -50,13 +51,46 @@ export type OfferJson = QuickMatchOfferJson;
 
 /** The code generic is excluded with (B6e): not a refusal of the write path, a product decision the probe owns. */
 export const QUICK_MATCH_GENERIC = "QUICK_MATCH_GENERIC";
-/** The code a lineup sport is excluded with (spec C11: lineup sports are optional and wait for v2; controller ruling
- *  2026-11-07). A product decision the probe owns, like generic's — not a refusal of the write path, which accepts a
- *  cricket match scored by innings summaries with no lineup (engine 3.0.2). */
-export const QUICK_MATCH_LINEUP_SPORT = "QUICK_MATCH_LINEUP_SPORT";
-/** The lineup sports C11 names. Typed, because no engine declaration says "this pad needs a named person to score"
- *  (`LineupPolicy` covers substitutions only). */
-export const QUICK_MATCH_LINEUP_SPORTS: ReadonlySet<string> = new Set(["cricket"]);
+
+/** How many redraws `quickMatchWalkModule` allows one draw before it answers "no event": a budget, named in nothing. */
+export const PROBE_REDRAWS = 64;
+
+/**
+ * `module` as a guest's quick match pad can drive it under `cfg`: for a band-capped sport (`quickMatchBandCeiling`, cricket),
+ * the generator redraws any sport event the guest's pad has no button for, and any draw that throws (cricket's "ran out
+ * of eligible players" with nobody in a side), up to PROBE_REDRAWS times, then answers null. A sport event the pad can
+ * record is one its spec DECLARES as an action (`spec.panels`: the pad's dispatch refuses any other, skin-dispatch.ts),
+ * at or below the ceiling in the engine's band map (an unbanded one is never filtered, as on the pad), and about no
+ * player (`personAttributedEvents`: the guest's pad leaves those out, `quickMatchSkin`). So cricket's ball and player
+ * line (above the ceiling), its review (about a player) and its declare, follow-on, revise and match close (banded, but
+ * no action on the pad) are all redrawn. Kernel events pass. Every other sport, and a sport with no generator, is
+ * `module` itself. A plain spread: the fold and the outcome read the module's own members.
+ */
+export function quickMatchWalkModule(module: AnySportModule, cfg: unknown): AnySportModule {
+  const spec = module.padSpec?.(cfg as never);
+  const ceiling = spec ? quickMatchBandCeiling(module.key, spec) : null;
+  const draw = module.arbitraryEvent;
+  if (ceiling === null || spec === undefined || draw === undefined) return module;
+  const declared = new Set(spec.panels.flatMap((panel) => panel.actions.map((action) => action.type)));
+  const about = personAttributedEvents(spec);
+  const within = (type: string) =>
+    isCoreEventType(type) || (declared.has(type) && !about.has(type) && (spec.fidelity[type] ?? 0) <= ceiling);
+  return {
+    ...module,
+    arbitraryEvent(state: never, rng: () => number) {
+      for (let i = 0; i < PROBE_REDRAWS; i++) {
+        let drawn: ReturnType<typeof draw>;
+        try {
+          drawn = draw.call(module, state, rng);
+        } catch {
+          continue;
+        }
+        if (drawn === null || within(drawn.type)) return drawn;
+      }
+      return null;
+    },
+  } as AnySportModule;
+}
 
 /** The repo root's engine package.json, as toolchain.test.ts reads it: the version the offer was proven on. */
 const ENGINE_PACKAGE_JSON = resolve(import.meta.dirname, "../../../../../../node_modules/@seazn/engine/package.json");
@@ -144,7 +178,8 @@ async function fixtureFold(auth: AuthCtx, fixtureId: string): Promise<FixtureFol
     home: { entrantId: row.home_entrant_id, slots: [] },
     away: { entrantId: row.away_entrant_id, slots: [] },
   };
-  return { module: mod, cfg, lineups };
+  // The module as the guest's pad drives it: a capped sport's walks and play events stay within its quick match ceiling.
+  return { module: quickMatchWalkModule(mod, cfg), cfg, lineups };
 }
 
 /**
@@ -298,11 +333,6 @@ export async function runQuickMatchProbe(
       if (sport_key === "generic") {
         excluded.push({ sport_key, variant_key, code: QUICK_MATCH_GENERIC });
         say(`probe ${name}: excluded ${QUICK_MATCH_GENERIC}`);
-        continue;
-      }
-      if (QUICK_MATCH_LINEUP_SPORTS.has(sport_key)) {
-        excluded.push({ sport_key, variant_key, code: QUICK_MATCH_LINEUP_SPORT });
-        say(`probe ${name}: excluded ${QUICK_MATCH_LINEUP_SPORT}`);
         continue;
       }
 

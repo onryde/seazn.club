@@ -2,7 +2,10 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { Chess } from "chess.js";
+import { foldMatch, type LineupPair } from "@seazn/engine/core";
+import type { AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
+import { makeEnvelope } from "@seazn/engine/testkit";
 import { boardgame } from "@seazn/engine/sports/boardgame";
 import { carromPadRules, tennisPadRules } from "@seazn/engine/pad";
 import offer from "@/lib/quick-match-offer.generated.json";
@@ -29,7 +32,7 @@ import { HeroSceneArt } from "../hero-scene-art";
 
 // The hero's art follows its Sport select (owner 2026-11-13: "when user choose the sport can we show relevant one?"). One
 // scene per sport the quick match OFFERS, read off the probe's own record (lib/quick-match-offer.generated.json), never a
-// list typed here; cricket stays in code for the day the quick match offers it. Every scorebug speaks its sport's score
+// list typed here. Every scorebug speaks its sport's score
 // language, judged against the ENGINE's declarations (its default rules for the variant the setup screen opens on, its
 // point calls, its chess score shape, its carrom board values), never against hero-scenes.ts itself.
 
@@ -71,10 +74,10 @@ describe("hero scenes: which scene a key opens", () => {
     expect(new Set(markups.values()).size, "distinct drawings").toBe(offeredSports.length);
   });
 
-  it("cricket stays in code (its scene and label) while the quick match excludes it", () => {
-    expect(excludedSports).toContain("cricket");
+  it("cricket is offered and opens its own scene (quick match cricket, decision log 2026-11-13)", () => {
+    expect(offeredSports).toContain("cricket");
+    expect(excludedSports).not.toContain("cricket");
     expect(heroSceneKey("cricket")).toBe("cricket");
-    expect(heroScoreText("cricket", 0)).toBe("Falcons CC 142/3");
     expect(en[heroSceneLabelKey("cricket") as keyof typeof en]).toMatch(/cricket/i);
   });
 
@@ -145,6 +148,38 @@ function tennisGameWon(points: readonly [number, number], calls: number, noAd: b
   if (Math.max(h, a) < calls) return null;
   if (!noAd && Math.abs(h - a) < 2) return null;
   return h > a ? "home" : "away";
+}
+
+/** The cricket scene's chase: its names and the innings it chases. */
+function inningsScore(sport: HeroSceneKey): Extract<HeroScore, { kind: "innings" }> {
+  const { score } = HERO_SCENES[sport] as { score: HeroScore };
+  if (score.kind !== "innings") throw new Error(`${sport} keeps no innings score`);
+  return score;
+}
+
+/** The chase folded through the ENGINE under the default rules: the away side wins the toss and bats, its innings closes
+ *  at `against` with its balls used up (an over summary, the quick match's own band-0 event), and then the home side's
+ *  frames are entered as running totals (`partial`), one ball a landing. Answers the outcome after each frame. */
+function chaseOutcomes(sport: HeroSceneKey): (string | null)[] {
+  const mod = builtinModules.find((m) => m.key === sport)! as AnySportModule;
+  const cfg = defaultRules<{ ballsPerInnings: number | null }>(sport);
+  expect(cfg.ballsPerInnings, `${sport}: a limited-overs default`).not.toBeNull();
+  const { against, steps } = inningsScore(sport);
+  const lineups: LineupPair = { home: { entrantId: "H", slots: [] }, away: { entrantId: "A", slots: [] } };
+  const ev = (type: string, payload: Record<string, unknown>) => ({ type, payload });
+  const prefix = [
+    ev("cricket.toss", { wonBy: "A", elected: "bat" }),
+    ev("core.start", {}),
+    ev("cricket.innings.summary", { runs: against[0], wickets: against[1], legalBalls: cfg.ballsPerInnings }),
+  ];
+  const firstBall = cfg.ballsPerInnings! - steps.length;
+  return steps.map((s, i) => {
+    const events = [...prefix, ev("cricket.innings.summary", { runs: s[0], wickets: s[1], legalBalls: firstBall + i, partial: true })];
+    const envelopes = events.map((e, seq) => makeEnvelope(seq, e as never));
+    const state = foldMatch(mod as never, cfg as never, lineups, envelopes);
+    const outcome = mod.outcome(state as never) as { winner?: string | null } | null;
+    return outcome === null ? null : (outcome.winner ?? "level");
+  });
 }
 
 /** ITF Rule 6 (a "tiebreak set"): won at `gamesTo` with `winBy` clear, or `tiebreakAt + 1` to `tiebreakAt` by the tiebreak. */
@@ -218,6 +253,18 @@ const checkers: Record<string, (sport: HeroSceneKey) => number> = {
       const score = text.slice(home.length + 1, -(away.length + 1));
       expect(tiebreak.safeParse({ rung: "rapid", winner: "H", score }).success, `${sport} "${score}"`).toBe(true);
       if (i > 0) expect(games, `${sport} step ${i}: one game's points`).toContain(`${s[0] - steps[i - 1]![0]},${s[1] - steps[i - 1]![1]}`);
+    });
+    return steps.length;
+  },
+  innings(sport) {
+    // Each landing is the scene's straight drive: four runs, no wicket. The frame reads the chase and the innings it chases.
+    const { names, against } = inningsScore(sport);
+    const { playersPerSide } = defaultRules<{ playersPerSide: number }>(sport);
+    const steps = stepsOf(sport);
+    for (const w of [against[1], ...steps.map((s) => s[1])]) expect(w, `${sport}: ${w} wickets, not all out`).toBeLessThan(playersPerSide - 1);
+    steps.forEach((s, i) => {
+      if (i > 0) expect([s[0] - steps[i - 1]![0], s[1] - steps[i - 1]![1]], `${sport} landing ${i}: a four`).toEqual([4, 0]);
+      expect(heroScoreText(sport, i)).toBe(`${names[0]} ${s[0]}/${s[1]}–${against[0]}/${against[1]} ${names[1]}`);
     });
     return steps.length;
   },
@@ -309,6 +356,13 @@ describe("hero scenes: each scorebug speaks its sport's score language (the engi
           expect(last[0] > last[1], `${sport} ${last}: the home side ahead`).toBe(true);
           break;
         }
+        case "innings": {
+          // The ENGINE's answer: the chase is live at every frame before the last, and the last wins it for the home side.
+          const outcomes = chaseOutcomes(sport);
+          expect(outcomes.slice(0, -1), `${sport}: the chase still on`).toEqual(before.map(() => null));
+          expect(outcomes.at(-1), `${sport} ${last}: the chase won by the home side`).toBe("H");
+          break;
+        }
         case "goals": {
           // A goals sport is decided by the clock, which the scorebug does not show: its resting frame is a win for the side
           // that scored, never level (the default rules' level score is a draw, or extra time and a shootout).
@@ -319,7 +373,8 @@ describe("hero scenes: each scorebug speaks its sport's score language (the engi
           break;
         }
         default:
-          throw new Error(`${sport}: no decided rule for "${score.kind}"`);
+          // Every kind has its rule now (cricket's innings since 2026-11-14), so this is a guard for the next kind added.
+          throw new Error(`${sport}: no decided rule for "${(score as { kind: string }).kind}"`);
       }
       sports++;
     }

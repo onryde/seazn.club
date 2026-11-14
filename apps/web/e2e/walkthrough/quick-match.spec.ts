@@ -79,7 +79,7 @@ import { fileURLToPath } from "node:url";
 import { LEVEL_RANK } from "@seazn/engine/competition";
 import { stageDefaultsFor } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
-import { expectNoHorizontalScroll, loginUi, TAG, withDb } from "../helpers";
+import { expectNoHorizontalScroll, loginUi, overflowingIn, TAG, withDb } from "../helpers";
 import { consentedAnonymousState } from "../scorepad-a11y-kit";
 import { waitForHydration } from "../directory-kit";
 import { HOLD_MS } from "../../src/components/v2/scorepad/queue";
@@ -2626,5 +2626,151 @@ test("(G) the season door: /play's Tennis opens the /start wizard on Tennis, and
     await expect(p.getByTestId("entrant-row-disclosure")).toHaveCount(0);
   } finally {
     await season.close();
+  }
+});
+
+// ── (H) cricket, League only ────────────────────────────────────────────────────────────────────────────────────
+// Quick match cricket (owner 2026-11-13 "yes", 2026-11-14 "why still not cricket in the quick match?"; decision log
+// 2026-11-13; spec C11 as amended 2026-11-14), in a browser of its own: two sides, the T20 rules the setup opens on, scored
+// the way a guest's pad lets it (bands 0–1, no named player): Start asks the toss (the away side wins it and bats, so the
+// AWAY side bats first: without a toss the engine seats the home side first, so the winner below tells the two apart); one
+// over of 9; Close innings; the home side's chase passes 9 in one over and the match is decided. The home reads the side
+// batting second as the winner, first in the table, and the Full table carries the engine's net run rate. The record
+// holds exactly what was tapped. Expected values: the engine's own variant (its balls per over) and the rulebook (the side
+// batting second wins once it passes the total), never the page.
+
+/** An over through the over sheet: this over's runs, no wicket, a full over (the sheet's own prefill). */
+async function cricketOver(p: Page, runs: number): Promise<void> {
+  await pad(p).locator('[data-tile-id="overSummary"]').click();
+  const sheet = p.locator('[data-role="v3-sheet"]');
+  await expect(sheet).toBeVisible({ timeout: STEP_MS });
+  const confirm = () => sheet.getByRole("button", { name: ui("scorepad.action.confirm"), exact: true }).click();
+  await sheet.getByRole("spinbutton", { name: ui("pad.cricket.sheet.overSummary.runs.title") }).fill(String(runs));
+  await confirm();
+  await expect(sheet.getByRole("spinbutton", { name: ui("pad.cricket.sheet.overSummary.wickets.title") })).toBeVisible({ timeout: REACH_MS });
+  await confirm();
+  await expect(sheet.getByRole("spinbutton", { name: ui("pad.cricket.sheet.overSummary.balls.title") })).toBeVisible({ timeout: REACH_MS });
+  await confirm();
+  await expect(sheet, "the over sheet's last step sends it").toHaveCount(0, { timeout: STEP_MS });
+}
+
+test("(H) cricket, League only: a guest plays a league of two by overs — the toss at Start, an over, Close innings, the chase — and the home reads the winner and the engine's table", async ({ browser }, info) => {
+  // Six page loads or redirects; ~45 local acts; four writes held and read back (toss and Start, two overs, the close)
+  // and the deciding over (DECIDE_MS).
+  setBudget(6 * STEP_MS + 45 * REACH_MS + 4 * (HOLD_MS + STEP_MS) + DECIDE_MS);
+  const night = await browser.newContext({ storageState: await consentedAnonymousState(), baseURL: info.project.use.baseURL, viewport: PHONE });
+  try {
+    const p = await night.newPage();
+    const sides = [`Falcons ${TAG}`, `Kites ${TAG}`];
+    const cricket = builtinModules.find((m) => m.key === "cricket")!;
+
+    // ---- 1. The setup form: Cricket, the two sides; the knockout rows listed, not for this sport; T20 ----
+    await p.goto("/en/play");
+    await expect(form(p)).toBeVisible({ timeout: STEP_MS });
+    await expect(p.getByTestId("qm-start")).toBeDisabled();
+    await choice(p, ui("sport.cricket")).click();
+    await expect(form(p).getByRole("radio", { name: ui("sport.cricket"), exact: true })).toBeChecked();
+    const name = `QM walk cricket ${TAG}`;
+    await form(p).getByLabel(mk("quickMatch.setup.nameLabel"), { exact: true }).fill(name);
+    for (const [i, side] of sides.entries()) await form(p).getByLabel(mk("quickMatch.setup.sideLabel", { n: i + 1 }), { exact: true }).fill(side);
+    for (const s of ["final", "semis"] as const) {
+      await expect(shapeRadio(p, s), `${s}: listed, disabled`).toBeDisabled();
+      await expect(shapeRadio(p, s), "…because cricket has no knockout here").toHaveAccessibleDescription(
+        `${mk(`quickMatch.setup.shape.${s}Hint`, { count: QUALIFIERS[s] })} ${mk("quickMatch.setup.shape.notForSport")}`,
+      );
+    }
+    await expect(shapeRadio(p, "league")).toBeChecked();
+    const rules = form(p).locator('select[name="variant_key"]');
+    const variant = await rules.inputValue();
+    expect(variant, "the setup opens on a cricket the engine declares").toMatch(/^\w/);
+    const cfg = cricket.configSchema.parse((cricket.variants as Record<string, unknown>)[variant]) as { ballsPerOver: number };
+    await expect(p.getByTestId("qm-start")).toContainText(plural(mk, "quickMatch.setup.startCount", 1));
+    await expectNoHorizontalScroll(p);
+    await p.getByTestId("qm-start").click();
+    await p.waitForURL(/\/q\/qm_[^/?#]+$/, { timeout: STEP_MS });
+    const path = new URL(p.url()).pathname;
+
+    // ---- 2. Score → the remote pad; Start asks the toss: the away side wins it and bats ----
+    const fixtureId = (await p.locator('[data-testid="qm-match"][data-next="true"]').getAttribute("data-fixture-id"))!;
+    const home = (await p.getByTestId("qm-hero-home").textContent())!.trim();
+    const away = (await p.getByTestId("qm-hero-away").textContent())!.trim();
+    expect(sides).toEqual(expect.arrayContaining([home, away]));
+    await p.getByTestId("qm-hero").getByTestId("qm-score").click();
+    await p.waitForURL(/\/score\/dl_[A-Za-z0-9_-]+$/, { timeout: STEP_MS });
+    await expect(p.getByTestId("scan-confirm")).toBeVisible({ timeout: STEP_MS });
+    await p.getByTestId("score-start-match").click();
+    const question = p.getByTestId("score-start-toss");
+    await expect(question).toContainText(ui("pad.cricket.sheet.toss.wonBy.title"), { timeout: STEP_MS });
+    await expect(question.getByTestId("pad-dock-chip-away")).toContainText(away);
+    await question.getByTestId("pad-dock-chip-away").click();
+    await expect(question).toContainText(ui("pad.cricket.sheet.toss.elected.title"));
+    await question.getByTestId("pad-dock-chip-bat").click();
+    await expect(pad(p).locator('[data-role="v3-scorebug"]'), "the toss answered, the pad opens").toBeVisible({ timeout: STEP_MS });
+    await expect(pad(p).locator('[data-tile-id="run0"]'), "no ball tile on the guest's pad").toHaveCount(0);
+    await expect(pad(p).locator('[data-role="context-chip"]'), "no batter or bowler to pick").toHaveCount(0);
+    // Sign-off 2026-11-14: no Review on the guest's pad, and the scorebug names the side batting (the away side, its toss).
+    await expect(pad(p).locator('[data-tile-id="review"]'), "no Review tile on the guest's pad").toHaveCount(0);
+    await expect(pad(p).locator('[data-role="v3-scorebug"]')).toContainText(ui("scorepad.skin.cricket.scorebug.battingSide", { side: away }));
+
+    // ---- 3. The away side bats first (its toss): one over of 9, then Close innings ----
+    await cricketOver(p, 9);
+    await expect(pad(p).locator('[data-role="v3-scorebug"]')).toContainText("9/0");
+    await pad(p).locator('[data-tile-id="inningsClose"]').click();
+    const close = p.locator('[data-role="v3-sheet"]');
+    await expect(close).toContainText(ui("pad.cricket.sheet.inningsClose.reason.title"), { timeout: STEP_MS });
+    await close.getByRole("button", { name: ui("pad.cricket.sheet.inningsClose.reason.other"), exact: true }).click();
+    await expect(close).toHaveCount(0, { timeout: STEP_MS });
+    await expect
+      .poll(async () => (await withDb((sql) => sql<{ type: string }[]>`select type from score_events where fixture_id = ${fixtureId} order by seq`)).map((e) => e.type), {
+        timeout: 3 * (HOLD_MS + STEP_MS),
+        message: "the toss, the Start, the over and the close never all reached the ledger",
+      })
+      .toEqual(["cricket.toss", "core.start", "cricket.innings.summary", "cricket.innings.close"]);
+
+    // ---- 4. The home side's chase: 10 in one over passes 9, and the match is decided ----
+    await cricketOver(p, 10);
+    await expect(p.getByText(ui("device.quickMatch.resultSaved")), "the device page says the match is decided").toBeVisible({ timeout: DECIDE_MS });
+    // The device page's header holds the decided score whole (sign-off qmc14a: "10/0 (1) — 9/0 (1)" at the LED size is wider
+    // than a phone's header card, which clipped it mid-number). Each side's score is one unbreakable run and the line may
+    // break between the two sides, so nothing overflows the card.
+    const header = await overflowingIn(p, 'header:has([data-testid="scan-scorebug-line"])', "p,span", "the device page's header was not in the DOM");
+    expect(header.clipped, "the decided score fits the device header").toEqual([]);
+    await p.getByTestId("quick-match-back-link").click();
+    await p.waitForURL((url) => url.pathname === path, { timeout: STEP_MS });
+
+    // ---- 5. The home: the side batting second won, first in the table; the Full table's NRR ----
+    await expectSettledOnHome(p, fixtureId);
+    await expect(p.getByTestId("qm-winner-name"), "the chase won it: the home side, batting second by the toss").toHaveText([home]);
+    await expect(p.getByTestId("qm-standings-row").getByRole("rowheader")).toHaveText([home, away]);
+    await p.getByTestId("qm-full-table-toggle").click();
+    const head = p.getByTestId("qm-full-table-head");
+    await expect(head, "the engine's net run rate is a column").toContainText("NRR");
+    const cols = await head.locator("th").allTextContents();
+    const nrrAt = cols.findIndex((c) => c.includes("NRR"));
+    const rowOf = (who: string) => p.getByTestId("qm-full-table-row").filter({ has: p.getByRole("rowheader", { name: who, exact: true }) });
+    // ICC net run rate: runs per over faced less runs per over conceded; one full over (the variant's balls) each way.
+    const overs = (balls: number) => balls / cfg.ballsPerOver;
+    const expectNrr = (forRuns: number, againstRuns: number) => forRuns / overs(cfg.ballsPerOver) - againstRuns / overs(cfg.ballsPerOver);
+    const cellAt = async (who: string) => Number((await rowOf(who).locator("th, td").nth(nrrAt).textContent())!.trim());
+    expect(await cellAt(home), "the winner's NRR").toBeCloseTo(expectNrr(10, 9), 2);
+    expect(await cellAt(away), "the loser's NRR").toBeCloseTo(expectNrr(9, 10), 2);
+    await expectNoHorizontalScroll(p);
+
+    // ---- 6. The record: exactly what was tapped, and the result ----
+    const record = await withDb((sql) => sql<{ type: string; payload: Record<string, unknown> }[]>`
+      select type, payload from score_events where fixture_id = ${fixtureId} order by seq`);
+    const [fx] = await withDb((sql) => sql<{ home_entrant_id: string; away_entrant_id: string; status: string; outcome: { winner?: string } }[]>`
+      select home_entrant_id, away_entrant_id, status, outcome from fixtures where id = ${fixtureId}`);
+    expect(record).toEqual([
+      { type: "cricket.toss", payload: { wonBy: fx!.away_entrant_id, elected: "bat" } },
+      { type: "core.start", payload: {} },
+      { type: "cricket.innings.summary", payload: { runs: 9, wickets: 0, legalBalls: cfg.ballsPerOver, partial: true } },
+      { type: "cricket.innings.close", payload: { reason: "other" } },
+      { type: "cricket.innings.summary", payload: { runs: 10, wickets: 0, legalBalls: cfg.ballsPerOver, partial: true } },
+    ]);
+    expect(fx!.status).toBe("decided");
+    expect(fx!.outcome.winner, "the side batting second: the home side, as the toss seated it").toBe(fx!.home_entrant_id);
+  } finally {
+    await night.close();
   }
 });
