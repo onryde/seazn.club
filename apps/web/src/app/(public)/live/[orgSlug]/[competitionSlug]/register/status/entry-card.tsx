@@ -383,7 +383,7 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
             <a
               href={lichessLinkStartHref(orgSlug)}
               data-testid="reg-status-promotion-skipped-link"
-              className="flex min-h-11 w-full items-center justify-center rounded-[10px] bg-[#7c3aed] px-4 text-[15px] font-semibold text-white no-underline hover:bg-[#6d28d9] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#7c3aed] sm:inline-flex sm:w-auto"
+              className="flex min-h-11 w-full items-center justify-center rounded-[10px] bg-[#7c3aed] px-4 py-2 text-center text-[15px] leading-snug font-semibold text-white no-underline hover:bg-[#6d28d9] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#7c3aed] sm:inline-flex sm:w-auto"
             >
               {t(ui, "register.status.promotionSkipped.link")}
             </a>
