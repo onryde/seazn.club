@@ -9,7 +9,9 @@
 // that the resolved view's data actually reaches the right sections.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { fmtDateTime, fmtZoneAbbrev } from "@/lib/format";
+import { fmtDateTime, fmtPublicDeadline, fmtZoneAbbrev } from "@/lib/format";
+import { BTN_QUIET_LINK } from "@/components/public-site/register/styles";
+import { compileClasses } from "@/components/v2/__tests__/_compiled-css";
 import uiEn from "@/dictionaries/en/ui.json";
 
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => "en" }));
@@ -86,6 +88,10 @@ const BASE_ENTRY = {
   approval: "auto" as "auto" | "manual",
   approved: false,
   fee_if_promoted_cents: null as number | null,
+  // B3 T13: a waitlisted entry's place in its division's queue (GroupEntryView.waitlist_position), null on every other entry.
+  waitlist_position: null as number | null,
+  // Walk-fix F16: when an automatic promotion last passed this waiting entry over (no Lichess link), null on every other entry.
+  promotion_skipped_at: null as string | null,
   // RS008: this entry's own division youth/player_name_display policy —
   // threaded onto GroupEntryView (buildGroupStatusView, usecases/registrations/group-status.ts).
   division_youth: false,
@@ -98,17 +104,31 @@ const BASE_ENTRY = {
   }[],
   refund_policy: { refundable: true, deadline: "2026-09-15T00:00:00.000Z", amount_cents: 2500 },
   refunded_cents: 0,
+  // B4 T14: how this entry's fee was settled (GroupEntryView.settled_by), history not status. null = nothing settled it.
+  settled_by: null as "card" | "offline" | "waived" | null,
+  // B5 T18: the reference to quote for THIS entry (GroupEntryView.entry_ref): the cart's with its place in the cart, in a cart sent
+  // with two or more entries. BASE_VIEW's cart was sent with two.
+  entry_ref: "SZ-TEST-01-1" as string | null,
 };
 
 const BASE_VIEW = {
-  ref_code: "SZ-TEST-01",
+  ref_code: "SZ-TEST-01" as string | null,
+  // B5 T18: how many entries the cart was sent with (GroupStatusView.cart_size, stored, never shrinks).
+  cart_size: 2,
   contact_name: "Alex Test",
+  // B4 T15: the address the confirmation went to ("Confirmation sent to {email}.").
+  contact_email: "alex@example.test",
   currency: "gbp",
   amount_cents: 2500,
   payment_method: "stripe" as const,
   expires_at: FUTURE,
   refunded_cents: 0,
   competition_name: "Summer Smash",
+  // B4 T14: the competition's own dates and the one venue its published fixtures share; unset here, so "What happens next" has
+  // only its step.
+  competition_starts_on: null as string | null,
+  competition_ends_on: null as string | null,
+  venue_name: null as string | null,
   competition_slug: "summer-smash",
   org_slug: "riverside",
   org_name: "Riverside CC",
@@ -129,6 +149,7 @@ const BASE_VIEW = {
       status: "waitlisted" as const,
       amount_cents: 0,
       refund_policy: { refundable: false, deadline: null, amount_cents: 0 },
+      entry_ref: "SZ-TEST-01-2" as string | null,
     },
   ],
 };
@@ -146,6 +167,27 @@ describe("register status page (RS007 rebuild)", () => {
     // single pending entry's own fee.
     expect(html).toContain("£25.00");
     expect(usecaseMock.groupById).toHaveBeenCalledWith("g1", "tok");
+  });
+
+  // B3 T13: the read model's place reaches the waitlisted entry's own card through the page (the seam between `groupById` and
+  // `EntryCard`), and only that card: the pending entry beside it states none.
+  it("a waitlisted entry's place in the queue reaches its card, and only its card", async () => {
+    usecaseMock.groupById.mockResolvedValueOnce({
+      ...BASE_VIEW,
+      entries: BASE_VIEW.entries.map((e) => (e.status === "waitlisted" ? { ...e, waitlist_position: 4 } : e)),
+    });
+    const html = (await render({ rid: "g1", token: "tok" })).replace(/&#x27;/g, "'");
+    expect(html).toContain("You're #4 on the waiting list");
+    expect(html.match(/data-testid="reg-status-waitlist-position"/g)?.length, "one waitlisted card, one place").toBe(1);
+  });
+
+  // B2 T8 (spec §7.2): the org header scrolls away on a phone only where `data-register-flow` is on the page (the register stepper). The
+  // status page is where a person comes back to check or pay, and its header stays sticky: the marker must not be here.
+  it("does not carry data-register-flow, so the org header stays sticky on the status page", async () => {
+    usecaseMock.groupById.mockResolvedValueOnce(BASE_VIEW);
+    const html = await render({ rid: "g1", token: "tok" });
+    expect(html, "anti-vacuity: this is the real status page, not an empty render").toContain("SZ-TEST-01");
+    expect(html).not.toContain("data-register-flow");
   });
 
   // RS008 review fix #9 (RS009 handoff) — gated ONLY on free_agent, no other
@@ -252,8 +294,107 @@ describe("register status page (RS007 rebuild)", () => {
       // the card itself shows its own figure too.
       expect(
         (html.match(/>£25\.00</g) || []).length,
-        "the offline-due card itself must show its own fee, not just the page Subtotal",
-      ).toBeGreaterThanOrEqual(2);
+        "the offline-due card itself must show its own fee (the money line reads \"£25.00 due\", never a bare figure)",
+      ).toBe(1);
+    });
+
+
+    // Registration redesign B5 T18 (spec §6.3). The hero keeps the CART's reference; each card of a 2+ cart quotes its own.
+    describe("per-entry reference (B5 T18)", () => {
+      /** The entry-reference lines of the page, in card order. */
+      const cardRefs = (html: string): string[] => [...html.matchAll(/data-testid="reg-status-entry-ref" data-entry-ref="([^"]*)"/g)].map((m) => m[1]!);
+      const offlineView = (over: Record<string, unknown>) => ({
+        ...BASE_VIEW,
+        payment_method: "offline" as const,
+        payment_instructions: "Send to club@example.com, quoting {{reference}}.",
+        ...over,
+      });
+      const dueEntry = (n: number, over: Record<string, unknown> = {}) => ({
+        ...BASE_ENTRY,
+        id: `reg-${n}`,
+        payment_method: "offline" as const,
+        entry_ref: `SZ-TEST-01-${n}`,
+        ...over,
+      });
+
+      it("every card of a 2+ cart names its own reference, in card order, and the hero still names the cart's", async () => {
+        usecaseMock.groupById.mockResolvedValueOnce(BASE_VIEW);
+        const html = await render({ rid: "g1", token: "tok" });
+        expect(cardRefs(html)).toEqual(["SZ-TEST-01-1", "SZ-TEST-01-2"]);
+        const hero = html.match(/<section[^>]*data-testid="reg-status-ref"[\s\S]*?<\/section>/)?.[0];
+        expect(hero, "the hero is still there").toContain(">SZ-TEST-01<");
+        expect(hero).not.toContain("SZ-TEST-01-");
+        // The label is the dictionary's own, read from the English file (never typed here).
+        const [lead] = (uiEn as Record<string, string>)["register.status.entry.reference"]!.split("{reference}");
+        expect(html).toContain(lead!);
+      });
+
+      it("a one-entry cart prints none on its card: it would only repeat the hero", async () => {
+        usecaseMock.groupById.mockResolvedValueOnce({
+          ...BASE_VIEW,
+          cart_size: 1,
+          entries: [{ ...BASE_ENTRY, entry_ref: "SZ-TEST-01" }],
+        });
+        const html = await render({ rid: "g1", token: "tok" });
+        expect(html, "anti-vacuity: the card and the hero rendered").toContain(">SZ-TEST-01<");
+        expect(html).toContain("Mixed Doubles");
+        expect(cardRefs(html)).toEqual([]);
+        expect(html).not.toContain('data-testid="reg-status-entry-ref"');
+      });
+
+      it("the lone survivor of a cart sent with three still prints its own -3 (the size is what it was sent with)", async () => {
+        usecaseMock.groupById.mockResolvedValueOnce({
+          ...BASE_VIEW,
+          cart_size: 3,
+          entries: [{ ...BASE_ENTRY, entry_ref: "SZ-TEST-01-3" }],
+        });
+        expect(cardRefs(await render({ rid: "g1", token: "tok" }))).toEqual(["SZ-TEST-01-3"]);
+      });
+
+      it("a cart with no reference (the mint ran out of retries) prints no entry reference and no hero", async () => {
+        usecaseMock.groupById.mockResolvedValueOnce({
+          ...BASE_VIEW,
+          ref_code: null,
+          entries: BASE_VIEW.entries.map((e) => ({ ...e, entry_ref: null })),
+        });
+        const html = await render({ rid: "g1", token: "tok" });
+        expect(html, "anti-vacuity: the page still rendered").toContain("Mixed Doubles");
+        expect(cardRefs(html)).toEqual([]);
+        expect(html).not.toContain('data-testid="reg-status-ref"');
+      });
+
+      it("offline instructions with TWO entries due quote the cart's reference, which finds both", async () => {
+        usecaseMock.groupById.mockResolvedValueOnce(offlineView({ entries: [dueEntry(1), dueEntry(2)] }));
+        const html = await render({ rid: "g1", token: "tok" });
+        expect(html.match(/quoting SZ-TEST-01\./g)?.length, "both due cards carry the instructions with the cart's reference").toBe(2);
+        expect(html).not.toContain("quoting SZ-TEST-01-");
+      });
+
+      it("offline instructions with exactly ONE entry due quote that entry's own reference, whichever place it holds", async () => {
+        for (const [due, other] of [[2, 1], [1, 2]] as const) {
+          usecaseMock.groupById.mockResolvedValueOnce(
+            offlineView({ entries: [dueEntry(other, { status: "confirmed" as const }), dueEntry(due)].sort((a, b) => a.id.localeCompare(b.id)) }),
+          );
+          const html = await render({ rid: "g1", token: "tok" });
+          expect(html.match(/quoting SZ-TEST-01-\d\./g), `entry ${due} is the one due`).toEqual([`quoting SZ-TEST-01-${due}.`]);
+        }
+      });
+
+      it("a withdrawn sibling does not hand the survivor the bare reference: entry 2 still quotes -2", async () => {
+        usecaseMock.groupById.mockResolvedValueOnce(
+          offlineView({ entries: [dueEntry(1, { status: "withdrawn" as const }), dueEntry(2)] }),
+        );
+        const html = await render({ rid: "g1", token: "tok" });
+        expect(html.match(/quoting SZ-TEST-01[-\d]*\./g)).toEqual(["quoting SZ-TEST-01-2."]);
+      });
+
+      it("a one-entry cart owing its fee quotes the bare reference", async () => {
+        usecaseMock.groupById.mockResolvedValueOnce(
+          offlineView({ cart_size: 1, entries: [dueEntry(1, { entry_ref: "SZ-TEST-01" })] }),
+        );
+        const html = await render({ rid: "g1", token: "tok" });
+        expect(html.match(/quoting SZ-TEST-01[-\d]*\./g)).toEqual(["quoting SZ-TEST-01."]);
+      });
     });
 
     // Bug (2026-08-27 browser sweep): payment_instructions is Markdown, and a
@@ -287,8 +428,43 @@ describe("register status page (RS007 rebuild)", () => {
       // offline case above — count exact, tag-flanked occurrences instead.
       expect(
         (html.match(/>£25\.00</g) || []).length,
-        "the stripe_unavailable card itself must show its own fee, not just the page Subtotal",
-      ).toBeGreaterThanOrEqual(2);
+        "the stripe_unavailable card itself must show its own fee (the money line reads \"£25.00 due\", never a bare figure)",
+      ).toBe(1);
+    });
+
+    // B4 fix round 3 (re-review gap): the expiry pass expires a card entry at its pay-by date whatever the org's Stripe state, so the
+    // unavailable card names that date — the time the person has to sort the payment with the organiser.
+    it("a card fee owed while cards are unavailable names its pay-by date", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce({ ...BASE_VIEW, charges_enabled: false, entries: [BASE_ENTRY] });
+      const html = (await render({ rid: "g1", token: "tok" })).replace(/&#x27;/g, "'");
+      expect(html).toContain(`>Pay by ${fmtPublicDeadline("en", "UTC", FUTURE)}<`);
+    });
+
+    // B4 fix round 3 (re-review gap): an offline fee with no instructions from the organiser shows the fee and the date, never a
+    // "How to pay" heading with nothing under it. With instructions, the heading stays.
+    // Tidy round (re-review m3): with no instructions from the division or the org, the card says the organiser will tell them how to
+    // pay, and nothing on the page names a way to pay that is not there: no Pay button, no "How to pay", no step pointing below.
+    it("an offline fee with no instructions says the organiser will tell them how to pay, and names no route; with instructions it keeps them", async () => {
+      const FALLBACK = ">The organiser will tell you how to pay.<";
+      const offline = { ...BASE_VIEW, payment_method: "offline" as const, entries: [{ ...BASE_ENTRY, payment_method: "offline" as const }] };
+      usecaseMock.groupById.mockResolvedValueOnce({ ...offline, payment_instructions: null });
+      const bare = (await render({ rid: "g1", token: "tok" })).replace(/&#x27;/g, "'");
+      expect(bare, "premise: the fee is still named").toMatch(/>£25\.00</);
+      expect(bare).toContain(FALLBACK);
+      expect(bare).not.toContain(">How to pay<");
+      expect(bare, "no Pay control for an offline fee").not.toMatch(/Pay now/);
+      expect(bare).toMatch(/data-testid="reg-status-headline"[^>]*>Pay to finish entering</);
+      expect(bare, "the step keeps the date and points nowhere").toContain(`>Pay by ${fmtPublicDeadline("en", "UTC", FUTURE)} to keep your place.<`);
+      expect(bare).not.toMatch(/below/i);
+      usecaseMock.groupById.mockResolvedValueOnce({ ...offline, payment_instructions: "Bank: Example Bank" });
+      const withText = (await render({ rid: "g1", token: "tok" })).replace(/&#x27;/g, "'");
+      expect(withText).toContain(">How to pay<");
+      expect(withText).toContain("Bank: Example Bank");
+      expect(withText, "instructions given: no fallback").not.toContain(FALLBACK);
+      usecaseMock.groupById.mockResolvedValueOnce({ ...BASE_VIEW, payment_instructions: null });
+      const card = (await render({ rid: "g1", token: "tok" })).replace(/&#x27;/g, "'");
+      expect(card, "premise: a card fee has its Pay button").toMatch(/Pay now/);
+      expect(card, "a card fee is paid here: no fallback").not.toContain(FALLBACK);
     });
 
     it("a confirmed entry still names its own fee — no Pay control, no instructions, but not a blank money section (FIX 1)", async () => {
@@ -305,8 +481,8 @@ describe("register status page (RS007 rebuild)", () => {
       // shows it" from "only the Subtotal does".
       expect(
         (html.match(/>£25\.00</g) || []).length,
-        "the confirmed card itself must show its own fee, not just the page Subtotal",
-      ).toBeGreaterThanOrEqual(2);
+        "the confirmed card itself must show its own fee (the money line is a sentence, never a bare figure)",
+      ).toBe(1);
     });
 
     it("a genuinely free (amount_cents 0) confirmed entry reads as 'Free', never '£0' (FIX 1)", async () => {
@@ -321,8 +497,8 @@ describe("register status page (RS007 rebuild)", () => {
       // just the Subtotal.
       expect(
         (html.match(/>Free</g) || []).length,
-        "the confirmed card itself must read Free, not just the page Subtotal",
-      ).toBeGreaterThanOrEqual(2);
+        "the confirmed card itself must read Free (the money line says \"Nothing to pay\", never \"Free\")",
+      ).toBe(1);
     });
   });
 
@@ -347,7 +523,7 @@ describe("register status page (RS007 rebuild)", () => {
       expect(
         (html.match(/>£25\.00</g) || []).length,
         "the window_closed card itself must still show its own fee",
-      ).toBeGreaterThanOrEqual(2);
+      ).toBe(1);
     });
 
     it("an entry whose deadline is still ahead is unaffected (sanity — not simply hiding every Pay button)", async () => {
@@ -399,86 +575,338 @@ describe("register status page (RS007 rebuild)", () => {
     });
   });
 
-  describe("subtotal — never includes a cancelled entry's stale pre-cancellation fee (FIX 1)", () => {
-    it("excludes a withdrawn entry's amount_cents from the page Subtotal — withdrawCore never clears it", async () => {
-      usecaseMock.groupById.mockResolvedValueOnce({
-        ...BASE_VIEW,
-        entries: [
-          { ...BASE_ENTRY, id: "reg-1", status: "pending" as const, amount_cents: 2500 },
-          { ...BASE_ENTRY, id: "reg-2", status: "withdrawn" as const, amount_cents: 1000 },
-        ],
-      });
-      const html = await render({ rid: "g1", token: "tok" });
-      const subtotalMatch = html.match(/data-testid="reg-status-subtotal-amount"[^>]*>([^<]*)</);
-      expect(subtotalMatch, "subtotal span not found").not.toBeNull();
-      // withdrawCore (usecases/registrations/withdraw.ts), the rejection path
-      // (registration-approval.ts), and the expiry sweep (usecases/registrations/)
-      // all touch ONLY status/timestamps — none ever clears amount_cents —
-      // so reg-2's stale 1000 must NOT be folded into the live subtotal.
-      expect(subtotalMatch![1]).toContain("25");
-      expect(subtotalMatch![1]).not.toContain("35");
-    });
-  });
-
-  // Polish wave P3 (walkthrough W6, W10, W11): a cart with nothing LIVE in it summed to 0 and the row printed "Free" -- for a waitlisted
-  // entry that owes a fee the moment it is promoted, and for an expired or withdrawn one. Each row below is a literal from the brief's
-  // ruling (amount / amount plus a "not due while waitlisted" note / "Nothing due"), never read back from `cartSubtotal`.
-  describe("subtotal words what is due, not just the live sum (P3)", () => {
-    const SUBTOTAL_CASES: { name: string; entries: Record<string, unknown>[]; amount: string; note: string | null }[] = [
-      { name: "all waitlisted, division fee 15.00 -> the fee a promotion would set, with the note, never Free",
-        entries: [{ status: "waitlisted", amount_cents: 0, fee_if_promoted_cents: 1500 }], amount: "£15.00", note: "Not due while waitlisted" },
-      { name: "two waitlisted entries add their promotion fees",
-        entries: [{ status: "waitlisted", amount_cents: 0, fee_if_promoted_cents: 1500 }, { status: "waitlisted", amount_cents: 0, fee_if_promoted_cents: 1000 }],
-        amount: "£25.00", note: "Not due while waitlisted" },
-      { name: "all waitlisted in a FREE division -> Free, no note (nothing would ever be due)",
-        entries: [{ status: "waitlisted", amount_cents: 0, fee_if_promoted_cents: 0 }], amount: "Free", note: null },
-      { name: "all withdrawn -> Nothing due, never Free",
-        entries: [{ status: "withdrawn", amount_cents: 1500, fee_if_promoted_cents: null }], amount: "Nothing due", note: null },
-      { name: "all expired -> Nothing due",
-        entries: [{ status: "expired", amount_cents: 1500, fee_if_promoted_cents: null }], amount: "Nothing due", note: null },
-      { name: "withdrawn + expired + rejected -> Nothing due",
-        entries: [{ status: "withdrawn", amount_cents: 1500, fee_if_promoted_cents: null }, { status: "expired", amount_cents: 500, fee_if_promoted_cents: null }, { status: "rejected", amount_cents: 900, fee_if_promoted_cents: null }],
-        amount: "Nothing due", note: null },
-      { name: "waitlisted + withdrawn -> the waitlisted fee (the ended entry adds nothing)",
-        entries: [{ status: "waitlisted", amount_cents: 0, fee_if_promoted_cents: 1500 }, { status: "withdrawn", amount_cents: 2500, fee_if_promoted_cents: null }],
-        amount: "£15.00", note: "Not due while waitlisted" },
-      { name: "a live entry wins: pending 25.00 + waitlisted -> 25.00 and NO waitlist note",
-        entries: [{ status: "pending", amount_cents: 2500, fee_if_promoted_cents: null }, { status: "waitlisted", amount_cents: 0, fee_if_promoted_cents: 1500 }],
-        amount: "£25.00", note: null },
-      { name: "a free confirmed entry is a genuinely free cart -> Free",
-        entries: [{ status: "confirmed", amount_cents: 0, fee_if_promoted_cents: null }], amount: "Free", note: null },
-      { name: "a confirmed entry beside a withdrawn one -> the confirmed fee only",
-        entries: [{ status: "confirmed", amount_cents: 1500, fee_if_promoted_cents: null }, { status: "withdrawn", amount_cents: 1500, fee_if_promoted_cents: null }],
-        amount: "£15.00", note: null },
-      { name: "no entries at all -> Nothing due (the empty case)", entries: [], amount: "Nothing due", note: null },
+  // B4 T15 (spec §5.3): the money line replaces the Subtotal. Paid is counted by SETTLEMENT (T14 `settled_by`), never by status: a
+  // fee waiver confirms an entry and keeps its fee (FP11). Each row's text is a literal from the spec's rendering table.
+  describe("money line (B4 T15, spec §5.3)", () => {
+    const moneyText = (html: string) => html.match(/data-testid="reg-status-money"[^>]*>([^<]*)</)?.[1]?.replace(/&#x27;/g, "'");
+    const CLOSED_AT = "2000-01-01T00:00:00.000Z"; // a pay-by date long gone: the entry is window_closed
+    const MONEY_CASES: { name: string; view?: Record<string, unknown>; entries: Record<string, unknown>[]; currency?: string; text: string }[] = [
+      { name: "no entries at all -> Nothing to pay (the empty case)", entries: [], text: "Nothing to pay" },
+      { name: "part-paid: a card-settled £15.00 and a pending card-due £24.00",
+        entries: [{ status: "confirmed", amount_cents: 1500, settled_by: "card" }, { status: "pending", amount_cents: 2400 }],
+        text: "Paid £15.00 · £24.00 still due" },
+      { name: "paid only", entries: [{ status: "confirmed", amount_cents: 1500, settled_by: "card" }], text: "Paid £15.00" },
+      { name: "paid offline (Mark paid)", entries: [{ status: "confirmed", amount_cents: 1500, settled_by: "offline" }], text: "Paid £15.00" },
+      { name: "due only", entries: [{ status: "pending", amount_cents: 2400 }], text: "£24.00 due" },
+      { name: "a waived entry never looks paid", entries: [{ status: "confirmed", amount_cents: 1500, settled_by: "waived" }], text: "Nothing to pay" },
+      { name: "refunded: £15.00 paid, £5.00 sent back",
+        entries: [{ status: "confirmed", amount_cents: 1500, settled_by: "card", refunded_cents: 500 }], text: "Paid £10.00" },
+      { name: "after a withdrawal: a withdrawn entry's stale fee is neither paid nor due (FIX 1)",
+        entries: [{ status: "pending", amount_cents: 2500 }, { status: "withdrawn", amount_cents: 1000 }], text: "£25.00 due" },
+      { name: "all waitlisted: what a promotion would cost, not due now",
+        entries: [{ status: "waitlisted", amount_cents: 0, fee_if_promoted_cents: 1500 }], text: "£15.00 if a place opens — not due now" },
+      { name: "all waitlisted in a free division -> Nothing to pay",
+        entries: [{ status: "waitlisted", amount_cents: 0, fee_if_promoted_cents: 0 }], text: "Nothing to pay" },
+      { name: "all ended -> Nothing to pay", entries: [{ status: "expired", amount_cents: 1500 }, { status: "rejected", amount_cents: 900 }], text: "Nothing to pay" },
+      { name: "a free confirmed entry -> Nothing to pay", entries: [{ status: "confirmed", amount_cents: 0 }], text: "Nothing to pay" },
+      // B4 fix round 2 (controller ruling): a fee past its pay-by date cannot be paid, so it is never "due". Round 3: both halves, each
+      // as the sweep sees it — never promoted (the CART's date gone: the expiry pass expires it) and a lapsed promotion (its OWN date
+      // gone: the lapse puts it back on the waitlist).
+      { name: "past the cart's pay-by date alone -> Nothing to pay", view: { expires_at: CLOSED_AT },
+        entries: [{ status: "pending", amount_cents: 2400 }], text: "Nothing to pay" },
+      { name: "past the cart's pay-by date beside a promoted entry still in its window -> only the payable fee is due",
+        view: { expires_at: CLOSED_AT },
+        entries: [{ status: "pending", amount_cents: 2400 }, { status: "pending", amount_cents: 1500, promotion_expires_at: FUTURE }],
+        text: "£15.00 due" },
+      { name: "past the cart's pay-by date beside a card-paid entry -> Paid, never still due", view: { expires_at: CLOSED_AT },
+        entries: [{ status: "pending", amount_cents: 2400 }, { status: "confirmed", amount_cents: 1500, settled_by: "card" }],
+        text: "Paid £15.00" },
+      { name: "a lapsed promotion alone -> Nothing to pay",
+        entries: [{ status: "pending", amount_cents: 2400, promotion_expires_at: CLOSED_AT }], text: "Nothing to pay" },
+      { name: "a lapsed promotion beside a pending card fee -> only the payable fee is due",
+        entries: [{ status: "pending", amount_cents: 2400, promotion_expires_at: CLOSED_AT }, { status: "pending", amount_cents: 1500 }],
+        text: "£15.00 due" },
+      { name: "the cart's own currency, two decimals (a whole amount keeps its .00)", currency: "eur",
+        entries: [{ status: "waitlisted", amount_cents: 0, fee_if_promoted_cents: 1500 }], text: "€15.00 if a place opens — not due now" },
     ];
 
-    it("every case prints its literal amount and note (counted)", async () => {
+    it("every case prints its literal sentence (counted)", async () => {
       let checked = 0;
-      for (const c of SUBTOTAL_CASES) {
+      for (const c of MONEY_CASES) {
         usecaseMock.groupById.mockResolvedValueOnce({
           ...BASE_VIEW,
+          ...c.view,
+          currency: c.currency ?? BASE_VIEW.currency,
           entries: c.entries.map((e, i) => ({ ...BASE_ENTRY, id: `reg-${i + 1}`, ...e })),
         });
         const html = await render({ rid: "g1", token: "tok" });
-        const amount = html.match(/data-testid="reg-status-subtotal-amount"[^>]*>([^<]*)</)?.[1];
-        expect(amount, c.name).toBe(c.amount);
-        const note = html.match(/data-testid="reg-status-subtotal-note"[^>]*>([^<]*)</)?.[1] ?? null;
-        expect(note, c.name).toBe(c.note);
+        expect(moneyText(html), c.name).toBe(c.text);
         checked += 1;
       }
-      expect(checked).toBe(SUBTOTAL_CASES.length);
+      expect(checked).toBe(MONEY_CASES.length);
       expect(checked).toBeGreaterThan(0);
     });
 
-    it("the subtotal is the cart's own currency, to two decimals, in the page's locale (a whole amount keeps its .00)", async () => {
+    it("the Subtotal row is gone: one money line, no second total", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce(BASE_VIEW);
+      const html = await render({ rid: "g1", token: "tok" });
+      expect(html.match(/data-testid="reg-status-money"/g)?.length).toBe(1);
+      expect(html).not.toContain(">Subtotal<");
+      expect(html).not.toContain("reg-status-subtotal");
+    });
+  });
+
+  describe("outcome headline, reference hero and what happens next (B4 T15, spec §5.1-5.2)", () => {
+    const headline = (html: string) =>
+      html.match(/<h1[^>]*data-testid="reg-status-headline"[^>]*>([^<]*)</)?.[1]?.replace(/&#x27;/g, "'");
+
+    const PAST = "2000-01-01T00:00:00.000Z";
+    const HEADLINES: { name: string; view?: Record<string, unknown>; entries: Record<string, unknown>[]; kind: string; text: string }[] = [
+      { name: "no entries (the empty case, first)", entries: [], kind: "closed", text: "This registration is closed" },
+      { name: "an unpaid card entry", entries: [{ status: "pending", amount_cents: 2500 }], kind: "pay", text: "Pay to finish entering" },
+      // B4 review m1 (owner ruling 2026-11-13): the two owed states with no way to pay on this page.
+      { name: "a card fee owed while card payments are unavailable: the card notice, never Pay or awaiting approval",
+        view: { charges_enabled: false }, entries: [{ status: "pending", amount_cents: 2500 }],
+        kind: "payUnavailable", text: "Card payments aren't available right now — contact the organiser." },
+      // Round 3 (re-review I1): each half of "past its pay-by date" as the sweep sees it.
+      { name: "never promoted, past the cart's pay-by date: closed (the expiry pass expires it)", view: { expires_at: PAST },
+        entries: [{ status: "pending", amount_cents: 2500 }], kind: "closed", text: "This registration is closed" },
+      { name: "a promotion past its own pay-by date: the waiting list (the lapse puts it back)",
+        entries: [{ status: "pending", amount_cents: 2500, promotion_expires_at: PAST }], kind: "waitlist", text: "You're on the waiting list" },
+      { name: "past the cart's pay-by date beside a confirmed entry: You're in", view: { expires_at: PAST },
+        entries: [{ status: "pending", amount_cents: 2500 }, { status: "confirmed", settled_by: "card" }],
+        kind: "in", text: "You're in" },
+      { name: "past the cart's pay-by date beside a paid entry awaiting approval: one entry received (the closed one is not counted)",
+        view: { expires_at: PAST },
+        entries: [{ status: "pending", amount_cents: 2500 }, { status: "paid", settled_by: "card" }],
+        kind: "received", text: "Entry received, awaiting approval" },
+      { name: "a confirmed entry", entries: [{ status: "confirmed", settled_by: "card" }], kind: "in", text: "You're in" },
+      { name: "one entry awaiting approval", entries: [{ status: "paid", settled_by: "card" }], kind: "received", text: "Entry received, awaiting approval" },
+      { name: "two entries awaiting approval (plural)", entries: [{ status: "paid", settled_by: "card" }, { status: "pending", amount_cents: 0 }],
+        kind: "received", text: "Entries received, awaiting approval" },
+      { name: "a waitlisted entry", entries: [{ status: "waitlisted", amount_cents: 0 }], kind: "waitlist", text: "You're on the waiting list" },
+      { name: "only withdrawn", entries: [{ status: "withdrawn" }], kind: "closed", text: "This registration is closed" },
+      // B4 review I1: a confirmed solo sign-up nobody has placed on a team yet.
+      { name: "a solo sign-up in the player pool", entries: [{ status: "confirmed", amount_cents: 0, free_agent: true }],
+        kind: "pool", text: "You're in the player pool" },
+      { name: "a solo sign-up placed on a team", entries: [{ status: "confirmed", amount_cents: 0, free_agent: true, assigned_team_name: "Riverside Rovers" }],
+        kind: "in", text: "You're in" },
+    ];
+
+    it("the h1 is the outcome, one literal per headline kind (counted)", async () => {
+      let checked = 0;
+      for (const c of HEADLINES) {
+        usecaseMock.groupById.mockResolvedValueOnce({
+          ...BASE_VIEW,
+          ...c.view,
+          entries: c.entries.map((e, i) => ({ ...BASE_ENTRY, id: `reg-${i + 1}`, ...e })),
+        });
+        const html = await render({ rid: "g1", token: "tok" });
+        expect(headline(html), c.name).toBe(c.text);
+        expect(html, c.name).toContain(`data-headline="${c.kind}"`);
+        expect(html.match(/<h1/g)?.length, `${c.name}: one h1`).toBe(1);
+        checked += 1;
+      }
+      expect(checked).toBe(HEADLINES.length);
+      // Premise: every headline kind the page can show is reached by a row here.
+      expect(new Set(HEADLINES.map((c) => c.kind))).toEqual(new Set(["pay", "payUnavailable", "in", "pool", "received", "waitlist", "closed"]));
+    });
+
+    // B4 review I1, through the page: the lead line, the step and the solo card agree. Beside a confirmed team entry the pool still
+    // leads (ruling: "Nothing else to do" would contradict the solo card's "Waiting for a team").
+    it("a solo sign-up in the pool beside a confirmed team: the pool leads, the step says the organiser places you, never 'Nothing else to do'", async () => {
       usecaseMock.groupById.mockResolvedValueOnce({
         ...BASE_VIEW,
-        currency: "eur",
-        entries: [{ ...BASE_ENTRY, status: "waitlisted" as const, amount_cents: 0, fee_if_promoted_cents: 1500 }],
+        entries: [
+          { ...BASE_ENTRY, id: "reg-1", status: "confirmed" as const, settled_by: "card" as const },
+          { ...BASE_ENTRY, id: "reg-2", division_name: "Womens 35+", display_name: "Alex Test", entrant_kind: "individual" as const,
+            status: "confirmed" as const, amount_cents: 0, free_agent: true, assigned_team_name: null },
+        ],
       });
+      const html = (await render({ rid: "g1", token: "tok" })).replace(/&#x27;/g, "'");
+      expect(headline(html)).toBe("You're in the player pool");
+      const steps = [...html.matchAll(/<li[^>]*data-next-kind="step"[^>]*>([^<]*)</g)].map((m) => m[1]);
+      expect(steps).toEqual(["The organiser places you on a team. This page shows it."]);
+      expect(html).toContain("Waiting for a team");
+      expect(html).not.toContain("Nothing else to do");
+    });
+
+    // B4 review m1, the owed states' cards and steps. A card fee owed while cards are unavailable keeps its figure and the notice, has
+    // no Pay button, and "What happens next" never says "Pay to keep your place". A fee past its pay-by date beside a confirmed entry:
+    // the page leads with "You're in", and the closed entry's own card says it lost its place.
+    it("cards unavailable: the owed fee still shows, no Pay button, and no step asks to pay", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce({ ...BASE_VIEW, charges_enabled: false, entries: [BASE_ENTRY] });
+      const html = (await render({ rid: "g1", token: "tok" })).replace(/&#x27;/g, "'");
+      expect(headline(html), "premise: the card notice leads").toBe("Card payments aren't available right now — contact the organiser.");
+      expect(html).not.toMatch(/Pay now/);
+      expect(html).not.toContain("to keep your place");
+      expect(html).toMatch(/data-testid="reg-status-money"[^>]*>£25\.00 due</);
+    });
+
+    // B4 fix round 2 (controller ruling): the card notice is said once. A one-entry cart's h1 IS the notice, so its card keeps the
+    // figure and drops the sentence; a cart of two or more keeps it on the card that owes, so the person can tell which entry it means.
+    const NOTICE = "Card payments aren't available right now — contact the organiser.";
+    const count = (html: string, text: string) => html.split(text).length - 1;
+
+    it("cards unavailable on a one-entry cart: the notice is the h1 only, the card keeps its figure", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce({ ...BASE_VIEW, charges_enabled: false, entries: [BASE_ENTRY] });
+      const html = (await render({ rid: "g1", token: "tok" })).replace(/&#x27;/g, "'");
+      expect(headline(html)).toBe(NOTICE);
+      expect(count(html, NOTICE), "said once, in the h1").toBe(1);
+      expect((html.match(/>£25\.00</g) || []).length, "the card still names its fee").toBe(1);
+    });
+
+    it("cards unavailable on a two-entry cart: the h1 and the owing card both say it, the confirmed card does not", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce({
+        ...BASE_VIEW,
+        charges_enabled: false,
+        entries: [
+          { ...BASE_ENTRY, id: "reg-1" },
+          { ...BASE_ENTRY, id: "reg-2", division_name: "Womens 35+", status: "confirmed" as const, settled_by: "card" as const },
+        ],
+      });
+      const html = (await render({ rid: "g1", token: "tok" })).replace(/&#x27;/g, "'");
+      expect(headline(html)).toBe(NOTICE);
+      const cards = html.match(/<li class="[^"]*rounded-xl[\s\S]*?(?=<li class="[^"]*rounded-xl|$)/g) ?? [];
+      expect(cards.length, "two entry cards").toBe(2);
+      expect(count(cards[0]!, NOTICE), "the owing card names it").toBe(1);
+      expect(count(cards[1]!, NOTICE), "the confirmed card does not").toBe(0);
+      expect(count(html, NOTICE), "h1 + the owing card").toBe(2);
+    });
+
+    // Round 3 (re-review m5): the one-entry rule counts LIVE entries. A withdrawn card beside the owing one is not what the h1 is about.
+    it("cards unavailable beside a withdrawn entry: one live entry, so the notice is the h1 only", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce({
+        ...BASE_VIEW,
+        charges_enabled: false,
+        entries: [{ ...BASE_ENTRY, id: "reg-1" }, { ...BASE_ENTRY, id: "reg-2", division_name: "Womens 35+", status: "withdrawn" as const }],
+      });
+      const html = (await render({ rid: "g1", token: "tok" })).replace(/&#x27;/g, "'");
+      expect(headline(html)).toBe(NOTICE);
+      expect(count(html, NOTICE), "said once, in the h1").toBe(1);
+    });
+
+    it("past the cart's pay-by date beside a confirmed entry: You're in, and the closed entry's card says it lost its place", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce({
+        ...BASE_VIEW,
+        expires_at: PAST, // never promoted: the cart's shared date is this entry's, and the expiry pass expires it
+        entries: [
+          { ...BASE_ENTRY, id: "reg-1" },
+          { ...BASE_ENTRY, id: "reg-2", division_name: "Womens 35+", status: "confirmed" as const, settled_by: "card" as const },
+        ],
+      });
+      const html = (await render({ rid: "g1", token: "tok" })).replace(/&#x27;/g, "'");
+      expect(headline(html)).toBe("You're in");
+      const cards = html.match(/<li class="[^"]*rounded-xl[\s\S]*?(?=<li class="[^"]*rounded-xl|$)/g) ?? [];
+      expect(cards.length, "two entry cards").toBe(2);
+      expect(cards[0], "the closed entry's card").toContain("so it has lost its place");
+      expect(cards[0], "round 4: its chip says Closed, never pending").toMatch(/data-testid="reg-status-outcome"[^>]*>closed<\/span>/);
+      expect(cards[1], "the confirmed card says nothing of it").not.toContain("lost its place");
+      expect(html).not.toContain("to keep your place");
+    });
+
+    // Round 3 (re-review I1): a promotion past its own pay-by date is put back at the END of the waitlist by the sweep's lapse
+    // (sweep.ts → returnToWaitlist), never expired. The page says so before the sweep runs: the waiting-list headline and the card's
+    // own sentence, never "lost its place", no Pay and no pay-by date.
+    it("a lapsed promotion: the waiting list leads, and its card says it goes back to the end of the list", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce({ ...BASE_VIEW, entries: [{ ...BASE_ENTRY, promotion_expires_at: PAST }] });
+      const html = (await render({ rid: "g1", token: "tok" })).replace(/&#x27;/g, "'");
+      expect(headline(html)).toBe("You're on the waiting list");
+      const cards = html.match(/<li class="[^"]*rounded-xl[\s\S]*?(?=<li class="[^"]*rounded-xl|$)/g) ?? [];
+      expect(cards.length, "one entry card").toBe(1);
+      expect(cards[0]).toContain(">The time to pay for this place has passed. Your entry goes back to the end of the waiting list.<");
+      expect(cards[0]).not.toContain("lost its place");
+      expect(cards[0], "not waiting for a payment it can no longer take").not.toContain("waiting for payment");
+      expect(cards[0], "round 4: never PENDING under a waitlist headline").toMatch(/data-testid="reg-status-outcome"[^>]*>waitlisted<\/span>/);
+      expect(html).not.toMatch(/Pay now|Pay by/);
+      expect(html).not.toContain("to keep your place");
+    });
+
+    it("states where the confirmation went", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce(BASE_VIEW);
       const html = await render({ rid: "g1", token: "tok" });
-      expect(html.match(/data-testid="reg-status-subtotal-amount"[^>]*>([^<]*)</)?.[1]).toBe("€15.00");
+      expect(html).toMatch(/Confirmation sent to <[^>]+>alex@example\.test<\/[a-z]+>\./);
+    });
+
+    // B4 review m3: the address is the registrant's own, so the element that holds it is kept out of session replay. Read off the
+    // element that wraps the address itself (its class list, token by token), never a regex that survives the class being deleted.
+    it("the address sits in an element marked ph-no-capture", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce(BASE_VIEW);
+      const html = await render({ rid: "g1", token: "tok" });
+      const holders = [...html.matchAll(/<([a-z]+) class="([^"]*)">alex@example\.test<\/\1>/g)];
+      expect(holders.length, "one element holds the address").toBe(1);
+      expect(holders[0]![2]!.split(/\s+/)).toContain("ph-no-capture");
+    });
+
+    it("reg-status-ref holds the cart reference and a Copy reference button", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce(BASE_VIEW);
+      const html = await render({ rid: "g1", token: "tok" });
+      const hero = html.match(/<section[^>]*data-testid="reg-status-ref"[\s\S]*?<\/section>/)?.[0];
+      expect(hero, "reference hero not found").toBeDefined();
+      expect(hero).toContain(">SZ-TEST-01<");
+      expect(hero).toContain("Your reference");
+      expect(hero).toMatch(/<button[^>]*data-testid="reg-status-copy-ref"[\s\S]*?Copy reference/);
+    });
+
+    it("a cart whose reference was never minted shows no hero and no Copy button (nothing to copy)", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce({ ...BASE_VIEW, ref_code: null });
+      const html = await render({ rid: "g1", token: "tok" });
+      expect(html, "anti-vacuity: the page still rendered").toContain("Mixed Doubles");
+      expect(html).not.toContain('data-testid="reg-status-ref"');
+      expect(html).not.toContain("Copy reference");
+    });
+
+    it("no dates, no venue and a closed cart: the section is not rendered (the empty case)", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce({ ...BASE_VIEW, entries: [{ ...BASE_ENTRY, status: "withdrawn" as const }] });
+      const html = await render({ rid: "g1", token: "tok" });
+      expect(html, "anti-vacuity: the page still rendered").toContain("Mixed Doubles");
+      expect(html).not.toContain('data-testid="reg-status-next"');
+      expect(html).not.toContain("What happens next");
+    });
+
+    it("dates, venue and the step render as sentences, the dates in the page's locale", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce({
+        ...BASE_VIEW,
+        competition_starts_on: "2099-12-05",
+        competition_ends_on: "2099-12-07",
+        venue_name: "Riverside Courts",
+        entries: [{ ...BASE_ENTRY, status: "waitlisted" as const, amount_cents: 0, waitlist_position: 2 }],
+      });
+      const html = (await render({ rid: "g1", token: "tok" })).replace(/&#x27;/g, "'");
+      const lines = [...html.matchAll(/<li[^>]*data-next-kind="([a-z]+)"[^>]*>([^<]*)</g)].map((m) => [m[1], m[2]]);
+      expect(lines).toEqual([
+        ["dates", "Summer Smash runs 5 Dec 2099 to 7 Dec 2099."],
+        ["venue", "Played at Riverside Courts."],
+        ["step", "If a place opens, your entry moves up and this page shows it."],
+      ]);
+      expect(html).toContain("What happens next");
+      // The T13 queue line still sits on the waitlisted card beside the headline's "You're on the waiting list".
+      expect(html).toContain("You're #2 on the waiting list");
+    });
+
+    // B4 review m7: the page passes the real clock, so these dates are far past/future (the file's FUTURE convention). A competition
+    // whose last day is before today has no dates line; the venue and the step stay.
+    it("a competition that is over shows no dates line, and keeps the venue and the step", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce({
+        ...BASE_VIEW,
+        competition_starts_on: "2000-06-01",
+        competition_ends_on: "2000-06-03",
+        venue_name: "Riverside Courts",
+        entries: [{ ...BASE_ENTRY, status: "confirmed" as const }],
+      });
+      const html = (await render({ rid: "g1", token: "tok" })).replace(/&#x27;/g, "'");
+      const kinds = [...html.matchAll(/<li[^>]*data-next-kind="([a-z]+)"/g)].map((m) => m[1]);
+      expect(kinds).toEqual(["venue", "step"]);
+      expect(html).not.toContain("Summer Smash runs");
+      expect(html).not.toContain("Summer Smash starts on");
+    });
+
+    it("a one-day event says 'starts on'", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce({
+        ...BASE_VIEW,
+        competition_starts_on: "2099-12-05",
+        competition_ends_on: "2099-12-05",
+        entries: [{ ...BASE_ENTRY, status: "confirmed" as const }],
+      });
+      const html = (await render({ rid: "g1", token: "tok" })).replace(/&#x27;/g, "'");
+      expect(html).toContain(">Summer Smash starts on 5 Dec 2099.<");
+      expect(html).toContain(">Nothing else to do. Keep this page — it's your entry.<");
+    });
+
+    it("pay: the step names the same pay-by deadline the card does, in the org's zone", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce(BASE_VIEW);
+      const html = await render({ rid: "g1", token: "tok" });
+      expect(html).toContain(`>Pay by ${fmtPublicDeadline("en", "UTC", FUTURE)} to keep your place.<`);
     });
   });
 
@@ -509,6 +937,33 @@ describe("register status page (RS007 rebuild)", () => {
       usecaseMock.groupById.mockResolvedValueOnce(BASE_VIEW);
       const html = await render({ rid: "g1", token: "tok" });
       expect(html).toContain("Cancel this entry");
+    });
+
+    // B4 T15 (spec §5.1 item 7): Cancel is a quiet text link in the card's own footer, never a filled or outlined button. Its class is
+    // the status page's quiet-link token (styles.ts BTN_QUIET_LINK): sentence case and underlined since the B4 design review.
+    it("Cancel renders as a link-styled button inside the card footer, not a filled button", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce({ ...BASE_VIEW, entries: [BASE_ENTRY] });
+      const html = await render({ rid: "g1", token: "tok" });
+      const card = html.match(/<li class="[^"]*rounded-xl[\s\S]*?<\/li>/)?.[0];
+      expect(card, "entry card not found").toBeDefined();
+      const footer = card!.match(/<div class="border-t[^"]*">[\s\S]*$/)?.[0];
+      expect(footer, "the card's footer").toBeDefined();
+      const button = footer!.match(/<button([^>]*)>Cancel this entry<\/button>/);
+      expect(button, "Cancel sits in the card's footer").not.toBeNull();
+      const cls = button![1]!.match(/class="([^"]*)"/)![1]!;
+      expect(cls).toBe(BTN_QUIET_LINK);
+      expect(cls).not.toMatch(/\bborder\b|\bbg-/);
+      expect(cls.split(/\s+/)).not.toContain("uppercase");
+    });
+
+    it("Resend sits in the page's quiet footer, after the entries and the money line, as a text link", async () => {
+      usecaseMock.groupById.mockResolvedValueOnce(BASE_VIEW);
+      const html = await render({ rid: "g1", token: "tok" });
+      const resend = html.match(/<button([^>]*)>Resend confirmation email<\/button>/);
+      expect(resend, "Resend button").not.toBeNull();
+      expect(resend![1]!.match(/class="([^"]*)"/)![1]).toBe(BTN_QUIET_LINK);
+      expect(html.indexOf("Resend confirmation email")).toBeGreaterThan(html.indexOf('data-testid="reg-status-money"'));
+      expect(html.indexOf('data-testid="reg-status-money"')).toBeGreaterThan(html.indexOf("Mixed Doubles"));
     });
 
     it("hides Cancel for an already-withdrawn entry", async () => {
@@ -581,7 +1036,7 @@ describe("register status page (RS007 rebuild)", () => {
       // the entry's own payment-status pill uses a few lines above (green
       // CONFIRMED = the fee landed). Roster-side copy now uses a check-in
       // metaphor instead, so it can no longer be read as a payment state. This entry is still PENDING, so (owner ruling on V7,
-      // 2026-11-12) its meter says who has joined - "checked in" is kept for a confirmed entry (pinned below).
+      // 2026-11-12) its meter says who has joined - and since walk-fix F10 a confirmed one does too (pinned below).
       expect(html).toContain("1 of 2 joined");
       expect(html).not.toContain("checked in");
       // The per-slot link carries the unclaimed player's id, on that slot's Copy button (polish wave K: no URL is printed).
@@ -742,21 +1197,20 @@ describe("register status page (RS007 rebuild)", () => {
       // The entry pill still legitimately says CONFIRMED — this finding is
       // about the ROSTER's vocabulary, not the entry's own money status.
       expect(html).toContain(">confirmed<");
-      // The roster's per-row badges and its meter use a check-in metaphor —
-      // who has personally shown up, not whether the entry (or a refund) is
-      // valid — deliberately distinct from both "confirm" (the entry's own
-      // money word) and "claim" (which carries its own money-adjacent
-      // reading: an insurance claim, an expense claim).
-      expect(html).toContain(">Not checked in<");
-      expect(html).toContain(">Checked in<");
-      expect(html).toContain("1 of 2 checked in");
+      // The roster's per-row badges and its meter say who has JOINED the entry — not whether the entry (or a refund) is valid —
+      // deliberately distinct from both "confirm" (the entry's own money word) and "claim" (which carries its own money-adjacent
+      // reading: an insurance claim, an expense claim). Walk-fix F10: no longer "checked in", which claimed an attendance nobody gave.
+      expect(html).toContain(">Not joined yet<");
+      expect(html).toContain(">Joined<");
+      expect(html).toContain("1 of 2 joined");
+      expect(html).not.toMatch(/checked in/i);
       // ...and nowhere does the roster block reuse "confirm" or "claim" —
       // pinned against the dictionary source directly (not string-sliced
       // out of the render) so this fails the moment any of the three keys
       // drifts back toward payment vocabulary, whatever the exact wording
       // becomes.
       const roster = uiEn as Record<string, string>;
-      for (const key of ["register.status.roster.pending", "register.status.roster.claimed", "register.status.roster.meter"]) {
+      for (const key of ["register.status.roster.notJoined", "register.status.roster.joined", "register.status.roster.meterJoined"]) {
         // Strip interpolation placeholders first — `.meter`'s own template
         // variable is literally named "{claimed}" in the SOURCE string
         // (view-model.ts's RosterCounts field), which would otherwise trip
@@ -830,5 +1284,102 @@ describe("register status page (RS007 rebuild)", () => {
         expect(html).not.toContain(invite("notListed"));
       },
     );
+  });
+});
+
+// Sign-off capture (2026-11-13): at 320 the hero reference wrapped mid-reference ("SZ-VXPW-FY4" / "N"): `break-all` at text-3xl in
+// Geist Mono (0.625em a character with tracking-wide) needs 225px, and the hero card leaves 222px inside the live layout's two 16px
+// gutters. The reference never breaks, and below 360px it steps down to 26px with normal tracking (still above the h1's text-2xl).
+// The browser fit at 320/360/375 is checked by the sign-off capture; here: the classes that make it, and that each one compiles.
+describe("the reference hero stays on one line (sign-off capture fix)", () => {
+  it("never breaks, and steps its size down below 360px; every class on it compiles", async () => {
+    usecaseMock.groupById.mockResolvedValueOnce(BASE_VIEW);
+    const html = await render({ rid: "g1", token: "tok" });
+    const hero = html.match(/<section[^>]*data-testid="reg-status-ref"[\s\S]*?<\/section>/)?.[0];
+    const p = hero?.match(/<p class="([^"]*)">SZ-TEST-01<\/p>/);
+    expect(p, "the hero's reference line").not.toBeNull();
+    const cls = p![1]!.split(/\s+/);
+    expect(cls, "never breaks inside the reference").toContain("whitespace-nowrap");
+    expect(cls).not.toContain("break-all");
+    for (const c of ["text-[26px]", "tracking-normal", "min-[360px]:text-3xl", "sm:text-4xl", "sm:tracking-wide"]) expect(cls, c).toContain(c);
+    const compiled = await compileClasses(cls);
+    expect(cls.length, "anti-vacuity: classes checked").toBeGreaterThan(8);
+    expect(cls.filter((c) => Object.keys(compiled.get(c) ?? {}).length === 0), "classes that compile to nothing").toEqual([]);
+    expect(compiled.get("text-[26px]")?.["font-size"]).toBe("26px");
+    expect(compiled.get("whitespace-nowrap")?.["white-space"]).toBe("nowrap");
+  }, 60_000);
+});
+
+describe("Resend confirmation email is offered only while a confirmation still means something (walk-fix F11)", () => {
+  const RESEND = (uiEn as Record<string, string>)["register.status.resend.cta"]!;
+  const PAST = "2000-01-01T00:00:00.000Z";
+  type Status = "pending" | "paid" | "confirmed" | "waitlisted" | "withdrawn" | "expired" | "rejected";
+  const single = (over: Omit<Partial<typeof BASE_ENTRY>, "status"> & { status?: Status }, cart: Partial<typeof BASE_VIEW> = {}) => ({
+    ...BASE_VIEW,
+    ...cart,
+    cart_size: 1,
+    entries: [{ ...BASE_ENTRY, entry_ref: null, ...over }],
+  });
+
+  it("a registration with nothing live (rejected, expired, withdrawn, past its pay-by date) has no Resend; every live state keeps it", async () => {
+    expect(RESEND, "premise: the button's words").toBe("Resend confirmation email");
+    const dead: [string, object][] = [
+      ["rejected", single({ status: "rejected" })],
+      ["expired", single({ status: "expired" })],
+      ["withdrawn", single({ status: "withdrawn" })],
+      // A never-promoted entry past the cart's pay-by date: closed (the sweep expires it next).
+      ["closed", single({ status: "pending" }, { expires_at: PAST })],
+      ["two dead entries", { ...BASE_VIEW, entries: BASE_VIEW.entries.map((e, i) => ({ ...e, status: i === 0 ? ("rejected" as const) : ("withdrawn" as const) })) }],
+    ];
+    const live: [string, object][] = [
+      ["pending", single({ status: "pending" })],
+      ["confirmed", single({ status: "confirmed", amount_cents: 0 })],
+      ["waitlisted", single({ status: "waitlisted", amount_cents: 0 })],
+      ["paid", single({ status: "paid" })],
+      // One dead entry beside a live one: the confirmation still covers the live one.
+      ["rejected beside confirmed", { ...BASE_VIEW, entries: [{ ...BASE_ENTRY, status: "rejected" as const }, { ...BASE_VIEW.entries[1]!, status: "confirmed" as const }] }],
+    ];
+    let checked = 0;
+    for (const [why, view] of dead) {
+      usecaseMock.groupById.mockResolvedValueOnce(view);
+      expect(await render({ rid: "g1", token: "tok" }), why).not.toContain(RESEND);
+      checked += 1;
+    }
+    for (const [why, view] of live) {
+      usecaseMock.groupById.mockResolvedValueOnce(view);
+      expect(await render({ rid: "g1", token: "tok" }), why).toContain(RESEND);
+      checked += 1;
+    }
+    expect(checked).toBe(10);
+  });
+
+  // Walk-fix A fix round 1 (Part B's routed item): "Confirmation sent to {email}." sat under "This registration is closed" on a
+  // rejected cart - a confirmation of nothing. The same carts that lose Resend say where the registration's mail goes instead; the
+  // address stays out of session replay in both wordings.
+  it("a registration with nothing live says where its emails go, not that a confirmation was sent; every live state keeps the confirmation line", async () => {
+    const en = uiEn as Record<string, string>;
+    const [sentLead] = en["register.status.sentTo"]!.split("{email}");
+    const [mailLead] = (en["register.status.mailTo"] ?? "").split("{email}");
+    expect(sentLead, "premise").toBe("Confirmation sent to ");
+    expect(mailLead, "premise: the closed wording exists and differs").toBeTruthy();
+    expect(mailLead).not.toBe(sentLead);
+    const cases: [string, object, string, string][] = [
+      ["rejected", single({ status: "rejected" }), mailLead!, sentLead!],
+      ["expired", single({ status: "expired" }), mailLead!, sentLead!],
+      ["withdrawn", single({ status: "withdrawn" }), mailLead!, sentLead!],
+      ["closed", single({ status: "pending" }, { expires_at: PAST }), mailLead!, sentLead!],
+      ["pending", single({ status: "pending" }), sentLead!, mailLead!],
+      ["waitlisted", single({ status: "waitlisted", amount_cents: 0 }), sentLead!, mailLead!],
+      ["rejected beside confirmed", { ...BASE_VIEW, entries: [{ ...BASE_ENTRY, status: "rejected" as const }, { ...BASE_VIEW.entries[1]!, status: "confirmed" as const }] }, sentLead!, mailLead!],
+    ];
+    let checked = 0;
+    for (const [why, view, says, not] of cases) {
+      usecaseMock.groupById.mockResolvedValueOnce(view);
+      const html = await render({ rid: "g1", token: "tok" });
+      expect(html, why).toContain(`${says}<span class="ph-no-capture`);
+      expect(html, why).not.toContain(not);
+      checked += 1;
+    }
+    expect(checked).toBe(cases.length);
   });
 });

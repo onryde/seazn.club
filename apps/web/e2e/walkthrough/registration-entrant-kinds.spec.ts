@@ -45,17 +45,20 @@ const ui = (key: string, vars: Record<string, string> = {}) => uiIn("en", key, v
 
 test.describe.configure({ mode: "serial" });
 
-/** Open a division's row-click config panel and wait past its own async GET. Returns the dialog (its Save button is a
- *  sibling of the content div, not a descendant). Same selectors as registration-hub.spec.ts, re-declared because the
- *  walkthrough project refuses a spec importing a spec. */
+/** Open a division's settings page (B7 T24: a hub tab, from the Settings row's "Open settings") and wait past its own
+ *  async GET. Returns the page's own section, which holds its fields and its pinned Save bar. Same selectors as
+ *  registration-hub.spec.ts, re-declared because the walkthrough project refuses a spec importing a spec. */
 async function openConfigPanel(page: Page, divisionId: string): Promise<Locator> {
   const row = page.locator(`[data-registration-hub-row][data-division-id="${divisionId}"]`);
   await expect(row).toBeVisible({ timeout: 20_000 });
   await row.locator("[data-registration-hub-row-configure]").click();
-  const content = page.locator(`[data-registration-hub-config-panel][data-division-id="${divisionId}"]`);
+  await expect(
+    page.locator(`[data-testid="reg-hub-tab-division"][data-division-id="${divisionId}"]`),
+  ).toHaveAttribute("aria-current", "page", { timeout: 20_000 });
+  const content = page.locator(`[data-registration-hub-config-panel][data-layout="page"][data-division-id="${divisionId}"]`);
   await expect(content).toBeVisible({ timeout: 20_000 });
   await expect(content.locator('[data-field="entrant_kind"]')).toBeVisible({ timeout: 20_000 });
-  return page.getByRole("dialog").filter({ has: content });
+  return content;
 }
 
 /** The entrant-type select's options as the browser holds them: value, label, disabled. */
@@ -147,7 +150,7 @@ test("a division narrowed after its registration was set up: the public card clo
     await anon.getByRole("button", { name: /^accept$/i }).click({ timeout: 3000 }).catch(() => {});
     await anon.locator("#reg-who-name").fill(`Kinds Visitor ${TAG}`, { timeout: 20_000 });
     await anon.locator("#reg-who-email").fill(`delivered+kinds-${TAG}@resend.dev`, { timeout: 20_000 });
-    await anon.getByRole("button", { name: /^next$/i }).click({ timeout: 20_000 });
+    await anon.getByTestId("reg-next").click({ timeout: 20_000 });
   };
   // The card is the INNERMOST rounded box holding the division's heading (the step's own panel is one too).
   const cardOf = (name: string) =>
@@ -240,9 +243,9 @@ test("a division narrowed after its registration was set up: the public card clo
     await expect(hint).toHaveCount(0);
     await panel.locator('[data-action="save"]').click();
     await expect.poll(() => puts, { timeout: 20_000 }).toBe(1);
-    await expect(page.locator(`[data-registration-hub-config-panel][data-division-id="${narrowedId}"]`)).toHaveCount(0, {
-      timeout: 20_000,
-    });
+    // The page stays (a tab, since B7 T24) and says it saved; the row it changed is on the Settings tab.
+    await expect(panel.locator('[data-config-status="clean"]')).toBeVisible({ timeout: 20_000 });
+    await page.getByTestId("reg-hub-tab-settings").click();
     const saved = await apiJson<{ entrant_kind: string }>(request, `/api/v1/divisions/${narrowedId}/registration-settings`, "GET");
     expect(saved.data?.entrant_kind).toBe("individual");
     await expect(flagOf(narrowedId)).toHaveCount(0, { timeout: 20_000 });

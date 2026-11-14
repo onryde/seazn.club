@@ -26,8 +26,16 @@ export interface RegistrationPromotedArgs {
   timeZone?: string | null;
   /** Offline divisions: resolved cash/bank instructions. */
   paymentInstructions?: string | null;
+  /** The reference to quote for THIS entry (`entryReferenceOf`, lib/ref-code.ts; B5 T18): this mail is always about one entry. Printed in the
+   *  reference line, and fills {{reference}} in the instructions. Not the status link's: `refStatusUrl` resolves by the CART's reference. */
   refCode?: string | null;
   refStatusUrl?: string | null;
+  /** The division the promotion SEATED the entry in, or null when it still waits (walk-fix F2). Only a free promotion on a
+   *  division with automatic approval seats (`promotionConfirmsRow`, waitlist.ts: the row is confirmed in the same transaction),
+   *  so the mail says "you're in"; a free one on manual approval stays pending, and says the organiser will confirm it. Read
+   *  only when nothing is owed: a fee never seats at promotion, and its panel says what to do. Required, so a caller cannot
+   *  leave the state out and fall back to the waiting sentence. */
+  seatedIn: string | null;
 }
 
 /** A waitlist spot opened (spec §2): the registrant is pending again — card
@@ -61,7 +69,11 @@ export function registrationPromotedTemplate(
           t(dict, "registrationPromoted.feePanelTitle", { amount }),
           instructions ?? t(dict, "registrationPromoted.contactOrganiser"),
         ) + (detailsUrl ? button(t(dict, "registrationPromoted.viewDetails"), detailsUrl) : "")
-      : paragraph(t(dict, "registrationPromoted.noPayment"));
+      : paragraph(
+          opts.seatedIn !== null
+            ? t(dict, "registrationPromoted.confirmed", { divisionName: escapeHtml(opts.seatedIn) })
+            : t(dict, "registrationPromoted.noPayment"),
+        );
 
   const nextStepText = card
     ? t(dict, "registrationPromoted.textFee", { amount }) +
@@ -76,7 +88,9 @@ export function registrationPromotedTemplate(
         "\n" +
         (instructions ?? t(dict, "registrationPromoted.contactOrganiser")) +
         (detailsUrl ? "\n\n" + t(dict, "registrationPromoted.textViewDetails") + "\n" + detailsUrl : "")
-      : t(dict, "registrationPromoted.noPayment");
+      : opts.seatedIn !== null
+        ? t(dict, "registrationPromoted.confirmed", { divisionName: opts.seatedIn })
+        : t(dict, "registrationPromoted.noPayment");
 
   const subject = t(dict, "registrationPromoted.subject", {
     competitionName: opts.competitionName,

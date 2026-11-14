@@ -11,6 +11,7 @@ import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harn
 import { joinLinkPath } from "@/lib/join-link";
 import { t } from "@/lib/i18n-runtime";
 import uiEn from "@/dictionaries/en/ui.json";
+import { compileClasses } from "@/components/v2/__tests__/_compiled-css";
 import { InviteActions, InviteTeammates } from "../invite-teammates";
 
 const ORIGIN = "https://seazn.test";
@@ -303,5 +304,155 @@ describe("InviteTeammates — the block", () => {
     stubBrowser({ canShare: false });
     expect(mount({ ...BLOCK, slots: BLOCK.slots.map((s) => ({ ...s, joined: true })), generic: false }).tree()).toEqual([]);
     expect(mount({ ...BLOCK, slots: [], generic: false }).tree()).toEqual([]);
+  });
+});
+
+// B4 T16 (spec §5.4) — the block at 320. What a node-env harness CAN see is the class contract that produces the layout; the real
+// paint (widths, where the chip lands, that nothing leaves the card) was measured in a browser at 320/768/1280 in en/nl/fr/es with a
+// 43-character name (see the commit message). The card is `overflow-hidden`, so an overflow here never shows as page scroll: it is
+// CLIPPED, which is exactly what the seven-width no-horizontal-scroll e2e cannot see.
+const allActionsOf = (island: Island) => island.tree().filter((e) => e.type === InviteActions);
+
+describe("InviteTeammates — layout at 320 (class contract)", () => {
+  // A 43-character name (spaced) and a 43-character name with no break opportunity at all: the realistic worst cases for a
+  // row that holds a name, a status chip and two 44px buttons in 222px.
+  const SPACED = "Maria-Alexandra Featherstonehaugh Beaumonte";
+  const TOKEN = "Featherstonehaughwetherspoonsmythejohnsonxx";
+  const BLOCK = {
+    kind: "team" as "team" | "pair",
+    entryName: "Team Alpha",
+    divisionName: "Mixed Doubles",
+    orgSlug: "riverside",
+    competitionSlug: "summer-smash",
+    joinCode: "SZ-ABCD-EF23",
+    slots: [
+      { id: "p1", name: "Sam Captain", joined: true },
+      { id: "p2", name: SPACED, joined: false },
+      { id: "p3", name: TOKEN, joined: false },
+    ],
+    generic: true,
+  };
+  type Node = ReturnType<Island["tree"]>[number];
+  const has = (el: Node, token: string) => String(propsOf(el).className ?? "").split(/\s+/).includes(token);
+  const mount = () => renderIsland(InviteTeammates, BLOCK);
+  /** The elements from the block's root down to `target`, root first and `target` last; null when `target` is not under it. */
+  function pathTo(from: unknown, target: Node, trail: Node[] = []): Node[] | null {
+    if (Array.isArray(from)) {
+      for (const child of from) {
+        const found = pathTo(child, target, trail);
+        if (found) return found;
+      }
+      return null;
+    }
+    if (!from || typeof from !== "object" || !("props" in from)) return null;
+    const el = from as Node;
+    const here = [...trail, el];
+    return el === target ? here : pathTo(propsOf(el).children, target, here);
+  }
+  const names = (island: Island) => island.tree().filter((e) => e.type === "span" && /-slot-\d+$/.test(String(propsOf(e).id ?? "")));
+  const genericText = (island: Island) => island.tree().find((e) => e.type === "p" && /-generic$/.test(String(propsOf(e).id ?? "")))!;
+  const rows = (island: Island) => island.tree().filter((e) => propsOf(e)["data-invite-slot"] || propsOf(e)["data-invite-generic"]);
+
+  beforeEach(() => stubBrowser({ canShare: false }));
+
+  it("every row (each roster slot AND the general link) wraps, so a long name sends its chip and buttons to the next line instead of squeezing the name (anti-vacuity: 3 slots + 1 general)", () => {
+    const found = rows(mount());
+    expect(found, "3 slot rows + the general row").toHaveLength(4);
+    for (const row of found) expect(has(row, "flex-wrap"), String(propsOf(row).className)).toBe(true);
+  });
+
+  it("min-w-0 on the WHOLE chain from each name up to the block's root (li, ul, section, and the name's own cluster), so nothing in it can hold the row wider than the card", () => {
+    const island = mount();
+    const root = island.tree()[0]!;
+    let checked = 0;
+    const tags = new Set<string>();
+    for (const target of [...names(island), genericText(island)]) {
+      const path = pathTo(root, target);
+      expect(path, "the name is reachable from the root").not.toBeNull();
+      expect(path![0], "the chain starts at the block's root").toBe(root);
+      for (const ancestor of path!.slice(0, -1)) {
+        expect(has(ancestor, "min-w-0"), `<${String(ancestor.type)} class="${String(propsOf(ancestor).className)}"> sits above a name and lacks min-w-0`).toBe(true);
+        tags.add(String(ancestor.type));
+        checked += 1;
+      }
+    }
+    expect(names(island), "3 slot names").toHaveLength(3);
+    expect(checked, "ancestors checked").toBeGreaterThan(0);
+    expect([...tags].sort(), "the chain really passed through the list, a row and the section").toEqual(expect.arrayContaining(["li", "section", "ul"]));
+  });
+
+  it("a name WRAPS (never truncates: it is how the captain tells whose link this is) and can never widen its row: min-w-0 + max-w-full + break-words", () => {
+    const island = mount();
+    const found = names(island);
+    expect(found).toHaveLength(3);
+    for (const name of found) {
+      for (const token of ["min-w-0", "max-w-full", "break-words"]) expect(has(name, token), `${textOf(name)} lacks ${token}`).toBe(true);
+      expect(has(name, "truncate"), "a truncated name would hide whose link it is").toBe(false);
+    }
+    expect(found.map((n) => textOf(n))).toEqual(["Sam Captain", SPACED, TOKEN]);
+  });
+
+  it("the name's cluster (and the general link's text) holds a 12rem floor, so the buttons drop under it on a phone rather than leaving the name ~130px; `grow`, never `flex-1`, so flex-1's own 0% basis can never outrank basis-48", () => {
+    const island = mount();
+    const root = island.tree()[0]!;
+    const clusters = names(island).map((name) => pathTo(root, name)!.at(-2)!);
+    expect(clusters, "one cluster per slot row").toHaveLength(3);
+    for (const el of [...clusters, genericText(island)]) {
+      for (const token of ["grow", "basis-48", "min-w-0"]) expect(has(el, token), `${String(propsOf(el).className)} lacks ${token}`).toBe(true);
+      expect(has(el, "flex-1"), "flex-1 sets its own flex-basis").toBe(false);
+      expect(has(el, "basis-32"), "the old 8rem floor").toBe(false);
+    }
+  });
+
+  it("both status chips can wrap inside their own pill rather than run past the row: max-w-full (anti-vacuity: one joined chip, two not-joined)", () => {
+    const chips = mount().tree().filter((e) => e.type === "span" && has(e, "rounded-full"));
+    const joined = chips.filter((c) => has(c, "bg-emerald-50"));
+    const waiting = chips.filter((c) => has(c, "bg-amber-50"));
+    expect(joined, "Sam").toHaveLength(1);
+    expect(waiting, "the two still to join").toHaveLength(2);
+    for (const chip of chips) {
+      expect(has(chip, "max-w-full"), String(propsOf(chip).className)).toBe(true);
+      expect(has(chip, "shrink-0"), "the pill keeps its own width until the cap").toBe(true);
+    }
+  });
+
+  it("the confirmation under the block breaks a name that has no space in it: 'Copied <43 unbroken characters>'s link' cannot leave the card", () => {
+    const island = mount();
+    (propsOf(allActionsOf(island)[1]!).onCopied as () => void)();
+    const shown = island.tree().find((e) => e.type === "p" && propsOf(e)["aria-hidden"] === "true")!;
+    expect(textOf(shown), "the copied line names the 43-character token").toContain(TOKEN);
+    expect(has(shown, "break-words"), String(propsOf(shown).className)).toBe(true);
+  });
+
+  it("the block wears the status page's card frame (rounded-xl, a zinc-200 hairline) and a sentence-case display heading like 'What happens next', not the all-caps eyebrow", () => {
+    const island = mount();
+    const root = island.tree()[0]!;
+    for (const token of ["rounded-xl", "border", "border-zinc-200", "bg-canvas", "ph-no-capture"]) expect(has(root, token), `root lacks ${token}`).toBe(true);
+    const heading = island.tree().find((e) => e.type === "h4")!;
+    expect(textOf(heading)).toBe(t(uiEn, "register.status.invite.heading"));
+    expect(has(heading, "font-display")).toBe(true);
+    expect(has(heading, "uppercase")).toBe(false);
+  });
+
+  it("the Copy / Share group wraps and may shrink to the row (so 'Copier le lien' + 'Partager' fall onto two lines, not past the card)", () => {
+    const actions = renderIsland(InviteActions, ACTIONS).tree()[0]!;
+    for (const token of ["flex-wrap", "min-w-0"]) expect(has(actions, token), token).toBe(true);
+  });
+
+  it("every utility the block and its buttons actually render compiles to a rule (a typo'd utility compiles to nothing and the layout silently reverts)", async () => {
+    stubBrowser({ canShare: true, clipboardBlocked: true });
+    const block = renderIsland(InviteTeammates, BLOCK, undefined, { hydrate: true });
+    const buttons = renderIsland(InviteActions, ACTIONS, undefined, { hydrate: true });
+    await (propsOf(buttons.tree().find((e) => e.type === "button" && textOf(e) === COPY)!).onClick as () => Promise<void>)();
+    (propsOf(allActionsOf(block)[1]!).onCopied as () => void)();
+    // `ph-no-capture` is PostHog's marker, not a utility; everything else is Tailwind.
+    const used = [...new Set([...block.tree(), ...buttons.tree()].flatMap((e) => String(propsOf(e).className ?? "").split(/\s+/)).filter((c) => c && c !== "ph-no-capture"))];
+    expect(used.length, "tokens checked").toBeGreaterThan(30);
+    expect(used, "the by-hand link fallback was drawn too").toContain("break-all");
+    expect(used, "the confirmation line was drawn too").toContain("break-words");
+    const compiled = await compileClasses(used);
+    const dead = used.filter((c) => Object.keys(compiled.get(c) ?? {}).length === 0);
+    expect(dead, "utilities that compile to nothing").toEqual([]);
+    expect(compiled.get("basis-48")!["flex-basis"], "12rem, read from the theme's spacing").toMatch(/48/);
   });
 });

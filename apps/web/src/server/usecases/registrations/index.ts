@@ -20,13 +20,14 @@ import "server-only";
 //
 //   types                the row shapes, the division context and the SQL handle types the siblings share; types only
 //   helpers              pure helpers: token prefix and hash, fee math, #402 link policy, form answers
-//   lookups              shared loaders: settings, division context, registration rows by token / ref / org, token match
+//   lookups              shared loaders: settings, division context (and its projection from the submit's own read), registration rows by token / ref / org, token match
 //   people               the person behind a registration: lookup / create / reconcile, and claim invites
 //   materialise          confirmed entry -> entrant: materialise, join an existing entrant, clear the expiry
-//   waitlist             waitlist promotion: the seat gate, promote the oldest, the promoted notice
+//   waitlist             waitlist promotion: the queue order and a place in it (sibling-only), the move back to its end (returnToWaitlist, sibling-only), the seat gate, promote the oldest, the promoted notice
 //   mail                 registration mail: cart confirmation (submit, resend) and the payment reminder message
-//   lifecycle-mail       the registrant's lifecycle mails (payment received, approved, released, withdrawn by the organiser, joined, rejected, promotion lapsed): one queue producer per kind
+//   lifecycle-mail       the registrant's lifecycle mails (payment received, approved, released, withdrawn by the organiser, joined, rejected, promotion lapsed, promotion skipped): one queue producer per kind
 //   settings             organiser settings (defaults, get / put) and the public register-panel info
+//   places-left          the panel's places-left count, against submit's cap min(capacity, plan limit); pure, sibling-only
 //   checkout             minting and resuming a Stripe checkout for a registration or a cart
 //   pay-token            the player payment page's token: mint, record, issue a link, resolve a token to its entry
 //   pay-page             the player payment page's document: what /r/pay/<token> shows, decided by an ordered state table
@@ -37,9 +38,11 @@ import "server-only";
 //   withdraw             withdrawal core shared by the public and organiser paths, and the solo placement release
 //   public-status        token- and ref-gated public views: status, cart, public withdraw
 //   group-status         the group (cart) read model behind the /r/[ref] status page
+//   status-facts         what the status page states beyond the cart: the one venue a competition's published fixtures share, how each entry settled (card / offline / waived); the SettledBy type is re-exported, the rest is sibling-only
 //   sweep                the hourly pay-window sweep: reminders, expiries, promotions
 //   list                 organiser list read and the solo-pool capacity helpers it shares
 //   organiser-actions    organiser actions: confirm, mark paid, waive, remind, waitlist, withdraw, refund
+//   reminder-window      the payment-reminder cap's window: one SQL count read by the press (cap) and the hub row; sibling-only
 //   csv-ics              files: the organiser CSV export and the registrant .ics attachment
 
 export type {
@@ -49,6 +52,7 @@ export type {
   RegistrationPlayerRow,
   RegistrationWithGroupRow,
   DivisionCtx,
+  KnownCart,
 } from "./types";
 export {
   REGISTRATION_TOKEN_PREFIX,
@@ -68,6 +72,7 @@ export {
   loadSettings,
   audit,
   divisionCtx,
+  knownCtxOf,
   fallbackOrigin,
   windowOpen,
   orgReg,
@@ -137,6 +142,7 @@ export {
 export type { PublicStatusView, PublicRefView, PublicCartEntryView, PublicCartView } from "./public-status";
 export { groupByRef, groupById } from "./group-status";
 export type { GroupEntryPlayerView, GroupEntryView, GroupStatusView } from "./group-status";
+export type { SettledBy } from "./status-facts";
 export { sweepRegistrations } from "./sweep";
 export { rosterCapExpr, effectivePoolDeadline, soloPoolIsFull, listRegistrations } from "./list";
 export type { ListRegistrationsFilters, RegistrationListRow } from "./list";

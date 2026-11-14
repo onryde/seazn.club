@@ -1,9 +1,10 @@
 import "server-only";
-// Waitlist promotion: the seat gate, promote the oldest, the promoted notice (see ./index.ts).
+// Waitlist promotion: the queue order and a place in it, the seat gate, promote the oldest, the promoted notice (see ./index.ts).
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { SPOT_HOLDERS } from "@/lib/registration-status";
 import { resolveVenueTz } from "@/lib/tz";
+import { entryReferenceOf } from "@/lib/ref-code";
 import { registrationPromotedEmail } from "@/lib/email";
 import { deferred } from "@/lib/deferred";
 import { dispatchNow, enqueueEmailOnce, expiryWithin, recipientLocale } from "@/server/email-outbox";
@@ -14,10 +15,56 @@ import { isLichessRosterRefusal } from "../external-accounts";
 import { openRegistrationSeatGate, type RegistrationSeatGate, type SeatGate } from "../online-seat-gate";
 import { loadEntrantShape } from "../entrant-shape";
 import { divisionTakesKind } from "@/lib/division-entrant-kinds";
-import type { Tx, RegistrationSettingsRow, RegistrationWithGroupRow, DivisionCtx } from "./types";
-import { regGroupCols, loadSettings } from "./lookups";
-import { materialise } from "./materialise";
+import type { AnySql, Tx, RegistrationSettingsRow, RegistrationWithGroupRow, DivisionCtx } from "./types";
+import { divisionNameOf, regGroupCols, loadSettings } from "./lookups";
+import { clearExpiresIfNoLongerNeeded, materialise } from "./materialise";
 import { issuePayLink, recordPayToken } from "./pay-token";
+import { queueRegistrationPromotionSkippedMail } from "./lifecycle-mail";
+
+/** The waitlist's queue order, the ONE statement of it: oldest first by `coalesce(waitlisted_at, created_at)`, then `id` (V378/RS007 -
+ *  see `promoteOldestWaitlisted`'s doc comment for why a lapsed promotion sorts by `waitlisted_at`). A comma list of `alias`'s keys,
+ *  so it reads as an `order by` and, in parentheses, as a row value. `promoteOldestWaitlisted` takes the queue by it and
+ *  `waitlistPositionSql` counts by it: the place a registrant is told is the place promotion takes. */
+function waitlistQueueKey(db: AnySql, alias: string) {
+  const r = db(alias);
+  return db`coalesce(${r}.waitlisted_at, ${r}.created_at), ${r}.id`;
+}
+
+/** A registration's 1-based place in its division's waitlist, or null when it is not waitlisted - one SQL expression over the row
+ *  aliased `alias` (registration redesign B3 T13). The count is of the waitlisted rows of the same division ahead of it in the queue
+ *  order promotion takes (`waitlistQueueKey`), so #1 is the next `promoteOldestWaitlisted` picks. Read by every surface that states a
+ *  place: the status page (`buildGroupStatusView`), the organiser list, the public status API and the confirmation mail. Before it,
+ *  the list and the API counted by `(created_at, id)` and told a lapsed promotion it was first while promotion had put it last.
+ *
+ *  Promotion also passes over a row another transaction holds (`skip locked`) or the seat gate refuses (an online division); those
+ *  keep their place here, as they do in the queue, which offers them the next freed spot. */
+export function waitlistPositionSql(db: AnySql, alias: string) {
+  const r = db(alias);
+  return db`case when ${r}.status = 'waitlisted' then (
+      select count(*)::int + 1 from registrations ahead
+      where ahead.division_id = ${r}.division_id and ahead.status = 'waitlisted'
+        and (${waitlistQueueKey(db, "ahead")}) < (${waitlistQueueKey(db, alias)})
+    ) else null end`;
+}
+
+/** Put a pending entry back on its division's waitlist, at the BACK of the queue: the ONE write for it (B4 fix round 2). Two paths
+ *  take an entry back - the sweep's lapse of an unpaid promotion (sweep.ts) and the organiser's move (`waitlistRegistration`,
+ *  organiser-actions.ts) - and the organiser's hand-kept copy had drifted from the lapse (B4 review m6). The write:
+ *  - `waitlisted_at = now()`: the queue key (`waitlistQueueKey`), so it sorts behind everyone already waiting (owner ruling, B3
+ *    review I1: the organiser's move joins the back too, as the lapse does).
+ *  - `promoted_at`, `promotion_expires_at` cleared: the promotion it held is taken back (the public status API reads promoted_at).
+ *  - `amount_cents` KEPT: a checkout minted before the move can still complete, and `confirmPaidRegistration`'s late branch refunds
+ *    that payment from this column (PR #677; sweep.ts's lapse explains the defect clearing it caused).
+ *  - the cart's shared pay-by date cleared when no other entry in the cart is still pending (`clearExpiresIfNoLongerNeeded`).
+ *  It decides nothing: the caller holds the row (locked, or read under the org's tenant) and has checked that it is pending. */
+export async function returnToWaitlist(tx: Tx, reg: { id: string; group_id: string }): Promise<void> {
+  await tx`
+    update registrations
+    set status = 'waitlisted', waitlisted_at = now(),
+        promoted_at = null, promotion_expires_at = null, updated_at = now()
+    where id = ${reg.id}`;
+  await clearExpiresIfNoLongerNeeded(tx, reg.group_id, reg.id);
+}
 
 /** RS012 ruling 1 — a status leaving SPOT_HOLDERS only frees a TEAM slot
  *  when the entry itself was ever counted as one; a solo sign-up
@@ -48,13 +95,15 @@ export function freesTeamSlot(row: { status: string; free_agent: boolean }): boo
  * the oldest-first pick.
  *
  * "Oldest" is `coalesce(waitlisted_at, created_at)`, not bare `created_at`
- * (V378/RS007). A row that has never lapsed has `waitlisted_at = null`, so
- * this is byte-for-byte the old ordering for every pre-existing waitlisted
- * row. A row `sweepRegistrations`' lapse branch just returned to the
- * waitlist carries a fresh `waitlisted_at = now()`, which sorts it BEHIND
+ * (V378/RS007). A row that joined the waitlist at submit has
+ * `waitlisted_at = null`, so it waits from its `created_at`. A row
+ * `sweepRegistrations`' lapse branch just returned to the waitlist - or the
+ * organiser just moved there (`waitlistRegistration`, B3 review I1) -
+ * carries a fresh `waitlisted_at = now()`, which sorts it BEHIND
  * every row still waiting on its original `created_at` — the tail, not a
  * reclaimed place in line — even though its OWN `created_at` may be far
- * older than theirs.
+ * older than theirs. The order is `waitlistQueueKey`, the same one
+ * `waitlistPositionSql` counts a registrant's place by.
  */
 /**
  * REVIEW FIX (money-path defect #5) — `excludeId` is optional, additive, and
@@ -92,10 +141,10 @@ export async function promoteOldestWaitlisted(
   const skipped: string[] = excludeId ? [excludeId] : [];
   for (;;) {
     const [picked] = await tx<{ id: string; group_id: string; free_agent: boolean }[]>`
-      select id, group_id, free_agent from registrations
-      where division_id = ${divisionId} and status = 'waitlisted'
-        ${skipped.length > 0 ? tx`and id <> all(${skipped})` : tx``}
-      order by coalesce(waitlisted_at, created_at), id limit 1
+      select r.id, r.group_id, r.free_agent from registrations r
+      where r.division_id = ${divisionId} and r.status = 'waitlisted'
+        ${skipped.length > 0 ? tx`and r.id <> all(${skipped})` : tx``}
+      order by ${waitlistQueueKey(tx, "r")} limit 1
       for update skip locked`;
     if (!picked) return null;
     if (!seatGate) return promoteWaitlistedRow(tx, picked.id, picked.group_id, settings);
@@ -128,20 +177,40 @@ export async function promoteOldestWaitlisted(
 
 /** A waitlisted registrant an automatic promotion passed over because the seat gate refused them: logged, and written to the
  *  competition's audit ledger (`registration.promotion_skipped`, with the gate's own code) so the organiser can see WHO was skipped
- *  and why, instead of finding a spot taken by someone behind them in the queue with nothing to explain it. No one is notified. */
+ *  and why, instead of finding a spot taken by someone behind them in the queue with nothing to explain it. Walk-fix F16: the
+ *  registrant is told too - one `registration_promotion_skipped` mail, queued in this same transaction and keyed on its clock - and the
+ *  organiser's row and the registrant's status card read the ledger row back (`promotionSkippedAtSql`). */
 async function recordSkippedPromotion(tx: Tx, divisionId: string, registrationId: string, refusal: HttpError): Promise<void> {
   log.warn(
     { registrationId, divisionId, code: refusal.code },
     "registrations: waitlist promotion skipped a registrant who cannot be seated on an online division yet",
   );
-  const [division] = await tx<{ competition_id: string; org_id: string }[]>`
-    select competition_id, org_id from divisions where id = ${divisionId}`;
+  const [division] = await tx<{ competition_id: string; org_id: string; skipped_at: Date }[]>`
+    select competition_id, org_id, now() as skipped_at from divisions where id = ${divisionId}`;
   if (!division) return;
   await audit(tx, division.competition_id, division.org_id, "registration.promotion_skipped", {
     registration_id: registrationId,
     division_id: divisionId,
     code: refusal.code ?? null,
   }, null);
+  await queueRegistrationPromotionSkippedMail(tx, { registrationId, skippedAt: division.skipped_at });
+}
+
+/** When an automatic promotion last passed the row aliased `alias` over (`registration.promotion_skipped`, recordSkippedPromotion) IN ITS
+ *  CURRENT WAIT, else null - one SQL expression, the ONE statement of "this entry was skipped" (walk-fix F16). Read by the organiser's
+ *  row (`RegistrationListRow.promotion_skipped_at`: the "Skipped on <date>: Lichess wasn't linked" chip) and the registrant's status card
+ *  (`GroupEntryView.promotion_skipped_at`: why, and the Link step). Null unless the row is waitlisted, and a skip older than the wait it is
+ *  in (`coalesce(waitlisted_at, created_at)`, the queue key's own start: an entry promoted and put back, or moved back by the organiser,
+ *  starts a new wait) is not this wait's. */
+export function promotionSkippedAtSql(db: AnySql, alias: string) {
+  const r = db(alias);
+  return db`case when ${r}.status = 'waitlisted' then (
+      select max(ev.created_at) from competition_events ev
+       where ev.competition_id = (select d.competition_id from divisions d where d.id = ${r}.division_id)
+         and ev.type = 'registration.promotion_skipped'
+         and ev.payload->>'registration_id' = ${r}.id::text
+         and ev.created_at >= coalesce(${r}.waitlisted_at, ${r}.created_at)
+    ) else null end`;
 }
 
 /** Whether promoting a waitlisted entry under these settings SEATS it at once: a free entry on an auto-approval division confirms
@@ -370,6 +439,10 @@ export async function notifyPromoted(
     // session only when the player presses Pay (and answers Connect being off itself).
     const link = promoted.amount_cents > 0 ? issuePayLink(origin) : null;
     const locale = await recipientLocale(sql, { pick: promoted.locale, userId: promoted.user_id, orgDefault: ctx.default_locale });
+    // Walk-fix F2: a free promotion on automatic approval has already SEATED the entry (`promotionConfirmsRow` above confirms it
+    // in the promotion's own transaction), so the mail says so and names the division; anything else still waits. Read off the
+    // row's status, the one fact that is true whichever door promoted it. Only then is the division's name read.
+    const seatedIn = promoted.status === "confirmed" ? await divisionNameOf(sql, promoted.division_id) : null;
     const content = await registrationPromotedEmail(
       {
         orgName: ctx.org_name,
@@ -394,8 +467,10 @@ export async function notifyPromoted(
           method === "offline" && promoted.amount_cents > 0
             ? (settings?.payment_instructions ?? ctx.payment_instructions)
             : null,
-        refCode: promoted.ref_code,
+        // B5 T18: the mail is always about ONE entry, so it quotes THAT entry's reference; the status link below resolves by the CART's.
+        refCode: entryReferenceOf(promoted),
         refStatusUrl: promoted.ref_code ? `${origin}/r/${promoted.ref_code}` : null,
+        seatedIn,
       },
       locale,
     );

@@ -203,7 +203,7 @@ test("RS006 — organiser settings, team entry, Stripe Connect payment", async (
     await anon.locator("#reg-who-dob").fill("1994-03-22");
     await anon.screenshot({ path: `${SHOTS}/2-who.png`, fullPage: true });
     await anon.waitForTimeout(1200);
-    await anon.getByRole("button", { name: "Next", exact: true }).click();
+    await anon.getByTestId("reg-next").click();
 
     // ---- BEAT 3 — ENTRIES: pick the paid TEAM division -------------------
     await expect(anon.getByRole("heading", { name: "Choose your divisions", exact: true })).toBeVisible({
@@ -222,7 +222,7 @@ test("RS006 — organiser settings, team entry, Stripe Connect payment", async (
     await anon.waitForTimeout(700);
     await anon.screenshot({ path: `${SHOTS}/3-entries-team-added.png`, fullPage: true });
     await anon.waitForTimeout(1200);
-    await anon.getByRole("button", { name: "Next", exact: true }).click();
+    await anon.getByTestId("reg-next").click();
 
     // ---- BEAT 4 — DETAILS: name the team, build the roster ---------------
     await expect(anon.getByRole("heading", { name: "Player details", exact: true })).toBeVisible({ timeout: 20_000 });
@@ -232,9 +232,9 @@ test("RS006 — organiser settings, team entry, Stripe Connect payment", async (
     // PLAYING captain's roster opens with their own row (named, and picked as
     // "which player are you"), so a name already on it is not added again.
     // Each row's name input is reachable by its aria-label,
-    // "Player <n> — Your name" (roster-table.tsx).
+    // "Player <n> — Full name" (roster-table.tsx).
     const roster = ["Priya Raman", "Arun Menon", "Sofia Alves"];
-    const nameBoxes = anon.getByRole("textbox", { name: /Player \d+ — Your name/ });
+    const nameBoxes = anon.getByRole("textbox", { name: /Player \d+ — Full name/ });
     for (const name of roster) {
       const onRoster = await nameBoxes.evaluateAll((els) => els.map((el) => (el as HTMLInputElement).value.trim()));
       if (onRoster.includes(name)) continue;
@@ -255,7 +255,7 @@ test("RS006 — organiser settings, team entry, Stripe Connect payment", async (
 
     await anon.screenshot({ path: `${SHOTS}/4-details-roster.png`, fullPage: true });
     await anon.waitForTimeout(1500);
-    await anon.getByRole("button", { name: "Next", exact: true }).click();
+    await anon.getByTestId("reg-next").click();
 
     // ---- BEAT 5 — CONSENT ------------------------------------------------
     await anon.waitForTimeout(900);
@@ -263,20 +263,20 @@ test("RS006 — organiser settings, team entry, Stripe Connect payment", async (
     if (await privacy.count()) await privacy.check();
     await anon.screenshot({ path: `${SHOTS}/5-consent.png`, fullPage: true });
     await anon.waitForTimeout(1200);
-    await anon.getByRole("button", { name: "Next", exact: true }).click();
+    await anon.getByTestId("reg-next").click();
 
     // ---- BEAT 6 — REVIEW: the subtotal is real money now -----------------
     await anon.waitForTimeout(1200);
     await anon.screenshot({ path: `${SHOTS}/6-review-with-fee.png`, fullPage: true });
     await anon.waitForTimeout(2000);
 
-    // A paid, card-enabled cart labels the submit "Continue to payment — £25.00"
-    // (register.submit.card). The free label is "Enter the competition"; the
-    // pay-later label is "Enter — {fee}". Match all three.
-    await anon
-      .getByRole("button", { name: /Continue to payment|Enter the competition|Enter —/ })
-      .first()
-      .click();
+    // A paid, card-enabled cart labels the submit "Pay £25.00 and enter" (register.submit.pay). The free label is "Enter the
+    // competition"; the pay-later label is "Enter — {fee}". The words change with the cart, so the button is found by its
+    // testid, which is on the one submit button of the review step. Once clicked the button reads "Saving your place…" and then
+    // "Opening secure payment…" (register.submit.saving / .openingPayment, disabled both times), so this locator is for the
+    // click only and the wait that follows is on the navigation, never on the label. (Same for the matching click in the other
+    // registration walkthroughs: rs007-invite-pay-cancel, rs007-money-matrix, rs007-registration-journey, rs010, rs012.)
+    await anon.getByTestId("reg-submit").click();
 
     // ---- BEAT 7 — Stripe Connect hosted checkout -------------------------
     await anon.waitForURL(/checkout\.stripe\.com/, { timeout: 60_000 });

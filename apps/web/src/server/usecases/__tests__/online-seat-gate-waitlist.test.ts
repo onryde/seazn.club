@@ -14,8 +14,10 @@
 //     happens - the organiser's approve / mark-paid, covered in online-seat-gate-doors.test.ts.
 //   * The organiser's EXPLICIT promote of one named entry is a door, not an automatic promotion: it refuses (doors file).
 //
-//   * A SKIP IS NOT SILENT: each one writes a `registration.promotion_skipped` audit row carrying the gate's own code (and mails
-//     nobody), so an organiser can see who was passed over and why.
+//   * A SKIP IS NOT SILENT: each one writes a `registration.promotion_skipped` audit row carrying the gate's own code, so an organiser
+//     can see who was passed over and why. Walk-fix F16 (ruling): it is TOLD, too - one `registration_promotion_skipped` mail to the
+//     entry's contact per act that passed them over (they keep their place; linking Lichess makes the next place theirs), and the
+//     organiser's row and the registrant's status card say so while the entry waits.
 //   * The cheap net first: the gate's prelude already read the queue's links, so a registrant who cannot play is passed over BEFORE the
 //     attempted seat (no entrant, no person, no savepoint); the savepoint stays under it for a seat the pre-filter let through.
 //   * Only a gate refusal is skipped. Any other failure of the attempted seat fails the whole call.
@@ -93,6 +95,20 @@ vi.mock("../external-accounts", async (importOriginal) => {
   };
 });
 
+// Final review m1 renders the two surfaces that state a skip from the real reads: the status card's Cancel reads the router and the
+// confirm dialog at render time, which a server test has neither of (the status page's own tests stub the same two).
+vi.mock("next/navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/navigation")>()),
+  useRouter: () => ({ refresh: () => {} }),
+}));
+vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => async () => false }));
+
+import { createElement, Fragment } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import uiEn from "@/dictionaries/en/ui.json";
+import type { Dict } from "@/lib/i18n-constants";
+import { EntryCard } from "@/app/(public)/live/[orgSlug]/[competitionSlug]/register/status/entry-card";
+import { renderRegistrantStatusCell } from "@/components/registration-hub-registrant-table";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -103,11 +119,14 @@ import { openRegistrationSeatGate } from "../online-seat-gate";
 import { promoteFromWaitlist } from "../registration-approval";
 import { submitRegistrationGroup } from "../registration-submit";
 import {
+  groupById,
+  listRegistrations,
   loadSettings,
   promoteOldestWaitlisted,
   promoteWaitlistedRow,
   putRegistrationSettings,
   sweepRegistrations,
+  waitlistRegistration,
   withdrawRegistrationOrganiser,
 } from "../registrations";
 import { seedRegistration } from "./_registration-fixtures";
@@ -407,7 +426,7 @@ const skipsOf = async (competitionId: string): Promise<{ registration: string; c
     .sort((x, y) => x.registration.localeCompare(y.registration));
 
 describe.skipIf(!HAS_DB)("a skipped registrant is on the record", () => {
-  it("each skip writes a promotion_skipped row with the gate's own code, mails nobody, and a promotion that went through writes none", async () => {
+  it("each skip writes a promotion_skipped row with the gate's own code, and a promotion that went through writes none", async () => {
     const r = await rig(true);
     const [reconnect, unlinked, ok] = [await player(r, "identity-only"), await player(r, "none"), await player(r, "plays")];
     const [a, b, c] = [await enter(r, reconnect, "waitlisted"), await enter(r, unlinked, "waitlisted"), await enter(r, ok, "waitlisted")];
@@ -422,11 +441,11 @@ describe.skipIf(!HAS_DB)("a skipped registrant is on the record", () => {
         { registration: b, code: "LICHESS_LINK_REQUIRED", actor: null },
       ].sort((x, y) => x.registration.localeCompare(y.registration)),
     );
-    // Nobody is notified of a skip: the registrants passed over, and the ones not, are told nothing by it.
+    // The skip's mail is an OUTBOX row (walk-fix F16, below), never a direct send: nothing went out by the old path.
     const skippedAddresses = [await contactOf(a), await contactOf(b)];
     expect(
       mail.sent.filter((m) => skippedAddresses.includes(m.to as string)),
-      "no mail went to a skipped registrant",
+      "no direct send to a skipped registrant",
     ).toEqual([]);
   });
 
@@ -454,6 +473,184 @@ describe.skipIf(!HAS_DB)("a skipped registrant is on the record", () => {
     await withdrawRegistrationOrganiser(r.auth, holder);
 
     expect(await skipsOf(r.competitionId)).toEqual([]);
+  });
+});
+
+/** The skipped mails queued for the competition's entries: whose, to which address, under which once-key. */
+const skippedMailsOf = async (orgId: string): Promise<{ ref_id: string; recipient: string; dedupe_key: string }[]> =>
+  sql<{ ref_id: string; recipient: string; dedupe_key: string }[]>`
+    select ref_id, recipient, dedupe_key from email_outbox
+     where kind = 'registration_promotion_skipped' and org_id = ${orgId} order by created_at, ref_id`;
+
+/** What the organiser's row says (`RegistrationListRow.promotion_skipped_at`) for each of `ids`, null or a time. */
+const rowSkipsOf = async (r: Rig, ids: string[]): Promise<(Date | null)[]> => {
+  const rows = await listRegistrations(r.auth, r.divisionId, null);
+  return ids.map((id) => {
+    const row = rows.find((x) => x.id === id);
+    expect(row, `the organiser's list carries ${id}`).toBeDefined();
+    return row!.promotion_skipped_at;
+  });
+};
+
+/** What the registrant's status page says (`GroupEntryView.promotion_skipped_at`) for the entry its cart holds. */
+const cardSkipOf = async (cart: { id: string; token: string }): Promise<string | null> => {
+  const view = await groupById(cart.id, cart.token);
+  expect(view.entries, "premise: the cart holds one entry").toHaveLength(1);
+  return view.entries[0]!.promotion_skipped_at;
+};
+
+/** A waitlisted entry for `p`, with its cart's id and access token (the status page's key). */
+async function enterWithCart(r: Rig, p: SeedPlayer): Promise<{ id: string; cart: { id: string; token: string } }> {
+  const { registration, access_token } = await seedRegistration(
+    r.competitionId,
+    r.divisionId,
+    { fee_cents: 0, currency: "gbp", payment_method: "offline" },
+    { status: "waitlisted", displayName: "Entry " + randomUUID().slice(0, 6), contactEmail: `entry-${randomUUID().slice(0, 8)}@t.local` },
+  );
+  await sql`
+    insert into registration_players (registration_id, full_name, user_id, source)
+    values (${registration.id}, 'Player', ${p.userId}, 'captain_entered')`;
+  return { id: registration.id, cart: { id: registration.group_id, token: access_token } };
+}
+
+// Walk-fix F16 (ruling): the skip is TOLD. One mail per act that passed the entry over, to its contact (an online entry is personal), with the
+// Link step; the entry keeps its place. The organiser's row shows "Skipped on <date>: Lichess wasn't linked" and the registrant's waiting card says why,
+// while the entry waits - a skip from an earlier wait, or an entry since promoted, shows nothing.
+describe.skipIf(!HAS_DB)("walk-fix F16: a skip is told to the registrant and shown to the organiser", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it("each skip queues ONE skipped mail to that entry's contact, in the transaction that records it; the promoted entry gets none", async () => {
+    stubOutboxEnv();
+    const r = await rig(true);
+    try {
+      const [reconnect, unlinked, ok] = [await player(r, "identity-only"), await player(r, "none"), await player(r, "plays")];
+      const [a, b, c] = [await enter(r, reconnect, "waitlisted"), await enter(r, unlinked, "waitlisted"), await enter(r, ok, "waitlisted")];
+      const holder = await enter(r, null, "pending");
+
+      await withdrawRegistrationOrganiser(r.auth, holder);
+
+      expect((await statusOf(c)).status, "premise: C took the spot").toBe("confirmed");
+      const rows = await skippedMailsOf(r.auth.orgId);
+      expect(rows.map((m) => m.ref_id).sort(), "one mail for each skipped entry (both codes), none for C").toEqual([a, b].sort());
+      for (const m of rows) expect(m.recipient, "to the skipped entry's own contact").toBe(await contactOf(m.ref_id));
+      expect(await queueOf(r.divisionId), "they keep their places").toEqual([a, b]);
+    } finally {
+      await sql`delete from email_outbox where org_id = ${r.auth.orgId}`;
+    }
+  });
+
+  it("the SEQUENCE: a second freed spot that passes them again is a new skip and mails again; an empty queue mails nobody", async () => {
+    stubOutboxEnv();
+    const r = await rig(true);
+    try {
+      const empty = await enter(r, null, "pending");
+      await withdrawRegistrationOrganiser(r.auth, empty);
+      expect(await skippedMailsOf(r.auth.orgId), "an empty queue: no skip, no mail").toEqual([]);
+
+      const a = await enter(r, await player(r, "none"), "waitlisted");
+      const [h1, h2] = [await enter(r, null, "pending"), await enter(r, null, "pending")];
+      await withdrawRegistrationOrganiser(r.auth, h1);
+      expect((await skippedMailsOf(r.auth.orgId)).map((m) => m.ref_id), "premise: the first skip mailed once").toEqual([a]);
+      await withdrawRegistrationOrganiser(r.auth, h2);
+
+      const rows = await skippedMailsOf(r.auth.orgId);
+      expect(rows.map((m) => m.ref_id), "the second skip is told too").toEqual([a, a]);
+      expect(new Set(rows.map((m) => m.dedupe_key)).size, "under two once-keys: two skips, not one mail queued twice").toBe(2);
+      expect(await skipsOf(r.competitionId), "and the ledger agrees: two skips").toHaveLength(2);
+    } finally {
+      await sql`delete from email_outbox where org_id = ${r.auth.orgId}`;
+    }
+  });
+
+  it("the organiser's row and the status card say it while the entry waits - not before the skip, not once it is promoted", async () => {
+    const r = await rig(true);
+    const [first, second] = [await player(r, "none"), await player(r, "plays")];
+    const a = await enterWithCart(r, first);
+    const b = await enter(r, second, "waitlisted");
+    const [h1, h2] = [await enter(r, null, "pending"), await enter(r, null, "pending")];
+    expect(await rowSkipsOf(r, [a.id, b]), "before any skip: nothing on either row").toEqual([null, null]);
+    expect(await cardSkipOf(a.cart), "nor on the card").toBeNull();
+
+    await withdrawRegistrationOrganiser(r.auth, h1);
+    expect((await statusOf(b)).status, "premise: B was promoted over A").toBe("confirmed");
+    const [skippedRow, promotedRow] = await rowSkipsOf(r, [a.id, b]);
+    expect(skippedRow, "A's row says it was skipped").toBeInstanceOf(Date);
+    expect(promotedRow, "B, promoted, says nothing").toBeNull();
+    expect(await cardSkipOf(a.cart), "A's card says it too").not.toBeNull();
+
+    await reconnectLichess(first);
+    await withdrawRegistrationOrganiser(r.auth, h2);
+    expect((await statusOf(a.id)).status, "premise: A, linked now, took the next spot").toBe("confirmed");
+    expect(await rowSkipsOf(r, [a.id]), "promoted: the row no longer says skipped").toEqual([null]);
+    expect(await cardSkipOf(a.cart), "nor does the card").toBeNull();
+  });
+
+  // Final review m1: linking re-runs nothing (only the next freed place does), so after the player links - the remedy both surfaces
+  // offer - the row and the card still carry the skip. The words they render from these real reads are about that moment: dated and
+  // in the past tense, so they stay true. The expected date is written by Intl here, in the org's zone, not by the components.
+  it("after a LATER link, the row and the card keep the skip's time, and both render it dated and in the past tense", async () => {
+    const r = await rig(true);
+    const first = await player(r, "none");
+    const a = await enterWithCart(r, first);
+    const b = await enter(r, await player(r, "plays"), "waitlisted");
+    const holder = await enter(r, null, "pending");
+    await withdrawRegistrationOrganiser(r.auth, holder);
+    expect((await statusOf(b)).status, "premise: B was promoted over A").toBe("confirmed");
+    const [skippedAt] = await rowSkipsOf(r, [a.id]);
+    expect(skippedAt, "premise: A's row says it was skipped").toBeInstanceOf(Date);
+
+    await reconnectLichess(first);
+    expect((await statusOf(a.id)).status, "linking frees nothing: A still waits").toBe("waitlisted");
+
+    const row = (await listRegistrations(r.auth, r.divisionId, null)).find((x) => x.id === a.id)!;
+    expect(row.promotion_skipped_at, "the row keeps the skip's time").toEqual(skippedAt);
+    const view = await groupById(a.cart.id, a.cart.token);
+    const entry = view.entries[0]!;
+    expect(entry.promotion_skipped_at, "so does the card").not.toBeNull();
+    expect(new Date(entry.promotion_skipped_at!).getTime(), "the same moment").toBe(skippedAt!.getTime());
+
+    const tz = view.org_timezone;
+    const day = (month: "long" | "short") => new Intl.DateTimeFormat("en-GB", { timeZone: tz, day: "numeric", month }).format(skippedAt!);
+    const chip = renderToStaticMarkup(createElement(Fragment, null, renderRegistrantStatusCell(row, uiEn as Dict, tz))).replace(/&#x27;/g, "'");
+    expect(chip, "the organiser's chip").toContain(`Skipped on ${day("short")}: Lichess wasn't linked`);
+    const card = renderToStaticMarkup(
+      createElement(EntryCard, {
+        entry,
+        cart: { cart_size: view.cart_size, expires_at: view.expires_at, charges_enabled: view.charges_enabled, instructionsHtml: null, currency: view.currency, timezone: tz },
+        orgSlug: view.org_slug,
+        competitionSlug: view.competition_slug,
+        token: a.cart.token,
+        locale: "en",
+        ui: uiEn as Dict,
+      }),
+    ).replace(/&#x27;/g, "'");
+    expect(card, "the registrant's note").toContain(`A place opened on ${day("long")}, but your turn was skipped`);
+    expect(card).toContain("wasn't linked to play");
+    for (const html of [chip, card]) expect(html, "never the present tense").not.toMatch(/isn't linked|not linked to play yet|Lichess not linked/);
+  });
+
+  it("a skip from an EARLIER wait does not follow the entry back onto the waitlist", async () => {
+    const r = await rig(true);
+    const a = await enter(r, await player(r, "none"), "waitlisted");
+    const [h1, h2] = [await enter(r, null, "pending"), await enter(r, null, "pending")];
+    await withdrawRegistrationOrganiser(r.auth, h1);
+    expect(await rowSkipsOf(r, [a]), "premise: A was skipped while free places seat at once").not.toEqual([null]);
+
+    // The division takes a fee now: a promotion opens a pay window and seats nobody, so no gate is asked and A is promoted to pay.
+    await putRegistrationSettings(r.auth, r.divisionId, {
+      enabled: true, entrant_kind: "individual", fee_cents: 500, form_fields: [], opens_at: null, closes_at: null, capacity: null,
+      refund_lock_at: null, payment_method: "offline", approval: "auto", allow_free_agents: false,
+    });
+    await withdrawRegistrationOrganiser(r.auth, h2);
+    expect((await statusOf(a)).status, "premise: A was promoted to pay").toBe("pending");
+    // The organiser moves it back to the waitlist (the real move: the back of the queue, a new wait).
+    await waitlistRegistration(r.auth, a);
+    expect((await statusOf(a)).status, "premise: A waits again").toBe("waitlisted");
+
+    expect(await rowSkipsOf(r, [a]), "the old skip is not this wait's").toEqual([null]);
   });
 });
 

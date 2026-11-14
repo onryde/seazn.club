@@ -4,7 +4,7 @@
 // buildStepOrder with NO change to nextStepIndex/prevStepIndex, exactly as
 // the older "hypothetical" case below predicted.
 import { describe, expect, it } from "vitest";
-import { buildStepOrder, nextStepIndex, offersJoinCode, prevStepIndex, shouldCollapseEntries, stepFocusTransition } from "../steps";
+import { buildStepOrder, nextStepIndex, offersJoinCode, prevStepIndex, sharedClosesAt, shouldCollapseEntries, stepFocusTransition } from "../steps";
 
 describe("shouldCollapseEntries", () => {
   it("collapses only when exactly one OPEN division exists AND it needs nothing typed", () => {
@@ -127,5 +127,55 @@ describe("offersJoinCode (polish wave H)", () => {
     expect(offersJoinCode([ind, { open: true, entrant_kind: "pair" }])).toBe(true);
     expect(offersJoinCode([{ open: true, entrant_kind: "team" }, ind])).toBe(true);
     expect(offersJoinCode([ind, { open: false, entrant_kind: "team" }, { open: false, entrant_kind: "pair" }])).toBe(false);
+  });
+});
+
+// Registration redesign B2 T7 (spec FP10) — the page heading's closing line. Closing time is per DIVISION
+// (`registration_settings.closes_at`); the competition has none, so the heading may say "Registration closes X" only when every
+// OPEN division closes at the same instant. Empty case first: no open division answers "none", the same as a disagreement.
+describe("sharedClosesAt", () => {
+  const IN_NOV = "2026-11-30T23:59:00.000Z";
+  const IN_DEC = "2026-12-14T23:59:00.000Z";
+  const open = (closes_at: string | null) => ({ open: true, closes_at });
+  const closed = (closes_at: string | null) => ({ open: false, closes_at });
+
+  it("the empty case: no divisions, and no OPEN division, have no shared closing time", () => {
+    expect(sharedClosesAt([])).toBeNull();
+    expect(sharedClosesAt([closed(IN_NOV), closed(IN_NOV)])).toBeNull();
+  });
+
+  it("one open division with a closing time: that time", () => {
+    expect(sharedClosesAt([open(IN_NOV)])).toBe(IN_NOV);
+  });
+
+  it("open divisions that agree: the common time", () => {
+    expect(sharedClosesAt([open(IN_NOV), open(IN_NOV), open(IN_NOV)])).toBe(IN_NOV);
+  });
+
+  it("the same instant written two ways still agrees (a string compare would hide the line for no reason)", () => {
+    expect(sharedClosesAt([open("2026-11-30T23:59:00.000Z"), open("2026-12-01T00:59:00.000+01:00")])).toBe("2026-11-30T23:59:00.000Z");
+  });
+
+  it("open divisions that differ: null, whichever order they come in", () => {
+    expect(sharedClosesAt([open(IN_NOV), open(IN_DEC)])).toBeNull();
+    expect(sharedClosesAt([open(IN_DEC), open(IN_NOV)])).toBeNull();
+    expect(sharedClosesAt([open(IN_NOV), open(IN_NOV), open(IN_DEC)])).toBeNull();
+  });
+
+  it("a division with no closing time never closes, so a line naming a time would be false for it: null", () => {
+    expect(sharedClosesAt([open(null)])).toBeNull();
+    expect(sharedClosesAt([open(null), open(null)])).toBeNull();
+    expect(sharedClosesAt([open(IN_NOV), open(null)])).toBeNull();
+    expect(sharedClosesAt([open(null), open(IN_NOV)])).toBeNull();
+  });
+
+  it("closed divisions do not vote — only the ones a person can still enter count", () => {
+    expect(sharedClosesAt([open(IN_NOV), closed(IN_DEC)])).toBe(IN_NOV);
+    expect(sharedClosesAt([closed(null), open(IN_NOV), closed(IN_DEC), open(IN_NOV)])).toBe(IN_NOV);
+  });
+
+  it("an unreadable closing time is never shared (not even with itself)", () => {
+    expect(sharedClosesAt([open("not a date")])).toBeNull();
+    expect(sharedClosesAt([open("not a date"), open("not a date")])).toBeNull();
   });
 });

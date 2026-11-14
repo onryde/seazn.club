@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 import {
   duplicateContactIds,
   registrationPulse,
-  waitlistPositions,
   type DerivableReg,
 } from "../registration-derive";
 
@@ -63,27 +62,6 @@ describe("registrationPulse", () => {
       confirmed: 0, holding: 0, waitlisted: 0, capacity: 8,
       paidCents: 0, dueCents: 0, refundIncomplete: 0, disputed: 0, nextExpiry: null,
     });
-  });
-});
-
-describe("waitlistPositions", () => {
-  it("orders 1-based by created_at among waitlisted rows only", () => {
-    const a = reg({ status: "waitlisted", created_at: "2026-01-02T00:00:00Z" });
-    const b = reg({ status: "waitlisted", created_at: "2026-01-01T00:00:00Z" });
-    const c = reg({ status: "pending", created_at: "2026-01-01T00:00:00Z" });
-    const pos = waitlistPositions([a, b, c]);
-    expect(pos.get(b.id)).toBe(1);
-    expect(pos.get(a.id)).toBe(2);
-    expect(pos.has(c.id)).toBe(false);
-  });
-
-  it("breaks created_at ties by id", () => {
-    const t = "2026-01-01T00:00:00Z";
-    const a = reg({ id: "aaa", status: "waitlisted", created_at: t });
-    const b = reg({ id: "bbb", status: "waitlisted", created_at: t });
-    const pos = waitlistPositions([b, a]);
-    expect(pos.get("aaa")).toBe(1);
-    expect(pos.get("bbb")).toBe(2);
   });
 });
 

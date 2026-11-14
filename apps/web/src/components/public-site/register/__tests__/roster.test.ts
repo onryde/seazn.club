@@ -5,7 +5,7 @@
 // plus the round-trip property test the RS006 dispatch calls for.
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
-import { effectiveSelfDob, effectiveSelfPlayers, parseRoster, serializeRoster, toGroupPlayer, toGroupPlayers } from "../roster";
+import { contactRowIndex, effectiveSelfDob, effectiveSelfPlayers, parseRoster, serializeRoster, toGroupPlayer, toGroupPlayers } from "../roster";
 import { EMPTY_ROSTER_PLAYER, type CartEntry, type RosterPlayerState } from "../types";
 
 function player(overrides: Partial<RosterPlayerState>): RosterPlayerState {
@@ -270,5 +270,39 @@ describe("effectiveSelfDob — guardian-consent-bypass fix: the self row's OWN d
   it("an out-of-range self_player_index degrades to contact.dob rather than throwing", () => {
     const e = selfEntry({ entrant_kind: "team", self_player_index: 5, players: [player({ full_name: "Self" })] });
     expect(effectiveSelfDob(e, contact)).toBe("1990-01-01");
+  });
+});
+
+// B2 T9 — the row Details shows read-only as the contact's own. EntryDetails' solo branch never asks (it renders its one row on its
+// own), so the solo exclusion lives here and is witnessed here, not through the card.
+describe("contactRowIndex — which roster row is the contact's own", () => {
+  const entry = (over: Partial<CartEntry>): Pick<CartEntry, "registering_self" | "self_player_index" | "entrant_kind" | "players"> & { free_agent?: boolean } => ({
+    registering_self: true,
+    self_player_index: null,
+    entrant_kind: "individual",
+    players: [player({ full_name: "Alex Test" })],
+    ...over,
+  });
+  const CONTACT = { name: "Alex Test" };
+
+  it.each([
+    ["an individual registering themselves: row 0", entry({}), CONTACT, 0],
+    ["spacing either side is ignored", entry({ players: [player({ full_name: " Alex Test " })] }), { name: "Alex Test  " }, 0],
+    ["not linked to the contact: nobody's row", entry({ registering_self: false }), CONTACT, null],
+    ["a solo sign-up is never locked, even carrying the contact's name", entry({ free_agent: true, entrant_kind: "team" }), CONTACT, null],
+    ["a row with another name (the contact was renamed): not the contact's", entry({ players: [player({ full_name: "Alx Test" })] }), CONTACT, null],
+    ["a blank contact never matches a blank row", entry({ players: [player({ full_name: "" })] }), { name: "" }, null],
+    ["a whitespace-only contact never matches a blank row", entry({ players: [player({ full_name: "  " })] }), { name: "   " }, null],
+    ["a team with no pick: no row", entry({ entrant_kind: "team", players: [player({ full_name: "Alex Test" })] }), CONTACT, null],
+    [
+      "a team's pick is the row, whichever it is",
+      entry({ entrant_kind: "team", self_player_index: 1, players: [player({ full_name: "Bo Lin" }), player({ full_name: "Alex Test" })] }),
+      CONTACT,
+      1,
+    ],
+    ["a pick that points past the roster: no row", entry({ entrant_kind: "pair", self_player_index: 3, players: [player({ full_name: "Alex Test" })] }), CONTACT, null],
+    ["an individual with no row at all: no row", entry({ players: [] }), CONTACT, null],
+  ] as const)("%s", (_name, e, contact, expected) => {
+    expect(contactRowIndex(e, contact)).toBe(expected);
   });
 });

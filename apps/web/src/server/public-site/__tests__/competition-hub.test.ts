@@ -17,6 +17,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { byeAward } from "@/lib/fixture-bye";
 import { FIXTURE_STATUSES } from "@/lib/fixture-status";
+import { CAMERA_POLICIES } from "@/lib/camera-policy";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // `unstable_cache` is a Next server-runtime API with no incrementalCache
@@ -1509,6 +1510,7 @@ describe("loadCompetitionHub — info", () => {
       endsOn: "2026-09-30",
       venues: ["Aylesbury Rec", "Riverside Park"],
       registrationOpen: false,
+      registrationWaitsOnCardPayments: false,
       registerHref: "/live/riverside/autumn-cup/register",
       calendars: [
         { divisionName: "Open", href: "/live/riverside/autumn-cup/open/calendar.ics" },
@@ -1525,6 +1527,71 @@ describe("loadCompetitionHub — info", () => {
     });
     const doc = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
     expect(doc.info.registrationOpen).toBe(true);
+  });
+
+  // Walk-fix F5: the public page gives the reason registration is shut when it is shut only for card payments - read off the SAME
+  // panel answer the Register button follows, never a second read of the org's Stripe state.
+  it("registrationWaitsOnCardPayments: all closed with one for card payments -> true; an open division, or another reason -> false (counted)", async () => {
+    const cases: [string, { open: boolean; closed_reason: string | null }[], boolean][] = [
+      ["card only", [{ open: false, closed_reason: "payments_unavailable" }], true],
+      ["card + window-closed", [{ open: false, closed_reason: "payments_unavailable" }, { open: false, closed_reason: "window" }], true],
+      ["card + an open offline division", [{ open: false, closed_reason: "payments_unavailable" }, { open: true, closed_reason: null }], false],
+      ["window-closed only", [{ open: false, closed_reason: "window" }], false],
+      ["no divisions", [], false],
+    ];
+    let checked = 0;
+    for (const [label, divisions, want] of cases) {
+      registrationMock.mockResolvedValue({
+        competition: { id: COMP.id, name: COMP.name, slug: COMP.slug, starts_on: null, ends_on: null },
+        org: { name: ORG.name, slug: ORG.slug, logo_url: null },
+        divisions,
+      });
+      const doc = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
+      expect(doc.info.registrationWaitsOnCardPayments, label).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+  });
+});
+
+// Walk-fix F8 (+ F4 on the public page): the public competition page never said a division is played online or that it
+// needs a camera. The hub reads it off the SAME registration panel answer the register page renders (`online_play`,
+// `camera_policy`), keyed by division id, and carries it on the division - absent when the division is not online.
+describe("loadCompetitionHub — online play on the division (walk-fix F8)", () => {
+  const panel = (divisions: { division_id: string; online_play?: boolean; camera_policy?: string; open?: boolean }[]) =>
+    registrationMock.mockResolvedValue({
+      competition: { id: COMP.id, name: COMP.name, slug: COMP.slug, starts_on: null, ends_on: null },
+      org: { name: ORG.name, slug: ORG.slug, logo_url: null },
+      divisions: divisions.map((d) => ({ open: true, closed_reason: null, ...d })),
+    });
+
+  it("the empty case first: no registration panel, an over-the-board division, or another division's flag - no onlinePlay", async () => {
+    let checked = 0;
+    for (const [label, setup] of [
+      ["no panel", () => registrationMock.mockRejectedValue(new Error("404"))],
+      ["over the board", () => panel([{ division_id: DIV.id, online_play: false, camera_policy: "off" }])],
+      ["another division online", () => panel([{ division_id: "div-other", online_play: true, camera_policy: "required" }])],
+    ] as const) {
+      setup();
+      const doc = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
+      expect(doc.divisions.find((d) => d.id === DIV.id), label).toBeTruthy();
+      expect(doc.divisions.find((d) => d.id === DIV.id)!.onlinePlay, label).toBeUndefined();
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("an online division carries its camera policy, every policy (counted)", async () => {
+    let checked = 0;
+    for (const policy of CAMERA_POLICIES) {
+      panel([{ division_id: DIV.id, online_play: true, camera_policy: policy }]);
+      const doc = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
+      expect(doc.divisions.find((d) => d.id === DIV.id)!.onlinePlay, policy).toEqual({ cameraPolicy: policy });
+      // The document still parses against its own schema (the field is declared, not smuggled).
+      expect(CompetitionHubDoc.safeParse(doc).success, policy).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(CAMERA_POLICIES.length);
   });
 });
 

@@ -968,6 +968,88 @@ describe.skipIf(!HAS_DB)("submit timing: the online-play reads are timed under p
   });
 });
 
+// Registration redesign B1 T4: the seat gates of a cart's online divisions now open TOGETHER (one batch, not one division after the
+// other). Each entry must still be asked about by its OWN division's gate: a captain's team with an unlinked teammate is refused in
+// whichever of the two online divisions it sits, and the same captain alone in both is seated in both. Not a writer scenario, so
+// it does not count toward the tally below.
+describe.skipIf(!HAS_DB)("two online divisions in one cart: every entry is asked about by its own division's seat gate", () => {
+  /** A second online division in `w`'s competition, built the same way `world` builds the first. */
+  async function secondOnlineDivision(w: World, kind: Kind): Promise<string> {
+    const division = await createDivision(w.auth, w.competitionId, {
+      name: "Online 2",
+      sport_key: "boardgame",
+      variant_key: "classical",
+      config: { variant: "classical", onlinePlay: "lichess", clock: { base: 600, increment: 5 } },
+    });
+    await putRegistrationSettings(w.auth, division.id, {
+      enabled: true,
+      entrant_kind: "individual",
+      fee_cents: 0,
+      form_fields: [],
+      opens_at: null,
+      closes_at: null,
+      capacity: null,
+      refund_lock_at: null,
+      approval: "auto",
+      allow_free_agents: false,
+    });
+    await sql`update registration_settings set entrant_kind = ${kind}, allow_free_agents = ${kind === "team"} where division_id = ${division.id}`;
+    await sql`update divisions set config = config || ${sql.json({ entrants: { kinds: [kind], defaultKind: kind } })} where id = ${division.id}`;
+    return division.id;
+  }
+
+  const teamEntry = (divisionId: string, captain: Account, mates: number): SubmitGroupEntryInput => ({
+    division_id: divisionId,
+    entrant_kind: "team",
+    team_name: "Two Gates " + randomUUID().slice(0, 6),
+    players: [
+      { full_name: "Submitter " + captain.lichessId, is_captain: true },
+      ...Array.from({ length: mates }, (_, i) => ({ full_name: `Mate ${i + 1} ${randomUUID().slice(0, 6)}` })),
+    ],
+    registering_self: true,
+    self_player_index: 0,
+    answers: {},
+  });
+
+  const submitBoth = (w: World, captain: Account, entries: SubmitGroupEntryInput[], timer?: StageTimer) =>
+    submitRegistrationGroup(
+      { orgSlug: w.orgSlug, compSlug: w.compSlug, sessionUserId: captain.userId },
+      {
+        contact: { name: "Submitter " + captain.lichessId, email: `${captain.lichessId}@t.local`, dob: ADULT },
+        privacy_consent: true,
+        entries,
+      },
+      timer,
+    );
+
+  it("an unlinked teammate is refused as LINK in EITHER online division (sorted first or second); the captain alone is seated in both", async () => {
+    const w = await world("team", true);
+    const second = await secondOnlineDivision(w, "team");
+    const [early, late] = [w.divisionId, second].sort() as [string, string];
+    const captain = await account(w, "plays", false);
+    const refusedIn: string[] = [];
+
+    for (const withMate of [early, late]) {
+      const other = withMate === early ? late : early;
+      const got = await refusalOf(submitBoth(w, captain, [teamEntry(other, captain, 0), teamEntry(withMate, captain, 1)]));
+      expect(got.status, `mate in the ${withMate === early ? "sorted-first" : "sorted-second"} division`).toBe(422);
+      expect(got.code).toBe("LICHESS_LINK_REQUIRED");
+      refusedIn.push(withMate === early ? "early" : "late");
+    }
+    expect(refusedIn, "anti-vacuity: both divisions' gates were tried").toEqual(["early", "late"]);
+    const [{ n: written }] = await sql<{ n: number }[]>`select count(*)::int as n from registrations where division_id in (${early}, ${late})`;
+    expect(written, "both refused submits rolled back whole").toBe(0);
+
+    const timer = createStageTimer();
+    const ok = await submitBoth(w, captain, [teamEntry(early, captain, 0), teamEntry(late, captain, 0)], timer);
+    expect(Object.keys(timer.durations()), "one seat_gate stage for the batch of gates").toContain("pre_tx.seat_gate");
+    for (const e of ok.entries) {
+      expect(await seatedAfterSubmit(e.registration_id)).toEqual({ status: "confirmed", people: 1 });
+    }
+    expect(ok.entries.map((e) => e.division_id).sort()).toEqual([early, late]);
+  });
+});
+
 describe.skipIf(!HAS_DB)("the writers file ran what it owes", () => {
   it("anti-vacuity: every writer ran every scenario", () => {
     expect([...ran.writers].sort()).toEqual(["approve-submitter", "approve-tie", "assign", "submit"]);

@@ -115,6 +115,9 @@ export interface RegistrationRow {
   charged_at: Date | null;
   /** The cart this entry belongs to — every entry has exactly one (V364). */
   group_id: string;
+  /** V519 (registration redesign B5 T17): the entry's 1-based place in its cart, numbered by the database as the entries are inserted and
+   *  never changed or reused. With the cart's `cart_size` it makes the entry's own reference (`entryReferenceOf`, lib/ref-code.ts). */
+  cart_position: number;
   /** Set when this (team) entry can hand out a self-join link. */
   join_code: string | null;
   free_agent: boolean;
@@ -138,6 +141,10 @@ export interface RegistrationGroupRow {
   locale: string | null;
   /** Human-quotable reference (v3/05 §3), shared by every entry in the cart. */
   ref_code: string | null;
+  /** V519 (registration redesign B5 T17): how many entries the cart was sent with — the largest `cart_position` it ever handed out.
+   *  Never shrinks (a withdrawal or a deleted division leaves it), so it, not a count of the entries left, decides whether an entry's
+   *  reference carries a suffix at all: a lone survivor of a 3-entry cart is still `…-3`. */
+  cart_size: number;
   access_token_hash: string;
   amount_cents: number;
   /** The org currency snapshotted when this cart was submitted (RS001b, design
@@ -265,7 +272,7 @@ export interface RegistrationPlayerRow {
 export type RegistrationWithGroupRow = RegistrationRow &
   Pick<
     RegistrationGroupRow,
-    | "contact_name" | "contact_email" | "user_id" | "locale" | "ref_code"
+    | "contact_name" | "contact_email" | "user_id" | "locale" | "ref_code" | "cart_size"
     | "access_token_hash" | "currency" | "payment_method" | "checkout_session_id"
     | "payment_intent_id" | "expires_at" | "reminded_at"
     | "refunded_at" | "disputed_at" | "dispute_id" | "offline_marked_paid_at"
@@ -320,12 +327,23 @@ export interface DivisionCtx {
    *  resolve per-division without risking two entries in one cart
    *  disagreeing about the same date). */
   org_timezone: string | null;
-  /** The org's CURRENT currency (RS001b/RS003) — read fresh on every call so
-   *  `createRegistrationCheckout` can 422 a group whose snapshot has gone
-   *  stale (the org's currency moved since submit) BEFORE any Stripe call,
-   *  never as a Stripe-side error on a registrant's pay page. Every OTHER
-   *  currency read in this file still resolves from the cart's own snapshot
-   *  (`RegistrationGroupRow.currency`) — this field exists only to compare
-   *  against that snapshot, never to replace it. */
+  /** The org's currency as of this read (RS001b/RS003). The checkout mint no
+   *  longer compares against it: it reads the org's currency itself, in the
+   *  same statement as the Connect account (registration redesign B1 fix M2),
+   *  because the register route's context is the submit's pre-transaction
+   *  read. Every currency the registrant is charged in still resolves from
+   *  the cart's own snapshot (`RegistrationGroupRow.currency`). */
   currency: string;
+}
+
+/**
+ * The cart a submit has just committed (registration redesign B1 T5): the cart's `payment_method` as written, its payable entries
+ * (`pending` with a fee) in cart order, and the division context of the cart's first entry. Built inside the submit's transaction
+ * and handed to `mintGroupCheckout` by the register route, which requires it (the mint no longer reads these back itself, B1 fix
+ * M1); never sent to the client (it carries the org's payment instructions and Connect state).
+ */
+export interface KnownCart {
+  paymentMethod: "stripe" | "offline" | null;
+  payableIds: string[];
+  ctx: DivisionCtx;
 }

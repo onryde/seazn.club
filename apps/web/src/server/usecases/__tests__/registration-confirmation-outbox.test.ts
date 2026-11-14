@@ -45,6 +45,8 @@ vi.mock("@/server/usecases/audit", async (importOriginal) => {
 
 // Test 9: the outbox refuses the enqueue once (after the submit committed), armed immediately before the call under test.
 const enqueueGate = vi.hoisted(() => ({ failOnce: false, calls: 0 }));
+// Section 5: a slow machine. The next `dispatchNow` (an organiser action's deferred first attempt) waits until the case releases it.
+const dispatchHold = vi.hoisted(() => ({ armed: false, heldIds: [] as string[], release: null as null | (() => void) }));
 vi.mock("@/server/email-outbox", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/server/email-outbox")>();
   return {
@@ -57,10 +59,19 @@ vi.mock("@/server/email-outbox", async (importOriginal) => {
       }
       return actual.enqueueEmail(...args);
     },
+    dispatchNow: (...args: Parameters<typeof actual.dispatchNow>) => {
+      if (!dispatchHold.armed) return actual.dispatchNow(...args);
+      dispatchHold.armed = false;
+      dispatchHold.heldIds = [...args[0]];
+      return new Promise<void>((resolve) => {
+        dispatchHold.release = resolve;
+      }).then(() => actual.dispatchNow(...args));
+    },
   };
 });
 
 import { sql } from "@/lib/db";
+import { flushDeferred } from "@/lib/deferred";
 import { log } from "@/server/logger";
 import { LOCALES, type Locale } from "@/lib/i18n-constants";
 import { HttpError } from "@/lib/errors";
@@ -122,6 +133,9 @@ beforeEach(() => {
   auditGate.failOnce = false;
   enqueueGate.failOnce = false;
   enqueueGate.calls = 0;
+  // A case that failed while holding a dispatch must not leave its tail pending: every later `flushDeferred` would wait on it for ever.
+  dispatchHold.release?.();
+  Object.assign(dispatchHold, { armed: false, heldIds: [], release: null });
   deliverMock.mockReset();
   deliverMock.mockImplementation(ok);
 });
@@ -158,10 +172,12 @@ const address = (tag: string): string => `t8-${tag}-${randomUUID().slice(0, 8)}@
 
 type Submitted = { status: number; body: { ok: boolean; data?: Record<string, unknown>; error?: { message: string; code?: string } }; email: string };
 
-/** The real route POST. `cookie` is the registrant's locale pick (the footer switcher's cookie). */
+/** The real route POST. `cookie` is the registrant's locale pick (the footer switcher's cookie). The route queues the confirmation
+ *  after its response (registration redesign B1 T5, through `deferred`), so this waits for that tail before answering: what a case
+ *  reads next is what the submit left, never a race with it. */
 async function submit(
   w: Pick<World, "orgSlug" | "competition" | "division">,
-  over: { cookie?: string; email?: string; players?: string[]; entry?: Record<string, unknown> } = {},
+  over: { cookie?: string; email?: string; players?: string[]; entry?: Record<string, unknown>; contactDob?: string } = {},
 ): Promise<Submitted> {
   const email = over.email ?? address("sub");
   const res = await registerRoute(
@@ -169,7 +185,7 @@ async function submit(
       method: "POST",
       headers: { "content-type": "application/json", "x-forwarded-for": "203.0.113.8", ...(over.cookie ? { cookie: over.cookie } : {}) },
       body: JSON.stringify({
-        contact: { name: "Alex Rep", email },
+        contact: { name: "Alex Rep", email, ...(over.contactDob ? { dob: over.contactDob } : {}) },
         privacy_consent: true,
         entries: (over.players ?? ["Solo Player"]).map((name) => ({
           division_id: w.division.id,
@@ -182,6 +198,7 @@ async function submit(
     }),
     { params: Promise.resolve({ orgSlug: w.orgSlug, slug: w.competition.slug }) },
   );
+  await flushDeferred();
   return { status: res.status, body: (await res.json()) as Submitted["body"], email };
 }
 
@@ -375,7 +392,8 @@ describe.skipIf(!HAS_DB)("the submit queues the confirmation on the outbox (DB)"
 
   it("a refused submit (the Lichess link demand) queues no confirmation; the same registrant is confirmed once the demand is off", async () => {
     // The online-chess flag is forced on, the division plays on Lichess and the registrant is anonymous: the submit is refused with
-    // 422 LICHESS_LINK_REQUIRED before any cart exists. #1020's refusal is left exactly as it is.
+    // 422 LICHESS_LINK_REQUIRED before any cart exists. #1020's refusal is left exactly as it is. The entry is the registrant's own
+    // (`registering_self`): an entry for someone else is refused earlier with its own code (walk-fix F3), not the link demand.
     const owner = await seedOwner();
     made.orgIds.push(owner.orgId);
     made.userIds.push(owner.userId!);
@@ -402,7 +420,8 @@ describe.skipIf(!HAS_DB)("the submit queues the confirmation on the outbox (DB)"
     vi.stubEnv("ONLINE_CHESS_ALWAYS", "1");
     forgetOnlineChessFlagCache();
     const email = address("lichess");
-    const refused = await submit(online, { email });
+    const own = { registering_self: true };
+    const refused = await submit(online, { email, entry: own, contactDob: "1990-04-12" });
     expect(refused.status).toBe(422);
     expect(refused.body.error?.code).toBe("LICHESS_LINK_REQUIRED");
     expect(await sql`select 1 from registration_groups where contact_email = ${email}`, "no cart was committed").toHaveLength(0);
@@ -412,7 +431,7 @@ describe.skipIf(!HAS_DB)("the submit queues the confirmation on the outbox (DB)"
     // The positive pair: with the demand off, the very same registrant is accepted and confirmed (so the refusal above was the demand).
     vi.stubEnv("ONLINE_CHESS_ALWAYS", undefined);
     forgetOnlineChessFlagCache();
-    const accepted = await submit(online, { email });
+    const accepted = await submit(online, { email, entry: own, contactDob: "1990-04-12" });
     expect(accepted.status).toBe(201);
     const [row] = await settled(String(accepted.body.data!.group_id), 1);
     expect(row).toMatchObject({ status: "sent", recipient: email });
@@ -794,7 +813,14 @@ describe.skipIf(!HAS_DB)("D4: the confirmation's language, through the real prod
 describe.skipIf(!HAS_DB)("a queued confirmation is a frozen snapshot (DB)", () => {
   const paidLine = dictionarySubject("en", "registration.textFee", { amount: "£15.00" });
 
-  it("a fact changed while the row waits: a resend retires the stale row and the NEW state is what sends", async () => {
+  // The payment mark also queues its own mail ("Payment received", `registration_paid`) to the same address, and its first attempt is a
+  // deferred tail. Where that tail lands against the provider coming back is machine timing, so the case runs both ways: settled
+  // before (flushed while the provider still answers 503), and held until after (a slow machine - it is then accepted as a second
+  // mail to the address). The confirmation is counted by its own rows' keys, never by address.
+  it.each([
+    { lands: "before the provider is back", late: false },
+    { lands: "after the provider is back (a slow machine)", late: true },
+  ])("a fact changed while the row waits: a resend retires the stale row and the NEW state is what sends (payment mail lands $lands)", async ({ late }) => {
     const w = await world({ fee: 1500 });
     deliverMock.mockReset().mockImplementation(later);
     const out = await submit(w);
@@ -806,19 +832,38 @@ describe.skipIf(!HAS_DB)("a queued confirmation is a frozen snapshot (DB)", () =
     expect(staleText, "premise: the waiting row asks for the fee").toContain(paidLine);
 
     // The fact changes while the row waits: the organiser records the payment (the entry is now confirmed and owes nothing).
+    dispatchHold.armed = late;
     await markRegistrationPaidOffline(w.owner, regId);
+    if (!late) await flushDeferred();
+    const [paid] = await sql<{ id: string; status: string; attempts: number }[]>`
+      select id, status, attempts from email_outbox where kind = 'registration_paid' and ref_type = 'registration' and ref_id = ${regId}`;
+    expect(paid, "premise: the payment mark queued its own mail").toBeDefined();
+    if (late) {
+      expect(dispatchHold.heldIds, "premise: the held dispatch is the payment mail's").toEqual([paid!.id]);
+      expect(paid, "premise: held, it has not been attempted yet").toMatchObject({ status: "queued", attempts: 0 });
+    } else {
+      expect(paid, "premise: flushed, its first attempt met the 503").toMatchObject({ status: "queued", attempts: 1 });
+    }
     const [still] = await rowsOf(groupId);
     expect(openBody(still!.body_sealed!).text, "the waiting row did NOT follow the change: it is a snapshot").toBe(staleText);
 
     // The resend writes the new state; the stale row is retired and the provider is back.
     deliverMock.mockReset().mockImplementation(ok);
+    if (late) {
+      dispatchHold.release!();
+      await flushDeferred();
+    }
     expect(await resendRegistrationConfirmation(w.owner, regId, ORIGIN)).toEqual({ sent: true });
     const rows = await rowsOf(groupId);
     expect(rows.map((r) => r.status)).toEqual(["replaced", "sent"]);
     await tickNow(rows.map((r) => r.id));
 
-    const sent = callsToAddress(out.email);
-    expect(sent, "exactly one mail was accepted, and it is the new one").toHaveLength(1);
+    const keys = new Set(rows.map((r) => idempotencyKey(r.id)));
+    const sent = allCalls().filter((c) => keys.has(c.idempotencyKey));
+    expect(sent, "exactly one confirmation was accepted, and it is the new one").toEqual(callsFor(rows[1]!.id));
+    expect(sent).toHaveLength(1);
+    expect(callsFor(paid!.id), "the payment mail is its own mail, accepted only if it landed after the provider was back").toHaveLength(late ? 1 : 0);
+    expect(callsToAddress(out.email), "so a count by address reads the payment mail as a second confirmation").toHaveLength(late ? 2 : 1);
     expect(sent[0]!.text, "the mail that arrived no longer asks for the fee").not.toContain(paidLine);
     expect(sent[0]!.text).not.toBe(staleText);
     expect(callsFor(rows[0]!.id), "the stale row was never sent again").toHaveLength(0);

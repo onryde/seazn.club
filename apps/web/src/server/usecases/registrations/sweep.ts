@@ -9,7 +9,7 @@ import { audit } from "../audit";
 import type { RegistrationSettingsRow, RegistrationWithGroupRow, DivisionCtx } from "./types";
 import { regGroupCols, loadSettings, divisionCtx } from "./lookups";
 import { clearExpiresIfNoLongerNeeded } from "./materialise";
-import { freesTeamSlot, promoteOldestWaitlisted, openPromotionSeatGate, notifyPromoted } from "./waitlist";
+import { freesTeamSlot, promoteOldestWaitlisted, openPromotionSeatGate, notifyPromoted, returnToWaitlist } from "./waitlist";
 import { paymentReminderMessage } from "./mail";
 import { issuePayLink, recordPayToken } from "./pay-token";
 import { refundEntryUnderLock } from "./refunds";
@@ -387,14 +387,10 @@ export async function sweepRegistrations(
       // `registrations.test.ts`'s "a late payment against a promotion that
       // already LAPSED to waitlisted" (expected 500, got 0) while trying
       // the change; left here so the next reader does not retry it.
-      await tx`
-        update registrations
-        set status = 'waitlisted', waitlisted_at = now(),
-            promoted_at = null, promotion_expires_at = null, updated_at = now()
-        where id = ${id}`;
-      // Same stale-deadline gap as the expiry branch: if this was the cart's
-      // LAST pending entry, nothing else needs the group's shared clock.
-      await clearExpiresIfNoLongerNeeded(tx, locked.group_id, locked.id);
+      //
+      // The write is `returnToWaitlist` (waitlist.ts), shared with the organiser's move (B4 fix round 2). It also covers the same
+      // stale-deadline gap as the expiry branch: if this was the cart's LAST pending entry, nothing else needs the group's shared clock.
+      await returnToWaitlist(tx, locked);
       const settings = await loadSettings(tx, division_id);
       const [div] = await tx<{ competition_id: string; org_id: string }[]>`
         select competition_id, org_id from divisions where id = ${division_id}`;

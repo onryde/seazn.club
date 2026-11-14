@@ -10,7 +10,7 @@ vi.mock("next/server", async (importOriginal) => {
 });
 
 import { after } from "next/server";
-import { deferred } from "@/lib/deferred";
+import { deferred, flushDeferred } from "@/lib/deferred";
 import { log } from "@/server/logger";
 
 describe("deferred", () => {
@@ -79,5 +79,68 @@ describe("deferred", () => {
 
     expect(settled).toBe(true);
     expect(flag).toBe(true);
+  });
+});
+
+// Registration redesign B1 T5: the register route queues the cart mail through `deferred`, so it lands AFTER the response. A test that
+// reads the outbox right after the route returns must first wait for that tail, and for any tail the tail itself starts (the mail's
+// own first attempt is a nested `deferred`). `flushDeferred` is that wait, for tests only.
+describe("flushDeferred (tests only)", () => {
+  let warn: ReturnType<typeof vi.spyOn> | undefined;
+  afterEach(() => {
+    warn?.mockRestore();
+    warn = undefined;
+  });
+
+  it("the empty case: nothing pending settles nothing, and answers 0", async () => {
+    await flushDeferred();
+    expect(await flushDeferred()).toBe(0);
+  });
+
+  it("waits for a tail AND the tail it starts, then answers how many settled; a second flush finds none", async () => {
+    await flushDeferred();
+    const done: string[] = [];
+    deferred(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      done.push("outer");
+      deferred(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        done.push("inner");
+      });
+    });
+    expect(done, "premise: nothing has finished when the flush starts").toEqual([]);
+    expect(await flushDeferred()).toBe(2);
+    expect(done).toEqual(["outer", "inner"]);
+    expect(await flushDeferred(), "the sequence: a second flush has nothing left").toBe(0);
+  });
+
+  it("a tail that fails still settles (deferred swallows it), and is counted", async () => {
+    await flushDeferred();
+    warn = vi.spyOn(log, "warn").mockImplementation(() => undefined as never);
+    deferred(async () => {
+      throw new Error("tail boom");
+    });
+    expect(await flushDeferred()).toBe(1);
+    expect(warn).toHaveBeenCalledWith({ err: "tail boom" }, "deferred: a tail task failed");
+  });
+
+  it("a tail handed to a request scope's after() is not tracked: the request owns it", async () => {
+    await flushDeferred();
+    let captured: (() => unknown) | undefined;
+    vi.mocked(after).mockImplementationOnce((task) => {
+      captured = task as () => unknown;
+    });
+    deferred(async () => {});
+    expect(captured, "premise: after() took the task").toBeTypeOf("function");
+    expect(await flushDeferred()).toBe(0);
+  });
+
+  it("refuses outside vitest, by name", async () => {
+    vi.stubEnv("VITEST", "");
+    try {
+      await expect(flushDeferred()).rejects.toThrow(/flushDeferred is for tests only/);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });

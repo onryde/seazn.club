@@ -103,6 +103,7 @@ export const KIND_HOOKS: Record<OutboxKind, KindHook> = {
   registration_promotion_lapsed: {},
   quick_match_link: {},
   quick_match_reminder: {},
+  registration_promotion_skipped: {},
 };
 
 /** Does this kind have a hook to run for a row that ended badly? (A kind with none is not "skipped" when a tick runs out of

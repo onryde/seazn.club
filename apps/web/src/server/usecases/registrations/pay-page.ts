@@ -7,12 +7,14 @@ import { sql } from "@/lib/db";
 import { ownPaymentRefundedCents } from "@/lib/registration-status";
 import type { Locale } from "@/lib/i18n-constants";
 import { fillPaymentInstructions } from "@/lib/payment-instructions";
+import { entryReferenceOf } from "@/lib/ref-code";
 import { resolveVenueTz } from "@/lib/tz";
 import { recipientLocale } from "@/server/email-outbox/locale";
 import type { RegistrationRow, RegistrationWithGroupRow } from "./types";
 import { regGroupCols, loadSettings, divisionCtx } from "./lookups";
 import { registrationLineItems } from "./checkout";
 import { registrationIdByPayToken } from "./pay-token";
+import { SETTLEMENT_EVENT_TYPES } from "./status-facts";
 
 export const PAY_PAGE_STATES = ["pay", "offline", "paid", "refunded", "deadline_passed", "waitlisted"] as const;
 export type PayPageState = (typeof PAY_PAGE_STATES)[number];
@@ -41,9 +43,12 @@ export interface PayPageDoc {
   /** The organiser's own zone (`organizations.timezone`, UTC when unset): the deadline is written in it, the same zone and spelling
    *  the status page writes it in (polish wave P3, W4). Always a valid IANA zone, never null. */
   timezone: string;
+  /** The reference to quote for THIS entry (`entryReferenceOf`, registration redesign B5 T18): the cart's `SZ-XXXX-XXXX` with the entry's
+   *  place in the cart (`-2`) when the cart was sent with two or more entries, the cart's alone for a one-entry cart. Null when the cart
+   *  has none. Still named `refCode` (the name predates per-entry references): it is the entry's reference, not always the cart's. */
   refCode: string | null;
   orgName: string;
-  /** Offline only: the division's instructions, else the org's, with `{{reference}}` filled. */
+  /** Offline only: the division's instructions, else the org's, with `{{reference}}` filled with `refCode` (this entry's own). */
   paymentInstructions: string | null;
   /** Paid/refunded only: the first confirming audit row's time, or null when there is none. */
   paidAt: Date | null;
@@ -94,13 +99,6 @@ export function payPageState(f: PayPageFacts, now: Date): PayPageState | null {
   throw new Error(`payPageState: no rule covers registration status "${f.status}"`);
 }
 
-const PAID_EVENT_TYPES = [
-  "registration.confirmed",
-  "registration.paid_awaiting_approval",
-  "registration.offline_paid",
-  "registration.fee_waived",
-] as const;
-
 /**
  * The document `/r/pay/<token>` renders, or null for an unknown token and for a withdrawn or rejected entry. Privileged pool reads:
  * the visitor has no org, the token is what names one.
@@ -140,10 +138,11 @@ export async function payPageDocByToken(token: string, now: Date): Promise<PayPa
 
   let paidAt: Date | null = null;
   if (state === "paid" || state === "refunded") {
+    // The first event of the settlement family (status-facts.ts, which the status page's "settled by" also reads: B4 review m4).
     const [ev] = await sql<{ created_at: Date }[]>`
       select created_at from competition_events
       where competition_id = ${ctx.competition_id}
-        and type in ${sql(PAID_EVENT_TYPES as unknown as string[])}
+        and type in ${sql(SETTLEMENT_EVENT_TYPES as unknown as string[])}
         and payload->>'registration_id' = ${reg.id}
       order by created_at
       limit 1`;
@@ -151,6 +150,9 @@ export async function payPageDocByToken(token: string, now: Date): Promise<PayPa
   }
 
   const instructions = settings?.payment_instructions ?? ctx.payment_instructions;
+  // One reading for both the page's reference and the instructions' {{reference}}: an offline transfer that quotes the line the page shows
+  // is the one the organiser searches for (spec §6.3).
+  const reference = entryReferenceOf(reg);
   return {
     registrationId: reg.id,
     groupId: reg.group_id,
@@ -169,9 +171,9 @@ export async function payPageDocByToken(token: string, now: Date): Promise<PayPa
     refundedCents,
     deadline,
     timezone: resolveVenueTz(null, ctx.org_timezone),
-    refCode: reg.ref_code,
+    refCode: reference,
     orgName: ctx.org_name,
-    paymentInstructions: state === "offline" && instructions ? fillPaymentInstructions(instructions, reg.ref_code) : null,
+    paymentInstructions: state === "offline" && instructions ? fillPaymentInstructions(instructions, reference) : null,
     paidAt,
     paySessionId: reg.pay_session_id,
     cardPaymentsOn: ctx.charges_enabled,

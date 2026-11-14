@@ -484,6 +484,7 @@ export function info(over: Partial<HubInfoT> = {}): HubInfoT {
     endsOn: null,
     venues: ["Riverside Oval"],
     registrationOpen: false,
+    registrationWaitsOnCardPayments: false,
     registerHref: `/${ORG}/${COMP}/register`,
     calendars: [],
     presentHref: `/${ORG}/${COMP}/present`,

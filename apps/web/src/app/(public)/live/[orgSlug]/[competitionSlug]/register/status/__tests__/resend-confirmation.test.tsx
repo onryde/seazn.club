@@ -2,12 +2,16 @@
 // mail is cart-shaped. No jsdom: driven through the shared node-env hook
 // harness.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { renderIsland, walk, propsOf } from "@/components/__tests__/_hook-harness";
+import { renderIsland, walk, propsOf, textOf } from "@/components/__tests__/_hook-harness";
+import { compileClasses } from "@/components/v2/__tests__/_compiled-css";
+import { BTN_QUIET_LINK } from "@/components/public-site/register/styles";
 
 const net = vi.hoisted(() => ({
   calls: [] as { url: string; method?: string; json?: unknown }[],
   response: null as unknown,
   rejection: null as unknown,
+  /** When set, the request waits on it (the response is in flight). */
+  hold: null as Promise<unknown> | null,
 }));
 vi.mock("@/lib/client-v1", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/client-v1")>();
@@ -20,6 +24,7 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
         net.rejection = null;
         return Promise.reject(e);
       }
+      if (net.hold) return net.hold.then(() => net.response);
       return Promise.resolve(net.response);
     },
   };
@@ -32,11 +37,49 @@ beforeEach(() => {
   net.calls = [];
   net.response = { sent: true };
   net.rejection = null;
+  net.hold = null;
 });
 
 const findButton = (tree: ReturnType<typeof walk>) => tree.find((e) => e.type === "button")!;
 
 describe("ResendConfirmation", () => {
+  // B4 review m2: while the request is in flight the button is WORKING, not unavailable. It says so to a screen reader (aria-busy) and
+  // keeps full strength (the busy rule outranks the 40% dim, BTN_PRIMARY's pattern); before the click and after the answer it is neither.
+  it("in flight: disabled, aria-busy and its busy label; before the click and after the answer, not busy", async () => {
+    let release!: () => void;
+    net.hold = new Promise<void>((r) => (release = r));
+    const island = renderIsland(ResendConfirmation, { groupId: "grp-1", token: "rg_tok" });
+    expect(propsOf(findButton(island.tree()))["aria-busy"], "before the click").toBe(false);
+
+    const click = (propsOf(findButton(island.tree())).onClick as () => Promise<void>)();
+    await new Promise((r) => setTimeout(r, 0));
+    const busy = findButton(island.tree());
+    expect(textOf(busy), "premise: the request is in flight").toBe("Sending…");
+    expect(propsOf(busy).disabled).toBe(true);
+    expect(propsOf(busy)["aria-busy"]).toBe(true);
+
+    release();
+    await click;
+    const after = findButton(island.tree());
+    expect(textOf(after)).toBe("Resend confirmation email");
+    expect(propsOf(after)["aria-busy"]).toBe(false);
+  });
+
+  // Spec §5.1 item 7 and the B4 design review: the footer actions read as text links, not as the uppercase label style. Sentence case,
+  // muted, underlined, 44px tall, and a busy one keeps full strength. Every class compiles to a real rule.
+  it("the quiet link: sentence case, muted, underlined, 44px, busy at full strength, and every class is a real one", async () => {
+    const island = renderIsland(ResendConfirmation, { groupId: "grp-1", token: "rg_tok" });
+    const cls = String(propsOf(findButton(island.tree())).className).split(/\s+/);
+    expect(cls.join(" ")).toBe(BTN_QUIET_LINK);
+    for (const must of ["text-ink-muted", "underline", "min-h-11", "disabled:aria-busy:opacity-100", "disabled:aria-busy:cursor-progress"]) {
+      expect(cls, must).toContain(must);
+    }
+    for (const never of ["uppercase", "tracking-wide", "font-display"]) expect(cls, never).not.toContain(never);
+    const compiled = await compileClasses(cls);
+    expect(cls.length, "anti-vacuity: classes checked").toBeGreaterThan(8);
+    expect(cls.filter((c) => Object.keys(compiled.get(c) ?? {}).length === 0), "classes that compile to nothing").toEqual([]);
+  }, 60_000);
+
   it("posts to the group-scoped (rid) public resend path with the token", async () => {
     const island = renderIsland(ResendConfirmation, { groupId: "grp-1", token: "rg_tok" });
 

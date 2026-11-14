@@ -156,6 +156,7 @@ import { OutboxKeyUnavailableError } from "@/server/email-outbox/seal";
 import { divisionEligibilityIssues } from "../registration-eligibility";
 import { isValidRefCode, generateRefCode } from "@/lib/ref-code";
 import { REGISTRATION_CURRENCIES, type Currency } from "@/lib/currency";
+import { registrationWaitsOnCardPayments } from "@/lib/registration-card-payments";
 import { LEGAL_VERSION } from "@/lib/legal";
 import { resolveNameDisplay } from "@/lib/name-display";
 
@@ -173,6 +174,7 @@ import {
   SETTINGS_BASE,
   stripeRig,
   currencyRig,
+  cartAsWritten,
 } from "./_registration-fixtures";
 import { FIRST_PAID_EARN, balance, walletIdFor } from "@/lib/credits";
 import { staffAlertDrops, staffRows } from "./_money-fixtures";
@@ -2137,6 +2139,37 @@ describe.skipIf(!HAS_DB)("card submit path (spec §3)", () => {
     expect(div.open).toBe(false);
     expect(div.closed_reason).toBe("payments_unavailable");
     expect(div.payment_method).toBe("stripe");
+  });
+
+  // Walk-fix A review I1: "registration opens once the organiser turns them on" is said wherever every division is
+  // closed and one is closed for card payments. A card division whose WINDOW is shut (closed weeks ago, or not open yet) is
+  // closed by the window whatever Connect does, so the window is its reason - otherwise a finished competition tells every
+  // visitor registration will open the moment Stripe pauses charges. Sequence: window past, window ahead, window open.
+  it("a shut window outranks card payments: closed_reason 'window' while Connect is off, 'payments_unavailable' only once the window opens", async () => {
+    const { orgId, orgSlug, owner, competition, division } = await stripeRig();
+    const readWithChargesOff = async (window: { opens_at: string | null; closes_at: string | null }) => {
+      // A card fee needs Connect to SAVE, so charges are on for the settings write and off for the read.
+      await sql`update organizations set stripe_charges_enabled = true where id = ${orgId}`;
+      await putRegistrationSettings(owner, division.id, { ...SETTINGS_BASE, payment_method: "stripe", fee_cents: 500, ...window });
+      await sql`update organizations set stripe_charges_enabled = false where id = ${orgId}`;
+      return publicRegistrationInfo(orgSlug, competition.slug);
+    };
+    const inThirtyDays = new Date(Date.now() + 30 * 86_400_000).toISOString();
+    const cases = [
+      { label: "closed in the past", window: { opens_at: null, closes_at: "2020-01-01T00:00:00Z" }, reason: "window", waits: false },
+      { label: "opens in the future", window: { opens_at: inThirtyDays, closes_at: null }, reason: "window", waits: false },
+      { label: "open now", window: { opens_at: null, closes_at: null }, reason: "payments_unavailable", waits: true },
+    ];
+    let checked = 0;
+    for (const c of cases) {
+      const info = await readWithChargesOff(c.window);
+      const div = info.divisions.find((d) => d.division_id === division.id)!;
+      expect(div.open, c.label).toBe(false);
+      expect(div.closed_reason, c.label).toBe(c.reason);
+      expect(registrationWaitsOnCardPayments(info.divisions), c.label).toBe(c.waits);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
   });
 
   // RS007 review fix M2 (2026-08-29): a 2026-08-27 revision made
@@ -4757,6 +4790,44 @@ describe.skipIf(!HAS_DB)("RS007: sweep sibling isolation on a promotion lapse", 
   });
 });
 
+// B4 fix round 2: the lapse goes through `returnToWaitlist` (waitlist.ts), which clears the cart's shared pay-by date
+// (`registration_groups.expires_at`) when nothing else in the cart is still pending. The organiser's move pins this in
+// registration-waitlist-position.test.ts; this pins it through the sweep, both ways.
+describe.skipIf(!HAS_DB)("B4 fix round 2: a lapse clears the cart's pay-by date only when no other entry needs it", () => {
+  const groupExpiresAt = async (groupId: string) =>
+    (await sql<{ expires_at: Date | null }[]>`select expires_at from registration_groups where id = ${groupId}`)[0]!.expires_at;
+
+  it("the cart's last pending entry lapses: the cart's pay-by date is cleared; beside a pending sibling it is kept", async () => {
+    // One division per cart: a lapse re-offers its slot to its division's oldest waitlisted entry, which would otherwise be the
+    // other cart's entry that lapsed a moment before (re-promoting it and re-dating its cart).
+    const a = await stripeRig({ feeCents: 500 });
+    const b = await stripeRig({ feeCents: 500 });
+    const lapse = async (groupId: string, regId: string) => {
+      await sql`update registrations set promoted_at = now(), promotion_expires_at = now() - interval '1 minute' where id = ${regId}`;
+      // A cart pay-by date still in the future: the expiry pass leaves the cart alone, so only the lapse can clear it.
+      await sql`update registration_groups set expires_at = now() + interval '1 day' where id = ${groupId}`;
+      return groupExpiresAt(groupId);
+    };
+
+    // Alone: the lapsing entry was the only one that needed the date.
+    const lone = await seedRegistration(a.competition.id, a.division.id, a.settings, { status: "pending", contactEmail: "lone-lapse@test.local" });
+    expect(await lapse(lone.registration.group_id, lone.registration.id), "premise: the cart has a pay-by date").not.toBeNull();
+
+    // The positive pair: a sibling in the same cart still owes, so the date stays, unchanged.
+    const shared = await seedRegistration(b.competition.id, b.division.id, b.settings, { status: "pending", contactEmail: "shared-lapse@test.local" });
+    await seedSecondEntry(shared.registration.group_id, b.division.id, 500, "Still Owes", "pending");
+    const sharedBefore = await lapse(shared.registration.group_id, shared.registration.id);
+    expect(sharedBefore, "premise: the cart has a pay-by date").not.toBeNull();
+
+    await sweepRegistrations("https://test.local");
+
+    expect((await loadWithGroup(lone.registration.id)).status, "lone entry lapsed").toBe("waitlisted");
+    expect((await loadWithGroup(shared.registration.id)).status, "shared-cart entry lapsed").toBe("waitlisted");
+    expect(await groupExpiresAt(lone.registration.group_id), "nothing else in the cart needs it").toBeNull();
+    expect((await groupExpiresAt(shared.registration.group_id))?.getTime(), "the sibling still owes").toBe(sharedBefore!.getTime());
+  });
+});
+
 describe.skipIf(!HAS_DB)("RS007: regression — a never-promoted pending entry still expires", () => {
   it("a plain overdue pending entry (promoted_at never set) still goes to 'expired', not 'waitlisted'", async () => {
     const { competition, division, settings } = await stripeRig({ feeCents: 500 });
@@ -5587,6 +5658,7 @@ describe.skipIf(!HAS_DB)("mintGroupCheckout — group-scoped Stripe session (RS0
       division.id,
       "http://test.local",
       first.access_token,
+      await cartAsWritten(first.registration.group_id, division.id),
     );
     expect(url).toBe("https://checkout.stripe.test/session");
 
@@ -5637,6 +5709,7 @@ describe.skipIf(!HAS_DB)("mintGroupCheckout — group-scoped Stripe session (RS0
       division.id,
       "http://test.local",
       paid.access_token,
+      await cartAsWritten(paid.registration.group_id, division.id),
     );
     expect(url).not.toBeNull();
 
@@ -5665,6 +5738,7 @@ describe.skipIf(!HAS_DB)("mintGroupCheckout — group-scoped Stripe session (RS0
       division.id,
       "http://test.local",
       first.access_token,
+      await cartAsWritten(first.registration.group_id, division.id),
     );
     expect(url).not.toBeNull();
 
@@ -5686,6 +5760,7 @@ describe.skipIf(!HAS_DB)("mintGroupCheckout — group-scoped Stripe session (RS0
       division.id,
       "http://test.local",
       res.access_token,
+      await cartAsWritten(res.registration.group_id, division.id),
     );
     expect(url).toBeNull();
     expect(stripeMock.checkoutCreate).not.toHaveBeenCalled();
@@ -5708,6 +5783,7 @@ describe.skipIf(!HAS_DB)("mintGroupCheckout — group-scoped Stripe session (RS0
       division.id,
       "http://test.local",
       res.access_token,
+      await cartAsWritten(res.registration.group_id, division.id),
     );
     expect(url).toBeNull();
     expect(stripeMock.checkoutCreate).not.toHaveBeenCalled();
@@ -5761,6 +5837,7 @@ describe.skipIf(!HAS_DB)("mintGroupCheckout — per-currency matrix (RS003 W4)",
         division.id,
         "http://test.local",
         first.access_token,
+        await cartAsWritten(first.registration.group_id, division.id),
       );
       expect(url).toBe("https://checkout.stripe.test/session");
 
@@ -5819,7 +5896,7 @@ describe.skipIf(!HAS_DB)("mintGroupCheckout — per-currency matrix (RS003 W4)",
       payment_method: "stripe",
     });
     await expect(
-      mintGroupCheckout(res.registration.group_id, division.id, "http://test.local", res.access_token),
+      mintGroupCheckout(res.registration.group_id, division.id, "http://test.local", res.access_token, await cartAsWritten(res.registration.group_id, division.id)),
     ).rejects.toMatchObject({ status: 422, code: "REGISTRATION_CURRENCY_UNAVAILABLE" });
     expect(stripeMock.checkoutCreate).not.toHaveBeenCalled();
   });
@@ -5841,7 +5918,7 @@ describe.skipIf(!HAS_DB)("mintGroupCheckout — per-currency matrix (RS003 W4)",
       payment_method: "stripe",
     });
     await expect(
-      mintGroupCheckout(res.registration.group_id, division.id, "http://test.local", res.access_token),
+      mintGroupCheckout(res.registration.group_id, division.id, "http://test.local", res.access_token, await cartAsWritten(res.registration.group_id, division.id)),
     ).rejects.toMatchObject({ status: 422, code: "REGISTRATION_CURRENCY_UNAVAILABLE" });
     expect(stripeMock.checkoutCreate).not.toHaveBeenCalled();
   });

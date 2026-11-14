@@ -114,6 +114,7 @@ const SPEC_LEGEND: Record<string, [to: "account" | "literal" | "staff", transact
   // 2026-11-08, plan 3 T1 review m1): the link is already on the guest's screen, so the suppression list is honoured.
   quick_match_link: ["literal", false],
   quick_match_reminder: ["literal", false],
+  registration_promotion_skipped: ["literal", false],
 };
 
 /** A `db` that records the statements it is handed and answers like postgres.js does for an insert: a row list carrying the
@@ -175,8 +176,9 @@ describe("the kind facts guard (no database)", () => {
       checked++;
     }
     // The spec's Counts: "With `magic_link` and `chess_invite` that is 51." Sponsor deals Task 23 adds sponsor_deal_paid: 52. Polish
-    // waves P2 and P5 add the seven registrant lifecycle mails: 59. And the quick match design's two (§7.6, C2): 61.
-    expect(checked, "every kind of the legend was compared").toBe(61);
+    // waves P2 and P5 add the seven registrant lifecycle mails: 59. And the quick match design's two (§7.6, C2): 61. Registration
+    // walk-fix F16 adds registration_promotion_skipped: 62.
+    expect(checked, "every kind of the legend was compared").toBe(62);
     // The other direction: the code declares no kind the legend does not.
     expect(Object.keys(OUTBOX_KIND_FACTS).sort()).toEqual(Object.keys(SPEC_LEGEND).sort());
   });
@@ -195,11 +197,11 @@ describe("the kind facts guard (no database)", () => {
         checked++;
       }
     }
-    // (29 literal + 16 staff) x 2 writers = 90: the spec's legend has 20 L kinds (magic_link, the five wave-1 kinds, wave 2's three
+    // (30 literal + 16 staff) x 2 writers = 92: the spec's legend has 20 L kinds (magic_link, the five wave-1 kinds, wave 2's three
     // sponsor mails, wave 3's eight, wave 4's two official notices and wave 5's funnel reminder), polish waves P2 and P5's seven
-    // registrant lifecycle mails, the quick match design's two (its link mail and reminder go to the address the guest typed) and
-    // 16 S kinds (wave 5's staff alerts).
-    expect(checked, "45 kinds not addressed to an account x 2 writers").toBe(90);
+    // registrant lifecycle mails, registration walk-fix F16's registration_promotion_skipped, the quick match design's two (its link
+    // mail and reminder go to the address the guest typed) and 16 S kinds (wave 5's staff alerts).
+    expect(checked, "46 kinds not addressed to an account x 2 writers").toBe(92);
   });
 
   it("the refusal names the kind and ref type and carries neither the address, the user id nor the body", async () => {

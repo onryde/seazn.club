@@ -21,7 +21,7 @@ vi.mock("@/server/usecases/registrations", () => ({
   listRegistrations: listRegistrationsMock,
 }));
 
-import { fetchRegistrantRows, parseRegistrantsQuery } from "../data";
+import { dropArchivedDivisionFilter, fetchRegistrantRows, parseRegistrantsQuery } from "../data";
 
 const AUTH: AuthCtx = { orgId: "org-1", via: "session", userId: "user-1", role: "owner", keyId: null };
 const COMPETITION_ID = "comp-1";
@@ -280,5 +280,76 @@ describe("fetchRegistrantRows — wiring to listRegistrations", () => {
     listRegistrationsMock.mockRejectedValueOnce(new HttpError(404, "competition not found"));
     await expect(fetchRegistrantRows(AUTH, COMPETITION_ID, {})).rejects.toThrow("competition not found");
     expect(listRegistrationsMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// B6 T21 review (item 7). `fetchDivisionOptions` lists only NON-archived divisions, but
+// `listRegistrations` happily narrows by an ARCHIVED one of this competition: a stale link
+// (`?division_id=<archived>`) used to narrow the table while the pill, the chip and the sheet read
+// "unset" — rows hidden by a filter nobody could see. Ruling: IGNORE it, exactly like a division
+// that does not exist or belongs to another competition (above) — the table renders unfiltered and
+// `filters.divisionId` says so. Cost if wrong: an organiser hunting an archived division's rows
+// through an old link sees every row instead; there is no screen that offers that filter.
+describe("dropArchivedDivisionFilter — a division the filter dropdown does not list is not a filter", () => {
+  const LISTED = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const ARCHIVED = DIVISION_ID;
+  const listed = [{ id: LISTED, name: "Open" }];
+  const first = (divisionId: string | null, rows: unknown[] = [{ id: "narrowed" }]) => ({
+    rows: rows as never,
+    filters: { ...parseRegistrantsQuery({ status: "paid", q: "alex" }), divisionId },
+  });
+
+  it("a listed division stays a filter: the first read is returned as is, and nothing is read again", async () => {
+    const f = first(LISTED);
+    const out = await dropArchivedDivisionFilter(AUTH, COMPETITION_ID, { division_id: LISTED }, f, listed);
+    expect(out).toBe(f);
+    expect(listRegistrationsMock).not.toHaveBeenCalled();
+  });
+
+  it("no division filter: nothing to check, nothing read", async () => {
+    const f = first(null);
+    expect(await dropArchivedDivisionFilter(AUTH, COMPETITION_ID, {}, f, listed)).toBe(f);
+    expect(listRegistrationsMock).not.toHaveBeenCalled();
+  });
+
+  it("an unlisted (archived) division is dropped: ONE re-read without it, every other filter kept", async () => {
+    listRegistrationsMock.mockResolvedValueOnce([{ id: "r1" }, { id: "r2" }]);
+    const out = await dropArchivedDivisionFilter(
+      AUTH,
+      COMPETITION_ID,
+      { division_id: ARCHIVED, status: "paid", q: "alex" },
+      first(ARCHIVED),
+      listed,
+    );
+    expect(out.rows).toEqual([{ id: "r1" }, { id: "r2" }]);
+    expect(out.filters.divisionId).toBeNull();
+    expect(out.filters.status).toBe("paid");
+    expect(out.filters.text).toBe("alex");
+    expect(listRegistrationsMock).toHaveBeenCalledTimes(1);
+    expect(listRegistrationsMock).toHaveBeenCalledWith(AUTH, null, "paid", {
+      competition_id: COMPETITION_ID,
+      sort: "newest",
+      text: "alex",
+    });
+  });
+
+  it("a competition whose divisions are ALL archived (no options at all) drops the filter too — an empty list is not 'everything is listed'", async () => {
+    listRegistrationsMock.mockResolvedValueOnce([]);
+    const out = await dropArchivedDivisionFilter(AUTH, COMPETITION_ID, { division_id: ARCHIVED }, first(ARCHIVED), []);
+    expect(out.filters.divisionId).toBeNull();
+    expect(listRegistrationsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("a repeated ?division_id=a&division_id=b is dropped as a whole (first value won in the parse, so the re-read must not hand it back)", async () => {
+    listRegistrationsMock.mockResolvedValueOnce([]);
+    await dropArchivedDivisionFilter(
+      AUTH,
+      COMPETITION_ID,
+      { division_id: [ARCHIVED, LISTED], status: "paid" },
+      first(ARCHIVED),
+      listed,
+    );
+    expect(listRegistrationsMock).toHaveBeenCalledTimes(1);
+    expect(listRegistrationsMock).toHaveBeenCalledWith(AUTH, null, "paid", expect.anything());
   });
 });

@@ -28,6 +28,7 @@ export {
   registrationWithdrawnTemplate,
   registrationRejectedTemplate,
   registrationPromotionLapsedTemplate,
+  registrationPromotionSkippedTemplate,
   registrationJoinedTemplate,
   type LifecycleBase,
   type RegistrationPaidArgs,
@@ -36,6 +37,7 @@ export {
   type RegistrationWithdrawnArgs,
   type RegistrationRejectedArgs,
   type RegistrationPromotionLapsedArgs,
+  type RegistrationPromotionSkippedArgs,
   type RegistrationJoinedArgs,
   type JoinedState,
 } from "./registration-lifecycle";

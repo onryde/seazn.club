@@ -13,6 +13,7 @@ export function StepDetails({
   dispatch,
   contact,
   seasonStartYear,
+  orgName,
   importTextByEntry,
   onImportTextChange,
 }: {
@@ -21,6 +22,8 @@ export function StepDetails({
   dispatch: (action: CartAction) => void;
   contact: ContactState;
   seasonStartYear: number;
+  /** The organiser's name, for each card's "Questions from {org}" heading. */
+  orgName: string;
   /** Keyed by entry id — see roster-table.tsx's header for why the paste
    *  draft lives here (RegisterStepper) rather than as RosterTable's own
    *  local state. */
@@ -32,7 +35,9 @@ export function StepDetails({
 
   return (
     <div className="space-y-4">
-      <div className="rounded-xl border border-zinc-200/80 bg-surface p-4 shadow-sm sm:p-6">
+      {/* The step's heading and its one line of help, with no card of their own (B2 T9, spec 7.3): the cards below are the entries,
+          one each. The heading stays the step's level-2 heading and the focus target of a step change (register-stepper.tsx). */}
+      <div>
         <h2 tabIndex={-1} className="font-display text-xl font-semibold uppercase tracking-wide text-ink">
           {t("register.details.heading")}
         </h2>
@@ -49,6 +54,7 @@ export function StepDetails({
             isSelfEntry={entry.registering_self}
             selfPlayerIndex={entry.self_player_index}
             seasonStartYear={seasonStartYear}
+            orgName={orgName}
             dispatch={dispatch}
             importText={importTextByEntry[entry.id] ?? ""}
             onImportTextChange={(text) => onImportTextChange(entry.id, text)}

@@ -1,19 +1,27 @@
 // RS006 chassis — cart reducer (pure, no DOM). Every action returns a NEW
 // state (no mutation) so back-navigation + sessionStorage round-tripping
 // (storage.ts) can treat CartState as a plain snapshot.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import type { Dict } from "@/lib/i18n-constants";
+import { t as tRuntime, type TKey } from "@/lib/i18n-runtime";
 import {
   MAX_ROSTER_PLAYERS,
   autoLinkObviousSelf,
   autoSeedSingleDivision,
   canAddEntry,
   cartHasOtherPlayers,
+  rosterNoticeKey,
   cartReducer,
+  cartTotalText,
   clearSelfLinkWhenNotPlaying,
   lineFeeCents,
   lineMethod,
   payableDivision,
   registeringSelfAnywhere,
+  reviewHeadingKey,
+  submitLabelKey,
   summarizeCart,
   toGroupEntry,
 } from "../cart";
@@ -918,6 +926,48 @@ describe("cartHasOtherPlayers", () => {
   });
 });
 
+// Walk-fix A fix round 1 (Part B's routed item): "You're entering other people in this registration" showed to a registrant who left
+// "I'm one of the players" unticked and named THEMSELVES as the one player - the page told them they were entering someone else. The
+// claim is true only when the registrant is a player somewhere in the cart (`registeringSelfAnywhere`: their row is self-linked, or a
+// solo sign-up), so every OTHER row really is another person. With no self anywhere, the honest line is "each player you've named will
+// be asked", plus the box to tick if they are playing too.
+describe("rosterNoticeKey: which consent notice the cart has earned", () => {
+  const named = (name: string) => ({ ...EMPTY_ROSTER_PLAYER, full_name: name });
+  const cases: [string, CartState, ReturnType<typeof rosterNoticeKey>][] = [
+    ["the empty cart (first)", EMPTY_CART, null],
+    ["a solo self-linked individual: nobody else is named", {
+      entries: [{ ...entry({ id: "e1", division_id: "d1", entrant_kind: "individual", registering_self: true, self_player_index: 0 }), players: [named("Mia Cole")] }],
+    }, null],
+    ["playing in a pair beside a partner: other people, truly", {
+      entries: [{ ...entry({ id: "e1", division_id: "d1", entrant_kind: "pair", registering_self: true, self_player_index: 0 }), players: [named("Mia Cole"), named("Sam Ortiz")] }],
+    }, "register.consent.rosterNotice"],
+    ["playing in one entry, another entry for someone else", {
+      entries: [
+        { ...entry({ id: "e1", division_id: "d1", entrant_kind: "individual", registering_self: true, self_player_index: 0 }), players: [named("Mia Cole")] },
+        { ...entry({ id: "e2", division_id: "d2", entrant_kind: "individual" }), players: [named("Alex Cole")] },
+      ],
+    }, "register.consent.rosterNotice"],
+    ["not ticked, and the one player is named after the registrant: the walkthrough's case", {
+      entries: [{ ...entry({ id: "e1", division_id: "d1", entrant_kind: "individual" }), players: [named("Mia Cole")] }],
+    }, "register.consent.rosterNoticeNotPlaying"],
+    ["not ticked, a captain's team", {
+      entries: [{ ...entry({ id: "e1", division_id: "d1", entrant_kind: "team" }), players: [named("Jordan Blake"), named("Sam Ortiz")] }],
+    }, "register.consent.rosterNoticeNotPlaying"],
+    ["a free agent names nobody", { entries: [entry({ id: "e1", division_id: "d1", entrant_kind: "team", free_agent: true })] }, null],
+  ];
+  it("one case per cart shape (counted)", () => {
+    let checked = 0;
+    for (const [why, cart, want] of cases) {
+      expect(rosterNoticeKey(cart), why).toBe(want);
+      // The notice shows exactly when the cart names someone other than a self-linked row.
+      expect(rosterNoticeKey(cart) !== null, `${why}: shown iff other players`).toBe(cartHasOtherPlayers(cart));
+      checked += 1;
+    }
+    expect(checked).toBe(cases.length);
+    expect(new Set(cases.map(([, , w]) => w)).size, "all three answers reached").toBe(3);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // RS006 §C — summarizeCart is the ONE subtotal/waitlist computation shared
 // by entry-cart.tsx (step 2) and step-review.tsx (step 5): "waitlisted
@@ -929,7 +979,8 @@ describe("cartHasOtherPlayers", () => {
 
 describe("summarizeCart", () => {
   const OPEN_PAID: DivisionLike = { ...TEAM_DIVISION, division_id: "open-paid", fee_cents: 2500, currency: "gbp" };
-  const WAITLIST_DIV: DivisionLike = { ...TEAM_DIVISION, division_id: "waitlist", closed_reason: "full", fee_cents: 1000 };
+  // A full division as the wire carries it: `closed_reason "full"` IS "open and 0 places left" (settings.ts), so the fixture says both.
+  const WAITLIST_DIV: DivisionLike = { ...TEAM_DIVISION, division_id: "waitlist", closed_reason: "full", capacity: 16, remaining: 0, taken: 16, fee_cents: 1000 };
   const STALE_CLOSED_DIV: DivisionLike = {
     ...TEAM_DIVISION,
     division_id: "stale",
@@ -984,6 +1035,102 @@ describe("summarizeCart", () => {
     expect(summary.subtotalCents).toBe(0);
   });
 
+  // Registration redesign B3 T12 (spec §4.1 cart arithmetic, Review Focus 2). The cart used to read the wire's `closed_reason`
+  // alone, so a division with ONE place left priced two entries at full and the server then waitlisted the second: the review
+  // quoted a total the card was never charged. The verdicts now come from `cartWaitlisted` (capacity.ts), which follows submit's
+  // own loop; these pin what the SUMMARY does with them — the flag, the "not charged now" state and the total — and the DB
+  // parity test (server/usecases/__tests__/registration-cart-parity.test.ts) holds the whole of it to the real submit.
+  describe("waitlist arithmetic — entries into a division take its remaining places in cart order (B3 T12)", () => {
+    const ONE_LEFT: DivisionLike = { ...TEAM_DIVISION, division_id: "one-left", capacity: 16, remaining: 1, taken: 15, fee_cents: 1000 };
+    const team = (id: string, division_id: string, patch: Partial<CartEntry> = {}) => entry({ id, division_id, entrant_kind: "team", ...patch });
+
+    it("second entry beyond remaining is waitlisted in the cart and excluded from total", () => {
+      const summary = summarizeCart({ entries: [team("e1", "one-left"), team("e2", "one-left")] }, [ONE_LEFT]);
+      expect(summary.lines.map((l) => l.waitlisted), "[first takes the place, second waits]").toEqual([false, true]);
+      expect(summary.lines.map((l) => l.notChargedNow)).toEqual([false, true]);
+      expect(summary.lines.map((l) => l.staleClosed), "waiting is not a stale-closed division").toEqual([false, false]);
+      expect(summary.subtotalCents, "the total is exactly ONE fee: the division's price, once").toBe(ONE_LEFT.fee_cents);
+      expect(summary.currency).toBe("gbp");
+      expect(payableDivision(summary)?.division_id).toBe("one-left");
+      expect(summary.lines.map(lineMethod), "the waiting entry has no payment method to name").toEqual(["offline", null]);
+    });
+
+    it("the empty cart: no lines, nothing to pay, no currency", () => {
+      expect(summarizeCart({ entries: [] }, [ONE_LEFT])).toEqual({ lines: [], subtotalCents: 0, currency: null });
+    });
+
+    it("remaining null never waitlists: every entry is charged", () => {
+      const open = { ...ONE_LEFT, division_id: "uncapped", capacity: null, remaining: null };
+      const summary = summarizeCart({ entries: [team("e1", "uncapped"), team("e2", "uncapped"), team("e3", "uncapped")] }, [open]);
+      expect(summary.lines.map((l) => l.waitlisted)).toEqual([false, false, false]);
+      expect(summary.subtotalCents).toBe(3 * open.fee_cents);
+    });
+
+    it("a division with 3 places left takes 3 entries; the 4th waits and is not in the total", () => {
+      const three = { ...ONE_LEFT, division_id: "three", remaining: 3 };
+      const summary = summarizeCart({ entries: [1, 2, 3, 4].map((n) => team(`e${n}`, "three")) }, [three]);
+      expect(summary.lines.map((l) => l.waitlisted)).toEqual([false, false, false, true]);
+      expect(summary.subtotalCents).toBe(3 * three.fee_cents);
+    });
+
+    it("after a sibling is removed (the real reducer), the entry behind it takes the place and is charged", () => {
+      const before: CartState = { entries: [team("e1", "one-left"), team("e2", "one-left")] };
+      expect(summarizeCart(before, [ONE_LEFT]).lines.map((l) => l.waitlisted)).toEqual([false, true]);
+      const after = cartReducer(before, { type: "REMOVE_ENTRY", id: "e1" });
+      const summary = summarizeCart(after, [ONE_LEFT]);
+      expect(summary.lines.map((l) => [l.entry.id, l.waitlisted])).toEqual([["e2", false]]);
+      expect(summary.subtotalCents, "the survivor is now the one charged entry").toBe(ONE_LEFT.fee_cents);
+    });
+
+    it("a duplicated entry (the real reducer) is queued behind its source when only one place is left", () => {
+      const cart = cartReducer({ entries: [team("e1", "one-left")] }, { type: "DUPLICATE_ENTRY", sourceId: "e1", newId: "e2" });
+      const summary = summarizeCart(cart, [ONE_LEFT]);
+      expect(summary.lines.map((l) => [l.entry.id, l.waitlisted])).toEqual([["e1", false], ["e2", true]]);
+    });
+
+    it("divisions are counted separately, and only the entries that hold a place are charged", () => {
+      const other: DivisionLike = { ...ONE_LEFT, division_id: "roomy", remaining: 5, fee_cents: 2500 };
+      const cart: CartState = {
+        entries: [team("a1", "one-left"), team("b1", "roomy"), team("a2", "one-left"), team("b2", "roomy")],
+      };
+      const summary = summarizeCart(cart, [ONE_LEFT, other]);
+      expect(summary.lines.map((l) => l.waitlisted)).toEqual([false, false, true, false]);
+      expect(summary.subtotalCents, "1000 for the first one-left entry + 2 x 2500 for roomy").toBe(1000 + 2 * 2500);
+    });
+
+    it("a full division waits every team entry into it (the pre-change behaviour, kept)", () => {
+      const summary = summarizeCart({ entries: [team("e1", "waitlist"), team("e2", "waitlist")] }, [WAITLIST_DIV]);
+      expect(summary.lines.map((l) => l.waitlisted)).toEqual([true, true]);
+      expect(summary.subtotalCents).toBe(0);
+    });
+
+    it("a solo sign-up into a full division is NOT waitlisted: it is charged its own price, like submit (FP2)", () => {
+      // Submit never queues a solo entry (it refuses a full solo pool instead). The cart used to flag it "waiting, not charged".
+      const full: DivisionLike = { ...WAITLIST_DIV, free_agent_fee_cents: 500 };
+      const summary = summarizeCart({ entries: [team("solo", "waitlist", { free_agent: true })] }, [full]);
+      expect(summary.lines[0]!.waitlisted).toBe(false);
+      expect(summary.lines[0]!.notChargedNow).toBe(false);
+      expect(summary.subtotalCents).toBe(500);
+    });
+
+    it("a solo sign-up takes no place: one place left, team + solo + team gives [seated, seated, waiting]", () => {
+      const summary = summarizeCart({ entries: [team("t1", "one-left"), team("solo", "one-left", { free_agent: true }), team("t2", "one-left")] }, [ONE_LEFT]);
+      expect(summary.lines.map((l) => l.waitlisted)).toEqual([false, false, true]);
+      expect(summary.subtotalCents, "two charged entries: the team fee and the solo price (a null solo price falls back to the team fee)").toBe(2 * ONE_LEFT.fee_cents);
+    });
+
+    it("a stale-closed division is never 'waiting', whatever its places say: it blocks Next instead", () => {
+      const stale: DivisionLike = { ...STALE_CLOSED_DIV, remaining: 0 };
+      const summary = summarizeCart({ entries: [team("e1", "stale")] }, [stale]);
+      expect([summary.lines[0]!.waitlisted, summary.lines[0]!.staleClosed, summary.lines[0]!.notChargedNow]).toEqual([false, true, true]);
+    });
+
+    it("an unknown division is not 'waiting' either: nothing is known about its places", () => {
+      const summary = summarizeCart({ entries: [team("e1", "ghost")] }, [ONE_LEFT]);
+      expect([summary.lines[0]!.waitlisted, summary.lines[0]!.notChargedNow]).toEqual([false, true]);
+    });
+  });
+
   describe("payableDivision — the ONE division that decides the submit CTA and the payment-method note (step 5, so the two can never disagree)", () => {
     it("undefined for an all-free/all-waitlisted cart — nothing to describe", () => {
       const cart: CartState = { entries: [entry({ id: "e1", division_id: "waitlist", entrant_kind: "team" })] };
@@ -999,6 +1146,184 @@ describe("summarizeCart", () => {
       };
       const division = payableDivision(summarizeCart(cart, [WAITLIST_DIV, OPEN_PAID]));
       expect(division?.division_id).toBe("open-paid");
+    });
+  });
+
+  // Registration redesign B3 T12 (B2 review m3). The forward button on Review names what submit will DO. A cart whose every entry
+  // waits is a person joining a waiting list - "Enter the competition" (the free label, because the charged total is 0) is wrong for
+  // it; a cart with one charged entry and one waiting entry still pays, and the label quotes the CHARGED total only.
+  describe("submitLabelKey — the Review button names what submit will do", () => {
+    const STRIPE_PAID: DivisionLike = { ...OPEN_PAID, division_id: "stripe-paid", payment_method: "stripe" };
+    const FREE_DIV: DivisionLike = { ...TEAM_DIVISION, division_id: "free-div", fee_cents: 0, free_agent_fee_cents: null };
+    const ONE_LEFT_STRIPE: DivisionLike = { ...STRIPE_PAID, division_id: "one-left-stripe", capacity: 8, remaining: 1, taken: 7 };
+    const team = (id: string, division_id: string, patch: Partial<CartEntry> = {}) => entry({ id, division_id, entrant_kind: "team", ...patch });
+    const key = (entries: CartEntry[], divisions: DivisionLike[]) => submitLabelKey(summarizeCart({ entries }, divisions));
+
+    // The empty case first (TEST-STRATEGY): an empty cart has no line that is "all" anything, so it must NOT read as a waiting list.
+    it("an empty cart is not a waiting list: it keeps the free label", () => {
+      expect(key([], [WAITLIST_DIV])).toBe("register.submit.free");
+    });
+
+    it.each([
+      { name: "one entry into a full division", entries: [team("e1", "waitlist")], divisions: [WAITLIST_DIV] },
+      { name: "two entries into a full division", entries: [team("e1", "waitlist"), team("e2", "waitlist")], divisions: [WAITLIST_DIV] },
+      {
+        name: "entries into two different full divisions",
+        entries: [team("e1", "waitlist"), team("e2", "waitlist-2")],
+        divisions: [WAITLIST_DIV, { ...WAITLIST_DIV, division_id: "waitlist-2" }],
+      },
+    ])("every entry waits ($name): join the waiting list", ({ entries, divisions }) => {
+      const summary = summarizeCart({ entries }, divisions);
+      expect(summary.lines.every((l) => l.waitlisted), "premise: every line is waitlisted").toBe(true);
+      expect(summary.lines.length, "premise: the cart is not empty").toBeGreaterThan(0);
+      expect(submitLabelKey(summary)).toBe("register.submit.waitlist");
+    });
+
+    it.each([
+      { name: "one charged card entry + one waiting entry", entries: [team("e1", "stripe-paid"), team("e2", "waitlist")], divisions: [STRIPE_PAID, WAITLIST_DIV], want: "register.submit.pay" },
+      { name: "one charged offline entry + one waiting entry", entries: [team("e1", "open-paid"), team("e2", "waitlist")], divisions: [OPEN_PAID, WAITLIST_DIV], want: "register.submit.fee" },
+      { name: "the same division: the first entry takes the last place, the second waits (card)", entries: [team("e1", "one-left-stripe"), team("e2", "one-left-stripe")], divisions: [ONE_LEFT_STRIPE], want: "register.submit.pay" },
+      { name: "the waiting entry comes FIRST in the cart, the charged one after it", entries: [team("e1", "waitlist"), team("e2", "stripe-paid")], divisions: [WAITLIST_DIV, STRIPE_PAID], want: "register.submit.pay" },
+    ])("mixed ($name): the Pay/Enter label stays, the waiting-list one does not", ({ entries, divisions, want }) => {
+      const summary = summarizeCart({ entries }, divisions);
+      expect(summary.lines.some((l) => l.waitlisted), "premise: one entry waits").toBe(true);
+      expect(summary.lines.some((l) => !l.notChargedNow), "premise: one entry is charged").toBe(true);
+      expect(submitLabelKey(summary)).toBe(want);
+    });
+
+    it("the fee the Pay label quotes is the charged total only: the waiting entry's own price never joins it", () => {
+      const summary = summarizeCart({ entries: [team("e1", "stripe-paid"), team("e2", "waitlist")] }, [STRIPE_PAID, WAITLIST_DIV]);
+      expect(WAITLIST_DIV.fee_cents, "premise: the waiting entry has a price of its own").toBeGreaterThan(0);
+      expect(summary.subtotalCents).toBe(STRIPE_PAID.fee_cents);
+    });
+
+    it("a free entry beside a waiting one is not a waiting list: the person is entering the free division", () => {
+      expect(key([team("e1", "free-div"), team("e2", "waitlist")], [FREE_DIV, WAITLIST_DIV])).toBe("register.submit.free");
+    });
+
+    it("a solo sign-up into a full division is not waiting (submit never queues it): it is charged, so it reads Pay", () => {
+      const full: DivisionLike = { ...WAITLIST_DIV, payment_method: "stripe", free_agent_fee_cents: 500 };
+      expect(key([team("solo", "waitlist", { free_agent: true })], [full])).toBe("register.submit.pay");
+    });
+
+    it("a stale-closed entry alone is not a waiting list, and neither is an unknown division", () => {
+      expect(key([team("e1", "stale")], [STALE_CLOSED_DIV])).toBe("register.submit.free");
+      expect(key([team("e1", "ghost")], [WAITLIST_DIV])).toBe("register.submit.free");
+    });
+
+    it("a waiting entry beside a stale-closed one is not 'every entry waits' (the stale one blocks Next, it does not wait)", () => {
+      expect(key([team("e1", "waitlist"), team("e2", "stale")], [WAITLIST_DIV, STALE_CLOSED_DIV])).toBe("register.submit.free");
+    });
+
+    it("after the entry holding the last place is removed (the real reducer) the survivor takes it: the label flips from Pay back off the waiting list", () => {
+      const before: CartState = { entries: [team("e1", "one-left-stripe"), team("e2", "one-left-stripe")] };
+      const afterRemoval = cartReducer(before, { type: "REMOVE_ENTRY", id: "e1" });
+      expect(submitLabelKey(summarizeCart(afterRemoval, [ONE_LEFT_STRIPE]))).toBe("register.submit.pay");
+      // And the other direction: a division that fills up under a cart of waiting entries reads waiting for all of them.
+      const full: DivisionLike = { ...ONE_LEFT_STRIPE, remaining: 0 };
+      expect(submitLabelKey(summarizeCart(before, [full]))).toBe("register.submit.waitlist");
+    });
+  });
+
+  // Owner ruling 2026-11-13 (B2/B3 fix round): Review's heading says "Review and pay" only when something IS charged now; a free cart,
+  // or one whose every entry waits, has nothing to pay, so it is a plain "Review". The expected key is the ruling's, entry by entry
+  // (what the person is charged), not read back from submitLabelKey.
+  describe("reviewHeadingKey — Review says 'and pay' only when something is charged now", () => {
+    const STRIPE_PAID: DivisionLike = { ...OPEN_PAID, division_id: "stripe-paid", payment_method: "stripe" };
+    const FREE_DIV: DivisionLike = { ...TEAM_DIVISION, division_id: "free-div", fee_cents: 0, free_agent_fee_cents: null };
+    const ONE_LEFT_STRIPE: DivisionLike = { ...STRIPE_PAID, division_id: "one-left-stripe", capacity: 8, remaining: 1, taken: 7 };
+    const team = (id: string, division_id: string, patch: Partial<CartEntry> = {}) => entry({ id, division_id, entrant_kind: "team", ...patch });
+    const PAY = "register.review.heading";
+    const PLAIN = "register.review.headingPlain";
+
+    it.each([
+      { name: "an empty cart (nothing is charged)", entries: [], divisions: [WAITLIST_DIV], charged: false },
+      { name: "a free entry", entries: [team("e1", "free-div")], divisions: [FREE_DIV], charged: false },
+      { name: "one entry into a full, PRICED division (it waits, so nothing is charged)", entries: [team("e1", "waitlist")], divisions: [WAITLIST_DIV], charged: false },
+      { name: "two entries into a full, priced division", entries: [team("e1", "waitlist"), team("e2", "waitlist")], divisions: [WAITLIST_DIV], charged: false },
+      { name: "a free entry beside a waiting one", entries: [team("e1", "free-div"), team("e2", "waitlist")], divisions: [FREE_DIV, WAITLIST_DIV], charged: false },
+      { name: "a card entry", entries: [team("e1", "stripe-paid")], divisions: [STRIPE_PAID], charged: true },
+      { name: "a pay-the-organiser entry", entries: [team("e1", "open-paid")], divisions: [OPEN_PAID], charged: true },
+      { name: "a charged entry beside a waiting one", entries: [team("e1", "stripe-paid"), team("e2", "waitlist")], divisions: [STRIPE_PAID, WAITLIST_DIV], charged: true },
+      { name: "the waiting entry comes first, the charged one after", entries: [team("e1", "waitlist"), team("e2", "stripe-paid")], divisions: [WAITLIST_DIV, STRIPE_PAID], charged: true },
+      { name: "a solo sign-up into a full division (submit never queues it, so it is charged)", entries: [team("solo", "waitlist", { free_agent: true })], divisions: [{ ...WAITLIST_DIV, payment_method: "stripe" as const, free_agent_fee_cents: 500 }], charged: true },
+    ])("$name", ({ entries, divisions, charged }) => {
+      const summary = summarizeCart({ entries }, divisions);
+      // The premise is the rulebook's own: money is charged now exactly when some line is not "not charged now" and has a price.
+      expect(summary.subtotalCents > 0, "premise: the cart's subtotal agrees with what the case says is charged").toBe(charged);
+      expect(reviewHeadingKey(summary)).toBe(charged ? PAY : PLAIN);
+    });
+
+    it("the answer follows the cart: the last place taken by the first entry flips the second off the heading's 'pay'", () => {
+      const both: CartState = { entries: [team("e1", "one-left-stripe"), team("e2", "one-left-stripe")] };
+      expect(reviewHeadingKey(summarizeCart(both, [ONE_LEFT_STRIPE])), "one entry seats and pays").toBe(PAY);
+      const full: DivisionLike = { ...ONE_LEFT_STRIPE, remaining: 0 };
+      expect(reviewHeadingKey(summarizeCart(both, [full])), "the division fills under the cart: both wait, nothing is charged").toBe(PLAIN);
+      const afterRemoval = cartReducer(both, { type: "REMOVE_ENTRY", id: "e1" });
+      expect(reviewHeadingKey(summarizeCart(afterRemoval, [ONE_LEFT_STRIPE])), "removing the first lets the survivor take the place").toBe(PAY);
+    });
+  });
+
+  // Registration redesign B3 review m1 (owner ruling 2026-11-13): a cart whose every entry waits read "Free" in its total - on Review
+  // AND in the Entries cart's subtotal - though the person is joining a queue for a priced division, not entering a free one. It reads
+  // "Nothing to pay now". The expected words are the ruling's literals and the real English dictionary's, never read back from cart.ts.
+  describe("cartTotalText — the ONE text both totals (Review, the Entries cart) read", () => {
+    const EN_UI: Dict = JSON.parse(readFileSync(join(__dirname, "..", "..", "..", "..", "dictionaries", "en", "ui.json"), "utf8")) as Dict;
+    const tEn = (key: TKey) => tRuntime(EN_UI, key);
+    const STRIPE_PAID: DivisionLike = { ...OPEN_PAID, division_id: "stripe-paid", payment_method: "stripe" };
+    const FREE_DIV: DivisionLike = { ...TEAM_DIVISION, division_id: "free-div", fee_cents: 0, free_agent_fee_cents: null };
+    const ONE_LEFT_STRIPE: DivisionLike = { ...STRIPE_PAID, division_id: "one-left-stripe", capacity: 8, remaining: 1, taken: 7 };
+    const team = (id: string, division_id: string, patch: Partial<CartEntry> = {}) => entry({ id, division_id, entrant_kind: "team", ...patch });
+    const text = (entries: CartEntry[], divisions: DivisionLike[]) => cartTotalText(summarizeCart({ entries }, divisions), tEn, "en");
+    const NOTHING = "Nothing to pay now";
+
+    // The empty case first (TEST-STRATEGY): an empty cart waits for nothing, so it is not "Nothing to pay now".
+    it("an empty cart is not a waiting list: it reads Free", () => {
+      expect(text([], [WAITLIST_DIV])).toBe("Free");
+    });
+
+    it.each([
+      { name: "one entry into a full, priced division", entries: [team("e1", "waitlist")], divisions: [WAITLIST_DIV] },
+      { name: "two entries into a full division", entries: [team("e1", "waitlist"), team("e2", "waitlist")], divisions: [WAITLIST_DIV] },
+      {
+        name: "entries into two different full divisions",
+        entries: [team("e1", "waitlist"), team("e2", "waitlist-2")],
+        divisions: [WAITLIST_DIV, { ...WAITLIST_DIV, division_id: "waitlist-2" }],
+      },
+    ])("every entry waits ($name): 'Nothing to pay now', never Free", ({ entries, divisions }) => {
+      const summary = summarizeCart({ entries }, divisions);
+      expect(summary.lines.length > 0 && summary.lines.every((l) => l.waitlisted), "premise: every line waits").toBe(true);
+      expect(text(entries, divisions)).toBe(NOTHING);
+    });
+
+    it.each([
+      { name: "a free entry", entries: [team("e1", "free-div")], divisions: [FREE_DIV], want: "Free" },
+      { name: "a free entry beside a waiting one (the free division is entered)", entries: [team("e1", "free-div"), team("e2", "waitlist")], divisions: [FREE_DIV, WAITLIST_DIV], want: "Free" },
+      { name: "a stale-closed entry alone (it blocks Next; it does not wait)", entries: [team("e1", "stale")], divisions: [STALE_CLOSED_DIV], want: "Free" },
+      { name: "a charged card entry", entries: [team("e1", "stripe-paid")], divisions: [STRIPE_PAID], want: "£25.00" },
+      { name: "a charged entry beside a waiting one: the charged fee only", entries: [team("e1", "stripe-paid"), team("e2", "waitlist")], divisions: [STRIPE_PAID, WAITLIST_DIV], want: "£25.00" },
+    ])("not every entry waits ($name): '$want'", ({ entries, divisions, want }) => {
+      expect(text(entries, divisions)).toBe(want);
+    });
+
+    it("the text follows the cart: the division filling under it turns £25.00 into Nothing to pay now, and a removal turns it back", () => {
+      const both: CartState = { entries: [team("e1", "one-left-stripe"), team("e2", "one-left-stripe")] };
+      expect(cartTotalText(summarizeCart(both, [ONE_LEFT_STRIPE]), tEn, "en"), "one place left: the first seats and pays").toBe("£25.00");
+      const full: DivisionLike = { ...ONE_LEFT_STRIPE, remaining: 0 };
+      expect(cartTotalText(summarizeCart(both, [full]), tEn, "en"), "no place left: both wait").toBe(NOTHING);
+      const afterRemoval = cartReducer(both, { type: "REMOVE_ENTRY", id: "e1" });
+      expect(cartTotalText(summarizeCart(afterRemoval, [ONE_LEFT_STRIPE]), tEn, "en"), "the survivor takes the place").toBe("£25.00");
+    });
+
+    it("every locale has the words, translated (a missing key would fall back to English or the key)", () => {
+      let checked = 0;
+      for (const loc of ["en", "nl", "fr", "es"]) {
+        const d = JSON.parse(readFileSync(join(__dirname, "..", "..", "..", "..", "dictionaries", loc, "ui.json"), "utf8")) as Record<string, string>;
+        expect(d["register.cart.nothingToPayNow"], `${loc}: the words`).toBeTruthy();
+        if (loc !== "en") expect(d["register.cart.nothingToPayNow"], `${loc}: translated, not English`).not.toBe(NOTHING);
+        checked += 1;
+      }
+      expect(checked, "anti-vacuity: four locales").toBe(4);
     });
   });
 });
@@ -1053,7 +1378,7 @@ describe("lineMethod - how ONE cart line is paid, for the review step's per-entr
 
   it("a line that is not charged now has no method: free, waitlisted, stale-closed, a free solo price, or an unknown division", () => {
     expect(lineMethod(lineOf({ ...CARD, fee_cents: 0 })), "free").toBeNull();
-    expect(lineMethod(lineOf({ ...CARD, closed_reason: "full" })), "waitlisted").toBeNull();
+    expect(lineMethod(lineOf({ ...CARD, closed_reason: "full", remaining: 0 })), "waitlisted").toBeNull();
     expect(lineMethod(lineOf({ ...CARD, closed_reason: "window" })), "stale-closed").toBeNull();
     expect(lineMethod(lineOf({ ...CARD, free_agent_fee_cents: 0 }, { free_agent: true })), "a solo price of 0 on a paid division").toBeNull();
     expect(lineMethod(summarizeCart({ entries: [entry({ id: "e1", division_id: "ghost", entrant_kind: "team" })] }, []).lines[0]!), "unknown division").toBeNull();
@@ -1065,7 +1390,8 @@ describe("lineMethod - how ONE cart line is paid, for the review step's per-entr
     for (const method of ["stripe", "offline"] as const)
       for (const fee of [0, 1500] as const)
         for (const closed of [null, "full", "window"] as const) {
-          const got = lineMethod(lineOf({ ...CARD, payment_method: method, fee_cents: fee, closed_reason: closed }));
+          // A "full" row is a full division on the wire: no places left. The other rows keep the fixture's places.
+          const got = lineMethod(lineOf({ ...CARD, payment_method: method, fee_cents: fee, closed_reason: closed, remaining: closed === "full" ? 0 : CARD.remaining }));
           const charged = fee > 0 && closed === null;
           expect(got, `${method}/${fee}/${closed}`).toBe(charged ? method : null);
           checked += 1;

@@ -121,14 +121,26 @@ describe("register page (live — open divisions)", () => {
     expect(html).not.toContain("Mixed Doubles");
   });
 
+  // B2 T8 (spec §7.2): the org header scrolls away on a phone while this form is up, keyed on `:has([data-register-flow])` (layout.tsx,
+  // layout-header.test.tsx). The marker must be on exactly the stepper's root, and it is read with `="` because React serialises an omitted
+  // prop as `"$undefined"` — a bare `data-register-flow` substring would match in both states.
+  it("marks the stepper's root with data-register-flow, once (the page-level side of the header scroll-away)", async () => {
+    const html = await render();
+    expect(html.match(/data-register-flow="/g) ?? [], "exactly one marker on the open register page").toHaveLength(1);
+  });
+
   it("does not crash with a ?join= param present, and carries it as a data attribute (RS007 seam)", async () => {
     const html = await render("ABC123");
     expect(html).toContain('data-join-code="ABC123"');
   });
 
-  it("the step rail shows both Who and Entries (two open divisions — no collapse; uppercase is CSS text-transform, not literal content)", async () => {
+  it("the step rail shows both Contact and Entries (two open divisions — no collapse; uppercase is CSS text-transform, not literal content)", async () => {
     const html = await render();
-    expect(html).toMatch(/>Who</);
+    // B2 T7: the first step is named Contact (it was Who). Entries is its own step here, so it is also what the phone header says is NEXT.
+    expect(html).toMatch(/>Contact</);
+    expect(html).not.toMatch(/>Who</);
     expect(html).toMatch(/>Entries</);
+    expect(html).toContain("Step 1 of 5");
+    expect(html).toContain("Next: Entries");
   });
 });

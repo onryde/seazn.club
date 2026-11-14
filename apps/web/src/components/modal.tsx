@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 /** Elements this trap treats as tab stops. Includes `select`/`textarea` —
  *  the registration hub config panel (RS004, the surface that motivated
@@ -49,6 +49,7 @@ export function Modal({
   bleed = false,
   placement = "center",
   closeSize = "md",
+  closeLabel = "Close",
 }: {
   title: string;
   children?: React.ReactNode;
@@ -65,8 +66,14 @@ export function Modal({
   /** `md` (the default) is the small close every dialog has had. `lg` is the sponsor console's (owner, 2026-11-12: "close icon is very
    *  small"): a 40px button, 44px below `md`, with a drawn 20px X in a darker grey. Opt-in, so the other callers do not move. */
   closeSize?: "md" | "lg";
+  /** The close button's accessible name. Defaults to the English "Close" every caller has always had; a caller that has a
+   *  dictionary passes its own localised word (B6 T21 review: the registration filter sheet). */
+  closeLabel?: string;
 }) {
   const dialogRef = useRef<HTMLDivElement>(null);
+  // The dialog's accessible name is its visible title (aria-labelledby -> the h3), so a screen reader announces what is drawn and
+  // axe's `aria-dialog-name` passes for every Modal in the app. `useId`, not a literal: two dialogs can be open at once.
+  const titleId = useId();
   // Read the LATEST onClose via a ref so the mount effect below can stay
   // deps:[] — a caller passing a fresh inline `onClose` every render must
   // not re-run this effect, or it would restore-then-refocus mid-edit,
@@ -151,14 +158,17 @@ export function Modal({
         className={`flex max-h-[85dvh] w-full ${maxW} flex-col rounded-t-2xl border border-purple-100 bg-white p-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))] shadow-2xl sm:rounded-2xl sm:pb-6${bleedDialog}${side ? ` ${SIDE_DIALOG_CLASSES}` : ""}`}
         role="dialog"
         aria-modal="true"
+        aria-labelledby={titleId}
         onClick={(e) => e.stopPropagation()}
       >
         <span className="sheet-handle" aria-hidden />
         <div className={`mb-3 flex shrink-0 items-center justify-between${bleedInset}`}>
-          <h3 className="text-lg font-semibold text-purple-900">{title}</h3>
+          <h3 id={titleId} className="text-lg font-semibold text-purple-900">
+            {title}
+          </h3>
           <button
             onClick={onClose}
-            aria-label="Close"
+            aria-label={closeLabel}
             className={closeClass}
           >
             {closeSize === "lg" ? (
@@ -171,7 +181,9 @@ export function Modal({
           </button>
         </div>
         {children && (
-          <div className="min-h-0 flex-1 overflow-y-auto text-sm text-slate-600">
+          // `overscroll-contain`: a swipe that runs past the end of the sheet's own scroll must not chain to the page behind the
+          // overlay. (Locking the page outright would change every Modal in the app; this does not.)
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain text-sm text-slate-600">
             {children}
           </div>
         )}

@@ -16,12 +16,15 @@ import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t } from "@/lib/i18n";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { RegisterStepper } from "@/components/public-site/register/register-stepper";
+import { RegistrationCloses } from "@/components/public-site/register/register-closes";
+import { sharedClosesAt } from "@/components/public-site/register/steps";
 import type { RegisterLichessState } from "@/components/public-site/register/register-lichess-card";
 import { getCurrentUser } from "@/lib/auth";
 import { lichessFlashCode } from "@/lib/lichess-link";
 import { lichessConfigured } from "@/lib/oauth";
 import { getLichessLink, lichessGrantPlays } from "@/server/usecases/external-accounts";
 import { routes } from "@/lib/routes";
+import { registrationWaitsOnCardPayments } from "@/lib/registration-card-payments";
 
 type Props = {
   params: Promise<{ orgSlug: string; competitionSlug: string }>;
@@ -94,11 +97,25 @@ export default async function RegisterPage({ params, searchParams }: Props) {
           <h1 className="mt-1 font-display text-4xl font-bold uppercase tracking-tight text-ink">
             {t(ui, "register.title")}
           </h1>
-          <p className="mt-4 text-sm text-zinc-500">{t(ui, "register.notOpen")}</p>
+          {/* Walk-fix F5: closed only because card payments aren't available is a reason the visitor is owed, and it says the
+              registration will open - the bare "not open" read as final. */}
+          {registrationWaitsOnCardPayments(info.divisions) ? (
+            <p
+              role="status"
+              data-testid="register-card-payments-unavailable"
+              className="mt-4 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900"
+            >
+              {t(ui, "register.cardPaymentsUnavailable")}
+            </p>
+          ) : (
+            <p className="mt-4 text-sm text-zinc-500">{t(ui, "register.notOpen")}</p>
+          )}
         </div>
       </DictProvider>
     );
   }
+
+  const closesAt = sharedClosesAt(info.divisions);
 
   return (
     <DictProvider dict={ui} locale={locale}>
@@ -112,9 +129,15 @@ export default async function RegisterPage({ params, searchParams }: Props) {
           </Link>{" "}
           / {t(ui, "register.title")}
         </p>
-        <h1 className="mt-1 mb-4 font-display text-4xl font-bold uppercase tracking-tight text-ink">
-          {t(ui, "register.title")}
-        </h1>
+        {/* B2 T7 (spec §7.1, FP10): the H1 is the competition's own name — "Register" says nothing about where this is (the
+            breadcrumb above still says it). A competition has no closing time of its own, only its divisions do, so the line under
+            the name appears only when every open division closes at the same instant. */}
+        <div className="mb-4">
+          <h1 className="mt-1 break-words font-display text-3xl font-bold uppercase leading-none tracking-tight text-ink sm:text-4xl">
+            {info.competition.name}
+          </h1>
+          {closesAt ? <RegistrationCloses iso={closesAt} locale={locale} /> : null}
+        </div>
         <RegisterStepper
           orgSlug={orgSlug}
           competitionSlug={competitionSlug}

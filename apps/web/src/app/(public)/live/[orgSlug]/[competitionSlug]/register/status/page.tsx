@@ -25,17 +25,64 @@ import {
 } from "@/server/usecases/registrations";
 import { HttpError } from "@/lib/errors";
 import { formatMoneyExact } from "@/lib/currency";
+import { fmtPublicDate, fmtPublicDeadline } from "@/lib/format";
 import { resolveLocale } from "@/lib/resolve-locale";
-import { getDictionary, t } from "@/lib/i18n";
+import { getDictionary, plural, t } from "@/lib/i18n";
+import type { Dict, Locale } from "@/lib/i18n-constants";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { renderProse } from "@/lib/prose";
 import { fillPaymentInstructions, preserveLineBreaks } from "@/lib/payment-instructions";
+import { CopyReference } from "./copy-reference";
 import { EntryCard } from "./entry-card";
 import { ResendConfirmation } from "./resend-confirmation";
-import { cartSubtotal } from "./view-model";
+import {
+  cartHeadline,
+  cartMoneySummary,
+  headlineCarriesUnavailableNotice,
+  offersResendConfirmation,
+  contactLineKey,
+  moneyLine,
+  offlineInstructionsReference,
+  receivedCount,
+  whatHappensNext,
+  type MoneySummary,
+  type NextItem,
+} from "./view-model";
 import { routes } from "@/lib/routes";
 
 export const metadata: Metadata = { robots: { index: false, follow: false } };
+
+/** A competition's own dates ('YYYY-MM-DD', no zone) the way the org hub prints them: "5 Dec 2026", read in UTC so the calendar day
+ *  never shifts. */
+const COMPETITION_DATE: Intl.DateTimeFormatOptions = { day: "numeric", month: "short", year: "numeric" };
+
+/** The money line's sentence (spec §5.3). Every amount in the cart's one currency, always to 2 decimals. */
+function moneySentence(money: MoneySummary, currency: string, locale: Locale, ui: Dict): string {
+  const amount = (cents: number) => formatMoneyExact(cents, currency, locale);
+  switch (moneyLine(money)) {
+    case "paidDue":
+      return t(ui, "register.status.money.paidDue", { paid: amount(money.paidCents), due: amount(money.dueCents) });
+    case "paid":
+      return t(ui, "register.status.money.paid", { amount: amount(money.paidCents) });
+    case "due":
+      return t(ui, "register.status.money.due", { amount: amount(money.dueCents) });
+    case "waitlisted":
+      return t(ui, "register.status.money.waitlisted", { amount: amount(money.waitlistedCents) });
+    case "nothing":
+      return t(ui, "register.status.money.nothing");
+  }
+}
+
+/** One "What happens next" line. `whatHappensNext` hands over raw values (see `NextItem`); this localises them: the competition's
+ *  dates as calendar days, a pay-by deadline in the org's own zone with its label (the card's own "Pay by" format). */
+function nextSentence(item: NextItem, locale: Locale, timezone: string, ui: Dict): string {
+  const vars = { ...item.vars };
+  for (const day of ["date", "start", "end"] as const) {
+    if (vars[day]) vars[day] = fmtPublicDate(locale, "UTC", vars[day], COMPETITION_DATE);
+  }
+  if (vars.deadline) vars.deadline = fmtPublicDeadline(locale, timezone, vars.deadline);
+  return item.count === undefined ? t(ui, item.key, vars) : plural(ui, item.key, item.count, locale, vars);
+}
 
 type Props = {
   params: Promise<{ orgSlug: string; competitionSlug: string }>;
@@ -88,44 +135,40 @@ export default async function RegistrationStatusPage({ params, searchParams }: P
     );
   }
 
-  // Live subtotal: NEVER view.amount_cents (group.amount_cents is a
-  // submit-time snapshot — promoteWaitlistedRow updates a promoted entry's
-  // own amount_cents but never that mirror, so it goes stale the moment any
-  // entry is promoted). Summed fresh from the entries this render actually
-  // has.
+  // Registration redesign B4 T15 (spec §5): the page leads with the outcome, then the reference, the entries, the money and what
+  // happens next. Each is a pure function of the view (view-model.ts); this only words what they return.
   //
-  // FIX 1 (RS007 status-page review): this used to exclude only
-  // `waitlisted` (buildCartMail's own "non-waitlisted" rule) — but unlike
-  // that email, which is built once shortly after submit, THIS page is
-  // revisited after a cancellation, and withdrawCore/the rejection
-  // path/the expiry sweep never clear a cancelled entry's `amount_cents`
-  // (see entryCountsTowardTotal's own doc comment, view-model.ts). Summing
-  // that stale figure in kept a cancelled entry's pre-cancellation fee in
-  // the Subtotal forever. `entryCountsTowardTotal` is the SAME predicate
-  // each EntryCard uses to decide whether to show its own fee, so this
-  // total is provably the sum of what the cards actually show.
-  //
-  // Polish wave P3 (W6, W10, W11): that predicate leaves an all-waitlisted or
-  // all-ended cart with a live total of 0, which this row used to print as
-  // "Free" for an entry that owes a fee on promotion, or was cancelled.
-  // `cartSubtotal` says which of the three it is; the row words each one.
-  const subtotal = cartSubtotal(view.entries);
-  const subtotalAmount =
-    subtotal.kind === "nothing_due"
-      ? t(ui, "register.status.subtotal.nothingDue")
-      : subtotal.cents === 0
-        ? t(ui, "register.entries.free")
-        : formatMoneyExact(subtotal.cents, view.currency, locale);
-  const subtotalNote = subtotal.kind === "waitlisted" && subtotal.cents > 0 ? t(ui, "register.status.subtotal.waitlisted") : null;
+  // The money line is summed fresh from the entries this render has, never `view.amount_cents` (a submit-time snapshot that a
+  // promotion never updates), and paid is counted by settlement, never by status: a fee waiver confirms an entry and keeps its fee.
+  const headline = cartHeadline(view.entries, view);
+  const headlineText =
+    headline === "received"
+      ? plural(ui, "register.status.headline.received", receivedCount(view.entries, view), locale)
+      : // B4 review m1: the card notice the owed entry's card already carries, as the page's lead line (owner ruling: the existing
+        // notice, not new copy).
+        headline === "payUnavailable"
+        ? t(ui, "register.status.pay.unavailable")
+        : t(ui, `register.status.headline.${headline}`);
+  const money = cartMoneySummary(view.entries, view);
+  const nextItems = whatHappensNext(view, headline, new Date());
+  // The address is set in its own span (layout.tsx's poweredBy split): the template is split on its one placeholder.
+  // A cart with nothing live says where its mail goes, not that a confirmation was sent (walk-fix A fix round 1, `contactLineKey`).
+  const [sentLead, sentTail = ""] = t(ui, contactLineKey(headline)).split("{email}");
 
   // Rendered ONCE (cart-level, not per entry — every offline-due entry in
   // this cart reads the SAME instructions) so EntryCard can stay a plain,
   // non-async component (see its own doc comment for why that matters for
   // this page's own render-to-static-markup tests).
+  //
+  // B5 T18 (spec §6.3): {{reference}} is the one entry's own reference when exactly one entry owes, the cart's when several do
+  // (`offlineInstructionsReference`), so the line a person quotes to their bank is the one the organiser can match.
   const instructionsHtml = view.payment_instructions
-    ? await renderProse(preserveLineBreaks(fillPaymentInstructions(view.payment_instructions, view.ref_code)))
+    ? await renderProse(
+        preserveLineBreaks(fillPaymentInstructions(view.payment_instructions, offlineInstructionsReference(view.entries, view))),
+      )
     : null;
   const cart = {
+    cart_size: view.cart_size,
     expires_at: view.expires_at,
     charges_enabled: view.charges_enabled,
     instructionsHtml,
@@ -134,6 +177,8 @@ export default async function RegistrationStatusPage({ params, searchParams }: P
     // usecases/registrations/) — entry-card.tsx renders every deadline in this,
     // never a hardcoded UTC.
     timezone: view.org_timezone,
+    // B4 fix round 2: a cart with one live entry has the card notice as its h1, so its card does not repeat it (round 3: live).
+    unavailableNoticeInHeadline: headlineCarriesUnavailableNotice(view.entries, headline),
   };
 
   return (
@@ -166,19 +211,41 @@ export default async function RegistrationStatusPage({ params, searchParams }: P
           </Link>
         </p>
 
-        <div className="mt-1 flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
-          <div className="min-w-0">
-            <h1 className="font-display text-2xl font-semibold text-ink">{t(ui, "register.status.heading")}</h1>
-            <p className="mt-2 text-sm text-ink-muted">
-              {t(ui, "register.ticket.refLabel")}:{" "}
-              <span className="font-mono font-semibold text-ink">{view.ref_code}</span>
-            </p>
-            <p className="text-sm text-ink-muted">
-              {view.contact_name} · {view.org_name}
-            </p>
-          </div>
-          <ResendConfirmation groupId={rid} token={token} />
-        </div>
+        <h1 data-testid="reg-status-headline" data-headline={headline} className="mt-1 font-display text-2xl font-semibold text-ink">
+          {headlineText}
+        </h1>
+        {/* The mail is queued at submit, so this states a fact. The address is the registrant's own: kept out of session replay. */}
+        <p className="mt-2 text-sm text-ink-muted">
+          {sentLead}
+          <span className="ph-no-capture font-medium break-all text-ink">{view.contact_email}</span>
+          {sentTail}
+        </p>
+
+        {/* The reference hero: the largest type on the page (spec §5.1 item 2). A cart whose reference mint ran out of retries has
+            none (`ref_code` is nullable), so there is nothing to show or copy. Per-entry suffixes (B5) go on each card, not here: the hero is
+            the whole cart's. */}
+        {view.ref_code && (
+          <section
+            data-testid="reg-status-ref"
+            aria-labelledby="reg-status-ref-label"
+            className="mt-6 rounded-xl border border-zinc-200 bg-surface p-4 shadow-sm"
+          >
+            <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-3">
+              <div className="min-w-0">
+                <p id="reg-status-ref-label" className="text-sm text-ink-muted">
+                  {t(ui, "register.ticket.refLabel")}
+                </p>
+                {/* One line, never broken mid-reference (sign-off capture, 2026-11-13: "SZ-VXPW-FY4" / "N" at 320). Inside the live
+                    layout's gutters the card leaves 222px at 320, and 12 Geist Mono characters at text-3xl with tracking-wide need 225px,
+                    so below 360px it is 26px with normal tracking: still above the h1's text-2xl. */}
+                <p className="mt-1 font-mono text-[26px] font-semibold tracking-normal whitespace-nowrap text-ink select-all min-[360px]:text-3xl sm:text-4xl sm:tracking-wide">
+                  {view.ref_code}
+                </p>
+              </div>
+              <CopyReference reference={view.ref_code} />
+            </div>
+          </section>
+        )}
 
         <ul className="mt-6 space-y-3">
           {view.entries.map((entry) => (
@@ -195,22 +262,46 @@ export default async function RegistrationStatusPage({ params, searchParams }: P
           ))}
         </ul>
 
-        {/* Wraps: at 320px the note ("Not due while waitlisted") sits under the amount instead of squeezing the label. */}
-        <div className="mt-6 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-t border-zinc-200 pt-3">
-          <span className="text-xs font-semibold uppercase tracking-wider text-ink-muted">
-            {t(ui, "register.entries.cart.subtotal")}
-          </span>
-          <span className="min-w-0 text-right">
-            <span data-testid="reg-status-subtotal-amount" data-subtotal-kind={subtotal.kind} className="block text-lg font-bold text-ink">
-              {subtotalAmount}
-            </span>
-            {subtotalNote && (
-              <span data-testid="reg-status-subtotal-note" className="block text-xs text-ink-muted">
-                {subtotalNote}
-              </span>
-            )}
-          </span>
-        </div>
+        {/* One sentence, never a bare figure (spec §5.3): "Paid £15.00 · £24.00 still due". */}
+        <p
+          data-testid="reg-status-money"
+          data-money-kind={moneyLine(money)}
+          data-paid-cents={money.paidCents}
+          data-due-cents={money.dueCents}
+          className="mt-6 border-t border-zinc-200 pt-4 text-lg font-semibold text-ink"
+        >
+          {moneySentence(money, view.currency, locale, ui)}
+        </p>
+
+        {/* Real data only (spec §5.2): the competition's dates, the one venue its published fixtures share, and one step. Not
+            rendered at all when there is nothing to say. Not numbered: the lines are facts, not a sequence. A surface panel on the
+            canvas page, without the entry cards' shadow: guidance, quieter than the entries above it. */}
+        {nextItems.length > 0 && (
+          <section
+            data-testid="reg-status-next"
+            aria-labelledby="reg-status-next-title"
+            className="mt-6 rounded-xl border border-zinc-200 bg-surface p-4"
+          >
+            <h2 id="reg-status-next-title" className="font-display text-base font-semibold text-ink">
+              {t(ui, "register.status.next.title")}
+            </h2>
+            <ul className="mt-2 space-y-1.5 text-sm text-ink">
+              {nextItems.map((item) => (
+                <li key={item.kind} data-next-kind={item.kind}>
+                  {nextSentence(item, locale, view.org_timezone, ui)}
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        {/* Quiet footer (spec §5.1 item 7): a text link, not a button competing with Pay. Each entry's Cancel is its own card's
+            footer link. */}
+        {offersResendConfirmation(headline) && (
+          <div className="mt-4">
+            <ResendConfirmation groupId={rid} token={token} />
+          </div>
+        )}
       </div>
     </DictProvider>
   );

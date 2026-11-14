@@ -615,7 +615,7 @@ test("RS012: the Registrants tab pool summary banner holds at this width", async
   await expectNoHorizontalScroll(page);
 });
 
-test("RS009: the assign sheet holds at this width, and the hub does not scroll behind it", async ({
+test("RS009: the assign sheet opens, lists its targets, holds at this width with no horizontal scroll, and Escape closes it", async ({
   page,
 }) => {
   // The picker is a bottom sheet under `sm` and a centred dialog above it, so

@@ -4,23 +4,25 @@
 //
 // Two of the guards below (empty entries, subtotal<=0) turned
 // out to be UNREACHABLE via a single, non-concurrent call to
-// mintGroupCheckout or resumeRegistrationCheckout: both callers re-derive
-// the exact id list/amount they hand down from a FRESH read taken moments
-// earlier (mintGroupCheckout's own `payable` SELECT filters
-// `amount_cents > 0`; resumeRegistrationCheckout re-checks
-// `reg.amount_cents <= 0` itself before ever calling in) — so for a single
-// call, the values createRegistrationCheckout re-queries are structurally
-// identical to what the caller already validated. Nothing in this codebase
+// mintGroupCheckout or resumeRegistrationCheckout: both callers hand down
+// an id list/amount taken moments earlier (mintGroupCheckout's known cart
+// lists only `pending` entries with `amount_cents > 0`, as the submit wrote
+// them; resumeRegistrationCheckout re-checks `reg.amount_cents <= 0` itself
+// before ever calling in) — so for a single call, the values
+// createRegistrationCheckout re-queries are structurally identical to what
+// the caller already validated. Nothing in this codebase
 // ever deletes a `registrations` row or changes its `amount_cents` outside
 // these guarded paths (`git grep -a "delete from registrations"` over
 // apps/web/src is empty), so the ONLY way either guard can fire for real is
-// a genuine race between a caller's read and createRegistrationCheckout's
-// own re-query a moment later — two non-transactional, non-locking SELECTs
-// with an `await divisionCtx(...)` gap between them. `payableRaceRig` below
+// a genuine race between the moment the caller's id list was taken and
+// createRegistrationCheckout's own re-query a moment later (for the register
+// route: between the submit's commit and its mint). `payableRaceRig` below
 // simulates exactly that gap deterministically (no timing/flakiness risk):
-// it intercepts mintGroupCheckout's own `payable` SELECT specifically and,
-// as a side effect, mutates the just-read row(s) for real before letting
-// createRegistrationCheckout's later re-query see the changed state. It is
+// it intercepts the known cart's `payable` SELECT (`cartAsWritten`,
+// _registration-fixtures.ts; until B1 fix round 1 it was mintGroupCheckout's
+// own read) specifically and, as a side effect, mutates the just-read row(s)
+// for real before letting createRegistrationCheckout's later re-query see
+// the changed state. It is
 // a one-shot, file-scoped `@/lib/db` wrap that is a complete passthrough
 // for every other query in this file (see the `payableRaceRig.action`
 // check inside the `apply` trap) — verified by every other test in this
@@ -41,8 +43,8 @@ type PayableRow = { id: string };
 type RealSql = typeof import("@/lib/db").sql;
 type PayableRaceAction = (rows: PayableRow[], realSql: RealSql) => Promise<void>;
 
-/** Armed by exactly ONE test at a time, right before it calls
- *  mintGroupCheckout; consumed (reset to null) the first time the wrapped
+/** Armed by exactly ONE test at a time, right before it takes the known
+ *  cart (`cartAsWritten`) for mintGroupCheckout; consumed (reset to null) the first time the wrapped
  *  `sql` below sees the query it's waiting for. `beforeEach` also clears it,
  *  so a test that fails before arming/consuming never leaks into the next. */
 const payableRaceRig: { action: PayableRaceAction | null } = { action: null };
@@ -91,7 +93,7 @@ import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { divisionCtx, mintGroupCheckout } from "../registrations";
 import { createRegistrationCheckout } from "../registrations/checkout";
-import { stripeRig, seedRegistration, loadWithGroup } from "./_registration-fixtures";
+import { stripeRig, seedRegistration, loadWithGroup, cartAsWritten } from "./_registration-fixtures";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -125,6 +127,7 @@ describe.skipIf(!HAS_DB)("createRegistrationCheckout — guards reachable via or
       division.id,
       "http://test.local",
       first.access_token,
+      await cartAsWritten(first.registration.group_id, division.id),
     );
     await expect(outcome).rejects.toMatchObject({
       status: 503,
@@ -144,7 +147,7 @@ describe.skipIf(!HAS_DB)("createRegistrationCheckout — guards reachable via or
     stripeMock.checkoutCreate.mockResolvedValueOnce(sessionWithoutUrl);
 
     await expect(
-      mintGroupCheckout(first.registration.group_id, division.id, "http://test.local", first.access_token),
+      mintGroupCheckout(first.registration.group_id, division.id, "http://test.local", first.access_token, await cartAsWritten(first.registration.group_id, division.id)),
     ).rejects.toMatchObject({ status: 502, message: "Stripe did not return a checkout URL" });
   });
 
@@ -159,7 +162,7 @@ describe.skipIf(!HAS_DB)("createRegistrationCheckout — guards reachable via or
     stripeMock.checkoutCreate.mockRejectedValueOnce(new Error("stripe unreachable"));
 
     await expect(
-      mintGroupCheckout(first.registration.group_id, division.id, "http://test.local", first.access_token),
+      mintGroupCheckout(first.registration.group_id, division.id, "http://test.local", first.access_token, await cartAsWritten(first.registration.group_id, division.id)),
     ).rejects.toMatchObject({ status: 502 });
 
     const group = await loadWithGroup(first.registration.id);
@@ -168,28 +171,21 @@ describe.skipIf(!HAS_DB)("createRegistrationCheckout — guards reachable via or
 });
 
 // ---------------------------------------------------------------------------
-// mintGroupCheckout's OWN guards — :1391 (unknown group) and :1398
-// (charges_enabled), the latter proven distinct from
-// resumeRegistrationCheckout's identically-shaped guard (already covered,
-// via resumeRegistrationCheckout, in registrations.test.ts).
+// mintGroupCheckout's OWN guard — :1398 (charges_enabled), proven distinct
+// from resumeRegistrationCheckout's identically-shaped guard (already
+// covered, via resumeRegistrationCheckout, in registrations.test.ts). The
+// unknown-group case left with the mint's read path (B1 fix round 1, M1):
+// the register route hands the mint the cart its submit just committed.
 // ---------------------------------------------------------------------------
 
 describe.skipIf(!HAS_DB)("mintGroupCheckout — own guards (RS003 W5c)", () => {
-  it("an unknown group id resolves to null — no throw, no Stripe call (:1391)", async () => {
-    const { division } = await stripeRig();
-    await expect(
-      mintGroupCheckout(randomUUID(), division.id, "http://test.local", "faketoken"),
-    ).resolves.toBeNull();
-    expect(stripeMock.checkoutCreate).not.toHaveBeenCalled();
-  });
-
   it("mintGroupCheckout's OWN charges_enabled guard 503s (:1398)", async () => {
     const { orgId, competition, division, settings } = await stripeRig();
     await sql`update organizations set stripe_charges_enabled = false where id = ${orgId}`;
     const first = await seedRegistration(competition.id, division.id, settings);
 
     await expect(
-      mintGroupCheckout(first.registration.group_id, division.id, "http://test.local", first.access_token),
+      mintGroupCheckout(first.registration.group_id, division.id, "http://test.local", first.access_token, await cartAsWritten(first.registration.group_id, division.id)),
     ).rejects.toMatchObject({ status: 503, message: "Payments are not set up for this organiser yet" });
     expect(stripeMock.checkoutCreate).not.toHaveBeenCalled();
   });
@@ -243,7 +239,7 @@ describe.skipIf(!HAS_DB)("createRegistrationCheckout — token===null return-URL
 describe.skipIf(!HAS_DB)(
   "createRegistrationCheckout — guards only reachable via a caller/re-query race (RS003 W5c)",
   () => {
-    it("a registration deleted between mintGroupCheckout's payable read and the re-validated select 422s 'No registrations to pay for' (:1277)", async () => {
+    it("a registration deleted between the known cart's payable read and the re-validated select 422s 'No registrations to pay for' (:1277)", async () => {
       const { competition, division, settings } = await stripeRig();
       const first = await seedRegistration(competition.id, division.id, settings);
 
@@ -254,12 +250,12 @@ describe.skipIf(!HAS_DB)(
       };
 
       await expect(
-        mintGroupCheckout(first.registration.group_id, division.id, "http://test.local", first.access_token),
+        mintGroupCheckout(first.registration.group_id, division.id, "http://test.local", first.access_token, await cartAsWritten(first.registration.group_id, division.id)),
       ).rejects.toMatchObject({ status: 422, message: "No registrations to pay for" });
       expect(stripeMock.checkoutCreate).not.toHaveBeenCalled();
     });
 
-    it("a registration's fee dropping to 0 between mintGroupCheckout's payable read and the re-validated select 422s createRegistrationCheckout's OWN 'no entry fee' guard, not a caller's redundant precheck (:1280)", async () => {
+    it("a registration's fee dropping to 0 between the known cart's payable read and the re-validated select 422s createRegistrationCheckout's OWN 'no entry fee' guard, not a caller's redundant precheck (:1280)", async () => {
       const { competition, division, settings } = await stripeRig();
       const first = await seedRegistration(competition.id, division.id, settings);
 
@@ -270,7 +266,7 @@ describe.skipIf(!HAS_DB)(
       };
 
       await expect(
-        mintGroupCheckout(first.registration.group_id, division.id, "http://test.local", first.access_token),
+        mintGroupCheckout(first.registration.group_id, division.id, "http://test.local", first.access_token, await cartAsWritten(first.registration.group_id, division.id)),
       ).rejects.toMatchObject({ status: 422, message: "This registration has no entry fee" });
       expect(stripeMock.checkoutCreate).not.toHaveBeenCalled();
     
@@ -299,6 +295,7 @@ describe.skipIf(!HAS_DB)("createRegistrationCheckout — Stripe error translatio
         division.id,
         "https://x.test",
         first.access_token,
+        await cartAsWritten(first.registration.group_id, division.id),
       ),
     ).rejects.toMatchObject({ status: 422, code: "REGISTRATION_AMOUNT_TOO_SMALL" });
   });
@@ -323,6 +320,7 @@ describe.skipIf(!HAS_DB)("createRegistrationCheckout — Stripe error translatio
         division.id,
         "https://x.test",
         first.access_token,
+        await cartAsWritten(first.registration.group_id, division.id),
       );
       throw new Error("expected mintGroupCheckout to reject");
     } catch (err) {

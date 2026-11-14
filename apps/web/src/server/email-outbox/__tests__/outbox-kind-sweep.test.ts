@@ -29,6 +29,10 @@
 //   - registration_promotion_lapsed (polish wave P5): the real `sweepRegistrations` (the lapse pass) over an `fr` entry promoted off the
 //     waitlist (the real `promoteWaitlistedRow`) whose pay window has passed: the "back on the waitlist" mail is queued in the transaction
 //     that puts it back, and the worker makes the first attempt.
+//   - registration_promotion_skipped (walk-fix F16): the real `withdrawRegistrationOrganiser` frees a place on an ONLINE-play division (free,
+//     auto approval) whose only waiting entry is an `fr` registrant with no Lichess link: the real promotion walk's seat gate passes them
+//     over, and the "you were skipped" mail is queued in that transaction; the worker makes the first attempt (the walk does not know whether
+//     a person is waiting on a response).
 //   - solo_signup_assigned: the real `assignSoloSignUp` of a pooled `fr` solo sign-up onto a team entry: the email is queued in the
 //     assignment's own transaction and the request that did it makes the first attempt.
 //   - refund_issued: the real `refundRegistration` of a paid `es` registrant (Stripe's refund is mocked): the receipt is queued in the transaction
@@ -192,6 +196,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type Stripe from "stripe";
 import { sql } from "@/lib/db";
+import { flushDeferred } from "@/lib/deferred";
 
 vi.mock("@/lib/rate-limit", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/rate-limit")>()),
@@ -314,7 +319,10 @@ import { maybeAlertExpensiveRun } from "@/server/usecases/ai-runs-admin";
 import { checkEarnGrantVolumeAlert } from "@/lib/credits";
 import { maybeAlertOrgAllowance } from "@/server/usecases/extra-orgs";
 import { earnGrantVolumeAlertEmail } from "@/lib/email";
-import { seedOnlineChessRound } from "@/server/usecases/__tests__/_external-play-seed";
+import { seedOnlineChessRound, seedOwner, seedPlayer } from "@/server/usecases/__tests__/_external-play-seed";
+import { createCompetition } from "@/server/usecases/competitions";
+import { createDivision } from "@/server/usecases/divisions";
+import { forgetOnlineChessFlagCache } from "@/server/usecases/external-play/online-chess-flag";
 import { claimPerson, makeAssignment, makeClaimedOfficial, makeFixture, seedFootballDivision, seedFutureDivision } from "@/server/usecases/__tests__/_seed";
 import { putMyReport, submitMyReport } from "@/server/usecases/match-reports";
 import { refreshDiscipline } from "@/server/usecases/scoring";
@@ -422,6 +430,8 @@ const SPEC_KINDS = [
   // reminder before expiry.
   "quick_match_link",
   "quick_match_reminder",
+  // Walk-fix F16: an automatic promotion passed a waiting entry over (no Lichess link that plays).
+  "registration_promotion_skipped",
 ] as const satisfies readonly OutboxKind[];
 
 /** The legend: [to, transactional]. A = an account, resolved at send; L = a literal address; S = the staff address. T = transactional. */
@@ -495,6 +505,7 @@ const SPEC_FACTS: KindFacts = {
   // address is honoured.
   quick_match_link: ["literal", false],
   quick_match_reminder: ["literal", false],
+  registration_promotion_skipped: ["literal", false],
 };
 
 /** What the real producers create beyond the rows the hand-made scenarios name: the seeded round's people and organisation. (The
@@ -568,11 +579,12 @@ describe("the spec's lists (no database)", () => {
   it("the spec lists fifty-one kinds, sponsor deals adds one, the registrant lifecycle seven more (59), the quick match design two more (61), and the code's registry is exactly them, in that order", () => {
     expect([...OUTBOX_KINDS]).toEqual([...SPEC_KINDS]);
     // The spec's Counts: "With `magic_link` and `chess_invite` that is 51." Sponsor deals Task 23 adds sponsor_deal_paid: 52; the seven
-    // registrant lifecycle kinds (P2's five, P5's two): 59. Then the quick match design's two (§7.6, C2): 61.
-    expect(SPEC_KINDS).toHaveLength(61);
+    // registrant lifecycle kinds (P2's five, P5's two): 59. Then the quick match design's two (§7.6, C2): 61; walk-fix F16's
+    // registration_promotion_skipped: 62.
+    expect(SPEC_KINDS).toHaveLength(62);
   });
 
-  it("the legend has 29 literal kinds, SIXTEEN account kinds (sponsor deals' sponsor_deal_paid the sixteenth) and SIXTEEN staff kinds; THIRTY-TWO are transactional", () => {
+  it("the legend has 30 literal kinds, SIXTEEN account kinds (sponsor deals' sponsor_deal_paid the sixteenth) and SIXTEEN staff kinds; THIRTY-TWO are transactional", () => {
     const by = (to: string): string[] => SPEC_KINDS.filter((k) => SPEC_FACTS[k][0] === to);
     expect(by("literal")).toEqual([
       "magic_link",
@@ -608,6 +620,8 @@ describe("the spec's lists (no database)", () => {
       // Quick match: both go to the address the guest typed.
       "quick_match_link",
       "quick_match_reminder",
+      // Walk-fix F16: to the passed-over entry's contact.
+      "registration_promotion_skipped",
     ]);
     expect(by("account")).toEqual([
       "chess_invite",
@@ -687,8 +701,8 @@ describe("the spec's lists (no database)", () => {
       "staff_extra_org_allowance",
     ]);
     // The spec's legend: "The 19 N kinds are the senders that pass no `transactional: true` today", so 51 - 19 = 32 are T. Sponsor deals'
-    // sponsor_deal_paid is N, and so is each of the 7 registration lifecycle kinds (P2's five, P5's two): 19 + 1 + 7 = 27 N, so
-    // 59 - 27 = 32 are T still; the quick match design's two are N too (controller ruling 2026-11-08): 61 - 29 = 32.
+    // sponsor_deal_paid is N, and so is each of the 8 registration lifecycle kinds (P2's five, P5's two, F16's one): 19 + 1 + 8 = 28 N, so
+    // 60 - 28 = 32 are T still; the quick match design's two are N too (controller ruling 2026-11-08): 62 - 30 = 32.
     expect(SPEC_KINDS.filter((k) => SPEC_FACTS[k][1])).toHaveLength(32);
   });
 
@@ -858,6 +872,8 @@ async function registrationConfirmationScenario(): Promise<KindScenario> {
         { params: Promise.resolve({ orgSlug, slug: competition.slug }) },
       );
       expect(res.status, "premise: the real route accepted the cart").toBe(201);
+      // Registration redesign B1 T5: the route queues the confirmation after its response (`deferred`); the harness reads the row next.
+      await flushDeferred();
     },
   };
 }
@@ -1106,6 +1122,55 @@ async function registrationPromotionLapsedScenario(): Promise<KindScenario> {
       );
       const [after] = await sql<{ status: string }[]>`select status from registrations where id = ${registration.id}`;
       expect(after!.status, "premise: the real sweep put the entry back on the waitlist").toBe("waitlisted");
+    },
+  };
+}
+
+/** Walk-fix F16: the real organiser withdrawal frees a place on an ONLINE-play division (free, auto approval: the promotion would seat at
+ *  once, so the seat gate is asked). The only waiting entry is an `fr` registrant's whose account has no Lichess link, so the real walk passes
+ *  them over and queues the "you were skipped" mail in that transaction; the worker makes the first attempt. */
+async function registrationPromotionSkippedScenario(): Promise<KindScenario> {
+  const owner = await seedOwner();
+  made.orgIds.push(owner.orgId);
+  made.userIds.push(owner.userId!);
+  const competition = await createCompetition(owner, {
+    name: `${RUN} skipped`,
+    visibility: "public",
+    branding: {},
+    starts_on: "2026-12-01",
+    ends_on: "2026-12-02",
+  });
+  const division = await createDivision(owner, competition.id, {
+    name: "Online",
+    sport_key: "boardgame",
+    variant_key: "classical",
+    config: { variant: "classical", onlinePlay: "lichess", clock: { base: 600, increment: 5 } },
+  });
+  const settings = await putRegistrationSettings(owner, division.id, { ...SETTINGS_BASE, fee_cents: 0, payment_method: "offline", approval: "auto" });
+  const unlinked = await seedPlayer(owner.orgId, `${RUN} waiting`, `ks-${randomUUID().replaceAll("-", "").slice(0, 12)}`, false);
+  made.userIds.push(unlinked.userId);
+  const recipient = address();
+  const { registration: waiting } = await seedRegistration(competition.id, division.id, settings, { contactEmail: recipient, locale: "fr", status: "waitlisted" });
+  await sql`
+    insert into registration_players (registration_id, full_name, user_id, source)
+    values (${waiting.id}, 'Player', ${unlinked.userId}, 'captain_entered')`;
+  const { registration: holder } = await seedRegistration(competition.id, division.id, settings, { contactEmail: address(), status: "pending" });
+  return {
+    locale: "fr",
+    subjectKey: "registrationPromotionSkipped.subject",
+    subjectVars: { competitionName: competition.name },
+    recipient,
+    firstAttempt: "worker",
+    run: async () => {
+      vi.stubEnv("ONLINE_CHESS_ALWAYS", "1");
+      forgetOnlineChessFlagCache();
+      await withdrawRegistrationOrganiser(owner, holder.id);
+      const [after] = await sql<{ status: string }[]>`select status from registrations where id = ${waiting.id}`;
+      expect(after!.status, "premise: the real walk passed the waiting entry over and it is still waiting").toBe("waitlisted");
+      const [skip] = await sql<{ n: number }[]>`
+        select count(*)::int as n from competition_events
+         where competition_id = ${competition.id} and type = 'registration.promotion_skipped' and payload->>'registration_id' = ${waiting.id}`;
+      expect(skip!.n, "premise: the skip is on the record").toBe(1);
     },
   };
 }
@@ -2612,6 +2677,11 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
       dictionarySubject("en", registrationLapsed.subjectKey, registrationLapsed.subjectVars),
     );
 
+    const registrationSkipped = await registrationPromotionSkippedScenario();
+    expect(dictionarySubject("fr", registrationSkipped.subjectKey, registrationSkipped.subjectVars)).not.toBe(
+      dictionarySubject("en", registrationSkipped.subjectKey, registrationSkipped.subjectVars),
+    );
+
     const staffDispute = await staffDisputeAlertScenario();
     expect(dictionarySubject("fr", staffDispute.subjectKey, staffDispute.subjectVars)).not.toBe(
       dictionarySubject("en", staffDispute.subjectKey, staffDispute.subjectVars),
@@ -2680,14 +2750,16 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         registration_promotion_lapsed: registrationLapsed,
         quick_match_link: quickMatchLink,
         quick_match_reminder: quickMatchReminder,
+        registration_promotion_skipped: registrationSkipped,
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );
 
     const moved = SPEC_KINDS.filter((k) => !NOT_YET_MOVED.includes(k));
     // The spec's count, typed: "With `magic_link` and `chess_invite` that is 51." Every kind has moved, so every one was swept; sponsor
-    // deals Task 23's sponsor_deal_paid makes 52, the seven registrant lifecycle kinds 59, and the quick match design's two (§7.6, C2) 61.
-    expect(out.checked, "anti-vacuity: every kind the spec lists was swept").toBe(61);
+    // deals Task 23's sponsor_deal_paid makes 52, the seven registrant lifecycle kinds 59, the quick match design's two (§7.6, C2) 61,
+    // and walk-fix F16's registration_promotion_skipped 62.
+    expect(out.checked, "anti-vacuity: every kind the spec lists was swept").toBe(62);
     expect(out.checked).toBeGreaterThan(0);
     expect(out.kinds, "and they are exactly the spec's moved kinds, in the spec's order").toEqual(moved);
   }, 60_000);

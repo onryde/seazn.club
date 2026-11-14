@@ -6,11 +6,10 @@
 // entries independently (singles + doubles at the same tournament is the
 // common racket-sports case); checking one does NOT uncheck another.
 import { useT } from "@/components/i18n/dict-provider";
-import { formatMoneyExact } from "@/lib/currency";
-import { summarizeCart, type CartAction } from "./cart";
+import { cartTotalText, summarizeCart, type CartAction } from "./cart";
 import { INELIGIBLE_MESSAGE_KEY, selfEligibilityForDivision } from "./eligibility-presentation";
 import { BTN_TEXT } from "./styles";
-import { mixedPaymentConflict, teamNameMissing } from "./validation";
+import { teamNameMissing } from "./validation";
 import { MAX_CART_ENTRIES, type CartEntry, type CartState, type ContactState, type DivisionLike } from "./types";
 
 // Exported for step-review.tsx (step 5) — a cart line reads the same either
@@ -38,6 +37,7 @@ export function EntryCart({
   contact,
   imPlaying,
   seasonStartYear,
+  mixedPayment = null,
 }: {
   cart: CartState;
   divisions: readonly DivisionLike[];
@@ -52,16 +52,14 @@ export function EntryCart({
    *  control anyway is how a stale self-link survived un-toggling it. */
   imPlaying: boolean;
   seasonStartYear: number;
+  /** The stepper's mixed-method refusal, worded - the SAME verdict that holds Continue (`validateEntries`). Null = none. */
+  mixedPayment?: string | null;
 }) {
   const t = useT();
   // RS006 §C: summarizeCart is the ONE subtotal/waitlist computation shared
   // with step-review.tsx (step 5) — see that function's own doc comment
   // (cart.ts) for why this must not fork back into a second copy.
   const summary = summarizeCart(cart, divisions);
-  const { subtotalCents, currency } = summary;
-  // P4 (W9): a card division and a pay-the-organiser one cannot be collected together, and the server refuses the cart as a whole. Said
-  // HERE, live, the moment the second division is added - validateEntries (the SAME predicate) is what holds Next.
-  const mixed = mixedPaymentConflict(cart, divisions);
 
   return (
     <div className="rounded-xl border border-zinc-200/80 bg-surface p-4 shadow-sm sm:p-6">
@@ -152,7 +150,11 @@ export function EntryCart({
                   </p>
                 )}
 
-                {willWaitlist && <p className="mt-1.5 text-xs text-amber-700">{t("register.entries.cart.waitlistNote")}</p>}
+                {willWaitlist && (
+                  <p data-testid="reg-cart-waitlist" className="mt-1.5 text-xs font-medium text-amber-700">
+                    {t("register.cart.waitlistLine")}
+                  </p>
+                )}
                 {/* Review finding 2 (2026-08-27): this note now BLOCKS
                     "Next" (validateEntries's staleClosedEntryId) rather than
                     being purely informational, so its copy is the stronger,
@@ -207,13 +209,14 @@ export function EntryCart({
         </ul>
       )}
 
-      {mixed && (
-        <p
-          role="alert"
-          data-testid="reg-cart-mixed-payment"
-          className="mt-3 min-w-0 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700"
-        >
-          {t("register.entries.cart.mixedPayment", { cardDivision: mixed.cardDivision, offlineDivision: mixed.offlineDivision })}
+      {/* The mixed-method refusal is the action bar's (walk-fix F6: under the cart it sat below the fold and under the phone's sticky
+          bar, while Continue looked enabled) - action-bar.tsx `blocked`, fed by the stepper from the same validateEntries verdict.
+          From md up the bar is an in-flow row under the whole division list, so with a long list the refusal sat below the fold at
+          the moment the second division was added (walk-fix B review m6): the cart, where the registrant is looking, says it too.
+          A quiet line, not a second box; `aria-hidden` because the bar's alert already announces it and describes Continue. */}
+      {mixedPayment !== null && (
+        <p aria-hidden="true" data-testid="reg-cart-mixed-payment-md" className="mt-3 hidden min-w-0 text-xs font-medium text-red-700 md:block">
+          {mixedPayment}
         </p>
       )}
 
@@ -226,8 +229,9 @@ export function EntryCart({
           <span className="font-display text-xs font-semibold uppercase tracking-wider text-ink-muted">
             {t("register.entries.cart.subtotal")}
           </span>
-          <span className="font-display text-lg font-bold text-ink">
-            {subtotalCents === 0 || !currency ? t("register.entries.free") : formatMoneyExact(subtotalCents, currency, locale)}
+          {/* The same words as Review's total (`cartTotalText`): "Nothing to pay now" when every entry waits (B3 review m1). */}
+          <span data-testid="reg-cart-subtotal" className="font-display text-right text-lg font-bold text-ink">
+            {cartTotalText(summary, t, locale)}
           </span>
         </div>
       )}

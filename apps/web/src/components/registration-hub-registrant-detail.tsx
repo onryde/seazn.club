@@ -22,6 +22,7 @@ import type { ReactNode } from "react";
 import { t } from "@/lib/i18n";
 import type { Dict } from "@/lib/i18n-constants";
 import { formatMoneyExact, asCurrency } from "@/lib/currency";
+import { entryReferenceOf } from "@/lib/ref-code";
 import { fmtDateTime } from "@/lib/format";
 import { isTerminalRegistrationStatus, ownPaymentRefundedCents } from "@/lib/registration-status";
 import type { RegistrationFormField } from "@/server/api-v1/schemas";
@@ -75,11 +76,13 @@ export interface RegistrationHubRegistrantDetailProps {
   compSlug: string;
 }
 
+// Tidy round: `min-w-0 break-words` on the value, and `min-w-0` on every grid section, so a long value (a 40-character email, a
+// free-text answer) wraps inside the card at 320 instead of being clipped by the card's `overflow-hidden`.
 function detailField(label: string, value: ReactNode): ReactNode {
   return (
     <div className="flex justify-between gap-3">
       <dt className="text-slate-500">{label}</dt>
-      <dd className="text-right font-medium text-slate-800">{value}</dd>
+      <dd className="min-w-0 text-right font-medium break-words text-slate-800">{value}</dd>
     </div>
   );
 }
@@ -136,11 +139,20 @@ export function RegistrationHubRegistrantDetail({
   // `isTerminalRegistrationStatus` (@/lib/registration-status) is the SAME
   // source `deriveRegistrantActionFlags`'s canWithdraw/canResend use — a
   // plain server component importing it drags in nothing (dependency-free).
+  // The reference to match a transfer against (spec §6.3): this ENTRY's own, via the one reading of its three stored columns, so it
+  // is the string the pay page, the mails and the CSV quote. A cart sent with 2+ entries also shows the cart's, for the mail the
+  // person got about the whole cart. Both read the cart's STORED size, never the siblings still here: a lone survivor of a 3-entry
+  // cart is still `-3`, and `siblings` empty must not read as a cart of one. The Cart line shows exactly when the entry's own
+  // reference differs from the cart's (T19 review m6), so `entryReferenceOf` stays the one rule. The entry's reference does not wrap: it is read aloud,
+  // copied and matched against a bank statement, and at 320px it would otherwise break after a hyphen (`SZ-7F3K-` / `Q2ND-2`); the
+  // label beside it is what gives way.
+  const entryRef = entryReferenceOf(row);
+  const cartRef = entryRef !== row.ref_code ? row.ref_code : null;
   const showJoinCode = canEdit && row.join_code !== null && !isTerminalRegistrationStatus(row.status);
 
   return (
     <div data-registration-hub-registrant-detail className="grid gap-5 sm:grid-cols-2">
-      <section aria-label={t(dict, "reg.hub.registrants.detail.section.contact")}>
+      <section className="min-w-0" aria-label={t(dict, "reg.hub.registrants.detail.section.contact")}>
         <h4 className={SECTION_HEADING}>{t(dict, "reg.hub.registrants.detail.section.contact")}</h4>
         <dl className="space-y-1 text-sm">
           {detailField(t(dict, "reg.hub.registrants.table.name"), row.contact_name)}
@@ -148,7 +160,7 @@ export function RegistrationHubRegistrantDetail({
         </dl>
       </section>
 
-      <section aria-label={t(dict, "reg.hub.registrants.detail.section.entry")}>
+      <section className="min-w-0" aria-label={t(dict, "reg.hub.registrants.detail.section.entry")}>
         <h4 className={SECTION_HEADING}>{t(dict, "reg.hub.registrants.detail.section.entry")}</h4>
         <dl className="space-y-1 text-sm">
           {detailField(t(dict, "reg.hub.registrants.detail.field.entryName"), row.display_name)}
@@ -162,8 +174,19 @@ export function RegistrationHubRegistrantDetail({
             t(dict, "reg.hub.registrants.detail.field.paymentState"),
             t(dict, `reg.hub.registrants.detail.paymentState.${paymentState}`),
           )}
-          {detailField(t(dict, "reg.hub.registrants.detail.field.refCode"), row.ref_code ?? "—")}
+          {detailField(
+            t(dict, "reg.hub.registrants.detail.field.entryRef"),
+            <span data-registration-hub-registrant-entry-ref className="whitespace-nowrap tabular-nums">
+              {entryRef ?? "—"}
+            </span>,
+          )}
         </dl>
+        {cartRef !== null && (
+          // Under the Entry reference row, on its own line: beside the label it would squeeze a long label (nl, es) at 320px.
+          <p data-registration-hub-registrant-cart-ref className="mt-0.5 text-right text-xs tabular-nums text-slate-500">
+            {t(dict, "reg.hub.registrants.detail.cartRef", { ref: cartRef })}
+          </p>
+        )}
 
         {showJoinCode && (
           <div className="mt-3">
@@ -178,7 +201,7 @@ export function RegistrationHubRegistrantDetail({
         )}
       </section>
 
-      <section className="sm:col-span-2" aria-label={t(dict, "reg.hub.registrants.detail.section.answers")}>
+      <section className="min-w-0 sm:col-span-2" aria-label={t(dict, "reg.hub.registrants.detail.section.answers")}>
         <h4 className={SECTION_HEADING}>{t(dict, "reg.hub.registrants.detail.section.answers")}</h4>
         {answers.length === 0 ? (
           <p className="text-sm text-slate-500">{t(dict, "reg.hub.registrants.detail.answers.empty")}</p>
@@ -198,7 +221,7 @@ export function RegistrationHubRegistrantDetail({
         )}
       </section>
 
-      <section className="sm:col-span-2" aria-label={t(dict, "reg.hub.registrants.detail.section.roster")}>
+      <section className="min-w-0 sm:col-span-2" aria-label={t(dict, "reg.hub.registrants.detail.section.roster")}>
         <h4 className={SECTION_HEADING}>{t(dict, "reg.hub.registrants.detail.section.roster")}</h4>
         {roster.length === 0 ? (
           <p className="text-sm text-slate-500">{t(dict, "reg.hub.registrants.detail.roster.empty")}</p>
@@ -229,6 +252,12 @@ export function RegistrationHubRegistrantDetail({
                 >
                   {t(dict, `reg.hub.registrants.detail.consent.${p.consent_status}`)}
                 </span>
+                {/* Owner rec 2026-11-14: who consented for a minor, on their own line under the name (a parent now often does). */}
+                {p.guardian_name?.trim() && (
+                  <span data-registration-hub-registrant-guardian className="basis-full text-xs text-slate-500">
+                    {t(dict, "reg.hub.registrants.detail.consent.guardianBy", { name: p.guardian_name.trim() })}
+                  </span>
+                )}
               </li>
             ))}
           </ul>
@@ -243,7 +272,7 @@ export function RegistrationHubRegistrantDetail({
       </section>
 
       {siblings.length > 0 && (
-        <section className="sm:col-span-2" aria-label={t(dict, "reg.hub.registrants.detail.section.siblings")}>
+        <section className="min-w-0 sm:col-span-2" aria-label={t(dict, "reg.hub.registrants.detail.section.siblings")}>
           <h4 className={SECTION_HEADING}>{t(dict, "reg.hub.registrants.detail.section.siblings")}</h4>
           <ul className="space-y-1">
             {siblings.map((s) => (
@@ -284,7 +313,7 @@ export function RegistrationHubRegistrantDetail({
           nothing applies. Derived through the SHARED flag function, not a
           second rule that could disagree with the buttons it describes. */}
       {canEdit && hasAnyAction && (
-        <section className="sm:col-span-2" aria-label={t(dict, "reg.hub.registrants.detail.section.actions")}>
+        <section className="min-w-0 sm:col-span-2" aria-label={t(dict, "reg.hub.registrants.detail.section.actions")}>
           <h4 className={SECTION_HEADING}>{t(dict, "reg.hub.registrants.detail.section.actions")}</h4>
           <div className="flex flex-wrap items-center gap-2">
           <RegistrationHubRegistrantActions
@@ -298,6 +327,7 @@ export function RegistrationHubRegistrantDetail({
             // Polish wave P5 (carry b): what was sent back of THIS payment (the Refund cap the server applies), never the history.
             refundedCents={ownPaymentRefundedCents(row)}
             lastRemindedAt={row.last_reminded_at ? new Date(row.last_reminded_at).toISOString() : null}
+            remindersInWindow={row.reminders_in_window}
             approvedAt={row.approved_at ? new Date(row.approved_at).toISOString() : null}
           />
           {/* The organiser's own last payment-reminder press, in the org's timezone like "Submitted". A full-width line under the

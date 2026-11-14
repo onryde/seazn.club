@@ -307,6 +307,8 @@ describe("#10/#13b — notifyPromoted (pure function, offline branch — no DB)"
       // waitlist entry that has never been charged.
       charged_at: null,
       group_id: "grp-1",
+      // V519 (B5 T18): a one-entry cart, so the entry's reference is the cart's own.
+      cart_position: 1,
       join_code: null,
       free_agent: false,
       created_at: now,
@@ -316,6 +318,7 @@ describe("#10/#13b — notifyPromoted (pure function, offline branch — no DB)"
       user_id: null,
       locale: null,
       ref_code: "SZ-TEST-01",
+      cart_size: 1,
       access_token_hash: "hash",
       currency: "gbp",
       // The CART's own column — deliberately null in every fixture below,
@@ -360,6 +363,18 @@ describe("#10/#13b — notifyPromoted (pure function, offline branch — no DB)"
     // Reverting the fix (reading promoted.payment_method, the null cart
     // column) makes this null too — no instructions AND no pay link.
     expect(args.paymentInstructions).toBe("Pay at the desk");
+  });
+
+  // B5 T18 (spec §6.3): the mail is always about ONE entry, so the renderer is given THAT entry's reference; the status link is the cart's.
+  it("hands the renderer the promoted entry's own reference (a 2-entry cart's second is -2) and the cart's status link", async () => {
+    const settings = fakeSettings({ payment_method: "offline", payment_instructions: "Quote {{reference}}" });
+    await notifyPromoted(fakePromoted({ amount_cents: 500, cart_position: 2, cart_size: 2 }), fakeCtx(), settings, "http://test.local", { firstAttempt: "worker" });
+    await notifyPromoted(fakePromoted({ amount_cents: 500, cart_position: 1, cart_size: 1 }), fakeCtx(), settings, "http://test.local", { firstAttempt: "worker" });
+    expect(emailMock.promoted).toHaveBeenCalledTimes(2);
+    const [second, only] = emailMock.promoted.mock.calls.map((c) => c[0]);
+    expect(second.refCode).toBe("SZ-TEST-01-2");
+    expect(second.refStatusUrl, "the link resolves by cart").toBe("http://test.local/r/SZ-TEST-01");
+    expect(only.refCode, "a one-entry cart's entry is the cart").toBe("SZ-TEST-01");
   });
 
   it("sends the ENTRY's own promotion_expires_at as payDeadline, never the cart's shared expires_at", async () => {

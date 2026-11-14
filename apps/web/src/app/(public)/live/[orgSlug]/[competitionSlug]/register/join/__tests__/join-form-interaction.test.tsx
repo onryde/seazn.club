@@ -10,7 +10,7 @@
 // identity stub, so assertions read actual copy.
 const apiV1Mock = vi.hoisted(() => ({
   calls: [] as { url: string; method?: string; json?: unknown; headers?: Record<string, string> }[],
-  queue: [] as ({ ok: true; data: unknown } | { ok: false; error: unknown })[],
+  queue: [] as ({ ok: true; data: unknown } | { ok: false; error: unknown } | { hold: Promise<unknown> })[],
 }));
 vi.mock("@/lib/client-v1", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/client-v1")>();
@@ -20,6 +20,8 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
       apiV1Mock.calls.push({ url, method: options?.method, json: options?.json, headers: options?.headers });
       const next = apiV1Mock.queue.shift();
       if (!next) return Promise.resolve(undefined);
+      // `hold`: a POST that stays open until the test settles it, so the in-flight button can be read while it is in flight.
+      if ("hold" in next) return next.hold;
       return next.ok ? Promise.resolve(next.data) : Promise.reject(next.error);
     },
   };
@@ -51,7 +53,7 @@ import { join as pathJoin } from "node:path";
 import type { ReactElement, ReactNode } from "react";
 import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
 import { ApiV1Error } from "@/lib/client-v1";
-import { t as tRuntime } from "@/lib/i18n-runtime";
+import { plural as pluralRuntime, t as tRuntime } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";
 import { StepConsent } from "@/components/public-site/register/step-consent";
 import { StepWho } from "@/components/public-site/register/step-who";
@@ -66,6 +68,9 @@ const EN_UI: Dict = JSON.parse(
 
 vi.mock("@/components/i18n/dict-provider", () => ({
   useT: () => (key: string, vars?: Record<string, string | number>) => tRuntime(EN_UI, key, vars),
+  // StepWho's error summary counts its problems (register.errors.summary.one/.other).
+  usePlural: () => (key: string, count: number, vars?: Record<string, string | number>) =>
+    pluralRuntime(EN_UI, key, count, "en", vars),
 }));
 
 type ComponentFn = (props: Record<string, unknown>) => ReactNode;
@@ -171,7 +176,7 @@ describe("slot picker", () => {
 });
 
 // ---------------------------------------------------------------------------
-// StepWho reuse — no "I'm registering myself" toggle on the join page
+// StepWho reuse — no "I'm one of the players" toggle on the join page
 // ---------------------------------------------------------------------------
 
 describe("StepWho reuse (showSelfToggle=false) — the join page never asks 'I'm playing'", () => {
@@ -179,7 +184,7 @@ describe("StepWho reuse (showSelfToggle=false) — the join page never asks 'I'm
     const { pageText, island } = mount();
     expect(pageText()).toContain("Your name");
     expect(pageText()).toContain("Email");
-    expect(pageText()).not.toContain("I'm registering myself");
+    expect(pageText()).not.toContain("I'm one of the players");
     const checkboxes = island.tree().filter((e) => e.type === "input" && propsOf(e).type === "checkbox");
     // Privacy + media consent checkboxes only (2) — no self-toggle checkbox.
     expect(checkboxes).toHaveLength(2);
@@ -324,6 +329,86 @@ async function submit(m: ReturnType<typeof mount>) {
   await (propsOf(btn).onClick as () => Promise<void>)();
 }
 
+// B2 T8 (the B1 leftover): the join form's button has the same pattern as the register stepper's submit — disabled while the POST is in
+// flight, its label turning into the status ("Joining…"). BTN_PRIMARY keeps a button that is disabled AND `aria-busy` at full strength
+// (it is working, not unavailable); without the attribute it dimmed to 40% and the status read as a dead control. The attribute is the
+// seam (the style is keyed on it), so it is read off the element mid-flight, and cleared again once the POST has answered.
+describe("submit — the in-flight button is busy, not dimmed (B2 T8)", () => {
+  const joinButton = (m: ReturnType<typeof mount>) => {
+    const btn = m.island.tree().find((e) => propsOf(e)["data-testid"] === "reg-join-submit");
+    expect(btn, "the join button").toBeTruthy();
+    return btn!;
+  };
+
+  it("while the POST is open: disabled, aria-busy, reading Joining…; after a refusal: ready again, not busy", async () => {
+    let release!: () => void;
+    const hold = new Promise<unknown>((_, reject) => {
+      release = () => reject(new ApiV1Error("boom", 503, "INTERNAL"));
+    });
+    apiV1Mock.queue.push({ hold });
+    const m = mount({ initialPlayerId: "p1" });
+    fillMinimalValidForm(m);
+    expect(propsOf(joinButton(m)).disabled, "premise: ready before the click").not.toBe(true);
+    expect(propsOf(joinButton(m))["aria-busy"], "ready: not busy").not.toBe(true);
+
+    const click = (propsOf(joinButton(m)).onClick as () => Promise<void>)();
+    await vi.waitFor(() => expect(apiV1Mock.calls, "the POST is in flight").toHaveLength(1));
+    expect(textOf(joinButton(m))).toBe("Joining…");
+    expect(propsOf(joinButton(m)).disabled).toBe(true);
+    expect(propsOf(joinButton(m))["aria-busy"], "in flight: busy, so BTN_PRIMARY keeps it at full strength").toBe(true);
+    expect(String(propsOf(joinButton(m)).className), "the busy style is BTN_PRIMARY's own, keyed on aria-busy").toContain("disabled:aria-busy:opacity-100");
+
+    release();
+    await click;
+    expect(textOf(joinButton(m))).toBe("Confirm my spot");
+    expect(propsOf(joinButton(m)).disabled).not.toBe(true);
+    expect(propsOf(joinButton(m))["aria-busy"], "after the refusal: not busy").not.toBe(true);
+  });
+});
+
+// B2 T10: the join page reuses StepWho, so it gets the same error summary - and the same focus move, which is the JOIN FORM's to make: the
+// summary only exists while something is wrong, so a failed Join hands StepWho a ref and asks it for focus, as the register stepper does on
+// a failed Continue. Without it the registrant taps Join, nothing visibly happens below the fold, and the summary is announced to nobody.
+describe("a failed Join focuses the Contact error summary (B2 T10)", () => {
+  type M = ReturnType<typeof mount>;
+  const summaries = (m: M) => m.island.tree().filter((e) => propsOf(e)["data-testid"] === "reg-who-error-summary");
+  const setField = (m: M, id: string, value: string) =>
+    (propsOf(m.island.tree().find((e) => propsOf(e).id === id)!).onChange as (e: { target: { value: string } }) => void)({ target: { value } });
+  /** The ref StepWho is handed, holding a stand-in for the element React would attach (no DOM here). */
+  function armFocus(m: M) {
+    const who = m.island.tree().find((e) => e.type === StepWho)!;
+    const ref = propsOf(who).summaryRef as { current: unknown } | undefined;
+    expect(ref, "StepWho is handed the join form's focus ref").toBeTruthy();
+    const focus = vi.fn();
+    ref!.current = { focus };
+    return { ref: ref!, focus };
+  }
+
+  it("focuses the summary on a failed Join, again on the next failed Join, and not when Contact is fine", async () => {
+    const m = mount({ initialPlayerId: "p1" });
+    expect(summaries(m), "pristine: nothing wrong yet, so no summary").toHaveLength(0);
+    const { ref, focus } = armFocus(m);
+
+    await submit(m);
+    expect(summaries(m), "one summary").toHaveLength(1);
+    expect(propsOf(summaries(m)[0]!).ref, "the element the join form's ref attaches to").toBe(ref);
+    expect(textOf(summaries(m)[0]!)).toBe("2 things to fix before you continue: Your name, Email");
+    expect(focus, "the failed Join asked for focus on it").toHaveBeenCalledTimes(1);
+
+    setField(m, "reg-who-name", "Alex Joiner");
+    await submit(m);
+    expect(textOf(summaries(m)[0]!)).toBe("1 thing to fix before you continue: Email");
+    expect(focus, "a SECOND failed Join focuses it again").toHaveBeenCalledTimes(2);
+
+    // Contact is now fine; the Join still fails (privacy consent): no summary exists, so nothing is focused.
+    setField(m, "reg-who-email", "alex@example.com");
+    await submit(m);
+    expect(summaries(m), "Contact is fine: no summary").toHaveLength(0);
+    expect(focus, "a Join refused for another reason asks for no summary focus").toHaveBeenCalledTimes(2);
+    expect(apiV1Mock.calls, "and nothing was posted").toHaveLength(0);
+  });
+});
+
 describe("submit — success", () => {
   it("a CLAIM shows the success state with the fill meter unchanged in total, claimed +1", async () => {
     apiV1Mock.queue.push({ ok: true, data: { registration_id: "reg-1", player_id: "p1", consent_status: "granted", entry_state: "confirmed" } });
@@ -336,10 +421,10 @@ describe("submit — success", () => {
     expect(m.pageText()).toContain("You're in");
     // totalPlayers 4, 2 unclaimed before -> 2 already granted; claiming ONE
     // more (p1) makes 3, total stays 4.
-    // RS007 #20: roster-side copy renamed off "confirm" (register.status.
-    // roster.meter) — it shares this key with the status page's own meter,
-    // so it can no longer be misread as a payment state.
-    expect(m.pageText()).toContain("3 of 4 checked in");
+    // RS007 #20: roster-side copy renamed off "confirm" — it shares its key with the status page's own meter, so it can no longer
+    // be misread as a payment state. Walk-fix F10: a confirmed entry's meter says "joined" too; nobody checks in at registration.
+    expect(m.pageText()).toContain("3 of 4 joined");
+    expect(m.pageText()).not.toMatch(/checked in/i);
     expect(m.pageText()).toContain("Team Alpha");
   });
 
@@ -350,7 +435,7 @@ describe("submit — success", () => {
     (propsOf(newRadio).onChange as () => void)();
     fillMinimalValidForm(m);
     await submit(m);
-    expect(m.pageText()).toContain("4 of 4 checked in");
+    expect(m.pageText()).toContain("4 of 4 joined");
   });
 
   // Polish wave P3 (W4, W13): "You're in / Your spot is confirmed" read as true for a team still awaiting payment or approval. The
@@ -444,7 +529,9 @@ describe("submit — designed failure states, never a raw server string", () => 
     // (`register.join.error.claimed`). The assertion is on the DESIGNED
     // message rather than the server's, which is the point of the test, so it
     // tracks the dictionary — it is not a wording-agnostic check by accident.
-    expect(m.pageText()).toContain("Someone else already checked in for that spot");
+    expect(m.pageText()).toContain("Someone else has already taken that spot");
+    // Registration has no check-in step (walk-fix F10 / A fix round 1): a taken spot is taken, never "checked in".
+    expect(m.pageText()).not.toMatch(/checked in/i);
     expect(m.pageText()).not.toContain("This player has already joined");
     expect(m.pageText()).toContain("Refresh available spots");
   });
@@ -511,8 +598,8 @@ describe("submit — designed failure states, never a raw server string", () => 
     (propsOf(remaining).onChange as () => void)();
     await submit(m);
 
-    expect(m.pageText()).toContain("5 of 5 checked in");
-    expect(m.pageText()).not.toContain("4 of 4 checked in");
+    expect(m.pageText()).toContain("5 of 5 joined");
+    expect(m.pageText()).not.toContain("4 of 4 joined");
   });
 
   // Bug (2026-08-27 review, FIX 4): NEW_PLAYER_CHOICE ("new") is never a

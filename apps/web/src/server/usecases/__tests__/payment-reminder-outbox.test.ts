@@ -63,7 +63,10 @@ import { sql } from "@/lib/db";
 import type { Locale } from "@/lib/i18n-constants";
 import { HttpError } from "@/lib/errors";
 import { money } from "@/lib/email-templates/shared";
+import { generateRefCode } from "@/lib/ref-code";
+import { REMINDER_CAP_PER_DAY } from "@/lib/registration-reminder";
 import {
+  listRegistrations,
   promoteWaitlistedRow,
   putRegistrationSettings,
   sendPaymentReminder,
@@ -74,7 +77,7 @@ import { idempotencyKey } from "@/server/email-outbox/constants";
 import { runOutboxTick } from "@/server/email-outbox/worker";
 import { assertNothingMoreToSend, bornAgo, dictionarySubject } from "@/server/email-outbox/__tests__/_kind-harness";
 import { stubOutboxEnv } from "./_invite-mail";
-import { SETTINGS_BASE, asOwner, rig, seedOrg, seedRegistration, stripeRig } from "./_registration-fixtures";
+import { SETTINGS_BASE, asOwner, rig, seedOrg, seedRegistration, seedSecondEntry, stripeRig } from "./_registration-fixtures";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const ORIGIN = "https://test.local";
@@ -284,6 +287,36 @@ describe.skipIf(!HAS_DB)("the sweep's payment reminders ride the outbox (DB)", (
     expect(sent.html, "and the html part").toContain(ref);
   });
 
+  // Registration redesign B5 T18 (spec §6.3): a reminder is about ONE entry, so it quotes that entry's own reference. A cart's two entries
+  // are two mails (one per entry, once-key `<entry id>:submit`), and each must name its own -n; the sweep passes no reference, so this is
+  // the message builder's own reading of the row the sweep selected.
+  it("the sweep's reminders of a 2-entry cart each print their OWN reference (-1 and -2), html and text (B5 T18)", async () => {
+    const w = await stripeWorld();
+    const email = address("t18");
+    const ref = generateRefCode();
+    const first = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: email, locale: "en", refCode: ref });
+    const second = await seedSecondEntry(first.registration.group_id, w.division.id, 500, "Second Entry", "pending");
+    await dueSoon(first.registration.group_id);
+    await sweepRegistrations(ORIGIN);
+    const rows = await rowsTo(email);
+    expect(rows.map((r) => r.ref_id).sort(), "premise: one reminder per entry").toEqual([first.registration.id, second.id].sort());
+    deliverMock.mockReset().mockImplementation(ok);
+    await bornAgo(rows.map((r) => r.id));
+    await tickNow(rows.map((r) => r.id));
+    let checked = 0;
+    for (const [entryId, n] of [[first.registration.id, 1], [second.id, 2]] as const) {
+      const row = rows.find((r) => r.ref_id === entryId)!;
+      const sent = callsFor(row.id)[0]!;
+      const line = dictionarySubject("en", "paymentReminder.textReference", { refCode: `${ref}-${n}` });
+      expect(sent.text.split("\n"), `entry ${n}'s text names ${ref}-${n}`).toContain(line);
+      expect(sent.html, `entry ${n}'s html names ${ref}-${n}`).toContain(`${ref}-${n}`);
+      const other = n === 1 ? 2 : 1;
+      expect(sent.text, `entry ${n}'s mail never names its sibling's`).not.toContain(`${ref}-${other}`);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
   it("a promoted entry's reminder is queued by pass 1b under its own once-key, and a re-promoted entry gets its second-cycle reminder", async () => {
     // Review Focus 2: the once-key embeds the promotion's own `promoted_at`, so a second promotion of the same entry is a new key
     // (the right answer is not the first cycle's constant).
@@ -327,7 +360,7 @@ describe.skipIf(!HAS_DB)("the sweep's payment reminders ride the outbox (DB)", (
 // ---------------------------------------------------------------------------------------------------------------------------------
 
 describe.skipIf(!HAS_DB)("the organiser's manual payment reminder rides the outbox (DB)", () => {
-  it("reports sent and records its audit entry in the same transaction; a second press is a second mail that supersedes the first", async () => {
+  it("reports sent and records its audit entry in the same transaction; a second press is a second mail that supersedes the first, which still records that it was sent", async () => {
     const w = await offlineWorld();
     const email = address("manual");
     const { registration } = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: email, locale: "nl" });
@@ -356,10 +389,20 @@ describe.skipIf(!HAS_DB)("the organiser's manual payment reminder rides the outb
     expect(await audited(), "the audit entry was written with the row").toHaveLength(1);
 
     // The second press: a deliberate second mail. The first has been sent, so the trigger marks it replaced and both went out.
+    // `replaced` means superseded, not unsent (outbox spec 2026-10-19 "replaced"; phase-3 §6 controller call 2026-10-25): the row keeps
+    // the provider's id and its send time, which is how an audit tells a sent-then-superseded reminder from one that never went
+    // (registration walk-fix F17, 2026-11-14: four of seven walkthrough reminders read `replaced` although each was sent).
     expect(await sendPaymentReminder(w.owner, registration.id, ORIGIN)).toEqual({ sent: true });
     const rows = await rowsTo(email);
     expect(rows).toHaveLength(2);
     expect(rows.map((r) => r.status)).toEqual(["replaced", "sent"]);
+    const proof = await sql<{ id: string; provider_id: string | null; sent_at: Date | null }[]>`
+      select id, provider_id, sent_at from email_outbox where id = any(${rows.map((r) => r.id)}::uuid[]) order by created_at, id`;
+    expect(proof.map((p) => p.id), "premise: the proof reads the two reminder rows, oldest first").toEqual(rows.map((r) => r.id));
+    for (const p of proof) {
+      expect(p.provider_id, "each row, the replaced one too, keeps the id the provider gave its send").toMatch(/^re_t9_/);
+      expect(p.sent_at, "and when it was sent").not.toBeNull();
+    }
     expect(callsTo(email), "each press is one mail").toHaveLength(2);
     expect(await audited()).toHaveLength(2);
     await assertNothingMoreToSend(KIND, rows.map((r) => r.id));
@@ -516,6 +559,33 @@ describe.skipIf(!HAS_DB)("the organiser's reminder is capped per entry, and quot
     await seedAudit(w, young.registration.id, 4, 30);
     await seedAudit(w, young.registration.id, 1, 24 * 60 - 1);
     expect((await refusal(sendPaymentReminder(w.owner, young.registration.id, ORIGIN))).status).toBe(429);
+  });
+
+  // Walk-fix F13: the hub disables the button at the cap, off the row's `reminders_in_window`. That count must be the cap's own, or the
+  // button would be disabled for a press the server accepts (or offered for one it refuses). Expected values come from the cap rule
+  // (REMINDER_CAP_PER_DAY presses in a rolling 24 h), and each case is checked against the usecase itself, both ways.
+  it("the hub row's reminders_in_window is the cap's own count: empty 0, at the cap it refuses, one aged past 24 h is not counted (DB)", async () => {
+    const w = await offlineWorld();
+    const countOf = async (regId: string) => (await listRegistrations(w.owner, w.division.id, null)).find((r) => r.id === regId)!.reminders_in_window;
+
+    const fresh = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("capwin0") });
+    expect(await countOf(fresh.registration.id), "empty case: never reminded").toBe(0);
+
+    const at = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("capwin5") });
+    await seedAudit(w, at.registration.id, REMINDER_CAP_PER_DAY - 1, 30);
+    await seedAudit(w, at.registration.id, 1, 24 * 60 - 1);
+    expect(await countOf(at.registration.id), "24 h - 1 min is inside the window").toBe(REMINDER_CAP_PER_DAY);
+    expect((await refusal(sendPaymentReminder(w.owner, at.registration.id, ORIGIN))).status, "and the cap refuses it").toBe(429);
+
+    const aged = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("capwin4") });
+    await seedAudit(w, aged.registration.id, REMINDER_CAP_PER_DAY - 1, 30);
+    await seedAudit(w, aged.registration.id, 1, 24 * 60 + 1);
+    // Noise the count must refuse: another type naming the entry, and another entry's presses.
+    await seedAudit(w, aged.registration.id, 3, 10, "registration.waitlisted");
+    expect(await countOf(aged.registration.id), "24 h + 1 min is outside; other types never count").toBe(REMINDER_CAP_PER_DAY - 1);
+    expect(await sendPaymentReminder(w.owner, aged.registration.id, ORIGIN), "and the cap sends it").toEqual({ sent: true });
+    expect(await countOf(aged.registration.id), "the press it just made counts").toBe(REMINDER_CAP_PER_DAY);
+    expect(await countOf(fresh.registration.id), "another entry's presses never leak into this one").toBe(0);
   });
 
   it("the sweep's mails, other audit types and another entry's presses do not count", async () => {

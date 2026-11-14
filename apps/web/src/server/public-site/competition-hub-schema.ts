@@ -33,6 +33,8 @@ import { deriveHubTabs } from "../../lib/matches-hub.ts";
 // The Swiss chip's closed state set (W3 T16), from the import-free leaf the lib that computes it re-exports — same reason,
 // same `.ts` extension (the leaf, not `swiss-round-state.ts`: that one reaches `@/` aliases this module's loader cannot resolve).
 import { SWISS_ROUND_STATES } from "../../lib/swiss-round-state-names.ts";
+// The camera-policy vocabulary, from its import-free leaf (same `.ts`-extension reason as above).
+import { CAMERA_POLICIES } from "../../lib/camera-policy.ts";
 
 /** The three lists the Matches hub can show. Restated here as zod because
  *  `lib/matches-hub.ts` — which owns the same vocabulary as a client-safe
@@ -146,6 +148,10 @@ export const HubDivision = z.object({
   /** Active bans in this division, sorted by name. Empty when none — and
    *  empty, never an error, when the discipline read fails. */
   suspensions: z.array(HubSuspension).optional(),
+  /** Walk-fix F8: the division is played online (a linked Lichess account needed to enter) and the camera policy a
+   *  player signs up to - the registration panel's own `online_play`/`camera_policy` for this division. ABSENT when the
+   *  division is not online (or has no registration panel), and optional for `description`'s cached-document reason. */
+  onlinePlay: z.object({ cameraPolicy: z.enum(CAMERA_POLICIES) }).optional(),
 });
 
 export const HubMatch = z.object({
@@ -441,6 +447,9 @@ export const HubInfo = z.object({
   endsOn: z.string().nullable(),
   venues: z.array(z.string()),
   registrationOpen: z.boolean(),
+  /** Walk-fix F5: nothing is open, and a division is shut only because card payments are not set up - the page gives that
+   *  reason (and that registration will open) instead of a bare "closed". Read off the same panel answer as `registrationOpen`. */
+  registrationWaitsOnCardPayments: z.boolean(),
   registerHref: z.string(),
   calendars: z.array(z.object({ divisionName: z.string(), href: z.string() })),
   presentHref: z.string(),

@@ -4,7 +4,7 @@
 // Every assertion is a differential over the four shipped locales, never one sampled language: an untranslated key renders as its own
 // raw token, and a locale whose word order buries the greeting would pass a single-language test.
 import { describe, expect, it } from "vitest";
-import { getDictionary } from "@/lib/i18n";
+import { getDictionary, t } from "@/lib/i18n";
 import { LOCALES } from "@/lib/i18n-constants";
 import {
   paymentReminderTemplate,
@@ -12,6 +12,7 @@ import {
   registrationPromotedTemplate,
   registrationTemplate,
 } from "@/lib/email-templates";
+import { money } from "@/lib/email-templates/shared";
 
 const CONTACT = "Dana Captain";
 const TEAM = "Riverside Rovers";
@@ -45,7 +46,7 @@ describe("a registrant mail greets the person, not the entry", () => {
         { ...base, feeCents: 1500, paymentInstructions: null, method: "card", payPageUrl: PAY_PAGE },
         dict,
       ),
-      promotion: registrationPromotedTemplate({ ...base, feeCents: 1500, method: "card", payPageUrl: PAY_PAGE }, dict),
+      promotion: registrationPromotedTemplate({ ...base, feeCents: 1500, method: "card", payPageUrl: PAY_PAGE, seatedIn: null }, dict),
       refund: refundIssuedTemplate({ ...base, amountCents: 1500 }, dict),
     };
     let checked = 0;
@@ -198,7 +199,9 @@ describe("a single-entry confirmation says what the entry is waiting on (V2)", (
     expect(checked, "anti-vacuity: five waiting states judged").toBe(5);
   });
 
-  it.each(LOCALES)("%s: nothing waiting - a confirmed entry, a waitlisted one - carries no status line and no review note", async (locale) => {
+  // A waitlisted entry whose place the producer did not give (`waitlistPosition` absent) keeps the plain waitlist intro and no number;
+  // with its place it carries a status line - see "a waiting-list entry states its place" (B3 T13) at the end of this file.
+  it.each(LOCALES)("%s: nothing waiting - a confirmed entry, a waitlisted one with no known place - carries no status line and no review note", async (locale) => {
     const dict = await dictOf(locale);
     const statusPrefix = raw(dict, "registration.textSingleStatus").split("{status}")[0]!.trim();
     expect(statusPrefix.length, "premise: the status line has a lead-in word").toBeGreaterThan(0);
@@ -299,7 +302,7 @@ describe("a registrant mail never names the contact back to themselves as the en
       confirmation: confirmation([entry(DIVISION, 1500)]),
       confirmationCart: confirmation([entry(DIVISION, 1500), entry("Masters Doubles", 0)]),
       reminder: paymentReminderTemplate({ ...base, feeCents: 1500, paymentInstructions: null, method: "card", payPageUrl: PAY_PAGE }, dict),
-      promotion: registrationPromotedTemplate({ ...base, feeCents: 1500, method: "card", payPageUrl: PAY_PAGE }, dict),
+      promotion: registrationPromotedTemplate({ ...base, feeCents: 1500, method: "card", payPageUrl: PAY_PAGE, seatedIn: null }, dict),
       refund: refundIssuedTemplate({ ...base, amountCents: 1500 }, dict),
     } as Record<string, { subject: string; html: string; text: string }>;
   }
@@ -336,5 +339,168 @@ describe("a registrant mail never names the contact back to themselves as the en
     expect(own.confirmationCart!.text).toContain("Open Doubles — ");
     expect(own.confirmationCart!.text).toContain("Masters Doubles — ");
     expect(own.reminder!.text).toContain("Open Doubles");
+  });
+});
+
+// Registration redesign B3 T13 (owner ruling 2026-11-13): the confirmation states a waiting-list entry honestly - its place in the queue
+// and that nothing is charged now ("On the waiting list — position #N, not charged now"). The place is the producer's
+// (`buildCartMail` reads the status page's own count; registration-waitlist-position.test.ts drives it); the expected words are the
+// dictionaries', filled by `t`, never this template's output. A waitlisted entry can still carry a fee (a lapsed promotion keeps it,
+// an organiser-waitlisted entry never had it zeroed): its line prints no amount beside "not charged now".
+describe("a waiting-list entry states its place and that nothing is charged now (B3 T13)", () => {
+  const unescape = (s: string) => s.replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+  const args = { orgName: "Riverside Club", competitionName: "Spring Open", contactName: CONTACT, currency: "gbp", paymentInstructions: null, statusUrl: "https://seazn.club/s" };
+  const waiting = (divisionName: string, waitlistPosition: number | undefined, feeCents = 0) => ({
+    displayName: TEAM,
+    divisionName,
+    status: "waitlisted",
+    feeCents,
+    approval: "auto" as const,
+    ...(waitlistPosition === undefined ? {} : { waitlistPosition }),
+  });
+  const holding = { displayName: TEAM, divisionName: DIVISION, status: "pending", feeCents: 1500, approval: "auto" as const, waitlistPosition: null };
+  const RAW = /\{\w+\}|\bregistration\.[a-zA-Z]+\b/;
+
+  it.each(LOCALES)("%s: a single waiting entry's status line names its place, in the html and the text", async (locale) => {
+    const dict = await dictOf(locale);
+    const label = t(dict, "registration.entryStatusWaitlistedPosition", { position: 3 });
+    expect(label, "premise: the label carries the number").toContain("3");
+    const out = registrationTemplate({ ...args, entries: [waiting(DIVISION, 3)], totalCents: 0 }, dict, locale);
+    expect(out.text).toContain(t(dict, "registration.textSingleStatus", { status: label }));
+    expect(unescape(words(out.html))).toContain(label);
+    for (const part of [out.subject, out.html, out.text]) expect(part, `${locale}: no raw token`).not.toMatch(RAW);
+  });
+
+  it.each(LOCALES)("%s: a cart's waiting line names its own place and no amount, while the place-holding line keeps its fee", async (locale) => {
+    const dict = await dictOf(locale);
+    const out = registrationTemplate(
+      { ...args, entries: [holding, waiting("Masters Doubles", 2, 1500)], totalCents: 1500 },
+      dict,
+      locale,
+    );
+    const lineOf = (division: string) => out.text.split("\n").find((l) => l.includes(division));
+    const label = t(dict, "registration.entryStatusWaitlistedPosition", { position: 2 });
+    expect(lineOf("Masters Doubles"), `${locale}: the waiting line, whole`).toBe(
+      t(dict, "registration.entryLineNoFee", { displayName: TEAM, divisionName: "Masters Doubles", status: label }),
+    );
+    const fee = money(1500, "gbp", locale);
+    expect(lineOf(DIVISION), `${locale}: premise - the holding line prints its fee`).toContain(fee);
+    expect(lineOf("Masters Doubles"), `${locale}: nothing charged now, so no amount`).not.toContain(fee);
+    expect(unescape(words(out.html)), `${locale}: html carries the waiting line's place`).toContain(label);
+    for (const part of [out.subject, out.html, out.text]) expect(part, `${locale}: no raw token`).not.toMatch(RAW);
+  });
+
+  it.each(LOCALES)("%s: a waiting entry whose place is not known keeps the plain waitlisted word - no number is invented", async (locale) => {
+    const dict = await dictOf(locale);
+    const out = registrationTemplate({ ...args, entries: [holding, waiting("Masters Doubles", undefined)], totalCents: 1500 }, dict, locale);
+    const line = out.text.split("\n").find((l) => l.includes("Masters Doubles"));
+    expect(line).toBe(
+      t(dict, "registration.entryLineNoFee", { displayName: TEAM, divisionName: "Masters Doubles", status: t(dict, "registration.entryStatusWaitlisted") }),
+    );
+  });
+
+  it("en, typed: the owner's words", async () => {
+    const dict = await dictOf("en");
+    const single = registrationTemplate({ ...args, entries: [waiting(DIVISION, 2)], totalCents: 0 }, dict, "en");
+    expect(single.text).toContain("Status: On the waiting list — position #2, not charged now");
+    const cart = registrationTemplate({ ...args, entries: [holding, waiting("Masters Doubles", 4, 1500)], totalCents: 1500 }, dict, "en");
+    expect(cart.text).toContain("Riverside Rovers · Masters Doubles — On the waiting list — position #4, not charged now\n");
+  });
+});
+
+describe("a free promotion says what the promotion did (walk-fix F2)", () => {
+  // The two free outcomes of `promoteWaitlistedRow` (waitlist.ts `promotionConfirmsRow`): automatic approval SEATS the entry
+  // (status confirmed) and nothing is left to do; manual approval leaves it pending the organiser's decision. The walkthrough's
+  // free + automatic mail said "the organiser will confirm your entry" about an entry that was already in.
+  const free = (seatedIn: string | null) =>
+    ({
+      orgName: "Riverside Club",
+      competitionName: "Spring Open",
+      displayName: TEAM,
+      contactName: CONTACT,
+      feeCents: 0,
+      currency: "gbp",
+      method: "offline",
+      payPageUrl: null,
+      seatedIn,
+    }) as const;
+
+  it.each(LOCALES)("%s: seated -> 'you're in' naming the division, never the approval wording; pending -> the approval wording (html and text)", async (locale) => {
+    const dict = await dictOf(locale);
+    const confirmedEsc = t(dict, "registrationPromoted.confirmed", { divisionName: DIVISION });
+    const awaiting = t(dict, "registrationPromoted.noPayment");
+    expect(confirmedEsc, `${locale}: the key exists`).not.toBe("registrationPromoted.confirmed");
+    expect(confirmedEsc, `${locale}: the division is named`).toContain(DIVISION);
+
+    const seated = registrationPromotedTemplate(free(DIVISION), dict, locale);
+    const pending = registrationPromotedTemplate(free(null), dict, locale);
+    let checked = 0;
+    for (const [part, s, p] of [
+      ["html", words(seated.html), words(pending.html)],
+      ["text", seated.text, pending.text],
+    ] as const) {
+      expect(s, `${locale} ${part}: seated says it is confirmed`).toContain(confirmedEsc);
+      expect(s, `${locale} ${part}: seated never says the organiser will confirm`).not.toContain(awaiting);
+      expect(p, `${locale} ${part}: pending says the organiser will confirm`).toContain(awaiting);
+      expect(p, `${locale} ${part}: pending never says it is confirmed`).not.toContain(confirmedEsc);
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("a name that needs escaping is escaped in the html and plain in the text", async () => {
+    const dict = await dictOf("en");
+    const out = registrationPromotedTemplate(free("Under-12 <Boys> & Girls"), dict, "en");
+    expect(out.html).toContain("Under-12 &lt;Boys&gt; &amp; Girls");
+    expect(out.html).not.toContain("<Boys>");
+    expect(out.text).toContain("Under-12 <Boys> & Girls");
+  });
+
+  it("en, typed: the ruling's words", async () => {
+    const dict = await dictOf("en");
+    expect(t(dict, "registrationPromoted.confirmed", { divisionName: DIVISION })).toBe(`You're in — your place in ${DIVISION} is confirmed.`);
+  });
+
+  it("a promotion that owes a fee never uses either free sentence, seated or not (the fee panel says what to do)", async () => {
+    const dict = await dictOf("en");
+    const card = registrationPromotedTemplate({ ...free(null), feeCents: 1500, method: "card", payPageUrl: PAY_PAGE }, dict, "en");
+    expect(words(card.html)).not.toContain(t(dict, "registrationPromoted.noPayment"));
+    expect(words(card.html)).not.toContain("You're in");
+  });
+});
+
+// Final review m2: the cart confirmation's offline instructions quote the reference the producer chose for them (`instructionsRef`: the
+// ONE owing entry's own, `buildCartMail`), while the reference panel keeps the cart's. Absent, the instructions quote the cart's - every
+// caller before m2. The producer's choice is pinned against the real cart in registration-lifecycle-mail.test.ts.
+describe("the cart confirmation fills {{reference}} with instructionsRef, and keeps refCode for its panel (final review m2)", () => {
+  const CART_REF = "SZ-ABCD-EFGH";
+  const args = {
+    orgName: "Riverside Club",
+    competitionName: "Spring Open",
+    contactName: CONTACT,
+    entries: [
+      { displayName: "Maya", divisionName: "Open Singles", status: "paid", feeCents: 1500, approval: "auto" as const },
+      { displayName: "Maya", divisionName: "Masters Singles", status: "pending", feeCents: 1200, approval: "auto" as const },
+    ],
+    totalCents: 2700,
+    currency: "gbp",
+    paymentInstructions: "Pay at the desk, quoting {{reference}}",
+    statusUrl: "https://seazn.club/s",
+    refCode: CART_REF,
+    refStatusUrl: `https://seazn.club/r/${CART_REF}`,
+  };
+
+  it.each(LOCALES)("%s: instructionsRef given, the instructions quote it (html and text) and the panel still names the cart", async (locale) => {
+    const dict = await dictOf(locale);
+    const out = registrationTemplate({ ...args, instructionsRef: `${CART_REF}-2` }, dict);
+    for (const part of [out.text, words(out.html)]) expect(part).toContain(`quoting ${CART_REF}-2`);
+    expect(out.text, "never the cart's reference in the instructions").not.toMatch(new RegExp(`quoting ${CART_REF}(?!-2)`));
+    expect(out.text, "the panel: the cart's reference").toContain(t(dict, "registration.textRef", { refCode: CART_REF }));
+  });
+
+  it.each(LOCALES)("%s: absent (every caller before m2), the instructions quote refCode", async (locale) => {
+    const out = registrationTemplate(args, await dictOf(locale));
+    expect(out.text).toContain(`quoting ${CART_REF}`);
+    expect(out.text).not.toContain(`${CART_REF}-`);
   });
 });

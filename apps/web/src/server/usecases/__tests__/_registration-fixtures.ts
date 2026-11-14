@@ -24,7 +24,9 @@ import {
   putRegistrationSettings,
   hashRegistrationToken,
   regGroupCols,
+  divisionCtx,
   REGISTRATION_TOKEN_PREFIX,
+  type KnownCart,
   type RegistrationRow,
   type RegistrationWithGroupRow,
 } from "../registrations";
@@ -139,6 +141,22 @@ export async function loadWithGroup(regId: string): Promise<RegistrationWithGrou
     from registrations r join registration_groups g on g.id = r.group_id
     where r.id = ${regId}`;
   return row;
+}
+
+/** The cart as the register route hands it to `mintGroupCheckout` (`KnownCart`), read back from the committed rows: the cart's
+ *  `payment_method`, its payable entries (`pending` with a fee) in cart order, and `divisionId`'s context. These are the reads
+ *  `mintGroupCheckout` made itself until its one production caller (the register route) started handing it the cart the submit
+ *  had just written (registration redesign B1 T5); B1 fix round 1 (review M1) removed them from the mint, so a suite that seeds
+ *  a cart directly, with no submit, takes the cart from here. The payable SELECT keeps its exact text: the race rig in
+ *  registration-checkout-guards.test.ts intercepts it by that text. */
+export async function cartAsWritten(groupId: string, divisionId: string): Promise<KnownCart> {
+  const [group] = await sql<{ payment_method: KnownCart["paymentMethod"] }[]>`
+    select payment_method from registration_groups where id = ${groupId}`;
+  const payable = await sql<{ id: string }[]>`
+    select id from registrations
+    where group_id = ${groupId} and status = 'pending' and amount_cents > 0
+    order by created_at`;
+  return { paymentMethod: group?.payment_method ?? null, payableIds: payable.map((r) => r.id), ctx: await divisionCtx(sql, divisionId) };
 }
 
 /** Attaches a SECOND entry to an existing cart (group) — reproduces what a

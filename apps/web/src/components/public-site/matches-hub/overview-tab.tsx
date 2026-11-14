@@ -53,6 +53,7 @@ import {
 import type { CompetitionHubDocT } from "@/server/public-site/competition-hub-schema";
 import { StandingsTableView } from "../standings-table-view";
 import { MatchCard } from "./match-card";
+import { HubOnlinePlayNote } from "./online-play-note";
 
 export interface OverviewTabProps {
   doc: CompetitionHubDocT;
@@ -502,6 +503,21 @@ export function OverviewTab({
   // window AND the heading, and both reads want it non-null together.
   const scope = plan.nextUp;
   const upNext = nextUpMatches(doc.matches, scope, now);
+  // Walk-fix F8 (+ F4): beside Register, each online division named as played online, with its camera policy. Optional
+  // on the schema (a document cached before it existed), so absent reads as over the board.
+  const onlineNotes = doc.divisions.flatMap((d) =>
+    d.onlinePlay
+      ? [
+          <HubOnlinePlayNote
+            key={d.id}
+            dict={dict}
+            onlinePlay={d.onlinePlay}
+            divisionName={d.name}
+            testId={`mh-register-online-${d.slug}`}
+          />,
+        ]
+      : [],
+  );
 
   // What each section would render, or null when it has nothing to say. Built
   // for every section regardless of the ladder, and then INTERSECTED with the
@@ -691,15 +707,26 @@ export function OverviewTab({
           </ul>
         </>
       ),
-    register: !doc.info.registrationOpen ? null : (
-      <Link
-        data-testid="mh-register"
-        href={doc.info.registerHref}
-        className={REGISTER_CLASS}
-      >
-        {t(dict, "landing.register")}
-      </Link>
-    ),
+    register: doc.info.registrationOpen ? (
+      <>
+        <Link
+          data-testid="mh-register"
+          href={doc.info.registerHref}
+          className={REGISTER_CLASS}
+        >
+          {t(dict, "landing.register")}
+        </Link>
+        {onlineNotes}
+      </>
+    ) : doc.info.registrationWaitsOnCardPayments ? (
+      <>
+        {/* Walk-fix F5: no Register while card payments aren't available, and the reason in its place rather than nothing. */}
+        <p data-testid="mh-register-unavailable" className="max-w-prose text-sm text-ink-muted">
+          {t(dict, "info.registration.cardPaymentsUnavailable")}
+        </p>
+        {onlineNotes}
+      </>
+    ) : null,
     // Each slot brings its own chrome — `info-tab.tsx` states the rule and this
     // follows it: a heading over an absent block reads as content that failed
     // to load rather than content that does not exist.

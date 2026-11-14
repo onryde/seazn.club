@@ -199,6 +199,14 @@ export const RegistrationListEntry = Registration.extend({
   /** 1-based rank within the division's waitlist; null for every other
    *  status. */
   waitlist_position: z.number().int().nullable(),
+  /** B5 (V519) — the two stored halves of this entry's OWN reference, which the row has always carried (`regGroupCols`) and the
+   *  organiser's registrant detail, the CSV's `entry_reference` column and the search now read. `cart_position` is the entry's 1-based
+   *  place in the cart it was sent in, never changed or reused after submit; `cart_size` is how many entries that cart was sent
+   *  with, never decremented. The reference to quote is `ref_code` for a cart sent with one entry, and `ref_code` + `-` + `cart_position`
+   *  for a cart sent with two or more (`entryReferenceOf`, `lib/ref-code.ts`) — so a withdrawn or deleted sibling never moves another entry's
+   *  reference, and an integration building the string itself must read `cart_size`, never count the rows it was sent. */
+  cart_position: z.number().int().min(1),
+  cart_size: z.number().int().min(1),
   /** RS009 — where a SOLO SIGN-UP currently sits, or null while still in the
    *  pool. Null on every non-solo-sign-up row. Derived from the roster row
    *  pointing back at this entry, never mirrored onto `registrations`, so the
@@ -219,6 +227,13 @@ export const RegistrationListEntry = Registration.extend({
   /** When the organiser last pressed "Send payment reminder" for this entry (the newest `registration.payment_reminded` audit row);
    *  null if never. */
   last_reminded_at: z.string().nullable(),
+  /** The organiser's presses for this entry inside the reminder cap's 24 h window (the cap's own count); at the cap the hub disables
+   *  Send payment reminder, since the press would be refused with PAYMENT_REMINDER_LIMIT. */
+  reminders_in_window: z.number().int().nonnegative(),
+  /** When an automatic waitlist promotion last passed this waiting entry over because its Lichess account is not linked to play, in
+   *  its current wait; null otherwise (and on every entry that is not waitlisted). The hub shows "Skipped on <date>: Lichess wasn't
+   *  linked". */
+  promotion_skipped_at: z.string().nullable(),
 });
 
 /** `POST /registrations/{id}/promote` body. `id` in the URL resolves which
@@ -311,10 +326,13 @@ export const PublicRegistrationDivision = z.object({
   opens_at: z.string().nullable(),
   closes_at: z.string().nullable(),
   capacity: z.number().int().nullable(),
-  /** Spots left before new submissions waitlist; null = uncapped. */
+  /** Spots left before new submissions waitlist, counted against the cap submit enforces: min(capacity, the plan's
+   *  per-division entrant limit). null = neither caps the division. */
   remaining: z.number().int().nullable(),
   /** Spots taken — the masthead capacity meter (v3/05 §2). */
   taken: z.number().int(),
+  /** Entries on the waiting list behind this division (PROMPT-52); 0 when nobody waits. */
+  waitlisted: z.number().int().nonnegative(),
   open: z.boolean(),
   /** 'window' | 'full' (waitlist only) | 'payments_unavailable' | 'entry_kind_unavailable' (the settings' entrant kind is
    *  one the division's own entrant kinds do not include) | null */
@@ -442,6 +460,10 @@ export const PublicRegisterGroupRequest = z
      *  submit (RS006 §A). Stamped the same way (timestamp + LEGAL_VERSION,
      *  registration-submit.ts) when true; left null otherwise. */
     media_consent: z.boolean().optional(),
+    /** The registrant is the parent or guardian of the players under 18 they are entering (not themselves). Optional, never
+     *  blocks: true consents for every such row at this submit (`SubmitGroupInput.guardian_for_minors`, registration-submit.ts);
+     *  false or absent leaves them to confirm their own place. Ignored when the cart names no such player. */
+    guardian_for_minors: z.boolean().optional(),
     entries: z.array(PublicRegisterGroupEntry).min(1).max(10),
     /** Honeypot (v3/05 §4): hidden on the real form; the ROUTE decides what
      *  to do with a filled one, not this schema. */

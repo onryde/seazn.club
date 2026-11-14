@@ -46,15 +46,15 @@ describe("the registration join flow does not borrow the profile-claim vocabular
       // Placeholder NAMES are not reader-facing — `{claimed}` is the
       // interpolation slot #20 deliberately left alone (renaming it would
       // touch every call site for no reader benefit). Strip them, or this
-      // guard fails on `"{claimed} of {total} checked in"`, which is
-      // exactly the copy it is meant to bless.
+      // guard fails on `"{claimed} of {total} joined"`, which is exactly
+      // the copy it is meant to allow.
       const offenders = keys
         .filter((k) => CLAIM_VOCABULARY[locale].test(dict[k]!.replace(/\{[^}]*\}/g, " ")))
         .map((k) => `${k} = ${JSON.stringify(dict[k])}`);
       expect(
         offenders,
         `these ${locale} join-flow strings reach for the profile-claim verb; ` +
-          `use this locale's check-in wording instead (see register.status.roster.claimed)`,
+          `use this locale's joined wording instead (see register.status.roster.joined / notJoined)`,
       ).toEqual([]);
     });
   }
@@ -66,5 +66,21 @@ describe("the registration join flow does not borrow the profile-claim vocabular
     const profileClaimKeys = Object.keys(en).filter((k) => k.startsWith("claim."));
     expect(profileClaimKeys.length).toBeGreaterThan(5);
     expect(en["claim.claimed"]).toMatch(/\bclaimed\b/i);
+  });
+});
+
+// Walk-fix B review m7: the register flow says a Lichess account is "lié" ("Liez votre compte Lichess"), the public hub (and one register
+// line) said "compte Lichess relié" for the same linked state - two words for one state. Scoped to that state phrase: settings and the
+// game room's "relier à nouveau" is the RE-link action, its own wording. French only: the drift was French.
+describe("fr: a linked Lichess account is 'lié' wherever its state is named (walk-fix B review m7)", () => {
+  it("no fr string says 'compte Lichess relié' (ui + public, counted)", () => {
+    const strings: [string, string][] = [];
+    for (const ns of ["ui", "public"]) {
+      const dict = JSON.parse(readFileSync(join(process.cwd(), "src/dictionaries/fr", `${ns}.json`), "utf8")) as Record<string, string>;
+      for (const [k, v] of Object.entries(dict)) if (/lichess/i.test(v)) strings.push([`${ns}:${k}`, v]);
+    }
+    expect(strings.length, "anti-vacuity: fr strings naming Lichess").toBeGreaterThan(10);
+    expect(strings.filter(([, v]) => /compte Lichess reli[ée]/i.test(v)).map(([k]) => k)).toEqual([]);
+    expect(strings.some(([, v]) => /\bli[ée]e?s?\b|\bLiez\b/.test(v)), "premise: the flow's own word is in use").toBe(true);
   });
 });

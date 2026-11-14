@@ -3,12 +3,14 @@ import "server-only";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { entryPriceCents, isTerminalRegistrationStatus, ownPaymentRefundedCents } from "@/lib/registration-status";
-import { isValidRefCode, normalizeRefCode } from "@/lib/ref-code";
+import { entryReferenceOf } from "@/lib/ref-code";
 import { resolveVenueTz } from "@/lib/tz";
 import type { RegistrationSettingsRow, RegistrationRow, RegistrationGroupRow } from "./types";
-import { loadSettings, DUMMY_ACCESS_HASH, tokenMatchesHash, GROUP_ID_RE } from "./lookups";
+import { loadSettings, DUMMY_ACCESS_HASH, tokenMatchesHash, typedReference, GROUP_ID_RE } from "./lookups";
 import { type ResolvedRefundPolicy, resolveRefundPolicy } from "./refunds";
 import { effectivePoolDeadline } from "./list";
+import { promotionSkippedAtSql, waitlistPositionSql } from "./waitlist";
+import { competitionVenueName, settlementsByRegistration, type SettledBy } from "./status-facts";
 
 // ---------------------------------------------------------------------------
 // Group read model — /r/[ref] status page, multi-entry (RS002 W5, RS007)
@@ -75,6 +77,14 @@ export interface GroupEntryView {
    *  `promoteWaitlistedRow` writes); `null` for every other entry (their own `amount_cents` is the figure). A waitlisted entry's stored
    *  fee is 0 by construction, so the Subtotal could only say "Free": this is what lets it say what is not yet due. */
   fee_if_promoted_cents: number | null;
+  /** Registration redesign B3 T13: a WAITLISTED entry's 1-based place in its division's queue, null for every other entry. Counted in
+   *  the order promotion takes the queue (`waitlistPositionSql`, registrations/waitlist.ts), the same place the organiser list, the
+   *  public status API and the confirmation mail state. */
+  waitlist_position: number | null;
+  /** Walk-fix F16: when an automatic promotion last passed this WAITING entry over because its Lichess account is not linked to play
+   *  (`promotionSkippedAtSql`, registrations/waitlist.ts), in its current wait (ISO); null otherwise. The status card says why and offers
+   *  the Link step. */
+  promotion_skipped_at: string | null;
   /** V378/RS007: this entry's OWN pay-by deadline when it was promoted out
    *  of the waitlist — null for a never-promoted entry, whose deadline is
    *  the CART's own `GroupStatusView.expires_at` instead (see
@@ -108,6 +118,16 @@ export interface GroupEntryView {
    *  organiser's Refund, a late payment's refund) - the entry's `refunded_cents`, never the cart's. The status card names it, so a
    *  rejected entry whose fee came back says so instead of reading only "Rejected". */
   refunded_cents: number;
+  /** Registration redesign B4 T14: how THIS entry's fee was settled — "card", "offline" (Mark paid), "waived" (Confirm without
+   *  payment), or null when nothing settled it. History, not status: it outlives a refund (`refunded_cents`) and a withdrawal.
+   *  A waived entry keeps its `amount_cents`, so it must count as neither paid nor due. Derived in ./status-facts.ts (the
+   *  contract T15 renders is documented at its top). */
+  settled_by: SettledBy | null;
+  /** Registration redesign B5 T18 (spec §6.2, §6.3): the reference to quote for THIS entry (`entryReferenceOf`, lib/ref-code.ts): the cart's
+   *  `SZ-XXXX-XXXX` with the entry's place in the cart (`-2`) when the cart was sent with two or more entries, the cart's alone for a
+   *  one-entry cart. Null only when the cart has no reference at all (`GroupStatusView.ref_code`). Fixed at submit: a withdrawal or a
+   *  deleted sibling never changes it. The card prints it only in a 2+ cart (`cardEntryReference`, register/status/view-model.ts). */
+  entry_ref: string | null;
 }
 
 /** The whole cart, for the status page (design §4 step 6; RS007 builds the
@@ -126,13 +146,27 @@ export interface GroupStatusView {
    *  The two current consumers (`fillPaymentInstructions`'s `reference`
    *  param, and a bare JSX `{view.ref_code}`) already tolerate null. */
   ref_code: string | null;
+  /** Registration redesign B5 T18: how many entries the cart was SENT with (`registration_groups.cart_size`, V519): every entry whatever its
+   *  status now, never less after a withdrawal or a deleted division. It decides whether the page speaks of per-entry references at all
+   *  (`cardEntryReference`), never a count of `entries`. */
+  cart_size: number;
   contact_name: string;
+  /** Registration redesign B4 T15: the address the cart's confirmation mail went to (queued at submit), for the page's "Confirmation
+   *  sent to {email}." Token-gated like every field here; the token-less `PublicCartView` never carries it. */
+  contact_email: string;
   currency: string;
   amount_cents: number;
   payment_method: "offline" | "stripe" | null;
   expires_at: string | null;
   refunded_cents: number;
   competition_name: string;
+  /** Registration redesign B4 T14: the competition's own dates, 'YYYY-MM-DD' (`date` columns, kept as plain strings), null when
+   *  unset. `ends_on` may equal `starts_on` (a one-day event). */
+  competition_starts_on: string | null;
+  competition_ends_on: string | null;
+  /** Registration redesign B4 T14 (spec §5.2, FP1): the one venue every placed fixture of a PUBLISHED division shares, else null
+   *  (no fixtures, two or more venues, or only draft schedules). `competitionVenueName`, ./status-facts.ts. */
+  venue_name: string | null;
   competition_slug: string;
   org_slug: string;
   org_name: string;
@@ -146,7 +180,9 @@ export interface GroupStatusView {
    *  payment_method at submit — `assertUniformPaymentMethod`). */
   charges_enabled: boolean;
   /** RS007: the resolved offline instructions ({{reference}} left
-   *  un-substituted — the page fills it in with THIS cart's own ref_code),
+   *  un-substituted — the page fills it in with the reference the entry due
+   *  quotes: that entry's own when exactly one is due, the cart's ref_code
+   *  otherwise; `offlineInstructionsReference`, status/view-model.ts),
    *  division override falling back to the org's, or null for a
    *  stripe-method cart. Same resolution order `buildCartMail`'s email
    *  uses, so the page and the confirmation email never disagree about what
@@ -175,10 +211,12 @@ export interface GroupStatusView {
  */
 export async function groupByRef(ref: string, accessToken: string): Promise<GroupStatusView> {
   const notFound = () => new HttpError(404, "registration not found");
-  const canonical = normalizeRefCode(ref);
-  if (!isValidRefCode(canonical)) throw notFound();
-  const [group] = await sql<RegistrationGroupRow[]>`
+  const { canonical, position } = typedReference(ref);
+  const [found] = await sql<RegistrationGroupRow[]>`
     select * from registration_groups where ref_code = ${canonical}`;
+  // An entry number the cart was never sent with (B5 T18 review m1) is no cart at all: the same dummy-hash compare and the same 404 as an
+  // unknown reference, so the number is no oracle on how many entries a cart has.
+  const group = found && (position === null || position <= found.cart_size) ? found : undefined;
   return buildGroupStatusView(group, accessToken, notFound);
 }
 
@@ -222,12 +260,12 @@ async function buildGroupStatusView(
   const [comp] = await sql<
     {
       comp_name: string; comp_slug: string; org_slug: string; org_name: string;
-      starts_on: string | null; charges_enabled: boolean; org_payment_instructions: string | null;
+      starts_on: string | null; ends_on: string | null; charges_enabled: boolean; org_payment_instructions: string | null;
       org_timezone: string | null;
     }[]
   >`
     select c.name as comp_name, c.slug as comp_slug, o.slug as org_slug, o.name as org_name,
-           c.starts_on, o.stripe_charges_enabled as charges_enabled,
+           c.starts_on, c.ends_on, o.stripe_charges_enabled as charges_enabled,
            o.payment_instructions as org_payment_instructions, o.timezone as org_timezone
     from competitions c join organizations o on o.id = c.org_id
     where c.id = ${group.competition_id}`;
@@ -247,10 +285,16 @@ async function buildGroupStatusView(
       | "pool_place_by_at"
       | "approval"
       | "fee_if_promoted_cents"
+      | "settled_by"
+      | "entry_ref"
+      | "promotion_skipped_at"
     > & {
+      /** V519: read to make `entry_ref`, then destructured OUT below (the view carries the reference, not the number). */
+      cart_position: number;
       refunded_cents: number;
       late_refunded_cents: number;
       promotion_expires_at: Date | null;
+      promotion_skipped_at: Date | null;
       /** V387/H1 — read to resolve THIS entry's refund policy, then
        *  destructured OUT below so it never reaches the public view: a
        *  Stripe intent id is not something a status page hands to whoever
@@ -258,10 +302,12 @@ async function buildGroupStatusView(
       entry_payment_intent_id: string | null;
     })[]
   >`
-    select r.id, r.division_id, d.name as division_name, r.display_name, r.status,
+    select r.id, r.division_id, d.name as division_name, r.display_name, r.status, r.cart_position,
            r.amount_cents, r.refunded_cents, r.late_refunded_cents, r.free_agent, r.join_code, r.promotion_expires_at,
            r.payment_intent_id as entry_payment_intent_id, r.approved_at is not null as approved,
            d.youth as division_youth, d.player_name_display as division_player_name_display,
+           ${waitlistPositionSql(sql, "r")} as waitlist_position,
+           ${promotionSkippedAtSql(sql, "r")} as promotion_skipped_at,
            -- RS009: the team an organiser placed this solo sign-up on, or
            -- null while they are still in the pool. free_agent records how
            -- the entry was MADE and never flips back, so it cannot answer
@@ -385,6 +431,12 @@ async function buildGroupStatusView(
           where rp.registration_id in ${sql(entries.map((e) => e.id))}
           order by rp.created_at`
       : [];
+  // Registration redesign B4 T14: the venue line and each entry's settlement (./status-facts.ts), two independent reads.
+  const [venueName, settledByEntry] = await Promise.all([
+    competitionVenueName(group.competition_id),
+    settlementsByRegistration(group.competition_id, entries.map((e) => e.id)),
+  ]);
+
   const playersByEntry = new Map<string, GroupEntryPlayerView[]>();
   for (const p of players) {
     const list = playersByEntry.get(p.registration_id) ?? [];
@@ -402,13 +454,18 @@ async function buildGroupStatusView(
     // doc comment for why that was a lie (groupById reaches rows where this
     // is genuinely null).
     ref_code: group.ref_code,
+    cart_size: group.cart_size,
     contact_name: group.contact_name,
+    contact_email: group.contact_email,
     currency: group.currency,
     amount_cents: group.amount_cents,
     payment_method: group.payment_method,
     expires_at: group.expires_at ? new Date(group.expires_at).toISOString() : null,
     refunded_cents: group.refunded_cents,
     competition_name: comp?.comp_name ?? "",
+    competition_starts_on: comp?.starts_on ?? null,
+    competition_ends_on: comp?.ends_on ?? null,
+    venue_name: venueName,
     competition_slug: comp?.comp_slug ?? "",
     org_slug: comp?.org_slug ?? "",
     org_name: comp?.org_name ?? "",
@@ -416,8 +473,11 @@ async function buildGroupStatusView(
     charges_enabled: comp?.charges_enabled ?? false,
     payment_instructions: paymentInstructions,
     org_timezone: refundTz,
-    entries: entries.map(({ refunded_cents, late_refunded_cents, promotion_expires_at, entry_payment_intent_id, ...e }) => ({
+    entries: entries.map(({ cart_position, refunded_cents, late_refunded_cents, promotion_expires_at, promotion_skipped_at, entry_payment_intent_id, ...e }) => ({
       ...e,
+      promotion_skipped_at: promotion_skipped_at ? new Date(promotion_skipped_at).toISOString() : null,
+      // B5 T18: the cart's STORED size (`group.cart_size`), never `entries.length`: this list may be short of what the cart was sent with.
+      entry_ref: entryReferenceOf({ ref_code: group.ref_code, cart_position, cart_size: group.cart_size }),
       refunded_cents,
       promotion_expires_at: promotion_expires_at ? new Date(promotion_expires_at).toISOString() : null,
       allows_new_joiner: entrantKindByDivision.get(e.division_id) !== "pair",
@@ -459,6 +519,7 @@ async function buildGroupStatusView(
           ? (poolPlaceByDivision.get(e.division_id)?.toISOString() ?? null)
           : null,
       players: playersByEntry.get(e.id) ?? [],
+      settled_by: settledByEntry.get(e.id) ?? null,
       refund_policy: resolveRefundPolicy(
         refundLockByDivision.get(e.division_id) ?? null,
         comp?.starts_on ?? null,

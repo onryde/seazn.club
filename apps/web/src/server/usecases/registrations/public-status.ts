@@ -4,8 +4,9 @@ import { sql } from "@/lib/db";
 import { anyOptedOut, resolvePersonDisplayName } from "@/lib/name-display";
 import type { RegistrationSettingsRow, RegistrationRow, AnySql } from "./types";
 import { hashRegistrationToken } from "./helpers";
-import { loadSettings, divisionCtx, regByToken, regByRef, regByRefAndToken } from "./lookups";
+import { loadSettings, divisionCtx, regByToken, regByRef, regByRefAndToken, typedReference } from "./lookups";
 import { withdrawCore } from "./withdraw";
+import { waitlistPositionSql } from "./waitlist";
 
 // ---------------------------------------------------------------------------
 // Public: status / withdraw / resume payment (token-gated)
@@ -89,17 +90,12 @@ export async function publicRegistrationStatus(
   // never change what an in-flight registrant owes (spec issue #8).
   const paymentDue = reg.status === "pending" && reg.amount_cents > 0;
   const offline = reg.payment_method !== "stripe";
-  // Queue position (PROMPT-52): created_at-then-id order — identical to the
-  // oldest-first order auto-promotion consumes, so "#N" never lies.
-  // The row's own created_at is read back in SQL (not passed from JS): a JS
-  // Date truncates to ms while timestamptz keeps µs, and the tuple compare
-  // would then exclude the row itself.
+  // Queue position (PROMPT-52): the place promotion takes, `waitlistPositionSql` (registrations/waitlist.ts) - the one count every
+  // surface states. It used to count by `(created_at, id)` here, which told a lapsed promotion it was first while promotion had put it
+  // on the tail (registration redesign B3 T13). Read off the row in SQL, never from a JS Date (ms, where timestamptz keeps µs).
   const [posRow] = reg.status === "waitlisted"
-    ? await sql<{ position: number }[]>`
-        select count(*)::int as position from registrations r
-        where r.division_id = ${reg.division_id} and r.status = 'waitlisted'
-          and (r.created_at, r.id) <=
-              (select created_at, id from registrations where id = ${reg.id})`
+    ? await sql<{ position: number | null }[]>`
+        select ${waitlistPositionSql(sql, "r")} as position from registrations r where r.id = ${reg.id}`
     : [];
   return {
     id: reg.id,
@@ -343,6 +339,10 @@ export interface PublicCartView {
    *  `PublicCartEntryView.can_withdraw`; this only gates whether the viewer
    *  has write access to the cart AT ALL. */
   can_withdraw: boolean;
+  /** Walk-fix F1: the entry a typed number names (`<ref>-2` → the entry at `cart_position` 2, the number the mails print), which
+   *  /r/[ref] shows first and opened, its siblings folded. Null for the bare reference, and for a number whose entry was deleted
+   *  (the cart, unfocused). `entries` is the whole cart either way, in cart order. */
+  focus: { entry_id: string; position: number } | null;
   entries: PublicCartEntryView[];
 }
 
@@ -353,6 +353,7 @@ export async function publicCartByRef(ref: string, token?: string | null): Promi
   // same source `publicRegistrationStatusByRef` reads) and the access-token
   // hash, without a second group lookup.
   const reg = await regByRef(ref);
+  const { position } = typedReference(ref); // regByRef has already refused a reference that does not parse
   const ctx = await divisionCtx(sql, reg.division_id);
 
   const entries = await sql<
@@ -368,10 +369,11 @@ export async function publicCartByRef(ref: string, token?: string | null): Promi
       // the team bypass can exclude a free-agent entry (one unassigned
       // person, not a named team) from its own division's team treatment.
       free_agent: boolean;
+      cart_position: number;
     }[]
   >`
     select r.id, r.status, r.display_name, r.division_id, d.name as division_name,
-           d.youth, d.player_name_display, r.free_agent
+           d.youth, d.player_name_display, r.free_agent, r.cart_position
     from registrations r join divisions d on d.id = r.division_id
     where r.group_id = ${reg.group_id}
     order by r.created_at, r.id`;
@@ -409,6 +411,7 @@ export async function publicCartByRef(ref: string, token?: string | null): Promi
     )
     .map((e) => e.id);
   const optedOut = await anyOptedOutByRegistration(sql, nonTeamEntryIds);
+  const focused = position === null ? undefined : entries.find((e) => e.cart_position === position);
 
   return {
     ref_code: reg.ref_code!,
@@ -420,6 +423,7 @@ export async function publicCartByRef(ref: string, token?: string | null): Promi
     ends_on: ctx.ends_on,
     created_at: new Date(reg.created_at).toISOString(),
     can_withdraw: tokenValid,
+    focus: focused ? { entry_id: focused.id, position: focused.cart_position } : null,
     entries: entries.map((e) => {
       // Code-review fix (2026-08-30, item 2): entrantKindByDivision already
       // decided which entries feed nonTeamEntryIds (the consent axis) above,

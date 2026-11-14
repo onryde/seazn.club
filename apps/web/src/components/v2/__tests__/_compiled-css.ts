@@ -16,11 +16,24 @@ export type CompiledClass = Record<string, string>;
 
 const escapeClass = (c: string): string => c.replace(/[^a-zA-Z0-9_-]/g, "\\$&");
 
+// Each compile gets a `from` of its own. @tailwindcss/postcss caches one compiler per `from` path for the life of the process,
+// and a later compile under a path it has seen can answer with an earlier compile's candidates — a class missing from the
+// output, read as "this utility generates nothing" (B7 T24 fix round 1 m9). The path need not exist; beside globals.css, so
+// its relative `@import`s and `@source`s resolve exactly as they do from globals.css itself.
+let compiles = 0;
+
+/** The raw CSS Tailwind compiles `classes` to over the real globals.css — for a test that must read a rule whose selector is not
+ *  the class itself (an arbitrary variant such as `[html:has(&)]:…`), which `compileClasses` does not look for. */
+export async function compileCss(classes: readonly string[]): Promise<string> {
+  compiles += 1;
+  const input = `${readFileSync(GLOBALS, "utf8")}\n@source inline("${classes.join(" ")}");\n`;
+  const from = join(dirname(GLOBALS), `__compiled-css-${compiles}.css`);
+  return (await postcss([tailwind({ base: dirname(GLOBALS) })]).process(input, { from })).css;
+}
+
 /** Compile `classes` (as if each appeared in the source) over the real globals.css and read each one's declarations back. */
 export async function compileClasses(classes: readonly string[]): Promise<Map<string, CompiledClass>> {
-  const input = `${readFileSync(GLOBALS, "utf8")}\n@source inline("${classes.join(" ")}");\n`;
-  const out = await postcss([tailwind({ base: dirname(GLOBALS) })]).process(input, { from: GLOBALS });
-  const root = postcss.parse(out.css);
+  const root = postcss.parse(await compileCss(classes));
   const found = new Map<string, CompiledClass>();
   for (const c of classes) {
     const decls: CompiledClass = {};

@@ -27,7 +27,7 @@ import { WithdrawByRef } from "@/components/public-site/withdraw-by-ref";
 import { ShareButton } from "@/components/share-button";
 import { baseUrlFromHeaders } from "@/lib/base-url";
 import { resolveLocale } from "@/lib/resolve-locale";
-import { getDictionary, t } from "@/lib/i18n";
+import { getDictionary, plural, t } from "@/lib/i18n";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { routes } from "@/lib/routes";
 
@@ -68,6 +68,16 @@ export default async function RefStatusPage({ params, searchParams }: Props) {
   const competitionHref = routes.publicHub(view.org_slug, view.competition_slug);
   const locale = await resolveLocale();
   const ui = await getDictionary(locale, "ui");
+  // Walk-fix F1: a typed entry reference (`<ref>-2`) opens the ticket on that entry; the bare reference keeps the whole cart, unfocused.
+  const focusEntry = view.focus ? view.entries.find((e) => e.id === view.focus!.entry_id) : undefined;
+  const focus =
+    view.focus && focusEntry
+      ? {
+          entryId: focusEntry.id,
+          heading: t(ui, "ref.focus.heading", { position: view.focus.position, name: focusEntry.display_name }),
+          othersLabel: plural(ui, "ref.focus.others", view.entries.length - 1, locale),
+        }
+      : null;
 
   return (
     <DictProvider dict={ui} locale={locale}>
@@ -86,6 +96,7 @@ export default async function RefStatusPage({ params, searchParams }: Props) {
           endsOn={view.ends_on}
           qrDataUrl={qrDataUrl}
           locale={locale}
+          focus={focus}
           // RS006 follow-up (data-integrity fix): withdraw used to be ONE
           // button here in `actions`, wired to whichever entry the server
           // silently picked (the oldest) — a multi-entry cart gave no way to
