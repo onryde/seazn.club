@@ -48,7 +48,7 @@ import { resolveScorePadBootstrap } from "@/server/usecases/fidelity";
 import { lineupCatalogFor } from "@/server/usecases/lineup-catalog";
 import { eventOutToEnvelope } from "@/components/v2/scorepad/wire";
 import { doubleWalkoverRefused } from "@/lib/double-walkover-next-match";
-import { routes } from "@/lib/routes";
+import { routes, searchOf } from "@/lib/routes";
 
 /** A search param as `URLSearchParams.get` reads it: the first value of a repeated key. */
 const first = (v: string | string[] | undefined): string | undefined => (Array.isArray(v) ? v[0] : v);
@@ -64,7 +64,7 @@ export default async function FixturePage({
   const [{ orgSlug, compSlug, divSlug, no }, sp] = await Promise.all([params, searchParams]);
   const fixtureNo = Number(no);
   if (!Number.isInteger(fixtureNo) || fixtureNo < 1) notFound();
-  const page = await requireFixturePage(orgSlug, compSlug, divSlug, fixtureNo);
+  const page = await requireFixturePage(orgSlug, compSlug, divSlug, fixtureNo, { search: searchOf(sp) });
   const { auth, canScore, canEdit } = page;
   const id = page.fixtureId;
   // Accepted officials scoring without edit rights get the courtside chrome.

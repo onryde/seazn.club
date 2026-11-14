@@ -302,13 +302,23 @@ describe("cancelQueuedEmails: its guards (no database)", () => {
     expect(tx).not.toHaveBeenCalled();
   });
 
-  it("the reasons it knows are the three the spec and this task write, wave 3's superseded email change, and a quick match saved or re-armed", () => {
+  it("the reasons it knows are the three the spec and this task write, wave 3's superseded email change, a quick match saved or re-armed, and a replaced funnel draft", () => {
     // The fourth is not a board's: an email-change request ends the user's older queued confirmation (phase-3 spec §5, wave-3 plan
     // P-W3-4); email-outbox/__tests__/email-change-cancel.test.ts drives it. The fifth ends a saved quick match's queued reminder
     // (quick match plan 3, pre-flight D9); usecases/__tests__/quick-match-save.test.ts drives it. The sixth ends a quick match's
     // reminder queued for an expiry its activity moved (branch review B m6); usecases/__tests__/quick-match-sweep.test.ts drives it.
+    // The seventh ends a replaced /start draft's queued claim email and reminder (V518, /start "Sent stepper");
+    // app/api/funnel/remind/__tests__/route.test.ts drives it.
     expect([...CANCELLED_REASONS].sort()).toEqual(
-      [BOARD_SETTLED, FIXTURE_DELETED, ROUND_VOIDED, "email_change_superseded", "quick_match_saved", "quick_match_rearmed"].sort(),
+      [
+        BOARD_SETTLED,
+        FIXTURE_DELETED,
+        ROUND_VOIDED,
+        "email_change_superseded",
+        "quick_match_saved",
+        "quick_match_rearmed",
+        "funnel_draft_replaced",
+      ].sort(),
     );
   });
 });

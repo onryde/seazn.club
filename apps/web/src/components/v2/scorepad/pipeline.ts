@@ -13,8 +13,10 @@
 // whether its event already landed by inspecting the ledger SLOT
 // (appendEvent accepts only at exactly expected_seq — server/engine-db/
 // append-event.ts: the accepted event lands at `expected_seq + 1`, so THAT
-// seq is a complete test). Only when that slot holds a FOREIGN event does
-// the client renegotiate (expected_seq := current_seq) and resend — once.
+// seq is a complete test). Only when that slot holds a FOREIGN event — or
+// one of this client's OTHER events, by an ack it already holds (review I-1,
+// `resolveConflict`) — does the client renegotiate (expected_seq :=
+// current_seq) and resend — once.
 import type {
   AppendSuccess,
   ConflictResolution,
@@ -68,6 +70,9 @@ function sameIdentityField(a: string | null | undefined, b: string | null | unde
   return (a ?? null) === (b ?? null);
 }
 
+/** `resolveConflict`/`sendOne`'s default: a caller that holds no acks. */
+const NO_ACKED_SEQS: ReadonlySet<number> = new Set();
+
 /**
  * The pure 409 verdict. `slot` is the ledger row at exactly the seq OUR
  * event would have landed at (null = unreadable OR absent — the fetch
@@ -116,16 +121,32 @@ function sameIdentityField(a: string | null | undefined, b: string | null | unde
  * call's own marker just wrote, so a genuinely first-ever send still reads
  * 0 here and still renegotiates (F2 stays fixed) while a resumed send reads
  * whatever an EARLIER call already marked.
+ *
+ * fix/pad-second-tap-in-flight (review I-1) — `ackedSeqs`. Content plus
+ * `attempts > 0` still cannot tell THIS event's landed row from ANOTHER of
+ * this pad's own identical events. It happens without any tab death: A and an
+ * identical B are queued; A loses a race, renegotiates, and lands one slot
+ * later than B was stamped to expect; B's first send is lost; B's retry 409s
+ * against A's row at its own slot and was dropped as already-applied — two
+ * taps, one row. Seqs this pad holds an ACK for are therefore excluded: an
+ * event leaves the queue on its ack and the one being judged is still queued,
+ * so a seq in this set is another event's row by construction, never this
+ * one's. The renegotiated resend carries the event's own idempotency key, so
+ * even a wrong exclusion cannot write it twice (the server answers a key the
+ * ledger already holds from the ledger, scoring.ts). Defaults to empty: a
+ * caller that knows of no acks gets exactly the verdicts above.
  */
 export function resolveConflict(
   event: Pick<PendingEvent, "type" | "payload" | "attempts">,
   slot: LedgerSlotEvent | null,
   identity: OwnIdentity,
   currentSeq: number | null,
+  ackedSeqs: ReadonlySet<number> = NO_ACKED_SEQS,
 ): ConflictResolution {
   if (slot === null) return { kind: "indeterminate" };
   const isOurs =
     event.attempts > 0 &&
+    !ackedSeqs.has(slot.seq) &&
     slot.type === event.type &&
     deepEqual(slot.payload, event.payload) &&
     sameIdentityField(slot.recorded_by, identity.recordedBy) &&
@@ -365,6 +386,9 @@ function refOf(r: { nextMatch?: NextMatchRef; reason?: string; rulesVersion?: nu
  * whatever happens. Never throws — every code path resolves to a
  * `SendOutcome`, so a caller (drainQueue, or eventually a hook) never needs
  * a try/catch around it.
+ *
+ * `ackedSeqs` — the seqs the caller already holds acks for, handed straight to
+ * `resolveConflict` (see its doc, review I-1). Only the 409 path reads it.
  */
 export async function sendOne(
   transport: ScoringTransport,
@@ -372,6 +396,7 @@ export async function sendOne(
   fixtureId: string,
   event: PendingEvent,
   identity: OwnIdentity,
+  ackedSeqs: ReadonlySet<number> = NO_ACKED_SEQS,
 ): Promise<SendOutcome> {
   const base = { localId: event.localId, idempotencyKey: event.idempotencyKey };
 
@@ -455,7 +480,7 @@ export async function sendOne(
   // resolveConflict's doc, for why judging the pre-call value is what keeps
   // F2 (a genuinely first-ever send) renegotiating instead of misreading
   // its own just-written marker as proof of a prior attempt.
-  const resolution = resolveConflict({ ...event, attempts: attemptsAsLoaded }, slot, identity, currentSeq);
+  const resolution = resolveConflict({ ...event, attempts: attemptsAsLoaded }, slot, identity, currentSeq, ackedSeqs);
 
   if (resolution.kind === "already-applied") {
     await markDropped(store, event.idempotencyKey);
@@ -538,6 +563,7 @@ export interface DrainReport {
  * outcome (acked, already-applied, or permanently rejected) before starting
  * the next, and stops the moment an event stays queued, leaving the rest of
  * the queue exactly where it was for a later call (reconnect, a timer, …).
+ * TEST-ONLY, and not the production drain: that is `use-pad-pipeline.ts`'s `runDrain`.
  */
 export async function drainQueue(
   transport: ScoringTransport,

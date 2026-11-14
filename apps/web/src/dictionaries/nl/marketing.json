@@ -566,5 +566,12 @@
   "quickMatch.setup.shape.semisNeeds": "Minstens {min} deelnemers nodig",
   "quickMatch.setup.shape.finalNeeds": "Minstens {min} deelnemers nodig",
   "quickMatch.setup.shape.notForSport": "Niet beschikbaar voor deze sport",
-  "quickMatch.errors.semisTooFewSides": "Voor halve finales zijn minstens {min} deelnemers nodig."
+  "quickMatch.errors.semisTooFewSides": "Voor halve finales zijn minstens {min} deelnemers nodig.",
+  "start.wizard.reference": "Referentie {reference}",
+  "start.wizard.referenceNote": "Dezelfde referentie staat in de e-mail.",
+  "start.wizard.resentNote": "Alleen de nieuwste link werkt. De referentie blijft hetzelfde.",
+  "start.wizard.language": "Taal",
+  "start.wizard.changeBanner": "Je vorige link werkt niet meer zodra je een nieuwe stuurt. Referentie {reference} blijft hetzelfde.",
+  "start.wizard.answersKept": "Je antwoorden blijven bewaard. Gebruik Terug om er een te wijzigen.",
+  "start.wizard.sendNew": "Stuur een nieuwe link"
 }

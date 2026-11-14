@@ -15,7 +15,7 @@ import Link from "@/components/ui/console-link";
 import { requireCompetitionPage } from "@/server/page-auth";
 import { getCompetition } from "@/server/usecases/competitions";
 import { feePercentFor } from "@/server/usecases/registrations";
-import { routes } from "@/lib/routes";
+import { routes, searchOf } from "@/lib/routes";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t } from "@/lib/i18n";
 import { isValidIana, DEFAULT_TZ } from "@/lib/tz";
@@ -56,7 +56,7 @@ export default async function RegistrationHubPage({
 }) {
   const [{ orgSlug, compSlug }, rawSearchParams] = await Promise.all([params, searchParams]);
   const { tab: rawTab, ...registrantsRawQuery } = rawSearchParams;
-  const page = await requireCompetitionPage(orgSlug, compSlug, { tail: "/registration" });
+  const page = await requireCompetitionPage(orgSlug, compSlug, { tail: "/registration", search: searchOf(rawSearchParams) });
   const { auth, canEdit } = page;
   // requireCompetitionPage (page-auth.ts:192-201) only 404s a SCORER — that
   // is pre-existing, trusted behaviour, unrelated to this page. Everyone

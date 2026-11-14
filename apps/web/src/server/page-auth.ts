@@ -117,17 +117,39 @@ function settle(res: Resolution, target: (newSlug: string) => string): ResolvedE
   return res;
 }
 
+/**
+ * Where a renamed slug's old URL goes (review I3, /start "Sent stepper": renaming the organisation is step 2, and it
+ * regenerates the org slug): the SAME page under the new slug. Each level of the chain hands the rest of its path down
+ * as `tail` — `/c/{comp}`, then `/d/{div}`, then the page's own (`/schedule`) — and every page that reads a query hands
+ * it on as `search` (`searchOf`, lib/routes.ts), so whichever level was renamed redirects with all of it. The match gate
+ * (`requireFixturePage`) keeps `/f/{no}` and the query the same way at each of its three levels (re-review m1); the
+ * sweep in page-auth-rename-tail.test.ts holds every page to this. The segments below a renamed level are kept as
+ * they were typed, unresolved, as the /live fallback keeps them (slug-resolve `sharedRenameTarget`): a path that no
+ * longer exists then 404s at its new address exactly as it did at its old one, and nothing is looked up for a visitor
+ * before membership. The org LAYOUT does not redirect a renamed org (it holds only the org slug): the page does.
+ */
+export interface RenameTail {
+  /** The path below this level, from its leading slash (`/settings`, `/d/open/schedule`). */
+  tail?: string;
+  /** The page's query, from its `?` (lib/routes.ts `searchOf`), or empty. */
+  search?: string;
+}
+
+/** A slug segment from the URL put back into one: encoded, so it can add no path segment and no query. */
+const seg = (slug: string): string => encodeURIComponent(slug);
+const rest = (opts: RenameTail): string => (opts.tail ?? "") + (opts.search ?? "");
+
 /** Session auth from the org slug in the path. Members only — non-members
  * 404 (existence never leaks). */
 export async function requireOrgPage(
   orgSlug: string,
-  opts: { tail?: string } = {},
+  opts: RenameTail = {},
 ): Promise<PageAuth> {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
   const resolved = await orgBySlug(orgSlug);
   if (resolved && "renamedTo" in resolved) {
-    permanentRedirect(routes.orgHome(resolved.renamedTo) + (opts.tail ?? ""));
+    permanentRedirect(routes.orgHome(resolved.renamedTo) + rest(opts));
   }
   if (!resolved) notFound();
   const orgs = await getUserOrgs(user.id);
@@ -176,13 +198,13 @@ export async function requireOrgPage(
  */
 export async function requireBillingPage(
   orgSlug: string,
-  opts: { tail?: string } = {},
+  opts: RenameTail = {},
 ): Promise<PageAuth & { viaPayer: boolean }> {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
   const resolved = await orgBySlug(orgSlug);
   if (resolved && "renamedTo" in resolved) {
-    permanentRedirect(routes.orgHome(resolved.renamedTo) + (opts.tail ?? ""));
+    permanentRedirect(routes.orgHome(resolved.renamedTo) + rest(opts));
   }
   if (!resolved) notFound();
   const orgs = await getUserOrgs(user.id);
@@ -220,16 +242,16 @@ export async function requireBillingPage(
 }
 
 /** `tail` keeps sub-pages (/schedule, /settings, …) on their own page after
- *  a rename redirect. */
+ *  a rename redirect, at the competition's level or the org's (`RenameTail`). */
 export async function requireCompetitionPage(
   orgSlug: string,
   compSlug: string,
-  opts: { tail?: string } = {},
+  opts: RenameTail = {},
 ): Promise<PageAuth & { competition: ResolvedEntity }> {
-  const page = await requireOrgPage(orgSlug, opts);
+  const page = await requireOrgPage(orgSlug, { tail: `/c/${seg(compSlug)}${opts.tail ?? ""}`, search: opts.search });
   const competition = settle(
     await compBySlug(page.org.id, compSlug),
-    (s) => routes.competition(orgSlug, s) + (opts.tail ?? ""),
+    (s) => routes.competition(orgSlug, s) + rest(opts),
   );
   return { ...page, competition };
 }
@@ -238,12 +260,12 @@ export async function requireDivisionPage(
   orgSlug: string,
   compSlug: string,
   divSlug: string,
-  opts: { tail?: string } = {},
+  opts: RenameTail = {},
 ): Promise<PageAuth & { competition: ResolvedEntity; division: ResolvedEntity }> {
-  const withComp = await requireCompetitionPage(orgSlug, compSlug);
+  const withComp = await requireCompetitionPage(orgSlug, compSlug, { tail: `/d/${seg(divSlug)}${opts.tail ?? ""}`, search: opts.search });
   const division = settle(
     await divBySlug(withComp.competition.id, divSlug),
-    (s) => routes.division(orgSlug, compSlug, s) + (opts.tail ?? ""),
+    (s) => routes.division(orgSlug, compSlug, s) + rest(opts),
   );
   return { ...withComp, division };
 }
@@ -257,6 +279,7 @@ export async function requireFixturePage(
   compSlug: string,
   divSlug: string,
   no: number,
+  opts: Pick<RenameTail, "search"> = {},
 ): Promise<
   PageAuth & {
     competition: ResolvedEntity;
@@ -267,13 +290,15 @@ export async function requireFixturePage(
 > {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
-  const org = settle(await orgBySlug(orgSlug), (s) => routes.orgHome(s));
+  // A rename at any level keeps the match and its query (`RenameTail`): only the renamed segment changes.
+  const match = `/f/${no}${opts.search ?? ""}`;
+  const org = settle(await orgBySlug(orgSlug), (s) => `${routes.orgHome(s)}/c/${seg(compSlug)}/d/${seg(divSlug)}${match}`);
   const orgs = await getUserOrgs(user.id);
   const membership = orgs.find((o) => o.id === org.id);
   const compRes = await compBySlug(org.id, compSlug);
   if (!compRes) notFound();
   if ("renamedTo" in compRes) {
-    if (membership) permanentRedirect(routes.competition(orgSlug, compRes.renamedTo));
+    if (membership) permanentRedirect(`${routes.competition(orgSlug, compRes.renamedTo)}/d/${seg(divSlug)}${match}`);
     notFound();
   }
   const competition = compRes;
@@ -281,7 +306,7 @@ export async function requireFixturePage(
   const divRes = await divBySlug(competition.id, divSlug);
   if (!divRes) notFound();
   if ("renamedTo" in divRes) {
-    if (membership) permanentRedirect(routes.division(orgSlug, compSlug, divRes.renamedTo));
+    if (membership) permanentRedirect(routes.division(orgSlug, compSlug, divRes.renamedTo) + match);
     notFound();
   }
   const division = divRes;

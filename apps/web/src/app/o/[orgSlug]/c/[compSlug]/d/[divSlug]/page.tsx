@@ -4,7 +4,7 @@ export const dynamic = "force-dynamic";
 import Link from "@/components/ui/console-link";
 import { UserPlus } from "lucide-react";
 import { StatusChip, divisionChipState } from "@/components/ui/status-chip";
-import { routes } from "@/lib/routes";
+import { routes, searchOf } from "@/lib/routes";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, plural, t } from "@/lib/i18n";
 import { sportLabel } from "@/lib/scoring-vocab";
@@ -51,6 +51,7 @@ import { getScheduleSettings } from "@/server/usecases/schedule";
 // already makes for CourtMultiPicker (default includeArchived: false; the
 // picker excludes archived courts either way via `courtGroups`).
 import { listVenues } from "@/server/usecases/venues";
+import { GettingStartedPanel } from "@/components/v2/getting-started-panel";
 import { omit } from "@/lib/omit";
 import { openStreamStates } from "@/server/usecases/stream-sessions";
 import { resolveVenueTz } from "@/lib/tz";
@@ -151,7 +152,8 @@ export default async function DivisionPage({
   // FMT5: Settings › Format moved to the Fixtures tab's Division rules card; an address that asked for it by name lands on
   // the card with the Format dialog open. Before any read, and outside every try: `redirect` throws NEXT_REDIRECT.
   if (isOldFormatAddress(query)) redirect(formatDialogHref(orgSlug, compSlug, divSlug));
-  const page = await requireDivisionPage(orgSlug, compSlug, divSlug);
+  // A renamed org, competition or division redirects to this same tab, its query kept (review I3).
+  const page = await requireDivisionPage(orgSlug, compSlug, divSlug, { search: searchOf(query) });
   const { auth, canEdit } = page;
   const id = page.division.id;
   const locale = await resolveLocale();
@@ -867,6 +869,26 @@ export default async function DivisionPage({
             />
           </div>
         </div>
+
+        {/* /start "Sent stepper" (owner-approved 2026-11-14, mock sss14a section 4): where the funnel claim lands, the organiser
+            of a competition a /start draft built sees the five steps carried on from the Sent screen, until a match is scheduled.
+            Organisers who can act only (`editable`: a viewer or a billing-frozen club has no step to take). The panel reads its own
+            state and renders nothing outside those competitions. Courts: the club's live ones, for step 5's hint. */}
+        {editable ? (
+          <GettingStartedPanel
+            auth={auth}
+            competition={competition}
+            orgSlug={orgSlug}
+            compSlug={compSlug}
+            divSlug={divSlug}
+            courts={venues
+              .filter((v) => v.archived_at === null)
+              .reduce((n, v) => n + v.courts.filter((c) => c.archived_at === null).length, 0)}
+            entrantKind={entrantModel.defaultKind}
+            dict={dict}
+            locale={locale}
+          />
+        ) : null}
 
         {/* v3/02 §3.3: tabs scroll horizontally with an edge fade — never wrap. */}
         <nav className="scroll-x scroll-x-fade mb-6 flex gap-1 whitespace-nowrap border-b border-slate-200">

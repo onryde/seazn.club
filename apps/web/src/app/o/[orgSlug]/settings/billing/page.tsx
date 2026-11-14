@@ -42,7 +42,7 @@ import { OperatorConsole } from "@/components/operator-console";
 import { SettingsShell, navContext } from "../_components/settings-nav";
 import { allocationConsole } from "@/server/usecases/operator-allocation";
 import { IncomingTransferOffers } from "@/components/incoming-transfer-offers";
-import { routes } from "@/lib/routes";
+import { routes, searchOf } from "@/lib/routes";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t, plural, type Locale } from "@/lib/i18n";
 
@@ -76,8 +76,11 @@ export default async function BillingPage({
   searchParams: Promise<{ checkout?: string; session_id?: string }>;
 }) {
   const { orgSlug } = await params;
+  // Read before the gate so a checkout return (`?checkout&session_id`) survives an org rename's redirect.
+  const sp = await searchParams;
   const { org, user, viaPayer } = await requireBillingPage(orgSlug, {
     tail: "/settings/billing",
+    search: searchOf(sp),
   });
   const orgId = org.id;
   const locale = await resolveLocale();
@@ -89,7 +92,6 @@ export default async function BillingPage({
 
   // Reconcile straight from Stripe on return from checkout, so the plan updates
   // even if the webhook is delayed or missing (best-effort, never throws).
-  const sp = await searchParams;
   const justCheckedOut = sp.checkout === "success";
   if (justCheckedOut && sp.session_id) {
     await reconcileCheckout(orgId, sp.session_id);

@@ -20,9 +20,15 @@ import {
   FUNNEL_CLAIM_DATE_PAST,
   FUNNEL_CLAIM_INVALID,
   FUNNEL_CLAIM_PLAN_LIMIT,
+  FUNNEL_CLAIM_REPLACED,
   FUNNEL_CLAIM_SIGNED_IN,
 } from "@/lib/funnel-claim-codes";
 
+/** `{name}` placeholders filled as the real `t` fills them; a placeholder left over stays, so a missing value shows. */
+const fill = vi.hoisted(
+  () => (s: string, vars?: Record<string, string | number>) =>
+    Object.entries(vars ?? {}).reduce((acc, [k, v]) => acc.replaceAll(`{${k}}`, String(v)), s),
+);
 const h = vi.hoisted(() => ({
   locale: "en" as string,
   dicts: {} as Record<string, Record<string, string>>,
@@ -47,10 +53,10 @@ vi.mock("@/components/i18n/dict-provider", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/components/i18n/dict-provider")>();
   return {
     ...actual,
-    useMsg: () => (key: string) => {
+    useMsg: () => (key: string, vars?: Record<string, string | number>) => {
       const s = h.dicts[h.locale]?.[key];
       if (typeof s !== "string") throw new Error(`${h.locale}/ui.json has no ${key}`);
-      return s;
+      return fill(s, vars);
     },
     useLocaleOrDefault: () => h.locale,
   };
@@ -66,10 +72,12 @@ for (const l of LOCALES) {
     string
   >;
 }
+/** The draft reference the page hands the card (V518): what the replaced-link card names. */
+const REF = "SZ-7KQ4MX";
 const ui = (l: Locale, key: string): string => {
   const s = h.dicts[l]![key];
   if (typeof s !== "string") throw new Error(`${l}/ui.json has no ${key}`);
-  return s;
+  return fill(s, { reference: REF });
 };
 const CARD_KEYS = Object.keys(h.dicts.en!).filter((k) => k.startsWith("funnel.claim.card."));
 
@@ -85,8 +93,8 @@ const hrefs = (els: ReactElement[]): string[] =>
   els.map((el) => (el.props as { href?: unknown }).href).filter((x): x is string => typeof x === "string");
 
 /** Mount the card on `token`, let the claim POST answer, and return what it then shows. */
-async function settle(token: string | null, restartSport: string | null = null) {
-  const island = renderIsland(FunnelClaim, { token, restartSport });
+async function settle(token: string | null, restartSport: string | null = null, reference: string | null = REF) {
+  const island = renderIsland(FunnelClaim, { token, restartSport, reference });
   // The POST's promise, then its .then/.catch handler: a few microtask turns.
   for (let i = 0; i < 5; i++) await Promise.resolve();
   const els = island.tree();
@@ -153,6 +161,15 @@ const STATES = [
     answer: () => Promise.reject(new ApiError(SERVER_TEXT, 400, FUNNEL_CLAIM_DATE_PAST)),
     keys: ["datePast", "startAgain"],
     links: (l: Locale) => [`/${l}/start`],
+  },
+  {
+    // V518: a newer start replaced this draft. Signed out, nothing built; the way on is the latest email, named by its reference —
+    // or, as on the dead-link card, a fresh start or a sign-in (T1 review m5: the email may be gone).
+    name: "replaced by a newer link",
+    token: "tok-replaced",
+    answer: () => Promise.reject(new ApiError(SERVER_TEXT, 400, FUNNEL_CLAIM_REPLACED)),
+    keys: ["replacedTitle", "replacedBody", "startAgain", "or", "signIn"],
+    links: ["/start", "/login"],
   },
   {
     name: "rate limited (the link is unused)",
@@ -229,7 +246,7 @@ describe("the funnel claim card", () => {
   it("posts the token once, and a claim that lands goes where the route says", async () => {
     h.answer = () => Promise.resolve({ redirect: "/o/x/c/y/d/z?tab=entrants" });
     const { island } = await settle("tok-1");
-    island.rerender({ token: "tok-1", restartSport: null });
+    island.rerender({ token: "tok-1", restartSport: null, reference: REF });
     for (let i = 0; i < 5; i++) await Promise.resolve();
     expect(h.posts, "one POST for one link").toEqual([{ method: "POST", json: { token: "tok-1" } }]);
     expect(h.pushes).toEqual(["/o/x/c/y/d/z?tab=entrants"]);
@@ -241,6 +258,7 @@ describe("the funnel claim card", () => {
       { name: "signed in, plan limit", answer: () => Promise.reject(new ApiError(SERVER_TEXT, 402, FUNNEL_CLAIM_PLAN_LIMIT)), refresh: 1 },
       { name: "signed in, first day passed", answer: () => Promise.reject(new ApiError(SERVER_TEXT, 400, FUNNEL_CLAIM_DATE_PAST)), refresh: 1 },
       { name: "dead link", answer: () => Promise.reject(new ApiError(SERVER_TEXT, 400, FUNNEL_CLAIM_INVALID)), refresh: 0 },
+      { name: "replaced link", answer: () => Promise.reject(new ApiError(SERVER_TEXT, 400, FUNNEL_CLAIM_REPLACED)), refresh: 0 },
       { name: "failed before the session", answer: () => Promise.reject(new ApiError(SERVER_TEXT, 500)), refresh: 0 },
       { name: "rate limited", answer: () => Promise.reject(new ApiError("Too many requests", 429)), refresh: 0 },
     ];
@@ -252,7 +270,7 @@ describe("the funnel claim card", () => {
       expect(h.refreshes, c.name).toBe(c.refresh);
       checked++;
     }
-    expect(checked, "anti-vacuity: the three signed-in failures and three signed-out ones").toBe(cases.length);
+    expect(checked, "anti-vacuity: the three signed-in failures and four signed-out ones").toBe(cases.length);
   });
 
   it("rate limited: Try again re-posts the SAME token, shows the working state meanwhile, and lands", async () => {
@@ -297,6 +315,24 @@ describe("the funnel claim card", () => {
       }
     }
     expect(checked, "anti-vacuity: every language × a sport and none").toBe(LOCALES.length * cases.length);
+  });
+
+  it("replaced: the card names the reference the latest email carries — and, without one, says only to check the latest email", async () => {
+    let checked = 0;
+    for (const l of LOCALES) {
+      h.locale = l;
+      h.answer = () => Promise.reject(new ApiError(SERVER_TEXT, 400, FUNNEL_CLAIM_REPLACED));
+      const named = await settle("tok-replaced", null, "SZ-23HJKZ");
+      expect(named.texts, `${l}: the reference in the sentence`).toContain(fill(h.dicts[l]!["funnel.claim.card.replacedBody"]!, { reference: "SZ-23HJKZ" }));
+      expect(named.text, `${l}: no placeholder left`).not.toContain("{reference}");
+      const unnamed = await settle("tok-replaced", null, null);
+      expect(unnamed.texts, `${l}: no reference to name`).toContain(ui(l, "funnel.claim.card.replacedBodyNoReference"));
+      expect(unnamed.text, `${l}: never an empty "()"`).not.toContain("()");
+      expect(unnamed.text).not.toContain("{reference}");
+      expect(unnamed.texts, `${l}: the title either way`).toContain(ui(l, "funnel.claim.card.replacedTitle"));
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every language").toBe(LOCALES.length);
   });
 
   it("a missing token posts nothing", async () => {

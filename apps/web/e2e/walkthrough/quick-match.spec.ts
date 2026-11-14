@@ -77,7 +77,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { LEVEL_RANK } from "@seazn/engine/competition";
-import { effectiveEntrantModel, stageDefaultsFor } from "@seazn/engine/sport";
+import { stageDefaultsFor } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { expectNoHorizontalScroll, loginUi, overflowingIn, TAG, withDb } from "../helpers";
 import { consentedAnonymousState } from "../scorepad-a11y-kit";
@@ -2600,8 +2600,8 @@ test("(G) the season door: /play's Tennis opens the /start wizard on Tennis, and
     await p.goto(`/start/claim?token=${token}`);
     await p.waitForURL(/\/o\/[^/]+\/c\/[^/]+\/d\/[^/?]+\?tab=entrants/, { timeout: STEP_MS });
 
-    // ---- 7. The record: a Tennis division, one League stage, six players seeded 1..6 of the sport's own default kind and
-    //         named by the dictionary, and no first day (Not sure yet) ----
+    // ---- 7. The record: a Tennis division, one League stage, no entrant (the six chosen are the draft's target, and the
+    //         organiser adds the real names — /start "Sent stepper", owner 2026-11-14), and no first day (Not sure yet) ----
     const built = await withDb(async (sql) => {
       const [d] = await sql<{ id: string; sport_key: string; variant_key: string; starts_on: string | null }[]>`
         select d.id, d.sport_key, d.variant_key, c.starts_on::text
@@ -2610,22 +2610,20 @@ test("(G) the season door: /play's Tennis opens the /start wizard on Tennis, and
       const stages = await sql<{ kind: string }[]>`select kind from stages where division_id = ${d!.id} order by seq`;
       const entrants = await sql<{ seed: number | null; kind: string; display_name: string }[]>`
         select seed, kind, display_name from entrants where division_id = ${d!.id} order by seed nulls last, id`;
-      return { ...d!, stages: stages.map((s) => s.kind), entrants: [...entrants] };
+      const [draft] = await sql<{ entrants: number | null }[]>`
+        select (f.payload->>'entrants')::int as entrants from funnel_drafts f
+          join competitions c on c.id = f.competition_id where c.name = ${name}`;
+      return { ...d!, stages: stages.map((s) => s.kind), entrants: [...entrants], target: draft?.entrants ?? null };
     });
     expect(built.sport_key, "the division is the door's sport").toBe("tennis");
     expect(built.stages, "a League is one league stage").toEqual(["league"]);
-    const mod = builtinModules.find((m) => m.key === built.sport_key);
-    expect(mod, "premise: the engine registers tennis").toBeDefined();
-    const variants = (mod!.variants ?? {}) as Record<string, unknown>;
-    expect(variants[built.variant_key], `premise: tennis declares ${built.variant_key}`).toBeDefined();
-    const kind = effectiveEntrantModel(mod!.entrantModel ?? null, variants[built.variant_key]).defaultKind;
-    expect(built.entrants).toEqual(
-      Array.from({ length: PLAYERS }, (_, i) => ({ seed: i + 1, kind, display_name: ui(`funnel.claim.entrant.${kind}`, { n: i + 1 }) })),
-    );
+    expect(built.entrants, "no placeholder entrant").toEqual([]);
+    expect(built.target, "the size chosen is the draft's, stamped with the competition it built").toBe(PLAYERS);
     expect(built.starts_on, "Not sure yet: no first day").toBeNull();
 
-    // ---- 8. …and the new organiser sees them: one row per player on the entrants tab the link landed on ----
-    await expect(p.getByTestId("entrant-row-disclosure")).toHaveCount(PLAYERS);
+    // ---- 8. …and the new organiser sees no placeholder row on the entrants tab the link landed on ----
+    await expect(p.locator("body"), "the landing page is the claimed competition's").toContainText(name);
+    await expect(p.getByTestId("entrant-row-disclosure")).toHaveCount(0);
   } finally {
     await season.close();
   }

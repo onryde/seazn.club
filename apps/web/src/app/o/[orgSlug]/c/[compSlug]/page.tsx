@@ -17,7 +17,7 @@ import { fmtDate, UTC } from "@/lib/format";
 import { formatMinor } from "@/lib/currency";
 import { lowestPassRung, passActiveLabels, passEndedReasons } from "@/lib/pass-ladder";
 import { preferredCurrency } from "@/lib/currency-server";
-import { routes } from "@/lib/routes";
+import { routes, searchOf } from "@/lib/routes";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t, plural } from "@/lib/i18n";
 import { sql } from "@/lib/db";
@@ -51,8 +51,10 @@ export default async function CompetitionPage({
   const { orgSlug, compSlug } = await params;
   // Match Day B2: the divisions list's page and its "show finished" switch live in the URL (`?dpage=`, `?finished=1`), so a
   // reload or the back button keeps them. Total - a malformed value is the default - and every other param is carried through.
-  const ledgerQuery = ledgerQueryOf(await searchParams);
-  const page = await requireCompetitionPage(orgSlug, compSlug);
+  const sp = await searchParams;
+  const ledgerQuery = ledgerQueryOf(sp);
+  // A renamed org or competition redirects to this same page, its query kept (review I3).
+  const page = await requireCompetitionPage(orgSlug, compSlug, { search: searchOf(sp) });
   const { auth, canEdit } = page;
   const id = page.competition.id;
   const locale = await resolveLocale();

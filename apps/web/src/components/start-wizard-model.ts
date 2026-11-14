@@ -269,6 +269,35 @@ export function buildFunnelBody(s: WizardState, locale: Locale, defaultName: str
   };
 }
 
+/** What a start answered that the Change-email flow needs: the draft's `reference` (SZ-XXXXXX, printed in the email too) and
+ *  the opaque `replaceKey` (lib/funnel.ts createFunnelDraft). Held in the island's state only, never in the URL: PostHog and
+ *  Sentry record page URLs, and the key is the proof that this browser started the draft. */
+export interface HeldStart {
+  reference: string;
+  replaceKey: string;
+}
+
+/** The pair out of the start route's answer; null when the answer does not carry both (a resend then replaces by address). */
+export function heldStart(answer: unknown): HeldStart | null {
+  if (typeof answer !== "object" || answer === null) return null;
+  const { reference, replaceKey } = answer as Record<string, unknown>;
+  return typeof reference === "string" && typeof replaceKey === "string" ? { reference, replaceKey } : null;
+}
+
+/** The reference stayed across a resend: the resend's answer names the reference held from the send before. The server
+ *  decides — a pair it refused, or a draft already gone, answers a new reference — so the Sent screen says "the reference
+ *  stays the same" only on this (review m1). */
+export function keptReference(previous: HeldStart | null, next: HeldStart | null): boolean {
+  return previous !== null && next !== null && previous.reference === next.reference;
+}
+
+/** A send's body: once a start has answered, every resend carries its pair (`previousReference` + `replaceKey`), so the
+ *  draft it wrote is replaced by its key — although the address changed (Change email) — and the reference in the inbox
+ *  stays. Sent whether or not the address changed: the key is what keeps the reference, not the address. */
+export function sendBody(body: Record<string, unknown>, held: HeldStart | null): Record<string, unknown> {
+  return held === null ? body : { ...body, previousReference: held.reference, replaceKey: held.replaceKey };
+}
+
 /** Every dictionary prefix the wizard and what it mounts read: its own copy (`start.`), the sport chips (`sport.`), the
  *  format cards (`format.`), <LegalNotice/> (`legal.`) and the bot check's refusal (`turnstile.`). The page hands its island
  *  only these (review-t4 (b): the whole marketing + ui catalogue was ~600KB on every /start load). */

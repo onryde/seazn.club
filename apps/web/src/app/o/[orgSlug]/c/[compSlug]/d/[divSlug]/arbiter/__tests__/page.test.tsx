@@ -110,7 +110,8 @@ describe("the arbiter page", () => {
     });
     expect(usecases.arbiterRequestedRound).toHaveBeenCalledWith(PAGE.auth, "div-1", "fx-9");
     expect(usecases.loadArbiterRound).toHaveBeenCalledWith(PAGE.auth, "div-1", { round: { stageId: "st", roundNo: 1 } });
-    expect(pageAuth.requireDivisionPage).toHaveBeenCalledWith("org", "comp", "div", { tail: "/arbiter" });
+    // The query rides along so a renamed slug's redirect keeps the asked-for board (re-review m2).
+    expect(pageAuth.requireDivisionPage).toHaveBeenCalledWith("org", "comp", "div", { tail: "/arbiter", search: "?fixture=fx-9" });
     expect(usecases.joinAsArbiter, "no token is minted for the HTML").not.toHaveBeenCalled();
   });
 

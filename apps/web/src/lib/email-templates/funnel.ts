@@ -8,11 +8,16 @@ export interface FunnelEmailArgs {
   link: string;
 }
 
+/** The claim email also prints the draft's reference (V518): the code a resubmit keeps, which the replaced-link card names. */
+export interface FunnelClaimEmailArgs extends FunnelEmailArgs {
+  reference: string;
+}
+
 /** Funnel claim link (v3/07 §6): the visitor configured a competition on
  *  /start; this single link signs them in AND finishes the setup. `dict` =
  *  emails namespace for the recipient's locale. */
 export function funnelClaimTemplate(
-  args: FunnelEmailArgs,
+  args: FunnelClaimEmailArgs,
   dict: Dict,
 ): {
   subject: string;
@@ -29,11 +34,14 @@ export function funnelClaimTemplate(
       title: t(dict, "funnelClaim.title", { competitionName: escapeHtml(args.competitionName) }),
       contentHtml:
         paragraph(t(dict, "funnelClaim.body", { sport: escapeHtml(args.sport) })) +
+        paragraph(t(dict, "funnelClaim.reference", { reference: escapeHtml(args.reference) })) +
         button(t(dict, "funnelClaim.button"), args.link) +
         linkFallback(args.link),
       footerNote: t(dict, "funnelClaim.footer"),
     }),
-    text: t(dict, "funnelClaim.text", { competitionName: args.competitionName, link: args.link }),
+    text: `${t(dict, "funnelClaim.text", { competitionName: args.competitionName, link: args.link })}\n\n${t(dict, "funnelClaim.reference", {
+      reference: args.reference,
+    })}`,
   };
 }
 

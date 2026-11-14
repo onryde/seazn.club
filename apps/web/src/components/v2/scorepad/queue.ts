@@ -19,9 +19,66 @@
 import type { PendingEvent, ConnectionStatus, QueueStatus } from "./types";
 import type { QueueStore } from "./queue-store";
 
+// ---------------------------------------------------------------------------
+// One write at a time per store (review rr4).
+//
+// QueueStore can only replace a whole entry, so every change to a queued entry
+// here reads it and writes back a changed copy. Two of those on one entry, both
+// reading before either writes (list, list, put, put), lose the first one's
+// change — and IndexedDB, answering requests in the order they were made, does
+// that whenever the second is asked for between the first's read and its write.
+// Found that way: a held tap's hold ending wrote its old stamp back over the
+// re-aim that had just moved it (a 409 against a slot the ledger never reaches,
+// every retry); a take-back deleted a held tap its own hold ending then wrote
+// back, so a point the scorer took back was recorded.
+//
+// So every function below that writes runs inside `exclusive`, which queues it
+// behind the last one on the same store and starts it only once that one has
+// finished: its reads see every earlier write. A chain of promises, not an
+// atomic `update` on QueueStore, because (1) several of these are not one-entry
+// updates — `dropHeld` reads once and deletes a set, `restampBehindDropped` and
+// `flushHeldBefore` walk the queue, `takeBackHeld` does a check, a walk and a
+// delete as one decision; (2) it lives here, once, for every store (IndexedDB,
+// memory, a test's), where a store method would be written per store and never
+// run under vitest (no `indexedDB` in node).
+//
+// Rules that keep it from deadlocking: a section only ever awaits the raw store,
+// never another `exclusive` call and never the network or a drain (`onDue` is a
+// plain callback, fired and not awaited; the internal helpers sections share —
+// `clearHeldFlag`, `flushHeld`, `restampNow`, `dropHeldNow`, `removeHeld` —
+// take no lock of their own).
+//
+// Outside the chain, on purpose: reads (`peekInOrder`, `depth`, a caller's own
+// `store.list()`), which change nothing so lose nothing; and the put of a NEW
+// key — `enqueue`'s and `enqueueHeld`'s own — which no other write here touches
+// yet, and which must be issued in the tick the tap is made: a read asked for
+// after the tap then sees it (review C1), and the queue holds taps in the order
+// they were made (review rr5). Queued behind a running section, a held tap's put
+// was issued after a plain tap made just after it, which then sat ahead of it in
+// the queue, stamped one past it: a 409 at a slot the ledger never reaches, both
+// stuck. Per store INSTANCE, like the release ticks below: two instances over
+// one IndexedDB database (two tabs, two pads on one fixture) do not share a chain.
+// ---------------------------------------------------------------------------
+
+const tails = new WeakMap<QueueStore, Promise<void>>();
+
+/** Run `section` once every section already queued on `store` has finished. */
+function exclusive<T>(store: QueueStore, section: () => Promise<T>): Promise<T> {
+  const run = (tails.get(store) ?? Promise.resolve()).then(section);
+  tails.set(
+    store,
+    run.then(
+      () => undefined,
+      () => undefined,
+    ),
+  );
+  return run;
+}
+
 /** Add a pending event. Idempotent on `idempotencyKey`: enqueuing the same
  *  key twice (e.g. re-enqueuing a recovered pending event on resume) replaces
- *  rather than duplicates, per QueueStore.put's contract. */
+ *  rather than duplicates, per QueueStore.put's contract. Not `exclusive` —
+ *  see the note above `exclusive`. */
 export async function enqueue(store: QueueStore, event: PendingEvent): Promise<void> {
   await store.put(event);
 }
@@ -32,9 +89,13 @@ export async function peekInOrder(store: QueueStore): Promise<PendingEvent[]> {
   return store.list();
 }
 
-/** The event was successfully appended — remove it, nothing more to send. */
+/** The event was successfully appended — remove it, nothing more to send.
+ *  `exclusive` although a delete reads nothing: a read-then-write running
+ *  around it (the hold ending on a tap the drain sent once its `heldUntil` had
+ *  passed, before the tick fired) would otherwise write the entry back after
+ *  it was deleted, and the drain would send it again. */
 export async function markAcked(store: QueueStore, idempotencyKey: string): Promise<void> {
-  await store.delete(idempotencyKey);
+  await exclusive(store, () => store.delete(idempotencyKey));
 }
 
 /** The event is resolved WITHOUT a fresh append landing — either the ledger
@@ -43,7 +104,7 @@ export async function markAcked(store: QueueStore, idempotencyKey: string): Prom
  *  markAcked; kept as a separate name so a caller reading pipeline.ts can
  *  tell "delivered" from "resolved without delivering" at the call site. */
 export async function markDropped(store: QueueStore, idempotencyKey: string): Promise<void> {
-  await store.delete(idempotencyKey);
+  await exclusive(store, () => store.delete(idempotencyKey));
 }
 
 /** How many events are still queued. */
@@ -51,14 +112,12 @@ export async function depth(store: QueueStore): Promise<number> {
   return (await store.list()).length;
 }
 
-async function patch(
-  store: QueueStore,
-  idempotencyKey: string,
-  fn: (event: PendingEvent) => PendingEvent,
-): Promise<void> {
-  const found = (await store.list()).find((e) => e.idempotencyKey === idempotencyKey);
-  if (!found) return; // already resolved/removed elsewhere — nothing to update
-  await store.put(fn(found));
+function patch(store: QueueStore, idempotencyKey: string, fn: (event: PendingEvent) => PendingEvent): Promise<void> {
+  return exclusive(store, async () => {
+    const found = (await store.list()).find((e) => e.idempotencyKey === idempotencyKey);
+    if (!found) return; // already resolved/removed elsewhere — nothing to update
+    await store.put(fn(found));
+  });
 }
 
 /** Record a failed send attempt (network failure, or a 409 whose ledger slot
@@ -79,9 +138,11 @@ export async function recordAttempt(
   await patch(store, idempotencyKey, (event) => ({ ...event, ...fields }));
 }
 
-/** Persist a renegotiated expected_seq for a still-queued event — the ONLY
- *  legitimate way expectedSeq changes after enqueue, per the S10 replay
+/** Persist a renegotiated expected_seq for a still-queued event — one of the
+ *  TWO legitimate ways expectedSeq changes after enqueue, per the S10 replay
  *  ruling: only once a 409's ledger slot proves FOREIGN, never speculatively.
+ *  (The other is `restampBehindDropped` below, and only for an entry that has
+ *  never been sent.)
  *  Must be durable (not just an in-memory variable in pipeline.ts): if the
  *  tab dies again between renegotiating and the resend's ack, the NEXT
  *  replay must resend the renegotiated value, not the original one, or it
@@ -92,6 +153,69 @@ export async function renegotiateExpectedSeq(
   expectedSeq: number,
 ): Promise<void> {
   await patch(store, idempotencyKey, (event) => ({ ...event, expectedSeq }));
+}
+
+/**
+ * Re-aim the entries behind ones that left the queue WITHOUT landing — a
+ * refusal (422), a dead-letter, an undo whose target never existed, and every
+ * entry bound to one of those (`dropWith`). Returns the entries it moved, so a
+ * caller can move its optimistic mirror with them.
+ *
+ * fix/pad-second-tap-in-flight (review I-2). Each entry was stamped assuming
+ * every entry ahead of it lands exactly one slot further on; an entry that
+ * never lands leaves the ones behind it claiming a seq the ledger never
+ * reaches. That is a 409 whose slot is simply absent, which `resolveConflict`
+ * rightly calls indeterminate — so the entry stayed queued forever, every
+ * write behind it blocked, its point still on screen. Each survivor moves
+ * down by the number of dropped entries that were AHEAD of it in `order`
+ * (the queue as it stood before the drops, dropped entries included).
+ *
+ * Only a NEVER-SENT entry (`attempts === 0`) moves. One already on the wire
+ * keeps its stamp: its earlier send may have landed at exactly that slot, and
+ * a resend must replay it verbatim for a 409's slot inspection to recognise it
+ * (the S10 replay rule). By FIFO a tap behind the head has never been sent, so
+ * in a single tab this is every follower; the case it decides is a second tab
+ * sharing this queue that already re-aimed and sent one — moving it again
+ * would aim it below the ledger.
+ *
+ * The whole walk is one `exclusive` section (review rr4): no other write here —
+ * a hold ending, a dock pick, a take-back, the send's pre-send marker, another
+ * re-aim — runs between its read of an entry and its write of it, so none is
+ * lost and none loses this one's shift. Each survivor is still re-read right
+ * before it is written (review m1), so a write from outside the chain (another
+ * tab's queue over the same database) made while an earlier survivor was being
+ * written is built on rather than undone. The shift is a delta on that fresh
+ * copy.
+ *
+ * An entry not in the queue when its read answers is skipped, so a caller must
+ * not call this until every entry in `order` has been written (review C1:
+ * `use-pad-pipeline`'s `reaimBehind` waits for the taps' queue writes first).
+ */
+export function restampBehindDropped(
+  store: QueueStore,
+  order: readonly string[],
+  dropped: ReadonlySet<string>,
+): Promise<PendingEvent[]> {
+  return exclusive(store, () => restampNow(store, order, dropped));
+}
+
+/** restampBehindDropped's body, without a lock: `takeBackHeld` runs it inside its own section. */
+async function restampNow(store: QueueStore, order: readonly string[], dropped: ReadonlySet<string>): Promise<PendingEvent[]> {
+  const moved: PendingEvent[] = [];
+  let droppedAhead = 0;
+  for (const key of order) {
+    if (dropped.has(key)) {
+      droppedAhead += 1;
+      continue;
+    }
+    if (droppedAhead === 0) continue;
+    const entry = (await store.list()).find((e) => e.idempotencyKey === key);
+    if (entry === undefined || (entry.attempts ?? 0) > 0) continue;
+    const restamped = { ...entry, expectedSeq: entry.expectedSeq - droppedAhead };
+    await store.put(restamped);
+    moved.push(restamped);
+  }
+  return moved;
 }
 
 /** Derive an at-a-glance queue state for a future UI's "queue depth" /
@@ -223,13 +347,29 @@ function cancelTick(store: QueueStore, id: string): HeldTick | undefined {
   return tick;
 }
 
+/**
+ * Is `entry` still held at `now` — its window not yet run out? THE one answer
+ * (review rr5), and the drain's: `use-pad-pipeline`'s drain sends an entry from
+ * its `heldUntil` on, whether or not its release has been written yet (the tick
+ * not yet run, or waiting its turn behind another write). So everything that
+ * acts only on a held tap — a take-back, a drop, a dock pick, and the hook's
+ * pre-read before a take-back — refuses it from that moment too: a take-back
+ * that answered yes then could remove a tap the drain already has on the wire.
+ */
+export function stillHeld(entry: PendingEvent, now: number): boolean {
+  return entry.heldUntil !== undefined && entry.heldUntil > now;
+}
+
 /** Clear `heldUntil` on a still-held entry (the actual "release" — the
  *  entry becomes an ordinary queued event, sendable on the next real drain
  *  pass). Returns false, a no-op, if `id` names no CURRENTLY held entry —
  *  already released/dropped/never held. Shared by enqueueHeld's own tick,
  *  releaseHeld, and flushHeldBefore, so "what counts as released" is
- *  defined in exactly one place. */
+ *  defined in exactly one place. Takes no lock: the tick and releaseHeld wrap
+ *  it in `exclusive`, flushHeldBefore runs it inside its own section. */
 async function clearHeldFlag(store: QueueStore, id: string): Promise<boolean> {
+  // Not `stillHeld`: this is the release itself, run when the window has just
+  // run out (the tick) or cut short (a release, a new tap) — it clears any flag.
   const found = (await store.list()).find((e) => e.idempotencyKey === id);
   if (found === undefined || found.heldUntil === undefined) return false;
   const { heldUntil, ...released } = found;
@@ -241,31 +381,38 @@ async function clearHeldFlag(store: QueueStore, id: string): Promise<boolean> {
 /** Enqueue exactly like `enqueue()` above — same durable put, same
  *  immediate visibility to `peekInOrder`/a caller's optimistic fold — but
  *  stamps `heldUntil` `holdMs` out and arms a release tick that fires
- *  `onDue` once the window closes on its own. A new held tap always
- *  flushes whatever was held before it FIRST (`flushHeldBefore`), so at
- *  most one entry is ever held at a time — "a new tap releases the prior
- *  held event", the flushed entry's OWN `onDue` fires as part of that,
- *  synchronously within this call. Returns the id every other `*Held`
- *  function below takes: `event.idempotencyKey`, the same identity a
- *  caller already assigns before calling this (mirrors `enqueue`'s own
- *  contract — nothing here generates a fresh id). */
-export async function enqueueHeld(
+ *  `onDue` once the window closes on its own. A new held tap releases
+ *  every tap held AHEAD of it in the queue (`flushHeldBefore`'s release,
+ *  limited to those), so at most one entry stays held — "a new tap
+ *  releases the prior held event", the released entry's OWN `onDue` firing
+ *  before this call resolves. Returns the id every other `*Held` function
+ *  below takes: `event.idempotencyKey`, the same identity a caller already
+ *  assigns before calling this (mirrors `enqueue`'s own contract — nothing
+ *  here generates a fresh id). */
+export function enqueueHeld(
   store: QueueStore,
   event: PendingEvent,
   holdMs: number,
   onDue: () => void,
 ): Promise<string> {
-  const now = Date.now();
-  await flushHeldBefore(store, now);
-  await store.put({ ...event, heldUntil: now + holdMs });
+  const id = event.idempotencyKey;
+  // The put and the tick in the tick the tap is made, outside the chain like
+  // `enqueue`'s put (see the note above `exclusive`, review rr5): the tap takes
+  // its place in the queue now, and its window runs from now — the `heldUntil`
+  // it is stamped with, which is when the tick fires.
+  const written = store.put({ ...event, heldUntil: Date.now() + holdMs });
   const timer = setTimeout(() => {
-    ticksFor(store).delete(event.idempotencyKey);
-    void clearHeldFlag(store, event.idempotencyKey).then((cleared) => {
+    ticksFor(store).delete(id);
+    void exclusive(store, () => clearHeldFlag(store, id)).then((cleared) => {
       if (cleared) onDue();
     });
   }, holdMs);
-  ticksFor(store).set(event.idempotencyKey, { timer, onDue });
-  return event.idempotencyKey;
+  ticksFor(store).set(id, { timer, onDue });
+  // Releasing the taps held before it reads and writes them, so that waits its
+  // turn. By then a held tap made AFTER this one can be in the queue too: only
+  // the ones ahead of this tap are released, never a later one.
+  const released = exclusive(store, () => flushHeld(store, id));
+  return Promise.all([written, released]).then(() => id);
 }
 
 /** Apply `fn` to a STILL-HELD entry in place — e.g. a future Dock UI
@@ -279,15 +426,13 @@ export async function enqueueHeld(
  *  TODO(task 4 fix round 1, Minor 2 — R2+ Dock): if a `fn` ever needs to
  *  touch `heldUntil` itself, route through `releaseHeld` first instead —
  *  today that silently drops the `onDue` call, not merely a stale value. */
-export async function mutateHeld(
-  store: QueueStore,
-  id: string,
-  fn: (event: PendingEvent) => PendingEvent,
-): Promise<boolean> {
-  const found = (await store.list()).find((e) => e.idempotencyKey === id);
-  if (found === undefined || found.heldUntil === undefined) return false;
-  await store.put(fn(found));
-  return true;
+export function mutateHeld(store: QueueStore, id: string, fn: (event: PendingEvent) => PendingEvent): Promise<boolean> {
+  return exclusive(store, async () => {
+    const found = (await store.list()).find((e) => e.idempotencyKey === id);
+    if (found === undefined || !stillHeld(found, Date.now())) return false;
+    await store.put(fn(found));
+    return true;
+  });
 }
 
 /** Release a held entry's window immediately — "send now": cancels its
@@ -297,7 +442,7 @@ export async function mutateHeld(
  *  A no-op if `id` names no currently-held entry. */
 export async function releaseHeld(store: QueueStore, id: string): Promise<void> {
   const tick = cancelTick(store, id);
-  const cleared = await clearHeldFlag(store, id);
+  const cleared = await exclusive(store, () => clearHeldFlag(store, id));
   if (cleared) tick?.onDue();
 }
 
@@ -325,10 +470,59 @@ export function boundTo(all: readonly PendingEvent[], id: string): string[] {
   return all.filter((e) => e.dropWith === id).map((e) => e.idempotencyKey);
 }
 
-export async function dropHeld(store: QueueStore, id: string): Promise<boolean> {
+export function dropHeld(store: QueueStore, id: string): Promise<boolean> {
+  return exclusive(store, () => dropHeldNow(store, id));
+}
+
+/**
+ * A take-back with the re-aim it owes the taps behind it (review I-B), as ONE
+ * `exclusive` section: is `id` still held, then `restampBehindDropped`'s walk
+ * over `order`/`dropped`, then `dropHeld`'s removal. Returns the entries it
+ * moved, or null — nothing moved, nothing removed — when `id` names no
+ * currently-held entry.
+ *
+ * Review rr4. Decided outside the section, the re-aim and the drop were two
+ * answers to one question asked twice: two take-backs of one tap at once (a
+ * double press) both re-aimed, moving the taps behind down twice for one tap
+ * taken back — a slot below the ledger, which costs each of them a 409 and a
+ * renegotiation before it lands (a stamp too low recovers; only one too high
+ * strands); and a take-back whose tap's hold ended in between re-aimed and was
+ * then refused, the tap sent after all at the slot the taps behind it had just
+ * moved into. Re-aimed before the drop, as before, so a drain reading the
+ * queue in between still stops at the held tap rather than sending the next
+ * entry at its old stamp. "Held" is `stillHeld`, decided at the section's own
+ * read.
+ */
+export function takeBackHeld(
+  store: QueueStore,
+  id: string,
+  order: readonly string[],
+  dropped: ReadonlySet<string>,
+): Promise<PendingEvent[] | null> {
+  return exclusive(store, async () => {
+    const all = await store.list();
+    const found = all.find((e) => e.idempotencyKey === id);
+    if (found === undefined || !stillHeld(found, Date.now())) return null;
+    const moved = await restampNow(store, order, dropped);
+    await removeHeld(store, all, id);
+    return moved;
+  });
+}
+
+// One `exclusive` section (review rr4): decided on one read, so a hold ending
+// on this tap lands wholly before it (the tap is released: refused, it is sent)
+// or wholly after (the tap is gone: nothing to write back). Never a take-back
+// that answers true while its own hold ending writes the tap back to be sent.
+async function dropHeldNow(store: QueueStore, id: string): Promise<boolean> {
   const all = await store.list();
   const found = all.find((e) => e.idempotencyKey === id);
-  if (found === undefined || found.heldUntil === undefined) return false;
+  if (found === undefined || !stillHeld(found, Date.now())) return false;
+  await removeHeld(store, all, id);
+  return true;
+}
+
+/** Remove held `id` and everything bound to it, as `all` (read in the caller's section) lists them. */
+async function removeHeld(store: QueueStore, all: readonly PendingEvent[], id: string): Promise<void> {
   cancelTick(store, id);
   await store.delete(id);
   // R8/#675 — CASCADE. An entry whose `dropWith` names this one exists only to
@@ -343,13 +537,12 @@ export async function dropHeld(store: QueueStore, id: string): Promise<boolean> 
   // required and neither substitutes for the other — see `dropWith`'s own doc
   // for the two one-sided designs this replaced.
   //
-  // Read from the SAME `list()` snapshot taken above, so a follower enqueued
-  // concurrently cannot be missed by a second read racing the delete.
+  // Read from the SAME `list()` snapshot the caller decided on, so a follower
+  // enqueued concurrently cannot be missed by a second read racing the delete.
   for (const boundId of boundTo(all, id)) {
     cancelTick(store, boundId);
     await store.delete(boundId);
   }
-  return true;
 }
 
 /** A new tap releases whatever was held before it, unconditionally —
@@ -361,9 +554,18 @@ export async function dropHeld(store: QueueStore, id: string): Promise<boolean> 
  *  ambiently) — every currently-held entry is released regardless of how
  *  much of its own window remains, since a new tap always wins; there is
  *  nothing in the comparison for this timestamp to gate. */
-export async function flushHeldBefore(store: QueueStore, nextTapAt: number): Promise<void> {
+export function flushHeldBefore(store: QueueStore, nextTapAt: number): Promise<void> {
   void nextTapAt;
-  const held = (await store.list()).filter((e) => e.heldUntil !== undefined);
+  return exclusive(store, () => flushHeld(store));
+}
+
+/** flushHeldBefore's body, without a lock. `ahead`: release only the entries
+ *  queued ahead of that one (`enqueueHeld`, for its own tap) — none, if it has
+ *  already left the queue. */
+async function flushHeld(store: QueueStore, ahead?: string): Promise<void> {
+  const all = await store.list();
+  const end = ahead === undefined ? all.length : all.findIndex((e) => e.idempotencyKey === ahead);
+  const held = all.slice(0, Math.max(end, 0)).filter((e) => e.heldUntil !== undefined);
   for (const entry of held) {
     const tick = cancelTick(store, entry.idempotencyKey);
     const cleared = await clearHeldFlag(store, entry.idempotencyKey);

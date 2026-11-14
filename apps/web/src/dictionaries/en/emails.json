@@ -72,6 +72,7 @@
   "funnelClaim.button": "Finish setting up",
   "funnelClaim.footer": "The link works once and expires in 7 days. If you didn't request this, you can safely ignore it.",
   "funnelClaim.text": "Finish setting up “{competitionName}” (link works once, expires in 7 days): {link}",
+  "funnelClaim.reference": "Your reference: {reference}",
   "funnelReminder.subject": "Still planning “{competitionName}”?",
   "funnelReminder.preheader": "Your drafted competition expires in a few days.",
   "funnelReminder.eyebrow": "Reminder",

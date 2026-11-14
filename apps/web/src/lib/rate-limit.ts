@@ -138,6 +138,15 @@ export const QUICK_MATCH_CREATE_LIMIT: RateLimitConfig = { max: 20, windowSecond
 export const QUICK_MATCH_RECIPIENT_LIMIT: RateLimitConfig = { max: 3, windowSeconds: 24 * 3600, failClosed: true };
 
 /**
+ * A /start (POST /api/funnel/start) per RECIPIENT: one inbox takes at most 5 starts a day, however many IPs send them (/start
+ * "Sent stepper" T1 review m1, controller 2026-11-14). A start replaces the address's live draft without any key, so without this
+ * anyone who knows an address could void its link and mail it again from rotating IPs. 5, not quick match's 3: a visitor who goes
+ * back and resubmits the wizard is the case the replace exists for. Keyed on the sha256 of the lower-cased address, never the
+ * address. Fail-closed, as every mail-sending limit is; taken after EMAIL_LIMIT (per IP) and before anything is written.
+ */
+export const FUNNEL_RECIPIENT_LIMIT: RateLimitConfig = { max: 5, windowSeconds: 24 * 3600, failClosed: true };
+
+/**
  * Cookie-consent recording (POST /api/consent), per IP. A person clicks the
  * banner once; 20 a minute leaves room for a household or venue behind one
  * NAT while capping a bot writing rows into `cookie_consents`. Fail-open —

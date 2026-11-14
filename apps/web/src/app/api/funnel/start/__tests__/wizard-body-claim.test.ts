@@ -1,8 +1,9 @@
 // The wizard's body, end to end (start-wizard redesign, plan 2026-11-13 Task 4): what an organiser builds on /start —
 // state driven through the wizard's own reducer, posted as the island posts it (`buildFunnelBody`) — is accepted by the REAL
 // POST /api/funnel/start, and the emailed claim builds exactly that: the format card picked, the field sized (clamped to the
-// claiming organisation's cap), the first day, and the courts only when Planning was opened. Then the analytics event the
-// route fires carries exactly `{ sport, entrants }` and nothing the visitor typed.
+// claiming organisation's cap) as the getting-started read's target — the claim writes no entrant (/start "Sent stepper",
+// owner 2026-11-14) — the first day, and the courts only when Planning was opened. Then the analytics event the route fires
+// carries exactly `{ sport, entrants }` and nothing the visitor typed, once per POST (a resubmit is counted too).
 //
 // The seam this closes: the model test proves the body parses the payload schema, the claim test proves a hand-written
 // payload builds; neither proves the body the wizard WRITES is one the route takes and the claim builds as chosen.
@@ -35,11 +36,14 @@ import { consumeFunnelDraft, createFromDraft, funnelEntrantCap } from "@/lib/fun
 import { FUNNEL_FORMATS, FUNNEL_MORE_FORMATS, type FunnelFormat } from "@/lib/funnel-formats";
 import { FUNNEL_SPORTS } from "@/lib/funnel-sports";
 import { stubOutboxEnv } from "@/server/usecases/__tests__/_invite-mail";
+import { gettingStarted } from "@/server/usecases/getting-started";
 import {
   buildFunnelBody,
+  heldStart,
   initialWizardState,
   nextEventDays,
   plausibleEmail,
+  sendBody,
   wizardReducer,
   wizardToday,
   type WizardAction,
@@ -77,6 +81,15 @@ async function post(body: Record<string, unknown>): Promise<number> {
   );
   await res.text();
   return res.status;
+}
+
+/** POST and the route's answer, out of the handler's `{ ok, data }` envelope as the island's `api()` unwraps it. */
+async function postFor(body: Record<string, unknown>): Promise<{ status: number; json: Record<string, unknown> }> {
+  const res = await start(
+    new Request(`${ORIGIN}/api/funnel/start`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
+  );
+  const envelope = (await res.json()) as { data?: Record<string, unknown> };
+  return { status: res.status, json: envelope.data ?? {} };
 }
 
 /** The organiser's walk, as the island dispatches it: every action through the wizard's own reducer. */
@@ -171,7 +184,9 @@ describe.skipIf(!HAS_DB)("the wizard's body → POST /api/funnel/start → the c
       const kinds = (await sql<{ kind: string }[]>`select kind from stages where division_id = ${comp!.division_id} order by seq`).map((r) => r.kind);
       expect(kinds, label).toEqual(RULEBOOK_KINDS[format]);
       const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from entrants where division_id = ${comp!.division_id}`;
-      expect(n, `${label}: the field`).toBe(cap === null ? entrants : Math.min(entrants, cap));
+      expect(n, `${label}: no entrant is written`).toBe(0);
+      const state = await gettingStarted({ orgId, via: "session", userId, role: "owner", keyId: null }, comp!.id);
+      expect(state.entrants, `${label}: the field chosen is the target`).toEqual({ count: 0, target: cap === null ? entrants : Math.min(entrants, cap) });
       const [{ c }] = await sql<{ c: number }[]>`
         select count(*)::int as c from courts k join venues v on v.id = k.venue_id
          where k.org_id = ${orgId} and k.archived_at is null and v.archived_at is null`;
@@ -184,6 +199,71 @@ describe.skipIf(!HAS_DB)("the wizard's body → POST /api/funnel/start → the c
     expect([...formatsSeen.keys()].sort(), "every format driven").toEqual([...ALL_FORMATS].sort());
     expect(Math.min(...formatsSeen.values()), "each format on two sports at least").toBeGreaterThanOrEqual(2);
     expect(cap === null || cap < 100, "the over-cap row really is over a cap (or the plan is unlimited)").toBe(true);
+  });
+
+  it("a resubmit from the wizard (the visitor went back and sent again) is counted: one funnel_draft_created per POST, one live draft", async () => {
+    const email = address();
+    const today = wizardToday(new Date());
+    const ctx: WizardContext = { maxEntrants: await funnelEntrantCap(), today };
+    const walk = (entrants: number) =>
+      drive("badminton", ctx, [
+        { type: "name", value: `${RUN} resubmit` },
+        { type: "next" },
+        { type: "entrants", value: entrants },
+        { type: "format", slug: "league" },
+        { type: "next" },
+        { type: "date", value: null },
+        { type: "next" },
+        { type: "email", value: email },
+      ]);
+    expect(await post(buildFunnelBody(walk(8), "en", "unused default"))).toBe(200);
+    expect(await post(buildFunnelBody(walk(10), "en", "unused default"))).toBe(200);
+    const drafts = await sql<{ id: string; live: boolean }[]>`
+      select id, (replaced_at is null) as live from funnel_drafts where email = ${email} order by created_at, id`;
+    expect(drafts.map((d) => d.live), "the first replaced, the second live").toEqual([false, true]);
+    const events = posthog.captureServer.mock.calls
+      .map((c) => c[0] as { event: string; distinctId: string; properties: unknown })
+      .filter((e) => e.event === "funnel_draft_created");
+    expect(events.map((e) => [e.distinctId, e.properties]), "one event per POST, each its own draft and size").toEqual([
+      [`funnel:${drafts[0]!.id}`, { sport: "Badminton", entrants: 8 }],
+      [`funnel:${drafts[1]!.id}`, { sport: "Badminton", entrants: 10 }],
+    ]);
+  });
+
+  it("Change email: the first answer's pair, held and sent back by the wizard's own helpers, replaces the first draft at another address; the reference stays", async () => {
+    const first = address();
+    const second = address();
+    const today = wizardToday(new Date());
+    const ctx: WizardContext = { maxEntrants: await funnelEntrantCap(), today };
+    const walked = drive("badminton", ctx, [
+      { type: "name", value: `${RUN} change email` },
+      { type: "next" },
+      { type: "format", slug: "league" },
+      { type: "next" },
+      { type: "next" },
+      { type: "email", value: first },
+    ]);
+    expect(walked.step, "premise: the walk reached B4").toBe("email");
+    const one = await postFor(sendBody(buildFunnelBody(walked, "en", "unused default"), null));
+    expect(one.status).toBe(200);
+    const held = heldStart(one.json);
+    expect(held, "the route's answer carries the pair the wizard holds").not.toBeNull();
+    // Sent, "Change it", the new address: the island's own transitions.
+    const changed = [{ type: "sent" }, { type: "changeEmail" }, { type: "email", value: second }].reduce(
+      (acc, a) => wizardReducer(acc, a as WizardAction, ctx),
+      walked,
+    );
+    expect(changed.step).toBe("email");
+    const two = await postFor(sendBody(buildFunnelBody(changed, "en", "unused default"), held));
+    expect(two.status).toBe(200);
+    expect(two.json.reference, "the reference in the inbox never changes").toBe(held!.reference);
+    const drafts = await sql<{ email: string; live: boolean; reference: string }[]>`
+      select email, (replaced_at is null) as live, reference from funnel_drafts
+       where email in (${first}, ${second}) order by created_at, id`;
+    expect(drafts, "the first address's draft is replaced; the new address holds the one live draft").toEqual([
+      { email: first, live: false, reference: held!.reference },
+      { email: second, live: true, reference: held!.reference },
+    ]);
   });
 
   it("an address the wizard holds back as short of its ending is one the route refuses: no draft, no email, no event", async () => {

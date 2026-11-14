@@ -47,6 +47,7 @@ import {
   type DisputeLostArgs,
   funnelClaimTemplate,
   funnelReminderTemplate,
+  type FunnelClaimEmailArgs,
   type FunnelEmailArgs,
   quickMatchLinkTemplate,
   quickMatchReminderTemplate,
@@ -326,7 +327,7 @@ export async function magicLinkEmail(
 /** Funnel claim link (v3/07 §6), RENDERED and not sent. The funnel start (`api/funnel/start`) queues what this returns on the email
  *  outbox (kind `funnel_claim`, transactional: it doubles as sign-in), in the same transaction as the draft whose token it carries,
  *  and makes the first attempt after commit. Nothing sends it directly. */
-export async function funnelClaimEmail(args: FunnelEmailArgs, locale: Locale): Promise<EmailContent> {
+export async function funnelClaimEmail(args: FunnelClaimEmailArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
   return funnelClaimTemplate(args, dict);
 }

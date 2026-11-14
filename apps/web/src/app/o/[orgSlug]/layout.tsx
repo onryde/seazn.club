@@ -6,10 +6,9 @@
 import { Nav } from "@/components/nav";
 import { ActiveOrgSync } from "@/components/active-org-sync";
 import { Breadcrumbs } from "@/components/breadcrumbs";
-import { notFound, permanentRedirect, redirect } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { getCurrentUser, getActiveOrgId, getUserOrgs } from "@/lib/auth";
 import { orgBySlug, breadcrumbNames } from "@/server/slug-resolve";
-import { routes } from "@/lib/routes";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary } from "@/lib/i18n";
 import { DictProvider } from "@/components/i18n/dict-provider";
@@ -25,13 +24,17 @@ export default async function OrgLayout({
   const user = await getCurrentUser();
   if (!user) redirect("/login");
   const resolved = await orgBySlug(orgSlug);
-  if (resolved && "renamedTo" in resolved) permanentRedirect(routes.orgHome(resolved.renamedTo));
   if (!resolved) notFound();
+  const locale = await resolveLocale();
+  const ui = await getDictionary(locale, "ui");
+  // A renamed org is left to the page (review I3): a layout holds only the org slug, so a redirect from here dropped the
+  // competition, the division, the tab and the query (the /present kiosk layout's F2, the same rule). Every page under
+  // /o redirects through page-auth with its whole path; a page's thrown redirect wins the response, so this bare shell
+  // is never what is served.
+  if ("renamedTo" in resolved) return <DictProvider dict={ui} locale={locale}>{children}</DictProvider>;
 
   const orgs = await getUserOrgs(user.id);
   const membership = orgs.find((o) => o.id === resolved.id);
-  const locale = await resolveLocale();
-  const ui = await getDictionary(locale, "ui");
 
   // Full console chrome only for members. Non-members reaching a fixture
   // deep-link (an accepted official — design v2 §A2) get the stripped courtside

@@ -1564,10 +1564,12 @@ test.describe("Match Day — E2 items 1, 2, 3, 5, 7 (desktop)", () => {
     await expect(cand(fx.anaCal)).toContainText(`${hhmm(of(fx.anaCal).scheduled_at!, seed.tz)} · ${fill(UI_EN["matchDay.candidate.where.nextOn"]!, { court: courts.a1.name })}`);
     await expect(cand(fx.benCal)).toContainText(`${hhmm(of(fx.benCal).scheduled_at!, seed.tz)} · ${fill(UI_EN["matchDay.candidate.where.nextOn"]!, { court: courts.a2.name })}`);
     await expect(cand(fx.sf1)).toContainText(`${hhmm(of(fx.sf1).scheduled_at!, seed.tz)} · ${fill(UI_EN["matchDay.candidate.where.nextOn"]!, { court: courts.b1.name })}`);
-    // Behind another DIVISION's match on its court, a match is still its own division's next there (F-T8-6, PR #1207: the
-    // first ready match per division, so a panel filtered to the Cup is never empty beside a Cup match in a queue): sf2
-    // waits behind the League's anaCal on A1, and is offered as next on A1.
-    await expect(cand(fx.sf2)).toContainText(`${hhmm(of(fx.sf2).scheduled_at!, seed.tz)} · ${fill(UI_EN["matchDay.candidate.where.nextOn"]!, { court: courts.a1.name })}`);
+    // Behind another DIVISION's match on its court, a match is still OFFERED (F-T8-6, PR #1207: the first ready match per
+    // division, so a panel filtered to the Cup is never empty beside a Cup match in a queue), but it is not that court's
+    // next: "Next on" is only the queue's very head, a later match is "Queued on" (F-T8-16, PR #1217, `first_in_queue`).
+    // sf2 waits behind the League's anaCal on A1, so anaCal is next on A1 and sf2 is queued on it.
+    await expect(cand(fx.sf2)).toContainText(`${hhmm(of(fx.sf2).scheduled_at!, seed.tz)} · ${fill(UI_EN["matchDay.candidate.where.queuedOn"]!, { court: courts.a1.name })}`);
+    await expect(cand(fx.sf2), "the queue's head alone is next on A1").not.toContainText(fill(UI_EN["matchDay.candidate.where.nextOn"]!, { court: courts.a1.name }));
     // Planned, no court: the plan leads, then "no court".
     await expect(cand(fx.benDee)).toContainText(`${hhmm(of(fx.benDee).scheduled_at!, seed.tz)} · ${UI_EN["matchDay.candidate.where.noCourt"]}`);
     // No time at all is the only "Not scheduled".
