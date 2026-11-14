@@ -656,7 +656,7 @@ closeDivision(s, id): HubTabsState   // active falls back to "settings" if it wa
 | × on a clean tab | Closes it; active returns to Settings at the saved scroll position | replace |
 | × on a dirty tab | Dialog "Close {name}? You have {n} unsaved changes in {sections}." with Save and close / Discard / Keep editing. At 320 the buttons stack with the primary first. Keep editing on a tab that is not on screen brings it on screen. | replace on close; push on Keep editing from another tab |
 | Switching tabs | Unsaved edits are kept in memory; a dirty tab shows a dot | push |
-| Browser Back that drops a dirty tab from `open` | The host `router.replace`s the tab back in and shows the × dialog | — |
+| Browser Back that drops a dirty tab from `open` | The host `router.replace`s the tab back in and shows the × dialog. If putting it back would evict the OTHER dirty tab, both dirty pages stay and the clean tab Back went to is dropped: `open` = [the other dirty tab, the held one], the held one on screen *(deviation 7, amended walk-fix B, T24 re-review n5)* | — |
 | Reload or close with any dirty tab | `beforeunload` prompt | — |
 | A link out of the hub, or Back/Forward past the hub's own history, with any dirty tab | Held; dialog "Leave with unsaved changes? {names} has/have unsaved changes." with Save and leave / Discard and leave / Keep editing. Downloads (Export CSV), new-window and modified clicks, and links to another hub tab pass through. | Back is put back at once; Discard goes on |
 | A save from a dialog that does not go through | The failing tab comes on screen, its refusal opened, scrolled to and focused | push if not on screen |
