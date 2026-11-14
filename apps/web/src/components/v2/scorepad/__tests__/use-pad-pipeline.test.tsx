@@ -17,7 +17,7 @@ import { HOLD_MS, enqueue, enqueueHeld, releaseHeld } from "../queue";
 import type { LedgerSlotEvent, OwnIdentity, PendingEvent } from "../types";
 import type { FixtureStateResult, PadTransport } from "../transport";
 import type { RealtimeConnector } from "../use-fixture-stream";
-import { indexedDbQueueStore, type QueueStore } from "../queue-store";
+import { indexedDbQueueStore, memoryQueueStore, type QueueStore } from "../queue-store";
 import {
   DOUBLE_SUBMIT_WINDOW_MS,
   HUMAN_FASTEST_REPEAT_MS,
@@ -652,7 +652,7 @@ describe("usePadPipeline — double-submit guard (review finding 2)", () => {
     vi.useRealTimers();
   });
 
-  it("an in-flight guard drops a SYNCHRONOUS second submit of the identical (type, payload)", async () => {
+  it("the 250ms window refuses a SYNCHRONOUS second submit of the identical (type, payload) — one press read twice — and says so", async () => {
     const { transport, appendCalls } = fakeTransport({ appendResults: [success(1), success(2)] });
     const pad = mountPipeline(baseParams({ transport }));
 
@@ -662,6 +662,40 @@ describe("usePadPipeline — double-submit guard (review finding 2)", () => {
 
     expect(appendCalls).toHaveLength(1); // the second call never reached the transport
     expect(pad.current.queueDepth).toBe(0);
+    expect(pad.current.lastRejection?.code, "refused visibly, not swallowed").toBe("DOUBLE_SUBMIT");
+  });
+
+  it("a deliberate repeat past the window, while the first tap is still being WRITTEN to a slow store, is recorded — the window alone decides", async () => {
+    // A phone's IndexedDB can take longer than the window to commit one put. A
+    // guard held until the write finished refused a deliberate second tap for
+    // exactly as long as the store was slow. Puts stay ordered, as IndexedDB's are.
+    const DB = "pad-tap-slow-store";
+    const inner = memoryQueueStore();
+    const firstPutCommits = deferred<void>();
+    let writes: Promise<void> = firstPutCommits.promise;
+    const slow: QueueStore = {
+      list: () => inner.list(),
+      put: (event) => (writes = writes.then(() => inner.put(event))),
+      delete: (key) => inner.delete(key),
+      clear: () => inner.clear(),
+    };
+    queueStoreRegistry.set(DB, slow);
+    const { transport, appendCalls } = fakeTransport({ appendResults: [success(1), success(2)] });
+    const pad = mountPipeline(baseParams({ transport, queueDbName: DB }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    const p1 = pad.current.submit("generic.score", { by: "H", points: 1 });
+    await vi.advanceTimersByTimeAsync(HUMAN_FASTEST_REPEAT_MS + 50); // past the window; the first put has not committed
+    const p2 = pad.current.submit("generic.score", { by: "H", points: 1 });
+    expect(pad.current.lastRejection, "a deliberate second tap is not refused").toBeNull();
+
+    firstPutCommits.resolve();
+    await Promise.all([p1, p2]);
+
+    expect(appendCalls.map((c) => c.body.expected_seq), "two taps, consecutive slots").toEqual([0, 1]);
+    expect(new Set(appendCalls.map((c) => c.body.idempotency_key)).size).toBe(2);
+    expect(pad.current.queueDepth).toBe(0);
+    expect((pad.current.state as { running: { home: number; away: number } }).running).toEqual({ home: 2, away: 0 });
   });
 
   it("a repeat of the identical (type, payload) within the window, AFTER the first fully resolves, is also suppressed — AND the refusal is now VISIBLE, not silent", async () => {
@@ -727,8 +761,9 @@ describe("usePadPipeline — double-submit guard (review finding 2)", () => {
 // connection. `submit()` held its same-tick guard (`submitInFlight`) across the
 // network drain, so a deliberate repeat seconds later, while the first POST was
 // still on the wire, was refused as DOUBLE_SUBMIT and the second point was
-// lost. The guard's own contract is "two calls landing in the SAME tick"; the
-// 250ms window (`lastAccepted`) is what catches one physical tap read twice.
+// lost. The guard's own contract was "two calls landing in the SAME tick"; the
+// 250ms window (`lastAccepted`) is what catches one physical tap read twice —
+// and, since review m-1 removed that latch, the only double-submit guard left.
 //
 // Every case here drives a transport whose POSTs answer only when the test
 // says so, because a POST that answers at once (fakeTransport's default) lets
@@ -2826,6 +2861,22 @@ describe("usePadPipeline — R2 soft-commit entry point (submitHeld / dropHeldSu
     expect(second).toBeNull(); // identical action, accepted too recently — same DOUBLE_SUBMIT_WINDOW_MS submit() uses
     expect(pad.current.queueDepth).toBe(1); // only one entry was ever held
     expect(pad.current.lastRejection?.code).toBe("DOUBLE_SUBMIT"); // no longer a silent no-op
+  });
+
+  it("the same window refuses a SAME-TICK identical submitHeld (one press read twice, two bound handlers) — visibly, holding one entry", async () => {
+    const { transport } = fakeTransport({ appendResults: [] });
+    const pad = mountPipeline(baseParams({ transport }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    const [first, second] = await Promise.all([
+      pad.current.submitHeld("generic.score", { by: "H", points: 1 }, HOLD_MS, vi.fn()),
+      pad.current.submitHeld("generic.score", { by: "H", points: 1 }, HOLD_MS, vi.fn()),
+    ]);
+
+    expect(first).not.toBeNull();
+    expect(second).toBeNull();
+    expect(pad.current.queueDepth).toBe(1);
+    expect(pad.current.lastRejection?.code).toBe("DOUBLE_SUBMIT");
   });
 
   it("dropHeldSubmission undoes a still-held tap with no network call, no core.void, and reverts the optimistic fold", async () => {

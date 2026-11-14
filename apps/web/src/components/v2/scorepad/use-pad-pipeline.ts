@@ -533,7 +533,7 @@ export interface UsePadPipelineResult {
   queueStore: QueueStore;
   /** R2 (spec §2.3): the soft-commit entry point. Builds and optimistically
    *  folds a `PendingEvent` through the EXACT SAME machinery `submit` above
-   *  does — the SAME `submitInFlight`/`lastAccepted` double-submit guard,
+   *  does — the SAME `lastAccepted` double-submit window,
    *  the SAME `expectedSeq`/`voidTargetSeq` computation, the SAME
    *  `pendingEnvelopes` commit (so the fold "advances immediately", spec
    *  §2.3's own wording) and the SAME `markOwn` — but enqueues the built
@@ -1317,17 +1317,19 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
   // starts empty and the verdicts fall back to content + `attempts`.
   const ackedSeqsRef = useRef<Set<number>>(new Set());
 
-  // Review finding 2's double-submit guard. Two separate mechanisms, both
-  // keyed on (type, payload) via pipeline.ts's own deepEqual (structural,
-  // not reference — a fresh object literal per render must still compare
-  // equal): `submitInFlight` catches two calls landing in the SAME tick
-  // (two bound handlers firing for one press, or a synchronous double
-  // invocation) before either has had a chance to update `lastAccepted`;
-  // `lastAccepted` catches a repeat that arrives AFTER the first fully
-  // resolved, within DOUBLE_SUBMIT_WINDOW_MS. Neither fires for two
-  // DIFFERENT actions, and the window is short enough that two genuinely
-  // separate identical actions (two dot balls in a row) both still land.
-  const submitInFlight = useRef<{ type: string; payload: unknown } | null>(null);
+  // Review finding 2's double-submit guard, keyed on (type, payload) via
+  // pipeline.ts's own deepEqual (structural, not reference — a fresh object
+  // literal per render must still compare equal). ONE mechanism: an identical
+  // action within DOUBLE_SUBMIT_WINDOW_MS of the last accepted one is
+  // refused. `submit`/`submitHeld` write `lastAccepted` synchronously, before
+  // their first `await`, so the window also catches two calls landing in the
+  // SAME tick (two bound handlers firing for one press). A same-tick latch
+  // (`submitInFlight`) used to sit in front of it and could only ever fire
+  // inside the window — except while the durable write was slower than the
+  // window, when it refused a scorer's deliberate repeat for as long as the
+  // store was slow (review m-1, removed). The window never fires for two
+  // DIFFERENT actions, and is short enough that two genuinely separate
+  // identical actions (two dot balls in a row) both still land.
   const lastAccepted = useRef<{ type: string; payload: unknown; at: number } | null>(null);
 
   // S12/#421 — the last successfully computed fold, the "last good state" a
@@ -2003,9 +2005,10 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
 
   const submit = useCallback(
     async (type: string, payload: unknown, opts?: { dropWith?: string }) => {
-      // Synchronous section — no `await` above this point (see below for
-      // why that matters to the in-flight guard too). `expectedSeq` assumes
-      // every event ahead (confirmed + already queued) lands exactly one slot
+      // Synchronous section — no `await` until the enqueue below, so a
+      // same-tick repeat already finds `lastAccepted` written and meets the
+      // window guard. `expectedSeq` assumes every event ahead (confirmed +
+      // already queued) lands exactly one slot
       // further on, per the append/replay protocol's own documented
       // assumption (pipeline.ts's drainQueue), and this reads refs rather
       // than awaiting the store. When an event ahead does NOT land where it
@@ -2018,14 +2021,6 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
       // one ahead of them leaves without landing (review I-2).
       const isSameAction = (o: { type: string; payload: unknown } | null): boolean =>
         o !== null && o.type === type && deepEqual(o.payload, payload);
-      if (isSameAction(submitInFlight.current)) {
-        // R7-46 — visible for the same reason the window guard below is; see
-        // `submitHeld`'s copy of this guard for the full note. Both guards in
-        // BOTH functions now refuse through `lastRejection`, so there is no
-        // remaining path by which the pipeline drops a tap in silence.
-        setLastRejection({ code: "DOUBLE_SUBMIT", message: "" });
-        return; // identical action already mid-flight this same tick — no-op
-      }
       const now = Date.now();
       const last = lastAccepted.current;
       // `last !== null` first, so it narrows `last` for BOTH the isSameAction
@@ -2043,75 +2038,66 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
         setLastRejection({ code: "DOUBLE_SUBMIT", message: "" });
         return; // identical action accepted too recently — likely one physical tap read twice
       }
-      submitInFlight.current = { type, payload };
       lastAccepted.current = { type, payload, at: now };
-      try {
-        // W3 task 1 — the TIP plus what is already in flight, never the
-        // count. See `ledgerTipSeq` above: over a sparse {1,2,4} the count
-        // claims seq 3, a slot the server already filled, and earns a 409
-        // this write did not need — which renegotiates into another gap.
-        const nextExpectedSeq = ledgerTipSeq(ledgerEventsRef.current) + pendingEnvelopesRef.current.size;
-        // S12/#421 pass H — captured HERE, not derived later at drain time,
-        // so it is correct even if this exact void is still sitting in the
-        // queue after a reload wipes ownEventIds. See voidTargetSeqAtSubmit's
-        // own doc for why this read is safe to trust unconditionally.
-        const voidTargetSeq = voidTargetSeqAtSubmit(type, payload, ownEventIdsRef.current, ledgerEventsRef.current);
-        const pending: PendingEvent = {
-          localId: newId(),
-          idempotencyKey: newId(),
-          type,
-          payload,
-          expectedSeq: nextExpectedSeq,
-          createdAt: new Date().toISOString(),
-          attempts: 0,
-          ...(voidTargetSeq === undefined ? {} : { voidTargetSeq }),
-          ...(opts?.dropWith === undefined ? {} : { dropWith: opts.dropWith }),
-          // W2c Task 15 (X-SR-7): the version this tap is made under, captured NOW and never re-stamped.
-          ...(rulesVersion === undefined ? {} : { rulesVersion }),
-        };
-        // Review Q8 (S12/#421 pass J): deliberately NOT wrapped in
-        // `pendingWithLocalVoidTarget`, unlike every OTHER place a
-        // `PendingEvent` becomes a local fold envelope (runDrain's ack,
-        // AND the mount-time leftover-queue resume effect's own seed step).
-        // That is provably correct TODAY, not merely an oversight:
-        // `voidTargetSeqAtSubmit` (just above) only ever sets
-        // `pending.voidTargetSeq` by finding the target in `ledgerEvents` BY
-        // THAT EXACT `targetId` in the first place, so IF `pending` is a
-        // core.void with a `voidTargetSeq` here, `ledgerEvents` necessarily
-        // already holds an entry at that seq under `targetId` verbatim —
-        // `pendingWithLocalVoidTarget`'s own "already the same id" guard
-        // would always fire, a guaranteed no-op. This is an ASSUMPTION tied
-        // to `voidTargetSeqAtSubmit`'s CURRENT implementation, not an
-        // inherent property of `submit()` itself — a future edit that
-        // resolves `voidTargetSeq` from some OTHER source (e.g. an async
-        // lookup, or a value threaded in from a caller) could quietly
-        // invalidate it, and nothing here would fail loudly: this optimistic
-        // pending build would just start showing a momentarily-untranslated
-        // void locally, the same transient throw pendingWithLocalVoidTarget's
-        // own doc already describes for the resume-effect seed step. If you
-        // are changing how `voidTargetSeq` gets attached to a fresh
-        // `PendingEvent`, re-verify this no-op still holds before trusting
-        // it — do not just assume "everywhere else wraps it, so here should
-        // too" without re-checking WHY here doesn't.
-        const withPending = new Map(pendingEnvelopesRef.current);
-        withPending.set(pending.idempotencyKey, pendingToEnvelope(fixtureId, identity, pending));
-        commitPendingEnvelopes(withPending); // optimistic fold shows immediately
-        markOwn(pending.idempotencyKey); // S12/#421 — this call submitted it, under THIS identity
-        setLastRejection(null);
-        // Everything below is async.
-        await enqueue(store, pending);
-        await refreshDepth();
-      } finally {
-        // Released once the tap is durably queued, NOT after the network send
-        // below — the same scope `submitHeld` gives it. Held across the drain,
-        // it refused a scorer's deliberate second tap for the same side for as
-        // long as the first POST was on the wire (a slow connection = a lost
-        // point). A second submit now joins the drain already running
-        // (`runDrain`'s piggyback; the store is FIFO and `expectedSeq` above
-        // already counts this event as pending), which is the path two
-        // DIFFERENT back-to-back actions have always taken.
-        submitInFlight.current = null;
-      }
+      // W3 task 1 — the TIP plus what is already in flight, never the
+      // count. See `ledgerTipSeq` above: over a sparse {1,2,4} the count
+      // claims seq 3, a slot the server already filled, and earns a 409
+      // this write did not need — which renegotiates into another gap.
+      const nextExpectedSeq = ledgerTipSeq(ledgerEventsRef.current) + pendingEnvelopesRef.current.size;
+      // S12/#421 pass H — captured HERE, not derived later at drain time,
+      // so it is correct even if this exact void is still sitting in the
+      // queue after a reload wipes ownEventIds. See voidTargetSeqAtSubmit's
+      // own doc for why this read is safe to trust unconditionally.
+      const voidTargetSeq = voidTargetSeqAtSubmit(type, payload, ownEventIdsRef.current, ledgerEventsRef.current);
+      const pending: PendingEvent = {
+        localId: newId(),
+        idempotencyKey: newId(),
+        type,
+        payload,
+        expectedSeq: nextExpectedSeq,
+        createdAt: new Date().toISOString(),
+        attempts: 0,
+        ...(voidTargetSeq === undefined ? {} : { voidTargetSeq }),
+        ...(opts?.dropWith === undefined ? {} : { dropWith: opts.dropWith }),
+        // W2c Task 15 (X-SR-7): the version this tap is made under, captured NOW and never re-stamped.
+        ...(rulesVersion === undefined ? {} : { rulesVersion }),
+      };
+      // Review Q8 (S12/#421 pass J): deliberately NOT wrapped in
+      // `pendingWithLocalVoidTarget`, unlike every OTHER place a
+      // `PendingEvent` becomes a local fold envelope (runDrain's ack,
+      // AND the mount-time leftover-queue resume effect's own seed step).
+      // That is provably correct TODAY, not merely an oversight:
+      // `voidTargetSeqAtSubmit` (just above) only ever sets
+      // `pending.voidTargetSeq` by finding the target in `ledgerEvents` BY
+      // THAT EXACT `targetId` in the first place, so IF `pending` is a
+      // core.void with a `voidTargetSeq` here, `ledgerEvents` necessarily
+      // already holds an entry at that seq under `targetId` verbatim —
+      // `pendingWithLocalVoidTarget`'s own "already the same id" guard
+      // would always fire, a guaranteed no-op. This is an ASSUMPTION tied
+      // to `voidTargetSeqAtSubmit`'s CURRENT implementation, not an
+      // inherent property of `submit()` itself — a future edit that
+      // resolves `voidTargetSeq` from some OTHER source (e.g. an async
+      // lookup, or a value threaded in from a caller) could quietly
+      // invalidate it, and nothing here would fail loudly: this optimistic
+      // pending build would just start showing a momentarily-untranslated
+      // void locally, the same transient throw pendingWithLocalVoidTarget's
+      // own doc already describes for the resume-effect seed step. If you
+      // are changing how `voidTargetSeq` gets attached to a fresh
+      // `PendingEvent`, re-verify this no-op still holds before trusting
+      // it — do not just assume "everywhere else wraps it, so here should
+      // too" without re-checking WHY here doesn't.
+      const withPending = new Map(pendingEnvelopesRef.current);
+      withPending.set(pending.idempotencyKey, pendingToEnvelope(fixtureId, identity, pending));
+      commitPendingEnvelopes(withPending); // optimistic fold shows immediately
+      markOwn(pending.idempotencyKey); // S12/#421 — this call submitted it, under THIS identity
+      setLastRejection(null);
+      // Everything below is async. A second submit arriving meanwhile is
+      // judged by the window alone and joins the drain already running
+      // (`runDrain`'s piggyback; the store is FIFO and `expectedSeq` above
+      // already counts this event as pending) — the path two DIFFERENT
+      // back-to-back actions have always taken.
+      await enqueue(store, pending);
+      await refreshDepth();
       await runDrain();
     },
     [store, fixtureId, identity, commitPendingEnvelopes, markOwn, refreshDepth, runDrain, rulesVersion],
@@ -2136,68 +2122,54 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
     ): Promise<{ heldId: string; heldUntil: number } | null> => {
       const isSameAction = (o: { type: string; payload: unknown } | null): boolean =>
         o !== null && o.type === type && deepEqual(o.payload, payload);
-      if (isSameAction(submitInFlight.current)) {
-        // R7-46 — this drop is VISIBLE too, for the same reason the window
-        // guard below is. There are two guards here, not one, and the R7-42
-        // fix only reached the second: a same-TICK repeat (two handlers bound
-        // to one physical press, a `dblclick`-shaped pair, a re-render that
-        // re-invokes the dispatch) never reaches the window check at all, so
-        // until now the single most literal case of "one tap read twice" was
-        // still swallowed with no row, no toast and no error — the exact
-        // silence R7-30 was filed about. Refusing through the same
-        // `lastRejection` channel means every drop the pipeline performs is
-        // one the scorer can see.
-        setLastRejection({ code: "DOUBLE_SUBMIT", message: "" });
-        return null; // identical action already mid-flight this same tick — no-op, same as submit()
-      }
       const now = Date.now();
       const last = lastAccepted.current;
       if (last !== null && isSameAction(last) && now - last.at < DOUBLE_SUBMIT_WINDOW_MS) {
         // R7-42/R7-30 — the SAME visible-refusal fix as submit() above.
         // `submitHeld` is the copy every real v3 tap actually calls
         // (createSkinDispatch's `heldSubmit`, pad-host.tsx), so a fix that
-        // only touched submit() would fix nothing a scorer ever hits.
+        // only touched submit() would fix nothing a scorer ever hits. A
+        // same-TICK repeat (two handlers bound to one physical press, a
+        // `dblclick`-shaped pair, a re-render that re-invokes the dispatch)
+        // is refused HERE too, and just as visibly (R7-46): `lastAccepted`
+        // is written below before the first `await`, so the repeat is
+        // inside the window by construction.
         setLastRejection({ code: "DOUBLE_SUBMIT", message: "" });
         return null; // identical action accepted too recently — same guard submit() uses
       }
-      submitInFlight.current = { type, payload };
       lastAccepted.current = { type, payload, at: now };
-      try {
-        // W3 task 1 — the SECOND `expected_seq` copy of this cursor, and the
-        // one that matters most: `submitHeld` is what `createSkinDispatch`'s
-        // `heldSubmit` routes every real v3 tap through (see the R7-42 note
-        // on the guard just above, which records the same trap once already),
-        // so a fix that reached only `submit()` would fix nothing a scorer
-        // ever hits. Same reasoning as there — see `ledgerTipSeq` above.
-        const nextExpectedSeq = ledgerTipSeq(ledgerEventsRef.current) + pendingEnvelopesRef.current.size;
-        const voidTargetSeq = voidTargetSeqAtSubmit(type, payload, ownEventIdsRef.current, ledgerEventsRef.current);
-        const pending: PendingEvent = {
-          localId: newId(),
-          idempotencyKey: newId(),
-          type,
-          payload,
-          expectedSeq: nextExpectedSeq,
-          createdAt: new Date().toISOString(),
-          attempts: 0,
-          ...(voidTargetSeq === undefined ? {} : { voidTargetSeq }),
-          // W2c Task 15 (X-SR-7): as `submit` — the version this tap is made under, captured NOW.
-          ...(rulesVersion === undefined ? {} : { rulesVersion }),
-        };
-        const withPending = new Map(pendingEnvelopesRef.current);
-        withPending.set(pending.idempotencyKey, pendingToEnvelope(fixtureId, identity, pending));
-        commitPendingEnvelopes(withPending); // optimistic fold shows immediately, same as submit()
-        markOwn(pending.idempotencyKey);
-        setLastRejection(null);
-        const heldUntil = Date.now() + holdMs;
-        // Everything below is async. Deliberately NO runDrain() call here —
-        // see this function's own doc: transmission stays deferred until
-        // `onDue` fires.
-        await enqueueHeld(store, pending, holdMs, onDue);
-        await refreshDepth();
-        return { heldId: pending.idempotencyKey, heldUntil };
-      } finally {
-        submitInFlight.current = null;
-      }
+      // W3 task 1 — the SECOND `expected_seq` copy of this cursor, and the
+      // one that matters most: `submitHeld` is what `createSkinDispatch`'s
+      // `heldSubmit` routes every real v3 tap through (see the R7-42 note
+      // on the guard just above, which records the same trap once already),
+      // so a fix that reached only `submit()` would fix nothing a scorer
+      // ever hits. Same reasoning as there — see `ledgerTipSeq` above.
+      const nextExpectedSeq = ledgerTipSeq(ledgerEventsRef.current) + pendingEnvelopesRef.current.size;
+      const voidTargetSeq = voidTargetSeqAtSubmit(type, payload, ownEventIdsRef.current, ledgerEventsRef.current);
+      const pending: PendingEvent = {
+        localId: newId(),
+        idempotencyKey: newId(),
+        type,
+        payload,
+        expectedSeq: nextExpectedSeq,
+        createdAt: new Date().toISOString(),
+        attempts: 0,
+        ...(voidTargetSeq === undefined ? {} : { voidTargetSeq }),
+        // W2c Task 15 (X-SR-7): as `submit` — the version this tap is made under, captured NOW.
+        ...(rulesVersion === undefined ? {} : { rulesVersion }),
+      };
+      const withPending = new Map(pendingEnvelopesRef.current);
+      withPending.set(pending.idempotencyKey, pendingToEnvelope(fixtureId, identity, pending));
+      commitPendingEnvelopes(withPending); // optimistic fold shows immediately, same as submit()
+      markOwn(pending.idempotencyKey);
+      setLastRejection(null);
+      const heldUntil = Date.now() + holdMs;
+      // Everything below is async. Deliberately NO runDrain() call here —
+      // see this function's own doc: transmission stays deferred until
+      // `onDue` fires.
+      await enqueueHeld(store, pending, holdMs, onDue);
+      await refreshDepth();
+      return { heldId: pending.idempotencyKey, heldUntil };
     },
     [store, fixtureId, identity, commitPendingEnvelopes, markOwn, refreshDepth, rulesVersion],
   );
