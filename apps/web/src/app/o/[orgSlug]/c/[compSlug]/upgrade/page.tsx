@@ -55,7 +55,7 @@ import { sql } from "@/lib/db";
 import { checkoutTrialDays, competitionHasRefusedPassPayment, reconcilePassCheckout } from "@/lib/billing";
 import { captureError } from "@/lib/sentry";
 import { requireCompetitionPage } from "@/server/page-auth";
-import { routes } from "@/lib/routes";
+import { routes, searchOf } from "@/lib/routes";
 import { PassUpgradeButton } from "@/components/pass-upgrade";
 import { Tip } from "@/components/ui/tip";
 import {
@@ -122,14 +122,14 @@ export default async function CompetitionUpgradePage({
   searchParams: Promise<{ checkout?: string; session_id?: string; feature?: string }>;
 }) {
   const { orgSlug, compSlug } = await params;
-  const page = await requireCompetitionPage(orgSlug, compSlug, { tail: "/upgrade" });
+  const sp = await searchParams;
+  const page = await requireCompetitionPage(orgSlug, compSlug, { tail: "/upgrade", search: searchOf(sp) });
   const orgId = page.org.id;
   const compId = page.competition.id;
 
   // Reconcile straight from Stripe on return from checkout (best-effort,
   // idempotent) — the pass must lift gates before any webhook lands, and this
   // read decides which state the buyer lands in.
-  const sp = await searchParams;
   if (sp.checkout === "success" && sp.session_id) {
     await reconcilePassCheckout(orgId, sp.session_id);
   }

@@ -21,9 +21,10 @@ export function isPublicHubPath(pathname: string): boolean {
 /** A page's search params as a query string to carry onto another URL (a rename redirect, page-auth `RenameTail`): every
  *  value (a repeated one too), an absent one dropped, encoded by URLSearchParams so no value adds a parameter; empty when
  *  there are none. */
-export function searchOf(params: Readonly<Record<string, string | readonly string[] | undefined>>): string {
+export function searchOf<P extends { readonly [K in keyof P]?: string | readonly string[] }>(params: P): string {
+  // Generic rather than a Record so a page's declared query INTERFACE (no index signature) is accepted as it is.
   const q = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) {
+  for (const [key, value] of Object.entries(params) as [string, string | readonly string[] | undefined][]) {
     if (value === undefined) continue;
     for (const v of typeof value === "string" ? [value] : value) q.append(key, v);
   }

@@ -120,8 +120,10 @@ function settle(res: Resolution, target: (newSlug: string) => string): ResolvedE
 /**
  * Where a renamed slug's old URL goes (review I3, /start "Sent stepper": renaming the organisation is step 2, and it
  * regenerates the org slug): the SAME page under the new slug. Each level of the chain hands the rest of its path down
- * as `tail` — `/c/{comp}`, then `/d/{div}`, then the page's own (`/schedule`) — and the page its query as `search`
- * (`searchOf`, lib/routes.ts), so whichever level was renamed redirects with all of it. The segments below a renamed level are kept as
+ * as `tail` — `/c/{comp}`, then `/d/{div}`, then the page's own (`/schedule`) — and every page that reads a query hands
+ * it on as `search` (`searchOf`, lib/routes.ts), so whichever level was renamed redirects with all of it. The match gate
+ * (`requireFixturePage`) keeps `/f/{no}` and the query the same way at each of its three levels (re-review m1); the
+ * sweep in page-auth-rename-tail.test.ts holds every page to this. The segments below a renamed level are kept as
  * they were typed, unresolved, as the /live fallback keeps them (slug-resolve `sharedRenameTarget`): a path that no
  * longer exists then 404s at its new address exactly as it did at its old one, and nothing is looked up for a visitor
  * before membership. The org LAYOUT does not redirect a renamed org (it holds only the org slug): the page does.
@@ -196,13 +198,13 @@ export async function requireOrgPage(
  */
 export async function requireBillingPage(
   orgSlug: string,
-  opts: { tail?: string } = {},
+  opts: RenameTail = {},
 ): Promise<PageAuth & { viaPayer: boolean }> {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
   const resolved = await orgBySlug(orgSlug);
   if (resolved && "renamedTo" in resolved) {
-    permanentRedirect(routes.orgHome(resolved.renamedTo) + (opts.tail ?? ""));
+    permanentRedirect(routes.orgHome(resolved.renamedTo) + rest(opts));
   }
   if (!resolved) notFound();
   const orgs = await getUserOrgs(user.id);
@@ -277,6 +279,7 @@ export async function requireFixturePage(
   compSlug: string,
   divSlug: string,
   no: number,
+  opts: Pick<RenameTail, "search"> = {},
 ): Promise<
   PageAuth & {
     competition: ResolvedEntity;
@@ -287,13 +290,15 @@ export async function requireFixturePage(
 > {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
-  const org = settle(await orgBySlug(orgSlug), (s) => `${routes.orgHome(s)}/c/${seg(compSlug)}/d/${seg(divSlug)}/f/${no}`);
+  // A rename at any level keeps the match and its query (`RenameTail`): only the renamed segment changes.
+  const match = `/f/${no}${opts.search ?? ""}`;
+  const org = settle(await orgBySlug(orgSlug), (s) => `${routes.orgHome(s)}/c/${seg(compSlug)}/d/${seg(divSlug)}${match}`);
   const orgs = await getUserOrgs(user.id);
   const membership = orgs.find((o) => o.id === org.id);
   const compRes = await compBySlug(org.id, compSlug);
   if (!compRes) notFound();
   if ("renamedTo" in compRes) {
-    if (membership) permanentRedirect(routes.competition(orgSlug, compRes.renamedTo));
+    if (membership) permanentRedirect(`${routes.competition(orgSlug, compRes.renamedTo)}/d/${seg(divSlug)}${match}`);
     notFound();
   }
   const competition = compRes;
@@ -301,7 +306,7 @@ export async function requireFixturePage(
   const divRes = await divBySlug(competition.id, divSlug);
   if (!divRes) notFound();
   if ("renamedTo" in divRes) {
-    if (membership) permanentRedirect(routes.division(orgSlug, compSlug, divRes.renamedTo));
+    if (membership) permanentRedirect(routes.division(orgSlug, compSlug, divRes.renamedTo) + match);
     notFound();
   }
   const division = divRes;
