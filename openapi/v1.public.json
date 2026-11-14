@@ -56649,6 +56649,16 @@
                             "type": "integer",
                             "minimum": 0,
                             "maximum": 9007199254740991
+                          },
+                          "promotion_skipped_at": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -56691,7 +56701,8 @@
                           "player_gender",
                           "division_started",
                           "last_reminded_at",
-                          "reminders_in_window"
+                          "reminders_in_window",
+                          "promotion_skipped_at"
                         ],
                         "additionalProperties": false
                       }
@@ -56745,7 +56756,8 @@
                       "player_gender": "example",
                       "division_started": true,
                       "last_reminded_at": "example",
-                      "reminders_in_window": 0
+                      "reminders_in_window": 0,
+                      "promotion_skipped_at": "example"
                     }
                   ],
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
@@ -57551,6 +57563,16 @@
                             "type": "integer",
                             "minimum": 0,
                             "maximum": 9007199254740991
+                          },
+                          "promotion_skipped_at": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -57593,7 +57615,8 @@
                           "player_gender",
                           "division_started",
                           "last_reminded_at",
-                          "reminders_in_window"
+                          "reminders_in_window",
+                          "promotion_skipped_at"
                         ],
                         "additionalProperties": false
                       }
@@ -57647,7 +57670,8 @@
                       "player_gender": "example",
                       "division_started": true,
                       "last_reminded_at": "example",
-                      "reminders_in_window": 0
+                      "reminders_in_window": 0,
+                      "promotion_skipped_at": "example"
                     }
                   ],
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"

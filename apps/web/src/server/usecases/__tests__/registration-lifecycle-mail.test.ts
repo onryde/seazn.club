@@ -65,6 +65,7 @@ import {
   queueRegistrationJoinedMail,
   queueRegistrationPaidMail,
   queueRegistrationPromotionLapsedMails,
+  queueRegistrationPromotionSkippedMail,
   queueRegistrationRejectedMails,
   queueRegistrationWithdrawnMails,
 } from "../registrations/lifecycle-mail";
@@ -73,6 +74,8 @@ import type { RegistrationRow } from "../registrations";
 import { approveRegistration, rejectRegistration } from "../registration-approval";
 import { createDivision } from "../divisions";
 import { stubOutboxEnv } from "./_invite-mail";
+import { seedBoardgameSport, seedPlayer } from "./_external-play-seed";
+import { forgetOnlineChessFlagCache } from "../external-play/online-chess-flag";
 import { SETTINGS_BASE, asOwner, fakeSession, loadWithGroup, makeUser, rig, seedOrg, seedRegistration, seedSecondEntry, stripeRig } from "./_registration-fixtures";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -138,6 +141,41 @@ async function offlineWorld(feeCents = 1500, approval: "auto" | "manual" = "auto
     approval,
   });
   return { orgId, orgSlug, ownerId, owner, competition, division, settings };
+}
+
+/** Walk-fix F16: an ONLINE-play division (chess on Lichess) that is free and auto-approved, so a promotion seats at once and the seat
+ *  gate is asked - the only place an automatic promotion skips a waiting entry. `drive` turns online chess on for the club. */
+async function onlineWorld() {
+  const { orgId, orgSlug, ownerId } = await seedOrg("pro");
+  made.orgIds.push(orgId);
+  made.userIds.push(ownerId);
+  const owner = asOwner(orgId, ownerId);
+  await seedBoardgameSport();
+  const { competition } = await rig(owner);
+  const division = await createDivision(owner, competition.id, {
+    name: "Online",
+    sport_key: "boardgame",
+    variant_key: "classical",
+    config: { variant: "classical", onlinePlay: "lichess", clock: { base: 600, increment: 5 } },
+  });
+  const settings = await putRegistrationSettings(owner, division.id, { ...SETTINGS_BASE, fee_cents: 0, payment_method: "offline", approval: "auto" });
+  return { orgId, orgSlug, ownerId, owner, competition, division, settings };
+}
+
+/** Walk-fix F16: the real walk passes `e` over - its player has an account with no Lichess link - when the organiser withdraws a pending
+ *  entry of the division and frees its place. */
+async function skipOnFreedPlace(w: Awaited<ReturnType<typeof onlineWorld>>, e: { id: string }) {
+  vi.stubEnv("ONLINE_CHESS_ALWAYS", "1");
+  forgetOnlineChessFlagCache();
+  const unlinked = await seedPlayer(w.orgId, "Maya Cole", `lm-${randomUUID().replaceAll("-", "").slice(0, 12)}`, false);
+  made.userIds.push(unlinked.userId);
+  await sql`
+    insert into registration_players (registration_id, full_name, user_id, source)
+    values (${e.id}, 'Maya Cole', ${unlinked.userId}, 'captain_entered')`;
+  const holder = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address("f16-holder") });
+  await withdrawRegistrationOrganiser(w.owner, holder.registration.id);
+  const [after] = await sql<{ status: string }[]>`select status from registrations where id = ${e.id}`;
+  expect(after!.status, "premise: the walk passed the entry over and it still waits").toBe("waitlisted");
 }
 
 /** A second division in the world's competition, with its own settings. */
@@ -1754,18 +1792,30 @@ describe.skipIf(!HAS_DB)("the reject and lapse producers' own guards", () => {
     expect(await queue()).toHaveLength(1);
     expect(await queue(), "the same promotion: nothing more").toEqual([]);
   });
+
+  it("skipped (walk-fix F16): a registration that is not there is refused by name, contained - nothing queued, nothing thrown", async () => {
+    const errors = vi.spyOn(log, "error");
+    const missing = randomUUID();
+    const id = await sql.begin((tx) => queueRegistrationPromotionSkippedMail(tx, { registrationId: missing, skippedAt: new Date() }));
+    expect(id).toBeNull();
+    const logged = errors.mock.calls.find((c) => (c[0] as { kind?: string }).kind === "registration_promotion_skipped");
+    expect(logged, "the refusal is logged under the kind").toBeDefined();
+    expect(String((logged![0] as { err?: Error }).err?.message)).toContain(`registration ${missing} not found`);
+    const [n] = await sql<{ n: number }[]>`select count(*)::int as n from email_outbox where kind = 'registration_promotion_skipped' and ref_id = ${missing}`;
+    expect(n!.n).toBe(0);
+  });
 });
 
 // ---------------------------------------------------------------------------------------------------------------------------------
 // Registration redesign B5 T18 review (I1): a mail about ONE entry quotes THAT entry's reference
 // ---------------------------------------------------------------------------------------------------------------------------------
-// The five per-entry mails (approved, expired, withdrawn, rejected, promotion lapsed) went out with the CART's reference, so a player who
+// The five per-entry mails (approved, expired, withdrawn, rejected, promotion lapsed; walk-fix F16 adds promotion skipped) went out with the CART's reference, so a player who
 // paid entry 2 by transfer and then read "your place was released" was handed a reference that also names entry 1. Each is driven through
 // its REAL producer (a usecase or the sweep), in a cart of one entry (the bare reference is right), of two (entry 2 is -2), and of two
 // with entry 1 withdrawn beforehand (the size is what the cart was SENT with, so the survivor is still -2). The expected reference line is
 // the dictionary's own, filled with the reference the cart was minted with: never typed here, never read back from the code under test.
 describe.skipIf(!HAS_DB)("B5 T18 review I1: the per-entry lifecycle mails quote the entry's own reference (real producers)", () => {
-  type AnyWorld = Awaited<ReturnType<typeof offlineWorld>> | Awaited<ReturnType<typeof stripeWorld>>;
+  type AnyWorld = Awaited<ReturnType<typeof offlineWorld>> | Awaited<ReturnType<typeof stripeWorld>> | Awaited<ReturnType<typeof onlineWorld>>;
   const KINDS: {
     kind: string;
     ns: string;
@@ -1778,6 +1828,8 @@ describe.skipIf(!HAS_DB)("B5 T18 review I1: the per-entry lifecycle mails quote 
     { kind: "registration_withdrawn", ns: "registrationWithdrawn", world: () => offlineWorld(1500, "auto"), seed: "pending", drive: async (w, e) => void (await withdrawRegistrationOrganiser(w.owner, e.id)) },
     { kind: "registration_rejected", ns: "registrationRejected", world: () => offlineWorld(1500, "manual"), seed: "pending", drive: async (w, e) => void (await rejectRegistration(w.owner, e.id)) },
     { kind: "registration_promotion_lapsed", ns: "registrationPromotionLapsed", world: () => stripeWorld(1500), seed: "waitlisted", drive: async (w, e) => { await promoteThenLapse(w as Awaited<ReturnType<typeof stripeWorld>>, e.id, e.group_id); await sweepRegistrations(ORIGIN); } },
+    // Walk-fix F16: an automatic promotion on an online-play division passed the waiting entry over (no Lichess link).
+    { kind: "registration_promotion_skipped", ns: "registrationPromotionSkipped", world: () => onlineWorld(), seed: "waitlisted", drive: async (w, e) => skipOnFreedPlace(w as Awaited<ReturnType<typeof onlineWorld>>, e) },
   ];
   const referenceLine = async (ns: string, ref: string) => t(await getDictionary("en", "emails"), `${ns}.textReference`, { refCode: ref });
 

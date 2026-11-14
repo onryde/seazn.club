@@ -9,7 +9,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { omit } from "@/lib/omit";
 import type { Tx, RegistrationSettingsRow, RegistrationWithGroupRow, AnySql } from "./types";
 import { regGroupCols } from "./lookups";
-import { waitlistPositionSql } from "./waitlist";
+import { promotionSkippedAtSql, waitlistPositionSql } from "./waitlist";
 import { remindersInWindowSql } from "./reminder-window";
 
 // ---------------------------------------------------------------------------
@@ -210,6 +210,10 @@ export interface RegistrationListRow extends Omit<RegistrationWithGroupRow, "acc
   /** The organiser's presses for THIS entry inside the cap's window (reminder-window.ts, the cap's own count): at
    *  REMINDER_CAP_PER_DAY the hub disables the button, since the press would be refused (walk-fix F13). */
   reminders_in_window: number;
+  /** When an automatic promotion last passed this WAITING entry over because its Lichess account is not linked to play
+   *  (`promotionSkippedAtSql`, registrations/waitlist.ts), in its current wait; null otherwise. The hub shows "Skipped - Lichess not
+   *  linked" beside the waitlist place (walk-fix F16). */
+  promotion_skipped_at: Date | null;
 }
 
 /** Raw wire shape — `RegistrationListRow` plus the hash the query still
@@ -351,7 +355,8 @@ export async function listRegistrations(
             and ev.type = 'registration.payment_reminded'
             and ev.payload->>'registration_id' = r.id::text) as last_reminded_at,
         ${remindersInWindowSql(tx, tx`c.id`, tx`r.id::text`)} as reminders_in_window,
-        ${waitlistPositionSql(tx, "r")} as waitlist_position
+        ${waitlistPositionSql(tx, "r")} as waitlist_position,
+        ${promotionSkippedAtSql(tx, "r")} as promotion_skipped_at
       from registrations r
       join registration_groups g on g.id = r.group_id
       join divisions d on d.id = r.division_id

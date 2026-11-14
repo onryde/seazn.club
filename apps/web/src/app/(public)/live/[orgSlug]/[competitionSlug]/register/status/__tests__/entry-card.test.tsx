@@ -32,6 +32,7 @@ vi.mock("../view-model", async (importOriginal) => {
 });
 
 import { EntryCard, type EntryCardProps } from "../entry-card";
+import { lichessLinkStartHref } from "@/lib/lichess-link";
 import type { EntryStatus } from "../view-model";
 
 const RAW_LEAK_SENTINEL = "Raw-Leak-Sentinel-Full-Name";
@@ -57,6 +58,7 @@ function baseProps(): EntryCardProps {
       approved: false,
       fee_if_promoted_cents: null,
       waitlist_position: null,
+      promotion_skipped_at: null,
       division_youth: false,
       division_player_name_display: null,
       players: [
@@ -392,6 +394,62 @@ describe("EntryCard — a waitlisted entry's place in the queue (B3 T13)", () =>
       expect(html, status).not.toContain('data-testid="reg-status-waitlist-position"');
       expect(html, status).not.toContain("on the waiting list");
     }
+  });
+});
+
+// Walk-fix F16 (ruling): an automatic promotion on an online-play division passed this waiting entry over because its Lichess account is
+// not linked to play. The waiting card says so - the turn was skipped, why, the entry keeps its place - with the Link step (the club's own
+// link start, `lichessLinkStartHref`), beside the place in the queue. The read model gives the time only while the entry waits.
+describe("EntryCard — a waiting entry an automatic promotion skipped (walk-fix F16)", () => {
+  const UI = { en: uiEn, es: uiEs, fr: uiFr, nl: uiNl } as const;
+  const unescape = (s: string) => s.replace(/&#x27;/g, "'").replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, "&");
+  const SKIPPED = "2026-11-14T10:00:00.000Z";
+  const render = (over: Partial<EntryCardProps["entry"]>, locale: keyof typeof UI = "en") => {
+    const props = baseProps();
+    return unescape(
+      renderToStaticMarkup(<EntryCard {...props} locale={locale} ui={UI[locale] as Dict} entry={{ ...props.entry, ...over }} />),
+    );
+  };
+  const raw = (locale: keyof typeof UI, key: string): string => {
+    const value = (UI[locale] as Record<string, string>)[key];
+    expect(typeof value, `premise: ${locale} has ${key}`).toBe("string");
+    return value!;
+  };
+  const notice = (html: string) => html.match(/<div[^>]*data-testid="reg-status-promotion-skipped"[^>]*>([\s\S]*?)<\/div>/);
+
+  it("en, typed: the turn was skipped, why, the place is kept - and the Link button starts linking for THIS club", () => {
+    const html = render({ status: "waitlisted", waitlist_position: 2, promotion_skipped_at: SKIPPED });
+    const m = notice(html);
+    expect(m, "the notice").not.toBeNull();
+    expect(m![1]).toContain(
+      "A place opened, but your turn was skipped: games here are played on Lichess, and your Lichess account isn't linked to play yet. You keep your place in line.",
+    );
+    expect(m![1]).toContain(`href="${lichessLinkStartHref("org")}"`);
+    expect(m![1]).toContain(">Link your Lichess account</a>");
+    expect(html, "the place in the queue still says where they are").toContain("You're #2 on the waiting list");
+  });
+
+  it("every locale says it in its own words, and the button names the step", () => {
+    let judged = 0;
+    for (const locale of ["en", "es", "fr", "nl"] as const) {
+      const m = notice(render({ status: "waitlisted", waitlist_position: 2, promotion_skipped_at: SKIPPED }, locale));
+      expect(m, locale).not.toBeNull();
+      expect(m![1], locale).toContain(raw(locale, "register.status.promotionSkipped.body"));
+      expect(m![1], locale).toContain(raw(locale, "register.status.promotionSkipped.link"));
+      if (locale !== "en") expect(raw(locale, "register.status.promotionSkipped.body"), `${locale}: translated`).not.toBe(raw("en", "register.status.promotionSkipped.body"));
+      judged += 1;
+    }
+    expect(judged, "anti-vacuity: four locales").toBe(4);
+  });
+
+  it("never skipped, it says nothing; nor on an entry that is not waiting, whatever the field holds", () => {
+    expect(notice(render({ status: "waitlisted", waitlist_position: 2, promotion_skipped_at: null })), "never skipped").toBeNull();
+    let judged = 0;
+    for (const status of ["pending", "confirmed", "withdrawn"] as const) {
+      expect(notice(render({ status, promotion_skipped_at: SKIPPED })), status).toBeNull();
+      judged += 1;
+    }
+    expect(judged).toBe(3);
   });
 });
 

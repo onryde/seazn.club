@@ -230,6 +230,9 @@ export const RegistrationListEntry = Registration.extend({
   /** The organiser's presses for this entry inside the reminder cap's 24 h window (the cap's own count); at the cap the hub disables
    *  Send payment reminder, since the press would be refused with PAYMENT_REMINDER_LIMIT. */
   reminders_in_window: z.number().int().nonnegative(),
+  /** When an automatic waitlist promotion last passed this waiting entry over because its Lichess account is not linked to play, in
+   *  its current wait; null otherwise (and on every entry that is not waitlisted). The hub shows "Skipped - Lichess not linked". */
+  promotion_skipped_at: z.string().nullable(),
 });
 
 /** `POST /registrations/{id}/promote` body. `id` in the URL resolves which

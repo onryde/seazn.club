@@ -1,7 +1,8 @@
 import "server-only";
 // The registrant's lifecycle mails (polish wave P2): what happens to an entry AFTER its confirmation - the payment landed, the organiser
 // approved it, the unpaid place was released, the organiser withdrew it, a teammate joined it; and (polish wave P5) the organiser rejected
-// it, or a promoted entry's pay window lapsed and it went back to the waitlist. One producer per outbox kind (see ./index.ts).
+// it, or a promoted entry's pay window lapsed and it went back to the waitlist; and (walk-fix F16) an automatic promotion on an online-play
+// division passed a waiting entry over. One producer per outbox kind (see ./index.ts).
 //
 // Every producer runs INSIDE the transaction that records the fact it reports (the payment, the approval, the expiry...), at its own
 // savepoint: the mail and the fact commit together or not at all, a fact the books lost is never mailed, and a mail that cannot be queued
@@ -9,12 +10,14 @@ import "server-only";
 // `null` also means "already queued" (the once-key): nothing more to attempt. A request path then makes the first attempt after commit
 // (`deferred(() => dispatchNow(ids))`); a webhook or the sweep leaves it to the retry worker, as every other outbox mail does.
 import { routes } from "@/lib/routes";
+import { lichessLinkStartHref } from "@/lib/lichess-link";
 import {
   registrationApprovedEmail,
   registrationExpiredEmail,
   registrationJoinedEmail,
   registrationPaidEmail,
   registrationPromotionLapsedEmail,
+  registrationPromotionSkippedEmail,
   registrationRejectedEmail,
   registrationWithdrawnEmail,
 } from "@/lib/email";
@@ -154,6 +157,15 @@ interface Audience {
   userId: string | null;
 }
 
+/** The registration's contact, as a recipient: their own pick of language, their account, and the entry's quotable reference. */
+const contactOf = (reg: RegistrationWithGroupRow): Audience => ({
+  to: reg.contact_email,
+  name: reg.contact_name,
+  refCode: entryReferenceOf(reg),
+  pick: reg.locale,
+  userId: reg.user_id,
+});
+
 const audienceOf = async (sp: Tx, reg: RegistrationWithGroupRow): Promise<Audience[]> => {
   const mates = await sp<{ full_name: string; email: string; user_id: string | null }[]>`
     select full_name, btrim(email) as email, user_id
@@ -163,7 +175,7 @@ const audienceOf = async (sp: Tx, reg: RegistrationWithGroupRow): Promise<Audien
       and consent_status in ('granted', 'guardian')
     order by created_at, id`;
   return [
-    { to: reg.contact_email, name: reg.contact_name, refCode: entryReferenceOf(reg), pick: reg.locale, userId: reg.user_id },
+    contactOf(reg),
     ...mates.map((m) => ({ to: m.email, name: m.full_name, refCode: null, pick: null, userId: m.user_id })),
   ];
 };
@@ -177,7 +189,13 @@ const audienceOf = async (sp: Tx, reg: RegistrationWithGroupRow): Promise<Audien
 async function fanOut(
   tx: Tx,
   a: {
-    kind: "registration_approved" | "registration_withdrawn" | "registration_expired" | "registration_rejected" | "registration_promotion_lapsed";
+    kind:
+      | "registration_approved"
+      | "registration_withdrawn"
+      | "registration_expired"
+      | "registration_rejected"
+      | "registration_promotion_lapsed"
+      | "registration_promotion_skipped";
     reg: RegistrationWithGroupRow;
     defaultLocale: string | null;
     audience: Audience[];
@@ -418,6 +436,59 @@ export async function queueRegistrationPromotionLapsedMails(tx: Tx, a: { reg: Re
     render: (r, locale) => registrationPromotionLapsedEmail({ ...base, contactName: r.name, refCode: r.refCode }, locale),
     keyOf: (r) => `${reg.id}:lapsed:${promotion}:${r.to.toLowerCase()}`,
   });
+}
+
+/**
+ * `registration_promotion_skipped` (walk-fix F16): an automatic waitlist promotion on an online-play division passed this WAITING entry
+ * over, because the seat gate refused it (`LICHESS_LINK_REQUIRED` / `LICHESS_RECONSENT_REQUIRED`: no Lichess link that plays), and offered
+ * the freed place to the next entry in line. To the registration's contact only: an online entry is personal (registration-submit refuses
+ * any other, F3), so the contact IS the player, and the remedy - linking Lichess - is their own account's. In their language: which entry,
+ * that it keeps its place, and the Link step (the club's own link start, `lichessLinkStartHref`; it signs them in first if it must).
+ *
+ * Runs in the transaction that records the skip (waitlist.ts `recordSkippedPromotion`, beside its `registration.promotion_skipped` row), at
+ * its own savepoint: a mail that cannot be queued never fails the withdrawal, sweep or organiser act that freed the place. The walk does not
+ * know whether a person is waiting on a response, so the retry worker makes the first attempt.
+ *
+ * Once per registrant per act that passed them over: the key carries `skippedAt`, the recording transaction's own clock. A retried
+ * transaction queues one mail, and the NEXT freed place that passes them again is a new skip and is told again - each time, the waiting
+ * registrant learns a place went to someone behind them.
+ */
+export async function queueRegistrationPromotionSkippedMail(
+  tx: Tx,
+  a: { registrationId: string; skippedAt: Date; origin?: string },
+): Promise<string | null> {
+  const prep = await contained(tx, "registration_promotion_skipped", a.registrationId, async (sp) => {
+    const [reg] = await sp<RegistrationWithGroupRow[]>`
+      select ${regGroupCols(sp)}
+        from registrations r join registration_groups g on g.id = r.group_id
+       where r.id = ${a.registrationId}`;
+    if (!reg) throw new Error(`promotion skipped mail: registration ${a.registrationId} not found`);
+    return { reg, ctx: await divisionCtx(sp, reg.division_id), divisionName: await divisionNameOf(sp, reg.division_id) };
+  });
+  if (!prep) return null;
+  const { reg, ctx } = prep;
+  const origin = a.origin ?? fallbackOrigin();
+  const [id] = await fanOut(tx, {
+    kind: "registration_promotion_skipped",
+    reg,
+    defaultLocale: ctx.default_locale,
+    audience: [contactOf(reg)],
+    render: (r, locale) =>
+      registrationPromotionSkippedEmail(
+        {
+          orgName: ctx.org_name,
+          competitionName: ctx.comp_name,
+          divisionName: prep.divisionName,
+          displayName: reg.display_name,
+          contactName: r.name,
+          refCode: r.refCode,
+          linkUrl: `${origin}${lichessLinkStartHref(ctx.org_slug)}`,
+        },
+        locale,
+      ),
+    keyOf: () => `${reg.id}:skipped:${a.skippedAt.toISOString()}`,
+  });
+  return id ?? null;
 }
 
 /**

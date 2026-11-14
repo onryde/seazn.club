@@ -102,7 +102,7 @@ export function renderRegistrantKindCell(
  * waitlist-queue.tsx to avoid re-introducing.
  */
 export function renderRegistrantStatusCell(
-  row: Pick<RegistrationListRow, "status" | "waitlist_position">,
+  row: Pick<RegistrationListRow, "status" | "waitlist_position" | "promotion_skipped_at">,
   dict: Dict,
 ): ReactNode {
   return (
@@ -116,6 +116,17 @@ export function renderRegistrantStatusCell(
       {row.status === "waitlisted" && row.waitlist_position !== null && (
         <span className="text-xs tabular-nums text-slate-500">
           {t(dict, "reg.hub.registrants.table.waitlistPosition", { position: row.waitlist_position })}
+        </span>
+      )}
+      {/* Walk-fix F16: an automatic promotion passed this waiting entry over (no Lichess link that plays) - the organiser's answer to
+          "why did the place go to someone behind them". The read model gives the time only while the entry waits; the status gates
+          it here too. Amber, the hub's own "needs the registrant's action" tone, not a status of its own. */}
+      {row.status === "waitlisted" && row.promotion_skipped_at !== null && (
+        <span
+          data-testid="reg-hub-promotion-skipped"
+          className="inline-flex w-fit items-center rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800 ring-1 ring-amber-200"
+        >
+          {t(dict, "reg.hub.registrants.table.promotionSkipped")}
         </span>
       )}
     </span>

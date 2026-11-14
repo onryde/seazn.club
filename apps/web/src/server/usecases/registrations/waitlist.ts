@@ -19,6 +19,7 @@ import type { AnySql, Tx, RegistrationSettingsRow, RegistrationWithGroupRow, Div
 import { regGroupCols, loadSettings } from "./lookups";
 import { clearExpiresIfNoLongerNeeded, materialise } from "./materialise";
 import { issuePayLink, recordPayToken } from "./pay-token";
+import { queueRegistrationPromotionSkippedMail } from "./lifecycle-mail";
 
 /** The waitlist's queue order, the ONE statement of it: oldest first by `coalesce(waitlisted_at, created_at)`, then `id` (V378/RS007 -
  *  see `promoteOldestWaitlisted`'s doc comment for why a lapsed promotion sorts by `waitlisted_at`). A comma list of `alias`'s keys,
@@ -176,20 +177,40 @@ export async function promoteOldestWaitlisted(
 
 /** A waitlisted registrant an automatic promotion passed over because the seat gate refused them: logged, and written to the
  *  competition's audit ledger (`registration.promotion_skipped`, with the gate's own code) so the organiser can see WHO was skipped
- *  and why, instead of finding a spot taken by someone behind them in the queue with nothing to explain it. No one is notified. */
+ *  and why, instead of finding a spot taken by someone behind them in the queue with nothing to explain it. Walk-fix F16: the
+ *  registrant is told too - one `registration_promotion_skipped` mail, queued in this same transaction and keyed on its clock - and the
+ *  organiser's row and the registrant's status card read the ledger row back (`promotionSkippedAtSql`). */
 async function recordSkippedPromotion(tx: Tx, divisionId: string, registrationId: string, refusal: HttpError): Promise<void> {
   log.warn(
     { registrationId, divisionId, code: refusal.code },
     "registrations: waitlist promotion skipped a registrant who cannot be seated on an online division yet",
   );
-  const [division] = await tx<{ competition_id: string; org_id: string }[]>`
-    select competition_id, org_id from divisions where id = ${divisionId}`;
+  const [division] = await tx<{ competition_id: string; org_id: string; skipped_at: Date }[]>`
+    select competition_id, org_id, now() as skipped_at from divisions where id = ${divisionId}`;
   if (!division) return;
   await audit(tx, division.competition_id, division.org_id, "registration.promotion_skipped", {
     registration_id: registrationId,
     division_id: divisionId,
     code: refusal.code ?? null,
   }, null);
+  await queueRegistrationPromotionSkippedMail(tx, { registrationId, skippedAt: division.skipped_at });
+}
+
+/** When an automatic promotion last passed the row aliased `alias` over (`registration.promotion_skipped`, recordSkippedPromotion) IN ITS
+ *  CURRENT WAIT, else null - one SQL expression, the ONE statement of "this entry was skipped" (walk-fix F16). Read by the organiser's
+ *  row (`RegistrationListRow.promotion_skipped_at`: the "Skipped - Lichess not linked" chip) and the registrant's status card
+ *  (`GroupEntryView.promotion_skipped_at`: why, and the Link step). Null unless the row is waitlisted, and a skip older than the wait it is
+ *  in (`coalesce(waitlisted_at, created_at)`, the queue key's own start: an entry promoted and put back, or moved back by the organiser,
+ *  starts a new wait) is not this wait's. */
+export function promotionSkippedAtSql(db: AnySql, alias: string) {
+  const r = db(alias);
+  return db`case when ${r}.status = 'waitlisted' then (
+      select max(ev.created_at) from competition_events ev
+       where ev.competition_id = (select d.competition_id from divisions d where d.id = ${r}.division_id)
+         and ev.type = 'registration.promotion_skipped'
+         and ev.payload->>'registration_id' = ${r}.id::text
+         and ev.created_at >= coalesce(${r}.waitlisted_at, ${r}.created_at)
+    ) else null end`;
 }
 
 /** Whether promoting a waitlisted entry under these settings SEATS it at once: a free entry on an auto-approval division confirms

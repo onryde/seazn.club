@@ -15,6 +15,7 @@ import { fmtPublicDeadline } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import { entryWaitingOn } from "@/lib/registration-status";
+import { lichessLinkStartHref } from "@/lib/lichess-link";
 import { CompetitionProse } from "@/components/public-site/competition-prose";
 import { PayButton } from "./pay-button";
 import { CancelEntry } from "./cancel-entry";
@@ -133,6 +134,10 @@ export interface EntryCardProps {
      *  the order promotion takes it), null otherwise. REQUIRED for the reason `assigned_team_name` is: an omitted value would silently
      *  fall back to the bare waitlisted note on every card. */
     waitlist_position: number | null;
+    /** Walk-fix F16: when an automatic promotion last passed this WAITING entry over because its Lichess account is not linked to play
+     *  (`GroupEntryView.promotion_skipped_at`), null otherwise. REQUIRED for the reason `waitlist_position` is: an omitted value would
+     *  silently say nothing about a skip the registrant was mailed about. */
+    promotion_skipped_at: string | null;
     /** RS008: this entry's OWN division's youth/player_name_display policy —
      *  see `rosterPlayerDisplayName` (view-model.ts) for why it travels with
      *  the entry rather than the cart. */
@@ -347,7 +352,7 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
   } else if (entry.status === "waitlisted") {
     // B3 T13 (spec §4.2): the entry's place in the queue replaces the bare note - the one fact a waiting registrant wants, set like
     // the money slot's other primary figures. An unknown place (the read model always gives one) keeps the note.
-    moneyNode =
+    const place =
       entry.waitlist_position !== null ? (
         <p
           data-testid="reg-status-waitlist-position"
@@ -358,6 +363,34 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
         </p>
       ) : (
         <p className="text-sm text-ink-muted">{t(ui, "register.status.waitlisted.note")}</p>
+      );
+    // Walk-fix F16: an automatic promotion passed this entry over (its Lichess account is not linked to play; the read model gives the
+    // time only while the entry waits). Under the place, which still holds: why, and the one step that makes the next place theirs. The
+    // amber and the Lichess violet are the register page's own Lichess card's (register-lichess-card.tsx), so the step reads as the same
+    // one. The link names no `next`: this page's address carries the cart's access token, which the sign-in and Lichess round trip would
+    // carry through more URLs; the flow lands on the player's home, whose Lichess card says the outcome.
+    moneyNode =
+      entry.promotion_skipped_at !== null ? (
+        <div className="space-y-2">
+          {place}
+          <div
+            role="note"
+            data-testid="reg-status-promotion-skipped"
+            data-skipped-at={entry.promotion_skipped_at}
+            className="space-y-2.5 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2.5"
+          >
+            <p className="text-sm text-amber-900">{t(ui, "register.status.promotionSkipped.body")}</p>
+            <a
+              href={lichessLinkStartHref(orgSlug)}
+              data-testid="reg-status-promotion-skipped-link"
+              className="flex min-h-11 w-full items-center justify-center rounded-[10px] bg-[#7c3aed] px-4 text-[15px] font-semibold text-white no-underline hover:bg-[#6d28d9] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#7c3aed] sm:inline-flex sm:w-auto"
+            >
+              {t(ui, "register.status.promotionSkipped.link")}
+            </a>
+          </div>
+        </div>
+      ) : (
+        place
       );
   } else if (showsFeeLine) {
     // paid/confirmed (the only remaining entryCountsTowardTotal-true

@@ -9,7 +9,7 @@ import type { RegistrationSettingsRow, RegistrationRow, RegistrationGroupRow } f
 import { loadSettings, DUMMY_ACCESS_HASH, tokenMatchesHash, typedReference, GROUP_ID_RE } from "./lookups";
 import { type ResolvedRefundPolicy, resolveRefundPolicy } from "./refunds";
 import { effectivePoolDeadline } from "./list";
-import { waitlistPositionSql } from "./waitlist";
+import { promotionSkippedAtSql, waitlistPositionSql } from "./waitlist";
 import { competitionVenueName, settlementsByRegistration, type SettledBy } from "./status-facts";
 
 // ---------------------------------------------------------------------------
@@ -81,6 +81,10 @@ export interface GroupEntryView {
    *  the order promotion takes the queue (`waitlistPositionSql`, registrations/waitlist.ts), the same place the organiser list, the
    *  public status API and the confirmation mail state. */
   waitlist_position: number | null;
+  /** Walk-fix F16: when an automatic promotion last passed this WAITING entry over because its Lichess account is not linked to play
+   *  (`promotionSkippedAtSql`, registrations/waitlist.ts), in its current wait (ISO); null otherwise. The status card says why and offers
+   *  the Link step. */
+  promotion_skipped_at: string | null;
   /** V378/RS007: this entry's OWN pay-by deadline when it was promoted out
    *  of the waitlist — null for a never-promoted entry, whose deadline is
    *  the CART's own `GroupStatusView.expires_at` instead (see
@@ -283,12 +287,14 @@ async function buildGroupStatusView(
       | "fee_if_promoted_cents"
       | "settled_by"
       | "entry_ref"
+      | "promotion_skipped_at"
     > & {
       /** V519: read to make `entry_ref`, then destructured OUT below (the view carries the reference, not the number). */
       cart_position: number;
       refunded_cents: number;
       late_refunded_cents: number;
       promotion_expires_at: Date | null;
+      promotion_skipped_at: Date | null;
       /** V387/H1 — read to resolve THIS entry's refund policy, then
        *  destructured OUT below so it never reaches the public view: a
        *  Stripe intent id is not something a status page hands to whoever
@@ -301,6 +307,7 @@ async function buildGroupStatusView(
            r.payment_intent_id as entry_payment_intent_id, r.approved_at is not null as approved,
            d.youth as division_youth, d.player_name_display as division_player_name_display,
            ${waitlistPositionSql(sql, "r")} as waitlist_position,
+           ${promotionSkippedAtSql(sql, "r")} as promotion_skipped_at,
            -- RS009: the team an organiser placed this solo sign-up on, or
            -- null while they are still in the pool. free_agent records how
            -- the entry was MADE and never flips back, so it cannot answer
@@ -466,8 +473,9 @@ async function buildGroupStatusView(
     charges_enabled: comp?.charges_enabled ?? false,
     payment_instructions: paymentInstructions,
     org_timezone: refundTz,
-    entries: entries.map(({ cart_position, refunded_cents, late_refunded_cents, promotion_expires_at, entry_payment_intent_id, ...e }) => ({
+    entries: entries.map(({ cart_position, refunded_cents, late_refunded_cents, promotion_expires_at, promotion_skipped_at, entry_payment_intent_id, ...e }) => ({
       ...e,
+      promotion_skipped_at: promotion_skipped_at ? new Date(promotion_skipped_at).toISOString() : null,
       // B5 T18: the cart's STORED size (`group.cart_size`), never `entries.length`: this list may be short of what the cart was sent with.
       entry_ref: entryReferenceOf({ ref_code: group.ref_code, cart_position, cart_size: group.cart_size }),
       refunded_cents,

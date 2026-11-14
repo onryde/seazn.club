@@ -381,6 +381,55 @@ export function registrationPromotionLapsedTemplate(opts: RegistrationPromotionL
 }
 
 // ------------------------------------------------------------------------------------------------------------------------------
+// registration_promotion_skipped (walk-fix F16)
+
+export interface RegistrationPromotionSkippedArgs extends LifecycleBase {
+  contactName: string;
+  /** Where linking Lichess starts for this club (`lichessLinkStartHref`, absolute): the one step that makes the next place theirs. */
+  linkUrl: string;
+}
+
+/** An automatic waitlist promotion on an online-play division passed this entry over: its Lichess account is not linked to play, so
+ *  the place went to the next entry in line. The entry keeps its place; linking Lichess lets the next place go to it. */
+export function registrationPromotionSkippedTemplate(opts: RegistrationPromotionSkippedArgs, dict: Dict): Content {
+  const ns = "registrationPromotionSkipped";
+  const subject = t(dict, `${ns}.subject`, { competitionName: opts.competitionName });
+  const names = { displayName: opts.displayName, divisionName: opts.divisionName };
+  const own = isOwnEntry(opts.displayName, opts.contactName);
+  return {
+    subject,
+    html: renderEmail({
+      subject,
+      preheader: t(dict, ownKey(`${ns}.preheader`, own), { displayName: opts.displayName, competitionName: opts.competitionName }),
+      ...shell(dict, ns, opts),
+      title: t(dict, `${ns}.title`),
+      contentHtml:
+        paragraph(
+          t(dict, ownKey(`${ns}.intro`, own), {
+            contactName: escapeHtml(opts.contactName),
+            displayName: escapeHtml(names.displayName),
+            divisionName: escapeHtml(names.divisionName),
+            competitionName: escapeHtml(opts.competitionName),
+          }),
+        ) +
+        panel(t(dict, `${ns}.panelTitle`), t(dict, `${ns}.panelBody`)) +
+        button(t(dict, `${ns}.linkLichess`), opts.linkUrl) +
+        linkFallback(opts.linkUrl) +
+        referenceHtml(dict, ns, opts.refCode),
+    }),
+    text:
+      t(dict, `${ns}.text`, { competitionName: opts.competitionName, orgName: opts.orgName }) +
+      "\n" +
+      t(dict, ownKey(`${ns}.textBody`, own), names) +
+      "\n\n" +
+      t(dict, `${ns}.textLinkLichess`) +
+      "\n" +
+      opts.linkUrl +
+      referenceText(dict, ns, opts.refCode),
+  };
+}
+
+// ------------------------------------------------------------------------------------------------------------------------------
 // registration_joined
 
 /** What the entry the player joined IS right now. `null` = the producer could not name a state it can stand behind: the mail then

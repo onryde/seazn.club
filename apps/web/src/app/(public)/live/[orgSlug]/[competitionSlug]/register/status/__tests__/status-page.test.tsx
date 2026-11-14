@@ -90,6 +90,8 @@ const BASE_ENTRY = {
   fee_if_promoted_cents: null as number | null,
   // B3 T13: a waitlisted entry's place in its division's queue (GroupEntryView.waitlist_position), null on every other entry.
   waitlist_position: null as number | null,
+  // Walk-fix F16: when an automatic promotion last passed this waiting entry over (no Lichess link), null on every other entry.
+  promotion_skipped_at: null as string | null,
   // RS008: this entry's own division youth/player_name_display policy —
   // threaded onto GroupEntryView (buildGroupStatusView, usecases/registrations/group-status.ts).
   division_youth: false,

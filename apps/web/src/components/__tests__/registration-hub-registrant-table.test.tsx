@@ -183,6 +183,49 @@ describe("renderRegistrantStatusCell — waitlist position (task 4)", () => {
   });
 });
 
+// Walk-fix F16 (ruling): an automatic promotion on an online-play division passed this waiting entry over (no Lichess link that plays).
+// The organiser's row says so beside the waitlist place - "Skipped — Lichess not linked" - while the entry waits (the read model,
+// `promotion_skipped_at`, gives the time only then; online-seat-gate-waitlist.test.ts pins that against the real walk).
+describe("renderRegistrantStatusCell — skipped by an automatic promotion (walk-fix F16)", () => {
+  const SKIPPED = new Date("2026-11-14T10:00:00Z");
+  const chip = (r: RegistrationListRow, d = dict) =>
+    walk(renderRegistrantStatusCell(r, d)).find((e) => propsOf(e)["data-testid"] === "reg-hub-promotion-skipped");
+
+  it("a waiting row that was skipped says so, in the dictionary's words, beside its place", () => {
+    const r = row({ status: "waitlisted", waitlist_position: 2, promotion_skipped_at: SKIPPED });
+    const found = chip(r);
+    expect(found, "the chip").toBeDefined();
+    expect(textOf(found!)).toBe(t(dict, "reg.hub.registrants.table.promotionSkipped"));
+    expect(textOf(found!)).toBe("Skipped — Lichess not linked");
+    expect(textOf(renderRegistrantStatusCell(r, dict)), "the place still shows").toContain("#2");
+  });
+
+  it("every locale names it in its own words", async () => {
+    let judged = 0;
+    const en = t(dict, "reg.hub.registrants.table.promotionSkipped");
+    for (const locale of ["es", "fr", "nl"] as const) {
+      const d = await getDictionary(locale, "ui");
+      const found = chip(row({ status: "waitlisted", waitlist_position: 2, promotion_skipped_at: SKIPPED }), d);
+      expect(found, locale).toBeDefined();
+      const words = textOf(found!);
+      expect(words, locale).toBe(t(d, "reg.hub.registrants.table.promotionSkipped"));
+      expect(words, `${locale}: translated`).not.toBe(en);
+      judged += 1;
+    }
+    expect(judged).toBe(3);
+  });
+
+  it("never skipped, no chip; and none on a row that is not waiting, whatever the field holds", () => {
+    expect(chip(row({ status: "waitlisted", waitlist_position: 2, promotion_skipped_at: null })), "never skipped").toBeUndefined();
+    let judged = 0;
+    for (const status of ["pending", "confirmed", "withdrawn"] as const) {
+      expect(chip(row({ status, promotion_skipped_at: SKIPPED })), status).toBeUndefined();
+      judged += 1;
+    }
+    expect(judged).toBe(3);
+  });
+});
+
 describe("renderRegistrantPaymentCell", () => {
   it("shows the formatted amount", () => {
     const text = textOf(renderRegistrantPaymentCell(row({ amount_cents: 2500, currency: "usd", refunded_cents: 0 }), dict));

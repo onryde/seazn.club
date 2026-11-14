@@ -42,6 +42,7 @@ function props(over: Partial<EntryCardProps["entry"]> = {}, cart: Partial<EntryC
       approved: false,
       fee_if_promoted_cents: null,
       waitlist_position: null,
+      promotion_skipped_at: null,
       division_youth: false,
       division_player_name_display: null,
       players: [],
