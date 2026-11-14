@@ -46,7 +46,7 @@ describe("a registrant mail greets the person, not the entry", () => {
         { ...base, feeCents: 1500, paymentInstructions: null, method: "card", payPageUrl: PAY_PAGE },
         dict,
       ),
-      promotion: registrationPromotedTemplate({ ...base, feeCents: 1500, method: "card", payPageUrl: PAY_PAGE }, dict),
+      promotion: registrationPromotedTemplate({ ...base, feeCents: 1500, method: "card", payPageUrl: PAY_PAGE, seatedIn: null }, dict),
       refund: refundIssuedTemplate({ ...base, amountCents: 1500 }, dict),
     };
     let checked = 0;
@@ -302,7 +302,7 @@ describe("a registrant mail never names the contact back to themselves as the en
       confirmation: confirmation([entry(DIVISION, 1500)]),
       confirmationCart: confirmation([entry(DIVISION, 1500), entry("Masters Doubles", 0)]),
       reminder: paymentReminderTemplate({ ...base, feeCents: 1500, paymentInstructions: null, method: "card", payPageUrl: PAY_PAGE }, dict),
-      promotion: registrationPromotedTemplate({ ...base, feeCents: 1500, method: "card", payPageUrl: PAY_PAGE }, dict),
+      promotion: registrationPromotedTemplate({ ...base, feeCents: 1500, method: "card", payPageUrl: PAY_PAGE, seatedIn: null }, dict),
       refund: refundIssuedTemplate({ ...base, amountCents: 1500 }, dict),
     } as Record<string, { subject: string; html: string; text: string }>;
   }
@@ -405,5 +405,66 @@ describe("a waiting-list entry states its place and that nothing is charged now 
     expect(single.text).toContain("Status: On the waiting list — position #2, not charged now");
     const cart = registrationTemplate({ ...args, entries: [holding, waiting("Masters Doubles", 4, 1500)], totalCents: 1500 }, dict, "en");
     expect(cart.text).toContain("Riverside Rovers · Masters Doubles — On the waiting list — position #4, not charged now\n");
+  });
+});
+
+describe("a free promotion says what the promotion did (walk-fix F2)", () => {
+  // The two free outcomes of `promoteWaitlistedRow` (waitlist.ts `promotionConfirmsRow`): automatic approval SEATS the entry
+  // (status confirmed) and nothing is left to do; manual approval leaves it pending the organiser's decision. The walkthrough's
+  // free + automatic mail said "the organiser will confirm your entry" about an entry that was already in.
+  const free = (seatedIn: string | null) =>
+    ({
+      orgName: "Riverside Club",
+      competitionName: "Spring Open",
+      displayName: TEAM,
+      contactName: CONTACT,
+      feeCents: 0,
+      currency: "gbp",
+      method: "offline",
+      payPageUrl: null,
+      seatedIn,
+    }) as const;
+
+  it.each(LOCALES)("%s: seated -> 'you're in' naming the division, never the approval wording; pending -> the approval wording (html and text)", async (locale) => {
+    const dict = await dictOf(locale);
+    const confirmedEsc = t(dict, "registrationPromoted.confirmed", { divisionName: DIVISION });
+    const awaiting = t(dict, "registrationPromoted.noPayment");
+    expect(confirmedEsc, `${locale}: the key exists`).not.toBe("registrationPromoted.confirmed");
+    expect(confirmedEsc, `${locale}: the division is named`).toContain(DIVISION);
+
+    const seated = registrationPromotedTemplate(free(DIVISION), dict, locale);
+    const pending = registrationPromotedTemplate(free(null), dict, locale);
+    let checked = 0;
+    for (const [part, s, p] of [
+      ["html", words(seated.html), words(pending.html)],
+      ["text", seated.text, pending.text],
+    ] as const) {
+      expect(s, `${locale} ${part}: seated says it is confirmed`).toContain(confirmedEsc);
+      expect(s, `${locale} ${part}: seated never says the organiser will confirm`).not.toContain(awaiting);
+      expect(p, `${locale} ${part}: pending says the organiser will confirm`).toContain(awaiting);
+      expect(p, `${locale} ${part}: pending never says it is confirmed`).not.toContain(confirmedEsc);
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("a name that needs escaping is escaped in the html and plain in the text", async () => {
+    const dict = await dictOf("en");
+    const out = registrationPromotedTemplate(free("Under-12 <Boys> & Girls"), dict, "en");
+    expect(out.html).toContain("Under-12 &lt;Boys&gt; &amp; Girls");
+    expect(out.html).not.toContain("<Boys>");
+    expect(out.text).toContain("Under-12 <Boys> & Girls");
+  });
+
+  it("en, typed: the ruling's words", async () => {
+    const dict = await dictOf("en");
+    expect(t(dict, "registrationPromoted.confirmed", { divisionName: DIVISION })).toBe(`You're in — your place in ${DIVISION} is confirmed.`);
+  });
+
+  it("a promotion that owes a fee never uses either free sentence, seated or not (the fee panel says what to do)", async () => {
+    const dict = await dictOf("en");
+    const card = registrationPromotedTemplate({ ...free(null), feeCents: 1500, method: "card", payPageUrl: PAY_PAGE }, dict, "en");
+    expect(words(card.html)).not.toContain(t(dict, "registrationPromoted.noPayment"));
+    expect(words(card.html)).not.toContain("You're in");
   });
 });

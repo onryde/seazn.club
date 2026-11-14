@@ -224,6 +224,7 @@
   "registrationPromoted.payNow": "Pay now — {amount}",
   "registrationPromoted.contactOrganiser": "The organiser will contact you with payment details.",
   "registrationPromoted.noPayment": "No payment is needed — the organiser will confirm your entry.",
+  "registrationPromoted.confirmed": "You're in — your place in {divisionName} is confirmed.",
   "registrationPromoted.reference": "Your reference is <strong>{refCode}</strong> — check your status any time at {url}.",
   "registrationPromoted.footer": "You received this because this address was used to enter {competitionName} at {orgName}.",
   "registrationPromoted.textIntro": "You're off the waitlist for {competitionName} ({orgName}).",

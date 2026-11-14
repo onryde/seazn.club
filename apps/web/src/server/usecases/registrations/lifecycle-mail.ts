@@ -27,13 +27,7 @@ import { money } from "@/lib/email-templates/shared";
 import { entryReferenceOf } from "@/lib/ref-code";
 import { log } from "@/server/logger";
 import type { Tx, RegistrationWithGroupRow, DivisionCtx } from "./types";
-import { divisionCtx, fallbackOrigin, loadSettings, regGroupCols } from "./lookups";
-
-const divisionNameOf = async (db: Tx, divisionId: string): Promise<string> => {
-  const [row] = await db<{ name: string }[]>`select name from divisions where id = ${divisionId}`;
-  if (!row) throw new Error(`lifecycle mail: division ${divisionId} not found`);
-  return row.name;
-};
+import { divisionCtx, divisionNameOf, fallbackOrigin, loadSettings, regGroupCols } from "./lookups";
 
 /** The competition's public pages exist only for a public or unlisted competition (a private one is a 404): a mail never links one. */
 const hasPublicPages = (ctx: DivisionCtx): boolean => ctx.comp_visibility === "public" || ctx.comp_visibility === "unlisted";

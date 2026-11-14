@@ -16,7 +16,7 @@ import { LOCALES, type Locale } from "@/lib/i18n-constants";
 
 const PAY = "https://seazn.club/r/pay/" + "T".repeat(43);
 const STATUS = "https://seazn.club/r/status?token=abc";
-const common = { orgName: "Riverside Club", competitionName: "Spring Open", contactName: "Mia Cole", displayName: "Mia Cole", divisionName: "Open Singles" };
+const common = { orgName: "Riverside Club", competitionName: "Spring Open", contactName: "Mia Cole", displayName: "Mia Cole", divisionName: "Open Singles", seatedIn: null };
 
 type Sender = (currency: string, locale: Locale) => Promise<{ html: string; text: string }>;
 

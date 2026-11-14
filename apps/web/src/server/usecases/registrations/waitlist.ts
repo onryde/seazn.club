@@ -16,7 +16,7 @@ import { openRegistrationSeatGate, type RegistrationSeatGate, type SeatGate } fr
 import { loadEntrantShape } from "../entrant-shape";
 import { divisionTakesKind } from "@/lib/division-entrant-kinds";
 import type { AnySql, Tx, RegistrationSettingsRow, RegistrationWithGroupRow, DivisionCtx } from "./types";
-import { regGroupCols, loadSettings } from "./lookups";
+import { divisionNameOf, regGroupCols, loadSettings } from "./lookups";
 import { clearExpiresIfNoLongerNeeded, materialise } from "./materialise";
 import { issuePayLink, recordPayToken } from "./pay-token";
 import { queueRegistrationPromotionSkippedMail } from "./lifecycle-mail";
@@ -439,6 +439,10 @@ export async function notifyPromoted(
     // session only when the player presses Pay (and answers Connect being off itself).
     const link = promoted.amount_cents > 0 ? issuePayLink(origin) : null;
     const locale = await recipientLocale(sql, { pick: promoted.locale, userId: promoted.user_id, orgDefault: ctx.default_locale });
+    // Walk-fix F2: a free promotion on automatic approval has already SEATED the entry (`promotionConfirmsRow` above confirms it
+    // in the promotion's own transaction), so the mail says so and names the division; anything else still waits. Read off the
+    // row's status, the one fact that is true whichever door promoted it. Only then is the division's name read.
+    const seatedIn = promoted.status === "confirmed" ? await divisionNameOf(sql, promoted.division_id) : null;
     const content = await registrationPromotedEmail(
       {
         orgName: ctx.org_name,
@@ -466,6 +470,7 @@ export async function notifyPromoted(
         // B5 T18: the mail is always about ONE entry, so it quotes THAT entry's reference; the status link below resolves by the CART's.
         refCode: entryReferenceOf(promoted),
         refStatusUrl: promoted.ref_code ? `${origin}/r/${promoted.ref_code}` : null,
+        seatedIn,
       },
       locale,
     );

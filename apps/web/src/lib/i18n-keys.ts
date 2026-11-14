@@ -7181,6 +7181,7 @@ export type DictionaryKey =
   | "registrationPaid.textTotal"
   | "registrationPaid.title"
   | "registrationPaid.viewEntry"
+  | "registrationPromoted.confirmed"
   | "registrationPromoted.contactOrganiser"
   | "registrationPromoted.feeHeld"
   | "registrationPromoted.feeHeldUntil"

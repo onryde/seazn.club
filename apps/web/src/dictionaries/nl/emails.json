@@ -224,6 +224,7 @@
   "registrationPromoted.payNow": "Nu betalen — {amount}",
   "registrationPromoted.contactOrganiser": "De organisator neemt contact met je op met de betaalgegevens.",
   "registrationPromoted.noPayment": "Er is geen betaling nodig — de organisator bevestigt je inschrijving.",
+  "registrationPromoted.confirmed": "Je bent erbij — je plek in {divisionName} is bevestigd.",
   "registrationPromoted.reference": "Je referentie is <strong>{refCode}</strong> — bekijk je status op elk moment op {url}.",
   "registrationPromoted.footer": "Je ontvangt dit omdat dit adres is gebruikt om in te schrijven voor {competitionName} bij {orgName}.",
   "registrationPromoted.textIntro": "Je staat niet meer op de wachtlijst voor {competitionName} ({orgName}).",

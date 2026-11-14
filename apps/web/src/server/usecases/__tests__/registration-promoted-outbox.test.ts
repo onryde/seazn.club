@@ -391,3 +391,43 @@ describe.skipIf(!HAS_DB)("the promotion email quotes the promoted entry's own re
     expect(sent.html).not.toContain(`${ref}-`);
   });
 });
+
+// Walk-fix F2: a FREE promotion is one of two states, decided in the promotion's own transaction (`promotionConfirmsRow`): automatic
+// approval seats the entry (confirmed), manual approval leaves it pending the organiser. The mail says which, through the real door (a
+// withdrawal frees the one spot), in the registrant's locale.
+describe.skipIf(!HAS_DB)("a free promotion's mail says whether the entry is in (walk-fix F2, DB)", () => {
+  const sentTo = (email: string) => {
+    const calls = deliverMock.mock.calls.map((c) => c[0] as { to: string; html: string; text: string }).filter((c) => c.to.toLowerCase() === email.toLowerCase());
+    expect(calls, `one mail went to ${email}`).toHaveLength(1);
+    return calls[0]!;
+  };
+
+  it("automatic approval: the entry is confirmed, and the mail says 'you're in' naming the division; manual: pending, and the organiser will confirm", async () => {
+    let checked = 0;
+    for (const approval of ["auto", "manual"] as const) {
+      const d = await fullDivision("offline", 0, approval);
+      const q = await seedQueue(d, "nl");
+      await withdrawRegistrationPublic(q.holder.registration.id, q.holder.access_token);
+      await settledTo(q.waitEmail, 1);
+
+      const status = (await loadWithGroup(q.waiting.registration.id)).status;
+      const seated = dictionarySubject("nl", "registrationPromoted.confirmed", { divisionName: d.division.name });
+      const waits = dictionarySubject("nl", "registrationPromoted.noPayment", {});
+      expect(seated, "premise: the sentence names the division").toContain(d.division.name);
+      const mail = sentTo(q.waitEmail);
+      if (approval === "auto") {
+        expect(status, "premise: a free promotion on automatic approval seats the entry").toBe("confirmed");
+        expect(mail.text).toContain(seated);
+        expect(mail.text).not.toContain(waits);
+        expect(mail.html).toContain(seated);
+      } else {
+        expect(status, "premise: manual approval leaves the free promotion pending").toBe("pending");
+        expect(mail.text).toContain(waits);
+        expect(mail.text).not.toContain(seated);
+        expect(mail.html).not.toContain(seated);
+      }
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+});

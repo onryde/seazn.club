@@ -224,6 +224,7 @@
   "registrationPromoted.payNow": "Pagar ahora — {amount}",
   "registrationPromoted.contactOrganiser": "El organizador se pondrá en contacto contigo con los detalles del pago.",
   "registrationPromoted.noPayment": "No es necesario ningún pago — el organizador confirmará tu inscripción.",
+  "registrationPromoted.confirmed": "Ya estás dentro — tu plaza en {divisionName} está confirmada.",
   "registrationPromoted.reference": "Tu referencia es <strong>{refCode}</strong> — consulta tu estado en cualquier momento en {url}.",
   "registrationPromoted.footer": "Has recibido esto porque esta dirección se usó para inscribirse en {competitionName} en {orgName}.",
   "registrationPromoted.textIntro": "Has salido de la lista de espera de {competitionName} ({orgName}).",

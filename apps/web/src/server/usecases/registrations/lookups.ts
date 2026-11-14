@@ -72,6 +72,15 @@ export async function loadSettings(db: AnySql, divisionId: string): Promise<Regi
  *  compiling unchanged. */
 export { audit };
 
+/** A division's name, for a mail that names it. Refused by name when the division is gone (a mail about a division that does not
+ *  exist is a wiring fault, never a blank). Moved here from lifecycle-mail.ts (walk-fix F2): the promotion mail names the division
+ *  it seated an entry in, too. */
+export async function divisionNameOf(db: AnySql, divisionId: string): Promise<string> {
+  const [row] = await db<{ name: string }[]>`select name from divisions where id = ${divisionId}`;
+  if (!row) throw new Error(`lifecycle mail: division ${divisionId} not found`);
+  return row.name;
+}
+
 export async function divisionCtx(db: AnySql, divisionId: string): Promise<DivisionCtx> {
   const [row] = await db<DivisionCtx[]>`
     select d.id, d.competition_id, d.org_id, d.slug as div_slug,
