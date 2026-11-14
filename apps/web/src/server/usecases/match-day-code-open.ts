@@ -9,6 +9,7 @@ import { siteOrigin } from "@/lib/site-origin";
 import { assertUuid } from "@/server/api-v1/auth";
 import { CAPTURE_SCORING_LINK_URL_RE } from "@/server/api-v1/capture-schemas";
 import { provideSealedLink } from "./device-links";
+import { liveCallSql } from "./match-day-call";
 import { inScope, type ScopeFixture } from "./match-day-code-view";
 import { logMatchDayUse, type MatchDayCodeRow } from "./match-day-codes";
 
@@ -52,7 +53,9 @@ export async function openMatchForCode(
     async (tx): Promise<Opened> => {
       const [row] = await tx<OpenRow[]>`
         select d.competition_id, f.court_id, c.venue_id, f.status, f.scheduled_at, f.finished_at, d.sport_key,
-               s.status as stage_status, f.home_entrant_id, f.away_entrant_id, (d.archived_at is null) as division_live
+               s.status as stage_status, f.home_entrant_id, f.away_entrant_id, (d.archived_at is null) as division_live,
+               exists (select 1 from fixture_calls fc join fixtures g on g.id = fc.fixture_id
+                        where fc.fixture_id = f.id and ${liveCallSql(tx)}) as called
           from fixtures f
           join divisions d on d.id = f.division_id
           join stages s on s.id = f.stage_id

@@ -24,6 +24,7 @@ import {
   CaptureMatchdayCallPreview,
   CaptureMatchdayCallRefusal,
   CaptureMatchdayCandidates,
+  CaptureMatchdayDay,
   CaptureMatchdayUndoOk,
 } from "@/server/api-v1/capture-schemas";
 import { getMatchDay } from "../match-day";
@@ -491,6 +492,77 @@ describe.skipIf(!HAS_DB)("calling a match to a court through a Match Day code (T
       }
       expect(checked).toBe(8);
       expect(await callsOf(A)).toEqual([]);
+    });
+  });
+
+  describe("a call outlives its day (F-T8-15)", () => {
+    /** The moment A was called, the evening before the code's day: its `scheduled_at` is now 6 November. */
+    const EVENING = at(-14 * 60);
+
+    it("a match called onto a court in scope yesterday, not started, is that court's now today, with Undo for the code that called it", async () => {
+      const { code } = await codeFor(day, { kind: "courts", courtIds: [day.courts.c1, day.courts.c2] }, true);
+      await callForCode(code, A, day.courts.c2, EVENING);
+      const view = await getMatchDayForCode(code, NOW);
+      const court2 = view.courts.find((c) => c.court_id === day.courts.c2)!;
+      expect([court2.state, court2.now?.fixture_id, court2.now?.status]).toEqual(["called", A, "upcoming"]);
+      expect(CaptureMatchdayDay.safeParse(view).success).toBe(true);
+      // The code that made the call undoes it today: the match goes back to Court 1's 11:00 slot.
+      expect(await undoCallForCode(code, A)).toEqual({ fixture_id: A, court_id: day.courts.c1, scheduled_at: iso(60) });
+    });
+
+    it("a call onto a court out of the code's scope stays out of its list, and so does a match whose call ended by finishing", async () => {
+      const whole = (await codeFor(day, { kind: "competition" }, true)).code;
+      const narrow = (await codeFor(day, { kind: "courts", courtIds: [day.courts.c1, day.courts.c2] }, true)).code;
+      await callForCode(whole, A, day.courts.c3, EVENING);
+      const outOfScope = JSON.stringify(await getMatchDayForCode(narrow, NOW));
+      expect(outOfScope).not.toContain(A);
+      // B is called onto Court 2 yesterday, then finished yesterday: it is not called any more, and it is yesterday's match.
+      await callForCode(whole, B, day.courts.c2, EVENING);
+      await setStatus(B, "decided");
+      await sql`update fixtures set finished_at = ${EVENING.toISOString()} where id = ${B}`;
+      const view = await getMatchDayForCode(narrow, NOW);
+      expect(JSON.stringify(view)).not.toContain(B);
+      expect(view.courts.find((c) => c.court_id === day.courts.c2)!.now).toBeNull();
+    });
+
+    it("a call the desk made yesterday shows as called today and the code's Undo of it is refused not_code_call", async () => {
+      const { code } = await codeFor(day, { kind: "competition" }, true);
+      const { callFixtureToCourt } = await import("../match-day-call");
+      await callFixtureToCourt(day.auth, A, day.courts.c2, EVENING);
+      const view = await getMatchDayForCode(code, NOW);
+      expect(view.courts.find((c) => c.court_id === day.courts.c2)!.now?.fixture_id).toBe(A);
+      expect(await refusalOf(() => undoCallForCode(code, A))).toMatchObject({ status: 409, code: "MD_CALL_REFUSED", extra: { reason: "not_code_call" } });
+    });
+
+    it("a match called yesterday can still be opened by the code that lists it", async () => {
+      const { code } = await codeFor(day, { kind: "competition" }, true);
+      await callForCode(code, A, day.courts.c2, EVENING);
+      const { openMatchForCode } = await import("../match-day-code-open");
+      expect((await openMatchForCode(code, A, NOW)).kind).toBe("link");
+    });
+  });
+
+  describe("Next on, or queued on (F-T8-16)", () => {
+    it("the code's candidates say first_in_queue for a court's very next match only, never for this_court or a called one", async () => {
+      const solo = [await person(day.orgId, "Ida Iyer"), await person(day.orgId, "Jon Joy")];
+      const singles = await seedCompetition(day.auth, "Singles", solo.map((p) => [p]), {
+        courts: [day.courts.c1, day.courts.c2, day.courts.c3],
+        competitionId: day.comp.id,
+        division: "Singles",
+      });
+      // Court 1's queue: A (Doubles, 11:00), D (Doubles, 12:00), then the Singles match (13:00).
+      await place(day, singles.fixtures[0]!.id, 180, day.courts.c1);
+      const { code } = await codeFor(day, { kind: "competition" }, true);
+      const offered = await candidatesForCode(code, day.courts.c2, NOW);
+      const of = (id: string) => offered.candidates.find((c) => c.match.fixture_id === id);
+      expect(of(A)).toMatchObject({ source: "other_court", from_court_name: "Court 1", first_in_queue: true });
+      expect(of(singles.fixtures[0]!.id)).toMatchObject({ source: "other_court", from_court_name: "Court 1", first_in_queue: false });
+      expect(offered.candidates.filter((c) => c.source !== "other_court").map((c) => c.first_in_queue)).not.toContain(true);
+      expect(CaptureMatchdayCandidates.safeParse(offered).success).toBe(true);
+      // Called onto Court 3: a called match is never "first in queue".
+      await callForCode(code, A, day.courts.c3, NOW);
+      const after = await candidatesForCode(code, day.courts.c2, NOW);
+      expect(after.candidates.find((c) => c.match.fixture_id === A)).toMatchObject({ called: true, first_in_queue: false });
     });
   });
 });

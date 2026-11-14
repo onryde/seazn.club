@@ -57,13 +57,13 @@ const SHA256: Record<string, string> = {
   "capture-record.v1.json": "213f766043b7682f198cc98da13e93995b6602e46533ecf60c78bf562aebd6f8",
   // MD-1 Task 3 (capture S4 Match Day design §5, §9.3): a Match Day code's day read.
   // Task 8e (2026-11-13): + can_call, additive.
-  "capture-matchday-day.v1.json": "44b5fd9ae752df510a1c3a1eb464d05678ed726a6f9b84cce5b0a4a1aa166c4e",
+  "capture-matchday-day.v1.json": "283a252050a42618752803baead43e18df6822a9e23588f80e04e5ebecd46332",
   // MD-1 Task 4 (capture S4 Match Day design §6, §9.4): a Match Day code's open.
   "capture-matchday-open.v1.json": "760028bf99e5cf74ee033f5613fa43477677cef318ecdf739c0b62e2fc21c0c0",
   // MD-1 Task 6 (capture S4 Match Day design §7, §9.5): a Match Day code's approval review, its approve and its answers.
   "capture-matchday-approval.v1.json": "279ff1488a1108b3667f9e2f11f559579382f83b238d91da65440c810189f69c",
   // Task 8e (owner 2026-11-13): a Match Day code calls a match to a court — the candidates, the preview, the call, the Undo.
-  "capture-matchday-call.v1.json": "208749ecae47072ea17fbfa8fb4c4b84de49aa2831bc817aa0a9af79d2dc003b",
+  "capture-matchday-call.v1.json": "91cd75948e7bf55c329aa232af29fa52408870ce3d3873ce3708114c51dc2286",
 };
 
 // ---------------------------------------------------------------------------------------------------------------

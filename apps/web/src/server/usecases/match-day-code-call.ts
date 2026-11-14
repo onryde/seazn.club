@@ -35,7 +35,7 @@ import type {
 } from "@/server/api-v1/capture-schemas";
 import { log } from "@/server/logger";
 import { candidatesIn } from "./match-day";
-import { callFixtureAs, previewCallAs, undoCallAs, type CallCaller, type CallGuard } from "./match-day-call";
+import { callFixtureAs, liveCallSql, previewCallAs, undoCallAs, type CallCaller, type CallGuard } from "./match-day-call";
 import { codeRowViews, inScope, scopeFixtureOf, type ScopeFixture } from "./match-day-code-view";
 import { logMatchDayUse, type MatchDayCodeRow } from "./match-day-codes";
 
@@ -66,7 +66,9 @@ async function courtInScope(tx: Tx, code: MatchDayCodeRow, courtId: string): Pro
 async function matchInScope(tx: Tx, code: MatchDayCodeRow, fixtureId: string): Promise<void> {
   const [row] = await tx<ScopeFixture[]>`
     select d.competition_id, f.court_id, c.venue_id, f.status, f.scheduled_at, f.finished_at, s.status as stage_status,
-           f.home_entrant_id, f.away_entrant_id, (d.archived_at is null) as division_live
+           f.home_entrant_id, f.away_entrant_id, (d.archived_at is null) as division_live,
+           exists (select 1 from fixture_calls fc join fixtures g on g.id = fc.fixture_id
+                    where fc.fixture_id = f.id and ${liveCallSql(tx)}) as called
       from fixtures f
       join divisions d on d.id = f.division_id
       join stages s on s.id = f.stage_id
@@ -188,6 +190,7 @@ export async function candidatesForCode(code: MatchDayCodeRow, courtId: string, 
         source: c.source,
         from_court_name: c.from_court_name,
         called: c.source === "other_court" && c.fixture.called_at !== null,
+        first_in_queue: c.first_in_queue,
         planned_at: c.planned_at,
         waiting_minutes: c.waiting_minutes,
         behind_minutes: c.behind_minutes,

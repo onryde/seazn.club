@@ -174,6 +174,7 @@ const cand = (o: Partial<MatchDayCandidate> = {}, f: Partial<MatchDayFixture> = 
   fixture: fx({ id: "x-1", home: "Anya Das", away: "Rhea Gill", headline: null, started_at: null, ...f }),
   source: "other_court",
   from_court_name: "Court 1",
+  first_in_queue: true,
   waiting_minutes: 15,
   behind_minutes: 0,
   planned_at: null,
@@ -516,6 +517,13 @@ describe("candidates", () => {
     it("a match waiting on another court leads with its planned time, then where and how late", () => {
       expect(whereOf(cand({ planned_at: PLANNED, behind_minutes: 25, waiting_minutes: 0 }))).toBe("18:00 · Next on Court 1 · 25 min behind");
       expect(whereOf(cand({ planned_at: PLANNED, waiting_minutes: 15 }))).toBe("18:00 · Next on Court 1 · in ~15 min");
+    });
+
+    it("a match later in another court's queue says Queued on, the court's very next says Next on (F-T8-16)", () => {
+      expect(whereOf(cand({ first_in_queue: true, planned_at: PLANNED }))).toBe(`18:00 · ${t(dict, "matchDay.candidate.where.nextOn", { court: "Court 1" })} · in ~15 min`);
+      const later = whereOf(cand({ first_in_queue: false, planned_at: PLANNED }));
+      expect(later).toBe(`18:00 · ${t(dict, "matchDay.candidate.where.queuedOn", { court: "Court 1" })} · in ~15 min`);
+      expect(later).toBe("18:00 · Queued on Court 1 · in ~15 min");
     });
 
     it("this court's own next match leads with its planned time too", () => {
