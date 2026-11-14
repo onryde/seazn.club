@@ -151,6 +151,18 @@ describe("the rotation - the dial opens AT the stored value (D12)", () => {
     expect(msg("sponsors.onStream.freqHint.busy")).not.toBe(msg("sponsors.onStream.freqHint.normal"));
   });
 
+  it("Light's and Busy's hints say what they cost, in every locale (owner 2026-11-14: Light hid over ends with no word why)", async () => {
+    const { readFileSync } = await import("node:fs");
+    let checked = 0;
+    for (const l of ["en", "es", "fr", "nl"]) {
+      const d = JSON.parse(readFileSync(`src/dictionaries/${l}/ui.json`, "utf8")) as Record<string, string>;
+      expect(d["sponsors.onStream.freqHint.light"], `${l} light names a small break that shows nothing`).toMatch(/\bover\b/i);
+      expect(d["sponsors.onStream.freqHint.busy"], `${l} busy states the 90 s spacing`).toMatch(/\b90\b/);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
   it("the switch reflects the rotation: on when enabled, off with no row or a disabled one - and says why", () => {
     expect(mount({ settings: { enabled: true, frequency: "normal" } }).checked("on-stream-switch")).toBe(true);
     const none = mount({ settings: null, ownRow: false });
