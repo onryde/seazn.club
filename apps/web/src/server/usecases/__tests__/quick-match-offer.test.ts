@@ -18,9 +18,20 @@ import { sql } from "@/lib/db";
 import { withSchemaDefaults } from "@/server/engine-db/fixture-cfg";
 import { resolveModule } from "@/server/engine-db/registry";
 import { listQuickMatchSports, offerFor, type QuickMatchOfferJson } from "../quick-match-sports";
-import { bracketMayEndLevel, stageDefaultsFor } from "@seazn/engine/sport";
+import { isCoreEventType } from "@seazn/engine/core";
+import { bracketMayEndLevel, stageDefaultsFor, type AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
-import { decidingPrefix, probeVariantsOf, runQuickMatchProbe, walkableVariants } from "./_quick-match-probe";
+import { buildWalk, makeEnvelope, onePlayEvent } from "@seazn/engine/testkit";
+import { QUICK_MATCH_BAND_CAPPED_SPORTS, quickMatchBandCeiling } from "@/lib/quick-match-pad";
+import {
+  decidingPrefix,
+  PROBE_REDRAWS,
+  PROBE_SEEDS,
+  probeVariantsOf,
+  quickMatchWalkModule,
+  runQuickMatchProbe,
+  walkableVariants,
+} from "./_quick-match-probe";
 import { seedFootballCatalog } from "./_seed";
 
 const KEK = kekBytes(32).toString("hex");
@@ -68,10 +79,12 @@ describe.skipIf(!HAS_DB || WRITING)("quick match offer", () => {
     expect(run.offer.excluded).toEqual(committed.excluded);
   }, 30 * 60_000);   // hundreds of creates (D3: "cost: slower DB suite"); AGENTS.md class 20
 
-  it("cricket is excluded and badminton, table tennis and tennis are offered (spec §9)", () => {
-    // C11 with the controller's ruling (2026-11-07): cricket is a lineup sport, excluded by name with its reason code.
-    expect(committed.excluded.some((e) => e.sport_key === "cricket" && e.code === "QUICK_MATCH_LINEUP_SPORT")).toBe(true);
-    expect(committed.offered.filter((o) => o.sport_key === "cricket")).toEqual([]);
+  it("cricket, badminton, table tennis and tennis are offered (spec §9; C11 as amended, decision log 2026-11-13)", () => {
+    // Cricket is scored at bands 0–1 (no named player), proven by the probe at those bands, and refused a knockout.
+    expect(committed.excluded.filter((e) => e.sport_key === "cricket"), "no cricket variant excluded").toEqual([]);
+    const cricketOffered = committed.offered.filter((o) => o.sport_key === "cricket");
+    expect(cricketOffered.length, "anti-vacuity: cricket variants offered").toBeGreaterThan(0);
+    for (const o of cricketOffered) expect(o.knockoutAllowed, `${o.variant_key}: League only`).toBe(false);
     for (const k of ["badminton", "tabletennis", "tennis"]) expect(committed.offered.some((o) => o.sport_key === k), k).toBe(true);
   });
 
@@ -87,9 +100,22 @@ describe.skipIf(!HAS_DB || WRITING)("quick match offer", () => {
       from sport_variants v join sports s on s.key = v.sport_key
       where v.is_system and v.org_id is null order by v.sport_key, v.key`;
     const declared = new Map<string, boolean>();
+    let capped = 0;
     for (const r of rows) {
       const mod = resolveModule(r.sport_key, r.module_version);
-      const knockoutCfg = { ...(withSchemaDefaults(mod, r.config) as object), ...stageDefaultsFor(mod, "knockout", r.key) };
+      // A band-capped quick match sport (cricket, bands 0–1) plays its knockout WITHOUT the stage's preset deciders: the
+      // preset is the super over, every ball of which names a batter and a bowler (the engine's band 3), so the guest's
+      // pad could never record it. The premise is asked of the engine's own declarations, not typed.
+      const spec = QUICK_MATCH_BAND_CAPPED_SPORTS.has(r.sport_key) ? mod.padSpec?.(mod.configSchema.parse(r.config) as never) : undefined;
+      const ceiling = spec ? quickMatchBandCeiling(r.sport_key, spec) : null;
+      const preset = stageDefaultsFor(mod, "knockout", r.key);
+      if (ceiling !== null) {
+        capped++;
+        if ((preset as { superOver?: unknown }).superOver === true) {
+          expect(spec!.fidelity["cricket.superover.ball"], `premise: ${r.sport_key}/${r.key}'s super over is above the ceiling`).toBeGreaterThan(ceiling);
+        }
+      }
+      const knockoutCfg = { ...(withSchemaDefaults(mod, r.config) as object), ...(ceiling === null ? preset : {}) };
       const expected = !bracketMayEndLevel(mod, "knockout", knockoutCfg);
       expect((await offerFor(r.sport_key, r.key)).knockoutAllowed, `${r.sport_key}/${r.key}`).toBe(expected);
       declared.set(`${r.sport_key}/${r.key}`, expected);
@@ -104,11 +130,12 @@ describe.skipIf(!HAS_DB || WRITING)("quick match offer", () => {
         listed++;
       }
     }
-    console.info(`knockout offer checked ${checked} variants, ${listed} of them listed`);
+    console.info(`knockout offer checked ${checked} variants (${capped} band-capped), ${listed} of them listed`);
     expect(checked).toBeGreaterThan(0);
+    expect(capped, "anti-vacuity: the capped composition was asked").toBeGreaterThan(0);
     expect(listed).toBe(committed.offered.length);   // every offered variant is listed, none dropped for want of a label (M4)
-    // Both directions across the catalog (D8). On engine 3.0.2 the only `false` is cricket/test (pinned below), which
-    // C11 excludes; among the OFFERED variants the count of refusals is the committed JSON's own (0 on 3.0.2).
+    // Both directions across the catalog (D8). The `false`s are cricket's (every variant: no super over at bands 0–1, and
+    // a Test can end drawn anyway); among the OFFERED variants the count of refusals is the committed JSON's own.
     expect(seen).toEqual(new Set([true, false]));
     const offeredRefusals = committed.offered.filter((o) => !declared.get(`${o.sport_key}/${o.variant_key}`)).length;
     expect(offeredRefusals).toBe(committed.offered.filter((o) => !o.knockoutAllowed).length);
@@ -132,8 +159,28 @@ describe.skipIf(!HAS_DB || WRITING)("quick match offer", () => {
     for (const x of badminton.variants) expect(x.knockoutAllowed, x.variant_key).toBe(true);
   });
 
-  it("cricket/test is refused a knockout: a Test can end drawn even under its knockout preset (C23; excluded anyway by C11)", async () => {
+  it("cricket/test is refused a knockout: a Test can end drawn even under its knockout preset (C23)", async () => {
     expect((await offerFor("cricket", "test")).knockoutAllowed).toBe(false);
+  });
+
+  it("every cricket variant is refused a knockout in a quick match, though its organiser knockout preset decides a tie", async () => {
+    // Decision log 2026-11-13: League only. The organiser's knockout of a limited-overs variant ends with a winner (its
+    // preset super over); the guest's pad stops at band 1, so a quick match knockout could end tied with nobody to settle.
+    const [sport] = await sql<{ module_version: string }[]>`select module_version from sports where key = 'cricket'`;
+    const mod = resolveModule("cricket", sport!.module_version);
+    let checked = 0;
+    let organiserDecides = 0;
+    for (const v of Object.keys(mod.variants)) {
+      const [row] = await sql<{ config: unknown }[]>`
+        select config from sport_variants where sport_key = 'cricket' and key = ${v} and is_system and org_id is null`;
+      expect((await offerFor("cricket", v)).knockoutAllowed, v).toBe(false);
+      const organiserKnockout = { ...(withSchemaDefaults(mod, row!.config) as object), ...stageDefaultsFor(mod, "knockout", v) };
+      if (!bracketMayEndLevel(mod, "knockout", organiserKnockout)) organiserDecides++;
+      checked++;
+    }
+    expect(checked, "anti-vacuity: cricket variants").toBe(Object.keys(mod.variants).length);
+    // The witness: without the cap, these would be offered (the cap, not the engine, refuses them).
+    expect(organiserDecides, "premise: some organiser cricket knockout ends with a winner").toBeGreaterThan(0);
   });
 
   it("generic is excluded by the probe and never listed (B6e)", async () => {
@@ -218,5 +265,82 @@ describe("decidingPrefix keeps why the walk gave up (review M5)", () => {
     expect(errors.length).toBeGreaterThan(0);   // zero kept is the bare catch this replaces
     expect(errors.every((e) => e.includes("no eligible players for this walk"))).toBe(true);
     expect(errors[0]).toMatch(/^seed 1: /);
+  });
+});
+
+describe("quickMatchWalkModule: the probe walks a band-capped sport as the guest's pad drives it (decision log 2026-11-13)", () => {
+  // Pure: no database. Bands come from the engine's own map (`padSpec().fidelity`), the ceiling from the pad's own rule.
+  const NAMELESS = { home: { entrantId: "H", slots: [] }, away: { entrantId: "A", slots: [] } };
+  const cricket = builtinModules.find((m) => m.key === "cricket")!;
+  const cfgOf = (mod: AnySportModule, variant: string) =>
+    mod.configSchema.parse((mod.variants as Record<string, unknown>)[variant]);
+
+  it("an uncapped sport, and a capped sport with no generator, walk as the module itself", () => {
+    let checked = 0;
+    for (const mod of builtinModules as readonly AnySportModule[]) {
+      if (QUICK_MATCH_BAND_CAPPED_SPORTS.has(mod.key)) continue;
+      for (const v of Object.keys(mod.variants)) {
+        expect(quickMatchWalkModule(mod, cfgOf(mod, v)), `${mod.key}/${v}`).toBe(mod);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: uncapped sport×variants").toBeGreaterThan(0);
+    const noGenerator = { ...cricket, arbitraryEvent: undefined } as AnySportModule;
+    expect(quickMatchWalkModule(noGenerator, cfgOf(cricket, "t20"))).toBe(noGenerator);
+  });
+
+  it("cricket decides on every variant through events at or below its quick match ceiling only", () => {
+    let variants = 0;
+    let sportEvents = 0;
+    for (const v of Object.keys(cricket.variants)) {
+      const cfg = cfgOf(cricket, v);
+      const spec = cricket.padSpec!(cfg as never);
+      const ceiling = quickMatchBandCeiling("cricket", spec)!;
+      expect(ceiling, `premise: ${v} is capped`).not.toBeNull();
+      const walk = quickMatchWalkModule(cricket, cfg);
+      expect(walk, `${v}: wrapped`).not.toBe(cricket);
+      const prefix = decidingPrefix(walk, cfg, NAMELESS);
+      expect(prefix, `${v}: a seed decides`).not.toBeNull();
+      for (const e of prefix!) {
+        if (isCoreEventType(e.type)) continue;
+        expect(spec.fidelity[e.type], `${v}: ${e.type} is in the engine's band map`).toBeDefined();
+        expect(spec.fidelity[e.type]!, `${v}: ${e.type}`).toBeLessThanOrEqual(ceiling);
+        sportEvents++;
+      }
+      // The play event the sweeps score after a Start is within the ceiling too (firstRallyFor's own draw).
+      const play = onePlayEvent(walk, cfg, NAMELESS, [makeEnvelope(0, { type: "core.start", payload: {} })]);
+      expect(play, `${v}: a play event after the Start`).not.toBeNull();
+      expect(spec.fidelity[play!.type]!, `${v}: ${play!.type}`).toBeLessThanOrEqual(ceiling);
+      variants++;
+    }
+    expect(variants, "anti-vacuity: cricket variants walked").toBe(Object.keys(cricket.variants).length);
+    expect(sportEvents, "anti-vacuity: sport events checked").toBeGreaterThan(0);
+  });
+
+  it("witness: the unwrapped generator draws above the ceiling (a ball or a player line) or throws, so the wrapper is load-bearing", () => {
+    const cfg = cfgOf(cricket, "t20");
+    const spec = cricket.padSpec!(cfg as never);
+    const ceiling = quickMatchBandCeiling("cricket", spec)!;
+    let above = 0;
+    let thrown = 0;
+    for (let seed = 1; seed <= PROBE_SEEDS; seed++) {
+      try {
+        const walk = buildWalk(cricket as never, cfg as never, NAMELESS, seed, 200);
+        above += walk.events.filter((e) => !isCoreEventType(e.type) && (spec.fidelity[e.type] ?? 0) > ceiling).length;
+      } catch {
+        thrown++;
+      }
+    }
+    expect(above + thrown).toBeGreaterThan(0);
+  });
+
+  it("the redraw budget: a generator that only draws above the ceiling, or only throws, answers null after PROBE_REDRAWS tries", () => {
+    const cfg = cfgOf(cricket, "t20");
+    for (const draw of [() => ({ type: "cricket.ball", payload: {} }), () => { throw new Error("ran out of eligible players"); }]) {
+      let calls = 0;
+      const stub = { ...cricket, arbitraryEvent: () => { calls++; return draw(); } } as unknown as AnySportModule;
+      expect(quickMatchWalkModule(stub, cfg).arbitraryEvent!(cricket.init(cfg as never, NAMELESS) as never, () => 0.5)).toBeNull();
+      expect(calls).toBe(PROBE_REDRAWS);
+    }
   });
 });

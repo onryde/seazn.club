@@ -14,7 +14,7 @@
 // Review m1 (controller ruling 2026-11-13): the words are decided per FIXTURE. When either side is called by its name,
 // BOTH are, so an organiser's fixture between a rostered team and a name-only one never reads "Goal / Home" beside
 // "Goal / Riverside FC". Driven over the same sweep in both orientations; and every engine sport a quick match does NOT
-// offer (cricket's squad labels among them) is rendered with rostered sides to show its pad keeps the side words.
+// offer is rendered with rostered sides to show its pad keeps the side words.
 import { describe, expect, it } from "vitest";
 import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -98,7 +98,24 @@ function render(sportKey: string, rostered: boolean | Record<Side, boolean>): st
 const wholeTexts = (html: string): string[] =>
   [...html.matchAll(/>([^<>]+)</g)].map((m) => m[1]!.replace(/&amp;/g, "&").trim()).filter((s) => s.length > 0);
 
+/** The offered sports whose pad says NO side word even with rostered sides (the control's own render): there is no word
+ *  for a name to stand in. Cricket (offered since 2026-11-14): its scorebug reads "Batting" and "Overs", never a side, and
+ *  the striker/bowler pickers name players. Read off the render, never typed; the pin below says which sport it is today. */
+const WORDLESS = QM_SPORTS.filter((k) => {
+  const texts = wholeTexts(render(k, true));
+  return !SIDES.some((s) => texts.includes(WORD[s]));
+});
+
 describe("a name-only side is called by its name on the pad, in every sport a quick match offers", () => {
+  it("the sports whose pad says no side word at all: cricket, today (its scorebug names no side; a follow-up)", () => {
+    expect(WORDLESS).toEqual(["cricket"]);
+    // Nor does its name-only pad: no word, and no name standing where none stood.
+    for (const k of WORDLESS) {
+      const texts = wholeTexts(render(k, false));
+      for (const s of SIDES) expect(texts.includes(WORD[s]) || texts.includes(NAMES[s]), `${k} ${s}`).toBe(false);
+    }
+  });
+
   it("no element reads Home or Away, and each side's name is on the pad", () => {
     expect(QM_SPORTS.length, "anti-vacuity: the offer lists sports").toBeGreaterThan(0);
     let checked = 0;
@@ -107,18 +124,20 @@ describe("a name-only side is called by its name on the pad, in every sport a qu
       const texts = wholeTexts(render(sportKey, false));
       for (const s of SIDES) {
         if (texts.includes(WORD[s])) faults.push(`${sportKey}: an element reads "${WORD[s]}"`);
+        if (WORDLESS.includes(sportKey)) continue;   // no word to stand in for (pinned above)
         if (!texts.some((x) => x === NAMES[s] || x.includes(NAMES[s]))) faults.push(`${sportKey}: "${NAMES[s]}" is nowhere`);
         checked++;
       }
     }
     expect(faults.join("\n")).toBe("");
-    expect(checked).toBe(QM_SPORTS.length * 2);
+    expect(checked).toBe((QM_SPORTS.length - WORDLESS.length) * 2);
   });
 
   it("the control: rostered sides keep the side words, in every one of those sports", () => {
     let checked = 0;
     const faults: string[] = [];
     for (const sportKey of QM_SPORTS) {
+      if (WORDLESS.includes(sportKey)) continue;   // says no side word (pinned above)
       const texts = wholeTexts(render(sportKey, true));
       for (const s of SIDES) {
         // The side word stays where it stood, and the entrant's name is not put in its place.
@@ -128,7 +147,7 @@ describe("a name-only side is called by its name on the pad, in every sport a qu
       }
     }
     expect(faults.join("\n")).toBe("");
-    expect(checked).toBe(QM_SPORTS.length * 2);
+    expect(checked).toBe((QM_SPORTS.length - WORDLESS.length) * 2);
   });
 });
 
@@ -138,6 +157,7 @@ describe("one side rostered, the other name-only: BOTH sides are called by name 
     let checked = 0;
     const faults: string[] = [];
     for (const sportKey of QM_SPORTS) {
+      if (WORDLESS.includes(sportKey)) continue;   // says no side word (pinned above)
       for (const rostered of [{ home: true, away: false }, { home: false, away: true }]) {
         const texts = wholeTexts(render(sportKey, rostered));
         const which = `${sportKey} (${rostered.home ? "home" : "away"} rostered)`;
@@ -149,7 +169,7 @@ describe("one side rostered, the other name-only: BOTH sides are called by name 
       }
     }
     expect(faults.join("\n")).toBe("");
-    expect(checked).toBe(QM_SPORTS.length * 2 * 2);
+    expect(checked).toBe((QM_SPORTS.length - WORDLESS.length) * 2 * 2);
   });
 });
 
@@ -158,7 +178,7 @@ describe("an organiser's sport a quick match does not offer, both sides rostered
   const OTHER_SPORTS = builtinModules.map((m) => m.key).filter((k) => !QM_SPORTS.includes(k));
 
   it("no entrant name stands in a side word's place, and where the pad says a side word it is still Home/Away", () => {
-    expect(OTHER_SPORTS, "anti-vacuity: the engine registers sports a quick match does not offer").toContain("cricket");
+    expect(OTHER_SPORTS.length, "anti-vacuity: the engine registers sports a quick match does not offer").toBeGreaterThan(0);
     let checked = 0;
     let saysWords = 0;
     const faults: string[] = [];

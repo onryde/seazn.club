@@ -310,9 +310,11 @@ describe("cutRowOf: the stored standings row, read", () => {
 // ---------------------------------------------------------------------------------------------------------------------
 
 interface OfferJson {
-  offered: { sport_key: string; variant_key: string }[];
+  offered: { sport_key: string; variant_key: string; knockoutAllowed: boolean }[];
 }
-const OFFERED = (offerJson as OfferJson).offered;
+/** The cut is League + Knockout's, so only a variant offered a knockout reaches it. Cricket is offered League only (C11 as
+ *  amended 2026-11-14), so it is in the offer and never at a cut. */
+const OFFERED = (offerJson as OfferJson).offered.filter((o) => o.knockoutAllowed);
 const OFFERED_SPORTS = [...new Set(OFFERED.map((o) => o.sport_key))];
 
 function moduleOf(sportKey: string): AnySportModule {
@@ -344,11 +346,11 @@ describe("cutTiebreakers: the sport's default with no seed step, ending in the l
   });
 
   it("every offered variant: the default ends in the lot, every variant of a sport shares one list, only tennis and ice hockey list the seed, and the cut's order is the default less every seed step, an order the engine accepts", () => {
-    expect(OFFERED_SPORTS, "the offer's sports (deduped)").toHaveLength(9);
+    expect(OFFERED_SPORTS, "the sports offered a knockout (deduped)").toHaveLength(9);
     // The count this sweep owes, from the engine: every variant the offered sports DECLARE. The probe offers each of
     // them today, so a variant the engine adds, or one the probe stops offering, moves this.
     const declaredVariants = OFFERED_SPORTS.reduce((n, k) => n + Object.keys(moduleOf(k).variants).length, 0);
-    expect(OFFERED, "every declared variant of the offered sports is offered").toHaveLength(declaredVariants);
+    expect(OFFERED, "every declared variant of those sports is offered a knockout").toHaveLength(declaredVariants);
     const withSeed = new Set<string>();
     const listsBySport = new Map<string, Set<string>>();
     let checked = 0;

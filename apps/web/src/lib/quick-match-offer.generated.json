@@ -1,6 +1,6 @@
 {
   "engine": "9.0.0",
-  "generatedAt": "2026-11-13T10:53:22.758Z",
+  "generatedAt": "2026-11-14T14:14:48.613Z",
   "offered": [
     {
       "sport_key": "football",
@@ -21,6 +21,26 @@
       "sport_key": "football",
       "variant_key": "youth",
       "knockoutAllowed": true
+    },
+    {
+      "sport_key": "cricket",
+      "variant_key": "hundred",
+      "knockoutAllowed": false
+    },
+    {
+      "sport_key": "cricket",
+      "variant_key": "odi",
+      "knockoutAllowed": false
+    },
+    {
+      "sport_key": "cricket",
+      "variant_key": "t20",
+      "knockoutAllowed": false
+    },
+    {
+      "sport_key": "cricket",
+      "variant_key": "test",
+      "knockoutAllowed": false
     },
     {
       "sport_key": "boardgame",
@@ -139,26 +159,6 @@
     }
   ],
   "excluded": [
-    {
-      "sport_key": "cricket",
-      "variant_key": "hundred",
-      "code": "QUICK_MATCH_LINEUP_SPORT"
-    },
-    {
-      "sport_key": "cricket",
-      "variant_key": "odi",
-      "code": "QUICK_MATCH_LINEUP_SPORT"
-    },
-    {
-      "sport_key": "cricket",
-      "variant_key": "t20",
-      "code": "QUICK_MATCH_LINEUP_SPORT"
-    },
-    {
-      "sport_key": "cricket",
-      "variant_key": "test",
-      "code": "QUICK_MATCH_LINEUP_SPORT"
-    },
     {
       "sport_key": "generic",
       "variant_key": "score",
