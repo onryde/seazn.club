@@ -285,8 +285,8 @@ export function heldStart(answer: unknown): HeldStart | null {
 }
 
 /** A send's body: once a start has answered, every resend carries its pair (`previousReference` + `replaceKey`), so the
- *  draft it wrote is replaced although the address changed (Change email) and the reference stays. Where the address did
- *  not change, the route's own same-address replace lands on the same draft: the pair is redundant there, never wrong. */
+ *  draft it wrote is replaced by its key — although the address changed (Change email) — and the reference in the inbox
+ *  stays. Sent whether or not the address changed: the key is what keeps the reference, not the address. */
 export function sendBody(body: Record<string, unknown>, held: HeldStart | null): Record<string, unknown> {
   return held === null ? body : { ...body, previousReference: held.reference, replaceKey: held.replaceKey };
 }
