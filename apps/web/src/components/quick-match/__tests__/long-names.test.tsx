@@ -8,6 +8,11 @@
 //   3. The Full table capped the name at 10rem even at 1280. The cap stays on a phone (the table scrolls sideways there);
 //      from md the name takes the room the numbers leave, never less than 10rem.
 //   4. A league row still to play broke a long name mid-word beside its Score and ⋯. A named seat now truncates.
+//   5. Every other name the home sets large at a fixed size (review m3): a plain League's or Knockout's winner, the page's
+//      title, the hero's two sides and the tie's title. Each now fits its longest run the way the champion's does.
+//
+// A run is counted in characters as a reader sees them (review m1): an accent typed as a combining mark and an emoji with a
+// skin tone are one character each, where a code-point or a UTF-16 count reads them as two or more.
 //
 // `apps/web` vitest has no DOM, so what is pinned here is the WIRING the browser needs (the classes, the custom property,
 // that the arbitrary values compile to real CSS); the sign-off capture measured the rendering at 320, 768 and 1280.
@@ -18,7 +23,7 @@
 import { isValidElement, type ReactElement, type ReactNode } from "react";
 import { describe, expect, it } from "vitest";
 import { compileClasses } from "@/components/v2/__tests__/_compiled-css";
-import { championCard } from "../home";
+import { championCard, cutCard, heroCard, titleBlock, winnerCard, type QuickMatchCopy } from "../home";
 import { QuickMatchDraw, type DrawCard, type DrawSeat } from "../draw";
 import { QuickMatchList, type MatchView, type SeatView } from "../match-list";
 import { QuickMatchFullTable, type StandingsView } from "../standings";
@@ -73,7 +78,7 @@ describe("the longest run a line cannot break inside (CSS line breaking: at a sp
       ["Ines Duarte", 6],
       ["Jean-Luc Picard", 6], // Jean- 5 · Luc 3 · Picard 6
       ["  Oskar   Lind ", 5], // runs of spaces are one break
-      ["Chloé Martin", 6], // é is one character, not two
+      ["Chloé Martin", 6], // Chloé 5 (é precomposed, one code point) · Martin 6
       ["Featherstonehaugh", 17], // no hyphen: the whole word
     ];
     let checked = 0;
@@ -82,6 +87,29 @@ describe("the longest run a line cannot break inside (CSS line breaking: at a sp
       checked++;
     }
     expect(checked, "names checked").toBe(7);
+  });
+
+  it("a run counts characters as people see them: a combining accent and an emoji's skin tone add none", () => {
+    // Built from code points here, so no editor or tool composes them on the way: “Renée” with its é typed as e + U+0301,
+    // and “Ana👍🏽” (thumbs up, then a skin-tone modifier, both outside the BMP).
+    const RENEE = `Rene${String.fromCodePoint(0x0301)}e`;
+    const ANA = `Ana${String.fromCodePoint(0x1f44d, 0x1f3fd)}`;
+    // The witnesses that the inputs are what they claim: each is longer in code points AND in UTF-16 units than the
+    // characters a reader counts (5 and 4), so a count by either unit fails every case below.
+    expect([[...RENEE].length, RENEE.length], "Renée: code points, UTF-16 units").toEqual([6, 6]);
+    expect([[...ANA].length, ANA.length], "Ana👍🏽: code points, UTF-16 units").toEqual([5, 7]);
+    const cases: [string, number][] = [
+      [`${RENEE} Lam`, 5], // Renée 5 · Lam 3
+      [`Li ${ANA}`, 4], // Li 2 · Ana👍🏽 4
+      [`${RENEE}-${ANA} Bo`, 6], // Renée- 6 · Ana👍🏽 4 · Bo 2
+    ];
+    let checked = 0;
+    for (const [name, run] of cases) {
+      // Soft: a wrong unit reports every case it miscounts, the emoji's as well as the accent's.
+      expect.soft(longestUnbreakableRun(name), JSON.stringify(name)).toBe(run);
+      checked++;
+    }
+    expect(checked, "names checked").toBe(3);
   });
 
   it("the champion card is a size container and its name carries its run (a long name and a short one)", () => {
@@ -281,15 +309,127 @@ describe("the Full table's side column: capped on a phone, the room the numbers 
   });
 });
 
+// ── 5. every other name set large on the home ────────────────────────────────────────────────────────────────────────
+
+// Each keeps the size it had as its ceiling (1.75rem, 1.6rem; the title's 2.25rem from lg) and the champion's floor.
+const FIT_175 = "text-[length:clamp(1.25rem,calc(100cqi/var(--qm-name-run)/0.55),1.75rem)]";
+const FIT_16 = "text-[length:clamp(1.25rem,calc(100cqi/var(--qm-name-run)/0.55),1.6rem)]";
+const FIT_LG = "lg:text-[length:clamp(1.25rem,calc(100cqi/var(--qm-name-run)/0.55),2.25rem)]";
+const MATCH_NAME = "Wednesday Night Featherstonehaugh-Bray Invitational";
+const TIE_LONG = `Tie for 2nd: Ines Duarte and ${LONG}`;
+const TIE_MANY = "Tie for 1st: 3 sides, 2 places";
+/** Counted by hand (a break at a space and after a hyphen), never read back from the helper. */
+const RUN = new Map<string, number>([
+  [LONG, 18], // Featherstonehaugh-
+  ["Priya Raman", 5],
+  ["Ines Duarte", 6], // Duarte
+  [MATCH_NAME, 18], // Wednesday 9 · Night 5 · Featherstonehaugh- 18 · Bray 4 · Invitational 12
+  ["Club night", 5],
+  [TIE_LONG, 18], // Tie 3 · for 3 · 2nd: 4 · Ines 4 · Duarte 6 · and 3 · then the long name's 18
+  [TIE_MANY, 6], // Tie 3 · for 3 · 1st: 4 · 3 1 · sides, 6 · 2 1 · places 6
+]);
+
+/** The name `el` fits its run inside `container`: the container is the size container its cqi reads, the fit replaces the
+ *  old fixed size (both on one element, whichever Tailwind sorts last would win), overflow-wrap stays as the last resort,
+ *  and the element carries its own run. */
+function expectFitted(container: El, el: El, fits: string[], gone: string[]) {
+  const name = textOf(el);
+  const run = RUN.get(name);
+  expect(run, `${name}: a hand count`).toBeDefined();
+  expect(tokens(container), `${name}: the size container`).toContain("@container");
+  expect(tokens(el), name).toEqual(expect.arrayContaining([...fits, "[overflow-wrap:anywhere]"]));
+  for (const old of gone) expect(tokens(el), `${name}: the fixed ${old} is gone`).not.toContain(old);
+  expect((el.props.style as Record<string, unknown> | undefined)?.["--qm-name-run"], name).toBe(run);
+}
+/** Every element in `tree` that carries a run: only the names, never the words between them. */
+const runCarriers = (tree: ReactNode) =>
+  all(tree, (el) => (el.props.style as Record<string, unknown> | undefined)?.["--qm-name-run"] !== undefined);
+const tStub = ((key: string) => key) as unknown as QuickMatchCopy["t"];
+
+describe("every other name the home sets large fits its longest run (a plain winner, the title, the hero, the tie)", () => {
+  it("a League's or Knockout's winner, alone and as co-leaders: each name its own run, in a card that is the container", () => {
+    let checked = 0;
+    for (const names of [[LONG], ["Priya Raman", LONG]]) {
+      const tree = expand(winnerCard({ kicker: "Winner", names, note: null }));
+      const [cardEl] = byTestId(tree, "qm-winner");
+      const els = byTestId(tree, "qm-winner-name");
+      expect(els.map(textOf)).toEqual(names);
+      for (const el of els) {
+        expectFitted(cardEl!, el, [FIT_175], ["text-[1.75rem]"]);
+        checked++;
+      }
+      expect(runCarriers(tree)).toHaveLength(names.length);
+    }
+    expect(checked, "winner names checked").toBe(3);
+  });
+
+  it("the page's title, a long match name and a short one: the fit on a phone, a larger ceiling from lg", () => {
+    let checked = 0;
+    for (const name of [MATCH_NAME, "Club night"]) {
+      const tree = expand(titleBlock("League", name, "Nothing played yet"));
+      const [h1] = byTestId(tree, "qm-name");
+      expect(h1!.type).toBe("h1");
+      expect(textOf(h1)).toBe(name);
+      // The block itself is the container: it is as wide as the column the title sits in.
+      expectFitted(tree as El, h1!, [FIT_175, FIT_LG], ["text-[1.75rem]", "lg:text-[2.25rem]"]);
+      expect(runCarriers(tree)).toHaveLength(1);
+      checked++;
+    }
+    expect(checked, "titles checked").toBe(2);
+  });
+
+  it("the hero's two sides, up next and live: each side fits its own run; the “v” and the live score carry none", () => {
+    let checked = 0;
+    for (const live of [false, true]) {
+      const tree = expand(
+        heroCard({ kicker: "Up next", home: LONG, away: "Ines Duarte", score: live ? "11–9" : null, fixture: { id: "f", live } }, tStub),
+      );
+      const [cardEl] = byTestId(tree, "qm-hero");
+      for (const id of ["qm-hero-home", "qm-hero-away"]) {
+        const [el] = byTestId(tree, id);
+        expectFitted(cardEl!, el!, [FIT_16], ["text-[1.6rem]"]);
+        checked++;
+      }
+      expect(runCarriers(tree).map(textOf), live ? "live" : "up next").toEqual([LONG, "Ines Duarte"]);
+      if (live) expect(textOf(byTestId(tree, "qm-hero-score")[0])).toBe("11–9");
+    }
+    expect(checked, "hero sides checked").toBe(4);
+  });
+
+  it("the tie's title, naming the tied sides or counting them: the title fits its longest run", () => {
+    let checked = 0;
+    for (const title of [TIE_LONG, TIE_MANY]) {
+      const view = { members: [{ id: "a", name: "Ines Duarte" }, { id: "b", name: LONG }], seats: 1, toss: true };
+      const tree = expand(cutCard({ kicker: "The league is done", title, body: "Pick who goes through.", view }));
+      const [cardEl] = byTestId(tree, "qm-cut");
+      const [h2] = byTestId(tree, "qm-cut-title");
+      expect(textOf(h2)).toBe(title);
+      expectFitted(cardEl!, h2!, [FIT_16], ["text-[1.6rem]"]);
+      expect(runCarriers(tree)).toHaveLength(1);
+      checked++;
+    }
+    expect(checked, "tie titles checked").toBe(2);
+  });
+});
+
 // ── the arbitrary values compile to real CSS (an unknown utility compiles to nothing) ────────────────────────────────
 
 describe("the new arbitrary utilities compile", () => {
-  it("the fit, the container, the seat floor and the Full table's floor are real declarations", async () => {
-    const css = await compileClasses([FIT, "@container", NAME_FLOOR, "md:min-w-[10rem]", "md:min-w-full", "md:w-0", "md:max-w-none"]);
+  it("the fits, the container, the seat floor and the Full table's floor are real declarations", async () => {
+    // ONE compile per file: the PostCSS plugin caches its compiler per source path, so a second call here would read the
+    // first call's classes back.
+    const css = await compileClasses([
+      FIT, FIT_175, FIT_16, FIT_LG, "@container", NAME_FLOOR, "md:min-w-[10rem]", "md:min-w-full", "md:w-0", "md:max-w-none",
+    ]);
     // Tailwind spaces the operators of an arbitrary value; the declaration is compared without whitespace.
     const bare = (cls: string, prop: string) => css.get(cls)?.[prop]?.replace(/\s+/g, "");
-    expect(Object.keys(css.get(FIT) ?? {})).toEqual(["font-size"]);
-    expect(bare(FIT, "font-size")).toBe("clamp(1.25rem,calc(100cqi/var(--qm-name-run)/0.55),2rem)");
+    let fits = 0;
+    for (const [cls, max] of [[FIT, "2rem"], [FIT_175, "1.75rem"], [FIT_16, "1.6rem"], [FIT_LG, "2.25rem"]] as const) {
+      expect(Object.keys(css.get(cls) ?? {}), cls).toEqual(["font-size"]);
+      expect(bare(cls, "font-size"), cls).toBe(`clamp(1.25rem,calc(100cqi/var(--qm-name-run)/0.55),${max})`);
+      fits++;
+    }
+    expect(fits, "fits compiled").toBe(4);
     expect(css.get("@container")).toEqual({ "container-type": "inline-size" });
     expect(Object.keys(css.get(NAME_FLOOR) ?? {})).toEqual(["min-width"]);
     expect(bare(NAME_FLOOR, "min-width")).toBe("min(100%,5rem)");

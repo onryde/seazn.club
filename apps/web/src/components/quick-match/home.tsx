@@ -931,20 +931,7 @@ export function QuickMatchHomeView({
                 {flash.text}
               </p>
             ) : null}
-            <div className="min-w-0">
-              <p data-testid="qm-eyebrow" className={`${LABEL} [overflow-wrap:anywhere]`}>
-                {v.eyebrow}
-              </p>
-              <h1
-                data-testid="qm-name"
-                className="app-display mt-1 text-[1.75rem] font-bold leading-[1.1] text-cream [overflow-wrap:anywhere] lg:text-[2.25rem]"
-              >
-                {home.row.name}
-              </h1>
-              <p data-testid="qm-played" className="mt-1.5 text-[13px] leading-snug text-[#b7aede]">
-                {v.played}
-              </p>
-            </div>
+            {titleBlock(v.eyebrow, home.row.name, v.played)}
             {v.cutResult ? cutResultLine(v.cutResult) : null}
             {v.hero ? heroCard(v.hero, t, slots.score) : null}
             {v.cut ? cutCard(v.cut, slots.cut) : null}
@@ -1005,13 +992,47 @@ export function gantry(t: QuickMatchCopy["t"]): ReactNode {
   );
 }
 
-function heroCard(hero: NonNullable<Built["hero"]>, t: QuickMatchCopy["t"], score?: ScoreSlot): ReactNode {
+/** A name set large, sized to its longest unbreakable run (name-fit.ts; sign-off qlk14s1, 2026-11-14): the run goes in
+ *  `--qm-name-run`, and the element's `text-[length:clamp(1.25rem,calc(100cqi/var(--qm-name-run)/0.55),<size>)]` reads it
+ *  against the nearest `@container` — the size it was always set at, shrunk only as far as that run needs to fit the
+ *  container's width (0.55em a character: Barlow Condensed bold capitals average 0.50em, measured), never below 1.25rem.
+ *  So a line breaks between words; only a single run too long even at 1.25rem still breaks inside
+ *  (`[overflow-wrap:anywhere]`, the last resort). Each class is written out whole where it is used: Tailwind reads the
+ *  source, never a class built at run time. */
+function nameRun(text: string): CSSProperties {
+  return { "--qm-name-run": longestUnbreakableRun(text) } as CSSProperties;
+}
+
+/** The page's title: the format's eyebrow, the quick match's name and how much is played. The block is the size container
+ *  the name fits (a typed name can be one long word): 1.75rem at most, 2.25rem from lg. */
+export function titleBlock(eyebrow: string, name: string, played: string): ReactNode {
+  return (
+    <div className="@container min-w-0">
+      <p data-testid="qm-eyebrow" className={`${LABEL} [overflow-wrap:anywhere]`}>
+        {eyebrow}
+      </p>
+      <h1
+        data-testid="qm-name"
+        style={nameRun(name)}
+        className="app-display mt-1 text-[length:clamp(1.25rem,calc(100cqi/var(--qm-name-run)/0.55),1.75rem)] font-bold leading-[1.1] text-cream [overflow-wrap:anywhere] lg:text-[length:clamp(1.25rem,calc(100cqi/var(--qm-name-run)/0.55),2.25rem)]"
+      >
+        {name}
+      </h1>
+      <p data-testid="qm-played" className="mt-1.5 text-[13px] leading-snug text-[#b7aede]">
+        {played}
+      </p>
+    </div>
+  );
+}
+
+/** The next match: each side's name fits its own run in the card (`nameRun`), 1.6rem at most. */
+export function heroCard(hero: NonNullable<Built["hero"]>, t: QuickMatchCopy["t"], score?: ScoreSlot): ReactNode {
   const live = hero.fixture.live;
   return (
     <section
       data-testid="qm-hero"
       aria-labelledby="qm-hero-kicker"
-      className="min-w-0 rounded-2xl border border-[color:var(--mk-lime)] bg-night-2 p-4 shadow-[0_0_0_1px_rgba(163,230,53,0.12),0_18px_40px_-24px_rgba(163,230,53,0.45)]"
+      className="@container min-w-0 rounded-2xl border border-[color:var(--mk-lime)] bg-night-2 p-4 shadow-[0_0_0_1px_rgba(163,230,53,0.12),0_18px_40px_-24px_rgba(163,230,53,0.45)]"
     >
       <p
         id="qm-hero-kicker"
@@ -1023,8 +1044,12 @@ function heroCard(hero: NonNullable<Built["hero"]>, t: QuickMatchCopy["t"], scor
         ) : null}
         <span className="min-w-0 [overflow-wrap:anywhere]">{hero.kicker}</span>
       </p>
-      <div className="app-display mt-2 flex min-w-0 flex-col gap-1 text-[1.6rem] font-bold leading-[1.1] text-cream">
-        <span data-testid="qm-hero-home" className="min-w-0 [overflow-wrap:anywhere]">
+      <div className="app-display mt-2 flex min-w-0 flex-col gap-1 font-bold leading-[1.1] text-cream">
+        <span
+          data-testid="qm-hero-home"
+          style={nameRun(hero.home)}
+          className="min-w-0 text-[length:clamp(1.25rem,calc(100cqi/var(--qm-name-run)/0.55),1.6rem)] [overflow-wrap:anywhere]"
+        >
           {hero.home}
         </span>
         {live && hero.score !== null ? (
@@ -1034,7 +1059,11 @@ function heroCard(hero: NonNullable<Built["hero"]>, t: QuickMatchCopy["t"], scor
         ) : (
           <span className="text-base font-semibold text-[#b7aede]">{t("quickMatch.home.versus")}</span>
         )}
-        <span data-testid="qm-hero-away" className="min-w-0 [overflow-wrap:anywhere]">
+        <span
+          data-testid="qm-hero-away"
+          style={nameRun(hero.away)}
+          className="min-w-0 text-[length:clamp(1.25rem,calc(100cqi/var(--qm-name-run)/0.55),1.6rem)] [overflow-wrap:anywhere]"
+        >
           {hero.away}
         </span>
       </div>
@@ -1044,13 +1073,14 @@ function heroCard(hero: NonNullable<Built["hero"]>, t: QuickMatchCopy["t"], scor
 }
 
 /** The tie at the cut, as the hero (plan 5 T7, spec §5, mockup qmd13a01 §8): orange where the hero is lime, so a question
- *  never reads as a match to play. The answers are the page's (`cut` slot: the Pick panel and the Toss form). */
-function cutCard(cut: NonNullable<Built["cut"]>, slot?: CutSlot): ReactNode {
+ *  never reads as a match to play. The answers are the page's (`cut` slot: the Pick panel and the Toss form). The title names
+ *  the tied sides, so it fits its longest run in the card (`nameRun`), 1.6rem at most. */
+export function cutCard(cut: NonNullable<Built["cut"]>, slot?: CutSlot): ReactNode {
   return (
     <section
       data-testid="qm-cut"
       aria-labelledby="qm-cut-title"
-      className="min-w-0 rounded-2xl border border-[color:var(--mk-orange)] bg-night-2 p-4 shadow-[0_0_0_1px_rgba(251,146,60,0.12),0_18px_40px_-24px_rgba(251,146,60,0.5)]"
+      className="@container min-w-0 rounded-2xl border border-[color:var(--mk-orange)] bg-night-2 p-4 shadow-[0_0_0_1px_rgba(251,146,60,0.12),0_18px_40px_-24px_rgba(251,146,60,0.5)]"
     >
       <p
         data-testid="qm-cut-kicker"
@@ -1061,7 +1091,8 @@ function cutCard(cut: NonNullable<Built["cut"]>, slot?: CutSlot): ReactNode {
       <h2
         id="qm-cut-title"
         data-testid="qm-cut-title"
-        className="app-display mt-2 text-[1.6rem] font-bold leading-[1.1] text-cream [overflow-wrap:anywhere]"
+        style={nameRun(cut.title)}
+        className="app-display mt-2 text-[length:clamp(1.25rem,calc(100cqi/var(--qm-name-run)/0.55),1.6rem)] font-bold leading-[1.1] text-cream [overflow-wrap:anywhere]"
       >
         {cut.title}
       </h2>
@@ -1134,11 +1165,8 @@ function cutResultLine(lines: readonly string[]): ReactNode {
 /** The champion (D8, mockup qmd13a01 §11): the final's winner, who they beat and by what, and whether they topped the
  *  league too. The one trophy on the page.
  *
- *  The name is set at 2rem, shrunk only as far as its longest unbreakable run needs to fit the card's width (sign-off
- *  qlk14s1: at 320 a 43-character name split "FEATHERSTONEHAUG / H-BRAY"). The card is a size container; the run's length
- *  (`--qm-name-run`, name-fit.ts) at 0.55em a character (Barlow Condensed bold capitals average 0.50em, measured) gives
- *  the size, never below 1.25rem, so a line breaks between words. Only a single run too long even at 1.25rem still
- *  breaks inside (`[overflow-wrap:anywhere]`, the last resort). */
+ *  The name fits its longest run in the card (`nameRun`), 2rem at most (sign-off qlk14s1: at 320 a 43-character name
+ *  split "FEATHERSTONEHAUG / H-BRAY"). */
 export function championCard(champion: NonNullable<Built["champion"]>): ReactNode {
   return (
     <section
@@ -1156,7 +1184,7 @@ export function championCard(champion: NonNullable<Built["champion"]>): ReactNod
       </p>
       <p
         data-testid="qm-champion-name"
-        style={{ "--qm-name-run": longestUnbreakableRun(champion.name) } as CSSProperties}
+        style={nameRun(champion.name)}
         className="app-display mt-2 text-[length:clamp(1.25rem,calc(100cqi/var(--qm-name-run)/0.55),2rem)] font-bold leading-[1.05] text-cream [overflow-wrap:anywhere]"
       >
         {champion.name}
@@ -1170,12 +1198,14 @@ export function championCard(champion: NonNullable<Built["champion"]>): ReactNod
   );
 }
 
-function winnerCard(winner: NonNullable<Built["winner"]>): ReactNode {
+/** A plain League's or Knockout's winner (co-leaders share the card): each name fits its own run in the card (`nameRun`),
+ *  1.75rem at most. */
+export function winnerCard(winner: NonNullable<Built["winner"]>): ReactNode {
   return (
     <section
       data-testid="qm-winner"
       aria-labelledby="qm-winner-kicker"
-      className="min-w-0 rounded-2xl border border-[color:var(--mk-lime)] bg-night-2 p-4"
+      className="@container min-w-0 rounded-2xl border border-[color:var(--mk-lime)] bg-night-2 p-4"
     >
       <p
         id="qm-winner-kicker"
@@ -1191,7 +1221,8 @@ function winnerCard(winner: NonNullable<Built["winner"]>): ReactNode {
           <li
             key={i}
             data-testid="qm-winner-name"
-            className="app-display text-[1.75rem] font-bold leading-[1.1] text-cream [overflow-wrap:anywhere]"
+            style={nameRun(name)}
+            className="app-display text-[length:clamp(1.25rem,calc(100cqi/var(--qm-name-run)/0.55),1.75rem)] font-bold leading-[1.1] text-cream [overflow-wrap:anywhere]"
           >
             {name}
           </li>
