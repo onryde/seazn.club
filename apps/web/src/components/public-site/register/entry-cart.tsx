@@ -37,6 +37,7 @@ export function EntryCart({
   contact,
   imPlaying,
   seasonStartYear,
+  mixedPayment = null,
 }: {
   cart: CartState;
   divisions: readonly DivisionLike[];
@@ -51,6 +52,8 @@ export function EntryCart({
    *  control anyway is how a stale self-link survived un-toggling it. */
   imPlaying: boolean;
   seasonStartYear: number;
+  /** The stepper's mixed-method refusal, worded - the SAME verdict that holds Continue (`validateEntries`). Null = none. */
+  mixedPayment?: string | null;
 }) {
   const t = useT();
   // RS006 §C: summarizeCart is the ONE subtotal/waitlist computation shared
@@ -207,7 +210,15 @@ export function EntryCart({
       )}
 
       {/* The mixed-method refusal is the action bar's (walk-fix F6: under the cart it sat below the fold and under the phone's sticky
-          bar, while Continue looked enabled) - action-bar.tsx `blocked`, fed by the stepper from the same validateEntries verdict. */}
+          bar, while Continue looked enabled) - action-bar.tsx `blocked`, fed by the stepper from the same validateEntries verdict.
+          From md up the bar is an in-flow row under the whole division list, so with a long list the refusal sat below the fold at
+          the moment the second division was added (walk-fix B review m6): the cart, where the registrant is looking, says it too.
+          A quiet line, not a second box; `aria-hidden` because the bar's alert already announces it and describes Continue. */}
+      {mixedPayment !== null && (
+        <p aria-hidden="true" data-testid="reg-cart-mixed-payment-md" className="mt-3 hidden min-w-0 text-xs font-medium text-red-700 md:block">
+          {mixedPayment}
+        </p>
+      )}
 
       {cart.entries.length >= MAX_CART_ENTRIES && (
         <p className="mt-2 text-xs text-ink-muted">{t("register.entries.cart.max", { max: MAX_CART_ENTRIES })}</p>

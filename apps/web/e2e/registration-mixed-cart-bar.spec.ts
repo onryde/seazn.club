@@ -90,6 +90,18 @@ test.describe("a mixed-method cart is refused in the action bar, above Continue 
       await expect(next).toHaveAttribute("aria-describedby", (await notice.getAttribute("id"))!);
       expect(Number(await next.evaluate((el) => getComputedStyle(el).opacity)), `${vp.width}: Continue looks unavailable`).toBeLessThan(1);
 
+      // Walk-fix B review m6: from md up the cart says it too, beside its lines, where the registrant is looking as the second division
+      // goes in - measured BEFORE any scroll (the bar row may be below the fold under a long division list). Phones keep the bar alone.
+      const mirror = page.getByTestId("reg-cart-mixed-payment-md");
+      if (vp.width < 768) {
+        await expect(mirror, `${vp.width}: phones keep F6's placement alone`).toBeHidden();
+      } else {
+        await expect(mirror).toHaveText(sentence);
+        await expect(mirror).toHaveAttribute("aria-hidden", "true");
+        const m = await hitAtCentre(page, "reg-cart-mixed-payment-md");
+        expect(m.inViewport && m.hit, `${vp.width}: the cart's line is on screen as the division goes in (${m.covering})`).toBe(true);
+        if (shots) await page.screenshot({ path: `${shots}/A2-m6-mixed-cart-md-${vp.width}.png` });
+      }
       if (vp.width < 768) {
         // On a phone, with no scrolling: the notice is in the pinned bar, inside the viewport, and nothing covers it or Continue.
         const n = await hitAtCentre(page, "reg-bar-blocked");

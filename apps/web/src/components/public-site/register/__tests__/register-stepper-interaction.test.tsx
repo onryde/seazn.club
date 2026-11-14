@@ -2041,6 +2041,33 @@ describe("ENTRIES — a mixed-method cart is refused in the action bar, above Co
     expect(inBar.indexOf("reg-bar-blocked"), "above Continue").toBeLessThan(inBar.indexOf("reg-next"));
   });
 
+  // Walk-fix B review m6: from md up the bar is an in-flow row under the whole division list, so the cart (where the registrant is
+  // looking when they add the second division) says it too - md+ only, the same sentence, and silent to a screen reader (the bar's alert
+  // already announces it and describes Continue, so it is never said twice). Phones keep F6's placement alone.
+  it("from md up the cart mirrors the refusal beside its lines: same words, md-only, aria-hidden, not an alert; none for a single-method cart", () => {
+    const m = mixedCart();
+    const mirrors = byTestId(m, "reg-cart-mixed-payment-md");
+    expect(mirrors).toHaveLength(1);
+    const mirror = mirrors[0]!;
+    expect(textOf(mirror)).toBe(sentence);
+    expect(propsOf(mirror)["aria-hidden"]).toBe("true");
+    expect(propsOf(mirror).role, "the bar's alert is the one announcement").toBeUndefined();
+    const classes = String(propsOf(mirror).className).split(/\s+/);
+    expect(classes, "hidden on phones").toContain("hidden");
+    expect(classes, "shown from md").toContain("md:block");
+    // Inside the cart, not the bar (one tree: element identity holds only inside one island.tree() call).
+    const tree = m.island.tree();
+    const isMirror = (e: unknown) => propsOf(e as never)["data-testid"] === "reg-cart-mixed-payment-md";
+    const ids = tree.map((e) => propsOf(e)["data-testid"]);
+    expect(ids.indexOf("reg-cart-mixed-payment-md"), "in the cart: above the cart's own subtotal").toBeLessThan(ids.indexOf("reg-cart-subtotal"));
+    expect(ids.indexOf("reg-cart-subtotal"), "premise: the cart rendered").toBeGreaterThan(-1);
+    const bar = tree.find((e) => propsOf(e)["data-testid"] === "reg-bar")!;
+    expect(walk(bar).filter(isMirror), "not in the bar").toHaveLength(0);
+    // Its pair: removing the conflict lifts it.
+    m.clickByText(tRuntime(EN_UI, "register.entries.cart.remove"));
+    expect(byTestId(m, "reg-cart-mixed-payment-md")).toHaveLength(0);
+  });
+
   it("tapping Continue reveals and focuses the notice, and stays on ENTRIES; removing an entry lifts it and Continue advances", () => {
     const m = mixedCart();
     const notice = byTestId(m, "reg-bar-blocked")[0]!;
@@ -2064,6 +2091,35 @@ describe("ENTRIES — a mixed-method cart is refused in the action bar, above Co
     m.clickByText("Next"); // -> DETAILS
     expect(onEntries(m), "advanced off ENTRIES").toBe(false);
     expect(focus, "the advancing tap does not reveal").toHaveBeenCalledTimes(2);
+  });
+
+  // Walk-fix B review m3: the refusal is ENTRIES' own (the stepper computes it only there - its remedy, removing an entry, lives there).
+  // A draft restored past ENTRIES whose cart has since become mixed (the organiser moved a division to pay-the-organiser in between)
+  // is not refused in a later step's bar: that step's Continue answers to its own validation, and the server refuses the cart at
+  // submit. Rare (owner standing: rare cases are not built for); pinned so the rule is a decision, not an accident. Its pair: Back on
+  // ENTRIES, the same restored cart is refused there.
+  it("a draft restored past ENTRIES with a now-mixed cart: no bar notice on the later step; back on ENTRIES it is refused", () => {
+    freshStorage();
+    const DIV_CARD_TOO: DivisionLike = { ...DIV_OFFLINE_PAID, payment_method: "stripe" };
+    const first = mount([DIV_PAID, DIV_CARD_TOO]);
+    (propsOf(first.stepWho()).onChange as (p: object) => void)({ name: "Rep", email: "rep@example.com" });
+    first.clickByText("Next"); // -> ENTRIES
+    (propsOf(first.divisionCard("div-paid")).onAddIndividual as () => void)();
+    (propsOf(first.divisionCard("div-off-paid")).onAddIndividual as () => void)();
+    expect(byTestId(first, "reg-bar-blocked"), "premise: two card divisions are not mixed").toHaveLength(0);
+    first.clickByText("Next"); // -> DETAILS, saved there
+    expect(onEntries(first), "premise: the first visit left ENTRIES").toBe(false);
+
+    const second = mount([DIV_PAID, DIV_OFFLINE_PAID]); // restores the draft, on its saved step
+    expect(onEntries(second), "premise: restored past ENTRIES").toBe(false);
+    expect(second.island.tree().some((e) => e.type === EntryCart), "premise: not on ENTRIES").toBe(false);
+    expect(byTestId(second, "reg-bar-blocked"), "a later step's bar carries no ENTRIES refusal").toHaveLength(0);
+    expect(propsOf(byTestId(second, "reg-next")[0]!)["aria-disabled"]).toBeUndefined();
+
+    second.clickByText("Back"); // -> ENTRIES
+    expect(onEntries(second)).toBe(true);
+    expect(byTestId(second, "reg-bar-blocked"), "the restored cart is refused where it can be fixed").toHaveLength(1);
+    freshStorage();
   });
 });
 

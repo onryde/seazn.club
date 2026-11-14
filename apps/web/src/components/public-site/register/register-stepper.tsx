@@ -549,6 +549,7 @@ export function RegisterStepper({
             imPlaying={imPlaying}
             seasonStartYear={seasonStartYear}
             locale={locale}
+            mixedPayment={barBlocked}
           />
           {entriesAttempted && !entriesValidation.valid && entriesValidation.error && (
             <p role="alert" className="text-sm text-red-600">

@@ -62,7 +62,9 @@ export function ActionBar({
         data-testid="reg-bar"
         className="relative flex flex-wrap items-center gap-x-3 gap-y-2 max-md:sticky max-md:bottom-0 max-md:z-30 md:z-50 max-md:-mx-4 max-md:mb-0 max-md:border-t max-md:border-zinc-200 max-md:bg-surface max-md:px-4 max-md:pt-3 max-md:pb-[max(0.75rem,env(safe-area-inset-bottom))] max-md:shadow-sm"
       >
-        {blocked !== null && step !== "review" ? (
+        {/* Shown whenever the stepper passes a refusal; WHICH steps can have one is the stepper's rule (ENTRIES only, walk-fix B
+            review m3), so the bar does not restate it. */}
+        {blocked !== null ? (
           // `role="alert"`: said when the cart becomes mixed, as the cart's own notice used to be. `tabIndex={-1}`: focusable by the
           // stepper's reveal, never a tab stop. `w-full`: its own line above the summary and the buttons, at every width.
           <p

@@ -20,6 +20,7 @@ export function StepEntries({
   imPlaying,
   seasonStartYear,
   locale,
+  mixedPayment = null,
 }: {
   divisions: readonly DivisionLike[];
   cart: CartState;
@@ -28,6 +29,8 @@ export function StepEntries({
   imPlaying: boolean;
   seasonStartYear: number;
   locale: string;
+  /** The stepper's mixed-method refusal, worded (walk-fix B review m6) - mirrored beside the cart lines from md up. */
+  mixedPayment?: string | null;
 }) {
   const t = useT();
   const canAdd = canAddEntry(cart);
@@ -94,6 +97,7 @@ export function StepEntries({
         contact={contact}
         imPlaying={imPlaying}
         seasonStartYear={seasonStartYear}
+        mixedPayment={mixedPayment}
       />
     </div>
   );
