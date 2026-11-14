@@ -133,7 +133,7 @@ test("the stage card: header buttons, a one-line summary, the stage's own fixtur
 });
 
 // Match Day PB1 item 3 (owner 2026-11-02): a COMPLETED stage's card is one line until its toggle opens it, and inside it a FINISHED round is one
-// bar until its bar opens it. Driven at the desktop width here (the phone widths are `mobile.spec.ts`, whose projects run the phone
+// bar until its bar opens it. Driven at the desktop width here (the phone widths are the `e2e/mobile/` specs, whose projects run the phone
 // branches; this spec's do not). Anti-vacuity: every "folded" is paired with the "open" beside it, and the rows are counted.
 test("PB1 item 3: a completed stage is one line - its toggle opens and closes the card, and a finished round inside is a bar that opens and closes", async ({ page, request }) => {
   test.setTimeout(150_000);

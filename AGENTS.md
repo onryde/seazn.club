@@ -228,13 +228,17 @@ shipped at least twice, and the first four shipped **past a green suite**.
     wave ran ~six green local gates, every one of them
     `-g "badminton v3 pad|cricket v3 pad|setup:"` — a filter that selected
     neither of the two tests the change actually broke. CI found both. Then
-    `mobile.spec.ts` runs `describe.configure({ mode: "serial" })`, so the
-    first red aborts the remaining ~110 tests in that project: CI's own
+    `mobile.spec.ts` (since split into `e2e/mobile/*.spec.ts`) ran as ONE
+    `describe.configure({ mode: "serial" })` group, so the first red aborted
+    the remaining ~110 tests in that project: CI's own
     "2 failed / 29 passed" was concealing a THIRD failure that only appeared
-    once the first was fixed. Two rules follow. Run the whole spec file, never
-    a `-g` slice, before believing a UI change is clean. And when a serial file
+    once the first was fixed. Two rules follow. Run all of `e2e/mobile/` (every area file,
+    never just the one you touched), never a `-g` slice, before believing a UI change is clean. And when a serial file
     goes red, treat the count as a floor, not a total — re-run after each fix
     until a full pass completes.
+    The split keeps `serial` only where tests share module-level state
+    (`e2e/mobile/setup-fixture`, `slot-labels`, `progression-panel`); a spec
+    file that needs the setup test's `let`s joins `setup-fixture`, in order.
 
 22. **Folding a control behind a phone disclosure breaks every test that
     asserts it VISIBLE, and no unit test can see it.** `apps/web` vitest is
@@ -252,14 +256,15 @@ shipped at least twice, and the first four shipped **past a green suite**.
 23. **A scrolling rail is not clipped content, and a `scrollWidth >
     clientWidth` scan cannot tell them apart.** Making the scorebug meta strip
     a swipeable rail on phones (`max-md:overflow-x-auto`) reddened
-    `mobile.spec.ts`'s clipping scan at all five phone widths
+    the `e2e/mobile/` clipping scan at all five phone widths
     (`div 394px content in 317px`) and tripped axe's
     `scrollable-region-focusable` at SERIOUS impact in
     `scorepad-skins.spec.ts`. Both are real, and both have one cause: an
     overflow whose extra content is REACHABLE is a feature; one inside an
     `overflow-hidden` box is a defect. Split on computed `overflow-x`
-    (`auto`/`scroll` vs `hidden`/`visible`) — `overflowingIn` /
-    `expectScorebugNotClipped` in `mobile.spec.ts` do this. And any new
+    (`auto`/`scroll` vs `hidden`/`visible`) — `overflowingIn`
+    (`e2e/helpers.ts`) / `expectScorebugNotClipped` (`e2e/mobile/_shared.ts`)
+    do this. And any new
     scrolling region owes a `tabindex="0"` plus a role and an accessible name,
     or axe reds; `tabindex` cannot be varied by media query, so it is
     unconditional. Never let the exemption go unchecked: assert that every box
@@ -384,8 +389,9 @@ or `fixture-console.tsx` at a phone width. Not derivable from the code:
   `docs/superpowers/specs/2026-08-26-games-board-redesign-and-new-games-design.md`).
 - UI work is verified by screenshot at desktop (1280), **320px**, and
   **768px**, with no horizontal page scroll at any of them; the
-  seven-width e2e matrix (320/360/375/390/430/768/834, `mobile.spec.ts`
-  projects) is the enforcement backstop. **`/admin` is exempt from ALL of
+  seven-width e2e matrix (320/360/375/390/430/768/834, the
+  `e2e/mobile/*.spec.ts` files, one per area; a spec outside that directory
+  runs desktop-only) is the enforcement backstop. **`/admin` is exempt from ALL of
   it** — staff-only, always viewed on a desktop (owner, 2026-09-28: "we
   don't need to worry about /admin mobile responsive design"). So an
   `/admin` change is verified at **1280 only**: no 320, no 768, no phone

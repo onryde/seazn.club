@@ -244,8 +244,8 @@ test.describe("/[lang]/scheduling — the recorded AI demo", () => {
   });
 
   test.describe("375px", () => {
-    // `mobile-se`/`mobile-14` are pinned to `mobile.spec.ts` by `testMatch`, so
-    // a new file is invisible to them however it is named. The viewport is set
+    // `mobile-se`/`mobile-14` are pinned to the `e2e/mobile/*.spec.ts` files by `testMatch`, so
+    // a new file elsewhere is invisible to them however it is named. The viewport is set
     // here instead, which gives this section the same 375×667 reference phone
     // under the `parallel` project.
     test.use({ viewport: { width: 375, height: 667 } });

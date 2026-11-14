@@ -129,9 +129,9 @@ its mapping); say so in the PR body too. Never silently drop one.
       (`en`,`es`,`fr`,`nl`, flat dotted keys) + `i18n:check`. `content/help/**`
       is one English tree, no translation owed
 - [ ] UI: screenshots at **1280, 768 and 320** px, no horizontal page scroll,
-      touch-sized targets; new public/org surfaces added to `mobile.spec.ts`
+      touch-sized targets; new public/org surfaces added to an `e2e/mobile/<area>.spec.ts`
       seven-width matrix (a surface has ZERO width coverage until it is inside
-      that file)
+      a spec in that directory; a new `e2e/mobile.spec.ts` would run at 1280 only)
 - [ ] UI text changed? `git grep -a` old **and** new strings across `e2e/` —
       text changes break e2e. Never touch `.github/workflows/e2e.yml` contents
       casually — it is LIVE on PRs

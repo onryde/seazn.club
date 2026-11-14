@@ -3,7 +3,7 @@
 //
 // Two real-server facts the vitest seams cannot see:
 //   1. The match page's sponsor board, TAPPED in a browser at 320 / 768 / 1280 (ruling R17: the widths are looped here,
-//      since only mobile.spec.ts runs in the width projects): the board renders below the match centre, the page has no
+//      since only the e2e/mobile/ specs run in the width projects): the board renders below the match centre, the page has no
 //      horizontal scroll with a 43-character title sponsor, the tap opens the sponsor's own site in a new tab through
 //      `/s/…`, and a `sponsor_clicks` row lands with this fixture and `match`.
 //   2. A stream short code typed as a viewer types it (`seazn.club/s/<CODE>`, in either case — fix round 1, I2): 302 to

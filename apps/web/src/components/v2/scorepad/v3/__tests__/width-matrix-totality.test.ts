@@ -1,7 +1,7 @@
 // R8/WS-M fix round 1, item 3 — the pin that keeps the SEVEN-WIDTH matrix
 // total.
 //
-// `e2e/mobile.spec.ts` is the only place anything narrower than 375 or wider
+// `e2e/mobile/` (the seven-width specs) is the only place anything narrower than 375 or wider
 // than 430 ever runs, and it names every sport it covers by hand inside test
 // bodies. Nothing tied that set to `V3_SKINS`: a twelfth sport would be forced
 // into `e2e/v3-skin-catalog.ts` by `a11y-sweep-totality.test.ts` beside this
@@ -43,8 +43,8 @@ describe("R8/WS-M — the seven-width matrix accounts for every v3 skin", () => 
     for (const c of WIDTH_MATRIX_PAD_UNCOVERED) expect(c.why.length, c.key).toBeGreaterThan(40);
   });
 
-  it("the clock pair mobile.spec.ts actually loops over is itself swept — the one tier that cannot drift", () => {
-    // `WIDTH_MATRIX_CLOCK_SPORTS` is read BACK by mobile.spec.ts's own
+  it("the clock pair e2e/mobile/pads-core.spec.ts actually loops over is itself swept — the one tier that cannot drift", () => {
+    // `WIDTH_MATRIX_CLOCK_SPORTS` is read BACK by e2e/mobile/pads-core.spec.ts's own
     // parameterised clock test, so unlike the declarations above it is proved
     // by use, not by assertion. This checks the two lists agree.
     for (const [key] of WIDTH_MATRIX_CLOCK_SPORTS) {

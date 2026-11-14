@@ -406,7 +406,7 @@ test.describe("board renders cleanly at 375px under the new segmentation (case c
     expect(applied.status).toBe(200);
 
     // No mobile PROJECT runs this spec — playwright.config scopes
-    // mobile-se/mobile-14 to mobile.spec.ts alone — so both widths are set
+    // mobile-se/mobile-14 to the e2e/mobile/ specs alone — so both widths are set
     // explicitly here or 375 is never exercised for this surface at all.
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto(await divisionPath(page.request, divisionId, "/schedule?tab=board"));

@@ -201,6 +201,15 @@ const PARALLEL_SLICE = process.env.E2E_PARALLEL_SLICE;
 // `test file "ai-architect.spec.ts" should not import test file "helpers.ts"`.
 const WALKTHROUGH = /[\\/]e2e[\\/]walkthrough[\\/]/;
 
+// The seven width projects below (mobile-se/14/320/360/430, tablet-768/834) run EVERY spec in e2e/mobile/ and nothing else;
+// no other project selects them. It used to be ONE file (89 tests per project in one serial group, so a red skipped every later
+// test in that project), split by area 2026-11-13. ANCHORED ON `e2e/` for the reason WALKTHROUGH is (the match is on the
+// absolute path), and on the `.spec.ts` suffix so e2e/mobile/_shared.ts, the helpers the specs share, is never a spec itself.
+const MOBILE_SPECS = /[\\/]e2e[\\/]mobile[\\/][^\\/]+\.spec\.ts$/;
+// The width projects set `fullyParallel: false` (the global is true): they all share ONE signed-in Pro org, and the old single
+// serial file never spread across workers locally. Within a file the tests keep their source order on one worker; this does not
+// make a file serial (a red does not skip the rest), which is why only the files sharing module state use describe.configure.
+
 // Walkthrough carve-outs, selected by E2E_WALKTHROUGH_SLICE (see the block
 // above the project for the measurements and the reasoning). "capture",
 // "stream" and "sponsor" each select ONE group of files; "rest" ignores all
@@ -253,7 +262,7 @@ export default defineConfig({
       ...(PARALLEL_SLICE === "heavy" ? { testMatch: PARALLEL_HEAVY } : {}),
       testIgnore: [
         SERIAL_SPECS,
-        /mobile\.spec\.ts/,
+        MOBILE_SPECS,
         // The walkthrough leg runs these; without this they would run TWICE.
         WALKTHROUGH,
         ...(PARALLEL_SLICE === "rest" ? [PARALLEL_HEAVY] : []),
@@ -281,11 +290,12 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"], storageState: AUTH_STATE },
       dependencies: ["setup"],
     },
-    // v3/02 §4 viewport gate: mobile.spec.ts runs at both reference phones —
-    // iPhone SE (375×667) and iPhone 14 (390×844). Desktop projects ignore it.
+    // v3/02 §4 viewport gate: the e2e/mobile/ specs run at both reference phones —
+    // iPhone SE (375×667) and iPhone 14 (390×844). Desktop projects ignore them.
     {
       name: "mobile-se",
-      testMatch: /mobile\.spec\.ts/,
+      testMatch: MOBILE_SPECS,
+      fullyParallel: false,
       use: {
         ...devices["Desktop Chrome"],
         viewport: { width: 375, height: 667 },
@@ -295,7 +305,8 @@ export default defineConfig({
     },
     {
       name: "mobile-14",
-      testMatch: /mobile\.spec\.ts/,
+      testMatch: MOBILE_SPECS,
+      fullyParallel: false,
       use: {
         ...devices["Desktop Chrome"],
         viewport: { width: 390, height: 844 },
@@ -308,7 +319,8 @@ export default defineConfig({
     // holds at every width; LCP self-pins to 375/390 inside the test.
     {
       name: "mobile-320",
-      testMatch: /mobile\.spec\.ts/,
+      testMatch: MOBILE_SPECS,
+      fullyParallel: false,
       use: {
         ...devices["Desktop Chrome"],
         viewport: { width: 320, height: 568 },
@@ -318,7 +330,8 @@ export default defineConfig({
     },
     {
       name: "mobile-360",
-      testMatch: /mobile\.spec\.ts/,
+      testMatch: MOBILE_SPECS,
+      fullyParallel: false,
       use: {
         ...devices["Desktop Chrome"],
         viewport: { width: 360, height: 800 },
@@ -328,7 +341,8 @@ export default defineConfig({
     },
     {
       name: "mobile-430",
-      testMatch: /mobile\.spec\.ts/,
+      testMatch: MOBILE_SPECS,
+      fullyParallel: false,
       use: {
         ...devices["Desktop Chrome"],
         viewport: { width: 430, height: 932 },
@@ -338,7 +352,8 @@ export default defineConfig({
     },
     {
       name: "tablet-768",
-      testMatch: /mobile\.spec\.ts/,
+      testMatch: MOBILE_SPECS,
+      fullyParallel: false,
       use: {
         ...devices["Desktop Chrome"],
         viewport: { width: 768, height: 1024 },
@@ -348,7 +363,8 @@ export default defineConfig({
     },
     {
       name: "tablet-834",
-      testMatch: /mobile\.spec\.ts/,
+      testMatch: MOBILE_SPECS,
+      fullyParallel: false,
       use: {
         ...devices["Desktop Chrome"],
         viewport: { width: 834, height: 1194 },
