@@ -213,8 +213,9 @@ export function RegistrationHubTabsHost({
     if (gone.length > 0) {
       setDirty((prev) => Object.fromEntries(Object.entries(prev).filter(([id]) => !gone.includes(id))));
     }
-    // Ask the close question about the first one held back; the effect below puts it back in the address.
-    if (held.length > 0) setDialog({ kind: "close", id: held[0]!, busy: false });
+    // Ask the close question about the first one held back - unless a dialog is busy (n1) - and the effect below puts it back in
+    // the address either way.
+    if (held.length > 0) askUnlessBusy({ kind: "close", id: held[0]!, busy: false });
   }
   const held = current.ids.filter((id) => !state.open.includes(id));
   // The server's latest for a tab in the address (a refresh after a save brings one), else what this host remembered.
@@ -333,10 +334,11 @@ export function RegistrationHubTabsHost({
   // rules above).
   const restoring = useRef(0);
   const hubEntry = useRef<number | null>(null);
-  // The leave question - unless a dialog is busy (T24 re-review n1): a save in flight keeps its dialog, so its buttons stay
-  // disabled and the choice already made is the only one that runs. The navigation is still held (put back, or prevented).
-  function askToLeave(to: LeaveTo) {
-    setDialog((d) => (d?.busy ? d : { kind: "leave", to, busy: false }));
+  // A question the viewer did not ask for (a held link, a Back) - unless a dialog is busy (T24 re-review n1): a save in flight keeps
+  // its dialog, so its buttons stay disabled and the choice already made is the only one that runs. The navigation is still held
+  // (put back, or prevented). Hoisted: the held-back close question above asks through it during render.
+  function askUnlessBusy(next: Dialog) {
+    setDialog((d) => (d?.busy ? d : next));
   }
   // Where the hub sits in the session history, read after every commit that leaves the viewer on it — never while a held
   // traversal is being put back: the browser is then briefly somewhere else, which the pathname check already skips (n4).
@@ -354,7 +356,7 @@ export function RegistrationHubTabsHost({
       // preventDefault ONLY (T24 re-review n2): the click still reaches the link's own handlers - an account-menu item closes its
       // menu in its onClick - and Next's Link, which runs that onClick first, then sees defaultPrevented and does not navigate.
       event.preventDefault();
-      askToLeave({ via: "link", href });
+      askUnlessBusy({ kind: "leave", to: { via: "link", href }, busy: false });
     };
     const onPopState = (event: PopStateEvent) => {
       if (leaving.current) return;
@@ -371,7 +373,7 @@ export function RegistrationHubTabsHost({
       const delta = now !== null && hubEntry.current !== null && now !== hubEntry.current ? now - hubEntry.current : -1;
       restoring.current += 1;
       window.history.go(-delta);
-      askToLeave({ via: "history", delta });
+      askUnlessBusy({ kind: "leave", to: { via: "history", delta }, busy: false });
     };
     window.addEventListener("click", onClick, true);
     const releasePopState = holdPopState(onPopState);

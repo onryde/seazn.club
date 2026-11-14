@@ -832,6 +832,42 @@ describe("RegistrationHubTabsHost — leaving the hub with unsaved edits (fix ro
     expect(msg("reg.hub.leave.title")).not.toBe(after.title);
   });
 
+  // n1, the in-hub path (found by the e2e): a Back INSIDE the hub that drops the dirty tab holds it back and asks the close
+  // question - which used to replace a busy leave dialog the same way. The tab is still held and put back; the busy dialog stays.
+  it("n1: a Back inside the hub that drops the dirty tab while Save and leave is busy keeps the busy dialog; the tab is put back", async () => {
+    const host = mount({ active: { division: A }, open: [A] });
+    host.dirty(A, ["capacity"]);
+    let settle: (r: ConfigSaveResult) => void = () => {};
+    host.handle(A, () => new Promise<ConfigSaveResult>((r) => (settle = r)));
+    fire(listeners.click, linkClick(COMP));
+    host.press("primary");
+    const before = propsOf(host.dialog()!);
+    expect(before.busy).toBe(true);
+    expect(before.title).toBe(msg("reg.hub.leave.title"));
+
+    host.land({ active: "settings", open: [] });
+    expect(host.pageOf(A), "held back, edits intact").toBeDefined();
+    expect(lastReplace().state, "and put back in the address").toEqual({ active: { division: A }, open: [A] });
+    const after = propsOf(host.dialog()!);
+    expect(after.title, "still the leave question, not the close one").toBe(msg("reg.hub.leave.title"));
+    expect(after.busy, "still busy").toBe(true);
+
+    settle("success");
+    await flush();
+    await flush();
+    expect(nav.push.mock.calls, "the chosen leave runs, once").toEqual([[COMP]]);
+  });
+
+  it("n1 positive pair: with no dialog open, the same Back inside the hub asks the close question", () => {
+    const host = mount({ active: { division: A }, open: [A] });
+    host.dirty(A, ["capacity"]);
+    expect(host.dialog()).toBeUndefined();
+    host.land({ active: "settings", open: [] });
+    const asked = propsOf(host.dialog()!);
+    expect(asked.title).toBe(msg("reg.hub.close.title", { name: NAMES[A]! }));
+    expect(asked.busy).toBe(false);
+  });
+
   // T24 re-review n4: `leaving` is reset when the guard re-arms. It matters only when a chosen leave leaves the hub MOUNTED (a
   // router that did not navigate away): after Save and leave the pages are clean, so the guard stands down; a new edit must arm it
   // again rather than let the next link out through unasked.

@@ -804,15 +804,23 @@ for (const viewport of [
       await expect(dialogAction(page, "save")).toBeDisabled();
       await expect.poll(() => puts, { timeout: 20_000 }).toBe(1);
 
-      // Back mid-save: held and put back as ever, but the busy dialog is not swapped for a fresh, enabled leave question.
+      // Back mid-save, twice: first inside the hub (it drops the dirty tab: held back and put back in the address, but no close
+      // question), then past the hub (put back, but no fresh leave question). Neither swaps the busy dialog for an enabled one.
+      const stillBusy = async (when: string) => {
+        await afterEffects(page);
+        await expect(dialog(page)).toHaveCount(1);
+        await expect(dialog(page), `${when}: still the leave question`).toContainText(copy("reg.hub.leave.title"));
+        await expect(dialogAction(page, "save"), `${when}: still the save in flight`).toHaveText(copy("reg.hub.config.saving"));
+        for (const action of ["save", "discard", "dismiss"] as const) {
+          await expect(dialogAction(page, action), `${when}: ${action} stays disabled while saving`).toBeDisabled();
+        }
+      };
+      await page.goBack();
+      await expectAddress(page, { tab: `division:${a}`, open: [a] });
+      await stillBusy("Back inside the hub");
       await page.goBack();
       await expect.poll(() => new URL(page.url()).pathname, { timeout: 10_000 }).toBe(hubPath(s));
-      await afterEffects(page);
-      await expect(dialog(page)).toHaveCount(1);
-      await expect(dialogAction(page, "save"), "still the save in flight").toHaveText(copy("reg.hub.config.saving"));
-      for (const action of ["save", "discard", "dismiss"] as const) {
-        await expect(dialogAction(page, action), `${action} stays disabled while saving`).toBeDisabled();
-      }
+      await stillBusy("Back past the hub");
 
       // The save lands: the hub goes where the chosen leave was for (the link), once, and never back to the overview.
       release();
