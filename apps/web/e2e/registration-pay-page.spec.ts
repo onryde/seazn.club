@@ -127,7 +127,8 @@ test.describe("player payment page", () => {
     await dialog.getByRole("button").last().click();
     await expect.poll(pressed, { timeout: 20_000 }).toBe(2);
 
-    // The cap, through the real route: audit rows up to the cap; the next press is refused in the panel's own words.
+    // The cap: audit rows up to the cap; the panel then offers no press at all (walk-fix F13 - no dialog for a press the
+    // server would refuse), saying why in its own words. The server's own refusal past the cap is pinned by the route tests.
     await withDb(async (sql) => {
       const [c] = await sql<{ competition_id: string }[]>`select d.competition_id from divisions d where d.id = ${rig.divisionId}`;
       for (let i = 0; i < REMINDER_CAP_PER_DAY - 2; i++) {
@@ -136,10 +137,14 @@ test.describe("player payment page", () => {
       }
     });
     row = await open();
-    await row.locator('[data-registration-hub-registrant-action="remind"]').click();
-    await page.getByRole("alertdialog").getByRole("button").last().click();
-    await expect(feedback(row)).toHaveText(limitCopy, { timeout: 20_000 });
-    expect(await pressed(), "the press past the cap queued nothing").toBe(REMINDER_CAP_PER_DAY);
+    const capped = row.locator('[data-registration-hub-registrant-action="remind"]');
+    await expect(capped, "at the cap the press is not offered").toBeDisabled();
+    await expect(capped).toHaveAttribute("data-capped", "true");
+    await expect(capped).toHaveText(enUi["reg.action.remindLimitReached"]!);
+    await expect(capped).toHaveAttribute("title", limitCopy);
+    await capped.click({ force: true });
+    await expect(page.getByRole("alertdialog"), "a disabled press opens nothing").toHaveCount(0);
+    expect(await pressed(), "nothing past the cap was queued").toBe(REMINDER_CAP_PER_DAY);
 
     // The panel at the other widths: the button and the line are reachable, with no horizontal page scroll.
     let checked = 0;
