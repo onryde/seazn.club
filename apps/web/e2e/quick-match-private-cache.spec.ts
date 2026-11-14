@@ -18,7 +18,7 @@ import { consentedAnonymousState } from "./scorepad-a11y-kit";
 // Server mode matters, and the dev case is NOT a trivial pass: in this Next (16.3), `next dev` answers EVERY page with
 // `no-cache, must-revalidate` (`no-store` on an HMR refresh) — node_modules/next/dist/build/templates/app-page-runtime.js,
 // the `routeModule.isDev` branch — so (b) would FAIL against a dev server, for want of `private`. This suite never runs
-// one: playwright.config.ts requires a pre-compiled production server and e2e.yml builds and `next start`s one for every
+// one: playwright.config.ts requires a pre-compiled production server and e2e.yml builds and serves one for every
 // job (E2E_PROD_TARGET=1). This file is in the `parallel` project's catch-all "rest" slice (no SERIAL_SPECS or
 // PARALLEL_HEAVY name), so CI's prod-build `rest` legs run it.
 
