@@ -4,6 +4,8 @@ import { listDiscoverySports } from "@/server/public-site/discovery";
 import { liveGames } from "@/games/registry";
 import { siteOrigin } from "@/lib/site-origin";
 import { routes } from "@/lib/routes";
+import { LOCALES } from "@/lib/i18n-constants";
+import { localizedPath } from "@/lib/seo-meta";
 
 // Request-time, never prerendered. A sitemap.ts is "cached by default unless
 // it uses a Request-time API or dynamic config option" (node_modules/next/dist/
@@ -16,21 +18,42 @@ export const dynamic = "force-dynamic";
 
 const BASE = siteOrigin();
 
+/**
+ * A marketing page lives under /{lang}, and each page declares the /en form as
+ * its canonical (lib/seo-meta.ts), so that is the URL listed here, with one
+ * hreflang alternate per locale. Listing the unprefixed form instead would put
+ * a URL in the sitemap that canonicalises elsewhere.
+ */
+function marketing(path: string, extra: { changeFrequency: "hourly" | "weekly" | "monthly"; priority: number }): MetadataRoute.Sitemap[number] {
+  return {
+    url: `${BASE}${localizedPath("en", path)}`,
+    ...extra,
+    alternates: {
+      languages: {
+        ...Object.fromEntries(LOCALES.map((l) => [l, `${BASE}${localizedPath(l, path)}`])),
+        "x-default": `${BASE}${localizedPath("en", path)}`,
+      },
+    },
+  };
+}
+
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const staticEntries: MetadataRoute.Sitemap = [
-    { url: BASE, changeFrequency: "weekly", priority: 1 },
-    { url: `${BASE}/discover`, changeFrequency: "hourly", priority: 0.9 },
-    { url: `${BASE}/live`, changeFrequency: "hourly", priority: 0.8 },
-    { url: `${BASE}/pricing`, changeFrequency: "monthly", priority: 0.9 },
+    marketing("", { changeFrequency: "weekly", priority: 1 }),
+    marketing("/discover", { changeFrequency: "hourly", priority: 0.9 }),
+    marketing("/live", { changeFrequency: "hourly", priority: 0.8 }),
+    marketing("/pricing", { changeFrequency: "monthly", priority: 0.9 }),
+    marketing("/formats", { changeFrequency: "monthly", priority: 0.8 }),
+    marketing("/scheduling", { changeFrequency: "monthly", priority: 0.7 }),
     { url: `${BASE}/games`, changeFrequency: "weekly", priority: 0.8 },
     ...liveGames().map((g) => ({
       url: `${BASE}/games/${g.slug}`,
       changeFrequency: "monthly" as const,
       priority: 0.7,
     })),
-    { url: `${BASE}/use-cases/clubs`, changeFrequency: "monthly", priority: 0.8 },
-    { url: `${BASE}/use-cases/events`, changeFrequency: "monthly", priority: 0.8 },
-    { url: `${BASE}/use-cases/schools`, changeFrequency: "monthly", priority: 0.8 },
+    marketing("/use-cases/clubs", { changeFrequency: "monthly", priority: 0.8 }),
+    marketing("/use-cases/events", { changeFrequency: "monthly", priority: 0.8 }),
+    marketing("/use-cases/schools", { changeFrequency: "monthly", priority: 0.8 }),
     { url: `${BASE}/legal/privacy`, changeFrequency: "yearly", priority: 0.3 },
     { url: `${BASE}/legal/terms`, changeFrequency: "yearly", priority: 0.3 },
     { url: `${BASE}/legal/cookie-policy`, changeFrequency: "yearly", priority: 0.2 },
@@ -71,11 +94,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   let sportEntries: MetadataRoute.Sitemap = [];
   try {
     const sports = await listDiscoverySports();
-    sportEntries = sports.map((s) => ({
-      url: `${BASE}/discover/${s.key}`,
-      changeFrequency: "hourly" as const,
-      priority: 0.8,
-    }));
+    sportEntries = sports.map((s) => marketing(`/discover/${s.key}`, { changeFrequency: "hourly", priority: 0.8 }));
   } catch {
     // DB unreachable — no sport landings, this request
   }

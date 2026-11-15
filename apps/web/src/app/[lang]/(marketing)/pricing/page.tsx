@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { marketingMeta } from "@/lib/seo-meta";
 import { Fragment } from "react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -105,17 +106,12 @@ export async function generateMetadata({
   const { lang } = await params;
   if (!hasLocale(lang)) return {};
   const d = await getDictionary(lang, "marketing");
-  return {
+  return marketingMeta({
+    lang,
+    path: "/pricing",
     title: t(d, "pricing.meta.title"),
     description: t(d, "pricing.meta.description"),
-    alternates: {
-      canonical: `/${lang}/pricing`,
-      languages: {
-        ...Object.fromEntries(["en", "fr", "es", "nl"].map((l) => [l, `/${l}/pricing`])),
-        "x-default": "/en/pricing",
-      },
-    },
-  };
+  });
 }
 
 /**

@@ -20,6 +20,8 @@ import { preferredCurrency } from "@/lib/currency-server";
 import { loadPricingMatrix } from "@/lib/pricing-matrix-server";
 import { getDictionary, t } from "@/lib/i18n";
 import { hasLocale } from "@/lib/i18n-constants";
+import { marketingMeta } from "@/lib/seo-meta";
+import { JsonLd, organizationLd, softwareApplicationLd } from "@/components/seo/json-ld";
 import { readRecentQuickMatches } from "@/server/usecases/quick-match-recent";
 import { listQuickMatchSports } from "@/server/usecases/quick-match-sports";
 import { log } from "@/server/logger";
@@ -33,28 +35,13 @@ export async function generateMetadata({
   const { lang } = await params;
   if (!hasLocale(lang)) return {};
   const d = await getDictionary(lang, "marketing");
-  return {
+  return marketingMeta({
+    lang,
+    path: "",
     title: t(d, "home.meta.title"),
     description: t(d, "home.meta.description"),
-    alternates: {
-      canonical: `/${lang}`,
-      languages: {
-        ...Object.fromEntries(["en", "fr", "es", "nl"].map((l) => [l, `/${l}`])),
-        "x-default": "/en",
-      },
-    },
-    openGraph: {
-      title: t(d, "home.og.title"),
-      description: t(d, "home.og.description"),
-      url: "/",
-      siteName: "Seazn Club",
-      type: "website",
-      // Explicit: in this Next build a page-level openGraph object replaces
-      // the inherited one wholesale, dropping the root file-convention
-      // opengraph-image (home shipped with no og:image at all).
-      images: [{ url: "/opengraph-image", width: 1200, height: 630 }],
-    },
-  };
+    ogDescription: t(d, "home.og.description"),
+  });
 }
 
 export default async function HomePage({ params }: { params: Promise<{ lang: string }> }) {
@@ -116,6 +103,8 @@ export default async function HomePage({ params }: { params: Promise<{ lang: str
 
   return (
     <MarketingShell variant="night-scroll" lang={lang}>
+      <JsonLd data={organizationLd()} />
+      <JsonLd data={softwareApplicationLd(t(d, "home.meta.description"))} />
       <main>
         {/* Hero — stadium night. */}
         <section className="relative -mt-16 overflow-hidden bg-[linear-gradient(180deg,var(--mk-night-2),var(--mk-night))] pb-16 pt-28 text-[var(--mk-cream)]">

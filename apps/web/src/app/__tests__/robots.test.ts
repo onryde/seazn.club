@@ -8,7 +8,7 @@ import { join } from "node:path";
 import type { MetadataRoute } from "next";
 import { describe, expect, it } from "vitest";
 import robots from "../robots";
-import { AI_CRAWLERS } from "@/lib/robots-policy";
+import { AI_CRAWLERS, AI_SEARCH_CRAWLERS } from "@/lib/robots-policy";
 
 type Rule = Extract<MetadataRoute.Robots["rules"], unknown[]>[number];
 
@@ -77,9 +77,15 @@ describe("robots.txt: AI crawlers", () => {
     expect(list(found[0]!.allow)).toEqual([]);
   });
 
-  it("every rule other than `*` is an AI crawler's: nothing else is refused", () => {
-    const others = rules().flatMap((r) => list(r.userAgent)).filter((a) => a !== "*");
+  it("every rule other than `*` and the search group is an AI crawler's: nothing else is refused", () => {
+    const search = new Set<string>(AI_SEARCH_CRAWLERS);
+    const others = rules().flatMap((r) => list(r.userAgent)).filter((a) => a !== "*" && !search.has(a));
     expect(others.sort()).toEqual([...AI_CRAWLERS].sort());
+  });
+
+  it("no crawler is both refused and allowed", () => {
+    const refused = new Set<string>(AI_CRAWLERS);
+    for (const bot of AI_SEARCH_CRAWLERS) expect(refused.has(bot), bot).toBe(false);
   });
 
   // The positive pair: these must reach the `*` rule, not a refusal.
@@ -96,5 +102,34 @@ describe("robots.txt: AI crawlers", () => {
   ])("%s is not refused: no rule of its own, so it falls under `*`", (bot) => {
     expect(AI_CRAWLERS.map((a) => a.toLowerCase())).not.toContain(bot.toLowerCase());
     expect(rulesFor(bot)).toEqual([]);
+  });
+});
+
+describe("robots.txt: AI search crawlers", () => {
+  it("premise: the list is not empty and includes PerplexityBot", () => {
+    expect(AI_SEARCH_CRAWLERS.length).toBeGreaterThan(0);
+    expect(AI_SEARCH_CRAWLERS).toContain("PerplexityBot");
+  });
+
+  it.each(AI_SEARCH_CRAWLERS.map((bot) => [bot]))("%s is allowed the site but keeps the private paths closed", (bot) => {
+    const found = rulesFor(bot);
+    expect(found).toHaveLength(1);
+    expect(list(found[0]!.allow)).toEqual(["/"]);
+    expect(list(found[0]!.disallow)).toEqual(list(star().disallow));
+    expect(list(found[0]!.disallow)).not.toContain("/");
+  });
+});
+
+describe("robots.txt: non-production origin", () => {
+  it("closes the whole site to everyone and lists no sitemap", async () => {
+    const prev = process.env.OAUTH_BASE_URL;
+    process.env.OAUTH_BASE_URL = "https://stg.seazn.club";
+    try {
+      const r = robots();
+      expect(r.rules).toEqual([{ userAgent: "*", disallow: "/" }]);
+    } finally {
+      if (prev === undefined) delete process.env.OAUTH_BASE_URL;
+      else process.env.OAUTH_BASE_URL = prev;
+    }
   });
 });

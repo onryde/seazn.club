@@ -108,6 +108,28 @@ describe("sitemap.xml: route config", () => {
   });
 });
 
+describe("sitemap.xml: marketing URLs match the page canonicals", () => {
+  it("lists the /en form with one hreflang alternate per locale, never the unprefixed form", async () => {
+    vi.mocked(listPublicSitemapEntries).mockResolvedValueOnce([]);
+    vi.mocked(listDiscoverySports).mockResolvedValueOnce([{ key: "cricket", name: "Cricket" }]);
+    const entries = await sitemap();
+    const out = urls(entries);
+    // Premise: the marketing pages are present, so the loop below checks something.
+    const marketing = entries.filter((e) => e.url.startsWith(`${BASE}/en`));
+    expect(marketing.length).toBeGreaterThan(5);
+    for (const bare of ["", "/pricing", "/discover", "/live", "/discover/cricket", "/use-cases/clubs"]) {
+      expect(out, bare).not.toContain(`${BASE}${bare}`);
+    }
+    for (const e of marketing) {
+      const langs = e.alternates?.languages as Record<string, string> | undefined;
+      expect(Object.keys(langs ?? {}).sort(), e.url).toEqual(["en", "es", "fr", "nl", "x-default"]);
+      expect(langs!["x-default"], e.url).toBe(e.url);
+    }
+    const xml = resolveRouteData(entries, "sitemap");
+    expect(xml).toContain('hreflang="fr"');
+  });
+});
+
 describe("sitemap.xml: reads and fallback", () => {
   it("reads competitions THROUGH the cached read, not the raw query", async () => {
     vi.mocked(listPublicSitemapEntries).mockResolvedValueOnce([
@@ -137,8 +159,8 @@ describe("sitemap.xml: reads and fallback", () => {
 
     // Premise: every KIND of entry is present, so a lastmod on any one kind
     // has somewhere to show.
-    expect(out).toContain(`${BASE}/pricing`);
-    expect(out).toContain(`${BASE}/discover/badminton`);
+    expect(out).toContain(`${BASE}/en/pricing`);
+    expect(out).toContain(`${BASE}/en/discover/badminton`);
     expect(out).toContain(`${BASE}/live/acme-club/summer-cup`);
     expect(out).toContain(`${BASE}/live/acme-club/summer-cup/open`);
     expect(out).toContain(`${BASE}/live/acme-club/winter-cup`);
@@ -155,8 +177,8 @@ describe("sitemap.xml: reads and fallback", () => {
     vi.mocked(listPublicSitemapEntries).mockRejectedValueOnce(new Error("connect ECONNREFUSED"));
     vi.mocked(listDiscoverySports).mockRejectedValueOnce(new Error("connect ECONNREFUSED"));
     const out = urls(await sitemap());
-    expect(out).toContain(BASE);
-    expect(out).toContain(`${BASE}/pricing`);
+    expect(out).toContain(`${BASE}/en`);
+    expect(out).toContain(`${BASE}/en/pricing`);
     expect(out.filter((u) => u.includes("/live/") || u.includes("/discover/"))).toEqual([]);
   });
 });

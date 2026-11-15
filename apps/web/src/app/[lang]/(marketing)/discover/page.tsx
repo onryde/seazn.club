@@ -3,6 +3,7 @@
 // ISR tag. Filters travel as query params so the page stays cacheable per
 // filter combination.
 import type { Metadata } from "next";
+import { marketingMeta } from "@/lib/seo-meta";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { MarketingShell } from "@/components/marketing/marketing-shell";
@@ -25,17 +26,12 @@ export async function generateMetadata({
   const { lang } = await params;
   if (!hasLocale(lang)) return {};
   const d = await getDictionary(lang, "marketing");
-  return {
+  return marketingMeta({
+    lang,
+    path: "/discover",
     title: t(d, "discover.meta.title"),
     description: t(d, "discover.meta.description"),
-    alternates: {
-      canonical: `/${lang}/discover`,
-      languages: {
-        ...Object.fromEntries(["en", "fr", "es", "nl"].map((l) => [l, `/${l}/discover`])),
-        "x-default": "/en/discover",
-      },
-    },
-  };
+  });
 }
 
 interface SearchParams {

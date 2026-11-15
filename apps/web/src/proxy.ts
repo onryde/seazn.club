@@ -154,7 +154,17 @@ export function gamesHostRewrite(request: NextRequest): URL | null {
  * Same-origin fetch calls (from our own UI) always pass because their Origin
  * matches the host the app is running on.
  */
-export function proxy(request: NextRequest) {
+/** Staging is the same app on another host. robots.txt (app/robots.ts) closes it, but a page already indexed
+ *  stays indexed until it is served with noindex, so every staging response carries the header. */
+export function proxy(request: NextRequest): NextResponse {
+  const response = proxyCore(request);
+  if (requestHostname(request).startsWith("stg.")) {
+    response.headers.set("X-Robots-Tag", "noindex, nofollow");
+  }
+  return response;
+}
+
+function proxyCore(request: NextRequest): NextResponse {
   const isApi = request.nextUrl.pathname.startsWith("/api/");
 
   if (isApi) {
