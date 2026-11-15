@@ -4,7 +4,7 @@
 // route to settle; cancel must call the PUBLIC write path, never the
 // organiser one) are provable without a render.
 import { anyOptedOut, resolvePersonDisplayName } from "@/lib/name-display";
-import { isTerminalRegistrationStatus } from "@/lib/registration-status";
+import { awaitingTeamAssignment, isTerminalRegistrationStatus } from "@/lib/registration-status";
 import { joinLinkPath } from "@/lib/join-link";
 import { zonedDateInput } from "@/lib/zoned-datetime";
 
@@ -506,32 +506,10 @@ export function canJoinEntry(status: EntryStatus): boolean {
   return status !== "withdrawn" && status !== "rejected" && status !== "expired";
 }
 
-/**
- * RS009 handoff (2026-08-30) — gates the "Waiting for a team" notice.
- * RS012 (found by the walkthrough, not a unit test — a sweep-withdrawn
- * entry's card showed WITHDRAWN next to "Waiting for a team" and an
- * already-past refund date) narrowed it a second time.
- *
- * `free_agent` records this entry's ENTRY MODE (design §5: "an entry with
- * no team of its own yet"), not its current OUTCOME, and neither does
- * `assigned_team_name` on its own: an entry the Stage 2 sweep withdraws for
- * missing its place-by date is still `free_agent = true` and still has no
- * `assigned_team_name` (it was never placed) — `status` is the only column
- * that changes when that happens. Without this check, a withdrawn/rejected/
- * expired solo sign-up reads as "still waiting" forever, contradicting its
- * own status badge right above it.
- */
-export function awaitingTeamAssignment(entry: {
-  status: EntryStatus;
-  free_agent: boolean;
-  assigned_team_name?: string | null;
-}): boolean {
-  return (
-    entry.free_agent === true &&
-    !entry.assigned_team_name &&
-    !isTerminalRegistrationStatus(entry.status)
-  );
-}
+// `awaitingTeamAssignment` (RS009/RS012: a solo sign-up still waiting for a team) lives in `@/lib/registration-status` since the m5 fix:
+// the status page's headline and the waitlist promotion mail both ask it, and the mail is server code, which does not import from `app/`.
+// Re-exported so every importer of this module (the entry card, the tests) keeps its path.
+export { awaitingTeamAssignment };
 
 /** RS009 — the other half: the team they were placed on, or null.
  *

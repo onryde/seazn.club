@@ -2,7 +2,7 @@ import "server-only";
 // Waitlist promotion: the queue order and a place in it, the seat gate, promote the oldest, the promoted notice (see ./index.ts).
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
-import { SPOT_HOLDERS } from "@/lib/registration-status";
+import { SPOT_HOLDERS, awaitingTeamAssignment } from "@/lib/registration-status";
 import { resolveVenueTz } from "@/lib/tz";
 import { entryReferenceOf } from "@/lib/ref-code";
 import { registrationPromotedEmail } from "@/lib/email";
@@ -443,6 +443,11 @@ export async function notifyPromoted(
     // in the promotion's own transaction), so the mail says so and names the division; anything else still waits. Read off the
     // row's status, the one fact that is true whichever door promoted it. Only then is the division's name read.
     const seatedIn = promoted.status === "confirmed" ? await divisionNameOf(sql, promoted.division_id) : null;
+    // Review walk-B m5: a confirmed SOLO sign-up seats nobody (`materialise` confirms it and returns), so the status page reads "You're in
+    // the player pool" for it - and the mail says that, not "your place is confirmed". The question is the page's own
+    // (`awaitingTeamAssignment`), asked of the row's own `free_agent`. No `assigned_team_name` is passed, and none can exist yet: a
+    // waitlisted or pending entry is refused by `assignSoloSignUp` (`isSoloAssignableStatus`), so a promotion never meets a placed one.
+    const inPool = seatedIn !== null && awaitingTeamAssignment(promoted);
     const content = await registrationPromotedEmail(
       {
         orgName: ctx.org_name,
@@ -471,6 +476,7 @@ export async function notifyPromoted(
         refCode: entryReferenceOf(promoted),
         refStatusUrl: promoted.ref_code ? `${origin}/r/${promoted.ref_code}` : null,
         seatedIn,
+        inPool,
       },
       locale,
     );
