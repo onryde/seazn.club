@@ -22,7 +22,9 @@ import { insertCourtStreamCode, openStreamCodeTok, wipeStreamCodeTok } from "@/s
 import { resolveCandidateCourts } from "./court-candidates";
 import { competitionZone, dayBounds } from "./match-day-codes";
 import { loadSettings } from "./schedule/settings";
-import { CODE_RETRIES, SLOT, drawCode, freshTok, isCodeCollision, requireSessionEditor, sha256Hex } from "./stream-codes";
+import {
+  CODE_RETRIES, SLOT, activeCodeOf, drawCode, fixtureOf, freshTok, isCodeCollision, lockFixtureCode, requireSessionEditor, sha256Hex,
+} from "./stream-codes";
 
 export type CourtStreamShown = {
   id: string;
@@ -225,4 +227,50 @@ export async function withdrawCourtStream(auth: AuthCtx, linkId: string): Promis
     const codes = await tx<{ id: string }[]>`select id from fixture_stream_codes where court_link_id = ${linkId} and ended_at is null`;
     for (const c of codes) await wipeStreamCodeTok(tx, c.id, "withdrawn", auth.userId);
   });
+}
+
+/** The court's link that is not withdrawn and is open at `now` (`opens_at <= now < expires_at`), or null — also for a match
+ *  with no court. The one answer to "is this court streaming right now?", for the switch and the mint guards. */
+export async function liveCourtLinkFor(
+  exec: Tx | typeof sql, a: { orgId: string; courtId: string | null; now: Date },
+): Promise<{ id: string; courtName: string } | null> {
+  if (a.courtId === null) return null;
+  const [row] = await exec<{ id: string; court_name: string }[]>`
+    select l.id, c.name as court_name from court_stream_links l join courts c on c.id = l.court_id
+     where l.org_id = ${a.orgId} and l.court_id = ${a.courtId} and l.withdrawn_at is null
+       and l.opens_at <= ${a.now} and ${a.now} < l.expires_at
+     limit 1`;
+  return row ? { id: row.id, courtName: row.court_name } : null;
+}
+
+/**
+ * The match's Stream switch (spec §5.2): ON hands the match to its court's phone. OFF by default; turning it on spends no
+ * credit (the credit is taken when a session starts). On is refused by name while the match has its own ACTIVE code
+ * (`has_own_stream_code`) or its court has no live link now (`court_not_streaming`); off is never refused. It takes the
+ * fixture's code lock first, the lock `ensureStreamCode` takes, so a mint and a switch-on cannot both succeed. An upsert that
+ * never touches `target_id` / `target_chosen` (plan R-1), bumping `revision`.
+ */
+export async function setCourtStream(auth: AuthCtx, fixtureId: string, on: boolean, now: Date = new Date()): Promise<{ on: boolean }> {
+  requireSessionEditor(auth);
+  assertUuid(fixtureId, "fixture");
+  await fixtureOf(auth, fixtureId); // the 404 for another org's fixture
+  await sql.begin(async (tx) => {
+    await lockFixtureCode(tx, fixtureId);
+    if (on) {
+      if (await activeCodeOf(tx, fixtureId)) {
+        throw new HttpError(409, "This match has its own stream code; end it before the court streams the match", "has_own_stream_code");
+      }
+      const [f] = await tx<{ court_id: string | null }[]>`select court_id from fixtures where id = ${fixtureId}`;
+      if (!(await liveCourtLinkFor(tx, { orgId: auth.orgId, courtId: f?.court_id ?? null, now }))) {
+        throw new HttpError(409, "This match's court is not streaming right now", "court_not_streaming");
+      }
+    }
+    await tx`
+      insert into fixture_stream_settings (fixture_id, org_id, court_stream, updated_by, updated_at, revision)
+      values (${fixtureId}, ${auth.orgId}, ${on}, ${auth.userId}, now(), 1)
+      on conflict (fixture_id) do update
+         set court_stream = excluded.court_stream, updated_by = excluded.updated_by, updated_at = now(),
+             revision = fixture_stream_settings.revision + 1`;
+  });
+  return { on };
 }

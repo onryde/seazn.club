@@ -20,6 +20,7 @@ import { composedUnavailable } from "@/server/relay/drivers";
 import { hasValidKek, sealWith } from "@/server/relay/crypto";
 import { ACTIVE_STATES } from "@/server/relay/domain/session";
 import { type CodeCall, codeServes, codeStatus, normaliseCode, type RecordTail, recordTailAnchor } from "@/server/relay/domain/stream-code";
+import { liveCourtLinkFor } from "./court-streams";
 import { insertStreamCode, openStreamCodeTok, wipeStreamCodeTok } from "@/server/relay/secret-columns";
 
 /** §6.1: 12 characters of lowercase Crockford base32 (60 bits). V430's `code` check admits exactly this alphabet. */
@@ -61,7 +62,7 @@ export function requireSessionEditor(auth: AuthCtx): void {
 
 /** The fixture's org and competition, pooled and OUTSIDE any transaction (`requireFeature` queries the pool; the
  *  device-links `competitionForFixture` reason). Another org's fixture reads exactly like a missing one. */
-async function fixtureOf(auth: AuthCtx, fixtureId: string): Promise<{ competitionId: string; sportKey: string }> {
+export async function fixtureOf(auth: AuthCtx, fixtureId: string): Promise<{ competitionId: string; sportKey: string }> {
   const [row] = await sql<{ org_id: string; competition_id: string; sport_key: string }[]>`
     select c.org_id, c.id as competition_id, d.sport_key from fixtures f
       join divisions d on d.id = f.division_id
@@ -73,7 +74,7 @@ async function fixtureOf(auth: AuthCtx, fixtureId: string): Promise<{ competitio
 
 /** Serialise every ensure and reissue on one fixture (§6.1): without it two organisers opening the panel at once both
  *  see "no code", both mint, and the partial unique index refuses one with a 500. */
-async function lockFixtureCode(tx: Tx, fixtureId: string): Promise<void> {
+export async function lockFixtureCode(tx: Tx, fixtureId: string): Promise<void> {
   await tx`select pg_advisory_xact_lock(hashtext(${"stream_code:" + fixtureId}))`;
 }
 
@@ -131,10 +132,24 @@ async function mintLocked(tx: Tx, auth: AuthCtx, fixtureId: string, fresh: { tok
 }
 
 type ActiveCode = { id: string; code: string; tok_hash: string; created_at: Date };
-async function activeCodeOf(tx: Tx, fixtureId: string): Promise<ActiveCode | null> {
+export async function activeCodeOf(tx: Tx, fixtureId: string): Promise<ActiveCode | null> {
   const [row] = await tx<ActiveCode[]>`
     select id, code, tok_hash, created_at from fixture_stream_codes where fixture_id = ${fixtureId} and ended_at is null`;
   return row ?? null;
+}
+
+/** Court stream (spec §5.2): a match whose Stream switch is on AND whose court has a live link is streamed by that court's
+ *  phone, so it mints no code of its own. Runs inside the fixture's code lock, the same lock `setCourtStream` takes. A switch
+ *  left on after its link ended or was withdrawn does not stop a mint: no court is streaming it. */
+async function refuseIfCourtStreamed(tx: Tx, orgId: string, fixtureId: string): Promise<void> {
+  const [row] = await tx<{ court_id: string | null; court_stream: boolean | null }[]>`
+    select f.court_id, s.court_stream from fixtures f
+      left join fixture_stream_settings s on s.fixture_id = f.id
+     where f.id = ${fixtureId}`;
+  if (!row?.court_stream) return;
+  if (await liveCourtLinkFor(tx, { orgId, courtId: row.court_id, now: new Date() })) {
+    throw new HttpError(409, "This match is streamed by its court's phone; switch the court Stream off to give it its own code", "court_streamed");
+  }
 }
 
 /**
@@ -151,6 +166,7 @@ export async function ensureStreamCode(auth: AuthCtx, fixtureId: string): Promis
   const outcome = await sql.begin(async (tx): Promise<StreamCodeShown | "finished"> => {
     await lockFixtureCode(tx, fixtureId);
     const finishedAt = await finishedAtOf(tx, fixtureId);
+    await refuseIfCourtStreamed(tx, auth.orgId, fixtureId);
     const current = await activeCodeOf(tx, fixtureId);
     if (current) {
       const status = codeStatus({ endedAt: null, finishedAt }, new Date(), await hasOpenSession(tx, fixtureId), graceMinutes());
@@ -190,6 +206,7 @@ export async function reissueStreamCode(auth: AuthCtx, fixtureId: string): Promi
   return sql.begin(async (tx) => {
     await lockFixtureCode(tx, fixtureId);
     if ((await finishedAtOf(tx, fixtureId)) !== null) throw new HttpError(422, FIXTURE_FINISHED, "fixture_finished");
+    await refuseIfCourtStreamed(tx, auth.orgId, fixtureId);
     const fresh = freshTok();
     const current = await activeCodeOf(tx, fixtureId);
     if (current) await wipeStreamCodeTok(tx, current.id, "reissued", auth.userId);

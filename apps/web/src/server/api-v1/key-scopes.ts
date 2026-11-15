@@ -389,6 +389,11 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   "POST /fixtures/:id/stream-code",
   "POST /fixtures/:id/stream-code/reissue",
   "PUT /fixtures/:id/stream-settings",
+  // Court stream (§5): a court link carries a live QR credential (a tok) and the switch hands a match to a court's phone — the desk's, never a key's.
+  "POST /competitions/:id/court-streams",
+  "GET /competitions/:id/court-streams",
+  "POST /court-streams/:id/withdraw",
+  "PUT /fixtures/:id/court-stream",
   // Capture QR v2 (T9, §9): the panel's phone read model names the paired phone and the destination — the panel's, never a key's.
   "GET /fixtures/:id/stream-phone",
   // Capture QR v2 (T8a–T8c, §6.3): the phone's routes. Their Bearer is the stream code's tok — no cookie, never a key.

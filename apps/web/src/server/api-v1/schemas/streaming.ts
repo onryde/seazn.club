@@ -231,6 +231,11 @@ export const CourtStream = z.object({
   qr: CaptureQrV2.nullable(),
 }).strict();
 export type CourtStream = z.infer<typeof CourtStream>;
+/** Court stream (spec 2026-11-14 §5.2): PUT /fixtures/{id}/court-stream. */
+export const PutCourtStream = z.object({ on: z.boolean() }).strict();
+export type PutCourtStream = z.infer<typeof PutCourtStream>;
+export const CourtStreamSwitch = z.object({ on: z.boolean() }).strict();
+export type CourtStreamSwitch = z.infer<typeof CourtStreamSwitch>;
 /** §6.7.3 / §8.1 (plan T3): the fixture's stream settings. `targetId` is the destination pre-pick (PR-1; `null` clears it) and
  *  `autoStream` is the automatic-streaming switch (PR-2, W7). Either or both, at least one: a PUT writes only the fields it
  *  names, so the panel's PR-1 body `{ targetId }` still leaves the switch alone and `{ autoStream }` leaves the pick alone. */
