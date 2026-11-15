@@ -15,7 +15,8 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { SPOT_HOLDERS } from "@/lib/registration-status";
+import { awaitingTeamAssignment, SPOT_HOLDERS, TERMINAL_STATUSES } from "@/lib/registration-status";
+import { awaitingTeamAssignment as onStatusPage } from "@/app/(public)/live/[orgSlug]/[competitionSlug]/register/status/view-model";
 import { SPOT_HOLDERS as fromRegistrations } from "@/server/usecases/registrations";
 
 describe("SPOT_HOLDERS — single source of truth", () => {
@@ -140,5 +141,31 @@ describe("entryPriceCents", () => {
     expect(checked).toBe(8);
     expect(entryPriceCents(null, true), "the empty case: no settings row").toBe(0);
     expect(entryPriceCents(undefined, false)).toBe(0);
+  });
+});
+
+// Review walk-B m5: the waitlist promotion mail says "player pool" for a solo sign-up still waiting for a team, and it must say it for
+// exactly the entries the status page's `pool` headline does. That holds only while both ask ONE predicate. `awaitingTeamAssignment` now
+// lives here (server code does not import from `app/`), and the status page's view-model re-exports it: pinned as the SAME binding, so a
+// second copy that can drift cannot be written without this failing.
+describe("awaitingTeamAssignment is one predicate for the status page and the promotion mail (m5)", () => {
+  it("the view-model's export is this module's function, not a copy", () => {
+    expect(onStatusPage).toBe(awaitingTeamAssignment);
+  });
+
+  it("answers every status for a solo (the table, not a sample): live and unplaced waits, a terminal one does not, a placed one does not", () => {
+    const live = ["pending", "paid", "confirmed", "waitlisted"] as const;
+    let checked = 0;
+    for (const status of live) {
+      expect(awaitingTeamAssignment({ status, free_agent: true }), `${status}, unplaced`).toBe(true);
+      expect(awaitingTeamAssignment({ status, free_agent: true, assigned_team_name: "Riverside Rovers" }), `${status}, placed`).toBe(false);
+      expect(awaitingTeamAssignment({ status, free_agent: false }), `${status}, a team`).toBe(false);
+      checked += 1;
+    }
+    for (const status of TERMINAL_STATUSES) {
+      expect(awaitingTeamAssignment({ status, free_agent: true }), `${status} is over`).toBe(false);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: four live statuses and three terminal ones").toBe(7);
   });
 });

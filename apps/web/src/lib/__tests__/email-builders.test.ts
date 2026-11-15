@@ -85,6 +85,7 @@ const registrationArgs = {
   statusUrl: LINK,
   // The promotion mail's state (walk-fix F2): these promotions owe a fee, so nothing is seated.
   seatedIn: null,
+  inPool: false,
 };
 
 // Cart-shaped — RS005 W4: registrationTemplate now takes an entries array +

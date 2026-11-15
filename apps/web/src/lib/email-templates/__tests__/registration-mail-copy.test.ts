@@ -12,7 +12,7 @@ import {
   registrationPromotedTemplate,
   registrationTemplate,
 } from "@/lib/email-templates";
-import { money } from "@/lib/email-templates/shared";
+import { escapeHtml, money } from "@/lib/email-templates/shared";
 
 const CONTACT = "Dana Captain";
 const TEAM = "Riverside Rovers";
@@ -46,7 +46,7 @@ describe("a registrant mail greets the person, not the entry", () => {
         { ...base, feeCents: 1500, paymentInstructions: null, method: "card", payPageUrl: PAY_PAGE },
         dict,
       ),
-      promotion: registrationPromotedTemplate({ ...base, feeCents: 1500, method: "card", payPageUrl: PAY_PAGE, seatedIn: null }, dict),
+      promotion: registrationPromotedTemplate({ ...base, feeCents: 1500, method: "card", payPageUrl: PAY_PAGE, seatedIn: null, inPool: false }, dict),
       refund: refundIssuedTemplate({ ...base, amountCents: 1500 }, dict),
     };
     let checked = 0;
@@ -302,7 +302,7 @@ describe("a registrant mail never names the contact back to themselves as the en
       confirmation: confirmation([entry(DIVISION, 1500)]),
       confirmationCart: confirmation([entry(DIVISION, 1500), entry("Masters Doubles", 0)]),
       reminder: paymentReminderTemplate({ ...base, feeCents: 1500, paymentInstructions: null, method: "card", payPageUrl: PAY_PAGE }, dict),
-      promotion: registrationPromotedTemplate({ ...base, feeCents: 1500, method: "card", payPageUrl: PAY_PAGE, seatedIn: null }, dict),
+      promotion: registrationPromotedTemplate({ ...base, feeCents: 1500, method: "card", payPageUrl: PAY_PAGE, seatedIn: null, inPool: false }, dict),
       refund: refundIssuedTemplate({ ...base, amountCents: 1500 }, dict),
     } as Record<string, { subject: string; html: string; text: string }>;
   }
@@ -423,6 +423,7 @@ describe("a free promotion says what the promotion did (walk-fix F2)", () => {
       method: "offline",
       payPageUrl: null,
       seatedIn,
+      inPool: false,
     }) as const;
 
   it.each(LOCALES)("%s: seated -> 'you're in' naming the division, never the approval wording; pending -> the approval wording (html and text)", async (locale) => {
@@ -466,6 +467,74 @@ describe("a free promotion says what the promotion did (walk-fix F2)", () => {
     const card = registrationPromotedTemplate({ ...free(null), feeCents: 1500, method: "card", payPageUrl: PAY_PAGE }, dict, "en");
     expect(words(card.html)).not.toContain(t(dict, "registrationPromoted.noPayment"));
     expect(words(card.html)).not.toContain("You're in");
+  });
+});
+
+// Review walk-B m5: a SOLO sign-up (a free agent, awaiting a team) promoted off the waitlist on a free + automatic division is `confirmed`
+// but seats nobody, and the status page reads "You're in the player pool". The mail used to say "your place in <division> is confirmed" -
+// two answers to one question. A pool promotion now states the pool (`inPool`, from the status page's own `awaitingTeamAssignment`), in
+// the body, the plain-text part and the preheader. Only a free promotion reads it: a fee panel always wins, as it does for `seatedIn`.
+describe("a solo promotion into the player pool says so, never 'confirmed' (review walk-B m5)", () => {
+  const free = (seatedIn: string | null, inPool: boolean) =>
+    ({
+      orgName: "Riverside Club",
+      competitionName: "Spring Open",
+      displayName: "Maya Solo",
+      contactName: "Maya Solo",
+      feeCents: 0,
+      currency: "gbp",
+      method: "offline",
+      payPageUrl: null,
+      seatedIn,
+      inPool,
+    }) as const;
+
+  it.each(LOCALES)("%s: the pool sentence and preheader replace the confirmed ones (html and text); a team seat keeps its own", async (locale) => {
+    const dict = await dictOf(locale);
+    const pool = t(dict, "registrationPromoted.pool");
+    const confirmed = t(dict, "registrationPromoted.confirmed", { divisionName: DIVISION });
+    const awaiting = t(dict, "registrationPromoted.noPayment");
+    const preheaderPool = t(dict, "registrationPromoted.preheaderPool", { competitionName: "Spring Open" });
+    const preheader = t(dict, "registrationPromoted.preheader", { competitionName: "Spring Open" });
+    expect(pool, `${locale}: the pool key exists`).not.toBe("registrationPromoted.pool");
+    expect(preheaderPool, `${locale}: the pool preheader key exists`).not.toBe("registrationPromoted.preheaderPool");
+    expect(pool, `${locale}: not the confirmed sentence`).not.toBe(confirmed);
+    expect(preheaderPool, `${locale}: not the plain preheader`).not.toBe(preheader);
+
+    const solo = registrationPromotedTemplate(free(DIVISION, true), dict, locale);
+    const team = registrationPromotedTemplate(free(DIVISION, false), dict, locale);
+    let checked = 0;
+    for (const [part, s, k] of [
+      ["html", words(solo.html), words(team.html)],
+      ["text", solo.text, team.text],
+    ] as const) {
+      expect(s, `${locale} ${part}: a solo in the pool says it`).toContain(pool);
+      expect(s, `${locale} ${part}: never 'confirmed'`).not.toContain(confirmed);
+      expect(s, `${locale} ${part}: never the approval wording`).not.toContain(awaiting);
+      expect(k, `${locale} ${part}: a seated team still says confirmed`).toContain(confirmed);
+      expect(k, `${locale} ${part}: and never the pool`).not.toContain(pool);
+      checked += 1;
+    }
+    expect(solo.html, `${locale}: the preheader states the pool`).toContain(escapeHtml(preheaderPool));
+    expect(solo.html, `${locale}: not the plain preheader`).not.toContain(escapeHtml(preheader));
+    expect(team.html, `${locale}: a team's preheader is the plain one`).toContain(escapeHtml(preheader));
+    expect(team.html, `${locale}: never the pool one`).not.toContain(escapeHtml(preheaderPool));
+    expect(checked).toBe(2);
+  });
+
+  it.each(LOCALES)("%s: a promotion that owes a fee never reads the pool (the fee panel and the plain preheader win)", async (locale) => {
+    const dict = await dictOf(locale);
+    const pool = t(dict, "registrationPromoted.pool");
+    const card = registrationPromotedTemplate({ ...free(null, true), feeCents: 1500, method: "card", payPageUrl: PAY_PAGE }, dict, locale);
+    expect(pool).not.toBe("registrationPromoted.pool");
+    expect(words(card.html)).not.toContain(pool);
+    expect(card.text).not.toContain(pool);
+    expect(card.html).not.toContain(escapeHtml(t(dict, "registrationPromoted.preheaderPool", { competitionName: "Spring Open" })));
+  });
+
+  it("en, typed: the owner's words (2026-11-15)", async () => {
+    const dict = await dictOf("en");
+    expect(t(dict, "registrationPromoted.pool")).toBe("You're in the player pool — the organiser will place you on a team.");
   });
 });
 

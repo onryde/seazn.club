@@ -36,6 +36,11 @@ export interface RegistrationPromotedArgs {
    *  only when nothing is owed: a fee never seats at promotion, and its panel says what to do. Required, so a caller cannot
    *  leave the state out and fall back to the waiting sentence. */
   seatedIn: string | null;
+  /** The promotion seated a SOLO sign-up who is still waiting for a team (review walk-B m5): confirmed, but nobody has placed them yet, so
+   *  the status page reads "You're in the player pool" and the mail must say the same, never "your place is confirmed". The producer
+   *  decides it with the status page's own predicate (`awaitingTeamAssignment`, lib/registration-status.ts). Wins over `seatedIn`, and,
+   *  like it, is read only when nothing is owed. Required, so a caller cannot leave it out and fall back to the confirmed sentence. */
+  inPool: boolean;
 }
 
 /** A waitlist spot opened (spec §2): the registrant is pending again — card
@@ -53,6 +58,8 @@ export function registrationPromotedTemplate(
   const deadline = opts.payDeadline ? formatDeadline(opts.payDeadline, locale, opts.timeZone) : null;
   const card = paid && opts.method === "card" && !!opts.payPageUrl;
   const detailsUrl = paid && !card ? (opts.payPageUrl ?? null) : null;
+  // A fee panel always wins (the entry is not in anything yet), so the pool is read only for a free promotion.
+  const inPlayerPool = !paid && opts.inPool;
   const instructions = opts.paymentInstructions
     ? paymentInstructionsText(fillPaymentInstructions(opts.paymentInstructions, opts.refCode))
     : null;
@@ -70,9 +77,11 @@ export function registrationPromotedTemplate(
           instructions ?? t(dict, "registrationPromoted.contactOrganiser"),
         ) + (detailsUrl ? button(t(dict, "registrationPromoted.viewDetails"), detailsUrl) : "")
       : paragraph(
-          opts.seatedIn !== null
-            ? t(dict, "registrationPromoted.confirmed", { divisionName: escapeHtml(opts.seatedIn) })
-            : t(dict, "registrationPromoted.noPayment"),
+          inPlayerPool
+            ? t(dict, "registrationPromoted.pool")
+            : opts.seatedIn !== null
+              ? t(dict, "registrationPromoted.confirmed", { divisionName: escapeHtml(opts.seatedIn) })
+              : t(dict, "registrationPromoted.noPayment"),
         );
 
   const nextStepText = card
@@ -88,9 +97,11 @@ export function registrationPromotedTemplate(
         "\n" +
         (instructions ?? t(dict, "registrationPromoted.contactOrganiser")) +
         (detailsUrl ? "\n\n" + t(dict, "registrationPromoted.textViewDetails") + "\n" + detailsUrl : "")
-      : opts.seatedIn !== null
-        ? t(dict, "registrationPromoted.confirmed", { divisionName: opts.seatedIn })
-        : t(dict, "registrationPromoted.noPayment");
+      : inPlayerPool
+        ? t(dict, "registrationPromoted.pool")
+        : opts.seatedIn !== null
+          ? t(dict, "registrationPromoted.confirmed", { divisionName: opts.seatedIn })
+          : t(dict, "registrationPromoted.noPayment");
 
   const subject = t(dict, "registrationPromoted.subject", {
     competitionName: opts.competitionName,
@@ -105,7 +116,7 @@ export function registrationPromotedTemplate(
               competitionName: opts.competitionName,
               deadline,
             })
-          : t(dict, "registrationPromoted.preheader", {
+          : t(dict, inPlayerPool ? "registrationPromoted.preheaderPool" : "registrationPromoted.preheader", {
               competitionName: opts.competitionName,
             }),
       mastheadTag: opts.orgName,

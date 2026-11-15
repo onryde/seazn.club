@@ -47,6 +47,38 @@ export function isTerminalRegistrationStatus(status: string): boolean {
   return (TERMINAL_STATUSES as readonly string[]).includes(status);
 }
 
+/**
+ * RS009 handoff (2026-08-30) — gates the "Waiting for a team" notice.
+ * RS012 (found by the walkthrough, not a unit test — a sweep-withdrawn
+ * entry's card showed WITHDRAWN next to "Waiting for a team" and an
+ * already-past refund date) narrowed it a second time.
+ *
+ * `free_agent` records this entry's ENTRY MODE (design §5: "an entry with
+ * no team of its own yet"), not its current OUTCOME, and neither does
+ * `assigned_team_name` on its own: an entry the Stage 2 sweep withdraws for
+ * missing its place-by date is still `free_agent = true` and still has no
+ * `assigned_team_name` (it was never placed) — `status` is the only column
+ * that changes when that happens. Without this check, a withdrawn/rejected/
+ * expired solo sign-up reads as "still waiting" forever, contradicting its
+ * own status badge right above it.
+ *
+ * The ONE statement of "this solo sign-up is still waiting for a team", declared here (dependency-free, like the rest of this module) so
+ * that every surface answering it reads the same rule: the status page's `pool` headline and "Waiting for a team" card, the refund-by date
+ * (`poolPlaceByDate`), and the waitlist promotion mail (`notifyPromoted`, review walk-B m5), which says "player pool" for exactly the
+ * entries the page does.
+ */
+export function awaitingTeamAssignment(entry: {
+  status: string;
+  free_agent: boolean;
+  assigned_team_name?: string | null;
+}): boolean {
+  return (
+    entry.free_agent === true &&
+    !entry.assigned_team_name &&
+    !isTerminalRegistrationStatus(entry.status)
+  );
+}
+
 /** What has been sent back of THIS entry's CURRENT payment (polish wave P5, P1-review carry b): its refund history
  *  (`refunded_cents`, V368) minus the refunds of LATE payments (`late_refunded_cents`, V512) - a late payment is never the entry's
  *  current payment (a late outcome never stamps its intent on the entry), and a re-promotion resets the fee but keeps the history.
