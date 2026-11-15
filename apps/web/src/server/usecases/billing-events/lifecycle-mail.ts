@@ -172,6 +172,9 @@ function noPayer(kind: OutboxKind, ids: Record<string, string>): void {
 // trial_expired (customer.subscription.deleted)
 // ---------------------------------------------------------------------------------------------------------------------------------
 
+/** How long after `trial_end` live Stripe may stamp a run-out's `ended_at` (see `trialRanOut`). */
+const TRIAL_RUN_OUT_TOLERANCE_SECONDS = 3600;
+
 /**
  * Did this deletion end a TRIAL that ran out, as opposed to a cancel the payer asked for or a paid plan ending?
  *
@@ -180,17 +183,22 @@ function noPayer(kind: OutboxKind, ids: Record<string, string>): void {
  *  - our mirror said `trialing` up to this delete (a converted, paying group says active or past_due);
  *  - no end date had been SET (`cancel_at` null): scheduling a cancel — the payer's "cancel at period end", or a Dashboard date — sets
  *    it, and that payer was already told by the cancel confirmation;
- *  - it ended EXACTLY at the trial's end (the sandbox's run-out: `ended_at == trial_end == canceled_at`). An immediate cancel during the
- *    trial ends before it; a trial that converted and was cancelled later ends after it — the case where our mirror can still say
- *    `trialing` because the conversion's update is late or stuck (`handleInvoicePaymentSucceeded` never moves a trialing mirror), and a
- *    paying customer must not be told their trial ended with no card.
+ *  - it ended AT the trial's end, or up to `TRIAL_RUN_OUT_TOLERANCE_SECONDS` after it. The sandbox's run-out read
+ *    `ended_at == trial_end == canceled_at`, but that sandbox ran on a TEST CLOCK, which jumps to the exact second; live Stripe stamps
+ *    `ended_at` when it processed the trial's end, which can be seconds or minutes later (review round 2 m-c) — an exact match would
+ *    silently drop every live run-out mail. The window is one-sided: Stripe never ends a trial early on its own, so a cancel NOW before
+ *    `trial_end` is the payer's. An hour leaves generous room for that delay (not measured live; the sandbox cannot show it) and stays far short of the other case it must refuse: a trial that
+ *    converted and was cancelled later — the case where our mirror can still say `trialing` because the conversion's update is late or
+ *    stuck (`handleInvoicePaymentSucceeded` never moves a trialing mirror), and a paying customer must not be told their trial ended
+ *    with no card.
  * A no-card trial is the only one that ends this way: a card-on-file trial converts at `trial_end` instead of ending.
  */
 export function trialRanOut(sub: Stripe.Subscription, mirrorStatusBefore: string | null): boolean {
   if (mirrorStatusBefore !== "trialing") return false;
   if (sub.cancel_at != null) return false;
   if (sub.trial_end == null || sub.ended_at == null) return false;
-  return sub.ended_at === sub.trial_end;
+  const afterTrialEnd = sub.ended_at - sub.trial_end;
+  return afterTrialEnd >= 0 && afterTrialEnd <= TRIAL_RUN_OUT_TOLERANCE_SECONDS;
 }
 
 /**
@@ -300,6 +308,9 @@ export async function queuePaidInvoiceMail(invoice: Stripe.Invoice, stripeSubId:
     return;
   }
   const p = await billingPayer(sql, groupId);
+  // Paid after the subscription was deleted (a cancel NOW inside the retry window): the group is cancelled and stays so
+  // (handleInvoicePaymentSucceeded does not revive it), so it is told nothing about a plan it no longer has (review round 2 m-b).
+  if (p?.status === "canceled") return;
   if (!p) {
     const [mirror] = await sql<{ trial_end: Date | null }[]>`select trial_end from subscriptions where id = ${groupId}`;
     const skipped = isFirstPayment(invoice, mirror?.trial_end ?? null) ? "plan_activated" : "renewal_paid";

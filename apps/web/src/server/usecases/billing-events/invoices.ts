@@ -56,9 +56,11 @@ export async function handleInvoicePaymentFailed(invoice: Stripe.Invoice) {
 export async function handleInvoicePaymentSucceeded(invoice: Stripe.Invoice) {
   const subId = invoiceSubId(invoice);
   if (!subId) return;
+  // Not a trialing mirror (its own events move it), and not a CANCELLED one: a retry that succeeds after a cancel NOW inside the retry
+  // window must not revive a deleted subscription — a revived 'active' would also block the payer's next checkout (review round 2 m-b).
   const [row] = await sql<{ id: string }[]>`
     update subscriptions set status = 'active', updated_at = now()
-    where stripe_subscription_id = ${subId} and status != 'trialing'
+    where stripe_subscription_id = ${subId} and status not in ('trialing', 'canceled')
     returning id`;
   // Leaving dunning restores the plan for every org in the group.
   if (row) await invalidateGroupEntitlements(row.id);

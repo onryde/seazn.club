@@ -163,13 +163,45 @@ describe("trialRanOut (no database)", () => {
       "trialing",
       false,
     ],
-    // Killer of the ended-EXACTLY-at-trial_end guard (review m-5): a trial that converted and was paid for, then cancelled outright a
-    // month later, while our mirror still says trialing (its conversion update stuck). A trial that runs out ends AT trial_end — the
-    // sandbox's D has ended_at == trial_end == canceled_at — so anything later is not one.
+    // Killer of the at-most-an-hour-after guard (review m-5): a trial that converted and was paid for, then cancelled outright a
+    // month later, while our mirror still says trialing (its conversion update stuck). A trial that runs out ends AT trial_end, or a
+    // processing delay after it — so anything much later is not one.
     [
       "a converted trial cancelled a month after its end while the mirror still says trialing",
       at("subscription.deleted.trial_ran_out_no_card", (o) => o.trial_end, now, (o) => {
         o.ended_at = (o.trial_end as number) + 30 * DAY;
+        o.canceled_at = o.ended_at;
+      }),
+      "trialing",
+      false,
+    ],
+    // The same, cancelled two hours after the trial's end: past the hour the run-out is allowed (the window's upper edge).
+    [
+      "a converted trial cancelled two hours after its end while the mirror still says trialing",
+      at("subscription.deleted.trial_ran_out_no_card", (o) => o.trial_end, now, (o) => {
+        o.ended_at = (o.trial_end as number) + 2 * 3600;
+        o.canceled_at = o.ended_at;
+      }),
+      "trialing",
+      false,
+    ],
+    // Review round 2 m-c: the sandbox stamped ended_at == trial_end because a TEST CLOCK advances to the exact second; live Stripe
+    // stamps when it processed the trial's end, which can be seconds or minutes later. That run-out must still mail.
+    [
+      "a no-card trial ran out and live Stripe stamped its end two minutes after trial_end",
+      at("subscription.deleted.trial_ran_out_no_card", (o) => o.trial_end, now, (o) => {
+        o.ended_at = (o.trial_end as number) + 120;
+        o.canceled_at = o.ended_at;
+      }),
+      "trialing",
+      true,
+    ],
+    // The window is one-sided: a cancel NOW ten minutes before the trial's end is the payer's, not a run-out (Stripe never ends a
+    // trial early on its own).
+    [
+      "a trial cancelled outright ten minutes before its end",
+      at("subscription.deleted.trial_ran_out_no_card", (o) => o.trial_end, now, (o) => {
+        o.ended_at = (o.trial_end as number) - 600;
         o.canceled_at = o.ended_at;
       }),
       "trialing",
@@ -181,11 +213,11 @@ describe("trialRanOut (no database)", () => {
   it.each(cases)("%s", (_name, event, before, expected) => {
     expect(trialRanOut(sub(event), before)).toBe(expected);
   });
-  it("judged nine cases, one of them positive; the sandbox's own run-out ends exactly at trial_end", () => {
+  it("judged twelve cases, two of them positive; the sandbox's own run-out (a test clock) ends exactly at trial_end", () => {
     const d = at("subscription.deleted.trial_ran_out_no_card", (o) => o.trial_end, now);
     expect(obj(d).ended_at, "premise (sandbox D): a trial that runs out ends at trial_end").toBe(obj(d).trial_end);
-    expect(cases).toHaveLength(9);
-    expect(cases.filter((c) => c[3])).toHaveLength(1);
+    expect(cases).toHaveLength(12);
+    expect(cases.filter((c) => c[3])).toHaveLength(2);
   });
 });
 
@@ -570,6 +602,48 @@ describe.skipIf(!HAS_DB)("plan_activated and renewal_paid: invoice.payment_succe
       checked++;
     }
     expect(checked).toBe(3);
+  });
+
+  it("a RE-BUY's invoice that lands before its link waits, though the group still stores its old, dead subscription (review round 2 m-a)", async () => {
+    // A departed customer comes back: the group keeps the cancelled subscription's id and status until customer.subscription.created
+    // writes the new one. Storing an id is not billing a live subscription — this invoice is the group's, so it is refused and retried.
+    const g = await group({ status: "active" });
+    const dead = `sub_blm_dead_${randomUUID().slice(0, 8)}`;
+    await sql`update subscriptions set stripe_subscription_id = ${dead}, status = 'canceled', plan_key = 'community' where id = ${g.groupId}`;
+    const stamped = { org_id: g.orgId, subscription_id: g.groupId };
+    const e = capturedEvent("invoice.payment_succeeded.new_paid_monthly", {
+      stripeSubId: g.stripeSubId,
+      anchor: (o) => o.created,
+      at: nowSeconds(),
+      edit: (o) => {
+        freshInvoiceId(o);
+        (o.parent as { subscription_details: { metadata: Record<string, string> } }).subscription_details.metadata = stamped;
+      },
+    });
+    await expect(processStripeEvent(e)).rejects.toThrow(BillingGroupNotLinkedError);
+    expect(await kinds(g.groupId)).toEqual([]);
+    // Positive pair: once the new subscription is linked, the same invoice activates.
+    await sql`update subscriptions set stripe_subscription_id = ${g.stripeSubId}, status = 'active', plan_key = 'pro' where id = ${g.groupId}`;
+    await processStripeEvent(e);
+    expect(await kinds(g.groupId)).toEqual(["plan_activated"]);
+  });
+
+  it("a payment that lands after the subscription was cancelled outright neither revives the group nor mails it (review round 2 m-b)", async () => {
+    // Cancel NOW inside the retry window: Stripe deletes the subscription, then a retry it had already started succeeds. The group
+    // stays cancelled (a revived 'active' would block the payer's next checkout) and is told nothing about a plan it no longer has.
+    vi.stubEnv("BILLING_RENEWAL_RECEIPT_EMAILS", "1");
+    let checked = 0;
+    for (const name of ["invoice.payment_succeeded.new_paid_monthly", "invoice.payment_succeeded.annual_renewal"] as const) {
+      const g = await group({ status: "past_due" });
+      await processStripeEvent(capturedEvent("subscription.deleted.paid_canceled_now", { stripeSubId: g.stripeSubId, anchor: (o) => o.ended_at, at: nowSeconds() }));
+      const status = async () => (await sql<{ status: string }[]>`select status from subscriptions where id = ${g.groupId}`)[0]!.status;
+      expect(await status(), `${name}: premise, the real delete cancelled the group`).toBe("canceled");
+      await processStripeEvent(capturedEvent(name, { stripeSubId: g.stripeSubId, anchor: (o) => o.created, at: nowSeconds(), edit: freshInvoiceId }));
+      expect(await status(), `${name}: still cancelled`).toBe("canceled");
+      expect(await kinds(g.groupId), `${name}: no activation, no receipt`).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 
   it("an invoice that belongs to no subscription (a one-off, like an Event Pass) mails nothing", async () => {
