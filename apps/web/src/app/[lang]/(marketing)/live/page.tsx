@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { marketingMeta } from "@/lib/seo-meta";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { MarketingShell } from "@/components/marketing/marketing-shell";
@@ -20,17 +21,12 @@ export async function generateMetadata({
   const { lang } = await params;
   if (!hasLocale(lang)) return {};
   const d = await getDictionary(lang, "marketing");
-  return {
+  return marketingMeta({
+    lang,
+    path: "/live",
     title: t(d, "live.meta.title"),
     description: t(d, "live.meta.description"),
-    alternates: {
-      canonical: `/${lang}/live`,
-      languages: {
-        ...Object.fromEntries(["en", "fr", "es", "nl"].map((l) => [l, `/${l}/live`])),
-        "x-default": "/en/live",
-      },
-    },
-  };
+  });
 }
 
 export default async function LivePage({

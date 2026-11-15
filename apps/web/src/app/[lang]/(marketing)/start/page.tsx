@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { marketingMeta } from "@/lib/seo-meta";
 import { notFound } from "next/navigation";
 import { MarketingShell } from "@/components/marketing/marketing-shell";
 import { StartWizard } from "@/components/start-wizard";
@@ -6,7 +7,7 @@ import { pickWizardDict, wizardToday } from "@/components/start-wizard-model";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { funnelEntrantCap } from "@/lib/funnel";
 import { funnelUtcDay } from "@/lib/funnel-days";
-import { LOCALES, hasLocale } from "@/lib/i18n-constants";
+import { hasLocale } from "@/lib/i18n-constants";
 import { getDictionary, t } from "@/lib/i18n";
 import { log } from "@/server/logger";
 import { listQuickMatchSports } from "@/server/usecases/quick-match-sports";
@@ -23,18 +24,12 @@ export async function generateMetadata({
   const { lang } = await params;
   if (!hasLocale(lang)) return {};
   const dict = await getDictionary(lang, "marketing");
-  return {
+  return marketingMeta({
+    lang,
+    path: "/start",
     title: t(dict, "start.meta.title"),
     description: t(dict, "start.meta.description"),
-    alternates: {
-      canonical: `/${lang}/start`,
-      // hreflang alternates — the primary SEO signal for the localized surface.
-      languages: {
-        ...Object.fromEntries(LOCALES.map((l) => [l, `/${l}/start`])),
-        "x-default": "/en/start",
-      },
-    },
-  };
+  });
 }
 
 /** The free plan's entrants per division, or none (the cards then count the size asked): a read that fails is not a 500. */

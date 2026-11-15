@@ -53,6 +53,7 @@ vi.mock("@/server/public-site/discovery", async (importOriginal) => {
 
 import { resolveRouteData } from "next/dist/build/webpack/loaders/metadata/resolve-route-data";
 import sitemap, * as route from "../sitemap";
+import { marketingMeta } from "@/lib/seo-meta";
 import { listPublicSitemapEntries } from "@/server/public-site/data";
 import { listDiscoverySports } from "@/server/public-site/discovery";
 import { SITEMAP_ENTRIES_CACHE_KEY } from "@/server/public-site/sitemap-cache";
@@ -108,6 +109,32 @@ describe("sitemap.xml: route config", () => {
   });
 });
 
+describe("sitemap.xml: marketing URLs match the page canonicals", () => {
+  it("lists the /en form with one hreflang alternate per locale, never the unprefixed form", async () => {
+    vi.mocked(listPublicSitemapEntries).mockResolvedValueOnce([]);
+    vi.mocked(listDiscoverySports).mockResolvedValueOnce([{ key: "cricket", name: "Cricket" }]);
+    const entries = await sitemap();
+    const out = urls(entries);
+    // Premise: the marketing pages are present, so the loop below checks something.
+    const marketing = entries.filter((e) => e.url.startsWith(`${BASE}/en`));
+    expect(marketing.length).toBeGreaterThan(5);
+    for (const bare of ["", "/pricing", "/discover", "/live", "/discover/cricket", "/use-cases/clubs"]) {
+      expect(out, bare).not.toContain(`${BASE}${bare}`);
+    }
+    for (const e of marketing) {
+      const langs = e.alternates?.languages as Record<string, string> | undefined;
+      expect(Object.keys(langs ?? {}).sort(), e.url).toEqual(["en", "es", "fr", "nl", "x-default"]);
+      expect(langs!["x-default"], e.url).toBe(e.url);
+      // Each alternate is that locale's own URL, and the same set the PAGE declares in its own metadata.
+      const path = e.url.slice(`${BASE}/en`.length);
+      const declared = marketingMeta({ lang: "en", path, title: "T", description: "d" }).alternates!.languages as Record<string, string>;
+      for (const [k, v] of Object.entries(declared)) expect(langs![k], `${e.url} ${k}`).toBe(`${BASE}${v}`);
+    }
+    const xml = resolveRouteData(entries, "sitemap");
+    expect(xml).toContain('hreflang="fr"');
+  });
+});
+
 describe("sitemap.xml: reads and fallback", () => {
   it("reads competitions THROUGH the cached read, not the raw query", async () => {
     vi.mocked(listPublicSitemapEntries).mockResolvedValueOnce([
@@ -137,8 +164,8 @@ describe("sitemap.xml: reads and fallback", () => {
 
     // Premise: every KIND of entry is present, so a lastmod on any one kind
     // has somewhere to show.
-    expect(out).toContain(`${BASE}/pricing`);
-    expect(out).toContain(`${BASE}/discover/badminton`);
+    expect(out).toContain(`${BASE}/en/pricing`);
+    expect(out).toContain(`${BASE}/en/discover/badminton`);
     expect(out).toContain(`${BASE}/live/acme-club/summer-cup`);
     expect(out).toContain(`${BASE}/live/acme-club/summer-cup/open`);
     expect(out).toContain(`${BASE}/live/acme-club/winter-cup`);
@@ -155,8 +182,8 @@ describe("sitemap.xml: reads and fallback", () => {
     vi.mocked(listPublicSitemapEntries).mockRejectedValueOnce(new Error("connect ECONNREFUSED"));
     vi.mocked(listDiscoverySports).mockRejectedValueOnce(new Error("connect ECONNREFUSED"));
     const out = urls(await sitemap());
-    expect(out).toContain(BASE);
-    expect(out).toContain(`${BASE}/pricing`);
+    expect(out).toContain(`${BASE}/en`);
+    expect(out).toContain(`${BASE}/en/pricing`);
     expect(out.filter((u) => u.includes("/live/") || u.includes("/discover/"))).toEqual([]);
   });
 });

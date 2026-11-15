@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { Metadata } from "next";
+import { marketingMeta } from "@/lib/seo-meta";
 import { notFound } from "next/navigation";
 import { ArrowRight } from "lucide-react";
 import { MarketingShell } from "@/components/marketing/marketing-shell";
@@ -15,17 +16,12 @@ export async function generateMetadata({
   const { lang } = await params;
   if (!hasLocale(lang)) return {};
   const d = await getDictionary(lang, "marketing");
-  return {
+  return marketingMeta({
+    lang,
+    path: "/formats",
     title: t(d, "formats.meta.title"),
     description: t(d, "formats.meta.description"),
-    alternates: {
-      canonical: `/${lang}/formats`,
-      languages: {
-        ...Object.fromEntries(["en", "fr", "es", "nl"].map((l) => [l, `/${l}/formats`])),
-        "x-default": "/en/formats",
-      },
-    },
-  };
+  });
 }
 
 export default async function FormatsMarketingPage({

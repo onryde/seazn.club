@@ -2,6 +2,8 @@
 // Doubles as the "tournament software for {sport}" SEO page doc 06 wanted,
 // now with a live directory underneath the copy.
 import type { Metadata } from "next";
+import { marketingMeta } from "@/lib/seo-meta";
+import { JsonLd, breadcrumbLd } from "@/components/seo/json-ld";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { MarketingShell } from "@/components/marketing/marketing-shell";
@@ -45,19 +47,14 @@ export async function generateMetadata({
   const d = await getDictionary(lang, "marketing");
   const name = sportLabel(sport, (k) => msgFor(lang, k));
   const vars = { name, nameLower: name.toLowerCase() };
-  return {
+  return marketingMeta({
+    lang,
+    path: `/discover/${sport}`,
     title: t(d, "discover.sport.metaTitle", vars),
     description: SPORTS_WITH_COPY.has(sport)
       ? t(d, `discover.sport.copy.${sport}.intro`)
       : t(d, "discover.sport.metaDesc", vars),
-    alternates: {
-      canonical: `/${lang}/discover/${sport}`,
-      languages: {
-        ...Object.fromEntries(["en", "fr", "es", "nl"].map((l) => [l, `/${l}/discover/${sport}`])),
-        "x-default": `/en/discover/${sport}`,
-      },
-    },
-  };
+  });
 }
 
 async function sportName(key: string): Promise<string | null> {
@@ -84,6 +81,13 @@ export default async function DiscoverSportPage({ params }: { params: Promise<Pa
 
   return (
     <>
+      <JsonLd
+        data={breadcrumbLd([
+          { name: "Seazn Club", path: `/${lang}` },
+          { name: t(d, "discover.sport.breadcrumb"), path: `/${lang}/discover` },
+          { name, path: `/${lang}/discover/${sport}` },
+        ])}
+      />
       <MarketingShell lang={lang}>
       <main className="mx-auto max-w-5xl px-4 py-12">
         <p className="text-xs text-slate-400">

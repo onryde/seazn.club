@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { marketingMeta } from "@/lib/seo-meta";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { MarketingShell } from "@/components/marketing/marketing-shell";
@@ -25,17 +26,12 @@ export async function generateMetadata({
   const { lang, case: kase } = await params;
   if (!hasLocale(lang) || !ICONS[kase]) return {};
   const d = await getDictionary(lang, "marketing");
-  return {
+  return marketingMeta({
+    lang,
+    path: `/use-cases/${kase}`,
     title: t(d, `useCases.${kase}.metaTitle`),
     description: t(d, `useCases.${kase}.metaDesc`),
-    alternates: {
-      canonical: `/${lang}/use-cases/${kase}`,
-      languages: {
-        ...Object.fromEntries(["en", "fr", "es", "nl"].map((l) => [l, `/${l}/use-cases/${kase}`])),
-        "x-default": `/en/use-cases/${kase}`,
-      },
-    },
-  };
+  });
 }
 
 export default async function UseCasePage({

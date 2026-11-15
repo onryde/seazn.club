@@ -50,6 +50,9 @@ const NOT_THE_HUB: { file: string; text: string }[] = [
 const MARKETING_WALL: { file: string; count: number }[] = [
   { file: "src/components/marketing/live-ticker.tsx", count: 1 },
   { file: "src/proxy.ts", count: 1 },
+  // The marketing /live wall page's own path under /{lang}: its metadata path and its sitemap entry.
+  { file: "src/app/sitemap.ts", count: 1 },
+  { file: "src/app/[lang]/(marketing)/live/page.tsx", count: 1 },
 ];
 
 const SHARED_SEGMENT = /\/shared(?![\w-])/;

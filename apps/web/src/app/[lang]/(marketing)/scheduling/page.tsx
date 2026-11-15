@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { marketingMeta } from "@/lib/seo-meta";
 import Link from "next/link";
 import { MarketingShell } from "@/components/marketing/marketing-shell";
 import { SchedulingBoard } from "@/components/marketing/scheduling-board";
@@ -19,17 +20,12 @@ export async function generateMetadata({
   const { lang } = await params;
   if (!hasLocale(lang)) return {};
   const d = await getDictionary(lang, "marketing");
-  return {
+  return marketingMeta({
+    lang,
+    path: "/scheduling",
     title: t(d, "scheduling.meta.title"),
     description: t(d, "scheduling.meta.description"),
-    alternates: {
-      canonical: `/${lang}/scheduling`,
-      languages: {
-        ...Object.fromEntries(["en", "fr", "es", "nl"].map((l) => [l, `/${l}/scheduling`])),
-        "x-default": "/en/scheduling",
-      },
-    },
-  };
+  });
 }
 
 // Time is data; what/how copy resolves from the marketing catalog per locale.
