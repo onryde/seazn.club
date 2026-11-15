@@ -169,6 +169,10 @@ export async function startBroadcast(
     /** The automatic start's instant (§7.2, final review m-1): stamped as `auto_started_at` IN the insert's transaction, so
      *  the session and "once per match" commit together. Given exactly when `actor.source` is `auto`. */
     autoStartedAt?: Date;
+    /** Court stream (spec 2026-11-14 §5.3, plan Task 7): the court link this start streams under. Given, the pairing's code
+     *  is that link's court code (not the fixture's own), and the session row stores `court_link_id`. Absent: today's
+     *  rule, the fixture's own code. */
+    courtLinkId?: string;
   },
   deps: SessionDeps,
 ): Promise<{ sessionId: string }> {
@@ -182,13 +186,9 @@ export async function startBroadcast(
   const composedRunnerDown = body.mode === "composed" && composedUnavailable();
   // An assumption made a guard: every caller reads its pairing FROM this fixture's code, so a pairing on another
   // fixture's code is a caller bug — refused before anything is weighed or written, never a session tied to the wrong
-  // phone. Witness: "startBroadcast refuses a pairing from another fixture's code".
-  const pairing = actor.pairingId === null ? null : (await sql<{ code_id: string; issued_by: string }[]>`
-    select p.code_id, c.issued_by from fixture_stream_pairings p join fixture_stream_codes c on c.id = p.code_id
-     where p.id = ${actor.pairingId} and c.fixture_id = ${fixtureId}`)[0] ?? null;
-  if (actor.pairingId !== null && pairing === null) {
-    throw new Error(`startBroadcast: pairing ${actor.pairingId} is not on fixture ${fixtureId}'s stream code`);
-  }
+  // phone. Witness: "startBroadcast refuses a pairing from another fixture's code". A court start (`courtLinkId`) reads
+  // its pairing from the court's code instead, and that is judged by `courtPairingOf`.
+  const pairing = actor.pairingId === null ? null : await pairingFor(actor.pairingId, fixtureId, opts);
   // §6.7.1 "the actor", made a guard (B4 review m-2): a phone's or the automatic start rides the slot's pairing and is
   // attributed to its stream code's `issued_by`, who vouches for the phone. A caller that names anyone else, or brings
   // no pairing, is a caller bug — refused by name before anything is weighed or written, so `created_by` and the
@@ -394,7 +394,7 @@ export async function startBroadcast(
                                            storage_minutes_at_admission, reserved_minutes, destination_kind,
                                            sport_key, competition_id, division_id, fixture_scheduled_at,
                                            venue_id, venue_address, org_timezone, entitlement_via_override,
-                                           start_cause, code_id, pairing_id, overlay_delay_ms, api_backed, youtube_broadcast_id)
+                                           start_cause, code_id, pairing_id, court_link_id, overlay_delay_ms, api_backed, youtube_broadcast_id)
       select ${fixtureId}, ${orgId}, ${body.mode}, 'requested', ${body.targetId},
              -- R2004 decision 7: the organiser's template CHOICE is copied, never resolved here (a retired id still reads,
              -- then resolves at every reader); a themeId the create names wins. The running session never moves with it.
@@ -403,7 +403,7 @@ export async function startBroadcast(
              ${usage.totalStorageMinutes}, ${reservationMinutes(body.mode, MAX_DURATION_MINUTES)}, (select kind from org_stream_targets where id = ${body.targetId}),
              d.sport_key, d.competition_id, f.division_id, f.scheduled_at,
              c.venue_id, v.address, o.timezone, ${viaOverride},
-             ${opts.startCause}, ${pairing?.code_id ?? null}, ${actor.pairingId},
+             ${opts.startCause}, ${pairing?.code_id ?? null}, ${actor.pairingId}, ${opts.courtLinkId ?? null},
              -- R2004 decision 4: the EFFECTIVE delay (the fixture's override, else the default) for composed; passthrough
              -- keeps the column's 0 (the field is unused in that mode). Copied, so a running session never changes.
              -- PR #989 review m2: a delay the create names wins over the stored one (null: the default), so the
@@ -484,4 +484,39 @@ export async function startBroadcast(
     throw err;
   }
   return { sessionId };
+}
+
+type GuardRow = {
+  code_id: string; issued_by: string; code_fixture: string | null; court_link_id: string | null; link_court: string | null;
+  link_target: string | null; withdrawn_at: Date | null; fixture_court: string | null; court_stream: boolean;
+};
+
+/** The start's pairing, judged against the fixture in ONE read (court stream plan Task 7). Without `courtLinkId` the
+ *  pairing's code must be the fixture's own (today's rule). With it: the code is that court link's; the link is not
+ *  withdrawn; its court is the fixture's court; the fixture's Stream switch is on; and the start's target is the link's
+ *  (O9: a court streams to its link's channel, never another). Each failure is a caller bug, refused by name before
+ *  anything is weighed or written. */
+async function pairingFor(
+  pairingId: string, fixtureId: string, opts: { targetId: string; courtLinkId?: string },
+): Promise<{ code_id: string; issued_by: string }> {
+  const [g] = await sql<GuardRow[]>`
+    select p.code_id, c.issued_by, c.fixture_id as code_fixture, c.court_link_id, l.court_id as link_court, l.target_id as link_target,
+           l.withdrawn_at, f.court_id as fixture_court, coalesce(st.court_stream, false) as court_stream
+      from fixture_stream_pairings p
+      join fixture_stream_codes c on c.id = p.code_id
+      join fixtures f on f.id = ${fixtureId}
+      left join court_stream_links l on l.id = c.court_link_id
+      left join fixture_stream_settings st on st.fixture_id = f.id
+     where p.id = ${pairingId}`;
+  if (opts.courtLinkId === undefined) {
+    if (!g || g.code_fixture !== fixtureId) throw new Error(`startBroadcast: pairing ${pairingId} is not on fixture ${fixtureId}'s stream code`);
+    return { code_id: g.code_id, issued_by: g.issued_by };
+  }
+  const notOnLink = (why: string) => new Error(`startBroadcast: pairing ${pairingId} is not on fixture ${fixtureId}'s court link (${why})`);
+  if (!g || g.court_link_id === null || g.court_link_id !== opts.courtLinkId) throw notOnLink("the pairing's code is not that link's");
+  if (g.withdrawn_at !== null) throw notOnLink("the link is withdrawn");
+  if (g.link_court === null || g.fixture_court !== g.link_court) throw notOnLink("the match is on another court");
+  if (!g.court_stream) throw notOnLink("the match's Stream switch is off");
+  if (opts.targetId !== g.link_target) throw notOnLink("the target is not the link's");
+  return { code_id: g.code_id, issued_by: g.issued_by };
 }

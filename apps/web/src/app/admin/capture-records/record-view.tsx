@@ -26,7 +26,7 @@ export function CaptureRecordView({ record, dict }: { record: AdminCaptureRecord
         {/* Owner ruling RL (2026-10-12): the bad lines among the dropped, a count only — a scrub leak shows up here. */}
         <Field label={t(dict, "admin.captureRecords.invalidLines")} value={String(record.invalid)} testId="capture-record-invalid" />
         <Field label={t(dict, "admin.captureRecords.codeId")} value={record.codeId} mono />
-        <Field label={t(dict, "admin.captureRecords.fixtureId")} value={record.fixtureId} mono />
+        <Field label={t(dict, "admin.captureRecords.fixtureId")} value={record.fixtureId ?? "—"} mono={record.fixtureId !== null} />
         <Field
           label={t(dict, "admin.captureRecords.sessions")}
           value={record.sessionIds.length > 0 ? record.sessionIds.join(", ") : t(dict, "admin.captureRecords.noSession")}

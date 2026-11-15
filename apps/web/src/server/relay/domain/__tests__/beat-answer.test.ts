@@ -156,7 +156,9 @@ describe("the wire (R5): wireBeatAnswer(beatAnswer(…)) parses with the real Ca
               expect(r.success, `${JSON.stringify(core)} → ${JSON.stringify(r.error?.issues)}`).toBe(true);
               // Exactly the branch's keys: sid / startedBy / endReason appear where the matrix says and nowhere else,
               // and the common fields ride on EVERY 2xx, replaced and taken included (ask 1). `device` is PR-2's.
-              expect(Object.keys(wire).sort(), wire.state).toEqual(BRANCH_KEYS.get(wire.state)!.filter((k) => k !== "device"));
+              // Court stream's `next` (§5.3) rides only when the caller gives one: COMMON is a fixture code's, so it is absent.
+              expect(Object.keys(wire).sort(), wire.state).toEqual(BRANCH_KEYS.get(wire.state)!.filter((k) => k !== "device" && k !== "next"));
+              expect(wire, wire.state).not.toHaveProperty("next");
               for (const k of COMMON_KEYS) expect(wire, `${wire.state} carries ${k}`).toHaveProperty(k);
               // go-live carries the open session's own startedBy, for every CaptureStartedBy option.
               if (wire.state === "go-live") expect(wire.startedBy, label).toBe(open!.startedBy);
@@ -224,5 +226,32 @@ describe("the wire (R5): wireBeatAnswer(beatAnswer(…)) parses with the real Ca
   it("a caller object with extra keys never leaks onto the strict wire", () => {
     const wide = { ...COMMON, venueTimezone: "Europe/London", code: "abcdefghjkmn" } as BeatAnswerCommon;
     expect(CaptureBeatAnswer.safeParse(wireBeatAnswer({ state: "replaced" }, wide)).success).toBe(true);
+  });
+
+  // Court stream (spec 2026-11-14 §5.3): a court code's answer carries `next` on EVERY branch; a null or absent `next` is
+  // omitted, never null, so a fixture code's answer keeps exactly its old keys.
+  const NEXT = { label: "Cat & Dan v Eve & Fay", scheduledStart: 1_790_003_600 };
+  const CORES: readonly BeatAnswerCore[] = [
+    { state: "waiting", starting: false }, { state: "waiting", starting: true }, { state: "go-live", sid: S, startedBy: "automatic" },
+    { state: "live", sid: S }, { state: "over", sid: X, endReason: "stopped" }, { state: "replaced" }, { state: "taken" },
+  ];
+  it("a court's `next` rides on every branch, exactly as given, and parses", () => {
+    for (const core of CORES) {
+      const wire = wireBeatAnswer(core, { ...COMMON, next: NEXT });
+      expect(wire, core.state).toHaveProperty("next", NEXT);
+      expect(CaptureBeatAnswer.safeParse(wire).success, core.state).toBe(true);
+      expect(Object.keys(wire).sort(), core.state).toEqual(BRANCH_KEYS.get(wire.state)!.filter((k) => k !== "device"));
+    }
+    const unscheduled = wireBeatAnswer({ state: "live", sid: S }, { ...COMMON, next: { label: "TBD", scheduledStart: null } });
+    expect(unscheduled.next).toEqual({ label: "TBD", scheduledStart: null });
+  });
+  it("a null `next` is omitted, never null on the wire", () => {
+    for (const core of CORES) expect(wireBeatAnswer(core, { ...COMMON, next: null }), core.state).not.toHaveProperty("next");
+  });
+  it("a wider `next` never leaks an extra key onto the strict wire", () => {
+    const wide = { ...NEXT, court: "Court 2" } as typeof NEXT;
+    const wire = wireBeatAnswer({ state: "waiting", starting: false }, { ...COMMON, next: wide });
+    expect(wire.next).toEqual(NEXT);
+    expect(CaptureBeatAnswer.safeParse(wire).success).toBe(true);
   });
 });
