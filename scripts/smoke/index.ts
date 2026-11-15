@@ -40,6 +40,7 @@ import { registrationPayPageSuite } from "./suites/registrationPayPage.ts";
 import { quickMatchSuite } from "./suites/quickMatch.ts";
 import { funnelSuite } from "./suites/funnel.ts";
 import { marketingSuite } from "./suites/marketing.ts";
+import { revshareSaleSuite } from "./suites/revshareSale.ts";
 
 // --- SMOKE_ONLY (review R1): run named suites alone, without a full smoke -----
 type SubsetCtx = { admin: Session; org2Id: string; org2Slug: string };
@@ -57,6 +58,7 @@ const SELECTABLE_SUITES: Record<string, (c: SubsetCtx) => Promise<void>> = {
   matchRoom: () => matchRoomSuite(),
   arbiter: () => arbiterSuite(),
   onlineChessDesk: () => onlineChessDeskSuite(),
+  revshareSale: () => revshareSaleSuite(),
   w2cStageRules: () => w2cStageRulesSuite(),
   divisionSettings: (c) => divisionSettingsSuite(c.admin),
   epochFloorOverride: () => epochFloorOverrideSuite(),

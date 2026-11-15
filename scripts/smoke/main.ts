@@ -21,6 +21,7 @@ import { passRungLSuite } from "./suites/passRungL.ts";
 import { clubsSuite } from "./suites/clubs.ts";
 import { extraOrgAddonSuite } from "./suites/extraOrgAddon.ts";
 import { addonChurnWebhookSuite } from "./suites/addonChurnWebhook.ts";
+import { revshareSaleSuite } from "./suites/revshareSale.ts";
 import { outboxTrialWarningSuite } from "./suites/outboxTrialWarning.ts";
 import { passLockEnforcementSuite } from "./suites/passLockEnforcement.ts";
 import { playerAccountsSuite } from "./suites/playerAccounts.ts";
@@ -1174,6 +1175,12 @@ export async function main() {
   // driven through the real signed-webhook route. Own fresh groups; needs
   // STRIPE_WEBHOOK_SECRET and skips cleanly without it.
   await suite("addonChurnWebhook", () => addonChurnWebhookSuite());
+
+  // Revshare affiliate sale reporting: a signed invoice.payment_succeeded for an
+  // attributed group (first charge + renewal) is accepted and processed through
+  // the real webhook route. Needs STRIPE_WEBHOOK_SECRET and no REVSHARE_API_KEY
+  // in this process (it would reach the live program); skips cleanly otherwise.
+  await suite("revshareSale", () => revshareSaleSuite());
 
   // Email outbox, phase 3 wave 2 (Task 11): a signed trial_will_end queues ONE
   // trial_ending row for the worker, and a redelivery of the same event id
