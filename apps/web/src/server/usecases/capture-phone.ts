@@ -451,7 +451,8 @@ export type BeatScope = {
   openSession: (exec: Exec) => Promise<OpenRow | null>;
   /** A session the beat names, when it is in this scope; null otherwise. */
   namedSession: (exec: Exec, sid: string) => Promise<NamedRow | null>;
-  /** Inside the beat's transaction, when this beat's `stopped: X` will end X (a court's latch). */
+  /** Inside the beat's transaction, when this beat's `stopped: X` from the CURRENT phone will end X (a court's latch). A
+   *  replaced phone's stale stop (T24a) still ends X but never calls this. */
   onStopApplied?: (tx: Tx, x: NamedRow) => Promise<void>;
   /** Step 6: the automatic start, for the current phone's beat. A throw is reported and the beat still answered. */
   autoStart: (pairingId: string, phoneMode: Beat["mode"]) => Promise<void>;
@@ -651,7 +652,7 @@ export async function runBeat(scope: BeatScope, body: Beat, deps: SessionDeps, n
         const stopApplies = callerCurrent || !heldByCurrent;
         if (stopApplies) {
           stop = x.id;
-          await scope.onStopApplied?.(tx, x);
+          if (callerCurrent) await scope.onStopApplied?.(tx, x);
         } else {
           await tx`select id from fixture_stream_sessions where id = ${x.id} for update`;
           await event(x.id, "stop_ignored", { held: true });

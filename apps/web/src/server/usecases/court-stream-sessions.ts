@@ -15,7 +15,8 @@ import { apply, type SessionDeps } from "./stream-sessions";
 const IN_PLAY = "in_play";
 
 /**
- * End every ACTIVE session of court link `linkId` other than `keepSid`, `auto_stopped`, each with a `court_handover` event
+ * End every ACTIVE session of court link `linkId` created before `keepSid` (by `(created_at, id)`; never a newer one, so two
+ * racing court starts cannot end each other), `auto_stopped`, each with a `court_handover` event
  * `{to: keepSid}`, and latch each ended session's match while it is still in play (R4). Returns the sids it ended, oldest
  * first. A session that ended on its own in between is skipped (no event, no latch): `apply`'s command is decided on the
  * locked row.
@@ -26,7 +27,9 @@ export async function endOtherCourtSessions(
 ): Promise<string[]> {
   const others = await sql<{ id: string; org_id: string; fixture_id: string }[]>`
     select id, org_id, fixture_id from fixture_stream_sessions
-     where court_link_id = ${a.linkId} and id <> ${a.keepSid} and state in ${sql([...ACTIVE_STATES])}
+     where court_link_id = ${a.linkId} and state in ${sql([...ACTIVE_STATES])}
+       -- Fix I1: only sessions OLDER than the kept one, so of two racing starts the newest always survives.
+       and (created_at, id) < (select k.created_at, k.id from fixture_stream_sessions k where k.id = ${a.keepSid})
      order by created_at, id`;
   const ended: string[] = [];
   for (const s of others) {

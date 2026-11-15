@@ -258,6 +258,24 @@ describe.skipIf(!HAS_DB)("a court code's descriptor, beat, start and record", ()
     expect(await refusal(operatorStart(phone))).toBe("409:no_match");
   });
 
+  it("a REPLACED court phone's stale stopped: X ends X (T24a) but never latches its match (fix M1)", async () => {
+    await streamed(A, AT_14);
+    await setStatus(A, "in_play");
+    const old = phoneId("stale");
+    await claimed(old);
+    const sid = await operatorStart(old);
+    // The old phone is replaced by a new one, and X is held by no current pairing (T24a: a stop from anyone applies).
+    const [mine] = await pairingOf(old);
+    await sql`update fixture_stream_pairings set ended_at = ${clock()}, end_cause = 'replaced' where id = ${mine!.id}`;
+    await sql`insert into fixture_stream_pairings (org_id, code_id, slot, phone, claim_kind, claimed_at, last_beat_at, answered_poll_seconds)
+              values (${day.orgId}, ${codeId}, 0, ${phoneId("new")}, 'new', ${clock()}, ${clock()}, 60)`;
+    await sql`update fixture_stream_sessions set pairing_id = null where id = ${sid}`;
+    const a = await beat(old, { stopped: sid });
+    expect(a.state).toBe("replaced");
+    expect((await sessionRow(sid)).end_reason, "premise: the stale stop still ends X").toBe("operator_stopped");
+    expect(await latchedAt(A)).toBeNull();
+  });
+
   it("a fixture code's stopped: X does NOT stamp auto_start_blocked_at (unchanged)", async () => {
     const r = await captureRig({ credits: 2 });
     const phone = phoneId("fixture-stop");
@@ -436,6 +454,15 @@ describe.skipIf(!HAS_DB)("a court code's descriptor, beat, start and record", ()
       await sql`update fixtures set status = 'decided', finished_at = ${clock()} where id = ${A}`;
       await endOtherCourtSessions({ linkId, keepSid: b, actorUserId: day.auth.userId! }, deps);
       expect(await latchedAt(A)).toBeNull();
+    });
+
+    it("never ends a session NEWER than the kept one: of two racing starts the newest survives (fix I1)", async () => {
+      const { a, b } = await twoOpen();
+      expect(await endOtherCourtSessions({ linkId, keepSid: a, actorUserId: day.auth.userId! }, deps)).toEqual([]);
+      expect(["requested", "provisioning", "warming", "live"]).toContain((await sessionRow(b)).state);
+      expect(await handoverEvents(b)).toHaveLength(0);
+      expect(await latchedAt(B)).toBeNull();
+      expect(await endOtherCourtSessions({ linkId, keepSid: b, actorUserId: day.auth.userId! }, deps)).toEqual([a]);
     });
 
     it("never touches another link's sessions", async () => {
