@@ -19,8 +19,17 @@ export const AI_SEARCH_CRAWLERS = [
   "Claude-User",
 ] as const;
 
-/** Staging hosts (stg.seazn.club) are closed to crawlers; app/proxy.ts keys its noindex header on the same prefix. */
+/** Staging hosts (stg.seazn.club) are closed to crawlers; app/robots.ts and proxy.ts both decide through isStagingOrigin. */
 export const STAGING_HOST_PREFIX = "stg.";
+
+/** True when the configured site origin (env, never a request header a client can send) is a staging host. */
+export function isStagingOrigin(origin: string): boolean {
+  try {
+    return new URL(origin).hostname.startsWith(STAGING_HOST_PREFIX);
+  } catch {
+    return false;
+  }
+}
 
 /**
  * AI-training and answer-engine crawlers, each refused the whole site with a

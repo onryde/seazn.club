@@ -1,6 +1,6 @@
 import type { MetadataRoute } from "next";
 import { siteOrigin } from "@/lib/site-origin";
-import { AI_CRAWLERS, AI_SEARCH_CRAWLERS, STAGING_HOST_PREFIX } from "@/lib/robots-policy";
+import { AI_CRAWLERS, AI_SEARCH_CRAWLERS, isStagingOrigin } from "@/lib/robots-policy";
 import { routes } from "@/lib/routes";
 
 // Request-time, never prerendered: the staging/production decision reads the
@@ -8,21 +8,12 @@ import { routes } from "@/lib/routes";
 // (same reason as sitemap.ts).
 export const dynamic = "force-dynamic";
 
-// Keyed on the staging prefix, not "anything but seazn.club": a wrong or missing
-// origin env on production must fail OPEN (indexable), never close the live site.
-function isStaging(origin: string): boolean {
-  try {
-    return new URL(origin).hostname.startsWith(STAGING_HOST_PREFIX);
-  } catch {
-    return false;
-  }
-}
-
 export default function robots(): MetadataRoute.Robots {
   const origin = siteOrigin();
   // Staging and previews: closed to every crawler. robots.txt alone does not
   // drop pages already indexed, so staging also wants an X-Robots-Tag header.
-  if (isStaging(origin)) {
+  // Fails OPEN: an unrecognised origin env never closes production.
+  if (isStagingOrigin(origin)) {
     return { rules: [{ userAgent: "*", disallow: "/" }] };
   }
   const PRIVATE = [

@@ -7,7 +7,7 @@ import { pickWizardDict, wizardToday } from "@/components/start-wizard-model";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { funnelEntrantCap } from "@/lib/funnel";
 import { funnelUtcDay } from "@/lib/funnel-days";
-import { LOCALES, hasLocale } from "@/lib/i18n-constants";
+import { hasLocale } from "@/lib/i18n-constants";
 import { getDictionary, t } from "@/lib/i18n";
 import { log } from "@/server/logger";
 import { listQuickMatchSports } from "@/server/usecases/quick-match-sports";

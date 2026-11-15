@@ -144,6 +144,7 @@ describe("robots.txt: staging origin", () => {
     try {
       const r = robots();
       expect(r.rules).toEqual([{ userAgent: "*", disallow: "/" }]);
+      expect(r.sitemap).toBeUndefined();
     } finally {
       if (prev === undefined) delete process.env.OAUTH_BASE_URL;
       else process.env.OAUTH_BASE_URL = prev;

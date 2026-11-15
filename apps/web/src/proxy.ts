@@ -4,6 +4,8 @@ import { hasLocale } from "@/lib/i18n-constants";
 import { SESSION_HINT_COOKIE, SESSION_MAX_AGE_S, hasSessionHint } from "@/lib/session-hint";
 import { RELAY_PHASE_PORT } from "@/lib/relay-phase";
 import { isPublicHubPath } from "@/lib/routes";
+import { isStagingOrigin } from "@/lib/robots-policy";
+import { siteOrigin } from "@/lib/site-origin";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
@@ -148,7 +150,9 @@ export function gamesHostRewrite(request: NextRequest): URL | null {
  *  stays indexed until it is served with noindex, so every staging response carries the header. */
 export function proxy(request: NextRequest): NextResponse {
   const response = proxyCore(request);
-  if (requestHostname(request).startsWith("stg.")) {
+  // The configured origin, not the Host/X-Forwarded-Host header: a client can send that header, and a forged
+  // noindex on a cacheable prod page would be served to crawlers.
+  if (isStagingOrigin(siteOrigin())) {
     response.headers.set("X-Robots-Tag", "noindex, nofollow");
   }
   return response;

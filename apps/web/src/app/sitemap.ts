@@ -19,10 +19,9 @@ export const dynamic = "force-dynamic";
 const BASE = siteOrigin();
 
 /**
- * A marketing page lives under /{lang}, and each page declares the /en form as
- * its canonical (lib/seo-meta.ts), so that is the URL listed here, with one
- * hreflang alternate per locale. Listing the unprefixed form instead would put
- * a URL in the sitemap that canonicalises elsewhere.
+ * A marketing page lives under /{lang}. The /en URL is listed, with one hreflang
+ * alternate per locale (the fr/es/nl URLs are reachable from it). The unprefixed
+ * form is never listed: it rewrites to a /{lang} page that canonicalises elsewhere.
  */
 function marketing(path: string, extra: { changeFrequency: "hourly" | "weekly" | "monthly"; priority: number }): MetadataRoute.Sitemap[number] {
   return {
