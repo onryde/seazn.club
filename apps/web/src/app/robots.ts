@@ -3,6 +3,11 @@ import { siteOrigin } from "@/lib/site-origin";
 import { AI_CRAWLERS, AI_SEARCH_CRAWLERS, STAGING_HOST_PREFIX } from "@/lib/robots-policy";
 import { routes } from "@/lib/routes";
 
+// Request-time, never prerendered: the staging/production decision reads the
+// origin env, and a build-time copy would freeze whatever origin the BUILD saw
+// (same reason as sitemap.ts).
+export const dynamic = "force-dynamic";
+
 // Keyed on the staging prefix, not "anything but seazn.club": a wrong or missing
 // origin env on production must fail OPEN (indexable), never close the live site.
 function isStaging(origin: string): boolean {

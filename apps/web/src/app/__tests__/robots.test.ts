@@ -7,7 +7,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { MetadataRoute } from "next";
 import { describe, expect, it } from "vitest";
-import robots from "../robots";
+import robots, * as route from "../robots";
 import { AI_CRAWLERS, AI_SEARCH_CRAWLERS } from "@/lib/robots-policy";
 
 type Rule = Extract<MetadataRoute.Robots["rules"], unknown[]>[number];
@@ -117,6 +117,12 @@ describe("robots.txt: AI search crawlers", () => {
     expect(list(found[0]!.allow)).toEqual(["/"]);
     expect(list(found[0]!.disallow)).toEqual(list(star().disallow));
     expect(list(found[0]!.disallow)).not.toContain("/");
+  });
+});
+
+describe("robots.txt: route config", () => {
+  it("is dynamic: the staging decision is read per request, not frozen at build", () => {
+    expect(route.dynamic).toBe("force-dynamic");
   });
 });
 
