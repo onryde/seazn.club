@@ -17,7 +17,7 @@ import { CaptureRefusalError, captureRefusal } from "@/server/api-v1/capture-htt
 import { CaptureBeat, CaptureRefusal, CaptureScoringLinkOk } from "@/server/api-v1/capture-schemas";
 import { sealWith } from "@/server/relay/crypto";
 import { log } from "@/server/logger";
-import { postBeat, postScoringLink } from "../capture-phone";
+import { getCode, postBeat, postScoringLink } from "../capture-phone";
 import {
   createDeviceLink, deviceLinkCoversFixture, ensureDeviceLink, hashDeviceLinkToken, mintDeviceLinkSecret,
   provideDeviceLinkForPhone, resolveDeviceLinkToken,
@@ -98,7 +98,8 @@ describe.skipIf(!HAS_DB)("postScoringLink â€” the phone's Remote scoring link (Â
     const { r, A } = await ready();
     expect(await linksOf(r.fixtureId), "premise: the fixture had no link").toEqual([]);
     const ok = await link(r, A);
-    expect(Object.keys(ok)).toEqual(["url"]);
+    expect(Object.keys(ok).sort()).toEqual(["label", "url"]);
+    expect(ok.label, "the code's own match, as the descriptor names it").toBe((await getCode(r.code, r.tok, { slot: 0, phone: A }, r.deps, r.now())).label);
     expect(CaptureScoringLinkOk.parse(ok)).toEqual(ok);
     expect(ok.url).toMatch(URL_PATTERN);
     expect(ok.url.startsWith(`${ORIGIN}/score/`), "the origin is OAUTH_BASE_URL's").toBe(true);

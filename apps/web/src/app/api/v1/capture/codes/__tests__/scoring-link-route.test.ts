@@ -123,7 +123,7 @@ describe.skipIf(!HAS_DB)("POST /api/v1/capture/codes/{code}/scoring-link", () =>
     await claim(r, A);
     const ok = await read(await call(r.code, { phone: A }, { auth: `Bearer ${r.tok}` }));
     expect(ok).toMatchObject({ status: 200, ...NO_STORE });
-    expect(Object.keys(ok.body)).toEqual(["url"]);
+    expect(Object.keys(ok.body)).toEqual(["url", "label"]);
     expect(CaptureScoringLinkOk.parse(ok.body)).toEqual(ok.body);
     expect(String(ok.body.url)).toMatch(URL_PATTERN);
     const again = await read(await call(r.code, { phone: A }, { auth: `Bearer ${r.tok}` }));

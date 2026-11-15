@@ -48,10 +48,10 @@ import type { IngestState } from "@/server/relay/ports";
 import { readFirstInput } from "@/server/relay/secret-columns";
 import { recordEvent } from "@/server/relay/telemetry";
 import { captureStageOf } from "./capture-stage";
-import { getCourtCode, postCourtBeat, postCourtStart } from "./capture-court";
+import { getCourtCode, postCourtBeat, postCourtScoringLink, postCourtStart } from "./capture-court";
 import { matchLabelOf } from "./court-stream-codes";
 import { provideDeviceLinkForPhone, type HolderVerifiedCode, type PhoneScoringLink } from "./device-links";
-import { fixtureStreamTarget, resolveAnyStreamCode, resolveStreamCode, startModeFor, type ResolvedCode } from "./stream-codes";
+import { fixtureStreamTarget, resolveAnyStreamCode, startModeFor, type ResolvedCode } from "./stream-codes";
 import { maybeAutoStart } from "./stream-auto";
 import { apply, lastConnectedSampleAt, startBroadcast, tickSession, type SessionDeps } from "./stream-sessions";
 
@@ -835,7 +835,7 @@ export async function postStart(rawCode: string, tok: string, body: CaptureStart
 
 /** W27: the origin the URL is built on must be https — the agreed pattern is `^https://[^/]+/score/dl_…`. Checked BEFORE
  *  the link is provided, so a deployment that would serve a URL the phone's parser rejects writes nothing. */
-const HTTPS_ORIGIN = /^https:\/\/[^/]+$/;
+export const HTTPS_ORIGIN = /^https:\/\/[^/]+$/;
 
 /** T12's holder check exactly as the start runs it (`holderOf`, session or none) — any other phone → 409 replaced —
  *  returning the code BRANDED as checked (review M5): the only value `provideDeviceLinkForPhone` accepts, and this the
@@ -848,7 +848,7 @@ async function currentPhoneCode(resolved: ResolvedCode, phone: string): Promise<
 }
 
 /** SQLSTATE 23503, as `postgres` reports it (`code`; lib/billing.ts reads the same shape off a real failure). */
-const isForeignKeyViolation = (err: unknown): boolean =>
+export const isForeignKeyViolation = (err: unknown): boolean =>
   typeof err === "object" && err !== null && (err as { code?: unknown }).code === "23503";
 
 /**
@@ -871,7 +871,8 @@ const isForeignKeyViolation = (err: unknown): boolean =>
 export async function postScoringLink(
   rawCode: string, tok: string, body: CaptureStartBody, deps: SessionDeps, now: Date, clientIp: string,
 ): Promise<CaptureScoringLinkOk> {
-  const resolved = await resolveStreamCode(rawCode, tok, "start", body.phone, now);
+  const resolved = await resolveAnyStreamCode(rawCode, tok, "start", body.phone, now);
+  if (resolved.kind === "court") return postCourtScoringLink(resolved, body, deps, now, clientIp);
   const checked = await currentPhoneCode(resolved, body.phone);
   const origin = captureOrigin(deps);
   if (!HTTPS_ORIGIN.test(origin)) {
@@ -897,7 +898,7 @@ export async function postScoringLink(
     throw err;
   }
   if (got.kind === "finished") throw new CaptureRefusalError(409, "match_finished", `the match is ${got.status}; it has no scoring link`);
-  const answer = CaptureScoringLinkOk.safeParse({ url: `${origin}/score/${got.secret}` });
+  const answer = CaptureScoringLinkOk.safeParse({ url: `${origin}/score/${got.secret}`, label: await matchLabelOf(resolved.orgId, resolved.fixtureId) });
   // An assumption made a guard: every secret is `mintDeviceLinkSecret`'s and the origin was checked above. Refused by
   // name (a logged 503) rather than served to a parser that rejects it — and never with the URL in the message.
   if (!answer.success) throw new Error("postScoringLink: the scoring link does not match the contract's url pattern");

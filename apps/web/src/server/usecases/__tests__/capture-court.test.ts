@@ -15,18 +15,20 @@
 //   - R4 (controller): a session ended by a handover latches its match while it is still in play.
 //
 // The link is for 2026-11-07, the seed's T0 day (Europe/Amsterdam, UTC+1): every clock is the test's, passed in.
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { __setRateLimitCounterForTests } from "@/lib/rate-limit";
+import { hashDeviceLinkToken } from "../device-links";
 import { randomBytes, randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { CaptureRefusalError } from "@/server/api-v1/capture-http";
-import { CaptureBeat, CaptureBeatAnswer, CaptureDescriptor } from "@/server/api-v1/capture-schemas";
+import { CaptureBeat, CaptureBeatAnswer, CaptureDescriptor, CaptureScoringLinkOk } from "@/server/api-v1/capture-schemas";
 import { POLL_FAR_SECONDS } from "@/server/relay/config";
 import { tokenTag } from "@/server/relay/domain/capture-record";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 import { rigApiTarget, rigUser } from "@/server/relay/__tests__/_session-rig";
 import { connect } from "@/server/youtube/__tests__/_connect-rig";
 import { FakeYouTube } from "@/server/youtube/fake";
-import { getCode, postBeat, postStart } from "../capture-phone";
+import { getCode, postBeat, postScoringLink, postStart } from "../capture-phone";
 import { postCaptureRecord } from "../capture-record";
 import { captureStageOf } from "../capture-stage";
 import { linkCourtStream, setCourtStream, withdrawCourtStream } from "../court-streams";
@@ -468,6 +470,99 @@ describe.skipIf(!HAS_DB)("a court code's descriptor, beat, start and record", ()
     it("never touches another link's sessions", async () => {
       const { a } = await twoOpen();
       expect(await endOtherCourtSessions({ linkId: randomUUID(), keepSid: a, actorUserId: day.auth.userId! }, deps)).toEqual([]);
+    });
+  });
+
+  describe("the scoring link on a court code (§5.6)", () => {
+    const savedLinkEnv = { base: process.env.OAUTH_BASE_URL, kek: process.env.DEVICE_LINK_KEK };
+    let minted: string[];
+    beforeEach(() => {
+      process.env.OAUTH_BASE_URL = "https://court-scoring.test";
+      process.env.DEVICE_LINK_KEK = randomBytes(32).toString("hex");
+      minted = [];
+      __setRateLimitCounterForTests(async (key) => {
+        if (key.startsWith("rl:dlmint:")) minted.push(key);
+        return { count: 1, ttlMs: 60_000 };
+      });
+    });
+    afterEach(() => {
+      __setRateLimitCounterForTests(null);
+      for (const [k, v] of [["OAUTH_BASE_URL", savedLinkEnv.base], ["DEVICE_LINK_KEK", savedLinkEnv.kek]] as const) {
+        if (v === undefined) delete process.env[k]; else process.env[k] = v;
+      }
+    });
+    const tap = (phone: string) => postScoringLink(qr.code, qr.tok, { phone }, deps, clock(), "203.0.113.9");
+    const linkRows = async () => (await sql<{ fixture_id: string; token_hash: string }[]>`
+      select fixture_id, token_hash from device_links where org_id = ${day.orgId} order by created_at`);
+    const secretOf = (url: string) => url.slice(url.lastIndexOf("/") + 1);
+    const labelFor = (i: number) => labelOf(day.comp, day.comp.fixtures[i]!);
+
+    it("during A's video the tap gets C's link (the next unstarted match on the court), streamed or not, with C's label", async () => {
+      await streamed(A, AT_14);
+      await place(day, B, AT_15 + 60, day.courts.c2);
+      await place(day, C, AT_15, day.courts.c2); // C is before B in queue order, and not streamed
+      await setStatus(A, "in_play");
+      const phone = phoneId("score-c");
+      await claimed(phone);
+      await operatorStart(phone);
+      const ok = await tap(phone);
+      expect(CaptureScoringLinkOk.parse(ok)).toEqual(ok);
+      expect(ok.label).toBe(labelFor(2));
+      const rows = await linkRows();
+      expect(rows.map((r) => r.fixture_id)).toEqual([C]);
+      expect(rows[0]!.token_hash).toBe(hashDeviceLinkToken(secretOf(ok.url)));
+      expect(minted).toHaveLength(1);
+    });
+
+    it("a held call outranks an earlier planned match", async () => {
+      await place(day, A, AT_14, day.courts.c2);
+      await place(day, C, AT_15, day.courts.c2);
+      await sql`insert into fixture_calls (fixture_id, org_id, court_id, called_at, called_by, prev_court_id, prev_venue_id, prev_scheduled_at)
+                values (${C}, ${day.orgId}, ${day.courts.c2}, ${at(AT_15)}, ${day.auth.userId!}, null, null, null)`;
+      const phone = phoneId("score-call");
+      await claimed(phone);
+      const ok = await tap(phone);
+      expect(ok.label).toBe(labelFor(2));
+      expect((await linkRows()).map((r) => r.fixture_id)).toEqual([C]);
+    });
+
+    it("no match queued on the court: 409 no_match, no device link written, the mint budget untouched", async () => {
+      const phone = phoneId("score-none");
+      await claimed(phone);
+      expect(await refusal(tap(phone))).toBe("409:no_match");
+      expect(await linkRows()).toEqual([]);
+      expect(minted).toEqual([]);
+    });
+
+    it("a refusal on a non-https origin writes nothing and spends no budget", async () => {
+      process.env.OAUTH_BASE_URL = "http://court-scoring.test";
+      await place(day, A, AT_14, day.courts.c2);
+      const phone = phoneId("score-http");
+      await claimed(phone);
+      expect(await refusal(tap(phone))).toBe("503:unavailable");
+      expect(await linkRows()).toEqual([]);
+      expect(minted).toEqual([]);
+    });
+
+    it("a second tap returns the same url (no revoke), even after C's switch flips", async () => {
+      await place(day, A, AT_14, day.courts.c2);
+      const phone = phoneId("score-twice");
+      await claimed(phone);
+      const first = await tap(phone);
+      await setCourtStream(day.auth, A, true, at(0));
+      const second = await tap(phone);
+      expect(second).toEqual(first);
+      const rows = await sql<{ revoked_at: Date | null }[]>`select revoked_at from device_links where fixture_id = ${A}`;
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.revoked_at).toBeNull();
+    });
+
+    it("a phone that is not the court's current phone: 409 replaced before anything is read", async () => {
+      await place(day, A, AT_14, day.courts.c2);
+      await claimed(phoneId("score-holder"));
+      expect(await refusal(tap(phoneId("score-stranger")))).toBe("409:replaced");
+      expect(await linkRows()).toEqual([]);
+      expect(minted).toEqual([]);
     });
   });
 

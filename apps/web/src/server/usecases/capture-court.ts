@@ -18,19 +18,22 @@ import "server-only";
 // Every read is on the non-tenant `sql` (the V430/V523 tables are FORCE RLS with no policy); the org is the code row's. The
 // tok is never logged, and `cred` goes only to the current session's own phone, as on a fixture code.
 import { sql, type Tx } from "@/lib/db";
-import { CaptureRefusalError } from "@/server/api-v1/capture-http";
-import { CAPTURE_COURT_NAME_MAX, type CaptureCourt, type CaptureNext, type CaptureStartBody, type CaptureStartedBy, type CaptureStartOk } from "@/server/api-v1/capture-schemas";
+import { HttpError } from "@/lib/errors";
+import { DEVICE_LINK_MINT_LIMIT, rateLimit } from "@/lib/rate-limit";
+import { CaptureRefusalError, codeEnded } from "@/server/api-v1/capture-http";
+import { CAPTURE_COURT_NAME_MAX, CaptureScoringLinkOk, type CaptureCourt, type CaptureNext, type CaptureStartBody, type CaptureStartedBy, type CaptureStartOk } from "@/server/api-v1/capture-schemas";
 import { log } from "@/server/logger";
 import { captureError } from "@/lib/sentry";
 import { courtMinAppVersion, POLL_FAR_SECONDS } from "@/server/relay/config";
 import type { CourtFocus, CourtMatchFacts } from "@/server/relay/domain/court-stream";
 import { ACTIVE_STATES, isActive, type SessionState } from "@/server/relay/domain/session";
 import {
-  alreadyLive, captureCommon, captureOrigin, DEST_MAX, fitText, holderOf, LABEL_MAX, latestSession,
+  alreadyLive, captureCommon, captureOrigin, DEST_MAX, fitText, holderOf, HTTPS_ORIGIN, isForeignKeyViolation, LABEL_MAX, latestSession,
   phoneStartRefusal, runBeat, sessionDescriptor, waitingFieldsOf,
   type Beat, type BeatAnswer, type BeatScope, type CaptureCommon, type Descriptor, type Exec, type LatestSession, type NamedRow,
   type OpenRow,
 } from "./capture-phone";
+import { provideDeviceLinkForPhone, type HolderVerifiedCode, type PhoneScoringLink } from "./device-links";
 import { captureStageOf } from "./capture-stage";
 import { asFixtureCode, courtFocusOf, matchLabelOf, type ResolvedCourtCode } from "./court-stream-codes";
 import { endOtherCourtSessions } from "./court-stream-sessions";
@@ -240,4 +243,52 @@ export async function postCourtStart(court: ResolvedCourtCode, body: CaptureStar
     captureError(err, { orgId: court.orgId, route: "capture.court.end_others", extra: { sid: sessionId } });
   }
   return { sid: sessionId };
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The scoring link (§5.6)
+// ---------------------------------------------------------------------------------------------------------------------
+
+/**
+ * `POST /capture/codes/{code}/scoring-link` on a court code: the link of the court's NEXT unstarted match in queue order,
+ * streamed or not (O10), with that match's label. In order: the holder check (409 `replaced`, the court's session or
+ * pairing); no match queued → 409 `no_match`; a non-https origin → 503; only then the console's mint budget (so a refusal
+ * never spends it); then the fixture code's own `provideDeviceLinkForPhone` on that match, never revoking. The secret is
+ * a credential: never logged, never in an error.
+ */
+export async function postCourtScoringLink(
+  court: ResolvedCourtCode, body: CaptureStartBody, deps: SessionDeps, now: Date, clientIp: string,
+): Promise<CaptureScoringLinkOk> {
+  void now;
+  const open = await courtOpenSession(sql, court.link.id);
+  const current = await holderOf(sql, court.codeId, open);
+  if (!current || current.phone !== body.phone) throw new CaptureRefusalError(409, "replaced", "this phone is not the slot's current phone");
+  const { focus } = await courtFocusOf(court.link);
+  const fixtureId = focus.scoringFixtureId;
+  if (fixtureId === null) throw new CaptureRefusalError(409, "no_match", "this court has no match to score");
+  const origin = captureOrigin(deps);
+  if (!HTTPS_ORIGIN.test(origin)) {
+    log.error({ codeId: court.codeId, origin }, "capture court scoring link: the server's origin is not https; no link is served");
+    throw new CaptureRefusalError(503, "unavailable", "scoring links need https, and this server's origin is not https (origin_not_https)");
+  }
+  await rateLimit(`dlmint:${clientIp}`, DEVICE_LINK_MINT_LIMIT);
+  const checked = asFixtureCode(court, fixtureId) as HolderVerifiedCode; // the holder check above is this code's
+  let got: PhoneScoringLink;
+  try {
+    got = await provideDeviceLinkForPhone(checked);
+  } catch (err) {
+    if (err instanceof HttpError && err.code === "DEVICE_LINK_KEK_MISSING") {
+      throw new CaptureRefusalError(503, "unavailable", "scoring links are not configured on this server");
+    }
+    if (isForeignKeyViolation(err)) {
+      log.warn({ codeId: court.codeId }, "capture court scoring link: the link insert broke a foreign key (the code's issuer is gone); answered code_ended");
+      throw codeEnded();
+    }
+    throw err;
+  }
+  // The match finished between the read and the lock: the same "no match" the queue gives, nothing written.
+  if (got.kind === "finished") throw new CaptureRefusalError(409, "no_match", `the match is ${got.status}; this court has no match to score`);
+  const answer = CaptureScoringLinkOk.safeParse({ url: `${origin}/score/${got.secret}`, label: await matchLabelOf(court.orgId, fixtureId) });
+  if (!answer.success) throw new Error("postCourtScoringLink: the scoring link does not match the contract's url pattern");
+  return answer.data;
 }
