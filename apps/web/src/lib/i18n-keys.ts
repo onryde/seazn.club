@@ -3571,7 +3571,6 @@ export type DictionaryKey =
   | "home.meta.description"
   | "home.meta.title"
   | "home.og.description"
-  | "home.og.title"
   | "home.stub.once"
   | "home.stub.perMonth"
   | "home.tools.live.body"
