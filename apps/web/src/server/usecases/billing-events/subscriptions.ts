@@ -22,6 +22,13 @@ import {
 } from "./group-resolution";
 import { syncSeatAddonsForSubscription, syncOrgAddonsForSubscription } from "./addon-sync";
 import { convergeOrgAddonPrices } from "./addon-pricing";
+import {
+  billingPayer,
+  queueSubscriptionChangedMail,
+  queueTrialExpiredMail,
+  subscriptionChange,
+  trialRanOut,
+} from "./lifecycle-mail";
 
 /**
  * A card was attached, detached, or the customer's default changed — in the
@@ -140,15 +147,26 @@ export async function handleSubscriptionDeleted(stripeSub: Stripe.Subscription) 
   // touch a resubscribed customer. A delete is terminal, so this holds on the
   // stamped path too (mayWriteGroup's re-buy exemption needs a LIVE status).
   if (!(await mayWriteGroup(resolved, stripeSub))) return;
-  await sql`
-    update subscriptions
-    set plan_key = 'community', status = 'canceled', updated_at = now(),
-        -- Paid slots die with the subscription: a re-buy starts from the real
-        -- org count, never from what the dead subscription had been billed for.
-        quantity_paid = 1,
-        status_changed_at = case when status is distinct from 'canceled'
-                                 then now() else status_changed_at end
-    where id = ${subscriptionId}`;
+  // One transaction with the "your trial has ended" mail (billing lifecycle mails, 2026-11-15): whether a TRIAL ran out is read from
+  // our mirror's status BEFORE this write moves it to canceled, so the read, the write and the queued mail commit together. A refused
+  // enqueue rolls the downgrade back and the event runs again whole; a re-run after commit finds `canceled` and queues nothing (the
+  // once-key, the Stripe subscription id, holds it to one row either way).
+  await sql.begin(async (tx) => {
+    const [before] = await tx<{ status: string | null; plan_key: string | null }[]>`
+      select status, plan_key from subscriptions where id = ${subscriptionId} for update`;
+    await tx`
+      update subscriptions
+      set plan_key = 'community', status = 'canceled', updated_at = now(),
+          -- Paid slots die with the subscription: a re-buy starts from the real
+          -- org count, never from what the dead subscription had been billed for.
+          quantity_paid = 1,
+          status_changed_at = case when status is distinct from 'canceled'
+                                   then now() else status_changed_at end
+      where id = ${subscriptionId}`;
+    if (trialRanOut(stripeSub, before?.status ?? null)) {
+      await queueTrialExpiredMail(tx, subscriptionId, stripeSub, before?.plan_key ?? null);
+    }
+  });
   // The plan is only ONE of the two axes the resolver adds up (v17 gap #293,
   // acceptance item 4). Recurring add-ons sit on TOP of the plan base, and
   // nothing here was cancelling them: syncOrgAddonsForSubscription runs only on
@@ -236,44 +254,10 @@ export async function handleTrialWillEnd(stripeSub: Stripe.Subscription, eventId
     );
     return;
   }
-  const [row] = await sql<
-    {
-      plan_key: string | null;
-      has_payment_method: boolean | null;
-      owner_user_id: string;
-      owner_email: string | null;
-      org_slug: string | null;
-      org_default_locale: string | null;
-    }[]
-  >`
-    select s.plan_key, s.has_payment_method, s.owner_user_id, u.email as owner_email,
-           -- The billing page is per-ORG, but a group can span several. Prefer
-           -- the one the payer actually owns — that is the org whose settings
-           -- they can reach — and fall back to the group's oldest org so a
-           -- payer who owns none still lands somewhere they can act.
-           coalesce(
-             (select o.slug from organizations o
-               where o.subscription_id = s.id and o.created_by = s.owner_user_id
-               order by o.created_at limit 1),
-             (select o.slug from organizations o
-               where o.subscription_id = s.id
-               order by o.created_at limit 1)
-           ) as org_slug,
-           -- That same org's default language, by the same choice (an org's
-           -- default_locale is never null, so each coalesce settles on the
-           -- same arm).
-           coalesce(
-             (select o.default_locale from organizations o
-               where o.subscription_id = s.id and o.created_by = s.owner_user_id
-               order by o.created_at limit 1),
-             (select o.default_locale from organizations o
-               where o.subscription_id = s.id
-               order by o.created_at limit 1)
-           ) as org_default_locale
-    from subscriptions s
-    left join users u on u.id = s.owner_user_id and u.deleted_at is null
-    where s.id = ${resolved.subscriptionId}`;
-  if (!row?.owner_email) {
+  // The payer, by the rule every billing mail shares (lifecycle-mail.ts `billingPayer`: the account `owner_user_id` names, and the
+  // billing page of the org that payer created, else the group's oldest).
+  const payer = await billingPayer(sql, resolved.subscriptionId);
+  if (!payer) {
     log.warn(
       { subscriptionId: resolved.subscriptionId },
       "billing: trial_will_end — group has no reachable owner",
@@ -293,21 +277,21 @@ export async function handleTrialWillEnd(stripeSub: Stripe.Subscription, eventId
     );
     return;
   }
-  const locale = await recipientLocale(sql, { pick: null, userId: row.owner_user_id, orgDefault: row.org_default_locale });
+  const locale = await recipientLocale(sql, { pick: null, userId: payer.ownerUserId, orgDefault: payer.orgDefaultLocale });
   const kind = "trial_ending";
   await enqueueEmailOnce(sql, {
     kind,
     refType: "subscription",
     refId: resolved.subscriptionId,
     orgId: null,
-    to: row.owner_email,
-    recipientUserId: row.owner_user_id,
+    to: payer.ownerEmail,
+    recipientUserId: payer.ownerUserId,
     ...(await trialEndingEmail(
       {
-        planName: planLabel(row.plan_key),
+        planName: planLabel(payer.planKey),
         trialEnd,
-        hasPaymentMethod: row.has_payment_method === true,
-        orgSlug: row.org_slug,
+        hasPaymentMethod: payer.hasPaymentMethod,
+        orgSlug: payer.orgSlug,
       },
       locale,
     )),
@@ -315,4 +299,21 @@ export async function handleTrialWillEnd(stripeSub: Stripe.Subscription, eventId
     expiresAt: expiryWithin(null),
     dedupeKey: onceKey(kind, "subscription", eventId),
   });
+}
+
+/**
+ * `customer.subscription.updated`, second half: the payer's own change, confirmed (billing lifecycle mails, 2026-11-15) — a cancel
+ * scheduled, a resume, a monthly/annual switch. Read off the event's `previous_attributes` (lifecycle-mail.ts `subscriptionChange`), so
+ * a change made anywhere — the billing page, the Stripe Dashboard, support — is confirmed the same way, once per Stripe event. Runs
+ * after the row sync, under the same stale-event guard: a replaced subscription's late update mails nobody.
+ */
+export async function handleSubscriptionChangeMail(event: Stripe.Event): Promise<void> {
+  const stripeSub = event.data.object as Stripe.Subscription;
+  const previous = (event.data as { previous_attributes?: Partial<Stripe.Subscription> }).previous_attributes;
+  const change = subscriptionChange(stripeSub, previous);
+  if (!change) return;
+  const resolved = await resolveGroupForStripeSub(stripeSub);
+  if (!resolved) return;
+  if (!(await mayWriteGroup(resolved, stripeSub))) return;
+  await queueSubscriptionChangedMail(resolved.subscriptionId, stripeSub, change, event.id);
 }

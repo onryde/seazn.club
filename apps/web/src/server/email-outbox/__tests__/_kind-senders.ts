@@ -38,7 +38,7 @@ export const KINDS_BEFORE_PHASE_3: readonly OutboxKind[] = ["magic_link", "chess
  *  list of their own. Sponsor deals Task 23 (plan 2026-11-07-sponsor-deals, D13): the owner's "a sponsor has paid" notice. The quick
  *  match design (docs/superpowers/specs/2026-11-03-quick-match-design.md §7.6, C2): its link mail and its reminder. Registration
  *  walk-fix F16: a waiting entry's promotion turn passed over (no Lichess link that plays). */
-export const KINDS_BORN_ON_THE_OUTBOX: readonly OutboxKind[] = ["sponsor_deal_paid", "registration_paid", "registration_approved", "registration_expired", "registration_withdrawn", "registration_joined", "registration_rejected", "registration_promotion_lapsed", "quick_match_link", "quick_match_reminder", "registration_promotion_skipped"];
+export const KINDS_BORN_ON_THE_OUTBOX: readonly OutboxKind[] = ["sponsor_deal_paid", "registration_paid", "registration_approved", "registration_expired", "registration_withdrawn", "registration_joined", "registration_rejected", "registration_promotion_lapsed", "quick_match_link", "quick_match_reminder", "registration_promotion_skipped", "trial_expired", "plan_activated", "renewal_failed", "renewal_upcoming", "renewal_paid", "subscription_changed"];
 
 /** The `send*` exports of lib/email.ts still to move. The spec counted 49 at the start of phase 3 wave 1; each kind task took its own
  *  with it, and wave 5's last move emptied the list (T7 also deleted the private boolean sender and its typed form, so lib/email.ts
@@ -123,6 +123,13 @@ export const KIND_DIRECT_SENDER: Readonly<Record<OutboxKind, string | null>> = {
   quick_match_link: null,
   quick_match_reminder: null,
   registration_promotion_skipped: null,
+  // Billing lifecycle mails (2026-11-15): born on the outbox.
+  trial_expired: null,
+  plan_activated: null,
+  renewal_failed: null,
+  renewal_upcoming: null,
+  renewal_paid: null,
+  subscription_changed: null,
 };
 
 /** How long the allowlist must be while `unmoved` kinds are still on their direct sender: the spec's 49, less one for every phase-3 kind

@@ -9,6 +9,7 @@ import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
 import { reportSale } from "@/lib/revshare";
 import { ownerDistinctId, primaryOrgForGroup } from "./group-resolution";
+import { queuePaidInvoiceMail, queueRenewalFailedMail, queueRenewalUpcomingMail } from "./lifecycle-mail";
 
 /** In Stripe v22 the subscription ref moved to invoice.parent.subscription_details.subscription */
 export function invoiceSubId(invoice: Stripe.Invoice): string | null {
@@ -20,7 +21,7 @@ export function invoiceSubId(invoice: Stripe.Invoice): string | null {
 export async function handleInvoicePaymentFailed(invoice: Stripe.Invoice) {
   const subId = invoiceSubId(invoice);
   if (!subId) return;
-  const [row] = await sql<{ id: string }[]>`
+  const [row] = await sql<{ id: string; grace_ends_at: Date }[]>`
     update subscriptions
     set status = 'past_due', updated_at = now(),
         -- Grace anchor: only the FIRST failure starts the 14-day clock;
@@ -28,7 +29,11 @@ export async function handleInvoicePaymentFailed(invoice: Stripe.Invoice) {
         status_changed_at = case when status is distinct from 'past_due'
                                  then now() else status_changed_at end
     where stripe_subscription_id = ${subId}
-    returning id`;
+    -- When that grace ends, by the resolver's own rule (lib/entitlements.ts and
+    -- org_has_feature: past_due collapses to community once
+    -- coalesce(status_changed_at, updated_at) <= now() - interval '14 days'),
+    -- for the dunning mail to name.
+    returning id, coalesce(status_changed_at, updated_at) + interval '14 days' as grace_ends_at`;
   if (row) {
     // past_due starts the 14-day grace the resolver reads, so it is a plan
     // change in all but name — drop the whole group's cached entitlements.
@@ -43,6 +48,8 @@ export async function handleInvoicePaymentFailed(invoice: Stripe.Invoice) {
         orgId,
       });
     }
+    // The dunning notice (billing lifecycle mails, 2026-11-15): one per declined renewal invoice.
+    await queueRenewalFailedMail(invoice, row.id, row.grace_ends_at);
   }
 }
 
@@ -57,6 +64,8 @@ export async function handleInvoicePaymentSucceeded(invoice: Stripe.Invoice) {
   if (row) await invalidateGroupEntitlements(row.id);
   await trueUpQuantityPaid(invoice, subId);
   await reportRevshareSale(invoice, subId);
+  // The activation mail for a subscription's first payment, or the renewal receipt (billing lifecycle mails, 2026-11-15).
+  await queuePaidInvoiceMail(invoice, subId);
 }
 
 /**
@@ -94,6 +103,17 @@ async function reportRevshareSale(invoice: Stripe.Invoice, subId: string): Promi
     currency: invoice.currency,
     customerId,
   });
+}
+
+/**
+ * `invoice.upcoming` (billing lifecycle mails, 2026-11-15): Stripe's notice ahead of a renewal, sent by the dashboard's "upcoming renewal
+ * events" lead time. The payload is a PREVIEW invoice — no `id` — so nothing here may key on one. Mail only (the annual renewal notice);
+ * nothing is mirrored.
+ */
+export async function handleInvoiceUpcoming(invoice: Stripe.Invoice): Promise<void> {
+  const subId = invoiceSubId(invoice);
+  if (!subId) return;
+  await queueRenewalUpcomingMail(invoice, subId);
 }
 
 /**

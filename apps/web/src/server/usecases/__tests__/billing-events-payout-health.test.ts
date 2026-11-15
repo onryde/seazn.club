@@ -164,11 +164,13 @@ describe("HANDLED_EVENT_TYPES (pure)", () => {
     expect(HANDLED_EVENT_TYPES).toContain(type);
   });
 
-  it("the two events the brief deferred are NOT subscribed", () => {
+  it("the event the brief deferred is NOT subscribed; invoice.upcoming, deferred with it, is now (billing lifecycle mails, 2026-11-15)", () => {
     // Positive pair for the assertions above: proves the list is a real filter
     // and not something that contains everything asked of it.
-    expect(HANDLED_EVENT_TYPES).not.toContain("invoice.upcoming");
     expect(HANDLED_EVENT_TYPES).not.toContain("radar.early_fraud_warning.created");
+    // The annual renewal notice's event. A platform event: never on the Connect destination.
+    expect(HANDLED_EVENT_TYPES).toContain("invoice.upcoming");
+    expect(CONNECT_SCOPED_EVENT_TYPES).not.toContain("invoice.upcoming");
   });
 });
 

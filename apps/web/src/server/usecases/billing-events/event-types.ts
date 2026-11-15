@@ -52,6 +52,10 @@ export const HANDLED_EVENT_TYPES = [
   // anything else in this table emits, because Stripe sends it three days AHEAD
   // of any subscription state change.
   "customer.subscription.trial_will_end",
+  // The annual renewal notice (billing lifecycle mails, 2026-11-15). A platform event, on the "your account" destination, and sent only
+  // as far ahead as the dashboard's Billing > Subscriptions > "Upcoming renewal events" setting says (3 days by default). The live
+  // endpoints must subscribe it, or this sits here looking correct for ever (see CONNECT_SCOPED_EVENT_TYPES).
+  "invoice.upcoming",
 ] as const;
 
 /**

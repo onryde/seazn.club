@@ -20,11 +20,12 @@ import { ownerDistinctId } from "./group-resolution";
 import { handleCheckoutCompleted } from "./checkout";
 import {
   handlePaymentMethodChanged,
+  handleSubscriptionChangeMail,
   handleSubscriptionChanged,
   handleSubscriptionDeleted,
   handleTrialWillEnd,
 } from "./subscriptions";
-import { handleInvoicePaymentFailed, handleInvoicePaymentSucceeded } from "./invoices";
+import { handleInvoicePaymentFailed, handleInvoicePaymentSucceeded, handleInvoiceUpcoming } from "./invoices";
 import {
   revokePassForRefundedChargeAndNotify,
   handlePackChargeRefunded,
@@ -79,6 +80,9 @@ export async function processStripeEvent(event: Stripe.Event): Promise<void> {
     case "customer.subscription.updated": {
       const stripeSub = event.data.object as Stripe.Subscription;
       await handleSubscriptionChanged(stripeSub);
+      // The payer's own change, confirmed (cancel scheduled / resumed / interval switch): only an UPDATE carries the
+      // previous_attributes that say what changed.
+      if (event.type === "customer.subscription.updated") await handleSubscriptionChangeMail(event);
       // Fire the activation-of-revenue event once, on creation only.
       if (event.type === "customer.subscription.created" && stripeSub.metadata?.org_id) {
         await captureServer({
@@ -103,6 +107,10 @@ export async function processStripeEvent(event: Stripe.Event): Promise<void> {
       break;
     case "invoice.payment_succeeded":
       await handleInvoicePaymentSucceeded(event.data.object as Stripe.Invoice);
+      break;
+    case "invoice.upcoming":
+      // The annual renewal notice. A preview invoice: it has no id.
+      await handleInvoiceUpcoming(event.data.object as Stripe.Invoice);
       break;
     case "account.updated":
       // Connect Express onboarding progress (PROMPT-20a): mirror the four

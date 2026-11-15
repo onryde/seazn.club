@@ -20,6 +20,7 @@ import "server-only";
 //   addon-sync        seat / extra-org add-on rows from subscription items
 //   addon-pricing     extra-org rider re-pricing and its reconciliation sweep
 //   group-resolution  which billing group / org a Stripe object belongs to
+//   lifecycle-mail    the billing lifecycle mails to a group's payer: who the payer is, which mail an event earns, its once-key
 //   staff-alerts      the staff alerts queued on the email outbox
 export { HANDLED_EVENT_TYPES, CONNECT_SCOPED_EVENT_TYPES } from "./event-types";
 export { processStripeEvent } from "./dispatch";
