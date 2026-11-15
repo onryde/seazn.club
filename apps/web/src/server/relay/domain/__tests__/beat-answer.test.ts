@@ -16,7 +16,7 @@ const X = "22222222-2222-4222-8222-222222222222";
 const OPEN = { sid: S, startedBy: "organiser" as const };
 const ENDED_X = { sid: X, endReason: "stopped" as const };
 const SLOTS: readonly SlotState[] = ["empty", "paired", "starting", "armed", "live", "live_dead"];
-const base: BeatAnswerInput = { claim: null, callerCurrent: true, namedEnded: null, slot: "paired", open: null };
+const base: BeatAnswerInput = { claim: null, callerCurrent: true, namedEnded: null, handover: null, slot: "paired", open: null };
 const COMMON: BeatAnswerCommon = {
   label: "Home v Away", scheduledStart: 1_790_000_000, autoAllowed: false, destinationName: null, overlayUrl: null,
   pollSeconds: POLL_NEAR_SECONDS,
@@ -57,6 +57,34 @@ describe("beatAnswer — §6.3.3, in precedence order", () => {
   it("row 7: slot live or live·dead → live S, with no startedBy", () => {
     expect(beatAnswer({ ...base, slot: "live", open: OPEN })).toEqual({ state: "live", sid: S });
     expect(beatAnswer({ ...base, slot: "live_dead", open: OPEN })).toEqual({ state: "live", sid: S });
+  });
+});
+
+describe("court handover (court stream §5.4, plan Task 8) — between rows 2 and 3", () => {
+  const SID_A = "33333333-3333-4333-8333-333333333333";
+  const SID_B = "44444444-4444-4444-8444-444444444444";
+  const court = { ...base, claim: null, callerCurrent: true, slot: "armed" as const, open: { sid: SID_B, startedBy: "automatic" as const } };
+
+  it("handover: the named A ended and B is armed → go-live B", () => {
+    expect(beatAnswer({ ...court, namedEnded: { sid: SID_A, endReason: "auto_stopped" }, handover: { sid: SID_B, startedBy: "automatic" } }))
+      .toEqual({ state: "go-live", sid: SID_B, startedBy: "automatic" });
+  });
+
+  it("no handover given: the named A ended → over A (today's row 3)", () => {
+    expect(beatAnswer({ ...court, namedEnded: { sid: SID_A, endReason: "auto_stopped" }, handover: null }))
+      .toEqual({ state: "over", sid: SID_A, endReason: "auto_stopped" });
+  });
+
+  it("a replaced caller still hears replaced before any handover", () => {
+    expect(beatAnswer({ ...court, callerCurrent: false, namedEnded: { sid: SID_A, endReason: "auto_stopped" }, handover: { sid: SID_B, startedBy: "automatic" } }).state)
+      .toBe("replaced");
+  });
+
+  it("a handover with nothing named ended is not a handover row: the slot's own row answers", () => {
+    expect(beatAnswer({ ...court, namedEnded: null, handover: { sid: SID_B, startedBy: "automatic" } }))
+      .toEqual({ state: "go-live", sid: SID_B, startedBy: "automatic" });
+    expect(beatAnswer({ ...court, slot: "paired", open: null, namedEnded: null, handover: { sid: SID_B, startedBy: "automatic" } }))
+      .toEqual({ state: "waiting", starting: false });
   });
 });
 
@@ -140,7 +168,7 @@ describe("the wire (R5): wireBeatAnswer(beatAnswer(…)) parses with the real Ca
         for (const namedEnded of [null, ENDED_X]) {
           for (const slot of SLOTS) {
             for (const open of OPENS) {
-              const input: BeatAnswerInput = { claim, callerCurrent, namedEnded, slot, open };
+              const input: BeatAnswerInput = { claim, callerCurrent, namedEnded, handover: null, slot, open };
               const label = JSON.stringify(input);
               const rule = refusalOf(input);
               expected[rule === null ? "parsed" : rule.source.startsWith("contradicts") ? "contradiction" : "open"]++;

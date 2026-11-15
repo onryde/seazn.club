@@ -34,6 +34,7 @@ import {
 import { captureStageOf } from "./capture-stage";
 import { asFixtureCode, courtFocusOf, matchLabelOf, type ResolvedCourtCode } from "./court-stream-codes";
 import { endOtherCourtSessions } from "./court-stream-sessions";
+import { maybeCourtAutoStart } from "./stream-auto-court";
 import { markAutoStartBlocked, startModeFor } from "./stream-codes";
 import { startBroadcast, type SessionDeps } from "./stream-sessions";
 
@@ -155,15 +156,8 @@ export async function getCourtCode(
 // The beat
 // ---------------------------------------------------------------------------------------------------------------------
 
-/**
- * Task 8's hook: the court's automatic start. Stubbed here — it never fires — so a court phone's beat starts nothing by
- * itself until Task 8 lands `maybeCourtAutoStart`.
- */
-async function courtAutoStart(): Promise<{ fired: false; why: "not_due" }> {
-  return { fired: false, why: "not_due" };
-}
-
-/** A court code's beat scope: the link's sessions, the court phone's Stop latch, and the court's answer fields. */
+/** A court code's beat scope: the link's sessions, the court phone's Stop latch, the court's automatic start and handover
+ *  (`maybeCourtAutoStart`, Task 8), and the court's answer fields. */
 function courtBeatScope(court: ResolvedCourtCode, code: string, deps: SessionDeps, now: Date): BeatScope {
   return {
     orgId: court.orgId, codeId: court.codeId, issuedBy: court.issuedBy,
@@ -174,7 +168,11 @@ function courtBeatScope(court: ResolvedCourtCode, code: string, deps: SessionDep
     // §5.4 "Phone Stop hold": the match the court phone stopped is latched, in the beat's own transaction, so the court
     // never offers its sid again (the phone refuses it) and the desk restarts it by hand.
     onStopApplied: (tx: Tx, x: NamedRow) => markAutoStartBlocked(court.orgId, x.fixture_id, now, court.issuedBy, tx),
-    autoStart: async () => { await courtAutoStart(); },
+    autoStart: async (pairingId, phoneMode) => {
+      await maybeCourtAutoStart({ court, pairingId, phoneMode }, deps, now);
+    },
+    // §5.4: the beat naming the match the court just moved on from is handed to the new, armed session.
+    handsOver: true,
     answerCommon: async (open) => {
       // Read AFTER step 6, so a start the beat made is the answer's subject.
       const view = await courtFocusOf(court.link);

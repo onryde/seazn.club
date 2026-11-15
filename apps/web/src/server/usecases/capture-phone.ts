@@ -458,6 +458,9 @@ export type BeatScope = {
   autoStart: (pairingId: string, phoneMode: Beat["mode"]) => Promise<void>;
   /** Step 7's common fields, read from the rows as they now stand, the open session given. */
   answerCommon: (open: OpenRow | null) => Promise<BeatAnswerCommon>;
+  /** Court stream §5.4 (plan Task 8): a court's beat that names an ended session of its scope while ANOTHER session of
+   *  the scope is armed is handed over to that one (`beatAnswer`'s handover row). A fixture's scope leaves it unset. */
+  handsOver?: true;
 };
 
 /** A fixture's code: its fixture's sessions, `maybeAutoStart`, and the fixture's waiting fields. */
@@ -701,11 +704,17 @@ export async function runBeat(scope: BeatScope, body: Beat, deps: SessionDeps, n
       namedEnded = { sid: x.id, endReason: wireEndReason({ endReason: x.end_reason, failReason: x.fail_reason }) };
     }
   }
+  const slot = slotOf(holder, open, false);
+  // `namedSession` answers only sessions of this scope, so on a court the ended one is this link's.
+  const handover = scope.handsOver === true && namedEnded !== null && open !== null && open.id !== namedEnded.sid && slot === "armed"
+    ? { sid: open.id, startedBy: open.start_cause }
+    : null;
   const core = beatAnswer({
     claim: body.claim === null ? null : decided.claim,
     callerCurrent: decided.callerCurrent,
     namedEnded,
-    slot: slotOf(holder, open, false),
+    handover,
+    slot,
     open: open === null ? null : { sid: open.id, startedBy: open.start_cause },
   });
   const common = await scope.answerCommon(open);
