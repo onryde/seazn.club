@@ -572,5 +572,21 @@
   "start.wizard.language": "Taal",
   "start.wizard.changeBanner": "Je vorige link werkt niet meer zodra je een nieuwe stuurt. Referentie {reference} blijft hetzelfde.",
   "start.wizard.answersKept": "Je antwoorden blijven bewaard. Gebruik Terug om er een te wijzigen.",
-  "start.wizard.sendNew": "Stuur een nieuwe link"
+  "start.wizard.sendNew": "Stuur een nieuwe link",
+  "footer.link.affiliates": "Affiliates",
+  "affiliates.meta.title": "Affiliateprogramma",
+  "affiliates.meta.description": "Verdien {percent}% van elke betaling van de clubs en organisatoren die je aanbeveelt bij Seazn Club, gedurende {years} jaar.",
+  "affiliates.badge": "AFFILIATES",
+  "affiliates.h1": "Verdien {percent}% gedurende {years} jaar",
+  "affiliates.subhead": "Ken je een club, competitie of organisator van toernooien? Deel je link en verdien {percent}% van wat elke aanbevolen klant aan Seazn Club betaalt, gedurende de eerste {years} jaar.",
+  "affiliates.card.0.title": "Haal je link op",
+  "affiliates.card.0.body": "Meld je aan via ons partnerportaal en ontvang je persoonlijke verwijzingslink.",
+  "affiliates.card.1.title": "Zij abonneren zich",
+  "affiliates.card.1.body": "Zodra iemand die je aanbeval een betaald abonnement neemt, wordt dat automatisch bijgehouden. Verwijzingen worden 30 dagen onthouden.",
+  "affiliates.card.2.title": "Jij blijft verdienen",
+  "affiliates.card.2.body": "Je verdient {percent}% van elke betaling gedurende {years} jaar, verlengingen inbegrepen, en ziet elke verwijzing in je partnerdashboard.",
+  "affiliates.cta.title": "Klaar om te gaan verdienen?",
+  "affiliates.cta.subtext": "Meld je gratis aan op ons partnerportaal.",
+  "affiliates.cta.button": "Doe mee aan het affiliateprogramma",
+  "affiliates.payout": "Commissies komen {payoutDelayDays} dagen na elke verkoop beschikbaar, met een minimale uitbetaling van {payoutMinimum}, uitgekeerd via {payoutMethod}."
 }

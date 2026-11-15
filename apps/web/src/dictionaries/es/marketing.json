@@ -572,5 +572,21 @@
   "start.wizard.language": "Idioma",
   "start.wizard.changeBanner": "Tu enlace anterior dejará de funcionar cuando envíes uno nuevo. La referencia {reference} se mantiene.",
   "start.wizard.answersKept": "Tus respuestas se mantienen. Usa Atrás para cambiar cualquiera.",
-  "start.wizard.sendNew": "Envíame un enlace nuevo"
+  "start.wizard.sendNew": "Envíame un enlace nuevo",
+  "footer.link.affiliates": "Afiliados",
+  "affiliates.meta.title": "Programa de afiliados",
+  "affiliates.meta.description": "Gana el {percent} % de cada pago de los clubes y organizadores que recomiendes a Seazn Club, durante {years} años.",
+  "affiliates.badge": "AFILIADOS",
+  "affiliates.h1": "Gana el {percent} % durante {years} años",
+  "affiliates.subhead": "¿Conoces un club, una liga o un organizador de torneos? Comparte tu enlace y gana el {percent} % de lo que cada cliente recomendado paga a Seazn Club durante sus primeros {years} años.",
+  "affiliates.card.0.title": "Consigue tu enlace",
+  "affiliates.card.0.body": "Únete a través de nuestro portal de socios y obtén tu enlace de recomendación personal.",
+  "affiliates.card.1.title": "Se suscriben",
+  "affiliates.card.1.body": "Cuando alguien que recomendaste contrata un plan de pago, se registra automáticamente. Las recomendaciones se recuerdan durante 30 días.",
+  "affiliates.card.2.title": "Sigues ganando",
+  "affiliates.card.2.body": "Ganas el {percent} % de cada pago que hagan durante {years} años, renovaciones incluidas, y ves cada recomendación en tu panel de socio.",
+  "affiliates.cta.title": "¿Listo para empezar a ganar?",
+  "affiliates.cta.subtext": "Regístrate gratis en nuestro portal de socios.",
+  "affiliates.cta.button": "Unirme al programa de afiliados",
+  "affiliates.payout": "Las comisiones están disponibles {payoutDelayDays} días después de cada venta, con un pago mínimo de {payoutMinimum}, abonado a través de {payoutMethod}."
 }
