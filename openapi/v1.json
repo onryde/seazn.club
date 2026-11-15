@@ -58503,6 +58503,20 @@
                             "role"
                           ],
                           "additionalProperties": false
+                        },
+                        "court": {
+                          "type": "object",
+                          "properties": {
+                            "name": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 80
+                            }
+                          },
+                          "required": [
+                            "name"
+                          ],
+                          "additionalProperties": false
                         }
                       },
                       "required": [
@@ -58681,6 +58695,20 @@
                           "required": [
                             "code",
                             "role"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "court": {
+                          "type": "object",
+                          "properties": {
+                            "name": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 80
+                            }
+                          },
+                          "required": [
+                            "name"
                           ],
                           "additionalProperties": false
                         },
@@ -58935,6 +58963,20 @@
                           ],
                           "additionalProperties": false
                         },
+                        "court": {
+                          "type": "object",
+                          "properties": {
+                            "name": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 80
+                            }
+                          },
+                          "required": [
+                            "name"
+                          ],
+                          "additionalProperties": false
+                        },
                         "cred": {
                           "type": "object",
                           "properties": {
@@ -59183,6 +59225,20 @@
                           "required": [
                             "code",
                             "role"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "court": {
+                          "type": "object",
+                          "properties": {
+                            "name": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 80
+                            }
+                          },
+                          "required": [
+                            "name"
                           ],
                           "additionalProperties": false
                         },
@@ -59450,6 +59506,20 @@
                           ],
                           "additionalProperties": false
                         },
+                        "court": {
+                          "type": "object",
+                          "properties": {
+                            "name": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 80
+                            }
+                          },
+                          "required": [
+                            "name"
+                          ],
+                          "additionalProperties": false
+                        },
                         "endReason": {
                           "type": "string",
                           "enum": [
@@ -59650,6 +59720,20 @@
                           ],
                           "additionalProperties": false
                         },
+                        "court": {
+                          "type": "object",
+                          "properties": {
+                            "name": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 80
+                            }
+                          },
+                          "required": [
+                            "name"
+                          ],
+                          "additionalProperties": false
+                        },
                         "endReason": {
                           "type": "string",
                           "enum": [
@@ -59755,7 +59839,8 @@
                             "unavailable",
                             "invalid",
                             "rate_limited",
-                            "match_finished"
+                            "match_finished",
+                            "no_match"
                           ]
                         },
                         "message": {
@@ -59826,7 +59911,8 @@
                             "unavailable",
                             "invalid",
                             "rate_limited",
-                            "match_finished"
+                            "match_finished",
+                            "no_match"
                           ]
                         },
                         "message": {
@@ -59897,7 +59983,8 @@
                             "unavailable",
                             "invalid",
                             "rate_limited",
-                            "match_finished"
+                            "match_finished",
+                            "no_match"
                           ]
                         },
                         "message": {
@@ -59968,7 +60055,8 @@
                             "unavailable",
                             "invalid",
                             "rate_limited",
-                            "match_finished"
+                            "match_finished",
+                            "no_match"
                           ]
                         },
                         "message": {
@@ -60039,7 +60127,8 @@
                             "unavailable",
                             "invalid",
                             "rate_limited",
-                            "match_finished"
+                            "match_finished",
+                            "no_match"
                           ]
                         },
                         "message": {
@@ -60481,6 +60570,33 @@
                           "minimum": 5,
                           "maximum": 300
                         },
+                        "next": {
+                          "type": "object",
+                          "properties": {
+                            "label": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "scheduledStart": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "label",
+                            "scheduledStart"
+                          ],
+                          "additionalProperties": false
+                        },
                         "state": {
                           "type": "string",
                           "const": "waiting"
@@ -60547,6 +60663,33 @@
                           "type": "integer",
                           "minimum": 5,
                           "maximum": 300
+                        },
+                        "next": {
+                          "type": "object",
+                          "properties": {
+                            "label": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "scheduledStart": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "label",
+                            "scheduledStart"
+                          ],
+                          "additionalProperties": false
                         },
                         "state": {
                           "type": "string",
@@ -60630,6 +60773,33 @@
                           "minimum": 5,
                           "maximum": 300
                         },
+                        "next": {
+                          "type": "object",
+                          "properties": {
+                            "label": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "scheduledStart": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "label",
+                            "scheduledStart"
+                          ],
+                          "additionalProperties": false
+                        },
                         "state": {
                           "type": "string",
                           "const": "live"
@@ -60702,6 +60872,33 @@
                           "type": "integer",
                           "minimum": 5,
                           "maximum": 300
+                        },
+                        "next": {
+                          "type": "object",
+                          "properties": {
+                            "label": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "scheduledStart": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "label",
+                            "scheduledStart"
+                          ],
+                          "additionalProperties": false
                         },
                         "state": {
                           "type": "string",
@@ -60789,6 +60986,33 @@
                           "minimum": 5,
                           "maximum": 300
                         },
+                        "next": {
+                          "type": "object",
+                          "properties": {
+                            "label": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "scheduledStart": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "label",
+                            "scheduledStart"
+                          ],
+                          "additionalProperties": false
+                        },
                         "state": {
                           "type": "string",
                           "const": "replaced"
@@ -60863,6 +61087,33 @@
                           "type": "integer",
                           "minimum": 5,
                           "maximum": 300
+                        },
+                        "next": {
+                          "type": "object",
+                          "properties": {
+                            "label": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "scheduledStart": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "label",
+                            "scheduledStart"
+                          ],
+                          "additionalProperties": false
                         },
                         "state": {
                           "type": "string",
@@ -60955,7 +61206,8 @@
                             "unavailable",
                             "invalid",
                             "rate_limited",
-                            "match_finished"
+                            "match_finished",
+                            "no_match"
                           ]
                         },
                         "message": {
@@ -61026,7 +61278,8 @@
                             "unavailable",
                             "invalid",
                             "rate_limited",
-                            "match_finished"
+                            "match_finished",
+                            "no_match"
                           ]
                         },
                         "message": {
@@ -61097,7 +61350,8 @@
                             "unavailable",
                             "invalid",
                             "rate_limited",
-                            "match_finished"
+                            "match_finished",
+                            "no_match"
                           ]
                         },
                         "message": {
@@ -61168,7 +61422,8 @@
                             "unavailable",
                             "invalid",
                             "rate_limited",
-                            "match_finished"
+                            "match_finished",
+                            "no_match"
                           ]
                         },
                         "message": {
@@ -61239,7 +61494,8 @@
                             "unavailable",
                             "invalid",
                             "rate_limited",
-                            "match_finished"
+                            "match_finished",
+                            "no_match"
                           ]
                         },
                         "message": {
@@ -61385,7 +61641,8 @@
                             "unavailable",
                             "invalid",
                             "rate_limited",
-                            "match_finished"
+                            "match_finished",
+                            "no_match"
                           ]
                         },
                         "message": {
@@ -61456,7 +61713,8 @@
                             "unavailable",
                             "invalid",
                             "rate_limited",
-                            "match_finished"
+                            "match_finished",
+                            "no_match"
                           ]
                         },
                         "message": {
@@ -61527,7 +61785,8 @@
                             "unavailable",
                             "invalid",
                             "rate_limited",
-                            "match_finished"
+                            "match_finished",
+                            "no_match"
                           ]
                         },
                         "message": {
@@ -61598,7 +61857,8 @@
                             "unavailable",
                             "invalid",
                             "rate_limited",
-                            "match_finished"
+                            "match_finished",
+                            "no_match"
                           ]
                         },
                         "message": {
@@ -61669,7 +61929,8 @@
                             "unavailable",
                             "invalid",
                             "rate_limited",
-                            "match_finished"
+                            "match_finished",
+                            "no_match"
                           ]
                         },
                         "message": {
@@ -61740,7 +62001,8 @@
                             "unavailable",
                             "invalid",
                             "rate_limited",
-                            "match_finished"
+                            "match_finished",
+                            "no_match"
                           ]
                         },
                         "message": {
@@ -61811,7 +62073,8 @@
                             "unavailable",
                             "invalid",
                             "rate_limited",
-                            "match_finished"
+                            "match_finished",
+                            "no_match"
                           ]
                         },
                         "message": {
@@ -61882,7 +62145,8 @@
                             "unavailable",
                             "invalid",
                             "rate_limited",
-                            "match_finished"
+                            "match_finished",
+                            "no_match"
                           ]
                         },
                         "message": {
@@ -63728,6 +63992,11 @@
                     "url": {
                       "type": "string",
                       "pattern": "^https:\\/\\/[^/]+\\/score\\/dl_[A-Za-z0-9_-]{43}$"
+                    },
+                    "label": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200
                     }
                   },
                   "required": [
@@ -63736,7 +64005,8 @@
                   "additionalProperties": false
                 },
                 "example": {
-                  "url": "example"
+                  "url": "example",
+                  "label": "example"
                 }
               }
             }
@@ -63794,7 +64064,8 @@
                             "unavailable",
                             "invalid",
                             "rate_limited",
-                            "match_finished"
+                            "match_finished",
+                            "no_match"
                           ]
                         },
                         "message": {
@@ -63865,7 +64136,8 @@
                             "unavailable",
                             "invalid",
                             "rate_limited",
-                            "match_finished"
+                            "match_finished",
+                            "no_match"
                           ]
                         },
                         "message": {
@@ -63936,7 +64208,8 @@
                             "unavailable",
                             "invalid",
                             "rate_limited",
-                            "match_finished"
+                            "match_finished",
+                            "no_match"
                           ]
                         },
                         "message": {
@@ -64007,7 +64280,8 @@
                             "unavailable",
                             "invalid",
                             "rate_limited",
-                            "match_finished"
+                            "match_finished",
+                            "no_match"
                           ]
                         },
                         "message": {
@@ -64078,7 +64352,8 @@
                             "unavailable",
                             "invalid",
                             "rate_limited",
-                            "match_finished"
+                            "match_finished",
+                            "no_match"
                           ]
                         },
                         "message": {
@@ -64149,7 +64424,8 @@
                             "unavailable",
                             "invalid",
                             "rate_limited",
-                            "match_finished"
+                            "match_finished",
+                            "no_match"
                           ]
                         },
                         "message": {

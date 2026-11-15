@@ -25,6 +25,12 @@
           "description": "The scoring pad's address: the server's https origin, /score/, and the link's secret (dl_ and 43 base64url characters). It is a credential: open it, show it as a QR, never log it.",
           "type": "string",
           "pattern": "^https:\\/\\/[^/]+\\/score\\/dl_[A-Za-z0-9_-]{43}$"
+        },
+        "label": {
+          "description": "The match the link scores, \"{side A} v {side B}\" or \"Match {n}\" (court stream §5.6). On a court code it is the court's next called match not yet started, streamed or not (O10), so it may differ from the beat's `label` and `next`; the phone shows it on the panel. A phone drops an answer when its held sid, waiting label or `next` changed between the request and the answer.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
         }
       },
       "required": [
@@ -33,7 +39,7 @@
       "additionalProperties": false
     },
     "refusal": {
-      "description": "Every refusal: `code` is the machine word the phone keys its copy on; `message` is a developer string, never shown (§4). 409 replaced (not the slot's current phone), 409 match_finished (the match is finalized or cancelled), 402 not_entitled (the plan has no scoring links), 503 unavailable, 401 code_ended, 404 not_a_stream_code; 422 invalid and 429 rate_limited (with Retry-After) (§6.3.5, W27).",
+      "description": "Every refusal: `code` is the machine word the phone keys its copy on; `message` is a developer string, never shown (§4). 409 replaced (not the slot's current phone), 409 match_finished (the match is finalized or cancelled), 409 no_match (a court code with no match queued on the court), 402 not_entitled (the plan has no scoring links), 503 unavailable, 401 code_ended, 404 not_a_stream_code; 422 invalid and 429 rate_limited (with Retry-After) (§6.3.5, W27).",
       "anyOf": [
         {
           "type": "object",
@@ -87,7 +93,8 @@
                 "unavailable",
                 "invalid",
                 "rate_limited",
-                "match_finished"
+                "match_finished",
+                "no_match"
               ]
             },
             "message": {

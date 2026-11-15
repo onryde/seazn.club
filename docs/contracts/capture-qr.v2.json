@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://seazn.club/contracts/capture-qr.v2.json",
   "title": "Seazn capture QR payload, v2",
-  "description": "What the organiser's panel encodes in the stream QR, and the paste code's exact text (capture QR v2 spec 2026-10-01 §6.2, W3). The panel sends exactly four keys, in the order v, code, slot, tok; exp is capture's optional field (A1, §1.2), which this server never sends. No other key is admitted. The QR never carries credentials: the phone fetches them with the tok (§6.3.1). Supersedes capture-qr.v1.json, removed (W4, §6.13). Vendored into the capture repo; its sha256, parity with its zod twin and its fixtures are pinned by apps/web/src/server/api-v1/__tests__/capture-contract.test.ts.",
+  "description": "What the organiser's panel encodes in the stream QR, and the paste code's exact text (capture QR v2 spec 2026-10-01 §6.2, W3). The panel sends four keys, in the order v, code, slot, tok, and a court code adds exp as a fifth, after tok (court stream spec 2026-11-14 §5.1, O4); exp is capture's optional field (A1, §1.2). No other key is admitted. The QR never carries credentials: the phone fetches them with the tok (§6.3.1). Supersedes capture-qr.v1.json, removed (W4, §6.13). Vendored into the capture repo; its sha256, parity with its zod twin and its fixtures are pinned by apps/web/src/server/api-v1/__tests__/capture-contract.test.ts.",
   "type": "object",
   "properties": {
     "v": {
@@ -11,7 +11,7 @@
       "const": 2
     },
     "code": {
-      "description": "The fixture's stable stream code: 12 characters of lowercase Crockford base32 (§6.1, W1). An identifier, not a secret, and the only path segment of the phone API (§6.3, §10.1).",
+      "description": "A fixture's or a court's stable stream code: 12 characters of lowercase Crockford base32 (§6.1, W1). An identifier, not a secret, and the only path segment of the phone API (§6.3, §10.1).",
       "type": "string",
       "pattern": "^[0-9a-hjkmnp-tv-z]{12}$"
     },
@@ -27,7 +27,7 @@
       "pattern": "^[A-Za-z0-9_-]{22}$"
     },
     "exp": {
-      "description": "Optional: when the QR expires, in epoch SECONDS (v1's unit), an integer of at least 0 (capture's A1, §1.2). Absent means the server decides. This server never sends it (§6.2), so a phone must accept a QR without it; null is not admitted.",
+      "description": "Optional: when the QR expires, in epoch SECONDS (v1's unit), an integer of at least 0 (capture's A1, §1.2). Absent means the server decides. This server sends it only on a court code: the end of the court's day (court stream §5.1, O4). A fixture's code never carries it, so a phone must accept a QR without it; null is not admitted.",
       "type": "integer",
       "minimum": 0,
       "maximum": 9007199254740991

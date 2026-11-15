@@ -3,7 +3,7 @@
 //
 // v2 (capture QR v2 spec 2026-10-01 §6.2, W3): `{v:2, code, slot, tok, exp?}` and nothing else — the QR never carries
 // credentials. `exp` is capture's optional field (A1, §1.2): epoch SECONDS, an integer ≥ 0, and absent means the server
-// decides. This server never sends it: captureQrV2Text writes the four keys only. Its JSON contract is docs/contracts/capture-qr.v2.json, checksum- and parity-pinned by
+// decides. This server sends it only on a court code (court stream §5.1): captureQrV2Text writes `exp` fifth when the payload has one, four keys otherwise. Its JSON contract is docs/contracts/capture-qr.v2.json, checksum- and parity-pinned by
 // server/api-v1/__tests__/capture-contract.test.ts.
 //
 // v1 (design 2026-09-07 §7.6) is gone (§6.13, W4): PR-1 T1 removed its JSON contract and fixtures, and T11 its schema,
@@ -23,6 +23,8 @@ export function parseCaptureQrV2(json: unknown): { ok: true; payload: CaptureQrV
   const p = CaptureQrV2.safeParse(json);
   return p.success ? { ok: true, payload: p.data } : { ok: false, reason: "invalid" };
 }
-/** The QR and paste-code text: exactly these four keys, in this order (W3; T11's regression pins it). Never `exp`, even
- *  when the payload carries one (A1: we never send it). */
-export const captureQrV2Text = (p: CaptureQrV2): string => JSON.stringify({ v: 2, code: p.code, slot: p.slot, tok: p.tok });
+/** The QR and paste-code text: these four keys, in this order (W3; T11's regression pins it), and `exp` fifth, after
+ *  `tok`, only when the payload carries one — a court code's (court stream spec 2026-11-14 §5.1, O4). A fixture's code
+ *  carries none, so its text stays four keys. Nothing else on the object is ever written. */
+export const captureQrV2Text = (p: CaptureQrV2): string =>
+  JSON.stringify(p.exp === undefined ? { v: 2, code: p.code, slot: p.slot, tok: p.tok } : { v: 2, code: p.code, slot: p.slot, tok: p.tok, exp: p.exp });

@@ -65,12 +65,13 @@ function body(r: CaptureRig, phone: string, over: Partial<Beat> = {}): Beat {
 }
 
 /** R5 (§17.5), from the CONTRACT's zod twin: each branch's own keys. The server sends the common fields on every 2xx (ask
- *  1), replaced and taken included, and never `device` (PR-1) — so the keys sent are exactly the branch's, less `device`. */
+ *  1), replaced and taken included, and never `device` (PR-1) — so the keys sent are exactly the branch's, less `device`. Court stream's `next` (spec
+ *  2026-11-14 §5.3) is optional on every branch and sent only for a court code, which no use-case sends yet. */
 const BRANCHES = CaptureBeatAnswer.options;
 const keysOf = (state: Answer["state"]): string[] => {
   const branch = BRANCHES.find((o) => o.shape.state.value === state);
   if (!branch) throw new Error(`no contract branch for ${state}`);
-  return Object.keys(branch.shape).filter((k) => k !== "device").sort();
+  return Object.keys(branch.shape).filter((k) => k !== "device" && k !== "next").sort();
 };
 let answersChecked = 0;
 const statesSeen = new Set<string>();

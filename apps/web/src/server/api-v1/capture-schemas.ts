@@ -51,6 +51,16 @@ export const CaptureStage = z.strictObject({
 });
 export type CaptureStage = z.infer<typeof CaptureStage>;
 
+/** Court stream (spec 2026-11-14 §6.1): the court a COURT code streams — its display name, 1..80 like a destination's.
+ *  Strict: a later field is a contract bump. */
+export const CAPTURE_COURT_NAME_MAX = 80;
+export const CaptureCourt = z.strictObject({ name: z.string().min(1).max(CAPTURE_COURT_NAME_MAX) });
+export type CaptureCourt = z.infer<typeof CaptureCourt>;
+/** Court stream (§5.3): the court's next streamed match not yet started. `scheduledStart` is nullable (an unscheduled
+ *  match), the object itself is omitted, never null. */
+export const CaptureNext = z.strictObject({ label: z.string().min(1).max(200), scheduledStart: EpochS.nullable() });
+export type CaptureNext = z.infer<typeof CaptureNext>;
+
 const WaitingFields = {
   code: Code,
   label: z.string().min(1).max(200),
@@ -64,6 +74,8 @@ const WaitingFields = {
   startUrl: Url,
   /** W28: on the waiting shape and every session state; omitted, never null, when no code can be produced. */
   stage: CaptureStage.optional(),
+  /** Court stream (§6.1): on the waiting shape and every session state; omitted, never null, on a fixture's code. */
+  court: CaptureCourt.optional(),
 };
 
 export const CaptureWaiting = z.strictObject({ state: z.literal("waiting"), ...WaitingFields });
@@ -168,6 +180,8 @@ const AnswerCommon = z.strictObject({
   destinationName: z.string().min(1).max(80).nullable(),
   overlayUrl: Url.nullable(),
   pollSeconds: PollSeconds,
+  /** Court stream (§5.3): on every branch; omitted, never null, when there is no next streamed match or on a fixture's code. */
+  next: CaptureNext.optional(),
 });
 const AnswerDevice = z.strictObject({ model: z.string().min(1).max(80) });
 
@@ -191,7 +205,11 @@ export type CaptureStartOk = z.infer<typeof CaptureStartOk>;
 /** W27 (2026-10-06): `POST …/scoring-link` answers `{url}` — the match's Remote scoring link. The pattern is the agreed
  *  contract, verbatim: an https origin, `/score/`, and a device-link secret (`dl_` + 32 bytes as base64url). */
 export const CAPTURE_SCORING_LINK_URL_RE = new RegExp("^https://[^/]+/score/dl_[A-Za-z0-9_-]{43}$");
-export const CaptureScoringLinkOk = z.strictObject({ url: z.string().regex(CAPTURE_SCORING_LINK_URL_RE) });
+export const CaptureScoringLinkOk = z.strictObject({
+  url: z.string().regex(CAPTURE_SCORING_LINK_URL_RE),
+  /** Court stream (§5.6): the match the link scores; this server always sends it. */
+  label: z.string().min(1).max(200).optional(),
+});
 export type CaptureScoringLinkOk = z.infer<typeof CaptureScoringLinkOk>;
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -297,6 +315,8 @@ export const CaptureRefusalCode = z.enum([
   "unavailable", "invalid", "rate_limited",
   // W27 (2026-10-06): the scoring link of a finalized or cancelled match — answered only by `…/scoring-link`.
   "match_finished",
+  // Court stream (2026-11-14): a court code with no match to stream or score — 409 from `…/scoring-link` and `…/start`.
+  "no_match",
 ]);
 export type CaptureRefusalCode = z.infer<typeof CaptureRefusalCode>;
 /** Every refusal: {code, message, ...extras}. Only already_live carries extras: {code, message, sid, startedBy}
