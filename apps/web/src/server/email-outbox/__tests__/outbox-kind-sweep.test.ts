@@ -1561,6 +1561,19 @@ const billingDay = (unixSeconds: number, locale: Locale): string =>
   new Intl.DateTimeFormat(locale, { dateStyle: "long", timeZone: "UTC" }).format(new Date(unixSeconds * 1000));
 const nowUnix = (): number => Math.floor(Date.now() / 1000);
 
+/** Run `fn` with the opt-in renewal receipt turned on, and the variable as it was after (not `vi.unstubAllEnvs`, which would also
+ *  drop the outbox key the harness stubbed). */
+async function withRenewalReceipts<T>(fn: () => Promise<T>): Promise<T> {
+  const before = process.env.BILLING_RENEWAL_RECEIPT_EMAILS;
+  process.env.BILLING_RENEWAL_RECEIPT_EMAILS = "1";
+  try {
+    return await fn();
+  } finally {
+    if (before === undefined) delete process.env.BILLING_RENEWAL_RECEIPT_EMAILS;
+    else process.env.BILLING_RENEWAL_RECEIPT_EMAILS = before;
+  }
+}
+
 /** The real `customer.subscription.deleted` for a no-card trial that ran out (a captured sandbox payload): its payer (account `fr`) is
  *  told the trial ended, transactionally, and the worker sends. */
 async function trialExpiredScenario(): Promise<KindScenario> {
@@ -1599,7 +1612,7 @@ async function planActivatedScenario(): Promise<KindScenario> {
 }
 
 /** The real `invoice.payment_succeeded` for an annual renewal a year after the trial (captured): the receipt to the payer (account
- *  `es`). The receipt gate is on by default. */
+ *  `es`). The receipt is opt-in (`BILLING_RENEWAL_RECEIPT_EMAILS=1`, default off), so the run turns it on and puts it back. */
 async function renewalPaidScenario(): Promise<KindScenario> {
   const g = await billingScenarioGroup({ status: "active", trialEnd: new Date((nowUnix() - 365 * 86_400) * 1000), ownerLocale: "es" });
   return {
@@ -1609,8 +1622,10 @@ async function renewalPaidScenario(): Promise<KindScenario> {
     recipient: g.ownerEmail,
     firstAttempt: "worker",
     run: async () => {
-      await processStripeEvent(
-        capturedEvent("invoice.payment_succeeded.annual_renewal", { stripeSubId: g.stripeSubId, anchor: (o) => o.created, at: nowUnix(), edit: freshInvoiceId }),
+      await withRenewalReceipts(() =>
+        processStripeEvent(
+          capturedEvent("invoice.payment_succeeded.annual_renewal", { stripeSubId: g.stripeSubId, anchor: (o) => o.created, at: nowUnix(), edit: freshInvoiceId }),
+        ),
       );
     },
   };

@@ -25,6 +25,7 @@ import type { Locale } from "@/lib/i18n-constants";
 import { appOrigin } from "@/lib/email";
 import { planLabel } from "@/lib/plan-label";
 import { planItem } from "@/lib/subscription-items";
+import { hasLiveSubscription } from "@/lib/subscription-status";
 import { enqueueEmailOnce, expiryWithin, onceKey, recipientLocale, type OutboxKind } from "@/server/email-outbox";
 import {
   planActivatedTemplate,
@@ -44,6 +45,7 @@ const DAY_MS = 86_400_000;
 const ANNUAL_MIN_SECONDS = 365 * 86_400;
 
 const iso = (unixSeconds: number): string => new Date(unixSeconds * 1000).toISOString();
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // ---------------------------------------------------------------------------------------------------------------------------------
 // The payer
@@ -178,14 +180,17 @@ function noPayer(kind: OutboxKind, ids: Record<string, string>): void {
  *  - our mirror said `trialing` up to this delete (a converted, paying group says active or past_due);
  *  - no end date had been SET (`cancel_at` null): scheduling a cancel — the payer's "cancel at period end", or a Dashboard date — sets
  *    it, and that payer was already told by the cancel confirmation;
- *  - it ended at or after the trial's end, not before it (an immediate cancel during the trial ends earlier).
+ *  - it ended EXACTLY at the trial's end (the sandbox's run-out: `ended_at == trial_end == canceled_at`). An immediate cancel during the
+ *    trial ends before it; a trial that converted and was cancelled later ends after it — the case where our mirror can still say
+ *    `trialing` because the conversion's update is late or stuck (`handleInvoicePaymentSucceeded` never moves a trialing mirror), and a
+ *    paying customer must not be told their trial ended with no card.
  * A no-card trial is the only one that ends this way: a card-on-file trial converts at `trial_end` instead of ending.
  */
 export function trialRanOut(sub: Stripe.Subscription, mirrorStatusBefore: string | null): boolean {
   if (mirrorStatusBefore !== "trialing") return false;
   if (sub.cancel_at != null) return false;
   if (sub.trial_end == null || sub.ended_at == null) return false;
-  return sub.ended_at >= sub.trial_end;
+  return sub.ended_at === sub.trial_end;
 }
 
 /**
@@ -208,13 +213,51 @@ export async function queueTrialExpiredMail(tx: Tx, groupId: string, sub: Stripe
 // ---------------------------------------------------------------------------------------------------------------------------------
 
 /**
- * Whether the renewal receipt is sent. ON unless `BILLING_RENEWAL_RECEIPT_EMAILS` is an explicit no (`0`, `false`, `off`, `no`): turn it
- * off when Stripe's own "successful payments" customer emails are on, so nobody gets two receipts. The activation mail is not gated:
+ * Whether the renewal receipt is sent. OFF unless `BILLING_RENEWAL_RECEIPT_EMAILS` is an explicit yes (`1`, `true`, `on`, `yes`): the
+ * help page (help/billing/plans.md) says Stripe already emails every invoice when it is charged, so ours would be a second receipt
+ * until the owner confirms Stripe's "successful payments" emails are off (review m-6, 2026-11-15). The activation mail is not gated:
  * it is the welcome, not the receipt.
  */
 export function renewalReceiptsEnabled(env: Record<string, string | undefined> = process.env): boolean {
   const v = env.BILLING_RENEWAL_RECEIPT_EMAILS?.trim().toLowerCase();
-  return !(v === "0" || v === "false" || v === "off" || v === "no");
+  return v === "1" || v === "true" || v === "on" || v === "yes";
+}
+
+/**
+ * A paid invoice for one of OUR billing groups that is not linked to its subscription yet. Stripe does not order its events: the
+ * first invoice of a new paid subscription can arrive before `customer.subscription.created`, the only webhook that writes the
+ * group's `stripe_subscription_id`. Throwing leaves the event unprocessed in the ledger (`runEvent` stamps `processed_at` only after
+ * the handler returns) and answers Stripe 500, so Stripe's retry or the stuck-event sweeper runs it again after the link lands; the
+ * invoice-id once-key keeps that to one mail. The handler's own writes before this point are replay-safe and found no group.
+ */
+export class BillingGroupNotLinkedError extends Error {
+  constructor(
+    readonly invoiceId: string,
+    readonly groupId: string,
+    readonly stripeSubscriptionId: string,
+  ) {
+    super(
+      `billing: invoice ${invoiceId} was paid for group ${groupId}, which is not linked to ${stripeSubscriptionId} yet — retried once customer.subscription.created lands`,
+    );
+    this.name = "BillingGroupNotLinkedError";
+  }
+}
+
+/**
+ * The group a paid invoice is WAITING for, or null. Checkout stamps the group id on the subscription's metadata (`subscription_id`,
+ * lib/billing.ts) and Stripe copies it onto the invoice's `parent.subscription_details.metadata`. Waiting means that group is ours and
+ * bills no live subscription yet (none linked, or only a dead one: a re-buy). Null when the stamp is missing, names a group this
+ * database does not have (the test-mode Stripe account is shared by stg, CI and local), or the group already bills a LIVE subscription
+ * (this invoice is a replaced one's, late): those are skipped, never retried.
+ */
+async function groupAwaitingLink(invoice: Stripe.Invoice): Promise<string | null> {
+  const stamped = invoice.parent?.subscription_details?.metadata?.subscription_id;
+  // Metadata is free text: anything but a uuid names no group of ours (and would make the uuid comparison throw).
+  if (!stamped || !UUID.test(stamped)) return null;
+  const [row] = await sql<{ id: string; stripe_subscription_id: string | null; status: string | null }[]>`
+    select id, stripe_subscription_id, status from subscriptions where id = ${stamped}`;
+  if (!row) return null;
+  return hasLiveSubscription(row) ? null : row.id;
 }
 
 /** The line with the longest service period: the plan's, when a rider on a shorter interval rides the same invoice. */
@@ -250,9 +293,18 @@ export async function queuePaidInvoiceMail(invoice: Stripe.Invoice, stripeSubId:
   if (!(invoice.amount_paid > 0)) return;
   if (invoice.billing_reason !== "subscription_create" && invoice.billing_reason !== "subscription_cycle") return;
   const groupId = await groupForStripeSubscription(stripeSubId);
-  if (!groupId) return;
+  if (!groupId) {
+    // Only a NEW subscription's invoice can outrun its link: a renewal's subscription was linked a whole period ago.
+    const waiting = await groupAwaitingLink(invoice);
+    if (waiting) throw new BillingGroupNotLinkedError(invoice.id, waiting, stripeSubId);
+    return;
+  }
   const p = await billingPayer(sql, groupId);
-  if (!p) return noPayer("plan_activated", { groupId, invoiceId: invoice.id });
+  if (!p) {
+    const [mirror] = await sql<{ trial_end: Date | null }[]>`select trial_end from subscriptions where id = ${groupId}`;
+    const skipped = isFirstPayment(invoice, mirror?.trial_end ?? null) ? "plan_activated" : "renewal_paid";
+    return noPayer(skipped, { groupId, invoiceId: invoice.id });
+  }
   const first = isFirstPayment(invoice, p.trialEnd);
   if (!first && !renewalReceiptsEnabled()) return;
   const line = longestLine(invoice);
@@ -335,7 +387,15 @@ export async function queueRenewalUpcomingMail(invoice: Stripe.Invoice, stripeSu
   const renewsAt = line.period.start;
   await queue(sql, p, "renewal_upcoming", `${stripeSubId}:${renewsAt}`, (dict, locale, url) =>
     renewalUpcomingTemplate(
-      { planName: planLabel(p.planKey), billingUrl: url, locale, amountDueCents: invoice.amount_due, currency: invoice.currency, renewsAt: iso(renewsAt) },
+      {
+        planName: planLabel(p.planKey),
+        billingUrl: url,
+        locale,
+        amountDueCents: invoice.amount_due,
+        currency: invoice.currency,
+        renewsAt: iso(renewsAt),
+        cardOnFile: p.hasPaymentMethod,
+      },
       dict,
     ),
   );
@@ -376,7 +436,19 @@ export function subscriptionChange(sub: Stripe.Subscription, previous: Partial<S
   return null;
 }
 
-/** Queue the confirmation. One kind for all three, so a later change REPLACES a still-queued earlier one (the outbox's replace rule):
+/**
+ * What a change means to a payer who is TRIALING WITHOUT A CARD: nothing will bill, so a resume does not mean "your plan will
+ * continue" and an interval switch has no "next billing date" — the trial still ends on its date unless a card is added. Both become
+ * `trial_continues`, dated by the payload's `trial_end`. A cancel stays a cancel. The card fact is the mirror's (`has_payment_method`,
+ * which the sync that ran just before keeps whenever the payload cannot answer), the status the payload's.
+ */
+export function changeForPayer(change: SubscriptionChange, sub: Stripe.Subscription, hasPaymentMethod: boolean): SubscriptionChange {
+  if (change.variant === "cancel_scheduled") return change;
+  if (sub.status !== "trialing" || hasPaymentMethod || sub.trial_end == null) return change;
+  return { variant: "trial_continues", trialEndsAt: iso(sub.trial_end) };
+}
+
+/** Queue the confirmation. One kind for all of them, so a later change REPLACES a still-queued earlier one (the outbox's replace rule):
  *  a cancel undone a minute later mails only "your plan will continue". */
 export async function queueSubscriptionChangedMail(
   groupId: string,
@@ -386,7 +458,8 @@ export async function queueSubscriptionChangedMail(
 ): Promise<void> {
   const p = await billingPayer(sql, groupId);
   if (!p) return noPayer("subscription_changed", { groupId, stripeSubscriptionId: sub.id });
+  const told = changeForPayer(change, sub, p.hasPaymentMethod);
   await queue(sql, p, "subscription_changed", eventId, (dict, locale, url) =>
-    subscriptionChangedTemplate({ planName: planLabel(p.planKey), billingUrl: url, locale, change }, dict),
+    subscriptionChangedTemplate({ planName: planLabel(p.planKey), billingUrl: url, locale, change: told }, dict),
   );
 }

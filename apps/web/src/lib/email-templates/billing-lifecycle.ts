@@ -180,26 +180,36 @@ export interface RenewalUpcomingArgs extends Common {
   currency: string;
   /** ISO: the renewal moment, from the payload (never "in N days": Stripe's lead time is a dashboard setting). */
   renewsAt: string;
+  /** Whether the group has a card on file (the mirror's `has_payment_method`). Without one there IS something to do: add one. */
+  cardOnFile: boolean;
 }
 
-/** An ANNUAL plan renews soon. */
+/** An ANNUAL plan renews soon: "nothing to do" with a card on file, "add a payment method before the date" without one. */
 export function renewalUpcomingTemplate(a: RenewalUpcomingArgs, dict: Dict): Rendered {
   const vars = { planName: a.planName, amount: money(a.amountDueCents, a.currency, a.locale), date: day(a.renewsAt, a.locale) };
   return layout(dict, {
     subject: t(dict, "renewalUpcoming.subject", vars),
-    preheader: t(dict, "renewalUpcoming.preheader", vars),
+    preheader: t(dict, a.cardOnFile ? "renewalUpcoming.preheader" : "renewalUpcoming.preheaderNoCard", vars),
     planName: a.planName,
     title: t(dict, "renewalUpcoming.title", vars),
-    sentences: [sentence(dict, "renewalUpcoming.body", vars), sentence(dict, "renewalUpcoming.change", vars)],
-    cta: { label: t(dict, "billingLifecycle.manageBilling"), url: a.billingUrl },
+    sentences: [
+      sentence(dict, a.cardOnFile ? "renewalUpcoming.body" : "renewalUpcoming.bodyNoCard", vars),
+      sentence(dict, "renewalUpcoming.change", vars),
+    ],
+    cta: { label: t(dict, a.cardOnFile ? "billingLifecycle.manageBilling" : "renewalUpcoming.ctaNoCard"), url: a.billingUrl },
   });
 }
 
-/** The three confirmations of one kind (`subscription_changed`), and the interval an interval switch moved TO. */
+/**
+ * The confirmations of one kind (`subscription_changed`), and the interval an interval switch moved TO. `trial_continues` is what a
+ * resume or an interval switch becomes during a trial with NO card on file: nothing will bill, so "your plan will continue" and "your
+ * next billing date" would both be false — the trial still ends on its date unless a card is added.
+ */
 export type SubscriptionChange =
   | { variant: "cancel_scheduled"; endsAt: string }
   | { variant: "resumed" }
-  | { variant: "plan_changed"; interval: "month" | "year"; nextBillingAt: string };
+  | { variant: "plan_changed"; interval: "month" | "year"; nextBillingAt: string }
+  | { variant: "trial_continues"; trialEndsAt: string };
 
 export type SubscriptionChangedArgs = Common & { change: SubscriptionChange };
 
@@ -211,11 +221,19 @@ export function subscriptionChangedTemplate(a: SubscriptionChangedArgs, dict: Di
       ? "subscriptionChanged.cancelScheduled"
       : c.variant === "resumed"
         ? "subscriptionChanged.resumed"
-        : c.interval === "year"
-          ? "subscriptionChanged.annual"
-          : "subscriptionChanged.monthly";
+        : c.variant === "trial_continues"
+          ? "subscriptionChanged.trialContinues"
+          : c.interval === "year"
+            ? "subscriptionChanged.annual"
+            : "subscriptionChanged.monthly";
   const date =
-    c.variant === "cancel_scheduled" ? day(c.endsAt, a.locale) : c.variant === "plan_changed" ? day(c.nextBillingAt, a.locale) : "";
+    c.variant === "cancel_scheduled"
+      ? day(c.endsAt, a.locale)
+      : c.variant === "plan_changed"
+        ? day(c.nextBillingAt, a.locale)
+        : c.variant === "trial_continues"
+          ? day(c.trialEndsAt, a.locale)
+          : "";
   const vars = { planName: a.planName, date };
   return layout(dict, {
     subject: t(dict, `${prefix}.subject`, vars),

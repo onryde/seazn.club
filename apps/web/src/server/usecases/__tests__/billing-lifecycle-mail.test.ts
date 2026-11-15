@@ -34,8 +34,10 @@ import { formatMoneyExact } from "@/lib/format-money-exact";
 import type { Locale } from "@/lib/i18n-constants";
 import { dictionarySubject } from "@/server/email-outbox/__tests__/_kind-harness";
 import { openBody } from "@/server/email-outbox/seal";
-import { processStripeEvent } from "../billing-events";
+import { log } from "@/server/logger";
+import { processStripeEvent, runEvent } from "../billing-events";
 import {
+  BillingGroupNotLinkedError,
   annualRenewalLine,
   isFirstPayment,
   renewalReceiptsEnabled,
@@ -63,6 +65,7 @@ const made = { orgIds: [] as string[], userIds: [] as string[] };
 afterAll(async () => {
   if (!HAS_DB) return;
   await sql`delete from email_outbox where recipient_user_id = any(${made.userIds}::uuid[])`;
+  await sql`delete from billing_events where id like 'evt_blm_%'`;
   await cleanUpSponsorOrgs(made.orgIds, made.userIds);
   await sql.end({ timeout: 2 }).catch(() => undefined);
 });
@@ -160,14 +163,28 @@ describe("trialRanOut (no database)", () => {
       "trialing",
       false,
     ],
+    // Killer of the ended-EXACTLY-at-trial_end guard (review m-5): a trial that converted and was paid for, then cancelled outright a
+    // month later, while our mirror still says trialing (its conversion update stuck). A trial that runs out ends AT trial_end — the
+    // sandbox's D has ended_at == trial_end == canceled_at — so anything later is not one.
+    [
+      "a converted trial cancelled a month after its end while the mirror still says trialing",
+      at("subscription.deleted.trial_ran_out_no_card", (o) => o.trial_end, now, (o) => {
+        o.ended_at = (o.trial_end as number) + 30 * DAY;
+        o.canceled_at = o.ended_at;
+      }),
+      "trialing",
+      false,
+    ],
     ["a paid plan the payer cancelled at period end", at("subscription.deleted.paid_cancel_scheduled", (o) => o.ended_at, now), "active", false],
     ["a paid plan cancelled outright", at("subscription.deleted.paid_canceled_now", (o) => o.ended_at, now), "past_due", false],
   ];
   it.each(cases)("%s", (_name, event, before, expected) => {
     expect(trialRanOut(sub(event), before)).toBe(expected);
   });
-  it("judged eight cases, one of them positive", () => {
-    expect(cases).toHaveLength(8);
+  it("judged nine cases, one of them positive; the sandbox's own run-out ends exactly at trial_end", () => {
+    const d = at("subscription.deleted.trial_ran_out_no_card", (o) => o.trial_end, now);
+    expect(obj(d).ended_at, "premise (sandbox D): a trial that runs out ends at trial_end").toBe(obj(d).trial_end);
+    expect(cases).toHaveLength(9);
     expect(cases.filter((c) => c[3])).toHaveLength(1);
   });
 });
@@ -253,15 +270,18 @@ describe("isFirstPayment and annualRenewalLine (no database)", () => {
 });
 
 describe("renewalReceiptsEnabled (no database)", () => {
+  // OFF unless asked for (review m-6): help/billing/plans.md says Stripe already emails every invoice, so ours is opt-in until the owner
+  // confirms Stripe's receipts are off.
   it.each([
-    [undefined, true],
-    ["", true],
-    ["1", true],
-    ["true", true],
+    [undefined, false],
+    ["", false],
     ["0", false],
     ["false", false],
-    [" OFF ", false],
     ["no", false],
+    ["1", true],
+    ["true", true],
+    [" ON ", true],
+    ["yes", true],
   ] as const)("BILLING_RENEWAL_RECEIPT_EMAILS=%j -> %s", (value, expected) => {
     expect(renewalReceiptsEnabled({ BILLING_RENEWAL_RECEIPT_EMAILS: value })).toBe(expected);
   });
@@ -380,13 +400,16 @@ describe.skipIf(!HAS_DB)("plan_activated and renewal_paid: invoice.payment_succe
     expect(await kinds(g.groupId)).toEqual(["plan_activated"]);
   });
 
-  it("a renewal a year after the trial: the receipt; and with BILLING_RENEWAL_RECEIPT_EMAILS=0 nothing", async () => {
+  it("a renewal a year after the trial: the receipt only with BILLING_RENEWAL_RECEIPT_EMAILS=1 (default off, and 0, send nothing)", async () => {
     const trialEnd = new Date((nowSeconds() - 365 * DAY) * 1000);
+    let checked = 0;
     for (const [flag, expected] of [
-      [undefined, ["renewal_paid"]],
+      [undefined, []],
+      ["1", ["renewal_paid"]],
       ["0", []],
     ] as const) {
-      if (flag !== undefined) vi.stubEnv("BILLING_RENEWAL_RECEIPT_EMAILS", flag);
+      vi.stubEnv("BILLING_RENEWAL_RECEIPT_EMAILS", flag);
+      checked++;
       const g = await group({ status: "active", trialEnd });
       const e = capturedEvent("invoice.payment_succeeded.annual_renewal", {
         stripeSubId: g.stripeSubId,
@@ -402,6 +425,7 @@ describe.skipIf(!HAS_DB)("plan_activated and renewal_paid: invoice.payment_succe
         expect(await body(r!.id)).toContain(formatMoneyExact(obj(e).amount_paid, obj(e).currency, "en"));
       }
     }
+    expect(checked).toBe(3);
   });
 
   it("the gate stops only the receipt: an activation still goes with BILLING_RENEWAL_RECEIPT_EMAILS=0", async () => {
@@ -445,6 +469,109 @@ describe.skipIf(!HAS_DB)("plan_activated and renewal_paid: invoice.payment_succe
     expect(await kinds(g.groupId)).toEqual(["plan_activated"]);
   });
 
+  it("an invoice that lands BEFORE customer.subscription.created links the group is refused and left unprocessed; once linked, the retry sends exactly one activation (review I-1)", async () => {
+    const g = await group({ status: "active" });
+    // Before the link: the group exists (checkout stamped its id on the subscription's metadata, which Stripe copies onto the
+    // invoice's parent) but stores no Stripe subscription yet — only customer.subscription.created writes it.
+    await sql`update subscriptions set stripe_subscription_id = null where id = ${g.groupId}`;
+    const stamped = { org_id: g.orgId, subscription_id: g.groupId };
+    const invoice = capturedEvent("invoice.payment_succeeded.new_paid_monthly", {
+      stripeSubId: g.stripeSubId,
+      anchor: (o) => o.created,
+      at: nowSeconds(),
+      edit: (o) => {
+        freshInvoiceId(o);
+        (o.parent as { subscription_details: { metadata: Record<string, string> } }).subscription_details.metadata = stamped;
+      },
+    });
+    await expect(runEvent(invoice)).rejects.toThrow(BillingGroupNotLinkedError);
+    expect(await kinds(g.groupId)).toEqual([]);
+    const ledger = () => sql<{ processed_at: Date | null }[]>`select processed_at from billing_events where id = ${invoice.id}`;
+    expect((await ledger())[0], "the ledger holds the event").toBeDefined();
+    expect((await ledger())[0]!.processed_at, "left unprocessed, so it is retried").toBeNull();
+
+    // The link: the REAL customer.subscription.created (a captured live subscription, re-typed and stamped as checkout stamps it).
+    const link = capturedEvent("subscription.updated.resumed", {
+      stripeSubId: g.stripeSubId,
+      anchor: (o) => o.created,
+      at: nowSeconds(),
+      edit: (o) => {
+        // A new PAID subscription (no trial), stamped as checkout stamps it.
+        o.metadata = stamped;
+        o.status = "active";
+        o.trial_end = null;
+      },
+    });
+    const created = { ...link, type: "customer.subscription.created", data: { object: link.data.object } } as unknown as Stripe.Event;
+    await processStripeEvent(created);
+    const [linked] = await sql<{ stripe_subscription_id: string | null }[]>`select stripe_subscription_id from subscriptions where id = ${g.groupId}`;
+    expect(linked!.stripe_subscription_id, "premise: the real handler linked the group").toBe(g.stripeSubId);
+
+    // The retry (Stripe's, or the stuck-event sweeper's once the 10-minute lease has passed).
+    await sql`update billing_events set processing_started_at = now() - interval '11 minutes' where id = ${invoice.id}`;
+    expect(await runEvent(invoice)).toBe(true);
+    expect(await kinds(g.groupId)).toEqual(["plan_activated"]);
+    expect((await ledger())[0]!.processed_at).not.toBeNull();
+    // And again: nothing more.
+    expect(await runEvent(invoice)).toBe(false);
+    await processStripeEvent(invoice);
+    expect(await kinds(g.groupId)).toEqual(["plan_activated"]);
+  });
+
+  it("an unlinked invoice that is NOT waiting for one of our groups is skipped, never retried: another environment's group, or a group that already bills a newer subscription", async () => {
+    let checked = 0;
+    // (1) Stamped with a group this database does not have (the test-mode Stripe account is shared by stg, CI and local).
+    {
+      const g = await group({ status: "active" });
+      const e = capturedEvent("invoice.payment_succeeded.new_paid_monthly", {
+        stripeSubId: `sub_blm_elsewhere_${randomUUID().slice(0, 8)}`,
+        anchor: (o) => o.created,
+        at: nowSeconds(),
+        edit: (o) => {
+          freshInvoiceId(o);
+          (o.parent as { subscription_details: { metadata: Record<string, string> } }).subscription_details.metadata = { subscription_id: randomUUID() };
+        },
+      });
+      await expect(processStripeEvent(e)).resolves.toBeUndefined();
+      expect(await kinds(g.groupId)).toEqual([]);
+      checked++;
+    }
+    // (2) A late invoice for a subscription this group has since REPLACED: it bills a newer, live one.
+    {
+      const g = await group({ status: "active" });
+      const e = capturedEvent("invoice.payment_succeeded.new_paid_monthly", {
+        stripeSubId: g.stripeSubId,
+        anchor: (o) => o.created,
+        at: nowSeconds(),
+        edit: (o) => {
+          freshInvoiceId(o);
+          (o.parent as { subscription_details: { metadata: Record<string, string> } }).subscription_details.metadata = { subscription_id: g.groupId };
+        },
+      });
+      await sql`update subscriptions set stripe_subscription_id = ${`sub_blm_new_${randomUUID().slice(0, 8)}`} where id = ${g.groupId}`;
+      await expect(processStripeEvent(e)).resolves.toBeUndefined();
+      expect(await kinds(g.groupId)).toEqual([]);
+      checked++;
+    }
+    // (3) A stamp that is not a group id at all (metadata is free text): skipped, not a database error.
+    {
+      const g = await group({ status: "active" });
+      const e = capturedEvent("invoice.payment_succeeded.new_paid_monthly", {
+        stripeSubId: `sub_blm_elsewhere_${randomUUID().slice(0, 8)}`,
+        anchor: (o) => o.created,
+        at: nowSeconds(),
+        edit: (o) => {
+          freshInvoiceId(o);
+          (o.parent as { subscription_details: { metadata: Record<string, string> } }).subscription_details.metadata = { subscription_id: "grp-legacy-7" };
+        },
+      });
+      await expect(processStripeEvent(e)).resolves.toBeUndefined();
+      expect(await kinds(g.groupId)).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
   it("an invoice that belongs to no subscription (a one-off, like an Event Pass) mails nothing", async () => {
     const g = await group({ status: "active" });
     const e = capturedEvent("invoice.payment_succeeded.new_paid_monthly", {
@@ -476,8 +603,10 @@ describe.skipIf(!HAS_DB)("renewal_failed: invoice.payment_failed", () => {
     // The grace the brief and the resolver give: fourteen days from the first failure.
     const graceEnd = Math.floor(m!.status_changed_at.getTime() / 1000) + 14 * DAY;
     const text = await body(rows[0]!.id);
-    expect(text).toContain(day(graceEnd, "nl"));
-    expect(text).toContain("14");
+    // The countdown sentence itself, from the dictionary in the payer's language with the plural category the language's rule picks
+    // (review m-1: a bare "14" was satisfied by the amount, "US$ 14,99").
+    const graceKey = `renewalFailed.grace.${new Intl.PluralRules("nl").select(14)}`;
+    expect(text).toContain(dictionarySubject("nl", graceKey, { planName: PRO, count: "14", date: day(graceEnd, "nl") }));
     expect(text).toContain(day(obj(e).next_payment_attempt, "nl"));
     expect(text).toContain(formatMoneyExact(obj(e).amount_due, obj(e).currency, "nl"));
   });
@@ -545,7 +674,7 @@ describe.skipIf(!HAS_DB)("renewal_failed: invoice.payment_failed", () => {
 
 describe.skipIf(!HAS_DB)("renewal_upcoming: invoice.upcoming", () => {
   it("an annual renewal: the notice, keyed by subscription and renewal instant (the payload has no invoice id)", async () => {
-    const g = await group({ status: "active", ownerLocale: "fr" });
+    const g = await group({ status: "active", hasPaymentMethod: true, ownerLocale: "fr" });
     const renewal = nowSeconds() + 3 * DAY;
     const e = capturedEvent("invoice.upcoming.annual_renewal", { stripeSubId: g.stripeSubId, anchor: (o) => o.period_end, at: renewal });
     const lineStart = obj(e).lines.data[0].period.start;
@@ -556,6 +685,23 @@ describe.skipIf(!HAS_DB)("renewal_upcoming: invoice.upcoming", () => {
     expect(rows[0]!.dedupe_key).toBe(`${g.stripeSubId}:${lineStart}`);
     expect(rows[0]!.subject).toBe(dictionarySubject("fr", "renewalUpcoming.subject", { planName: PRO, date: day(lineStart, "fr") }));
     expect(await body(rows[0]!.id)).toContain(formatMoneyExact(obj(e).amount_due, obj(e).currency, "fr"));
+  });
+
+  it("'nothing to do' only with a card on file; without one, the notice asks for a payment method before the renewal (review m-3)", async () => {
+    let checked = 0;
+    for (const hasPaymentMethod of [true, false]) {
+      const g = await group({ status: "active", hasPaymentMethod });
+      const e = capturedEvent("invoice.upcoming.annual_renewal", { stripeSubId: g.stripeSubId, anchor: (o) => o.period_end, at: nowSeconds() + 3 * DAY });
+      await processStripeEvent(e);
+      const [r] = await groupMail(g.groupId);
+      const vars = { planName: PRO, date: day(obj(e).lines.data[0].period.start, "en"), amount: formatMoneyExact(obj(e).amount_due, obj(e).currency, "en") };
+      const text = await body(r!.id);
+      const [said, notSaid] = hasPaymentMethod ? ["renewalUpcoming.body", "renewalUpcoming.bodyNoCard"] : ["renewalUpcoming.bodyNoCard", "renewalUpcoming.body"];
+      expect(text, `card=${hasPaymentMethod}`).toContain(dictionarySubject("en", said, vars));
+      expect(text, `card=${hasPaymentMethod}`).not.toContain(dictionarySubject("en", notSaid, vars));
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 
   it("a second invoice.upcoming for the same renewal (a new event id) queues nothing more", async () => {
@@ -596,7 +742,8 @@ describe.skipIf(!HAS_DB)("renewal_upcoming: invoice.upcoming", () => {
 
 describe.skipIf(!HAS_DB)("subscription_changed: customer.subscription.updated", () => {
   it("cancel scheduled, then resumed: two confirmations; the resume REPLACES the still-queued cancel (one kind, the replace rule)", async () => {
-    const g = await group({ status: "active" });
+    // A payer with a card on file: the resume really does mean "your plan will continue".
+    const g = await group({ status: "active", hasPaymentMethod: true });
     const cancelAt = nowSeconds() + 10 * DAY;
     const cancel = capturedEvent("subscription.updated.cancel_scheduled", { stripeSubId: g.stripeSubId, anchor: (o) => o.cancel_at, at: cancelAt });
     await processStripeEvent(cancel);
@@ -619,13 +766,51 @@ describe.skipIf(!HAS_DB)("subscription_changed: customer.subscription.updated", 
   });
 
   it("an interval switch: the annual confirmation with the next billing date from the plan item", async () => {
-    const g = await group({ status: "trialing" });
+    // A card-on-file trial: it WILL bill on that date. (A no-card trial gets the trial wording; see below.)
+    const g = await group({ status: "trialing", hasPaymentMethod: true });
     const e = capturedEvent("subscription.updated.interval_switch_to_annual", { stripeSubId: g.stripeSubId, anchor: (o) => o.created, at: nowSeconds() });
     await processStripeEvent(e);
     const rows = await groupMail(g.groupId);
     expect(rows.map((r) => r.kind)).toEqual(["subscription_changed"]);
     expect(rows[0]!.subject).toBe(dictionarySubject("en", "subscriptionChanged.annual.subject", { planName: PRO }));
     expect(await body(rows[0]!.id)).toContain(day(obj(e).items.data[0].current_period_end, "en"));
+  });
+
+  it("a NO-CARD trial that resumes or switches interval is told its trial continues until its end, never 'your plan will continue' (review m-2)", async () => {
+    const trialEnd = nowSeconds() + 9 * DAY;
+    const asTrial = (o: Record<string, unknown>) => {
+      o.status = "trialing";
+      o.trial_end = trialEnd;
+    };
+    let checked = 0;
+    for (const name of ["subscription.updated.resumed", "subscription.updated.interval_switch_to_annual"] as const) {
+      const g = await group({ status: "trialing", hasPaymentMethod: false, ownerLocale: "es" });
+      await processStripeEvent(capturedEvent(name, { stripeSubId: g.stripeSubId, anchor: (o) => o.created, at: nowSeconds(), edit: asTrial }));
+      const rows = await groupMail(g.groupId);
+      expect(rows.map((r) => r.kind), name).toEqual(["subscription_changed"]);
+      expect(rows[0]!.subject, name).toBe(dictionarySubject("es", "subscriptionChanged.trialContinues.subject", { planName: PRO, date: day(trialEnd, "es") }));
+      checked++;
+    }
+    expect(checked).toBe(2);
+    // Positive pair: the same resume with a card on file is the ordinary "will continue" confirmation (the trial converts and bills).
+    const g = await group({ status: "trialing", hasPaymentMethod: true });
+    await processStripeEvent(capturedEvent("subscription.updated.resumed", { stripeSubId: g.stripeSubId, anchor: (o) => o.created, at: nowSeconds(), edit: asTrial }));
+    const [r] = await groupMail(g.groupId);
+    expect(r!.subject).toBe(dictionarySubject("en", "subscriptionChanged.resumed.subject", { planName: PRO }));
+    // And a PAYING subscription (not trialing) resuming is the ordinary confirmation whatever the card mirror says: it is not a trial.
+    const paid = await group({ status: "active", hasPaymentMethod: false });
+    await processStripeEvent(
+      capturedEvent("subscription.updated.resumed", {
+        stripeSubId: paid.stripeSubId,
+        anchor: (o) => o.created,
+        at: nowSeconds(),
+        edit: (o) => {
+          o.status = "active";
+        },
+      }),
+    );
+    const [p] = await groupMail(paid.groupId);
+    expect(p!.subject).toBe(dictionarySubject("en", "subscriptionChanged.resumed.subject", { planName: PRO }));
   });
 
   it("a renewal and a trial converting confirm nothing", async () => {
@@ -661,18 +846,33 @@ describe.skipIf(!HAS_DB)("who is mailed", () => {
     expect(r!.subject).toBe(dictionarySubject("nl", "planActivated.subject", { planName: PRO }));
   });
 
-  it("a group whose payer deleted their account mails nobody (and the webhook still completes)", async () => {
-    const g = await group({ status: "active" });
-    await sql`update users set deleted_at = now() where id = ${g.ownerId}`;
-    await processStripeEvent(
-      capturedEvent("invoice.payment_succeeded.new_paid_monthly", { stripeSubId: g.stripeSubId, anchor: (o) => o.created, at: nowSeconds(), edit: freshInvoiceId }),
-    );
-    expect(await kinds(g.groupId)).toEqual([]);
+  it("a group whose payer deleted their account mails nobody (and the webhook still completes); the warning names the kind it skipped", async () => {
+    vi.stubEnv("BILLING_RENEWAL_RECEIPT_EMAILS", "1");
+    const warn = vi.spyOn(log, "warn");
+    try {
+      let checked = 0;
+      for (const [name, kind, trialEnd] of [
+        ["invoice.payment_succeeded.new_paid_monthly", "plan_activated", null],
+        ["invoice.payment_succeeded.annual_renewal", "renewal_paid", new Date((nowSeconds() - 365 * DAY) * 1000)],
+      ] as const) {
+        const g = await group({ status: "active", trialEnd });
+        await sql`update users set deleted_at = now() where id = ${g.ownerId}`;
+        warn.mockClear();
+        await processStripeEvent(capturedEvent(name, { stripeSubId: g.stripeSubId, anchor: (o) => o.created, at: nowSeconds(), edit: freshInvoiceId }));
+        expect(await kinds(g.groupId), name).toEqual([]);
+        expect(warn, name).toHaveBeenCalledWith(expect.objectContaining({ kind, groupId: g.groupId }), expect.stringContaining("no reachable payer"));
+        checked++;
+      }
+      expect(checked).toBe(2);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 
 describe.skipIf(!HAS_DB)("sequences a payer lives through", () => {
   it("card trial -> converts (activated) -> annual renewal notice -> renewal paid (receipt) -> next renewal declined: four mails, each once, even replayed whole", async () => {
+    vi.stubEnv("BILLING_RENEWAL_RECEIPT_EMAILS", "1");
     // One captured timeline (the sandbox's card trial B), moved by ONE shift so its events keep Stripe's own relations: the conversion
     // invoice's period starts exactly at the trial_end the subscription events carry. The trial ended 360 days ago.
     const capturedTrialEnd = capturedValue("invoice.payment_succeeded.trial_conversion_annual", (o: Obj) => o.lines.data[0].period.start as number);
@@ -719,5 +919,8 @@ describe.skipIf(!HAS_DB)("sequences a payer lives through", () => {
       capturedEvent("subscription.deleted.trial_cancel_scheduled_no_card", { stripeSubId: g.stripeSubId, anchor: (o) => o.trial_end, at: trialEnd }),
     );
     expect(await kinds(g.groupId)).toEqual(["subscription_changed"]);
+    // A cancel stays a cancel during a no-card trial (only a resume or an interval switch becomes "your trial continues").
+    const [r] = await groupMail(g.groupId);
+    expect(r!.subject).toBe(dictionarySubject("en", "subscriptionChanged.cancelScheduled.subject", { planName: PRO, date: day(trialEnd, "en") }));
   });
 });

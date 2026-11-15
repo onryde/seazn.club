@@ -44,11 +44,13 @@ async function renderAll(locale: Locale) {
     renewalFailed1: renewalFailedTemplate({ ...failed, graceDaysLeft: 1 }, dict),
     renewalFailedLapsed: renewalFailedTemplate({ ...failed, graceDaysLeft: 0 }, dict),
     renewalFailedNoRetry: renewalFailedTemplate({ ...failed, graceDaysLeft: 14, nextAttemptAt: null }, dict),
-    renewalUpcoming: renewalUpcomingTemplate({ ...common, amountDueCents: 12899, currency: "usd", renewsAt: RENEWS }, dict),
+    renewalUpcoming: renewalUpcomingTemplate({ ...common, amountDueCents: 12899, currency: "usd", renewsAt: RENEWS, cardOnFile: true }, dict),
+    renewalUpcomingNoCard: renewalUpcomingTemplate({ ...common, amountDueCents: 12899, currency: "usd", renewsAt: RENEWS, cardOnFile: false }, dict),
     cancelScheduled: subscriptionChangedTemplate({ ...common, change: { variant: "cancel_scheduled", endsAt: TRIAL_END } }, dict),
     resumed: subscriptionChangedTemplate({ ...common, change: { variant: "resumed" } }, dict),
     annual: subscriptionChangedTemplate({ ...common, change: { variant: "plan_changed", interval: "year", nextBillingAt: RENEWS } }, dict),
     monthly: subscriptionChangedTemplate({ ...common, change: { variant: "plan_changed", interval: "month", nextBillingAt: TRIAL_END } }, dict),
+    trialContinues: subscriptionChangedTemplate({ ...common, change: { variant: "trial_continues", trialEndsAt: TRIAL_END } }, dict),
   };
 }
 
@@ -66,7 +68,7 @@ describe("billing lifecycle templates", () => {
         checked++;
       }
     }
-    expect(checked, "anti-vacuity: 13 cases x 3 parts").toBe(39);
+    expect(checked, "anti-vacuity: 15 cases x 3 parts").toBe(45);
   });
 
   it.each(LOCALES)("%s: every case links to the billing page in both halves", async (locale) => {
@@ -87,10 +89,19 @@ describe("billing lifecycle templates", () => {
 
   it.each(LOCALES)("%s: the six kinds and the four confirmation variants are different mails", async (locale) => {
     const a = await renderAll(locale);
-    const subjects = [a.trialExpired, a.planActivated, a.renewalPaid, a.renewalFailed14, a.renewalUpcoming, a.cancelScheduled, a.resumed, a.annual, a.monthly].map(
-      (o) => o.subject,
-    );
-    expect(new Set(subjects).size, `${locale}: nine distinct subjects`).toBe(9);
+    const subjects = [
+      a.trialExpired,
+      a.planActivated,
+      a.renewalPaid,
+      a.renewalFailed14,
+      a.renewalUpcoming,
+      a.cancelScheduled,
+      a.resumed,
+      a.annual,
+      a.monthly,
+      a.trialContinues,
+    ].map((o) => o.subject);
+    expect(new Set(subjects).size, `${locale}: ten distinct subjects`).toBe(10);
   });
 
   it.each(LOCALES)("%s: dates are the reader's, read as UTC", async (locale) => {
@@ -139,6 +150,29 @@ describe("billing lifecycle templates", () => {
     expect(a.planActivatedBare.text).not.toContain(INVOICE);
     expect(a.planActivatedBare.text).not.toContain(day(RENEWS, locale));
     expect(a.planActivatedBare.text, "positive pair: the bare mail still says the plan is active").toContain("Pro");
+  });
+
+  it.each(LOCALES)("%s: the renewal notice says 'nothing to do' only with a card on file; without one it asks for a payment method before the date", async (locale) => {
+    const a = await renderAll(locale);
+    const dict = (await getDictionary(locale, "emails")) as Record<string, string>;
+    const vars: Record<string, string> = { planName: "Pro", date: day(RENEWS, locale), amount: formatMoneyExact(12899, "usd", locale) };
+    const fill = (key: string) => Object.entries(vars).reduce((s, [k, v]) => s.replaceAll(`{${k}}`, v), dict[key]!);
+    expect(a.renewalUpcoming.text).toContain(fill("renewalUpcoming.body"));
+    expect(a.renewalUpcoming.text).not.toContain(fill("renewalUpcoming.bodyNoCard"));
+    expect(a.renewalUpcomingNoCard.text).toContain(fill("renewalUpcoming.bodyNoCard"));
+    expect(a.renewalUpcomingNoCard.text).not.toContain(fill("renewalUpcoming.body"));
+    expect(a.renewalUpcomingNoCard.text).toContain(`${dict["renewalUpcoming.ctaNoCard"]}: ${BILLING}`);
+    expect(fill("renewalUpcoming.bodyNoCard"), "premise: the two sentences differ").not.toBe(fill("renewalUpcoming.body"));
+  });
+
+  it.each(LOCALES)("%s: a no-card trial's confirmation names the trial's end and is not the 'plan will continue' mail", async (locale) => {
+    const a = await renderAll(locale);
+    const dict = (await getDictionary(locale, "emails")) as Record<string, string>;
+    const fill = (key: string) => dict[key]!.replaceAll("{planName}", "Pro").replaceAll("{date}", day(TRIAL_END, locale));
+    expect(a.trialContinues.subject).toBe(fill("subscriptionChanged.trialContinues.subject"));
+    expect(a.trialContinues.text).toContain(fill("subscriptionChanged.trialContinues.body"));
+    expect(a.trialContinues.subject).not.toBe(a.resumed.subject);
+    expect(a.trialContinues.text).not.toContain(dict["subscriptionChanged.resumed.body"]!.replaceAll("{planName}", "Pro"));
   });
 
   it("the resume confirmation names no date: a resumed no-card trial still ends unless a card is added, so no date is promised", async () => {

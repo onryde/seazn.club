@@ -306,7 +306,15 @@ describe.skipIf(!HAS_DB)("an account kind's sealed body never names its recipien
     renewal_paid: async () => {
       const g = await seedBillingGroup({ status: "active", trialEnd: new Date(Date.now() - 365 * 86_400_000), prefix: "akb" });
       const e = capturedEvent("invoice.payment_succeeded.annual_renewal", { stripeSubId: g.stripeSubId, anchor: (o) => o.created, at: Math.floor(Date.now() / 1000), edit: freshInvoiceId });
-      await processStripeEvent(e);
+      // The receipt is opt-in (default off): on for this one event, then back as it was.
+      const before = process.env.BILLING_RENEWAL_RECEIPT_EMAILS;
+      process.env.BILLING_RENEWAL_RECEIPT_EMAILS = "1";
+      try {
+        await processStripeEvent(e);
+      } finally {
+        if (before === undefined) delete process.env.BILLING_RENEWAL_RECEIPT_EMAILS;
+        else process.env.BILLING_RENEWAL_RECEIPT_EMAILS = before;
+      }
       // The receipt links to the invoice Stripe hosts for this payment.
       return { rowIds: await rowIdsOf("renewal_paid", g.groupId), positive: literal((e.data.object as Stripe.Invoice).hosted_invoice_url!) };
     },
