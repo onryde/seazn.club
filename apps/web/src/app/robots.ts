@@ -1,11 +1,13 @@
 import type { MetadataRoute } from "next";
 import { siteOrigin } from "@/lib/site-origin";
-import { AI_CRAWLERS, AI_SEARCH_CRAWLERS, PRODUCTION_HOST } from "@/lib/robots-policy";
+import { AI_CRAWLERS, AI_SEARCH_CRAWLERS, STAGING_HOST_PREFIX } from "@/lib/robots-policy";
 import { routes } from "@/lib/routes";
 
-function isProduction(origin: string): boolean {
+// Keyed on the staging prefix, not "anything but seazn.club": a wrong or missing
+// origin env on production must fail OPEN (indexable), never close the live site.
+function isStaging(origin: string): boolean {
   try {
-    return new URL(origin).hostname === PRODUCTION_HOST;
+    return new URL(origin).hostname.startsWith(STAGING_HOST_PREFIX);
   } catch {
     return false;
   }
@@ -15,7 +17,7 @@ export default function robots(): MetadataRoute.Robots {
   const origin = siteOrigin();
   // Staging and previews: closed to every crawler. robots.txt alone does not
   // drop pages already indexed, so staging also wants an X-Robots-Tag header.
-  if (!isProduction(origin)) {
+  if (isStaging(origin)) {
     return { rules: [{ userAgent: "*", disallow: "/" }] };
   }
   const PRIVATE = [

@@ -19,8 +19,8 @@ export const AI_SEARCH_CRAWLERS = [
   "Claude-User",
 ] as const;
 
-/** The production host. Any other origin (staging, previews) is closed to crawlers. */
-export const PRODUCTION_HOST = "seazn.club";
+/** Staging hosts (stg.seazn.club) are closed to crawlers; app/proxy.ts keys its noindex header on the same prefix. */
+export const STAGING_HOST_PREFIX = "stg.";
 
 /**
  * AI-training and answer-engine crawlers, each refused the whole site with a

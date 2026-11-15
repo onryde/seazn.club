@@ -144,16 +144,6 @@ export function gamesHostRewrite(request: NextRequest): URL | null {
   return url;
 }
 
-/**
- * CSRF protection: for every mutating API call, the Origin header must match
- * the app host. Browsers always send Origin on cross-origin requests, so a
- * mismatch means a third-party site is trying to trigger an action on behalf
- * of a logged-in user.
- *
- * Google OAuth callback is a GET — unaffected.
- * Same-origin fetch calls (from our own UI) always pass because their Origin
- * matches the host the app is running on.
- */
 /** Staging is the same app on another host. robots.txt (app/robots.ts) closes it, but a page already indexed
  *  stays indexed until it is served with noindex, so every staging response carries the header. */
 export function proxy(request: NextRequest): NextResponse {
@@ -164,6 +154,16 @@ export function proxy(request: NextRequest): NextResponse {
   return response;
 }
 
+/**
+ * CSRF protection: for every mutating API call, the Origin header must match
+ * the app host. Browsers always send Origin on cross-origin requests, so a
+ * mismatch means a third-party site is trying to trigger an action on behalf
+ * of a logged-in user.
+ *
+ * Google OAuth callback is a GET — unaffected.
+ * Same-origin fetch calls (from our own UI) always pass because their Origin
+ * matches the host the app is running on.
+ */
 function proxyCore(request: NextRequest): NextResponse {
   const isApi = request.nextUrl.pathname.startsWith("/api/");
 

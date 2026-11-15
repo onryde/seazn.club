@@ -120,7 +120,18 @@ describe("robots.txt: AI search crawlers", () => {
   });
 });
 
-describe("robots.txt: non-production origin", () => {
+describe("robots.txt: staging origin", () => {
+  it("an unrecognised origin is NOT closed: a wrong prod env fails open, never de-indexes the live site", () => {
+    const prev = process.env.OAUTH_BASE_URL;
+    process.env.OAUTH_BASE_URL = "https://www.seazn.club";
+    try {
+      expect(robots().rules).not.toEqual([{ userAgent: "*", disallow: "/" }]);
+    } finally {
+      if (prev === undefined) delete process.env.OAUTH_BASE_URL;
+      else process.env.OAUTH_BASE_URL = prev;
+    }
+  });
+
   it("closes the whole site to everyone and lists no sitemap", async () => {
     const prev = process.env.OAUTH_BASE_URL;
     process.env.OAUTH_BASE_URL = "https://stg.seazn.club";
