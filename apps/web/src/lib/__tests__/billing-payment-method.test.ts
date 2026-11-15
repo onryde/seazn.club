@@ -50,6 +50,8 @@ vi.mock("@/lib/auth", () => ({
   getActiveOrgId: vi.fn(),
   requireOrgRole: vi.fn(),
   requireUser: vi.fn(),
+  // The banner resolves the console's language (cookie, then the signed-in account): nobody is signed in here, so it is English.
+  getCurrentUser: vi.fn(async () => null),
 }));
 vi.mock("@/lib/posthog-server", () => ({ captureServer: vi.fn() }));
 // Whole-module mock: every invalidator billing.ts reaches for must be present,

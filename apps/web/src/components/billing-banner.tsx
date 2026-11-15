@@ -1,5 +1,7 @@
 import Link from "@/components/ui/console-link";
 import { sql } from "@/lib/db";
+import { getDictionary, plural, t } from "@/lib/i18n";
+import { resolveLocale } from "@/lib/resolve-locale";
 import type { Subscription } from "@/lib/types";
 
 interface Props {
@@ -39,12 +41,15 @@ export async function BillingBanner({ orgId }: Props) {
     where o.id = ${orgId}`;
 
   if (!sub) return null;
+  // The console's language, as the pages that mount this banner resolve it (cookie, then account, then header).
+  const locale = await resolveLocale();
+  const dict = await getDictionary(locale, "ui");
   if (sub.org_status === "suspended") {
     return (
       <div className="bg-red-600 px-4 py-2 text-center text-sm text-white">
-        Your account is suspended due to a failed payment. Data is preserved.{" "}
+        {t(dict, "billing.banner.suspended")}{" "}
         <Link href="/settings/billing" className="font-semibold underline">
-          Reactivate →
+          {t(dict, "billing.banner.reactivate")}
         </Link>
       </div>
     );
@@ -61,10 +66,10 @@ export async function BillingBanner({ orgId }: Props) {
     if (days > 7) {
       return (
         <div className="bg-purple-50 px-4 py-2 text-center text-sm text-purple-700">
-          {days} days left on your Pro trial.{" "}
+          {plural(dict, "billing.banner.trialLeftLong", days, locale)}{" "}
           {askForCard && (
             <Link href="/settings/billing" className="font-semibold underline">
-              Add a card to keep Pro →
+              {t(dict, "billing.banner.addCardKeepPro")}
             </Link>
           )}
         </div>
@@ -72,12 +77,10 @@ export async function BillingBanner({ orgId }: Props) {
     }
     return (
       <div className="bg-purple-600 px-4 py-2 text-center text-sm text-white">
-        {days <= 0
-          ? "Your Pro trial has ended. "
-          : `${days} day${days === 1 ? "" : "s"} left in your Pro trial. `}
+        {days <= 0 ? t(dict, "billing.banner.trialEnded") : plural(dict, "billing.banner.trialLeftShort", days, locale)}{" "}
         {askForCard && (
           <Link href="/settings/billing" className="font-semibold underline">
-            Add a payment method →
+            {t(dict, "billing.banner.addPaymentMethod")}
           </Link>
         )}
       </div>
@@ -87,9 +90,9 @@ export async function BillingBanner({ orgId }: Props) {
   if (sub.status === "past_due") {
     return (
       <div className="bg-amber-500 px-4 py-2 text-center text-sm text-white">
-        Payment failed — your subscription is past due.{" "}
+        {t(dict, "billing.banner.pastDue")}{" "}
         <Link href="/settings/billing" className="font-semibold underline">
-          Update payment →
+          {t(dict, "billing.banner.updatePayment")}
         </Link>
       </div>
     );
