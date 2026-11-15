@@ -25,7 +25,7 @@ import type { Locale } from "@/lib/i18n-constants";
 import { appOrigin } from "@/lib/email";
 import { planLabel } from "@/lib/plan-label";
 import { planItem } from "@/lib/subscription-items";
-import { hasLiveSubscription } from "@/lib/subscription-status";
+import { hasLiveSubscription, isTerminalStripeStatus } from "@/lib/subscription-status";
 import { enqueueEmailOnce, expiryWithin, onceKey, recipientLocale, type OutboxKind } from "@/server/email-outbox";
 import {
   planActivatedTemplate,
@@ -429,7 +429,7 @@ const asInterval = (v: string | undefined): PlanInterval | null => (v === "month
  */
 export function subscriptionChange(sub: Stripe.Subscription, previous: Partial<Stripe.Subscription> | undefined): SubscriptionChange | null {
   if (!previous) return null;
-  if (sub.status === "canceled" || sub.status === "incomplete_expired") return null;
+  if (isTerminalStripeStatus(sub.status)) return null;
   if ("cancel_at" in previous) {
     const wasEnding = previous.cancel_at != null;
     const isEnding = sub.cancel_at != null;
