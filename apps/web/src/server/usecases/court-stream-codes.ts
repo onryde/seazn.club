@@ -55,9 +55,9 @@ type FactRow = {
 
 /**
  * The facts of every match the court's phone may be asked about (spec §5.3), in Match Day's queue order (`queueOrder`):
- * the link's org's matches on the link's court that are planned inside the link's day, in play (whenever planned), called
- * there by a call that still holds (`liveCallSql`), or under an open session of this link (match-day.ts's admission rule,
- * plus the open session). `streamed` is the match's Stream switch, read as false while the match has its own ACTIVE code
+ * the link's org's matches on the link's court that are planned inside the link's day, in play (whenever planned) or called
+ * there by a call that still holds (`liveCallSql`) — match-day.ts's admission rule — and, on whatever court it now is, any
+ * match under an open session of this link (controller ruling R8: the camera belongs to the court). `streamed` is the match's Stream switch, read as false while the match has its own ACTIVE code
  * (Task 4's guard, again here: a court never streams a match that has a phone of its own). `ready` is Match Day's rule:
  * both entrants known (match-day.ts `qualifies`, its entrant half). `kickoffAt` is read for the in-play ones only.
  */
@@ -82,11 +82,16 @@ export async function courtFactsOf(exec: Tx | typeof sql, link: CourtLinkRef): P
           select s.id, s.created_at, s.start_cause from fixture_stream_sessions s
            where s.fixture_id = f.id and s.court_link_id = ${link.id} and s.state in ${sql([...ACTIVE_STATES])}
            order by s.created_at desc, s.id desc limit 1) os on true
-       where f.court_id = ${link.courtId}
-         and f.org_id = (select l.org_id from court_stream_links l where l.id = ${link.id})
-         and ((f.scheduled_at >= ${link.opensAt} and f.scheduled_at < ${link.expiresAt})
-              or f.status = ${IN_PLAY}
-              or lc.called_at is not null
+       where f.org_id = (select l.org_id from court_stream_links l where l.id = ${link.id})
+         -- Index-friendly prefilter (fixtures_court_idx OR the pkey): the court's matches, and the link's open ones.
+         and (f.court_id = ${link.courtId}
+              or f.id = any(array(select s.fixture_id from fixture_stream_sessions s
+                                   where s.court_link_id = ${link.id} and s.state in ${sql([...ACTIVE_STATES])})))
+         and ((f.court_id = ${link.courtId}
+               and ((f.scheduled_at >= ${link.opensAt} and f.scheduled_at < ${link.expiresAt})
+                    or f.status = ${IN_PLAY}
+                    or lc.called_at is not null))
+              -- R8: the camera is the court's. A match moved off the court mid-video stays until its session ends.
               or os.id is not null)
     ) x
     order by x.ready desc, x.called_at is null, x.called_at, x.scheduled_at nulls last, x.round_no nulls last,

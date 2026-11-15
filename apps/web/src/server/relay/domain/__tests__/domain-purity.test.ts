@@ -39,9 +39,9 @@ const ENV_READERS: ReadonlySet<string> = (() => {
 const ALLOWED_SOURCE = /^(\.\.\/config|\.\/[\w-]+|@\/server\/api-v1\/capture-schemas)$/;
 
 describe("server/relay/domain is pure", () => {
-  it("has the eighteen units (capture QR v2: T4a's stream-code, pairing, slot, poll-seconds; T4b's beat-answer, end-reason, phone-lost; PR-2 T2's auto-stream, phone-health; T6's health-reasons; the record upload's capture-record; the 2026-10-18 sizing alarm's ladder; Owed 108 fix (b)'s phone-live)", () => {
+  it("has the nineteen units (capture QR v2: T4a's stream-code, pairing, slot, poll-seconds; T4b's beat-answer, end-reason, phone-lost; PR-2 T2's auto-stream, phone-health; T6's health-reasons; the record upload's capture-record; the 2026-10-18 sizing alarm's ladder; Owed 108 fix (b)'s phone-live; court stream Task 5's court-stream)", () => {
     expect(files.map((f) => f.name).sort()).toEqual([
-      "auto-stream.ts", "beat-answer.ts", "capture-record.ts", "credits.ts", "end-reason.ts", "expiry.ts", "health-reasons.ts", "ladder.ts", "pairing.ts",
+      "auto-stream.ts", "beat-answer.ts", "capture-record.ts", "court-stream.ts", "credits.ts", "end-reason.ts", "expiry.ts", "health-reasons.ts", "ladder.ts", "pairing.ts",
       "phone-health.ts", "phone-live.ts", "phone-lost.ts", "poll-seconds.ts", "retention.ts", "runner.ts", "session.ts", "slot.ts", "stream-code.ts",
     ]);
   });

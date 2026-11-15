@@ -286,6 +286,22 @@ describe.skipIf(!HAS_DB)("court stream codes", () => {
     expect((await courtFactsOf(sql, court.link)).find((f) => f.fixtureId === fx[0])!.openSession).toMatchObject({ sid, byOrganiser: false });
   });
 
+  it("courtFactsOf (R8): a match moved off the court mid-video stays, with its open session, until that session ends", async () => {
+    await place(day, fx[0]!, 60, day.courts.c2);
+    await setStatus(fx[0]!, "in_play");
+    const sid = await courtSession(fx[0]!);
+    await place(day, fx[0]!, 60, day.courts.c1);
+    const facts = await courtFactsOf(sql, court.link);
+    expect(facts.map((f) => f.fixtureId)).toEqual([fx[0]!]);
+    expect(facts[0]!.openSession).toMatchObject({ sid });
+    // Only the open session holds it: another match moved off the court with no court session is gone.
+    await place(day, fx[1]!, 60, day.courts.c1);
+    await setStatus(fx[1]!, "in_play");
+    expect(await factIds()).toEqual([fx[0]!]);
+    await sql`update fixture_stream_sessions set state = 'completed', end_reason = 'stopped', ended_at = now() where id = ${sid}`;
+    expect(await factIds()).toEqual([]);
+  });
+
   it("SQL queue order equals queueOrder() on a seeded court of 6 matches (ties on time, round and seq)", async () => {
     expect(fx).toHaveLength(6);
     // Two at the same time AND the same round and seq (the id decides); two more at one time, the round deciding; one
