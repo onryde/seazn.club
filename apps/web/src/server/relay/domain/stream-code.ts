@@ -67,7 +67,7 @@ export function codeServes(i: ServesInput): boolean {
 
 /**
  * C1(c)'s anchor (spec 2026-10-12 §4): the LATER of
- *  - the code's own end: `ended_at` for a reissue; for an expiry, `finished_at` plus the grace — NOT the lazily written
+ *  - the code's own end: `ended_at` for a reissue or a court link's withdrawal; for an expiry, `finished_at` plus the grace — NOT the lazily written
  *    `ended_at`, which can land long after the code stopped serving (a reverted result, C5, leaves no finished_at, so
  *    the expiry falls back to its ended_at);
  *  - the end of the last session of the fixture that was open when the code ended — created before the code's OWN end
@@ -77,7 +77,7 @@ export function codeServes(i: ServesInput): boolean {
  * null for a code that has not ended. `graceMinutes` is the use-case's `tunable(…)`, passed in.
  */
 export function recordTailAnchor(i: {
-  endCause: "reissued" | "expired" | null; endedAt: Date | null; finishedAt: Date | null; graceMinutes: number;
+  endCause: "reissued" | "expired" | "withdrawn" | null; endedAt: Date | null; finishedAt: Date | null; graceMinutes: number;
   sessions: readonly { createdAt: Date; endedAt: Date | null }[];
 }): Date | null {
   if (i.endedAt === null) return null;

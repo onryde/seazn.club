@@ -15,7 +15,6 @@ import { DEVICE_LINK_MINT_LIMIT, rateLimit } from "@/lib/rate-limit";
 import { DESTINATION_NOT_ALLOWED, TARGET_UNREADABLE } from "@/lib/stream-destinations";
 import { isYoutubeRefusalCode, YOUTUBE_REFUSAL_REMEDY } from "@/lib/youtube";
 import { captureError } from "@/lib/sentry";
-import { getDictionary, t, toLocale } from "@/lib/i18n";
 import { OVERLAY_KEY_PARAM } from "@/lib/realtime-purpose";
 import { resolveTemplate } from "@/components/overlay/template-registry";
 import { CaptureRefusalError, codeEnded } from "@/server/api-v1/capture-http";
@@ -45,6 +44,7 @@ import type { IngestState } from "@/server/relay/ports";
 import { readFirstInput } from "@/server/relay/secret-columns";
 import { recordEvent } from "@/server/relay/telemetry";
 import { captureStageOf } from "./capture-stage";
+import { matchLabelOf } from "./court-stream-codes";
 import { provideDeviceLinkForPhone, type HolderVerifiedCode, type PhoneScoringLink } from "./device-links";
 import { fixtureStreamTarget, resolveStreamCode, startModeFor, type ResolvedCode } from "./stream-codes";
 import { maybeAutoStart } from "./stream-auto";
@@ -56,7 +56,7 @@ type Descriptor = z.infer<typeof CaptureDescriptor>;
 const SLOT = 0;
 
 /** The contract's own maxima (R7), read off the zod twins — never retyped. */
-const LABEL_MAX = maxOf(CaptureWaiting.shape.label.maxLength, "label");
+export const LABEL_MAX = maxOf(CaptureWaiting.shape.label.maxLength, "label");
 const DEST_MAX = maxOf(CaptureWaiting.shape.destinationName.unwrap().maxLength, "destinationName");
 const SESSION_SHAPE = CaptureDescriptor.options[1];   // warming — every session branch shares SessionFields
 const HOLD_MAX = Math.min(
@@ -128,8 +128,8 @@ export type CaptureCommon = {
 };
 
 type FixtureCtx = {
-  fixture_no: number; status: string; scheduled_at: Date | null; finished_at: Date | null; competition_id: string;
-  sport_key: string; tz: string; default_locale: string | null; home_name: string | null; away_name: string | null;
+  status: string; scheduled_at: Date | null; finished_at: Date | null; competition_id: string;
+  sport_key: string; tz: string;
   auto_stream: boolean;
   /** R2004 change 7: the organiser's stored template choice (V462), null = the sport default. */
   overlay_template: string | null;
@@ -145,21 +145,18 @@ export async function captureCommon(
   deps: SessionDeps,
   now: Date,
 ): Promise<CaptureCommon> {
-  // One statement for the fixture's facts: the V305 venue lane (division → org → UTC, the checkin-token.ts query), the
-  // org's locale (W25), both sides' names and the fixture's automatic-streaming switch (W7, `autoAllowed`; false with no
-  // settings row). The destination is `fixtureStreamTarget`'s — the one the start opens on
+  // One statement for the fixture's facts: the V305 venue lane (division → org → UTC, the checkin-token.ts query) and the
+  // fixture's automatic-streaming switch (W7, `autoAllowed`; false with no settings row). The label (both sides' names, or
+  // the org's locale's "Match N", W25) is `matchLabelOf`'s, the one rule a court's phone shares. The destination is `fixtureStreamTarget`'s — the one the start opens on
   // (B8 review I-1), so the phone names exactly what it would stream to.
   const [ctx] = await sql<FixtureCtx[]>`
-    select f.fixture_no, f.status, f.scheduled_at, f.finished_at, d.competition_id, d.sport_key,
-           coalesce(ss.tz, o.timezone, 'UTC') as tz, o.default_locale,
-           h.display_name as home_name, a.display_name as away_name,
+    select f.status, f.scheduled_at, f.finished_at, d.competition_id, d.sport_key,
+           coalesce(ss.tz, o.timezone, 'UTC') as tz,
            coalesce(st.auto_stream, false) as auto_stream, st.overlay_template
       from fixtures f
       join divisions d on d.id = f.division_id
       join organizations o on o.id = d.org_id
       left join schedule_settings ss on ss.division_id = d.id
-      left join entrants h on h.id = f.home_entrant_id
-      left join entrants a on a.id = f.away_entrant_id
       left join fixture_stream_settings st on st.fixture_id = f.id
      where f.id = ${c.fixtureId} and d.org_id = ${c.orgId}`;
   // The code cascades with its fixture (T35), so a resolved code's fixture is there; one deleted in between reads as an
@@ -167,9 +164,7 @@ export async function captureCommon(
   if (!ctx) throw codeEnded();
   const target = await fixtureStreamTarget(sql, { orgId: c.orgId, fixtureId: c.fixtureId });
 
-  const label = ctx.home_name !== null && ctx.away_name !== null
-    ? `${ctx.home_name} v ${ctx.away_name}`
-    : t(await getDictionary(toLocale(ctx.default_locale), "ui"), "breadcrumb.match", { no: ctx.fixture_no });
+  const label = await matchLabelOf(c.orgId, c.fixtureId);
 
   const origin = captureOrigin(deps);
   let overlayUrl: string | null = null;
@@ -185,7 +180,7 @@ export async function captureCommon(
 
   return {
     code: c.code,
-    label: fitText(label, LABEL_MAX),
+    label,
     venueTimezone: ctx.tz,
     scheduledStart: ctx.scheduled_at === null ? null : Math.floor(new Date(ctx.scheduled_at).getTime() / 1000),
     pollSeconds: pollSecondsFor({
