@@ -127,7 +127,7 @@ import {
   PAY_SESSION_REUSE_MARGIN_MS,
   type KnownCart,
 } from "../registrations";
-import { createRegistrationCheckout } from "../registrations/checkout";
+import { createRegistrationCheckout, openSessionNamesEntry } from "../registrations/checkout";
 import { approveRegistration, rejectRegistration } from "../registration-approval";
 import { returnsToPayPage } from "../registrations/pay-page-checkout";
 import { divisionCtx } from "../registrations/lookups";
@@ -715,12 +715,12 @@ describe.skipIf(!HAS_DB)("payFromPayPage (player payment page, Task 3)", () => {
   });
 
   describe("cart sibling with an open cart session (Review Focus 1)", () => {
-    async function cartWithOpenSession() {
+    async function cartWithOpenSession(bCents = 1500) {
       const { rig, reg: a, accessToken } = await cardEntry({ displayName: "Entry A" });
-      const b = await seedSecondEntry(a.group_id, rig.division.id, 1500, "Entry B");
+      const b = await seedSecondEntry(a.group_id, rig.division.id, bCents, "Entry B");
       await mintGroupCheckout(a.group_id, rig.division.id, ORIGIN, accessToken, await cartAsWritten(a.group_id, rig.division.id));
       const sAB = (await loadWithGroup(a.id)).checkout_session_id!;
-      return { rig, a, b, sAB };
+      return { rig, a, b, sAB, accessToken };
     }
 
     // Cart double-pay fix (owner ruling 2026-11-14): this case used to pin the defect - A's page left the cart session open ("not
@@ -736,6 +736,42 @@ describe.skipIf(!HAS_DB)("payFromPayPage (player payment page, Task 3)", () => {
       expect(stripeMock.store.get(sAB)!.status, "the cart session can no longer charge A").toBe("expired");
       expect(payableFor(a.id)).toEqual([sA]);
       expect(payableFor(b.id), "B mints its own through its own Pay").toEqual([]);
+    });
+
+    // The backstop the fix above leaves standing (review m1 of #1225). The Pay buttons can no longer leave A payable twice, but a
+    // session that charges an entry a second time can still exist: a cart whose sibling's Pay ran before the fix (its pointer moved
+    // off a still-open sign-up session), or the mint called directly (`createRegistrationCheckout`, whose supersede step leaves a
+    // sign-up session that still covers B open). `kind: "duplicate"` then refunds exactly the duplicate entry's OWN share on that
+    // session's intent - never the session's whole amount, which also holds B's money. A and B are priced differently so the share,
+    // the whole session and the sibling's share are three different numbers.
+    it("a sign-up session that charges A a second time refunds A's own share on that session's intent, not the session's amount; B confirmed once", async () => {
+      const { rig, a, b, sAB, accessToken } = await cartWithOpenSession(2200);
+      expect([a.amount_cents, b.amount_cents], "premise: two different prices").toEqual([1500, 2200]);
+      const wholeSession = createdParams(0).line_items!.reduce((n, li) => n + li.price_data!.unit_amount!, 0);
+      expect(wholeSession, "premise: the sign-up session holds both entries' money").toBe(3700);
+
+      // A's own session by the mint alone (the Pay buttons would retire sAB first, so this seeds the state they now prevent).
+      await createRegistrationCheckout(a.group_id, [a.id], await divisionCtx(sql, rig.division.id), ORIGIN, accessToken);
+      const sA = (await loadWithGroup(a.id)).checkout_session_id!;
+      expect(sA, "premise: a second session for A").not.toBe(sAB);
+      expect(stripeMock.store.get(sAB)!.status, "premise: B still needs the sign-up session, so the supersede step leaves it open").toBe("open");
+      expect([...payableFor(a.id)].sort(), "premise: A is payable twice").toEqual([sAB, sA].sort());
+
+      await handleRegistrationCheckoutCompleted(payInStripe(sA));
+      expect((await loadWithGroup(a.id)).status).toBe("confirmed");
+      expect(stripeMock.refundCreate, "A's first payment is no duplicate").not.toHaveBeenCalled();
+
+      const cart = payInStripe(sAB);
+      await handleRegistrationCheckoutCompleted(cart);
+
+      expect((await loadWithGroup(b.id)).status, "B confirmed by the sign-up session").toBe("confirmed");
+      expect(stripeMock.refundCreate, "exactly one refund: A's second charge").toHaveBeenCalledTimes(1);
+      expect(stripeMock.refundCreate).toHaveBeenCalledWith(expect.objectContaining({ payment_intent: cart.payment_intent, amount: 1500 }));
+      const refunds = await sql<{ reg: string; mode: string; amount: string }[]>`
+        select payload->>'registration_id' as reg, payload->>'mode' as mode, payload->>'amount_cents' as amount
+        from competition_events
+        where type = 'registration.refunded' and payload->>'registration_id' in (${a.id}, ${b.id})`;
+      expect(refunds, "one duplicate refund, for A, of A's share; none for B").toEqual([{ reg: a.id, mode: "duplicate", amount: "1500" }]);
     });
 
     it("the cart session completes first → A and B confirmed, then A's page shows paid and Pay 409s", async () => {
@@ -1988,6 +2024,71 @@ describe.skipIf(!HAS_DB)("the status page's Pay hands an open session out again 
       expect([...sequenced].sort()).toEqual(BUTTONS.map(([label]) => label).sort());
     });
 
+    // Review m4 of #1225: only an OPEN session is retired. The `open` clause of `openSessionNamesEntry` is what stops the payment
+    // page expiring a session that is no longer open (an expire Stripe refuses, answered by a re-read that judges it the same way, so
+    // the outcome alone cannot tell the clause is there): a sign-up session that timed out, or whose delayed payment failed, costs two
+    // wasted Stripe calls - and a spurious 502 whenever either fails - for nothing to retire. The status page's loop re-checks
+    // `open` itself, so this table pins the outcome on both buttons and the call count kills the clause on the payment page.
+    const DEAD_SIGNUP: [string, (id: string) => void][] = [
+      ["timed out (expired)", (id) => void (stripeMock.store.get(id)!.status = "expired")],
+      ["complete, its delayed payment failed", (id) => void completeDelayed(id, "requires_payment_method")],
+    ];
+    const DEAD_CASES = BUTTONS.flatMap(([buttonLabel, pay]) =>
+      DEAD_SIGNUP.map(([deadLabel, kill]) => [`${buttonLabel} / sign-up ${deadLabel}`, pay, kill] as const),
+    );
+    const deadSeen = new Set<string>();
+
+    it.each(DEAD_CASES)("%s: nothing to retire - zero expire, one mint for A, A payable once", async (label, pay, kill) => {
+      const { a, b, accessToken, sAB } = await signedUpPair();
+      kill(sAB);
+      expect(stripeMock.store.get(sAB)!.status, `${label}: premise: the sign-up session is no longer open`).not.toBe("open");
+      expect(payableFor(a.id), `${label}: premise: nothing pays A now`).toEqual([]);
+
+      const url = await pay(a, accessToken);
+
+      expect(stripeMock.checkoutExpire, `${label}: a session that is not open is never expired`).not.toHaveBeenCalled();
+      expect(stripeMock.checkoutCreate, `${label}: the sign-up, then A's one mint`).toHaveBeenCalledTimes(2);
+      expect(createdParams(1).metadata?.registration_ids, `${label}: A's session is A's alone`).toBe(a.id);
+      const payableA = payableFor(a.id);
+      expect(payableA, `${label}: exactly one payable session for A`).toHaveLength(1);
+      expect(url, label).toBe(stripeMock.store.get(payableA[0]!)!.url);
+      expect(payableFor(b.id), `${label}: B is left to its own Pay`).toEqual([]);
+      deadSeen.add(label);
+    });
+
+    // The status page's own loop re-checks `open` for the entry's pointer session too (the cart-pointer clause above covers the other
+    // half of that loop), so it needs its own case: A's earlier session, still on A's own pointer after B's Pay moved the cart's.
+    const DEAD_OWN_CASES = DEAD_SIGNUP.map(([deadLabel, kill]) => [`the status page / A's own earlier session ${deadLabel}`, kill] as const);
+    it.each(DEAD_OWN_CASES)("%s: nothing to expire, one mint for A, B's session left payable", async (label, kill) => {
+      const { a, b, accessToken } = await signedUpPair();
+      await resumeRegistrationCheckout(a.id, accessToken, ORIGIN);
+      const sA = payableFor(a.id)[0]!;
+      await resumeRegistrationCheckout(b.id, accessToken, ORIGIN);
+      const sB = payableFor(b.id)[0]!;
+      expect([payableFor(a.id), payableFor(b.id)], `${label}: premise: one session each`).toEqual([[sA], [sB]]);
+      expect(await payPointer(a.id), `${label}: premise: A's pointer is on its own session`).toBe(sA);
+      expect(await cartPointer(a.id), `${label}: premise: the cart's pointer moved on to B's`).toBe(sB);
+      kill(sA);
+      expect(payableFor(a.id), `${label}: premise: nothing pays A now`).toEqual([]);
+      stripeMock.checkoutExpire.mockClear();
+      const creates = stripeMock.checkoutCreate.mock.calls.length;
+
+      await resumeRegistrationCheckout(a.id, accessToken, ORIGIN);
+
+      expect(stripeMock.checkoutExpire, `${label}: a session that is not open is never expired, B's does not name A`).not.toHaveBeenCalled();
+      expect(stripeMock.checkoutCreate, `${label}: A's one mint`).toHaveBeenCalledTimes(creates + 1);
+      expect(payableFor(a.id), `${label}: exactly one payable session for A`).toHaveLength(1);
+      expect(payableFor(b.id), `${label}: B's session is untouched`).toEqual([sB]);
+      deadSeen.add(label);
+    });
+
+    it("the not-open sweep covered both Pay buttons against both ways a session stops being open (counted; zero is a failure)", () => {
+      expect(DEAD_CASES.length + DEAD_OWN_CASES.length, "anti-vacuity: the tables are not empty").toBe(
+        BUTTONS.length * DEAD_SIGNUP.length + DEAD_SIGNUP.length,
+      );
+      expect([...deadSeen].sort()).toEqual([...DEAD_CASES, ...DEAD_OWN_CASES].map(([label]) => label).sort());
+    });
+
     it.each(BUTTONS)(
       "%s: an expire that fails while the sign-up session is still open -> 502, zero create, both entries still on the sign-up session, no pointer moved",
       async (label, pay) => {
@@ -2052,6 +2153,17 @@ describe("returnsToPayPage: whose page a stored session returns to (P5 carry a)"
     }
     expect(checked, "anti-vacuity").toBe(cases.length);
   });
+});
+
+// Review m5 of #1225: `openSessionNamesEntry` answers a plain boolean. As the type predicate `stored is Session` it was false for a
+// non-null session that is not open or names someone else, and an `else` branch narrowed that session to `null`.
+it("openSessionNamesEntry narrows nothing: its false branch keeps the session's type (a type-level pin, checked by tsc)", () => {
+  const stored = null as Stripe.Checkout.Session | null;
+  if (!openSessionNamesEntry(stored, "r")) {
+    // No runtime assertion on the type: `expectTypeOf` is erased at run time, and `tsc` fails this line if the predicate returns.
+    expectTypeOf(stored).toEqualTypeOf<Stripe.Checkout.Session | null>();
+  }
+  expect(openSessionNamesEntry(null, "r"), "the empty case: no stored session names nothing").toBe(false);
 });
 
 describe.skipIf(!HAS_DB)("A → sibling B → A on the status page: one payable session per entry (P5 carry a)", () => {

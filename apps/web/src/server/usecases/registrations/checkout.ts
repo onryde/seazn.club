@@ -607,11 +607,11 @@ export function reusableSessionUrl(stored: Stripe.Checkout.Session, registration
  * a sibling used to be left open (the mint's own supersede step keeps its subsumption rule), so the entry stayed payable twice - its
  * new session and the sign-up tab. The siblings it also named stay payable through their own Pay. A session that does not name this
  * entry (a sibling's own) is never this entry's to retire.
+ *
+ * A plain boolean, never a type predicate: `stored is Session` would also be "false" for a non-null session that is not open or does
+ * not name this entry, and an `else` branch would narrow it to `null`. A caller that needs the session non-null checks that itself.
  */
-export function openSessionNamesEntry(
-  stored: Stripe.Checkout.Session | null,
-  registrationId: string,
-): stored is Stripe.Checkout.Session {
+export function openSessionNamesEntry(stored: Stripe.Checkout.Session | null, registrationId: string): boolean {
   return stored?.status === "open" && checkoutRegistrationIds(stored).includes(registrationId);
 }
 

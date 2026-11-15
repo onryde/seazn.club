@@ -96,7 +96,7 @@ export async function payFromPayPage(token: string, origin: string, now: Date = 
   // entry stays payable twice; the sibling pays through its own Pay. A session that returns to THIS page is not retired: on the
   // cart pointer but not on the entry pointer this press read, it is a concurrent press's own, already handed out - that press won,
   // and this one's mint loses its pointer claim (409 CONFLICT) instead.
-  if (openSessionNamesEntry(cart, doc.registrationId) && !returnsToPayPage(cart)) {
+  if (cart !== null && openSessionNamesEntry(cart, doc.registrationId) && !returnsToPayPage(cart)) {
     const settled = await expireStoredSession(cart.id, doc.registrationId);
     if (settled.status === "complete" && (await completedSessionStillPays(settled, doc.registrationId))) {
       throw new HttpError(409, "A payment for this entry is already on its way", "REGISTRATION_PAID_ONLINE");

@@ -191,7 +191,7 @@ describe.skipIf(!HAS_DB)(
       expect(group.checkout_session_id).not.toBe(sessionA); // overwritten with the new (whole-cart) session
     });
 
-    it("re-minting a PARTIAL subset of a prior session's entries leaves it alone — the uncovered sibling keeps its only payable link", async () => {
+    it("the supersede step's own rule: a mint covering only PART of a prior session's entries leaves that session alone", async () => {
       const { competition, division, settings } = await stripeRig();
       const a = await seedRegistration(competition.id, division.id, settings, {
         displayName: "Entry A",
@@ -206,14 +206,14 @@ describe.skipIf(!HAS_DB)(
         openSession(sessionAB, [a.registration.id, b.id]),
       );
 
-      // A alone is re-minted (e.g. re-priced, or promoted and paying on its
-      // own) — B's only payable link is still sessionAB, so expiring it here
-      // would strand B exactly as the file-header bug describes.
+      // A alone is re-minted. This is the supersede step's own best-effort rule and nothing more: it expires a prior session only
+      // when the new mint covers every entry that session names, so one that still names an entry the mint does not (B) is never
+      // expired by it. It is a backstop, not the product's answer for a per-entry Pay: since the cart double-pay fix (owner ruling
+      // 2026-11-14) an entry's Pay retires the open sign-up session that names it BEFORE minting, on purpose, and B pays through its
+      // own Pay (registration-pay-page-checkout.test.ts, "an entry's Pay retires a sign-up session that also names a sibling").
       //
-      // Driven through the mint itself, not `resumeRegistrationCheckout`: since the cart double-pay fix (owner ruling 2026-11-14)
-      // an entry's own Pay retires an open cart session that names it BEFORE minting, siblings or not, so the status page never
-      // reaches this supersede step with sessionAB still open (registration-pay-page-checkout.test.ts, "an entry's Pay retires a
-      // sign-up session that also names a sibling"). The step's own subsumption rule is unchanged and still owed its test.
+      // Driven through the mint itself, not `resumeRegistrationCheckout`: neither Pay button reaches this step with sessionAB still
+      // open, and `createRegistrationCheckout` has no production caller. The rule is unchanged and still owed its test.
       await createRegistrationCheckout(
         a.registration.group_id,
         [a.registration.id],
