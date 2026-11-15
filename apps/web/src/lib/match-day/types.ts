@@ -88,6 +88,10 @@ export interface MatchDayFixture {
    *  `effectiveLine`) — the court's read-only Match format. Set on a playing match only; null for any other, and for a format
    *  the line has no words for. */
   format_line: string | null;
+  /** The match's Stream switch (`fixture_stream_settings.court_stream`): the court's phone streams this match (court stream §5.2). */
+  court_stream: boolean;
+  /** The match has its own ACTIVE stream code, so the switch cannot go on ("This match has its own stream code"). */
+  own_stream_code: boolean;
 }
 
 /** A match waiting in a court's queue. `planned_at` is its planned time, which a call never changes (owner ruling B);
@@ -102,6 +106,19 @@ export interface MatchDayQueued extends MatchDayFixture {
  *  - now: the court is closed at the view's `now`; `until` is when it reopens, null when it does not open again today;
  *  - later: open now, with a break still to come today (`from`..`until`). A court that only closes for the night has none. */
 export type CourtClosure = { kind: "now"; until: string | null } | { kind: "later"; from: string; until: string };
+
+/** A court's live link for the day, as the desk reads it (court stream §5.5). No secret: never the code or its token. */
+export interface MatchDayCourtStream {
+  link_id: string;
+  target_label: string;
+  /** ISO: the end of the link's day. */
+  expires_at: string;
+  /** The court phone: unpaired (no pairing), waiting, live (an open session), or offline (three missed beats). */
+  phone: "unpaired" | "waiting" | "live" | "offline";
+  /** The stored refusal of the court's latest refused automatic start (the focus match's `auto_start_refusal`), else null.
+   *  `competition_frozen` is served while the competition is frozen, never stored. */
+  refusal: "no_destination" | "no_credit" | "not_entitled" | "destination_in_use" | "unavailable" | "competition_frozen" | null;
+}
 
 export interface MatchDayCourt {
   court_id: string;
@@ -125,6 +142,8 @@ export interface MatchDayCourt {
   queue: MatchDayQueued[];
   /** The court's closure today (`CourtClosure`); null while it is open with no break still to come. */
   closure: CourtClosure | null;
+  /** The court's live stream link today, with its phone's status; null when the court has none (never linked or withdrawn). */
+  stream_link: MatchDayCourtStream | null;
 }
 
 export type MatchDayCandidateSource = "this_court" | "other_court" | "no_court";

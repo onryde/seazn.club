@@ -146,6 +146,8 @@ const fx = (o: Partial<MatchDayFixture> = {}): MatchDayFixture => ({
   scorer_attention: null,
   live_video: null,
   format_line: null,
+  court_stream: false,
+  own_stream_code: false,
   ...o,
 });
 
@@ -161,6 +163,7 @@ const court = (o: Partial<MatchDayCourt> = {}): MatchDayCourt => ({
   free_since: null,
   queue: [],
   closure: null,
+  stream_link: null,
   ...o,
 });
 

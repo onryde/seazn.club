@@ -16,7 +16,12 @@ import { resolveVenueTz } from "@/lib/tz";
 import type { CaptureQrV2 } from "@/lib/capture-qr";
 import { assertUuid, type AuthCtx } from "@/server/api-v1/auth";
 import { log } from "@/server/logger";
+import type { MatchDayCourtStream } from "@/lib/match-day/types";
 import { courtMinAppVersion } from "@/server/relay/config";
+import { AUTO_START_REFUSALS } from "@/server/relay/domain/auto-stream";
+import { courtPhoneStatus } from "@/server/relay/domain/court-stream";
+import { ACTIVE_STATES, type SessionState } from "@/server/relay/domain/session";
+import { frozenCompetitionIds } from "./entitlement-freeze";
 import { hasValidKek } from "@/server/relay/crypto";
 import { insertCourtStreamCode, openStreamCodeTok, wipeStreamCodeTok } from "@/server/relay/secret-columns";
 import { resolveCandidateCourts } from "./court-candidates";
@@ -273,4 +278,82 @@ export async function setCourtStream(auth: AuthCtx, fixtureId: string, on: boole
              revision = fixture_stream_settings.revision + 1`;
   });
   return { on };
+}
+
+type StoredRefusal = (typeof AUTO_START_REFUSALS)[number];
+const isRefusal = (v: string | null): v is StoredRefusal => v !== null && (AUTO_START_REFUSALS as readonly string[]).includes(v);
+
+/**
+ * The desk's read of court streams for Match Day (spec §5.5): per court the live link with its phone's status and the court's
+ * latest stored refusal, per match its switch and whether it has its own ACTIVE code. Two statements however many courts and
+ * matches: one over the links (the pairing and the open session by lateral join), one over the matches. No tok, no code.
+ * The refusal is the newest stored one among the court's unfinished matches that have no open session (a success or a Go live
+ * clears it); `competition_frozen` is served for a stored `not_entitled` while the competition is frozen (as `streamPhone`).
+ */
+export async function courtStreamsForDay(
+  orgId: string, courtIds: readonly string[], fixtureIds: readonly string[], now: Date,
+): Promise<{ links: Map<string, MatchDayCourtStream>; switches: Map<string, { on: boolean; ownCode: boolean }> }> {
+  const links = new Map<string, MatchDayCourtStream>();
+  const switches = new Map<string, { on: boolean; ownCode: boolean }>();
+  if (courtIds.length > 0) {
+    const linkRows = await sql<{
+      id: string; court_id: string; label: string; expires_at: Date;
+      last_beat_at: Date | null; answered_poll_seconds: number | null; open_state: SessionState | null;
+    }[]>`
+      select l.id, l.court_id, t.label, l.expires_at, p.last_beat_at, p.answered_poll_seconds, s.state as open_state
+        from court_stream_links l
+        join org_stream_targets t on t.id = l.target_id
+        left join lateral (
+          select p.last_beat_at, p.answered_poll_seconds
+            from fixture_stream_pairings p join fixture_stream_codes k on k.id = p.code_id
+           where k.court_link_id = l.id and k.ended_at is null and p.ended_at is null
+           order by p.claimed_at desc, p.id desc limit 1) p on true
+        left join lateral (
+          select s.state from fixture_stream_sessions s
+           where s.court_link_id = l.id and s.state in ${sql([...ACTIVE_STATES])}
+           order by s.created_at desc, s.id desc limit 1) s on true
+       where l.org_id = ${orgId} and l.court_id in ${sql([...courtIds])} and l.withdrawn_at is null
+         and l.opens_at <= ${now} and ${now} < l.expires_at`;
+    for (const r of linkRows) {
+      links.set(r.court_id, {
+        link_id: r.id,
+        target_label: r.label,
+        expires_at: r.expires_at.toISOString(),
+        phone: courtPhoneStatus({
+          pairing: r.last_beat_at === null ? null : { lastBeatAt: new Date(r.last_beat_at), answeredPoll: r.answered_poll_seconds! },
+          openState: r.open_state,
+        }, now),
+        refusal: null,
+      });
+    }
+  }
+  if (fixtureIds.length === 0) return { links, switches };
+  const rows = await sql<{
+    id: string; court_id: string | null; competition_id: string; court_stream: boolean | null;
+    auto_start_refusal: string | null; auto_start_attempted_at: Date | null; settled: boolean; own_code: boolean;
+  }[]>`
+    select f.id, f.court_id, d.competition_id, st.court_stream, st.auto_start_refusal, st.auto_start_attempted_at,
+           (f.status not in ('scheduled', 'in_play')
+            or exists (select 1 from fixture_stream_sessions s where s.fixture_id = f.id and s.state in ${sql([...ACTIVE_STATES])})) as settled,
+           exists (select 1 from fixture_stream_codes k where k.fixture_id = f.id and k.ended_at is null) as own_code
+      from fixtures f
+      join divisions d on d.id = f.division_id
+      left join fixture_stream_settings st on st.fixture_id = f.id
+     where f.id in ${sql([...fixtureIds])} and d.org_id = ${orgId}`;
+  const newest = new Map<string, (typeof rows)[number]>();
+  for (const r of rows) {
+    switches.set(r.id, { on: r.court_stream === true, ownCode: r.own_code });
+    if (r.court_id === null || r.settled || !isRefusal(r.auto_start_refusal) || !links.has(r.court_id)) continue;
+    const held = newest.get(r.court_id);
+    if (!held || (r.auto_start_attempted_at?.getTime() ?? 0) > (held.auto_start_attempted_at?.getTime() ?? 0)) newest.set(r.court_id, r);
+  }
+  if (newest.size > 0) {
+    // Asked only when it could change the answer, outside any transaction (`frozenCompetitionIds`).
+    const frozen = [...newest.values()].some((r) => r.auto_start_refusal === "not_entitled") ? await frozenCompetitionIds(orgId) : new Set<string>();
+    for (const [courtId, r] of newest) {
+      const refusal = r.auto_start_refusal as StoredRefusal;
+      links.get(courtId)!.refusal = refusal === "not_entitled" && frozen.has(r.competition_id) ? "competition_frozen" : refusal;
+    }
+  }
+  return { links, switches };
 }

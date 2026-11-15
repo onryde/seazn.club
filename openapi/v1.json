@@ -3482,6 +3482,12 @@
                                             "type": "null"
                                           }
                                         ]
+                                      },
+                                      "court_stream": {
+                                        "type": "boolean"
+                                      },
+                                      "own_stream_code": {
+                                        "type": "boolean"
                                       }
                                     },
                                     "required": [
@@ -3505,7 +3511,9 @@
                                       "stream",
                                       "scorer_attention",
                                       "live_video",
-                                      "format_line"
+                                      "format_line",
+                                      "court_stream",
+                                      "own_stream_code"
                                     ],
                                     "additionalProperties": false
                                   },
@@ -3779,6 +3787,12 @@
                                         }
                                       ]
                                     },
+                                    "court_stream": {
+                                      "type": "boolean"
+                                    },
+                                    "own_stream_code": {
+                                      "type": "boolean"
+                                    },
                                     "planned_at": {
                                       "type": "string",
                                       "format": "date-time",
@@ -3812,6 +3826,8 @@
                                     "scorer_attention",
                                     "live_video",
                                     "format_line",
+                                    "court_stream",
+                                    "own_stream_code",
                                     "planned_at",
                                     "estimated_at"
                                   ],
@@ -3879,6 +3895,66 @@
                                     "type": "null"
                                   }
                                 ]
+                              },
+                              "stream_link": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "link_id": {
+                                        "type": "string",
+                                        "format": "uuid",
+                                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                      },
+                                      "target_label": {
+                                        "type": "string"
+                                      },
+                                      "expires_at": {
+                                        "type": "string",
+                                        "format": "date-time",
+                                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                      },
+                                      "phone": {
+                                        "type": "string",
+                                        "enum": [
+                                          "unpaired",
+                                          "waiting",
+                                          "live",
+                                          "offline"
+                                        ]
+                                      },
+                                      "refusal": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string",
+                                            "enum": [
+                                              "no_destination",
+                                              "no_credit",
+                                              "not_entitled",
+                                              "destination_in_use",
+                                              "unavailable",
+                                              "competition_frozen"
+                                            ]
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      }
+                                    },
+                                    "required": [
+                                      "link_id",
+                                      "target_label",
+                                      "expires_at",
+                                      "phone",
+                                      "refusal"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             "required": [
@@ -3892,7 +3968,8 @@
                               "in_use_by",
                               "free_since",
                               "queue",
-                              "closure"
+                              "closure",
+                              "stream_link"
                             ],
                             "additionalProperties": false
                           }
@@ -4139,6 +4216,12 @@
                                     "type": "null"
                                   }
                                 ]
+                              },
+                              "court_stream": {
+                                "type": "boolean"
+                              },
+                              "own_stream_code": {
+                                "type": "boolean"
                               }
                             },
                             "required": [
@@ -4162,7 +4245,9 @@
                               "stream",
                               "scorer_attention",
                               "live_video",
-                              "format_line"
+                              "format_line",
+                              "court_stream",
+                              "own_stream_code"
                             ],
                             "additionalProperties": false
                           }
@@ -4335,7 +4420,9 @@
                             "url": null,
                             "made_for_kids": null
                           },
-                          "format_line": "example"
+                          "format_line": "example",
+                          "court_stream": true,
+                          "own_stream_code": true
                         },
                         "in_use_by": "example",
                         "free_since": "2026-08-01T09:00:00Z",
@@ -4373,6 +4460,8 @@
                               "made_for_kids": null
                             },
                             "format_line": "example",
+                            "court_stream": true,
+                            "own_stream_code": true,
                             "planned_at": "2026-08-01T09:00:00Z",
                             "estimated_at": "2026-08-01T09:00:00Z"
                           }
@@ -4380,6 +4469,13 @@
                         "closure": {
                           "kind": "now",
                           "until": null
+                        },
+                        "stream_link": {
+                          "link_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                          "target_label": "example",
+                          "expires_at": "2026-08-01T09:00:00Z",
+                          "phone": "unpaired",
+                          "refusal": "no_destination"
                         }
                       }
                     ],
@@ -4421,7 +4517,9 @@
                           "url": "example",
                           "made_for_kids": true
                         },
-                        "format_line": "example"
+                        "format_line": "example",
+                        "court_stream": true,
+                        "own_stream_code": true
                       }
                     ],
                     "needs_you": [
@@ -6058,6 +6156,12 @@
                                     "type": "null"
                                   }
                                 ]
+                              },
+                              "court_stream": {
+                                "type": "boolean"
+                              },
+                              "own_stream_code": {
+                                "type": "boolean"
                               }
                             },
                             "required": [
@@ -6081,7 +6185,9 @@
                               "stream",
                               "scorer_attention",
                               "live_video",
-                              "format_line"
+                              "format_line",
+                              "court_stream",
+                              "own_stream_code"
                             ],
                             "additionalProperties": false
                           },
@@ -6224,7 +6330,9 @@
                           "url": "example",
                           "made_for_kids": true
                         },
-                        "format_line": "example"
+                        "format_line": "example",
+                        "court_stream": true,
+                        "own_stream_code": true
                       },
                       "source": "this_court",
                       "from_court_name": "example",

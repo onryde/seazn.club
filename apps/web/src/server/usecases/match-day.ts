@@ -60,6 +60,7 @@ import {
 import { courtNamesById, loadSettings, MOVABLE_STATUS } from "./schedule";
 import { fixtureFormatLines } from "./fixtures";
 import { readRounds, roundOf } from "./match-day-rounds";
+import { courtStreamsForDay } from "./court-streams";
 import { openStreamStates } from "./stream-sessions";
 import { kickoffsOf } from "@/server/engine-db/kickoff";
 import { servingSideOf, sportReadsServe } from "@/server/engine-db/serving";
@@ -692,12 +693,16 @@ interface PlayingExtras {
   format_line: MatchDayFixture["format_line"];
 }
 const NO_EXTRAS: PlayingExtras = { serving: null, scorer_attention: null, live_video: null, format_line: null };
+/** The match's Stream switch and own-code flag (court stream §5.5), by match; a match with no settings row reads off. */
+type Switches = ReadonlyMap<string, { on: boolean; ownCode: boolean }>;
+const NO_SWITCHES: Switches = new Map();
 
 function fixtureView(
   r: FixtureRow,
   rounds: ReadonlyMap<string, MatchDayRound>,
   streams: Record<string, "live" | "waiting">,
   extras: PlayingExtras = NO_EXTRAS,
+  switches: Switches = NO_SWITCHES,
 ): MatchDayFixture {
   return {
     id: r.id,
@@ -721,6 +726,8 @@ function fixtureView(
     scorer_attention: extras.scorer_attention,
     live_video: extras.live_video,
     format_line: extras.format_line,
+    court_stream: switches.get(r.id)?.on ?? false,
+    own_stream_code: switches.get(r.id)?.ownCode ?? false,
   };
 }
 
@@ -729,9 +736,11 @@ function courtView(
   rounds: ReadonlyMap<string, MatchDayRound>,
   streams: Record<string, "live" | "waiting">,
   extras: (fixtureId: string) => PlayingExtras,
+  switches: Switches,
+  streamLink: MatchDayCourt["stream_link"],
 ): MatchDayCourt {
   const queue: MatchDayQueued[] = c.queue.map((q) => ({
-    ...fixtureView(q.row, rounds, streams),
+    ...fixtureView(q.row, rounds, streams, NO_EXTRAS, switches),
     planned_at: q.planned_at.toISOString(),
     estimated_at: q.estimated_at.toISOString(),
   }));
@@ -742,11 +751,12 @@ function courtView(
     venue_name: c.venue_name,
     sport_noun: venueNoun(c.current?.sport_key ?? c.queue[0]?.row.sport_key ?? c.candidate_sport),
     state: c.state,
-    current: c.current === null ? null : fixtureView(c.current, rounds, streams, extras(c.current.id)),
+    current: c.current === null ? null : fixtureView(c.current, rounds, streams, extras(c.current.id), switches),
     in_use_by: c.in_use_by,
     free_since: iso(c.free_since),
     queue,
     closure: c.closure,
+    stream_link: streamLink,
   };
 }
 
@@ -802,11 +812,13 @@ export async function getMatchDay(
     ...board.courts.flatMap((c) => [...(c.current ? [c.current.id] : []), ...c.queue.map((q) => q.row.id)]),
     ...board.playingNoCourt.map((r) => r.id),
   ];
-  const [streams, desk, divisions] = await Promise.all([
+  const [streams, desk, divisions, courtStreams] = await Promise.all([
     openStreamStates(auth, ids),
     getCompetitionDesk(auth, competitionId, now),
     listDivisions(auth, competitionId),
+    courtStreamsForDay(auth.orgId, board.courts.map((c) => c.court_id), ids, now),
   ]);
+  const switches = courtStreams.switches;
   const needs = needsYouItems(
     dict,
     desk,
@@ -864,8 +876,8 @@ export async function getMatchDay(
     date: board.day,
     tz: board.tz,
     now: now.toISOString(),
-    courts: board.courts.map((c) => courtView(c, rounds, streams, extras)),
-    playing_no_court: board.playingNoCourt.map((r) => fixtureView(r, rounds, streams, extras(r.id))),
+    courts: board.courts.map((c) => courtView(c, rounds, streams, extras, switches, courtStreams.links.get(c.court_id) ?? null)),
+    playing_no_court: board.playingNoCourt.map((r) => fixtureView(r, rounds, streams, extras(r.id), switches)),
     needs_you: withFindCourt(dict, atHome, findCourts, routes.competitionMatchDay(board.comp.org_slug, board.comp.slug)),
     results_owed: needsYouHome(fixturesToday) === "match_day" ? resultsOwedOf(desk) : 0,
     fixtures_today: fixturesToday,

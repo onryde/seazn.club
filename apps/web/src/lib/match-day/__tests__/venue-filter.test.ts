@@ -32,6 +32,7 @@ const court = (id: string, name: string, venue: { id: string; name: string }, o:
   free_since: null,
   queue: [],
   closure: null,
+  stream_link: null,
   ...o,
 });
 

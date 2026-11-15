@@ -547,7 +547,11 @@ describe.skipIf(!HAS_DB)("getMatchDay", () => {
       scorer_attention: null,
       live_video: null,
       format_line: block.effectiveLine,
+      // Court stream §5.5: no switch row and no code of its own, on a court with no link.
+      court_stream: false,
+      own_stream_code: false,
     });
+    expect(c1.stream_link, "a court nobody linked reads no stream link").toBeNull();
     // Held until max(now 20, kick-off 5 + 30) = 35. f13: max(30, 35) = 35, ends 65; f24: max(90, 65) = 90.
     expect(queueOf(c1)).toEqual([
       [f13.id, 30, 35],
