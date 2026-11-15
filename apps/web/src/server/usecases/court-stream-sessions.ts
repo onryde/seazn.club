@@ -10,7 +10,10 @@ import { sql } from "@/lib/db";
 import { ACTIVE_STATES, isActive } from "@/server/relay/domain/session";
 import { recordEvent } from "@/server/relay/telemetry";
 import { markAutoStartBlocked } from "./stream-codes";
-import { apply, type SessionDeps } from "./stream-sessions";
+// The stream-sessions modules directly, never the barrel: the desk's restart (stream-sessions/start.ts) calls this module, and
+// the barrel would close an import cycle through it.
+import { apply } from "./stream-sessions/apply";
+import type { SessionDeps } from "./stream-sessions/deps";
 
 const IN_PLAY = "in_play";
 
