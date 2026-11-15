@@ -12,6 +12,9 @@ import { LOCALES } from "@/lib/i18n-constants";
 
 const BRAND = "Seazn Club";
 
+/** Mirrors `alt` in app/opengraph-image.tsx (a test pins the two equal); the explicit image below would otherwise drop it. */
+export const OG_ALT = "Seazn Club — any sport, live in minutes";
+
 /** A title that already names the brand is used as-is; anything else gets the root template's suffix. */
 export function pageTitle(title: string): Metadata["title"] {
   return title.includes(BRAND) ? { absolute: title } : title;
@@ -60,7 +63,7 @@ export function marketingMeta(opts: {
       url: canonical,
       // Explicit: a page-level openGraph replaces the inherited one, which
       // would drop the root file-convention opengraph-image.
-      images: [{ url: "/opengraph-image", width: 1200, height: 630 }],
+      images: [{ url: "/opengraph-image", width: 1200, height: 630, type: "image/png", alt: OG_ALT }],
     },
   };
 }

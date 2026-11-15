@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { marketingMeta, ogTitle, pageTitle } from "../seo-meta";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { alt as rootOgAlt } from "../../app/opengraph-image";
+import { OG_ALT, marketingMeta, ogTitle, pageTitle } from "../seo-meta";
 import { LOCALES } from "../i18n-constants";
 import { breadcrumbLd, serializeJsonLd } from "../../components/seo/json-ld";
 
@@ -57,5 +60,36 @@ describe("json-ld", () => {
     };
     expect(b.itemListElement.map((i) => i.position)).toEqual([1, 2]);
     expect(b.itemListElement.every((i) => i.item.startsWith("http"))).toBe(true);
+  });
+});
+
+describe("every real marketing meta title, in all four locales", () => {
+  const titles: [string, string][] = [];
+  for (const l of LOCALES) {
+    const dict = JSON.parse(readFileSync(join(process.cwd(), `src/dictionaries/${l}/marketing.json`), "utf8")) as Record<string, string>;
+    for (const [k, v] of Object.entries(dict)) if (/(\.meta\.title|\.metaTitle)$/.test(k) && !v.includes("{")) titles.push([`${l}:${k}`, v]);
+  }
+  it("premise: the sweep found titles in every locale", () => {
+    expect(titles.length).toBeGreaterThan(LOCALES.length * 5);
+  });
+  it.each(titles)("%s: absolute iff branded, and the share title never repeats the brand", (_k, title) => {
+    const branded = title.includes("Seazn Club");
+    expect(typeof pageTitle(title) === "object").toBe(branded);
+    if (ogTitle(title) !== title) expect(ogTitle(title)).not.toMatch(/Seazn Club\s*$/);
+  });
+});
+
+describe("share image", () => {
+  it("OG_ALT equals the root opengraph-image alt it stands in for", () => {
+    expect(OG_ALT).toBe(rootOgAlt);
+    const img = (marketingMeta({ lang: "en", path: "", title: "T", description: "d" }).openGraph as { images: { alt?: string }[] }).images[0]!;
+    expect(img.alt).toBe(rootOgAlt);
+  });
+});
+
+describe("hreflang targets", () => {
+  it.each(LOCALES.map((l) => [l]))("the %s alternate points at that locale's own URL", (l) => {
+    const langs = marketingMeta({ lang: "en", path: "/discover/cricket", title: "T", description: "d" }).alternates!.languages as Record<string, string>;
+    expect(langs[l]).toBe(`/${l}/discover/cricket`);
   });
 });

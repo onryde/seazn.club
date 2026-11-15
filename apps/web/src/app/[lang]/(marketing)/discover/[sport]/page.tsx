@@ -2,7 +2,7 @@
 // Doubles as the "tournament software for {sport}" SEO page doc 06 wanted,
 // now with a live directory underneath the copy.
 import type { Metadata } from "next";
-import { marketingMeta, ogTitle } from "@/lib/seo-meta";
+import { marketingMeta } from "@/lib/seo-meta";
 import { JsonLd, breadcrumbLd } from "@/components/seo/json-ld";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -84,7 +84,7 @@ export default async function DiscoverSportPage({ params }: { params: Promise<Pa
       <JsonLd
         data={breadcrumbLd([
           { name: "Seazn Club", path: `/${lang}` },
-          { name: ogTitle(t(d, "discover.meta.title")), path: `/${lang}/discover` },
+          { name: t(d, "discover.sport.breadcrumb"), path: `/${lang}/discover` },
           { name, path: `/${lang}/discover/${sport}` },
         ])}
       />

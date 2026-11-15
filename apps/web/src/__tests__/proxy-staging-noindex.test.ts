@@ -29,4 +29,11 @@ describe("staging noindex header (decided by the configured origin)", () => {
       expect(get(path, { host: "stg.seazn.club", "x-forwarded-host": "stg.seazn.club" }).headers.get("x-robots-tag"), path).toBeNull();
     }
   });
+
+  it("a refused CSRF call (403) on staging is still noindexed", () => {
+    process.env.OAUTH_BASE_URL = "https://stg.seazn.club";
+    const res = proxy(new NextRequest("http://localhost:3000/api/v1/anything", { method: "POST", headers: { host: "stg.seazn.club", origin: "https://evil.example" } }));
+    expect(res.status).toBe(403);
+    expect(res.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+  });
 });

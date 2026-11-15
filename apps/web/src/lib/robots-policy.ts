@@ -32,7 +32,7 @@ export function isStagingOrigin(origin: string): boolean {
 }
 
 /**
- * AI-training and answer-engine crawlers, each refused the whole site with a
+ * AI-training crawlers, each refused the whole site with a
  * rule of its own. Search engines (Googlebot, Bingbot) and link-preview bots
  * (facebookexternalhit, WhatsApp, Twitterbot, Slackbot, TelegramBot,
  * Discordbot, LinkedInBot) are deliberately NOT listed: they fall under the

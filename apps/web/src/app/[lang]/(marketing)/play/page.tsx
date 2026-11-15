@@ -6,6 +6,7 @@
 // and `?e=` are per request. The server resolves every name, computes the whole preview table and hands both to the
 // island, which never fetches a count (pre-flight D1, B4b).
 import type { Metadata } from "next";
+import { marketingMeta } from "@/lib/seo-meta";
 import { notFound } from "next/navigation";
 import { MarketingShell } from "@/components/marketing/marketing-shell";
 import { ClearFlashParam } from "@/components/quick-match/clear-flash-param";
@@ -14,8 +15,7 @@ import { playedLine } from "@/components/quick-match/played-line";
 import { QuickMatchSetupForm } from "@/components/quick-match/setup-form";
 import { RecentStrip } from "@/components/quick-match/recent-strip";
 import { getDictionary, plural, t } from "@/lib/i18n";
-import { DEFAULT_LOCALE, hasLocale, LOCALES } from "@/lib/i18n-constants";
-import { routes } from "@/lib/routes";
+import { hasLocale } from "@/lib/i18n-constants";
 import { log } from "@/server/logger";
 import { quickMatchPreviewTable } from "@/server/usecases/quick-match-preview";
 import { readRecentQuickMatches } from "@/server/usecases/quick-match-recent";
@@ -28,17 +28,12 @@ export async function generateMetadata({ params }: { params: Promise<{ lang: str
   const { lang } = await params;
   if (!hasLocale(lang)) return {};
   const d = await getDictionary(lang, "marketing");
-  return {
+  return marketingMeta({
+    lang,
+    path: "/play",
     title: t(d, "quickMatch.meta.title"),
     description: t(d, "quickMatch.meta.description"),
-    alternates: {
-      canonical: routes.quickMatchSetup(lang),
-      languages: {
-        ...Object.fromEntries(LOCALES.map((l) => [l, routes.quickMatchSetup(l)])),
-        "x-default": routes.quickMatchSetup(DEFAULT_LOCALE),
-      },
-    },
-  };
+  });
 }
 
 /** The offer, or none: a catalog that cannot be read shows the same honest line as an empty one (Q2), never a 500. */

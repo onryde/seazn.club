@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 
 export default function robots(): MetadataRoute.Robots {
   const origin = siteOrigin();
-  // Staging and previews: closed to every crawler. robots.txt alone does not
+  // Staging (a `stg.` origin): closed to every crawler. robots.txt alone does not
   // drop pages already indexed, so staging also wants an X-Robots-Tag header.
   // Fails OPEN: an unrecognised origin env never closes production.
   if (isStagingOrigin(origin)) {

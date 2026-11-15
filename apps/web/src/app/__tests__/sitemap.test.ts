@@ -53,6 +53,7 @@ vi.mock("@/server/public-site/discovery", async (importOriginal) => {
 
 import { resolveRouteData } from "next/dist/build/webpack/loaders/metadata/resolve-route-data";
 import sitemap, * as route from "../sitemap";
+import { marketingMeta } from "@/lib/seo-meta";
 import { listPublicSitemapEntries } from "@/server/public-site/data";
 import { listDiscoverySports } from "@/server/public-site/discovery";
 import { SITEMAP_ENTRIES_CACHE_KEY } from "@/server/public-site/sitemap-cache";
@@ -124,6 +125,10 @@ describe("sitemap.xml: marketing URLs match the page canonicals", () => {
       const langs = e.alternates?.languages as Record<string, string> | undefined;
       expect(Object.keys(langs ?? {}).sort(), e.url).toEqual(["en", "es", "fr", "nl", "x-default"]);
       expect(langs!["x-default"], e.url).toBe(e.url);
+      // Each alternate is that locale's own URL, and the same set the PAGE declares in its own metadata.
+      const path = e.url.slice(`${BASE}/en`.length);
+      const declared = marketingMeta({ lang: "en", path, title: "T", description: "d" }).alternates!.languages as Record<string, string>;
+      for (const [k, v] of Object.entries(declared)) expect(langs![k], `${e.url} ${k}`).toBe(`${BASE}${v}`);
     }
     const xml = resolveRouteData(entries, "sitemap");
     expect(xml).toContain('hreflang="fr"');
