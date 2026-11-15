@@ -1,0 +1,228 @@
+import "server-only";
+// Court stream, the desk's side (spec seazn.club.capture docs/specs/2026-11-14-court-stream-design.md §5; plan Task 3): an
+// organiser links a COURT, for one day, to a connected YouTube channel and is shown the court's QR; the phone at that court
+// scans it once and streams every match the organiser has switched on. Link, list and withdraw are session-editor acts.
+//
+// The court's code is a row of fixture_stream_codes with no fixture (V523) — the same sealed-tok rules as a fixture's
+// (stream-codes.ts): FORCE RLS with no policy, so every read and write here is on the non-tenant `sql`, the org a WHERE
+// the code writes. The link has no org-tying foreign key for competition_id / target_id, so both are written from the
+// authorised, org-scoped reads below and from nowhere else. The tok is held in memory between a seal or open and the
+// answer: never logged, never in an error, never in a URL.
+import { dayKeyInTz } from "@seazn/engine/scheduling";
+import { sql, withTenant, type Tx } from "@/lib/db";
+import { requireFeature } from "@/lib/entitlements";
+import { HttpError } from "@/lib/errors";
+import { resolveVenueTz } from "@/lib/tz";
+import type { CaptureQrV2 } from "@/lib/capture-qr";
+import { assertUuid, type AuthCtx } from "@/server/api-v1/auth";
+import { log } from "@/server/logger";
+import { courtMinAppVersion } from "@/server/relay/config";
+import { hasValidKek } from "@/server/relay/crypto";
+import { insertCourtStreamCode, openStreamCodeTok, wipeStreamCodeTok } from "@/server/relay/secret-columns";
+import { resolveCandidateCourts } from "./court-candidates";
+import { competitionZone, dayBounds } from "./match-day-codes";
+import { loadSettings } from "./schedule/settings";
+import { CODE_RETRIES, SLOT, drawCode, freshTok, isCodeCollision, requireSessionEditor, sha256Hex } from "./stream-codes";
+
+export type CourtStreamShown = {
+  id: string;
+  courtId: string;
+  courtName: string;
+  day: string;
+  expiresAt: Date;
+  target: { id: string; label: string };
+  /** null only when the sealed tok will not reopen: the link is listed so it can still be withdrawn. */
+  qr: CaptureQrV2 | null;
+};
+
+const KEK_MISSING = "Stream codes are not configured on this server (RELAY_KEK missing or malformed)";
+
+type LinkRow = {
+  id: string;
+  court_id: string;
+  court_name: string;
+  day: string;
+  expires_at: Date;
+  target_id: string;
+  target_label: string;
+  code_id: string | null;
+  code: string | null;
+  tok_hash: string | null;
+};
+
+type Q = Tx | typeof sql;
+// `day::text`: a bare `date` would come back as a JS Date at local midnight. The link's one live code rides along.
+// `where` is built on the same executor, so a transaction reads its own uncommitted rows.
+const linkSelect = (q: Q, where: ReturnType<Q>) => q<LinkRow[]>`
+  select l.id, l.court_id, c.name as court_name, l.day::text as day, l.expires_at, l.target_id, t.label as target_label,
+         k.id as code_id, k.code, k.tok_hash
+    from court_stream_links l
+    join courts c on c.id = l.court_id
+    join org_stream_targets t on t.id = l.target_id
+    left join fixture_stream_codes k on k.court_link_id = l.id and k.ended_at is null
+   where ${where}
+   order by c.sort, c.name, l.day, l.id`;
+
+async function shownOf(tx: Tx, r: LinkRow): Promise<CourtStreamShown> {
+  const base = {
+    id: r.id,
+    courtId: r.court_id,
+    courtName: r.court_name,
+    day: r.day,
+    expiresAt: r.expires_at,
+    target: { id: r.target_id, label: r.target_label },
+  };
+  if (r.code_id === null || r.code === null || r.tok_hash === null) return { ...base, qr: null };
+  if (!hasValidKek("RELAY_KEK")) throw new HttpError(503, KEK_MISSING, "RELAY_KEK_MISSING");
+  const tok = await openStreamCodeTok(tx, r.code_id);
+  if (tok === null || sha256Hex(tok) !== r.tok_hash) {
+    log.warn({ codeId: r.code_id, linkId: r.id }, "court stream: the sealed tok is not this code's; listed without its QR");
+    return { ...base, qr: null };
+  }
+  return { ...base, qr: { v: 2, code: r.code, slot: SLOT, tok, exp: Math.floor(r.expires_at.getTime() / 1000) } };
+}
+
+/** Insert the link's sealed code, redrawing on a code collision (a savepoint per attempt, as `mintLocked`). */
+async function mintCourtCode(tx: Tx, auth: AuthCtx, linkId: string, fresh: { tok: string; tokEnc: Buffer }): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await tx.savepoint((sp) => insertCourtStreamCode(sp, {
+        orgId: auth.orgId, courtLinkId: linkId, code: drawCode(), tokHash: sha256Hex(fresh.tok), tokEnc: fresh.tokEnc, issuedBy: auth.userId!,
+      }));
+      return;
+    } catch (err) {
+      if (isCodeCollision(err) && attempt < CODE_RETRIES) continue;
+      throw err;
+    }
+  }
+}
+
+/**
+ * Link a court to a YouTube channel for a day and show its QR (spec §5.1). The day defaults to today in the competition's
+ * zone; the QR's `exp` is the end of that day. The same court, day and target again re-shows the one QR; another target
+ * is 409 `court_already_streaming`. The tok is sealed BEFORE any write, so a missing key writes nothing.
+ */
+export async function linkCourtStream(
+  auth: AuthCtx,
+  competitionId: string,
+  input: { courtId: string; targetId: string; day?: string },
+  now: Date = new Date(),
+): Promise<CourtStreamShown> {
+  requireSessionEditor(auth);
+  assertUuid(input.courtId, "court");
+  assertUuid(input.targetId, "target");
+  const tz = await competitionZone(auth, competitionId);
+  await requireFeature(auth.orgId, "streaming.relay", competitionId);
+  if (courtMinAppVersion() === null) {
+    throw new HttpError(503, "Court streaming is not configured on this server", "court_streaming_unconfigured");
+  }
+  const [court] = await sql<{ id: string }[]>`
+    select id from courts where id = ${input.courtId} and org_id = ${auth.orgId} and archived_at is null`;
+  if (!court) throw new HttpError(404, "court not found");
+  const [target] = await sql<{ id: string; yt: string | null }[]>`
+    select id, youtube_connection_id as yt from org_stream_targets
+     where id = ${input.targetId} and org_id = ${auth.orgId} and archived_at is null`;
+  if (!target) throw new HttpError(404, "target not found");
+  if (target.yt === null) {
+    throw new HttpError(422, "A court streams to a connected YouTube channel, not a pasted stream key", "court_destination_not_youtube");
+  }
+  const day = input.day ?? dayKeyInTz(now.getTime(), tz);
+  const { opensAt, expiresAt } = dayBounds(day, tz);
+  if (expiresAt.getTime() <= now.getTime()) throw new HttpError(422, "that day is already over", "day_over");
+  const fresh = freshTok(); // seal first: a missing KEK writes nothing
+  return sql.begin(async (tx) => {
+    await tx`select pg_advisory_xact_lock(hashtext(${"court_stream:" + input.courtId + ":" + day}))`;
+    const [live] = await linkSelect(tx, tx`l.court_id = ${input.courtId} and l.day = ${day}::date and l.withdrawn_at is null`);
+    if (live) {
+      if (live.target_id !== input.targetId) {
+        throw new HttpError(409, "This court already streams to another destination today", "court_already_streaming");
+      }
+      const shown = await shownOf(tx, live);
+      if (shown.qr !== null) return shown;
+      // An envelope that will not open is never re-shown: end it and mint a fresh code for the same link.
+      if (live.code_id !== null) await wipeStreamCodeTok(tx, live.code_id, "reissued", auth.userId);
+      await mintCourtCode(tx, auth, live.id, fresh);
+      const [again] = await linkSelect(tx, tx`l.id = ${live.id}`);
+      return shownOf(tx, again!);
+    }
+    const [link] = await tx<{ id: string }[]>`
+      insert into court_stream_links (org_id, competition_id, court_id, day, tz, opens_at, expires_at, target_id, created_by)
+      values (${auth.orgId}, ${competitionId}, ${court.id}, ${day}::date, ${tz}, ${opensAt}, ${expiresAt}, ${target.id}, ${auth.userId})
+      returning id`;
+    await mintCourtCode(tx, auth, link!.id, fresh);
+    const [row] = await linkSelect(tx, tx`l.id = ${link!.id}`);
+    return shownOf(tx, row!);
+  });
+}
+
+/** The competition's candidate courts (every live division's, the scheduler's own resolver) and the courts carrying one of
+ *  its fixtures today — Match Day's court list (match-day.ts "Which courts"). */
+async function competitionCourtIds(auth: AuthCtx, competitionId: string, tz: string, now: Date): Promise<string[]> {
+  const { opensAt, expiresAt } = dayBounds(dayKeyInTz(now.getTime(), tz), tz);
+  return withTenant(auth.orgId, async (tx) => {
+    const ids = new Set<string>();
+    const divisions = await tx<{ id: string; required_court_tags: string[] | null }[]>`
+      select id, required_court_tags from divisions where competition_id = ${competitionId} and archived_at is null`;
+    for (const d of divisions) {
+      const settings = await loadSettings(tx, d.id);
+      const c = await resolveCandidateCourts(tx, d.id, settings.config.courts, d.required_court_tags ?? []);
+      for (const id of c.ids) ids.add(id);
+    }
+    const today = await tx<{ court_id: string }[]>`
+      select distinct f.court_id from fixtures f join divisions d on d.id = f.division_id
+       where d.competition_id = ${competitionId} and f.court_id is not null
+         and f.scheduled_at >= ${opensAt} and f.scheduled_at < ${expiresAt}`;
+    for (const r of today) ids.add(r.court_id);
+    return [...ids];
+  });
+}
+
+/** The competition's live court links (not withdrawn, not yet over) on its courts, each re-shown with its QR, in court order. */
+export async function listCourtStreams(auth: AuthCtx, competitionId: string, now: Date = new Date()): Promise<CourtStreamShown[]> {
+  requireSessionEditor(auth);
+  const tz = resolveVenueTz(null, await orgTz(auth, competitionId));
+  const courtIds = await competitionCourtIds(auth, competitionId, tz, now);
+  if (courtIds.length === 0) return [];
+  return sql.begin(async (tx) => {
+    const rows = await linkSelect(
+      tx,
+      tx`l.org_id = ${auth.orgId} and l.withdrawn_at is null and l.expires_at > ${now} and l.court_id in ${tx(courtIds)}`,
+    );
+    const shown: CourtStreamShown[] = [];
+    for (const r of rows) shown.push(await shownOf(tx, r));
+    return shown;
+  });
+}
+
+async function orgTz(auth: AuthCtx, competitionId: string): Promise<string | null> {
+  await competitionZone(auth, competitionId); // the 404 for another org's competition
+  const [o] = await sql<{ timezone: string | null }[]>`select timezone from organizations where id = ${auth.orgId}`;
+  return o?.timezone ?? null;
+}
+
+/** The competition and org a link belongs to, for the withdraw route's door (404 when there is no such link). */
+export async function courtLinkOwner(linkId: string): Promise<{ orgId: string; competitionId: string }> {
+  assertUuid(linkId, "court link");
+  const [row] = await sql<{ org_id: string; competition_id: string }[]>`
+    select org_id, competition_id from court_stream_links where id = ${linkId}`;
+  if (!row) throw new HttpError(404, "court link not found");
+  return { orgId: row.org_id, competitionId: row.competition_id };
+}
+
+/**
+ * Withdraw a court link: the link and its code end together, the sealed tok wiped. Idempotent: a second withdraw writes
+ * nothing. A session already live keeps streaming to its end (C1b, Task 6); the court takes no new start.
+ */
+export async function withdrawCourtStream(auth: AuthCtx, linkId: string): Promise<void> {
+  requireSessionEditor(auth);
+  assertUuid(linkId, "court link");
+  await sql.begin(async (tx) => {
+    const [link] = await tx<{ id: string; withdrawn_at: Date | null }[]>`
+      select id, withdrawn_at from court_stream_links where id = ${linkId} and org_id = ${auth.orgId} for update`;
+    if (!link) throw new HttpError(404, "court link not found");
+    if (link.withdrawn_at !== null) return;
+    await tx`update court_stream_links set withdrawn_at = now(), withdrawn_by = ${auth.userId} where id = ${linkId}`;
+    const codes = await tx<{ id: string }[]>`select id from fixture_stream_codes where court_link_id = ${linkId} and ended_at is null`;
+    for (const c of codes) await wipeStreamCodeTok(tx, c.id, "withdrawn", auth.userId);
+  });
+}

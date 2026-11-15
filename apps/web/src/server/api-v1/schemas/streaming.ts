@@ -211,6 +211,26 @@ export type StreamSessionCurrent = z.infer<typeof StreamSessionCurrent>;
  *  is when this code was minted, so a re-show answers the same instant. Served `private, no-store`: the tok is live. */
 export const StreamCodeShown = z.object({ qr: CaptureQrV2, issuedAt: z.string() }).strict();
 export type StreamCodeShown = z.infer<typeof StreamCodeShown>;
+/** Court stream (spec 2026-11-14 §5.1): POST /competitions/{id}/court-streams. `day` is `YYYY-MM-DD` on the competition's clock;
+ *  omitted = today there. */
+export const CreateCourtStream = z.object({
+  court_id: z.uuid(),
+  target_id: z.uuid(),
+  day: z.iso.date().optional(),
+}).strict();
+export type CreateCourtStream = z.infer<typeof CreateCourtStream>;
+/** A court's link for a day as the desk shows it. `qr` is the court's capture QR (v2, with `exp` the end of the day), a live
+ *  credential served `private, no-store`; null only when its sealed tok will not reopen (still withdrawable). */
+export const CourtStream = z.object({
+  id: z.uuid(),
+  court_id: z.uuid(),
+  court_name: z.string(),
+  day: z.iso.date(),
+  expires_at: z.string(),
+  target: z.object({ id: z.uuid(), label: z.string() }).strict(),
+  qr: CaptureQrV2.nullable(),
+}).strict();
+export type CourtStream = z.infer<typeof CourtStream>;
 /** §6.7.3 / §8.1 (plan T3): the fixture's stream settings. `targetId` is the destination pre-pick (PR-1; `null` clears it) and
  *  `autoStream` is the automatic-streaming switch (PR-2, W7). Either or both, at least one: a PUT writes only the fields it
  *  names, so the panel's PR-1 body `{ targetId }` still leaves the switch alone and `{ autoStream }` leaves the pick alone. */

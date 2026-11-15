@@ -113,7 +113,7 @@ export {
 export {
   StreamMode, StreamSessionState, StreamFailReason, StreamEndReason, StreamTargetKind, CreateStreamSession,
   StreamSessionCreated, StreamHealth, StreamIngest, StreamOutput, StreamRestartAllowance, StreamLostCountdown,
-  StreamSessionCurrent, StreamCodeShown, PutStreamSettings, StreamSettings, StreamPhoneBeat, StreamPhone,
+  StreamSessionCurrent, StreamCodeShown, CreateCourtStream, CourtStream, PutStreamSettings, StreamSettings, StreamPhoneBeat, StreamPhone,
   StreamPlatform, CreateStreamTarget, StreamTargetHolder, YoutubePrivacy, YoutubeConnectionView, StreamTarget,
   StreamTargetSaveOutcome, StreamTargetSaved, PatchStreamTarget, StreamTargetRemoved, PickYoutubeChannel,
   YoutubeConnectionSaved, YoutubePendingChannels, YoutubeConnectionSettings, YOUTUBE_REVOKE_OUTCOMES,

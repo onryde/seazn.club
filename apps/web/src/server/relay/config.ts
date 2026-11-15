@@ -547,3 +547,12 @@ export function tunable(name: TunableName, fallback: number, env: Record<string,
   }
   return Number(raw);
 }
+
+/** Court stream (spec 2026-11-14 §5, O13): the oldest capture app build a court code serves, in the app's own
+ *  `appVersion` form `<semver>-<commit count>` (e.g. `1.0.14-1200`). Env `COURT_MIN_APP_VERSION`, read per call. Unset,
+ *  blank or in any other shape is null — and a null means court streaming is not configured: a link is refused 503
+ *  `court_streaming_unconfigured` and nothing is written, so a deployment cannot hand out court codes no build can honour. */
+export function courtMinAppVersion(env: Record<string, string | undefined> = process.env): string | null {
+  const raw = env.COURT_MIN_APP_VERSION?.trim();
+  return raw && /^\d+\.\d+\.\d+-\d+$/.test(raw) ? raw : null;
+}

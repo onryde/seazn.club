@@ -26,7 +26,7 @@ import { insertStreamCode, openStreamCodeTok, wipeStreamCodeTok } from "@/server
 const CODE_ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz";
 const CODE_LENGTH = 12;
 /** A drawn code that collides with any other code is redrawn — at most this many times (§6.1, brief T5 Step 3). */
-const CODE_RETRIES = 3;
+export const CODE_RETRIES = 3;
 /** PR-1 carries one camera: the QR names slot 0. */
 export const SLOT = 0;
 
@@ -38,7 +38,7 @@ function tokMatches(storedHex: string | null, tok: string): boolean {
   const stored = Buffer.from(storedHex ?? DUMMY_TOK_HASH, "hex");
   return timingSafeEqual(given, stored) && storedHex !== null;
 }
-const sha256Hex = (s: string): string => createHash("sha256").update(s, "utf8").digest("hex");
+export const sha256Hex = (s: string): string => createHash("sha256").update(s, "utf8").digest("hex");
 
 export type ResolvedCode = {
   codeId: string;
@@ -92,15 +92,15 @@ async function hasOpenSession(exec: Tx | typeof sql, fixtureId: string): Promise
 const graceMinutes = (): number => tunable("CODE_GRACE_AFTER_FINISH_MINUTES", CODE_GRACE_AFTER_FINISH_MINUTES);
 
 /** A fresh tok and its envelope — sealed FIRST, before the caller writes anything (§6.1: a missing KEK writes nothing). */
-function freshTok(): { tok: string; tokEnc: Buffer } {
+export function freshTok(): { tok: string; tokEnc: Buffer } {
   if (!hasValidKek("RELAY_KEK")) throw new HttpError(503, KEK_MISSING, "RELAY_KEK_MISSING");
   const tok = randomBytes(16).toString("base64url");
   return { tok, tokEnc: sealWith("RELAY_KEK", tok) };
 }
 
-const drawCode = (): string => Array.from({ length: CODE_LENGTH }, () => CODE_ALPHABET[randomInt(CODE_ALPHABET.length)]).join("");
+export const drawCode = (): string => Array.from({ length: CODE_LENGTH }, () => CODE_ALPHABET[randomInt(CODE_ALPHABET.length)]).join("");
 
-function isCodeCollision(err: unknown): boolean {
+export function isCodeCollision(err: unknown): boolean {
   const e = err as { code?: string; constraint_name?: string };
   return e?.code === "23505" && e.constraint_name === "fixture_stream_codes_code_key";
 }
