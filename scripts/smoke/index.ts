@@ -58,7 +58,6 @@ const SELECTABLE_SUITES: Record<string, (c: SubsetCtx) => Promise<void>> = {
   matchRoom: () => matchRoomSuite(),
   arbiter: () => arbiterSuite(),
   onlineChessDesk: () => onlineChessDeskSuite(),
-  revshareSale: () => revshareSaleSuite(),
   w2cStageRules: () => w2cStageRulesSuite(),
   divisionSettings: (c) => divisionSettingsSuite(c.admin),
   epochFloorOverride: () => epochFloorOverrideSuite(),
@@ -77,6 +76,7 @@ const SELECTABLE_SUITES: Record<string, (c: SubsetCtx) => Promise<void>> = {
   quickMatch: () => quickMatchSuite(),
   funnel: () => funnelSuite(),
   marketing: () => marketingSuite(),
+  revshareSale: () => revshareSaleSuite(),
 };
 
 /** The subset's setup: the same calls main() makes for this state, in main()'s order — the admin sign-in, the plan
