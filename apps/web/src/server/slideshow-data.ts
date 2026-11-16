@@ -18,7 +18,7 @@ import { creditsNobody, forfeitLedgerOfReason, unseatedForfeitLoser } from "@/li
 import { outcomeTagWords } from "@/lib/outcome-text";
 import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
 import { getDictionary, t } from "@/lib/i18n";
-import { poolLabel } from "@/lib/pool-label";
+import { poolNaming, poolCaption } from "@/lib/pool-label";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { DEFAULT_LOCALE, toLocale } from "@/lib/i18n-constants";
 import { msgFor } from "@/lib/messages-i18n";
@@ -425,13 +425,15 @@ export async function buildDivisionSlides(
       tx<{ id: string; key: string }[]>`
         select id, key from pools where stage_id = ${stage.id} order by key`,
     );
+    // A stage of ONE pool is headed by its name alone (`poolNaming`, X-BD-7).
+    const named = poolNaming(pools);
     const tables =
       pools.length > 0
         ? await Promise.all(
             pools.map(async (p) => ({
               // From the pool's KEY in the org's locale, never its stored
               // English name (`lib/pool-label.ts`).
-              caption: `${stage.name} — ${poolLabel(publicDict, p.key)}`,
+              caption: poolCaption(publicDict, stage.name, p.id, named),
               snap: await getStandings(auth, stage.id, p.id),
             })),
           )
@@ -716,7 +718,7 @@ export async function buildPublicDivisionSlides(data: PublicSlideInput): Promise
     ]),
   );
   const stageById = new Map(data.stages.map((s) => [s.id, s]));
-  const poolById = new Map(data.pools.map((p) => [p.id, p]));
+  const poolNamed = poolNaming(data.pools);
   const slides: Slide[] = [];
   const sportModule = divisionModule(data.division);
 
@@ -727,14 +729,13 @@ export async function buildPublicDivisionSlides(data: PublicSlideInput): Promise
     // snapshot is the placement table it writes when it completes (rank only, every count zero), which read here as an
     // all-zero "table" beside the bracket. The organiser board has always walked table stages only.
     if (BRACKET_SLIDE_KINDS.has(stage.kind)) continue;
-    const pool = snap.pool_id !== null ? poolById.get(snap.pool_id) : undefined;
     const { columns, rows, level, tiebreakColumns } = standingsSlideRows(snap.rows, stageShape(sportModule, stage.table_rules, stage.kind), names, (key) => t(publicDict, key));
     slides.push({
       kind: "standings",
       division: data.division.name,
       // From the pool's KEY in the org's locale, never its stored English
       // name (`lib/pool-label.ts`).
-      caption: pool !== undefined ? `${stage.name} — ${poolLabel(publicDict, pool.key)}` : stage.name,
+      caption: poolCaption(publicDict, stage.name, snap.pool_id, poolNamed),
       columns,
       rows,
       level,

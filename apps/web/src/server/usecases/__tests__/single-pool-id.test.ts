@@ -16,6 +16,8 @@ import { generateStageFixtures, getStandings } from "../stages";
 import { addFixture } from "../stages";
 import { createEntrants } from "../entrants";
 import { listDivisionFixturesForBoard } from "../fixtures";
+import { listNamedPools } from "../stage-table-snapshot";
+import { captureStageOf } from "../capture-stage";
 import { startDivision } from "../schedule";
 import { playToDecided } from "./_quick-match-probe";
 import { BADMINTON, FOOTBALL, lineBetween, rig, rowsOf, type Rig } from "./_w5-t3-rig";
@@ -225,5 +227,38 @@ describe.skipIf(!HAS_DB)("X-SF-5 the board loader sends the pool letter for a st
     const leagueBoard = await listDivisionFixturesForBoard(league.auth, league.divisionId);
     expect(leagueBoard).toHaveLength(6);
     for (const f of leagueBoard) expect("pool_key" in f).toBe(false);
+  });
+});
+
+// ---- Fix round 1 (Important 1): the console's chip list and the capture stage name pools of a several-pool stage only ------------
+
+describe.skipIf(!HAS_DB)("X-BD-7 the desk's pool list and the capture stage label name pools of a several-pool stage only", () => {
+  it("listNamedPools: no stages -> nothing (the empty case); two pools -> both, in a stage of their own; one pool and a league -> none", async () => {
+    const two = await rig({ n: 4, kind: "group", pools: 2 });
+    const one = await rig({ n: 4, kind: "group" });
+    const league = await rig({ n: 4, kind: "league" });
+    expect(await withTenant(two.auth.orgId, (tx) => listNamedPools(tx, [])), "the empty case").toEqual([]);
+    const named = await withTenant(two.auth.orgId, (tx) => listNamedPools(tx, [two.stageId]));
+    expect(named.map((p) => p.key).sort(), "two pools: both letters").toEqual(["A", "B"]);
+    expect(await withTenant(one.auth.orgId, (tx) => listNamedPools(tx, [one.stageId])), "premise: the one-pool group HAS a pool row, and is still not named").toEqual([]);
+    expect((await poolsOf(one.stageId)).length, "premise: the one-pool group has its pool row").toBe(1);
+    expect(await withTenant(league.auth.orgId, (tx) => listNamedPools(tx, [league.stageId]))).toEqual([]);
+  });
+
+  it("captureStageOf: a two-pool group's card says its pool; a one-pool group's and a league's do not (the phone's label)", async () => {
+    const two = await rig({ n: 4, kind: "group", pools: 2 });
+    const [twoFx] = await rowsOf(two.stageId);
+    const twoStage = await captureStageOf(two.auth.orgId, twoFx!.id);
+    expect(twoStage?.pool, "two pools: the pool letter").toMatch(/^[AB]$/);
+    let checked = 1;
+    for (const kind of ["group", "league"] as const) {
+      const r = await rig({ n: 4, kind });
+      const [fx] = await rowsOf(r.stageId);
+      const stage = await captureStageOf(r.auth.orgId, fx!.id);
+      expect(stage, `${kind}: premise: a stage descriptor exists`).not.toBeNull();
+      expect(stage && "pool" in stage, `${kind}: no pool in the descriptor`).toBe(false);
+      checked += 1;
+    }
+    expect(checked).toBe(3);
   });
 });

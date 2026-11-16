@@ -84,7 +84,7 @@ import {
 } from "./data";
 import { statusOf } from "./match-centre";
 import { byPoolOrder } from "@/lib/pool-order";
-import { poolLabel } from "@/lib/pool-label";
+import { poolNaming, poolCaption } from "@/lib/pool-label";
 import { isSwissByeShellExtKey } from "@/lib/swiss-shell";
 import { BYE_SLOT_LABEL } from "@/lib/bye-line";
 import { swissRoundState, type SwissRoundState } from "@/lib/swiss-round-state";
@@ -971,7 +971,7 @@ export async function loadCompetitionHub(
     const championIds = titleEntrantIds(divisionTitle(stages, fixtures, standings));
     // A pool is named from its KEY in the org's locale, never by its stored
     // English name (`lib/pool-label.ts`).
-    const poolKey = new Map(pools.map((p) => [p.id, p.key]));
+    const poolKey = poolNaming(pools);
     // Live stage first — the same "relevance" order the division page already
     // sorts its standings panel by, so the two agree about which table reads
     // first.
@@ -1007,9 +1007,7 @@ export async function loadCompetitionHub(
           buildTableView({
             id: `${d.slug}-${stage.id}-${snap.pool_id ?? "overall"}`,
             division: { id: d.id, slug: d.slug, name: d.name },
-            caption: snap.pool_id
-              ? `${stage.name} — ${poolLabel(dict, poolKey.get(snap.pool_id))}`
-              : stage.name,
+            caption: poolCaption(dict, stage.name, snap.pool_id, poolKey),
             fullHref: `${divHref}?tab=standings`,
             rows: snap.rows,
             metricSpecs: module_?.metrics ?? [],

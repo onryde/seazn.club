@@ -9,6 +9,7 @@ import "server-only";
 //   - a table stored under no pool (a league, a Swiss stage, a group drawn before W5 T3), else
 //   - the table of the stage's ONLY pool.
 // A stage with several pools has no single table: undefined, as before (each pool is a table of its own).
+import type postgres from "postgres";
 import type { Tx } from "@/lib/db";
 
 export async function readSingleTableSnapshot<Rows = unknown>(
@@ -28,4 +29,21 @@ export async function readSingleTableSnapshot<Rows = unknown>(
 export async function onlyPoolOf(tx: Tx, stageId: string): Promise<string | null> {
   const pools = await tx<{ id: string }[]>`select id from pools where stage_id = ${stageId} limit 2`;
   return pools.length === 1 ? pools[0]!.id : null;
+}
+
+/**
+ * The SQL half of `poolNaming` (lib/pool-label.ts): true for a pool `on` (an alias of `pools`, or of anything with a `stage_id`) whose
+ * stage has SEVERAL pools. A group of one pool has a pool row but reads as a league (X-BD-7), so a surface that names pools (the board's
+ * pool letter, the desk's pool chip, the capture stage label) asks this, in one place.
+ */
+export function inSeveralPoolsSql(tx: postgres.Sql | Tx, on: string) {
+  return tx`(select count(*) from pools _sp where _sp.stage_id = ${tx(on)}.stage_id) > 1`;
+}
+
+/** The pools of `stageIds` a surface may name: those of a stage with several pools (the desk's chip list, `fixturePools`). */
+export async function listNamedPools(tx: Tx, stageIds: readonly string[]): Promise<{ id: string; key: string; name: string }[]> {
+  if (stageIds.length === 0) return [];
+  return tx<{ id: string; key: string; name: string }[]>`
+    select p.id, p.key, p.name from pools p
+    where p.stage_id in ${tx(stageIds)} and ${inSeveralPoolsSql(tx, "p")}`;
 }

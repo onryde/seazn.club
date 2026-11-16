@@ -32,6 +32,7 @@ import { benchRefusal, lineupCatalogFor } from "./lineup-catalog";
 import { validateLineup, type AnySportModule, type LineupIssue, type PositionCatalog } from "@seazn/engine/sport";
 import type { ForfeitAward, Lineup, MatchOutcome, StageKind } from "@seazn/engine/core";
 import { log } from "@/server/logger";
+import { inSeveralPoolsSql } from "./stage-table-snapshot";
 import type { Dict } from "@/lib/i18n-constants";
 import { formatLineOf } from "@/server/engine-db/rules-version";
 
@@ -476,8 +477,7 @@ export async function listDivisionFixturesForBoard(
              -- the server's own predicate, so a knockout bye line is no drag target either).
              ${byeLineSql(tx, "f")} as bye_line,
              -- W5 T3 (X-SF-5): the pool's letter, for a stage with SEVERAL pools only (a one-pool group reads as a league).
-             (select p.key from pools p where p.id = f.pool_id
-                and (select count(*) from pools q where q.stage_id = p.stage_id) > 1) as pool_key
+             (select p.key from pools p where p.id = f.pool_id and ${inSeveralPoolsSql(tx, "p")}) as pool_key
       from fixtures f
       where f.division_id = ${divisionId}
       order by f.stage_id, f.round_no, f.seq_in_round`;

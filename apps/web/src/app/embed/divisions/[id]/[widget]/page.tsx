@@ -26,7 +26,7 @@ import { divisionQualification, qualificationFixtures } from "@/server/public-si
 import { msgFor } from "@/lib/messages-i18n";
 import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
 import { byPoolOrder } from "@/lib/pool-order";
-import { poolLabel } from "@/lib/pool-label";
+import { poolNaming, poolCaption } from "@/lib/pool-label";
 import { routes } from "@/lib/routes";
 
 export const revalidate = 30;
@@ -99,7 +99,7 @@ export default async function EmbedWidgetPage({ params }: Props) {
   );
   // A pool is named from its KEY in the org's locale, never by its stored
   // English name (`lib/pool-label.ts`).
-  const poolKey = new Map(pools.map((p) => [p.id, p.key]));
+  const poolKey = poolNaming(pools);
   const publicPath = routes.publicHub(org.slug, competition.slug, division.slug);
 
   // P6 fix round 1, finding #2 (CRITICAL) — same treatment as the public
@@ -240,11 +240,7 @@ export default async function EmbedWidgetPage({ params }: Props) {
               entrantNames={entrantNames}
               entrantLogos={entrantLogos}
               entrantStatuses={entrantStatuses}
-              caption={
-                snap.pool_id
-                  ? `${stage.name} — ${poolLabel(dict, poolKey.get(snap.pool_id))}`
-                  : stage.name
-              }
+              caption={poolCaption(dict, stage.name, snap.pool_id, poolKey)}
               dict={dict}
               qualification={qualificationFor(stage, snap)}
               rules={stage.table_rules}

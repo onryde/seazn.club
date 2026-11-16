@@ -30,6 +30,7 @@ import { listSwissRoundControls } from "@/server/usecases/swiss-rounds-admin";
 import { getSwissCutDrift } from "@/server/usecases/swiss-cut-drift";
 import { listKnockoutWaiting, listStageDrawSeeds, listStartedKnockoutStageIds, listThirdPlaceDropped } from "@/server/usecases/knockout-desk";
 import { swissCutDriftStageIds } from "@/lib/swiss-cut-drift";
+import { listNamedPools } from "@/server/usecases/stage-table-snapshot";
 import { getKnockoutCutDrift } from "@/server/usecases/knockout-cut-drift";
 import { knockoutCutDriftStageIds } from "@/lib/knockout-cut-drift";
 import { divisionLockedFields } from "@/server/usecases/rule-locks";
@@ -62,7 +63,7 @@ import { findCourtHref } from "@/lib/match-day/view";
 import { needsYouHome } from "@/components/v2/desk/needs-you";
 import { DeskOpenMenu, type DeskOpenItem } from "@/components/v2/desk/desk-open-menu";
 import { comparePools } from "@/lib/pool-order";
-import { poolLabel, poolLabelsInOrder } from "@/lib/pool-label";
+import { poolNaming, poolCaption, poolLabelsInOrder } from "@/lib/pool-label";
 import { hasFeature, orgPlanKey } from "@/lib/entitlements";
 import { viewerPlanFrom } from "@/lib/viewer-plan";
 import { listEntrantLogoUrls } from "@/server/usecases/teams";
@@ -519,14 +520,9 @@ export default async function DivisionPage({
     tab === "fixtures" && fixturesPublicDict !== undefined && groupStageIds.length > 0
       ? poolLabelsInOrder(
           fixturesPublicDict,
-          await withTenant(auth.orgId, (tx) =>
-            tx<{ id: string; key: string; name: string }[]>`
-              -- W5 T3 (X-BD-7): a group of ONE pool has a pool row now, but reads as a league: no "Pool A" chip on its rows
-              -- (owner R24 pick 5: a one-pool division shows no letter). Only a stage with several pools names its pools.
-              select id, key, name from pools
-              where stage_id in ${tx(groupStageIds)}
-                and (select count(*) from pools q where q.stage_id = pools.stage_id) > 1`,
-          ),
+          // W5 T3 (X-BD-7): a group of ONE pool has a pool row now, but reads as a league: no "Pool A" chip on its rows
+          // (owner R24: a one-pool division shows no letter). Only a stage with several pools names its pools.
+          await withTenant(auth.orgId, (tx) => listNamedPools(tx, groupStageIds)),
         )
       : undefined;
 
@@ -544,13 +540,15 @@ export default async function DivisionPage({
                   select id, key, name from pools where stage_id = ${stage.id}`,
               )),
             ].sort(comparePools);
+            // A stage of ONE pool is headed by its name alone (`poolNaming`, X-BD-7).
+            const named = poolNaming(pools);
             const tables =
               pools.length > 0
                 ? await Promise.all(
                     pools.map(async (p) => ({
                       // From the pool's KEY in the viewer's locale, never
                       // its stored English name (`lib/pool-label.ts`).
-                      caption: `${stage.name} — ${poolLabel(publicDict, p.key)}`,
+                      caption: poolCaption(publicDict, stage.name, p.id, named),
                       poolId: p.id as string | null,
                       snap: await getStandings(auth, stage.id, p.id),
                     })),

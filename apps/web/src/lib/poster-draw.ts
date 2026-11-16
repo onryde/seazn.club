@@ -38,6 +38,7 @@
 // stage — is untouched.
 import { resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
 import { unseatedForfeitLoser } from "@/lib/forfeit-tag";
+import { poolNaming } from "@/lib/pool-label";
 import type { PublicFixture } from "@/server/public-site/data";
 
 export interface DrawFixtureRow {
@@ -153,7 +154,9 @@ interface RoundBucket {
 export function buildDrawModel(input: BuildDrawModelInput, lookup: SlotLabelLookup): DrawStageGroup[] {
   const { stages, pools, fixtures, entrantNames, seatText, poolText } = input;
   const stageById = new Map(stages.map((s) => [s.id, s]));
+  // Only a pool of a stage with SEVERAL pools is named: a one-pool group reads as a league (X-BD-7; `poolNaming`).
   const poolById = new Map(pools.map((p) => [p.id, p]));
+  const namedKeys = poolNaming(pools);
   const poolRank = new Map(pools.map((p, i) => [p.id, i]));
 
   const stageOrder: string[] = [];
@@ -253,7 +256,7 @@ export function buildDrawModel(input: BuildDrawModelInput, lookup: SlotLabelLook
       });
       // `poolKey` here is the pool's ID ("" for no pool); the label is built
       // from the pool's own KEY. A pool the read does not list heads nothing.
-      const pool = poolKey ? poolById.get(poolKey) : undefined;
+      const pool = poolKey && namedKeys.get(poolKey) !== null ? poolById.get(poolKey) : undefined;
       return { poolName: pool ? poolText(pool.key) : null, rounds };
     });
 

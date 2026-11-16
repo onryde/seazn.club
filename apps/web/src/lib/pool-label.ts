@@ -28,3 +28,25 @@ export function poolLabel(dict: Dict, key: string | null | undefined): string {
 export function poolLabelsInOrder(dict: Dict, pools: readonly PoolOrderRef[]): { id: string; label: string }[] {
   return [...pools].sort(comparePools).map((p) => ({ id: p.id, label: poolLabel(dict, p.key) }));
 }
+
+/**
+ * W5 T3 fix round 1 (X-BD-7; owner R24: a one-pool division shows no letter): how each pool of a read is NAMED, id -> key, or id -> null
+ * for a pool that is not named. A group of ONE pool now has a pool row (pool A), but it behaves as a league: its table is the stage's
+ * table, headed by the stage's name alone, never "Groups - Group A". Only a pool of a stage with SEVERAL pools is named. `pools` is
+ * every pool the read holds (a division's, or one stage's); a pool with no `stage_id` is read as one stage's. A pool the read does not
+ * list is absent from the map, and `poolCaption` keeps its old reading of that (the bare pool word). The one authority for "does this
+ * stage name its pools" on the public page, the embed, the hub, both slideshows, the PDF, the poster and the console.
+ */
+export function poolNaming(pools: readonly { id: string; key: string; stage_id?: string }[]): Map<string, string | null> {
+  const perStage = new Map<string, number>();
+  for (const p of pools) perStage.set(p.stage_id ?? "", (perStage.get(p.stage_id ?? "") ?? 0) + 1);
+  return new Map(pools.map((p) => [p.id, (perStage.get(p.stage_id ?? "") ?? 0) > 1 ? p.key : null]));
+}
+
+/** A table's caption: "Stage - Group A" for a named pool (`poolNaming`), the bare stage name for a stage-wide table or a pool that is not
+ *  named (a one-pool stage's), and "Stage - Group" (the bare pool word) for a pool the read does not list. */
+export function poolCaption(dict: Dict, stageName: string, poolId: string | null | undefined, naming: ReadonlyMap<string, string | null>): string {
+  if (!poolId) return stageName;
+  const key = naming.get(poolId);
+  return key === null ? stageName : `${stageName} \u2014 ${poolLabel(dict, key)}`;
+}
