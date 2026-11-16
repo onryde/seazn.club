@@ -48,6 +48,8 @@ const noOrg200 = () =>
   new Response(JSON.stringify({ ok: true, data: { id: "u1", org: null } }), { status: 200 });
 const anon401 = () =>
   new Response(JSON.stringify({ ok: false, error: "Not authenticated" }), { status: 401 });
+/** What the endpoint answers an anonymous visitor: a 200 carrying no identity, so the browser logs no failed request. */
+const anon200 = () => new Response(JSON.stringify({ ok: true, data: null }), { status: 200 });
 
 beforeEach(() => {
   // Reset the module-level identified-this-tab flag between tests.
@@ -55,6 +57,20 @@ beforeEach(() => {
 });
 
 describe("resolveIdentity", () => {
+  it("asks the identity endpoint, which answers anonymous visitors with 200: null without caching, then identifies once the session exists", async () => {
+    const storage = memoryStorage();
+    const fetchFn = vi.fn<typeof fetch>(async () => anon200());
+    expect(await resolveIdentity({ fetchFn, storage })).toBeNull();
+    // Never /api/users/me: that one answers 401 to an anonymous visitor, which every browser logs as a console error
+    // on every public page.
+    expect(fetchFn.mock.calls.map((c) => c[0])).toEqual(["/api/users/identity"]);
+    expect(storage.dump()).toEqual({});
+    fetchFn.mockImplementation(async () => ok200());
+    expect(await resolveIdentity({ fetchFn, storage })).toEqual(IDENTITY);
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(storage.dump()[IDENTITY_CACHE_KEY]!)).toEqual(IDENTITY);
+  });
+
   it("login transition: anonymous 401 resolves null WITHOUT caching, then the same tab identifies on the next resolve once the session exists", async () => {
     const storage = memoryStorage();
     // First navigation: no session yet — the magic link hasn't been consumed.

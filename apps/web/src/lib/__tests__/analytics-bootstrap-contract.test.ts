@@ -54,9 +54,11 @@ describe("analytics-bootstrap contract (task-8): root layout stays cookie-free",
     expect(source).toMatch(/usePathname/);
   });
 
-  it("lib/analytics-identity.ts owns the /api/users/me fetch and stays client-safe", () => {
+  it("lib/analytics-identity.ts owns the /api/users/identity fetch and stays client-safe", () => {
     const raw = readFileSync(IDENTITY, "utf8");
-    expect(raw).toMatch(/["']\/api\/users\/me["']/);
+    expect(raw).toMatch(/["']\/api\/users\/identity["']/);
+    // Not /api/users/me: its 401 for an anonymous visitor is a console error on every public page.
+    expect(stripComments(raw)).not.toMatch(/["']\/api\/users\/me["']/);
     const source = stripComments(raw);
     expect(source).not.toMatch(/import\s+["']server-only["']/);
     expect(source).not.toMatch(/next\/headers/);
@@ -80,6 +82,13 @@ describe("analytics-bootstrap contract (task-8): root layout stays cookie-free",
     expect(source).not.toMatch(/getCurrentUser/);
     expect(source).not.toMatch(/next\/headers/);
     expect(source).not.toMatch(/cookies\(\)/);
+  });
+
+  it("GET /api/users/identity exists and never refuses an anonymous visitor", () => {
+    const source = stripComments(readFileSync(join(__dirname, "..", "..", "app/api/users/identity/route.ts"), "utf8"));
+    expect(source).toMatch(/export\s+async function\s+GET\s*\(/);
+    expect(source).toMatch(/getCurrentUser\s*\(/);
+    expect(source).not.toMatch(/requireUser/);
   });
 
   it("GET /api/users/me exists and requires auth", () => {
