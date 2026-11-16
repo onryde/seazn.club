@@ -11,11 +11,16 @@ import { check, newSession, signIn, tag, v1, v1data } from "../harness.ts";
  * T2 (FX-G21): a league of five has a bye each round; the stage's `config.round_byes` names who sat out which round, each
  * entrant once (five rounds, five byes), so an odd field's byes are a stored fact and not a thing every reader re-derives.
  *
+ * T3 (X-BD-6, FX-G15): Add match defaults to the latest round where NEITHER side plays, not to the round after the last. A league of six
+ * plays in every round of its five, so a side is free only where its line was expunged: two round-3 lines are picked and their far
+ * sides withdrawn after Start, which frees the two near sides in round 3 and nowhere else; the match added with no round named is
+ * written in round 3 (main wrote it in round 6).
+ *
  * Every check is counted, and a run that checked nothing fails. SMOKE_ONLY=w5RoundRobinA runs it alone (SELECTABLE_SUITES).
  */
 export async function w5RoundRobinASuite(): Promise<void> {
-  // T2: 2 (4 -> 6 reconciles by pair; a 5-team league persists its byes).
-  const EXPECTED_CHECKS = 2;
+  // T2: 2 (4 -> 6 reconciles by pair; a 5-team league persists its byes). T3: 1 (Add match lands in the round both sides are free).
+  const EXPECTED_CHECKS = 3;
   let checked = 0;
   const w5Check = (label: string, cond: boolean) => {
     checked++;
@@ -29,7 +34,7 @@ export async function w5RoundRobinASuite(): Promise<void> {
     await v1(owner, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W5 RR A ${tag}`, visibility: "private" }),
   );
 
-  type Fx = { id: string; stage_id: string; home_entrant_id: string | null; away_entrant_id: string | null; ext_key?: string | null };
+  type Fx = { id: string; stage_id: string; round_no: number; home_entrant_id: string | null; away_entrant_id: string | null; ext_key?: string | null };
   type StageOut = { id: string; config: { round_byes?: { round_no: number; leg: number; entrant_id: string }[] } };
 
   /** A generic league of `n` entrants, generated once. */
@@ -98,6 +103,33 @@ export async function w5RoundRobinASuite(): Promise<void> {
     w5Check(
       "w5a FX-G21: a five-team league stores its byes (config.round_byes: one per round 1-5, each entrant once, leg 1)" +
         (ok ? "" : ` — entrants ${l.entrants.length}, byes ${JSON.stringify(byes).slice(0, 300)}`),
+      ok,
+    );
+  }
+
+  // Check 3 - X-BD-6: Add match with no round named lands in the latest round where neither side plays.
+  {
+    const l = await league("AddRound", 6);
+    const lines = await l.fixtures();
+    const round3 = lines.filter((f) => f.round_no === 3);
+    const [lineA, lineB] = round3;
+    const a = lineA?.home_entrant_id ?? "";
+    const x = lineA?.away_entrant_id ?? "";
+    const b = lineB?.home_entrant_id ?? "";
+    const y = lineB?.away_entrant_id ?? "";
+    const started = await v1(owner, `/api/v1/divisions/${l.divId}/start`, "POST");
+    const gone = [await v1(owner, `/api/v1/entrants/${x}`, "PATCH", { status: "withdrawn" }), await v1(owner, `/api/v1/entrants/${y}`, "PATCH", { status: "withdrawn" })];
+    const addRes = await v1(owner, `/api/v1/stages/${l.stageId}/fixtures`, "POST", { home_entrant_id: a, away_entrant_id: b });
+    const after = await l.fixtures();
+    const added = after.filter((f) => !lines.some((o) => o.id === f.id));
+    const rounds = Math.max(...lines.map((f) => f.round_no));
+    const ok =
+      lines.length === 15 && rounds === 5 && round3.length === 3 && new Set([a, x, b, y]).size === 4 &&
+      started.status === 200 && gone.every((g) => g.status === 200) && addRes.status === 201 &&
+      added.length === 1 && added[0]?.round_no === 3;
+    w5Check(
+      "w5a X-BD-6: Add match with no round named lands in round 3, where both sides are free (main wrote round 6)" +
+        (ok ? "" : ` - lines ${lines.length}, rounds ${rounds}, start ${started.status}, add ${addRes.status}, added ${added.length} in round ${added[0]?.round_no}`),
       ok,
     );
   }

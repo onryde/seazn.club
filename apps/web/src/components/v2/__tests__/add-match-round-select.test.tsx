@@ -101,4 +101,16 @@ describe("AddMatchRoundSelect (X-BD-6)", () => {
     }
     expect(checked).toBe(16);
   });
+
+  it("the label and the select may shrink inside the form's flex-wrap row (the 43-character name trap: a clash option carries two names)", () => {
+    const html = render({});
+    // `min-w-0` on the label is what lets a long option text shrink instead of widening the form; `max-w-full` caps it at the row.
+    const label = html.match(/<label class="([^"]*)"/);
+    expect(label, "premise: the label renders").not.toBeNull();
+    const cls = label![1]!.split(/\s+/);
+    expect(cls).toContain("min-w-0");
+    expect(cls).toContain("max-w-full");
+    const select = html.match(/<select[^>]*class="([^"]*)"/);
+    expect(select![1]!.split(/\s+/)).toEqual(expect.arrayContaining(["min-w-0", "max-w-full", "w-full"]));
+  });
 });

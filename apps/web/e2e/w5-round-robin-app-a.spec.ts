@@ -11,11 +11,11 @@ const GENERIC_CONFIG = { resultMode: "score", allowDraws: true, points: { w: 3, 
 
 type Seeded = { divisionId: string; stageId: string; ids: string[] };
 
-async function seedLeague(request: APIRequestContext, label: string, n: number): Promise<Seeded> {
+async function seedLeague(request: APIRequestContext, label: string, n: number, visibility: "private" | "public" = "private"): Promise<Seeded> {
   const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
     ends_on: "2030-12-31",
     name: `${label} ${TAG}`,
-    visibility: "private",
+    visibility,
   });
   expect(comp.status, JSON.stringify(comp.error)).toBe(201);
   const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
@@ -262,5 +262,57 @@ test.describe("X-BD-6 Add match lands in round 3", () => {
     expect(added, "exactly the one new line").toHaveLength(1);
     expect(pairOf(added[0]!), "between the two sides picked").toBe([a, b].sort().join("|"));
     expect(added[0]!.round_no, "in round 3, not round 6").toBe(3);
+  });
+});
+
+// W5 app PR A, Task 3 fix round 1 (X-SF-4, FX-G19): an odd field's round says who sits it out - on the desk's run sheet and on the public
+// page's round view - and a player who has left is never named. The expectation is the stored byes (`config.round_byes`, the engine's own
+// `rounds[].bye` written at Generate), read back through the API; the rule is "one line per round, naming that round's bye, none for a
+// departed player" - never what the page happened to print.
+test.describe("X-SF-4 a five-player league says who sits out each round", () => {
+  test("five lines on the desk and on the public page, each naming its round's bye; a withdrawal removes exactly that round's line", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(180_000);
+    const label = "SitOut";
+    const { divisionId, stageId, ids } = await seedLeague(request, label, 5, "public");
+    expect((await generate(request, stageId)).status).toBe(200);
+    const stages = await apiJson<{ id: string; config: { round_byes?: { round_no: number; entrant_id: string }[] } }[]>(request, `/api/v1/divisions/${divisionId}/stages`);
+    const byes = stages.data!.find((s) => s.id === stageId)?.config.round_byes ?? [];
+    expect(byes.length, "premise: five rounds, one bye each (FX-G21)").toBe(5);
+    const nameOf = (id: string) => `${label} P${ids.indexOf(id) + 1} ${TAG}`;
+    const byeOfRound = new Map(byes.map((b) => [b.round_no, b.entrant_id]));
+    expect(byeOfRound.size, "premise: five distinct rounds").toBe(5);
+
+    const deskPath = await divisionPath(request, divisionId, "?tab=fixtures");
+    const livePath = deskPath.replace(/^\/o\//, "/live/").replace(/\/c\//, "/").replace(/\/d\//, "/").replace(/\?tab=fixtures$/, "");
+
+    // The lines currently on a surface, as the rounds' texts; each is checked against the rule for who is on the bye.
+    async function readLines(selector: string, where: "desk" | "public") {
+      await page.goto(where === "desk" ? deskPath : livePath);
+      if (where === "desk") await showAllFixtures(page);
+      return page.locator(selector).allInnerTexts();
+    }
+    const expectNames = (texts: string[], present: string[], absent: string[], where: string) => {
+      expect(texts.length, `${where}: one line per round that has a player on the bye`).toBe(present.length);
+      for (const name of present) expect(texts.filter((t) => t.includes(name)).length, `${where}: ${name} is named once`).toBe(1);
+      for (const name of absent) expect(texts.some((t) => t.includes(name)), `${where}: ${name} is not named`).toBe(false);
+    };
+
+    const everyone = ids.map(nameOf);
+    expectNames(await readLines("[data-run-sheet-round-sits-out]", "desk"), everyone, [], "desk, before");
+    expectNames(await readLines('[data-testid="schedule-sits-out"]', "public"), everyone, [], "public, before");
+
+    // A player leaves: the round they sat out no longer says anyone sits out (the four others keep their line, unchanged).
+    const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
+    expect(started.status, JSON.stringify(started.error)).toBe(200);
+    const leaver = byeOfRound.get(3)!;
+    const gone = await apiJson(request, `/api/v1/entrants/${leaver}`, "PATCH", { status: "withdrawn" });
+    expect(gone.status, JSON.stringify(gone.error)).toBe(200);
+    const stay = ids.filter((id) => id !== leaver).map(nameOf);
+    expectNames(await readLines("[data-run-sheet-round-sits-out]", "desk"), stay, [nameOf(leaver)], "desk, after");
+    expectNames(await readLines('[data-testid="schedule-sits-out"]', "public"), stay, [nameOf(leaver)], "public, after");
+    await expectNoHorizontalScroll(page);
   });
 });

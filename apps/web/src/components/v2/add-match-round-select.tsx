@@ -31,11 +31,11 @@ export function AddMatchRoundSelect({
   const value = plan === null ? "" : String(chosenAdhocRound(plan, pick));
   const name = (id: string) => entrantNames[id] ?? id;
   return (
-    <label className="label flex flex-col gap-1 text-xs">
+    <label className="label flex min-w-0 max-w-full flex-col gap-1 text-xs">
       {msg("stage.addMatch.round")}
       <select
         data-testid="add-match-round"
-        className="input min-h-11 max-w-full py-1.5 text-sm"
+        className="input min-h-11 w-full min-w-0 max-w-full py-1.5 text-sm"
         value={value}
         disabled={!ready}
         title={ready ? undefined : msg("stage.addMatch.round.pickSides")}
