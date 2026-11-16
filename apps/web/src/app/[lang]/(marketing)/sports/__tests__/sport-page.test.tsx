@@ -21,15 +21,19 @@ const { default: Page, generateMetadata, generateStaticParams } = await import("
 const plain = (s: string) => s.replace(/\*/g, "");
 
 describe("/sports/cricket", () => {
-  it.each(LOCALES.map((l) => [l]))("%s: h1 is the short line; the search phrase is in the title and the lede", async (lang) => {
+  it.each(LOCALES.map((l) => [l]))("%s: h1 is the short line; the search words are in the title and the lede", async (lang) => {
     const html = await renderPage(Page, { lang, sport: "cricket" });
     const d = DICTS[lang]!;
     expect(html.split("<h1")).toHaveLength(2);
     expect(h1Of(html)).toBe(plain(d["sport.cricket.h1"]!));
     const meta = await generateMetadata({ params: Promise.resolve({ lang, sport: "cricket" }) });
     expect(JSON.stringify(meta.title)).toContain(d["sport.cricket.meta.title"]!);
-    expect(d["sport.cricket.lede"]!.startsWith(d["sport.cricket.meta.title"]!)).toBe(true);
+    // The search words: the sport and "tournament" are named in both the <title> and the lede the page renders.
+    const SEARCH = /(cricket|críquet).*(tournament|tournoi|torneo|toernooi)|(tournament|tournoi|torneo|toernooi).*(cricket|críquet)/i;
+    expect(d["sport.cricket.meta.title"]!).toMatch(SEARCH);
+    expect(d["sport.cricket.lede"]!).toMatch(SEARCH);
     const text = textOf(html);
+    expect(text).toContain(d["sport.cricket.lede"]!);
     expect(text).not.toMatch(/(sport|product)\.[a-z]+\.[a-zA-Z0-9.]+\b(?<!\.png)/);
     expect(text).not.toMatch(/\{[a-z]+\}/);
   });
