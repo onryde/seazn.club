@@ -35,7 +35,7 @@ import {
 } from "./capture-phone";
 import { provideDeviceLinkForPhone, type HolderVerifiedCode, type PhoneScoringLink } from "./device-links";
 import { captureStageOf } from "./capture-stage";
-import { asFixtureCode, courtFocusOf, matchLabelOf, type ResolvedCourtCode } from "./court-stream-codes";
+import { asFixtureCode, courtFocusOf, linkOpenAt, matchLabelOf, type ResolvedCourtCode } from "./court-stream-codes";
 import { endOtherCourtSessions } from "./court-stream-sessions";
 import { maybeCourtAutoStart } from "./stream-auto-court";
 import { markAutoStartBlocked, startModeFor } from "./stream-codes";
@@ -205,7 +205,7 @@ export async function postCourtBeat(court: ResolvedCourtCode, body: Beat, deps: 
 /**
  * `POST /capture/codes/{code}/start` on a court code: the current phone starts the court's in-play streamed match, never a
  * match not yet started (§5.4). In order: the holder check (409 `replaced`); a court session already open → 409
- * `already_live` naming it; no match to start → 409 `no_match`; else `startBroadcast` on the LINK's target with the court
+ * `already_live` naming it; the link's day not open now → 409 `no_match`; no match to start → 409 `no_match`; else `startBroadcast` on the LINK's target with the court
  * link guard, then every other session of the link ends (`endOtherCourtSessions`). Refusals map as a fixture code's start.
  */
 export async function postCourtStart(court: ResolvedCourtCode, body: CaptureStartBody, deps: SessionDeps): Promise<CaptureStartOk> {
@@ -213,6 +213,9 @@ export async function postCourtStart(court: ResolvedCourtCode, body: CaptureStar
   const current = await holderOf(sql, court.codeId, open);
   if (!current || current.phone !== body.phone) throw new CaptureRefusalError(409, "replaced", "this phone is not the slot's current phone");
   if (open) throw alreadyLive(open);
+  // Final review m-1: a code for a later day (or one past its day) has no match to stream today — the existing `no_match`, the
+  // contract being pinned. Read before the focus, so a closed window costs no match read.
+  if (!linkOpenAt(court.link, deps.now())) throw new CaptureRefusalError(409, "no_match", "this court's day is not open");
   const { focus } = await courtFocusOf(court.link);
   if (focus.start === null) throw new CaptureRefusalError(409, "no_match", "this court has no match in play to stream");
   const fixtureId = focus.start;

@@ -314,6 +314,25 @@ describe.skipIf(!HAS_DB)("a court code's descriptor, beat, start and record", ()
     expect(await refusal(postStart(qr.code, qr.tok, { phone: phoneId("not-current") }, deps, clock()))).toBe("409:replaced");
   });
 
+  it("final review m-1: a court code for a later day starts nothing today — the phone's start is 409 no_match and startBroadcast itself refuses the pairing; the same call inside the day starts", async () => {
+    const phone = phoneId("future-day");
+    await claimed(phone);
+    await streamed(A, 0);
+    await setStatus(A, "in_play");
+    const [pairing] = await pairingOf(phone);
+    const actor = { userId: day.auth.userId!, orgId: day.orgId, source: "phone" as const, pairingId: pairing!.id };
+    const opts = { targetId, startCause: "operator" as const, phone: "present" as const, mode: "passthrough" as const, courtLinkId: linkId };
+    // The link's day is tomorrow: the phone has scanned today's printout of a code for a later day.
+    await sql`update court_stream_links set opens_at = opens_at + interval '1 day', expires_at = expires_at + interval '1 day' where id = ${linkId}`;
+    expect(await refusal(operatorStart(phone))).toBe("409:no_match");
+    await expect(startBroadcast(actor, A, opts, deps)).rejects.toThrow(/is not on fixture .*'s court link \(the link's day is not open\)/);
+    expect(await sessionsOf(A), "nothing was written").toBe(0);
+    // Positive control: the day brought back to now — the same phone, match and call start.
+    await sql`update court_stream_links set opens_at = opens_at - interval '1 day', expires_at = expires_at - interval '1 day' where id = ${linkId}`;
+    const sid = await operatorStart(phone);
+    expect(await sessionRow(sid)).toMatchObject({ fixture_id: A, court_link_id: linkId });
+  });
+
   it("startBroadcast refuses a court pairing for a fixture on another court, with the switch off, on a withdrawn link, or with another targetId", async () => {
     const phone = phoneId("guard");
     await claimed(phone);

@@ -19,7 +19,7 @@ import { AUTO_START_RETRY_SECONDS, PHONE_SILENT_FLOOR_SECONDS, tunable } from "@
 import { autoStartVerdict, type AutoStartRefusal, type PhoneMode } from "@/server/relay/domain/auto-stream";
 import { isPresent } from "@/server/relay/domain/pairing";
 import { ACTIVE_STATES } from "@/server/relay/domain/session";
-import { courtFocusOf, type ResolvedCourtCode } from "./court-stream-codes";
+import { courtFocusOf, linkOpenAt, type ResolvedCourtCode } from "./court-stream-codes";
 import { endOtherCourtSessions } from "./court-stream-sessions";
 import { autoStartRefusalOf } from "./stream-auto";
 import { startModeFor } from "./stream-codes";
@@ -69,7 +69,8 @@ const setRefusal = (fixtureId: string, refusal: AutoStartRefusal | null) =>
 
 /**
  * The court's automatic start, for the current court phone's beat. In order:
- *  1. the link is open: its code active (not finishing or ended), the link not withdrawn, `now` before the day's end —
+ *  1. the link is open: its code active (not finishing or ended), the link not withdrawn, `now` inside the day (`opens_at <= now`
+ *     < the day's end; final review m-1: a code minted for a later day starts nothing today) —
  *     else `link_closed`, nothing read or claimed;
  *  2. the court's match to start (`courtFocus`'s `start`: a streamed in-play match with no session of its own, while the
  *     court is idle or its current session is due for handover) — none → `not_due`;
@@ -86,7 +87,7 @@ export async function maybeCourtAutoStart(
 ): Promise<CourtAutoStartResult> {
   const { court, pairingId, phoneMode } = a;
   const { link } = court;
-  if (court.status !== "active" || link.withdrawnAt !== null || now.getTime() >= link.expiresAt.getTime()) {
+  if (court.status !== "active" || link.withdrawnAt !== null || !linkOpenAt(link, now)) {
     return { fired: false, why: "link_closed" };
   }
   const { focus } = await courtFocusOf(link);

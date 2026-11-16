@@ -356,6 +356,23 @@ describe.skipIf(!HAS_DB)("a court's automatic start and handover", () => {
     expect((await settingsOf(A))!.auto_start_attempted_at, "no attempt was claimed").toBeNull();
   });
 
+  it("final review m-1: a link whose day has not opened yet is link_closed too — nothing starts, nothing is claimed — and opens the instant its day does", async () => {
+    await streamOn(B);
+    await aLive();
+    atMin(11);
+    await kickoff(B, 11);
+    const [pairing] = await pairingOf(P);
+    await sql`update fixture_stream_pairings set last_beat_at = ${clock()} where id = ${pairing!.id}`;
+    const live = await court();
+    const run = (c: ResolvedCourtCode, t: Date) => maybeCourtAutoStart({ court: c, pairingId: pairing!.id, phoneMode: "automatic" }, deps, t);
+    const tomorrow = { ...live, link: { ...live.link, opensAt: new Date(clock().getTime() + 1) } };
+    expect(await run(tomorrow, clock())).toEqual({ fired: false, why: "link_closed" });
+    expect(await sessionsOf(B)).toEqual([]);
+    expect((await settingsOf(B))!.auto_start_attempted_at, "a closed window claims nothing").toBeNull();
+    // Positive control: the same facts with the window open this very millisecond — the handover is due and fires.
+    expect(await run({ ...live, link: { ...live.link, opensAt: clock() } }, clock())).toMatchObject({ fired: true });
+  });
+
   it("past the day's end or withdrawn: link_closed, nothing starts, the live session runs on", async () => {
     await streamOn(B);
     const sidA = await aLive();

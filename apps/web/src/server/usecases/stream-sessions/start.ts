@@ -237,7 +237,7 @@ export async function startBroadcast(
   // fixture's code is a caller bug — refused before anything is weighed or written, never a session tied to the wrong
   // phone. Witness: "startBroadcast refuses a pairing from another fixture's code". A court start (`courtLinkId`) reads
   // its pairing from the court's code instead, and that is judged by `courtPairingOf`.
-  const pairing = actor.pairingId === null ? null : await pairingFor(actor.pairingId, fixtureId, opts);
+  const pairing = actor.pairingId === null ? null : await pairingFor(actor.pairingId, fixtureId, opts, deps.now());
   // §6.7.1 "the actor", made a guard (B4 review m-2): a phone's or the automatic start rides the slot's pairing and is
   // attributed to its stream code's `issued_by`, who vouches for the phone. A caller that names anyone else, or brings
   // no pairing, is a caller bug — refused by name before anything is weighed or written, so `created_by` and the
@@ -537,20 +537,20 @@ export async function startBroadcast(
 
 type GuardRow = {
   code_id: string; issued_by: string; code_fixture: string | null; court_link_id: string | null; link_court: string | null;
-  link_target: string | null; withdrawn_at: Date | null; fixture_court: string | null; court_stream: boolean;
+  link_target: string | null; withdrawn_at: Date | null; opens_at: Date | null; expires_at: Date | null; fixture_court: string | null; court_stream: boolean;
 };
 
 /** The start's pairing, judged against the fixture in ONE read (court stream plan Task 7). Without `courtLinkId` the
  *  pairing's code must be the fixture's own (today's rule). With it: the code is that court link's; the link is not
  *  withdrawn; its court is the fixture's court; the fixture's Stream switch is on; and the start's target is the link's
- *  (O9: a court streams to its link's channel, never another). Each failure is a caller bug, refused by name before
+ *  (O9: a court streams to its link's channel, never another); and `now` is inside the link's day (m-1). Each failure is a caller bug, refused by name before
  *  anything is weighed or written. */
 async function pairingFor(
-  pairingId: string, fixtureId: string, opts: { targetId: string; courtLinkId?: string },
+  pairingId: string, fixtureId: string, opts: { targetId: string; courtLinkId?: string }, now: Date,
 ): Promise<{ code_id: string; issued_by: string }> {
   const [g] = await sql<GuardRow[]>`
     select p.code_id, c.issued_by, c.fixture_id as code_fixture, c.court_link_id, l.court_id as link_court, l.target_id as link_target,
-           l.withdrawn_at, f.court_id as fixture_court, coalesce(st.court_stream, false) as court_stream
+           l.withdrawn_at, l.opens_at, l.expires_at, f.court_id as fixture_court, coalesce(st.court_stream, false) as court_stream
       from fixture_stream_pairings p
       join fixture_stream_codes c on c.id = p.code_id
       join fixtures f on f.id = ${fixtureId}
@@ -564,6 +564,10 @@ async function pairingFor(
   const notOnLink = (why: string) => new Error(`startBroadcast: pairing ${pairingId} is not on fixture ${fixtureId}'s court link (${why})`);
   if (!g || g.court_link_id === null || g.court_link_id !== opts.courtLinkId) throw notOnLink("the pairing's code is not that link's");
   if (g.withdrawn_at !== null) throw notOnLink("the link is withdrawn");
+  // Final review m-1: the link's own day (`opens_at <= now < expires_at`, the window `liveCourtLinkFor` reads).
+  if (g.opens_at === null || g.expires_at === null || g.opens_at.getTime() > now.getTime() || now.getTime() >= g.expires_at.getTime()) {
+    throw notOnLink("the link's day is not open");
+  }
   if (g.link_court === null || g.fixture_court !== g.link_court) throw notOnLink("the match is on another court");
   if (!g.court_stream) throw notOnLink("the match's Stream switch is off");
   if (opts.targetId !== g.link_target) throw notOnLink("the target is not the link's");

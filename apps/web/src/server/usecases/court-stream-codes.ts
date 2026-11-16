@@ -28,6 +28,11 @@ export type CourtLinkRef = {
   withdrawnAt: Date | null;
 };
 
+/** Is `now` inside the link's day (`opens_at <= now < expires_at`, the window `liveCourtLinkFor` reads in SQL)? A code minted for a
+ *  later day is served, but starts nothing before its day opens (final review m-1). */
+export const linkOpenAt = (link: Pick<CourtLinkRef, "opensAt" | "expiresAt">, now: Date): boolean =>
+  link.opensAt.getTime() <= now.getTime() && now.getTime() < link.expiresAt.getTime();
+
 /** A court's code, resolved: `ResolvedCode` without a fixture, with its link. `status` is C1's (C2 at the day's end). */
 export type ResolvedCourtCode = {
   kind: "court";
