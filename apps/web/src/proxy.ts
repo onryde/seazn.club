@@ -97,7 +97,9 @@ export function cspHeader(
     `base-uri 'self'`,
     `form-action 'self'`,
     `frame-ancestors 'self'`,
-    `upgrade-insecure-requests`,
+    // Only on the enforced policy: a browser ignores it in a report-only one and logs a console error saying so on
+    // every page.
+    ...(enforce ? [`upgrade-insecure-requests`] : []),
   ].join("; ");
   return {
     name: enforce ? "Content-Security-Policy" : "Content-Security-Policy-Report-Only",
