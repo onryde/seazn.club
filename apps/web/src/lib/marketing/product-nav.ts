@@ -10,6 +10,7 @@ export type NavLink = { key: string; href: string };
 
 export const PRODUCT_LINKS = [
   { key: "nav.product.streaming", href: "/product/streaming" },
+  { key: "nav.product.remoteScoring", href: "/product/remote-scoring" },
   { key: "nav.formats", href: "/formats" },
   { key: "nav.scheduling", href: "/scheduling" },
 ] as const satisfies readonly NavLink[];

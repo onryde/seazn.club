@@ -6,7 +6,7 @@ import { expectNoHorizontalScroll } from "./helpers";
 
 test.use({ storageState: { cookies: [], origins: [] } });
 
-const PAGES = ["/product/streaming", "/sports/cricket"] as const;
+const PAGES = ["/product/streaming", "/product/remote-scoring", "/sports/cricket"] as const;
 const WIDTHS = [320, 768, 1280] as const;
 
 const score = (page: Page, id: "chase-score" | "chase-mc-score" | "chase-stream-score") => page.getByTestId(id);
@@ -124,6 +124,70 @@ test.describe("product pages: the working demo", () => {
   });
 });
 
+test.describe("remote scoring: the signal demo", () => {
+  test("no signal: the phone keeps scoring, the other screen stands still, then catches up in one go", async ({ page }) => {
+    await visit(page, "/product/remote-scoring");
+    const demo = page.getByTestId("signal-demo");
+    const phone = page.getByTestId("signal-phone-score");
+    const others = page.getByTestId("signal-server-score");
+    const sw = page.getByTestId("signal-switch");
+    const tapSignalKey = async (key: string) => {
+      const k = page.getByTestId(`signal-key-${key}`);
+      await k.scrollIntoViewIfNeeded();
+      expect(await k.evaluate((el) => { const r = el.getBoundingClientRect(); return document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) === el; }), `key ${key} on top`).toBe(true);
+      await k.click();
+    };
+
+    // With signal a tap reaches everyone at once.
+    await expect(sw).toHaveAttribute("aria-checked", "true");
+    await tapSignalKey("1");
+    await expect(phone).toHaveText("28/2");
+    await expect(others).toHaveText("28/2");
+
+    await sw.click();
+    await expect(sw).toHaveAttribute("aria-checked", "false");
+    await expect(demo).toHaveAttribute("data-signal", "off");
+    for (const key of ["4", "6", "wide"]) await tapSignalKey(key);
+    await expect(phone).toHaveText("39/2");
+    await expect(others).toHaveText("28/2");
+    await expect(demo).toHaveAttribute("data-waiting", "3");
+    await expect(page.getByTestId("signal-badge")).toContainText("3");
+    await expect(page.getByTestId("signal-server-note")).toHaveText("Waiting for the phone");
+
+    // Taking back a tap that never left the phone shortens the queue.
+    await page.getByTestId("signal-undo").click();
+    await expect(phone).toHaveText("38/2");
+    await expect(demo).toHaveAttribute("data-waiting", "2");
+    await expect(others).toHaveText("28/2");
+
+    await sw.click();
+    await expect(others).toHaveText("38/2");
+    await expect(demo).toHaveAttribute("data-waiting", "0");
+    await expect(page.getByTestId("signal-badge")).toContainText("2 sent");
+    await expect(page.getByTestId("signal-server-note")).toHaveText("Up to date");
+  });
+
+  test("the switch works from the keyboard and says what it is", async ({ page }) => {
+    await visit(page, "/product/remote-scoring");
+    const sw = page.getByRole("switch", { name: "Signal" });
+    await sw.focus();
+    await page.keyboard.press("Space");
+    await expect(sw).toHaveAttribute("aria-checked", "false");
+    await page.keyboard.press("Enter");
+    await expect(sw).toHaveAttribute("aria-checked", "true");
+  });
+
+  test("the nav's Product menu lists Remote scoring and lands on it", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto("/pricing");
+    const product = page.getByTestId("nav-menu-product");
+    await product.getByRole("button").click();
+    await product.getByRole("link", { name: "Remote scoring" }).click();
+    await expect(page).toHaveURL(/\/product\/remote-scoring$/);
+    await expect(page.locator("h1")).toHaveText("No signal? Keep scoring.");
+  });
+});
+
 test.describe("product pages: layout", () => {
   for (const path of PAGES) {
     for (const width of WIDTHS) {
@@ -147,7 +211,7 @@ test.describe("product pages: layout", () => {
         expect(m.h1).toBe(1);
         expect(errors).toEqual([]);
         // Every pad key is a real tap target.
-        const sizes = await page.locator('[data-testid^="chase-key-"]').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().height)));
+        const sizes = await page.locator('[data-testid^="chase-key-"], [data-testid^="signal-key-"]').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().height)));
         expect(sizes.length).toBe(8);
         for (const h of sizes) expect(h).toBeGreaterThanOrEqual(44);
       });
@@ -177,10 +241,13 @@ test.describe("product pages: layout", () => {
   test("with script off, both pages read complete and the demo shows its opening state", async ({ browser }) => {
     const ctx = await browser.newContext({ javaScriptEnabled: false, storageState: { cookies: [], origins: [] } });
     const page = await ctx.newPage();
-    for (const [path, sections] of [["/product/streaming", 8], ["/sports/cricket", 9]] as const) {
+    for (const [path, sections, scores] of [
+      ["/product/streaming", 8, ["chase-score", "chase-stream-score"]],
+      ["/sports/cricket", 9, ["chase-score", "chase-stream-score"]],
+      ["/product/remote-scoring", 7, ["signal-phone-score", "signal-server-score"]],
+    ] as const) {
       await page.goto(path);
-      await expect(page.getByTestId("chase-score")).toHaveText("27/2");
-      await expect(page.getByTestId("chase-stream-score")).toHaveText("27/2");
+      for (const id of scores) await expect(page.getByTestId(id)).toHaveText("27/2");
       await expect(page.locator("[data-section]")).toHaveCount(sections);
       await expect(page.locator(".mkp h2")).toHaveCount(sections - 2);
       // The questions are readable without script: the first is open, the rest are native disclosures.

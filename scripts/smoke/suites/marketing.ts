@@ -44,6 +44,11 @@ export async function marketingSuite(): Promise<void> {
   check("marketing: /product/streaming 200", streaming.status === 200);
   check("marketing: /product/streaming has its headline", streamingHtml.includes("on your stream."));
   check("marketing: /product/streaming demo renders its opening score", streamingHtml.includes('data-testid="chase-stream-score">27/2<'));
+  const remote = await fetch(`${BASE}/product/remote-scoring`);
+  const remoteHtml = await remote.text();
+  check("marketing: /product/remote-scoring 200", remote.status === 200);
+  check("marketing: /product/remote-scoring has its headline", remoteHtml.replace(/<[^>]+>/g, "").includes("No signal? Keep scoring."));
+  check("marketing: /product/remote-scoring demo opens online with both screens level", remoteHtml.includes('data-testid="signal-phone-score">27/2<') && remoteHtml.includes('data-testid="signal-server-score">27/2<'));
   const cricket = await fetch(`${BASE}/sports/cricket`);
   const cricketHtml = await cricket.text();
   check("marketing: /sports/cricket 200", cricket.status === 200);
