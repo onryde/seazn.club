@@ -7,7 +7,8 @@
 //
 // What is checked, and how:
 //  - WHICH kinds are account kinds is the engine's own declaration (`OUTBOX_KIND_FACTS`), compared with a list typed here from the
-//    spec (`chess_invite`, wave 2's seven, wave 4's seven and sponsor deals' `sponsor_deal_paid`). A new account kind is then a failure that asks for a decision here, not a
+//    spec (`chess_invite`, wave 2's seven, wave 4's seven, sponsor deals' `sponsor_deal_paid` and the seven billing lifecycle mails). A new
+//    account kind is then a failure that asks for a decision here, not a
 //    quiet pass.
 //  - Every account kind that has moved is swept through its real producer. Wave 2's T1 registered its kinds before their producers moved,
 //    each kind task (T2-T9) added its producer here, and T10 deleted the list of the pending ones. Wave 4's T1 registered its seven
@@ -32,6 +33,9 @@
 //    the notice read the database only; the other refund handlers no-op on a pass charge (their one Stripe lookup needs a Stripe key).
 //  - The trial warning is driven through the real `processStripeEvent` (`customer.subscription.trial_will_end`) on a trialing billing
 //    group. Nothing reaches Stripe: the group is found by the subscription id it stores.
+//  - The seven billing lifecycle mails are driven through the real `processStripeEvent` with REAL Stripe payloads captured in a sandbox
+//    (usecases/__tests__/_billing-lifecycle-fixtures.ts), each on its own billing group; the paid-invoice kinds' and the confirmation
+//    request's positive pair is the invoice link the payload carries.
 //  - The suspension notices are driven through the real discipline producers on a football division with a unique name (the positive
 //    pair) whose player is claimed by a fresh account: the confirmed notice through `decideSuspension` (confirm). Its request makes the
 //    first attempt, which the transport refuses (503), so the row is judged once that attempt is over and it is queued again. The
@@ -80,6 +84,7 @@ import { processStripeEvent } from "@/server/usecases/billing-events";
 import { seedCommunityGroup, seedDetachableGroup, seedLiveGroup, seedPassOrg, seedSponsorOrder, seedTrialingGroup } from "@/server/usecases/__tests__/_money-fixtures";
 import { detachOrgFromGroup, offerGroupTransfer } from "@/server/usecases/billing-groups";
 import { fakeSession, seedRegistration, stripeRig } from "@/server/usecases/__tests__/_registration-fixtures";
+import { capturedEvent, freshInvoiceId, seedBillingGroup } from "@/server/usecases/__tests__/_billing-lifecycle-fixtures";
 import { claimPerson, makeAssignment, makeClaimedOfficial, makeFixture, seedFootballDivision } from "@/server/usecases/__tests__/_seed";
 import { putMyReport, submitMyReport } from "@/server/usecases/match-reports";
 import { refreshDiscipline } from "@/server/usecases/scoring";
@@ -107,6 +112,14 @@ const SPEC_ACCOUNT_KINDS: readonly OutboxKind[] = [
   "group_org_left",
   // Sponsor deals Task 23 (D13): born on the outbox after phase 3, the owner's "a sponsor has paid" notice.
   "sponsor_deal_paid",
+  // The billing lifecycle mails (2026-11-15): the payer's account.
+  "trial_expired",
+  "plan_activated",
+  "renewal_failed",
+  "renewal_upcoming",
+  "renewal_paid",
+  "subscription_changed",
+  "renewal_action_required",
 ];
 
 beforeEach(() => stubOutboxEnv());
@@ -258,6 +271,67 @@ describe.skipIf(!HAS_DB)("an account kind's sealed body never names its recipien
       await processStripeEvent(event as unknown as Stripe.Event);
       // The warning links to the billing page, where the payer adds a card or cancels.
       return { rowIds: await rowIdsOf("trial_ending", g.groupId), positive: /\/settings\/billing/ };
+    },
+    // The billing lifecycle mails (2026-11-15), each from a REAL Stripe payload captured in a sandbox (_billing-lifecycle-fixtures.ts)
+    // through the real webhook dispatch. The test env has no Stripe key, so the renewal seat true-up's best-effort Stripe read fails and
+    // is logged; nothing reaches Stripe.
+    trial_expired: async () => {
+      const trialEnd = Math.floor(Date.now() / 1000) - 60;
+      const g = await seedBillingGroup({ status: "trialing", trialEnd: new Date(trialEnd * 1000), prefix: "akb" });
+      await processStripeEvent(capturedEvent("subscription.deleted.trial_ran_out_no_card", { stripeSubId: g.stripeSubId, anchor: (o) => o.trial_end, at: trialEnd }));
+      // The notice links to the billing page, where the payer picks a plan again.
+      return { rowIds: await rowIdsOf("trial_expired", g.groupId), positive: /\/settings\/billing/ };
+    },
+    plan_activated: async () => {
+      const g = await seedBillingGroup({ status: "active", prefix: "akb" });
+      const e = capturedEvent("invoice.payment_succeeded.new_paid_monthly", { stripeSubId: g.stripeSubId, anchor: (o) => o.created, at: Math.floor(Date.now() / 1000), edit: freshInvoiceId });
+      await processStripeEvent(e);
+      // The welcome links to the invoice Stripe hosts for this payment.
+      return { rowIds: await rowIdsOf("plan_activated", g.groupId), positive: literal((e.data.object as Stripe.Invoice).hosted_invoice_url!) };
+    },
+    renewal_failed: async () => {
+      const g = await seedBillingGroup({ status: "active", prefix: "akb" });
+      await processStripeEvent(
+        capturedEvent("invoice.payment_failed.monthly_renewal", { stripeSubId: g.stripeSubId, anchor: (o) => o.created, at: Math.floor(Date.now() / 1000), edit: freshInvoiceId }),
+      );
+      // The notice links to the billing page, where the payer fixes the card.
+      return { rowIds: await rowIdsOf("renewal_failed", g.groupId), positive: /\/settings\/billing/ };
+    },
+    renewal_upcoming: async () => {
+      const g = await seedBillingGroup({ status: "active", prefix: "akb" });
+      await processStripeEvent(
+        capturedEvent("invoice.upcoming.annual_renewal", { stripeSubId: g.stripeSubId, anchor: (o) => o.period_end, at: Math.floor(Date.now() / 1000) + 3 * 86_400 }),
+      );
+      return { rowIds: await rowIdsOf("renewal_upcoming", g.groupId), positive: /\/settings\/billing/ };
+    },
+    renewal_paid: async () => {
+      const g = await seedBillingGroup({ status: "active", trialEnd: new Date(Date.now() - 365 * 86_400_000), prefix: "akb" });
+      const e = capturedEvent("invoice.payment_succeeded.annual_renewal", { stripeSubId: g.stripeSubId, anchor: (o) => o.created, at: Math.floor(Date.now() / 1000), edit: freshInvoiceId });
+      // The receipt is opt-in (default off): on for this one event, then back as it was.
+      const before = process.env.BILLING_RENEWAL_RECEIPT_EMAILS;
+      process.env.BILLING_RENEWAL_RECEIPT_EMAILS = "1";
+      try {
+        await processStripeEvent(e);
+      } finally {
+        if (before === undefined) delete process.env.BILLING_RENEWAL_RECEIPT_EMAILS;
+        else process.env.BILLING_RENEWAL_RECEIPT_EMAILS = before;
+      }
+      // The receipt links to the invoice Stripe hosts for this payment.
+      return { rowIds: await rowIdsOf("renewal_paid", g.groupId), positive: literal((e.data.object as Stripe.Invoice).hosted_invoice_url!) };
+    },
+    subscription_changed: async () => {
+      const g = await seedBillingGroup({ status: "active", prefix: "akb" });
+      await processStripeEvent(
+        capturedEvent("subscription.updated.cancel_scheduled", { stripeSubId: g.stripeSubId, anchor: (o) => o.cancel_at, at: Math.floor(Date.now() / 1000) + 10 * 86_400 }),
+      );
+      return { rowIds: await rowIdsOf("subscription_changed", g.groupId), positive: /\/settings\/billing/ };
+    },
+    renewal_action_required: async () => {
+      const g = await seedBillingGroup({ status: "active", prefix: "akb" });
+      const e = capturedEvent("invoice.payment_action_required.monthly_renewal", { stripeSubId: g.stripeSubId, anchor: (o) => o.created, at: Math.floor(Date.now() / 1000), edit: freshInvoiceId });
+      await processStripeEvent(e);
+      // The request's button is the Stripe-hosted page where the payer confirms.
+      return { rowIds: await rowIdsOf("renewal_action_required", g.groupId), positive: literal((e.data.object as Stripe.Invoice).hosted_invoice_url!) };
     },
     suspension_confirmed: async () => {
       const { ctx, divisionName } = await claimedFootballDivision();

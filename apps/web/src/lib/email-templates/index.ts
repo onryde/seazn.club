@@ -62,6 +62,22 @@ export {
 } from "./sponsor-deal-paid";
 export { trialEndingTemplate, type TrialEndingArgs } from "./trial-ending";
 export {
+  trialExpiredTemplate,
+  planActivatedTemplate,
+  renewalPaidTemplate,
+  renewalFailedTemplate,
+  renewalActionRequiredTemplate,
+  renewalUpcomingTemplate,
+  subscriptionChangedTemplate,
+  type TrialExpiredArgs,
+  type PaidInvoiceArgs,
+  type RenewalFailedArgs,
+  type RenewalActionRequiredArgs,
+  type RenewalUpcomingArgs,
+  type SubscriptionChange,
+  type SubscriptionChangedArgs,
+} from "./billing-lifecycle";
+export {
   sponsorDisputeAlertTemplate,
   type SponsorDisputeAlertArgs,
 } from "./sponsor-dispute-alert";

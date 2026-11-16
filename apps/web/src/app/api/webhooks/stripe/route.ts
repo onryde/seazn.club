@@ -44,8 +44,15 @@ export async function POST(req: Request) {
     // visible as "received" on /admin/billing-events for replay.
     await runEvent(event);
   } catch (err) {
-    // Return 5xx so Stripe retries
-    log.error({ err }, "stripe-webhook: processing failed");
+    // Return 5xx so Stripe retries.
+    // A paid invoice that outran customer.subscription.created (billing-events/lifecycle-mail.ts) is an expected wait, not a fault:
+    // the retry succeeds once the link lands. A warning, so it raises no Sentry error. Matched by name — the route never imports the
+    // usecase internals.
+    if (err instanceof Error && err.name === "BillingGroupNotLinkedError") {
+      log.warn({ err }, "stripe-webhook: invoice waits for its subscription link; Stripe will retry");
+    } else {
+      log.error({ err }, "stripe-webhook: processing failed");
+    }
     return NextResponse.json({ error: "Processing failed" }, { status: 500 });
   }
 

@@ -13,13 +13,14 @@ import "server-only";
 //   ledger            billing_events: claim/run, replay, stuck-event sweep, reads
 //   checkout          checkout.session.completed (packs, passes, subscriptions)
 //   subscriptions     customer.subscription.* and payment-method mirroring
-//   invoices          invoice.payment_failed / payment_succeeded, renewal true-up
+//   invoices          invoice.payment_failed / payment_succeeded / payment_action_required, renewal true-up
 //   refunds           charge.refunded: pass revoke, AI pack + match-credit claw-back
 //   disputes          platform-charge disputes
 //   connect           Connect payout health and external-account changes
 //   addon-sync        seat / extra-org add-on rows from subscription items
 //   addon-pricing     extra-org rider re-pricing and its reconciliation sweep
 //   group-resolution  which billing group / org a Stripe object belongs to
+//   lifecycle-mail    the billing lifecycle mails to a group's payer: who the payer is, which mail an event earns, its once-key
 //   staff-alerts      the staff alerts queued on the email outbox
 export { HANDLED_EVENT_TYPES, CONNECT_SCOPED_EVENT_TYPES } from "./event-types";
 export { processStripeEvent } from "./dispatch";

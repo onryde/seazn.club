@@ -115,6 +115,14 @@ const SPEC_LEGEND: Record<string, [to: "account" | "literal" | "staff", transact
   quick_match_link: ["literal", false],
   quick_match_reminder: ["literal", false],
   registration_promotion_skipped: ["literal", false],
+  // Billing lifecycle mails (2026-11-15): the payer's account, transactional (trial_ending's facts).
+  trial_expired: ["account", true],
+  plan_activated: ["account", true],
+  renewal_failed: ["account", true],
+  renewal_upcoming: ["account", true],
+  renewal_paid: ["account", true],
+  subscription_changed: ["account", true],
+  renewal_action_required: ["account", true],
 };
 
 /** A `db` that records the statements it is handed and answers like postgres.js does for an insert: a row list carrying the
@@ -177,8 +185,8 @@ describe("the kind facts guard (no database)", () => {
     }
     // The spec's Counts: "With `magic_link` and `chess_invite` that is 51." Sponsor deals Task 23 adds sponsor_deal_paid: 52. Polish
     // waves P2 and P5 add the seven registrant lifecycle mails: 59. And the quick match design's two (§7.6, C2): 61. Registration
-    // walk-fix F16 adds registration_promotion_skipped: 62.
-    expect(checked, "every kind of the legend was compared").toBe(62);
+    // walk-fix F16 adds registration_promotion_skipped: 62. The billing lifecycle mails (2026-11-15) add seven: 69.
+    expect(checked, "every kind of the legend was compared").toBe(69);
     // The other direction: the code declares no kind the legend does not.
     expect(Object.keys(OUTBOX_KIND_FACTS).sort()).toEqual(Object.keys(SPEC_LEGEND).sort());
   });

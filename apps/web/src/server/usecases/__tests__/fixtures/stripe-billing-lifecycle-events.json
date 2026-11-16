@@ -1,0 +1,2641 @@
+{
+ "_source": "Captured 2026-11-15 from a Stripe SANDBOX (test clocks) by the billing lifecycle emails probe: real event payloads, null and empty fields pruned, the customer email replaced. Tests rebase every unix timestamp by one offset, so the relations inside a payload (a line period starting at trial_end, a retry an hour after the renewal) are Stripe's own. See report-1.md for the probe. The four confirmation (3-D Secure) and no-card events were captured 2026-11-16 the same way (report-2.md): a renewal whose card asks for authentication on every payment (Stripe's pm_card_authenticationRequired), a new subscription on that card, and a renewal with no card left.",
+ "events": {
+  "subscription.deleted.trial_ran_out_no_card": {
+   "id": "evt_1Uc2MwB2rWevQSf8UQ94J4A5",
+   "type": "customer.subscription.deleted",
+   "created": 1794745034,
+   "livemode": false,
+   "data": {
+    "object": {
+     "id": "sub_1Uc2MeB2rWevQSf8BBF5WM7C",
+     "object": "subscription",
+     "billing_cycle_anchor": 1795954615,
+     "cancel_at_period_end": false,
+     "canceled_at": 1795954615,
+     "collection_method": "charge_automatically",
+     "created": 1794745015,
+     "currency": "usd",
+     "current_period_end": 1795954615,
+     "current_period_start": 1794745015,
+     "customer": "cus_VdIyYgHiLePABg",
+     "ended_at": 1795954615,
+     "items": {
+      "object": "list",
+      "data": [
+       {
+        "id": "si_VdIy2cnyI4VBGx",
+        "object": "subscription_item",
+        "created": 1794745015,
+        "current_period_end": 1795954615,
+        "current_period_start": 1794745015,
+        "price": {
+         "id": "price_1UHl73B2rWevQSf83OW1slCp",
+         "object": "price",
+         "active": true,
+         "created": 1789912141,
+         "currency": "usd",
+         "livemode": false,
+         "lookup_key": "seazn_pro_monthly",
+         "metadata": {
+          "seazn_plan": "pro"
+         },
+         "product": "prod_VILonR11zi9JVT",
+         "recurring": {
+          "interval": "month",
+          "interval_count": 1,
+          "usage_type": "licensed"
+         },
+         "type": "recurring"
+        },
+        "quantity": 1,
+        "subscription": "sub_1Uc2MeB2rWevQSf8BBF5WM7C"
+       }
+      ],
+      "has_more": false,
+      "total_count": 1,
+      "url": "/v1/subscription_items?subscription=sub_1Uc2MeB2rWevQSf8BBF5WM7C"
+     },
+     "latest_invoice": "in_1Uc2MeB2rWevQSf8eV45cJRO",
+     "livemode": false,
+     "managed_payments": {
+      "enabled": false
+     },
+     "metadata": {
+      "probe": "billing-emails-2026-11-15-b"
+     },
+     "pending_setup_intent": "seti_1Uc2MeB2rWevQSf8l6IyOdgT",
+     "quantity": 1,
+     "start_date": 1794745015,
+     "status": "canceled",
+     "test_clock": "clock_1Uc2MdB2rWevQSf8ZabSsaTF",
+     "trial_end": 1795954615,
+     "trial_start": 1794745015,
+     "cancellation_details": {
+      "reason": "cancellation_requested"
+     }
+    }
+   }
+  },
+  "subscription.deleted.trial_cancel_scheduled_no_card": {
+   "id": "evt_1Uc2MwB2rWevQSf8ONQoh8JW",
+   "type": "customer.subscription.deleted",
+   "created": 1794745034,
+   "livemode": false,
+   "data": {
+    "object": {
+     "id": "sub_1Uc2MfB2rWevQSf8FHMUmMOf",
+     "object": "subscription",
+     "billing_cycle_anchor": 1795954615,
+     "cancel_at": 1795954615,
+     "cancel_at_period_end": true,
+     "canceled_at": 1794745015,
+     "collection_method": "charge_automatically",
+     "created": 1794745015,
+     "currency": "usd",
+     "current_period_end": 1795954615,
+     "current_period_start": 1794745015,
+     "customer": "cus_VdIyeGnZFJVOoY",
+     "ended_at": 1795954615,
+     "items": {
+      "object": "list",
+      "data": [
+       {
+        "id": "si_VdIylkUjrosr4R",
+        "object": "subscription_item",
+        "created": 1794745015,
+        "current_period_end": 1795954615,
+        "current_period_start": 1794745015,
+        "price": {
+         "id": "price_1UHl73B2rWevQSf83OW1slCp",
+         "object": "price",
+         "active": true,
+         "created": 1789912141,
+         "currency": "usd",
+         "livemode": false,
+         "lookup_key": "seazn_pro_monthly",
+         "metadata": {
+          "seazn_plan": "pro"
+         },
+         "product": "prod_VILonR11zi9JVT",
+         "recurring": {
+          "interval": "month",
+          "interval_count": 1,
+          "usage_type": "licensed"
+         },
+         "type": "recurring"
+        },
+        "quantity": 1,
+        "subscription": "sub_1Uc2MfB2rWevQSf8FHMUmMOf"
+       }
+      ],
+      "has_more": false,
+      "total_count": 1,
+      "url": "/v1/subscription_items?subscription=sub_1Uc2MfB2rWevQSf8FHMUmMOf"
+     },
+     "latest_invoice": "in_1Uc2MfB2rWevQSf8HOj2jaT1",
+     "livemode": false,
+     "managed_payments": {
+      "enabled": false
+     },
+     "metadata": {
+      "probe": "billing-emails-2026-11-15-b"
+     },
+     "pending_setup_intent": "seti_1Uc2MfB2rWevQSf8K70Ad6A2",
+     "quantity": 1,
+     "start_date": 1794745015,
+     "status": "canceled",
+     "test_clock": "clock_1Uc2MdB2rWevQSf8ZabSsaTF",
+     "trial_end": 1795954615,
+     "trial_start": 1794745015,
+     "cancellation_details": {
+      "reason": "cancellation_requested"
+     }
+    }
+   }
+  },
+  "subscription.deleted.trial_cancel_scheduled_card": {
+   "id": "evt_1Uc2MxB2rWevQSf8DNgxT83t",
+   "type": "customer.subscription.deleted",
+   "created": 1794745035,
+   "livemode": false,
+   "data": {
+    "object": {
+     "id": "sub_1Uc2MiB2rWevQSf8BeQCBzrt",
+     "object": "subscription",
+     "billing_cycle_anchor": 1795954615,
+     "cancel_at": 1795954615,
+     "cancel_at_period_end": true,
+     "canceled_at": 1794745015,
+     "collection_method": "charge_automatically",
+     "created": 1794745015,
+     "currency": "usd",
+     "current_period_end": 1795954615,
+     "current_period_start": 1794745015,
+     "customer": "cus_VdIyEnoeaJtGx0",
+     "ended_at": 1795954615,
+     "items": {
+      "object": "list",
+      "data": [
+       {
+        "id": "si_VdIybRqiEZ2Kve",
+        "object": "subscription_item",
+        "created": 1794745015,
+        "current_period_end": 1795954615,
+        "current_period_start": 1794745015,
+        "price": {
+         "id": "price_1UHl73B2rWevQSf83OW1slCp",
+         "object": "price",
+         "active": true,
+         "created": 1789912141,
+         "currency": "usd",
+         "livemode": false,
+         "lookup_key": "seazn_pro_monthly",
+         "metadata": {
+          "seazn_plan": "pro"
+         },
+         "product": "prod_VILonR11zi9JVT",
+         "recurring": {
+          "interval": "month",
+          "interval_count": 1,
+          "usage_type": "licensed"
+         },
+         "type": "recurring"
+        },
+        "quantity": 1,
+        "subscription": "sub_1Uc2MiB2rWevQSf8BeQCBzrt"
+       }
+      ],
+      "has_more": false,
+      "total_count": 1,
+      "url": "/v1/subscription_items?subscription=sub_1Uc2MiB2rWevQSf8BeQCBzrt"
+     },
+     "latest_invoice": "in_1Uc2MiB2rWevQSf8KFr8lwrp",
+     "livemode": false,
+     "managed_payments": {
+      "enabled": false
+     },
+     "metadata": {
+      "probe": "billing-emails-2026-11-15-b"
+     },
+     "quantity": 1,
+     "start_date": 1794745015,
+     "status": "canceled",
+     "test_clock": "clock_1Uc2MdB2rWevQSf8ZabSsaTF",
+     "trial_end": 1795954615,
+     "trial_start": 1794745015,
+     "cancellation_details": {
+      "reason": "cancellation_requested"
+     }
+    }
+   }
+  },
+  "subscription.deleted.paid_cancel_scheduled": {
+   "id": "evt_1Uc2N2B2rWevQSf8BfNbTc3k",
+   "type": "customer.subscription.deleted",
+   "created": 1794745039,
+   "livemode": false,
+   "data": {
+    "object": {
+     "id": "sub_1Uc2MlB2rWevQSf80CDLdXNd",
+     "object": "subscription",
+     "billing_cycle_anchor": 1794745015,
+     "cancel_at": 1797337015,
+     "cancel_at_period_end": true,
+     "canceled_at": 1794745015,
+     "collection_method": "charge_automatically",
+     "created": 1794745015,
+     "currency": "usd",
+     "current_period_end": 1797337015,
+     "current_period_start": 1794745015,
+     "customer": "cus_VdIyMyIQ1RnWnQ",
+     "ended_at": 1797337015,
+     "items": {
+      "object": "list",
+      "data": [
+       {
+        "id": "si_VdIyRonYjW1TDk",
+        "object": "subscription_item",
+        "created": 1794745015,
+        "current_period_end": 1797337015,
+        "current_period_start": 1794745015,
+        "price": {
+         "id": "price_1UHl73B2rWevQSf83OW1slCp",
+         "object": "price",
+         "active": true,
+         "created": 1789912141,
+         "currency": "usd",
+         "livemode": false,
+         "lookup_key": "seazn_pro_monthly",
+         "metadata": {
+          "seazn_plan": "pro"
+         },
+         "product": "prod_VILonR11zi9JVT",
+         "recurring": {
+          "interval": "month",
+          "interval_count": 1,
+          "usage_type": "licensed"
+         },
+         "type": "recurring"
+        },
+        "quantity": 1,
+        "subscription": "sub_1Uc2MlB2rWevQSf80CDLdXNd"
+       }
+      ],
+      "has_more": false,
+      "total_count": 1,
+      "url": "/v1/subscription_items?subscription=sub_1Uc2MlB2rWevQSf80CDLdXNd"
+     },
+     "latest_invoice": "in_1Uc2MmB2rWevQSf8MTuTRGAS",
+     "livemode": false,
+     "managed_payments": {
+      "enabled": false
+     },
+     "metadata": {
+      "probe": "billing-emails-2026-11-15-b"
+     },
+     "quantity": 1,
+     "start_date": 1794745015,
+     "status": "canceled",
+     "test_clock": "clock_1Uc2MdB2rWevQSf8Vzi365OE",
+     "cancellation_details": {
+      "reason": "cancellation_requested"
+     }
+    }
+   }
+  },
+  "subscription.deleted.paid_canceled_now": {
+   "id": "evt_1Uc2KmB2rWevQSf8VNxlAQ5c",
+   "type": "customer.subscription.deleted",
+   "created": 1794744900,
+   "livemode": false,
+   "data": {
+    "object": {
+     "id": "sub_1Uc2KJB2rWevQSf83N1BVBu1",
+     "object": "subscription",
+     "billing_cycle_anchor": 1794744863,
+     "cancel_at_period_end": false,
+     "canceled_at": 1797768863,
+     "collection_method": "charge_automatically",
+     "created": 1794744863,
+     "currency": "usd",
+     "current_period_end": 1800015263,
+     "current_period_start": 1797336863,
+     "customer": "cus_VdIwL61fVRnAKz",
+     "ended_at": 1797768863,
+     "items": {
+      "object": "list",
+      "data": [
+       {
+        "id": "si_VdIwavWGQBp6vs",
+        "object": "subscription_item",
+        "created": 1794744863,
+        "current_period_end": 1800015263,
+        "current_period_start": 1797336863,
+        "price": {
+         "id": "price_1UHl73B2rWevQSf83OW1slCp",
+         "object": "price",
+         "active": true,
+         "created": 1789912141,
+         "currency": "usd",
+         "livemode": false,
+         "lookup_key": "seazn_pro_monthly",
+         "metadata": {
+          "seazn_plan": "pro"
+         },
+         "product": "prod_VILonR11zi9JVT",
+         "recurring": {
+          "interval": "month",
+          "interval_count": 1,
+          "usage_type": "licensed"
+         },
+         "type": "recurring"
+        },
+        "quantity": 1,
+        "subscription": "sub_1Uc2KJB2rWevQSf83N1BVBu1"
+       }
+      ],
+      "has_more": false,
+      "total_count": 1,
+      "url": "/v1/subscription_items?subscription=sub_1Uc2KJB2rWevQSf83N1BVBu1"
+     },
+     "latest_invoice": "in_1Uc2KcB2rWevQSf8fkCN9uPr",
+     "livemode": false,
+     "managed_payments": {
+      "enabled": false
+     },
+     "metadata": {
+      "probe": "billing-emails-2026-11-15"
+     },
+     "quantity": 1,
+     "start_date": 1794744863,
+     "status": "canceled",
+     "test_clock": "clock_1Uc2KBB2rWevQSf8HPPtOpae",
+     "cancellation_details": {
+      "reason": "cancellation_requested"
+     }
+    }
+   }
+  },
+  "invoice.payment_succeeded.trial_start_zero": {
+   "id": "evt_1Uc2MfB2rWevQSf8Zkv00bVG",
+   "type": "invoice.payment_succeeded",
+   "created": 1794745016,
+   "livemode": false,
+   "data": {
+    "object": {
+     "id": "in_1Uc2MeB2rWevQSf8eV45cJRO",
+     "object": "invoice",
+     "amount_due": 0,
+     "amount_overpaid": 0,
+     "amount_paid": 0,
+     "amount_remaining": 0,
+     "amount_shipping": 0,
+     "attempt_count": 0,
+     "attempted": true,
+     "auto_advance": false,
+     "billing_reason": "subscription_create",
+     "collection_method": "charge_automatically",
+     "created": 1794745015,
+     "currency": "usd",
+     "customer": "cus_VdIyYgHiLePABg",
+     "customer_email": "payer@example.com",
+     "effective_at": 1794745015,
+     "ending_balance": 0,
+     "hosted_invoice_url": "https://invoice.stripe.com/i/acct_1UHkqzB2rWevQSf8/test_YWNjdF8xVUhrcXpCMnJXZXZRU2Y4LF9WZEl5NWYycFVLQ1pCcGFHSkp2OXNacERlb0xRdjhaLDE4NTI4NTgxNw02009P0MLLqA?s=ap",
+     "invoice_pdf": "https://pay.stripe.com/invoice/acct_1UHkqzB2rWevQSf8/test_YWNjdF8xVUhrcXpCMnJXZXZRU2Y4LF9WZEl5NWYycFVLQ1pCcGFHSkp2OXNacERlb0xRdjhaLDE4NTI4NTgxNw02009P0MLLqA/pdf?s=ap",
+     "lines": {
+      "object": "list",
+      "data": [
+       {
+        "id": "il_1Uc2MdB2rWevQSf8URV3Qb3h",
+        "object": "line_item",
+        "amount": 0,
+        "amount_excluding_tax": 0,
+        "currency": "usd",
+        "description": "Free trial for 1 × Seazn Club Pro",
+        "discountable": true,
+        "invoice": "in_1Uc2MeB2rWevQSf8eV45cJRO",
+        "livemode": false,
+        "metadata": {
+         "probe": "billing-emails-2026-11-15-b"
+        },
+        "parent": {
+         "subscription_item_details": {
+          "proration": false,
+          "subscription": "sub_1Uc2MeB2rWevQSf8BBF5WM7C",
+          "subscription_item": "si_VdIy2cnyI4VBGx"
+         },
+         "type": "subscription_item_details"
+        },
+        "period": {
+         "end": 1795954615,
+         "start": 1794745015
+        },
+        "price": {
+         "id": "price_1UHl73B2rWevQSf83OW1slCp",
+         "object": "price",
+         "active": true,
+         "created": 1789912141,
+         "currency": "usd",
+         "livemode": false,
+         "lookup_key": "seazn_pro_monthly",
+         "metadata": {
+          "seazn_plan": "pro"
+         },
+         "product": "prod_VILonR11zi9JVT",
+         "recurring": {
+          "interval": "month",
+          "interval_count": 1,
+          "usage_type": "licensed"
+         },
+         "type": "recurring"
+        },
+        "pricing": {
+         "price_details": {
+          "price": "price_1UHl73B2rWevQSf83OW1slCp",
+          "product": "prod_VILonR11zi9JVT"
+         },
+         "type": "price_details",
+         "unit_amount_decimal": "0"
+        },
+        "proration": false,
+        "quantity": 1,
+        "quantity_decimal": "1",
+        "subscription": "sub_1Uc2MeB2rWevQSf8BBF5WM7C",
+        "subscription_item": "si_VdIy2cnyI4VBGx",
+        "subtotal": 0,
+        "type": "subscription",
+        "unit_amount_excluding_tax": "0"
+       }
+      ],
+      "has_more": false,
+      "total_count": 1,
+      "url": "/v1/invoices/in_1Uc2MeB2rWevQSf8eV45cJRO/lines"
+     },
+     "livemode": false,
+     "number": "4SAUXZEX-0001",
+     "paid": true,
+     "paid_out_of_band": false,
+     "parent": {
+      "subscription_details": {
+       "metadata": {
+        "probe": "billing-emails-2026-11-15-b"
+       },
+       "subscription": "sub_1Uc2MeB2rWevQSf8BBF5WM7C"
+      },
+      "type": "subscription_details"
+     },
+     "period_end": 1794745015,
+     "period_start": 1794745015,
+     "post_payment_credit_notes_amount": 0,
+     "pre_payment_credit_notes_amount": 0,
+     "starting_balance": 0,
+     "status": "paid",
+     "status_transitions": {
+      "finalized_at": 1794745015,
+      "paid_at": 1794745015
+     },
+     "subscription": "sub_1Uc2MeB2rWevQSf8BBF5WM7C",
+     "subscription_details": {
+      "metadata": {
+       "probe": "billing-emails-2026-11-15-b"
+      }
+     },
+     "subtotal": 0,
+     "subtotal_excluding_tax": 0,
+     "test_clock": "clock_1Uc2MdB2rWevQSf8ZabSsaTF",
+     "total": 0,
+     "total_excluding_tax": 0,
+     "webhooks_delivered_at": 1794745015
+    }
+   }
+  },
+  "invoice.payment_succeeded.new_paid_monthly": {
+   "id": "evt_1Uc2KLB2rWevQSf8dulfVEGY",
+   "type": "invoice.payment_succeeded",
+   "created": 1794744872,
+   "livemode": false,
+   "data": {
+    "object": {
+     "id": "in_1Uc2KJB2rWevQSf8ROanWlUG",
+     "object": "invoice",
+     "amount_due": 1499,
+     "amount_overpaid": 0,
+     "amount_paid": 1499,
+     "amount_remaining": 0,
+     "amount_shipping": 0,
+     "attempt_count": 1,
+     "attempted": true,
+     "auto_advance": false,
+     "billing_reason": "subscription_create",
+     "charge": "ch_3Uc2KJB2rWevQSf81X7pvLrs",
+     "collection_method": "charge_automatically",
+     "created": 1794744863,
+     "currency": "usd",
+     "customer": "cus_VdIwL61fVRnAKz",
+     "customer_email": "payer@example.com",
+     "effective_at": 1794744863,
+     "ending_balance": 0,
+     "hosted_invoice_url": "https://invoice.stripe.com/i/acct_1UHkqzB2rWevQSf8/test_YWNjdF8xVUhrcXpCMnJXZXZRU2Y4LF9WZEl3T0pqeGd4QTJCVGRJUGw3aFFTN3dtVFkwQ1Y4LDE4NTI4NTY3Mw02005xx9vZIR?s=ap",
+     "invoice_pdf": "https://pay.stripe.com/invoice/acct_1UHkqzB2rWevQSf8/test_YWNjdF8xVUhrcXpCMnJXZXZRU2Y4LF9WZEl3T0pqeGd4QTJCVGRJUGw3aFFTN3dtVFkwQ1Y4LDE4NTI4NTY3Mw02005xx9vZIR/pdf?s=ap",
+     "lines": {
+      "object": "list",
+      "data": [
+       {
+        "id": "il_1Uc2KBB2rWevQSf8dgNeyag2",
+        "object": "line_item",
+        "amount": 1499,
+        "amount_excluding_tax": 1499,
+        "currency": "usd",
+        "description": "1 × Seazn Club Pro (Tier 1 at $14.99 / month)",
+        "discountable": true,
+        "invoice": "in_1Uc2KJB2rWevQSf8ROanWlUG",
+        "livemode": false,
+        "metadata": {
+         "probe": "billing-emails-2026-11-15"
+        },
+        "parent": {
+         "subscription_item_details": {
+          "proration": false,
+          "subscription": "sub_1Uc2KJB2rWevQSf83N1BVBu1",
+          "subscription_item": "si_VdIwavWGQBp6vs"
+         },
+         "type": "subscription_item_details"
+        },
+        "period": {
+         "end": 1797336863,
+         "start": 1794744863
+        },
+        "price": {
+         "id": "price_1UHl73B2rWevQSf83OW1slCp",
+         "object": "price",
+         "active": true,
+         "created": 1789912141,
+         "currency": "usd",
+         "livemode": false,
+         "lookup_key": "seazn_pro_monthly",
+         "metadata": {
+          "seazn_plan": "pro"
+         },
+         "product": "prod_VILonR11zi9JVT",
+         "recurring": {
+          "interval": "month",
+          "interval_count": 1,
+          "usage_type": "licensed"
+         },
+         "type": "recurring"
+        },
+        "pricing": {
+         "price_details": {
+          "price": "price_1UHl73B2rWevQSf83OW1slCp",
+          "product": "prod_VILonR11zi9JVT"
+         },
+         "type": "price_details",
+         "unit_amount_decimal": "1499"
+        },
+        "proration": false,
+        "quantity": 1,
+        "quantity_decimal": "1",
+        "subscription": "sub_1Uc2KJB2rWevQSf83N1BVBu1",
+        "subscription_item": "si_VdIwavWGQBp6vs",
+        "subtotal": 1499,
+        "type": "subscription",
+        "unit_amount_excluding_tax": "1499"
+       }
+      ],
+      "has_more": false,
+      "total_count": 1,
+      "url": "/v1/invoices/in_1Uc2KJB2rWevQSf8ROanWlUG/lines"
+     },
+     "livemode": false,
+     "number": "JJSLQVG0-0001",
+     "paid": true,
+     "paid_out_of_band": false,
+     "parent": {
+      "subscription_details": {
+       "metadata": {
+        "probe": "billing-emails-2026-11-15"
+       },
+       "subscription": "sub_1Uc2KJB2rWevQSf83N1BVBu1"
+      },
+      "type": "subscription_details"
+     },
+     "payment_intent": "pi_3Uc2KJB2rWevQSf81pgpn4gh",
+     "period_end": 1794744863,
+     "period_start": 1794744863,
+     "post_payment_credit_notes_amount": 0,
+     "pre_payment_credit_notes_amount": 0,
+     "starting_balance": 0,
+     "status": "paid",
+     "status_transitions": {
+      "finalized_at": 1794744863,
+      "paid_at": 1794744863
+     },
+     "subscription": "sub_1Uc2KJB2rWevQSf83N1BVBu1",
+     "subscription_details": {
+      "metadata": {
+       "probe": "billing-emails-2026-11-15"
+      }
+     },
+     "subtotal": 1499,
+     "subtotal_excluding_tax": 1499,
+     "test_clock": "clock_1Uc2KBB2rWevQSf8HPPtOpae",
+     "total": 1499,
+     "total_excluding_tax": 1499,
+     "webhooks_delivered_at": 1794744863
+    }
+   }
+  },
+  "invoice.payment_succeeded.trial_conversion_annual": {
+   "id": "evt_1Uc2KXB2rWevQSf8ed3ITqcy",
+   "type": "invoice.payment_succeeded",
+   "created": 1794744884,
+   "livemode": false,
+   "data": {
+    "object": {
+     "id": "in_1Uc2KRB2rWevQSf88T6Pfn4O",
+     "object": "invoice",
+     "amount_due": 12899,
+     "amount_overpaid": 0,
+     "amount_paid": 12899,
+     "amount_remaining": 0,
+     "amount_shipping": 0,
+     "attempt_count": 1,
+     "attempted": true,
+     "auto_advance": false,
+     "billing_reason": "subscription_cycle",
+     "charge": "ch_3Uc2KTB2rWevQSf80rI3tSso",
+     "collection_method": "charge_automatically",
+     "created": 1795954463,
+     "currency": "usd",
+     "customer": "cus_VdIwH7MzEqqTcy",
+     "customer_email": "payer@example.com",
+     "effective_at": 1795958063,
+     "ending_balance": 0,
+     "hosted_invoice_url": "https://invoice.stripe.com/i/acct_1UHkqzB2rWevQSf8/test_YWNjdF8xVUhrcXpCMnJXZXZRU2Y4LF9WZEl3dWVEUkU1dmMwUDh5bnVPTXN2MWN5dm13MThhLDE4NTI4NTY4NQ0200fEcpx4D6?s=ap",
+     "invoice_pdf": "https://pay.stripe.com/invoice/acct_1UHkqzB2rWevQSf8/test_YWNjdF8xVUhrcXpCMnJXZXZRU2Y4LF9WZEl3dWVEUkU1dmMwUDh5bnVPTXN2MWN5dm13MThhLDE4NTI4NTY4NQ0200fEcpx4D6/pdf?s=ap",
+     "lines": {
+      "object": "list",
+      "data": [
+       {
+        "id": "il_1Uh6zrB2rWevQSf8CUNDnxZf",
+        "object": "line_item",
+        "amount": 12899,
+        "amount_excluding_tax": 12899,
+        "currency": "usd",
+        "description": "1 × Seazn Club Pro (Tier 1 at $128.99 / year)",
+        "discountable": true,
+        "invoice": "in_1Uc2KRB2rWevQSf88T6Pfn4O",
+        "livemode": false,
+        "metadata": {
+         "probe": "billing-emails-2026-11-15"
+        },
+        "parent": {
+         "subscription_item_details": {
+          "proration": false,
+          "subscription": "sub_1Uc2KGB2rWevQSf8nQ6D1J1Y",
+          "subscription_item": "si_VdIwR1BlkOuUyh"
+         },
+         "type": "subscription_item_details"
+        },
+        "period": {
+         "end": 1827490463,
+         "start": 1795954463
+        },
+        "price": {
+         "id": "price_1UHl73B2rWevQSf8vSKhOyd8",
+         "object": "price",
+         "active": true,
+         "created": 1789912141,
+         "currency": "usd",
+         "livemode": false,
+         "lookup_key": "seazn_pro_annual",
+         "metadata": {
+          "seazn_plan": "pro"
+         },
+         "product": "prod_VILonR11zi9JVT",
+         "recurring": {
+          "interval": "year",
+          "interval_count": 1,
+          "usage_type": "licensed"
+         },
+         "type": "recurring"
+        },
+        "pricing": {
+         "price_details": {
+          "price": "price_1UHl73B2rWevQSf8vSKhOyd8",
+          "product": "prod_VILonR11zi9JVT"
+         },
+         "type": "price_details",
+         "unit_amount_decimal": "12899"
+        },
+        "proration": false,
+        "quantity": 1,
+        "quantity_decimal": "1",
+        "subscription": "sub_1Uc2KGB2rWevQSf8nQ6D1J1Y",
+        "subscription_item": "si_VdIwR1BlkOuUyh",
+        "subtotal": 12899,
+        "type": "subscription",
+        "unit_amount_excluding_tax": "12899"
+       }
+      ],
+      "has_more": false,
+      "total_count": 1,
+      "url": "/v1/invoices/in_1Uc2KRB2rWevQSf88T6Pfn4O/lines"
+     },
+     "livemode": false,
+     "number": "31T8POPZ-0002",
+     "paid": true,
+     "paid_out_of_band": false,
+     "parent": {
+      "subscription_details": {
+       "metadata": {
+        "probe": "billing-emails-2026-11-15"
+       },
+       "subscription": "sub_1Uc2KGB2rWevQSf8nQ6D1J1Y"
+      },
+      "type": "subscription_details"
+     },
+     "payment_intent": "pi_3Uc2KTB2rWevQSf808sacOG4",
+     "period_end": 1795954463,
+     "period_start": 1794744863,
+     "post_payment_credit_notes_amount": 0,
+     "pre_payment_credit_notes_amount": 0,
+     "starting_balance": 0,
+     "status": "paid",
+     "status_transitions": {
+      "finalized_at": 1795958063,
+      "paid_at": 1795958063
+     },
+     "subscription": "sub_1Uc2KGB2rWevQSf8nQ6D1J1Y",
+     "subscription_details": {
+      "metadata": {
+       "probe": "billing-emails-2026-11-15"
+      }
+     },
+     "subtotal": 12899,
+     "subtotal_excluding_tax": 12899,
+     "test_clock": "clock_1Uc2KBB2rWevQSf8HPPtOpae",
+     "total": 12899,
+     "total_excluding_tax": 12899,
+     "webhooks_delivered_at": 1795954463
+    }
+   }
+  },
+  "invoice.payment_succeeded.annual_renewal": {
+   "id": "evt_1Uc2LEB2rWevQSf8YetvwxqF",
+   "type": "invoice.payment_succeeded",
+   "created": 1794744927,
+   "livemode": false,
+   "data": {
+    "object": {
+     "id": "in_1Uc2L2B2rWevQSf8HoOV5WmO",
+     "object": "invoice",
+     "amount_due": 12899,
+     "amount_overpaid": 0,
+     "amount_paid": 12899,
+     "amount_remaining": 0,
+     "amount_shipping": 0,
+     "attempt_count": 1,
+     "attempted": true,
+     "auto_advance": false,
+     "billing_reason": "subscription_cycle",
+     "charge": "ch_3Uc2L6B2rWevQSf81DmmD7hK",
+     "collection_method": "charge_automatically",
+     "created": 1827490463,
+     "currency": "usd",
+     "customer": "cus_VdIwH7MzEqqTcy",
+     "customer_email": "payer@example.com",
+     "effective_at": 1827494063,
+     "ending_balance": 0,
+     "hosted_invoice_url": "https://invoice.stripe.com/i/acct_1UHkqzB2rWevQSf8/test_YWNjdF8xVUhrcXpCMnJXZXZRU2Y4LF9WZEl3Z3FrdURCb1k2UHd5Tk1Fd3VXRmZUTjhLa1JFLDE4NTI4NTcyOA0200e787DY2B?s=ap",
+     "invoice_pdf": "https://pay.stripe.com/invoice/acct_1UHkqzB2rWevQSf8/test_YWNjdF8xVUhrcXpCMnJXZXZRU2Y4LF9WZEl3Z3FrdURCb1k2UHd5Tk1Fd3VXRmZUTjhLa1JFLDE4NTI4NTcyOA0200e787DY2B/pdf?s=ap",
+     "lines": {
+      "object": "list",
+      "data": [
+       {
+        "id": "il_1WpQx1B2rWevQSf8zBTze4Lt",
+        "object": "line_item",
+        "amount": 12899,
+        "amount_excluding_tax": 12899,
+        "currency": "usd",
+        "description": "1 × Seazn Club Pro (Tier 1 at $128.99 / year)",
+        "discountable": true,
+        "invoice": "in_1Uc2L2B2rWevQSf8HoOV5WmO",
+        "livemode": false,
+        "metadata": {
+         "probe": "billing-emails-2026-11-15"
+        },
+        "parent": {
+         "subscription_item_details": {
+          "proration": false,
+          "subscription": "sub_1Uc2KGB2rWevQSf8nQ6D1J1Y",
+          "subscription_item": "si_VdIwR1BlkOuUyh"
+         },
+         "type": "subscription_item_details"
+        },
+        "period": {
+         "end": 1859112863,
+         "start": 1827490463
+        },
+        "price": {
+         "id": "price_1UHl73B2rWevQSf8vSKhOyd8",
+         "object": "price",
+         "active": true,
+         "created": 1789912141,
+         "currency": "usd",
+         "livemode": false,
+         "lookup_key": "seazn_pro_annual",
+         "metadata": {
+          "seazn_plan": "pro"
+         },
+         "product": "prod_VILonR11zi9JVT",
+         "recurring": {
+          "interval": "year",
+          "interval_count": 1,
+          "usage_type": "licensed"
+         },
+         "type": "recurring"
+        },
+        "pricing": {
+         "price_details": {
+          "price": "price_1UHl73B2rWevQSf8vSKhOyd8",
+          "product": "prod_VILonR11zi9JVT"
+         },
+         "type": "price_details",
+         "unit_amount_decimal": "12899"
+        },
+        "proration": false,
+        "quantity": 1,
+        "quantity_decimal": "1",
+        "subscription": "sub_1Uc2KGB2rWevQSf8nQ6D1J1Y",
+        "subscription_item": "si_VdIwR1BlkOuUyh",
+        "subtotal": 12899,
+        "type": "subscription",
+        "unit_amount_excluding_tax": "12899"
+       }
+      ],
+      "has_more": false,
+      "total_count": 1,
+      "url": "/v1/invoices/in_1Uc2L2B2rWevQSf8HoOV5WmO/lines"
+     },
+     "livemode": false,
+     "number": "31T8POPZ-0003",
+     "paid": true,
+     "paid_out_of_band": false,
+     "parent": {
+      "subscription_details": {
+       "metadata": {
+        "probe": "billing-emails-2026-11-15"
+       },
+       "subscription": "sub_1Uc2KGB2rWevQSf8nQ6D1J1Y"
+      },
+      "type": "subscription_details"
+     },
+     "payment_intent": "pi_3Uc2L6B2rWevQSf819Kc9Eaw",
+     "period_end": 1827490463,
+     "period_start": 1795954463,
+     "post_payment_credit_notes_amount": 0,
+     "pre_payment_credit_notes_amount": 0,
+     "starting_balance": 0,
+     "status": "paid",
+     "status_transitions": {
+      "finalized_at": 1827494063,
+      "paid_at": 1827494063
+     },
+     "subscription": "sub_1Uc2KGB2rWevQSf8nQ6D1J1Y",
+     "subscription_details": {
+      "metadata": {
+       "probe": "billing-emails-2026-11-15"
+      }
+     },
+     "subtotal": 12899,
+     "subtotal_excluding_tax": 12899,
+     "test_clock": "clock_1Uc2KBB2rWevQSf8HPPtOpae",
+     "total": 12899,
+     "total_excluding_tax": 12899,
+     "webhooks_delivered_at": 1827490463
+    }
+   }
+  },
+  "invoice.payment_succeeded.interval_switch_in_trial_zero": {
+   "id": "evt_1Uc2KEB2rWevQSf8VrPRRIVU",
+   "type": "invoice.payment_succeeded",
+   "created": 1794744866,
+   "livemode": false,
+   "data": {
+    "object": {
+     "id": "in_1Uc2KDB2rWevQSf83r8zSGWJ",
+     "object": "invoice",
+     "amount_due": 0,
+     "amount_overpaid": 0,
+     "amount_paid": 0,
+     "amount_remaining": 0,
+     "amount_shipping": 0,
+     "attempt_count": 0,
+     "attempted": true,
+     "auto_advance": false,
+     "billing_reason": "subscription_update",
+     "collection_method": "charge_automatically",
+     "created": 1794744863,
+     "currency": "usd",
+     "customer": "cus_VdIwvLHF6bniQA",
+     "customer_email": "payer@example.com",
+     "effective_at": 1794744863,
+     "ending_balance": 0,
+     "hosted_invoice_url": "https://invoice.stripe.com/i/acct_1UHkqzB2rWevQSf8/test_YWNjdF8xVUhrcXpCMnJXZXZRU2Y4LF9WZEl3S0FlV3RETUhTNldDS3BPOUN5d29LeVdBY0RaLDE4NTI4NTY2Ng0200IXcKKQHS?s=ap",
+     "invoice_pdf": "https://pay.stripe.com/invoice/acct_1UHkqzB2rWevQSf8/test_YWNjdF8xVUhrcXpCMnJXZXZRU2Y4LF9WZEl3S0FlV3RETUhTNldDS3BPOUN5d29LeVdBY0RaLDE4NTI4NTY2Ng0200IXcKKQHS/pdf?s=ap",
+     "lines": {
+      "object": "list",
+      "data": [
+       {
+        "id": "il_1Uc2KBB2rWevQSf8T6vuU5Yd",
+        "object": "line_item",
+        "amount": 0,
+        "amount_excluding_tax": 0,
+        "currency": "usd",
+        "description": "Free trial for 1 × Seazn Club Pro",
+        "discountable": true,
+        "invoice": "in_1Uc2KDB2rWevQSf83r8zSGWJ",
+        "livemode": false,
+        "metadata": {
+         "probe": "billing-emails-2026-11-15"
+        },
+        "parent": {
+         "subscription_item_details": {
+          "proration": false,
+          "subscription": "sub_1Uc2KCB2rWevQSf8JSBw6nxP",
+          "subscription_item": "si_VdIwGp9Rf131qb"
+         },
+         "type": "subscription_item_details"
+        },
+        "period": {
+         "end": 1795954463,
+         "start": 1794744863
+        },
+        "price": {
+         "id": "price_1UHl73B2rWevQSf8vSKhOyd8",
+         "object": "price",
+         "active": true,
+         "created": 1789912141,
+         "currency": "usd",
+         "livemode": false,
+         "lookup_key": "seazn_pro_annual",
+         "metadata": {
+          "seazn_plan": "pro"
+         },
+         "product": "prod_VILonR11zi9JVT",
+         "recurring": {
+          "interval": "year",
+          "interval_count": 1,
+          "usage_type": "licensed"
+         },
+         "type": "recurring"
+        },
+        "pricing": {
+         "price_details": {
+          "price": "price_1UHl73B2rWevQSf8vSKhOyd8",
+          "product": "prod_VILonR11zi9JVT"
+         },
+         "type": "price_details",
+         "unit_amount_decimal": "0"
+        },
+        "proration": false,
+        "quantity": 1,
+        "quantity_decimal": "1",
+        "subscription": "sub_1Uc2KCB2rWevQSf8JSBw6nxP",
+        "subscription_item": "si_VdIwGp9Rf131qb",
+        "subtotal": 0,
+        "type": "subscription",
+        "unit_amount_excluding_tax": "0"
+       }
+      ],
+      "has_more": false,
+      "total_count": 1,
+      "url": "/v1/invoices/in_1Uc2KDB2rWevQSf83r8zSGWJ/lines"
+     },
+     "livemode": false,
+     "number": "5PZ4JMBW-0002",
+     "paid": true,
+     "paid_out_of_band": false,
+     "parent": {
+      "subscription_details": {
+       "metadata": {
+        "probe": "billing-emails-2026-11-15"
+       },
+       "subscription": "sub_1Uc2KCB2rWevQSf8JSBw6nxP"
+      },
+      "type": "subscription_details"
+     },
+     "period_end": 1794744863,
+     "period_start": 1794744863,
+     "post_payment_credit_notes_amount": 0,
+     "pre_payment_credit_notes_amount": 0,
+     "starting_balance": 0,
+     "status": "paid",
+     "status_transitions": {
+      "finalized_at": 1794744863,
+      "paid_at": 1794744863
+     },
+     "subscription": "sub_1Uc2KCB2rWevQSf8JSBw6nxP",
+     "subscription_details": {
+      "metadata": {
+       "probe": "billing-emails-2026-11-15"
+      }
+     },
+     "subtotal": 0,
+     "subtotal_excluding_tax": 0,
+     "test_clock": "clock_1Uc2KBB2rWevQSf8HPPtOpae",
+     "total": 0,
+     "total_excluding_tax": 0,
+     "webhooks_delivered_at": 1794744863
+    }
+   }
+  },
+  "invoice.payment_failed.monthly_renewal": {
+   "id": "evt_1Uc2KiB2rWevQSf8ltP6IHGc",
+   "type": "invoice.payment_failed",
+   "created": 1794744895,
+   "livemode": false,
+   "data": {
+    "object": {
+     "id": "in_1Uc2KcB2rWevQSf8fkCN9uPr",
+     "object": "invoice",
+     "amount_due": 1499,
+     "amount_overpaid": 0,
+     "amount_paid": 0,
+     "amount_remaining": 1499,
+     "amount_shipping": 0,
+     "attempt_count": 1,
+     "attempted": true,
+     "auto_advance": true,
+     "billing_reason": "subscription_cycle",
+     "charge": "ch_3Uc2KeB2rWevQSf81QUMz2UU",
+     "collection_method": "charge_automatically",
+     "created": 1797336863,
+     "currency": "usd",
+     "customer": "cus_VdIwL61fVRnAKz",
+     "customer_email": "payer@example.com",
+     "effective_at": 1797340463,
+     "ending_balance": 0,
+     "hosted_invoice_url": "https://invoice.stripe.com/i/acct_1UHkqzB2rWevQSf8/test_YWNjdF8xVUhrcXpCMnJXZXZRU2Y4LF9WZEl3SGNuekdhQUdvR3dTVTRHZ0gyNkpGemRtVzY0LDE4NTI4NTY5Ng0200mqkCSMtK?s=ap",
+     "invoice_pdf": "https://pay.stripe.com/invoice/acct_1UHkqzB2rWevQSf8/test_YWNjdF8xVUhrcXpCMnJXZXZRU2Y4LF9WZEl3SGNuekdhQUdvR3dTVTRHZ0gyNkpGemRtVzY0LDE4NTI4NTY5Ng0200mqkCSMtK/pdf?s=ap",
+     "lines": {
+      "object": "list",
+      "data": [
+       {
+        "id": "il_1UmucdB2rWevQSf8X369Z9qn",
+        "object": "line_item",
+        "amount": 1499,
+        "amount_excluding_tax": 1499,
+        "currency": "usd",
+        "description": "1 × Seazn Club Pro (Tier 1 at $14.99 / month)",
+        "discountable": true,
+        "invoice": "in_1Uc2KcB2rWevQSf8fkCN9uPr",
+        "livemode": false,
+        "metadata": {
+         "probe": "billing-emails-2026-11-15"
+        },
+        "parent": {
+         "subscription_item_details": {
+          "proration": false,
+          "subscription": "sub_1Uc2KJB2rWevQSf83N1BVBu1",
+          "subscription_item": "si_VdIwavWGQBp6vs"
+         },
+         "type": "subscription_item_details"
+        },
+        "period": {
+         "end": 1800015263,
+         "start": 1797336863
+        },
+        "price": {
+         "id": "price_1UHl73B2rWevQSf83OW1slCp",
+         "object": "price",
+         "active": true,
+         "created": 1789912141,
+         "currency": "usd",
+         "livemode": false,
+         "lookup_key": "seazn_pro_monthly",
+         "metadata": {
+          "seazn_plan": "pro"
+         },
+         "product": "prod_VILonR11zi9JVT",
+         "recurring": {
+          "interval": "month",
+          "interval_count": 1,
+          "usage_type": "licensed"
+         },
+         "type": "recurring"
+        },
+        "pricing": {
+         "price_details": {
+          "price": "price_1UHl73B2rWevQSf83OW1slCp",
+          "product": "prod_VILonR11zi9JVT"
+         },
+         "type": "price_details",
+         "unit_amount_decimal": "1499"
+        },
+        "proration": false,
+        "quantity": 1,
+        "quantity_decimal": "1",
+        "subscription": "sub_1Uc2KJB2rWevQSf83N1BVBu1",
+        "subscription_item": "si_VdIwavWGQBp6vs",
+        "subtotal": 1499,
+        "type": "subscription",
+        "unit_amount_excluding_tax": "1499"
+       }
+      ],
+      "has_more": false,
+      "total_count": 1,
+      "url": "/v1/invoices/in_1Uc2KcB2rWevQSf8fkCN9uPr/lines"
+     },
+     "livemode": false,
+     "next_payment_attempt": 1797806836,
+     "number": "JJSLQVG0-0002",
+     "paid": false,
+     "paid_out_of_band": false,
+     "parent": {
+      "subscription_details": {
+       "metadata": {
+        "probe": "billing-emails-2026-11-15"
+       },
+       "subscription": "sub_1Uc2KJB2rWevQSf83N1BVBu1"
+      },
+      "type": "subscription_details"
+     },
+     "payment_intent": "pi_3Uc2KeB2rWevQSf81aufTCe5",
+     "period_end": 1797336863,
+     "period_start": 1794744863,
+     "post_payment_credit_notes_amount": 0,
+     "pre_payment_credit_notes_amount": 0,
+     "starting_balance": 0,
+     "status": "open",
+     "status_transitions": {
+      "finalized_at": 1797340463
+     },
+     "subscription": "sub_1Uc2KJB2rWevQSf83N1BVBu1",
+     "subscription_details": {
+      "metadata": {
+       "probe": "billing-emails-2026-11-15"
+      }
+     },
+     "subtotal": 1499,
+     "subtotal_excluding_tax": 1499,
+     "test_clock": "clock_1Uc2KBB2rWevQSf8HPPtOpae",
+     "total": 1499,
+     "total_excluding_tax": 1499,
+     "webhooks_delivered_at": 1797336863
+    }
+   }
+  },
+  "invoice.payment_failed.monthly_renewal_needs_confirmation": {
+   "id": "evt_1UcNE4B2rWevQSf8D5intokc",
+   "type": "invoice.payment_failed",
+   "created": 1794825207,
+   "livemode": false,
+   "data": {
+    "object": {
+     "id": "in_1UcNDzB2rWevQSf86byS0qyj",
+     "object": "invoice",
+     "amount_due": 1499,
+     "amount_overpaid": 0,
+     "amount_paid": 0,
+     "amount_remaining": 1499,
+     "amount_shipping": 0,
+     "attempt_count": 0,
+     "attempted": true,
+     "auto_advance": true,
+     "billing_reason": "subscription_cycle",
+     "collection_method": "charge_automatically",
+     "created": 1797417182,
+     "currency": "usd",
+     "customer": "cus_VdeWTbXtBvy3ru",
+     "customer_email": "payer@example.com",
+     "effective_at": 1797420782,
+     "ending_balance": 0,
+     "hosted_invoice_url": "https://invoice.stripe.com/i/acct_1UHkqzB2rWevQSf8/test_YWNjdF8xVUhrcXpCMnJXZXZRU2Y4LF9WZGVYNjk4QWtoeVR2emtwekdDY1ZKRnNkM21MY0g4LDE4NTM2NjAwOA02001mSs4hXW?s=ap",
+     "invoice_pdf": "https://pay.stripe.com/invoice/acct_1UHkqzB2rWevQSf8/test_YWNjdF8xVUhrcXpCMnJXZXZRU2Y4LF9WZGVYNjk4QWtoeVR2emtwekdDY1ZKRnNkM21MY0g4LDE4NTM2NjAwOA02001mSs4hXW/pdf?s=ap",
+     "lines": {
+      "object": "list",
+      "data": [
+       {
+        "id": "il_1UnFW6B2rWevQSf85iyi3sOF",
+        "object": "line_item",
+        "amount": 1499,
+        "amount_excluding_tax": 1499,
+        "currency": "usd",
+        "description": "1 × Seazn Club Pro (Tier 1 at $14.99 / month)",
+        "discountable": true,
+        "invoice": "in_1UcNDzB2rWevQSf86byS0qyj",
+        "livemode": false,
+        "metadata": {
+         "probe": "billing-emails-sca-2026-11-16"
+        },
+        "parent": {
+         "subscription_item_details": {
+          "proration": false,
+          "subscription": "sub_1UcNDhB2rWevQSf8SAYxuO4K",
+          "subscription_item": "si_VdeWNZocztadpd"
+         },
+         "type": "subscription_item_details"
+        },
+        "period": {
+         "end": 1800095582,
+         "start": 1797417182
+        },
+        "price": {
+         "id": "price_1UHl73B2rWevQSf83OW1slCp",
+         "object": "price",
+         "active": true,
+         "created": 1789912141,
+         "currency": "usd",
+         "livemode": false,
+         "lookup_key": "seazn_pro_monthly",
+         "metadata": {
+          "seazn_plan": "pro"
+         },
+         "product": "prod_VILonR11zi9JVT",
+         "recurring": {
+          "interval": "month",
+          "interval_count": 1,
+          "usage_type": "licensed"
+         },
+         "type": "recurring"
+        },
+        "pricing": {
+         "price_details": {
+          "price": "price_1UHl73B2rWevQSf83OW1slCp",
+          "product": "prod_VILonR11zi9JVT"
+         },
+         "type": "price_details",
+         "unit_amount_decimal": "1499"
+        },
+        "proration": false,
+        "quantity": 1,
+        "quantity_decimal": "1",
+        "subscription": "sub_1UcNDhB2rWevQSf8SAYxuO4K",
+        "subscription_item": "si_VdeWNZocztadpd",
+        "subtotal": 1499,
+        "type": "subscription",
+        "unit_amount_excluding_tax": "1499"
+       }
+      ],
+      "has_more": false,
+      "total_count": 1,
+      "url": "/v1/invoices/in_1UcNDzB2rWevQSf86byS0qyj/lines"
+     },
+     "livemode": false,
+     "number": "NQGWN7IP-0002",
+     "paid": false,
+     "paid_out_of_band": false,
+     "parent": {
+      "subscription_details": {
+       "metadata": {
+        "probe": "billing-emails-sca-2026-11-16"
+       },
+       "subscription": "sub_1UcNDhB2rWevQSf8SAYxuO4K"
+      },
+      "type": "subscription_details"
+     },
+     "payment_intent": "pi_3UcNE1B2rWevQSf815NqjCiv",
+     "period_end": 1797417182,
+     "period_start": 1794825182,
+     "post_payment_credit_notes_amount": 0,
+     "pre_payment_credit_notes_amount": 0,
+     "starting_balance": 0,
+     "status": "open",
+     "status_transitions": {
+      "finalized_at": 1797420782
+     },
+     "subscription": "sub_1UcNDhB2rWevQSf8SAYxuO4K",
+     "subscription_details": {
+      "metadata": {
+       "probe": "billing-emails-sca-2026-11-16"
+      }
+     },
+     "subtotal": 1499,
+     "subtotal_excluding_tax": 1499,
+     "test_clock": "clock_1UcNDfB2rWevQSf8Ur6OEBLC",
+     "total": 1499,
+     "total_excluding_tax": 1499,
+     "webhooks_delivered_at": 1797417182
+    }
+   }
+  },
+  "invoice.payment_failed.monthly_renewal_no_card": {
+   "id": "evt_1UcNGAB2rWevQSf8IQrxkIVu",
+   "type": "invoice.payment_failed",
+   "created": 1794825337,
+   "livemode": false,
+   "data": {
+    "object": {
+     "id": "in_1UcNG5B2rWevQSf8URJi510n",
+     "object": "invoice",
+     "amount_due": 1499,
+     "amount_overpaid": 0,
+     "amount_paid": 0,
+     "amount_remaining": 1499,
+     "amount_shipping": 0,
+     "attempt_count": 1,
+     "attempted": true,
+     "auto_advance": true,
+     "billing_reason": "subscription_cycle",
+     "collection_method": "charge_automatically",
+     "created": 1800268382,
+     "currency": "usd",
+     "customer": "cus_VdeYWAKcLaXdXP",
+     "customer_email": "payer@example.com",
+     "effective_at": 1800271982,
+     "ending_balance": 0,
+     "hosted_invoice_url": "https://invoice.stripe.com/i/acct_1UHkqzB2rWevQSf8/test_YWNjdF8xVUhrcXpCMnJXZXZRU2Y4LF9WZGVaU01PS2FhZG56V01YV0g2N3ZZUjE5c3hscnhiLDE4NTM2NjEzOA02007p1ckQdN?s=ap",
+     "invoice_pdf": "https://pay.stripe.com/invoice/acct_1UHkqzB2rWevQSf8/test_YWNjdF8xVUhrcXpCMnJXZXZRU2Y4LF9WZGVaU01PS2FhZG56V01YV0g2N3ZZUjE5c3hscnhiLDE4NTM2NjEzOA02007p1ckQdN/pdf?s=ap",
+     "lines": {
+      "object": "list",
+      "data": [
+       {
+        "id": "il_1UzDFCB2rWevQSf81CydUj8E",
+        "object": "line_item",
+        "amount": 1499,
+        "amount_excluding_tax": 1499,
+        "currency": "usd",
+        "description": "1 × Seazn Club Pro (Tier 1 at $14.99 / month)",
+        "discountable": true,
+        "invoice": "in_1UcNG5B2rWevQSf8URJi510n",
+        "livemode": false,
+        "metadata": {
+         "probe": "billing-emails-sca-2026-11-16"
+        },
+        "parent": {
+         "subscription_item_details": {
+          "proration": false,
+          "subscription": "sub_1UcNFnB2rWevQSf8e6kawKUi",
+          "subscription_item": "si_VdeYYrgZNFUlp3"
+         },
+         "type": "subscription_item_details"
+        },
+        "period": {
+         "end": 1802946782,
+         "start": 1800268382
+        },
+        "price": {
+         "id": "price_1UHl73B2rWevQSf83OW1slCp",
+         "object": "price",
+         "active": true,
+         "created": 1789912141,
+         "currency": "usd",
+         "livemode": false,
+         "lookup_key": "seazn_pro_monthly",
+         "metadata": {
+          "seazn_plan": "pro"
+         },
+         "product": "prod_VILonR11zi9JVT",
+         "recurring": {
+          "interval": "month",
+          "interval_count": 1,
+          "usage_type": "licensed"
+         },
+         "type": "recurring"
+        },
+        "pricing": {
+         "price_details": {
+          "price": "price_1UHl73B2rWevQSf83OW1slCp",
+          "product": "prod_VILonR11zi9JVT"
+         },
+         "type": "price_details",
+         "unit_amount_decimal": "1499"
+        },
+        "proration": false,
+        "quantity": 1,
+        "quantity_decimal": "1",
+        "subscription": "sub_1UcNFnB2rWevQSf8e6kawKUi",
+        "subscription_item": "si_VdeYYrgZNFUlp3",
+        "subtotal": 1499,
+        "type": "subscription",
+        "unit_amount_excluding_tax": "1499"
+       }
+      ],
+      "has_more": false,
+      "total_count": 1,
+      "url": "/v1/invoices/in_1UcNG5B2rWevQSf8URJi510n/lines"
+     },
+     "livemode": false,
+     "next_payment_attempt": 1800735980,
+     "number": "ZVGF3FAT-0002",
+     "paid": false,
+     "paid_out_of_band": false,
+     "parent": {
+      "subscription_details": {
+       "metadata": {
+        "probe": "billing-emails-sca-2026-11-16"
+       },
+       "subscription": "sub_1UcNFnB2rWevQSf8e6kawKUi"
+      },
+      "type": "subscription_details"
+     },
+     "payment_intent": "pi_3UcNG8B2rWevQSf81fq9YxBe",
+     "period_end": 1800268382,
+     "period_start": 1797589982,
+     "post_payment_credit_notes_amount": 0,
+     "pre_payment_credit_notes_amount": 0,
+     "starting_balance": 0,
+     "status": "open",
+     "status_transitions": {
+      "finalized_at": 1800271982
+     },
+     "subscription": "sub_1UcNFnB2rWevQSf8e6kawKUi",
+     "subscription_details": {
+      "metadata": {
+       "probe": "billing-emails-sca-2026-11-16"
+      }
+     },
+     "subtotal": 1499,
+     "subtotal_excluding_tax": 1499,
+     "test_clock": "clock_1UcNDfB2rWevQSf8Ur6OEBLC",
+     "total": 1499,
+     "total_excluding_tax": 1499,
+     "webhooks_delivered_at": 1800268382
+    }
+   }
+  },
+  "invoice.payment_action_required.monthly_renewal": {
+   "id": "evt_1UcNE4B2rWevQSf8PSimAhfH",
+   "type": "invoice.payment_action_required",
+   "created": 1794825207,
+   "livemode": false,
+   "data": {
+    "object": {
+     "id": "in_1UcNDzB2rWevQSf86byS0qyj",
+     "object": "invoice",
+     "amount_due": 1499,
+     "amount_overpaid": 0,
+     "amount_paid": 0,
+     "amount_remaining": 1499,
+     "amount_shipping": 0,
+     "attempt_count": 0,
+     "attempted": true,
+     "auto_advance": true,
+     "billing_reason": "subscription_cycle",
+     "collection_method": "charge_automatically",
+     "created": 1797417182,
+     "currency": "usd",
+     "customer": "cus_VdeWTbXtBvy3ru",
+     "customer_email": "payer@example.com",
+     "effective_at": 1797420782,
+     "ending_balance": 0,
+     "hosted_invoice_url": "https://invoice.stripe.com/i/acct_1UHkqzB2rWevQSf8/test_YWNjdF8xVUhrcXpCMnJXZXZRU2Y4LF9WZGVYNjk4QWtoeVR2emtwekdDY1ZKRnNkM21MY0g4LDE4NTM2NjAwOA02001mSs4hXW?s=ap",
+     "invoice_pdf": "https://pay.stripe.com/invoice/acct_1UHkqzB2rWevQSf8/test_YWNjdF8xVUhrcXpCMnJXZXZRU2Y4LF9WZGVYNjk4QWtoeVR2emtwekdDY1ZKRnNkM21MY0g4LDE4NTM2NjAwOA02001mSs4hXW/pdf?s=ap",
+     "lines": {
+      "object": "list",
+      "data": [
+       {
+        "id": "il_1UnFW6B2rWevQSf85iyi3sOF",
+        "object": "line_item",
+        "amount": 1499,
+        "amount_excluding_tax": 1499,
+        "currency": "usd",
+        "description": "1 × Seazn Club Pro (Tier 1 at $14.99 / month)",
+        "discountable": true,
+        "invoice": "in_1UcNDzB2rWevQSf86byS0qyj",
+        "livemode": false,
+        "metadata": {
+         "probe": "billing-emails-sca-2026-11-16"
+        },
+        "parent": {
+         "subscription_item_details": {
+          "proration": false,
+          "subscription": "sub_1UcNDhB2rWevQSf8SAYxuO4K",
+          "subscription_item": "si_VdeWNZocztadpd"
+         },
+         "type": "subscription_item_details"
+        },
+        "period": {
+         "end": 1800095582,
+         "start": 1797417182
+        },
+        "price": {
+         "id": "price_1UHl73B2rWevQSf83OW1slCp",
+         "object": "price",
+         "active": true,
+         "created": 1789912141,
+         "currency": "usd",
+         "livemode": false,
+         "lookup_key": "seazn_pro_monthly",
+         "metadata": {
+          "seazn_plan": "pro"
+         },
+         "product": "prod_VILonR11zi9JVT",
+         "recurring": {
+          "interval": "month",
+          "interval_count": 1,
+          "usage_type": "licensed"
+         },
+         "type": "recurring"
+        },
+        "pricing": {
+         "price_details": {
+          "price": "price_1UHl73B2rWevQSf83OW1slCp",
+          "product": "prod_VILonR11zi9JVT"
+         },
+         "type": "price_details",
+         "unit_amount_decimal": "1499"
+        },
+        "proration": false,
+        "quantity": 1,
+        "quantity_decimal": "1",
+        "subscription": "sub_1UcNDhB2rWevQSf8SAYxuO4K",
+        "subscription_item": "si_VdeWNZocztadpd",
+        "subtotal": 1499,
+        "type": "subscription",
+        "unit_amount_excluding_tax": "1499"
+       }
+      ],
+      "has_more": false,
+      "total_count": 1,
+      "url": "/v1/invoices/in_1UcNDzB2rWevQSf86byS0qyj/lines"
+     },
+     "livemode": false,
+     "number": "NQGWN7IP-0002",
+     "paid": false,
+     "paid_out_of_band": false,
+     "parent": {
+      "subscription_details": {
+       "metadata": {
+        "probe": "billing-emails-sca-2026-11-16"
+       },
+       "subscription": "sub_1UcNDhB2rWevQSf8SAYxuO4K"
+      },
+      "type": "subscription_details"
+     },
+     "payment_intent": "pi_3UcNE1B2rWevQSf815NqjCiv",
+     "period_end": 1797417182,
+     "period_start": 1794825182,
+     "post_payment_credit_notes_amount": 0,
+     "pre_payment_credit_notes_amount": 0,
+     "starting_balance": 0,
+     "status": "open",
+     "status_transitions": {
+      "finalized_at": 1797420782
+     },
+     "subscription": "sub_1UcNDhB2rWevQSf8SAYxuO4K",
+     "subscription_details": {
+      "metadata": {
+       "probe": "billing-emails-sca-2026-11-16"
+      }
+     },
+     "subtotal": 1499,
+     "subtotal_excluding_tax": 1499,
+     "test_clock": "clock_1UcNDfB2rWevQSf8Ur6OEBLC",
+     "total": 1499,
+     "total_excluding_tax": 1499,
+     "webhooks_delivered_at": 1797417182
+    }
+   }
+  },
+  "invoice.payment_action_required.new_paid_monthly": {
+   "id": "evt_1UcNDoB2rWevQSf8vZXhh5mx",
+   "type": "invoice.payment_action_required",
+   "created": 1794825191,
+   "livemode": false,
+   "data": {
+    "object": {
+     "id": "in_1UcNDmB2rWevQSf8labxrojT",
+     "object": "invoice",
+     "amount_due": 1499,
+     "amount_overpaid": 0,
+     "amount_paid": 0,
+     "amount_remaining": 1499,
+     "amount_shipping": 0,
+     "attempt_count": 0,
+     "attempted": true,
+     "auto_advance": true,
+     "billing_reason": "subscription_create",
+     "collection_method": "charge_automatically",
+     "created": 1794825182,
+     "currency": "usd",
+     "customer": "cus_VdeWsBTh0a2Wbw",
+     "customer_email": "payer@example.com",
+     "effective_at": 1794825182,
+     "ending_balance": 0,
+     "hosted_invoice_url": "https://invoice.stripe.com/i/acct_1UHkqzB2rWevQSf8/test_YWNjdF8xVUhrcXpCMnJXZXZRU2Y4LF9WZGVXNllEUGJxT2ZYMkRnZWNudDU5NlFINFV2bTZRLDE4NTM2NTk5Mg0200I3ezVoUX?s=ap",
+     "invoice_pdf": "https://pay.stripe.com/invoice/acct_1UHkqzB2rWevQSf8/test_YWNjdF8xVUhrcXpCMnJXZXZRU2Y4LF9WZGVXNllEUGJxT2ZYMkRnZWNudDU5NlFINFV2bTZRLDE4NTM2NTk5Mg0200I3ezVoUX/pdf?s=ap",
+     "lines": {
+      "object": "list",
+      "data": [
+       {
+        "id": "il_1UcNDeB2rWevQSf8Bi7WsR7P",
+        "object": "line_item",
+        "amount": 1499,
+        "amount_excluding_tax": 1499,
+        "currency": "usd",
+        "description": "1 × Seazn Club Pro (Tier 1 at $14.99 / month)",
+        "discountable": true,
+        "invoice": "in_1UcNDmB2rWevQSf8labxrojT",
+        "livemode": false,
+        "metadata": {
+         "probe": "billing-emails-sca-2026-11-16"
+        },
+        "parent": {
+         "subscription_item_details": {
+          "proration": false,
+          "subscription": "sub_1UcNDmB2rWevQSf8p6wgUAyO",
+          "subscription_item": "si_VdeW57qRgF4LpN"
+         },
+         "type": "subscription_item_details"
+        },
+        "period": {
+         "end": 1797417182,
+         "start": 1794825182
+        },
+        "price": {
+         "id": "price_1UHl73B2rWevQSf83OW1slCp",
+         "object": "price",
+         "active": true,
+         "created": 1789912141,
+         "currency": "usd",
+         "livemode": false,
+         "lookup_key": "seazn_pro_monthly",
+         "metadata": {
+          "seazn_plan": "pro"
+         },
+         "product": "prod_VILonR11zi9JVT",
+         "recurring": {
+          "interval": "month",
+          "interval_count": 1,
+          "usage_type": "licensed"
+         },
+         "type": "recurring"
+        },
+        "pricing": {
+         "price_details": {
+          "price": "price_1UHl73B2rWevQSf83OW1slCp",
+          "product": "prod_VILonR11zi9JVT"
+         },
+         "type": "price_details",
+         "unit_amount_decimal": "1499"
+        },
+        "proration": false,
+        "quantity": 1,
+        "quantity_decimal": "1",
+        "subscription": "sub_1UcNDmB2rWevQSf8p6wgUAyO",
+        "subscription_item": "si_VdeW57qRgF4LpN",
+        "subtotal": 1499,
+        "type": "subscription",
+        "unit_amount_excluding_tax": "1499"
+       }
+      ],
+      "has_more": false,
+      "total_count": 1,
+      "url": "/v1/invoices/in_1UcNDmB2rWevQSf8labxrojT/lines"
+     },
+     "livemode": false,
+     "paid": false,
+     "paid_out_of_band": false,
+     "parent": {
+      "subscription_details": {
+       "metadata": {
+        "probe": "billing-emails-sca-2026-11-16"
+       },
+       "subscription": "sub_1UcNDmB2rWevQSf8p6wgUAyO"
+      },
+      "type": "subscription_details"
+     },
+     "payment_intent": "pi_3UcNDmB2rWevQSf81mKbqcLQ",
+     "period_end": 1794825182,
+     "period_start": 1794825182,
+     "post_payment_credit_notes_amount": 0,
+     "pre_payment_credit_notes_amount": 0,
+     "starting_balance": 0,
+     "status": "open",
+     "status_transitions": {
+      "finalized_at": 1794825182
+     },
+     "subscription": "sub_1UcNDmB2rWevQSf8p6wgUAyO",
+     "subscription_details": {
+      "metadata": {
+       "probe": "billing-emails-sca-2026-11-16"
+      }
+     },
+     "subtotal": 1499,
+     "subtotal_excluding_tax": 1499,
+     "test_clock": "clock_1UcNDfB2rWevQSf8Ur6OEBLC",
+     "total": 1499,
+     "total_excluding_tax": 1499,
+     "webhooks_delivered_at": 1794825182
+    }
+   }
+  },
+  "invoice.upcoming.annual_renewal": {
+   "id": "evt_1Uc2KxB2rWevQSf8uXtWidh9",
+   "type": "invoice.upcoming",
+   "created": 1794744911,
+   "livemode": false,
+   "data": {
+    "object": {
+     "object": "invoice",
+     "amount_due": 12899,
+     "amount_overpaid": 0,
+     "amount_paid": 0,
+     "amount_remaining": 12899,
+     "amount_shipping": 0,
+     "attempt_count": 0,
+     "attempted": false,
+     "billing_reason": "upcoming",
+     "collection_method": "charge_automatically",
+     "created": 1827490463,
+     "currency": "usd",
+     "customer": "cus_VdIwH7MzEqqTcy",
+     "customer_email": "payer@example.com",
+     "ending_balance": 0,
+     "lines": {
+      "object": "list",
+      "data": [
+       {
+        "id": "il_tmp_1WpQx1B2rWevQSf8f2yL8Fol",
+        "object": "line_item",
+        "amount": 12899,
+        "amount_excluding_tax": 12899,
+        "currency": "usd",
+        "description": "1 × Seazn Club Pro (Tier 1 at $128.99 / year)",
+        "discountable": true,
+        "livemode": false,
+        "metadata": {
+         "probe": "billing-emails-2026-11-15"
+        },
+        "parent": {
+         "subscription_item_details": {
+          "proration": false,
+          "subscription": "sub_1Uc2KGB2rWevQSf8nQ6D1J1Y",
+          "subscription_item": "si_VdIwR1BlkOuUyh"
+         },
+         "type": "subscription_item_details"
+        },
+        "period": {
+         "end": 1859112863,
+         "start": 1827490463
+        },
+        "price": {
+         "id": "price_1UHl73B2rWevQSf8vSKhOyd8",
+         "object": "price",
+         "active": true,
+         "created": 1789912141,
+         "currency": "usd",
+         "livemode": false,
+         "lookup_key": "seazn_pro_annual",
+         "metadata": {
+          "seazn_plan": "pro"
+         },
+         "product": "prod_VILonR11zi9JVT",
+         "recurring": {
+          "interval": "year",
+          "interval_count": 1,
+          "usage_type": "licensed"
+         },
+         "type": "recurring"
+        },
+        "pricing": {
+         "price_details": {
+          "price": "price_1UHl73B2rWevQSf8vSKhOyd8",
+          "product": "prod_VILonR11zi9JVT"
+         },
+         "type": "price_details",
+         "unit_amount_decimal": "12899"
+        },
+        "proration": false,
+        "quantity": 1,
+        "quantity_decimal": "1",
+        "subscription": "sub_1Uc2KGB2rWevQSf8nQ6D1J1Y",
+        "subscription_item": "si_VdIwR1BlkOuUyh",
+        "subtotal": 12899,
+        "type": "subscription",
+        "unit_amount_excluding_tax": "12899"
+       }
+      ],
+      "has_more": false,
+      "total_count": 1,
+      "url": "/v1/invoices/upcoming_in_1Uc2KwB2rWevQSf8IdJmLdf1/lines"
+     },
+     "livemode": false,
+     "next_payment_attempt": 1827494063,
+     "paid": false,
+     "paid_out_of_band": false,
+     "parent": {
+      "subscription_details": {
+       "metadata": {
+        "probe": "billing-emails-2026-11-15"
+       },
+       "subscription": "sub_1Uc2KGB2rWevQSf8nQ6D1J1Y"
+      },
+      "type": "subscription_details"
+     },
+     "period_end": 1827490463,
+     "period_start": 1795954463,
+     "post_payment_credit_notes_amount": 0,
+     "pre_payment_credit_notes_amount": 0,
+     "starting_balance": 0,
+     "status": "draft",
+     "subscription": "sub_1Uc2KGB2rWevQSf8nQ6D1J1Y",
+     "subscription_details": {
+      "metadata": {
+       "probe": "billing-emails-2026-11-15"
+      }
+     },
+     "subtotal": 12899,
+     "subtotal_excluding_tax": 12899,
+     "test_clock": "clock_1Uc2KBB2rWevQSf8HPPtOpae",
+     "total": 12899,
+     "total_excluding_tax": 12899
+    }
+   }
+  },
+  "invoice.upcoming.card_trial_before_conversion": {
+   "id": "evt_1Uc2KPB2rWevQSf8CacUJV9B",
+   "type": "invoice.upcoming",
+   "created": 1794744877,
+   "livemode": false,
+   "data": {
+    "object": {
+     "object": "invoice",
+     "amount_due": 12899,
+     "amount_overpaid": 0,
+     "amount_paid": 0,
+     "amount_remaining": 12899,
+     "amount_shipping": 0,
+     "attempt_count": 0,
+     "attempted": false,
+     "billing_reason": "upcoming",
+     "collection_method": "charge_automatically",
+     "created": 1795954463,
+     "currency": "usd",
+     "customer": "cus_VdIwH7MzEqqTcy",
+     "customer_email": "payer@example.com",
+     "ending_balance": 0,
+     "lines": {
+      "object": "list",
+      "data": [
+       {
+        "id": "il_tmp_1Uh6zrB2rWevQSf8lzGIjkZw",
+        "object": "line_item",
+        "amount": 12899,
+        "amount_excluding_tax": 12899,
+        "currency": "usd",
+        "description": "1 × Seazn Club Pro (Tier 1 at $128.99 / year)",
+        "discountable": true,
+        "livemode": false,
+        "metadata": {
+         "probe": "billing-emails-2026-11-15"
+        },
+        "parent": {
+         "subscription_item_details": {
+          "proration": false,
+          "subscription": "sub_1Uc2KGB2rWevQSf8nQ6D1J1Y",
+          "subscription_item": "si_VdIwR1BlkOuUyh"
+         },
+         "type": "subscription_item_details"
+        },
+        "period": {
+         "end": 1827490463,
+         "start": 1795954463
+        },
+        "price": {
+         "id": "price_1UHl73B2rWevQSf8vSKhOyd8",
+         "object": "price",
+         "active": true,
+         "created": 1789912141,
+         "currency": "usd",
+         "livemode": false,
+         "lookup_key": "seazn_pro_annual",
+         "metadata": {
+          "seazn_plan": "pro"
+         },
+         "product": "prod_VILonR11zi9JVT",
+         "recurring": {
+          "interval": "year",
+          "interval_count": 1,
+          "usage_type": "licensed"
+         },
+         "type": "recurring"
+        },
+        "pricing": {
+         "price_details": {
+          "price": "price_1UHl73B2rWevQSf8vSKhOyd8",
+          "product": "prod_VILonR11zi9JVT"
+         },
+         "type": "price_details",
+         "unit_amount_decimal": "12899"
+        },
+        "proration": false,
+        "quantity": 1,
+        "quantity_decimal": "1",
+        "subscription": "sub_1Uc2KGB2rWevQSf8nQ6D1J1Y",
+        "subscription_item": "si_VdIwR1BlkOuUyh",
+        "subtotal": 12899,
+        "type": "subscription",
+        "unit_amount_excluding_tax": "12899"
+       }
+      ],
+      "has_more": false,
+      "total_count": 1,
+      "url": "/v1/invoices/upcoming_in_1Uc2KPB2rWevQSf8nmZXv5o3/lines"
+     },
+     "livemode": false,
+     "next_payment_attempt": 1795958063,
+     "paid": false,
+     "paid_out_of_band": false,
+     "parent": {
+      "subscription_details": {
+       "metadata": {
+        "probe": "billing-emails-2026-11-15"
+       },
+       "subscription": "sub_1Uc2KGB2rWevQSf8nQ6D1J1Y"
+      },
+      "type": "subscription_details"
+     },
+     "period_end": 1795954463,
+     "period_start": 1794744863,
+     "post_payment_credit_notes_amount": 0,
+     "pre_payment_credit_notes_amount": 0,
+     "starting_balance": 0,
+     "status": "draft",
+     "subscription": "sub_1Uc2KGB2rWevQSf8nQ6D1J1Y",
+     "subscription_details": {
+      "metadata": {
+       "probe": "billing-emails-2026-11-15"
+      }
+     },
+     "subtotal": 12899,
+     "subtotal_excluding_tax": 12899,
+     "test_clock": "clock_1Uc2KBB2rWevQSf8HPPtOpae",
+     "total": 12899,
+     "total_excluding_tax": 12899
+    }
+   }
+  },
+  "invoice.upcoming.monthly_renewal": {
+   "id": "evt_1Uc2KbB2rWevQSf8IhISlH2Z",
+   "type": "invoice.upcoming",
+   "created": 1794744889,
+   "livemode": false,
+   "data": {
+    "object": {
+     "object": "invoice",
+     "amount_due": 1499,
+     "amount_overpaid": 0,
+     "amount_paid": 0,
+     "amount_remaining": 1499,
+     "amount_shipping": 0,
+     "attempt_count": 0,
+     "attempted": false,
+     "billing_reason": "upcoming",
+     "collection_method": "charge_automatically",
+     "created": 1797336863,
+     "currency": "usd",
+     "customer": "cus_VdIwL61fVRnAKz",
+     "customer_email": "payer@example.com",
+     "ending_balance": 0,
+     "lines": {
+      "object": "list",
+      "data": [
+       {
+        "id": "il_tmp_1UmucdB2rWevQSf8FHNPWpna",
+        "object": "line_item",
+        "amount": 1499,
+        "amount_excluding_tax": 1499,
+        "currency": "usd",
+        "description": "1 × Seazn Club Pro (Tier 1 at $14.99 / month)",
+        "discountable": true,
+        "livemode": false,
+        "metadata": {
+         "probe": "billing-emails-2026-11-15"
+        },
+        "parent": {
+         "subscription_item_details": {
+          "proration": false,
+          "subscription": "sub_1Uc2KJB2rWevQSf83N1BVBu1",
+          "subscription_item": "si_VdIwavWGQBp6vs"
+         },
+         "type": "subscription_item_details"
+        },
+        "period": {
+         "end": 1800015263,
+         "start": 1797336863
+        },
+        "price": {
+         "id": "price_1UHl73B2rWevQSf83OW1slCp",
+         "object": "price",
+         "active": true,
+         "created": 1789912141,
+         "currency": "usd",
+         "livemode": false,
+         "lookup_key": "seazn_pro_monthly",
+         "metadata": {
+          "seazn_plan": "pro"
+         },
+         "product": "prod_VILonR11zi9JVT",
+         "recurring": {
+          "interval": "month",
+          "interval_count": 1,
+          "usage_type": "licensed"
+         },
+         "type": "recurring"
+        },
+        "pricing": {
+         "price_details": {
+          "price": "price_1UHl73B2rWevQSf83OW1slCp",
+          "product": "prod_VILonR11zi9JVT"
+         },
+         "type": "price_details",
+         "unit_amount_decimal": "1499"
+        },
+        "proration": false,
+        "quantity": 1,
+        "quantity_decimal": "1",
+        "subscription": "sub_1Uc2KJB2rWevQSf83N1BVBu1",
+        "subscription_item": "si_VdIwavWGQBp6vs",
+        "subtotal": 1499,
+        "type": "subscription",
+        "unit_amount_excluding_tax": "1499"
+       }
+      ],
+      "has_more": false,
+      "total_count": 1,
+      "url": "/v1/invoices/upcoming_in_1Uc2KbB2rWevQSf8XpiaJTxA/lines"
+     },
+     "livemode": false,
+     "next_payment_attempt": 1797340463,
+     "paid": false,
+     "paid_out_of_band": false,
+     "parent": {
+      "subscription_details": {
+       "metadata": {
+        "probe": "billing-emails-2026-11-15"
+       },
+       "subscription": "sub_1Uc2KJB2rWevQSf83N1BVBu1"
+      },
+      "type": "subscription_details"
+     },
+     "period_end": 1797336863,
+     "period_start": 1794744863,
+     "post_payment_credit_notes_amount": 0,
+     "pre_payment_credit_notes_amount": 0,
+     "starting_balance": 0,
+     "status": "draft",
+     "subscription": "sub_1Uc2KJB2rWevQSf83N1BVBu1",
+     "subscription_details": {
+      "metadata": {
+       "probe": "billing-emails-2026-11-15"
+      }
+     },
+     "subtotal": 1499,
+     "subtotal_excluding_tax": 1499,
+     "test_clock": "clock_1Uc2KBB2rWevQSf8HPPtOpae",
+     "total": 1499,
+     "total_excluding_tax": 1499
+    }
+   }
+  },
+  "subscription.updated.cancel_scheduled": {
+   "id": "evt_1Uc2KEB2rWevQSf8KCQ0GXMX",
+   "type": "customer.subscription.updated",
+   "created": 1794744866,
+   "livemode": false,
+   "data": {
+    "object": {
+     "id": "sub_1Uc2KCB2rWevQSf8JSBw6nxP",
+     "object": "subscription",
+     "billing_cycle_anchor": 1795954463,
+     "cancel_at": 1795954463,
+     "cancel_at_period_end": true,
+     "canceled_at": 1794744863,
+     "collection_method": "charge_automatically",
+     "created": 1794744863,
+     "currency": "usd",
+     "current_period_end": 1795954463,
+     "current_period_start": 1794744863,
+     "customer": "cus_VdIwvLHF6bniQA",
+     "items": {
+      "object": "list",
+      "data": [
+       {
+        "id": "si_VdIwGp9Rf131qb",
+        "object": "subscription_item",
+        "created": 1794744863,
+        "current_period_end": 1795954463,
+        "current_period_start": 1794744863,
+        "price": {
+         "id": "price_1UHl73B2rWevQSf8vSKhOyd8",
+         "object": "price",
+         "active": true,
+         "created": 1789912141,
+         "currency": "usd",
+         "livemode": false,
+         "lookup_key": "seazn_pro_annual",
+         "metadata": {
+          "seazn_plan": "pro"
+         },
+         "product": "prod_VILonR11zi9JVT",
+         "recurring": {
+          "interval": "year",
+          "interval_count": 1,
+          "usage_type": "licensed"
+         },
+         "type": "recurring"
+        },
+        "quantity": 1,
+        "subscription": "sub_1Uc2KCB2rWevQSf8JSBw6nxP"
+       }
+      ],
+      "has_more": false,
+      "total_count": 1,
+      "url": "/v1/subscription_items?subscription=sub_1Uc2KCB2rWevQSf8JSBw6nxP"
+     },
+     "latest_invoice": "in_1Uc2KDB2rWevQSf83r8zSGWJ",
+     "livemode": false,
+     "managed_payments": {
+      "enabled": false
+     },
+     "metadata": {
+      "probe": "billing-emails-2026-11-15"
+     },
+     "pending_setup_intent": "seti_1Uc2KCB2rWevQSf8OB6XLAwJ",
+     "quantity": 1,
+     "start_date": 1794744863,
+     "status": "trialing",
+     "test_clock": "clock_1Uc2KBB2rWevQSf8HPPtOpae",
+     "trial_end": 1795954463,
+     "trial_start": 1794744863
+    },
+    "previous_attributes": {
+     "cancel_at": null,
+     "cancel_at_period_end": false,
+     "canceled_at": null,
+     "cancellation_details": {}
+    }
+   }
+  },
+  "subscription.updated.resumed": {
+   "id": "evt_1Uc2KFB2rWevQSf8zT7sxbdj",
+   "type": "customer.subscription.updated",
+   "created": 1794744867,
+   "livemode": false,
+   "data": {
+    "object": {
+     "id": "sub_1Uc2KCB2rWevQSf8JSBw6nxP",
+     "object": "subscription",
+     "billing_cycle_anchor": 1795954463,
+     "cancel_at_period_end": false,
+     "collection_method": "charge_automatically",
+     "created": 1794744863,
+     "currency": "usd",
+     "current_period_end": 1795954463,
+     "current_period_start": 1794744863,
+     "customer": "cus_VdIwvLHF6bniQA",
+     "items": {
+      "object": "list",
+      "data": [
+       {
+        "id": "si_VdIwGp9Rf131qb",
+        "object": "subscription_item",
+        "created": 1794744863,
+        "current_period_end": 1795954463,
+        "current_period_start": 1794744863,
+        "price": {
+         "id": "price_1UHl73B2rWevQSf8vSKhOyd8",
+         "object": "price",
+         "active": true,
+         "created": 1789912141,
+         "currency": "usd",
+         "livemode": false,
+         "lookup_key": "seazn_pro_annual",
+         "metadata": {
+          "seazn_plan": "pro"
+         },
+         "product": "prod_VILonR11zi9JVT",
+         "recurring": {
+          "interval": "year",
+          "interval_count": 1,
+          "usage_type": "licensed"
+         },
+         "type": "recurring"
+        },
+        "quantity": 1,
+        "subscription": "sub_1Uc2KCB2rWevQSf8JSBw6nxP"
+       }
+      ],
+      "has_more": false,
+      "total_count": 1,
+      "url": "/v1/subscription_items?subscription=sub_1Uc2KCB2rWevQSf8JSBw6nxP"
+     },
+     "latest_invoice": "in_1Uc2KDB2rWevQSf83r8zSGWJ",
+     "livemode": false,
+     "managed_payments": {
+      "enabled": false
+     },
+     "metadata": {
+      "probe": "billing-emails-2026-11-15"
+     },
+     "pending_setup_intent": "seti_1Uc2KCB2rWevQSf8OB6XLAwJ",
+     "quantity": 1,
+     "start_date": 1794744863,
+     "status": "trialing",
+     "test_clock": "clock_1Uc2KBB2rWevQSf8HPPtOpae",
+     "trial_end": 1795954463,
+     "trial_start": 1794744863
+    },
+    "previous_attributes": {
+     "cancel_at": 1795954463,
+     "cancel_at_period_end": true,
+     "canceled_at": 1794744863,
+     "cancellation_details": {
+      "reason": "cancellation_requested"
+     }
+    }
+   }
+  },
+  "subscription.updated.interval_switch_to_annual": {
+   "id": "evt_1Uc2KEB2rWevQSf8wLLDrHdg",
+   "type": "customer.subscription.updated",
+   "created": 1794744866,
+   "livemode": false,
+   "data": {
+    "object": {
+     "id": "sub_1Uc2KCB2rWevQSf8JSBw6nxP",
+     "object": "subscription",
+     "billing_cycle_anchor": 1795954463,
+     "cancel_at_period_end": false,
+     "collection_method": "charge_automatically",
+     "created": 1794744863,
+     "currency": "usd",
+     "current_period_end": 1795954463,
+     "current_period_start": 1794744863,
+     "customer": "cus_VdIwvLHF6bniQA",
+     "items": {
+      "object": "list",
+      "data": [
+       {
+        "id": "si_VdIwGp9Rf131qb",
+        "object": "subscription_item",
+        "created": 1794744863,
+        "current_period_end": 1795954463,
+        "current_period_start": 1794744863,
+        "price": {
+         "id": "price_1UHl73B2rWevQSf8vSKhOyd8",
+         "object": "price",
+         "active": true,
+         "created": 1789912141,
+         "currency": "usd",
+         "livemode": false,
+         "lookup_key": "seazn_pro_annual",
+         "metadata": {
+          "seazn_plan": "pro"
+         },
+         "product": "prod_VILonR11zi9JVT",
+         "recurring": {
+          "interval": "year",
+          "interval_count": 1,
+          "usage_type": "licensed"
+         },
+         "type": "recurring"
+        },
+        "quantity": 1,
+        "subscription": "sub_1Uc2KCB2rWevQSf8JSBw6nxP"
+       }
+      ],
+      "has_more": false,
+      "total_count": 1,
+      "url": "/v1/subscription_items?subscription=sub_1Uc2KCB2rWevQSf8JSBw6nxP"
+     },
+     "latest_invoice": "in_1Uc2KDB2rWevQSf83r8zSGWJ",
+     "livemode": false,
+     "managed_payments": {
+      "enabled": false
+     },
+     "metadata": {
+      "probe": "billing-emails-2026-11-15"
+     },
+     "pending_setup_intent": "seti_1Uc2KCB2rWevQSf8OB6XLAwJ",
+     "quantity": 1,
+     "start_date": 1794744863,
+     "status": "trialing",
+     "test_clock": "clock_1Uc2KBB2rWevQSf8HPPtOpae",
+     "trial_end": 1795954463,
+     "trial_start": 1794744863
+    },
+    "previous_attributes": {
+     "items": {
+      "data": [
+       {
+        "id": "si_VdIwGp9Rf131qb",
+        "object": "subscription_item",
+        "created": 1794744863,
+        "current_period_end": 1795954463,
+        "current_period_start": 1794744863,
+        "plan": {
+         "id": "price_1UHl73B2rWevQSf83OW1slCp",
+         "object": "plan",
+         "active": true,
+         "billing_scheme": "tiered",
+         "created": 1789912141,
+         "currency": "usd",
+         "interval": "month",
+         "interval_count": 1,
+         "livemode": false,
+         "metadata": {
+          "seazn_plan": "pro"
+         },
+         "product": "prod_VILonR11zi9JVT",
+         "tiers_mode": "graduated",
+         "usage_type": "licensed"
+        },
+        "price": {
+         "id": "price_1UHl73B2rWevQSf83OW1slCp",
+         "object": "price",
+         "active": true,
+         "billing_scheme": "tiered",
+         "created": 1789912141,
+         "currency": "usd",
+         "livemode": false,
+         "lookup_key": "seazn_pro_monthly",
+         "metadata": {
+          "seazn_plan": "pro"
+         },
+         "product": "prod_VILonR11zi9JVT",
+         "recurring": {
+          "interval": "month",
+          "interval_count": 1,
+          "usage_type": "licensed"
+         },
+         "tax_behavior": "unspecified",
+         "tiers_mode": "graduated",
+         "type": "recurring"
+        },
+        "quantity": 1,
+        "subscription": "sub_1Uc2KCB2rWevQSf8JSBw6nxP"
+       }
+      ]
+     },
+     "latest_invoice": "in_1Uc2KCB2rWevQSf8OLsFjTtL",
+     "plan": {
+      "id": "price_1UHl73B2rWevQSf83OW1slCp",
+      "interval": "month"
+     }
+    }
+   }
+  },
+  "subscription.updated.trial_converted": {
+   "id": "evt_1Uc2KSB2rWevQSf8DwDhlCQC",
+   "type": "customer.subscription.updated",
+   "created": 1794744880,
+   "livemode": false,
+   "data": {
+    "object": {
+     "id": "sub_1Uc2KGB2rWevQSf8nQ6D1J1Y",
+     "object": "subscription",
+     "billing_cycle_anchor": 1795954463,
+     "cancel_at_period_end": false,
+     "collection_method": "charge_automatically",
+     "created": 1794744863,
+     "currency": "usd",
+     "current_period_end": 1827490463,
+     "current_period_start": 1795954463,
+     "customer": "cus_VdIwH7MzEqqTcy",
+     "items": {
+      "object": "list",
+      "data": [
+       {
+        "id": "si_VdIwR1BlkOuUyh",
+        "object": "subscription_item",
+        "created": 1794744863,
+        "current_period_end": 1827490463,
+        "current_period_start": 1795954463,
+        "price": {
+         "id": "price_1UHl73B2rWevQSf8vSKhOyd8",
+         "object": "price",
+         "active": true,
+         "created": 1789912141,
+         "currency": "usd",
+         "livemode": false,
+         "lookup_key": "seazn_pro_annual",
+         "metadata": {
+          "seazn_plan": "pro"
+         },
+         "product": "prod_VILonR11zi9JVT",
+         "recurring": {
+          "interval": "year",
+          "interval_count": 1,
+          "usage_type": "licensed"
+         },
+         "type": "recurring"
+        },
+        "quantity": 1,
+        "subscription": "sub_1Uc2KGB2rWevQSf8nQ6D1J1Y"
+       }
+      ],
+      "has_more": false,
+      "total_count": 1,
+      "url": "/v1/subscription_items?subscription=sub_1Uc2KGB2rWevQSf8nQ6D1J1Y"
+     },
+     "latest_invoice": "in_1Uc2KRB2rWevQSf88T6Pfn4O",
+     "livemode": false,
+     "managed_payments": {
+      "enabled": false
+     },
+     "metadata": {
+      "probe": "billing-emails-2026-11-15"
+     },
+     "quantity": 1,
+     "start_date": 1794744863,
+     "status": "active",
+     "test_clock": "clock_1Uc2KBB2rWevQSf8HPPtOpae",
+     "trial_end": 1795954463,
+     "trial_start": 1794744863
+    },
+    "previous_attributes": {
+     "current_period_end": 1795954463,
+     "current_period_start": 1794744863,
+     "items": {
+      "data": [
+       {
+        "id": "si_VdIwR1BlkOuUyh",
+        "object": "subscription_item",
+        "created": 1794744863,
+        "current_period_end": 1795954463,
+        "current_period_start": 1794744863,
+        "plan": {
+         "id": "price_1UHl73B2rWevQSf8vSKhOyd8",
+         "object": "plan",
+         "active": true,
+         "billing_scheme": "tiered",
+         "created": 1789912141,
+         "currency": "usd",
+         "interval": "year",
+         "interval_count": 1,
+         "livemode": false,
+         "metadata": {
+          "seazn_plan": "pro"
+         },
+         "product": "prod_VILonR11zi9JVT",
+         "tiers_mode": "graduated",
+         "usage_type": "licensed"
+        },
+        "price": {
+         "id": "price_1UHl73B2rWevQSf8vSKhOyd8",
+         "object": "price",
+         "active": true,
+         "billing_scheme": "tiered",
+         "created": 1789912141,
+         "currency": "usd",
+         "livemode": false,
+         "lookup_key": "seazn_pro_annual",
+         "metadata": {
+          "seazn_plan": "pro"
+         },
+         "product": "prod_VILonR11zi9JVT",
+         "recurring": {
+          "interval": "year",
+          "interval_count": 1,
+          "usage_type": "licensed"
+         },
+         "tax_behavior": "unspecified",
+         "tiers_mode": "graduated",
+         "type": "recurring"
+        },
+        "quantity": 1,
+        "subscription": "sub_1Uc2KGB2rWevQSf8nQ6D1J1Y"
+       }
+      ]
+     },
+     "latest_invoice": "in_1Uc2KGB2rWevQSf8NAjzU80z",
+     "status": "trialing"
+    }
+   }
+  },
+  "subscription.updated.annual_renewal": {
+   "id": "evt_1Uc2L3B2rWevQSf8ZNDW99qb",
+   "type": "customer.subscription.updated",
+   "created": 1794744917,
+   "livemode": false,
+   "data": {
+    "object": {
+     "id": "sub_1Uc2KGB2rWevQSf8nQ6D1J1Y",
+     "object": "subscription",
+     "billing_cycle_anchor": 1795954463,
+     "cancel_at_period_end": false,
+     "collection_method": "charge_automatically",
+     "created": 1794744863,
+     "currency": "usd",
+     "current_period_end": 1859112863,
+     "current_period_start": 1827490463,
+     "customer": "cus_VdIwH7MzEqqTcy",
+     "items": {
+      "object": "list",
+      "data": [
+       {
+        "id": "si_VdIwR1BlkOuUyh",
+        "object": "subscription_item",
+        "created": 1794744863,
+        "current_period_end": 1859112863,
+        "current_period_start": 1827490463,
+        "price": {
+         "id": "price_1UHl73B2rWevQSf8vSKhOyd8",
+         "object": "price",
+         "active": true,
+         "created": 1789912141,
+         "currency": "usd",
+         "livemode": false,
+         "lookup_key": "seazn_pro_annual",
+         "metadata": {
+          "seazn_plan": "pro"
+         },
+         "product": "prod_VILonR11zi9JVT",
+         "recurring": {
+          "interval": "year",
+          "interval_count": 1,
+          "usage_type": "licensed"
+         },
+         "type": "recurring"
+        },
+        "quantity": 1,
+        "subscription": "sub_1Uc2KGB2rWevQSf8nQ6D1J1Y"
+       }
+      ],
+      "has_more": false,
+      "total_count": 1,
+      "url": "/v1/subscription_items?subscription=sub_1Uc2KGB2rWevQSf8nQ6D1J1Y"
+     },
+     "latest_invoice": "in_1Uc2L2B2rWevQSf8HoOV5WmO",
+     "livemode": false,
+     "managed_payments": {
+      "enabled": false
+     },
+     "metadata": {
+      "probe": "billing-emails-2026-11-15"
+     },
+     "quantity": 1,
+     "start_date": 1794744863,
+     "status": "active",
+     "test_clock": "clock_1Uc2KBB2rWevQSf8HPPtOpae",
+     "trial_end": 1795954463,
+     "trial_start": 1794744863
+    },
+    "previous_attributes": {
+     "current_period_end": 1827490463,
+     "current_period_start": 1795954463,
+     "items": {
+      "data": [
+       {
+        "id": "si_VdIwR1BlkOuUyh",
+        "object": "subscription_item",
+        "created": 1794744863,
+        "current_period_end": 1827490463,
+        "current_period_start": 1795954463,
+        "plan": {
+         "id": "price_1UHl73B2rWevQSf8vSKhOyd8",
+         "object": "plan",
+         "active": true,
+         "billing_scheme": "tiered",
+         "created": 1789912141,
+         "currency": "usd",
+         "interval": "year",
+         "interval_count": 1,
+         "livemode": false,
+         "metadata": {
+          "seazn_plan": "pro"
+         },
+         "product": "prod_VILonR11zi9JVT",
+         "tiers_mode": "graduated",
+         "usage_type": "licensed"
+        },
+        "price": {
+         "id": "price_1UHl73B2rWevQSf8vSKhOyd8",
+         "object": "price",
+         "active": true,
+         "billing_scheme": "tiered",
+         "created": 1789912141,
+         "currency": "usd",
+         "livemode": false,
+         "lookup_key": "seazn_pro_annual",
+         "metadata": {
+          "seazn_plan": "pro"
+         },
+         "product": "prod_VILonR11zi9JVT",
+         "recurring": {
+          "interval": "year",
+          "interval_count": 1,
+          "usage_type": "licensed"
+         },
+         "tax_behavior": "unspecified",
+         "tiers_mode": "graduated",
+         "type": "recurring"
+        },
+        "quantity": 1,
+        "subscription": "sub_1Uc2KGB2rWevQSf8nQ6D1J1Y"
+       }
+      ]
+     },
+     "latest_invoice": "in_1Uc2KRB2rWevQSf88T6Pfn4O"
+    }
+   }
+  }
+ }
+}

@@ -66,6 +66,11 @@
 //   - trial_ending: the real `processStripeEvent` (`customer.subscription.trial_will_end`) on a no-card trialing billing group whose
 //     payer's account is `fr`: the warning is queued to the payer's account, TRANSACTIONAL (the only wave-2 kind that is), with no
 //     organisation, and the worker makes the first attempt.
+//   - trial_expired, plan_activated, renewal_paid, renewal_failed, renewal_upcoming, subscription_changed, renewal_action_required (the
+//     billing lifecycle mails, V524): the real `processStripeEvent` with a REAL Stripe payload captured in a sandbox (usecases/__tests__/
+//     _billing-lifecycle-fixtures.ts) — a no-card trial deleted at its end, a new paid subscription's invoice, an annual renewal's
+//     invoice, a declined renewal, an annual `invoice.upcoming`, a cancel scheduled, a renewal the bank wants confirmed — each on its own billing group whose payer's account
+//     is `fr`, `es` or `nl`: queued to the payer's account, transactional, no organisation, and the worker makes the first attempt.
 //   - email_verification: the route POST of app/api/admin/users/[id]/resend-verification/route.ts, a staff press for an unverified `fr`
 //     account: the token and its row are one transaction on the pool, no organisation, and the request's own deferred attempt sends it.
 //     The staff member is signed in through the session stand-in below; `requireStaff` itself is real.
@@ -333,6 +338,8 @@ import { alertStreamCreditGrantFailed } from "@/server/usecases/stream-credits-c
 import { alertPassCreditReversalIncomplete } from "@/server/usecases/pass-credit";
 import { alertPassUnknownCompetition, maybeAlertPassRungMismatch } from "@/lib/billing";
 import { planLabel } from "@/lib/plan-label";
+import type { Locale } from "@/lib/i18n-constants";
+import { capturedEvent, freshInvoiceId, seedBillingGroup } from "@/server/usecases/__tests__/_billing-lifecycle-fixtures";
 import { SETTINGS_BASE, asOwner, fakeSession, makeUser, rig, seedOrg, seedRegistration, stripeRig } from "@/server/usecases/__tests__/_registration-fixtures";
 import { DISPATCH_NOW_BUDGET_MS, DISPATCH_NOW_MARGIN_MS, OUTBOX_KINDS, idempotencyKey, type OutboxKind } from "../constants";
 import { dispatchNow } from "../attempt";
@@ -432,6 +439,14 @@ const SPEC_KINDS = [
   "quick_match_reminder",
   // Walk-fix F16: an automatic promotion passed a waiting entry over (no Lichess link that plays).
   "registration_promotion_skipped",
+  // The billing lifecycle mails (2026-11-15), in the brief's order: what happened to a billing group's subscription, told to its payer.
+  "trial_expired",
+  "plan_activated",
+  "renewal_failed",
+  "renewal_upcoming",
+  "renewal_paid",
+  "subscription_changed",
+  "renewal_action_required",
 ] as const satisfies readonly OutboxKind[];
 
 /** The legend: [to, transactional]. A = an account, resolved at send; L = a literal address; S = the staff address. T = transactional. */
@@ -506,6 +521,14 @@ const SPEC_FACTS: KindFacts = {
   quick_match_link: ["literal", false],
   quick_match_reminder: ["literal", false],
   registration_promotion_skipped: ["literal", false],
+  // Billing lifecycle mails: the payer's account, transactional (trial_ending's facts).
+  trial_expired: ["account", true],
+  plan_activated: ["account", true],
+  renewal_failed: ["account", true],
+  renewal_upcoming: ["account", true],
+  renewal_paid: ["account", true],
+  subscription_changed: ["account", true],
+  renewal_action_required: ["account", true],
 };
 
 /** What the real producers create beyond the rows the hand-made scenarios name: the seeded round's people and organisation. (The
@@ -576,15 +599,15 @@ afterEach(() => {
 });
 
 describe("the spec's lists (no database)", () => {
-  it("the spec lists fifty-one kinds, sponsor deals adds one, the registrant lifecycle seven more (59), the quick match design two more (61), and the code's registry is exactly them, in that order", () => {
+  it("the spec lists fifty-one kinds, sponsor deals adds one, the registrant lifecycle seven more (59), the quick match design two more (61), walk-fix F16 one (62), the billing lifecycle mails seven (69), and the code's registry is exactly them, in that order", () => {
     expect([...OUTBOX_KINDS]).toEqual([...SPEC_KINDS]);
     // The spec's Counts: "With `magic_link` and `chess_invite` that is 51." Sponsor deals Task 23 adds sponsor_deal_paid: 52; the seven
     // registrant lifecycle kinds (P2's five, P5's two): 59. Then the quick match design's two (§7.6, C2): 61; walk-fix F16's
-    // registration_promotion_skipped: 62.
-    expect(SPEC_KINDS).toHaveLength(62);
+    // registration_promotion_skipped: 62; the seven billing lifecycle mails (2026-11-15): 69.
+    expect(SPEC_KINDS).toHaveLength(69);
   });
 
-  it("the legend has 30 literal kinds, SIXTEEN account kinds (sponsor deals' sponsor_deal_paid the sixteenth) and SIXTEEN staff kinds; THIRTY-TWO are transactional", () => {
+  it("the legend has 30 literal kinds, TWENTY-THREE account kinds (sponsor deals' sponsor_deal_paid the sixteenth, then the seven billing lifecycle mails) and SIXTEEN staff kinds; THIRTY-NINE are transactional", () => {
     const by = (to: string): string[] => SPEC_KINDS.filter((k) => SPEC_FACTS[k][0] === to);
     expect(by("literal")).toEqual([
       "magic_link",
@@ -642,6 +665,14 @@ describe("the spec's lists (no database)", () => {
       "group_org_left",
       // Sponsor deals Task 23: the owner's "a sponsor has paid" notice.
       "sponsor_deal_paid",
+      // The billing lifecycle mails: the payer's.
+      "trial_expired",
+      "plan_activated",
+      "renewal_failed",
+      "renewal_upcoming",
+      "renewal_paid",
+      "subscription_changed",
+      "renewal_action_required",
     ]);
     expect(by("staff"), "the sixteen staff alerts are wave 5's, in the table's row order").toEqual([
       "staff_registration_refund_failed",
@@ -699,11 +730,20 @@ describe("the spec's lists (no database)", () => {
       "staff_ai_run_cost",
       "staff_earn_grant_volume",
       "staff_extra_org_allowance",
+      // The billing lifecycle mails: all seven (the trial warning's flag).
+      "trial_expired",
+      "plan_activated",
+      "renewal_failed",
+      "renewal_upcoming",
+      "renewal_paid",
+      "subscription_changed",
+      "renewal_action_required",
     ]);
     // The spec's legend: "The 19 N kinds are the senders that pass no `transactional: true` today", so 51 - 19 = 32 are T. Sponsor deals'
     // sponsor_deal_paid is N, and so is each of the 8 registration lifecycle kinds (P2's five, P5's two, F16's one): 19 + 1 + 8 = 28 N, so
-    // 60 - 28 = 32 are T still; the quick match design's two are N too (controller ruling 2026-11-08): 62 - 30 = 32.
-    expect(SPEC_KINDS.filter((k) => SPEC_FACTS[k][1])).toHaveLength(32);
+    // 60 - 28 = 32 are T still; the quick match design's two are N too (controller ruling 2026-11-08): 62 - 30 = 32. The seven billing
+    // lifecycle mails are T: 69 - 30 = 39.
+    expect(SPEC_KINDS.filter((k) => SPEC_FACTS[k][1])).toHaveLength(39);
   });
 
   it("the not-yet-moved list names only spec kinds, once each, in the registry's order, none of waves 1 to 4, and leaves at least one kind to sweep", () => {
@@ -1509,6 +1549,161 @@ async function trialEndingScenario(): Promise<KindScenario> {
       const sub = { id: g.stripeSubId, object: "subscription", status: "trialing", trial_end: trialEnd.getTime() / 1000, metadata: {} };
       const event = { id: `evt_${RUN}_trial`, type: "customer.subscription.trial_will_end", data: { object: sub } };
       await processStripeEvent(event as unknown as Stripe.Event);
+    },
+  };
+}
+
+/** A billing group for one of the lifecycle scenarios below: a payer at a RUN address (so the harness finds the rows), cleaned up. */
+async function billingScenarioGroup(o: Parameters<typeof seedBillingGroup>[0]) {
+  const g = await seedBillingGroup({ ...o, prefix: RUN });
+  made.orgIds.push(g.orgId);
+  made.userIds.push(g.ownerId);
+  return g;
+}
+
+const billingDay = (unixSeconds: number, locale: Locale): string =>
+  new Intl.DateTimeFormat(locale, { dateStyle: "long", timeZone: "UTC" }).format(new Date(unixSeconds * 1000));
+const nowUnix = (): number => Math.floor(Date.now() / 1000);
+
+/** Run `fn` with the opt-in renewal receipt turned on, and the variable as it was after (not `vi.unstubAllEnvs`, which would also
+ *  drop the outbox key the harness stubbed). */
+async function withRenewalReceipts<T>(fn: () => Promise<T>): Promise<T> {
+  const before = process.env.BILLING_RENEWAL_RECEIPT_EMAILS;
+  process.env.BILLING_RENEWAL_RECEIPT_EMAILS = "1";
+  try {
+    return await fn();
+  } finally {
+    if (before === undefined) delete process.env.BILLING_RENEWAL_RECEIPT_EMAILS;
+    else process.env.BILLING_RENEWAL_RECEIPT_EMAILS = before;
+  }
+}
+
+/** The real `customer.subscription.deleted` for a no-card trial that ran out (a captured sandbox payload): its payer (account `fr`) is
+ *  told the trial ended, transactionally, and the worker sends. */
+async function trialExpiredScenario(): Promise<KindScenario> {
+  const trialEnd = nowUnix() - 60;
+  const g = await billingScenarioGroup({ status: "trialing", trialEnd: new Date(trialEnd * 1000), ownerLocale: "fr", orgDefaultLocale: "en" });
+  return {
+    locale: "fr",
+    subjectKey: "trialExpired.subject",
+    subjectVars: { planName: planLabel("pro") },
+    recipient: g.ownerEmail,
+    firstAttempt: "worker",
+    run: async () => {
+      await processStripeEvent(
+        capturedEvent("subscription.deleted.trial_ran_out_no_card", { stripeSubId: g.stripeSubId, anchor: (o) => o.trial_end, at: trialEnd }),
+      );
+    },
+  };
+}
+
+/** The real `invoice.payment_succeeded` for a new paid subscription (`subscription_create`, captured): the activation mail to the payer
+ *  (account `es`). */
+async function planActivatedScenario(): Promise<KindScenario> {
+  const g = await billingScenarioGroup({ status: "active", ownerLocale: "es" });
+  return {
+    locale: "es",
+    subjectKey: "planActivated.subject",
+    subjectVars: { planName: planLabel("pro") },
+    recipient: g.ownerEmail,
+    firstAttempt: "worker",
+    run: async () => {
+      await processStripeEvent(
+        capturedEvent("invoice.payment_succeeded.new_paid_monthly", { stripeSubId: g.stripeSubId, anchor: (o) => o.created, at: nowUnix(), edit: freshInvoiceId }),
+      );
+    },
+  };
+}
+
+/** The real `invoice.payment_succeeded` for an annual renewal a year after the trial (captured): the receipt to the payer (account
+ *  `es`). The receipt is opt-in (`BILLING_RENEWAL_RECEIPT_EMAILS=1`, default off), so the run turns it on and puts it back. */
+async function renewalPaidScenario(): Promise<KindScenario> {
+  const g = await billingScenarioGroup({ status: "active", trialEnd: new Date((nowUnix() - 365 * 86_400) * 1000), ownerLocale: "es" });
+  return {
+    locale: "es",
+    subjectKey: "renewalPaid.subject",
+    subjectVars: { planName: planLabel("pro") },
+    recipient: g.ownerEmail,
+    firstAttempt: "worker",
+    run: async () => {
+      await withRenewalReceipts(() =>
+        processStripeEvent(
+          capturedEvent("invoice.payment_succeeded.annual_renewal", { stripeSubId: g.stripeSubId, anchor: (o) => o.created, at: nowUnix(), edit: freshInvoiceId }),
+        ),
+      );
+    },
+  };
+}
+
+/** The real `invoice.payment_failed` for a declined monthly renewal (captured): the dunning notice to the payer (account `nl`). */
+async function renewalFailedScenario(): Promise<KindScenario> {
+  const g = await billingScenarioGroup({ status: "active", ownerLocale: "nl" });
+  return {
+    locale: "nl",
+    subjectKey: "renewalFailed.subject",
+    subjectVars: { planName: planLabel("pro") },
+    recipient: g.ownerEmail,
+    firstAttempt: "worker",
+    run: async () => {
+      await processStripeEvent(
+        capturedEvent("invoice.payment_failed.monthly_renewal", { stripeSubId: g.stripeSubId, anchor: (o) => o.created, at: nowUnix(), edit: freshInvoiceId }),
+      );
+    },
+  };
+}
+
+/** The real `invoice.upcoming` for an annual renewal three days out (captured; the payload has no invoice id): the notice to the payer
+ *  (account `fr`), dated by the renewal the payload names. */
+async function renewalUpcomingScenario(): Promise<KindScenario> {
+  const g = await billingScenarioGroup({ status: "active", ownerLocale: "fr" });
+  const renewal = nowUnix() + 3 * 86_400;
+  const event = capturedEvent("invoice.upcoming.annual_renewal", { stripeSubId: g.stripeSubId, anchor: (o) => o.period_end, at: renewal });
+  const renewsAt = (event.data.object as Stripe.Invoice).lines.data[0]!.period.start;
+  return {
+    locale: "fr",
+    subjectKey: "renewalUpcoming.subject",
+    subjectVars: { planName: planLabel("pro"), date: billingDay(renewsAt, "fr") },
+    recipient: g.ownerEmail,
+    firstAttempt: "worker",
+    run: async () => {
+      await processStripeEvent(event);
+    },
+  };
+}
+
+/** The real `customer.subscription.updated` that schedules a cancel (captured): the confirmation to the payer (account `nl`), dated by
+ *  the payload's `cancel_at`. */
+async function subscriptionChangedScenario(): Promise<KindScenario> {
+  const g = await billingScenarioGroup({ status: "active", ownerLocale: "nl" });
+  const cancelAt = nowUnix() + 10 * 86_400;
+  return {
+    locale: "nl",
+    subjectKey: "subscriptionChanged.cancelScheduled.subject",
+    subjectVars: { planName: planLabel("pro"), date: billingDay(cancelAt, "nl") },
+    recipient: g.ownerEmail,
+    firstAttempt: "worker",
+    run: async () => {
+      await processStripeEvent(
+        capturedEvent("subscription.updated.cancel_scheduled", { stripeSubId: g.stripeSubId, anchor: (o) => o.cancel_at, at: cancelAt }),
+      );
+    },
+  };
+}
+
+/** The real `invoice.payment_action_required` for a monthly renewal whose card asks the bank for authentication (captured): the request
+ *  to confirm, to the payer (account `fr`). */
+async function renewalActionRequiredScenario(): Promise<KindScenario> {
+  const g = await billingScenarioGroup({ status: "active", ownerLocale: "fr" });
+  return {
+    locale: "fr",
+    subjectKey: "renewalActionRequired.subject",
+    subjectVars: { planName: planLabel("pro") },
+    recipient: g.ownerEmail,
+    firstAttempt: "worker",
+    run: async () => {
+      await processStripeEvent(
+        capturedEvent("invoice.payment_action_required.monthly_renewal", { stripeSubId: g.stripeSubId, anchor: (o) => o.created, at: nowUnix(), edit: freshInvoiceId }),
+      );
     },
   };
 }
@@ -2687,6 +2882,14 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
       dictionarySubject("en", staffDispute.subjectKey, staffDispute.subjectVars),
     );
 
+    const trialExpired = await trialExpiredScenario();
+    const planActivated = await planActivatedScenario();
+    const renewalFailed = await renewalFailedScenario();
+    const renewalUpcoming = await renewalUpcomingScenario();
+    const renewalPaid = await renewalPaidScenario();
+    const subscriptionChanged = await subscriptionChangedScenario();
+    const renewalActionRequired = await renewalActionRequiredScenario();
+
     const out = await forEachOutboxKind(
       {
         magic_link: magicLinkScenario(),
@@ -2751,6 +2954,13 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         quick_match_link: quickMatchLink,
         quick_match_reminder: quickMatchReminder,
         registration_promotion_skipped: registrationSkipped,
+        trial_expired: trialExpired,
+        plan_activated: planActivated,
+        renewal_failed: renewalFailed,
+        renewal_upcoming: renewalUpcoming,
+        renewal_paid: renewalPaid,
+        subscription_changed: subscriptionChanged,
+        renewal_action_required: renewalActionRequired,
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );
@@ -2758,8 +2968,8 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
     const moved = SPEC_KINDS.filter((k) => !NOT_YET_MOVED.includes(k));
     // The spec's count, typed: "With `magic_link` and `chess_invite` that is 51." Every kind has moved, so every one was swept; sponsor
     // deals Task 23's sponsor_deal_paid makes 52, the seven registrant lifecycle kinds 59, the quick match design's two (§7.6, C2) 61,
-    // and walk-fix F16's registration_promotion_skipped 62.
-    expect(out.checked, "anti-vacuity: every kind the spec lists was swept").toBe(62);
+    // walk-fix F16's registration_promotion_skipped 62, and the seven billing lifecycle mails 69.
+    expect(out.checked, "anti-vacuity: every kind the spec lists was swept").toBe(69);
     expect(out.checked).toBeGreaterThan(0);
     expect(out.kinds, "and they are exactly the spec's moved kinds, in the spec's order").toEqual(moved);
   }, 60_000);
