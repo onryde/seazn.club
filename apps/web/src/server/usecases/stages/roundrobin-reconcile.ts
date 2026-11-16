@@ -32,7 +32,7 @@ import { cancelBoardInvites } from "../external-play/cancel-invites";
 import { fixtureHasResultSql } from "../fixture-results-sql";
 import { stageHasStarted } from "../fixture-started-sql";
 import { roundRobinRefusal } from "../roundrobin-refusal";
-import { roundRobinStagePlan, type RoundBye } from "./generators";
+import { poolCount, roundRobinStagePlan, type RoundBye } from "./generators";
 import { appendFixturesGenerated, divisionHasStarted, recordFixturesCleared } from "./helpers";
 import { stageAttachmentCounts } from "./roster-drift";
 import type { ActiveEntrant, SealedSetupCounts, StageRow } from "./types";
@@ -90,10 +90,14 @@ export async function reconcileRoundRobinLines(
     return { kind: "noop" }; // unchanged, or only departures the withdrawal cascade already walked over
   }
 
+  // A group whose live field has fallen below what its pools need (2 per pool) cannot be snaked again: the redraw is the one Rebuild
+  // refuses (`group_too_few_entrants`). Nobody arrived, so there is nothing to place and the draw stands (the withdrawal cascade has
+  // already walked the departed's lines over); an arrival into such a field falls through to the redraw's own refusal by name.
+  if (stage.kind === "group" && entrants.length < poolCount(stage.config) * 2 && newcomers.length === 0) return { kind: "noop" };
+
   // Task-2 review, ruling 1: a redraw deletes every line, and the delete cascades into the organiser's setup on them (every kind
   // `stageAttachmentCounts` counts). Slots are carried by pair; the rest is not, so it is refused by name before any write
-  // (the counts Rebuild's confirm reads), pointing to Rebuild, whose dialog lists what it clears. The same counts tell the planner
-  // whether a longer patch is worth keeping (ruling 2): setup on the lines makes a redraw costly.
+  // (the counts Rebuild's confirm reads), pointing to Rebuild, whose dialog lists what it clears.
   const attachments = await stageAttachmentCounts(tx, stage.id, sealed ?? { streams: 0, youtubeBroadcasts: 0 });
   const hasSetup = Object.values(attachments).some((n) => n > 0);
   const regenerateDecision: RoundRobinDecision = { kind: "regenerate", placed: newcomers, vacated: departed };
@@ -123,9 +127,7 @@ export async function reconcileRoundRobinLines(
     for (const [pool, m] of members) if (m.size % 2 === 1) storedByePools.add(pool);
   }
   const freshByePools = new Set<string | null>(schedule.byes.map((b) => b.pool));
-  const plan = planRoundRobinReconcile(before, fresh, roundRobinShape(before, fresh, { stored: storedByePools, fresh: freshByePools }), {
-    keepLines: hasSetup,
-  });
+  const plan = planRoundRobinReconcile(before, fresh, roundRobinShape(before, fresh, { stored: storedByePools, fresh: freshByePools }));
   if (plan.kind === "noop") return { kind: "noop" };
   if (plan.kind === "regenerate") return regenerate();
 

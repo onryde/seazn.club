@@ -154,9 +154,8 @@ function hasRepeat(lines: readonly RrLine[]): boolean {
  *  - no line either side, or the same keys both sides: `noop`;
  *  - a repeated key either side, or a structural change (`shape`): `regenerate` — the caller deletes the stage's lines and
  *    draws them again with times and courts carried by pair;
- *  - otherwise `patch`: insert every key only the fresh schedule has, remove every stored line whose key it does not - unless the
- *    patched table would run MORE rounds than a fresh draw and no setup on the lines would be lost (`opts.keepLines` false), when
- *    it is `regenerate`.
+ *  - otherwise `patch`: insert every key only the fresh schedule has, remove every stored line whose key it does not. Every
+ *    surviving line keeps its row; the round count may grow (rulebook silent on round count; X-CU-6 keeps lines).
  *
  * Each inserted line sits in the fresh schedule's round, moved later (never earlier) while that round already seats one of its
  * two entrants in the same pool: a patched table must never seat a player twice in a round.
@@ -165,9 +164,6 @@ export function planRoundRobinReconcile(
   before: readonly RrLine[],
   fresh: readonly RrLine[],
   shape: RrShape,
-  /** `keepLines`: the stage's lines carry organiser setup a redraw would clear (officials, lineups, device links...), so the
-   *  patch is kept even when it is longer than a fresh draw. */
-  opts: { keepLines?: boolean } = {},
 ): RrPlan {
   if (hasRepeat(before) || hasRepeat(fresh)) return { kind: "regenerate" };
   if (shape.parityFlipped || shape.poolMembershipChanged) return { kind: "regenerate" };
@@ -203,12 +199,8 @@ export function planRoundRobinReconcile(
     seat(placed);
     insert.push(placed);
   }
-  // Bloat (task-2 review, ruling): a patch places a newcomer's lines after the rounds the old lines already fill, so a table
-  // patched twice can run many rounds longer than a fresh draw of the same field would. When the patched table's last round is
-  // later than the fresh draw's and nothing the organiser set up on the lines would be lost, the stage is drawn again.
-  if (!opts.keepLines && roundSpan([...before.filter((l) => freshKeys.has(l.key)), ...insert]) > roundSpan(fresh)) {
-    return { kind: "regenerate" };
-  }
+  // rulebook silent on round count; X-CU-6 keeps lines. A patch may run more rounds than a fresh draw (4 -> 6 patched is 8 rounds
+  // against a fresh 5); the controller retracted the redraw-on-bloat ruling, because a league keeps its lines.
   return { kind: "patch", insert, remove };
 }
 

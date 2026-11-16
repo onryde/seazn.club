@@ -59,7 +59,7 @@ const pairOf = (f: Pairing) => [f.home_entrant_id, f.away_entrant_id].sort().joi
 const owedPairs = (ids: string[]) => ids.flatMap((a, i) => ids.slice(i + 1).map((b) => [a, b].sort().join("|")));
 
 test.describe("X-CU-6 Generate adds the new players' pairs and nothing twice", () => {
-  test("four players grown to six before Start: Generate draws the six-player table once (no pair twice, none missing, no stretched rounds), and the run sheet lists 15 lines", async ({
+  test("four players grown to six before Start: Generate keeps the six lines and adds the nine missing pairs (no pair twice, none missing), and the run sheet lists 15 lines", async ({
     page,
     request,
   }) => {
@@ -75,13 +75,15 @@ test.describe("X-CU-6 Generate adds the new players' pairs and nothing twice", (
     const everyone = [...ids, ...added.map((e) => e.id)];
     const res = await generate(request, stageId);
     expect(res.status, JSON.stringify(res.error)).toBe(200);
-    // Parity is kept (even -> even), but a patch would keep the old lines in their old rounds and stretch the table to eight rounds
-    // against a fresh draw's five (task-2 review, ruling 2); nothing the organiser set up sits on the lines, so it is drawn again.
-    expect(res.data!.reconcile?.kind).toBe("regenerated");
-    expect(res.data!.created).toBe(15);
+    // Parity is kept (even -> even), so the draw is patched in place: the six lines the four already had stay, and C(6,2) - C(4,2) = 9
+    // pairs are added. rulebook silent on round count; X-CU-6 keeps lines: the table runs past a fresh six-player draw's five rounds
+    // (by hand: the old four fill rounds 1-3, so the newcomers' pairs land from round 4 on - eight rounds in all).
+    expect(res.data!.reconcile?.kind).toBe("in_place");
+    expect(res.data!.created).toBe(9);
 
     const after = (await stageFixtures(request, divisionId, stageId)) as Pairing[];
-    expect(Math.max(...after.map((a) => a.round_no)), "five rounds for six players, not eight").toBe(5);
+    for (const b of before) expect(after.some((a) => a.id === b.id), `the line ${b.id} survives untouched`).toBe(true);
+    expect(Math.max(...after.map((a) => a.round_no)), "eight rounds (hand-derived), past a fresh draw's five").toBe(8);
     const keys = after.map(pairOf);
     const owed = owedPairs(everyone);
     expect(owed.length, "anti-vacuity: C(6,2) pairs owed").toBe(15);
