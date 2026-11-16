@@ -6,8 +6,8 @@
 // Semantics (the review-approved design):
 //  - sessionStorage caches ONLY an identified payload — never an anonymous
 //    sentinel. A cache hit returns without fetching.
-//  - A miss fetches GET /api/users/me. 200-with-org → cache + return.
-//    401 / no-org / network error → null WITHOUT caching, so the next
+//  - A miss fetches GET /api/users/identity. 200-with-org → cache + return.
+//    anonymous (200, data null) / no-org / network error → null WITHOUT caching, so the next
 //    navigation retries. That retry is what restores identify-after-login:
 //    the post-login redirect (magic-link.tsx router.push) is itself a
 //    navigation, and the effect in analytics-bootstrap is keyed on pathname.
@@ -34,10 +34,11 @@ export interface ResolveIdentityDeps {
 }
 
 interface MeResponse {
+  /** null for an anonymous visitor: the endpoint answers 200 either way, so the browser logs no failed request. */
   data: {
     id: string;
     org: { id: string; name: string; plan: string } | null;
-  };
+  } | null;
 }
 
 // Bumped by clearAnalyticsIdentity: a resolution that started under an older
@@ -92,10 +93,10 @@ export async function resolveIdentity(
   const startedGeneration = generation;
   const fetchFn = deps.fetchFn ?? fetch;
   try {
-    const res = await fetchFn("/api/users/me");
-    if (!res.ok) return null; // 401 anonymous — never cached
+    const res = await fetchFn("/api/users/identity");
+    if (!res.ok) return null; // an error answer — never cached
     const body = (await res.json()) as MeResponse;
-    if (!body?.data?.org) return null; // logged in but org-less — never cached
+    if (!body?.data?.org) return null; // anonymous, or logged in but org-less — never cached
     const identity: AnalyticsIdentity = {
       userId: body.data.id,
       orgId: body.data.org.id,

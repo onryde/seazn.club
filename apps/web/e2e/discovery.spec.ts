@@ -2,9 +2,9 @@ import { test, expect } from "@playwright/test";
 import { TAG, apiJson, addEntrantsViaApi, createStageAndGenerate } from "./helpers";
 
 // Discovery: a public competition flagged discoverable shows up in the public
-// discovery API and on /discover. Listing is free on every plan; the guard
+// discovery API, which is what the Live page lists from. Listing is free on every plan; the guard
 // worth testing is that discoverable requires public visibility.
-test("a discoverable public competition appears on /discover", async ({ page, request }) => {
+test("a discoverable public competition is listed by the public discovery API", async ({ page, request }) => {
   const name = `Discoverfest ${TAG}`;
   const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31",
     name,
@@ -44,9 +44,9 @@ test("a discoverable public competition appears on /discover", async ({ page, re
   const items = ((await found.json()) as { data: { items: { name: string }[] } }).data.items;
   expect(items.some((i) => i.name === name)).toBe(true);
 
-  // And the directory page renders its card.
-  await page.goto(`/discover?q=${encodeURIComponent(name)}`);
-  await expect(page.getByText(name).first()).toBeVisible({ timeout: 20_000 });
+  // The /discover directory page is deleted (2026-11-16). /live lists the next few upcoming competitions with no
+  // search, so one named competition is not guaranteed a card there in a shared database; the page's own rendering is
+  // pinned in app/[lang]/(marketing)/live/__tests__/live-page.test.tsx and e2e/marketing-product.spec.ts.
 });
 
 test("discoverable requires public visibility", async ({ request }) => {

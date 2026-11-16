@@ -89,7 +89,7 @@ describe("share image", () => {
 
 describe("hreflang targets", () => {
   it.each(LOCALES.map((l) => [l]))("the %s alternate points at that locale's own URL", (l) => {
-    const langs = marketingMeta({ lang: "en", path: "/discover/cricket", title: "T", description: "d" }).alternates!.languages as Record<string, string>;
-    expect(langs[l]).toBe(`/${l}/discover/cricket`);
+    const langs = marketingMeta({ lang: "en", path: "/sports/cricket", title: "T", description: "d" }).alternates!.languages as Record<string, string>;
+    expect(langs[l]).toBe(`/${l}/sports/cricket`);
   });
 });

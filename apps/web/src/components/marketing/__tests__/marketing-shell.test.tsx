@@ -22,12 +22,34 @@ describe("marketing shell pieces", () => {
     // MarketingFooter is now an async server component (getDictionary for the
     // localized labels) — resolve it to an element, then static-render.
     const html = renderToStaticMarkup(await MarketingFooter({ lang: "en" }));
-    expect(html).toContain('href="/formats"');
-    expect(html).toContain('href="/scheduling"');
-    expect(html).toContain('href="/discover"');
+    expect(html).toContain('href="/product/streaming"');
+    // One Sports link to the index, which lists every sport; no single sport is singled out here.
+    expect(html).toContain('href="/sports"');
+    expect(html).not.toContain('href="/sports/');
+    expect(html).toContain('href="/product/remote-scoring"');
+    expect(html).toContain('href="/product/format"');
+    expect(html).not.toContain('href="/formats"');
+    expect(html).toContain('href="/product/scheduling"');
+    expect(html).not.toContain('href="/scheduling"');
+    expect(html).toContain('href="/live"');
+    // The pages deleted on 2026-11-16 have no link left anywhere in the footer.
+    for (const gone of ["/discover", "/use-cases/", "/formats", "/scheduling"]) expect(html, gone).not.toContain(`href="${gone}`);
     expect(html).toContain('href="/legal/privacy"');
     expect(html).toContain("ANY SPORT · LIVE IN MINUTES");
   });
+  it("footer is four headed columns, none longer than six links, in every locale", async () => {
+    const { footerCols } = await import("@/components/marketing-footer");
+    const cols = footerCols(true);
+    expect(cols).toHaveLength(4);
+    for (const c of cols) expect(c.links.length, c.headKey).toBeLessThanOrEqual(6);
+    expect(new Set(cols.flatMap((c) => c.links.map((l) => l.href))).size).toBe(cols.flatMap((c) => c.links).length);
+    for (const lang of ["en", "fr", "es", "nl"]) {
+      const html = renderToStaticMarkup(await MarketingFooter({ lang }));
+      expect(html.split("<ul").length - 1, lang).toBe(4);
+      expect(html, lang).not.toContain("footer.col.");
+    }
+  });
+
   it("footer carries the official Powered by Stripe badge (links stripe.com)", async () => {
     const html = renderToStaticMarkup(await MarketingFooter({ lang: "en" }));
     expect(html).toContain('href="https://stripe.com"');

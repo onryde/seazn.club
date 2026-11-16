@@ -299,7 +299,7 @@ export default async function PricingPage({
   return (
     <>
       <TrackOnMount event={EVENTS.PRICING_VIEWED} />
-      <MarketingShell lang={lang}>
+      <MarketingShell lang={lang} hideBackButton>
         <main>
           {/* ══ Box office marquee (R14) ═══════════════════════════════════
               A night band, matching the home page's own marquee/finale

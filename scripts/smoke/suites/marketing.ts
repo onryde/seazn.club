@@ -37,23 +37,77 @@ export async function marketingSuite(): Promise<void> {
     .map((m) => /\bvalue="([^"]*)"/.exec(m[0])?.[1]);
   check("marketing: /en/start opens on the linked sport (one checked chip: tabletennis)", JSON.stringify(checkedSport) === '["tabletennis"]');
 
-  const sched = await fetch(`${BASE}/scheduling`);
-  const shtml = await sched.text();
-  check("marketing: /scheduling 200", sched.status === 200);
-  check("marketing: /scheduling has rundown", shtml.includes("Order of play"));
-
-  // #364 Task 8 — the AI architect demo section. Smoke reads HTML with no JS
-  // running, so the claim provable here is narrow and deliberately so: the
-  // section SHIPPED on this page, with one card per template. `ready` names the
-  // section root, not a played recording — that a recording actually replays is
-  // an e2e claim (apps/web/e2e/marketing-ai-demo.spec.ts), never this one.
-  // Every probe carries the full value AND its closing quote: React serialises
-  // an omitted prop as `"$undefined"`, so a bare attribute-name probe would
-  // pass in both states and prove nothing.
-  check("marketing: ai demo section shipped", shtml.includes('data-ai-demo="ready"'));
-  for (const slug of ["finals-day", "club-night", "northside-open"]) {
-    check(`marketing: ai demo card ${slug}`, shtml.includes(`data-ai-template="${slug}"`));
+  // Product pages wave 1 (docs/superpowers/specs/2026-11-16-product-pages-design.md). Smoke reads HTML with no JS, so
+  // these prove the pages SHIP with their headline and the demo's server-rendered opening state; taps are e2e's job.
+  const streaming = await fetch(`${BASE}/product/streaming`);
+  const streamingHtml = await streaming.text();
+  check("marketing: /product/streaming 200", streaming.status === 200);
+  check("marketing: /product/streaming has its headline", streamingHtml.includes("on your stream."));
+  check("marketing: /product/streaming demo renders its opening score", streamingHtml.includes('data-testid="chase-stream-score">27/2<'));
+  const remote = await fetch(`${BASE}/product/remote-scoring`);
+  const remoteHtml = await remote.text();
+  check("marketing: /product/remote-scoring 200", remote.status === 200);
+  check("marketing: /product/remote-scoring has its headline", remoteHtml.replace(/<[^>]+>/g, "").includes("No signal? Keep scoring."));
+  check("marketing: /product/remote-scoring demo opens online with both screens level", remoteHtml.includes('data-testid="signal-phone-score">27/2<') && remoteHtml.includes('data-testid="signal-server-score">27/2<'));
+  const format = await fetch(`${BASE}/product/format`);
+  const formatHtml = await format.text();
+  check("marketing: /product/format 200", format.status === 200);
+  check("marketing: /product/format has its headline", formatHtml.replace(/<[^>]+>/g, "").includes("fits your day."));
+  check("marketing: /product/format demo renders a card per format with one Best fit", ["league", "groups-knockout", "knockout", "swiss", "double_elim"].every((f) => formatHtml.includes(`data-testid="format-card-${f}"`)) && formatHtml.split('data-best="true"').length === 2);
+  const schedPage = await fetch(`${BASE}/product/scheduling`);
+  const schedHtml = await schedPage.text();
+  check("marketing: /product/scheduling 200", schedPage.status === 200);
+  check("marketing: /product/scheduling has its headline", schedHtml.replace(/<[^>]+>/g, "").includes("a court and a time."));
+  check("marketing: /product/scheduling demo renders its six cells, unpublished", schedHtml.split('data-testid="day-cell-').length - 1 === 6 && schedHtml.includes('data-published="false"'));
+  const sportsIndex = await fetch(`${BASE}/sports`);
+  const sportsIndexHtml = await sportsIndex.text();
+  check("marketing: /sports 200", sportsIndex.status === 200);
+  check("marketing: /sports has a card for each sport page", sportsIndexHtml.split('data-testid="sport-card-').length - 1 === 8 && sportsIndexHtml.includes('href="/sports/ice-hockey"'));
+  const matchDayPage = await fetch(`${BASE}/product/match-day`);
+  const matchDayHtml = await matchDayPage.text();
+  check("marketing: /product/match-day 200", matchDayPage.status === 200);
+  check("marketing: /product/match-day has its headline", matchDayHtml.replace(/<[^>]+>/g, "").includes("one screen."));
+  check("marketing: /product/match-day demo opens with one court playing and two to call", matchDayHtml.includes('data-court-state="playing"') && matchDayHtml.split('data-act="call"').length - 1 === 2);
+  const sponsorPage = await fetch(`${BASE}/product/sponsoring`);
+  const sponsorHtml = await sponsorPage.text();
+  check("marketing: /product/sponsoring 200", sponsorPage.status === 200);
+  check("marketing: /product/sponsoring has its headline", sponsorHtml.replace(/<[^>]+>/g, "").includes("pay their way."));
+  check("marketing: /product/sponsoring demo opens on a draft deal with nothing showing", sponsorHtml.includes('data-deal-status="draft"') && sponsorHtml.includes('data-on-stream="false"') && !sponsorHtml.includes('data-testid="sponsor-on-page"'));
+  const cricket = await fetch(`${BASE}/sports/cricket`);
+  const cricketHtml = await cricket.text();
+  check("marketing: /sports/cricket 200", cricket.status === 200);
+  check("marketing: /sports/cricket has its headline", cricketHtml.replace(/<[^>]+>/g, "").includes("Scores every ball."));
+  check("marketing: /sports/cricket demo renders all four screens", ["pad", "matchCentre", "table", "stream"].every((tile) => cricketHtml.includes(`data-testid="chase-tile-${tile}"`)));
+  check("marketing: /fr/sports/cricket is French", (await (await fetch(`${BASE}/fr/sports/cricket`)).text()).replace(/<[^>]+>/g, "").includes("Marque chaque balle."));
+  for (const [slug, headline, family] of [
+    ["badminton", "Scores every rally.", "rally"],
+    ["table-tennis", "Scores every point.", "rally"],
+    ["volleyball", "Every set, point by point.", "rally"],
+    ["football", "Every goal, as it goes in.", "goal"],
+    ["hockey", "Every goal, every quarter.", "goal"],
+    ["ice-hockey", "Every goal, every period.", "goal"],
+    ["tennis", "Calls every point.", "tennis"],
+  ] as const) {
+    const res = await fetch(`${BASE}/sports/${slug}`);
+    const html = await res.text();
+    check(`marketing: /sports/${slug} 200`, res.status === 200);
+    check(`marketing: /sports/${slug} has its headline`, html.replace(/<[^>]+>/g, "").includes(headline));
+    check(`marketing: /sports/${slug} demo renders all four screens`, ["pad", "matchCentre", "table", "stream"].every((tile) => html.includes(`data-testid="${family}-tile-${tile}"`)));
   }
+  check("marketing: /sports/notasport (no such page) 404", (await fetch(`${BASE}/sports/notasport`)).status === 404);
+
+  // The recorded scheduler runs load in the browser when scrolled near, so with no JS the page carries only their
+  // placeholder. Full value and closing quote: React serialises an omitted prop as `"$undefined"`.
+  check("marketing: /product/scheduling carries the recorded-runs placeholder", schedHtml.includes('data-runs="waiting"'));
+  // Deleted 2026-11-16, no redirects.
+  for (const gone of ["/scheduling", "/formats", "/discover", "/discover/cricket", "/use-cases/clubs"]) {
+    check(`marketing: ${gone} is gone (404)`, (await fetch(`${BASE}${gone}`, { redirect: "manual" })).status === 404);
+  }
+  const liveRes = await fetch(`${BASE}/live`);
+  const liveHtml = await liveRes.text();
+  check("marketing: /live 200", liveRes.status === 200);
+  check("marketing: /live has its headline", liveHtml.replace(/<[^>]+>/g, "").includes("Live now."));
+  check("marketing: /live does not link to the deleted directory", !liveHtml.includes('href="/discover') && !liveHtml.includes("/en/discover"));
 
   // R14 (entitlements v18 W3) — the /pricing box-office redesign. Coarse HTML
   // checks only (no JS runs here); the figures and copy are pinned by

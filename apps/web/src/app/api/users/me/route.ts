@@ -1,7 +1,6 @@
 import { sql } from "@/lib/db";
 import {
   requireUser,
-  resolveActiveOrg,
   destroySession,
   invalidateUser,
   invalidateUserOrgs,
@@ -16,32 +15,21 @@ import { unlinkLichess } from "@/server/usecases/external-accounts";
 import { releaseQuickMatchesOfDeletedAccount } from "@/server/usecases/quick-match-save";
 import { afterEndedBadly, dispatchNow, enqueueEmailOnce, expiryWithin, onceKey, recipientLocale } from "@/server/email-outbox";
 import { anonymiseAccountEmails, deletedAccountPlaceholder } from "@/server/email-outbox/account-deletion";
+import { whoami } from "@/server/usecases/whoami";
 
 /**
  * Whoami (task-8): resolves the same identity AnalyticsBootstrap used to read
  * via getCurrentUser()/cookies() directly in the ROOT layout — moved here so
  * that read no longer forces every route rendered through the root layout to
  * go dynamic whenever NEXT_PUBLIC_POSTHOG_KEY is set. The client-side
- * analytics bootstrap (lib/analytics-identity) fetches this per navigation
- * until identified (sessionStorage-memoized). 401 for anonymous callers; org
+ * analytics bootstrap now asks GET /api/users/identity instead (same payload,
+ * 200 for an anonymous visitor). 401 for anonymous callers here; org
  * is null for a user with no org membership. Payload is minimized to what
  * the identify call consumes — no email (task-8 review F3).
  */
 export async function GET() {
   const res = await handler(async () => {
-    const user = await requireUser();
-    const org = await resolveActiveOrg(user);
-    if (!org) return { id: user.id, org: null };
-
-    const [sub] = await sql<{ plan_key: string | null }[]>`
-      select coalesce(s.plan_key, 'community') as plan_key
-      from subscriptions s
-      join organizations o on o.subscription_id = s.id
-      where o.id = ${org.id}`;
-    return {
-      id: user.id,
-      org: { id: org.id, name: org.name, plan: sub?.plan_key ?? "community" },
-    };
+    return whoami(await requireUser());
   });
   // Identity endpoints must never be cacheable — set explicitly on EVERY
   // status (200 and 401 alike), not left to framework defaults + external

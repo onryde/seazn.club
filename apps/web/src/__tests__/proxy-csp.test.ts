@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
-import { proxy, isCacheablePublicPath } from "@/proxy";
+import { cspHeader, proxy, isCacheablePublicPath } from "@/proxy";
 
 afterEach(() => vi.unstubAllEnvs());
 
@@ -60,6 +60,30 @@ describe("CSP vs cacheable public routes", () => {
 // compositor's loopback phase endpoint, on the `/overlay` tree ONLY. Driven through `proxy()` — the real call site — so
 // the pathname wiring is what is proven, not `cspHeader` alone. The origin is TYPED from spec §4.3 (port 7419), never
 // read from RELAY_PHASE_PORT.
+describe("upgrade-insecure-requests rides only the enforced policy", () => {
+  // A browser ignores this directive in a report-only policy and says so with a console error on every page (found by
+  // Lighthouse, 2026-11-16). Dropping it there changes no behaviour; the enforced policy keeps it.
+  it("report-only (the default): the directive is absent, the rest of the policy is not", () => {
+    const h = cspHeader("n1");
+    expect(h.name).toBe("Content-Security-Policy-Report-Only");
+    expect(h.value).not.toContain("upgrade-insecure-requests");
+    expect(h.value).toContain("default-src 'self'");
+    expect(h.value).toContain("frame-ancestors 'self'");
+  });
+  it("enforced: the directive is present", () => {
+    vi.stubEnv("CSP_MODE", "enforce");
+    const h = cspHeader("n1");
+    expect(h.name).toBe("Content-Security-Policy");
+    expect(h.value.split("; ")).toContain("upgrade-insecure-requests");
+  });
+  it("enforce mode forced back to report-only (cacheable public pages): absent again", () => {
+    vi.stubEnv("CSP_MODE", "enforce");
+    const h = cspHeader("n1", { forceReportOnly: true });
+    expect(h.name).toBe("Content-Security-Policy-Report-Only");
+    expect(h.value).not.toContain("upgrade-insecure-requests");
+  });
+});
+
 describe("A5 — connect-src carries the loopback phase endpoint on /overlay only", () => {
   const LOOPBACK = "http://127.0.0.1:7419";
   const UUID = "8c4f7a52-1f3e-4b9a-9d2c-3e5f6a7b8c9d";

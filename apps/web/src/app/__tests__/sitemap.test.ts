@@ -46,16 +46,11 @@ vi.mock("@/server/public-site/data", async (importOriginal) => {
   const real = await importOriginal<typeof import("@/server/public-site/data")>();
   return { ...real, listPublicSitemapEntries: vi.fn(real.listPublicSitemapEntries) };
 });
-vi.mock("@/server/public-site/discovery", async (importOriginal) => {
-  const real = await importOriginal<typeof import("@/server/public-site/discovery")>();
-  return { ...real, listDiscoverySports: vi.fn(real.listDiscoverySports) };
-});
 
 import { resolveRouteData } from "next/dist/build/webpack/loaders/metadata/resolve-route-data";
 import sitemap, * as route from "../sitemap";
 import { marketingMeta } from "@/lib/seo-meta";
 import { listPublicSitemapEntries } from "@/server/public-site/data";
-import { listDiscoverySports } from "@/server/public-site/discovery";
 import { SITEMAP_ENTRIES_CACHE_KEY } from "@/server/public-site/sitemap-cache";
 import {
   SITEMAP_REVALIDATE_SECONDS,
@@ -112,13 +107,12 @@ describe("sitemap.xml: route config", () => {
 describe("sitemap.xml: marketing URLs match the page canonicals", () => {
   it("lists the /en form with one hreflang alternate per locale, never the unprefixed form", async () => {
     vi.mocked(listPublicSitemapEntries).mockResolvedValueOnce([]);
-    vi.mocked(listDiscoverySports).mockResolvedValueOnce([{ key: "cricket", name: "Cricket" }]);
     const entries = await sitemap();
     const out = urls(entries);
     // Premise: the marketing pages are present, so the loop below checks something.
     const marketing = entries.filter((e) => e.url.startsWith(`${BASE}/en`));
     expect(marketing.length).toBeGreaterThan(5);
-    for (const bare of ["", "/pricing", "/discover", "/live", "/discover/cricket", "/use-cases/clubs"]) {
+    for (const bare of ["", "/pricing", "/live", "/product/format", "/sports/cricket"]) {
       expect(out, bare).not.toContain(`${BASE}${bare}`);
     }
     for (const e of marketing) {
@@ -130,6 +124,8 @@ describe("sitemap.xml: marketing URLs match the page canonicals", () => {
       const declared = marketingMeta({ lang: "en", path, title: "T", description: "d" }).alternates!.languages as Record<string, string>;
       for (const [k, v] of Object.entries(declared)) expect(langs![k], `${e.url} ${k}`).toBe(`${BASE}${v}`);
     }
+    // The product pages are listed in their /en form.
+    for (const path of ["/product/streaming", "/product/remote-scoring", "/product/format", "/product/scheduling", "/product/sponsoring", "/product/match-day", "/sports", "/sports/cricket"]) expect(out, path).toContain(`${BASE}/en${path}`);
     const xml = resolveRouteData(entries, "sitemap");
     expect(xml).toContain('hreflang="fr"');
   });
@@ -140,7 +136,6 @@ describe("sitemap.xml: reads and fallback", () => {
     vi.mocked(listPublicSitemapEntries).mockResolvedValueOnce([
       { orgSlug: "acme-club", compSlug: "summer-cup", divisionSlugs: ["open"], updated: "2026-09-27T00:00:00.000Z" },
     ]);
-    vi.mocked(listDiscoverySports).mockResolvedValueOnce([]);
     const out = urls(await sitemap());
     expect(cache.invoked).toContain(SITEMAP_ENTRIES_CACHE_KEY.join("|"));
     expect(out).toContain(`${BASE}/live/acme-club/summer-cup`);
@@ -158,14 +153,13 @@ describe("sitemap.xml: reads and fallback", () => {
       { orgSlug: "acme-club", compSlug: "summer-cup", divisionSlugs: ["open"], updated: "2026-09-01T10:00:00.000Z" },
       { orgSlug: "acme-club", compSlug: "winter-cup", divisionSlugs: [], updated: "2026-02-03T04:05:06.000Z" },
     ]);
-    vi.mocked(listDiscoverySports).mockResolvedValueOnce([{ key: "badminton", name: "Badminton" }]);
     const entries = await sitemap();
     const out = urls(entries);
 
     // Premise: every KIND of entry is present, so a lastmod on any one kind
     // has somewhere to show.
     expect(out).toContain(`${BASE}/en/pricing`);
-    expect(out).toContain(`${BASE}/en/discover/badminton`);
+    expect(out).toContain(`${BASE}/en/live`);
     expect(out).toContain(`${BASE}/live/acme-club/summer-cup`);
     expect(out).toContain(`${BASE}/live/acme-club/summer-cup/open`);
     expect(out).toContain(`${BASE}/live/acme-club/winter-cup`);
@@ -180,11 +174,19 @@ describe("sitemap.xml: reads and fallback", () => {
 
   it("a database error at request time serves the static routes, not a 500", async () => {
     vi.mocked(listPublicSitemapEntries).mockRejectedValueOnce(new Error("connect ECONNREFUSED"));
-    vi.mocked(listDiscoverySports).mockRejectedValueOnce(new Error("connect ECONNREFUSED"));
     const out = urls(await sitemap());
     expect(out).toContain(`${BASE}/en`);
     expect(out).toContain(`${BASE}/en/pricing`);
-    expect(out.filter((u) => u.includes("/live/") || u.includes("/discover/"))).toEqual([]);
+    expect(out.filter((u) => u.includes("/live/"))).toEqual([]);
+  });
+
+  it("the removed pages are gone: no /discover, /formats, /scheduling or /use-cases URL in any language", async () => {
+    vi.mocked(listPublicSitemapEntries).mockResolvedValueOnce([]);
+    const out = urls(await sitemap());
+    // Premise: the pages that replace them are listed, so this is not an empty sitemap passing by default.
+    for (const kept of ["/en/live", "/en/product/format", "/en/product/scheduling"]) expect(out).toContain(`${BASE}${kept}`);
+    const gone = out.filter((u) => /\/(discover|formats|use-cases)(\/|$)|\/[a-z]{2}\/scheduling$/.test(new URL(u).pathname));
+    expect(gone).toEqual([]);
   });
 });
 

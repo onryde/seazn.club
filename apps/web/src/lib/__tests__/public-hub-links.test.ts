@@ -52,6 +52,10 @@ const MARKETING_WALL: { file: string; count: number }[] = [
   // The marketing /live wall page's own path under /{lang}: its metadata path and its sitemap entry.
   { file: "src/app/sitemap.ts", count: 1 },
   { file: "src/app/[lang]/(marketing)/live/page.tsx", count: 1 },
+  // The marketing nav's "Live" link (product pages wave 1): the wall page itself, never a hub.
+  { file: "src/lib/marketing/product-nav.ts", count: 1 },
+  // The footer's "Live now" link, which pointed at /discover until that page was deleted (2026-11-16).
+  { file: "src/components/marketing-footer.tsx", count: 1 },
 ];
 
 const SHARED_SEGMENT = /\/shared(?![\w-])/;

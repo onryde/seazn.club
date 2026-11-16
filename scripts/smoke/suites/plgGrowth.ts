@@ -143,13 +143,7 @@ export async function plgGrowthSuite(admin: Session, proOrgId: string, proOrgSlu
       meRunPlayer.body.includes("utm_source=me"),
   );
 
-  // --- /discover: the acquisition CTA back to /start (unconditional —
-  // renders whether or not any club happens to be live right now).
-  const discover = await html(newSession(), "/en/discover");
-  check(
-    "plg /discover offers the /start acquisition CTA",
-    discover.status === 200 &&
-      discover.body.includes("utm_source=discover") &&
-      discover.body.includes("Start free"),
-  );
+  // --- /live: the acquisition call (unconditional: it renders whether or not any club is live right now).
+  const livePage = await html(newSession(), "/en/live");
+  check("plg /live offers the start-free call", livePage.status === 200 && livePage.body.includes("Start free") && livePage.body.includes("/login?tab=signup"));
 }

@@ -25,37 +25,10 @@ export async function i18nSuite(): Promise<void> {
   const bad = await fetch(`${BASE}/de/start`);
   check("i18n: unsupported locale 404s", bad.status === 404);
 
-  // Scoring vocab (2026-07-16): sport names on the public /discover chips now
-  // localize (sport.<key>). Gate on the en page actually showing the chip so
-  // the assertion is robust to whichever sports are seeded as discoverable.
-  const enDisc = await fetch(`${BASE}/en/discover`);
-  const enDiscHtml = await enDisc.text();
-  const frDisc = await fetch(`${BASE}/fr/discover`);
-  const frDiscHtml = await frDisc.text();
-  check("i18n: /fr/discover 200", frDisc.status === 200);
-  // The chip's NAME is the dictionaries' `sport.boardgame` word (owner 2026-10-19: "Chess", not "Board game"), read
-  // from the dictionaries on disk for both locales rather than typed here, so a later rename moves this check with
-  // it. The gate is the chip's own link (`/discover/boardgame"`), not the word — "Chess" appears in other copy.
-  const sportWord = (lang: "en" | "fr"): string => {
-    const dict = JSON.parse(
-      readFileSync(new URL(`../../../apps/web/src/dictionaries/${lang}/ui.json`, import.meta.url), "utf8"),
-    ) as Record<string, string>;
-    const word = dict["sport.boardgame"];
-    if (word === undefined) throw new Error(`${lang}/ui.json has no sport.boardgame`);
-    return word;
-  };
-  const enSport = sportWord("en");
-  const frSport = sportWord("fr");
-  check("i18n: the en and fr boardgame sport words differ (else the check below proves nothing)", enSport !== frSport);
-  if (enDiscHtml.includes('/discover/boardgame"')) {
-    check(`i18n: /en/discover names the boardgame chip '${enSport}'`, enDiscHtml.includes(enSport));
-    check(
-      `i18n: /fr/discover localizes the boardgame sport name ('${frSport}', not '${enSport}')`,
-      frDiscHtml.includes(frSport) && !frDiscHtml.includes(` ${enSport}<`),
-    );
-  } else {
-    check("i18n: /discover has no boardgame seed to assert (skipped)", true);
-  }
+  // The /discover directory and its sport chips are deleted (2026-11-16); /live takes over as the public listing page.
+  const frLive = await fetch(`${BASE}/fr/live`);
+  check("i18n: /fr/live 200", frLive.status === 200);
+  check("i18n: /fr/live is French", (await frLive.text()).replace(/<[^>]+>/g, "").includes("En direct, maintenant."));
 
   const enHome = await fetch(`${BASE}/en`);
   const enHomeHtml = await enHome.text();

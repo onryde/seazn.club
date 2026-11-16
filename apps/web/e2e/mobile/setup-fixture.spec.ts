@@ -497,6 +497,12 @@ test("public surfaces: no horizontal scroll (v3/11 gap 12)", async ({ browser })
       // The organiser's /start wizard (start wizard plan 2026-11-13, T6): its first step as a link lands on it. Every step,
       // walked, is the "start wizard" case at the end of this file.
       "/en/start?sport=football",
+      // Product pages wave 1 (design doc 2026-11-16): the two page shapes, with their working demo, at every width.
+      "/product/streaming",
+      "/product/remote-scoring",
+      "/product/format",
+      "/product/scheduling",
+      "/sports/cricket",
       // RS007's two new surfaces, POPULATED — an empty state holds at any
       // width, so visiting them without a real rid/token/join_code would be
       // the vacuous pass this file's own #349 comment warns about.

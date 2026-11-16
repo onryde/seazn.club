@@ -1,6 +1,6 @@
-// The /live floodlit wall — every discoverable in-play fixture as a scorebug
-// card on one night slab. Server-rendered from public_discovery_v data only;
-// real fixtures or an honest empty state, never filler.
+// The /live wall: every discoverable in-play fixture as a scorebug card on the page's night band. Server-rendered from
+// public_discovery_v data only: real fixtures, or an honest empty state with the "start your own" banner. Never
+// filler, and never the demo club (owner, 2026-11-16).
 import Link from "next/link";
 import type { DiscoveryLiveFixture } from "@/server/public-site/discovery";
 import { sportEmoji } from "@/components/discovery-cards";
@@ -9,71 +9,42 @@ import { plural } from "@/lib/i18n-runtime";
 import type { Locale } from "@/lib/i18n-constants";
 import { routes } from "@/lib/routes";
 
-export function LiveWall({
-  fixtures,
-  dict,
-  lang,
-}: {
-  fixtures: DiscoveryLiveFixture[];
-  dict: Dict;
-  lang: Locale;
-}) {
+export function LiveWall({ fixtures, dict, lang }: { fixtures: DiscoveryLiveFixture[]; dict: Dict; lang: Locale }) {
   return (
-    <section
-      aria-label={t(dict, "live.wall.aria")}
-      className="app-night-stage rounded-3xl p-5 sm:p-8"
-    >
+    <section aria-label={t(dict, "live.wall.aria")} className="mkp-wall">
       {fixtures.length === 0 ? (
-        <div className="py-16 text-center">
-          <p className="mk-display text-2xl font-bold text-cream">
-            {t(dict, "live.wall.emptyTitle")}
-          </p>
-          <p className="mx-auto mt-3 max-w-md text-sm text-cream/60">
-            {t(dict, "live.wall.emptyBody")}
-          </p>
-          <div className="mt-6 flex flex-wrap justify-center gap-3">
-            <Link
-              href={`/${lang}/discover`}
-              className="btn bg-lime-400 font-semibold text-night hover:bg-lime-300"
-            >
-              {t(dict, "live.wall.emptyDiscover")}
-            </Link>
-            <Link
-              href={`/${lang}/start`}
-              className="btn border border-cream/25 text-cream hover:bg-cream/10"
-            >
-              {t(dict, "live.wall.emptyStart")}
+        <div className="mkp-wall-empty">
+          <div>
+            <p className="mkp-wall-t">{t(dict, "live.wall.emptyTitle")}</p>
+            <p className="mkp-wall-b">{t(dict, "live.wall.emptyBody")}</p>
+          </div>
+          <div className="mkp-wall-start" data-testid="live-start">
+            <p className="mkp-wall-t">{t(dict, "live.start.title")}</p>
+            <p>{t(dict, "live.start.body")}</p>
+            <Link href={`/${lang}/start`} className="mkp-btn">
+              {t(dict, "live.start.button")}
             </Link>
           </div>
         </div>
       ) : (
         <>
-          <p className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.22em] text-lime-400">
-            <span className="chip-pulse-dot h-2 w-2 rounded-full bg-lime-400" aria-hidden />
+          <p className="mkp-wall-count">
+            <span className="chip-pulse-dot" aria-hidden />
             {plural(dict, "live.wall.count", fixtures.length, lang)}
           </p>
-          <ul className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <ul className="mkp-wall-grid">
             {fixtures.map((f) => (
               <li key={f.id}>
-                <Link
-                  href={routes.publicFixture(f.org_slug, f.comp_slug, f.division_slug, f.id)}
-                  className="block rounded-2xl border border-cream/10 bg-cream/[0.05] p-4 transition hover:border-lime-400/50 hover:bg-cream/10"
-                >
-                  <p className="flex items-center gap-2 text-[11px] uppercase tracking-widest text-cream/50">
+                <Link href={routes.publicFixture(f.org_slug, f.comp_slug, f.division_slug, f.id)} className="mkp-wall-card">
+                  <span className="mkp-wall-comp">
                     <span aria-hidden>{sportEmoji(f.sport_key)}</span>
-                    <span className="truncate">{f.competition_name}</span>
-                  </p>
-                  <p className="mk-display mt-2 flex items-center gap-2 truncate text-xl font-bold tabular-nums text-cream">
-                    <span className="truncate">{f.headline ?? t(dict, "discovery.inPlay")}</span>
-                    {f.strength ? (
-                      <span className="shrink-0 rounded-full bg-amber-400/20 px-2 py-0.5 font-mono text-[11px] font-bold text-amber-300">
-                        {f.strength}
-                      </span>
-                    ) : null}
-                  </p>
-                  <p className="mt-2 text-xs font-medium text-lime-400">
-                    {t(dict, "live.wall.watch")}
-                  </p>
+                    <span>{f.competition_name}</span>
+                  </span>
+                  <span className="mkp-wall-score">
+                    <span>{f.headline ?? t(dict, "discovery.inPlay")}</span>
+                    {f.strength ? <i>{f.strength}</i> : null}
+                  </span>
+                  <span className="mkp-wall-watch">{t(dict, "live.wall.watch")}</span>
                 </Link>
               </li>
             ))}

@@ -50,7 +50,8 @@ function marketingH1(locale: "en" | "fr"): string {
   const dict = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
   const v = dict["live.h1"];
   if (typeof v !== "string" || v.length === 0) throw new Error(`premise: no live.h1 in ${locale}/marketing.json`);
-  return v;
+  // The dictionary marks the accented words with asterisks; the page renders them without.
+  return v.replace(/\*/g, "");
 }
 
 /** One hop, never followed: the status and Location the server answers `path` with. */
