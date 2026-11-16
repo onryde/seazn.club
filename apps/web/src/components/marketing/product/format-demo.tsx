@@ -28,7 +28,8 @@ export function FormatDemo({ labels: l }: { labels: FormatDemoLabels }) {
 
   return (
     <div className="mkp-stage mkp-s2" data-testid="format-demo">
-      <div className="mkp-tile mkp-t-pad">
+      {/* Not `mkp-t-pad`: that class sends a scoring pad below its screens on a phone. Here the controls come first. */}
+      <div className="mkp-tile">
         <small>
           <b>1</b>
           {l["entrants"]} · {l["courts"]} · {l["hours"]}
