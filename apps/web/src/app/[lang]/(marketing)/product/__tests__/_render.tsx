@@ -3,7 +3,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactElement } from "react";
 
-export async function renderPage(page: (p: { params: Promise<Record<string, string>> }) => Promise<ReactElement>, params: Record<string, string>): Promise<string> {
+export async function renderPage<P extends Record<string, string>>(page: (p: { params: Promise<P> }) => Promise<ReactElement>, params: P): Promise<string> {
   return renderToStaticMarkup(await page({ params: Promise.resolve(params) }));
 }
 
