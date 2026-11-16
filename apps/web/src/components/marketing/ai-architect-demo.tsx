@@ -419,7 +419,15 @@ export function AiArchitectDemo({ locale, weights }: { locale: Locale; weights: 
             )}
           </div>
 
-          <div className="rounded-xl bg-white p-3 sm:p-4">
+          {/* Capped at about the height of a run down to its summary; the change list and the price scroll inside
+              (owner, 2026-11-16). A scrolling region owes a tab stop, a role and a name. */}
+          <div
+            data-ai-scroll="true"
+            tabIndex={0}
+            role="region"
+            aria-label={t("scheduling.aidemo.recordedLabel")}
+            className="max-h-[min(30rem,70vh)] overflow-y-auto overscroll-contain rounded-xl bg-white p-3 sm:p-4"
+          >
             {!fixture || !plan ? (
               <p className="py-8 text-center text-sm text-slate-400">
                 {t("scheduling.aidemo.loading")}

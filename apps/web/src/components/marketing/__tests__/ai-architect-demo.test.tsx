@@ -232,6 +232,23 @@ describe("AiArchitectDemo — the template rail", () => {
     }
     expect(html).toContain(esc(msg("scheduling.aidemo.title")));
   });
+
+  it("the run's screen is a capped box that scrolls inside itself, reachable by keyboard and named", () => {
+    // Owner, 2026-11-16: show the run down to its summary, then scroll. A scrolling region owes a tab stop, a role and
+    // a name, or axe reds (AGENTS.md class 23).
+    const html = renderToStaticMarkup(
+      <DictProvider dict={DICT} locale="en">
+        <AiArchitectDemo locale="en" weights={schedulingRungWeights()} />
+      </DictProvider>,
+    );
+    const tag = html.match(/<div[^>]*data-ai-scroll="true"[^>]*>/)?.[0] ?? "";
+    expect(tag, "the scroll box is rendered").not.toBe("");
+    expect(tag).toMatch(/[\s"]max-h-\[min\(30rem,70vh\)\][\s"]/);
+    expect(tag).toMatch(/\soverflow-y-auto[\s"]/);
+    expect(tag).toContain('tabindex="0"');
+    expect(tag).toContain('role="region"');
+    expect(tag).toContain(`aria-label="${esc(msg("scheduling.aidemo.recordedLabel"))}"`);
+  });
 });
 
 describe("AiArchitectDemo — T1 club night", () => {
