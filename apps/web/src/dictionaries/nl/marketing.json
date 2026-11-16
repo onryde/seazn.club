@@ -1450,5 +1450,21 @@
   "product.matchday.demo.stream.live": "Live",
   "product.matchday.demo.stream.waiting": "Telefoon wacht",
   "product.matchday.demo.stream.none": "Nog geen telefoon",
-  "nav.product.matchDay": "Wedstrijddag"
+  "nav.product.matchDay": "Wedstrijddag",
+  "nav.desc.streaming": "Live op je YouTube-kanaal, met de score in beeld",
+  "nav.desc.remoteScoring": "Scoor vanaf elke telefoon, ook zonder bereik",
+  "nav.desc.formats": "Competitie, knock-out of poules: vind wat past",
+  "nav.desc.scheduling": "Vul de banen zonder team op twee plekken",
+  "nav.desc.matchDay": "Elke baan op één scherm, roep de volgende wedstrijd",
+  "nav.desc.sponsoring": "Pakketten, facturen en logo's op pagina's en stream",
+  "nav.desc.sport.cricket": "Bal voor bal, met net-run-rate-standen",
+  "nav.desc.sport.badminton": "Rally voor rally, enkel en dubbel",
+  "nav.desc.sport.tabletennis": "Punt voor punt, enkel en dubbel",
+  "nav.desc.sport.volleyball": "Elke set, punt voor punt, zaal en beach",
+  "nav.desc.sport.football": "Goals en kaarten zodra ze vallen",
+  "nav.desc.sport.tennis": "Punten, games en sets, voor je bijgehouden",
+  "nav.desc.sport.hockey": "Goals en kaarten, kwart voor kwart",
+  "nav.desc.sport.icehockey": "Goals en straffen, periode voor periode",
+  "nav.desc.sport.all": "Elke sport die Seazn scoort, op één plek",
+  "footer.col.explore": "Ontdek"
 }

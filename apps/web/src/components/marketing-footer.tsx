@@ -13,11 +13,17 @@ const COLS: Array<{ headKey: string; links: FooterLink[] }> = [
     links: [
       { key: "nav.product.streaming", href: "/product/streaming" },
       { key: "nav.product.remoteScoring", href: "/product/remote-scoring" },
-      { key: "nav.sports", href: "/sports" },
       { key: "nav.formats", href: "/product/format" },
       { key: "nav.scheduling", href: "/product/scheduling" },
       { key: "nav.product.matchDay", href: "/product/match-day" },
       { key: "nav.product.sponsoring", href: "/product/sponsoring" },
+    ],
+  },
+  {
+    // Where to go next that is not a feature page: split out so no column runs past six links.
+    headKey: "footer.col.explore",
+    links: [
+      { key: "nav.sports", href: "/sports" },
       { key: "nav.pricing", href: "/pricing" },
       { key: "footer.link.liveNow", href: "/live" },
       { key: "footer.link.games", href: "/games" },

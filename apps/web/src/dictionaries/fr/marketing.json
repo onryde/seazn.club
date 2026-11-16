@@ -1450,5 +1450,21 @@
   "product.matchday.demo.stream.live": "En direct",
   "product.matchday.demo.stream.waiting": "Téléphone en attente",
   "product.matchday.demo.stream.none": "Pas encore de téléphone",
-  "nav.product.matchDay": "Jour de match"
+  "nav.product.matchDay": "Jour de match",
+  "nav.desc.streaming": "En direct sur votre chaîne YouTube, score à l'écran",
+  "nav.desc.remoteScoring": "Marquez depuis tout téléphone, même sans réseau",
+  "nav.desc.formats": "Championnat, élimination ou poules : trouvez le bon",
+  "nav.desc.scheduling": "Remplissez les terrains sans équipe à deux endroits",
+  "nav.desc.matchDay": "Tous les terrains sur un écran, appelez le suivant",
+  "nav.desc.sponsoring": "Offres, factures et logos sur vos pages et le direct",
+  "nav.desc.sport.cricket": "Balle par balle, avec classements au net run rate",
+  "nav.desc.sport.badminton": "Échange par échange, simple et double",
+  "nav.desc.sport.tabletennis": "Point par point, simple et double",
+  "nav.desc.sport.volleyball": "Chaque set, point par point, salle et beach",
+  "nav.desc.sport.football": "Buts et cartons en direct",
+  "nav.desc.sport.tennis": "Points, jeux et sets, comptés pour vous",
+  "nav.desc.sport.hockey": "Buts et cartons, quart-temps par quart-temps",
+  "nav.desc.sport.icehockey": "Buts et pénalités, période par période",
+  "nav.desc.sport.all": "Tous les sports que Seazn gère, au même endroit",
+  "footer.col.explore": "Explorer"
 }

@@ -1450,5 +1450,21 @@
   "product.matchday.demo.stream.live": "En vivo",
   "product.matchday.demo.stream.waiting": "Móvil esperando",
   "product.matchday.demo.stream.none": "Aún sin móvil",
-  "nav.product.matchDay": "Día de partidos"
+  "nav.product.matchDay": "Día de partidos",
+  "nav.desc.streaming": "En vivo en tu canal de YouTube, con marcador",
+  "nav.desc.remoteScoring": "Anota desde cualquier móvil, incluso sin cobertura",
+  "nav.desc.formats": "Liga, eliminatoria o grupos: encuentra el que encaja",
+  "nav.desc.scheduling": "Llena las pistas sin un equipo en dos sitios",
+  "nav.desc.matchDay": "Todas las pistas en una pantalla, llama el siguiente",
+  "nav.desc.sponsoring": "Paquetes, facturas y logos en páginas y emisión",
+  "nav.desc.sport.cricket": "Bola a bola, con tablas de net run rate",
+  "nav.desc.sport.badminton": "Jugada a jugada, individuales y dobles",
+  "nav.desc.sport.tabletennis": "Punto a punto, individuales y dobles",
+  "nav.desc.sport.volleyball": "Cada set, punto a punto, sala y playa",
+  "nav.desc.sport.football": "Goles y tarjetas al momento",
+  "nav.desc.sport.tennis": "Puntos, juegos y sets, contados por ti",
+  "nav.desc.sport.hockey": "Goles y tarjetas, cuarto a cuarto",
+  "nav.desc.sport.icehockey": "Goles y penalizaciones, periodo a periodo",
+  "nav.desc.sport.all": "Todos los deportes que anota Seazn, en un lugar",
+  "footer.col.explore": "Explorar"
 }

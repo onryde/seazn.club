@@ -37,6 +37,19 @@ describe("marketing shell pieces", () => {
     expect(html).toContain('href="/legal/privacy"');
     expect(html).toContain("ANY SPORT · LIVE IN MINUTES");
   });
+  it("footer is four headed columns, none longer than six links, in every locale", async () => {
+    const { footerCols } = await import("@/components/marketing-footer");
+    const cols = footerCols(true);
+    expect(cols).toHaveLength(4);
+    for (const c of cols) expect(c.links.length, c.headKey).toBeLessThanOrEqual(6);
+    expect(new Set(cols.flatMap((c) => c.links.map((l) => l.href))).size).toBe(cols.flatMap((c) => c.links).length);
+    for (const lang of ["en", "fr", "es", "nl"]) {
+      const html = renderToStaticMarkup(await MarketingFooter({ lang }));
+      expect(html.split("<ul").length - 1, lang).toBe(4);
+      expect(html, lang).not.toContain("footer.col.");
+    }
+  });
+
   it("footer carries the official Powered by Stripe badge (links stripe.com)", async () => {
     const html = renderToStaticMarkup(await MarketingFooter({ lang: "en" }));
     expect(html).toContain('href="https://stripe.com"');

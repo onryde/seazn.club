@@ -2,10 +2,19 @@ import Link from "next/link";
 import { getCurrentUser } from "@/lib/auth";
 import { NavScrollFlip } from "@/components/marketing/nav-scroll";
 import { MarketingMobileNav } from "@/components/marketing/mobile-nav";
+import { CalendarClock, ClipboardList, Handshake, Radio, Smartphone, Trophy, type LucideIcon } from "lucide-react";
 import { NavMenu } from "@/components/marketing/nav-menu";
+import { SportIcon } from "@/components/v2/division-builder/sport-icon";
 import { NAV_GROUPS, TOP_LINKS } from "@/lib/marketing/product-nav";
 import { getDictionary, t } from "@/lib/i18n";
 import { toLocale } from "@/lib/i18n-constants";
+
+/** A product page's drawing in its menu row, by the name the link ledger gives it. */
+const PRODUCT_ICONS: Record<string, LucideIcon> = { radio: Radio, smartphone: Smartphone, trophy: Trophy, "calendar-clock": CalendarClock, "clipboard-list": ClipboardList, handshake: Handshake };
+const menuIcon = (group: string, icon: string) => {
+  const Product = group === "product" ? PRODUCT_ICONS[icon] : undefined;
+  return Product ? <Product aria-hidden className="h-5 w-5" strokeWidth={1.75} /> : <SportIcon sportKey={icon} className="h-6 w-6" />;
+};
 
 /** Marketing nav (design/v3/12 §4.1). `night-scroll` starts transparent over
  *  the night hero and flips solid when the hero scrolls out; `light` is the
@@ -24,6 +33,7 @@ export async function MarketingNav({
   const night = variant === "night-scroll";
   // Product and Sports are menus; the rest are plain links. The mobile panel shows the same set, opened flat.
   const groups = NAV_GROUPS.map((g) => ({ id: g.id, label: t(d, g.key), links: g.links.map((l) => ({ href: l.href, label: t(d, l.key) })) }));
+  const menus = NAV_GROUPS.map((g) => ({ id: g.id, label: t(d, g.key), links: g.links.map((l) => ({ href: l.href, label: t(d, l.key), desc: t(d, l.desc), icon: menuIcon(g.id, l.icon) })) }));
   const top = TOP_LINKS.map((l) => ({ href: l.href, label: t(d, l.key) }));
   return (
     <header
@@ -31,7 +41,7 @@ export async function MarketingNav({
       className={`sticky top-0 z-40 ${night ? "mk-nav mk-nav-night" : "mk-nav mk-nav-solid"}`}
     >
       {night ? <NavScrollFlip /> : null}
-      <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
+      <div className="relative mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
         <Link href="/" aria-label="Seazn Club — home" className="flex items-center gap-2">
           {/* logo-wide.png is the night-ink wordmark for light navs; the night
               state swaps to logo-wide-night.png — the cream wordmark carrying
@@ -45,7 +55,7 @@ export async function MarketingNav({
           <img src="/logo-wide-night-nav.webp" alt="Seazn Club" width={309} height={108} className="mk-nav-logo-img-night h-9 w-auto" />
         </Link>
         <nav className="flex items-center gap-1 sm:gap-2">
-          {groups.map((g) => (
+          {menus.map((g) => (
             <NavMenu key={g.id} id={g.id} label={g.label} links={g.links} />
           ))}
           {top.map((l) => (
