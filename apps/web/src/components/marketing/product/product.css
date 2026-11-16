@@ -102,6 +102,26 @@
 .mkp-day-pubcard li i{font-style:normal;font-size:12.5px;color:#b9b0d8}
 .mkp-day-upd{display:inline-block;font-size:12px;font-weight:700;border-radius:999px;padding:3px 10px;background:#5a2a12;color:#ffd9b8;margin-bottom:8px}
 @media (min-width:900px){.mkp-stage.mkp-s2.mkp-s2r{grid-template-columns:minmax(0,1.25fr) minmax(0,1fr)}}
+/* the Live page: the wall of matches in play, and the upcoming list */
+.mkp-wall{padding-bottom:8px}
+.mkp-wall-count{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.18em;color:var(--mk-lime)}
+.mkp-wall-count .chip-pulse-dot{width:8px;height:8px;border-radius:50%;background:var(--mk-lime)}
+.mkp-wall-grid{display:grid;gap:12px;margin-top:14px}
+.mkp-wall-card{display:grid;gap:8px;border-radius:16px;border:1.5px solid #3b3158;background:#221a3a;padding:16px;min-width:0}
+.mkp-wall-card:hover{border-color:var(--mk-lime)}
+.mkp-wall-comp{display:flex;gap:8px;font-size:12px;text-transform:uppercase;letter-spacing:.1em;color:#b9b0d8;min-width:0}
+.mkp-wall-comp span:last-child,.mkp-wall-score span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.mkp-wall-score{display:flex;align-items:center;gap:8px;font-family:var(--mk-font-display, var(--font-geist-sans));font-size:24px;color:var(--mk-cream);font-variant-numeric:tabular-nums;min-width:0}
+.mkp-wall-score i{flex:none;font-style:normal;font-family:var(--font-geist-mono, monospace);font-size:11px;font-weight:700;border-radius:999px;padding:2px 8px;background:#5a3d12;color:#ffd58a}
+.mkp-wall-watch{font-size:13px;font-weight:600;color:var(--mk-lime)}
+.mkp-wall-empty{display:grid;gap:20px;align-items:center}
+.mkp-wall-t{font-family:var(--mk-font-display, var(--font-geist-sans));font-size:28px;line-height:1.1}
+.mkp-wall-b{margin-top:8px;color:#d9d2f3;max-width:44ch}
+.mkp-wall-start{background:var(--mk-lime);color:var(--mk-night);border-radius:18px;padding:20px;display:grid;gap:8px;justify-items:start}
+.mkp-wall-start .mkp-btn{background:var(--mk-night);color:var(--mk-cream);margin-top:6px}
+.mkp-upcoming{display:grid;gap:12px;margin-top:24px}.mkp-upcoming li{min-width:0}
+@media (min-width:640px){.mkp-wall-grid,.mkp-upcoming{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (min-width:900px){.mkp-wall-grid,.mkp-upcoming{grid-template-columns:repeat(3,minmax(0,1fr))}.mkp-wall-empty{grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:48px}}
 /* public match card (mirrors the real match page) */
 .mkp-mc{background:#221a3a;border-radius:16px;padding:16px;border-bottom:4px solid #10b981;color:#fff}
 .mkp-mc-l{font-size:11.5px;letter-spacing:.14em;color:#34d399;font-weight:700;display:flex;gap:8px;align-items:center}

@@ -7,8 +7,9 @@ const dict = {
   "live.wall.aria": "Live matches",
   "live.wall.emptyTitle": "EMPTY-XX",
   "live.wall.emptyBody": "BODY-XX",
-  "live.wall.emptyDiscover": "DISCOVER-XX",
-  "live.wall.emptyStart": "START-XX",
+  "live.start.title": "START-TITLE-XX",
+  "live.start.body": "START-BODY-XX",
+  "live.start.button": "START-XX",
   "live.wall.count.one": "{count} EN DIRECT",
   "live.wall.count.other": "{count} EN DIRECT",
   "live.wall.watch": "WATCH-XX",
@@ -48,8 +49,11 @@ describe("LiveWall (/live)", () => {
   it("empty state is honest — localized, no filler fixtures, locale-prefixed CTAs", () => {
     const html = renderToStaticMarkup(<LiveWall fixtures={[]} dict={dict} lang="fr" />);
     expect(html).toContain("EMPTY-XX");
-    expect(html).toContain('href="/fr/discover"');
+    // The start-your-own banner, and no way back to the directory /live replaces.
+    expect(html).toContain("START-TITLE-XX");
+    expect(html).toContain("START-BODY-XX");
     expect(html).toContain('href="/fr/start"');
+    expect(html).not.toContain("/discover");
     expect(html).not.toContain("/live/");
   });
 });

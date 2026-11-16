@@ -323,6 +323,28 @@ test.describe("scheduling: the recorded runs", () => {
   });
 });
 
+test.describe("live: the listing page in the product theme", () => {
+  for (const width of [320, 768, 1280]) {
+    test(`/live at ${width}: one headline, a wall or an honest empty state, and no way to the old directory`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 800 });
+      const errors: string[] = [];
+      page.on("pageerror", (e) => errors.push(e.message));
+      await visit(page, "/live");
+      await expect(page.locator("h1")).toHaveCount(1);
+      await expect(page.locator("h1")).toHaveText("Live now.");
+      const wall = page.locator('[data-section="wall"]');
+      await expect(wall).toBeVisible();
+      // Whatever the database holds, the wall shows exactly one of its two states.
+      const cards = await wall.locator(".mkp-wall-card").count();
+      const banner = await page.getByTestId("live-start").count();
+      expect(cards > 0 ? banner === 0 : banner === 1, `cards ${cards}, banner ${banner}`).toBe(true);
+      await expect(page.locator('main a[href*="/discover"]')).toHaveCount(0);
+      await expectNoHorizontalScroll(page);
+      expect(errors).toEqual([]);
+    });
+  }
+});
+
 test.describe("product pages: layout", () => {
   for (const path of PAGES) {
     for (const width of WIDTHS) {
