@@ -555,6 +555,6 @@ describe("every cached read under src/ is classified: routed through the not-fou
     expect(byKey(found)).toEqual(
       byKey(Object.entries(CACHE_SITES).map(([key, { via, file }]) => ({ key, via, file }))),
     );
-    expect(found).toHaveLength(17);
+    expect(found).toHaveLength(15);
   });
 });
