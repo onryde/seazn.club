@@ -54,9 +54,9 @@ export async function marketingSuite(): Promise<void> {
   check("marketing: /product/format 200", format.status === 200);
   check("marketing: /product/format has its headline", formatHtml.replace(/<[^>]+>/g, "").includes("fits your day."));
   check("marketing: /product/format demo renders a card per format with one Best fit", ["league", "groups-knockout", "knockout", "swiss", "double_elim"].every((f) => formatHtml.includes(`data-testid="format-card-${f}"`)) && formatHtml.split('data-best="true"').length === 2);
-  const sched = await fetch(`${BASE}/product/scheduling`);
-  const schedHtml = await sched.text();
-  check("marketing: /product/scheduling 200", sched.status === 200);
+  const schedPage = await fetch(`${BASE}/product/scheduling`);
+  const schedHtml = await schedPage.text();
+  check("marketing: /product/scheduling 200", schedPage.status === 200);
   check("marketing: /product/scheduling has its headline", schedHtml.replace(/<[^>]+>/g, "").includes("a court and a time."));
   check("marketing: /product/scheduling demo renders its six cells, unpublished", schedHtml.split('data-testid="day-cell-').length - 1 === 6 && schedHtml.includes('data-published="false"'));
   const cricket = await fetch(`${BASE}/sports/cricket`);
