@@ -259,7 +259,7 @@ export class ModelFakeDriver extends FakeLeagueDriver {
       const started = LOCK.statuses.includes(this.#divisionStatus);
       if (started && rootKnockout) throw new Error(`fake: a late add into a started ${this.stage?.kind ?? "knockout"} is the product's late-entry door, which this fake does not simulate (the model never offers it — commands.ts AddEntrant.ready)`);
       // W5 T4 (X-CU-9): and a ROOT league or group is exempt too — same loud refusal to simulate it.
-      const rootTable = LOCK.rootTable && only !== null && isRootTableStage(only);
+      const rootTable = LOCK.rootTable && only !== null && isRootTableStage(only, [only]);
       if (started && rootTable) throw new Error(`fake: a late add into a started ${this.stage?.kind ?? "league"} is the product's late-entry door, which this fake does not simulate (the model never offers it — commands.ts AddEntrant.ready)`);
       const locked = started && !LOCK.openKinds.includes(this.stage?.kind ?? "") && !runningSwiss;
       if (locked && this.opts.rosterLock !== "open") {

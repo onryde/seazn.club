@@ -91,22 +91,28 @@ export function isRunningRootKnockout(
 export const TABLE_STAGE_KINDS: readonly string[] = ["league", "group"];
 
 /**
- * W5 T4 (X-CU-9, ruling 276): a ROOT table — a `league` or `group` stage that draws from the live roster (no progression
- * source, no stored `qualified` field). A late player joins it (catch-up fixtures, Task 5); a group stage fed by an
- * earlier one (the second tier of a two-tier format) has a fixed field, so nobody joins it late (X-LE-2's reading for
- * tables). A bracket behind a table is never one: `isRootKnockoutStage` is the entry-stage predicate for brackets.
+ * W5 T4 (X-CU-9, RB5-L1, ruling 276): a ROOT table — a `league` or `group` stage that draws from the live roster (no
+ * progression source, no stored `qualified` field) AND is its division's ENTRY stage (`divisionEntryStage`: the lowest
+ * `seq`), exactly as `isRootKnockoutStage` reads a bracket. The second half is not redundant: a stage fed by an earlier one
+ * (the second tier of `group_group_ko`, a table after a table) carries NO progression on stg, so "no progression" alone
+ * would open a fed table to late players (X-LE-2's reading for tables). The first tier of a two-tier format is its entry
+ * stage, so it is root. `stage` must be an element of `division`.
  *
  * The ONE predicate: the Start lock (`hasRootTableStage`, `usecases/roundrobin-late-entry.ts`), the admission and this
  * client mirror all read it, so they cannot disagree.
  */
-export function isRootTableStage(stage: EntryStage): boolean {
-  return TABLE_STAGE_KINDS.includes(stage.kind) && drawsFromRoster(stage);
+export function isRootTableStage(stage: EntryStage, division: readonly EntryStage[]): boolean {
+  if (!TABLE_STAGE_KINDS.includes(stage.kind) || !drawsFromRoster(stage)) return false;
+  return divisionEntryStage(division) === stage;
 }
 
 /** A root table that still takes a late player: not `complete` (a finished table has nothing left to join; the
  *  admission refuses by name, Task 5). */
-export function isRunningRootTable(stage: EntryStage & { status: string }): boolean {
-  return isRootTableStage(stage) && stage.status !== "complete";
+export function isRunningRootTable(
+  stage: EntryStage & { status: string },
+  division: readonly (EntryStage & { status: string })[],
+): boolean {
+  return isRootTableStage(stage, division) && stage.status !== "complete";
 }
 
 /** One stage exempts the WHOLE division at Start: an open-format stage, a root Swiss, a root knockout, or a root table
@@ -117,7 +123,7 @@ function keepsListOpen(stages: readonly EntryStage[]): boolean {
       OPEN_ENTRY_STAGE_KINDS.includes(s.kind) ||
       isRootSwissStage(s) ||
       isRootKnockoutStage(s, stages) ||
-      isRootTableStage(s),
+      isRootTableStage(s, stages),
   );
 }
 
@@ -151,7 +157,7 @@ export type StartEntrantsLine = "closes" | "swiss_late" | "knockout_late" | "tab
 export function startEntrantsLine(stages: readonly EntryStage[]): StartEntrantsLine {
   if (stages.some(isRootSwissStage)) return "swiss_late";
   if (stages.some((s) => isRootKnockoutStage(s, stages))) return "knockout_late";
-  if (stages.some(isRootTableStage)) return "table_late";
+  if (stages.some((s) => isRootTableStage(s, stages))) return "table_late";
   return startClosesEntrantList(stages) ? "closes" : null;
 }
 
@@ -183,7 +189,7 @@ export function entrantListLocked(
       OPEN_ENTRY_STAGE_KINDS.includes(s.kind) ||
       isRunningRootSwiss(s) ||
       isRunningRootKnockout(s, stages) ||
-      isRunningRootTable(s),
+      isRunningRootTable(s, stages),
   );
 }
 
@@ -235,12 +241,13 @@ export function knockoutLateEntryOffered(args: {
  */
 export function tableLateEntryOffered(args: {
   stage: EntryStage & { status: string };
+  division: readonly (EntryStage & { status: string })[];
   divisionStatus: string;
   /** The stage has fixtures (its table was generated). */
   generated: boolean;
 }): boolean {
   return (
-    ENTRANT_LIST_LOCKED_STATUSES.includes(args.divisionStatus) && isRunningRootTable(args.stage) && args.generated
+    ENTRANT_LIST_LOCKED_STATUSES.includes(args.divisionStatus) && isRunningRootTable(args.stage, args.division) && args.generated
   );
 }
 

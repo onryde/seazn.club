@@ -22,6 +22,7 @@ import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { startDivision } from "../schedule";
 import { createStages } from "../stages";
+import { rootTableStages } from "../roundrobin-late-entry";
 import { seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -246,6 +247,28 @@ describe.skipIf(!HAS_DB)("W5 T4: a root league or group keeps the entrant list o
       checked++;
     }
     expect(checked).toBe(2);
+  });
+
+  it("X-CU-9 only the division's ENTRY stage is a root table: null-progression groups at seq 1 and seq 2 (stg carries no progression on a fed stage)", async () => {
+    // differential: today (196da2c969) both stages are root (no entry-stage check), so a late player would be taken by seq 2 too.
+    const group = (name: string): StageSpec => ({ kind: "group", name, config: { legs: 1, pools: { count: 1 } }, progression: null });
+    const rig = await started("badminton", [group("Tier 1"), group("Tier 2")], 4);
+    const roots = await sql.begin((tx) => rootTableStages(tx, rig.divisionId));
+    expect(roots.map((r) => r.id), "only the entry stage is root").toEqual([rig.stageIds[0]]);
+    expect(roots.map((r) => r.seq)).toEqual([1]);
+    const before = await entrantCount(rig.divisionId);
+    const late = await addLate(rig);
+    expect(await entrantCount(rig.divisionId), "seq 1 takes the late add").toBe(before + 1);
+    expect(await seatedIn(late.id), "nothing of seq 2 is seated by it").not.toContain(rig.stageIds[1]);
+
+    // The stage behind a closed entry stage exempts nothing: double_elim at seq 1, a null-progression league at seq 2.
+    const behind = await started("badminton", [
+      { kind: "double_elim", name: "Double", config: {}, progression: null },
+      { kind: "league", name: "Behind", config: { legs: 1 }, progression: null },
+    ]);
+    expect(await sql.begin((tx) => rootTableStages(tx, behind.divisionId)), "a league behind a double elimination is not root").toEqual([]);
+    const err = await refusal(addLate(behind));
+    expect(err).toMatchObject({ status: 422, message: LOCKED });
   });
 
   it("X-LE-2 the templates behind a table carry a fed stage (the premise of the checks above)", () => {

@@ -240,7 +240,8 @@ export function modelHoldsRootKnockout(m: ModelState): boolean {
  *  is outcomes this model does not simulate, so it does not offer the add there; the late-entry door is driven by the
  *  W5 scripts (Task 24, lib/scenarios/r2-late-entry.ts). */
 export function modelHoldsRootTable(m: ModelState): boolean {
-  return ROSTER_LOCK.rootTable && isRootTableStage(modelStage(m));
+  const stage = modelStage(m);
+  return ROSTER_LOCK.rootTable && isRootTableStage(stage, [stage]);
 }
 
 /** The product refuses an entrant here. The model's single stage is the

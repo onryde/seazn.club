@@ -411,7 +411,7 @@ test("publishing, then Start: the confirmation states its four consequences, and
   // checks on two testids would not.
   await expect(
     confirm.getByTestId("start-confirm-consequences").getByRole("listitem"),
-).toHaveText([
+  ).toHaveText([
     // W5 T4 (X-CU-9): league_ko's entry stage is a root league, which keeps the list open after Start, so the dialog says
     // so (it said "Entrant list closes" before).
     L["launch.confirm.entrantsTable"],

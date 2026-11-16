@@ -3612,7 +3612,7 @@
   "launch.confirm.entrants": "Entrant list closes. Withdrawals still work; no one new can be added.",
   "launch.confirm.entrantsSwiss": "Late entrants can still join the Swiss. Withdrawals still work.",
   "launch.confirm.entrantsKnockout": "Late players can still join round 1 while it has a free slot.",
-  "launch.confirm.entrantsTable": "Late players can still join the table and play catch-up matches. Withdrawals still work.",
+  "launch.confirm.entrantsTable": "Late players you add can still join the table and play catch-up matches; a finished table takes no one. Withdrawals still work.",
   "entrants.locked.note": "This tournament has started — the entrant list is locked. Withdrawals still work; no one new can be added.",
   "entrants.swissLate.note": "This Swiss has started. An entrant you add here joins it late.",
   "entrants.knockoutLate.note": "This knockout has started. A player you add here takes a free place in round 1: a bye, or a withdrawn player's place.",
