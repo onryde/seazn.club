@@ -211,7 +211,9 @@ export const TableColumn = z.object({
 /** Standings qualification status (spec 2026-09-22 §4.1). Every string is
  *  already resolved in the org's locale by `buildQualificationView`
  *  (`./qualification-view.ts`); the renderer only places them. */
-export const QualStatusKind = z.enum(["through", "win_k", "needs_help", "out"]);
+export const QualStatusKind = z.enum(["through", "win_k", "needs_help", "out", "qualified"]);
+// "qualified": engine 10.0.0's frozen marker. The builder maps it to "through"
+// (same chip, same copy); the vocabulary accepts it so a document carrying it parses.
 /** One row's status. Named `QualRowView`, not `QualRow`: the engine's
  *  qualification input row is `QualRow` (`@seazn/engine/competition`), and
  *  both are imported side by side (controller ruling T2-C3). */

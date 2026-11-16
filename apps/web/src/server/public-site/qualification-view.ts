@@ -314,6 +314,11 @@ function statusLabel(s: QualStatus, i: QualificationViewInput): string {
       return i.msg("table.qual.status.needsHelp");
     case "out":
       return i.msg("table.qual.status.out");
+    // Engine 10.0.0 adds `{ kind: "qualified" }` (the frozen "Qualified" marker on a
+    // complete stage). It reads as `through` until the frozen variant is built; any
+    // kind this build does not know does too, so a newer engine never prints a key.
+    default:
+      return i.msg("table.qual.status.through");
   }
 }
 
@@ -346,6 +351,8 @@ export function ifYouLoseSentence(
       return i.msg("table.qual.ifYouLose.needsHelp");
     case "out":
       return i.msg("table.qual.ifYouLose.out");
+    default: // "qualified" (engine 10.0.0) and any later kind: as `through`.
+      return i.msg("table.qual.ifYouLose.through");
   }
 }
 
@@ -360,6 +367,21 @@ function headline(s: QualStatus, i: QualificationViewInput, next: string, n: num
     case "out":
       // Pluralised on N (final review COPY): "…in the top 1" read badly.
       return i.plural("table.qual.headline.out", n, { n });
+    default: // "qualified" (engine 10.0.0) and any later kind: as `through`.
+      return i.msg("table.qual.headline.through", { next });
+  }
+}
+
+/** The hub document's status vocabulary for an engine status: the three kinds it
+ *  renders itself, and `through` for every other (engine 10.0.0's `qualified`). */
+function statusKindOf(s: QualStatus): "through" | "win_k" | "needs_help" | "out" {
+  switch (s.kind) {
+    case "win_k":
+    case "needs_help":
+    case "out":
+      return s.kind;
+    default:
+      return "through";
   }
 }
 
@@ -678,7 +700,7 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
     const open = res.status.kind === "win_k" || res.status.kind === "needs_help";
     const w = open ? whatIf(r, res.status, res.ifYouLose) : null;
     rows[r.entrantId] = {
-      status: res.status.kind,
+      status: statusKindOf(res.status),
       label,
       ariaLabel: i.msg("table.qual.rankLabel", { rank: r.rank ?? position + 1, status: label }),
       headline: headline(res.status, i, next, cut),
