@@ -18,7 +18,7 @@ import {
   canLinkCourt, lastWorkingMinute, linkFailureKey, phoneKey, switchFailureKey, switchSpec, youtubeTargets,
 } from "@/lib/match-day/court-stream";
 import { CourtFocus, type MatchDayCtx } from "@/components/v2/match-day/court-focus";
-import { CandidateRows } from "@/components/v2/match-day/candidate-list";
+import { CandidateRows, FreeCourtBody } from "@/components/v2/match-day/candidate-list";
 import { CourtList } from "@/components/v2/match-day/court-list";
 import { TargetPicker } from "@/components/v2/match-day/court-stream-sheet";
 import { levelWords } from "@/lib/score/levels";
@@ -305,6 +305,70 @@ describe("the Stream switch on a waiting-to-be-called (candidate) row", () => {
   it("a blocked candidate (a player busy elsewhere) keeps its switch: the intent is the match's, not the call's", () => {
     const html = rows(free({ stream_link: link() }), [cand({ blocked: { kind: "player_busy", person_name: "Zara", court_name: "Court 4" } })]);
     expect(sw(html)).toHaveLength(1);
+  });
+});
+
+describe("a free court's whole queue (B2: the 2nd and later matches are switched on before the court is called)", () => {
+  // Three matches queued on the free court, each with its own pair of names so "appears once" is a count of names.
+  const trio = [
+    queued({ id: "q-1", home: "Aiko Tan", away: "Bo Wen" }),
+    queued({ id: "q-2", home: "Cleo Park", away: "Dev Shah" }),
+    queued({ id: "q-3", home: "Esi Boateng", away: "Finn Roy" }),
+  ];
+  // What the server's candidates hold for such a court: the next ready match per division, "Due here next" (q-1; one division).
+  const next = (): MatchDayCandidate => ({
+    fixture: trio[0]!, source: "this_court", from_court_name: null, first_in_queue: false, waiting_minutes: 0, behind_minutes: 0,
+    planned_at: null, blocked: null,
+  });
+  const body = (c: MatchDayCourt, load: Parameters<typeof FreeCourtBody>[0]["load"] = { status: "ready", candidates: [next()] }, ctx = baseCtx()) =>
+    renderToStaticMarkup(<FreeCourtBody ctx={ctx} court={c} load={load} onCall={() => {}} onRetry={() => {}} />);
+  const free = (o: Partial<MatchDayCourt> = {}) => court({ state: "free", current: null, queue: trio, ...o });
+  const names = ["Aiko Tan", "Cleo Park", "Esi Boateng"];
+  /** How often a match's name is VISIBLE: its switch's accessible name carries it too (`Stream: …`), which is counted apart. */
+  const once = (html: string, needle: string): number => html.replace(/aria-label="[^"]*"/g, "").split(needle).length - 1;
+  const switchesNamed = (html: string, needle: string): number => html.split(`aria-label="${t(dict, "matchDay.courtStream.switch")}: `).filter((p) => p.startsWith(needle)).length;
+
+  it("a LINKED free court: all three matches appear exactly once, and each carries a Stream switch", () => {
+    const html = body(free({ stream_link: link() }));
+    for (const n of names) {
+      expect(once(html, n), `${n} listed once`).toBe(1);
+      expect(switchesNamed(html, n), `${n} has one switch`).toBe(1);
+    }
+    expect(count(html, "md-candidate")).toBe(1);
+    expect(count(html, "md-queue-row")).toBe(2);
+    expect(count(html, "md-cs-switch")).toBe(3);
+    // the queue keeps its places: the match already shown above is place 1, so the list here starts at 2
+    expect(html).toContain(">2</span>");
+    expect(html).toContain(">3</span>");
+  });
+
+  it("an UNLINKED free court is unchanged: only the next match, no queue, no switch", () => {
+    const html = body(free());
+    expect(once(html, "Aiko Tan")).toBe(1);
+    for (const n of ["Cleo Park", "Esi Boateng"]) expect(html).not.toContain(n);
+    expect(count(html, "md-queue-row")).toBe(0);
+    expect(count(html, "md-cs-switch")).toBe(0);
+  });
+
+  it("while its candidates load, or if they fail, a linked court still lists its queue, and a later load does not repeat it", () => {
+    for (const load of [{ status: "loading" }, { status: "failed" }] as const) {
+      const html = body(free({ stream_link: link() }), load);
+      expect(count(html, "md-queue-row")).toBe(3);
+    }
+  });
+
+  it("a linked free court whose only queued match is the one the candidates show says nothing more (no empty list)", () => {
+    const html = body(free({ stream_link: link(), queue: [trio[0]!] }));
+    expect(count(html, "md-queue-row")).toBe(0);
+    expect(html).not.toContain(t(dict, "matchDay.queue.title"));
+    expect(html).not.toContain(t(dict, "matchDay.queue.empty"));
+  });
+
+  it("a view-only reader of a linked free court sees the queue with no switch that is off (only an ON one, locked)", () => {
+    const withOn = [trio[0]!, queued({ id: "q-2", home: "Cleo Park", away: "Dev Shah", court_stream: true }), trio[2]!];
+    const html = body(free({ stream_link: link(), queue: withOn }), undefined, baseCtx({ readOnly: true }));
+    expect(count(html, "md-queue-row")).toBe(2);
+    expect(count(html, "md-cs-switch")).toBe(1);
   });
 });
 

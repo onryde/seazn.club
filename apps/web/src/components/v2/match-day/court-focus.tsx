@@ -56,6 +56,7 @@ import { CourtStreamPreview } from "./court-stream-preview";
 import { CourtStreamBand, CourtStreamSheet, LinkCourtAction } from "./court-stream-sheet";
 import { CourtStreamSwitch } from "./court-stream-switch";
 import { MatchRoundChip } from "./round-chip";
+import { Queue } from "./court-queue";
 import { ScorerMark } from "./scorer-mark";
 import { MatchFormatEditor } from "@/components/v2/rules/match-format-editor";
 
@@ -480,47 +481,6 @@ function ScorerPanel({
         // hidden only while a live one exists - decided by the panel's first read. `initiallyOpen` shows only if that read fails.
         hide={{ storageKey: scorerMemoryKey(memoryKey), heading, initiallyOpen: true, followLink: true }}
       />
-    </section>
-  );
-}
-
-/** The court's next matches, in planned order, each with its read-time estimate ("~12:20") and, when that is later, its plan. */
-function Queue({ ctx, court, onChanged, onRefused }: { ctx: MatchDayCtx; court: MatchDayCourt; onChanged: () => void; onRefused: (message: string) => void }) {
-  const { dict } = ctx;
-  const time = (iso: string) => fmtPublicTime(ctx.locale, ctx.tz, iso);
-  return (
-    <section aria-label={t(dict, "matchDay.queue.title")} className="min-w-0">
-      <h3 className="mb-2 text-xs font-semibold text-slate-600">{t(dict, "matchDay.queue.title")}</h3>
-      {court.queue.length === 0 ? (
-        <p className="text-sm text-slate-500">{t(dict, "matchDay.queue.empty")}</p>
-      ) : (
-        <ol className="card divide-y divide-purple-50">
-          {court.queue.map((q, i) => {
-            const estimate = time(q.estimated_at);
-            const planned = time(q.planned_at);
-            const spec = switchSpec(q, court.stream_link !== null, canWriteCourtStream(ctx));
-            return (
-              <li key={q.id} data-testid="md-queue-row" className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-baseline gap-x-3 px-4 py-2.5">
-                <span className="font-mono text-xs text-slate-400">{i + 1}</span>
-                <span className="min-w-0 text-sm text-slate-900 [overflow-wrap:anywhere]">
-                  <MatchRoundChip round={q.round} /> {matchLabel(dict, q)} <span className="text-xs text-slate-500">· {q.division_name}</span>
-                </span>
-                <span className="text-right">
-                  <span className="block font-mono text-sm tabular-nums text-slate-700">{t(dict, "matchDay.queue.estimate", { time: estimate })}</span>
-                  {estimate !== planned && (
-                    <span className="block text-[11px] text-slate-500">{t(dict, "matchDay.queue.planned", { time: planned })}</span>
-                  )}
-                </span>
-                {spec !== null && (
-                  <div className="col-span-2 col-start-2">
-                    <CourtStreamSwitch key={q.id} ctx={ctx} fixture={q} spec={spec} onChanged={onChanged} onRefused={onRefused} />
-                  </div>
-                )}
-              </li>
-            );
-          })}
-        </ol>
-      )}
     </section>
   );
 }
