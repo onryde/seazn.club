@@ -59,6 +59,11 @@ export async function marketingSuite(): Promise<void> {
   check("marketing: /product/scheduling 200", schedPage.status === 200);
   check("marketing: /product/scheduling has its headline", schedHtml.replace(/<[^>]+>/g, "").includes("a court and a time."));
   check("marketing: /product/scheduling demo renders its six cells, unpublished", schedHtml.split('data-testid="day-cell-').length - 1 === 6 && schedHtml.includes('data-published="false"'));
+  const sponsorPage = await fetch(`${BASE}/product/sponsoring`);
+  const sponsorHtml = await sponsorPage.text();
+  check("marketing: /product/sponsoring 200", sponsorPage.status === 200);
+  check("marketing: /product/sponsoring has its headline", sponsorHtml.replace(/<[^>]+>/g, "").includes("pay their way."));
+  check("marketing: /product/sponsoring demo opens on a draft deal with nothing showing", sponsorHtml.includes('data-deal-status="draft"') && sponsorHtml.includes('data-on-stream="false"') && !sponsorHtml.includes('data-testid="sponsor-on-page"'));
   const cricket = await fetch(`${BASE}/sports/cricket`);
   const cricketHtml = await cricket.text();
   check("marketing: /sports/cricket 200", cricket.status === 200);

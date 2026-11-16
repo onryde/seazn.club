@@ -45,6 +45,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     marketing("/product/remote-scoring", { changeFrequency: "monthly", priority: 0.8 }),
     marketing("/product/format", { changeFrequency: "monthly", priority: 0.8 }),
     marketing("/product/scheduling", { changeFrequency: "monthly", priority: 0.8 }),
+    marketing("/product/sponsoring", { changeFrequency: "monthly", priority: 0.8 }),
     ...SPORT_PAGES.map((sport) => marketing(`/sports/${sport}`, { changeFrequency: "monthly", priority: 0.8 })),
     { url: `${BASE}/games`, changeFrequency: "weekly", priority: 0.8 },
     ...liveGames().map((g) => ({

@@ -8,12 +8,14 @@ test.use({ storageState: { cookies: [], origins: [] } });
 
 const RALLY_PAGES = ["/sports/badminton", "/sports/table-tennis", "/sports/volleyball"] as const;
 const GOAL_PAGES = ["/sports/football", "/sports/hockey", "/sports/ice-hockey"] as const;
-const PAGES = ["/product/streaming", "/product/remote-scoring", "/product/format", "/product/scheduling", "/sports/cricket", ...RALLY_PAGES, ...GOAL_PAGES, "/sports/tennis"] as const;
+const PAGES = ["/product/streaming", "/product/remote-scoring", "/product/format", "/product/scheduling", "/product/sponsoring", "/sports/cricket", ...RALLY_PAGES, ...GOAL_PAGES, "/sports/tennis"] as const;
 /** How many pad keys each sport family's demo offers, by page: every one must be a real tap target. */
 const PAD_KEYS: Record<string, [selector: string, count: number]> = {
   ...Object.fromEntries(RALLY_PAGES.map((p) => [p, ['[data-testid^="rally-point-"]', 2]])),
   ...Object.fromEntries(GOAL_PAGES.map((p) => [p, ['[data-testid^="goal-key-"]', 5]])),
   "/sports/tennis": ['[data-testid^="tennis-point-"]', 2],
+  // Sponsoring opens on an online invoice: four tiers, three methods, its three go-live rules, and a draft's two steps.
+  "/product/sponsoring": ['[data-testid^="sponsor-tier-"], [data-testid^="sponsor-method-"], [data-testid^="sponsor-rule-"], [data-testid^="sponsor-step-"]', 12],
 };
 const WIDTHS = [320, 768, 1280] as const;
 
@@ -182,6 +184,59 @@ test.describe("product pages: the working demo", () => {
     const final = await page.getByTestId("tennis-stream-score").innerText();
     await page.getByTestId("tennis-point-b").click();
     await expect(page.getByTestId("tennis-stream-score")).toHaveText(final);
+  });
+
+  test("sponsoring: a sponsor reaches the page and the stream only when the deal's own rule is met, and leaves when it ends", async ({ page }) => {
+    await visit(page, "/product/sponsoring");
+    const demo = page.getByTestId("sponsor-demo");
+    const onPage = page.getByTestId("sponsor-on-page");
+    const stream = page.getByTestId("sponsor-stream");
+    await expect(demo).toHaveAttribute("data-deal-status", "draft");
+    await expect(onPage).toHaveCount(0);
+
+    // Bank or cash, live after I approve: payment alone is not enough.
+    await page.getByTestId("sponsor-method-offline").click();
+    await page.getByTestId("sponsor-rule-on_approval").click();
+    await expect(demo).toHaveAttribute("data-deal-status", "awaiting_payment");
+    await expect(page.getByTestId("sponsor-step-approve")).toHaveCount(0);
+    await page.getByTestId("sponsor-step-pay").click();
+    await expect(demo).toHaveAttribute("data-deal-status", "awaiting_approval");
+    await expect(demo).toHaveAttribute("data-deal-money", "paid");
+    await expect(onPage).toHaveCount(0);
+    await expect(stream).toHaveAttribute("data-on-stream", "false");
+    await page.getByTestId("sponsor-step-approve").click();
+    await expect(demo).toHaveAttribute("data-deal-status", "live");
+    await expect(onPage).toBeVisible();
+    await expect(onPage).toContainText("Harbour Bakery");
+    await expect(stream).toHaveAttribute("data-on-stream", "true");
+    await expect(page.getByTestId("sponsor-log")).toHaveCount(2);
+
+    // The tier decides where on the page, and how many turns on the stream: no two of these read the same.
+    const turns: string[] = [];
+    for (const tier of ["title", "gold", "partner"] as const) {
+      await page.getByTestId(`sponsor-tier-${tier}`).click();
+      await expect(page.getByTestId("sponsor-board")).toHaveAttribute("data-board-tier", tier);
+      await expect(onPage).toHaveCount(1);
+      turns.push(await page.getByTestId("sponsor-turns").innerText());
+    }
+    expect(new Set(turns).size).toBe(3);
+
+    await page.getByTestId("sponsor-step-end").click();
+    await expect(demo).toHaveAttribute("data-deal-status", "ended");
+    await expect(onPage).toHaveCount(0);
+    await expect(stream).toHaveAttribute("data-on-stream", "false");
+    await expect(page.locator('[data-testid^="sponsor-step-"]')).toHaveCount(0);
+
+    // A complimentary deal has no payment to wait for: "When paid" is not offered, and it is live from the start.
+    await page.getByTestId("sponsor-method-complimentary").click();
+    await expect(page.getByTestId("sponsor-rule-on_payment")).toHaveCount(0);
+    // It kept "After I approve", which a complimentary deal also offers, so it waits for that.
+    await expect(demo).toHaveAttribute("data-deal-status", "awaiting_approval");
+    await page.getByTestId("sponsor-rule-immediate").click();
+    await expect(demo).toHaveAttribute("data-deal-status", "live");
+    await expect(demo).toHaveAttribute("data-deal-money", "free");
+    await page.getByTestId("sponsor-reset").click();
+    await expect(demo).toHaveAttribute("data-deal-status", "live");
   });
 
   test("cricket: finishing the chase updates the table, and the keys then stop changing the score", async ({ page }) => {
@@ -536,6 +591,7 @@ test.describe("product pages: layout", () => {
       ["/product/remote-scoring", 7, ["signal-phone-score", "signal-server-score"]],
       ["/product/format", 6, []],
       ["/product/scheduling", 7, []],
+      ["/product/sponsoring", 6, []],
     ] as const) {
       await page.goto(path);
       for (const id of scores) await expect(page.getByTestId(id)).toHaveText("27/2");

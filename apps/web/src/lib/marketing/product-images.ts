@@ -53,6 +53,9 @@ export const PRODUCT_IMAGES = {
   icehockeyPadM: { src: "/marketing/product/icehockey-pad-m.webp", width: 780, height: 1386, kind: "phone" },
   icehockeyMcM: { src: "/marketing/product/icehockey-mc-m.webp", width: 780, height: 1386, kind: "phone" },
   icehockeyMcD: { src: "/marketing/product/icehockey-mc-d.webp", width: 1400, height: 840, kind: "web" },
+  sponsorListM: { src: "/marketing/product/sponsor-list-m.webp", width: 780, height: 1386, kind: "phone" },
+  sponsorPublicM: { src: "/marketing/product/sponsor-public-m.webp", width: 780, height: 1386, kind: "phone" },
+  sponsorReportM: { src: "/marketing/product/sponsor-report-m.webp", width: 780, height: 1386, kind: "phone" },
 } as const satisfies Record<string, ProductImage>;
 
 export type ProductImageKey = keyof typeof PRODUCT_IMAGES;
