@@ -49,6 +49,11 @@ export async function marketingSuite(): Promise<void> {
   check("marketing: /product/remote-scoring 200", remote.status === 200);
   check("marketing: /product/remote-scoring has its headline", remoteHtml.replace(/<[^>]+>/g, "").includes("No signal? Keep scoring."));
   check("marketing: /product/remote-scoring demo opens online with both screens level", remoteHtml.includes('data-testid="signal-phone-score">27/2<') && remoteHtml.includes('data-testid="signal-server-score">27/2<'));
+  const format = await fetch(`${BASE}/product/format`);
+  const formatHtml = await format.text();
+  check("marketing: /product/format 200", format.status === 200);
+  check("marketing: /product/format has its headline", formatHtml.replace(/<[^>]+>/g, "").includes("fits your day."));
+  check("marketing: /product/format demo renders a card per format with one Best fit", ["league", "groups-knockout", "knockout", "swiss", "double_elim"].every((f) => formatHtml.includes(`data-testid="format-card-${f}"`)) && formatHtml.split('data-best="true"').length === 2);
   const cricket = await fetch(`${BASE}/sports/cricket`);
   const cricketHtml = await cricket.text();
   check("marketing: /sports/cricket 200", cricket.status === 200);

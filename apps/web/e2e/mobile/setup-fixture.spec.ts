@@ -500,6 +500,7 @@ test("public surfaces: no horizontal scroll (v3/11 gap 12)", async ({ browser })
       // Product pages wave 1 (design doc 2026-11-16): the two page shapes, with their working demo, at every width.
       "/product/streaming",
       "/product/remote-scoring",
+      "/product/format",
       "/sports/cricket",
       // RS007's two new surfaces, POPULATED — an empty state holds at any
       // width, so visiting them without a real rid/token/join_code would be

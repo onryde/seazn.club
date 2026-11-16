@@ -14,11 +14,14 @@ import nl from "@/dictionaries/nl/marketing.json";
 const DICTS: Record<string, Record<string, string>> = { en, fr, es, nl };
 
 describe("product nav ledger", () => {
-  it("offers the two new pages, keeps the old ones until their wave, and has no duplicate href", () => {
+  it("offers the new pages, keeps an old one until its replacement lands, and has no duplicate href", () => {
     const hrefs = navHrefs();
     expect(hrefs).toContain("/product/streaming");
     expect(hrefs).toContain("/sports/cricket");
-    expect(hrefs).toContain("/formats");
+    expect(hrefs).toContain("/product/remote-scoring");
+    // Formats now points at its product page; the old gallery route is no longer linked from the nav.
+    expect(hrefs).toContain("/product/format");
+    expect(hrefs).not.toContain("/formats");
     expect(hrefs).toContain("/scheduling");
     expect(hrefs).toContain("/pricing");
     expect(hrefs).toContain("/live");

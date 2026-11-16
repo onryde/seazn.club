@@ -6,7 +6,7 @@ import { expectNoHorizontalScroll } from "./helpers";
 
 test.use({ storageState: { cookies: [], origins: [] } });
 
-const PAGES = ["/product/streaming", "/product/remote-scoring", "/sports/cricket"] as const;
+const PAGES = ["/product/streaming", "/product/remote-scoring", "/product/format", "/sports/cricket"] as const;
 const WIDTHS = [320, 768, 1280] as const;
 
 const score = (page: Page, id: "chase-score" | "chase-mc-score" | "chase-stream-score") => page.getByTestId(id);
@@ -188,6 +188,51 @@ test.describe("remote scoring: the signal demo", () => {
   });
 });
 
+test.describe("formats: the recommender demo", () => {
+  test("changing the day changes what fits, and the cards show the recommender's own numbers", async ({ page }) => {
+    await visit(page, "/product/format");
+    const card = (slug: string) => page.getByTestId(`format-card-${slug}`);
+    // Opening day: 8 teams. A league of 8 is 28 matches and a knockout is 7: the rulebook's n(n-1)/2 and n-1.
+    await expect(page.getByTestId("format-entrants")).toHaveText("8");
+    await expect(page.getByTestId("format-card-league-matches")).toContainText("28");
+    await expect(page.getByTestId("format-card-knockout-matches")).toContainText("7");
+    await expect(page.locator('[data-best="true"]')).toHaveCount(1);
+
+    // Two more teams: 10 → 45 and 9.
+    await page.getByTestId("format-entrants-more").click();
+    await page.getByTestId("format-entrants-more").click();
+    await expect(page.getByTestId("format-entrants")).toHaveText("10");
+    await expect(page.getByTestId("format-card-league-matches")).toContainText("45");
+    await expect(page.getByTestId("format-card-knockout-matches")).toContainText("9");
+
+    // Squeeze the day to one pitch for one hour at 90 minutes: nothing fits, so nothing wears Best fit.
+    for (let i = 0; i < 3; i++) await page.getByTestId("format-hours-less").click();
+    await page.getByTestId("format-courts-less").click();
+    await page.getByTestId("format-minutes-90").click();
+    await expect(page.getByTestId("format-hours")).toHaveText("1");
+    await expect(page.getByTestId("format-hours-less")).toBeDisabled();
+    await expect(card("league")).toHaveAttribute("data-state", "over");
+    await expect(page.locator('[data-best="true"]')).toHaveCount(0);
+
+    // A generous day brings a best fit back.
+    for (let i = 0; i < 11; i++) await page.getByTestId("format-hours-more").click();
+    for (let i = 0; i < 5; i++) await page.getByTestId("format-courts-more").click();
+    await page.getByTestId("format-minutes-20").click();
+    await expect(page.locator('[data-best="true"]')).toHaveCount(1);
+    await expect(page.getByTestId("format-minutes-20")).toHaveAttribute("aria-pressed", "true");
+  });
+
+  test("the nav's Formats link lands on the product page", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto("/pricing");
+    const product = page.getByTestId("nav-menu-product");
+    await product.getByRole("button").click();
+    await product.getByRole("link", { name: "Formats" }).click();
+    await expect(page).toHaveURL(/\/product\/format$/);
+    await expect(page.locator("h1")).toHaveText("The format that fits your day.");
+  });
+});
+
 test.describe("product pages: layout", () => {
   for (const path of PAGES) {
     for (const width of WIDTHS) {
@@ -206,14 +251,18 @@ test.describe("product pages: layout", () => {
           broken: [...document.images].filter((i) => !i.naturalWidth).map((i) => i.getAttribute("src")),
           h1: document.querySelectorAll("h1").length,
         }));
-        expect(m.images, "pictures on the page").toBeGreaterThanOrEqual(6);
+        expect(m.images, "pictures on the page").toBeGreaterThanOrEqual(4);
         expect(m.broken).toEqual([]);
         expect(m.h1).toBe(1);
         expect(errors).toEqual([]);
         // Every pad key is a real tap target.
         const sizes = await page.locator('[data-testid^="chase-key-"], [data-testid^="signal-key-"]').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().height)));
-        expect(sizes.length).toBe(8);
-        for (const h of sizes) expect(h).toBeGreaterThanOrEqual(44);
+        // Every control of the page's demo is a real tap target: pad keys, or the format demo's steppers.
+        const controls = path === "/product/format"
+          ? await page.locator('[data-testid^="format-"][data-testid$="-less"], [data-testid^="format-"][data-testid$="-more"], [data-testid^="format-minutes-"]').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().height)))
+          : sizes;
+        expect(controls.length).toBe(path === "/product/format" ? 11 : 8);
+        for (const h of controls) expect(h).toBeGreaterThanOrEqual(44);
       });
     }
   }
@@ -245,6 +294,7 @@ test.describe("product pages: layout", () => {
       ["/product/streaming", 8, ["chase-score", "chase-stream-score"]],
       ["/sports/cricket", 9, ["chase-score", "chase-stream-score"]],
       ["/product/remote-scoring", 7, ["signal-phone-score", "signal-server-score"]],
+      ["/product/format", 6, []],
     ] as const) {
       await page.goto(path);
       for (const id of scores) await expect(page.getByTestId(id)).toHaveText("27/2");

@@ -3,7 +3,8 @@
  * the "more of the product" chips on product pages. Pure data (no dictionary, no React) so the proxy tests, the nav
  * and the pages can all read it.
  *
- * `/formats` and `/scheduling` are the OLD pages. They stay listed until the wave that replaces each one lands
+ * `/scheduling` is the OLD page (Formats now points at `/product/format`; the old `/formats` route still exists, unlinked,
+ * until the deletion wave). It stays listed until the wave that replaces it lands
  * (design: docs/superpowers/specs/2026-11-16-product-pages-design.md §10); nothing is deleted before then.
  */
 export type NavLink = { key: string; href: string };
@@ -11,7 +12,7 @@ export type NavLink = { key: string; href: string };
 export const PRODUCT_LINKS = [
   { key: "nav.product.streaming", href: "/product/streaming" },
   { key: "nav.product.remoteScoring", href: "/product/remote-scoring" },
-  { key: "nav.formats", href: "/formats" },
+  { key: "nav.formats", href: "/product/format" },
   { key: "nav.scheduling", href: "/scheduling" },
 ] as const satisfies readonly NavLink[];
 

@@ -57,6 +57,24 @@
 .mkp-badge.mkp-off{background:#fff1d6;color:#8a4b00}
 .mkp-mc.mkp-stale{border-bottom-color:#f59e0b}.mkp-mc-s{margin-top:10px;font-size:13px;color:#b9b0d8}
 @media (prefers-reduced-motion:reduce){.mkp-switch i,.mkp-switch i::after{transition:none}}
+/* the format demo: three steppers and a match length, beside the recommender's cards */
+.mkp-knobs{display:grid;gap:10px;padding:14px}
+.mkp-knob{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:14px;font-weight:600}
+.mkp-knob>div{display:flex;align-items:center;gap:6px}
+.mkp-knob button{min-width:44px;min-height:44px;border-radius:12px;background:#fff;border:1.5px solid #d9d5e6;font-size:20px;font-weight:600}
+.mkp-knob button:disabled{opacity:.4;cursor:default}
+.mkp-knob output{min-width:38px;text-align:center;font-family:var(--mk-font-display, var(--font-geist-sans));font-size:26px}
+.mkp-knob-m{flex-direction:column;align-items:stretch}.mkp-knob-m>div{flex-wrap:wrap}
+.mkp-knob .mkp-min{font-size:13.5px;padding:0 10px;min-width:0}
+.mkp-knob .mkp-min[aria-pressed="true"]{background:var(--mk-purple);border-color:var(--mk-purple);color:#fff}
+.mkp-fmts{display:grid;gap:8px}
+.mkp-fmt{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px 14px;align-items:center;background:#221a3a;color:#fff;border-radius:14px;padding:12px 14px;border:1.5px solid transparent}
+.mkp-fmt b{display:block;font-size:15.5px}.mkp-fmt span{display:block;font-size:13px;color:#b9b0d8}
+.mkp-fmt-n{text-align:right}
+.mkp-fmt-b{grid-column:1/-1;justify-self:start;font-style:normal;font-size:12px;font-weight:700;border-radius:999px;padding:3px 10px;background:#3b3158;color:#e9e4fb}
+.mkp-fmt-best{border-color:var(--mk-lime)}.mkp-fmt-best .mkp-fmt-b{background:var(--mk-lime);color:var(--mk-night)}
+.mkp-fmt-over{opacity:.72}.mkp-fmt-over .mkp-fmt-b{background:#5a2a12;color:#ffd9b8}
+.mkp-fmt-unavailable{opacity:.55}
 /* public match card (mirrors the real match page) */
 .mkp-mc{background:#221a3a;border-radius:16px;padding:16px;border-bottom:4px solid #10b981;color:#fff}
 .mkp-mc-l{font-size:11.5px;letter-spacing:.14em;color:#34d399;font-weight:700;display:flex;gap:8px;align-items:center}
