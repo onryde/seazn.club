@@ -2,18 +2,18 @@ import Link from "next/link";
 import { getCurrentUser } from "@/lib/auth";
 import { NavScrollFlip } from "@/components/marketing/nav-scroll";
 import { MarketingMobileNav } from "@/components/marketing/mobile-nav";
-import { CalendarClock, ClipboardList, Handshake, Radio, Smartphone, Trophy, type LucideIcon } from "lucide-react";
+import { CalendarClock, ClipboardList, Handshake, LayoutGrid, Radio, Smartphone, Trophy, type LucideIcon } from "lucide-react";
 import { NavMenu } from "@/components/marketing/nav-menu";
 import { SportIcon } from "@/components/v2/division-builder/sport-icon";
 import { NAV_GROUPS, TOP_LINKS } from "@/lib/marketing/product-nav";
 import { getDictionary, t } from "@/lib/i18n";
 import { toLocale } from "@/lib/i18n-constants";
 
-/** A product page's drawing in its menu row, by the name the link ledger gives it. */
-const PRODUCT_ICONS: Record<string, LucideIcon> = { radio: Radio, smartphone: Smartphone, trophy: Trophy, "calendar-clock": CalendarClock, "clipboard-list": ClipboardList, handshake: Handshake };
-const menuIcon = (group: string, icon: string) => {
-  const Product = group === "product" ? PRODUCT_ICONS[icon] : undefined;
-  return Product ? <Product aria-hidden className="h-5 w-5" strokeWidth={1.75} /> : <SportIcon sportKey={icon} className="h-6 w-6" />;
+/** A menu row's drawing, by the name the link ledger gives it; any other name is a sport key. */
+const MENU_ICONS: Record<string, LucideIcon> = { "layout-grid": LayoutGrid, radio: Radio, smartphone: Smartphone, trophy: Trophy, "calendar-clock": CalendarClock, "clipboard-list": ClipboardList, handshake: Handshake };
+const menuIcon = (icon: string) => {
+  const Drawn = MENU_ICONS[icon];
+  return Drawn ? <Drawn aria-hidden className="h-5 w-5" strokeWidth={1.75} /> : <SportIcon sportKey={icon} className="h-6 w-6" />;
 };
 
 /** Marketing nav (design/v3/12 §4.1). `night-scroll` starts transparent over
@@ -33,7 +33,7 @@ export async function MarketingNav({
   const night = variant === "night-scroll";
   // Product and Sports are menus; the rest are plain links. The mobile panel shows the same set, opened flat.
   const groups = NAV_GROUPS.map((g) => ({ id: g.id, label: t(d, g.key), links: g.links.map((l) => ({ href: l.href, label: t(d, l.key) })) }));
-  const menus = NAV_GROUPS.map((g) => ({ id: g.id, label: t(d, g.key), links: g.links.map((l) => ({ href: l.href, label: t(d, l.key), desc: t(d, l.desc), icon: menuIcon(g.id, l.icon) })) }));
+  const menus = NAV_GROUPS.map((g) => ({ id: g.id, label: t(d, g.key), links: g.links.map((l) => ({ href: l.href, label: t(d, l.key), desc: t(d, l.desc), icon: menuIcon(l.icon) })) }));
   const top = TOP_LINKS.map((l) => ({ href: l.href, label: t(d, l.key) }));
   return (
     <header

@@ -43,13 +43,13 @@ export default async function SportsIndexPage({ params }: { params: Promise<{ la
             <h2 className="mkp-d">{s("grid.title")}</h2>
             <p className="mkp-lede">{s("grid.lede")}</p>
             <div className="mkp-phones mkp-sportgrid">
-              {SPORT_PAGES.map((slug) => {
+              {SPORT_PAGES.map((slug, i) => {
                 const key = sportKeyOf(slug);
                 const name = t(d, `nav.sport.${key}` as never);
                 return (
                   <Link key={slug} href={`/sports/${slug}`} className="mkp-sportcard" data-testid={`sport-card-${slug}`}>
                     <figure>
-                      <Shot image={padOf(key)} alt={name} />
+                      <Shot image={padOf(key)} alt={name} eager={i === 0} />
                       <figcaption>
                         <b>{name}</b>
                         {t(d, `sport.${key}.h1` as never).replace(/\*/g, "")}

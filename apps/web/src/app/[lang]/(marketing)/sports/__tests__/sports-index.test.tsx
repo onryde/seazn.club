@@ -49,12 +49,22 @@ describe("/sports", () => {
 
   it("every card has its own picture, and the sections end on the closing call", async () => {
     const html = await renderPage(Page, { lang: "en" });
-    const pics = [...html.matchAll(/\/marketing\/product\/([a-z0-9-]+)\.webp/g)].map((m) => m[1]!);
+    // Pictures as drawn: the first card's is not lazy, so React also emits a preload link for it, which is not a card.
+    const pics = [...html.matchAll(/<img src="\/marketing\/product\/([a-z0-9-]+)\.webp/g)].map((m) => m[1]!);
     expect(pics).toHaveLength(SPORT_PAGES.length);
     expect(new Set(pics).size).toBe(SPORT_PAGES.length);
     expect(sectionOrder(html)).toEqual(["hero", "sports", "questions", "closing"]);
     expect(html).toContain('href="#sports"');
     expect(html).toContain('id="sports"');
     await expect(renderPage(Page, { lang: "de" })).rejects.toThrow("NOT_FOUND");
+  });
+
+  it("the first card's picture is not lazy (it is the largest thing on a phone's first screen); the rest are", async () => {
+    const html = await renderPage(Page, { lang: "en" });
+    const grid = html.slice(html.indexOf("mkp-sportgrid"));
+    const loads = [...grid.matchAll(/data-testid="sport-card-[a-z-]+".*?<img[^>]* loading="(eager|lazy)"/gs)].map((m) => m[1]);
+    expect(loads.length).toBeGreaterThanOrEqual(8);
+    expect(loads[0]).toBe("eager");
+    expect(new Set(loads.slice(1))).toEqual(new Set(["lazy"]));
   });
 });
