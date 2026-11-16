@@ -42,7 +42,7 @@ export default async function LivePage({
   ]);
 
   return (
-    <MarketingShell lang={lang}>
+    <MarketingShell lang={lang} hideBackButton>
       <main className="bg-[var(--mk-light-warm)]">
         <section className="mx-auto max-w-6xl px-4 pb-16 pt-12">
           <p className="mk-eyebrow">{t(d, "live.eyebrow")}</p>

@@ -249,6 +249,19 @@ test.describe("marketing nav: Product and Sports", () => {
     await expect(nav).toHaveClass(/mk-nav-solid/);
   });
 
+  test("Pricing and Live are reached from the nav, so they carry no back arrow; a page that is not still does", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const back = page.getByRole("button", { name: "Back", exact: true });
+    // The control: the arrow exists and this locator finds it, or the two absences below prove nothing.
+    await page.goto("/scheduling");
+    await expect(back).toBeVisible();
+    for (const path of ["/pricing", "/live"]) {
+      await page.goto(path);
+      await expect(page.locator("[data-mk-nav]")).toBeVisible();
+      await expect(back, path).toHaveCount(0);
+    }
+  });
+
   test("phone: the panel lists the same pages under Product and Sports", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 800 });
     await page.goto("/product/streaming");

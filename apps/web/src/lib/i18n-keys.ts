@@ -6055,7 +6055,6 @@ export type DictionaryKey =
   | "product.shared.closingSub"
   | "product.shared.clubTitle"
   | "product.shared.illustrated"
-  | "product.shared.more"
   | "product.shared.questions"
   | "product.shared.seePricing"
   | "product.shared.startFree"
