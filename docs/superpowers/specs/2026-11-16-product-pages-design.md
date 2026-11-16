@@ -17,7 +17,8 @@ Not a funnel fix: no analytics study gates this work.
 
 Goals
 - One theme and one layout system shared by ALL marketing pages: home, feature, sport, pricing, live.
-- Feature pages: Sports (index), Format, Scheduling, Match Day, Streaming, Sponsoring, Chess External Play.
+- Feature pages: Sports (index), Format, Scheduling, Match Day, Streaming, Remote scoring, Sponsoring, Chess External Play.
+  Format and Scheduling are REDESIGNED in this template, not only deleted (owner, 2026-11-16).
 - One sport page per sport in the catalog, in the cricket pattern.
 - A single `/live` page replacing `/discover` and `/discover/{sport}`.
 - Every picture is a real product screen. Scoring pictures come from the phone app first.
@@ -83,6 +84,11 @@ Each is a small pure state machine in a client component, with its own unit test
   from the engine's declarations, never typed into the page.
 - **Streaming**: pad + stream tile; switches for overlay style (bar / bug) and state (soon / live /
   reconnecting / final).
+- **Remote scoring** (owner, 2026-11-16): offline scoring is the HERO of this page, not a section lower down. H1 in
+  the shape "No signal? Keep scoring."; the search phrase goes in the lede and `<title>`. The hero demo is a pad plus a
+  signal switch: signal off, taps queue with a count; signal on, they send themselves. Below: hand a match to a
+  volunteer's phone by code or QR with no account, what the scorer holds, and a link to "your phone is the camera" on
+  Streaming. The lede must say this is the Seazn app on a phone: the web pad makes no offline claim.
 - **Match Day**: three courts and a queue. Call → Called → Playing → Finished; an announcement card and a
   per-court stream list react.
 - Format, Scheduling, Sponsoring, Chess: model to be designed per page in the same frame; builder proposes,
@@ -91,7 +97,7 @@ Each is a small pure state machine in a client component, with its own unit test
 ## 6. Routes
 
 Add (under `app/[lang]/(marketing)/`): `/product/streaming`, `/product/match-day`, `/product/format`,
-`/product/scheduling`, `/product/sponsoring`, `/product/chess`, `/sports` (index), `/sports/{sport}`.
+`/product/scheduling`, `/product/remote-scoring`, `/product/sponsoring`, `/product/chess`, `/sports` (index), `/sports/{sport}`.
 URL names are the builder's call within that shape; fix them once, in the nav config and the sitemap.
 
 Delete, no redirects: `/formats`, `/scheduling`, `/use-cases/clubs|events|schools`, `/discover`,
@@ -144,11 +150,24 @@ depend on it do not ship.
 2. Cricket sport page (approved pattern) and Streaming.
 3. Route deletions, sitemap, `/live`.
 4. Remaining sport pages (same shape, batched).
-5. Format, Scheduling, Sponsoring, Chess.
+5. Format, Scheduling, Remote scoring, Sponsoring, Chess.
 6. Match Day — held behind court streaming, or shipped without that section (owner to choose at the time).
 
 One PR per wave. Each ships unit tests for its model, the scoped e2e (all seven widths cover the marketing
 pages), smoke strings, and screenshots at 320 / 768 / 1280 for per-screen sign-off.
+
+### Offline scoring: where it lives
+
+Offline is a feature of the phone app, the same for every sport, so its home is the Remote scoring page (hero). Until
+that page ships, the cricket page keeps its full "No signal at the ground? Keep scoring." section so the claim stays
+promoted. When Remote scoring ships, every sport page's offline section shrinks to a small "Works without signal" tag
+under the hero buttons, linking to it. A sport page's hero never carries the offline line: one message per hero.
+
+### Decided after wave 1 was built (owner, 2026-11-16)
+
+- No "More of the product" strip at the foot of a page: the nav menu and the footer already list the same pages. A page
+  ends on its closing call. (§4's table row "Closing call + more of the product links" is now "Closing call" only.)
+- No back arrow on Pricing or Live: both are top-level nav destinations.
 
 ## 11. Left to the builder
 
