@@ -64,8 +64,16 @@ const AMENDED_TEXT: Readonly<Record<string, { says: string; by: string }>> = {
     by: "W2b ledger I-1 and Task 15 review M-6: the sport's own retirement credit",
   },
   "BD-RT-1": {
-    says: "Badminton retirement = points played stand, the current game completed for the winner to its legal end (21, or two clear up to the 30 cap), remaining games 21-0 (until W5's 16.2.5).",
-    by: "Task 15 review M-6, owner Q2: the current game runs to its legal end, not a flat 21",
+    says: "Badminton retirement = points played stand, the current game completed for the winner to its legal end (21, or two clear up to the 30 cap), remaining games 21-0 (a permanent recorded deviation from BWF GCR 16.2.5, ruling 290).",
+    by: "Task 15 review M-6, owner Q2: the current game runs to its legal end, not a flat 21; ruling 290 (2026-11-16): \"until W5\" dropped, a permanent recorded deviation from BWF GCR 16.2.5",
+  },
+  "BD-WO-2": {
+    says: "In a badminton group stage BD-WO-1 applies instead of BWF GCR 16.2.5's delete-all-results (a permanent recorded deviation from BWF GCR 16.2.5, ruling 290: badminton follows ruling 277's 50 percent rule, X-WDT-1 and X-WDT-2, like every sport; delete-all is not applied).",
+    by: "ruling 290 (2026-11-16, W5 engine 9.1.0): \"until W5\" dropped, a permanent recorded deviation from BWF GCR 16.2.5; ruling 277's 50 percent rule (X-WDT-1, X-WDT-2) applies to badminton like every sport",
+  },
+  "X-RT-1": {
+    says: "In-match disqualification takes the sport's retirement credit for that match (and the entrant leaves the stage: a withdrawal under ruling 259; from a league or group table under X-WDT-1, X-WDT-2 and X-WDT-10, rulings 277 and 289). Amended by ruling 113 (2026-10-11): a retirement is recorded only once something is played (nobody retires from a match never played). Amended by ruling 115 (2026-10-12): a disqualification with nothing played (no Start, or a Start with nothing played) is treated like a walkover: the sport's walkover credit, and no match in players' stats (X-PS-1). Amended by ruling 118 (2026-10-12): in chess the Start is play (Seazn records no moves), so a chess retirement or disqualification after the Start is in-match: it carries the result, and both players' stats count it (X-PS-2).",
+    by: "ruling 289 (2026-11-16, W5 engine 9.1.0): an in-match disqualification takes the retirement credit and the entrant leaves the stage; from a league or group table under X-WDT-1, X-WDT-2 and X-WDT-10 (ruling 277)",
   },
   "X-RS-3": {
     says: "Every event that records a forfeit, walkover, retirement or double walkover is organiser-only, through the X-ST-2 predicate, except as X-SE-3 admits.",
