@@ -1,5 +1,5 @@
 import "server-only";
-// Stripe event processing: invoice.payment_failed / payment_succeeded and the renewal true-up (see ./index.ts).
+// Stripe event processing: invoice.payment_failed / payment_succeeded / payment_action_required and the renewal true-up (see ./index.ts).
 import type Stripe from "stripe";
 import { sql } from "@/lib/db";
 import { log } from "@/server/logger";
@@ -9,7 +9,7 @@ import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
 import { reportSale } from "@/lib/revshare";
 import { ownerDistinctId, primaryOrgForGroup } from "./group-resolution";
-import { queuePaidInvoiceMail, queueRenewalFailedMail, queueRenewalUpcomingMail } from "./lifecycle-mail";
+import { queuePaidInvoiceMail, queueRenewalActionRequiredMail, queueRenewalFailedMail, queueRenewalUpcomingMail } from "./lifecycle-mail";
 
 /** In Stripe v22 the subscription ref moved to invoice.parent.subscription_details.subscription */
 export function invoiceSubId(invoice: Stripe.Invoice): string | null {
@@ -116,6 +116,17 @@ export async function handleInvoiceUpcoming(invoice: Stripe.Invoice): Promise<vo
   const subId = invoiceSubId(invoice);
   if (!subId) return;
   await queueRenewalUpcomingMail(invoice, subId);
+}
+
+/**
+ * `invoice.payment_action_required` (billing lifecycle mails, 2026-11-16): the payer's bank wants the payment confirmed (3-D Secure).
+ * Mail only (the request to confirm): Stripe sends `invoice.payment_failed` for the same invoice in the same second, and that handler
+ * is the one that moves the mirror to past_due.
+ */
+export async function handleInvoicePaymentActionRequired(invoice: Stripe.Invoice): Promise<void> {
+  const subId = invoiceSubId(invoice);
+  if (!subId) return;
+  await queueRenewalActionRequiredMail(invoice, subId);
 }
 
 /**

@@ -110,6 +110,7 @@ export const KIND_HOOKS: Record<OutboxKind, KindHook> = {
   renewal_upcoming: {},
   renewal_paid: {},
   subscription_changed: {},
+  renewal_action_required: {},
 };
 
 /** Does this kind have a hook to run for a row that ended badly? (A kind with none is not "skipped" when a tick runs out of

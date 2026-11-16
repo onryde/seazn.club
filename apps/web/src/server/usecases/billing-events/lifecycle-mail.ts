@@ -1,7 +1,7 @@
 import "server-only";
 // Stripe event processing: the billing lifecycle mails to a group's payer (see ./index.ts).
 //
-// One owner for three questions every one of these mails asks: WHO the payer is (the trial warning's rule, moved here so all seven
+// One owner for three questions every one of these mails asks: WHO the payer is (the trial warning's rule, moved here so all eight
 // billing mails share it), WHICH mail an event earns (the guards below, each a named predicate a test reaches), and its ONCE-KEY. The
 // handlers in ./subscriptions and ./invoices call in after their own writes; nothing here writes billing state.
 //
@@ -15,6 +15,7 @@ import "server-only";
 //  - plan_activated:       the invoice id
 //  - renewal_paid:         the invoice id
 //  - renewal_failed:       the invoice id (ONE notice per declined invoice, however many retries Stripe makes)
+//  - renewal_action_required: the invoice id (ONE request per invoice the bank wants confirmed, however often Stripe asks)
 //  - renewal_upcoming:     `<stripe subscription id>:<renewal instant>` (an `invoice.upcoming` payload has NO invoice id)
 //  - subscription_changed: the Stripe event id (each change is its own event)
 import type Stripe from "stripe";
@@ -29,6 +30,7 @@ import { hasLiveSubscription, isTerminalStripeStatus } from "@/lib/subscription-
 import { enqueueEmailOnce, expiryWithin, onceKey, recipientLocale, type OutboxKind } from "@/server/email-outbox";
 import {
   planActivatedTemplate,
+  renewalActionRequiredTemplate,
   renewalFailedTemplate,
   renewalPaidTemplate,
   renewalUpcomingTemplate,
@@ -336,14 +338,32 @@ export async function queuePaidInvoiceMail(invoice: Stripe.Invoice, stripeSubId:
 // ---------------------------------------------------------------------------------------------------------------------------------
 
 /**
+ * Did this payment stop for the payer's BANK (3-D Secure) rather than fail? Measured in a Stripe sandbox (2026-11-16, report-2.md): a
+ * renewal on a card that asks for authentication sends BOTH `invoice.payment_action_required` and `invoice.payment_failed`, for one
+ * invoice, in the same second, with IDENTICAL invoice objects: Stripe made no charge, did not count an attempt (`attempt_count` 0) and
+ * scheduled no retry. A real failure is a counted attempt: a declined card and a renewal with no card left both read `attempt_count` 1,
+ * with a retry. Stripe's own definition says the same: any payment attempt counts as the first. An invoice that says nothing
+ * (`attempt_count` absent) is not taken for one waiting on the bank, so the dunning notice still goes.
+ */
+export function awaitsConfirmation(invoice: Stripe.Invoice): boolean {
+  return invoice.attempt_count === 0;
+}
+
+/**
  * `invoice.payment_failed`: the dunning notice, ONE per invoice. Only a RENEWAL charge (`subscription_cycle`, which includes the charge
  * that ends a card-on-file trial): a declined first checkout (`subscription_create`) is shown on the checkout page as it happens and
  * has no grace to speak of, and a declined interval switch is confirmed in-page. `graceEndsAt` is the resolver's: 14 days from the
  * FIRST failure (`status_changed_at`), handed in by the handler that just wrote it.
+ *
+ * Not when the payment is waiting on the payer's bank (`awaitsConfirmation`): that failure arrives beside an
+ * `invoice.payment_action_required` for the same moment, and `renewal_action_required` is its one mail — this one would say the card
+ * was declined and ask for a new one, both false (ruling, brief 2: one mail for one moment). A decline before or after it, on the same
+ * invoice, is a counted attempt and still earns this notice.
  */
 export async function queueRenewalFailedMail(invoice: Stripe.Invoice, groupId: string, graceEndsAt: Date): Promise<void> {
   if (invoice.billing_reason !== "subscription_cycle") return;
   if (!(invoice.amount_due > 0)) return;
+  if (awaitsConfirmation(invoice)) return;
   const p = await billingPayer(sql, groupId);
   if (!p) return noPayer("renewal_failed", { groupId, invoiceId: invoice.id });
   const graceDaysLeft = Math.ceil((graceEndsAt.getTime() - Date.now()) / DAY_MS);
@@ -358,6 +378,50 @@ export async function queueRenewalFailedMail(invoice: Stripe.Invoice, groupId: s
         graceEndsAt: graceEndsAt.toISOString(),
         graceDaysLeft,
         nextAttemptAt: invoice.next_payment_attempt ? iso(invoice.next_payment_attempt) : null,
+      },
+      dict,
+    ),
+  );
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// renewal_action_required (invoice.payment_action_required)
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+/**
+ * `invoice.payment_action_required`: the payer's bank wants a renewal confirmed (3-D Secure). Stripe's own "confirm your payment" email
+ * is OFF (owner, 2026-11-16), so this is the only notice that reaches anybody. ONE per invoice (once-key: the invoice id, however often
+ * Stripe asks). Only a RENEWAL (`subscription_cycle`), as the dunning notice: a first checkout is confirmed in the browser as it
+ * happens. The button is the invoice's Stripe-hosted page, where the payer confirms; an invoice with none gives nothing to act on, so
+ * nothing is sent. Mail only — the `invoice.payment_failed` Stripe sends beside it moves the mirror to past_due.
+ *
+ * The grace it names is the dunning notice's, by the resolver's rule (lib/entitlements.ts and org_has_feature: past_due holds the plan
+ * for 14 days from `coalesce(status_changed_at, updated_at)`). Stripe sends this in the same second as that failure, in either order: a
+ * mirror already past_due names its own start, and one that is not yet is moving now.
+ */
+export async function queueRenewalActionRequiredMail(invoice: Stripe.Invoice, stripeSubId: string): Promise<void> {
+  if (invoice.billing_reason !== "subscription_cycle") return;
+  const confirmUrl = invoice.hosted_invoice_url;
+  if (!confirmUrl) return;
+  const [row] = await sql<{ id: string; grace_ends_at: Date }[]>`
+    select id,
+           (case when status = 'past_due' then coalesce(status_changed_at, updated_at) else now() end) + interval '14 days' as grace_ends_at
+      from subscriptions where stripe_subscription_id = ${stripeSubId}`;
+  if (!row) return;
+  const p = await billingPayer(sql, row.id);
+  if (!p) return noPayer("renewal_action_required", { groupId: row.id, invoiceId: invoice.id });
+  const graceDaysLeft = Math.ceil((row.grace_ends_at.getTime() - Date.now()) / DAY_MS);
+  await queue(sql, p, "renewal_action_required", invoice.id, (dict, locale, url) =>
+    renewalActionRequiredTemplate(
+      {
+        planName: planLabel(p.planKey),
+        billingUrl: url,
+        locale,
+        amountDueCents: invoice.amount_due,
+        currency: invoice.currency,
+        confirmUrl,
+        graceEndsAt: row.grace_ends_at.toISOString(),
+        graceDaysLeft,
       },
       dict,
     ),

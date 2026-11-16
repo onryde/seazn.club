@@ -1,4 +1,4 @@
--- V524 -- the email outbox's six billing lifecycle kinds (2026-11-15).
+-- V524 -- the email outbox's seven billing lifecycle kinds (2026-11-15).
 --
 -- WHAT THIS ADDS. A billing group's payer is told what happened to the subscription, each mail queued by the Stripe webhook that
 -- learns it (server/usecases/billing-events/lifecycle-mail.ts):
@@ -8,11 +8,13 @@
 --   renewal_upcoming      an ANNUAL plan renews soon (invoice.upcoming)
 --   renewal_paid          a later renewal was paid: the receipt (invoice.payment_succeeded; BILLING_RENEWAL_RECEIPT_EMAILS can stop it)
 --   subscription_changed  the payer's own change confirmed (customer.subscription.updated): cancel scheduled, resumed, interval switched
--- All six are addressed to the payer's account (subscriptions.owner_user_id, resolved at send) and transactional, like trial_ending.
+--   renewal_action_required  the payer's bank wants a renewal confirmed (invoice.payment_action_required, 3-D Secure), one per invoice,
+--                            its button the invoice's Stripe-hosted page (Stripe's own confirm-your-payment email is off)
+-- All seven are addressed to the payer's account (subscriptions.owner_user_id, resolved at send) and transactional, like trial_ending.
 --
--- The CHECK restates every kind: V520's sixty-two in V520's order, then these six: sixty-eight. V520__email_outbox_registration_
--- promotion_skipped.sql is the previous definer of email_outbox_kind_valid (re-checked 2026-11-15 against origin/main: V521 and V522
--- define none). constants.ts carries all sixty-eight. Nothing else moves: the once-key, the replace rule and the cancel function are
+-- The CHECK restates every kind: V520's sixty-two in V520's order, then these seven: sixty-nine. V520__email_outbox_registration_
+-- promotion_skipped.sql is the previous definer of email_outbox_kind_valid (re-checked 2026-11-16 against origin/main: V521 to V523
+-- define none). constants.ts carries all sixty-nine. Nothing else moves: the once-key, the replace rule and the cancel function are
 -- V472's.
 
 alter table email_outbox drop constraint email_outbox_kind_valid,
@@ -33,4 +35,5 @@ alter table email_outbox drop constraint email_outbox_kind_valid,
     'registration_paid', 'registration_approved', 'registration_expired', 'registration_withdrawn', 'registration_joined', 'registration_rejected', 'registration_promotion_lapsed',
     'quick_match_link', 'quick_match_reminder',
     'registration_promotion_skipped',
-    'trial_expired', 'plan_activated', 'renewal_failed', 'renewal_upcoming', 'renewal_paid', 'subscription_changed'));
+    'trial_expired', 'plan_activated', 'renewal_failed', 'renewal_upcoming', 'renewal_paid', 'subscription_changed',
+    'renewal_action_required'));

@@ -5,7 +5,7 @@
 // The same two lists are typed again as CHECK constraints: the statuses in db/migration/deltas/V470__email_outbox.sql, the kinds
 // (as last redefined) in `V524__email_outbox_billing_lifecycle.sql`: V520's sixty-two (polish wave P5's V514 list — V511's
 // registration lifecycle list, the sponsor deals delta's V503 list plus five, plus two more; that is 59 — then the quick match's two,
-// then walk-fix F16's one) and the six billing lifecycle kinds: sixty-eight. They are two copies of one fact, so outbox-schema.test.ts reads the
+// then walk-fix F16's one) and the seven billing lifecycle kinds: sixty-nine. They are two copies of one fact, so outbox-schema.test.ts reads the
 // constraint definitions back from the catalogue and requires them to name exactly these members.
 
 export const OUTBOX_KINDS = [
@@ -89,6 +89,9 @@ export const OUTBOX_KINDS = [
   "renewal_upcoming",
   "renewal_paid",
   "subscription_changed",
+  // The payer's bank wants a renewal confirmed (3-D Secure; invoice.payment_action_required). Stripe's own confirm-your-payment email is
+  // off (owner, 2026-11-16), so this is the only notice. Same facts as its six siblings. V524.
+  "renewal_action_required",
 ] as const;
 export type OutboxKind = (typeof OUTBOX_KINDS)[number];
 
@@ -104,7 +107,7 @@ export type OutboxKind = (typeof OUTBOX_KINDS)[number];
  *    The quick match's two mails (its design, §7.6 and C2) go to the address the guest typed (a guest has no account) and are
  *    NOT transactional (controller ruling 2026-11-08): the link is already on the guest's screen, so the mail is a convenience,
  *    and an address that bounced or complained (`email_suppressions`) is honoured.
- *    The six billing lifecycle mails (2026-11-15) are born on the outbox with the trial-ending notice's facts: the payer's account,
+ *    The seven billing lifecycle mails (2026-11-15) are born on the outbox with the trial-ending notice's facts: the payer's account,
  *    transactional (a declined renewal or a lapsed trial is about the payer's own money, so the suppression list does not hold it).
  *
  * A declaration, like the lists above: pure data for the core, the writers and the tests to read.
@@ -183,6 +186,7 @@ export const OUTBOX_KIND_FACTS: Readonly<Record<OutboxKind, { to: "account" | "l
   renewal_upcoming: { to: "account", transactional: true },
   renewal_paid: { to: "account", transactional: true },
   subscription_changed: { to: "account", transactional: true },
+  renewal_action_required: { to: "account", transactional: true },
 };
 
 /** Mail ABOUT an account that is addressed to a literal address (phase-3 D5, wave 3): its verification and its email change. These kinds

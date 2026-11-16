@@ -7,7 +7,7 @@
 //
 // What is checked, and how:
 //  - WHICH kinds are account kinds is the engine's own declaration (`OUTBOX_KIND_FACTS`), compared with a list typed here from the
-//    spec (`chess_invite`, wave 2's seven, wave 4's seven, sponsor deals' `sponsor_deal_paid` and the six billing lifecycle mails). A new
+//    spec (`chess_invite`, wave 2's seven, wave 4's seven, sponsor deals' `sponsor_deal_paid` and the seven billing lifecycle mails). A new
 //    account kind is then a failure that asks for a decision here, not a
 //    quiet pass.
 //  - Every account kind that has moved is swept through its real producer. Wave 2's T1 registered its kinds before their producers moved,
@@ -33,9 +33,9 @@
 //    the notice read the database only; the other refund handlers no-op on a pass charge (their one Stripe lookup needs a Stripe key).
 //  - The trial warning is driven through the real `processStripeEvent` (`customer.subscription.trial_will_end`) on a trialing billing
 //    group. Nothing reaches Stripe: the group is found by the subscription id it stores.
-//  - The six billing lifecycle mails are driven through the real `processStripeEvent` with REAL Stripe payloads captured in a sandbox
-//    (usecases/__tests__/_billing-lifecycle-fixtures.ts), each on its own billing group; the paid-invoice kinds' positive pair is the
-//    invoice link the payload carries.
+//  - The seven billing lifecycle mails are driven through the real `processStripeEvent` with REAL Stripe payloads captured in a sandbox
+//    (usecases/__tests__/_billing-lifecycle-fixtures.ts), each on its own billing group; the paid-invoice kinds' and the confirmation
+//    request's positive pair is the invoice link the payload carries.
 //  - The suspension notices are driven through the real discipline producers on a football division with a unique name (the positive
 //    pair) whose player is claimed by a fresh account: the confirmed notice through `decideSuspension` (confirm). Its request makes the
 //    first attempt, which the transport refuses (503), so the row is judged once that attempt is over and it is queued again. The
@@ -119,6 +119,7 @@ const SPEC_ACCOUNT_KINDS: readonly OutboxKind[] = [
   "renewal_upcoming",
   "renewal_paid",
   "subscription_changed",
+  "renewal_action_required",
 ];
 
 beforeEach(() => stubOutboxEnv());
@@ -324,6 +325,13 @@ describe.skipIf(!HAS_DB)("an account kind's sealed body never names its recipien
         capturedEvent("subscription.updated.cancel_scheduled", { stripeSubId: g.stripeSubId, anchor: (o) => o.cancel_at, at: Math.floor(Date.now() / 1000) + 10 * 86_400 }),
       );
       return { rowIds: await rowIdsOf("subscription_changed", g.groupId), positive: /\/settings\/billing/ };
+    },
+    renewal_action_required: async () => {
+      const g = await seedBillingGroup({ status: "active", prefix: "akb" });
+      const e = capturedEvent("invoice.payment_action_required.monthly_renewal", { stripeSubId: g.stripeSubId, anchor: (o) => o.created, at: Math.floor(Date.now() / 1000), edit: freshInvoiceId });
+      await processStripeEvent(e);
+      // The request's button is the Stripe-hosted page where the payer confirms.
+      return { rowIds: await rowIdsOf("renewal_action_required", g.groupId), positive: literal((e.data.object as Stripe.Invoice).hosted_invoice_url!) };
     },
     suspension_confirmed: async () => {
       const { ctx, divisionName } = await claimedFootballDivision();

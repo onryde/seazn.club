@@ -13,7 +13,7 @@ import "server-only";
 //   ledger            billing_events: claim/run, replay, stuck-event sweep, reads
 //   checkout          checkout.session.completed (packs, passes, subscriptions)
 //   subscriptions     customer.subscription.* and payment-method mirroring
-//   invoices          invoice.payment_failed / payment_succeeded, renewal true-up
+//   invoices          invoice.payment_failed / payment_succeeded / payment_action_required, renewal true-up
 //   refunds           charge.refunded: pass revoke, AI pack + match-credit claw-back
 //   disputes          platform-charge disputes
 //   connect           Connect payout health and external-account changes

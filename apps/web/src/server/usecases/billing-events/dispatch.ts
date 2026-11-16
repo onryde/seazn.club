@@ -25,7 +25,12 @@ import {
   handleSubscriptionDeleted,
   handleTrialWillEnd,
 } from "./subscriptions";
-import { handleInvoicePaymentFailed, handleInvoicePaymentSucceeded, handleInvoiceUpcoming } from "./invoices";
+import {
+  handleInvoicePaymentActionRequired,
+  handleInvoicePaymentFailed,
+  handleInvoicePaymentSucceeded,
+  handleInvoiceUpcoming,
+} from "./invoices";
 import {
   revokePassForRefundedChargeAndNotify,
   handlePackChargeRefunded,
@@ -107,6 +112,11 @@ export async function processStripeEvent(event: Stripe.Event): Promise<void> {
       break;
     case "invoice.payment_succeeded":
       await handleInvoicePaymentSucceeded(event.data.object as Stripe.Invoice);
+      break;
+    case "invoice.payment_action_required":
+      // The payer's bank wants a renewal confirmed (3-D Secure): the request to confirm. Mail only — Stripe sends
+      // invoice.payment_failed beside it, which moves the mirror.
+      await handleInvoicePaymentActionRequired(event.data.object as Stripe.Invoice);
       break;
     case "invoice.upcoming":
       // The annual renewal notice. A preview invoice: it has no id.
