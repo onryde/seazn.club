@@ -40,6 +40,7 @@ import { registrationPayPageSuite } from "./suites/registrationPayPage.ts";
 import { quickMatchSuite } from "./suites/quickMatch.ts";
 import { funnelSuite } from "./suites/funnel.ts";
 import { marketingSuite } from "./suites/marketing.ts";
+import { revshareSaleSuite } from "./suites/revshareSale.ts";
 
 // --- SMOKE_ONLY (review R1): run named suites alone, without a full smoke -----
 type SubsetCtx = { admin: Session; org2Id: string; org2Slug: string };
@@ -75,6 +76,7 @@ const SELECTABLE_SUITES: Record<string, (c: SubsetCtx) => Promise<void>> = {
   quickMatch: () => quickMatchSuite(),
   funnel: () => funnelSuite(),
   marketing: () => marketingSuite(),
+  revshareSale: () => revshareSaleSuite(),
 };
 
 /** The subset's setup: the same calls main() makes for this state, in main()'s order — the admin sign-in, the plan

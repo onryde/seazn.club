@@ -572,5 +572,21 @@
   "start.wizard.language": "Language",
   "start.wizard.changeBanner": "Your earlier link will stop working when you send a new one. Reference {reference} stays.",
   "start.wizard.answersKept": "Your answers are kept. Use Back to change any of them.",
-  "start.wizard.sendNew": "Send a new link"
+  "start.wizard.sendNew": "Send a new link",
+  "footer.link.affiliates": "Affiliates",
+  "affiliates.meta.title": "Affiliate program",
+  "affiliates.meta.description": "Earn {percent}% of every payment from the clubs and organisers you refer to Seazn Club, for {years} years.",
+  "affiliates.badge": "AFFILIATES",
+  "affiliates.h1": "Earn {percent}% for {years} years",
+  "affiliates.subhead": "Know a club, league or event organiser who runs tournaments? Share your link and earn {percent}% of what each customer you refer pays Seazn Club, for their first {years} years.",
+  "affiliates.card.0.title": "Get your link",
+  "affiliates.card.0.body": "Join through our partner portal and get your personal referral link.",
+  "affiliates.card.1.title": "They subscribe",
+  "affiliates.card.1.body": "When someone you referred starts a paid plan, it is tracked automatically. Referrals are remembered for 30 days.",
+  "affiliates.card.2.title": "You keep earning",
+  "affiliates.card.2.body": "You earn {percent}% of every payment they make for {years} years, renewals included, and see each referral in your partner dashboard.",
+  "affiliates.cta.title": "Ready to start earning?",
+  "affiliates.cta.subtext": "Sign up for free on our partner portal.",
+  "affiliates.cta.button": "Join the affiliate program",
+  "affiliates.payout": "Commissions become available {payoutDelayDays} days after each sale, with a {payoutMinimum} minimum payout, paid through {payoutMethod}."
 }

@@ -8,6 +8,8 @@ import { CookieConsent } from "@/components/cookie-consent";
 import { ConfirmProvider } from "@/components/ui/confirm-provider";
 import { HtmlLang } from "@/components/i18n/html-lang";
 import { PopStateGuardRoot } from "@/components/popstate-guard";
+import { RevshareCapture } from "@/components/revshare-capture";
+import { revshareEnabled } from "@/lib/revshare-shared";
 
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({
@@ -62,6 +64,20 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} ${barlowCondensed.variable} h-full antialiased`}
     >
+      {/* Revshare affiliate tracking — sets window.revshare_metadata.ref_code on
+          affiliate landings; <RevshareCapture> forwards it to the server. Off
+          unless NEXT_PUBLIC_REVSHARE_ENABLED=1 (stg/local ship it off). */}
+      {revshareEnabled() && (
+        <head>
+          <script
+            async
+            src="https://www.revshare.so/tracking.js"
+            data-program-id="6ac5012c6a42960a11fbb86b"
+            data-domain=".seazn.club"
+            data-cookie-duration="30"
+          />
+        </head>
+      )}
       <body className="min-h-full font-sans">
         {/* A screen reader was pronouncing French, Spanish and Dutch copy with
             English rules on every tree outside [lang]/(marketing), which was
@@ -81,6 +97,7 @@ export default function RootLayout({
         <AnalyticsBootstrap />
         {/* Global consent banner — analytics stays opted out until Accept. */}
         <CookieConsent />
+        <RevshareCapture />
       </body>
     </html>
   );

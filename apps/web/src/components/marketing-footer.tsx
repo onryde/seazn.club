@@ -4,8 +4,10 @@ import { LocaleSwitcher } from "@/components/i18n/locale-switcher";
 import { PoweredByStripe } from "@/components/powered-by-stripe";
 import { getDictionary, t } from "@/lib/i18n";
 import { toLocale } from "@/lib/i18n-constants";
+import { revshareEnabled } from "@/lib/revshare-shared";
 
-const COLS: Array<{ headKey: string; links: Array<{ key: string; href: string }> }> = [
+type FooterLink = { key: string; href: string; requiresRevshare?: boolean };
+const COLS: Array<{ headKey: string; links: FooterLink[] }> = [
   {
     headKey: "footer.col.product",
     links: [
@@ -14,6 +16,9 @@ const COLS: Array<{ headKey: string; links: Array<{ key: string; href: string }>
       { key: "nav.pricing", href: "/pricing" },
       { key: "footer.link.liveNow", href: "/discover" },
       { key: "footer.link.games", href: "/games" },
+      // Only while the Revshare program is live (NEXT_PUBLIC_REVSHARE_ENABLED=1) —
+      // see footerCols(); the /affiliates page 404s otherwise.
+      { key: "footer.link.affiliates", href: "/affiliates", requiresRevshare: true },
     ],
   },
   {
@@ -45,6 +50,11 @@ const COLS: Array<{ headKey: string; links: Array<{ key: string; href: string }>
   },
 ];
 
+/** The footer columns, minus any link whose feature is switched off. */
+export function footerCols(revshareOn: boolean) {
+  return COLS.map((c) => ({ ...c, links: c.links.filter((l) => !l.requiresRevshare || revshareOn) }));
+}
+
 /** Night footer (design/v3/12 §4.9) — closes the matchday arc. */
 export async function MarketingFooter({ lang = "en" }: { lang?: string }) {
   const d = await getDictionary(toLocale(lang), "marketing");
@@ -52,7 +62,7 @@ export async function MarketingFooter({ lang = "en" }: { lang?: string }) {
     <footer className="bg-[var(--mk-night)]">
       <div className="mx-auto max-w-6xl px-4 py-12">
         <div className="grid gap-8 text-center sm:grid-cols-2 sm:text-left lg:grid-cols-4">
-          {COLS.map((col) => (
+          {footerCols(revshareEnabled()).map((col) => (
             <div key={col.headKey}>
               <p className="mk-display mb-3 text-xs font-semibold uppercase tracking-[0.16em] text-[var(--mk-cream)]">
                 {t(d, col.headKey)}

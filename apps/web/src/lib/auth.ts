@@ -10,6 +10,7 @@ import { getLimit, orgPlanKey } from "@/lib/entitlements";
 import { orgAddonForPlan } from "@/lib/org-addons";
 import { grantMonthly, walletIdFor } from "@/lib/credits";
 import { isReservedSlug } from "@/lib/public-site";
+import { consumeRevshareCookie } from "@/lib/revshare";
 import { routes } from "@/lib/routes";
 import { setRequestActor } from "@/server/request-context";
 import { slugify, uniqueSlug } from "@/server/usecases/slugs";
@@ -369,7 +370,16 @@ export async function assertMayOwnAnotherOrg(userId: string): Promise<void> {
  * (`assertMayOwnAnotherOrg`) is what stops a free user minting orgs for ever;
  * the per-GROUP cap is enforced on the explicit attach path, not here.
  */
-export async function createOrgForUser(userId: string, name: string): Promise<Organization> {
+export async function createOrgForUser(
+  userId: string,
+  name: string,
+  opts?: { revshareRefCode?: string | null },
+): Promise<Organization> {
+  // Revshare affiliate attribution: every caller gets it from the rs_ref cookie
+  // (consumed here whether or not it ends up stamped); an explicit value, even
+  // null, overrides. Stamped on the new billing GROUP, first org only — below.
+  const revshareRefCode =
+    opts?.revshareRefCode !== undefined ? opts.revshareRefCode : await consumeRevshareCookie();
   // Readable slugs can collide when two same-named orgs sign up concurrently
   // (check-then-insert race) — retry past the unique index, then salt.
   let org: Organization | undefined;
@@ -388,9 +398,23 @@ export async function createOrgForUser(userId: string, name: string): Promise<Or
         // not a 23505 — the catch below rethrows it without retrying.
         await tx`select pg_advisory_xact_lock(hashtext(${"org-create:" + userId}))`;
         await assertMayOwnAnotherOrg(userId);
+        // Revshare attribution is for a user's FIRST org only: someone who already
+        // belongs to an org, or already pays through Stripe, is an existing customer
+        // and must not be able to claim an affiliate by clicking a link later
+        // (their own included). Checked under the advisory lock, before this
+        // transaction adds its own membership row.
+        let groupRefCode: string | null = null;
+        if (revshareRefCode) {
+          const [member] = await tx<{ x: number }[]>`
+            select 1 as x from org_members where user_id = ${userId} limit 1`;
+          const [payer] = await tx<{ x: number }[]>`
+            select 1 as x from subscriptions
+             where owner_user_id = ${userId} and stripe_customer_id is not null limit 1`;
+          if (!member && !payer) groupRefCode = revshareRefCode;
+        }
         const [s] = await tx<{ id: string }[]>`
-          insert into subscriptions (owner_user_id, plan_key, status, quantity_paid)
-          values (${userId}, 'community', 'active', 1)
+          insert into subscriptions (owner_user_id, plan_key, status, quantity_paid, revshare_ref_code)
+          values (${userId}, 'community', 'active', 1, ${groupRefCode})
           returning id`;
         const [o] = await tx<Organization[]>`
           insert into organizations (name, slug, created_by, subscription_id)

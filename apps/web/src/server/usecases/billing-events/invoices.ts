@@ -7,6 +7,7 @@ import { invalidateGroupEntitlements } from "@/lib/entitlements";
 import { syncGroupQuantity } from "@/server/usecases/billing-groups";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
+import { reportSale } from "@/lib/revshare";
 import { ownerDistinctId, primaryOrgForGroup } from "./group-resolution";
 
 /** In Stripe v22 the subscription ref moved to invoice.parent.subscription_details.subscription */
@@ -55,6 +56,44 @@ export async function handleInvoicePaymentSucceeded(invoice: Stripe.Invoice) {
   // Leaving dunning restores the plan for every org in the group.
   if (row) await invalidateGroupEntitlements(row.id);
   await trueUpQuantityPaid(invoice, subId);
+  await reportRevshareSale(invoice, subId);
+}
+
+/**
+ * Revshare: report each paid subscription charge against the ref_code frozen on
+ * the paying GROUP (subscriptions.revshare_ref_code, stamped once at the user's
+ * first org). Frozen on the payer rather than looked up from member orgs, so an
+ * org attach/detach never changes or drops who is owed the renewals.
+ *
+ * Scope is the first charge and renewals only (billing_reason subscription_create
+ * / subscription_cycle) — a proration or add-on invoice (subscription_update,
+ * manual) is deliberately not reported. The amount EXCLUDES tax: automatic tax is
+ * on, so amount_paid carries VAT/GST and would overpay commission. The invoice id
+ * is the transaction id — unique per charge, and a replayed webhook is ignored by
+ * Revshare. Best-effort, and a no-op while the master switch is off — reportSale owns both
+ * (one authority; a second copy of the switch here would shadow its tests).
+ */
+const REVSHARE_BILLING_REASONS = new Set(["subscription_create", "subscription_cycle"]);
+
+async function reportRevshareSale(invoice: Stripe.Invoice, subId: string): Promise<void> {
+  if (!invoice.billing_reason || !REVSHARE_BILLING_REASONS.has(invoice.billing_reason)) return;
+  const customerId =
+    typeof invoice.customer === "string" ? invoice.customer : invoice.customer?.id;
+  if (!customerId || !invoice.id) return;
+  const [row] = await sql<{ revshare_ref_code: string | null }[]>`
+    select revshare_ref_code from subscriptions where stripe_subscription_id = ${subId}`;
+  if (!row?.revshare_ref_code) return;
+  const paid = invoice.amount_paid ?? 0;
+  // Never report more than was paid; fall back to the paid amount when Stripe
+  // gives no pre-tax total.
+  const exTax = invoice.total_excluding_tax;
+  await reportSale({
+    refCode: row.revshare_ref_code,
+    transactionId: invoice.id,
+    amountCents: typeof exTax === "number" ? Math.min(paid, exTax) : paid,
+    currency: invoice.currency,
+    customerId,
+  });
 }
 
 /**

@@ -250,8 +250,8 @@ export function matrixSqlOver(db: ReturnType<typeof postgres>, expectedDataDir: 
         const actual = dir?.data_directory ?? "";
         if (actual !== expectedDataDir) throw new DataDirMismatch(expectedDataDir, actual);
         const [sub] = await tx<{ id: string }[]>`
-          insert into subscriptions (owner_user_id, plan_key, status, quantity_paid)
-          values (${userId}, 'community', 'active', 1)
+          insert into subscriptions (owner_user_id, plan_key, status, quantity_paid, revshare_ref_code)
+          values (${userId}, 'community', 'active', 1, ${null})
           returning id`;
         if (sub === undefined) throw new Error("seed-org: subscriptions insert returned no row");
         const [org] = await tx<{ id: string; slug: string }[]>`
