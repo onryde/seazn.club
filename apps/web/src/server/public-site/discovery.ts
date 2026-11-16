@@ -102,16 +102,3 @@ export async function getDiscoveryDirectory(
   )();
 }
 
-/** Sports that currently have discoverable competitions (sitemap + /discover
- *  sport filter chips), joined to the catalog for display names. */
-export const listDiscoverySports = unstable_cache(
-  async (): Promise<{ key: string; name: string }[]> => {
-    return sql<{ key: string; name: string }[]>`
-      select s.key, s.name
-      from sports s
-      where s.key in (select unnest(sports) from public_discovery_v)
-      order by s.name`;
-  },
-  ["discovery-sports"],
-  { tags: [DISCOVERY_TAG], revalidate: REVALIDATE_FAST },
-);

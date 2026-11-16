@@ -28,7 +28,7 @@ export default function robots(): MetadataRoute.Robots {
   ];
   return {
     rules: [
-      { userAgent: "*", allow: ["/", "/pricing", "/use-cases/", "/legal/"], disallow: PRIVATE },
+      { userAgent: "*", allow: ["/", "/pricing", "/product/", "/sports/", "/legal/"], disallow: PRIVATE },
       // Named AI search crawlers ignore the `*` group, so they carry the private paths too.
       { userAgent: [...AI_SEARCH_CRAWLERS], allow: "/", disallow: PRIVATE },
       // One rule per AI crawler, refusing the whole site (see AI_CRAWLERS).

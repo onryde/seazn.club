@@ -29,7 +29,9 @@ describe("marketing shell pieces", () => {
     expect(html).not.toContain('href="/formats"');
     expect(html).toContain('href="/product/scheduling"');
     expect(html).not.toContain('href="/scheduling"');
-    expect(html).toContain('href="/discover"');
+    expect(html).toContain('href="/live"');
+    // The pages deleted on 2026-11-16 have no link left anywhere in the footer.
+    for (const gone of ["/discover", "/use-cases/", "/formats", "/scheduling"]) expect(html, gone).not.toContain(`href="${gone}`);
     expect(html).toContain('href="/legal/privacy"');
     expect(html).toContain("ANY SPORT · LIVE IN MINUTES");
   });

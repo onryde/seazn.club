@@ -17,19 +17,11 @@ const COLS: Array<{ headKey: string; links: FooterLink[] }> = [
       { key: "nav.formats", href: "/product/format" },
       { key: "nav.scheduling", href: "/product/scheduling" },
       { key: "nav.pricing", href: "/pricing" },
-      { key: "footer.link.liveNow", href: "/discover" },
+      { key: "footer.link.liveNow", href: "/live" },
       { key: "footer.link.games", href: "/games" },
       // Only while the Revshare program is live (NEXT_PUBLIC_REVSHARE_ENABLED=1) —
       // see footerCols(); the /affiliates page 404s otherwise.
       { key: "footer.link.affiliates", href: "/affiliates", requiresRevshare: true },
-    ],
-  },
-  {
-    headKey: "footer.col.who",
-    links: [
-      { key: "footer.link.sportsClubs", href: "/use-cases/clubs" },
-      { key: "footer.link.events", href: "/use-cases/events" },
-      { key: "footer.link.schools", href: "/use-cases/schools" },
     ],
   },
   {

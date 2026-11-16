@@ -128,13 +128,20 @@ async function playOut(page: Page, slug: Slug): Promise<void> {
   await expect(price(page)).toHaveAttribute("data-credits", String(rec.response.credits));
 }
 
-test.describe("/[lang]/scheduling — the recorded AI demo", () => {
+/** The replay lives on the Scheduling product page and loads only when scrolled near, so every test opens it this way. */
+async function openRuns(page: Page, lang: string = "en"): Promise<void> {
+  await page.goto(`/${lang}/product/scheduling`);
+  await page.locator('[data-section="runs"]').scrollIntoViewIfNeeded();
+  await expect(section(page)).toBeVisible();
+}
+
+test.describe("/[lang]/product/scheduling — the recorded AI demo", () => {
   test("replaying all three recordings calls no model and no AI endpoint", async ({ page }) => {
     // Registered BEFORE goto: the document request itself is in scope.
     const urls: string[] = [];
     page.on("request", (r) => urls.push(r.url()));
 
-    await page.goto("/en/scheduling");
+    await openRuns(page);
     await expect(section(page)).toBeVisible();
     await expect(section(page).locator("[data-ai-template]")).toHaveCount(SLUGS.length);
 
@@ -166,7 +173,7 @@ test.describe("/[lang]/scheduling — the recorded AI demo", () => {
   });
 
   test("holds the replay until the block is scrolled into view", async ({ page }) => {
-    await page.goto("/en/scheduling");
+    await openRuns(page);
 
     // The premise, measured rather than assumed: if the screen were already on
     // display at load, every assertion below would pass for the wrong reason.
@@ -202,7 +209,7 @@ test.describe("/[lang]/scheduling — the recorded AI demo", () => {
   test("a card click starts the run even while the screen is still off-screen", async ({
     page,
   }) => {
-    await page.goto("/en/scheduling");
+    await openRuns(page);
 
     // The card scrolls into view on click; the screen below it need not, and at
     // 375px it does not. A view-only gate swallowed exactly this interaction.
@@ -216,7 +223,7 @@ test.describe("/[lang]/scheduling — the recorded AI demo", () => {
   test("T3 finals day plays through to the diff, the unplaceable list and the price", async ({
     page,
   }) => {
-    await page.goto("/en/scheduling");
+    await openRuns(page);
 
     // The hero is the finals-day card, and it is the default selection.
     await expect(card(page, "finals-day")).toHaveAttribute("data-ai-hero", "true");
@@ -251,7 +258,7 @@ test.describe("/[lang]/scheduling — the recorded AI demo", () => {
     test.use({ viewport: { width: 375, height: 667 } });
 
     test("no page-level horizontal scroll on any template", async ({ page }) => {
-      await page.goto("/en/scheduling");
+      await openRuns(page);
       await expect(section(page)).toBeVisible();
       await expectNoHorizontalScroll(page);
 
@@ -264,7 +271,7 @@ test.describe("/[lang]/scheduling — the recorded AI demo", () => {
 
   test("every locale renders its own recorded-run copy", async ({ page }) => {
     for (const lang of LOCALES) {
-      await page.goto(`/${lang}/scheduling`);
+      await openRuns(page, lang);
       const dict = MARKETING[lang];
       await expect(section(page)).toBeVisible();
       await expect(section(page)).toContainText(dict["scheduling.aidemo.recordedLabel"]!);

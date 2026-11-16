@@ -1,7 +1,6 @@
 import { SPORT_PAGES } from "@/lib/marketing/sport-pages";
 import type { MetadataRoute } from "next";
 import { cachedPublicSitemapEntries } from "@/server/public-site/sitemap-cache";
-import { listDiscoverySports } from "@/server/public-site/discovery";
 import { liveGames } from "@/games/registry";
 import { siteOrigin } from "@/lib/site-origin";
 import { routes } from "@/lib/routes";
@@ -13,7 +12,7 @@ import { localizedPath } from "@/lib/seo-meta";
 // docs/01-app/03-api-reference/03-file-conventions/01-metadata/sitemap.md), so
 // it used to be rendered at `next build` — which has no database — and
 // production served that competition-less copy after every deploy. The DB
-// reads are cached instead (sitemap-cache.ts, listDiscoverySports), so a
+// read is cached instead (sitemap-cache.ts), so a
 // crawler request inside the window runs no query.
 export const dynamic = "force-dynamic";
 
@@ -40,25 +39,19 @@ function marketing(path: string, extra: { changeFrequency: "hourly" | "weekly" |
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const staticEntries: MetadataRoute.Sitemap = [
     marketing("", { changeFrequency: "weekly", priority: 1 }),
-    marketing("/discover", { changeFrequency: "hourly", priority: 0.9 }),
-    marketing("/live", { changeFrequency: "hourly", priority: 0.8 }),
+    marketing("/live", { changeFrequency: "hourly", priority: 0.9 }),
     marketing("/pricing", { changeFrequency: "monthly", priority: 0.9 }),
     marketing("/product/streaming", { changeFrequency: "monthly", priority: 0.8 }),
     marketing("/product/remote-scoring", { changeFrequency: "monthly", priority: 0.8 }),
     marketing("/product/format", { changeFrequency: "monthly", priority: 0.8 }),
     marketing("/product/scheduling", { changeFrequency: "monthly", priority: 0.8 }),
     ...SPORT_PAGES.map((sport) => marketing(`/sports/${sport}`, { changeFrequency: "monthly", priority: 0.8 })),
-    marketing("/formats", { changeFrequency: "monthly", priority: 0.8 }),
-    marketing("/scheduling", { changeFrequency: "monthly", priority: 0.7 }),
     { url: `${BASE}/games`, changeFrequency: "weekly", priority: 0.8 },
     ...liveGames().map((g) => ({
       url: `${BASE}/games/${g.slug}`,
       changeFrequency: "monthly" as const,
       priority: 0.7,
     })),
-    marketing("/use-cases/clubs", { changeFrequency: "monthly", priority: 0.8 }),
-    marketing("/use-cases/events", { changeFrequency: "monthly", priority: 0.8 }),
-    marketing("/use-cases/schools", { changeFrequency: "monthly", priority: 0.8 }),
     { url: `${BASE}/legal/privacy`, changeFrequency: "yearly", priority: 0.3 },
     { url: `${BASE}/legal/terms`, changeFrequency: "yearly", priority: 0.3 },
     { url: `${BASE}/legal/cookie-policy`, changeFrequency: "yearly", priority: 0.2 },
@@ -94,15 +87,6 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     // DB unreachable — static entries only, this request
   }
 
-  // Per-sport discovery landings (doc 15 §2): only sports that currently have
-  // discoverable competitions — no empty SEO shells.
-  let sportEntries: MetadataRoute.Sitemap = [];
-  try {
-    const sports = await listDiscoverySports();
-    sportEntries = sports.map((s) => marketing(`/discover/${s.key}`, { changeFrequency: "hourly", priority: 0.8 }));
-  } catch {
-    // DB unreachable — no sport landings, this request
-  }
 
-  return [...staticEntries, ...sportEntries, ...publicEntries];
+  return [...staticEntries, ...publicEntries];
 }

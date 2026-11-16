@@ -21,7 +21,7 @@ export async function generateMetadata({ params }: { params: Promise<{ lang: str
 
 /**
  * Formats: the feature-page shape (docs/superpowers/specs/2026-11-16-product-pages-design.md §4). Replaces the old
- * `/formats` gallery as the page the nav links to. The demo runs the product's own format recommender, and the format
+ * `/formats` gallery (deleted 2026-11-16) as the page the nav links to. The demo runs the product's own format recommender, and the format
  * names in the ticket are the format gallery's (`ui`), so nothing here is a second description of the product.
  */
 export default async function FormatProductPage({ params }: { params: Promise<{ lang: string }> }) {

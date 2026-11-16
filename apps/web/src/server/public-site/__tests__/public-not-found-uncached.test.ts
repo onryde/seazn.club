@@ -500,7 +500,6 @@ const CACHE_SITES: Record<string, { via: "cachedIfFound" | "unstable_cache"; fil
   SITEMAP_ENTRIES_CACHE_KEY: { via: "unstable_cache", file: "server/public-site/sitemap-cache.ts", why: "a list; empty is a real state" },
   "discovery-live-all": { via: "unstable_cache", file: "server/public-site/discovery.ts", why: "a list; empty is a real state" },
   "discovery-dir": { via: "unstable_cache", file: "server/public-site/discovery.ts", why: "a list; empty is a real state" },
-  "discovery-sports": { via: "unstable_cache", file: "server/public-site/discovery.ts", why: "a list; empty is a real state" },
   "overlay-fold-v5": {
     via: "unstable_cache",
     file: "server/overlay/load.ts",
@@ -555,6 +554,6 @@ describe("every cached read under src/ is classified: routed through the not-fou
     expect(byKey(found)).toEqual(
       byKey(Object.entries(CACHE_SITES).map(([key, { via, file }]) => ({ key, via, file }))),
     );
-    expect(found).toHaveLength(15);
+    expect(found).toHaveLength(14);
   });
 });

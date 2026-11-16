@@ -67,23 +67,18 @@ export async function marketingSuite(): Promise<void> {
   check("marketing: /fr/sports/cricket is French", (await (await fetch(`${BASE}/fr/sports/cricket`)).text()).replace(/<[^>]+>/g, "").includes("Marque chaque balle."));
   check("marketing: /sports/tennis (no such page) 404", (await fetch(`${BASE}/sports/tennis`)).status === 404);
 
-  const sched = await fetch(`${BASE}/scheduling`);
-  const shtml = await sched.text();
-  check("marketing: /scheduling 200", sched.status === 200);
-  check("marketing: /scheduling has rundown", shtml.includes("Order of play"));
-
-  // #364 Task 8 — the AI architect demo section. Smoke reads HTML with no JS
-  // running, so the claim provable here is narrow and deliberately so: the
-  // section SHIPPED on this page, with one card per template. `ready` names the
-  // section root, not a played recording — that a recording actually replays is
-  // an e2e claim (apps/web/e2e/marketing-ai-demo.spec.ts), never this one.
-  // Every probe carries the full value AND its closing quote: React serialises
-  // an omitted prop as `"$undefined"`, so a bare attribute-name probe would
-  // pass in both states and prove nothing.
-  check("marketing: ai demo section shipped", shtml.includes('data-ai-demo="ready"'));
-  for (const slug of ["finals-day", "club-night", "northside-open"]) {
-    check(`marketing: ai demo card ${slug}`, shtml.includes(`data-ai-template="${slug}"`));
+  // The recorded scheduler runs load in the browser when scrolled near, so with no JS the page carries only their
+  // placeholder. Full value and closing quote: React serialises an omitted prop as `"$undefined"`.
+  check("marketing: /product/scheduling carries the recorded-runs placeholder", schedHtml.includes('data-runs="waiting"'));
+  // Deleted 2026-11-16, no redirects.
+  for (const gone of ["/scheduling", "/formats", "/discover", "/discover/cricket", "/use-cases/clubs"]) {
+    check(`marketing: ${gone} is gone (404)`, (await fetch(`${BASE}${gone}`, { redirect: "manual" })).status === 404);
   }
+  const liveRes = await fetch(`${BASE}/live`);
+  const liveHtml = await liveRes.text();
+  check("marketing: /live 200", liveRes.status === 200);
+  check("marketing: /live has its headline", liveHtml.replace(/<[^>]+>/g, "").includes("Live now."));
+  check("marketing: /live does not link to the deleted directory", !liveHtml.includes('href="/discover') && !liveHtml.includes("/en/discover"));
 
   // R14 (entitlements v18 W3) — the /pricing box-office redesign. Coarse HTML
   // checks only (no JS runs here); the figures and copy are pinned by

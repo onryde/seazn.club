@@ -231,10 +231,10 @@ function proxyCore(request: NextRequest): NextResponse {
   // without a visible redirect. Localized URLs like /fr/start are served
   // directly. Extend MARKETING_UNPREFIXED as more marketing pages move under
   // [lang].
-  const MARKETING_UNPREFIXED = new Set(["/", "/start", "/pricing", "/scheduling", "/formats", "/live", "/discover", "/affiliates"]);
-  // Marketing trees with sub-paths (e.g. /use-cases/clubs, /discover/tennis) —
+  const MARKETING_UNPREFIXED = new Set(["/", "/start", "/pricing", "/live", "/affiliates"]);
+  // Marketing trees with sub-paths (e.g. /product/streaming, /sports/cricket) —
   // prefix match (the exact-match Set can't cover dynamic child routes).
-  const MARKETING_PREFIXED = ["/use-cases/", "/discover/", "/product/", "/sports/"];
+  const MARKETING_PREFIXED = ["/product/", "/sports/"];
   const mp = request.nextUrl.pathname;
   // The games.* subdomain owns "/" (and single-segment slugs) for its own tree
   // via gamesHostRewrite below — the marketing [lang] rewrite must NOT claim

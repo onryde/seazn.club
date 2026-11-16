@@ -13,10 +13,10 @@ import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 // mounted only after a click), so they're reachable without depending on a
 // second round of client JS.
 const LINKS = [
-  { href: "/formats", label: "Formats" },
-  { href: "/scheduling", label: "Scheduling" },
+  { href: "/product/format", label: "Formats" },
+  { href: "/product/scheduling", label: "Scheduling" },
   { href: "/pricing", label: "Pricing" },
-  { href: "/use-cases/clubs", label: "Use cases" },
+  { href: "/live", label: "Live" },
 ];
 
 describe("MarketingMobileNav", () => {

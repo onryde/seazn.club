@@ -486,7 +486,7 @@ test.describe("marketing nav: Product and Sports", () => {
     await page.setViewportSize({ width: 1280, height: 900 });
     const back = page.getByRole("button", { name: "Back", exact: true });
     // The control: the arrow exists and this locator finds it, or the two absences below prove nothing.
-    await page.goto("/scheduling");
+    await page.goto("/help");
     await expect(back).toBeVisible();
     for (const path of ["/pricing", "/live"]) {
       await page.goto(path);

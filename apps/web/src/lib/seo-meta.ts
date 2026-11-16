@@ -30,7 +30,7 @@ export function ogTitle(title: string): string {
   return stripped || title;
 }
 
-/** Path under /{lang}: "" for the home page, "/pricing", "/discover/cricket". */
+/** Path under /{lang}: "" for the home page, "/pricing", "/sports/cricket". */
 export function localizedPath(lang: string, path: string): string {
   return `/${lang}${path}`;
 }

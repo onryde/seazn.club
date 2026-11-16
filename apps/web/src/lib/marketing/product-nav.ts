@@ -3,8 +3,8 @@
  * the "more of the product" chips on product pages. Pure data (no dictionary, no React) so the proxy tests, the nav
  * and the pages can all read it.
  *
- * Formats and Scheduling point at their product pages. The old `/formats` and `/scheduling` routes still exist,
- * unlinked, until the deletion wave (design: docs/superpowers/specs/2026-11-16-product-pages-design.md §10).
+ * Formats and Scheduling point at their product pages. The old `/formats`, `/scheduling`, `/use-cases/*` and
+ * `/discover` routes are deleted, with no redirects (design: docs/superpowers/specs/2026-11-16-product-pages-design.md §6).
  */
 export type NavLink = { key: string; href: string };
 

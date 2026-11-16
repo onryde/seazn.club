@@ -23,7 +23,7 @@ export async function generateMetadata({ params }: { params: Promise<{ lang: str
 
 /**
  * Scheduling: the feature-page shape (docs/superpowers/specs/2026-11-16-product-pages-design.md §4). Replaces the old
- * `/scheduling` page as the one the nav links to. The demo is a small model of the schedule board that keeps the
+ * `/scheduling` page (deleted 2026-11-16) as the one the nav links to. The demo is a small model of the schedule board that keeps the
  * board's own two refusals (one match per court per time; nobody in two matches at once) and its 15-minute day shift.
  * Below the steps, the recorded-runs section (carried over from the old page) replays three real scheduler runs.
  * The ticket's plan rows reuse the pricing matrix's own labels.
