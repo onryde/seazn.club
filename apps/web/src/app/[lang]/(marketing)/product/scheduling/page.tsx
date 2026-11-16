@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { DictProvider } from "@/components/i18n/dict-provider";
 import { MarketingShell } from "@/components/marketing/marketing-shell";
 import { DayBoardDemo } from "@/components/marketing/product/day-board-demo";
 import { dayBoardLabels } from "@/components/marketing/product/day-board-labels";
@@ -66,9 +65,7 @@ export default async function SchedulingProductPage({ params }: { params: Promis
         />
 
         <div data-section="runs">
-          <DictProvider dict={runsDict} locale={lang}>
-            <RecordedRuns locale={lang} weights={schedulingRungWeights()} title={t(d, "scheduling.aidemo.title")} subtitle={t(d, "scheduling.aidemo.subtitle")} />
-          </DictProvider>
+          <RecordedRuns locale={lang} weights={schedulingRungWeights()} dict={runsDict} title={t(d, "scheduling.aidemo.title")} subtitle={t(d, "scheduling.aidemo.subtitle")} />
         </div>
 
         <Ticket
