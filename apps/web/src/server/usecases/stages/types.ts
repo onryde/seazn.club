@@ -356,6 +356,14 @@ export interface ReconcileOutcome {
   /** B2 fix round 1 (I2): every seat emptied — a departed entrant's, and one whose entrant was deleted (in no list). */
   vacated_seats: number;
   slots?: { kept: number; freed: number; unscheduled: number };
+  /** W5 T2 fix round 3: a `noop` that is not "up to date" - a group below what its pools need keeps its draw, and says why. */
+  reason?: "pools_below_minimum";
+  groups?: number;
+  entrants?: number;
+  required?: number;
+  /** W5 T2 fix round 3: an in-place patch dropped lines that carried setup (officials, sheets, devices, availability, calls); how
+   *  many rows, and the entrants whose fixtures they were. */
+  setups_removed?: { count: number; names: string[] };
 }
 
 /** A generate's committed write (R10e): the wire outcome, plus the division

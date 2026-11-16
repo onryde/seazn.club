@@ -2489,6 +2489,13 @@ export type GenerateNoticeWire = {
     /** Every seat emptied, a deleted entrant's included (no id to list) — fix round 1, I2. */
     vacated_seats: number;
     slots?: { kept: number; freed: number; unscheduled: number };
+    /** W5 T2 fix round 3: a no-op that is NOT "up to date" - a group below what its pools need keeps its draw. */
+    reason?: "pools_below_minimum";
+    groups?: number;
+    entrants?: number;
+    required?: number;
+    /** W5 T2 fix round 3: an in-place patch took lines that carried setup with it - the rows, and whose fixtures they were. */
+    setups_removed?: { count: number; names: string[] };
   };
 };
 
@@ -2520,7 +2527,16 @@ export function generateNoticeText(out: GenerateNoticeWire, msg: Msg, msgPlural:
  * and the departed taken out, each clause dropped at zero.
  */
 export function reconcileNotice(reconcile: GenerateNoticeWire["reconcile"], msg: Msg, msgPlural: MsgPlural): string | null {
-  if (reconcile === undefined || reconcile.kind === "noop") return null;
+  if (reconcile === undefined) return null;
+  if (reconcile.kind === "noop") {
+    // W5 T2 fix round 3: the one no-op that is not "up to date" - a group whose live field is below its pools' minimum cannot be
+    // snaked again, so nothing was done and the organiser is told why (the same sentence a first Generate's refusal uses).
+    if (reconcile.reason !== "pools_below_minimum") return null;
+    return [
+      tooFewGroupEntrantsText({ groups: reconcile.groups, entrants: reconcile.entrants, required: reconcile.required }, msg),
+      msg("schedule.notice.reconcileDrawStands"),
+    ].join(" ");
+  }
   if (reconcile.kind === "regenerated") {
     // B2 fix round 1 (I1): a redraw deletes every line and draws new ones, so it says what became of the slots (Rebuild's
     // own line, dropped for a bracket nobody laid out — the server then reports 0/0/0) and that printed sheets, which name
@@ -2540,6 +2556,10 @@ export function reconcileNotice(reconcile: GenerateNoticeWire["reconcile"], msg:
     reconcile.placed.length > 0 ? msgPlural("schedule.notice.reconcilePlaced", reconcile.placed.length) : null,
     // The SEATS emptied, not the ids listed: a deleted entrant's seat has no id left (fix round 1, I2).
     reconcile.vacated_seats > 0 ? msgPlural("schedule.notice.reconcileVacated", reconcile.vacated_seats) : null,
+    // The setup (officials, team sheets, devices, availability, calls) that went with the removed lines is said, never silent.
+    reconcile.setups_removed !== undefined && reconcile.setups_removed.count > 0
+      ? msgPlural("schedule.notice.reconcileSetupsRemoved", reconcile.setups_removed.count, { names: reconcile.setups_removed.names.join(", ") })
+      : null,
   ].filter((c): c is string => c !== null);
   return clauses.length > 0 ? clauses.join(" ") : null;
 }

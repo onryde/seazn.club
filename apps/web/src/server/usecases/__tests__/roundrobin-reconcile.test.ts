@@ -13,7 +13,7 @@ import { randomUUID } from "node:crypto";
 import { generateRoundRobin } from "@seazn/engine/scheduling";
 import { builtinModules } from "@seazn/engine/sports";
 import { entrantKindCap } from "@seazn/engine/sport";
-import { sql } from "@/lib/db";
+import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { rrKey, rrLegOfExtKey } from "@/lib/roundrobin-reconcile";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -22,7 +22,7 @@ import { createDivision } from "../divisions";
 import { createEntrants, deleteEntrant } from "../entrants";
 import { undoDivision } from "../history";
 import { startDivision } from "../schedule";
-import { createStages, generateStageFixtures, rebuildStageFixtures } from "../stages";
+import { createStages, generateStageFixtures, generateStageFixturesTx, rebuildStageFixtures } from "../stages";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { CHESS_SEAT_REF_TYPE, chessSeatRef } from "../external-play/seat-stamp";
 import { seedCourts, seedOrg } from "./_seed";
@@ -524,10 +524,35 @@ describe.skipIf(!HAS_DB)("X-CU-6 RB5-G4/G7: a withdrawal before Start, then Gene
       await withdrawEntrantCascade(r.auth, r.ids[7]!);
       const out = await generateStageFixtures(r.auth, r.stageId);
       expect(out.reconcile?.kind, sport.key).toBe("noop");
+      // The desk must not read this as "up to date": the reason and the numbers (4 pools x 2 = 8 required, 7 live) ride on the answer.
+      expect(out.reconcile, `${sport.key}: the answer says why nothing was done`).toEqual({
+        kind: "noop",
+        placed: [],
+        vacated: [],
+        vacated_seats: 0,
+        reason: "pools_below_minimum",
+        groups: 4,
+        entrants: 7,
+        required: 8,
+      });
       expect(await rowsOf(r.stageId), `${sport.key}: the draw stands`).toEqual(before);
       checked++;
     }
     expect(checked).toBe(2);
+  });
+
+  it("X-CU-6 the reason is absent on the genuine no-ops: a plain second Generate, and a full group's (both sports)", async () => {
+    let checked = 0;
+    for (const sport of [BADMINTON, FOOTBALL]) {
+      for (const shape of [{ kind: "league" as const }, { kind: "group" as const, pools: 2 }]) {
+        const r = await rig({ n: 8, sport, ...shape });
+        const out = await generateStageFixtures(r.auth, r.stageId);
+        expect(out.reconcile, `${sport.key} ${shape.kind}`).toEqual({ kind: "noop", placed: [], vacated: [], vacated_seats: 0 });
+        expect(out.reconcile, `${sport.key} ${shape.kind}`).not.toHaveProperty("reason");
+        checked++;
+      }
+    }
+    expect(checked).toBe(4);
   });
 
   it("X-CU-6 a withdrawal that leaves the pools fillable (9 -> 8 in 4 pools) re-snakes the remaining entrants: nobody withdrawn is seated, every pool is its own round robin once", async () => {
@@ -891,18 +916,121 @@ describe.skipIf(!HAS_DB)("X-CU-6 an entrant delete refreshes the removed lines' 
     expect(await outboxStatus(doomed), "the removed line's invite is ended").toBe("expired");
     expect(await outboxStatus(kept), "another line's invite is left alone").toBe("queued");
 
-    // A patch's removals (an official on a kept line makes it a patch, not a redraw).
+    // A patch's removals (a league keeps its lines when an even field stays even: the pairs of the departed are dropped).
     const r2 = await rig({ n: 6 });
     await attachOfficial(r2.auth, (await keptLine(r2.stageId, r2.ids.slice(0, 4))).id);
     const gone = (await rowsOf(r2.stageId)).find((x) => x.home_entrant_id === r2.ids[5] || x.away_entrant_id === r2.ids[5])!;
     const doomed2 = await queueInvite(r2.auth.orgId, gone.id);
-    // Two leave: an even field stays even, so the patch (kept for the official's sake) drops their pairs.
+    // Two leave: an even field stays even, so Generate patches and drops their pairs.
     await withdrawEntrantCascade(r2.auth, r2.ids[4]!);
     await withdrawEntrantCascade(r2.auth, r2.ids[5]!);
     const out = await generateStageFixtures(r2.auth, r2.stageId);
     expect(out.reconcile?.kind).toBe("in_place");
     expect((await rowsOf(r2.stageId)).some((x) => x.id === gone.id), "premise: the line went").toBe(false);
     expect(await outboxStatus(doomed2), "the patch ended the removed line's invite").toBe("expired");
+  });
+
+  // differential: a redraw rewrites `stages.config.round_byes` (writeRoundByes) and Undo put the lines back but left the NEW byes
+  // beside them, so the table's byes named players in rounds they no longer sit out.
+  it("X-CU-6 Undo of a redraw puts `round_byes` back with the lines: 6 -> 5 (none before) and 5 -> 6 (five before), both sports", async () => {
+    let checked = 0;
+    for (const sport of [BADMINTON, FOOTBALL]) {
+      for (const change of [
+        { from: 6, label: "6 -> 5", apply: async (r: Rig) => withdrawEntrantCascade(r.auth, r.ids[5]!) },
+        { from: 5, label: "5 -> 6", apply: async (r: Rig) => void (await r.add("P6", 6)) },
+      ]) {
+        const r = await rig({ n: change.from, sport });
+        const before = await roundByesOf(r.stageId);
+        const lines = await rowsOf(r.stageId);
+        await change.apply(r);
+        const out = await generateStageFixtures(r.auth, r.stageId);
+        expect(out.reconcile?.kind, `${sport.key} ${change.label}`).toBe("regenerated");
+        const redrawn = await roundByesOf(r.stageId);
+        expect(redrawn, `${sport.key} ${change.label}: premise - the redraw rewrote the byes`).not.toEqual(before);
+        await undoDivision(r.auth, r.divisionId); // the fresh draw goes
+        await undoDivision(r.auth, r.divisionId); // the previous lines return
+        expect((await rowsOf(r.stageId)).map((x) => x.id).sort(), `${sport.key} ${change.label}: the lines are back`).toEqual(lines.map((x) => x.id).sort());
+        expect(await roundByesOf(r.stageId), `${sport.key} ${change.label}: the byes are back with them`).toEqual(before);
+        checked++;
+      }
+    }
+    expect(checked).toBe(4);
+  });
+
+  // differential: a patch took every kind of match setup hanging on a departed player's lines (officials, sheets, calls) and the
+  // organiser was told only "N entrants who left were taken out".
+  it("X-CU-6 a patch that drops lines carrying setup says how many setups went and with whom; no setup, no clause (both sports)", async () => {
+    let checked = 0;
+    for (const sport of [BADMINTON, FOOTBALL]) {
+      const r = await rig({ n: 6, sport });
+      const goneLine = (await rowsOf(r.stageId)).find((x) => x.home_entrant_id === r.ids[5] || x.away_entrant_id === r.ids[5])!;
+      await attachOfficial(r.auth, goneLine.id);
+      await withdrawEntrantCascade(r.auth, r.ids[4]!);
+      await withdrawEntrantCascade(r.auth, r.ids[5]!);
+      const out = await generateStageFixtures(r.auth, r.stageId);
+      expect(out.reconcile?.kind, sport.key).toBe("in_place");
+      expect(out.reconcile?.setups_removed, `${sport.key}: one official went with P5's and P6's lines`).toEqual({ count: 1, names: ["P5", "P6"] });
+      expect(await officialsOn(r.stageId), `${sport.key}: it is gone`).toBe(0);
+
+      const plain = await rig({ n: 6, sport });
+      await withdrawEntrantCascade(plain.auth, plain.ids[4]!);
+      await withdrawEntrantCascade(plain.auth, plain.ids[5]!);
+      const quiet = await generateStageFixtures(plain.auth, plain.stageId);
+      expect(quiet.reconcile?.kind, `${sport.key} (no setup)`).toBe("in_place");
+      expect(quiet.reconcile, `${sport.key}: nothing to report`).not.toHaveProperty("setups_removed");
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  // differential: `sealed ?? { streams: 0, youtubeBroadcasts: 0 }` read a caller that never read the sealed kinds as "none", so a
+  // redraw cleared a stream's setup it could not see.
+  it("X-CU-6 a redraw whose sealed setup counts were never read is refused, not assumed empty (and drawn once they are read)", async () => {
+    let checked = 0;
+    for (const sport of [BADMINTON, FOOTBALL]) {
+      const r = await rig({ n: 3, sport });
+      const rows = await rowsOf(r.stageId);
+      await r.add("P4", 4);
+      const err = await refusal(withTenant(r.auth.orgId, (tx) => generateStageFixturesTx(tx, r.auth, r.stageId, {})));
+      expect([err.status, err.code], sport.key).toEqual([409, "RR_REGENERATE_WOULD_CLEAR_SETUP"]);
+      expect(err.extra?.sealed_unread, `${sport.key}: the refusal says why`).toBe(true);
+      expect(await rowsOf(r.stageId), `${sport.key}: nothing was drawn`).toEqual(rows);
+      const drawn = await withTenant(r.auth.orgId, (tx) => generateStageFixturesTx(tx, r.auth, r.stageId, { sealedSetup: { streams: 0, youtubeBroadcasts: 0 } }));
+      expect(drawn.outcome.reconcile?.kind, `${sport.key}: with the counts read, none, it draws`).toBe("regenerated");
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  // A voided result is still evidence (monotonic), so a voided line makes the stage STARTED: it stays keyed, and Generate - however
+  // many times, with a departure in between - adds nothing for its pair and never drops it. An arrival is refused by name.
+  it("X-CU-6 a voided line of a surviving pair stays keyed, and every Generate after it adds nothing for the pair (both sports)", async () => {
+    let checked = 0;
+    for (const sport of [BADMINTON, FOOTBALL]) {
+      const r = await rig({ n: 6, sport });
+      const line = await keptLine(r.stageId, r.ids.slice(0, 4));
+      const [start] = await sql<{ id: string }[]>`
+        insert into score_events (fixture_id, org_id, seq, type, payload) values (${line.id}, ${r.auth.orgId}, 0, 'core.start', '{}') returning id`;
+      await sql`insert into score_events (fixture_id, org_id, seq, type, payload)
+                values (${line.id}, ${r.auth.orgId}, 1, 'core.void', ${sql.json({ event_id: start!.id } as never)})`;
+      const before = await rowsOf(r.stageId);
+      await withdrawEntrantCascade(r.auth, r.ids[5]!);
+      for (const call of [1, 2]) {
+        const out = await generateStageFixtures(r.auth, r.stageId);
+        expect(out.reconcile, `${sport.key} call ${call}`).toEqual({ kind: "noop", placed: [], vacated: [], vacated_seats: 0 });
+        expect(out.created, `${sport.key} call ${call}`).toBe(0);
+        const rows = await rowsOf(r.stageId);
+        expect(rows.find((x) => x.id === line.id)?.ext_key, `${sport.key} call ${call}: the voided line keeps its key`).toBe(line.ext_key);
+        expect(rows, `${sport.key} call ${call}: no line added, none dropped`).toEqual(before);
+        expect(rows.filter((x) => keyOfRow(x) === keyOfRow(line)), `${sport.key} call ${call}: the pair is keyed once`).toHaveLength(1);
+      }
+      await r.add("P7", 7);
+      const err = await refusal(generateStageFixtures(r.auth, r.stageId));
+      expect([err.status, err.code], `${sport.key}: an arrival after the void`).toEqual([409, "RR_GENERATE_AFTER_START"]);
+      expect(await rowsOf(r.stageId), `${sport.key}: still byte-equal`).toEqual(before);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 
   // A voided result is still evidence (`fixtureHasResultSql` reads the ledger the monotonic way): the line is not silently dropped.

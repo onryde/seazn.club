@@ -34,8 +34,8 @@ export type RoundRobinRefusalCode =
   | "RR_RANK_OVERRIDE_NOT_TABLE"
   // Task 12b (RB5-E6): a cut larger than the field (or than any pool can supply).
   | "RR_CUT_EXCEEDS_FIELD"
-  // Task 2 fix round 1: a Generate that would have to draw the stage again (a pool changed parity, a group re-snaked, or the
-  // patch would run longer than a fresh draw) while its lines carry officials, team sheets, devices, streams, availability or
+  // Task 2 fix round 1: a Generate that would have to draw the stage again (a pool changed parity or a group re-snaked)
+  // while its lines carry officials, team sheets, devices, streams, availability or
   // court calls. Details: `attachments`, the counts `stageAttachmentCounts` reads - the same shape as KO_REDRAW_WOULD_CLEAR_SETUP.
   | "RR_REGENERATE_WOULD_CLEAR_SETUP";
 

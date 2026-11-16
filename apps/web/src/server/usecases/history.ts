@@ -19,7 +19,7 @@ import {
   type LedgerEvent,
 } from "@seazn/engine/history";
 import { EngineError } from "@seazn/engine/core";
-import { snapshotFixtures } from "./fixture-snapshot";
+import { readStageRoundByes, snapshotFixtures, writeStageRoundByes } from "./fixture-snapshot";
 import { sql, withTenant } from "@/lib/db";
 // Since #382 a manual save AT THE CAP rolls the window instead of refusing, so
 // PaymentRequiredError survives here for one case only: a quota that resolves
@@ -805,6 +805,10 @@ async function stepWrite(
     if (result.event.type === "fixtures_cleared") {
       const ids = (result.event.payload.fixture_ids as string[]) ?? [];
       if (ids.length > 0) result.event.payload.fixtures = await snapshotFixtures(tx, { ids });
+      // W5 T2 fix round 3: the stage's byes as they stand now ride with the delete, as the rows do, so the step that walks back past
+      // it puts both back (a redraw rewrites `config.round_byes`; the engine's inverse carries rows only).
+      const clearedStage = result.event.payload.stage_id as string | undefined;
+      if (ids.length > 0 && clearedStage !== undefined) result.event.payload.round_byes = await readStageRoundByes(tx, clearedStage);
     } else if (result.event.type === "pool_entrants_cleared") {
       const ids = ((result.event.payload.fixtures as FixtureSnapshot[]) ?? []).map((f) => f.id);
       result.event.payload.fixtures = await snapshotFixtures(tx, { ids });
@@ -821,6 +825,8 @@ async function stepWrite(
     const restoring =
       result.event.type === "pool_entrants_restored" ||
       (result.event.type === "fixtures_generated" && result.event.payload.fixtures !== undefined);
+    // The byes the newest delete of these rows recorded (`undefined` for a ledger row from before they were kept: left alone).
+    let restoredByes: unknown[] | null | undefined;
     if (restoring) {
       const rows = snapshotIdKey(result.event.payload.fixtures);
       // Only a restore that names its rows, and only a DELETE of them: a
@@ -830,7 +836,11 @@ async function stepWrite(
         rows === undefined
           ? undefined
           : ledger.findLast((e) => DELETE_SIDE_EVENTS.has(e.type) && snapshotIdKey(e.payload.fixtures) === rows);
-      if (newest !== undefined) result.event.payload.fixtures = newest.payload.fixtures;
+      if (newest !== undefined) {
+        result.event.payload.fixtures = newest.payload.fixtures;
+        const recorded = newest.payload.round_byes;
+        if (recorded === null || Array.isArray(recorded)) restoredByes = recorded as unknown[] | null;
+      }
     }
     // Batch-1 I1. A Swiss Pair this step re-applies — a Redo of it, or an Undo walking back through its own Undo (the
     // engine's inverse of a seat clear names no rows, `fixture_ids: []`) — is re-paired HERE, in this transaction, and
@@ -872,6 +882,8 @@ async function stepWrite(
     if (result.event.type === "fixtures_generated" && result.event.payload.fixtures !== undefined) {
       const snapshots = (result.event.payload.fixtures as FixtureSnapshot[]) ?? [];
       fixtureIds.push(...(await restoreFixtures(tx, divisionId, snapshots, result.event.type)));
+      const restoredStage = result.event.payload.stage_id as string | undefined;
+      if (restoredByes !== undefined && restoredStage !== undefined) await writeStageRoundByes(tx, restoredStage, restoredByes);
     }
     return {
       out: {

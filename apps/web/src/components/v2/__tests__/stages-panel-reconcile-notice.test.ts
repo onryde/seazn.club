@@ -124,4 +124,49 @@ describe("the Generate notice after a knockout reconcile (FX-G2)", () => {
     expect(reconcileNotice(undefined, msg as never, msgPlural)).toBeNull();
     expect(reconcileNotice({ kind: "noop", placed: [], vacated: [], vacated_seats: 0 }, msg as never, msgPlural)).toBeNull();
   });
+
+  // W5 T2 fix round 3: a group whose field fell below its pools' minimum did NOTHING, and the desk used to say "up to date".
+  it("a group below its pools' minimum says so with the numbers and that the draw stands - never 'up to date' (every locale)", () => {
+    const below: GenerateNoticeWire["reconcile"] = {
+      kind: "noop", placed: [], vacated: [], vacated_seats: 0, reason: "pools_below_minimum", groups: 4, entrants: 7, required: 8,
+    };
+    expect(text("en", { created: 0, existing: 24, reconcile: below })).toBe(
+      "Can't generate matches yet — 4 groups need at least 8 entrants in total, 2 per group (have 7). Use fewer groups or add entrants. " +
+        "The draw stands; use Rebuild fixtures with fewer groups to redraw.",
+    );
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const said = text(locale, { created: 0, existing: 24, reconcile: below });
+      expect(said, `${locale}: not the up-to-date line`).not.toBe(locale === "en" ? UP_TO_DATE : said + "!");
+      expect(said, `${locale}: no raw key`).not.toMatch(/schedule\.(notice|error)\./);
+      expect(said, `${locale}: no unfilled placeholder`).not.toMatch(/\{\w+\}/);
+      expect(said, `${locale}: carries 4, 8 and 7`).toMatch(/\b4\b[\s\S]*\b8\b[\s\S]*\b7\b/);
+      checked++;
+    }
+    expect(checked).toBe(4);
+    // The plain no-op keeps its line: the reason is what makes the difference.
+    expect(text("en", { created: 0, existing: 24, reconcile: { kind: "noop", placed: [], vacated: [], vacated_seats: 0 } })).toBe(UP_TO_DATE);
+  });
+
+  it("a patch that took setup away with a departed player's lines counts it and names whose; absent or zero says nothing", () => {
+    const base = { kind: "in_place" as const, placed: [], vacated: ["x", "y"], vacated_seats: 2 };
+    expect(text("en", { created: 0, existing: 11, reconcile: { ...base, setups_removed: { count: 1, names: ["P5", "P6"] } } })).toBe(
+      "2 entrants who left were taken out; their opponents now have byes. 1 match setup removed with P5, P6's fixtures.",
+    );
+    expect(text("en", { created: 0, existing: 11, reconcile: { ...base, setups_removed: { count: 3, names: ["P5"] } } })).toContain(
+      "3 match setups removed with P5's fixtures.",
+    );
+    for (const reconcile of [base, { ...base, setups_removed: { count: 0, names: [] } }]) {
+      expect(text("en", { created: 0, existing: 11, reconcile }), JSON.stringify(reconcile)).not.toMatch(/setup/);
+    }
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const said = text(locale, { created: 0, existing: 11, reconcile: { ...base, setups_removed: { count: 3, names: ["P5"] } } });
+      expect(said, locale).toMatch(/\b3\b[\s\S]*P5/);
+      expect(said, `${locale}: no raw key`).not.toMatch(/schedule\.notice/);
+      expect(said, `${locale}: no unfilled placeholder`).not.toMatch(/\{\w+\}/);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
 });

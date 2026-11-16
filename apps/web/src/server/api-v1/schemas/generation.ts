@@ -71,6 +71,14 @@ export const GenerateResult = z.object({
       /** Every seat emptied: a departed entrant's, and one whose entrant was deleted (no id left to list). */
       vacated_seats: z.number().int(),
       slots: z.object({ kept: z.number().int(), freed: z.number().int(), unscheduled: z.number().int() }).optional(),
+      /** W5 T2 fix round 3: a `noop` that is not "up to date" - a group whose live field is below what its pools need cannot be
+       *  snaked again, so its draw stands. `groups` x 2 is `required`; `entrants` is the live field. Absent on every other answer. */
+      reason: z.literal("pools_below_minimum").optional(),
+      groups: z.number().int().optional(),
+      entrants: z.number().int().optional(),
+      required: z.number().int().optional(),
+      /** W5 T2 fix round 3: an `in_place` patch dropped lines that carried setup; the rows removed and whose fixtures they were. */
+      setups_removed: z.object({ count: z.number().int(), names: z.array(z.string()) }).optional(),
     })
     .optional(),
 });

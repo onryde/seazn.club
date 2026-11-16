@@ -34,13 +34,30 @@ import { stageHasStarted } from "../fixture-started-sql";
 import { roundRobinRefusal } from "../roundrobin-refusal";
 import { poolCount, roundRobinStagePlan, type RoundBye } from "./generators";
 import { appendFixturesGenerated, divisionHasStarted, recordFixturesCleared } from "./helpers";
-import { stageAttachmentCounts } from "./roster-drift";
+import { setupRowsOnFixtures, stageAttachmentCounts } from "./roster-drift";
 import type { ActiveEntrant, SealedSetupCounts, StageRow } from "./types";
+
+/** The named no-op that is NOT "up to date": a group whose live field is below what its pools need, so it cannot be snaked again
+ *  and its draw stands. The organiser is told so (the desk's notice), never "nothing new to generate". */
+export interface PoolsBelowMinimum {
+  reason: "pools_below_minimum";
+  groups: number;
+  entrants: number;
+  required: number;
+}
 
 /** What the driver did, or (`regenerate`) what the caller must do. `placed`/`vacated` are entrant ids. */
 export type RoundRobinDecision =
-  | { kind: "noop" }
-  | { kind: "patched"; insertedIds: string[]; removedIds: string[]; placed: string[]; vacated: string[] }
+  | ({ kind: "noop" } & Partial<PoolsBelowMinimum>)
+  | {
+      kind: "patched";
+      insertedIds: string[];
+      removedIds: string[];
+      placed: string[];
+      vacated: string[];
+      /** Setup rows (officials, sheets, devices, availability, calls) that went with the removed lines, and whose entrants they were. */
+      setupsRemoved: { count: number; names: string[] };
+    }
   | { kind: "regenerate"; placed: string[]; vacated: string[] };
 
 /** The stage's recorded byes (`config.round_byes`), or null when the stage has none recorded at all (drawn before W5). A
@@ -93,16 +110,22 @@ export async function reconcileRoundRobinLines(
   // A group whose live field has fallen below what its pools need (2 per pool) cannot be snaked again: the redraw is the one Rebuild
   // refuses (`group_too_few_entrants`). Nobody arrived, so there is nothing to place and the draw stands (the withdrawal cascade has
   // already walked the departed's lines over); an arrival into such a field falls through to the redraw's own refusal by name.
-  if (stage.kind === "group" && entrants.length < poolCount(stage.config) * 2 && newcomers.length === 0) return { kind: "noop" };
+  if (stage.kind === "group" && entrants.length < poolCount(stage.config) * 2 && newcomers.length === 0) {
+    const groups = poolCount(stage.config);
+    return { kind: "noop", reason: "pools_below_minimum", groups, entrants: entrants.length, required: groups * 2 };
+  }
 
   // Task-2 review, ruling 1: a redraw deletes every line, and the delete cascades into the organiser's setup on them (every kind
   // `stageAttachmentCounts` counts). Slots are carried by pair; the rest is not, so it is refused by name before any write
   // (the counts Rebuild's confirm reads), pointing to Rebuild, whose dialog lists what it clears.
+  // Fail closed (fix round 3): a caller that could not read the sealed kinds (streams, YouTube - `sealed` undefined) cannot say there
+  // is none, so a redraw it needs is refused as if there were setup; `sealed_unread` tells the two apart in the body.
+  const sealedUnread = sealed === undefined;
   const attachments = await stageAttachmentCounts(tx, stage.id, sealed ?? { streams: 0, youtubeBroadcasts: 0 });
-  const hasSetup = Object.values(attachments).some((n) => n > 0);
+  const hasSetup = sealedUnread || Object.values(attachments).some((n) => n > 0);
   const regenerateDecision: RoundRobinDecision = { kind: "regenerate", placed: newcomers, vacated: departed };
   const regenerate = (): RoundRobinDecision => {
-    if (hasSetup) throw roundRobinRefusal("RR_REGENERATE_WOULD_CLEAR_SETUP", { attachments });
+    if (hasSetup) throw roundRobinRefusal("RR_REGENERATE_WOULD_CLEAR_SETUP", { attachments, ...(sealedUnread ? { sealed_unread: true } : {}) });
     return regenerateDecision;
   };
   const stored = rrLinesOfRows(rows);
@@ -134,9 +157,18 @@ export async function reconcileRoundRobinLines(
   // The patch: drop the pairs that are gone, then put each missing pair in the round the planner chose, on the round's next free
   // court (`seq_in_round`), with the leg stored on its key.
   const removed = new Set(plan.remove);
+  let setupsRemoved: { count: number; names: string[] } = { count: 0, names: [] };
   if (plan.remove.length > 0) {
     // Undoable (task-2 review, ruling 3): the lines are recorded before they go, so Undo puts them back; and a chess invite still
     // queued for a board that goes ends with it (Phase 3 G-1), like every other fixture delete.
+    // The setup that cascades away with them is counted first, so the notice can say so (never a refusal: a departed entrant's
+    // lines go regardless).
+    const setupCount = await setupRowsOnFixtures(tx, plan.remove);
+    if (setupCount > 0) {
+      const named =
+        departed.length === 0 ? [] : await tx<{ display_name: string }[]>`select display_name from entrants where id in ${tx(departed)} order by display_name`;
+      setupsRemoved = { count: setupCount, names: named.map((n) => n.display_name) };
+    }
     await recordFixturesCleared(tx, stage.division_id, stage.id, plan.remove);
     await cancelBoardInvites(tx, plan.remove, FIXTURE_DELETED_REASON);
     await tx`delete from fixtures where stage_id = ${stage.id} and id in ${tx(plan.remove)}`;
@@ -184,7 +216,7 @@ export async function reconcileRoundRobinLines(
   else await tx`update divisions set edit_watermark = null where id = ${stage.division_id}`;
   const beforeSeated = new Set(before.flatMap((l) => [l.home, l.away]));
   const placed = [...new Set(plan.insert.flatMap((l) => [l.home, l.away]).filter((id) => !beforeSeated.has(id)))];
-  return { kind: "patched", insertedIds, removedIds: plan.remove, placed, vacated: departed };
+  return { kind: "patched", insertedIds, removedIds: plan.remove, placed, vacated: departed, setupsRemoved };
 }
 
 /**

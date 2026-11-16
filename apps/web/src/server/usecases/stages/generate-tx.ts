@@ -213,9 +213,9 @@ async function reconcileKnockoutGenerate(
  * name (RR_GENERATE_AFTER_START) and anything else is the named no-op; before Start the pairs are reconciled by (pair, leg) — a
  * change a patch can express writes in place, and one it cannot (a pool that changed parity, a group that re-snaked) is
  * Rebuild's own body (`regenerateStageInTx`) with the times and courts carried by PAIR, so a pair keeps its slot wherever the
- * redraw put it. A redraw (or a patch that would run longer than one, with nothing set up on the lines) is refused by name,
- * RR_REGENERATE_WOULD_CLEAR_SETUP, when the lines carry officials, team sheets, devices, streams, availability or calls; every
- * delete is recorded first (`fixtures_cleared` + snapshot) so Undo restores it.
+ * redraw put it. A redraw is refused by name, RR_REGENERATE_WOULD_CLEAR_SETUP, when the lines carry officials, team sheets,
+ * devices, streams, availability or calls (or when the sealed kinds could not be read); every delete is recorded first
+ * (`fixtures_cleared` + snapshot, with the stage's previous `round_byes`) so Undo restores it.
  */
 async function reconcileRoundRobinGenerate(
   tx: Tx,
@@ -250,8 +250,23 @@ async function reconcileRoundRobinGenerate(
       existing: fixtures.length - (patched ? decision.insertedIds.length : 0),
       fixtures,
       reconcile: patched
-        ? { kind: "in_place", placed: decision.placed, vacated: decision.vacated, vacated_seats: decision.vacated.length }
-        : { kind: "noop", placed: [], vacated: [], vacated_seats: 0 },
+        ? {
+            kind: "in_place",
+            placed: decision.placed,
+            vacated: decision.vacated,
+            vacated_seats: decision.vacated.length,
+            ...(decision.setupsRemoved.count > 0 ? { setups_removed: decision.setupsRemoved } : {}),
+          }
+        : {
+            kind: "noop",
+            placed: [],
+            vacated: [],
+            vacated_seats: 0,
+            // A group that cannot be snaked again says why nothing was done, so the desk never reads it as "up to date".
+            ...(decision.reason !== undefined
+              ? { reason: decision.reason, groups: decision.groups!, entrants: decision.entrants!, required: decision.required! }
+              : {}),
+          },
     },
     divisionId: stage.division_id,
     competitionId: division!.competition_id,

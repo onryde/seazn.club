@@ -27658,6 +27658,46 @@
                                 "unscheduled"
                               ],
                               "additionalProperties": false
+                            },
+                            "reason": {
+                              "type": "string",
+                              "const": "pools_below_minimum"
+                            },
+                            "groups": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "entrants": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "required": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "setups_removed": {
+                              "type": "object",
+                              "properties": {
+                                "count": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                "names": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                }
+                              },
+                              "required": [
+                                "count",
+                                "names"
+                              ],
+                              "additionalProperties": false
                             }
                           },
                           "required": [
@@ -30146,6 +30186,46 @@
                                 "kept",
                                 "freed",
                                 "unscheduled"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "reason": {
+                              "type": "string",
+                              "const": "pools_below_minimum"
+                            },
+                            "groups": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "entrants": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "required": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "setups_removed": {
+                              "type": "object",
+                              "properties": {
+                                "count": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                "names": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                }
+                              },
+                              "required": [
+                                "count",
+                                "names"
                               ],
                               "additionalProperties": false
                             }

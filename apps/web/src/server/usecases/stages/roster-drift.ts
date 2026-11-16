@@ -185,6 +185,23 @@ export async function sealedStageSetupCounts(db: Tx | typeof sql, orgId: string,
   return { streams: counts?.streams ?? 0, youtubeBroadcasts: counts?.youtube_broadcasts ?? 0 };
 }
 
+/** How many tenant-readable setup rows (officials, team-sheet lineups, scoring devices, player availability, court calls) hang on
+ *  exactly these fixtures: what deleting them takes with them, for a notice that says so (W5 T2 fix round 3). The sealed kinds
+ *  (streams, YouTube) are read stage-wide on a privileged client and are not counted here. Zero for no ids, without a statement. */
+export async function setupRowsOnFixtures(tx: Tx, fixtureIds: readonly string[]): Promise<number> {
+  if (fixtureIds.length === 0) return 0;
+  const ids = [...fixtureIds];
+  const [row] = await tx<{ n: number }[]>`
+    select (
+      (select count(*) from fixture_officials where fixture_id in ${tx(ids)}) +
+      (select count(*) from lineups where fixture_id in ${tx(ids)}) +
+      (select count(*) from device_links where fixture_id in ${tx(ids)}) +
+      (select count(*) from fixture_availability where fixture_id in ${tx(ids)}) +
+      (select count(*) from fixture_calls where fixture_id in ${tx(ids)})
+    )::int as n`;
+  return row?.n ?? 0;
+}
+
 /** The organiser work attached to a stage's fixtures that a delete of them CASCADEs into (`StageRosterDrift.attachments`):
  *  what Rebuild's confirm lists, and what a knockout's Generate refuses to redraw over (W4 B2 fix round 1, I1; every kind
  *  that can exist before Start since fix round 2, item 5). The tenant-readable kinds in one round trip on `tx` — each a

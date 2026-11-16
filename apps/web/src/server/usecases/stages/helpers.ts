@@ -7,7 +7,7 @@ import { withTenant } from "@/lib/db";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import { recomputeStandings } from "@/server/engine-db";
 import { log } from "@/server/logger";
-import { snapshotFixtures } from "../fixture-snapshot";
+import { readStageRoundByes, snapshotFixtures } from "../fixture-snapshot";
 import { REAL_TABLE_KINDS, type Tx } from "./types";
 
 /**
@@ -153,5 +153,7 @@ export function appendFixturesGenerated(tx: Tx, divisionId: string, payload: Rec
 export async function recordFixturesCleared(tx: Tx, divisionId: string, stageId: string, ids: readonly string[]): Promise<void> {
   if (ids.length === 0) return;
   const fixtures = await snapshotFixtures(tx, { ids });
-  await appendDivisionEvent(tx, divisionId, "fixtures_cleared", { stage_id: stageId, fixture_ids: [...ids], fixtures });
+  // The stage's byes ride with the snapshot: a redraw rewrites `config.round_byes`, and the engine's inverse keeps only the rows.
+  const round_byes = await readStageRoundByes(tx, stageId);
+  await appendDivisionEvent(tx, divisionId, "fixtures_cleared", { stage_id: stageId, fixture_ids: [...ids], fixtures, round_byes });
 }
