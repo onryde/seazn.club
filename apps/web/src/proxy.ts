@@ -248,7 +248,9 @@ function proxyCore(request: NextRequest): NextResponse {
   ) {
     const url = request.nextUrl.clone();
     url.pathname = mp === "/" ? `/${locale}` : `/${locale}${mp}`;
-    return NextResponse.rewrite(url, { request: { headers: requestHeaders } });
+    const rewritten = NextResponse.rewrite(url, { request: { headers: requestHeaders } });
+    rewritten.headers.set("Content-Language", locale);
+    return rewritten;
   }
 
   const rewriteUrl = gamesHostRewrite(request);
@@ -256,6 +258,11 @@ function proxyCore(request: NextRequest): NextResponse {
     ? NextResponse.rewrite(rewriteUrl, { request: { headers: requestHeaders } })
     : NextResponse.next({ request: { headers: requestHeaders } });
   response.headers.set(csp.name, csp.value);
+  // The static root layout serves `<html lang="en">` for every locale (app/layout.tsx), and script corrects it only
+  // after load. A URL under /{locale} says which language the page is in, so the response says it too: a server-side
+  // signal for a reader that runs no script, at no rendering cost.
+  const prefix = mp.split("/")[1] ?? "";
+  if (hasLocale(prefix)) response.headers.set("Content-Language", prefix);
   if (!cacheable) syncSessionHint(request, response);
   return response;
 }
