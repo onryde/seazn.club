@@ -66284,6 +66284,29 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "court": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "name": {
+                                  "type": "string"
+                                },
+                                "targetLabel": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "name",
+                                "targetLabel"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -66294,7 +66317,8 @@
                         "auto",
                         "legacy",
                         "finished",
-                        "session"
+                        "session",
+                        "court"
                       ],
                       "additionalProperties": false
                     },
@@ -66359,6 +66383,10 @@
                     "finished": true,
                     "session": {
                       "id": "example"
+                    },
+                    "court": {
+                      "name": "example",
+                      "targetLabel": "example"
                     }
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
