@@ -771,3 +771,21 @@ describe.skipIf(!HAS_DB)("the organiser's poll names a HELD fixture before the s
     expect(await read()).toEqual({ held: false, decided: true });
   });
 });
+
+describe.skipIf(!HAS_DB)("automatic stop — a per-fixture code is unchanged by the court's Stream switch (court stream Task 9)", () => {
+  it("a per-fixture code's auto stop still reads the fixture's auto_stream switch alone", async () => {
+    const { r, sid } = await liveRig({}, { autoStream: false });
+    // The court's Stream switch set on the same match's row (its own code makes the use-case refuse it, so it is written
+    // directly): it is not this session's switch, and the session has no court link.
+    await sql`update fixture_stream_settings set court_stream = true where fixture_id = ${r.fixtureId}`;
+    expect((await sql<{ court_link_id: string | null }[]>`select court_link_id from fixture_stream_sessions where id = ${sid}`)[0]!.court_link_id).toBeNull();
+    const finished = await finishAt(r, sid, SEC);
+    clockTo(r, new Date(finished.getTime() + DELAY_MS));
+    await sweepTick(r, sid);
+    expect(isOpen(await sessionOf(sid)), "auto_stream off: open at the due time").toBe(true);
+    // The fixture's own switch on: the same tick ends it.
+    await saveStreamSettings(r.auth, r.fixtureId, { autoStream: true });
+    await sweepTick(r, sid);
+    expect(await sessionOf(sid)).toMatchObject({ end_reason: "auto_stopped" });
+  });
+});

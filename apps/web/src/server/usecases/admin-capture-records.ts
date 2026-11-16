@@ -12,7 +12,9 @@ import { CAPTURE_RECORD_REF_RE } from "@/server/api-v1/capture-schemas";
 
 export type AdminRecordLine = { at: string; kind: string; level: string | null; sid: string | null; fields: [key: string, value: string][] };
 export type AdminCaptureRecord = {
-  id: string; ref: string; createdAt: Date; expiresAt: Date; slot: number; codeId: string; fixtureId: string; orgId: string;
+  id: string; ref: string; createdAt: Date; expiresAt: Date; slot: number; codeId: string;
+  /** null for a court code's record (court stream, V525): a court's code names no match. */
+  fixtureId: string | null; orgId: string;
   received: number; kept: number; dropped: number;
   /** Owner ruling RL (2026-10-12): the BAD lines among the dropped (off the allow-list or its class, unreadable, or
    *  secret-shaped) — a count only, so staff can spot a scrub leak. */
@@ -52,7 +54,7 @@ function linesOf(recordId: string, text: string): AdminRecordLine[] {
 }
 
 type Row = {
-  id: string; ref: string; created_at: Date; expires_at: Date; slot: number; code_id: string; fixture_id: string; org_id: string;
+  id: string; ref: string; created_at: Date; expires_at: Date; slot: number; code_id: string; fixture_id: string | null; org_id: string;
   received_lines: number; kept_lines: number; dropped_lines: number; invalid_lines: number; lines: string; session_ids: string[];
 };
 const toRecord = (r: Row): AdminCaptureRecord => ({

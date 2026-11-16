@@ -65,12 +65,14 @@ function body(r: CaptureRig, phone: string, over: Partial<Beat> = {}): Beat {
 }
 
 /** R5 (§17.5), from the CONTRACT's zod twin: each branch's own keys. The server sends the common fields on every 2xx (ask
- *  1), replaced and taken included, and never `device` (PR-1) — so the keys sent are exactly the branch's, less `device`. */
+ *  1), replaced and taken included, and never `device` (PR-1) — so the keys sent are exactly the branch's, less `device`. Court stream's `next` (spec
+ *  2026-11-14 §5.3) is optional on every branch and sent only for a COURT code (capture-court.test.ts asserts it there); every code here is a
+ *  fixture's, so `next` is never sent — `checked` asserts its absence on every answer, rather than merely excluding it. */
 const BRANCHES = CaptureBeatAnswer.options;
 const keysOf = (state: Answer["state"]): string[] => {
   const branch = BRANCHES.find((o) => o.shape.state.value === state);
   if (!branch) throw new Error(`no contract branch for ${state}`);
-  return Object.keys(branch.shape).filter((k) => k !== "device").sort();
+  return Object.keys(branch.shape).filter((k) => k !== "device" && k !== "next").sort();
 };
 let answersChecked = 0;
 const statesSeen = new Set<string>();
@@ -79,6 +81,7 @@ function checked(a: Answer): Answer {
   expect(CaptureBeatAnswer.parse(a)).toEqual(a);
   expect(Object.keys(a).sort(), a.state).toEqual(keysOf(a.state));
   expect(a).not.toHaveProperty("device");
+  expect(a, "a fixture code's answer never carries the court's next").not.toHaveProperty("next");
   for (const v of Object.values(a)) expect(v, "an absent field is omitted, never undefined").not.toBeUndefined();
   answersChecked++;
   statesSeen.add(a.state);

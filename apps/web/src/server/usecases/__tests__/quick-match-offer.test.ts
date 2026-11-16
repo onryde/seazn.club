@@ -25,6 +25,7 @@ import { buildWalk, makeEnvelope, onePlayEvent } from "@seazn/engine/testkit";
 import { personAttributedEvents, QUICK_MATCH_BAND_CAPPED_SPORTS, quickMatchBandCeiling } from "@/lib/quick-match-pad";
 import {
   decidingPrefix,
+  engineAtLeast,
   PROBE_REDRAWS,
   PROBE_SEEDS,
   probeVariantsOf,
@@ -65,8 +66,41 @@ describe.skipIf(!WRITING)("write the quick match offer (QUICK_MATCH_PROBE_WRITE=
   }, 30 * 60_000);
 });
 
+describe("engineAtLeast: the offer's engine pin is a floor (owner ruling 2026-11-16)", () => {
+  it("compares major, minor and patch numerically; malformed input throws", () => {
+    let checked = 0;
+    const cases: [running: string, provenOn: string, expected: boolean][] = [
+      ["9.1.0", "9.0.0", true],
+      ["10.0.0", "9.0.0", true],
+      ["9.0.0", "9.0.0", true],
+      ["9.0.1", "9.0.0", true],
+      ["8.9.9", "9.0.0", false],
+      ["9.0.0", "9.0.1", false],
+      ["9.9.0", "9.10.0", false],   // numeric, not string order ("9.9.0" > "9.10.0" as strings)
+      ["9.10.0", "9.9.0", true],
+      ["0.0.0-pr50.abc", "9.0.0", false],   // a snapshot reads as its core version
+      ["9.1.0-rc.1", "9.1.0", true],
+    ];
+    for (const [running, provenOn, expected] of cases) {
+      expect(engineAtLeast(running, provenOn), `${running} >= ${provenOn}`).toBe(expected);
+      checked++;
+    }
+    for (const bad of ["", "9", "9.0", "v9.0.0", "9.0.x", "latest"]) {
+      expect(() => engineAtLeast(bad, "9.0.0"), `running "${bad}"`).toThrow();
+      expect(() => engineAtLeast("9.0.0", bad), `provenOn "${bad}"`).toThrow();
+      checked++;
+    }
+    expect(checked, "anti-vacuity: cases checked").toBe(cases.length + 6);
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("the committed offer records a version the floor can read", () => {
+    expect(engineAtLeast(committed.engine, committed.engine)).toBe(true);
+  });
+});
+
 describe.skipIf(!HAS_DB || WRITING)("quick match offer", () => {
-  it("DRIFT PIN: the committed offer equals a fresh probe run on the pinned engine", async () => {
+  it("DRIFT PIN: the committed offer equals a fresh probe run on an engine at or above the one it was proven on", async () => {
     // Its expected value is this probe's own earlier output, so it proves only that nothing moved. The spec's oracle is
     // the next test and the knockout one (B6g).
     const run = await runQuickMatchProbe({ quiet: true });
@@ -74,7 +108,13 @@ describe.skipIf(!HAS_DB || WRITING)("quick match offer", () => {
     expect(run.checked).toBeGreaterThan(0);   // zero checked is a failure
     expect(run.countCases).toBeGreaterThan(0);
     expect(run.knockoutCases).toBeGreaterThan(0);   // C23's bracket question was asked of at least one real knockout (M1)
-    expect(run.offer.engine).toBe(committed.engine);   // M2: the engine the offer was proven on
+    // M2: the engine the offer was proven on is a FLOOR, not an exact version (owner ruling 2026-11-16): a rows-only bump
+    // that changes nothing the offer depends on must not need QUICK_MATCH_PROBE_WRITE=1. What catches an offer change is
+    // the exact equality of `offered` and `excluded` below, so a bump that moves the offer still goes red.
+    expect(
+      engineAtLeast(run.offer.engine, committed.engine),
+      `running engine ${run.offer.engine} is older than the ${committed.engine} the offer was proven on`,
+    ).toBe(true);
     expect(run.offer.offered).toEqual(committed.offered);   // every offered variant's key AND its knockoutAllowed (M2)
     expect(run.offer.excluded).toEqual(committed.excluded);
   }, 30 * 60_000);   // hundreds of creates (D3: "cost: slower DB suite"); AGENTS.md class 20

@@ -127,7 +127,7 @@ function toRow(r: DbRow): MatchDayCodeRow {
 }
 
 /** The competition and its org's zone; another org's competition reads exactly like a missing one. */
-async function competitionZone(auth: AuthCtx, competitionId: string): Promise<string> {
+export async function competitionZone(auth: AuthCtx, competitionId: string): Promise<string> {
   const [row] = await sql<{ org_id: string; timezone: string | null }[]>`
     select c.org_id, o.timezone from competitions c join organizations o on o.id = c.org_id
      where c.id = ${competitionId}`;
@@ -140,7 +140,7 @@ async function competitionZone(auth: AuthCtx, competitionId: string): Promise<st
 const YMD = /^\d{4}-\d{2}-\d{2}$/;
 
 /** The day's bounds in `tz`: 00:00 and 24:00 of `day`. A malformed or impossible date (2026-02-30) is a 422. */
-function dayBounds(day: string, tz: string): { opensAt: Date; expiresAt: Date } {
+export function dayBounds(day: string, tz: string): { opensAt: Date; expiresAt: Date } {
   const [y, m, d] = day.split("-").map(Number);
   const probe = new Date(Date.UTC(y!, m! - 1, d!));
   if (!YMD.test(day) || probe.toISOString().slice(0, 10) !== day) throw new HttpError(422, "day must be a real date, YYYY-MM-DD");

@@ -42,7 +42,7 @@ export {
   CaptureStartFailed, CaptureWaiting, CaptureCred, CaptureSession, CaptureDescriptor, CaptureBeat, CaptureBeatAnswer,
   CaptureStartBody, CaptureStartOk, CaptureRefusalCode, CaptureRefusal,
   // W27 / W28 (2026-10-06).
-  CAPTURE_POOL_RE, CaptureStageRole, CaptureStage, CAPTURE_STAGE_LABEL_MAX, CAPTURE_SCORING_LINK_URL_RE, CaptureScoringLinkOk,
+  CAPTURE_POOL_RE, CaptureStageRole, CaptureStage, CAPTURE_STAGE_LABEL_MAX, CAPTURE_COURT_NAME_MAX, CaptureCourt, CaptureNext, CAPTURE_SCORING_LINK_URL_RE, CaptureScoringLinkOk,
   // capture-record.v1 (spec 2026-10-12, approved).
   CAPTURE_RECORD_MAX_LINES, CAPTURE_RECORD_MAX_BYTES, CAPTURE_RECORD_REF_RE, CaptureRecordLine, CaptureRecordOk,
   CaptureRecordRefusalCode, CaptureRecordRefusal, CaptureRecordSecretS2, CaptureRecordSecretS3, CaptureRecordSecretS4,
@@ -113,7 +113,7 @@ export {
 export {
   StreamMode, StreamSessionState, StreamFailReason, StreamEndReason, StreamTargetKind, CreateStreamSession,
   StreamSessionCreated, StreamHealth, StreamIngest, StreamOutput, StreamRestartAllowance, StreamLostCountdown,
-  StreamSessionCurrent, StreamCodeShown, PutStreamSettings, StreamSettings, StreamPhoneBeat, StreamPhone,
+  StreamSessionCurrent, StreamCodeShown, CreateCourtStream, CourtStream, PutCourtStream, CourtStreamSwitch, PutStreamSettings, StreamSettings, StreamPhoneBeat, StreamPhone,
   StreamPlatform, CreateStreamTarget, StreamTargetHolder, YoutubePrivacy, YoutubeConnectionView, StreamTarget,
   StreamTargetSaveOutcome, StreamTargetSaved, PatchStreamTarget, StreamTargetRemoved, PickYoutubeChannel,
   YoutubeConnectionSaved, YoutubePendingChannels, YoutubeConnectionSettings, YOUTUBE_REVOKE_OUTCOMES,

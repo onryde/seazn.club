@@ -660,7 +660,7 @@ const facts = (over: Partial<Facts> = {}): Facts => ({
 /** The `stream-phone` read model (§9, T9): an active code with a paired, present phone — Ready's "paired" row. */
 const readModel = (over: Partial<StreamPhone> = {}): StreamPhone => ({
   code: { issuedAt: "2026-09-14T11:00:00.000Z", state: "active", endCause: null }, phone: facts(), destination: null,
-  lastTakeover: null, auto: null, legacy: false, finished: false, session: null, ...over,
+  lastTakeover: null, auto: null, legacy: false, finished: false, session: null, court: null, ...over,
 });
 /** §6.9: paired, but the phone has stopped answering. */
 const SILENT = facts({ present: false, silent: true, elapsedMs: 90_000 });
@@ -1422,6 +1422,102 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     expect(attr(byTestId(opened, "stream-qr-text")!, "value")).toBe(CODE_TEXT);
     expect(byTestId(opened, "stream-code-reissue")).toBeDefined();
     expect(qrImageOf(opened, "stream-qr")).toBeDefined();
+  });
+
+  // Court stream (plan Task 13, spec 2026-11-14 §5.2): a match the court's phone streams names it, in place of the code.
+  describe("a court-streamed match (read model `court`)", () => {
+    const COURT = { name: "Court 2", targetLabel: "Court channel" };
+    const idle = (phone: StreamPhone) => body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", phone });
+
+    it("Ready: ONE line names the court's phone — the dictionary's words, the court as typed — and no code card, fold, QR or reissue is drawn; Go live stays", () => {
+      const tree = idle(readModel({ court: COURT, code: null, phone: facts() }));
+      const line = byTestId(tree, "stream-court-line");
+      expect(line, "the court line").toBeDefined();
+      expect(textAt(tree, "stream-court-line")).toBe(m("stream.courtStreamed", { court: "Court 2" }));
+      expect(textAt(tree, "stream-court-line")).toBe("Streamed by Court 2's phone");
+      for (const id of ["stream-code-card", "stream-code-disclosure", "stream-qr", "stream-qr-text", "stream-code-reissue"]) {
+        expect(byTestId(tree, id), `${id}: a court phone's code is the desk's, never the match page's`).toBeUndefined();
+      }
+      expect(attr(byTestId(tree, "stream-go-live")!, "disabled"), "the court phone is paired: Go live starts on it").toBe(false);
+    });
+
+    it("no phone scanned yet: the line still shows (no scan prompt, no QR), and Go live is held — there is no phone to start on", () => {
+      const tree = idle(readModel({ court: COURT, code: null, phone: null }));
+      expect(textAt(tree, "stream-court-line")).toBe(m("stream.courtStreamed", { court: "Court 2" }));
+      expect(byTestId(tree, "stream-code-card")).toBeUndefined();
+      expect(attr(byTestId(tree, "stream-go-live")!, "disabled")).toBe(true);
+    });
+
+    it("waiting and live: the line replaces the fold there too, and Stop (the desk's Stop for a court match) is kept", () => {
+      let checked = 0;
+      for (const view of [session({ state: "warming" }), session({ state: "live", startedAt: "2026-09-14T11:50:00Z" })]) {
+        const tree = body({ view, balance: 2, targets: TARGETS, phone: readModel({ court: COURT, code: null, phone: facts() }) });
+        expect(textAt(tree, "stream-court-line"), view.state).toBe(m("stream.courtStreamed", { court: "Court 2" }));
+        expect(byTestId(tree, "stream-code-disclosure"), view.state).toBeUndefined();
+        expect(byTestId(tree, view.state === "live" ? "stream-stop" : "stream-cancel"), view.state).toBeDefined();
+        checked++;
+      }
+      expect(checked).toBe(2);
+    });
+
+    it("the match's own switch off (court null): today's panel — the code card at no phone, the fold at paired, and no court line anywhere", () => {
+      expect(byTestId(idle(readModel({ court: null, phone: null })), "stream-code-card")).toBeDefined();
+      const paired = idle(readModel({ court: null }));
+      expect(byTestId(paired, "stream-code-disclosure")).toBeDefined();
+      expect(byTestId(paired, "stream-court-line")).toBeUndefined();
+    });
+
+    it("the destination picker is not offered while `court` is set (the server streams to the court link's channel): no picker, label or Directory link, and Go live stays", () => {
+      const tree = idle(readModel({ court: COURT, code: null, phone: facts() }));
+      expect(destPicker(tree), "no picker").toBeUndefined();
+      expect(byTestId(tree, "stream-manage-destinations"), "no way to Directory from a choice that is not one").toBeUndefined();
+      expect(tree.some((el) => el.type === "label" && attr(el, "htmlFor") !== undefined && textOf(el) === m("stream.dest.label")), "no Destination label").toBe(false);
+      expect(attr(byTestId(tree, "stream-go-live")!, "disabled"), "Go live is kept").toBe(false);
+      // …a match of its own, beside it, still has the picker.
+      const own = idle(readModel({ court: null }));
+      expect(destPicker(own), "court null: today's picker").toBeDefined();
+      expect(byTestId(own, "stream-manage-destinations")).toBeDefined();
+    });
+
+    it("a failed destination read on a court match keeps its Retry (Go live needs the list), without the picker", () => {
+      let retried = 0;
+      const tree = body({ view: null, balance: 2, targets: { status: "error" }, selectedTargetId: null, onRetryTargets: () => retried++, phone: readModel({ court: COURT, code: null, phone: facts() }) });
+      expect(destPicker(tree)).toBeUndefined();
+      click(byTestId(tree, "stream-dest-retry"));
+      expect(retried).toBe(1);
+    });
+
+    it("waiting and live keep Stop and the court line, with no picker", () => {
+      for (const view of [session({ state: "warming" }), session({ state: "live", startedAt: "2026-09-14T11:50:00Z" })]) {
+        const tree = body({ view, balance: 2, targets: TARGETS, phone: readModel({ court: COURT, code: null, phone: facts() }) });
+        expect(destPicker(tree), view.state).toBeUndefined();
+        expect(byTestId(tree, view.state === "live" ? "stream-stop" : "stream-cancel"), view.state).toBeDefined();
+      }
+    });
+
+    it("final review I-1: at Ready the Signal path names the court link's channel, never the panel's own pick (t1 'Club'); a session's own destination still wins", () => {
+      const tree = idle(readModel({ court: COURT, code: null, phone: facts() }));
+      expect(chainOf(tree)?.destination).toEqual({ kind: "youtube", label: "Court channel" });
+      // …a match of its own still draws the picked one.
+      expect(chainOf(idle(readModel({ court: null })))?.destination).toMatchObject({ label: "Club" });
+      // …and once a session is up, the chain is drawn to the session's destination, as today.
+      const live = body({ view: session({ state: "live", startedAt: "2026-09-14T11:50:00Z" }), balance: 2, targets: TARGETS, selectedTargetId: "t1", phone: readModel({ court: COURT, code: null, phone: facts() }) });
+      expect(chainOf(live)?.destination.label).not.toBe("Court channel");
+    });
+
+    it("final review I-1: a YouTube refusal on a court match names the court link's channel, not the pick", () => {
+      const tree = body({
+        view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", createError: { code: "youtube_reconnect_needed" as never, holder: null },
+        phone: readModel({ court: COURT, code: null, phone: facts() }),
+      });
+      expect(textAt(tree, "stream-youtube-refusal-title")).toBe(m("stream.youtube.refused.title", { label: "Court channel" }));
+      expect(textAt(tree, "stream-youtube-refusal-title")).not.toContain("Club");
+    });
+
+    it("a court match has no per-match automatic switch of its own: the Stream switch on the desk is its one control", () => {
+      expect(byTestId(idle(readModel({ court: COURT, code: null })), "stream-auto")).toBeUndefined();
+      expect(byTestId(idle(readModel({ court: null })), "stream-auto")).toBeDefined();
+    });
   });
 
   it("Ready, silent (§6.9): amber — the dot, the Phone node 'Not answering', the strip 'Open Seazn Capture' — and Go live DISABLED", () => {
@@ -2895,7 +2991,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
           session: s.openSession !== undefined ? (s.openSession === null ? null : { id: s.openSession }) : open ? { id: s.current!.id } : null,
         });
       }
-      if (key === ENSURE) return s.code ? s.code() : { qr: { ...CODE_QR, exp: 1_900_000_000 }, issuedAt: (s.phone ?? readModel()).code?.issuedAt ?? "2026-09-14T11:00:00.000Z" };
+      if (key === ENSURE) return s.code ? s.code() : { qr: { ...CODE_QR }, issuedAt: (s.phone ?? readModel()).code?.issuedAt ?? "2026-09-14T11:00:00.000Z" };
       if (key === REISSUE) return s.reissue!();
       if (key === SETTINGS) {
         const json = options?.json as { targetId?: string | null; autoStream?: boolean };
@@ -3163,7 +3259,26 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     expect(checked).toBe(2);
   });
 
-  it("W3: the code is encoded CLIENT-side from its own text — exactly the four keys, never the route's `exp` — once per text; Copy writes that text", async () => {
+  it("Task 13: a court-streamed match never asks for a code — no ensure at mount (no phone to show one for), none on the fold, none on Retry, none from a poll — and mints nothing", async () => {
+    const courtRead = readModel({ court: { name: "Court 2", targetLabel: "Court channel" }, code: null, phone: null });
+    const island = track(await mount({ current: null, targets: TARGETS, phone: courtRead }));
+    expect(ensures(), "at mount: the court's line, not a code").toBe(0);
+    bodyOf(island).onToggleCode(true);
+    bodyOf(island).onRetryCode();
+    await settle();
+    await vi.advanceTimersByTimeAsync(STREAM_POLL_MS * 2);
+    await settle();
+    expect(ensures(), "after the fold, Retry and two polls").toBe(0);
+    expect(calls().filter((c) => c === ENSURE || c === REISSUE), "no mint and no reissue on the wire").toEqual([]);
+    expect(bodyOf(island).phone?.court).toEqual({ name: "Court 2", targetLabel: "Court channel" });
+    expect(byTestId(island.tree(), "stream-loading")).toBeUndefined();
+    // The same read with its switch off is today's: a phoneless match asks at once.
+    apiV1.mockClear();
+    track(await mount({ current: null, targets: TARGETS, phone: readModel({ court: null, phone: null }) }));
+    expect(ensures(), "regression: switch off, no phone — the card asks at once").toBe(1);
+  });
+
+  it("W3: the code is encoded CLIENT-side from its own text — exactly the four keys (a fixture's code carries no `exp`; only a court code does, court stream §5.1) — once per text; Copy writes that text", async () => {
     const island = track(await mount({ current: null, targets: TARGETS, phone: readModel({ phone: null }) }));
     expect(seaznQr.renderSeaznQr.mock.calls).toEqual([[CODE_TEXT]]);
     expect(Object.keys(JSON.parse(seaznQr.renderSeaznQr.mock.calls[0]![0]))).toEqual(["v", "code", "slot", "tok"]);

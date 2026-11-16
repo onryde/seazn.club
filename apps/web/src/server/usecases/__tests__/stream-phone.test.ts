@@ -118,7 +118,7 @@ describe.skipIf(!HAS_DB)("streamPhone — the panel's read model (§9)", () => {
     const auth: AuthCtx = { ...seeded, userId: await rigUser() };
     const { fixtureId } = await startedDivisionWithFixture(auth);
     const now = () => new Date();
-    const empty = { code: null, phone: null, destination: null, lastTakeover: null, auto: null, legacy: false, finished: false, session: null };
+    const empty = { code: null, phone: null, destination: null, lastTakeover: null, auto: null, legacy: false, finished: false, session: null, court: null };
     expect(await read(auth, fixtureId, now)).toEqual(empty);
     expect(await read(auth, fixtureId, now)).toEqual(empty);
     const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_codes where fixture_id = ${fixtureId}`;

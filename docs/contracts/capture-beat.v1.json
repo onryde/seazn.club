@@ -379,6 +379,36 @@
               "minimum": 5,
               "maximum": 300
             },
+            "next": {
+              "description": "Court codes only (§5.3): the court's next streamed match not yet started, so the phone can show \"Next: …\" while waiting or during a live tail. Omitted, never null, when there is none or on a fixture's code.",
+              "type": "object",
+              "properties": {
+                "label": {
+                  "description": "The next match as the phone shows it, \"{side A} v {side B}\" or \"Match {n}\", 1 to 200 characters (§5.3).",
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                },
+                "scheduledStart": {
+                  "description": "The next match's scheduled start as epoch seconds; null when it has none (§5.3).",
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9007199254740991
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "label",
+                "scheduledStart"
+              ],
+              "additionalProperties": false
+            },
             "state": {
               "type": "string",
               "const": "waiting"
@@ -452,6 +482,36 @@
               "type": "integer",
               "minimum": 5,
               "maximum": 300
+            },
+            "next": {
+              "description": "Court codes only (§5.3): the court's next streamed match not yet started, so the phone can show \"Next: …\" while waiting or during a live tail. Omitted, never null, when there is none or on a fixture's code.",
+              "type": "object",
+              "properties": {
+                "label": {
+                  "description": "The next match as the phone shows it, \"{side A} v {side B}\" or \"Match {n}\", 1 to 200 characters (§5.3).",
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                },
+                "scheduledStart": {
+                  "description": "The next match's scheduled start as epoch seconds; null when it has none (§5.3).",
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9007199254740991
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "label",
+                "scheduledStart"
+              ],
+              "additionalProperties": false
             },
             "state": {
               "type": "string",
@@ -544,6 +604,36 @@
               "minimum": 5,
               "maximum": 300
             },
+            "next": {
+              "description": "Court codes only (§5.3): the court's next streamed match not yet started, so the phone can show \"Next: …\" while waiting or during a live tail. Omitted, never null, when there is none or on a fixture's code.",
+              "type": "object",
+              "properties": {
+                "label": {
+                  "description": "The next match as the phone shows it, \"{side A} v {side B}\" or \"Match {n}\", 1 to 200 characters (§5.3).",
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                },
+                "scheduledStart": {
+                  "description": "The next match's scheduled start as epoch seconds; null when it has none (§5.3).",
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9007199254740991
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "label",
+                "scheduledStart"
+              ],
+              "additionalProperties": false
+            },
             "state": {
               "type": "string",
               "const": "live"
@@ -624,6 +714,36 @@
               "type": "integer",
               "minimum": 5,
               "maximum": 300
+            },
+            "next": {
+              "description": "Court codes only (§5.3): the court's next streamed match not yet started, so the phone can show \"Next: …\" while waiting or during a live tail. Omitted, never null, when there is none or on a fixture's code.",
+              "type": "object",
+              "properties": {
+                "label": {
+                  "description": "The next match as the phone shows it, \"{side A} v {side B}\" or \"Match {n}\", 1 to 200 characters (§5.3).",
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                },
+                "scheduledStart": {
+                  "description": "The next match's scheduled start as epoch seconds; null when it has none (§5.3).",
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9007199254740991
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "label",
+                "scheduledStart"
+              ],
+              "additionalProperties": false
             },
             "state": {
               "type": "string",
@@ -720,6 +840,36 @@
               "minimum": 5,
               "maximum": 300
             },
+            "next": {
+              "description": "Court codes only (§5.3): the court's next streamed match not yet started, so the phone can show \"Next: …\" while waiting or during a live tail. Omitted, never null, when there is none or on a fixture's code.",
+              "type": "object",
+              "properties": {
+                "label": {
+                  "description": "The next match as the phone shows it, \"{side A} v {side B}\" or \"Match {n}\", 1 to 200 characters (§5.3).",
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                },
+                "scheduledStart": {
+                  "description": "The next match's scheduled start as epoch seconds; null when it has none (§5.3).",
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9007199254740991
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "label",
+                "scheduledStart"
+              ],
+              "additionalProperties": false
+            },
             "state": {
               "type": "string",
               "const": "replaced"
@@ -802,6 +952,36 @@
               "type": "integer",
               "minimum": 5,
               "maximum": 300
+            },
+            "next": {
+              "description": "Court codes only (§5.3): the court's next streamed match not yet started, so the phone can show \"Next: …\" while waiting or during a live tail. Omitted, never null, when there is none or on a fixture's code.",
+              "type": "object",
+              "properties": {
+                "label": {
+                  "description": "The next match as the phone shows it, \"{side A} v {side B}\" or \"Match {n}\", 1 to 200 characters (§5.3).",
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                },
+                "scheduledStart": {
+                  "description": "The next match's scheduled start as epoch seconds; null when it has none (§5.3).",
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9007199254740991
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "label",
+                "scheduledStart"
+              ],
+              "additionalProperties": false
             },
             "state": {
               "type": "string",

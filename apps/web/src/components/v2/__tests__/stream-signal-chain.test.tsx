@@ -377,7 +377,7 @@ describe("PhoneStripView — PR-2's line, lead values and remedies (Option A)", 
   });
   const readModel = (f: Facts | null, over: Partial<StreamPhone> = {}): StreamPhone => ({
     code: { issuedAt: "2026-10-08T11:00:00Z", state: "active", endCause: null }, phone: f, destination: null, lastTakeover: null,
-    auto: null, legacy: false, finished: false, session: null, ...over,
+    auto: null, legacy: false, finished: false, session: null, court: null, ...over,
   });
   const live = { state: "live", ingest: { state: "connected", protocol: "srt" }, output: null, countdown: null } as unknown as StreamSessionCurrent;
   const html = (s: PhoneStrip, locale: Locale = "en", onBuy?: () => void) =>

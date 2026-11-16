@@ -68,6 +68,7 @@ const court = (id: string, name: string, venue: { id: string; name: string }, o:
   free_since: null,
   queue: [],
   closure: null,
+  stream_link: null,
   ...o,
 });
 const fixture = (id: string, division: string): MatchDayFixture => ({
@@ -92,6 +93,8 @@ const fixture = (id: string, division: string): MatchDayFixture => ({
   scorer_attention: null,
   live_video: null,
   format_line: null,
+  court_stream: false,
+  own_stream_code: false,
 });
 
 // Two venues; "Court 1" is in both, so the server has qualified both names.

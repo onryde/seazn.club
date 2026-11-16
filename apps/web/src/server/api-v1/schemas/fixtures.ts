@@ -155,6 +155,17 @@ export const MatchDayFixture = z.object({
   // Match Day C2: the format a playing match plays, in the fixture page's own rules line (the court's read-only Match format);
   // null for a match not in play, and for a format the line has no words for.
   format_line: z.string().nullable(),
+  // Court stream §5.2: the match's Stream switch, and whether it has its own ACTIVE stream code.
+  court_stream: z.boolean(),
+  own_stream_code: z.boolean(),
+});
+
+export const MatchDayCourtStream = z.object({
+  link_id: Uuid,
+  target_label: z.string(),
+  expires_at: z.iso.datetime({ offset: true }),
+  phone: z.enum(["unpaired", "waiting", "live", "offline"]),
+  refusal: z.enum(["no_destination", "no_credit", "not_entitled", "destination_in_use", "unavailable", "competition_frozen"]).nullable(),
 });
 
 export const MatchDayCourt = z.object({
@@ -179,6 +190,8 @@ export const MatchDayCourt = z.object({
       z.object({ kind: z.literal("later"), from: z.iso.datetime({ offset: true }), until: z.iso.datetime({ offset: true }) }),
     ])
     .nullable(),
+  // Court stream §5.5: the court's live link and its phone; null when it has none.
+  stream_link: MatchDayCourtStream.nullable(),
 });
 
 export const MatchDayView = z.object({

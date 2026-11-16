@@ -1,7 +1,7 @@
 // Capture record upload (spec docs/superpowers/specs/2026-10-12-capture-record-upload-design.md, approved by the owner
 // 2026-10-12): `POST /api/v1/capture/codes/{code}/records`, the operator's "Send record to Seazn".
 //
-// §5's order, after the route's rate limit: auth (401/404, `resolveStreamCode` with the `record` call and NO phone —
+// §5's order, after the route's rate limit: auth (401/404, `resolveAnyStreamCode` — a fixture's code or a court's — with the `record` call and NO phone —
 // R4), then the body (413 over a limit; 422 only for a body that cannot be read as lines, or has none — P10), then
 // each line's screen (the allow-list, then the secret-shaped values), attribution (§6), storage (§9) and the 201. A
 // stranger's body is never read: the tok is checked before a byte of it.
@@ -17,7 +17,7 @@ import { log } from "@/server/logger";
 import { CAPTURE_RECORD_RETENTION_DAYS } from "@/server/relay/config";
 import { keptLines, screenRecordLine, tokenTag } from "@/server/relay/domain/capture-record";
 import { readRecordBody } from "@/server/relay/record-body";
-import { resolveStreamCode, SLOT } from "./stream-codes";
+import { resolveAnyStreamCode, SLOT } from "./stream-codes";
 
 /** P9: Crockford base32, upper-case (no I, L, O or U) — the contract's ok.ref alphabet. */
 const REF_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -45,7 +45,10 @@ export type RecordDeps = { drawRef?: () => string };
 export async function postCaptureRecord(
   rawCode: string, tok: string, req: Request, now: Date, deps: RecordDeps = {},
 ): Promise<CaptureRecordOk> {
-  const code = await resolveStreamCode(rawCode, tok, "record", null, now);
+  const code = await resolveAnyStreamCode(rawCode, tok, "record", null, now);
+  // Court stream (plan Task 7): a court's code names no match — its record is stored with no fixture (V525) and the link's
+  // competition; the sessions it names are still read through the code's own pairings (A1, below).
+  const fixtureId = code.kind === "fixture" ? code.fixtureId : null;
 
   const body = await readRecordBody(req);
   if (!body.ok) throw new CaptureRefusalError(body.code === "too_large" ? 413 : 422, body.code, body.message);
@@ -78,23 +81,28 @@ export async function postCaptureRecord(
 
   const drawRef = deps.drawRef ?? drawRefDefault;
   const stored = await sql.begin(async (tx) => {
-    const [fixture] = await tx<{ competition_id: string }[]>`
-      select d.competition_id from fixtures f join divisions d on d.id = f.division_id where f.id = ${code.fixtureId}`;
-    // The code row's FK cascades from its fixture, so a resolved code always has one.
-    if (!fixture) throw new RangeError("postCaptureRecord: the code's fixture is gone");
+    const competitionId = code.kind === "court" ? code.link.competitionId : await competitionOf(tx, code.fixtureId);
     const { id, ref } = await insertRecord(tx, drawRef, {
-      orgId: code.orgId, competitionId: fixture.competition_id, fixtureId: code.fixtureId, codeId: code.codeId,
+      orgId: code.orgId, competitionId, fixtureId, codeId: code.codeId,
       received, kept, dropped, invalid, bodyBytes: body.bodyBytes, lines: keptTexts.join("\n"), now,
     });
     for (const sessionId of linked) await tx`insert into capture_record_sessions (record_id, session_id) values (${id}, ${sessionId})`;
     return { id, ref };
   });
-  log.info({ codeId: code.codeId, fixtureId: code.fixtureId, recordId: stored.id, ref: stored.ref, received, kept, dropped, invalid }, "capture record stored");
+  log.info({ codeId: code.codeId, fixtureId, recordId: stored.id, ref: stored.ref, received, kept, dropped, invalid }, "capture record stored");
   return { ref: stored.ref, kept, dropped };
 }
 
+async function competitionOf(tx: Tx, fixtureId: string): Promise<string> {
+  const [fixture] = await tx<{ competition_id: string }[]>`
+    select d.competition_id from fixtures f join divisions d on d.id = f.division_id where f.id = ${fixtureId}`;
+  // The code row's FK cascades from its fixture, so a resolved code always has one.
+  if (!fixture) throw new RangeError("postCaptureRecord: the code's fixture is gone");
+  return fixture.competition_id;
+}
+
 async function insertRecord(tx: Tx, drawRef: () => string, r: {
-  orgId: string; competitionId: string; fixtureId: string; codeId: string; received: number; kept: number; dropped: number;
+  orgId: string; competitionId: string; fixtureId: string | null; codeId: string; received: number; kept: number; dropped: number;
   invalid: number; bodyBytes: number; lines: string; now: Date;
 }): Promise<{ id: string; ref: string }> {
   for (let attempt = 0; ; attempt++) {

@@ -468,7 +468,7 @@ function nlPhoneRead(): Record<string, unknown> {
       notReady: null, notReadyShown: false, health: null, startFailed: null, lastBeatAt: at, elapsedMs: 5_000,
       beat: { battery: null, bitrateKbps: null, delivery: null, thermal: null, dataUsedMB: null }, farPoll: false,
     },
-    destination: null, lastTakeover: null, auto: null, legacy: false, finished: false, session: null,
+    destination: null, lastTakeover: null, auto: null, legacy: false, finished: false, session: null, court: null,
   };
 }
 

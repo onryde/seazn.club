@@ -17,6 +17,12 @@
 // the heading in both shapes; the choice is remembered per court in this tab. Keyed by the match, so
 // another court's match never shows the last one's link.
 //
+// Court stream (spec 2026-11-14 §5; web plan Task 12): a court with no link offers "Stream this court" in the header (a writer of an
+// unfrozen competition; court-stream-sheet.tsx); a linked court shows its band under the header — the phone's status chip, the channel,
+// how long the link works — with "Show court QR" and "Stop streaming" for a writer; and its current and queued matches carry the
+// Stream switch (court-stream-switch.tsx; the rule is `switchSpec`, lib/match-day/court-stream.ts). A view-only or frozen desk reads the
+// status and nothing that writes. Candidate rows never carry the switch: their court-stream fields always read false (ruling R11).
+//
 // Task B4 (owner ruling Q1):
 //  - a match playing on NO court (an untimed bracket match, an online board) opens `NoCourtFocus`: the playing court's own
 //    panel — the match, its scoreboard or live stream, the scorer's QR — with no queue and nothing to call;
@@ -38,6 +44,7 @@ import type { ViewerPlan } from "@/lib/viewer-plan";
 import { ATTENTION_SEVERITY } from "@/lib/division-phase";
 import type { MatchDayCourt, MatchDayFixture } from "@/lib/match-day/types";
 import { closureText, courtScorerAttention, matchLabel, matchMeta, scorerMemoryKey, streamPreviewOf } from "@/lib/match-day/view";
+import { canLinkCourt, canWriteCourtStream, switchSpec } from "@/lib/match-day/court-stream";
 import { venueNoun } from "@/lib/venue";
 import { DeviceLinkPanel } from "@/components/v2/device-link-panel";
 import { FreeCourt } from "./candidate-list";
@@ -45,6 +52,8 @@ import { ClosureLine } from "./court-list";
 import { failureMessage } from "./call-sheet";
 import { CourtScoreboard } from "./court-scoreboard";
 import { CourtStreamPreview } from "./court-stream-preview";
+import { CourtStreamBand, CourtStreamSheet, LinkCourtAction } from "./court-stream-sheet";
+import { CourtStreamSwitch } from "./court-stream-switch";
 import { MatchRoundChip } from "./round-chip";
 import { ScorerMark } from "./scorer-mark";
 import { MatchFormatEditor } from "@/components/v2/rules/match-format-editor";
@@ -69,6 +78,9 @@ export interface MatchDayCtx {
    *  and its Undo with a 402, so neither is offered, nor "+ Connect a stream" (a new stream 402s, PB2). The fact the competition
    *  page reads (`getCompetition(…).frozen`). The scorer QR, the pad and a stream already up stay: a frozen competition scores. */
   frozen: boolean;
+  /** The organisation, for the channels a court may stream to (`/orgs/{id}/stream-targets`). Absent where the mount has none to
+   *  give: "Stream this court" is then not offered (the page passes it). */
+  orgId?: string;
 }
 
 /** The match's console page: its pad and its per-match stream panel. */
@@ -110,6 +122,9 @@ export function CourtFocus({
   const { dict } = ctx;
   const f = court.current;
   const preview = court.state === "playing" && f !== null ? streamPreviewOf(f) : null;
+  // The court stream sheet (link, or its QR again) is the focus's: linking refreshes the board and turns "Stream this court" into the
+  // band, so a sheet owned by either would be unmounted mid-QR. Kept for the court it was opened on.
+  const [sheet, setSheet] = useState<{ courtId: string; linkId: string | null } | null>(null);
   return (
     <section
       data-testid="md-focus"
@@ -130,8 +145,26 @@ export function CourtFocus({
             <ClosureLine kind={court.closure.kind} text={closureText(dict, court.closure, ctx.locale, ctx.tz) ?? ""} className="mt-1" />
           )}
         </div>
-        {f !== null && (court.state === "playing" || court.state === "called") && <OpenPadLink ctx={ctx} fixture={f} />}
+        {(canLinkCourt(ctx, court) || (f !== null && (court.state === "playing" || court.state === "called"))) && (
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            {canLinkCourt(ctx, court) && <LinkCourtAction ctx={ctx} onOpen={() => setSheet({ courtId: court.court_id, linkId: null })} />}
+            {f !== null && (court.state === "playing" || court.state === "called") && <OpenPadLink ctx={ctx} fixture={f} />}
+          </div>
+        )}
       </header>
+
+      {court.stream_link !== null && (
+        <CourtStreamBand
+          ctx={ctx}
+          court={court}
+          link={court.stream_link}
+          onShowQr={() => setSheet({ courtId: court.court_id, linkId: court.stream_link!.link_id })}
+          onChanged={onChanged}
+        />
+      )}
+      {sheet !== null && sheet.courtId === court.court_id && canWriteCourtStream(ctx) && (
+        <CourtStreamSheet ctx={ctx} court={court} linkId={sheet.linkId} onClose={() => setSheet(null)} onChanged={onChanged} />
+      )}
 
       {notice !== null && (
         <div
@@ -153,6 +186,7 @@ export function CourtFocus({
       {court.state === "playing" && f !== null && (
         <>
           <MatchLine ctx={ctx} fixture={f} />
+          <MatchStreamSwitch ctx={ctx} court={court} fixture={f} onChanged={onChanged} onRefused={onRefused} />
           {preview !== null ? (
             <CourtStreamPreview
               fixture={f}
@@ -177,6 +211,7 @@ export function CourtFocus({
         </>
       )}
       {court.state === "called" && f !== null && <CalledPanel ctx={ctx} fixture={f} onChanged={onChanged} onRefused={onRefused} />}
+      {court.state === "called" && f !== null && <MatchStreamSwitch ctx={ctx} court={court} fixture={f} onChanged={onChanged} onRefused={onRefused} />}
       {f !== null && (court.state === "playing" || court.state === "called") && !ctx.readOnly && (
         <ScorerPanel
           ctx={ctx}
@@ -206,7 +241,7 @@ export function CourtFocus({
         </div>
       )}
 
-      {court.state !== "free" && <Queue ctx={ctx} court={court} />}
+      {court.state !== "free" && <Queue ctx={ctx} court={court} onChanged={onChanged} onRefused={onRefused} />}
     </section>
   );
 }
@@ -335,6 +370,17 @@ function MatchLine({ ctx, fixture }: { ctx: MatchDayCtx; fixture: MatchDayFixtur
   );
 }
 
+/** The current match's Stream switch: on a linked court always, on an unlinked one only while it is ON, locked (`switchSpec`). */
+function MatchStreamSwitch({ ctx, court, fixture, onChanged, onRefused }: { ctx: MatchDayCtx; court: MatchDayCourt; fixture: MatchDayFixture; onChanged: () => void; onRefused: (message: string) => void }) {
+  const spec = switchSpec(fixture, court.stream_link !== null, canWriteCourtStream(ctx));
+  if (spec === null) return null;
+  return (
+    <div data-testid="md-cs-current" className="min-w-0 rounded-xl px-3 ring-1 ring-inset ring-purple-100">
+      <CourtStreamSwitch key={fixture.id} ctx={ctx} fixture={fixture} spec={spec} onChanged={onChanged} onRefused={onRefused} />
+    </div>
+  );
+}
+
 /** A called match not started yet, and the way back: Undo call restores its old court and time (A1). Undo is refused
  *  NOT_CALLED once the scorer has started or the board has moved the match; the refusal's words go to the court focus
  *  (`onRefused`), which keeps them through the refresh that shows what is true now. */
@@ -438,7 +484,7 @@ function ScorerPanel({
 }
 
 /** The court's next matches, in planned order, each with its read-time estimate ("~12:20") and, when that is later, its plan. */
-function Queue({ ctx, court }: { ctx: MatchDayCtx; court: MatchDayCourt }) {
+function Queue({ ctx, court, onChanged, onRefused }: { ctx: MatchDayCtx; court: MatchDayCourt; onChanged: () => void; onRefused: (message: string) => void }) {
   const { dict } = ctx;
   const time = (iso: string) => fmtPublicTime(ctx.locale, ctx.tz, iso);
   return (
@@ -451,6 +497,7 @@ function Queue({ ctx, court }: { ctx: MatchDayCtx; court: MatchDayCourt }) {
           {court.queue.map((q, i) => {
             const estimate = time(q.estimated_at);
             const planned = time(q.planned_at);
+            const spec = switchSpec(q, court.stream_link !== null, canWriteCourtStream(ctx));
             return (
               <li key={q.id} data-testid="md-queue-row" className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-baseline gap-x-3 px-4 py-2.5">
                 <span className="font-mono text-xs text-slate-400">{i + 1}</span>
@@ -463,6 +510,11 @@ function Queue({ ctx, court }: { ctx: MatchDayCtx; court: MatchDayCourt }) {
                     <span className="block text-[11px] text-slate-500">{t(dict, "matchDay.queue.planned", { time: planned })}</span>
                   )}
                 </span>
+                {spec !== null && (
+                  <div className="col-span-2 col-start-2">
+                    <CourtStreamSwitch key={q.id} ctx={ctx} fixture={q} spec={spec} onChanged={onChanged} onRefused={onRefused} />
+                  </div>
+                )}
               </li>
             );
           })}

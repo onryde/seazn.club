@@ -95,6 +95,26 @@ export function quickMatchWalkModule(module: AnySportModule, cfg: unknown): AnyS
 /** The repo root's engine package.json, as toolchain.test.ts reads it: the version the offer was proven on. */
 const ENGINE_PACKAGE_JSON = resolve(import.meta.dirname, "../../../../../../node_modules/@seazn/engine/package.json");
 
+const SEMVER_CORE = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/;
+function semverCore(v: string): [number, number, number] {
+  const m = SEMVER_CORE.exec(v);
+  if (!m) throw new Error(`engineAtLeast: "${v}" is not a major.minor.patch version`);
+  return [Number(m[1]), Number(m[2]), Number(m[3])];
+}
+
+/**
+ * True when `running` is at or above `provenOn`, comparing major, then minor, then patch as numbers ("9.10.0" > "9.9.0").
+ * A -prerelease/+build suffix is ignored, so a snapshot reads as its core version.
+ * The offer's engine pin is a floor, not an equality: a bump that changes nothing the offer depends on must not need the
+ * generated JSON rewritten. Malformed input throws, never reads as "older": a silent false would hide a bad version string.
+ */
+export function engineAtLeast(running: string, provenOn: string): boolean {
+  const a = semverCore(running);
+  const b = semverCore(provenOn);
+  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i]! > b[i]!;
+  return true;
+}
+
 /**
  * The first seed in 1..PROBE_SEEDS whose walk reaches `module.outcome(state) !== null` through `core.start` and
  * MODULE-OWNED events only, up to and including the deciding event. A walk that draws `core.forfeit`, `core.abandon` or

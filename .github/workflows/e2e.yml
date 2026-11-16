@@ -1168,6 +1168,10 @@ jobs:
           # Playwright step below, and refused by the spec when unshortened.
           AUTO_STOP_AFTER_RESULT_SECONDS: "10"
           AUTO_START_RETRY_SECONDS: "5"
+          # Court stream (spec 2026-11-14, capture O13): a court code serves only a capture build at or above this version, in the
+          # app's own `appVersion` form; unset, linking a court is refused. match-day.spec.ts and walkthrough/court-stream.spec.ts
+          # link a court and claim it with a build above it (1.0.14-1300). Not a tunable: a version, never a duration.
+          COURT_MIN_APP_VERSION: "1.0.14-1200"
         run: |
           rm -rf apps/web/.next/standalone/apps/web/.next/static
           cp -R apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static

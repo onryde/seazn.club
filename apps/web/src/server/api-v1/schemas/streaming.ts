@@ -211,6 +211,31 @@ export type StreamSessionCurrent = z.infer<typeof StreamSessionCurrent>;
  *  is when this code was minted, so a re-show answers the same instant. Served `private, no-store`: the tok is live. */
 export const StreamCodeShown = z.object({ qr: CaptureQrV2, issuedAt: z.string() }).strict();
 export type StreamCodeShown = z.infer<typeof StreamCodeShown>;
+/** Court stream (spec 2026-11-14 §5.1): POST /competitions/{id}/court-streams. `day` is `YYYY-MM-DD` on the competition's clock;
+ *  omitted = today there. */
+export const CreateCourtStream = z.object({
+  court_id: z.uuid(),
+  target_id: z.uuid(),
+  day: z.iso.date().optional(),
+}).strict();
+export type CreateCourtStream = z.infer<typeof CreateCourtStream>;
+/** A court's link for a day as the desk shows it. `qr` is the court's capture QR (v2, with `exp` the end of the day), a live
+ *  credential served `private, no-store`; null only when its sealed tok will not reopen (still withdrawable). */
+export const CourtStream = z.object({
+  id: z.uuid(),
+  court_id: z.uuid(),
+  court_name: z.string(),
+  day: z.iso.date(),
+  expires_at: z.string(),
+  target: z.object({ id: z.uuid(), label: z.string() }).strict(),
+  qr: CaptureQrV2.nullable(),
+}).strict();
+export type CourtStream = z.infer<typeof CourtStream>;
+/** Court stream (spec 2026-11-14 §5.2): PUT /fixtures/{id}/court-stream. */
+export const PutCourtStream = z.object({ on: z.boolean() }).strict();
+export type PutCourtStream = z.infer<typeof PutCourtStream>;
+export const CourtStreamSwitch = z.object({ on: z.boolean() }).strict();
+export type CourtStreamSwitch = z.infer<typeof CourtStreamSwitch>;
 /** §6.7.3 / §8.1 (plan T3): the fixture's stream settings. `targetId` is the destination pre-pick (PR-1; `null` clears it) and
  *  `autoStream` is the automatic-streaming switch (PR-2, W7). Either or both, at least one: a PUT writes only the fields it
  *  names, so the panel's PR-1 body `{ targetId }` still leaves the switch alone and `{ autoStream }` leaves the pick alone. */
@@ -358,6 +383,11 @@ export const StreamPhone = z
     /** B8 review I-2: the fixture's OPEN session (any starter — the organiser's Go live or the phone's own start), null
      *  with none. The panel reads `current` when it names one the panel does not show. An id, nothing else. */
     session: z.object({ id: z.string() }).strict().nullable(),
+    /** Court stream (spec 2026-11-14 §5.2): the court whose phone streams this match — set exactly when the match's Stream switch
+     *  is on, its court has a live link now and the match has no code of its own; null otherwise. The panel names the court
+     *  instead of showing a code. The court's name and the label of the link's YouTube channel (the one Go live will stream to, whatever
+     *  the panel picked: final review I-1) — a label, never a link id, a target id, a code or a tok. */
+    court: z.object({ name: z.string(), targetLabel: z.string() }).strict().nullable(),
   })
   .strict();
 export type StreamPhone = z.infer<typeof StreamPhone>;

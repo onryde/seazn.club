@@ -2,8 +2,8 @@
 // (§6.13, W4: PR-1 T11 removed the v1 schema and its parser).
 //
 // What the spec fixes, and therefore what these tests take as expected values — never the module's own output:
-//  1. the QR and the paste code are `{v:2, code, slot, tok}` — exactly these four keys, in this order (W3). The QR never
-//     carries a credential, and never `exp` even when a payload holds one (A1: this server never sends it);
+//  1. the QR and the paste code are `{v:2, code, slot, tok}` — exactly these four keys, in this order (W3), plus `exp` after them on a court code. The QR never
+//     carries a credential, and `exp` fifth only when the payload holds one (a court code, court stream §5.1); never on a fixture's code;
 //  2. the version is read FIRST: a v1 payload is `wrong_version` (an old app says "update"), never a malformed v2;
 //  3. nothing outside the declared fields rides along (strict).
 // The JSON contract's parity with this schema is capture-contract.test.ts's; this file pins the builder and the cut.
@@ -23,16 +23,22 @@ describe("captureQrV2Text — the QR and paste-code text (W3)", () => {
     expect(back).toEqual(VALID);
   });
 
-  it("never `exp`, even from a payload that carries one (A1) — and nothing else a caller hangs on the object", () => {
-    const withExp = CaptureQrV2.parse({ ...VALID, exp: 1_900_000_000 });
-    expect(withExp.exp, "PREMISE: the schema admits exp").toBe(1_900_000_000);
-    const smuggled = { ...withExp, sid: "3f1c2a9e-8b7d-4c61-9f0a-2d5e6b7c8a91", cred: { rtmps: { streamKey: "k" } } } as unknown as CaptureQrV2;
+  it("writes exp fifth when the payload carries one (a court code)", () => {
+    expect(captureQrV2Text({ v: 2, code: "0123456789ab", slot: 0, tok: "A".repeat(22), exp: 1794700800 }))
+      .toBe('{"v":2,"code":"0123456789ab","slot":0,"tok":"AAAAAAAAAAAAAAAAAAAAAA","exp":1794700800}');
+  });
+
+  it("still writes exactly four keys without exp (T11's regression) — and never anything else a caller hangs on the object", () => {
+    const smuggled = { ...VALID, sid: "3f1c2a9e-8b7d-4c61-9f0a-2d5e6b7c8a91", cred: { rtmps: { streamKey: "k" } } } as unknown as CaptureQrV2;
     let checked = 0;
-    for (const p of [withExp, smuggled]) {
+    for (const p of [CaptureQrV2.parse(VALID), smuggled]) {
       expect(Object.keys(JSON.parse(captureQrV2Text(p)))).toEqual(["v", "code", "slot", "tok"]);
       checked++;
     }
     expect(checked).toBe(2);
+    // …and with exp, smuggled keys still never ride: exactly the five.
+    const withExp = { ...smuggled, exp: 1_900_000_000 } as unknown as CaptureQrV2;
+    expect(Object.keys(JSON.parse(captureQrV2Text(withExp)))).toEqual(["v", "code", "slot", "tok", "exp"]);
   });
 
   it("the text round-trips through the phone's parser unchanged", () => {

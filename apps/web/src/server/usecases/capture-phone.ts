@@ -4,6 +4,10 @@ import "server-only";
 // (`postScoringLink`, W27), and the waiting-fields builder both answers share, so the two never disagree (R7: ONE owner
 // of the length fit).
 //
+// Court stream (spec 2026-11-14, plan Task 7): every call resolves a code of EITHER owner (`resolveAnyStreamCode`) and
+// hands a COURT code to capture-court.ts; this file keeps the fixture code's paths and exports, for that file only, the
+// internals both share (visibility only — nothing here changes for a fixture code).
+//
 // R1 (§17.1): the V430 tables are FORCE RLS with no policy, so every read here goes through the non-tenant `sql` —
 // never `withTenant` — and the org is the code row's (`resolveStreamCode`). Each answer is built field by field, never
 // by spreading a row. The sealed ingest secrets are opened (`readFirstInput`) only when `cred` is about to be served,
@@ -15,13 +19,12 @@ import { DEVICE_LINK_MINT_LIMIT, rateLimit } from "@/lib/rate-limit";
 import { DESTINATION_NOT_ALLOWED, TARGET_UNREADABLE } from "@/lib/stream-destinations";
 import { isYoutubeRefusalCode, YOUTUBE_REFUSAL_REMEDY } from "@/lib/youtube";
 import { captureError } from "@/lib/sentry";
-import { getDictionary, t, toLocale } from "@/lib/i18n";
 import { OVERLAY_KEY_PARAM } from "@/lib/realtime-purpose";
 import { resolveTemplate } from "@/components/overlay/template-registry";
 import { CaptureRefusalError, codeEnded } from "@/server/api-v1/capture-http";
 import {
   CaptureDescriptor, CaptureWaiting, type CaptureBeat, type CaptureBeatAnswer, type CaptureCred, type CaptureStartBody,
-  CaptureScoringLinkOk, type CaptureStage, type CaptureStartedBy, type CaptureStartOk,
+  CaptureScoringLinkOk, type CaptureCourt, type CaptureStage, type CaptureStartedBy, type CaptureStartOk,
 } from "@/server/api-v1/capture-schemas";
 import type { z } from "zod";
 import { log } from "@/server/logger";
@@ -31,7 +34,7 @@ import {
   PHONE_BEAT_RETENTION_HOURS, POLL_FAR_SECONDS, QR_PREFERRED_DEFAULT, SRT_LATENCY_MS, WARMING_TIMEOUT_MINUTES,
   relayDriverMode, srtEnabled, streamPlaybackHost, tunable,
 } from "@/server/relay/config";
-import { beatAnswer, wireBeatAnswer } from "@/server/relay/domain/beat-answer";
+import { beatAnswer, wireBeatAnswer, type BeatAnswerCommon } from "@/server/relay/domain/beat-answer";
 import { wireEndReason, type DbEndReason } from "@/server/relay/domain/end-reason";
 import { type ClaimOutcome, deadForTakeover, decideClaim, isNotResponding } from "@/server/relay/domain/pairing";
 import { phoneFlagsOf } from "@/server/relay/domain/phone-health";
@@ -45,19 +48,21 @@ import type { IngestState } from "@/server/relay/ports";
 import { readFirstInput } from "@/server/relay/secret-columns";
 import { recordEvent } from "@/server/relay/telemetry";
 import { captureStageOf } from "./capture-stage";
+import { getCourtCode, postCourtBeat, postCourtScoringLink, postCourtStart } from "./capture-court";
+import { matchLabelOf } from "./court-stream-codes";
 import { provideDeviceLinkForPhone, type HolderVerifiedCode, type PhoneScoringLink } from "./device-links";
-import { fixtureStreamTarget, resolveStreamCode, startModeFor, type ResolvedCode } from "./stream-codes";
+import { fixtureStreamTarget, resolveAnyStreamCode, startModeFor, type ResolvedCode } from "./stream-codes";
 import { maybeAutoStart } from "./stream-auto";
 import { apply, lastConnectedSampleAt, startBroadcast, tickSession, type SessionDeps } from "./stream-sessions";
 
-type Descriptor = z.infer<typeof CaptureDescriptor>;
+export type Descriptor = z.infer<typeof CaptureDescriptor>;
 
 /** PR-1 carries one camera: every other slot is `422 invalid` (T41). */
-const SLOT = 0;
+export const SLOT = 0;
 
 /** The contract's own maxima (R7), read off the zod twins — never retyped. */
-const LABEL_MAX = maxOf(CaptureWaiting.shape.label.maxLength, "label");
-const DEST_MAX = maxOf(CaptureWaiting.shape.destinationName.unwrap().maxLength, "destinationName");
+export const LABEL_MAX = maxOf(CaptureWaiting.shape.label.maxLength, "label");
+export const DEST_MAX = maxOf(CaptureWaiting.shape.destinationName.unwrap().maxLength, "destinationName");
 const SESSION_SHAPE = CaptureDescriptor.options[1];   // warming — every session branch shares SessionFields
 const HOLD_MAX = Math.min(
   maxOf(SESSION_SHAPE.shape.holdWindowSeconds.shape.srt.maxValue, "holdWindowSeconds.srt"),
@@ -96,19 +101,19 @@ export function holdWindowFor(capability: { rtmps: number; srt: number | null })
 
 /** §6.4: `OAUTH_BASE_URL || NEXT_PUBLIC_BASE_URL`, both set on every deployment; only when neither is set (local, CI)
  *  the deps' app url. Never read off a request header where the environment sets it. */
-function captureOrigin(deps: SessionDeps): string {
+export function captureOrigin(deps: SessionDeps): string {
   return (process.env.OAUTH_BASE_URL || process.env.NEXT_PUBLIC_BASE_URL || deps.appUrl).replace(/\/+$/, "");
 }
 
-const unavailable = (why: string): CaptureRefusalError => new CaptureRefusalError(503, "unavailable", `streaming is unavailable (${why})`);
+export const unavailable = (why: string): CaptureRefusalError => new CaptureRefusalError(503, "unavailable", `streaming is unavailable (${why})`);
 
 /** The fixture's latest session and its phone: the descriptor follows it (§6.3.1). The phone is the session's pairing
  *  while that pairing has not ended — its CODE's state is not read (C-2, spec §17.11). */
-type LatestSession = {
+export type LatestSession = {
   id: string; state: SessionState; end_reason: DbEndReason | null; fail_reason: FailReason | null; theme_id: string | null;
   warming_at: Date | null; created_at: Date; max_duration_minutes: number; phone: string | null; phone_slot: number | null;
 };
-async function latestSession(fixtureId: string): Promise<LatestSession | null> {
+export async function latestSession(fixtureId: string): Promise<LatestSession | null> {
   const [row] = await sql<LatestSession[]>`
     select s.id, s.state, s.end_reason, s.fail_reason, s.theme_id, s.warming_at, s.created_at, s.max_duration_minutes,
            p.phone, p.slot as phone_slot
@@ -128,8 +133,8 @@ export type CaptureCommon = {
 };
 
 type FixtureCtx = {
-  fixture_no: number; status: string; scheduled_at: Date | null; finished_at: Date | null; competition_id: string;
-  sport_key: string; tz: string; default_locale: string | null; home_name: string | null; away_name: string | null;
+  status: string; scheduled_at: Date | null; finished_at: Date | null; competition_id: string;
+  sport_key: string; tz: string;
   auto_stream: boolean;
   /** R2004 change 7: the organiser's stored template choice (V462), null = the sport default. */
   overlay_template: string | null;
@@ -145,21 +150,18 @@ export async function captureCommon(
   deps: SessionDeps,
   now: Date,
 ): Promise<CaptureCommon> {
-  // One statement for the fixture's facts: the V305 venue lane (division → org → UTC, the checkin-token.ts query), the
-  // org's locale (W25), both sides' names and the fixture's automatic-streaming switch (W7, `autoAllowed`; false with no
-  // settings row). The destination is `fixtureStreamTarget`'s — the one the start opens on
+  // One statement for the fixture's facts: the V305 venue lane (division → org → UTC, the checkin-token.ts query) and the
+  // fixture's automatic-streaming switch (W7, `autoAllowed`; false with no settings row). The label (both sides' names, or
+  // the org's locale's "Match N", W25) is `matchLabelOf`'s, the one rule a court's phone shares. The destination is `fixtureStreamTarget`'s — the one the start opens on
   // (B8 review I-1), so the phone names exactly what it would stream to.
   const [ctx] = await sql<FixtureCtx[]>`
-    select f.fixture_no, f.status, f.scheduled_at, f.finished_at, d.competition_id, d.sport_key,
-           coalesce(ss.tz, o.timezone, 'UTC') as tz, o.default_locale,
-           h.display_name as home_name, a.display_name as away_name,
+    select f.status, f.scheduled_at, f.finished_at, d.competition_id, d.sport_key,
+           coalesce(ss.tz, o.timezone, 'UTC') as tz,
            coalesce(st.auto_stream, false) as auto_stream, st.overlay_template
       from fixtures f
       join divisions d on d.id = f.division_id
       join organizations o on o.id = d.org_id
       left join schedule_settings ss on ss.division_id = d.id
-      left join entrants h on h.id = f.home_entrant_id
-      left join entrants a on a.id = f.away_entrant_id
       left join fixture_stream_settings st on st.fixture_id = f.id
      where f.id = ${c.fixtureId} and d.org_id = ${c.orgId}`;
   // The code cascades with its fixture (T35), so a resolved code's fixture is there; one deleted in between reads as an
@@ -167,9 +169,7 @@ export async function captureCommon(
   if (!ctx) throw codeEnded();
   const target = await fixtureStreamTarget(sql, { orgId: c.orgId, fixtureId: c.fixtureId });
 
-  const label = ctx.home_name !== null && ctx.away_name !== null
-    ? `${ctx.home_name} v ${ctx.away_name}`
-    : t(await getDictionary(toLocale(ctx.default_locale), "ui"), "breadcrumb.match", { no: ctx.fixture_no });
+  const label = await matchLabelOf(c.orgId, c.fixtureId);
 
   const origin = captureOrigin(deps);
   let overlayUrl: string | null = null;
@@ -185,7 +185,7 @@ export async function captureCommon(
 
   return {
     code: c.code,
-    label: fitText(label, LABEL_MAX),
+    label,
     venueTimezone: ctx.tz,
     scheduledStart: ctx.scheduled_at === null ? null : Math.floor(new Date(ctx.scheduled_at).getTime() / 1000),
     pollSeconds: pollSecondsFor({
@@ -202,14 +202,16 @@ export async function captureCommon(
 }
 
 /** The waiting shape's fields, picked by name (the strict wire): `scheduledStart` is OMITTED when null (§6.4), and so
- *  is W28's `stage` when no code can be produced (`captureStageOf`) — on every shape, since every shape spreads this. */
-function waitingFieldsOf(w: CaptureCommon, stage: CaptureStage | null) {
+ *  is W28's `stage` when no code can be produced (`captureStageOf`) — on every shape, since every shape spreads this.
+ *  Court stream §6.1: `court` rides on a COURT code's every shape and is omitted (never null) on a fixture's. */
+export function waitingFieldsOf(w: CaptureCommon, stage: CaptureStage | null, court: CaptureCourt | null = null) {
   return {
     code: w.code, label: w.label, venueTimezone: w.venueTimezone,
     ...(w.scheduledStart !== null ? { scheduledStart: w.scheduledStart } : {}),
     pollSeconds: w.pollSeconds, autoAllowed: w.autoAllowed, destinationName: w.destinationName, overlayUrl: w.overlayUrl,
     heartbeatUrl: w.heartbeatUrl, startUrl: w.startUrl,
     ...(stage !== null ? { stage } : {}),
+    ...(court !== null ? { court: { name: court.name } } : {}),
   };
 }
 
@@ -224,9 +226,10 @@ function waitingFieldsOf(w: CaptureCommon, stage: CaptureStage | null) {
 export async function getCode(
   rawCode: string, tok: string, q: { slot: number; phone: string | null }, deps: SessionDeps, now: Date,
 ): Promise<Descriptor> {
-  const resolved = await resolveStreamCode(rawCode, tok, "get", q.phone, now);
+  const resolved = await resolveAnyStreamCode(rawCode, tok, "get", q.phone, now);
   if (q.slot !== SLOT) throw new CaptureRefusalError(422, "invalid", `slot ${String(q.slot)} is not served (PR-1 carries slot ${SLOT})`);
   const code = normaliseCode(rawCode)!;   // resolve refused every code that does not normalise
+  if (resolved.kind === "court") return getCourtCode(resolved, code, q, deps, now);
   const latest = await latestSession(resolved.fixtureId);
   const open = latest !== null && isActive(latest.state) ? latest.state : null;
   const common = await captureCommon({ orgId: resolved.orgId, fixtureId: resolved.fixtureId, code }, { open, themeId: latest?.theme_id ?? null }, deps, now);
@@ -241,9 +244,9 @@ export async function getCode(
   return sessionDescriptor(resolved, latest!, q, common, stage, deps, now);
 }
 
-async function sessionDescriptor(
+export async function sessionDescriptor(
   resolved: ResolvedCode, s: LatestSession, q: { slot: number; phone: string | null }, common: CaptureCommon, stage: CaptureStage | null,
-  deps: SessionDeps, now: Date,
+  deps: SessionDeps, now: Date, court: CaptureCourt | null = null,
 ): Promise<Descriptor> {
   // A deployment with no relay has no capability to read and no playback to name: the phone waits and retries.
   if (deps.drivers.disabled) throw unavailable("relay_disabled");
@@ -269,7 +272,7 @@ async function sessionDescriptor(
     // A8: the SAME anchor as the warming timeout — warming_at, or created_at for a session opened before V430.
     warmingDeadline: Math.floor((new Date(s.warming_at ?? s.created_at).getTime() + WARMING_TIMEOUT_MINUTES * 60_000) / 1000),
     scoreUpdates: common.scoreUpdates,
-    ...waitingFieldsOf(common, stage),
+    ...waitingFieldsOf(common, stage, court),
   };
   const withCred = cred !== null ? { cred } : {};
   switch (s.state) {
@@ -320,17 +323,17 @@ async function serveCred(
 // T8b — the beat: `POST /api/v1/capture/codes/{code}/beats` (§6.3.2, §6.3.3, §6.5, §6.8.2, §6.10)
 // ---------------------------------------------------------------------------------------------------------------------
 
-type Beat = z.infer<typeof CaptureBeat>;
-type BeatAnswer = z.infer<typeof CaptureBeatAnswer>;
-type Exec = Tx | typeof sql;
+export type Beat = z.infer<typeof CaptureBeat>;
+export type BeatAnswer = z.infer<typeof CaptureBeatAnswer>;
+export type Exec = Tx | typeof sql;
 
 /** The fixture's open session (one per fixture, V421) as the beat reads it. */
-type OpenRow = { id: string; state: SessionState; first_ingest_at: Date | null; start_cause: CaptureStartedBy; pairing_id: string | null };
-type PairingRow = { id: string; code_id: string; phone: string; last_beat_at: Date; answered_poll_seconds: number };
+export type OpenRow = { id: string; state: SessionState; first_ingest_at: Date | null; start_cause: CaptureStartedBy; pairing_id: string | null };
+export type PairingRow = { id: string; code_id: string; phone: string; last_beat_at: Date; answered_poll_seconds: number };
 /** The session's phone-live tracker as stored (V476), read under the row lock with the state it is judged against. */
 type TrackerRow = { state: SessionState; phone_live_edge: number | null; phone_live: boolean | null; phone_live_beat_at: Date | null };
 
-async function openSessionOf(exec: Exec, fixtureId: string): Promise<OpenRow | null> {
+export async function openSessionOf(exec: Exec, fixtureId: string): Promise<OpenRow | null> {
   const [row] = await exec<OpenRow[]>`
     select id, state, first_ingest_at, start_cause, pairing_id from fixture_stream_sessions
      where fixture_id = ${fixtureId} and state in ${sql([...ACTIVE_STATES])}
@@ -342,7 +345,7 @@ async function openSessionOf(exec: Exec, fixtureId: string): Promise<OpenRow | n
  *  or not by nothing but a takeover, the operator's Stop or the code's cascade, wherever its code (C-2: a reissue never
  *  makes the open session's phone non-current, so the code's state is not read). Otherwise the current pairing on the
  *  caller's own code, the one current pairing per (code, slot) of V430's partial unique index. */
-async function holderOf(exec: Exec, codeId: string, open: OpenRow | null): Promise<PairingRow | null> {
+export async function holderOf(exec: Exec, codeId: string, open: OpenRow | null): Promise<PairingRow | null> {
   if (open?.pairing_id) {
     const [held] = await exec<PairingRow[]>`
       select id, code_id, phone, last_beat_at, answered_poll_seconds from fixture_stream_pairings
@@ -432,6 +435,55 @@ type Decided = {
   tickSid: string | null;            // the open session this beat ticks (§6.11): its phone's beat naming it
 };
 
+/** A session a beat names (`sid` or `stopped`), read only inside the beat's scope. */
+export type NamedRow = {
+  id: string; state: SessionState; pairing_id: string | null; fixture_id: string; end_reason: DbEndReason | null; fail_reason: FailReason | null;
+};
+
+/**
+ * What a beat is judged on (court stream, plan Task 7): a fixture's code judges its fixture's sessions, a court's code its
+ * link's sessions, whichever match each streams. Everything else in the beat — the claim, the storage, the stops, the tick
+ * and the answer — is the same code for both (`runBeat`).
+ */
+export type BeatScope = {
+  orgId: string; codeId: string; issuedBy: string;
+  /** The open session the slot is judged on (one per fixture; for a court, its link's newest). */
+  openSession: (exec: Exec) => Promise<OpenRow | null>;
+  /** A session the beat names, when it is in this scope; null otherwise. */
+  namedSession: (exec: Exec, sid: string) => Promise<NamedRow | null>;
+  /** Inside the beat's transaction, when this beat's `stopped: X` from the CURRENT phone will end X (a court's latch). A
+   *  replaced phone's stale stop (T24a) still ends X but never calls this. */
+  onStopApplied?: (tx: Tx, x: NamedRow) => Promise<void>;
+  /** Step 6: the automatic start, for the current phone's beat. A throw is reported and the beat still answered. */
+  autoStart: (pairingId: string, phoneMode: Beat["mode"]) => Promise<void>;
+  /** Step 7's common fields, read from the rows as they now stand, the open session given. */
+  answerCommon: (open: OpenRow | null) => Promise<BeatAnswerCommon>;
+  /** Court stream §5.4 (plan Task 8): a court's beat that names an ended session of its scope while ANOTHER session of
+   *  the scope is armed is handed over to that one (`beatAnswer`'s handover row). A fixture's scope leaves it unset. */
+  handsOver?: true;
+};
+
+/** A fixture's code: its fixture's sessions, `maybeAutoStart`, and the fixture's waiting fields. */
+function fixtureBeatScope(resolved: ResolvedCode, code: string, deps: SessionDeps, now: Date): BeatScope {
+  return {
+    orgId: resolved.orgId, codeId: resolved.codeId, issuedBy: resolved.issuedBy,
+    openSession: (exec) => openSessionOf(exec, resolved.fixtureId),
+    namedSession: async (exec, sid) => (await exec<NamedRow[]>`
+      select id, state, pairing_id, fixture_id, end_reason, fail_reason from fixture_stream_sessions
+       where id = ${sid} and fixture_id = ${resolved.fixtureId}`)[0] ?? null,
+    autoStart: async (pairingId, phoneMode) => {
+      await maybeAutoStart({ orgId: resolved.orgId, fixtureId: resolved.fixtureId, pairingId, phoneMode }, deps, now);
+    },
+    answerCommon: async (open) => {
+      const latest = await latestSession(resolved.fixtureId);
+      return captureCommon(
+        { orgId: resolved.orgId, fixtureId: resolved.fixtureId, code },
+        { open: open?.state ?? null, themeId: latest?.theme_id ?? null }, deps, now,
+      );
+    },
+  };
+}
+
 /**
  * `POST /api/v1/capture/codes/{code}/beats` (§6.3.2). `body` has passed the strict contract (`CaptureBeat`, its refines
  * included); the route answers 422 otherwise. In order:
@@ -445,10 +497,16 @@ type Decided = {
  *  7. the answer — `wireBeatAnswer`'s, sent exactly, its pollSeconds stored as the answered cadence.
  */
 export async function postBeat(rawCode: string, tok: string, body: Beat, deps: SessionDeps, now: Date): Promise<BeatAnswer> {
-  const resolved = await resolveStreamCode(rawCode, tok, body.claim === "new" ? "claim" : "beat", body.phone, now);
+  const resolved = await resolveAnyStreamCode(rawCode, tok, body.claim === "new" ? "claim" : "beat", body.phone, now);
   const code = normaliseCode(rawCode)!;
   if (body.slot !== SLOT) throw new CaptureRefusalError(422, "invalid", `slot ${body.slot} is not served (PR-1 carries slot ${SLOT})`);
   if (body.code !== code) throw new CaptureRefusalError(422, "invalid", "the body names another code than the path");
+  if (resolved.kind === "court") return postCourtBeat(resolved, body, deps, now);
+  return runBeat(fixtureBeatScope(resolved, code, deps, now), body, deps, now);
+}
+
+/** Steps 2–7 of the beat (above), on a scope: the resolve and the body checks are the caller's. */
+export async function runBeat(scope: BeatScope, body: Beat, deps: SessionDeps, now: Date): Promise<BeatAnswer> {
   const atUtc = new Date(body.at).toISOString();
   const raw = rawOf(body, atUtc);
 
@@ -457,8 +515,8 @@ export async function postBeat(rawCode: string, tok: string, body: Beat, deps: S
   // last connected sample BEFORE that read — each conjunct its own evidence. Both run on the pool, before the lock.
   let takeoverFacts: { fresh: IngestState | undefined; lastConnectedAt: Date | null } | null = null;
   if (body.claim === "new") {
-    const open = await openSessionOf(sql, resolved.fixtureId);
-    const holder = await holderOf(sql, resolved.codeId, open);
+    const open = await scope.openSession(sql);
+    const holder = await holderOf(sql, scope.codeId, open);
     if (open !== null && holder !== null && holder.phone !== body.phone && slotOf(holder, open, false) === "live") {
       try {
         const lastConnectedAt = await lastConnectedSampleAt(sql, open.id);
@@ -466,18 +524,18 @@ export async function postBeat(rawCode: string, tok: string, body: Beat, deps: S
         takeoverFacts = { fresh: obs.freshIngest, lastConnectedAt };
       } catch (err) {
         // No fresh read: nothing proves the holder gone, so the claim is judged as on a live slot (T3).
-        log.error({ err: String(err), sid: open.id, orgId: resolved.orgId }, "capture beat: the takeover read failed — the claim is judged without it");
-        captureError(err, { orgId: resolved.orgId, route: "capture.beat.takeover_read", extra: { sid: open.id } });
+        log.error({ err: String(err), sid: open.id, orgId: scope.orgId }, "capture beat: the takeover read failed — the claim is judged without it");
+        captureError(err, { orgId: scope.orgId, route: "capture.beat.takeover_read", extra: { sid: open.id } });
       }
     }
   }
 
   const decided = (await sql.begin(async (tx) => {
     if (body.claim !== null || body.stopped !== null) {
-      await tx`select id from fixture_stream_codes where id = ${resolved.codeId} for update`;
+      await tx`select id from fixture_stream_codes where id = ${scope.codeId} for update`;
     }
-    const open = await openSessionOf(tx, resolved.fixtureId);
-    const holder = await holderOf(tx, resolved.codeId, open);
+    const open = await scope.openSession(tx);
+    const holder = await holderOf(tx, scope.codeId, open);
     // A14 (T4): judged under the lock on the holder's LOCKED last beat. No fresh read, or an `unknown` one, proves
     // nothing (m-3's rule): the slot stays live and the claim is refused.
     const dead = takeoverFacts !== null && open !== null && holder !== null && open.first_ingest_at !== null
@@ -490,11 +548,11 @@ export async function postBeat(rawCode: string, tok: string, body: Beat, deps: S
     const callerCurrent = claim.result === "accept" || claim.result === "takeover" || claim.result === "none";
     const lockOpen = async () => { if (open) await tx`select id from fixture_stream_sessions where id = ${open.id} for update`; };
     const event = async (sessionId: string, type: string, payload: Record<string, unknown>) =>
-      recordEvent(tx, { sessionId, orgId: resolved.orgId, source: "phone", kind: "event", type, actorUserId: null, occurredAt: now, payload });
+      recordEvent(tx, { sessionId, orgId: scope.orgId, source: "phone", kind: "event", type, actorUserId: null, occurredAt: now, payload });
     const insertMine = async (): Promise<PairingRow> => {
       const [p] = await tx<PairingRow[]>`
         insert into fixture_stream_pairings (org_id, code_id, slot, phone, claim_kind, device_model, claimed_at, last_beat_at, answered_poll_seconds)
-        values (${resolved.orgId}, ${resolved.codeId}, ${SLOT}, ${body.phone}, ${body.claim}, ${body.device?.model ?? null}, ${now}, ${now}, ${POLL_FAR_SECONDS})
+        values (${scope.orgId}, ${scope.codeId}, ${SLOT}, ${body.phone}, ${body.claim}, ${body.device?.model ?? null}, ${now}, ${now}, ${POLL_FAR_SECONDS})
         returning id, code_id, phone, last_beat_at, answered_poll_seconds`;
       return p!;
     };
@@ -502,7 +560,7 @@ export async function postBeat(rawCode: string, tok: string, body: Beat, deps: S
     // 2. The claim decides who holds the slot, and nothing else.
     let mine: PairingRow | null = callerCurrent ? holder : null;
     if (claim.result === "accept" && holder === null) mine = await insertMine();
-    if (claim.result === "accept" && holder !== null && holder.code_id !== resolved.codeId) {
+    if (claim.result === "accept" && holder !== null && holder.code_id !== scope.codeId) {
       // B6 review I-2 (T1/T5 × C-2): the HOLDER rescanned — the open session's phone, its pairing on an older (reissued)
       // code, claiming on THIS one (the Revoke copy tells operators to scan the new QR). It keeps the slot, and its
       // pairing AND the open session move onto this code, so the phone lives entirely on the code it scanned: after the
@@ -511,7 +569,7 @@ export async function postBeat(rawCode: string, tok: string, body: Beat, deps: S
       const [moved] = await tx<PairingRow[]>`
         insert into fixture_stream_pairings (org_id, code_id, slot, phone, claim_kind, device_model, claimed_at, last_beat_at,
                                              answered_poll_seconds, last_beat, not_ready, not_ready_since, start_failed, mode, app_version, phone_state)
-        select org_id, ${resolved.codeId}, slot, phone, ${body.claim}, device_model, ${now}, last_beat_at,
+        select org_id, ${scope.codeId}, slot, phone, ${body.claim}, device_model, ${now}, last_beat_at,
                answered_poll_seconds, last_beat, not_ready, not_ready_since, start_failed, mode, app_version, phone_state
           from fixture_stream_pairings where id = ${holder.id}
         returning id, code_id, phone, last_beat_at, answered_poll_seconds`;
@@ -577,7 +635,7 @@ export async function postBeat(rawCode: string, tok: string, body: Beat, deps: S
                         phone_live_edge = ${t.edge}, phone_live = ${t.live}, phone_live_beat_at = ${t.beatAt}
                   where id = ${open!.id}`;
       }
-      await storeHistory(tx, { orgId: resolved.orgId, pairingId: mine.id, sessionId: held ? open!.id : null, beat: body, raw, flags: flagsOf(body, notResponding) }, now);
+      await storeHistory(tx, { orgId: scope.orgId, pairingId: mine.id, sessionId: held ? open!.id : null, beat: body, raw, flags: flagsOf(body, notResponding) }, now);
     }
 
     // 4. The stops, judged AFTER the claim (ask 7); applied once this transaction commits (apply takes its own locks).
@@ -589,15 +647,16 @@ export async function postBeat(rawCode: string, tok: string, body: Beat, deps: S
       await event(open!.id, "phone_stop", { pairingId: mine!.id });
       stop = open!.id;
     } else if (body.stopped !== null) {
-      const [x] = await tx<{ id: string; state: SessionState; pairing_id: string | null }[]>`
-        select id, state, pairing_id from fixture_stream_sessions where id = ${body.stopped} and fixture_id = ${resolved.fixtureId}`;
+      const x = await scope.namedSession(tx, body.stopped);
       if (x && isActive(x.state)) {
         // T23 / T24a (§6.8.2): X is held by the current phone iff X's pairing is the slot's current pairing.
         const currentNow = callerCurrent ? mine : holder;
         const heldByCurrent = currentNow !== null && x.pairing_id === currentNow.id;
         const stopApplies = callerCurrent || !heldByCurrent;
-        if (stopApplies) stop = x.id;
-        else {
+        if (stopApplies) {
+          stop = x.id;
+          if (callerCurrent) await scope.onStopApplied?.(tx, x);
+        } else {
           await tx`select id from fixture_stream_sessions where id = ${x.id} for update`;
           await event(x.id, "stop_ignored", { held: true });
         }
@@ -610,15 +669,15 @@ export async function postBeat(rawCode: string, tok: string, body: Beat, deps: S
 
   if (decided.stop !== null) {
     await apply(decided.stop, (s) => (isActive(s.state) ? { type: "stop", reason: "operator_stopped" } : null), deps,
-      { userId: resolved.issuedBy, source: "phone" });
+      { userId: scope.issuedBy, source: "phone" });
   }
   if (decided.tickSid !== null) {
     try {
       await tickSession(decided.tickSid, deps, "beat");
     } catch (err) {
       // The beat is stored and the answer below reads the rows: a failed tick is reported, never a failed beat.
-      log.error({ err: String(err), sid: decided.tickSid, orgId: resolved.orgId }, "capture beat: the session tick failed — the beat is answered");
-      captureError(err, { orgId: resolved.orgId, route: "capture.beat.tick", extra: { sid: decided.tickSid } });
+      log.error({ err: String(err), sid: decided.tickSid, orgId: scope.orgId }, "capture beat: the session tick failed — the beat is answered");
+      captureError(err, { orgId: scope.orgId, route: "capture.beat.tick", extra: { sid: decided.tickSid } });
     }
   }
 
@@ -627,41 +686,39 @@ export async function postBeat(rawCode: string, tok: string, body: Beat, deps: S
   // broadcast is answered `go-live` with `startedBy: "automatic"` (T42). It never fails the beat: reported, answered.
   if (decided.mine !== null && body.state !== "ended" && decided.stop === null) {
     try {
-      await maybeAutoStart({ orgId: resolved.orgId, fixtureId: resolved.fixtureId, pairingId: decided.mine.id, phoneMode: body.mode }, deps, now);
+      await scope.autoStart(decided.mine.id, body.mode);
     } catch (err) {
-      log.error({ err: String(err), orgId: resolved.orgId }, "capture beat: auto start failed — the beat is answered");
-      captureError(err, { orgId: resolved.orgId, route: "capture.beat.auto_start" });
+      log.error({ err: String(err), orgId: scope.orgId }, "capture beat: auto start failed — the beat is answered");
+      captureError(err, { orgId: scope.orgId, route: "capture.beat.auto_start" });
     }
   }
 
   // 7. The answer, from the rows as they now stand.
-  const latest = await latestSession(resolved.fixtureId);
-  const open = await openSessionOf(sql, resolved.fixtureId);
-  const holder = await holderOf(sql, resolved.codeId, open);
+  const open = await scope.openSession(sql);
+  const holder = await holderOf(sql, scope.codeId, open);
   const named = body.sid ?? body.stopped;
   let namedEnded: { sid: string; endReason: ReturnType<typeof wireEndReason> } | null = null;
   if (named !== null) {
-    const [x] = await sql<{ id: string; state: SessionState; end_reason: DbEndReason | null; fail_reason: FailReason | null }[]>`
-      select id, state, end_reason, fail_reason from fixture_stream_sessions where id = ${named} and fixture_id = ${resolved.fixtureId}`;
+    const x = await scope.namedSession(sql, named);
     if (x && (x.state === "ending" || x.state === "completed" || x.state === "failed")) {
       namedEnded = { sid: x.id, endReason: wireEndReason({ endReason: x.end_reason, failReason: x.fail_reason }) };
     }
   }
+  const slot = slotOf(holder, open, false);
+  // `namedSession` answers only sessions of this scope, so on a court the ended one is this link's.
+  const handover = scope.handsOver === true && namedEnded !== null && open !== null && open.id !== namedEnded.sid && slot === "armed"
+    ? { sid: open.id, startedBy: open.start_cause }
+    : null;
   const core = beatAnswer({
     claim: body.claim === null ? null : decided.claim,
     callerCurrent: decided.callerCurrent,
     namedEnded,
-    slot: slotOf(holder, open, false),
+    handover,
+    slot,
     open: open === null ? null : { sid: open.id, startedBy: open.start_cause },
   });
-  const common = await captureCommon(
-    { orgId: resolved.orgId, fixtureId: resolved.fixtureId, code },
-    { open: open?.state ?? null, themeId: latest?.theme_id ?? null }, deps, now,
-  );
-  const answer = wireBeatAnswer(core, {
-    label: common.label, scheduledStart: common.scheduledStart, autoAllowed: common.autoAllowed,
-    destinationName: common.destinationName, overlayUrl: common.overlayUrl, pollSeconds: common.pollSeconds,
-  });
+  const common = await scope.answerCommon(open);
+  const answer = wireBeatAnswer(core, common);
   if (decided.mine !== null && answer.pollSeconds !== undefined) {
     await sql`update fixture_stream_pairings set answered_poll_seconds = ${answer.pollSeconds} where id = ${decided.mine.id}`;
   }
@@ -672,7 +729,7 @@ export async function postBeat(rawCode: string, tok: string, body: Beat, deps: S
 // T8c — the phone's own start (§6.3.4, §6.7)
 // ---------------------------------------------------------------------------
 
-const alreadyLive = (open: { id: string; start_cause: CaptureStartedBy }): CaptureRefusalError =>
+export const alreadyLive = (open: { id: string; start_cause: CaptureStartedBy }): CaptureRefusalError =>
   new CaptureRefusalError(409, "already_live", "a session is already running for this match", { sid: open.id, startedBy: open.start_cause });
 const noDestination = (why: string): CaptureRefusalError => new CaptureRefusalError(409, "no_destination", why);
 
@@ -740,7 +797,8 @@ export function phoneStartRefusal(err: unknown): CaptureRefusalError | { already
  * Not idempotent by design: a retry after a lost 200 meets 409 already_live naming the same sid.
  */
 export async function postStart(rawCode: string, tok: string, body: CaptureStartBody, deps: SessionDeps, now: Date): Promise<CaptureStartOk> {
-  const resolved = await resolveStreamCode(rawCode, tok, "start", body.phone, now);
+  const resolved = await resolveAnyStreamCode(rawCode, tok, "start", body.phone, now);
+  if (resolved.kind === "court") return postCourtStart(resolved, body, deps);
   const open = await openSessionOf(sql, resolved.fixtureId);
   const current = await holderOf(sql, resolved.codeId, open);
   if (!current || current.phone !== body.phone) throw new CaptureRefusalError(409, "replaced", "this phone is not the slot's current phone");
@@ -777,7 +835,7 @@ export async function postStart(rawCode: string, tok: string, body: CaptureStart
 
 /** W27: the origin the URL is built on must be https — the agreed pattern is `^https://[^/]+/score/dl_…`. Checked BEFORE
  *  the link is provided, so a deployment that would serve a URL the phone's parser rejects writes nothing. */
-const HTTPS_ORIGIN = /^https:\/\/[^/]+$/;
+export const HTTPS_ORIGIN = /^https:\/\/[^/]+$/;
 
 /** T12's holder check exactly as the start runs it (`holderOf`, session or none) — any other phone → 409 replaced —
  *  returning the code BRANDED as checked (review M5): the only value `provideDeviceLinkForPhone` accepts, and this the
@@ -790,7 +848,7 @@ async function currentPhoneCode(resolved: ResolvedCode, phone: string): Promise<
 }
 
 /** SQLSTATE 23503, as `postgres` reports it (`code`; lib/billing.ts reads the same shape off a real failure). */
-const isForeignKeyViolation = (err: unknown): boolean =>
+export const isForeignKeyViolation = (err: unknown): boolean =>
   typeof err === "object" && err !== null && (err as { code?: unknown }).code === "23503";
 
 /**
@@ -813,7 +871,8 @@ const isForeignKeyViolation = (err: unknown): boolean =>
 export async function postScoringLink(
   rawCode: string, tok: string, body: CaptureStartBody, deps: SessionDeps, now: Date, clientIp: string,
 ): Promise<CaptureScoringLinkOk> {
-  const resolved = await resolveStreamCode(rawCode, tok, "start", body.phone, now);
+  const resolved = await resolveAnyStreamCode(rawCode, tok, "start", body.phone, now);
+  if (resolved.kind === "court") return postCourtScoringLink(resolved, body, deps, now, clientIp);
   const checked = await currentPhoneCode(resolved, body.phone);
   const origin = captureOrigin(deps);
   if (!HTTPS_ORIGIN.test(origin)) {
@@ -839,7 +898,7 @@ export async function postScoringLink(
     throw err;
   }
   if (got.kind === "finished") throw new CaptureRefusalError(409, "match_finished", `the match is ${got.status}; it has no scoring link`);
-  const answer = CaptureScoringLinkOk.safeParse({ url: `${origin}/score/${got.secret}` });
+  const answer = CaptureScoringLinkOk.safeParse({ url: `${origin}/score/${got.secret}`, label: await matchLabelOf(resolved.orgId, resolved.fixtureId) });
   // An assumption made a guard: every secret is `mintDeviceLinkSecret`'s and the origin was checked above. Refused by
   // name (a logged 503) rather than served to a parser that rejects it — and never with the URL in the message.
   if (!answer.success) throw new Error("postScoringLink: the scoring link does not match the contract's url pattern");
