@@ -37,6 +37,21 @@ export async function marketingSuite(): Promise<void> {
     .map((m) => /\bvalue="([^"]*)"/.exec(m[0])?.[1]);
   check("marketing: /en/start opens on the linked sport (one checked chip: tabletennis)", JSON.stringify(checkedSport) === '["tabletennis"]');
 
+  // Product pages wave 1 (docs/superpowers/specs/2026-11-16-product-pages-design.md). Smoke reads HTML with no JS, so
+  // these prove the pages SHIP with their headline and the demo's server-rendered opening state; taps are e2e's job.
+  const streaming = await fetch(`${BASE}/product/streaming`);
+  const streamingHtml = await streaming.text();
+  check("marketing: /product/streaming 200", streaming.status === 200);
+  check("marketing: /product/streaming has its headline", streamingHtml.includes("on your stream."));
+  check("marketing: /product/streaming demo renders its opening score", streamingHtml.includes('data-testid="chase-stream-score">27/2<'));
+  const cricket = await fetch(`${BASE}/sports/cricket`);
+  const cricketHtml = await cricket.text();
+  check("marketing: /sports/cricket 200", cricket.status === 200);
+  check("marketing: /sports/cricket has its headline", cricketHtml.replace(/<[^>]+>/g, "").includes("Scores every ball."));
+  check("marketing: /sports/cricket demo renders all four screens", ["pad", "matchCentre", "table", "stream"].every((tile) => cricketHtml.includes(`data-testid="chase-tile-${tile}"`)));
+  check("marketing: /fr/sports/cricket is French", (await (await fetch(`${BASE}/fr/sports/cricket`)).text()).replace(/<[^>]+>/g, "").includes("Marque chaque balle."));
+  check("marketing: /sports/tennis (no such page) 404", (await fetch(`${BASE}/sports/tennis`)).status === 404);
+
   const sched = await fetch(`${BASE}/scheduling`);
   const shtml = await sched.text();
   check("marketing: /scheduling 200", sched.status === 200);

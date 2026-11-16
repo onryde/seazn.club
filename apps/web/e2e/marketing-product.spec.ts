@@ -1,0 +1,265 @@
+// The product pages (/product/streaming, /sports/cricket) in a browser: what the unit suites cannot see. Those run
+// without a DOM, so the taps, the fold, the menus, real overflow and the no-script page are all proven here.
+import { expect, test, type Page } from "@playwright/test";
+import AxeBuilder from "@axe-core/playwright";
+
+test.use({ storageState: { cookies: [], origins: [] } });
+
+const PAGES = ["/product/streaming", "/sports/cricket"] as const;
+const WIDTHS = [320, 768, 1280] as const;
+
+const score = (page: Page, id: "chase-score" | "chase-mc-score" | "chase-stream-score") => page.getByTestId(id);
+
+/**
+ * Open a page as a first-time visitor and answer the cookie banner. The banner is fixed bottom-left, which is exactly
+ * where the pad sits on a desktop first view, so a visitor has to answer it before the keys are reachable; the tests
+ * do what that visitor does rather than pretending the banner is not there.
+ */
+async function visit(page: Page, path: string) {
+  await page.goto(path);
+  const banner = page.getByTestId("cookie-consent");
+  await banner.getByRole("button", { name: "Reject" }).click();
+  await expect(banner).toBeHidden();
+}
+
+/** Tap a pad key the way a finger would: only if the key is what is actually on top at its centre. */
+async function tapKey(page: Page, key: string) {
+  const k = page.getByTestId(`chase-key-${key}`);
+  await k.scrollIntoViewIfNeeded();
+  const onTop = await k.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    return document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) === el;
+  });
+  expect(onTop, `key ${key} is the top element at its own centre`).toBe(true);
+  await k.click();
+}
+
+/** Lazy pictures only load near the viewport: walk the page so every one has had its chance. */
+async function walkPage(page: Page) {
+  await page.evaluate(async () => {
+    for (let y = 0; y < document.documentElement.scrollHeight; y += window.innerHeight / 2) {
+      window.scrollTo(0, y);
+      await new Promise((r) => setTimeout(r, 60));
+    }
+    await Promise.all([...document.images].map((i) => (i.complete ? null : new Promise((r) => { i.onload = i.onerror = r; }))));
+    window.scrollTo(0, 0);
+  });
+}
+
+test.describe("product pages: the working demo", () => {
+  test("cricket: a tap moves the pad, the match page tile and the stream tile; undo puts all three back", async ({ page }) => {
+    await visit(page, "/sports/cricket");
+    for (const id of ["chase-score", "chase-mc-score", "chase-stream-score"] as const) await expect(score(page, id)).toHaveText("27/2");
+    await expect(page.getByTestId("chase-need")).toContainText("22");
+
+    await tapKey(page, "4");
+    for (const id of ["chase-score", "chase-mc-score", "chase-stream-score"] as const) await expect(score(page, id)).toHaveText("31/2");
+    await expect(page.getByTestId("chase-need")).toContainText("18");
+
+    await tapKey(page, "out");
+    await expect(score(page, "chase-mc-score")).toHaveText("31/3");
+    await tapKey(page, "wide");
+    await expect(score(page, "chase-stream-score")).toHaveText("32/3");
+
+    for (let i = 0; i < 3; i++) await page.getByTestId("chase-undo").click();
+    for (const id of ["chase-score", "chase-mc-score", "chase-stream-score"] as const) await expect(score(page, id)).toHaveText("27/2");
+    // Nothing left to take back: a fourth press changes nothing.
+    await page.getByTestId("chase-undo").click();
+    await expect(score(page, "chase-score")).toHaveText("27/2");
+  });
+
+  test("cricket: finishing the chase updates the table, and the keys then stop changing the score", async ({ page }) => {
+    await visit(page, "/sports/cricket");
+    const me = page.getByTestId("chase-table-me").locator("td");
+    await expect(me.nth(2)).toHaveText("0");
+    await expect(me.nth(3)).toHaveText("0");
+    for (let i = 0; i < 4; i++) await tapKey(page, "6");
+    await expect(page.getByTestId("chase-demo")).toHaveAttribute("data-chase-end", "won");
+    await expect(score(page, "chase-score")).toHaveText("51/2");
+    await expect(me.nth(2)).toHaveText("1");
+    await expect(me.nth(3)).toHaveText("2");
+    await page.getByTestId("chase-key-6").click();
+    await page.getByTestId("chase-key-out").click();
+    await expect(score(page, "chase-score")).toHaveText("51/2");
+    // Taking the last ball back reopens the chase.
+    await page.getByTestId("chase-undo").click();
+    await expect(page.getByTestId("chase-demo")).toHaveAttribute("data-chase-end", "");
+    await expect(me.nth(3)).toHaveText("0");
+  });
+
+  test("streaming: the pad drives the stream, and the style and state switches change it", async ({ page }) => {
+    await visit(page, "/product/streaming");
+    const stream = page.getByTestId("chase-stream");
+    await expect(page.getByTestId("chase-tile-table")).toHaveCount(0);
+    await tapKey(page, "2");
+    await expect(score(page, "chase-stream-score")).toHaveText("29/2");
+    await expect(stream).toHaveAttribute("data-stream-style", "bar");
+    await page.getByTestId("chase-seg-style-bug").click();
+    await expect(stream).toHaveAttribute("data-stream-style", "bug");
+    await expect(page.getByTestId("chase-seg-style-bug")).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByTestId("chase-seg-style-bar")).toHaveAttribute("aria-pressed", "false");
+    for (const [state, word] of [["recon", "Reconnecting"], ["final", "Final"], ["soon", "Starting soon"], ["live", "Live"]] as const) {
+      await page.getByTestId(`chase-seg-state-${state}`).click();
+      await expect(stream).toHaveAttribute("data-stream-state", state);
+      await expect(page.getByTestId("chase-stream-state")).toHaveText(word);
+    }
+    // The score survived every switch.
+    await expect(score(page, "chase-stream-score")).toHaveText("29/2");
+  });
+
+  test("a tap flashes the screens it changed, and never under reduced motion", async ({ browser }) => {
+    for (const reducedMotion of ["no-preference", "reduce"] as const) {
+      const ctx = await browser.newContext({ reducedMotion, storageState: { cookies: [], origins: [] } });
+      const page = await ctx.newPage();
+      await visit(page, "/sports/cricket");
+      await expect(page.locator(".mkp-flash")).toHaveCount(0);
+      await tapKey(page, "1");
+      await expect(score(page, "chase-score")).toHaveText("28/2");
+      const flashed = await page.locator(".mkp-flash").count();
+      if (reducedMotion === "reduce") expect(flashed).toBe(0);
+      else expect(flashed).toBeGreaterThanOrEqual(3);
+      await ctx.close();
+    }
+  });
+});
+
+test.describe("product pages: layout", () => {
+  for (const path of PAGES) {
+    for (const width of WIDTHS) {
+      test(`${path} at ${width}: no sideways scroll, no page errors, every picture loads`, async ({ page }) => {
+        const errors: string[] = [];
+        page.on("pageerror", (e) => errors.push(e.message));
+        await page.setViewportSize({ width, height: 900 });
+        const res = await page.goto(path);
+        expect(res?.status()).toBe(200);
+        await walkPage(page);
+        const m = await page.evaluate(() => ({
+          over: document.documentElement.scrollWidth - window.innerWidth,
+          images: document.images.length,
+          broken: [...document.images].filter((i) => !i.naturalWidth).map((i) => i.getAttribute("src")),
+          h1: document.querySelectorAll("h1").length,
+        }));
+        expect(m.over, "horizontal overflow in px").toBeLessThanOrEqual(0);
+        expect(m.images, "pictures on the page").toBeGreaterThanOrEqual(6);
+        expect(m.broken).toEqual([]);
+        expect(m.h1).toBe(1);
+        expect(errors).toEqual([]);
+        // Every pad key is a real tap target.
+        const sizes = await page.locator('[data-testid^="chase-key-"]').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().height)));
+        expect(sizes.length).toBe(8);
+        for (const h of sizes) expect(h).toBeGreaterThanOrEqual(44);
+      });
+    }
+  }
+
+  for (const lang of ["fr", "nl", "es"] as const) {
+    test(`${lang} at 320: the longer copy still fits`, async ({ page }) => {
+      await page.setViewportSize({ width: 320, height: 800 });
+      let checked = 0;
+      for (const path of PAGES) {
+        await page.goto(`/${lang}${path}`);
+        await expect(page.locator("html")).toHaveAttribute("lang", lang);
+        await walkPage(page);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth), `${lang}${path}`).toBeLessThanOrEqual(0);
+        // No button label is clipped by its own box.
+        const clipped = await page.locator(".mkp a.mkp-btn, .mkp button").evaluateAll((els) =>
+          els.filter((e) => e.scrollWidth > e.clientWidth + 1).map((e) => e.textContent),
+        );
+        expect(clipped, `${lang}${path}`).toEqual([]);
+        checked++;
+      }
+      expect(checked).toBe(PAGES.length);
+    });
+  }
+
+  test("with script off, both pages read complete and the demo shows its opening state", async ({ browser }) => {
+    const ctx = await browser.newContext({ javaScriptEnabled: false, storageState: { cookies: [], origins: [] } });
+    const page = await ctx.newPage();
+    for (const [path, sections] of [["/product/streaming", 8], ["/sports/cricket", 9]] as const) {
+      await page.goto(path);
+      await expect(page.getByTestId("chase-score")).toHaveText("27/2");
+      await expect(page.getByTestId("chase-stream-score")).toHaveText("27/2");
+      await expect(page.locator("[data-section]")).toHaveCount(sections);
+      await expect(page.locator(".mkp h2")).toHaveCount(sections - 2);
+      // The questions are readable without script: the first is open, the rest are native disclosures.
+      await expect(page.locator(".mkp-faq details").first()).toHaveAttribute("open", "");
+    }
+    await ctx.close();
+  });
+
+  test("a sport with no page is a 404, prefixed or not", async ({ request }) => {
+    for (const path of ["/sports/tennis", "/en/sports/tennis", "/fr/sports/notasport"]) {
+      expect((await request.get(path)).status(), path).toBe(404);
+    }
+    expect((await request.get("/sports/cricket")).status()).toBe(200);
+  });
+
+  for (const path of PAGES) {
+    test(`${path}: no serious accessibility violation`, async ({ page }) => {
+      await page.goto(path);
+      const results = await new AxeBuilder({ page }).analyze();
+      const bad = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+      expect(bad.map((v) => `${v.id}: ${v.nodes.length} — ${v.nodes[0]?.target}`)).toEqual([]);
+    });
+  }
+});
+
+test.describe("marketing nav: Product and Sports", () => {
+  test("desktop: the menus open by keyboard, close on Escape, and their links land on real pages", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto("/pricing");
+    const product = page.getByTestId("nav-menu-product");
+    const button = product.getByRole("button");
+    const link = product.getByRole("link", { name: "Streaming" });
+    await expect(button).toHaveAttribute("aria-expanded", "false");
+    await expect(link).toBeHidden();
+    await button.focus();
+    await page.keyboard.press("Enter");
+    await expect(button).toHaveAttribute("aria-expanded", "true");
+    await expect(link).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(link).toBeHidden();
+    await expect(button).toBeFocused();
+    // Outside click closes too.
+    await button.click();
+    await expect(link).toBeVisible();
+    await page.locator("main").click({ position: { x: 5, y: 300 } });
+    await expect(link).toBeHidden();
+
+    await button.click();
+    await link.click();
+    await expect(page).toHaveURL(/\/product\/streaming$/);
+    await expect(page.locator("h1")).toContainText("already on your stream");
+
+    const sports = page.getByTestId("nav-menu-sports");
+    await sports.getByRole("button").click();
+    await sports.getByRole("link", { name: "Cricket" }).click();
+    await expect(page).toHaveURL(/\/sports\/cricket$/);
+    await expect(page.locator("h1")).toHaveText("Scores every ball.");
+  });
+
+  test("the night nav stays readable over the product hero and flips solid once it scrolls away", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto("/sports/cricket");
+    const nav = page.locator("[data-mk-nav]");
+    await expect(nav).toHaveClass(/mk-nav-night/);
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await expect(nav).toHaveClass(/mk-nav-solid/);
+  });
+
+  test("phone: the panel lists the same pages under Product and Sports", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 800 });
+    await page.goto("/product/streaming");
+    await expect(page.getByTestId("nav-menu-product")).toBeHidden();
+    await page.getByRole("button", { name: "Open menu" }).click();
+    const panel = page.getByRole("menu");
+    await expect(panel.getByRole("group", { name: "Product" }).getByRole("menuitem", { name: "Streaming" })).toBeVisible();
+    await expect(panel.getByRole("group", { name: "Sports" }).getByRole("menuitem", { name: "Cricket" })).toBeVisible();
+    await expect(panel.getByRole("menuitem", { name: "Pricing" })).toBeVisible();
+    // The panel fits the screen it opened on.
+    const box = await panel.boundingBox();
+    expect(box!.y + box!.height).toBeLessThanOrEqual(800);
+    await panel.getByRole("menuitem", { name: "Cricket" }).click();
+    await expect(page).toHaveURL(/\/sports\/cricket$/);
+  });
+});
