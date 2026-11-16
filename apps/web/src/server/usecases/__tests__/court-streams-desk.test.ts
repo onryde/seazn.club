@@ -12,6 +12,7 @@ vi.mock("next/headers", () => ({
 }));
 
 import { sql } from "@/lib/db";
+import { insertStreamCode, wipeStreamCodeTok } from "@/server/relay/secret-columns";
 import { rigApiTarget, rigUser, apiSessionOnTarget } from "@/server/relay/__tests__/_session-rig";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { linkCourtStream, withdrawCourtStream } from "../court-streams";
@@ -111,12 +112,12 @@ describe.skipIf(!HAS_DB)("court streams (the desk's read)", () => {
   it("court_stream and own_stream_code per match", async () => {
     await link();
     await sql`insert into fixture_stream_settings (fixture_id, org_id, court_stream) values (${f0}, ${day.orgId}, true)`;
-    await sql`insert into fixture_stream_codes (org_id, fixture_id, code, tok_hash, tok_enc, issued_by)
-              values (${day.orgId}, ${f1}, ${newCode()}, ${'0'.repeat(64)}, ${Buffer.from("sealed")}, ${await rigUser()})`;
+    const user = await rigUser();
+    const f1Code = await sql.begin((tx) => insertStreamCode(tx, { orgId: day.orgId, fixtureId: f1, code: newCode(), tokHash: '0'.repeat(64), tokEnc: Buffer.from("sealed"), issuedBy: user }));
     const court = await courtOf();
     expect([court.current!.court_stream, court.current!.own_stream_code]).toEqual([true, false]);
     expect([court.queue[0]!.court_stream, court.queue[0]!.own_stream_code]).toEqual([false, true]);
-    await sql`update fixture_stream_codes set ended_at = now(), end_cause = 'reissued', tok_enc = null where fixture_id = ${f1}`;
+    await sql.begin((tx) => wipeStreamCodeTok(tx, f1Code.id, "reissued", null));
     expect((await courtOf()).queue[0]!.own_stream_code, "an ended code is not active").toBe(false);
   });
 
@@ -134,10 +135,10 @@ describe.skipIf(!HAS_DB)("court streams (the desk's read)", () => {
     expect(first.source).toBe("this_court");
     expect([first.fixture.court_stream, first.fixture.own_stream_code]).toEqual([true, false]);
     // Its own active code, the other flag; an ended one is not active (as for a queued row).
-    await sql`insert into fixture_stream_codes (org_id, fixture_id, code, tok_hash, tok_enc, issued_by)
-              values (${day.orgId}, ${f0}, ${newCode()}, ${'0'.repeat(64)}, ${Buffer.from("sealed")}, ${await rigUser()})`;
+    const user = await rigUser();
+    const f0Code = await sql.begin((tx) => insertStreamCode(tx, { orgId: day.orgId, fixtureId: f0, code: newCode(), tokHash: '0'.repeat(64), tokEnc: Buffer.from("sealed"), issuedBy: user }));
     expect((await candidate(f0)).fixture.own_stream_code).toBe(true);
-    await sql`update fixture_stream_codes set ended_at = now(), end_cause = 'reissued', tok_enc = null where fixture_id = ${f0}`;
+    await sql.begin((tx) => wipeStreamCodeTok(tx, f0Code.id, "reissued", null));
     await sql`update fixture_stream_settings set court_stream = false where fixture_id = ${f0}`;
     expect([ (await candidate(f0)).fixture.court_stream, (await candidate(f0)).fixture.own_stream_code ]).toEqual([false, false]);
   });
