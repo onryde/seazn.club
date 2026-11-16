@@ -21,7 +21,8 @@
 // unfrozen competition; court-stream-sheet.tsx); a linked court shows its band under the header — the phone's status chip, the channel,
 // how long the link works — with "Show court QR" and "Stop streaming" for a writer; and its current and queued matches carry the
 // Stream switch (court-stream-switch.tsx; the rule is `switchSpec`, lib/match-day/court-stream.ts). A view-only or frozen desk reads the
-// status and nothing that writes. Candidate rows never carry the switch: their court-stream fields always read false (ruling R11).
+// status and nothing that writes. A candidate row of a LINKED court carries the switch too (ruling O14, 2026-11-16, superseding R11:
+// the day's first match is switched on before it is called; candidate-list.tsx `CandidateSwitch`).
 //
 // Task B4 (owner ruling Q1):
 //  - a match playing on NO court (an untimed bracket match, an online board) opens `NoCourtFocus`: the playing court's own
