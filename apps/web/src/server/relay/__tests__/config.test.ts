@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import * as config from "../config";
 import {
-  AUTO_START_RETRY_SECONDS, AUTO_STOP_AFTER_RESULT_SECONDS, CODE_GRACE_AFTER_FINISH_MINUTES, DEAD_PHONE_TAKEOVER_SECONDS,
+  AUTO_START_RETRY_SECONDS, AUTO_STOP_AFTER_RESULT_SECONDS, COURT_AUTO_STOP_AFTER_RESULT_SECONDS, CODE_GRACE_AFTER_FINISH_MINUTES, DEAD_PHONE_TAKEOVER_SECONDS,
   FLY_RELAY_APP_RETIRED_DEFAULT, LOCAL_ENV_NAME, PHONE_LOST_LIVE_MINUTES, PHONE_NOT_READY_SHOW_AFTER_SECONDS,
   PHONE_SILENT_FLOOR_SECONDS, TUNABLE_NAMES, buildShaOf, liveRunnerIdentity, relayDriverMode, relayEnvironment, tunable,
 } from "../config";
@@ -256,14 +256,14 @@ describe("tunable — honoured only when ENV_NAME is local or ci", () => {
   // The declared defaults, from the spec's own figures (§5.1 C2, §6.5, §6.8.5, §6.9, §8.3) — never from config.ts.
   const SPEC_DEFAULTS = {
     DEAD_PHONE_TAKEOVER_SECONDS: 60, PHONE_LOST_LIVE_MINUTES: 15, PHONE_SILENT_FLOOR_SECONDS: 60, CODE_GRACE_AFTER_FINISH_MINUTES: 120,
-    AUTO_STOP_AFTER_RESULT_SECONDS: 180, AUTO_START_RETRY_SECONDS: 60,
+    AUTO_STOP_AFTER_RESULT_SECONDS: 180, COURT_AUTO_STOP_AFTER_RESULT_SECONDS: 30, AUTO_START_RETRY_SECONDS: 60,
   } as const;
   const DEFAULTS = {
     DEAD_PHONE_TAKEOVER_SECONDS, PHONE_LOST_LIVE_MINUTES, PHONE_SILENT_FLOOR_SECONDS, CODE_GRACE_AFTER_FINISH_MINUTES,
-    AUTO_STOP_AFTER_RESULT_SECONDS, AUTO_START_RETRY_SECONDS,
+    AUTO_STOP_AFTER_RESULT_SECONDS, COURT_AUTO_STOP_AFTER_RESULT_SECONDS, AUTO_START_RETRY_SECONDS,
   };
 
-  it("the guard pins the DEFAULTS: 60 s takeover, 15 min lost, 60 s silent floor, 120 min grace, 180 s auto stop, 60 s auto-start retry", () => {
+  it("the guard pins the DEFAULTS: 60 s takeover, 15 min lost, 60 s silent floor, 120 min grace, 180 s auto stop, 30 s court auto stop, 60 s auto-start retry", () => {
     expect(DEFAULTS).toEqual(SPEC_DEFAULTS);
     expect([...TUNABLE_NAMES].sort()).toEqual(Object.keys(SPEC_DEFAULTS).sort());
   });
@@ -296,7 +296,7 @@ describe("tunable — honoured only when ENV_NAME is local or ci", () => {
       }
     }
     expect(checked).toBe(TUNABLE_NAMES.length * 9);
-    expect(checked).toBe(54);   // the six tunables the spec declares (anti-vacuity: 36 before AUTO_STOP / AUTO_START_RETRY)
+    expect(checked).toBe(63);   // the seven tunables (the six the spec declares + the court tail, O15)
   });
 
   it("under ci, an unset or EMPTY variable is the fallback — never Number(\"\") = 0", () => {

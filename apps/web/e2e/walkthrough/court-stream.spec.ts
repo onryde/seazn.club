@@ -46,7 +46,7 @@ import {
 } from "../helpers/stream-slot-pool";
 import {
   AUTO_START_RETRY_SECONDS,
-  AUTO_STOP_AFTER_RESULT_SECONDS,
+  COURT_AUTO_STOP_AFTER_RESULT_SECONDS,
   POLL_NEAR_SECONDS,
   POLL_STARTING_SECONDS,
 } from "../../src/server/relay/config";
@@ -60,7 +60,8 @@ const wholeEnv = envGuard(ENV_PROBLEMS);
 /** Each "not yet" assertion below beats ONCE inside a window this long: shorter than a beat's round trip on a loaded runner and
  *  the "not yet" half could no longer be told from a slow "already". */
 const NOT_YET_FLOOR_S = 5;
-const AUTO_STOP_S = wholeEnv("AUTO_STOP_AFTER_RESULT_SECONDS", { below: AUTO_STOP_AFTER_RESULT_SECONDS, atLeast: NOT_YET_FLOOR_S }) ?? AUTO_STOP_AFTER_RESULT_SECONDS;
+/** A court session's tail is its own tunable (O15, owner 2026-11-16): 30 s by default, not the per-fixture code's 180. */
+const AUTO_STOP_S = wholeEnv("COURT_AUTO_STOP_AFTER_RESULT_SECONDS", { below: COURT_AUTO_STOP_AFTER_RESULT_SECONDS, atLeast: NOT_YET_FLOOR_S }) ?? COURT_AUTO_STOP_AFTER_RESULT_SECONDS;
 const RETRY_S = wholeEnv("AUTO_START_RETRY_SECONDS", { below: AUTO_START_RETRY_SECONDS, atLeast: NOT_YET_FLOOR_S }) ?? AUTO_START_RETRY_SECONDS;
 const FAKE_CONNECT_MS = wholeEnv("FAKE_INGEST_CONNECT_AFTER_MS") ?? FAKE_CONNECT_AFTER_MS_DEFAULT;
 if (!process.env.DATABASE_URL) ENV_PROBLEMS.push("DATABASE_URL is not set");

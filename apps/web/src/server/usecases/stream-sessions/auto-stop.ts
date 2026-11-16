@@ -1,7 +1,7 @@
 import "server-only";
 // The automatic stop after the result (7.3): its facts, verdict and endIfAutoStopDue (see ./index.ts).
 import { sql, type Tx } from "@/lib/db";
-import { AUTO_STOP_AFTER_RESULT_SECONDS, tunable } from "@/server/relay/config";
+import { AUTO_STOP_AFTER_RESULT_SECONDS, COURT_AUTO_STOP_AFTER_RESULT_SECONDS, tunable } from "@/server/relay/config";
 import { isTerminal } from "@/server/relay/domain/session";
 import { autoStopApplies, autoStopVerdict, type PhoneMode } from "@/server/relay/domain/auto-stream";
 import { log } from "@/server/logger";
@@ -18,13 +18,15 @@ import { apply } from "./apply";
  *  millisecond would read equal there (Review Focus 4). Two clocks stay apart: those two stamps are compared with each other,
  *  and the delay is `deps.now()` against `finished_at`. `exec` is apply's tx when re-taken under the row lock.
  *  Court stream (spec 2026-11-14 §5.3–§5.4, plan Task 9): a court session's switch is the court's — the session exists only
- *  because its match's Stream switch was on — so a session with a `court_link_id` reads `auto_stream` true and gets the same
- *  180 s tail ("nothing follows"); a handover ends it sooner. A per-fixture code's session still reads its fixture's switch. */
-type AutoStopFacts = { auto_stream: boolean; mode: string | null; finished_at: Date | null; session_predates_result: boolean };
+ *  because its match's Stream switch was on — so a session with a `court_link_id` reads `auto_stream` true and gets the
+ *  court's own tail, COURT_AUTO_STOP_AFTER_RESULT_SECONDS (30 s; O15, owner 2026-11-16: "nothing follows" the result on the
+ *  court phone but the next match's start, which hands over sooner); a handover ends it sooner. A per-fixture code's session still reads its fixture's switch
+ *  and waits AUTO_STOP_AFTER_RESULT_SECONDS (180 s). `is_court` is `court_link_id is not null`, read with the rest. */
+type AutoStopFacts = { auto_stream: boolean; mode: string | null; finished_at: Date | null; session_predates_result: boolean; is_court: boolean };
 async function autoStopFactsOf(exec: Tx | typeof sql, sessionId: string): Promise<AutoStopFacts | null> {
   const [f] = await exec<AutoStopFacts[]>`
     select coalesce(st.auto_stream, false) or s.court_link_id is not null as auto_stream, p.mode, f.finished_at,
-           coalesce(s.created_at < f.finished_at, false) as session_predates_result
+           coalesce(s.created_at < f.finished_at, false) as session_predates_result, s.court_link_id is not null as is_court
       from fixture_stream_sessions s
       join fixtures f on f.id = s.fixture_id
       left join fixture_stream_settings st on st.fixture_id = s.fixture_id
@@ -42,10 +44,16 @@ export async function autoStopAppliesTo(sessionId: string): Promise<boolean> {
     autoStream: f.auto_stream, phoneMode: phoneModeOf(f.mode), finishedAt: f.finished_at, sessionPredatesResult: f.session_predates_result,
   });
 }
+/** The delay after the result, as the tick reads it: a court session's tail (O15) or a per-fixture code's. */
+function autoStopDelaySeconds(isCourt: boolean): number {
+  return isCourt
+    ? tunable("COURT_AUTO_STOP_AFTER_RESULT_SECONDS", COURT_AUTO_STOP_AFTER_RESULT_SECONDS)
+    : tunable("AUTO_STOP_AFTER_RESULT_SECONDS", AUTO_STOP_AFTER_RESULT_SECONDS);
+}
 function autoStopDue(f: AutoStopFacts, now: Date): boolean {
   return autoStopVerdict({
     autoStream: f.auto_stream, phoneMode: phoneModeOf(f.mode), finishedAt: f.finished_at, sessionPredatesResult: f.session_predates_result,
-  }, now, tunable("AUTO_STOP_AFTER_RESULT_SECONDS", AUTO_STOP_AFTER_RESULT_SECONDS)).due;
+  }, now, autoStopDelaySeconds(f.is_court)).due;
 }
 
 /** Step 7 of the tick (§7.3): end the session `auto_stopped` once `autoStopDue`. Judged on an UNLOCKED read first (the common
