@@ -65,7 +65,14 @@ export async function marketingSuite(): Promise<void> {
   check("marketing: /sports/cricket has its headline", cricketHtml.replace(/<[^>]+>/g, "").includes("Scores every ball."));
   check("marketing: /sports/cricket demo renders all four screens", ["pad", "matchCentre", "table", "stream"].every((tile) => cricketHtml.includes(`data-testid="chase-tile-${tile}"`)));
   check("marketing: /fr/sports/cricket is French", (await (await fetch(`${BASE}/fr/sports/cricket`)).text()).replace(/<[^>]+>/g, "").includes("Marque chaque balle."));
-  check("marketing: /sports/tennis (no such page) 404", (await fetch(`${BASE}/sports/tennis`)).status === 404);
+  for (const [slug, headline] of [["badminton", "Scores every rally."], ["table-tennis", "Scores every point."], ["volleyball", "Every set, point by point."]] as const) {
+    const res = await fetch(`${BASE}/sports/${slug}`);
+    const html = await res.text();
+    check(`marketing: /sports/${slug} 200`, res.status === 200);
+    check(`marketing: /sports/${slug} has its headline`, html.replace(/<[^>]+>/g, "").includes(headline));
+    check(`marketing: /sports/${slug} demo renders all four screens`, ["pad", "matchCentre", "table", "stream"].every((tile) => html.includes(`data-testid="rally-tile-${tile}"`)));
+  }
+  check("marketing: /sports/notasport (no such page) 404", (await fetch(`${BASE}/sports/notasport`)).status === 404);
 
   // The recorded scheduler runs load in the browser when scrolled near, so with no JS the page carries only their
   // placeholder. Full value and closing quote: React serialises an omitted prop as `"$undefined"`.

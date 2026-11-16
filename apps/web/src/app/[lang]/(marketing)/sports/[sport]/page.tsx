@@ -6,7 +6,11 @@ import { chaseDemoLabels } from "@/components/marketing/product/chase-demo-label
 import { Accent, Closing, DEMO_CLUB_HREF, DEMO_TEAMS, DemoBand, DemoClub, PageHero, PhoneRow, ProductPage, Questions, Road, SplitBand, Ticket } from "@/components/marketing/product/parts";
 import { CHASE } from "@/lib/marketing/cricket-chase";
 import { BALLS_PER_OVER } from "@/lib/marketing/cricket-chase-rules";
-import { SPORT_PAGES, isSportPage } from "@/lib/marketing/sport-pages";
+import { RallyDemo } from "@/components/marketing/product/rally-demo";
+import { rallyDemoLabels } from "@/components/marketing/product/rally-demo-labels";
+import type { ProductImageKey } from "@/lib/marketing/product-images";
+import { RALLY_RULES, RALLY_SPORTS, type RallySport } from "@/lib/marketing/rally-rules";
+import { RALLY_SIDES, SPORT_PAGES, isSportPage, sportKeyOf } from "@/lib/marketing/sport-pages";
 import { getDictionary, t } from "@/lib/i18n";
 import { hasLocale } from "@/lib/i18n-constants";
 import { marketingMeta } from "@/lib/seo-meta";
@@ -22,12 +26,14 @@ export async function generateMetadata({ params }: { params: Promise<{ lang: str
   const { lang, sport } = await params;
   if (!hasLocale(lang) || !isSportPage(sport)) return {};
   const d = await getDictionary(lang, "marketing");
-  return marketingMeta({ lang, path: `/sports/${sport}`, title: t(d, `sport.${sport}.meta.title`), description: t(d, `sport.${sport}.meta.description`) });
+  const key = sportKeyOf(sport);
+  return marketingMeta({ lang, path: `/sports/${sport}`, title: t(d, `sport.${key}.meta.title`), description: t(d, `sport.${key}.meta.description`) });
 }
 
 /**
- * A sport's page: the sport-page shape (docs/superpowers/specs/2026-11-16-product-pages-design.md §4). Cricket is the
- * first and, for now, only one, so the demo is the cricket chase; a second sport brings its own demo with it.
+ * A sport's page: the sport-page shape (docs/superpowers/specs/2026-11-16-product-pages-design.md §4). Cricket's demo
+ * is the chase; the rally sports (badminton, table tennis, volleyball) share one demo and one page body below, each
+ * with its own rules from the engine, its own words and its own pictures.
  *
  * The H1 is the short line; the search words (cricket tournament, scoring, tables) sit in the lede and the <title>.
  * Offline scoring is claimed for the phone app only: it was proven there, and the web pad makes no such promise.
@@ -36,10 +42,66 @@ export default async function SportPage({ params }: { params: Promise<{ lang: st
   const { lang, sport } = await params;
   if (!hasLocale(lang) || !isSportPage(sport)) notFound();
   const d = await getDictionary(lang, "marketing");
-  const s = (key: string, vars?: Record<string, string | number>) => t(d, `sport.${sport}.${key}`, vars);
+  const key = sportKeyOf(sport);
+  const s = (k: string, vars?: Record<string, string | number>) => t(d, `sport.${key}.${k}`, vars);
   const shared = (key: string) => t(d, `product.shared.${key}`);
   const app = shared("appName");
   const appSentence = app.charAt(0).toUpperCase() + app.slice(1);
+
+  if ((RALLY_SPORTS as readonly string[]).includes(key)) {
+    const rally = key as RallySport;
+    const sides = RALLY_SIDES[rally];
+    const img = (name: "HubM" | "PadM" | "McM" | "McD") => `${rally}${name}` as ProductImageKey;
+    return (
+      <MarketingShell variant="night-scroll" lang={lang}>
+        <ProductPage>
+          <PageHero
+            crumb={s("crumb")}
+            title={<Accent text={s("h1")} />}
+            lede={s("lede")}
+            primary={{ label: s("try"), href: "#try" }}
+            secondary={{ label: s("start"), href: SIGNUP }}
+          >
+            <DemoBand id="try" title={s("demo.title")} note={s("demo.note", { a: sides.a })}>
+              <RallyDemo labels={rallyDemoLabels(d, rally)} teams={{ a: sides.a, b: sides.b }} others={sides.others} rules={RALLY_RULES[rally]} />
+            </DemoBand>
+          </PageHero>
+
+          <Road
+            title={s("road.title")}
+            lede={s("road.lede")}
+            steps={([["1", "HubM"], ["2", "PadM"], ["3", "McM"]] as const).map(([n, image]) => ({
+              heading: s(`road.${n}.h`),
+              who: s(`road.${n}.who`),
+              body: s(`road.${n}.p`),
+              image: img(image),
+              caption: s(`road.${n}.cap`),
+            }))}
+          />
+
+          <Ticket
+            title={s("ticket.title")}
+            body={s("ticket.body")}
+            kicker={s("ticket.kicker")}
+            heading={s("ticket.heading")}
+            rows={(["scoring", "tables", "formats", "extras"] as const).map((k) => ({ label: s(`ticket.${k}`), value: s(`ticket.${k}V`) }))}
+            stub={{ top: s("ticket.stubTop"), big: s("ticket.stubBig"), bottom: s("ticket.stubBottom"), href: "/product/streaming" }}
+          />
+
+          <DemoClub title={shared("clubTitle")} text={s("club.text")} image={img("McD")} imageAlt={s("club.alt")} href={DEMO_CLUB_HREF} linkLabel="Seazn Demo Club" />
+
+          <Questions title={shared("questions")} items={(["1", "2", "3", "4", "5"] as const).map((n) => ({ q: s(`faq.${n}.q`), a: s(`faq.${n}.a`) }))} />
+
+          <Closing
+            line={s("closing")}
+            sub={shared("closingSub")}
+            cta={{ label: s("start"), href: SIGNUP }}
+            pricing={{ label: shared("seePricing"), href: "/pricing" }}
+          />
+        </ProductPage>
+      </MarketingShell>
+    );
+  }
 
   return (
     <MarketingShell variant="night-scroll" lang={lang}>

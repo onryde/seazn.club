@@ -25,6 +25,18 @@ export const PRODUCT_IMAGES = {
   appOfflineHistory: { src: "/marketing/product/app-offline-history.webp", width: 720, height: 1280, kind: "phone" },
   appStreamArmed: { src: "/marketing/product/app-stream-armed.webp", width: 2230, height: 970, kind: "web" },
   appStreamSettings: { src: "/marketing/product/app-stream-settings.webp", width: 2230, height: 940, kind: "web" },
+  badmintonHubM: { src: "/marketing/product/badminton-hub-m.webp", width: 780, height: 1386, kind: "phone" },
+  badmintonPadM: { src: "/marketing/product/badminton-pad-m.webp", width: 780, height: 1386, kind: "phone" },
+  badmintonMcM: { src: "/marketing/product/badminton-mc-m.webp", width: 780, height: 1386, kind: "phone" },
+  badmintonMcD: { src: "/marketing/product/badminton-mc-d.webp", width: 1400, height: 840, kind: "web" },
+  tabletennisHubM: { src: "/marketing/product/tabletennis-hub-m.webp", width: 780, height: 1386, kind: "phone" },
+  tabletennisPadM: { src: "/marketing/product/tabletennis-pad-m.webp", width: 780, height: 1386, kind: "phone" },
+  tabletennisMcM: { src: "/marketing/product/tabletennis-mc-m.webp", width: 780, height: 1386, kind: "phone" },
+  tabletennisMcD: { src: "/marketing/product/tabletennis-mc-d.webp", width: 1400, height: 840, kind: "web" },
+  volleyballHubM: { src: "/marketing/product/volleyball-hub-m.webp", width: 780, height: 1386, kind: "phone" },
+  volleyballPadM: { src: "/marketing/product/volleyball-pad-m.webp", width: 780, height: 1386, kind: "phone" },
+  volleyballMcM: { src: "/marketing/product/volleyball-mc-m.webp", width: 780, height: 1386, kind: "phone" },
+  volleyballMcD: { src: "/marketing/product/volleyball-mc-d.webp", width: 1400, height: 840, kind: "web" },
 } as const satisfies Record<string, ProductImage>;
 
 export type ProductImageKey = keyof typeof PRODUCT_IMAGES;

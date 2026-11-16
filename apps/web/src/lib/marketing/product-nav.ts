@@ -15,7 +15,12 @@ export const PRODUCT_LINKS = [
   { key: "nav.scheduling", href: "/product/scheduling" },
 ] as const satisfies readonly NavLink[];
 
-export const SPORT_LINKS = [{ key: "nav.sport.cricket", href: "/sports/cricket" }] as const satisfies readonly NavLink[];
+export const SPORT_LINKS = [
+  { key: "nav.sport.cricket", href: "/sports/cricket" },
+  { key: "nav.sport.badminton", href: "/sports/badminton" },
+  { key: "nav.sport.tabletennis", href: "/sports/table-tennis" },
+  { key: "nav.sport.volleyball", href: "/sports/volleyball" },
+] as const satisfies readonly NavLink[];
 
 export const TOP_LINKS = [
   { key: "nav.pricing", href: "/pricing" },

@@ -6,7 +6,8 @@ import { expectNoHorizontalScroll } from "./helpers";
 
 test.use({ storageState: { cookies: [], origins: [] } });
 
-const PAGES = ["/product/streaming", "/product/remote-scoring", "/product/format", "/product/scheduling", "/sports/cricket"] as const;
+const RALLY_PAGES = ["/sports/badminton", "/sports/table-tennis", "/sports/volleyball"] as const;
+const PAGES = ["/product/streaming", "/product/remote-scoring", "/product/format", "/product/scheduling", "/sports/cricket", ...RALLY_PAGES] as const;
 const WIDTHS = [320, 768, 1280] as const;
 
 const score = (page: Page, id: "chase-score" | "chase-mc-score" | "chase-stream-score") => page.getByTestId(id);
@@ -68,6 +69,45 @@ test.describe("product pages: the working demo", () => {
     await page.getByTestId("chase-undo").click();
     await expect(score(page, "chase-score")).toHaveText("27/2");
   });
+
+  for (const path of RALLY_PAGES) {
+    test(`${path}: a point moves the pad, the match page tile and the stream tile; take back undoes it; the match can be won`, async ({ page }) => {
+      await visit(page, path);
+      const demo = page.getByTestId("rally-demo");
+      const num = async (id: string) => Number(await page.getByTestId(id).innerText());
+      const [a0, b0] = [await num("rally-score-a"), await num("rally-score-b")];
+      expect(a0, "the opening score is a real mid-set score").toBeGreaterThan(b0);
+      expect(b0).toBeGreaterThan(0);
+      const setsBefore = await page.getByTestId("rally-set").count();
+      expect(setsBefore).toBeGreaterThanOrEqual(2);
+
+      await page.getByTestId("rally-point-b").click();
+      await expect(page.getByTestId("rally-score-b")).toHaveText(String(b0 + 1));
+      await expect(page.getByTestId("rally-mc-score-b")).toHaveText(String(b0 + 1));
+      await expect(page.getByTestId("rally-stream-score")).toHaveText(`${a0}-${b0 + 1}`);
+      await page.getByTestId("rally-undo").click();
+      await expect(page.getByTestId("rally-score-b")).toHaveText(String(b0));
+      await expect(page.getByTestId("rally-stream-score")).toHaveText(`${a0}-${b0}`);
+      await expect(demo).toHaveAttribute("data-rally-winner", "");
+
+      // The leader is a few points from the match: award them until it is over (bounded, so a dead pad fails here).
+      let taps = 0;
+      while ((await demo.getAttribute("data-rally-winner")) === "" && taps < 8) {
+        await page.getByTestId("rally-point-a").click();
+        taps++;
+      }
+      await expect(demo).toHaveAttribute("data-rally-winner", "a");
+      expect(taps, "the opening state is a few points from the end").toBeLessThanOrEqual(4);
+      await expect(page.getByTestId("rally-set")).toHaveCount(setsBefore + 1);
+      const me = page.getByTestId("rally-table-me").locator("td");
+      await expect(me.nth(1)).toHaveText("1");
+      await expect(me.nth(2)).toHaveText("1");
+      // Over: another point changes nothing.
+      const final = await page.getByTestId("rally-stream-score").innerText();
+      await page.getByTestId("rally-point-b").click();
+      await expect(page.getByTestId("rally-stream-score")).toHaveText(final);
+    });
+  }
 
   test("cricket: finishing the chase updates the table, and the keys then stop changing the score", async ({ page }) => {
     await visit(page, "/sports/cricket");
@@ -374,9 +414,12 @@ test.describe("product pages: layout", () => {
           ? await page.locator('[data-testid^="format-"][data-testid$="-less"], [data-testid^="format-"][data-testid$="-more"], [data-testid^="format-minutes-"]').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().height)))
           : path === "/product/scheduling"
             ? await page.getByTestId("day-demo").getByRole("button").evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().height)))
-            : sizes;
-        // Scheduling: six board cells, three matches waiting, three actions.
-        expect(controls.length).toBe(path === "/product/format" ? 11 : path === "/product/scheduling" ? 12 : 8);
+            : (RALLY_PAGES as readonly string[]).includes(path)
+              ? await page.locator('[data-testid^="rally-point-"]').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().height)))
+              : sizes;
+        // Scheduling: six board cells, three matches waiting, three actions. A rally pad: one key a side.
+        const expected = path === "/product/format" ? 11 : path === "/product/scheduling" ? 12 : (RALLY_PAGES as readonly string[]).includes(path) ? 2 : 8;
+        expect(controls.length).toBe(expected);
         for (const h of controls) expect(h).toBeGreaterThanOrEqual(44);
       });
     }
@@ -408,6 +451,9 @@ test.describe("product pages: layout", () => {
     for (const [path, sections, scores] of [
       ["/product/streaming", 8, ["chase-score", "chase-stream-score"]],
       ["/sports/cricket", 9, ["chase-score", "chase-stream-score"]],
+      ["/sports/badminton", 7, []],
+      ["/sports/table-tennis", 7, []],
+      ["/sports/volleyball", 7, []],
       ["/product/remote-scoring", 7, ["signal-phone-score", "signal-server-score"]],
       ["/product/format", 6, []],
       ["/product/scheduling", 7, []],
@@ -423,7 +469,7 @@ test.describe("product pages: layout", () => {
   });
 
   test("a sport with no page is a 404, prefixed or not", async ({ request }) => {
-    for (const path of ["/sports/tennis", "/en/sports/tennis", "/fr/sports/notasport"]) {
+    for (const path of ["/sports/notasport", "/en/sports/tabletennis", "/fr/sports/notasport"]) {
       expect((await request.get(path)).status(), path).toBe(404);
     }
     expect((await request.get("/sports/cricket")).status()).toBe(200);
