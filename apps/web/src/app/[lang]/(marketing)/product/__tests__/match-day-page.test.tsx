@@ -57,6 +57,15 @@ describe("/product/match-day", () => {
     expect(html).toContain('data-testid="md-next"');
   });
 
+  it.each(LOCALES.map((l) => [l]))("%s: the questions are also published as FAQ structured data, word for word", async (lang) => {
+    const html = await renderPage(Page, { lang });
+    const blocks = [...html.matchAll(/<script type="application\/ld\+json">(.*?)<\/script>/gs)].map((m) => JSON.parse(m[1]!) as { "@type": string; mainEntity?: { name: string; acceptedAnswer: { text: string } }[] });
+    const faq = blocks.filter((b) => b["@type"] === "FAQPage");
+    expect(faq).toHaveLength(1);
+    const d = DICTS[lang]!;
+    expect(faq[0]!.mainEntity!.map((q) => [q.name, q.acceptedAnswer.text])).toEqual((["1", "2", "3", "4"] as const).map((n) => [d[`product.matchday.faq.${n}.q`], d[`product.matchday.faq.${n}.a`]]));
+  });
+
   it("every picture is a Match Day or camera-phone screen, and an unknown locale is a 404", async () => {
     const html = await renderPage(Page, { lang: "en" });
     const pics = [...html.matchAll(/\/marketing\/product\/([a-z0-9-]+)\.webp/g)].map((m) => m[1]!);

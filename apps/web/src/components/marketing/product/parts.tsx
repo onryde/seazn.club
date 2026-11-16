@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { JsonLd, faqLd } from "@/components/seo/json-ld";
 import { PRODUCT_IMAGES, type ProductImageKey } from "@/lib/marketing/product-images";
 import "./product.css";
 
@@ -305,6 +306,7 @@ export function DemoClub({
 export function Questions({ title, items }: { title: string; items: { q: string; a: string }[] }) {
   return (
     <section className="mkp-faq" data-section="questions">
+      <JsonLd data={faqLd(items)} />
       <div className="mkp-wrap">
         <h2 className="mkp-d">{title}</h2>
         <div>
