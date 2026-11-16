@@ -1649,6 +1649,31 @@ describe("the fake YouTube reaches every fake-relay server, its key generated pe
   });
 });
 
+// Court stream (spec 2026-11-14, capture O13): linking a court is refused 503 `court_streaming_unconfigured` while the server's
+// COURT_MIN_APP_VERSION is unset or not `<semver>-<commit count>`. match-day.spec.ts (the court-stream desk tests) and
+// walkthrough/court-stream.spec.ts link a court on e2e-parallel's :3000 server, so that server must carry it: the first PR run
+// (workflow_dispatch on main's workflow, which lacked it) failed both with the sheet's "isn't set up on this server" alert.
+describe("COURT_MIN_APP_VERSION reaches the server the court-stream specs link on", () => {
+  const yml = readFileSync(join(REPO_ROOT, ".github/workflows/e2e.yml"), "utf8")
+    .split("\n")
+    .map((line) => line.replace(/(^|\s)#.*$/, ""))
+    .join("\n");
+
+  it("e2e-parallel's Start server env sets COURT_MIN_APP_VERSION to a build version the helper's fake phone clears", () => {
+    const jobAt = yml.search(/^ {2}e2e-parallel:\n/m);
+    const nextJobAt = yml.search(/^ {2}e2e-serial:\n/m);
+    expect(jobAt, "e2e-parallel job found").toBeGreaterThanOrEqual(0);
+    expect(nextJobAt, "e2e-serial job found").toBeGreaterThan(jobAt);
+    const job = yml.slice(jobAt, nextJobAt);
+    const server = job.indexOf("- name: Start server");
+    expect(server, "e2e-parallel Start server step").toBeGreaterThan(0);
+    const env = job.slice(server, job.indexOf("        run:", server));
+    const version = /^\s+COURT_MIN_APP_VERSION:\s*"?(\d+\.\d+\.\d+-\d+)"?\s*$/m.exec(env)?.[1];
+    expect(version, "COURT_MIN_APP_VERSION on e2e-parallel's Start server").toBeDefined();
+    expect(version).toBe("1.0.14-1200");
+  });
+});
+
 // Capture QR v2 PR-2 B8 (the B6/B7 reviews' deferred item): the stream-slot pool was restated in six specs, and each sized
 // its wait for a key from the holds IT knew about — stream-relay and directory waited 3 cycles (165 s in CI) while
 // capture-phone's W23 holds 5. It now lives in ONE helper with one hold limit and one wait. Two guards keep it that way:
