@@ -581,6 +581,168 @@ body {
   .mk-reveal.mk-in { animation: none; }
 }
 
+/* ───────── Home: the competition flow (components/marketing/competition-flow.tsx) ─────────
+   Owner-picked 2026-11-16 (Option A with stage labels). One DOM, phone first; the two-column rail arrives at 900px.
+   Everything is lit without script; `[data-live]` (set by the FlowProgress island) is what dims the steps ahead. */
+.mkf {
+  --mkf-ink: #1e1b2e; --mkf-sub: #5d5873; --mkf-edge: #e6dff3; --mkf-soft: #f6f3ff; --mkf-track: #e9e3f6;
+  --mkf-nav: 64px;
+  background: var(--mk-light-warm); color: var(--mkf-ink); font-size: 15px; line-height: 1.45;
+}
+/* Gentle snapping (owner 2026-11-16): the page settles on a step only when the reader stops near one. */
+html:has(.mkf) { scroll-snap-type: y proximity; }
+.mkf-step { scroll-snap-align: start; scroll-margin-top: calc(var(--mkf-nav) + 56px); }
+.mkf-in { padding: 36px 20px 48px; }
+.mkf h2 { font-weight: 700; font-size: 38px; line-height: 1.02; text-wrap: balance; }
+/* Lime as a marker behind the word, not as its colour: lime type on cream is under 2:1. */
+.mkf-hl { background: var(--mk-lime); color: var(--mk-night); padding: 0 0.12em; border-radius: 0.08em; }
+.mkf h3 { font-weight: 600; font-size: 27px; line-height: 1.08; }
+.mkf-lede { color: var(--mkf-sub); margin-top: 12px; max-width: 44ch; font-size: 16px; }
+.mkf-idx { display: none; }
+.mkf-steps { margin-top: 32px; }
+.mkf-step { position: relative; display: grid; grid-template-columns: 34px minmax(0, 1fr); column-gap: 14px; padding-bottom: 32px; }
+.mkf-step::before { content: ""; position: absolute; left: 14px; top: 34px; bottom: 0; width: 6px; border-radius: 3px; background: var(--mk-lime); }
+.mkf-step:last-child { padding-bottom: 0; }
+.mkf-step:last-child::before { display: none; }
+.mkf-peg { width: 34px; height: 34px; border-radius: 50%; background: var(--mk-night); color: var(--mk-lime); font-weight: 700; font-size: 19px; display: grid; place-items: center; position: relative; }
+.mkf-body { min-width: 0; }
+.mkf-stage { display: block; margin-top: 4px; font-size: 13.5px; font-weight: 600; color: #6d28d9; }
+.mkf-text p { color: var(--mkf-sub); margin-top: 6px; max-width: 46ch; }
+.mkf-art { min-width: 0; max-width: 520px; margin-top: 14px; }
+.mkf-cap { font-size: 13px; color: var(--mkf-sub); margin-top: 10px; max-width: 48ch; }
+
+.mkf[data-live] .mkf-step::before { background: linear-gradient(var(--mk-lime) calc(var(--mkf-fill, 0) * 100%), var(--mkf-track) 0); }
+.mkf[data-live] .mkf-peg { background: #fff; color: var(--mkf-sub); box-shadow: inset 0 0 0 2px var(--mkf-track); transition: background 0.25s, color 0.25s, box-shadow 0.25s; }
+.mkf[data-live] .mkf-step[data-on] .mkf-peg, .mkf[data-live] .mkf-step[data-done] .mkf-peg { background: var(--mk-night); color: var(--mk-lime); box-shadow: none; }
+.mkf[data-live] .mkf-step[data-on] .mkf-peg { box-shadow: 0 0 0 5px rgb(163 230 53 / 0.45); }
+/* The steps ahead lose their colour, not their contrast: fading the text would fail AA. */
+.mkf[data-live] .mkf-art { filter: grayscale(0.85); transition: filter 0.3s; }
+.mkf[data-live] .mkf-step[data-on] .mkf-art, .mkf[data-live] .mkf-step[data-done] .mkf-art { filter: none; }
+
+/* Phone: a slim bar pinned under the nav says where you are. Shown only once the island is live. */
+.mkf-prog { display: none; }
+.mkf[data-live] .mkf-prog { position: sticky; top: var(--mkf-nav); z-index: 5; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0 10px; align-items: baseline; padding: 10px 20px 0; background: rgb(255 253 247 / 0.94); backdrop-filter: blur(6px); font-size: 13.5px; }
+.mkf-prog-n { font-weight: 600; color: var(--mkf-sub); font-variant-numeric: tabular-nums; }
+.mkf-prog-t { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mkf-prog-bar { grid-column: 1 / -1; display: block; height: 4px; background: var(--mkf-track); margin: 8px -20px 0; }
+.mkf-prog-bar i { display: block; height: 100%; width: 0; background: var(--mk-lime); }
+
+/* exhibits */
+.mkf-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.mkf-chips li { font-size: 13px; padding: 5px 11px; border-radius: 999px; border: 1px solid var(--mkf-edge); color: var(--mkf-sub); }
+.mkf-chips li.mkf-on { background: var(--mk-purple); border-color: var(--mk-purple); color: #fff; font-weight: 600; }
+.mkf-chips li.mkf-more { border-style: dashed; }
+.mkf-bug { margin-top: 12px; background: var(--mk-night); border-radius: 10px; padding: 6px 12px; color: var(--mk-cream); max-width: 340px; }
+.mkf-bug-r { display: grid; grid-template-columns: 8px minmax(0, 1fr) 30px 30px; gap: 10px; align-items: center; padding: 6px 0; font-size: 14px; }
+.mkf-bug-r + .mkf-bug-r { border-top: 1px solid #2c1f66; }
+.mkf-bug-r b { font-family: var(--mk-font-display, inherit); font-size: 22px; font-weight: 600; text-align: right; color: #a79dd0; font-variant-numeric: tabular-nums; }
+.mkf-bug-r b.mkf-cur { color: var(--mk-cream); }
+.mkf-srv { width: 8px; height: 8px; border-radius: 50%; background: var(--mk-lime); }
+.mkf-srv.mkf-off { background: transparent; }
+.mkf-nm { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.mkf-divs li { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; padding: 10px 0; border-bottom: 1px solid var(--mkf-edge); font-size: 14.5px; }
+.mkf-dn { font-weight: 550; min-width: 0; }
+.mkf-dc { font-size: 12.5px; color: var(--mkf-sub); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mkf-divs li.mkf-add { border-bottom: 0; color: var(--mkf-sub); }
+.mkf-divs li.mkf-add .mkf-dn { font-weight: 400; text-decoration: underline dashed; text-underline-offset: 4px; }
+
+.mkf-seg { display: flex; flex-wrap: wrap; gap: 4px; font-size: 13px; }
+.mkf-seg li { padding: 6px 11px; border-radius: 8px; color: var(--mkf-sub); border: 1px solid var(--mkf-edge); }
+.mkf-seg li.mkf-on { background: var(--mkf-soft); color: var(--mkf-ink); font-weight: 600; border-color: var(--mk-purple); }
+.mkf-draw { display: grid; grid-template-columns: 96px 1fr 1fr 1fr; gap: 14px; align-items: center; margin-top: 14px; max-width: 400px; }
+.mkf-grp { display: grid; gap: 5px; }
+.mkf-grp span { font-size: 11.5px; padding: 5px 8px; border-radius: 6px; background: var(--mkf-soft); border: 1px solid var(--mkf-edge); color: var(--mkf-sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mkf-rnd { display: grid; gap: 6px; align-content: space-around; height: 100%; }
+.mkf-rnd i { display: block; height: 11px; border-radius: 3px; background: var(--mkf-track); position: relative; }
+.mkf-rnd i::before { content: ""; position: absolute; right: 100%; top: 50%; width: 14px; height: 1px; background: var(--mkf-edge); }
+.mkf-rnd i.mkf-fin { background: var(--mk-lime); height: 15px; }
+
+.mkf-sum { font-size: 15px; display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; justify-content: space-between; }
+.mkf-sum b { font-family: var(--mk-font-display, inherit); font-size: 30px; font-weight: 700; line-height: 1; }
+.mkf-amt { font-weight: 600; color: #6d28d9; }
+.mkf-ents { margin-top: 10px; border-top: 1px solid var(--mkf-edge); }
+.mkf-ents li { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--mkf-edge); font-size: 14px; }
+.mkf-en { min-width: 0; font-weight: 550; }
+.mkf-en small { display: block; font-weight: 400; font-size: 12.5px; color: var(--mkf-sub); }
+.mkf-pill { font-size: 12px; font-weight: 600; padding: 3px 9px; border-radius: 999px; white-space: nowrap; flex: none; }
+.mkf-paid { background: #dcfce7; color: #136c34; }
+.mkf-due { background: #fef3c6; color: #7a4100; }
+
+.mkf-grid { display: grid; grid-template-columns: 42px repeat(3, minmax(0, 1fr)); gap: 4px; font-size: 11.5px; }
+.mkf-gh { color: var(--mkf-sub); font-weight: 600; padding: 2px 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mkf-gt { color: var(--mkf-sub); font-variant-numeric: tabular-nums; padding: 7px 0; }
+.mkf-gc { background: var(--mkf-soft); border: 1px solid var(--mkf-edge); border-radius: 6px; padding: 7px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mkf-gc.mkf-clash { border-color: #f59e0b; background: #fef3c6; color: #7a3d00; font-weight: 600; }
+.mkf-gc.mkf-empty { background: transparent; border-style: dashed; color: var(--mkf-sub); }
+.mkf-warn { margin-top: 10px; font-size: 13px; font-weight: 550; color: #a14a05; padding-left: 14px; position: relative; }
+.mkf-warn::before { content: ""; position: absolute; left: 0; top: 0.42em; width: 8px; height: 8px; border-radius: 2px; background: #f59e0b; }
+
+.mkf-live { display: grid; gap: 14px; container: mkf-live / inline-size; }
+.mkf-live > * { min-width: 0; }
+.mkf-pad { background: var(--mk-night); border-radius: 14px; padding: 10px; color: var(--mk-cream); max-width: 300px; }
+.mkf-pad-top { font-size: 12px; color: #b9b0d8; text-align: center; padding-bottom: 8px; }
+.mkf-pad-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.mkf-pb { background: #241659; border-radius: 10px; padding: 10px 8px; text-align: center; display: grid; gap: 2px; min-width: 0; }
+.mkf-pb small { font-size: 11px; color: #b9b0d8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mkf-pb b { font-family: var(--mk-font-display, inherit); font-size: 46px; line-height: 1; font-weight: 700; }
+.mkf-pb span { font-size: 12px; font-weight: 700; background: var(--mk-lime); color: var(--mk-night); border-radius: 6px; padding: 5px 0; margin-top: 4px; }
+.mkf-pub-h { font-size: 12.5px; font-weight: 600; display: flex; align-items: center; gap: 7px; margin-bottom: 4px; }
+.mkf-livedot { width: 8px; height: 8px; border-radius: 50%; background: var(--mk-live); flex: none; }
+.mkf-pub-r { display: grid; grid-template-columns: minmax(0, 1fr) 26px 26px; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--mkf-edge); font-size: 14px; }
+.mkf-pub-r b { text-align: right; font-variant-numeric: tabular-nums; }
+.mkf-vid { position: relative; aspect-ratio: 16 / 9; border-radius: 12px; overflow: hidden; background: linear-gradient(160deg, #1f6b52, #124a3a); max-width: 420px; }
+.mkf-court { position: absolute; inset: 16% 12%; border: 2px solid rgb(245 240 232 / 0.55); transform: perspective(420px) rotateX(38deg); transform-origin: 50% 100%; }
+.mkf-court::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 2px; background: rgb(245 240 232 / 0.75); }
+.mkf-court::after { content: ""; position: absolute; top: 0; bottom: 0; left: 50%; width: 2px; background: rgb(245 240 232 / 0.4); }
+.mkf-v-live { position: absolute; top: 10px; left: 10px; background: rgb(21 11 54 / 0.85); color: var(--mk-cream); font-size: 11.5px; font-weight: 600; padding: 3px 8px; border-radius: 6px; display: flex; gap: 6px; align-items: center; }
+.mkf-v-score { position: absolute; left: 10px; bottom: 10px; max-width: calc(100% - 20px); background: rgb(21 11 54 / 0.9); color: var(--mk-cream); border-radius: 8px; padding: 5px 10px; font-size: 12px; display: grid; gap: 2px; border-left: 4px solid var(--mk-lime); }
+.mkf-v-score span { display: flex; justify-content: space-between; gap: 16px; }
+.mkf-v-score b { font-variant-numeric: tabular-nums; }
+.mkf-offer { margin-top: 14px; max-width: 420px; background: var(--mk-lime); color: var(--mk-night); border-radius: 12px; padding: 14px 16px; display: grid; gap: 4px; }
+.mkf-offer strong { font-size: 24px; font-weight: 700; line-height: 1.08; text-wrap: balance; }
+.mkf-offer span { font-size: 13.5px; }
+@container mkf-live (min-width: 480px) {
+  .mkf-pad, .mkf-pub { grid-row: 1; }
+  .mkf-live { grid-template-columns: minmax(0, 260px) minmax(0, 1fr); gap: 20px 28px; align-items: center; }
+  .mkf-strm { grid-column: 1 / -1; }
+}
+
+.mkf-champ { display: flex; gap: 14px; align-items: center; background: var(--mk-night); color: var(--mk-cream); border-radius: 12px; padding: 14px 16px; border-left: 6px solid var(--mk-lime); }
+.mkf-cup { width: 30px; height: 34px; flex: none; background: var(--mk-lime); clip-path: polygon(8% 0, 92% 0, 86% 46%, 62% 62%, 62% 82%, 82% 82%, 82% 100%, 18% 100%, 18% 82%, 38% 82%, 38% 62%, 14% 46%); }
+.mkf-champ div { min-width: 0; }
+.mkf-champ small { display: block; font-size: 12px; color: #b9b0d8; }
+.mkf-champ b { display: block; font-family: var(--mk-font-display, inherit); font-size: 26px; font-weight: 700; line-height: 1.1; }
+.mkf-champ span { font-size: 13px; color: #d9d2f3; }
+.mkf-tbl { margin-top: 12px; font-size: 13.5px; width: 100%; border-collapse: collapse; }
+.mkf-tbl th { font-weight: 600; color: var(--mkf-sub); font-size: 12px; text-align: right; padding: 5px 6px; border-bottom: 1px solid var(--mkf-edge); }
+.mkf-tbl th:first-child, .mkf-tbl td:first-child { text-align: left; padding-left: 8px; }
+.mkf-tbl td { padding: 7px 6px; text-align: right; border-bottom: 1px solid var(--mkf-edge); font-variant-numeric: tabular-nums; }
+.mkf-tbl tr.mkf-q td:first-child { box-shadow: inset 3px 0 0 var(--mk-lime); }
+
+@media (min-width: 900px) {
+  .mkf h2 { font-size: 56px; }
+  .mkf h3 { font-size: 34px; }
+  .mkf-in { display: grid; grid-template-columns: 290px minmax(0, 1fr); gap: 64px; padding: 80px 32px 88px; max-width: 1216px; margin: 0 auto; }
+  .mkf-rail { position: sticky; top: calc(var(--mkf-nav) + 28px); align-self: start; }
+  .mkf-idx { display: grid; gap: 2px; margin-top: 28px; border-top: 1px solid var(--mkf-edge); padding-top: 16px; font-size: 14.5px; color: var(--mkf-sub); }
+  .mkf-idx a { display: flex; gap: 12px; padding: 5px 0 5px 12px; margin-left: -14px; border-left: 2px solid transparent; }
+  .mkf-idx a:focus-visible { outline: 2px solid var(--mk-purple); outline-offset: 2px; }
+  .mkf-idx span { font-family: var(--mk-font-display, inherit); font-weight: 700; color: var(--mkf-ink); width: 14px; }
+  .mkf-idx li[data-on] a { color: var(--mkf-ink); font-weight: 600; border-left-color: var(--mk-lime); }
+  .mkf-steps { margin-top: 6px; }
+  .mkf-step { grid-template-columns: 44px minmax(0, 1fr); column-gap: 28px; padding-bottom: 56px; scroll-margin-top: calc(var(--mkf-nav) + 28px); }
+  .mkf-step::before { left: 19px; top: 44px; }
+  .mkf-peg { width: 44px; height: 44px; font-size: 24px; }
+  .mkf-body { display: grid; grid-template-columns: minmax(0, 270px) minmax(0, 1fr); gap: 40px; align-items: start; }
+  .mkf-art { margin-top: 4px; }
+  .mkf-grid { font-size: 12.5px; grid-template-columns: 48px repeat(3, minmax(0, 1fr)); }
+  .mkf[data-live] .mkf-prog { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mkf[data-live] .mkf-peg, .mkf[data-live] .mkf-art { transition: none; }
+}
+
 /* Ticket-stub chrome (floodlit finale, design/v3/12 §4.8) */
 .mk-stub::before,
 .mk-stub::after {
@@ -748,97 +910,6 @@ body {
    With no script there is no observer and no attribute: the art plays as
    before. Same specificity as the rules above, so it must stay after them. */
 [data-offscreen] .mk-vignette * { animation-play-state: paused; }
-
-/* LIVE ticker marquee — duplicated row scrolls 50%; pause on hover/focus. */
-.mk-ticker { animation: mk-ticker-scroll 28s linear infinite; }
-.mk-ticker:hover,
-.mk-ticker:focus-within { animation-play-state: paused; }
-@keyframes mk-ticker-scroll { to { transform: translateX(-50%); } }
-@media (prefers-reduced-motion: reduce) {
-  .mk-ticker { animation: none; }
-}
-
-/* Draw mind-map: nodes pop, edges draw themselves (design/v3/12 §4.4). */
-.mk-map-node { opacity: 0; transform-box: fill-box; transform-origin: center; }
-.mk-in .mk-map-node { animation: mk-map-pop 0.45s cubic-bezier(0.2, 1.4, 0.4, 1) both; }
-@keyframes mk-map-pop {
-  0% { opacity: 0; transform: scale(0.7); }
-  100% { opacity: 1; transform: scale(1); }
-}
-.mk-map-edge { stroke-dasharray: 1; stroke-dashoffset: 1; }
-.mk-in .mk-map-edge { animation: mk-map-draw 0.6s 0.15s ease-out both; }
-@keyframes mk-map-draw { to { stroke-dashoffset: 0; } }
-@media (prefers-reduced-motion: reduce) {
-  .mk-map-node { opacity: 1; }
-  .mk-map-edge { stroke-dashoffset: 0; }
-  .mk-in .mk-map-node, .mk-in .mk-map-edge { animation: none; }
-}
-
-/* Motif dividers: play once after Reveal adds .mk-in, then REST visible.
-   Hidden until then so no half-state flashes; reduced motion = end state. */
-.mk-shuttle, .mk-knight { opacity: 0; }
-/* Badminton rally: three passes, cork leading each way (design/v3/12 §4.6,
-   revised 12 Jul). Outer group travels; inner glyph flips per direction. */
-.mk-in .mk-shuttle { animation: mk-shuttle-rally 3.6s 0.1s cubic-bezier(0.4, 0, 0.4, 1) both; }
-@keyframes mk-shuttle-rally {
-  0% { opacity: 1; transform: translate(40px, 34px); }
-  15% { opacity: 1; transform: translate(300px, 9px); }
-  33% { opacity: 1; transform: translate(640px, 30px); }
-  48% { opacity: 1; transform: translate(340px, 10px); }
-  66% { opacity: 1; transform: translate(80px, 31px); }
-  81% { opacity: 1; transform: translate(420px, 9px); }
-  100% { opacity: 1; transform: translate(700px, 34px); }
-}
-.mk-shuttle-glyph { transform-box: fill-box; transform-origin: center; }
-.mk-in .mk-shuttle-glyph { animation: mk-shuttle-flip 3.6s 0.1s step-end both; }
-@keyframes mk-shuttle-flip {
-  0% { transform: scaleX(-1); }
-  33% { transform: scaleX(1); }
-  66% { transform: scaleX(-1); }
-  100% { transform: scaleX(-1); }
-}
-.mk-in .mk-knight { animation: mk-knight-tour 2.4s 0.1s cubic-bezier(0.45, 0, 0.3, 1) both; }
-/* Three chess-legal jumps: each traces an L — up 1, across 2, down 1. */
-@keyframes mk-knight-tour {
-  0% { opacity: 1; transform: translate(250px, 12px); }
-  6% { opacity: 1; transform: translate(250px, -10px); }
-  16% { opacity: 1; transform: translate(334px, -10px); }
-  22% { opacity: 1; transform: translate(334px, 12px); }
-  34% { opacity: 1; transform: translate(334px, 12px); }
-  40% { opacity: 1; transform: translate(334px, -10px); }
-  50% { opacity: 1; transform: translate(418px, -10px); }
-  56% { opacity: 1; transform: translate(418px, 12px); }
-  68% { opacity: 1; transform: translate(418px, 12px); }
-  74% { opacity: 1; transform: translate(418px, -10px); }
-  84% { opacity: 1; transform: translate(502px, -10px); }
-  90% { opacity: 1; transform: translate(502px, 12px); }
-  100% { opacity: 1; transform: translate(502px, 12px); }
-}
-.mk-in .mk-knight-sq-1 { animation: mk-square-in 0.3s 0.6s ease both; }
-.mk-in .mk-knight-sq-2 { animation: mk-square-in 0.3s 1.45s ease both; }
-.mk-in .mk-knight-sq-3 { animation: mk-square-in 0.3s 2.25s ease both; }
-@keyframes mk-square-in { to { opacity: 0.45; } }
-@media (prefers-reduced-motion: reduce) {
-  .mk-shuttle { opacity: 1; transform: translate(700px, 34px); }
-  .mk-shuttle-glyph { transform: scaleX(-1); }
-  .mk-in .mk-shuttle-glyph { animation: none; }
-  .mk-knight { opacity: 1; transform: translate(502px, 12px); }
-  .mk-knight-sq { opacity: 0.45; }
-  .mk-in .mk-shuttle, .mk-in .mk-knight, .mk-in .mk-knight-sq-1, .mk-in .mk-knight-sq-2, .mk-in .mk-knight-sq-3 { animation: none; }
-}
-/* Matchday tools micro-animations */
-.mk-in .mk-lane-block { animation: mk-lane-in 0.5s cubic-bezier(0.22, 1.2, 0.36, 1) both; }
-@keyframes mk-lane-in { from { opacity: 0; transform: translateX(-24px); } }
-.mk-odometer { height: 1em; }
-.mk-in .mk-odometer-reel { animation: mk-odometer-roll 0.9s 0.3s cubic-bezier(0.3, 0, 0.2, 1) both; }
-@keyframes mk-odometer-roll { to { transform: translateY(-2em); } }
-.mk-in .mk-swap-a { animation: mk-swap-down 0.7s 0.4s ease both; }
-.mk-in .mk-swap-b { animation: mk-swap-up 0.7s 0.4s ease both; }
-@keyframes mk-swap-down { to { transform: translateY(1.1em); } }
-@keyframes mk-swap-up { to { transform: translateY(-1.1em); } }
-@media (prefers-reduced-motion: reduce) {
-  .mk-in .mk-lane-block, .mk-in .mk-odometer-reel, .mk-in .mk-swap-a, .mk-in .mk-swap-b { animation: none; }
-}
 
 /* Nav variants — one component, class-flipped by NavScrollFlip. */
 .mk-nav { transition: background-color 0.25s ease, border-color 0.25s ease; }

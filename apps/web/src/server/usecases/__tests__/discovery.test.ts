@@ -318,11 +318,4 @@ describe.skipIf(!HAS_DB)("public discovery (doc 15, PROMPT-19)", () => {
     const upcoming = await discoveryList({ status: "live" });
     expect(upcoming.items.some((i) => i.id === competition.id)).toBe(false);
   });
-
-  it("empty state: home sections collapse to nothing", async () => {
-    const { LiveNowStrip, ThisWeekSection } = await import("@/components/discovery-cards");
-    // Both collapse before touching copy, so an empty dict/locale is fine here.
-    expect(LiveNowStrip({ fixtures: [], dict: {} })).toBeNull();
-    expect(ThisWeekSection({ entries: [], dict: {}, lang: "en" })).toBeNull();
-  });
 });

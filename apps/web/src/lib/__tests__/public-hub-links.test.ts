@@ -48,7 +48,6 @@ const NOT_THE_HUB: { file: string; text: string }[] = [
  *  marketing paths. Each pinned to its file AND how many times it appears there, so a second `"/live"` in the same file
  *  (a hand-built hub join beside the wall link) still reds; an entry no longer found is stale and reds too. */
 const MARKETING_WALL: { file: string; count: number }[] = [
-  { file: "src/components/marketing/live-ticker.tsx", count: 1 },
   { file: "src/proxy.ts", count: 1 },
   // The marketing /live wall page's own path under /{lang}: its metadata path and its sitemap entry.
   { file: "src/app/sitemap.ts", count: 1 },
