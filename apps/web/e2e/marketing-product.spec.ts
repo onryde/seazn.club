@@ -304,12 +304,22 @@ test.describe("scheduling: the recorded runs", () => {
   test("three recordings are offered, and picking one plays it on the product's own screen with its price", async ({ page }) => {
     await visit(page, "/product/scheduling");
     const runs = page.locator('[data-section="runs"]');
+    // Not loaded at the top of the page; scrolling to it brings the replay in.
+    await expect(runs.locator('[data-runs="waiting"]')).toBeVisible();
+    await expect(runs.locator("[data-ai-template]")).toHaveCount(0);
+    await runs.scrollIntoViewIfNeeded();
     await expect(runs.locator("[data-ai-template]")).toHaveCount(3);
     await runs.locator('[data-ai-template="club-night"]').click();
     await expect(runs.locator('[data-ai-demo="ready"]')).toHaveAttribute("data-ai-started", "true");
     await expect(runs.locator('[data-ai-screen="true"]')).toBeVisible();
     await expect(runs.locator('[data-ai-price="run"]')).toBeVisible({ timeout: 30_000 });
     expect(Number(await runs.locator('[data-ai-price="run"]').getAttribute("data-credits"))).toBeGreaterThan(0);
+    // The product's own components render here with only a slice of the dictionary shipped: no raw key may show,
+    // and a court is named, never "unknown".
+    const text = await runs.innerText();
+    expect(text).not.toMatch(/\b(board|courtPicker|scheduling|sched|constraints)\.[a-zA-Z][a-zA-Z0-9.]+/);
+    expect(text).not.toContain("Unknown court");
+    expect(text.length).toBeGreaterThan(400);
   });
 });
 

@@ -1,10 +1,10 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { DictProvider } from "@/components/i18n/dict-provider";
-import { AiArchitectDemo } from "@/components/marketing/ai-architect-demo";
 import { MarketingShell } from "@/components/marketing/marketing-shell";
 import { DayBoardDemo } from "@/components/marketing/product/day-board-demo";
 import { dayBoardLabels } from "@/components/marketing/product/day-board-labels";
+import { RecordedRuns } from "@/components/marketing/product/recorded-runs";
 import { Accent, Closing, DemoBand, PageHero, ProductPage, Questions, Road, Ticket } from "@/components/marketing/product/parts";
 import { getDictionary, t } from "@/lib/i18n";
 import { schedulingRungWeights } from "@/lib/ai-rung";
@@ -36,7 +36,11 @@ export default async function SchedulingProductPage({ params }: { params: Promis
   // The recorded-runs section replays real scheduler runs through the PRODUCT's own trace and diff components, whose
   // copy lives in the `ui` catalogue: only the two prefixes they read are shipped. Rung weights are resolved here
   // because their overrides exist only on the server (#385).
-  const runsDict = { ...d, ...pickDictPrefixes(await getDictionary(lang, "ui"), ["board.ai.", "board.conflict."]) };
+  // `courtPicker.` is the diff panel's fallback court label; `sched.board.court` numbers the recordings' courts.
+  const runsDict = {
+    ...pickDictPrefixes(d, ["scheduling.aidemo.", "sched.board.court"]),
+    ...pickDictPrefixes(await getDictionary(lang, "ui"), ["board.ai.", "board.conflict.", "courtPicker."]),
+  };
   const s = (key: string) => t(d, `product.scheduling.${key}`);
   const shared = (key: string) => t(d, `product.shared.${key}`);
 
@@ -63,7 +67,7 @@ export default async function SchedulingProductPage({ params }: { params: Promis
 
         <div data-section="runs">
           <DictProvider dict={runsDict} locale={lang}>
-            <AiArchitectDemo locale={lang} weights={schedulingRungWeights()} />
+            <RecordedRuns locale={lang} weights={schedulingRungWeights()} title={t(d, "scheduling.aidemo.title")} subtitle={t(d, "scheduling.aidemo.subtitle")} />
           </DictProvider>
         </div>
 

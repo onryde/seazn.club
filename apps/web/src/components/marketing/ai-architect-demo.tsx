@@ -605,6 +605,10 @@ export function AiArchitectDemo({ locale, weights }: { locale: Locale; weights: 
                   <AiDiffPanel
                     plan={plan}
                     fixtures={fixture.board.fixtures}
+                    // The recordings carry court ids but no court names (captured before `courtNames` existed), and
+                    // the panel degrades an unnamed court to "Unknown court" on every row. Number them in the
+                    // board's own court order instead: a label for an id, not an invented fact about the run.
+                    courtNames={fixture.courtNames ?? Object.fromEntries(fixture.board.courts.map((id, i) => [id, t("sched.board.court", { n: i + 1 })]))}
                     excluded={excluded}
                     onToggleExclude={(id) =>
                       setExcluded((prev) =>
