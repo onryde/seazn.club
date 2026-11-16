@@ -49,10 +49,16 @@
 .mkp-last{margin-top:10px;background:#fff;border:1px solid #e4e0ee;border-radius:999px;padding:9px 14px;font-size:13px;display:flex;justify-content:space-between;gap:10px}
 .mkp-last button{color:var(--mk-purple);font-weight:600}
 /* the sponsor deal demo: choices on the pad, a deal record, a public board */
-.mkp-dealpad .mkp-segs-l{margin-top:0;margin-bottom:10px}.mkp-dealpad .mkp-segs-l span{flex-basis:100%;color:#5b5670;font-weight:600}
-.mkp-dealpad .mkp-seg{background:#fff;border-color:#d9d5e6;color:#1e1b2e;min-height:44px}
-.mkp-dealpad .mkp-seg[aria-pressed=true]{background:var(--mk-night);border-color:var(--mk-night);color:var(--mk-cream)}
-.mkp-dealkeys{min-height:64px}.mkp-dealkeys .mkp-key:only-child{grid-column:1/-1}
+.mkp-dealstate{font-family:var(--mk-font-display, var(--font-geist-sans));font-size:28px;line-height:1.05;text-transform:uppercase;color:var(--mk-lime);text-align:center;padding:10px 8px 12px;border-top:1px solid #2c1f66}
+.mkp-dealpad .mkp-bug-b{text-align:center}
+.mkp-choice{margin-top:12px}.mkp-choice>span{display:block;font-size:12px;font-weight:600;color:#5d5873;margin:0 0 5px 2px}
+.mkp-track{display:grid;background:#e9e4f6;border-radius:12px;padding:3px;gap:3px}
+.mkp-track button{min-height:44px;border-radius:9px;font-size:12.5px;line-height:1.15;font-weight:500;color:#3d3850;padding:4px 3px}
+.mkp-track button[aria-pressed=true]{background:#fff;color:var(--mk-night);font-weight:700;box-shadow:0 1px 2px rgb(21 11 54/.18)}
+.mkp-dealkeys{display:grid;gap:8px;margin-top:14px;min-height:50px}.mkp-dealkeys .mkp-key{font-size:16px}
+.mkp-dealfoot{display:flex;justify-content:space-between;gap:10px;margin-top:6px}
+.mkp-dealfoot button{min-height:44px;padding:0 6px;font-size:13.5px;font-weight:600;color:var(--mk-purple)}
+.mkp-dealfoot button[data-testid=sponsor-step-end]{color:#b42318}
 .mkp-mc-r b.mkp-money{font-size:15px;font-family:var(--font-geist-sans);text-transform:none;letter-spacing:0}
 .mkp-dealsteps{margin-top:12px;padding-left:20px;list-style:decimal;font-size:13.5px;color:#d9d2f3;display:grid;gap:4px}
 .mkp-board{display:grid;gap:10px;align-content:start;min-height:150px;padding:14px}

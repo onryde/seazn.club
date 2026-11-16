@@ -42,6 +42,12 @@ export function SponsorDemo({ labels: l, table, tiers }: { labels: SponsorDemoLa
     restart(method, r);
   };
 
+  const take = (step: DemoStep) => {
+    const to = table.flows[`${method}|${rule}`]!.edges[node]?.[step];
+    if (!to) return;
+    setNode(to);
+    setLog([...log, step]);
+  };
   const [status, money] = node.split("|") as [string, string];
   const offered = flow.edges[node] ?? {};
   const live = status === "live";
@@ -56,50 +62,46 @@ export function SponsorDemo({ labels: l, table, tiers }: { labels: SponsorDemoLa
           {l["setup.label"]}
         </small>
         <div className="mkp-pad mkp-dealpad">
-          <div className="mkp-segs mkp-segs-l" role="group" aria-label={l["setup.tier"]}>
-            <span>{l["setup.tier"]}</span>
-            {tiers.map((x) => (
-              <button key={x.key} type="button" className="mkp-seg" aria-pressed={tier === x.key} data-testid={`sponsor-tier-${x.key}`} onClick={() => setTier(x.key)}>
-                {lab(l, `tier.${x.key}`)}
-              </button>
-            ))}
+          <div className="mkp-bug">
+            <div className="mkp-bug-t">{fill(l["deal.heading"], { sponsor: SPONSOR, tier: lab(l, `tier.${tier}`) })}</div>
+            <div className="mkp-dealstate" data-testid="sponsor-status" aria-live="polite">
+              {lab(l, `status.${status}`)}
+            </div>
+            <div className="mkp-bug-b">{lab(l, `money.${money}`)}</div>
           </div>
-          <div className="mkp-segs mkp-segs-l" role="group" aria-label={l["setup.method"]}>
-            <span>{l["setup.method"]}</span>
-            {table.methods.map((m) => (
-              <button key={m} type="button" className="mkp-seg" aria-pressed={method === m} data-testid={`sponsor-method-${m}`} onClick={() => pickMethod(m)}>
-                {lab(l, `method.${m}`)}
-              </button>
-            ))}
-          </div>
-          <div className="mkp-segs mkp-segs-l" role="group" aria-label={l["setup.rule"]}>
-            <span>{l["setup.rule"]}</span>
-            {table.rules[method].map((r) => (
-              <button key={r} type="button" className="mkp-seg" aria-pressed={rule === r} data-testid={`sponsor-rule-${r}`} onClick={() => pickRule(r)}>
-                {lab(l, `rule.${r}`)}
-              </button>
-            ))}
-          </div>
-          <div className="mkp-keys mkp-keys2 mkp-dealkeys">
-            {STEPS.filter((s) => offered[s]).map((s) => (
-              <button
-                key={s}
-                type="button"
-                className={s === "end" ? "mkp-key" : "mkp-key mkp-p"}
-                data-testid={`sponsor-step-${s}`}
-                onClick={() => {
-                  setNode(offered[s]!);
-                  setLog([...log, s]);
-                }}
-              >
+          {(
+            [
+              ["tier", l["setup.tier"], tiers.map((x) => x.key), tier, (k: string) => setTier(k)],
+              ["method", l["setup.method"], table.methods, method, (k: string) => pickMethod(k as typeof method)],
+              ["rule", l["setup.rule"], table.rules[method], rule, (k: string) => pickRule(k as typeof rule)],
+            ] as const
+          ).map(([kind, label, keys, picked, pick]) => (
+            <div key={kind} className="mkp-choice" role="group" aria-label={label}>
+              <span>{label}</span>
+              <div className="mkp-track" style={{ gridTemplateColumns: `repeat(${keys.length}, minmax(0, 1fr))` }}>
+                {keys.map((k) => (
+                  <button key={k} type="button" aria-pressed={picked === k} data-testid={`sponsor-${kind}-${k}`} onClick={() => pick(k)}>
+                    {lab(l, `${kind}.${k}`)}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+          <div className="mkp-dealkeys">
+            {STEPS.filter((s) => s !== "end" && offered[s]).map((s) => (
+              <button key={s} type="button" className="mkp-key mkp-p" data-testid={`sponsor-step-${s}`} onClick={() => take(s)}>
                 {stepLabel(s)}
               </button>
             ))}
           </div>
-          <div className="mkp-last">
-            <span data-testid="sponsor-status" aria-live="polite">
-              {lab(l, `status.${status}`)}
-            </span>
+          <div className="mkp-dealfoot">
+            {offered.end ? (
+              <button type="button" data-testid="sponsor-step-end" onClick={() => take("end")}>
+                {stepLabel("end")}
+              </button>
+            ) : (
+              <span />
+            )}
             <button type="button" data-testid="sponsor-reset" onClick={() => restart()}>
               {l["setup.reset"]}
             </button>
