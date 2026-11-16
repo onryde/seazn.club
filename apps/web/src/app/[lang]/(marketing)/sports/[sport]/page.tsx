@@ -29,7 +29,7 @@ export async function generateMetadata({ params }: { params: Promise<{ lang: str
  * A sport's page: the sport-page shape (docs/superpowers/specs/2026-11-16-product-pages-design.md §4). Cricket is the
  * first and, for now, only one, so the demo is the cricket chase; a second sport brings its own demo with it.
  *
- * The H1 is the short line; the search phrase ("Cricket tournament software") leads the lede and is the <title>.
+ * The H1 is the short line; the search words (cricket tournament, scoring, tables) sit in the lede and the <title>.
  * Offline scoring is claimed for the phone app only: it was proven there, and the web pad makes no such promise.
  */
 export default async function SportPage({ params }: { params: Promise<{ lang: string; sport: string }> }) {
