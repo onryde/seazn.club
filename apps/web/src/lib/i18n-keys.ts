@@ -9636,6 +9636,7 @@ export type DictionaryKey =
   | "stream.code.showAgain"
   | "stream.copied"
   | "stream.copy"
+  | "stream.courtStreamed"
   | "stream.credits.close"
   | "stream.credits.error.owner"
   | "stream.credits.error.unknown"

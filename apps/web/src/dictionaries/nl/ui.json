@@ -7269,6 +7269,7 @@
   "stream.code.scan": "Scan met de Seazn Capture-app",
   "stream.code.paired": "Gekoppeld",
   "stream.code.showAgain": "Toon de code opnieuw",
+  "stream.courtStreamed": "Gestreamd door de telefoon van {court}",
   "stream.code.reissue": "Intrekken en opnieuw uitgeven",
   "stream.code.reissue.confirm.title": "Nieuwe code maken?",
   "stream.code.reissue.confirm.body": "De huidige code werkt dan niet meer. Elke telefoon die hem gebruikt, moet de nieuwe scannen.",

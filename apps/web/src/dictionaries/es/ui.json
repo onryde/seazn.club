@@ -7269,6 +7269,7 @@
   "stream.code.scan": "Escanea con la app Seazn Capture",
   "stream.code.paired": "Emparejado",
   "stream.code.showAgain": "Mostrar el código otra vez",
+  "stream.courtStreamed": "Lo emite el teléfono de {court}",
   "stream.code.reissue": "Revocar y volver a emitir",
   "stream.code.reissue.confirm.title": "¿Crear un código nuevo?",
   "stream.code.reissue.confirm.body": "El código actual deja de funcionar. Cualquier teléfono que lo use tendrá que escanear el nuevo.",

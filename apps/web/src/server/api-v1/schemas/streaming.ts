@@ -383,6 +383,10 @@ export const StreamPhone = z
     /** B8 review I-2: the fixture's OPEN session (any starter — the organiser's Go live or the phone's own start), null
      *  with none. The panel reads `current` when it names one the panel does not show. An id, nothing else. */
     session: z.object({ id: z.string() }).strict().nullable(),
+    /** Court stream (spec 2026-11-14 §5.2): the court whose phone streams this match — set exactly when the match's Stream switch
+     *  is on, its court has a live link now and the match has no code of its own; null otherwise. The panel names the court
+     *  instead of showing a code. The court's name, nothing else: never a link id, a code or a tok. */
+    court: z.object({ name: z.string() }).strict().nullable(),
   })
   .strict();
 export type StreamPhone = z.infer<typeof StreamPhone>;

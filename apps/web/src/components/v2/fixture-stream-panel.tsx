@@ -1025,6 +1025,9 @@ export function PhoneTab({
 
   const ready = readyStateOf(phone, shown);
   const legacy = phone?.legacy ?? false;
+  // Court stream (spec 2026-11-14 §5.2): a match its court's phone streams has no code of its own to show — the read model names
+  // the court instead, and the panel neither asks for a code nor mints one (the server refuses the mint too: court_streamed).
+  const court = phone?.court ?? null;
 
   // The stream code (§6.1): asked for LAZILY — when Ready has no phone (the card shows it), or when the organiser opens
   // "Show the code again". Never for a legacy session or a match that is over (ensure answers 422 there). The QR is
@@ -1047,10 +1050,11 @@ export function PhoneTab({
     setCode(got === null ? { status: "error" } : { status: "ok", qr: got.qr, issuedAt: got.issuedAt });
   }, []);
   const ensureCode = useCallback(async () => {
+    if (court !== null) return;
     setCode({ status: "loading" });
     landCode(await askCode());
-  }, [askCode, landCode]);
-  const wantCode = phoneLoaded && !legacy && ready !== "code_ended" && (ready === "no_phone" ? state === "idle" : codeOpen);
+  }, [askCode, landCode, court]);
+  const wantCode = phoneLoaded && court === null && !legacy && ready !== "code_ended" && (ready === "no_phone" ? state === "idle" : codeOpen);
   // The read model names the code the server holds NOW. One the card does not show — reissued from another tab, or the
   // shown one ended (expired) on a match no longer finished (C5) — is asked for again, ONCE per such answer, so a stale
   // read can never spin the ensure.
@@ -1865,6 +1869,8 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
   // before stream codes) is drawn as the panel was: no phone strip, no code, the §3.2 chain.
   const ready = readyStateOf(p.phone, p.view);
   const legacy = p.phone?.legacy ?? false;
+  // Court stream: the court whose phone streams this match, when the read model names one. Its line stands where the code does.
+  const court = p.phone?.court ?? null;
   // R2006 (Option C): what Go live — and the automatic start — will stream: the score unless the organiser chose Camera
   // only, or this deployment cannot run it. The server's own rule (`effectiveStreamMode`), never a second copy.
   const scoreMode = effectiveStreamMode(p.score.stored, p.score.available);
@@ -2074,6 +2080,26 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
       {p.codeOpen && <div className="px-3 pb-3">{codeInner}</div>}
     </details>
   );
+
+  // Court stream (spec 2026-11-14 §5.2; plan Task 13): where the code card and its fold would be, ONE line - whose phone streams the
+  // match. The Paired fold's own row (white card, purple ring, the Phone node's dot from `phoneDot`, 44 px, wrapping rather than cutting
+  // a court's name), minus the code: nothing to scan or show here - the court's code is the desk's, on Match Day. No new tokens.
+  const courtLine = court ? (
+    <p
+      data-testid="stream-court-line"
+      className="flex min-h-11 min-w-0 items-center gap-2 rounded-lg bg-white px-3 py-1.5 text-sm ring-1 ring-purple-100"
+    >
+      <span
+        aria-hidden
+        data-tone={dot}
+        className={`h-2 w-2 shrink-0 rounded-full ${
+          dot === "lime" ? "bg-[var(--mk-lime)] ring-1 ring-lime-600" : dot === "amber" ? "bg-amber-400" : "bg-slate-300"
+        }`}
+      />
+      <span className="min-w-0 break-words font-medium text-slate-800">{msg("stream.courtStreamed", { court: court.name })}</span>
+    </p>
+  ) : null;
+  const codeSlot = courtLine ?? codeDisclosure;
 
   // Owner 2026-10-30: the match's video on YouTube — one more card where the Paired card is (Ready's right column, under it; after it
   // in the waiting and live stacks; inside the ended and failed cards). Laid out as the Paired card's own row: what it is on the left,
@@ -2414,18 +2440,20 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
                 </p>
               </div>
             )}
-            {autoSwitch}
+            {/* A court match starts and stops by the court's Stream switch, which the desk owns: this switch writes a flag nothing
+                reads for it, so it is not drawn. */}
+            {!court && autoSwitch}
           </div>
           <div
             className={`min-w-0 space-y-3 md:col-start-2 md:row-start-1 ${scoreBlock ? "" : "md:row-span-2"} ${ready === "no_phone" ? "" : "md:mt-6"}`}
           >
-            {ready === "no_phone" ? (
+            {ready === "no_phone" && !court ? (
               <div data-testid="stream-code-card" className="min-w-0 rounded-lg bg-white p-3 ring-1 ring-purple-100">
                 <p className="text-sm font-semibold text-slate-900">{msg("stream.code.scan")}</p>
                 {codeInner}
               </div>
             ) : (
-              codeDisclosure
+              codeSlot
             )}
             {/* Owner 2026-10-30: under the Paired (or code) card — the next child, so on a phone it stacks right after it. */}
             {youtubeCard}
@@ -2500,7 +2528,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
           >
             {msg("stream.phone.cancel")}
           </button>
-          {!legacy && codeDisclosure}
+          {!legacy && codeSlot}
           {youtubeCard}
         </div>
       )}
@@ -2577,7 +2605,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
               )}
             </div>
           </details>
-          {!legacy && state === "live" && codeDisclosure}
+          {!legacy && state === "live" && codeSlot}
           {youtubeCard}
           {youtubeStatusEl}
         </div>
