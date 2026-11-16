@@ -173,13 +173,18 @@ test.describe("/[lang]/product/scheduling — the recorded AI demo", () => {
   });
 
   test("holds the replay until the block is scrolled into view", async ({ page }) => {
-    await openRuns(page);
+    // Not openRuns: that scrolls the block into view, which is the very thing this test withholds. The replay's code
+    // loads once the block is NEAR the viewport, so stop a few hundred pixels short: loaded, but still below the fold.
+    await page.goto("/en/product/scheduling");
+    await page.evaluate(() => {
+      const runs = document.querySelector('[data-section="runs"]')!;
+      window.scrollTo(0, runs.getBoundingClientRect().top + window.scrollY - window.innerHeight - 300);
+    });
+    await expect(section(page)).toBeAttached();
 
     // The premise, measured rather than assumed: if the screen were already on
     // display at load, every assertion below would pass for the wrong reason.
-    // Measured on the SCREEN, not the section — the section's own top edge is
-    // inside the first viewport at this size (y≈548 of 720), which is why the
-    // observer is anchored on the screen in the first place.
+    // Measured on the SCREEN, which is what the observer is anchored on.
     const box = await screen(page).boundingBox();
     const viewport = page.viewportSize();
     expect(box, "screen has no box").not.toBeNull();
