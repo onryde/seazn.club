@@ -75,6 +75,7 @@ describe.skipIf(!HAS_DB)("a court's automatic start and handover", () => {
   let qr: { code: string; tok: string };
   let now: number;
   let deps: SessionDeps;
+  let ingest: FakeIngest;
   let P: string;
 
   beforeEach(async () => {
@@ -87,7 +88,7 @@ describe.skipIf(!HAS_DB)("a court's automatic start and handover", () => {
     targetId = c.targetId;
     connectionId = c.connectionId;
     now = at(0).getTime();
-    const ingest = new FakeIngest({ clock: () => now, connectAfterMs: 0 });
+    ingest = new FakeIngest({ clock: () => now, connectAfterMs: 0 });
     ingest.storage = { totalStorageMinutes: 0, totalStorageMinutesLimit: ROOMY_STORAGE_MINUTES, videoCount: 0 };
     deps = {
       drivers: { ingest, runner: new FakeRunner() }, now: () => new Date(now), appUrl: "http://app.test",
@@ -188,6 +189,37 @@ describe.skipIf(!HAS_DB)("a court's automatic start and handover", () => {
     now += 120 * SEC;
     expect(await beat(P, { sid: ans.sid, state: "publishing" })).toMatchObject({ state: "live", sid: ans.sid });
     expect(await sessionsOf(A)).toHaveLength(1);
+  });
+
+  it("a court start with the match's mode never chosen is COMPOSED: a programme input exists and the add_output effect targets it, not the camera (A2)", async () => {
+    // Every other start here runs `passthrough`, as the helpers that call startBroadcast say; the court's own start asks
+    // `startModeFor`, and a fixture whose stream_mode was never stored streams the score whenever the deployment can run it.
+    // A composed deployment: the compositor image configured, and the secret the runner's job token is minted under.
+    const prev = { image: process.env.RELAY_IMAGE, secret: process.env.AUTH_SECRET };
+    process.env.RELAY_IMAGE = "registry.fly.io/seazn-relay:court-composed-test";
+    process.env.AUTH_SECRET = "stream-auto-court-composed-test-secret";
+    try {
+      await streamOn(A);
+      await kickoff(A, 0);
+      expect((await sql`select 1 from fixture_stream_settings where fixture_id = ${A} and stream_mode is not null`).length, "premise: mode never chosen").toBe(0);
+      const go = await beat(P);
+      if (go.state !== "go-live") throw new Error(`premise: A starts, got ${go.state}`);
+      const inputs = await sql<{ role: string; ingest_input_id: string | null }[]>`
+        select role, ingest_input_id from fixture_stream_inputs where session_id = ${go.sid} order by role`;
+      expect((await sql<{ mode: string }[]>`select mode from fixture_stream_sessions where id = ${go.sid}`)[0]!.mode).toBe("composed");
+      expect(inputs.map((i) => i.role), "a composed session has a camera and a programme input").toEqual(["camera", "programme"]);
+      const camera = inputs.find((i) => i.role === "camera")!.ingest_input_id;
+      const programme = inputs.find((i) => i.role === "programme")!.ingest_input_id;
+      expect(camera, "premise: the camera input was provisioned").toBeTruthy();
+      expect(programme, "premise: the programme input was provisioned").toBeTruthy();
+      expect(programme).not.toBe(camera);
+      // The simulcast is on the PROGRAMME input; the camera's input carries no output (the destination key never reaches the phone's input).
+      expect(ingest.outputsFor(programme!), "the destination is the programme's output").toHaveLength(1);
+      expect(ingest.outputsFor(camera!), "the camera input has no output").toEqual([]);
+    } finally {
+      if (prev.image === undefined) delete process.env.RELAY_IMAGE; else process.env.RELAY_IMAGE = prev.image;
+      if (prev.secret === undefined) delete process.env.AUTH_SECRET; else process.env.AUTH_SECRET = prev.secret;
+    }
   });
 
   it("an unstreamed match in play never starts: no session, no consume row", async () => {
