@@ -84,7 +84,7 @@ const FIXTURE_MATRIX: MatrixData = matrixOf({
   "competitions.max_active": { community: 3, pro: null },
   "divisions.per_competition.max": { community: 4, event_pass: 10, pro: 20 },
   "entrants.per_division.max": { community: 64, event_pass: 128, pro: 256 },
-  "registration.fee_percent": { community: 5, event_pass: 4, pro: 2 },
+  "registration.fee_percent": { community: 5, event_pass: 3, pro: 2 },
 });
 
 /**
@@ -228,7 +228,7 @@ describe("pricing cards", () => {
   // were equal would satisfy every rung-keyed read in the codebase while
   // restoring exactly the flat grant this wave retired.
   it("the Event Pass card quotes a one-time credit grant per rung — 25 on M, 35 on L", () => {
-    expect(PASS_CREDIT_GRANT).toEqual({ event_pass: 25, event_pass_l: 35 });
+    expect(PASS_CREDIT_GRANT).toEqual({ event_pass: 5, event_pass_l: 8 });
     expect(PASS_CREDIT_GRANT.event_pass_l).toBeGreaterThan(PASS_CREDIT_GRANT.event_pass);
     // Every rung the product can sell has a grant — no rung falls through to a
     // default, because there is deliberately no default to fall through to.
@@ -317,7 +317,7 @@ const APPROVED_CARD_BULLETS: ApprovedBullets[] = [
       "3 active competitions, 4 divisions",
       "64 entrants per division",
       "League, groups + knockout & swiss formats",
-      "Online registration & entry fees (5% fee)",
+      "Online registration & entry fees (5% fee on card payments)",
       "Live standings & public dashboard",
       "Listed on the seazn.club showcase",
     ],
@@ -329,7 +329,7 @@ const APPROVED_CARD_BULLETS: ApprovedBullets[] = [
       "Upgrades ONE competition while it runs",
       "10 divisions, 128 entrants each",
       "Advanced formats — americano, ladders",
-      "4% platform fee on entry fees, not 5%",
+      "3% platform fee on entry fees taken by card, not 5%",
       "Branded exports & public player cards",
       "Sponsor tiers & online sponsor invoices",
       "Realtime scoreboard & slideshow",
@@ -341,7 +341,7 @@ const APPROVED_CARD_BULLETS: ApprovedBullets[] = [
     bullets: [
       "Unlimited competitions, 20 divisions each",
       "256 entrants per division",
-      "Entry fees at a 2% platform fee",
+      "2% platform fee on entry fees taken by card",
       "Career stats across competitions",
       "Officials, exports, API keys",
       "Your club colours on public pages & slideshow",
@@ -582,7 +582,7 @@ const CARD_SURFACES: CardSurface[] = [
       { feature: "competitions.max_active", plan: "community", says: (n) => new RegExp(`\\b${n}\\s+active\\s+competitions\\b`, "i") },
       { feature: "divisions.per_competition.max", plan: "community", says: (n) => new RegExp(`\\b${n}\\s+divisions\\b`, "i") },
       { feature: "entrants.per_division.max", plan: "community", says: (n) => new RegExp(`\\b${n}\\s+entrants\\s+per\\s+division\\b`, "i") },
-      { feature: "registration.fee_percent", plan: "community", says: (n) => new RegExp(`\\(${n}%\\s+fee\\)`, "i") },
+      { feature: "registration.fee_percent", plan: "community", says: (n) => new RegExp(`\\(${n}%\\s+fee\\b`, "i") },
     ],
     booleans: [
       { feature: "registration.paid", plans: ["community"], says: /\bonline registration & entry fees\b/i },
@@ -1527,7 +1527,7 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
   /**
    * …and the two platform-fee rates the Event Pass card COMPARES.
    *
-   * The bullet is "4% platform fee on entry fees, not 5%" — a saving, not a
+   * The bullet is "3% platform fee on entry fees taken by card, not 5%" — a saving, not a
    * rate. Quoting only the pass's own would survive community's moving and stop
    * being a saving at all, which is why the bullet reads two rows and this
    * asserts both. V398 re-cut that ladder once already.
@@ -1541,7 +1541,7 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
     const cards = await liveCards();
     expect(cards.PASS_FEATURES!.join(" | ")).toContain(`${passFee}% platform fee`);
     expect(cards.PASS_FEATURES!.join(" | ")).toContain(`not ${communityFee}%`);
-    expect(cards.FREE_FEATURES!.join(" | ")).toContain(`(${communityFee}% fee)`);
+    expect(cards.FREE_FEATURES!.join(" | ")).toContain(`(${communityFee}% fee on card payments)`);
     expect(cards.PRO_FEATURES!.join(" | ")).toContain(
       `${await capFor("registration.fee_percent", "pro")}% platform fee`,
     );
@@ -1556,9 +1556,9 @@ describe.skipIf(!HAS_DB)("plan-card copy quotes the numbers the matrix enforces"
   // (V393), pro 35 -> 25 (V395), and the 200 belonged to `pro_plus`, a plan
   // V393 deleted — enterprise carries 500. LITERALS on purpose: reading them
   // back out of the same table the cards read would make this a tautology.
-  it("plan_entitlements grants the credit-line numbers the cards quote (5 / 25 / 500)", async () => {
-    expect(await capFor("ai.credits.monthly", "community")).toBe(5);
-    expect(await capFor("ai.credits.monthly", "pro")).toBe(25);
+  it("plan_entitlements grants the credit-line numbers the cards quote (3 / 8 / 500)", async () => {
+    expect(await capFor("ai.credits.monthly", "community")).toBe(3);
+    expect(await capFor("ai.credits.monthly", "pro")).toBe(8);
     expect(await capFor("ai.credits.monthly", "enterprise")).toBe(500);
   });
 

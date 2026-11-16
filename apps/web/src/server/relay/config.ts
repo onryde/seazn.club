@@ -55,14 +55,15 @@ export const RECORDING_RETENTION_DAYS = 3;
 export const RUNNER_DEFAULT_GUEST = { cpus: 6, memoryMb: 12288, cpuClass: "dedicated" } as const;
 export const RUNNER_DEFAULT_REGION = "lhr";
 
-/** Design §6.1 default and ruling E: 5 h. */
-export const MAX_DURATION_MINUTES = 300;
+/** One stream runs for up to 3 h (owner ruling 2026-11-16, V526; design §6.1 and ruling E had it at 5 h). The DDL's
+ *  CHECK ceiling and column default carry the same number: migration-shape.test.ts reads both against this constant. */
+export const MAX_DURATION_MINUTES = 180;
 /** Owner ruling 2026-10-26 ("E1, 30 mins buffer"): a RUNNING session's claim on the recording pool is rolling, not a full
  *  match up front. Each recording it makes reserves `min(maxDurationMinutes, ceil(elapsed minutes) + RESERVATION_BUFFER_MINUTES)`
  *  (domain/credits.ts `reservationMinutes`), so a stream just admitted holds the buffer alone — `RECORDINGS_PER_SESSION × 30`,
  *  the admission threshold — and grows as it runs, to a full booking at most. The buffer is the growth a reservation allows
  *  between two reads of the pool (admissions read it live, the daily sweep reads it once more). A reservation no longer
- *  guarantees a full 5 h, so the pool can be overcommitted; that is reported (`relay.storage_overcommitted`), never enforced
+ *  guarantees a full booking, so the pool can be overcommitted; that is reported (`relay.storage_overcommitted`), never enforced
  *  against a running stream. */
 export const RESERVATION_BUFFER_MINUTES = 30;
 /** §6.6: job/page tokens expire at max_duration + 30 min. */
@@ -335,7 +336,7 @@ export function srtEnabled(env: Record<string, string | undefined> = process.env
 export const MAX_OUTPUTS_PER_INPUT = 5;
 
 /** Ruling 13 (capture everything) has one cost line: fixture_stream_samples.
- *  5 h (MAX_DURATION_MINUTES) at one heartbeat AND one poll every 5 s is 7,200
+ *  3 h (MAX_DURATION_MINUTES) at one heartbeat AND one poll every 5 s is 4,320
  *  rows; the cap sits above that so a legitimate session never hits it, and a
  *  runaway client (a poll loop at 100 ms) cannot write 180,000. The writer
  *  returns "capped" and the usecase records ONE `samples_capped` event. */

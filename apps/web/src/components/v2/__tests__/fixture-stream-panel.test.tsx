@@ -1158,11 +1158,11 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
       }
     }
     expect(checked).toBe(SUPPORTED_CURRENCIES.length * STREAM_CREDIT_PACKS.length);
-    // The regression itself, off a real checkout (capture pass 2, en-US): the 5-pack tile reads $33.25, never £25.
+    // The regression itself, the 5-pack tile reads the owner's dollar price (2026-11-16: $15), never the £12.
     const usd = textAt(body({ view: null, balance: 0, currency: "usd" }), "stream-buy-pack-5");
-    expect(usd).toContain("$33.25");
+    expect(usd).toContain("$15");
     expect(usd).not.toContain("£");
-    expect(streamPack(5)!.gbpPence).toBe(2500);
+    expect(streamPack(5)!.gbpPence).toBe(1200);
   });
 
   it("a tile click buys THAT pack — the size off the catalogue, never a default", () => {

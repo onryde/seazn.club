@@ -23,9 +23,9 @@
 //     which refuses to charge a price `streamPackPriceDrift` finds different.
 //
 // ONE table, for however many readers arrive (P14: the panel's own
-// CREDIT_PACKS display table was a second authority and is gone). Sandbox
-// placeholders: £6 / £25 / £80; real prices are an owner ruling before the GA
-// flip. A lookup key is never an env value, so `_INDEX.md` can record the
+// CREDIT_PACKS display table was a second authority and is gone). Prices as the owner
+// set them on 2026-11-16 (£3 / £12 / £40, each other currency typed); `STREAM_PACK_PRICES_FINAL` stays false until
+// the owner calls them final for live Stripe. A lookup key is never an env value, so `_INDEX.md` can record the
 // names.
 //
 // MATCH credits are NOT the AI credit wallet. That currency is
@@ -58,11 +58,17 @@ export type StreamPackLabelKey =
   | "stream.credits.pack5"
   | "stream.credits.pack20";
 
+export type StreamPackOptionCurrency = "eur" | "usd" | "inr";
+
 export interface StreamCreditPack {
   size: StreamPackSize;
   credits: number;
   lookupKey: string;
+  /** The price in GBP, the Stripe price's base currency, in pence. */
   gbpPence: number;
+  /** The price in every other currency the platform sells in, in that currency's minor unit. TYPED, not converted:
+   *  the owner sets each one (2026-11-16), so a pack can be priced for its market instead of at a flat exchange rate. */
+  options: Readonly<Record<StreamPackOptionCurrency, number>>;
   labelKey: StreamPackLabelKey;
   /** §8b: the 5-pack carries `border-purple-500` and the "Most clubs" chip. */
   popular: boolean;
@@ -77,9 +83,9 @@ export interface StreamCreditPack {
 export const STREAM_PACK_PRICES_FINAL = false;
 
 export const STREAM_CREDIT_PACKS: readonly StreamCreditPack[] = [
-  { size: 1, credits: 1, lookupKey: "seazn_stream_pack_1", gbpPence: 600, labelKey: "stream.credits.pack1", popular: false },
-  { size: 5, credits: 5, lookupKey: "seazn_stream_pack_5", gbpPence: 2500, labelKey: "stream.credits.pack5", popular: true },
-  { size: 20, credits: 20, lookupKey: "seazn_stream_pack_20", gbpPence: 8000, labelKey: "stream.credits.pack20", popular: false },
+  { size: 1, credits: 1, lookupKey: "seazn_stream_pack_1", gbpPence: 300, options: { eur: 350, usd: 399, inr: 19900 }, labelKey: "stream.credits.pack1", popular: false },
+  { size: 5, credits: 5, lookupKey: "seazn_stream_pack_5", gbpPence: 1200, options: { eur: 1400, usd: 1500, inr: 79900 }, labelKey: "stream.credits.pack5", popular: true },
+  { size: 20, credits: 20, lookupKey: "seazn_stream_pack_20", gbpPence: 4000, options: { eur: 4500, usd: 4900, inr: 249900 }, labelKey: "stream.credits.pack20", popular: false },
 ];
 
 /** The pack a SIZE names, or undefined. Deliberately takes `number`, not
@@ -92,33 +98,20 @@ export function streamPack(size: number): StreamCreditPack | undefined {
 }
 
 /**
- * The non-GBP currency options every match-credit price carries, as rough
- * multipliers on the GBP amount. PLACEHOLDERS, like the GBP prices above, and
- * superseded by the owner's pre-GA pricing ruling.
+ * The non-GBP currencies every match-credit price carries an amount for (`StreamCreditPack.options`).
  *
- * It lives HERE rather than in `scripts/stripe-sync.ts`, which reads it
- * through `streamPackPriceAmounts`, for one reason: the key set has to stay equal to
- * `SUPPORTED_CURRENCIES` minus `gbp`, and the script CANNOT import
- * `lib/currency.ts` to check that itself. Measured 2026-09-28 under
- * `tsconfig.scripts.json` (`moduleResolution: "nodenext"`): that import reds
- * with TS1543 on currency.ts's own `@/config/stripe-plans.json` import (no
- * `with { type: "json" }` attribute) and TS2307 on its extensionless
- * `@/lib/types` — and `node --experimental-strip-types` would not resolve the
- * `@/` alias at runtime either. From here, a vitest test in `apps/web` can
- * import BOTH this table and `SUPPORTED_CURRENCIES` and red the day a fifth
- * currency is added. Without that, `preferredCurrency` would hand
- * `buildRelayCheckoutParams` a currency the Stripe price has no option for,
- * Stripe would refuse the session, and the buyer would see a 500.
+ * It lives HERE rather than in `scripts/stripe-sync.ts` for one reason: the set has to stay equal to
+ * `SUPPORTED_CURRENCIES` minus `gbp`, and the script CANNOT import `lib/currency.ts` to check that itself (measured
+ * 2026-09-28 under `tsconfig.scripts.json`: TS1543 on its JSON import, TS2307 on its extensionless `@/lib/types`).
+ * From here, a vitest test in `apps/web` imports BOTH this list and `SUPPORTED_CURRENCIES` and reds the day a fifth
+ * currency is added. Without that, `preferredCurrency` would hand `buildRelayCheckoutParams` a currency the Stripe
+ * price has no option for, Stripe would refuse the session, and the buyer would see a 500.
  */
-export const STREAM_PACK_FX: Readonly<Record<string, number>> = {
-  eur: 1.17,
-  usd: 1.33,
-  inr: 111,
-};
+export const STREAM_PACK_OPTION_CURRENCIES = ["eur", "usd", "inr"] as const;
 
 /**
- * P1 (Task 14 fix round 2): THE amounts a pack's Stripe price is created with — the GBP base plus one option per
- * `STREAM_PACK_FX` currency. `scripts/stripe-sync.ts` spreads this into `stripe.prices.create`, and the
+ * P1 (Task 14 fix round 2): THE amounts a pack's Stripe price is created with — the GBP base plus one typed option per
+ * `STREAM_PACK_OPTION_CURRENCIES` currency. `scripts/stripe-sync.ts` spreads this into `stripe.prices.create`, and the
  * checkout charges the option for the buyer's `preferredCurrency` (`adaptive_pricing` off), so a tile that quotes
  * anything but these numbers quotes a price the buyer is not charged. The tiles read it back through
  * `streamPackAmountMinor`; nothing else computes a pack's price.
@@ -132,7 +125,7 @@ export function streamPackPriceAmounts(pack: StreamCreditPack): {
     unit_amount: pack.gbpPence,
     currency: "gbp",
     currency_options: Object.fromEntries(
-      Object.entries(STREAM_PACK_FX).map(([code, rate]) => [code, { unit_amount: Math.round(pack.gbpPence * rate) }]),
+      STREAM_PACK_OPTION_CURRENCIES.map((code) => [code, { unit_amount: pack.options[code] }]),
     ),
   };
 }

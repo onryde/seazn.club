@@ -1053,6 +1053,7 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
     // `pricing.faq.platformFee.a` entry, naming three live rates and the
     // same additive disclosure. Net +2 keys.
     // A count, not a floor, so a DELETED pin reds too.
+    // 304 -> 300: `pricing.pass.crossover` removed (owner 2026-11-16: the sentence confused more than it told).
     expect(APPROVED_DICTIONARY_COPY.length * DICTIONARY_LOCALES.length).toBe(304);
     // Every entry must say what it claims and what decides it — a pin with no
     // `why` is a snapshot, and a snapshot teaches the next editor to re-record
@@ -1098,14 +1099,6 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
       match: /^pricing\.(credits\.\w+|addons\.(credits|seat|org|sizePack)|card\.feePill|pass\.(per|from|stub\.caps\w*)|community\.price)$/,
       pinned: true,
       why: "quotes money or an allowance — the number is interpolated live, so the words around it are the claim",
-    },
-    {
-      // W2: the pass-vs-Pro comparator. It states WHICH offer is cheaper and up
-      // to what volume of entry fees — a claim no `plan_entitlements` row makes
-      // on its own, because it is derived from two prices and two rates at once.
-      match: /^pricing\.pass\.crossover$/,
-      pinned: true,
-      why: "names the point where a month of Pro overtakes the Event Pass, and the two platform-fee rates that put it there. Every figure is live (lib/pricing-crossover.ts over stripe-plans.json + registration.fee_percent); the words are what say which side is which, and swapping them mis-sells the one-time sku",
     },
     {
       // W2 (entitlements v18): the three plan cards' bullets. They were
@@ -1171,6 +1164,13 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
       match: /^pricing\.matrix\.fees\.note$/,
       pinned: true,
       why: "states that the platform fee is ADDITIVE to Stripe's own processing fees, not instead of it — a claim about how the two costs stack, which is exactly the sentence a buyer reading only the row's percentage would miss",
+    },
+    {
+      // Owner 2026-11-16 ("update the pricing page … matchday, live streaming, court bounded live streaming, remote
+      // scoring"): the line above the comparison table naming what no plan withholds.
+      match: /^pricing\.everyPlan$/,
+      pinned: true,
+      why: "a capability claim about EVERY plan: Match Day, remote scoring and phone streaming (per match or per court) are withheld by none. scoring.device_links, streaming.relay and streaming.overlay are true on every plan row; Match Day has no gate at all",
     },
     {
       match: /^pricing\.(?!matrix\.(orgs\.max_owned|fees)\.note$)(matrix|table)\./,

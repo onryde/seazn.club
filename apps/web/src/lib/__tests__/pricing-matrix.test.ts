@@ -19,6 +19,7 @@ import {
 } from "@/lib/pricing-matrix";
 import { ALL_PLAN_KEYS, HIDDEN_PASS_KEYS, SELLABLE_PASS_KEYS } from "@/lib/currency";
 import { ENTITLEMENT_DOMAINS } from "@/lib/entitlement-domains";
+import { PASS_CREDIT_GRANT } from "@/lib/pricing-cards";
 import { sql } from "@/lib/db";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -115,12 +116,17 @@ const DATA: MatrixData = {
   },
   // V398 re-cut this ladder for the additive-fee model: community 8 -> 5, both
   // pass rungs 5 -> 4. Pro and enterprise were already pure margin and did not
-  // move.
+  // move. V526 (owner 2026-11-16): both pass rungs 4 -> 3.
+  // The credit rows (V526's ladder). `streaming.credits.monthly` carries a pass row — a ONE-OFF amount; the pass has no
+  // `ai.credits.monthly` row at all.
+  "streaming.relay": { community: cell(null, true), event_pass: cell(null, true), pro: cell(null, true) },
+  "streaming.credits.monthly": { community: cell(1), event_pass: cell(3), pro: cell(5), enterprise: cell(20) },
+  "ai.credits.monthly": { community: cell(3), pro: cell(8), enterprise: cell(500) },
   "registration.fee_percent": {
     community: cell(5),
-    event_pass: cell(4),
+    event_pass: cell(3),
     // Flat across rungs by decision (#294): L buys size, not a cheaper cut.
-    event_pass_l: cell(4),
+    event_pass_l: cell(3),
     pro: cell(2),
   },
   // W3-A (2026-09-06, V399): the per-division RECORD is free on every plan —
@@ -194,7 +200,7 @@ describe("buildPricingSections — the /pricing pivot", () => {
   const cells = (labelKey: string) => row(labelKey).cells;
 
   it("returns one section per ENTITLEMENT_DOMAINS entry, in domain order", () => {
-    expect(sections).toHaveLength(8);
+    expect(sections).toHaveLength(9);
     expect(sections.map((s) => s.labelKey)).toEqual(
       ENTITLEMENT_DOMAINS.map((d) => `pricing.matrix.section.${d.slug}`),
     );
@@ -366,15 +372,36 @@ describe("buildPricingSections — the /pricing pivot", () => {
     expect(labelKeys).not.toContain("pricing.matrix.officials.per_fixture.max");
   });
 
+  it("the credit rows: a count per month on a subscription column, a one-time '+n' on the pass column, each with its note", () => {
+    // Owner ruling 2026-11-16: streams 1 / +3 / 5, AI credits 3 / +5 / 8. The pass's AI figure is PASS_CREDIT_GRANT, the
+    // constant the grant reads — the pass has no ai.credits.monthly row, and community's 3 must NOT fall through to it.
+    expect(cells("pricing.matrix.streaming.credits.monthly")).toEqual({ community: "1", event_pass: "+3", pro: "5" });
+    expect(cells("pricing.matrix.ai.credits.monthly")).toEqual({
+      community: "3",
+      event_pass: `+${PASS_CREDIT_GRANT.event_pass}`,
+      pro: "8",
+    });
+    expect(PASS_CREDIT_GRANT.event_pass, "the differential: the pass's top-up is not community's monthly figure").not.toBe(3);
+    expect(row("pricing.matrix.streaming.credits.monthly").noteKey).toBe("pricing.matrix.streaming.credits.monthly.note");
+    expect(row("pricing.matrix.ai.credits.monthly").noteKey).toBe("pricing.matrix.ai.credits.monthly.note");
+    // A pass with no stream row adds nothing — it never borrows community's monthly credit.
+    const bare = buildPricingSections({ ...DATA, "streaming.credits.monthly": { community: cell(1), pro: cell(5) } })
+      .flatMap((s) => s.rows)
+      .find((r) => r.labelKey === "pricing.matrix.streaming.credits.monthly")!;
+    expect(bare.cells.event_pass).toBe("—");
+    // Streaming itself is on every column.
+    expect(cells("pricing.matrix.streaming.relay")).toEqual({ community: "✓", event_pass: "✓", pro: "✓" });
+  });
+
   it("folds registration.paid + fee_percent into one entry-fee cell, keyed pricing.matrix.fees", () => {
     // V310 as re-cut by V398: every column charges; the ladder is what differs,
-    // now 5/4/2/1 rather than 8/5/2/1.
+    // now 5/3/2/1 (V526), after 5/4/2/1 and 8/5/2/1.
     // #294: the fee is FLAT across rungs — L buys size, not a cheaper cut.
     // Equal cells on the two pass columns are the assertion that keeps that
     // honest, so they move together or not at all.
     expect(cells("pricing.matrix.fees")).toMatchObject({
       community: "✓ 5%",
-      event_pass: "✓ 4%",
+      event_pass: "✓ 3%",
       pro: "✓ 2%",
     });
     // The 1% rung did not disappear with pro_plus — it moved to `enterprise`,
@@ -567,12 +594,12 @@ describe.skipIf(!HAS_DB)("V310 packaging: logos + paid entry for everyone", () =
   // tell the two apart. Value inequality was only ever a PROXY for existence;
   // `toBeDefined()` on the row itself is the thing we actually mean, and it
   // keeps working whatever the two numbers do next.
-  it("ladders registration.fee_percent 5/4/2/1 with an EXPLICIT community row", async () => {
+  it("ladders registration.fee_percent 5/3/2/1 with an EXPLICIT community row", async () => {
     const get = await load("registration.fee_percent");
     expect(get("community"), "community needs a real row, not the env fallback").toBeDefined();
     expect(get("community")?.int_value).toBe(5);
-    expect(get("event_pass")?.int_value).toBe(4);
-    expect(get("event_pass_l")?.int_value).toBe(4);
+    expect(get("event_pass")?.int_value).toBe(3);
+    expect(get("event_pass_l")?.int_value).toBe(3);
     expect(get("pro")?.int_value).toBe(2);
     // V393 moved the 1% floor from pro_plus onto enterprise. The LADDER is the
     // assertion, not the plan name: each step must be strictly cheaper than

@@ -589,7 +589,7 @@ describe.skipIf(!HAS_DB)("event pass (v3/07 §3)", () => {
   // fallback — and the inequality check cannot tell the cases apart. Value
   // inequality was a proxy; the row's presence is the actual claim, so it is
   // now queried directly and survives whatever the two numbers do next.
-  it("fee percent ladder: community 5%, pass comps 4%, pro orgs 2%", async () => {
+  it("fee percent ladder: community 5%, pass comps 3%, pro orgs 2%", async () => {
     const { auth } = await seedOrg("community");
     const comp = await makeCompetition(auth, "Fee");
     const [row] = await sql<{ int_value: number | null }[]>`
@@ -602,7 +602,7 @@ describe.skipIf(!HAS_DB)("event pass (v3/07 §3)", () => {
     expect(await feePercentFor(auth.orgId)).toBe(5);
     await grantPass(auth.orgId, comp.id);
     // The pass is the LOWER_IS_BETTER key: it must cut the rate, not raise it.
-    expect(await feePercentFor(auth.orgId, comp.id)).toBe(4);
+    expect(await feePercentFor(auth.orgId, comp.id)).toBe(3);
     await setPlan(auth.orgId, "pro");
     expect(await feePercentFor(auth.orgId, comp.id)).toBe(2);
   });

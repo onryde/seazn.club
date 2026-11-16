@@ -29,17 +29,21 @@ afterAll(async () => {
 });
 
 /**
- * The one key the pass lifts that must NOT be offered a paywall.
+ * The keys the pass lifts that must NOT be offered a paywall.
  *
- * `registration.fee_percent` (Free's rate → the pass's; 5% → 4% since V398) is
+ * `registration.fee_percent` (Free's rate → the pass's; 5% → 3% since V526) is
  * a deduction RATE, not a gate: it is
  * read with `getLimit` at server/usecases/registrations/ and folded into the
  * payout, so it never throws PaymentRequiredError and no <UpgradeGate> can ever
  * be rendered for it. It is named here, rather than subtracted silently, so a
  * future reader can tell a deliberate exclusion from an oversight — and so that
  * a key which STARTS throwing 402 has to be removed from this list on purpose.
+ *
+ * `streaming.credits.monthly` (Free's 1 → the pass's 3 since V526; equal before it, so it was not lifted at all) is a
+ * GRANT SIZE, not a gate: it is read by the match-credit grant (server/usecases/stream-credits.ts) and nothing calls
+ * requireFeature on it. Running out of match credits is its own refusal, sold by the credit packs, never an UpgradeGate.
  */
-const NOT_A_GATE = new Set(["registration.fee_percent"]);
+const NOT_A_GATE = new Set(["registration.fee_percent", "streaming.credits.monthly"]);
 
 describe.skipIf(!HAS_DB)("UpgradeGate offers the pass for every key the pass lifts", () => {
   // Same derivation as the pass-scoping guard: a key whose event_pass value
@@ -62,7 +66,7 @@ describe.skipIf(!HAS_DB)("UpgradeGate offers the pass for every key the pass lif
     return keys;
   };
 
-  it("matches the live event_pass column exactly, minus the one non-gate key", async () => {
+  it("matches the live event_pass column exactly, minus the non-gate keys", async () => {
     const lifted = await liftedKeys();
     const gateable = [...lifted].filter((k) => !NOT_A_GATE.has(k)).sort();
 

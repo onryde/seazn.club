@@ -13,6 +13,7 @@
 // this workspace has no jsdom (same pattern as upgrade-page.test.tsx). The
 // dictionary and every pure pricing module are REAL, because the assertions
 // are about the figures and copy a buyer actually reads.
+import { PASS_CREDIT_GRANT } from "@/lib/pricing-cards";
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -51,10 +52,7 @@ import {
   SELLABLE_PASS_KEYS,
   formatMinor,
   passPrice,
-  proPrice,
 } from "@/lib/currency";
-import { feeCrossoverMinor, readableMinor } from "@/lib/pricing-crossover";
-import { PASS_RUNG_MARKETING_KEY } from "@/lib/pass-ladder";
 import { PRICING_RAIL_SPORTS, pricingRailKey, PRICING_RAIL_FOOTER_KEY } from "@/lib/pricing-rail";
 import { PRICING_PLAN_KEYS } from "@/lib/pricing-matrix";
 import enMarketing from "@/dictionaries/en/marketing.json";
@@ -75,8 +73,6 @@ import type { Dict } from "@/lib/i18n-constants";
  *  string would have turned a legitimate reprice into a page regression. */
 const M_PRICE = formatMinor(passPrice("usd", "event_pass"), "usd");
 const L_PRICE = formatMinor(passPrice("usd", "event_pass_l"), "usd");
-/** The entry rung's ladder label, from the dictionary the page renders it from. */
-const M_RUNG = (enMarketing as Record<string, string>)[PASS_RUNG_MARKETING_KEY.event_pass];
 
 /**
  * The keys this page's Event Pass ticket renders from: the two V341 makes the
@@ -161,7 +157,7 @@ describe("/pricing's Event Pass ticket sells only the rung that is on sale", () 
     expect(markup, 'the M slot').toContain('data-pass-stub-slot="m"');
     expect(text).toContain(M_PRICE);
     expect(text).toContain("10 divisions × 128 entrants");
-    expect(text).toContain("+25 AI credits");
+    expect(text).toContain(`+${PASS_CREDIT_GRANT.event_pass} AI credits`);
 
     // The negative half, about the CAPS and the PRICE, not just the ladder
     // markup — L's price alone could plausibly appear in unrelated FAQ prose.
@@ -231,9 +227,6 @@ describe("/pricing's Event Pass ticket sells only the rung that is on sale", () 
 describe("/pricing's Event Pass stub: row cards, not a 2-up phone comparison (W3 fix round 2)", () => {
   it("never renders the stub's two slots as a 2-up grid — always one column", async () => {
     const { markup } = await render();
-    expect(markup, "the crossover slot must actually be present for this case").toContain(
-      "data-pass-crossover",
-    );
     const gridClass = /class="([^"]*)"[^>]*>\s*<div[^>]*data-pass-stub-slot="m"/.exec(
       markup,
     )?.[1];
@@ -313,91 +306,6 @@ describe("/pricing's comparison table has no column for a rung nobody can buy", 
     const { markup } = await render();
     // `hidden md:block`: at ≥768 the table renders unconditionally.
     expect(markup).toMatch(/class="[^"]*\bhidden\b[^"]*\bmd:block\b[^"]*"[^>]*tabindex="0"/);
-  });
-});
-
-// ── The pass/Pro comparator, now inside the stub ─────────────────────────────
-//
-// The page priced both offers and left the buyer to work out which one costs
-// them less, which reads as "the pass is cheaper" — true only below one
-// threshold, and the threshold was stated nowhere. Naming it is the whole
-// point, so the assertions below are about the FIGURE, not about the element
-// being present. R14 moves this into the ticket's stub as its second slot;
-// the underlying sentence and its correctness guards (pricing-crossover.test.ts)
-// are unchanged.
-describe("/pricing names where Pro overtakes the Event Pass", () => {
-  /** The crossing as the page derives it: catalogue prices, matrix fee rates. */
-  const CROSSING = formatMinor(
-    readableMinor(
-      feeCrossoverMinor({
-        passMinor: passPrice("usd", "event_pass"),
-        proMonthlyMinor: proPrice("monthly", "usd"),
-        passFeePercent: 4,
-        proFeePercent: 2,
-      })!,
-    ),
-    "usd",
-  );
-
-  it("quotes the crossing and both fee rates, none of them typed, inside the stub", async () => {
-    const { markup, text } = await render();
-    expect(markup, "the comparator itself").toContain("data-pass-crossover");
-    expect(CROSSING).toBe("$150");
-    expect(text).toContain(CROSSING);
-    // Both sides of the fee ladder, so the reader can check the arithmetic.
-    expect(text).toContain("2% platform fee against 4%");
-    // …and Pro's own price, since that is the other half of what they would pay.
-    expect(text).toContain(`${formatMinor(proPrice("monthly", "usd"), "usd")}/mo`);
-    // The crossing is a THIRD number, not either sticker price echoed back —
-    // a comparator that printed one of those would satisfy a bare
-    // "contains a currency amount" assertion.
-    expect(CROSSING).not.toBe(M_PRICE);
-    expect(CROSSING).not.toBe(formatMinor(proPrice("monthly", "usd"), "usd"));
-  });
-
-  // PREMISE CHANGED 2026-09-05 (W3 fix round 2, item 2, the same ruling that
-  // strips "Size M"/"Event Pass M" from the stub and the table header above):
-  // with one rung sellable, naming it here printed a letter that exists
-  // nowhere else on the page — the confusion dropping the suffix was for. So
-  // this test now pins the OPPOSITE of what it pinned before: the line must
-  // NOT name a rung. It is still true of exactly one rung, just identified by
-  // its price alone rather than by letter — which is why M_PRICE (not
-  // L_PRICE) staying in the line, unconditionally, is still asserted below.
-  // `pricing-crossover.test.ts`'s `rungFaults`/`rungNamingRequired` pin the
-  // same rule against SELLABLE_PASS_KEYS at the dictionary-string level; this
-  // is the same rule read off the RENDERED page instead.
-  it("names no rung — one is on sale, so the price alone is what the crossing is true of", async () => {
-    const { markup } = await render();
-    const para = /<p[^>]*data-pass-crossover[^>]*>([\s\S]*?)<\/p>/.exec(markup);
-    expect(para, "the comparator paragraph").not.toBeNull();
-    const line = para![1].replace(/<[^>]*>/g, " ").replace(/\s+/g, " ");
-
-    // This test's premise: exactly one rung sellable. If that ever changes,
-    // this test (and the dictionary copy it reads) needs to change with it —
-    // see `rungFaults` in pricing-crossover.test.ts, which is what re-requires
-    // the rung letter the moment SELLABLE_PASS_KEYS grows past one.
-    expect(SELLABLE_PASS_KEYS.length, "this test's premise — see the comment above").toBe(1);
-
-    const escape = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    expect(line, `the line must not name the ${M_RUNG} rung`).not.toMatch(
-      new RegExp(`\\b${escape(M_RUNG)}\\b`),
-    );
-    expect(M_PRICE).not.toBe(L_PRICE);
-    expect(line, "the price still identifies which offer this is about").toContain(M_PRICE);
-    expect(line, "the line must not read as a claim about L").not.toContain(L_PRICE);
-    expect(line).toContain(CROSSING);
-    expect(line).toContain("2% platform fee against 4%");
-  });
-
-  it("says nothing at all when a fee rate could not be read", async () => {
-    const { markup, text } = await render(
-      LIVE.filter((r) => !(r.feature_key === "registration.fee_percent" && r.plan_key === "pro")),
-    );
-    expect(markup).not.toContain("data-pass-crossover");
-    expect(text).not.toContain(CROSSING);
-    // …and the stub still sells. Suppressing the comparator must not take the
-    // Event Pass offer down with it.
-    expect(text).toContain(M_PRICE);
   });
 });
 

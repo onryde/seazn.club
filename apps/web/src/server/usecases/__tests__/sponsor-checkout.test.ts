@@ -8,6 +8,7 @@
 // legs read the DEAL's sponsor (`sponsor_orders.sponsor_id` after the event),
 // so they hold whether the webhook inserts a sponsor (today) or moves the
 // deal's own (Task 8, D7).
+import { SPONSOR_PLATFORM_FEE_PERCENT } from "@/lib/sponsor-deal-policy";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
@@ -298,8 +299,9 @@ describe.skipIf(!HAS_DB)("sponsor monetization", () => {
     });
     expect(params.line_items[0].price_data.unit_amount).toBe(50_000);
     expect(params.payment_intent_data).toMatchObject({
-      // Pro entry-fee percent is 2 → 2% of 50000.
-      application_fee_amount: 1000,
+      // The sponsorship cut is fixed (owner 2026-11-16), not the plan's entry-fee rate: this org is Pro, whose entry
+      // rate is 2%, and 2% of 50000 would be 1000.
+      application_fee_amount: (50_000 * SPONSOR_PLATFORM_FEE_PERCENT) / 100,
       transfer_data: { destination: expect.stringMatching(/^acct_/) },
       metadata: {
         kind: "sponsor",

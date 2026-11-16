@@ -193,63 +193,24 @@ test.describe("pricing v18 — the box office redesign (R14)", () => {
     expect(blockingNodes(mobile)).toEqual([]);
   });
 
-  // W3 fix round 2, item 1: the crossover paragraph was unreadable in an
-  // 84px phone column (a 2-up stub grid). The fix stacks both slots as
-  // full-width row cards at every width — proven here on the actual box
-  // height at 320, which only a browser can measure.
-  test("at 320 the ticket's stub slots stack as full-width row cards, never 2-up", async ({
+  // The stub's price card is a full-width row card at every width, measured in a browser at 320.
+  test("at 320 the ticket's stub price card is a full-width row card", async ({
     page,
   }) => {
     await page.setViewportSize({ width: 320, height: 900 });
     await page.goto("/pricing");
     const priceSlot = page.locator('[data-pass-stub-slot="m"]');
-    const crossoverBox = page.locator("[data-pass-crossover]");
     await expect(priceSlot).toBeVisible();
 
     const priceBox = await priceSlot.boundingBox();
     expect(priceBox, "the price slot's box").not.toBeNull();
 
-    // ROW CARDS ARE A RELATIONSHIP, NOT A WIDTH. This asserted
-    // `width > 260` on a 320 viewport, which sounds like "nearly full width"
-    // and is really a guess about the ticket's padding: the stub sits 40px in
-    // on each side, so a correctly stacked slot measures 240 and the check
-    // failed on its first ever run against a page that was doing exactly what
-    // it was built to do.
-    //
-    // What "row card, never 2-up" actually means is a fact about the two
-    // slots: same left edge, same width, one below the other. A 2-up grid
-    // differs on every one of those, and no padding change can make it pass.
-    // The SLOT, not the paragraph inside it: `[data-pass-crossover]` is the
-    // <p>, inset by the box's own 14px padding, so comparing it to the price
-    // SLOT measures padding and reports it as a layout change.
-    const crossoverSlot = page.locator('[data-pass-stub-slot="crossover"]');
-    const crossoverSlotBox = await crossoverSlot.boundingBox();
-    expect(crossoverSlotBox, "the crossover slot's box").not.toBeNull();
-    expect(priceBox!.x, "both slots start at the same left edge").toBeCloseTo(
-      crossoverSlotBox!.x,
-      0,
-    );
-    expect(priceBox!.width, "both slots are the same width").toBeCloseTo(
-      crossoverSlotBox!.width,
-      0,
-    );
-    expect(
-      crossoverSlotBox!.y,
-      "the crossover sits BELOW the price, not beside it",
-    ).toBeGreaterThan(priceBox!.y + priceBox!.height - 1);
-    // …and each still fills its column rather than being a narrow inset: the
-    // slot is the full width of the grid that holds it.
+    // One slot since 2026-11-16 (the pass/Pro comparison sentence was removed): it fills its column.
     const columnWidth = await priceSlot.evaluate(
       (el) => (el.parentElement as HTMLElement).getBoundingClientRect().width,
     );
     expect(priceBox!.width).toBeCloseTo(columnWidth, 0);
 
-    // The crossover card sits BELOW the price card (stacked), not beside it.
-    if (await crossoverBox.count()) {
-      const cBox = await crossoverBox.boundingBox();
-      expect(cBox, "the crossover box").not.toBeNull();
-      expect(cBox!.y).toBeGreaterThan(priceBox!.y + priceBox!.height - 5);
-    }
     await expectNoHorizontalScroll(page);
 
     // The price and its "/ event" suffix hold on one line — no orphaned

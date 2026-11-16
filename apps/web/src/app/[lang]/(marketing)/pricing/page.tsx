@@ -31,7 +31,6 @@ import {
   proPrice,
   type Currency,
 } from "@/lib/currency";
-import { feeCrossoverMinor, readableMinor } from "@/lib/pricing-crossover";
 import { preferredCurrency } from "@/lib/currency-server";
 import { getActiveOrgId, getCurrentUser, getUserOrgs } from "@/lib/auth";
 import { pickActiveOrg } from "@/lib/active-org";
@@ -210,14 +209,6 @@ export default async function PricingPage({
   const passCta = await passColumnCta().catch(() => "signup" as const);
   const proMonthly = formatMinor(proPrice("monthly", currency), currency);
 
-  // ── R14 stub slot 2: where Pro overtakes the Event Pass (owner-approved
-  // composition, decided this session — discharges gap #4 of 2026-09-04).
-  // The mockup's stub was a two-rung M/L comparison; L is off sale, so the
-  // second slot is this crossover instead, derived live from
-  // lib/pricing-crossover.ts. Every input is a live read (stripe-plans.json
-  // prices, `registration.fee_percent`); the line disappears rather than
-  // misleads when a rate is unreadable or the ladder has no crossing at all —
-  // the same rule the old ladder followed for a cap it did not have.
   const proFeePercent = feePercent("pro");
   const passFeePercent = feePercent(offeredRung.key);
   // W3 fix round 2 (item 6): the three live rates the new Platform fee FAQ
@@ -228,43 +219,6 @@ export default async function PricingPage({
     typeof communityFeePercent === "number" &&
     typeof passFeePercent === "number" &&
     typeof proFeePercent === "number";
-  const crossoverMinor = feeCrossoverMinor({
-    passMinor: offeredRung.amountMinor,
-    proMonthlyMinor: proPrice("monthly", currency),
-    passFeePercent,
-    proFeePercent,
-  });
-  const crossoverReadable = crossoverMinor === null ? 0 : readableMinor(crossoverMinor);
-  // The FULL correctness-hardened sentence (pricing.pass.crossover), not a
-  // shorter paraphrase: `pricing-crossover.test.ts`'s "states its own
-  // assumption" guard exists precisely because an unscoped short line — "Pro
-  // is cheaper above {amount}" — is the wording that shipped once already and
-  // recommended the wrong offer for a season (it omits that the crossing is a
-  // ONE-MONTH crossing) and the wrong rung once after that (the card sells one
-  // rung on sale, but a bare "the pass" reads as a claim about the whole
-  // Event Pass column, which is false of the hidden L rung). Reusing this
-  // key, verbatim, in the stub rather than inventing a shorter one keeps both
-  // lessons enforced instead of reintroducing the defect they were written
-  // for. `pass-cards-i18n.test.ts` and `pricing-crossover.test.ts` both pin
-  // this key's wording; changing it here would change it there too.
-  const crossoverStubLine =
-    crossoverReadable > 0
-      ? t(d, "pricing.pass.crossover", {
-          amount: formatMinor(crossoverReadable, currency),
-          pro: proMonthly,
-          // No `rung`: the sentence no longer names the rung letter. With one
-          // sellable rung, "the M pass" printed a size that exists nowhere
-          // else on the page — the stub and the matrix column both read plain
-          // "Event Pass" — which is the confusion dropping the suffix was for.
-          pass: passLabel,
-          // Non-null wherever `crossoverMinor` is: `feeCrossoverMinor` returns
-          // null unless both rates are numbers. Narrowed rather than
-          // defaulted, so a rate that went missing can never render as 0%.
-          proFee: proFeePercent as number,
-          passFee: passFeePercent as number,
-        })
-      : null;
-
   // The FAQ used to hardcode "$19/mo" while the cards above it honoured the
   // currency switcher — a GBP visitor saw £ and $ on one page. Every answer is
   // interpolated with the same switched amounts instead; `t()` leaves an answer
@@ -428,28 +382,6 @@ export default async function PricingPage({
                         </p>
                       </div>
 
-                      {crossoverStubLine && (
-                        // Named like its sibling above so the row-card layout
-                        // is assertable as a RELATIONSHIP between the two
-                        // slots. `data-pass-crossover` is the paragraph
-                        // INSIDE this box and sits 15px in on each side, so a
-                        // test comparing it to the price SLOT measures padding
-                        // and calls it a layout change.
-                        <div
-                          data-pass-stub-slot="crossover"
-                          className="rounded-xl border border-[#3b2a6e] bg-black/25 px-3.5 py-3"
-                        >
-                          <p className="mk-cond text-[12.5px] font-semibold tracking-[0.22em] text-lime-400">
-                            {t(d, "pricing.table.pro")}
-                          </p>
-                          <p
-                            data-pass-crossover
-                            className="mt-1.5 text-[0.78rem] leading-snug text-[#bdb4e2]"
-                          >
-                            {crossoverStubLine}
-                          </p>
-                        </div>
-                      )}
                     </div>
 
                     {/* Three readers, three honest endings (task 19, spec D3).
@@ -656,6 +588,9 @@ export default async function PricingPage({
             {sections.length > 0 && (
               <>
                 <h2 className="sr-only">{t(d, "pricing.table.compareLabel")}</h2>
+                <p className="mx-auto mt-10 max-w-2xl text-center text-sm text-slate-600" data-pricing-every-plan>
+                  {t(d, "pricing.everyPlan")}
+                </p>
 
                 <div
                   className="scroll-x scroll-x-fade mt-12 hidden rounded-2xl border border-purple-100 bg-white md:block"

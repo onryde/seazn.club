@@ -8,7 +8,7 @@ The **Credits** page in your organisation's **Settings** is the home for your wa
 
 ## Match credits (Streaming)
 
-Streaming a match from a phone spends a different currency: **match credits**. One credit streams one match, for up to 5 hours. They are not AI credits — the two balances, the two histories and the two sets of packs are separate, and a credit of one kind can't pay for the other.
+Streaming a match from a phone spends a different currency: **match credits**. One credit streams one match, for up to 3 hours. They are not AI credits — the two balances, the two histories and the two sets of packs are separate, and a credit of one kind can't pay for the other.
 
 Open **Settings → Credits** — it opens on the **Streaming** side. You'll see:
 

@@ -48,9 +48,9 @@ describe("groupForAdmin", () => {
     );
   });
 
-  it("caps at 9 sections (8 domains + trailing other)", () => {
+  it("caps at 10 sections (9 domains + trailing other)", () => {
     const sections = groupForAdmin(rows);
-    expect(sections.length).toBeLessThanOrEqual(9);
+    expect(sections.length).toBeLessThanOrEqual(10);
   });
 
   it("puts an unknown key in a trailing 'other' section", () => {

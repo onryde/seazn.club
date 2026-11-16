@@ -25,7 +25,7 @@ import {
 } from "../../../../scripts/stripe-sync.ts";
 import {
   STREAM_CREDIT_PACKS,
-  STREAM_PACK_FX,
+  STREAM_PACK_OPTION_CURRENCIES,
   STREAM_PACK_PRICES_FINAL,
   streamPackPriceAmounts,
   type StreamCreditPack,
@@ -89,7 +89,7 @@ function fakeStripe(opts: { prices?: Record<string, LivePrice | undefined>; prod
 }
 
 /** The owner's GBP prices (§8b sandbox £6 / £25 / £80), in pence — the oracle, typed here on purpose. */
-const OWNER_GBP_PENCE: Readonly<Record<number, number>> = { 1: 600, 5: 2500, 20: 8000 };
+const OWNER_MINOR: Readonly<Record<number, Readonly<Record<string, number>>>> = { 1: { gbp: 300, eur: 350, usd: 399, inr: 19900 }, 5: { gbp: 1200, eur: 1400, usd: 1500, inr: 79900 }, 20: { gbp: 4000, eur: 4500, usd: 4900, inr: 249900 } };
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -97,7 +97,7 @@ describe("streamPackPriceCreateParams — the price sync mints, from the table a
   it("carries the lookup key (transferred), the owner's GBP amount and each FX option derived from it, and the stream_credits tag", () => {
     let checked = 0;
     for (const pack of STREAM_CREDIT_PACKS) {
-      const gbp = OWNER_GBP_PENCE[pack.size]!;
+      const { gbp, ...others } = OWNER_MINOR[pack.size]!;
       const params = streamPackPriceCreateParams(pack, "prod_x");
       expect(params).toMatchObject({
         product: "prod_x",
@@ -108,7 +108,7 @@ describe("streamPackPriceCreateParams — the price sync mints, from the table a
         metadata: { kind: "stream_credits", credits: String(pack.credits) },
       });
       expect(params.currency_options).toEqual(
-        Object.fromEntries(Object.entries(STREAM_PACK_FX).map(([c, rate]) => [c, { unit_amount: Math.round(gbp * rate) }])),
+        Object.fromEntries(Object.entries(others).map(([c, amount]) => [c, { unit_amount: amount }])),
       );
       checked++;
     }
@@ -116,10 +116,10 @@ describe("streamPackPriceCreateParams — the price sync mints, from the table a
     expect(checked).toBe(3);
   });
 
-  it("the sync computes no amount of its own — no gbpPence arithmetic, no FX table read beside streamPackPriceAmounts", () => {
+  it("the sync computes no amount of its own — no amount read off the pack beside streamPackPriceAmounts", () => {
     const src = readFileSync(join(__dirname, "..", "..", "..", "..", "scripts", "stripe-sync.ts"), "utf8");
     expect(src).toMatch(/\.\.\.streamPackPriceAmounts\(pack\)/);
-    expect(src, "a second amount computation beside the shared one").not.toMatch(/gbpPence|STREAM_PACK_FX/);
+    expect(src, "a second amount computation beside the shared one").not.toMatch(/gbpPence|pack\.options|STREAM_PACK_OPTION_CURRENCIES/);
   });
 });
 
@@ -161,14 +161,14 @@ describe("ensureStreamPackPrice — the re-mint policy every other price in stri
         checked++;
       }
     }
-    expect(checked).toBe(STREAM_CREDIT_PACKS.length * (1 + Object.keys(STREAM_PACK_FX).length));
+    expect(checked).toBe(STREAM_CREDIT_PACKS.length * (1 + [...STREAM_PACK_OPTION_CURRENCIES].length));
     expect(log.mock.calls.some(([m]) => String(m).includes("drift → new price")), "the re-mint is reported").toBe(true);
   });
 
   it("a MISSING currency option is a change too — re-minted, not reused and not refused", async () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     let checked = 0;
-    for (const currency of Object.keys(STREAM_PACK_FX)) {
+    for (const currency of [...STREAM_PACK_OPTION_CURRENCIES]) {
       const pack = STREAM_CREDIT_PACKS[1]!;
       const live = priceFor(pack, "price_old");
       delete live.currency_options[currency];
@@ -178,7 +178,7 @@ describe("ensureStreamPackPrice — the re-mint policy every other price in stri
       expect(f.pricesUpdate, currency).toHaveBeenCalledWith("price_old", { active: false });
       checked++;
     }
-    expect(checked).toBe(Object.keys(STREAM_PACK_FX).length);
+    expect(checked).toBe([...STREAM_PACK_OPTION_CURRENCIES].length);
   });
 
   it("the empty case — no price at all — creates one FROM the table on the given product, and archives nothing", async () => {

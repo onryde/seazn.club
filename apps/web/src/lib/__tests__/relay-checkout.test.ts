@@ -6,7 +6,7 @@
 // than a retyped copy of one (S10).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  STREAM_CREDIT_PACKS, STREAM_PACK_FX, streamPack, streamPackAmountMinor, streamPackPerMatchMinor, streamPackPriceAmounts,
+  STREAM_CREDIT_PACKS, STREAM_PACK_OPTION_CURRENCIES, streamPack, streamPackAmountMinor, streamPackPerMatchMinor, streamPackPriceAmounts,
   streamPackPriceDrift,
 } from "../stream-credit-packs";
 import { messages, type MessageKey } from "@/lib/messages";
@@ -56,9 +56,9 @@ import {
 describe("STREAM_CREDIT_PACKS", () => {
   it("is the three packs the design names, one popular, lookup keys unique", () => {
     expect(STREAM_CREDIT_PACKS.map((p) => [p.size, p.credits, p.gbpPence])).toEqual([
-      [1, 1, 600],
-      [5, 5, 2500],
-      [20, 20, 8000],
+      [1, 1, 300],
+      [5, 5, 1200],
+      [20, 20, 4000],
     ]);
     expect(STREAM_CREDIT_PACKS.filter((p) => p.popular).map((p) => p.size)).toEqual([5]);
     expect(new Set(STREAM_CREDIT_PACKS.map((p) => p.lookupKey)).size).toBe(3);
@@ -87,16 +87,16 @@ describe("STREAM_CREDIT_PACKS", () => {
     expect(labelKeys).toHaveLength(3);
     for (const k of labelKeys) expect(messages[k]?.length).toBeGreaterThan(0);
   });
-  it("formats sandbox prices as the sheet shows them (§8b)", () => {
+  it("formats the pack prices and their per-match line (owner 2026-11-16)", () => {
     expect(
       STREAM_CREDIT_PACKS.map((p) => [
         formatMinor(streamPackAmountMinor(p, "gbp")!, "gbp", "en"),
         formatMinor(streamPackPerMatchMinor(p, "gbp")!, "gbp", "en"),
       ]),
     ).toEqual([
-      ["£6", "£6"],
-      ["£25", "£5"],
-      ["£80", "£4"],
+      ["£3", "£3"],
+      ["£12", "£2.40"],
+      ["£40", "£2"],
     ]);
   });
 
@@ -106,14 +106,15 @@ describe("STREAM_CREDIT_PACKS", () => {
   // first CALLS the second, so it could not fail. The oracle now comes from outside the code under test: the owner's GBP
   // prices as literals (§8b sandbox £6 / £25 / £80), and every other currency derived from THOSE literals and the
   // declared FX table — never from either function.
-  it("P1 (m10): the tile and the Stripe price both charge the owner's GBP literals, and every other currency is that literal × its declared FX rate", () => {
-    const OWNER_GBP_PENCE: Readonly<Record<number, number>> = { 1: 600, 5: 2500, 20: 8000 };
-    expect(STREAM_CREDIT_PACKS.map((p) => p.size).sort((x, y) => x - y), "one owner price per pack").toEqual(Object.keys(OWNER_GBP_PENCE).map(Number).sort((x, y) => x - y));
+  it("P1 (m10): the tile and the Stripe price both charge the owner's literals, in every currency the platform sells in", () => {
+    // The owner's prices, typed from the ruling of 2026-11-16 (each currency set by hand, none converted).
+    const OWNER_MINOR: Readonly<Record<number, Readonly<Record<string, number>>>> = { 1: { gbp: 300, eur: 350, usd: 399, inr: 19900 }, 5: { gbp: 1200, eur: 1400, usd: 1500, inr: 79900 }, 20: { gbp: 4000, eur: 4500, usd: 4900, inr: 249900 } };
+    expect(STREAM_CREDIT_PACKS.map((p) => p.size).sort((x, y) => x - y), "one owner price per pack").toEqual(Object.keys(OWNER_MINOR).map(Number).sort((x, y) => x - y));
     const others = SUPPORTED_CURRENCIES.filter((c) => c !== "gbp");
-    expect(Object.keys(STREAM_PACK_FX).sort(), "an FX rate for every other platform currency, and no stray one").toEqual([...others].sort());
+    expect([...STREAM_PACK_OPTION_CURRENCIES].sort(), "an amount for every other platform currency, and no stray one").toEqual([...others].sort());
     let checked = 0;
     for (const pack of STREAM_CREDIT_PACKS) {
-      const gbp = OWNER_GBP_PENCE[pack.size]!;
+      const gbp = OWNER_MINOR[pack.size]!.gbp!;
       const price = streamPackPriceAmounts(pack);
       expect(price.currency, `${pack.size}: the price's base currency`).toBe("gbp");
       expect(price.unit_amount, `${pack.size} gbp: the Stripe price`).toBe(gbp);
@@ -121,7 +122,8 @@ describe("STREAM_CREDIT_PACKS", () => {
       expect(streamPackPerMatchMinor(pack, "gbp"), `${pack.size} gbp per match`).toBe(Math.round(gbp / pack.credits));
       checked++;
       for (const c of others) {
-        const want = Math.round(gbp * STREAM_PACK_FX[c]!);
+        const want = OWNER_MINOR[pack.size]![c]!;
+        expect(want, `${pack.size} ${c}: the ruling names an amount`).toBeGreaterThan(0);
         expect(price.currency_options[c]?.unit_amount, `${pack.size} ${c}: the Stripe price's option`).toBe(want);
         expect(streamPackAmountMinor(pack, c), `${pack.size} ${c}: the tile`).toBe(want);
         expect(streamPackPerMatchMinor(pack, c), `${pack.size} ${c} per match`).toBe(Math.round(want / pack.credits));
@@ -132,9 +134,18 @@ describe("STREAM_CREDIT_PACKS", () => {
     expect(checked).toBe(12);
   });
 
+  it("a bigger pack is cheaper per match, in every currency", () => {
+    let checked = 0;
+    for (const c of SUPPORTED_CURRENCIES) {
+      const per = STREAM_CREDIT_PACKS.map((p) => streamPackAmountMinor(p, c)! / p.credits);
+      for (let i = 1; i < per.length; i++) { expect(per[i], `${c}: pack ${i}`).toBeLessThan(per[i - 1]!); checked++; }
+    }
+    expect(checked).toBe(SUPPORTED_CURRENCIES.length * (STREAM_CREDIT_PACKS.length - 1));
+  });
+
   it("P1: one amount a REAL checkout charged, and no amount at all for a currency the price has no option for", () => {
-    // Read off Stripe's embedded checkout in capture pass 2 (en-US, the 5-pack): $33.25. Not derived from the code.
-    expect(streamPackAmountMinor(streamPack(5)!, "usd")).toBe(3325);
+    // The owner's 5-pack price in dollars (2026-11-16): $15.00. Typed here, not derived from the code.
+    expect(streamPackAmountMinor(streamPack(5)!, "usd")).toBe(1500);
     // Per match is the NEAREST minor unit. Every sandbox price divides exactly, so a synthetic price is the only way to
     // witness it: £25.03 over 5 is 500.6p → 501p (a floor would say 500p).
     expect(streamPackPerMatchMinor({ ...streamPack(5)!, gbpPence: 2503 }, "gbp")).toBe(501);
@@ -190,8 +201,8 @@ describe("STREAM_CREDIT_PACKS", () => {
           checked++;
         }
       }
-      // 3 packs × (the GBP base + one option per STREAM_PACK_FX currency).
-      expect(checked).toBe(STREAM_CREDIT_PACKS.length * (1 + Object.keys(STREAM_PACK_FX).length));
+      // 3 packs × (the GBP base + one option per other currency).
+      expect(checked).toBe(STREAM_CREDIT_PACKS.length * (1 + [...STREAM_PACK_OPTION_CURRENCIES].length));
       expect(checked).toBe(12);
     });
 
@@ -210,7 +221,7 @@ describe("STREAM_CREDIT_PACKS", () => {
       // An UNEXPANDED currency_options (absent) reads as every option missing — never as "matches".
       const bare = livePrice(pack) as { currency: string; unit_amount: number | null; currency_options?: Record<string, { unit_amount: number | null }> };
       delete bare.currency_options;
-      expect(streamPackPriceDrift(pack, bare).map((d) => d.at).sort()).toEqual(Object.keys(STREAM_PACK_FX).sort());
+      expect(streamPackPriceDrift(pack, bare).map((d) => d.at).sort()).toEqual([...STREAM_PACK_OPTION_CURRENCIES].sort());
       const usdBase = { ...livePrice(pack), currency: "usd" };
       expect(streamPackPriceDrift(pack, usdBase)).toContainEqual({ at: "base currency", live: "usd", want: "gbp" });
     });
@@ -323,17 +334,18 @@ describe("buildRelayCheckoutParams — a purchase made from Settings has no fixt
 // not resolve at runtime. So the table lives in `lib/stream-credit-packs.ts`,
 // which the script CAN import, and the parity claim lives here, where
 // `SUPPORTED_CURRENCIES` is importable. Add a fifth currency and this reds.
-describe("STREAM_PACK_FX", () => {
-  it("carries exactly the platform's non-GBP currencies — never a retyped subset", () => {
-    expect(new Set(Object.keys(STREAM_PACK_FX))).toEqual(
-      new Set(SUPPORTED_CURRENCIES.filter((c) => c !== "gbp")),
-    );
-    // GBP is the base the multipliers are applied TO — an option for it would
-    // be a second, disagreeing GBP amount on the same price.
-    expect(Object.keys(STREAM_PACK_FX)).not.toContain("gbp");
-    // Non-vacuous: an empty table would satisfy a subset check.
-    expect(Object.keys(STREAM_PACK_FX).length).toBeGreaterThan(0);
-    for (const rate of Object.values(STREAM_PACK_FX)) expect(rate).toBeGreaterThan(0);
+describe("STREAM_PACK_OPTION_CURRENCIES", () => {
+  it("is exactly the platform's non-GBP currencies — never a retyped subset — and every pack prices each of them", () => {
+    expect(new Set<string>(STREAM_PACK_OPTION_CURRENCIES)).toEqual(new Set(SUPPORTED_CURRENCIES.filter((c) => c !== "gbp")));
+    // GBP is the price's base — an option for it would be a second, disagreeing GBP amount on the same price.
+    expect([...STREAM_PACK_OPTION_CURRENCIES] as string[]).not.toContain("gbp");
+    expect(STREAM_PACK_OPTION_CURRENCIES.length).toBeGreaterThan(0);
+    let checked = 0;
+    for (const pack of STREAM_CREDIT_PACKS) {
+      expect(Object.keys(pack.options).sort(), String(pack.size)).toEqual([...STREAM_PACK_OPTION_CURRENCIES].sort());
+      for (const c of STREAM_PACK_OPTION_CURRENCIES) { expect(Number.isInteger(pack.options[c]) && pack.options[c] > 0, `${pack.size} ${c}`).toBe(true); checked++; }
+    }
+    expect(checked).toBe(STREAM_CREDIT_PACKS.length * STREAM_PACK_OPTION_CURRENCIES.length);
   });
 });
 
@@ -544,7 +556,7 @@ describe("createRelayCheckout", () => {
         const base = synced(pack.size, `price_base_${pack.size}`);
         base.unit_amount = base.unit_amount + 1;
         variants.push(["base amount", base]);
-        for (const c of Object.keys(STREAM_PACK_FX)) {
+        for (const c of [...STREAM_PACK_OPTION_CURRENCIES]) {
           const off = synced(pack.size, `price_${c}_${pack.size}`);
           off.currency_options[c] = { unit_amount: off.currency_options[c]!.unit_amount! + 1 };
           variants.push([`${c} amount`, off]);
@@ -566,7 +578,7 @@ describe("createRelayCheckout", () => {
         await createRelayCheckout(args(pack.size));
         expect(stripeMock.sessionsCreate.mock.calls.at(-1)![0].line_items).toEqual([{ price: `price_ok_${pack.size}`, quantity: 1 }]);
       }
-      expect(checked).toBe(STREAM_CREDIT_PACKS.length * (1 + 2 * Object.keys(STREAM_PACK_FX).length));
+      expect(checked).toBe(STREAM_CREDIT_PACKS.length * (1 + 2 * [...STREAM_PACK_OPTION_CURRENCIES].length));
     });
 
     it("staff are paged ONCE per drifted price per day in this process — the same price refused again pages nothing, another drifted price pages on its own", async () => {

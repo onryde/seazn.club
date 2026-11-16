@@ -1844,11 +1844,13 @@ describe.skipIf(!HAS_DB)("R2008: a COMPOSED live stream whose camera is gone for
     expect((await tickSession(r.sessionId, r.deps, "sweep")).session, "the limit").toMatchObject({ state: "failed", failReason: "camera_never_live" });
   });
 
-  it("never-live, a `live` at minute 10: the camera appeared, so this rule NEVER fires — not at minute 15, not at hour 5 (the normal rule applies: it is judged only if the camera is lost later), and nothing is refunded", async () => {
+  it("never-live, a `live` at minute 10: the camera appeared, so this rule NEVER fires — not at minute 15, not hours later (the normal rule applies: it is judged only if the camera is lost later), and nothing is refunded", async () => {
     const r = await composedWaiting();
     r.tick(10 * MIN); await r.beat("live");
     let ticks = 0;
-    for (const at of [5 * MIN, 5 * MIN, 5 * MIN, 4 * 60 * MIN]) {
+    // The last step stops well short of the booking's own end — far enough that the lost-camera limit below still fits
+    // inside it — so the wall clock is not what is being tested.
+    for (const at of [5 * MIN, 5 * MIN, 5 * MIN, (MAX_DURATION_MINUTES - 40 - 2 * PHONE_LOST_LIVE_MINUTES) * MIN]) {
       r.tick(at); await r.beat("live"); await r.phoneBeat();
       expect((await tickOf(r))?.state, `${Math.round((r.deps.now().getTime() - r.liveAt.getTime()) / MIN)} minutes after go-live`).toBe("live");
       ticks++;

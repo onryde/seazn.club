@@ -48,7 +48,7 @@ describe("the declaration", () => {
     // wallet-delta assertion in billing-pass-financial-trace.test.ts) reads
     // PASS_CREDIT_GRANT, so all of them move silently with a wrong edit. This
     // line is what actually witnesses a change to the numbers themselves.
-    expect(PASS_CREDIT_GRANT).toEqual({ event_pass: 25, event_pass_l: 35 });
+    expect(PASS_CREDIT_GRANT).toEqual({ event_pass: 5, event_pass_l: 8 });
     // No rung falls through to a default, because there is no default: a rung
     // added to PASS_KEYS without a grant is a compile error, and this is the
     // runtime half of that same claim.

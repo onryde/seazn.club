@@ -6,7 +6,7 @@ order: 1
 
 ## Community — free forever
 
-Run real competitions, free: 3 active competitions, 4 divisions in each, 3 team members, 64 entrants per division, 2 public dashboards, full scoring and scheduling, and unlimited match officials per fixture. Your **organisation logo** sits on your public pages, you can **charge entry fees** (by card or offline) at a 5% platform fee, exports come out as plain PDF/XLSX, and your organisation gets **5 AI credits a month** to spend on AI scheduling and officials. When a competition is finished, complete or archive it to free its slot. Divisions work differently: archiving one gives its slot back only if it never recorded a result ([archive and delete](/help/divisions/archive)).
+Run real competitions, free: 3 active competitions, 4 divisions in each, 3 team members, 64 entrants per division, 2 public dashboards, full scoring and scheduling, and unlimited match officials per fixture. Your **organisation logo** sits on your public pages, you can **charge entry fees** (by card or offline) at a 5% platform fee, exports come out as plain PDF/XLSX, and your organisation gets **3 AI credits a month** to spend on AI scheduling and officials. When a competition is finished, complete or archive it to free its slot. Divisions work differently: archiving one gives its slot back only if it never recorded a result ([archive and delete](/help/divisions/archive)).
 
 ## Event Pass — $11.99 one-time
 
@@ -14,13 +14,13 @@ One-time upgrade for a single competition, while that competition is still runni
 
 - **Event Pass — $11.99**: **128 entrants** per division, up to **10 divisions**.
 
-It carries branded exports, public player cards, sponsor tiers and online sponsor invoices, the realtime scoreboard and slideshow, advanced formats — americano and ladders — and a **4% platform fee** on entry fees instead of 5%, plus a one-time top-up of **+25 AI credits**. A competition holds one pass and keeps it.
+It carries branded exports, public player cards, sponsor tiers and online sponsor invoices, the realtime scoreboard and slideshow, advanced formats — americano and ladders — and a **3% platform fee** on entry fees instead of 5%, plus a one-time top-up of **+5 AI credits**. A competition holds one pass and keeps it.
 
 Your brand **colour** is not part of it — that stays Pro. A passed competition doesn't count against your active-competition limit. Right for the tournament that comes round rarely enough that a running subscription doesn't pay for itself. It doesn't carry to the next edition. [What the pass buys, in full](/help/billing/event-pass).
 
 ## Pro — $14.99/month, up to 5 organisations
 
-Unlimited active competitions, 20 divisions in each, 256 entrants per division, 10 team members — plus the organiser toolkit: your **brand colour** on public pages and share images (the logo is free everywhere), a **2% platform fee** on entry fees, spreadsheet imports and branded exports, clubs, player stats, advanced formats, read-only API keys and embeds (score & manage keys need Enterprise), and **25 AI credits a month**. Also unlocks automatic suspension tracking, automatic officials assignment and rating your match officials, auto-drafted result posts, public player profiles, and up to 10 public dashboards. Starts with a 14-day trial, no card required — one trial per organisation, whether you start it yourself or our team sets one up for you; if you come back to Pro later, billing starts from day one.
+Unlimited active competitions, 20 divisions in each, 256 entrants per division, 10 team members — plus the organiser toolkit: your **brand colour** on public pages and share images (the logo is free everywhere), a **2% platform fee** on entry fees, spreadsheet imports and branded exports, clubs, player stats, advanced formats, read-only API keys and embeds (score & manage keys need Enterprise), and **8 AI credits a month**. Also unlocks automatic suspension tracking, automatic officials assignment and rating your match officials, auto-drafted result posts, public player profiles, and up to 10 public dashboards. Starts with a 14-day trial, no card required — one trial per organisation, whether you start it yourself or our team sets one up for you; if you come back to Pro later, billing starts from day one.
 
 ## Enterprise — talk to us
 
@@ -37,7 +37,7 @@ Charging entry fees is free on every plan — Community included. What the plan 
 | Plan | Platform fee |
 | --- | --- |
 | Community | 5% |
-| Event Pass | 4% |
+| Event Pass | 3% |
 | Pro | 2% |
 | Enterprise | 1% |
 

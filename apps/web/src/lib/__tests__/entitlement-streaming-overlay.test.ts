@@ -32,10 +32,14 @@ async function setOverride(orgId: string, key: string, value: boolean): Promise<
   await invalidateOrgEntitlements(orgId);
 }
 
-describe("streaming.overlay is unadvertised", () => {
-  it("is in NO ENTITLEMENT_DOMAINS section — that omission is what keeps it off /pricing (Task 14b: /pricing is an owner question, out of scope)", () => {
-    const listed = ENTITLEMENT_DOMAINS.flatMap((d) => d.features);
-    for (const key of [...STREAM_KEYS, MONTHLY]) expect(listed, key).not.toContain(key);
+describe("streaming is on /pricing", () => {
+  it("every streaming key sits in the `streaming` ENTITLEMENT_DOMAINS section (owner 2026-11-16; until then they were in none)", () => {
+    const section = ENTITLEMENT_DOMAINS.find((d) => d.slug === "streaming");
+    const keys = [...STREAM_KEYS, MONTHLY];
+    expect(keys.length).toBeGreaterThan(1);
+    for (const key of keys) expect(section?.features, key).toContain(key);
+    // …and in no second section, which would render the row twice.
+    for (const key of keys) expect(ENTITLEMENT_DOMAINS.filter((d) => d.features.includes(key)).length, key).toBe(1);
   });
 
   it("the domains list is otherwise untouched by this wave", () => {

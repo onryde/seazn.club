@@ -12,8 +12,8 @@ An **Event Pass** upgrades one competition while it runs — bigger limits, the 
 |---|---|
 | Entrants per division | 128 |
 | Divisions in the competition | Up to 10 |
-| AI credits | +25, one-time |
-| Platform fee on entry fees | 4% |
+| AI credits | +5, one-time |
+| Platform fee on entry fees | 3% |
 
 A competition holds exactly one pass, and there is no second one to buy for it afterwards. If your event is bigger than the numbers above — more than 128 entrants in a single division, or more than 10 divisions — Pro is the step: it raises every competition in the organisation rather than one, and it is cheaper than a pass at that size for anything running longer than a few weeks.
 
@@ -24,13 +24,13 @@ Prices are shown in your billing currency, so the figure above is the US one; th
 For the competition it covers, and every division inside it:
 
 - **128 entrants** per division (Community allows 64) — and up to **10 divisions** in the competition (Community allows 4).
-- **A 4% platform fee** on card entry fees, instead of Community's 5% — on a $2,000 event that's $20 back in your pocket.
+- **A 3% platform fee** on card entry fees, instead of Community's 5% — on a $2,000 event that's $40 back in your pocket.
 - **Branded exports** — order of play, match sheets, rotas and posters carry your masthead, logo and sponsor line instead of exporting as plain tables.
 - **Public player cards** — entrants get their public profile pages.
 - **Sponsor tiers and online sponsor invoices** — Title / Gold / Silver / Partner grouping, per-competition placement, and invoicing a sponsor by card ([sponsors](/help/sharing/sponsors)).
 - **The realtime scoreboard and slideshow** — live scores turn over on the venue screen *and* on the competition's public spectator pages, so your audience follows along live, not just your own noticeboard.
 - **Advanced formats** — americano and ladders.
-- **AI credits**, once, added to your organisation's wallet when the pass is bought — **+25 AI credits**, to spend on scheduling the event ([AI Schedule](/help/scheduling/ai-scheduling)).
+- **AI credits**, once, added to your organisation's wallet when the pass is bought — **+5 AI credits**, to spend on scheduling the event ([AI Schedule](/help/scheduling/ai-scheduling)).
 
 ## What it doesn't include
 
@@ -102,7 +102,7 @@ When that happens the event stays fully **readable** — nothing you built is de
 
 **Can I buy a pass on top of Pro?** No — and you wouldn't want to. Pro allows **256 entrants** per division against an M pass's 128, with no cap on divisions or on how many competitions it covers. So while you're on a paid plan, upgrade prompts inside your competitions don't offer the pass at all — they show your plan's next step on its own — and the purchase itself is blocked with a note.
 
-**Do I need a pass to take card entry fees?** No — every plan can charge entry fees, Community included. The pass makes them **cheaper**: 4% instead of 5%. [The fee ladder](/help/billing/plans#the-platform-fee-on-entry-fees).
+**Do I need a pass to take card entry fees?** No — every plan can charge entry fees, Community included. The pass makes them **cheaper**: 3% instead of 5%. [The fee ladder](/help/billing/plans#the-platform-fee-on-entry-fees).
 
 **I own the pass and I've hit a limit again — will it offer me another one?** No. Once a competition holds a pass, every upgrade prompt inside it drops the pass button and shows Pro on its own: either you've used everything the pass includes, or the feature was never on the pass. You can't buy the same competition a second pass. If you have outgrown the pass, Pro is the step, not a second purchase.
 

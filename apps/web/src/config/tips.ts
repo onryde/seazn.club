@@ -121,12 +121,12 @@ export const TIPS = {
     // longer adds it. What the pass still adds is the cross-division CAREER
     // rollup (`stats.player.career`), for the divisions inside the competition
     // it covers, so that is what this sentence names.
-    body: "For this competition only: the pass gives it 128 entrants per division and up to 10 divisions. It adds branded exports, public player cards, career stats, auto officials assignment, discipline tracking, embeds, sponsor tiers and online sponsor invoices, the realtime scoreboard, a one-time AI credit top-up and a 4% platform fee instead of 5%. It is not Pro — your brand colour on public pages, API access and your organisation's own limits all stay Pro. A passed competition stops counting against your active-competition limit; the pass doesn't carry to next season's edition.",
+    body: "For this competition only: the pass gives it 128 entrants per division and up to 10 divisions. It adds branded exports, public player cards, career stats, auto officials assignment, discipline tracking, embeds, sponsor tiers and online sponsor invoices, the realtime scoreboard, a one-time AI credit top-up and a 3% platform fee instead of 5%. It is not Pro — your brand colour on public pages, API access and your organisation's own limits all stay Pro. A passed competition stops counting against your active-competition limit; the pass doesn't carry to next season's edition.",
     helpSlug: "billing/event-pass",
   },
   "registration.platform-fee": {
     title: "The platform fee",
-    body: "Charging entry fees is free on every plan, Community included. What your plan sets is the fee we keep on card payments: 5% on Community, 4% on a competition with an Event Pass, 2% on Pro, 1% on Enterprise. Stripe's own processing fee is separate.",
+    body: "Charging entry fees is free on every plan, Community included. What your plan sets is the fee we keep on card payments: 5% on Community, 3% on a competition with an Event Pass, 2% on Pro, 1% on Enterprise. Stripe's own processing fee is separate.",
     helpSlug: "registration/card-payments",
   },
   "registration.ref-number": {
