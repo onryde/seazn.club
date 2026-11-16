@@ -202,6 +202,10 @@
 .mkp-phones figure{min-width:0}.mkp-phones .mkp-shot.mkp-ph{border-color:#2c1f66;max-width:none;margin-top:0;box-shadow:none}
 .mkp-phones figcaption{font-size:14px;color:#d9d2f3;margin-top:10px}.mkp-phones figcaption b{display:block;color:var(--mk-cream);font-family:var(--mk-font-display, var(--font-geist-sans));font-size:21px;font-weight:600;line-height:1.1;margin-bottom:2px}
 @media (min-width:900px){.mkp-phones{grid-template-columns:repeat(4,minmax(0,1fr));gap:32px;margin-top:44px}}
+/* the Sports index: each phone is a link to its sport's page */
+.mkp-sportcard{display:block;min-width:0;color:inherit;border-radius:24px;scroll-margin-top:64px}
+.mkp-sportcard:hover b,.mkp-sportcard:focus-visible b{color:var(--mk-lime)}
+#sports{scroll-margin-top:64px}
 .mkp-off-steps{margin-top:22px;display:grid;gap:14px;counter-reset:o}
 .mkp-off-steps li{counter-increment:o;padding-left:44px;position:relative;color:#5d5873;max-width:44ch}
 .mkp-off-steps li::before{content:counter(o);position:absolute;left:0;top:0;width:32px;height:32px;border-radius:50%;background:var(--mk-night);color:var(--mk-lime);font-family:var(--mk-font-display, var(--font-geist-sans));font-weight:700;font-size:19px;display:grid;place-items:center}

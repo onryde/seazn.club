@@ -1346,5 +1346,21 @@
   "product.sponsor.demo.stream.channel": "Your club's YouTube channel",
   "product.sponsor.demo.stream.turns": "{tier}: {n} in every rotation",
   "product.sponsor.demo.stream.none": "No sponsor on screen",
-  "nav.product.sponsoring": "Sponsoring"
+  "nav.product.sponsoring": "Sponsoring",
+  "product.sports.meta.title": "Tournament scoring for every sport you run",
+  "product.sports.meta.description": "Cricket, football, tennis, badminton, hockey and more. Each sport has its own scoring pad, its own tables and a live page for players and parents.",
+  "product.sports.crumb": "Sports",
+  "product.sports.h1": "Scored the way *your sport* is played.",
+  "product.sports.lede": "Run a tournament in any of these sports from your phone. Each one has a scoring pad that follows its own rules, tables that count the right things, and a live page everyone can open.",
+  "product.sports.pick": "Pick your sport",
+  "product.sports.grid.title": "One pad per sport",
+  "product.sports.grid.lede": "Each picture is the real scoring screen. Open a sport to try it.",
+  "product.sports.faq.1.q": "My sport is not on the list. Can I still use Seazn?",
+  "product.sports.faq.1.a": "Yes. Any sport can run with simple results: enter the score or the winner, and the draws and tables still work.",
+  "product.sports.faq.2.q": "Can one club run several sports?",
+  "product.sports.faq.2.a": "Yes. Each competition picks its own sport, and a club can run as many as it likes.",
+  "product.sports.faq.3.q": "Is scoring free?",
+  "product.sports.faq.3.a": "Yes. Scoring is on every plan, for every sport.",
+  "product.sports.closing": "Start with the sport you run this weekend.",
+  "nav.sport.all": "All sports"
 }

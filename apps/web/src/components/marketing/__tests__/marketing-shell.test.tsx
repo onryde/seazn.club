@@ -23,7 +23,9 @@ describe("marketing shell pieces", () => {
     // localized labels) — resolve it to an element, then static-render.
     const html = renderToStaticMarkup(await MarketingFooter({ lang: "en" }));
     expect(html).toContain('href="/product/streaming"');
-    expect(html).toContain('href="/sports/cricket"');
+    // One Sports link to the index, which lists every sport; no single sport is singled out here.
+    expect(html).toContain('href="/sports"');
+    expect(html).not.toContain('href="/sports/');
     expect(html).toContain('href="/product/remote-scoring"');
     expect(html).toContain('href="/product/format"');
     expect(html).not.toContain('href="/formats"');

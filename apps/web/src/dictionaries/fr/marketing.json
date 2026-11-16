@@ -1346,5 +1346,21 @@
   "product.sponsor.demo.stream.channel": "La chaîne YouTube de votre club",
   "product.sponsor.demo.stream.turns": "{tier} : {n} par rotation",
   "product.sponsor.demo.stream.none": "Aucun sponsor à l'écran",
-  "nav.product.sponsoring": "Sponsoring"
+  "nav.product.sponsoring": "Sponsoring",
+  "product.sports.meta.title": "Le score de tournoi pour chaque sport que vous organisez",
+  "product.sports.meta.description": "Cricket, football, tennis, badminton, hockey et plus encore. Chaque sport a son propre pavé de score, ses classements et une page en direct pour joueurs et parents.",
+  "product.sports.crumb": "Sports",
+  "product.sports.h1": "Le score, comme *votre sport* se joue.",
+  "product.sports.lede": "Organisez un tournoi dans l'un de ces sports depuis votre téléphone. Chacun a un pavé de score qui suit ses règles, des classements qui comptent ce qu'il faut et une page en direct ouverte à tous.",
+  "product.sports.pick": "Choisissez votre sport",
+  "product.sports.grid.title": "Un pavé par sport",
+  "product.sports.grid.lede": "Chaque image est le vrai écran de score. Ouvrez un sport pour l'essayer.",
+  "product.sports.faq.1.q": "Mon sport n'est pas dans la liste. Puis-je quand même utiliser Seazn ?",
+  "product.sports.faq.1.a": "Oui. N'importe quel sport fonctionne avec des résultats simples : saisissez le score ou le vainqueur, et les tirages et classements suivent.",
+  "product.sports.faq.2.q": "Un club peut-il gérer plusieurs sports ?",
+  "product.sports.faq.2.a": "Oui. Chaque compétition choisit son sport, et un club peut en gérer autant qu'il veut.",
+  "product.sports.faq.3.q": "Le score est-il gratuit ?",
+  "product.sports.faq.3.a": "Oui. Le score est inclus dans chaque formule, pour chaque sport.",
+  "product.sports.closing": "Commencez par le sport de ce week-end.",
+  "nav.sport.all": "Tous les sports"
 }

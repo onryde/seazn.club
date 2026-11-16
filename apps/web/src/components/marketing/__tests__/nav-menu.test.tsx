@@ -24,6 +24,7 @@ describe("product nav ledger", () => {
     expect(hrefs).not.toContain("/formats");
     expect(hrefs).toContain("/product/scheduling");
     expect(hrefs).toContain("/product/sponsoring");
+    expect(hrefs).toContain("/sports");
     expect(hrefs).not.toContain("/scheduling");
     expect(hrefs).toContain("/pricing");
     expect(hrefs).toContain("/live");

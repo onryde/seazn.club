@@ -610,7 +610,26 @@ test.describe("product pages: layout", () => {
     expect((await request.get("/sports/cricket")).status()).toBe(200);
   });
 
-  for (const path of PAGES) {
+  test("/sports: a card per sport at every width, nothing wider than the screen, and a card opens its sport's page", async ({ page, request }) => {
+    for (const lang of ["", "/fr"]) expect((await request.get(`${lang}/sports`)).status(), `${lang}/sports`).toBe(200);
+    const slugs = ["cricket", ...[...RALLY_PAGES, ...GOAL_PAGES, "/sports/tennis"].map((p) => p.replace("/sports/", ""))];
+    for (const width of WIDTHS) {
+      await page.setViewportSize({ width, height: 800 });
+      await visit(page, "/sports");
+      await walkPage(page);
+      await expect(page.locator('[data-testid^="sport-card-"]')).toHaveCount(slugs.length);
+      await expectNoHorizontalScroll(page);
+      const broken = await page.evaluate(() => [...document.images].filter((i) => i.naturalWidth === 0).map((i) => i.src));
+      expect(broken, `${width}px`).toEqual([]);
+      await page.context().clearCookies();
+    }
+    for (const slug of slugs) await expect(page.getByTestId(`sport-card-${slug}`)).toHaveAttribute("href", `/sports/${slug}`);
+    await page.getByTestId("sport-card-football").click();
+    await expect(page).toHaveURL(/\/sports\/football$/);
+    await expect(page.getByTestId("goal-demo")).toBeVisible();
+  });
+
+  for (const path of [...PAGES, "/sports"]) {
     test(`${path}: no serious accessibility violation`, async ({ page }) => {
       await page.goto(path);
       const results = await new AxeBuilder({ page }).analyze();

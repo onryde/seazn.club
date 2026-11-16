@@ -1346,5 +1346,21 @@
   "product.sponsor.demo.stream.channel": "El canal de YouTube de tu club",
   "product.sponsor.demo.stream.turns": "{tier}: {n} en cada rotación",
   "product.sponsor.demo.stream.none": "Ningún patrocinador en pantalla",
-  "nav.product.sponsoring": "Patrocinio"
+  "nav.product.sponsoring": "Patrocinio",
+  "product.sports.meta.title": "Marcador de torneos para cada deporte que organizas",
+  "product.sports.meta.description": "Críquet, fútbol, tenis, bádminton, hockey y más. Cada deporte tiene su propio marcador, sus tablas y una página en vivo para jugadores y familias.",
+  "product.sports.crumb": "Deportes",
+  "product.sports.h1": "Anotado como se juega *tu deporte*.",
+  "product.sports.lede": "Organiza un torneo de cualquiera de estos deportes desde tu móvil. Cada uno tiene un marcador que sigue sus reglas, tablas que cuentan lo que toca y una página en vivo que todos pueden abrir.",
+  "product.sports.pick": "Elige tu deporte",
+  "product.sports.grid.title": "Un marcador por deporte",
+  "product.sports.grid.lede": "Cada imagen es la pantalla real del marcador. Abre un deporte para probarlo.",
+  "product.sports.faq.1.q": "Mi deporte no está en la lista. ¿Puedo usar Seazn igualmente?",
+  "product.sports.faq.1.a": "Sí. Cualquier deporte funciona con resultados sencillos: introduce el marcador o el ganador, y los cuadros y las tablas siguen funcionando.",
+  "product.sports.faq.2.q": "¿Puede un club llevar varios deportes?",
+  "product.sports.faq.2.a": "Sí. Cada competición elige su deporte, y un club puede llevar todos los que quiera.",
+  "product.sports.faq.3.q": "¿El marcador es gratis?",
+  "product.sports.faq.3.a": "Sí. El marcador está en todos los planes, para todos los deportes.",
+  "product.sports.closing": "Empieza por el deporte de este fin de semana.",
+  "nav.sport.all": "Todos los deportes"
 }

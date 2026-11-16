@@ -1346,5 +1346,21 @@
   "product.sponsor.demo.stream.channel": "Het YouTube-kanaal van je club",
   "product.sponsor.demo.stream.turns": "{tier}: {n} per ronde",
   "product.sponsor.demo.stream.none": "Geen sponsor in beeld",
-  "nav.product.sponsoring": "Sponsoring"
+  "nav.product.sponsoring": "Sponsoring",
+  "product.sports.meta.title": "Toernooiscores voor elke sport die je organiseert",
+  "product.sports.meta.description": "Cricket, voetbal, tennis, badminton, hockey en meer. Elke sport heeft zijn eigen scorepad, eigen standen en een livepagina voor spelers en ouders.",
+  "product.sports.crumb": "Sporten",
+  "product.sports.h1": "Gescoord zoals *jouw sport* gespeeld wordt.",
+  "product.sports.lede": "Organiseer een toernooi in een van deze sporten vanaf je telefoon. Elke sport heeft een scorepad dat de eigen regels volgt, standen die het juiste tellen en een livepagina die iedereen kan openen.",
+  "product.sports.pick": "Kies je sport",
+  "product.sports.grid.title": "Eén pad per sport",
+  "product.sports.grid.lede": "Elke afbeelding is het echte scorescherm. Open een sport om het te proberen.",
+  "product.sports.faq.1.q": "Mijn sport staat er niet bij. Kan ik Seazn toch gebruiken?",
+  "product.sports.faq.1.a": "Ja. Elke sport werkt met eenvoudige uitslagen: voer de score of de winnaar in, en de schema's en standen werken gewoon.",
+  "product.sports.faq.2.q": "Kan één club meerdere sporten organiseren?",
+  "product.sports.faq.2.a": "Ja. Elke competitie kiest haar eigen sport, en een club kan er zoveel organiseren als ze wil.",
+  "product.sports.faq.3.q": "Is scoren gratis?",
+  "product.sports.faq.3.a": "Ja. Scoren zit in elk abonnement, voor elke sport.",
+  "product.sports.closing": "Begin met de sport van dit weekend.",
+  "nav.sport.all": "Alle sporten"
 }
