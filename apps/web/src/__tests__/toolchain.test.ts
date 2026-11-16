@@ -337,6 +337,59 @@ describe("toolchain: Turbopack build cache is opt-in and env-gated", () => {
 });
 
 
+describe("toolchain: lean local build is opt-in and env-gated", () => {
+  /**
+   * `next build` defaults to cpus-1 prerender workers (11 on a 12-core Mac);
+   * measured, they add ~2.3 GB over the compile, taking the build's peak from
+   * 3.4 GB to 6.8 GB. NEXT_LEAN_BUILD=1 (local seazn-env builds) caps it at 4
+   * workers and drops server / prerender source maps; CI, Docker and the
+   * deploy workflows leave it unset and are unchanged.
+   */
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  type Cfg = {
+    enablePrerenderSourceMaps?: unknown;
+    experimental?: { cpus?: unknown; serverSourceMaps?: unknown };
+  };
+
+  async function cfg(): Promise<Cfg> {
+    vi.resetModules();
+    const mod = (await import("../../next.config.js")) as { nextConfig: Cfg };
+    return mod.nextConfig;
+  }
+
+  it("changes nothing when NEXT_LEAN_BUILD is unset", async () => {
+    vi.stubEnv("NEXT_LEAN_BUILD", "");
+    const c = await cfg();
+    expect(c.experimental?.cpus).toBeUndefined();
+    expect(c.experimental?.serverSourceMaps).toBeUndefined();
+    expect(c.enablePrerenderSourceMaps).toBeUndefined();
+  });
+
+  it("caps workers and drops source maps for NEXT_LEAN_BUILD=1 only", async () => {
+    vi.stubEnv("NEXT_LEAN_BUILD", "1");
+    const on = await cfg();
+    expect(on.experimental?.cpus).toBe(4);
+    expect(on.experimental?.serverSourceMaps).toBe(false);
+    expect(on.enablePrerenderSourceMaps).toBe(false);
+    vi.stubEnv("NEXT_LEAN_BUILD", "true");
+    expect((await cfg()).experimental?.cpus).toBeUndefined();
+  });
+
+  it("turbo.json hashes NEXT_LEAN_BUILD into the build task", () => {
+    const jsonc = readFileSync(join(REPO_ROOT, "turbo.json"), "utf8")
+      .split("\n")
+      .filter((line) => !/^\s*\/\//.test(line))
+      .join("\n");
+    const turbo = JSON.parse(jsonc) as { tasks: { build: { env?: string[] } } };
+    expect(turbo.tasks.build.env).toContain("NEXT_LEAN_BUILD");
+  });
+});
+
+
 function rootManifest(): {
   dependencies?: Record<string, string>;
   devDependencies?: Record<string, string>;

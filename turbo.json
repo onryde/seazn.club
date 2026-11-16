@@ -48,7 +48,9 @@
         "SKIP_TYPECHECK",
         // Gates experimental.turbopackFileSystemCacheForBuild in next.config.js;
         // strict env mode would otherwise strip it before Next reads it.
-        "NEXT_BUILD_FS_CACHE"
+        "NEXT_BUILD_FS_CACHE",
+        // Gates cpus / source maps in next.config.js (local lean builds).
+        "NEXT_LEAN_BUILD"
       ]
     },
 

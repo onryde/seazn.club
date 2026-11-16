@@ -39,6 +39,8 @@ const securityHeaders = [
   { key: "X-DNS-Prefetch-Control", value: "off" },
 ];
 
+const LEAN_BUILD = process.env.NEXT_LEAN_BUILD === "1";
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: "standalone",
@@ -74,7 +76,17 @@ const nextConfig = {
     // Do not load every page's JS at boot: idle RSS 266 -> 145 MB measured
     // (docs: guides/memory-usage). Pinned by next-config-memory.test.ts.
     preloadEntriesOnStart: false,
+    // NEXT_LEAN_BUILD=1 (local seazn-env builds only; CI, Docker and the deploy
+    // workflows leave it unset): 4 prerender workers instead of cpus-1 (11 on a
+    // 12-core Mac). Measured, same tree, `SKIP_TYPECHECK=1 next build`: peak RSS
+    // of the whole process tree 6.83 GB -> 3.38 GB, almost all of it the worker
+    // phase (11 workers add ~2.3 GB on top of the compile). Pinned by
+    // toolchain.test.ts, which also pins that unset changes nothing.
+    ...(LEAN_BUILD ? { cpus: 4, serverSourceMaps: false } : {}),
   },
+  // Next reads source maps during the prerender phase by default; lean builds
+  // skip them (docs: guides/memory-usage, "Disable source maps").
+  ...(LEAN_BUILD ? { enablePrerenderSourceMaps: false } : {}),
   // Monorepo: trace from the workspace root so hoisted node_modules land in
   // .next/standalone (Next docs: config/output caveats).
   outputFileTracingRoot: path.join(import.meta.dirname, "../.."),
