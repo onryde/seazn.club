@@ -51,8 +51,11 @@ function fmt(iso: string | null, never: string): string {
 export function ApiKeysPanel({
   orgId,
   competitions,
+  developerDocs = false,
 }: {
   orgId: string;
+  /** Whether to link to the developer docs — only for an organisation that has them switched on. */
+  developerDocs?: boolean;
   /** Org competitions offered as an optional key pin (v3/08 §2). */
   competitions: { id: string; name: string }[];
 }) {
@@ -328,12 +331,14 @@ export function ApiKeysPanel({
         </ul>
       )}
 
-      <p className="text-xs text-slate-500">
-        {msg("apiKeys.docs.prefix")}{" "}
-        <Link href="/developers" className="font-medium text-purple-600 hover:underline">
-          {msg("apiKeys.docs.link")} →
-        </Link>
-      </p>
+      {developerDocs && (
+        <p className="text-xs text-slate-500" data-testid="api-keys-docs-link">
+          {msg("apiKeys.docs.prefix")}{" "}
+          <Link href="/developers" className="font-medium text-purple-600 hover:underline">
+            {msg("apiKeys.docs.link")} →
+          </Link>
+        </p>
+      )}
 
       {revoked.length > 0 && (
         <details className="text-sm text-slate-500">

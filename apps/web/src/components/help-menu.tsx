@@ -17,13 +17,19 @@ export interface HelpMenuLabels {
 
 /** `labels` is the localized copy, resolved by the server parent (Nav) and
  *  passed in — client islands can't import the server-only t(). */
+/**
+ * The menu's links, in order. No developer docs (owner, 2026-11-16): they are switched on per organisation
+ * (lib/developer-docs.ts) and not found for everyone else, and the console chrome does not spend an entitlement read on
+ * every page to find out. An organisation that has them is linked from Settings → API, beside its keys.
+ */
+export function helpMenuItems(labels: HelpMenuLabels): { href: string; label: string }[] {
+  return [{ href: "/help", label: labels.centre }];
+}
+
 export function HelpMenu({ labels }: { labels: HelpMenuLabels }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
-  const items = [
-    { href: "/help", label: labels.centre },
-    { href: "/developers", label: labels.developerDocs },
-  ];
+  const items = helpMenuItems(labels);
 
   useEffect(() => {
     if (!open) return;
