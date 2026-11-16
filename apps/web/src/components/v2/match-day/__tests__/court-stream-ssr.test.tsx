@@ -13,11 +13,12 @@ import fr from "@/dictionaries/fr/ui.json";
 import nl from "@/dictionaries/nl/ui.json";
 import type { Dict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
-import type { MatchDayCourt, MatchDayCourtStream, MatchDayFixture, MatchDayQueued } from "@/lib/match-day/types";
+import type { MatchDayCandidate, MatchDayCourt, MatchDayCourtStream, MatchDayFixture, MatchDayQueued } from "@/lib/match-day/types";
 import {
   canLinkCourt, lastWorkingMinute, linkFailureKey, phoneKey, switchFailureKey, switchSpec, youtubeTargets,
 } from "@/lib/match-day/court-stream";
 import { CourtFocus, type MatchDayCtx } from "@/components/v2/match-day/court-focus";
+import { CandidateRows } from "@/components/v2/match-day/candidate-list";
 import { CourtList } from "@/components/v2/match-day/court-list";
 import { TargetPicker } from "@/components/v2/match-day/court-stream-sheet";
 import { levelWords } from "@/lib/score/levels";
@@ -247,6 +248,63 @@ describe("the Stream switch", () => {
     expect(switchFailureKey("")).toBe("matchDay.refusal.other");
     expect(linkFailureKey("court_already_streaming")).toBe("matchDay.courtStream.alreadyStreaming");
     expect(linkFailureKey("anything else")).toBe("matchDay.refusal.other");
+  });
+});
+
+// Ruling O14 (2026-11-16, superseding R11): a waiting-to-be-called (candidate) row of a LINKED free court carries the Stream switch, so
+// the day's first match is switched on before it is called. Rows are written out from the ruling, not computed by the code under test.
+describe("the Stream switch on a waiting-to-be-called (candidate) row", () => {
+  const cand = (o: Partial<MatchDayCandidate> = {}, f: Partial<MatchDayFixture> = {}): MatchDayCandidate => ({
+    fixture: fx({ id: "k-1", started_at: null, headline: null, ...f }),
+    source: "this_court", from_court_name: null, first_in_queue: false, waiting_minutes: 0, behind_minutes: 0, planned_at: null, blocked: null, ...o,
+  });
+  const free = (o: Partial<MatchDayCourt> = {}) => court({ state: "free", current: null, queue: [], ...o });
+  const rows = (c: MatchDayCourt, candidates: MatchDayCandidate[], ctx: MatchDayCtx = baseCtx()) =>
+    renderToStaticMarkup(<CandidateRows ctx={ctx} court={c} candidates={candidates} onCall={() => {}} />);
+  const sw = (html: string) => html.match(/<button[^>]*data-testid="md-cs-switch"[^>]*>/g) ?? [];
+
+  it("the court's own next match, on a linked court: a switch, off by default, free to turn, beside Call", () => {
+    const html = rows(free({ stream_link: link() }), [cand(), cand({}, { id: "k-2", court_stream: true })]);
+    const buttons = sw(html);
+    expect(buttons).toHaveLength(2);
+    expect(buttons.map((b) => /aria-checked="(true|false)"/.exec(b)![1])).toEqual(["false", "true"]);
+    for (const b of buttons) expect(isDisabled(b)).toBe(false);
+    expect(count(html, "md-candidate")).toBe(2);
+  });
+
+  it("on a court with no link a candidate that is off has none; the one switched on shows it locked, 'Court not streaming'", () => {
+    expect(count(rows(free(), [cand()]), "md-cs-switch")).toBe(0);
+    const html = rows(free(), [cand({}, { court_stream: true })]);
+    expect(sw(html)).toHaveLength(1);
+    expect(isDisabled(sw(html)[0]!)).toBe(true);
+    expect(html).toContain("Court not streaming");
+  });
+
+  it("a match that waits on ANOTHER court, or on none, is judged on its own court: no switch to turn on here, an ON one locked", () => {
+    const html = rows(free({ stream_link: link() }), [
+      cand({ source: "other_court", from_court_name: "Court 9" }, { id: "k-3" }),
+      cand({ source: "no_court" }, { id: "k-4" }),
+      cand({ source: "no_court" }, { id: "k-5", court_stream: true }),
+    ]);
+    const buttons = sw(html);
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0]).toContain('aria-checked="true"');
+    expect(isDisabled(buttons[0]!)).toBe(true);
+  });
+
+  it("its own stream code locks it, naming why; a view-only or frozen desk sees only an ON one, locked", () => {
+    const linked = free({ stream_link: link() });
+    expect(rows(linked, [cand({}, { own_stream_code: true })])).toContain("This match has its own stream code");
+    for (const o of [{ readOnly: true }, { frozen: true }] as const) {
+      const html = rows(linked, [cand(), cand({}, { id: "k-2", court_stream: true })], baseCtx(o));
+      expect(sw(html)).toHaveLength(1);
+      expect(isDisabled(sw(html)[0]!)).toBe(true);
+    }
+  });
+
+  it("a blocked candidate (a player busy elsewhere) keeps its switch: the intent is the match's, not the call's", () => {
+    const html = rows(free({ stream_link: link() }), [cand({ blocked: { kind: "player_busy", person_name: "Zara", court_name: "Court 4" } })]);
+    expect(sw(html)).toHaveLength(1);
   });
 });
 

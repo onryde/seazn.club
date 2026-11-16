@@ -16,7 +16,7 @@ import { rigApiTarget, rigUser, apiSessionOnTarget } from "@/server/relay/__test
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { linkCourtStream, withdrawCourtStream } from "../court-streams";
 import { courtStreamsForDay } from "../court-streams";
-import { getMatchDay } from "../match-day";
+import { getMatchDay, matchDayCandidates } from "../match-day";
 import { at, place, seedDay, setStatus, type Day } from "./_match-day-seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -118,6 +118,43 @@ describe.skipIf(!HAS_DB)("court streams (the desk's read)", () => {
     expect([court.queue[0]!.court_stream, court.queue[0]!.own_stream_code]).toEqual([false, true]);
     await sql`update fixture_stream_codes set ended_at = now(), end_cause = 'reissued', tok_enc = null where fixture_id = ${f1}`;
     expect((await courtOf()).queue[0]!.own_stream_code, "an ended code is not active").toBe(false);
+  });
+
+  it("ruling O14: a waiting-to-be-called (candidate) row carries the match's real court_stream and own_stream_code, in the same read", async () => {
+    await link();
+    await setStatus(f0, "scheduled"); // Court 2 is free: its next match, f0, is the court's own candidate
+    await sql`insert into fixture_stream_settings (fixture_id, org_id, court_stream) values (${f0}, ${day.orgId}, true)`;
+    const candidate = async (id: string) => {
+      const all = await matchDayCandidates(day.auth, day.comp.id, day.courts.c2, at(0));
+      const c = all.find((x) => x.fixture.id === id);
+      if (!c) throw new Error(`${id} is not a candidate of Court 2: ${all.map((x) => x.fixture.id).join(",")}`);
+      return c;
+    };
+    const first = await candidate(f0);
+    expect(first.source).toBe("this_court");
+    expect([first.fixture.court_stream, first.fixture.own_stream_code]).toEqual([true, false]);
+    // Its own active code, the other flag; an ended one is not active (as for a queued row).
+    await sql`insert into fixture_stream_codes (org_id, fixture_id, code, tok_hash, tok_enc, issued_by)
+              values (${day.orgId}, ${f0}, ${newCode()}, ${'0'.repeat(64)}, ${Buffer.from("sealed")}, ${await rigUser()})`;
+    expect((await candidate(f0)).fixture.own_stream_code).toBe(true);
+    await sql`update fixture_stream_codes set ended_at = now(), end_cause = 'reissued', tok_enc = null where fixture_id = ${f0}`;
+    await sql`update fixture_stream_settings set court_stream = false where fixture_id = ${f0}`;
+    expect([ (await candidate(f0)).fixture.court_stream, (await candidate(f0)).fixture.own_stream_code ]).toEqual([false, false]);
+  });
+
+  it("ruling O14: the candidates' switches cost ONE statement however many candidates, and none for the desk's own courts", async () => {
+    const seen: string[] = [];
+    const opts = (sql as unknown as { options: { debug?: unknown } }).options;
+    const saved = opts.debug;
+    opts.debug = (_c: number, q: string) => { seen.push(q); };
+    try {
+      await courtStreamsForDay(day.orgId, [], [f0], at(0));
+      const one = seen.length;
+      seen.length = 0;
+      await courtStreamsForDay(day.orgId, [], [f0, f1, day.comp.fixtures[2]!.id], at(0));
+      expect(one, "one statement for a candidate list").toBe(1);
+      expect(seen.length, "the same for three candidates").toBe(1);
+    } finally { opts.debug = saved; }
   });
 
   it("a view-only member reads it; the read costs one statement per kind (no per-court query)", async () => {

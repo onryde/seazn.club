@@ -1978,8 +1978,8 @@ test.describe("Match Day — PB2 item 3: a viewer's poll carries no Needs-you ro
  * code, then "Phone waiting". Stop streaming asks first; once the court is unlinked the chip goes, the link action returns, and the
  * match's switch stays ON but locked ("Court not streaming"): the switch is the per-match intent, and withdrawing never edits it.
  *
- * Court 1 is the court under test (a match in play and one queued): a free court's next match is a candidate, whose switch always
- * reads off (ruling R11), so only a court with a current or queued match carries Stream switches.
+ * Court 1 is the court under test (a match in play and one queued). A free court's next match is a candidate: it carries the
+ * switch too (ruling O14, 2026-11-16, superseding R11's "always reads off"), pinned in its own test below.
  */
 const UI_CS = (key: string, vars: Record<string, string> = {}): string =>
   Object.entries(vars).reduce((s, [k, v]) => s.replaceAll(`{${k}}`, v), UI_EN[`matchDay.courtStream.${key}`] ?? `?${key}`);
@@ -2137,6 +2137,49 @@ test.describe("Match Day — court stream (desk)", () => {
     await expect(page.getByTestId("md-cs-band")).toHaveCount(0);
     const settings = await withDb((sql) => sql`select 1 from fixture_stream_settings where fixture_id = ${seed.anaCal} and court_stream`);
     expect(settings, "a refused switch wrote nothing").toHaveLength(0);
+  });
+
+  test("a not-yet-called match is switched on from the free court's candidate row, and shows ON once it is called (ruling O14)", async ({ page, request }) => {
+    test.setTimeout(150_000);
+    const seed = await seedMatchDay(request, "CStreamCand");
+    const orgId = (await activeOrg(page)).id;
+    const label = `Candidate channel ${TAG}`;
+    await seedYoutubeDestination(orgId, label);
+    await page.goto(await competitionPath(request, seed.competitionId, "/match-day"), { waitUntil: "load" });
+
+    // Court 2 is free with Cal v Dee waiting: before it is linked a candidate carries no switch (nothing is switched on).
+    await row(page, seed.court2).click();
+    const focus = page.getByTestId("md-focus");
+    await expect(focus).toHaveAttribute("data-state", "free");
+    const cand = focus.locator(`[data-testid="md-candidate"][data-fixture-id="${seed.calDee}"]`);
+    await expect(cand).toBeVisible();
+    await expect(cand.getByTestId("md-cs-switch")).toHaveCount(0);
+
+    // Linked: the candidate wears its switch, off, and it turns on BEFORE the match is called.
+    await linkCourtThroughSheet(page, label);
+    await expect(page.getByTestId("md-cs-band")).toBeVisible();
+    const sw = cand.getByTestId("md-cs-switch");
+    await expect(sw).toHaveAttribute("aria-checked", "false");
+    await expect(sw).toBeEnabled();
+    await expectNoHorizontalScroll(page);
+    await sw.click();
+    await expect(sw).toHaveAttribute("aria-checked", "true");
+    // The switch shows its choice at once; the write lands a moment later, so the row is waited for, not read once.
+    await expect
+      .poll(async () => (await withDb((sql) => sql`select 1 from fixture_stream_settings where fixture_id = ${seed.calDee} and court_stream`)).length, {
+        message: "the switch wrote the match's intent",
+      })
+      .toBe(1);
+    // The next poll reads it back from the server: still ON (the read carries the candidate's real switch).
+    await page.reload({ waitUntil: "load" });
+    await row(page, seed.court2).click();
+    await expect(cand.getByTestId("md-cs-switch")).toHaveAttribute("aria-checked", "true");
+    await expectNoHorizontalScroll(page);
+
+    // Called: the match is now the court's current one, and its row shows ON.
+    await callTop(page, seed);
+    await expect(focus.getByTestId("md-cs-current").getByTestId("md-cs-switch")).toHaveAttribute("aria-checked", "true");
+    await expectNoHorizontalScroll(page);
   });
 
   test.describe("phone (320)", () => {

@@ -908,8 +908,20 @@ export async function matchDayCandidates(
 ): Promise<MatchDayCandidate[]> {
   const dict = await getDictionary(opts.locale ?? DEFAULT_LOCALE, "ui");
   const ranked = await withTenant(auth.orgId, (tx) => candidatesIn(tx, competitionId, courtId, now, dict));
-  const streams = await openStreamStates(auth, ranked.map((c) => c.row.id));
-  return ranked.map(({ candidate }) => ({ ...candidate, fixture: { ...candidate.fixture, stream: streams[candidate.fixture.id] ?? null } }));
+  const ids = ranked.map((c) => c.row.id);
+  // Ruling O14 (2026-11-16, superseding R11): a candidate carries the match's REAL Stream switch and own-code flag, so the day's first
+  // match can be switched on before it is called. One statement however many candidates (no court ids: the links are the board's).
+  const [streams, courtStreams] = await Promise.all([openStreamStates(auth, ids), courtStreamsForDay(auth.orgId, [], ids, now)]);
+  return ranked.map(({ candidate }) => {
+    const sw = courtStreams.switches.get(candidate.fixture.id);
+    return {
+      ...candidate,
+      fixture: {
+        ...candidate.fixture, stream: streams[candidate.fixture.id] ?? null,
+        court_stream: sw?.on ?? false, own_stream_code: sw?.ownCode ?? false,
+      },
+    };
+  });
 }
 
 /** One candidate as `candidatesIn` ranks it: the desk's row (its `fixture.stream` not yet read: null), and the board row it

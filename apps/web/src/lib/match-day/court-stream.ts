@@ -25,7 +25,8 @@ export type SwitchSpec = { on: boolean; lock: SwitchLock | null };
  *    (an OFF switch nobody can turn says nothing);
  *  - on a court with no link only a match whose switch is already ON shows it, locked, "Court not streaming" (an intent left
  *    behind by a withdrawn link: R5, the switch is the per-match intent and never ends a video).
- * Candidate rows never reach this: their `court_stream` / `own_stream_code` always read false (ruling R11).
+ * A waiting-to-be-called (candidate) row reaches this too (ruling O14, 2026-11-16, superseding R11's "candidates always read
+ * false"): its `court_stream` / `own_stream_code` are the real ones, so the day's first match can be switched on before it is called.
  */
 export function switchSpec(f: Pick<MatchDayFixture, "court_stream" | "own_stream_code">, linked: boolean, canWrite: boolean): SwitchSpec | null {
   if (!linked) return f.court_stream ? { on: true, lock: "not_streaming" } : null;
