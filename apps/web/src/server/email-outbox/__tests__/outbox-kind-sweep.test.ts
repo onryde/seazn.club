@@ -67,7 +67,7 @@
 //     payer's account is `fr`: the warning is queued to the payer's account, TRANSACTIONAL (the only wave-2 kind that is), with no
 //     organisation, and the worker makes the first attempt.
 //   - trial_expired, plan_activated, renewal_paid, renewal_failed, renewal_upcoming, subscription_changed (the billing lifecycle mails,
-//     V523): the real `processStripeEvent` with a REAL Stripe payload captured in a sandbox (usecases/__tests__/
+//     V524): the real `processStripeEvent` with a REAL Stripe payload captured in a sandbox (usecases/__tests__/
 //     _billing-lifecycle-fixtures.ts) — a no-card trial deleted at its end, a new paid subscription's invoice, an annual renewal's
 //     invoice, a declined renewal, an annual `invoice.upcoming`, a cancel scheduled — each on its own billing group whose payer's account
 //     is `fr`, `es` or `nl`: queued to the payer's account, transactional, no organisation, and the worker makes the first attempt.

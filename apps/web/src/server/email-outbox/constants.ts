@@ -3,7 +3,7 @@
 // can all read them without a cycle.
 //
 // The same two lists are typed again as CHECK constraints: the statuses in db/migration/deltas/V470__email_outbox.sql, the kinds
-// (as last redefined) in `V523__email_outbox_billing_lifecycle.sql`: V520's sixty-two (polish wave P5's V514 list — V511's
+// (as last redefined) in `V524__email_outbox_billing_lifecycle.sql`: V520's sixty-two (polish wave P5's V514 list — V511's
 // registration lifecycle list, the sponsor deals delta's V503 list plus five, plus two more; that is 59 — then the quick match's two,
 // then walk-fix F16's one) and the six billing lifecycle kinds: sixty-eight. They are two copies of one fact, so outbox-schema.test.ts reads the
 // constraint definitions back from the catalogue and requires them to name exactly these members.
@@ -82,7 +82,7 @@ export const OUTBOX_KINDS = [
   // Walk-fix F16: an automatic waitlist promotion passed a waiting entry over (no Lichess link that plays). Literal, not transactional.
   "registration_promotion_skipped",
   // Billing lifecycle mails (2026-11-15), in the brief's order: a billing group's payer is told what happened to the subscription.
-  // Account, transactional (about the payer's own money, like trial_ending). Born on the outbox. V523.
+  // Account, transactional (about the payer's own money, like trial_ending). Born on the outbox. V524.
   "trial_expired",
   "plan_activated",
   "renewal_failed",

@@ -1,4 +1,4 @@
--- V523 -- the email outbox's six billing lifecycle kinds (2026-11-15).
+-- V524 -- the email outbox's six billing lifecycle kinds (2026-11-15).
 --
 -- WHAT THIS ADDS. A billing group's payer is told what happened to the subscription, each mail queued by the Stripe webhook that
 -- learns it (server/usecases/billing-events/lifecycle-mail.ts):

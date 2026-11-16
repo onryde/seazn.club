@@ -50,7 +50,7 @@ const SPEC_STATUSES = [
 // (docs/superpowers/specs/2026-11-03-quick-match-design.md §7.6, C2): the link mail at creation and the one reminder before expiry,
 // in `V515__quick_match_lifecycle.sql`, which restates V514's list plus two, then registration walk-fix F16's
 // `registration_promotion_skipped` in `V520__email_outbox_registration_promotion_skipped.sql`, which restates V515's list plus one,
-// then the six billing lifecycle kinds (2026-11-15) in `V523__email_outbox_billing_lifecycle.sql`, which restates V520's list plus
+// then the six billing lifecycle kinds (2026-11-15) in `V524__email_outbox_billing_lifecycle.sql`, which restates V520's list plus
 // six and is therefore the LAST definer of the CHECK. The vocabulary test compares constants.ts with it, and the live-CHECK read
 // compares the database's constraint with it as well.
 const SPEC_KINDS = [
@@ -286,7 +286,7 @@ describe.skipIf(!HAS_DB)("email_outbox (V470)", () => {
     expect(kinds.length).toBeGreaterThan(0);
     expect(statuses).toEqual([...OUTBOX_STATUSES].sort());
     expect(kinds).toEqual([...OUTBOX_KINDS].sort());
-    // And the database's list is the typed sixty-eight (V523: the spec's fifty-one, sponsor_deal_paid, the seven registrant lifecycle
+    // And the database's list is the typed sixty-eight (V524: the spec's fifty-one, sponsor_deal_paid, the seven registrant lifecycle
     // kinds, the quick match design's two, walk-fix F16's one, then the six billing lifecycle kinds), read against the typed list,
     // not only against constants.ts.
     expect(kinds).toEqual([...SPEC_KINDS].sort());
