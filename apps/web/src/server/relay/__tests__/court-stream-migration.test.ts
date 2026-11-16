@@ -1,4 +1,4 @@
-// V523 (court stream, spec docs/specs/2026-11-14-court-stream-design.md in the capture repo): a court link for a day, its
+// V525 (court stream, spec docs/specs/2026-11-14-court-stream-design.md in the capture repo): a court link for a day, its
 // code as a row of fixture_stream_codes with no fixture, the per-fixture court_stream switch, the session's court_link_id,
 // and a capture record with no fixture. Each refusal has its accepted twin in the same `it`, so an empty schema cannot
 // pass (AGENTS.md class 3): the twin fails with "relation/column does not exist" first.
@@ -61,7 +61,7 @@ const failure = async (p: PromiseLike<unknown>): Promise<string> => {
   return "landed";
 };
 
-describe.skipIf(!HAS_DB)("V523__court_stream_links.sql — the constraints are real", () => {
+describe.skipIf(!HAS_DB)("V525__court_stream_links.sql — the constraints are real", () => {
   it("court_stream_links exists with RLS enabled AND forced, no policy and no trg_set_org (the V430 pattern)", async () => {
     const rows = await sql<{ rls: boolean; forced: boolean; policies: number; triggers: number }[]>`
       select c.relrowsecurity as rls, c.relforcerowsecurity as forced,

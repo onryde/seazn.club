@@ -414,7 +414,7 @@ export async function insertStreamCode(
   return { id: row!.id, createdAt: row!.created_at };
 }
 
-/** Mint one ACTIVE court code (court stream, V523): a code row owned by a court link, with no fixture. The partial unique
+/** Mint one ACTIVE court code (court stream, V525): a code row owned by a court link, with no fixture. The partial unique
  *  index `fixture_stream_codes_one_active_court` admits one live code per link; a `code` collision is the caller's to
  *  retry exactly as `insertStreamCode`'s. `orgId` is the LINK's org. */
 export async function insertCourtStreamCode(

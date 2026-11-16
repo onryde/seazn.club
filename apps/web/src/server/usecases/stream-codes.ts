@@ -217,7 +217,7 @@ export async function reissueStreamCode(auth: AuthCtx, fixtureId: string): Promi
   });
 }
 
-/** The code row C1 judges, whichever its owner: a fixture (`fixture_id`) or a court link (`court_link_id`, V523). */
+/** The code row C1 judges, whichever its owner: a fixture (`fixture_id`) or a court link (`court_link_id`, V525). */
 type CodeRow = {
   id: string; org_id: string; tok_hash: string; issued_by: string; ended_at: Date | null;
   end_cause: "reissued" | "expired" | "withdrawn" | null;
@@ -319,7 +319,7 @@ async function serveCourtCode(row: CodeRow, link: CourtLinkRef, call: CodeCall, 
  *    only a `get` or a `beat`.
  *  - `record` (spec 2026-10-12 §4, P11/Q1): C1b without the phone condition (R4), then C1(c)'s 24 h tail. The records
  *    route passes `phone = null`, so the lazy `code_ended` pairing write below never fires for a record.
- * A FIXTURE's code only: the inner join finds no fixture for a court's code (V523), which answers 401 like an unknown one.
+ * A FIXTURE's code only: the inner join finds no fixture for a court's code (V525), which answers 401 like an unknown one.
  * `resolveAnyStreamCode` reads both.
  */
 export async function resolveStreamCode(
@@ -361,7 +361,7 @@ export async function resolveAnyStreamCode(
      where c.code = ${code}`;
   if (!tokMatches(row?.tok_hash ?? null, tok) || !row) throw codeEnded();
   if (row.fixture_id !== null) return serveFixtureCode({ ...row, fixture_id: row.fixture_id }, call, phone, now);
-  // fixture_stream_codes_one_owner (V523): no fixture means a court link, and the link's court is the org's (its FK).
+  // fixture_stream_codes_one_owner (V525): no fixture means a court link, and the link's court is the org's (its FK).
   if (row.court_link_id === null || row.court_id === null || row.court_name === null || row.competition_id === null
       || row.opens_at === null || row.expires_at === null || row.target_id === null) {
     throw new Error(`stream code ${row.id} has neither a fixture nor a court link`);

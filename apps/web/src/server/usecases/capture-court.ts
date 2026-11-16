@@ -15,7 +15,7 @@ import "server-only";
 // The destination is always the LINK's (O9), and `autoAllowed` is always true: on a court the organiser's Stream switch is
 // the decision (§5.3), and the phone's own Automatic switch is the other half (A4).
 //
-// Every read is on the non-tenant `sql` (the V430/V523 tables are FORCE RLS with no policy); the org is the code row's. The
+// Every read is on the non-tenant `sql` (the V430/V525 tables are FORCE RLS with no policy); the org is the code row's. The
 // tok is never logged, and `cred` goes only to the current session's own phone, as on a fixture code.
 import { sql, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";

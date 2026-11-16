@@ -3,7 +3,7 @@ import "server-only";
 // organiser links a COURT, for one day, to a connected YouTube channel and is shown the court's QR; the phone at that court
 // scans it once and streams every match the organiser has switched on. Link, list and withdraw are session-editor acts.
 //
-// The court's code is a row of fixture_stream_codes with no fixture (V523) — the same sealed-tok rules as a fixture's
+// The court's code is a row of fixture_stream_codes with no fixture (V525) — the same sealed-tok rules as a fixture's
 // (stream-codes.ts): FORCE RLS with no policy, so every read and write here is on the non-tenant `sql`, the org a WHERE
 // the code writes. The link has no org-tying foreign key for competition_id / target_id, so both are written from the
 // authorised, org-scoped reads below and from nowhere else. The tok is held in memory between a seal or open and the

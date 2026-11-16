@@ -1,4 +1,4 @@
--- V523 — Court stream (spec: seazn.club.capture docs/specs/2026-11-14-court-stream-design.md; plan
+-- V525 — Court stream (spec: seazn.club.capture docs/specs/2026-11-14-court-stream-design.md; plan
 -- docs/superpowers/plans/2026-11-14-court-stream-web.md, Task 2): a court link for one day, its code, the
 -- per-fixture switch that lets a court's phone stream that fixture, and the columns that hang off the link.
 --

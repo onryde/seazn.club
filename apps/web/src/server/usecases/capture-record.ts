@@ -46,7 +46,7 @@ export async function postCaptureRecord(
   rawCode: string, tok: string, req: Request, now: Date, deps: RecordDeps = {},
 ): Promise<CaptureRecordOk> {
   const code = await resolveAnyStreamCode(rawCode, tok, "record", null, now);
-  // Court stream (plan Task 7): a court's code names no match — its record is stored with no fixture (V523) and the link's
+  // Court stream (plan Task 7): a court's code names no match — its record is stored with no fixture (V525) and the link's
   // competition; the sessions it names are still read through the code's own pairings (A1, below).
   const fixtureId = code.kind === "fixture" ? code.fixtureId : null;
 

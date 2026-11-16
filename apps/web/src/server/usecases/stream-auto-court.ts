@@ -11,7 +11,7 @@ import "server-only";
 // which ends only sessions OLDER than the new one). A YouTube-connection destination has no holder exclusivity, so the new
 // start is never refused for the old one; and a refused start leaves the old match's tail running.
 //
-// R1 (§17.1): the V430/V431/V523 tables are FORCE RLS with no policy, so every read and write here is on the non-tenant `sql`.
+// R1 (§17.1): the V430/V431/V525 tables are FORCE RLS with no policy, so every read and write here is on the non-tenant `sql`.
 import { sql } from "@/lib/db";
 import { captureError } from "@/lib/sentry";
 import { log } from "@/server/logger";

@@ -21,13 +21,13 @@ const SQL_ONLY = stripSqlComments(STREAM_DELTAS);
 
 /** V430's four tables (spec §8.1), by name — the fold must find each of them. */
 const V430_TABLES = ["fixture_stream_codes", "fixture_stream_settings", "fixture_stream_pairings", "fixture_stream_phone_beats"];
-/** V523's court table (court stream), by name — the fold must find it, enabled AND forced. */
-const V523_TABLES = ["court_stream_links"];
+/** V525's court table (court stream), by name — the fold must find it, enabled AND forced. */
+const V525_TABLES = ["court_stream_links"];
 
 describe("the stream deltas — RLS is static text, not a runtime hope", () => {
   it("every created table has `enable row level security` AND `force row level security`", () => {
-    // V410's eight, plus V430's four (R1), plus V523's court table.
-    expect(STREAM_TABLES.length).toBeGreaterThanOrEqual(8 + V430_TABLES.length + V523_TABLES.length);
+    // V410's eight, plus V430's four (R1), plus V525's court table.
+    expect(STREAM_TABLES.length).toBeGreaterThanOrEqual(8 + V430_TABLES.length + V525_TABLES.length);
     let checked = 0;
     for (const t of STREAM_TABLES) {
       expect(SQL_ONLY, t).toMatch(new RegExp(`alter table ${t}\\s+enable\\s+row level security;`));
@@ -49,10 +49,10 @@ describe("the stream deltas — RLS is static text, not a runtime hope", () => {
     expect(checked).toBe(4);
   });
 
-  it("V523's court table is in the fold, enabled AND forced (court stream, the V430 pattern)", () => {
-    expect(STREAM_DELTA_FILES, "the fold reads V523").toContain("V523__court_stream_links.sql");
+  it("V525's court table is in the fold, enabled AND forced (court stream, the V430 pattern)", () => {
+    expect(STREAM_DELTA_FILES, "the fold reads V525").toContain("V525__court_stream_links.sql");
     let checked = 0;
-    for (const t of V523_TABLES) {
+    for (const t of V525_TABLES) {
       expect(STREAM_TABLES, t).toContain(t);
       expect(SQL_ONLY, t).toMatch(new RegExp(`alter table ${t}\\s+enable\\s+row level security;`));
       expect(SQL_ONLY, t).toMatch(new RegExp(`alter table ${t}\\s+force\\s+row level security;`));
@@ -96,7 +96,7 @@ describe("the stream deltas — RLS is static text, not a runtime hope", () => {
     for (const f of touching) expect(STREAM_DELTA_FILES, f).toContain(f);
   });
 
-  it("creates no policy and no grant to app_user — across the whole fold, V430 and V523 included", () => {
+  it("creates no policy and no grant to app_user — across the whole fold, V430 and V525 included", () => {
     expect(STREAM_DELTA_FILES.length, "the fold read no file").toBeGreaterThan(0);
     expect(SQL_ONLY).not.toMatch(/create policy/i);
     expect(SQL_ONLY).not.toMatch(/grant .* to app_user/i);

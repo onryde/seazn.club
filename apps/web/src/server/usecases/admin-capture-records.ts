@@ -13,7 +13,7 @@ import { CAPTURE_RECORD_REF_RE } from "@/server/api-v1/capture-schemas";
 export type AdminRecordLine = { at: string; kind: string; level: string | null; sid: string | null; fields: [key: string, value: string][] };
 export type AdminCaptureRecord = {
   id: string; ref: string; createdAt: Date; expiresAt: Date; slot: number; codeId: string;
-  /** null for a court code's record (court stream, V523): a court's code names no match. */
+  /** null for a court code's record (court stream, V525): a court's code names no match. */
   fixtureId: string | null; orgId: string;
   received: number; kept: number; dropped: number;
   /** Owner ruling RL (2026-10-12): the BAD lines among the dropped (off the allow-list or its class, unreadable, or

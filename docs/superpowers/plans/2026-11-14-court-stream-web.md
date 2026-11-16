@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - **Base:** branch from today's `origin/main` (b5f4d5ebb4 at revision, 2026-11-15). The main checkout's detached HEAD `96aae0f7e6` is far behind and has no Match Day code: never build on it. New branch `feat/court-stream` in a worktree (AGENTS.md). V522 (`youtube_live_status`) is on main and adds YouTube state to sessions: rebase before Task 2 and re-read `fixture_stream_sessions` as it stands.
-- **Migration number:** `V523__court_stream_links.sql`. V521 (`drop_registrations_group_idx`) and V522 (`youtube_live_status`) are taken on main. Re-list every branch's `db/migration/deltas` (`git for-each-ref` over heads and `origin/*`) before committing and take the next free number if V523 is gone, renaming it everywhere in this plan's tasks. The name must contain `stream` so the stream fold (`_stream-migration.ts`) reads it.
+- **Migration number:** `V525__court_stream_links.sql` (was drafted as V523; main took V523 and V524 first, so it was renumbered at the 2026-11-16 rebase). V521 (`drop_registrations_group_idx`), V522 (`youtube_live_status`), V523 (`org_revshare_ref`) and V524 (`email_outbox_billing_lifecycle`) are taken on main. The name must contain `stream` so the stream fold (`_stream-migration.ts`) reads it.
 - Stream tables follow V430's RLS pattern: `enable` + `force` row level security, no policy, no grant, no `trg_set_org`; every read and write goes through the non-tenant `sql`, with the org as a WHERE from the code or link row.
 - Contracts are generated, never hand-edited: change the zod twin and the prose in `scripts/gen-capture-contracts.ts`, run `node --experimental-strip-types scripts/gen-capture-contracts.ts`, and move each changed file's constant in `capture-contract.test.ts` in the same commit. File names keep their versions (additive optional fields, the W28 `stage` precedent): `capture-descriptor.v1`, `capture-beat.v1`, `capture-scoring-link.v1`, `capture-start.v1`, `capture-qr.v2`. The capture app re-pins its vendored copies to the merge commit.
 - Per-fixture streaming is unchanged: a fixture code's descriptor, beat answer, start and scoring-link answer carry exactly today's keys plus the scoring link's new `label`, and no other byte moves on a per-fixture path.
@@ -42,7 +42,7 @@
 
 | File | Responsibility |
 |---|---|
-| `db/migration/deltas/V523__court_stream_links.sql` | Court link table; code, settings, session and record columns |
+| `db/migration/deltas/V525__court_stream_links.sql` | Court link table; code, settings, session and record columns |
 | `apps/web/src/server/relay/domain/court-stream.ts` | Pure: `courtFocus`, `courtPhoneStatus`, `courtCodeView` |
 | `apps/web/src/server/usecases/court-streams.ts` | Desk: link, list, withdraw, Stream switch; desk read for Match Day |
 | `apps/web/src/server/usecases/court-stream-codes.ts` | Phone side: resolve a court code, read its facts, focus, label |
@@ -133,10 +133,10 @@ git commit -m "feat(capture): court stream contract fields (court, next, label, 
 
 ---
 
-### Task 2: Migration V523 — court links and the columns that hang off them
+### Task 2: Migration V525 — court links and the columns that hang off them
 
 **Files:**
-- Create: `db/migration/deltas/V523__court_stream_links.sql`
+- Create: `db/migration/deltas/V525__court_stream_links.sql`
 - Modify: `apps/web/src/server/relay/__tests__/rls-static.test.ts` (court table by name), `apps/web/src/server/relay/__tests__/migration-shape.test.ts`
 - Test: those two, plus `apps/web/src/server/relay/__tests__/court-stream-migration.test.ts` (new, DB)
 
@@ -160,14 +160,14 @@ it("end_cause admits withdrawn", async () => { /* update … end_cause='withdraw
 it("court_stream defaults false on an existing settings row", async () => {});
 ```
 
-`rls-static.test.ts`: add `"court_stream_links"` to a `V523_TABLES` list asserted enabled AND forced, and no policy/grant across the fold.
+`rls-static.test.ts`: add `"court_stream_links"` to a `V525_TABLES` list asserted enabled AND forced, and no policy/grant across the fold.
 
 - [ ] **Step 2: Run to verify they fail**
 
 Run: `cd apps/web && npx vitest run src/server/relay/__tests__/court-stream-migration.test.ts src/server/relay/__tests__/rls-static.test.ts src/server/relay/__tests__/migration-shape.test.ts --reporter=json --outputFile=/tmp/cs-2.json`
 Expected: FAIL (table missing).
 
-- [ ] **Step 3: Write `V523__court_stream_links.sql`**
+- [ ] **Step 3: Write `V525__court_stream_links.sql`**
 
 Header comment names the spec, the V430 RLS pattern and why codes reuse `fixture_stream_codes` (pairings, sessions, beats and records keep their foreign keys). Confirm the `end_cause` check's default name with `\d fixture_stream_codes` on a fresh DB before dropping it, and say so in the comment (V430's own practice).
 
@@ -182,8 +182,8 @@ Drop the `fixture_stream_codes_one_owner` check from the file, re-apply: the own
 - [ ] **Step 6: Commit**
 
 ```bash
-git add db/migration/deltas/V523__court_stream_links.sql apps/web/src/server/relay/__tests__
-git commit -m "feat(db): court stream links (V523)"
+git add db/migration/deltas/V525__court_stream_links.sql apps/web/src/server/relay/__tests__
+git commit -m "feat(db): court stream links (V525)"
 ```
 
 ---

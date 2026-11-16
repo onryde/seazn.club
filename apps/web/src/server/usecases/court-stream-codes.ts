@@ -5,7 +5,7 @@ import "server-only";
 // fixture code's, so both kinds share one constant-time tok compare and one set of C1 rules.
 //
 // Every read here is on the non-tenant `sql` (or the caller's transaction): the phone carries no org session, and
-// fixture_stream_codes / court_stream_links are FORCE RLS with no policy (V430, V523). The org is a WHERE, read from the link.
+// fixture_stream_codes / court_stream_links are FORCE RLS with no policy (V430, V525). The org is a WHERE, read from the link.
 import { sql, type Tx } from "@/lib/db";
 import { getDictionary, t, toLocale } from "@/lib/i18n";
 import { codeEnded } from "@/server/api-v1/capture-http";
@@ -16,7 +16,7 @@ import { fitText, LABEL_MAX } from "./capture-phone";
 import { IN_PLAY, liveCallSql } from "./match-day-call";
 import type { ResolvedCode } from "./stream-codes";
 
-/** A court link as a resolved court code carries it (V523's court_stream_links, the court's name joined). */
+/** A court link as a resolved court code carries it (V525's court_stream_links, the court's name joined). */
 export type CourtLinkRef = {
   id: string;
   competitionId: string;
