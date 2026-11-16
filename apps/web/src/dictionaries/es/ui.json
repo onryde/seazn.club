@@ -3559,6 +3559,7 @@
   "launch.confirm.entrants": "La lista de inscritos se cierra. Las retiradas siguen funcionando; ya no se podrá añadir a nadie nuevo.",
   "launch.confirm.entrantsSwiss": "Aún pueden entrar participantes tardíos en la fase suiza. Las retiradas siguen funcionando.",
   "launch.confirm.entrantsKnockout": "Los jugadores tardíos aún pueden entrar en la ronda 1 mientras quede un hueco libre.",
+  "launch.confirm.entrantsTable": "Los jugadores tardíos aún pueden unirse a la tabla y jugar partidos de recuperación. Las retiradas siguen funcionando.",
   "entrants.locked.note": "Este torneo ya ha comenzado: la lista de participantes está bloqueada. Las bajas siguen funcionando; no se puede añadir a nadie nuevo.",
   "entrants.swissLate.note": "Esta fase suiza ya ha empezado. Un participante que añadas aquí entra con retraso.",
   "entrants.knockoutLate.note": "Este cuadro ya ha empezado. Un jugador que añadas aquí ocupa un puesto libre en la ronda 1: un descanso o el puesto de un jugador retirado.",

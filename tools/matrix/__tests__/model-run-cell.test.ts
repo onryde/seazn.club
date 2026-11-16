@@ -50,7 +50,8 @@ const input = (over: Over = {}): RunCellInput => {
   return {
     cell: `league|${sport}`, row: "league", sport, variant,
     newDriverState: async (n) => {
-      const real = driver?.() ?? new ModelFakeDriver({ ...opts, fault879: fault879 === true });
+      // W5 T4: a table seeded by a cut keeps the roster lock after Start (a root league's list is open, which the model does not drive).
+      const real = driver?.() ?? new ModelFakeDriver({ fedTable: true, ...opts, fault879: fault879 === true });
       return { real, model: await newModelState({ driver: real, row: "league", sport, variant, entrants: 4, tag: `t${n}` }) };
     },
     runs: 40, maxCommands: 12, seed: 42, fences: true, timeLimitMs: 60_000, regressions: [],
@@ -600,14 +601,14 @@ describe("runCell", () => {
   it("fix round 1, I-1: a NEW check passed over under a target that outranks it (a KNOWN unexpected refusal) is still reported, with the commands it ran", async () => {
     // Seed 62 at 12 commands, probed over seeds 1-200 (the only hit): the shrink
     // follows an unexpected refusal and passes over #879's I7 on the way.
-    const r = await runCell(input({ driver: () => new RefusingPosts({ fault879: true }), fences: false, runs: 40, maxCommands: 12, seed: 62, regressions: [openReg("MB-003", UNEXPECTED_REFUSAL, POST_REFUSED)] }));
+    const r = await runCell(input({ driver: () => new RefusingPosts({ fault879: true, fedTable: true }), fences: false, runs: 40, maxCommands: 12, seed: 62, regressions: [openReg("MB-003", UNEXPECTED_REFUSAL, POST_REFUSED)] }));
     expect(r.failure?.check).toBe(UNEXPECTED_REFUSAL);
     expect(r.failure?.known).toBe("MB-003");
     expect(r.masked[I7]).toBeGreaterThan(0);
     expect(Object.keys(r.maskedNew)).toEqual([I7]);
     expectLateEntryShape(r.maskedNew[I7] ?? []);
     // With I7 committed too, nothing passed over is new.
-    const both = await runCell(input({ driver: () => new RefusingPosts({ fault879: true }), fences: false, runs: 40, maxCommands: 12, seed: 62, regressions: [openReg("MB-003", UNEXPECTED_REFUSAL, POST_REFUSED), openReg("MB-001", I7)] }));
+    const both = await runCell(input({ driver: () => new RefusingPosts({ fault879: true, fedTable: true }), fences: false, runs: 40, maxCommands: 12, seed: 62, regressions: [openReg("MB-003", UNEXPECTED_REFUSAL, POST_REFUSED), openReg("MB-001", I7)] }));
     expect(both.masked[I7]).toBeGreaterThan(0);
     expect(both.maskedNew).toEqual({});
   });

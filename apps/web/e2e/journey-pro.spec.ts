@@ -167,7 +167,9 @@ test.describe.serial("pro lifecycle", () => {
     const confirm = page.getByTestId("start-confirm");
     await expect(confirm).toBeVisible({ timeout: 20_000 });
     await expect(confirm).toContainText("The timetable goes live to players now.");
-    await expect(confirm.getByTestId("start-confirm-entrants")).toBeVisible();
+    // W5 T4 (X-CU-9): a root league keeps the list open after Start, so the entrants line is the table's.
+    await expect(confirm.getByTestId("start-confirm-entrants-table")).toBeVisible();
+    await expect(confirm.getByTestId("start-confirm-entrants")).toHaveCount(0);
     // The competition is published, so the promotion really happens and the
     // dialog owes the organiser that sentence. Its TEXT, not just its
     // presence: the line's whole job is naming which move is about to be made,

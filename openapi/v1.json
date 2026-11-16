@@ -12452,6 +12452,98 @@
                                     "case"
                                   ],
                                   "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "format": {
+                                      "type": "string",
+                                      "enum": [
+                                        "league",
+                                        "group"
+                                      ]
+                                    },
+                                    "entrant_id": {
+                                      "type": "string",
+                                      "format": "uuid",
+                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                    },
+                                    "stage_id": {
+                                      "type": "string",
+                                      "format": "uuid",
+                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                    },
+                                    "case": {
+                                      "type": "string",
+                                      "enum": [
+                                        "catch_up",
+                                        "rebuild_offered",
+                                        "refused",
+                                        "waiting"
+                                      ]
+                                    },
+                                    "source": {
+                                      "type": "string",
+                                      "enum": [
+                                        "organiser",
+                                        "automatic"
+                                      ]
+                                    },
+                                    "pool_key": {
+                                      "type": "string"
+                                    },
+                                    "fixtures": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "fixture_id": {
+                                            "type": "string",
+                                            "format": "uuid",
+                                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                          },
+                                          "round_no": {
+                                            "type": "integer",
+                                            "minimum": -9007199254740991,
+                                            "maximum": 9007199254740991
+                                          },
+                                          "placement": {
+                                            "type": "string",
+                                            "enum": [
+                                              "bye_slot",
+                                              "catch_up_round"
+                                            ]
+                                          },
+                                          "scheduled": {
+                                            "type": "boolean"
+                                          }
+                                        },
+                                        "required": [
+                                          "fixture_id",
+                                          "round_no",
+                                          "placement",
+                                          "scheduled"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "appended_rounds": {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "reason": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "format",
+                                    "entrant_id",
+                                    "stage_id",
+                                    "case",
+                                    "source"
+                                  ],
+                                  "additionalProperties": false
                                 }
                               ]
                             }
@@ -12696,6 +12788,98 @@
                                       "entrant_id",
                                       "stage_id",
                                       "case"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "format": {
+                                        "type": "string",
+                                        "enum": [
+                                          "league",
+                                          "group"
+                                        ]
+                                      },
+                                      "entrant_id": {
+                                        "type": "string",
+                                        "format": "uuid",
+                                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                      },
+                                      "stage_id": {
+                                        "type": "string",
+                                        "format": "uuid",
+                                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                      },
+                                      "case": {
+                                        "type": "string",
+                                        "enum": [
+                                          "catch_up",
+                                          "rebuild_offered",
+                                          "refused",
+                                          "waiting"
+                                        ]
+                                      },
+                                      "source": {
+                                        "type": "string",
+                                        "enum": [
+                                          "organiser",
+                                          "automatic"
+                                        ]
+                                      },
+                                      "pool_key": {
+                                        "type": "string"
+                                      },
+                                      "fixtures": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "object",
+                                          "properties": {
+                                            "fixture_id": {
+                                              "type": "string",
+                                              "format": "uuid",
+                                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                            },
+                                            "round_no": {
+                                              "type": "integer",
+                                              "minimum": -9007199254740991,
+                                              "maximum": 9007199254740991
+                                            },
+                                            "placement": {
+                                              "type": "string",
+                                              "enum": [
+                                                "bye_slot",
+                                                "catch_up_round"
+                                              ]
+                                            },
+                                            "scheduled": {
+                                              "type": "boolean"
+                                            }
+                                          },
+                                          "required": [
+                                            "fixture_id",
+                                            "round_no",
+                                            "placement",
+                                            "scheduled"
+                                          ],
+                                          "additionalProperties": false
+                                        }
+                                      },
+                                      "appended_rounds": {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "reason": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "format",
+                                      "entrant_id",
+                                      "stage_id",
+                                      "case",
+                                      "source"
                                     ],
                                     "additionalProperties": false
                                   }
@@ -13757,6 +13941,98 @@
                                 "entrant_id",
                                 "stage_id",
                                 "case"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "format": {
+                                  "type": "string",
+                                  "enum": [
+                                    "league",
+                                    "group"
+                                  ]
+                                },
+                                "entrant_id": {
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                },
+                                "stage_id": {
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                },
+                                "case": {
+                                  "type": "string",
+                                  "enum": [
+                                    "catch_up",
+                                    "rebuild_offered",
+                                    "refused",
+                                    "waiting"
+                                  ]
+                                },
+                                "source": {
+                                  "type": "string",
+                                  "enum": [
+                                    "organiser",
+                                    "automatic"
+                                  ]
+                                },
+                                "pool_key": {
+                                  "type": "string"
+                                },
+                                "fixtures": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "fixture_id": {
+                                        "type": "string",
+                                        "format": "uuid",
+                                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                      },
+                                      "round_no": {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "placement": {
+                                        "type": "string",
+                                        "enum": [
+                                          "bye_slot",
+                                          "catch_up_round"
+                                        ]
+                                      },
+                                      "scheduled": {
+                                        "type": "boolean"
+                                      }
+                                    },
+                                    "required": [
+                                      "fixture_id",
+                                      "round_no",
+                                      "placement",
+                                      "scheduled"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                },
+                                "appended_rounds": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                "reason": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "format",
+                                "entrant_id",
+                                "stage_id",
+                                "case",
+                                "source"
                               ],
                               "additionalProperties": false
                             }

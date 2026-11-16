@@ -75,6 +75,10 @@ export interface RosterLockText {
   /** W4 T9 (X-LE-1, ruling 263): a ROOT knockout exempts the division too (`hasRootKnockoutStage`); knockout-late-entry.ts
    *  then places the late player, parks them or refuses by name (KO_LATE_ENTRY_NO_SLOT) — never the roster lock. */
   rootKnockout: boolean;
+  /** W5 T4 (X-CU-9, RB5-L1, L2): a ROOT league or group stage exempts the division too (`hasRootTableStage`);
+   *  roundrobin-late-entry.ts reads the one predicate (`isRootTableStage`), and the late-entry admission (Task 5) seats,
+   *  offers a Rebuild or refuses by name — never the roster lock. */
+  rootTable: boolean;
   status: number;
   /** The HttpError's own code, or null (none: the wire carries wireCode). */
   code: string | null;
@@ -86,24 +90,30 @@ export interface RosterLockText {
 /** entrants.ts createEntrants: a started tournament's entrant list is locked
  *  unless one of its stages is an open-window format — or, since W3 T9 (ruling
  *  250), the division holds a root Swiss, or, since W4 T9 (ruling 263), a root
- *  knockout: `!openFormat && !(await hasRootSwissStage(tx, divisionId)) &&
- *  !(await hasRootKnockoutStage(tx, divisionId))`. The two exemptions are read
+ *  knockout, or, since W5 T4 (X-CU-9), a root league or group:
+ *  `!openFormat && !(await hasRootSwissStage(tx, divisionId)) &&
+ *  !(await hasRootKnockoutStage(tx, divisionId)) &&
+ *  !(await hasRootTableStage(tx, divisionId))`. The three exemptions are read
  *  in either order and each is optional; any other condition term is drift and
  *  throws. */
 export function rosterLockText(): RosterLockText {
   const src = read("apps/web/src/server/usecases/entrants.ts");
-  const m = /\n\s*if \(((?:division\.status === "[a-z_]+"(?: \|\| )?)+)\) \{\s*const \[openFormat\] = await tx`[\s\S]*?kind in \(([^)]*)\)[\s\S]*?if \(\s*!openFormat((?:\s*&&\s*!\(await hasRoot(?:Swiss|Knockout)Stage\(tx, divisionId\)\))*),?\s*\) \{\s*throw new HttpError\(\s*(\d{3}),\s*"([^"]*)",?\s*(?:("[A-Z_]+"|[A-Za-z_]\w*),?\s*)?\);/.exec(src);
+  const m = /\n\s*if \(((?:division\.status === "[a-z_]+"(?: \|\| )?)+)\) \{\s*const \[openFormat\] = await tx`[\s\S]*?kind in \(([^)]*)\)[\s\S]*?if \(\s*!openFormat((?:\s*&&\s*!\(await hasRoot(?:Swiss|Knockout|Table)Stage\(tx, divisionId\)\))*),?\s*\) \{\s*throw new HttpError\(\s*(\d{3}),\s*"([^"]*)",?\s*(?:("[A-Z_]+"|[A-Za-z_]\w*),?\s*)?\);/.exec(src);
   if (m === null) throw new Error("product-text: entrants.ts roster lock not found in the expected shape — re-read it and update the model's ROSTER_LOCK");
   const statuses = [...m[1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]);
   const openKinds = [...m[2].matchAll(/'([a-z_]+)'/g)].map((x) => x[1]);
   const rootSwiss = m[3].includes("hasRootSwissStage");
   const rootKnockout = m[3].includes("hasRootKnockoutStage");
+  const rootTable = m[3].includes("hasRootTableStage");
   // Each exemption is the product's own read, not a look-alike: imported from the module that defines it.
   if (rootSwiss && !/\nimport \{[^}]*\bhasRootSwissStage\b[^}]*\} from "\.\/swiss-late-entry";/.test(src)) {
     throw new Error("product-text: entrants.ts's hasRootSwissStage is not swiss-late-entry.ts's — re-read it and update the model's ROSTER_LOCK");
   }
   if (rootKnockout && !/\nimport \{[^}]*\bhasRootKnockoutStage\b[^}]*\} from "\.\/knockout-late-entry";/.test(src)) {
     throw new Error("product-text: entrants.ts's hasRootKnockoutStage is not knockout-late-entry.ts's — re-read it and update the model's ROSTER_LOCK");
+  }
+  if (rootTable && !/\nimport \{[^}]*\bhasRootTableStage\b[^}]*\} from "\.\/roundrobin-late-entry";/.test(src)) {
+    throw new Error("product-text: entrants.ts's hasRootTableStage is not roundrobin-late-entry.ts's — re-read it and update the model's ROSTER_LOCK");
   }
   const status = Number(m[4]);
   const arg = m[6];
@@ -116,7 +126,7 @@ export function rosterLockText(): RosterLockText {
       code = def[1];
     }
   }
-  return { statuses, openKinds, rootSwiss, rootKnockout, status, code, wireCode: code ?? wireCodeFor(status), message: m[5] };
+  return { statuses, openKinds, rootSwiss, rootKnockout, rootTable, status, code, wireCode: code ?? wireCodeFor(status), message: m[5] };
 }
 
 /** schedule/rounds.ts ROUND_ROBIN_STAGE_KINDS: the stage kinds the product generates

@@ -123,7 +123,8 @@ const deps = (over: Over = {}): ModelDeps => {
     }),
     signIn: async () => ({ cookies: {} }),
     prepareCaseOrg: async (_c, i) => ({ orgId: `org-${i.slug}`, orgSlug: i.slug, denied: [] }),
-    driverFor: () => new ModelFakeDriver({ fault879: fault879 === true }),
+    // W5 T4: a table seeded by a cut keeps the roster lock after Start (a root league's list is open, which the model does not drive).
+    driverFor: () => new ModelFakeDriver({ fedTable: true, fault879: fault879 === true }),
     loadRegressions: () => regs ?? [],
     ...rest,
   };
@@ -521,7 +522,7 @@ describe("model.ts", () => {
 
   it("fix round 1, I-1: a NEW failure met while shrinking toward a KNOWN one is reported NEW and exits 1 (the reviewer's probe)", async () => {
     const io = capture();
-    const d = deps({ driverFor: () => new ModelFakeDriver({ fault879: true, lieOutcome: true }), regs: [openReg("MB-002", FOLD)] });
+    const d = deps({ driverFor: () => new ModelFakeDriver({ fault879: true, lieOutcome: true, fedTable: true }), regs: [openReg("MB-002", FOLD)] });
     expect(await runModel(d, ["--run-id", "i1", "--report-dir", reportDir(), "--cell", CELL, "--runs", "40", "--max-commands", "12", "--seed", "62", "--no-fences"])).toBe(1);
     expect(failureLine(io.out())).toMatch(/^FAILURE I7-rr-no-pair-over-legs \(NEW\): /);
     expect(io.out()).toMatch(/model: 1 cell\(s\) — 0 ok, 0 known, 1 NEW/);
@@ -530,7 +531,7 @@ describe("model.ts", () => {
   it("fix round 1, I-1: a NEW check passed over under a KNOWN unexpected refusal makes the cell NEW (exit 1): printed with what it ran, and no stub it could not replay", async () => {
     const io = capture();
     const dir = reportDir();
-    const d = deps({ driverFor: () => new RefusingPosts({ fault879: true }), regs: [openReg("MB-003", UNEXPECTED_REFUSAL, POST_REFUSED)] });
+    const d = deps({ driverFor: () => new RefusingPosts({ fault879: true, fedTable: true }), regs: [openReg("MB-003", UNEXPECTED_REFUSAL, POST_REFUSED)] });
     expect(await runModel(d, ["--run-id", "i1b", "--report-dir", dir, "--cell", CELL, "--runs", "40", "--max-commands", "12", "--seed", "62", "--no-fences"])).toBe(1);
     expect(failureLine(io.out())).toMatch(/\(known MB-003\)/);
     expect(io.out()).toMatch(/\n {2}NEW I7-rr-no-pair-over-legs \(passed over while shrinking toward model-unexpected-refusal\): [^\n]*Generate\(/);

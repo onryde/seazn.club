@@ -33,7 +33,9 @@ export function StartConfirmDialog({
    *  `lib/open-entry-stages.ts`, which mirrors the server's own exemption):
    *  `"closes"`; `"swiss_late"` — a running root Swiss still takes late
    *  entrants (W3 T9), so the closing line would be false and is REPLACED by
-   *  what stays open; or `null` for an open-format division, where the line is
+   *  what stays open; `"knockout_late"` / `"table_late"` — a root knockout (W4
+   *  T9) or a root league or group (W5 T4) still takes late players, said the
+   *  same way; or `null` for an open-format division, where the line is
    *  omitted entirely rather than softened, because for those divisions it is
    *  simply untrue, and a dialog that lies once is not read again. */
   entrantsLine,
@@ -104,6 +106,10 @@ export function StartConfirmDialog({
         {/* W4 T9 (X-LE-1): a root knockout takes a late player into round 1 while a slot is free. */}
         {entrantsLine === "knockout_late" && (
           <li data-testid="start-confirm-entrants-knockout">{msg("launch.confirm.entrantsKnockout")}</li>
+        )}
+        {/* W5 T4 (X-CU-9): a root league or group takes a late player into its table with catch-up matches. */}
+        {entrantsLine === "table_late" && (
+          <li data-testid="start-confirm-entrants-table">{msg("launch.confirm.entrantsTable")}</li>
         )}
         {/* Grouped with the entrants line because both are things that CHANGE;
             the two below are clarifications about what does not lock. The

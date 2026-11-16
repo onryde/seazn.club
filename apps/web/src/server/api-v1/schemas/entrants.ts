@@ -204,9 +204,44 @@ export const KnockoutLateEntryResult = z.object({
 });
 export type KnockoutLateEntryResult = z.infer<typeof KnockoutLateEntryResult>;
 
-/** A late add's answer, by the entry stage's FORMAT: a running root Swiss (W3) or a drawn root knockout (W4). Every
- *  reader narrows on `format` before it reads a case. */
-export const LateEntryResult = z.discriminatedUnion("format", [SwissLateEntryResult, KnockoutLateEntryResult]);
+/** W5 app-A Task 4 (X-CU-7, X-CU-9; RB5-L3…L16, design 2026-11-05 §4.1): what "Add late player" did with an entrant added
+ *  to a division whose root LEAGUE or GROUP stage is running. `format` names the stage's kind. `catch_up` — the newcomer
+ *  was seated against every member they owed a match (`fixtures`: a started-round-free bye slot, or an appended catch-up
+ *  round; `appended_rounds` counts the appended ones); `waiting` — an automatic arrival (registration, import,
+ *  Reinstate) is held for one organiser tap (the tap answers `catch_up` with `source: "organiser"`); `rebuild_offered`
+ *  — nothing has started, so a Rebuild is offered beside the catch-up; `refused` — nothing to join or add (`reason`: the
+ *  `RR_LATE_ENTRY_*` code). `pool_key`: the pool a group newcomer joined. `fixtures[].scheduled`: the new line found a
+ *  free slot (else it is unscheduled and flagged to the desk, X-CU-12). Only the shape lands in Task 4; Task 5 writes
+ *  it. */
+export const TableLateEntryResult = z.object({
+  format: z.enum(["league", "group"]),
+  entrant_id: Uuid,
+  stage_id: Uuid,
+  case: z.enum(["catch_up", "rebuild_offered", "refused", "waiting"]),
+  source: z.enum(["organiser", "automatic"]),
+  pool_key: z.string().optional(),
+  fixtures: z
+    .array(
+      z.object({
+        fixture_id: Uuid,
+        round_no: z.number().int(),
+        placement: z.enum(["bye_slot", "catch_up_round"]),
+        scheduled: z.boolean(),
+      }),
+    )
+    .optional(),
+  appended_rounds: z.number().int().optional(),
+  reason: z.string().optional(),
+});
+export type TableLateEntryResult = z.infer<typeof TableLateEntryResult>;
+
+/** A late add's answer, by the entry stage's FORMAT: a running root Swiss (W3), a drawn root knockout (W4) or a running
+ *  root league or group (W5). Every reader narrows on `format` before it reads a case. */
+export const LateEntryResult = z.discriminatedUnion("format", [
+  SwissLateEntryResult,
+  KnockoutLateEntryResult,
+  TableLateEntryResult,
+]);
 export type LateEntryResult = z.infer<typeof LateEntryResult>;
 
 /** `PATCH /entrants/{id}`'s reply: the entrant, plus `cascade` when the patch disqualified an entrant still in the field

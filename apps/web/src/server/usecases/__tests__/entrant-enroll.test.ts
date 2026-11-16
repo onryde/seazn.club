@@ -298,7 +298,8 @@ describe.skipIf(!HAS_DB)("enroll an existing team", () => {
       branding: {},
     });
 
-    // Fixed-format division (league): active → 422 on add; withdraw untouched.
+    // Fixed-format division (a double elimination — W5 T4: a league is a root table and keeps the list open): active →
+    // 422 on add; withdraw untouched.
     const league = await makeDivision(auth, comp.id, "generic");
     await createEntrants(auth, league.id, [
       { kind: "individual", display_name: "A", seed: 1, members: [] },
@@ -308,7 +309,7 @@ describe.skipIf(!HAS_DB)("enroll an existing team", () => {
       auth.orgId,
       (tx) => tx`
       insert into stages (division_id, seq, kind, name, config)
-      values (${league.id}, 1, 'league', 'League', '{}')`,
+      values (${league.id}, 1, 'double_elim', 'Double elimination', '{}')`,
     );
     await withTenant(
       auth.orgId,

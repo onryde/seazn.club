@@ -900,7 +900,7 @@ for (const s of SPORTS) {
 
 describe.runIf(HAS_DB)("W3 T9 the Start lock's other formats (badminton)", () => {
   // single-sport: badminton — the lock reads the stage KIND, never the sport.
-  async function startedWith(kind: "league" | "ladder") {
+  async function startedWith(kind: "double_elim" | "ladder") {
     const { auth } = await seedOrg("pro");
     const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "Lock " + randomUUID().slice(0, 6), visibility: "private", branding: {} });
     const division = await createDivision(auth, comp.id, {
@@ -916,8 +916,9 @@ describe.runIf(HAS_DB)("W3 T9 the Start lock's other formats (badminton)", () =>
     return { auth, divisionId: division.id };
   }
 
-  it("a non-Swiss started division still refuses with the existing sentence", async () => {
-    const { auth, divisionId } = await startedWith("league");
+  it("a closed-field started division still refuses with the existing sentence", async () => {
+    // W5 T4 (X-CU-9): a league is a root table now and keeps the list open, so the closed-field example is a double elimination.
+    const { auth, divisionId } = await startedWith("double_elim");
     await expect(createEntrants(auth, divisionId, [{ kind: "individual", display_name: "Late", members: [] }])).rejects.toMatchObject({
       status: 422,
       message: LOCKED_SENTENCE,
@@ -940,7 +941,7 @@ describe.runIf(HAS_DB)("W3 T9 the Start lock's other formats (badminton)", () =>
         config: {},
       });
       await createEntrants(auth, division.id, Array.from({ length: 4 }, (_, i) => ({ kind: "individual", display_name: `P${i + 1}`, seed: i + 1, members: [] })));
-      await createStages(auth, division.id, { seq: 1, kind: "league", name: "League", config: {}, progression: null });
+      await createStages(auth, division.id, { seq: 1, kind: "double_elim", name: "Double", config: {}, progression: null });
       const [swiss] = await createStages(auth, division.id, { seq: 2, kind: "swiss", name: "Swiss", config: { rounds: 3 }, progression: null });
       if (shape === "fed") await sql`update stages set progression = '{"sources": [{"from_seq": 1, "top": 4}], "placement": "snake", "timing": "on_complete"}'::jsonb where id = ${swiss!.id}`;
       else await sql`update stages set config = config || '{"qualified": []}'::jsonb where id = ${swiss!.id}`;

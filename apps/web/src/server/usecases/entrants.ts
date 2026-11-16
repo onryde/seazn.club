@@ -44,6 +44,7 @@ import { admitSwissLateEntrant, afterSwissLateEntry, hasRootSwissStage } from ".
 import { admitKnockoutLateEntrant, afterKnockoutLateEntry, hasRootKnockoutStage } from "./knockout-late-entry";
 // A running ladder takes a late player at the bottom of its order (ladder-late-entry.ts, one owner of the rule).
 import { appendToLadderOrder } from "./ladder-late-entry";
+import { hasRootTableStage } from "./roundrobin-late-entry";
 // Type-only: withdrawal.ts imports this module, so its value is reached by a dynamic import (`patchEntrant`).
 import type { WithdrawCascadeOut } from "./withdrawal";
 
@@ -423,7 +424,8 @@ export async function createEntrants(
     // takes a late player (W3 T9, ruling 250 — `admitSwissLateEntrant` below
     // decides how, or refuses by name when no round is left or it is over),
     // and so does a drawn ROOT knockout, into its round 1 (W4 T9, X-LE-1 —
-    // `isRootKnockoutStage`; a fed knockout never takes one, X-LE-2).
+    // `isRootKnockoutStage`; a fed knockout never takes one, X-LE-2), and so does a ROOT league or group stage (W5 T4,
+    // X-CU-9 — `isRootTableStage`; the catch-up placement is `admitTableLateEntrant`, Task 5).
     // Withdrawals stay available in every state.
     if (division.status === "active" || division.status === "completed") {
       const [openFormat] = await tx`
@@ -433,7 +435,8 @@ export async function createEntrants(
       if (
         !openFormat &&
         !(await hasRootSwissStage(tx, divisionId)) &&
-        !(await hasRootKnockoutStage(tx, divisionId))
+        !(await hasRootKnockoutStage(tx, divisionId)) &&
+        !(await hasRootTableStage(tx, divisionId))
       ) {
         throw new HttpError(
           422,

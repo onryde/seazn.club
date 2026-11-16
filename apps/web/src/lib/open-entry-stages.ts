@@ -4,7 +4,8 @@
 // division is active/completed — UNLESS the division has a stage of one of
 // these kinds, because ladders and americano sessions take late joiners by
 // design (Jul3/08 §6), a running root Swiss takes a late player (W3 T9), and
-// so does a root knockout — its round 1, while a slot is free (W4 T9).
+// so does a root knockout — its round 1, while a slot is free (W4 T9) — and a root league or group stage takes a late
+// player into its table with catch-up fixtures (W5 T4, X-CU-9).
 // Read the predicate there carefully before changing this:
 // it is `exists(... kind in ('ladder','americano'))` over the WHOLE division,
 // so ONE open-format stage exempts the division. It is not "every stage".
@@ -86,11 +87,37 @@ export function isRunningRootKnockout(
   return isRootKnockoutStage(stage, division) && stage.status !== "complete";
 }
 
-/** One stage exempts the WHOLE division at Start: an open-format stage, a root Swiss, or a root knockout (`exists`, not
- *  "every"). */
+/** W5 T4 (X-CU-9; RB5-L1, L2): the stage kinds that are a round-robin TABLE a late player can join. */
+export const TABLE_STAGE_KINDS: readonly string[] = ["league", "group"];
+
+/**
+ * W5 T4 (X-CU-9, ruling 276): a ROOT table — a `league` or `group` stage that draws from the live roster (no progression
+ * source, no stored `qualified` field). A late player joins it (catch-up fixtures, Task 5); a group stage fed by an
+ * earlier one (the second tier of a two-tier format) has a fixed field, so nobody joins it late (X-LE-2's reading for
+ * tables). A bracket behind a table is never one: `isRootKnockoutStage` is the entry-stage predicate for brackets.
+ *
+ * The ONE predicate: the Start lock (`hasRootTableStage`, `usecases/roundrobin-late-entry.ts`), the admission and this
+ * client mirror all read it, so they cannot disagree.
+ */
+export function isRootTableStage(stage: EntryStage): boolean {
+  return TABLE_STAGE_KINDS.includes(stage.kind) && drawsFromRoster(stage);
+}
+
+/** A root table that still takes a late player: not `complete` (a finished table has nothing left to join; the
+ *  admission refuses by name, Task 5). */
+export function isRunningRootTable(stage: EntryStage & { status: string }): boolean {
+  return isRootTableStage(stage) && stage.status !== "complete";
+}
+
+/** One stage exempts the WHOLE division at Start: an open-format stage, a root Swiss, a root knockout, or a root table
+ *  (`exists`, not "every"). */
 function keepsListOpen(stages: readonly EntryStage[]): boolean {
   return stages.some(
-    (s) => OPEN_ENTRY_STAGE_KINDS.includes(s.kind) || isRootSwissStage(s) || isRootKnockoutStage(s, stages),
+    (s) =>
+      OPEN_ENTRY_STAGE_KINDS.includes(s.kind) ||
+      isRootSwissStage(s) ||
+      isRootKnockoutStage(s, stages) ||
+      isRootTableStage(s),
   );
 }
 
@@ -116,13 +143,15 @@ export function startClosesEntrantList(stages: readonly EntryStage[]): boolean {
 /**
  * The Start dialog's entrants line: `"closes"` (the list closes), `"swiss_late"` (a root Swiss keeps taking late
  * players; said whenever it is true, beside a ladder too), `"knockout_late"` (W4 T9: a root knockout takes a late
- * player into round 1 while it has a free slot — said when no root Swiss is there to say it first), or `null` (an
- * open-format division: the line would be false either way, so it is omitted).
+ * player into round 1 while it has a free slot — said when no root Swiss is there to say it first), `"table_late"`
+ * (W5 T4: a root league or group takes a late player into its table with catch-up matches — said when neither of the
+ * two above is), or `null` (an open-format division: the line would be false either way, so it is omitted).
  */
-export type StartEntrantsLine = "closes" | "swiss_late" | "knockout_late" | null;
+export type StartEntrantsLine = "closes" | "swiss_late" | "knockout_late" | "table_late" | null;
 export function startEntrantsLine(stages: readonly EntryStage[]): StartEntrantsLine {
   if (stages.some(isRootSwissStage)) return "swiss_late";
   if (stages.some((s) => isRootKnockoutStage(s, stages))) return "knockout_late";
+  if (stages.some(isRootTableStage)) return "table_late";
   return startClosesEntrantList(stages) ? "closes" : null;
 }
 
@@ -150,7 +179,11 @@ export function entrantListLocked(
   // Right now, a finished root Swiss exempts nothing: the add would only come back SWISS_OVER (review I1). Nor does a
   // finished root knockout (W4 T9): it has no round-1 slot left, so the add would only come back refused.
   return !stages.some(
-    (s) => OPEN_ENTRY_STAGE_KINDS.includes(s.kind) || isRunningRootSwiss(s) || isRunningRootKnockout(s, stages),
+    (s) =>
+      OPEN_ENTRY_STAGE_KINDS.includes(s.kind) ||
+      isRunningRootSwiss(s) ||
+      isRunningRootKnockout(s, stages) ||
+      isRunningRootTable(s),
   );
 }
 
@@ -191,6 +224,23 @@ export function knockoutLateEntryOffered(args: {
     ENTRANT_LIST_LOCKED_STATUSES.includes(args.divisionStatus) &&
     isRunningRootKnockout(args.stage, args.division) &&
     args.generated
+  );
+}
+
+/**
+ * W5 T4 (X-CU-9): is "Add late player" offered on this stage's rail? On a ROOT table (`isRootTableStage`) of a started
+ * division, once its fixtures exist (`generated`), until the table is finished (`isRunningRootTable`). A fed table never
+ * takes a late player; before Start the ordinary add applies. The rail itself arrives with Task 12; the predicate is the
+ * one place the rule is written.
+ */
+export function tableLateEntryOffered(args: {
+  stage: EntryStage & { status: string };
+  divisionStatus: string;
+  /** The stage has fixtures (its table was generated). */
+  generated: boolean;
+}): boolean {
+  return (
+    ENTRANT_LIST_LOCKED_STATUSES.includes(args.divisionStatus) && isRunningRootTable(args.stage) && args.generated
   );
 }
 

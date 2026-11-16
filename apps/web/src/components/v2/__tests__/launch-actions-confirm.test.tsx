@@ -177,7 +177,8 @@ describe("Start tournament confirms first", () => {
     // `enrollEntrants` exempts the WHOLE division when ANY stage is a ladder
     // or americano, so the mixed case is exempt too — the line would be false
     // there, and a dialog that lies once is not read again.
-    const closed = renderIsland(LaunchActions, baseProps({ stages: stagesOf("league", "knockout") }));
+    // W5 (X-CU-9): a root league no longer closes the list, so the closing line is pinned on a closed-field stage.
+    const closed = renderIsland(LaunchActions, baseProps({ stages: stagesOf("double_elim") }));
     await pressStart(closed);
     const closedProps = confirmProps(closed.tree());
     expect(closedProps.entrantsLine).toBe("closes");
@@ -227,7 +228,7 @@ describe("Start tournament confirms first", () => {
     // The negative pair: a Swiss fed by an earlier stage has a fixed field, so the list does close.
     const fed = renderIsland(
       LaunchActions,
-      baseProps({ stages: [{ kind: "league", progression: null, config: {} }, { kind: "swiss", progression: { from: "s1", top: 4 }, config: {} }] }),
+      baseProps({ stages: [{ kind: "double_elim", progression: null, config: {} }, { kind: "swiss", progression: { from: "s1", top: 4 }, config: {} }] }),
     );
     await pressStart(fed);
     expect(confirmProps(fed.tree()).entrantsLine).toBe("closes");
@@ -260,15 +261,57 @@ describe("Start tournament confirms first", () => {
     expect(checked, "anti-vacuity: three templates in every locale").toBe(3 * Object.keys(DICTS).length);
     expect(Object.keys(DICTS).length).toBe(4);
 
+    // W5 (X-CU-9): league_ko's and groups_ko's FIRST stage is a root table, so the line is the table's, never the
+    // knockout one: their bracket is fed and takes nobody (X-LE-2).
     for (const key of ["league_ko", "groups_ko"]) {
       const fed = renderIsland(LaunchActions, baseProps({ stages: templateStages(key) }));
       await pressStart(fed);
       const props = confirmProps(fed.tree());
-      expect(props.entrantsLine, key).toBe("closes");
+      expect(props.entrantsLine, key).toBe("table_late");
       const html = renderDialog(props);
-      expect(html, key).toContain('data-testid="start-confirm-entrants"');
       expect(html, key).not.toContain('data-testid="start-confirm-entrants-knockout"');
     }
+  });
+
+  it("W5 T4 (X-CU-9): on a root league or group says late players can join the table, never that the list closes", async () => {
+    // differential: today (110b2ccbd3) the line is "closes" - "no one new can be added" - for every one of these.
+    // A root league or group takes a late player into its table with catch-up matches (RB5-L1, L2), so that sentence
+    // would be false. The five templates whose entry stage is a table (rulebook), in every locale.
+    const KNOBS = { qualified: 4, swissRounds: 3, poolCount: 2, legs: 1 };
+    const templateStages = (key: string) =>
+      buildTemplateStages(key, KNOBS).map((d, i) => ({ kind: d.kind, progression: d.progression, config: d.config, seq: i + 1 }));
+    const KEYS = ["league", "league_ko", "groups_ko", "group_stepladder", "group_playoffs"];
+    let checked = 0;
+    for (const key of KEYS) {
+      const island = renderIsland(LaunchActions, baseProps({ stages: templateStages(key) }));
+      await pressStart(island);
+      const props = confirmProps(island.tree());
+      expect(props.entrantsLine, key).toBe("table_late");
+      for (const locale of Object.keys(DICTS)) {
+        const html = renderDialog(props, locale);
+        const label = `${key} ${locale}`;
+        const line = DICTS[locale]!["launch.confirm.entrantsTable"] as string;
+        expect(line, `${label}: the key is translated`).toBeTruthy();
+        expect(html, label).toContain(esc(line));
+        expect(html, label).toContain('data-testid="start-confirm-entrants-table"');
+        expect(html, label).not.toContain(esc(DICTS[locale]!["launch.confirm.entrants"] as string));
+        expect(html, label).not.toContain('data-testid="start-confirm-entrants"');
+        expect(html, label).not.toContain('data-testid="start-confirm-entrants-swiss"');
+        expect(html, label).not.toContain('data-testid="start-confirm-entrants-knockout"');
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: five templates in every locale").toBe(KEYS.length * Object.keys(DICTS).length);
+    expect(Object.keys(DICTS).length).toBe(4);
+    // The four locales do not share one sentence (an untranslated copy of the English would pass the check above).
+    expect(new Set(Object.values(DICTS).map((d) => d["launch.confirm.entrantsTable"])).size).toBe(4);
+
+    // The negative pair: a stage that is neither a root table nor anything else open still closes the list.
+    const closed = renderIsland(LaunchActions, baseProps({ stages: stagesOf("double_elim") }));
+    await pressStart(closed);
+    const closedProps = confirmProps(closed.tree());
+    expect(closedProps.entrantsLine).toBe("closes");
+    expect(renderDialog(closedProps)).not.toContain('data-testid="start-confirm-entrants-table"');
   });
 
   it("names the competition promotion only when the competition is published", async () => {
@@ -294,7 +337,8 @@ describe("Start tournament confirms first", () => {
       expect(html, competitionStatus).not.toContain(esc(enDict["launch.confirm.competition"] as string));
       expect(html, competitionStatus).not.toContain('data-testid="start-confirm-competition"');
       // The rest of the dialog is untouched by the carve-out — one line.
-      expect(html, competitionStatus).toContain(esc(enDict["launch.confirm.entrants"] as string));
+      // (The default stage is a root league, which keeps the list open: its entrants line is the table's, W5 T4.)
+      expect(html, competitionStatus).toContain(esc(enDict["launch.confirm.entrantsTable"] as string));
       expect(html, competitionStatus).toContain(esc(enDict["launch.confirm.formatOpen"] as string));
       expect(html, competitionStatus).toContain('data-testid="start-confirm-format-open"');
       expect(html, competitionStatus).toContain(esc(enDict["launch.confirm.rules"] as string));

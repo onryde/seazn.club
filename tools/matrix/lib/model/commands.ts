@@ -29,7 +29,7 @@ import { fenceBlocking } from "./fences.ts";
 import { ledgerEnvelopes, liveEntries, type LedgerEntry } from "./ledger-fold.ts";
 import {
   COMMAND_KINDS, FORFEIT_REFUSAL_CHECK, OPT_IN_KINDS, SETTLE_REFUSAL_CHECK, ModelViolation, NEXT_MATCH_CHECK, NEXT_MATCH_LOCK, REFUSAL_NAMED, ROSTER_LOCK, ROSTER_LOCK_CHECK, ROSTER_LOCK_FINDING, UNEXPECTED_REFUSAL,
-  absorbFixtures, checkStep, ensureModelLineups, entrantInput, fedCandidates, fedMatchStarted, inLastRound, lastRoundReadDiverges, markUnknown, modelHoldsRootKnockout, readRoster, recordFinding, rosterLocked,
+  absorbFixtures, checkStep, ensureModelLineups, entrantInput, fedCandidates, fedMatchStarted, inLastRound, lastRoundReadDiverges, markUnknown, modelHoldsRootKnockout, modelHoldsRootTable, readRoster, recordFinding, rosterLocked,
   type AnyCommandKind, type CommandCounts, type CommandKind, type FixtureModel, type ModelState, type OptInKind, type StepVerdict,
 } from "./state.ts";
 
@@ -314,7 +314,10 @@ class AddEntrant extends Cmd {
   // in a bye or a withdrawn seat, parked, or refused by name when no seat is left), outcomes this model does not
   // simulate, so it does not offer the add there. The late-entry door is driven by the W4A scripts (R2 / R10 / R6,
   // lib/scenarios/w4a-late-entry.ts), which read the seat the entrant takes off the product.
-  protected ready(m: ModelState) { return m.entrants.length < MAX_ENTRANTS && !m.completed && !(m.started && modelHoldsRootKnockout(m)); }
+  // W5 T4 (X-CU-9): the same for a started ROOT league or group — the product's late-entry door answers (catch-up fixtures,
+  // Rebuild offered, a named refusal: Task 5), outcomes this model does not simulate, so it does not offer the add there
+  // either. The W5 scripts (Task 24, lib/scenarios/r2-late-entry.ts) drive that door.
+  protected ready(m: ModelState) { return m.entrants.length < MAX_ENTRANTS && !m.completed && !(m.started && (modelHoldsRootKnockout(m) || modelHoldsRootTable(m))); }
   // After Start the product locks the roster (entrants.ts) of every other kind: offered, EXPECTED
   // to be refused, the roster judged unchanged.
   protected override expectsRefusal(m: ModelState) { return rosterLocked(m); }

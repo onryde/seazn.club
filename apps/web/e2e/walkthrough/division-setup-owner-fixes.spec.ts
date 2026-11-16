@@ -53,7 +53,7 @@ async function seedDivision(request: APIRequestContext, label: string): Promise<
   return { competitionId: comp.data!.id, divisionId: div.data!.id };
 }
 
-async function seedLeague(request: APIRequestContext, label: string, entrants: string[]): Promise<{ competitionId: string; divisionId: string; stageId: string }> {
+async function seedLeague(request: APIRequestContext, label: string, entrants: string[], kind: "league" | "double_elim" = "league"): Promise<{ competitionId: string; divisionId: string; stageId: string }> {
   const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `UI5 ${label} ${TAG}`, visibility: "private" });
   expect(comp.status, `competition: ${JSON.stringify(comp.error)}`).toBeLessThan(300);
   const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
@@ -65,7 +65,7 @@ async function seedLeague(request: APIRequestContext, label: string, entrants: s
   expect(div.status, `division: ${JSON.stringify(div.error)}`).toBeLessThan(300);
   const ents = await addEntrantsViaApi(request, div.data!.id, entrants.map((n) => `${n} ${TAG}`));
   expect(ents.ids, "entrants").toHaveLength(entrants.length);
-  const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${div.data!.id}/stages`, "POST", { seq: 1, kind: "league", name: "League" });
+  const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${div.data!.id}/stages`, "POST", { seq: 1, kind, name: kind === "league" ? "League" : "Double elimination" });
   expect(stage.status, `stage: ${JSON.stringify(stage.error)}`).toBeLessThan(300);
   const gen = await apiJson(request, `/api/v1/stages/${stage.data!.id}/generate`, "POST");
   expect(gen.status, `generate: ${JSON.stringify(gen.error)}`).toBeLessThan(300);
@@ -75,7 +75,9 @@ async function seedLeague(request: APIRequestContext, label: string, entrants: s
 test.describe("UI5: the division page's owner fixes, walked", () => {
   test("1. no start-locks banner while setting up; Start still names the lock, and the Entrants tab says it after", async ({ page, request }) => {
     test.setTimeout(budget(3, 6));
-    const { divisionId, stageId } = await seedLeague(request, "Banner", ["Ana", "Ben", "Cy", "Di"]);
+    // W5 T4 (X-CU-9): a league keeps the entrant list open after Start now, so the locked list this walk is about is a
+    // closed-field stage's — a double elimination.
+    const { divisionId, stageId } = await seedLeague(request, "Banner", ["Ana", "Ben", "Cy", "Di"], "double_elim");
     const base = await divisionPath(request, divisionId);
 
     // The state the banner used to show in: an organiser, the division set up (not started), a stage built, nothing played.
