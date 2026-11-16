@@ -2,6 +2,7 @@
 // without a DOM, so the taps, the fold, the menus, real overflow and the no-script page are all proven here.
 import { expect, test, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
+import { expectNoHorizontalScroll } from "./helpers";
 
 test.use({ storageState: { cookies: [], origins: [] } });
 
@@ -133,13 +134,14 @@ test.describe("product pages: layout", () => {
         const res = await page.goto(path);
         expect(res?.status()).toBe(200);
         await walkPage(page);
+        // The site clips sideways overflow (`overflow-x: clip`), which pins a naive scrollWidth to the viewport; the
+        // helper lifts the clip before measuring, and organiser-console.spec.ts carries the control that proves it can fail.
+        await expectNoHorizontalScroll(page);
         const m = await page.evaluate(() => ({
-          over: document.documentElement.scrollWidth - window.innerWidth,
           images: document.images.length,
           broken: [...document.images].filter((i) => !i.naturalWidth).map((i) => i.getAttribute("src")),
           h1: document.querySelectorAll("h1").length,
         }));
-        expect(m.over, "horizontal overflow in px").toBeLessThanOrEqual(0);
         expect(m.images, "pictures on the page").toBeGreaterThanOrEqual(6);
         expect(m.broken).toEqual([]);
         expect(m.h1).toBe(1);
@@ -160,7 +162,7 @@ test.describe("product pages: layout", () => {
         await page.goto(`/${lang}${path}`);
         await expect(page.locator("html")).toHaveAttribute("lang", lang);
         await walkPage(page);
-        expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth), `${lang}${path}`).toBeLessThanOrEqual(0);
+        await expectNoHorizontalScroll(page);
         // No button label is clipped by its own box.
         const clipped = await page.locator(".mkp a.mkp-btn, .mkp button").evaluateAll((els) =>
           els.filter((e) => e.scrollWidth > e.clientWidth + 1).map((e) => e.textContent),
