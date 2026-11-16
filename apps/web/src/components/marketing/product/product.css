@@ -10,7 +10,8 @@
 .mkp-wrap{max-width:1180px;margin:0 auto;padding:0 20px}
 .mkp-d{font-family:var(--mk-font-display, var(--font-geist-sans));font-weight:700;line-height:1;letter-spacing:.005em}
 /* hero */
-.mkp-hero{background:var(--mk-night);color:var(--mk-cream);padding:28px 0 0;overflow:hidden}
+/* The night nav is sticky and transparent over the hero: the hero slides up under it (as the home hero does). */
+.mkp-hero{background:var(--mk-night);color:var(--mk-cream);margin-top:-64px;padding:92px 0 0;overflow:hidden}
 .mkp-crumb{font-size:13px;color:#b9b0d8}
 .mkp-hero h1{font-size:clamp(44px,8.2vw,92px);margin-top:10px;text-wrap:balance}
 .mkp-hero h1 em{font-style:normal;color:var(--mk-lime)}
@@ -19,7 +20,7 @@
 .mkp-btn{font-weight:600;font-size:15px;padding:12px 18px;border-radius:10px;min-height:46px;display:inline-flex;align-items:center;gap:8px}
 .mkp-btn-l{background:var(--mk-lime);color:var(--mk-night)}.mkp-btn-g{border:1px solid #4a3885;color:var(--mk-cream)}
 /* the demo: one tap, every screen */
-.mkp-demo{scroll-margin-top:56px;margin-top:28px;background:var(--mk-night-2);border-top:1px solid #2c1f66;padding:22px 0 30px;position:relative}
+.mkp-demo{scroll-margin-top:64px;margin-top:28px;background:var(--mk-night-2);border-top:1px solid #2c1f66;padding:22px 0 30px;position:relative}
 .mkp-demo-h{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .mkp-demo-h p{font-family:var(--mk-font-display, var(--font-geist-sans));font-weight:600;font-size:24px}
 .mkp-demo-h span{font-size:13px;color:#b9b0d8}
@@ -146,7 +147,7 @@
 }
 @media (min-width:900px){
  .mkp-wrap{padding:0 40px}
- .mkp-hero{padding-top:56px}.mkp-hero .mkp-top{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,.9fr);gap:48px;align-items:end}
+ .mkp-hero{padding-top:120px}.mkp-hero .mkp-top{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,.9fr);gap:48px;align-items:end}
  .mkp-hero .mkp-lede{font-size:19px}
  .mkp-demo{margin-top:48px;padding:30px 0 48px}.mkp-demo-h p{font-size:30px}
  .mkp-stage{grid-template-columns:300px minmax(0,1fr) minmax(0,1fr);gap:22px;align-items:start}

@@ -23,6 +23,24 @@ export function Shot({ image, alt, eager = false }: { image: ProductImageKey; al
   );
 }
 
+/** A headline with one lime phrase: the dictionary marks it `like *this*`, so translators choose which words carry it. */
+export function Accent({ text }: { text: string }) {
+  return (
+    <>
+      {text.split("*").map((part, i) => (i % 2 ? <em key={i}>{part}</em> : part))}
+    </>
+  );
+}
+
+/** The pages' example sides. Invented, and left untranslated like every example name on the marketing site. */
+export const DEMO_TEAMS = { batting: "Thorpe Bay Tigers", bowling: "Southend Blue Blazers" } as const;
+
+/**
+ * Where the proof block's button goes. Seazn Demo Club does not exist in production yet (creating it needs the
+ * owner's explicit go), so there is no link and the block shows none. Set this once the club is live.
+ */
+export const DEMO_CLUB_HREF: string | undefined = undefined;
+
 export function ProductPage({ children }: { children: ReactNode }) {
   return <main className="mkp">{children}</main>;
 }
@@ -45,6 +63,8 @@ export function PageHero({
 }) {
   return (
     <section className="mkp-hero" data-section="hero">
+      {/* NavScrollFlip (nav-scroll.tsx) keeps the nav in its night colours while this is on screen. */}
+      <div id="mk-hero-sentinel" aria-hidden />
       <div className="mkp-wrap">
         <div className="mkp-top">
           <div>
