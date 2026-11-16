@@ -13,6 +13,7 @@ export const PRODUCT_LINKS = [
   { key: "nav.product.remoteScoring", href: "/product/remote-scoring" },
   { key: "nav.formats", href: "/product/format" },
   { key: "nav.scheduling", href: "/product/scheduling" },
+  { key: "nav.product.matchDay", href: "/product/match-day" },
   { key: "nav.product.sponsoring", href: "/product/sponsoring" },
 ] as const satisfies readonly NavLink[];
 

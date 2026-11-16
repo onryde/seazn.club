@@ -8,7 +8,7 @@ test.use({ storageState: { cookies: [], origins: [] } });
 
 const RALLY_PAGES = ["/sports/badminton", "/sports/table-tennis", "/sports/volleyball"] as const;
 const GOAL_PAGES = ["/sports/football", "/sports/hockey", "/sports/ice-hockey"] as const;
-const PAGES = ["/product/streaming", "/product/remote-scoring", "/product/format", "/product/scheduling", "/product/sponsoring", "/sports/cricket", ...RALLY_PAGES, ...GOAL_PAGES, "/sports/tennis"] as const;
+const PAGES = ["/product/streaming", "/product/remote-scoring", "/product/format", "/product/scheduling", "/product/sponsoring", "/product/match-day", "/sports/cricket", ...RALLY_PAGES, ...GOAL_PAGES, "/sports/tennis"] as const;
 /** How many pad keys each sport family's demo offers, by page: every one must be a real tap target. */
 const PAD_KEYS: Record<string, [selector: string, count: number]> = {
   ...Object.fromEntries(RALLY_PAGES.map((p) => [p, ['[data-testid^="rally-point-"]', 2]])),
@@ -16,6 +16,8 @@ const PAD_KEYS: Record<string, [selector: string, count: number]> = {
   "/sports/tennis": ['[data-testid^="tennis-point-"]', 2],
   // Sponsoring opens on an online invoice: four tiers, three methods, its three go-live rules, and a draft's two steps.
   "/product/sponsoring": ['[data-testid^="sponsor-tier-"], [data-testid^="sponsor-method-"], [data-testid^="sponsor-rule-"], [data-testid^="sponsor-step-"]', 12],
+  // Match Day opens with two free courts to call and one match whose result can go in.
+  "/product/match-day": ['[data-testid="md-demo"] [data-act]', 3],
 };
 const WIDTHS = [320, 768, 1280] as const;
 
@@ -188,6 +190,58 @@ test.describe("product pages: the working demo", () => {
     const final = await page.getByTestId("tennis-stream-score").innerText();
     await page.getByTestId("tennis-point-b").click();
     await expect(page.getByTestId("tennis-stream-score")).toHaveText(final);
+  });
+
+  test("match day: a call moves the desk, the phone and the court's camera together, and a busy team is passed over", async ({ page }) => {
+    await visit(page, "/product/match-day");
+    const court = (i: number) => page.getByTestId(`md-court-${i}`);
+    const cam = (i: number) => page.getByTestId("md-cams").locator("li").nth(i);
+    const waiting = page.getByTestId("md-waiting");
+    await expect(court(1)).toHaveAttribute("data-court-state", "free");
+    await expect(waiting).toHaveAttribute("data-waiting", "4");
+    await expect(cam(0)).toHaveAttribute("data-stream", "live");
+
+    // Call, then undo: the match goes back and the same one is offered again.
+    const offered = await court(1).getByTestId("md-next").innerText();
+    await court(1).locator('[data-act="call"]').click();
+    await expect(court(1)).toHaveAttribute("data-court-state", "called");
+    await expect(page.getByTestId("md-event")).toHaveAttribute("data-event", "call");
+    await expect(waiting).toHaveAttribute("data-waiting", "3");
+    await expect(court(1).locator('[data-act="call"]')).toHaveCount(0);
+    await court(1).locator('[data-act="undo"]').click();
+    await expect(court(1)).toHaveAttribute("data-court-state", "free");
+    await expect(waiting).toHaveAttribute("data-waiting", "4");
+    await expect(court(1).getByTestId("md-next")).toHaveText(offered);
+
+    // Called is not on air; the camera goes live only when the players are on.
+    await court(1).locator('[data-act="call"]').click();
+    await expect(cam(1)).toHaveAttribute("data-stream", "waiting");
+    await court(1).locator('[data-act="start"]').click();
+    await expect(court(1)).toHaveAttribute("data-court-state", "playing");
+    await expect(cam(1)).toHaveAttribute("data-stream", "live");
+    await expect(page.getByTestId("md-phone").locator("li").nth(1)).toHaveAttribute("data-phone-state", "playing");
+
+    // The next match in line has a team still playing on court 1: it is held, named, and the one after is called.
+    const held = page.getByTestId("md-held");
+    await expect(held).toContainText("Southend Blue Blazers");
+    const heldText = await held.innerText();
+    await court(2).locator('[data-act="call"]').click();
+    await expect(held).toHaveText(heldText);
+    await court(2).locator('[data-act="start"]').click();
+    // Court 3 has no phone: a match plays there and nothing streams.
+    await expect(cam(2)).toHaveAttribute("data-stream", "none");
+
+    // Result in on court 1: the court frees, the held match is released and is what the court now offers.
+    await court(0).locator('[data-act="result"]').click();
+    await expect(court(0)).toHaveAttribute("data-court-state", "free");
+    await expect(cam(0)).toHaveAttribute("data-stream", "waiting");
+    await expect(held).toHaveCount(0);
+    await expect(page.getByTestId("md-done")).toContainText("1");
+    await expect(court(0).getByTestId("md-next")).toContainText("Southend Blue Blazers");
+
+    await page.getByTestId("md-reset").click();
+    await expect(waiting).toHaveAttribute("data-waiting", "4");
+    await expect(court(0)).toHaveAttribute("data-court-state", "playing");
   });
 
   test("sponsoring: a sponsor reaches the page and the stream only when the deal's own rule is met, and leaves when it ends", async ({ page }) => {
@@ -621,6 +675,7 @@ test.describe("product pages: layout", () => {
       ["/product/format", 6, []],
       ["/product/scheduling", 7, []],
       ["/product/sponsoring", 6, []],
+      ["/product/match-day", 8, []],
     ] as const) {
       await page.goto(path);
       for (const id of scores) await expect(page.getByTestId(id)).toHaveText("27/2");

@@ -56,6 +56,10 @@ export const PRODUCT_IMAGES = {
   sponsorListM: { src: "/marketing/product/sponsor-list-m.webp", width: 780, height: 1386, kind: "phone" },
   sponsorPublicM: { src: "/marketing/product/sponsor-public-m.webp", width: 780, height: 1386, kind: "phone" },
   sponsorReportM: { src: "/marketing/product/sponsor-report-m.webp", width: 780, height: 1386, kind: "phone" },
+  matchdayListM: { src: "/marketing/product/matchday-list-m.webp", width: 780, height: 1386, kind: "phone" },
+  matchdayCallM: { src: "/marketing/product/matchday-call-m.webp", width: 780, height: 1386, kind: "phone" },
+  matchdayCalledM: { src: "/marketing/product/matchday-called-m.webp", width: 780, height: 1386, kind: "phone" },
+  matchdayDeskD: { src: "/marketing/product/matchday-desk-d.webp", width: 1400, height: 840, kind: "web" },
 } as const satisfies Record<string, ProductImage>;
 
 export type ProductImageKey = keyof typeof PRODUCT_IMAGES;

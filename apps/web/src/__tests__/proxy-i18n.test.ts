@@ -58,7 +58,7 @@ describe("marketing [lang] rewrite honors the resolved locale", () => {
   });
 
   it("product and sport pages: unprefixed serves the resolved locale without a redirect; a prefixed URL is left alone", () => {
-    const pages = ["/product/streaming", "/product/remote-scoring", "/product/format", "/product/scheduling", "/product/sponsoring", "/sports/cricket", "/sports"];
+    const pages = ["/product/streaming", "/product/remote-scoring", "/product/format", "/product/scheduling", "/product/sponsoring", "/product/match-day", "/sports/cricket", "/sports"];
     for (const path of pages) {
       const bare = proxy(req(path));
       expect(rewriteTarget(bare), path).toBe(`/en${path}`);
@@ -67,7 +67,7 @@ describe("marketing [lang] rewrite honors the resolved locale", () => {
       expect(rewriteTarget(proxy(req(path, { cookie: "seazn_locale=fr" }))), path).toBe(`/fr${path}`);
       expect(proxy(req(`/fr${path}`)).headers.get("x-middleware-rewrite"), `/fr${path}: not rewritten`).toBeNull();
     }
-    expect(pages.length, "anti-vacuity").toBe(7);
+    expect(pages.length, "anti-vacuity").toBe(8);
   });
 
   it("ignores an unsupported cookie locale and negotiates instead", () => {

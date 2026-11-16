@@ -16,6 +16,7 @@ const COLS: Array<{ headKey: string; links: FooterLink[] }> = [
       { key: "nav.sports", href: "/sports" },
       { key: "nav.formats", href: "/product/format" },
       { key: "nav.scheduling", href: "/product/scheduling" },
+      { key: "nav.product.matchDay", href: "/product/match-day" },
       { key: "nav.product.sponsoring", href: "/product/sponsoring" },
       { key: "nav.pricing", href: "/pricing" },
       { key: "footer.link.liveNow", href: "/live" },
