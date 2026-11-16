@@ -376,6 +376,12 @@ export async function generateStageFixturesTx(
         values (${stageId}, ${key}, ${"Pool " + key}) returning id`;
       poolIds.set(key, row.id);
     }
+    // A group of ONE pool that is drawn (or drawn again, by a Rebuild of a legacy group) as pool A keeps no table under NO pool: that
+    // row is the legacy shape's, written by any read of its unplayed table, and `readSingleTableSnapshot` prefers it, so a survivor
+    // would shadow pool A's table for every reader that asks for "the stage's table" (RB5-E5). A several-pool group never has one.
+    if (poolCount(stage.config) === 1) {
+      await tx`delete from standings_snapshots where stage_id = ${stageId} and pool_id is null`;
+    }
   }
 
   // ORDERED (W3 T3, controller ruling from the engine review): swissGen walks these rows to build each player's colour
