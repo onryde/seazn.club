@@ -188,6 +188,8 @@ async function competitionCourtIds(auth: AuthCtx, competitionId: string, tz: str
 export async function listCourtStreams(auth: AuthCtx, competitionId: string, now: Date = new Date()): Promise<CourtStreamShown[]> {
   requireSessionEditor(auth);
   const tz = resolveVenueTz(null, await orgTz(auth, competitionId));
+  // As the link is: without streaming.relay the list is 402, the answer the openapi documents (final review m-7). After the 404 above.
+  await requireFeature(auth.orgId, "streaming.relay", competitionId);
   const courtIds = await competitionCourtIds(auth, competitionId, tz, now);
   if (courtIds.length === 0) return [];
   return sql.begin(async (tx) => {

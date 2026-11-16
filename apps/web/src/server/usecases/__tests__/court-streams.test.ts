@@ -134,6 +134,10 @@ describe.skipIf(!HAS_DB)("court streams (desk)", () => {
     await invalidateOrgEntitlements(unpaid.orgId);
     expect((await failure(linkCourtStream(unpaid.auth, unpaid.comp.id, { courtId: unpaid.courts.c1, targetId: t.targetId }, at(0)))).status).toBe(402);
     expect(await counts(unpaid.orgId)).toEqual({ links: 0, codes: 0 });
+    // Final review m-7: the list is the same 402 (the openapi's), not an empty answer; another org's competition is still 404 first.
+    expect((await failure(listCourtStreams(unpaid.auth, unpaid.comp.id, at(0)))).status).toBe(402);
+    expect((await failure(listCourtStreams(unpaid.auth, day.comp.id, at(0)))).status).toBe(404);
+    expect(await listCourtStreams(day.auth, day.comp.id, at(0)), "the entitled org's list is unchanged").toEqual([]);
   });
 
   it("another org's court, target or competition is 404 and nothing is written", async () => {
