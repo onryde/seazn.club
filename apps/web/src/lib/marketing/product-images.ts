@@ -15,6 +15,8 @@ export const PRODUCT_IMAGES = {
   remotePanelM: { src: "/marketing/product/remote-panel-m.png", width: 780, height: 1326, kind: "phone" },
   formatWizardM: { src: "/marketing/product/format-wizard-m.png", width: 780, height: 1386, kind: "phone" },
   formatDrawM: { src: "/marketing/product/format-draw-m.png", width: 780, height: 1386, kind: "phone" },
+  schedTrayM: { src: "/marketing/product/sched-tray-m.png", width: 780, height: 1386, kind: "phone" },
+  schedRepairM: { src: "/marketing/product/sched-repair-m.png", width: 780, height: 1386, kind: "phone" },
   appPad2: { src: "/marketing/product/app-pad2.png", width: 720, height: 1280, kind: "phone" },
   appOut: { src: "/marketing/product/app-out.png", width: 720, height: 1280, kind: "phone" },
   appWide: { src: "/marketing/product/app-wide.png", width: 720, height: 1280, kind: "phone" },

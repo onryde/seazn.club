@@ -131,7 +131,7 @@ describe("sitemap.xml: marketing URLs match the page canonicals", () => {
       for (const [k, v] of Object.entries(declared)) expect(langs![k], `${e.url} ${k}`).toBe(`${BASE}${v}`);
     }
     // The product pages are listed in their /en form.
-    for (const path of ["/product/streaming", "/product/remote-scoring", "/product/format", "/sports/cricket"]) expect(out, path).toContain(`${BASE}/en${path}`);
+    for (const path of ["/product/streaming", "/product/remote-scoring", "/product/format", "/product/scheduling", "/sports/cricket"]) expect(out, path).toContain(`${BASE}/en${path}`);
     const xml = resolveRouteData(entries, "sitemap");
     expect(xml).toContain('hreflang="fr"');
   });

@@ -501,6 +501,7 @@ test("public surfaces: no horizontal scroll (v3/11 gap 12)", async ({ browser })
       "/product/streaming",
       "/product/remote-scoring",
       "/product/format",
+      "/product/scheduling",
       "/sports/cricket",
       // RS007's two new surfaces, POPULATED — an empty state holds at any
       // width, so visiting them without a real rid/token/join_code would be

@@ -15,7 +15,7 @@ const COLS: Array<{ headKey: string; links: FooterLink[] }> = [
       { key: "nav.product.remoteScoring", href: "/product/remote-scoring" },
       { key: "nav.sport.cricket", href: "/sports/cricket" },
       { key: "nav.formats", href: "/product/format" },
-      { key: "nav.scheduling", href: "/scheduling" },
+      { key: "nav.scheduling", href: "/product/scheduling" },
       { key: "nav.pricing", href: "/pricing" },
       { key: "footer.link.liveNow", href: "/discover" },
       { key: "footer.link.games", href: "/games" },

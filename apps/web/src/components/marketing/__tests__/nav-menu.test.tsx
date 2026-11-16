@@ -22,7 +22,8 @@ describe("product nav ledger", () => {
     // Formats now points at its product page; the old gallery route is no longer linked from the nav.
     expect(hrefs).toContain("/product/format");
     expect(hrefs).not.toContain("/formats");
-    expect(hrefs).toContain("/scheduling");
+    expect(hrefs).toContain("/product/scheduling");
+    expect(hrefs).not.toContain("/scheduling");
     expect(hrefs).toContain("/pricing");
     expect(hrefs).toContain("/live");
     expect(new Set(hrefs).size).toBe(hrefs.length);

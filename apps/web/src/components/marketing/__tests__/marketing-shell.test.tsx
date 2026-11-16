@@ -27,7 +27,8 @@ describe("marketing shell pieces", () => {
     expect(html).toContain('href="/product/remote-scoring"');
     expect(html).toContain('href="/product/format"');
     expect(html).not.toContain('href="/formats"');
-    expect(html).toContain('href="/scheduling"');
+    expect(html).toContain('href="/product/scheduling"');
+    expect(html).not.toContain('href="/scheduling"');
     expect(html).toContain('href="/discover"');
     expect(html).toContain('href="/legal/privacy"');
     expect(html).toContain("ANY SPORT · LIVE IN MINUTES");

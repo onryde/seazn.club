@@ -6,7 +6,7 @@ import { expectNoHorizontalScroll } from "./helpers";
 
 test.use({ storageState: { cookies: [], origins: [] } });
 
-const PAGES = ["/product/streaming", "/product/remote-scoring", "/product/format", "/sports/cricket"] as const;
+const PAGES = ["/product/streaming", "/product/remote-scoring", "/product/format", "/product/scheduling", "/sports/cricket"] as const;
 const WIDTHS = [320, 768, 1280] as const;
 
 const score = (page: Page, id: "chase-score" | "chase-mc-score" | "chase-stream-score") => page.getByTestId(id);
@@ -233,6 +233,73 @@ test.describe("formats: the recommender demo", () => {
   });
 });
 
+test.describe("scheduling: the day board demo", () => {
+  test("a clash is refused, the rest fills itself, and a delay moves what players see", async ({ page }) => {
+    await visit(page, "/product/scheduling");
+    const demo = page.getByTestId("day-demo");
+    const status = page.getByTestId("day-status");
+    const cell = (c: number, s: number) => page.getByTestId(`day-cell-${c}-${s}`);
+    // Opening day: three placed, three waiting, nothing published, free cells are not tappable yet.
+    await expect(demo.locator('[data-match]:not([data-match=""])')).toHaveCount(3);
+    await expect(page.getByTestId("day-tray").getByRole("button")).toHaveCount(3);
+    await expect(demo).toHaveAttribute("data-published", "false");
+    await expect(cell(1, 1)).toBeDisabled();
+    await expect(page.getByTestId("day-publish")).toBeDisabled();
+
+    // Blazers already play at 09:40 on Court 1 (m3). Blazers v Lions (m5) on Court 2 at 09:40 is refused, by name.
+    await page.getByTestId("day-tray-m5").click();
+    await cell(1, 1).click();
+    await expect(status).toHaveAttribute("data-refused", "team");
+    await expect(status).toContainText("Blazers");
+    await expect(cell(1, 1)).toHaveAttribute("data-match", "");
+    // The same match one start later is fine.
+    await cell(1, 2).click();
+    await expect(cell(1, 2)).toHaveAttribute("data-match", "m5");
+    await expect(status).toHaveAttribute("data-refused", "");
+
+    // Fill the rest: all six on the board, no two in one cell, and Publish wakes up.
+    await page.getByTestId("day-fill").click();
+    await expect(demo.locator('[data-match]:not([data-match=""])')).toHaveCount(6);
+    const ids = await demo.locator("[data-match]").evaluateAll((els) => els.map((e) => e.getAttribute("data-match")));
+    expect(new Set(ids).size).toBe(6);
+    await expect(page.getByTestId("day-public").locator("li")).toHaveCount(0);
+    await page.getByTestId("day-publish").click();
+    await expect(demo).toHaveAttribute("data-published", "true");
+    const rows = page.getByTestId("day-public").locator("li");
+    await expect(rows).toHaveCount(6);
+    await expect(rows.first().locator("b")).toHaveText("09:00");
+
+    // Rain: one step is the real board's 15 minutes; the public list moves with it and says so.
+    await page.getByTestId("day-delay").click();
+    await expect(rows.first().locator("b")).toHaveText("09:15");
+    await expect(rows.last().locator("b")).toHaveText("10:35");
+    await expect(page.getByTestId("day-updated")).toContainText("15");
+    await expect(demo).toHaveAttribute("data-published", "true");
+
+    // Lifting a match takes the day back to draft: players see nothing until it is published again.
+    await cell(0, 0).click();
+    await expect(demo).toHaveAttribute("data-published", "false");
+    await expect(rows).toHaveCount(0);
+  });
+
+  test("the board works from the keyboard, and the nav's Scheduling link lands here", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto("/pricing");
+    const product = page.getByTestId("nav-menu-product");
+    await product.getByRole("button").click();
+    await product.getByRole("link", { name: "Scheduling" }).click();
+    await expect(page).toHaveURL(/\/product\/scheduling$/);
+    await expect(page.locator("h1")).toHaveText("Every match, a court and a time.");
+    await page.getByTestId("cookie-consent").getByRole("button", { name: "Reject" }).click().catch(() => {});
+    await page.getByTestId("day-tray-m4").focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("day-tray-m4")).toHaveAttribute("aria-pressed", "true");
+    await page.getByTestId("day-cell-1-1").focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("day-cell-1-1")).toHaveAttribute("data-match", "m4");
+  });
+});
+
 test.describe("product pages: layout", () => {
   for (const path of PAGES) {
     for (const width of WIDTHS) {
@@ -260,8 +327,11 @@ test.describe("product pages: layout", () => {
         // Every control of the page's demo is a real tap target: pad keys, or the format demo's steppers.
         const controls = path === "/product/format"
           ? await page.locator('[data-testid^="format-"][data-testid$="-less"], [data-testid^="format-"][data-testid$="-more"], [data-testid^="format-minutes-"]').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().height)))
-          : sizes;
-        expect(controls.length).toBe(path === "/product/format" ? 11 : 8);
+          : path === "/product/scheduling"
+            ? await page.getByTestId("day-demo").getByRole("button").evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().height)))
+            : sizes;
+        // Scheduling: six board cells, three matches waiting, three actions.
+        expect(controls.length).toBe(path === "/product/format" ? 11 : path === "/product/scheduling" ? 12 : 8);
         for (const h of controls) expect(h).toBeGreaterThanOrEqual(44);
       });
     }
@@ -295,6 +365,7 @@ test.describe("product pages: layout", () => {
       ["/sports/cricket", 9, ["chase-score", "chase-stream-score"]],
       ["/product/remote-scoring", 7, ["signal-phone-score", "signal-server-score"]],
       ["/product/format", 6, []],
+      ["/product/scheduling", 6, []],
     ] as const) {
       await page.goto(path);
       for (const id of scores) await expect(page.getByTestId(id)).toHaveText("27/2");

@@ -76,6 +76,32 @@
 .mkp-fmt-best{border-color:var(--mk-lime)}.mkp-fmt-best .mkp-fmt-b{background:var(--mk-lime);color:var(--mk-night)}
 .mkp-fmt-over{opacity:.72}.mkp-fmt-over .mkp-fmt-b{background:#5a2a12;color:#ffd9b8}
 .mkp-fmt-unavailable{opacity:.55}
+/* the scheduling demo: a small day board beside what players see */
+.mkp-day{padding:12px}
+.mkp-day-grid{display:grid;gap:6px;align-items:stretch}
+.mkp-day-h{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#6b6385;padding:2px 4px}
+.mkp-day-t{font-family:var(--mk-font-display, var(--font-geist-sans));font-size:17px;color:#3b3158;display:grid;align-items:center;padding-right:4px}
+.mkp-day-c{min-height:52px;border-radius:10px;border:1.5px dashed #cfc8e6;background:#fff;color:#8a83a3;font-size:13px;font-weight:600;padding:4px 6px;line-height:1.2}
+.mkp-day-c:disabled{cursor:default;opacity:.75}
+.mkp-day-c:not(:disabled):not(.mkp-day-on){border-color:var(--mk-purple);color:var(--mk-purple);background:#f3edff}
+.mkp-day-on{border:1.5px solid transparent;border-left:4px solid var(--mk-purple);background:#e4dcfb;color:#1e1b2e;text-align:left}
+.mkp-day-k{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#6b6385;margin:12px 0 6px}
+.mkp-day-tray{display:flex;flex-wrap:wrap;gap:6px;min-height:44px;align-items:center}
+.mkp-day-chip{min-height:44px;border-radius:10px;border:1.5px solid #d9d5e6;background:#fff;font-size:13.5px;font-weight:600;padding:0 12px}
+.mkp-day-chip[aria-pressed="true"]{background:var(--mk-purple);border-color:var(--mk-purple);color:#fff}
+.mkp-day-none{font-size:13.5px;color:#6b6385}
+.mkp-day-acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.mkp-day-acts button{min-height:44px;border-radius:10px;border:1.5px solid #d9d5e6;background:#fff;font-size:14px;font-weight:600;padding:0 14px}
+.mkp-day-acts button:disabled{opacity:.45;cursor:default}
+.mkp-day-acts .mkp-day-pub:not(:disabled){background:var(--mk-lime);border-color:var(--mk-lime);color:var(--mk-night)}
+.mkp-day-pubcard{background:#221a3a;color:#fff;border-radius:18px;padding:14px;min-height:120px}
+.mkp-day-pubcard .mkp-day-none{color:#b9b0d8}
+.mkp-day-pubcard ol{display:grid;gap:6px}
+.mkp-day-pubcard li{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:baseline;background:#2e2550;border-radius:10px;padding:9px 12px;font-size:14px}
+.mkp-day-pubcard li b{font-family:var(--mk-font-display, var(--font-geist-sans));font-size:17px;color:var(--mk-lime)}
+.mkp-day-pubcard li i{font-style:normal;font-size:12.5px;color:#b9b0d8}
+.mkp-day-upd{display:inline-block;font-size:12px;font-weight:700;border-radius:999px;padding:3px 10px;background:#5a2a12;color:#ffd9b8;margin-bottom:8px}
+@media (min-width:900px){.mkp-stage.mkp-s2.mkp-s2r{grid-template-columns:minmax(0,1.25fr) minmax(0,1fr)}}
 /* public match card (mirrors the real match page) */
 .mkp-mc{background:#221a3a;border-radius:16px;padding:16px;border-bottom:4px solid #10b981;color:#fff}
 .mkp-mc-l{font-size:11.5px;letter-spacing:.14em;color:#34d399;font-weight:700;display:flex;gap:8px;align-items:center}
