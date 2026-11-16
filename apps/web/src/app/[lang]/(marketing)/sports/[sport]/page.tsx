@@ -10,7 +10,13 @@ import { RallyDemo } from "@/components/marketing/product/rally-demo";
 import { rallyDemoLabels } from "@/components/marketing/product/rally-demo-labels";
 import type { ProductImageKey } from "@/lib/marketing/product-images";
 import { RALLY_RULES, RALLY_SPORTS, type RallySport } from "@/lib/marketing/rally-rules";
-import { RALLY_SIDES, SPORT_PAGES, isSportPage, sportKeyOf } from "@/lib/marketing/sport-pages";
+import { GoalDemo } from "@/components/marketing/product/goal-demo";
+import { goalDemoLabels } from "@/components/marketing/product/goal-demo-labels";
+import { TennisDemo } from "@/components/marketing/product/tennis-demo";
+import { tennisDemoLabels } from "@/components/marketing/product/tennis-demo-labels";
+import { GOAL_RULES, GOAL_SPORTS, type GoalSport } from "@/lib/marketing/goal-rules";
+import { TENNIS_RULES } from "@/lib/marketing/tennis-rules";
+import { DEMO_SIDES, SPORT_PAGES, isSportPage, sportKeyOf, type DemoSportKey } from "@/lib/marketing/sport-pages";
 import { getDictionary, t } from "@/lib/i18n";
 import { hasLocale } from "@/lib/i18n-constants";
 import { marketingMeta } from "@/lib/seo-meta";
@@ -32,8 +38,9 @@ export async function generateMetadata({ params }: { params: Promise<{ lang: str
 
 /**
  * A sport's page: the sport-page shape (docs/superpowers/specs/2026-11-16-product-pages-design.md §4). Cricket's demo
- * is the chase; the rally sports (badminton, table tennis, volleyball) share one demo and one page body below, each
- * with its own rules from the engine, its own words and its own pictures.
+ * is the chase and its body is its own (it carries the app's phone screens and the offline section). Every other sport
+ * shares one page body and brings a demo from its family: rally (badminton, table tennis, volleyball), goal (football,
+ * hockey, ice hockey) or tennis. Each has its own rules from the engine, its own words and its own pictures.
  *
  * The H1 is the short line; the search words (cricket tournament, scoring, tables) sit in the lede and the <title>.
  * Offline scoring is claimed for the phone app only: it was proven there, and the web pad makes no such promise.
@@ -48,10 +55,18 @@ export default async function SportPage({ params }: { params: Promise<{ lang: st
   const app = shared("appName");
   const appSentence = app.charAt(0).toUpperCase() + app.slice(1);
 
-  if ((RALLY_SPORTS as readonly string[]).includes(key)) {
-    const rally = key as RallySport;
-    const sides = RALLY_SIDES[rally];
-    const img = (name: "HubM" | "PadM" | "McM" | "McD") => `${rally}${name}` as ProductImageKey;
+  if (key !== "cricket") {
+    const sportKey = key as DemoSportKey;
+    const sides = DEMO_SIDES[sportKey];
+    const teams = { a: sides.a, b: sides.b };
+    const img = (name: "HubM" | "PadM" | "McM" | "McD") => `${sportKey}${name}` as ProductImageKey;
+    const demo = (RALLY_SPORTS as readonly string[]).includes(key) ? (
+      <RallyDemo labels={rallyDemoLabels(d, key)} teams={teams} others={sides.others} rules={RALLY_RULES[key as RallySport]} />
+    ) : (GOAL_SPORTS as readonly string[]).includes(key) ? (
+      <GoalDemo labels={goalDemoLabels(d, key, GOAL_RULES[key as GoalSport].card)} teams={teams} others={sides.others} />
+    ) : (
+      <TennisDemo labels={tennisDemoLabels(d)} teams={teams} others={sides.others} rules={TENNIS_RULES} />
+    );
     return (
       <MarketingShell variant="night-scroll" lang={lang}>
         <ProductPage>
@@ -62,8 +77,8 @@ export default async function SportPage({ params }: { params: Promise<{ lang: st
             primary={{ label: s("try"), href: "#try" }}
             secondary={{ label: s("start"), href: SIGNUP }}
           >
-            <DemoBand id="try" title={s("demo.title")} note={s("demo.note", { a: sides.a })}>
-              <RallyDemo labels={rallyDemoLabels(d, rally)} teams={{ a: sides.a, b: sides.b }} others={sides.others} rules={RALLY_RULES[rally]} />
+            <DemoBand id="try" title={s("demo.title")} note={s("demo.note", teams)}>
+              {demo}
             </DemoBand>
           </PageHero>
 

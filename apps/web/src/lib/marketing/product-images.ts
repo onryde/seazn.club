@@ -37,6 +37,22 @@ export const PRODUCT_IMAGES = {
   volleyballPadM: { src: "/marketing/product/volleyball-pad-m.webp", width: 780, height: 1386, kind: "phone" },
   volleyballMcM: { src: "/marketing/product/volleyball-mc-m.webp", width: 780, height: 1386, kind: "phone" },
   volleyballMcD: { src: "/marketing/product/volleyball-mc-d.webp", width: 1400, height: 840, kind: "web" },
+  footballHubM: { src: "/marketing/product/football-hub-m.webp", width: 780, height: 1386, kind: "phone" },
+  footballPadM: { src: "/marketing/product/football-pad-m.webp", width: 780, height: 1386, kind: "phone" },
+  footballMcM: { src: "/marketing/product/football-mc-m.webp", width: 780, height: 1386, kind: "phone" },
+  footballMcD: { src: "/marketing/product/football-mc-d.webp", width: 1400, height: 840, kind: "web" },
+  tennisHubM: { src: "/marketing/product/tennis-hub-m.webp", width: 780, height: 1386, kind: "phone" },
+  tennisPadM: { src: "/marketing/product/tennis-pad-m.webp", width: 780, height: 1386, kind: "phone" },
+  tennisMcM: { src: "/marketing/product/tennis-mc-m.webp", width: 780, height: 1386, kind: "phone" },
+  tennisMcD: { src: "/marketing/product/tennis-mc-d.webp", width: 1400, height: 840, kind: "web" },
+  hockeyHubM: { src: "/marketing/product/hockey-hub-m.webp", width: 780, height: 1386, kind: "phone" },
+  hockeyPadM: { src: "/marketing/product/hockey-pad-m.webp", width: 780, height: 1386, kind: "phone" },
+  hockeyMcM: { src: "/marketing/product/hockey-mc-m.webp", width: 780, height: 1386, kind: "phone" },
+  hockeyMcD: { src: "/marketing/product/hockey-mc-d.webp", width: 1400, height: 840, kind: "web" },
+  icehockeyHubM: { src: "/marketing/product/icehockey-hub-m.webp", width: 780, height: 1386, kind: "phone" },
+  icehockeyPadM: { src: "/marketing/product/icehockey-pad-m.webp", width: 780, height: 1386, kind: "phone" },
+  icehockeyMcM: { src: "/marketing/product/icehockey-mc-m.webp", width: 780, height: 1386, kind: "phone" },
+  icehockeyMcD: { src: "/marketing/product/icehockey-mc-d.webp", width: 1400, height: 840, kind: "web" },
 } as const satisfies Record<string, ProductImage>;
 
 export type ProductImageKey = keyof typeof PRODUCT_IMAGES;

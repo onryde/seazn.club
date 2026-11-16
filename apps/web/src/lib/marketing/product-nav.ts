@@ -20,6 +20,10 @@ export const SPORT_LINKS = [
   { key: "nav.sport.badminton", href: "/sports/badminton" },
   { key: "nav.sport.tabletennis", href: "/sports/table-tennis" },
   { key: "nav.sport.volleyball", href: "/sports/volleyball" },
+  { key: "nav.sport.football", href: "/sports/football" },
+  { key: "nav.sport.tennis", href: "/sports/tennis" },
+  { key: "nav.sport.hockey", href: "/sports/hockey" },
+  { key: "nav.sport.icehockey", href: "/sports/ice-hockey" },
 ] as const satisfies readonly NavLink[];
 
 export const TOP_LINKS = [

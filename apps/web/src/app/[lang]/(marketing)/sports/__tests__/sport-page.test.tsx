@@ -5,7 +5,9 @@ import path from "node:path";
 import { LOCALES } from "@/lib/i18n-constants";
 import { SPORT_PAGES, isSportPage } from "@/lib/marketing/sport-pages";
 import { navHrefs } from "@/lib/marketing/product-nav";
+import { GOAL_RULES, GOAL_SPORTS } from "@/lib/marketing/goal-rules";
 import { RALLY_RULES, type RallySport } from "@/lib/marketing/rally-rules";
+import { TENNIS_RULES } from "@/lib/marketing/tennis-rules";
 import en from "@/dictionaries/en/marketing.json";
 import fr from "@/dictionaries/fr/marketing.json";
 import es from "@/dictionaries/es/marketing.json";
@@ -128,6 +130,84 @@ describe.each(RALLY_PAGES.map((r) => [...r]))("/sports/%s", (slug, key, sportWor
   it("the stream upsell links to the streaming page", async () => {
     const html = await renderPage(Page, { lang: "en", sport: slug });
     expect(html.slice(html.indexOf('data-section="ticket"'), html.indexOf('data-section="club"'))).toContain('href="/product/streaming"');
+  });
+});
+
+// The goal sports and tennis: the same shared body, each with its family's demo.
+const OTHER_PAGES = [
+  ["football", "football", /football|fútbol|voetbal/i, "goal"],
+  ["hockey", "hockey", /hockey/i, "goal"],
+  ["ice-hockey", "icehockey", /ice hockey|hockey sur glace|hockey sobre hielo|ijshockey/i, "goal"],
+  ["tennis", "tennis", /tennis|tenis/i, "tennis"],
+] as const;
+
+describe.each(OTHER_PAGES.map((r) => [...r]))("/sports/%s", (slug, key, sportWord, family) => {
+  it.each(LOCALES.map((l) => [l]))("%s: one h1, the search words in the title and the lede, no leaked key or placeholder", async (lang) => {
+    const html = await renderPage(Page, { lang, sport: slug });
+    const d = DICTS[lang]!;
+    expect(html.split("<h1")).toHaveLength(2);
+    expect(h1Of(html)).toBe(plain(d[`sport.${key}.h1`]!));
+    const meta = await generateMetadata({ params: Promise.resolve({ lang, sport: slug }) });
+    expect(JSON.stringify(meta.title)).toContain(d[`sport.${key}.meta.title`]!);
+    for (const k of ["meta.title", "lede"]) {
+      expect(d[`sport.${key}.${k}`]!, k).toMatch(sportWord);
+      expect(d[`sport.${key}.${k}`]!, k).toMatch(TOURNAMENT);
+    }
+    const text = textOf(html);
+    expect(text).toContain(d[`sport.${key}.lede`]!);
+    expect(text).not.toMatch(/(sport|product)\.[a-z]+\.[a-zA-Z0-9.]+\b(?<!\.webp)/);
+    expect(text).not.toMatch(/\{[a-zA-Z]+\}/);
+    expect(text).not.toMatch(/[$£€]\s?\d/);
+    expect(text).not.toMatch(/tournament (format )?software/i);
+  });
+
+  it("sections come in the sport-page order; the demo is its family's, with all four screens", async () => {
+    const html = await renderPage(Page, { lang: "en", sport: slug });
+    expect(sectionOrder(html)).toEqual(["hero", "demo", "road", "ticket", "club", "questions", "closing"]);
+    for (const tile of ["pad", "matchCentre", "table", "stream"]) expect(html, tile).toContain(`data-testid="${family}-tile-${tile}"`);
+    for (const other of ["chase-demo", "rally-demo", "goal-demo", "tennis-demo"].filter((x) => x !== `${family}-demo`)) expect(html, other).not.toContain(`data-testid="${other}"`);
+    expect(html.slice(html.indexOf('data-section="ticket"'), html.indexOf('data-section="club"'))).toContain('href="/product/streaming"');
+  });
+
+  it("every picture on the page is this sport's own", async () => {
+    const html = await renderPage(Page, { lang: "en", sport: slug });
+    const pics = [...html.matchAll(/\/marketing\/product\/([a-z0-9-]+)\.webp/g)].map((m) => m[1]!);
+    expect(pics.length).toBeGreaterThanOrEqual(4);
+    for (const pic of pics) expect(pic.startsWith(`${key}-`), pic).toBe(true);
+  });
+});
+
+describe("goal demos: the card key is the engine's class, named in every locale", () => {
+  it.each(GOAL_SPORTS.map((s) => [s]))("%s", async (sport) => {
+    const slug = sport === "icehockey" ? "ice-hockey" : sport;
+    const cardKey = `product.goal.card.${GOAL_RULES[sport].card}`;
+    let checked = 0;
+    for (const lang of LOCALES) {
+      const label = DICTS[lang]![cardKey];
+      expect(label, `${lang} ${cardKey}`).toBeTruthy();
+      const html = await renderPage(Page, { lang, sport: slug });
+      const key = html.slice(html.indexOf('data-testid="goal-key-card-a"'));
+      expect(textOf(key.slice(0, key.indexOf("</button>") + 9)), lang).toContain(label!);
+      checked++;
+    }
+    expect(checked).toBe(4);
+    // Opening state: level, two goals on the timeline, no result.
+    const en = await renderPage(Page, { lang: "en", sport: slug });
+    expect(en).toMatch(/data-testid="goal-score-a"[^>]*>1</);
+    expect(en).toMatch(/data-testid="goal-score-b"[^>]*>1</);
+    expect(en.split('data-testid="goal-event"').length - 1).toBe(2);
+    expect(en).toContain('data-goal-result=""');
+  });
+});
+
+describe("tennis demo opens on the engine's calls", () => {
+  it("shows the third and second point calls, 5-4 in games, in the deciding set", async () => {
+    const html = await renderPage(Page, { lang: "en", sport: "tennis" });
+    expect(html).toMatch(new RegExp(`data-testid="tennis-call-a"[^>]*>${TENNIS_RULES.calls[2]}<`));
+    expect(html).toMatch(new RegExp(`data-testid="tennis-call-b"[^>]*>${TENNIS_RULES.calls[1]}<`));
+    expect(textOf(html)).toContain("Games 5-4");
+    expect(textOf(html)).toContain(`Best of ${TENNIS_RULES.bestOf} · set ${TENNIS_RULES.bestOf}`);
+    expect(html.split('data-testid="tennis-setcol-a"').length - 1).toBe(TENNIS_RULES.bestOf);
   });
 });
 

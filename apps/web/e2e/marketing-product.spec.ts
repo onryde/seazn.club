@@ -7,7 +7,14 @@ import { expectNoHorizontalScroll } from "./helpers";
 test.use({ storageState: { cookies: [], origins: [] } });
 
 const RALLY_PAGES = ["/sports/badminton", "/sports/table-tennis", "/sports/volleyball"] as const;
-const PAGES = ["/product/streaming", "/product/remote-scoring", "/product/format", "/product/scheduling", "/sports/cricket", ...RALLY_PAGES] as const;
+const GOAL_PAGES = ["/sports/football", "/sports/hockey", "/sports/ice-hockey"] as const;
+const PAGES = ["/product/streaming", "/product/remote-scoring", "/product/format", "/product/scheduling", "/sports/cricket", ...RALLY_PAGES, ...GOAL_PAGES, "/sports/tennis"] as const;
+/** How many pad keys each sport family's demo offers, by page: every one must be a real tap target. */
+const PAD_KEYS: Record<string, [selector: string, count: number]> = {
+  ...Object.fromEntries(RALLY_PAGES.map((p) => [p, ['[data-testid^="rally-point-"]', 2]])),
+  ...Object.fromEntries(GOAL_PAGES.map((p) => [p, ['[data-testid^="goal-key-"]', 5]])),
+  "/sports/tennis": ['[data-testid^="tennis-point-"]', 2],
+};
 const WIDTHS = [320, 768, 1280] as const;
 
 const score = (page: Page, id: "chase-score" | "chase-mc-score" | "chase-stream-score") => page.getByTestId(id);
@@ -108,6 +115,74 @@ test.describe("product pages: the working demo", () => {
       await expect(page.getByTestId("rally-stream-score")).toHaveText(final);
     });
   }
+
+  for (const path of GOAL_PAGES) {
+    test(`${path}: a goal moves the pad, the match page tile and the stream tile; a card joins the timeline; full time settles the table`, async ({ page }) => {
+      await visit(page, path);
+      const demo = page.getByTestId("goal-demo");
+      const num = async (id: string) => Number(await page.getByTestId(id).innerText());
+      const [a0, b0] = [await num("goal-score-a"), await num("goal-score-b")];
+      expect(a0, "the demo opens level").toBe(b0);
+      const events0 = await page.getByTestId("goal-event").count();
+
+      await page.getByTestId("goal-key-goal-a").click();
+      await expect(page.getByTestId("goal-score-a")).toHaveText(String(a0 + 1));
+      await expect(page.getByTestId("goal-mc-score-a")).toHaveText(String(a0 + 1));
+      await expect(page.getByTestId("goal-stream-score")).toHaveText(`${a0 + 1}-${b0}`);
+      await expect(page.getByTestId("goal-event")).toHaveCount(events0 + 1);
+
+      await page.getByTestId("goal-key-card-b").click();
+      await expect(page.getByTestId("goal-event")).toHaveCount(events0 + 2);
+      await expect(page.getByTestId("goal-event").last()).toHaveAttribute("data-event-kind", "card");
+      await expect(page.getByTestId("goal-stream-score"), "a card changes no score").toHaveText(`${a0 + 1}-${b0}`);
+      await page.getByTestId("goal-undo").click();
+      await expect(page.getByTestId("goal-event")).toHaveCount(events0 + 1);
+
+      await expect(demo).toHaveAttribute("data-goal-result", "");
+      await page.getByTestId("goal-key-fulltime").click();
+      await expect(demo).toHaveAttribute("data-goal-result", "a");
+      const me = page.getByTestId("goal-table-me").locator("td");
+      await expect(me.nth(1)).toHaveText("1");
+      await expect(me.nth(2)).toHaveText("1");
+      // Over: a late goal changes nothing; take back reopens the match.
+      await page.getByTestId("goal-key-goal-b").click();
+      await expect(page.getByTestId("goal-stream-score")).toHaveText(`${a0 + 1}-${b0}`);
+      await page.getByTestId("goal-undo").click();
+      await expect(demo).toHaveAttribute("data-goal-result", "");
+    });
+  }
+
+  test("tennis: a point moves the call on the pad, the match page tile and the stream tile; the leader can serve it out", async ({ page }) => {
+    await visit(page, "/sports/tennis");
+    const demo = page.getByTestId("tennis-demo");
+    const [a0, b0] = [await page.getByTestId("tennis-call-a").innerText(), await page.getByTestId("tennis-call-b").innerText()];
+    expect(a0).not.toBe(b0);
+    await expect(page.getByTestId("tennis-stream-score")).toHaveText(`${a0}-${b0}`);
+    const cols0 = await page.getByTestId("tennis-setcol-a").count();
+
+    await page.getByTestId("tennis-point-b").click();
+    // The trailing side draws level: both sides now show the call the leader opened on.
+    await expect(page.getByTestId("tennis-call-b")).toHaveText(a0);
+    await expect(page.getByTestId("tennis-mc-call-b")).toHaveText(a0);
+    await expect(page.getByTestId("tennis-stream-score")).toHaveText(`${a0}-${a0}`);
+    await page.getByTestId("tennis-undo").click();
+    await expect(page.getByTestId("tennis-call-b")).toHaveText(b0);
+
+    let taps = 0;
+    while ((await demo.getAttribute("data-tennis-winner")) === "" && taps < 6) {
+      await page.getByTestId("tennis-point-a").click();
+      taps++;
+    }
+    await expect(demo).toHaveAttribute("data-tennis-winner", "a");
+    expect(taps).toBeLessThanOrEqual(3);
+    await expect(page.getByTestId("tennis-setcol-a")).toHaveCount(cols0);
+    await expect(page.getByTestId("tennis-setcol-a").last()).toHaveText("6");
+    const me = page.getByTestId("tennis-table-me").locator("td");
+    await expect(me.nth(2)).toHaveText("1");
+    const final = await page.getByTestId("tennis-stream-score").innerText();
+    await page.getByTestId("tennis-point-b").click();
+    await expect(page.getByTestId("tennis-stream-score")).toHaveText(final);
+  });
 
   test("cricket: finishing the chase updates the table, and the keys then stop changing the score", async ({ page }) => {
     await visit(page, "/sports/cricket");
@@ -414,11 +489,11 @@ test.describe("product pages: layout", () => {
           ? await page.locator('[data-testid^="format-"][data-testid$="-less"], [data-testid^="format-"][data-testid$="-more"], [data-testid^="format-minutes-"]').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().height)))
           : path === "/product/scheduling"
             ? await page.getByTestId("day-demo").getByRole("button").evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().height)))
-            : (RALLY_PAGES as readonly string[]).includes(path)
-              ? await page.locator('[data-testid^="rally-point-"]').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().height)))
+            : PAD_KEYS[path]
+              ? await page.locator(PAD_KEYS[path]![0]).evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().height)))
               : sizes;
-        // Scheduling: six board cells, three matches waiting, three actions. A rally pad: one key a side.
-        const expected = path === "/product/format" ? 11 : path === "/product/scheduling" ? 12 : (RALLY_PAGES as readonly string[]).includes(path) ? 2 : 8;
+        // Scheduling: six board cells, three matches waiting, three actions. The other sports: their family's pad keys.
+        const expected = path === "/product/format" ? 11 : path === "/product/scheduling" ? 12 : (PAD_KEYS[path]?.[1] ?? 8);
         expect(controls.length).toBe(expected);
         for (const h of controls) expect(h).toBeGreaterThanOrEqual(44);
       });
@@ -454,6 +529,10 @@ test.describe("product pages: layout", () => {
       ["/sports/badminton", 7, []],
       ["/sports/table-tennis", 7, []],
       ["/sports/volleyball", 7, []],
+      ["/sports/football", 7, []],
+      ["/sports/hockey", 7, []],
+      ["/sports/ice-hockey", 7, []],
+      ["/sports/tennis", 7, []],
       ["/product/remote-scoring", 7, ["signal-phone-score", "signal-server-score"]],
       ["/product/format", 6, []],
       ["/product/scheduling", 7, []],

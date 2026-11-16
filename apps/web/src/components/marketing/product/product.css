@@ -142,6 +142,9 @@
 .mkp-vid::before{content:"";position:absolute;left:44%;right:44%;top:36%;bottom:20%;background:#c4b280;transform:perspective(300px) rotateX(40deg)}
 .mkp-vid .mkp-yt{position:absolute;top:8px;right:8px;font-size:11px;background:rgb(0 0 0/.55);color:#fff;padding:3px 8px;border-radius:5px}
 .mkp-ov{position:absolute;left:4%;right:4%;bottom:7%;background:#1e1147;border-radius:4px;color:#fff;box-shadow:0 10px 24px rgb(0 0 0/.35);overflow:hidden;font-size:clamp(8px,1.55cqw,15px)}
+.mkp-key .mkp-key-sub{display:block;font-size:12px;font-weight:500;color:#5d5873}
+.mkp-setchip.mkp-cardchip{background:#5b4a12;color:#fde68a}
+.mkp-vid.mkp-pitch::before{left:49.7%;right:49.7%;top:21%;bottom:0;background:#e9e6f5;opacity:.7;transform:none}
 .mkp-vid.mkp-court{background:linear-gradient(#3a3350 0 30%,#1f6e63 30%,#18584f)}
 .mkp-vid.mkp-court::before{left:8%;right:8%;top:46%;bottom:auto;height:2px;background:#e9e6f5;transform:none}
 .mkp-ov-a .mkp-nm.mkp-nm2{margin-left:0}

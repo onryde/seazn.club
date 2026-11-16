@@ -65,12 +65,20 @@ export async function marketingSuite(): Promise<void> {
   check("marketing: /sports/cricket has its headline", cricketHtml.replace(/<[^>]+>/g, "").includes("Scores every ball."));
   check("marketing: /sports/cricket demo renders all four screens", ["pad", "matchCentre", "table", "stream"].every((tile) => cricketHtml.includes(`data-testid="chase-tile-${tile}"`)));
   check("marketing: /fr/sports/cricket is French", (await (await fetch(`${BASE}/fr/sports/cricket`)).text()).replace(/<[^>]+>/g, "").includes("Marque chaque balle."));
-  for (const [slug, headline] of [["badminton", "Scores every rally."], ["table-tennis", "Scores every point."], ["volleyball", "Every set, point by point."]] as const) {
+  for (const [slug, headline, family] of [
+    ["badminton", "Scores every rally.", "rally"],
+    ["table-tennis", "Scores every point.", "rally"],
+    ["volleyball", "Every set, point by point.", "rally"],
+    ["football", "Every goal, as it goes in.", "goal"],
+    ["hockey", "Every goal, every quarter.", "goal"],
+    ["ice-hockey", "Every goal, every period.", "goal"],
+    ["tennis", "Calls every point.", "tennis"],
+  ] as const) {
     const res = await fetch(`${BASE}/sports/${slug}`);
     const html = await res.text();
     check(`marketing: /sports/${slug} 200`, res.status === 200);
     check(`marketing: /sports/${slug} has its headline`, html.replace(/<[^>]+>/g, "").includes(headline));
-    check(`marketing: /sports/${slug} demo renders all four screens`, ["pad", "matchCentre", "table", "stream"].every((tile) => html.includes(`data-testid="rally-tile-${tile}"`)));
+    check(`marketing: /sports/${slug} demo renders all four screens`, ["pad", "matchCentre", "table", "stream"].every((tile) => html.includes(`data-testid="${family}-tile-${tile}"`)));
   }
   check("marketing: /sports/notasport (no such page) 404", (await fetch(`${BASE}/sports/notasport`)).status === 404);
 

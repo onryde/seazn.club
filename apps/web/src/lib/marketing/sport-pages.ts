@@ -3,7 +3,7 @@
  * APPEND and never reorder (a concurrent branch inserting into a sorted list is the ugliest merge there is). Any other
  * slug is a 404.
  */
-export const SPORT_PAGES = ["cricket", "badminton", "table-tennis", "volleyball"] as const;
+export const SPORT_PAGES = ["cricket", "badminton", "table-tennis", "volleyball", "football", "tennis", "hockey", "ice-hockey"] as const;
 export type SportPageKey = (typeof SPORT_PAGES)[number];
 
 export function isSportPage(s: string): s is SportPageKey {
@@ -16,11 +16,16 @@ export function sportKeyOf(slug: SportPageKey): string {
 }
 
 /**
- * Who plays the rally sports' demo match, and the two other names in its group table. Racquet sports are people,
- * volleyball is teams; the names are the ones on Seazn Demo Club's own pages, so the demo and the pictures agree.
+ * Who plays each sport's demo match, and the two other names in its group table. Racquet sports are people, the rest
+ * are teams; the names are the ones on Seazn Demo Club's own pages, so the demo and the pictures agree.
  */
-export const RALLY_SIDES = {
+export const DEMO_SIDES = {
   badminton: { a: "Priya Nair", b: "Elin Shah", others: ["Rosa Lindqvist", "Maya Okafor"] },
   tabletennis: { a: "Tom Achebe", b: "Dev Menon", others: ["Luca Brandt", "Sam Whitlock"] },
   volleyball: { a: "Southend Spikers", b: "Hadleigh Hawks", others: ["Canvey Crushers", "Leigh Lions"] },
+  football: { a: "Southend Blue Blazers", b: "Rayleigh Rovers", others: ["Thorpe Bay Tigers", "Leigh Lions"] },
+  tennis: { a: "Priya Nair", b: "Tanvi Deshmukh", others: ["Rosa Lindqvist", "Maya Okafor"] },
+  hockey: { a: "Southend Sticks", b: "Hadleigh Hawks", others: ["Canvey Comets", "Leigh Lions"] },
+  icehockey: { a: "Southend Blades", b: "Hadleigh Hawks", others: ["Canvey Kings", "Leigh Lions"] },
 } as const;
+export type DemoSportKey = keyof typeof DEMO_SIDES;
