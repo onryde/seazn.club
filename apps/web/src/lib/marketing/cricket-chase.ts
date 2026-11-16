@@ -23,7 +23,7 @@ export type ChaseState = {
   history: ChaseState[];
 };
 
-export const CHASE = { target: 49, wicketsToFall: 10, opening: { runs: 27, wkts: 2, balls: 19 } } as const;
+export const CHASE = { target: 49, wicketsToFall: 10, overs: 20, opening: { runs: 27, wkts: 2, balls: 19 } } as const;
 
 export const BALLS_PER_OVER: number = cricketPadRules.ballsPerOver({});
 
@@ -64,4 +64,9 @@ export function oversText(balls: number, ballsPerOver: number): string {
 
 export function needText(s: ChaseState): { runs: number } {
   return { runs: Math.max(0, CHASE.target - s.runs) };
+}
+
+/** Legal balls left in the chasing side's innings. */
+export function ballsLeft(s: ChaseState): number {
+  return Math.max(0, CHASE.overs * BALLS_PER_OVER - s.balls);
 }

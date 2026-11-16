@@ -99,3 +99,13 @@ describe("cricket chase model", () => {
     expect(visited).toBeGreaterThan(1000);
   });
 });
+
+describe("cricket chase: balls left", () => {
+  it("counts down from the innings' overs at the engine's over length", async () => {
+    const { ballsLeft } = await import("../cricket-chase");
+    const s = openingChase();
+    expect(ballsLeft(s)).toBe(CHASE.overs * ENGINE_BPO - s.balls);
+    expect(ballsLeft(tap(s, "1"))).toBe(ballsLeft(s) - 1);
+    expect(ballsLeft(tap(s, "wide"))).toBe(ballsLeft(s));
+  });
+});
