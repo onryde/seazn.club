@@ -1,4 +1,4 @@
-// The billing lifecycle mails (2026-11-15): six kinds, one template file. What a template owns is the copy: which sentence each case
+// The billing lifecycle mails (2026-11-15): seven kinds, one template file. What a template owns is the copy: which sentence each case
 // gets, that every locale ships its own words (no raw key, no unfilled placeholder, no "$undefined"), that the dates and amounts are
 // the reader's, and that the link the reader acts on is in both halves. Who gets which mail is the producer's
 // (server/usecases/__tests__/billing-lifecycle-mail.test.ts).
@@ -11,6 +11,7 @@ import { LOCALES, type Locale } from "@/lib/i18n-constants";
 import { formatMoneyExact } from "@/lib/format-money-exact";
 import {
   planActivatedTemplate,
+  renewalActionRequiredTemplate,
   renewalFailedTemplate,
   renewalPaidTemplate,
   renewalUpcomingTemplate,
@@ -20,6 +21,8 @@ import {
 
 const BILLING = "https://seazn.club/o/riverside/settings/billing";
 const INVOICE = "https://invoice.stripe.com/i/acct_test/inv_test_123";
+// The Stripe-hosted page where the payer confirms a payment their bank asked about (the invoice's own hosted page).
+const CONFIRM = "https://invoice.stripe.com/i/acct_test/inv_test_confirm_456";
 // Instants taken from the sandbox probe's payloads (2026-11-15): a trial end, an annual renewal, a retry an hour later.
 const TRIAL_END = "2026-12-01T10:14:23.000Z";
 const RENEWS = "2027-12-01T10:14:23.000Z";
@@ -35,6 +38,7 @@ async function renderAll(locale: Locale) {
   const common = { planName: "Pro", billingUrl: BILLING, locale };
   const paid = { ...common, amountCents: 12899, currency: "usd", renewsAt: RENEWS, invoiceUrl: INVOICE };
   const failed = { ...common, amountDueCents: 1499, currency: "usd", graceEndsAt: GRACE_END, nextAttemptAt: RETRY };
+  const confirm = { ...common, amountDueCents: 1499, currency: "usd", graceEndsAt: GRACE_END, confirmUrl: CONFIRM };
   return {
     trialExpired: trialExpiredTemplate({ ...common, trialEnd: TRIAL_END }, dict),
     planActivated: planActivatedTemplate(paid, dict),
@@ -44,6 +48,9 @@ async function renderAll(locale: Locale) {
     renewalFailed1: renewalFailedTemplate({ ...failed, graceDaysLeft: 1 }, dict),
     renewalFailedLapsed: renewalFailedTemplate({ ...failed, graceDaysLeft: 0 }, dict),
     renewalFailedNoRetry: renewalFailedTemplate({ ...failed, graceDaysLeft: 14, nextAttemptAt: null }, dict),
+    actionRequired14: renewalActionRequiredTemplate({ ...confirm, graceDaysLeft: 14 }, dict),
+    actionRequired1: renewalActionRequiredTemplate({ ...confirm, graceDaysLeft: 1 }, dict),
+    actionRequiredLapsed: renewalActionRequiredTemplate({ ...confirm, graceDaysLeft: 0 }, dict),
     renewalUpcoming: renewalUpcomingTemplate({ ...common, amountDueCents: 12899, currency: "usd", renewsAt: RENEWS, cardOnFile: true }, dict),
     renewalUpcomingNoCard: renewalUpcomingTemplate({ ...common, amountDueCents: 12899, currency: "usd", renewsAt: RENEWS, cardOnFile: false }, dict),
     cancelScheduled: subscriptionChangedTemplate({ ...common, change: { variant: "cancel_scheduled", endsAt: TRIAL_END } }, dict),
@@ -54,7 +61,7 @@ async function renderAll(locale: Locale) {
   };
 }
 
-const PREFIXES = /\b(billingLifecycle|trialExpired|planActivated|renewalPaid|renewalFailed|renewalUpcoming|subscriptionChanged)\./;
+const PREFIXES = /\b(billingLifecycle|trialExpired|planActivated|renewalPaid|renewalFailed|renewalActionRequired|renewalUpcoming|subscriptionChanged)\./;
 
 describe("billing lifecycle templates", () => {
   it.each(LOCALES)("%s: no raw key, no unfilled placeholder, no $undefined, in any part of any case", async (locale) => {
@@ -68,7 +75,7 @@ describe("billing lifecycle templates", () => {
         checked++;
       }
     }
-    expect(checked, "anti-vacuity: 15 cases x 3 parts").toBe(45);
+    expect(checked, "anti-vacuity: 18 cases x 3 parts").toBe(54);
   });
 
   it.each(LOCALES)("%s: every case links to the billing page in both halves", async (locale) => {
@@ -87,13 +94,14 @@ describe("billing lifecycle templates", () => {
     }
   });
 
-  it.each(LOCALES)("%s: the six kinds and the four confirmation variants are different mails", async (locale) => {
+  it.each(LOCALES)("%s: the seven kinds and the four confirmation variants are different mails", async (locale) => {
     const a = await renderAll(locale);
     const subjects = [
       a.trialExpired,
       a.planActivated,
       a.renewalPaid,
       a.renewalFailed14,
+      a.actionRequired14,
       a.renewalUpcoming,
       a.cancelScheduled,
       a.resumed,
@@ -101,7 +109,7 @@ describe("billing lifecycle templates", () => {
       a.monthly,
       a.trialContinues,
     ].map((o) => o.subject);
-    expect(new Set(subjects).size, `${locale}: ten distinct subjects`).toBe(10);
+    expect(new Set(subjects).size, `${locale}: eleven distinct subjects`).toBe(11);
   });
 
   it.each(LOCALES)("%s: dates are the reader's, read as UTC", async (locale) => {
@@ -112,6 +120,7 @@ describe("billing lifecycle templates", () => {
     expect(a.renewalUpcoming.subject).toContain(day(RENEWS, locale));
     expect(a.renewalFailed14.text).toContain(day(RETRY, locale));
     expect(a.renewalFailed14.text).toContain(day(GRACE_END, locale));
+    expect(a.actionRequired14.text).toContain(day(GRACE_END, locale));
     expect(a.cancelScheduled.subject).toContain(day(TRIAL_END, locale));
     expect(a.annual.text).toContain(day(RENEWS, locale));
     expect(a.monthly.text).toContain(day(TRIAL_END, locale));
@@ -123,6 +132,7 @@ describe("billing lifecycle templates", () => {
     const monthly = formatMoneyExact(1499, "usd", locale);
     for (const out of [a.planActivated, a.renewalPaid, a.renewalUpcoming]) expect(out.text).toContain(annual);
     expect(a.renewalFailed14.text).toContain(monthly);
+    expect(a.actionRequired14.text).toContain(monthly);
     // The HTML half carries the same amount (escaped, but an amount has nothing to escape).
     expect(words(a.renewalUpcoming.html)).toContain(annual);
   });
@@ -180,6 +190,40 @@ describe("billing lifecycle templates", () => {
       const a = await renderAll(locale);
       for (const iso of [TRIAL_END, RENEWS]) expect(a.resumed.text).not.toContain(day(iso, locale));
     }
+  });
+
+  it.each(LOCALES)("%s: the confirmation request's button is Stripe's confirm page, in both halves; the billing page rides beside it", async (locale) => {
+    const a = await renderAll(locale);
+    const dict = (await getDictionary(locale, "emails")) as Record<string, string>;
+    let checked = 0;
+    for (const out of [a.actionRequired14, a.actionRequired1, a.actionRequiredLapsed]) {
+      expect(out.text).toContain(`${dict["renewalActionRequired.cta"]}: ${CONFIRM}`);
+      expect(out.html).toContain(`href="${CONFIRM}"`);
+      expect(out.text).toContain(`${dict["billingLifecycle.manageBilling"]}: ${BILLING}`);
+      checked++;
+    }
+    expect(checked).toBe(3);
+    // Positive pair: the dunning notice's button is the billing page, never a confirm page.
+    expect(a.renewalFailed14.html).not.toContain(CONFIRM);
+  });
+
+  it.each(LOCALES)("%s: the confirmation request asks the payer to confirm (not to change the card), and holds the plan by the dunning notice's grace", async (locale) => {
+    const a = await renderAll(locale);
+    const dict = (await getDictionary(locale, "emails")) as Record<string, string>;
+    const vars: Record<string, string> = { planName: "Pro", amount: formatMoneyExact(1499, "usd", locale), date: day(GRACE_END, locale) };
+    const fill = (key: string, extra: Record<string, string> = {}) =>
+      Object.entries({ ...vars, ...extra }).reduce((s, [k, v]) => s.replaceAll(`{${k}}`, v), dict[key]!);
+    expect(a.actionRequired14.text).toContain(fill("renewalActionRequired.body"));
+    // The countdown by the language's plural rule, from the same grace the dunning notice names (14 days, then 1).
+    expect(a.actionRequired14.text).toContain(fill(`renewalActionRequired.grace.${new Intl.PluralRules(locale).select(14)}`, { count: "14" }));
+    expect(a.actionRequired1.text).toContain(fill(`renewalActionRequired.grace.${new Intl.PluralRules(locale).select(1)}`, { count: "1" }));
+    // Over: the plan has moved to Community until the payment goes through; no countdown, no grace date.
+    expect(a.actionRequiredLapsed.text).toContain(fill("renewalActionRequired.lapsed"));
+    expect(a.actionRequiredLapsed.text).not.toContain(day(GRACE_END, locale));
+    // Not the dunning notice: no "declined", no retry, no "update your payment method" button.
+    expect(a.actionRequired14.text).not.toContain(fill("renewalFailed.body"));
+    expect(a.actionRequired14.text).not.toContain(dict["renewalFailed.cta"]!);
+    expect(fill("renewalActionRequired.body"), "premise: the two sentences differ").not.toBe(fill("renewalFailed.body"));
   });
 
   it("an interpolated value is escaped in the HTML half and raw in the text half", async () => {

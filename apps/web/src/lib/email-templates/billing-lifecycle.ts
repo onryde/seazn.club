@@ -1,10 +1,11 @@
-// The billing lifecycle mails (2026-11-15): what happened to a billing group's subscription, told to its payer. Six outbox kinds share
+// The billing lifecycle mails (2026-11-15): what happened to a billing group's subscription, told to its payer. Seven outbox kinds share
 // this file because they share their shape: a plan name, a date or two, an amount, and one link to the billing page.
 //
 //  - trialExpiredTemplate        a no-card trial ran out and the group is on Community now
 //  - planActivatedTemplate       the first paid invoice of a subscription (a new paid plan, or the charge that ends a trial)
 //  - renewalPaidTemplate         a later renewal was paid: the receipt
 //  - renewalFailedTemplate       a renewal charge was declined: the dunning notice, with the grace the resolver still gives
+//  - renewalActionRequiredTemplate the payer's bank wants a renewal confirmed (3-D Secure): the button is Stripe's confirm page
 //  - renewalUpcomingTemplate     an ANNUAL plan renews soon (Stripe's `invoice.upcoming`)
 //  - subscriptionChangedTemplate the payer's own change, confirmed: a cancel scheduled, a resume, an interval switch
 //
@@ -147,19 +148,24 @@ export interface RenewalFailedArgs extends Common {
   nextAttemptAt: string | null;
 }
 
+/** The sentence both past-due mails end on: the grace days left by the language's plural rule, or the lapsed one once it is over. */
+function graceSentence(
+  dict: Dict,
+  prefix: "renewalFailed" | "renewalActionRequired",
+  a: Common & { graceEndsAt: string; graceDaysLeft: number },
+): { html: string; text: string } {
+  if (a.graceDaysLeft <= 0) return sentence(dict, `${prefix}.lapsed`, { planName: a.planName });
+  const g = { planName: a.planName, date: day(a.graceEndsAt, a.locale) };
+  return {
+    html: plural(dict, `${prefix}.grace`, a.graceDaysLeft, a.locale, escapeAll(g)),
+    text: plural(dict, `${prefix}.grace`, a.graceDaysLeft, a.locale, g),
+  };
+}
+
 /** A renewal charge was declined. Says what failed, when Stripe tries again, and how long the plan holds. */
 export function renewalFailedTemplate(a: RenewalFailedArgs, dict: Dict): Rendered {
   const vars = { planName: a.planName, amount: money(a.amountDueCents, a.currency, a.locale) };
-  const grace =
-    a.graceDaysLeft > 0
-      ? (() => {
-          const g = { planName: a.planName, date: day(a.graceEndsAt, a.locale) };
-          return {
-            html: plural(dict, "renewalFailed.grace", a.graceDaysLeft, a.locale, escapeAll(g)),
-            text: plural(dict, "renewalFailed.grace", a.graceDaysLeft, a.locale, g),
-          };
-        })()
-      : sentence(dict, "renewalFailed.lapsed", { planName: a.planName });
+  const grace = graceSentence(dict, "renewalFailed", a);
   return layout(dict, {
     subject: t(dict, "renewalFailed.subject", vars),
     preheader: t(dict, "renewalFailed.preheader", vars),
@@ -171,6 +177,36 @@ export function renewalFailedTemplate(a: RenewalFailedArgs, dict: Dict): Rendere
       grace,
     ],
     cta: { label: t(dict, "renewalFailed.cta"), url: a.billingUrl },
+  });
+}
+
+export interface RenewalActionRequiredArgs extends Common {
+  /** What the invoice asks for (`amount_due`), in minor units. */
+  amountDueCents: number;
+  currency: string;
+  /** The invoice's Stripe-hosted page (`hosted_invoice_url`), where the payer confirms the payment with their bank. */
+  confirmUrl: string;
+  /** ISO: when the past-due grace ends — the dunning notice's: the resolver's 14 days from the move to past_due. */
+  graceEndsAt: string;
+  /** Whole days left of that grace, rounded up; 0 or less once it is over. */
+  graceDaysLeft: number;
+}
+
+/**
+ * The payer's bank wants a renewal payment confirmed (3-D Secure): nothing was declined, so the button is Stripe's confirm page rather
+ * than "update your payment method", and the billing page rides beside it. How long the plan holds meanwhile is the dunning notice's
+ * grace, in the dunning notice's words.
+ */
+export function renewalActionRequiredTemplate(a: RenewalActionRequiredArgs, dict: Dict): Rendered {
+  const vars = { planName: a.planName, amount: money(a.amountDueCents, a.currency, a.locale) };
+  return layout(dict, {
+    subject: t(dict, "renewalActionRequired.subject", vars),
+    preheader: t(dict, "renewalActionRequired.preheader", vars),
+    planName: a.planName,
+    title: t(dict, "renewalActionRequired.title", vars),
+    sentences: [sentence(dict, "renewalActionRequired.body", vars), graceSentence(dict, "renewalActionRequired", a)],
+    cta: { label: t(dict, "renewalActionRequired.cta"), url: a.confirmUrl },
+    link: { label: t(dict, "billingLifecycle.manageBilling"), url: a.billingUrl },
   });
 }
 
