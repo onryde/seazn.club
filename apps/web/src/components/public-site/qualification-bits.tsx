@@ -12,7 +12,7 @@ import type { QualRowT, QualTableT } from "@/server/public-site/competition-hub-
 type Kind = QualRowT["status"];
 
 export function QualMarker({ status }: { status: Kind }) {
-  if (status === "through") {
+  if (status === "through" || status === "qualified") {
     return (
       <span
         aria-hidden="true"
