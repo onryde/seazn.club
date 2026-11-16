@@ -30,6 +30,8 @@ describe("/product/streaming", () => {
   it("sections come in the feature-page order", async () => {
     const html = await renderPage(Page, { lang: "en" });
     expect(sectionOrder(html)).toEqual(["hero", "demo", "road", "camera", "ticket", "club", "questions", "closing"]);
+    // Nothing between the closing call and the footer: no second list of product links.
+    expect(html.slice(html.indexOf('data-section="closing"'))).not.toMatch(/<nav|mkp-more|mkp-chips/);
   });
 
   it.each(LOCALES.map((l) => [l]))("%s: quotes no price", async (lang) => {

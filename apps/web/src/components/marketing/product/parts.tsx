@@ -325,19 +325,14 @@ export function Closing({
   sub,
   cta,
   pricing,
-  moreLabel,
-  more,
 }: {
   line: string;
   sub: string;
   cta: LinkTo;
   pricing: LinkTo;
-  moreLabel: string;
-  more: (LinkTo & { current?: boolean })[];
 }) {
   return (
-    <>
-      <section className="mkp-fin" data-section="closing">
+    <section className="mkp-fin" data-section="closing">
         <div className="mkp-wrap">
           <h2 className="mkp-d">{line}</h2>
           <p>{sub}</p>
@@ -350,19 +345,6 @@ export function Closing({
             </Link>
           </div>
         </div>
-      </section>
-      <nav className="mkp-more" aria-label={moreLabel}>
-        <div className="mkp-wrap">
-          <p>{moreLabel}</p>
-          <div className="mkp-chips">
-            {more.map((m) => (
-              <Link key={m.href} href={m.href} className={m.current ? "mkp-on" : undefined} aria-current={m.current ? "page" : undefined}>
-                {m.label}
-              </Link>
-            ))}
-          </div>
-        </div>
-      </nav>
-    </>
+    </section>
   );
 }

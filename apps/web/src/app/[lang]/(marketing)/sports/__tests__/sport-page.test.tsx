@@ -37,6 +37,8 @@ describe("/sports/cricket", () => {
   it("sections come in the sport-page order", async () => {
     const html = await renderPage(Page, { lang: "en", sport: "cricket" });
     expect(sectionOrder(html)).toEqual(["hero", "demo", "road", "phones", "offline", "ticket", "club", "questions", "closing"]);
+    // Nothing between the closing call and the footer: no second list of product links.
+    expect(html.slice(html.indexOf('data-section="closing"'))).not.toMatch(/<nav|mkp-more|mkp-chips/);
   });
 
   it("the offline section names the app, in every locale", async () => {

@@ -5,7 +5,6 @@ import { ChaseDemo } from "@/components/marketing/product/chase-demo";
 import { chaseDemoLabels } from "@/components/marketing/product/chase-demo-labels";
 import { Accent, Closing, DEMO_CLUB_HREF, DEMO_TEAMS, DemoBand, DemoClub, PageHero, PhoneRow, ProductPage, Questions, Road, Ticket } from "@/components/marketing/product/parts";
 import { BALLS_PER_OVER } from "@/lib/marketing/cricket-chase-rules";
-import { PRODUCT_LINKS } from "@/lib/marketing/product-nav";
 import { getDictionary, t } from "@/lib/i18n";
 import { hasLocale } from "@/lib/i18n-constants";
 import { marketingMeta } from "@/lib/seo-meta";
@@ -86,8 +85,6 @@ export default async function StreamingProductPage({ params }: { params: Promise
           sub={shared("closingSub")}
           cta={{ label: shared("startFree"), href: SIGNUP }}
           pricing={{ label: shared("seePricing"), href: "/pricing" }}
-          moreLabel={shared("more")}
-          more={PRODUCT_LINKS.map((l) => ({ label: t(d, l.key), href: l.href, current: l.href === PATH }))}
         />
       </ProductPage>
     </MarketingShell>

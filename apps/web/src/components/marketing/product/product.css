@@ -138,9 +138,6 @@
 .mkp-faq summary::after{content:"+";font-family:var(--mk-font-display, var(--font-geist-sans));font-size:26px;color:var(--mk-purple);line-height:1}.mkp-faq details[open] summary::after{content:"–"}
 .mkp-faq details p{color:#5d5873;margin-top:8px;max-width:62ch}
 .mkp-fin{background:var(--mk-night);color:var(--mk-cream);padding:60px 0}.mkp-fin h2{font-size:clamp(40px,6.4vw,76px)}.mkp-fin p{color:#d9d2f3;margin-top:10px}
-.mkp-more{padding:26px 0 40px}.mkp-more p{font-size:13.5px;color:#5d5873;font-weight:600}
-.mkp-chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}.mkp-chips a{font-size:14px;padding:9px 14px;border:1px solid #e6dff3;border-radius:999px;background:#fff}
-.mkp-chips a.mkp-on{background:var(--mk-purple);border-color:var(--mk-purple);color:#fff;font-weight:600}
 /* phone: the pad stays under the thumb while the screens above react */
 @media (max-width:899px){
  .mkp-stage .mkp-t-pad{order:9}

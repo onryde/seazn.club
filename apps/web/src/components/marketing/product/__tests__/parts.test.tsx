@@ -119,11 +119,14 @@ describe("product page parts", () => {
       <>
         <PageHero crumb="Product / X" title="Big line" lede="lede" primary={{ label: "Try", href: "#try" }} secondary={{ label: "Start", href: "/login?tab=signup" }} />
         <Ticket title="T" body="B" kicker="K" heading="H" rows={[{ label: "Length", value: "Up to 5 hours" }]} stub={{ top: "Packs of", big: "1 · 5 · 20", bottom: "x" }} />
-        <Closing line="Go" sub="Free" cta={{ label: "Start free", href: "/login?tab=signup" }} pricing={{ label: "See pricing", href: "/pricing" }} moreLabel="More" more={[{ label: "Streaming", href: "/product/streaming", current: true }]} />
+        <Closing line="Go" sub="Free" cta={{ label: "Start free", href: "/login?tab=signup" }} pricing={{ label: "See pricing", href: "/pricing" }} />
       </>,
     );
     expect(html.split("<h1")).toHaveLength(2);
     expect(html).toContain("Up to 5 hours");
-    expect(html).toContain('aria-current="page"');
+    // The page ends on its call to action: the nav and the footer already list the other pages, so no third list here.
+    const closing = html.slice(html.indexOf('data-section="closing"'));
+    expect(closing.match(/<a /g)).toHaveLength(2);
+    expect(html).not.toContain("<nav");
   });
 });
