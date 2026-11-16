@@ -16,11 +16,14 @@ import { apply } from "./apply";
  *  at all. `session_predates_result` is compared HERE, in SQL: `created_at` and `finished_at` are database stamps at
  *  microsecond precision and a JS `Date` truncates both to the millisecond, so a session created in the result's own
  *  millisecond would read equal there (Review Focus 4). Two clocks stay apart: those two stamps are compared with each other,
- *  and the delay is `deps.now()` against `finished_at`. `exec` is apply's tx when re-taken under the row lock. */
+ *  and the delay is `deps.now()` against `finished_at`. `exec` is apply's tx when re-taken under the row lock.
+ *  Court stream (spec 2026-11-14 §5.3–§5.4, plan Task 9): a court session's switch is the court's — the session exists only
+ *  because its match's Stream switch was on — so a session with a `court_link_id` reads `auto_stream` true and gets the same
+ *  180 s tail ("nothing follows"); a handover ends it sooner. A per-fixture code's session still reads its fixture's switch. */
 type AutoStopFacts = { auto_stream: boolean; mode: string | null; finished_at: Date | null; session_predates_result: boolean };
 async function autoStopFactsOf(exec: Tx | typeof sql, sessionId: string): Promise<AutoStopFacts | null> {
   const [f] = await exec<AutoStopFacts[]>`
-    select coalesce(st.auto_stream, false) as auto_stream, p.mode, f.finished_at,
+    select coalesce(st.auto_stream, false) or s.court_link_id is not null as auto_stream, p.mode, f.finished_at,
            coalesce(s.created_at < f.finished_at, false) as session_predates_result
       from fixture_stream_sessions s
       join fixtures f on f.id = s.fixture_id

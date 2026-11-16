@@ -466,3 +466,16 @@ describe("relayOutputProfile — RELAY_OUTPUT_PROFILE, the composed output the M
     }
   });
 });
+
+describe("courtMinAppVersion — the oldest app build a court code serves (court stream O13)", () => {
+  it("is the capture appVersion form <semver>-<count>, read per call; anything else, unset or blank is null", () => {
+    expect(config.courtMinAppVersion({})).toBeNull();
+    expect(config.courtMinAppVersion({ COURT_MIN_APP_VERSION: "" })).toBeNull();
+    expect(config.courtMinAppVersion({ COURT_MIN_APP_VERSION: "  " })).toBeNull();
+    expect(config.courtMinAppVersion({ COURT_MIN_APP_VERSION: "1.0.14-1200" })).toBe("1.0.14-1200");
+    expect(config.courtMinAppVersion({ COURT_MIN_APP_VERSION: " 1.0.14-1200 " })).toBe("1.0.14-1200");
+    for (const bad of ["abc", "1.0.14", "1.0-1200", "v1.0.14-1200", "1.0.14-abc", "1.0.14-1200-x"]) {
+      expect(config.courtMinAppVersion({ COURT_MIN_APP_VERSION: bad })).toBeNull();
+    }
+  });
+});

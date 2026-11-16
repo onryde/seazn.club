@@ -33,6 +33,22 @@ A court shows **Closed** when its venue's hours say it is shut — until a time,
 
 On a playing or called court, **Remote scoring** shows a QR code and link for that match: scan it on any phone and that phone scores the match, no account needed ([device links](/help/scoring/device-links)). A court marked **No scorer** has nobody scoring yet. **Open pad** opens the match's own page.
 
+## Stream a court
+
+One phone on a tripod can stream every match on a court, one YouTube video per match, with nobody touching it between matches. You set it up once for the day.
+
+1. **Link the court.** On the court, press **Stream this court** and pick a connected YouTube channel (use **Connect YouTube** if you have none). The court gets a QR code that works until the end of the day, on the competition's clock. **Show court QR** brings it back. A court streams to one channel for the day.
+2. **Scan it on the phone.** In the Seazn Club app, open **Live Stream** and scan the court's QR. The phone shows the court and waits. It starts matches by itself only while its **Automatic** switch is on; otherwise press **Go live** on the match page, or have the volunteer hold **Go live** on the phone itself.
+3. **Switch matches on.** Each match on the court's queue has a **Stream** switch, off by default, and so has the match waiting to be called on a free court, so the day's first match can be switched on before it is called. Turn it on for the matches the phone should stream. A match that has its own stream code can't be switched on until that code is ended. The court's row and the focused court show the phone's state: **No phone yet**, **Phone waiting**, **Live** or **Phone offline**.
+
+**What the phone does.** When the scorer starts a match whose switch is on, the phone starts that match's own broadcast on the court's channel. About three minutes after the result, the broadcast ends. If the next switched-on match starts in that time, it takes over at once and the previous video ends. Between matches nothing is on air, and a match whose switch is off is never streamed. Each match's video spends one stream credit, the same as streaming it from its own page.
+
+**On the match page.** The stream panel of a switched-on match reads **Streamed by** *court*'s **phone**. It has no code of its own to scan. **Go live** starts on the court's phone, and **Stop** ends that match's video.
+
+**Switching a match off** only changes what the phone picks next; it never cuts a video that is already live. Use **Stop** on the match page for that.
+
+**Stop streaming a court** (the court's own button) unlinks it after asking: the QR stops working and the phone stops following matches. A match on air finishes first.
+
 ## Common questions
 
 **Why can't I call a match from Match Day?** Either you can only view the competition (the page says **View only**), or your organisation is over its plan's limit on active competitions. Over the limit, matches still score: **Open pad** works as usual, and so does the scorer link if your plan includes scorer links. What stops is calling or uncalling a match and starting a new stream from anywhere: the stream panel, a camera phone or an automatic start (a stream already running keeps going, and you can still stop it). Archive a competition or upgrade your plan to get those back ([plans](/help/billing/plans)).

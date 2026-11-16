@@ -604,6 +604,11 @@ const WALKTHROUGH_SPECS: string[] = [
   // and each amber the server names, the beat-confirmed "Phone not ready", the automatic start's refusal, and the
   // takeover notice (dismissed across a reload, gone after Revoke & reissue, naming Stop while live).
   "capture-panel-pr2.spec.ts",
+  // Court stream (spec 2026-11-14, plan Task 14) — one court phone and three matches in a row on the shortened automatic-streaming
+  // timings: the desk links Court 2, the phone claims it by the court's QR, A starts, B starts inside A's tail and takes the court
+  // (a handover, not the tail), turning Stream off on B never ends its video, C (switch off) streams nothing, B's tail ends it, and
+  // org_stream_credits holds exactly two consume rows. The match page's panel names the court's phone at 1280 and 320 (Task 13).
+  "court-stream.spec.ts",
 
   // Online chess (Lichess) — OTB has no Play CTA, an online board links to no
   // Lichess game, and the organiser's needs-result queue resolves a held board;
@@ -1641,6 +1646,31 @@ describe("the fake YouTube reaches every fake-relay server, its key generated pe
       expect(yml.match(/YOUTUBE_TOKEN_KEK=[0-9a-fA-F]{16,}/g) ?? [], `${wf}: a literal YOUTUBE_TOKEN_KEK value`).toEqual([]);
     }
     expect(scanned).toBe(WORKFLOW_FILES.length);
+  });
+});
+
+// Court stream (spec 2026-11-14, capture O13): linking a court is refused 503 `court_streaming_unconfigured` while the server's
+// COURT_MIN_APP_VERSION is unset or not `<semver>-<commit count>`. match-day.spec.ts (the court-stream desk tests) and
+// walkthrough/court-stream.spec.ts link a court on e2e-parallel's :3000 server, so that server must carry it: the first PR run
+// (workflow_dispatch on main's workflow, which lacked it) failed both with the sheet's "isn't set up on this server" alert.
+describe("COURT_MIN_APP_VERSION reaches the server the court-stream specs link on", () => {
+  const yml = readFileSync(join(REPO_ROOT, ".github/workflows/e2e.yml"), "utf8")
+    .split("\n")
+    .map((line) => line.replace(/(^|\s)#.*$/, ""))
+    .join("\n");
+
+  it("e2e-parallel's Start server env sets COURT_MIN_APP_VERSION to a build version the helper's fake phone clears", () => {
+    const jobAt = yml.search(/^ {2}e2e-parallel:\n/m);
+    const nextJobAt = yml.search(/^ {2}e2e-serial:\n/m);
+    expect(jobAt, "e2e-parallel job found").toBeGreaterThanOrEqual(0);
+    expect(nextJobAt, "e2e-serial job found").toBeGreaterThan(jobAt);
+    const job = yml.slice(jobAt, nextJobAt);
+    const server = job.indexOf("- name: Start server");
+    expect(server, "e2e-parallel Start server step").toBeGreaterThan(0);
+    const env = job.slice(server, job.indexOf("        run:", server));
+    const version = /^\s+COURT_MIN_APP_VERSION:\s*"?(\d+\.\d+\.\d+-\d+)"?\s*$/m.exec(env)?.[1];
+    expect(version, "COURT_MIN_APP_VERSION on e2e-parallel's Start server").toBeDefined();
+    expect(version).toBe("1.0.14-1200");
   });
 });
 

@@ -46,6 +46,7 @@ import { storageUsageForColumns, storageHeadroomMinutes } from "./storage";
 import { targetHolderFor, tearDownPriorMachines, releasePriorOutputs, targetInUse } from "./holders";
 import { refuse, unreadableRefusal, refuseUnreadableTarget, pooledKeyRefusal } from "./refusals";
 import { provisionSession } from "./provision";
+import { endOtherCourtSessions } from "../court-stream-sessions";
 
 /** T11 (TEST-STRATEGY rule 4): the destination's source decides whether a broadcast was prepared, so a mismatch at the insert is
  *  a caller bug, refused by name. Reachable only through a race the probe cannot see (its answer and the locked row's differ). */
@@ -75,6 +76,13 @@ export interface StartActor {
  *  the automatic start is the domain's own decision. */
 const START_EVENT_SOURCE = { organiser: "client", phone: "phone", auto: "domain" } as const satisfies Record<StartActor["source"], EventSource>;
 
+/** The organiser's Go live's phone: its pairing, its standing, and the court link it streams under (null: the fixture's own code). */
+type CurrentPhone = { pairingId: string; standing: Exclude<PhoneStanding, "unpaired">; courtLinkId: string | null };
+const standingOf = (p: { last_beat_at: Date; answered_poll_seconds: number }, now: Date): CurrentPhone["standing"] =>
+  isPresent(
+    { current: true, lastBeatAt: new Date(p.last_beat_at), answeredPoll: p.answered_poll_seconds },
+    now, tunable("PHONE_SILENT_FLOOR_SECONDS", PHONE_SILENT_FLOOR_SECONDS),
+  ) ? "present" : "silent";
 /** W5 / T10 (§6.7.1, §6.9): slot 0's CURRENT pairing on the fixture's ACTIVE stream code, and its standing — `present`
  *  (current and not silent on `now`, admission's clock) or `silent` (owner ruling 2026-10-09: refused
  *  `phone_not_responding`, never `phone_not_paired`). Null is no current phone: `unpaired` to admission. Through the non-tenant `sql` (R1): V430's tables are FORCE RLS
@@ -85,8 +93,9 @@ const START_EVENT_SOURCE = { organiser: "client", phone: "phone", auto: "domain"
  *  C2 (B7 re-review m-b, §6.12 "Code ended: no Go live"): the lookup EVALUATES the active code, on the same clock. Found
  *  expired, the first evaluation writes it (ended `expired`, tok wiped), as resolve, ensure and the panel's read do, and
  *  the code has no current phone: W5 answers `phone_not_paired`. An open session defers it (C2), so a Go live over one
- *  meets `active_session` as before. */
-async function currentPhoneOf(fixtureId: string, now: Date): Promise<{ pairingId: string; standing: Exclude<PhoneStanding, "unpaired"> } | null> {
+ *  meets `active_session` as before.
+ *  Court stream (Task 9): with NO active code of its own, the match's court phone (`courtPhoneOf`), with its `courtLinkId`. */
+async function currentPhoneOf(fixtureId: string, now: Date): Promise<CurrentPhone | null> {
   const [c] = await sql<{
     id: string; finished_at: Date | null; open: boolean; pairing_id: string | null; last_beat_at: Date | null; answered_poll_seconds: number | null;
   }[]>`
@@ -97,23 +106,45 @@ async function currentPhoneOf(fixtureId: string, now: Date): Promise<{ pairingId
       join fixtures f on f.id = c.fixture_id
       left join fixture_stream_pairings p on p.code_id = c.id and p.slot = 0 and p.ended_at is null
      where c.fixture_id = ${fixtureId} and c.ended_at is null`;
-  if (!c) return null;
+  if (!c) return courtPhoneOf(fixtureId, now);
   const grace = tunable("CODE_GRACE_AFTER_FINISH_MINUTES", CODE_GRACE_AFTER_FINISH_MINUTES);
   if (codeStatus({ endedAt: null, finishedAt: c.finished_at }, now, c.open, grace) === "expiry_due") {
     await sql.begin((tx) => wipeStreamCodeTok(tx, c.id, "expired", null));
     return null;
   }
   if (c.pairing_id === null) return null;
-  const p = { id: c.pairing_id, last_beat_at: c.last_beat_at!, answered_poll_seconds: c.answered_poll_seconds! };
-  const present = isPresent(
-    { current: true, lastBeatAt: new Date(p.last_beat_at), answeredPoll: p.answered_poll_seconds },
-    now, tunable("PHONE_SILENT_FLOOR_SECONDS", PHONE_SILENT_FLOOR_SECONDS),
-  );
-  return { pairingId: p.id, standing: present ? "present" : "silent" };
+  return { pairingId: c.pairing_id, standing: standingOf({ last_beat_at: c.last_beat_at!, answered_poll_seconds: c.answered_poll_seconds! }, now), courtLinkId: null };
+}
+
+/** Court stream (spec 2026-11-14 §5.4, plan Task 9): a match with no active code of its own whose Stream switch is on is
+ *  streamed by its court's phone — slot 0's current pairing on the ACTIVE court code of the match's court link that is live
+ *  at `now` (not withdrawn, `opens_at <= now < expires_at`, the window `liveCourtLinkFor` reads). Null when any of that is
+ *  missing: admission then answers `phone_not_paired`, as for a match with no phone. A court code's own end is the court's
+ *  resolver's to write (the link's window bounds it here), never this lookup's. */
+async function courtPhoneOf(fixtureId: string, now: Date): Promise<CurrentPhone | null> {
+  const [p] = await sql<{ link_id: string; pairing_id: string; last_beat_at: Date; answered_poll_seconds: number }[]>`
+    select l.id as link_id, p.id as pairing_id, p.last_beat_at, p.answered_poll_seconds
+      from fixtures f
+      join fixture_stream_settings st on st.fixture_id = f.id and st.court_stream
+      join court_stream_links l on l.court_id = f.court_id and l.org_id = f.org_id and l.withdrawn_at is null
+                                and l.opens_at <= ${now} and ${now} < l.expires_at
+      join fixture_stream_codes c on c.court_link_id = l.id and c.ended_at is null
+      join fixture_stream_pairings p on p.code_id = c.id and p.slot = 0 and p.ended_at is null
+     where f.id = ${fixtureId}`;
+  return p ? { pairingId: p.pairing_id, standing: standingOf(p, now), courtLinkId: p.link_id } : null;
+}
+
+/** The court link's destination (O9): a court streams to its link's channel, never another. */
+async function courtLinkTargetOf(linkId: string): Promise<string> {
+  const [l] = await sql<{ target_id: string }[]>`select target_id from court_stream_links where id = ${linkId}`;
+  if (!l) throw new HttpError(404, "fixture not found");
+  return l.target_id;
 }
 
 /** The organiser's Go live (the route's caller; unchanged signature). It resolves the actor, asks whether the fixture's
- *  phone is present (W5), starts through the ONE start path, and saves the destination as the fixture's pre-pick. */
+ *  phone is present (W5), starts through the ONE start path, and saves the destination as the fixture's pre-pick. A match
+ *  streamed by its court (Task 9) starts on the court phone, on the link's target, ends the court's older sessions, and
+ *  saves no pre-pick. */
 export async function createSession(
   auth: AuthCtx, fixtureId: string, body: CreateStreamSession, deps: SessionDeps,
 ): Promise<{ sessionId: string }> {
@@ -127,15 +158,33 @@ export async function createSession(
   const actorUserId = auth.userId;
   if (actorUserId === null) throw new HttpError(403, "A stream can only be started by a signed-in organiser");
   const phone = await currentPhoneOf(fixtureId, deps.now());
+  const courtLinkId = phone?.courtLinkId ?? null;
+  // Court stream (§5.4, plan Task 9): the match page's Go live of a court-streamed match — the desk's restart — rides the
+  // court phone, on the LINK's target whatever the body names (O9; `startBroadcast`'s court guard refuses any other).
+  // Its cause stays `organiser`, so the court's resolver holds it (R3) and never hands the court back over it.
+  const targetId = courtLinkId === null ? body.targetId : await courtLinkTargetOf(courtLinkId);
   const started = await startBroadcast(
     { userId: actorUserId, orgId, source: "organiser", pairingId: phone?.pairingId ?? null },
     fixtureId,
     {
-      targetId: body.targetId, startCause: "organiser", phone: phone?.standing ?? "unpaired", mode: body.mode,
+      targetId, startCause: "organiser", phone: phone?.standing ?? "unpaired", mode: body.mode,
       themeId: body.themeId ?? null, overlayDelayMs: body.overlayDelayMs,
+      ...(courtLinkId === null ? {} : { courtLinkId }),
     },
     deps,
   );
+  if (courtLinkId !== null) {
+    // Start first, then end (§5.4): every OLDER session of the court ends, handed over to this one. A failure leaves the
+    // start standing (it is running; an error would be retried into active_session), logged and reported, as for the
+    // court's own starts. No pre-pick: the match's own destination choice is not the court's to change.
+    try {
+      await endOtherCourtSessions({ linkId: courtLinkId, keepSid: started.sessionId, actorUserId, source: "client" }, deps);
+    } catch (err) {
+      log.error({ err: String(err), sid: started.sessionId, orgId }, "stream session: ending the court's other sessions failed — the desk's start stands");
+      captureError(err, { orgId, route: "relay.session.court_end_others", extra: { sid: started.sessionId } });
+    }
+    return started;
+  }
   // T6 (§6.6): the destination this Go live used becomes the fixture's pre-pick, which the phone's own start reads.
   // AFTER the start, and never failing it: a broadcast that IS running must not answer an error the organiser would
   // retry straight into active_session. A failed save is logged and reported; the next Go live saves it again.
@@ -169,6 +218,10 @@ export async function startBroadcast(
     /** The automatic start's instant (§7.2, final review m-1): stamped as `auto_started_at` IN the insert's transaction, so
      *  the session and "once per match" commit together. Given exactly when `actor.source` is `auto`. */
     autoStartedAt?: Date;
+    /** Court stream (spec 2026-11-14 §5.3, plan Task 7): the court link this start streams under. Given, the pairing's code
+     *  is that link's court code (not the fixture's own), and the session row stores `court_link_id`. Absent: today's
+     *  rule, the fixture's own code. */
+    courtLinkId?: string;
   },
   deps: SessionDeps,
 ): Promise<{ sessionId: string }> {
@@ -182,13 +235,9 @@ export async function startBroadcast(
   const composedRunnerDown = body.mode === "composed" && composedUnavailable();
   // An assumption made a guard: every caller reads its pairing FROM this fixture's code, so a pairing on another
   // fixture's code is a caller bug — refused before anything is weighed or written, never a session tied to the wrong
-  // phone. Witness: "startBroadcast refuses a pairing from another fixture's code".
-  const pairing = actor.pairingId === null ? null : (await sql<{ code_id: string; issued_by: string }[]>`
-    select p.code_id, c.issued_by from fixture_stream_pairings p join fixture_stream_codes c on c.id = p.code_id
-     where p.id = ${actor.pairingId} and c.fixture_id = ${fixtureId}`)[0] ?? null;
-  if (actor.pairingId !== null && pairing === null) {
-    throw new Error(`startBroadcast: pairing ${actor.pairingId} is not on fixture ${fixtureId}'s stream code`);
-  }
+  // phone. Witness: "startBroadcast refuses a pairing from another fixture's code". A court start (`courtLinkId`) reads
+  // its pairing from the court's code instead, and that is judged by `courtPairingOf`.
+  const pairing = actor.pairingId === null ? null : await pairingFor(actor.pairingId, fixtureId, opts, deps.now());
   // §6.7.1 "the actor", made a guard (B4 review m-2): a phone's or the automatic start rides the slot's pairing and is
   // attributed to its stream code's `issued_by`, who vouches for the phone. A caller that names anyone else, or brings
   // no pairing, is a caller bug — refused by name before anything is weighed or written, so `created_by` and the
@@ -394,7 +443,7 @@ export async function startBroadcast(
                                            storage_minutes_at_admission, reserved_minutes, destination_kind,
                                            sport_key, competition_id, division_id, fixture_scheduled_at,
                                            venue_id, venue_address, org_timezone, entitlement_via_override,
-                                           start_cause, code_id, pairing_id, overlay_delay_ms, api_backed, youtube_broadcast_id)
+                                           start_cause, code_id, pairing_id, court_link_id, overlay_delay_ms, api_backed, youtube_broadcast_id)
       select ${fixtureId}, ${orgId}, ${body.mode}, 'requested', ${body.targetId},
              -- R2004 decision 7: the organiser's template CHOICE is copied, never resolved here (a retired id still reads,
              -- then resolves at every reader); a themeId the create names wins. The running session never moves with it.
@@ -403,7 +452,7 @@ export async function startBroadcast(
              ${usage.totalStorageMinutes}, ${reservationMinutes(body.mode, MAX_DURATION_MINUTES)}, (select kind from org_stream_targets where id = ${body.targetId}),
              d.sport_key, d.competition_id, f.division_id, f.scheduled_at,
              c.venue_id, v.address, o.timezone, ${viaOverride},
-             ${opts.startCause}, ${pairing?.code_id ?? null}, ${actor.pairingId},
+             ${opts.startCause}, ${pairing?.code_id ?? null}, ${actor.pairingId}, ${opts.courtLinkId ?? null},
              -- R2004 decision 4: the EFFECTIVE delay (the fixture's override, else the default) for composed; passthrough
              -- keeps the column's 0 (the field is unused in that mode). Copied, so a running session never changes.
              -- PR #989 review m2: a delay the create names wins over the stored one (null: the default), so the
@@ -484,4 +533,43 @@ export async function startBroadcast(
     throw err;
   }
   return { sessionId };
+}
+
+type GuardRow = {
+  code_id: string; issued_by: string; code_fixture: string | null; court_link_id: string | null; link_court: string | null;
+  link_target: string | null; withdrawn_at: Date | null; opens_at: Date | null; expires_at: Date | null; fixture_court: string | null; court_stream: boolean;
+};
+
+/** The start's pairing, judged against the fixture in ONE read (court stream plan Task 7). Without `courtLinkId` the
+ *  pairing's code must be the fixture's own (today's rule). With it: the code is that court link's; the link is not
+ *  withdrawn; its court is the fixture's court; the fixture's Stream switch is on; and the start's target is the link's
+ *  (O9: a court streams to its link's channel, never another); and `now` is inside the link's day (m-1). Each failure is a caller bug, refused by name before
+ *  anything is weighed or written. */
+async function pairingFor(
+  pairingId: string, fixtureId: string, opts: { targetId: string; courtLinkId?: string }, now: Date,
+): Promise<{ code_id: string; issued_by: string }> {
+  const [g] = await sql<GuardRow[]>`
+    select p.code_id, c.issued_by, c.fixture_id as code_fixture, c.court_link_id, l.court_id as link_court, l.target_id as link_target,
+           l.withdrawn_at, l.opens_at, l.expires_at, f.court_id as fixture_court, coalesce(st.court_stream, false) as court_stream
+      from fixture_stream_pairings p
+      join fixture_stream_codes c on c.id = p.code_id
+      join fixtures f on f.id = ${fixtureId}
+      left join court_stream_links l on l.id = c.court_link_id
+      left join fixture_stream_settings st on st.fixture_id = f.id
+     where p.id = ${pairingId}`;
+  if (opts.courtLinkId === undefined) {
+    if (!g || g.code_fixture !== fixtureId) throw new Error(`startBroadcast: pairing ${pairingId} is not on fixture ${fixtureId}'s stream code`);
+    return { code_id: g.code_id, issued_by: g.issued_by };
+  }
+  const notOnLink = (why: string) => new Error(`startBroadcast: pairing ${pairingId} is not on fixture ${fixtureId}'s court link (${why})`);
+  if (!g || g.court_link_id === null || g.court_link_id !== opts.courtLinkId) throw notOnLink("the pairing's code is not that link's");
+  if (g.withdrawn_at !== null) throw notOnLink("the link is withdrawn");
+  // Final review m-1: the link's own day (`opens_at <= now < expires_at`, the window `liveCourtLinkFor` reads).
+  if (g.opens_at === null || g.expires_at === null || g.opens_at.getTime() > now.getTime() || now.getTime() >= g.expires_at.getTime()) {
+    throw notOnLink("the link's day is not open");
+  }
+  if (g.link_court === null || g.fixture_court !== g.link_court) throw notOnLink("the match is on another court");
+  if (!g.court_stream) throw notOnLink("the match's Stream switch is off");
+  if (opts.targetId !== g.link_target) throw notOnLink("the target is not the link's");
+  return { code_id: g.code_id, issued_by: g.issued_by };
 }

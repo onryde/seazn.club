@@ -256,6 +256,7 @@ describe("the tunable is read at the call site (AGENTS.md #20)", () => {
   // The auto STOP call site (usecases/stream-sessions/) is guarded the same way in stream-auto-stop.test.ts.
   it.each([
     ["stream-auto.ts", "AUTO_START_RETRY_SECONDS"],
+    ["stream-auto-court.ts", "AUTO_START_RETRY_SECONDS"],
   ])("%s reads %s only through tunable(NAME, NAME)", (file, name) => {
     const code = strip(readFileSync(resolve(SRC, file), "utf8")).split("\n").filter((l) => !/^\s*(import|\}\s*from)\b/.test(l)).join("\n");
     const viaTunable = new RegExp(`tunable\\(\\s*"${name}"\\s*,\\s*${name}\\s*\\)`, "g");

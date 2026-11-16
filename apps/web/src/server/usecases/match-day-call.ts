@@ -119,7 +119,7 @@ export const LIVE_CALL_ALIASES = { call: "fc", fixture: "g" } as const;
  * `called_at` from the same instant). A board edit that moves it anywhere else, a later time on the same court included, ends
  * the call. Match Day's read model asks this same question (spec §7, task A2).
  */
-export function liveCallSql(tx: Tx) {
+export function liveCallSql(tx: Tx | postgres.Sql) {
   const fc = tx(LIVE_CALL_ALIASES.call);
   const g = tx(LIVE_CALL_ALIASES.fixture);
   return tx`(${g}.status = ${MOVABLE_STATUS} and ${g}.court_id = ${fc}.court_id and ${g}.scheduled_at = ${fc}.called_at)`;

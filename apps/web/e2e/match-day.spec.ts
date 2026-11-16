@@ -18,6 +18,8 @@ import {
   withDb,
 } from "./helpers";
 import { dismissConsent, freshOrg } from "./directory-kit";
+import { captureQrV2Text, type CaptureQrV2 } from "../src/lib/capture-qr";
+import { disposeFakePhones, fakeCapturePhone, newPhoneRequest } from "./helpers/fake-capture-phone";
 import { middayZoneFor, withinToday } from "./midday-zone";
 
 /**
@@ -1966,5 +1968,255 @@ test.describe("Match Day — PB2 item 3: a viewer's poll carries no Needs-you ro
     } finally {
       await viewer.close();
     }
+  });
+});
+
+/**
+ * Court stream, the desk's side (spec 2026-11-14 §5; web plan Task 12). The organiser links Court 1 to a connected YouTube channel
+ * from its focus, is shown the court's QR (shown AGAIN by a read, never by a second write), turns a queued match's Stream switch on,
+ * and sees the court's phone: "No phone yet" until a real capture phone (the fake one, over the real beat route) claims the court's
+ * code, then "Phone waiting". Stop streaming asks first; once the court is unlinked the chip goes, the link action returns, and the
+ * match's switch stays ON but locked ("Court not streaming"): the switch is the per-match intent, and withdrawing never edits it.
+ *
+ * Court 1 is the court under test (a match in play and one queued). A free court's next match is a candidate: it carries the
+ * switch too (ruling O14, 2026-11-16, superseding R11's "always reads off"), pinned in its own test below.
+ */
+const UI_CS = (key: string, vars: Record<string, string> = {}): string =>
+  Object.entries(vars).reduce((s, [k, v]) => s.replaceAll(`{${k}}`, v), UI_EN[`matchDay.courtStream.${key}`] ?? `?${key}`);
+
+/** A build the server's COURT_MIN_APP_VERSION admits (the e2e server is started with "1.0.14-1200"; capture O13). */
+const COURT_PHONE_BUILD = "1.0.14-1300";
+
+/** A connected YouTube channel as a destination, written raw (the OAuth round trip is not under test): the rig's own insert. */
+async function seedYoutubeDestination(orgId: string, label: string): Promise<string> {
+  return withDb(async (sql) => {
+    const [owner] = await sql<{ user_id: string }[]>`select user_id from org_members where org_id = ${orgId} limit 1`;
+    const [conn] = await sql<{ id: string }[]>`
+      insert into org_youtube_connections (org_id, channel_id, channel_title, refresh_token_enc, granted_scope, default_privacy,
+                                           consent_by, consent_at, consent_version, status, created_by)
+      values (${orgId}, ${`UC${Math.random().toString(36).slice(2).padEnd(22, "x").slice(0, 22)}`}, ${`${label} channel`}, ${Buffer.from("not-a-real-envelope")},
+              'https://www.googleapis.com/auth/youtube', 'unlisted', ${owner!.user_id}, now(), 1, 'connected', ${owner!.user_id})
+      returning id`;
+    const [target] = await sql<{ id: string }[]>`
+      insert into org_stream_targets (org_id, kind, label, youtube_connection_id) values (${orgId}, 'youtube', ${label}, ${conn!.id}) returning id`;
+    return target!.id;
+  });
+}
+
+/** Court 1 linked from its focus, through the UI. Returns once the QR is on screen and the sheet closed. */
+async function linkCourtThroughSheet(page: Page, label: string): Promise<{ posts: () => number }> {
+  let posts = 0;
+  page.on("request", (r) => {
+    if (r.method() === "POST" && /\/court-streams(\?|$)/.test(r.url())) posts++;
+  });
+  await page.getByTestId("md-cs-link").click();
+  const sheet = page.getByTestId("md-cs-sheet");
+  await expect(sheet).toBeVisible();
+  // The org is shared by every spec, so it may hold other channels: this one is picked by its name. (A pasted-key destination is
+  // not listed at all: the unit suite pins that.)
+  await sheet.getByRole("radio", { name: label }).check();
+  await page.getByTestId("md-cs-link-confirm").click();
+  await expect(page.getByTestId("md-cs-qr-image")).toBeVisible();
+  await expect(sheet).toContainText(UI_CS("qrHint"));
+  await page.getByRole("button", { name: UI_EN["matchDay.code.close"]!, exact: true }).last().click();
+  await expect(sheet).toHaveCount(0);
+  return { posts: () => posts };
+}
+
+test.describe("Match Day — court stream (desk)", () => {
+  test.afterEach(async () => {
+    await disposeFakePhones();
+  });
+
+  test("link Court 1 → its QR → a queued match's Stream switch → the capture phone claims the court → 'Phone waiting' → Stop streaming → the chip goes; at 1280 and 768", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(150_000);
+    const seed = await seedMatchDay(request, "CStream");
+    const orgId = (await activeOrg(page)).id;
+    const label = `Club channel ${TAG}`;
+    await seedYoutubeDestination(orgId, label);
+    await page.goto(await competitionPath(request, seed.competitionId, "/match-day"), { waitUntil: "load" });
+
+    const focus = page.getByTestId("md-focus");
+    await expect(focus).toHaveAttribute("data-court-id", seed.court1Id);
+    // Not linked: the action, no band, no chip anywhere, and no switch (nothing is switched on).
+    await expect(page.getByTestId("md-cs-link")).toHaveText(UI_CS("link"));
+    await expect(page.getByTestId("md-cs-band")).toHaveCount(0);
+    await expect(page.getByTestId("md-cs-chip")).toHaveCount(0);
+    await expect(page.getByTestId("md-cs-switch")).toHaveCount(0);
+
+    const writes = await linkCourtThroughSheet(page, label);
+    expect(writes.posts(), "linking is one write").toBe(1);
+    const band = page.getByTestId("md-cs-band");
+    await expect(band).toBeVisible();
+    await expect(band.getByTestId("md-cs-chip")).toHaveAttribute("data-phone", "unpaired");
+    await expect(band.getByTestId("md-cs-chip")).toHaveText(UI_CS("phone.unpaired"));
+    await expect(band).toContainText(label);
+    await expect(page.getByTestId("md-cs-link")).toHaveCount(0);
+    // The court's row says it too.
+    await expect(row(page, seed.court1).getByTestId("md-cs-chip")).toHaveText(UI_CS("phone.unpaired"));
+    await expectNoHorizontalScroll(page);
+
+    // Show court QR again: a READ. Opening it must never make a code.
+    await band.getByTestId("md-cs-show").click();
+    await expect(page.getByTestId("md-cs-qr-image")).toBeVisible();
+    expect(writes.posts(), "showing the QR again made no code").toBe(1);
+    await page.getByRole("button", { name: UI_EN["matchDay.code.close"]!, exact: true }).last().click();
+
+    // The court's QR, as the phone would scan it — read from the same door the sheet reads.
+    const listed = await apiJson<{ court_id: string; qr: CaptureQrV2 }[]>(request, `/api/v1/competitions/${seed.competitionId}/court-streams`);
+    expect(listed.status).toBe(200);
+    const mine = listed.data!.find((l) => l.court_id === seed.court1Id)!;
+    expect(mine.qr.exp, "a court's QR names the end of its day").toBeGreaterThan(Date.now() / 1000);
+
+    // The Stream switch: the current match and the queued one, off. Turn the queued one on.
+    const switches = focus.getByTestId("md-cs-switch");
+    await expect(switches).toHaveCount(2);
+    await expect(switches.first()).toHaveAttribute("aria-checked", "false");
+    const queuedSwitch = focus.getByTestId("md-queue-row").first().getByTestId("md-cs-switch");
+    await queuedSwitch.click();
+    await expect(queuedSwitch).toHaveAttribute("aria-checked", "true");
+    await expect
+      .poll(() => withDb((sql) => sql<{ on: boolean }[]>`select court_stream as on from fixture_stream_settings where fixture_id = ${seed.anaCal}`).then((r) => r[0]?.on))
+      .toBe(true);
+
+    // The real phone claims the court's code over the real beat route.
+    const phone = await fakeCapturePhone(page, await newPhoneRequest(new URL(page.url()).origin), { qrText: captureQrV2Text(mine.qr), appVersion: COURT_PHONE_BUILD });
+    const claimed = await phone.claim("new");
+    expect(claimed.status, `the court's claim beat: ${JSON.stringify(claimed.refusal)}`).toBe(200);
+    phone.keepAlive("idle");
+    await page.reload({ waitUntil: "load" });
+    await expect(page.getByTestId("md-cs-band").getByTestId("md-cs-chip")).toHaveAttribute("data-phone", "waiting");
+    await expect(page.getByTestId("md-cs-band").getByTestId("md-cs-chip")).toHaveText(UI_CS("phone.waiting"));
+    await expect(row(page, seed.court1).getByTestId("md-cs-chip")).toHaveText(UI_CS("phone.waiting"));
+    await expect(focus.getByTestId("md-queue-row").first().getByTestId("md-cs-switch")).toHaveAttribute("aria-checked", "true");
+    await expectNoHorizontalScroll(page);
+
+    await page.setViewportSize({ width: 768, height: 1024 });
+    await expect(page.getByTestId("md-cs-band")).toBeVisible();
+    await expectNoHorizontalScroll(page);
+    await page.setViewportSize({ width: 1280, height: 800 });
+
+    // Stop streaming asks first; Cancel keeps the link.
+    await page.getByTestId("md-cs-withdraw").click();
+    await expect(page.getByTestId("md-cs-confirm")).toContainText(UI_CS("withdrawConfirm", { court: seed.court1 }));
+    await page.getByTestId("md-cs-confirm").getByRole("button", { name: UI_EN["matchDay.sheet.cancel"]!, exact: true }).click();
+    await expect(page.getByTestId("md-cs-band")).toBeVisible();
+    await page.getByTestId("md-cs-withdraw").click();
+    await page.getByTestId("md-cs-withdraw-confirm").click();
+    await expect(page.getByTestId("md-cs-band")).toHaveCount(0);
+    await expect(page.getByTestId("md-cs-chip")).toHaveCount(0);
+    await expect(page.getByTestId("md-cs-link")).toBeVisible();
+    // The intent stays (R5), locked, and says why.
+    const left = focus.getByTestId("md-queue-row").first();
+    await expect(left.getByTestId("md-cs-switch")).toHaveAttribute("aria-checked", "true");
+    await expect(left.getByTestId("md-cs-switch")).toBeDisabled();
+    await expect(left).toContainText(UI_CS("notStreaming"));
+  });
+
+  test("a switch the server refuses goes back and says why: the court was unlinked under an open desk", async ({ page, request }) => {
+    const seed = await seedMatchDay(request, "CStreamRefuse");
+    const orgId = (await activeOrg(page)).id;
+    const label = `Refuse channel ${TAG}`;
+    await seedYoutubeDestination(orgId, label);
+    await page.goto(await competitionPath(request, seed.competitionId, "/match-day"), { waitUntil: "load" });
+    await linkCourtThroughSheet(page, label);
+    await expect(page.getByTestId("md-cs-band")).toBeVisible();
+    // Another desk withdraws the link; this one still shows it until its next read.
+    const links = await withDb((sql) => sql<{ id: string }[]>`select id from court_stream_links where court_id = ${seed.court1Id} and withdrawn_at is null`);
+    expect(links).toHaveLength(1);
+    const withdrawn = await request.post(`/api/v1/court-streams/${links[0]!.id}/withdraw`);
+    expect(withdrawn.status()).toBe(204);
+
+    const queuedSwitch = page.getByTestId("md-focus").getByTestId("md-queue-row").first().getByTestId("md-cs-switch");
+    await queuedSwitch.click();
+    // The refusal is held at the court (it survives the refresh that takes the link away), in the server's own words.
+    await expect(page.getByTestId("md-notice")).toContainText(UI_CS("notStreaming"));
+    await expect(page.getByTestId("md-cs-band")).toHaveCount(0);
+    const settings = await withDb((sql) => sql`select 1 from fixture_stream_settings where fixture_id = ${seed.anaCal} and court_stream`);
+    expect(settings, "a refused switch wrote nothing").toHaveLength(0);
+  });
+
+  test("a not-yet-called match is switched on from the free court's candidate row, and shows ON once it is called (ruling O14)", async ({ page, request }) => {
+    test.setTimeout(150_000);
+    const seed = await seedMatchDay(request, "CStreamCand");
+    const orgId = (await activeOrg(page)).id;
+    const label = `Candidate channel ${TAG}`;
+    await seedYoutubeDestination(orgId, label);
+    await page.goto(await competitionPath(request, seed.competitionId, "/match-day"), { waitUntil: "load" });
+
+    // Court 2 is free with Cal v Dee waiting: before it is linked a candidate carries no switch (nothing is switched on).
+    await row(page, seed.court2).click();
+    const focus = page.getByTestId("md-focus");
+    await expect(focus).toHaveAttribute("data-state", "free");
+    const cand = focus.locator(`[data-testid="md-candidate"][data-fixture-id="${seed.calDee}"]`);
+    await expect(cand).toBeVisible();
+    await expect(cand.getByTestId("md-cs-switch")).toHaveCount(0);
+
+    // Linked: the candidate wears its switch, off, and it turns on BEFORE the match is called.
+    await linkCourtThroughSheet(page, label);
+    await expect(page.getByTestId("md-cs-band")).toBeVisible();
+    const sw = cand.getByTestId("md-cs-switch");
+    await expect(sw).toHaveAttribute("aria-checked", "false");
+    await expect(sw).toBeEnabled();
+    await expectNoHorizontalScroll(page);
+    await sw.click();
+    await expect(sw).toHaveAttribute("aria-checked", "true");
+    // The switch shows its choice at once; the write lands a moment later, so the row is waited for, not read once.
+    await expect
+      .poll(async () => (await withDb((sql) => sql`select 1 from fixture_stream_settings where fixture_id = ${seed.calDee} and court_stream`)).length, {
+        message: "the switch wrote the match's intent",
+      })
+      .toBe(1);
+    // The next poll reads it back from the server: still ON (the read carries the candidate's real switch).
+    await page.reload({ waitUntil: "load" });
+    await row(page, seed.court2).click();
+    await expect(cand.getByTestId("md-cs-switch")).toHaveAttribute("aria-checked", "true");
+    await expectNoHorizontalScroll(page);
+
+    // Called: the match is now the court's current one, and its row shows ON.
+    await callTop(page, seed);
+    await expect(focus.getByTestId("md-cs-current").getByTestId("md-cs-switch")).toHaveAttribute("aria-checked", "true");
+    await expectNoHorizontalScroll(page);
+  });
+
+  test.describe("phone (320)", () => {
+    test.use({ viewport: { width: 320, height: 568 } });
+
+    test("the focused court's link action, band, switch, chip and QR sheet hold at 320 with no sideways scroll", async ({ page, request }) => {
+      test.setTimeout(120_000);
+      const seed = await seedMatchDay(request, "CStreamPhone");
+      const orgId = (await activeOrg(page)).id;
+      const label = `Phone channel ${TAG}`;
+      await seedYoutubeDestination(orgId, label);
+      await page.goto(await competitionPath(request, seed.competitionId, "/match-day"), { waitUntil: "load" });
+
+      await row(page, seed.court1).click();
+      const focus = page.getByTestId("md-focus");
+      await expect(focus).toBeVisible();
+      await expect(page.getByTestId("md-cs-link")).toBeVisible();
+      await expectNoHorizontalScroll(page);
+
+      await page.getByTestId("md-cs-link").click();
+      await expect(page.getByTestId("md-cs-sheet")).toBeVisible();
+      await expectNoHorizontalScroll(page);
+      await page.getByTestId("md-cs-sheet").getByRole("radio", { name: label }).check();
+      await page.getByTestId("md-cs-link-confirm").click();
+      await expect(page.getByTestId("md-cs-qr-image")).toBeVisible();
+      await expectNoHorizontalScroll(page);
+      await page.getByRole("button", { name: UI_EN["matchDay.code.close"]!, exact: true }).last().click();
+
+      await expect(page.getByTestId("md-cs-band")).toBeVisible();
+      await expect(page.getByTestId("md-cs-band").getByTestId("md-cs-chip")).toHaveText(UI_CS("phone.unpaired"));
+      await focus.getByTestId("md-queue-row").first().getByTestId("md-cs-switch").scrollIntoViewIfNeeded();
+      await expect(focus.getByTestId("md-cs-switch")).toHaveCount(2);
+      await expectNoHorizontalScroll(page);
+
+      await page.getByTestId("md-back").click();
+      await expect(row(page, seed.court1).getByTestId("md-cs-chip")).toBeVisible();
+      await expectNoHorizontalScroll(page);
+    });
   });
 });

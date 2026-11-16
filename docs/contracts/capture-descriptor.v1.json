@@ -134,6 +134,22 @@
             "role"
           ],
           "additionalProperties": false
+        },
+        "court": {
+          "description": "Court codes only (court stream spec 2026-11-14 §6.1): the court this code streams, its display name. Omitted, never null, on a fixture's code.",
+          "type": "object",
+          "properties": {
+            "name": {
+              "description": "The court's display name, 1 to 80 characters (§6.1).",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [
@@ -338,6 +354,22 @@
           "required": [
             "code",
             "role"
+          ],
+          "additionalProperties": false
+        },
+        "court": {
+          "description": "Court codes only (court stream spec 2026-11-14 §6.1): the court this code streams, its display name. Omitted, never null, on a fixture's code.",
+          "type": "object",
+          "properties": {
+            "name": {
+              "description": "The court's display name, 1 to 80 characters (§6.1).",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            }
+          },
+          "required": [
+            "name"
           ],
           "additionalProperties": false
         },
@@ -623,6 +655,22 @@
           ],
           "additionalProperties": false
         },
+        "court": {
+          "description": "Court codes only (court stream spec 2026-11-14 §6.1): the court this code streams, its display name. Omitted, never null, on a fixture's code.",
+          "type": "object",
+          "properties": {
+            "name": {
+              "description": "The court's display name, 1 to 80 characters (§6.1).",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "additionalProperties": false
+        },
         "cred": {
           "description": "present only to the slot's current phone; absent = claim first (G0-d). Only in warming, live and ending (§6.3.1, §10.2, §17.5).",
           "type": "object",
@@ -902,6 +950,22 @@
           "required": [
             "code",
             "role"
+          ],
+          "additionalProperties": false
+        },
+        "court": {
+          "description": "Court codes only (court stream spec 2026-11-14 §6.1): the court this code streams, its display name. Omitted, never null, on a fixture's code.",
+          "type": "object",
+          "properties": {
+            "name": {
+              "description": "The court's display name, 1 to 80 characters (§6.1).",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            }
+          },
+          "required": [
+            "name"
           ],
           "additionalProperties": false
         },
@@ -1201,6 +1265,22 @@
           ],
           "additionalProperties": false
         },
+        "court": {
+          "description": "Court codes only (court stream spec 2026-11-14 §6.1): the court this code streams, its display name. Omitted, never null, on a fixture's code.",
+          "type": "object",
+          "properties": {
+            "name": {
+              "description": "The court's display name, 1 to 80 characters (§6.1).",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "additionalProperties": false
+        },
         "endReason": {
           "description": "Why the broadcast ended, on the wire (§6.8.4): every DB end or fail reason maps to exactly one value. `failed` is a server-side end that is neither a stop nor a timeout (G0-f), including a completed session with no recorded end reason (R11).",
           "type": "string",
@@ -1428,6 +1508,22 @@
           ],
           "additionalProperties": false
         },
+        "court": {
+          "description": "Court codes only (court stream spec 2026-11-14 §6.1): the court this code streams, its display name. Omitted, never null, on a fixture's code.",
+          "type": "object",
+          "properties": {
+            "name": {
+              "description": "The court's display name, 1 to 80 characters (§6.1).",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "additionalProperties": false
+        },
         "endReason": {
           "description": "Why the broadcast ended, on the wire (§6.8.4): every DB end or fail reason maps to exactly one value. `failed` is a server-side end that is neither a stop nor a timeout (G0-f), including a completed session with no recorded end reason (R11).",
           "type": "string",
@@ -1521,7 +1617,8 @@
                 "unavailable",
                 "invalid",
                 "rate_limited",
-                "match_finished"
+                "match_finished",
+                "no_match"
               ]
             },
             "message": {

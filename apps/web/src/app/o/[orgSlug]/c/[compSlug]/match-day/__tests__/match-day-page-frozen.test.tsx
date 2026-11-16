@@ -85,6 +85,29 @@ describe("F1 — the Match Day page hands the shell the competition's billing fr
   });
 });
 
+// Court stream (Task 12): "Stream this court" asks the ORGANISATION for its channels, and the dictionary the island is given carries the
+// stream panel's refusal words for a court's refused automatic start. Both are seams the shell's own suites cannot see: a literal or a
+// missing prop compiles and renders, and only the court's link action (or its refusal line) quietly goes.
+describe("court stream - the page hands the shell its organisation and the refusal words", () => {
+  const shellProps = async () => {
+    const tree = (await Page({ params: Promise.resolve({ orgSlug: "riverside", compSlug: "summer-league" }), searchParams: Promise.resolve({}) })) as {
+      props: { children: { type: unknown; props: { orgId?: string; dict: Dict } } };
+    };
+    expect(tree.props.children.type).toBe(MatchDayShell);
+    return tree.props.children.props;
+  };
+
+  it("orgId is the page's authorised organisation, and the dictionary carries the stream panel's refusal lines", async () => {
+    h.frozen = false;
+    h.canEdit = true;
+    const props = await shellProps();
+    expect(props.orgId).toBe("org-1");
+    expect(props.dict["stream.auto.refusal.no_credit"]).toBe((en as Dict)["stream.auto.refusal.no_credit"]);
+    expect(props.dict["stream.auto.refused"]).toBe((en as Dict)["stream.auto.refused"]);
+    expect(props.dict["matchDay.courtStream.link"]).toBe((en as Dict)["matchDay.courtStream.link"]);
+  });
+});
+
 // Match Day PB3 item 7: the banner names the org's frozen competitions. The page reads them (the persisted set, through
 // `listFrozenCompetitions`), cuts them with `frozenNamesFor` and hands the shell the result as a REQUIRED prop - so this is the seam
 // where a literal `NO_FROZEN_NAMES` would compile, render and quietly take the names off the banner.

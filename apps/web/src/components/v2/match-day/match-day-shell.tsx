@@ -76,6 +76,8 @@ export interface MatchDayShellProps {
   competitionName: string;
   orgSlug: string;
   compSlug: string;
+  /** The organisation (its channels are what a court streams to); absent, a court cannot be linked from here. */
+  orgId?: string;
   locale: Locale;
   /** The competition's live divisions, for the filter chips. */
   divisions: { id: string; name: string }[];
@@ -105,6 +107,7 @@ export function MatchDayShell({
   competitionName,
   orgSlug,
   compSlug,
+  orgId,
   locale,
   divisions,
   initial,
@@ -192,7 +195,7 @@ export function MatchDayShell({
   /** A phone shows one court (or match) full-screen only while what it opened is still there. */
   const phoneCourt = phoneOpen && (focused !== null || focusedMatch !== null);
   const noun = sharedNoun(courts.length > 0 ? courts : allCourts);
-  const ctx: MatchDayCtx = { competitionId, orgSlug, compSlug, locale, tz: view.tz, dict, scoreDict, viewerPlan, readOnly, frozen };
+  const ctx: MatchDayCtx = { competitionId, orgSlug, compSlug, locale, tz: view.tz, dict, scoreDict, viewerPlan, readOnly, frozen, orgId };
   const words = levelWords(scoreDict);
   const needsTone = needsYouTone(needsYou);
   const date = fmtPublicDate(locale, "UTC", `${view.date}T12:00:00Z`, { weekday: "long", day: "numeric", month: "short" });

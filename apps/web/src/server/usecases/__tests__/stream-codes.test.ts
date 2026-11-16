@@ -428,7 +428,7 @@ describe.skipIf(!HAS_DB)("stream codes — resolve (C1, C1b, C2)", () => {
 
     vi.mocked(timingSafeEqual).mockClear();
     expect(await resolveStreamCode(qr.code, qr.tok, "claim", "phone-0123456789abcdef", now)).toEqual({
-      codeId: row!.id, orgId: r.auth.orgId, fixtureId: r.fixtureId, status: "active", issuedBy: r.auth.userId,
+      kind: "fixture", codeId: row!.id, orgId: r.auth.orgId, fixtureId: r.fixtureId, status: "active", issuedBy: r.auth.userId,
     });
     expect(calls()).toHaveLength(1);
     expect(Buffer.from(calls()[0]![1]).toString("hex")).toBe(row!.tok_hash);

@@ -26,6 +26,7 @@ import { wipeStreamCodeTok } from "@/server/relay/secret-columns";
 import { fixtureStreamTarget, requireSessionEditor } from "./stream-codes";
 import { frozenCompetitionIds } from "./entitlement-freeze";
 import { autoStopAppliesTo } from "./stream-sessions";
+import { liveCourtLinkFor } from "./court-streams";
 
 /** PR-1 carries one camera: the panel reads slot 0. */
 const SLOT = 0;
@@ -65,9 +66,13 @@ function beatOf(raw: unknown): NonNullable<StreamPhone["phone"]>["beat"] {
  *  - an OPEN session's own pairing, while that pairing has not ended — its CODE's state is not read (C1b/C3, spec §17.11:
  *    a reissued code's phone that is still streaming is the current phone). `held`;
  *  - otherwise the current pairing on the fixture's ACTIVE code — exactly W5's lookup (`currentPhoneOf`), so the panel
- *    offers Go live on exactly the phone the server admits: after a reissue, only a claim on the NEW code pairs one.
+ *    offers Go live on exactly the phone the server admits: after a reissue, only a claim on the NEW code pairs one;
+ *  - with no active code of its own and a court stream (`courtLinkId`: the match's switch is on and its court's link is
+ *    live), the court phone — slot 0's current pairing on the link's active court code, W5's own fallback (`courtPhoneOf`).
  */
-async function phoneOf(fixtureId: string): Promise<{ row: PairingRow | null; held: boolean; legacy: boolean; openId: string | null }> {
+async function phoneOf(
+  fixtureId: string, courtLinkId: string | null,
+): Promise<{ row: PairingRow | null; held: boolean; legacy: boolean; openId: string | null }> {
   const [open] = await sql<{ id: string; pairing_id: string | null }[]>`
     select id, pairing_id from fixture_stream_sessions
      where fixture_id = ${fixtureId} and state in ${sql([...ACTIVE_STATES])}
@@ -84,6 +89,14 @@ async function phoneOf(fixtureId: string): Promise<{ row: PairingRow | null; hel
       from fixture_stream_codes c
       join fixture_stream_pairings p on p.code_id = c.id and p.slot = ${SLOT} and p.ended_at is null
      where c.fixture_id = ${fixtureId} and c.ended_at is null`;
+  if (!cur && courtLinkId !== null) {
+    const [court] = await sql<PairingRow[]>`
+      select ${PAIRING_COLS()}
+        from fixture_stream_codes c
+        join fixture_stream_pairings p on p.code_id = c.id and p.slot = ${SLOT} and p.ended_at is null
+       where c.court_link_id = ${courtLinkId} and c.ended_at is null`;
+    return { row: court ?? null, held: false, legacy: false, openId };
+  }
   return { row: cur ?? null, held: false, legacy: false, openId };
 }
 
@@ -155,13 +168,16 @@ function autoOf(
  *    ruling R-2): the debounce of the flapping `notReady`, from the pairing's `not_ready_since`, shown only once a BEAT a
  *    constant after the stretch began still says not ready (and never for a silent phone);
  *  - `legacy` / `finished` (T11): the open session has no pairing (C-1), and the fixture is finished (C5's match-over row);
+ *  - `court` (court stream, Task 13): `{ name }` of the court whose phone streams the match — set exactly when the switch is on,
+ *    the court's link is live now and the match has no active code of its own (the match page names the court and mints no
+ *    code); the court phone is then `phone` when the match holds no session of its own pairing;
  *  - `session` (B8 review I-2): the fixture's OPEN session's id, whoever started it — the panel's `current` rests at
  *    Ready, so a session the PHONE started would otherwise stay unseen there.
  */
 export async function streamPhone(auth: AuthCtx, fixtureId: string, deps: { now: () => Date }): Promise<StreamPhone> {
   requireSessionEditor(auth);
-  const [fx] = await sql<(SettingsFacts & { org_id: string; competition_id: string; finished_at: Date | null; status: string })[]>`
-    select c.org_id, c.id as competition_id, f.finished_at, f.status,
+  const [fx] = await sql<(SettingsFacts & { org_id: string; competition_id: string; finished_at: Date | null; status: string; court_id: string | null; court_stream: boolean | null })[]>`
+    select c.org_id, c.id as competition_id, f.finished_at, f.status, f.court_id, st.court_stream,
            st.fixture_id as settings_id, st.auto_stream, st.auto_started_at, st.auto_start_blocked_at, st.auto_start_attempted_at,
            st.auto_start_refusal,
            exists (select 1 from fixture_stream_sessions s where s.fixture_id = f.id and s.first_ingest_at is not null) as any_ingest
@@ -197,8 +213,14 @@ export async function streamPhone(auth: AuthCtx, fixtureId: string, deps: { now:
     }
   }
 
+  // --- the court (spec 2026-11-14 §5.2): the switch is on, the match's court has a live link now, and the match has no ACTIVE
+  // code of its own — the order the resolver and the start path use (an own code wins), so the panel never hides the QR of a
+  // phone that is the one the server will start on. The link is not served: its court's name and its channel's label are all the panel is told.
+  const ownCode = code !== null && code.state !== "ended";
+  const courtLink = fx.court_stream === true && !ownCode ? await liveCourtLinkFor(sql, { orgId: auth.orgId, courtId: fx.court_id, now }) : null;
+
   // --- the phone ---
-  const { row: p, held, legacy, openId } = await phoneOf(fixtureId);
+  const { row: p, held, legacy, openId } = await phoneOf(fixtureId, courtLink?.id ?? null);
   let phone: StreamPhone["phone"] = null;
   let phoneMode: PhoneMode | null = null;
   if (p) {
@@ -271,5 +293,6 @@ export async function streamPhone(auth: AuthCtx, fixtureId: string, deps: { now:
     code, phone, destination, lastTakeover,
     auto: autoOf(fx, { phoneMode, openSession: openId !== null, stopApplies, competitionFrozen }, now),
     legacy, finished: fx.finished_at !== null, session: openId === null ? null : { id: openId },
+    court: courtLink ? { name: courtLink.courtName, targetLabel: courtLink.targetLabel } : null,
   };
 }

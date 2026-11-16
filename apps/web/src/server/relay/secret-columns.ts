@@ -414,6 +414,20 @@ export async function insertStreamCode(
   return { id: row!.id, createdAt: row!.created_at };
 }
 
+/** Mint one ACTIVE court code (court stream, V525): a code row owned by a court link, with no fixture. The partial unique
+ *  index `fixture_stream_codes_one_active_court` admits one live code per link; a `code` collision is the caller's to
+ *  retry exactly as `insertStreamCode`'s. `orgId` is the LINK's org. */
+export async function insertCourtStreamCode(
+  tx: Tx,
+  a: { orgId: string; courtLinkId: string; code: string; tokHash: string; tokEnc: Buffer; issuedBy: string },
+): Promise<{ id: string; createdAt: Date }> {
+  const [row] = await tx<{ id: string; created_at: Date }[]>`
+    insert into fixture_stream_codes (org_id, court_link_id, code, tok_hash, tok_enc, issued_by)
+    values (${a.orgId}, ${a.courtLinkId}, ${a.code}, ${a.tokHash}, ${a.tokEnc}, ${a.issuedBy})
+    returning id, created_at`;
+  return { id: row!.id, createdAt: row!.created_at };
+}
+
 /** The code's tok, opened — or null when there is nothing to re-show: no such row, an ENDED code (its envelope was
  *  wiped), or an envelope that will not open under a VALID KEK (logged: an unopenable envelope is how a KEK change
  *  shows itself, and the caller reissues). A missing or malformed KEK is the deployment's fault and throws the KEK's own
@@ -433,7 +447,7 @@ export async function openStreamCodeTok(tx: Tx, codeId: string): Promise<string 
 /** End an ACTIVE code and wipe its sealed tok in the same write (V430: an ended row holds no envelope). A code already
  *  ended is left exactly as it is — its first cause and time stand. */
 export async function wipeStreamCodeTok(
-  tx: Tx, codeId: string, cause: "reissued" | "expired", endedBy: string | null,
+  tx: Tx, codeId: string, cause: "reissued" | "expired" | "withdrawn", endedBy: string | null,
 ): Promise<void> {
   await tx`
     update fixture_stream_codes

@@ -109,7 +109,11 @@ export async function newPhoneRequest(baseURL: string): Promise<APIRequestContex
 /** Parse the paste code as a phone would, refusing anything but the §6.2 payload. */
 export function parseCaptureQr(text: string): CaptureQr {
   const q = JSON.parse(text) as Record<string, unknown>;
-  expect(Object.keys(q), "the paste code is the QR's four keys, in order, and nothing else (§6.2)").toEqual([...QR_KEYS]);
+  // A court code's QR carries `exp` fifth (court stream §5.1); a fixture's stays four keys. Nothing else, in either.
+  const keys = Object.keys(q);
+  expect(keys, "the paste code is the QR's four keys, in order, and `exp` fifth on a court's (§6.2)").toEqual(
+    keys.length === QR_KEYS.length + 1 ? [...QR_KEYS, "exp"] : [...QR_KEYS],
+  );
   expect(q.v, "a v2 QR").toBe(2);
   expect(typeof q.code === "string" && typeof q.tok === "string" && typeof q.slot === "number", "the QR's field types").toBe(true);
   return q as unknown as CaptureQr;
@@ -161,12 +165,13 @@ async function replyOf<T>(res: APIResponse, ok: z.ZodType<T>, route: string): Pr
  * same install re-scanning); the default is a fresh 32-hex id. `qrText` is for a phone that scanned EARLIER (an old
  * code kept after a reissue) — the text still came from the panel. `captureMode` is the phone's own Automatic switch
  * (capture A4, PR-2): the `mode` on every beat, the claim and the keep-alives included; the default is PR-1's
- * `operator`, so every existing caller beats exactly as before.
+ * `operator`, so every existing caller beats exactly as before. `appVersion` is the beat's build (default "1.4.0"): a COURT
+ * code refuses a build with no build count at or past the server's COURT_MIN_APP_VERSION (capture O13), so a court spec names one.
  */
 export async function fakeCapturePhone(
   page: Page,
   request: APIRequestContext,
-  opts: { phone?: string; qrText?: string; captureMode?: CaptureMode } = {},
+  opts: { phone?: string; qrText?: string; captureMode?: CaptureMode; appVersion?: string } = {},
 ): Promise<FakeCapturePhone> {
   const state = await request.storageState();
   expect(state.cookies, "the phone's HTTP client carries no organiser session (use newPhoneRequest)").toEqual([]);
@@ -186,7 +191,7 @@ export async function fakeCapturePhone(
     code: qr.code, slot: qr.slot, phone: id, claim: null, device: null, sid: null, at: iso(), state: "paired",
     cause: null, notReady: null, startFailed: null, stopped: null, mode: captureMode, transport: null, bitrateKbps: null,
     delivery: "unknown", deliveredLagS: null, audioOk: null, battery: { percent: 87, charging: false, drainPctPerHour: null },
-    thermal: 0, dataUsedMB: 0, appVersion: "1.4.0",
+    thermal: 0, dataUsedMB: 0, appVersion: opts.appVersion ?? "1.4.0",
     ...partial,
   });
   const learn = (r: PhoneReply<BeatAnswer>): PhoneReply<BeatAnswer> => {

@@ -24,6 +24,8 @@ import {
 import type { MatchDayCtx } from "./court-focus";
 import { CallSheet } from "./call-sheet";
 import { MatchRoundChip } from "./round-chip";
+import { CourtStreamSwitch } from "./court-stream-switch";
+import { canWriteCourtStream, switchSpec } from "@/lib/match-day/court-stream";
 
 export type CandidateLoad =
   | { status: "loading" }
@@ -80,7 +82,7 @@ export function FreeCourt({
   const shown: CandidateLoad = load.status === "ready" ? { status: "ready", candidates: filterCandidates(load.candidates, divisions) } : load;
   return (
     <>
-      <FreeCourtBody ctx={ctx} court={court} load={shown} onCall={setCalling} onRetry={retry} />
+      <FreeCourtBody ctx={ctx} court={court} load={shown} onCall={setCalling} onRetry={retry} onChanged={onChanged} onRefused={onRefused} />
       {calling !== null && (
         <CallSheet
           ctx={ctx}
@@ -108,12 +110,18 @@ export function FreeCourtBody({
   load,
   onCall,
   onRetry,
+  onChanged,
+  onRefused,
 }: {
   ctx: MatchDayCtx;
   court: MatchDayCourt;
   load: CandidateLoad;
   onCall: (candidate: MatchDayCandidate) => void;
   onRetry: () => void;
+  /** A Stream switch was written (the court's own refresh follows). Omitted by a reader that draws no switch. */
+  onChanged?: () => void;
+  /** A Stream switch was refused, in the organiser's words. */
+  onRefused?: (message: string) => void;
 }) {
   const { dict } = ctx;
   // A court shut right now is not "free" (fix round 1, m2): the panel says so, and has no "free since".
@@ -137,8 +145,36 @@ export function FreeCourtBody({
         )}
       </div>
       {load.status === "ready" && load.candidates.length > 0 && (
-        <CandidateRows ctx={ctx} court={court} candidates={load.candidates} onCall={onCall} />
+        <CandidateRows ctx={ctx} court={court} candidates={load.candidates} onCall={onCall} onChanged={onChanged} onRefused={onRefused} />
       )}
+    </div>
+  );
+}
+
+const noop = () => {};
+
+/** A candidate's Stream switch (ruling O14, 2026-11-16: the day's first match is switched on before it is called). The match is
+ *  judged on ITS court, which is the focused court only for the court's own next match (`this_court`): another court's match, or
+ *  one with no court, is "not linked" here, so it shows only an intent already ON, locked "Court not streaming" — the server
+ *  refuses a turn-on there (`court_not_streaming`) and no row offers one. */
+function CandidateSwitch({
+  ctx,
+  court,
+  candidate,
+  onChanged,
+  onRefused,
+}: {
+  ctx: MatchDayCtx;
+  court: MatchDayCourt;
+  candidate: MatchDayCandidate;
+  onChanged: () => void;
+  onRefused: (message: string) => void;
+}) {
+  const spec = switchSpec(candidate.fixture, candidate.source === "this_court" && court.stream_link !== null, canWriteCourtStream(ctx));
+  if (spec === null) return null;
+  return (
+    <div data-testid="md-candidate-switch" className="min-w-0 md:col-span-2">
+      <CourtStreamSwitch key={candidate.fixture.id} ctx={ctx} fixture={candidate.fixture} spec={spec} onChanged={onChanged} onRefused={onRefused} />
     </div>
   );
 }
@@ -149,11 +185,15 @@ export function CandidateRows({
   court,
   candidates,
   onCall,
+  onChanged = noop,
+  onRefused = noop,
 }: {
   ctx: MatchDayCtx;
   court: MatchDayCourt;
   candidates: MatchDayCandidate[];
   onCall: (candidate: MatchDayCandidate) => void;
+  onChanged?: () => void;
+  onRefused?: (message: string) => void;
 }) {
   const { dict } = ctx;
   const primary = primaryCandidateId(candidates);
@@ -199,6 +239,7 @@ export function CandidateRows({
                       {t(dict, "matchDay.candidate.call", { court: court.court_name })}
                     </button>
                   )}
+                  <CandidateSwitch ctx={ctx} court={court} candidate={c} onChanged={onChanged} onRefused={onRefused} />
                 </li>
               ))}
             </ul>

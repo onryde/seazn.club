@@ -34,20 +34,28 @@ import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { buildOpenApiDocument } from "@/server/api-v1/openapi";
 import { StreamPhone } from "@/server/api-v1/schemas";
 import { createApiKey } from "@/server/usecases/api-keys";
+import { CaptureBeat } from "@/server/api-v1/capture-schemas";
+import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
+import { postBeat } from "@/server/usecases/capture-phone";
+import { linkCourtStream, setCourtStream, withdrawCourtStream } from "@/server/usecases/court-streams";
 import { ensureStreamCode, saveStreamSettings } from "@/server/usecases/stream-codes";
 import { createStreamTarget } from "@/server/usecases/stream-targets";
-import { pairPresentPhone } from "@/server/relay/__tests__/_session-rig";
+import { pairPresentPhone, rigApiTarget } from "@/server/relay/__tests__/_session-rig";
 import { makeUser, seedOrg } from "@/server/usecases/__tests__/_seed";
 import { startedDivisionWithFixture } from "@/server/usecases/__tests__/_rig";
+import { place, seedDay, type Day } from "@/server/usecases/__tests__/_match-day-seed";
 import { GET as phoneRoute } from "../route";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
 const savedKek = process.env.RELAY_KEK;
-beforeAll(() => { process.env.RELAY_KEK = randomBytes(32).toString("hex"); });
+const savedMin = process.env.COURT_MIN_APP_VERSION;
+beforeAll(() => { process.env.RELAY_KEK = randomBytes(32).toString("hex"); process.env.COURT_MIN_APP_VERSION = "1.0.14-1200"; });
 afterAll(() => {
   if (savedKek === undefined) delete process.env.RELAY_KEK;
   else process.env.RELAY_KEK = savedKek;
+  if (savedMin === undefined) delete process.env.COURT_MIN_APP_VERSION;
+  else process.env.COURT_MIN_APP_VERSION = savedMin;
 });
 afterAll(async () => {
   if (!HAS_DB) return;
@@ -184,3 +192,92 @@ describe.skipIf(!HAS_DB)("GET …/stream-phone over HTTP", () => {
     expect((await get(a.fixtureId)).status).toBe(200);
   });
 });
+
+// Court stream (spec 2026-11-14 §5.2; plan Task 13): `court` is the court whose phone streams the match, set exactly when the
+// match's Stream switch is on, its court has a live link now and the match has no code of its own. The rules are the brief's,
+// typed here; the secrets the read must never carry are the court code's tok and the code itself.
+describe.skipIf(!HAS_DB)("GET …/stream-phone — a court-streamed match names its court (Task 13)", () => {
+  let day: Day;
+  let fx: string;
+  let linked: { code: string; tok: string; id: string };
+  const linkCourt2 = async () => {
+    const api = await rigApiTarget(day.orgId, "Club channel");
+    const shown = await linkCourtStream(day.auth, day.comp.id, { courtId: day.courts.c2, targetId: api.targetId });
+    return { code: shown.qr!.code, tok: shown.qr!.tok, id: shown.id };
+  };
+  const readCourt = async () => {
+    authState.userId = day.auth.userId!;
+    const res = await get(fx);
+    const raw = await res.clone().text();
+    const r = await read<StreamPhone>(res);
+    expect(r.status).toBe(200);
+    return { data: StreamPhone.parse(r.body.data), raw };
+  };
+  /** The court phone's claim beat, as the app sends it (a court build, Automatic). */
+  async function claim(qr: { code: string; tok: string }, phone: string) {
+    const now = new Date();
+    const deps = { drivers: { ingest: new FakeIngest({ clock: () => now.getTime() }), runner: new FakeRunner() }, now: () => now, appUrl: "http://app.test" };
+    await postBeat(qr.code, qr.tok, CaptureBeat.parse({
+      code: qr.code, slot: 0, phone, claim: "new", device: { model: "Pixel 8" }, sid: null, at: now.toISOString(), state: "paired", cause: null,
+      notReady: null, startFailed: null, stopped: null, mode: "automatic", transport: null, bitrateKbps: null, delivery: "unknown",
+      deliveredLagS: null, audioOk: null, battery: null, thermal: null, dataUsedMB: null, appVersion: "1.0.14-1200",
+    }), deps, now);
+  }
+  const fresh = async () => {
+    day = await seedDay();
+    fx = day.comp.fixtures[0]!.id;
+    await override(day.orgId, "streaming.relay", true);
+    await place(day, fx, 0, day.courts.c2);
+    linked = await linkCourt2();
+  };
+
+  it("switch on and the court's link live → court {name}, no code of the match's own, and nothing secret on the wire", async () => {
+    await fresh();
+    await setCourtStream(day.auth, fx, true);
+    const { data, raw } = await readCourt();
+    expect(data.court).toEqual({ name: "Court 2", targetLabel: "Club channel" });
+    expect(data.code, "the match has no code of its own").toBeNull();
+    for (const secret of [linked.tok, linked.code, linked.id]) expect(raw.includes(secret), "a court secret on the wire").toBe(false);
+  });
+
+  it("switch off, never touched, or the match on another court → court null", async () => {
+    await fresh();
+    expect((await readCourt()).data.court, "never touched").toBeNull();
+    await setCourtStream(day.auth, fx, true);
+    await setCourtStream(day.auth, fx, false);
+    expect((await readCourt()).data.court, "switched off").toBeNull();
+    await setCourtStream(day.auth, fx, true);
+    await place(day, fx, 0, day.courts.c1);
+    expect((await readCourt()).data.court, "moved to a court with no link").toBeNull();
+  });
+
+  it("the court's link withdrawn → court null, the switch left on", async () => {
+    await fresh();
+    await setCourtStream(day.auth, fx, true);
+    expect((await readCourt()).data.court).not.toBeNull();
+    await withdrawCourtStream(day.auth, linked.id);
+    expect((await readCourt()).data.court).toBeNull();
+  });
+
+  it("a match with its own active code reads as its own: the switch left on does not name the court (the resolver prefers the own code)", async () => {
+    await fresh();
+    await ensureStreamCode(day.auth, fx);
+    await sql`insert into fixture_stream_settings (fixture_id, org_id, court_stream, revision) values (${fx}, ${day.orgId}, true, 1)
+              on conflict (fixture_id) do update set court_stream = true`;
+    const { data } = await readCourt();
+    expect(data.court).toBeNull();
+    expect(data.code?.state).toBe("active");
+  });
+
+  it("the court phone is the match's phone: paired and present on the court's code, so the panel's Go live has a phone to start on", async () => {
+    await fresh();
+    await setCourtStream(day.auth, fx, true);
+    expect((await readCourt()).data.phone, "nobody has scanned yet").toBeNull();
+    await claim(linked, `court-phone-${randomUUID()}`);
+    const { data } = await readCourt();
+    expect(data.phone).toMatchObject({ present: true, model: "Pixel 8", mode: "automatic" });
+    await setCourtStream(day.auth, fx, false);
+    expect((await readCourt()).data.phone, "switch off: the court's phone is not this match's").toBeNull();
+  });
+});
+

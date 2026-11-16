@@ -66,6 +66,8 @@ const fixture = (id: string): MatchDayFixture => ({
   scorer_attention: null,
   live_video: null,
   format_line: null,
+  court_stream: false,
+  own_stream_code: false,
 });
 const queued = (id: string): MatchDayQueued => ({
   ...fixture(id),
@@ -85,6 +87,7 @@ const court = (n: number, o: Partial<MatchDayCourt> = {}): MatchDayCourt => ({
   free_since: null,
   queue: [],
   closure: null,
+  stream_link: null,
   ...o,
 });
 const playing = (n: number) => court(n, { state: "playing", current: fixture(`p-${n}`) });
