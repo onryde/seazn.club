@@ -2,7 +2,8 @@
 // the engine's own declaration, never a number typed here.
 import { describe, expect, it } from "vitest";
 import { cricketPadRules } from "@seazn/engine/pad";
-import { CHASE, BALLS_PER_OVER, chaseOver, needText, openingChase, oversText, tap, undo, type ChaseKey, type ChaseState } from "../cricket-chase";
+import { BALLS_PER_OVER } from "../cricket-chase-rules";
+import { CHASE, chaseOver, needText, openingChase, oversText, tap, undo, type ChaseKey, type ChaseState } from "../cricket-chase";
 
 const KEYS: ChaseKey[] = ["0", "1", "2", "3", "4", "6", "wide", "out"];
 const ENGINE_BPO = cricketPadRules.ballsPerOver({});
@@ -25,33 +26,33 @@ describe("cricket chase model", () => {
 
   it("a run adds to runs and balls; a wide adds one run and no ball", () => {
     const s = openingChase();
-    expect(strip(tap(s, "4"))).toMatchObject({ runs: 31, balls: 20, wkts: 2 });
-    const w = tap(s, "wide");
+    expect(strip(tap(s, "4", ENGINE_BPO))).toMatchObject({ runs: 31, balls: 20, wkts: 2 });
+    const w = tap(s, "wide", ENGINE_BPO);
     expect(w.runs).toBe(28);
     expect(w.balls).toBe(s.balls);
   });
 
   it("out adds a wicket and a ball and no runs", () => {
-    const s = tap(openingChase(), "out");
+    const s = tap(openingChase(), "out", ENGINE_BPO);
     expect(strip(s)).toMatchObject({ runs: 27, wkts: 3, balls: 20 });
   });
 
   it("the over strip resets after the engine's balls-per-over legal balls", () => {
     let s = openingChase();
     const left = ENGINE_BPO - (s.balls % ENGINE_BPO);
-    for (let i = 0; i < left; i++) s = tap(s, "0");
+    for (let i = 0; i < left; i++) s = tap(s, "0", ENGINE_BPO);
     expect(s.balls % ENGINE_BPO).toBe(0);
     expect(s.over.length).toBeGreaterThanOrEqual(left);
-    s = tap(s, "wide"); // a wide opens the next over's strip without using a ball
+    s = tap(s, "wide", ENGINE_BPO); // a wide opens the next over's strip without using a ball
     expect(s.over).toEqual(["wd"]);
-    s = tap(s, "1");
+    s = tap(s, "1", ENGINE_BPO);
     expect(s.over).toEqual(["wd", "1"]);
   });
 
   it("undo restores the exact previous state, any number of times, and is a no-op at the opening state", () => {
     const a = openingChase();
-    const b = tap(a, "2");
-    const c = tap(b, "out");
+    const b = tap(a, "2", ENGINE_BPO);
+    const c = tap(b, "out", ENGINE_BPO);
     expect(strip(undo(c))).toEqual(strip(b));
     expect(strip(undo(undo(c)))).toEqual(strip(a));
     const back = undo(undo(c));
@@ -61,26 +62,26 @@ describe("cricket chase model", () => {
 
   it("reaching the target ends the chase: further taps return the same object", () => {
     let s = openingChase();
-    while (!chaseOver(s)) s = tap(s, "6");
+    while (!chaseOver(s)) s = tap(s, "6", ENGINE_BPO);
     expect(chaseOver(s)).toBe("won");
     expect(s.runs).toBeGreaterThanOrEqual(CHASE.target);
-    for (const k of KEYS) expect(tap(s, k)).toBe(s);
+    for (const k of KEYS) expect(tap(s, k, ENGINE_BPO)).toBe(s);
     expect(needText(s).runs).toBe(0);
   });
 
   it("ten wickets ends the chase the same way", () => {
     let s = openingChase();
-    while (!chaseOver(s)) s = tap(s, "out");
+    while (!chaseOver(s)) s = tap(s, "out", ENGINE_BPO);
     expect(chaseOver(s)).toBe("allOut");
     expect(s.wkts).toBe(CHASE.wicketsToFall);
-    for (const k of KEYS) expect(tap(s, k)).toBe(s);
+    for (const k of KEYS) expect(tap(s, k, ENGINE_BPO)).toBe(s);
   });
 
   it("sweep: no sequence of taps yields negative runs, an eleventh wicket, or a tap accepted after the end", () => {
     let visited = 0;
     const walk = (s: ChaseState, depth: number) => {
       for (const k of KEYS) {
-        const n = tap(s, k);
+        const n = tap(s, k, ENGINE_BPO);
         visited++;
         expect(n.runs).toBeGreaterThanOrEqual(s.runs);
         expect(n.wkts).toBeLessThanOrEqual(CHASE.wicketsToFall);
@@ -91,10 +92,10 @@ describe("cricket chase model", () => {
     };
     walk(openingChase(), 4);
     let nearWin = openingChase();
-    while (CHASE.target - nearWin.runs > 6) nearWin = tap(nearWin, "4");
+    while (CHASE.target - nearWin.runs > 6) nearWin = tap(nearWin, "4", ENGINE_BPO);
     walk(nearWin, 3);
     let nearOut = openingChase();
-    while (nearOut.wkts < CHASE.wicketsToFall - 1) nearOut = tap(nearOut, "out");
+    while (nearOut.wkts < CHASE.wicketsToFall - 1) nearOut = tap(nearOut, "out", ENGINE_BPO);
     walk(nearOut, 3);
     expect(visited).toBeGreaterThan(1000);
   });
@@ -104,8 +105,8 @@ describe("cricket chase: balls left", () => {
   it("counts down from the innings' overs at the engine's over length", async () => {
     const { ballsLeft } = await import("../cricket-chase");
     const s = openingChase();
-    expect(ballsLeft(s)).toBe(CHASE.overs * ENGINE_BPO - s.balls);
-    expect(ballsLeft(tap(s, "1"))).toBe(ballsLeft(s) - 1);
-    expect(ballsLeft(tap(s, "wide"))).toBe(ballsLeft(s));
+    expect(ballsLeft(s, ENGINE_BPO)).toBe(CHASE.overs * ENGINE_BPO - s.balls);
+    expect(ballsLeft(tap(s, "1", ENGINE_BPO), ENGINE_BPO)).toBe(ballsLeft(s, ENGINE_BPO) - 1);
+    expect(ballsLeft(tap(s, "wide", ENGINE_BPO), ENGINE_BPO)).toBe(ballsLeft(s, ENGINE_BPO));
   });
 });

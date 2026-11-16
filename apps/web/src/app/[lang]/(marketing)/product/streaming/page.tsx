@@ -4,6 +4,7 @@ import { MarketingShell } from "@/components/marketing/marketing-shell";
 import { ChaseDemo } from "@/components/marketing/product/chase-demo";
 import { chaseDemoLabels } from "@/components/marketing/product/chase-demo-labels";
 import { Accent, Closing, DEMO_CLUB_HREF, DEMO_TEAMS, DemoBand, DemoClub, PageHero, PhoneRow, ProductPage, Questions, Road, Ticket } from "@/components/marketing/product/parts";
+import { BALLS_PER_OVER } from "@/lib/marketing/cricket-chase-rules";
 import { PRODUCT_LINKS } from "@/lib/marketing/product-nav";
 import { getDictionary, t } from "@/lib/i18n";
 import { hasLocale } from "@/lib/i18n-constants";
@@ -41,7 +42,7 @@ export default async function StreamingProductPage({ params }: { params: Promise
           secondary={{ label: shared("startFree"), href: SIGNUP }}
         >
           <DemoBand id="try" title={s("demo.title")} note={s("demo.note")}>
-            <ChaseDemo tiles={["pad", "stream"]} streamControls labels={chaseDemoLabels(d)} teams={DEMO_TEAMS} />
+            <ChaseDemo tiles={["pad", "stream"]} streamControls labels={chaseDemoLabels(d)} teams={DEMO_TEAMS} ballsPerOver={BALLS_PER_OVER} />
           </DemoBand>
         </PageHero>
 

@@ -1,13 +1,11 @@
-import { cricketPadRules } from "@seazn/engine/pad";
-
 /**
  * The cricket chase behind the product pages' working demo ("one tap, four screens"). A deliberately small model of a
  * second innings, NOT the engine: it exists so a visitor can tap a pad and watch the other screens move, on a public,
  * statically cached page with no match behind it. Pure and immutable; the island in `chase-demo.tsx` holds one of
  * these in state.
  *
- * The over length is the engine's declaration (`cricketPadRules.ballsPerOver`), so the demo cannot drift from the
- * real pad's over.
+ * The over length is a PARAMETER, never an import: it is the engine's declaration, read on the server
+ * (cricket-chase-rules.ts) and passed down, because this file ships to the browser and the engine must not.
  */
 
 export type ChaseKey = "0" | "1" | "2" | "3" | "4" | "6" | "wide" | "out";
@@ -25,8 +23,6 @@ export type ChaseState = {
 
 export const CHASE = { target: 49, wicketsToFall: 10, overs: 20, opening: { runs: 27, wkts: 2, balls: 19 } } as const;
 
-export const BALLS_PER_OVER: number = cricketPadRules.ballsPerOver({});
-
 export function openingChase(): ChaseState {
   return { ...CHASE.opening, over: ["1"], last: null, history: [] };
 }
@@ -37,13 +33,13 @@ export function chaseOver(s: ChaseState): "won" | "allOut" | null {
   return null;
 }
 
-export function tap(s: ChaseState, key: ChaseKey): ChaseState {
+export function tap(s: ChaseState, key: ChaseKey, ballsPerOver: number): ChaseState {
   if (chaseOver(s)) return s;
   const legal = key !== "wide";
   const mark = key === "wide" ? "wd" : key === "out" ? "W" : key;
   const runs = key === "wide" ? 1 : key === "out" ? 0 : Number(key);
   // The strip belongs to one over: the first delivery after a completed over starts a new one.
-  const overDone = s.balls > 0 && s.balls % BALLS_PER_OVER === 0 && s.over.some((d) => d !== "wd");
+  const overDone = s.balls > 0 && s.balls % ballsPerOver === 0 && s.over.some((d) => d !== "wd");
   return {
     runs: s.runs + runs,
     wkts: s.wkts + (key === "out" ? 1 : 0),
@@ -67,6 +63,6 @@ export function needText(s: ChaseState): { runs: number } {
 }
 
 /** Legal balls left in the chasing side's innings. */
-export function ballsLeft(s: ChaseState): number {
-  return Math.max(0, CHASE.overs * BALLS_PER_OVER - s.balls);
+export function ballsLeft(s: ChaseState, ballsPerOver: number): number {
+  return Math.max(0, CHASE.overs * ballsPerOver - s.balls);
 }

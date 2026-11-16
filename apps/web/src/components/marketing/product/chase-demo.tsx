@@ -3,7 +3,6 @@
 import { useRef, useState } from "react";
 import type { ChaseDemoLabels } from "./chase-demo-labels";
 import {
-  BALLS_PER_OVER,
   CHASE,
   ballsLeft,
   chaseOver,
@@ -46,11 +45,14 @@ export function ChaseDemo({
   streamControls,
   labels: l,
   teams,
+  ballsPerOver,
 }: {
   tiles: ChaseTile[];
   streamControls: boolean;
   labels: ChaseDemoLabels;
   teams: { batting: string; bowling: string };
+  /** The engine's over length, read on the server (cricket-chase-rules.ts). Passed in so the engine stays out of the browser. */
+  ballsPerOver: number;
 }) {
   const [s, setS] = useState<ChaseState>(openingChase);
   const [style, setStyle] = useState<StreamStyle>("bar");
@@ -66,10 +68,10 @@ export function ChaseDemo({
   };
 
   const score = `${s.runs}/${s.wkts}`;
-  const overs = oversText(s.balls, BALLS_PER_OVER);
+  const overs = oversText(s.balls, ballsPerOver);
   const end = chaseOver(s);
   const winner = end === "won" ? teams.batting : end === "allOut" ? teams.bowling : null;
-  const need = { team: teams.batting, runs: needText(s).runs, balls: ballsLeft(s) };
+  const need = { team: teams.batting, runs: needText(s).runs, balls: ballsLeft(s, ballsPerOver) };
   const ballWord = (m: string) => (m === "wd" ? l["pad.wide"] : m === "W" ? l["pad.out"] : m);
   const firstInnings = `${CHASE.target - 1}/${FIRST_INNINGS_WICKETS}`;
   // A changing `key` restarts the CSS flash on every accepted tap; the class is absent until the first one and under
@@ -108,7 +110,7 @@ export function ChaseDemo({
             </div>
             <div className="mkp-keys">
               {KEYS.map(({ key, cls }) => (
-                <button key={key} type="button" className={cls} data-testid={`chase-key-${key}`} onClick={() => act(tap(s, key))}>
+                <button key={key} type="button" className={cls} data-testid={`chase-key-${key}`} onClick={() => act(tap(s, key, ballsPerOver))}>
                   {key === "wide" ? l["pad.wide"] : key === "out" ? l["pad.out"] : key}
                 </button>
               ))}

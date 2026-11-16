@@ -5,6 +5,7 @@ import { ChaseDemo } from "@/components/marketing/product/chase-demo";
 import { chaseDemoLabels } from "@/components/marketing/product/chase-demo-labels";
 import { Accent, Closing, DEMO_CLUB_HREF, DEMO_TEAMS, DemoBand, DemoClub, PageHero, PhoneRow, ProductPage, Questions, Road, SplitBand, Ticket } from "@/components/marketing/product/parts";
 import { CHASE } from "@/lib/marketing/cricket-chase";
+import { BALLS_PER_OVER } from "@/lib/marketing/cricket-chase-rules";
 import { PRODUCT_LINKS } from "@/lib/marketing/product-nav";
 import { SPORT_PAGES, isSportPage } from "@/lib/marketing/sport-pages";
 import { getDictionary, t } from "@/lib/i18n";
@@ -52,7 +53,7 @@ export default async function SportPage({ params }: { params: Promise<{ lang: st
           secondary={{ label: s("start"), href: SIGNUP }}
         >
           <DemoBand id="try" title={s("demo.title")} note={s("demo.note", { team: DEMO_TEAMS.batting, target: CHASE.target })}>
-            <ChaseDemo tiles={["pad", "matchCentre", "table", "stream"]} streamControls={false} labels={chaseDemoLabels(d)} teams={DEMO_TEAMS} />
+            <ChaseDemo tiles={["pad", "matchCentre", "table", "stream"]} streamControls={false} labels={chaseDemoLabels(d)} teams={DEMO_TEAMS} ballsPerOver={BALLS_PER_OVER} />
           </DemoBand>
         </PageHero>
 
