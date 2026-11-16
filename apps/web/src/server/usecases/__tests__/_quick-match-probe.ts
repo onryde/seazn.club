@@ -104,6 +104,7 @@ function semverCore(v: string): [number, number, number] {
 
 /**
  * True when `running` is at or above `provenOn`, comparing major, then minor, then patch as numbers ("9.10.0" > "9.9.0").
+ * A -prerelease/+build suffix is ignored, so a snapshot reads as its core version.
  * The offer's engine pin is a floor, not an equality: a bump that changes nothing the offer depends on must not need the
  * generated JSON rewritten. Malformed input throws, never reads as "older": a silent false would hide a bad version string.
  */

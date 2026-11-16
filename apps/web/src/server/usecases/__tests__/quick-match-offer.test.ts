@@ -78,6 +78,8 @@ describe("engineAtLeast: the offer's engine pin is a floor (owner ruling 2026-11
       ["9.0.0", "9.0.1", false],
       ["9.9.0", "9.10.0", false],   // numeric, not string order ("9.9.0" > "9.10.0" as strings)
       ["9.10.0", "9.9.0", true],
+      ["0.0.0-pr50.abc", "9.0.0", false],   // a snapshot reads as its core version
+      ["9.1.0-rc.1", "9.1.0", true],
     ];
     for (const [running, provenOn, expected] of cases) {
       expect(engineAtLeast(running, provenOn), `${running} >= ${provenOn}`).toBe(expected);
@@ -98,7 +100,7 @@ describe("engineAtLeast: the offer's engine pin is a floor (owner ruling 2026-11
 });
 
 describe.skipIf(!HAS_DB || WRITING)("quick match offer", () => {
-  it("DRIFT PIN: the committed offer equals a fresh probe run on the pinned engine", async () => {
+  it("DRIFT PIN: the committed offer equals a fresh probe run on an engine at or above the one it was proven on", async () => {
     // Its expected value is this probe's own earlier output, so it proves only that nothing moved. The spec's oracle is
     // the next test and the knockout one (B6g).
     const run = await runQuickMatchProbe({ quiet: true });
