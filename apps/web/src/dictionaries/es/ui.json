@@ -2914,6 +2914,7 @@
   "roundrobin.refusal.RR_RANK_OVERRIDE_POOL": "Cada puesto se puede fijar una vez por grupo, y nunca por encima del tamaño del grupo.",
   "roundrobin.refusal.RR_RANK_OVERRIDE_NOT_TABLE": "Los puestos solo se pueden fijar en la tabla de una liga o de un grupo.",
   "roundrobin.refusal.RR_CUT_EXCEEDS_FIELD": "{qualified} no pueden clasificarse con este número de participantes: como máximo pueden clasificarse {max}.",
+  "roundrobin.refusal.RR_REGENERATE_WOULD_CLEAR_SETUP": "Habría que sortear la tabla de nuevo, y eso borra la configuración que ya tienen sus partidos (árbitros, alineaciones, dispositivos de anotación, emisiones, disponibilidad de jugadores o llamadas a pista). Usa Reconstruir enfrentamientos: antes te muestra lo que borra.",
   "knockout.addToBracket": "Añadir al cuadro",
   "knockout.lateEntry.tookBye": "{name} juega contra {holder}, que tenía un descanso.",
   "knockout.lateEntry.tookWithdrawnSlot": "{name} ocupa el puesto de {withdrawn} contra {opponent}.",

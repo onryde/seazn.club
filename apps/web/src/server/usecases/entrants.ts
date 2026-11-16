@@ -657,12 +657,13 @@ export async function deleteEntrant(auth: AuthCtx, id: string): Promise<void> {
       );
     }
     await unseatSwissRoundsSeatingEntrant(tx, id);
+    // Read BEFORE the delete: `on delete set null` leaves nothing to find the
+    // fixtures this entrant sat in by afterwards. And before the round-robin cleanup below, which deletes those fixtures: the
+    // public refresh must still name them, or their match-centre documents would be left on the CDN.
+    const where = await entrantPublicScope(tx, row);
     // #837 / ruling 288 (G7): a league's or group's lines the entrant sat in go with it, and its recorded byes - the FK alone left
     // a half-filled line no button could repair. Same lock, same transaction, read while the seats are still filled.
     await dropEntrantFromRoundRobins(tx, row.division_id, id);
-    // Read BEFORE the delete: `on delete set null` leaves nothing to find the
-    // fixtures this entrant sat in by afterwards.
-    const where = await entrantPublicScope(tx, row);
     // The division's stages that have a table to refresh (W2d concern 2, review
     // I1): any with fixtures (the generate stored a table) or a stored table
     // (one an undo left behind).

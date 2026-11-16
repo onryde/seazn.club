@@ -19,7 +19,7 @@ import {
   ATOMIC, HARNESS_SCENARIO, LIFECYCLE_ID, MATCH_REQUIRED_CHECKS, PARENTS, REGRESSIONS_PATH, UI_PATH_BUILT, l2Atomic, l2NoPathFor, l3Atomic, loadRegressions, parseRegressions, replayFences,
 } from "../lib/scenario-catalogue.ts";
 import { productMessageOf } from "../lib/driver/types.ts";
-import { FENCES } from "../lib/model/fences.ts";
+import { FENCES, LIFTED_FENCES } from "../lib/model/fences.ts";
 import { NEXT_MATCH_CHECK, ORIENTATION_CHECK, ROSTER_LOCK_CHECK } from "../lib/model/state.ts";
 import { STEP_INVARIANTS } from "../lib/invariants.ts";
 import { thrownWords } from "./product-text.ts";
@@ -484,8 +484,9 @@ describe("regression cases (R29)", () => {
    *  (MB-001..005 were committed from W1b fix round 1's later runs). */
   const PRE_FIX_HISTORY_RUNS: readonly string[] = ["w1b-model-0928a", "w1b-model-0928b"];
   /** Cases a product fix closed: still committed (their evidence still holds the failure), status `fixed` — and only
-   *  these. W4 app-A Task 8 (FX-G2): a knockout's Generate after a roster change reconciles (MB-004, MB-005). */
-  const FIXED_CASES: ReadonlyMap<string, string> = new Map([["MB-004", "W4 app-A T8"], ["MB-005", "W4 app-A T8"]]);
+   *  these. W4 app-A Task 8 (FX-G2): a knockout's Generate after a roster change reconciles (MB-004, MB-005). W5 app PR A
+   *  Task 2 (X-CU-6): a league's or group's does too, by (pair, leg) (MB-001, #879). */
+  const FIXED_CASES: ReadonlyMap<string, string> = new Map([["MB-001", "W5 app-A T2"], ["MB-004", "W4 app-A T8"], ["MB-005", "W4 app-A T8"]]);
   it("T15-R5: every new failure in a committed model report is a committed open case — its cell, check, seed, path, replayPath, bound and fences — save the named pre-fix W1b history (T16-R4 m-7)", () => {
     type Cell = { cell: string; verdict: string; maxCommands: number; fences: boolean; failure: { check: string; seed: number; path: string; replayPath: string | null } | null };
     const found: { runId: string; cell: Cell; failure: NonNullable<Cell["failure"]> }[] = [];
@@ -668,11 +669,14 @@ describe("regression cases (R29)", () => {
     expect(checked).toBe(FENCES.length);
   });
   it("final batch F-2: every fence the model has is a committed OPEN case's fence — a fenced bug is still witnessed (fences.ts)", () => {
-    const open = loadRegressions().filter((r) => r.status === "open");
+    const all = loadRegressions();
+    const open = all.filter((r) => r.status === "open");
     let checked = 0;
     for (const f of FENCES) {
-      const witnesses = open.filter((r) => r.fence === f.id);
-      expect(witnesses.map((r) => r.id), `fence ${f.id} names no open committed case`).not.toEqual([]);
+      // W5 T2: a LIFTED fence (the product fixed its bug) is witnessed by a FIXED case instead, and must guard nothing.
+      const lifted = LIFTED_FENCES.includes(f.id);
+      const witnesses = (lifted ? all.filter((r) => r.status === "fixed") : open).filter((r) => r.fence === f.id);
+      expect(witnesses.map((r) => r.id), `fence ${f.id} names no ${lifted ? "fixed" : "open"} committed case`).not.toEqual([]);
       // …and the case and the fence agree on the issue (null when none is filed).
       for (const r of witnesses) expect(r.issue, `${r.id} vs fence ${f.id}`).toBe(f.issue);
       checked++;

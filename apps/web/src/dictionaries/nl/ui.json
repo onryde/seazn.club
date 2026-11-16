@@ -2914,6 +2914,7 @@
   "roundrobin.refusal.RR_RANK_OVERRIDE_POOL": "Elke rang kan één keer per groep worden vastgezet, en nooit boven de grootte van de groep.",
   "roundrobin.refusal.RR_RANK_OVERRIDE_NOT_TABLE": "Rangen kunnen alleen worden vastgezet op de stand van een competitie of groep.",
   "roundrobin.refusal.RR_CUT_EXCEEDS_FIELD": "{qualified} kunnen zich niet kwalificeren uit dit veld: het kan er hooguit {max} leveren.",
+  "roundrobin.refusal.RR_REGENERATE_WOULD_CLEAR_SETUP": "De competitie zou opnieuw ingedeeld moeten worden, en dat wist wat al bij de wedstrijden is ingesteld (officials, teamopstellingen, scoreapparaten, streams, beschikbaarheid van spelers of baanoproepen). Gebruik Wedstrijden herbouwen — dat laat eerst zien wat het wist.",
   "knockout.addToBracket": "Toevoegen aan schema",
   "knockout.lateEntry.tookBye": "{name} speelt tegen {holder}, die een bye had.",
   "knockout.lateEntry.tookWithdrawnSlot": "{name} neemt de plek van {withdrawn} in tegen {opponent}.",

@@ -2914,6 +2914,7 @@
   "roundrobin.refusal.RR_RANK_OVERRIDE_POOL": "Each rank can be pinned once per pool, and never above the pool's size.",
   "roundrobin.refusal.RR_RANK_OVERRIDE_NOT_TABLE": "Ranks can only be pinned on a league or group table.",
   "roundrobin.refusal.RR_CUT_EXCEEDS_FIELD": "{qualified} can't qualify from this field: it can supply at most {max}.",
+  "roundrobin.refusal.RR_REGENERATE_WOULD_CLEAR_SETUP": "The table would have to be drawn again, which clears match setup already on its lines (officials, team sheets, scoring devices, streams, player availability or court calls). Use Rebuild fixtures — it lists what it clears first.",
   "knockout.addToBracket": "Add to bracket",
   "knockout.lateEntry.tookBye": "{name} plays {holder}, who had a bye.",
   "knockout.lateEntry.tookWithdrawnSlot": "{name} takes {withdrawn}'s place against {opponent}.",

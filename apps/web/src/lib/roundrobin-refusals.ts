@@ -33,7 +33,11 @@ export type RoundRobinRefusalCode =
   | "RR_RANK_OVERRIDE_POOL"
   | "RR_RANK_OVERRIDE_NOT_TABLE"
   // Task 12b (RB5-E6): a cut larger than the field (or than any pool can supply).
-  | "RR_CUT_EXCEEDS_FIELD";
+  | "RR_CUT_EXCEEDS_FIELD"
+  // Task 2 fix round 1: a Generate that would have to draw the stage again (a pool changed parity, a group re-snaked, or the
+  // patch would run longer than a fresh draw) while its lines carry officials, team sheets, devices, streams, availability or
+  // court calls. Details: `attachments`, the counts `stageAttachmentCounts` reads - the same shape as KO_REDRAW_WOULD_CLEAR_SETUP.
+  | "RR_REGENERATE_WOULD_CLEAR_SETUP";
 
 export interface RoundRobinRefusalRow {
   status: 409 | 422;
@@ -103,6 +107,11 @@ export const ROUND_ROBIN_REFUSALS: Record<RoundRobinRefusalCode, RoundRobinRefus
     status: 422,
     en: "{qualified} can't qualify from this field: it can supply at most {max}.",
     key: "roundrobin.refusal.RR_CUT_EXCEEDS_FIELD",
+  },
+  RR_REGENERATE_WOULD_CLEAR_SETUP: {
+    status: 409,
+    en: "The table would have to be drawn again, which clears match setup already on its lines (officials, team sheets, scoring devices, streams, player availability or court calls). Use Rebuild fixtures — it lists what it clears first.",
+    key: "roundrobin.refusal.RR_REGENERATE_WOULD_CLEAR_SETUP",
   },
 };
 

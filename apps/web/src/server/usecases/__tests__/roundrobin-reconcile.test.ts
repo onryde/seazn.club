@@ -8,7 +8,7 @@
 // Expected values: the ENGINE is the oracle (`generateRoundRobin`: its `fixtures[].leg`, its `rounds[].bye`), and the pair/leg
 // key is the rulebook's (RB5-G7: the unordered pair, the leg, the pool). Hand-derived where the engine has no say: the seeded
 // snake of a group (doc 05 §1), typed below. Never derived from the code under test.
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { generateRoundRobin } from "@seazn/engine/scheduling";
 import { builtinModules } from "@seazn/engine/sports";
@@ -24,9 +24,20 @@ import { undoDivision } from "../history";
 import { startDivision } from "../schedule";
 import { createStages, generateStageFixtures, rebuildStageFixtures } from "../stages";
 import { withdrawEntrantCascade } from "../withdrawal";
+import { CHESS_SEAT_REF_TYPE, chessSeatRef } from "../external-play/seat-stamp";
 import { seedCourts, seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
+
+// A pre-Start entrant delete refreshes the public pages after it commits; the names of the fixture ids it passes are what #4
+// of the Task-2 review pins (the removed lines' match-centre documents), so the drop is spied and everything else stays real.
+const fireScoreRevalidate = vi.hoisted(() => vi.fn(async () => {}));
+const dropNamedPublicDocuments = vi.hoisted(() => vi.fn());
+vi.mock("@/server/public-site/revalidate", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/public-site/revalidate")>()),
+  fireScoreRevalidate,
+  dropNamedPublicDocuments,
+}));
 
 afterAll(async () => {
   if (!HAS_DB) return;
@@ -215,33 +226,92 @@ async function refusal(p: Promise<unknown>): Promise<HttpError> {
   return err as HttpError;
 }
 
+/** An official on a line: organiser setup a redraw would clear (`fixture_officials` goes with the line). */
+async function attachOfficial(auth: AuthCtx, fixtureId: string): Promise<void> {
+  const [person] = await sql<{ id: string }[]>`insert into persons (org_id, full_name) values (${auth.orgId}, ${"Ref " + randomUUID().slice(0, 6)}) returning id`;
+  const [official] = await sql<{ id: string }[]>`
+    insert into officials (org_id, person_id, display_name, role_keys)
+    values (${auth.orgId}, ${person!.id}, 'Ref X', ${sql.json(["referee"])}) returning id`;
+  await sql`insert into fixture_officials (org_id, fixture_id, official_id, role_key, response)
+            values (${auth.orgId}, ${fixtureId}, ${official!.id}, 'referee', 'accepted')`;
+}
+async function officialsOn(stageId: string): Promise<number> {
+  const [row] = await sql<{ n: number }[]>`
+    select count(*)::int as n from fixture_officials fo join fixtures f on f.id = fo.fixture_id where f.stage_id = ${stageId}`;
+  return row!.n;
+}
+/** The first line both of whose players are in `among` (default: any line): the line a roster change here keeps. */
+async function keptLine(stageId: string, among?: readonly string[]): Promise<Row> {
+  const line = (await rowsOf(stageId)).find((x) => among === undefined || (among.includes(x.home_entrant_id!) && among.includes(x.away_entrant_id!)));
+  if (line === undefined) throw new Error("test: no line among the kept players");
+  return line;
+}
+/** The engine's own count of rounds for a field: what a fresh draw spans. */
+const freshSpan = (ids: readonly string[], legs: number): number => Math.max(...generateRoundRobin({ entrants: [...ids], config: { legs } }).fixtures.map((f) => f.roundNo));
+const spanOf = (rows: readonly Row[]): number => Math.max(...rows.map((r) => r.round_no));
+
+beforeEach(() => {
+  fireScoreRevalidate.mockClear();
+  dropNamedPublicDocuments.mockClear();
+});
+
 describe.skipIf(!HAS_DB)("X-CU-6 / FX-G1: Generate before Start reconciles a league by (pair, leg)", () => {
   // differential: today the positional insert adds 9 rows that duplicate ad, ac, bd, ab, cd and miss af, be, ae, ce, bf — run 2026-11-16
+  // Task-2 review, ruling 2: a patch keeps every old line where it was, so 4 -> 6 would stretch to 8 rounds against a fresh draw's 5
+  // (2 legs: 23 against 14, hand-derived in the planner's own test). With no setup on the lines to lose, the table is drawn again.
   for (const legs of [1, 2]) {
-    it(`X-CU-6 FX-G1 4→6: Generate adds exactly the missing pairs and duplicates none (legs ${legs})`, async () => {
+    it(`X-CU-6 FX-G1 4→6 with no setup: a longer patch would bloat, so the table is drawn once, every pair once (legs ${legs})`, async () => {
       const r = await rig({ n: 4, legs });
       const before = await rowsOf(r.stageId);
       expect(before).toHaveLength(6 * legs);
-      await r.add("P5", 5);
-      await r.add("P6", 6);
-      const all = [...r.ids, ...(await sql<{ id: string }[]>`select id from entrants where division_id = ${r.divisionId} and display_name in ('P5','P6')`).map((e) => e.id)];
+      const all = [...r.ids, await r.add("P5", 5), await r.add("P6", 6)];
       expect(all).toHaveLength(6);
+
+      const out = await generateStageFixtures(r.auth, r.stageId);
+      expect(out.reconcile?.kind).toBe("regenerated");
+      const after = await rowsOf(r.stageId);
+      // The multiset of keys is the engine's schedule of six, once each: nothing twice, nothing missing.
+      expect(await storedKeys(r.stageId)).toEqual(sorted(engineKeys(all, legs)));
+      expect(after).toHaveLength(15 * legs);
+      expect(out.created, "the whole fresh table").toBe(15 * legs);
+      // No bloat: the stored rounds are the engine's own count for six players.
+      expect(spanOf(after), "rounds").toBe(freshSpan(all, legs));
+      const oldIds = new Set(before.map((x) => x.id));
+      expect(after.some((x) => oldIds.has(x.id)), "drawn again: every line is new").toBe(false);
+      expect(after.every((x) => rrLegOfExtKey(x.ext_key) !== null)).toBe(true);
+      expect(expectNoDoubleBooking(after, `legs ${legs}`)).toBe(after.length * 2);
+      // And a second Generate is the named no-op.
+      const again = await generateStageFixtures(r.auth, r.stageId);
+      expect(again.reconcile?.kind).toBe("noop");
+      expect(await rowsOf(r.stageId)).toEqual(after);
+    });
+
+    it(`X-CU-6 FX-G1 4→6 over an official on a surviving line: patched in place, nine pairs per leg, the official kept (legs ${legs})`, async () => {
+      const r = await rig({ n: 4, legs });
+      const before = await rowsOf(r.stageId);
+      await attachOfficial(r.auth, (await keptLine(r.stageId)).id);
+      const all = [...r.ids, await r.add("P5", 5), await r.add("P6", 6)];
 
       const out = await generateStageFixtures(r.auth, r.stageId);
       // C(6,2) - C(4,2) = 9 new pairs, per leg.
       expect(out.created, "nine new pairs per leg").toBe(9 * legs);
       expect(out.reconcile?.kind).toBe("in_place");
-
       const after = await rowsOf(r.stageId);
-      // The multiset of keys is the engine's schedule of six, once each: nothing twice, nothing missing.
       expect(await storedKeys(r.stageId)).toEqual(sorted(engineKeys(all, legs)));
       expect(after).toHaveLength(15 * legs);
-      // The four players' old lines are the SAME rows (patched in, never redrawn).
+      // The four players' old lines are the SAME rows (patched in, never redrawn), and the official is still on its line.
       const afterIds = new Set(after.map((x) => x.id));
       expect(before.every((b) => afterIds.has(b.id)), "the old lines survive").toBe(true);
-      // Every stored line carries its leg, and a patched table never seats a player twice in a round.
+      expect(await officialsOn(r.stageId), "the official stays").toBe(1);
       expect(after.every((x) => rrLegOfExtKey(x.ext_key) !== null)).toBe(true);
       expect(expectNoDoubleBooking(after, `legs ${legs}`)).toBe(after.length * 2);
+      // The premise of the trade: the kept patch IS longer than a fresh draw (ruling 2 keeps it only because setup would be lost).
+      expect(spanOf(after), "rounds").toBeGreaterThan(freshSpan(all, legs));
+      // A second Generate after a patch is the named no-op: every key is present, nothing is written.
+      const again = await generateStageFixtures(r.auth, r.stageId);
+      expect(again.reconcile?.kind).toBe("noop");
+      expect(again.created).toBe(0);
+      expect(await rowsOf(r.stageId)).toEqual(after);
     });
   }
 
@@ -297,14 +367,25 @@ describe.skipIf(!HAS_DB)("X-CU-6 / FX-G1: Generate before Start reconciles a lea
     }
   });
 
-  it("X-CU-6 a withdrawal before Start then Generate: an even field losing two drops exactly their pairs; an odd result is drawn again", async () => {
+  it("X-CU-6 a withdrawal before Start then Generate: an even field losing two is drawn again with no setup, and patched (their pairs dropped) over an official", async () => {
+    // No setup: patching 6 -> 4 would keep five rounds of a field that needs three, so the table is drawn again.
     const r = await rig({ n: 6 });
     await withdrawEntrantCascade(r.auth, r.ids[4]!);
     await withdrawEntrantCascade(r.auth, r.ids[5]!);
     const out = await generateStageFixtures(r.auth, r.stageId);
-    expect(out.reconcile?.kind).toBe("in_place");
-    expect(out.reconcile?.vacated.sort()).toEqual([r.ids[4]!, r.ids[5]!].sort());
+    expect(out.reconcile?.kind).toBe("regenerated");
     expect(await storedKeys(r.stageId)).toEqual(sorted(engineKeys(r.ids.slice(0, 4), 1)));
+    expect(spanOf(await rowsOf(r.stageId))).toBe(freshSpan(r.ids.slice(0, 4), 1));
+    // With an official on a surviving line the same change patches: exactly the withdrawn players' pairs go.
+    const r1 = await rig({ n: 6 });
+    await attachOfficial(r1.auth, (await keptLine(r1.stageId, r1.ids.slice(0, 4))).id);
+    await withdrawEntrantCascade(r1.auth, r1.ids[4]!);
+    await withdrawEntrantCascade(r1.auth, r1.ids[5]!);
+    const out1 = await generateStageFixtures(r1.auth, r1.stageId);
+    expect(out1.reconcile?.kind).toBe("in_place");
+    expect(out1.reconcile?.vacated.sort()).toEqual([r1.ids[4]!, r1.ids[5]!].sort());
+    expect(await storedKeys(r1.stageId)).toEqual(sorted(engineKeys(r1.ids.slice(0, 4), 1)));
+    expect(await officialsOn(r1.stageId), "the official stays").toBe(1);
     // 6 -> 5 withdrawn one: odd, drawn again.
     const r2 = await rig({ n: 6 });
     await withdrawEntrantCascade(r2.auth, r2.ids[5]!);
@@ -323,7 +404,8 @@ describe.skipIf(!HAS_DB)("X-CU-6 / FX-G1: Generate before Start reconciles a lea
       const all = (await sql<{ id: string }[]>`select id from entrants where division_id = ${r.divisionId}`).map((e) => e.id);
       expect(all).toHaveLength(6);
       const out = await generateStageFixtures(r.auth, r.stageId);
-      expect(out.created, `${sport.key}/${sport.kind}`).toBe(9);
+      expect(out.reconcile?.kind, `${sport.key}/${sport.kind}`).toBe("regenerated");
+      expect(out.created, `${sport.key}/${sport.kind}: the whole fresh table`).toBe(15);
       expect(await storedKeys(r.stageId), `${sport.key}/${sport.kind}`).toEqual(sorted(engineKeys(all, 1)));
       checked++;
     }
@@ -407,28 +489,60 @@ describe.skipIf(!HAS_DB)("X-CU-6 RB5-L17: a group stage re-snakes before Start",
     expect(expectNoDoubleBooking(rows, "re-snake")).toBe(32);
   });
 
-  it("X-CU-6 two pools of four growing to six (nobody moves, parity kept) patch each pool by its own missing pairs", async () => {
-    const r = await rig({ n: 8, kind: "group", pools: 2 });
+  /** Two pools of four grown to six, nobody moving (seeds 9..12 continue the snake: A gets 9 and 12, B gets 10 and 11). */
+  async function grownPools(sport: SportPick, withOfficial: boolean) {
+    const r = await rig({ n: 8, kind: "group", pools: 2, sport });
     const before = await rowsOf(r.stageId);
     expect(before).toHaveLength(12);
-    const poolIds = [...new Set(before.map((x) => x.pool_id))];
-    expect(poolIds).toHaveLength(2);
+    expect(new Set(before.map((x) => x.pool_id)).size).toBe(2);
+    if (withOfficial) await attachOfficial(r.auth, before[0]!.id);
     for (const [i, name] of ["P9", "P10", "P11", "P12"].entries()) await r.add(name, 9 + i);
     const out = await generateStageFixtures(r.auth, r.stageId);
-    // Seeds 9..12 continue the snake without moving seeds 1..8 (A gets 9 and 12, B gets 10 and 11): 2 x (15 - 6) new lines.
-    expect(out.reconcile?.kind).toBe("in_place");
-    expect(out.created).toBe(18);
     const after = await rowsOf(r.stageId);
-    expect(after).toHaveLength(30);
     const byPool = new Map<string, Row[]>();
     for (const row of after) byPool.set(row.pool_id!, [...(byPool.get(row.pool_id!) ?? []), row]);
-    expect([...byPool.values()].map((x) => x.length)).toEqual([15, 15]);
-    for (const rows of byPool.values()) {
-      const members = new Set(rows.flatMap((x) => [x.home_entrant_id!, x.away_entrant_id!]));
-      expect(members.size).toBe(6);
-      expect(sorted(rows.map(keyOfRow)), "each pool is its own round robin, once each").toEqual(sorted(engineKeys([...members], 1, rows[0]!.pool_id)));
+    return { r, before, out, after, byPool };
+  }
+
+  it("X-CU-6 two pools of four growing to six with no setup are drawn again (a patch would stretch each pool), each pool once per pair", async () => {
+    let checked = 0;
+    for (const sport of [BADMINTON, FOOTBALL]) {
+      const { out, after, byPool } = await grownPools(sport, false);
+      expect(out.reconcile?.kind, sport.key).toBe("regenerated");
+      expect(after, sport.key).toHaveLength(30);
+      expect([...byPool.values()].map((x) => x.length)).toEqual([15, 15]);
+      for (const rows of byPool.values()) {
+        const members = new Set(rows.flatMap((x) => [x.home_entrant_id!, x.away_entrant_id!]));
+        expect(members.size).toBe(6);
+        expect(sorted(rows.map(keyOfRow)), `${sport.key}: each pool is its own round robin`).toEqual(sorted(engineKeys([...members], 1, rows[0]!.pool_id)));
+        expect(spanOf(rows), `${sport.key}: no bloat`).toBe(freshSpan([...members], 1));
+      }
+      expect(expectNoDoubleBooking(after, `${sport.key} regenerated pools`)).toBe(60);
+      checked++;
     }
-    expect(expectNoDoubleBooking(after, "grown pools")).toBe(60);
+    expect(checked).toBe(2);
+  });
+
+  it("X-CU-6 two pools of four growing to six over an official patch each pool by its own missing pairs (badminton and football)", async () => {
+    let checked = 0;
+    for (const sport of [BADMINTON, FOOTBALL]) {
+      const { before, out, after, byPool, r } = await grownPools(sport, true);
+      expect(out.reconcile?.kind, sport.key).toBe("in_place");
+      expect(out.created, `${sport.key}: 2 x (15 - 6) new lines`).toBe(18);
+      expect(after, sport.key).toHaveLength(30);
+      expect([...byPool.values()].map((x) => x.length)).toEqual([15, 15]);
+      const afterIds = new Set(after.map((x) => x.id));
+      expect(before.every((b) => afterIds.has(b.id)), `${sport.key}: the old lines survive`).toBe(true);
+      expect(await officialsOn(r.stageId), `${sport.key}: the official stays`).toBe(1);
+      for (const rows of byPool.values()) {
+        const members = new Set(rows.flatMap((x) => [x.home_entrant_id!, x.away_entrant_id!]));
+        expect(members.size).toBe(6);
+        expect(sorted(rows.map(keyOfRow)), `${sport.key}: each pool is its own round robin, once each`).toEqual(sorted(engineKeys([...members], 1, rows[0]!.pool_id)));
+      }
+      expect(expectNoDoubleBooking(after, `${sport.key} grown pools`)).toBe(60);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 });
 
@@ -606,15 +720,237 @@ describe.skipIf(!HAS_DB)("#837 / G7: deleting a league entrant before Start drop
   });
 });
 
-describe.skipIf(!HAS_DB)("X-CU-6 a patched Generate is undoable", () => {
-  it("X-CU-6 Undo takes back exactly the lines a patched Generate inserted", async () => {
+/** A chess invite still queued for a line's white seat: the outbox row a delete must end (Phase 3 G-1). */
+async function queueInvite(orgId: string, fixtureId: string): Promise<string> {
+  const [row] = await sql<{ id: string }[]>`
+    insert into email_outbox (id, kind, ref_type, ref_id, org_id, recipient, subject, transactional, status, expires_at)
+    values (${randomUUID()}, 'chess_invite', ${CHESS_SEAT_REF_TYPE}, ${chessSeatRef(fixtureId, "white")}, ${orgId}, 'seat@example.test',
+            'invite', true, 'queued', now() + interval '1 hour')
+    returning id`;
+  return row!.id;
+}
+async function outboxStatus(id: string): Promise<string> {
+  const [row] = await sql<{ status: string }[]>`select status from email_outbox where id = ${id}`;
+  return row!.status;
+}
+
+describe.skipIf(!HAS_DB)("X-CU-6 Generate stays undoable (Task-2 review, ruling 3)", () => {
+  // differential: before the fix a regenerate and a patch's removals deleted the lines with no history row, so Undo undid only the
+  // insert half (or nothing) and the previous lines were gone for good.
+  it("X-CU-6 a regenerate then Undo puts the previous lines back (the new draw goes first, then the old one returns)", async () => {
     const r = await rig({ n: 4 });
     const before = await rowsOf(r.stageId);
     await r.add("P5", 5);
     await r.add("P6", 6);
     const out = await generateStageFixtures(r.auth, r.stageId);
-    expect(out.created).toBe(9);
+    expect(out.reconcile?.kind).toBe("regenerated");
+    expect(await rowsOf(r.stageId)).toHaveLength(15);
+
+    await undoDivision(r.auth, r.divisionId); // the fresh draw goes
+    expect(await rowsOf(r.stageId), "the fresh lines are gone").toHaveLength(0);
+    await undoDivision(r.auth, r.divisionId); // the previous lines return
+    const restored = await rowsOf(r.stageId);
+    expect(restored.map((x) => x.id).sort(), "the previous lines are the very same rows").toEqual(before.map((x) => x.id).sort());
+    expect(await storedKeys(r.stageId)).toEqual(sorted(before.map(keyOfRow)));
+  });
+
+  it("X-CU-6 a patch that only removes lines, then Undo, restores the removed lines (football too)", async () => {
+    let checked = 0;
+    for (const sport of [BADMINTON, FOOTBALL]) {
+      const r = await rig({ n: 6, sport });
+      await attachOfficial(r.auth, (await keptLine(r.stageId, r.ids.slice(0, 4))).id);
+      const before = await rowsOf(r.stageId);
+      await withdrawEntrantCascade(r.auth, r.ids[4]!);
+      await withdrawEntrantCascade(r.auth, r.ids[5]!);
+      const out = await generateStageFixtures(r.auth, r.stageId);
+      expect(out.reconcile?.kind, sport.key).toBe("in_place");
+      const patched = await rowsOf(r.stageId);
+      expect(patched.length, `${sport.key}: removals only`).toBe(6);
+      const gone = before.filter((b) => !patched.some((x) => x.id === b.id));
+      expect(gone, `${sport.key}: nine lines of the two withdrawn players went`).toHaveLength(9);
+
+      await undoDivision(r.auth, r.divisionId);
+      const restored = await rowsOf(r.stageId);
+      expect(restored.map((x) => x.id).sort(), `${sport.key}: every removed line is back, as the same row`).toEqual(before.map((x) => x.id).sort());
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("X-CU-6 a patch that removes and inserts takes two Undo steps: the inserted lines go first, then the removed ones return", async () => {
+    const r = await rig({ n: 6 });
+    await attachOfficial(r.auth, (await keptLine(r.stageId, r.ids.slice(0, 5))).id);
+    const before = await rowsOf(r.stageId);
+    await withdrawEntrantCascade(r.auth, r.ids[5]!);
+    const newcomer = await r.add("P7", 7);
+    const out = await generateStageFixtures(r.auth, r.stageId);
+    expect(out.reconcile?.kind).toBe("in_place");
+    const patched = await rowsOf(r.stageId);
+    const removed = before.filter((b) => !patched.some((x) => x.id === b.id));
+    const inserted = patched.filter((x) => !before.some((b) => b.id === x.id));
+    expect(removed, "the withdrawn player's five lines").toHaveLength(5);
+    expect(inserted, "the newcomer's five lines").toHaveLength(5);
+    expect(inserted.every((x) => x.home_entrant_id === newcomer || x.away_entrant_id === newcomer)).toBe(true);
+
     await undoDivision(r.auth, r.divisionId);
-    expect((await rowsOf(r.stageId)).map((x) => x.id)).toEqual(before.map((x) => x.id));
+    const afterFirst = await rowsOf(r.stageId);
+    expect(afterFirst.some((x) => inserted.some((i) => i.id === x.id)), "the inserted lines are gone").toBe(false);
+    expect(afterFirst, "the removed lines have not returned yet").toHaveLength(before.length - removed.length);
+    await undoDivision(r.auth, r.divisionId);
+    expect((await rowsOf(r.stageId)).map((x) => x.id).sort(), "the removed lines return").toEqual(before.map((x) => x.id).sort());
+  });
+});
+
+describe.skipIf(!HAS_DB)("X-CU-6 Generate refuses to clear setup (Task-2 review, ruling 1)", () => {
+  // differential: before the fix a parity flip redrew the table and the cascade took the official with it, with no word said.
+  it("X-CU-6 3→4 over an official on a surviving line: refused by name with the counts, lines and official untouched (football too)", async () => {
+    let checked = 0;
+    for (const sport of [BADMINTON, FOOTBALL]) {
+      const r = await rig({ n: 3, sport });
+      await attachOfficial(r.auth, (await keptLine(r.stageId)).id);
+      const rows = await rowsOf(r.stageId);
+      const byes = await roundByesOf(r.stageId);
+      await r.add("P4", 4);
+      const err = await refusal(generateStageFixtures(r.auth, r.stageId));
+      expect([err.status, err.code], sport.key).toEqual([409, "RR_REGENERATE_WOULD_CLEAR_SETUP"]);
+      expect((err.extra?.attachments as { officials: number }).officials, `${sport.key}: the counts ride on the refusal`).toBe(1);
+      expect(await rowsOf(r.stageId), `${sport.key}: lines byte-equal`).toEqual(rows);
+      expect(await officialsOn(r.stageId), `${sport.key}: the official is still there`).toBe(1);
+      expect(await roundByesOf(r.stageId), `${sport.key}: byes untouched`).toEqual(byes);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("X-CU-6 a group that would re-snake over an official is refused too, and once the official is gone Generate draws it", async () => {
+    // Seeds 2..9 now, the newcomer takes seed 1: every player moves down the snake, so the pools must be redrawn.
+    const r = await rig({ n: 8, kind: "group", pools: 2, seeds: [2, 3, 4, 5, 6, 7, 8, 9] });
+    await attachOfficial(r.auth, (await keptLine(r.stageId)).id);
+    const rows = await rowsOf(r.stageId);
+    await r.add("P9", 1);
+    const err = await refusal(generateStageFixtures(r.auth, r.stageId));
+    expect(err.code).toBe("RR_REGENERATE_WOULD_CLEAR_SETUP");
+    expect(await rowsOf(r.stageId), "lines byte-equal").toEqual(rows);
+    expect(await officialsOn(r.stageId)).toBe(1);
+    // The organiser clears the setup (or uses Rebuild, which lists it): the same Generate now draws.
+    await sql`delete from fixture_officials where fixture_id in (select id from fixtures where stage_id = ${r.stageId})`;
+    const out = await generateStageFixtures(r.auth, r.stageId);
+    expect(out.reconcile?.kind).toBe("regenerated");
+    expect(await rowsOf(r.stageId)).toHaveLength(16);
+  });
+
+  it("X-CU-6 slots are NOT setup: a time and a court on a line carry over a redraw without a refusal", async () => {
+    const r = await rig({ n: 3 });
+    const courts = await seedCourts(r.auth.orgId, 1);
+    const line = await keptLine(r.stageId);
+    await sql`update fixtures set scheduled_at = ${"2030-06-11T10:00:00.000Z"}, court_id = ${courts[0]!} where id = ${line.id}`;
+    await r.add("P4", 4);
+    const out = await generateStageFixtures(r.auth, r.stageId);
+    expect(out.reconcile?.kind).toBe("regenerated");
+    const carried = (await rowsOf(r.stageId)).find((x) => keyOfRow(x) === keyOfRow(line));
+    expect(carried?.court_id).toBe(courts[0]!);
+  });
+});
+
+describe.skipIf(!HAS_DB)("X-CU-6 an entrant delete refreshes the removed lines' public pages and ends their queued invites (Task-2 review)", () => {
+  // differential: the hook ran BEFORE the scope read, so the lines it deleted were already gone and their match-centre documents stayed
+  it("X-CU-6 the delete's public refresh names the removed lines, so their match-centre documents are dropped", async () => {
+    const r = await rig({ n: 4 });
+    const victim = r.ids[1]!;
+    const lines = (await rowsOf(r.stageId)).filter((x) => x.home_entrant_id === victim || x.away_entrant_id === victim).map((x) => x.id);
+    expect(lines, "premise: the victim sits in three lines").toHaveLength(3);
+    dropNamedPublicDocuments.mockClear();
+    await deleteEntrant(r.auth, victim);
+    expect(await rowsOf(r.stageId), "the lines went with the entrant").toHaveLength(3);
+    expect(dropNamedPublicDocuments).toHaveBeenCalledTimes(1);
+    const scope = (dropNamedPublicDocuments.mock.calls[0] as unknown as [{ fixtureIds: string[] }])[0];
+    expect([...scope.fixtureIds].sort()).toEqual([...lines].sort());
+  });
+
+  it("X-CU-6 a queued chess invite on a removed line ends with it: on a pre-Start delete, and on a patch's removals", async () => {
+    // The delete hook.
+    const r = await rig({ n: 4 });
+    const victim = r.ids[1]!;
+    const [onVictim] = (await rowsOf(r.stageId)).filter((x) => x.home_entrant_id === victim || x.away_entrant_id === victim);
+    const survivor = (await rowsOf(r.stageId)).find((x) => x.home_entrant_id !== victim && x.away_entrant_id !== victim)!;
+    const doomed = await queueInvite(r.auth.orgId, onVictim!.id);
+    const kept = await queueInvite(r.auth.orgId, survivor.id);
+    await deleteEntrant(r.auth, victim);
+    expect(await outboxStatus(doomed), "the removed line's invite is ended").toBe("expired");
+    expect(await outboxStatus(kept), "another line's invite is left alone").toBe("queued");
+
+    // A patch's removals (an official on a kept line makes it a patch, not a redraw).
+    const r2 = await rig({ n: 6 });
+    await attachOfficial(r2.auth, (await keptLine(r2.stageId, r2.ids.slice(0, 4))).id);
+    const gone = (await rowsOf(r2.stageId)).find((x) => x.home_entrant_id === r2.ids[5] || x.away_entrant_id === r2.ids[5])!;
+    const doomed2 = await queueInvite(r2.auth.orgId, gone.id);
+    // Two leave: an even field stays even, so the patch (kept for the official's sake) drops their pairs.
+    await withdrawEntrantCascade(r2.auth, r2.ids[4]!);
+    await withdrawEntrantCascade(r2.auth, r2.ids[5]!);
+    const out = await generateStageFixtures(r2.auth, r2.stageId);
+    expect(out.reconcile?.kind).toBe("in_place");
+    expect((await rowsOf(r2.stageId)).some((x) => x.id === gone.id), "premise: the line went").toBe(false);
+    expect(await outboxStatus(doomed2), "the patch ended the removed line's invite").toBe("expired");
+  });
+
+  // A voided result is still evidence (`fixtureHasResultSql` reads the ledger the monotonic way): the line is not silently dropped.
+  it("X-CU-6 a line whose only result was voided still holds evidence: its entrant's delete is refused and the lines stay", async () => {
+    const r = await rig({ n: 4 });
+    const rows = await rowsOf(r.stageId);
+    const line = rows[0]!;
+    const [start] = await sql<{ id: string }[]>`
+      insert into score_events (fixture_id, org_id, seq, type, payload) values (${line.id}, ${r.auth.orgId}, 0, 'core.start', '{}') returning id`;
+    await sql`insert into score_events (fixture_id, org_id, seq, type, payload)
+              values (${line.id}, ${r.auth.orgId}, 1, 'core.void', ${sql.json({ event_id: start!.id } as never)})`;
+    const err = await refusal(deleteEntrant(r.auth, line.home_entrant_id!));
+    expect(err.status).toBe(409);
+    expect(err.code).toBe("ENTRANT_FIXTURES_HAVE_RESULTS");
+    expect(await rowsOf(r.stageId), "nothing was dropped").toEqual(rows);
+  });
+});
+
+describe.skipIf(!HAS_DB)("FX-G21 / X-CU-6: a league drawn over day-one seats (`timing: setup`) records its byes and reads legacy keys", () => {
+  /** 5 players, stage 1 a league, stage 2 a league whose five seats are the first five of stage 1 (an odd field), drawn off seats. */
+  async function seatLeague() {
+    const r = await rig({ n: 5, generate: false });
+    const [fed] = await createStages(r.auth, r.divisionId, {
+      seq: 2,
+      kind: "league",
+      name: "Super",
+      config: {},
+      progression: {
+        sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 5 }] }],
+        placement: "rank_order",
+        timing: "setup",
+      },
+    });
+    return { r, fed: fed! };
+  }
+
+  // differential: the setup path never recorded round_byes, so an odd seat league's bye was lost like main's
+  it("FX-G21 an odd league drawn over five seats records the engine's byes, naming the seats", async () => {
+    const { r, fed } = await seatLeague();
+    const out = await generateStageFixtures(r.auth, fed.id);
+    expect(out.fixtures.length, "ten lines of C(5,2)").toBe(10);
+    const seats = [1, 2, 3, 4, 5].map((i) => `slot:${i}`);
+    const expected = engineByes(seats, 1);
+    expect(expected, "premise: the engine emits one bye per round").toHaveLength(5);
+    const byes = await roundByesOf(fed.id);
+    expect(byes, "round_byes is written").toBeDefined();
+    expect(bySlot(byes!.map(({ round_no, leg, entrant_id }) => ({ round_no, leg, entrant_id })))).toEqual(bySlot(expected));
+    expect(byes!.every((b) => b.pool === null)).toBe(true);
+  });
+
+  // differential: byKey read only the new `-L{n}` spelling, so a seat league drawn before the leg was stored would be inserted twice
+  it("X-CU-6 a seat league whose lines carry the pre-leg key is not drawn twice by a second Generate", async () => {
+    const { r, fed } = await seatLeague();
+    await generateStageFixtures(r.auth, fed.id);
+    const before = await rowsOf(fed.id);
+    expect(before).toHaveLength(10);
+    await sql`update fixtures set ext_key = regexp_replace(ext_key, '-L[0-9]+$', '') where stage_id = ${fed.id}`;
+    await generateStageFixtures(r.auth, fed.id);
+    const after = await rowsOf(fed.id);
+    expect(after, "no line written a second time").toHaveLength(10);
+    expect(after.map((x) => x.id).sort()).toEqual(before.map((x) => x.id).sort());
   });
 });

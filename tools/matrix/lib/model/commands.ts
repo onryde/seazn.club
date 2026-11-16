@@ -402,6 +402,13 @@ class Correct extends Cmd {
     await post(m, d, f, winStream(m, f, this.w % 2 === 0 ? "away" : "home"));
   }
 }
+/** The code a Generate after Start is refused with for an entrant added since the lines were drawn: a root knockout's
+ *  (W4 T8) and a root league's or group's (W5 T2); null for every other kind, whose Generate the model does not expect refused. */
+function afterStartCode(stageKind: string): string | null {
+  if (stageKind === "knockout") return "KO_GENERATE_AFTER_START";
+  if (stageKind === "league" || stageKind === "group") return "RR_GENERATE_AFTER_START";
+  return null;
+}
 class Generate extends Cmd {
   readonly kind = "Generate" as const;
   // Before Start too: POST /stages/:id/generate refuses only a frozen schedule
@@ -413,21 +420,29 @@ class Generate extends Cmd {
    *  refused by name, 409 KO_GENERATE_AFTER_START. A withdrawal is NOT (MB-004's sequence): its cascade already walked
    *  the line over, so Generate is the named no-op and answers the bracket. The model's knockout rows are single-stage,
    *  so their stage is the root. Before Start the product reconciles (places, vacates or regenerates), which the model
-   *  accepts. */
+   *  accepts.
+   *  W5 app PR A T2 (X-CU-6; #879, MB-001): the same for a root league or group, refused 409 RR_GENERATE_AFTER_START — a Start
+   *  draws nothing over lines a league already holds, so an entrant added before it has no line, and Generate never reshapes
+   *  once play has started. Before Start the product reconciles by (pair, leg), which the model accepts. */
   protected override expectsRefusal(m: ModelState) {
-    return m.started && m.stageKind === "knockout" && m.fixtures.size > 0 && m.lateEntry;
+    return m.started && afterStartCode(m.stageKind) !== null && m.fixtures.size > 0 && m.lateEntry;
   }
   /** The code the product refused with, when it refused (read by afterExpectedRefusal; one command per step). */
   #refusedCode: string | null = null;
-  /** B2 fix round 1 (m3): where the model expects the refusal it expects THAT one — the knockout table's
-   *  KO_GENERATE_AFTER_START (apps/web lib/knockout-refusals.ts) — not any named refusal. */
+  #refusedOn = "";
+  /** B2 fix round 1 (m3): where the model expects the refusal it expects THAT one - the kind's own after-Start code
+   *  (apps/web lib/knockout-refusals.ts, lib/roundrobin-refusals.ts) - not any named refusal. */
   protected override afterExpectedRefusal(): Promise<void> {
-    if (this.#refusedCode === "KO_GENERATE_AFTER_START") return Promise.resolve();
-    return Promise.reject(new ModelViolation(this.expectedCheck(), [`${this.toString()}: a knockout Generate after Start over a late entry was refused with ${this.#refusedCode ?? "no code"}, not KO_GENERATE_AFTER_START`]));
+    const want = afterStartCode(this.#refusedOn);
+    if (want !== null && this.#refusedCode === want) return Promise.resolve();
+    return Promise.reject(new ModelViolation(this.expectedCheck(), [`${this.toString()}: a ${this.#refusedOn} Generate after Start over a late entry was refused with ${this.#refusedCode ?? "no code"}, not ${want ?? "a named refusal"}`]));
   }
   protected async act(m: ModelState, d: OrganiserDriver) {
     const g = await d.generate(m.stageId).catch((e: unknown) => {
-      if (e instanceof RefusedCall) this.#refusedCode = e.code;
+      if (e instanceof RefusedCall) {
+        this.#refusedCode = e.code;
+        this.#refusedOn = m.stageKind;
+      }
       throw e;
     });
     // I8 judges what is recorded here: `total` is the stage's full list, so a

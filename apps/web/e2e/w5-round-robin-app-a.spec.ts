@@ -59,7 +59,7 @@ const pairOf = (f: Pairing) => [f.home_entrant_id, f.away_entrant_id].sort().joi
 const owedPairs = (ids: string[]) => ids.flatMap((a, i) => ids.slice(i + 1).map((b) => [a, b].sort().join("|")));
 
 test.describe("X-CU-6 Generate adds the new players' pairs and nothing twice", () => {
-  test("four players grown to six before Start: Generate adds the six missing pairs, repeats none, and the run sheet lists 15 lines", async ({
+  test("four players grown to six before Start: Generate draws the six-player table once (no pair twice, none missing, no stretched rounds), and the run sheet lists 15 lines", async ({
     page,
     request,
   }) => {
@@ -75,12 +75,13 @@ test.describe("X-CU-6 Generate adds the new players' pairs and nothing twice", (
     const everyone = [...ids, ...added.map((e) => e.id)];
     const res = await generate(request, stageId);
     expect(res.status, JSON.stringify(res.error)).toBe(200);
-    // Parity is kept (even -> even), so the draw is patched in place: the six lines the four already had stay.
-    expect(res.data!.reconcile?.kind).toBe("in_place");
-    expect(res.data!.created).toBe(9);
+    // Parity is kept (even -> even), but a patch would keep the old lines in their old rounds and stretch the table to eight rounds
+    // against a fresh draw's five (task-2 review, ruling 2); nothing the organiser set up sits on the lines, so it is drawn again.
+    expect(res.data!.reconcile?.kind).toBe("regenerated");
+    expect(res.data!.created).toBe(15);
 
     const after = (await stageFixtures(request, divisionId, stageId)) as Pairing[];
-    for (const b of before) expect(after.some((a) => a.id === b.id), `the line ${b.id} survives untouched`).toBe(true);
+    expect(Math.max(...after.map((a) => a.round_no)), "five rounds for six players, not eight").toBe(5);
     const keys = after.map(pairOf);
     const owed = owedPairs(everyone);
     expect(owed.length, "anti-vacuity: C(6,2) pairs owed").toBe(15);
@@ -198,5 +199,66 @@ test.describe("X-BD-5 a field too small to generate is refused by name", () => {
     expect(res.status).toBe(422);
     expect(res.error?.code).toBe("STAGE_NOT_READY");
     expect(await stageFixtures(request, divisionId, stageId)).toHaveLength(0);
+  });
+});
+
+// W5 app PR A, Task 3 (X-BD-6, FX-G15; owner R24 pick 6 option A). Add match used to land at `max(round) + 1`. It now defaults to the latest
+// round where NEITHER side plays, and the form's Round select lists a round where a side already plays with its reason, unselectable.
+// Driven through the real form on the desk's fixtures tab and read back through the API. The rig is derived from the generated table, never
+// typed in: round 3's lines are read back, two of them are picked and their far sides withdrawn, so the only round where both Add match
+// sides are free is round 3 BY CONSTRUCTION (each of the six plays in every round of a five-round table, so a side is free only where a
+// line of its was expunged).
+test.describe("X-BD-6 Add match lands in round 3", () => {
+  test("six players, two withdrawn from round 3: the form defaults to Round 3, lists the rounds where a side plays as unselectable, and the added match is written in round 3", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(150_000);
+    const { divisionId, stageId } = await seedLeague(request, "AddRound", 6);
+    expect((await generate(request, stageId)).status).toBe(200);
+    const lines = (await stageFixtures(request, divisionId, stageId)) as Pairing[];
+    expect(lines.length, "a six-player table plays 15 lines").toBe(15);
+    const rounds = Math.max(...lines.map((l) => l.round_no));
+    expect(rounds, "five rounds for six players").toBe(5);
+    const round3 = lines.filter((l) => l.round_no === 3);
+    expect(round3.length, "three lines in round 3").toBe(3);
+    // Two lines of round 3: (a, x) and (b, y). x and y leave; a and b are then both free in round 3, and nowhere else.
+    const [lineA, lineB] = round3 as [Pairing, Pairing];
+    const a = lineA.home_entrant_id!;
+    const x = lineA.away_entrant_id!;
+    const b = lineB.home_entrant_id!;
+    const y = lineB.away_entrant_id!;
+    expect(new Set([a, x, b, y]).size, "four different players").toBe(4);
+
+    const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
+    expect(started.status, JSON.stringify(started.error)).toBe(200);
+    for (const gone of [x, y]) {
+      const res = await apiJson(request, `/api/v1/entrants/${gone}`, "PATCH", { status: "withdrawn" });
+      expect(res.status, JSON.stringify(res.error)).toBe(200);
+    }
+
+    await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+    await page.getByTestId("stage-add-match").first().click();
+    const form = page.locator("div.border-dashed").filter({ has: page.getByTestId("add-match-round") });
+    const round = form.getByTestId("add-match-round");
+    await expect(round, "the Round select waits for both sides").toBeDisabled();
+    await form.locator("label", { hasText: /^Home/ }).locator("select").selectOption(a);
+    await form.locator("label", { hasText: /^Away/ }).locator("select").selectOption(b);
+    await expect(round).toBeEnabled();
+    await expect(round, "the default is the latest round where neither side plays").toHaveValue("3");
+    await expect(round.locator("option:checked")).toHaveText("Round 3 · both free (suggested)");
+    // A round where a side already plays is listed, with its reason, and cannot be picked; the new round after the last is open.
+    await expect(round.locator('option[value="5"]')).toBeDisabled();
+    await expect(round.locator('option[value="6"]')).toBeEnabled();
+    await expect(round.locator('option[value="5"]')).toHaveText(/^Round 5 · .+ plays /);
+    await expectNoHorizontalScroll(page);
+
+    await form.getByRole("button", { name: "Add match", exact: true }).click();
+    await expect.poll(async () => (await stageFixtures(request, divisionId, stageId)).length, { timeout: 20_000 }).toBe(16);
+    const after = (await stageFixtures(request, divisionId, stageId)) as Pairing[];
+    const added = after.filter((f) => !lines.some((l) => l.id === f.id));
+    expect(added, "exactly the one new line").toHaveLength(1);
+    expect(pairOf(added[0]!), "between the two sides picked").toBe([a, b].sort().join("|"));
+    expect(added[0]!.round_no, "in round 3, not round 6").toBe(3);
   });
 });

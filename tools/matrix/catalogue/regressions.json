@@ -15,7 +15,7 @@
       "fencesOn": false,
       "fence": "late-entry-then-generate",
       "match": null,
-      "status": "open",
+      "status": "fixed",
       "found": "2026-09-29",
       "runId": "w1b-model-0929f"
     },

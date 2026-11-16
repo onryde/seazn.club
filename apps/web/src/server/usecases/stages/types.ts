@@ -340,7 +340,9 @@ export interface GenerateOutcome {
    *  departed `vacated` (their opponents now hold byes), no line inserted or deleted; `regenerated`: the bracket crossed a
    *  power of two, so it was drawn again in this transaction with its slots carried by role (`slots`, as Rebuild says).
    *  W5 T2 (X-CU-6): a root league's or group's Generate over existing lines answers the same three kinds: `in_place` inserted the
-   *  newcomers' pairs and removed the departed's (no other line moved), `regenerated` carried each PAIR's slot (a parity flip). */
+   *  newcomers' pairs and removed the departed's (no other line moved), `regenerated` carried each PAIR's slot (a parity flip, a
+   *  re-snake, or a patch that would stretch the rounds past a fresh draw's with no setup on the lines to lose). A redraw that would
+   *  clear setup beyond slots is refused instead (409 RR_REGENERATE_WOULD_CLEAR_SETUP), so `in_place` is also what keeps setup. */
   reconcile?: ReconcileOutcome;
 }
 

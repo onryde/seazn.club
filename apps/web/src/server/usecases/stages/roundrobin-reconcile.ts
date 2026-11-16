@@ -27,12 +27,15 @@ import {
   type RrLine,
   type RrStoredRow,
 } from "@/lib/roundrobin-reconcile";
+import { FIXTURE_DELETED_REASON } from "@/server/email-outbox/cancel";
+import { cancelBoardInvites } from "../external-play/cancel-invites";
 import { fixtureHasResultSql } from "../fixture-results-sql";
 import { stageHasStarted } from "../fixture-started-sql";
 import { roundRobinRefusal } from "../roundrobin-refusal";
 import { roundRobinStagePlan, type RoundBye } from "./generators";
-import { appendFixturesGenerated, divisionHasStarted } from "./helpers";
-import type { ActiveEntrant, StageRow } from "./types";
+import { appendFixturesGenerated, divisionHasStarted, recordFixturesCleared } from "./helpers";
+import { stageAttachmentCounts } from "./roster-drift";
+import type { ActiveEntrant, SealedSetupCounts, StageRow } from "./types";
 
 /** What the driver did, or (`regenerate`) what the caller must do. `placed`/`vacated` are entrant ids. */
 export type RoundRobinDecision =
@@ -63,6 +66,9 @@ export async function reconcileRoundRobinLines(
   stage: StageRow,
   entrants: readonly ActiveEntrant[],
   poolIds: ReadonlyMap<string, string>,
+  /** The sealed-table setup counts (streams, YouTube broadcasts), read on the privileged prelude by `generateStageFixtures`.
+   *  Absent for a caller that cannot read them (history's Redo re-running the generator): the tenant-readable kinds still count. */
+  sealed: SealedSetupCounts | undefined,
 ): Promise<RoundRobinDecision> {
   if (stage.kind !== "league" && stage.kind !== "group") {
     throw new Error(`reconcileRoundRobinLines: stage ${stage.id} is a ${stage.kind}, not a round robin`);
@@ -84,10 +90,20 @@ export async function reconcileRoundRobinLines(
     return { kind: "noop" }; // unchanged, or only departures the withdrawal cascade already walked over
   }
 
-  const regenerate: RoundRobinDecision = { kind: "regenerate", placed: newcomers, vacated: departed };
+  // Task-2 review, ruling 1: a redraw deletes every line, and the delete cascades into the organiser's setup on them (every kind
+  // `stageAttachmentCounts` counts). Slots are carried by pair; the rest is not, so it is refused by name before any write
+  // (the counts Rebuild's confirm reads), pointing to Rebuild, whose dialog lists what it clears. The same counts tell the planner
+  // whether a longer patch is worth keeping (ruling 2): setup on the lines makes a redraw costly.
+  const attachments = await stageAttachmentCounts(tx, stage.id, sealed ?? { streams: 0, youtubeBroadcasts: 0 });
+  const hasSetup = Object.values(attachments).some((n) => n > 0);
+  const regenerateDecision: RoundRobinDecision = { kind: "regenerate", placed: newcomers, vacated: departed };
+  const regenerate = (): RoundRobinDecision => {
+    if (hasSetup) throw roundRobinRefusal("RR_REGENERATE_WOULD_CLEAR_SETUP", { attachments });
+    return regenerateDecision;
+  };
   const stored = rrLinesOfRows(rows);
   // A seat whose entrant was deleted by the FK (a line this change's own delete would have dropped) has no key to reconcile.
-  if (stored.some((l) => l === null)) return regenerate;
+  if (stored.some((l) => l === null)) return regenerate();
   const before = stored as RrLine[];
 
   const schedule = roundRobinStagePlan(stage.kind, stage.config, [...entrants], new Map(poolIds));
@@ -107,14 +123,22 @@ export async function reconcileRoundRobinLines(
     for (const [pool, m] of members) if (m.size % 2 === 1) storedByePools.add(pool);
   }
   const freshByePools = new Set<string | null>(schedule.byes.map((b) => b.pool));
-  const plan = planRoundRobinReconcile(before, fresh, roundRobinShape(before, fresh, { stored: storedByePools, fresh: freshByePools }));
+  const plan = planRoundRobinReconcile(before, fresh, roundRobinShape(before, fresh, { stored: storedByePools, fresh: freshByePools }), {
+    keepLines: hasSetup,
+  });
   if (plan.kind === "noop") return { kind: "noop" };
-  if (plan.kind === "regenerate") return regenerate;
+  if (plan.kind === "regenerate") return regenerate();
 
   // The patch: drop the pairs that are gone, then put each missing pair in the round the planner chose, on the round's next free
   // court (`seq_in_round`), with the leg stored on its key.
   const removed = new Set(plan.remove);
-  if (plan.remove.length > 0) await tx`delete from fixtures where stage_id = ${stage.id} and id in ${tx(plan.remove)}`;
+  if (plan.remove.length > 0) {
+    // Undoable (task-2 review, ruling 3): the lines are recorded before they go, so Undo puts them back; and a chess invite still
+    // queued for a board that goes ends with it (Phase 3 G-1), like every other fixture delete.
+    await recordFixturesCleared(tx, stage.division_id, stage.id, plan.remove);
+    await cancelBoardInvites(tx, plan.remove, FIXTURE_DELETED_REASON);
+    await tx`delete from fixtures where stage_id = ${stage.id} and id in ${tx(plan.remove)}`;
+  }
   const nextSeq = new Map<string, number>();
   const slotOf = (pool: string | null, roundNo: number) => `${pool ?? ""}|${roundNo}`;
   for (const r of rows) {
@@ -190,10 +214,12 @@ export async function dropEntrantFromRoundRobins(tx: Tx, divisionId: string, ent
       "ENTRANT_FIXTURES_HAVE_RESULTS",
     );
   }
-  const gone = await tx<{ id: string }[]>`
-    delete from fixtures
-     where stage_id in ${tx(stageIds)} and (home_entrant_id = ${entrantId} or away_entrant_id = ${entrantId})
-     returning id`;
+  const lines = await tx<{ id: string }[]>`
+    select id from fixtures
+     where stage_id in ${tx(stageIds)} and (home_entrant_id = ${entrantId} or away_entrant_id = ${entrantId})`;
+  // A chess invite still queued for a board that goes ends with it (Phase 3 G-1); before the delete, like every other one.
+  await cancelBoardInvites(tx, lines.map((l) => l.id), FIXTURE_DELETED_REASON);
+  const gone = lines.length === 0 ? [] : await tx<{ id: string }[]>`delete from fixtures where id in ${tx(lines.map((l) => l.id))} returning id`;
   // G7: the victim's bye entries go with it; everybody else's stay exactly as they were.
   await tx`
     update stages set config = jsonb_set(

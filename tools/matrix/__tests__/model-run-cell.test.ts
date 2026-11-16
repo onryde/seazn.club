@@ -369,15 +369,20 @@ describe("runCell", () => {
     expect(r.stepChecks["SEEDED-CHECK"]).toBe(7 * captured.length);
   });
 
-  it("Review Focus 3 — fenced: #879 present, fences ON → no failure, and the fence fired (the walk kept exploring past it)", async () => {
+  it("W5 T2 lifted the #879 fence: the fault present with fences ON is FOUND on I7 (nothing fences it), and the fence never fires", async () => {
     const r = await runCell(input({ fault879: true }));
-    expect(r.failure, JSON.stringify(r.failure)).toBeNull();
     expect(FENCES.map((f) => f.id)).toContain(FENCE_879);
-    expect(r.fenced[FENCE_879]).toBeGreaterThan(0);
-    // Exploring past the fence: every other command still ran, and nothing is vacuous.
-    for (const k of COMMAND_KINDS) expect(r.counts[k].ran, k).toBeGreaterThan(0);
-    expect(r.vacuous).toEqual([]);
+    expect(r.failure?.check, JSON.stringify(r.failure)).toBe(I7);
+    expect(r.fenced[FENCE_879] ?? 0).toBe(0);
     expect(r.fences).toBe(true);
+  });
+  it("W5 T2: a product without the fault (the reconcile by pair) runs the walk clean with fences ON - a late entry is reconciled before Start, refused by name after", async () => {
+    const r = await runCell(input());
+    expect(r.failure, JSON.stringify(r.failure)).toBeNull();
+    for (const k of COMMAND_KINDS) expect(r.counts[k].ran, k).toBeGreaterThan(0);
+    // (the after-Start refusal itself is driven deterministically in model-core.test.ts; a random walk reaches it only by chance)
+    expect(r.counts.Generate.unexpected, "no unexpected refusal").toBe(0);
+    expect(r.vacuous).toEqual([]);
   });
 
   it("fences OFF → #879 found on I7; the shrunk path is Generate, AddEntrant, Generate before any Start; seed and path logged", async () => {

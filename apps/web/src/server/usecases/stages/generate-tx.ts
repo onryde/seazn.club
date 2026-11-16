@@ -37,7 +37,7 @@ import {
   type GenerateOptions,
   type SealedSetupCounts,
 } from "./types";
-import { appendFixturesGenerated, divisionHasStarted } from "./helpers";
+import { appendFixturesGenerated, divisionHasStarted, recordFixturesCleared } from "./helpers";
 import {
   americanoGen,
   BRACKET_WALKOVER_KINDS,
@@ -213,7 +213,9 @@ async function reconcileKnockoutGenerate(
  * name (RR_GENERATE_AFTER_START) and anything else is the named no-op; before Start the pairs are reconciled by (pair, leg) — a
  * change a patch can express writes in place, and one it cannot (a pool that changed parity, a group that re-snaked) is
  * Rebuild's own body (`regenerateStageInTx`) with the times and courts carried by PAIR, so a pair keeps its slot wherever the
- * redraw put it.
+ * redraw put it. A redraw (or a patch that would run longer than one, with nothing set up on the lines) is refused by name,
+ * RR_REGENERATE_WOULD_CLEAR_SETUP, when the lines carry officials, team sheets, devices, streams, availability or calls; every
+ * delete is recorded first (`fixtures_cleared` + snapshot) so Undo restores it.
  */
 async function reconcileRoundRobinGenerate(
   tx: Tx,
@@ -221,10 +223,13 @@ async function reconcileRoundRobinGenerate(
   stage: StageRow,
   field: ActiveEntrant[],
   poolIds: Map<string, string>,
+  sealedSetup: SealedSetupCounts | undefined,
 ): Promise<GenerateWrite> {
-  const decision = await reconcileRoundRobinLines(tx, stage, field, poolIds);
+  const decision = await reconcileRoundRobinLines(tx, stage, field, poolIds, sealedSetup);
   if (decision.kind === "regenerate") {
-    const regen = await regenerateStageInTx(tx, auth, stage.id, stage, { carry: "pair" });
+    // `recordCleared`: the old lines are recorded before the delete, so Undo (which inverts the regenerate's own
+    // `fixtures_generated` first) brings the previous lines back with their times and courts.
+    const regen = await regenerateStageInTx(tx, auth, stage.id, stage, { carry: "pair", recordCleared: true });
     return {
       ...regen.generated,
       outcome: {
@@ -350,7 +355,16 @@ export async function generateStageFixturesTx(
   // Group stages with pools: materialise the pools rows first (idempotent),
   // so generated fixtures can reference them.
   const poolIds = new Map<string, string>();
-  if (stage.kind === "group" && poolCount(stage.config) > 1) {
+  // W5 T3 (X-BD-7, RB5-E5): a group of ONE pool writes its pool too (pool A, on every line), so a group is one thing whatever its
+  // pool count and a pool-aware reader needs no "no pool" special case. A group drawn before this change has lines with no pool at
+  // all and no `pools` row: it stays as it was (its table is the one `pool_id is null` reader's), until a Rebuild draws it again.
+  let legacyOnePool = false;
+  if (stage.kind === "group" && poolCount(stage.config) === 1) {
+    const [lines] = await tx<{ n: number; pooled: number }[]>`
+      select count(*)::int as n, count(pool_id)::int as pooled from fixtures where stage_id = ${stageId}`;
+    legacyOnePool = lines!.n > 0 && lines!.pooled === 0;
+  }
+  if (stage.kind === "group" && !legacyOnePool) {
     const existing = await tx<{ id: string; key: string }[]>`
       select id, key from pools where stage_id = ${stageId}`;
     for (const pool of existing) poolIds.set(pool.key, pool.id);
@@ -400,7 +414,7 @@ export async function generateStageFixturesTx(
   // newcomers owed). Beside the knockout's branch, after the two-entrant refusal above, so a field that fell to 0 or 1 is
   // refused by name and never patched to an empty table (X-BD-5). A fed stage (`config.qualified`) keeps its path.
   if ((stage.kind === "league" || stage.kind === "group") && qualified === null && stage.progression === null && existing.length > 0) {
-    return reconcileRoundRobinGenerate(tx, auth, stage, entrants, poolIds);
+    return reconcileRoundRobinGenerate(tx, auth, stage, entrants, poolIds, opts.sealedSetup);
   }
 
   let swissSeatedCount = 0;
@@ -448,9 +462,10 @@ export async function generateStageFixturesTx(
   } else if (stage.kind === "league" || stage.kind === "group") {
     const plan = roundRobinStagePlan(stage.kind, stage.config, entrants, poolIds);
     gen = plan.gen;
-    // Only a FIRST draw (no lines yet: a new stage, or Rebuild's delete-and-draw) records them. A stage with lines that took this
-    // path is a fed one (`config.qualified`), whose lines are matched positionally below: its byes were recorded when it was drawn.
-    if (existing.length === 0) roundByes = plan.byes;
+    // Every draw of a round robin records its byes: a new stage, Rebuild's delete-and-draw, and a FED stage (`config.qualified`)
+    // drawn again over lines it already holds (matched positionally below). The fed draw runs over the whole qualification list,
+    // so the same schedule writes the same entries each pass. An unfed stage with lines never gets here (`reconcileRoundRobinGenerate`).
+    roundByes = plan.byes;
   } else {
     gen = generateForStage(stage.id, stage.kind, stage.config, entrants, poolIds);
   }
@@ -865,7 +880,7 @@ export async function regenerateStageInTx(
   stage: { division_id: string; kind: string },
   /** W5 T2 (RB5-G7, RB5-L17): `carry: "pair"` — a round robin's Generate that draws the lines again before Start keeps each PAIR's
    *  time and court (`carrySlotsByPair`). Rebuild's own call omits it and keeps the positional carry (X-RB-1). */
-  opts: { carry?: "pair" } = {},
+  opts: { carry?: "pair"; recordCleared?: boolean } = {},
 ): Promise<{ generated: GenerateWrite; removedIds: string[]; slots: { kept: number; freed: number; unscheduled: number } }> {
   await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
   // A frozen division refuses the rebuild — the same predicate as generate's
@@ -1018,6 +1033,9 @@ export async function regenerateStageInTx(
            status, outcome, home_entrant_id, away_entrant_id, home_slot_label, away_slot_label
     from fixtures where stage_id = ${stageId}
     order by pool_id nulls first, round_no, seq_in_round, created_at, id`;
+  // W5 T2 fix round 1 (undo): a Generate that redraws a round robin records the lines first (`fixtures_cleared` + snapshot), so the
+  // ledger's inverse restores them. Rebuild's own call omits it: its Undo contract is unchanged.
+  if (opts.recordCleared === true) await recordFixturesCleared(tx, stage.division_id, stageId, before.map((r) => r.id));
   const deleted = await tx<{ id: string }[]>`
     delete from fixtures where stage_id = ${stageId} returning id`;
 

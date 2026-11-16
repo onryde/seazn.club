@@ -19,6 +19,7 @@ import {
   type LedgerEvent,
 } from "@seazn/engine/history";
 import { EngineError } from "@seazn/engine/core";
+import { snapshotFixtures } from "./fixture-snapshot";
 import { sql, withTenant } from "@/lib/db";
 // Since #382 a manual save AT THE CAP rolls the window instead of refusing, so
 // PaymentRequiredError survives here for one case only: a quota that resolves
@@ -392,42 +393,6 @@ function byeFedSeats(snapshots: readonly FixtureSnapshot[]): Set<string> {
 // own new rows (stages/, "Second pass: feeds") is declared nowhere but that
 // pass, so undoing that regeneration and restoring it does not re-wire it.
 // ---------------------------------------------------------------------------
-
-/** What `snapshotFixtures` returns: every field present (the SQL selects them
- *  all), which a snapshot read back from an older ledger row cannot promise. */
-interface SnapshotRow extends FixtureSnapshot {
-  stage_id: string;
-  pool_id: string | null;
-  round_no: number;
-  at: string | null;
-  court: string | null;
-  locked: boolean;
-  status: string;
-  finished_at: string | null;
-}
-
-/** The one snapshot read. Unordered: `restoreFixtures` owns the order. */
-async function snapshotFixtures(
-  tx: Tx,
-  by: { ids: readonly string[] } | { poolId: string },
-): Promise<SnapshotRow[]> {
-  if ("ids" in by && by.ids.length === 0) return [];
-  const where = "ids" in by ? tx`f.id in ${tx(by.ids as string[])}` : tx`f.pool_id = ${by.poolId}`;
-  // `court` is a courts.id (P9 pass 3a — aliased off court_id, never the
-  // legacy court_label): the restore writes it straight back into an id
-  // column, so a label here would be a display string in a uuid.
-  return tx<SnapshotRow[]>`
-    select f.id, f.stage_id, f.pool_id, f.round_no, f.seq_in_round,
-           f.home_entrant_id, f.away_entrant_id,
-           f.scheduled_at::text as at, f.court_id as court,
-           f.schedule_locked as locked, f.schedule_source, f.fixture_no,
-           f.ext_key, f.lane, f.is_final, f.third_place, f.conditional,
-           f.home_slot_label, f.away_slot_label,
-           f.winner_to_fixture, f.winner_to_slot, f.loser_to_fixture, f.loser_to_slot,
-           f.status, f.outcome, f.finished_at::text as finished_at,
-           exists (select 1 from score_events se where se.fixture_id = f.id) as scored
-    from fixtures f where ${where}`;
-}
 
 /** A row that carried no score events comes back with the status, outcome and
  *  finished_at it had. Every play-driven status is a fold of score events

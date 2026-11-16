@@ -26,22 +26,27 @@ const PLAN: Record<string, { status: 409 | 422; en: string }> = {
   RR_RANK_OVERRIDE_POOL: { status: 422, en: "Each rank can be pinned once per pool, and never above the pool's size." },
   RR_RANK_OVERRIDE_NOT_TABLE: { status: 422, en: "Ranks can only be pinned on a league or group table." },
   RR_CUT_EXCEEDS_FIELD: { status: 422, en: "{qualified} can't qualify from this field: it can supply at most {max}." },
+  // Task 2 fix round 1 (controller ruling): the knockout's KO_REDRAW_WOULD_CLEAR_SETUP, for a league or group.
+  RR_REGENERATE_WOULD_CLEAR_SETUP: {
+    status: 409,
+    en: "The table would have to be drawn again, which clears match setup already on its lines (officials, team sheets, scoring devices, streams, player availability or court calls). Use Rebuild fixtures — it lists what it clears first.",
+  },
 };
 
 const LOCALES = { en, es, fr, nl } as Record<string, Record<string, string>>;
 const placeholders = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
 
 describe("ROUND_ROBIN_REFUSALS (W5 app PR A, Task 2)", () => {
-  it("holds exactly the plan's twelve codes, each with the plan's status and sentence", () => {
+  it("holds exactly the plan's twelve codes plus the review's one, each with the plan's status and sentence", () => {
     expect(Object.keys(ROUND_ROBIN_REFUSALS).sort()).toEqual(Object.keys(PLAN).sort());
-    expect(Object.keys(PLAN).length).toBe(12);
+    expect(Object.keys(PLAN).length).toBe(13);
     let checked = 0;
     for (const [code, want] of Object.entries(PLAN)) {
       const row = ROUND_ROBIN_REFUSALS[code as RoundRobinRefusalCode];
       expect({ status: row.status, en: row.en }, code).toEqual(want);
       checked++;
     }
-    expect(checked).toBe(12);
+    expect(checked).toBe(13);
   });
 
   it("every code has a key present, translated, in all 4 dictionaries, and en says what the server says", () => {
@@ -60,7 +65,7 @@ describe("ROUND_ROBIN_REFUSALS (W5 app PR A, Task 2)", () => {
       expect(en[row.key as keyof typeof en], `${code}: en/ui.json says what the server says`).toBe(row.en);
     }
     // Anti-vacuity: every (code, locale) pair. Zero checked is a failure, not a pass.
-    expect(checked, "(code, locale) pairs checked").toBe(12 * 4);
+    expect(checked, "(code, locale) pairs checked").toBe(13 * 4);
   });
 
   it("isRoundRobinRefusalCode: true for every code, false for any other wire code or a prototype name", () => {
@@ -69,7 +74,7 @@ describe("ROUND_ROBIN_REFUSALS (W5 app PR A, Task 2)", () => {
       expect(isRoundRobinRefusalCode(code), code).toBe(true);
       yes++;
     }
-    expect(yes).toBe(12);
+    expect(yes).toBe(13);
     const others = ["KO_GENERATE_AFTER_START", "SWISS_BYE_NOT_PLACEABLE", "rr_generate_after_start", "", "toString", "__proto__", "constructor", undefined, null, 409];
     for (const other of others) expect(isRoundRobinRefusalCode(other), String(other)).toBe(false);
     expect(others.length).toBe(10);

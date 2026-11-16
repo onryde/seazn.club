@@ -290,8 +290,20 @@ export const StageConfig = z
     carry_deltas: z.unknown().optional(),
     rank_overrides: z.unknown().optional(),
     // W5 T2 (FX-G21): who sits out which round of which leg - written by the server at every round-robin draw, read back through
-    // the stage's own config (a replace round-trips it), never by a client.
-    round_byes: z.unknown().optional(),
+    // the stage's own config (a replace round-trips it). `pool` is the pool's id (null for a league or a one-pool group); `entrant_id`
+    // is an entrant's id, or the seat id (`slot:N`) of a setup stage drawn before its seeds are filled.
+    round_byes: z
+      .array(
+        z
+          .object({
+            pool: z.string().nullable(),
+            round_no: z.number().int().min(1),
+            leg: z.number().int().min(1).max(8),
+            entrant_id: z.string().min(1),
+          })
+          .strict(),
+      )
+      .optional(),
     cross_feeds: z.unknown().optional(),
     placements: z.unknown().optional(),
     // W2c Task 12 (D3): a stage's deciders are its match RULES, written at create as its kind's preset under

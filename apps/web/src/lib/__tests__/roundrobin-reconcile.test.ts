@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import { generateRoundRobin } from "@seazn/engine/scheduling";
 import {
   RR_MAX_LEG,
+  roundSpan,
   RrKeyError,
   planRoundRobinReconcile,
   roundRobinShape,
@@ -49,14 +50,15 @@ describe("rrKey (RB5-G7: the unordered pair, the leg and the pool)", () => {
     expect(rrKey("a", "b", 1, null)).not.toBe(rrKey("a", "b", 2, null));
     expect(rrKey("a", "b", 1, "poolA")).not.toBe(rrKey("a", "b", 1, "poolB"));
     expect(rrKey("a", "b", 1, "poolA")).not.toBe(rrKey("a", "b", 1, null));
-    // The text is the engine's `roundRobinLineKey` shape with the pool in front (app PR B pins the two together).
-    expect(rrKey("b", "a", 2, null)).toBe("|rr:a:b:L2");
+    // The text is the engine's `roundRobinLineKey` shape (app PR B pins the two together): bare for an unpooled stage, and
+    // `pool|`-prefixed only when a pool names it (the engine has no pool).
+    expect(rrKey("b", "a", 2, null)).toBe("rr:a:b:L2");
     expect(rrKey("b", "a", 2, "P")).toBe("P|rr:a:b:L2");
   });
 
   it("orders the pair by code unit, not by locale", () => {
     // "B" (66) < "a" (97) in code units; a locale compare would put "a" first.
-    expect(rrKey("a", "B", 1, null)).toBe("|rr:B:a:L1");
+    expect(rrKey("a", "B", 1, null)).toBe("rr:B:a:L1");
   });
 
   it("refuses by name: a self-pair, a leg outside 1..8, an empty id, an id with ':', a bad pool", () => {
@@ -140,7 +142,7 @@ describe("planRoundRobinReconcile", () => {
         const a = linesOf(n, legs, { stored: true });
         const b = linesOf(n + 2, legs);
         const shape = roundRobinShape(a.lines, b.lines, { stored: a.byePools, fresh: b.byePools });
-        const plan = planRoundRobinReconcile(a.lines, b.lines, shape);
+        const plan = planRoundRobinReconcile(a.lines, b.lines, shape, { keepLines: true });
         if (n % 2 === 1) {
           // An odd pool's byes are recorded per round (FX-G21); a patch cannot keep them true.
           expect(plan, `n=${n} legs=${legs}`).toEqual({ kind: "regenerate" });
@@ -167,7 +169,7 @@ describe("planRoundRobinReconcile", () => {
     for (let n = 2; n <= 9; n++) {
       const a = linesOf(n, 2, { stored: true });
       const b = linesOf(n + 2, 2);
-      const plan = planRoundRobinReconcile(a.lines, b.lines, NO_CHANGE);
+      const plan = planRoundRobinReconcile(a.lines, b.lines, NO_CHANGE, { keepLines: true });
       expect(plan.kind, `n=${n}`).toBe("patch");
       if (plan.kind === "patch") expect(plan.insert.map((l) => l.key).sort()).toEqual(minus(keysOf(b.lines), keysOf(a.lines)));
       checked++;
@@ -212,7 +214,7 @@ describe("planRoundRobinReconcile", () => {
       const a = linesOf(n, 2, { stored: true });
       const b = linesOf(n - 2, 2);
       const shape = roundRobinShape(a.lines, b.lines, { stored: a.byePools, fresh: b.byePools });
-      const plan = planRoundRobinReconcile(a.lines, b.lines, shape);
+      const plan = planRoundRobinReconcile(a.lines, b.lines, shape, { keepLines: true });
       expect(plan.kind, `n=${n}`).toBe("patch");
       if (plan.kind !== "patch") continue;
       const gone = new Set(entrantsOf(n).slice(n - 2));
@@ -232,7 +234,7 @@ describe("planRoundRobinReconcile", () => {
     const dupFresh = [...b.lines, { ...b.lines[0]! }];
     expect(planRoundRobinReconcile(a.lines, dupFresh, NO_CHANGE)).toEqual({ kind: "regenerate" });
     // The control: the same two sides without the duplicate patch.
-    expect(planRoundRobinReconcile(a.lines, b.lines, NO_CHANGE).kind).toBe("patch");
+    expect(planRoundRobinReconcile(a.lines, b.lines, NO_CHANGE, { keepLines: true }).kind).toBe("patch");
   });
 
   it("a structural change is a regenerate whatever the keys say", () => {
@@ -249,7 +251,7 @@ describe("planRoundRobinReconcile", () => {
       for (let legs = 1; legs <= 3; legs++) {
         const a = linesOf(n, legs, { stored: true });
         const b = linesOf(n + 2, legs);
-        const plan = planRoundRobinReconcile(a.lines, b.lines, NO_CHANGE);
+        const plan = planRoundRobinReconcile(a.lines, b.lines, NO_CHANGE, { keepLines: true });
         if (plan.kind !== "patch") throw new Error(`n=${n} legs=${legs}: expected a patch`);
         const table = [...a.lines, ...plan.insert];
         const seen = new Set<string>();
@@ -284,7 +286,7 @@ describe("planRoundRobinReconcile", () => {
     expect(keysOf(before).size).toBe(before.length);
     const shape = roundRobinShape(before, fresh, { stored: new Set(), fresh: new Set() });
     expect(shape).toEqual(NO_CHANGE);
-    const plan = planRoundRobinReconcile(before, fresh, shape);
+    const plan = planRoundRobinReconcile(before, fresh, shape, { keepLines: true });
     expect(plan.kind).toBe("patch");
     if (plan.kind !== "patch") return;
     expect(plan.insert.every((l) => l.pool === "pa"), "only pool pa grew").toBe(true);
@@ -302,8 +304,67 @@ describe("planRoundRobinReconcile", () => {
     if (plan.kind !== "patch") return;
     expect(plan.insert.map((l) => l.key)).toEqual([dropped[0]!.key]);
     expect(plan.insert[0]!.leg).toBe(2);
+    // No bloat: the line went back into its own fresh round, so the patched table is no longer than a fresh draw (a patch
+    // without `keepLines` is only ever one that is not longer).
+    expect(roundSpan([...before, ...plan.insert])).toBe(roundSpan(b.lines));
     // The same pair's leg-1 line is still there, so it was not mistaken for the missing leg-2 one.
     expect(before.some((l) => l.leg === 1 && l.home !== "" && rrKey(l.home, l.away, 1, null) === rrKey(dropped[0]!.home, dropped[0]!.away, 1, null))).toBe(true);
+  });
+
+  // Task-2 review, ruling 2 (bloat). Spans are derived by hand, not read off the planner:
+  //  - 1 leg, 4 -> 6. A fresh 6-field is n-1 = 5 rounds. The old four fill rounds 1-3 completely (every round seats all four), so
+  //    the newcomers E and F meet A-D only in round 4 or later, each needing four distinct rounds (4-7); the engine's own E-F
+  //    line is round 4, inside that stretch and seating both of them, so one more round is needed: 8.
+  //  - 2 legs, 6 -> 8. A fresh 8-field is 2 x 7 = 14 rounds. The old six fill rounds 1-10, so G and H meet the six old players
+  //    twice each (12 rounds) from round 11 on = 11..22; the engine's leg-2 G-H line is round 14 (the leg-1 one is round 7,
+  //    which the old table leaves free), inside that stretch, so one more: 23.
+  describe("bloat: a patched table longer than a fresh draw is drawn again, unless setup on its lines would be lost", () => {
+    const cases = [
+      { n: 4, m: 6, legs: 1, patched: 8, fresh: 5 },
+      { n: 6, m: 8, legs: 2, patched: 23, fresh: 14 },
+    ] as const;
+
+    it("without setup on the lines the longer patch is a regenerate", () => {
+      let checked = 0;
+      for (const c of cases) {
+        const a = linesOf(c.n, c.legs, { stored: true });
+        const b = linesOf(c.m, c.legs);
+        const shape = roundRobinShape(a.lines, b.lines, { stored: a.byePools, fresh: b.byePools });
+        expect(shape, `${c.n}->${c.m}: the shape alone would patch`).toEqual(NO_CHANGE);
+        expect(planRoundRobinReconcile(a.lines, b.lines, shape), `${c.n}->${c.m} legs ${c.legs}`).toEqual({ kind: "regenerate" });
+        checked++;
+      }
+      expect(checked).toBe(2);
+    });
+
+    it("with setup on the lines (keepLines) the same field patches, and the spans are the hand-derived ones", () => {
+      let checked = 0;
+      for (const c of cases) {
+        const a = linesOf(c.n, c.legs, { stored: true });
+        const b = linesOf(c.m, c.legs);
+        const plan = planRoundRobinReconcile(a.lines, b.lines, NO_CHANGE, { keepLines: true });
+        expect(plan.kind, `${c.n}->${c.m}`).toBe("patch");
+        if (plan.kind !== "patch") continue;
+        expect(roundSpan([...a.lines, ...plan.insert]), `${c.n}->${c.m} legs ${c.legs}: patched span`).toBe(c.patched);
+        expect(roundSpan(b.lines), `${c.n}->${c.m} legs ${c.legs}: fresh span`).toBe(c.fresh);
+        expect(c.patched, "the premise: the patch IS longer").toBeGreaterThan(c.fresh);
+        checked++;
+      }
+      expect(checked).toBe(2);
+    });
+
+    it("the predicate has two sides: a removal that leaves the table no longer than a fresh draw patches, one that leaves a late line regenerates", () => {
+      // Hand-built, not the engine's: a-b stands in round R and c-d (a departed pair's line) in round 3; the fresh field is a-b alone
+      // in round 1. Removing c-d leaves a-b in round R: R = 1 is as long as the fresh draw (a patch), R = 3 is longer (a redraw).
+      const line = (key: string, home: string, away: string, roundNo: number, id?: string): RrLine => ({ key, home, away, roundNo, leg: 1, pool: null, ...(id ? { id } : {}) });
+      const fresh = [line("rr:a:b:L1", "a", "b", 1)];
+      const early = [line("rr:a:b:L1", "a", "b", 1, "ab"), line("rr:c:d:L1", "c", "d", 3, "cd")];
+      const late = [line("rr:a:b:L1", "a", "b", 3, "ab"), line("rr:c:d:L1", "c", "d", 3, "cd")];
+      expect(planRoundRobinReconcile(early, fresh, NO_CHANGE)).toEqual({ kind: "patch", insert: [], remove: ["cd"] });
+      expect(planRoundRobinReconcile(late, fresh, NO_CHANGE)).toEqual({ kind: "regenerate" });
+      expect(planRoundRobinReconcile(late, fresh, NO_CHANGE, { keepLines: true })).toEqual({ kind: "patch", insert: [], remove: ["cd"] });
+      expect(roundSpan([])).toBe(0);
+    });
   });
 
   it("a stored line to remove with no id is a defect refused by name, not an empty remove", () => {

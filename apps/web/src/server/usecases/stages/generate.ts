@@ -100,8 +100,9 @@ async function generateStageFixturesWrite(
       // T26c (I1, round-trip budget): whether the division holds a FED page playoff - the one size gate a non-knockout root
       // answers to - and the division's status, read in this same statement, so a root whose division has no page playoff
       // pays no extra round trip for the gate below (generate-roundtrips.test.ts pins the budget).
-      const [stage] = await tx<(StageRow & { fed_page_playoff: boolean; division_status: string | null })[]>`
+      const [stage] = await tx<(StageRow & { fed_page_playoff: boolean; division_status: string | null; has_lines: boolean })[]>`
         select ${tx(STAGE_COLS)},
+               exists (select 1 from fixtures x where x.stage_id = stages.id) as has_lines,
                exists (select 1 from stages p
                         where p.division_id = stages.division_id and p.kind = 'page_playoff' and p.progression is not null)
                  as fed_page_playoff,
@@ -144,6 +145,12 @@ async function generateStageFixturesWrite(
       const rootKnockout = stage.kind === "knockout" && stage.progression === null;
       const drawn = rootKnockout && (await tx`select 1 from fixtures where stage_id = ${stageId} limit 1`).length > 0;
       readsSealedSetup = drawn && !Array.isArray(stage.config.qualified);
+      // W5 T2 fix round 1: a root league or group that already holds its lines can be redrawn by this Generate too
+      // (`reconcileRoundRobinGenerate`), and refuses over setup the same way, so it reads the sealed counts as well. Only the
+      // lines-already-drawn case pays the read, as the knockout's does.
+      if (!readsSealedSetup && (stage.kind === "league" || stage.kind === "group") && stage.progression === null && !Array.isArray(stage.config.qualified)) {
+        readsSealedSetup = stage.has_lines;
+      }
       // W4 T15 (X-PL-1, X-QM-5): a root knockout about to be drawn, or redrawn before Start, on a field its format cannot play. A
       // bracket drawn and started is left out: after Start a withdrawal is the bracket's to settle, and this Generate reshapes nothing.
       if (rootKnockout) {

@@ -6,7 +6,7 @@ import { check, newSession, signIn, tag, v1, v1data } from "../harness.ts";
  * server. Own fresh owner; keyless; every read and write is a v1 route (the generic sport needs no key).
  *
  * T2 (X-CU-6, FX-G1): a league of four, generated, then two entrants added before Start and Generate pressed again, owes
- * exactly the six pairs the newcomers add: 6 + 9 = 15 lines, every unordered pair of the six once. Main wrote nine new
+ * exactly the pairs the newcomers owe, drawn once: 15 lines, every unordered pair of the six once. Main wrote nine new
  * positional lines that repeated pairs already drawn and left the newcomers' pairs short.
  * T2 (FX-G21): a league of five has a bye each round; the stage's `config.round_byes` names who sat out which round, each
  * entrant once (five rounds, five byes), so an odd field's byes are a stored fact and not a thing every reader re-derives.

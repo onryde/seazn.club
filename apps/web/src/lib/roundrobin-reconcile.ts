@@ -66,7 +66,9 @@ export function rrKey(a: string, b: string, leg: number, pool: string | null): s
   if (pool !== null && (pool === "" || pool.includes("|"))) throw new RrKeyError(`pool ${JSON.stringify(pool)} is empty or holds "|"`);
   const lo = a < b ? a : b;
   const hi = a < b ? b : a;
-  return `${pool ?? ""}|rr:${lo}:${hi}:L${leg}`;
+  // The engine's own `roundRobinLineKey` shape for an unpooled stage; a pooled one is prefixed `pool|` (the engine has no pool).
+  const line = `rr:${lo}:${hi}:L${leg}`;
+  return pool === null ? line : `${pool}|${line}`;
 }
 
 /** The leg a round-robin line's `ext_key` carries (`rrExtKey`'s `-L{leg}` tail), or null for a line generated before the leg
@@ -152,12 +154,21 @@ function hasRepeat(lines: readonly RrLine[]): boolean {
  *  - no line either side, or the same keys both sides: `noop`;
  *  - a repeated key either side, or a structural change (`shape`): `regenerate` — the caller deletes the stage's lines and
  *    draws them again with times and courts carried by pair;
- *  - otherwise `patch`: insert every key only the fresh schedule has, remove every stored line whose key it does not.
+ *  - otherwise `patch`: insert every key only the fresh schedule has, remove every stored line whose key it does not - unless the
+ *    patched table would run MORE rounds than a fresh draw and no setup on the lines would be lost (`opts.keepLines` false), when
+ *    it is `regenerate`.
  *
  * Each inserted line sits in the fresh schedule's round, moved later (never earlier) while that round already seats one of its
  * two entrants in the same pool: a patched table must never seat a player twice in a round.
  */
-export function planRoundRobinReconcile(before: readonly RrLine[], fresh: readonly RrLine[], shape: RrShape): RrPlan {
+export function planRoundRobinReconcile(
+  before: readonly RrLine[],
+  fresh: readonly RrLine[],
+  shape: RrShape,
+  /** `keepLines`: the stage's lines carry organiser setup a redraw would clear (officials, lineups, device links...), so the
+   *  patch is kept even when it is longer than a fresh draw. */
+  opts: { keepLines?: boolean } = {},
+): RrPlan {
   if (hasRepeat(before) || hasRepeat(fresh)) return { kind: "regenerate" };
   if (shape.parityFlipped || shape.poolMembershipChanged) return { kind: "regenerate" };
   const freshKeys = new Set(fresh.map((l) => l.key));
@@ -192,7 +203,18 @@ export function planRoundRobinReconcile(before: readonly RrLine[], fresh: readon
     seat(placed);
     insert.push(placed);
   }
+  // Bloat (task-2 review, ruling): a patch places a newcomer's lines after the rounds the old lines already fill, so a table
+  // patched twice can run many rounds longer than a fresh draw of the same field would. When the patched table's last round is
+  // later than the fresh draw's and nothing the organiser set up on the lines would be lost, the stage is drawn again.
+  if (!opts.keepLines && roundSpan([...before.filter((l) => freshKeys.has(l.key)), ...insert]) > roundSpan(fresh)) {
+    return { kind: "regenerate" };
+  }
   return { kind: "patch", insert, remove };
+}
+
+/** The last round any line stands in (0 for no lines): how long the table runs. Pools play side by side, so the longest pool. */
+export function roundSpan(lines: readonly { roundNo: number }[]): number {
+  return lines.reduce((m, l) => Math.max(m, l.roundNo), 0);
 }
 
 /** The pools a set of lines stands in, each with its entrants and its keys. */

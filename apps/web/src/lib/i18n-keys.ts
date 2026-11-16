@@ -8075,6 +8075,7 @@ export type DictionaryKey =
   | "roundrobin.refusal.RR_RANK_OVERRIDE_NOT_TABLE"
   | "roundrobin.refusal.RR_RANK_OVERRIDE_POOL"
   | "roundrobin.refusal.RR_SUBSTITUTE_PARTNER_REFUSED"
+  | "roundrobin.refusal.RR_REGENERATE_WOULD_CLEAR_SETUP"
   | "routeError.body"
   | "routeError.reference"
   | "routeError.retry"
