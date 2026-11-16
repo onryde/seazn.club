@@ -168,7 +168,10 @@
 .mkp-vid.mkp-court{background:linear-gradient(#3a3350 0 30%,#1f6e63 30%,#18584f)}
 .mkp-vid.mkp-court::before{left:8%;right:8%;top:46%;bottom:auto;height:2px;background:#e9e6f5;transform:none}
 .mkp-ov-a .mkp-nm.mkp-nm2{margin-left:0}
-.mkp-mc-r b .mkp-sets{color:#b9b0d8;font-size:17px;margin-right:12px}
+/* set columns sit in a row and line up between the two sides (`.mkp-mc-r span` above is a flex box, which stacked them) */
+.mkp-mc-r b{display:flex;align-items:baseline;justify-content:flex-end}
+.mkp-mc-r b span{display:block;min-width:2ch;text-align:right;font-variant-numeric:tabular-nums}
+.mkp-mc-r b .mkp-sets{color:#b9b0d8;font-size:17px;margin-right:12px;min-width:1ch;text-align:center}
 .mkp-setchip{border-radius:999px;background:#3b3158;font-size:12.5px;font-weight:700;padding:4px 10px;font-variant-numeric:tabular-nums}
 .mkp-vidwrap{container-type:inline-size}
 .mkp-ov-a{display:flex;align-items:center;gap:1em;padding:.7em 1em;border-bottom:.28em solid var(--mk-lime)}

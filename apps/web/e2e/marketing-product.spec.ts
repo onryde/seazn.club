@@ -161,6 +161,10 @@ test.describe("product pages: the working demo", () => {
     expect(a0).not.toBe(b0);
     await expect(page.getByTestId("tennis-stream-score")).toHaveText(`${a0}-${b0}`);
     const cols0 = await page.getByTestId("tennis-setcol-a").count();
+    // The set columns read across, on the line of the current call: not stacked above it.
+    const tops = await page.locator('[data-testid="tennis-setcol-a"], [data-testid="tennis-mc-call-a"]').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().bottom)));
+    expect(tops.length).toBe(cols0 + 1);
+    expect(Math.max(...tops) - Math.min(...tops), `set columns and the call share a line: ${tops}`).toBeLessThanOrEqual(8);
 
     await page.getByTestId("tennis-point-b").click();
     // The trailing side draws level: both sides now show the call the leader opened on.
