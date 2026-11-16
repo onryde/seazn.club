@@ -196,7 +196,9 @@ scorer starts the pad, then shows the live scoreboard.
 
 Each court gets one camera, set up once for the day. When a match is called to or starts on that
 court, the court's stream shows that match: overlay with those players and the sport's score.
-Nobody re-points a stream per match. Between matches the stream shows a court-idle card.
+Nobody re-points a stream per match. Each streamed match is its own broadcast and its own video (court stream design 2026-11-14, O2); between matches nothing is on air. Superseded by O11, owner 2026-11-14.
+
+Built as the court stream: spec `../seazn.club.capture/docs/specs/2026-11-14-court-stream-design.md`, plan `docs/superpowers/plans/2026-11-14-court-stream-web.md`.
 
 **This is new plumbing, not just a new screen.** Every stream table today is per fixture:
 `fixture_stream_sessions` (V410), `fixture_stream_codes` / `fixture_stream_settings` /

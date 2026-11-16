@@ -604,6 +604,11 @@ const WALKTHROUGH_SPECS: string[] = [
   // and each amber the server names, the beat-confirmed "Phone not ready", the automatic start's refusal, and the
   // takeover notice (dismissed across a reload, gone after Revoke & reissue, naming Stop while live).
   "capture-panel-pr2.spec.ts",
+  // Court stream (spec 2026-11-14, plan Task 14) — one court phone and three matches in a row on the shortened automatic-streaming
+  // timings: the desk links Court 2, the phone claims it by the court's QR, A starts, B starts inside A's tail and takes the court
+  // (a handover, not the tail), turning Stream off on B never ends its video, C (switch off) streams nothing, B's tail ends it, and
+  // org_stream_credits holds exactly two consume rows. The match page's panel names the court's phone at 1280 and 320 (Task 13).
+  "court-stream.spec.ts",
 
   // Online chess (Lichess) — OTB has no Play CTA, an online board links to no
   // Lichess game, and the organiser's needs-result queue resolves a held board;
