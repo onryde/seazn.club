@@ -2,20 +2,14 @@ import type { Metadata } from "next";
 import Link from "@/components/ui/console-link";
 import { notFound } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth";
-import { getDiscoveryLive, getDiscoveryThisWeek } from "@/server/public-site/discovery";
-import { ThisWeekSection } from "@/components/discovery-cards";
 import { MarketingShell } from "@/components/marketing/marketing-shell";
 import { HeroVignette } from "@/components/marketing/hero-vignette";
 import { HERO_SCENES, heroSceneLabelKey, type HeroSceneKey } from "@/components/marketing/hero-scenes";
-import { LiveTicker } from "@/components/marketing/live-ticker";
-import { TheDraw } from "@/components/marketing/the-draw";
-import { MatchdayTools, AlsoInTheKit } from "@/components/marketing/matchday-tools";
-import { MotifDivider } from "@/components/marketing/motif-divider";
+import { CompetitionFlow } from "@/components/marketing/competition-flow";
 import { TicketStubs } from "@/components/marketing/ticket-stubs";
 import { QuickMatchCta } from "@/components/marketing/quick-match-cta";
 import { HeroEventLink } from "@/components/marketing/hero-event-link";
 import { RecentStrip } from "@/components/quick-match/recent-strip";
-import { marketingPreview } from "@/lib/marketing/format-preview";
 import { preferredCurrency } from "@/lib/currency-server";
 import { loadPricingMatrix } from "@/lib/pricing-matrix-server";
 import { getDictionary, t } from "@/lib/i18n";
@@ -58,12 +52,6 @@ export default async function HomePage({ params }: { params: Promise<{ lang: str
   const user = await getCurrentUser().catch(() => null);
 
   const d = await getDictionary(lang, "marketing");
-  const audiences = [
-    { key: "clubs", href: "/use-cases/clubs" },
-    { key: "events", href: "/use-cases/events" },
-    { key: "schools", href: "/use-cases/schools" },
-  ] as const;
-
   // Fail-soft: DB may be unreachable at build (same contract as before).
   //
   // `planMatrix` joined this list when the ticket stubs' bullets became
@@ -81,9 +69,7 @@ export default async function HomePage({ params }: { params: Promise<{ lang: str
   // screen offers, read and named the way that page does (`listQuickMatchSports`, `setupSports`), so it never offers a
   // sport /play would ignore. Empty on failure: the Start alone, and /play says why. The failure is logged at error, as
   // /play logs the same read (review m3): the hero's one primary is dead until it recovers.
-  const [liveNow, thisWeek, currency, planMatrix, recentQuickMatches, quickMatchOffer, ui] = await Promise.all([
-    getDiscoveryLive().catch(() => []),
-    getDiscoveryThisWeek().catch(() => []),
+  const [currency, planMatrix, recentQuickMatches, quickMatchOffer, ui] = await Promise.all([
     preferredCurrency(null).catch(() => "usd" as const),
     loadPricingMatrix().catch(() => ({})),
     readRecentQuickMatches(),
@@ -98,8 +84,6 @@ export default async function HomePage({ params }: { params: Promise<{ lang: str
   const heroSceneLabels = Object.fromEntries(
     (Object.keys(HERO_SCENES) as HeroSceneKey[]).map((scene) => [scene, t(d, heroSceneLabelKey(scene))]),
   ) as Record<HeroSceneKey, string>;
-  // SSR default draw = the configurator's no-JS fallback (design/v3/12 §4.4).
-  const defaultDraw = marketingPreview("groups-knockout", 8);
 
   return (
     <MarketingShell variant="night-scroll" lang={lang}>
@@ -172,63 +156,7 @@ export default async function HomePage({ params }: { params: Promise<{ lang: str
           />
         </section>
 
-        <LiveTicker fixtures={liveNow} />
-
-        {/* The Draw */}
-        <section id="the-draw" className="bg-[var(--mk-light-violet)] py-20">
-          <div className="mx-auto max-w-5xl px-4">
-            <h2 className="mk-display mb-2 text-center text-4xl font-bold text-purple-950">
-              {t(d, "home.draw.title")}
-            </h2>
-            <p className="mb-10 text-center text-slate-600">{t(d, "home.draw.subhead")}</p>
-            <TheDraw initialPhases={defaultDraw} />
-          </div>
-        </section>
-
-        <MotifDivider kind="shuttle" />
-
-        {/* Matchday tools */}
-        <section className="mx-auto max-w-5xl px-4 pb-20 pt-4">
-          <h2 className="mk-display mb-2 text-center text-4xl font-bold text-purple-950">
-            {t(d, "home.tools.title")}
-          </h2>
-          <p className="mb-10 text-center text-slate-600">{t(d, "home.tools.subhead")}</p>
-          <MatchdayTools dict={d} />
-          <div className="mt-12 border-t border-purple-100 pt-8">
-            <AlsoInTheKit dict={d} />
-          </div>
-        </section>
-
-        <MotifDivider kind="knight" />
-
-        {/* Who plays here */}
-        <section className="bg-[var(--mk-light-warm)] py-16">
-          <div className="mx-auto max-w-5xl px-4">
-            <h2 className="mk-display mb-8 text-center text-4xl font-bold text-purple-950">
-              {t(d, "home.audiences.title")}
-            </h2>
-            <div className="grid gap-6 sm:grid-cols-3">
-              {audiences.map((c) => (
-                <Link
-                  key={c.href}
-                  href={c.href}
-                  className="card block p-6 transition hover:border-purple-300 hover:shadow-md"
-                >
-                  <h3 className="mk-display mb-1 text-lg font-semibold text-slate-800">
-                    {t(d, `home.audiences.${c.key}.title`)}
-                  </h3>
-                  <p className="text-sm text-slate-500">{t(d, `home.audiences.${c.key}.body`)}</p>
-                  <p className="mt-3 text-xs font-semibold text-purple-600">
-                    {t(d, "home.audiences.learnMore")}
-                  </p>
-                </Link>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        {/* Playing this week (collapses when empty) */}
-        <ThisWeekSection entries={thisWeek} dict={d} lang={lang} />
+        <CompetitionFlow dict={d} lang={lang} currency={currency} />
 
         {/* Floodlit finale — pricing + CTA in one night block */}
         <section className="relative overflow-hidden bg-[linear-gradient(180deg,var(--mk-night-2),var(--mk-night))] py-20 text-center">

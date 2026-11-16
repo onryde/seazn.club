@@ -352,8 +352,6 @@ const EXEMPT: Record<string, string> = {
     "redeems an emailed invite token: the token proves the inbox and is the credential, it mints a session only for a new or unverified invitee; POST-only, per-IP AUTH_LIMIT",
   "claims/[token]/accept/route.ts POST":
     "redeems an emailed person-claim token: signed in it links the caller's own account, signed out it needs the emailed secret plus a same-origin request; per-IP AUTH_LIMIT",
-  "public/format-preview/route.ts POST":
-    "pure computation over placeholder entrants for the home configurator: no database, no session, no mail; the answer is cached per (format, entrants); per-IP limit of 30 a minute",
   "consent/route.ts POST": "cookie-consent receipt: writes one row, sends no mail; per-IP CONSENT_LIMIT; a challenge would block the consent banner itself",
   "v1/public/registrations/[id]/checkout/route.ts POST":
     "pay: needs the registrant's own token for an existing registration, per-IP CHECKOUT_LIMIT; revisit if Checkout Session spend becomes a target",
@@ -474,8 +472,8 @@ describe("route-tree sweep: every write handler under app/api is gated, behind a
     for (const [k, why] of Object.entries(EXEMPT)) expect([k, why.length > 30]).toEqual([k, true]);
   });
 
-  it("the three anonymous token and compute routes the review named are exempt, not hidden behind a rule", () => {
-    for (const k of ["invites/[token]/claim/route.ts POST", "claims/[token]/accept/route.ts POST", "public/format-preview/route.ts POST"]) {
+  it("the two anonymous token routes the review named are exempt, not hidden behind a rule", () => {
+    for (const k of ["invites/[token]/claim/route.ts POST", "claims/[token]/accept/route.ts POST"]) {
       expect([k, tree.find((t) => key(t.handler) === k)?.cls, k in EXEMPT]).toEqual([k, "anonymous", true]);
     }
   });

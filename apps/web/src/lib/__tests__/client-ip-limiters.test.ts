@@ -35,7 +35,6 @@ import { POST as consent } from "@/app/api/consent/route";
 import { POST as funnelClaim } from "@/app/api/funnel/claim/route";
 import { POST as funnelStart } from "@/app/api/funnel/start/route";
 import { POST as inviteClaim } from "@/app/api/invites/[token]/claim/route";
-import { POST as formatPreview } from "@/app/api/public/format-preview/route";
 import { POST as deviceLinkMint } from "@/app/api/v1/fixtures/[id]/device-links/route";
 import { POST as deviceLinkReissue } from "@/app/api/v1/fixtures/[id]/device-links/reissue/route";
 import { GET as joinPreview, POST as join } from "@/app/api/v1/public/orgs/[orgSlug]/competitions/[slug]/register/join/route";
@@ -81,7 +80,6 @@ const LIMITERS: Row[] = [
   { name: "POST /api/funnel/claim", namespace: "funnel-claim", call: (h) => funnelClaim(post("/api/funnel/claim", h)) },
   { name: "POST /api/funnel/start", namespace: "funnel-start", call: (h) => funnelStart(post("/api/funnel/start", h)) },
   { name: "POST /api/invites/[token]/claim", namespace: "invite-claim", call: (h) => inviteClaim(post("/api/invites/t/claim", h), ctx({ token: "t" })) },
-  { name: "POST /api/public/format-preview", namespace: "format-preview", call: (h) => formatPreview(post("/api/public/format-preview", h)) },
   { name: "POST /api/v1/fixtures/[id]/device-links", namespace: "dlmint", call: (h) => deviceLinkMint(post(`/api/v1/fixtures/${ID}/device-links`, h), ctx({ id: ID })) },
   {
     name: "POST /api/v1/fixtures/[id]/device-links/reissue",
@@ -134,10 +132,10 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllEnvs());
 
-// 18 rows for the 19 IP-keyed buckets in the 17 files: register's second, per-competition bucket (`regsubmit:${ip}:org:slug`,
+// 17 rows for the 18 IP-keyed buckets in the 16 files: register's second, per-competition bucket (`regsubmit:${ip}:org:slug`,
 // behind its honeypot and body) reuses the `ip` its first bucket is proven on here.
-it("covers all 18 limiter calls the change moved, in 17 files (anti-vacuity: an emptied table would pass every row below by not running)", () => {
-  expect(LIMITERS).toHaveLength(18);
+it("covers all 17 limiter calls, in 16 files (anti-vacuity: an emptied table would pass every row below by not running)", () => {
+  expect(LIMITERS).toHaveLength(17);
   expect(TOPOLOGIES).toHaveLength(3);
 });
 

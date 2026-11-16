@@ -26,38 +26,9 @@ export interface DiscoveryLiveFixture {
   division_slug: string;
 }
 
-/** "Live right now" strip (doc 15 §2): up to ~6 in-play fixtures across all
- *  discoverable competitions. Summary comes from match_states via
- *  public_fixtures_v — render-agnostic score lines, never person data. */
-export const getDiscoveryLive = unstable_cache(
-  async (): Promise<DiscoveryLiveFixture[]> => {
-    const rows = await sql<
-      (Omit<DiscoveryLiveFixture, "headline" | "strength"> & {
-        summary: { headline?: string; detail?: { strength?: string | null } } | null;
-      })[]
-    >`
-      select f.id, d.sport_key, f.summary,
-             disc.name as competition_name, disc.org_slug,
-             disc.slug as comp_slug, d.slug as division_slug
-      from public_discovery_v disc
-      join public_divisions_v d on d.competition_id = disc.id
-      join public_fixtures_v f on f.division_id = d.id
-      where f.status = 'in_play'
-      order by f.scheduled_at nulls last, f.id
-      limit 6`;
-    return rows.map(({ summary, ...r }) => ({
-      ...r,
-      headline: summary?.headline ?? null,
-      strength: summary?.detail?.strength ?? null,
-    }));
-  },
-  ["discovery-live"],
-  { tags: [DISCOVERY_TAG], revalidate: REVALIDATE_FAST },
-);
-
 /** The /live floodlit wall: every in-play fixture across discoverable
- *  competitions (same shape/filters as the strip, page-sized cap). The home
- *  ticker keeps its 6; this is where "all of it" lives. */
+ *  competitions, page-sized cap. Summary comes from match_states via
+ *  public_fixtures_v: render-agnostic score lines, never person data. */
 export const getDiscoveryLiveAll = unstable_cache(
   async (): Promise<DiscoveryLiveFixture[]> => {
     const rows = await sql<
@@ -81,23 +52,6 @@ export const getDiscoveryLiveAll = unstable_cache(
     }));
   },
   ["discovery-live-all"],
-  { tags: [DISCOVERY_TAG], revalidate: REVALIDATE_FAST },
-);
-
-/** "Happening this week" cards (doc 15 §2): upcoming discoverable
- *  competitions — starting within 7 days or with a scheduled fixture ahead. */
-export const getDiscoveryThisWeek = unstable_cache(
-  async (): Promise<DiscoveryEntry[]> => {
-    return sql<DiscoveryEntry[]>`
-      select * from public_discovery_v
-      where in_play_count = 0
-        and ((starts_on >= current_date and starts_on < current_date + 7)
-          or (next_fixture_at is not null and next_fixture_at < now() + interval '7 days'))
-      order by featured desc, coalesce(starts_on, current_date) asc,
-               entrant_count desc, id
-      limit 6`;
-  },
-  ["discovery-week"],
   { tags: [DISCOVERY_TAG], revalidate: REVALIDATE_FAST },
 );
 

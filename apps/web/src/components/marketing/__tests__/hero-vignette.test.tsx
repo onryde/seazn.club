@@ -253,7 +253,7 @@ describe("HeroVignette under prefers-reduced-motion: the final frame, no motion"
   });
 
   it("the CSS: every part the vignette animates stops under reduced motion, the object rests where it lands, the trail is drawn", () => {
-    const vignette = CSS.slice(CSS.indexOf("/* Hero vignette choreography"), CSS.indexOf("/* LIVE ticker marquee"));
+    const vignette = CSS.slice(CSS.indexOf("/* Hero vignette choreography"), CSS.indexOf("/* Nav variants"));
     const cut = vignette.indexOf("@media (prefers-reduced-motion: reduce)");
     expect(cut, "the vignette's reduced-motion block").toBeGreaterThan(0);
     const reduced = vignette.slice(cut);
@@ -375,7 +375,7 @@ describe("HeroVignette holds its plays while it is off-screen (review m5)", () =
   });
 
   it("the CSS holds every part under the attribute, after (so over) every rule that animates one; the scorebug's pulse is inside", () => {
-    const vignette = CSS.slice(CSS.indexOf("/* Hero vignette choreography"), CSS.indexOf("/* LIVE ticker marquee"));
+    const vignette = CSS.slice(CSS.indexOf("/* Hero vignette choreography"), CSS.indexOf("/* Nav variants"));
     const hold = vignette.match(/\[data-offscreen\]\s+\.mk-vignette\s+\*\s*\{([^}]*)\}/);
     expect(hold, "the off-screen hold rule").not.toBeNull();
     expect(hold![1]).toMatch(/animation-play-state:\s*paused/);

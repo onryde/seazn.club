@@ -184,12 +184,12 @@ const at = (html: string, testid: string) => html.search(new RegExp(`\\bdata-tes
 function ctaButton(html: string, label: string): string | undefined {
   return [...html.matchAll(/<button\b[^>]*>([^<]*)<\/button>/g)].find((m) => m[1] === label)?.[0];
 }
-/** The hero: from the page's <main> to The Draw, the next section a visitor meets. */
+/** The hero: from the page's <main> to the competition flow, the next section a visitor meets. */
 function heroOf(html: string): string {
   const start = html.indexOf("<main");
-  const end = html.indexOf('id="the-draw"');
+  const end = html.indexOf('id="how-it-works"');
   expect(start, "the page's <main>").toBeGreaterThan(-1);
-  expect(end, "The Draw").toBeGreaterThan(start);
+  expect(end, "the competition flow").toBeGreaterThan(start);
   return html.slice(start, end);
 }
 /** The hero's quick match form: its opening tag and its whole markup, or null when there is none. */
@@ -320,7 +320,7 @@ describe("the hero's quick match start (spec §5 step 1, Option A)", () => {
     expect(form?.tag).toContain('action="/en/play"');
     expect(form!.body).not.toContain("<select");
     expect(ctaButton(form!.body, enMarketing["quickMatch.cta"])).toBeDefined();
-    expect(html).toContain('id="the-draw"');
+    expect(html).toContain('id="how-it-works"');
   });
 
   it("an offer: a Sport select over it, in its order and with the setup screen's names, the first selected, then the Start (the positive pair of both above)", async () => {

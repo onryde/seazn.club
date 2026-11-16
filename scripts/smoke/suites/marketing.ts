@@ -5,7 +5,6 @@ export async function marketingSuite(): Promise<void> {
   const home = await fetch(`${BASE}/`, { redirect: "manual" });
   const html = await home.text();
   check("marketing: home 200", home.status === 200);
-  check("marketing: home has The Draw", html.includes("The Draw"));
   // The hero's one primary since owner 2026-11-13 (Option A): the quick match start, a plain GET form (it works with no
   // script, which is all smoke reads) to the locale's setup page; the organiser's setup is a link to the locale's /start.
   // The locale is whatever `/` negotiated, so the paths match any two-letter one.
@@ -18,7 +17,8 @@ export async function marketingSuite(): Promise<void> {
   check("marketing: home hero sport select", /<select\b[^>]*\bname="sport"/.test(html));
   check("marketing: home hero organiser link to /start", /\bhref="\/[a-z]{2}\/start"/.test(tagOf("hero-event-link")));
   check("marketing: home hero has no funnel form", !html.includes("data-start-funnel"));
-  check("marketing: home SSR default draw", html.includes("GROUP STAGE"));
+  // The competition flow under the hero (owner 2026-11-16): all seven steps are in the server's markup, before any script.
+  check("marketing: home SSR competition flow", tagOf("competition-flow") !== "" && (html.match(/\bdata-flow-step="/g) ?? []).length === 7);
 
   // The two doors into /start carry the sport (start wizard plan T5, T7). /play's "register to start a season" link names the
   // sport its chips chose — before any script runs, the server's default — by its key; and /start, opened by such a link,
@@ -36,18 +36,6 @@ export async function marketingSuite(): Promise<void> {
     .filter((m) => /\bchecked=""/.test(m[0]))
     .map((m) => /\bvalue="([^"]*)"/.exec(m[0])?.[1]);
   check("marketing: /en/start opens on the linked sport (one checked chip: tabletennis)", JSON.stringify(checkedSport) === '["tabletennis"]');
-
-  const preview = await fetch(`${BASE}/api/public/format-preview`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ format: "groups-knockout", entrants: 8 }),
-  });
-  const body = (await preview.json()) as {
-    ok?: boolean;
-    data?: { phases?: Array<{ sections: unknown[] }> };
-  };
-  check("marketing: format-preview 200", preview.status === 200);
-  check("marketing: format-preview two phases", body.data?.phases?.length === 2);
 
   const sched = await fetch(`${BASE}/scheduling`);
   const shtml = await sched.text();

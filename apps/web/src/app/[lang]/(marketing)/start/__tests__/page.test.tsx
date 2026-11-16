@@ -9,7 +9,7 @@ import { resolve } from "node:path";
 // the link's query through T3's `parseStartPrefill`, today from the server clock (UTC less one day), the free plan's cap
 // and the quick match offer as live reads — each read failing soft. HTML assertions anchor on `="` (AGENTS.md).
 //
-// Producers (review focus 4): /play and the hero send a key, The Draw a name + size + format, older links a name + size +
+// Producers (review focus 4): /play and the hero send a key, a format link a name + size + format, older links a name + size +
 // date; garbage of every field is dropped field by field.
 
 const { getCurrentUser, cap, offer } = vi.hoisted(() => ({
@@ -97,7 +97,7 @@ describe("/start hands the wizard only what it parsed", () => {
     const rows: [string, Search][] = [
       ["/play and the hero (a key)", { sport: "tabletennis" }],
       ["the hero, ice hockey", { sport: "icehockey" }],
-      ["The Draw's Make it real", { sport: "Football", entrants: "16", format: "groups-knockout" }],
+      ["a format link", { sport: "Football", entrants: "16", format: "groups-knockout" }],
       ["an older link", { sport: "Badminton", entrants: "8", date: "2026-11-21" }],
       ["garbage", { sport: "<script>x</script>", entrants: "1e3", date: "2026-02-30", format: "ladder" }],
       ["repeated", { sport: ["quidditch", "tennis"], entrants: ["12", "8"] }],

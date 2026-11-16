@@ -1,33 +1,105 @@
 import { expect, test, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { HERO_AUTO_PLAYS, heroScoreText, type HeroSceneKey } from "../src/components/marketing/hero-scenes";
+import { FLOW_STEPS } from "../src/lib/marketing/flow-steps";
 import { waitForHydration } from "./directory-kit";
 
 // The home page redirects signed-in users to /dashboard — run signed out.
 test.use({ storageState: { cookies: [], origins: [] } });
 
 test.describe("marketing home (design/v3/12)", () => {
-  test("default draw renders without any interaction", async ({ page }) => {
-    await page.goto("/");
-    const draw = page.locator("#the-draw");
-    await expect(draw.locator("svg[role=img]")).toBeVisible();
-    await expect(draw.getByText("GROUP STAGE")).toBeVisible();
-    await expect(draw.getByText("QUALIFIERS ADVANCE ↓")).toBeVisible();
-    await expect(draw.getByText("🏆")).toBeVisible();
+  // The competition flow under the hero (owner 2026-11-16: Option A with stage labels, gentle snapping). The step
+  // count and order are read from the component's own list, never typed here.
+  const stepIds = FLOW_STEPS.map((s) => `flow-${s.key}`);
+  const flow = (page: Page) => page.getByTestId("competition-flow");
+  const onStep = (page: Page) => flow(page).locator("[data-flow-step][data-on]");
+
+  test("under the hero: the seven steps in order, then the pricing tickets", async ({ page }) => {
+    await page.goto("/en");
+    await expect(flow(page)).toBeVisible();
+    const ids = await flow(page).locator("[data-flow-step]").evaluateAll((els) => els.map((e) => e.id));
+    expect(ids).toEqual(stepIds);
+    expect(ids.length, "steps checked").toBe(7);
+    await expect(page.getByRole("heading", { name: "Pick your season" })).toBeVisible();
+    // The price of streaming is called out in the live step.
+    await expect(flow(page).getByTestId("flow-stream-offer")).toContainText("price of a coffee");
   });
 
-  test("format switch redraws via the public API", async ({ page }) => {
-    await page.goto("/");
-    const api = page.waitForResponse("**/api/public/format-preview");
-    await page.getByRole("radio", { name: "League", exact: true }).click();
-    expect((await api).status()).toBe(200);
-    await expect(page.locator("#the-draw").getByText("Everyone plays everyone")).toBeVisible();
+  test("scrolling moves the current step, fills the line, and a contents link jumps to its step", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/en");
+    await expect(flow(page)).toHaveAttribute("data-live", "");
+    let checked = 0;
+    for (const i of [3, 1, 6]) {
+      await page.locator(`#${stepIds[i]}`).evaluate((el) => el.scrollIntoView({ block: "start", behavior: "instant" }));
+      await expect(onStep(page), `step ${i + 1} is the current one`).toHaveAttribute("id", stepIds[i]!);
+      await expect(flow(page).locator("[data-flow-step][data-done]"), "the steps before it are done").toHaveCount(i);
+      await expect(flow(page).locator("[data-flow-idx][data-on]"), "the contents list follows").toHaveAttribute("data-flow-idx", String(i));
+      checked++;
+    }
+    expect(checked).toBe(3);
+    // The last step is current, so nothing is greyed; scroll back and the steps ahead lose their colour.
+    await page.locator(`#${stepIds[1]}`).evaluate((el) => el.scrollIntoView({ block: "start", behavior: "instant" }));
+    await expect(page.locator(`#${stepIds[5]} .mkf-art`)).toHaveCSS("filter", /grayscale/);
+    await expect(page.locator(`#${stepIds[1]} .mkf-art`)).toHaveCSS("filter", "none");
+    // A passed step's line is full; the last step's is not drawn at all.
+    const fill = await page.locator(`#${stepIds[0]}`).evaluate((el) => getComputedStyle(el).getPropertyValue("--mkf-fill"));
+    expect(Number(fill)).toBe(1);
+    // The contents list is pinned beside the steps, and its links land on the step they name.
+    await page.locator(`#${stepIds[2]}`).evaluate((el) => el.scrollIntoView({ block: "start", behavior: "instant" }));
+    const link = flow(page).locator(`a[href="#${stepIds[5]}"]`);
+    await expect(link).toBeInViewport();
+    await link.click();
+    await expect(onStep(page)).toHaveAttribute("id", stepIds[5]!);
+    await expect(page.locator(`#${stepIds[5]} h3`)).toBeInViewport();
   });
 
-  test("Make it real carries choices into /start", async ({ page }) => {
-    await page.goto("/");
-    await page.getByTestId("make-it-real").click();
-    await expect(page).toHaveURL(/\/start\?sport=Football&entrants=8&format=groups-knockout/);
+  test("gentle snapping: stopping near a step settles on it", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/en");
+    // Proximity is the default strictness, so the computed value drops the word; "y mandatory" is the strict one.
+    expect(await page.evaluate(() => getComputedStyle(document.documentElement).scrollSnapType)).toMatch(/^y( proximity)?$/);
+    const top = (i: number) => page.locator(`#${stepIds[i]}`).evaluate((el) => Math.round(el.getBoundingClientRect().top));
+    const target = await page.locator(`#${stepIds[2]}`).evaluate((el) => Math.round(el.getBoundingClientRect().top + window.scrollY));
+    const resting = Number(await page.locator(`#${stepIds[2]}`).evaluate((el) => parseFloat(getComputedStyle(el).scrollMarginTop)));
+    await page.mouse.move(640, 400);
+    await page.mouse.wheel(0, target - resting - 90);
+    // It comes to rest with the step's top at its scroll margin, not 90px short of it.
+    await expect.poll(() => top(2), { message: "settles on the step" }).toBe(Math.round(resting));
+  });
+
+  test("phone: the pinned bar names the current step, and nothing scrolls sideways", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 780 });
+    await page.goto("/en");
+    const bar = flow(page).locator(".mkf-prog");
+    await page.locator(`#${stepIds[3]}`).evaluate((el) => el.scrollIntoView({ block: "start", behavior: "instant" }));
+    await expect(onStep(page)).toHaveAttribute("id", stepIds[3]!);
+    await expect(bar).toBeInViewport();
+    await expect(bar).toContainText("4 of 7");
+    await expect(bar).toContainText(await page.locator(`#${stepIds[3]} h3`).innerText());
+    // The contents list is desktop only.
+    await expect(flow(page).locator(".mkf-idx")).toBeHidden();
+    for (const width of [320, 390, 768]) {
+      await page.setViewportSize({ width, height: 780 });
+      const over = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+      expect(over, `no sideways scroll at ${width}`).toBeLessThanOrEqual(0);
+    }
+  });
+
+  test("without JavaScript every step is lit and reachable from the contents list", async ({ browser }) => {
+    const ctx = await browser.newContext({ javaScriptEnabled: false, viewport: { width: 1280, height: 800 }, storageState: { cookies: [], origins: [] } });
+    const page = await ctx.newPage();
+    try {
+      await page.goto("/en");
+      await expect(flow(page)).not.toHaveAttribute("data-live");
+      const filters = await flow(page).locator(".mkf-art").evaluateAll((els) => els.map((e) => getComputedStyle(e).filter));
+      expect(filters).toEqual(stepIds.map(() => "none"));
+      await flow(page).locator(`a[href="#${stepIds[4]}"]`).click();
+      await expect(page).toHaveURL(new RegExp(`#${stepIds[4]}$`));
+      await expect(page.locator(`#${stepIds[4]} h3`)).toBeInViewport();
+    } finally {
+      await ctx.close();
+    }
   });
 
   // The hero's one primary since owner 2026-11-13 (Option A): a Sport select over the quick match offer and "Start a quick
@@ -247,14 +319,15 @@ test.describe("marketing home (design/v3/12)", () => {
   test("nav flips from night to solid after the hero", async ({ page }) => {
     await page.goto("/");
     await expect(page.locator("[data-mk-nav]")).toHaveClass(/mk-nav-night/);
-    await page.locator("#the-draw").scrollIntoViewIfNeeded();
+    await page.locator("#how-it-works").scrollIntoViewIfNeeded();
     await expect(page.locator("[data-mk-nav]")).toHaveClass(/mk-nav-solid/);
   });
 
   test("reveal system fires on scroll (mk-in lands once)", async ({ page }) => {
     await page.goto("/");
-    await page.locator("#the-draw").scrollIntoViewIfNeeded();
-    await expect(page.locator("#the-draw .mk-reveal.mk-in").first()).toBeVisible();
+    const stub = page.locator(".mk-reveal").first();
+    await stub.scrollIntoViewIfNeeded();
+    await expect(page.locator(".mk-reveal.mk-in").first()).toBeVisible();
   });
 
   test("reduced motion renders end states", async ({ browser }) => {
@@ -262,7 +335,7 @@ test.describe("marketing home (design/v3/12)", () => {
     const page = await ctx.newPage();
     await page.goto("/");
     await expect(page.getByTestId("scorebug")).toBeVisible();
-    await expect(page.locator("#the-draw").getByText("GROUP STAGE")).toBeVisible();
+    await expect(page.getByTestId("competition-flow").locator("[data-flow-step]").first()).toBeVisible();
     await ctx.close();
   });
 

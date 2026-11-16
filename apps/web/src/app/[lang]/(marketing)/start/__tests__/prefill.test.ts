@@ -3,7 +3,7 @@
 // declaration and from the authorities the parser answers to, never from the parser:
 //   - sport keys: the quick-match offer /play and the home hero both read (lib/quick-match-offer.generated.json) and the
 //     wizard's own list (lib/funnel-sports.ts FUNNEL_SPORTS);
-//   - formats: The Draw's (lib/marketing/formats.ts MARKETING_FORMATS) and the funnel's (lib/funnel-formats.ts);
+//   - formats: the marketing set (lib/marketing/formats.ts MARKETING_FORMATS) and the funnel's (lib/funnel-formats.ts);
 //   - the field size: the start route's own schema (lib/funnel.ts funnelPayloadSchema.entrants), so a size the POST
 //     would refuse is never prefilled.
 // Every sweep counts what it checked and fails on zero.
@@ -13,7 +13,6 @@ import { funnelPayloadSchema } from "@/lib/funnel";
 import { FUNNEL_FORMATS, FUNNEL_MORE_FORMATS } from "@/lib/funnel-formats";
 import { FUNNEL_SPORTS } from "@/lib/funnel-sports";
 import { MARKETING_FORMATS } from "@/lib/marketing/formats";
-import { DRAW_ENTRANTS } from "@/components/marketing/the-draw";
 import { parseStartPrefill, type StartPrefill } from "../prefill";
 
 type SearchParams = Record<string, string | string[] | undefined>;
@@ -49,7 +48,8 @@ const MAX = ENTRANTS.maxValue as number;
  *  Sport select can put in `?sport=`. */
 const OFFERED_KEYS = [...new Set(offerJson.offered.map((o) => o.sport_key))];
 
-/** Every size The Draw's stepper can reach, so every `entrants` its "Make it real" link can send. */
+/** The entrant counts a format link is swept over. */
+const DRAW_ENTRANTS = { min: 4, max: 16 } as const;
 const DRAW_SIZES = Array.from({ length: DRAW_ENTRANTS.max - DRAW_ENTRANTS.min + 1 }, (_, i) => DRAW_ENTRANTS.min + i);
 
 describe("parseStartPrefill", () => {
@@ -116,11 +116,11 @@ describe("parseStartPrefill", () => {
     for (const key of OFFERED_KEYS) {
       rows.push({ name: `/play ${key}`, qs: `sport=${key}`, want: { ...NONE, sportKey: key } });
     }
-    // The Draw's "Make it real": `?sport=Football&entrants=<n>&format=<slug>` (the-draw.tsx), every format × size.
+    // A format link: `?sport=Football&entrants=<n>&format=<slug>`, every format × size.
     for (const format of MARKETING_FORMATS) {
       for (const n of DRAW_SIZES) {
         rows.push({
-          name: `the draw ${format} ${n}`,
+          name: `format link ${format} ${n}`,
           qs: `sport=Football&entrants=${n}&format=${format}`,
           want: { ...NONE, sportKey: "football", entrants: n, format },
         });
