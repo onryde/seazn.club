@@ -129,6 +129,8 @@ const REST = [
   "src/server/public-site/__tests__/public-stages-qualification-db.test.ts",
   "src/server/public-site/__tests__/qualification-view-db.test.ts",
   "src/server/public-site/__tests__/qualification-view.test.ts",
+  // Engine 10.0.0 tolerance: the frozen QualStatus kind "qualified" reads as through.
+  "src/server/public-site/__tests__/qualification-view-qualified-kind.test.ts",
   "src/server/public-site/__tests__/standings-ratio-note.test.ts",
   // show_seeds (V416 — `public_entrants_v` publishes `seed` only while the
   // division shows it, and every public reader then sorts by name). Begins
