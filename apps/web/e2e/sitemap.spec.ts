@@ -11,7 +11,7 @@ import { sitemapWindowOverride } from "../src/lib/sitemap-window";
 // This walks the real seam on a production build, as an anonymous crawler:
 //
 //   0. the route is NOT served from Next's route cache — no `x-nextjs-cache`
-//      header — while its prerendered sibling /robots.txt is (the positive
+//      header — while a prerendered sibling, /opengraph-image, is (the positive
 //      pair: without it a missing header could mean "this server never sends
 //      one"). A 20s ISR route would pass steps 1-3 below; it fails this one;
 //   1. a public, PUBLISHED competition is listed, with its division;
@@ -80,7 +80,7 @@ test.describe("sitemap.xml", () => {
     "needs SITEMAP_REVALIDATE_SECONDS on the server under test AND this runner; the shipped window is an hour",
   );
 
-  test("is not route-cached (robots.txt is); lists a published competition; serves the cached list inside the window; picks up a new one only after it", async ({
+  test("is not route-cached (the Open Graph image is); lists a published competition; serves the cached list inside the window; picks up a new one only after it", async ({
     request,
     playwright,
     baseURL,
@@ -105,12 +105,15 @@ test.describe("sitemap.xml", () => {
       };
 
       // 0. Rendered per request, not by the route cache — against a sibling
-      //    metadata route that IS served from it, on this same server.
-      const robots = await crawler.get("/robots.txt");
-      expect(robots.status()).toBe(200);
+      //    metadata route that IS served from it, on this same server. That
+      //    sibling was /robots.txt until it became per-request too (it answers
+      //    by host, so staging can refuse crawlers); the Open Graph image is
+      //    still prerendered.
+      const prerendered = await crawler.get("/opengraph-image");
+      expect(prerendered.status()).toBe(200);
       expect(
-        robots.headers()["x-nextjs-cache"],
-        "positive pair: the prerendered /robots.txt reports its route-cache state",
+        prerendered.headers()["x-nextjs-cache"],
+        "positive pair: the prerendered /opengraph-image reports its route-cache state",
       ).toBeTruthy();
       expect((await sitemap()).routeCache, "/sitemap.xml must not be a prerendered/ISR route").toBeUndefined();
 
