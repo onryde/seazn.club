@@ -498,9 +498,7 @@ const CACHE_SITES: Record<string, { via: "cachedIfFound" | "unstable_cache"; fil
     why: "null = no figures for a fixture already found; the key moves with last_seq",
   },
   SITEMAP_ENTRIES_CACHE_KEY: { via: "unstable_cache", file: "server/public-site/sitemap-cache.ts", why: "a list; empty is a real state" },
-  "discovery-live": { via: "unstable_cache", file: "server/public-site/discovery.ts", why: "a list; empty is a real state" },
   "discovery-live-all": { via: "unstable_cache", file: "server/public-site/discovery.ts", why: "a list; empty is a real state" },
-  "discovery-week": { via: "unstable_cache", file: "server/public-site/discovery.ts", why: "a list; empty is a real state" },
   "discovery-dir": { via: "unstable_cache", file: "server/public-site/discovery.ts", why: "a list; empty is a real state" },
   "discovery-sports": { via: "unstable_cache", file: "server/public-site/discovery.ts", why: "a list; empty is a real state" },
   "overlay-fold-v5": {

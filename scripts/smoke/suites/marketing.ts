@@ -5,7 +5,6 @@ export async function marketingSuite(): Promise<void> {
   const home = await fetch(`${BASE}/`, { redirect: "manual" });
   const html = await home.text();
   check("marketing: home 200", home.status === 200);
-  check("marketing: home has The Draw", html.includes("The Draw"));
   // The hero's one primary since owner 2026-11-13 (Option A): the quick match start, a plain GET form (it works with no
   // script, which is all smoke reads) to the locale's setup page; the organiser's setup is a link to the locale's /start.
   // The locale is whatever `/` negotiated, so the paths match any two-letter one.

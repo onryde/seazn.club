@@ -124,7 +124,7 @@ export function initialWizardState(p: StartPrefill, ctx: WizardContext): WizardS
     date: p.date !== null && validDate(p.date, ctx) ? p.date : null,
     email: "",
   };
-  // The link's format wins only where it can be built (The Draw's "Make it real"); below its minimum it is dropped.
+  // The link's format wins only where it can be built; below its minimum it is dropped.
   const linked = cardFor(base, ctx, p.format);
   let s = settle(linked?.available ? { ...base, format: linked.slug, formatPicked: true } : base, ctx);
   // The URL's step, replayed as Next through the reducer: canAdvance decides how far the answers can go.
