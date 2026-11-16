@@ -307,6 +307,36 @@ describe.skipIf(!HAS_DB)("prepareYoutubeBroadcast — a new broadcast (spec §6.
     expect(poweredWitnessed).toBe(3);   // es, fr, nl
   });
 
+  it("A3: a PRIVATE competition's description has no live-score line (its public page 404s); link-only and public keep it; the powered-by paragraph stays on all three", async () => {
+    const w = await world(3);
+    const [priv, unlisted, pub] = w.fixtures as [string, string, string];
+    const origin = siteOrigin();
+    const line = en["streaming.youtube.broadcast.descriptionLine"];
+    const powered = `${en["streaming.youtube.broadcast.poweredBy"]} · ${origin}`;
+    const setVisibility = (fixtureId: string, visibility: string) =>
+      sql`update competitions set visibility = ${visibility} where id = (select d.competition_id from fixtures f join divisions d on d.id = f.division_id where f.id = ${fixtureId})`;
+    const describe_ = async (fixtureId: string, visibility: string): Promise<string> => {
+      await setVisibility(fixtureId, visibility);
+      const p = await must(prep(w, fixtureId));
+      return w.fake.inspectBroadcast((await row(p.broadcastId)).yt_broadcast_id!)!.description;
+    };
+
+    const dPrivate = await describe_(priv, "private");
+    expect(dPrivate, "private: the powered-by paragraph only").toBe(powered);
+    expect(dPrivate).not.toContain(line);
+    expect(dPrivate).not.toContain("/live/");
+
+    const dUnlisted = await describe_(unlisted, "unlisted");
+    expect(dUnlisted.startsWith(`${line} ${origin}/live/`), "link-only stays linked").toBe(true);
+    expect(dUnlisted).toContain(`/fixtures/${unlisted}`);
+    expect(dUnlisted.endsWith(`\n\n${powered}`)).toBe(true);
+
+    const dPublic = await describe_(pub, "public");
+    expect(dPublic.startsWith(`${line} ${origin}/live/`), "public is linked").toBe(true);
+    expect(dPublic).toContain(`/fixtures/${pub}`);
+    expect(dPublic.endsWith(`\n\n${powered}`)).toBe(true);
+  });
+
   it("S2 (owner 2026-10-29): the Powered-by paragraph is shown for EVERY org — a dashboard.branding org (which removed the public footer's badge) gets it too, before and after a plan change; an unbranded org beside it still gets it (checked === 4)", async () => {
     const a = await world(3);   // the org whose plan changes
     const b = await world(1);   // an unbranded org beside it, in the same run

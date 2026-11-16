@@ -136,6 +136,13 @@ describe("broadcastDescription (spec §6.5)", () => {
     expect(d).toBe(`Score live & results: ${url}?x=y\n\nPowered by Seazn Club · https://seazn.club`);
   });
 
+  it("a match with no public page (matchUrl null) carries no live-score line: the powered-by paragraph alone, and no dead link", () => {
+    const d = broadcastDescription({ ...base, matchUrl: null });
+    expect(d).toBe(`Powered by Seazn Club · ${site}`);
+    expect(d).not.toContain(base.line);
+    expect(d).not.toContain("/live/");
+  });
+
   it("the powered-by paragraph is present and last (exactly two paragraphs)", () => {
     const d = broadcastDescription(base);
     const paragraphs = d.split("\n\n");
