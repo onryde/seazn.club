@@ -15,7 +15,7 @@ import { builtinModules } from "@seazn/engine/sports";
 import { entrantKindCap } from "@seazn/engine/sport";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
-import { rrKey, rrLegOfExtKey } from "@/lib/roundrobin-reconcile";
+import { isRrExtKey, rrKey, rrLegOfExtKey } from "@/lib/roundrobin-reconcile";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
@@ -1157,6 +1157,38 @@ describe.skipIf(!HAS_DB)("X-CU-6 Generate leaves Add match rows alone (B1 batch 
       expect(checked).toBe(2);
     });
   }
+
+  // differential: a stage that holds only Add match rows entered the reconcile (`existing.length > 0`), read as "no lines either side" and
+  // answered a redraw, which the Add match guard refused - main's positional insert wrote the table and kept the extra row.
+  // Decision: the FIRST Generate never deletes an Add match row (byte-equal), and does not move it either, so it can sit in a round
+  // beside a table line of the same player: the same thing main did, and the row is the organiser's own placement.
+  it("a never-generated league holding only Add match rows takes the FIRST Generate: the table is written, the extra row byte-equal (even and odd field, both sports)", async () => {
+    let checked = 0;
+    for (const sport of [BADMINTON, FOOTBALL]) {
+      // (A never-generated GROUP has no pools yet, so Add match refuses it: only a league can reach this.)
+      for (const shape of [{ n: 8, pairs: 28 }, { n: 5, pairs: 10 }]) {
+        const r = await rig({ n: shape.n, sport, generate: false });
+        const added = await addFixture(r.auth, r.stageId, { home_entrant_id: r.ids[0]!, away_entrant_id: r.ids[1]! });
+        const extra = (await rowsOf(r.stageId)).find((x) => x.id === added.fixture_id)!;
+        expect(extra.ext_key, "premise: only an Add match row exists").toMatch(/^adhoc-\d+$/);
+        expect(await rowsOf(r.stageId), "premise: the stage holds that one row").toHaveLength(1);
+        const out = await generateStageFixtures(r.auth, r.stageId);
+        expect(out.reconcile, `${sport.key} n=${shape.n}: a first Generate reports no reconcile`).toBeUndefined();
+        const after = await rowsOf(r.stageId);
+        expect(after.find((x) => x.id === extra.id), `${sport.key} n=${shape.n}: the extra row is byte-equal`).toEqual(extra);
+        const table = after.filter((x) => x.ext_key !== extra.ext_key);
+        // n choose 2: 8 entrants = 28 pairs, 5 entrants = 10.
+        expect(table, `${sport.key} n=${shape.n}: the table is written`).toHaveLength(shape.pairs);
+        expect(table.every((x) => isRrExtKey(x.ext_key)), `${sport.key} n=${shape.n}: every written row is a table line`).toBe(true);
+        // A second Generate is then the named no-op, the extra row untouched.
+        const again = await generateStageFixtures(r.auth, r.stageId);
+        expect(again.reconcile, `${sport.key} n=${shape.n}`).toEqual({ kind: "noop", placed: [], vacated: [], vacated_seats: 0 });
+        expect(await rowsOf(r.stageId), `${sport.key} n=${shape.n}: byte-equal`).toEqual(after);
+        checked++;
+      }
+    }
+    expect(checked).toBe(4);
+  });
 
   it("Add match then ONE newcomer (4 -> 5, an odd field: a redraw) is refused by name and writes nothing, in both sports", async () => {
     let checked = 0;

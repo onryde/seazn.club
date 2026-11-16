@@ -22,7 +22,7 @@ import { fixtureCalledSql, stageHasStarted } from "../fixture-started-sql";
 // W4 T8 (FX-G2): a root knockout's Generate over existing lines reconciles them (bracket-reconcile.ts).
 import { reconcileRootBracket } from "../bracket-reconcile";
 import { carriedSlotCounts, carrySlots, carrySlotsByPair } from "@/lib/rebuild-slots";
-import { rrLegacyExtKey, rrLinesOfRows } from "@/lib/roundrobin-reconcile";
+import { isRrExtKey, rrLegacyExtKey, rrLinesOfRows } from "@/lib/roundrobin-reconcile";
 import { refuseOwnFormatLoss } from "../fixture-override-guards";
 import {
   STAGE_COLS,
@@ -434,7 +434,10 @@ export async function generateStageFixturesTx(
   // inserted into by the positional `ext_key` (4 -> 6 added nine rows that repeated pairs already drawn and missed the pairs the
   // newcomers owed). Beside the knockout's branch, after the two-entrant refusal above, so a field that fell to 0 or 1 is
   // refused by name and never patched to an empty table (X-BD-5). A fed stage (`config.qualified`) keeps its path.
-  if ((stage.kind === "league" || stage.kind === "group") && qualified === null && stage.progression === null && existing.length > 0) {
+  // `hasTable`: the stage holds lines the generator wrote. An Add match row (`adhoc-N`) is no line of the table, so a never-generated
+  // league or group holding only those takes the FIRST Generate below (which never deletes them; B1 batch review).
+  const hasTable = existing.some((f) => isRrExtKey(f.ext_key));
+  if ((stage.kind === "league" || stage.kind === "group") && qualified === null && stage.progression === null && hasTable) {
     return reconcileRoundRobinGenerate(tx, auth, stage, entrants, poolIds, opts.sealedSetup);
   }
 
@@ -512,7 +515,7 @@ export async function generateStageFixturesTx(
   // so the UI showed a green "up to date" banner while zero fixtures ever
   // existed. Distinguish the two: this is a precondition failure, not a
   // no-op success, so it must throw (a real reason), not return quietly.
-  if ((stage.kind === "group" || stage.kind === "league") && gen.length === 0 && existing.length === 0) {
+  if ((stage.kind === "group" || stage.kind === "league") && gen.length === 0 && !hasTable) {
     const groups = stage.kind === "group" ? poolCount(stage.config) : 1;
     const required = Math.max(2, groups * 2);
     throw new EngineError(
@@ -532,7 +535,7 @@ export async function generateStageFixturesTx(
   // and numbers, before any fixture is inserted (the pools rows above roll back with it). First draw only: a stage that
   // already has fixtures is a re-draw after a withdrawal, and judging it again would strand a started board. (No `gen`/pool-count
   // condition: an empty `gen` was refused above, and a single pool pairs everyone, so neither can reach here with a stranded entrant.)
-  if (stage.kind === "group" && existing.length === 0) {
+  if (stage.kind === "group" && !hasTable) {
     const referenced = new Set<string>();
     for (const g of gen) for (const side of [g.home, g.away, g.award]) if (typeof side === "string") referenced.add(side);
     const stranded = entrants.filter((e) => !referenced.has(e.id));

@@ -118,7 +118,7 @@ export const ROUND_ROBIN_REFUSALS: Record<RoundRobinRefusalCode, RoundRobinRefus
   },
   RR_REGENERATE_WOULD_DROP_ADD_MATCH: {
     status: 409,
-    en: "The table would have to be drawn again, which removes the matches added by hand. Use Rebuild fixtures — it lists what it clears first.",
+    en: "The table would have to be drawn again, which removes the matches you added with Add match. Rebuild fixtures removes them too: note them down first, then use it.",
     key: "roundrobin.refusal.RR_REGENERATE_WOULD_DROP_ADD_MATCH",
   },
 };
