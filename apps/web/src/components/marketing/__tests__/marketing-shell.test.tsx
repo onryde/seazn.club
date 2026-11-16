@@ -22,6 +22,8 @@ describe("marketing shell pieces", () => {
     // MarketingFooter is now an async server component (getDictionary for the
     // localized labels) — resolve it to an element, then static-render.
     const html = renderToStaticMarkup(await MarketingFooter({ lang: "en" }));
+    expect(html).toContain('href="/product/streaming"');
+    expect(html).toContain('href="/sports/cricket"');
     expect(html).toContain('href="/formats"');
     expect(html).toContain('href="/scheduling"');
     expect(html).toContain('href="/discover"');

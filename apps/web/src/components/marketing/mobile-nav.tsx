@@ -25,12 +25,21 @@ export interface MobileNavAuthLink extends MobileNavLink {
   primary: boolean;
 }
 
+/** A labelled run of links: the bar's Product and Sports menus, opened flat in the panel. */
+export interface MobileNavGroup {
+  label: string;
+  links: MobileNavLink[];
+}
+
 export function MarketingMobileNav({
+  groups = [],
   links,
   openLabel,
   closeLabel,
   auth = [],
 }: {
+  /** Rendered above `links`, each under its own heading. */
+  groups?: MobileNavGroup[];
   links: MobileNavLink[];
   openLabel: string;
   closeLabel: string;
@@ -93,10 +102,27 @@ export function MarketingMobileNav({
         aria-hidden={!open}
         // w-64, not w-56: "Commencer gratuitement" is ~190px at this size and
         // needs the extra 32px to stay on one line in the panel.
-        className={`absolute right-0 top-11 z-50 w-64 rounded-xl border border-purple-100 bg-white py-1 shadow-xl ${
+        className={`absolute right-0 top-11 z-50 max-h-[calc(100dvh-4.5rem)] w-64 overflow-y-auto rounded-xl border border-purple-100 bg-white py-1 shadow-xl ${
           open ? "block" : "hidden"
         }`}
       >
+        {groups.map((g) => (
+          <div key={g.label} role="group" aria-label={g.label} className="border-b border-purple-100 pb-1">
+            <p className="px-4 pb-0.5 pt-2.5 text-xs font-semibold text-slate-500">{g.label}</p>
+            {g.links.map((l) => (
+              <Link
+                key={l.href}
+                role="menuitem"
+                href={l.href}
+                tabIndex={open ? undefined : -1}
+                onClick={() => setOpen(false)}
+                className="block px-4 py-2.5 text-sm text-slate-700 hover:bg-purple-50 hover:text-purple-800"
+              >
+                {l.label}
+              </Link>
+            ))}
+          </div>
+        ))}
         {links.map((l) => (
           <Link
             key={l.href}

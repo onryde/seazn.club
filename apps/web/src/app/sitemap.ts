@@ -1,3 +1,4 @@
+import { SPORT_PAGES } from "@/lib/marketing/sport-pages";
 import type { MetadataRoute } from "next";
 import { cachedPublicSitemapEntries } from "@/server/public-site/sitemap-cache";
 import { listDiscoverySports } from "@/server/public-site/discovery";
@@ -42,6 +43,8 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     marketing("/discover", { changeFrequency: "hourly", priority: 0.9 }),
     marketing("/live", { changeFrequency: "hourly", priority: 0.8 }),
     marketing("/pricing", { changeFrequency: "monthly", priority: 0.9 }),
+    marketing("/product/streaming", { changeFrequency: "monthly", priority: 0.8 }),
+    ...SPORT_PAGES.map((sport) => marketing(`/sports/${sport}`, { changeFrequency: "monthly", priority: 0.8 })),
     marketing("/formats", { changeFrequency: "monthly", priority: 0.8 }),
     marketing("/scheduling", { changeFrequency: "monthly", priority: 0.7 }),
     { url: `${BASE}/games`, changeFrequency: "weekly", priority: 0.8 },

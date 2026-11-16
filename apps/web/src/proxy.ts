@@ -234,7 +234,7 @@ function proxyCore(request: NextRequest): NextResponse {
   const MARKETING_UNPREFIXED = new Set(["/", "/start", "/pricing", "/scheduling", "/formats", "/live", "/discover", "/affiliates"]);
   // Marketing trees with sub-paths (e.g. /use-cases/clubs, /discover/tennis) —
   // prefix match (the exact-match Set can't cover dynamic child routes).
-  const MARKETING_PREFIXED = ["/use-cases/", "/discover/"];
+  const MARKETING_PREFIXED = ["/use-cases/", "/discover/", "/product/", "/sports/"];
   const mp = request.nextUrl.pathname;
   // The games.* subdomain owns "/" (and single-segment slugs) for its own tree
   // via gamesHostRewrite below — the marketing [lang] rewrite must NOT claim

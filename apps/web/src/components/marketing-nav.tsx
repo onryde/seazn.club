@@ -2,15 +2,10 @@ import Link from "next/link";
 import { getCurrentUser } from "@/lib/auth";
 import { NavScrollFlip } from "@/components/marketing/nav-scroll";
 import { MarketingMobileNav } from "@/components/marketing/mobile-nav";
+import { NavMenu } from "@/components/marketing/nav-menu";
+import { NAV_GROUPS, TOP_LINKS } from "@/lib/marketing/product-nav";
 import { getDictionary, t } from "@/lib/i18n";
 import { toLocale } from "@/lib/i18n-constants";
-
-const LINKS = [
-  { key: "nav.formats", href: "/formats" },
-  { key: "nav.scheduling", href: "/scheduling" },
-  { key: "nav.pricing", href: "/pricing" },
-  { key: "nav.useCases", href: "/use-cases/clubs" },
-];
 
 /** Marketing nav (design/v3/12 §4.1). `night-scroll` starts transparent over
  *  the night hero and flips solid when the hero scrolls out; `light` is the
@@ -27,6 +22,9 @@ export async function MarketingNav({
     getDictionary(toLocale(lang), "marketing"),
   ]);
   const night = variant === "night-scroll";
+  // Product and Sports are menus; the rest are plain links. The mobile panel shows the same set, opened flat.
+  const groups = NAV_GROUPS.map((g) => ({ id: g.id, label: t(d, g.key), links: g.links.map((l) => ({ href: l.href, label: t(d, l.key) })) }));
+  const top = TOP_LINKS.map((l) => ({ href: l.href, label: t(d, l.key) }));
   return (
     <header
       data-mk-nav
@@ -45,13 +43,16 @@ export async function MarketingNav({
           <img src="/logo-wide-night.png" alt="Seazn Club" className="mk-nav-logo-img-night h-9 w-auto" />
         </Link>
         <nav className="flex items-center gap-1 sm:gap-2">
-          {LINKS.map((l) => (
+          {groups.map((g) => (
+            <NavMenu key={g.id} id={g.id} label={g.label} links={g.links} />
+          ))}
+          {top.map((l) => (
             <Link
               key={l.href}
               href={l.href}
               className="mk-nav-link hidden rounded-lg px-3 py-1.5 text-sm md:inline-flex"
             >
-              {t(d, l.key)}
+              {l.label}
             </Link>
           ))}
           {/* Below `sm` the auth actions live in the mobile panel, not here.
@@ -81,7 +82,8 @@ export async function MarketingNav({
             </>
           )}
           <MarketingMobileNav
-            links={LINKS.map((l) => ({ href: l.href, label: t(d, l.key) }))}
+            groups={groups.map((g) => ({ label: g.label, links: g.links }))}
+            links={top}
             openLabel={t(d, "nav.openMenu")}
             closeLabel={t(d, "nav.closeMenu")}
             auth={

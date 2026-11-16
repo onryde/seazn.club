@@ -130,6 +130,8 @@ describe("sitemap.xml: marketing URLs match the page canonicals", () => {
       const declared = marketingMeta({ lang: "en", path, title: "T", description: "d" }).alternates!.languages as Record<string, string>;
       for (const [k, v] of Object.entries(declared)) expect(langs![k], `${e.url} ${k}`).toBe(`${BASE}${v}`);
     }
+    // The product pages are listed in their /en form.
+    for (const path of ["/product/streaming", "/sports/cricket"]) expect(out, path).toContain(`${BASE}/en${path}`);
     const xml = resolveRouteData(entries, "sitemap");
     expect(xml).toContain('hreflang="fr"');
   });
