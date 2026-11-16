@@ -67,7 +67,7 @@ export default async function LivePage({ params }: { params: Promise<{ lang: str
           </section>
         ) : null}
 
-        <Closing line={t(d, "live.start.title")} sub={shared("closingSub")} cta={{ label: shared("startFree"), href: SIGNUP }} pricing={{ label: shared("seePricing"), href: "/pricing" }} />
+        <Closing line={t(d, "live.closing")} sub={shared("closingSub")} cta={{ label: shared("startFree"), href: SIGNUP }} pricing={{ label: shared("seePricing"), href: "/pricing" }} />
       </ProductPage>
       <LiveRefresh />
     </MarketingShell>

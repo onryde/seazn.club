@@ -69,6 +69,8 @@ describe("/live", () => {
     const html = await renderPage(Page, { lang: "en" });
     expect(sectionOrder(html)).toEqual(["hero", "wall", "closing"]);
     expect(html).toContain('data-testid="live-start"');
+    // The banner and the closing call do not say the same thing twice.
+    expect(textOf(html).split(en["live.start.title"]).length - 1).toBe(1);
   });
 
   it("a failing data source is an empty page, never an error page", async () => {

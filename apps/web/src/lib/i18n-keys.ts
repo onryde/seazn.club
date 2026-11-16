@@ -3981,6 +3981,7 @@ export type DictionaryKey =
   | "lineup.starting"
   | "lineup.statusAria"
   | "lineup.title"
+  | "live.closing"
   | "live.eyebrow"
   | "live.h1"
   | "live.lede"
