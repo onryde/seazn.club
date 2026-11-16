@@ -37,7 +37,10 @@ export type RoundRobinRefusalCode =
   // Task 2 fix round 1: a Generate that would have to draw the stage again (a pool changed parity or a group re-snaked)
   // while its lines carry officials, team sheets, devices, streams, availability or
   // court calls. Details: `attachments`, the counts `stageAttachmentCounts` reads - the same shape as KO_REDRAW_WOULD_CLEAR_SETUP.
-  | "RR_REGENERATE_WOULD_CLEAR_SETUP";
+  | "RR_REGENERATE_WOULD_CLEAR_SETUP"
+  // B1 batch C1: the same redraw over a table that holds an Add match row. The row cannot be kept through a redraw and is never
+  // dropped silently, so the Generate is refused. Details: `matches`, how many extra rows the stage holds.
+  | "RR_REGENERATE_WOULD_DROP_ADD_MATCH";
 
 export interface RoundRobinRefusalRow {
   status: 409 | 422;
@@ -112,6 +115,11 @@ export const ROUND_ROBIN_REFUSALS: Record<RoundRobinRefusalCode, RoundRobinRefus
     status: 409,
     en: "The table would have to be drawn again, which clears match setup already on its lines (officials, team sheets, scoring devices, streams, player availability or court calls). Use Rebuild fixtures — it lists what it clears first.",
     key: "roundrobin.refusal.RR_REGENERATE_WOULD_CLEAR_SETUP",
+  },
+  RR_REGENERATE_WOULD_DROP_ADD_MATCH: {
+    status: 409,
+    en: "The table would have to be drawn again, which removes the matches added by hand. Use Rebuild fixtures — it lists what it clears first.",
+    key: "roundrobin.refusal.RR_REGENERATE_WOULD_DROP_ADD_MATCH",
   },
 };
 

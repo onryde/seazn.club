@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import { generateRoundRobin } from "@seazn/engine/scheduling";
 import {
   RR_MAX_LEG,
+  isRrExtKey,
   roundSpan,
   RrKeyError,
   planRoundRobinReconcile,
@@ -445,3 +446,47 @@ describe("rrLinesOfRows (the stored side of the planner)", () => {
     expect(lines[2]).toBeNull();
   });
 });
+
+// B1 batch C1: an Add match row (`adhoc-N`) is not a line of the table.
+describe("isRrExtKey: which stored keys are the table's own lines", () => {
+  it("accepts exactly what rrExtKey writes (pooled or not, with or without the leg) and refuses everything else", () => {
+    const yes = [rrExtKey("", 3, 2, 1), rrExtKey("pA-", 3, 2, 2), rrExtKey("p12-", 10, 1, 8), rrLegacyExtKey(rrExtKey("", 3, 2, 1)), rrLegacyExtKey(rrExtKey("pB-", 1, 1, 1))];
+    const no = ["adhoc-7", "adhoc-1", "", "rr-r1", "rr-r1-c1-Lx", "xrr-r1-c1-L1", "rr-r1-c1-L1x", "ad-hoc-rr-r1-c1", null];
+    for (const k of yes) expect(isRrExtKey(k), String(k)).toBe(true);
+    for (const k of no) expect(isRrExtKey(k), String(k)).toBe(false);
+    expect(yes.length + no.length, "anti-vacuity").toBe(14);
+  });
+});
+
+describe("planRoundRobinReconcile: rows that are not lines (`fixed`) are never planned, only avoided", () => {
+  it("a newcomer's line never lands in a round where a fixed row already seats one of its players", () => {
+    const a = linesOf(4, 1, { stored: true });
+    const b = linesOf(6, 1);
+    const shape = roundRobinShape(a.lines, b.lines, { stored: a.byePools, fresh: b.byePools });
+    const free = planRoundRobinReconcile(a.lines, b.lines, shape);
+    expect(free.kind).toBe("patch");
+    if (free.kind !== "patch") return;
+    // Pick a placed line and fix its two players in the very round the planner chose for it: it must move later.
+    const target = free.insert[0]!;
+    const fixed = [{ pool: null, roundNo: target.roundNo, home: target.home, away: target.away }];
+    const plan = planRoundRobinReconcile(a.lines, b.lines, shape, fixed);
+    expect(plan.kind).toBe("patch");
+    if (plan.kind !== "patch") return;
+    const moved = plan.insert.find((l) => l.key === target.key)!;
+    expect(moved.roundNo, "the line moved to a later round").toBeGreaterThan(target.roundNo);
+    expect(plan.remove, "nothing of the fixed rows is removed").toEqual(free.remove);
+    expect(plan.insert, "the same lines are inserted").toHaveLength(free.insert.length);
+    let seats = 0;
+    const seen = new Set<string>();
+    for (const l of [...a.lines, ...plan.insert, ...fixed.map((f) => ({ ...f }))]) {
+      for (const e of [l.home, l.away]) {
+        const at = `${l.roundNo}|${e}`;
+        expect(seen.has(at), `${e} twice in round ${l.roundNo}`).toBe(false);
+        seen.add(at);
+        seats++;
+      }
+    }
+    expect(seats).toBe(2 * (a.lines.length + plan.insert.length + 1));
+  });
+});
+

@@ -18,6 +18,7 @@ import { randomUUID } from "node:crypto";
 import type { Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import {
+  isRrExtKey,
   planRoundRobinReconcile,
   roundRobinShape,
   rrExtKey,
@@ -84,17 +85,22 @@ export async function reconcileRoundRobinLines(
   entrants: readonly ActiveEntrant[],
   poolIds: ReadonlyMap<string, string>,
   /** The sealed-table setup counts (streams, YouTube broadcasts), read on the privileged prelude by `generateStageFixtures`.
-   *  Absent for a caller that cannot read them (history's Redo re-running the generator): the tenant-readable kinds still count. */
+   *  Absent for a caller that cannot read them (Start's frozen-drift pass): a redraw it needs is then refused (`sealed_unread`),
+   *  never assumed to clear nothing. */
   sealed: SealedSetupCounts | undefined,
 ): Promise<RoundRobinDecision> {
   if (stage.kind !== "league" && stage.kind !== "group") {
     throw new Error(`reconcileRoundRobinLines: stage ${stage.id} is a ${stage.kind}, not a round robin`);
   }
-  const rows = await tx<StoredRow[]>`
+  const allRows = await tx<StoredRow[]>`
     select id, ext_key, pool_id, round_no, seq_in_round, home_entrant_id, away_entrant_id, status
       from fixtures where stage_id = ${stage.id} order by round_no, seq_in_round`;
+  // Only the table's own lines are reconciled. An Add match row (`adhoc-N`) is the organiser's: it is no pair of the table, so it
+  // is never planned, removed or redrawn here (B1 batch C1) - but its seats count as taken in its round when lines are inserted.
+  const rows = allRows.filter((r) => isRrExtKey(r.ext_key));
+  const extraRows = allRows.filter((r) => !isRrExtKey(r.ext_key));
   // A first Generate is not a reconcile: the caller branches here only when lines exist, so this is a caller's bug.
-  if (rows.length === 0) throw new Error(`reconcileRoundRobinLines: stage ${stage.id} has no lines — a first Generate is not a reconcile`);
+  if (allRows.length === 0) throw new Error(`reconcileRoundRobinLines: stage ${stage.id} has no lines — a first Generate is not a reconcile`);
 
   const active = new Set(entrants.map((e) => e.id));
   const seated = new Set(rows.flatMap((r) => [r.home_entrant_id, r.away_entrant_id]).filter((id): id is string => id !== null));
@@ -125,6 +131,9 @@ export async function reconcileRoundRobinLines(
   const hasSetup = sealedUnread || Object.values(attachments).some((n) => n > 0);
   const regenerateDecision: RoundRobinDecision = { kind: "regenerate", placed: newcomers, vacated: departed };
   const regenerate = (): RoundRobinDecision => {
+    // A redraw deletes the table's lines and draws them again; an Add match row cannot be kept through it (it would sit in a round
+    // where a redrawn line seats one of its players), and it is never deleted silently - so it is refused by name before any write.
+    if (extraRows.length > 0) throw roundRobinRefusal("RR_REGENERATE_WOULD_DROP_ADD_MATCH", { matches: extraRows.length });
     if (hasSetup) throw roundRobinRefusal("RR_REGENERATE_WOULD_CLEAR_SETUP", { attachments, ...(sealedUnread ? { sealed_unread: true } : {}) });
     return regenerateDecision;
   };
@@ -150,7 +159,10 @@ export async function reconcileRoundRobinLines(
     for (const [pool, m] of members) if (m.size % 2 === 1) storedByePools.add(pool);
   }
   const freshByePools = new Set<string | null>(schedule.byes.map((b) => b.pool));
-  const plan = planRoundRobinReconcile(before, fresh, roundRobinShape(before, fresh, { stored: storedByePools, fresh: freshByePools }));
+  const fixed = extraRows.flatMap((r) =>
+    r.home_entrant_id === null || r.away_entrant_id === null ? [] : [{ pool: r.pool_id, roundNo: r.round_no, home: r.home_entrant_id, away: r.away_entrant_id }],
+  );
+  const plan = planRoundRobinReconcile(before, fresh, roundRobinShape(before, fresh, { stored: storedByePools, fresh: freshByePools }), fixed);
   if (plan.kind === "noop") return { kind: "noop" };
   if (plan.kind === "regenerate") return regenerate();
 
@@ -175,7 +187,7 @@ export async function reconcileRoundRobinLines(
   }
   const nextSeq = new Map<string, number>();
   const slotOf = (pool: string | null, roundNo: number) => `${pool ?? ""}|${roundNo}`;
-  for (const r of rows) {
+  for (const r of allRows) {
     if (removed.has(r.id)) continue;
     const at = slotOf(r.pool_id, r.round_no);
     nextSeq.set(at, Math.max(nextSeq.get(at) ?? 0, r.seq_in_round));

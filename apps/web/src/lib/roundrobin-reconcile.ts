@@ -84,6 +84,13 @@ export function rrExtKey(prefix: string, roundNo: number, court: number, leg: nu
   return `${prefix}rr-r${roundNo}-c${court}-L${leg}`;
 }
 
+/** Whether a stored `ext_key` is one a round robin's own generator wrote (`rrExtKey`: `rr-r{round}-c{court}-L{leg}`, with the pool's
+ *  `p{key}-` in front, and no `-L{leg}` tail on a stage drawn before the leg was stored). Anything else on a league or group stage -
+ *  `adhoc-N` from Add match, a null key - is the organiser's own row, not a line of the table: Generate never reads it as one. */
+export function isRrExtKey(extKey: string | null): boolean {
+  return extKey !== null && /^(?:p[^-]*-)?rr-r\d+-c\d+(?:-L\d+)?$/.test(extKey);
+}
+
 /** The `ext_key` of the same line before the leg was appended (`rrExtKey` minus its `-L{leg}` tail): the key a stage drawn
  *  before this change carries. Used where a positional insert must still recognise a line it already wrote. */
 export function rrLegacyExtKey(extKey: string): string {
@@ -158,12 +165,14 @@ function hasRepeat(lines: readonly RrLine[]): boolean {
  *    surviving line keeps its row; the round count may grow (rulebook silent on round count; X-CU-6 keeps lines).
  *
  * Each inserted line sits in the fresh schedule's round, moved later (never earlier) while that round already seats one of its
- * two entrants in the same pool: a patched table must never seat a player twice in a round.
+ * two entrants in the same pool: a patched table must never seat a player twice in a round. `fixed` are rows that are not lines of
+ * the table (Add match rows): never planned, never removed, but their seats count as taken in their round.
  */
 export function planRoundRobinReconcile(
   before: readonly RrLine[],
   fresh: readonly RrLine[],
   shape: RrShape,
+  fixed: readonly { pool: string | null; roundNo: number; home: string; away: string }[] = [],
 ): RrPlan {
   if (hasRepeat(before) || hasRepeat(fresh)) return { kind: "regenerate" };
   if (shape.parityFlipped || shape.poolMembershipChanged) return { kind: "regenerate" };
@@ -187,6 +196,7 @@ export function planRoundRobinReconcile(
     seated.set(at, set);
   };
   for (const l of before) if (freshKeys.has(l.key)) seat(l);
+  for (const l of fixed) seat(l);
   const insert: RrLine[] = [];
   for (const line of [...missing].sort((x, y) => x.roundNo - y.roundNo)) {
     let roundNo = line.roundNo;

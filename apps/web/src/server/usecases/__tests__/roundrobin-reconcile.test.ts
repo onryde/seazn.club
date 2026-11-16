@@ -22,7 +22,7 @@ import { createDivision } from "../divisions";
 import { createEntrants, deleteEntrant } from "../entrants";
 import { undoDivision } from "../history";
 import { startDivision } from "../schedule";
-import { createStages, generateStageFixtures, generateStageFixturesTx, rebuildStageFixtures } from "../stages";
+import { addFixture, createStages, generateStageFixtures, generateStageFixturesTx, rebuildStageFixtures } from "../stages";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { CHESS_SEAT_REF_TYPE, chessSeatRef } from "../external-play/seat-stamp";
 import { seedCourts, seedOrg } from "./_seed";
@@ -1094,3 +1094,97 @@ describe.skipIf(!HAS_DB)("FX-G21 / X-CU-6: a league drawn over day-one seats (`t
     expect(after.map((x) => x.id).sort()).toEqual(before.map((x) => x.id).sort());
   });
 });
+
+// B1 batch review C1: "Add match" writes `ext_key = adhoc-N`, which is no round-robin line. The reconcile read it as a line of a
+// legacy leg, saw a repeat of a pair the engine already draws, and redrew the stage - deleting the organiser's extra match (and
+// over-refusing when setup hung on the lines, and breaking "a second Generate with no roster change is a no-op").
+// Decision for a redraw: it never keeps an Add match row (it cannot, without seating a player twice in a round), so it REFUSES
+// by name (RR_REGENERATE_WOULD_DROP_ADD_MATCH, pointing to Rebuild) and writes nothing.
+describe.skipIf(!HAS_DB)("X-CU-6 Generate leaves Add match rows alone (B1 batch C1)", () => {
+  /** Strip the `-L{leg}` tail from every round-robin key: a stage drawn before W5. */
+  async function makeLegacy(stageId: string) {
+    await sql`update fixtures set ext_key = regexp_replace(ext_key, '-L[0-9]+$', '') where stage_id = ${stageId} and ext_key like '%rr-r%'`;
+  }
+  async function addMatch(r: Rig, a: number, b: number): Promise<Row> {
+    const added = await addFixture(r.auth, r.stageId, { home_entrant_id: r.ids[a]!, away_entrant_id: r.ids[b]! });
+    const row = (await rowsOf(r.stageId)).find((x) => x.id === added.fixture_id)!;
+    expect(row.ext_key, "premise: Add match writes the adhoc key").toMatch(/^adhoc-\d+$/);
+    return row;
+  }
+
+  for (const legacy of [false, true]) {
+    const tag = legacy ? "a pre-W5 stage (legacy keys)" : "a W5 stage";
+
+    it(`Add match then Generate with no roster change is the named no-op, the extra row byte-equal: ${tag}, even and odd fields, both sports`, async () => {
+      let checked = 0;
+      for (const sport of [BADMINTON, FOOTBALL]) {
+        for (const n of [4, 5]) {
+          const r = await rig({ n, sport });
+          if (legacy) await makeLegacy(r.stageId);
+          await addMatch(r, 0, 1);
+          const before = await rowsOf(r.stageId);
+          const byes = await roundByesOf(r.stageId);
+          for (const call of [1, 2]) {
+            const out = await generateStageFixtures(r.auth, r.stageId);
+            expect(out.reconcile, `${sport.key} n=${n} call ${call}`).toEqual({ kind: "noop", placed: [], vacated: [], vacated_seats: 0 });
+            expect(await rowsOf(r.stageId), `${sport.key} n=${n} call ${call}: every row byte-equal, the extra one included`).toEqual(before);
+            expect(await roundByesOf(r.stageId), `${sport.key} n=${n} call ${call}: byes untouched`).toEqual(byes);
+          }
+          checked++;
+        }
+      }
+      expect(checked).toBe(4);
+    });
+
+    it(`Add match then two newcomers (even stays even) is a patch that keeps the extra row and seats nobody twice in a round: ${tag}, both sports`, async () => {
+      let checked = 0;
+      for (const sport of [BADMINTON, FOOTBALL]) {
+        const r = await rig({ n: 4, sport });
+        if (legacy) await makeLegacy(r.stageId);
+        const extra = await addMatch(r, 0, 1);
+        await r.add("P5", 5);
+        await r.add("P6", 6);
+        const out = await generateStageFixtures(r.auth, r.stageId);
+        expect(out.reconcile?.kind, sport.key).toBe("in_place");
+        const after = await rowsOf(r.stageId);
+        expect(after.find((x) => x.id === extra.id), `${sport.key}: the extra row is untouched`).toEqual(extra);
+        const seats = expectNoDoubleBooking(after, sport.key);
+        // 6 players: 15 pair lines + the extra one, two seats each.
+        expect(seats, `${sport.key}: anti-vacuity, every seat checked`).toBe(2 * (15 + 1));
+        expect(after.filter((x) => x.ext_key !== extra.ext_key), `${sport.key}: the 15 lines are the engine's pairs`).toHaveLength(15);
+        checked++;
+      }
+      expect(checked).toBe(2);
+    });
+  }
+
+  it("Add match then ONE newcomer (4 -> 5, an odd field: a redraw) is refused by name and writes nothing, in both sports", async () => {
+    let checked = 0;
+    for (const sport of [BADMINTON, FOOTBALL]) {
+      const r = await rig({ n: 4, sport });
+      await addMatch(r, 0, 1);
+      await r.add("P5", 5);
+      const before = await rowsOf(r.stageId);
+      const byes = await roundByesOf(r.stageId);
+      const err = await refusal(generateStageFixtures(r.auth, r.stageId));
+      expect([err.status, err.code], sport.key).toEqual([409, "RR_REGENERATE_WOULD_DROP_ADD_MATCH"]);
+      expect(await rowsOf(r.stageId), `${sport.key}: byte-equal`).toEqual(before);
+      expect(await roundByesOf(r.stageId), `${sport.key}: byes untouched`).toEqual(byes);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("a group that would re-snake over an Add match row is refused the same way", async () => {
+    const r = await rig({ n: 8, kind: "group", pools: 2 });
+    const line = await keptLine(r.stageId);
+    const added = await addFixture(r.auth, r.stageId, { home_entrant_id: line.home_entrant_id!, away_entrant_id: line.away_entrant_id!, pool_id: line.pool_id! } as never);
+    expect((await rowsOf(r.stageId)).find((x) => x.id === added.fixture_id)?.ext_key, "premise").toMatch(/^adhoc-/);
+    await r.add("P9", 1); // seeded first: everyone moves, a re-snake
+    const before = await rowsOf(r.stageId);
+    const err = await refusal(generateStageFixtures(r.auth, r.stageId));
+    expect(err.code).toBe("RR_REGENERATE_WOULD_DROP_ADD_MATCH");
+    expect(await rowsOf(r.stageId)).toEqual(before);
+  });
+});
+
