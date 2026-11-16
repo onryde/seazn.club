@@ -231,7 +231,7 @@
 .mkp-ticket{background:var(--mk-light-warm);border-radius:16px;display:grid;position:relative;box-shadow:0 20px 40px -24px rgb(21 11 54/.6);margin-top:24px;overflow:hidden}
 .mkp-ticket .mkp-main{padding:22px 22px 20px}
 .mkp-ticket .mkp-k{font-family:var(--mk-font-display, var(--font-geist-sans));font-size:14px;letter-spacing:.16em;color:#5d5873;text-transform:uppercase}
-.mkp-ticket h3{font-family:var(--mk-font-display, var(--font-geist-sans));font-size:44px;line-height:1;margin-top:6px}
+.mkp-ticket h3{font-family:var(--mk-font-display, var(--font-geist-sans));font-size:clamp(30px,9vw,38px);line-height:1;margin-top:6px}
 .mkp-ticket ul{margin-top:14px;display:grid;gap:8px;font-size:15px}
 .mkp-ticket li{display:flex;justify-content:space-between;gap:12px;border-bottom:1px dashed #cfc7e2;padding-bottom:7px}
 .mkp-ticket li b{font-weight:600;text-align:right}
