@@ -305,6 +305,8 @@ function statusText(s: QualStatus): string {
       return dictString("en", "table.qual.status.needsHelp");
     case "out":
       return dictString("en", "table.qual.status.out");
+    default: // engine 10.0.0's frozen "qualified" reads as through (as qualification-view.ts)
+      return dictString("en", "table.qual.status.through");
   }
 }
 
@@ -326,6 +328,8 @@ function ifYouLoseText(s: QualStatus, left: number): string {
       return dictString("en", "table.qual.ifYouLose.needsHelp");
     case "out":
       return dictString("en", "table.qual.ifYouLose.out");
+    default: // engine 10.0.0's frozen "qualified" reads as through (as qualification-view.ts)
+      return dictString("en", "table.qual.ifYouLose.through");
   }
 }
 
