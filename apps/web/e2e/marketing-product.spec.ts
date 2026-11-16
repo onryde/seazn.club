@@ -300,6 +300,19 @@ test.describe("scheduling: the day board demo", () => {
   });
 });
 
+test.describe("scheduling: the recorded runs", () => {
+  test("three recordings are offered, and picking one plays it on the product's own screen with its price", async ({ page }) => {
+    await visit(page, "/product/scheduling");
+    const runs = page.locator('[data-section="runs"]');
+    await expect(runs.locator("[data-ai-template]")).toHaveCount(3);
+    await runs.locator('[data-ai-template="club-night"]').click();
+    await expect(runs.locator('[data-ai-demo="ready"]')).toHaveAttribute("data-ai-started", "true");
+    await expect(runs.locator('[data-ai-screen="true"]')).toBeVisible();
+    await expect(runs.locator('[data-ai-price="run"]')).toBeVisible({ timeout: 30_000 });
+    expect(Number(await runs.locator('[data-ai-price="run"]').getAttribute("data-credits"))).toBeGreaterThan(0);
+  });
+});
+
 test.describe("product pages: layout", () => {
   for (const path of PAGES) {
     for (const width of WIDTHS) {
@@ -365,7 +378,7 @@ test.describe("product pages: layout", () => {
       ["/sports/cricket", 9, ["chase-score", "chase-stream-score"]],
       ["/product/remote-scoring", 7, ["signal-phone-score", "signal-server-score"]],
       ["/product/format", 6, []],
-      ["/product/scheduling", 6, []],
+      ["/product/scheduling", 7, []],
     ] as const) {
       await page.goto(path);
       for (const id of scores) await expect(page.getByTestId(id)).toHaveText("27/2");

@@ -1,11 +1,15 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { DictProvider } from "@/components/i18n/dict-provider";
+import { AiArchitectDemo } from "@/components/marketing/ai-architect-demo";
 import { MarketingShell } from "@/components/marketing/marketing-shell";
 import { DayBoardDemo } from "@/components/marketing/product/day-board-demo";
 import { dayBoardLabels } from "@/components/marketing/product/day-board-labels";
 import { Accent, Closing, DemoBand, PageHero, ProductPage, Questions, Road, Ticket } from "@/components/marketing/product/parts";
 import { getDictionary, t } from "@/lib/i18n";
+import { schedulingRungWeights } from "@/lib/ai-rung";
 import { hasLocale } from "@/lib/i18n-constants";
+import { pickDictPrefixes } from "@/lib/i18n-subset";
 import { marketingMeta } from "@/lib/seo-meta";
 
 const PATH = "/product/scheduling";
@@ -22,12 +26,17 @@ export async function generateMetadata({ params }: { params: Promise<{ lang: str
  * Scheduling: the feature-page shape (docs/superpowers/specs/2026-11-16-product-pages-design.md §4). Replaces the old
  * `/scheduling` page as the one the nav links to. The demo is a small model of the schedule board that keeps the
  * board's own two refusals (one match per court per time; nobody in two matches at once) and its 15-minute day shift.
+ * Below the steps, the recorded-runs section (carried over from the old page) replays three real scheduler runs.
  * The ticket's plan rows reuse the pricing matrix's own labels.
  */
 export default async function SchedulingProductPage({ params }: { params: Promise<{ lang: string }> }) {
   const { lang } = await params;
   if (!hasLocale(lang)) notFound();
   const d = await getDictionary(lang, "marketing");
+  // The recorded-runs section replays real scheduler runs through the PRODUCT's own trace and diff components, whose
+  // copy lives in the `ui` catalogue: only the two prefixes they read are shipped. Rung weights are resolved here
+  // because their overrides exist only on the server (#385).
+  const runsDict = { ...d, ...pickDictPrefixes(await getDictionary(lang, "ui"), ["board.ai.", "board.conflict."]) };
   const s = (key: string) => t(d, `product.scheduling.${key}`);
   const shared = (key: string) => t(d, `product.shared.${key}`);
 
@@ -51,6 +60,12 @@ export default async function SchedulingProductPage({ params }: { params: Promis
             caption: s(`road.${n}.cap`),
           }))}
         />
+
+        <div data-section="runs">
+          <DictProvider dict={runsDict} locale={lang}>
+            <AiArchitectDemo locale={lang} weights={schedulingRungWeights()} />
+          </DictProvider>
+        </div>
 
         <Ticket
           title={s("ticket.title")}

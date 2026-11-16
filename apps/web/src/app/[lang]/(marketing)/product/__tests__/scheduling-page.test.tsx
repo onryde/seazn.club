@@ -30,7 +30,16 @@ describe("/product/scheduling", () => {
   });
 
   it("sections come in the feature-page order", async () => {
-    expect(sectionOrder(await renderPage(Page, { lang: "en" }))).toEqual(["hero", "demo", "road", "ticket", "questions", "closing"]);
+    expect(sectionOrder(await renderPage(Page, { lang: "en" }))).toEqual(["hero", "demo", "road", "runs", "ticket", "questions", "closing"]);
+  });
+
+  it.each(LOCALES.map((l) => [l]))("%s: the recorded-runs section is the product's own replay, with a card per recording and translated chrome", async (lang) => {
+    const html = await renderPage(Page, { lang });
+    const runs = html.slice(html.indexOf('data-section="runs"'), html.indexOf('data-section="ticket"'));
+    expect(runs.split("data-ai-template=").length - 1).toBe(3);
+    expect(textOf(runs)).toContain(DICTS[lang]!["scheduling.aidemo.title"]!);
+    // The replay renders the board's own components, whose copy lives in the ui catalogue: no raw key may show.
+    expect(textOf(runs)).not.toMatch(/\b(board|scheduling)\.[a-zA-Z]+\.[a-zA-Z0-9.]+/);
   });
 
   it("the demo is rendered on the server at the model's opening day", async () => {
