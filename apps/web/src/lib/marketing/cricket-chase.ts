@@ -66,3 +66,19 @@ export function needText(s: ChaseState): { runs: number } {
 export function ballsLeft(s: ChaseState, ballsPerOver: number): number {
   return Math.max(0, CHASE.overs * ballsPerOver - s.balls);
 }
+
+/**
+ * What the stream tile announces after the last tap, the way the real overlay does: a boundary or a wicket for the
+ * ball itself, and an end-of-over card when that ball was the over's last legal one. Derived from the state alone, so
+ * taking a ball back takes its moment back.
+ */
+export type ChaseMoment = { ball: "six" | "four" | "out" | null; endOfOver: { over: number; runs: number } | null };
+
+const MARK_RUNS = (mark: string) => (mark === "wd" ? 1 : mark === "W" ? 0 : Number(mark));
+
+export function chaseMoment(s: ChaseState, ballsPerOver: number): ChaseMoment {
+  const ball = s.last === "6" ? "six" : s.last === "4" ? "four" : s.last === "W" ? "out" : null;
+  // A wide is not a ball of the over: only a legal delivery can be the one that ends it.
+  const ended = s.last !== null && s.last !== "wd" && s.balls > 0 && s.balls % ballsPerOver === 0;
+  return { ball, endOfOver: ended ? { over: s.balls / ballsPerOver, runs: s.over.reduce((n, m) => n + MARK_RUNS(m), 0) } : null };
+}

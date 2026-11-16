@@ -3,7 +3,7 @@
 import { describe, expect, it } from "vitest";
 import { cricketPadRules } from "@seazn/engine/pad";
 import { BALLS_PER_OVER } from "../cricket-chase-rules";
-import { CHASE, chaseOver, needText, openingChase, oversText, tap, undo, type ChaseKey, type ChaseState } from "../cricket-chase";
+import { CHASE, chaseOver, needText, openingChase, oversText, tap, undo, type ChaseKey, type ChaseState, chaseMoment } from "../cricket-chase";
 
 const KEYS: ChaseKey[] = ["0", "1", "2", "3", "4", "6", "wide", "out"];
 const ENGINE_BPO = cricketPadRules.ballsPerOver({});
@@ -108,5 +108,48 @@ describe("cricket chase: balls left", () => {
     expect(ballsLeft(s, ENGINE_BPO)).toBe(CHASE.overs * ENGINE_BPO - s.balls);
     expect(ballsLeft(tap(s, "1", ENGINE_BPO), ENGINE_BPO)).toBe(ballsLeft(s, ENGINE_BPO) - 1);
     expect(ballsLeft(tap(s, "wide", ENGINE_BPO), ENGINE_BPO)).toBe(ballsLeft(s, ENGINE_BPO));
+  });
+});
+
+// What the stream tile announces after a tap. Expected values are worked by hand from the laws (a boundary is a four
+// or a six; an over is `ballsPerOver` LEGAL balls; a wide is one run and not a ball), never read from the model.
+describe("chaseMoment", () => {
+  const play = (keys: ChaseKey[], bpo = 6) => keys.reduce((s, k) => tap(s, k, bpo), openingChase());
+
+  it("nothing before the first tap, and nothing for a ball that is not a moment", () => {
+    expect(chaseMoment(openingChase(), 6)).toEqual({ ball: null, endOfOver: null });
+    for (const key of ["0", "1", "2", "3", "wide"] as const) expect(chaseMoment(play([key]), 6), key).toEqual({ ball: null, endOfOver: null });
+  });
+
+  it("a six, a four and a wicket each announce themselves, and are told apart", () => {
+    expect(chaseMoment(play(["6"]), 6).ball).toBe("six");
+    expect(chaseMoment(play(["4"]), 6).ball).toBe("four");
+    expect(chaseMoment(play(["out"]), 6).ball).toBe("out");
+    // Only the LAST ball: a six followed by a single is no longer a moment.
+    expect(chaseMoment(play(["6", "1"]), 6).ball).toBeNull();
+  });
+
+  it("the sixth legal ball ends the over: its number, and every run scored in it, wides included", () => {
+    // The demo opens 19 balls in (3.1) with a single on the strip. Five more legal balls and one wide finish over 4.
+    const s = play(["2", "wide", "4", "0", "1", "6"]);
+    expect(s.balls).toBe(24);
+    expect(chaseMoment(s, 6)).toEqual({ ball: "six", endOfOver: { over: 4, runs: 1 + 2 + 1 + 4 + 0 + 1 + 6 } });
+    // One ball earlier it had not ended.
+    expect(chaseMoment(play(["2", "wide", "4", "0", "1"]), 6).endOfOver).toBeNull();
+  });
+
+  it("a wide after the over has ended is the next over's ball, not a second end of over", () => {
+    const s = play(["2", "4", "0", "1", "6", "wide"]);
+    expect(s.balls).toBe(24);
+    expect(chaseMoment(s, 6).endOfOver).toBeNull();
+  });
+
+  it("the over length is the parameter's: five-ball overs end the over one legal ball in", () => {
+    expect(chaseMoment(play(["1"], 5), 5).endOfOver).toEqual({ over: 4, runs: 2 });
+    expect(chaseMoment(play(["1"], 6), 6).endOfOver).toBeNull();
+  });
+
+  it("taking the ball back takes its moment back", () => {
+    expect(chaseMoment(undo(play(["6"])), 6)).toEqual({ ball: null, endOfOver: null });
   });
 });

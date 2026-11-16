@@ -41,7 +41,7 @@ export default async function StreamingProductPage({ params }: { params: Promise
           secondary={{ label: shared("startFree"), href: SIGNUP }}
         >
           <DemoBand id="try" title={s("demo.title")} note={s("demo.note")}>
-            <ChaseDemo tiles={["pad", "stream"]} streamControls labels={chaseDemoLabels(d)} teams={DEMO_TEAMS} ballsPerOver={BALLS_PER_OVER} />
+            <ChaseDemo tiles={["pad", "stream"]} streamControls labels={chaseDemoLabels(d, await getDictionary(lang, "public"))} teams={DEMO_TEAMS} ballsPerOver={BALLS_PER_OVER} />
           </DemoBand>
         </PageHero>
 

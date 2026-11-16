@@ -179,6 +179,11 @@
 .mkp-ov-a .mkp-tg{color:#a79dd0;white-space:nowrap}.mkp-ov-a .mkp-nm{font-family:var(--mk-font-display, var(--font-geist-sans));font-weight:700;font-size:1.5em;margin-left:auto;white-space:nowrap}
 .mkp-ov-a .mkp-sc{font-family:var(--mk-font-display, var(--font-geist-sans));font-weight:700;font-size:2.4em;color:var(--mk-lime);line-height:1}.mkp-ov-a .mkp-ovs{color:#a79dd0}
 .mkp-ov-b{padding:.5em 1em;background:#2a2148;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* the moment slab: a boundary, a wicket, the end of an over, announced above the score bar */
+.mkp-mom{position:absolute;left:4%;top:16%;max-width:92%;display:flex;align-items:center;gap:1em;background:#1e1147;color:#fff;border-left:.4em solid var(--mk-lime);border-radius:4px;padding:.6em 1em .7em;box-shadow:0 10px 24px rgb(0 0 0/.35);font-size:clamp(8px,1.55cqw,15px)}
+.mkp-mom b{font-family:var(--mk-font-display, var(--font-geist-sans));font-size:3.6em;line-height:.95;color:var(--mk-lime);letter-spacing:.02em}
+.mkp-mom span{display:block;white-space:nowrap}.mkp-mom span u{display:block;text-decoration:none;font-weight:700;font-size:1.15em}
+.mkp-mom.mkp-mom-out{border-left-color:#f87171}.mkp-mom.mkp-mom-out b{color:#f87171}
 .mkp-ov.mkp-bug2{left:3%;right:auto;top:6%;bottom:auto;width:36%}
 .mkp-ov.mkp-bug2 .mkp-ov-a{flex-wrap:wrap;gap:.3em .8em;border-bottom:0;border-left:.3em solid var(--mk-lime)}.mkp-ov.mkp-bug2 .mkp-tg{display:none}.mkp-ov.mkp-bug2 .mkp-nm{margin-left:0}
 .mkp-ov.mkp-soon .mkp-ov-a .mkp-sc,.mkp-ov.mkp-soon .mkp-ovs,.mkp-ov.mkp-soon .mkp-ov-b{display:none}

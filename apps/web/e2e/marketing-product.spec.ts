@@ -243,6 +243,31 @@ test.describe("product pages: the working demo", () => {
     await expect(demo).toHaveAttribute("data-deal-status", "live");
   });
 
+  test("cricket: a six, a four and a wicket are announced on the stream tile, and the over's last ball adds its summary", async ({ page }) => {
+    await visit(page, "/sports/cricket");
+    const moment = page.getByTestId("chase-moment");
+    await expect(moment).toHaveCount(0);
+    for (const [key, kind, word] of [["6", "six", "SIX"], ["4", "four", "FOUR"], ["out", "out", "OUT"]] as const) {
+      await tapKey(page, key);
+      await expect(moment).toHaveAttribute("data-moment", kind);
+      await expect(moment).toHaveText(word);
+    }
+    // An ordinary ball clears it; the demo opened one ball into the over, so two more legal balls finish it.
+    await tapKey(page, "1");
+    await expect(moment).toHaveCount(0);
+    await tapKey(page, "2");
+    await expect(moment).toHaveAttribute("data-moment", "over");
+    const score = await page.getByTestId("chase-stream-score").innerText();
+    await expect(page.getByTestId("chase-moment-over")).toContainText(score);
+    await expect(page.getByTestId("chase-moment-over")).toContainText("End of over 4");
+    // It sits inside the picture and clear of the score bar.
+    const [m, v, bar] = await Promise.all([moment.boundingBox(), page.getByTestId("chase-stream").boundingBox(), page.locator('[data-testid="chase-stream"] .mkp-ov').boundingBox()]);
+    expect(m!.x + m!.width).toBeLessThanOrEqual(v!.x + v!.width + 1);
+    expect(m!.y + m!.height).toBeLessThanOrEqual(bar!.y + 1);
+    await page.getByTestId("chase-undo").click();
+    await expect(moment).toHaveCount(0);
+  });
+
   test("cricket: finishing the chase updates the table, and the keys then stop changing the score", async ({ page }) => {
     await visit(page, "/sports/cricket");
     const me = page.getByTestId("chase-table-me").locator("td");

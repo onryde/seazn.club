@@ -5,6 +5,7 @@ import type { ChaseDemoLabels } from "./chase-demo-labels";
 import {
   CHASE,
   ballsLeft,
+  chaseMoment,
   chaseOver,
   needText,
   openingChase,
@@ -73,6 +74,7 @@ export function ChaseDemo({
   const winner = end === "won" ? teams.batting : end === "allOut" ? teams.bowling : null;
   const need = { team: teams.batting, runs: needText(s).runs, balls: ballsLeft(s, ballsPerOver) };
   const ballWord = (m: string) => (m === "wd" ? l["pad.wide"] : m === "W" ? l["pad.out"] : m);
+  const moment = chaseMoment(s, ballsPerOver);
   const firstInnings = `${CHASE.target - 1}/${FIRST_INNINGS_WICKETS}`;
   // A changing `key` restarts the CSS flash on every accepted tap; the class is absent until the first one and under
   // reduced motion (`pulse` never moves).
@@ -207,6 +209,17 @@ export function ChaseDemo({
           <div className="mkp-vidwrap">
             <div key={`vid-${pulse}`} className={`mkp-vid${state === "recon" ? " mkp-recon" : ""}${pulse ? " mkp-flash" : ""}`} data-testid="chase-stream" data-stream-style={style} data-stream-state={state}>
               <span className="mkp-yt">{l["stream.channel"]}</span>
+              {state === "live" && (moment.ball || moment.endOfOver) ? (
+                <div className={`mkp-mom${moment.ball === "out" ? " mkp-mom-out" : ""}`} data-testid="chase-moment" data-moment={moment.ball ?? "over"} aria-live="polite">
+                  {moment.ball ? <b>{l[`moment.${moment.ball}`]}</b> : null}
+                  {moment.endOfOver ? (
+                    <span data-testid="chase-moment-over">
+                      <u>{fill(l["moment.endOfOver"], { over: moment.endOfOver.over })}</u>
+                      {fill(l["moment.runsScore"], { runs: moment.endOfOver.runs, score })}
+                    </span>
+                  ) : null}
+                </div>
+              ) : null}
               <div className={`mkp-ov${style === "bug" ? " mkp-bug2" : ""}${state === "soon" ? " mkp-soon" : ""}`}>
                 <div className="mkp-ov-a">
                   <span className="mkp-lv">

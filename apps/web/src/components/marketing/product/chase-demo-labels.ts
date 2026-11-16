@@ -12,8 +12,19 @@ const L = [
   "stream.labelSport", "stream.labelStreaming", "stream.channel", "stream.target", "stream.need",
   "stream.style", "stream.bar", "stream.bug", "stream.state", "stream.soon", "stream.live", "stream.recon", "stream.final",
 ] as const;
-export type ChaseDemoLabels = Record<(typeof L)[number], string>;
+/** The stream tile's moments, worded by the REAL overlay's own dictionary (`public`), so the demo says what the stream says. */
+const MOMENTS = {
+  "moment.six": "overlay.moment.six",
+  "moment.four": "overlay.moment.four",
+  "moment.out": "overlay.moment.out",
+  "moment.endOfOver": "overlay.endOfOver.title",
+  "moment.runsScore": "overlay.endOfOver.runsScore",
+} as const;
+export type ChaseDemoLabels = Record<(typeof L)[number] | keyof typeof MOMENTS, string>;
 
-export function chaseDemoLabels(dict: Dict): ChaseDemoLabels {
-  return Object.fromEntries(L.map((k) => [k, t(dict, `product.demo.${k}` as never)])) as ChaseDemoLabels;
+export function chaseDemoLabels(dict: Dict, overlay: Dict): ChaseDemoLabels {
+  return {
+    ...Object.fromEntries(L.map((k) => [k, t(dict, `product.demo.${k}` as never)])),
+    ...Object.fromEntries(Object.entries(MOMENTS).map(([k, key]) => [k, t(overlay, key as never)])),
+  } as ChaseDemoLabels;
 }

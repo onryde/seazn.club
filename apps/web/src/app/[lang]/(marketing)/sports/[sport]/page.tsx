@@ -129,7 +129,7 @@ export default async function SportPage({ params }: { params: Promise<{ lang: st
           secondary={{ label: s("start"), href: SIGNUP }}
         >
           <DemoBand id="try" title={s("demo.title")} note={s("demo.note", { team: DEMO_TEAMS.batting, target: CHASE.target })}>
-            <ChaseDemo tiles={["pad", "matchCentre", "table", "stream"]} streamControls={false} labels={chaseDemoLabels(d)} teams={DEMO_TEAMS} ballsPerOver={BALLS_PER_OVER} />
+            <ChaseDemo tiles={["pad", "matchCentre", "table", "stream"]} streamControls={false} labels={chaseDemoLabels(d, await getDictionary(lang, "public"))} teams={DEMO_TEAMS} ballsPerOver={BALLS_PER_OVER} />
           </DemoBand>
         </PageHero>
 

@@ -11,12 +11,17 @@ import en from "@/dictionaries/en/marketing.json";
 import fr from "@/dictionaries/fr/marketing.json";
 import es from "@/dictionaries/es/marketing.json";
 import nl from "@/dictionaries/nl/marketing.json";
+import enPublic from "@/dictionaries/en/public.json";
+import frPublic from "@/dictionaries/fr/public.json";
+import esPublic from "@/dictionaries/es/public.json";
+import nlPublic from "@/dictionaries/nl/public.json";
 
 const DICTS = { en, fr, es, nl } as unknown as Record<string, Dict>;
+const PUBLIC = { en: enPublic, fr: frPublic, es: esPublic, nl: nlPublic } as unknown as Record<string, Dict>;
 const TEAMS = { batting: "Thorpe Bay Tigers", bowling: "Southend Blue Blazers" };
 const ALL: ChaseTile[] = ["pad", "matchCentre", "table", "stream"];
 const render = (lang: string, tiles: ChaseTile[], streamControls: boolean) =>
-  renderToStaticMarkup(<ChaseDemo tiles={tiles} streamControls={streamControls} labels={chaseDemoLabels(DICTS[lang]!)} teams={TEAMS} ballsPerOver={BALLS_PER_OVER} />);
+  renderToStaticMarkup(<ChaseDemo tiles={tiles} streamControls={streamControls} labels={chaseDemoLabels(DICTS[lang]!, PUBLIC[lang]!)} teams={TEAMS} ballsPerOver={BALLS_PER_OVER} />);
 const KEYS = ["0", "1", "2", "3", "4", "6", "wide", "out"];
 
 describe("ChaseDemo server render", () => {
@@ -91,5 +96,20 @@ describe("ChaseDemo ships no engine to the browser", () => {
     walk(path.join(src, "components/marketing/product/chase-demo.tsx"));
     expect(seen.size).toBeGreaterThanOrEqual(2);
     expect([...seen].some((f) => f.endsWith("cricket-chase.ts"))).toBe(true);
+  });
+
+  it("the stream tile's moments are worded by the real overlay's dictionary, and none shows before a tap", () => {
+    let checked = 0;
+    for (const lang of LOCALES) {
+      const l = chaseDemoLabels(DICTS[lang]!, PUBLIC[lang]!);
+      const pub = PUBLIC[lang] as unknown as Record<string, string>;
+      for (const [label, key] of [["moment.six", "overlay.moment.six"], ["moment.four", "overlay.moment.four"], ["moment.out", "overlay.moment.out"], ["moment.endOfOver", "overlay.endOfOver.title"], ["moment.runsScore", "overlay.endOfOver.runsScore"]] as const) {
+        expect(pub[key], `${lang} ${key}`).toBeTruthy();
+        expect(l[label], `${lang} ${label}`).toBe(pub[key]);
+        checked++;
+      }
+      expect(render(lang, ALL, false)).not.toContain('data-testid="chase-moment"');
+    }
+    expect(checked).toBe(LOCALES.length * 5);
   });
 });
