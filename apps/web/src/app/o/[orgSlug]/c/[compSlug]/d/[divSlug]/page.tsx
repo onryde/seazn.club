@@ -521,7 +521,11 @@ export default async function DivisionPage({
           fixturesPublicDict,
           await withTenant(auth.orgId, (tx) =>
             tx<{ id: string; key: string; name: string }[]>`
-              select id, key, name from pools where stage_id in ${tx(groupStageIds)}`,
+              -- W5 T3 (X-BD-7): a group of ONE pool has a pool row now, but reads as a league: no "Pool A" chip on its rows
+              -- (owner R24 pick 5: a one-pool division shows no letter). Only a stage with several pools names its pools.
+              select id, key, name from pools
+              where stage_id in ${tx(groupStageIds)}
+                and (select count(*) from pools q where q.stage_id = pools.stage_id) > 1`,
           ),
         )
       : undefined;

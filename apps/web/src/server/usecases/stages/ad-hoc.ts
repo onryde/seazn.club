@@ -6,6 +6,9 @@ import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { requireFeature } from "@/lib/entitlements";
 import { swissRefusal } from "../swiss-refusal";
+import { roundRobinRefusal } from "../roundrobin-refusal";
+import { hasActiveAbandonSql } from "../../engine-db/recorded-abandon";
+import { adhocRoundPlan, type AdhocRoundDefault } from "@/lib/adhoc-round";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { afterScheduleWrite, courtVenueIds, divisionLockState } from "../schedule";
 import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lock";
@@ -240,7 +243,16 @@ export async function addFixture(
     venue_id?: string | null;
     court_id?: string | null;
   },
+  /**
+   * W5 T3 (X-BD-6, RB5-S5): the round a match lands in when `input.round_no` names none. `latest_free` (the default) is the latest
+   * existing round where NEITHER side is seated, else a new round after the last (`lib/adhoc-round.ts`, the same plan the form's
+   * select is drawn from). `append` is always a new round at `max(round) + 1`: the quick-match decider's documented rule
+   * (`quick-match-add.ts`), which must not move: a Not played quick-match line is `cancelled` and so "free", and the decider is
+   * not a replacement for it.
+   */
+  opts: { roundDefault?: AdhocRoundDefault } = {},
 ): Promise<{ fixture_id: string }> {
+  const roundDefault: AdhocRoundDefault = opts.roundDefault ?? "latest_free";
   const write = await withTenant(auth.orgId, async (tx) => {
     const [stage] = await tx<{ division_id: string; kind: string; status: string; competition_id: string }[]>`
       select s.division_id, s.kind, s.status, d.competition_id
@@ -314,9 +326,16 @@ export async function addFixture(
       }
       poolId = ids[0];
     }
-    const [{ maxRound }] = await tx<{ maxRound: number }[]>`
-      select coalesce(max(round_no), 0)::int as "maxRound" from fixtures where stage_id = ${stageId}`;
-    const round = input.round_no ?? maxRound + 1;
+    // A line "seats" its two sides unless it is voided (`cancelled`: Not played, a called-off match) or a withdrawal EXPUNGED it
+    // (it left the table altogether, so nothing is owed on it): the same reading the form's select takes.
+    const lines = await tx<{ round_no: number; home: string | null; away: string | null; seats: boolean }[]>`
+      select f.round_no, f.home_entrant_id as home, f.away_entrant_id as away,
+             (f.status <> 'cancelled' and not ${hasActiveAbandonSql(tx, "f", { expunge: true })}) as seats
+      from fixtures f where f.stage_id = ${stageId}`;
+    const plan = adhocRoundPlan(lines, input.home_entrant_id, input.away_entrant_id, roundDefault);
+    // An explicit round must exist or be the next one: a round two past the table would leave a hole no round-robin view can draw.
+    if (input.round_no !== undefined && input.round_no > plan.newRound) throw roundRobinRefusal("RR_ADHOC_ROUND_INVALID");
+    const round = input.round_no ?? plan.suggested;
     const [{ nextSeq }] = await tx<{ nextSeq: number }[]>`
       select coalesce(max(seq_in_round), 0)::int + 1 as "nextSeq"
       from fixtures where stage_id = ${stageId} and round_no = ${round}`;

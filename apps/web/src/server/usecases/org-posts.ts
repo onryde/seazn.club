@@ -35,6 +35,7 @@ import { log } from "@/server/logger";
 import { slugify, withUniqueSlug, SLUG_CONSTRAINT } from "./slugs";
 import { QUICK_MATCH_SYSTEM_ORG_ID } from "@/lib/quick-match-constants";
 import { playerStatsWithoutWaiting } from "./player-stats";
+import { readSingleTableSnapshot } from "./stage-table-snapshot";
 import { creditsNobody, forfeitLedgerOfReason } from "@/lib/forfeit-tag";
 import { outcomeTagWords } from "@/lib/outcome-text";
 import {
@@ -1051,9 +1052,7 @@ export async function assembleRecapEnrichment(
     // reaching the second query below is a genuine SQL-level risk the
     // savepoint now covers too.
     await tx.savepoint(async (sp) => {
-      const [snap] = await sp<{ rows: RankedEntrantRow[]; previous_rows: RankedEntrantRow[] | null }[]>`
-        select rows, previous_rows from standings_snapshots
-        where stage_id = ${fx.stage_id} and pool_id is null`;
+      const snap = await readSingleTableSnapshot<RankedEntrantRow[]>(sp, fx.stage_id);
       if (snap) {
         const climber = biggestClimber(snap.rows, snap.previous_rows);
         if (climber) {
@@ -1130,11 +1129,8 @@ async function pointsUnitOf(tx: Tx, stageId: string) {
  *  table (started, nothing counted — X-TB-6) has no top: its order is the seed
  *  list, so it is no table at all here (anti-goal 3: nobody reads as first). */
 async function topStandings(tx: Tx, stageId: string, top = RECAP_STANDINGS_TOP): Promise<StandingRow[]> {
-  const rows = await tx<
-    { rows: { entrantId: string; played: number; points: number; rank?: number; level?: boolean }[] }[]
-  >`
-    select rows from standings_snapshots where stage_id = ${stageId} and pool_id is null`;
-  const table = rows[0]?.rows;
+  const snap = await readSingleTableSnapshot<{ entrantId: string; played: number; points: number; rank?: number; level?: boolean }[]>(tx, stageId);
+  const table = snap?.rows;
   if (!table || table.length === 0 || isLevelTable(table)) return [];
   const unit = await pointsUnitOf(tx, stageId);
   const sorted = [...table].sort(
@@ -1318,9 +1314,7 @@ export async function assembleDigestStandings(
       // away from `invalid input syntax for type uuid` — that is the exact
       // trigger org-posts-digest.test.ts now reproduces.
       await tx.savepoint(async (sp) => {
-        const [snap] = await sp<{ rows: RankedEntrantRow[]; previous_rows: RankedEntrantRow[] | null }[]>`
-          select rows, previous_rows from standings_snapshots
-          where stage_id = ${stage.stage_id} and pool_id is null`;
+        const snap = await readSingleTableSnapshot<RankedEntrantRow[]>(sp, stage.stage_id);
         // A level table (X-TB-6) has no top 3 — its order is the seed list (anti-goal 3).
         if (!snap || snap.rows.length === 0 || isLevelTable(snap.rows)) return;
         const unit = await pointsUnitOf(sp, stage.stage_id);

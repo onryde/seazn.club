@@ -20,7 +20,7 @@ import { ShareButton } from "@/components/share-button";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { Tabs } from "@/components/public-site/tabs";
 import { Schedule } from "@/components/public-site/schedule";
-import { publicScheduleCopy, publicWatchCopy } from "@/server/public-site/schedule-copy";
+import { publicScheduleCopy, publicSitsOutLines, publicWatchCopy } from "@/server/public-site/schedule-copy";
 import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/online-play";
 import { loadDivisionWatch } from "@/server/usecases/external-play-read";
 import { StandingsTable } from "@/components/public-site/standings-table";
@@ -557,6 +557,7 @@ export default async function DivisionHomePage({ params }: Props) {
               roundLabels={roundLabels}
               stageOrder={stageOrder}
               stageNames={stageNames}
+              sitsOut={publicSitsOutLines(dict, stages, entrantNames, entrantStatuses)}
               copy={scheduleCopy}
               locale={orgLocale}
               {...(watch ? { watch } : {})}

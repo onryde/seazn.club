@@ -460,6 +460,7 @@ export async function listDivisionFixturesForBoard(
         conditional: boolean;
         held: boolean;
         bye_line: boolean;
+        pool_key: string | null;
       })[]
     >`
       select f.id, f.stage_id, f.division_id, f.pool_id, f.round_no, f.seq_in_round, f.fixture_no,
@@ -473,15 +474,19 @@ export async function listDivisionFixturesForBoard(
              (f.status = 'scheduled' and ${fixtureHasResultSql(tx)}) as held,
              -- W3 T3 (X-SW-29), W4 T3 (X-SD-5): a bye line, which no board write places (B1a review #1:
              -- the server's own predicate, so a knockout bye line is no drag target either).
-             ${byeLineSql(tx, "f")} as bye_line
+             ${byeLineSql(tx, "f")} as bye_line,
+             -- W5 T3 (X-SF-5): the pool's letter, for a stage with SEVERAL pools only (a one-pool group reads as a league).
+             (select p.key from pools p where p.id = f.pool_id
+                and (select count(*) from pools q where q.stage_id = p.stage_id) > 1) as pool_key
       from fixtures f
       where f.division_id = ${divisionId}
       order by f.stage_id, f.round_no, f.seq_in_round`;
     // Omitted, not nulled: the RSC flight serialises an undefined value as
     // "$undefined" and a null/false as the key plus its value — only a key
     // that is not there costs nothing.
-    return rows.map(({ ext_key, lane, is_final, third_place, conditional, held, bye_line, ...row }) => ({
+    return rows.map(({ ext_key, lane, is_final, third_place, conditional, held, bye_line, pool_key, ...row }) => ({
       ...row,
+      ...(pool_key !== null ? { pool_key } : {}),
       ...(held ? { held: true as const } : {}),
       ...(bye_line ? { bye_line: true as const } : {}),
       ...(ext_key !== null && ext_key.startsWith("pp-") ? { ext_key } : {}),

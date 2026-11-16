@@ -8,7 +8,7 @@ import { divisionAccent, divisionHue, divisionShortCode, divisionTint } from "@/
 import type { FeedLabelPair } from "@/lib/schedule-board";
 import { CONFLICT_LABEL, boardMovable, cardTitle, type BoardConflict, type BoardFixture } from "./types";
 import { formatBoardConflictDetail } from "./conflict-detail-format";
-import type { BoardRoundCode } from "./round-codes";
+import { plainRoundCode, type BoardRoundCode } from "./round-codes";
 import { RoundCodeChip } from "./round-code-chip";
 import { useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
@@ -181,7 +181,7 @@ export function FixtureBlock({
         {time && <span>{time}</span>}
         <RoundCodeChip
           testId="board-round-code"
-          code={roundCode ? roundCode.code : `R${fixture.round_no}`}
+          code={roundCode ? roundCode.code : plainRoundCode(fixture)}
           knockout={roundCode !== undefined}
           title={roundCode?.label}
         />

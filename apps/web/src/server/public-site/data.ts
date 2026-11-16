@@ -406,6 +406,9 @@ export interface PublicFixture {
 }
 
 export interface PublicStage {
+  /** W5 T3 (X-SF-4): the stage's recorded byes (`config.round_byes`: `{pool, round_no, leg, entrant_id}`), or null when it has none
+   *  (a knockout, a stage drawn before W5). Read for the public fixtures list's "Sits out" line only (`sitsOutByesOf`). */
+  round_byes?: unknown;
   id: string;
   division_id: string;
   seq: number;
@@ -1007,6 +1010,8 @@ export async function readPublicDivisionDetail(
              -- view still decides which rows exist and the rest of config
              -- (progression, cross-feeds) stays private.
              (select x.config->'rules' from stages x where x.id = public_stages_v.id) as rules,
+             -- W5 T3 (X-SF-4): who sits out which round, for the fixtures list's "Sits out" line - the one other key of config read here.
+             (select x.config->'round_byes' from stages x where x.id = public_stages_v.id) as round_byes,
              -- C16: the stored progression, for the champion rule graph ONLY (see stageFeedsOf); never published.
              (select x.progression from stages x where x.id = public_stages_v.id) as progression
       from public_stages_v where division_id = ${division.id} order by seq`;

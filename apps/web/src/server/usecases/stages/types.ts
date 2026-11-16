@@ -102,6 +102,8 @@ export type BoardFixtureRow = Omit<
   /** W3 T3 (X-SW-29), W4 T3 (X-SD-5): a bye line (`byeLineSql` — a Swiss bye shell, a bracket's system bye, or a
    *  pre-award bye line), which no board write places. Sent only when true. */
   bye_line?: true;
+  /** W5 T3 (X-SF-5): the pool letter, sent only for a stage with several pools. */
+  pool_key?: string;
 };
 
 export const BOARD_FIXTURE_COLS = [

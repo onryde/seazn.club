@@ -103,6 +103,10 @@ export interface BoardFixture {
    *  it takes no court and no time, and every board write refuses to place it (SWISS_BYE_NOT_PLACEABLE,
    *  BYE_LINE_NOT_PLACEABLE). Sent only when true (`listDivisionFixturesForBoard`). */
   bye_line?: boolean;
+  /** W5 T3 (X-SF-5, FX-G19): the pool's letter ("A", "B"), sent ONLY for a fixture of a stage with SEVERAL pools
+   *  (`listDivisionFixturesForBoard`): the card leads its round code with it ("A·R2", `plainRoundCode`). A league, a Swiss stage
+   *  and a one-pool group send none, so a card of those stays a plain "R2" and a single-table board pays no bytes for it. */
+  pool_key?: string | null;
 }
 
 /** Whether the board may move or pin this card: `scheduled`, holding no

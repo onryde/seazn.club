@@ -449,7 +449,10 @@ export function roundRobinStagePlan(
   const rawLegs = typeof cfg.legs === "number" ? Math.trunc(cfg.legs) : 1;
   const legs = Math.min(Math.max(rawLegs, 1), 8);
   const count = kind === "group" ? poolCount(cfg) : 1;
-  if (count === 1) return roundRobinGen(entrants, legs);
+  // W5 T3 (X-BD-7): a one-pool group's lines carry pool A's id, like any pool's (a league, and a group drawn before this change,
+  // have no pool row and keep the unprefixed key and no pool).
+  const only = poolIds.get(POOL_KEYS[0]!);
+  if (count === 1) return only === undefined ? roundRobinGen(entrants, legs) : roundRobinGen(entrants, legs, `p${POOL_KEYS[0]}-`, only);
   const ordered = [...entrants].sort(
     (a, b) => (a.seed ?? Number.MAX_SAFE_INTEGER) - (b.seed ?? Number.MAX_SAFE_INTEGER),
   );

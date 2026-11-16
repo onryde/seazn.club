@@ -148,6 +148,9 @@ import { RUN_SHEET_FILTER_LABEL, RunSheet, RunSheetFilterBar, runSheetHasRows, t
 import { dayKeyInTz } from "@seazn/engine/scheduling/tz";
 import { isOnlineGameExists } from "@/lib/open-round";
 import { venueNoun } from "@/lib/venue";
+import { sitsOutByRound, sitsOutByesOf } from "@/lib/sits-out";
+import { adhocRoundPlan, chosenAdhocRound, type AdhocRoundRow } from "@/lib/adhoc-round";
+import { AddMatchRoundSelect } from "@/components/v2/add-match-round-select";
 import { OnlineGameExistsNotice } from "@/components/v2/online-game-exists-notice";
 // Competition Desk W3 (Task 2) — the stage rail takes the three header
 // action controls (Generate/Complete/Delete). See stage-rail.tsx's own
@@ -226,6 +229,9 @@ interface FixtureRow {
   officials?: unknown[];
   status: string;
   outcome: unknown;
+  /** W5 T3 (X-BD-6): a withdrawal EXPUNGED this match (`listDivisionFixtures`'s `expunged`), so it no longer seats its sides in its round.
+   *  Optional: hand-built test props predate it. */
+  expunged?: boolean;
   /** F1 (2026-08-17) — the engine's bracket-position role, persisted on
    *  fixtures (V368) and selected by usecases/stages/types.ts's FIXTURE_COLS.
    *  Optional here for the same reason it's optional on the shared
@@ -1083,6 +1089,13 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
   // A2/3). C3 mounts it once PER STAGE (`RunSheet embedded`, narrowed to the stage, inside that stage's card) under ONE filter bar
   // above the cards. `nowMs` is the panel's ticking `useNow` clock (C5), never a module-scope `Date.now()`.
   const runSheetBlocks = buildRunSheet({ fixtures: fixtures.map(toRunSheetFixture), stages, tz, nowMs });
+  // W5 T3 (X-SF-4): who has left the field, for each round bar's "Sits out" line: every named entrant the page does not hold in the
+  // field (`activeEntrantIds`, the complement of its DEPARTED_STATUSES). With no roster the panel cannot tell, so it names no one.
+  const sitsOutDeparted = (() => {
+    if (activeEntrantIds === undefined) return null;
+    const active = new Set(activeEntrantIds);
+    return new Set(Object.keys(entrantNames).filter((id) => !active.has(id)));
+  })();
   const runSheetProps = {
     blocks: runSheetBlocks,
     stages,
@@ -2007,6 +2020,14 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                     msg={msg}
                     stageId={stage.id}
                     entrantNames={entrantNames}
+                    // W5 T3 (X-BD-6): the stage's lines as the round planner reads them. A line seats its sides unless it was voided
+                    // ("Not played", `cancelled`) or a withdrawal expunged it - the server's own `seats` rule (`addFixture`).
+                    roundRows={stageFixtures.map((f) => ({
+                      round_no: f.round_no,
+                      home: f.home_entrant_id,
+                      away: f.away_entrant_id,
+                      seats: f.status !== "cancelled" && f.expunged !== true,
+                    }))}
                     boardSlotOptions={boardSlotOptions}
                     onDone={() => {
                       setAddingTo(null);
@@ -2173,6 +2194,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                     embedded
                     quietEmpty={!anyRowsKept}
                     stageId={stage.id}
+                    sitsOut={sitsOutDeparted === null ? undefined : sitsOutByRound(sitsOutByesOf(stage.config), entrantNames, sitsOutDeparted)}
                     endsCard={false /* something always follows the sheet in the card: an editor's rail, a viewer's court-tags line (review m3) */}
                   />
                 )}
@@ -2962,6 +2984,7 @@ function AddMatchForm({
   msg,
   stageId,
   entrantNames,
+  roundRows,
   boardSlotOptions,
   onDone,
   onCancel,
@@ -2969,6 +2992,8 @@ function AddMatchForm({
   msg: Msg;
   stageId: string;
   entrantNames: Record<string, string>;
+  /** W5 T3 (X-BD-6): the stage's lines, for the Round select. */
+  roundRows: AdhocRoundRow[];
   /** Board slots for the "When" field — see `boardSlotOptionsFor` above.
    *  `undefined` lets `DateTimeField` fall back to quarter hours. */
   boardSlotOptions?: string[];
@@ -2978,6 +3003,7 @@ function AddMatchForm({
   const options = Object.entries(entrantNames).sort((a, b) => a[1].localeCompare(b[1]));
   const [home, setHome] = useState("");
   const [away, setAway] = useState("");
+  const [roundPick, setRoundPick] = useState<number | null>(null);
   const [when, setWhen] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -2986,11 +3012,15 @@ function AddMatchForm({
     setSaving(true);
     setError(null);
     try {
+      // The round on screen is the round sent (W5 T3, X-BD-6): the server defaults the same way when none is named, but a form that
+      // shows "Round 3" must write round 3, not whatever a second planner says later.
+      const round = chosenAdhocRound(adhocRoundPlan(roundRows, home, away), roundPick);
       await apiV1(`/api/v1/stages/${stageId}/fixtures`, {
         method: "POST",
         json: {
           home_entrant_id: home,
           away_entrant_id: away,
+          round_no: round,
           ...(when !== "" ? { scheduled_at: new Date(when).toISOString() } : {}),
         },
       });
@@ -3027,6 +3057,15 @@ function AddMatchForm({
             ))}
           </select>
         </label>
+        <AddMatchRoundSelect
+          msg={msg}
+          rows={roundRows}
+          home={home}
+          away={away}
+          entrantNames={entrantNames}
+          pick={roundPick}
+          onPick={setRoundPick}
+        />
         <DateTimeField
           kind="datetime-local"
           label={msg("stage.addMatch.when")}

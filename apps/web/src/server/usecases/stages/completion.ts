@@ -22,6 +22,7 @@ import { generateStageFixturesUnpublished } from "./generate";
 import { computeSeedProposal } from "./seed-proposal";
 import { markDependentSeedProposalsStale } from "./seed-stale";
 import { isFirstLossProgression, maybeProposePlate } from "../plate-field";
+import { onlyPoolOf } from "../stage-table-snapshot";
 
 /**
  * W4 T6 (AN-2; the app half of engine row X-CH-7): the lines of a BRACKET stage still owed a result, in bracket order
@@ -383,10 +384,14 @@ export interface StandingsOut {
 }
 
 /** Standings snapshot for a stage (recomputed on demand when absent). */
-export async function getStandings(auth: AuthCtx, stageId: string, poolId?: string): Promise<StandingsOut> {
+export async function getStandings(auth: AuthCtx, stageId: string, requestedPoolId?: string): Promise<StandingsOut> {
+  let poolId = requestedPoolId;
   const snapshot = await withTenant(auth.orgId, async (tx) => {
     const [stage] = await tx`select 1 from stages where id = ${stageId}`;
     if (!stage) throw new HttpError(404, "stage not found");
+    // W5 T3 (X-BD-7): asked for no pool, a stage with ONE pool answers that pool's table (a group of one is a league to a caller
+    // that never heard of pools); a stage with none, or several, has no pool to default to and answers as before.
+    if (poolId === undefined) poolId = (await onlyPoolOf(tx, stageId)) ?? undefined;
     const [snap] = await tx<StandingsOut[]>`
       select stage_id, pool_id, rows, computed_through_seq, updated_at
       from standings_snapshots

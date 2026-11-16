@@ -71,6 +71,10 @@ interface Props {
    *  ONLY those. Already in the org's locale, like everything else here; a
    *  stage missing from the map keeps the bare round name. */
   stageNames: Record<string, string>;
+  /** W5 T3 (X-SF-4): the "Sits out: Eve" line of a round, keyed `${stage_id}:${round_no}` and already in the org's words
+   *  (`publicSitsOutLines`). Shown under a round's heading in the ROUND view only (a day mixes rounds). Absent: no line, as before
+   *  (the embed, a division with no bye). */
+  sitsOut?: Record<string, string>;
   /** N1d d5, N1e e5 — every phrase this client component cannot resolve
    *  itself, in the org's locale, built server-side by the caller. */
   copy: ScheduleCopy;
@@ -444,6 +448,7 @@ export function Schedule({
   roundLabels,
   stageOrder,
   stageNames,
+  sitsOut,
   copy,
   locale,
   watch,
@@ -596,6 +601,16 @@ export function Schedule({
             })()}
             <span aria-hidden className="h-px flex-1 bg-zinc-200" />
           </h3>
+          {mode === "round" && (() => {
+            // W5 T3 (X-SF-4): every fixture of a round group shares its stage and round_no; the line belongs to that round.
+            const first = list[0];
+            const line = first ? sitsOut?.[`${first.stage_id}:${first.round_no}`] : undefined;
+            return line ? (
+              <p data-testid="schedule-sits-out" className="mb-2 text-xs text-ink-muted">
+                {line}
+              </p>
+            ) : null;
+          })()}
           <ul className="divide-y divide-zinc-100 overflow-hidden rounded-xl border border-zinc-200/80 bg-surface shadow-sm">
             {[...list]
               .sort((a, b) =>

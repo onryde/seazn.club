@@ -148,6 +148,7 @@ export function RunSheet({
   quietEmpty = false,
   endsCard = true,
   pools,
+  sitsOut,
 }: {
   blocks: RunSheetBlock[];
   stages: RunSheetStageInfo[];
@@ -244,6 +245,10 @@ export function RunSheet({
    *  round across its pools; each row carries a chip with its pool's label, and rows that kick off together read in this order. Absent, or
    *  a pool it does not list: the row has no chip (no label to say), and its place among equal times falls after every listed pool. */
   pools?: readonly { id: string; label: string }[];
+  /** Embedded only (W5 T3, X-SF-4; owner R24 pick 4 option A): round_no -> the names of who sits out that round of THIS stage
+   *  (`sitsOutByRound` over `config.round_byes`, departed entrants already left out). A round with a line ends its bar with
+   *  "· Sits out: Eve". Absent, or a round it does not list: the bar says nothing, as before. */
+  sitsOut?: ReadonlyMap<number, readonly string[]>;
 }) {
   const msg = useMsg();
   const msgPlural = useMsgPlural();
@@ -669,6 +674,12 @@ export function RunSheet({
                     <span data-run-sheet-round-span>
                       {" · "}
                       {when.from === when.to ? when.from : `${when.from}\u2013${when.to}`}
+                    </span>
+                  )}
+                  {sitsOut?.get(section.round) !== undefined && (
+                    <span data-run-sheet-round-sits-out>
+                      {" · "}
+                      {msg("runsheet.round.sitsOut", { names: sitsOut.get(section.round)!.join(", ") })}
                     </span>
                   )}
                 </RoundBar>

@@ -656,6 +656,7 @@
   "division.calendar": "Add to calendar",
   "division.metaDescription": "{division} standings, schedule and results for {competition}.",
   "division.scheduleEmpty": "No matches scheduled yet",
+  "division.sitsOut": "Sits out: {names}",
   "division.timesIn": "times in {zone}",
   "division.roundOpened": "Opened",
   "division.present": "Present",

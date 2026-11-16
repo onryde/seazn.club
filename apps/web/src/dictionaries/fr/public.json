@@ -656,6 +656,7 @@
   "division.calendar": "Ajouter au calendrier",
   "division.metaDescription": "Classement, calendrier et résultats de {division} pour {competition}.",
   "division.scheduleEmpty": "Aucun match programmé pour l'instant",
+  "division.sitsOut": "Au repos : {names}",
   "division.timesIn": "heures en {zone}",
   "division.roundOpened": "Ouverte",
   "division.present": "Présenter",
