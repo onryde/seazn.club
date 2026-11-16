@@ -118,14 +118,18 @@ export async function w5RoundRobinASuite(): Promise<void> {
     const b = lineB?.home_entrant_id ?? "";
     const y = lineB?.away_entrant_id ?? "";
     const started = await v1(owner, `/api/v1/divisions/${l.divId}/start`, "POST");
-    const gone = [await v1(owner, `/api/v1/entrants/${x}`, "PATCH", { status: "withdrawn" }), await v1(owner, `/api/v1/entrants/${y}`, "PATCH", { status: "withdrawn" })];
+    // The withdrawal expunges the leaver's lines only once the division is under way: play one round-1 line neither leaver is in.
+    const free = lines.find((f) => f.round_no === 1 && ![x, y].includes(f.home_entrant_id ?? "") && ![x, y].includes(f.away_entrant_id ?? ""));
+    const startEv = await v1(owner, `/api/v1/fixtures/${free?.id}/events`, "POST", { expected_seq: 0, type: "core.start", payload: {} });
+    const resultEv = await v1(owner, `/api/v1/fixtures/${free?.id}/events`, "POST", { expected_seq: 1, type: "generic.result", payload: { p1Score: 2, p2Score: 0 } });
+    const gone = [await v1(owner, `/api/v1/entrants/${x}/withdraw`, "POST"), await v1(owner, `/api/v1/entrants/${y}/withdraw`, "POST")];
     const addRes = await v1(owner, `/api/v1/stages/${l.stageId}/fixtures`, "POST", { home_entrant_id: a, away_entrant_id: b });
     const after = await l.fixtures();
     const added = after.filter((f) => !lines.some((o) => o.id === f.id));
     const rounds = Math.max(...lines.map((f) => f.round_no));
     const ok =
       lines.length === 15 && rounds === 5 && round3.length === 3 && new Set([a, x, b, y]).size === 4 &&
-      started.status === 200 && gone.every((g) => g.status === 200) && addRes.status === 201 &&
+      started.status === 200 && free !== undefined && startEv.status === 201 && resultEv.status === 201 && gone.every((g) => g.status === 200) && addRes.status === 201 &&
       added.length === 1 && added[0]?.round_no === 3;
     w5Check(
       "w5a X-BD-6: Add match with no round named lands in round 3, where both sides are free (main wrote round 6)" +

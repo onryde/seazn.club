@@ -234,9 +234,19 @@ test.describe("X-BD-6 Add match lands in round 3", () => {
 
     const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
     expect(started.status, JSON.stringify(started.error)).toBe(200);
+    // The withdrawal only voids the leaver's lines once the division is under way (before that it is a plain status flip, and the lines
+    // stay scheduled): play one round-1 line that neither leaver is in. Each leaver has then played 0 of 5, under half, so her lines are
+    // expunged (`POST /entrants/{id}/withdraw`, policy "expunge": the cascade the desk's Withdraw button calls).
+    const played = lines.find((l) => l.round_no === 1 && ![x, y].includes(l.home_entrant_id!) && ![x, y].includes(l.away_entrant_id!));
+    expect(played, "premise: a round-1 line neither leaver is in").toBeDefined();
+    for (const [seq, type, payload] of [[0, "core.start", {}], [1, "generic.result", { p1Score: 2, p2Score: 0 }]] as const) {
+      const ev = await apiJson(request, `/api/v1/fixtures/${played!.id}/events`, "POST", { expected_seq: seq, type, payload });
+      expect(ev.status, JSON.stringify(ev.error)).toBe(201);
+    }
     for (const gone of [x, y]) {
-      const res = await apiJson(request, `/api/v1/entrants/${gone}`, "PATCH", { status: "withdrawn" });
+      const res = await apiJson<{ policy: string }>(request, `/api/v1/entrants/${gone}/withdraw`, "POST");
       expect(res.status, JSON.stringify(res.error)).toBe(200);
+      expect(res.data!.policy, "an early withdrawal expunges the leaver's lines").toBe("expunge");
     }
 
     await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
@@ -308,7 +318,7 @@ test.describe("X-SF-4 a five-player league says who sits out each round", () => 
     const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
     expect(started.status, JSON.stringify(started.error)).toBe(200);
     const leaver = byeOfRound.get(3)!;
-    const gone = await apiJson(request, `/api/v1/entrants/${leaver}`, "PATCH", { status: "withdrawn" });
+    const gone = await apiJson(request, `/api/v1/entrants/${leaver}/withdraw`, "POST");
     expect(gone.status, JSON.stringify(gone.error)).toBe(200);
     const stay = ids.filter((id) => id !== leaver).map(nameOf);
     expectNames(await readLines("[data-run-sheet-round-sits-out]", "desk"), stay, [nameOf(leaver)], "desk, after");
