@@ -57,7 +57,12 @@ export const GenerateResult = z.object({
    *  bye, each in `vacated` left and their opponent now holds a bye; no line was inserted or deleted. `regenerated`: the
    *  field crossed a power of two (or a change in place could not express the departures), so the bracket was drawn again,
    *  slots carried by bracket role (`slots`, as Rebuild reports them) — refused 409 KO_REDRAW_WOULD_CLEAR_SETUP when its
-   *  lines carry any match setup (usecases/stages/roster-drift.ts `stageAttachmentCounts`). After Start an arrival is refused 409 KO_GENERATE_AFTER_START. */
+   *  lines carry any match setup (usecases/stages/roster-drift.ts `stageAttachmentCounts`). After Start an arrival is refused 409 KO_GENERATE_AFTER_START.
+   *  W5 T2 (X-CU-6): a ROOT league's or group's Generate over existing lines reports the same shape, ABSENT on a first Generate.
+   *  `noop`: nothing changed. `in_place`: the pairs the newcomers owe were inserted and the departed's removed, every other line
+   *  untouched (`placed` = newcomers, `vacated` = departed). `regenerated`: a pool changed parity or a group re-snaked, so the
+   *  stage was drawn again in this transaction with each PAIR's time and court carried (`slots`). After Start an arrival is refused
+   *  409 RR_GENERATE_AFTER_START and anything else is `noop`. */
   reconcile: z
     .object({
       kind: z.enum(["noop", "in_place", "regenerated"]),

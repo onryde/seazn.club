@@ -24325,6 +24325,7 @@
                           "points": {},
                           "carry_deltas": {},
                           "rank_overrides": {},
+                          "round_byes": {},
                           "cross_feeds": {},
                           "placements": {},
                           "rules": {
@@ -24770,6 +24771,7 @@
                             "points": {},
                             "carry_deltas": {},
                             "rank_overrides": {},
+                            "round_byes": {},
                             "cross_feeds": {},
                             "placements": {},
                             "rules": {
@@ -25751,6 +25753,7 @@
                           "points": {},
                           "carry_deltas": {},
                           "rank_overrides": {},
+                          "round_byes": {},
                           "cross_feeds": {},
                           "placements": {},
                           "rules": {
@@ -26196,6 +26199,7 @@
                             "points": {},
                             "carry_deltas": {},
                             "rank_overrides": {},
+                            "round_byes": {},
                             "cross_feeds": {},
                             "placements": {},
                             "rules": {

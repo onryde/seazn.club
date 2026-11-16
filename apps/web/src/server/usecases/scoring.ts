@@ -6,6 +6,7 @@ import "server-only";
 // same door.
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { rrLegacyExtKey } from "@/lib/roundrobin-reconcile";
 import { cacheGet, cacheSet, cacheDel, sendAfterDeleteOrBound } from "@/lib/cache";
 import { rateLimit } from "@/lib/rate-limit";
 import { hasFeature, requireFeature } from "@/lib/entitlements";
@@ -1151,7 +1152,11 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
     // alphabetical.
     const placements = (fixture.stage_config as { placements?: Record<string, [number, number]> })
       ?.placements;
-    const place = fixture.ext_key !== null ? placements?.[fixture.ext_key] : undefined;
+    // W5 T2: a round-robin line's key now ends `-L{leg}`; a `placements` map written against the positional id
+    // (`rr-r1-c1`, the key before the leg was stored) still names the same line - the engine's round numbers run on across legs,
+    // so the legacy key is unambiguous.
+    const place =
+      fixture.ext_key !== null ? (placements?.[fixture.ext_key] ?? placements?.[rrLegacyExtKey(fixture.ext_key)]) : undefined;
     if (place !== undefined && winner !== undefined && loser !== undefined) {
       const overrides =
         ((fixture.stage_config as { rank_overrides?: { entrant_id: string; rank: number }[] })

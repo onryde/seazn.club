@@ -120,3 +120,20 @@ export async function departedEntrantIds(tx: Tx, divisionId: string): Promise<Se
     where division_id = ${divisionId} and status in ('withdrawn','disqualified')`;
   return new Set(rows.map((r) => r.id));
 }
+
+/**
+ * Undoable generation (Jul3/03 §3): the `fixtures_generated` ledger row a pass appends so Undo can remove exactly the fixtures
+ * it created, and the watermark put at the head (a Redo waiting on the old board is gone). `payload.fixture_ids` IS the Undo
+ * contract - Undo DELETEs every id in it. Verbatim from `generateStageFixturesTx`'s own write, which now calls this; the W5 T2
+ * round-robin patch (`roundrobin-reconcile.ts`) is the second writer. The caller holds the division lock.
+ */
+export async function appendFixturesGenerated(tx: Tx, divisionId: string, payload: Record<string, unknown>): Promise<void> {
+  const [{ seq: last }] = await tx<{ seq: number }[]>`
+    select coalesce(max(seq), 0)::int as seq from division_events
+    where division_id = ${divisionId}`;
+  await tx`
+    insert into division_events (division_id, seq, type, payload)
+    values (${divisionId}, ${last + 1}, 'fixtures_generated', ${tx.json(payload as never)})`;
+  await tx`update divisions set seq = ${last + 1}, edit_watermark = null
+           where id = ${divisionId}`;
+}

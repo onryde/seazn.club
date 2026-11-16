@@ -27,7 +27,7 @@ import { gateRosterEligibility, type EligibilityIssue } from "./registration-eli
 // One-way edge (stages/ does not import this module): a status flip has to
 // reach the seed proposals that were computed over the old field, and a
 // pre-Start DELETE has to leave the swiss rounds it was seated in coherent.
-import { markFieldChangeSeedProposalsStale, refoldStageTable, unseatSwissRoundsSeatingEntrant } from "./stages";
+import { dropEntrantFromRoundRobins, markFieldChangeSeedProposalsStale, refoldStageTable, unseatSwissRoundsSeatingEntrant } from "./stages";
 import { followRosterEdit, type RosterNamePerson } from "@/lib/entrant-roster-name";
 import { dropNamedPublicDocuments, fireScoreRevalidate } from "@/server/public-site/revalidate";
 import { retireCompetitionPlayerMatches } from "@/server/public-site/player-matches-cache-keys";
@@ -657,6 +657,9 @@ export async function deleteEntrant(auth: AuthCtx, id: string): Promise<void> {
       );
     }
     await unseatSwissRoundsSeatingEntrant(tx, id);
+    // #837 / ruling 288 (G7): a league's or group's lines the entrant sat in go with it, and its recorded byes - the FK alone left
+    // a half-filled line no button could repair. Same lock, same transaction, read while the seats are still filled.
+    await dropEntrantFromRoundRobins(tx, row.division_id, id);
     // Read BEFORE the delete: `on delete set null` leaves nothing to find the
     // fixtures this entrant sat in by afterwards.
     const where = await entrantPublicScope(tx, row);

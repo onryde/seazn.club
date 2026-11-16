@@ -338,7 +338,9 @@ export interface GenerateOutcome {
   /** W4 T8 (FX-G2): a root knockout's Generate over a bracket that already has lines — ABSENT on a first Generate and on
    *  every other kind. `noop`: nothing changed (the desk's "up to date"); `in_place`: newcomers `placed` in byes and the
    *  departed `vacated` (their opponents now hold byes), no line inserted or deleted; `regenerated`: the bracket crossed a
-   *  power of two, so it was drawn again in this transaction with its slots carried by role (`slots`, as Rebuild says). */
+   *  power of two, so it was drawn again in this transaction with its slots carried by role (`slots`, as Rebuild says).
+   *  W5 T2 (X-CU-6): a root league's or group's Generate over existing lines answers the same three kinds: `in_place` inserted the
+   *  newcomers' pairs and removed the departed's (no other line moved), `regenerated` carried each PAIR's slot (a parity flip). */
   reconcile?: ReconcileOutcome;
 }
 

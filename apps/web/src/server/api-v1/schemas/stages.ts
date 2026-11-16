@@ -289,6 +289,9 @@ export const StageConfig = z
     points: z.unknown().optional(),
     carry_deltas: z.unknown().optional(),
     rank_overrides: z.unknown().optional(),
+    // W5 T2 (FX-G21): who sits out which round of which leg - written by the server at every round-robin draw, read back through
+    // the stage's own config (a replace round-trips it), never by a client.
+    round_byes: z.unknown().optional(),
     cross_feeds: z.unknown().optional(),
     placements: z.unknown().optional(),
     // W2c Task 12 (D3): a stage's deciders are its match RULES, written at create as its kind's preset under

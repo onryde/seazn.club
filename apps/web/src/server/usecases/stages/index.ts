@@ -15,6 +15,7 @@ import "server-only";
 //   swiss-boards.ts    Swiss board seat locks, clearing, unseating, and un-pairing a round
 //   preview.ts         the builder's example preview (`generate()` over synthetic entrants), and the draw as structure (previewStageDraw)
 //   roster-drift.ts    roster drift, sealed-setup and attachment counts
+//   roundrobin-reconcile.ts  a root league's or group's Generate over existing lines (patch by pair and leg), round_byes, delete cleanup
 //   bracket-seats.ts   bracket seat writes: fillSlot, departed seats, seeded byes, resolveBracketSeats
 //   setup-fixtures.ts  TBD-shape fixtures for a `timing: "setup"` progression
 //   generate-tx.ts     in-transaction generate/rebuild core, root-knockout reconcile, cross feeds
@@ -86,6 +87,7 @@ export {
   unseatSwissRoundsSeatingEntrant,
   unpairSwissRound,
 } from "./swiss-boards";
+export { dropEntrantFromRoundRobins } from "./roundrobin-reconcile";
 export { patchKnockoutStage } from "./third-place";
 export type { PatchKnockoutStageResult } from "./third-place";
 export { previewDivisionFixtures, previewStageDraw } from "./preview";

@@ -21,7 +21,8 @@ import { fixtureHasResultSql } from "../fixture-results-sql";
 import { fixtureCalledSql, stageHasStarted } from "../fixture-started-sql";
 // W4 T8 (FX-G2): a root knockout's Generate over existing lines reconciles them (bracket-reconcile.ts).
 import { reconcileRootBracket } from "../bracket-reconcile";
-import { carriedSlotCounts, carrySlots } from "@/lib/rebuild-slots";
+import { carriedSlotCounts, carrySlots, carrySlotsByPair } from "@/lib/rebuild-slots";
+import { rrLegacyExtKey, rrLinesOfRows } from "@/lib/roundrobin-reconcile";
 import { refuseOwnFormatLoss } from "../fixture-override-guards";
 import {
   STAGE_COLS,
@@ -36,7 +37,7 @@ import {
   type GenerateOptions,
   type SealedSetupCounts,
 } from "./types";
-import { divisionHasStarted } from "./helpers";
+import { appendFixturesGenerated, divisionHasStarted } from "./helpers";
 import {
   americanoGen,
   BRACKET_WALKOVER_KINDS,
@@ -48,7 +49,10 @@ import {
   POOL_KEYS,
   poolCount,
   generateForStage,
+  roundRobinStagePlan,
+  type RoundBye,
 } from "./generators";
+import { reconcileRoundRobinLines, writeRoundByes } from "./roundrobin-reconcile";
 import { isEmptySwissReshape } from "./swiss-reconcile";
 import { swissActiveEntrants, swissGen } from "./swiss-gen";
 import { lockBoardsRefusingOnlineGames } from "./swiss-boards";
@@ -204,6 +208,54 @@ async function reconcileKnockoutGenerate(
 }
 
 /**
+ * W5 T2 (X-CU-6; RB5-G7, RB5-L17): Generate over a root league or group that already has its lines, in the caller's transaction and
+ * lock. The decision and the patch are `reconcileRoundRobinLines` (roundrobin-reconcile.ts): after Start an arrival is refused by
+ * name (RR_GENERATE_AFTER_START) and anything else is the named no-op; before Start the pairs are reconciled by (pair, leg) — a
+ * change a patch can express writes in place, and one it cannot (a pool that changed parity, a group that re-snaked) is
+ * Rebuild's own body (`regenerateStageInTx`) with the times and courts carried by PAIR, so a pair keeps its slot wherever the
+ * redraw put it.
+ */
+async function reconcileRoundRobinGenerate(
+  tx: Tx,
+  auth: AuthCtx,
+  stage: StageRow,
+  field: ActiveEntrant[],
+  poolIds: Map<string, string>,
+): Promise<GenerateWrite> {
+  const decision = await reconcileRoundRobinLines(tx, stage, field, poolIds);
+  if (decision.kind === "regenerate") {
+    const regen = await regenerateStageInTx(tx, auth, stage.id, stage, { carry: "pair" });
+    return {
+      ...regen.generated,
+      outcome: {
+        ...regen.generated.outcome,
+        reconcile: { kind: "regenerated", placed: decision.placed, vacated: decision.vacated, vacated_seats: decision.vacated.length, slots: regen.slots },
+      },
+      changedFixtureIds: regen.removedIds,
+    };
+  }
+  await wireCrossFeeds(tx, stage.division_id);
+  const fixtures = await readStageFixtureRows(tx, stage.id);
+  const [division] = await tx<{ competition_id: string }[]>`
+    select competition_id from divisions where id = ${stage.division_id}`;
+  const patched = decision.kind === "patched";
+  return {
+    outcome: {
+      created: patched ? decision.insertedIds.length : 0,
+      existing: fixtures.length - (patched ? decision.insertedIds.length : 0),
+      fixtures,
+      reconcile: patched
+        ? { kind: "in_place", placed: decision.placed, vacated: decision.vacated, vacated_seats: decision.vacated.length }
+        : { kind: "noop", placed: [], vacated: [], vacated_seats: 0 },
+    },
+    divisionId: stage.division_id,
+    competitionId: division!.competition_id,
+    kind: stage.kind,
+    changedFixtureIds: patched ? [...decision.insertedIds, ...decision.removedIds] : [],
+  };
+}
+
+/**
  * The main write of a Generate (doc 08 §3), in the CALLER's transaction: everything `generateStageFixtures` does
  * between its pre-flight and its post-commit work, unchanged in behaviour. Extracted (W3 T1, X-RB-1) so
  * `rebuildStageFixtures` can delete and regenerate in ONE transaction — a regenerate that throws then rolls the
@@ -343,6 +395,14 @@ export async function generateStageFixturesTx(
     return reconcileKnockoutGenerate(tx, auth, stage, entrants, poolIds, opts.inPlaceOnly === true, opts.sealedSetup, opts.inPlaceOnly === true && opts.waitNewcomers === true);
   }
 
+  // W5 T2 (X-CU-6, FX-G1 #879; RB5-G7): a ROOT league or group that already has its lines is reconciled by (pair, leg), never
+  // inserted into by the positional `ext_key` (4 -> 6 added nine rows that repeated pairs already drawn and missed the pairs the
+  // newcomers owed). Beside the knockout's branch, after the two-entrant refusal above, so a field that fell to 0 or 1 is
+  // refused by name and never patched to an empty table (X-BD-5). A fed stage (`config.qualified`) keeps its path.
+  if ((stage.kind === "league" || stage.kind === "group") && qualified === null && stage.progression === null && existing.length > 0) {
+    return reconcileRoundRobinGenerate(tx, auth, stage, entrants, poolIds);
+  }
+
   let swissSeatedCount = 0;
   let swissReshaped: SwissReshape | undefined;
   let swissRoundsWarn: SwissRoundsNotice | undefined;
@@ -351,6 +411,8 @@ export async function generateStageFixturesTx(
   // Rides on this pass's `fixtures_generated` row when it seated a round.
   let swissAudit: Record<string, unknown> | undefined;
   let gen: GenFixture[];
+  // FX-G21 (RB5-G3): the byes the engine's schedule names, kept beside the lines it drew them for (written below).
+  let roundByes: RoundBye[] | null = null;
   if (stage.kind === "swiss") {
     const swiss = await swissGen(tx, stageId, stage.division_id, stage.config, entrants, existing, opts.pairing);
     gen = swiss.gen;
@@ -383,6 +445,12 @@ export async function generateStageFixturesTx(
     gen = await americanoGen(tx, stage.division_id, stageId, stage.config, entrants);
   } else if (stage.kind === "ladder") {
     gen = []; // Jul3/08 §6: ladder fixtures come from challenges, on demand
+  } else if (stage.kind === "league" || stage.kind === "group") {
+    const plan = roundRobinStagePlan(stage.kind, stage.config, entrants, poolIds);
+    gen = plan.gen;
+    // Only a FIRST draw (no lines yet: a new stage, or Rebuild's delete-and-draw) records them. A stage with lines that took this
+    // path is a fed one (`config.qualified`), whose lines are matched positionally below: its byes were recorded when it was drawn.
+    if (existing.length === 0) roundByes = plan.byes;
   } else {
     gen = generateForStage(stage.id, stage.kind, stage.config, entrants, poolIds);
   }
@@ -515,8 +583,11 @@ export async function generateStageFixturesTx(
   // First pass: all new fixtures in one multi-row insert. Ids are generated
   // client-side so the feed/bye passes can reference them without relying
   // on RETURNING order.
+  // A fed round robin drawn before the leg was stored holds `rr-r{n}-c{m}`; the line this pass would write is the same one
+  // (`rrLegacyExtKey`), so it is not inserted a second time.
+  const alreadyDrawn = (g: GenFixture) => byKey.has(g.extKey) || ((stage.kind === "league" || stage.kind === "group") && byKey.has(rrLegacyExtKey(g.extKey)));
   const newRows = gen
-    .filter((g) => !byKey.has(g.extKey))
+    .filter((g) => !alreadyDrawn(g))
     .map((g) => {
       const home_entrant_id = bakeDirect(g) ? g.home : null;
       const away_entrant_id = bakeDirect(g) ? g.away : null;
@@ -572,6 +643,7 @@ export async function generateStageFixturesTx(
     });
   if (newRows.length > 0) await tx`insert into fixtures ${tx(newRows)}`;
   for (const r of newRows) byKey.set(r.ext_key, r.id);
+  if (roundByes !== null) await writeRoundByes(tx, stageId, roundByes);
   // Loop R M-8 (R116-2's other door): F14's departed-qualifier walkover — an award over two seated sides, which a
   // withdrawal would record as `core.forfeit{by, "withdrew"}` once the bracket exists — shows that walkover's score
   // too, so "withdraw then generate" reads as "generate then withdraw" does. No event records it (nobody played,
@@ -737,15 +809,12 @@ export async function generateStageFixturesTx(
   // in `seated_fixture_ids`, which Undo of Pair next reads to put exactly
   // those rows back onto their shells (W3 T5, history.ts `stepWrite`).
   if (created > 0 && ledger === "record") {
-    const [{ seq: last }] = await tx<{ seq: number }[]>`
-      select coalesce(max(seq), 0)::int as seq from division_events
-      where division_id = ${stage.division_id}`;
-    await tx`
-      insert into division_events (division_id, seq, type, payload)
-      values (${stage.division_id}, ${last + 1}, 'fixtures_generated',
-              ${tx.json({ stage_id: stageId, fixture_ids: createdIds, ...(swissAudit ?? {}), ...(knockoutDrawSeed !== null ? { draw_seed: knockoutDrawSeed } : {}) } as never)})`;
-    await tx`update divisions set seq = ${last + 1}, edit_watermark = null
-             where id = ${stage.division_id}`;
+    await appendFixturesGenerated(tx, stage.division_id, {
+      stage_id: stageId,
+      fixture_ids: createdIds,
+      ...(swissAudit ?? {}),
+      ...(knockoutDrawSeed !== null ? { draw_seed: knockoutDrawSeed } : {}),
+    });
   }
   const [division] = await tx<{ competition_id: string }[]>`
     select competition_id from divisions where id = ${stage.division_id}`;
@@ -794,6 +863,9 @@ export async function regenerateStageInTx(
   auth: AuthCtx,
   stageId: string,
   stage: { division_id: string; kind: string },
+  /** W5 T2 (RB5-G7, RB5-L17): `carry: "pair"` — a round robin's Generate that draws the lines again before Start keeps each PAIR's
+   *  time and court (`carrySlotsByPair`). Rebuild's own call omits it and keeps the positional carry (X-RB-1). */
+  opts: { carry?: "pair" } = {},
 ): Promise<{ generated: GenerateWrite; removedIds: string[]; slots: { kept: number; freed: number; unscheduled: number } }> {
   await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
   // A frozen division refuses the rebuild — the same predicate as generate's
@@ -940,9 +1012,9 @@ export async function regenerateStageInTx(
       court_id: string | null;
       venue_id: string | null;
       schedule_locked: boolean;
-    } & ByeLineRow)[]
+    } & ByeLineRow & { id: string })[]
   >`
-    select pool_id, round_no, seq_in_round, ext_key, scheduled_at, court_id, venue_id, schedule_locked,
+    select id, pool_id, round_no, seq_in_round, ext_key, scheduled_at, court_id, venue_id, schedule_locked,
            status, outcome, home_entrant_id, away_entrant_id, home_slot_label, away_slot_label
     from fixtures where stage_id = ${stageId}
     order by pool_id nulls first, round_no, seq_in_round, created_at, id`;
@@ -973,11 +1045,27 @@ export async function regenerateStageInTx(
     ext_key: f.ext_key ?? null,
     bye: isByeLine({ ...f, ext_key: f.ext_key ?? null }),
   }));
-  const carry = carrySlots(
-    oldRows,
-    newRows,
-    ROLE_CARRY_KINDS.has(stage.kind) ? { before: roleKeyOf(oldRows), after: roleKeyOf(newRows) } : undefined,
-  );
+  // W5 T2: a round robin drawn again by Generate carries by PAIR (a row with no key to speak of - an empty seat - keeps its own
+  // id as its key, so it matches nothing).
+  const pairKeys = (rows: readonly { id: string; pool_id: string | null; ext_key: string | null; round_no: number; seq_in_round: number; home_entrant_id: string | null; away_entrant_id: string | null }[]): Map<string, string> => {
+    const lines = rrLinesOfRows(rows);
+    return new Map(rows.map((r, i) => [r.id, lines[i]?.key ?? `row:${r.id}`]));
+  };
+  const carry =
+    opts.carry === "pair"
+      ? (() => {
+          const oldKey = pairKeys(before);
+          const newKey = pairKeys(generated.outcome.fixtures.map((f) => ({ id: f.id, pool_id: f.pool_id, ext_key: f.ext_key ?? null, round_no: f.round_no, seq_in_round: f.seq_in_round, home_entrant_id: f.home_entrant_id, away_entrant_id: f.away_entrant_id })));
+          return carrySlotsByPair(
+            oldRows.map((r, i) => ({ ...r, key: oldKey.get(before[i]!.id)! })),
+            newRows.map((r) => ({ ...r, key: newKey.get(r.id)! })),
+          );
+        })()
+      : carrySlots(
+          oldRows,
+          newRows,
+          ROLE_CARRY_KINDS.has(stage.kind) ? { before: roleKeyOf(oldRows), after: roleKeyOf(newRows) } : undefined,
+        );
   const carried = [...carry.assign];
   if (carried.length > 0) {
     // ONE update for every carried slot, batched the way this file batches
