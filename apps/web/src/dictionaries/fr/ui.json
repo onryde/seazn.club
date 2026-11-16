@@ -8347,6 +8347,8 @@
   "matchDay.courtStream.withdrawing": "Arrêt…",
   "matchDay.courtStream.alt": "QR de diffusion du terrain",
   "matchDay.courtStream.alreadyStreaming": "Ce terrain diffuse déjà aujourd'hui vers une autre chaîne.",
+  "matchDay.courtStream.noPlan": "La diffusion est désactivée pour cette organisation : impossible de lier un terrain. Contactez-nous pour la réactiver.",
+  "matchDay.courtStream.notConfigured": "La diffusion par terrain n'est pas encore configurée sur ce serveur. Contactez-nous.",
   "dlink.hide": "Masquer",
   "dlink.hideLabel": "Masquer le score à distance",
   "dlink.linkReady": "Lien de score prêt",

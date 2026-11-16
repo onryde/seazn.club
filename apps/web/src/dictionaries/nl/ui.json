@@ -8347,6 +8347,8 @@
   "matchDay.courtStream.withdrawing": "Stoppen…",
   "matchDay.courtStream.alt": "Stream-QR van de baan",
   "matchDay.courtStream.alreadyStreaming": "Deze baan streamt vandaag al naar een ander kanaal.",
+  "matchDay.courtStream.noPlan": "Streamen is uitgeschakeld voor deze organisatie, dus een baan kan niet worden gekoppeld. Neem contact met ons op om het weer aan te zetten.",
+  "matchDay.courtStream.notConfigured": "Streamen per baan is nog niet ingesteld op deze server. Neem contact met ons op.",
   "dlink.hide": "Verbergen",
   "dlink.hideLabel": "Scoren op afstand verbergen",
   "dlink.linkReady": "Scorelink klaar",

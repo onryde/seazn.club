@@ -8347,6 +8347,8 @@
   "matchDay.courtStream.withdrawing": "Stopping…",
   "matchDay.courtStream.alt": "Court stream QR",
   "matchDay.courtStream.alreadyStreaming": "This court already streams to another channel today.",
+  "matchDay.courtStream.noPlan": "Streaming is switched off for this organisation, so a court can't be linked. Contact us to turn it back on.",
+  "matchDay.courtStream.notConfigured": "Court streaming isn't set up on this server yet. Contact us.",
   "dlink.hide": "Hide",
   "dlink.hideLabel": "Hide remote scoring",
   "dlink.linkReady": "Scorer link ready",

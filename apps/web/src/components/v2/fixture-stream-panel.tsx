@@ -2369,7 +2369,9 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
           }`}
         >
           <div className="min-w-0 md:col-start-1 md:row-start-1">
-            <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+            {/* A court-streamed match streams to the court link's channel and the server ignores any other (O9), so no pick is offered:
+                only a failed read keeps its Retry, because Go live still needs the list it loads. */}
+            {!court && (<div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
               {p.targets.status === "ok" && targetList.length > 0 ? (
                 <label htmlFor={pickerId} className="text-sm font-medium text-slate-800">
                   {msg("stream.dest.label")}
@@ -2388,7 +2390,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
                 {msg("stream.dest.manage")}
                 <ExternalLink aria-hidden className="h-3.5 w-3.5" strokeWidth={1.8} />
               </a>
-            </div>
+            </div>)}
             {p.targets.status === "error" ? (
               <div data-testid="stream-dest-load-error" role="alert" className="mt-1 flex flex-wrap items-center gap-2 text-sm text-red-700">
                 <span>{msg("stream.dest.loadError")}</span>
@@ -2396,7 +2398,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
                   {msg("stream.dest.retry")}
                 </button>
               </div>
-            ) : p.targets.status === "ok" && targetList.length === 0 ? (
+            ) : court ? null : p.targets.status === "ok" && targetList.length === 0 ? (
               <p data-testid="stream-dest-empty" className="mt-1 text-sm text-slate-600">
                 {msg("stream.dest.empty")}
               </p>

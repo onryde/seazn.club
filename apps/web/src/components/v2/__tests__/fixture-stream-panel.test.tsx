@@ -1467,6 +1467,34 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
       expect(byTestId(paired, "stream-court-line")).toBeUndefined();
     });
 
+    it("the destination picker is not offered while `court` is set (the server streams to the court link's channel): no picker, label or Directory link, and Go live stays", () => {
+      const tree = idle(readModel({ court: COURT, code: null, phone: facts() }));
+      expect(destPicker(tree), "no picker").toBeUndefined();
+      expect(byTestId(tree, "stream-manage-destinations"), "no way to Directory from a choice that is not one").toBeUndefined();
+      expect(tree.some((el) => el.type === "label" && attr(el, "htmlFor") !== undefined && textOf(el) === m("stream.dest.label")), "no Destination label").toBe(false);
+      expect(attr(byTestId(tree, "stream-go-live")!, "disabled"), "Go live is kept").toBe(false);
+      // …a match of its own, beside it, still has the picker.
+      const own = idle(readModel({ court: null }));
+      expect(destPicker(own), "court null: today's picker").toBeDefined();
+      expect(byTestId(own, "stream-manage-destinations")).toBeDefined();
+    });
+
+    it("a failed destination read on a court match keeps its Retry (Go live needs the list), without the picker", () => {
+      let retried = 0;
+      const tree = body({ view: null, balance: 2, targets: { status: "error" }, selectedTargetId: null, onRetryTargets: () => retried++, phone: readModel({ court: COURT, code: null, phone: facts() }) });
+      expect(destPicker(tree)).toBeUndefined();
+      click(byTestId(tree, "stream-dest-retry"));
+      expect(retried).toBe(1);
+    });
+
+    it("waiting and live keep Stop and the court line, with no picker", () => {
+      for (const view of [session({ state: "warming" }), session({ state: "live", startedAt: "2026-09-14T11:50:00Z" })]) {
+        const tree = body({ view, balance: 2, targets: TARGETS, phone: readModel({ court: COURT, code: null, phone: facts() }) });
+        expect(destPicker(tree), view.state).toBeUndefined();
+        expect(byTestId(tree, view.state === "live" ? "stream-stop" : "stream-cancel"), view.state).toBeDefined();
+      }
+    });
+
     it("a court match has no per-match automatic switch of its own: the Stream switch on the desk is its one control", () => {
       expect(byTestId(idle(readModel({ court: COURT, code: null })), "stream-auto")).toBeUndefined();
       expect(byTestId(idle(readModel({ court: null })), "stream-auto")).toBeDefined();

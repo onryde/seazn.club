@@ -52,7 +52,13 @@ export function switchFailureKey(code: string): "matchDay.courtStream.ownCode" |
   return "matchDay.refusal.other";
 }
 
-/** The words for a refused link. */
-export function linkFailureKey(code: string): "matchDay.courtStream.alreadyStreaming" | "matchDay.refusal.other" {
-  return code === "court_already_streaming" ? "matchDay.courtStream.alreadyStreaming" : "matchDay.refusal.other";
+/** The words for a refused link: by the server's own code (a 402 reads `PAYMENT_REQUIRED`: no streaming plan for this organisation;
+ *  `court_streaming_unconfigured`: this server has no minimum app version to hand out court codes for), else the generic line. */
+export function linkFailureKey(
+  code: string,
+): "matchDay.courtStream.alreadyStreaming" | "matchDay.courtStream.noPlan" | "matchDay.courtStream.notConfigured" | "matchDay.refusal.other" {
+  if (code === "court_already_streaming") return "matchDay.courtStream.alreadyStreaming";
+  if (code === "PAYMENT_REQUIRED") return "matchDay.courtStream.noPlan";
+  if (code === "court_streaming_unconfigured") return "matchDay.courtStream.notConfigured";
+  return "matchDay.refusal.other";
 }

@@ -8347,6 +8347,8 @@
   "matchDay.courtStream.withdrawing": "Deteniendo…",
   "matchDay.courtStream.alt": "QR de retransmisión de la pista",
   "matchDay.courtStream.alreadyStreaming": "Esta pista ya se retransmite hoy a otro canal.",
+  "matchDay.courtStream.noPlan": "La retransmisión está desactivada para esta organización, así que no se puede vincular una pista. Contáctenos para volver a activarla.",
+  "matchDay.courtStream.notConfigured": "La retransmisión por pista aún no está configurada en este servidor. Contáctenos.",
   "dlink.hide": "Ocultar",
   "dlink.hideLabel": "Ocultar la puntuación remota",
   "dlink.linkReady": "Enlace de anotación listo",

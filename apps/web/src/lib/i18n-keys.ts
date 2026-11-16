@@ -4256,6 +4256,8 @@ export type DictionaryKey =
   | "matchDay.courtStream.destination"
   | "matchDay.courtStream.link"
   | "matchDay.courtStream.linking"
+  | "matchDay.courtStream.noPlan"
+  | "matchDay.courtStream.notConfigured"
   | "matchDay.courtStream.notStreaming"
   | "matchDay.courtStream.ownCode"
   | "matchDay.courtStream.phone.live"
