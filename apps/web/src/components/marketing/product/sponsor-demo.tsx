@@ -78,7 +78,7 @@ export function SponsorDemo({ labels: l, table, tiers }: { labels: SponsorDemoLa
           ).map(([kind, label, keys, picked, pick]) => (
             <div key={kind} className="mkp-choice" role="group" aria-label={label}>
               <span>{label}</span>
-              <div className="mkp-track" style={{ gridTemplateColumns: `repeat(${keys.length}, minmax(0, 1fr))` }}>
+              <div className="mkp-track" data-n={keys.length} style={{ gridTemplateColumns: `repeat(${keys.length}, minmax(0, 1fr))` }}>
                 {keys.map((k) => (
                   <button key={k} type="button" aria-pressed={picked === k} data-testid={`sponsor-${kind}-${k}`} onClick={() => pick(k)}>
                     {lab(l, `${kind}.${k}`)}

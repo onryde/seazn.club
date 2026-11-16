@@ -697,15 +697,17 @@ test.describe("product pages: layout", () => {
   test("/sports: a card per sport at every width, nothing wider than the screen, and a card opens its sport's page", async ({ page, request }) => {
     for (const lang of ["", "/fr"]) expect((await request.get(`${lang}/sports`)).status(), `${lang}/sports`).toBe(200);
     const slugs = ["cricket", ...[...RALLY_PAGES, ...GOAL_PAGES, "/sports/tennis"].map((p) => p.replace("/sports/", ""))];
+    // The cookie banner is answered once: the answer outlives a reload, so a second `visit` would wait for a
+    // banner that never comes back.
+    await visit(page, "/sports");
     for (const width of WIDTHS) {
       await page.setViewportSize({ width, height: 800 });
-      await visit(page, "/sports");
+      await page.goto("/sports");
       await walkPage(page);
       await expect(page.locator('[data-testid^="sport-card-"]')).toHaveCount(slugs.length);
       await expectNoHorizontalScroll(page);
       const broken = await page.evaluate(() => [...document.images].filter((i) => i.naturalWidth === 0).map((i) => i.src));
       expect(broken, `${width}px`).toEqual([]);
-      await page.context().clearCookies();
     }
     for (const slug of slugs) await expect(page.getByTestId(`sport-card-${slug}`)).toHaveAttribute("href", `/sports/${slug}`);
     await page.getByTestId("sport-card-football").click();

@@ -301,3 +301,5 @@
 .mkp-mdcams li[data-stream=live]{border-left-color:#f04438}.mkp-mdcams li[data-stream=live] em{background:#f04438;color:#fff}
 .mkp-mdcams li[data-stream=none]{opacity:.7}
 .mkp-off[data-section=courtstream] .mkp-off-p{grid-template-columns:minmax(0,1fr);max-width:520px}
+/* four choices do not fit one row of a 320 screen in Spanish or French: two by two there */
+@media (max-width:374px){.mkp-track[data-n="4"]{grid-template-columns:repeat(2,minmax(0,1fr))!important}}
