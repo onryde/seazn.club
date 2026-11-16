@@ -20,6 +20,7 @@ import {
 import { CourtFocus, type MatchDayCtx } from "@/components/v2/match-day/court-focus";
 import { CandidateRows, FreeCourtBody } from "@/components/v2/match-day/candidate-list";
 import { CourtList } from "@/components/v2/match-day/court-list";
+import { CourtTailCountdown } from "@/components/v2/match-day/court-tail-countdown";
 import { TargetPicker } from "@/components/v2/match-day/court-stream-sheet";
 import { levelWords } from "@/lib/score/levels";
 import publicEn from "@/dictionaries/en/public.json";
@@ -82,6 +83,7 @@ const link = (o: Partial<MatchDayCourtStream> = {}): MatchDayCourtStream => ({
   expires_at: "2026-11-01T00:00:00.000Z",
   phone: "waiting",
   refusal: null,
+  tail_ends_at: null,
   ...o,
 });
 
@@ -369,6 +371,71 @@ describe("a free court's whole queue (B2: the 2nd and later matches are switched
     const html = body(free({ stream_link: link(), queue: withOn }), undefined, baseCtx({ readOnly: true }));
     expect(count(html, "md-queue-row")).toBe(2);
     expect(count(html, "md-cs-switch")).toBe(1);
+  });
+});
+
+describe("the tail countdown (O16: \"Video ends in 12 s\")", () => {
+  const NOW = "2026-10-31T12:00:00.000Z";
+  const plus = (ms: number): string => new Date(Date.parse(NOW) + ms).toISOString();
+  const free = (l: MatchDayCourtStream) => court({ state: "free", current: null, queue: [], stream_link: l });
+  const tail = (html: string): string | null => /<span data-testid="md-cs-tail"[^>]*>([^<]*)<\/span>/.exec(html)?.[1] ?? null;
+  const focused = (l: MatchDayCourtStream, viewNow: string | undefined = NOW, d: Dict = dict) => focus(free(l), baseCtx({ viewNow }, d));
+  const listed = (l: MatchDayCourtStream) =>
+    renderToStaticMarkup(
+      <CourtList courts={[free(l)]} selectedId={null} dict={dict} words={levelWords(publicEn as Dict)} locale="en" tz="Europe/London" onSelect={() => {}} viewNow={NOW} />,
+    );
+
+  it("12 s before the tail ends the focus's status block says 'Video ends in 12 s', in tabular figures", () => {
+    const html = focused(link({ tail_ends_at: plus(12_000) }));
+    expect(tail(html)).toBe("Video ends in 12 s");
+    expect(html).toMatch(/<span data-testid="md-cs-tail"[^>]*class="[^"]*\btabular-nums\b/);
+    // inside the court's band, under the link's own lines
+    expect(html.indexOf('data-testid="md-cs-status"')).toBeLessThan(html.indexOf('data-testid="md-cs-tail"'));
+    expect(html.indexOf('data-testid="md-cs-tail"')).toBeLessThan(html.indexOf('data-testid="md-cs-show"'));
+  });
+
+  it("the court's card in the list carries it too", () => {
+    expect(tail(listed(link({ tail_ends_at: plus(12_000) })))).toBe("Video ends in 12 s");
+    expect(has(listed(link()), "md-cs-tail")).toBe(false);
+  });
+
+  it("rounds a part-second UP (0.4 s left still reads 1 s), and counts the tail down second by second", () => {
+    expect(tail(focused(link({ tail_ends_at: plus(400) })))).toBe("Video ends in 1 s");
+    expect(tail(focused(link({ tail_ends_at: plus(30_000) })))).toBe("Video ends in 30 s");
+    expect(tail(focused(link({ tail_ends_at: plus(29_001) })))).toBe("Video ends in 30 s");
+    expect(tail(focused(link({ tail_ends_at: plus(29_000) })))).toBe("Video ends in 29 s");
+  });
+
+  it("is gone at 0 and after it: the court then reads its normal state", () => {
+    expect(has(focused(link({ tail_ends_at: plus(0) })), "md-cs-tail")).toBe(false);
+    expect(has(focused(link({ tail_ends_at: plus(-1_000) })), "md-cs-tail")).toBe(false);
+    expect(has(listed(link({ tail_ends_at: plus(0) })), "md-cs-tail")).toBe(false);
+  });
+
+  it("is gone when the session has ended or the next match started (the server reads tail_ends_at null)", () => {
+    expect(has(focused(link({ tail_ends_at: null })), "md-cs-tail")).toBe(false);
+    expect(has(listed(link({ tail_ends_at: null })), "md-cs-tail")).toBe(false);
+  });
+
+  it("a court with no link has no band and no countdown", () => {
+    expect(has(focus(court({ state: "free", current: null, queue: [], stream_link: null }), baseCtx({ viewNow: NOW })), "md-cs-tail")).toBe(false);
+  });
+
+  it("with no server instant to anchor to it draws nothing until the page mounts (so the server's markup and the browser's first render agree)", () => {
+    expect(has(focus(free(link({ tail_ends_at: plus(12_000) })), baseCtx()), "md-cs-tail")).toBe(false);
+  });
+
+  it("is counted from the server's `now`, not the reader's clock: a clock an hour off changes nothing", () => {
+    const html = renderToStaticMarkup(<CourtTailCountdown dict={dict} tailEndsAt={plus(12_000)} viewNow={NOW} clock={() => Date.parse(NOW) + 3_600_000} />);
+    expect(tail(html)).toBe("Video ends in 12 s");
+  });
+
+  it.each(["es", "fr", "nl"] as const)("speaks %s, with the seconds in place", (locale) => {
+    const html = focused(link({ tail_ends_at: plus(12_000) }), NOW, DICTS[locale]);
+    const words = tail(html)!;
+    expect(words).toContain("12");
+    expect(words).not.toBe("Video ends in 12 s");
+    expect(words).not.toContain("{seconds}");
   });
 });
 

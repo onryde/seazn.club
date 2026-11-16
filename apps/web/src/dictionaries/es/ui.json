@@ -8334,6 +8334,7 @@
   "matchDay.courtStream.show": "Mostrar el QR de la pista",
   "matchDay.courtStream.qrHint": "Escanea con la app Seazn Club: Live Stream.",
   "matchDay.courtStream.until": "Funciona hasta las {time} de hoy",
+  "matchDay.courtStream.tailEnds": "El vídeo termina en {seconds} s",
   "matchDay.courtStream.withdraw": "Dejar de retransmitir {court}",
   "matchDay.courtStream.withdrawConfirm": "¿Desvincular {court}? Su teléfono deja de seguir los partidos. Un partido en directo termina primero.",
   "matchDay.courtStream.phone.unpaired": "Aún sin teléfono",

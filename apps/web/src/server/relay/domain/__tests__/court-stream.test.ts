@@ -3,6 +3,7 @@ import {
   courtCodeView,
   courtFocus,
   courtPhoneStatus,
+  courtTailEndsAt,
   type CourtMatchFacts,
 } from "../court-stream";
 
@@ -229,5 +230,39 @@ describe("court resolver", () => {
       m("r", { scheduledAt: T("12:00") }),
     ]);
     expect(f).toMatchObject({ nextFixtureId: "r", scoringFixtureId: "r" });
+  });
+});
+
+describe("courtTailEndsAt (O16: when the court's video stops by itself, while that is still to come)", () => {
+  const T = (hhmmss: string) => new Date(`2026-11-15T${hhmmss}Z`);
+  const facts = (o: Partial<Parameters<typeof courtTailEndsAt>[0]> = {}): Parameters<typeof courtTailEndsAt>[0] => ({
+    openState: "live",
+    finishedAt: T("10:00:00"),
+    sessionPredatesResult: true,
+    phoneMode: "automatic",
+    ...o,
+  });
+  // 45 s is not the court's 30 s tail and not the per-fixture 180 s, so the delay passed in is what decides the end.
+  const DELAY = 45;
+
+  it("is the result plus the delay it is given, while that is still ahead", () => {
+    expect(courtTailEndsAt(facts(), T("10:00:12"), DELAY)).toEqual(T("10:00:45"));
+  });
+  it("is null at and after the end of the tail", () => {
+    expect(courtTailEndsAt(facts(), T("10:00:44.999"), DELAY)).toEqual(T("10:00:45"));
+    expect(courtTailEndsAt(facts(), T("10:00:45"), DELAY)).toBeNull();
+    expect(courtTailEndsAt(facts(), T("10:09:00"), DELAY)).toBeNull();
+  });
+  it("is set while ending too, and only while live or ending", () => {
+    expect(courtTailEndsAt(facts({ openState: "ending" }), T("10:00:12"), DELAY)).toEqual(T("10:00:45"));
+    for (const openState of ["requested", "provisioning", "warming", "completed", "failed", null] as const) {
+      expect(courtTailEndsAt(facts({ openState }), T("10:00:12"), DELAY), String(openState)).toBeNull();
+    }
+  });
+  it("is null with no result, and where the automatic stop will not fire", () => {
+    expect(courtTailEndsAt(facts({ finishedAt: null }), T("10:00:12"), DELAY)).toBeNull();
+    expect(courtTailEndsAt(facts({ phoneMode: "operator" }), T("10:00:12"), DELAY)).toBeNull();
+    expect(courtTailEndsAt(facts({ phoneMode: null }), T("10:00:12"), DELAY)).toBeNull();
+    expect(courtTailEndsAt(facts({ sessionPredatesResult: false }), T("10:00:12"), DELAY)).toBeNull();
   });
 });

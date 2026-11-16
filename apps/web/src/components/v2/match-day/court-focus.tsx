@@ -83,6 +83,9 @@ export interface MatchDayCtx {
   /** The organisation, for the channels a court may stream to (`/orgs/{id}/stream-targets`). Absent where the mount has none to
    *  give: "Stream this court" is then not offered (the page passes it). */
   orgId?: string;
+  /** The view's server `now` (ISO): what a linked court's tail countdown (O16) is anchored to. Absent where the mount has none (the
+   *  countdown then runs on the page's own clock from mount). */
+  viewNow?: string;
 }
 
 /** The match's console page: its pad and its per-match stream panel. */

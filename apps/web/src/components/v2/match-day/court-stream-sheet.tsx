@@ -274,7 +274,7 @@ export function CourtStreamBand({
 
   return (
     <section data-testid="md-cs-band" aria-label={court.court_name} className="card grid min-w-0 gap-3 p-4">
-      <CourtPhoneStatus dict={dict} locale={ctx.locale} tz={ctx.tz} link={link} />
+      <CourtPhoneStatus dict={dict} locale={ctx.locale} tz={ctx.tz} link={link} viewNow={ctx.viewNow} />
       {writer && !asking && (
         <div className="flex min-w-0 flex-wrap gap-2 max-md:flex-col">
           <button type="button" data-testid="md-cs-show" aria-haspopup="dialog" onClick={onShowQr} className="btn btn-ghost min-h-11">

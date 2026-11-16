@@ -195,7 +195,7 @@ export function MatchDayShell({
   /** A phone shows one court (or match) full-screen only while what it opened is still there. */
   const phoneCourt = phoneOpen && (focused !== null || focusedMatch !== null);
   const noun = sharedNoun(courts.length > 0 ? courts : allCourts);
-  const ctx: MatchDayCtx = { competitionId, orgSlug, compSlug, locale, tz: view.tz, dict, scoreDict, viewerPlan, readOnly, frozen, orgId };
+  const ctx: MatchDayCtx = { competitionId, orgSlug, compSlug, locale, tz: view.tz, dict, scoreDict, viewerPlan, readOnly, frozen, orgId, viewNow: view.now };
   const words = levelWords(scoreDict);
   const needsTone = needsYouTone(needsYou);
   const date = fmtPublicDate(locale, "UTC", `${view.date}T12:00:00Z`, { weekday: "long", day: "numeric", month: "short" });
@@ -420,7 +420,7 @@ export function MatchDayShell({
           )}
           <div data-testid="md-list" className={`grid min-w-0 gap-5 md:col-start-1 md:row-start-1${phoneCourt ? " max-md:hidden" : ""}`}>
             {courts.length > 0 && (
-              <CourtList courts={courts} selectedId={focused?.court_id ?? null} dict={dict} words={words} locale={locale} tz={view.tz} onSelect={open} />
+              <CourtList courts={courts} selectedId={focused?.court_id ?? null} dict={dict} words={words} locale={locale} tz={view.tz} onSelect={open} viewNow={view.now} />
             )}
             <NoCourtList
               fixtures={noCourt}

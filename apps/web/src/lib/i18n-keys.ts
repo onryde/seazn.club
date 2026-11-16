@@ -4215,6 +4215,7 @@ export type DictionaryKey =
   | "matchDay.courtStream.qrHint"
   | "matchDay.courtStream.show"
   | "matchDay.courtStream.switch"
+  | "matchDay.courtStream.tailEnds"
   | "matchDay.courtStream.until"
   | "matchDay.courtStream.withdraw"
   | "matchDay.courtStream.withdrawConfirm"

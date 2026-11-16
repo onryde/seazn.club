@@ -8334,6 +8334,7 @@
   "matchDay.courtStream.show": "Baan-QR tonen",
   "matchDay.courtStream.qrHint": "Scan met de Seazn Club-app: Live Stream.",
   "matchDay.courtStream.until": "Werkt tot {time} vandaag",
+  "matchDay.courtStream.tailEnds": "Video eindigt over {seconds} s",
   "matchDay.courtStream.withdraw": "Stoppen met streamen van {court}",
   "matchDay.courtStream.withdrawConfirm": "{court} loskoppelen? De telefoon volgt geen wedstrijden meer. Een wedstrijd die live is, wordt eerst afgemaakt.",
   "matchDay.courtStream.phone.unpaired": "Nog geen telefoon",

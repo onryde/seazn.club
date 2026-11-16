@@ -31,6 +31,7 @@ import {
   sharedNoun,
 } from "@/lib/match-day/view";
 import { CourtPhoneChip } from "./court-phone-status";
+import { CourtTailCountdown } from "./court-tail-countdown";
 import { MatchRoundChip } from "./round-chip";
 import { ScorerMark } from "./scorer-mark";
 
@@ -52,6 +53,7 @@ export function CourtList({
   locale,
   tz,
   onSelect,
+  viewNow,
 }: {
   /** In list order (`orderCourts`); the list folds the free, empty ones itself. */
   courts: MatchDayCourt[];
@@ -63,6 +65,8 @@ export function CourtList({
   /** The organisation's zone: the view's `tz`, in which a closure's times print. */
   tz: string;
   onSelect: (courtId: string) => void;
+  /** The view's server `now`, which a linked court's tail countdown is anchored to (O16). */
+  viewNow?: string;
 }) {
   const [foldOpen, setFoldOpen] = useState(false);
   const foldId = useId();
@@ -74,7 +78,7 @@ export function CourtList({
   return (
     <ul aria-label={t(dict, "matchDay.list.label")} className="card divide-y divide-purple-50 overflow-hidden">
       {live.map((c) => (
-        <CourtRow key={c.court_id} court={c} selected={c.court_id === selectedId} dict={dict} words={words} locale={locale} tz={tz} onSelect={onSelect} />
+        <CourtRow key={c.court_id} court={c} selected={c.court_id === selectedId} dict={dict} words={words} locale={locale} tz={tz} onSelect={onSelect} viewNow={viewNow} />
       ))}
       {folded.length > 0 && (
         <li data-testid="md-court-fold" data-open={foldOpen ? "true" : "false"}>
@@ -105,14 +109,14 @@ export function CourtList({
           {foldOpen && (
             <ul id={foldId} className="divide-y divide-purple-50 border-t border-purple-50">
               {folded.map((c) => (
-                <CourtRow key={c.court_id} court={c} selected={false} dict={dict} words={words} locale={locale} tz={tz} onSelect={onSelect} />
+                <CourtRow key={c.court_id} court={c} selected={false} dict={dict} words={words} locale={locale} tz={tz} onSelect={onSelect} viewNow={viewNow} />
               ))}
             </ul>
           )}
         </li>
       )}
       {shut.map((c) => (
-        <CourtRow key={c.court_id} court={c} selected={c.court_id === selectedId} dict={dict} words={words} locale={locale} tz={tz} onSelect={onSelect} />
+        <CourtRow key={c.court_id} court={c} selected={c.court_id === selectedId} dict={dict} words={words} locale={locale} tz={tz} onSelect={onSelect} viewNow={viewNow} />
       ))}
     </ul>
   );
@@ -145,6 +149,7 @@ function CourtRow({
   locale,
   tz,
   onSelect,
+  viewNow,
 }: {
   court: MatchDayCourt;
   selected: boolean;
@@ -153,6 +158,7 @@ function CourtRow({
   locale: Locale;
   tz: string;
   onSelect: (courtId: string) => void;
+  viewNow?: string;
 }) {
   const score = c.state === "playing" && c.current !== null ? scoreLine(c.current) : null;
   const closure = closureText(dict, c.closure, locale, tz);
@@ -185,6 +191,10 @@ function CourtRow({
           <span className="block truncate text-xs text-slate-600">
             <RowLine dict={dict} court={c} />
           </span>
+          {/* O16: the court's video stops by itself in a few seconds, after its last match's result. */}
+          {c.stream_link !== null && c.stream_link.tail_ends_at !== null && (
+            <CourtTailCountdown dict={dict} tailEndsAt={c.stream_link.tail_ends_at} viewNow={viewNow} className="mt-0.5 text-xs font-medium text-slate-700" />
+          )}
           {/* The score on its own line (beside the name a real score squeezed the court's own name to "Cour…"), in the row's
               own sans with tabular figures: games won and the current game's points for a set sport, the sport's own
               headline otherwise (`scoreLine`, the panel's rule; review V4). */}

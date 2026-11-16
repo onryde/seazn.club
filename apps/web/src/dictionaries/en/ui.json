@@ -8334,6 +8334,7 @@
   "matchDay.courtStream.show": "Show court QR",
   "matchDay.courtStream.qrHint": "Scan with the Seazn Club app: Live Stream.",
   "matchDay.courtStream.until": "Works until {time} today",
+  "matchDay.courtStream.tailEnds": "Video ends in {seconds} s",
   "matchDay.courtStream.withdraw": "Stop streaming {court}",
   "matchDay.courtStream.withdrawConfirm": "Unlink {court}? Its phone stops following matches. A match on air finishes first.",
   "matchDay.courtStream.phone.unpaired": "No phone yet",
