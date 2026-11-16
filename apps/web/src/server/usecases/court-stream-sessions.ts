@@ -22,10 +22,10 @@ const IN_PLAY = "in_play";
  * racing court starts cannot end each other), `auto_stopped`, each with a `court_handover` event
  * `{to: keepSid}`, and latch each ended session's match while it is still in play (R4). Returns the sids it ended, oldest
  * first. A session that ended on its own in between is skipped (no event, no latch): `apply`'s command is decided on the
- * locked row.
+ * locked row. `source` names who handed the court over in the event trail ("phone" by default; the desk's restart passes "client").
  */
 export async function endOtherCourtSessions(
-  a: { linkId: string; keepSid: string; actorUserId: string },
+  a: { linkId: string; keepSid: string; actorUserId: string; source?: "client" | "phone" },
   deps: SessionDeps,
 ): Promise<string[]> {
   const others = await sql<{ id: string; org_id: string; fixture_id: string }[]>`
@@ -34,17 +34,20 @@ export async function endOtherCourtSessions(
        -- Fix I1: only sessions OLDER than the kept one, so of two racing starts the newest always survives.
        and (created_at, id) < (select k.created_at, k.id from fixture_stream_sessions k where k.id = ${a.keepSid})
      order by created_at, id`;
+  // Who handed the court over, for the event trail: the court phone's start and the automatic start are "phone" (the default), the
+  // desk's restart from the match page is "client" (final review m-5).
+  const source = a.source ?? "phone";
   const ended: string[] = [];
   for (const s of others) {
     let stopped = false;
     await apply(s.id, (row) => {
       stopped = isActive(row.state);
       return stopped ? { type: "stop", reason: "auto_stopped" } : null;
-    }, deps, { userId: a.actorUserId, source: "phone" });
+    }, deps, { userId: a.actorUserId, source });
     if (!stopped) continue;
     await sql.begin(async (tx) => {
       await recordEvent(tx, {
-        sessionId: s.id, orgId: s.org_id, source: "phone", kind: "event", type: "court_handover", actorUserId: a.actorUserId,
+        sessionId: s.id, orgId: s.org_id, source, kind: "event", type: "court_handover", actorUserId: a.actorUserId,
         occurredAt: deps.now(), payload: { to: a.keepSid },
       });
       // R4: the match's status read under a share lock, so a result landing now is ordered with the latch.

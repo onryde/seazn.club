@@ -462,6 +462,24 @@ describe.skipIf(!HAS_DB)("a court code's descriptor, beat, start and record", ()
       expect(await handoverEvents(a)).toHaveLength(1);
     });
 
+    it("final review m-5: the handover's source is the phone's by default and the caller's when it names one (the desk's restart: client)", async () => {
+      const { a, b } = await twoOpen();
+      const trail = (sid: string) => sql<{ type: string; source: string }[]>`
+        select type, source from fixture_stream_events where session_id = ${sid} and (type = 'court_handover' or (type = 'stop' and kind = 'action')) order by type`;
+      await endOtherCourtSessions({ linkId, keepSid: b, actorUserId: day.auth.userId! }, deps);
+      expect(await trail(a)).toEqual([{ type: "court_handover", source: "phone" }, { type: "stop", source: "phone" }]);
+      // A second pair on the same link, ended with an explicit client source.
+      await streamed(C, AT_15);
+      await setStatus(C, "in_play");
+      const [pairing] = await sql<{ id: string }[]>`select id from fixture_stream_pairings where code_id = ${codeId} order by claimed_at limit 1`;
+      const { sessionId: c } = await startBroadcast(
+        { userId: day.auth.userId!, orgId: day.orgId, source: "phone", pairingId: pairing!.id }, C,
+        { targetId, startCause: "automatic", phone: "present", mode: "passthrough", courtLinkId: linkId }, deps,
+      );
+      expect(await endOtherCourtSessions({ linkId, keepSid: c, actorUserId: day.auth.userId!, source: "client" }, deps)).toEqual([b]);
+      expect(await trail(b)).toEqual([{ type: "court_handover", source: "client" }, { type: "stop", source: "client" }]);
+    });
+
     it("latches the ended session's match when it is still in play", async () => {
       const { a, b } = await twoOpen();
       await endOtherCourtSessions({ linkId, keepSid: b, actorUserId: day.auth.userId! }, deps);

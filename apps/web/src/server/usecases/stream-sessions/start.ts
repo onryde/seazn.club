@@ -178,7 +178,7 @@ export async function createSession(
     // start standing (it is running; an error would be retried into active_session), logged and reported, as for the
     // court's own starts. No pre-pick: the match's own destination choice is not the court's to change.
     try {
-      await endOtherCourtSessions({ linkId: courtLinkId, keepSid: started.sessionId, actorUserId }, deps);
+      await endOtherCourtSessions({ linkId: courtLinkId, keepSid: started.sessionId, actorUserId, source: "client" }, deps);
     } catch (err) {
       log.error({ err: String(err), sid: started.sessionId, orgId }, "stream session: ending the court's other sessions failed — the desk's start stands");
       captureError(err, { orgId, route: "relay.session.court_end_others", extra: { sid: started.sessionId } });

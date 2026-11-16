@@ -150,6 +150,9 @@ describe.skipIf(!HAS_DB)("court stream: the tail, the latches, a desk restart, a
     (await sql<{ b: Date | null }[]>`select auto_start_blocked_at as b from fixture_stream_settings where fixture_id = ${fixtureId}`)[0]?.b ?? null;
   const handoverEvents = async (sid: string) =>
     (await sql<{ payload: { to: string } }[]>`select payload from fixture_stream_events where session_id = ${sid} and type = 'court_handover'`).map((e) => e.payload);
+  const handoverTrail = async (sid: string) =>
+    sql<{ type: string; source: string }[]>`select type, source from fixture_stream_events
+                                             where session_id = ${sid} and (type = 'court_handover' or (type = 'stop' and kind = 'action')) order by type`;
   const pairingOf = async (phone: string) =>
     sql<{ id: string; ended_at: Date | null }[]>`select p.id, p.ended_at from fixture_stream_pairings p join fixture_stream_codes c on c.id = p.code_id
                                                   where c.court_link_id = ${linkId} and p.phone = ${phone}`;
@@ -278,6 +281,8 @@ describe.skipIf(!HAS_DB)("court stream: the tail, the latches, a desk restart, a
     // B's session is older than the restart: it ends, handed over to the restart.
     expect(await sessionRow(sidB)).toMatchObject({ end_reason: "auto_stopped" });
     expect(await handoverEvents(sidB)).toEqual([{ to: deskA }]);
+    // Final review m-5: the desk's restart is the organiser's act in the trail (source client), not the phone's — the stop and the handover.
+    expect(await handoverTrail(sidB)).toEqual([{ type: "court_handover", source: "client" }, { type: "stop", source: "client" }]);
     expect(await activeOfLink()).toEqual([deskA]);
     // R4: B was still in play, so it is latched — and R3 holds the court for the desk: no ping-pong back to B.
     expect(await latchedAt(B)).not.toBeNull();
