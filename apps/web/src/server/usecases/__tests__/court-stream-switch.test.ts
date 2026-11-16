@@ -28,6 +28,7 @@ import { rigApiTarget } from "@/server/relay/__tests__/_session-rig";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { linkCourtStream, setCourtStream, withdrawCourtStream } from "../court-streams";
 import { ensureStreamCode, reissueStreamCode } from "../stream-codes";
+import { streamPhone } from "../stream-phone";
 import { place, seedDay, type Day } from "./_match-day-seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -88,6 +89,15 @@ describe.skipIf(!HAS_DB)("court stream switch", () => {
     expect(await settingsOf(other)).toBeNull();
     expect(await setCourtStream(day.auth, fx, false)).toEqual({ on: false });
     expect(await settingsOf(fx)).toMatchObject({ court_stream: false, revision: 2 });
+  });
+
+  it("final review I-1: the panel's read model names the court AND the link's channel label once the switch is on, and nothing before", async () => {
+    await linkCourt2();
+    expect((await streamPhone(day.auth, fx, { now: () => new Date() })).court, "switch off").toBeNull();
+    await setCourtStream(day.auth, fx, true);
+    const read = await streamPhone(day.auth, fx, { now: () => new Date() });
+    expect(read.court).toEqual({ name: "Court 2", targetLabel: "Club channel" });
+    expect(JSON.stringify(read), "a label only: no link or target id on the panel read").not.toMatch(/court_link|target_id|tok/);
   });
 
   it("turning on a match that has its own stream code is 409 has_own_stream_code, nothing written", async () => {

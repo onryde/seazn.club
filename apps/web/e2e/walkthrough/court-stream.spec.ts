@@ -436,7 +436,8 @@ test("court stream: link Court 2, claim it, A then B then C — A starts, B star
   await page.setViewportSize({ width: 1280, height: 900 });
   const rig = await seedRig(page);
   const [A, B, C] = rig.fixtures as [Fx, Fx, Fx];
-  const targetId = await connectChannel(page, `Club channel ${TAG}`);
+  const channelTitle = `Club channel ${TAG}`;
+  const targetId = await connectChannel(page, channelTitle);
   await storeCameraOnly(page.request, [A.id, B.id, C.id]);
   // Any POST to a stream-code route is a mint or a re-show of a match's OWN code: a court-streamed match makes none.
   const mints: string[] = [];
@@ -458,7 +459,7 @@ test("court stream: link Court 2, claim it, A then B then C — A starts, B star
   await putCourtSwitch(page, A, true);
   await putCourtSwitch(page, B, true);
   const readA = await readPhone(page, A);
-  expect(readA.court, "A's read names the court whose phone streams it").toEqual({ name: rig.court2Name });
+  expect(readA.court, "A's read names the court whose phone streams it and the channel it streams to (final review I-1)").toEqual({ name: rig.court2Name, targetLabel: channelTitle });
   expect(readA.phone, "…and the court's phone is A's phone").toMatchObject({ present: true, mode: "automatic" });
   expect(readA.code, "…and A has no code of its own").toBeNull();
   expect((await readPhone(page, C)).court, "C's switch was never touched: its read is today's").toBeNull();

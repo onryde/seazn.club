@@ -1426,7 +1426,7 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
 
   // Court stream (plan Task 13, spec 2026-11-14 §5.2): a match the court's phone streams names it, in place of the code.
   describe("a court-streamed match (read model `court`)", () => {
-    const COURT = { name: "Court 2" };
+    const COURT = { name: "Court 2", targetLabel: "Court channel" };
     const idle = (phone: StreamPhone) => body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", phone });
 
     it("Ready: ONE line names the court's phone — the dictionary's words, the court as typed — and no code card, fold, QR or reissue is drawn; Go live stays", () => {
@@ -1493,6 +1493,25 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
         expect(destPicker(tree), view.state).toBeUndefined();
         expect(byTestId(tree, view.state === "live" ? "stream-stop" : "stream-cancel"), view.state).toBeDefined();
       }
+    });
+
+    it("final review I-1: at Ready the Signal path names the court link's channel, never the panel's own pick (t1 'Club'); a session's own destination still wins", () => {
+      const tree = idle(readModel({ court: COURT, code: null, phone: facts() }));
+      expect(chainOf(tree)?.destination).toEqual({ kind: "youtube", label: "Court channel" });
+      // …a match of its own still draws the picked one.
+      expect(chainOf(idle(readModel({ court: null })))?.destination).toMatchObject({ label: "Club" });
+      // …and once a session is up, the chain is drawn to the session's destination, as today.
+      const live = body({ view: session({ state: "live", startedAt: "2026-09-14T11:50:00Z" }), balance: 2, targets: TARGETS, selectedTargetId: "t1", phone: readModel({ court: COURT, code: null, phone: facts() }) });
+      expect(chainOf(live)?.destination.label).not.toBe("Court channel");
+    });
+
+    it("final review I-1: a YouTube refusal on a court match names the court link's channel, not the pick", () => {
+      const tree = body({
+        view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", createError: { code: "youtube_reconnect_needed" as never, holder: null },
+        phone: readModel({ court: COURT, code: null, phone: facts() }),
+      });
+      expect(textAt(tree, "stream-youtube-refusal-title")).toBe(m("stream.youtube.refused.title", { label: "Court channel" }));
+      expect(textAt(tree, "stream-youtube-refusal-title")).not.toContain("Club");
     });
 
     it("a court match has no per-match automatic switch of its own: the Stream switch on the desk is its one control", () => {
@@ -3241,7 +3260,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
   });
 
   it("Task 13: a court-streamed match never asks for a code — no ensure at mount (no phone to show one for), none on the fold, none on Retry, none from a poll — and mints nothing", async () => {
-    const courtRead = readModel({ court: { name: "Court 2" }, code: null, phone: null });
+    const courtRead = readModel({ court: { name: "Court 2", targetLabel: "Court channel" }, code: null, phone: null });
     const island = track(await mount({ current: null, targets: TARGETS, phone: courtRead }));
     expect(ensures(), "at mount: the court's line, not a code").toBe(0);
     bodyOf(island).onToggleCode(true);
@@ -3251,7 +3270,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     await settle();
     expect(ensures(), "after the fold, Retry and two polls").toBe(0);
     expect(calls().filter((c) => c === ENSURE || c === REISSUE), "no mint and no reissue on the wire").toEqual([]);
-    expect(bodyOf(island).phone?.court).toEqual({ name: "Court 2" });
+    expect(bodyOf(island).phone?.court).toEqual({ name: "Court 2", targetLabel: "Court channel" });
     expect(byTestId(island.tree(), "stream-loading")).toBeUndefined();
     // The same read with its switch off is today's: a phoneless match asks at once.
     apiV1.mockClear();

@@ -235,7 +235,7 @@ describe.skipIf(!HAS_DB)("GET …/stream-phone — a court-streamed match names 
     await fresh();
     await setCourtStream(day.auth, fx, true);
     const { data, raw } = await readCourt();
-    expect(data.court).toEqual({ name: "Court 2" });
+    expect(data.court).toEqual({ name: "Court 2", targetLabel: "Club channel" });
     expect(data.code, "the match has no code of its own").toBeNull();
     for (const secret of [linked.tok, linked.code, linked.id]) expect(raw.includes(secret), "a court secret on the wire").toBe(false);
   });

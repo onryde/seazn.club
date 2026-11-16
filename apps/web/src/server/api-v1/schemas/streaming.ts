@@ -385,8 +385,9 @@ export const StreamPhone = z
     session: z.object({ id: z.string() }).strict().nullable(),
     /** Court stream (spec 2026-11-14 §5.2): the court whose phone streams this match — set exactly when the match's Stream switch
      *  is on, its court has a live link now and the match has no code of its own; null otherwise. The panel names the court
-     *  instead of showing a code. The court's name, nothing else: never a link id, a code or a tok. */
-    court: z.object({ name: z.string() }).strict().nullable(),
+     *  instead of showing a code. The court's name and the label of the link's YouTube channel (the one Go live will stream to, whatever
+     *  the panel picked: final review I-1) — a label, never a link id, a target id, a code or a tok. */
+    court: z.object({ name: z.string(), targetLabel: z.string() }).strict().nullable(),
   })
   .strict();
 export type StreamPhone = z.infer<typeof StreamPhone>;

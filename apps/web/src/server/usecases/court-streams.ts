@@ -238,14 +238,15 @@ export async function withdrawCourtStream(auth: AuthCtx, linkId: string): Promis
  *  with no court. The one answer to "is this court streaming right now?", for the switch and the mint guards. */
 export async function liveCourtLinkFor(
   exec: Tx | typeof sql, a: { orgId: string; courtId: string | null; now: Date },
-): Promise<{ id: string; courtName: string } | null> {
+): Promise<{ id: string; courtName: string; targetLabel: string } | null> {
   if (a.courtId === null) return null;
-  const [row] = await exec<{ id: string; court_name: string }[]>`
-    select l.id, c.name as court_name from court_stream_links l join courts c on c.id = l.court_id
+  const [row] = await exec<{ id: string; court_name: string; target_label: string }[]>`
+    select l.id, c.name as court_name, t.label as target_label
+      from court_stream_links l join courts c on c.id = l.court_id join org_stream_targets t on t.id = l.target_id
      where l.org_id = ${a.orgId} and l.court_id = ${a.courtId} and l.withdrawn_at is null
        and l.opens_at <= ${a.now} and ${a.now} < l.expires_at
      limit 1`;
-  return row ? { id: row.id, courtName: row.court_name } : null;
+  return row ? { id: row.id, courtName: row.court_name, targetLabel: row.target_label } : null;
 }
 
 /**

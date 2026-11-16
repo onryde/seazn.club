@@ -215,7 +215,7 @@ export async function streamPhone(auth: AuthCtx, fixtureId: string, deps: { now:
 
   // --- the court (spec 2026-11-14 §5.2): the switch is on, the match's court has a live link now, and the match has no ACTIVE
   // code of its own — the order the resolver and the start path use (an own code wins), so the panel never hides the QR of a
-  // phone that is the one the server will start on. The link is not served: its court's name is all the panel is told.
+  // phone that is the one the server will start on. The link is not served: its court's name and its channel's label are all the panel is told.
   const ownCode = code !== null && code.state !== "ended";
   const courtLink = fx.court_stream === true && !ownCode ? await liveCourtLinkFor(sql, { orgId: auth.orgId, courtId: fx.court_id, now }) : null;
 
@@ -293,6 +293,6 @@ export async function streamPhone(auth: AuthCtx, fixtureId: string, deps: { now:
     code, phone, destination, lastTakeover,
     auto: autoOf(fx, { phoneMode, openSession: openId !== null, stopApplies, competitionFrozen }, now),
     legacy, finished: fx.finished_at !== null, session: openId === null ? null : { id: openId },
-    court: courtLink ? { name: courtLink.courtName } : null,
+    court: courtLink ? { name: courtLink.courtName, targetLabel: courtLink.targetLabel } : null,
   };
 }

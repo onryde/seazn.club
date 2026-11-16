@@ -1892,7 +1892,10 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
   const inUseHolder = p.createError?.code === "target_in_use" ? p.createError.holder : null;
   // §3.2: the Signal path is drawn to the session's destination, or — with none — to the picked one. Neither (credits
   // only, a list loading, failed or empty) draws no chain: a path to nowhere says nothing. Ended and failed draw none.
-  const chainTarget = p.view ? p.view.target : selected ?? null;
+  // A court-streamed match goes to its court link's channel (the server overrides the body's target, O9), so before a session the
+  // path and a refusal name THAT channel — never the panel's own pick, which is not drawn and is not where the match goes.
+  const courtTarget = court ? { kind: "youtube" as const, label: court.targetLabel } : null;
+  const chainTarget = p.view ? p.view.target : courtTarget ?? selected ?? null;
   const capture = legacy ? undefined : { phone: p.phone?.phone ?? null, countdown: p.view?.countdown ?? null };
   const drawn =
     !creditsOnly && !matchOver && chainTarget
@@ -2252,11 +2255,11 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
         role="alert"
         className={`min-w-0 rounded-lg border border-red-200 bg-red-50 p-3.5 text-sm text-red-800 ${REFUSAL_FOCUS_RING}`}
       >
-        {selected && (
+        {(courtTarget ?? selected) && (
           <p className="flex gap-2 font-semibold">
             <CircleAlert aria-hidden className="mt-0.5 h-5 w-5 shrink-0" strokeWidth={1.8} />
             <span data-testid="stream-youtube-refusal-title" className="min-w-0 [overflow-wrap:anywhere]">
-              {msg("stream.youtube.refused.title", { label: youtubeTargetLabel(msg, selected.label) })}
+              {msg("stream.youtube.refused.title", { label: youtubeTargetLabel(msg, (courtTarget ?? selected)!.label) })}
             </span>
           </p>
         )}
