@@ -9,9 +9,15 @@ import { Closing, DemoClub, PageHero, PhoneRow, Questions, Road, SplitBand, Tick
 
 const PUBLIC = path.resolve(__dirname, "../../../../../public");
 
-/** Width and height straight from a PNG's IHDR or a JPEG's SOF marker. */
+/** Width and height straight from a WebP's VP8/VP8X header, a PNG's IHDR or a JPEG's SOF marker. */
 function measure(file: string): { width: number; height: number } {
   const b = fs.readFileSync(file);
+  if (b.toString("ascii", 0, 4) === "RIFF" && b.toString("ascii", 8, 12) === "WEBP") {
+    const kind = b.toString("ascii", 12, 16);
+    if (kind === "VP8 ") return { width: b.readUInt16LE(26) & 0x3fff, height: b.readUInt16LE(28) & 0x3fff };
+    if (kind === "VP8X") return { width: b.readUIntLE(24, 3) + 1, height: b.readUIntLE(27, 3) + 1 };
+    throw new Error(`unsupported WebP kind ${kind} in ${file}`);
+  }
   if (b.toString("ascii", 1, 4) === "PNG") return { width: b.readUInt32BE(16), height: b.readUInt32BE(20) };
   for (let i = 2; i < b.length; ) {
     const marker = b[i + 1]!;
@@ -32,11 +38,19 @@ describe("product images", () => {
     for (const k of KEYS) {
       const im = PRODUCT_IMAGES[k];
       expect(im.src.startsWith("/marketing/product/"), k).toBe(true);
+      // Pictures ship as WebP: the PNG captures were about three times the bytes (owner's Lighthouse bar, 2026-11-16).
+      expect(im.src.endsWith(".webp"), k).toBe(true);
+      expect(fs.statSync(path.join(PUBLIC, im.src)).size, `${k} is under 120 KB`).toBeLessThan(120 * 1024);
       expect(measure(path.join(PUBLIC, im.src)), k).toEqual({ width: im.width, height: im.height });
       checked++;
     }
     expect(checked).toBe(KEYS.length);
     expect(checked).toBeGreaterThanOrEqual(14);
+  });
+
+  it("no PNG capture is left beside its WebP", () => {
+    const left = fs.readdirSync(path.join(PUBLIC, "marketing/product")).filter((f) => !f.endsWith(".webp"));
+    expect(left).toEqual([]);
   });
 
   it("premise: the ledger holds both phone and web pictures", () => {

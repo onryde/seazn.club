@@ -36,11 +36,13 @@ export async function MarketingNav({
           {/* logo-wide.png is the night-ink wordmark for light navs; the night
               state swaps to logo-wide-night.png — the cream wordmark carrying
               the lime pitch line + red ball, legible over the floodlit hero.
-              Exactly one shows at a time via CSS (globals.css §mk-nav). */}
+              Exactly one shows at a time via CSS (globals.css §mk-nav).
+              The `-nav.webp` files are the same wordmarks at three times the nav's 36px height, about 6 KB each
+              against 21 KB for the 800px PNGs, with their size declared so the bar never shifts. */}
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/logo-wide.png" alt="Seazn Club" className="mk-nav-logo-img h-9 w-auto" />
+          <img src="/logo-wide-nav.webp" alt="Seazn Club" width={309} height={108} className="mk-nav-logo-img h-9 w-auto" />
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/logo-wide-night.png" alt="Seazn Club" className="mk-nav-logo-img-night h-9 w-auto" />
+          <img src="/logo-wide-night-nav.webp" alt="Seazn Club" width={309} height={108} className="mk-nav-logo-img-night h-9 w-auto" />
         </Link>
         <nav className="flex items-center gap-1 sm:gap-2">
           {groups.map((g) => (
