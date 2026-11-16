@@ -30,6 +30,7 @@ import {
   scoreLine,
   sharedNoun,
 } from "@/lib/match-day/view";
+import { CourtPhoneChip } from "./court-phone-status";
 import { MatchRoundChip } from "./round-chip";
 import { ScorerMark } from "./scorer-mark";
 
@@ -176,7 +177,10 @@ function CourtRow({
         <span className="min-w-0">
           <span className="flex min-w-0 items-center gap-2">
             <span className="truncate text-sm font-semibold">{c.court_name}</span>
-            {c.current?.stream === "live" && <LiveBadge dict={dict} />}
+            {/* A linked court's phone says "Live" itself: a second "Live" for the same broadcast would only repeat it. A match
+                streaming on a code of its own on a court whose phone is not live still earns its badge. */}
+            {c.current?.stream === "live" && c.stream_link?.phone !== "live" && <LiveBadge dict={dict} />}
+            {c.stream_link !== null && <CourtPhoneChip dict={dict} phone={c.stream_link.phone} />}
           </span>
           <span className="block truncate text-xs text-slate-600">
             <RowLine dict={dict} court={c} />

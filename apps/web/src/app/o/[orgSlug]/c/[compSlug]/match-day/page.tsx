@@ -67,13 +67,14 @@ export default async function MatchDayPage({
         competitionName={page.competition.name}
         orgSlug={orgSlug}
         compSlug={page.competition.slug}
+        orgId={page.auth.orgId}
         locale={locale}
         divisions={divisions.map((d) => ({ id: d.id, name: d.name }))}
         initial={initial}
         // Only the keys the island renders cross to the client, never the whole dictionary: its own, the Needs-you list's title
         // (`NeedsYou`, reused; its rows arrive translated), the scorer QR's heading (the console's own "Remote scoring") and the
         // preview's "Live on YouTube" (the fixture page's words for the same stream).
-        dict={pickDictPrefixes(ui, ["matchDay.", "desk.needsYou.title", "dlink.title", "stream.youtube.link.live"])}
+        dict={pickDictPrefixes(ui, ["matchDay.", "desk.needsYou.title", "dlink.title", "stream.youtube.link.live", "stream.auto.refus"])}
         scoreDict={pickDictPrefixes(pub, ["matchCentre.", "forfeit."])}
         viewerPlan={viewerPlanFrom(planKey)}
         readOnly={!page.canEdit}
