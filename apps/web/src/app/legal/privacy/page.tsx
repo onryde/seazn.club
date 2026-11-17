@@ -15,7 +15,7 @@ export default function PrivacyPage() {
       <MarketingNav />
       <main className="mx-auto max-w-3xl px-4 py-16">
         <h1 className="mb-2 text-3xl font-bold text-purple-900">Privacy Policy</h1>
-        <p className="mb-8 text-sm text-slate-400">Last updated: 8 November 2026</p>
+        <p className="mb-8 text-sm text-slate-400">Last updated: 17 November 2026</p>
         <div className="prose prose-slate max-w-none space-y-6 text-sm text-slate-700">
 
           <section>
@@ -90,38 +90,52 @@ export default function PrivacyPage() {
           </section>
 
           <section>
-            <h2 className="mb-2 text-lg font-semibold text-slate-800">8. Sub-processors</h2>
+            <h2 className="mb-2 text-lg font-semibold text-slate-800">8. The Seazn Club phone app</h2>
+            <p>Seazn Club has a phone app for Android (<span className="font-mono text-sm">com.seazn.capture</span>) that an organisation&apos;s volunteers use to stream and score its matches. It has no account and no sign-in: it works from a stream code or a scoring link that the organiser gives the operator.</p>
+            <ul className="mt-2 list-disc space-y-1 pl-5">
+              <li><strong>Camera and microphone:</strong> the app uses the phone&apos;s camera and microphone to stream a match. The picture and sound are sent only once a broadcast is started, by the operator&apos;s tap on Go live or by the organiser when the operator has allowed the app to start and stop automatically, and they stop when the broadcast ends. They go to our streaming infrastructure and from there to the organisation&apos;s YouTube channel or other destination the organiser chose. The app does not keep a recording on the phone. People in view of the camera may be seen and heard on the stream; the organisation running the event decides what is streamed and is responsible for telling the people it films.</li>
+              <li><strong>Status reports:</strong> while the app is paired with a match or a court it tells us how the phone is doing, so the organiser can see whether the stream is healthy: the phone&apos;s model, the app&apos;s version, a random identifier the app makes for that pairing, the battery level and whether it is charging, and the state and quality of the connection and of the stream. These reports are deleted after 24 hours.</li>
+              <li><strong>Technical record:</strong> if something goes wrong, the operator can tap Send record to Seazn. The record is a list of technical events from that session (timings, connection and encoder figures, error words). It holds no picture and no sound, and the app removes anything that looks like a code or a secret before it is sent. It is sent only on that tap, is used only to diagnose the problem, and is deleted after 30 days.</li>
+              <li><strong>Scoring:</strong> when the operator scores a match in the app, the points they enter are saved to that match exactly as they are from the website.</li>
+              <li><strong>Kept on the phone:</strong> the stream code or scoring link and the app&apos;s settings, in the phone&apos;s secure storage. Forget in the app, or uninstalling it, removes them.</li>
+              <li><strong>What the app does not collect:</strong> it has no account, and it does not read the phone&apos;s location, contacts, photos or files, or its advertising identifier. It shows no advertising and holds no third-party analytics or advertising software.</li>
+            </ul>
+            <p className="mt-2">Everything the app sends travels encrypted. Questions, or a request to delete data the app sent: <a href="mailto:privacy@seazn.club" className="text-purple-600 underline">privacy@seazn.club</a>.</p>
+          </section>
+
+          <section>
+            <h2 className="mb-2 text-lg font-semibold text-slate-800">9. Sub-processors</h2>
             <p>We share data with trusted sub-processors to operate the service. See our <Link href="/legal/sub-processors" className="text-purple-600 underline">sub-processors list</Link> for details.</p>
           </section>
 
           <section>
-            <h2 className="mb-2 text-lg font-semibold text-slate-800">9. Data retention</h2>
+            <h2 className="mb-2 text-lg font-semibold text-slate-800">10. Data retention</h2>
             <p>Account data is retained for the life of your account plus 30 days after deletion. Tournament records may be anonymised rather than deleted at your request. Billing records are retained for 7 years for tax compliance.</p>
             <p className="mt-2">Scheduling instructions you preview but do not run are deleted within the hour; a preview you did run is kept for 30 days so a disputed plan can be re-checked.</p>
           </section>
 
           <section>
-            <h2 className="mb-2 text-lg font-semibold text-slate-800">10. Your rights (GDPR)</h2>
+            <h2 className="mb-2 text-lg font-semibold text-slate-800">11. Your rights (GDPR)</h2>
             <p>You have the right to access, correct, or delete your personal data. You can export your data from Settings → Account → Export my data. To exercise other rights, email us at privacy@seazn.club. We respond within 30 days.</p>
           </section>
 
           <section>
-            <h2 className="mb-2 text-lg font-semibold text-slate-800">11. Cookies</h2>
+            <h2 className="mb-2 text-lg font-semibold text-slate-800">12. Cookies</h2>
             <p>We use essential session cookies plus, with your consent, PostHog analytics cookies. No advertising cookies. See our <Link href="/legal/cookie-policy" className="text-purple-600 underline">Cookie Policy</Link>.</p>
           </section>
 
           <section>
-            <h2 className="mb-2 text-lg font-semibold text-slate-800">12. Security</h2>
+            <h2 className="mb-2 text-lg font-semibold text-slate-800">13. Security</h2>
             <p>Data is encrypted in transit (TLS) and at rest. Sign-in is by a single-use emailed link or by Google. Access is controlled by row-level security policies at the database level. Staff access is logged and audited.</p>
           </section>
 
           <section>
-            <h2 className="mb-2 text-lg font-semibold text-slate-800">13. Changes</h2>
+            <h2 className="mb-2 text-lg font-semibold text-slate-800">14. Changes</h2>
             <p>We will notify you by email of material changes to this policy at least 14 days in advance.</p>
           </section>
 
           <section>
-            <h2 className="mb-2 text-lg font-semibold text-slate-800">14. Contact</h2>
+            <h2 className="mb-2 text-lg font-semibold text-slate-800">15. Contact</h2>
             <p>Privacy questions: <a href="mailto:privacy@seazn.club" className="text-purple-600 underline">privacy@seazn.club</a></p>
           </section>
         </div>
