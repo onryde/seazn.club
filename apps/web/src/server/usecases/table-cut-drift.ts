@@ -36,13 +36,17 @@ export async function tableCutToday(
   tx: Tx,
   dependent: BracketDependent,
   sourceStageId: string,
-  opts: { asResultsMake?: boolean } = {},
+  opts: { asResultsMake?: boolean; alsoDeparted?: string } = {},
 ): Promise<string[]> {
   const asResultsMake = opts.asResultsMake === true;
+  const also = new Set(opts.alsoDeparted === undefined ? [] : [opts.alsoDeparted]);
   const { shapes, tables, resolved } = await sourcesToTables(tx, dependent, dependent.progression.sources, {
     withoutDepartureBackfill: asResultsMake,
+    alsoDeparted: also,
   });
-  const read = asResultsMake ? tables : departedLoseBestNth(tables, resolved, await departedEntrantIds(tx, dependent.division_id));
+  const read = asResultsMake
+    ? tables
+    : departedLoseBestNth(tables, resolved, new Set([...(await departedEntrantIds(tx, dependent.division_id)), ...also]));
   const today = resolveStoredProgression(dependent.progression, shapes, read, dependent.kind as never, resolved.map((r) => r.kind));
   return [...today.qualifiers]
     .filter((q) => resolved[q.sourceIndex]?.id === sourceStageId)
@@ -53,8 +57,11 @@ export async function tableCutToday(
 /**
  * Does `slate`'s part of the cut still stand, before the destination starts? EMPTY CASE FIRST: a slate that names nobody from this
  * source has nothing a correction could take away, and stands. `departing` is an entrant the withdrawal cascade is about to settle
- * (her status is not written yet): when named she is a difference outright, and when not nothing about her moves the cut, so the
- * table is not re-read. A source another source is not ready for cannot be judged: it stands.
+ * (her status is not written yet): not named, nothing about her moves the cut (the table is not re-read); named, she is a
+ * difference outright - unless nobody is left to take her place (the cut is EXHAUSTED: today's eligible cut is SHORTER than the
+ * slate), in which case the proposal stands and her seat is the cascade's walkover (RB4-E7, R6). A Reinstate is judged the same way
+ * with no `departing`: the cut as it reads today against the slate. A source another source is not ready for cannot be judged: it
+ * stands.
  */
 export async function tableSlateStands(
   tx: Tx,
@@ -65,9 +72,17 @@ export async function tableSlateStands(
 ): Promise<boolean> {
   const named = onSource(slate, sourceStageId);
   if (named.length === 0) return true;
-  if (departing !== undefined) return !named.includes(departing);
+  if (departing !== undefined && !named.includes(departing)) return true;
   try {
-    const today = await tableCutToday(tx, dependent, sourceStageId);
+    const today = await tableCutToday(tx, dependent, sourceStageId, { alsoDeparted: departing });
+    // EXHAUSTED (RB4-E7, R6 "else walkover"): fewer ELIGIBLE entrants are left than the slate has seats - nobody to take a departed
+    // qualifier's place (the cut reads a true shortfall into a departed row, so `today` still has the seats; it is the eligible
+    // ones that run out). Re-proposing would offer a short cut (a page playoff with a bye, breaking RB4-S2), so the confirmed
+    // proposal stands and the seat is the cascade's walkover.
+    const out = await departedEntrantIds(tx, dependent.division_id);
+    if (departing !== undefined) out.add(departing);
+    if (today.filter((id) => !out.has(id)).length < named.length) return true;
+    // Someone is left to backfill: the cut as it reads today (a departing qualifier already out of it) against the slate.
     return today.length === named.length && today.every((id, i) => id === named[i]);
   } catch (err) {
     if (err instanceof HttpError && err.code === "SEEDING_SOURCE_INCOMPLETE") return true;

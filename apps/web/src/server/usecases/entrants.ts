@@ -1291,9 +1291,13 @@ export async function writeEntrantPatch(
   // nothing has started in the destination) as well as the cascade's own final write (which already asked BEFORE it settled her
   // lines, where a walkover over her seat would have been a start, and so finds nothing left to do). Own try/catch, same reason as
   // above: the status write has committed.
-  if (departed) {
+  //
+  // The other direction too (Reinstate, review I-2): a confirmed proposal made while she was out names the entrant who took her
+  // place, and nothing else would re-judge it once she is back - her seat would be left to the one who stood in, and after the start
+  // the desk would say a result was corrected. Judged with no `departing`: the cut as it reads today against what was confirmed.
+  if (fieldChanged) {
     try {
-      const cut = await staleConfirmedProposalsOfDeparting(auth.orgId, refresh.divisionId, id);
+      const cut = await staleConfirmedProposalsOfDeparting(auth.orgId, refresh.divisionId, departed ? id : undefined);
       if (cut.unfilled.length > 0 && refresh.competitionId !== null) {
         afterScheduleWrite(refresh.divisionId, refresh.competitionId, "schedule", cut.unfilled);
       }

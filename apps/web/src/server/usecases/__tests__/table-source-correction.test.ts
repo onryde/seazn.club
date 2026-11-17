@@ -65,7 +65,7 @@ const BADMINTON: SportPick = (() => {
 })();
 
 interface RowSpec {
-  key: "league_ko" | "groups_ko";
+  key: "league_ko" | "groups_ko" | "group_playoffs" | "group_stepladder";
   entrants: number;
   qualified: number;
 }
@@ -76,6 +76,9 @@ const GROUPS4: RowSpec = { key: "groups_ko", entrants: 8, qualified: 4 };
 /** Two pools of three (E1,E4,E5 and E2,E3,E6), q = 5: top two of each plus the best third - the shape where a departed pool winner
  *  would take the best-third seat on the record she earned (`departedLoseBestNth`, Task 9). */
 const GROUPS6: RowSpec = { key: "groups_ko", entrants: 6, qualified: 5 };
+/** Final stages with a FIXED shape (RB4-S1/S2): four seats, so a short cut cannot be drawn. The field is the take (`EXHAUSTED`)
+ *  or one more (`BACKFILL`). */
+const finalsRow = (key: "group_playoffs" | "group_stepladder", entrants: number): RowSpec => ({ key, entrants, qualified: 4 });
 /** The same pools with q = 5: top two of each plus the best third. Thirds are E5 and E6 on 3 points each (a tie the confirm
  *  resolves) until a departure leaves one pool with a different third. */
 const GROUPS5: RowSpec = { key: "groups_ko", entrants: 8, qualified: 5 };
@@ -469,6 +472,20 @@ describe.runIf(HAS_DB)("W5 T11 a correction inside a completed league or group s
     expect(await statusOf(r.confirmedId), "still confirmed").toBe("confirmed");
   });
 
+  it("X-CUT-4 groups_ko best-Nth: a correction that DOES move the cut stales it even with a departed pool winner (her record must not read as an exhausted field)", async () => {
+    // As above, E2 left before the source completed: the cut is E1, E4 (pool A), E3, E6 (pool B), and pool A's third, E5.
+    const r = await rig(GROUPS6, GENERIC, { departBefore: [2] });
+    expect((await slateOf(r, r.confirmedId)).slice().sort((a, b) => a - b), "premise").toEqual([1, 3, 4, 5, 6]);
+    // E5 beats E4 in pool A: E1, E5, E4 - E5 now takes E4's seat in the draw (A2) and E4 drops to the best-third place.
+    await correct(r, 4, 5, 5);
+    expect(await statusOf(r.confirmedId), "the cut's seats moved: stale").toBe("stale");
+    await expectDayOne(r);
+    const now = await newestSlate(r);
+    expect(now.status).toBe("draft");
+    expect(now.seeds.slice().sort((a, b) => a - b), "the same five people, E2 still out").toEqual([1, 3, 4, 5, 6]);
+    expect(now.seeds, "in a new draw order").not.toEqual(await slateOf(r, r.confirmedId));
+  });
+
   it("X-CUT-4 a rank override on a complete league is a correction too: it stales the confirmed proposal", async () => {
     const r = await rig(LEAGUE);
     await overrideStandings(r.auth, r.srcId, {
@@ -478,8 +495,97 @@ describe.runIf(HAS_DB)("W5 T11 a correction inside a completed league or group s
     await expectDayOne(r);
   });
 
+  // Review I-1 (RB4-E7, R6 "else walkover"): a fixed-shape final cannot be drawn short. When nobody is left to take a departed
+  // qualifier's place the confirmed proposal STANDS and her seat is the cascade's walkover; when someone is, it is re-proposed.
+  // Expected from the rulebook: RB4-S1 stepladder k=4 plays R1 = seed 4 v seed 3 first; RB4-S2 page playoff plays Q1 = seed 1 v
+  // seed 2 and E = seed 3 v seed 4 first. The qualifier who leaves is the one on a day-one line, so a walkover is visible at once.
+  const FINALS = [
+    { key: "group_stepladder", leaves: 3, opponent: 4, first: "R1 (seed 4 v seed 3, RB4-S1)" },
+    { key: "group_playoffs", leaves: 2, opponent: 1, first: "Q1 (seed 1 v seed 2, RB4-S2)" },
+  ] as const;
+  let finalsChecked = 0;
+  for (const f of FINALS) {
+    it(`X-CUT-4 ${f.key} EXHAUSTED (field = take): the confirmed proposal stands and the departure is a walkover, never a short cut [route, bare PATCH]`, async () => {
+      for (const door of ["cascade", "patch"] as const) {
+        const r = await rig(finalsRow(f.key, 4));
+        const slate = await slateOf(r, r.confirmedId);
+        expect(slate.slice().sort(), "premise: all four take the four seats").toEqual([1, 2, 3, 4]);
+        const idAtSeed = async (seed: number) => {
+          const [p] = await sql<{ computed: { qualifiers: { rank: number; entrantId: string }[] } }[]>`select computed from stage_seed_proposals where id = ${r.confirmedId}`;
+          return p!.computed.qualifiers.find((q) => q.rank === seed)!.entrantId;
+        };
+        const leaving = await idAtSeed(f.leaves);
+        const opponent = await idAtSeed(f.opponent);
+        const before = (await sql<{ n: number }[]>`select count(*)::int as n from stage_seed_proposals where stage_id = ${r.koId}`)[0]!.n;
+        if (door === "cascade") await withdrawEntrantCascade(r.auth, leaving);
+        else await patchEntrant(r.auth, leaving, { status: "withdrawn" });
+        expect(await statusOf(r.confirmedId), `${door}: nobody to take her place - the proposal stands`).toBe("confirmed");
+        expect(
+          (await sql<{ n: number }[]>`select count(*)::int as n from stage_seed_proposals where stage_id = ${r.koId}`)[0]!.n,
+          `${door}: no short re-proposal was made`,
+        ).toBe(before);
+        const held = (await rowsOf(r.koId)).filter((x) => [x.home_entrant_id, x.away_entrant_id].includes(leaving));
+        expect(held.length, `${door}: her seat is still on a line of ${f.first}`).toBeGreaterThan(0);
+        if (door === "cascade") {
+          expect(held.some((x) => (x.outcome as { winner?: string } | null)?.winner === opponent), "the cascade walked the line over to her opponent").toBe(true);
+        } else {
+          expect(held.every((x) => x.outcome === null), "a bare status flip settles no line").toBe(true);
+        }
+        finalsChecked++;
+      }
+    }, 120_000);
+
+    it(`X-CUT-4 ${f.key} BACKFILL (field = take + 1): the departure stales it, the seats go back and the next eligible takes her place`, async () => {
+      const r = await rig(finalsRow(f.key, 5));
+      const [p] = await sql<{ computed: { qualifiers: { rank: number; entrantId: string }[] } }[]>`select computed from stage_seed_proposals where id = ${r.confirmedId}`;
+      const named = p!.computed.qualifiers.map((q) => q.entrantId);
+      expect(named.length, "premise: four seats").toBe(4);
+      const extra = [...r.seedOf.keys()].filter((id) => !named.includes(id));
+      expect(extra.length, "premise: exactly one entrant is left out of the take").toBe(1);
+      const leaving = p!.computed.qualifiers.find((q) => q.rank === f.leaves)!.entrantId;
+      await withdrawEntrantCascade(r.auth, leaving);
+      expect(await statusOf(r.confirmedId), "someone can take her place: stale").toBe("stale");
+      await expectDayOne(r);
+      const now = await getSeedProposal(r.auth, r.koId);
+      expect(now!.status, "a fresh draft waits on the desk").toBe("draft");
+      expect(new Set(now!.computed.qualifiers.map((q) => q.entrantId)), "the one left out is in; she is out").toEqual(new Set([...named.filter((id) => id !== leaving), extra[0]!]));
+      finalsChecked++;
+    }, 120_000);
+  }
+
+  // Review I-2: Reinstate after a re-confirm. A confirmed proposal made while she was out names the entrant who stood in; once she
+  // is back the cut is hers again, and nothing but this write can say so.
+  it("X-CUT-4 sequence: withdraw, re-confirm, Reinstate - the confirmed proposal goes stale and is re-proposed WITH her", async () => {
+    const r = await rig(LEAGUE);
+    await withdrawEntrantCascade(r.auth, r.idOf.get(3)!);
+    const second = await getSeedProposal(r.auth, r.koId);
+    await confirmResolvingTies(r.auth, r.koId, second!.id);
+    expect(await slateOf(r, second!.id), "premise: E5 stands in for E3").toEqual([1, 2, 4, 5]);
+    await patchEntrant(r.auth, r.idOf.get(3)!, { status: "confirmed" });
+    expect(await statusOf(second!.id), "she is back: the confirmed cut is stale").toBe("stale");
+    await expectDayOne(r);
+    expect(await newestSlate(r), "re-proposed with her").toEqual({ status: "draft", seeds: [1, 2, 3, 4] });
+    // The other side: a Reinstate that changes nothing about the cut leaves a confirmed proposal alone.
+    const q = await rig(LEAGUE);
+    await patchEntrant(q.auth, q.idOf.get(6)!, { status: "withdrawn" });
+    expect(await statusOf(q.confirmedId), "premise: a non-qualifier's departure moved nothing").toBe("confirmed");
+    await patchEntrant(q.auth, q.idOf.get(6)!, { status: "confirmed" });
+    expect(await statusOf(q.confirmedId), "nor does her return").toBe("confirmed");
+    // And after the finals started the bracket stands: she is back, no seat moves, the desk names the difference truthfully.
+    const t = await rig(LEAGUE);
+    await withdrawEntrantCascade(t.auth, t.idOf.get(3)!);
+    const third = await getSeedProposal(t.auth, t.koId);
+    await confirmResolvingTies(t.auth, t.koId, third!.id);
+    await startDestination(t);
+    const seated = await seats(t);
+    await patchEntrant(t.auth, t.idOf.get(3)!, { status: "confirmed" });
+    expect(await statusOf(third!.id), "started: the bracket stands").toBe("confirmed");
+    expect(await seats(t), "no seat moved").toEqual(seated);
+  });
+
   it("X-CUT-4 the sweep ran every sport and every door", () => {
     expect(swept, "anti-vacuity: both sports ran the correction").toBe(2);
     expect(doorChecks, "anti-vacuity: every door ran").toBe(doors.length);
+    expect(finalsChecked, "anti-vacuity: two finals kinds x (two exhausted doors + one backfill)").toBe(FINALS.length * 3);
   });
 });

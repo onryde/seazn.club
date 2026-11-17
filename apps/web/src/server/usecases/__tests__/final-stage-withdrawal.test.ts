@@ -202,7 +202,7 @@ describe.skipIf(!HAS_DB)("a withdrawal inside a final-stage stepladder (X-SP-3, 
     expect(await seatsOf(f.stageId, f.seed[2])).toEqual([r2.ext_key]);
   });
 
-  it.each(SPORTS)("%s: X-SP-3 seed 2 withdraws BEFORE R1 is played (R2's other seat still empty): the climber walks R2 over on arrival, nothing voided", async (sport) => {
+  it.each(SPORTS)("%s: X-SP-3 seed 2 withdraws after the finals start, before R1's result (R2's other seat still empty): the climber walks R2 over on arrival, nothing voided", async (sport) => {
     const f = await seededFinals(sport, "stepladder");
     const { r1, r2, final } = await rungs(f.stageId);
     await startFinals(f.auth, r1.id);
@@ -303,7 +303,7 @@ async function completeRanks(auth: AuthCtx, stageId: string): Promise<string[]> 
 }
 
 describe.skipIf(!HAS_DB)("a withdrawn finalist stage seed is RANKED (X-SP-4 / X-SP-5; the draw order is not the registration order)", () => {
-  it.each(SPORTS)("%s: X-SP-4 stepladder - seed 2 withdraws before R1: she ranks 3rd (the loser of R2, the rung she was due to enter)", async (sport) => {
+  it.each(SPORTS)("%s: X-SP-4 stepladder - seed 2 withdraws after the finals start, before R1's result: she ranks 3rd (the loser of R2, the rung she was due to enter)", async (sport) => {
     const f = await seededFinals(sport, "stepladder", { reverse: true });
     const { r1, r2, final } = await rungs(f.stageId);
     expect(pair(r1), "premise: the draw seeds are the league order, not the registration seeds").toEqual(sorted(f.seed[3], f.seed[4]));
@@ -325,7 +325,7 @@ describe.skipIf(!HAS_DB)("a withdrawn finalist stage seed is RANKED (X-SP-4 / X-
     expect(walkedOverTo(await fixtureRow(r2.id)), "R2 walks over to R1's winner").toEqual({ status: "forfeited", kind: "award", winner: f.seed[4] });
   });
 
-  it.each(SPORTS)("%s: X-SP-5 page playoff - seed 1 withdraws before Q1: she ranks 4th, below the eliminator's loser", async (sport) => {
+  it.each(SPORTS)("%s: X-SP-5 page playoff - seed 1 withdraws after the finals start, before Q1's result: she ranks 4th, below the eliminator's loser", async (sport) => {
     const f = await seededFinals(sport, "page_playoff", { reverse: true });
     const { q1, e, final } = await pageLines(f.stageId);
     expect(pair(q1), "premise: Q1 is the draw's seeds 1 v 2").toEqual(sorted(f.seed[1], f.seed[2]));

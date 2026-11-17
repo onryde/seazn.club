@@ -418,8 +418,10 @@ export async function sourcesToTables(
   /** Read a knockout's cut as its results make it, with no lucky loser in a departed qualifier's rank: who a CORRECTION moved
    *  (`getKnockoutCutDrift`), where a withdrawal is not a correction. `withoutDepartureBackfill` is the same read for a league's
    *  or a group's cut (W5 T11, `getTableCutDrift`): a departed entrant keeps the place her results earned, so the next eligible
-   *  entrant is not read as moved across the line by a withdrawal. */
-  opts: { withoutLuckyLoser?: boolean; withoutDepartureBackfill?: boolean } = {},
+   *  entrant is not read as moved across the line by a withdrawal. `alsoDeparted` reads the cut as if these entrants were already
+   *  out of the field (W5 T11: the withdrawal cascade asks before it writes her status, to learn whether anyone is left to take
+   *  her place). */
+  opts: { withoutLuckyLoser?: boolean; withoutDepartureBackfill?: boolean; alsoDeparted?: ReadonlySet<string> } = {},
 ): Promise<{
   shapes: SourceShape[];
   tables: SourceTables[];
@@ -469,7 +471,7 @@ export async function sourcesToTables(
     // W4 T13 a league's or a group's (RB4-V6). A knockout source's departed qualifier takes a lucky loser in her place
     // (RB4-V2, `luckyLoserCut`). The hash the proposal stores is over these tables, so a departure or a return after a
     // draft stales it.
-    const departed = await departedEntrantIds(tx, target.division_id);
+    const departed = new Set([...(await departedEntrantIds(tx, target.division_id)), ...(opts.alsoDeparted ?? [])]);
     const cut = LUCKY_LOSER_SOURCE_KINDS.has(source.kind) && opts.withoutLuckyLoser !== true ? rankCutOf(s.take) : null;
     const pools =
       cut === null

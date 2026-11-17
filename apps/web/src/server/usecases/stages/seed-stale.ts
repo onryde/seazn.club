@@ -22,7 +22,9 @@ import { computeSeedProposal, type SeedProposalOut } from "./seed-proposal";
  *  dependent draft proposals stale and recomputes"). Best-effort throughout:
  *  a dependent whose recompute now trips (e.g. rules unsatisfiable, or
  *  already confirmed) is left as-is rather than blocking the write that
- *  already committed.
+ *  already committed. A TABLE source (W5 T11) takes the same drafts-first path
+ *  below the `includeConfirmed` branch: its drafts are staled and recomputed
+ *  as always, and with the option its CONFIRMED proposal is judged first.
  *
  *  Exported (P5 review finding): `overrideStandings` is not the only
  *  standings-mutating path a COMPLETE source stage can still take.
@@ -107,7 +109,10 @@ async function correctTableDependent(
 
 /**
  * W5 T11 (X-CUT-4 <- RB5-K6): `entrantId` is leaving, and the destination of a completed league or group of her division has not
- * started: every confirmed proposal that names her goes stale and its seats go back, in this call's own transaction. Run by the
+ * started: every confirmed proposal that names her goes stale and its seats go back, in this call's own transaction - unless the
+ * cut is exhausted (nobody left to take her place), where it stands and her seat is the cascade's walkover (`tableSlateStands`).
+ * With NO `entrantId` (a Reinstate) every confirmed proposal of a completed table source is re-judged against the cut as it reads
+ * now. Run by the
  * withdrawal cascade BEFORE it settles her lines (a walkover over her seat is a start, after which nothing could go back), so
  * the status write that follows finds no seat to walk anyone over. Returns the lines that changed (for the caller's publish) and
  * the dependents to re-propose AFTER her status is written - the re-proposal reads her as departed. A destination that has
@@ -116,7 +121,7 @@ async function correctTableDependent(
 export async function staleConfirmedProposalsOfDeparting(
   orgId: string,
   divisionId: string,
-  entrantId: string,
+  entrantId?: string,
 ): Promise<{ unfilled: string[]; recompute: string[] }> {
   return withTenant(orgId, async (tx) => {
     const sources = await tx<{ id: string }[]>`
