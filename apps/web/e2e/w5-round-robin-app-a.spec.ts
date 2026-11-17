@@ -326,3 +326,55 @@ test.describe("X-SF-4 a five-player league says who sits out each round", () => 
     await expectNoHorizontalScroll(page);
   });
 });
+
+// W5 app PR A, Task 5 (X-CU-7, X-CU-12, X-CU-13; RB5-L3, L13, L14). "Add late player" on a started league: main refused the add
+// 422 (the entrant list locked at Start); Task 4's interim accepted it with no seat. Now the newcomer gets one fixture against every
+// member — in a member's bye round still to come, else in an appended round — each written UNSCHEDULED, and Undo across the add is
+// refused by name. Driven through the routes the desk's Add player form and History panel call. The expected placements are the
+// hand derivation over the engine's byes for a seeded five (r1 P5, r2 P4, r3 P3, r4 P2, r5 P1; asserted as the premise): rounds 1-2
+// are under way, so P3, P2, P1 meet the newcomer in their bye rounds 3, 4, 5, and P4, P5 (whose byes were in started rounds) in
+// appended rounds 6, 7.
+test.describe("X-CU-7 a late player gets catch-up fixtures", () => {
+  test("a started league of five: the late player meets all five, unscheduled, in rounds 3-7; every earlier line kept; Undo refused", async ({ request }) => {
+    test.setTimeout(120_000);
+    const { divisionId, stageId, ids } = await seedLeague(request, "Late", 5);
+    expect((await generate(request, stageId)).status).toBe(200);
+    const stages = await apiJson<{ id: string; config: { round_byes?: { round_no: number; entrant_id: string }[] } }[]>(request, `/api/v1/divisions/${divisionId}/stages`);
+    const byes = (stages.data!.find((s) => s.id === stageId)?.config.round_byes ?? []).sort((a, b) => a.round_no - b.round_no);
+    expect(byes.map((b) => ids.indexOf(b.entrant_id) + 1), "premise: the byes of a seeded five, r1..r5").toEqual([5, 4, 3, 2, 1]);
+    const before = (await stageFixtures(request, divisionId, stageId)) as Pairing[];
+    expect(before).toHaveLength(10);
+
+    const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
+    expect(started.status, JSON.stringify(started.error)).toBe(200);
+    for (const r of [1, 2]) {
+      const line = before.find((f) => f.round_no === r)!;
+      const ev = await apiJson(request, `/api/v1/fixtures/${line.id}/events`, "POST", { expected_seq: 0, type: "core.start", payload: {} });
+      expect(ev.status, JSON.stringify(ev.error)).toBe(201);
+    }
+
+    type Late = { id: string; late_entry?: { case: string; fixtures?: { fixture_id: string; round_no: number; placement: string; scheduled: boolean }[] } };
+    const add = await apiJson<Late[]>(request, `/api/v1/divisions/${divisionId}/entrants`, "POST", [{ kind: "individual", display_name: `Late newcomer ${TAG}` }]);
+    expect(add.status, JSON.stringify(add.error)).toBe(201);
+    const late = add.data![0]!;
+    expect(late.late_entry?.case).toBe("catch_up");
+
+    const after = (await stageFixtures(request, divisionId, stageId)) as (Pairing & { scheduled_at?: string | null })[];
+    const mine = after.filter((f) => f.home_entrant_id === late.id || f.away_entrant_id === late.id).sort((a, b) => a.round_no - b.round_no);
+    const opponent = (f: Pairing) => ids.indexOf(f.home_entrant_id === late.id ? f.away_entrant_id! : f.home_entrant_id!) + 1;
+    expect(mine.map((f) => `P${opponent(f)}@r${f.round_no}`)).toEqual(["P3@r3", "P2@r4", "P1@r5", "P4@r6", "P5@r7"]);
+    expect(mine.every((f) => (f.scheduled_at ?? null) === null), "every catch-up line is unscheduled (X-CU-12)").toBe(true);
+    expect((late.late_entry?.fixtures ?? []).map((f) => `${f.placement}:${f.round_no}:${f.scheduled}`).sort()).toEqual([
+      "bye_slot:3:false", "bye_slot:4:false", "bye_slot:5:false", "catch_up_round:6:false", "catch_up_round:7:false",
+    ]);
+    for (const o of before) {
+      const now = after.find((f) => f.id === o.id);
+      expect(now && [now.round_no, now.home_entrant_id, now.away_entrant_id], `line ${o.id} kept`).toEqual([o.round_no, o.home_entrant_id, o.away_entrant_id]);
+    }
+
+    const undo = await apiJson(request, `/api/v1/divisions/${divisionId}/undo`, "POST", {});
+    expect(undo.status).toBe(409);
+    expect(undo.error?.code).toBe("RR_LATE_ENTRY_NOT_UNDOABLE");
+    expect(await stageFixtures(request, divisionId, stageId), "the refused Undo moved nothing").toHaveLength(after.length);
+  });
+});

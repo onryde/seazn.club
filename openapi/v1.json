@@ -11937,6 +11937,14 @@
                           "reason"
                         ],
                         "additionalProperties": false
+                      },
+                      "late_entry_pool": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 2
+                      },
+                      "prefer_rebuild": {
+                        "type": "boolean"
                       }
                     },
                     "required": [
@@ -12177,6 +12185,14 @@
                             "reason"
                           ],
                           "additionalProperties": false
+                        },
+                        "late_entry_pool": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2
+                        },
+                        "prefer_rebuild": {
+                          "type": "boolean"
                         }
                       },
                       "required": [

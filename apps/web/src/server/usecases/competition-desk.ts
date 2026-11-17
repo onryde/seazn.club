@@ -35,6 +35,7 @@ import type { ProgressionSpec } from "@seazn/engine/competition";
 import { cardStatsCountsPlayed, listDivisionCardStats, type NextFixture } from "./card-stats";
 import { DEPARTED_STATUSES } from "./entrants";
 import { countsAsMatch } from "@/lib/run-sheet-groups";
+import { isCatchUpExtKey } from "@/lib/roundrobin-late-entry";
 import { listDivisions } from "./divisions";
 
 /** The desk's own "next" fact (`resolveDivisionNext` below) is a SEPARATE
@@ -626,6 +627,8 @@ export async function getCompetitionDesk(
       awaitsSettle: fixtureAwaitsSettle(stageKindById.get(x.stage_id), x),
       awaitsRoundOpen:
         onlineIds.has(d.id) && x.round_no !== null && !openedRounds.has(roundKey(x.stage_id, x.round_no)),
+      // W5 T5 (X-CU-12): a late entrant's catch-up line, counted apart in `unscheduled` while it has no slot.
+      catchUp: isCatchUpExtKey(x.ext_key),
     }));
     const input = {
       divisionStatus: d.status as DivisionStatus,

@@ -85,10 +85,12 @@ export function rrExtKey(prefix: string, roundNo: number, court: number, leg: nu
 }
 
 /** Whether a stored `ext_key` is one a round robin's own generator wrote (`rrExtKey`: `rr-r{round}-c{court}-L{leg}`, with the pool's
- *  `p{key}-` in front, and no `-L{leg}` tail on a stage drawn before the leg was stored). Anything else on a league or group stage -
- *  `adhoc-N` from Add match, a null key - is the organiser's own row, not a line of the table: Generate never reads it as one. */
+ *  `p{key}-` in front, and no `-L{leg}` tail on a stage drawn before the leg was stored), or a late entrant's catch-up line (W5 T5,
+ *  `rrCatchUpExtKey`: `rr-cu-` / `rr-by-`, always with its leg) - a line of the table like any other, so a late entrant seated only
+ *  on catch-up lines is no "newcomer" to Generate. Anything else on a league or group stage - `adhoc-N` from Add match, a null key -
+ *  is the organiser's own row, not a line of the table: Generate never reads it as one. */
 export function isRrExtKey(extKey: string | null): boolean {
-  return extKey !== null && /^(?:p[^-]*-)?rr-r\d+-c\d+(?:-L\d+)?$/.test(extKey);
+  return extKey !== null && /^(?:p[^-]*-)?rr-(?:(?:cu|by)-r\d+-c\d+-L\d+|r\d+-c\d+(?:-L\d+)?)$/.test(extKey);
 }
 
 /** The `ext_key` of the same line before the leg was appended (`rrExtKey` minus its `-L{leg}` tail): the key a stage drawn

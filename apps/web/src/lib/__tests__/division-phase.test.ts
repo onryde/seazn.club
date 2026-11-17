@@ -483,6 +483,22 @@ describe("resolveAttention", () => {
     const fixtures = [fx({ id: "a", scheduledAt: null }), fx({ id: "b", scheduledAt: null, status: "decided" }), fx({ id: "c" })];
     expect(resolveAttention(input({ fixtures }))).toContainEqual({ kind: "unscheduled", count: 1 });
   });
+  // W5 T5 (X-CU-12, RB5-L13): a late entrant's catch-up lines are counted apart inside `unscheduled`; the count IS the flag.
+  it("unscheduled carries the catch-up count only for catch-up lines still without a time", () => {
+    const fixtures = [
+      fx({ id: "a", scheduledAt: null }),
+      fx({ id: "cu1", scheduledAt: null, catchUp: true }),
+      fx({ id: "cu2", scheduledAt: null, catchUp: true }),
+      fx({ id: "cu3", catchUp: true }), // scheduled: no longer flagged
+      fx({ id: "cu4", scheduledAt: null, catchUp: true, status: "decided" }), // not a scheduled-status row
+    ];
+    expect(resolveAttention(input({ fixtures })).find((a) => a.kind === "unscheduled")).toEqual({ kind: "unscheduled", count: 3, catchUp: 2 });
+  });
+  it("unscheduled carries no catch-up field when no catch-up line is unscheduled (empty case first)", () => {
+    expect(resolveAttention(input({ fixtures: [fx({ id: "a", scheduledAt: null }), fx({ id: "cu", catchUp: true })] }))
+      .find((a) => a.kind === "unscheduled")).toEqual({ kind: "unscheduled", count: 1 });
+    expect(resolveAttention(input({ fixtures: [fx({ id: "cu", catchUp: true })] })).some((a) => a.kind === "unscheduled")).toBe(false);
+  });
   it("no_scorer: in play with zero events, minutes since kickoff from scheduledAt", () => {
     const fixtures = [fx({ id: "p", status: "in_play", scheduledAt: "2026-09-05T09:30:00Z", eventCount: 0 })];
     expect(resolveAttention(input({ fixtures }))).toContainEqual({

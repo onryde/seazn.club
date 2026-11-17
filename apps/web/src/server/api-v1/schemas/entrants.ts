@@ -73,6 +73,13 @@ export const CreateEntrant = z
     // roster (explicit members / copy_roster / squad-seed) would otherwise
     // hard-block on. See `EligibilityOverride`'s own comment above.
     eligibility_override: EligibilityOverride.optional(),
+    // W5 T5 (X-CU-11, RB5-L9): a late player added to a started GROUP stage joins this pool (its letter); omitted, the smallest
+    // pool (ties: where the seed snake puts the next seed). A letter that is no pool of the stage is refused by name
+    // (RR_LATE_ENTRY_UNKNOWN_POOL). Read only by a late add to a running root league or group.
+    late_entry_pool: z.string().min(1).max(2).optional(),
+    // W5 T5 (X-CU-7, RB5-L7): when nothing in the stage has started, redraw it with the late player in it (Rebuild's own body)
+    // instead of writing catch-up fixtures. Ignored once play has started (catch-up is then the only way in).
+    prefer_rebuild: z.boolean().optional(),
   })
   .refine((e) => e.display_name != null || e.team_id != null, {
     message: "display_name is required unless team_id is provided",
@@ -211,8 +218,9 @@ export type KnockoutLateEntryResult = z.infer<typeof KnockoutLateEntryResult>;
  *  Reinstate) is held for one organiser tap (the tap answers `catch_up` with `source: "organiser"`); `rebuild_offered`
  *  — nothing has started, so a Rebuild is offered beside the catch-up; `refused` — nothing to join or add (`reason`: the
  *  `RR_LATE_ENTRY_*` code). `pool_key`: the pool a group newcomer joined. `fixtures[].scheduled`: the new line found a
- *  free slot (else it is unscheduled and flagged to the desk, X-CU-12). Only the shape lands in Task 4; Task 5 writes
- *  it. */
+ *  free slot (else it is unscheduled and flagged to the desk, X-CU-12; Task 5 writes every catch-up line unscheduled, RB5-L13).
+ *  `reason: "rebuilt"` on `rebuild_offered`: the add asked to rebuild (`prefer_rebuild`) and the stage was redrawn with the
+ *  newcomer in it, so no catch-up fixtures were written. */
 export const TableLateEntryResult = z.object({
   format: z.enum(["league", "group"]),
   entrant_id: Uuid,

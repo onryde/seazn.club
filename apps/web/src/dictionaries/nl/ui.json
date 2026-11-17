@@ -7027,6 +7027,7 @@
   "history.event.swissRoundsChanged": "Aantal rondes gewijzigd",
   "history.event.seedConfirmed": "Loting bevestigd",
   "history.event.knockoutLateEntry": "Late speler toegevoegd aan het schema",
+  "history.event.roundrobinLateEntry": "Late speler toegevoegd aan de stand",
   "pad.cricket.action.playerLine.field.innings": "Innings",
   "pad.cricket.action.playerLine.field.battingOut": "Uitgeschakeld",
   "pad.cricket.action.playerLine.field.battingRuns": "Gescoorde runs",

@@ -116,6 +116,10 @@ export interface PhaseFixture {
    *  reader of `stage_round_opens`); false for every board of a division that does not play online. Status-free —
    *  each attention arm already asks the status it needs. */
   awaitsRoundOpen: boolean;
+  /** W5 T5 (X-CU-12, RB5-L13): a late entrant's catch-up line (`isCatchUpExtKey`: `rr-cu-` / `rr-by-`), written with no time and
+   *  no court. Counted apart inside `unscheduled` — the count IS the desk's flag, so it clears as each line is given a slot.
+   *  Optional: absent reads as no catch-up line. */
+  catchUp?: boolean;
 }
 
 /** W2a — a fixture HELD for the organiser's settle: `needs_decision` (a level bracket result), or a recorded abandon
@@ -264,7 +268,8 @@ export type Attention =
   // 2026-09-03 and are pinned by the action-label sweep
   // (`competition-desk-actions.spec.ts`).
   | { kind: "needs_fixtures"; stageName: string }
-  | { kind: "unscheduled"; count: number }
+  /** `catchUp` (W5 T5, X-CU-12): how many of the `count` are late entrants' catch-up lines — present only when any are. */
+  | { kind: "unscheduled"; count: number; catchUp?: number }
   // F3 fix (final review, Important): used to be one row PER FIXTURE — a
   // division with 6 overdue fixtures produced 6 identical "Needs you" rows.
   // Aggregated per division now, the same way `unscheduled` already was;
@@ -881,8 +886,9 @@ export function resolveAttention(input: PhaseInput): Attention[] {
     // one.
     out.push({ kind: "needs_fixtures", stageName: blocked.name });
   }
-  const unscheduled = input.fixtures.filter(isUnscheduledFixture).length;
-  if (unscheduled > 0) out.push({ kind: "unscheduled", count: unscheduled });
+  const unscheduledRows = input.fixtures.filter(isUnscheduledFixture);
+  const catchUp = unscheduledRows.filter((f) => f.catchUp === true).length;
+  if (unscheduledRows.length > 0) out.push({ kind: "unscheduled", count: unscheduledRows.length, ...(catchUp > 0 ? { catchUp } : {}) });
   // F3+F4 fix (final review, Important): both aggregated per division below,
   // the same way `unscheduled` already is above — collected here, pushed once.
   const noScorer: { id: string; since: number | null }[] = [];

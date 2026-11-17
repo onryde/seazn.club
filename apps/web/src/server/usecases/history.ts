@@ -27,6 +27,7 @@ import { sql, withTenant } from "@/lib/db";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lock";
 import { isKnockoutRefusalCode } from "@/lib/knockout-refusals";
+import { isRoundRobinRefusalCode } from "@/lib/roundrobin-refusals";
 import type { UndoRefusalCode } from "@/lib/undo-refusals";
 import { SWISS_PAIRINGS, type SwissPairingMode } from "@/lib/swiss-pairing";
 import { UUID_RE, liveCourt, venueBack, venueOf, venueWith } from "./court-restore-sql";
@@ -51,6 +52,7 @@ import {
 } from "./stages";
 import { swissRefusal } from "./swiss-refusal";
 import { knockoutRefusal } from "./knockout-refusal";
+import { roundRobinRefusal } from "./roundrobin-refusal";
 import { DEPARTED_STATUSES } from "./entrants";
 import { afterScheduleWrite, divisionLockState } from "./schedule";
 import { schedulePlayerStatsRefresh } from "./player-stats-refresh";
@@ -117,14 +119,21 @@ export const UNDO_BARRIER_TYPES = {
   // records. Every writer of the row is an organiser's action (Add late player; Task 11's one-tap place), so every row
   // is a barrier.
   knockout_late_entry: "KO_LATE_ENTRY_NOT_UNDOABLE",
+  // W5 T5 (X-CU-13, RB5-L14): a late player added to a started league or group — catch-up lines written outside any step (or the
+  // stage redrawn with them in it). Only an organiser's add writes the row, so every row is a barrier; the refusal points to
+  // Withdraw.
+  roundrobin_late_entry: "RR_LATE_ENTRY_NOT_UNDOABLE",
 } as const satisfies Record<string, UndoRefusalCode>;
 
 export type UndoBarrierType = keyof typeof UNDO_BARRIER_TYPES;
 
 /** A barrier's refusal, thrown through its own family's table so the status, the code and the English come from one row:
- *  a knockout code through `knockoutRefusal`, a Swiss one through `swissRefusal`. */
+ *  a knockout code through `knockoutRefusal`, a round-robin one through `roundRobinRefusal` (W5 T5), a Swiss one through
+ *  `swissRefusal`. */
 function undoRefusal(code: UndoRefusalCode): HttpError {
-  return isKnockoutRefusalCode(code) ? knockoutRefusal(code) : swissRefusal(code);
+  if (isKnockoutRefusalCode(code)) return knockoutRefusal(code);
+  if (isRoundRobinRefusalCode(code)) return roundRobinRefusal(code);
+  return swissRefusal(code);
 }
 
 function isUndoBarrier(e: LedgerEvent): e is LedgerEvent & { type: UndoBarrierType } {

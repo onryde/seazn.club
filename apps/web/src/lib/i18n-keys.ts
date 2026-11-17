@@ -3481,6 +3481,7 @@ export type DictionaryKey =
   | "history.event.participantsImported"
   | "history.event.poolEntrantsCleared"
   | "history.event.poolEntrantsRestored"
+  | "history.event.roundrobinLateEntry"
   | "history.event.scheduleApplied"
   | "history.event.scheduleCleared"
   | "history.event.scheduleEdited"

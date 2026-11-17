@@ -44,7 +44,7 @@ import { admitSwissLateEntrant, afterSwissLateEntry, hasRootSwissStage } from ".
 import { admitKnockoutLateEntrant, afterKnockoutLateEntry, hasRootKnockoutStage } from "./knockout-late-entry";
 // A running ladder takes a late player at the bottom of its order (ladder-late-entry.ts, one owner of the rule).
 import { appendToLadderOrder } from "./ladder-late-entry";
-import { hasRootTableStage } from "./roundrobin-late-entry";
+import { admitTableLateEntrant, afterTableLateEntry, hasRootTableStage, type TableAdmission } from "./roundrobin-late-entry";
 // Type-only: withdrawal.ts imports this module, so its value is reached by a dynamic import (`patchEntrant`).
 import type { WithdrawCascadeOut } from "./withdrawal";
 
@@ -403,7 +403,7 @@ export async function createEntrants(
       linkStates = await lichessLinkStatesByPerson(ptx, auth.orgId, namedPersonIds);
     }
   };
-  const { rows, competitionId } = await withTenant(auth.orgId, async (tx) => {
+  const { rows, competitionId, tableAdmissions } = await withTenant(auth.orgId, async (tx) => {
     const [division] = await tx<
       {
         status: string;
@@ -425,7 +425,7 @@ export async function createEntrants(
     // decides how, or refuses by name when no round is left or it is over),
     // and so does a drawn ROOT knockout, into its round 1 (W4 T9, X-LE-1 —
     // `isRootKnockoutStage`; a fed knockout never takes one, X-LE-2), and so does a ROOT league or group stage (W5 T4,
-    // X-CU-9 — `isRootTableStage`; the catch-up placement is `admitTableLateEntrant`, Task 5).
+    // X-CU-9 — `isRootTableStage`; the catch-up placement is `admitTableLateEntrant`, W5 T5).
     // Withdrawals stay available in every state.
     if (division.status === "active" || division.status === "completed") {
       const [openFormat] = await tx`
@@ -467,6 +467,7 @@ export async function createEntrants(
     }
 
     const rows: CreatedEntrant[] = [];
+    const tableAdmissions: TableAdmission[] = [];
     for (const input of inputs) {
       // Snapshot the name from the team so a later rename never rewrites
       // historical standings (which read entrants.display_name / snapshots).
@@ -553,9 +554,21 @@ export async function createEntrants(
       // W4 T10: or its drawn root knockout — the bye, a withdrawn slot, or no slot (X-LE-3…X-LE-6): unstarted, the entrant is
       // kept waiting and the answer is `rebuild_offered` (RB4-L6); started, KO_LATE_ENTRY_NO_SLOT refuses. A division's
       // entry stage is one or the other, so at most one of the two answers.
-      const late =
+      // W5 T5: or its running root league or group — catch-up fixtures, Rebuild offered (or done, `prefer_rebuild`), or a named
+      // refusal that rolls the batch back (the entrant row with it). Its answer also carries what the after-commit publishes.
+      let late: LateEntryResult | null =
         (await admitSwissLateEntrant(tx, auth, divisionId, row.id, "organiser")) ??
         (await admitKnockoutLateEntrant(tx, auth, divisionId, row.id, "organiser"));
+      if (late === null) {
+        const table = await admitTableLateEntrant(tx, auth, divisionId, row.id, "organiser", {
+          poolKey: input.late_entry_pool,
+          preferRebuild: input.prefer_rebuild,
+        });
+        if (table !== null) {
+          tableAdmissions.push(table);
+          late = table.result;
+        }
+      }
       // The row as stored after admission: the first round it wrote is part of the entrant (ruling C4).
       if (late) [row] = await tx<EntrantRow[]>`select ${tx(COLS)} from entrants where id = ${row.id}`;
       // A running ladder: the newcomer joins the bottom of its order in this same transaction (a no-op for any other format).
@@ -567,7 +580,7 @@ export async function createEntrants(
         ...(late ? { late_entry: late } : {}),
       });
     }
-    return { rows, competitionId: division.competition_id };
+    return { rows, competitionId: division.competition_id, tableAdmissions };
   }, onlineChessOn === false ? {} : { privilegedPrelude: readLinkStates });
   // A new entrant sits in no fixture yet; its name joins the division's lists.
   refreshEntrantPublicPages(
@@ -578,6 +591,8 @@ export async function createEntrants(
   await afterSwissLateEntry(auth.orgId, divisionId, competitionId, rows.map((r) => r.late_entry));
   // W4 T10: a late player seated in the knockout moved a line (and the next line's seat): told as a schedule write.
   await afterKnockoutLateEntry(auth.orgId, divisionId, competitionId, rows.map((r) => r.late_entry));
+  // W5 T5: a late player's catch-up lines are told as a schedule write and the table refolds; a rebuild publishes as Rebuild does.
+  await afterTableLateEntry(auth, divisionId, competitionId, tableAdmissions);
   return rows;
 }
 

@@ -16,11 +16,17 @@ import { check, newSession, signIn, tag, v1, v1data } from "../harness.ts";
  * sides withdrawn after Start, which frees the two near sides in round 3 and nowhere else; the match added with no round named is
  * written in round 3 (main wrote it in round 6).
  *
+ * T5 (X-CU-7, X-CU-12, X-CU-13; RB5-L3): "Add late player" into a started league of five, rounds 1-2 under way, writes the newcomer
+ * five UNSCHEDULED catch-up lines — in the bye rounds still to come (3, 4, 5: the engine's byes r3 P3, r4 P2, r5 P1) and two
+ * appended rounds (6, 7) — and every earlier line stays as it was (main refused the add 422; Task 4's interim accepted it with no
+ * seat). Undo across the add is then refused by name (RR_LATE_ENTRY_NOT_UNDOABLE) and moves nothing.
+ *
  * Every check is counted, and a run that checked nothing fails. SMOKE_ONLY=w5RoundRobinA runs it alone (SELECTABLE_SUITES).
  */
 export async function w5RoundRobinASuite(): Promise<void> {
   // T2: 2 (4 -> 6 reconciles by pair; a 5-team league persists its byes). T3: 1 (Add match lands in the round both sides are free).
-  const EXPECTED_CHECKS = 3;
+  // T5: 2 (a late player's catch-up lines; Undo across the add refused by name).
+  const EXPECTED_CHECKS = 5;
   let checked = 0;
   const w5Check = (label: string, cond: boolean) => {
     checked++;
@@ -34,7 +40,15 @@ export async function w5RoundRobinASuite(): Promise<void> {
     await v1(owner, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W5 RR A ${tag}`, visibility: "private" }),
   );
 
-  type Fx = { id: string; stage_id: string; round_no: number; home_entrant_id: string | null; away_entrant_id: string | null; ext_key?: string | null };
+  type Fx = {
+    id: string;
+    stage_id: string;
+    round_no: number;
+    home_entrant_id: string | null;
+    away_entrant_id: string | null;
+    ext_key?: string | null;
+    scheduled_at?: string | null;
+  };
   type StageOut = { id: string; config: { round_byes?: { round_no: number; leg: number; entrant_id: string }[] } };
 
   /** A generic league of `n` entrants, generated once. */
@@ -135,6 +149,48 @@ export async function w5RoundRobinASuite(): Promise<void> {
       "w5a X-BD-6: Add match with no round named lands in round 3, where both sides are free (main wrote round 6)" +
         (ok ? "" : ` - lines ${lines.length}, rounds ${rounds}, start ${started.status}, add ${addRes.status}, added ${added.length} in round ${added[0]?.round_no}`),
       ok,
+    );
+  }
+
+  // Checks 4-5 - X-CU-7 / X-CU-13: a late player added to a started league of five gets catch-up lines; Undo refuses.
+  {
+    const l = await league("Late", 5);
+    const lines = await l.fixtures();
+    const started = await v1(owner, `/api/v1/divisions/${l.divId}/start`, "POST");
+    const starts = [];
+    for (const r of [1, 2]) {
+      const line = lines.find((f) => f.round_no === r);
+      starts.push(await v1(owner, `/api/v1/fixtures/${line?.id}/events`, "POST", { expected_seq: 0, type: "core.start", payload: {} }));
+    }
+    type Late = { id: string; late_entry?: { case?: string; fixtures?: { round_no: number; placement: string; scheduled: boolean }[] } };
+    const addRes = await v1(owner, `/api/v1/divisions/${l.divId}/entrants`, "POST", [{ kind: "individual", display_name: `Late ${tag}` }]);
+    const late = (v1data<Late[] | undefined>(addRes) ?? [])[0];
+    const after = await l.fixtures();
+    const mine = after.filter((f) => f.home_entrant_id === late?.id || f.away_entrant_id === late?.id).sort((a, b) => a.round_no - b.round_no);
+    const placed = (late?.late_entry?.fixtures ?? []).map((f) => `${f.placement}:${f.round_no}`).sort();
+    const kept = lines.every((o) => {
+      const now = after.find((f) => f.id === o.id);
+      return now !== undefined && now.round_no === o.round_no && now.home_entrant_id === o.home_entrant_id && now.away_entrant_id === o.away_entrant_id;
+    });
+    const ok =
+      lines.length === 10 && started.status === 200 && starts.every((s) => s.status === 201) && addRes.status === 201 &&
+      late?.late_entry?.case === "catch_up" &&
+      mine.map((f) => f.round_no).join(",") === "3,4,5,6,7" &&
+      placed.join(",") === "bye_slot:3,bye_slot:4,bye_slot:5,catch_up_round:6,catch_up_round:7" &&
+      mine.every((f) => (f.scheduled_at ?? null) === null) && kept && after.length === 15;
+    w5Check(
+      "w5a X-CU-7: a late player in a started league of five gets 5 unscheduled catch-up lines (byes r3-r5, appended r6-r7), every earlier line kept" +
+        (ok ? "" : ` - start ${started.status}, add ${addRes.status}, case ${late?.late_entry?.case}, rounds ${mine.map((f) => f.round_no).join(",")}, placed ${placed.join(",")}, kept ${kept}, after ${after.length}`),
+      ok,
+    );
+    const undo = await v1(owner, `/api/v1/divisions/${l.divId}/undo`, "POST", {});
+    const code = undo.json.error?.code;
+    const still = await l.fixtures();
+    const okUndo = undo.status === 409 && code === "RR_LATE_ENTRY_NOT_UNDOABLE" && still.length === after.length;
+    w5Check(
+      "w5a X-CU-13: Undo across Add late player is refused 409 RR_LATE_ENTRY_NOT_UNDOABLE and moves nothing" +
+        (okUndo ? "" : ` - status ${undo.status}, code ${code}, lines ${still.length}/${after.length}`),
+      okUndo,
     );
   }
 
