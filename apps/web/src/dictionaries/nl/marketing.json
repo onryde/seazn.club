@@ -1477,5 +1477,6 @@
   "pricing.streams.perMonth.one": "{count} streamingcredit / maand",
   "pricing.streams.perMonth.other": "{count} streamingcredits / maand",
   "pricing.streams.passGrant.one": "+{count} streamingcredit, eenmalig",
-  "pricing.streams.passGrant.other": "+{count} streamingcredits, eenmalig"
+  "pricing.streams.passGrant.other": "+{count} streamingcredits, eenmalig",
+  "pricing.matrix.sponsors.monetize.note": "Wij houden een vaste 5% van elke sponsoring die met kaart wordt betaald. Dat verandert niet met je abonnement en staat los van het tarief op inschrijfgeld."
 }

@@ -73,4 +73,24 @@ describe("the fixed sponsorship fee is the one the copy states", () => {
     expect(readFileSync(join(process.cwd(), "content/help/sharing/sponsors.md"), "utf8")).toMatch(quoted);
     expect(checked + 1).toBe(5);
   });
+
+  // Owner, 2026-11-17 ("not in pricing page"): the Pricing table ticked sponsor monetization and never said what it costs.
+  it("the Pricing page's sponsor-monetization note quotes it in every locale, and the row carries that note", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { buildPricingSections } = await import("@/lib/pricing-matrix");
+    const quoted = new RegExp(`(?<![\\d.])${SPONSOR_PLATFORM_FEE_PERCENT}\\s?%`);
+    let checked = 0;
+    for (const locale of ["en", "fr", "es", "nl"]) {
+      const m = JSON.parse(readFileSync(join(process.cwd(), "src/dictionaries", locale, "marketing.json"), "utf8")) as Record<string, string>;
+      expect(m["pricing.matrix.sponsors.monetize.note"], locale).toMatch(quoted);
+      checked++;
+    }
+    expect(checked).toBe(4);
+    const rows = buildPricingSections({}).flatMap((sec) => sec.rows);
+    const row = rows.find((r) => r.labelKey === "pricing.matrix.sponsors.monetize");
+    expect(row?.noteKey).toBe("pricing.matrix.sponsors.monetize.note");
+    // Only that row: the tiers row beside it makes no money claim.
+    expect(rows.find((r) => r.labelKey === "pricing.matrix.sponsors.tiers")?.noteKey).toBeUndefined();
+  });
 });

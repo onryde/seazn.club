@@ -1477,5 +1477,6 @@
   "pricing.streams.perMonth.one": "{count} crédito de retransmisión / mes",
   "pricing.streams.perMonth.other": "{count} créditos de retransmisión / mes",
   "pricing.streams.passGrant.one": "+{count} crédito de retransmisión, una sola vez",
-  "pricing.streams.passGrant.other": "+{count} créditos de retransmisión, una sola vez"
+  "pricing.streams.passGrant.other": "+{count} créditos de retransmisión, una sola vez",
+  "pricing.matrix.sponsors.monetize.note": "Nos quedamos con un 5% fijo de cada patrocinio pagado con tarjeta. No cambia con tu plan y es independiente de la comisión de inscripción."
 }

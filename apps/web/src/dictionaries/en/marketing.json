@@ -1477,5 +1477,6 @@
   "pricing.streams.perMonth.one": "{count} streaming credit / month",
   "pricing.streams.perMonth.other": "{count} streaming credits / month",
   "pricing.streams.passGrant.one": "+{count} streaming credit, one-time",
-  "pricing.streams.passGrant.other": "+{count} streaming credits, one-time"
+  "pricing.streams.passGrant.other": "+{count} streaming credits, one-time",
+  "pricing.matrix.sponsors.monetize.note": "We keep a fixed 5% of each sponsorship paid by card. It does not change with your plan and is separate from the entry-fee rate."
 }
