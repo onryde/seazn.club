@@ -142,7 +142,7 @@ export async function courtCommon(
   const next = starting !== null ? await startingNextOf(court, starting) : await nextOf(court, view);
   // E2: not told while a start is in flight; an open session settles the match, so the stored word is already ignored.
   const autoRefusal = starting === null
-    ? await courtRefusalOf(court.orgId, court.link.courtId, view.facts.map((f) => f.fixtureId)) : null;
+    ? await courtRefusalOf(court.orgId, court.link.courtId, view.facts.map((f) => f.fixtureId), view.focus.start) : null;
   return { ...base, court: { name: fitText(court.link.courtName, CAPTURE_COURT_NAME_MAX) }, next, autoRefusal };
 }
 

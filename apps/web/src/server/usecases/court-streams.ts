@@ -20,13 +20,14 @@ import { captureError } from "@/lib/sentry";
 import type { MatchDayCourtStream } from "@/lib/match-day/types";
 import { courtMinAppVersion } from "@/server/relay/config";
 import { AUTO_START_REFUSALS, type AutoServedRefusal } from "@/server/relay/domain/auto-stream";
-import { courtPhoneStatus, courtTailEndsAt } from "@/server/relay/domain/court-stream";
+import { courtFocus, courtPhoneStatus, courtTailEndsAt } from "@/server/relay/domain/court-stream";
 import { ACTIVE_STATES, isTerminal, type SessionState } from "@/server/relay/domain/session";
 import { autoStopDelaySeconds } from "./stream-sessions/auto-stop";
 import type { SessionDeps } from "./stream-sessions/deps";
 import { stopSession } from "./stream-sessions/stop";
 import { finishOwedStop } from "./stream-sessions/apply";
 import { endCourtBroadcastSoon } from "./stream-sessions/court-end";
+import { courtFactsOf, type CourtLinkRef } from "./court-stream-codes";
 import { frozenCompetitionIds } from "./entitlement-freeze";
 import { hasValidKek } from "@/server/relay/crypto";
 import { insertCourtStreamCode, openStreamCodeTok, wipeStreamCodeTok } from "@/server/relay/secret-columns";
@@ -359,6 +360,7 @@ type RefusalRow = {
  *  or a Go live clears it); `competition_frozen` for a stored `not_entitled` while the competition is frozen. */
 async function servedRefusals(
   orgId: string, rows: readonly RefusalRow[], wanted: (courtId: string) => boolean,
+  startOf: (courtId: string) => Promise<string | null>,
 ): Promise<Map<string, AutoServedRefusal>> {
   const newest = new Map<string, RefusalRow>();
   for (const r of rows) {
@@ -366,6 +368,8 @@ async function servedRefusals(
     const held = newest.get(r.court_id);
     if (!held || (r.auto_start_attempted_at?.getTime() ?? 0) > (held.auto_start_attempted_at?.getTime() ?? 0)) newest.set(r.court_id, r);
   }
+  // M1: only the match the court would start now is refused; a word stored against a match the court has moved on from is stale.
+  for (const [courtId, r] of [...newest]) if ((await startOf(courtId)) !== r.id) newest.delete(courtId);
   const out = new Map<string, AutoServedRefusal>();
   if (newest.size === 0) return out;
   // Asked only when it could change the answer, outside any transaction (`frozenCompetitionIds`).
@@ -378,7 +382,7 @@ async function servedRefusals(
 }
 
 /** E2: the refusal word the court phone is told (and the Match Day card shows) for a court, from the court's own matches; null when none. */
-export async function courtRefusalOf(orgId: string, courtId: string, fixtureIds: readonly string[]): Promise<AutoServedRefusal | null> {
+export async function courtRefusalOf(orgId: string, courtId: string, fixtureIds: readonly string[], startFixtureId: string | null): Promise<AutoServedRefusal | null> {
   if (fixtureIds.length === 0) return null;
   const rows = await sql<RefusalRow[]>`
     select f.id, f.court_id, d.competition_id, st.auto_start_refusal, st.auto_start_attempted_at,
@@ -388,7 +392,7 @@ export async function courtRefusalOf(orgId: string, courtId: string, fixtureIds:
       join divisions d on d.id = f.division_id
       left join fixture_stream_settings st on st.fixture_id = f.id
      where f.id in ${sql([...fixtureIds])} and d.org_id = ${orgId}`;
-  return (await servedRefusals(orgId, rows, (c) => c === courtId)).get(courtId) ?? null;
+  return (await servedRefusals(orgId, rows, (c) => c === courtId, async () => startFixtureId)).get(courtId) ?? null;
 }
 
 /**
@@ -403,16 +407,18 @@ export async function courtStreamsForDay(
 ): Promise<{ links: Map<string, MatchDayCourtStream>; switches: Map<string, { on: boolean; ownCode: boolean }> }> {
   const links = new Map<string, MatchDayCourtStream>();
   const switches = new Map<string, { on: boolean; ownCode: boolean }>();
+  const linkRefs = new Map<string, CourtLinkRef>();
   if (courtIds.length > 0) {
     const linkRows = await sql<{
-      id: string; court_id: string; label: string; expires_at: Date;
+      id: string; court_id: string; label: string; expires_at: Date; opens_at: Date; competition_id: string; target_id: string; court_name: string;
       last_beat_at: Date | null; answered_poll_seconds: number | null; open_state: SessionState | null;
       result_at: Date | null; session_predates_result: boolean | null; session_mode: string | null;
     }[]>`
-      select l.id, l.court_id, t.label, l.expires_at, p.last_beat_at, p.answered_poll_seconds, s.state as open_state,
+      select l.id, l.court_id, t.label, l.expires_at, l.opens_at, l.competition_id, l.target_id, c.name as court_name, p.last_beat_at, p.answered_poll_seconds, s.state as open_state,
              s.result_at, s.session_predates_result, s.session_mode
         from court_stream_links l
         join org_stream_targets t on t.id = l.target_id
+        join courts c on c.id = l.court_id
         left join lateral (
           select p.last_beat_at, p.answered_poll_seconds
             from fixture_stream_pairings p join fixture_stream_codes k on k.id = p.code_id
@@ -437,6 +443,10 @@ export async function courtStreamsForDay(
         sessionPredatesResult: r.session_predates_result === true,
         phoneMode: r.session_mode === "automatic" || r.session_mode === "operator" ? r.session_mode : null,
       }, now, tailSeconds);
+      linkRefs.set(r.court_id, {
+        id: r.id, competitionId: r.competition_id, courtId: r.court_id, courtName: r.court_name,
+        opensAt: new Date(r.opens_at), expiresAt: new Date(r.expires_at), targetId: r.target_id, withdrawnAt: null,
+      });
       links.set(r.court_id, {
         link_id: r.id,
         target_label: r.label,
@@ -464,7 +474,10 @@ export async function courtStreamsForDay(
       left join fixture_stream_settings st on st.fixture_id = f.id
      where f.id in ${sql([...fixtureIds])} and d.org_id = ${orgId}`;
   for (const r of rows) switches.set(r.id, { on: r.court_stream === true, ownCode: r.own_code });
-  const served = await servedRefusals(orgId, rows, (courtId) => links.has(courtId));
+  const served = await servedRefusals(orgId, rows, (courtId) => links.has(courtId), async (courtId) => {
+    const l = linkRefs.get(courtId);
+    return l === undefined ? null : courtFocus(await courtFactsOf(sql, l)).start;
+  });
   for (const [courtId, refusal] of served) links.get(courtId)!.refusal = refusal;
   return { links, switches };
 }

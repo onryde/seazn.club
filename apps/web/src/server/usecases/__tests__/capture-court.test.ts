@@ -190,6 +190,7 @@ describe.skipIf(!HAS_DB)("a court code's descriptor, beat, start and record", ()
 
   it("E2: a stored refusal word is told to the court phone, on the waiting descriptor and beat only; cleared with the refusal; never on a session shape or a fixture code", async () => {
     await streamed(A, AT_14);
+    await setStatus(A, "in_play");
     const phone = phoneId("e2");
     await claimed(phone);
     expect(await describeAs(phone), "premise: none").not.toHaveProperty("autoRefusal");
@@ -211,12 +212,37 @@ describe.skipIf(!HAS_DB)("a court code's descriptor, beat, start and record", ()
     expect(await beat(phone)).not.toHaveProperty("autoRefusal");
     // A session open: never on the answer (a stale word on a match that now streams is settled).
     await sql`update fixture_stream_settings set auto_start_refusal = 'unavailable', auto_start_attempted_at = ${at(0)} where fixture_id = ${A}`;
-    await setStatus(A, "in_play");
     const sid = await operatorStart(phone);
     now += 3000;
     await tickSession(sid, deps, "beat");
     expect(await describeAs(phone)).not.toHaveProperty("autoRefusal");
     expect(await beat(phone, { sid, state: "publishing" })).not.toHaveProperty("autoRefusal");
+  });
+
+  it("E2/M1: a refusal stored against a match that is no longer the court's start is not told (latched A, B waiting)", async () => {
+    await streamed(A, AT_14);
+    await streamed(B, AT_15);
+    await setStatus(A, "in_play");
+    const phone = phoneId("m1");
+    await claimed(phone);
+    await sql`update fixture_stream_settings set auto_start_refusal = 'no_credit', auto_start_attempted_at = ${at(0)} where fixture_id = ${A}`;
+    expect(await describeAs(phone), "premise: A is the start").toMatchObject({ autoRefusal: "no_credit" });
+    await sql`update fixture_stream_settings set auto_start_blocked_at = now() where fixture_id = ${A}`;
+    expect(await describeAs(phone)).not.toHaveProperty("autoRefusal");
+    expect(await beat(phone)).not.toHaveProperty("autoRefusal");
+  });
+
+  it("E2: while a start is in flight (startingFixtureId) the stored word is not told; without it, it is", async () => {
+    await streamed(A, AT_14);
+    await streamed(B, AT_15);
+    await setStatus(A, "in_play");
+    await sql`update fixture_stream_settings set auto_start_refusal = 'unavailable', auto_start_attempted_at = ${at(0)} where fixture_id = ${A}`;
+    const resolved = await resolveAnyStreamCode(qr.code, qr.tok, "get", null, clock());
+    if (resolved.kind !== "court") throw new Error("premise: a court code");
+    const view = await courtFocusOf(resolved.link);
+    const common = (starting: string | null) => courtCommon(resolved, qr.code, view, { open: null, themeId: null }, deps, clock(), starting);
+    expect((await common(null)).autoRefusal, "premise").toBe("unavailable");
+    expect((await common(B)).autoRefusal).toBeNull();
   });
 
   it("A switched on, planned 14:00: descriptor label A's, beat next {label: A's, scheduledStart: 14:00 epoch s}", async () => {
