@@ -59,8 +59,8 @@ export async function tableCutToday(
  * source has nothing a correction could take away, and stands. `departing` is an entrant the withdrawal cascade is about to settle
  * (her status is not written yet): not named, nothing about her moves the cut (the table is not re-read); named, she is a
  * difference outright - unless nobody is left to take her place (the cut is EXHAUSTED: today's eligible cut is SHORTER than the
- * slate), in which case the proposal stands and her seat is the cascade's walkover (RB4-E7, R6). A Reinstate is judged the same way
- * with no `departing`: the cut as it reads today against the slate. A source another source is not ready for cannot be judged: it
+ * slate), in which case the proposal stands and her seat is the cascade's walkover (RB4-E7, R6). A correction or a Reinstate has no
+ * `departing`: the cut as it reads today is compared with the slate, an exhausted one included. A source another source is not ready for cannot be judged: it
  * stands.
  */
 export async function tableSlateStands(
@@ -75,13 +75,16 @@ export async function tableSlateStands(
   if (departing !== undefined && !named.includes(departing)) return true;
   try {
     const today = await tableCutToday(tx, dependent, sourceStageId, { alsoDeparted: departing });
-    // EXHAUSTED (RB4-E7, R6 "else walkover"): fewer ELIGIBLE entrants are left than the slate has seats - nobody to take a departed
-    // qualifier's place (the cut reads a true shortfall into a departed row, so `today` still has the seats; it is the eligible
+    // EXHAUSTED (RB4-E7, R6 "else walkover"): a DEPARTURE with fewer ELIGIBLE entrants left than the slate has seats - nobody to
+    // take her place (the cut reads a true shortfall into a departed row, so `today` still has the seats; it is the eligible
     // ones that run out). Re-proposing would offer a short cut (a page playoff with a bye, breaking RB4-S2), so the confirmed
-    // proposal stands and the seat is the cascade's walkover.
-    const out = await departedEntrantIds(tx, dependent.division_id);
-    if (departing !== undefined) out.add(departing);
-    if (today.filter((id) => !out.has(id)).length < named.length) return true;
+    // proposal stands and the seat is the cascade's walkover. ONLY for a departure: a correction (or a Reinstate) that re-orders
+    // an exhausted cut changes the seeding, which drives the bracket (RB5-K6), and follows the comparison below.
+    if (departing !== undefined) {
+      const out = await departedEntrantIds(tx, dependent.division_id);
+      out.add(departing);
+      if (today.filter((id) => !out.has(id)).length < named.length) return true;
+    }
     // Someone is left to backfill: the cut as it reads today (a departing qualifier already out of it) against the slate.
     return today.length === named.length && today.every((id, i) => id === named[i]);
   } catch (err) {

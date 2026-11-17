@@ -583,6 +583,59 @@ describe.runIf(HAS_DB)("W5 T11 a correction inside a completed league or group s
     expect(await seats(t), "no seat moved").toEqual(seated);
   });
 
+  // Review round 2: the exhausted rule is for a DEPARTURE only. League of four, all four qualify (the cut IS the field), so a
+  // departure leaves nobody to backfill; a correction that re-orders the cut still changes the seeding, which drives the bracket.
+  // Table by hand (3 points a win, the higher seed winning everything): E1 9, E2 6, E3 3, E4 0. E2 beating E1 makes it E2 9, E1 6.
+  const FULL: RowSpec = { key: "league_ko", entrants: 4, qualified: 4 };
+  it("X-CUT-4 exhausted cut: a correction that re-orders it stales the proposal and re-seeds from the corrected table (a departed qualifier in it changes nothing)", async () => {
+    const r = await rig(FULL);
+    expect(await slateOf(r, r.confirmedId), "premise: the cut is the whole field, in table order").toEqual([1, 2, 3, 4]);
+    await patchEntrant(r.auth, r.idOf.get(4)!, { status: "withdrawn" }); // nobody to backfill: it stands (the departure rule)
+    expect(await statusOf(r.confirmedId), "premise: the exhausted departure left it standing").toBe("confirmed");
+    await correct(r, 1, 2, 2);
+    expect(await statusOf(r.confirmedId), "the order moved: the seeding is stale").toBe("stale");
+    await expectDayOne(r);
+    const now = await newestSlate(r);
+    expect(now.status).toBe("draft");
+    expect(now.seeds.slice(0, 3), "re-seeded from the corrected table: E2, E1, E3").toEqual([2, 1, 3]);
+    // The same correction with nobody departed (the plain full cut) stales it too.
+    const plain = await rig(FULL);
+    await correct(plain, 1, 2, 2);
+    expect(await statusOf(plain.confirmedId)).toBe("stale");
+    expect((await newestSlate(plain)).seeds).toEqual([2, 1, 3, 4]);
+  });
+
+  it("X-CUT-4 exhausted cut: a departure alone stands and the cascade walks her seat over (RB4-E7)", async () => {
+    const r = await rig(FULL);
+    await withdrawEntrantCascade(r.auth, r.idOf.get(4)!);
+    expect(await statusOf(r.confirmedId)).toBe("confirmed");
+    const held = (await rowsOf(r.koId)).find((f) => [f.home_entrant_id, f.away_entrant_id].includes(r.idOf.get(4)!))!;
+    expect(held.outcome, "E4 v E1 on day one (seed 4 v seed 1): E1 is awarded the line").toMatchObject({ winner: r.idOf.get(1)! });
+  });
+
+  it("X-CUT-4 exhausted cut, a correction AND a departure: whichever comes first, the seeding follows the corrected table and the departure is a walkover", async () => {
+    // Basis: RB5-K6 (a correction before the start re-seeds, the bracket seeds by rank, RB4-Q3) and RB4-E7/R6 (a departure with no
+    // backfill stands and is a walkover). Order 1: the correction first - stale, re-proposed, re-confirmed E2, E1, E3, E4 - then E4
+    // leaves: the confirmed re-seeding stands, E4's seat (seed 4 v seed 1 = E2) is awarded to E2.
+    const a = await rig(FULL);
+    await correct(a, 1, 2, 2);
+    expect(await statusOf(a.confirmedId)).toBe("stale");
+    const fresh = await getSeedProposal(a.auth, a.koId);
+    await confirmResolvingTies(a.auth, a.koId, fresh!.id);
+    expect(await slateOf(a, fresh!.id), "premise: the corrected order is confirmed").toEqual([2, 1, 3, 4]);
+    await withdrawEntrantCascade(a.auth, a.idOf.get(4)!);
+    expect(await statusOf(fresh!.id), "the exhausted departure leaves the corrected seeding standing").toBe("confirmed");
+    const awarded = (await rowsOf(a.koId)).find((f) => [f.home_entrant_id, f.away_entrant_id].includes(a.idOf.get(4)!))!;
+    expect(awarded.outcome, "seed 4 v seed 1 (E2): E2 is awarded the line").toMatchObject({ winner: a.idOf.get(2)! });
+    // Order 2: the departure first (the bare flip settles nothing: it stands), then the correction: the seeding is stale and is
+    // re-seeded from the corrected table, E4 (out of the field) last.
+    const b = await rig(FULL);
+    await patchEntrant(b.auth, b.idOf.get(4)!, { status: "withdrawn" });
+    await correct(b, 1, 2, 2);
+    expect(await statusOf(b.confirmedId)).toBe("stale");
+    expect((await newestSlate(b)).seeds.slice(0, 3)).toEqual([2, 1, 3]);
+  });
+
   it("X-CUT-4 the sweep ran every sport and every door", () => {
     expect(swept, "anti-vacuity: both sports ran the correction").toBe(2);
     expect(doorChecks, "anti-vacuity: every door ran").toBe(doors.length);
