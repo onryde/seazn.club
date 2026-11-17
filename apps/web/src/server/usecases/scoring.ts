@@ -191,8 +191,8 @@ export async function scoreEvent(
   // only; the write path below is untouched.
   const cacheKey = input.idempotency_key ? idemKey(fixtureId, input.idempotency_key) : null;
   // W5 T8b review I2 (a): a replayed disqualifying forfeit (the write landed, its answer was lost) retries a withdrawal its
-  // first attempt did not finish — `disqualifyFromMatch` with `retry`, idempotent (a departed entrant is left alone) and held
-  // back inside the retry window. Every replay exit below passes through it.
+  // first attempt did not finish — `disqualifyFromMatch` with `retry`: idempotent (a departed or reinstated entrant is left
+  // alone), and one cascade at a time under the cascade's per-entrant lock. Every replay exit below passes through it.
   const isDqForfeit =
     opts.writer === undefined && input.type === "core.forfeit" && (input.payload as { reason?: unknown } | null)?.reason === "disqualified";
   const retryOwedDq = async (answer: ScoreOutcome): Promise<ScoreOutcome> => {

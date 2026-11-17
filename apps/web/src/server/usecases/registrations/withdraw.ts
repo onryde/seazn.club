@@ -132,6 +132,9 @@ async function settleStartedWithdrawal(
       ...(by === "registrant" ? { actor: { kind: "registrant" as const, registration_id: registrationId } } : {}),
     });
   } catch (err) {
+    // Re-review: a run that waited behind another (the cascade's lock) and found her already gone — done, nothing failed.
+    const [now] = await sql<{ status: string }[]>`select status from entrants where id = ${entrantId}`;
+    if (now !== undefined && (await import("../entrants")).DEPARTED_STATUSES.has(now.status)) return;
     log.error(
       { err, registrationId, entrantId, orgId },
       "registration: withdrawn after Start, but the table withdrawal failed — the entrant is still in the field; the organiser's Withdraw finishes it",
@@ -141,22 +144,21 @@ async function settleStartedWithdrawal(
 
 /**
  * W5 T8b review I2 (a): a withdrawal POSTed again (the registrant's retry, the organiser's) for a registration already
- * withdrawn after Start runs the table withdrawal its first attempt did not finish — the entrant still in the field — once the
- * retry window has passed (`CASCADE_RETRY_AFTER_MS`: a double POST arrives inside it and must not run a second cascade beside
- * the first, which takes no lock). Anything else is the idempotent no-op it always was.
+ * withdrawn after Start runs the table withdrawal its first attempt did not finish — the entrant still in the field, and not
+ * reinstated since (`withdrawalOwedSince`). Re-review: no window — the cascade holds a per-entrant lock, so a double POST
+ * racing the first run waits for it and then finds her gone. Anything else is the idempotent no-op it always was.
  */
 async function retryOwedWithdrawal(regId: string, divisionId: string, actorId: string | null, by: WithdrawnBy): Promise<void> {
-  const [{ CASCADE_RETRY_AFTER_MS, cascadeTraceSince }, { DEPARTED_STATUSES }] = await Promise.all([import("../withdrawal"), import("../entrants")]);
+  const [{ withdrawalOwedSince }, { DEPARTED_STATUSES }] = await Promise.all([import("../withdrawal"), import("../entrants")]);
   const [row] = await sql<{ entrant_id: string; withdrawn_at: Date | null; entrant_status: string }[]>`
     select r.entrant_id, r.withdrawn_at, e.status as entrant_status
       from registrations r join entrants e on e.id = r.entrant_id
      where r.id = ${regId} and r.status = 'withdrawn'`;
   if (row === undefined || row.withdrawn_at === null || DEPARTED_STATUSES.has(row.entrant_status)) return;
-  if (Date.now() - row.withdrawn_at.getTime() < CASCADE_RETRY_AFTER_MS) return;
   const at = row.withdrawn_at;
   const entrantId = row.entrant_id;
-  // Started, and no cascade has run since (one that ran and was undone by the organiser's Reinstate is not owed again).
-  const owed = await sql.begin(async (tx) => (await divisionHasStarted(tx, divisionId)) && !(await cascadeTraceSince(tx, divisionId, entrantId, at)));
+  // Started, and still owed (a Reinstate since her withdrawal stands: the organiser's last word).
+  const owed = await sql.begin(async (tx) => (await divisionHasStarted(tx, divisionId)) && (await withdrawalOwedSince(tx, divisionId, entrantId, at)));
   if (!owed) return;
   const ctx = await divisionCtx(sql, divisionId);
   await settleStartedWithdrawal(ctx.org_id, regId, row.entrant_id, by, actorId);

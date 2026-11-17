@@ -334,6 +334,24 @@ describe("NeedsYou", () => {
     }
     expect(checked).toBe(3);
   });
+  it("W5 T8b review I2 withdrawal_owed: one amber row naming who, opening the Entrants tab, in all four locales", () => {
+    const d = div({ phase: "match_day", attention: [{ kind: "withdrawal_owed", count: 2, names: ["Rae Registrant", "Sam Scorer"] }] });
+    const [item, ...rest] = needsYouItems(en, desk(d, 0), names, "org", "comp", "en");
+    expect(rest, "one row").toEqual([]);
+    expect(item).toMatchObject({ kind: "withdrawal_owed", severity: "amber", title: plural(en, "withdrawal.owed", 2, "en") });
+    expect(item!.sub, "names both").toContain("Rae Registrant");
+    expect(item!.sub).toContain("Sam Scorer");
+    expect(item!.action).toEqual({ label: "Open entrants", href: "/o/org/c/comp/d/premier-division?tab=entrants" });
+    let checked = 0;
+    for (const [loc, dict] of [["es", es], ["fr", fr], ["nl", nl]] as const) {
+      const [row] = needsYouItems(dict, desk(d, 0), names, "org", "comp", loc);
+      expect(row!.title, loc).toBe(plural(dict, "withdrawal.owed", 2, loc));
+      expect(row!.title, `${loc}: translated, not the English`).not.toBe(item!.title);
+      expect(row!.sub, `${loc}: names the player`).toContain("Rae Registrant");
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
   it("loop R M7(e): every Needs-you action is a 44px tap target below lg (768 and 834 are touch widths), compact only at lg", () => {
     // The desktop row (md and up) carried `py-1.5 text-xs` — 28px at 768, a touch width. Each row's two actions (the
     // phone stack and the md row) are read; every item, red and amber.

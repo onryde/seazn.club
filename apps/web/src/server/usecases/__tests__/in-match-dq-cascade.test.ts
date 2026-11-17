@@ -30,15 +30,35 @@ import { startDivision } from "../schedule";
 import { createStages, generateStageFixtures } from "../stages";
 import { getCompetitionDesk } from "../competition-desk";
 import { scoreEvent } from "../scoring";
-import { CASCADE_RETRY_AFTER_MS } from "../withdrawal";
+import { withdrawEntrantCascade } from "../withdrawal";
 import { seedOrg } from "./_seed";
 
 vi.stubEnv("DEVICE_LINK_KEK", randomBytes(32).toString("hex"));
 
 // Review I2: a cascade failure is simulated by making its FIRST cross-module call throw once (`replaceDepartedQualifier`, which
-// only the withdrawal cascade calls, before any write). `disqualifyFromMatch` calls the cascade inside its own module, so the
-// cascade's own export cannot be swapped; every other call is the real code.
-const control = vi.hoisted(() => ({ failNext: false, cascades: 0 }));
+// only the withdrawal cascade calls, inside its lock, after its status check and before any write — so `cascades` counts the
+// runs that got past "already departed"). `disqualifyFromMatch` calls the cascade inside its own module, so the cascade's own
+// export cannot be swapped. Re-review (I): a failure AFTER a settle — `failAfter` names a cascade write type; once one such
+// write has gone through, the NEXT cascade write throws. Every other call is the real code.
+const control = vi.hoisted(() => ({ failNext: false, cascades: 0, failAfter: null as string | null, passed: false }));
+vi.mock("../scoring", async (io) => {
+  const real = await io<typeof import("../scoring")>();
+  return {
+    ...real,
+    scoreEvent: async (...args: Parameters<typeof real.scoreEvent>) => {
+      const [, , input, opts] = args;
+      if (opts?.writer === "withdrawal_cascade" && control.failAfter !== null) {
+        if (control.passed) {
+          control.failAfter = null;
+          control.passed = false;
+          throw new Error("simulated: a later settle of the cascade failed");
+        }
+        if ((input as { type: string }).type === control.failAfter) control.passed = true;
+      }
+      return real.scoreEvent(...args);
+    },
+  };
+});
 vi.mock("../lucky-loser", async (io) => {
   const real = await io<typeof import("../lucky-loser")>();
   return {
@@ -351,49 +371,125 @@ describe.skipIf(!HAS_DB)("X-WDT-10 review I1: the Undo of a disqualifying forfei
   }, 300_000);
 });
 
+/** Her active `withdrew` forfeits on a line (a settle of the cascade; more than one would be a double settle). */
+const activeWithdrew = async (fixtureId: string, v: string) =>
+  (await activeEvents(fixtureId)).filter((e) => e.type === "core.forfeit" && e.payload.reason === "withdrew" && e.payload.by === v).length;
+const activeExpunges = async (fixtureId: string) =>
+  (await activeEvents(fixtureId)).filter((e) => e.type === "core.abandon" && e.payload.expunge === true).length;
+const ledger = async (divisionId: string) =>
+  (await withdrawalRows(divisionId)).map((x) => [x.payload.policy, x.payload.played_at_departure, x.payload.scheduled]);
+
+/** League of six; P1 wins `k` lines by walkover, then is disqualified in the next by a KEYED forfeit (so it can be replayed). */
+async function keyedDq(k: number) {
+  const r = await started(6, BADMINTON);
+  const v = r.ids[0]!;
+  const mine = (await linesOf(r.stageId)).filter((l) => involves(l, v));
+  for (const l of mine.slice(0, k)) await walkoverAgainst(r.auth, l.id, otherSide(l, v));
+  const dqLine = mine[k]!;
+  await post(r.auth, dqLine.id, "core.start", {});
+  await post(r.auth, dqLine.id, `${BADMINTON.key}.sanction`, { by: v, level: BADMINTON.endLevel });
+  const forfeit = { type: "core.forfeit", payload: { by: v, reason: "disqualified" }, idempotency_key: "dq-" + randomUUID() };
+  const first = await scoreEvent(r.auth, dqLine.id, { expected_seq: await tip(dqLine.id), ...forfeit } as never);
+  const replay = () => scoreEvent(r.auth, dqLine.id, { expected_seq: first.seq - 1, ...forfeit } as never);
+  return { r, v, mine, dqLine, rest: mine.slice(k + 1), first, replay };
+}
+
 describe.skipIf(!HAS_DB)("X-WDT-10 review I2: a failed in-match cascade is shown on the desk and finished by a replay", () => {
-  it("I2 the desk names her as owed; a replay of the forfeit inside the retry window runs nothing, past it finishes the cascade, and the item clears", async () => {
-    const r = await started(6, BADMINTON);
-    const v = r.ids[0]!;
-    expect(await deskOwed(r), "the empty case: nobody owed").toEqual([]);
-    const mine = (await linesOf(r.stageId)).filter((l) => involves(l, v));
-    for (const l of mine.slice(0, 2)) await walkoverAgainst(r.auth, l.id, otherSide(l, v));
-    const dqLine = mine[2]!;
-    await post(r.auth, dqLine.id, "core.start", {});
-    await post(r.auth, dqLine.id, `${BADMINTON.key}.sanction`, { by: v, level: BADMINTON.endLevel });
-    const key = "dq-" + randomUUID();
-    const forfeit = { type: "core.forfeit", payload: { by: v, reason: "disqualified" }, idempotency_key: key };
+  it("I2 a cascade that failed before any write: the desk names her, a replay of the forfeit finishes it, and the item clears", async () => {
     control.failNext = true;
-    const first = await scoreEvent(r.auth, dqLine.id, { expected_seq: await tip(dqLine.id), ...forfeit } as never);
+    const { r, v, rest, first, replay } = await keyedDq(2);
     expect(control.failNext, "premise: the cascade ran and failed").toBe(false);
     expect(await statusOf(v), "the forfeit stands, she is still in the field").not.toBe("disqualified");
     expect(await deskOwed(r)).toEqual([{ kind: "withdrawal_owed", count: 1, names: ["P1"] }]);
-
-    // A lost-ack resend inside the window: the same answer, and no second cascade beside a first that may still be running.
     const cascades = control.cascades;
-    const again = await scoreEvent(r.auth, dqLine.id, { expected_seq: first.seq - 1, ...forfeit } as never);
-    expect(again.event_id, "the replay is the same write").toBe(first.event_id);
-    expect(control.cascades - cascades, "inside the window: no cascade").toBe(0);
-    expect(await deskOwed(r), "still owed").toHaveLength(1);
-
-    // Past the window, the resend finishes it.
-    await sql`update score_events set recorded_at = recorded_at - make_interval(secs => ${CASCADE_RETRY_AFTER_MS / 1000 + 60}) where id = ${first.event_id}`;
-    const late = await scoreEvent(r.auth, dqLine.id, { expected_seq: first.seq - 1, ...forfeit } as never);
-    expect(late.event_id).toBe(first.event_id);
-    expect(control.cascades - cascades, "past the window: one cascade").toBe(1);
+    expect((await replay()).event_id, "the replay is the same write").toBe(first.event_id);
+    expect(control.cascades - cascades, "the replay ran the cascade once").toBe(1);
     expect(await statusOf(v)).toBe("disqualified");
-    expect((await withdrawalRows(r.divisionId)).map((x) => [x.payload.policy, x.payload.played_at_departure, x.payload.scheduled])).toEqual([["walkover", 3, 5]]);
+    expect(await ledger(r.divisionId)).toEqual([["walkover", 3, 5]]);
+    for (const l of rest) expect(await activeWithdrew(l.id, v), "walked over once").toBe(1);
     expect(await deskOwed(r), "finished: the item clears").toEqual([]);
-    // And a further resend settles nothing twice (she has left).
-    await scoreEvent(r.auth, dqLine.id, { expected_seq: first.seq - 1, ...forfeit } as never);
-    expect(control.cascades - cascades, "departed: no second cascade").toBe(1);
+    await replay();
+    expect(control.cascades - cascades, "departed: a further replay runs none").toBe(1);
   }, 300_000);
 
-  it("I2 a Reinstate after an in-match disqualification never reads as owed", async () => {
-    const { r, v } = await dqAfter(2, BADMINTON, "organiser");
+  it("I2 re-review: a cascade cut off AFTER its first walkover is still owed; the replay finishes it as a clean run would — 3 of 5, each line walked over once", async () => {
+    // differential: the trace reading took the first walkover for "done" (no row, no retry); a resume without taking it back
+    // writes the row as 4 of 5 (its own walkover counted as played).
+    control.failAfter = "core.forfeit";
+    const { r, v, rest, replay } = await keyedDq(2);
+    expect(control.failAfter, "premise: the cascade failed after a settle").toBeNull();
+    expect(rest, "rig: two remaining lines").toHaveLength(2);
+    expect((await Promise.all(rest.map((l) => activeWithdrew(l.id, v)))).sort(), "premise: one line walked over, one not").toEqual([0, 1]);
+    expect(await statusOf(v), "her status is the last write: unwritten").not.toBe("disqualified");
+    expect(await deskOwed(r), "a half-settled withdrawal is owed").toEqual([{ kind: "withdrawal_owed", count: 1, names: ["P1"] }]);
+    await replay();
+    expect(await statusOf(v)).toBe("disqualified");
+    expect(await ledger(r.divisionId), "the clean run's row").toEqual([["walkover", 3, 5]]);
+    for (const l of rest) expect(await activeWithdrew(l.id, v), "no double settle").toBe(1);
+    expect(await deskOwed(r)).toEqual([]);
+  }, 300_000);
+
+  it("I2 re-review: an expunge cut off after its first line resumes as the same expunge — 2 of 5, every line out once", async () => {
+    // differential: resumed over the half-expunged lines, the rule reads 2 of 4 and walks the rest over.
+    control.failAfter = "core.abandon";
+    const { r, v, mine, replay } = await keyedDq(1);
+    expect(control.failAfter, "premise: the cascade failed after an expunge").toBeNull();
+    const out = await Promise.all(mine.map((l) => activeExpunges(l.id)));
+    expect(out.filter((n) => n === 1), "premise: exactly one line expunged").toHaveLength(1);
+    expect(await statusOf(v)).not.toBe("disqualified");
+    expect(await deskOwed(r)).toHaveLength(1);
+    await replay();
+    expect(await statusOf(v)).toBe("disqualified");
+    expect(await ledger(r.divisionId), "the clean run's row").toEqual([["expunge", 2, 5]]);
+    let checked = 0;
+    for (const l of await linesOf(r.stageId)) {
+      if (!mine.some((m) => m.id === l.id)) continue;
+      expect([l.status, l.outcome, await activeExpunges(l.id)], `line vs ${otherSide(l, v)}`).toEqual(["abandoned", null, 1]);
+      checked++;
+    }
+    expect(checked).toBe(5);
+    expect(await deskOwed(r)).toEqual([]);
+  }, 300_000);
+
+  it("I2 re-review: an OPPONENT's expunge on a shared line does not mark her withdrawal done", async () => {
+    control.failNext = true;
+    const { r, v, rest } = await keyedDq(2);
+    expect(await deskOwed(r), "premise: owed").toHaveLength(1);
+    // The opponent of one of her open lines leaves with nothing played: an expunge, whose abandon lands on their shared line.
+    const opp = otherSide(rest[0]!, v);
+    await withdrawEntrantCascade(r.auth, opp);
+    expect(await activeExpunges(rest[0]!.id), "premise: the opponent's expunge is on the shared line").toBe(1);
+    expect(await deskOwed(r), "still owed: the expunge is not hers").toEqual([{ kind: "withdrawal_owed", count: 1, names: ["P1"] }]);
+  }, 300_000);
+
+  it("I2 re-review: two concurrent replays run ONE cascade — one ledger row, every line walked over once (three runs)", async () => {
+    let checked = 0;
+    for (let run = 0; run < 3; run++) {
+      control.failNext = true;
+      const { r, v, rest, replay } = await keyedDq(2);
+      expect(await deskOwed(r), `run ${run}: premise owed`).toHaveLength(1);
+      const cascades = control.cascades;
+      const both = await Promise.allSettled([replay(), replay()]);
+      expect(both.map((x) => x.status), `run ${run}: both answer`).toEqual(["fulfilled", "fulfilled"]);
+      expect(control.cascades - cascades, `run ${run}: one cascade`).toBe(1);
+      expect(await ledger(r.divisionId), `run ${run}`).toEqual([["walkover", 3, 5]]);
+      for (const l of rest) expect(await activeWithdrew(l.id, v), `run ${run}: walked over once`).toBe(1);
+      expect(await statusOf(v)).toBe("disqualified");
+      checked++;
+    }
+    expect(checked).toBe(3);
+  }, 600_000);
+
+  it("I2 a Reinstate after an in-match disqualification never reads as owed, and a replay of the forfeit does not disqualify her again", async () => {
+    const { r, v, rest, replay } = await keyedDq(2);
+    expect(await statusOf(v), "premise: the cascade finished").toBe("disqualified");
     expect(await deskOwed(r), "a finished cascade is not owed").toEqual([]);
     await patchEntrant(r.auth, v, { status: "registered" });
-    expect(await triggerOf((await linesOf(r.stageId)).filter((l) => involves(l, v))[2]!.id, v), "premise: the forfeit still stands").toBeDefined();
     expect(await deskOwed(r), "reinstated: back in the field with the forfeit standing, and still not owed").toEqual([]);
+    const cascades = control.cascades;
+    await replay();
+    expect(control.cascades - cascades, "the Reinstate stands").toBe(0);
+    expect(await statusOf(v)).toBe("registered");
+    for (const l of rest) expect(await activeWithdrew(l.id, v), "her lines stay open").toBe(0);
   }, 300_000);
 });

@@ -22,27 +22,47 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants, patchEntrant } from "../entrants";
 import { getCompetitionDesk } from "../competition-desk";
-import { CASCADE_RETRY_AFTER_MS } from "../withdrawal";
 import { confirmRegistration, groupById, withdrawRegistrationByRef, withdrawRegistrationPublic } from "../registrations";
 import { startDivision } from "../schedule";
 import { createStages } from "../stages";
 import { seedRegistration } from "./_registration-fixtures";
 import { seedOrg } from "./_seed";
 
-// A cascade failure is simulated by making the door the registrant's path calls throw once (`failNextCascade`); every other
-// call is the real cascade.
-const control = vi.hoisted(() => ({ failNext: false, calls: 0 }));
-vi.mock("../withdrawal", async (io) => {
-  const real = await io<typeof import("../withdrawal")>();
+// A cascade failure is simulated by making the cascade's FIRST cross-module call throw once (`replaceDepartedQualifier`: only
+// the withdrawal cascade calls it, inside its per-entrant lock, after its "already departed" check and before any write), so
+// `calls` counts the cascades that actually RAN — a caller that waited on the lock and found her gone is not one. Re-review
+// (I): `failAfter` names a cascade write type; once one such write has gone through, the NEXT cascade write throws (a cascade
+// cut off part-way). Every other call is the real code.
+const control = vi.hoisted(() => ({ failNext: false, calls: 0, failAfter: null as string | null, passed: false }));
+vi.mock("../lucky-loser", async (io) => {
+  const real = await io<typeof import("../lucky-loser")>();
   return {
     ...real,
-    withdrawEntrantCascade: async (...args: Parameters<typeof real.withdrawEntrantCascade>) => {
+    replaceDepartedQualifier: async (...args: Parameters<typeof real.replaceDepartedQualifier>) => {
       control.calls++;
       if (control.failNext) {
         control.failNext = false;
-        throw new Error("simulated: the cascade's first write failed");
+        throw new Error("simulated: the cascade's first step failed");
       }
-      return real.withdrawEntrantCascade(...args);
+      return real.replaceDepartedQualifier(...args);
+    },
+  };
+});
+vi.mock("../scoring", async (io) => {
+  const real = await io<typeof import("../scoring")>();
+  return {
+    ...real,
+    scoreEvent: async (...args: Parameters<typeof real.scoreEvent>) => {
+      const [, , input, opts] = args;
+      if (opts?.writer === "withdrawal_cascade" && control.failAfter !== null) {
+        if (control.passed) {
+          control.failAfter = null;
+          control.passed = false;
+          throw new Error("simulated: a later settle of the cascade failed");
+        }
+        if ((input as { type: string }).type === control.failAfter) control.passed = true;
+      }
+      return real.scoreEvent(...args);
     },
   };
 });
@@ -272,25 +292,30 @@ describe.skipIf(!HAS_DB)("X-WDT-9 the public door into the cascade: who reaches 
     expect(await linesOf(r.stageId)).toEqual(before);
   }, 120_000);
 
-  it("X-WDT-9 a double POST runs one cascade", async () => {
-    const r = await rig(6);
-    await leaverWins(r, 2);
-    const calls = control.calls;
-    const both = await Promise.allSettled([
-      withdrawRegistrationPublic(r.registrationId, r.token),
-      withdrawRegistrationByRef(r.ref, r.registrationId, r.token),
-    ]);
-    expect(both.map((x) => x.status), "both answer").toEqual(["fulfilled", "fulfilled"]);
-    expect(control.calls - calls, "one cascade").toBe(1);
-    // And a later retry runs none.
-    await withdrawRegistrationPublic(r.registrationId, r.token);
-    expect(control.calls - calls, "the retry ran no second cascade").toBe(1);
-    expect(await withdrawalRows(r.divisionId), "one ledger row").toHaveLength(1);
-    for (const l of (await linesOf(r.stageId)).filter((x) => involves(x, r.leaver))) {
-      const abandons = (await activeEvents(l.id)).filter((e) => e.type === "core.abandon" && e.payload.expunge === true);
-      expect(abandons, "one expunge per line").toHaveLength(1);
+  it("X-WDT-9 a double POST runs one cascade (re-review: under the per-entrant lock, no window; three runs)", async () => {
+    let checked = 0;
+    for (let run = 0; run < 3; run++) {
+      const r = await rig(6);
+      await leaverWins(r, 2);
+      const calls = control.calls;
+      const both = await Promise.allSettled([
+        withdrawRegistrationPublic(r.registrationId, r.token),
+        withdrawRegistrationByRef(r.ref, r.registrationId, r.token),
+      ]);
+      expect(both.map((x) => x.status), `run ${run}: both answer`).toEqual(["fulfilled", "fulfilled"]);
+      expect(control.calls - calls, `run ${run}: one cascade`).toBe(1);
+      // And a later retry runs none.
+      await withdrawRegistrationPublic(r.registrationId, r.token);
+      expect(control.calls - calls, `run ${run}: the retry ran no second cascade`).toBe(1);
+      expect(await withdrawalRows(r.divisionId), `run ${run}: one ledger row`).toHaveLength(1);
+      for (const l of (await linesOf(r.stageId)).filter((x) => involves(x, r.leaver))) {
+        const abandons = (await activeEvents(l.id)).filter((e) => e.type === "core.abandon" && e.payload.expunge === true);
+        expect(abandons, `run ${run}: one expunge per line`).toHaveLength(1);
+      }
+      checked++;
     }
-  }, 180_000);
+    expect(checked).toBe(3);
+  }, 400_000);
 
   it("X-WDT-9 a cascade that fails leaves her in the field, recoverable by the organiser's Withdraw — never marked withdrawn with lines untouched", async () => {
     const r = await rig(6);
@@ -320,11 +345,13 @@ async function deskOwed(r: Rig) {
   const desk = await getCompetitionDesk(r.auth, r.competitionId);
   return (desk.divisions.get(r.divisionId)?.attention ?? []).filter((a) => a.kind === "withdrawal_owed");
 }
-const pastTheWindow = (registrationId: string) =>
-  sql`update registrations set withdrawn_at = withdrawn_at - make_interval(secs => ${CASCADE_RETRY_AFTER_MS / 1000 + 60}) where id = ${registrationId}`;
+const ledger = async (divisionId: string) =>
+  (await withdrawalRows(divisionId)).map((x) => [x.payload.policy, x.payload.played_at_departure, x.payload.scheduled]);
+const activeExpunges = async (fixtureId: string) =>
+  (await activeEvents(fixtureId)).filter((e) => e.type === "core.abandon" && e.payload.expunge === true).length;
 
 describe.skipIf(!HAS_DB)("X-WDT-9 review I2: a failed withdrawal is shown on the desk and finished by a retry", () => {
-  it("I2 the desk names her as owed; her retry inside the window runs nothing, past it finishes the cascade, and the item clears", async () => {
+  it("I2 a cascade that failed before any write: the desk names her, her retry finishes it, and the item clears", async () => {
     const r = await rig(6);
     await leaverWins(r, 2);
     expect(await deskOwed(r), "the empty case: nobody owed").toEqual([]);
@@ -333,21 +360,43 @@ describe.skipIf(!HAS_DB)("X-WDT-9 review I2: a failed withdrawal is shown on the
     expect(control.failNext, "premise: the cascade ran and failed").toBe(false);
     expect(await deskOwed(r)).toEqual([{ kind: "withdrawal_owed", count: 1, names: ["Rae Registrant"] }]);
     const calls = control.calls;
-    // A double POST arrives inside the window: it must not run a second cascade beside a first that may still be running.
-    await withdrawRegistrationPublic(r.registrationId, r.token);
-    expect(control.calls - calls, "inside the window: no cascade").toBe(0);
-    expect(await deskOwed(r), "still owed").toHaveLength(1);
-    await pastTheWindow(r.registrationId);
     await withdrawRegistrationByRef(r.ref, r.registrationId, r.token);
-    expect(control.calls - calls, "past the window: one cascade").toBe(1);
+    expect(control.calls - calls, "the retry ran the cascade once").toBe(1);
     expect((await entrantOf(r.leaver)).status).toBe("withdrawn");
-    expect((await withdrawalRows(r.divisionId)).map((x) => [x.payload.policy, x.payload.played_at_departure, x.payload.scheduled])).toEqual([["expunge", 2, 5]]);
+    expect(await ledger(r.divisionId)).toEqual([["expunge", 2, 5]]);
     expect(await deskOwed(r), "finished: the item clears").toEqual([]);
     await withdrawRegistrationPublic(r.registrationId, r.token);
     expect(control.calls - calls, "departed: a further retry runs none").toBe(1);
   }, 180_000);
 
-  it("I2 a finished withdrawal, and a Reinstate after it, never read as owed (the registration stays withdrawn: m4, parked)", async () => {
+  it("I2 re-review: an expunge cut off after its first line is owed; her retry finishes it as a clean run would — 2 of 5, every line out once", async () => {
+    // differential: the trace reading took the first expunge for "done"; a resume over the half-expunged lines reads 2 of 4.
+    const r = await rig(6);
+    const played = await leaverWins(r, 2);
+    control.failAfter = "core.abandon";
+    await withdrawRegistrationPublic(r.registrationId, r.token);
+    expect(control.failAfter, "premise: the cascade failed after an expunge").toBeNull();
+    const mine = (await linesOf(r.stageId)).filter((l) => involves(l, r.leaver));
+    expect((await Promise.all(mine.map((l) => activeExpunges(l.id)))).filter((n) => n === 1), "premise: one line out").toHaveLength(1);
+    expect((await entrantOf(r.leaver)).status, "her status is the last write: unwritten").not.toBe("withdrawn");
+    expect(await deskOwed(r), "a half-settled withdrawal is owed").toEqual([{ kind: "withdrawal_owed", count: 1, names: ["Rae Registrant"] }]);
+    await withdrawRegistrationPublic(r.registrationId, r.token);
+    expect((await entrantOf(r.leaver)).status).toBe("withdrawn");
+    expect(await ledger(r.divisionId), "the clean run's row").toEqual([["expunge", 2, 5]]);
+    let checked = 0;
+    for (const l of (await linesOf(r.stageId)).filter((x) => involves(x, r.leaver))) {
+      expect([l.status, l.outcome, await activeExpunges(l.id)], "out once").toEqual(["abandoned", null, 1]);
+      checked++;
+    }
+    expect(checked).toBe(5);
+    // Its removed results are on the row, so a Reinstate puts BOTH played results back (the re-recorded ones included).
+    await patchEntrant(r.auth, r.leaver, { status: "registered" });
+    const back = await linesOf(r.stageId);
+    for (const p of played) expect(back.find((l) => l.id === p.id)!.outcome, "her result is back").toMatchObject({ kind: "award", winner: r.leaver });
+    expect(await deskOwed(r)).toEqual([]);
+  }, 180_000);
+
+  it("I2 a finished withdrawal, and a Reinstate after it, never read as owed; her retry does not withdraw her again (the registration stays withdrawn: m4, parked)", async () => {
     const r = await rig(6);
     await leaverWins(r, 2);
     await withdrawRegistrationPublic(r.registrationId, r.token);
@@ -356,8 +405,6 @@ describe.skipIf(!HAS_DB)("X-WDT-9 review I2: a failed withdrawal is shown on the
     await patchEntrant(r.auth, r.leaver, { status: "registered" });
     expect(await registrationStatus(r.registrationId), "premise (m4): the registration still reads withdrawn").toBe("withdrawn");
     expect(await deskOwed(r), "reinstated: in the field, and not owed").toEqual([]);
-    // Nor does a retry past the window withdraw her again — her Reinstate is the organiser's last word.
-    await pastTheWindow(r.registrationId);
     const calls = control.calls;
     await withdrawRegistrationPublic(r.registrationId, r.token);
     expect(control.calls - calls, "no second withdrawal over a Reinstate").toBe(0);

@@ -34,7 +34,7 @@ import { bracketAwaitsCompletion } from "@/server/engine-db/stage-finals";
 import type { ProgressionSpec } from "@seazn/engine/competition";
 import { cardStatsCountsPlayed, listDivisionCardStats, type NextFixture } from "./card-stats";
 import { DEPARTED_STATUSES } from "./entrants";
-import { cascadeTraceSince } from "./withdrawal";
+import { withdrawalOwedSince } from "./withdrawal";
 import { countsAsMatch } from "@/lib/run-sheet-groups";
 import { isCatchUpExtKey } from "@/lib/roundrobin-late-entry";
 import { listDivisions } from "./divisions";
@@ -540,9 +540,9 @@ export async function getCompetitionDesk(
       : [];
     // W5 T8b review I2 (b): a withdrawal owed and not finished — DERIVED, never stored. The trigger is the entrant's registration
     // withdrawn AFTER Start (`division_started`; before it the withdrawal is a bare flip), or a disqualifying forfeit by her that
-    // still stands on a league, group or Swiss match (its time is the FIRST such forfeit: a Reinstate's re-record is later).
-    // Owed while she is still in the field and no trace of a cascade for her follows the trigger (`cascadeTraceSince`, the one
-    // reading the retries use too): a Reinstate therefore never reads as owed. Candidates are read here, the trace per candidate.
+    // still stands on a league, group or Swiss match — the LATEST of these (re-review: a disqualification after a Reinstate is a
+    // new withdrawal owed). Owed while `withdrawalOwedSince` says so — the one reading the retries use: done is her departed
+    // status, the cascade's last write, and a Reinstate since the trigger is not owed. Candidates here, the reading per candidate.
     const owedCandidates = ids.length
       ? await tx<{ id: string; division_id: string; name: string; at: Date }[]>`
           with started as (
@@ -550,17 +550,14 @@ export async function getCompetitionDesk(
              where division_id = any(${ids}) and type = 'division_started' group by division_id
           ), trig as (
             select e.id, e.division_id, e.display_name, e.created_at,
-                   least(
-                     (select min(r.withdrawn_at) from registrations r
+                   greatest(
+                     (select max(r.withdrawn_at) from registrations r
                        where r.entrant_id = e.id and r.status = 'withdrawn' and r.withdrawn_at >= st.at),
-                     (select min(ev.recorded_at) from score_events ev
+                     (select max(ev.recorded_at) from score_events ev
                         join fixtures f on f.id = ev.fixture_id join stages s on s.id = f.stage_id
-                       where s.kind in ('league', 'group', 'swiss') and ev.type = 'core.forfeit'
+                       where f.division_id = e.division_id and s.kind in ('league', 'group', 'swiss') and ev.type = 'core.forfeit'
                          and ev.payload ->> 'reason' = 'disqualified' and ev.payload ->> 'by' = e.id::text
-                         and exists (select 1 from score_events a
-                                      where a.fixture_id = ev.fixture_id and a.type = 'core.forfeit'
-                                        and a.payload ->> 'reason' = 'disqualified' and a.payload ->> 'by' = e.id::text
-                                        and not exists (select 1 from score_events v where v.fixture_id = a.fixture_id and v.voids_event_id = a.id)))
+                         and not exists (select 1 from score_events v where v.fixture_id = ev.fixture_id and v.voids_event_id = ev.id))
                    ) as at
               from entrants e join started st on st.division_id = e.division_id
              where e.status not in ${tx([...DEPARTED_STATUSES])}
@@ -571,7 +568,7 @@ export async function getCompetitionDesk(
       : [];
     const withdrawalOwed: { division_id: string; name: string }[] = [];
     for (const c of owedCandidates) {
-      if (!(await cascadeTraceSince(tx, c.division_id, c.id, c.at))) withdrawalOwed.push({ division_id: c.division_id, name: c.name });
+      if (await withdrawalOwedSince(tx, c.division_id, c.id, c.at)) withdrawalOwed.push({ division_id: c.division_id, name: c.name });
     }
     return { orgTz: resolveVenueTz(null, org?.timezone), stages, fixtures, settings, fixturesWithOfficial, fixturesWithLink, fixturesToday, lateWaiting, lateUnplaced, withdrawalOwed };
   });

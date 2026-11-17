@@ -42,7 +42,8 @@ import {
 } from "@seazn/engine/competition";
 import { feedsNextMatch } from "@/lib/bracket-next-match";
 import { FIELD_ENTRANT_STATUSES as FIELD_STATUSES, inTheField } from "@/lib/entrant-field";
-import { withTenant, type Tx } from "@/lib/db";
+import { randomUUID } from "node:crypto";
+import { sql, withTenant, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { resolveModule } from "@/server/engine-db/registry";
 import type { CascadeWriter } from "@/server/engine-db/append-event";
@@ -398,10 +399,115 @@ export function cascadeAuthFor(orgId: string, userId: string | null): AuthCtx {
   return { orgId, via: "session", userId, role: "owner", keyId: null };
 }
 
+/**
+ * W5 T8b re-review (m): ONE withdrawal cascade per entrant at a time. The cascade is many transactions (every settle is its
+ * own `scoreEvent`), so nothing else serialises two runs: a double POST, a lost-ack resend of a disqualifying forfeit, the
+ * organiser's Withdraw beside the registrant's own, or a slow first run beside its retry would each settle the same lines
+ * twice. The whole run holds a per-entrant ROW lock; a second caller waits for it, then re-reads her status inside it and
+ * finds nothing owed (the 409 below — the cascade writes her status last, so a run that finished is a departed entrant).
+ *
+ * A row, not a Postgres advisory lock — the owner's 2026-08-25 ruling for the import lock (`event-import.ts`), for the same
+ * two reasons: a session lock breaks under a transaction-mode pooler (the backend can change between lock and unlock), and
+ * holding a session for the whole cascade pins a slot of a five-connection pool while the cascade itself needs more. The row
+ * reuses `import_locks` under a key no import shares the meaning of (`withdrawal-cascade:<entrant>`; an import's id is free
+ * text, so the worst a collision does is make one of the two wait or answer `import.concurrent`). Nothing is held while
+ * waiting (a poll, not a reserved connection). A crashed run's row is taken over once its TTL passes.
+ */
+const CASCADE_LOCK_TTL_MINUTES = 10;
+const CASCADE_LOCK_WAIT_MS = 120_000;
+const CASCADE_LOCK_POLL_MS = 100;
+const cascadeLockKey = (entrantId: string) => `withdrawal-cascade:${entrantId}`;
+
+async function acquireCascadeLock(orgId: string, divisionId: string, entrantId: string): Promise<string | null> {
+  const holder = randomUUID();
+  const [row] = await sql<{ holder: string }[]>`
+    insert into import_locks (division_id, import_id, org_id, holder, expires_at)
+    values (${divisionId}, ${cascadeLockKey(entrantId)}, ${orgId}, ${holder}, now() + make_interval(mins => ${CASCADE_LOCK_TTL_MINUTES}))
+    on conflict (division_id, import_id) do update
+      set holder = excluded.holder, org_id = excluded.org_id, acquired_at = now(), expires_at = excluded.expires_at
+      where import_locks.expires_at < now()
+    returning holder`;
+  return row ? row.holder : null;
+}
+
+async function releaseCascadeLock(orgId: string, divisionId: string, entrantId: string, holder: string): Promise<void> {
+  await sql`delete from import_locks where division_id = ${divisionId} and import_id = ${cascadeLockKey(entrantId)}
+             and org_id = ${orgId} and holder = ${holder}`;
+}
+
 export async function withdrawEntrantCascade(
   auth: AuthCtx,
   entrantId: string,
   opts: { as?: "withdrawn" | "disqualified"; actor?: CascadeActor } = {},
+): Promise<WithdrawCascadeOut> {
+  const { division_id: divisionId } = await getEntrant(auth, entrantId);
+  const deadline = Date.now() + CASCADE_LOCK_WAIT_MS;
+  let holder = await acquireCascadeLock(auth.orgId, divisionId, entrantId);
+  while (holder === null) {
+    if (Date.now() > deadline) throw new HttpError(409, "A withdrawal of this entrant is already running - try again in a moment");
+    await new Promise((r) => setTimeout(r, CASCADE_LOCK_POLL_MS));
+    holder = await acquireCascadeLock(auth.orgId, divisionId, entrantId);
+  }
+  try {
+    return await runWithdrawEntrantCascade(auth, entrantId, opts);
+  } finally {
+    try {
+      await releaseCascadeLock(auth.orgId, divisionId, entrantId, holder);
+    } catch (err) {
+      log.error({ err, entrantId }, "withdrawal: releasing the cascade lock failed (it expires on its own)");
+    }
+  }
+}
+
+/**
+ * W5 T8b re-review (I): a cascade cut off part-way (it has no catch: a throw on a later settle leaves the earlier ones written,
+ * her status unwritten) is RESUMED by the next run — and the next run must decide as the first did. It would not, over the
+ * half-settled lines: a line it walked over now reads as PLAYED (4 of 5 instead of 3 of 5 on the ledger row), and a line it
+ * expunged reads as neither played nor pending, so an expunge at 2 of 5 resumes as a walkover at 2 of 4. So before deciding,
+ * the run takes back its own unfinished work on the open table stages: on every line of hers whose other side is still in the
+ * field (a line shared with an entrant who has left is that entrant's), the cascade's own active events (`cascadeEventsOf`:
+ * an expunge abandon, her `withdrew` walkover — cascade-only, PF-2) are voided newest first, and what an expunge removed — the
+ * unbroken run of voids `voidAndAbandon` wrote just before its abandon — is recorded again (`rerecordRemoved`, Reinstate's
+ * own re-record). The line is then as it was before the first run, and the run decides from there.
+ *
+ * Only for an entrant still in the field (the caller has checked): a departed entrant's events are her finished withdrawal.
+ */
+async function reversePartialCascade(auth: AuthCtx, entrantId: string, divisionId: string): Promise<void> {
+  const [stages, fixtures, entrants] = await Promise.all([
+    listStages(auth, divisionId),
+    listDivisionFixtures(auth, divisionId),
+    listEntrants(auth, divisionId),
+  ]);
+  const open = new Set(stages.filter((st) => TABLE_KINDS.has(st.kind) && st.status !== "complete").map((st) => st.id));
+  const gone = new Set(entrants.filter((e) => DEPARTED_STATUSES.has(e.status)).map((e) => e.id));
+  const scratch: ReinstateTableOut = { voided: 0, rerecorded: 0, not_restored: [] };
+  for (const f of fixtures as unknown as FixtureRowLite[]) {
+    if (!open.has(f.stage_id) || (f.home_entrant_id !== entrantId && f.away_entrant_id !== entrantId)) continue;
+    const other = f.home_entrant_id === entrantId ? f.away_entrant_id : f.home_entrant_id;
+    if (other === null || gone.has(other)) continue;
+    const events = await listEvents(auth, f.id, 0);
+    const own = cascadeEventsOf(events, entrantId);
+    if (own.length === 0) continue;
+    const bySeq = new Map(events.map((e) => [e.seq, e]));
+    const removed: string[] = [];
+    for (const e of own) {
+      if (e.type !== "core.abandon") continue;
+      for (let seq = e.seq - 1; bySeq.get(seq)?.type === "core.void"; seq--) removed.push(bySeq.get(seq)!.voids_event_id as string);
+    }
+    for (const e of own) {
+      const state = await getFixtureState(auth, f.id);
+      await scoreEvent(auth, f.id, { expected_seq: state.last_seq, type: "core.void", payload: { event_id: e.id } }, CASCADE);
+    }
+    if (removed.length > 0 && !(await rerecordRemoved(auth, f.id, removed, scratch))) {
+      log.warn({ fixture: f.id, entrantId }, "withdrawal: resuming a cut-off cascade, a removed result could not be put back");
+    }
+  }
+}
+
+async function runWithdrawEntrantCascade(
+  auth: AuthCtx,
+  entrantId: string,
+  opts: { as?: "withdrawn" | "disqualified"; actor?: CascadeActor },
 ): Promise<WithdrawCascadeOut> {
   const as = opts.as ?? "withdrawn";
   const entrant = await getEntrant(auth, entrantId);
@@ -440,6 +546,8 @@ export async function withdrawEntrantCascade(
   // generated) are regenerated from the field anyway — plain status flip.
   // W3 T15: "started" is T9's one predicate (`divisionHasStarted`, controller ruling C17), read here rather than restated.
   if (await withTenant(auth.orgId, (tx) => divisionHasStarted(tx, division.id))) {
+    // Re-review (I): a run cut off part-way left settles behind; take them back so this run decides as the first did.
+    if (!DEPARTED_STATUSES.has(entrant.status)) await reversePartialCascade(auth, entrantId, division.id);
     // W4 T13 (RB4-V2, X-LL-1): a qualifier whose main-draw round-1 line has not started takes a lucky loser in her seat
     // FIRST, so the line below is no longer hers and walks nobody over. Its own transaction, committed before the
     // settles (ruling 101), and published like any seat write.
@@ -739,33 +847,27 @@ export async function withdrawEntrantCascade(
  * logged; she is still in the field (the cascade writes her status last), so the organiser's Disqualify finishes it.
  */
 /**
- * W5 T8b review I2 (a): how long after its triggering write (a registration's `withdrawn_at`, a disqualifying forfeit's
- * `recorded_at`) a RETRY of that write may run the withdrawal again for an entrant still in the field. The cascade takes no
- * lock, so a retry racing the first attempt (a double POST, a lost-ack resend) would run a second cascade beside it; those
- * arrive within seconds, while a cascade that genuinely failed is still owed a minute later. Past the window the retry runs
- * it; within it the retry answers as before. The desk's "withdrawal owed" item names her either way.
+ * W5 T8b re-review (I): is the withdrawal a trigger owed (a registration withdrawn after Start, a disqualifying forfeit — both
+ * at `at`) still not done? DONE is keyed on the cascade's LAST write — her departed status, written after every settle and
+ * after the `table_withdrawal` rows (the refold that follows it is derived, recomputed by any later fold) — never on an
+ * intermediate settle: a run cut off part-way has written walkovers and expunges but not her status, and is owed. So: owed
+ * while she is still in the field, unless the organiser has REINSTATED her since the trigger — read from Reinstate's own write,
+ * a `table_withdrawal_voided` row (on or after `at`) voiding a `table_withdrawal` row about her. The ONE reading for the desk's
+ * "withdrawal did not finish" row and for both retries, so a Reinstate is neither flagged nor withdrawn again by a retry.
+ *
+ * Limit (recorded): a finished cascade that wrote NO table row — her open stages were Swiss or brackets only, which RB5-W7 does
+ * not ledger — then Reinstated leaves no durable trace of either, so it reads as owed. A durable "departed at" (a column set in
+ * the status write) would close it; it is a schema change, left to the controller.
  */
-export const CASCADE_RETRY_AFTER_MS = 60_000;
-
-/**
- * W5 T8b review I2: has a withdrawal cascade for this entrant left its trace since `at` (the trigger: a registration withdrawn
- * after Start, a disqualifying forfeit)? Its own events on her lines — an expunge abandon, her `withdrew` walkover — active or
- * since voided, or a `table_withdrawal` ledger row about her (its `_voided` twin is a Reinstate's). The ONE reading of "the
- * withdrawal this trigger owed has run", for the desk's "withdrawal did not finish" row and for both retries: a cascade that
- * finished and was then undone by Reinstate leaves its trace, so a reinstated entrant is never read as owed — and a retry never
- * withdraws her again over the organiser's Reinstate.
- */
-export async function cascadeTraceSince(tx: Tx, divisionId: string, entrantId: string, at: Date): Promise<boolean> {
-  const [row] = await tx<{ hit: boolean }[]>`
-    select exists (select 1 from score_events ev join fixtures f on f.id = ev.fixture_id
-                    where f.division_id = ${divisionId} and ${entrantId} in (f.home_entrant_id, f.away_entrant_id)
-                      and ev.recorded_at >= ${at}
-                      and ((ev.type = 'core.abandon' and ev.payload ->> 'expunge' = 'true')
-                        or (ev.type = 'core.forfeit' and ev.payload ->> 'reason' = ${REASON} and ev.payload ->> 'by' = ${entrantId})))
-        or exists (select 1 from division_events de
-                    where de.division_id = ${divisionId} and de.type in (${TABLE_WITHDRAWAL_ROW}, ${TABLE_WITHDRAWAL_VOIDED_ROW})
-                      and de.payload ->> 'entrant_id' = ${entrantId} and de.created_at >= ${at}) as hit`;
-  return row?.hit === true;
+export async function withdrawalOwedSince(tx: Tx, divisionId: string, entrantId: string, at: Date): Promise<boolean> {
+  const [row] = await tx<{ status: string | null; reversed: boolean }[]>`
+    select (select status from entrants where id = ${entrantId}) as status,
+           exists (select 1 from division_events w
+                     join division_events v on v.division_id = w.division_id and v.type = ${TABLE_WITHDRAWAL_VOIDED_ROW}
+                                           and (v.payload ->> 'voids_seq')::int = w.seq
+                    where w.division_id = ${divisionId} and w.type = ${TABLE_WITHDRAWAL_ROW}
+                      and w.payload ->> 'entrant_id' = ${entrantId} and v.created_at >= ${at}) as reversed`;
+  return row !== undefined && row.status !== null && !DEPARTED_STATUSES.has(row.status) && !row.reversed;
 }
 
 /** The refusal an organiser's (or a scorer's) Undo of a disqualifying forfeit meets while the disqualification stands. */
@@ -820,15 +922,16 @@ export async function disqualifyFromMatch(
     if (line.entrant_status === null || DEPARTED_STATUSES.has(line.entrant_status)) return null;
     // Review I2: only a disqualification that stands is owed a withdrawal (a replay of one since undone is not).
     if (line.forfeit_at === null) return null;
-    // Review I2 (a): a replayed write retries a cascade still owed — once the first attempt has had its window to finish.
+    // Review I2 (a): a replayed write retries a cascade still owed (re-review: one at a time under the cascade's lock, so a
+    // resend racing the first run waits for it and then finds her gone). A Reinstate since the forfeit stands.
     if (opts.retry === true) {
-      if (Date.now() - line.forfeit_at.getTime() < CASCADE_RETRY_AFTER_MS) return null;
-      // A cascade that ran (and a Reinstate since undid) is not owed again: the organiser's Reinstate stands.
       const forfeitAt = line.forfeit_at;
-      if (await withTenant(auth.orgId, (tx) => cascadeTraceSince(tx, line.division_id, by, forfeitAt))) return null;
+      if (!(await withTenant(auth.orgId, (tx) => withdrawalOwedSince(tx, line.division_id, by, forfeitAt)))) return null;
     }
     return await withdrawEntrantCascade(cascadeAuthFor(auth.orgId, auth.userId), by, { as: "disqualified" });
   } catch (err) {
+    // A run that waited behind another and found her already gone: the withdrawal is done, nothing failed.
+    if (typeof by === "string" && DEPARTED_STATUSES.has((await getEntrant(auth, by).catch(() => null))?.status ?? "")) return null;
     log.error(
       { err, fixture: fixtureId, entrant: by },
       "withdrawal: an in-match disqualification stands, but the table withdrawal failed — the organiser's Disqualify finishes it",
