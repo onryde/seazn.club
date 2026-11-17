@@ -728,5 +728,12 @@ test.describe("X-RP-2, X-RP-3 a started league's pair cannot change partners; lo
     await expect.poll(async () => (await apiJson<{ status: string }>(request, `/api/v1/entrants/${leaverId}`)).data!.status, { timeout: 20_000 }).toBe("withdrawn");
     expect((await mine()).map((f) => f.status), "all three of her lines taken out").toEqual(["abandoned", "abandoned", "abandoned"]);
     expect(others.length, "anti-vacuity: three opposing pairs").toBe(3);
+    // Fix round 1 (I1): the withdrawn pair's card shows the roster the pair had - BOTH partners, re-seeded from the server's answer, never
+    // the staged one-partner roster - and it is read-only: there is no Save roster to press (the record is frozen; Reinstate first).
+    await expect(rosterBox.getByText(keep.name, { exact: true })).toBeVisible();
+    await expect(rosterBox.getByText(go.name, { exact: true }), "the partner who left is still on the pair's record").toBeVisible();
+    await expect(saveRoster(page), "no live Save on a withdrawn pair").toHaveCount(0);
+    await expect(rosterBox.getByRole("button", { name: uiEn["entrants.roster.remove"] }), "nothing to remove on a frozen record").toHaveCount(0);
+    expect(await storedMembers(request, leaverId), "the server kept both people").toBe(roster);
   });
 });

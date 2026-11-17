@@ -988,38 +988,43 @@ function refreshEntrantPublicPages(scope: EntrantPublicScope, context: Record<st
 }
 
 /**
- * W5 T10 (X-RP-2, X-RP-3; RB5-R2, RB5-R3, R12; rulings 282, 290): what a `members` edit of a PAIR means once its division's root
+ * W5 T10 (X-RP-2, X-RP-3; RB5-R2, RB5-R3, R12; rulings 282, 290): what a roster edit of a PAIR means once its division's root
  * league or group has started (`hasRootTableStage` + `divisionHasStarted`, the late-entry door's own "running" reading).
- * - `refuse`: anyone joining (R12a, a substitute partner — a lineup matter, deferred), for a pair that is in the field or would
- *   be after this patch; and a partner leaving as a departed pair comes back (a Reinstate may not return a pair that is not
- *   whole). Nothing is written.
- * - `dissolve`: a partner leaving with nobody joining, for a pair in the field (R12b): the pair withdraws as the entrant.
- * - `none`: everything else — before Start, a team or an individual, a roster that names the same people, a pair already
- *   departed that stays so (its record is inert). `patchEntrant` goes on as it always did.
+ * - `refuse`: anyone joining a pair in the field (R12a, a substitute partner - a lineup matter, deferred); and ANY change to
+ *   the roster of a departed pair (fix round 1, I1: a withdrawn pair's record is FROZEN - were it editable, a plain Reinstate
+ *   would put a one-partner or substitute pair back into the started table). Nothing is written.
+ * - `dissolve`: a partner leaving a pair in the field with nobody joining (R12b): the pair withdraws as the entrant.
+ * - `none`: everything else - before Start, a team or an individual, a roster that names the same people.
  * A Reinstate is a `status`-only patch, which never reaches here (no `members`), so the refusal cannot block one.
+ * Shared by every door that rewrites or adds to a roster: `patchEntrant`, the squad sync, the import's `roster.add` and a
+ * placed solo sign-up's release.
  */
-async function pairRosterVerdict(auth: AuthCtx, id: string, patch: PatchEntrant): Promise<PairRosterVerdict> {
-  if (patch.members === undefined) return "none";
-  const next = patch.members.map((m) => m.person_id);
-  return withTenant(auth.orgId, (tx) => pairRosterVerdictTx(tx, id, next, patch.status));
-}
+export type PairRosterVerdict = "none" | "refuse" | "dissolve";
 
-type PairRosterVerdict = "none" | "refuse" | "dissolve";
-
-async function pairRosterVerdictTx(tx: Tx, id: string, next: readonly string[], statusAfter: string | undefined): Promise<PairRosterVerdict> {
+/** The pair entrant `id` when it sits in a division whose root league or group has started; null for anything else (a team, an
+ *  individual, a pair before Start or in a division with no such table, an unknown id). */
+export async function startedTablePair(tx: Tx, id: string): Promise<{ status: string; division_id: string } | null> {
   const [e] = await tx<{ kind: string; status: string; division_id: string }[]>`
     select kind, status, division_id from entrants where id = ${id}`;
-  if (e === undefined || e.kind !== "pair") return "none";
-  if (!(await hasRootTableStage(tx, e.division_id)) || !(await divisionHasStarted(tx, e.division_id))) return "none";
+  if (e === undefined || e.kind !== "pair") return null;
+  if (!(await hasRootTableStage(tx, e.division_id)) || !(await divisionHasStarted(tx, e.division_id))) return null;
+  return { status: e.status, division_id: e.division_id };
+}
+
+export async function pairRosterVerdictTx(tx: Tx, id: string, next: readonly string[]): Promise<PairRosterVerdict> {
+  const e = await startedTablePair(tx, id);
+  if (e === null) return "none";
   const current = (await tx<{ person_id: string }[]>`select person_id from entrant_members where entrant_id = ${id}`).map((m) => m.person_id);
   const change = classifyPairRosterChange(current, next);
   if (change === "same") return "none";
-  const inField = inTheField(e);
-  const inFieldAfter = inTheField({ status: statusAfter ?? e.status });
-  if (change === "substitutes") return inField || inFieldAfter ? "refuse" : "none";
-  // change === "drops"
-  if (inField) return "dissolve";
-  return inFieldAfter ? "refuse" : "none";
+  if (!inTheField(e)) return "refuse";
+  return change === "substitutes" ? "refuse" : "dissolve";
+}
+
+async function pairRosterVerdict(auth: AuthCtx, id: string, patch: PatchEntrant): Promise<PairRosterVerdict> {
+  if (patch.members === undefined) return "none";
+  const next = patch.members.map((m) => m.person_id);
+  return withTenant(auth.orgId, (tx) => pairRosterVerdictTx(tx, id, next));
 }
 
 /**
@@ -1315,7 +1320,7 @@ export async function syncEntrantRosterFromSquad(
     // W5 T10 (R12): a squad sync rewrites the roster whole, so a started pair's partner cannot change through it either — the
     // squad that now names someone else, or fewer, is the same edit `patchEntrant` judges. A sync never withdraws a pair on its
     // own: the organiser withdraws it (the pointer in the refusal), so `dissolve` is a refusal here too.
-    if ((await pairRosterVerdictTx(tx, id, members.map((m) => m.person_id), undefined)) !== "none") {
+    if ((await pairRosterVerdictTx(tx, id, members.map((m) => m.person_id))) !== "none") {
       throw roundRobinRefusal("RR_SUBSTITUTE_PARTNER_REFUSED");
     }
     await seatGate?.assertRoster(tx, row.division_id, members.map((m) => m.person_id));

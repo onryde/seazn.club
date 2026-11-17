@@ -39,6 +39,7 @@ import {
   assertOrganiserPromotionHasRoom,
   openRegistrationSeatGateFor,
   releaseSoloSignUpPlacement,
+  dissolvePairsAfterRelease,
   withdrawRegistrationOrganiser,
   clearExpiresIfNoLongerNeeded,
   refundEntryUnderLock,
@@ -238,6 +239,7 @@ export async function rejectRegistration(
         refundable: null as RegistrationWithGroupRow | null,
         refundCents: 0,
         mailIds: [] as string[],
+        pairLosses: [] as string[],
       };
     }
     if (reg.status !== "pending" && reg.status !== "paid") {
@@ -256,7 +258,9 @@ export async function rejectRegistration(
     // on. Same shared helper withdrawCore and the expiry sweep use: rejection
     // is a status change, so V388's delete cascade never fires and the
     // placement would outlive the entry that created it.
-    await releaseSoloSignUpPlacement(tx, regId);
+    // W5 T10 fix round 1 (R12): a pair of a started league or group that loses its placed solo withdraws, after this commits.
+    const pairLosses: string[] = [];
+    await releaseSoloSignUpPlacement(tx, regId, pairLosses);
     await clearExpiresIfNoLongerNeeded(tx, reg.group_id, reg.id);
     // RS012 `/code-review high` finding 1 (Site B) — `reg` is read once
     // before the lock above and never mutates its own `free_agent` (that
@@ -297,8 +301,10 @@ export async function rejectRegistration(
       refundable: reg.status === "paid" ? reg : null,
       refundCents,
       mailIds,
+      pairLosses,
     };
   });
+  await dissolvePairsAfterRelease(auth.orgId, regId, result.pairLosses, "organiser", auth.userId);
   if (result.mailIds.length > 0) deferred(() => dispatchNow(result.mailIds));
   fireDivisionRevalidate(result.row.division_id, result.competitionId ?? undefined);
   if (result.promoted) {

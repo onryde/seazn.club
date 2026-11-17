@@ -130,7 +130,7 @@ export {
 } from "./refunds";
 export type { ResolvedRefundPolicy } from "./refunds";
 export { handleRegistrationDispute, buildDisputeEvidence, disputeOutcomeSql } from "./disputes";
-export { releaseSoloSignUpPlacement } from "./withdraw";
+export { releaseSoloSignUpPlacement, dissolvePairsAfterRelease } from "./withdraw";
 export { queueRegistrationApprovedMails, queueRegistrationJoinedMail, queueRegistrationRejectedMails } from "./lifecycle-mail";
 export {
   publicRegistrationStatus,

@@ -887,6 +887,7 @@ export function EntrantsPanel({
                   // W4 T19 (K13): a REINSTATE into a started knockout answers how the player rejoins it — waiting for the
                   // organiser's Add to bracket, or back on the list with their place played on. Said, never a silent flip.
                   if (res !== undefined && patch.status === "registered") sayReinstated(e.id, res);
+                  return res;
                 }}
                 onWithdraw={async () => {
                   // Withdrawal mid-tournament does fixture surgery (spec 05
@@ -1983,7 +1984,9 @@ export function EntrantTableRow({
   deletable: boolean;
   /** The Name field's save: its own request, never the panel-wide busy. */
   onRename: (next: string) => Promise<void>;
-  onPatch: (patch: Record<string, unknown>) => void;
+  /** Resolves to the entrant the server answered with (its `members` are what a saved roster re-seeds the editor from), or
+   *  undefined when the write was refused. */
+  onPatch: (patch: Record<string, unknown>) => void | Promise<unknown>;
   /** Withdraw with fixture surgery (spec 05 §5) — confirm handled upstream. */
   onWithdraw: () => void;
   /** Disqualify (ruling 258) - confirm handled upstream; sends `PATCH /entrants/{id}` `{ status: "disqualified" }`. */
@@ -2204,15 +2207,17 @@ export function EntrantTableRow({
                 persons={persons}
                 positionGroups={positionGroups}
                 roles={roles}
-                canEdit={canEdit}
+                // W5 T10 fix round 1 (R12, I1): a departed PAIR's roster is frozen once play has started (the server refuses any
+                // change), so its card shows the roster read-only - Reinstate first.
+                canEdit={canEdit && !(withdrawn && entrant.kind === "pair")}
                 busy={busy}
                 allowCaptain={entrantModel.captain}
                 allowSquadNumbers={entrantModel.squadNumbers}
                 entrantModel={entrantModel}
                 eligibility={eligibility}
                 conflictsFor={(personId) => otherTeamsFor(personId, entrant.id)}
-                onSave={(next) =>
-                  onPatch({
+                onSave={async (next) => {
+                  const res = await onPatch({
                     members: next.map((m) => ({
                       person_id: m.person_id,
                       squad_number: m.squad_number,
@@ -2220,8 +2225,15 @@ export function EntrantTableRow({
                       is_captain: m.is_captain,
                       roles: m.roles,
                     })),
-                  })
-                }
+                  });
+                  // Re-seed from the server's own answer: a pair that LOST a partner is withdrawn with its roster kept as it was
+                  // (R12b), so the editor must not go on showing the staged one-partner roster.
+                  const saved = (res as { members?: Member[] } | undefined)?.members;
+                  if (Array.isArray(saved)) {
+                    setMembers(saved);
+                    setRosterVersion((v) => v + 1);
+                  }
+                }}
               />
             )}
           </td>

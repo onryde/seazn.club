@@ -199,11 +199,13 @@ describe.skipIf(!HAS_DB)("X-RP-2 (RB5-R2): a pair that loses a partner after Sta
     expect(await statusOf(leaver.id)).toBe("withdrawn");
     const events = await eventCount(r.stageId);
     expect(await withdrawalRows(r.divisionId)).toHaveLength(1);
-    // She is departed: a later roster edit settles nothing again and writes no second ledger row.
-    await patchEntrant(r.auth, leaver.id, { members: [member(leaver.a)] });
+    // She is departed: a later roster edit is REFUSED (the record is frozen, fix round 1 I1), so it settles nothing again and
+    // writes no second ledger row.
+    await expect(patchEntrant(r.auth, leaver.id, { members: [member(leaver.a)] })).rejects.toMatchObject({ status: 422, code: "RR_SUBSTITUTE_PARTNER_REFUSED" });
     expect(await withdrawalRows(r.divisionId), "no second ledger row").toHaveLength(1);
     expect(await eventCount(r.stageId), "no second settle").toBe(events);
     expect(await statusOf(leaver.id)).toBe("withdrawn");
+    expect(await rosterOf(r.auth, leaver.id), "the emptied-roster edit never rewrote the record").toEqual([leaver.a, leaver.b].sort());
   }, 200_000);
 
   it("X-RP-2 the rest of the patch lands, and a disqualifying patch dissolves the pair as a disqualification", async () => {
@@ -297,6 +299,43 @@ describe.skipIf(!HAS_DB)("X-RP-3 (RB5-R3): a substitute partner is refused", () 
     expect(await statusOf(pair.id)).toBe("registered");
     expect(await eventCount(r.stageId), "no score event written").toBe(events);
     expect(await withdrawalRows(r.divisionId), "no ledger row").toEqual([]);
+  }, 200_000);
+});
+
+describe.skipIf(!HAS_DB)("X-RP-3 (fix round 1, I1) a withdrawn pair's roster is frozen, so Reinstate restores the pair that left", () => {
+  it("dissolve, then a members-only edit of the withdrawn pair is refused (fewer, a substitute, a squad sync), then a plain Reinstate restores the ORIGINAL two-member pair", async () => {
+    // differential: at 69e0044f08 a departed pair that stayed departed returned `none`, so the members-only edit was written and
+    // the plain Reinstate then put a one-partner or substitute pair back into the started league.
+    const r = await rig(GENERIC, 4);
+    const pair = r.pairs[0]!;
+    await wins(r, pair.id, 1);
+    await patchEntrant(r.auth, pair.id, { members: [member(pair.a)] });
+    expect(await statusOf(pair.id), "premise: the pair withdrew").toBe("withdrawn");
+    const original = [pair.a, pair.b].sort();
+    expect(await rosterOf(r.auth, pair.id), "premise: the record stands").toEqual(original);
+
+    const newcomer = await r.person("Frozen Sub");
+    let refused = 0;
+    for (const members of [[member(pair.a)], [member(pair.a), member(newcomer)], [member(newcomer)], []]) {
+      await expect(patchEntrant(r.auth, pair.id, { members })).rejects.toMatchObject({ status: 422, code: "RR_SUBSTITUTE_PARTNER_REFUSED" });
+      refused++;
+    }
+    // A squad sync that would change it is refused too.
+    const [{ id: teamId }] = await withTenant(r.auth.orgId, (tx) => tx<{ id: string }[]>`
+      insert into teams (org_id, name) values (${r.auth.orgId}, ${"Frozen FC " + randomUUID().slice(0, 6)}) returning id`);
+    await sql`update entrants set team_id = ${teamId} where id = ${pair.id}`;
+    await setTeamSquad(r.auth, teamId, [member(pair.a), member(newcomer)]);
+    await expect(syncEntrantRosterFromSquad(r.auth, pair.id)).rejects.toMatchObject({ status: 422, code: "RR_SUBSTITUTE_PARTNER_REFUSED" });
+    refused++;
+    expect(refused, "anti-vacuity: five refused edits").toBe(5);
+    expect(await rosterOf(r.auth, pair.id), "nothing was written").toEqual(original);
+
+    // The same two people re-saved (a captain flag) is no change of partners, withdrawn or not.
+    await patchEntrant(r.auth, pair.id, { members: [member(pair.b), member(pair.a, true)] });
+    // A plain Reinstate - the status alone - brings the pair that left back, whole.
+    await patchEntrant(r.auth, pair.id, { status: "registered" });
+    expect(await statusOf(pair.id)).toBe("registered");
+    expect(await rosterOf(r.auth, pair.id), "Reinstate restores the ORIGINAL two-member pair").toEqual(original);
   }, 200_000);
 });
 
