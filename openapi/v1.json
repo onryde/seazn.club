@@ -14053,6 +14053,35 @@
                               "additionalProperties": false
                             }
                           ]
+                        },
+                        "reinstate": {
+                          "type": "object",
+                          "properties": {
+                            "voided": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "rerecorded": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "not_restored": {
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              }
+                            }
+                          },
+                          "required": [
+                            "voided",
+                            "rerecorded",
+                            "not_restored"
+                          ],
+                          "additionalProperties": false
                         }
                       },
                       "required": [
@@ -14845,7 +14874,7 @@
         "tags": [
           "entrants"
         ],
-        "x-required-scope": "none",
+        "x-required-scope": "read",
         "parameters": [
           {
             "name": "id",
@@ -70196,7 +70225,7 @@
         "tags": [
           "scoring"
         ],
-        "x-required-scope": "none",
+        "x-required-scope": "score",
         "parameters": [
           {
             "name": "id",
