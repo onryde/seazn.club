@@ -295,6 +295,29 @@ describe("NeedsYou", () => {
     }
     expect(checked).toBe(2);
   });
+  // W5 T6 (X-CU-8): the same row for a running league or group (`table: true`) — the sentence says "table", never "bracket",
+  // in every locale; the action still opens the Fixtures tab.
+  it("X-CU-8 late_players_waiting on a table: 'add to the table', never 'bracket', in all four locales", () => {
+    const want = { 1: "1 late player waiting — add to the table", 3: "3 late players waiting — add to the table" } as const;
+    let checked = 0;
+    for (const count of [1, 3] as const) {
+      const d = div({ phase: "scheduled", attention: [{ kind: "late_players_waiting", count, stageName: "Table", table: true }] });
+      const [item, ...rest] = needsYouItems(en, desk(d, 1), names, "org", "comp", "en");
+      expect(rest, "one row").toEqual([]);
+      expect(item).toMatchObject({ kind: "late_players_waiting", severity: "amber", title: want[count] });
+      expect(item!.sub).toBe("Premier Division · Table: joined after Start, no fixtures yet.");
+      expect(item!.action).toEqual({ label: "Open fixtures", href: "/o/org/c/comp/d/premier-division?tab=fixtures" });
+      checked++;
+    }
+    for (const [loc, dict] of [["es", es], ["fr", fr], ["nl", nl]] as const) {
+      const d = div({ phase: "scheduled", attention: [{ kind: "late_players_waiting", count: 1, stageName: "Table", table: true }] });
+      const [item] = needsYouItems(dict, desk(d, 1), names, "org", "comp", loc);
+      expect(item!.title, loc).toBe(plural(dict, "roundrobin.lateWaiting", 1, loc));
+      expect(item!.title, `${loc}: not the knockout's sentence`).not.toBe(plural(dict, "knockout.lateWaiting", 1, loc));
+      checked++;
+    }
+    expect(checked).toBe(5);
+  });
   it("loop R M7(e): every Needs-you action is a 44px tap target below lg (768 and 834 are touch widths), compact only at lg", () => {
     // The desktop row (md and up) carried `py-1.5 text-xs` — 28px at 768, a touch width. Each row's two actions (the
     // phone stack and the md row) are read; every item, red and amber.

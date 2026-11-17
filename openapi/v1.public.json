@@ -23398,7 +23398,7 @@
     },
     "/api/v1/stages/{id}/late-entrants/{entrantId}/place": {
       "post": {
-        "summary": "W4 T11 (X-LE-10, ruling 271) — the organiser's one tap on a late player WAITING to join a started root knockout: an automatic arrival (a confirmed or paid registration, a waitlist promotion, an import, a Reinstate) is never placed by the app — it waits, flagged on the desk (late_players_waiting). No body. Runs the cases Add late player runs: the lowest-seeded holder's bye (case 'bye'), else a withdrawn entrant's seat with the walkover reversed (case 'withdrawn_slot'); a reinstated player only gets their own walked-over seat back. Placed: the marker clears and an undo barrier is written. No slot: 200 with case 'refused', or 'rebuild_offered' when nothing in the stage has started, reason KO_LATE_ENTRY_NO_SLOT — the player keeps waiting; with nothing started but the division's schedule frozen, case 'refused' with reason KO_LATE_ENTRY_SCHEDULE_FROZEN (Rebuild refuses a frozen schedule: unfreeze first) — the player keeps waiting. 409 KO_LATE_ENTRY_NOT_WAITING when the entrant does not wait on this stage; 422 KO_LATE_ENTRY_FED_STAGE when this knockout is filled from the stage the player waits on",
+        "summary": "W4 T11 (X-LE-10, ruling 271) — the organiser's one tap on a late player WAITING to join a started root knockout: an automatic arrival (a confirmed or paid registration, a waitlist promotion, an import, a Reinstate) is never placed by the app — it waits, flagged on the desk (late_players_waiting). A knockout reads no body. Runs the cases Add late player runs: the lowest-seeded holder's bye (case 'bye'), else a withdrawn entrant's seat with the walkover reversed (case 'withdrawn_slot'); a reinstated player only gets their own walked-over seat back. Placed: the marker clears and an undo barrier is written. No slot: 200 with case 'refused', or 'rebuild_offered' when nothing in the stage has started, reason KO_LATE_ENTRY_NO_SLOT — the player keeps waiting; with nothing started but the division's schedule frozen, case 'refused' with reason KO_LATE_ENTRY_SCHEDULE_FROZEN (Rebuild refuses a frozen schedule: unfreeze first) — the player keeps waiting. 409 KO_LATE_ENTRY_NOT_WAITING when the entrant does not wait on this stage; 422 KO_LATE_ENTRY_FED_STAGE when this knockout is filled from the stage the player waits on. W5 T6 (X-CU-8): on a running root LEAGUE or GROUP the same tap places a player waiting there (table_waiting_stage_id): the catch-up lines Add late player writes (case 'catch_up', or 'rebuild_offered' when nothing in the stage has started — the lines are written either way), unscheduled, with an undo barrier; the marker clears. Optional body pool_key: the group pool to join (else the smallest). 409 RR_LATE_ENTRY_ALREADY_PLACED when the player already holds a line of the stage (a second tap); 409 RR_LATE_ENTRY_NOT_WAITING when they do not wait on it; 422 RR_LATE_ENTRY_UNKNOWN_POOL / RR_LATE_ENTRY_STAGE_COMPLETE / RR_LATE_ENTRY_NOTHING_TO_ADD — the player keeps waiting",
         "tags": [
           "stages"
         ],
@@ -23423,6 +23423,27 @@
             }
           }
         ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "pool_key": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2
+                  }
+                },
+                "additionalProperties": false
+              },
+              "example": {
+                "pool_key": "ex"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Success",
@@ -23440,65 +23461,161 @@
                       "const": true
                     },
                     "data": {
-                      "type": "object",
-                      "properties": {
-                        "format": {
-                          "type": "string",
-                          "const": "knockout"
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "format": {
+                              "type": "string",
+                              "const": "knockout"
+                            },
+                            "entrant_id": {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                            },
+                            "stage_id": {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                            },
+                            "case": {
+                              "type": "string",
+                              "enum": [
+                                "bye",
+                                "withdrawn_slot",
+                                "waiting",
+                                "refused",
+                                "rebuild_offered"
+                              ]
+                            },
+                            "fixture_id": {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                            },
+                            "opponent_id": {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                            },
+                            "withdrawn_id": {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                            },
+                            "scheduled": {
+                              "type": "boolean"
+                            },
+                            "schedule_frozen": {
+                              "type": "boolean",
+                              "const": true
+                            },
+                            "reason": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "format",
+                            "entrant_id",
+                            "stage_id",
+                            "case"
+                          ],
+                          "additionalProperties": false
                         },
-                        "entrant_id": {
-                          "type": "string",
-                          "format": "uuid",
-                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                        },
-                        "stage_id": {
-                          "type": "string",
-                          "format": "uuid",
-                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                        },
-                        "case": {
-                          "type": "string",
-                          "enum": [
-                            "bye",
-                            "withdrawn_slot",
-                            "waiting",
-                            "refused",
-                            "rebuild_offered"
-                          ]
-                        },
-                        "fixture_id": {
-                          "type": "string",
-                          "format": "uuid",
-                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                        },
-                        "opponent_id": {
-                          "type": "string",
-                          "format": "uuid",
-                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                        },
-                        "withdrawn_id": {
-                          "type": "string",
-                          "format": "uuid",
-                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                        },
-                        "scheduled": {
-                          "type": "boolean"
-                        },
-                        "schedule_frozen": {
-                          "type": "boolean",
-                          "const": true
-                        },
-                        "reason": {
-                          "type": "string"
+                        {
+                          "type": "object",
+                          "properties": {
+                            "format": {
+                              "type": "string",
+                              "enum": [
+                                "league",
+                                "group"
+                              ]
+                            },
+                            "entrant_id": {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                            },
+                            "stage_id": {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                            },
+                            "case": {
+                              "type": "string",
+                              "enum": [
+                                "catch_up",
+                                "rebuild_offered",
+                                "refused",
+                                "waiting"
+                              ]
+                            },
+                            "source": {
+                              "type": "string",
+                              "enum": [
+                                "organiser",
+                                "automatic"
+                              ]
+                            },
+                            "pool_key": {
+                              "type": "string"
+                            },
+                            "fixtures": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "fixture_id": {
+                                    "type": "string",
+                                    "format": "uuid",
+                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                  },
+                                  "round_no": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "placement": {
+                                    "type": "string",
+                                    "enum": [
+                                      "bye_slot",
+                                      "catch_up_round"
+                                    ]
+                                  },
+                                  "scheduled": {
+                                    "type": "boolean"
+                                  }
+                                },
+                                "required": [
+                                  "fixture_id",
+                                  "round_no",
+                                  "placement",
+                                  "scheduled"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "appended_rounds": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "reason": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "format",
+                            "entrant_id",
+                            "stage_id",
+                            "case",
+                            "source"
+                          ],
+                          "additionalProperties": false
                         }
-                      },
-                      "required": [
-                        "format",
-                        "entrant_id",
-                        "stage_id",
-                        "case"
-                      ],
-                      "additionalProperties": false
+                      ]
                     },
                     "requestId": {
                       "type": "string",

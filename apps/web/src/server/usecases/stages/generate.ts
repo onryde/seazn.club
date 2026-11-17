@@ -308,6 +308,8 @@ export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Prom
     // W4 T11 (X-LE-10): Rebuild draws every active entrant, so nobody waits on this stage any more — the late players the
     // desk flagged are in the new bracket, and the flag goes with them.
     await tx`update entrants set knockout_waiting_stage_id = null where knockout_waiting_stage_id = ${stageId}`;
+    // W5 T6 (X-CU-8; storage table G7): the same for a league or group — the late arrivals waiting on it are in the redraw.
+    await tx`update entrants set table_waiting_stage_id = null where table_waiting_stage_id = ${stageId}`;
     return regen;
   });
 

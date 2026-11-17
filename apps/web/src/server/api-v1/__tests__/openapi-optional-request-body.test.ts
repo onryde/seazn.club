@@ -38,6 +38,13 @@ describe("OpenAPI — an optional request body is documented as optional", () =>
     });
   }
 
+  // W5 T6 (X-CU-8): the tap on a waiting late player reads an optional `{ pool_key }` (a group's pool); the W4 call sends none.
+  it("POST /stages/{id}/late-entrants/{entrantId}/place has a body schema that is NOT required", () => {
+    const place = op(buildOpenApiDocument(), "/api/v1/stages/{id}/late-entrants/{entrantId}/place", "post");
+    expect(place.requestBody?.content["application/json"]).toBeDefined();
+    expect(place.requestBody!.required).toBe(false);
+  });
+
   it("a body route without the opt-out is still required (control)", () => {
     const promote = op(buildOpenApiDocument(), PROMOTE, "post");
     expect(promote.requestBody?.required).toBe(true);

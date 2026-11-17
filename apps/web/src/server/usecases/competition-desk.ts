@@ -502,15 +502,18 @@ export async function getCompetitionDesk(
     const fixturesToday = await countFixturesToday(tx, competitionId, now);
     // W4 T11 (X-LE-10, K7): late players waiting to join a started root knockout — entrants still in the field whose
     // marker names a stage not yet complete (a complete stage has no round 1 left to join), counted per stage.
+    // W5 T6 (X-CU-8): and those waiting to join a running root league or group (`table_waiting_stage_id`, V526) — `table`
+    // says which, so the row reads "add to the table", not "add to bracket". An entrant waits on one stage at most (a
+    // division's entry stage is one kind), so the two markers never count one entrant twice.
     const lateWaiting = ids.length
-      ? await tx<{ division_id: string; stage_name: string; count: number }[]>`
-          select e.division_id, s.name as stage_name, count(*)::int as count
+      ? await tx<{ division_id: string; stage_name: string; count: number; is_table: boolean }[]>`
+          select e.division_id, s.name as stage_name, count(*)::int as count, s.kind in ('league', 'group') as is_table
             from entrants e
-            join stages s on s.id = e.knockout_waiting_stage_id
+            join stages s on s.id = coalesce(e.knockout_waiting_stage_id, e.table_waiting_stage_id)
            where e.division_id = any(${ids})
              and s.status <> 'complete'
              and e.status not in ${tx([...DEPARTED_STATUSES])}
-           group by e.division_id, s.id, s.name, s.seq
+           group by e.division_id, s.id, s.name, s.seq, s.kind
            order by s.seq`
       : [];
     return { orgTz: resolveVenueTz(null, org?.timezone), stages, fixtures, settings, fixturesWithOfficial, fixturesWithLink, fixturesToday, lateWaiting };
@@ -641,7 +644,9 @@ export async function getCompetitionDesk(
       // any sport, and without a model there is no Discipline tab for "Review" to open. The module is resolved only for
       // a division with something to show.
       bansToReview: disciplineEntitled && (s?.bans_to_review ?? 0) > 0 && hasDisciplineTab(d) ? s!.bans_to_review : 0,
-      lateWaiting: lateWaiting.filter((w) => w.division_id === d.id).map((w) => ({ stageName: w.stage_name, count: w.count })),
+      lateWaiting: lateWaiting
+        .filter((w) => w.division_id === d.id)
+        .map((w) => ({ stageName: w.stage_name, count: w.count, ...(w.is_table ? { table: true as const } : {}) })),
     };
     const attention = resolveAttention(input);
     const needsDraw = attention.find((a) => a.kind === "needs_draw");

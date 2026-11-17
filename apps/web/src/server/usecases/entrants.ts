@@ -1080,6 +1080,12 @@ export async function writeEntrantPatch(
     // statuses, or between two active ones, is not.
     const fieldChanged =
       prior !== undefined && DEPARTED_STATUSES.has(prior.status) !== DEPARTED_STATUSES.has(row.status);
+    // W5 T6 (X-CU-8; ruling 288's cleanup, storage table G7): an entrant LEAVING the field stops waiting for a table place, in the
+    // transaction that writes the status — the withdrawal cascade's own final write (C6) and a bare status flip alike. A waiting
+    // entrant holds no line, so this is all the cascade owes them; the desk count and the tap then forget them.
+    if (fieldChanged && DEPARTED_STATUSES.has(row.status)) {
+      await tx`update entrants set table_waiting_stage_id = null where id = ${id} and table_waiting_stage_id is not null`;
+    }
     // W4 T19 (K13): how a reinstated player rejoins the division's running entry stage — the reply carries it, so the
     // desk can say "waiting to join the bracket" or "their place has been played on" instead of a silent flip.
     let late: LateEntryResult | null = null;
@@ -1098,7 +1104,10 @@ export async function writeEntrantPatch(
       late = revived
         ? null
         : (await admitSwissLateEntrant(tx, auth, row.division_id, id, "reinstate")) ??
-          (await admitKnockoutLateEntrant(tx, auth, row.division_id, id, "reinstate"));
+          (await admitKnockoutLateEntrant(tx, auth, row.division_id, id, "reinstate")) ??
+          // W5 T6 (X-CU-8): a running root league or group — a reinstated entrant whose lines still exist keeps them and
+          // never waits; one with no fixture in the stage waits for the organiser's tap. Never refused.
+          ((await admitTableLateEntrant(tx, auth, row.division_id, id, "reinstate"))?.result ?? null);
       if (late) [row] = await tx<EntrantRow[]>`select ${tx(COLS)} from entrants where id = ${id}`;
     }
     if (members) {

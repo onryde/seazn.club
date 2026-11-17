@@ -12,6 +12,9 @@ import "server-only";
 // Every new line is UNSCHEDULED (RB5-L13: no time, no court; the desk counts it) and carries a catch-up key (`rr-by-` / `rr-cu-`),
 // and every placing add writes one `roundrobin_late_entry` ledger row, an undo barrier (RB5-L14: Undo refuses and points to
 // Withdraw). The decision is the pure `lib/roundrobin-late-entry.ts`; this file reads the stage, asks it, and writes the answer.
+// W5 app-A Task 6 (X-CU-8; RB5-L10): an AUTOMATIC arrival (registration, waitlist promotion, import, Reinstate) is never placed and
+// never refused — it waits under `entrants.table_waiting_stage_id` (`markTableWaiting`), and the organiser's one tap
+// (`placeWaitingTableEntrant`) runs the same placing core as "Add late player" (`placeInRootTable`) under the division lock.
 //
 // The predicate is `isRootTableStage` (lib/open-entry-stages.ts): the ONE rule the Start lock, the admission and the desk's client
 // mirror all read, so they cannot disagree. Only the division's ENTRY stage is root: a group stage fed by an earlier one (a
@@ -19,7 +22,9 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import type postgres from "postgres";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import type { TableLateEntryResult } from "@/server/api-v1/schemas";
+import type { KnockoutLateEntryResult, TableLateEntryResult } from "@/server/api-v1/schemas";
+import { withTenant } from "@/lib/db";
+import { HttpError } from "@/lib/errors";
 import { isRootTableStage, tableLateEntryOffered } from "@/lib/open-entry-stages";
 import { isRrExtKey, rrLinesOfRows, type RrStoredRow } from "@/lib/roundrobin-reconcile";
 import {
@@ -31,7 +36,9 @@ import {
   type ExistingLine,
   type RoundRobinLateDecision,
 } from "@/lib/roundrobin-late-entry";
+import { DEPARTED_STATUSES } from "./entrants";
 import { fixtureStartedSql, stageHasStarted } from "./fixture-started-sql";
+import { placeWaitingKnockoutEntrant } from "./knockout-late-entry";
 import { roundRobinRefusal } from "./roundrobin-refusal";
 import { afterScheduleWrite } from "./schedule/after-write";
 import {
@@ -301,32 +308,24 @@ export interface TableAdmission {
 }
 
 /**
- * Admit `entrantId` (already inserted) into the division's running root league or group. Null when there is nothing to do: an
- * automatic arrival (it waits for the organiser's tap — Task 6), the division has not started (before Start, Generate's reconcile
- * places a newcomer), it has no root table, or the table is not drawn yet (`tableLateEntryOffered`: a later Generate draws the
- * newcomer in). A refusal throws (RR_LATE_ENTRY_STAGE_COMPLETE, RR_LATE_ENTRY_NOTHING_TO_ADD, RR_LATE_ENTRY_UNKNOWN_POOL) and
- * rolls the caller's whole write back, the entrant row with it.
+ * The placing core, shared by the organiser's add (`admitTableLateEntrant`) and the tap on a waiting arrival
+ * (`placeWaitingTableEntrant`) — ONE copy of the cases. The caller holds the `division:` lock and passes `stage` taken FROM
+ * `stages` (the predicates compare stages by identity). Null when the table is not drawn yet (`tableLateEntryOffered`: a later
+ * Generate draws the newcomer in). A refusal throws (RR_LATE_ENTRY_STAGE_COMPLETE, RR_LATE_ENTRY_NOTHING_TO_ADD,
+ * RR_LATE_ENTRY_UNKNOWN_POOL) and rolls the caller's whole write back.
  */
-export async function admitTableLateEntrant(
+async function placeInRootTable(
   tx: Tx,
   auth: AuthCtx | null,
   divisionId: string,
+  stages: TableEntryStage[],
+  stage: TableEntryStage,
   entrantId: string,
   source: LateEntrySource,
-  opts: { poolKey?: string; preferRebuild?: boolean } = {},
+  opts: { poolKey?: string; preferRebuild?: boolean },
 ): Promise<TableAdmission | null> {
-  if (source !== "organiser") return null;
-  // Read BEFORE the lock, as the Swiss and knockout admissions do: most arrivals land in a division with no root table.
-  if (!(await hasRootTableStage(tx, divisionId)) || !(await divisionHasStarted(tx, divisionId))) return null;
-  await tx`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
-  const stages = await divisionStages(tx, divisionId);
-  // The stage object is taken FROM the list the predicates read: they compare stages by identity (`divisionEntryStage`).
-  const stage = stages.find((s) => isRootTableStage(s, stages));
-  if (stage === undefined) return null;
   if (stage.status === "complete") throw roundRobinRefusal("RR_LATE_ENTRY_STAGE_COMPLETE");
-  const [division] = await tx<{ status: string }[]>`select status from divisions where id = ${divisionId}`;
-  const [line] = await tx`select 1 from fixtures where stage_id = ${stage.id} limit 1`;
-  if (!tableLateEntryOffered({ stage, division: stages, divisionStatus: division!.status, generated: line !== undefined })) return null;
+  if (!(await tableDrawnAndOffered(tx, divisionId, stages, stage))) return null;
 
   // The append lock of every line of the stage (`fixture:<id>`, the key each score append takes), before `started` is read: a
   // scorer starting a bye-slot round either commits first (and the read sees it) or waits on the finished write.
@@ -338,11 +337,13 @@ export async function admitTableLateEntrant(
   const ctx: TableLateContext = { divisionId, actorId: auth?.userId ?? null, source, poolId: place.poolId, poolKey: place.poolKey };
 
   if (decision.case === "rebuild_offered" && opts.preferRebuild === true) {
-    if (auth === null) throw new Error("admitTableLateEntrant: a rebuild is an organiser's own write and needs their auth");
+    if (auth === null) throw new Error("placeInRootTable: a rebuild is an organiser's own write and needs their auth");
     // RB5-L7: nothing has started, and the organiser asked for the clean path — Rebuild's own body (one transaction, slots carried,
     // a group re-snaked), with the newcomer already on the roster it draws from.
     await refuseFormatTooSmall(tx, divisionId);
     const regen = await regenerateStageInTx(tx, auth, stage.id, { division_id: divisionId, kind: stage.kind });
+    // W5 T6: the redraw seated every active entrant, a waiting arrival included — nobody waits on this stage any more.
+    await clearTableWaitingMarks(tx, stage.id);
     const mine = await tx<{ id: string; round_no: number }[]>`
       select id, round_no from fixtures where stage_id = ${stage.id} and ${entrantId} in (home_entrant_id, away_entrant_id) order by round_no`;
     await appendUndoBarrierRow(
@@ -358,6 +359,130 @@ export async function admitTableLateEntrant(
     };
   }
   return { result: await applyTableLateDecision(tx, stage, entrantId, decision, ctx) };
+}
+
+/** Whether the root table is drawn and takes a late player (`tableLateEntryOffered`, the ONE rule the Start lock and the desk read). */
+async function tableDrawnAndOffered(tx: Tx, divisionId: string, stages: TableEntryStage[], stage: TableEntryStage): Promise<boolean> {
+  const [division] = await tx<{ status: string }[]>`select status from divisions where id = ${divisionId}`;
+  const [line] = await tx`select 1 from fixtures where stage_id = ${stage.id} limit 1`;
+  return tableLateEntryOffered({ stage, division: stages, divisionStatus: division!.status, generated: line !== undefined });
+}
+
+/** Rebuild (and an add that redraws, `prefer_rebuild`) seats every active entrant: no marker on the stage survives it. The
+ *  storage table's cleanup path for `table_waiting_stage_id` (G7); `rebuildStageFixtures` runs the same statement. */
+async function clearTableWaitingMarks(tx: Tx, stageId: string): Promise<void> {
+  await tx`update entrants set table_waiting_stage_id = null where table_waiting_stage_id = ${stageId}`;
+}
+
+/**
+ * W5 T6 (X-CU-8, RB5-L10; the W4 `markWaiting` precedent): an AUTOMATIC arrival — a confirmed or paid registration (every
+ * confirm / approve / waive / webhook door goes through `materialise`), a waitlist promotion, an import, a Reinstate — is never
+ * placed by the app and never refused (a payment that has moved cannot be un-taken by a 409). It WAITS:
+ * `table_waiting_stage_id` names the stage, the desk counts it (`late_players_waiting`, `table: true`), and the organiser's one
+ * tap (`placeWaitingTableEntrant`) runs the cases.
+ *
+ * - The stage is COMPLETE: nothing is marked (a finished table takes no one, RB5-L8 — V526's own ruling) and the arrival still
+ *   commits; the answer SAYS so (`refused`, RR_LATE_ENTRY_STAGE_COMPLETE), never a throw.
+ * - The table is not drawn: null (a later Generate draws them in).
+ * - The entrant already holds a fixture of ANY kind in the stage (a Reinstate whose lines still exist): null — they never wait.
+ *   "Seatless" is V526's backfill predicate (no fixture at all), so the column's two writers agree on who waits.
+ * - Otherwise the marker is written. Idempotent: the same value on a retry (a webhook redelivery never reaches here twice anyway:
+ *   `materialise` returns early once the registration holds its entrant), so one arrival is one flag.
+ */
+async function markTableWaiting(
+  tx: Tx,
+  divisionId: string,
+  stages: TableEntryStage[],
+  stage: TableEntryStage,
+  entrantId: string,
+): Promise<TableAdmission | null> {
+  const base = { format: stage.kind === "group" ? ("group" as const) : ("league" as const), entrant_id: entrantId, stage_id: stage.id, source: "automatic" as const };
+  if (stage.status === "complete") return { result: { ...base, case: "refused", reason: "RR_LATE_ENTRY_STAGE_COMPLETE" } };
+  if (!(await tableDrawnAndOffered(tx, divisionId, stages, stage))) return null;
+  const [seat] = await tx`select 1 from fixtures where stage_id = ${stage.id} and ${entrantId} in (home_entrant_id, away_entrant_id) limit 1`;
+  if (seat !== undefined) return null;
+  await tx`update entrants set table_waiting_stage_id = ${stage.id} where id = ${entrantId}`;
+  return { result: { ...base, case: "waiting" } };
+}
+
+/**
+ * Admit `entrantId` (already inserted, or just reinstated) into the division's running root league or group. Null when there is
+ * nothing to do: the division has not started (before Start, Generate's reconcile places a newcomer), it has no root table, or
+ * the table is not drawn yet. An organiser's add is placed now (`placeInRootTable`); every other source is an automatic arrival,
+ * which waits (`markTableWaiting`, T6) and is never refused.
+ */
+export async function admitTableLateEntrant(
+  tx: Tx,
+  auth: AuthCtx | null,
+  divisionId: string,
+  entrantId: string,
+  source: LateEntrySource,
+  opts: { poolKey?: string; preferRebuild?: boolean } = {},
+): Promise<TableAdmission | null> {
+  // Read BEFORE the lock, as the Swiss and knockout admissions do: most arrivals land in a division with no root table.
+  if (!(await hasRootTableStage(tx, divisionId)) || !(await divisionHasStarted(tx, divisionId))) return null;
+  await tx`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
+  const stages = await divisionStages(tx, divisionId);
+  // The stage object is taken FROM the list the predicates read: they compare stages by identity (`divisionEntryStage`).
+  const stage = stages.find((s) => isRootTableStage(s, stages));
+  if (stage === undefined) return null;
+  if (source !== "organiser") return markTableWaiting(tx, divisionId, stages, stage, entrantId);
+  return placeInRootTable(tx, auth, divisionId, stages, stage, entrantId, source, opts);
+}
+
+/**
+ * W5 T6 (X-CU-8; Review Focus 2): the organiser's one tap on an entrant WAITING to join `stageId` — `POST
+ * /stages/{id}/late-entrants/{entrantId}/place` (the route dispatches here for a league or group, `placeWaitingLateEntrant`).
+ * Under the `division:` lock — taken BEFORE the marker is read, so two taps on one player are one placement: the second reads
+ * the marker the first cleared and is answered RR_LATE_ENTRY_ALREADY_PLACED — it runs Task 5's placing core
+ * (`placeInRootTable`, source `organiser`: the catch-up lines, unscheduled; the `roundrobin_late_entry` ledger row with its
+ * `fixture_ids`, which the Joined marker reads), then clears the marker. `poolKey` names a group's pool (else the smallest).
+ *
+ * Refused by name: RR_LATE_ENTRY_ALREADY_PLACED when the entrant (still in the field) already holds a line of this stage;
+ * RR_LATE_ENTRY_NOT_WAITING when they do not wait on this stage (never marked, withdrawn since, swept up by a Rebuild, another
+ * division's); the placing core's own refusals roll back and leave them waiting. 404 for an unknown stage.
+ */
+export async function placeWaitingTableEntrant(auth: AuthCtx, stageId: string, entrantId: string, poolKey?: string): Promise<TableLateEntryResult> {
+  const { admission, divisionId, competitionId } = await withTenant(auth.orgId, async (tx) => {
+    const [st] = await tx<{ division_id: string; competition_id: string }[]>`
+      select s.division_id, d.competition_id from stages s join divisions d on d.id = s.division_id where s.id = ${stageId}`;
+    if (st === undefined) throw new HttpError(404, "stage not found");
+    await tx`select pg_advisory_xact_lock(hashtext(${"division:" + st.division_id}))`;
+    const stages = await divisionStages(tx, st.division_id);
+    const stage = stages.find((s) => s.id === stageId && isRootTableStage(s, stages));
+    const [e] = await tx<{ status: string; waiting: string | null }[]>`
+      select status, table_waiting_stage_id as waiting from entrants where id = ${entrantId} and division_id = ${st.division_id}`;
+    const inField = e !== undefined && !DEPARTED_STATUSES.has(e.status);
+    if (stage === undefined || !inField || e.waiting !== stageId) {
+      const [seat] = inField
+        ? await tx`select 1 from fixtures where stage_id = ${stageId} and ${entrantId} in (home_entrant_id, away_entrant_id) limit 1`
+        : [];
+      throw roundRobinRefusal(seat !== undefined ? "RR_LATE_ENTRY_ALREADY_PLACED" : "RR_LATE_ENTRY_NOT_WAITING");
+    }
+    const placed = await placeInRootTable(tx, auth, st.division_id, stages, stage, entrantId, "organiser", poolKey === undefined ? {} : { poolKey });
+    // A marker names a drawn table (`markTableWaiting` writes it only then, and Rebuild clears it): an undrawn one here is a
+    // marker no writer should have left, answered by name rather than placed against nothing.
+    if (placed === null) throw roundRobinRefusal("RR_LATE_ENTRY_NOT_WAITING");
+    await tx`update entrants set table_waiting_stage_id = null where id = ${entrantId}`;
+    return { admission: placed, divisionId: st.division_id, competitionId: st.competition_id };
+  });
+  await afterTableLateEntry(auth, divisionId, competitionId, [admission]);
+  return admission.result;
+}
+
+/** The route's dispatch (`POST /stages/{id}/late-entrants/{entrantId}/place`): a league or group stage takes the table tap, every
+ *  other stage the knockout one (W4 T11), whose own refusals answer a stage it does not own. */
+export async function placeWaitingLateEntrant(
+  auth: AuthCtx,
+  stageId: string,
+  entrantId: string,
+  poolKey?: string,
+): Promise<TableLateEntryResult | KnockoutLateEntryResult> {
+  const [st] = await withTenant(auth.orgId, (tx) => tx<{ kind: string }[]>`select kind from stages where id = ${stageId}`);
+  if (st === undefined) throw new HttpError(404, "stage not found");
+  return st.kind === "league" || st.kind === "group"
+    ? placeWaitingTableEntrant(auth, stageId, entrantId, poolKey)
+    : placeWaitingKnockoutEntrant(auth, stageId, entrantId);
 }
 
 /** After the adding write COMMITS: the new lines are told as a schedule write is, and the table refolds so the newcomer stands in

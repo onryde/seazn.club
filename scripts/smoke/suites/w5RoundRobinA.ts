@@ -24,12 +24,18 @@ import { call, check, newSession, signIn, tag, v1, v1data } from "../harness.ts"
  * T5b (X-CU-10; RB5-L5): the same late player's row in the PUBLIC hub document reads "Joined round 3" while her catch-up lines are
  * undecided (`tables[].rows[].markers`, read anonymously); main marked no league row at all.
  *
+ * T6 (X-CU-8; RB5-L10): an AUTOMATIC arrival into a started league waits for one tap. A league of five whose fifth player withdrew
+ * before Start is drawn as four; after round 1 starts, the fifth is reinstated — the PATCH answers `late_entry.case: "waiting"`
+ * (main: no answer, seated nowhere, no flag) and nothing is placed. The organiser's tap (`POST /stages/{id}/late-entrants/{id}/place`)
+ * writes one unscheduled catch-up line against each of the four, and a second tap is refused 409 RR_LATE_ENTRY_ALREADY_PLACED.
+ *
  * Every check is counted, and a run that checked nothing fails. SMOKE_ONLY=w5RoundRobinA runs it alone (SELECTABLE_SUITES).
  */
 export async function w5RoundRobinASuite(): Promise<void> {
   // T2: 2 (4 -> 6 reconciles by pair; a 5-team league persists its byes). T3: 1 (Add match lands in the round both sides are free).
   // T5: 2 (a late player's catch-up lines; Undo across the add refused by name). T5b: 1 (her hub row reads Joined round 3).
-  const EXPECTED_CHECKS = 6;
+  // T6: 1 (an automatic arrival waits; one tap places it; a second tap is refused by name).
+  const EXPECTED_CHECKS = 7;
   let checked = 0;
   const w5Check = (label: string, cond: boolean) => {
     checked++;
@@ -225,6 +231,40 @@ export async function w5RoundRobinASuite(): Promise<void> {
     w5Check(
       "w5a X-CU-10: the public hub marks a late player's row 'Joined round 3' while her catch-up lines remain, and no other row" +
         (ok ? "" : ` - add ${addRes.status}, hub ${hubRes.status}, tables ${tables.length}, rows ${rows.length}, hers ${JSON.stringify(mine?.markers ?? null)}, others marked ${others.filter((r) => (r.markers ?? []).length > 0).length}`),
+      ok,
+    );
+  }
+
+  // Check 7 - X-CU-8 / RB5-L10: a reinstated player with no line waits; one tap writes her catch-up lines; a second tap is refused.
+  {
+    const l = await league("Wait", 5);
+    const ids = l.entrants.map((e) => e.id);
+    const gone = ids[4];
+    // Withdrawn before Start (a plain status flip); Generate then redraws the four still in the field.
+    const out = await v1(owner, `/api/v1/entrants/${gone}/withdraw`, "POST");
+    const regen = await l.generate();
+    const started = await v1(owner, `/api/v1/divisions/${l.divId}/start`, "POST");
+    const drawn = await l.fixtures();
+    const first = drawn.find((f) => f.round_no === 1);
+    const ev = await v1(owner, `/api/v1/fixtures/${first?.id}/events`, "POST", { expected_seq: 0, type: "core.start", payload: {} });
+    const back = await v1(owner, `/api/v1/entrants/${gone}`, "PATCH", { status: "registered" });
+    const answer = v1data<{ late_entry?: { case?: string; source?: string } } | undefined>(back)?.late_entry;
+    const placedBefore = (await l.fixtures()).filter((f) => f.home_entrant_id === gone || f.away_entrant_id === gone).length;
+    const tap = await v1(owner, `/api/v1/stages/${l.stageId}/late-entrants/${gone}/place`, "POST");
+    const tapCase = v1data<{ case?: string } | undefined>(tap)?.case;
+    const mine = (await l.fixtures()).filter((f) => f.home_entrant_id === gone || f.away_entrant_id === gone);
+    const opps = mine.map((f) => (f.home_entrant_id === gone ? f.away_entrant_id : f.home_entrant_id)).sort().join(",");
+    const again = await v1(owner, `/api/v1/stages/${l.stageId}/late-entrants/${gone}/place`, "POST");
+    const ok =
+      out.status === 200 && regen.status === 200 && started.status === 200 && drawn.length === 6 &&
+      drawn.every((f) => f.home_entrant_id !== gone && f.away_entrant_id !== gone) && ev.status === 201 && back.status === 200 &&
+      answer?.case === "waiting" && answer.source === "automatic" && placedBefore === 0 &&
+      tap.status === 200 && tapCase === "catch_up" && mine.length === 4 && opps === ids.slice(0, 4).sort().join(",") &&
+      mine.every((f) => (f.scheduled_at ?? null) === null) &&
+      again.status === 409 && again.json.error?.code === "RR_LATE_ENTRY_ALREADY_PLACED";
+    w5Check(
+      "w5a X-CU-8: a reinstated player with no line waits (nothing placed); one tap writes 4 unscheduled catch-up lines; a second tap is RR_LATE_ENTRY_ALREADY_PLACED" +
+        (ok ? "" : ` - withdraw ${out.status}, generate ${regen.status}, start ${started.status}, drawn ${drawn.length}, ev ${ev.status}, back ${back.status}, answer ${JSON.stringify(answer ?? null)}, before ${placedBefore}, tap ${tap.status}/${tapCase}, mine ${mine.length}, again ${again.status}/${again.json.error?.code}`),
       ok,
     );
   }

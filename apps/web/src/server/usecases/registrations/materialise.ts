@@ -2,6 +2,7 @@ import "server-only";
 // Confirmed entry -> entrant: materialise, join an existing entrant, clear the expiry (see ./index.ts).
 // W3 T9 (X-SW-13): a confirmed entry or a promotion into a running Swiss is an automatic arrival — case (c) only.
 import { admitKnockoutLateEntrant } from "../knockout-late-entry";
+import { admitTableLateEntrant } from "../roundrobin-late-entry";
 import { admitSwissLateEntrant } from "../swiss-late-entry";
 import { appendToLadderOrder } from "../ladder-late-entry";
 import { divisionPlaysOnline } from "@/server/external-play/online-play";
@@ -229,9 +230,12 @@ export async function materialise(
   // moved cannot be un-taken by a 409). Null before Start, or with no running Swiss.
   // W4 T11 (X-LE-10, K7, ruling 271): or its started root knockout — where the arrival WAITS, flagged on the desk for the
   // organiser's one tap, never placed by the app and never refused. A division's entry stage is one or the other.
-  if ((await admitSwissLateEntrant(tx, null, reg.division_id, entrant.id, arrival)) === null) {
-    await admitKnockoutLateEntrant(tx, null, reg.division_id, entrant.id, arrival);
-  }
+  // W5 T6 (X-CU-8, RB5-L10): or its running root league or group — where the arrival waits the same way
+  // (`table_waiting_stage_id`), flagged on the desk for the organiser's one tap; never placed, never refused.
+  const late =
+    (await admitSwissLateEntrant(tx, null, reg.division_id, entrant.id, arrival)) ??
+    (await admitKnockoutLateEntrant(tx, null, reg.division_id, entrant.id, arrival));
+  if (late === null) await admitTableLateEntrant(tx, null, reg.division_id, entrant.id, arrival);
   // A running ladder takes the confirmed entry at the bottom of its order (a no-op for any other format).
   await appendToLadderOrder(tx, reg.division_id);
   await tx`

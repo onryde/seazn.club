@@ -1,5 +1,6 @@
 import { test, expect, type APIRequestContext } from "@playwright/test";
-import { TAG, apiJson, divisionPath, expectNoHorizontalScroll, seedVenueWithCourts, activeOrgIdFromRequest } from "./helpers";
+import { TAG, apiJson, competitionPath, divisionPath, expectNoHorizontalScroll, seedVenueWithCourts, activeOrgIdFromRequest } from "./helpers";
+import { dismissCookieBanner } from "./scorepad-a11y-kit";
 import { showAllFixtures, stageFixtures, type Fx } from "./support/swiss-app-a-kit";
 
 // W5 round-robin app PR A, Task 2 (X-CU-6 FX-G1 #879; FX-G21; #837; X-BD-5). A pre-Start Generate on a league used to insert by
@@ -376,5 +377,84 @@ test.describe("X-CU-7 a late player gets catch-up fixtures", () => {
     expect(undo.status).toBe(409);
     expect(undo.error?.code).toBe("RR_LATE_ENTRY_NOT_UNDOABLE");
     expect(await stageFixtures(request, divisionId, stageId), "the refused Undo moved nothing").toHaveLength(after.length);
+  });
+});
+
+// W5 app PR A, Task 6 (X-CU-8; RB5-L10; ruling 271's rule for tables). An AUTOMATIC arrival into a started league is never placed
+// by the app and never refused: before this task it was seated nowhere and flagged nowhere. It now WAITS — the competition desk
+// says "1 late player waiting — add to the table" (the approved sentence, typed here) — and the organiser's one tap
+// (`POST /stages/{id}/late-entrants/{entrantId}/place`, the route W4 built, now dispatched by the stage's kind) writes the
+// catch-up lines. The arrival comes through the PUBLIC register door, auto-approved: the same `materialise` every paid, approved,
+// waived and webhook confirmation runs (a test has no Stripe, so the door is the free one). Expected: the newcomer meets each of
+// the four (RB5-L3), every line unscheduled (RB5-L13); a second tap is refused by name (Review Focus 2).
+async function registerLate(request: APIRequestContext, competitionId: string, divisionId: string, who: string): Promise<string> {
+  const settings = await apiJson(request, `/api/v1/divisions/${divisionId}/registration-settings`, "PUT", {
+    enabled: true,
+    entrant_kind: "individual",
+    fee_cents: 0,
+    payment_method: "offline",
+    form_fields: [],
+    approval: "auto",
+  });
+  expect(settings.status, JSON.stringify(settings.error)).toBeLessThan(300);
+  const path = await competitionPath(request, competitionId);
+  const [, orgSlug, compSlug] = /^\/o\/([^/]+)\/c\/([^/]+)/.exec(path)!;
+  const sent = await apiJson<{ entries: { status: string }[] }>(request, `/api/v1/public/orgs/${orgSlug}/competitions/${compSlug}/register`, "POST", {
+    contact: { name: who, email: `delivered+${TAG.toLowerCase().replace(/\W+/g, "-")}-${Math.random().toString(36).slice(2, 8)}@resend.dev` },
+    privacy_consent: true,
+    entries: [{ division_id: divisionId, entrant_kind: "individual", players: [{ full_name: who }], answers: {} }],
+  });
+  expect(sent.status, JSON.stringify(sent.error)).toBe(201);
+  expect(sent.data!.entries[0]!.status, "premise: confirmed at once").toBe("confirmed");
+  const list = await apiJson<{ id: string; display_name: string }[]>(request, `/api/v1/divisions/${divisionId}/entrants`);
+  const entrant = list.data!.find((e) => e.display_name === who);
+  expect(entrant, "premise: the confirmation made an entrant").toBeTruthy();
+  return entrant!.id;
+}
+
+test.describe("X-CU-8 a paid player waits, then one tap places them", () => {
+  test("a registration confirmed after Start: the desk flags one late player for the table; the tap writes four unscheduled catch-up lines; a second tap is RR_LATE_ENTRY_ALREADY_PLACED", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(120_000);
+    const { divisionId, stageId, ids } = await seedLeague(request, "Waits", 4, "public");
+    expect((await generate(request, stageId)).status).toBe(200);
+    const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
+    expect(started.status, JSON.stringify(started.error)).toBe(200);
+    const before = (await stageFixtures(request, divisionId, stageId)) as Pairing[];
+    expect(before, "premise: four players, six lines").toHaveLength(6);
+    const first = before.find((f) => f.round_no === 1)!;
+    const ev = await apiJson(request, `/api/v1/fixtures/${first.id}/events`, "POST", { expected_seq: 0, type: "core.start", payload: {} });
+    expect(ev.status, JSON.stringify(ev.error)).toBe(201);
+
+    const div = await apiJson<{ competition_id: string }>(request, `/api/v1/divisions/${divisionId}`);
+    const competitionId = div.data!.competition_id;
+    const lateId = await registerLate(request, competitionId, divisionId, `Waits Newcomer ${TAG}`);
+    const waiting = (await stageFixtures(request, divisionId, stageId)) as Pairing[];
+    expect(waiting.some((f) => f.home_entrant_id === lateId || f.away_entrant_id === lateId), "the app placed nobody").toBe(false);
+    expect(waiting).toHaveLength(6);
+
+    await page.goto(await competitionPath(request, competitionId));
+    await dismissCookieBanner(page);
+    const flag = page.locator('[data-attention="late_players_waiting"]').first();
+    await expect(flag, "the desk flags the waiting player").toContainText("1 late player waiting — add to the table", { timeout: 20_000 });
+    await expect(flag).not.toContainText("bracket");
+
+    type Tap = { format: string; case: string; source: string; fixtures?: { fixture_id: string; scheduled: boolean }[] };
+    const tap = await apiJson<Tap>(request, `/api/v1/stages/${stageId}/late-entrants/${lateId}/place`, "POST");
+    expect(tap.status, JSON.stringify(tap.error)).toBe(200);
+    expect(tap.data).toMatchObject({ format: "league", case: "catch_up", source: "organiser" });
+    const after = (await stageFixtures(request, divisionId, stageId)) as (Pairing & { scheduled_at?: string | null })[];
+    const mine = after.filter((f) => f.home_entrant_id === lateId || f.away_entrant_id === lateId);
+    const opponents = mine.map((f) => (f.home_entrant_id === lateId ? f.away_entrant_id! : f.home_entrant_id!)).sort();
+    expect(opponents, "one line against each of the four").toEqual([...ids].sort());
+    expect(mine.every((f) => (f.scheduled_at ?? null) === null), "every catch-up line is unscheduled").toBe(true);
+    expect((tap.data!.fixtures ?? []).map((f) => f.fixture_id).sort()).toEqual(mine.map((f) => f.id).sort());
+
+    await page.reload();
+    await expect(page.locator('[data-attention="late_players_waiting"]'), "the desk row goes").toHaveCount(0, { timeout: 20_000 });
+    const again = await apiJson(request, `/api/v1/stages/${stageId}/late-entrants/${lateId}/place`, "POST");
+    expect([again.status, again.error?.code, again.error?.message]).toEqual([409, "RR_LATE_ENTRY_ALREADY_PLACED", "This player already has their fixtures."]);
   });
 });

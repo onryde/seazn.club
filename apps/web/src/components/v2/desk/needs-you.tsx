@@ -205,12 +205,13 @@ export function needsYouItems(
         }
         // W4 T11 (X-LE-10; R24 pick 1A): late players waiting to join a started knockout — one row per division, its
         // stage named; "Open bracket" lands on the Fixtures tab, where the stage card offers Add to bracket per player.
+        // W5 T6 (X-CU-8): the same row for a running league or group (`a.table`), its copy saying "table".
         case "late_players_waiting":
           items.push({
             key: needsYouKey(d.id, "late_players_waiting"), severity: sev, kind: a.kind,
-            title: plural(dict, "knockout.lateWaiting", a.count, locale),
-            sub: t(dict, "knockout.lateWaiting.sub", { division: d.name, stage: a.stageName }),
-            action: { label: t(dict, "knockout.lateWaiting.action"), href: routes.division(org, comp, d.slug, "fixtures") },
+            title: a.table ? plural(dict, "roundrobin.lateWaiting", a.count, locale) : plural(dict, "knockout.lateWaiting", a.count, locale),
+            sub: t(dict, a.table ? "roundrobin.lateWaiting.sub" : "knockout.lateWaiting.sub", { division: d.name, stage: a.stageName }),
+            action: { label: t(dict, a.table ? "roundrobin.lateWaiting.action" : "knockout.lateWaiting.action"), href: routes.division(org, comp, d.slug, "fixtures") },
           });
           break;
         // W4 T21 (AN-1, X-CH-8): a bracket played out and never completed. The action is the fixtures tab's own

@@ -74,7 +74,8 @@ export {
 export {
   PersonLane, EntrantMemberInput, NewPersonMemberInput, CreateEntrantMemberInput, CreateEntrant, CreateEntrants,
   CreateTeam, SetTeamSquad, SyncEntrantRoster, PatchEntrant, Entrant, WithdrawCascadeReport, SwissLateEntryResult,
-  KnockoutLateEntryResult, TableLateEntryResult, LateEntryResult, PatchedEntrant, CreatedEntrant,
+  KnockoutLateEntryResult, TableLateEntryResult, LateEntryResult, PlaceLateEntrantInput, PlacedLateEntrantResult, PatchedEntrant,
+  CreatedEntrant,
 } from "./entrants.ts";
 export {
   Consent, CreatePerson, PatchPerson, MergePersons, ReverseMerge, PutProfile, Person, CreateClaimInvite, PersonClaim,

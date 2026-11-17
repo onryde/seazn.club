@@ -252,6 +252,18 @@ export const LateEntryResult = z.discriminatedUnion("format", [
 ]);
 export type LateEntryResult = z.infer<typeof LateEntryResult>;
 
+/** W5 T6 (X-CU-8): the organiser's tap on a waiting late player (`POST /stages/{id}/late-entrants/{entrantId}/place`). An
+ *  optional body: `pool_key` names the pool of a running group the player joins (else the smallest, ties by the seed snake);
+ *  ignored on a league and on a knockout. */
+export const PlaceLateEntrantInput = z.object({
+  pool_key: z.string().min(1).max(2).optional(),
+});
+export type PlaceLateEntrantInput = z.infer<typeof PlaceLateEntrantInput>;
+
+/** The tap's answer, by the stage's FORMAT: a knockout (W4 T11) or a league / group (W5 T6). */
+export const PlacedLateEntrantResult = z.discriminatedUnion("format", [KnockoutLateEntryResult, TableLateEntryResult]);
+export type PlacedLateEntrantResult = z.infer<typeof PlacedLateEntrantResult>;
+
 /** `PATCH /entrants/{id}`'s reply: the entrant, plus `cascade` when the patch disqualified an entrant still in the field
  *  (the withdrawal's fixture surgery ran, W3 T15). */
 export const PatchedEntrant = Entrant.extend({

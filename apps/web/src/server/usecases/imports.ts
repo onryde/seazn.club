@@ -42,6 +42,7 @@ import {
   type EligibilityRosterPlayer,
 } from "./registration-eligibility";
 import { admitKnockoutLateEntrant } from "./knockout-late-entry";
+import { admitTableLateEntrant } from "./roundrobin-late-entry";
 import { admitSwissLateEntrant } from "./swiss-late-entry";
 import { appendToLadderOrder } from "./ladder-late-entry";
 import { heldMemberships, personOnOtherTeamError, type HeldMembershipRow } from "./entrants";
@@ -732,9 +733,11 @@ async function executePlan(tx: Tx, auth: AuthCtx, ops: ImportOp[]): Promise<stri
         divisionIds.add(op.divisionId);
         // W3 T9 (X-SW-13): into a running Swiss an import is an automatic arrival — case (c), never a refusal.
         // W4 T11 (X-LE-10, K7): into a started root knockout it waits for the organiser's tap, never placed by the import.
-        if ((await admitSwissLateEntrant(tx, auth, op.divisionId, row!.id, "import")) === null) {
-          await admitKnockoutLateEntrant(tx, auth, op.divisionId, row!.id, "import");
-        }
+        // W5 T6 (X-CU-8): into a running root league or group it waits the same way (`table_waiting_stage_id`).
+        const late =
+          (await admitSwissLateEntrant(tx, auth, op.divisionId, row!.id, "import")) ??
+          (await admitKnockoutLateEntrant(tx, auth, op.divisionId, row!.id, "import"));
+        if (late === null) await admitTableLateEntrant(tx, auth, op.divisionId, row!.id, "import");
         // A running ladder: the imported entrant joins the bottom of its order (a no-op for any other format).
         await appendToLadderOrder(tx, op.divisionId);
         break;

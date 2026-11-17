@@ -824,6 +824,16 @@ describe("resolveAttention", () => {
         stageName: "Main",
       });
     });
+    it("X-CU-8 a table's waiting list carries `table: true` onto the row; a knockout's carries nothing", () => {
+      expect(resolveAttention(input({ lateWaiting: [{ stageName: "Table", count: 2, table: true }] }))).toContainEqual({
+        kind: "late_players_waiting",
+        count: 2,
+        stageName: "Table",
+        table: true,
+      });
+      const ko = resolveAttention(input({ lateWaiting: [{ stageName: "Cup", count: 1 }] })).find((a) => a.kind === "late_players_waiting");
+      expect(ko).toEqual({ kind: "late_players_waiting", count: 1, stageName: "Cup" });
+    });
     it("is AMBER — the player is owed a place, but every match already drawn can be played", () => {
       expect(ATTENTION_SEVERITY.late_players_waiting).toBe("amber");
     });

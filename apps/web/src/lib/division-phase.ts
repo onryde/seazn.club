@@ -223,7 +223,7 @@ export interface PhaseInput {
    *  registration, a waitlist promotion, an import, a Reinstate) the app never places — one entry per stage with any,
    *  its count of waiting entrants still in the field. The caller counts `entrants.knockout_waiting_stage_id` on stages
    *  not complete; empty for every other division. */
-  lateWaiting: readonly { stageName: string; count: number }[];
+  lateWaiting: readonly { stageName: string; count: number; table?: true }[];
 }
 
 /** WHICH control the seed-proposal panel is showing for a stage that owes
@@ -299,7 +299,9 @@ export type Attention =
   | { kind: "bans_waiting"; count: number }
   // W4 T11 (X-LE-10, ruling 271): late players waiting to join a started knockout's bracket — the organiser's one tap
   // places each (the bye, a withdrawn slot). Raised per stage, only after Start (the marker is written only then).
-  | { kind: "late_players_waiting"; count: number; stageName: string };
+  // W5 T6 (X-CU-8): `table: true` when they wait to join a running root league or group (`table_waiting_stage_id`) — the
+  // same tap, the copy says "table" instead of "bracket". Absent for a knockout.
+  | { kind: "late_players_waiting"; count: number; stageName: string; table?: true };
 
 export type Severity = "red" | "amber" | "slate";
 
@@ -1046,7 +1048,7 @@ export function resolveAttention(input: PhaseInput): Attention[] {
   // that somehow carried one would be asking the organiser to place a player into a bracket that has not been drawn.
   if (input.divisionStatus !== "setup") {
     for (const w of input.lateWaiting) {
-      if (w.count > 0) out.push({ kind: "late_players_waiting", count: w.count, stageName: w.stageName });
+      if (w.count > 0) out.push({ kind: "late_players_waiting", count: w.count, stageName: w.stageName, ...(w.table ? { table: true as const } : {}) });
     }
   }
   return out.sort(
