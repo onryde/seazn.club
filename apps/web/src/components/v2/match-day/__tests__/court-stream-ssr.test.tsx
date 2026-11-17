@@ -20,7 +20,6 @@ import {
 import { CourtFocus, type MatchDayCtx } from "@/components/v2/match-day/court-focus";
 import { CandidateRows, FreeCourtBody } from "@/components/v2/match-day/candidate-list";
 import { CourtList } from "@/components/v2/match-day/court-list";
-import { CourtTailCountdown } from "@/components/v2/match-day/court-tail-countdown";
 import { TargetPicker } from "@/components/v2/match-day/court-stream-sheet";
 import { levelWords } from "@/lib/score/levels";
 import publicEn from "@/dictionaries/en/public.json";
