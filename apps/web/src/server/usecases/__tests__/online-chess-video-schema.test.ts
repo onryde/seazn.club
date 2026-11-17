@@ -392,16 +392,38 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V451)", () => {
     it("side, left_by and source are closed sets: each listed value is accepted and an unlisted one refused (counted)", async () => {
       // The sets, typed from the design (§6.2) and the plan's brief, never read from the catalogue.
       const SETS = { side: ["home", "away"], left_by: ["left", "ended"], source: ["webhook", "read"] } as const;
+      // a left_by needs its left_at (the pair check below), so each left_by case carries one: the set check alone decides it
+      const withPair = (col: string, v: string) => (col === "left_by" ? { left_by: v, left_at: "2026-11-17T10:00:00.000Z" } : { [col]: v });
       let checked = 0;
       for (const [col, values] of Object.entries(SETS)) {
         for (const v of values) {
-          expect(await rolledBack(presence({ [col]: v })), `${col} = ${v}`).toEqual({ accepted: true });
+          expect(await rolledBack(presence(withPair(col, v))), `${col} = ${v}`).toEqual({ accepted: true });
           checked += 1;
         }
-        expect(await rolledBack(presence({ [col]: "other" })), `${col} = other`).toMatchObject({ accepted: false, code: CHECK_VIOLATION });
+        expect(await rolledBack(presence(withPair(col, "other"))), `${col} = other`).toMatchObject({ accepted: false, code: CHECK_VIOLATION, constraint: `fixture_video_presence_${col}_check` });
         checked += 1;
       }
       expect(checked, "anti-vacuity: cases checked").toBe(9);
+    });
+
+    it("left_at and left_by are set TOGETHER: a stamp without its cause and a cause without its stamp are each refused, by name (batch-1 T2)", async () => {
+      // Every writer in presence.ts sets both or neither; this pins the table refusing a half-closed row. Positive pair: both
+      // null (open) and both set (closed) are accepted.
+      const AT = "2026-11-17T10:00:00.000Z";
+      const cases: [string, Record<string, string | null>, boolean][] = [
+        ["open: both null", { left_at: null, left_by: null }, true],
+        ["closed: both set", { left_at: AT, left_by: "left" }, true],
+        ["a stamp without its cause", { left_at: AT, left_by: null }, false],
+        ["a cause without its stamp", { left_at: null, left_by: "ended" }, false],
+      ];
+      let checked = 0;
+      for (const [why, cols, ok] of cases) {
+        const got = await rolledBack(presence(cols));
+        if (ok) expect(got, why).toEqual({ accepted: true });
+        else expect(got, why).toMatchObject({ accepted: false, code: CHECK_VIOLATION, constraint: "fixture_video_presence_left_pair_check" });
+        checked += 1;
+      }
+      expect(checked, "anti-vacuity: cases checked").toBe(4);
     });
 
     it("one presence row per (meeting, peer), one delivery per rtk-uuid, one end per (meeting, session); a second peer in the meeting is accepted", async () => {

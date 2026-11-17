@@ -49,7 +49,10 @@ create table fixture_video_presence (
   received_at           timestamptz not null default now(),
   -- the last tie-break of the presence order (joined_at, received_at, seq): two joins in one millisecond still order
   seq                   bigserial not null,
-  primary key (meeting_id, peer_id)
+  primary key (meeting_id, peer_id),
+  -- open with neither, closed with both: every writer (presence.ts) sets the stamp and its cause together, and a half-closed row
+  -- (a stamp nobody can attribute, or a cause with no instant) is refused rather than read as open by one reader and closed by another
+  constraint fixture_video_presence_left_pair_check check ((left_at is null) = (left_by is null))
 );
 create index fixture_video_presence_live_idx on fixture_video_presence (meeting_id, participant_id) where left_at is null;
 create index fixture_video_presence_custom_idx on fixture_video_presence (meeting_id, custom_participant_id);
