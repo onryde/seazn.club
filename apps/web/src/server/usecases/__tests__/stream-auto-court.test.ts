@@ -274,6 +274,33 @@ describe.skipIf(!HAS_DB)("a court's automatic start and handover", () => {
     expect(go).toMatchObject({ state: "go-live", next: nextB });
   });
 
+  it("D2 (device check 3): from the session's row to Open, every beat's `next` names A — requested and provisioning are not yet handed to the phone; Stream off is today's answer", async () => {
+    await streamOn(A);
+    await streamOn(B);
+    await kickoff(A, 0);
+    const nextA = { label: labelOf(day.comp, day.comp.fixtures[0]!), scheduledStart: null };
+    const nextB = { label: labelOf(day.comp, day.comp.fixtures[1]!), scheduledStart: Math.floor(at(30).getTime() / 1000) };
+    await beat(P);   // claims, and the start runs (`beat` runs the deferred tails)
+    const [sid] = await activeOfLink();
+    expect(sid, "premise: the start made A's session").toBeDefined();
+    // Staging's path: the row exists (the claim is no longer in flight) while the composed session is requested, then provisioning.
+    for (const state of ["requested", "provisioning"] as const) {
+      await sql`update fixture_stream_sessions set state = ${state} where id = ${sid!}`;
+      now += POLL_STARTING_SECONDS * SEC;
+      const w = await beat(P);
+      expect(w, state).toMatchObject({ state: "waiting", pollSeconds: POLL_STARTING_SECONDS, next: nextA });
+    }
+    // Stream off while provisioning (the switch's own stop is not this test's): the match is no longer the court's to name.
+    await sql`update fixture_stream_settings set court_stream = false where fixture_id = ${A}`;
+    now += POLL_STARTING_SECONDS * SEC;
+    expect((await beat(P)).next).toEqual(nextB);
+    await sql`update fixture_stream_settings set court_stream = true where fixture_id = ${A}`;
+    // Open (warming, go-live) names A by its sid; `next` is the usual one again.
+    await sql`update fixture_stream_sessions set state = 'warming' where id = ${sid!}`;
+    now += POLL_STARTING_SECONDS * SEC;
+    expect(await beat(P)).toMatchObject({ state: "go-live", sid, next: nextB });
+  });
+
   it("C2: a stored refusal is not a start in flight: the beat's `next` is the usual one, never the refused match", async () => {
     await streamOn(A);
     await streamOn(B);
