@@ -44,8 +44,8 @@ describe("buildPublicDivisionSlides", () => {
     const slides = await buildPublicDivisionSlides(input);
     const kinds = slides.map((s) => s.kind);
     expect(kinds).toEqual(["standings", "fixtures", "fixtures", "bracket"]);
-    // The en label from the dictionary file, over the KEY — not the stored name.
-    expect(slides[0]).toMatchObject({ caption: `Groups — ${enPublic["table.poolLabel"].replace("{key}", "A")}` });
+    // X-BD-7 (owner R24): a group stage of ONE pool is headed by the stage's name alone — never "Groups — Group A".
+    expect(slides[0]).toMatchObject({ caption: input.stages[0]!.name });
     expect(slides[1]).toMatchObject({ title: "In play", pinned: true });
     const bracket = slides[3] as { fixtures: { home: string | null }[] };
     expect(bracket.fixtures[0]).toMatchObject({ home: "Mexico", line: "1–0" });
@@ -126,19 +126,44 @@ describe("buildPublicDivisionSlides — orgLocale (P6 finding #2)", () => {
 // generator ever stores, the English "Pool " + key. A venue screen speaks the
 // ORG's locale, so the standings slide names the pool with that locale's
 // `table.poolLabel` over the pool's KEY — expected text read out of the
-// dictionary FILES, never through the builder.
+// dictionary FILES, never through the builder. X-BD-7 (W5 T3, owner R24): only
+// a stage of SEVERAL pools names them, so the label is proven on two pools; a
+// stage of ONE pool is headed by its name alone in every locale.
 describe("buildPublicDivisionSlides — the pool label is the org's locale's, from the key", () => {
-  it("captions the pooled standings slide in every locale from the key — never the stored English name", async () => {
-    const files: Record<string, Record<string, string>> = { en: enPublic, es: esPublic, fr: frPublic, nl: nlPublic };
+  const twoPools = {
+    ...input,
+    pools: [...input.pools, { id: "pB", stage_id: "sg", key: "B", name: "Pool B" }],
+    standings: [
+      ...input.standings,
+      { stage_id: "sg", pool_id: "pB", rows: [
+        { entrantId: "e3", played: 1, won: 1, drawn: 0, lost: 0, points: 3, rank: 1 },
+        { entrantId: "e4", played: 1, won: 0, drawn: 0, lost: 1, points: 0, rank: 2 },
+      ] },
+    ],
+  };
+  const files: Record<string, Record<string, string>> = { en: enPublic, es: esPublic, fr: frPublic, nl: nlPublic };
+  const captionsOf = async (data: typeof input, locale: string) =>
+    (await buildPublicDivisionSlides({ ...data, orgLocale: locale })).filter((s) => s.kind === "standings").map((s) => (s as { caption: string }).caption);
+
+  it("captions each pool of a several-pool stage in every locale from the key — never the stored English name", async () => {
     expect(files.es!["table.poolLabel"]!.replace("{key}", "A"), "premise").not.toBe("Pool A");
     let checked = 0;
     for (const locale of Object.keys(files)) {
-      const slides = await buildPublicDivisionSlides({ ...input, orgLocale: locale });
-      const captions = slides.filter((s) => s.kind === "standings").map((s) => (s as { caption: string }).caption);
-      expect(captions, locale).toEqual([`Groups — ${files[locale]!["table.poolLabel"]!.replace("{key}", "A")}`]);
+      const label = (key: string) => files[locale]!["table.poolLabel"]!.replace("{key}", key);
+      const captions = await captionsOf(twoPools, locale);
+      expect(captions, locale).toEqual([`Groups — ${label("A")}`, `Groups — ${label("B")}`]);
       checked += captions.length;
     }
-    // Anti-vacuity: one pooled slide, four locales.
+    // Anti-vacuity: two pooled slides, four locales.
+    expect(checked).toBe(8);
+  });
+
+  it("X-BD-7 a stage of ONE pool is headed by its name alone in every locale — no pool word", async () => {
+    let checked = 0;
+    for (const locale of Object.keys(files)) {
+      expect(await captionsOf(input, locale), locale).toEqual([input.stages[0]!.name]);
+      checked++;
+    }
     expect(checked).toBe(4);
   });
 });
