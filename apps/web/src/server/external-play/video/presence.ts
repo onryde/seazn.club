@@ -82,7 +82,8 @@ export function currentPeerOf(rows: readonly Pick<PresenceRow, "peerId" | "joine
 
 /** The receiver's ownership test (Global Constraints), and the board the rows are stamped with: the meeting's (fixture_id, side)
  *  from fixture_video_meetings, else from video_rooms_to_end, else from an existing presence row of that meeting; null when none
- *  (not ours: the receiver answers 200 ignored and writes nothing). Each lookup is keyed by meeting_id alone, which the video
+ *  (not ours: the receiver answers 200 ignored and writes nothing). The third arm reads only a presence row that CARRIES a board
+ *  (fixture_id and side both non-null): a row stored with none (a read for a meeting held nowhere) never makes its meeting held. Each lookup is keyed by meeting_id alone, which the video
  *  source guard classifies `other_key` (its own rule test, `video-per-player-source-guard.test.ts` line 146), not unkeyed. */
 export async function heldMeeting(db: AnySql, meetingId: string): Promise<{ fixtureId: string; side: Side } | null> {
   // One statement, three sources in priority order: the live row, the parked room, then the newest stamped presence row.
@@ -273,7 +274,9 @@ export async function recordPresenceFromRead(
     on conflict (meeting_id, peer_id) do nothing`;
 }
 
-/** Every peer of a participant in a meeting, in the presence order (oldest join first). */
+/** Every peer of a participant in a meeting, in the presence order (oldest join first). A row with a null joined_at (a left that
+ *  carried no joinedAt, its joined not yet arrived) sorts LAST, Postgres's ascending default; such a row is never current
+ *  (currentPeerOf skips it), so where it sits changes no answer, and the order is left as the shared one rather than `nulls first`. */
 export async function peersOf(db: AnySql, a: Who): Promise<Pick<PresenceRow, "peerId" | "sessionId" | "joinedAt" | "leftAt" | "leftBy" | "source">[]> {
   const rows = await db<{ peer_id: string; session_id: string | null; joined_at: Date | null; left_at: Date | null; left_by: "left" | "ended" | null; source: "webhook" | "read" }[]>`
     select peer_id, session_id, joined_at, left_at, left_by, source
@@ -290,7 +293,10 @@ export type ShadowReport = {
   verified: number;
   /** of those, the ones a `source='webhook'` row was OPEN for at the stamp: received_at <= stamp + SHADOW_ARRIVAL_TOLERANCE_MS
    *  and (left_at is null or left_at > stamp). A row is the seat's when it names the seat's participant, or names none and carries
-   *  the seat's person id as its custom id in the seat's meeting (the readers' rule). */
+   *  the seat's person id as its custom id in the seat's meeting (the readers' rule). CAVEAT: a webhook that UPGRADES a read row
+   *  keeps the read's received_at, so for such a row the tolerance measures the read's arrival, not the webhook's: once plan 2
+   *  writes read rows, a webhook that came late but upgraded an early read hint counts as covered. Rows here are written by
+   *  webhooks alone until then; plan 2 and the shadow script (Task 9) must read `covered` with that in mind. */
   covered: number;
   missing: { fixtureId: string; side: Side; participantId: string; seenAt: Date }[];
   /** presence rows in scope with left_at null at report time. Read at a quiescent point (every meeting in scope ended), any is a
