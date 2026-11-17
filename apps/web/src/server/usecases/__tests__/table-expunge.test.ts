@@ -23,7 +23,7 @@ import { createCompetition } from "../competitions";
 import { createDivision, patchDivision } from "../divisions";
 import { createEntrants, patchEntrant, writeEntrantPatch } from "../entrants";
 import { getFixtureState } from "../fixtures";
-import { undoBarrierRefusal } from "../history";
+import { divisionHistory, undoBarrierRefusal } from "../history";
 import { startDivision } from "../schedule";
 import { finalizeFixture, scoreEvent } from "../scoring";
 import { addFixture, completeStage, createStages, getStandings, refoldStageTable } from "../stages";
@@ -654,6 +654,25 @@ describe.skipIf(!HAS_DB)("X-WDT-8 (RB5-W6): Reinstate reverses the expunge or th
 });
 
 describe("Undo and the table-withdrawal rows", () => {
+  it("history lists an expunge and its Reinstate once each; the per-line rows never show", async () => {
+    // differential: before the filter, Recent edits and API v1 history listed every write-ahead line row and its retirement
+    // by raw type name — 2 per line — around the two real entries.
+    const r = await started(4);
+    const p1 = r.id.get("P1")!;
+    const hers = (await linesOf(r.stageId)).filter((l) => involves(l, p1));
+    await withdrawEntrantCascade(r.auth, p1);
+    await patchEntrant(r.auth, p1, { status: "registered" });
+    const [stored] = await sql<{ lines: number; retired: number }[]>`
+      select count(*) filter (where type = 'table_withdrawal_line')::int as lines,
+             count(*) filter (where type = 'table_withdrawal_line_voided')::int as retired
+        from division_events where division_id = ${r.divisionId}`;
+    expect([stored!.lines, stored!.retired], "premise: a row and a retirement per line are stored").toEqual([hers.length, hers.length]);
+    const listed = (await divisionHistory(r.auth, r.divisionId)).events.map((e) => e.type);
+    expect(listed.filter((t) => t.startsWith("table_withdrawal_line")), "no internal row is listed").toEqual([]);
+    expect(listed.filter((t) => t.startsWith("table_withdrawal")), "one entry for the withdrawal, one for the Reinstate (newest first)")
+      .toEqual(["table_withdrawal_voided", "table_withdrawal"]);
+  }, 120_000);
+
   it("the rows are not history steps and not barriers: Undo steps over them", () => {
     expect(isReversible("table_withdrawal"), "not a step Undo inverts").toBe(false);
     expect(isReversible("table_withdrawal_voided")).toBe(false);

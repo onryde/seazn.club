@@ -7059,6 +7059,8 @@
   "history.event.seedConfirmed": "Sorteo confirmado",
   "history.event.knockoutLateEntry": "Jugador tardío añadido al cuadro",
   "history.event.roundrobinLateEntry": "Jugador tardío añadido a la tabla",
+  "history.event.tableWithdrawal": "Retirada aplicada a la tabla",
+  "history.event.tableWithdrawalReversed": "Retirada revertida en la tabla",
   "pad.cricket.action.playerLine.field.innings": "Entrada",
   "pad.cricket.action.playerLine.field.battingOut": "Eliminado",
   "pad.cricket.action.playerLine.field.battingRuns": "Carreras anotadas",

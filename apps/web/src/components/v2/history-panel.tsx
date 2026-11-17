@@ -84,6 +84,10 @@ const TYPE_LABEL_KEYS: Record<string, MessageKey> = {
   knockout_late_entry: "history.event.knockoutLateEntry",
   // W5 T5 (X-CU-13): "Add late player" into a started league or group is an undo barrier, listed (not undoable).
   roundrobin_late_entry: "history.event.roundrobinLateEntry",
+  // W5 T8 (RB5-W7): a league or group withdrawal's settle and its Reinstate — one line each, not undoable (Reinstate is the
+  // undo). Their per-line write-ahead rows are internal and never listed (`divisionHistory` leaves them out).
+  table_withdrawal: "history.event.tableWithdrawal",
+  table_withdrawal_voided: "history.event.tableWithdrawalReversed",
 };
 
 export function HistoryPanel({

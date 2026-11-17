@@ -7059,6 +7059,8 @@
   "history.event.seedConfirmed": "Draw confirmed",
   "history.event.knockoutLateEntry": "Late player added to the bracket",
   "history.event.roundrobinLateEntry": "Late player added to the table",
+  "history.event.tableWithdrawal": "Withdrawal applied to the table",
+  "history.event.tableWithdrawalReversed": "Withdrawal reversed in the table",
   "pad.cricket.action.playerLine.field.innings": "Innings",
   "pad.cricket.action.playerLine.field.battingOut": "Dismissed",
   "pad.cricket.action.playerLine.field.battingRuns": "Runs scored",

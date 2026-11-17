@@ -3490,6 +3490,8 @@ export type DictionaryKey =
   | "history.event.seedConfirmed"
   | "history.event.swissLateEntry"
   | "history.event.swissRoundsChanged"
+  | "history.event.tableWithdrawal"
+  | "history.event.tableWithdrawalReversed"
   | "history.freezeAll"
   | "history.notUndoable"
   | "history.recent.empty"
