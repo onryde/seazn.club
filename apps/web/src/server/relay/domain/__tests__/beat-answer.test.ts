@@ -185,8 +185,9 @@ describe("the wire (R5): wireBeatAnswer(beatAnswer(…)) parses with the real Ca
               // Exactly the branch's keys: sid / startedBy / endReason appear where the matrix says and nowhere else,
               // and the common fields ride on EVERY 2xx, replaced and taken included (ask 1). `device` is PR-2's.
               // Court stream's `next` (§5.3) rides only when the caller gives one: COMMON is a fixture code's, so it is absent.
-              expect(Object.keys(wire).sort(), wire.state).toEqual(BRANCH_KEYS.get(wire.state)!.filter((k) => k !== "device" && k !== "next"));
+              expect(Object.keys(wire).sort(), wire.state).toEqual(BRANCH_KEYS.get(wire.state)!.filter((k) => k !== "device" && k !== "next" && k !== "autoRefusal"));
               expect(wire, wire.state).not.toHaveProperty("next");
+              expect(wire, wire.state).not.toHaveProperty("autoRefusal");
               for (const k of COMMON_KEYS) expect(wire, `${wire.state} carries ${k}`).toHaveProperty(k);
               // go-live carries the open session's own startedBy, for every CaptureStartedBy option.
               if (wire.state === "go-live") expect(wire.startedBy, label).toBe(open!.startedBy);
@@ -268,10 +269,19 @@ describe("the wire (R5): wireBeatAnswer(beatAnswer(…)) parses with the real Ca
       const wire = wireBeatAnswer(core, { ...COMMON, next: NEXT });
       expect(wire, core.state).toHaveProperty("next", NEXT);
       expect(CaptureBeatAnswer.safeParse(wire).success, core.state).toBe(true);
-      expect(Object.keys(wire).sort(), core.state).toEqual(BRANCH_KEYS.get(wire.state)!.filter((k) => k !== "device"));
+      expect(Object.keys(wire).sort(), core.state).toEqual(BRANCH_KEYS.get(wire.state)!.filter((k) => k !== "device" && k !== "autoRefusal"));
     }
     const unscheduled = wireBeatAnswer({ state: "live", sid: S }, { ...COMMON, next: { label: "TBD", scheduledStart: null } });
     expect(unscheduled.next).toEqual({ label: "TBD", scheduledStart: null });
+  });
+  it("E2: `autoRefusal` rides on the waiting answer only, as given; a null one is omitted; any other state drops it", () => {
+    for (const core of CORES) {
+      const wire = wireBeatAnswer(core, { ...COMMON, autoRefusal: "no_credit" });
+      if (core.state === "waiting") expect(wire).toHaveProperty("autoRefusal", "no_credit");
+      else expect(wire, core.state).not.toHaveProperty("autoRefusal");
+      expect(CaptureBeatAnswer.safeParse(wire).success, core.state).toBe(true);
+      expect(wireBeatAnswer(core, { ...COMMON, autoRefusal: null }), core.state).not.toHaveProperty("autoRefusal");
+    }
   });
   it("a null `next` is omitted, never null on the wire", () => {
     for (const core of CORES) expect(wireBeatAnswer(core, { ...COMMON, next: null }), core.state).not.toHaveProperty("next");
