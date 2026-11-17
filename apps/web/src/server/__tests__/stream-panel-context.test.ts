@@ -580,6 +580,8 @@ describe("R2006: the score preferences and whether the score can stream", () => 
   it("the server's delay default is handed over as the server serves it (config.ts), so the panel never types a number", async () => {
     const got = await load();
     expect(got?.overlayDelayDefaultMs).toBe(RELAY_OVERLAY_DELAY_DEFAULT_MS);
+    // Court stream device check 3 (D1): a court session's default (the owner's "Ok", 2026-11-17) is 0 ms.
+    expect(got?.courtOverlayDelayDefaultMs).toBe(0);
   });
 
   it("no panel (overlay switched off) reads no preferences — the switched-off org still costs one entitlement query", async () => {

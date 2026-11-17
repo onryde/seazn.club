@@ -10,7 +10,7 @@ import {
   CODE_GRACE_AFTER_FINISH_MINUTES,
   MAX_DURATION_MINUTES,
   PHONE_SILENT_FLOOR_SECONDS,
-  RELAY_OVERLAY_DELAY_DEFAULT_MS,
+  overlayDelayDefaultMs,
   tunable,
 } from "@/server/relay/config";
 import {
@@ -392,6 +392,7 @@ export async function startBroadcast(
   };
   const usage = await deps.drivers.ingest.storageUsage().then(storageUsageForColumns).catch(abandonThenRethrow);   // outside the transaction; G7: fitted to the integer columns
   const viaOverride = relayOverride?.bool_value === true;
+  const defaultDelayMs = overlayDelayDefaultMs(opts.courtLinkId !== undefined);
 
   const sessionId = await (sql.begin(async (tx) => {
     // Spec §5.2: the target ROW LOCK, taken inside the admission transaction and BEFORE admit reads it — Replace key and
@@ -469,11 +470,12 @@ export async function startBroadcast(
              -- keeps the column's 0 (the field is unused in that mode). Copied, so a running session never changes.
              -- PR #989 review m2: a delay the create names wins over the stored one (null: the default), so the
              -- organiser's Go live streams the timing its panel showed even while that timing's own save is in flight.
+             -- Court stream device check 3 (D1): the default is a court session's own (0 ms), every other session's 3.1 s.
              ${body.mode !== "composed"
                ? sql`0`
                : body.overlayDelayMs === undefined
-                 ? sql`coalesce(st.overlay_delay_ms, ${RELAY_OVERLAY_DELAY_DEFAULT_MS}::int)`
-                 : sql`${body.overlayDelayMs ?? RELAY_OVERLAY_DELAY_DEFAULT_MS}::int`},
+                 ? sql`coalesce(st.overlay_delay_ms, ${defaultDelayMs}::int)`
+                 : sql`${body.overlayDelayMs ?? defaultDelayMs}::int`},
              -- T11 (post-T1 amendment): written ONCE, here, and never updated — V479's broadcast_implies_api_backed holds them
              -- together, and the per-target index exempts an api_backed session from the moment it exists.
              ${connectionId !== null}, ${prepared?.broadcastId ?? null}

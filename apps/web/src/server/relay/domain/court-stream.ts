@@ -116,6 +116,25 @@ export function courtFocus(matches: readonly CourtMatchFacts[]): CourtFocus {
   };
 }
 
+/**
+ * Device check 3 (D2, 2026-11-17): the match whose court session EXISTS but is not yet handed to the phone. Once the
+ * deferred start inserts its row, the claim no longer reads as in flight (C2) and the match, being in play, is no longer
+ * `nextFixtureId`, so the beat's `next` went null and the phone read "No streamed match yet" for the seconds a composed
+ * session spends requested or provisioning (staging: ~3–6 s). This names that match until the beat answers go-live on it
+ * (warming, slot `armed`): the court's current session is `requested` or `provisioning`, its match in play, streamed and
+ * not latched. Stream off (not streamed) or a latch is today's answer; a refusal leaves no session, so it never applies.
+ */
+export function startingOfCurrent(
+  facts: readonly CourtMatchFacts[],
+  focus: Pick<CourtFocus, "current">,
+  openState: SessionState | null,
+): string | null {
+  if (focus.current === null) return null;
+  if (openState !== "requested" && openState !== "provisioning") return null;
+  const m = facts.find((f) => f.fixtureId === focus.current!.fixtureId);
+  return m !== undefined && isCandidate(m) ? m.fixtureId : null;
+}
+
 export type CourtPhoneStatus = "unpaired" | "waiting" | "live" | "offline";
 
 /** §5.5: the desk's phone status; offline is isNotResponding's boundary (NOT_RESPONDING_BEATS cadences). */

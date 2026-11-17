@@ -225,6 +225,7 @@ function ctx(o: Partial<StreamPanelContext> = {}): StreamPanelContext {
     composedAvailable: false,
     streamPrefs: {},
     overlayDelayDefaultMs: RELAY_OVERLAY_DELAY_DEFAULT_MS,
+    courtOverlayDelayDefaultMs: 0,
     overlaySides: {},
     ...o,
   };
@@ -5507,6 +5508,25 @@ describe("R2006: ScoreTiming — 0–30 s in tenths, the server's default, Reset
     expect(byTestId(island.tree(), "stream-timing-invalid")).toBeUndefined();
     expect(attr(byTestId(island.tree(), "stream-timing-input")!, "value")).toBe(secs(2500));
     expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("D1 (court stream device check 3): a court-streamed match's Score timing shows a COURT session's default (0 s); any other match's the 3.1 s", async () => {
+    const island = openPanel({ relayEntitled: true, composedAvailable: true, courtOverlayDelayDefaultMs: 0 });
+    const score = propsOf(island.tree().find((el) => el.type === PhoneTab)!).score as PhoneScore;
+    const defaultOf = (editor: PhoneScore["editor"]) => (propsOf(walk(editor as ReactElement).find((el) => el.type === ScoreTiming)!) as unknown as Parameters<typeof ScoreTiming>[0]).defaultMs;
+    expect(defaultOf(score.editor), "a match's own code").toBe(RELAY_OVERLAY_DELAY_DEFAULT_MS);
+    expect(defaultOf(score.courtEditor), "a court-streamed match").toBe(0);
+    // The body shows the court's editor exactly while the read model names the match's court.
+    const COURT_EDITOR = <span data-testid="court-editor-marker" />;
+    const EDITOR = <span data-testid="score-editor-marker" />;
+    const sc: PhoneScore = { ...SCORE_OFF, available: true, editor: EDITOR, courtEditor: COURT_EDITOR };
+    const ready = { view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1" } as const;
+    const court = body({ ...ready, score: sc, phone: readModel({ court: { name: "Court 2", targetLabel: "Court channel" }, code: null, phone: facts() }) });
+    expect(byTestId(court, "court-editor-marker"), "court: the court's editor").toBeDefined();
+    expect(byTestId(court, "score-editor-marker")).toBeUndefined();
+    const own = body({ ...ready, score: sc, phone: readModel({ court: null }) });
+    expect(byTestId(own, "score-editor-marker"), "switch off: the match's own").toBeDefined();
+    expect(byTestId(own, "court-editor-marker")).toBeUndefined();
   });
 
   it("the panel: a timing change PUTs { overlayDelayMs } alone, Reset PUTs null, and a failed save puts the stored value back and says so", async () => {

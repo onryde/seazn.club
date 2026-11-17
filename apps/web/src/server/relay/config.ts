@@ -258,6 +258,15 @@ export const RELAY_EXIT_RESTART = 75;
  *  nullable, null = this default, 0 a real override). PROVISIONAL: n=2 — C11 owes a ≥10-sample in-chain re-measure
  *  and moves THIS line. */
 export const RELAY_OVERLAY_DELAY_DEFAULT_MS = 3_100;
+/** Court stream device check 3 (staging, 2026-11-17; owner "Ok" to the recommendation): the default `overlayDelayMs` of a
+ *  COURT session (`court_link_id` set: a court phone over SRT, composed to YouTube). Two samples at the 3.1 s default put
+ *  the score ~4 s and ~4.5 s AFTER the picture it belongs to, so a court session's score is not held back at all. Like
+ *  the default above, the fixture's own Score timing still wins, and it is PROVISIONAL: n=2, and C11's ≥10-sample
+ *  in-chain re-measure is still owed and may move both lines. */
+export const COURT_PHONE_OVERLAY_DELAY_MS = 0;
+/** The delay a session serves when its fixture sets none: a court session's `COURT_PHONE_OVERLAY_DELAY_MS`, every other
+ *  session's `RELAY_OVERLAY_DELAY_DEFAULT_MS`. The ONE rule the session create and the panel's Score timing both read. */
+export const overlayDelayDefaultMs = (court: boolean): number => (court ? COURT_PHONE_OVERLAY_DELAY_MS : RELAY_OVERLAY_DELAY_DEFAULT_MS);
 /** R2004 decision 3 (compositor ADR 0005): the composed Machine's output — what the compositor renders and publishes to
  *  the session's programme input. These MUST equal the compositor's `OutputProfile`; the shared contract fixtures
  *  `docs/contracts/fixtures/relay-job.v1/session-composed-{720p,1080p}.json` carry the same numbers, and config.test.ts

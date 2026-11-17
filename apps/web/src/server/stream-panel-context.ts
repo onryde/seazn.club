@@ -24,7 +24,7 @@ import { relayOverlayPageFacts } from "@/server/overlay/page-facts";
 import type { OverlaySideInput } from "@/lib/overlay-model";
 import { overlayDictOf } from "@/lib/overlay-dict";
 import { NO_STREAM_PREFS_READ, type StreamPrefsRead } from "@/lib/stream-settings";
-import { AUTO_STOP_AFTER_RESULT_SECONDS, PHONE_LOST_LIVE_MINUTES, RELAY_OVERLAY_DELAY_DEFAULT_MS, tunable } from "@/server/relay/config";
+import { AUTO_STOP_AFTER_RESULT_SECONDS, PHONE_LOST_LIVE_MINUTES, overlayDelayDefaultMs, tunable } from "@/server/relay/config";
 import { composedUnavailable, relayUnavailable } from "@/server/relay/drivers";
 import { streamPrefsOf } from "@/server/usecases/stream-codes";
 import { hasLiveConnection } from "@/server/youtube/connections";
@@ -190,7 +190,9 @@ export async function loadStreamPanelContext(args: {
     streamPrefs: entitled ? Object.fromEntries(args.fixtureIds.map((id) => [id, storedPrefs[id] ?? NO_STREAM_PREFS_READ])) : {},
     // R2006: the delay a composed session serves when the fixture sets none — the number the session create copies
     // (usecases/stream-sessions/), so the panel's "Default {seconds}s" is the server's, never a typed one. No read.
-    overlayDelayDefaultMs: RELAY_OVERLAY_DELAY_DEFAULT_MS,
+    overlayDelayDefaultMs: overlayDelayDefaultMs(false),
+    // Court stream device check 3 (D1): a court session's own default, from the same rule the create reads.
+    courtOverlayDelayDefaultMs: overlayDelayDefaultMs(true),
     // I3: each listed fixture's sides as the overlay airs them (`overlayPreviewSides`).
     overlaySides: previewSides,
     // Streaming R1 lane D: the Phone tab's routes address the org, and its idle state needs the balance before any

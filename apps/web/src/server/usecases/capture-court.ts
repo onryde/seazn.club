@@ -26,7 +26,7 @@ import { log } from "@/server/logger";
 import { captureError } from "@/lib/sentry";
 import { courtMinAppVersion, POLL_FAR_SECONDS, POLL_NEAR_SECONDS } from "@/server/relay/config";
 import { deferred } from "@/lib/deferred";
-import type { CourtFocus, CourtMatchFacts } from "@/server/relay/domain/court-stream";
+import { startingOfCurrent, type CourtFocus, type CourtMatchFacts } from "@/server/relay/domain/court-stream";
 import { ACTIVE_STATES, isActive, type SessionState } from "@/server/relay/domain/session";
 import {
   alreadyLive, captureCommon, captureOrigin, DEST_MAX, fitText, holderOf, HTTPS_ORIGIN, isForeignKeyViolation, LABEL_MAX, latestSession,
@@ -134,7 +134,9 @@ export async function courtCommon(
         pollSeconds: courtCadence(court, now, POLL_FAR_SECONDS), autoAllowed: true, destinationName, overlayUrl: null, scoreUpdates: "polled",
         heartbeatUrl: `${origin}/api/v1/capture/codes/${code}/beats`, startUrl: `${origin}/api/v1/capture/codes/${code}/start`,
       };
-  const next = startingFixtureId !== null ? await startingNextOf(court, startingFixtureId) : await nextOf(court, view);
+  // D2 (device check 3): a start in flight (C2), or one whose session exists but is not yet handed to the phone, names its match.
+  const starting = startingFixtureId ?? startingOfCurrent(view.facts, view.focus, s.open);
+  const next = starting !== null ? await startingNextOf(court, starting) : await nextOf(court, view);
   return { ...base, court: { name: fitText(court.link.courtName, CAPTURE_COURT_NAME_MAX) }, next };
 }
 

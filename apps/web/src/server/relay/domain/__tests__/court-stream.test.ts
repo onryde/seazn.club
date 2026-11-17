@@ -5,6 +5,7 @@ import {
   courtFocus,
   courtPhoneStatus,
   courtTailEndsAt,
+  startingOfCurrent,
   type CourtMatchFacts,
 } from "../court-stream";
 
@@ -231,6 +232,30 @@ describe("court resolver", () => {
       m("r", { scheduledAt: T("12:00") }),
     ]);
     expect(f).toMatchObject({ nextFixtureId: "r", scoringFixtureId: "r" });
+  });
+
+  describe("startingOfCurrent (D2: the match whose session exists but is not yet handed to the phone)", () => {
+    const inPlay = (o: Partial<CourtMatchFacts> = {}) =>
+      m("a", { status: "in_play", kickoffAt: T("10:00"), openSession: open("s1", "10:00"), ...o });
+    const of = (a: CourtMatchFacts, state: Parameters<typeof startingOfCurrent>[2]) => {
+      const facts = [a, m("b", { scheduledAt: T("11:00") })];
+      return startingOfCurrent(facts, courtFocus(facts), state);
+    };
+    it("requested and provisioning name the in-play streamed match", () => {
+      expect(of(inPlay(), "requested")).toBe("a");
+      expect(of(inPlay(), "provisioning")).toBe("a");
+    });
+    it("warming (go-live, Open), live and ending, or no session: today's answer", () => {
+      expect(of(inPlay(), "warming")).toBeNull();
+      expect(of(inPlay(), "live")).toBeNull();
+      expect(of(inPlay(), "ending")).toBeNull();
+      expect(of(inPlay({ openSession: null }), null)).toBeNull();
+    });
+    it("Stream off, a latch, or a match no longer in play: today's answer", () => {
+      expect(of(inPlay({ streamed: false }), "provisioning")).toBeNull();
+      expect(of(inPlay({ latched: true }), "provisioning")).toBeNull();
+      expect(of(inPlay({ status: "completed" }), "provisioning")).toBeNull();
+    });
   });
 });
 
