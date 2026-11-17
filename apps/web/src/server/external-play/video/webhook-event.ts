@@ -12,12 +12,16 @@ export type RealtimeKitEvent =
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
-/** A non-empty string, or null. */
-const id = (v: unknown): string | null => (typeof v === "string" && v !== "" ? v : null);
+/** A string with something in it besides whitespace, or null. */
+const id = (v: unknown): string | null => (typeof v === "string" && v.trim() !== "" ? v : null);
 
-/** An ISO-8601 string that reads as an instant, or null (no other type is coerced: a number is not a date here). */
+/** Date, `T`, time (optional fraction) and an EXPLICIT zone (`Z` or ±hh:mm). `new Date` alone reads "12" as December 2001 and
+ *  a zone-less string in the server's local zone, so a wrong instant would close a seat: the shape is gated first. */
+const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+
+/** An ISO-8601 instant with an explicit zone that reads as a real date, or null (no other type is coerced: a number is not a date here). */
 function isoDate(v: unknown): Date | null {
-  if (typeof v !== "string" || v === "") return null;
+  if (typeof v !== "string" || !ISO_INSTANT.test(v)) return null;
   const d = new Date(v);
   return Number.isNaN(d.getTime()) ? null : d;
 }

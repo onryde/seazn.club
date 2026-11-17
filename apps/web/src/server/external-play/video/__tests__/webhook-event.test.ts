@@ -38,14 +38,17 @@ const BODIES: Record<Shape, () => Body> = {
 };
 
 /** Required key paths per shape, typed from spec §6.2 (never read off the parser), with the kind of unreadable value each takes. */
-const REQUIRED: { shape: Shape; path: string[]; unreadable: unknown }[] = [
-  ...(["joined", "left", "ended"] as const).map((shape) => ({ shape, path: ["event"], unreadable: 7 })),
-  ...(["joined", "left", "ended"] as const).map((shape) => ({ shape, path: ["meeting", "id"], unreadable: 7 })),
-  ...(["joined", "left"] as const).map((shape) => ({ shape, path: ["participant", "peerId"], unreadable: 7 })),
-  ...(["joined", "left"] as const).map((shape) => ({ shape, path: ["participant", "customParticipantId"], unreadable: 7 })),
-  { shape: "joined", path: ["participant", "joinedAt"], unreadable: "yesterday" },
-  { shape: "left", path: ["participant", "leftAt"], unreadable: "yesterday" },
-  { shape: "ended", path: ["meeting", "endedAt"], unreadable: "yesterday" },
+/** Strings V8's Date would read as an instant but that are not an ISO-8601 instant with an explicit zone. */
+const BAD_DATES = ["yesterday", "", "1", "12", "Nov 5 2026", "2026-11-17", "2026-11-17T10:00:00", "2026-11-17 10:00:00Z", "2026-13-45T10:00:00Z", 7, null];
+
+const REQUIRED: { shape: Shape; path: string[]; unreadable: unknown[] }[] = [
+  ...(["joined", "left", "ended"] as const).map((shape) => ({ shape, path: ["event"], unreadable: [7, null, {}, ""] })),
+  ...(["joined", "left", "ended"] as const).map((shape) => ({ shape, path: ["meeting", "id"], unreadable: [7, null, {}, ""] })),
+  ...(["joined", "left"] as const).map((shape) => ({ shape, path: ["participant", "peerId"], unreadable: [7, null, {}, ""] })),
+  ...(["joined", "left"] as const).map((shape) => ({ shape, path: ["participant", "customParticipantId"], unreadable: [7, null, {}, ""] })),
+  { shape: "joined", path: ["participant", "joinedAt"], unreadable: BAD_DATES },
+  { shape: "left", path: ["participant", "leftAt"], unreadable: BAD_DATES },
+  { shape: "ended", path: ["meeting", "endedAt"], unreadable: BAD_DATES },
 ];
 
 function at(body: Body, path: string[], mutate: (parent: Body, key: string) => void): Body {
@@ -94,14 +97,19 @@ describe("parseRealtimeKitEvent", () => {
 
   it("a known event missing a required field is null (sweep: every required field of every applied shape removed, one at a time)", () => {
     let checked = 0;
+    let values = 0;
     for (const { shape, path, unreadable } of REQUIRED) {
       const label = `${shape}:${path.join(".")}`;
       expect(parseRealtimeKitEvent(at(BODIES[shape](), path, (p, k) => delete p[k])), `${label} removed`).toBeNull();
-      expect(parseRealtimeKitEvent(at(BODIES[shape](), path, (p, k) => (p[k] = unreadable))), `${label} unreadable`).toBeNull();
+      for (const bad of unreadable) {
+        expect(parseRealtimeKitEvent(at(BODIES[shape](), path, (p, k) => (p[k] = bad))), `${label} = ${JSON.stringify(bad)}`).toBeNull();
+        values++;
+      }
       checked++;
     }
     // spec §6.2: joined 5 + left 5 + ended 3. Zero, or any other count, is a failure (a vacuous or drifted sweep).
     expect(checked).toBe(13);
+    expect(values).toBe(10 * 4 + 3 * BAD_DATES.length); // 10 id/event paths x 4 unreadable values + 3 date paths x BAD_DATES: nothing skipped
     // the unmutated bodies still parse, so every null above is the mutation's doing
     for (const shape of ["joined", "left", "ended"] as const) expect(parseRealtimeKitEvent(BODIES[shape]())).not.toBeNull();
   });
@@ -113,10 +121,28 @@ describe("parseRealtimeKitEvent", () => {
     expect(parseRealtimeKitEvent({ event: "meeting.participantJoined", meeting: [], participant: [] })).toBeNull();
   });
 
-  it("an empty id is as unusable as a missing one", () => {
-    expect(parseRealtimeKitEvent(at(BODIES.joined(), ["meeting", "id"], (p, k) => (p[k] = "")))).toBeNull();
-    expect(parseRealtimeKitEvent(at(BODIES.joined(), ["participant", "peerId"], (p, k) => (p[k] = "")))).toBeNull();
-    expect(parseRealtimeKitEvent(at(BODIES.left(), ["participant", "customParticipantId"], (p, k) => (p[k] = "")))).toBeNull();
+  it("an empty or whitespace-only id is as unusable as a missing one (sweep: every id field of every shape)", () => {
+    const ids = REQUIRED.filter((r) => r.path[r.path.length - 1].match(/^(id|peerId|customParticipantId)$/));
+    let checked = 0;
+    for (const { shape, path } of ids) {
+      for (const bad of ["", " ", "\t\n"]) {
+        expect(parseRealtimeKitEvent(at(BODIES[shape](), path, (p, k) => (p[k] = bad))), `${shape}:${path.join(".")} = ${JSON.stringify(bad)}`).toBeNull();
+        checked++;
+      }
+    }
+    // meeting.id x3 shapes + peerId x2 + customParticipantId x2 = 7 id fields, 3 bad values each
+    expect(checked).toBe(7 * 3);
+  });
+
+  it("a date is read only as ISO-8601 with an explicit zone, at the instant it names", () => {
+    const at2 = (leftAt: string) => parseRealtimeKitEvent(at(BODIES.left(), ["participant", "leftAt"], (p, k) => (p[k] = leftAt)));
+    // the zone is honoured, so the same instant written two ways reads as one Date; the fraction is optional
+    expect(at2("2026-11-17T12:05:00+02:00")).toMatchObject({ leftAt: new Date("2026-11-17T10:05:00.000Z") });
+    expect(at2("2026-11-17T10:05:00-00:00")).toMatchObject({ leftAt: new Date("2026-11-17T10:05:00.000Z") });
+    expect(at2("2026-11-17T10:05:00Z")).toMatchObject({ leftAt: new Date("2026-11-17T10:05:00.000Z") });
+    expect(at2("2026-11-17T10:05:00.123456Z")).not.toBeNull();
+    // a zone-less instant would be read in the SERVER's zone: refused
+    expect(at2("2026-11-17T10:05:00")).toBeNull();
   });
 
   it("tolerated as null, and only these: a missing meeting.sessionId (all three shapes), a missing participant.joinedAt on `left`", () => {
@@ -139,6 +165,10 @@ describe("parseRealtimeKitEvent", () => {
       joinedAt: null,
       leftAt: new Date(LEFT_AT), // from the payload, never the receipt time
     });
+    // a sessionId of the wrong type reads as absent too (tolerated, not trusted)
+    for (const shape of ["joined", "left", "ended"] as const) {
+      expect(parseRealtimeKitEvent(at(BODIES[shape](), ["meeting", "sessionId"], (p, k) => (p[k] = 7))), shape).toMatchObject({ sessionId: null });
+    }
     // an unreadable optional joinedAt must not drop the leave that closes a seat: it reads as absent
     const odd = parseRealtimeKitEvent(at(BODIES.left(), ["participant", "joinedAt"], (p, k) => (p[k] = "yesterday")));
     expect(odd).toMatchObject({ kind: "left", joinedAt: null, leftAt: new Date(LEFT_AT) });
@@ -146,24 +176,32 @@ describe("parseRealtimeKitEvent", () => {
 
   it("a body that is not an object is null", () => {
     let checked = 0;
-    for (const b of [null, 1, "x", [], undefined, true, { event: 3 }, {}]) {
+    for (const b of [null, 1, "x", [], undefined, true, { event: 3 }, { event: "" }, {}]) {
       expect(parseRealtimeKitEvent(b)).toBeNull();
       checked++;
     }
-    expect(checked).toBe(8);
+    expect(checked).toBe(9);
   });
 
-  it("never throws, whatever it is given", () => {
-    const hostile: unknown[] = [
-      { event: "meeting.participantJoined", meeting: { id: "m" }, participant: { peerId: {}, customParticipantId: [], joinedAt: {} } },
-      { event: "meeting.ended", meeting: { id: "m", endedAt: {} } },
-      { event: "meeting.ended", meeting: { id: "m", endedAt: "" } },
-      Object.create(null),
-    ];
-    for (const b of hostile) expect(() => parseRealtimeKitEvent(b)).not.toThrow();
-    expect(parseRealtimeKitEvent(hostile[0])).toBeNull();
-    expect(parseRealtimeKitEvent(hostile[1])).toBeNull();
-    expect(parseRealtimeKitEvent(hostile[2])).toBeNull();
+  it("never throws, whatever it is given (generated: every wrong type at every field of every shape)", () => {
+    const wrong: unknown[] = [undefined, null, 0, 7, true, "", " ", "x", [], [1], {}, { a: 1 }, () => 1, Symbol("s"), 10n, NaN, Object.create(null)];
+    let checked = 0;
+    for (const shape of ["joined", "left", "ended"] as const) {
+      const paths = [["event"], ["meeting"], ["participant"], ["meeting", "id"], ["meeting", "sessionId"], ["meeting", "endedAt"], ["participant", "peerId"], ["participant", "customParticipantId"], ["participant", "joinedAt"], ["participant", "leftAt"]];
+      for (const path of paths) {
+        for (const w of wrong) {
+          const body = BODIES[shape]();
+          // a path the shape does not have (e.g. participant on `ended`) is created, so the parent being wrong is also swept
+          let parent = body;
+          for (const k of path.slice(0, -1)) parent = (parent[k] ??= {}) as Body;
+          parent[path[path.length - 1]] = w;
+          expect(() => parseRealtimeKitEvent(body), `${shape}:${path.join(".")}=${String(typeof w)}`).not.toThrow();
+          checked++;
+        }
+      }
+    }
+    expect(checked).toBe(3 * 10 * wrong.length);
+    expect(() => parseRealtimeKitEvent(Object.create(null))).not.toThrow();
   });
 });
 
