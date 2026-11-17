@@ -41,6 +41,7 @@ import {
   type FixtureUpdate,
 } from "@seazn/engine/competition";
 import { feedsNextMatch } from "@/lib/bracket-next-match";
+import { inTheField } from "@/lib/entrant-field";
 import { withTenant, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { resolveModule } from "@/server/engine-db/registry";
@@ -406,6 +407,10 @@ export async function withdrawEntrantCascade(
       if (mine.length === 0) continue;
       const byId = new Map(mine.map((f) => [f.id, f]));
 
+      // W5 T8 fix round 1 (C1, RB5-L8): a FINISHED league or group takes nothing from a later departure — no result removed,
+      // no walkover, no ledger row, no refold (her row there stands as earned; seeding reads that snapshot). The knockout's
+      // precedent below (`stage.status === "complete"`).
+      if (ROUND_ROBIN_KINDS.has(stage.kind) && stage.status === "complete") continue;
       if (TABLE_KINDS.has(stage.kind)) {
         // lib/table-withdrawal: the ONE reading of these rows into the policy's
         // input (the qualification builder reads the same verdict, ruling F1).
@@ -683,56 +688,105 @@ function cascadeEventsOf(events: readonly EventOut[], entrantId: string): EventO
 }
 
 /**
- * W5 T8 (RB5-W6, X-WDT-8): Reinstate reverses a league or group withdrawal — the cascade's own events on the entrant's lines
- * are voided, newest first, so a voided line and a never-played walkover return to scheduled; nothing is reshaped (her lines
- * still exist, which is also why Task 6's door never makes her wait). Then the `table_withdrawal` row is voided, and the
- * footnote goes with it. Called by `patchEntrant` after the status write that brought her back.
- *
- * What it does NOT bring back: a result the expunge removed. The expunge voided those events, and a void is not voidable
- * (engine events.ts, PROMPT-02); the line is owed play again, as it stood before its result was recorded.
- *
- * Skipped, with the row left as it is: a line whose other side is still departed (the shared line of two withdrawals stays
- * out until both are back) and a stage already complete (RB5-L8: a finished table takes no one, and its lines are not
- * reopened). Each void commits on its own, as the cascade's writes do (ruling 101).
+ * The events the cascade's expunge removed from one line, oldest first: the run of `core.void`s written immediately before
+ * the line's latest `core.abandon{expunge: true}` (`voidAndAbandon` writes exactly that run, then the abandon), read back
+ * through what they void. Empty when the line has no expunge abandon, or one with no void before it (a line never played).
  */
-export async function reinstateTableEntrant(auth: AuthCtx, entrantId: string): Promise<{ voided: number }> {
-  const entrant = await getEntrant(auth, entrantId);
-  if (DEPARTED_STATUSES.has(entrant.status)) {
-    throw new Error(`reinstateTableEntrant: entrant ${entrantId} is still ${entrant.status} — write the Reinstate first`);
+function removedByExpunge(events: readonly EventOut[]): { abandon: EventOut; removed: EventOut[] } | null {
+  const bySeq = [...events].sort((a, b) => a.seq - b.seq);
+  const abandon = [...bySeq].reverse().find((e) => e.type === "core.abandon" && (e.payload as { expunge?: unknown } | null)?.expunge === true);
+  if (abandon === undefined) return null;
+  const byId = new Map(bySeq.map((e) => [e.id, e]));
+  const removed: EventOut[] = [];
+  for (let i = bySeq.indexOf(abandon) - 1; i >= 0 && bySeq[i]!.type === "core.void"; i--) {
+    const target = byId.get(bySeq[i]!.voids_event_id as string);
+    if (target !== undefined) removed.push(target);
   }
-  const ledger = await withTenant(auth.orgId, (tx) =>
-    tx<{ seq: number; type: string; payload: unknown }[]>`
-      select seq::int as seq, type, payload from division_events
-       where division_id = ${entrant.division_id} and type in (${TABLE_WITHDRAWAL_ROW}, ${TABLE_WITHDRAWAL_VOIDED_ROW})`,
-  );
-  const records = activeTableWithdrawals(ledger).filter((r) => r.entrant_id === entrantId);
-  if (records.length === 0) return { voided: 0 };
+  return { abandon, removed: removed.sort((a, b) => a.seq - b.seq) };
+}
+
+const sameEvent = (a: EventOut, b: EventOut) => a.type === b.type && JSON.stringify(a.payload ?? null) === JSON.stringify(b.payload ?? null);
+
+/**
+ * W5 T8 (RB5-W6, X-WDT-8; fix round 1 I1, m1): Reinstate REVERSES a league or group withdrawal.
+ *
+ * Her lines are found from the SCORE ledger, not the division row (m1: a cascade from before the row existed is reversed
+ * too): the cascade's own events, still active (`cascadeEventsOf` — cascade-only, PF-2, so self-identifying), are voided
+ * newest first, so a never-played line and a never-played walkover return to scheduled. A result the expunge REMOVED is
+ * then RE-RECORDED — a void is not voidable, and the engine's way to undo an undo is to record the event again
+ * (events.js:354-357): the events the expunge voided, in their original order, type and payload, through the cascade's
+ * writer; a signed-off line ends on its `core.finalize` again. Nothing is reshaped (her lines still exist, which is also
+ * why Task 6's door never makes her wait). Last, her `table_withdrawal` rows are voided (the footnote goes) and each
+ * stage is refolded.
+ *
+ * Safe to run again (m2): a void already written is no longer active, and a re-record already written is matched as a
+ * prefix of what the expunge removed, so a retry after a failure part-way finishes the job and writes nothing twice. A line
+ * whose events after the voided abandon are NOT that prefix (the organiser recorded something since) is left as it is.
+ *
+ * Skipped: a line whose other side is still departed (the shared line of two withdrawals stays out until both are back)
+ * and a stage already complete (RB5-L8: a finished table takes no one, and its lines are not reopened). Called by
+ * `patchEntrant` after the status write that brought her back.
+ */
+export async function reinstateTableEntrant(auth: AuthCtx, entrantId: string): Promise<{ voided: number; rerecorded: number }> {
+  const entrant = await getEntrant(auth, entrantId);
+  if (!inTheField(entrant)) {
+    throw new Error(`reinstateTableEntrant: entrant ${entrantId} is ${entrant.status} — write the Reinstate first`);
+  }
   const [stages, fixtures, entrants] = await Promise.all([
     listStages(auth, entrant.division_id),
     listDivisionFixtures(auth, entrant.division_id),
     listEntrants(auth, entrant.division_id),
   ]);
+  const open = new Map(stages.filter((st) => ROUND_ROBIN_KINDS.has(st.kind) && st.status !== "complete").map((st) => [st.id, st]));
   const gone = new Set(entrants.filter((e) => DEPARTED_STATUSES.has(e.status)).map((e) => e.id));
   let voided = 0;
-  for (const record of records) {
-    const stage = stages.find((s) => s.id === record.stage_id);
-    if (stage === undefined || stage.status === "complete") continue;
-    for (const f of fixtures as unknown as FixtureRowLite[]) {
-      if (f.stage_id !== stage.id || (f.home_entrant_id !== entrantId && f.away_entrant_id !== entrantId)) continue;
-      const other = f.home_entrant_id === entrantId ? f.away_entrant_id : f.home_entrant_id;
-      if (other === null || gone.has(other)) continue;
-      for (const e of cascadeEventsOf(await listEvents(auth, f.id, 0), entrantId)) {
-        const state = await getFixtureState(auth, f.id);
-        await scoreEvent(auth, f.id, { expected_seq: state.last_seq, type: "core.void", payload: { event_id: e.id } }, CASCADE);
-        voided++;
+  let rerecorded = 0;
+  const touched = new Map<string, { id: string; kind: string }>();
+  for (const f of fixtures as unknown as FixtureRowLite[]) {
+    const stage = open.get(f.stage_id);
+    if (stage === undefined || (f.home_entrant_id !== entrantId && f.away_entrant_id !== entrantId)) continue;
+    const other = f.home_entrant_id === entrantId ? f.away_entrant_id : f.home_entrant_id;
+    if (other === null || gone.has(other)) continue;
+    const own = cascadeEventsOf(await listEvents(auth, f.id, 0), entrantId);
+    for (const e of own) {
+      const state = await getFixtureState(auth, f.id);
+      await scoreEvent(auth, f.id, { expected_seq: state.last_seq, type: "core.void", payload: { event_id: e.id } }, CASCADE);
+      voided++;
+    }
+    const before = rerecorded;
+    const events = await listEvents(auth, f.id, 0);
+    const exp = removedByExpunge(events);
+    if (exp !== null && exp.removed.length > 0) {
+      const voidedIds = new Set(events.filter((e) => e.voids_event_id !== null).map((e) => e.voids_event_id as string));
+      if (voidedIds.has(exp.abandon.id)) {
+        const since = events.filter((e) => e.seq > exp.abandon.seq && e.type !== "core.void" && !voidedIds.has(e.id)).sort((a, b) => a.seq - b.seq);
+        const prefix = since.length <= exp.removed.length && since.every((e, i) => sameEvent(e, exp.removed[i]!));
+        if (prefix) {
+          for (const e of exp.removed.slice(since.length)) {
+            const state = await getFixtureState(auth, f.id);
+            await scoreEvent(auth, f.id, { expected_seq: state.last_seq, type: e.type, payload: (e.payload ?? {}) as Record<string, unknown> } as never, CASCADE);
+            rerecorded++;
+          }
+        }
       }
     }
+    if (own.length > 0 || rerecorded > before) touched.set(stage.id, { id: stage.id, kind: stage.kind });
+  }
+  // The footnote's rows: voided for every stage she is back in (a finished table's row stands with it, RB5-L8).
+  const ledger = await withTenant(auth.orgId, (tx) =>
+    tx<{ seq: number; type: string; payload: unknown }[]>`
+      select seq::int as seq, type, payload from division_events
+       where division_id = ${entrant.division_id} and type in (${TABLE_WITHDRAWAL_ROW}, ${TABLE_WITHDRAWAL_VOIDED_ROW})`,
+  );
+  const rows = activeTableWithdrawals(ledger).filter((r) => r.entrant_id === entrantId && open.has(r.stage_id));
+  if (rows.length > 0) {
     await withTenant(auth.orgId, async (tx) => {
       await tx`select pg_advisory_xact_lock(hashtext(${"division:" + entrant.division_id}))`;
-      await appendTableLedgerRow(tx, entrant.division_id, TABLE_WITHDRAWAL_VOIDED_ROW, { voids_seq: record.seq }, auth.userId);
+      for (const record of rows) await appendTableLedgerRow(tx, entrant.division_id, TABLE_WITHDRAWAL_VOIDED_ROW, { voids_seq: record.seq }, auth.userId);
     });
-    // RB5-W1's reverse: back in the field, she ranks by her results again.
-    await refoldStageTable(auth.orgId, stage, "skip");
+    for (const record of rows) touched.set(record.stage_id, { id: record.stage_id, kind: open.get(record.stage_id)!.kind });
   }
-  return { voided };
+  // RB5-W1's reverse: back in the field, she ranks by her results again.
+  for (const stage of touched.values()) await refoldStageTable(auth.orgId, stage, "skip");
+  return { voided, rerecorded };
 }

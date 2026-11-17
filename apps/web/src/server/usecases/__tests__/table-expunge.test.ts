@@ -26,7 +26,7 @@ import { getFixtureState } from "../fixtures";
 import { undoBarrierRefusal } from "../history";
 import { startDivision } from "../schedule";
 import { finalizeFixture, scoreEvent } from "../scoring";
-import { completeStage, createStages, getStandings } from "../stages";
+import { addFixture, completeStage, createStages, getStandings, refoldStageTable } from "../stages";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { seedOrg } from "./_seed";
 
@@ -163,6 +163,13 @@ async function standingsRows(auth: AuthCtx, stageId: string, poolId?: string) {
 }
 const playedOf = async (auth: AuthCtx, stageId: string) =>
   Object.fromEntries((await standingsRows(auth, stageId)).map((r) => [r.entrantId, r.played]));
+
+/** A line as the table and the score ledger see it: its status, its outcome, and its ACTIVE events (type and payload, in
+ *  order) — what a Reinstate must give back, captured BEFORE the withdrawal (never derived from the code under test). */
+async function lineState(fixtureId: string) {
+  const l = await lineOf(fixtureId);
+  return { status: l.status, outcome: l.outcome, events: (await activeEvents(fixtureId)).map((e) => [e.type, JSON.stringify(e.payload)]) };
+}
 
 const statusOf = async (entrantId: string) =>
   (await sql<{ status: string; table_waiting_stage_id: string | null }[]>`select status, table_waiting_stage_id from entrants where id = ${entrantId}`)[0]!;
@@ -330,6 +337,37 @@ describe.skipIf(!HAS_DB)("X-WDT-7 (RB5-W1, RB5-W5): the leaver stays in the tabl
   it("X-WDT-7 a league leaver stays in the table, marked, ranked last", () => leaverWithTheMostPoints("withdrawn"), 120_000);
   it("X-WDT-7 a disqualification follows the same rule", () => leaverWithTheMostPoints("disqualified"), 120_000);
 
+  // Fix round 1 (C1, RB5-L8): a league that FINISHED is never re-ranked by a later departure from another stage. The league
+  // winner, seeded into the final, withdraws there: the finished table keeps her first, takes no row and no footnote, and a
+  // later refold of it (any result anywhere) still reads her as earned. The positive pair is the running table above (she
+  // ranks last). differential: before the fix the finished league went 1st → 4th with a footnote.
+  it("X-WDT-7 a finished table is never re-ranked by a withdrawal from the knockout after it", async () => {
+    const r = await started(4, { knockout: true });
+    const order = ["P1", "P2", "P3", "P4"].map((k) => r.id.get(k)!);
+    for (const l of await linesOf(r.stageId)) {
+      const loser = order.indexOf(l.home_entrant_id!) > order.indexOf(l.away_entrant_id!) ? l.home_entrant_id! : l.away_entrant_id!;
+      await walkoverAgainst(r.auth, l.id, loser);
+    }
+    const [st] = await sql<{ status: string }[]>`select status from stages where id = ${r.stageId}`;
+    expect(st!.status, "rig: the league finished").toBe("complete");
+    const [ko] = await sql<{ id: string }[]>`select id from stages where division_id = ${r.divisionId} and kind = 'knockout'`;
+    const final = await sql<{ id: string; home_entrant_id: string | null; away_entrant_id: string | null }[]>`
+      select id, home_entrant_id, away_entrant_id from fixtures where stage_id = ${ko!.id}`;
+    expect(final.flatMap((f) => [f.home_entrant_id, f.away_entrant_id]), "rig: P1 is seeded into the final").toContain(order[0]);
+    const ranks = async () => (await standingsRows(r.auth, r.stageId)).map((x) => [x.entrantId, x.rank, x.points]);
+    const before = await ranks();
+    expect(before[0]![0], "rig: P1 topped the league").toBe(order[0]);
+    const snap = async () => (await sql<{ rows: unknown }[]>`select rows from standings_snapshots where stage_id = ${r.stageId} order by pool_id nulls first`).map((x) => JSON.stringify(x.rows));
+    const snapBefore = await snap();
+
+    await withdrawEntrantCascade(r.auth, order[0]!);
+    expect(await ranks(), "the finished league is not re-ranked").toEqual(before);
+    expect(await snap(), "its stored snapshot is untouched").toEqual(snapBefore);
+    expect(await withdrawalRows(r.divisionId), "no table_withdrawal row: no footnote").toEqual([]);
+    await refoldStageTable(r.auth.orgId, { id: r.stageId, kind: "league" }, "skip");
+    expect(await ranks(), "a later refold reads her as earned, not departed").toEqual(before);
+  }, 180_000);
+
   it("X-WDT-7 a pooled leaver stays in their pool's table", async () => {
     const r = await started(6, { group: { pools: 2 } });
     const p1 = r.id.get("P1")!;
@@ -374,32 +412,80 @@ describe.skipIf(!HAS_DB)("X-WDT-7 (ruling 290): tennis and badminton follow ruli
 });
 
 describe.skipIf(!HAS_DB)("X-WDT-8 (RB5-W6): Reinstate reverses the expunge or the walkovers", () => {
-  it("X-WDT-8 Reinstate reverses the expunge", async () => {
+  // Fix round 1 (I1): the removed result comes BACK. A void is not voidable, so the Reinstate re-records what the expunge voided
+  // (engine events.js:354-357), and the signed-off line is signed off again. Expected: the state captured before the withdrawal.
+  // differential: before the fix the line was left `in_play` with no result (the expunge's voids stood).
+  it("X-WDT-8 Reinstate reverses the expunge: the removed result is re-recorded, signed off again", async () => {
     const r = await started(4);
     const [p1, p2] = [r.id.get("P1")!, r.id.get("P2")!];
     const signed = await lineBetween(r.stageId, p1, p2);
     await playBadminton(r.auth, signed.id, signed.home_entrant_id === p2);
     await finalizeFixture(r.auth, signed.id, await tip(signed.id));
+    const pre = Object.fromEntries(await Promise.all((await linesOf(r.stageId)).filter((l) => involves(l, p1)).map(async (l) => [l.id, await lineState(l.id)] as const)));
+    const preTable = Object.fromEntries((await standingsRows(r.auth, r.stageId)).map((x) => [x.entrantId, [x.played, x.points]]));
+    expect(pre[signed.id]!.status, "rig: signed off").toBe("finalized");
+    expect(pre[signed.id]!.events.length, "rig: a played result on the ledger").toBeGreaterThan(2);
     await withdrawEntrantCascade(r.auth, p1);
+    expect((await lineOf(signed.id)).status, "rig: the expunge removed it").toBe("abandoned");
     await patchEntrant(r.auth, p1, { status: "registered" });
     const me = await statusOf(p1);
     // Task 6's door: her lines still exist, so she never waits for a place.
     expect([me.status, me.table_waiting_stage_id], "back in the field, not waiting").toEqual(["registered", null]);
     const mine = (await linesOf(r.stageId)).filter((l) => involves(l, p1));
-    expect(mine, "her three lines, never reshaped").toHaveLength(3);
-    for (const l of mine) expect(await hasActiveExpunge(l.id), `line ${l.ext_key}: the expunge is taken back`).toBe(false);
-    // The two never played return to scheduled.
-    const unplayed = mine.filter((l) => l.id !== signed.id);
-    expect(unplayed.map((l) => [l.status, l.outcome]), "voided fixtures return to scheduled").toEqual([
-      ["scheduled", null],
-      ["scheduled", null],
-    ]);
-    // The removed result does not come back (voids are not voidable, engine events.ts PROMPT-02): the line is owed again,
-    // as it stood before its result was recorded — its Start stands.
-    const back = await lineOf(signed.id);
-    expect([back.status, back.outcome], "the removed result's line is owed play again").toEqual(["in_play", null]);
-    expect((await playedOf(r.auth, r.stageId))[p2], "nothing counted on it").toBe(0);
+    expect(mine.map((l) => l.id).sort(), "her three lines, never reshaped").toEqual(Object.keys(pre).sort());
+    let checked = 0;
+    for (const l of mine) {
+      expect(await lineState(l.id), `line ${l.ext_key}: exactly as before the withdrawal`).toEqual(pre[l.id]);
+      checked++;
+    }
+    expect(checked).toBe(3);
+    const table = Object.fromEntries((await standingsRows(r.auth, r.stageId)).map((x) => [x.entrantId, [x.played, x.points]]));
+    expect(table, "the table is the one before the withdrawal").toEqual(preTable);
   }, 120_000);
+
+  // m1: a cascade with no `table_withdrawal` row (one from before the row existed) is reversed all the same: the lines are
+  // found from the score ledger's own cascade events.
+  it("X-WDT-8 a withdrawal with no ledger row is reversed from the score ledger", async () => {
+    const r = await started(4);
+    const [p1, p2] = [r.id.get("P1")!, r.id.get("P2")!];
+    const signed = await lineBetween(r.stageId, p1, p2);
+    await playBadminton(r.auth, signed.id, true);
+    const pre = Object.fromEntries(await Promise.all((await linesOf(r.stageId)).filter((l) => involves(l, p1)).map(async (l) => [l.id, await lineState(l.id)] as const)));
+    await withdrawEntrantCascade(r.auth, p1);
+    await sql`delete from division_events where division_id = ${r.divisionId} and type = 'table_withdrawal'`;
+    expect(await withdrawalRows(r.divisionId), "rig: a legacy withdrawal, no row").toEqual([]);
+    await patchEntrant(r.auth, p1, { status: "registered" });
+    let checked = 0;
+    for (const id of Object.keys(pre)) {
+      expect(await lineState(id), "back as it was").toEqual(pre[id]);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  }, 120_000);
+
+  // m3: an Add match line (`adhoc-N`) is one of her ordinary lines (the stated decision): counted, expunged, walked over, and
+  // back on Reinstate.
+  it("an Add match line is counted, expunged or walked over, and back on Reinstate", async () => {
+    for (const policy of ["expunge", "walkover"] as const) {
+      const r = await started(4);
+      const [p1, p2, p3, p4] = ["P1", "P2", "P3", "P4"].map((k) => r.id.get(k)!) as [string, string, string, string];
+      const { fixture_id: extra } = await addFixture(r.auth, r.stageId, { home_entrant_id: p1, away_entrant_id: p2 });
+      expect((await lineOf(extra)).ext_key, "rig: an Add match line").toMatch(/^adhoc-/);
+      // 4 lines: expunge with 1 played (under half); walkover with 2 played (half).
+      await walkoverAgainst(r.auth, (await lineBetween(r.stageId, p1, p3)).id, p3);
+      if (policy === "walkover") await walkoverAgainst(r.auth, (await lineBetween(r.stageId, p1, p4)).id, p4);
+      const pre = await lineState(extra);
+      const out = await withdrawEntrantCascade(r.auth, p1);
+      expect(out.policy, policy).toBe(policy);
+      const { loadTableWithdrawals } = await import("@/server/public-site/table-withdrawals");
+      expect((await loadTableWithdrawals(r.divisionId)).map((x) => x.scheduled), `${policy}: the Add match line is one of her 4`).toEqual([4]);
+      const gone = await lineOf(extra);
+      if (policy === "expunge") expect([gone.status, await hasActiveExpunge(extra)], "expunged with the rest").toEqual(["abandoned", true]);
+      else expect(gone.outcome, "walked over to the opponent").toMatchObject({ kind: "award", winner: p2, reason: "withdrew" });
+      await patchEntrant(r.auth, p1, { status: "registered" });
+      expect(await lineState(extra), `${policy}: back as it was`).toEqual(pre);
+    }
+  }, 240_000);
 
   it("X-WDT-8 Reinstate after walkovers: unplayed walkovers return to scheduled", async () => {
     const r = await started(4);

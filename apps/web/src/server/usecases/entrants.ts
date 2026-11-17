@@ -1,4 +1,5 @@
 import "server-only";
+import { inTheField } from "@/lib/entrant-field";
 // Entrant use-cases (doc 08 §3): registration (single + bulk), withdraw/seed/
 // member management. Cross-org person references die at the RLS boundary — a
 // person the tenant can't see doesn't exist.
@@ -1022,14 +1023,22 @@ export async function patchEntrant(
   // W5 T8 (RB5-W6, X-WDT-8): a Reinstate — a departed entrant patched back into the field — reverses her league or group
   // withdrawal AFTER the status write commits (her lines still exist, so Task 6's door in `writeEntrantPatch` never makes her
   // wait). Read before the write: the write is what changes it.
+  // Fix round 1 (m2): the reverse is many score writes (each its own transaction, as the cascade's are), so it cannot share
+  // the status write's transaction. It is made all-or-retry instead: a reverse that throws puts the status BACK (the PATCH
+  // changed nothing a client can see), and the reverse is idempotent (`reinstateTableEntrant`), so the retry finishes it.
   const [prior] =
-    patch.status !== undefined && !DEPARTED_STATUSES.has(patch.status)
+    patch.status !== undefined && inTheField({ status: patch.status })
       ? await withTenant(auth.orgId, (tx) => tx<{ status: string }[]>`select status from entrants where id = ${id}`)
       : [];
   const out = await writeEntrantPatch(auth, id, patch);
-  if (prior !== undefined && DEPARTED_STATUSES.has(prior.status) && !DEPARTED_STATUSES.has(out.status)) {
+  if (prior !== undefined && DEPARTED_STATUSES.has(prior.status) && inTheField(out)) {
     const { reinstateTableEntrant } = await import("./withdrawal");
-    await reinstateTableEntrant(auth, id);
+    try {
+      await reinstateTableEntrant(auth, id);
+    } catch (err) {
+      await writeEntrantPatch(auth, id, { status: prior.status as PatchEntrant["status"] });
+      throw err;
+    }
   }
   return out;
 }

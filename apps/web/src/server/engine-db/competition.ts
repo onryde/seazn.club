@@ -16,6 +16,7 @@ import { completionEngineStatus, hasActiveAbandonSql, rowAwaitsSettle } from "./
 import { ABANDONED_MATCHES_REASON } from "@/lib/abandoned-matches-refusal";
 import { inTheField } from "@/lib/entrant-field";
 import { departedRankedLast } from "@/lib/table-withdrawal";
+import { TABLE_WITHDRAWAL_ROW, TABLE_WITHDRAWAL_VOIDED_ROW, activeTableWithdrawals } from "@/lib/table-withdrawal-note";
 import { EngineError, StageKind, type MatchOutcome, type StageCtx, type StandingsDelta } from "@seazn/engine/core";
 import {
   SETTLED_FIXTURE_STATUSES,
@@ -851,7 +852,20 @@ export async function stageTablePoints(
  * refused, never ranked by an order nobody stored.
  */
 async function rankWithStoredLots(tx: Tx, inputs: StageInputs): Promise<CompletedTableStage> {
-  return withDepartedRankedLast(await rankWithStoredLotsRaw(tx, inputs), inputs);
+  const done = await rankWithStoredLotsRaw(tx, inputs);
+  if (inputs.kind !== "league" && inputs.kind !== "group") return done;
+  return withDepartedRankedLast(done, await stageTableWithdrawals(tx, inputs), inputs);
+}
+
+/** W5 T8 fix round 1 (C1): the entrants THIS stage's own withdrawal cascade settled — its active `table_withdrawal` rows
+ *  (`activeTableWithdrawals`). Read per stage, never from the division's field: an entrant who leaves later, from another
+ *  stage (a knockout after the league finished), has no row here, and the finished table she topped is not re-ranked
+ *  (RB5-L8). */
+async function stageTableWithdrawals(tx: Tx, inputs: StageInputs): Promise<ReadonlySet<string>> {
+  const ledger = await tx<{ seq: number; type: string; payload: unknown }[]>`
+    select seq::int as seq, type, payload from division_events
+     where division_id = (select division_id from stages where id = ${inputs.stage.id}) and type in (${TABLE_WITHDRAWAL_ROW}, ${TABLE_WITHDRAWAL_VOIDED_ROW})`;
+  return new Set(activeTableWithdrawals(ledger).filter((r) => r.stage_id === inputs.stage.id).map((r) => r.entrant_id));
 }
 
 /**
@@ -860,9 +874,10 @@ async function rankWithStoredLots(tx: Tx, inputs: StageInputs): Promise<Complete
  * neither tops the table she left nor heads its final order. One place, after the fold ranked and any lots were stored.
  * A Swiss table is W3's and keeps its own order.
  */
-function withDepartedRankedLast(done: CompletedTableStage, inputs: StageInputs): CompletedTableStage {
-  if (inputs.kind !== "league" && inputs.kind !== "group") return done;
-  const departed = (id: string) => !inputs.field.has(id);
+function withDepartedRankedLast(done: CompletedTableStage, settled: ReadonlySet<string>, inputs: StageInputs): CompletedTableStage {
+  // Both: this stage's cascade settled her (its row), and she is still out (a Reinstate the cascade could not reverse — a
+  // table already complete — leaves the row standing with her back in the field).
+  const departed = (id: string) => settled.has(id) && !inputs.field.has(id);
   return {
     ...done,
     tables: { ...done.tables, pools: done.tables.pools.map((p) => ({ ...p, rows: departedRankedLast(p.rows, departed) })) },

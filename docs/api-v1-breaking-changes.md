@@ -61,8 +61,12 @@ league or group, an entrant who leaves under half played has every result remove
 (W5 RB5-W2). The new field counts the entrant's cancelled matches, which are still left as they are. A
 reader of `skipped_finalized` finds the key absent.
 
-A Reinstate (`PATCH /entrants/{id}` back into the field) now reverses a league or group withdrawal: voided
-matches and never-played walkovers return to scheduled. A departed entrant's league or group row ranks last.
+A Reinstate (`PATCH /entrants/{id}` back into the field) now reverses a league or group withdrawal: matches it
+voided and walkovers never played return to scheduled, and a result it removed is recorded again (a match that was
+signed off is signed off again), so every line reads as it did before the withdrawal. A match whose opponent has also
+left stays out until both are back, and a table already finished is not reopened. A departed entrant's row ranks last
+in the league or group table she left while it runs; a table that had finished before she left keeps her where she
+finished.
 
 ## 2026-11-12 — the public registration writes take a bot-check token
 
