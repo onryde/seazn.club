@@ -29,6 +29,11 @@ export const TABLE_WITHDRAWAL_LINE_VOIDED_ROW = "table_withdrawal_line_voided";
  *  row, through `withdrawalOwedSince` (owed while the pair is still in the field and not reinstated since). Not a history step. */
 export const PAIR_DISSOLVE_OWED_ROW = "pair_dissolve_owed";
 
+/** W5 T10b (ruling 292): the durable trace of a Reinstate, written for EVERY stage kind in the transaction that puts the entrant back
+ *  in the field - `{entrant_id}`. A Swiss or knockout cascade writes no `table_withdrawal` row, so `table_withdrawal_voided` is no
+ *  evidence of a Reinstate there; `withdrawalOwedSince` reads this row instead. Not a history step. */
+export const WITHDRAWAL_REINSTATED_ROW = "withdrawal_reinstated";
+
 export type TableWithdrawalPolicy = "expunge" | "walkover";
 
 /** One active `table_withdrawal` row, as written (`seq` is its ledger position). */

@@ -13,6 +13,10 @@
 // The expiry sweep calls the same release but cannot meet a placed solo: assign refuses an unpaid entry and expiry takes only
 // `pending` ones, so it is wired (the collector, the post-commit cascade) and not driven here.
 //
+// Task 10b (ruling 292): both doors apply in EVERY format after Start - the rigs take the entry stage's kind (league, swiss,
+// knockout) and each door test is driven in all three; the Swiss/knockout dissolves write no `table_withdrawal` row, so the
+// Reinstate sequence reads its own `withdrawal_reinstated` trace.
+//
 // Real Postgres required; skipped without DATABASE_URL.
 import { describe, expect, it, vi } from "vitest";
 import { sql } from "@/lib/db";
@@ -49,6 +53,15 @@ vi.mock("../lucky-loser", async (io) => {
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
+type StageKind = "league" | "swiss" | "knockout";
+const STAGE_KINDS: readonly StageKind[] = ["league", "swiss", "knockout"];
+const stageConfig = (kind: StageKind) => (kind === "league" ? { legs: 1 } : kind === "swiss" ? { rounds: 1 } : {});
+/** Only a league is generated before Start (the existing rigs' way); a Swiss pairs round one after it (startDivision mints shells). */
+async function afterStart(auth: Parameters<typeof startDivision>[0], divisionId: string, stageId: string, kind: StageKind) {
+  await startDivision(auth, divisionId);
+  if (kind === "swiss") await generateStageFixtures(auth, stageId);
+}
+
 const csvUpload = (csv: string) => ({ filename: "import.csv", contentType: "text/csv", buffer: Buffer.from(csv, "utf8") });
 const HEADER = "Club,Team,Player,DOB,Number,Position,Captain,Division";
 const csv = (...lines: string[]) => [HEADER, ...lines].join("\r\n");
@@ -61,7 +74,7 @@ const statusOf = async (id: string) => (await sql<{ status: string }[]>`select s
 const personCount = async (orgId: string) => (await sql<{ n: number }[]>`select count(*)::int as n from persons where org_id = ${orgId}`)[0]!.n;
 
 describe.skipIf(!HAS_DB)("X-RP-3 the bulk import is a roster door (R12)", () => {
-  async function rig(start: boolean) {
+  async function rig(start: boolean, kind: StageKind = "league") {
     const { auth } = await seedOrg();
     await seedFootballCatalog();
     const comp = await createCompetition(auth, { name: "Import Pairs", visibility: "private", branding: {}, ends_on: "2030-12-31" });
@@ -78,9 +91,9 @@ describe.skipIf(!HAS_DB)("X-RP-3 the bulk import is a roster door (R12)", () => 
     // The import makes teams; Acme is rewritten to a pair (the same fixture rewrite as the squad-seed suites: a legacy-shape row
     // built through the real door and then reshaped by SQL).
     await sql`update entrants set kind = 'pair' where id = ${acme}`;
-    const [stage] = await createStages(auth, division.id, { seq: 1, kind: "league", name: "Table", config: { legs: 1 }, progression: null });
-    await generateStageFixtures(auth, stage!.id);
-    if (start) await startDivision(auth, division.id);
+    const [stage] = await createStages(auth, division.id, { seq: 1, kind, name: "Table", config: stageConfig(kind), progression: null });
+    if (kind === "league") await generateStageFixtures(auth, stage!.id);
+    if (start) await afterStart(auth, division.id, stage!.id, kind);
     return { auth, division, acme, borough };
   }
 
@@ -119,12 +132,40 @@ describe.skipIf(!HAS_DB)("X-RP-3 the bulk import is a roster door (R12)", () => 
     }
     expect(checked, "anti-vacuity: four cases driven").toBe(4);
   }, 300_000);
+
+  for (const kind of STAGE_KINDS.filter((k) => k !== "league")) {
+    it(`ruling 292: an import roster.add onto a pair of a started ${kind} is refused and writes nothing; before Start it is allowed`, async () => {
+      // differential: today (eb2b12514f) the join is written outside a root league or group.
+      let checked = 0;
+      {
+        const r = await rig(false, kind);
+        const plan = await createImport(r.auth, csvUpload(csv("Acme SC,Acme U12,Cy Three,2014-01-03,3,,,u12")));
+        await commitImport(r.auth, plan.importId, null);
+        expect(await membersOf(r.acme), `${kind} before Start: the join is allowed`).toEqual(["Ada One", "Bo Two", "Cy Three"]);
+        checked++;
+      }
+      const r = await rig(true, kind);
+      const plan = await createImport(r.auth, csvUpload(csv("Acme SC,Acme U12,Cy Three,2014-01-03,3,,,u12")));
+      expect((plan.plan.ops as { kind: string }[]).filter((o) => o.kind === "roster.add"), "premise: one join planned").toHaveLength(1);
+      const persons = await personCount(r.auth.orgId);
+      await expect(commitImport(r.auth, plan.importId, null)).rejects.toMatchObject({ status: 422, code: "RR_SUBSTITUTE_PARTNER_REFUSED" });
+      expect(await membersOf(r.acme), "the pair is as it was").toEqual(["Ada One", "Bo Two"]);
+      expect(await personCount(r.auth.orgId), "nothing written").toBe(persons);
+      checked++;
+      // The positive pair: a TEAM of the same started division still takes a join.
+      const team = await createImport(r.auth, csvUpload(csv("Borough FC,Borough U12,Eve Nine,2014-01-09,9,,,u12")));
+      await commitImport(r.auth, team.importId, null);
+      expect(await membersOf(r.borough)).toEqual(["Di Four", "Eve Nine"]);
+      checked++;
+      expect(checked).toBe(3);
+    }, 300_000);
+  }
 });
 
 describe.skipIf(!HAS_DB)("X-RP-2 a placed solo sign-up who leaves a started pair dissolves it (R12b)", () => {
   /** A football team division taking solo sign-ups; the team entry "Pair A" materialised as an entrant (rewritten to a pair) holding its
    *  captain and the placed solo, in a started league against two more teams. */
-  async function rig(start: boolean, soloStatus: "confirmed" | "paid" = "confirmed") {
+  async function rig(start: boolean, soloStatus: "confirmed" | "paid" = "confirmed", kind: StageKind = "league") {
     const { auth } = await seedOrg();
     await seedFootballCatalog();
     const comp = await createCompetition(auth, { name: "Solo Pairs", visibility: "public", branding: {}, starts_on: "2030-06-01", ends_on: "2030-12-31" });
@@ -162,9 +203,9 @@ describe.skipIf(!HAS_DB)("X-RP-2 a placed solo sign-up who leaves a started pair
       { kind: "team", display_name: "Team C", members: [] },
     ]);
     await sql`update entrants set kind = 'pair' where id = ${entrantId}`;
-    const [stage] = await createStages(auth, division.id, { seq: 1, kind: "league", name: "Table", config: { legs: 1 }, progression: null });
-    await generateStageFixtures(auth, stage!.id);
-    if (start) await startDivision(auth, division.id);
+    const [stage] = await createStages(auth, division.id, { seq: 1, kind, name: "Table", config: stageConfig(kind), progression: null });
+    if (kind === "league") await generateStageFixtures(auth, stage!.id);
+    if (start) await afterStart(auth, division.id, stage!.id, kind);
     return { auth, division, divisionId: division.id, competitionId: comp.id, team, solo, entrantId };
   }
   const withdrawalRows = (divisionId: string) =>
@@ -269,4 +310,45 @@ describe.skipIf(!HAS_DB)("X-RP-2 a placed solo sign-up who leaves a started pair
     expect(await membersOf(r.entrantId)).toEqual(["Captain One"]);
     expect(await statusOf(r.entrantId), "still in the field").toBe("confirmed");
   }, 300_000);
+
+  for (const kind of STAGE_KINDS.filter((k) => k !== "league")) {
+    it(`ruling 292: a placed solo who leaves a started ${kind} pair dissolves it through the cascade; the pair is Reinstated and is NOT owed, a re-POST does not withdraw it again`, async () => {
+      // differential: today the pair stays seated carrying a departed partner outside a root league or group; and (the closed 8b
+      // limit) a Swiss/knockout dissolve then Reinstate read as "withdrawal did not finish" and the solo's re-POST withdrew it again.
+      {
+        const before = await rig(false, "confirmed", kind);
+        await withdrawRegistrationOrganiser(before.auth, before.solo.id);
+        expect(await membersOf(before.entrantId), "before Start the member is simply released").toEqual(["Captain One"]);
+        expect(await statusOf(before.entrantId)).toBe("confirmed");
+      }
+      const r = await rig(true, "confirmed", kind);
+      expect(await membersOf(r.entrantId), "premise").toEqual(["Captain One", "Priya Raman"]);
+      await withdrawRegistrationOrganiser(r.auth, r.solo.id);
+      expect(await statusOf(r.entrantId), `the ${kind} pair that lost its partner withdrew`).toBe("withdrawn");
+      expect(await membersOf(r.entrantId), "its record stands").toEqual(["Captain One", "Priya Raman"]);
+      expect((await withdrawalRows(r.divisionId)).length, "Swiss and knockout write no table-withdrawal row").toBe(0);
+      expect(await deskOwed(r), "dissolved: nothing owed").toEqual([]);
+
+      // The sequence: Reinstate, then the desk is quiet and the solo's re-POST runs no cascade.
+      await patchEntrant(r.auth, r.entrantId, { status: "confirmed" });
+      expect(await statusOf(r.entrantId), "Reinstated").toBe("confirmed");
+      expect(await deskOwed(r), "THE LIMIT: a Reinstated Swiss/knockout pair is not 'withdrawal did not finish'").toEqual([]);
+      const calls = control.calls;
+      await withdrawRegistrationOrganiser(r.auth, r.solo.id); // the solo's re-POST
+      expect(control.calls - calls, "the retry ran no cascade").toBe(0);
+      expect(await statusOf(r.entrantId), "still Reinstated").toBe("confirmed");
+    }, 300_000);
+
+    it(`ruling 292: a ${kind} dissolve that fails after the solo's release is shown on the desk and finished by the re-POST`, async () => {
+      const r = await rig(true, "confirmed", kind);
+      control.failNext = true;
+      await withdrawRegistrationOrganiser(r.auth, r.solo.id);
+      expect(control.failNext, "premise: the cascade ran and failed").toBe(false);
+      expect(await statusOf(r.entrantId)).toBe("confirmed");
+      expect(await deskOwed(r), "the desk names the pair").toEqual([{ kind: "withdrawal_owed", count: 1, names: ["Pair A"] }]);
+      await withdrawRegistrationOrganiser(r.auth, r.solo.id);
+      expect(await statusOf(r.entrantId)).toBe("withdrawn");
+      expect(await deskOwed(r)).toEqual([]);
+    }, 300_000);
+  }
 });

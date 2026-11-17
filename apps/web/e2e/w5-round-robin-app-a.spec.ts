@@ -738,6 +738,80 @@ test.describe("X-RP-2, X-RP-3 a started league's pair cannot change partners; lo
   });
 });
 
+// Ruling 292 (W5 T10b): the partner rule is the same in EVERY format - a started Swiss and a started knockout refuse a substitute in the
+// console's own words and withdraw a pair that loses a partner, each by its own rule (Swiss: the paired board is walked over, W3 R4b;
+// knockout: the line is walked over to the opponent, RB4-V1). Reinstate then needs no table row to be read as done.
+test.describe("ruling 292 a started Swiss or knockout pair cannot change partners; losing one withdraws it", () => {
+  for (const kind of ["swiss", "knockout"] as const) {
+    test(`the roster editor in a started ${kind}: a substitute is refused and nothing moves; dropping the partner withdraws the pair and walks her line over`, async ({ page, request }) => {
+      test.setTimeout(150_000);
+      const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `Pairs292 ${kind} ${TAG}`, visibility: "private" });
+      expect(comp.status, JSON.stringify(comp.error)).toBe(201);
+      const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+        name: "Doubles",
+        sport_key: "generic",
+        variant_key: "score",
+        config: GENERIC_CONFIG,
+      });
+      expect(div.status, JSON.stringify(div.error)).toBe(201);
+      const divisionId = div.data!.id;
+      const leaverName = "Alexandria Montgomery-Featherstonehaugh III";
+      const keep = await seedPlayer(request, "Keeper");
+      const go = await seedPlayer(request, "Leaver");
+      const newcomer = await seedPlayer(request, "Newcomer");
+      const leaverId = await seedPair(request, divisionId, [keep, go], leaverName);
+      for (let i = 0; i < 3; i++) await seedPair(request, divisionId, [await seedPlayer(request, `Opp${i}a`), await seedPlayer(request, `Opp${i}b`)]);
+      const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", {
+        seq: 1,
+        kind,
+        name: kind === "swiss" ? "Swiss" : "Bracket",
+        config: kind === "swiss" ? { rounds: 2 } : {},
+      });
+      expect(stage.status, JSON.stringify(stage.error)).toBe(201);
+      const stageId = stage.data!.id;
+      expect((await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST")).status).toBe(200);
+      if (kind === "swiss") expect((await generate(request, stageId)).status, "Pair round one").toBe(200);
+      const mine = async () =>
+        ((await stageFixtures(request, divisionId, stageId)) as (Pairing & { status: string })[]).filter(
+          (f) => (f.home_entrant_id === leaverId || f.away_entrant_id === leaverId) && f.home_entrant_id !== null && f.away_entrant_id !== null,
+        );
+      expect(await mine(), "premise: she holds a seated line").toHaveLength(1);
+      const roster = await storedMembers(request, leaverId);
+
+      await page.goto(await divisionPath(request, divisionId, "?tab=entrants"));
+      await dismissCookieBanner(page);
+      const toggle = page.getByRole("cell", { name: leaverName }).getByRole("button", { name: leaverName, exact: false });
+      await expect(toggle).toBeVisible({ timeout: 20_000 });
+      await toggle.click();
+      // 1. A substitute: refused, in the console's words (format-neutral), and nothing moves.
+      await stagePartnerSwap(page, go.name, newcomer.name);
+      const refusedRes = page.waitForResponse((res) => new URL(res.url()).pathname === `/api/v1/entrants/${leaverId}` && res.request().method() === "PATCH", { timeout: 20_000 });
+      await saveRoster(page).click();
+      expect((await refusedRes).status()).toBe(422);
+      const error = page.getByTestId("entrants-error");
+      await expect(error).toHaveText(uiEn["roundrobin.refusal.RR_SUBSTITUTE_PARTNER_REFUSED"]!, { timeout: 20_000 });
+      expect(await storedMembers(request, leaverId), "the roster is as it was").toBe(roster);
+      expect((await apiJson<{ status: string }>(request, `/api/v1/entrants/${leaverId}`)).data!.status).not.toBe("withdrawn");
+      expect((await mine()).map((f) => f.status), "her line did not move").not.toContain("forfeited");
+
+      // 2. The partner dropped: the pair withdraws and her seated line is a walkover to the opponent.
+      await page.reload();
+      await dismissCookieBanner(page);
+      await toggle.click();
+      const rosterBox = page.getByTestId("entrant-roster");
+      await expect(rosterBox.getByText(go.name, { exact: true })).toBeVisible();
+      await rosterBox.locator("div", { has: page.getByText(go.name, { exact: true }) }).last().getByRole("button", { name: uiEn["entrants.roster.remove"] }).click();
+      const sent = page.waitForResponse((res) => new URL(res.url()).pathname === `/api/v1/entrants/${leaverId}` && res.request().method() === "PATCH", { timeout: 30_000 });
+      await saveRoster(page).click();
+      expect((await sent).status()).toBe(200);
+      await expect.poll(async () => (await apiJson<{ status: string }>(request, `/api/v1/entrants/${leaverId}`)).data!.status, { timeout: 20_000 }).toBe("withdrawn");
+      expect((await mine()).map((f) => f.status), `${kind}: her line is walked over, not voided`).toEqual(["forfeited"]);
+      await expect(saveRoster(page), "no live Save on a withdrawn pair").toHaveCount(0);
+      expect(await storedMembers(request, leaverId), "the server kept both people").toBe(roster);
+    });
+  }
+});
+
 // X-CUT-4 (W5 T11, FX-G16's table half; RB5-K6): a correction inside a COMPLETED league. An organiser cannot void a result the next
 // stage built on, so the unwind a correction really is: take the decided line's events back, re-record it the other way. Before the
 // finals start the confirmed proposal goes stale and its seats go back to TBD; a fresh draft waits on the desk and its confirm seats

@@ -989,11 +989,13 @@ function refreshEntrantPublicPages(scope: EntrantPublicScope, context: Record<st
 }
 
 /**
- * W5 T10 (X-RP-2, X-RP-3; RB5-R2, RB5-R3, R12; rulings 282, 290): what a roster edit of a PAIR means once its division's root
- * league or group has started (`hasRootTableStage` + `divisionHasStarted`, the late-entry door's own "running" reading).
+ * W5 T10 + T10b (X-RP-2, X-RP-3; RB5-R2, RB5-R3, R12; rulings 282, 290, 292): what a roster edit of a PAIR means once its
+ * division has started (`divisionHasStarted`, the late-entry door's own "running" reading) - in ANY format (ruling 292, owner
+ * 2026-11-17: "same rule for everywhere"): a league or group, a Swiss, a knockout, a mixed template. Each format's own withdrawal
+ * rule then applies, through the cascade.
  * - `refuse`: anyone joining a pair in the field (R12a, a substitute partner - a lineup matter, deferred); and ANY change to
  *   the roster of a departed pair (fix round 1, I1: a withdrawn pair's record is FROZEN - were it editable, a plain Reinstate
- *   would put a one-partner or substitute pair back into the started table). Nothing is written.
+ *   would put a one-partner or substitute pair back into the started division). Nothing is written.
  * - `dissolve`: a partner leaving a pair in the field with nobody joining (R12b): the pair withdraws as the entrant.
  * - `none`: everything else - before Start, a team or an individual, a roster that names the same people.
  * A Reinstate is a `status`-only patch, which never reaches here (no `members`), so the refusal cannot block one.
@@ -1002,18 +1004,18 @@ function refreshEntrantPublicPages(scope: EntrantPublicScope, context: Record<st
  */
 export type PairRosterVerdict = "none" | "refuse" | "dissolve";
 
-/** The pair entrant `id` when it sits in a division whose root league or group has started; null for anything else (a team, an
- *  individual, a pair before Start or in a division with no such table, an unknown id). */
-export async function startedTablePair(tx: Tx, id: string): Promise<{ status: string; division_id: string } | null> {
+/** The pair entrant `id` when its division has started, whatever the format; null for anything else (a team, an individual, a
+ *  pair before Start, an unknown id). Ruling 292: no longer gated on a root league or group (`hasRootTableStage`). */
+export async function startedPair(tx: Tx, id: string): Promise<{ status: string; division_id: string } | null> {
   const [e] = await tx<{ kind: string; status: string; division_id: string }[]>`
     select kind, status, division_id from entrants where id = ${id}`;
   if (e === undefined || e.kind !== "pair") return null;
-  if (!(await hasRootTableStage(tx, e.division_id)) || !(await divisionHasStarted(tx, e.division_id))) return null;
+  if (!(await divisionHasStarted(tx, e.division_id))) return null;
   return { status: e.status, division_id: e.division_id };
 }
 
 export async function pairRosterVerdictTx(tx: Tx, id: string, next: readonly string[]): Promise<PairRosterVerdict> {
-  const e = await startedTablePair(tx, id);
+  const e = await startedPair(tx, id);
   if (e === null) return "none";
   const current = (await tx<{ person_id: string }[]>`select person_id from entrant_members where entrant_id = ${id}`).map((m) => m.person_id);
   const change = classifyPairRosterChange(current, next);
@@ -1157,6 +1159,12 @@ export async function writeEntrantPatch(
     // again (`heldMemberships`, the roster write's own predicate) — a player who joined another entrant of the division
     // while this one was away is refused by name, and the transaction writes nothing. A patch that also replaces the
     // roster is asked by `insertMembers` over the NEW roster instead (below), never over the one it replaces.
+    // W5 T10b (ruling 292): a Reinstate leaves a durable trace in EVERY format, in this transaction - Swiss and knockout cascades write
+    // no `table_withdrawal` row, so nothing else would tell `withdrawalOwedSince` that her withdrawal was taken back.
+    if (reinstating && !DEPARTED_STATUSES.has(row.status)) {
+      const { recordWithdrawalReinstated } = await import("./withdrawal");
+      await recordWithdrawalReinstated(tx, row.division_id, id, auth.userId);
+    }
     if (reinstating && !DEPARTED_STATUSES.has(row.status) && !members) {
       const mine = await tx<{ person_id: string }[]>`select person_id from entrant_members where entrant_id = ${id}`;
       const held =

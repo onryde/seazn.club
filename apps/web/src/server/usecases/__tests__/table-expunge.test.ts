@@ -669,6 +669,10 @@ describe("Undo and the table-withdrawal rows", () => {
     expect([stored!.lines, stored!.retired], "premise: a row and a retirement per line are stored").toEqual([hers.length, hers.length]);
     const listed = (await divisionHistory(r.auth, r.divisionId)).events.map((e) => e.type);
     expect(listed.filter((t) => t.startsWith("table_withdrawal_line")), "no internal row is listed").toEqual([]);
+    // W5 T10b (ruling 292): the Reinstate's own trace is stored for every stage kind and never listed.
+    const [traced] = await sql<{ n: number }[]>`select count(*)::int as n from division_events where division_id = ${r.divisionId} and type = 'withdrawal_reinstated'`;
+    expect(traced!.n, "premise: the Reinstate wrote its trace").toBe(1);
+    expect(listed.filter((t) => t === "withdrawal_reinstated"), "the trace is not a history entry").toEqual([]);
     expect(listed.filter((t) => t.startsWith("table_withdrawal")), "one entry for the withdrawal, one for the Reinstate (newest first)")
       .toEqual(["table_withdrawal_voided", "table_withdrawal"]);
   }, 120_000);
@@ -678,12 +682,14 @@ describe("Undo and the table-withdrawal rows", () => {
     expect(isReversible("table_withdrawal_voided")).toBe(false);
     expect(isReversible("table_withdrawal_line"), "the write-ahead line row (re-review 2) neither").toBe(false);
     expect(isReversible("table_withdrawal_line_voided")).toBe(false);
+    expect(isReversible("withdrawal_reinstated"), "T10b: the Reinstate trace neither").toBe(false);
     const ledger = [
       { seq: 1, type: "fixtures_generated", payload: {} },
       { seq: 2, type: "table_withdrawal_line", payload: {} },
       { seq: 3, type: "table_withdrawal", payload: {} },
       { seq: 4, type: "table_withdrawal_line_voided", payload: { voids_seq: 2 } },
       { seq: 5, type: "table_withdrawal_voided", payload: { voids_seq: 3 } },
+      { seq: 6, type: "withdrawal_reinstated", payload: { entrant_id: "e" } },
     ];
     expect(undoBarrierRefusal(ledger, 0), "an Undo crossing them is not refused").toBeNull();
   });

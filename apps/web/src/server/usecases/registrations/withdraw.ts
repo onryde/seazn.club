@@ -69,7 +69,7 @@ import { refundEntryUnderLock, resolveRefundPolicy } from "./refunds";
 export async function releaseSoloSignUpPlacement(
   tx: Tx,
   registrationId: string,
-  /** W5 T10 fix round 1 (R12): where a PAIR of a started league or group that loses this person is reported (its entrant id), for
+  /** W5 T10 fix round 1 (R12): where a PAIR of a started division (any format, ruling 292) that loses this person is reported (its entrant id), for
    *  the caller to dissolve through the withdrawal cascade AFTER its transaction commits (the cascade is many transactions).
    *  A caller that passes none cannot run the cascade, so such a release is refused instead (`RR_SUBSTITUTE_PARTNER_REFUSED`). */
   pairLosses?: string[],
@@ -98,7 +98,7 @@ export async function releaseSoloSignUpPlacement(
     const [target] = await tx<{ entrant_id: string | null; division_id: string }[]>`
       select entrant_id, division_id from registrations where id = ${placement.registration_id} for update`;
     if (target?.entrant_id && placement.person_id) {
-      // W5 T10 fix round 1 (R12; RB5-R2): a placed solo who leaves is a partner LEAVING. On a pair of a started league or group
+      // W5 T10 fix round 1 (R12; RB5-R2): a placed solo who leaves is a partner LEAVING. On a pair of a started division (any format, ruling 292)
       // the member row is kept (the pair is the entrant; its record stands) and the pair withdraws instead - reported to the
       // caller, which runs the cascade after the commit. A departed pair's roster is frozen the same way (nothing to dissolve).
       const members = (await tx<{ person_id: string }[]>`select person_id from entrant_members where entrant_id = ${target.entrant_id}`)
@@ -168,7 +168,7 @@ async function settleStartedWithdrawal(
 }
 
 /**
- * W5 T10 fix round 1 (R12; RB5-R2): the pairs of a started league or group that a released solo placement left a partner short
+ * W5 T10 fix round 1 (R12; RB5-R2): the pairs of a started division (any format, ruling 292) that a released solo placement left a partner short
  * (`releaseSoloSignUpPlacement`'s `pairLosses`) withdraw through the same cascade as any other withdrawal, once the releasing
  * transaction has committed. Failure handling is `settleStartedWithdrawal`'s: logged, the pair left in the field - and, I-1 (fix round 2),
  * SHOWN: the release wrote a durable `pair_dissolve_owed` row with it (`recordPairDissolveOwed`), so the desk's "withdrawal did

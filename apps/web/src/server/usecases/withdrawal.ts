@@ -65,6 +65,7 @@ import {
   TABLE_WITHDRAWAL_LINE_VOIDED_ROW,
   TABLE_WITHDRAWAL_ROW,
   TABLE_WITHDRAWAL_VOIDED_ROW,
+  WITHDRAWAL_REINSTATED_ROW,
   activeTableWithdrawals,
   type TableWithdrawalPolicy,
 } from "@/lib/table-withdrawal-note";
@@ -881,22 +882,28 @@ async function runWithdrawEntrantCascade(
  * after the `table_withdrawal` rows (the refold that follows it is derived, recomputed by any later fold) — never on an
  * intermediate settle: a run cut off part-way has written walkovers and expunges but not her status, and is owed. So: owed
  * while she is still in the field, unless the organiser has REINSTATED her since the trigger — read from Reinstate's own write,
- * a `table_withdrawal_voided` row (on or after `at`) voiding a `table_withdrawal` row about her. The ONE reading for the desk's
+ * a `withdrawal_reinstated` row about her (on or after `at`). The ONE reading for the desk's
  * "withdrawal did not finish" row and for both retries, so a Reinstate is neither flagged nor withdrawn again by a retry.
  *
- * Limit (recorded): a finished cascade that wrote NO table row — her open stages were Swiss or brackets only, which RB5-W7 does
- * not ledger — then Reinstated leaves no durable trace of either, so it reads as owed. A durable "departed at" (a column set in
- * the status write) would close it; it is a schema change, left to the controller.
+ * W5 T10b (ruling 292) closes the 8b limit: the Reinstate is read from its OWN trace, `withdrawal_reinstated` (`recordWithdrawalReinstated`,
+ * written for every stage kind in the status write's transaction), never inferred from a `table_withdrawal_voided` row - a Swiss or
+ * knockout cascade writes no `table_withdrawal` row, so a Reinstated pair there read as owed. One authority for the fact.
  */
 export async function withdrawalOwedSince(tx: Tx, divisionId: string, entrantId: string, at: Date): Promise<boolean> {
   const [row] = await tx<{ status: string | null; reversed: boolean }[]>`
     select (select status from entrants where id = ${entrantId}) as status,
-           exists (select 1 from division_events w
-                     join division_events v on v.division_id = w.division_id and v.type = ${TABLE_WITHDRAWAL_VOIDED_ROW}
-                                           and (v.payload ->> 'voids_seq')::int = w.seq
-                    where w.division_id = ${divisionId} and w.type = ${TABLE_WITHDRAWAL_ROW}
-                      and w.payload ->> 'entrant_id' = ${entrantId} and v.created_at >= ${at}) as reversed`;
+           exists (select 1 from division_events v
+                    where v.division_id = ${divisionId} and v.type = ${WITHDRAWAL_REINSTATED_ROW}
+                      and v.payload ->> 'entrant_id' = ${entrantId} and v.created_at >= ${at}) as reversed`;
   return row !== undefined && row.status !== null && !DEPARTED_STATUSES.has(row.status) && !row.reversed;
+}
+
+/** W5 T10b (ruling 292): the durable trace of a Reinstate, in the transaction that writes her back into the field - every stage kind,
+ *  because only a league or group cascade writes a `table_withdrawal` row for a Reinstate to void. Takes the division lock
+ *  (`appendTableLedgerRow`'s contract; a Reinstate already holds it). */
+export async function recordWithdrawalReinstated(tx: Tx, divisionId: string, entrantId: string, actorId: string | null): Promise<void> {
+  await tx`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
+  await appendTableLedgerRow(tx, divisionId, WITHDRAWAL_REINSTATED_ROW, { entrant_id: entrantId }, actorId);
 }
 
 /**

@@ -45,7 +45,7 @@ import { admitKnockoutLateEntrant } from "./knockout-late-entry";
 import { admitTableLateEntrant } from "./roundrobin-late-entry";
 import { admitSwissLateEntrant } from "./swiss-late-entry";
 import { appendToLadderOrder } from "./ladder-late-entry";
-import { heldMemberships, personOnOtherTeamError, startedTablePair, type HeldMembershipRow } from "./entrants";
+import { heldMemberships, personOnOtherTeamError, startedPair, type HeldMembershipRow } from "./entrants";
 import { roundRobinRefusal } from "./roundrobin-refusal";
 
 type Tx = postgres.TransactionSql;
@@ -455,7 +455,7 @@ export async function commitImport(
     await assertImportRostersPlayOnline(tx, seatGate, rosterCandidates);
     // UI5 fix round 1 (ruling Q3): one person, one entrant per division — no override either.
     await assertImportRostersOneTeam(tx, rosterCandidates);
-    // W5 T10 fix round 1 (R12): a roster.add is always a JOIN, so none may land on a pair of a started league or group.
+    // W5 T10 fix round 1 (R12): a roster.add is always a JOIN, so none may land on a pair of a started division (any format, ruling 292).
     await assertImportRostersKeepStartedPairs(tx, rosterCandidates);
     if (rosterCandidates.length > 0) {
       const divisionIds = [...new Set(rosterCandidates.map((c) => c.divisionId))];
@@ -680,14 +680,14 @@ async function assertImportRostersOneTeam(tx: Tx, candidates: readonly RosterEli
 }
 
 /** W5 T10 fix round 1 (R12; RB5-R3): the import is a roster door like any other. The planner plans a `roster.add` only for a
- *  membership the snapshot does not hold, so every one is a person JOINING; onto an existing `pair` entrant of a division whose
- *  root league or group has started, that is a substitute partner (or a change to a withdrawn pair's frozen record) and the whole
+ *  membership the snapshot does not hold, so every one is a person JOINING; onto an existing `pair` entrant of a division that has started (any format, ruling 292),
+ *  that is a substitute partner (or a change to a withdrawn pair's frozen record) and the whole
  *  commit is refused 422 RR_SUBSTITUTE_PARTNER_REFUSED before anything is written. An entrant this commit creates is never a
  *  pair (`entrant.create` makes teams), and a pair before Start is free to change. */
 async function assertImportRostersKeepStartedPairs(tx: Tx, candidates: readonly RosterEligibilityCandidate[]): Promise<void> {
   const existing = [...new Set(candidates.filter((c) => !c.isNewEntrant).map((c) => c.entrantKey.replace(/^id:/, "")))];
   for (const entrantId of existing) {
-    if ((await startedTablePair(tx, entrantId)) !== null) {
+    if ((await startedPair(tx, entrantId)) !== null) {
       throw roundRobinRefusal("RR_SUBSTITUTE_PARTNER_REFUSED", { entrant_id: entrantId });
     }
   }

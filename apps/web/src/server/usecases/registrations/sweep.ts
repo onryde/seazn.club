@@ -289,7 +289,7 @@ export async function sweepRegistrations(
       // RS009 — same reason withdrawCore does it: expiry is a status change,
       // so V388's cascade never fires and the placement would outlive the
       // entry that created it.
-      // W5 T10 fix round 1 (R12): a pair of a started league or group that loses its placed solo withdraws, after the commit.
+      // W5 T10 fix round 1 (R12): a pair of a started division (any format, ruling 292) that loses its placed solo withdraws, after the commit.
       const pairLosses: string[] = [];
       await releaseSoloSignUpPlacement(tx, id, pairLosses);
       // RS002 W5 whole-branch review MAJOR: expiring the cart's LAST

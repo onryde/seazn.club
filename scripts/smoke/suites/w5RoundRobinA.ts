@@ -47,6 +47,11 @@ import { call, check, html, newSession, signIn, tag, v1, v1data } from "../harne
  * confirmed cut goes stale and her seat is given back (the finals read unseated), a fresh proposal offers the next eligible, and
  * confirming it seats them. (Main: the confirmed seats stood, a departed entrant on a finals line.)
  *
+ * Task 10b (ruling 292, X-RP-2/3 in every format): a started SWISS of four pairs and a started KNOCKOUT of four pairs, in a second org
+ * (the first org's competitions are at their caps). A substitute partner is refused 422 RR_SUBSTITUTE_PARTNER_REFUSED and the roster
+ * stays; dropping a partner withdraws the pair as the entrant, its seated line walked over to the opponent (W3 R4b / RB4-V1), and a
+ * Reinstate leaves the pair in the field. (Main: the members write succeeded and every fixture was left standing.)
+ *
  * Every check is counted, and a run that checked nothing fails. SMOKE_ONLY=w5RoundRobinA runs it alone (SELECTABLE_SUITES).
  */
 export async function w5RoundRobinASuite(): Promise<void> {
@@ -60,7 +65,8 @@ export async function w5RoundRobinASuite(): Promise<void> {
   // Task 9: 1 (a qualifier who leaves after the table completes is cut; the 5th place is seated).
   // Task 10: 1 (a started league's pair: a substitute partner is refused by name; dropping a partner withdraws the pair by the 50 percent rule).
   // Task 11: 1 (a confirmed qualifier leaves before the finals start: the proposal goes stale and her seat is given back; the re-proposal seats the next eligible).
-  const EXPECTED_CHECKS = 14;
+  // Task 10b: 1 (the same rule in a started Swiss and a started knockout of pairs: a substitute is refused; dropping a partner withdraws the pair and walks her line over).
+  const EXPECTED_CHECKS = 15;
   let checked = 0;
   const w5Check = (label: string, cond: boolean) => {
     checked++;
@@ -604,6 +610,70 @@ export async function w5RoundRobinASuite(): Promise<void> {
       "w5a X-RP-2/X-RP-3: in a started league a substitute partner is refused by name and changes nothing; dropping a partner withdraws the pair (1 of 3 played: all 3 lines taken out)" +
         (ok ? "" : ` - div ${dRes.status}, pairs ${pairs.length}, start ${started.status}, hers ${hers.length}, walk ${walk.status}, swap ${swap.status} ${JSON.stringify(swap.json).slice(0, 200)}, roster ${rosterAfterSwap}, drop ${drop.status} ${JSON.stringify(report ?? null).slice(0, 200)}, after ${after.map((f) => f.status).join(",")}`),
       ok,
+    );
+  }
+
+  // Check 15 - Task 10b (ruling 292): the partner rule in a started Swiss and a started knockout. A SECOND org: the first one's
+  // competitions are at their caps (the module's header). Nothing here reads the first org's data.
+  {
+    const second = newSession();
+    await signIn(second, `delivered+w5a2_${tag}@resend.dev`);
+    const c2 = v1data<{ id: string } | undefined>(
+      await v1(second, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W5 RR A pairs ${tag}`, visibility: "private" }),
+    );
+    const verdicts: string[] = [];
+    for (const kind of ["swiss", "knockout"] as const) {
+      const dRes = await v1(second, `/api/v1/competitions/${c2?.id ?? "no-competition"}/divisions`, "POST", {
+        name: `Pairs ${kind}`,
+        sport_key: "generic",
+        variant_key: "score",
+        config: { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false },
+      });
+      const divId = v1data<{ id: string } | undefined>(dRes)?.id;
+      const persons: string[] = [];
+      for (let i = 0; i < 9; i++) {
+        const p = v1data<{ id: string } | undefined>(await v1(second, "/api/v1/persons", "POST", { full_name: `${kind} person ${i + 1} ${tag}` }));
+        persons.push(p?.id ?? "");
+      }
+      const pairs = v1data<{ id: string }[] | undefined>(
+        await v1(second, `/api/v1/divisions/${divId}/entrants`, "POST",
+          [0, 1, 2, 3].map((i) => ({
+            kind: "pair", display_name: `${kind} pair ${i + 1} ${tag}`, seed: i + 1,
+            members: [{ person_id: persons[2 * i] }, { person_id: persons[2 * i + 1] }],
+          }))),
+      ) ?? [];
+      const stageId = v1data<{ id: string } | undefined>(
+        await v1(second, `/api/v1/divisions/${divId}/stages`, "POST", { seq: 1, kind, name: kind, ...(kind === "swiss" ? { config: { rounds: 2 } } : {}) }),
+      )?.id;
+      const started = await v1(second, `/api/v1/divisions/${divId}/start`, "POST");
+      if (kind === "swiss") await v1(second, `/api/v1/stages/${stageId}/generate`, "POST");
+      const last = pairs[3]?.id;
+      const seated = async () =>
+        (v1data<Fx[] | undefined>(await v1(second, `/api/v1/divisions/${divId}/fixtures`)) ?? []).filter(
+          (f) => f.stage_id === stageId && (f.home_entrant_id === last || f.away_entrant_id === last) && f.home_entrant_id && f.away_entrant_id,
+        );
+      const before = await seated();
+      const opp = before[0]?.home_entrant_id === last ? before[0]?.away_entrant_id : before[0]?.home_entrant_id;
+      const swap = await v1(second, `/api/v1/entrants/${last}`, "PATCH", { members: [{ person_id: persons[6] }, { person_id: persons[8] }] });
+      const rosterAfterSwap = v1data<{ members?: { person_id: string }[] } | undefined>(await v1(second, `/api/v1/entrants/${last}`))?.members?.map((m) => m.person_id).sort().join(",");
+      const drop = await v1(second, `/api/v1/entrants/${last}`, "PATCH", { members: [{ person_id: persons[6] }] });
+      const report = v1data<{ status?: string } | undefined>(drop);
+      const after = await seated();
+      const back = await v1(second, `/api/v1/entrants/${last}`, "PATCH", { status: "registered" });
+      const reinstated = v1data<{ status?: string } | undefined>(back);
+      const ok =
+        dRes.status === 201 && pairs.length === 4 && started.status === 200 && before.length === 1 &&
+        swap.status === 422 && (swap.json as { error?: { code?: string } } | undefined)?.error?.code === "RR_SUBSTITUTE_PARTNER_REFUSED" &&
+        rosterAfterSwap === [persons[6], persons[7]].sort().join(",") &&
+        drop.status === 200 && report?.status === "withdrawn" &&
+        after.length === 1 && after[0]?.status === "forfeited" && opp !== undefined && opp !== null &&
+        back.status === 200 && reinstated?.status === "registered";
+      verdicts.push(ok ? `${kind} ok` : `${kind} FAILED - div ${dRes.status}, pairs ${pairs.length}, start ${started.status}, before ${before.length}, swap ${swap.status} ${JSON.stringify(swap.json).slice(0, 160)}, roster ${rosterAfterSwap}, drop ${drop.status} ${JSON.stringify(report ?? null).slice(0, 120)}, after ${after.map((f) => f.status).join(",")}, back ${back.status}`);
+    }
+    w5Check(
+      "w5a X-RP-2/X-RP-3 (ruling 292): in a started Swiss and a started knockout a substitute partner is refused by name; dropping a partner withdraws the pair and walks her line over; Reinstate puts her back" +
+        (verdicts.every((v) => v.endsWith(" ok")) ? "" : ` - ${verdicts.join("; ")}`),
+      verdicts.length === 2 && verdicts.every((v) => v.endsWith(" ok")),
     );
   }
 

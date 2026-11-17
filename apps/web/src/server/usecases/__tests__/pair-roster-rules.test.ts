@@ -361,7 +361,7 @@ describe.skipIf(!HAS_DB)("X-RP-3 the squad sync is the same door (R12)", () => {
   }, 200_000);
 });
 
-describe.skipIf(!HAS_DB)("X-RP-2/3 where the rule does not apply (pins)", () => {
+describe.skipIf(!HAS_DB)("X-RP-2/3 where the rule does not apply, and the ruling 292 widening (pins)", () => {
   it("before Start a partner change is allowed: swapped, dropped, and re-added — nobody withdraws", async () => {
     // pin, no defect expected: before Start the fixtures are regenerated from the field anyway.
     const r = await rig(GENERIC, 3, { start: false });
@@ -389,8 +389,8 @@ describe.skipIf(!HAS_DB)("X-RP-2/3 where the rule does not apply (pins)", () => 
     expect(await withdrawalRows(r.divisionId)).toEqual([]);
   }, 200_000);
 
-  it("a pair in a division with no league or group is not held by R12 (a knockout is another rule)", async () => {
-    // pin, no defect expected: the brief scopes R12 to a started ROOT TABLE stage.
+  it("a pair in a started knockout-only division IS held by the rule now (ruling 292; Task 10 had scoped it to a root table)", async () => {
+    // differential: at eb2b12514f this swap was allowed (no root league or group); ruling 292 widens the rule to every format.
     const { auth } = await seedOrg("pro");
     const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "W5 T10 ko " + randomUUID().slice(0, 6), visibility: "private", branding: {} });
     const d = await createDivision(auth, comp.id, { name: "KO", slug: "ko-" + randomUUID().slice(0, 6), sport_key: GENERIC.key, variant_key: GENERIC.variant, config: {} });
@@ -404,7 +404,8 @@ describe.skipIf(!HAS_DB)("X-RP-2/3 where the rule does not apply (pins)", () => 
     await createStages(auth, d.id, { seq: 1, kind: "knockout", name: "Bracket", config: {}, progression: null });
     await startDivision(auth, d.id);
     const swap = await person("KSwap");
-    await patchEntrant(auth, made[0]!.id, { members: [member(made[0]!.a), member(swap)] });
-    expect(await rosterOf(auth, made[0]!.id)).toEqual([made[0]!.a, swap].sort());
+    await expect(patchEntrant(auth, made[0]!.id, { members: [member(made[0]!.a), member(swap)] })).rejects.toMatchObject({ status: 422, code: "RR_SUBSTITUTE_PARTNER_REFUSED" });
+    expect((await rosterOf(auth, made[0]!.id)).length, "the roster is as it was").toBe(2);
+    expect(await rosterOf(auth, made[0]!.id)).not.toContain(swap);
   }, 200_000);
 });
