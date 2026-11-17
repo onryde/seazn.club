@@ -37,6 +37,8 @@ const m = (n: number) => new Date(T0.getTime() + n * 60_000);
 interface FactsIn {
   /** S: the latest ended_at among the broadcast's sessions; null/absent = no session has ended on it. */
   S?: Date | null; status?: string; F?: Date | null; active?: boolean; reservedUntil?: Date | null; terminalWithoutEndedAt?: boolean;
+  /** B1: the last session on the broadcast was a court session. */
+  court?: boolean;
 }
 const facts = (o: FactsIn): EndFacts => ({
   activeSessionOnBroadcast: o.active ?? false,
@@ -45,6 +47,7 @@ const facts = (o: FactsIn): EndFacts => ({
   fixtureStatus: o.status ?? "in_play",
   finishedAt: o.F ?? null,
   terminalWithoutEndedAt: o.terminalWithoutEndedAt ?? false,
+  ...(o.court === undefined ? {} : { lastSessionCourt: o.court }),
 });
 /** `now` defaults to a minute after Stop: inside the grace, so a "due" answer is a time in the future of `now`. */
 const due = (o: FactsIn & { now?: Date }) => broadcastEndDueAt(facts(o), o.now ?? m(1));
@@ -206,6 +209,38 @@ async function session(
   return row!.id;
 }
 
+
+describe("broadcastEndDueAt — a court session's finished match (B1, owner 2026-11-17: 30 s after the app stops)", () => {
+  const s30 = (d: Date) => new Date(d.getTime() + 30_000);
+  it("court + finished: Stop + 30 s, for every finished status", () => {
+    let checked = 0;
+    for (const status of SPEC_FINISHED) {
+      expect(due({ court: true, S: m(10), ...resultAt(status, m(9)) }), status).toEqual(s30(m(10)));
+      checked++;
+    }
+    expect(checked).toBe(5);
+  });
+  it("court + a result that lands after the Stop (inside the grace): 30 s after the result, never past the 5-minute grace", () => {
+    expect(due({ court: true, S: m(10), ...resultAt("decided", new Date(m(10).getTime() + 90_000)) })).toEqual(new Date(m(10).getTime() + 120_000));
+    expect(due({ court: true, S: m(10), ...resultAt("decided", m(14.9)) })).toEqual(m(15));
+  });
+  it("court + not finished: the 5-minute grace, for every other status (a restart may follow)", () => {
+    let checked = 0;
+    for (const status of NOT_FINISHED) {
+      expect(due({ court: true, S: m(10), ...resultAt(status, m(9)) }), status).toEqual(m(15));
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+  it("a fixture code's finished match is unchanged: Stop + 2 min, with court absent or false", () => {
+    expect(due({ S: m(10), ...resultAt("decided", m(9)) })).toEqual(m(12));
+    expect(due({ court: false, S: m(10), ...resultAt("decided", m(9)) })).toEqual(m(12));
+  });
+  it("a court session still active on the broadcast is never due", () => {
+    expect(due({ court: true, active: true, S: m(10), ...resultAt("decided", m(9)) })).toBeNull();
+  });
+});
+
 describe.skipIf(!HAS_DB)("readEndFacts — the facts, read with plain selects (spec §6.4, P5)", () => {
   it("EMPTY CASE FIRST: a broadcast no session has used reads no active session, no S, no stale terminal → the rule answers null", async () => {
     const w = await world(2);
@@ -213,7 +248,7 @@ describe.skipIf(!HAS_DB)("readEndFacts — the facts, read with plain selects (s
     const f = await readEndFacts(sql, b);
     expect(f).toEqual({
       activeSessionOnBroadcast: false, reservedUntil: null, latestEndedAt: null,
-      fixtureStatus: "in_play", finishedAt: null, terminalWithoutEndedAt: false,
+      fixtureStatus: "in_play", finishedAt: null, terminalWithoutEndedAt: false, lastSessionCourt: false,
     });
     expect(broadcastEndDueAt(f, m(1))).toBeNull();
     // The reservation is the broadcast's own reserved_until, read as written (T10 reserves a broadcast it reuses).

@@ -24,6 +24,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 
 const tails = vi.hoisted(() => ({ queue: [] as (() => unknown)[] }));
 vi.mock("@/lib/deferred", () => ({ deferred: (fn: () => unknown) => { tails.queue.push(fn); } }));
+// B1: the YouTube end tail waits up to 45 s for its due time; this file is about the start, the tail and the money, and
+// court-stream-youtube-end.test.ts drives the end tail with its own clock.
+vi.mock("../stream-sessions/court-end", () => ({ endCourtBroadcastSoon: () => undefined }));
 async function runTails(): Promise<void> {
   while (tails.queue.length > 0) {
     const fn = tails.queue.shift()!;

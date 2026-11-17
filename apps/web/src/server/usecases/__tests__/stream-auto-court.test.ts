@@ -25,6 +25,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 
 const tails = vi.hoisted(() => ({ queue: [] as (() => unknown)[] }));
 vi.mock("@/lib/deferred", () => ({ deferred: (fn: () => unknown) => { tails.queue.push(fn); } }));
+// B1: the YouTube end tail waits up to 45 s for its due time; court-stream-youtube-end.test.ts drives it with its own clock.
+vi.mock("../stream-sessions/court-end", () => ({ endCourtBroadcastSoon: () => undefined }));
 /** Runs every queued tail, and the tails those queue, as `after()` would once the response is sent. Errors are swallowed,
  *  as `deferred` swallows them. */
 async function runTails(): Promise<number> {

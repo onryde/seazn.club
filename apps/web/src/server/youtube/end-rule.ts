@@ -33,12 +33,18 @@ import { ACTIVE_STATES, TERMINAL_STATES } from "@/server/relay/domain/session";
 export { YOUTUBE_GRACE_MINUTES };
 /** D5: a finished match's broadcast ends this long after Stop, or after the result when it lands inside the grace. */
 export const YOUTUBE_FINISHED_END_MINUTES = 2;
+/** Court stream (owner, 2026-11-17: "match decided -> 30 s stops in app -> another 30 s stop in youtube"): a finished match whose LAST
+ *  session was a court session ends this many seconds after Stop (or the result, when it lands after the Stop). The court's own 30 s
+ *  tail already waited out the result, so the 2 minutes of D5 would be a second wait. An unfinished match keeps the grace. */
+export const YOUTUBE_COURT_FINISHED_END_SECONDS = 30;
 /** Spec §6.4: the fixture statuses that make a match finished. NEVER needs_decision (F8). */
 export const FINISHED_STATUSES = ["decided", "finalized", "forfeited", "abandoned", "cancelled"] as const;
 
 export type EndFacts = {
   activeSessionOnBroadcast: boolean; reservedUntil: Date | null; latestEndedAt: Date | null;
   fixtureStatus: string; finishedAt: Date | null; terminalWithoutEndedAt: boolean;
+  /** The session with the latest ended_at on this broadcast was a court session (`court_link_id` set). Absent reads false. */
+  lastSessionCourt?: boolean;
 };
 
 /** The facts break an assumption the rule rests on; the rule refuses rather than answer a time it cannot know. */
@@ -70,13 +76,16 @@ export function broadcastEndDueAt(f: EndFacts, now: Date): Date | null {
   if (f.finishedAt === null) {
     throw new EndRuleInvariantError(`fixture status '${f.fixtureStatus}' is finished but finished_at is null`);
   }
-  const resultEnd = plusMinutes(Math.max(stop, f.finishedAt.getTime()), YOUTUBE_FINISHED_END_MINUTES);
+  const settled = Math.max(stop, f.finishedAt.getTime());
+  const resultEnd = f.lastSessionCourt === true
+    ? settled + YOUTUBE_COURT_FINISHED_END_SECONDS * 1000
+    : plusMinutes(settled, YOUTUBE_FINISHED_END_MINUTES);
   return new Date(Math.min(graceEnd, resultEnd));
 }
 
 interface FactsRow {
   reserved_until: Date | null; fixture_status: string; finished_at: Date | null;
-  active: boolean; latest_ended_at: Date | null; terminal_without_ended_at: boolean;
+  active: boolean; latest_ended_at: Date | null; terminal_without_ended_at: boolean; last_court: boolean | null;
 }
 
 /** The broadcast's end facts in one statement: plain selects, no lock. Sessions are this broadcast's only
@@ -91,7 +100,10 @@ export async function readEndFacts(exec: Tx | typeof sql, broadcastId: string): 
              where s.youtube_broadcast_id = b.id and s.state in ${sql([...TERMINAL_STATES])}) as latest_ended_at,
            exists (select 1 from fixture_stream_sessions s
                     where s.youtube_broadcast_id = b.id and s.state in ${sql([...TERMINAL_STATES])}
-                      and s.ended_at is null) as terminal_without_ended_at
+                      and s.ended_at is null) as terminal_without_ended_at,
+           (select s.court_link_id is not null from fixture_stream_sessions s
+             where s.youtube_broadcast_id = b.id and s.state in ${sql([...TERMINAL_STATES])}
+             order by s.ended_at desc nulls last, s.id limit 1) as last_court
       from youtube_broadcasts b
       join fixtures f on f.id = b.fixture_id
      where b.id = ${broadcastId}`;
@@ -103,5 +115,6 @@ export async function readEndFacts(exec: Tx | typeof sql, broadcastId: string): 
     fixtureStatus: row.fixture_status,
     finishedAt: row.finished_at,
     terminalWithoutEndedAt: row.terminal_without_ended_at,
+    lastSessionCourt: row.last_court === true,
   };
 }
