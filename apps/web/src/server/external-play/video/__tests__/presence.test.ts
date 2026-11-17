@@ -13,6 +13,7 @@
 // seeded board is a chess board because that is the only product that holds RealtimeKit meetings.
 import { randomUUID } from "node:crypto";
 import fc from "fast-check";
+import type postgres from "postgres";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sql } from "@/lib/db";
 import { log } from "@/server/logger";
@@ -371,6 +372,30 @@ describe.skipIf(!DB)("applyPresenceEvent", () => {
     expect((await rowOf(b.homeMeeting, q)).left_at).toBeNull();
   });
 
+  it("a null-session joined AFTER meeting.ended: stored closed at the earliest recorded end at or after its join, open when it joined after every end", async () => {
+    // Expected, from the rule (batch-1 T5 M1): a row without a session is closed by any session's end that came at or after its
+    // join, and the EARLIEST such end is the one the ended path itself would have stamped first had the join arrived first.
+    const b = await board();
+    const M = b.homeMeeting;
+    const c = b.home.personId;
+    const E1 = at(100 * SEC);
+    const E2 = at(200 * SEC);
+    await applyPresenceEvent(sql, endedEv({ meetingId: M, sessionId: "A", endedAt: E1 }), at(201 * SEC));
+    await applyPresenceEvent(sql, endedEv({ meetingId: M, sessionId: "B", endedAt: E2 }), at(202 * SEC));
+    const [beforeBoth, between, atE1, afterBoth] = [peer(), peer(), peer(), peer()];
+    await applyPresenceEvent(sql, joinedEv({ meetingId: M, peerId: beforeBoth, custom: c, joinedAt: at(50 * SEC), sessionId: null }), at(203 * SEC));
+    await applyPresenceEvent(sql, joinedEv({ meetingId: M, peerId: between, custom: c, joinedAt: at(150 * SEC), sessionId: null }), at(204 * SEC));
+    await applyPresenceEvent(sql, joinedEv({ meetingId: M, peerId: atE1, custom: c, joinedAt: E1, sessionId: null }), at(205 * SEC));
+    await applyPresenceEvent(sql, joinedEv({ meetingId: M, peerId: afterBoth, custom: c, joinedAt: at(250 * SEC), sessionId: null }), at(206 * SEC));
+    const want: [string, Date | null][] = [[beforeBoth, E1], [between, E2], [atE1, E1], [afterBoth, null]];
+    let checked = 0;
+    for (const [p, left] of want) {
+      expect(await rowOf(M, p), p).toMatchObject({ left_at: left, left_by: left === null ? null : "ended" });
+      checked++;
+    }
+    expect(checked, "rows checked").toBe(4);
+  });
+
   it("ended: closes every open row of THAT meeting's session and no other; a null-session row of that meeting closes only if it joined before the end", async () => {
     const b = await board();
     const M = b.homeMeeting;
@@ -459,29 +484,40 @@ describe.skipIf(!DB)("applyPresenceEvent", () => {
   });
 
   it("property: the rows depend only on the SET of a stay's events, never their order or repeats (fast-check, numRuns reported)", async () => {
-    // A stay: 1-2 peers in ONE session, each with a joined and optionally a left, and optionally the session's ended. The events
-    // are applied shuffled with repeats. `held` is passed explicitly, so a case needs no seeded board; participant resolution is
-    // not the subject here (the rows' stamps are).
+    // A stay: 1-2 peers, each with a joined and optionally a left, and optionally the session's ended. A peer is in session
+    // `sess-1` (joining before its end) or carries NO session (joining at any time: before, between or after the ends); a second
+    // session `sess-2`, which no session-carrying peer is in, may also end, so a null-session peer can have two ends to choose
+    // from. The events are applied shuffled with repeats. `held` is passed explicitly, so a case needs no seeded board;
+    // participant resolution is not the subject here (the rows' stamps are).
     const held = { fixtureId: randomUUID(), side: "home" as const };
-    type Peer = { joinedOff: number; leftOff: number | null };
+    type Peer = { sessionless: boolean; joinedOff: number; leftOff: number | null };
     const scenarioArb = fc.record({
       peers: fc.array(
-        fc.record({ joinedOff: fc.integer({ min: 1, max: 20 }), leftOff: fc.option(fc.integer({ min: 21, max: 80 }), { nil: null }) }),
+        fc
+          .record({ sessionless: fc.boolean(), off: fc.integer({ min: 1, max: 140 }), leftDelta: fc.option(fc.integer({ min: 1, max: 60 }), { nil: null }) })
+          .map(({ sessionless, off, leftDelta }): Peer => {
+            // a session-carrying peer joins inside its session (1..20); a null-session one anywhere in 1..140
+            const joinedOff = sessionless ? off : 1 + (off % 20);
+            return { sessionless, joinedOff, leftOff: leftDelta === null ? null : joinedOff + leftDelta };
+          }),
         { minLength: 1, maxLength: 2 },
       ),
       endedOff: fc.option(fc.integer({ min: 81, max: 120 }), { nil: null }),
+      ended2Off: fc.option(fc.integer({ min: 60, max: 130 }), { nil: null }),
     });
     const stamp = (off: number) => at(off * SEC);
-    const eventsOf = (meetingId: string, peers: Peer[], endedOff: number | null) => {
+    const eventsOf = (meetingId: string, peers: Peer[], endedOff: number | null, ended2Off: number | null) => {
       const evs: { key: string; ev: RealtimeKitEvent }[] = [];
       peers.forEach((p, i) => {
         const id = `peer-${i}`;
-        evs.push({ key: `j${i}`, ev: joinedEv({ meetingId, peerId: id, custom: `c-${i}`, joinedAt: stamp(p.joinedOff) }) });
+        const sessionId = p.sessionless ? null : "sess-1";
+        evs.push({ key: `j${i}`, ev: joinedEv({ meetingId, peerId: id, custom: `c-${i}`, joinedAt: stamp(p.joinedOff), sessionId }) });
         if (p.leftOff !== null) {
-          evs.push({ key: `l${i}`, ev: leftEv({ meetingId, peerId: id, custom: `c-${i}`, joinedAt: stamp(p.joinedOff), leftAt: stamp(p.leftOff) }) });
+          evs.push({ key: `l${i}`, ev: leftEv({ meetingId, peerId: id, custom: `c-${i}`, joinedAt: stamp(p.joinedOff), leftAt: stamp(p.leftOff), sessionId }) });
         }
       });
       if (endedOff !== null) evs.push({ key: "e", ev: endedEv({ meetingId, sessionId: "sess-1", endedAt: stamp(endedOff) }) });
+      if (ended2Off !== null) evs.push({ key: "f", ev: endedEv({ meetingId, sessionId: "sess-2", endedAt: stamp(ended2Off) }) });
       return evs;
     };
     // canonical order: every joined, then every left, then the end (the order a well-behaved vendor delivers)
@@ -492,11 +528,15 @@ describe.skipIf(!DB)("applyPresenceEvent", () => {
     let repeated = 0;
     let lostLeaveAfterEnd = 0;
     let peersChecked = 0;
+    let sessionlessChecked = 0;
+    let sessionlessClosedByEnd = 0;
+    let sessionlessOpenPastEveryEnd = 0;
+    let sessionlessEarliestOfTwo = 0;
     await fc.assert(
       fc
         .asyncProperty(
           scenarioArb.chain((sc) => {
-            const base = eventsOf("m-shape", sc.peers, sc.endedOff);
+            const base = eventsOf("m-shape", sc.peers, sc.endedOff, sc.ended2Off);
             return fc
               .array(fc.nat({ max: base.length - 1 }), { maxLength: 4 })
               .chain((dups) => {
@@ -523,13 +563,23 @@ describe.skipIf(!DB)("applyPresenceEvent", () => {
             meetingsMade.push(meetingId);
 
             // Expected, derived from the event SET (never from applyPresenceEvent): joined_at = the joined payload; left_at = the
-            // peer's own leave if one is in the set, else the session's end if one is, else open.
+            // peer's own leave if one is in the set; else, for a peer in sess-1, sess-1's end if one is in the set; for a peer with
+            // no session, the EARLIEST end of any session at or after its join; else open.
             const rows = await rowsOf(meetingId);
             expect(rows.map((r) => r.peer_id).sort(), "one row per peer").toEqual(sc.peers.map((_, i) => `peer-${i}`).sort());
             sc.peers.forEach((p, i) => {
               const r = rows.find((x) => x.peer_id === `peer-${i}`)!;
-              const expectLeft = p.leftOff !== null ? stamp(p.leftOff) : sc.endedOff !== null ? stamp(sc.endedOff) : null;
-              const expectBy = p.leftOff !== null ? "left" : sc.endedOff !== null ? "ended" : null;
+              const ends = [sc.endedOff, sc.ended2Off].filter((e): e is number => e !== null);
+              const reachable = ends.filter((e) => e >= p.joinedOff);
+              const endOff = p.sessionless ? (reachable.length === 0 ? null : Math.min(...reachable)) : sc.endedOff;
+              const expectLeft = p.leftOff !== null ? stamp(p.leftOff) : endOff !== null ? stamp(endOff) : null;
+              const expectBy = p.leftOff !== null ? "left" : endOff !== null ? "ended" : null;
+              if (p.sessionless) {
+                sessionlessChecked++;
+                if (p.leftOff === null && endOff !== null) sessionlessClosedByEnd++;
+                if (p.leftOff === null && ends.length > 0 && endOff === null) sessionlessOpenPastEveryEnd++;
+                if (p.leftOff === null && reachable.length === 2 && reachable[0] !== reachable[1]) sessionlessEarliestOfTwo++;
+              }
               expect(r.joined_at, `peer ${i} joined_at`).toEqual(stamp(p.joinedOff));
               expect(r.left_at, `peer ${i} left_at`).toEqual(expectLeft);
               expect(r.left_by, `peer ${i} left_by`).toBe(expectBy);
@@ -540,14 +590,98 @@ describe.skipIf(!DB)("applyPresenceEvent", () => {
           },
         )
         ,
-      { numRuns: 60 },
+      { numRuns: 120 },
     );
-    expect(cases, "cases run").toBeGreaterThanOrEqual(50);
+    expect(cases, "cases run").toBeGreaterThanOrEqual(100);
+    expect(sessionlessChecked, `null-session peer rows checked: ${sessionlessChecked}`).toBeGreaterThan(0);
+    expect(sessionlessClosedByEnd, `null-session peers closed by an end: ${sessionlessClosedByEnd}`).toBeGreaterThan(0);
+    expect(sessionlessOpenPastEveryEnd, `null-session peers that joined after every end (open): ${sessionlessOpenPastEveryEnd}`).toBeGreaterThan(0);
+    expect(sessionlessEarliestOfTwo, `null-session peers with two distinct ends to choose from: ${sessionlessEarliestOfTwo}`).toBeGreaterThan(0);
     expect(reordered, `cases whose applied order differed from the canonical one: ${reordered}/${cases}`).toBeGreaterThan(0);
     expect(repeated, `cases with a repeated event: ${repeated}/${cases}`).toBeGreaterThan(0);
     expect(lostLeaveAfterEnd, `cases where a leave arrived after its session's end: ${lostLeaveAfterEnd}/${cases}`).toBeGreaterThan(0);
     expect(peersChecked, "peer rows checked").toBeGreaterThanOrEqual(cases);
   }, 120_000);
+});
+
+// ─── applyPresenceEvent across two connections (the meeting lock) ──────────────────────────────────────────────────────
+
+/** Is some backend waiting for the presence lock of `meetingId`? The key is `hashtext(meeting_id)`, a bigint advisory key, which
+ *  pg_locks splits into classid (high 32 bits) and objid (low 32 bits). */
+const waitingOnMeetingLock = async (meetingId: string) => {
+  const [r] = await sql<{ n: number }[]>`
+    select count(*)::int as n from pg_locks
+     where locktype = 'advisory' and not granted and objsubid = 1
+       and ((classid::bigint << 32) | objid::bigint) = hashtext(${meetingId})::bigint`;
+  return r!.n > 0;
+};
+
+/** Applies `first` inside a transaction on one connection and holds it OPEN; then starts `second` on another connection
+ *  (the pool) and waits until it is either blocked on the meeting's lock or finished (no lock); then commits the first and
+ *  awaits the second. Returns which of the two the second did while the first was open: the witness that the two events really
+ *  interleaved (under READ COMMITTED, without the lock, each statement misses the other's uncommitted write). */
+async function interleave(meetingId: string, first: (tx: postgres.TransactionSql) => Promise<unknown>, second: () => Promise<unknown>) {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  let opened!: () => void;
+  const isOpen = new Promise<void>((r) => (opened = r));
+  const firstTx = sql.begin(async (tx) => {
+    await first(tx);
+    opened();
+    await gate;
+  });
+  // a failure of `first` must not leave this waiting on `isOpen` for ever
+  await Promise.race([isOpen, firstTx]);
+  let settled = false;
+  const other = second().finally(() => {
+    settled = true;
+  });
+  other.catch(() => undefined);
+  let blocked = false;
+  for (let i = 0; i < 400 && !settled && !blocked; i++) {
+    blocked = await waitingOnMeetingLock(meetingId);
+    if (!blocked && !settled) await new Promise((r) => setTimeout(r, 10));
+  }
+  const settledWhileOpen = settled;
+  release();
+  await firstTx;
+  await other;
+  return { blocked, settledWhileOpen };
+}
+
+describe.skipIf(!DB)("applyPresenceEvent across two connections (READ COMMITTED; the meeting's advisory lock)", () => {
+  // Every case: one event's transaction is held open on one connection while the other event runs on a second connection.
+  // Expected, from the rule (batch-1 T5 M1): a peer whose session ended is CLOSED at that end, whichever of the joined and the
+  // ended commits first. `held` is passed explicitly (the receiver's contract), so no board is seeded.
+  const held = { fixtureId: randomUUID(), side: "home" as const };
+  const E = at(100 * SEC);
+
+  const cases: { name: string; sessionId: string | null; firstIs: "joined" | "ended" }[] = [
+    { name: "joined held open, then the session's ended", sessionId: "sess-1", firstIs: "joined" },
+    { name: "the session's ended held open, then the joined", sessionId: "sess-1", firstIs: "ended" },
+    { name: "a null-session joined held open, then an ended", sessionId: null, firstIs: "joined" },
+    { name: "an ended held open, then a null-session joined", sessionId: null, firstIs: "ended" },
+  ];
+  let checked = 0;
+  for (const c of cases) {
+    it(`${c.name}: the row is stored closed at the end, left_by 'ended'`, async () => {
+      const M = track(`race-${randomUUID().slice(0, 8)}`);
+      const p = peer();
+      const joined = joinedEv({ meetingId: M, peerId: p, custom: "c-race", joinedAt: at(10 * SEC), sessionId: c.sessionId });
+      const ended = endedEv({ meetingId: M, sessionId: "sess-1", endedAt: E });
+      const [a, b] = c.firstIs === "joined" ? [joined, ended] : [ended, joined];
+      const outcome = await interleave(
+        M,
+        (tx) => applyPresenceEvent(tx, a, at(101 * SEC), held),
+        () => applyPresenceEvent(sql, b, at(102 * SEC), held),
+      );
+      expect(outcome.blocked || outcome.settledWhileOpen, "premise: the second event ran while the first transaction was open").toBe(true);
+      expect(await rowOf(M, p)).toMatchObject({ left_at: E, left_by: "ended", joined_at: at(10 * SEC) });
+      expect(outcome.blocked, "the second event waited for the first's meeting lock").toBe(true);
+      checked++;
+    });
+  }
+  it("cases checked", () => expect(checked, "interleavings checked").toBe(cases.length));
 });
 
 // ─── readers ───────────────────────────────────────────────────────────────────────────────────────────────────────────

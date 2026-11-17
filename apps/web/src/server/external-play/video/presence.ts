@@ -4,10 +4,19 @@ import "server-only";
 //
 // WHAT A ROW IS. One per (meeting, peer): open while the peer is in the room, closed by the peer's own participantLeft
 // (left_by 'left') or by its session's meeting.ended (left_by 'ended'). The webhook stamps are the vendor's (`joinedAt`,
-// `leftAt`, `endedAt`), never our receipt time, so the result depends only on the SET of events applied, never their order or
-// repeats: the fixture (and the vendor on a retry) delivers concurrently, so arrival order is not emit order. The three arrival
-// hazards each have one rule: a left before its joined inserts the row with both stamps; a joined after its own left leaves
-// left_at alone; a joined after its session's end is stored closed at that end. A peer's OWN leave beats its session's end.
+// `leftAt`, `endedAt`), never our receipt time. The fixture (and the vendor on a retry) delivers concurrently, so arrival order
+// is not emit order, and two deliveries can run at once on two connections: every write path (joined, left, ended) therefore
+// runs in a transaction holding `pg_advisory_xact_lock(hashtext(meeting_id))`, so the events of one meeting apply one at a time
+// and each sees every earlier one committed (under READ COMMITTED a joined and an ended running together would otherwise each
+// miss the other's write and leave an open peer in a dead meeting). With that, the webhook rows depend only on the SET of
+// joined/left/ended events applied, never their order or repeats, with ONE exception: a session's end is the endedAt of the
+// FIRST meeting.ended recorded for it (a repeat with a different endedAt is ignored, and every row it closes carries the
+// recorded value). The arrival hazards each have one rule: a left before its joined inserts the row with both stamps; a joined
+// after its own left leaves left_at alone; a joined after its session's end is stored closed at that end, and a joined with no
+// session is stored closed at the earliest recorded end of any session of the meeting at or after its join (the rows the ended
+// path closes, read from the other side). A peer's OWN leave beats its session's end. A read row (recordPresenceFromRead) takes
+// no lock and is outside this claim: one written after its session ended stays open, a hint the readers trust for
+// PRESENCE_READ_TRUST_MS only.
 //
 // WHAT A ROW IS NOT. A `source = 'read'` row is the seat's own vendor read written as a hint (plan 2); only a webhook can close
 // a row, so a read row is trusted for PRESENCE_READ_TRUST_MS after it was received and then not (owner ruling R4). Nothing here
@@ -21,6 +30,19 @@ import type { RealtimeKitEvent } from "./webhook-event";
 
 type AnySql = postgres.Sql | postgres.TransactionSql;
 type Side = "home" | "away";
+
+/** Runs `fn` holding the meeting's presence lock, `pg_advisory_xact_lock(hashtext(meetingId))`: in a transaction of its own on
+ *  the pool, or inside the caller's transaction (which then holds the lock to its own end). A TransactionSql is told from the pool
+ *  by its `savepoint` method, as appearances.ts's ownTransaction does (`"begin" in sql` is false on lib/db's Proxy). */
+async function underMeetingLock<T>(db: AnySql, meetingId: string, fn: (tx: AnySql) => Promise<T>): Promise<T> {
+  const run = async (tx: AnySql) => {
+    await tx`select pg_advisory_xact_lock(hashtext(${meetingId}))`;
+    return fn(tx);
+  };
+  const open = db as Partial<Pick<postgres.TransactionSql, "savepoint">>;
+  if (typeof open.savepoint === "function") return run(db);
+  return (await (db as postgres.Sql).begin((tx) => run(tx))) as T;
+}
 
 export type PresenceRow = {
   meetingId: string;
@@ -96,16 +118,19 @@ export async function resolveParticipant(db: AnySql, a: { meetingId: string; cus
   return r ? r.participant_id : null;
 }
 
-/** Applies one event; the result depends only on the SET of events applied, never their order or repeats (property in the tests).
- *  joined: insert the row with joined_at from the payload and, when `realtimekit_ended_sessions` already holds (meetingId,
- *  sessionId), left_at = that ended_at and left_by 'ended'; on conflict keep an existing row's joined_at / left_at (coalesce) and set
- *  source 'webhook' (a webhook upgrades a read row).
+/** Applies one event under the meeting's lock (`underMeetingLock`); the result depends only on the SET of events applied, never
+ *  their order or repeats, save a session's end being its first recorded endedAt (the header; property in the tests).
+ *  joined: insert the row with joined_at from the payload and, when the session has already ended (`realtimekit_ended_sessions`
+ *  holds (meetingId, sessionId); for a null sessionId, any session of the meeting with ended_at >= joinedAt, the earliest),
+ *  left_at = that ended_at and left_by 'ended'; on conflict keep an existing row's joined_at (coalesce), close it the same way when
+ *  it is still open, and set source 'webhook' (a webhook upgrades a read row).
  *  left: insert with both stamps and left_by 'left'; on conflict left_at = the payload's leftAt UNLESS the row's left_by is already
  *  'left' (a peer's own leave beats its session's end; the first own leave is kept), left_by 'left', source 'webhook'.
- *  ended: upsert (meetingId, sessionId, endedAt) into realtimekit_ended_sessions (do nothing on conflict), then left_at = endedAt,
- *  left_by 'ended' on every open row WHERE meeting_id = meetingId AND (session_id = sessionId OR (session_id is null AND
- *  joined_at <= endedAt)): scoped by the meeting (the session index), and a row stored without a session is closed only when it
- *  joined before the end. An `ended` with a null sessionId closes nothing and records nothing (logged at warn).
+ *  ended: upsert (meetingId, sessionId, endedAt) into realtimekit_ended_sessions (do nothing on conflict: the FIRST end recorded
+ *  stays), then, with E = the RECORDED ended_at (never a repeat's payload), left_at = E, left_by 'ended' on every open row of
+ *  the meeting's session, and on every row of the meeting stored without a session that joined at or before E and is open or
+ *  closed by a LATER end (the earliest end at or after the join wins, whichever ended arrives first). An `ended` with a null
+ *  sessionId closes nothing and records nothing (logged at warn).
  *  Every row written carries fixture_id / side from `held` (the receiver passes the heldMeeting answer it gated on; when omitted it
  *  is looked up here). "ignored" for `other`. */
 export async function applyPresenceEvent(db: AnySql, ev: RealtimeKitEvent, receivedAt: Date, held?: { fixtureId: string; side: Side } | null): Promise<"applied" | "ignored"> {
@@ -120,17 +145,23 @@ export async function applyPresenceEvent(db: AnySql, ev: RealtimeKitEvent, recei
       log.warn({ meetingId: ev.meetingId }, "presence: meeting.ended carried no sessionId; nothing closed or recorded");
       return "ignored";
     }
-    await db`
-      with rec as (
+    const sessionId = ev.sessionId;
+    await underMeetingLock(db, ev.meetingId, async (tx) => {
+      await tx`
         insert into realtimekit_ended_sessions (meeting_id, session_id, ended_at, received_at)
-        values (${ev.meetingId}, ${ev.sessionId}, ${ev.endedAt}, ${receivedAt})
-        on conflict (meeting_id, session_id) do nothing
-      )
-      update fixture_video_presence
-         set left_at = ${ev.endedAt}, left_by = 'ended'
-       where meeting_id = ${ev.meetingId}
-         and left_at is null
-         and (session_id = ${ev.sessionId} or (session_id is null and joined_at <= ${ev.endedAt}))`;
+        values (${ev.meetingId}, ${sessionId}, ${ev.endedAt}, ${receivedAt})
+        on conflict (meeting_id, session_id) do nothing`;
+      // A second statement, so it sees the recorded row (a CTE's insert is invisible to its own statement's update).
+      await tx`
+        with s as (select ended_at from realtimekit_ended_sessions where meeting_id = ${ev.meetingId} and session_id = ${sessionId})
+        update fixture_video_presence p
+           set left_at = s.ended_at, left_by = 'ended'
+          from s
+         where p.meeting_id = ${ev.meetingId}
+           and ((p.session_id = ${sessionId} and p.left_at is null)
+             or (p.session_id is null and p.joined_at <= s.ended_at
+                 and (p.left_at is null or (p.left_by = 'ended' and p.left_at > s.ended_at))))`;
+    });
     return "applied";
   }
 
@@ -141,13 +172,21 @@ export async function applyPresenceEvent(db: AnySql, ev: RealtimeKitEvent, recei
   }
 
   if (ev.kind === "joined") {
-    await db`
+    await underMeetingLock(db, ev.meetingId, (tx) => tx`
+      with e as (
+        -- the session's recorded end; for a joined with no session, the earliest end of any session at or after the join
+        select ended_at from realtimekit_ended_sessions
+         where meeting_id = ${ev.meetingId}
+           and (session_id = ${ev.sessionId} or (${ev.sessionId}::text is null and ended_at >= ${ev.joinedAt}))
+         order by ended_at
+         limit 1
+      )
       insert into fixture_video_presence
         (meeting_id, peer_id, fixture_id, side, participant_id, custom_participant_id, session_id, joined_at, left_at, left_by, source, received_at)
       values (
         ${ev.meetingId}, ${ev.peerId}, ${board.fixtureId}, ${board.side}, ${participantId}, ${ev.customParticipantId}, ${ev.sessionId}, ${ev.joinedAt},
-        (select ended_at from realtimekit_ended_sessions where meeting_id = ${ev.meetingId} and session_id = ${ev.sessionId}),
-        case when exists (select 1 from realtimekit_ended_sessions where meeting_id = ${ev.meetingId} and session_id = ${ev.sessionId}) then 'ended' end,
+        (select ended_at from e),
+        case when exists (select 1 from e) then 'ended' end,
         'webhook', ${receivedAt})
       on conflict (meeting_id, peer_id) do update
         set joined_at      = coalesce(fixture_video_presence.joined_at, excluded.joined_at),
@@ -155,11 +194,14 @@ export async function applyPresenceEvent(db: AnySql, ev: RealtimeKitEvent, recei
             session_id     = coalesce(fixture_video_presence.session_id, excluded.session_id),
             fixture_id     = coalesce(fixture_video_presence.fixture_id, excluded.fixture_id),
             side           = coalesce(fixture_video_presence.side, excluded.side),
-            source         = 'webhook'`;
+            -- an open row (a read hint written after the end) is closed like a fresh insert; a closed one keeps its stamps
+            left_at        = case when fixture_video_presence.left_at is null then excluded.left_at else fixture_video_presence.left_at end,
+            left_by        = case when fixture_video_presence.left_at is null then excluded.left_by else fixture_video_presence.left_by end,
+            source         = 'webhook'`);
     return "applied";
   }
 
-  await db`
+  await underMeetingLock(db, ev.meetingId, (tx) => tx`
     insert into fixture_video_presence
       (meeting_id, peer_id, fixture_id, side, participant_id, custom_participant_id, session_id, joined_at, left_at, left_by, source, received_at)
     values (${ev.meetingId}, ${ev.peerId}, ${board.fixtureId}, ${board.side}, ${participantId}, ${ev.customParticipantId}, ${ev.sessionId}, ${ev.joinedAt},
@@ -172,7 +214,7 @@ export async function applyPresenceEvent(db: AnySql, ev: RealtimeKitEvent, recei
           side           = coalesce(fixture_video_presence.side, excluded.side),
           left_at        = case when fixture_video_presence.left_by = 'left' then fixture_video_presence.left_at else excluded.left_at end,
           left_by        = 'left',
-          source         = 'webhook'`;
+          source         = 'webhook'`);
   return "applied";
 }
 
