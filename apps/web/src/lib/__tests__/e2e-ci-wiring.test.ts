@@ -42,6 +42,7 @@ import { FakeIngest } from "../../server/relay/fakes";
 import {
   AUTO_START_RETRY_SECONDS,
   AUTO_STOP_AFTER_RESULT_SECONDS,
+  COURT_AUTO_STOP_AFTER_RESULT_SECONDS,
   CODE_GRACE_AFTER_FINISH_MINUTES,
   DEAD_PHONE_TAKEOVER_SECONDS,
   PHONE_LOST_LIVE_MINUTES,
@@ -1402,7 +1403,7 @@ describe("the capture walkthroughs' shortened timings (R10, PR-2)", () => {
   const valueOf = (body: string, name: string) => new RegExp(`^\\s+${name}: *"?([^"\\s]*)"?\\s*$`, "m").exec(body)?.[1];
   const DEFAULTS: Record<(typeof TUNABLE_NAMES)[number], number> = {
     DEAD_PHONE_TAKEOVER_SECONDS, PHONE_LOST_LIVE_MINUTES, PHONE_SILENT_FLOOR_SECONDS, CODE_GRACE_AFTER_FINISH_MINUTES,
-    AUTO_STOP_AFTER_RESULT_SECONDS, AUTO_START_RETRY_SECONDS,
+    AUTO_STOP_AFTER_RESULT_SECONDS, COURT_AUTO_STOP_AFTER_RESULT_SECONDS, AUTO_START_RETRY_SECONDS,
   };
   /** The one tunable no walkthrough shortens: capture-phone's finished-fixture case reaches the code's grace by
    *  BACKDATING `finished_at` in SQL, not by waiting it out, so CI runs the default 120 minutes on purpose. */
@@ -1480,7 +1481,9 @@ describe("the capture walkthroughs' shortened timings (R10, PR-2)", () => {
     // The floor each tunable's guards demand (the highest, where two specs both guard it).
     const floors = new Map<string, number>();
     for (const g of SPECS.flatMap(guardsOf)) if (g.atLeast !== null) floors.set(g.name, Math.max(floors.get(g.name) ?? 0, g.atLeast));
-    expect([...floors.keys()].sort(), "premise: capture-auto's two guards state their floors").toEqual(["AUTO_START_RETRY_SECONDS", "AUTO_STOP_AFTER_RESULT_SECONDS"]);
+    expect([...floors.keys()].sort(), "premise: the walkthroughs' guards state their floors (capture-auto's two, court-stream's court tail)").toEqual([
+      "AUTO_START_RETRY_SECONDS", "AUTO_STOP_AFTER_RESULT_SECONDS", "COURT_AUTO_STOP_AFTER_RESULT_SECONDS",
+    ]);
     const walkthrough = projectNamed(await configFor(undefined), "walkthrough");
     // Every reader — not only the guarded ones — runs in the job that sets the tunables. A reader in another project
     // would run CI's defaults, since the next assertions keep the tunables out of every other job.

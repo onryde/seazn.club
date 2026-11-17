@@ -18,7 +18,7 @@ import {
   canLinkCourt, lastWorkingMinute, linkFailureKey, phoneKey, switchFailureKey, switchSpec, youtubeTargets,
 } from "@/lib/match-day/court-stream";
 import { CourtFocus, type MatchDayCtx } from "@/components/v2/match-day/court-focus";
-import { CandidateRows } from "@/components/v2/match-day/candidate-list";
+import { CandidateRows, FreeCourtBody } from "@/components/v2/match-day/candidate-list";
 import { CourtList } from "@/components/v2/match-day/court-list";
 import { TargetPicker } from "@/components/v2/match-day/court-stream-sheet";
 import { levelWords } from "@/lib/score/levels";
@@ -82,6 +82,7 @@ const link = (o: Partial<MatchDayCourtStream> = {}): MatchDayCourtStream => ({
   expires_at: "2026-11-01T00:00:00.000Z",
   phone: "waiting",
   refusal: null,
+  tail_ends_at: null,
   ...o,
 });
 
@@ -305,6 +306,130 @@ describe("the Stream switch on a waiting-to-be-called (candidate) row", () => {
   it("a blocked candidate (a player busy elsewhere) keeps its switch: the intent is the match's, not the call's", () => {
     const html = rows(free({ stream_link: link() }), [cand({ blocked: { kind: "player_busy", person_name: "Zara", court_name: "Court 4" } })]);
     expect(sw(html)).toHaveLength(1);
+  });
+});
+
+describe("a free court's whole queue (B2: the 2nd and later matches are switched on before the court is called)", () => {
+  // Three matches queued on the free court, each with its own pair of names so "appears once" is a count of names.
+  const trio = [
+    queued({ id: "q-1", home: "Aiko Tan", away: "Bo Wen" }),
+    queued({ id: "q-2", home: "Cleo Park", away: "Dev Shah" }),
+    queued({ id: "q-3", home: "Esi Boateng", away: "Finn Roy" }),
+  ];
+  // What the server's candidates hold for such a court: the next ready match per division, "Due here next" (q-1; one division).
+  const next = (): MatchDayCandidate => ({
+    fixture: trio[0]!, source: "this_court", from_court_name: null, first_in_queue: false, waiting_minutes: 0, behind_minutes: 0,
+    planned_at: null, blocked: null,
+  });
+  const body = (c: MatchDayCourt, load: Parameters<typeof FreeCourtBody>[0]["load"] = { status: "ready", candidates: [next()] }, ctx = baseCtx()) =>
+    renderToStaticMarkup(<FreeCourtBody ctx={ctx} court={c} load={load} onCall={() => {}} onRetry={() => {}} />);
+  const free = (o: Partial<MatchDayCourt> = {}) => court({ state: "free", current: null, queue: trio, ...o });
+  const names = ["Aiko Tan", "Cleo Park", "Esi Boateng"];
+  /** How often a match's name is VISIBLE: its switch's accessible name carries it too (`Stream: …`), which is counted apart. */
+  const once = (html: string, needle: string): number => html.replace(/aria-label="[^"]*"/g, "").split(needle).length - 1;
+  const switchesNamed = (html: string, needle: string): number => html.split(`aria-label="${t(dict, "matchDay.courtStream.switch")}: `).filter((p) => p.startsWith(needle)).length;
+
+  it("a LINKED free court: all three matches appear exactly once, and each carries a Stream switch", () => {
+    const html = body(free({ stream_link: link() }));
+    for (const n of names) {
+      expect(once(html, n), `${n} listed once`).toBe(1);
+      expect(switchesNamed(html, n), `${n} has one switch`).toBe(1);
+    }
+    expect(count(html, "md-candidate")).toBe(1);
+    expect(count(html, "md-queue-row")).toBe(2);
+    expect(count(html, "md-cs-switch")).toBe(3);
+    // the queue keeps its places: the match already shown above is place 1, so the list here starts at 2
+    expect(html).toContain(">2</span>");
+    expect(html).toContain(">3</span>");
+  });
+
+  it("an UNLINKED free court is unchanged: only the next match, no queue, no switch", () => {
+    const html = body(free());
+    expect(once(html, "Aiko Tan")).toBe(1);
+    for (const n of ["Cleo Park", "Esi Boateng"]) expect(html).not.toContain(n);
+    expect(count(html, "md-queue-row")).toBe(0);
+    expect(count(html, "md-cs-switch")).toBe(0);
+  });
+
+  it("while its candidates load, or if they fail, a linked court still lists its queue, and a later load does not repeat it", () => {
+    for (const load of [{ status: "loading" }, { status: "failed" }] as const) {
+      const html = body(free({ stream_link: link() }), load);
+      expect(count(html, "md-queue-row")).toBe(3);
+    }
+  });
+
+  it("a linked free court whose only queued match is the one the candidates show says nothing more (no empty list)", () => {
+    const html = body(free({ stream_link: link(), queue: [trio[0]!] }));
+    expect(count(html, "md-queue-row")).toBe(0);
+    expect(html).not.toContain(t(dict, "matchDay.queue.title"));
+    expect(html).not.toContain(t(dict, "matchDay.queue.empty"));
+  });
+
+  it("a view-only reader of a linked free court sees the queue with no switch that is off (only an ON one, locked)", () => {
+    const withOn = [trio[0]!, queued({ id: "q-2", home: "Cleo Park", away: "Dev Shah", court_stream: true }), trio[2]!];
+    const html = body(free({ stream_link: link(), queue: withOn }), undefined, baseCtx({ readOnly: true }));
+    expect(count(html, "md-queue-row")).toBe(2);
+    expect(count(html, "md-cs-switch")).toBe(1);
+  });
+});
+
+describe("the tail countdown (O16: \"Video ends in 12 s\")", () => {
+  const NOW = "2026-10-31T12:00:00.000Z";
+  const plus = (ms: number): string => new Date(Date.parse(NOW) + ms).toISOString();
+  const free = (l: MatchDayCourtStream) => court({ state: "free", current: null, queue: [], stream_link: l });
+  const tail = (html: string): string | null => /<span data-testid="md-cs-tail"[^>]*>([^<]*)<\/span>/.exec(html)?.[1] ?? null;
+  const focused = (l: MatchDayCourtStream, viewNow: string | undefined = NOW, d: Dict = dict) => focus(free(l), baseCtx({ viewNow }, d));
+  const listed = (l: MatchDayCourtStream) =>
+    renderToStaticMarkup(
+      <CourtList courts={[free(l)]} selectedId={null} dict={dict} words={levelWords(publicEn as Dict)} locale="en" tz="Europe/London" onSelect={() => {}} viewNow={NOW} />,
+    );
+
+  it("12 s before the tail ends the focus's status block says 'Video ends in 12 s', in tabular figures", () => {
+    const html = focused(link({ tail_ends_at: plus(12_000) }));
+    expect(tail(html)).toBe("Video ends in 12 s");
+    expect(html).toMatch(/<span data-testid="md-cs-tail"[^>]*class="[^"]*\btabular-nums\b/);
+    // inside the court's band, under the link's own lines
+    expect(html.indexOf('data-testid="md-cs-status"')).toBeLessThan(html.indexOf('data-testid="md-cs-tail"'));
+    expect(html.indexOf('data-testid="md-cs-tail"')).toBeLessThan(html.indexOf('data-testid="md-cs-show"'));
+  });
+
+  it("the court's card in the list carries it too", () => {
+    expect(tail(listed(link({ tail_ends_at: plus(12_000) })))).toBe("Video ends in 12 s");
+    expect(has(listed(link()), "md-cs-tail")).toBe(false);
+  });
+
+  it("rounds a part-second UP (0.4 s left still reads 1 s), and counts the tail down second by second", () => {
+    expect(tail(focused(link({ tail_ends_at: plus(400) })))).toBe("Video ends in 1 s");
+    expect(tail(focused(link({ tail_ends_at: plus(30_000) })))).toBe("Video ends in 30 s");
+    expect(tail(focused(link({ tail_ends_at: plus(29_001) })))).toBe("Video ends in 30 s");
+    expect(tail(focused(link({ tail_ends_at: plus(29_000) })))).toBe("Video ends in 29 s");
+  });
+
+  it("is gone at 0 and after it: the court then reads its normal state", () => {
+    expect(has(focused(link({ tail_ends_at: plus(0) })), "md-cs-tail")).toBe(false);
+    expect(has(focused(link({ tail_ends_at: plus(-1_000) })), "md-cs-tail")).toBe(false);
+    expect(has(listed(link({ tail_ends_at: plus(0) })), "md-cs-tail")).toBe(false);
+  });
+
+  it("is gone when the session has ended or the next match started (the server reads tail_ends_at null)", () => {
+    expect(has(focused(link({ tail_ends_at: null })), "md-cs-tail")).toBe(false);
+    expect(has(listed(link({ tail_ends_at: null })), "md-cs-tail")).toBe(false);
+  });
+
+  it("a court with no link has no band and no countdown", () => {
+    expect(has(focus(court({ state: "free", current: null, queue: [], stream_link: null }), baseCtx({ viewNow: NOW })), "md-cs-tail")).toBe(false);
+  });
+
+  it("with no server instant to anchor to it draws nothing until the page mounts (so the server's markup and the browser's first render agree)", () => {
+    expect(has(focus(free(link({ tail_ends_at: plus(12_000) })), baseCtx()), "md-cs-tail")).toBe(false);
+  });
+
+  it.each(["es", "fr", "nl"] as const)("speaks %s, with the seconds in place", (locale) => {
+    const html = focused(link({ tail_ends_at: plus(12_000) }), NOW, DICTS[locale]);
+    const words = tail(html)!;
+    expect(words).toContain("12");
+    expect(words).not.toBe("Video ends in 12 s");
+    expect(words).not.toContain("{seconds}");
   });
 });
 

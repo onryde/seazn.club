@@ -19,8 +19,9 @@ import { log } from "@/server/logger";
 import type { MatchDayCourtStream } from "@/lib/match-day/types";
 import { courtMinAppVersion } from "@/server/relay/config";
 import { AUTO_START_REFUSALS } from "@/server/relay/domain/auto-stream";
-import { courtPhoneStatus } from "@/server/relay/domain/court-stream";
+import { courtPhoneStatus, courtTailEndsAt } from "@/server/relay/domain/court-stream";
 import { ACTIVE_STATES, type SessionState } from "@/server/relay/domain/session";
+import { autoStopDelaySeconds } from "./stream-sessions/auto-stop";
 import { frozenCompetitionIds } from "./entitlement-freeze";
 import { hasValidKek } from "@/server/relay/crypto";
 import { insertCourtStreamCode, openStreamCodeTok, wipeStreamCodeTok } from "@/server/relay/secret-columns";
@@ -302,8 +303,10 @@ export async function courtStreamsForDay(
     const linkRows = await sql<{
       id: string; court_id: string; label: string; expires_at: Date;
       last_beat_at: Date | null; answered_poll_seconds: number | null; open_state: SessionState | null;
+      result_at: Date | null; session_predates_result: boolean | null; session_mode: string | null;
     }[]>`
-      select l.id, l.court_id, t.label, l.expires_at, p.last_beat_at, p.answered_poll_seconds, s.state as open_state
+      select l.id, l.court_id, t.label, l.expires_at, p.last_beat_at, p.answered_poll_seconds, s.state as open_state,
+             s.result_at, s.session_predates_result, s.session_mode
         from court_stream_links l
         join org_stream_targets t on t.id = l.target_id
         left join lateral (
@@ -311,13 +314,25 @@ export async function courtStreamsForDay(
             from fixture_stream_pairings p join fixture_stream_codes k on k.id = p.code_id
            where k.court_link_id = l.id and k.ended_at is null and p.ended_at is null
            order by p.claimed_at desc, p.id desc limit 1) p on true
+        -- The newest open session, with the facts the auto-stop judges (O16's tail): its match's result, whether it predates it
+        -- (compared here, in SQL, at the stamps' own precision: auto-stop.ts), and its phone's mode.
         left join lateral (
-          select s.state from fixture_stream_sessions s
+          select s.state, sf.finished_at as result_at, s.created_at < sf.finished_at as session_predates_result, sp.mode as session_mode
+            from fixture_stream_sessions s
+            left join fixtures sf on sf.id = s.fixture_id
+            left join fixture_stream_pairings sp on sp.id = s.pairing_id
            where s.court_link_id = l.id and s.state in ${sql([...ACTIVE_STATES])}
            order by s.created_at desc, s.id desc limit 1) s on true
        where l.org_id = ${orgId} and l.court_id in ${sql([...courtIds])} and l.withdrawn_at is null
          and l.opens_at <= ${now} and ${now} < l.expires_at`;
+    const tailSeconds = autoStopDelaySeconds(true);
     for (const r of linkRows) {
+      const tailEnd = courtTailEndsAt({
+        openState: r.open_state,
+        finishedAt: r.result_at === null ? null : new Date(r.result_at),
+        sessionPredatesResult: r.session_predates_result === true,
+        phoneMode: r.session_mode === "automatic" || r.session_mode === "operator" ? r.session_mode : null,
+      }, now, tailSeconds);
       links.set(r.court_id, {
         link_id: r.id,
         target_label: r.label,
@@ -327,6 +342,7 @@ export async function courtStreamsForDay(
           openState: r.open_state,
         }, now),
         refusal: null,
+        tail_ends_at: tailEnd === null ? null : tailEnd.toISOString(),
       });
     }
   }

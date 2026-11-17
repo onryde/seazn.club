@@ -6,7 +6,7 @@
 // credit is taken by the real `consumeForSession` in that tick — never a ledger row inserted by the test.
 //
 // The rules under test, typed here from the brief and the spec, never imported from the code under test:
-//   - nothing follows: a court session ends auto_stopped AUTO_STOP_AFTER_RESULT_SECONDS (180 s) after the result, not before,
+//   - nothing follows: a court session ends auto_stopped COURT_AUTO_STOP_AFTER_RESULT_SECONDS (30 s, O15) after the result, not before,
 //     and never while its phone is in Operator; the court's Stream switch stands in for the match's auto_stream (§5.3);
 //   - the organiser's Stop ends that video only: the link and the phone's pairing stay, the match is never re-offered (A12);
 //   - the phone's Stop hold latches the match; the match page's Go live restarts it on the court phone, court_link_id set,
@@ -21,7 +21,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { CaptureBeat, CaptureBeatAnswer } from "@/server/api-v1/capture-schemas";
 import { CreateStreamSession } from "@/server/api-v1/schemas/streaming";
-import { AUTO_START_RETRY_SECONDS, AUTO_STOP_AFTER_RESULT_SECONDS } from "@/server/relay/config";
+import { AUTO_START_RETRY_SECONDS, COURT_AUTO_STOP_AFTER_RESULT_SECONDS } from "@/server/relay/config";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 import { rigTarget, rigUser, spendMonthlyStreamGrant } from "@/server/relay/__tests__/_session-rig";
 import { connect } from "@/server/youtube/__tests__/_connect-rig";
@@ -59,7 +59,7 @@ const DAY = "2026-11-07";
 const COURT_BUILD = "1.0.14-1200";
 const ROOMY_STORAGE_MINUTES = 100_000_000;
 const SEC = 1000;
-const DELAY_MS = AUTO_STOP_AFTER_RESULT_SECONDS * SEC;
+const DELAY_MS = COURT_AUTO_STOP_AFTER_RESULT_SECONDS * SEC;
 const ACTIVE = ["requested", "provisioning", "warming", "live", "ending"];
 const ENDED = ["ending", "completed"];
 
@@ -187,11 +187,11 @@ describe.skipIf(!HAS_DB)("court stream: the tail, the latches, a desk restart, a
 
   // ── The tail and the latches ────────────────────────────────────────────────────────────────────────────────────────────
 
-  it("nothing follows: A's court session ends auto_stopped 180 s after finished_at (tunable), not before", async () => {
+  it("nothing follows: A's court session ends auto_stopped 30 s after finished_at (O15, tunable), not before", async () => {
     const sidA = await autoLive(A, 0);
     await createdOnTestDay(sidA, 0);
     await decide(A, 10);
-    expect(DELAY_MS, "the declared tail").toBe(180 * SEC);
+    expect(DELAY_MS, "the declared tail: the owner's 30 s court tail (2026-11-16)").toBe(30 * SEC);
     // The fixture's own auto_stream is never set: the court's Stream switch is what stops it.
     expect((await sql`select 1 from fixture_stream_settings where fixture_id = ${A} and auto_stream`).length, "premise: auto_stream off").toBe(0);
     now = at(10).getTime() + DELAY_MS - 1;
@@ -343,6 +343,7 @@ describe.skipIf(!HAS_DB)("court stream: the tail, the latches, a desk restart, a
     // C kicks off unstreamed; A's tail ends on its own.
     atMin(11);
     await kickoff(C, 11);
+    now = at(10).getTime() + DELAY_MS - SEC;
     expect(await beat(P, { sid: sidA, state: "publishing" })).toMatchObject({ state: "live", sid: sidA });
     now = at(10).getTime() + DELAY_MS;
     expect(await beat(P, { sid: sidA, state: "publishing" })).toMatchObject({ state: "over", sid: sidA, endReason: "auto_stopped" });

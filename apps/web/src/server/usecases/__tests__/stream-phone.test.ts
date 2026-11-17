@@ -538,7 +538,7 @@ describe.skipIf(!HAS_DB)("streamPhone — `auto` (PR-2 T6, §7.1)", () => {
     await saveStreamSettings(r.auth, r.fixtureId, { targetId: r.target.id });
     // `stopApplies` is null throughout: no session is open (B7 review M-3).
     // Final review I-1: a fresh match latches nothing — `wontStart` null, the switch off and on alike.
-    const off = { enabled: false, refusal: null, wontStart: null, stopApplies: null };
+    const off = { enabled: false, refusal: null, wontStart: null, stopApplies: null, stopAfterSeconds: null };
     expect((await readRig(r)).auto, "a row made by a destination pick has the switch off").toEqual(off);
     await saveStreamSettings(r.auth, r.fixtureId, { autoStream: true });
     const on = { ...off, enabled: true };
@@ -552,7 +552,7 @@ describe.skipIf(!HAS_DB)("streamPhone — `auto` (PR-2 T6, §7.1)", () => {
     expect(answer, "PREMISE: the beat started the broadcast").toMatchObject({ state: "go-live", startedBy: "automatic" });
     expect((await settingsOf(r)).auto_start_attempted_at, "PREMISE: the attempt is stamped, so a refusal read that ignored the stored code would see one").not.toBeNull();
     // B7 review M-3: the automatic start's own session — switch on, phone automatic, no result yet — will be stopped by §7.3.
-    const started = { enabled: true, refusal: null, wontStart: "already_started", stopApplies: true };
+    const started = { enabled: true, refusal: null, wontStart: "already_started", stopApplies: true, stopAfterSeconds: 180 };
     expect((await readRig(r)).auto).toEqual(started);
     expect((await readRig(r)).auto, "a second read").toEqual(started);
     expect((await settingsOf(r)).auto_started_at?.getTime(), "PREMISE: the latch is the column the start stamped").toBe(r.now().getTime());
@@ -574,7 +574,7 @@ describe.skipIf(!HAS_DB)("streamPhone — `auto` (PR-2 T6, §7.1)", () => {
     const after = await readRig(r);
     // B7 review M-3: the Stop closed the session (the fake ends it at once), so nothing is open for a stop to apply to.
     expect(after.session, "PREMISE: the stopped session is closed").toBeNull();
-    expect(after.auto).toEqual({ enabled: false, refusal: null, wontStart: "stopped", stopApplies: null });
+    expect(after.auto).toEqual({ enabled: false, refusal: null, wontStart: "stopped", stopApplies: null, stopAfterSeconds: null });
   });
 
   // B7 review M-3: `stopApplies` — the panel's "stops about N minutes after the result" is a promise about the session on air,
@@ -634,7 +634,7 @@ describe.skipIf(!HAS_DB)("streamPhone — `auto` (PR-2 T6, §7.1)", () => {
       const { r, phone } = await autoRig({ credits: sc.credits ?? 3 });
       await sc.arrange(r);
       await beat(r, phone, { mode: "automatic" });
-      const want = { enabled: true, refusal: code, wontStart: null, stopApplies: null };
+      const want = { enabled: true, refusal: code, wontStart: null, stopApplies: null, stopAfterSeconds: null };
       expect((await readRig(r)).auto, code).toEqual(want);
       expect((await readRig(r)).auto, `${code}: a second read`).toEqual(want);
       reached++;
@@ -659,7 +659,7 @@ describe.skipIf(!HAS_DB)("streamPhone — `auto` (PR-2 T6, §7.1)", () => {
     expect((await frozenCompetitionIds(r.auth.orgId)).has(cid), "premise: the competition is frozen").toBe(true);
     await beat(r, phone, { mode: "automatic" });
     expect((await settingsOf(r)).auto_start_refusal, "premise: the column stores the closed vocabulary's not_entitled").toBe("not_entitled");
-    const want = { enabled: true, refusal: "competition_frozen", wontStart: null, stopApplies: null };
+    const want = { enabled: true, refusal: "competition_frozen", wontStart: null, stopApplies: null, stopAfterSeconds: null };
     expect((await readRig(r)).auto).toEqual(want);
     expect((await readRig(r)).auto, "a second read agrees").toEqual(want);
     // Thawed (the ceiling lifted) before the next attempt: the competition is not frozen, so the stored word is served as itself.
@@ -784,7 +784,7 @@ describe.skipIf(!HAS_DB)("streamPhone — `auto` (PR-2 T6, §7.1)", () => {
     await beat(r, phone, { mode: "automatic" });
     const done = await readRig(r);
     expect(done.auto, "started: no refusal, and the start latches (once per match)").toEqual({
-      enabled: true, refusal: null, wontStart: "already_started", stopApplies: true,
+      enabled: true, refusal: null, wontStart: "already_started", stopApplies: true, stopAfterSeconds: 180,
     });
     expect((await settingsOf(r)).auto_started_at?.getTime(), "at the retry's instant").toBe(r.now().getTime());
     expect(done.session, "PREMISE: a session opened").not.toBeNull();

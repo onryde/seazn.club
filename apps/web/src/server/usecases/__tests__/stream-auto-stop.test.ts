@@ -19,7 +19,7 @@ import { FIXTURE_STATUSES } from "@/lib/fixture-status";
 import { log } from "@/server/logger";
 import { CaptureBeat, CaptureBeatAnswer } from "@/server/api-v1/capture-schemas";
 import { pairPresentPhone } from "@/server/relay/__tests__/_session-rig";
-import { AUTO_STOP_AFTER_RESULT_SECONDS, POLL_NEAR_SECONDS } from "@/server/relay/config";
+import { AUTO_STOP_AFTER_RESULT_SECONDS, COURT_AUTO_STOP_AFTER_RESULT_SECONDS, POLL_NEAR_SECONDS } from "@/server/relay/config";
 import { AUTO_STOP_CONJUNCTS } from "@/server/relay/domain/auto-stream";
 import { postBeat } from "../capture-phone";
 import { sweepStreamSessions } from "../relay-sweep";
@@ -138,8 +138,9 @@ const sweepTick = (r: CaptureRig, sid: string) => tickSession(sid, r.deps, "swee
 // ---------------------------------------------------------------------------------------------------------------------
 describe("the tunable is read at the call site (AGENTS.md #20)", () => {
   const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
-  it("stream-sessions/ reads AUTO_STOP_AFTER_RESULT_SECONDS only through tunable(NAME, NAME)", () => {
-    const name = "AUTO_STOP_AFTER_RESULT_SECONDS";
+  // Both delays: the per-fixture code's, and the court's own tail (O15). `\b` does not see the shorter name inside the longer
+  // (`_` is a word character), so each is judged on its own.
+  it.each(["AUTO_STOP_AFTER_RESULT_SECONDS", "COURT_AUTO_STOP_AFTER_RESULT_SECONDS"])("stream-sessions/ reads %s only through tunable(NAME, NAME)", (name) => {
     // Every module of the folder (it was one file), each stripped of comments and imports before they are joined.
     const code = streamSessionsSource((text) => strip(text).replace(/^import[\s\S]*?\bfrom\s*"[^"]*";?/gm, ""));
     const viaTunable = new RegExp(`tunable\\(\\s*"${name}"\\s*,\\s*${name}\\s*\\)`, "g");
@@ -153,6 +154,8 @@ describe.skipIf(!HAS_DB)("automatic stop — fires AUTO_STOP_AFTER_RESULT_SECOND
     const info = vi.spyOn(log, "info");
     const { r, phone, sid } = await liveRig();
     const finished = await finishAt(r, sid, SEC);
+    clockTo(r, new Date(finished.getTime() + COURT_AUTO_STOP_AFTER_RESULT_SECONDS * SEC));
+    expect((await sweepTick(r, sid)).session?.state, "+30 s: a per-fixture code is not on the court's 30 s tail (O15)").toBe("live");
     clockTo(r, new Date(finished.getTime() + DELAY_MS - SEC));
     expect((await sweepTick(r, sid)).session?.state, "+179 s").toBe("live");
     clockTo(r, new Date(finished.getTime() + DELAY_MS - 1));

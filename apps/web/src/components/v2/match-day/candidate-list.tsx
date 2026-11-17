@@ -25,6 +25,7 @@ import type { MatchDayCtx } from "./court-focus";
 import { CallSheet } from "./call-sheet";
 import { MatchRoundChip } from "./round-chip";
 import { CourtStreamSwitch } from "./court-stream-switch";
+import { Queue } from "./court-queue";
 import { canWriteCourtStream, switchSpec } from "@/lib/match-day/court-stream";
 
 export type CandidateLoad =
@@ -146,6 +147,18 @@ export function FreeCourtBody({
       </div>
       {load.status === "ready" && load.candidates.length > 0 && (
         <CandidateRows ctx={ctx} court={court} candidates={load.candidates} onCall={onCall} onChanged={onChanged} onRefused={onRefused} />
+      )}
+      {/* A LINKED free court lists its whole queue below the candidates, each match with its Stream switch (the controller's ruling,
+          2026-11-16, applying O14: the 2nd and later matches are switched on before the court is called, not after). The match the
+          candidates show ("Due here next") is left out, so none appears twice. An unlinked free court is unchanged (spec §7). */}
+      {court.stream_link !== null && (
+        <Queue
+          ctx={ctx}
+          court={court}
+          onChanged={onChanged ?? noop}
+          onRefused={onRefused ?? noop}
+          exclude={new Set(load.status === "ready" ? load.candidates.map((c) => c.fixture.id) : [])}
+        />
       )}
     </div>
   );

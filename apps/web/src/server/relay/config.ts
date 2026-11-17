@@ -517,6 +517,10 @@ export const LOW_BATTERY_PERCENT = 20;
 export const HOT_THERMAL_STATUS = 3;
 /** W7 (§8.3): auto stop fires this long after the result is saved (`finished_at`), under the same switch. Tunable (T8's walkthrough). */
 export const AUTO_STOP_AFTER_RESULT_SECONDS = 180;
+/** Court stream (O15, owner ruling 2026-11-16: "yes 30s court tail"): a COURT-bound session (`court_link_id` set) stops this long
+ *  after its match's result (`finished_at`); the court's next match follows on the same phone, so there is no long tail to wait
+ *  for. A per-fixture code's session keeps AUTO_STOP_AFTER_RESULT_SECONDS. Tunable like its sibling. */
+export const COURT_AUTO_STOP_AFTER_RESULT_SECONDS = 30;
 /** §8.3: a REFUSED auto start is retried no more than once per this long (`auto_start_attempted_at`). Tunable (T8's walkthrough). */
 export const AUTO_START_RETRY_SECONDS = 60;
 /** FP16 / plan R-2 (owner ruling 2026-10-07): the panel shows "Phone not ready" only after the phone has been continuously
@@ -526,7 +530,7 @@ export const PHONE_NOT_READY_SHOW_AFTER_SECONDS = 20;
 /** §6.15 / AGENTS.md #20: the timings a walkthrough may shorten, so A14, ask 10, W19 and W7's auto stop run in seconds. */
 export const TUNABLE_NAMES = [
   "DEAD_PHONE_TAKEOVER_SECONDS", "PHONE_LOST_LIVE_MINUTES", "PHONE_SILENT_FLOOR_SECONDS", "CODE_GRACE_AFTER_FINISH_MINUTES",
-  "AUTO_STOP_AFTER_RESULT_SECONDS", "AUTO_START_RETRY_SECONDS",
+  "AUTO_STOP_AFTER_RESULT_SECONDS", "COURT_AUTO_STOP_AFTER_RESULT_SECONDS", "AUTO_START_RETRY_SECONDS",
 ] as const;
 export type TunableName = (typeof TUNABLE_NAMES)[number];
 /** The ENV_NAMEs an override is honoured under: a developer's machine and CI. Never a deployment, never unset. */

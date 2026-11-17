@@ -59,8 +59,11 @@ export function broadcastTitle(a: {
 }
 
 /** Two paragraphs, every part without `<` or `>`: the line and the public match URL, a blank line, then "Powered by Seazn Club"
- *  and the site's own link (owner request 2026-10-29). Every org gets both, `dashboard.branding` orgs included (owner, 2026-10-29). */
-export function broadcastDescription(a: { line: string; matchUrl: string; poweredBy: string; siteUrl: string }): string {
+ *  and the site's own link (owner request 2026-10-29). Every org gets both, `dashboard.branding` orgs included (owner, 2026-10-29).
+ *  A match with no public page (`matchUrl` null: a private competition's /live/... URL answers "This link is no longer valid")
+ *  carries no live-score line, only the powered-by paragraph — a viewer is never handed a dead link. */
+export function broadcastDescription(a: { line: string; matchUrl: string | null; poweredBy: string; siteUrl: string }): string {
   const url = (u: string): string => u.replace(/[<>]/g, "");
-  return `${clean(a.line)} ${url(a.matchUrl)}\n\n${clean(a.poweredBy)} · ${url(a.siteUrl)}`;
+  const powered = `${clean(a.poweredBy)} · ${url(a.siteUrl)}`;
+  return a.matchUrl === null ? powered : `${clean(a.line)} ${url(a.matchUrl)}\n\n${powered}`;
 }

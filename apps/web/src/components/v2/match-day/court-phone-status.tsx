@@ -10,6 +10,7 @@ import { fmtPublicTime } from "@/lib/format";
 import { t } from "@/lib/i18n-runtime";
 import { lastWorkingMinute, phoneKey } from "@/lib/match-day/court-stream";
 import type { MatchDayCourtStream } from "@/lib/match-day/types";
+import { CourtTailCountdown } from "./court-tail-countdown";
 
 type Phone = MatchDayCourtStream["phone"];
 
@@ -37,7 +38,20 @@ export function CourtPhoneChip({ dict, phone, className = "" }: { dict: Dict; ph
 
 /** The court focus's status block: chip, the channel, "Works until 23:59 today", and a refused automatic start in the stream
  *  panel's own words (`stream.auto.refused` + `stream.auto.refusal.*`). */
-export function CourtPhoneStatus({ dict, locale, tz, link }: { dict: Dict; locale: Locale; tz: string; link: MatchDayCourtStream }) {
+export function CourtPhoneStatus({
+  dict,
+  locale,
+  tz,
+  link,
+  viewNow,
+}: {
+  dict: Dict;
+  locale: Locale;
+  tz: string;
+  link: MatchDayCourtStream;
+  /** The view's server `now`, which the tail countdown is anchored to (O16). */
+  viewNow?: string;
+}) {
   const until = fmtPublicTime(locale, tz, lastWorkingMinute(link.expires_at));
   return (
     <div data-testid="md-cs-status" className="min-w-0">
@@ -46,6 +60,9 @@ export function CourtPhoneStatus({ dict, locale, tz, link }: { dict: Dict; local
         <p className="min-w-0 text-sm font-medium text-slate-900 [overflow-wrap:anywhere]">{link.target_label}</p>
       </div>
       <p className="mt-1 text-xs text-slate-600">{t(dict, "matchDay.courtStream.until", { time: until })}</p>
+      {link.tail_ends_at !== null && viewNow !== undefined && (
+        <CourtTailCountdown dict={dict} tailEndsAt={link.tail_ends_at} viewNow={viewNow} className="mt-1 text-sm font-medium text-slate-900" />
+      )}
       {link.refusal !== null && (
         <p data-testid="md-cs-refusal" data-refusal={link.refusal} className="mt-2 text-xs font-medium text-amber-900 [overflow-wrap:anywhere]">
           {t(dict, "stream.auto.refused", { reason: t(dict, `stream.auto.refusal.${link.refusal}`) })}

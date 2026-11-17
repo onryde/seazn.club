@@ -166,6 +166,8 @@ export const MatchDayCourtStream = z.object({
   expires_at: z.iso.datetime({ offset: true }),
   phone: z.enum(["unpaired", "waiting", "live", "offline"]),
   refusal: z.enum(["no_destination", "no_credit", "not_entitled", "destination_in_use", "unavailable", "competition_frozen"]).nullable(),
+  // O16: when the court's video stops by itself, while that is still to come (the tail after its last match's result); else null.
+  tail_ends_at: z.iso.datetime({ offset: true }).nullable(),
 });
 
 export const MatchDayCourt = z.object({

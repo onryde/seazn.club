@@ -101,6 +101,12 @@ export type AutoStopFacts = {
   sessionPredatesResult: boolean;
 };
 
+/** The instant the automatic stop falls due: the result plus the delay. The ONE place the sum is made: the tick's `delay_elapsed`
+ *  conjunct and the desk's tail countdown (`courtTailEndsAt`) both read it, so what the desk counts down to is when the tick stops. */
+export function autoStopDeadline(finishedAt: Date, delaySeconds: number): Date {
+  return new Date(finishedAt.getTime() + delaySeconds * 1000);
+}
+
 type StopConjunct = { name: string; holds: (f: AutoStopFacts, now: Date, delaySeconds: number) => boolean };
 
 /** §7.3's `autoStopDue(session)`. The two conjuncts that read the result HOLD while there is none (a null `finishedAt`):
@@ -109,7 +115,7 @@ export const AUTO_STOP_CONJUNCTS: readonly StopConjunct[] = [
   { name: "switch_on", holds: (f) => f.autoStream },
   { name: "phone_automatic", holds: (f) => f.phoneMode === "automatic" },
   { name: "fixture_finished", holds: (f) => f.finishedAt !== null },
-  { name: "delay_elapsed", holds: (f, now, secs) => f.finishedAt === null || now.getTime() >= f.finishedAt.getTime() + secs * 1000 },
+  { name: "delay_elapsed", holds: (f, now, secs) => f.finishedAt === null || now.getTime() >= autoStopDeadline(f.finishedAt, secs).getTime() },
   // A15: a broadcast started AFTER the result is the organiser's deliberate post-match one and is never auto-stopped; strictly before.
   { name: "session_predates_result", holds: (f) => f.finishedAt === null || f.sessionPredatesResult },
 ];

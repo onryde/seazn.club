@@ -388,8 +388,8 @@ describe("overlay + panel copy is complete in every locale", () => {
       readByPluralBase("stream.auto.liveLine.label", new Set(["stream.auto.liveLine"])),
       "only a CLDR category is read by a base",
     ).toBe(false);
-    // Anti-vacuity: the panel resolves exactly these two plural bases today.
-    expect([...pluralBases("stream")].sort()).toEqual(["stream.auto.liveLine", "stream.auto.switchHint"]);
+    // Anti-vacuity: the panel resolves exactly these three plural bases today.
+    expect([...pluralBases("stream")].sort()).toEqual(["stream.auto.liveLine", "stream.auto.liveLineSeconds", "stream.auto.switchHint"]);
   });
 
   it("a key named in a COMMENT is not a reader — documentation cannot wire copy", () => {

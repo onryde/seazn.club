@@ -17,6 +17,7 @@ import { rigApiTarget, rigUser, apiSessionOnTarget } from "@/server/relay/__test
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { linkCourtStream, withdrawCourtStream } from "../court-streams";
 import { courtStreamsForDay } from "../court-streams";
+import { COURT_AUTO_STOP_AFTER_RESULT_SECONDS } from "@/server/relay/config";
 import { getMatchDay, matchDayCandidates } from "../match-day";
 import { at, place, seedDay, setStatus, type Day } from "./_match-day-seed";
 
@@ -68,7 +69,7 @@ describe.skipIf(!HAS_DB)("court streams (the desk's read)", () => {
   it("a linked court with no phone reads unpaired; after a beat waiting; with a live session live; 3 missed beats offline", async () => {
     const shown = await link();
     expect((await courtOf()).stream_link).toEqual({
-      link_id: shown.id, target_label: "Club channel", expires_at: shown.expiresAt.toISOString(), phone: "unpaired", refusal: null,
+      link_id: shown.id, target_label: "Club channel", expires_at: shown.expiresAt.toISOString(), phone: "unpaired", refusal: null, tail_ends_at: null,
     });
     await pair(shown.id, 0);
     expect((await courtOf("Court 2", new Date(at(0).getTime() + 25_000))).stream_link!.phone, "25 s: 2.5 cadences, still there").toBe("waiting");
@@ -76,6 +77,85 @@ describe.skipIf(!HAS_DB)("court streams (the desk's read)", () => {
     await sql`update fixture_stream_sessions set court_link_id = ${shown.id} where id = ${sid}`;
     expect((await courtOf("Court 2", new Date(at(0).getTime() + 5_000))).stream_link!.phone).toBe("live");
     expect((await courtOf("Court 2", new Date(at(0).getTime() + 30_000))).stream_link!.phone, "30 s: 3 cadences").toBe("offline");
+  });
+
+  describe("O16: tail_ends_at (the court's video stops by itself COURT_AUTO_STOP_AFTER_RESULT_SECONDS after the result)", () => {
+    const TAIL_MS = COURT_AUTO_STOP_AFTER_RESULT_SECONDS * 1000;
+    /** Court 2 linked, its phone paired in AUTOMATIC mode, a court session `state` on f0 bound to that pairing, and f0's result
+     *  stamped `resultOffsetMs` after the session was created (the database's own clock, as the tick reads it). Returns the
+     *  result's instant. A null offset leaves f0 in play with no result. */
+    const rig = async (o: { state?: string; mode?: string; resultOffsetMs?: number | null } = {}) => {
+      const shown = await link();
+      await pair(shown.id, 0);
+      const [pairing] = await sql<{ id: string }[]>`
+        update fixture_stream_pairings set mode = ${o.mode ?? "automatic"}
+         where code_id in (select id from fixture_stream_codes where court_link_id = ${shown.id}) returning id`;
+      const sid = await apiSessionOnTarget(day.orgId, f0, targetId, o.state ?? "live");
+      // The session's own stamp is moved onto the link's day (the link and `now` are at the seed's instants), so the result's
+      // offset from it is the test's to choose.
+      await sql`update fixture_stream_sessions set court_link_id = ${shown.id}, pairing_id = ${pairing!.id}, created_at = ${at(1)} where id = ${sid}`;
+      const offset = o.resultOffsetMs === undefined ? 5_000 : o.resultOffsetMs;
+      if (offset === null) return { shown, sid, finishedAt: null as Date | null };
+      await setStatus(f0, "decided");
+      const [x] = await sql<{ finished_at: Date }[]>`
+        update fixtures set finished_at = (select created_at from fixture_stream_sessions where id = ${sid}) + make_interval(secs => ${offset / 1000}::float8)
+         where id = ${f0} returning finished_at`;
+      return { shown, sid, finishedAt: x!.finished_at };
+    };
+    const tail = async (now: Date) => (await courtOf("Court 2", now)).stream_link!.tail_ends_at;
+
+    it("inside the tail it is finished_at + the court tail, to the millisecond; it counts down and is null once the tail has passed", async () => {
+      const { finishedAt } = await rig();
+      expect(TAIL_MS, "a court tail that is not the per-fixture 180 s, so a wrong constant is seen").not.toBe(180_000);
+      const expected = new Date(finishedAt!.getTime() + TAIL_MS).toISOString();
+      expect(await tail(new Date(finishedAt!.getTime() + 1_000)), "1 s after the result").toBe(expected);
+      expect(await tail(new Date(finishedAt!.getTime() + TAIL_MS - 1)), "1 ms before the tail ends").toBe(expected);
+      expect(await tail(new Date(finishedAt!.getTime() + TAIL_MS)), "the instant the tail ends").toBeNull();
+      expect(await tail(new Date(finishedAt!.getTime() + TAIL_MS + 60_000)), "the tick has not run yet; the court reads its normal state").toBeNull();
+    });
+
+    it("a live session reads its tail; an ending one (already stopping), a warming one and a completed one do not", async () => {
+      const ending = await rig({ state: "live" });
+      expect(await tail(new Date(ending.finishedAt!.getTime() + 1_000))).not.toBeNull();
+      await sql`update fixture_stream_sessions set state = 'ending' where id = ${ending.sid}`;
+      expect(await tail(new Date(ending.finishedAt!.getTime() + 1_000)), "ending: the video is already stopping").toBeNull();
+      await sql`update fixture_stream_sessions set state = 'completed' where id = ${ending.sid}`;
+      expect(await tail(new Date(ending.finishedAt!.getTime() + 1_000)), "the session ended: the line goes").toBeNull();
+      await sql`update fixture_stream_sessions set state = 'warming' where id = ${ending.sid}`;
+      expect(await tail(new Date(ending.finishedAt!.getTime() + 1_000)), "no video yet").toBeNull();
+    });
+
+    it("null with a link and no session at all", async () => {
+      await link();
+      expect(await tail(at(0))).toBeNull();
+    });
+
+    it("null while the match is still in play (no result), though its session is live", async () => {
+      await rig({ resultOffsetMs: null });
+      expect(await tail(at(2))).toBeNull();
+    });
+
+    it("a handover: the next streamed match's session (no result yet) is the court's newest, so the line goes at once", async () => {
+      const first = await rig();
+      expect(await tail(new Date(first.finishedAt!.getTime() + 1_000))).not.toBeNull();
+      const next = await apiSessionOnTarget(day.orgId, f1, targetId, "live");
+      await sql`update fixture_stream_sessions set court_link_id = ${first.shown.id}, created_at = ${at(2)} where id = ${next}`;
+      expect(await tail(new Date(first.finishedAt!.getTime() + 1_000))).toBeNull();
+    });
+
+    it("promises nothing the tick will not do: a phone in Operator, a session begun after the result", async () => {
+      const operator = await rig({ mode: "operator" });
+      expect(await tail(new Date(operator.finishedAt!.getTime() + 1_000)), "operator mode is never auto-stopped").toBeNull();
+      await sql`update fixture_stream_pairings set mode = 'automatic' where mode = 'operator'`;
+      expect(await tail(new Date(operator.finishedAt!.getTime() + 1_000))).not.toBeNull();
+      await sql`update fixtures set finished_at = (select created_at from fixture_stream_sessions where id = ${operator.sid}) - interval '1 second' where id = ${f0}`;
+      const after = await sql<{ finished_at: Date }[]>`select finished_at from fixtures where id = ${f0}`;
+      expect(await tail(new Date(after[0]!.finished_at.getTime() + 1_000)), "a broadcast started after the result is never auto-stopped (A15)").toBeNull();
+    });
+
+    it("a court with no link has no stream_link, so no tail", async () => {
+      expect((await courtOf("Court 2")).stream_link).toBeNull();
+    });
   });
 
   it("an unlinked court has stream_link null; a withdrawn link reads null", async () => {
