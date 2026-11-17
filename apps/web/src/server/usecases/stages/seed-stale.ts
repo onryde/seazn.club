@@ -119,6 +119,12 @@ async function correctTableDependent(
   return { unfilled, staled: true };
 }
 
+/** The completed sources whose confirmed proposals a departure (or a Reinstate) re-judges: a league or a group (RB5-K6) and, since
+ *  the B3 fix wave (m-5), a SWISS - RB4-V6 names it a table source whose departed qualifier the next eligible entrant replaces, and
+ *  the W3 rulebook's Q2 sends a confirmed Swiss qualifier who withdraws before the bracket starts to that rule. The correction path
+ *  (`markDependentSeedProposalsStale`) is not widened: a corrected Swiss result after a confirm is W4's FX-G16, not this. */
+const DEPARTURE_REJUDGED_SOURCE_KINDS: readonly string[] = [...TABLE_CUT_DRIFT_KINDS, "swiss"];
+
 /**
  * W5 T11 (X-CUT-4 <- RB5-K6): `entrantId` is leaving, and the destination of a completed league or group of her division has not
  * started: every confirmed proposal that names her goes stale and its seats go back, in this call's own transaction - unless the
@@ -138,7 +144,7 @@ export async function staleConfirmedProposalsOfDeparting(
   return withTenant(orgId, async (tx) => {
     const sources = await tx<{ id: string }[]>`
       select id from stages
-       where division_id = ${divisionId} and status = 'complete' and kind in ${tx([...TABLE_CUT_DRIFT_KINDS])}
+       where division_id = ${divisionId} and status = 'complete' and kind in ${tx([...DEPARTURE_REJUDGED_SOURCE_KINDS])}
        order by seq`;
     const out = { unfilled: [] as string[], recompute: [] as string[] };
     if (sources.length === 0) return out;

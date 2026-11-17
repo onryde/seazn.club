@@ -28,9 +28,10 @@ import { createEntrants, getEntrant, patchEntrant, syncEntrantRosterFromSquad } 
 import { divisionHistory } from "../history";
 import { createPerson } from "../persons";
 import { startDivision } from "../schedule";
-import { createStages, generateStageFixtures } from "../stages";
+import { completeStage, createStages, generateStageFixtures, getSeedProposal } from "../stages";
 import { setTeamSquad } from "../teams";
 import { withdrawalOwedSince } from "../withdrawal";
+import { confirmResolvingTies } from "./_confirm-with-ties";
 import { seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -174,7 +175,9 @@ describe.skipIf(!HAS_DB)("ruling 292: one partner rule in every format after Sta
           expect(r2.length, "round two is paired").toBeGreaterThan(0);
           expect(r2.some((l) => involves(l, leaver.id)), "the withdrawn pair is not paired again (P-A7)").toBe(false);
           const stood = (await rowsOf(r.entryStageId)).find((l) => l.id === rest[0]!.id)!;
-          expect(stood.outcome, "a played result stands").toMatchObject({ kind: "award", reason: "walkover" });
+          // (A board scored AFTER the cascade: this reads the walkover just posted. A result of HERS played before the dissolve
+          // standing is the B3 m-5 test below.)
+          expect(stood.outcome, "the other board's walkover is recorded").toMatchObject({ kind: "award", reason: "walkover" });
         }
 
         // 4. The departed pair's roster is FROZEN: fewer, a substitute, both gone, and a squad sync that would change it.
@@ -227,6 +230,93 @@ describe.skipIf(!HAS_DB)("ruling 292: one partner rule in every format after Sta
     }
     expect(checked).toBe(2);
   }, 300_000);
+});
+
+/** A real result on `line` for `winner` through the scorer (the generic sport's first variant scores win/loss: a winner id). */
+async function playFor(auth: AuthCtx, line: FixtureRow, winner: string): Promise<void> {
+  await post(auth, line.id, "core.start");
+  await post(auth, line.id, "generic.result", { winnerId: winner });
+}
+const scoreEventsOn = async (fixtureId: string) => (await sql<{ n: number }[]>`select count(*)::int as n from score_events where fixture_id = ${fixtureId}`)[0]!.n;
+
+// B3 fix wave (m-5): the two Task 10b gaps. Single sport (the generic scoreboard): the partner rule and both cascades are
+// sport-blind, and the sport sweep is the per-format test above.
+describe.skipIf(!HAS_DB)("ruling 292 after round one: a dissolve later in a Swiss, and in the knockout half of a Swiss + knockout", () => {
+  it("a Swiss pair dissolved in round TWO keeps its round-one result (W3 R4b: a played result stands); only round two is walked over", async () => {
+    // pin, no defect expected: replaces the tautological "a played result stands" above (that board was scored after the cascade).
+    const r = await rig("swiss", GENERIC);
+    const leaver = r.pairs[3]!;
+    const r1 = (await rowsOf(r.entryStageId)).filter((l) => l.round_no === 1 && l.home_entrant_id !== null && l.away_entrant_id !== null);
+    expect(r1.length, "rig: four pairs, two boards in round one").toBe(2);
+    for (const l of r1) await playFor(r.auth, l, involves(l, leaver.id) ? leaver.id : l.home_entrant_id!); // she WINS hers
+    const hersR1 = r1.find((l) => involves(l, leaver.id))!;
+    const won = (await rowsOf(r.entryStageId)).find((l) => l.id === hersR1.id)!;
+    expect(won.status, "rig: her round-one result is recorded").toBe("decided");
+    expect(won.outcome, "rig: she won it").toMatchObject({ winner: leaver.id });
+    const r1Events = await scoreEventsOn(hersR1.id);
+
+    await generateStageFixtures(r.auth, r.entryStageId); // Pair round two
+    const hersR2 = (await rowsOf(r.entryStageId)).find((l) => l.round_no === 2 && involves(l, leaver.id));
+    expect(hersR2, "rig: she is paired in round two").toBeDefined();
+    const opponent = otherSide(hersR2!, leaver.id);
+
+    await patchEntrant(r.auth, leaver.id, { members: [member(leaver.a)] });
+    expect(await statusOf(leaver.id), "the pair withdrew").toBe("withdrawn");
+    const after = await rowsOf(r.entryStageId);
+    const stood = after.find((l) => l.id === hersR1.id)!;
+    expect([stood.status, stood.outcome], "her round-one result stands as it was").toEqual([won.status, won.outcome]);
+    expect(await scoreEventsOn(hersR1.id), "nothing was written on it (no void, no expunge)").toBe(r1Events);
+    const r2 = after.find((l) => l.id === hersR2!.id)!;
+    expect(r2.status, "round two is the walkover").toBe("forfeited");
+    expect(r2.outcome).toMatchObject({ kind: "award", winner: opponent, loser: leaver.id, reason: "withdrew" });
+  }, 300_000);
+
+  it("swiss_knockout: a pair dissolved after the Swiss completes and the cut is confirmed, before the knockout starts, is replaced by the next eligible entrant (RB4-V6, W3 rulebook Q2)", async () => {
+    // Expected values: the Swiss table read by hand off the recorded results (the better seed wins every board: 2-0, two on
+    // 1-1, 0-2), and RB4-V6 / RB5-K7 (a departed qualifier from a table source, Swiss included, is replaced by the next-ranked
+    // eligible entrant) with RB5-K5 (not a walkover: the knockout has not started).
+    const r = await rig("swiss_knockout", GENERIC);
+    const seedOf = new Map(r.pairs.map((p, i) => [p.id, i + 1]));
+    const wins = new Map(r.pairs.map((p) => [p.id, 0]));
+    for (const round of [1, 2]) {
+      if (round === 2) await generateStageFixtures(r.auth, r.entryStageId);
+      const lines = (await rowsOf(r.entryStageId)).filter((l) => l.round_no === round && l.home_entrant_id !== null && l.away_entrant_id !== null);
+      expect(lines.length, `rig: round ${round} has two boards`).toBe(2);
+      for (const l of lines) {
+        const winner = seedOf.get(l.home_entrant_id!)! < seedOf.get(l.away_entrant_id!)! ? l.home_entrant_id! : l.away_entrant_id!;
+        await playFor(r.auth, l, winner);
+        wins.set(winner, wins.get(winner)! + 1);
+      }
+    }
+    expect([...wins.values()].sort(), "premise: the Swiss reads 2-0, 1-1, 1-1, 0-2").toEqual([0, 1, 1, 2]);
+    const [ko] = await sql<{ id: string }[]>`select id from stages where division_id = ${r.divisionId} and kind = 'knockout'`;
+    await generateStageFixtures(r.auth, ko!.id); // the knockout's TBD bracket, which the Swiss's completion seeds a proposal for
+    const [swiss] = await sql<{ status: string }[]>`select status from stages where id = ${r.entryStageId}`;
+    if (swiss!.status !== "complete") expect((await completeStage(r.auth, r.entryStageId)).completed, "rig: the Swiss completed").toBe(true);
+    const draft = await getSeedProposal(r.auth, ko!.id);
+    expect(draft?.status, "rig: completion proposed the cut").toBe("draft");
+    await confirmResolvingTies(r.auth, ko!.id, draft!.id);
+    const leaver = r.pairs[0]!; // 2-0: in every cut of two
+    const oneOne = r.pairs.filter((p) => wins.get(p.id) === 1).map((p) => p.id).sort();
+    const confirmedIds = draft!.computed.qualifiers.map((q) => q.entrantId);
+    expect(confirmedIds, "premise: the confirmed cut names her").toContain(leaver.id);
+    const seated = (await rowsOf(ko!.id)).flatMap((l) => [l.home_entrant_id, l.away_entrant_id]).filter((x) => x !== null);
+    expect(seated, "premise: the confirm seated her").toContain(leaver.id);
+
+    await patchEntrant(r.auth, leaver.id, { members: [member(leaver.a)] });
+    expect(await statusOf(leaver.id), "the pair withdrew").toBe("withdrawn");
+
+    const [{ status: was }] = await sql<{ status: string }[]>`select status from stage_seed_proposals where id = ${draft!.id}`;
+    expect(was, "the confirmed proposal naming her went stale").toBe("stale");
+    const lines = await rowsOf(ko!.id);
+    expect(lines.length, "anti-vacuity: the knockout has lines").toBeGreaterThan(0);
+    expect(lines.map((l) => [l.status, l.outcome, l.home_entrant_id, l.away_entrant_id]), "RB5-K5: no walkover - her seat went back, unseated").toEqual(
+      lines.map(() => ["scheduled", null, null, null]),
+    );
+    const next = await getSeedProposal(r.auth, ko!.id);
+    expect(next?.status, "re-proposed").toBe("draft");
+    expect(next!.computed.qualifiers.map((q) => q.entrantId).sort(), "RB4-V6: both 1-1 pairs - the next eligible takes her place").toEqual(oneOne);
+  }, 400_000);
 });
 
 describe.skipIf(!HAS_DB)("ruling 292: Reinstate leaves a trace in every format (the closed 8b limit)", () => {
