@@ -22,6 +22,8 @@ import { AUTO_START_REFUSALS } from "@/server/relay/domain/auto-stream";
 import { courtPhoneStatus, courtTailEndsAt } from "@/server/relay/domain/court-stream";
 import { ACTIVE_STATES, type SessionState } from "@/server/relay/domain/session";
 import { autoStopDelaySeconds } from "./stream-sessions/auto-stop";
+import type { SessionDeps } from "./stream-sessions/deps";
+import { stopSession } from "./stream-sessions/stop";
 import { frozenCompetitionIds } from "./entitlement-freeze";
 import { hasValidKek } from "@/server/relay/crypto";
 import { insertCourtStreamCode, openStreamCodeTok, wipeStreamCodeTok } from "@/server/relay/secret-columns";
@@ -258,8 +260,16 @@ export async function liveCourtLinkFor(
  * (`has_own_stream_code`) or its court has no live link now (`court_not_streaming`); off is never refused. It takes the
  * fixture's code lock first, the lock `ensureStreamCode` takes, so a mint and a switch-on cannot both succeed. An upsert that
  * never touches `target_id` / `target_chosen` (plan R-1), bumping `revision`.
+ *
+ * O17 (owner, 2026-11-17: "switching Stream off should stop the video now"): OFF while the match's court session is
+ * requested, provisioning, warming or live ends it at once — the organiser's Stop (`stopSession`, end reason `stopped`, no
+ * 30 s tail), which also latches the match (`auto_start_blocked_at`), so the court never starts it again by itself; the desk
+ * restarts it by hand. The switch is written first, so a court start racing the stop finds it off. `deps` are the relay's
+ * (the route's `defaultDeps`); an OFF that finds a session to stop without them refuses rather than leave it running.
  */
-export async function setCourtStream(auth: AuthCtx, fixtureId: string, on: boolean, now: Date = new Date()): Promise<{ on: boolean }> {
+export async function setCourtStream(
+  auth: AuthCtx, fixtureId: string, on: boolean, now: Date = new Date(), deps: SessionDeps | null = null,
+): Promise<{ on: boolean }> {
   requireSessionEditor(auth);
   assertUuid(fixtureId, "fixture");
   await fixtureOf(auth, fixtureId); // the 404 for another org's fixture
@@ -281,7 +291,22 @@ export async function setCourtStream(auth: AuthCtx, fixtureId: string, on: boole
          set court_stream = excluded.court_stream, updated_by = excluded.updated_by, updated_at = now(),
              revision = fixture_stream_settings.revision + 1`;
   });
+  if (!on) await stopCourtSessionOf(auth, fixtureId, deps);
   return { on };
+}
+
+/** O17: the match's court session that is not yet stopping (an `ending` one is already on its way out), stopped as the
+ *  organiser's Stop stops it. One per match: a match's sessions are one at a time (`active_session`). */
+async function stopCourtSessionOf(auth: AuthCtx, fixtureId: string, deps: SessionDeps | null): Promise<void> {
+  const [open] = await sql<{ id: string }[]>`
+    select id from fixture_stream_sessions
+     where fixture_id = ${fixtureId} and org_id = ${auth.orgId} and court_link_id is not null
+       and state in ('requested', 'provisioning', 'warming', 'live')
+     order by created_at desc, id desc limit 1`;
+  if (!open) return;
+  if (deps === null) throw new Error("setCourtStream: switching Stream off found a court session to stop, and no session deps were given");
+  await stopSession(auth, fixtureId, open.id, deps);
+  log.info({ orgId: auth.orgId, fixtureId, sid: open.id }, "court stream: Stream switched off — the match's court session was stopped (O17)");
 }
 
 type StoredRefusal = (typeof AUTO_START_REFUSALS)[number];

@@ -16,7 +16,9 @@
 //   - web batch A1 (2026-11-17): while the court's link is live (not withdrawn, its day open) the court phone is never told to
 //     beat slower than the near cadence (10 s), idle or with a match far off; a withdrawn link keeps the fixture's rules;
 //   - web batch A3: a withdrawn court serves its live session's phone, and once that session is no longer streaming (ending or
-//     ended) the phone's next beat is 401 code_ended and its pairing ends; a withdrawn court that never went live is 401 at once.
+//     ended) the phone's next beat is 401 code_ended and its pairing ends; a withdrawn court that never went live is 401 at once;
+//   - web batch A4 (O17, owner 2026-11-17: "switching Stream off should stop the video now"): the match's Stream switch OFF
+//     ends its court session at once as the organiser's Stop (end reason stopped), and latches the match.
 //
 // The link is for 2026-11-07, the seed's T0 day (Europe/Amsterdam, UTC+1): every clock is the test's, passed in.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -530,6 +532,73 @@ describe.skipIf(!HAS_DB)("a court code's descriptor, beat, start and record", ()
       await reissueStreamCode(r.auth, r.fixtureId);
       const a = await postBeat(r.code, r.tok, fbody({ sid }), r.deps, r.now());
       expect(a).toMatchObject({ state: "over", sid });
+    });
+  });
+
+  describe("web batch A4 (O17): the Stream switch off stops the match's court session now", () => {
+    it("live: OFF ends it at once as the organiser's Stop (stopped), latches A, and the court never starts A again", async () => {
+      await streamed(A, AT_14);
+      await setStatus(A, "in_play");
+      const phone = phoneId("a4-live");
+      await claimed(phone);
+      const sid = await operatorStart(phone);
+      now += 3000;
+      await tickSession(sid, deps, "beat");
+      expect((await sessionRow(sid)).state, "premise: live").toBe("live");
+      expect(await latchedAt(A), "premise: not latched").toBeNull();
+      expect(await setCourtStream(day.auth, A, false, clock(), deps)).toEqual({ on: false });
+      const row = await sessionRow(sid);
+      expect(["ending", "completed"]).toContain(row.state);
+      expect(row.end_reason).toBe("stopped");
+      expect(await latchedAt(A)).not.toBeNull();
+      // The phone hears the end on its next beat, and the operator's start finds nothing to start.
+      expect(await beat(phone, { sid, state: "publishing" })).toMatchObject({ state: "over", sid, endReason: "stopped" });
+      expect(await refusal(operatorStart(phone))).toBe("409:no_match");
+      // Switched back on: still latched, so nothing restarts it by itself (the desk restarts it by hand).
+      await setCourtStream(day.auth, A, true, clock());
+      expect(await refusal(operatorStart(phone)), "the latch outlives the switch").toBe("409:no_match");
+    });
+
+    it("armed (warming) and requested: OFF ends it too", async () => {
+      for (const state of ["warming", "requested"] as const) {
+        const fx = state === "warming" ? A : B;
+        await place(day, fx, AT_14, day.courts.c2);
+        await setCourtStream(day.auth, fx, true, at(0));
+        await setStatus(fx, "in_play");
+        const phone = phoneId(`a4-${state}`);
+        await claimed(phone);
+        const sid = await operatorStart(phone);
+        if (state === "requested") await sql`update fixture_stream_sessions set state = 'requested' where id = ${sid}`;
+        expect((await sessionRow(sid)).state, `premise: ${state}`).toBe(state);
+        await setCourtStream(day.auth, fx, false, clock(), deps);
+        const row = await sessionRow(sid);
+        expect(["ending", "completed", "failed"], state).toContain(row.state);
+        expect(await latchedAt(fx), state).not.toBeNull();
+        await sql`update fixtures set status = 'decided' where id = ${fx}`;
+      }
+    });
+
+    it("OFF with no session stops nothing and latches nothing; another match's session runs on", async () => {
+      await streamed(A, AT_14);
+      await streamed(B, AT_15);
+      await setStatus(A, "in_play");
+      const phone = phoneId("a4-other");
+      await claimed(phone);
+      const sid = await operatorStart(phone);
+      expect(await setCourtStream(day.auth, B, false, clock(), deps)).toEqual({ on: false });
+      expect(await latchedAt(B)).toBeNull();
+      expect((await sessionRow(sid)).end_reason).toBeNull();
+      expect(["requested", "provisioning", "warming", "live"]).toContain((await sessionRow(sid)).state);
+    });
+
+    it("OFF that finds a session to stop without the relay's deps refuses rather than leave it running", async () => {
+      await streamed(A, AT_14);
+      await setStatus(A, "in_play");
+      const phone = phoneId("a4-nodeps");
+      await claimed(phone);
+      const sid = await operatorStart(phone);
+      await expect(setCourtStream(day.auth, A, false, clock())).rejects.toThrow(/no session deps/);
+      expect((await sessionRow(sid)).end_reason).toBeNull();
     });
   });
 
