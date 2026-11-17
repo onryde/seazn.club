@@ -14,6 +14,7 @@ import { markAutoStartBlocked } from "./stream-codes";
 // the barrel would close an import cycle through it.
 import { apply } from "./stream-sessions/apply";
 import type { SessionDeps } from "./stream-sessions/deps";
+import { endCourtBroadcastSoon } from "./stream-sessions/court-end";
 
 const IN_PLAY = "in_play";
 
@@ -45,6 +46,8 @@ export async function endOtherCourtSessions(
       return stopped ? { type: "stop", reason: "auto_stopped" } : null;
     }, deps, { userId: a.actorUserId, source });
     if (!stopped) continue;
+    // The finished match's YouTube end is scheduled now, not left to the cron.
+    endCourtBroadcastSoon(s.id, deps);
     await sql.begin(async (tx) => {
       await recordEvent(tx, {
         sessionId: s.id, orgId: s.org_id, source, kind: "event", type: "court_handover", actorUserId: a.actorUserId,

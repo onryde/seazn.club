@@ -184,6 +184,44 @@ describe("the shell's one read of the day", () => {
     island.unmount();
   });
 
+  it("a manual tap while a quiet read is running shows Refreshing… on that read, with no second request", async () => {
+    const island = renderIsland(MatchDayShell, shellProps);
+    const list = () => propsOf(island.tree().find((e) => e.type === CourtList)!);
+    (list().onTailEnd as () => void)();
+    expect(line(island.tree()).busy).toBe(false);
+    (line(island.tree()).onRefresh as () => void)();
+    expect(line(island.tree()).busy).toBe(true);
+    expect(net.calls).toHaveLength(1);
+    net.settle!.ok(view("2026-11-17T10:00:09.000Z"));
+    await flush();
+    expect(line(island.tree())).toMatchObject({ busy: false, failed: false });
+    expect(net.calls).toHaveLength(1);
+    island.unmount();
+  });
+
+  it("a tail end reads now and once more 12 s later (one per tail end); unmounting before then cancels it", async () => {
+    const island = renderIsland(MatchDayShell, shellProps);
+    const onTailEnd = propsOf(island.tree().find((e) => e.type === CourtList)!).onTailEnd as () => void;
+    onTailEnd();
+    onTailEnd();
+    net.settle!.ok(view("2026-11-17T10:00:01.000Z"));
+    await flush();
+    vi.advanceTimersByTime(11_999);
+    expect(net.calls).toHaveLength(1);
+    vi.advanceTimersByTime(1);
+    expect(net.calls, "the one follow-up read").toHaveLength(2);
+    net.settle!.ok(view("2026-11-17T10:00:13.000Z"));
+    await flush();
+    vi.advanceTimersByTime(60_000);
+    expect(net.calls).toHaveLength(2);
+    vi.advanceTimersByTime(1000);
+    onTailEnd();
+    expect(net.calls).toHaveLength(3);
+    island.unmount();
+    vi.advanceTimersByTime(20_000);
+    expect(net.calls, "unmounted: the pending recheck never fires").toHaveLength(3);
+  });
+
   it("the poll's read is quiet too: no Refreshing…, and a failed one says Couldn't refresh", async () => {
     const island = renderIsland(MatchDayShell, shellProps);
     const list = () => propsOf(island.tree().find((e) => e.type === CourtList)!);

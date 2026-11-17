@@ -20,14 +20,11 @@ export interface DayRefresh {
 }
 
 export function useDayRefresh(competitionId: string, onView: (v: MatchDayView) => void, clock: () => number = Date.now): DayRefresh {
-  const inflight = useRef(false);
+  const inflight = useRef<Promise<void> | null>(null);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
   const [lastOkAt, setLastOkAt] = useState<number | null>(null);
-  const refresh = useCallback(async (o?: { manual?: boolean }) => {
-    if (inflight.current) return;
-    inflight.current = true;
-    if (o?.manual === true) setBusy(true);
+  const read = useCallback(async () => {
     try {
       const next = await apiV1<unknown>(`/api/v1/competitions/${competitionId}/match-day`);
       if (!isMatchDayView(next)) throw new Error("not a view");
@@ -37,10 +34,28 @@ export function useDayRefresh(competitionId: string, onView: (v: MatchDayView) =
     } catch {
       // Keep the last view; the next read tries again.
       setFailed(true);
-    } finally {
-      inflight.current = false;
-      setBusy(false);
     }
   }, [competitionId, onView, clock]);
+  const refresh = useCallback(async (o?: { manual?: boolean }) => {
+    const manual = o?.manual === true;
+    if (inflight.current !== null) {
+      // A manual tap during a running read shows busy on that read until it settles; no second request.
+      if (manual) {
+        setBusy(true);
+        await inflight.current;
+        setBusy(false);
+      }
+      return;
+    }
+    if (manual) setBusy(true);
+    const running = read();
+    inflight.current = running;
+    try {
+      await running;
+    } finally {
+      inflight.current = null;
+      setBusy(false);
+    }
+  }, [read]);
   return { refresh, busy, failed, lastOkAt };
 }

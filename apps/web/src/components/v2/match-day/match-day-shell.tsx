@@ -102,6 +102,9 @@ export interface MatchDayShellProps {
   venueParam?: string | readonly string[] | null;
 }
 
+/** How long after a tail countdown reaches 0 the day is read once more (the server's stop lands after it). */
+const TAIL_RECHECK_MS = 12_000;
+
 export function MatchDayShell({
   competitionId,
   competitionName,
@@ -154,12 +157,26 @@ export function MatchDayShell({
   const refreshNow = useCallback(() => void refresh({ manual: true }), [refresh]);
   /** A court's tail countdown ended: quiet, and one read per second however many countdowns end on the same tick. */
   const lastTailRead = useRef(0);
+  const tailTimers = useRef(new Set<ReturnType<typeof setTimeout>>());
   const refreshOnTailEnd = useCallback(() => {
     const at = Date.now();
     if (at - lastTailRead.current < 1000) return;
     lastTailRead.current = at;
     void refresh();
+    // The server stops the session a little after the countdown reaches 0, so one more read follows (one per tail end).
+    const id = setTimeout(() => {
+      tailTimers.current.delete(id);
+      void refresh();
+    }, TAIL_RECHECK_MS);
+    tailTimers.current.add(id);
   }, [refresh]);
+  useEffect(() => {
+    const timers = tailTimers.current;
+    return () => {
+      for (const id of timers) clearTimeout(id);
+      timers.clear();
+    };
+  }, []);
 
   const live = isLive(view);
   useEffect(() => startBandPolling(live, () => void refresh(), browserBandPollDeps()), [live, refresh]);
